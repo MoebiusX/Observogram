@@ -800,6 +800,7 @@ const mcpEndpoints = await import('./store/mcp-endpoints.mjs');
 const packs = await import('./store/packs.mjs');
 const packServices = await import('./store/pack-services.mjs');
 const packLinks = await import('./store/pack-links.mjs');
+const serviceAdmin = await import('./service-admin.mjs');
 
 async function freshStore(tag) {
   const path = join(tempDir(tag), 'observogram.db');
@@ -1004,6 +1005,9 @@ test('context-scoped repositories throw outside runWithOrg()', async () => {
       'environments.create': () => environments.createEnvironment(db, 'a', { serviceId: 1, name: 'prod' }),
       'mcp_endpoints.list': () => mcpEndpoints.listMcpEndpoints(db),
       'mcp_endpoints.create': () => mcpEndpoints.createMcpEndpoint(db, 'a', { name: 'm', url: 'https://mcp.example' }),
+      'mcp_endpoints.countBound': () => mcpEndpoints.countBound(db, 1),
+      'service_admin.tierFor': () => serviceAdmin.serviceTierFor(db, 'p', 'prod'),
+      'service_admin.views': () => serviceAdmin.listServiceViews(db),
       'packs.list': () => packs.listPacks(db),
       'packs.add': () => packs.addPack(db, 'a', { id: 'p' }),
       'packs.touch': () => packs.touch(db, 'p'),
@@ -1034,7 +1038,7 @@ test('Tenancy isolation: org B reads and writes nothing of org A through any con
     orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
     orgs.createOrg(db, 'system', { id: 'bravo', name: 'Bravo' });
     const a = runWithOrg('acme', () => {
-      const ep = mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'prod-mcp', url: 'https://mcp.acme.example/mcp', readTokenEnv: 'ACME_MCP_TOKEN' });
+      const ep = mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'prod-mcp', url: 'https://mcp.acme.example/mcp', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' });
       const svc = services.createService(db, 'alice', { slug: 'checkout', name: 'Checkout', owners: ['alice'], tier: 'critical' });
       const env = environments.createEnvironment(db, 'alice', { serviceId: svc.id, name: 'prod', tier: 'high', bindings: { region: 'eu' }, mcpEndpointId: ep.id });
       const pack = packs.addPack(db, 'alice', { id: 'uploaded-checkout-0123abcd', label: 'Checkout', source: 'upload' });
@@ -1070,7 +1074,10 @@ test('Tenancy isolation: org B reads and writes nothing of org A through any con
       assert.equal(environments.getEnvironmentByName(db, a.svc.id, 'prod'), null);
       assert.deepEqual(environments.listEnvironmentsForOrg(db), []);
       assert.deepEqual(environments.countEnvironmentsBoundTo(db, a.ep.id), []);
+      assert.equal(mcpEndpoints.countBound(db, a.ep.id), 0);
       assert.deepEqual(packServices.listLinksForOrg(db), []);
+      assert.equal(serviceAdmin.serviceTierFor(db, a.pack.id, 'prod'), null, 'A\'s pack has no primary link in B');
+      assert.deepEqual(serviceAdmin.listServiceViews(db), []);
       assert.equal(packs.touchMany(db, [[a.pack.id, '2031-01-01T00:00:00.000Z']]), 0);
       assert.throws(() => packs.removePack(db, 'bob', a.pack.id, { action: 'pack.evict', detail: { cap: 200 } }), /no pack/);
       // B's own rows, reaching for A's: A's service and A's endpoint are not found.
@@ -1102,7 +1109,12 @@ test('Tenancy isolation: org B reads and writes nothing of org A through any con
       assert.equal(environments.getEnvironmentByName(db, a.svc.id, 'prod').id, a.env.id);
       assert.deepEqual(environments.listEnvironmentsForOrg(db).map((e) => e.id), [a.env.id]);
       assert.deepEqual(environments.countEnvironmentsBoundTo(db, a.ep.id), [a.env.id]);
+      assert.equal(mcpEndpoints.countBound(db, a.ep.id), 1);
       assert.equal(mcpEndpoints.getMcpEndpoint(db, a.ep.id).url, 'https://mcp.acme.example/mcp');
+      assert.deepEqual(serviceAdmin.serviceTierFor(db, a.pack.id, 'prod'),
+        { tier: 'high', from: 'environment', service: { id: a.svc.id, slug: 'checkout' }, environment: { id: a.env.id, name: 'prod' } });
+      assert.deepEqual(serviceAdmin.listServiceViews(db).map((v) => [v.slug, v.environments.map((e) => [e.name, e.effectiveTier, e.mcpEndpoint]), v.packs]),
+        [['checkout', [['prod', 'high', { id: a.ep.id, name: 'prod-mcp', origin: 'https://mcp.acme.example' }]], [{ id: a.pack.id, label: 'Checkout', source: 'upload', role: 'primary' }]]]);
       assert.equal(packs.listPacks(db).length, 1);
       assert.equal(packs.getPack(db, a.pack.id).label, 'Checkout', 'B\'s upsert of the same id left A\'s label');
       assert.equal(packs.getPack(db, a.pack.id).lastUsedAt, a.pack.lastUsedAt, 'B\'s touchMany of A\'s id changed nothing');
@@ -1141,7 +1153,7 @@ test('context-scoped updates, deletes and cascades within one org', async () => 
     runWithOrg('acme', () => {
       const ep = mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'mcp', url: 'http://mcp.internal:3001' });
       assert.throws(() => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'leaky', url: 'https://user:secret@mcp.example' }), /may not carry credentials/);
-      assert.throws(() => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'tok', url: 'https://mcp.example', readTokenEnv: 'sk-live-123' }), /env var name/);
+      assert.throws(() => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'tok', url: 'https://mcp.example', readTokenEnv: 'sk-live-123' }), /names an env var of this org/);
       assert.throws(() => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'ftp', url: 'ftp://mcp.example' }), /http\(s\)/);
       const svc = services.createService(db, 'alice', { slug: 'pay', name: 'Payments' });
       assert.throws(() => services.createService(db, 'alice', { slug: 'pay', name: 'Again' }), /UNIQUE/);
@@ -1396,6 +1408,133 @@ test('an MCP endpoint URL carrying a secret is refused, on create and update, wi
         }
       }
       assert.deepEqual(mcpEndpoints.listMcpEndpoints(db).map((e) => e.url), ['https://mcp.example/mcp?transport=sse'], 'nothing leaky was stored');
+    });
+  } finally {
+    close();
+  }
+});
+
+// Slice 4 §7.5: the credential test is the word rule of
+// tools/lib/mcp-url-safety.mjs (names echoed, never values), and
+// readTokenEnv is restricted to this org's variables.
+test('an MCP endpoint URL is refused exactly when stripMcpUrl would drop something, naming the parameters', async () => {
+  const { db, close } = await freshStore('mcp-url-words');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    runWithOrg('acme', () => {
+      const ep = mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'ok', url: 'https://mcp.example/sse?signal=1&design=2&author=me&tier=x' });
+      assert.equal(ep.url, 'https://mcp.example/sse?signal=1&design=2&author=me&tier=x', 'a credential word INSIDE a name is not a credential');
+      const refused = [
+        ['https://mcp.example/sse?token=s3cr3t', '"token"'],
+        ['https://mcp.example/sse?api_key=s3cr3t', '"api_key"'],
+        ['https://mcp.example/sse?X-Amz-Signature=s3cr3t', '"X-Amz-Signature"'],
+        ['https://mcp.example/sse?%74oken=s3cr3t', '"token"'],
+        ['https://mcp.example/sse?tier=x;pwd=s3cr3t', '"tier"'],
+        ['https://mcp.example/sse?token=s3cr3t&transport=sse&sig=s3cr3t', '"token", "sig"'],
+      ];
+      for (const [url, names] of refused) {
+        const text = `observogram store: an MCP endpoint URL may not carry credentials in its query — the parameter(s) ${names} look like credentials; remove them and name an env var in readTokenEnv`;
+        for (const write of [
+          () => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'leaky', url }),
+          () => mcpEndpoints.updateMcpEndpoint(db, 'alice', ep.id, { url }),
+        ]) {
+          assert.throws(write, (e) => e instanceof TypeError && e.message === text, url);
+        }
+      }
+      assert.throws(() => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'u', url: 'https://alice:s3cr3t@mcp.example/' }),
+        (e) => e.message === 'observogram store: an MCP endpoint URL may not carry credentials — name an env var in readTokenEnv');
+      assert.throws(() => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'f', url: 'https://mcp.example/#token=s3cr3t' }),
+        (e) => e.message === 'observogram store: an MCP endpoint URL has no fragment');
+      assert.deepEqual(mcpEndpoints.listMcpEndpoints(db).map((e) => e.name), ['ok']);
+      assert.ok(!('CREDENTIAL_PARAM' in mcpEndpoints), 'the substring regex is gone');
+      // The same rule for another field's URL: the API's text, no store prefix.
+      assert.equal(mcpEndpoints.assertNoCredential('https://grafana.example/d/abc?orgId=1&design=x', 'endpoints.grafana'), 'https://grafana.example/d/abc?orgId=1&design=x');
+      for (const [url, note] of [
+        ['https://grafana.example/d/abc?token=s3cr3t&apiKey=s3cr3t', 'the parameter(s) "token", "apiKey", which look like credentials'],
+        ['https://me:s3cr3t@grafana.example/', 'userinfo'],
+        ['https://grafana.example/#access_token=s3cr3t', 'a fragment'],
+      ]) {
+        assert.throws(() => mcpEndpoints.assertNoCredential(url, 'endpoints.grafana'),
+          (e) => e instanceof TypeError && e.message === `endpoints.grafana carries ${note} — a token goes in the auth field, never in a URL`, url);
+      }
+    });
+  } finally {
+    close();
+  }
+});
+
+test('readTokenEnv names a variable of this org: OBSERVOGRAM_ORG_<KEY>_<NAME>, owned by the longest org prefix', async () => {
+  const { db, close } = await freshStore('mcp-env-owner');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    orgs.createOrg(db, 'system', { id: 'acme-eu', name: 'Acme EU' });
+    orgs.createOrg(db, 'system', { id: 'bravo', name: 'Bravo' });
+    orgs.createOrg(db, 'system', { id: 'a-b', name: 'A-B' });
+    orgs.createOrg(db, 'system', { id: 'a_b', name: 'A_B' });
+    orgs.createOrg(db, 'system', { id: 'gone', name: 'Gone' });
+    orgs.removeOrg(db, 'system', 'gone');
+    assert.equal(mcpEndpoints.orgEnvPrefix('pay-eu'), 'OBSERVOGRAM_ORG_PAY_EU_');
+    assert.deepEqual(mcpEndpoints.envNameOwnedBy(db, 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN'), ['acme']);
+    assert.deepEqual(mcpEndpoints.envNameOwnedBy(db, 'OBSERVOGRAM_ORG_ACME_EU_TOKEN'), ['acme-eu'], 'the longest prefix wins');
+    assert.deepEqual(mcpEndpoints.envNameOwnedBy(db, 'OBSERVOGRAM_ORG_A_B_X'), ['a-b', 'a_b'], 'a KEY tie');
+    assert.deepEqual(mcpEndpoints.envNameOwnedBy(db, 'OBSERVOGRAM_ORG_GONE_X'), ['gone'], 'a removed org keeps its variables');
+    assert.deepEqual(mcpEndpoints.envNameOwnedBy(db, 'OBSERVOGRAM_ORG_NOBODY_X'), []);
+    assert.deepEqual(mcpEndpoints.envNameOwnedBy(db, 'OBSERVOGRAM_ORG_ACME_'), [], 'an empty NAME is nobody\'s');
+    assert.deepEqual(mcpEndpoints.envNameOwnedBy(db, 42), []);
+    const shape = (name, key) => `observogram store: readTokenEnv names an env var of this org, OBSERVOGRAM_ORG_<KEY>_<NAME> with <NAME> of [A-Z0-9_]+ (for example OBSERVOGRAM_ORG_${key}_MCP_TOKEN), not ${JSON.stringify(name)} — an admin may only name variables set aside for their org`;
+    const owner = (name, orgList) => `observogram store: ${name} belongs to org ${orgList} (the longest org prefix wins) — an admin may only name variables set aside for their org`;
+    const create = (name, readTokenEnv) => mcpEndpoints.createMcpEndpoint(db, 'alice', { name, url: 'https://mcp.example/mcp', readTokenEnv });
+    const refusedWith = (text) => (e) => e instanceof TypeError && e.message === text;
+    runWithOrg('acme', () => {
+      assert.equal(create('a', 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN').readTokenEnv, 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN');
+      assert.equal(create('b', 'OBSERVOGRAM_ORG_ACME_TOKEN').readTokenEnv, 'OBSERVOGRAM_ORG_ACME_TOKEN');
+      assert.equal(create('c', null).readTokenEnv, null);
+      assert.equal(create('d').readTokenEnv, null);
+      assert.throws(() => create('e', 'MCP_TOKEN'), refusedWith(shape('MCP_TOKEN', 'ACME')));
+      assert.throws(() => create('e', 'OBSERVOGRAM_SESSION_SECRET'), refusedWith(shape('OBSERVOGRAM_SESSION_SECRET', 'ACME')));
+      assert.throws(() => create('e', 'observogram_org_acme_x'), refusedWith(shape('observogram_org_acme_x', 'ACME')), 'upper case only');
+      assert.throws(() => create('e', 'OBSERVOGRAM_ORG_ACME_'), refusedWith(shape('OBSERVOGRAM_ORG_ACME_', 'ACME')));
+      assert.throws(() => create('e', 'OBSERVOGRAM_ORG_NOBODY_X'), refusedWith(shape('OBSERVOGRAM_ORG_NOBODY_X', 'ACME')), 'nobody\'s is refused with the shape text');
+      assert.throws(() => create('e', 'OBSERVOGRAM_ORG_ACME_EU_TOKEN'), refusedWith(owner('OBSERVOGRAM_ORG_ACME_EU_TOKEN', 'acme-eu')), 'starts with acme\'s prefix, but is acme-eu\'s');
+      assert.throws(() => create('e', 'OBSERVOGRAM_ORG_GONE_X'), refusedWith(owner('OBSERVOGRAM_ORG_GONE_X', 'gone')), 'a removed org\'s variable is nobody else\'s');
+      assert.throws(() => create('e', 'OBSERVOGRAM_ORG_A_B_X'), refusedWith(owner('OBSERVOGRAM_ORG_A_B_X', 'a-b, a_b')));
+      assert.throws(() => create('e', 42), refusedWith(shape(42, 'ACME')));
+      // On update too; the audit rows carry the origin and the NAME (never the URL's path or query).
+      const ep = mcpEndpoints.getMcpEndpoint(db, create('f', 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN').id);
+      assert.throws(() => mcpEndpoints.updateMcpEndpoint(db, 'alice', ep.id, { readTokenEnv: 'OBSERVOGRAM_ORG_ACME_EU_TOKEN' }), refusedWith(owner('OBSERVOGRAM_ORG_ACME_EU_TOKEN', 'acme-eu')));
+      assert.equal(mcpEndpoints.updateMcpEndpoint(db, 'alice', ep.id, { readTokenEnv: null }).readTokenEnv, null);
+      assert.equal(mcpEndpoints.updateMcpEndpoint(db, 'alice', ep.id, { url: 'https://mcp2.example:8443/x/mcp?transport=sse', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_OTHER' }).readTokenEnv, 'OBSERVOGRAM_ORG_ACME_OTHER');
+      assert.deepEqual(mcpEndpoints.deleteMcpEndpoint(db, 'alice', ep.id).name, 'f');
+      assert.deepEqual(auditRepo.listAudit(db, { orgId: 'acme', limit: 1000 }).reverse().filter((r) => r.targetId === 'f').map((r) => [r.action, r.detail]), [
+        ['mcp_endpoint.create', { fields: ['name', 'url', 'readTokenEnv'], origin: 'https://mcp.example', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' }],
+        ['mcp_endpoint.update', { fields: ['readTokenEnv'], origin: 'https://mcp.example', readTokenEnv: null }],
+        ['mcp_endpoint.update', { fields: ['url', 'readTokenEnv'], origin: 'https://mcp2.example:8443', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_OTHER' }],
+        ['mcp_endpoint.delete', { origin: 'https://mcp2.example:8443', unbound: 0 }],
+      ]);
+      assert.equal(auditRepo.listAudit(db, { orgId: 'acme', limit: 1000 }).filter((r) => r.action === 'mcp_endpoint.create').length, 5, 'a refused create writes no row');
+    });
+    runWithOrg('acme-eu', () => {
+      assert.equal(create('a', 'OBSERVOGRAM_ORG_ACME_EU_TOKEN').readTokenEnv, 'OBSERVOGRAM_ORG_ACME_EU_TOKEN');
+      assert.throws(() => create('b', 'OBSERVOGRAM_ORG_ACME_TOKEN'), refusedWith(owner('OBSERVOGRAM_ORG_ACME_TOKEN', 'acme')));
+      assert.throws(() => create('b', 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN'), refusedWith(owner('OBSERVOGRAM_ORG_ACME_MCP_TOKEN', 'acme')));
+      assert.throws(() => create('b', 'MCP_TOKEN'), refusedWith(shape('MCP_TOKEN', 'ACME_EU')), 'the example names this org\'s prefix');
+    });
+    runWithOrg('bravo', () => {
+      assert.throws(() => create('a', 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN'), refusedWith(owner('OBSERVOGRAM_ORG_ACME_MCP_TOKEN', 'acme')));
+      assert.equal(create('a', 'OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN').readTokenEnv, 'OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN');
+    });
+    runWithOrg('a-b', () => assert.equal(create('a', 'OBSERVOGRAM_ORG_A_B_X').readTokenEnv, 'OBSERVOGRAM_ORG_A_B_X', 'a tie that includes the context org passes'));
+    runWithOrg('a_b', () => assert.equal(create('a', 'OBSERVOGRAM_ORG_A_B_X').readTokenEnv, 'OBSERVOGRAM_ORG_A_B_X'));
+    // The delete row counts the environments it unbinds.
+    runWithOrg('bravo', () => {
+      const ep = mcpEndpoints.listMcpEndpoints(db)[0];
+      const svc = services.createService(db, 'bob', { slug: 'pay', name: 'Pay' });
+      environments.createEnvironment(db, 'bob', { serviceId: svc.id, name: 'prod', mcpEndpointId: ep.id });
+      environments.createEnvironment(db, 'bob', { serviceId: svc.id, name: 'staging', mcpEndpointId: ep.id });
+      assert.equal(mcpEndpoints.countBound(db, ep.id), 2);
+      mcpEndpoints.deleteMcpEndpoint(db, 'bob', ep.id);
+      assert.deepEqual(auditRepo.listAudit(db, { orgId: 'bravo', action: 'mcp_endpoint.delete' }).map((r) => r.detail), [{ origin: 'https://mcp.example', unbound: 2 }]);
+      assert.deepEqual(environments.listEnvironmentsForOrg(db).map((e) => e.mcpEndpointId), [null, null]);
     });
   } finally {
     close();

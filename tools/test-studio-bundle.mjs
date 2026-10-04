@@ -418,6 +418,20 @@ test('T5 parity: the shim answers every ported route as a running server does â€
     for (const h of headers) assert.equal(b.headers.get(h), a.headers.get(h), `${path}: ${h}`);
     return a;
   };
+  // GET /api/packs/:id/conformance: the server names the service record a
+  // registered pack is linked to (`tier.service`, `tier.environment` â€” STORE_PLAN
+  // slice 4 Â§9); the bundle has no registry, so the shim answers null there
+  // and must match everywhere else â€” the grading itself (graded, pack, from,
+  // mismatch) is the pack's own on both sides while no record tier is set.
+  const sameConformance = async (backend, path) => {
+    const [a, b] = await Promise.all([server(path), shim(backend, path)]);
+    assert.equal(b.status, a.status, `${path}: status`);
+    assert.equal(b.type, a.type, `${path}: content-type`);
+    assert.equal(b.body.tier?.service, null, `${path}: the shim names no service record`);
+    assert.equal(b.body.tier?.environment, null, `${path}: the shim names no environment record`);
+    assert.deepEqual(b.body, { ...a.body, tier: { ...a.body.tier, service: null, environment: null } }, `${path}: body, the record's ids aside`);
+    return a;
+  };
 
   // The example pack, with the server's label and description.
   const examples = (await server('/api/examples')).body.examples;
@@ -460,11 +474,11 @@ test('T5 parity: the shim answers every ported route as a running server does â€
     await same(backend, base);
     for (const env of packEnvs) {
       await same(backend, `${base}?env=${encodeURIComponent(env)}`);
-      await same(backend, `${base}/conformance?env=${encodeURIComponent(env)}`);
+      await sameConformance(backend, `${base}/conformance?env=${encodeURIComponent(env)}`);
       await same(backend, `${base}/canonical?env=${encodeURIComponent(env)}`);
       await same(backend, `${base}/compile-catalog?env=${encodeURIComponent(env)}`);
     }
-    const conf = await same(backend, `${base}/conformance`);
+    const conf = await sameConformance(backend, `${base}/conformance`);
     if (id === ordersId) assert.ok(Array.isArray(conf.body.onPlaceholder) && conf.body.onPlaceholder.length, 'the library-built pack says onPlaceholder');
     else assert.ok(!('onPlaceholder' in conf.body), 'the example pack omits onPlaceholder');
     await same(backend, `${base}/canonical`);

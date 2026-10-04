@@ -31,6 +31,24 @@ never stored — never in the URL's path.
 The studio can also call the same flow through `POST /api/draft-from-mcp`.
 Successful drafts are registered in memory and become selectable as Pack B.
 
+An org can name its MCP endpoints once (STORE_PLAN slice 4): an admin
+registers `{ name, url, readTokenEnv? }` with `POST /api/mcp-endpoints`
+(`X-Observogram-CSRF: 1` in every posture), every member lists them with
+`GET /api/mcp-endpoints` (the URL and the variable's name to operators and
+above), and an environment of a service names the one it is checked through
+(`mcpEndpointId`). `POST /api/refresh-live` and `POST /api/draft-from-mcp`
+then take `mcpEndpointId` in place of `mcpUrl`: the record's URL, and the
+read token from the variable the record names —
+`OBSERVOGRAM_ORG_<ORG>_<NAME>`, set in the server's environment (the k8s
+studio Deployment's `env`, from a Secret) — read at request time when the
+request sends no `mcpAuth`, never logged, returned or stored. An admin may
+name only their org's variables (the owning org is the one whose prefix is
+the longest match, so `OBSERVOGRAM_ORG_ACME_EU_X` is `acme-eu`'s); the URL
+may carry no credential-looking query parameter. The deploy and rollback
+routes take `mcpEndpointId` for the URL only — a write token is always the
+request's `mcpAuth`. See the README's Services, Environments And MCP
+Endpoints.
+
 ```bash
 MCP_URL=https://otel-mcp.example.com/mcp \
 MCP_AUTH=$MCP_CLIENT_KEY \

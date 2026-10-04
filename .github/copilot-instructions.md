@@ -69,13 +69,19 @@ them; change them at the source and update the gate in the same commit.
   `server/test-authz.mjs` fails the build on an unclassified, unguarded or
   unprobed route (add its probe to `PROBES`); a class change updates
   `EXPECTED_CLASS` there in the same commit.
-- **Identity rules:** every user, org, membership and join-role rule lives
-  once in `server/identity-admin.mjs`, applied by the CLIs (`npm run users`,
-  `npm run orgs`) and by the identity API (`server/routes/identity.mjs`,
-  with `surface: 'api'`, which changes only the way out a refusal names).
-  A refusal's `kind` (invalid / missing / conflict → 400 / 404 / 409) and
-  both surfaces' texts are pinned in `server/test-store.mjs`; never fork a
-  rule into a route.
+- **Identity and service rules:** every user, org, membership and join-role
+  rule lives once in `server/identity-admin.mjs`, applied by the CLIs
+  (`npm run users`, `npm run orgs`) and by the identity API
+  (`server/routes/identity.mjs`, with `surface: 'api'`, which changes only
+  the way out a refusal names); every service, environment and MCP endpoint
+  rule — the tier enum, the MCP URL word rule and the per-org
+  `OBSERVOGRAM_ORG_<ORG>_*` token variable, an MCP target picked by
+  `mcpEndpointId` — lives once in `server/service-admin.mjs` (over
+  `server/store/mcp-endpoints.mjs`), applied by `server/routes/services.mjs`
+  and the refresh, draft and deploy routes. A refusal's `kind` (invalid /
+  missing / conflict → 400 / 404 / 409) and the texts are pinned in
+  `server/test-store.mjs`, `server/test-service-admin.mjs` and
+  `server/test-services-api.mjs`; never fork a rule into a route.
 - **Browser-safety rule:** modules under `tools/lib/` (including
   `tools/lib/contracts/`) are imported by the studio in the browser — they
   must not import `node:*` APIs or read `process.env`. Node-only code lives

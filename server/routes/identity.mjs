@@ -14,6 +14,8 @@
 // conflict 409. A repository's own TypeError ('observogram store: …') is bad
 // input too, 400. Nothing here answers 403: that is the guard's
 // (authorize(), server/authz.mjs), and means an authorization denial only.
+// The handler, the refusal mapping, the body and the path id are
+// server/routes/util.mjs's, shared with server/routes/services.mjs.
 //
 // Each handler is synchronous around its rule — no await between reading a
 // row and the atomic() that changes it. The audit actor is the principal's
@@ -32,55 +34,18 @@ import { authDisabled, authEnabled, oidcEnabled } from '../auth.mjs';
 import { proxyAuthConfig } from '../auth-proxy.mjs';
 import { apiTokenLabel } from '../authz.mjs';
 import {
-  AdminRefusal, addLocalUser, addMember, createOrgFromAdmin, disableUser, enableUser, findMemberCandidate, liveSignInMode,
+  addLocalUser, addMember, createOrgFromAdmin, disableUser, enableUser, findMemberCandidate, liveSignInMode,
   parseRole, removeMember, removeOrgSoft, renameOrgFromAdmin, setJoinRole, setLocalPassword, setMemberRole, setOwnerFlag,
   signOutEverywhere,
 } from '../identity-admin.mjs';
-import { atomic, currentStore } from '../store/db.mjs';
+import { atomic } from '../store/db.mjs';
 import { defaultOrgId } from '../store/identity.mjs';
 import { listMembers, listMembershipsForUser } from '../store/memberships.mjs';
 import { getMeta } from '../store/meta.mjs';
 import { getOrg, listOrgs } from '../store/orgs.mjs';
 import { getUser, listUsersWithMemberships } from '../store/users.mjs';
 import { baseWorkspaceRoot } from '../tenancy.mjs';
-
-const STATUS = Object.freeze({ invalid: 400, missing: 404, conflict: 409 });
-const USER_ID = /^[1-9][0-9]{0,15}$/;
-
-// A rule's refusal, or a repository's TypeError, answered; anything else
-// is a bug and goes on to Express (500).
-function refused(res, e) {
-  if (e instanceof AdminRefusal) return res.status(STATUS[e.kind]).json({ ok: false, error: e.message });
-  if (e instanceof TypeError && e.message.startsWith('observogram store: ')) return res.status(400).json({ ok: false, error: e.message });
-  throw e;
-}
-
-// The handler, with the store, the principal and its audit actor.
-const handler = (fn) => function identityHandler(req, res) {
-  const principal = req.observogramPrincipal;
-  try {
-    return fn(req, res, { db: currentStore(), principal, actor: principal.actor });
-  } catch (e) {
-    return refused(res, e);
-  }
-};
-
-// A JSON object body, else {} (each rule refuses what is then missing).
-const bodyOf = (req) => (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {});
-
-// The users.id a path parameter holds, bound as a number — or null, the
-// 400 sent. A 16-digit id past 2^53 - 1 is refused too, and the text says
-// why: as a number it would round, and a refusal would name an id the
-// caller never sent.
-function pathId(req, res, param) {
-  const id = req.params[param];
-  const n = USER_ID.test(id) ? Number(id) : NaN;
-  if (!Number.isSafeInteger(n)) {
-    res.status(400).json({ ok: false, error: 'user id must be a positive integer, at most 9007199254740991' });
-    return null;
-  }
-  return n;
-}
+import { bodyOf, handler, pathId } from './util.mjs';
 
 // The user an owner route's path names — or null, the answer (400 / 404)
 // sent. (The member routes never say whether an id exists: pathId only.)

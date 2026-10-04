@@ -24,7 +24,9 @@ import {
   targetIsDeployable, filterPromRulesScope, buildNativeDeployCalls,
   newDeployId, captureDeploySnapshot,
 } from '../deploy-helpers.mjs';
-import { validateMcpUrl, redactCredentials } from '../mcp-url.mjs';
+import { redactCredentials } from '../mcp-url.mjs';
+import { resolveMcpTarget } from '../service-admin.mjs';
+import { currentStore } from '../store/db.mjs';
 import { brandEnv } from '../../tools/lib/brand-env.mjs';
 import {
   appendDeployRecord, appendDeployVerify, readDeployRecords, readDeploySnapshot,
@@ -163,14 +165,15 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
       return res.status(409).json({ ok: false, error: `no usable snapshot for ${rollbackOf} (status: ${snap?.meta?.status || 'none'}) — nothing to restore from` });
     }
     const b = req.body || {};
-    const mcpUrl = typeof b.mcpUrl === 'string' ? b.mcpUrl.trim() : '';
-    if (!mcpUrl) return res.status(400).json({ ok: false, error: 'mcpUrl required in JSON body' });
-    const { error: mcpUrlError, safeUrl: safeMcpUrl } = validateMcpUrl(mcpUrl);
-    if (mcpUrlError) return res.status(400).json({ ok: false, error: mcpUrlError });
+    // mcpUrl, or the org's MCP endpoint by mcpEndpointId (its URL only: a
+    // write token is the request's, never a stored variable's).
+    const target = resolveMcpTarget(currentStore(), b, { forWrite: true });
+    if (target.status) return res.status(target.status).json({ ok: false, error: target.error });
+    const { mcpUrl, safeMcpUrl, mcpAuth } = target;
     const dryRun = b.dryRun === true || b.dry_run === true;
 
     const t0 = Date.now();
-    const { rpc, callTool } = createMcpClient({ mcpUrl, mcpAuth: typeof b.mcpAuth === 'string' ? b.mcpAuth : null });
+    const { rpc, callTool } = createMcpClient({ mcpUrl, mcpAuth });
     await rpc('initialize', {
       protocolVersion: '2025-06-18',
       capabilities: {},
@@ -259,7 +262,8 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
   // ----------------------------------------------------------------
   // POST /api/packs/:id/deploy-bulk — multi-artefact deploy.
   // Body: {
-  //   mcpUrl, mcpAuth?,
+  //   mcpUrl | mcpEndpointId, mcpAuth?,   (an endpoint by id: its URL only;
+  //                                        the write token stays per request)
   //   targetProduct, targetVersion, targetFolder?,
   //   items: [{ group, flavor?, artifact?, dashboardId?, scope? }, ...]
   // }
@@ -272,8 +276,6 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     const meta = findPackMeta(req.params.id);
     if (!meta) return res.status(404).json({ ok: false, error: `unknown pack: ${req.params.id}` });
     const body = req.body || {};
-    const mcpUrl  = typeof body.mcpUrl  === 'string' ? body.mcpUrl.trim() : '';
-    const mcpAuth = typeof body.mcpAuth === 'string' ? body.mcpAuth : null;
     const product = (typeof body.targetProduct === 'string' && body.targetProduct.trim()) ? body.targetProduct.trim() : 'grafana';
     const version = (typeof body.targetVersion === 'string' && body.targetVersion.trim()) ? body.targetVersion.trim() : '12';
     const folder  = typeof body.targetFolder === 'string' ? body.targetFolder.trim() : '';
@@ -282,9 +284,9 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     const items = Array.isArray(body.items) ? body.items : null;
     const env = readEnv(req.query);
 
-    if (!mcpUrl) return res.status(400).json({ ok: false, error: 'mcpUrl required in JSON body' });
-    const { error: mcpUrlError, safeUrl: safeMcpUrl } = validateMcpUrl(mcpUrl);
-    if (mcpUrlError) return res.status(400).json({ ok: false, error: mcpUrlError });
+    const target = resolveMcpTarget(currentStore(), body, { forWrite: true });
+    if (target.status) return res.status(target.status).json({ ok: false, error: target.error });
+    const { mcpUrl, safeMcpUrl, mcpAuth } = target;
     if (!items || items.length === 0) return res.status(400).json({ ok: false, error: 'items array required and must be non-empty' });
     if (!DEPLOY_PRODUCTS.includes(product)) return res.status(400).json({ ok: false, error: `unsupported target product: ${product}` });
     if (!DEPLOY_VERSIONS[product]?.includes(version)) return res.status(400).json({ ok: false, error: `unsupported ${product} version: ${version}` });
@@ -457,8 +459,6 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     }
 
     const body = req.body || {};
-    const mcpUrl  = typeof body.mcpUrl  === 'string' ? body.mcpUrl.trim()  : '';
-    const mcpAuth = typeof body.mcpAuth === 'string' ? body.mcpAuth        : null;
     const product = (typeof body.targetProduct === 'string' && body.targetProduct.trim())
       ? body.targetProduct.trim() : 'grafana';
     const version = (typeof body.targetVersion === 'string' && body.targetVersion.trim())
@@ -485,9 +485,11 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
 
     const env = readEnv(req.query);
     const dashboardId = typeof req.query.dashboardId === 'string' ? req.query.dashboardId : undefined;
-    if (!mcpUrl) return res.status(400).json({ ok: false, error: 'mcpUrl required in JSON body' });
-    const { error: mcpUrlError, safeUrl: safeMcpUrl } = validateMcpUrl(mcpUrl);
-    if (mcpUrlError) return res.status(400).json({ ok: false, error: mcpUrlError });
+    // mcpUrl, or the org's MCP endpoint by mcpEndpointId (its URL only; the
+    // write token stays the request's mcpAuth).
+    const mcp = resolveMcpTarget(currentStore(), body, { forWrite: true });
+    if (mcp.status) return res.status(mcp.status).json({ ok: false, error: mcp.error });
+    const { mcpUrl, safeMcpUrl, mcpAuth } = mcp;
 
     const t0 = Date.now();
     let canonical = null;   // hoisted: the catch-path audit record reads it

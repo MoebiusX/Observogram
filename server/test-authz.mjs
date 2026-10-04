@@ -25,7 +25,9 @@
  * - the decision (authzDecision), pure, over synthetic entries — the
  *   always / refuse / rule / direct-loopback paths no route has yet — and
  *   the request facts it reads (the CSRF header, a cross-site form, a
- *   direct loopback request); selfGate's CSRF step, on the entry of
+ *   direct loopback request); the `direct` / `closedAs` entry of the MCP
+ *   endpoint changes (slice 4: the identity API's defences without its
+ *   texts' CLI way out); selfGate's CSRF step, on the entry of
  *   POST /auth/signout-others; the guard's 500 for
  *   a classified route reached without a principal (fail closed);
  * - the AuthZ matrix: every /api route × every principal × every posture,
@@ -48,7 +50,13 @@
  *   identity writes and their audit rows (actor local; system for the
  *   first local user's grant); Arming, the API half (an exposed server
  *   seeded with OBSERVOGRAM_ADMIN_PASSWORD never answers an anonymous read
- *   while its users change).
+ *   while its users change);
+ * - the MCP endpoint rows in that matrix (slice 4): POST /api/mcp-endpoints
+ *   closed when exposed, a direct loopback request with the header only
+ *   without sign-in (its own texts), the CSRF header from every session;
+ *   GET /api/mcp-endpoints by rank (the url and the variable to operators
+ *   and above, null to a viewer) on an endpoint planted by a repository
+ *   call; the open-loopback create by `local` and its audit row.
  */
 
 // Hermetic (§0): a developer shell's store or identity variables never
@@ -71,6 +79,7 @@ process.env.OBSERVOGRAM_WORKSPACE = WORKSPACE;
 
 const {
   postureOf, listenOf, orgContext, authzDecision, directLoopbackRequest, crossSiteForm, hasCsrfHeader, rankOf, effectiveRoleOf, selfGate,
+  csrfAlwaysText,
 } = await import('./authz.mjs');
 const { openStore, closeStore, currentStore } = await import('./store/db.mjs');
 const { createUser } = await import('./store/users.mjs');
@@ -219,7 +228,9 @@ test('orgContext stamps the principal; a session\'s role is the context org\'s m
 // proved on the function the guard calls, whatever routes the table holds
 // (the matrix below proves them again over the identity API's routes).
 
-const synth = (fields) => ({ csrf: 'none', exposed: 'allow', identityApi: false, ...fields });
+// `direct` and `closedAs` default as routeEntry() fills them: the identity
+// API is direct, named 'the identity API'.
+const synth = (fields) => ({ csrf: 'none', exposed: 'allow', identityApi: false, direct: fields.identityApi === true, closedAs: 'the identity API', ...fields });
 const P = {
   local: { kind: 'local', actor: 'local', role: 'admin', owner: true },
   anon: { kind: 'anonymous', actor: null, role: 'viewer', owner: false },
@@ -239,6 +250,8 @@ test('authzDecision: posture, CSRF and class, in that order', () => {
   const orgCreate = synth({ class: 'owner', identityApi: true, csrf: 'always', exposed: 'rule' });
   const adminApi = synth({ class: 'admin', identityApi: true, csrf: 'always', exposed: 'refuse' });
   const adminRead = synth({ class: 'admin', identityApi: true, exposed: 'refuse' });
+  // The MCP endpoint changes (slice 4): the identity API's defences, not the identity API.
+  const mcpWrite = synth({ class: 'admin', direct: true, csrf: 'always', exposed: 'refuse', closedAs: 'the MCP endpoint API' });
   const viewerRead = synth({ class: 'viewer' });
   const opWrite = synth({ class: 'operator', csrf: 'session' });
   const rows = [
@@ -277,6 +290,18 @@ test('authzDecision: posture, CSRF and class, in that order', () => {
     [adminRead, ctxOf('token', P.bearer), '403 role'],
     // the posture refusal wins over the class and the header
     [ownerApi, ctxOf('open-exposed', P.local, { csrf: false, direct: false }), '403 posture'],
+    // a direct entry outside the identity API: closed when exposed, a direct
+    // loopback request with the header only, the admin role with the header
+    [mcpWrite, ctxOf('open-exposed', P.local), '403 posture'],
+    [mcpWrite, ctxOf('open-loopback', P.local), 'allow'],
+    [mcpWrite, ctxOf('open-loopback', P.local, { direct: false }), '403 posture'],
+    [mcpWrite, ctxOf('open-loopback', P.local, { csrf: false }), '403 csrf'],
+    [mcpWrite, ctxOf('identity', P.admin, { direct: false }), 'allow'],
+    [mcpWrite, ctxOf('identity', P.admin, { csrf: false }), '403 csrf'],
+    [mcpWrite, ctxOf('identity', P.owner), 'allow'],
+    [mcpWrite, ctxOf('identity', P.operator), '403 role'],
+    [mcpWrite, ctxOf('identity', P.bearer, { csrf: false }), '403 role'],
+    [mcpWrite, ctxOf('token', P.anon), '403 role'],
   ];
   for (const [entry, ctx, want] of rows) {
     assert.equal(verdict(authzDecision(entry, ctx)), want, `${JSON.stringify(entry)} × ${ctx.posture} ${ctx.principal.kind}/${ctx.principal.role} csrf=${ctx.csrf} direct=${ctx.direct}`);
@@ -286,6 +311,7 @@ test('authzDecision: posture, CSRF and class, in that order', () => {
 test('authzDecision: every refusal names a way out', () => {
   const ownerApi = synth({ class: 'owner', identityApi: true, csrf: 'always', exposed: 'refuse' });
   const adminApi = synth({ class: 'admin', identityApi: true, csrf: 'always', exposed: 'refuse' });
+  const mcpWrite = synth({ class: 'admin', direct: true, csrf: 'always', exposed: 'refuse', closedAs: 'the MCP endpoint API' });
   const opWrite = synth({ class: 'operator', csrf: 'session' });
   const text = (entry, ctx) => authzDecision(entry, ctx).body.error;
   assert.equal(text(ownerApi, ctxOf('open-exposed', P.local, { authOff: true })),
@@ -306,6 +332,18 @@ test('authzDecision: every refusal names a way out', () => {
     'anonymous callers are viewers here; the operator role needs a signed-in user; this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC');
   const body = authzDecision(opWrite, ctxOf('identity', P.viewer)).body;
   assert.deepEqual({ ...body, error: undefined }, { ok: false, error: undefined, denied: 'role', need: 'operator', role: 'viewer', owner: false, org: 'acme' });
+  // The MCP endpoint changes: the same refusals named after them — and no
+  // CLI way out (no CLI manages endpoints).
+  assert.equal(text(mcpWrite, ctxOf('open-exposed', P.local, { authOff: true })),
+    'the MCP endpoint API is closed on a server bound to 0.0.0.0 without sign-in (OBSERVOGRAM_INSECURE_NO_AUTH=1, OBSERVOGRAM_AUTH=off): restart it without OBSERVOGRAM_AUTH=off and sign in as an owner, or bind it to loopback');
+  assert.equal(text(mcpWrite, ctxOf('open-exposed', P.local)),
+    'the MCP endpoint API is closed on a server bound to 0.0.0.0 without sign-in (OBSERVOGRAM_INSECURE_NO_AUTH=1): add the first user with npm run users -- add <login> (it arms sign-in without a restart; the first local user is an owner), or configure OIDC');
+  assert.equal(text(mcpWrite, ctxOf('open-loopback', P.local, { direct: false, port: 8123 })),
+    'on a server without sign-in the MCP endpoint API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:8123');
+  assert.equal(text(mcpWrite, ctxOf('identity', P.admin, { csrf: false })),
+    "missing X-Observogram-CSRF: 1 — changes to the MCP endpoint API need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')");
+  assert.equal(text(mcpWrite, ctxOf('identity', P.operator)), "requires the admin role in org 'acme' (you are operator) — ask an admin of acme");
+  assert.equal(csrfAlwaysText(adminApi), text(ownerApi, ctxOf('identity', P.owner, { csrf: false })), 'csrfAlwaysText: the identity text, byte for byte');
 });
 
 test('the request facts: the CSRF header, a cross-site form, a direct loopback request; ranks', () => {
@@ -799,6 +837,11 @@ const EXPECTED_CLASS = Object.freeze({
   'GET /api/library': 'viewer',
   'GET /api/library/requirements/:tier': 'viewer',
   'GET /api/library/:id': 'viewer',
+  'GET /api/services': 'viewer',
+  'GET /api/services/:id': 'viewer',
+  'GET /api/services/:id/environments': 'viewer',
+  'GET /api/environments/:id': 'viewer',
+  'GET /api/mcp-endpoints': 'viewer',
   'DELETE /api/uploads': 'operator',
   'POST /api/packs/:id/retrofeed': 'operator',
   'POST /api/deploys/:deployId/verify': 'operator',
@@ -815,11 +858,20 @@ const EXPECTED_CLASS = Object.freeze({
   'POST /api/library/instantiate': 'operator',
   'POST /api/library/compile': 'operator',
   'POST /api/library/register': 'operator',
+  'POST /api/services': 'operator',
+  'PATCH /api/services/:id': 'operator',
+  'DELETE /api/services/:id': 'operator',
+  'POST /api/services/:id/environments': 'operator',
+  'PATCH /api/environments/:id': 'operator',
+  'DELETE /api/environments/:id': 'operator',
   'PATCH /api/org': 'admin',
   'GET /api/org/members': 'admin',
   'POST /api/org/members': 'admin',
   'PATCH /api/org/members/:userId': 'admin',
   'DELETE /api/org/members/:userId': 'admin',
+  'POST /api/mcp-endpoints': 'admin',
+  'PATCH /api/mcp-endpoints/:id': 'admin',
+  'DELETE /api/mcp-endpoints/:id': 'admin',
   'GET /api/admin/users': 'owner',
   'POST /api/admin/users': 'owner',
   'POST /api/admin/users/:id/disable': 'owner',
@@ -842,6 +894,16 @@ const EXPECTED_IDENTITY_API = Object.freeze([
   'GET /api/admin/orgs', 'POST /api/admin/orgs', 'DELETE /api/admin/orgs/:id', 'GET /api/admin/join-role', 'PUT /api/admin/join-role',
 ]);
 const EXPECTED_EXPOSED_RULE = Object.freeze(['POST /api/admin/orgs']);
+// The MCP endpoint changes (STORE_PLAN slice 4): the identity API's
+// defences — direct loopback only without sign-in, the CSRF header in every
+// posture, closed when exposed — on rows that are not the identity API.
+const EXPECTED_MCP_ENDPOINT_CHANGES = Object.freeze(['POST /api/mcp-endpoints', 'PATCH /api/mcp-endpoints/:id', 'DELETE /api/mcp-endpoints/:id']);
+// Every `direct` entry, and every csrf: 'always' entry (the identity
+// mutations, the self route that changes a session, the MCP endpoint changes).
+const EXPECTED_DIRECT = Object.freeze([...EXPECTED_IDENTITY_API, ...EXPECTED_MCP_ENDPOINT_CHANGES]);
+const EXPECTED_CSRF_ALWAYS = Object.freeze([
+  ...EXPECTED_IDENTITY_API.filter((k) => !k.startsWith('GET ')), 'POST /auth/signout-others', ...EXPECTED_MCP_ENDPOINT_CHANGES,
+]);
 
 const { spawnSync } = await import('node:child_process');
 const { ROUTES, STATIC_MOUNTS, MIDDLEWARE, CLASSES, MODES, routeEntry } = await import('./route-table.mjs');
@@ -911,7 +973,8 @@ test('completeness: the table agrees with the independent classification, and ev
     assert.ok(e.modes.length > 0 && e.modes.every((m) => MODES.includes(m)), `${key}: modes`);
     assert.ok(['none', 'session', 'always', 'form'].includes(e.csrf), `${key}: csrf`);
     assert.ok(['allow', 'refuse', 'rule'].includes(e.exposed), `${key}: exposed`);
-    assert.ok(Array.isArray(e.audit) && e.audit.every((a) => /^[a-z]+(?:[.-][a-z]+)+$/.test(a)), `${key}: audit actions`);
+    // <kind>.<verb>, lower case; a kind of two words joins them with _ (mcp_endpoint.create).
+    assert.ok(Array.isArray(e.audit) && e.audit.every((a) => /^[a-z]+(?:_[a-z]+)*(?:[.-][a-z]+(?:_[a-z]+)*)+$/.test(a)), `${key}: audit actions`);
     assert.ok(e.later === null || (typeof e.later === 'string' && e.later.length > 0), `${key}: later`);
     const isApi = e.path.startsWith('/api/');
     if (isApi && e.method !== 'GET') {
@@ -919,6 +982,13 @@ test('completeness: the table agrees with the independent classification, and ev
       assert.ok(!['public', 'viewer'].includes(e.class), `${key}: a viewer may only read`);
     }
     if (e.identityApi) assert.ok(['admin', 'owner'].includes(e.class), `${key}: the identity API is admin or owner`);
+    if (e.identityApi) assert.equal(e.direct, true, `${key}: the identity API is direct`);
+    if (e.direct) assert.ok(['admin', 'owner'].includes(e.class), `${key}: a direct entry is admin or owner`);
+    if (e.direct) assert.equal(e.exposed === 'allow', false, `${key}: a direct entry is closed (or its rule's) when exposed`);
+    if (e.direct && e.method !== 'GET') assert.equal(e.csrf, 'always', `${key}: a direct change takes the CSRF header in every posture`);
+    assert.ok(['the identity API', 'the MCP endpoint API'].includes(e.closedAs), `${key}: closedAs`);
+    assert.match(e.closedAs, / API$/, `${key}: closedAs is a singular subject (the texts say 'is closed', 'answers only')`);
+    assert.equal(e.closedAs === 'the identity API', !EXPECTED_MCP_ENDPOINT_CHANGES.includes(key), `${key}: closed as what it is`);
     if (e.class === 'admin' || e.class === 'owner') assert.ok(Object.hasOwn(ROUTES[key], 'exposed'), `${key}: an ${e.class} route declares exposed`);
     if (e.csrf === 'form') assert.ok(e.method !== 'GET' && e.path.startsWith('/auth/'), `${key}: form is for a non-GET /auth route`);
     if (e.class === 'self') {
@@ -927,13 +997,16 @@ test('completeness: the table agrees with the independent classification, and ev
     } else assert.equal(e.self, null, `${key}: only a self entry has a self spec`);
   }
   assert.deepEqual(Object.keys(ROUTES).filter((k) => routeEntry(k).identityApi).sort(), [...EXPECTED_IDENTITY_API].sort(), 'the identity API set');
+  assert.deepEqual(Object.keys(ROUTES).filter((k) => routeEntry(k).direct).sort(), [...EXPECTED_DIRECT].sort(), 'the direct set');
+  assert.deepEqual(Object.keys(ROUTES).filter((k) => routeEntry(k).csrf === 'always').sort(), [...EXPECTED_CSRF_ALWAYS].sort(), 'the csrf: always set');
   assert.deepEqual(Object.keys(ROUTES).filter((k) => routeEntry(k).exposed === 'rule').sort(), [...EXPECTED_EXPOSED_RULE].sort(), 'the exposed: rule set');
 });
 
 // The README's API Surface states each row's class in its intro: the
-// public and self rows by name, the admin rows (/api/org, /api/org/…) and
-// the owner rows (/api/admin/…) by path, then every other GET viewer, every
-// other row operator. Each row is checked against the route table.
+// public and self rows by name, the admin rows (/api/org, /api/org/…, and
+// every /api/mcp-endpoints route but its GET) and the owner rows
+// (/api/admin/…) by path, then every other GET viewer, every other row
+// operator. Each row is checked against the route table.
 test('the README API Surface: its intro states each row\'s class — public and self by name, admin and owner by path, every other GET viewer, every other row operator', () => {
   const readme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'README.md'), 'utf8');
   const start = readme.indexOf('\n## API Surface\n');
@@ -950,6 +1023,7 @@ test('the README API Surface: its intro states each row\'s class — public and 
   assert.ok(selfNamed.length > 0, 'the intro names the self rows');
   assert.match(intro, /`\/api\/org` and every `\/api\/org\/…` route are `admin`/, 'the intro states the admin rows');
   assert.match(intro, /every `\/api\/admin\/…` route `owner`/, 'the intro states the owner rows');
+  assert.match(intro, /every `\/api\/mcp-endpoints` route but its `GET` is `admin`/, 'the intro states the MCP endpoint rows');
   assert.match(intro, /every other `GET` is `viewer`/, 'the intro states the GET rule');
   assert.match(intro, /every other route `operator`/, 'the intro states the rule for every other row');
   const stated = (method, path) => {
@@ -957,6 +1031,7 @@ test('the README API Surface: its intro states each row\'s class — public and 
     if (selfNamed.includes(path)) return 'self';
     if (path === '/api/org' || path.startsWith('/api/org/')) return 'admin';
     if (path.startsWith('/api/admin/')) return 'owner';
+    if (path.startsWith('/api/mcp-endpoints') && method !== 'GET') return 'admin';
     return method === 'GET' ? 'viewer' : 'operator';
   };
   for (const { method, path } of rows) {
@@ -999,6 +1074,25 @@ test('the README Identity API section states the audit actor and its system exce
   for (const line of curls) {
     if (/ -d /.test(line) && /\/api\/(admin|org)/.test(line)) assert.ok(line.includes("-H 'X-Observogram-CSRF: 1'"), `${line}: sends the CSRF header`);
   }
+});
+
+// The README's Services section quotes the CSRF refusal the three MCP
+// endpoint changes send, with their closedAs: the quote is the bytes
+// csrfAlwaysText gives for those rows (whitespace folded — the README wraps
+// it), so a renamed closedAs cannot leave the README quoting the old text.
+test('the README Services section quotes the MCP endpoint changes\' CSRF refusal as the server sends it', () => {
+  const readme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'README.md'), 'utf8');
+  const start = readme.indexOf('\n### Services, Environments And MCP Endpoints\n');
+  assert.ok(start >= 0, 'README has a Services section');
+  const end = readme.indexOf('\n### ', start + 1);
+  const section = readme.slice(start, end < 0 ? undefined : end).replace(/\s+/g, ' ');
+  const quotes = [...section.matchAll(/`(missing X-Observogram-CSRF: 1 — [^`]*)`/g)].map((m) => m[1]);
+  assert.ok(quotes.length >= 1, 'the section quotes the CSRF refusal');
+  const mcpWrites = Object.keys(ROUTES).filter((k) => k.startsWith('POST /api/mcp-endpoints') || k.startsWith('PATCH /api/mcp-endpoints') || k.startsWith('DELETE /api/mcp-endpoints'));
+  assert.equal(mcpWrites.length, 3, 'the three MCP endpoint changes');
+  const texts = new Set(mcpWrites.map((k) => csrfAlwaysText(routeEntry(k))));
+  assert.equal(texts.size, 1, 'one CSRF text for the three');
+  for (const q of quotes) assert.equal(q, [...texts][0], 'the README quote is the text the server sends');
 });
 
 // The README's Roles section states how the import maps orgs.json roles:
@@ -1140,6 +1234,8 @@ const { serve, cli, signIn } = await import('./fixtures/serve-child.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
 const { hashPassword } = await import('./auth.mjs');
 const { openRaw, prepare } = await import('./store/db.mjs');
+const { createMcpEndpoint } = await import('./store/mcp-endpoints.mjs');
+const { runWithOrg } = await import('./org-context.mjs');
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ORG_ADMIN = join(REPO, 'tools', 'org-admin.mjs');
@@ -1190,6 +1286,23 @@ const PROBES = Object.freeze({
   'POST /api/library/instantiate': ['POST', '/api/library/instantiate'],
   'POST /api/library/compile': ['POST', '/api/library/compile'],
   'POST /api/library/register': ['POST', '/api/library/register'],
+  // The services and environments API (STORE_PLAN slice 4): unknown ids
+  // (404) and empty bodies (400) — nothing is written.
+  'GET /api/services': ['GET', '/api/services'],
+  'GET /api/services/:id': ['GET', '/api/services/999999'],
+  'GET /api/services/:id/environments': ['GET', '/api/services/999999/environments'],
+  'GET /api/environments/:id': ['GET', '/api/environments/999999'],
+  'POST /api/services': ['POST', '/api/services'],
+  'PATCH /api/services/:id': ['PATCH', '/api/services/999999'],
+  'DELETE /api/services/:id': ['DELETE', '/api/services/999999'],
+  'POST /api/services/:id/environments': ['POST', '/api/services/999999/environments'],
+  'PATCH /api/environments/:id': ['PATCH', '/api/environments/999999'],
+  'DELETE /api/environments/:id': ['DELETE', '/api/environments/999999'],
+  // The MCP endpoints: the list, an empty body (400), an unknown id (404).
+  'GET /api/mcp-endpoints': ['GET', '/api/mcp-endpoints'],
+  'POST /api/mcp-endpoints': ['POST', '/api/mcp-endpoints'],
+  'PATCH /api/mcp-endpoints/:id': ['PATCH', '/api/mcp-endpoints/999999'],
+  'DELETE /api/mcp-endpoints/:id': ['DELETE', '/api/mcp-endpoints/999999'],
   // The admin routes: invalid bodies, and a user id that is no member (the
   // PATCH names a valid role, so the membership is what it answers).
   'PATCH /api/org': ['PATCH', '/api/org'],
@@ -1514,6 +1627,29 @@ test('the AuthZ matrix — identity posture: every /api route × every principal
     }
     assert.equal((await liveFor('mia (no org → her first, bravo)')).present, false, 'bravo has no live pack: acme\'s is not read');
 
+    // GET /api/mcp-endpoints by rank, on an endpoint planted beside the
+    // running child by a repository call (WAL): the url and the variable's
+    // name to an operator and above — the bearer among them — null to a
+    // viewer; the origin and the name to every member; none of it in bravo.
+    const EP_URL = 'https://mcp.acme.test/mcp/s/sk-path-secret/obs?tier=x';
+    const planted = await openRaw(join(ws, 'observogram.db'));
+    try {
+      runWithOrg('acme', () => createMcpEndpoint(planted, 'system', { name: 'planted', url: EP_URL, readTokenEnv: 'OBSERVOGRAM_ORG_ACME_PLANTED_TOKEN' }));
+    } finally {
+      planted.close();
+    }
+    const endpointsFor = async (name) => (await call(srv.base, PROBES['GET /api/mcp-endpoints'], { headers: variants.find((v) => v.name === name).headers })).json;
+    for (const name of ['vera@acme', 'mia@acme']) {
+      const e = await endpointsFor(name);
+      assert.deepEqual(e.endpoints.map((x) => [x.name, x.origin, x.url, x.readTokenEnv, x.environments]), [['planted', LIVE_ORIGIN, null, null, 0]], `${name}: the name and origin only`);
+    }
+    for (const name of ['oscar@acme', 'bearer', 'ada@acme', 'owen@acme', 'olive@acme']) {
+      const e = await endpointsFor(name);
+      assert.deepEqual(e.endpoints.map((x) => [x.name, x.origin, x.url, x.readTokenEnv, x.environments]), [['planted', LIVE_ORIGIN, EP_URL, 'OBSERVOGRAM_ORG_ACME_PLANTED_TOKEN', 0]], `${name}: the url and the variable`);
+    }
+    assert.deepEqual((await endpointsFor('mia (no org → her first, bravo)')).endpoints, [], 'bravo lists none of acme\'s endpoints');
+    assert.deepEqual((await auditRowsAfter(ws, await auditSeq(ws))), [], 'the reads wrote nothing');
+
     // Public rows, anonymous.
     const pub = async (method, path, init = {}) => fetch(`${srv.base}${path}`, { method, redirect: 'manual', ...init });
     assert.equal((await pub('GET', '/healthz')).status, 200);
@@ -1655,17 +1791,18 @@ test('the AuthZ matrix — token posture: anonymous reads, the bearer an operato
 // to a person at this machine only ----
 //
 // Without sign-in, local is an owner. Every existing route answers it as
-// today, with or without the CSRF header. The identity API needs the header
+// today, with or without the CSRF header. The identity API — and the MCP
+// endpoint changes, the other `direct` entries (slice 4) — needs the header
 // on a mutation and, on a loopback bind, a request sent straight to it —
 // a foreign Host (a DNS-rebinding page), a proxy header or a foreign Origin
 // is refused (§8.1); on an exposed bind it is closed, but for POST
 // /api/admin/orgs, whose rule answers 409 (no second org without identity).
 function expectOpen(tag) {
   return (v, key) => {
-    if (!EXPECTED_IDENTITY_API.includes(key)) return 'allowed';
+    if (!EXPECTED_DIRECT.includes(key)) return 'allowed';
     if (tag !== 'open-loopback' && !EXPECTED_EXPOSED_RULE.includes(key)) return '403 posture';
     if (v.foreign) return '403 posture';
-    if (key.split(' ')[0] !== 'GET' && !v.csrf) return '403 csrf';
+    if (EXPECTED_CSRF_ALWAYS.includes(key) && !v.csrf) return '403 csrf';
     return 'allowed';
   };
 }
@@ -1682,6 +1819,9 @@ async function auditRowsAfter(ws, seq) {
 }
 
 const CSRF_HEADER = Object.freeze({ 'X-Observogram-CSRF': '1' });
+// An MCP endpoint of the default org (the open postures' one org): the
+// variable's name carries the org's prefix.
+const MCP_BODY = Object.freeze({ name: 'local-mcp', url: 'https://mcp.local.test/mcp/obs?tier=x', readTokenEnv: 'OBSERVOGRAM_ORG_DEFAULT_MCP_TOKEN' });
 const OPEN = [
   { tag: 'open-loopback', host: '127.0.0.1', env: { OBSERVOGRAM_AUTH: 'off' } },
   {
@@ -1731,6 +1871,11 @@ for (const posture of OPEN) {
         const r = await call(srv.base, PROBES['GET /api/admin/users'], { headers: CSRF_HEADER });
         assert.deepEqual([r.status, r.json.denied], [403, 'posture']);
         assert.match(r.json.error, /^the identity API is closed on a server bound to 0\.0\.0\.0 without sign-in \(OBSERVOGRAM_INSECURE_NO_AUTH=1/);
+        // The MCP endpoint changes are closed here too, under their own name.
+        const ep = await call(srv.base, PROBES['POST /api/mcp-endpoints'], { headers: CSRF_HEADER, body: JSON.stringify(MCP_BODY) });
+        assert.deepEqual([ep.status, ep.json.denied], [403, 'posture']);
+        assert.match(ep.json.error, /^the MCP endpoint API is closed on a server bound to 0\.0\.0\.0 without sign-in \(OBSERVOGRAM_INSECURE_NO_AUTH=1/);
+        assert.deepEqual((await call(srv.base, PROBES['GET /api/mcp-endpoints'])).json, { ok: true, endpoints: [] }, 'the list is a read: open');
       }
 
       // Open loopback: identity writes from this machine, and their audit (§14.2).
@@ -1753,10 +1898,33 @@ for (const posture of OPEN) {
         }]);
         r = await call(srv.base, ['GET', '/api/packs']);
         assert.equal(r.status, 200, 'still no sign-in: OBSERVOGRAM_AUTH=off');
+
+        // The MCP endpoint cells (slice 4): without the header → 403 csrf
+        // under their own text; a foreign Host or a proxy header → 403
+        // posture, with no CLI way out; then the create by `local`, its
+        // view the admin's (url and variable present), and its row.
+        const body = JSON.stringify(MCP_BODY);
+        r = await call(srv.base, PROBES['POST /api/mcp-endpoints'], { body });
+        assert.deepEqual([r.status, r.json.denied, r.json.error], [403, 'csrf',
+          "missing X-Observogram-CSRF: 1 — changes to the MCP endpoint API need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')"]);
+        for (const [label, extra] of [['a foreign Host', { Host: `rebind.attacker.example:${port}` }], ['X-Forwarded-For', { 'X-Forwarded-For': '203.0.113.9' }]]) {
+          r = await call(srv.base, PROBES['POST /api/mcp-endpoints'], { headers: { ...CSRF_HEADER, ...extra }, body, raw: true });
+          assert.deepEqual([r.status, r.json.denied, r.json.error], [403, 'posture',
+            'on a server without sign-in the MCP endpoint API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; '
+            + `no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${port}`], label);
+        }
+        r = await call(srv.base, PROBES['POST /api/mcp-endpoints'], { headers: CSRF_HEADER, body });
+        assert.equal(r.status, 201, r.text);
+        assert.deepEqual({ ...r.json.endpoint, id: 'ID', createdAt: 'T' }, {
+          id: 'ID', name: 'local-mcp', origin: 'https://mcp.local.test', url: MCP_BODY.url, readTokenEnv: MCP_BODY.readTokenEnv, environments: 0, createdAt: 'T',
+        }, 'the admin\'s own view');
+        r = await call(srv.base, PROBES['GET /api/mcp-endpoints']);
+        assert.deepEqual(r.json.endpoints.map((e) => [e.name, e.url]), [['local-mcp', MCP_BODY.url]], 'local, an owner, reads the url');
         writes = async () => assert.deepEqual(await auditRowsAfter(ws, seq), [
           ['user.create', 'local', null, 'lena', { kind: 'local', isOwner: false, sessionEpoch: 1, disabled: false }],
           ['owner.first-local-user', 'system', null, 'lena', { via: 'api', match: null, org: 'default', membership: 'added', from: null }],
           ['meta.set', 'local', null, 'identity_armed', null],
+          ['mcp_endpoint.create', 'local', 'default', 'local-mcp', { fields: ['name', 'url', 'readTokenEnv'], origin: 'https://mcp.local.test', readTokenEnv: MCP_BODY.readTokenEnv }],
         ], 'actor local, system for the grant; nothing from the refused requests');
       }
     } finally {

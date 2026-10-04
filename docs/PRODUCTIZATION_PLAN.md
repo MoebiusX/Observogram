@@ -175,7 +175,13 @@ enforced server-side, not hidden client-side.
 > in slice 4. *Delivered on the store (STORE_PLAN slice 3): roles per org
 > enforced through one route table (`server/route-table.mjs`), the
 > deployment-level owner, the identity API (users, orgs, members, the join
-> role), sign-out everywhere; org-scoped MCP endpoints follow in slice 4.*
+> role), sign-out everywhere. Org-scoped MCP endpoints delivered (STORE_PLAN
+> slice 4): admins register named endpoints (`POST /api/mcp-endpoints`) with
+> a read-token variable of their org — `OBSERVOGRAM_ORG_<ORG>_<NAME>`, the
+> owning org by longest prefix, re-checked at request time — read by the
+> server at request time and never stored; write tokens stay per request
+> (`mcpAuth`). Operators manage the org's services and environments
+> (`/api/services`, `/api/environments`).*
 
 - **Roles per org:** `viewer` (read everything), `operator` (+ crawl /
   draft / register / deploy / retrofeed), `admin` (+ org settings,

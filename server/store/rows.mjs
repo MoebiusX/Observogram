@@ -61,14 +61,18 @@ export function optionalText(value, field, opts) {
 
 // Builds `SET a = :a, b = :b` from a patch whose keys are mapped to
 // columns, skipping undefined values. Column names come from the map,
-// never from the caller.
+// never from the caller. `fields` lists the patch keys written — the API
+// names, in the map's order — for an audit row's `{ fields }`, which
+// spells them as the create rows and the API's `changed` do.
 export function setClause(patch, columns) {
   const sets = [];
   const params = {};
+  const fields = [];
   for (const [key, column] of Object.entries(columns)) {
     if (patch[key] === undefined) continue;
     sets.push(`${column} = :${column}`);
     params[column] = patch[key];
+    fields.push(key);
   }
-  return { sql: sets.join(', '), params };
+  return { sql: sets.join(', '), params, fields };
 }

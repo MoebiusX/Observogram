@@ -275,7 +275,15 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
       const { canonical: overlaid } = overlaidCanonical(p.canonical, env);
       const report = evaluateConformance(overlaid);
       const onPlaceholder = librarySummaryFor(overlaid)?.onPlaceholder;
-      return json(200, { environment: env, ...report, ...(Array.isArray(onPlaceholder) ? { onPlaceholder } : {}) });
+      // A bundled pack has no service record (STORE_PLAN slice 4 §9 grades
+      // an uploaded pack at its service row's tier), so the server's `tier`
+      // object is the pack's own: graded === declaredTier, from 'pack', no
+      // service or environment, no mismatch.
+      const packTier = overlaid.metadata?.bindings?.criticality ?? 'tier-3';
+      return json(200, {
+        environment: env, ...report, ...(Array.isArray(onPlaceholder) ? { onPlaceholder } : {}),
+        tier: { graded: report.declaredTier, pack: packTier, from: 'pack', service: null, environment: null, mismatch: false },
+      });
     } catch (e) {
       return json(500, { error: e.message });
     }

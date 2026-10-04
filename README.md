@@ -456,8 +456,8 @@ the server registers, and each route's first handler is its guard.
 | Role | May |
 |---|---|
 | `viewer` | every read (`GET`) in the org |
-| `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys, the live refresh, RESET |
-| `admin` | the org's name and members as well ([the identity API](#the-identity-api)) |
+| `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys, the live refresh, RESET, and the org's services and environments ([Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)) |
+| `admin` | the org's name, members and MCP endpoints as well ([the identity API](#the-identity-api), [Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)) |
 | owner | a deployment-level flag, not an org role: an owner acts as `admin` in every org, plus users, orgs and the join role ([the identity API](#the-identity-api)) |
 
 The role is the membership **of the request's org** (`X-Observogram-Org`,
@@ -489,7 +489,9 @@ coming from another site, or a sibling subdomain
 change — every identity-API request but a `GET`, and
 `POST /auth/signout-others` — needs `X-Observogram-CSRF: 1` in every
 posture, the open ones included, so a cross-site form cannot make one (the
-bearer, which a cross-site page cannot send, never reaches one).
+bearer, which a cross-site page cannot send, never reaches one); so does
+every change to the org's MCP endpoint records (`/api/mcp-endpoints`), where
+the server will send a read token of the org.
 Authorization is decided when a request reaches its route: a request
 already running when its user is disabled or demoted finishes; the user's
 next one is refused.
@@ -664,6 +666,150 @@ keeps its expiry (signing out elsewhere never extends a session). It
 answers `{ ok, sessionEpoch }` and writes one `user.signout` row, the user
 its actor.
 
+### Services, Environments And MCP Endpoints
+
+A **service record** is the org's own entry for one service, in the store
+since slice 4a: a `slug` (the key the catalogue files services under —
+lowercase letters, digits and `-`, derived from the name; fixed once
+created, because packs link to a service by slug), a `name`, `owners`, a
+`tier` (`tier-1`, `tier-2`, `tier-3`, or `null`: graded by the pack) and a
+`description`. A service has **environments** (`production`, `staging`, …),
+each with its own optional `tier`, free-form string `bindings` (a cluster,
+a namespace, a region), named `endpoints` (http(s) links — a dashboard, a
+runbook) and, optionally, the **MCP endpoint** it is checked through. An
+MCP endpoint record is the org's named MCP server — `name`, `url` and
+`readTokenEnv`, the name of the environment variable the server reads the
+read token from ([Fetch Live From MCP](#fetch-live-from-mcp)); the
+record holds no secret. Packs link to services: registering a pack (a scan,
+a draft, an upload, a library register) creates the service rows it names —
+its primary service and its members; a live aggregate pack, a snapshot of a
+whole MCP backend, has no primary and names every service it discovered —
+with an environment per name the pack declares, and links the pack to each
+(`role` `primary` or `member`). The rows the register creates carry no tier
+(`null`): a person sets one. A service deleted over the API stays deleted
+across restarts and rehydrates (its environments and pack links go with it;
+the packs stay registered); registering a pack that names it re-creates it,
+by that caller (`service.create { via: 'register', pack }`). The rules live
+once in [`server/service-admin.mjs`](server/service-admin.mjs), a sibling
+of `identity-admin.mjs`, and every change writes its audit rows with the
+caller as the actor.
+
+Operators manage services and environments; admins manage the MCP endpoint
+records; every member reads all three. The org is the request's
+(`X-Observogram-Org`, `?org=`): no path names an org, and an id of another
+org is never found (404, or 400 for `mcpEndpointId`).
+
+| Method | Path | Who | Body | What it does |
+|---|---|---|---|---|
+| `GET` | `/api/services` | viewer | — | `services`, by slug, each with `environments` (their `mcpEndpoint` as `{ id, name, origin }` or `null`) and `packs` (`id`, `label`, `source`, `role`) |
+| `POST` | `/api/services` | operator | `{ name, slug?, owners?, tier?, description? }` | a service record (201); `slug` defaults to the name's key; `owners` at most 50 names; a slug in use is 409 naming its id |
+| `GET` | `/api/services/:id` | viewer | — | one service record with its environments and packs; 404 `no service <id>` |
+| `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description` | `changed` lists the fields that differed (none: no audit row); `slug` in the body is 400 — the slug is fixed, create a new service instead |
+| `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments` and `packLinks` removed with it |
+| `GET` | `/api/services/:id/environments` | viewer | — | `service` (`id`, `slug`, `name`, `tier`) and its `environments` |
+| `POST` | `/api/services/:id/environments` | operator | `{ name, tier?, bindings?, endpoints?, mcpEndpointId? }` | an environment (201); `bindings` at most 32 string values of 1–256 characters, `endpoints` at most 20 http(s) URLs by name, `mcpEndpointId` one of the org's MCP endpoints; a name in use is 409 |
+| `GET` | `/api/environments/:id` | viewer | — | `environment` and its `service` (`id`, `slug`, `name`, `tier`); `effectiveTier` is the environment's tier, else the service's |
+| `PATCH` | `/api/environments/:id` | operator | any of `name`, `tier`, `bindings`, `endpoints`, `mcpEndpointId` | `changed`; `"mcpEndpointId": null` unbinds |
+| `DELETE` | `/api/environments/:id` | operator | — | `deleted` |
+| `GET` | `/api/mcp-endpoints` | viewer | — | `endpoints`, by name: `id`, `name`, `origin`, `environments` (how many are checked through it), `createdAt`; `url` and `readTokenEnv` to an operator and above, `null` to a viewer |
+| `POST` | `/api/mcp-endpoints` | admin | `{ name, url, readTokenEnv? }` | an MCP endpoint record (201), the admin's own view with `url` and `readTokenEnv`; a name in use is 409 |
+| `PATCH` | `/api/mcp-endpoints/:id` | admin | any of `name`, `url`, `readTokenEnv` | `changed`; `"readTokenEnv": null` clears it; 404 `no MCP endpoint <id>` |
+| `DELETE` | `/api/mcp-endpoints/:id` | admin | — | `deleted` and `unbound`: the ids of the environments that were checked through it (they stay, with no MCP endpoint) |
+
+Call them with a session cookie, the org header when the org is not your
+default one, and `X-Observogram-CSRF: 1` on every change:
+
+```bash
+# Sign in; the jar keeps the session cookie.
+curl -s -c jar -H 'Accept: application/json' \
+  --data-urlencode username=ada --data-urlencode 'password=<password>' \
+  http://127.0.0.1:8000/auth/login
+# A tier-1 service in acme (201); the slug defaults to "checkout".
+curl -s -b jar -H 'X-Observogram-CSRF: 1' -H 'X-Observogram-Org: acme' \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Checkout","owners":["payments"],"tier":"tier-1"}' \
+  http://127.0.0.1:8000/api/services
+# As an admin of acme: the org's MCP endpoint, its read token read from
+# OBSERVOGRAM_ORG_ACME_MCP_TOKEN on the server (201).
+curl -s -b jar -H 'X-Observogram-CSRF: 1' -H 'X-Observogram-Org: acme' \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"prod-otel","url":"https://otel-mcp.example.com/mcp","readTokenEnv":"OBSERVOGRAM_ORG_ACME_MCP_TOKEN"}' \
+  http://127.0.0.1:8000/api/mcp-endpoints
+# The service's production environment, checked through that endpoint (201).
+curl -s -b jar -H 'X-Observogram-CSRF: 1' -H 'X-Observogram-Org: acme' \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"production","bindings":{"cluster":"eu-1"},"endpoints":{"dashboard":"https://grafana.example.com/d/checkout"},"mcpEndpointId":1}' \
+  http://127.0.0.1:8000/api/services/1/environments
+```
+
+A rule's refusal is 400 (bad input), 404 (no such service, environment or
+endpoint) or 409 (a slug or name in use), and names the way out — `service
+"checkout" exists (id 1) — PATCH /api/services/1 changes it`; a 403 is an
+authorization denial, with `denied`. The three MCP endpoint changes take
+the identity API's defences, because a record is where the server will
+send the org's read token: `X-Observogram-CSRF: 1` in every posture (403
+`csrf` — `missing X-Observogram-CSRF: 1 — changes to the MCP endpoint API need
+it in every posture, so a cross-site form cannot make them (the studio
+sends it; with curl add -H 'X-Observogram-CSRF: 1')`), only a request sent
+straight to a loopback server without sign-in, and closed on an exposed
+server without sign-in (403 `posture`, as [the identity
+API](#the-identity-api) is). The bearer (`OBSERVOGRAM_API_TOKEN`) is an
+operator: it manages services and environments and reads the endpoints
+with their URLs, and never changes an endpoint.
+
+- **The tier rule.** `GET /api/packs/:id/conformance` grades a registered
+  pack at its service record's tier when one is set — the environment's for
+  `?env=<name>` when that environment has one, else the service's; the
+  pack's primary service is the record. `declaredTier` in the report is the
+  tier it was graded at, so `scorePercent`, `mustPercent` and each clause's
+  `applies` follow it; the report's `tier` object says where it came from:
+  `{ graded, pack, from: 'environment' | 'service' | 'pack', service: { id,
+  slug } | null, environment: { id, name } | null, mismatch }`. `tier.pack`
+  is the pack's own `metadata.bindings.criticality` (`tier-3` when it
+  declares none) and `tier.mismatch` says the record and the pack differ —
+  shown, never blocked: fix the record or the pack. A pack with no record
+  (a catalogue or example pack, a service whose rows carry no tier) is
+  graded at its own tier, `from: 'pack'`.
+- **An endpoint picked by id.** `POST /api/refresh-live` and
+  `POST /api/draft-from-mcp` take `mcpEndpointId` in place of `mcpUrl`;
+  the server uses the record's URL and, when the request sends no
+  `mcpAuth`, reads the read token from the record's `readTokenEnv` at
+  request time. The deploy and rollback routes take `mcpEndpointId` for the
+  URL only: a write token stays the request's `mcpAuth`, never a record's.
+  Sending both `mcpUrl` and `mcpEndpointId` is 400 (`send mcpUrl or
+  mcpEndpointId, not both`); see [Fetch Live From MCP](#fetch-live-from-mcp).
+- **The read-token variable.** `readTokenEnv` must be
+  `OBSERVOGRAM_ORG_<ORG>_<NAME>` — `ORG` the org id in upper case with `-`
+  as `_` (`acme` → `OBSERVOGRAM_ORG_ACME_`, `pay-eu` →
+  `OBSERVOGRAM_ORG_PAY_EU_`), `NAME` of `[A-Z0-9_]+` — and must be **this
+  org's**: the owning org of a name is the one whose prefix is the longest
+  match among every org, so `OBSERVOGRAM_ORG_ACME_EU_TOKEN` is `acme-eu`'s,
+  not `acme`'s. Why: without it an org admin — not an owner — could point
+  an endpoint at a URL they control and have the server send any variable
+  of its process there (`OBSERVOGRAM_SESSION_SECRET`,
+  `OBSERVOGRAM_API_TOKEN`, a cloud credential). The rule runs at the write
+  and again at each request that reads the variable (an org created later
+  can become the owner of a stored name; the request is then refused naming
+  `PATCH /api/mcp-endpoints/<id>`). Pick a `NAME` that is not another
+  org's id followed by `_`. The variable is set on the server — the k8s
+  studio Deployment's `env`, from a Secret; never on the journey CronJob
+  ([`deploy/k8s/README.md`](deploy/k8s/README.md)) — and its value is never
+  logged, returned or stored.
+- **The MCP URL carries no credential.** `url` is refused with userinfo, a
+  fragment, or a query parameter whose *name* looks like a credential
+  (`token`, `api_key`, `sig`, …; `signal`, `design`, `author` pass — the
+  word rule of `tools/lib/mcp-url-safety.mjs`): `observogram store: an MCP
+  endpoint URL may not carry credentials in its query — the parameter(s)
+  "token" look like credentials; remove them and name an env var in
+  readTokenEnv`, naming the parameters and never the URL. An environment's
+  `endpoints` follow the same rule (a token goes in no link).
+- **What a viewer sees.** Every member reads the services, the environments
+  with their `bindings` and `endpoints` in full (they are links a viewer
+  opens — never put a token in one), and each environment's MCP endpoint as
+  `{ id, name, origin }`. The MCP URL itself and the variable's name go to
+  operators and above (`GET /api/mcp-endpoints`); the token's value to
+  nobody.
+
 ### Run In Docker Or Kubernetes
 
 The whole app is one Express process, so the container story is one image:
@@ -778,6 +924,23 @@ that fails to load or breaks its contract is a hard failure — exit 1, no pack
 written; the server refuses to start on a load failure — while network
 failures through it stay ordinary probe failures. Unset, nothing changes
 (`docs/MCP_INTEGRATION.md`, "Transport hook").
+
+The studio's `POST /api/refresh-live` and `POST /api/draft-from-mcp` take
+either `mcpUrl` (with an optional `mcpAuth`, as before) or `mcpEndpointId`:
+one of the org's named MCP endpoints (`GET /api/mcp-endpoints`; an admin
+registers them with `POST /api/mcp-endpoints`). With an id the server uses the
+record's URL, and when the request sends no `mcpAuth` it reads the endpoint's
+read token from the variable the record names, `OBSERVOGRAM_ORG_<ORG>_<NAME>`
+(`ORG` = the org id in upper case, `-` → `_`; for example
+`OBSERVOGRAM_ORG_DEFAULT_MCP_TOKEN`), set in the server's own environment (the
+k8s Deployment's `env`, from a Secret). An admin may name only their org's
+variables; the owning org is the one whose prefix is the longest match, so
+`OBSERVOGRAM_ORG_ACME_EU_X` is `acme-eu`'s, not `acme`'s, and the check runs
+again at each request. A variable that is not set is a 400 naming it, before
+anything is fetched. The response says which record was used (`mcpEndpoint:
+{ id, name }`, or `null` for a URL); the live pack and the draft keep the safe
+URL and never the token. The deploy and rollback routes take `mcpEndpointId`
+for the URL only — a write token stays the request's `mcpAuth`.
 When the MCP exposes `metrics_query`, the fetch also samples the observability
 stack's own self-metrics (scrape, ruler, notify, tsdb, collector, dashboards,
 synthetic, logs, traces) as point-in-time signals — never verdicts, stamps or
@@ -1712,8 +1875,12 @@ Every route's class — public, self, viewer, operator, admin, owner — is in
 [`server/route-table.mjs`](server/route-table.mjs) (see [Roles](#roles)).
 Below, `/healthz`, `/api/version`, `/` and `/index.html` are `public` and
 `/auth/signout-others` is `self`; `/api/org` and every `/api/org/…` route are `admin`, every
-`/api/admin/…` route `owner` (see [The Identity API](#the-identity-api));
-every other `GET` is `viewer` and every other route `operator`.
+`/api/admin/…` route `owner` (see [The Identity API](#the-identity-api)),
+and every `/api/mcp-endpoints` route but its `GET` is `admin` (an endpoint
+record is where the server will send the org's read token: its changes take
+the identity API's defences — the `X-Observogram-CSRF: 1` header in every
+posture, closed on an exposed server without sign-in); every other `GET` is
+`viewer` and every other route `operator`.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -1727,7 +1894,7 @@ every other `GET` is `viewer` and every other route `operator`.
 | `GET` | `/api/references` | Curated catalogue reference packs |
 | `GET` | `/api/packs/:id` | Adapted layered pack |
 | `GET` | `/api/packs/:id/canonical` | Canonical pack with env overlay |
-| `GET` | `/api/packs/:id/conformance` | Maturity-rubric scoring (`onPlaceholder` when the pack carries `library.todo.*` annotations) |
+| `GET` | `/api/packs/:id/conformance` | Maturity-rubric scoring (`onPlaceholder` when the pack carries `library.todo.*` annotations), graded at the service record's tier when one is set (the environment's for `?env=`, else the service's): `declaredTier` is the graded tier, `tier.pack` the pack's own, `tier.mismatch` says they differ; a pack with no record (a catalogue pack, a service without a tier) is graded at its own tier, `tier.from: 'pack'` |
 | `GET` | `/api/diff?a=&b=` | Repo/live or pack/pack structural diff |
 | `GET` | `/api/packs/:id/compile-catalog` | Per-artifact compile tree |
 | `GET` | `/api/packs/:id/compile-artifact` | Compile one artifact or group |
@@ -1740,15 +1907,29 @@ every other `GET` is `viewer` and every other route `operator`.
 | `POST` | `/api/library/register` | `{ canonical, source? }` → the upload registry as `/api/validate` registers (`registered { id, source }`, `adapted`, `conformance`, `summary`; the source defaults to `library:<entries>@<tier>` for a library-built pack, `metadata.name` otherwise) — VERIFY's "Open pack in Discover" |
 | `POST` | `/api/crawl` | Draft a pack from uploaded repo files |
 | `POST` | `/api/crawl-github` | Draft a pack from a GitHub URL |
-| `POST` | `/api/draft-from-mcp` | Draft a live pack from an MCP endpoint |
-| `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts |
-| `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target |
+| `POST` | `/api/draft-from-mcp` | Draft a live pack from an MCP endpoint: `mcpUrl` (and `mcpAuth`), or `mcpEndpointId` — one of the org's MCP endpoint records, its read token from the variable the record names when the request sends none; the answer's `mcpEndpoint` says which |
+| `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts (`mcpUrl` or `mcpEndpointId` for the URL; the write token is the request's `mcpAuth`) |
+| `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target (`mcpUrl` or `mcpEndpointId` for the URL; the write token is the request's `mcpAuth`) |
 | `DELETE` | `/api/uploads` | Clear uploaded/crawled/drafted packs |
 | `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`, `inventory` `{ status, reason, environment, kinds }`) |
 | `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series) |
 | `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule) |
 | `POST` | `/api/journeys/:name/run` | Run a saved journey now |
 | `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file |
+| `GET` | `/api/services` | The org's service records, by slug, each with its environments (their MCP endpoint as `{ id, name, origin }`) and the packs linked to it (`id`, `label`, `source`, `role`) |
+| `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack) |
+| `GET` | `/api/services/:id` | One service record with its environments and packs |
+| `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description` (`changed` lists what differed; nothing → no audit row) |
+| `DELETE` | `/api/services/:id` | Removes the service with its environments and pack links (the packs stay registered; registering a pack that names the service re-creates it) |
+| `GET` | `/api/services/:id/environments` | The service's environments |
+| `POST` | `/api/services/:id/environments` | An environment (201): `{ name, tier?, bindings?, endpoints?, mcpEndpointId? }`; `endpoints` are links every member may open — never put a token in one |
+| `GET` | `/api/environments/:id` | One environment with its service |
+| `PATCH` | `/api/environments/:id` | Changes `name`, `tier`, `bindings`, `endpoints`, `mcpEndpointId` (`null` unbinds) |
+| `DELETE` | `/api/environments/:id` | Removes an environment |
+| `GET` | `/api/mcp-endpoints` | The org's MCP endpoint records, by name: `id`, `name`, `origin`, how many environments are checked through each; `url` and `readTokenEnv` to operators and above, `null` to a viewer |
+| `POST` | `/api/mcp-endpoints` | An MCP endpoint record (201): `{ name, url, readTokenEnv? }` — the URL carries no credential (a query parameter named like one is refused by name), `readTokenEnv` names a variable of this org, `OBSERVOGRAM_ORG_<ORG>_<NAME>` |
+| `PATCH` | `/api/mcp-endpoints/:id` | Changes `name`, `url`, `readTokenEnv` (`null` clears it; `changed` lists what differed) |
+| `DELETE` | `/api/mcp-endpoints/:id` | Removes an MCP endpoint record; the environments checked through it stay, unbound (`unbound` lists their ids) |
 | `GET` | `/api/admin/users` | Every user, disabled ones too, with their memberships — never a password |
 | `POST` | `/api/admin/users` | Create a local user (201) |
 | `POST` | `/api/admin/users/:id/disable` | Disable a user: every session ends |
@@ -1776,6 +1957,8 @@ server/
   library.mjs              Loads library/**/*.library.yaml from disk (the Node side of the BUILD engine)
   boot.mjs                 The boot order: opens the store, imports users.json / orgs.json once, the seed and the fail-closed checks
   identity-admin.mjs       The user and org rules behind npm run users / npm run orgs
+  service-admin.mjs        The service, environment and MCP endpoint rules behind /api/services, /api/environments and /api/mcp-endpoints; the tier rule; an MCP target picked by id
+  routes/                  The identity API (identity.mjs), the services API (services.mjs), the deploy routes, and the handler helpers they share (util.mjs)
   store/                   The embedded store (docs/STORE_PLAN.md): db.mjs (the one node:sqlite door), migrations, repositories, the legacy import and import --replace, backup/restore, ops.mjs (export, the replace request, rekey-issuer, purge-org)
   test-smoke.mjs           End-to-end route smoke tests
 
