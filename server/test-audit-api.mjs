@@ -23,7 +23,9 @@
  * bounded verify outcome; the refusals writing none; `auditError` when the
  * insert fails (a blocking trigger) while the file write stands;
  * `fileError` on the row when the deploys.jsonl append failed while the
- * row stands; the repository's size guard; the journey run's 502 row
+ * row stands — the deploy's with the file a directory, the verify's 500
+ * with the append itself faulted (the verify reads the file first, so a
+ * directory is its 404); the repository's size guard; the journey run's 502 row
  * (outcome error, never the error's text); a non-member owner's actor
  * shown to the org's admin as is (design D6); the structural guard over
  * the slice's rows (no URL beyond an origin, no email).
@@ -54,6 +56,8 @@ for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) 
 const { test, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, unlinkSync } = await import('node:fs');
+const fs = (await import('node:fs')).default;
+const { syncBuiltinESMExports } = await import('node:module');
 const { tmpdir } = await import('node:os');
 const { dirname, join } = await import('node:path');
 const { fileURLToPath } = await import('node:url');
@@ -598,6 +602,55 @@ test('fileError: with deploys.jsonl a directory the deploy answers as before and
   assert.ok(!('fileError' in dep.rows[0][4]), 'restored: no fileError key');
   const ver = await ok('POST /api/deploys/:deployId/verify', 'oscar', `/api/deploys/${ids.deploy}/verify`, { outcome: 'verified' });
   assert.deepEqual(ver.rows, [['deploy.verify', 'oscar', 'acme', ids.deploy, { outcome: 'verified', alignment: null, attempts: null }]]);
+});
+
+// ---------- 10b. fileError: the verify's append fails, the row stands, then the 500 ----------
+
+// The verify reads the file before it appends to it (the known-deploy
+// check), so the directory fault above cannot reach its append. The fault
+// here is the append itself: `fs.appendFileSync` throws for the window, and
+// `syncBuiltinESMExports()` carries the patched function into the live
+// bindings `workspace.mjs` imported, in this process (the server is
+// in-process). Every other `node:fs` function is untouched, so the read
+// finds the deploy and the route reaches the append.
+async function withAppendFaulted(fn) {
+  const real = fs.appendFileSync;
+  fs.appendFileSync = () => { throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }); };
+  syncBuiltinESMExports();
+  try {
+    return await fn();
+  } finally {
+    fs.appendFileSync = real;
+    syncBuiltinESMExports();
+  }
+}
+
+test('fileError, verify: with the append failing the verify answers 500 { ok, error } and exactly one deploy.verify row is flagged fileError; with the audit blocked too, the 500 carries auditError and no row lands; restored, the next row has no flag', async () => {
+  const lines = () => readFileSync(DEPLOYS, 'utf8').trim().split('\n').length;
+  const n = lines();
+  await withAppendFaulted(async () => {
+    const seq = seqNow();
+    const r = await call('oscar', 'POST', `/api/deploys/${ids.deploy}/verify`, { outcome: 'verified', alignment: 42, attempts: 3 });
+    assert.deepEqual([r.status, r.json], [500, { ok: false, error: 'ENOSPC: no space left on device, write' }], 'the 500 as before, no auditError');
+    assert.equal(lines(), n, 'no verify line was appended');
+    assert.deepEqual(rowsAfter(seq), [['deploy.verify', 'oscar', 'acme', ids.deploy, { outcome: 'verified', alignment: 42, attempts: 3, fileError: true }]], 'exactly one row, flagged');
+    // The insert blocked as well: the 500 stands, its body says auditError, no row.
+    execScript(db, "CREATE TRIGGER audit_test_block BEFORE INSERT ON audit BEGIN SELECT RAISE(ABORT, 'test: audit blocked'); END;");
+    try {
+      const seq2 = seqNow();
+      const { result: both, output } = await logged(() => call('oscar', 'POST', `/api/deploys/${ids.deploy}/verify`, { outcome: 'verified' }));
+      assert.deepEqual([both.status, both.json.ok, both.json.error], [500, false, 'ENOSPC: no space left on device, write']);
+      assert.match(both.json.auditError ?? '', /test: audit blocked/, 'the 500 body says the row failed too');
+      assert.match(output, /\[verify\] {3}audit row failed: .*test: audit blocked/);
+      assert.equal(seqNow(), seq2, 'no row landed');
+      assert.equal(lines(), n, 'still no line');
+    } finally {
+      execScript(db, 'DROP TRIGGER audit_test_block');
+    }
+  });
+  const ver = await ok('POST /api/deploys/:deployId/verify', 'oscar', `/api/deploys/${ids.deploy}/verify`, { outcome: 'verified' });
+  assert.deepEqual(ver.rows, [['deploy.verify', 'oscar', 'acme', ids.deploy, { outcome: 'verified', alignment: null, attempts: null }]], 'restored: no fileError key');
+  assert.equal(lines(), n + 1, 'restored: the verify line is there');
 });
 
 // ---------- 11. the journey run's 502 writes one row ----------
