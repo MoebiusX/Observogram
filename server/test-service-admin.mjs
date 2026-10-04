@@ -233,7 +233,7 @@ test('environments: create (404 service, the texts, the 409, the endpoint of thi
       assert.equal(admin.updateEnvironmentFromApi(db, 'oscar', prod.id, { name: 'prod' }).changed.length, 0, 'its own name is no clash');
       const up = admin.updateEnvironmentFromApi(db, 'oscar', prod.id, { tier: null, bindings: { region: 'eu', cluster: 'c1' }, mcpEndpointId: null });
       assert.deepEqual([up.changed, up.environment.tier, up.environment.bindings, up.environment.mcpEndpointId], [['tier', 'bindings', 'mcpEndpointId'], null, { region: 'eu', cluster: 'c1' }, null]);
-      assert.deepEqual(rows(db, 'acme', 'environment.update'), [['environment.update', 'oscar', 'pay/prod', { fields: ['tier', 'bindings', 'mcp_endpoint_id'] }]]);
+      assert.deepEqual(rows(db, 'acme', 'environment.update'), [['environment.update', 'oscar', 'pay/prod', { fields: ['tier', 'bindings', 'mcpEndpointId'] }]]);
       const renamed = admin.updateEnvironmentFromApi(db, 'oscar', staging.id, { name: 'stage' });
       assert.deepEqual([renamed.changed, renamed.environment.name], [['name'], 'stage']);
 
@@ -291,7 +291,7 @@ test('MCP endpoints: create (the texts, the 409, the repository\'s URL and env-v
       assert.deepEqual(admin.updateMcpEndpointFromApi(db, 'ada', ep.id, { name: 'prod-mcp', url: 'https://mcp.acme.example/mcp?transport=sse', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' }).changed, []);
       const up = admin.updateMcpEndpointFromApi(db, 'ada', ep.id, { url: 'https://mcp2.acme.example/mcp', readTokenEnv: null });
       assert.deepEqual([up.changed, up.endpoint.url, up.endpoint.readTokenEnv], [['url', 'readTokenEnv'], 'https://mcp2.acme.example/mcp', null]);
-      assert.deepEqual(rows(db, 'acme', 'mcp_endpoint.update'), [['mcp_endpoint.update', 'ada', 'prod-mcp', { fields: ['url', 'read_token_env'], origin: 'https://mcp2.acme.example', readTokenEnv: null }]]);
+      assert.deepEqual(rows(db, 'acme', 'mcp_endpoint.update'), [['mcp_endpoint.update', 'ada', 'prod-mcp', { fields: ['url', 'readTokenEnv'], origin: 'https://mcp2.acme.example', readTokenEnv: null }]]);
       assert.deepEqual(admin.updateMcpEndpointFromApi(db, 'ada', plain.id, { name: 'lab2' }).changed, ['name']);
 
       // delete: the admin's view as it was, the unbound ids, the environments unbound.

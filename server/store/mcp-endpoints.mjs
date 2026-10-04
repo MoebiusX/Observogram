@@ -174,7 +174,7 @@ export function updateMcpEndpoint(db, actor, id, patch) {
     url: patch.url === undefined ? undefined : requireUrl(patch.url),
     readTokenEnv: patch.readTokenEnv === undefined ? undefined : requireEnvName(db, patch.readTokenEnv, org),
   };
-  const { sql, params } = setClause(values, { name: 'name', url: 'url', readTokenEnv: 'read_token_env' });
+  const { sql, params, fields } = setClause(values, { name: 'name', url: 'url', readTokenEnv: 'read_token_env' });
   return atomic(db, () => {
     const current = getMcpEndpoint(db, id);
     if (!current) throw notFound('MCP endpoint', id);
@@ -183,7 +183,7 @@ export function updateMcpEndpoint(db, actor, id, patch) {
     const updated = getMcpEndpoint(db, id);
     writeAudit(db, actor, {
       orgId: org, action: 'mcp_endpoint.update', targetKind: 'mcp_endpoint', targetId: current.name,
-      detail: { fields: Object.keys(params), origin: mcpUrlOrigin(updated.url), readTokenEnv: updated.readTokenEnv },
+      detail: { fields, origin: mcpUrlOrigin(updated.url), readTokenEnv: updated.readTokenEnv },
     });
     return updated;
   });

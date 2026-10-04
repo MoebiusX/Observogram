@@ -1496,8 +1496,8 @@ test('readTokenEnv names a variable of this org: OBSERVOGRAM_ORG_<KEY>_<NAME>, o
       assert.deepEqual(mcpEndpoints.deleteMcpEndpoint(db, 'alice', ep.id).name, 'f');
       assert.deepEqual(auditRepo.listAudit(db, { orgId: 'acme', limit: 1000 }).reverse().filter((r) => r.targetId === 'f').map((r) => [r.action, r.detail]), [
         ['mcp_endpoint.create', { fields: ['name', 'url', 'readTokenEnv'], origin: 'https://mcp.example', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' }],
-        ['mcp_endpoint.update', { fields: ['read_token_env'], origin: 'https://mcp.example', readTokenEnv: null }],
-        ['mcp_endpoint.update', { fields: ['url', 'read_token_env'], origin: 'https://mcp2.example:8443', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_OTHER' }],
+        ['mcp_endpoint.update', { fields: ['readTokenEnv'], origin: 'https://mcp.example', readTokenEnv: null }],
+        ['mcp_endpoint.update', { fields: ['url', 'readTokenEnv'], origin: 'https://mcp2.example:8443', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_OTHER' }],
         ['mcp_endpoint.delete', { origin: 'https://mcp2.example:8443', unbound: 0 }],
       ]);
       assert.equal(auditRepo.listAudit(db, { orgId: 'acme', limit: 1000 }).filter((r) => r.action === 'mcp_endpoint.create').length, 5, 'a refused create writes no row');

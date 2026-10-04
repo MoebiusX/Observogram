@@ -403,7 +403,7 @@ test('PATCH /api/environments/:id: name, tier, bindings, endpoints, mcpEndpointI
     id: ids.prod, serviceId: ids.checkout, name: 'production', tier: 'tier-2', effectiveTier: 'tier-2',
     bindings: { region: 'eu-west-1' }, endpoints: {}, mcpEndpoint: null, createdAt: 'T', updatedAt: 'T',
   });
-  // The row names the environment as it was and the columns written.
+  // The row names the environment as it was and the fields written (API names, as the create rows and `changed`).
   assert.deepEqual(rows, [['environment.update', 'oscar', 'acme', 'checkout-service/prod', { fields: ['name', 'tier', 'bindings', 'endpoints'] }]]);
   const same = await ok(K, 'oscar', P, { name: 'production', bindings: { region: 'eu-west-1' }, mcpEndpointId: null });
   assert.deepEqual([same.json.changed, same.rows], [[], []]);
@@ -541,20 +541,20 @@ test('GET /api/mcp-endpoints by rank: the url and the variable to an operator an
   await refused('PATCH /api/environments/:id', 'ada', `/api/environments/${ids.prod}`, { mcpEndpointId: ids.bravoMcp }, 400, WAYS.noMcpEndpointInOrg(ids.bravoMcp));
 });
 
-test('PATCH /api/mcp-endpoints/:id: name, url, readTokenEnv (null clears) with `changed` and one row naming the columns, the origin and the variable after the change; nothing differing → no row; a rename clash is 409; the refusals; the id rule', async () => {
+test('PATCH /api/mcp-endpoints/:id: name, url, readTokenEnv (null clears) with `changed` and one row naming the fields (API names, as the create row and `changed`), the origin and the variable after the change; nothing differing → no row; a rename clash is 409; the refusals; the id rule', async () => {
   const K = 'PATCH /api/mcp-endpoints/:id';
   const P = `/api/mcp-endpoints/${ids.mcp}`;
   const { json, rows } = await ok(K, 'ada', P, { name: 'prod-mcp-2', url: 'https://mcp2.acme.test/mcp/v2?tier=y', readTokenEnv: null });
   assert.deepEqual(json.changed, ['name', 'url', 'readTokenEnv']);
   assert.deepEqual({ ...json.endpoint, createdAt: 'T' }, { id: ids.mcp, name: 'prod-mcp-2', origin: 'https://mcp2.acme.test', url: 'https://mcp2.acme.test/mcp/v2?tier=y', readTokenEnv: null, environments: 0, createdAt: 'T' });
-  assert.deepEqual(rows, [['mcp_endpoint.update', 'ada', 'acme', 'prod-mcp', { fields: ['name', 'url', 'read_token_env'], origin: 'https://mcp2.acme.test', readTokenEnv: null }]], 'the row names the record as it was, the columns written, and where the token goes next');
+  assert.deepEqual(rows, [['mcp_endpoint.update', 'ada', 'acme', 'prod-mcp', { fields: ['name', 'url', 'readTokenEnv'], origin: 'https://mcp2.acme.test', readTokenEnv: null }]], 'the row names the record as it was, the fields written as the create row spells them, and where the token goes next');
   const same = await ok(K, 'ada', P, { name: 'prod-mcp-2', readTokenEnv: null, extra: true });
   assert.deepEqual([same.json.changed, same.rows], [[], []]);
   const back = await ok(K, 'olive', P, { name: 'prod-mcp', url: MCP_URL, readTokenEnv: ACME_TOKEN });
   assert.deepEqual([back.json.changed, back.json.endpoint.url, back.json.endpoint.readTokenEnv], [['name', 'url', 'readTokenEnv'], MCP_URL, ACME_TOKEN]);
-  assert.deepEqual(back.rows, [['mcp_endpoint.update', 'olive', 'acme', 'prod-mcp-2', { fields: ['name', 'url', 'read_token_env'], origin: MCP_ORIGIN, readTokenEnv: ACME_TOKEN }]]);
+  assert.deepEqual(back.rows, [['mcp_endpoint.update', 'olive', 'acme', 'prod-mcp-2', { fields: ['name', 'url', 'readTokenEnv'], origin: MCP_ORIGIN, readTokenEnv: ACME_TOKEN }]]);
   const only = await ok(K, 'ada', P, { readTokenEnv: 'OBSERVOGRAM_ORG_ACME_OTHER' });
-  assert.deepEqual([only.json.changed, only.rows], [['readTokenEnv'], [['mcp_endpoint.update', 'ada', 'acme', 'prod-mcp', { fields: ['read_token_env'], origin: MCP_ORIGIN, readTokenEnv: 'OBSERVOGRAM_ORG_ACME_OTHER' }]]]);
+  assert.deepEqual([only.json.changed, only.rows], [['readTokenEnv'], [['mcp_endpoint.update', 'ada', 'acme', 'prod-mcp', { fields: ['readTokenEnv'], origin: MCP_ORIGIN, readTokenEnv: 'OBSERVOGRAM_ORG_ACME_OTHER' }]]], 'changed and the row spell the field the same way');
   await ok(K, 'ada', P, { readTokenEnv: ACME_TOKEN });
   // The refusals.
   await refused(K, 'ada', P, { name: 'staging-mcp' }, 409, `MCP endpoint "staging-mcp" exists (id ${ids.mcpStaging}) — PATCH /api/mcp-endpoints/${ids.mcpStaging} changes it`);
@@ -575,7 +575,7 @@ test('an environment bound to an endpoint: PATCH /api/environments/:id { mcpEndp
   const bind = await ok('PATCH /api/environments/:id', 'oscar', `/api/environments/${ids.prod}`, { mcpEndpointId: ids.mcp });
   assert.deepEqual(bind.json.changed, ['mcpEndpointId']);
   assert.deepEqual(bind.json.environment.mcpEndpoint, { id: ids.mcp, name: 'prod-mcp', origin: MCP_ORIGIN });
-  assert.deepEqual(bind.rows, [['environment.update', 'oscar', 'acme', 'checkout-service/prod', { fields: ['mcp_endpoint_id'] }]]);
+  assert.deepEqual(bind.rows, [['environment.update', 'oscar', 'acme', 'checkout-service/prod', { fields: ['mcpEndpointId'] }]], 'the row spells the field as changed does');
   const again = await ok('PATCH /api/environments/:id', 'oscar', `/api/environments/${ids.prod}`, { mcpEndpointId: String(ids.mcp) });
   assert.deepEqual([again.json.changed, again.rows], [[], []], 'the same id (as a string) differs in nothing');
   const read = await ok('GET /api/environments/:id', 'vera', `/api/environments/${ids.prod}`);

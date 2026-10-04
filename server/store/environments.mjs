@@ -95,11 +95,11 @@ export function updateEnvironment(db, actor, id, patch) {
       endpoints: patch.endpoints === undefined ? undefined : toJson(requireObject(patch.endpoints, 'endpoints')),
       mcpEndpointId: patch.mcpEndpointId === undefined ? undefined : requireEndpoint(db, patch.mcpEndpointId),
     };
-    const { sql, params } = setClause(values, { name: 'name', tier: 'tier', bindings: 'bindings', endpoints: 'endpoints', mcpEndpointId: 'mcp_endpoint_id' });
+    const { sql, params, fields } = setClause(values, { name: 'name', tier: 'tier', bindings: 'bindings', endpoints: 'endpoints', mcpEndpointId: 'mcp_endpoint_id' });
     if (!sql) return current;
     prepare(db, `UPDATE environments SET ${sql}, updated_at = :updated_at WHERE id = :id`).run({ ...params, updated_at: nowIso(), id });
     const service = getService(db, current.serviceId);
-    writeAudit(db, actor, { orgId: org, action: 'environment.update', targetKind: 'environment', targetId: `${service.slug}/${current.name}`, detail: { fields: Object.keys(params) } });
+    writeAudit(db, actor, { orgId: org, action: 'environment.update', targetKind: 'environment', targetId: `${service.slug}/${current.name}`, detail: { fields } });
     return getEnvironment(db, id);
   });
 }
