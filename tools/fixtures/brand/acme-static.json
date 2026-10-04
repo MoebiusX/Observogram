@@ -1,0 +1,45 @@
+{
+  "name": "Acme Watch",
+  "shortName": "Acme",
+  "wordmark": {
+    "lead": "Acme",
+    "tail": "Watch"
+  },
+  "tagline": "reliability, watched",
+  "titleSuffix": "the Reliability Console",
+  "description": "Acme Watch — Acme's reliability console: compile one manifest, scan the posture, score the conformance.",
+  "logo": {
+    "svg": "<svg viewBox=\"0 0 36 36\" xmlns=\"http://www.w3.org/2000/svg\"><circle cx=\"18\" cy=\"18\" r=\"14\" fill=\"#b3261e\"/></svg>"
+  },
+  "favicon": "data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Ccircle cx=%278%27 cy=%278%27 r=%277%27 fill=%27%23b3261e%27/%3E%3C/svg%3E",
+  "docsUrl": "https://docs.example.com/acme-watch",
+  "footer": {
+    "text": "Acme Watch · a product of Acme Corp",
+    "links": [
+      {
+        "label": "docs",
+        "href": "https://docs.example.com/acme-watch"
+      },
+      {
+        "label": "support",
+        "href": "https://support.example.com/?product=watch&tier=\"gold\""
+      },
+      {
+        "label": "status <live>",
+        "href": "https://status.example.com"
+      }
+    ]
+  },
+  "about": {
+    "changelogUrl": "https://docs.example.com/acme-watch/releases"
+  },
+  "tokens": {
+    "light": {
+      "accent": "#b3261e",
+      "accent-solid": "#f28b82"
+    },
+    "dark": {
+      "accent": "#f28b82"
+    }
+  }
+}

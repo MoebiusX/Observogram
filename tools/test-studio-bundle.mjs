@@ -11,14 +11,24 @@
 // pack) and a library-built pack registered through POST /api/validate, so
 // onPlaceholder is compared too; export.zip headers and entry names · T6 the
 // denial table · T7 the REAL bundle booted in headless Chromium against the
-// fixture pack, the Export download asserted.
+// fixture pack, the Export download asserted · T4b inert by default: a build
+// with nothing baked is the build of the same tree with --taxonomy/--brand
+// unset, byte for byte (config-vs-no-config identity on the same tree — the
+// shim's source changed, so no cross-tree claim) · T8 a --taxonomy bundle
+// answers /api/taxonomy as a server started with OBSERVOGRAM_TAXONOMY does
+// and its board is the typed-canonical mapped golden · T8b a --brand bundle
+// carries the branded server's shell fragments · T9 the baked bundle in
+// headless Chromium (skips like T7).
 //
 // Playwright is an environment-provided tool, never a dependency:
 // OBSERVOGRAM_PLAYWRIGHT names its index.mjs (else the bare 'playwright');
 // T7 skips when neither imports or the browser does not launch, unless
 // OBSERVOGRAM_BUNDLE_SMOKE=require (CI with browsers) turns the skip into a
 // failure. Hermetic: the page may only reach the loopback server that
-// serves the bundle; the child server gets serve-child's stripped env.
+// serves the bundle; the child server AND every CLI spawn get serve-child's
+// stripped env (both spellings of TAXONOMY and the nine BRAND_* names), so a
+// developer shell with OBSERVOGRAM_BRAND_NAME exported bakes into no test
+// build (T4b, T7's exact texts).
 //
 // `document` is named only inside page.evaluate callbacks, which run in the browser.
 /* global document */
@@ -35,19 +45,32 @@ import { join, resolve, dirname } from 'node:path';
 import {
   collectModuleGraph, rewriteSpecifiers, assertRewritten, inlineJson, styleBlock, buildStudioBundle,
   checkPackUrl, parseArgs, defaultPackId, ENTRIES, CONFIG_ID, DEFAULT_ROOT,
+  resolveTaxonomySource, loadTaxonomyFile, loadBundleBrand, checkBrandUrls,
 } from './build-studio-bundle.mjs';
-import { createStaticBackend, featureOf, denialText, noticeText, DENIED } from '../studio/static-backend.mjs';
+import { createStaticBackend, featureOf, denialText, noticeText, apiMenuSubText, DENIED } from '../studio/static-backend.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { listEnvironments } from './lib/adapter.mjs';
 import { listTargets } from './lib/compile.mjs';
 import { SPEC_SCHEMA_PATH } from './lib/validator.mjs';
-import { serve } from '../server/fixtures/serve-child.mjs';
+import { normalizeBrand, DEFAULT_BRAND, SHELL_ANCHORS } from './lib/brand.mjs';
+import * as artefactClassify from './lib/artefact-classify.mjs';
+import { bindTaxonomy } from '../studio/taxonomy.mjs';
+import { serve, childEnv } from '../server/fixtures/serve-child.mjs';
+// The board renderer the goldens are made with (its top level binds no override and reads the catalogue; isMain is false here).
+import { renderBoard, familiesOf, boardGroupCounts } from './test-golden-board.mjs';
 
 const ROOT = DEFAULT_ROOT;
 const TOOL = resolve(ROOT, 'tools/build-studio-bundle.mjs');
 const PAYMENT = 'vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml';
 const GOLDEN = 'tools/fixtures/golden-crawl.pack.json';
 const LIBRARY_BUILT = 'tools/fixtures/build/orders-api.tier-2.instantiate.json';
+// The seams' fixtures: the taxonomy override, the canonical pack with seven declared
+// types (the golden-board fixture), the bundle-safe brand and the server's brand (root-relative URLs).
+const TAX = resolve(DEFAULT_ROOT, 'tools/fixtures/taxonomy/taxonomy.json');
+const TYPED_CANONICAL = resolve(DEFAULT_ROOT, 'tools/fixtures/taxonomy/typed-canonical.pack.json');
+const ACME_STATIC = resolve(DEFAULT_ROOT, 'tools/fixtures/brand/acme-static.json');
+const ACME = resolve(DEFAULT_ROOT, 'tools/fixtures/brand/acme.json');
+const MAPPED_BOARD = 'tools/fixtures/golden/board/typed-canonical.mapped.board.html';
 const read = (rel) => readFileSync(resolve(ROOT, rel), 'utf8');
 const schema = JSON.parse(read(SPEC_SCHEMA_PATH));
 const paymentCanonical = parseYaml(read(PAYMENT));
@@ -68,7 +91,8 @@ const filesUnder = (dir) => {
   return out.sort();
 };
 const treeHashes = (dirs) => Object.fromEntries(dirs.flatMap(filesUnder).map((p) => [p, sha256(readFileSync(p))]));
-const cli = (args, cwd = TMP) => spawnSync(process.execPath, [TOOL, ...args], { cwd, encoding: 'utf8', env: { ...process.env } });
+// Every CLI spawn gets the stripped env (serve-child STRIP: TAXONOMY and the BRAND_* names, both spellings) plus the test's own.
+const cli = (args, cwd = TMP, extraEnv = {}) => spawnSync(process.execPath, [TOOL, ...args], { cwd, encoding: 'utf8', env: childEnv(null, extraEnv) });
 // The body as JSON when it is (a compiled 'all' dashboards bundle carries
 // comments under a JSON content type on both sides), else as text.
 const bodyOf = async (r) => {
@@ -83,6 +107,24 @@ const decodeModule = (address) => {
 };
 const importMapOf = (html) => JSON.parse(/<script type="importmap">([\s\S]*?)<\/script>/.exec(html)[1]);
 const configOf = (html) => JSON.parse(new RegExp(`<script type="application/json" id="${CONFIG_ID}">([\\s\\S]*?)</script>`).exec(html)[1]);
+const normalizeBuiltAt = (html) => html.replace(/"builtAt":"[^"]*"/, '"builtAt":"x"');
+// The shell fragments brandShellHtml writes — each exactly once on a branded shell, absent (undefined) on the shipped one.
+const BRAND_FRAGMENTS = {
+  title: /<title>[^<]*<\/title>/g,
+  description: /<meta name="description" content="[^"]*">/g,
+  h1: /<h1>[\s\S]*?<\/h1>/g,
+  hdrSub: /<div class="hdr-sub">[^<]*<\/div>/g,
+  footer: /<footer class="ftr">[\s\S]*?<\/footer>/g,
+  tokens: /<style id="brand-tokens">[\s\S]*?<\/style>/g,
+  config: /<script type="application\/json" id="brand-config">.*?<\/script>/g,
+  icon: /<link rel="icon" href="[^"]*">/g,
+};
+const brandFragmentsOf = (html, { branded }) => Object.fromEntries(Object.entries(BRAND_FRAGMENTS).map(([k, re]) => {
+  const m = [...html.matchAll(re)].map((x) => x[0]);
+  const expected = branded || !['tokens', 'config', 'icon'].includes(k) ? 1 : 0;
+  assert.equal(m.length, expected, `${k}: ${expected} occurrence(s)`);
+  return [k, m[0]];
+}));
 
 // The entry names of a ZIP, from its central directory (tools/lib/zip.mjs writes one).
 function zipEntryNames(bytes) {
@@ -242,6 +284,12 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   // The config.
   const config = configOf(html);
   assert.deepEqual(config, built.config);
+  assert.deepEqual(Object.keys(config), ['version', 'builtAt', 'schema', 'packs'], 'the unconfigured config: four keys, this order');
+  assert.equal(built.taxonomy, null);
+  assert.equal(built.brand, null);
+  // The shell is the unbranded one: no brand script, tokens or icon; the shipped anchors intact.
+  assert.ok(!html.includes('id="brand-config"') && !html.includes('id="brand-tokens"') && !html.includes('<link rel="icon"'), 'nothing of a brand in the shell');
+  assert.ok(html.includes(SHELL_ANCHORS.title) && html.includes(SHELL_ANCHORS.h1) && html.includes(SHELL_ANCHORS.hdrSub), 'the shipped anchors are there');
   assert.equal(config.version, JSON.parse(read('package.json')).version);
   assert.equal(config.builtAt, '2026-10-04T00:00:00.000Z');
   assert.deepEqual(config.schema, schema);
@@ -292,6 +340,15 @@ test('T3 the CLI: writes, --check writes nothing, --json, --no-remote-fonts, a p
   assert.equal(j.out, null);
   assert.deepEqual(j.packs, [{ id: 'payment-service', label: 'payment-service', source: 'file' }]);
   assert.equal(j.stylesheets.length, 16);
+  assert.equal(j.taxonomy, null, 'nothing baked: taxonomy null, the key present');
+  assert.equal(j.brand, null, 'nothing baked: brand null, the key present');
+  assert.deepEqual(Object.keys(j), ['ok', 'out', 'check', 'bytes', 'modules', 'stylesheets', 'remoteFonts', 'packs', 'taxonomy', 'brand']);
+  // --taxonomy / --brand twice: usage, exit 2.
+  for (const flag of ['--taxonomy', '--brand']) {
+    const twice = cli(['--check', flag, TAX, flag, TAX]);
+    assert.equal(twice.status, 2, flag);
+    assert.match(twice.stderr, new RegExp(`^${flag} given twice\\nusage: build-studio-bundle\\.mjs`));
+  }
   // --check writes nothing.
   const checkDir = join(TMP, 'check');
   mkdirSync(checkDir);
@@ -338,7 +395,7 @@ test('T3 the CLI: writes, --check writes nothing, --json, --no-remote-fonts, a p
   assert.equal(twins.status, 1);
   assert.match(twins.stderr, /two packs share the id "payment-service"/);
   // Usage.
-  for (const args of [['--bogus'], ['--pack'], ['--id', 'x'], ['--out']]) {
+  for (const args of [['--bogus'], ['--pack'], ['--id', 'x'], ['--out'], ['--taxonomy'], ['--brand']]) {
     const u = cli(['--check', ...args]);
     assert.equal(u.status, 2, args.join(' '));
     assert.match(u.stderr, /usage: build-studio-bundle\.mjs/);
@@ -392,6 +449,67 @@ test('T4 inert by default: a build changes no file under studio/, tools/lib or s
   const css = read('studio/static-backend.css').replace(/\/\*[\s\S]*?\*\//g, '');
   assert.ok(!/#[0-9a-f]{3,8}\b/i.test(css) && !/rgba?\(/.test(css), 'no colour literal');
   assert.ok(/\.no-backend-notice\s*\{[^}]*position:\s*fixed;[^}]*bottom:\s*0;/.test(css), 'pinned to the bottom');
+});
+
+test('T4b inert by default: a build with nothing baked is the same tree\'s build with the seams unset, byte for byte; the CLI adds nothing; the shim unconfigured; a parent env with the seams set reaches no stripped child', () => {
+  const payment = { id: 'payment-service', label: 'payment-service', canonical: paymentCanonical };
+  // (1) Determinism for a pinned builtAt — the only non-determinism the build has.
+  const a = buildStudioBundle({ root: ROOT, packs: [payment], builtAt: 'x' });
+  const b = buildStudioBundle({ root: ROOT, packs: [payment], builtAt: 'x' });
+  assert.equal(b.html, a.html, 'two builds, one builtAt: identical');
+  assert.equal(a.taxonomy, null);
+  assert.equal(a.brand, null);
+  // (2) The seams unset in every spelling: the identity (brandShellHtml is the identity for an unconfigured brand; the config gains no key).
+  for (const [label, extra] of [['null/null', { taxonomy: null, brand: null }], ['DEFAULT_BRAND', { brand: DEFAULT_BRAND }], ['normalizeBrand({})', { brand: normalizeBrand({}) }], ['raw {}', { brand: {} }]]) {
+    const c = buildStudioBundle({ root: ROOT, packs: [payment], builtAt: 'x', ...extra });
+    assert.equal(c.html, a.html, `${label}: byte-identical`);
+    assert.equal(c.brand, null, `${label}: no brand`);
+  }
+  assert.deepEqual(Object.keys(a.config), ['version', 'builtAt', 'schema', 'packs']);
+  // (3) The CLI path, stripped env, no flags: the same bytes once builtAt is normalized.
+  const out = join(TMP, 'inert-cli', 'index.html');
+  const r = cli(['--pack', resolve(ROOT, PAYMENT), '--out', out]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^wrote .* — \d+ modules · 16 stylesheets · \d+ bytes · 1 pack\n$/, 'the human line is today\'s');
+  assert.equal(normalizeBuiltAt(readFileSync(out, 'utf8')), normalizeBuiltAt(a.html), 'the CLI adds nothing');
+  // (4) The shim with no taxonomy baked: the server's unconfigured answer, the default product.
+  const backend = createStaticBackend({ version: '1', schema, packs: [] });
+  assert.equal(backend.taxonomyConfigured, false);
+  assert.equal(backend.product, 'Observogram');
+  return backend.handle('/api/taxonomy').then(async (res) => {
+    assert.equal(res.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await res.json(), { ok: true, taxonomy: null, configured: false });
+    // (5) The parent env carries the seams; the child env is stripped (childEnv) — nothing bakes. This is
+    // what keeps T7's exact texts true on a developer shell with OBSERVOGRAM_BRAND_NAME exported.
+    const saved = { OBSERVOGRAM_BRAND_NAME: process.env.OBSERVOGRAM_BRAND_NAME, OBSERVOGRAM_TAXONOMY: process.env.OBSERVOGRAM_TAXONOMY };
+    process.env.OBSERVOGRAM_BRAND_NAME = 'Zed';
+    process.env.OBSERVOGRAM_TAXONOMY = TAX;
+    try {
+      const env = childEnv(null);
+      assert.ok(!('OBSERVOGRAM_BRAND_NAME' in env) && !('OBSERVOGRAM_TAXONOMY' in env), 'childEnv strips the seams');
+      const out5 = join(TMP, 'inert-env', 'index.html');
+      const r5 = cli(['--pack', resolve(ROOT, PAYMENT), '--out', out5, '--json']);
+      assert.equal(r5.status, 0, r5.stderr);
+      const j5 = JSON.parse(r5.stdout);
+      assert.equal(j5.taxonomy, null);
+      assert.equal(j5.brand, null);
+      const html5 = readFileSync(out5, 'utf8');
+      assert.ok(!html5.includes('id="brand-config"') && !('taxonomy' in configOf(html5)), 'nothing baked from the parent env');
+      assert.equal(normalizeBuiltAt(html5), normalizeBuiltAt(a.html));
+      // The same build through main()'s env parameter with the seams set bakes — the env is what decides.
+      const r5b = cli(['--check', '--json', '--pack', resolve(ROOT, PAYMENT)], TMP, { OBSERVOGRAM_BRAND_NAME: 'Zed', OBSERVOGRAM_TAXONOMY: TAX });
+      assert.equal(r5b.status, 0, r5b.stderr);
+      const j5b = JSON.parse(r5b.stdout);
+      assert.equal(j5b.brand?.name, 'Zed');
+      assert.equal(j5b.taxonomy?.source, 'env');
+    } finally {
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
+    // A branded build is self-guarding against a reordering of the shell transform: the anchors are on the shipped shell only.
+    const branded = buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', brand: JSON.parse(readFileSync(ACME_STATIC, 'utf8')) });
+    assert.ok(branded.html.includes('id="brand-config"'));
+    assert.throws(() => buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', brand: { name: 'X', tokens: { light: { accent: '#000' } } }, taxonomy: { version: 2 } }), { message: /^taxonomy: version must be 1/ });
+  });
 });
 
 // ---------- T5 parity with the server ----------
@@ -646,7 +764,10 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   // A repeated ?env= is no env (server/index.mjs readEnv reads a string only).
   const twice = await (await backend.handle('/api/packs/p/conformance?env=prod&env=staging')).json();
   assert.equal(twice.environment, null);
-  // The notice text.
+  // The notice text — and the default product is today's text character for character.
+  assert.equal(denialText('Compare'), denialText('Compare', DEFAULT_BRAND.name));
+  assert.equal(noticeText(1), noticeText(1, DEFAULT_BRAND.name));
+  assert.equal(apiMenuSubText(), 'needs the Observogram server · this studio is a static bundle');
   assert.equal(noticeText(1), 'Static studio — no Observogram server behind this page. Discover, Diagnose, Compile and conformance read the 1 pack built in; Scan a repo, Draft from MCP, Compare, Deploy, Journeys, Build and sign-in need the server.');
   assert.match(noticeText(0), /read the 0 packs built in/);
 });
@@ -753,4 +874,315 @@ test('T7 the REAL bundle boots in headless Chromium against the fixture pack: th
   assert.deepEqual(problems, [], 'no page error and no console.error');
   assert.deepEqual(offLoopback, [], 'no request left the loopback');
   assert.ok(served.every((u) => u === `${base}/` || u.startsWith(`${base}/?`)), `the page fetched only itself over HTTP: ${served.filter((u) => u !== `${base}/`)}`);
+});
+
+// ---------- T8 the baked taxonomy ----------
+
+// What carries weight here: the shim's /api/taxonomy body and header equal a
+// configured server's, the layered bodies carry the seven `type` keys, the
+// board rendered from the shim's answer is the committed mapped golden and
+// differs from the unmapped one (the bake is what regroups). shimBoard ===
+// serverBoard follows from the bodies being equal; T9 is the end-to-end proof
+// through the studio's own boot binding (studio/app.mjs bindTaxonomyFromServer).
+test('T8 baked taxonomy: a --taxonomy bundle answers /api/taxonomy as a server started with OBSERVOGRAM_TAXONOMY does; the board is the typed-canonical mapped golden; env fallback, flag over env, refusals; no path in the bundle', async (t) => {
+  const ws = mkdtempSync(join(tmpdir(), 'observogram-bundle-taxonomy-'));
+  const child = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off', OBSERVOGRAM_TAXONOMY: TAX } });
+  t.after(async () => { await child.stop(); rmSync(ws, { recursive: true, force: true }); bindTaxonomy(artefactClassify, null); });
+  const fixture = JSON.parse(readFileSync(TAX, 'utf8'));
+  const typedCanonical = JSON.parse(readFileSync(TYPED_CANONICAL, 'utf8'));
+  const registered = await fetch(`${child.base}/api/validate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(typedCanonical) }).then((r) => r.json());
+  assert.equal(registered.ok, true, JSON.stringify(registered.errors));
+  const id = registered.registered.id;
+
+  // The build: --json names the source, the path and the counts — never the contents.
+  const out = join(TMP, 'taxonomy', 'index.html');
+  const w = cli(['--taxonomy', TAX, '--pack', TYPED_CANONICAL, '--id', id, '--out', out, '--json']);
+  assert.equal(w.status, 0, w.stderr);
+  const j = JSON.parse(w.stdout);
+  assert.deepEqual(j.taxonomy, { source: 'flag', file: TAX, types: 7, ids: 1 });
+  assert.equal(j.brand, null);
+  assert.ok(!w.stdout.includes('promrule') && !w.stderr.includes('promrule'), 'the report prints no taxonomy contents');
+  const human = cli(['--check', '--taxonomy', TAX, '--pack', TYPED_CANONICAL]);
+  assert.equal(human.status, 0, human.stderr);
+  assert.match(human.stdout, /^ok \(not written\): \d+ modules · 16 stylesheets · \d+ bytes · 1 pack · taxonomy: 7 types, 1 id rule\n$/);
+  const html = readFileSync(out, 'utf8');
+  const config = configOf(html);
+  assert.deepEqual(Object.keys(config), ['version', 'builtAt', 'schema', 'packs', 'taxonomy'], 'the taxonomy key after packs');
+  assert.deepEqual(config.taxonomy, fixture, 'the document is baked verbatim (so ^promrule- legitimately appears in the bundle)');
+  assert.ok(!html.includes(TAX) && !html.includes(ROOT), 'no operator path in the bundle');
+  assert.ok(!/(?:href|src)="\//.test(html), 'nothing points at the server');
+
+  // Parity: the server's body and header, the layered bodies with their `type` keys.
+  const backend = createStaticBackend(config);
+  assert.equal(backend.taxonomyConfigured, true);
+  const server = async (path) => { const r = await fetch(`${child.base}${path}`, { headers: { Accept: 'application/json' } }); return { status: r.status, type: r.headers.get('content-type'), cc: r.headers.get('cache-control'), body: await bodyOf(r) }; };
+  const shim = async (path) => { const r = await backend.handle(path); assert.ok(r, `${path} answered`); return { status: r.status, type: r.headers.get('content-type'), cc: r.headers.get('cache-control'), body: await bodyOf(r) }; };
+  const same = async (path) => { const [a, b] = await Promise.all([server(path), shim(path)]); assert.equal(b.status, a.status, path); assert.equal(b.type, a.type, path); assert.deepEqual(b.body, a.body, `${path}: body`); return { a, b }; };
+  const tax = await same('/api/taxonomy');
+  assert.deepEqual(tax.a.body, { ok: true, taxonomy: fixture, configured: true });
+  assert.equal(tax.a.cc, 'no-store');
+  assert.equal(tax.b.cc, 'no-store');
+  const layered = await same(`/api/packs/${encodeURIComponent(id)}`);
+  const prod = await same(`/api/packs/${encodeURIComponent(id)}?env=prod`);
+  assert.equal(prod.b.body.layers.L4.policy[0].type, 'PrometheusRule');
+  const typed = Object.values(prod.b.body.layers).flatMap((l) => (Array.isArray(l) ? l : Object.values(l).flat())).filter((a) => typeof a.type === 'string');
+  assert.equal(typed.length, 7, 'the seven declared types ride through the adapter');
+
+  // The board, golden-board style: bound from each side's /api/taxonomy answer.
+  bindTaxonomy(artefactClassify, tax.a.body.taxonomy);
+  const serverBoard = renderBoard(layered.a.body, { env: 'prod' });
+  const serverFamilies = familiesOf(layered.a.body);
+  bindTaxonomy(artefactClassify, tax.b.body.taxonomy);
+  const shimBoard = renderBoard(layered.b.body, { env: 'prod' });
+  const shimFamilies = familiesOf(layered.b.body);
+  assert.equal(shimBoard, serverBoard);
+  assert.deepEqual(shimFamilies, serverFamilies);
+  assert.equal(shimBoard, read(MAPPED_BOARD), 'the shim\'s board is the mapped golden, byte for byte');
+  assert.equal(JSON.stringify(shimFamilies, null, 2) + '\n', read('tools/fixtures/golden/board/typed-canonical.mapped.families.json'));
+  assert.deepEqual(boardGroupCounts(shimBoard, 'L4').filter(([, n]) => n), [['pol', 2], ['alr', 2], ['rule', 1]]);
+  bindTaxonomy(artefactClassify, null);
+  const unmapped = renderBoard(layered.b.body, { env: 'prod' });
+  assert.equal(unmapped, read('tools/fixtures/golden/board/typed-canonical.unmapped.board.html'));
+  assert.notEqual(unmapped, shimBoard, 'the bake is what regroups');
+
+  // Env fallback (both spellings), flag over env.
+  const envRun = cli(['--check', '--json', '--pack', TYPED_CANONICAL], TMP, { OBSERVOGRAM_TAXONOMY: TAX });
+  assert.equal(envRun.status, 0, envRun.stderr);
+  assert.deepEqual(JSON.parse(envRun.stdout).taxonomy, { source: 'env', file: TAX, types: 7, ids: 1 });
+  const legacy = cli(['--check', '--json', '--pack', TYPED_CANONICAL], TMP, { TOMOGRAPH_TAXONOMY: TAX });
+  assert.equal(legacy.status, 0, legacy.stderr);
+  assert.equal(JSON.parse(legacy.stdout).taxonomy.source, 'env');
+  const broken = join(TMP, 'broken-taxonomy.json');
+  writeFileSync(broken, '{');
+  const flagWins = cli(['--check', '--json', '--taxonomy', TAX], TMP, { OBSERVOGRAM_TAXONOMY: broken });
+  assert.equal(flagWins.status, 0, flagWins.stderr);
+  assert.equal(JSON.parse(flagWins.stdout).taxonomy.source, 'flag');
+  // A relative path resolves against the cwd given, not process.cwd().
+  const relDir = join(TMP, 'rel-tax');
+  mkdirSync(relDir, { recursive: true });
+  writeFileSync(join(relDir, 't.json'), JSON.stringify(fixture));
+  assert.deepEqual(resolveTaxonomySource({ taxonomy: 't.json' }, {}, relDir), { file: join(relDir, 't.json'), origin: '--taxonomy' });
+  assert.deepEqual(resolveTaxonomySource({ taxonomy: null }, { TOMOGRAPH_TAXONOMY: 't.json' }, relDir), { file: join(relDir, 't.json'), origin: 'OBSERVOGRAM_TAXONOMY' });
+  assert.equal(resolveTaxonomySource({ taxonomy: null }, {}, relDir), null);
+  const rel = cli(['--check', '--json', '--taxonomy', 't.json'], relDir);
+  assert.equal(rel.status, 0, rel.stderr);
+  assert.equal(JSON.parse(rel.stdout).taxonomy.file, join(relDir, 't.json'));
+  assert.deepEqual(loadTaxonomyFile(join(relDir, 't.json')).taxonomy, fixture);
+
+  // Refusals: exit 1, nothing written, the server's texts behind the origin, --json → { ok: false, error }.
+  const refuse = (args, extraEnv, re) => {
+    const badOut = join(TMP, `refused-${Math.random().toString(36).slice(2)}`, 'index.html');
+    const r = cli([...args, '--out', badOut], TMP, extraEnv);
+    assert.equal(r.status, 1, `${args.join(' ')}: ${r.stderr}`);
+    assert.match(r.stderr, re);
+    assert.ok(!existsSync(badOut), 'nothing written');
+    const rj = cli(['--json', ...args, '--out', badOut], TMP, extraEnv);
+    assert.equal(rj.status, 1);
+    const body = JSON.parse(rj.stdout);
+    assert.equal(body.ok, false);
+    assert.match(body.error, re);
+    return r.stderr;
+  };
+  const esc = (p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const missing = join(TMP, 'nope-taxonomy.json');
+  refuse(['--taxonomy', missing], {}, new RegExp(`^--taxonomy: ${esc(missing)}: ENOENT: no such file or directory`));
+  refuse(['--taxonomy', broken], {}, new RegExp(`^--taxonomy: ${esc(broken)}: invalid JSON: `));
+  const indicator = join(TMP, 'indicator.json');
+  writeFileSync(indicator, '{"version":1,"types":{"PackSLI":"indicator"}}');
+  assert.equal(refuse(['--taxonomy', indicator], {}, /unknown family/), `--taxonomy: ${indicator}: taxonomy: types.PackSLI: unknown family "indicator"\n`);
+  const v2 = join(TMP, 'v2.json');
+  writeFileSync(v2, '{"version":2,"nope":1}');
+  assert.equal(refuse(['--taxonomy', v2], {}, /version must be 1/), `--taxonomy: ${v2}: taxonomy: version must be 1 (+1 more)\n`);
+  refuse([], { TOMOGRAPH_TAXONOMY: missing }, new RegExp(`^OBSERVOGRAM_TAXONOMY: ${esc(missing)}: ENOENT`));
+  // The programmatic guard.
+  assert.throws(() => buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', taxonomy: { version: 2 } }), { message: /^taxonomy: version must be 1/ });
+  assert.throws(() => loadTaxonomyFile(indicator, 'OBSERVOGRAM_TAXONOMY'), { message: new RegExp(`^OBSERVOGRAM_TAXONOMY: ${esc(indicator)}: taxonomy: types\\.PackSLI`) });
+});
+
+// ---------- T8b the baked brand ----------
+
+test('T8b baked brand: a --brand bundle carries the branded server\'s shell fragments; the scalars on top; env fallback; server paths and bad brands refused; the shim names the product', async (t) => {
+  const ws = mkdtempSync(join(tmpdir(), 'observogram-bundle-brand-'));
+  const child = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off', OBSERVOGRAM_BRAND_FILE: ACME_STATIC } });
+  t.after(async () => { await child.stop(); rmSync(ws, { recursive: true, force: true }); });
+  const serverShell = await (await fetch(`${child.base}/`)).text();
+  const acme = normalizeBrand(JSON.parse(readFileSync(ACME_STATIC, 'utf8')));
+
+  const out = join(TMP, 'brand', 'index.html');
+  const w = cli(['--brand', ACME_STATIC, '--pack', resolve(ROOT, PAYMENT), '--out', out, '--json']);
+  assert.equal(w.status, 0, w.stderr);
+  const j = JSON.parse(w.stdout);
+  assert.deepEqual(j.brand, { source: 'flag', file: ACME_STATIC, name: 'Acme Watch' });
+  assert.equal(j.taxonomy, null);
+  assert.ok(!w.stdout.includes('b3261e') && !w.stderr.includes('b3261e'), 'the report prints no brand contents');
+  const human = cli(['--check', '--brand', ACME_STATIC, '--pack', resolve(ROOT, PAYMENT)]);
+  assert.match(human.stdout, /^ok \(not written\): \d+ modules · 16 stylesheets · \d+ bytes · 1 pack · brand: Acme Watch\n$/);
+  const html = readFileSync(out, 'utf8');
+  // The fragments brandShellHtml writes: the bundle's equal the branded server's, each exactly once.
+  const bundleFragments = brandFragmentsOf(html, { branded: true });
+  const serverFragments = brandFragmentsOf(serverShell, { branded: true });
+  assert.deepEqual(bundleFragments, serverFragments, 'the bundle\'s shell is the server\'s branded shell');
+  assert.deepEqual(JSON.parse(/<script type="application\/json" id="brand-config">(.*?)<\/script>/.exec(html)[1]), acme, '#brand-config is the normalized brand');
+  const at = (s) => { const i = html.indexOf(s); assert.ok(i >= 0, `${s} present`); return i; };
+  assert.ok(at('<style data-src="design-tokens.css">') < at('<style id="brand-tokens">') && at('<style id="brand-tokens">') < at('<style data-src="app.css">'), '#brand-tokens after design-tokens.css, before app.css — the server\'s cascade position');
+  assert.ok(html.includes('id="build-label"'));
+  assert.ok(!/(?:href|src)="\//.test(html), 'nothing points at the server (the data: favicon, the inline logo)');
+  assert.ok(!html.includes(ACME_STATIC) && !html.includes(ROOT), 'no operator path in the bundle');
+  assert.deepEqual(Object.keys(configOf(html)), ['version', 'builtAt', 'schema', 'packs'], 'a brand bakes no config key');
+  // The inert direction: the shipped shell and the unbranded bundle carry no brand fragment and today's title/h1.
+  const shipped = brandFragmentsOf(read('studio/index.html'), { branded: false });
+  const unbranded = brandFragmentsOf(buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x' }).html, { branded: false });
+  assert.equal(shipped.tokens, undefined);
+  assert.equal(shipped.config, undefined);
+  assert.equal(shipped.icon, undefined);
+  assert.equal(unbranded.title, shipped.title);
+  assert.equal(unbranded.h1, shipped.h1);
+  assert.notEqual(bundleFragments.title, shipped.title);
+
+  // Env: the scalars alone, the file, the legacy spelling; the scalars on top of --brand (the server's loader).
+  const scalars = cli(['--check', '--json', '--pack', resolve(ROOT, PAYMENT)], TMP, { OBSERVOGRAM_BRAND_NAME: 'Zed' });
+  assert.equal(scalars.status, 0, scalars.stderr);
+  assert.deepEqual(JSON.parse(scalars.stdout).brand, { source: 'env', file: null, name: 'Zed' });
+  const envFile = cli(['--check', '--json', '--pack', resolve(ROOT, PAYMENT)], TMP, { OBSERVOGRAM_BRAND_FILE: ACME_STATIC });
+  assert.deepEqual(JSON.parse(envFile.stdout).brand, { source: 'env', file: ACME_STATIC, name: 'Acme Watch' });
+  const legacy = cli(['--check', '--json', '--pack', resolve(ROOT, PAYMENT)], TMP, { TOMOGRAPH_BRAND_FILE: ACME_STATIC });
+  assert.deepEqual(JSON.parse(legacy.stdout).brand, { source: 'env', file: ACME_STATIC, name: 'Acme Watch' });
+  const onTop = join(TMP, 'brand-on-top', 'index.html');
+  const top = cli(['--brand', ACME_STATIC, '--out', onTop], TMP, { OBSERVOGRAM_BRAND_TAGLINE: 'scalar wins' });
+  assert.equal(top.status, 0, top.stderr);
+  const topConfig = JSON.parse(/<script type="application\/json" id="brand-config">(.*?)<\/script>/.exec(readFileSync(onTop, 'utf8'))[1]);
+  assert.equal(topConfig.tagline, 'scalar wins');
+  assert.equal(topConfig.name, 'Acme Watch');
+  // loadBundleBrand directly: a relative --brand resolves against cwd; the legacy file spelling cannot shadow the flag.
+  const relDir = join(TMP, 'rel-brand');
+  mkdirSync(relDir, { recursive: true });
+  writeFileSync(join(relDir, 'b.json'), '{"name":"Rel"}');
+  assert.deepEqual(loadBundleBrand({ brand: 'b.json' }, { TOMOGRAPH_BRAND_FILE: ACME_STATIC }, relDir).brand.name, 'Rel');
+  assert.deepEqual(loadBundleBrand({ brand: null }, {}, relDir), { brand: null, source: null, file: null });
+
+  // Refusals: the server's texts behind the origin that was set; nothing written.
+  const refuse = (args, extraEnv, re) => {
+    const badOut = join(TMP, `refused-brand-${Math.random().toString(36).slice(2)}`, 'index.html');
+    const r = cli([...args, '--out', badOut], TMP, extraEnv);
+    assert.equal(r.status, 1, `${args.join(' ')}: ${r.stderr}`);
+    assert.match(r.stderr, re);
+    assert.ok(!existsSync(badOut), 'nothing written');
+    return r.stderr;
+  };
+  const esc = (p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const missing = join(TMP, 'nope-brand.json');
+  refuse(['--brand', missing], {}, new RegExp(`^--brand: brand file ${esc(missing)}: not found\\n$`));
+  const notJson = join(TMP, 'not-json-brand.json');
+  writeFileSync(notJson, 'not json');
+  refuse(['--brand', notJson], {}, new RegExp(`^--brand: brand file ${esc(notJson)}: not valid JSON\\n$`));
+  const arr = join(TMP, 'array-brand.json');
+  writeFileSync(arr, '[]');
+  refuse(['--brand', arr], {}, new RegExp(`^--brand: brand file ${esc(arr)}: not a JSON object\\n$`));
+  refuse([], { OBSERVOGRAM_BRAND_FILE: missing }, new RegExp(`^OBSERVOGRAM_BRAND_FILE: brand file ${esc(missing)}: not found\\n$`));
+  const empty = join(TMP, 'empty-brand.json');
+  writeFileSync(empty, '{}');
+  refuse(['--brand', empty], {}, new RegExp(`^--brand: brand file ${esc(empty)}: an empty brand \\(no field set\\) — nothing to bake\\n$`));
+  refuse(['--brand', ACME], {}, /^brand favicon "\/assets\/acme\.ico" is a server path — the bundle is served without the server; use an absolute URL \(https:\/\/…, data:…\) or a path relative to the bundle's own directory \("assets\/acme\.ico"\)\n$/);
+  const badToken = join(TMP, 'bad-token-brand.json');
+  writeFileSync(badToken, JSON.stringify({ name: 'X', tokens: { light: { 'Bad Name': '1' } } }));
+  refuse(['--brand', badToken], {}, /^--brand: brand: tokens\.light\.Bad Name is not a design token name\n$/);
+  refuse([], { OBSERVOGRAM_BRAND_ACCENT: 'a;b' }, /^OBSERVOGRAM_BRAND_\*: brand: token value for accent contains ;\{\}<>\n$/);
+  // checkBrandUrls: the three fields, the exemptions.
+  for (const [field, b] of [['favicon', { favicon: '/x.ico' }], ['logo.url', { logo: { url: '/l.svg' } }], ['hero.src', { hero: { src: '/h.png' } }]]) {
+    assert.throws(() => checkBrandUrls(normalizeBrand({ name: 'X', ...b })), { message: new RegExp(`^brand ${esc(field)} "/`) }, field);
+  }
+  for (const b of [{ favicon: '//cdn.example/x.ico' }, { favicon: 'https://x.example/f.ico' }, { favicon: 'data:image/png;base64,AA==' }, { favicon: 'assets/x.ico' }, { logo: { url: 'assets/l.svg' } }]) {
+    assert.ok(checkBrandUrls(normalizeBrand({ name: 'X', ...b })), JSON.stringify(b));
+  }
+  // An unnamed but configured brand inherits the default hero (a server asset, as every unbranded bundle): not refused.
+  const unnamed = normalizeBrand({ tagline: 't' });
+  assert.equal(unnamed.hero.src, DEFAULT_BRAND.hero.src);
+  assert.ok(checkBrandUrls(unnamed));
+  assert.ok(buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', brand: { tagline: 't' } }).html.includes('id="brand-config"'));
+
+  // The shim names the product.
+  const backend = createStaticBackend({ version: '1', schema, packs: [] }, { product: 'Acme Watch' });
+  assert.equal(backend.product, 'Acme Watch');
+  const diff = await backend.handle('/api/diff?a=p&b=p');
+  assert.equal(diff.status, 501);
+  assert.equal((await diff.json()).error, 'Compare needs the Acme Watch server; this studio is a static bundle built without one.');
+  assert.match(noticeText(1, 'Acme Watch'), /^Static studio — no Acme Watch server behind this page\./);
+  assert.equal(apiMenuSubText('Acme Watch'), 'needs the Acme Watch server · this studio is a static bundle');
+});
+
+// ---------- T9 the baked bundle in a browser ----------
+
+test('T9 the baked bundle in headless Chromium: the brand in the title, wordmark, notice and 501 texts, no upstream name; /api/taxonomy from the page; Discover groups as the mapped golden; nothing fetched but the page', async (t) => {
+  const required = process.env.OBSERVOGRAM_BUNDLE_SMOKE === 'require';
+  const skip = (why) => { if (required) assert.fail(`OBSERVOGRAM_BUNDLE_SMOKE=require: ${why}`); t.skip(why); };
+  const { pw, error } = await loadPlaywright();
+  if (!pw) return skip(error);
+  let browser;
+  try { browser = await pw.chromium.launch(); }
+  catch (e) { return skip(`chromium.launch failed: ${e.message.split('\n')[0]}`); }
+  t.after(() => browser.close());
+
+  const out = join(TMP, 'baked', 'index.html');
+  const built = cli(['--taxonomy', TAX, '--brand', ACME_STATIC, '--pack', TYPED_CANONICAL, '--no-remote-fonts', '--out', out]);
+  assert.equal(built.status, 0, built.stderr);
+  const html = readFileSync(out);
+  const srv = createServer((req, res) => {
+    if (req.url === '/' || req.url.startsWith('/?') || req.url.startsWith('/index.html')) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(html);
+    } else {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('not found');
+    }
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  t.after(() => new Promise((r) => srv.close(r)));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+
+  const page = await browser.newPage();
+  const problems = [];
+  const offLoopback = [];
+  const served = [];
+  page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
+  page.on('console', (m) => { if (m.type() === 'error') problems.push(`console.error: ${m.text()}`); });
+  await page.route('**/*', (route) => {
+    const u = route.request().url();
+    if (u.startsWith(base)) { served.push(u); return route.continue(); }
+    offLoopback.push(u);
+    return route.abort();
+  });
+  await page.goto(`${base}/`);
+  // The service tile: the fixture's bindings.service (examples/production-curated.pack.yaml).
+  await page.waitForSelector('.svc-gate-card[data-service="internal-orders"]', { state: 'attached', timeout: 30_000 });
+  assert.equal(await page.title(), 'Acme Watch — the Reliability Console');
+  assert.equal(await page.textContent('.observa-wordmark'), 'ACMEWATCH');
+  assert.match(await page.textContent('.no-backend-notice'), /^Static studio — no Acme Watch server behind this page\./);
+  assert.equal(/observogram/i.test(await page.evaluate('document.body.innerText')), false, 'no upstream name rendered');
+  const tax = await page.evaluate(async () => { const r = await fetch('/api/taxonomy'); return { status: r.status, body: await r.json() }; });
+  assert.equal(tax.status, 200);
+  assert.deepEqual(tax.body, { ok: true, taxonomy: JSON.parse(readFileSync(TAX, 'utf8')), configured: true });
+  const denied = await page.evaluate(async () => { const r = await fetch('/api/refresh-live', { method: 'POST' }); return { status: r.status, body: await r.json() }; });
+  assert.equal(denied.status, 501);
+  assert.match(denied.body.error, /^Refresh from MCP needs the Acme Watch server/);
+  // Open the pack the way a user does; Discover groups L4 as the mapped golden says (studio/discover-board.mjs
+  // writes data-group and aria-label="<title>: <n>" on every .dvb-group section).
+  await page.click('#home-choice-check');
+  await page.click('.svc-gate-card[data-service="internal-orders"]');
+  await page.waitForSelector('#pack-select option[value="typed-canonical"]', { state: 'attached', timeout: 30_000 });
+  await page.waitForSelector('#layer-view .dv-layer[data-layer="L4"] .dvb-group', { state: 'attached', timeout: 30_000 });
+  const browserL4 = await page.evaluate(() => [...document.querySelectorAll('#layer-view .dv-layer[data-layer="L4"] .dvb-group')].map((el) => [el.dataset.group, Number(el.getAttribute('aria-label').split(': ').pop())]).filter(([, n]) => n > 0));
+  const goldenL4 = boardGroupCounts(read(MAPPED_BOARD), 'L4').filter(([, n]) => n > 0);
+  assert.deepEqual(browserL4, goldenL4, 'the browser groups L4 as the mapped golden');
+  assert.deepEqual(goldenL4, [['pol', 2], ['alr', 2], ['rule', 1]]);
+  const item = await page.evaluate(() => {
+    const el = document.querySelector('.observa-adv-item[data-action="api"]');
+    return el ? { disabled: el.disabled, sub: el.querySelector('.observa-adv-item-sub')?.textContent } : null;
+  });
+  assert.deepEqual(item, { disabled: true, sub: 'needs the Acme Watch server · this studio is a static bundle' });
+  assert.match(await page.textContent('#build-label'), /static bundle/);
+  assert.equal(/observogram/i.test(await page.evaluate('document.body.innerText')), false, 'no upstream name rendered with a pack open');
+
+  assert.deepEqual(problems, [], 'no page error and no console.error');
+  assert.deepEqual(offLoopback, [], 'no request left the loopback');
+  assert.ok(served.every((u) => u === `${base}/` || u.startsWith(`${base}/?`)), `the page fetched only itself (the data: favicon and the inline logo fetch nothing): ${served.filter((u) => u !== `${base}/`)}`);
 });

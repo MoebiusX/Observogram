@@ -35,6 +35,17 @@
  * process-wide for the diff, so a self-diff of the typed pack keys every
  * artefact by its family — what the server does with OBSERVOGRAM_TAXONOMY.
  *
+ * The typed-canonical fixture (tools/fixtures/taxonomy/typed-canonical.pack.json)
+ * is examples/production-curated.pack.yaml as JSON with seven declared types
+ * in metadata.annotations["observogram.artefact.type.<symbol>"] — a CANONICAL
+ * pack with declared types, the shape --pack and the server accept — so
+ * tools/test-studio-bundle.mjs T8 can prove a baked bundle against a
+ * configured server over the same goldens (typed-canonical.unmapped.* and
+ * typed-canonical.mapped.*). Without the override the adapter's `defines`
+ * and ids place every artefact (a declared type name a default family does
+ * not know places nothing); with it POL-01 moves from burn_rate/id to
+ * alert_rule/type — the L4 band regroups.
+ *
  * To update after an INTENDED output change:
  *   node tools/test-golden-board.mjs --update
  * then review `git diff tools/fixtures/golden/board/`. Exit 0 = pass.
@@ -144,8 +155,12 @@ function checkGolden(file, actual, label) {
 const loadPack = (path) => adapt(parseYaml(readFileSync(resolve(ROOT, path), 'utf8')));
 const loadJson = (path) => JSON.parse(readFileSync(resolve(ROOT, path), 'utf8'));
 const TYPED = loadJson('tools/fixtures/taxonomy/typed.pack.json');
+const TYPED_CANONICAL = adapt(loadJson('tools/fixtures/taxonomy/typed-canonical.pack.json'));
 const OVERRIDE = loadJson('tools/fixtures/taxonomy/taxonomy.json');
-const groupsOf = (html, layer) => [...(html.split(`<!-- ${layer} -->`)[1] || '').split('<!-- ')[0].matchAll(/data-group="([a-z]+)" aria-label="[^"]*: (\d+)"/g)].map(m => [m[1], Number(m[2])]);
+// The [group, n] pairs of one layer's band, in board order (studio/discover-board.mjs
+// boardGroupsHtml writes data-group and aria-label="<title>: <n>" on every section).
+export const boardGroupCounts = (html, layer) => [...(html.split(`<!-- ${layer} -->`)[1] || '').split('<!-- ')[0].matchAll(/data-group="([a-z]+)" aria-label="[^"]*: (\d+)"/g)].map(m => [m[1], Number(m[2])]);
+const groupsOf = boardGroupCounts;
 const nonEmptyGroups = (html, layer) => groupsOf(html, layer).filter(([, n]) => n > 0).map(([g]) => g);
 
 // The typed fixture, unbound config and bound config: the two goldens, and
@@ -213,6 +228,44 @@ function typedCases() {
   assert(selfDiff(TYPED) === unmappedDiff, 'configureTaxonomy(null) restores the unmapped self-diff byte for byte');
 }
 
+// The typed-canonical fixture: a canonical pack with seven declared types,
+// adapted — the shape --pack and the server accept. Unmapped, the adapter's
+// `defines`/ids place everything; mapped, the declared types win where they
+// differ (POL-01: burn_rate/id → alert_rule/type), so the L4 band regroups.
+function typedCanonicalCases() {
+  const nonEmpty = (html, layer) => groupsOf(html, layer).filter(([, n]) => n);
+  const typed = LAYER_DEFS.flatMap(def => boardEntries(TYPED_CANONICAL, def.id)).filter(e => typeof e.a.type === 'string');
+  assert(typed.length === 7, 'the typed-canonical fixture carries 7 declared types through the adapter', typed.map(e => `${e.key}=${e.a.type}`), 7);
+
+  // --- unmapped: no override — a declared type the default families do not know places nothing ---
+  bindTaxonomy(artefactClassify, null);
+  const unmappedHtml = renderBoard(TYPED_CANONICAL, { env: 'prod' });
+  const unmappedFamilies = familiesOf(TYPED_CANONICAL);
+  checkGolden('typed-canonical.unmapped.board.html', unmappedHtml, 'typed-canonical unmapped board');
+  checkGolden('typed-canonical.unmapped.families.json', JSON.stringify(unmappedFamilies, null, 2) + '\n', 'typed-canonical unmapped families');
+  const typedKeys = typed.map(e => `${e.key.split('/')[0]}:${e.sub ?? ''}:${e.a.id}`);
+  assert(typedKeys.every(k => ['defines', 'id'].includes(unmappedFamilies[k].via)), 'unmapped: every typed artefact classifies via defines or id (the adapter decides, the foreign name places nothing)', typedKeys.map(k => `${k}=${unmappedFamilies[k].family}/${unmappedFamilies[k].via}`));
+  assert(JSON.stringify(nonEmpty(unmappedHtml, 'L4')) === JSON.stringify([['pol', 3], ['alr', 2]]), 'unmapped L4: pol 3 · alr 2', nonEmpty(unmappedHtml, 'L4'));
+  assert(unmappedFamilies['L4:policy:POL-01'].family === 'burn_rate' && unmappedFamilies['L4:policy:POL-01'].via === 'id', 'unmapped: POL-01 is a burn rate by id', unmappedFamilies['L4:policy:POL-01']);
+
+  // --- mapped: the override installed, as the server installs OBSERVOGRAM_TAXONOMY ---
+  bindTaxonomy(artefactClassify, OVERRIDE);
+  try {
+    const mappedHtml = renderBoard(TYPED_CANONICAL, { env: 'prod' });
+    const mappedFamilies = familiesOf(TYPED_CANONICAL);
+    checkGolden('typed-canonical.mapped.board.html', mappedHtml, 'typed-canonical mapped board');
+    checkGolden('typed-canonical.mapped.families.json', JSON.stringify(mappedFamilies, null, 2) + '\n', 'typed-canonical mapped families');
+    assert(JSON.stringify(nonEmpty(mappedHtml, 'L4')) === JSON.stringify([['pol', 2], ['alr', 2], ['rule', 1]]), 'mapped L4: pol 2 · alr 2 · rule 1 — POL-01 moved to the rules', nonEmpty(mappedHtml, 'L4'));
+    for (const [k, family] of [['L1::SLI-01', 'sli'], ['L1::SLO-01', 'slo'], ['L2::OTEL-01', 'otel'], ['L3::QRY-01', 'recording_rule'], ['L3::DASH-01', 'dashboard'], ['L4:alerting:ALR-01', 'alert_route'], ['L4:policy:POL-01', 'alert_rule']]) {
+      assert(mappedFamilies[k]?.family === family && mappedFamilies[k]?.via === 'type', `mapped: ${k} is ${family} by its declared type`, mappedFamilies[k], { family, via: 'type' });
+    }
+    assert(mappedHtml !== unmappedHtml, 'the override changes the board of the typed-canonical pack');
+  } finally {
+    bindTaxonomy(artefactClassify, null);
+  }
+  assert(artefactClassify.activeTaxonomy() === null, 'the override is gone again');
+}
+
 const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   // The catalogue, with the override installed and removed around it: an
@@ -237,5 +290,7 @@ if (isMain) {
   assert(withOverride.diff === paymentDiff && paymentDiff === JSON.stringify(diffPacks(payment, payment)), 'payment-service: the self-diff is byte-identical with the override installed and after it is removed');
   process.stdout.write('\ntyped (tools/fixtures/taxonomy/typed.pack.json)\n');
   typedCases();
+  process.stdout.write('\ntyped-canonical (tools/fixtures/taxonomy/typed-canonical.pack.json)\n');
+  typedCanonicalCases();
   report('golden board', UPDATE ? 'board goldens updated — review git diff tools/fixtures/golden/board/' : 'all board goldens byte-identical.');
 }
