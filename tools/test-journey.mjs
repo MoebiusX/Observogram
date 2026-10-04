@@ -668,12 +668,14 @@ try {
   // A closed loopback port makes the fetcher fail on its core tools at
   // once (connection refused) — no network, no timeout wait.
   const port = await closedLoopbackPort();
-  const lostUrl = `http://127.0.0.1:${port}/mcp`;
+  const lostUrl = `http://127.0.0.1:${port}/mcp?keep=1`;
+  // The def's URL carries a credential parameter: the record must persist
+  // the stripped form (stripMcpUrl's rule), never the secret.
   const lostPath = join(TMP, 'journeys', 'lost.journey.yaml');
   writeFileSync(lostPath, [
     'name: lost',
     `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`,
-    `packB: { mcp: { url: ${lostUrl} } }`,
+    `packB: { mcp: { url: http://127.0.0.1:${port}/mcp?token=URLTOKSECRET&keep=1 } }`,
     'gate: { requireGradePass: true }',
   ].join('\n'));
   let lostErr = null;
@@ -684,6 +686,8 @@ try {
   const lostRec = lostRuns[0];
   assert(typeof lostRec.error === 'string' && lostRec.error.length > 0, 'vantage-lost record carries the error message', lostRec.error);
   assert(lostRec.packB.source === `mcp:${lostUrl}` && lostRec.packA.name === 'payment-service', 'vantage-lost record names both sources', { a: lostRec.packA, b: lostRec.packB });
+  const lostRaw = readFileSync(join(TMP, 'runs', 'lost', `${lostRec.startedAt.replace(/[:.]/g, '-')}.json`), 'utf8');
+  assert(!lostRaw.includes('URLTOKSECRET'), 'the vantage-lost record on disk carries no credential parameter from packB.mcp.url', lostRaw.match(/"source": "[^"]*"/g));
   assert(typeof lostRec.startedAt === 'string' && typeof lostRec.tookMs === 'number' && lostRec.gate.breaches.length === 0, 'vantage-lost record has the timing fields and no fabricated breaches');
   assert(lostRec.grade === undefined && lostRec.drift === undefined, 'vantage-lost record carries no grade or drift — nothing was verified');
   const lostMd = renderJourneyMarkdown(lostRec);
@@ -843,6 +847,20 @@ try {
     assert(readLivePack('fake-live', { livePack: { kept: false, path: null } }) === null && readLivePack('fake-live', { livePack: { kept: true, path: 'live/../../x.json' } }) === null && readLivePack('fake-live', { livePack: { kept: true, path: 'live/1999-01-01T00-00-00-000Z.json' } }) === null,
            'readLivePack is null for no snapshot, a path outside the snapshot shape, and a missing file');
     assert(t1.versions === null || typeof t1.versions === 'object', 'versions is null or a map on a live source (the fake exposes no version probe)', t1.versions);
+    // A credential parameter on packB.mcp.url reaches neither the run record
+    // nor the kept live snapshot (its mcp.url annotation): both persist the
+    // stripped URL, as the server's draft route does.
+    writeFileSync(join(TMP, 'journeys', 'fake-live-cred.journey.yaml'), [
+      'name: fake-live-cred',
+      `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`,
+      `packB: { mcp: { url: ${fakeUrl}?token=FAKETOKSECRET&keep=1 } }`,
+    ].join('\n'));
+    const tc = await runJourney(loadJourneyDef('fake-live-cred'));
+    assert(tc.packB.source === `mcp:${fakeUrl}?keep=1` && tc.outcome === 'pass', 'a live run record persists packB.mcp.url stripped of its credential parameter', tc.packB.source);
+    const tcRecordRaw = readFileSync(join(TMP, 'runs', 'fake-live-cred', stemOf(tc)), 'utf8');
+    const tcSnapRaw = readFileSync(join(liveDirOf('fake-live-cred'), stemOf(tc)), 'utf8');
+    assert(!tcRecordRaw.includes('FAKETOKSECRET') && !tcSnapRaw.includes('FAKETOKSECRET') && readLivePack('fake-live-cred', tc)?.metadata?.annotations?.['mcp.url'] === `${fakeUrl}?keep=1`,
+           'neither the run record nor the live snapshot on disk carries the credential; the snapshot annotation names the stripped URL', { record: tcRecordRaw.includes('FAKETOKSECRET'), snap: tcSnapRaw.includes('FAKETOKSECRET') });
     await new Promise(r => setTimeout(r, 5));
     const t2 = await runJourney(loadJourneyDef('fake-live'));
     assert(t2.transition && t2.transition.any === false && t2.transition.since === t1.startedAt, 'an identical second live run has no transition', t2.transition);

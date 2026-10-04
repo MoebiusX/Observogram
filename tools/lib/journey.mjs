@@ -89,6 +89,7 @@ import { comparePackBranches } from './traceability-graph.mjs';
 import { crawlFiles } from './crawler.mjs';
 import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
 import { isTransportHookError } from './mcp-client.mjs';
+import { safeMcpUrl } from './mcp-url-safety.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from './contracts/stack-self-metrics.mjs';
 import { formatStackValue } from './stack-evidence.mjs';
 import { parseSchedule, windowMs } from './schedule.mjs';
@@ -479,6 +480,12 @@ async function resolvePackA(def, baseDir, crawlScope = null) {
   return { canonical: out.canonical, source: `crawl:${root}` };
 }
 
+// packB.mcp.url as a run record may carry it: stripMcpUrl's rule, with a
+// non-URL value kept as spelled (the fetcher has already refused it).
+function packBSourceUrl(raw) {
+  return safeMcpUrl(raw) ?? String(raw);
+}
+
 async function resolvePackB(def, crawlScope = null) {
   if (def.packB.file) return loadPackFile(def.packB.file, def.__baseDir, crawlScope);
   const m = def.packB.mcp;
@@ -493,8 +500,12 @@ async function resolvePackB(def, crawlScope = null) {
   try {
     const fetched = await fetchMcp({ mcpUrl: m.url, mcpAuth });
     const refreshedAt = new Date().toISOString();
-    const canonical = buildCanonicalPack({ refreshedAt, mcpUrl: m.url, ...fetched });
-    return { canonical, source: `mcp:${m.url}` };
+    // The record and the kept snapshot (its mcp.url annotation) persist the
+    // URL as it may be persisted — userinfo, fragment and credential
+    // parameters stripped — never the URL as the def spelled it.
+    const safeUrl = packBSourceUrl(m.url);
+    const canonical = buildCanonicalPack({ refreshedAt, mcpUrl: safeUrl, ...fetched });
+    return { canonical, source: `mcp:${safeUrl}` };
   } catch (e) {
     // A transport hook fault (OBSERVOGRAM_TRANSPORT_HOOK failing to load or
     // breaking its contract) is a configuration error like the ones above:
@@ -952,7 +963,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
         outcome: 'vantage-lost',
         error: String(e.message || e),
         packA: { source: a.source, name: a.canonical?.metadata?.name || null, version: a.canonical?.metadata?.version || null },
-        packB: { source: `mcp:${def.packB.mcp.url}` },
+        packB: { source: `mcp:${packBSourceUrl(def.packB.mcp.url)}` },
         scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
         gate: { thresholds: def.gate || {}, breaches: [] },
       };
