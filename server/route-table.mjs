@@ -28,7 +28,8 @@
 //                identityApi; true for the MCP endpoint mutations too, a
 //                durable record the server will send a token to
 //   closedAs     how the posture refusals name the route — 'the identity
-//                API' (default) or 'the MCP endpoints'
+//                API' (default) or 'the MCP endpoint API' (a singular
+//                subject: the texts say `is closed`, `answers only`)
 //   modes        where the route is registered: local, oidc, off (the
 //                /auth/* routes follow initAuth()'s mode)
 //   self         { pwflow, session, unauth } — class self only
@@ -160,9 +161,9 @@ export const ROUTES = Object.freeze({
   // identity API's defences — the CSRF header in every posture, closed in
   // the open, exposed posture and, without sign-in, answered only to a
   // direct loopback request — without being the identity API.
-  'POST /api/mcp-endpoints': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoints', audit: ['mcp_endpoint.create'] },
-  'PATCH /api/mcp-endpoints/:id': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoints', audit: ['mcp_endpoint.update'] },
-  'DELETE /api/mcp-endpoints/:id': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoints', audit: ['mcp_endpoint.delete'] },
+  'POST /api/mcp-endpoints': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoint API', audit: ['mcp_endpoint.create'] },
+  'PATCH /api/mcp-endpoints/:id': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoint API', audit: ['mcp_endpoint.update'] },
+  'DELETE /api/mcp-endpoints/:id': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoint API', audit: ['mcp_endpoint.delete'] },
 
   // ---------- owner: the deployment's users, orgs and join role ----------
   // The identity API (server/routes/identity.mjs), whatever org the request

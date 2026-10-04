@@ -251,7 +251,7 @@ test('authzDecision: posture, CSRF and class, in that order', () => {
   const adminApi = synth({ class: 'admin', identityApi: true, csrf: 'always', exposed: 'refuse' });
   const adminRead = synth({ class: 'admin', identityApi: true, exposed: 'refuse' });
   // The MCP endpoint changes (slice 4): the identity API's defences, not the identity API.
-  const mcpWrite = synth({ class: 'admin', direct: true, csrf: 'always', exposed: 'refuse', closedAs: 'the MCP endpoints' });
+  const mcpWrite = synth({ class: 'admin', direct: true, csrf: 'always', exposed: 'refuse', closedAs: 'the MCP endpoint API' });
   const viewerRead = synth({ class: 'viewer' });
   const opWrite = synth({ class: 'operator', csrf: 'session' });
   const rows = [
@@ -311,7 +311,7 @@ test('authzDecision: posture, CSRF and class, in that order', () => {
 test('authzDecision: every refusal names a way out', () => {
   const ownerApi = synth({ class: 'owner', identityApi: true, csrf: 'always', exposed: 'refuse' });
   const adminApi = synth({ class: 'admin', identityApi: true, csrf: 'always', exposed: 'refuse' });
-  const mcpWrite = synth({ class: 'admin', direct: true, csrf: 'always', exposed: 'refuse', closedAs: 'the MCP endpoints' });
+  const mcpWrite = synth({ class: 'admin', direct: true, csrf: 'always', exposed: 'refuse', closedAs: 'the MCP endpoint API' });
   const opWrite = synth({ class: 'operator', csrf: 'session' });
   const text = (entry, ctx) => authzDecision(entry, ctx).body.error;
   assert.equal(text(ownerApi, ctxOf('open-exposed', P.local, { authOff: true })),
@@ -335,13 +335,13 @@ test('authzDecision: every refusal names a way out', () => {
   // The MCP endpoint changes: the same refusals named after them — and no
   // CLI way out (no CLI manages endpoints).
   assert.equal(text(mcpWrite, ctxOf('open-exposed', P.local, { authOff: true })),
-    'the MCP endpoints is closed on a server bound to 0.0.0.0 without sign-in (OBSERVOGRAM_INSECURE_NO_AUTH=1, OBSERVOGRAM_AUTH=off): restart it without OBSERVOGRAM_AUTH=off and sign in as an owner, or bind it to loopback');
+    'the MCP endpoint API is closed on a server bound to 0.0.0.0 without sign-in (OBSERVOGRAM_INSECURE_NO_AUTH=1, OBSERVOGRAM_AUTH=off): restart it without OBSERVOGRAM_AUTH=off and sign in as an owner, or bind it to loopback');
   assert.equal(text(mcpWrite, ctxOf('open-exposed', P.local)),
-    'the MCP endpoints is closed on a server bound to 0.0.0.0 without sign-in (OBSERVOGRAM_INSECURE_NO_AUTH=1): add the first user with npm run users -- add <login> (it arms sign-in without a restart; the first local user is an owner), or configure OIDC');
+    'the MCP endpoint API is closed on a server bound to 0.0.0.0 without sign-in (OBSERVOGRAM_INSECURE_NO_AUTH=1): add the first user with npm run users -- add <login> (it arms sign-in without a restart; the first local user is an owner), or configure OIDC');
   assert.equal(text(mcpWrite, ctxOf('open-loopback', P.local, { direct: false, port: 8123 })),
-    'on a server without sign-in the MCP endpoints answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:8123');
+    'on a server without sign-in the MCP endpoint API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:8123');
   assert.equal(text(mcpWrite, ctxOf('identity', P.admin, { csrf: false })),
-    "missing X-Observogram-CSRF: 1 — changes to the MCP endpoints need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')");
+    "missing X-Observogram-CSRF: 1 — changes to the MCP endpoint API need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')");
   assert.equal(text(mcpWrite, ctxOf('identity', P.operator)), "requires the admin role in org 'acme' (you are operator) — ask an admin of acme");
   assert.equal(csrfAlwaysText(adminApi), text(ownerApi, ctxOf('identity', P.owner, { csrf: false })), 'csrfAlwaysText: the identity text, byte for byte');
 });
@@ -982,7 +982,8 @@ test('completeness: the table agrees with the independent classification, and ev
     if (e.direct) assert.ok(['admin', 'owner'].includes(e.class), `${key}: a direct entry is admin or owner`);
     if (e.direct) assert.equal(e.exposed === 'allow', false, `${key}: a direct entry is closed (or its rule's) when exposed`);
     if (e.direct && e.method !== 'GET') assert.equal(e.csrf, 'always', `${key}: a direct change takes the CSRF header in every posture`);
-    assert.ok(['the identity API', 'the MCP endpoints'].includes(e.closedAs), `${key}: closedAs`);
+    assert.ok(['the identity API', 'the MCP endpoint API'].includes(e.closedAs), `${key}: closedAs`);
+    assert.match(e.closedAs, / API$/, `${key}: closedAs is a singular subject (the texts say 'is closed', 'answers only')`);
     assert.equal(e.closedAs === 'the identity API', !EXPECTED_MCP_ENDPOINT_CHANGES.includes(key), `${key}: closed as what it is`);
     if (e.class === 'admin' || e.class === 'owner') assert.ok(Object.hasOwn(ROUTES[key], 'exposed'), `${key}: an ${e.class} route declares exposed`);
     if (e.csrf === 'form') assert.ok(e.method !== 'GET' && e.path.startsWith('/auth/'), `${key}: form is for a non-GET /auth route`);
@@ -1849,7 +1850,7 @@ for (const posture of OPEN) {
         // The MCP endpoint changes are closed here too, under their own name.
         const ep = await call(srv.base, PROBES['POST /api/mcp-endpoints'], { headers: CSRF_HEADER, body: JSON.stringify(MCP_BODY) });
         assert.deepEqual([ep.status, ep.json.denied], [403, 'posture']);
-        assert.match(ep.json.error, /^the MCP endpoints is closed on a server bound to 0\.0\.0\.0 without sign-in \(OBSERVOGRAM_INSECURE_NO_AUTH=1/);
+        assert.match(ep.json.error, /^the MCP endpoint API is closed on a server bound to 0\.0\.0\.0 without sign-in \(OBSERVOGRAM_INSECURE_NO_AUTH=1/);
         assert.deepEqual((await call(srv.base, PROBES['GET /api/mcp-endpoints'])).json, { ok: true, endpoints: [] }, 'the list is a read: open');
       }
 
@@ -1881,11 +1882,11 @@ for (const posture of OPEN) {
         const body = JSON.stringify(MCP_BODY);
         r = await call(srv.base, PROBES['POST /api/mcp-endpoints'], { body });
         assert.deepEqual([r.status, r.json.denied, r.json.error], [403, 'csrf',
-          "missing X-Observogram-CSRF: 1 — changes to the MCP endpoints need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')"]);
+          "missing X-Observogram-CSRF: 1 — changes to the MCP endpoint API need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')"]);
         for (const [label, extra] of [['a foreign Host', { Host: `rebind.attacker.example:${port}` }], ['X-Forwarded-For', { 'X-Forwarded-For': '203.0.113.9' }]]) {
           r = await call(srv.base, PROBES['POST /api/mcp-endpoints'], { headers: { ...CSRF_HEADER, ...extra }, body, raw: true });
           assert.deepEqual([r.status, r.json.denied, r.json.error], [403, 'posture',
-            'on a server without sign-in the MCP endpoints answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; '
+            'on a server without sign-in the MCP endpoint API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; '
             + `no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${port}`], label);
         }
         r = await call(srv.base, PROBES['POST /api/mcp-endpoints'], { headers: CSRF_HEADER, body });

@@ -283,7 +283,7 @@ export function effectiveRoleOf(principal, membershipRole = null) {
 const NO_SIGN_IN_WAY = 'this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC';
 // The csrf: 'always' refusal, by what the entry is closed as: 'identity
 // changes' for the identity API (and the self route that changes a
-// session), 'changes to the MCP endpoints' for those rows.
+// session), 'changes to the MCP endpoint API' for those rows.
 export function csrfAlwaysText(entry) {
   const what = entry.closedAs === 'the identity API' ? 'identity changes' : `changes to ${entry.closedAs}`;
   return `missing X-Observogram-CSRF: 1 — ${what} need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')`;
