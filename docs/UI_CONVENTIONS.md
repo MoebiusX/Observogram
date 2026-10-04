@@ -92,3 +92,10 @@ emitted by verdict-ui.mjs) is the precedent: it documents the CSS custom
 properties it expects from the host theme in its header, and app.css keeps
 the shared production styles (`.drift-*`, `.diag-*` banners) verdict-ui also
 emits.
+
+The other split along that seam is `studio/static-backend.css`: the static
+bundle's notice (`.no-backend-notice`, a status row pinned to the bottom of the
+window like `.toast`, `role="status"`, dismissable), inlined by
+`tools/build-studio-bundle.mjs` after `reskin.css` and never linked by the live
+studio. It reads the `--og-*` tokens only and is registered in
+`tools/test-studio-layout.mjs`'s EXEMPT list (pinned, but under neither bar).

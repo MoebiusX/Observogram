@@ -174,10 +174,9 @@ The golden suites read `tools/fixtures/` — copy that directory with them.
   `artifact-model`, `constants`, `verify-deploy`, `metric-readers`): still the
   prose table, still CI-asserted zero-import; folding them into the manifest
   (which would also let `retrofeed.mjs` enter the set) is a follow-up.
-- The other downstream seams — branding, the embeddable studio bundle — are
-  documented where they land (the taxonomy and the reverse-proxy identity
-  seams are in §9); the
-  *Decisions — downstream seams* section of
+- The other downstream seam — branding — is documented where it lands (the
+  taxonomy and the reverse-proxy identity seams are in §9, the embeddable
+  studio bundle in §10); the *Decisions — downstream seams* section of
   [`UPDATE_JOURNEY.md`](UPDATE_JOURNEY.md) tracks them.
 
 ## 9. The private plugin layer
@@ -190,6 +189,7 @@ a bump. The surface so far:
 |---|---|---|
 | Backend access (W2) | `OBSERVOGRAM_TRANSPORT_HOOK=<path.mjs \| file:URL>` — a module exporting `prepareRequest({ url, headers })` and/or `fetchImpl(url, init)`, applied to every MCP request of the CLI, the recorder, the probes, journeys and the studio server; `OBSERVOGRAM_ALLOW_LOCAL_MCP=0` still binds the URL it returns | [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md), "Transport hook" |
 | Reverse-proxy identity (W5) | `OBSERVOGRAM_TRUST_PROXY_AUTH=1` + `OBSERVOGRAM_TRUST_PROXY_AUTH_ACK=only-the-proxy-reaches-this-port`, the header names (`PROXY_AUTH_USER_HEADER`, `_EMAIL_HEADER`, `_NAME_HEADER`, `_GROUPS_HEADER`), `PROXY_AUTH_GROUP_ROLES` (`g=role,*=role`, authoritative in `PROXY_AUTH_ORG`), `PROXY_AUTH_JOIN_ROLE`, `PROXY_AUTH_OWNERS` (grant-only), `PROXY_AUTH_SHARED_SECRET` + `_SECRET_HEADER` (required beyond loopback), `PROXY_AUTH_LOGOUT_URL`, `PROXY_AUTH_REALM`; users are `proxy://<realm>#<user>` rows of kind `oidc`; refuses to start without the ACK, beside OIDC, or exposed without the secret | README, "Behind a reverse proxy (trusted headers)" |
+| Studio bundle (W6) | `npm run build:studio -- [--pack <file> [--id] [--label]]… [--pack-url <url>]… [--out dist/studio/index.html] [--no-remote-fonts]` — one static HTML file: every studio and `tools/lib` module in an import map of `data:` URLs, the stylesheets inlined, the packs and the schema as JSON, `studio/static-backend.mjs` answering the read-only pack routes in the browser and `501 denied: 'no-backend'` for the rest; no server configuration at all | §10 below; README, "Serve The Studio Without The Server" |
 | Artefact taxonomy (W3) | `OBSERVOGRAM_TAXONOMY=<path.json>` — `{ version: 1, types: { <TypeName>: <family> \| { family, label?, role? } }, ids: [{ pattern, family, flags?, label?, role? }] }`, read once at start, installed process-wide for the diff and the graphs, served to the studio at `GET /api/taxonomy`; an unreadable or invalid file refuses the start. The classifier itself (`tools/lib/artefact-classify.mjs`) is a listed module | README, "Classify Typed Packs"; [`ADAPTER.md`](ADAPTER.md), "Id families and the classifier" |
 
 A minimal plugin layer for the backend seam is one file the deployment
@@ -205,3 +205,49 @@ listed module of this manifest: a downstream that vendors it gets the same
 `transport` parameter (`createMcpClient({ mcpUrl, mcpAuth, timeoutMs,
 transport })`) and the same `TransportHookError` contract in its own
 tooling.
+
+## 10. Embedding the studio
+
+A downstream that serves the studio from its own static host does not run the
+Express server in front of it; it builds the studio from the vendored snapshot
+as one file and serves that:
+
+```bash
+# From the snapshot (the whole tree, not only tools/lib — the bundle inlines studio/ too):
+node tools/build-studio-bundle.mjs \
+  --pack packs/orders.pack.yaml --label "Orders" \
+  --pack-url https://packs.example.internal/payments.pack.yaml --label "Payments" \
+  --out dist/studio/index.html --no-remote-fonts
+```
+
+What is in the file: `studio/index.html` with every stylesheet inlined in
+place, an inline import map whose keys are `studio/<file>.mjs` and
+`lib/<path>.mjs` (for `tools/lib`) and whose addresses are `data:` URLs of each
+module with only its import-specifier strings rewritten, the packs' canonical
+manifests and the spec schema as a JSON block, and `studio/static-backend.mjs`
+installed before `studio/app.mjs` boots. The shim is the route table of the
+bundle — each handler is a port of the `server/index.mjs` handler it names,
+over the same `tools/lib` engines, and `tools/test-studio-bundle.mjs` compares
+every ported route (status, content type, body; the export ZIP's headers and
+entry names) against a running server:
+
+| Answered in the browser | Answered `501 { ok: false, denied: 'no-backend', error: '<Feature> needs the Observogram server; this studio is a static bundle built without one.' }` |
+|---|---|
+| `GET /api/packs`, `/api/packs/:id` (+ `?env=`), `/canonical` (JSON, `?format=yaml`), `/conformance`, `/compile-catalog`, `/compile-artifact`, `/compile/:target`, `/export.zip` (the Export button downloads it as a Blob); `/api/compile/targets`, `/api/maturity-rubric`, `/api/version`, `/healthz`, `/api/taxonomy` (unconfigured), `/api/examples` and `/api/references` (empty), `/api/live-status` (`present: false`); `/auth/me` → `404 { ok: false, error: 'identity not configured' }` (the open posture) | every other `/api` or `/auth` path and every non-GET: Scan a repo (`/api/crawl*`), Draft from MCP, Refresh from MCP, uploads (`/api/validate`, `/api/uploads`), Compare (`/api/diff`, retrofeed), Deploy, Journeys, Build (`/api/library*`), sign-in (`/auth/*`) |
+
+Swapping packs is a rebuild: `--pack` inlines a file validated against the
+schema at build time; `--pack-url` names a URL the page fetches at its first
+catalogue read (the host must answer CORS; a URL that fails is a catalogue
+entry with `ok: false`, never a failed boot; a URL carrying userinfo or a
+credential query parameter is refused, because the file is distributed).
+Upgrading is a snapshot bump and a rebuild — the bundle has no configuration
+of its own to migrate.
+
+Compare is excluded on purpose: the server's `GET /api/diff` carries
+`comparePackBranches` (`tools/lib/traceability-graph.mjs`), whose PromQL parser
+is the bare node dependency `@prometheus-io/lezer-promql`; a diff without the
+graph changes the diagnostic grade, and the bundle must never show a verdict
+the server would not. Inlining that dependency's ESM dists is the follow-up
+that would bring Compare offline. The other follow-up is `--split`, a
+directory form without `data:` URLs for a host whose Content-Security-Policy
+forbids them in `script-src`.

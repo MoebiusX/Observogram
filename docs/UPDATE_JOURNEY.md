@@ -596,3 +596,51 @@ no header is read in any posture (proven on an open-loopback and a
 local-users server), and nothing under `tools/` changes, so the goldens are
 byte-identical. Tests: 731 → 745 (`server/test-auth-proxy.mjs`;
 `test-authz` inventories the fourth mode).
+
+**W6 — the embeddable studio bundle.** Delivered as
+`tools/build-studio-bundle.mjs` (`npm run build:studio`) and
+`studio/static-backend.mjs` (README, "Serve The Studio Without The Server";
+[`DOWNSTREAM.md`](DOWNSTREAM.md) §10). Decisions: the inlining is an inline
+import map of `data:` URLs — one key per studio and `tools/lib` module, only
+the import-specifier strings rewritten — rather than nested `data:` URLs (a
+relative specifier cannot resolve against a `data:` base, and nesting is
+exponential), `blob:` URLs (a runtime step before the import map, the same
+base problem) or a concatenation registry (rewriting `import`/`export` syntax
+by hand across 2 MB of untyped browser code, with silent failure modes); the
+price is base64's third and stack traces that name `data:` URLs, and a host
+whose CSP forbids `data:` in `script-src` waits for a `--split` directory
+form. The browser-side backend mirrors the server's handlers over the same
+`tools/lib` engines instead of importing server code — `server/index.mjs`
+cannot run in a browser (Express, the store, the file system), and a port
+whose every route is compared against a running server (`test-studio-bundle`
+T5, over an example pack and a library-built one so `onPlaceholder` is
+compared too) is a contract the server cannot drift away from unnoticed;
+`pack-registry.mjs`'s `slugify` is copied with its source named for the same
+reason. Compare is out: the server's diff carries the traceability graph,
+whose PromQL parser is a bare node dependency, and a diff without it would
+grade differently from the server — a different verdict for the same packs
+is worse than a sentence saying the feature needs the server; inlining the
+parser's ESM dists is the follow-up. Everything the server alone can do
+answers `501 denied: 'no-backend'` with a sentence naming the feature, because
+the studio already shows a `denied` body verbatim — one shape, no new client
+code. Export is taken over in the capture phase and downloaded as a Blob,
+because the studio's own button navigates and a fetch wrapper never sees a
+navigation; the `api` link and menu item are disabled for the same reason.
+The shim imports `tools/lib` statically and relatively (`../tools/lib/…`)
+instead of the live studio's `import('/lib/…')`: it must link headlessly
+under Node for the parity suite and resolve in the bundle's import map, and
+the live server never loads it (nothing in the live studio imports it). A
+`--pack-url` with userinfo or a credential query parameter is refused and
+`--json` prints URLs stripped, because the bundle is a file that gets
+distributed. The default is an empty catalogue plus the notice, not the
+vendored example — a downstream ships its own packs. Playwright is resolved
+through `OBSERVOGRAM_PLAYWRIGHT` or the bare `playwright` and never installed:
+an environment-provided tool, so CI without browsers proves parse and parity
+and skips the boot, and `OBSERVOGRAM_BUNDLE_SMOKE=require` turns that skip into
+a failure where browsers exist. Config surface: the CLI's flags; the two
+test-only env names; no server env, no new route (the live server serves the
+two new studio files publicly through the existing public `/` mount — the one
+default-behaviour change, acknowledged in the CHANGELOG). Inert when unused:
+nothing under `server/`, `tools/lib` or the live studio changes and a build
+leaves every source file byte-identical (proven), so the goldens are
+byte-identical. Tests: 745 → 753 (`tools/test-studio-bundle.mjs`).

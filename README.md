@@ -875,6 +875,60 @@ as the `assurance` item with its own file. See
 [`docs/ASSURANCE_RULES.md`](docs/ASSURANCE_RULES.md) for the rules and a sample
 heartbeat route.
 
+### Serve The Studio Without The Server (static bundle)
+
+A downstream that serves the studio behind its own static host — a CDN, an
+S3 bucket, a reverse proxy's `root` — builds it as one HTML file:
+
+```bash
+# One file: every module, every stylesheet, the packs it names.
+npm run build:studio -- \
+  --pack vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml --label "Payment service" \
+  --pack my-service.pack.yaml --id my-service \
+  --out dist/studio/index.html
+
+# A pack the page fetches at its first catalogue read (the host must answer CORS):
+npm run build:studio -- --pack-url https://packs.example.com/orders.pack.yaml --label Orders
+
+# Check the build without writing (also --json): the graph, the stylesheets, the packs.
+npm run build:studio -- --check --pack my-service.pack.yaml
+```
+
+What the file is (`tools/build-studio-bundle.mjs`): `studio/index.html` with
+every stylesheet inlined in place, an inline **import map** whose keys are the
+studio and `tools/lib` modules and whose addresses are `data:` URLs of each
+module (only the import-specifier strings are rewritten — no transform of the
+code), the packs' canonical manifests and the spec schema inlined as JSON, and
+`studio/static-backend.mjs` installed before the app boots. That module answers
+the read-only pack routes in the browser from the same `tools/lib` engines the
+server runs — the catalogue, Discover, Diagnose (conformance), the canonical
+manifest, Compile (the catalogue, every artefact, every target) and **Export**
+(the ZIP, downloaded as a Blob) — so the verdicts are the server's
+(`tools/test-studio-bundle.mjs` compares every ported route against a running
+server). Everything the server alone can do — Scan a repo, Draft from MCP,
+uploads, Compare, Deploy, Journeys, Build, sign-in — answers
+`501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
+this studio is a static bundle built without one.' }`, which the studio shows
+as the sentence, and a dismissable notice at the bottom of the window says so
+once ("Static studio — no Observogram server behind this page …"). Compare is
+out by design: the server's diff carries the traceability graph, whose PromQL
+parser is a bare node dependency the bundle cannot inline, and a diff without
+it would grade differently from the server.
+
+Notes: `--pack` is validated against the spec schema at build time (a failing
+pack fails the build with the validator's text); `--pack-url` refuses a URL
+with userinfo or a credential query parameter — the URL is baked into a file
+you distribute — and `--json` prints URLs stripped; the Google Fonts links stay
+unless `--no-remote-fonts` (offline, the fallback stacks apply); a
+Content-Security-Policy that forbids `data:` in `script-src` cannot run the
+single-file form (a `--split` directory mode is the follow-up); import maps
+need Chrome 89, Firefox 108 or Safari 16.4. Without `--pack` the studio boots
+with an empty catalogue and the notice. The live server is untouched: it
+serves `studio/static-backend.mjs` and `.css` publicly like every studio file,
+and nothing in the live studio imports them. `docs/DOWNSTREAM.md` §10 is the
+downstream view (build from the vendored snapshot, swap packs, upgrade by
+rebuilding).
+
 ### Build A Pack From The Library
 
 For a service that has no pack yet: pick the products it runs on (or an archetype
@@ -1622,6 +1676,7 @@ studio/
   layers-view.mjs          Discover Observogram and artifact cards
   neuron-view.mjs          Advanced → Neuron: fleet tiles, trend / heatmap / bar panels, the journey in focus, the newest record opened up
   journeys-view.mjs        Saved journeys: capture, run-now, history, stack chips, chains + cause lines (the cards Neuron composes)
+  static-backend.mjs       The static bundle's backend in the browser: the read-only pack routes from tools/lib, 501 no-backend for the rest, the Export download, the notice (bundle-only; the live studio never imports it)
   build-model.mjs          The BUILD journey's pure models (define / compile / verify, the stack, the definition column, the layer sheet, the clause checklist's three states, step reachability)
   build-api.mjs            The BUILD journey's loaders over /api/library/* (fetchFn injectable)
   build-definition-view.mjs  BUILD — the definition column on every step (service, the tier as a segmented control, the entries as chips, the conformance summary)
@@ -1635,6 +1690,7 @@ tools/
   cli.mjs                  packc CLI (journey run / list, compile, init, store backup / restore, …)
   crawl-repo.mjs           CLI repo crawler
   fetch-live-pack.mjs      MCP live-pack fetcher
+  build-studio-bundle.mjs  The studio as one static HTML file: an import map of data: modules, inlined stylesheets, the packs (npm run build:studio)
   pack-init.mjs            packc init: build a pack from the library (list / show / instantiate)
   test-build-model.mjs     The BUILD journey's studio models over captured API responses (tools/fixtures/build/)
   validate-pack.mjs        Canonical pack validator
