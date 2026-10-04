@@ -1060,7 +1060,7 @@ test('the README API Surface: its intro states each row\'s class — public and 
   assert.match(intro, /`\/api\/org` and every `\/api\/org\/…` route are `admin`/, 'the intro states the admin rows');
   assert.match(intro, /every `\/api\/admin\/…` route `owner`/, 'the intro states the owner rows');
   assert.match(intro, /every `\/api\/mcp-endpoints` route but its `GET` is `admin`/, 'the intro states the MCP endpoint rows');
-  assert.match(intro, /`GET \/api\/audit` is `admin`/, 'the intro states the audit reader\'s class');
+  assert.match(intro, /`GET \/api\/audit` is\s+`admin` \([^)]*— see \[The Audit\]\(#the-audit\)\)/, 'the intro states the audit reader\'s class and links The Audit');
   assert.match(intro, /every other `GET` is `viewer`/, 'the intro states the GET rule');
   assert.match(intro, /every other route `operator`/, 'the intro states the rule for every other row');
   const stated = (method, path) => {

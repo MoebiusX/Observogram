@@ -1995,8 +1995,8 @@ record is where the server will send the org's read token: its changes take
 the identity API's defences — the `X-Observogram-CSRF: 1` header in every
 posture, closed on an exposed server without sign-in); `GET /api/audit` is
 `admin` (the org's rows; an owner reads the deployment's; closed in the
-open, exposed posture); every other `GET` is `viewer` and every other route
-`operator`.
+open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
+`viewer` and every other route `operator`.
 
 | Method | Path | Purpose |
 |---|---|---|
