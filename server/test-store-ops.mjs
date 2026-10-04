@@ -52,6 +52,7 @@ const { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSyn
 const { tmpdir } = await import('node:os');
 const { dirname, join } = await import('node:path');
 const { fileURLToPath, pathToFileURL } = await import('node:url');
+const { isWin32, win32Skip, WIN32 } = await import('./fixtures/platform.mjs');
 
 const { closeStore, openStore, tx } = await import('./store/db.mjs');
 const identity = await import('./store/identity.mjs');
@@ -228,7 +229,7 @@ test('Export gate: a flat deployment — no orgs.json; the same enabled users si
     p2: { label: 'Second', source: 'workspace', createdAt: Math.trunc(mtime('p2')), lastUsedAt: idx.p2.lastUsedAt },
   });
   assert.ok(Number.isInteger(idx.p2.lastUsedAt) && idx.p2.lastUsedAt >= idx.p2.createdAt, 'lastUsedAt: the relabel touched it');
-  assert.equal(statSync(indexPath).mode & 0o777, 0o644, 'no secret in it: 0644');
+  assert.equal(statSync(indexPath).mode & 0o777, isWin32 ? 0o666 : 0o644, 'no secret in it: world-readable (0644; Windows reports a writable file as 0666)');
   assert.deepEqual(readdirSync(join(base, 'packs')).filter((f) => f.endsWith('.tmp')), []);
 
   // The pre-store build.
@@ -344,7 +345,7 @@ test('Export gate: a flat default org plus a created org — orgs.json, the defa
   assert.deepEqual(logs.filter((l) => /index\.json/.test(l)), []);
 });
 
-test('Export: a recorded index.json a rolled-back build changed (a relabel, a labelled register) refuses naming import --replace and writes nothing; one it only touched (lastUsedAt), or that says what the reconcile makes the store hold (an adopted file), is overwritten; a packs/ that cannot be listed refuses', { skip: process.platform === 'win32' && 'POSIX modes' }, async () => {
+test('Export: a recorded index.json a rolled-back build changed (a relabel, a labelled register) refuses naming import --replace and writes nothing; one it only touched (lastUsedAt), or that says what the reconcile makes the store hold (an adopted file), is overwritten; a packs/ that cannot be listed refuses', { skip: win32Skip(WIN32.modes) }, async () => {
   const base = tempDir();
   usersJson(base, ['alice']);
   pack(base, 'p1');
@@ -705,7 +706,7 @@ test('export: a directory export into another store\'s markerless workspace is r
   await start(t2);
 });
 
-test('export: a directory export targets a new or empty directory only — an empty one and a symlink to an absent or empty one export; a file, a non-empty symlink target and a non-empty directory are refused', { skip: process.platform === 'win32' && 'symlinks' }, async () => {
+test('export: a directory export targets a new or empty directory only — an empty one and a symlink to an absent or empty one export; a file, a non-empty symlink target and a non-empty directory are refused', { skip: win32Skip(WIN32.symlinks) }, async () => {
   const base = tempDir();
   usersJson(base, ['alice']);
   await start(base);
@@ -744,7 +745,7 @@ test('export: a directory export targets a new or empty directory only — an em
   await assert.rejects(exportIt(base, join(root, 'file')), (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && /is not a directory/.test(e.message));
 });
 
-test('export: users.json holds password hashes — a new one is created 0600, an existing one keeps its mode, no .tmp left behind', { skip: process.platform === 'win32' && 'POSIX modes' }, async () => {
+test('export: users.json holds password hashes — a new one is created 0600, an existing one keeps its mode, no .tmp left behind', { skip: win32Skip(WIN32.modes) }, async () => {
   const base = tempDir();
   usersJson(base, ['alice']);
   await start(base);
@@ -2355,7 +2356,7 @@ test('purge-org docs: the README and the k8s note say it cannot be undone, what 
   }
 });
 
-test('purge-org: refused for a live, default or unknown org, a root that is a symlink, a workspace whose marker names another store, a store in use, no database and :memory: — nothing deleted', async () => {
+test('purge-org: refused for a live, default or unknown org, a root that is a symlink, a workspace whose marker names another store, a store in use, no database and :memory: — nothing deleted', async (t) => {
   const base = await removedOrgDeployment();
   const rows = await read(base, (db) => actions(db).length);
   const files = () => readdirSync(join(base, 'orgs'), { recursive: true }).sort();
@@ -2377,14 +2378,16 @@ test('purge-org: refused for a live, default or unknown org, a root that is a sy
   await assert.rejects(purge(base, 'acme'), refusedOp(/names store another-store, but .* holds store \S+: the workspace .* is not this store's/));
   writeFileSync(legacy.markerPath(base), markerBytes);
 
-  const elsewhere = tempDir();
-  pack(elsewhere, 'x1');
-  rmSync(join(base, 'orgs', 'acme'), { recursive: true });
-  symlinkSync(elsewhere, join(base, 'orgs', 'acme'), 'dir');
-  await assert.rejects(purge(base, 'acme'), refusedOp(/orgs\/acme is not a directory \(a symlink, never followed\)/));
-  assert.ok(existsSync(join(elsewhere, 'packs', 'x1.pack.yaml')), 'the link target stays');
-  rmSync(join(base, 'orgs', 'acme'));
-  pack(join(base, 'orgs', 'acme'), 'a1');
+  await t.test('a root that is a symlink is refused and never followed', { skip: win32Skip(WIN32.symlinks) }, async () => {
+    const elsewhere = tempDir();
+    pack(elsewhere, 'x1');
+    rmSync(join(base, 'orgs', 'acme'), { recursive: true });
+    symlinkSync(elsewhere, join(base, 'orgs', 'acme'), 'dir');
+    await assert.rejects(purge(base, 'acme'), refusedOp(/orgs\/acme is not a directory \(a symlink, never followed\)/));
+    assert.ok(existsSync(join(elsewhere, 'packs', 'x1.pack.yaml')), 'the link target stays');
+    rmSync(join(base, 'orgs', 'acme'));
+    pack(join(base, 'orgs', 'acme'), 'a1');
+  });
   assert.deepEqual(files(), filesBefore);
 
   await assert.rejects(purge(tempDir(), 'acme'), refusedOp(/^no database at .* nothing to purge/));

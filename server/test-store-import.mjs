@@ -31,6 +31,7 @@ const {
 const { tmpdir } = await import('node:os');
 const { dirname, join } = await import('node:path');
 const { fileURLToPath } = await import('node:url');
+const { win32Skip, WIN32 } = await import('./fixtures/platform.mjs');
 
 const legacy = await import('./store/legacy-files.mjs');
 const { planFlatMigration, migrateFlatWorkspace } = await import('./tenancy.mjs');
@@ -87,7 +88,7 @@ test('strict readers: the file — corrupt JSON, a users array, a string record,
   assert.throws(() => legacy.readUsersFileStrict(join(dir, 'dir.json')), (e) => isLegacyError(join(dir, 'dir.json'))(e) && /EISDIR/.test(e.message));
 });
 
-test('strict readers: EACCES on read is an error, not "absent"', (t) => {
+test('strict readers: EACCES on read is an error, not "absent"', { skip: win32Skip(WIN32.modes) }, (t) => {
   const dir = tempDir('eacces');
   const u = write(join(dir, 'users.json'), '{ "users": {} }');
   chmodSync(u, 0o000);
@@ -197,7 +198,7 @@ test('hashes and the marker: sha256File absent vs present; compareHashes changed
   }
 });
 
-test('hasData: absent, empty file, empty directory tree → no data; a byte, a nested file, a symlink (even dangling) → data', () => {
+test('hasData: absent, empty file, empty directory tree → no data; a byte, a nested file → data', () => {
   const d = tempDir('hasdata');
   assert.equal(legacy.hasData(join(d, 'nothing')), false);
   write(join(d, 'empty.jsonl'), '');
@@ -207,6 +208,10 @@ test('hasData: absent, empty file, empty directory tree → no data; a byte, a n
   assert.equal(legacy.hasData(join(d, 'tree')), false);
   write(join(d, 'tree', 'a', 'b', 'one'), 'x');
   assert.equal(legacy.hasData(join(d, 'tree')), true);
+});
+
+test('hasData: a symlink (even dangling) → data, alone or inside a directory', { skip: win32Skip(WIN32.symlinks) }, () => {
+  const d = tempDir('hasdata-link');
   symlinkSync(join(d, 'missing'), join(d, 'link'));
   assert.equal(legacy.hasData(join(d, 'link')), true);
   mkdirSync(join(d, 'withlink'));

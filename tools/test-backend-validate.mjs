@@ -33,12 +33,13 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { compileCatalog, compileArtifact } from './lib/compile.mjs';
 import { createHarness } from './lib/harness.mjs';
+import { isWin32 } from '../server/fixtures/platform.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 const BIN_DIR = join(ROOT, '.tools', 'bin');
 const OUT_DIR = join(ROOT, '.tools', 'tmp', 'backend-validate');
-const EXE = process.platform === 'win32' ? '.exe' : '';
+const EXE = isWin32 ? '.exe' : '';
 const STRICT = process.argv.includes('--strict');
 
 const { assert, failures, report } = createHarness({ indent: '  ', truncate: 400 });
@@ -65,7 +66,7 @@ const VALIDATORS = {
 // Tools with no published build for this platform are a skip even under
 // --strict (mimirtool ships linux/darwin only); CI runs on linux where
 // every validator exists.
-const NO_BUILD_HERE = new Set(process.platform === 'win32' ? ['mimirtool'] : []);
+const NO_BUILD_HERE = new Set(isWin32 ? ['mimirtool'] : []);
 
 for (const [name, path] of Object.entries(VALIDATORS)) {
   if (path) {

@@ -16,6 +16,7 @@ import { chmodSync, chownSync, copyFileSync, existsSync, mkdirSync, mkdtempSync,
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { win32Skip, WIN32 } from './fixtures/platform.mjs';
 
 // Hermetic (§0): a developer shell's store or identity variables never reach
 // this process's imports (the identity-admin cases below read the server's
@@ -95,7 +96,7 @@ const tables = (db) => prepare(db, "SELECT name FROM sqlite_schema WHERE type = 
 
 // ---------- the harness: a stuck child fails its test, it does not hang the file ----------
 
-test('child(): exited() rejects, naming the wait, and SIGKILLs a child still running after its deadline', async () => {
+test('child(): exited() rejects, naming the wait, and SIGKILLs a child still running after its deadline', { skip: win32Skip(WIN32.signals) }, async () => {
   const c = child(`
     process.on('SIGTERM', () => {});   // a handler that swallows the signal
     console.log('ready');
@@ -645,7 +646,7 @@ test('Audit: the same on a raw connection opened without recursive_triggers', as
 // ---------- closing on a signal ----------
 
 for (const sig of ['SIGTERM', 'SIGINT']) {
-  test(`${sig}: the child closes the store (no -wal left behind) and still dies by the signal`, async () => {
+  test(`${sig}: the child closes the store (no -wal left behind) and still dies by the signal`, { skip: win32Skip(WIN32.signals) }, async () => {
     const path = join(tempDir(), 'sig.db');
     const c = child(`
       const { openStore, prepare, tx } = await import(${JSON.stringify(DB_URL)});
@@ -676,7 +677,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
 // it was registered before or after the first open, or as a `once`, and
 // must still be closed (checkpointed, no -wal) when that handler exits.
 for (const [where, how] of [['before', 'on'], ['after', 'on'], ['before', 'once']]) {
-  test(`SIGTERM with the process's own handler (${how}, registered ${where} the open): the store stays usable until it exits`, async () => {
+  test(`SIGTERM with the process's own handler (${how}, registered ${where} the open): the store stays usable until it exits`, { skip: win32Skip(WIN32.signals) }, async () => {
     const path = join(tempDir(), `sig-owned-${where}-${how}.db`);
     const c = child(`
       const { openStore, prepare, tx } = await import(${JSON.stringify(DB_URL)});
@@ -721,7 +722,7 @@ const SIG_CHILD = (path) => `
 `;
 
 for (const sig of ['SIGTERM', 'SIGINT']) {
-  test(`${sig}: when the re-raise is dropped (as for PID 1) the child still exits ${SIGNAL_EXIT[sig]} with the store closed`, async () => {
+  test(`${sig}: when the re-raise is dropped (as for PID 1) the child still exits ${SIGNAL_EXIT[sig]} with the store closed`, { skip: win32Skip(WIN32.signals) }, async () => {
     const path = join(tempDir(), 'sig-dropped.db');
     // A no-op process.kill stands in for the kernel ignoring the re-raise.
     const c = child(`process.kill = () => true;\n${SIG_CHILD(path)}`);
@@ -1694,7 +1695,7 @@ async function readStore(path) {
   }
 }
 
-test('packc store backup: refuses :memory:, a missing database (creating none) and an existing target; usage is exit 2', async () => {
+test('packc store backup: refuses :memory:, a missing database (creating none) and an existing target; usage is exit 2', async (t) => {
   const dir = tempDir('bk-refuse');
   const dbPath = join(dir, 'observogram.db');
   let r = await packc(['store', 'backup', join(dir, 'a.db')], { OBSERVOGRAM_DB: ':memory:' });
@@ -1711,22 +1712,26 @@ test('packc store backup: refuses :memory:, a missing database (creating none) a
   r = await packc(['store', 'backup', dbPath], { OBSERVOGRAM_DB: dbPath });
   assert.equal(r.code, 1);
   assert.match(r.stderr, /is the database itself/);
-  // The database's own -wal/-shm/-journal, also named through a symlinked
-  // directory: a backup there reads "written" and the next open deletes it.
-  const via = join(dir, 'via');
-  symlinkSync(dir, via);
-  r = await packc(['store', 'backup', join(via, 'observogram.db')], { OBSERVOGRAM_DB: dbPath });
-  assert.equal(r.code, 1);
-  assert.match(r.stderr, /is the database itself/);
-  for (const sfx of ['-wal', '-shm', '-journal']) {
-    for (const dest of [`${dbPath}${sfx}`, join(via, `observogram.db${sfx}`)]) {
-      r = await packc(['store', 'backup', dest], { OBSERVOGRAM_DB: dbPath });
-      assert.equal(r.code, 1, dest);
-      assert.match(r.stderr, new RegExp(`is the database's own ${sfx} file`));
-      assert.equal(existsSync(`${dbPath}${sfx}`), false, dest);
-      assert.equal(existsSync(`${dbPath}${sfx}.tmp`), false, dest);
-    }
-  }
+  // The database's own -wal/-shm/-journal: a backup there reads "written"
+  // and the next open deletes it, so it is refused as that file (and the
+  // refusal creates neither it nor its .tmp).
+  const ownSidecarRefused = async (dest, sfx) => {
+    r = await packc(['store', 'backup', dest], { OBSERVOGRAM_DB: dbPath });
+    assert.equal(r.code, 1, dest);
+    assert.match(r.stderr, new RegExp(`is the database's own ${sfx} file`));
+    assert.equal(existsSync(`${dbPath}${sfx}`), false, dest);
+    assert.equal(existsSync(`${dbPath}${sfx}.tmp`), false, dest);
+  };
+  for (const sfx of ['-wal', '-shm', '-journal']) await ownSidecarRefused(`${dbPath}${sfx}`, sfx);
+  // The same names through a symlinked directory (a privilege on Windows).
+  await t.test('the database named through a symlinked directory is the database itself, its sidecars too', { skip: win32Skip(WIN32.symlinks) }, async () => {
+    const via = join(dir, 'via');
+    symlinkSync(dir, via);
+    r = await packc(['store', 'backup', join(via, 'observogram.db')], { OBSERVOGRAM_DB: dbPath });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /is the database itself/);
+    for (const sfx of ['-wal', '-shm', '-journal']) await ownSidecarRefused(join(via, `observogram.db${sfx}`), sfx);
+  });
   // A database named *.tmp is the backup's temporary file for the name
   // without it: refused as that, not as an interrupted backup to remove.
   const tmpNamed = join(dir, 'live.tmp');
@@ -1784,7 +1789,7 @@ test('packc store backup while a server holds the store: every committed row, no
   }
 });
 
-test('packc store restore: refuses while the server holds the store (even idle), a foreign file, a missing one and :memory:', async () => {
+test('packc store restore: refuses while the server holds the store (even idle), a foreign file, a missing one and :memory:', { skip: win32Skip('signal semantics: the holder is ended by TerminateProcess, so its -wal/-shm survive and the final directory listing differs') }, async () => {
   const dir = tempDir('rs-refuse');
   const dbPath = join(dir, 'observogram.db');
   const backup = join(dir, 'b.db');
@@ -1973,7 +1978,7 @@ test('packc store restore with a -wal and -shm but no database to probe: they mo
   }
 });
 
-test('packc store restore gives the restored file the replaced store\'s mode (owner read-write, 0600 when there was none), not the backup\'s, and it opens in WAL', async () => {
+test('packc store restore gives the restored file the replaced store\'s mode (owner read-write, 0600 when there was none), not the backup\'s, and it opens in WAL', { skip: win32Skip(WIN32.modes) }, async () => {
   const dir = tempDir('rs-mode');
   const dbPath = join(dir, 'observogram.db');
   await openStore({ path: dbPath });
@@ -2032,7 +2037,7 @@ test('packc store restore gives the restored file the replaced store\'s mode (ow
   }
 });
 
-test('the store holds password records, so no file it creates is group or world readable: the database and its -wal/-shm, a backup, a restored database and the moved-aside files are 0600', async () => {
+test('the store holds password records, so no file it creates is group or world readable: the database and its -wal/-shm, a backup, a restored database and the moved-aside files are 0600', { skip: win32Skip(WIN32.modes) }, async () => {
   const dir = tempDir('modes');
   const dbPath = join(dir, 'db', 'observogram.db');
   const modeOf = (p) => statSync(p).mode & 0o777;
