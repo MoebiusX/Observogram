@@ -34,6 +34,8 @@
   "scripts": {
     "start": "node server/index.mjs",
     "build:stamp": "node tools/stamp-build.mjs",
+    "build:studio": "node tools/build-studio-bundle.mjs",
+    "lint:studio-bundle": "node --check tools/build-studio-bundle.mjs && node --check studio/static-backend.mjs",
     "lint:build-info": "node --check server/build-info.mjs && node --check tools/stamp-build.mjs && node --check studio/build-label.mjs",
     "test:build-info": "node tools/test-build-info.mjs",
     "serve": "node server/index.mjs",

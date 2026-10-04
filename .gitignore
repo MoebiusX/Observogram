@@ -58,5 +58,9 @@ docs/archive/TOMOGRAPH_MIGRATION_CHECKLIST.md
 # Superseded scratch versions of the brand/architecture diagrams.
 docs/diagrams/_prev*
 
+# `npm run build:studio` output (tools/build-studio-bundle.mjs): the studio
+# as one static HTML file. A build product, never source.
+/dist/
+
 # Generated provisioning files for the T2 provisioning-load test.
 docker/.t2-provisioning/
