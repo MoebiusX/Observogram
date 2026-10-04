@@ -349,7 +349,14 @@ docroot. That architecture is gone:
   (`OBSERVOGRAM_OIDC_*`) also satisfies the requirement; with it,
   `OBSERVOGRAM_BOOTSTRAP_ADMIN` names the first owner (`<issuer>#<sub>`, or
   an email the ID token marks verified) — see
-  [.env.example](../../.env.example).
+  [.env.example](../../.env.example). Behind an ingress or sidecar that
+  terminates SSO, `OBSERVOGRAM_TRUST_PROXY_AUTH=1` takes identity from its
+  headers instead: the pod binds beyond loopback, so
+  `OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET` (a Secret the proxy sends in
+  `X-Proxy-Auth-Secret`) is required, the ACK sentence must be set, and the
+  proxy must be the only route to the pod's port (a NetworkPolicy) and
+  strip the identity headers from client requests — see the README's
+  "Behind a reverse proxy".
 - `GITHUB_TOKEN` (optional) — uncomment in
   [deployment-studio.yaml](deployment-studio.yaml) to raise GitHub rate
   limits / allow private repos for `POST /api/crawl-github`.

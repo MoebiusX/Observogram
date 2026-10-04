@@ -360,6 +360,91 @@ server opens it at every start.
   org's own part of the workspace (or outside it); a path inside another
   org's part is refused.
 
+#### Behind a reverse proxy (trusted headers)
+
+An enterprise deployment that terminates SSO at a reverse proxy can have the
+server trust the identity the proxy forwards, instead of running OIDC or
+local users itself ([`server/auth-proxy.mjs`](server/auth-proxy.mjs); the
+auth seam of [docs/DOWNSTREAM.md](docs/DOWNSTREAM.md)). Opt-in, and off
+unless `OBSERVOGRAM_TRUST_PROXY_AUTH=1`: without it no header is read, in
+any posture.
+
+```bash
+OBSERVOGRAM_TRUST_PROXY_AUTH=1
+OBSERVOGRAM_TRUST_PROXY_AUTH_ACK=only-the-proxy-reaches-this-port
+OBSERVOGRAM_PROXY_AUTH_USER_HEADER=X-Forwarded-User        # default; required on every request
+OBSERVOGRAM_PROXY_AUTH_EMAIL_HEADER=X-Forwarded-Email      # default
+OBSERVOGRAM_PROXY_AUTH_NAME_HEADER=                        # unset by default
+OBSERVOGRAM_PROXY_AUTH_GROUPS_HEADER=X-Forwarded-Groups    # unset by default; a comma list
+OBSERVOGRAM_PROXY_AUTH_GROUP_ROLES='sre=admin,dev=operator,*=viewer'
+OBSERVOGRAM_PROXY_AUTH_ORG=                                # the org the groups rule; default the default org
+OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE=none                      # first-sight role when no groups header is configured
+OBSERVOGRAM_PROXY_AUTH_OWNERS=root                         # comma list of user values granted owner
+OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET=<32+ chars>           # required beyond loopback
+OBSERVOGRAM_PROXY_AUTH_SECRET_HEADER=X-Proxy-Auth-Secret   # default
+OBSERVOGRAM_PROXY_AUTH_LOGOUT_URL=https://sso.example.com/logout
+OBSERVOGRAM_PROXY_AUTH_REALM=proxy                         # default; [a-z0-9._-]{1,64}
+```
+
+- **The rule.** The proxy MUST be the only route to this port, and MUST
+  strip the user, email, name, groups and secret headers from every client
+  request before adding its own — a client that can set `X-Forwarded-User`
+  is anyone. The server cannot verify that, so it refuses to start until
+  the operator says so in words: `OBSERVOGRAM_TRUST_PROXY_AUTH_ACK` must be
+  the sentence `only-the-proxy-reaches-this-port` (not `1`). The refusal:
+  `OBSERVOGRAM_TRUST_PROXY_AUTH=1 trusts identity headers from a reverse
+  proxy, which is safe only when clients cannot reach this port — set
+  OBSERVOGRAM_TRUST_PROXY_AUTH_ACK=only-the-proxy-reaches-this-port once the
+  proxy strips X-Forwarded-User, X-Forwarded-Email[, <groups header>] from
+  every client request, or unset OBSERVOGRAM_TRUST_PROXY_AUTH`.
+- **Loopback, or a shared secret.** Bind to loopback next to the proxy, or
+  set `OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET` (32 characters or more) and have
+  the proxy send it in `X-Proxy-Auth-Secret`: a request without the right
+  secret is anonymous. A bind beyond loopback without it refuses to start
+  (`refusing to bind to <host> with OBSERVOGRAM_TRUST_PROXY_AUTH=1 and no
+  OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET: beyond loopback any client could set
+  X-Forwarded-User. Set the shared secret (the proxy sends it in
+  X-Proxy-Auth-Secret), or bind to loopback (HOST=127.0.0.1) next to the
+  proxy`); on loopback without it the boot warns once that every process
+  reaching the port is trusted as the proxy. The secret is compared in
+  constant time and never printed or recorded.
+- **One sign-in mode per server.** `OBSERVOGRAM_OIDC_ISSUER` set beside the
+  flag refuses to start (`… are both set: one sign-in mode per server —
+  unset one`); `OBSERVOGRAM_AUTH=off` wins over the flag (one warn line,
+  headers not read). Local users are not consulted while the mode is on.
+- **No cookie, no login page.** The headers are the session: every request
+  resolves them against the store, once, in one transaction. `GET
+  /auth/login` answers 401 and says so; the studio's **sign out** goes to
+  `OBSERVOGRAM_PROXY_AUTH_LOGOUT_URL` when set (the proxy's session outlives
+  this app's) and otherwise says it signed out of this app only; **sign out
+  my other sessions** is not offered. The headers are ambient like a
+  cookie, so a session mutation still needs `X-Observogram-CSRF: 1`.
+- **Rows and roles.** Users are recorded as `proxy://<realm>#<user>`, kind
+  `oidc`, under the key `proxy://<realm>` — `npm run users -- owner
+  proxy://proxy#alice`, `remove`, `enable` and the identity API name them
+  that way, whatever OIDC issuer the store recorded (a store that recorded
+  one keeps refusing bare logins from a plain shell, as before). The email
+  the proxy sends is recorded as verified. With a groups header configured,
+  the groups are **authoritative in `OBSERVOGRAM_PROXY_AUTH_ORG`** (default
+  the default org) and nowhere else: on every request that carries the
+  header the membership there is added, raised, lowered or removed to match
+  (`membership.jit` / `membership.role` / `membership.remove` rows, actor
+  `system`, `via: proxy-groups`; an admin's manual edit in that org is
+  overwritten by the next request); a request without the header leaves
+  memberships alone; `*` is every user the header names. Without a groups
+  header, `OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE` applies at the first sight
+  only. A user in `OBSERVOGRAM_PROXY_AUTH_OWNERS`, or in a group mapped to
+  `owner`, is granted owner once (`owner.grant`, `via: proxy`) and **never
+  revoked here** — revoke with `PUT /api/admin/users/:id/owner`. A disabled
+  row is refused and never re-enabled by a request; a local row holding the
+  login is refused.
+- **Refused requests are anonymous (401), and write nothing**: a duplicated
+  identity header line, a value over 2000 characters or holding a control
+  character, an empty user header, a missing or wrong secret.
+- **`packc store rekey-issuer --clear` disables `proxy://` rows too**: they
+  are kind `oidc`, and `--clear` disables every enabled OIDC row. `--to`
+  rewrites one issuer's prefix and leaves them alone.
+
 #### Roles
 
 Who may call what is decided per route, by one table:
@@ -378,7 +463,7 @@ The role is the membership **of the request's org** (`X-Observogram-Org`,
 `admin`, `viewer` / `read` / `readonly` / `read-only` → `viewer`,
 anything else (`member`, empty) → `operator`. Per posture:
 
-- **Signed in** (local users or OIDC): the user's role in the org; an owner
+- **Signed in** (local users, OIDC or a reverse proxy): the user's role in the org; an owner
   is an admin everywhere. The bearer (`OBSERVOGRAM_API_TOKEN`) acts as an
   `operator` of its `X-Observogram-Org` (else the default org), never as an
   admin or owner.
@@ -476,7 +561,7 @@ emails go in the JSON body.
 | `GET` | `/api/admin/orgs` | owner | — | `defaultOrg` and every org, removed ones too, with its `members` count |
 | `POST` | `/api/admin/orgs` | owner | `{ id, name?, adopt? }` | a new org at `orgs/<id>/` (201), the caller its first admin; `"adopt": true` takes over a non-empty directory; a slug is never reused |
 | `DELETE` | `/api/admin/orgs/:id` | owner | — | a soft removal, never of the default org: the org is refused from its members' next request; its files stay (`packc store purge-org <id>`, with the server stopped) |
-| `GET` | `/api/admin/join-role` | owner | — | the recorded join role (`viewer`, `operator`, `admin` or `null`), `oidc`, `issuerKey` |
+| `GET` | `/api/admin/join-role` | owner | — | the recorded join role (`viewer`, `operator`, `admin` or `null`), `oidc`, `issuerKey`, `mode` (`local`, `oidc` or `proxy`; behind a reverse proxy a `proxy` object says what rules first-sight roles there instead) |
 | `PUT` | `/api/admin/join-role` | owner | `{ role, confirm? }` | the default-org role of every IdP user created from now on; `null` or `"none"`: no automatic join |
 | `PATCH` | `/api/org` | admin | `{ name }` | renames the org (1–200 characters) |
 | `GET` | `/api/org/members` | admin | — | the org and its members: `userId`, `login`, `kind`, `name`, `email`, `role`, `disabled`, `since` |

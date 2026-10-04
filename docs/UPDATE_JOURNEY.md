@@ -544,3 +544,55 @@ byte-identical, with and without an override installed. Tests: 706 → 731
 (`tools/test-golden-board.mjs`, `tools/test-artefact-classify.mjs`,
 `tools/test-declared-type.mjs`, `server/test-taxonomy.mjs`;
 `test-discover-rows`, `test-smoke`, `test-authz`, `test-tenancy` extended).
+
+**W5 — reverse-proxy identity passthrough.** Delivered as
+`server/auth-proxy.mjs` behind `OBSERVOGRAM_TRUST_PROXY_AUTH=1` (README,
+"Behind a reverse proxy (trusted headers)"), with `proxySignIn` /
+`syncProxyMembership` in `server/store/identity.mjs`. Decisions: the rows are
+kind `oidc` under a `proxy://<realm>` key (`proxy://<realm>#<user>`) — no
+migration (the users table's CHECK stays), and every store operation, CLI
+and the identity API that knows an OIDC row knows these for free; the price
+is that `packc store rekey-issuer --clear` disables them too, which the
+README says; a dedicated kind would need a table rebuild and buys nothing
+today. No cookie: the headers ARE the session, resolved once per request
+(cached on the request, so the gate and `/auth/me` open one transaction),
+because a cookie beside trusted headers would be a second identity to keep
+in sync and a second thing to revoke — revocation is the proxy's job, and
+ours is to refuse a disabled row. CSRF stays: the headers are ambient
+exactly like a cookie (a cross-site POST through the proxy carries them),
+so the session principal and its `X-Observogram-CSRF` rule are unchanged,
+proven by the suite. The acknowledgement is a sentence, not `1`, because the
+one thing the server cannot verify — that the proxy is the only route to
+the port and strips the identity headers — is the whole security argument,
+and a flag someone copies from a snippet is not an acknowledgement. Beyond
+loopback the shared secret is a hard refusal, not a warning: the ACK speaks
+for the network path, the secret for the request, and a warning that is
+read once is not a defence. On loopback without it the boot warns once
+(every process that reaches the port is the proxy). Groups are authoritative
+in the configured org only: a proxy that sends the header is the source of
+truth for that org, so a membership there is raised, lowered or removed to
+match on every request that carries it (an admin's manual edit there is
+overwritten; other orgs are never touched; a request without the header
+changes nothing), and an empty header is a statement — no groups. Owner is
+grant-only: a user dropped from the owner group stays owner until an owner
+revokes it, because an owner losing a group should never silently lose the
+deployment, and the audit must show a person's revoke. OIDC beside the flag
+refuses rather than one winning silently, checked before the OIDC branch in
+`initAuth()` and in `bootContext()`. Duplicate header lines are counted on
+`req.rawHeaders` because Node joins them into one value (`alice, root`) and
+a login nobody intended must never be created. `GET /auth/login` is a 401
+explainer, not a redirect: there is no page to sign in on, and the proxy's
+own URLs are its business — the studio's sign-out goes to
+`OBSERVOGRAM_PROXY_AUTH_LOGOUT_URL` when configured and otherwise says it
+signed out of this app only. The one default-behaviour change — `GET
+/api/admin/join-role` gains `mode` — is pinned in `test-identity-api` and
+`test-auth-oidc`. Config surface: `OBSERVOGRAM_TRUST_PROXY_AUTH`,
+`OBSERVOGRAM_TRUST_PROXY_AUTH_ACK`, `OBSERVOGRAM_PROXY_AUTH_REALM`,
+`_USER_HEADER`, `_EMAIL_HEADER`, `_NAME_HEADER`, `_GROUPS_HEADER`,
+`_GROUP_ROLES`, `_ORG`, `_JOIN_ROLE`, `_OWNERS`, `_SHARED_SECRET`,
+`_SECRET_HEADER`, `_LOGOUT_URL` (legacy `TOMOGRAPH_*` honoured); route-table
+mode `proxy`; `identity_mode` `proxy:<key>`; no new route. Inert when unset:
+no header is read in any posture (proven on an open-loopback and a
+local-users server), and nothing under `tools/` changes, so the goldens are
+byte-identical. Tests: 731 → 745 (`server/test-auth-proxy.mjs`;
+`test-authz` inventories the fourth mode).

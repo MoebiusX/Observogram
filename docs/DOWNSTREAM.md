@@ -174,8 +174,9 @@ The golden suites read `tools/fixtures/` — copy that directory with them.
   `artifact-model`, `constants`, `verify-deploy`, `metric-readers`): still the
   prose table, still CI-asserted zero-import; folding them into the manifest
   (which would also let `retrofeed.mjs` enter the set) is a follow-up.
-- The other downstream seams — artefact taxonomy, branding, proxy identity,
-  the embeddable studio bundle — are documented where they land; the
+- The other downstream seams — branding, the embeddable studio bundle — are
+  documented where they land (the taxonomy and the reverse-proxy identity
+  seams are in §9); the
   *Decisions — downstream seams* section of
   [`UPDATE_JOURNEY.md`](UPDATE_JOURNEY.md) tracks them.
 
@@ -188,6 +189,7 @@ a bump. The surface so far:
 | Seam | Configuration | Where it is documented |
 |---|---|---|
 | Backend access (W2) | `OBSERVOGRAM_TRANSPORT_HOOK=<path.mjs \| file:URL>` — a module exporting `prepareRequest({ url, headers })` and/or `fetchImpl(url, init)`, applied to every MCP request of the CLI, the recorder, the probes, journeys and the studio server; `OBSERVOGRAM_ALLOW_LOCAL_MCP=0` still binds the URL it returns | [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md), "Transport hook" |
+| Reverse-proxy identity (W5) | `OBSERVOGRAM_TRUST_PROXY_AUTH=1` + `OBSERVOGRAM_TRUST_PROXY_AUTH_ACK=only-the-proxy-reaches-this-port`, the header names (`PROXY_AUTH_USER_HEADER`, `_EMAIL_HEADER`, `_NAME_HEADER`, `_GROUPS_HEADER`), `PROXY_AUTH_GROUP_ROLES` (`g=role,*=role`, authoritative in `PROXY_AUTH_ORG`), `PROXY_AUTH_JOIN_ROLE`, `PROXY_AUTH_OWNERS` (grant-only), `PROXY_AUTH_SHARED_SECRET` + `_SECRET_HEADER` (required beyond loopback), `PROXY_AUTH_LOGOUT_URL`, `PROXY_AUTH_REALM`; users are `proxy://<realm>#<user>` rows of kind `oidc`; refuses to start without the ACK, beside OIDC, or exposed without the secret | README, "Behind a reverse proxy (trusted headers)" |
 | Artefact taxonomy (W3) | `OBSERVOGRAM_TAXONOMY=<path.json>` — `{ version: 1, types: { <TypeName>: <family> \| { family, label?, role? } }, ids: [{ pattern, family, flags?, label?, role? }] }`, read once at start, installed process-wide for the diff and the graphs, served to the studio at `GET /api/taxonomy`; an unreadable or invalid file refuses the start. The classifier itself (`tools/lib/artefact-classify.mjs`) is a listed module | README, "Classify Typed Packs"; [`ADAPTER.md`](ADAPTER.md), "Id families and the classifier" |
 
 A minimal plugin layer for the backend seam is one file the deployment
