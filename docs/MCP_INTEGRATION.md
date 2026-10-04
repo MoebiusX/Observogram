@@ -136,7 +136,9 @@ behave exactly as without a hook — retried once when transient, annotated as
 that probe's failure, the pack written. A `fetchImpl` rejection's message is
 still hook text, so it is redacted like a `prepareRequest` throw's (the
 error itself stays ordinary: same name and code, the original kept as
-`cause`).
+`cause`); so is the text of a Response the `fetchImpl` *returns* — the body
+of a non-OK answer (`MCP HTTP <status> on <method>: …`) and a JSON-RPC or
+SSE `error.message` — while a native `fetch` answer passes through as is.
 
 The texts, exact: `OBSERVOGRAM_TRANSPORT_HOOK: cannot load <path>: <message>`
 · `OBSERVOGRAM_TRANSPORT_HOOK: <path> exports neither prepareRequest nor
