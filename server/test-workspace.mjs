@@ -53,7 +53,7 @@ const {
 const {
   registerPack, loadPacks, clearPacks, touchPack, flushPackTouches, resetPackRegistry, uploadsMap, packIdOf, MAX_UPLOADS,
 } = await import('./pack-registry.mjs');
-const { openStore, execScript } = await import('./store/db.mjs');
+const { openStore, execScript, closeStore } = await import('./store/db.mjs');
 const { createOrg } = await import('./store/orgs.mjs');
 const { addPack, getPack, listPacks, removePack } = await import('./store/packs.mjs');
 const { listServices } = await import('./store/services.mjs');
@@ -379,6 +379,7 @@ try {
   rmSync(TMP3, { recursive: true, force: true });
   });
 } finally {
+  closeStore();
   rmSync(TMP, { recursive: true, force: true });
   rmSync(DB_DIR, { recursive: true, force: true });
 }

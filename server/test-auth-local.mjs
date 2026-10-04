@@ -35,7 +35,7 @@ const { assert, failures, report } = createHarness({ indent: '  ', truncate: 200
 
 const { hashPassword, verifyPassword, localUsersEnabled } = await import('./auth.mjs');
 const { writeUsersFile } = await import('./store/legacy-files.mjs');
-const { currentStore, prepare } = await import('./store/db.mjs');
+const { currentStore, prepare, closeStore } = await import('./store/db.mjs');
 const { createUser, setDisabled, bumpSessionEpoch, getUserByLogin, listUsers } = await import('./store/users.mjs');
 const { getMeta } = await import('./store/meta.mjs');
 const { listMembershipsForUser } = await import('./store/memberships.mjs');
@@ -508,6 +508,7 @@ try {
   assert(clearedSet.some(c => c.startsWith('tomo_session=;')), 'logout clears the legacy cookie name too');
 } finally {
   await new Promise(res => srv.close(res));
+  closeStore();
   rmSync(WORKSPACE, { recursive: true, force: true });
 }
 
@@ -683,6 +684,7 @@ try {
   assert(r.status === 401, 'admin/admin is dead after the change', r.status, 401);
 } finally {
   await new Promise(res => srv2.close(res));
+  closeStore();
   rmSync(BOOT_WS, { recursive: true, force: true });
 }
 
@@ -707,6 +709,7 @@ try {
 } finally {
   delete process.env.OBSERVOGRAM_ADMIN_PASSWORD;
   await new Promise(res => srv3.close(res));
+  closeStore();
   rmSync(ENV_WS, { recursive: true, force: true });
 }
 
@@ -744,6 +747,7 @@ try {
     await new Promise(res => srv5.close(res));
   }
 } finally {
+  closeStore();
   rmSync(NET_WS, { recursive: true, force: true });
 }
 
@@ -764,6 +768,7 @@ try {
 } finally {
   delete process.env.OBSERVOGRAM_AUTH;
   await new Promise(res => srv4.close(res));
+  closeStore();
   rmSync(OFF_WS, { recursive: true, force: true });
 }
 
