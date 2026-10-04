@@ -25,6 +25,8 @@ export const STRIP = [
   'TRUST_PROXY_AUTH', 'TRUST_PROXY_AUTH_ACK', 'PROXY_AUTH_REALM', 'PROXY_AUTH_USER_HEADER', 'PROXY_AUTH_EMAIL_HEADER',
   'PROXY_AUTH_NAME_HEADER', 'PROXY_AUTH_GROUPS_HEADER', 'PROXY_AUTH_GROUP_ROLES', 'PROXY_AUTH_ORG', 'PROXY_AUTH_JOIN_ROLE',
   'PROXY_AUTH_OWNERS', 'PROXY_AUTH_SHARED_SECRET', 'PROXY_AUTH_SECRET_HEADER', 'PROXY_AUTH_LOGOUT_URL',
+  // The studio-bundle suite's own knobs (tools/test-studio-bundle.mjs): read by no boot, stripped so a child never sees a test knob.
+  'PLAYWRIGHT', 'BUNDLE_SMOKE',
 ];
 
 export function childEnv(ws, extra = {}) {
