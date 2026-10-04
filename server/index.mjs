@@ -67,8 +67,10 @@ import { describeProxyAuth } from './auth-proxy.mjs';
 import { redactCredentials, stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
+import { auditAfter, actorForRecord, bounded, finite } from './audit-after.mjs';
 import { identityRoutes } from './routes/identity.mjs';
 import { servicesRoutes } from './routes/services.mjs';
+import { auditRoutes } from './routes/audit.mjs';
 import { resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
 import { authGate, orgContext, authorize, effectiveRoleOf, rankOf, rankOfRole } from './authz.mjs';
 import { versionInfo } from './version.mjs';
@@ -338,9 +340,6 @@ app.get('/api/version', authorize('GET /api/version'), (req, res) => {
 // orgContext runs every /api request inside its org (membership checked)
 // and stamps the principal. Both before the body parsers: the context
 // survives Express's body parsing.
-
-// Who performed a mutating request — the audit log's actor field.
-function actorForRequest(req) { return req?.observogramActor || 'local'; }
 
 app.use(authGate);
 app.use(orgContext);
@@ -688,7 +687,7 @@ app.get('/api/packs/:id/export.zip', authorize('GET /api/packs/:id/export.zip'),
 // plan/execute, bulk + single deploy) live in server/routes/deploy.mjs;
 // the shaping transforms in server/deploy-helpers.mjs. The pack-registry
 // seam is injected until the registry extraction slice.
-app.use(deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, actorForRequest, contentHash, authorize }));
+app.use(deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, contentHash, authorize }));
 
 // The identity API (STORE_PLAN slice 3b) lives in server/routes/identity.mjs:
 // the deployment's users, orgs and join role under /api/admin/* (owners),
@@ -701,6 +700,12 @@ app.use(identityRoutes({ authorize }));
 // /api/services (viewer reads, operator writes) and their environments
 // under /api/environments, every rule server/service-admin.mjs's.
 app.use(servicesRoutes({ authorize }));
+
+// The audit reader (STORE_PLAN slice 5) lives in server/routes/audit.mjs:
+// GET /api/audit — the request's org's rows to its admins, the
+// deployment's to owners, filtered and paged; the scope and every query
+// rule server/audit-admin.mjs's.
+app.use(auditRoutes({ authorize }));
 
 // ---------- saved journeys (VALUE_BACKLOG item 11, studio surface) ----------
 
@@ -878,18 +883,41 @@ app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/sched
 // POST /api/journeys/:name/run — execute now. HTTP 200 even when the gate
 // fails: the run succeeded, the outcome is data. 404 for unknown names,
 // 502 when a pack source can't be resolved (live MCP down etc.).
+//
+// The audit (STORE_PLAN slice 5): one journey.run row for every attempt
+// past the 404, written after the engine returned or threw — on the 200
+// path the record's seven scalars; on the 502 path the same keys from the
+// route's own clock, the outcome `vantage-lost` when a live source lost its
+// vantage (the engine wrote a run record and may have notified) else
+// `error` (no record exists). Never the error's message: it may carry a URL
+// or a credential. A failed insert never fails the run: `auditError` on
+// the response, one line on stderr.
 app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), async (req, res) => {
   let def;
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
+  try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+  const t0 = new Date();
+  const runRow = (detail) => ({ action: 'journey.run', targetKind: 'journey', targetId: bounded(def.name), detail });
   try {
     // A crawl: walk, a file: source and an inventory site read only this
     // org's own part of the workspace (STORE_PLAN slice 2, A-24); a path in
     // another org's part is refused.
     const record = await runJourney(def, { crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() } });
-    res.json({ ok: true, record });
+    const auditError = auditAfter(req, runRow({
+      startedAt: bounded(record.startedAt), outcome: bounded(record.outcome, 100),
+      alignmentPct: finite(record.drift?.alignmentPct), gradeScore: finite(record.grade?.score),
+      gradePass: typeof record.grade?.pass === 'boolean' ? record.grade.pass : null,
+      breaches: Array.isArray(record.gate?.breaches) ? record.gate.breaches.length : null,
+      tookMs: finite(record.tookMs),
+    }), { tag: 'journey' });
+    res.json({ ok: true, record, ...(auditError ? { auditError } : {}) });
   } catch (e) {
-    res.status(502).json({ ok: false, error: redactCredentials(String(e.message)) });
+    const auditError = auditAfter(req, runRow({
+      startedAt: t0.toISOString(), outcome: def.packB?.mcp && e?.vantageLost ? 'vantage-lost' : 'error',
+      alignmentPct: null, gradeScore: null, gradePass: null, breaches: null, tookMs: Date.now() - t0.getTime(),
+    }), { tag: 'journey' });
+    res.status(502).json({ ok: false, error: redactCredentials(String(e.message)), ...(auditError ? { auditError } : {}) });
   }
 });
 
@@ -937,6 +965,11 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
     ...(b.stackBudget !== undefined ? { stackBudget: b.stackBudget } : {}),
     ...(b.notify !== undefined ? { notify: b.notify } : {}),
   };
+  // The audit (STORE_PLAN slice 5): the principal is checked before the
+  // file is written — a missing actor (a bug) writes neither the file nor
+  // the row, 500.
+  try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+  let saved;
   try {
     // The same validation loadJourneyDef applies: a captured gate that
     // names an unknown stack row must be refused here (400), not saved as
@@ -946,7 +979,7 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
     if (def.schedule !== undefined) validateSchedule(def.schedule, name);
     if (def.stackBudget !== undefined) validateStackBudget(def.stackBudget, name);
     if (def.notify !== undefined) validateNotify(def.notify, name);
-    const saved = saveJourneyDef(name, def, {
+    saved = saveJourneyDef(name, def, {
       banner: [
         `Captured from a studio session on ${new Date().toISOString()}.`,
         `Pack A: ${metaA.label || metaA.id} · Pack B: ${metaB.label || metaB.id}`,
@@ -954,10 +987,20 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
         `or add authEnv under packB.mcp for authenticated MCPs.`,
       ],
     });
-    res.json({ ok: true, name: saved.name });
   } catch (e) {
-    res.status(400).json({ ok: false, error: e.message });
+    return res.status(400).json({ ok: false, error: e.message });
   }
+  // The row, after the file: the two pack ids and whether Pack B was saved
+  // as a live mcp: source — never the paths or the mcp.url the file holds;
+  // the three scope scalars cut to the row's text rule.
+  const auditError = auditAfter(req, {
+    action: 'journey.capture', targetKind: 'journey', targetId: bounded(saved.name),
+    detail: {
+      packA: metaA.id, packB: metaB.id, live: Boolean(packB.mcp),
+      env: bounded(def.env), service: bounded(def.service), scopeMode: bounded(def.scopeMode),
+    },
+  }, { tag: 'journeys' });
+  res.json({ ok: true, name: saved.name, ...(auditError ? { auditError } : {}) });
 });
 
 app.get('/api/packs/:id/compile/:target', authorize('GET /api/packs/:id/compile/:target'), (req, res) => {
@@ -1405,6 +1448,9 @@ app.post('/api/refresh-live', authorize('POST /api/refresh-live'), async (req, r
   if (target.status) return res.status(target.status).json({ ok: false, error: target.error });
   const { mcpUrl, safeMcpUrl, mcpAuth, endpoint: mcpEndpoint } = target;
   const { dropped } = stripMcpUrl(mcpUrl);
+  // The audit (STORE_PLAN slice 5): the principal is checked before any
+  // fetch or file write — a missing actor (a bug) writes nothing, 500.
+  try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 
   const t0 = Date.now();
   try {
@@ -1421,6 +1467,17 @@ app.post('/api/refresh-live', authorize('POST /api/refresh-live'), async (req, r
     process.stderr.write(`[refresh-live]   ok in ${Date.now() - t0}ms; ` +
       `services=${pack.metadata.annotations['mcp.servicesDiscovered'] || '(none)'} ` +
       `failed=${pack.metadata.annotations['mcp.toolsFailed'] || 'none'}\n`);
+    // The row, after the file: the MCP origin (never the URL), the record
+    // used, and counts from the comma-list annotations.
+    const listCount = (v) => (typeof v === 'string' ? v.split(',').filter(Boolean).length : 0);
+    const auditError = auditAfter(req, {
+      action: 'live.refresh', targetKind: 'live', targetId: mcpUrlOrigin(safeMcpUrl),
+      detail: {
+        mcpEndpoint, refreshedAt,
+        servicesDiscovered: listCount(pack.metadata.annotations['mcp.servicesDiscovered']),
+        toolsFailed: listCount(pack.metadata.annotations['mcp.toolsFailed']),
+      },
+    }, { tag: 'refresh-live' });
     const note = droppedNote(dropped);
     res.json({
       ok: true,
@@ -1429,6 +1486,7 @@ app.post('/api/refresh-live', authorize('POST /api/refresh-live'), async (req, r
       annotations: pack.metadata.annotations,
       mcpEndpoint,
       ...(note ? { note } : {}),
+      ...(auditError ? { auditError } : {}),
     });
   } catch (e) {
     process.stderr.write(`[refresh-live]   error in ${Date.now() - t0}ms: ${redactCredentials(e.message)}\n`);

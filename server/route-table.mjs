@@ -17,7 +17,6 @@
 //   class        public · self · viewer · operator · admin · owner (required)
 //   audit        the audit actions a successful call writes in this build,
 //                exactly; [] = none
-//   later        the rows a later slice adds, for review; not asserted
 //   csrf         none · session · always · form — GET → none, any other
 //                /api method → session
 //   exposed      allow · refuse · rule — the open-exposed posture's answer;
@@ -28,8 +27,9 @@
 //                identityApi; true for the MCP endpoint mutations too, a
 //                durable record the server will send a token to
 //   closedAs     how the posture refusals name the route — 'the identity
-//                API' (default) or 'the MCP endpoint API' (a singular
-//                subject: the texts say `is closed`, `answers only`)
+//                API' (default), 'the MCP endpoint API' or 'the audit API'
+//                (a singular subject: the texts say `is closed`, `answers
+//                only`)
 //   modes        where the route is registered: local, oidc, proxy, off
 //                (the /auth/* routes follow initAuth()'s mode)
 //   self         { pwflow, session, unauth } — class self only
@@ -123,20 +123,20 @@ export const ROUTES = Object.freeze({
 
   // ---------- operator: every existing mutation ----------
   'DELETE /api/uploads': { class: 'operator', audit: ['pack.clear'] },
-  'POST /api/packs/:id/retrofeed': { class: 'operator', later: 'none (computes; writes nothing)' },
-  'POST /api/deploys/:deployId/verify': { class: 'operator', later: 'slice 5: deploy.verify' },
-  'POST /api/deploys/:deployId/rollback': { class: 'operator', later: 'slice 5: deploy.rollback' },
-  'POST /api/packs/:id/deploy-bulk': { class: 'operator', later: 'slice 5: deploy.bulk' },
-  'POST /api/packs/:id/deploy/:target': { class: 'operator', later: 'slice 5: deploy.run' },
-  'POST /api/journeys/:name/run': { class: 'operator', later: 'slice 5: journey.run' },
-  'POST /api/journeys/capture': { class: 'operator', later: 'slice 5: journey.capture' },
+  'POST /api/packs/:id/retrofeed': { class: 'operator' }, // computes; writes nothing
+  'POST /api/deploys/:deployId/verify': { class: 'operator', audit: ['deploy.verify'] },
+  'POST /api/deploys/:deployId/rollback': { class: 'operator', audit: ['deploy.rollback'] },
+  'POST /api/packs/:id/deploy-bulk': { class: 'operator', audit: ['deploy.bulk'] },
+  'POST /api/packs/:id/deploy/:target': { class: 'operator', audit: ['deploy.run'] },
+  'POST /api/journeys/:name/run': { class: 'operator', audit: ['journey.run'] },
+  'POST /api/journeys/capture': { class: 'operator', audit: ['journey.capture'] },
   'POST /api/draft-from-mcp': { class: 'operator', audit: PACK_REGISTER },
-  'POST /api/refresh-live': { class: 'operator', later: 'slice 5: live.refresh' },
+  'POST /api/refresh-live': { class: 'operator', audit: ['live.refresh'] },
   'POST /api/crawl': { class: 'operator', audit: PACK_REGISTER },
   'POST /api/crawl-github': { class: 'operator', audit: PACK_REGISTER },
   'POST /api/validate': { class: 'operator', audit: PACK_REGISTER },
-  'POST /api/library/instantiate': { class: 'operator', later: 'none (computes)' },
-  'POST /api/library/compile': { class: 'operator', later: 'none (computes)' },
+  'POST /api/library/instantiate': { class: 'operator' }, // computes; writes nothing
+  'POST /api/library/compile': { class: 'operator' }, // computes; writes nothing
   'POST /api/library/register': { class: 'operator', audit: PACK_REGISTER },
   // The services and environments API (server/routes/services.mjs): a
   // service's deletion cascades its environments and pack links, which
@@ -170,6 +170,14 @@ export const ROUTES = Object.freeze({
   'POST /api/mcp-endpoints': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoint API', audit: ['mcp_endpoint.create'] },
   'PATCH /api/mcp-endpoints/:id': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoint API', audit: ['mcp_endpoint.update'] },
   'DELETE /api/mcp-endpoints/:id': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoint API', audit: ['mcp_endpoint.delete'] },
+  // The org's audit (STORE_PLAN §5, slice 5; server/routes/audit.mjs): the
+  // rows with its org_id, to its admins; an owner reads the deployment's
+  // (scope=all, the default for an owner; scope=deployment for the rows
+  // with no org). It lists every login and every MCP origin, so it is
+  // closed where the member and user lists are: in the open, exposed
+  // posture, and without sign-in answered only to a direct loopback
+  // request — without being the identity API. A read: it writes no row.
+  'GET /api/audit': { class: 'admin', exposed: 'refuse', direct: true, closedAs: 'the audit API' },
 
   // ---------- owner: the deployment's users, orgs and join role ----------
   // The identity API (server/routes/identity.mjs), whatever org the request
@@ -223,7 +231,6 @@ export function routeEntry(key) {
     path,
     class: raw.class,
     audit: Object.freeze([...(raw.audit || [])]),
-    later: raw.later ?? null,
     csrf: raw.csrf ?? (method === 'GET' || !isApi ? 'none' : 'session'),
     exposed: raw.exposed ?? (raw.class === 'admin' || raw.class === 'owner' ? 'refuse' : 'allow'),
     identityApi: raw.identityApi === true,

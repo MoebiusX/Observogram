@@ -57,6 +57,12 @@ const { currentStore } = await import('./store/db.mjs');
 const { runWithOrg } = await import('./tenancy.mjs');
 const { listPacks } = await import('./store/packs.mjs');
 const { listServices } = await import('./store/services.mjs');
+const { listAudit } = await import('./store/audit.mjs');
+
+// The default org's newest audit rows (STORE_PLAN slice 5): the deploy
+// routes write theirs after the deploys.jsonl append.
+const auditRows = (filter = {}) => runWithOrg('default', () => listAudit(currentStore(), { limit: 5, ...filter }));
+const auditSeq = () => auditRows({ limit: 1 })[0]?.seq ?? 0;
 
 const failures = [];
 function assert(cond, label, got, want) {
@@ -543,6 +549,17 @@ try {
   assert(auditRec?.items?.[0]?.error && !/Bearer|token=/i.test(auditRec.items[0].error),
          'audited error is present and credential-free');
   assert(!('verify' in (auditRec || {})), 'no verify field until re-verify writes one back');
+  // The deploy.run row after the line (STORE_PLAN slice 5): the same actor,
+  // counts and the MCP origin — never the URL's path or the item's error.
+  const runRow = auditRows({ action: 'deploy.run', limit: 1 })[0];
+  assert(runRow?.targetId === deployErr.deployId && runRow.actor === 'local' && runRow.orgId === 'default' && runRow.targetKind === 'deploy',
+         'the failed deploy writes one deploy.run row by local naming its deployId', runRow);
+  assert(JSON.stringify(runRow?.detail) === JSON.stringify({
+    pack: { id: 'payment-service', version: auditRec.pack.version }, env: null, target: { product: 'grafana', version: '12', folder: null },
+    mode: 'upsert', dryRun: false, origin: 'http://127.0.0.1:1', mcpEndpoint: null, items: 1, ok: 0, failed: 1, tookMs: auditRec.tookMs,
+  }), 'the deploy.run row: the exact detail — failed: 1, the origin, no snapshot key, no fileError key', runRow?.detail);
+  assert(!JSON.stringify(runRow?.detail).includes('no-mcp'), 'the row carries the origin, never the URL\'s path', runRow?.detail);
+  assert(!('auditError' in deployErr), 'a written row: no auditError key in the response');
 
   // Post-deploy re-verify write-back (item 9): the verify outcome lands as
   // its own audit record and merges into the deploy at read time.
@@ -557,6 +574,11 @@ try {
     }),
   });
   assert(verifyRes.status === 200, 'POST /api/deploys/:id/verify accepts a verify outcome');
+  const verifyRow = auditRows({ action: 'deploy.verify', limit: 1 })[0];
+  assert(verifyRow?.targetId === deployErr.deployId && verifyRow.actor === 'local'
+         && JSON.stringify(verifyRow.detail) === JSON.stringify({ outcome: 'pending', alignment: null, attempts: 2 }),
+         'the verify writes one deploy.verify row: outcome, alignment, attempts — summary and transitions stay in the line', verifyRow);
+  const seqBeforeRefusals = auditSeq();
   const auditAfter = await getJson(base, `/api/deploys?pack=payment-service&limit=10`);
   const mergedRec = auditAfter.deploys.find(d => d.deployId === deployErr.deployId);
   assert(mergedRec?.verify?.outcome === 'pending', 'verify outcome merges into the deploy record');
@@ -569,6 +591,7 @@ try {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
   });
   assert(verify400.status === 400, 'verify with malformed deployId → 400');
+  assert(auditSeq() === seqBeforeRefusals, 'the refused verifies (404, 400) write no row');
 
   // --- write-route auth (10B) — token read lazily per request, so the
   // posture can be flipped mid-suite. ---
@@ -608,7 +631,8 @@ try {
     body: JSON.stringify(authRaw),
   }).then(r => r.json());
   assert(rightTok.ok === true, 'correct bearer token → mutating route works');
-  // The audit actor becomes the token's ownership label, never the secret.
+  // The audit actor is the principal's — here the bearer's ownership label
+  // (open loopback above wrote `local`), never the secret.
   const authedDeploy = await fetch(`${base}/api/packs/payment-service/deploy/prometheus-rules`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer smoke-secret' },
@@ -617,7 +641,13 @@ try {
   const authedAudit = await getJson(base, `/api/deploys?pack=payment-service&limit=5`);
   const authedRec = authedAudit.deploys.find(d => d.deployId === authedDeploy.deployId);
   assert(authedRec?.actor === 'smoke-ci', 'audit actor is the token label', authedRec?.actor, 'smoke-ci');
+  assert(JSON.stringify(Object.keys(authedRec).slice(0, 4)) === JSON.stringify(['type', 'deployId', 'at', 'actor']),
+         'a deploy record keeps its key order — the actor third', Object.keys(authedRec).slice(0, 4), ['type', 'deployId', 'at', 'actor']);
   assert(!JSON.stringify(authedRec).includes('smoke-secret'), 'the token secret never lands in the audit log');
+  const authedRow = auditRows({ action: 'deploy.run', limit: 1 })[0];
+  assert(authedRow?.targetId === authedDeploy.deployId && authedRow.actor === 'smoke-ci',
+         'the bearer\'s deploy.run row names the token label as its actor — the line and the row agree', authedRow);
+  assert(!JSON.stringify(authedRow).includes('smoke-secret'), 'the token secret never lands in the audit row');
   delete process.env.OBSERVOGRAM_API_TOKEN;
   delete process.env.OBSERVOGRAM_API_TOKEN_LABEL;
   const reopened = await fetch(`${base}/api/validate`, {
@@ -658,6 +688,14 @@ try {
   assert(jRun.ok === true && jRun.record?.journey === 'smoke-journey', 'POST /api/journeys/:name/run executes the journey');
   assert(typeof jRun.record.drift?.alignmentPct === 'number', 'run record carries drift facts');
   assert(jRun.record.outcome === 'pass', 'permissive gate passes', jRun.record.gate?.breaches, []);
+  // Slice 5: the run's audit row — the record's seven scalars by `local`
+  // (the open posture's principal), never the record or a path.
+  const jRunRow = auditRows({ action: 'journey.run', limit: 1 })[0];
+  assert(jRunRow && jRunRow.actor === 'local' && jRunRow.orgId === 'default' && jRunRow.targetKind === 'journey' && jRunRow.targetId === 'smoke-journey'
+         && JSON.stringify(jRunRow.detail) === JSON.stringify({ startedAt: jRun.record.startedAt, outcome: 'pass', alignmentPct: jRun.record.drift.alignmentPct,
+           gradeScore: jRun.record.grade.score, gradePass: jRun.record.grade.pass, breaches: 0, tookMs: jRun.record.tookMs }),
+         'the run writes one journey.run row by local: the record\'s startedAt, outcome, alignment, grade, breaches and tookMs', jRunRow);
+  assert(jRun.auditError === undefined, 'the run\'s response carries no auditError', jRun.auditError);
 
   const jRuns = await getJson(base, '/api/journeys/smoke-journey/runs?limit=5');
   assert(jRuns.runs.length === 1 && jRuns.runs[0].startedAt === jRun.record.startedAt,
@@ -838,17 +876,54 @@ try {
   assert(chainRuns.runs[0]?.branches?.length === 4 && chainRuns.runs[0].transition.changed.length === 2 && chainRuns.runs[0].livePack.kept === false,
          'GET /api/journeys/:name/runs hands the record through unchanged (branches, transition, livePack)');
 
+  const seqBefore404 = auditSeq();
   const jRun404 = await fetch(`${base}/api/journeys/never-saved/run`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
   });
   assert(jRun404.status === 404, 'running an unknown journey → 404');
+  assert(auditSeq() === seqBefore404, 'the 404 run writes no row');
+
+  // Slice 5: a live Pack B that cannot be reached loses its vantage — the
+  // engine writes a run record (outcome vantage-lost) before it throws, the
+  // route answers 502, and the attempt is on the audit: one journey.run row
+  // with outcome vantage-lost, the four record scalars null, never the
+  // error's message (it names the URL).
+  writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'smoke-lost.journey.yaml'), [
+    'name: smoke-lost',
+    `packA: { file: ${PAY.replaceAll('\\', '/')} }`,
+    'packB: { mcp: { url: http://127.0.0.1:1/no-mcp } }',
+    'gate: { minAlignmentPct: 1 }',
+  ].join('\n'));
+  const lostRes = await fetch(`${base}/api/journeys/smoke-lost/run`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+  });
+  const lost = await lostRes.json();
+  assert(lostRes.status === 502 && lost.ok === false, 'a run whose live Pack B is unreachable → 502', [lostRes.status, lost]);
+  const lostRuns = await getJson(base, '/api/journeys/smoke-lost/runs?limit=5');
+  assert(lostRuns.runs.length === 1 && lostRuns.runs[0].outcome === 'vantage-lost', 'the engine kept a vantage-lost run record', lostRuns.runs);
+  const lostRow = auditRows({ action: 'journey.run', limit: 1 })[0];
+  assert(lostRow && lostRow.actor === 'local' && lostRow.targetId === 'smoke-lost'
+         && JSON.stringify(Object.keys(lostRow.detail)) === JSON.stringify(['startedAt', 'outcome', 'alignmentPct', 'gradeScore', 'gradePass', 'breaches', 'tookMs'])
+         && lostRow.detail.outcome === 'vantage-lost' && lostRow.detail.alignmentPct === null && lostRow.detail.gradeScore === null
+         && lostRow.detail.gradePass === null && lostRow.detail.breaches === null
+         && typeof lostRow.detail.startedAt === 'string' && Number.isFinite(Date.parse(lostRow.detail.startedAt)) && typeof lostRow.detail.tookMs === 'number'
+         && !JSON.stringify(lostRow).includes('127.0.0.1:1'),
+         'the lost run writes one journey.run row: outcome vantage-lost, the record scalars null, no URL', lostRow);
 
   // Capture: freeze a comparison of two known packs as a journey.
+  const seqBeforeCap = auditSeq();
   const cap = await fetch(`${base}/api/journeys/capture`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: 'captured-pair', packAId: 'payment-service', packBId: 'production-curated', env: 'prod' }),
   }).then(r => r.json());
   assert(cap.ok === true && cap.name === 'captured-pair', 'POST /api/journeys/capture saves a journey');
+  // Slice 5: the capture's row — the two pack ids and the scope, live false
+  // (Pack B is a file), never a path.
+  const capRows = auditRows({ limit: 5 }).filter(r => r.seq > seqBeforeCap);
+  assert(capRows.length === 1 && capRows[0].action === 'journey.capture' && capRows[0].actor === 'local' && capRows[0].targetId === 'captured-pair'
+         && JSON.stringify(capRows[0].detail) === JSON.stringify({ packA: 'payment-service', packB: 'production-curated', live: false, env: 'prod', service: null, scopeMode: null })
+         && !JSON.stringify(capRows[0]).includes('.pack.yaml'),
+         'the capture writes one journey.capture row by local: the pack ids, live false, env prod, no path', capRows);
   const capRun = await fetch(`${base}/api/journeys/captured-pair/run`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
   }).then(r => r.json());
@@ -1028,6 +1103,13 @@ try {
     const bulkBody = await deployBulk.json();
     assert(bulkBody.ok === true && bulkBody.summary?.ok === 2,
            'deploy-bulk reports both artefacts as deployed', bulkBody.summary, { ok: 2 });
+    const bulkRow = auditRows({ action: 'deploy.bulk', limit: 1 })[0];
+    assert(bulkRow?.targetId === bulkBody.deployId && bulkRow.actor === 'local'
+           && bulkRow.detail.items === 2 && bulkRow.detail.ok === 2 && bulkRow.detail.failed === 0 && bulkRow.detail.snapshot === 'captured'
+           && bulkRow.detail.origin === new URL(fakeMcp.url).origin && bulkRow.detail.mcpEndpoint === null
+           && bulkRow.detail.target.folder === 'observability-pack' && !('fileError' in bulkRow.detail),
+           'deploy-bulk writes one deploy.bulk row: ok 2 of 2, snapshot captured, the fake\'s origin', bulkRow);
+    assert(!('auditError' in bulkBody), 'deploy-bulk: no auditError key when the row was written');
 
     // Pre-deploy snapshot (10D): the read calls land BEFORE the writes.
     const callNames = fakeMcp.calls.map(c => c.name);
@@ -1081,12 +1163,24 @@ try {
     const rbAudit = await getJson(base, `/api/deploys?pack=payment-service&limit=3`);
     assert(rbAudit.deploys.find(d => d.deployId === rb.deployId)?.rollbackOf === bulkBody.deployId,
            'the rollback lands in the audit log with rollbackOf');
+    for (const id of [bulkBody.deployId, rb.deployId]) {
+      const keys = Object.keys(rbAudit.deploys.find(d => d.deployId === id) || {}).slice(0, 4);
+      assert(JSON.stringify(keys) === JSON.stringify(['type', 'deployId', 'at', 'actor']),
+             'a bulk and a rollback record keep their key order — the actor third', keys, ['type', 'deployId', 'at', 'actor']);
+    }
+    const rbRow = auditRows({ action: 'deploy.rollback', limit: 1 })[0];
+    assert(rbRow?.targetId === rb.deployId && rbRow.actor === 'local' && rbRow.detail.rollbackOf === bulkBody.deployId
+           && rbRow.detail.items === 1 && rbRow.detail.ok === 1 && rbRow.detail.failed === 0 && rbRow.detail.manual === rb.manual.length
+           && rbRow.detail.pack?.id === 'payment-service' && rbRow.detail.origin === new URL(fakeMcp.url).origin,
+           'the rollback writes one deploy.rollback row: its own deployId as the target, rollbackOf the original, the manual count', rbRow);
+    const seqBefore409 = auditSeq();
 
     // A deploy with no snapshot (the earlier single-route 502) can't roll back.
     const rb409 = await fetch(`${base}/api/deploys/${deployErr.deployId}/rollback`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mcpUrl: fakeMcp.url }),
     });
     assert(rb409.status === 409, 'rollback without a usable snapshot → 409');
+    assert(auditSeq() === seqBefore409, 'the 409 rollback writes no row');
   } finally {
     await fakeMcp.close();
   }
@@ -1322,8 +1416,21 @@ try {
              'the live pack was written with the record\'s URL', liveById.slice(0, 300));
       assert(!JSON.stringify(byId).includes(SMOKE_TOKEN_VALUE) && !liveById.includes(SMOKE_TOKEN_VALUE),
              'the token\'s value is in no response and not in the live pack');
+      // Slice 5: the refresh's row — the MCP origin as the target, the
+      // record used, counts from the annotations; never the URL or the token.
+      const byIdRow = auditRows({ action: 'live.refresh', limit: 1 })[0];
+      assert(byIdRow && byIdRow.actor === 'local' && byIdRow.orgId === 'default' && byIdRow.targetKind === 'live' && byIdRow.targetId === new URL(fakeRestricted.url).origin
+             && JSON.stringify(byIdRow.detail.mcpEndpoint) === JSON.stringify({ id: mcpEndpointId, name: 'smoke' }) && byIdRow.detail.refreshedAt === byId.refreshedAt
+             && byIdRow.detail.servicesDiscovered === (byId.annotations['mcp.servicesDiscovered'] || '').split(',').filter(Boolean).length
+             && byIdRow.detail.toolsFailed === 0 && JSON.stringify(Object.keys(byIdRow.detail)) === JSON.stringify(['mcpEndpoint', 'refreshedAt', 'servicesDiscovered', 'toolsFailed'])
+             && !JSON.stringify(byIdRow).includes(SMOKE_TOKEN_VALUE),
+             'refresh-live { mcpEndpointId } writes one live.refresh row by local: the fake\'s origin, the record { id, name }, the counts', byIdRow);
+      assert(byId.auditError === undefined, 'the refresh\'s response carries no auditError', byId.auditError);
       const byUrl = await (await postJson('/api/refresh-live', { mcpUrl: fakeRestricted.url })).json();
       assert(byUrl.ok === true && byUrl.mcpEndpoint === null, 'refresh-live { mcpUrl }: mcpEndpoint null', byUrl.mcpEndpoint);
+      const byUrlRow = auditRows({ action: 'live.refresh', limit: 1 })[0];
+      assert(byUrlRow && byUrlRow.seq > byIdRow.seq && byUrlRow.detail.mcpEndpoint === null && byUrlRow.targetId === new URL(fakeRestricted.url).origin,
+             'refresh-live { mcpUrl }: its live.refresh row names no record (mcpEndpoint null), the same origin', byUrlRow);
       const draftById = await (await postJson('/api/draft-from-mcp', { mcpEndpointId })).json();
       assert(draftById.ok === true && JSON.stringify(draftById.mcpEndpoint) === JSON.stringify({ id: mcpEndpointId, name: 'smoke' })
              && draftById.summary.mcpUrl === fakeRestricted.url,

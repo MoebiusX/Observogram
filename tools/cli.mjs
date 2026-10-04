@@ -12,7 +12,7 @@
 //   packc x-ray    <repo-dir>         → tools/crawl-repo.mjs
 //   packc compile  <file> [target]    → tools/lib/compile.mjs (programmatic)
 //   packc init     …                  → tools/pack-init.mjs (build a pack from the library)
-//   packc store    backup|restore|export|import --replace|rekey-issuer|purge-org … → tools/store-admin.mjs (back up / restore / export the embedded store; request a re-import; rekey the OIDC issuer; purge a removed org's files)
+//   packc store    backup|restore|export|import --replace|rekey-issuer|purge-org|audit … → tools/store-admin.mjs (back up / restore / export the embedded store; request a re-import; rekey the OIDC issuer; purge a removed org's files; list the audit)
 //   packc serve                       → server/index.mjs (boots the studio)
 //   observogram                       → same as `serve`
 //
@@ -125,6 +125,8 @@ Usage:
   packc store    import --replace Ask the next server start to re-import users.json / orgs.json and each org's packs/index.json as they stand (server stopped)
   packc store    rekey-issuer --to <issuer> | --clear  Move the OIDC users to the IdP's new URL, or disable them for another IdP (server stopped)
   packc store    purge-org <id>   Delete the files of an org removed with \`npm run orgs -- remove\` (server stopped)
+  packc store    audit [flags]    List the audit, newest first, one JSON row per line (--org <id> | --deployment | --all; --actor, --action, --kind,
+                                  --target-kind, --target, --since, --until, --limit, --before; \`next: <seq>\` on stderr when more exist; read-only)
   packc serve                     Boot the studio (Express server)
   observogram                     Same as \`packc serve\`
 

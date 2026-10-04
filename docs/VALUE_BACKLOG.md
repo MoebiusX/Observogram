@@ -241,7 +241,8 @@ The v1 non-goal ("multi-tenant persistence") activates as its own
 stream: **sign in → land in your org → see only your services** —
 packs, journeys, deploys, audit, MCP endpoints all org-scoped,
 enforced server-side. Four stages, each shippable alone: OIDC identity
-(attaches at the existing `requireAuth` / `observogramActor` seam; the
+(attaches at the existing `requireAuth` / `observogramActor` seam — since
+STORE_PLAN slice 5 the gate stamps `req.observogramPrincipal` instead; the
 bearer token becomes the service-account path), workspace-per-org
 tenancy (the `workspaceRoot()` seam — file-first machinery unchanged),
 roles (viewer / operator / admin) + org-scoped MCP endpoints (write

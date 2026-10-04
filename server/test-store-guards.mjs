@@ -29,6 +29,12 @@
  *    imports nothing — and only server/authz.mjs, the route-inventory
  *    fixture and the suites import it.
  *
+ * 6. The docs and the request (slice 5): every `req.observogram<Name>` a
+ *    doc names (README and docs/, outside the CHANGELOG's history and
+ *    docs/archive) is a property the server stamps. Slice 5 replaced
+ *    observogramActor / observogramSub with observogramPrincipal and a
+ *    status-quo row kept naming the old seam.
+ *
  * The matchers are tested on known-good and known-bad snippets first, so
  * the guard cannot pass by matching nothing.
  */
@@ -165,6 +171,37 @@ test('server/auth.mjs exports resolveSession and none of the file-era readers', 
   }
 });
 
+// The request properties the docs name (`req.observogram<Name>`, outside the
+// CHANGELOG's history and docs/archive) are ones the server stamps: slice 5
+// replaced req.observogramActor / req.observogramSub with req.observogramPrincipal
+// and a plan's status-quo row kept naming the old seam.
+const REQ_PROP = /\breq\.(observogram[A-Z]\w*)\b/g;
+function markdownFiles(dir, out = []) {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.name.startsWith('.') || e.name === 'archive') continue;
+    const p = join(dir, e.name);
+    if (e.isDirectory()) markdownFiles(p, out);
+    else if (e.isFile() && e.name.endsWith('.md')) out.push(relative(ROOT, p).split(sep).join('/'));
+  }
+  return out;
+}
+
+test('every req.observogram<Name> the docs name is a property the server stamps', () => {
+  const stamped = new Set();
+  for (const f of sourceFiles().filter((f) => f.startsWith('server/'))) {
+    for (const m of withoutComments(readFileSync(join(ROOT, f), 'utf8')).matchAll(/\breq\.(observogram[A-Z]\w*)\s*=[^=]/g)) stamped.add(m[1]);
+  }
+  assert.ok(stamped.has('observogramPrincipal'), 'the server stamps req.observogramPrincipal');
+  const docs = ['README.md', ...markdownFiles(join(ROOT, 'docs'))].filter((f) => f !== 'docs/CHANGELOG.md');
+  const stale = [];
+  for (const f of docs) {
+    for (const m of readFileSync(join(ROOT, f), 'utf8').matchAll(REQ_PROP)) {
+      if (!stamped.has(m[1])) stale.push(`${f}: req.${m[1]}`);
+    }
+  }
+  assert.deepEqual(stale, [], `docs name request properties the server no longer stamps: ${stale.join(', ')}`);
+});
+
 test('no tools/lib module imports from server/', () => {
   const files = sourceFiles(join(ROOT, 'tools', 'lib'));
   assert.ok(files.includes('tools/lib/journey.mjs'), `walked tools/lib (${files.length} files)`);
@@ -184,19 +221,20 @@ test('only the boot, the migration, the store import/ops/cli, the suites and fix
 
 // A string literal that opens an SQL statement. The modules that compose
 // repository calls — the registry over files and rows, the pack → service
-// rule, boot step 5 — hold none of their own.
+// rule, boot step 5, the file-first routes' after-the-file audit row
+// (slice 5) — hold none of their own.
 const SQL_LITERAL = /['"`]\s*(?:SELECT\s|INSERT\s+INTO\b|UPDATE\s+\w+\s+SET\b|DELETE\s+FROM\b|WITH\s+\w+\s+AS\b)/i;
-const SQL_FREE = ['server/pack-registry.mjs', 'server/service-admin.mjs', 'server/store/pack-links.mjs', 'server/store/pack-import.mjs'];
+const SQL_FREE = ['server/pack-registry.mjs', 'server/service-admin.mjs', 'server/store/pack-links.mjs', 'server/store/pack-import.mjs', 'server/audit-after.mjs', 'server/audit-admin.mjs'];
 
 test('the SQL-literal matcher flags what it must and passes what it must', () => {
   for (const bad of ["prepare(db, 'SELECT * FROM packs')", 'prepare(db, `\n  UPDATE packs SET x = 1`)', 'x("delete from a")']) assert.ok(SQL_LITERAL.test(bad), bad);
   for (const good of ["removePack(db, actor, id, { action: 'pack.remove' })", "'DELETE /api/uploads'", "const selected = 'yes'", "'update the label'"]) assert.ok(!SQL_LITERAL.test(good), good);
 });
 
-test('server/pack-registry.mjs, service-admin.mjs, pack-links.mjs and pack-import.mjs hold no SQL of their own (the repositories do)', () => {
+test('server/pack-registry.mjs, service-admin.mjs, pack-links.mjs, pack-import.mjs, audit-after.mjs and audit-admin.mjs hold no SQL of their own (the repositories do)', () => {
   for (const f of SQL_FREE) {
     const code = withoutComments(readFileSync(join(ROOT, f), 'utf8'));
-    assert.ok(!SQL_LITERAL.test(code), `${f}: new SQL lives in server/store/{packs,pack-services,services,environments,mcp-endpoints}.mjs`);
+    assert.ok(!SQL_LITERAL.test(code), `${f}: new SQL lives in server/store/{packs,pack-services,services,environments,mcp-endpoints,audit}.mjs`);
   }
 });
 

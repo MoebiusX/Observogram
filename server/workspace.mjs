@@ -152,6 +152,10 @@ export function clearWorkspacePackFiles() {
 //
 // Deliberately NOT cleared by DELETE /api/uploads: resetting the pack
 // registry must not erase the record of what was pushed to production.
+//
+// Each append is followed by one audit row (STORE_PLAN slice 5) written by
+// the route through server/audit-after.mjs, not here: this module stays
+// file-only, and the row names the deployId the line holds.
 
 function deploysPath() { return join(workspaceRoot(), 'deploys.jsonl'); }
 

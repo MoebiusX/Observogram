@@ -55,6 +55,8 @@ const { listMembershipsForUser } = await import('./store/memberships.mjs');
 const { orgWorkspaceRoot, runWithOrg } = await import('./tenancy.mjs');
 const { listPacks } = await import('./store/packs.mjs');
 const { listServices } = await import('./store/services.mjs');
+const { listAudit } = await import('./store/audit.mjs');
+const { routeEntry } = await import('./route-table.mjs');
 const { orgChipModel } = await import('../studio/api.mjs');
 const { GRAFANA_ALERT_RULE_TOOL, GRAFANA_DASHBOARD_TOOL } = await import('./deploy-helpers.mjs');
 const { allKnownToolNames } = await import('../tools/lib/contracts/mcp-capabilities.mjs');
@@ -169,13 +171,26 @@ const OWNER_ONLY = new Set([
   'GET /api/admin/orgs', 'POST /api/admin/orgs', 'DELETE /api/admin/orgs/:id', 'GET /api/admin/join-role', 'PUT /api/admin/join-role',
 ]);
 
+// The audit's newest seq, and the rows written after `seq` (oldest first) as
+// [action, actor, orgId, targetId, detail] — STORE_PLAN slice 5: the deploy
+// routes write their row after the deploys.jsonl line, the journey routes
+// after the journey file and the run, in the request's org, by the
+// principal's login; each action must be one the route table lists for its
+// route, so a typo in the table fails here.
+const auditSeq = () => listAudit(currentStore(), { limit: 1 })[0]?.seq ?? 0;
+const rowsAfter = (seq) => listAudit(currentStore(), { limit: 1000 }).filter(r => r.seq > seq).reverse()
+  .map(r => [r.action, r.actor, r.orgId, r.targetId, r.detail]);
+const listedFor = (key, rows) => rows.every(([action]) => routeEntry(key).audit.includes(action));
+
 // alice, in `org`, creates the objects the sweep addresses: a registered
-// pack, a deploy with a snapshot against the fake MCP, a verify on it, a
-// journey captured and run once, the org's live pack (planted; the
-// route's own write into a created org is the default-at-'.' block's), and
-// — STORE_PLAN slice 4 — a service record with one environment and an MCP
-// endpoint record (its variable named with the org's own prefix) through
-// the API (rows in the store, nothing under `dir`).
+// pack, a deploy with a snapshot against the fake MCP (its deploy.bulk row),
+// a verify on it (its deploy.verify row), a journey captured and run once
+// (its journey.capture and journey.run rows),
+// the org's live pack (planted; the route's own write into a created org is
+// the default-at-'.' block's), and — STORE_PLAN slice 4 — a service record
+// with one environment and an MCP endpoint record (its variable named with
+// the org's own prefix) through the API (rows in the store, nothing under
+// `dir`).
 async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   const h = { Cookie: cookie, 'X-Observogram-CSRF': '1', 'X-Observogram-Org': org };
   mkdirSync(join(dir, 'live'), { recursive: true });
@@ -190,6 +205,7 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   j = await r.json();
   const packId = j.registered?.id;
   assert(!!packId && existsSync(join(dir, 'packs', `${packId}.pack.yaml`)), `alice registers a pack into ${org}`, j.registered);
+  let seq = auditSeq();
   r = await fetch(`${root}/api/packs/${packId}/deploy-bulk`, {
     method: 'POST', headers: { ...h, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -204,19 +220,45 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   const deployId = j.deployId;
   assert(r.status === 200 && !!deployId && existsSync(join(dir, 'snapshots', deployId, 'meta.json')),
     `alice deploys in ${org}: a deployId with a snapshot under its root`, [r.status, deployId]);
+  let rows = rowsAfter(seq);
+  assert(rows.length === 1 && listedFor('POST /api/packs/:id/deploy-bulk', rows)
+    && JSON.stringify(rows[0].slice(0, 4)) === JSON.stringify(['deploy.bulk', 'alice', org, deployId])
+    && rows[0][4].items === 2 && rows[0][4].ok === 2 && rows[0][4].failed === 0 && rows[0][4].snapshot === 'captured'
+    && rows[0][4].origin === new URL(mcp.url).origin && !('fileError' in rows[0][4]),
+    `alice's deploy in ${org}: exactly one deploy.bulk row by alice in ${org} (an action the table lists), ok 2 of 2, snapshot captured`, rows);
+  assert(!('auditError' in j), `alice's deploy in ${org}: the row was written (no auditError)`, j.auditError);
+  seq = auditSeq();
   r = await fetch(`${root}/api/deploys/${deployId}/verify`, {
     method: 'POST', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ outcome: 'pending' }),
   });
   assert(r.status === 200, `alice records a verify in ${org}`, r.status, 200);
+  rows = rowsAfter(seq);
+  assert(rows.length === 1 && listedFor('POST /api/deploys/:deployId/verify', rows)
+    && JSON.stringify(rows) === JSON.stringify([['deploy.verify', 'alice', org, deployId, { outcome: 'pending', alignment: null, attempts: null }]]),
+    `alice's verify in ${org}: exactly one deploy.verify row by alice in ${org} (an action the table lists)`, rows);
+  seq = auditSeq();
   r = await fetch(`${root}/api/journeys/capture`, {
     method: 'POST', headers: { ...h, 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: journey, packAId: packId, packBId: 'production-curated', env: 'prod' }),
   });
   j = await r.json();
   assert(j.ok === true && existsSync(join(dir, 'journeys', `${journey}.journey.yaml`)), `alice captures ${journey} in ${org}`, j);
+  rows = rowsAfter(seq);
+  assert(rows.length === 1 && listedFor('POST /api/journeys/capture', rows)
+    && JSON.stringify(rows) === JSON.stringify([['journey.capture', 'alice', org, journey, { packA: packId, packB: 'production-curated', live: false, env: 'prod', service: null, scopeMode: null }]]),
+    `alice's capture in ${org}: exactly one journey.capture row by alice in ${org} (an action the table lists): the pack ids, live false, env prod`, rows);
+  seq = auditSeq();
   r = await fetch(`${root}/api/journeys/${journey}/run`, { method: 'POST', headers: { ...h, 'Content-Type': 'application/json' }, body: '{}' });
   j = await r.json();
   assert(j.ok === true && existsSync(join(dir, 'runs')), `alice runs ${journey} once in ${org} (a runs/ record)`, j.error);
+  rows = rowsAfter(seq);
+  assert(rows.length === 1 && listedFor('POST /api/journeys/:name/run', rows)
+    && JSON.stringify(rows[0].slice(0, 4)) === JSON.stringify(['journey.run', 'alice', org, journey])
+    && JSON.stringify(Object.keys(rows[0][4])) === JSON.stringify(['startedAt', 'outcome', 'alignmentPct', 'gradeScore', 'gradePass', 'breaches', 'tookMs'])
+    && rows[0][4].startedAt === j.record.startedAt && rows[0][4].outcome === j.record.outcome && ['pass', 'gate-failed'].includes(rows[0][4].outcome)
+    && rows[0][4].alignmentPct === j.record.drift.alignmentPct && rows[0][4].gradeScore === j.record.grade.score && rows[0][4].gradePass === j.record.grade.pass
+    && rows[0][4].breaches === j.record.gate.breaches.length && rows[0][4].tookMs === j.record.tookMs,
+    `alice's run in ${org}: exactly one journey.run row by alice in ${org} (an action the table lists), the record's seven scalars`, rows);
   r = await fetch(`${root}/api/services`, {
     method: 'POST', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: `${org} sweep service` }),
   });
@@ -239,12 +281,16 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   return { packId, deployId, journey, serviceId, environmentId, mcpEndpointId };
 }
 
-// The cross-org route sweep: `who` (a session in another org) calls every
-// org-scoped route with the other org's ids — a user of the other org only
-// among them; each answers 404, an empty list or "no snapshot", no MCP call
-// is made, nothing under `dir` changes and that user's memberships stay as
-// they were. An /api route in no table fails the test.
-async function sweep({ root, cookie, who, ids, mcp, dir }) {
+// The cross-org route sweep: `who` (a session in another org — `org` is its
+// context org; an `owner` reads the deployment's audit by default) calls
+// every org-scoped route with the other org's (`otherOrg`) ids — a user of
+// the other org only among them; each answers 404, an empty list or "no
+// snapshot", no MCP call is made, nothing under `dir` changes, that user's
+// memberships stay as they were and the audit of the other org gains no row
+// (STORE_PLAN slice 5: the sweep's own RESET writes one pack.clear row in
+// the sweeper's org, none in the other's). An /api route in no table fails
+// the test.
+async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir }) {
   const h = { Cookie: cookie, 'X-Observogram-CSRF': '1' };
   const call = async (method, path, body) => {
     const r = await fetch(`${root}${path}`, {
@@ -318,12 +364,22 @@ async function sweep({ root, cookie, who, ids, mcp, dir }) {
     'POST /api/mcp-endpoints': ['/api/mcp-endpoints', {}, (r) => assert(r.status === 400, `${who}: POST /api/mcp-endpoints {} → 400`, r.status, 400)],
     'PATCH /api/mcp-endpoints/:id': [`/api/mcp-endpoints/${mcpEndpointId}`, { name: 'renamed' }, is404('PATCH /api/mcp-endpoints/:id')],
     'DELETE /api/mcp-endpoints/:id': [`/api/mcp-endpoints/${mcpEndpointId}`, undefined, is404('DELETE /api/mcp-endpoints/:id')],
+    // The audit reader (STORE_PLAN slice 5; `who` is an admin or an owner in
+    // their org): the org-scoped listing is the sweeper's org's — every row
+    // its own, none of the other org's deploy or journey rows, none by alice
+    // (who acted in the other org only); the owner-aware check because an
+    // owner's default scope is `all`, so the row asks scope=org explicitly.
+    'GET /api/audit': ['/api/audit?scope=org&limit=500', undefined, (r) => assert(r.status === 200 && r.json.scope === 'org' && r.json.org === org
+      && r.json.rows.every(x => x.orgId === org) && !r.json.rows.some(x => x.targetId === deployId || x.targetId === journey || x.actor === 'alice'),
+    `${who}: GET /api/audit?scope=org lists ${org}'s rows only — none of ${otherOrg}'s deploy or journey rows, none by alice`, r.json)],
   };
   const memberships = () => JSON.stringify(listMembershipsForUser(currentStore(), userId));
   const membershipsBefore = memberships();
   assert(membershipsBefore !== '[]', `${who}: the other org's user is a member there`, membershipsBefore);
   const before = tree(dir);
   const mcpCalls = mcp.calls.length;
+  const otherRows = () => listAudit(currentStore(), { orgId: otherOrg, limit: 1000 }).length;
+  const otherRowsBefore = otherRows();
   const routes = apiRoutes();
   const unclassified = routes.filter(k => !DEPLOYMENT_GLOBAL.has(k) && !ORG_SCOPED[k] && !OWNER_ONLY.has(k));
   assert(unclassified.length === 0, 'every /api route is classified org-scoped, deployment-global or owner-only', unclassified, []);
@@ -338,6 +394,23 @@ async function sweep({ root, cookie, who, ids, mcp, dir }) {
   assert(mcp.calls.length === mcpCalls, `${who}: the sweep made no MCP call`, mcp.calls.length - mcpCalls, 0);
   assert(JSON.stringify(tree(dir)) === JSON.stringify(before), `${who}: nothing under ${dir} changed`);
   assert(memberships() === membershipsBefore, `${who}: the other org's user's memberships are unchanged`, memberships(), membershipsBefore);
+  assert(otherRows() === otherRowsBefore, `${who}: the sweep wrote no audit row of ${otherOrg}'s`, otherRows(), otherRowsBefore);
+  // The admin / owner split of GET /api/audit (STORE_PLAN slice 5, design
+  // §6): a non-owner's plain listing is its org's (scope org, no deployment
+  // row); an owner's scope=all is the deployment's — alice's rows in the
+  // other org among them.
+  const plain = await call('GET', '/api/audit?limit=500');
+  const all = await call('GET', '/api/audit?scope=all&limit=500');
+  if (owner) {
+    assert(plain.status === 200 && plain.json.scope === 'all' && plain.json.org === null, `${who}, an owner: a plain GET /api/audit is scope all`, [plain.status, plain.json?.scope]);
+    assert(all.status === 200 && all.json.rows.some(x => x.actor === 'alice' && x.orgId === otherOrg) && all.json.rows.some(x => x.targetId === deployId),
+      `${who}, an owner: GET /api/audit?scope=all holds alice's rows of ${otherOrg} and the deploy row`, all.json?.rows?.length);
+  } else {
+    assert(plain.status === 200 && plain.json.scope === 'org' && plain.json.org === org && !plain.json.rows.some(x => x.orgId === null),
+      `${who}, an admin: a plain GET /api/audit is scope org (${org}), no deployment row`, [plain.status, plain.json?.scope, plain.json?.org]);
+    assert(all.status === 400 && all.json.error === `the deployment's audit (scope=deployment, scope=all) is an owner's: as an admin of org '${org}' you read its rows (scope=org, the default) — drop scope, or ask an owner`,
+      `${who}, an admin: GET /api/audit?scope=all is refused, naming ${org}`, [all.status, all.json?.error]);
+  }
 }
 
 const mcp = await startFakeMcp();
@@ -485,12 +558,20 @@ try {
       `packA: { crawl: { path: ${JSON.stringify(bravoRoot)}, name: svc } }`,
       `packB: { file: ../packs/${pack} }`,
     ].join('\n') + '\n');
+    const crawlSeq = auditSeq();
     r = await fetch(`${base}/api/journeys/acme-crawl/run`, {
       method: 'POST', headers: { Cookie: alice, 'Content-Type': 'application/json', 'X-Observogram-CSRF': '1' }, body: '{}',
     });
     j = await r.json();
     assert(r.status === 502 && j.error === `crawl source ${bravoRoot} belongs to another org's part of the workspace — refused`,
       "alice's crawl: journey whose root is orgs/bravo → 502 'belongs to another org'", [r.status, j.error]);
+    // The attempt is on the record (slice 5): a journey.run row with outcome
+    // `error` — a file source, not a lost vantage — and never the message.
+    const crawlRows = rowsAfter(crawlSeq);
+    assert(crawlRows.length === 1 && JSON.stringify(crawlRows[0].slice(0, 4)) === JSON.stringify(['journey.run', 'alice', 'acme', 'acme-crawl'])
+      && crawlRows[0][4].outcome === 'error' && crawlRows[0][4].alignmentPct === null && crawlRows[0][4].breaches === null
+      && typeof crawlRows[0][4].startedAt === 'string' && typeof crawlRows[0][4].tookMs === 'number' && !JSON.stringify(crawlRows).includes('bravo'),
+      "alice's refused crawl run: one journey.run row, outcome error, no path in it", crawlRows);
     rmSync(join(bravoRoot, 'leak.yaml'));
     rmSync(join(WORKSPACE, 'orgs', 'acme', 'journeys', 'acme-crawl.journey.yaml'));
   }
@@ -535,7 +616,7 @@ try {
   // ---- the cross-org route sweep: bob (bravo) against acme's objects ----
   const acmeIds = await createObjects({ root: base, cookie: alice, org: 'acme', journey: 'acme-sweep', mcp, dir: join(WORKSPACE, 'orgs', 'acme') });
   const aliceId = listUsers(currentStore()).find(u => u.login === 'alice').id;   // acme's admin, no member of bravo
-  await sweep({ root: base, cookie: bob, who: 'bob (bravo)', ids: { ...acmeIds, userId: aliceId }, mcp, dir: join(WORKSPACE, 'orgs', 'acme') });
+  await sweep({ root: base, cookie: bob, who: 'bob (bravo)', owner: false, org: 'bravo', otherOrg: 'acme', ids: { ...acmeIds, userId: aliceId }, mcp, dir: join(WORKSPACE, 'orgs', 'acme') });
 } finally {
   await new Promise(res => srv.close(res));
 }
@@ -689,7 +770,7 @@ try {
     r = await fetch(`${base4}/api/journeys`, { headers: { Cookie: carlos } });
     j = await r.json();
     assert(!j.journeys.some(x => x.name === ids.journey), "carlos's /api/journeys in default never lists delta's journey");
-    await sweep({ root: base4, cookie: carlos, who: 'carlos (default at .)', ids: { ...ids, userId: dora.id }, mcp, dir: deltaDir });
+    await sweep({ root: base4, cookie: carlos, who: 'carlos (default at .)', owner: true, org: 'default', otherOrg: 'delta', ids: { ...ids, userId: dora.id }, mcp, dir: deltaDir });
 
     // The refresh writes the caller's org's live pack — orgs/delta/live/ —
     // and never the default org's at the base (whose root contains delta's).

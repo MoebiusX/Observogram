@@ -27,7 +27,7 @@ const {
   defaultDeployTool, deployToolMissingError, targetIsDeployable,
   filterPromRulesScope, scopeMatchesGrafanaRule, normalizeGrafanaProvisioningRule,
   grafanaRulesFromProvisioningYaml, dashboardFromCompiledJson,
-  buildNativeDeployCalls, newDeployId, captureDeploySnapshot,
+  buildNativeDeployCalls, newDeployId, captureDeploySnapshot, deployAuditRow,
 } = await import('./deploy-helpers.mjs');
 
 const { assert, report } = createHarness({ indent: '  ', truncate: 160 });
@@ -164,5 +164,73 @@ assert(buildNativeDeployCalls({ target: 'x', compiled: { content: '' }, tool: 'u
 // ---------- snapshot: the only behaviour safe to pin without a workspace ----------
 const snap = await captureDeploySnapshot({ deployId: 'dep_test', callTool: null, availableTools: null, items: [], dryRun: true });
 assert(snap.status === 'skipped' && snap.itemCount === 0, 'dry-run deploys skip snapshot capture');
+
+// ---------- the audit row of a deploys.jsonl record (STORE_PLAN slice 5) ----------
+// Counts and the MCP origin, never the URL, an item's error or a tool name;
+// the action is the caller's; every request text is bounded; fileError and
+// manual only when given.
+const bulkRecord = {
+  deployId: 'dep_2026-10-04T09-12-33_k2x9', at: '2026-10-04T09:12:33.000Z', actor: 'ada',
+  pack: { id: 'payment-service', version: '1.5.0', contentHash: 'abcdef12' },
+  env: 'prod', mcpUrl: 'https://user:pw@mcp.acme.test:8443/mcp/x?token=sekrit',
+  target: { product: 'grafana', version: '12', folder: 'observability-pack' },
+  mode: 'upsert', dryRun: false, snapshot: { status: 'captured', items: 2 },
+  items: [
+    { group: 'rules', ok: true, tool: 'grafana_create_alert_rule', operations: 2, bytes: 100, tookMs: 10 },
+    { group: 'dashboards', ok: false, tool: 'grafana_create_dashboard', error: 'dashboard write refused: /mcp/x said no', tookMs: 5 },
+  ],
+  summary: { total: 2, ok: 1, failed: 1 }, tookMs: 1830,
+};
+const bulkRow = deployAuditRow(bulkRecord, { action: 'deploy.bulk', mcpEndpoint: { id: 3, name: 'prod-grafana' } });
+assert(JSON.stringify(bulkRow) === JSON.stringify({
+  action: 'deploy.bulk', targetKind: 'deploy', targetId: 'dep_2026-10-04T09-12-33_k2x9',
+  detail: {
+    pack: { id: 'payment-service', version: '1.5.0' }, env: 'prod',
+    target: { product: 'grafana', version: '12', folder: 'observability-pack' }, mode: 'upsert', dryRun: false,
+    origin: 'https://mcp.acme.test:8443', mcpEndpoint: { id: 3, name: 'prod-grafana' }, snapshot: 'captured',
+    items: 2, ok: 1, failed: 1, tookMs: 1830,
+  },
+}), 'deploy.bulk row: the exact shape — counts, the snapshot status, the origin, the endpoint record', bulkRow);
+const bulkText = JSON.stringify(bulkRow.detail);
+assert(!/\/mcp\//.test(bulkText) && !bulkText.includes('sekrit') && !bulkText.includes('user:pw'), 'the row never carries the URL\'s path, query or userinfo', bulkText);
+assert(!bulkText.includes('said no') && !bulkText.includes('contentHash') && !('items' in bulkRow.detail && Array.isArray(bulkRow.detail.items)),
+  'the row never carries an item\'s error text, the content hash or the items array', bulkText);
+assert(!bulkText.includes('grafana_create'), 'the row never carries a tool name', bulkText);
+assert(!('fileError' in bulkRow.detail) && !('manual' in bulkRow.detail), 'fileError and manual are absent keys on a normal deploy row');
+
+const singleRow = deployAuditRow({ ...bulkRecord, snapshot: undefined, items: [bulkRecord.items[1]], mcpUrl: null }, { action: 'deploy.run' });
+assert(singleRow.action === 'deploy.run' && !('snapshot' in singleRow.detail) && singleRow.detail.origin === null && singleRow.detail.mcpEndpoint === null,
+  'deploy.run row: the action as passed, no snapshot key, origin null for a null mcpUrl, mcpEndpoint null by default', singleRow);
+assert(singleRow.detail.items === 1 && singleRow.detail.ok === 0 && singleRow.detail.failed === 1, 'deploy.run row counts the one failed item', singleRow.detail);
+assert(deployAuditRow({ ...bulkRecord, items: [bulkRecord.items[0]] }, { action: 'deploy.bulk' }).action === 'deploy.bulk',
+  'a one-item bulk deploy is a deploy.bulk: the shape never decides the action');
+
+const rollbackRow = deployAuditRow({
+  deployId: 'dep_2026-10-04T09-20-09_q7mm', rollbackOf: 'dep_2026-10-04T09-12-33_k2x9', pack: { id: 'payment-service', version: '1.5.0' },
+  env: 'prod', mcpUrl: 'https://mcp.acme.test/mcp', target: bulkRecord.target, mode: 'rollback', dryRun: false,
+  items: [{ artifact: 'payment-overview', group: 'restore', ok: true, tookMs: 600 }], summary: { total: 1, ok: 1, failed: 0 }, tookMs: 640,
+}, { action: 'deploy.rollback', manual: 1 });
+assert(JSON.stringify(rollbackRow) === JSON.stringify({
+  action: 'deploy.rollback', targetKind: 'deploy', targetId: 'dep_2026-10-04T09-20-09_q7mm',
+  detail: {
+    rollbackOf: 'dep_2026-10-04T09-12-33_k2x9', pack: { id: 'payment-service', version: '1.5.0' }, env: 'prod', dryRun: false,
+    origin: 'https://mcp.acme.test', mcpEndpoint: null, items: 1, ok: 1, failed: 0, manual: 1, tookMs: 640,
+  },
+}), 'deploy.rollback row: rollbackOf, the pack, the counts and the manual steps; its own deployId as the target', rollbackRow);
+assert(deployAuditRow({ deployId: 'dep_x', rollbackOf: 'dep_y', pack: null, items: [], tookMs: 0 }, { action: 'deploy.rollback' }).detail.pack === null,
+  'a rollback of a record without a pack: pack null');
+
+const flagged = deployAuditRow(bulkRecord, { action: 'deploy.bulk', fileError: true });
+assert(flagged.detail.fileError === true, 'fileError: true only when the caller says the line is missing');
+assert(!('fileError' in deployAuditRow(bulkRecord, { action: 'deploy.bulk', fileError: false }).detail), 'fileError: false is an absent key');
+
+const huge = 'x'.repeat(1024 * 1024);
+const boundedRow = deployAuditRow({ ...bulkRecord, env: huge, target: { ...bulkRecord.target, folder: huge } }, { action: 'deploy.bulk' });
+assert(boundedRow.detail.env.length === 200 && boundedRow.detail.target.folder.length === 200 && JSON.stringify(boundedRow.detail).length < 8192,
+  'a 1 MB env and folder are cut to 200 characters; the detail stays under the repository\'s 8 KB bound', JSON.stringify(boundedRow.detail).length);
+
+let badAction = false;
+try { deployAuditRow(bulkRecord, { action: 'deploy.nope' }); } catch (e) { badAction = /deploy\.run, deploy\.bulk or deploy\.rollback/.test(e.message); }
+assert(badAction, 'an action the table does not name throws');
 
 report('deploy-helpers', 'the write-path transforms shape rules, dashboards and scopes exactly as deployed.');

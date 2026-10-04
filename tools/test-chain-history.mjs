@@ -341,6 +341,12 @@ assert(JSON.stringify(rankCauses({ previous: prevRun, current: curRun, deploys: 
   ] });
   const deployCauses = (r) => r.causes.filter(c => c.kind === 'observogram-deploy');
   assert(deployCauses(rb).length === 1 && rb.causes[0].evidence === 'deploy dep_rb by carlos at 2026-09-08T10:05:00.000Z (rollback, rollback of dep_in) touched rr-123 → checkout:ratio', 'a rollback is named as such; aId matches exactly and the evidence names the node; all and a bare prefix of a label match nothing', rb.causes.map(c => c.evidence));
+  // An actor is an opaque string: an OIDC login (<issuerKey>#<sub>) flows into the evidence verbatim — never split on '#' or '@'.
+  const oidcActor = rankCauses({ previous: prevRun, current: curRun, deploys: [
+    { type: 'deploy', deployId: 'dep_oidc', at: '2026-09-08T10:05:00.000Z', actor: 'https://idp.example/realms/acme#9a3e0f', pack: { id: 'x' }, mode: 'upsert', items: [{ artifact: 'checkout:ratio', ok: true }] },
+  ] });
+  assert(deployCauses(oidcActor).length === 1 && oidcActor.causes[0].evidence === 'deploy dep_oidc by https://idp.example/realms/acme#9a3e0f at 2026-09-08T10:05:00.000Z (upsert) touched checkout:ratio',
+         'an OIDC login (<issuerKey>#<sub>) as the actor reaches the evidence string verbatim', deployCauses(oidcActor).map(c => c.evidence));
   // A deploy naming an artefact whose label embeds the SLI's name does not blame the SLI (matching is exact, never by substring).
   const oneWay = rankCauses({ previous: prevRun, current: { ...curRun, branches: [{ ...curRun.branches[0], degraded: [dn('recording_rule', 'payment:api_availability:ratio_5m'), dn('sli', 'api_availability')] }, ...curRun.branches.slice(1)] }, deploys: [
     { type: 'deploy', deployId: 'dep_rule', at: '2026-09-08T10:05:00.000Z', actor: 'ci', pack: { id: 'x' }, mode: 'upsert', items: [{ artifact: 'payment:api_availability:ratio_5m', ok: true }] },
