@@ -229,7 +229,38 @@ for (const [label, hook] of [
     const abortLike = { fetchImpl: async () => { const err = new Error('The operation was aborted'); err.name = 'AbortError'; throw err; }, hookPath: '/x/gw.mjs' };
     const e4 = await expectFail(() => twoCalls(fake2, abortLike));
     assert(e4?.name === 'AbortError' && e4.message === 'The operation was aborted', 'a fetchImpl rejection with a typed name keeps it', e4?.name);
+
+    // What fetchImpl RETURNS is hook text as well: a non-OK body, a JSON-RPC
+    // error message and an SSE error message that echo the request are
+    // redacted the same way (the error stays an ordinary wire error).
+    const echoUrl = `${fake2.url}?token=URLTOKENSENTINEL9&tier=x`;
+    const echoText = (url, init) => `gateway refused ${init.headers.Authorization} for ${url}`;
+    const returning502 = { fetchImpl: async (url, init) => new Response(echoText(url, init), { status: 502 }), hookPath: '/x/gw.mjs' };
+    const { rpc: r502 } = createMcpClient({ mcpUrl: echoUrl, mcpAuth: 'BEARERSENTINEL7', transport: returning502 });
+    const e5 = await expectFail(() => r502('tools/list', {}));
+    assert(e5 && !isTransportHookError(e5) && e5.message === `MCP HTTP 502 on tools/list: gateway refused Bearer <redacted> for ${fake2.url}?token=<redacted>&tier=x`,
+      'the bearer and the URL token value are <redacted> in a non-OK Response body a fetchImpl returns', e5?.message);
+    const returningRpcError = { fetchImpl: async (url, init) => new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32000, message: echoText(url, init) } }), { status: 200, headers: { 'content-type': 'application/json' } }), hookPath: '/x/gw.mjs' };
+    const { rpc: rRpc } = createMcpClient({ mcpUrl: echoUrl, mcpAuth: 'BEARERSENTINEL7', transport: returningRpcError });
+    const e6 = await expectFail(() => rRpc('tools/list', {}));
+    assert(e6 && !isTransportHookError(e6) && e6.message === `tools/list: gateway refused Bearer <redacted> for ${fake2.url}?token=<redacted>&tier=x`,
+      'a JSON-RPC error message a fetchImpl returns is redacted', e6?.message);
+    const returningSseError = { fetchImpl: async (url, init) => new Response(`data: ${JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32000, message: echoText(url, init) } })}\n\n`, { status: 200, headers: { 'content-type': 'text/event-stream' } }), hookPath: '/x/gw.mjs' };
+    const { rpc: rSse } = createMcpClient({ mcpUrl: echoUrl, mcpAuth: 'BEARERSENTINEL7', transport: returningSseError });
+    const e7 = await expectFail(() => rSse('tools/list', {}));
+    assert(e7 && !isTransportHookError(e7) && e7.message === `tools/list: gateway refused Bearer <redacted> for ${fake2.url}?token=<redacted>&tier=x`,
+      'an SSE error message a fetchImpl returns is redacted', e7?.message);
   } finally { await fake2.close(); }
+
+  // Inert: a native fetch answer is not hook text — the body of a real
+  // upstream's 502 reaches the caller byte-for-byte as before.
+  const fake3 = await startFakeMcp({ failWith: { tool: SYSTEM_HEALTH, status: 502, text: 'upstream says Bearer tok' } });
+  try {
+    const { callTool: nativeCall, rpc: nativeRpc } = createMcpClient({ mcpUrl: `${fake3.url}?token=URLTOKENSENTINEL9`, mcpAuth: 'tok', transport: null });
+    await nativeRpc('initialize', {});
+    const e8 = await expectFail(() => nativeCall(SYSTEM_HEALTH, {}));
+    assert(e8?.message === `MCP HTTP 502 on tools/call: upstream says Bearer tok`, 'without a fetchImpl the upstream body passes through untouched', e8?.message);
+  } finally { await fake3.close(); }
 }
 
 // ---------- 6. load failures ----------
