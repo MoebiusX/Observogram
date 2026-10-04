@@ -33,7 +33,8 @@
 //   OBSERVOGRAM_PROXY_AUTH_GROUP_ROLES    'sre=admin,dev=operator,*=viewer' (viewer|operator|admin|owner; the top rank wins)
 //   OBSERVOGRAM_PROXY_AUTH_ORG            the org the groups rule; default the store's default org
 //   OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE      viewer|operator|admin|none (default none): the first-sight
-//                                         membership when no groups header is configured
+//                                         membership when no groups header is configured; refused
+//                                         beside one (a request that omits the header must grant nothing)
 //   OBSERVOGRAM_PROXY_AUTH_OWNERS         comma list of user values granted owner (grant-only)
 //   OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET  ≥ 32 chars; required beyond loopback
 //   OBSERVOGRAM_PROXY_AUTH_SECRET_HEADER  default X-Proxy-Auth-Secret
@@ -166,6 +167,13 @@ export function parseProxyAuthEnv(env = process.env) {
   const org = brandEnvFrom(env, 'PROXY_AUTH_ORG') || null;
   if (org !== null && !validOrgId(org)) throw new TypeError('OBSERVOGRAM_PROXY_AUTH_ORG is not an org id');
   const joinRole = parseProxyJoinRole(brandEnvFrom(env, 'PROXY_AUTH_JOIN_ROLE'));
+  // With a groups header the groups rule every membership: a join role beside
+  // it would apply whenever the proxy omits the header, which the operator's
+  // documentation says cannot happen — refuse, as GROUP_ROLES without the
+  // header is refused ('none' spelled out is fine).
+  if (joinRole !== null && groupsHeader) {
+    throw new TypeError('OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE and OBSERVOGRAM_PROXY_AUTH_GROUPS_HEADER are both set: with a groups header the groups rule every membership, and a request that omits the header must grant none — set the join role to none, or unset the groups header');
+  }
   const owners = Object.freeze(brandEnvFrom(env, 'PROXY_AUTH_OWNERS').split(',').map((s) => s.trim()).filter(Boolean));
   const secret = brandEnvFrom(env, 'PROXY_AUTH_SHARED_SECRET') || null;
   if (secret !== null && secret.length < SECRET_MIN) throw new TypeError(`OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET is at least ${SECRET_MIN} characters`);

@@ -378,7 +378,7 @@ OBSERVOGRAM_PROXY_AUTH_NAME_HEADER=                        # unset by default
 OBSERVOGRAM_PROXY_AUTH_GROUPS_HEADER=X-Forwarded-Groups    # unset by default; a comma list
 OBSERVOGRAM_PROXY_AUTH_GROUP_ROLES='sre=admin,dev=operator,*=viewer'
 OBSERVOGRAM_PROXY_AUTH_ORG=                                # the org the groups rule; default the default org
-OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE=none                      # first-sight role when no groups header is configured
+OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE=none                      # first-sight role when no groups header is configured (refused beside one)
 OBSERVOGRAM_PROXY_AUTH_OWNERS=root                         # comma list of user values granted owner
 OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET=<32+ chars>           # required beyond loopback
 OBSERVOGRAM_PROXY_AUTH_SECRET_HEADER=X-Proxy-Auth-Secret   # default
@@ -433,7 +433,9 @@ OBSERVOGRAM_PROXY_AUTH_REALM=proxy                         # default; [a-z0-9._-
   overwritten by the next request); a request without the header leaves
   memberships alone; `*` is every user the header names. Without a groups
   header, `OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE` applies at the first sight
-  only. A user in `OBSERVOGRAM_PROXY_AUTH_OWNERS`, or in a group mapped to
+  only; beside a groups header it refuses the start (`… are both set: with
+  a groups header the groups rule every membership …`), since it would
+  otherwise apply whenever the proxy omits the header. A user in `OBSERVOGRAM_PROXY_AUTH_OWNERS`, or in a group mapped to
   `owner`, is granted owner once (`owner.grant`, `via: proxy`) and **never
   revoked here** — revoke with `PUT /api/admin/users/:id/owner`. A disabled
   row is refused and never re-enabled by a request; a local row holding the

@@ -622,7 +622,12 @@ in the configured org only: a proxy that sends the header is the source of
 truth for that org, so a membership there is raised, lowered or removed to
 match on every request that carries it (an admin's manual edit there is
 overwritten; other orgs are never touched; a request without the header
-changes nothing), and an empty header is a statement — no groups. Owner is
+changes nothing), and an empty header is a statement — no groups. A join
+role beside a groups header refuses the start (as `_GROUP_ROLES` without the
+header does): the store applies the join role exactly when the proxy made no
+statement about groups, so beside a configured header it would rule every
+request that omits the header, not "when no groups header is configured" as
+documented — `none` spelled out is fine. Owner is
 grant-only: a user dropped from the owner group stays owner until an owner
 revokes it, because an owner losing a group should never silently lose the
 deployment, and the audit must show a person's revoke. OIDC beside the flag

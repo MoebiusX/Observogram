@@ -7,7 +7,8 @@
  * X-Forwarded-User in every posture (open loopback answers as `local` and
  * writes no row; local users answer 401 and write nothing). Refusals: no
  * ACK or a wrong one (text a), OIDC beside it (b), a bad realm / header
- * name / forbidden header / group map / join role / logout URL / short
+ * name / forbidden header / group map / join role (and one beside a groups
+ * header) / logout URL / short
  * secret (the variable named, the secret never echoed), a non-loopback bind
  * without the shared secret (c, nothingMoved), AUTH=off with the flag (one
  * warn line, headers ignored), loopback without the secret (the warn
@@ -128,18 +129,19 @@ test('parseProxyAuthEnv: off without the flag; the defaults; every knob; the leg
   });
   const full = parseProxyAuthEnv({
     ...GROUPS, OBSERVOGRAM_PROXY_AUTH_REALM: 'corp.sso-1', OBSERVOGRAM_PROXY_AUTH_USER_HEADER: 'X-Auth-User', OBSERVOGRAM_PROXY_AUTH_EMAIL_HEADER: 'X-Auth-Email',
-    OBSERVOGRAM_PROXY_AUTH_NAME_HEADER: 'X-Auth-Name', OBSERVOGRAM_PROXY_AUTH_ORG: 'acme', OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE: 'viewer',
+    OBSERVOGRAM_PROXY_AUTH_NAME_HEADER: 'X-Auth-Name', OBSERVOGRAM_PROXY_AUTH_ORG: 'acme', OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE: 'none',
     OBSERVOGRAM_PROXY_AUTH_OWNERS: ' root, ops ,', OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET: SECRET, OBSERVOGRAM_PROXY_AUTH_SECRET_HEADER: 'X-Gate',
     OBSERVOGRAM_PROXY_AUTH_LOGOUT_URL: 'https://sso.example.test/logout?rd=/',
   });
   assert.deepEqual(full, {
     realm: 'corp.sso-1', issuerKey: 'proxy://corp.sso-1', userHeader: 'X-Auth-User', emailHeader: 'X-Auth-Email', nameHeader: 'X-Auth-Name',
     groupsHeader: 'X-Forwarded-Groups', secretHeader: 'X-Gate', groupRoles: { sre: 'admin', dev: 'operator', '*': 'viewer' }, org: 'acme',
-    joinRole: 'viewer', owners: ['root', 'ops'], secret: SECRET, logoutUrl: 'https://sso.example.test/logout?rd=/',
+    joinRole: null, owners: ['root', 'ops'], secret: SECRET, logoutUrl: 'https://sso.example.test/logout?rd=/',
   });
   assert.equal(parseProxyAuthEnv({ TOMOGRAPH_TRUST_PROXY_AUTH: '1', TOMOGRAPH_TRUST_PROXY_AUTH_ACK: PROXY_ACK, TOMOGRAPH_PROXY_AUTH_REALM: 'old' }).realm, 'old');
   assert.equal(parseProxyAuthEnv({ ...ACK, OBSERVOGRAM_PROXY_AUTH_REALM: 'new', TOMOGRAPH_PROXY_AUTH_REALM: 'old' }).realm, 'new');
   assert.equal(parseProxyAuthEnv({ ...ACK, OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE: 'none' }).joinRole, null);
+  assert.equal(parseProxyAuthEnv({ ...ACK, OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE: 'viewer' }).joinRole, 'viewer', 'a join role rules without a groups header');
   assert.deepEqual(PROXY_AUTH_ENV.filter((k) => !STRIP.includes(k)), [], 'every variable the mode reads is on the children\'s STRIP list');
 });
 
@@ -174,6 +176,11 @@ test('parseProxyAuthEnv refuses: no ACK (a), a wrong ACK, OIDC beside it (b), a 
   refuses({ ...ok, OBSERVOGRAM_PROXY_AUTH_GROUPS_HEADER: 'X-G', OBSERVOGRAM_PROXY_AUTH_GROUP_ROLES: 'sre=admin,sre=viewer' }, 'OBSERVOGRAM_PROXY_AUTH_GROUP_ROLES names the group "sre" twice');
   refuses({ ...ok, OBSERVOGRAM_PROXY_AUTH_GROUP_ROLES: 'sre=admin' }, 'OBSERVOGRAM_PROXY_AUTH_GROUP_ROLES needs OBSERVOGRAM_PROXY_AUTH_GROUPS_HEADER: without a groups header no group reaches the server');
   refuses({ ...ok, OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE: 'owner' }, 'OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE is one of viewer, operator, admin or none, not "owner"');
+  // Beside a groups header a join role would rule every request that omits
+  // the header (not 'when no groups header is configured'): refused, 'none' not.
+  for (const role of ['viewer', 'operator', 'admin']) {
+    refuses({ ...ok, OBSERVOGRAM_PROXY_AUTH_GROUPS_HEADER: 'X-G', OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE: role }, 'OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE and OBSERVOGRAM_PROXY_AUTH_GROUPS_HEADER are both set: with a groups header the groups rule every membership, and a request that omits the header must grant none — set the join role to none, or unset the groups header');
+  }
   refuses({ ...ok, OBSERVOGRAM_PROXY_AUTH_ORG: 'Not An Org' }, 'OBSERVOGRAM_PROXY_AUTH_ORG is not an org id');
   refuses({ ...ok, OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET: 'short' }, 'OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET is at least 32 characters');
   refuses({ ...ok, OBSERVOGRAM_PROXY_AUTH_LOGOUT_URL: 'sso.example.test/logout' }, 'OBSERVOGRAM_PROXY_AUTH_LOGOUT_URL is not a URL');
@@ -258,6 +265,11 @@ test('refusals: no ACK or a wrong one (a), OIDC beside it (b), a bad knob names 
   r = boot(workspace(), { env: { ...ACK, OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET: 'tooshort' }, silent: false });
   assert.deepEqual([r.listening, r.message], [false, 'OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET is at least 32 characters']);
   assert.ok(!`${r.stdout}${r.stderr}`.includes('tooshort'), 'the secret is never printed');
+  // The probe that found it: a groups header, a group map and a join role —
+  // the first request of a user whose proxy omits the groups header would be
+  // joined at the join role. The server does not start.
+  r = boot(workspace(), { env: { ...GROUPS, OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE: 'operator' } });
+  assert.deepEqual([r.listening, r.message], [false, 'OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE and OBSERVOGRAM_PROXY_AUTH_GROUPS_HEADER are both set: with a groups header the groups rule every membership, and a request that omits the header must grant none — set the join role to none, or unset the groups header']);
   r = boot(workspace(), { env: { ...ACK, OBSERVOGRAM_PROXY_AUTH_ORG: 'ghost' } });
   assert.equal(r.listening, false);
   assert.equal(r.message, "refusing to start: OBSERVOGRAM_PROXY_AUTH_ORG names org 'ghost', which this store does not hold (or it is removed). "
@@ -429,7 +441,7 @@ test('groups are authoritative in the configured org: raised, lowered, removed (
   }
 });
 
-test('a group mapped to owner grants it; PROXY_AUTH_JOIN_ROLE rules the first sight when no groups header is configured, and only then', async () => {
+test('a group mapped to owner grants it; PROXY_AUTH_JOIN_ROLE rules the first sight when no groups header is configured, and only then (beside one the start is refused)', async () => {
   const ws = workspace();
   const s = await serve(ws, { env: { ...ACK, OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE: 'viewer' } });
   try {
