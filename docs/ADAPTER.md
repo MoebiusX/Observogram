@@ -205,14 +205,27 @@ manifest, so the one canonical pipeline serves old packs too.
 import { isLegacyLayeredPack, upconvertLegacyPack } from './tools/lib/legacy.mjs';
 
 if (isLegacyLayeredPack(parsed)) {
-  const { canonical, report } = upconvertLegacyPack(parsed);
+  const { canonical, report, provenance } = upconvertLegacyPack(parsed);
   // report = { format, service, mapped, scaffolded, notes }
+  // provenance = { '<symbol>': 'legacy.artefact.<LAYER>.<ID>' | null }  (null: a schema-required stub)
 }
 ```
 
 Wired in at the ingestion gate (`POST /api/validate` — uploads convert
 transparently; the response carries the `legacy` report) and as a CLI
-(`npm run upconvert-legacy <file> [-o out.pack.json]`).
+(`npm run upconvert-legacy <file> [-o out.pack.json] [--merge <existing>] [--overwrite]`).
+A canonical input is never converted: `isLegacyLayeredPack` is false on
+anything with `apiVersion`/`kind`, the gate passes it through and the CLI
+echoes it (exit 0). A legacy input whose `-o` target already holds a canonical
+pack merges into it (`mergeUpconvert({ canonical, provenance }, existing)`):
+the existing pack wins for every artefact it has, the upconvert only adds
+artefacts whose legacy record the existing pack has never seen, added items
+get their marker re-indexed to their final position, and the `legacy.*` block
+is refreshed — so a real value never regresses to a scaffold; `--overwrite`
+restores the plain write. `report.scaffolded` and `legacy.scaffoldCount` count
+every `crawler.scaffold.*` key, the six shared-section markers (`otel`,
+`pipelines.*`) included. `npm run pack-conformance -- <pack>` lists the
+placeholders that remain ([`DOWNSTREAM.md`](DOWNSTREAM.md) §11).
 
 Conversion contract:
 
@@ -231,4 +244,8 @@ Conversion contract:
   `opts.now`).
 
 `tools/test-legacy-pack.mjs` gates the four restored examples on every
-`npm test`.
+`npm test`; `tools/test-upconvert-merge.mjs` gates the merge. The lossless
+record key does not say which L4 sublist (policy / alerting / healing) an item
+came from, so two L4 items sharing an id across sublists collide in the record
+and in the merge provenance — left as is, because changing the key would break
+the record of packs already upconverted downstream.

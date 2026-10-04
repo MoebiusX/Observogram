@@ -1033,7 +1033,8 @@ The crawler reads source files such as:
 - Docker Compose files
 
 It emits a canonical v1.4 pack plus crawler annotations describing what was
-scanned and what was inferred. Every alert rule is kept: a rule whose
+scanned and what was inferred. A fresh crawl validates; `npm run
+pack-conformance -- repo.pack.yaml` lists what it had to stub. Every alert rule is kept: a rule whose
 expression references a recorded SLO series is a burn-rate alert
 (`spec.policy.burn_rate_alerts`); every other rule — a pod restarting, a pool
 saturated, a certificate expiring — is an operational alert and is declared in
@@ -1106,6 +1107,35 @@ npm run validate-pack -- path/to/pack.yaml
 The studio also accepts drag-and-drop or file picker upload. Uploaded, crawled,
 and MCP-drafted packs are registered in memory and become addressable through
 the same `/api/packs/:id/*` endpoints as catalog packs.
+
+### Report Placeholders (pack conformance)
+
+```bash
+npm run pack-conformance -- path/to/pack.yaml [more.pack.json ...] [--json] [--strict] [--quiet]
+packc conformance path/to/pack.yaml
+```
+
+A valid pack can still be full of placeholders — the values an importer (the
+upconvert, the crawler, the live fetcher, Build) had to invent to satisfy the
+schema. This tool lists them as rows: the pack path (`$.spec.slis[0]`), the
+field, what it needs, and where the value normally comes from — **crawl** (it
+exists in the service repository: `npm run crawl` reads it), **telemetry** (a
+fact of the running backends: the live fetcher or the backend's API) or
+**operator** (a decision only the owning team can make). The detection rule is
+the studio's: an artefact whose symbol carries a `crawler.scaffold.*`,
+`mcp.scaffold.*` or `library.todo.*` annotation is a placeholder, so the rows
+are what Discover parks as Scaffold. Each row's state is `placeholder` (marker
+present, value still a stub), `marker-only` (value changed — if real, delete the
+marker), `unmarked` (no marker, but the value is an importer's stub literal) or
+`dangling` (a marker naming nothing). Exit 0 when every pack is readable,
+canonical and valid (rows are informational); 1 for an unreadable, layered
+(upconvert it first) or invalid pack, or with `--strict` when any pack still
+has rows; 2 for usage. `--json` prints `{ tool, specVersion, strict, packs:
+[{ path, valid, errors, rubric, rows, counts, … }], totals, exitCode }`. The
+maturity rubric (Diagnose) grades what is declared, placeholders included; the
+rows are what still has to become real. The workflow, the marker contract and
+the merge-safe `upconvert-legacy` (`-o` onto an existing canonical file merges;
+`--merge`, `--overwrite`) are in [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §11.
 
 ### Classify Typed Packs
 
@@ -2081,7 +2111,7 @@ open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
 | `GET` | `/api/references` | Curated catalogue reference packs |
 | `GET` | `/api/packs/:id` | Adapted layered pack |
 | `GET` | `/api/packs/:id/canonical` | Canonical pack with env overlay |
-| `GET` | `/api/packs/:id/conformance` | Maturity-rubric scoring (`onPlaceholder` when the pack carries `library.todo.*` annotations), graded at the service record's tier when one is set (the environment's for `?env=`, else the service's): `declaredTier` is the graded tier, `tier.pack` the pack's own, `tier.mismatch` says they differ; a pack with no record (a catalogue pack, a service without a tier) is graded at its own tier, `tier.from: 'pack'` |
+| `GET` | `/api/packs/:id/conformance` | Maturity-rubric scoring (the rubric grades what is declared, placeholders included; `npm run pack-conformance` lists the placeholders) (`onPlaceholder` when the pack carries `library.todo.*` annotations), graded at the service record's tier when one is set (the environment's for `?env=`, else the service's): `declaredTier` is the graded tier, `tier.pack` the pack's own, `tier.mismatch` says they differ; a pack with no record (a catalogue pack, a service without a tier) is graded at its own tier, `tier.from: 'pack'` |
 | `GET` | `/api/diff?a=&b=` | Repo/live or pack/pack structural diff |
 | `GET` | `/api/packs/:id/compile-catalog` | Per-artifact compile tree |
 | `GET` | `/api/packs/:id/compile-artifact` | Compile one artifact or group |
@@ -2180,6 +2210,8 @@ tools/
   pack-init.mjs            packc init: build a pack from the library (list / show / instantiate)
   test-build-model.mjs     The BUILD journey's studio models over captured API responses (tools/fixtures/build/)
   validate-pack.mjs        Canonical pack validator
+  pack-conformance.mjs     The placeholders a pack still carries: path, field, what it needs, where it comes from (--json, --strict)
+  upconvert-legacy.mjs     Layered JSON -> canonical; idempotent, merges into an existing output (--merge, --overwrite)
   lib/
     adapter.mjs            Canonical pack -> layered UI model
     blast-radius.mjs       Blind-spot blast radius over the requirement graph (zero-import, vendorable)
@@ -2190,7 +2222,9 @@ tools/
     conformance.mjs        Maturity rubric
     diff.mjs               Structural pack diff
     journey.mjs            Journey definitions, runner, gate, run history (node-only)
+    legacy.mjs             Layered-JSON upconvert and the merge-safe re-run (mergeUpconvert); imports pack-conformance.mjs
     library.mjs            The BUILD journey engine: entries, tier scaffold, instantiation, todos, provenance (browser-safe)
+    pack-conformance.mjs   Scaffold markers -> {path, field, needs, source, hint} rows; the adapter's symbol grammar (zero-import, vendorable)
     stack-evidence.mjs     Stack self-metric history helpers (browser-safe, vendorable)
     traceability.mjs       Requirement chains
 

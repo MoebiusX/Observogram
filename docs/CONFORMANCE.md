@@ -15,6 +15,8 @@ exposes the scoring under **Advanced -> Conformance** and via
 - `evaluate(canonical) → boolean`: run against the env-overlaid spec.
 - `specRef`: section in the upstream spec.md where the rule is defined.
 
+The rubric grades what is *declared*, placeholders included; `npm run pack-conformance -- <pack>` (`tools/pack-conformance.mjs`, [`DOWNSTREAM.md`](DOWNSTREAM.md) §11) lists what is still a placeholder — the two answer different questions.
+
 The rubric is intentionally **content-focused** — schema-enforced rules (e.g. "every SLO has `objective + window`") aren't duplicated here because the validator already covers them. Conformance only checks what sits above the schema floor.
 
 | ID | Dimension | Severity | applies @ | Spec |

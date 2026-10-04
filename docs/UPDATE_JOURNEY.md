@@ -705,7 +705,7 @@ nothing under `server/`, `tools/lib` or the live studio changes and a build
 leaves every source file byte-identical (proven), so the goldens are
 byte-identical. Tests: 745 → 753 (`tools/test-studio-bundle.mjs`).
 
-### Rebadge batch 2, B1: bundle parity
+### Rebadge batch 2
 
 **B1 — the taxonomy and the brand baked into the bundle.** Delivered as
 `--taxonomy` and `--brand` on `tools/build-studio-bundle.mjs` and a
@@ -742,3 +742,34 @@ the licence embedding, the `node_modules` dependence at build and the
 bare-specifier allowlist are the work). Tests: 843 → 847
 (`tools/test-studio-bundle.mjs` 9 → 13; `tools/test-golden-board.mjs` +4
 goldens, none changed).
+
+**Rebadge batch 2, B2a — pack conformance and the merge-safe upconvert.**
+Delivered as `tools/lib/pack-conformance.mjs` (zero-import, listed) with the
+CLI `tools/pack-conformance.mjs` / `packc conformance`, and `mergeUpconvert` in
+`tools/lib/legacy.mjs` behind `tools/upconvert-legacy.mjs`;
+[`DOWNSTREAM.md`](DOWNSTREAM.md) §11 is the workflow. Decisions: a separate
+CLI rather than a `validate-pack --conformance` mode, because validate-pack's
+contract (exit code by validity, `✓/✗ path` per file) is pinned by the README
+and every script that pipes it, and the two tools answer different questions
+(schema vs. "is what it says real"); the engine is the browser-safe module and
+the CLI the thin Node wrapper, as validator.mjs ↔ validate-pack.mjs. No new
+marker: a placeholder is an artefact whose adapter symbol carries one of the
+three scaffold prefixes with a non-empty value — the adapter's own test, so the
+report equals what the studio parks as Scaffold and packs already upconverted
+downstream report correctly without re-conversion; the prefixes are a
+text-pinned copy, never an import, because the adapter is in the static
+bundle's module graph. The stub-shape heuristic that splits `placeholder`
+from `marker-only` is advisory and says so; every upconverter, crawler,
+fetcher and library stub literal is recognised (a drift guard pins it). The
+crawler-default fingerprints (`0.1.0-crawled`, `team-platform`) fire only on a
+crawler-written pack, so every shipped catalogue pack reports zero rows
+(`examples/demo-skeleton.pack.yaml` names `team-platform` for real).
+`--strict` fails on any row. The merge rule is "existing wins" by artefact
+identity, with provenance recorded for every mapped item (not only scaffolded
+ones) so a deleted BAU backend or GOV import stays deleted; the `legacy.*`
+block is the designed exception and is refreshed. The one deliberate
+default-output change is the `legacy.scaffoldCount` value (the six
+shared-section markers now count: 9→15, 27→33, 29→35, 39→45), with the
+annotation key order preserved. Tests: 17 new (`tools/test-pack-conformance.mjs` 9,
+`tools/test-upconvert-merge.mjs` 8) plus one pin in `tools/test-legacy-pack.mjs`.
+
