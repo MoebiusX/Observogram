@@ -21,6 +21,7 @@
 
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
 import { redactCredentials } from './mcp-url.mjs';
+import { isTransportHookError } from '../tools/lib/mcp-client.mjs';
 import { saveDeploySnapshot } from './workspace.mjs';
 
 export const DEPLOY_PRODUCTS = ['grafana'];
@@ -48,7 +49,8 @@ export async function discoverMcpToolNames(rpc) {
   try {
     const out = await rpc('tools/list');
     return (out?.tools || []).map(t => t?.name).filter(Boolean).sort();
-  } catch (_) {
+  } catch (e) {
+    if (isTransportHookError(e)) throw e;   // a misconfigured transport hook is never "no tools/list"
     return null;
   }
 }
@@ -205,6 +207,7 @@ export async function captureDeploySnapshot({ deployId, callTool, availableTools
         meta.items.push({ ref: 'rules', kind: 'rules-listing', preState: 'captured', file: 'alert-rules', restore: 'manual' });
         captured++;
       } catch (e) {
+        if (isTransportHookError(e)) throw e;
         meta.items.push({ ref: 'rules', kind: 'rules-listing', preState: 'error', error: redactCredentials(String(e.message)), restore: 'manual' });
         problems++;
       }
@@ -226,6 +229,7 @@ export async function captureDeploySnapshot({ deployId, callTool, availableTools
       meta.items.push({ ref: uid, kind: 'dashboard', preState: 'captured', file: `dashboard-${uid}`, restore: 'redeploy' });
       captured++;
     } catch (e) {
+      if (isTransportHookError(e)) throw e;
       // A create, not a capture failure: rollback of a create is a delete.
       meta.items.push({ ref: uid, kind: 'dashboard', preState: 'absent', error: redactCredentials(String(e.message)), restore: 'delete' });
     }

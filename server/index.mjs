@@ -78,6 +78,7 @@ import { defaultOrgId } from './store/identity.mjs';
 import { getOrg, listOrgs } from './store/orgs.mjs';
 import { listMembershipsForUser } from './store/memberships.mjs';
 import { brandEnv } from '../tools/lib/brand-env.mjs';
+import { mcpTransport, describeTransport } from '../tools/mcp-transport.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
 import { stackSummary } from '../tools/lib/stack-evidence.mjs';
 import { parseSchedule } from '../tools/lib/schedule.mjs';
@@ -1954,6 +1955,12 @@ export async function start({ port = PORT, host = HOST, silent = false, legacyLi
   const log = (m) => { if (!silent) process.stdout.write(m + '\n'); };
   const warn = (m) => { if (!silent) process.stderr.write(m + '\n'); };
   const { db, ctx } = await bootStore({ host, log, warn });
+  // The MCP transport hook (OBSERVOGRAM_TRANSPORT_HOOK, tools/mcp-transport.mjs)
+  // loads once per process: a hook that cannot load refuses the start, and
+  // every MCP call the routes make (refresh, draft, deploy) goes through it.
+  // Logged here once, by this entrypoint — the loader is silent.
+  const transport = await mcpTransport();
+  if (transport.hookPath) log(`[studio] MCP transport hook: ${describeTransport(transport)}`);
   if (localUsersEnabled()) touchSessionSecret();
   // Journeys/runs live in the engine (tools/lib/journey.mjs) — wire its
   // root through the same context-aware resolver the registry uses.
