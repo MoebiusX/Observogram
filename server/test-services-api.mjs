@@ -133,6 +133,28 @@ async function call(who, method, path, body, extra = {}) {
   return { status: r.status, json, text };
 }
 
+// `fn` with everything the in-process server writes to this process's
+// stdout or stderr meanwhile (console.* writes through the two streams),
+// passed through: { result, output }. The one gate on §7.6's "never
+// logged": a token's value is in no response AND in no line of output.
+async function logged(fn) {
+  const streams = [process.stdout, process.stderr];
+  const writes = streams.map((s) => s.write);
+  let output = '';
+  for (const s of streams) {
+    const write = s.write;
+    s.write = function (chunk, ...rest) {
+      output += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString();
+      return write.call(this, chunk, ...rest);
+    };
+  }
+  try {
+    return { result: await fn(), output };
+  } finally {
+    streams.forEach((s, i) => { s.write = writes[i]; });
+  }
+}
+
 const seqNow = () => prepare(db, 'SELECT coalesce(max(seq), 0) AS s FROM audit').get().s;
 // The rows after `seq`: [action, actor, org, target, detail].
 const rowsAfter = (seq) => prepare(db, 'SELECT org_id, actor, action, target_id, detail FROM audit WHERE seq > ? ORDER BY seq').all(seq)
@@ -598,7 +620,7 @@ test('an environment bound to an endpoint: PATCH /api/environments/:id { mcpEndp
 // is a closed loopback port, so a request that passes the resolver ends in
 // a 502 that proves it passed). The success path with a live fake and the
 // written pack is test-smoke's.
-test('POST /api/refresh-live { mcpEndpointId }: both fields, neither, the id shape, an unknown or another org\'s id, the unset variable (naming it), the owner re-checked once acme-eu exists — each a 400 before any fetch; the PATCH way out works; a token value never comes back', async () => {
+test('POST /api/refresh-live { mcpEndpointId }: both fields, neither, the id shape, an unknown or another org\'s id, the unset variable (naming it), the owner re-checked once acme-eu exists — each a 400 before any fetch; the PATCH way out works; a token value never comes back and is never logged', async () => {
   const K = 'POST /api/refresh-live';
   const P = '/api/refresh-live';
   const LOOP = 'http://127.0.0.1:1/mcp';   // a closed port: a fetch there fails at once
@@ -622,14 +644,28 @@ test('POST /api/refresh-live { mcpEndpointId }: both fields, neither, the id sha
   // in no response. A sent mcpAuth needs no variable.
   const loop = await ok('POST /api/mcp-endpoints', 'ada', '/api/mcp-endpoints', { name: 'loop-mcp', url: LOOP, readTokenEnv: ACME_TOKEN }, 201);
   const loopId = loop.json.endpoint.id;
-  const sent = await call('oscar', 'POST', P, { mcpEndpointId: loopId, mcpAuth: 'sent-token-value' });
+  // Each token-bearing request runs under logged(): the server's line
+  // names the safe URL (so the capture is known to see its stderr) and
+  // no line carries the token (§7.6: never logged).
+  const SAFE_LINE = `[refresh-live] POST /api/refresh-live -> ${LOOP}\n`;
+  const { result: sent, output: sentOut } = await logged(() => call('oscar', 'POST', P, { mcpEndpointId: loopId, mcpAuth: 'sent-token-value' }));
   assert.equal(sent.status, 502, `a sent token passes the resolver: ${sent.text.slice(0, 200)}`);
   assert.ok(!sent.text.includes('sent-token-value'), 'the token is in no response');
+  assert.ok(sentOut.includes(SAFE_LINE), `the server logged the safe URL: ${JSON.stringify(sentOut)}`);
+  assert.ok(!sentOut.includes('sent-token-value'), `a sent token is never logged: ${JSON.stringify(sentOut)}`);
   process.env[ACME_TOKEN] = 'env-token-value';
   try {
-    const fetched = await call('oscar', 'POST', P, { mcpEndpointId: loopId });
+    const { result: fetched, output: fetchedOut } = await logged(() => call('oscar', 'POST', P, { mcpEndpointId: loopId }));
     assert.equal(fetched.status, 502, `the variable set: past the resolver, to the fetch: ${fetched.text.slice(0, 200)}`);
     assert.ok(!fetched.text.includes('env-token-value'), 'the variable\'s value is in no response');
+    assert.ok(fetchedOut.includes(SAFE_LINE), `the server logged the safe URL: ${JSON.stringify(fetchedOut)}`);
+    assert.ok(!fetchedOut.includes('env-token-value'), `the variable's value is never logged: ${JSON.stringify(fetchedOut)}`);
+    // draft-from-mcp reads the same variable the same way.
+    const { result: draft, output: draftOut } = await logged(() => call('oscar', 'POST', '/api/draft-from-mcp', { mcpEndpointId: loopId }));
+    assert.equal(draft.status, 502, `draft-from-mcp, the variable set: past the resolver, to the fetch: ${draft.text.slice(0, 200)}`);
+    assert.ok(!draft.text.includes('env-token-value'), 'the variable\'s value is in no draft response');
+    assert.ok(draftOut.includes(`[draft-from-mcp] POST -> ${LOOP}\n`), `the server logged the safe URL: ${JSON.stringify(draftOut)}`);
+    assert.ok(!draftOut.includes('env-token-value'), `the variable's value is never logged by draft-from-mcp: ${JSON.stringify(draftOut)}`);
   } finally {
     delete process.env[ACME_TOKEN];
   }
@@ -642,7 +678,9 @@ test('POST /api/refresh-live { mcpEndpointId }: both fields, neither, the id sha
   const euId = eu.json.endpoint.id;
   process.env[EU_VAR] = 'eu-token-value';
   try {
-    assert.equal((await call('oscar', 'POST', P, { mcpEndpointId: euId })).status, 502, 'before acme-eu exists the name is acme\'s: read, fetched');
+    const { result: euRead, output: euOut } = await logged(() => call('oscar', 'POST', P, { mcpEndpointId: euId }));
+    assert.equal(euRead.status, 502, 'before acme-eu exists the name is acme\'s: read, fetched');
+    assert.ok(!`${euRead.text}${euOut}`.includes('eu-token-value'), `the variable's value is in no response and never logged: ${JSON.stringify(euOut)}`);
     const org = await ok('POST /api/admin/orgs', 'olive', '/api/admin/orgs', { id: 'acme-eu', name: 'Acme EU' }, 201);
     assert.equal(org.json.org.id, 'acme-eu');
     const OWNER = `${envNameOwnerText(EU_VAR, ['acme-eu'])} — PATCH /api/mcp-endpoints/${euId} names another variable`;
@@ -652,9 +690,10 @@ test('POST /api/refresh-live { mcpEndpointId }: both fields, neither, the id sha
     await refused('POST /api/draft-from-mcp', 'oscar', '/api/draft-from-mcp', { mcpEndpointId: euId }, 400, OWNER);
     // The write routes take the URL only: no variable, nothing to own — the
     // request reaches the MCP (a 502 at the closed port, no 400).
-    const write = await call('oscar', 'POST', `/api/packs/payment-service/deploy/grafana-dashboard`, { mcpEndpointId: euId, dryRun: true });
+    const { result: write, output: writeOut } = await logged(() => call('oscar', 'POST', `/api/packs/payment-service/deploy/grafana-dashboard`, { mcpEndpointId: euId, mcpAuth: 'write-token-value', dryRun: true }));
     assert.notEqual(write.status, 400, `deploy with mcpEndpointId takes the record's URL: ${write.text.slice(0, 200)}`);
     assert.ok(!write.text.includes('eu-token-value'));
+    assert.ok(!`${write.text}${writeOut}`.includes('write-token-value'), `the sent write token is in no response and never logged: ${JSON.stringify(writeOut)}`);
     // The way out: a name under acme's prefix that is not acme-eu's
     // (OBSERVOGRAM_ORG_ACME_EU_<X> would be — the longest prefix owns it).
     const patched = await ok('PATCH /api/mcp-endpoints/:id', 'ada', `/api/mcp-endpoints/${euId}`, { readTokenEnv: 'OBSERVOGRAM_ORG_ACME_EU2_MCP' });
