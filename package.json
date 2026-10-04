@@ -126,6 +126,8 @@
     "test:taxonomy": "node --test server/test-taxonomy.mjs",
     "test:declared-type": "node --test tools/test-declared-type.mjs",
     "upconvert-legacy": "node tools/upconvert-legacy.mjs",
+    "pack-conformance": "node tools/pack-conformance.mjs",
+    "lint:conformance": "node --check tools/pack-conformance.mjs && node --check tools/lib/pack-conformance.mjs && node --check tools/upconvert-legacy.mjs",
     "orgs": "node tools/org-admin.mjs",
     "gen:dashboards": "node tools/gen-dashboards.mjs",
     "gen:burn-rules": "node tools/gen-burn-rules.mjs",

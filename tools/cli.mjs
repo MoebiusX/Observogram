@@ -109,6 +109,7 @@ function printHelp() {
 
 Usage:
   packc validate <file...>        Validate pack(s) against spec v${SPEC_VERSION}
+  packc conformance <file...> [--json] [--strict]  Report the placeholders a pack still carries: path, field, what it needs, where it comes from
   packc adapt    <file> [env]     Adapt a pack into the layered projection
   packc x-ray    <repo-dir>       Crawl a repo into a draft pack
   packc compile  <file> [target]  Compile a pack into a backend artefact
@@ -264,6 +265,9 @@ async function runJourneyCommand([sub, ...args]) {
 switch (command) {
   case 'validate':
     delegate('tools/validate-pack.mjs', rest);
+    break;
+  case 'conformance':
+    delegate('tools/pack-conformance.mjs', rest);
     break;
   case 'adapt':
     delegate('tools/adapt-spec-pack.mjs', rest);
