@@ -68,6 +68,15 @@ import { renderBuildDefinition } from './build-definition-view.mjs';
 import { renderBuildSheet } from './build-sheet-view.mjs';
 import { revealTodo } from './build-atoms.mjs';
 import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from './build-label.mjs';
+import { loadBrand } from './brand.mjs';
+
+// The brand (studio/brand.mjs): kicked off here, at module top level, so the
+// one fetch (/lib/brand.mjs, modulepreloaded by the shell) overlaps the
+// module graph instead of following it; boot() awaits it first. Marked
+// handled so a rejection waits for that await (under node — the graph
+// test — the specifier cannot resolve).
+const brandReady = loadBrand();
+brandReady.catch(() => {});
 
 // `state`, the `$`/`$$` DOM helpers and the persistence layer now live in
 // studio/state.mjs (imported above).
@@ -1282,7 +1291,11 @@ function trackContextBarHeight() {
   syncContextBarHeight();
 }
 
-function installObservaChrome() {
+// The chrome strings come from the brand (studio/brand.mjs, state.brand.chrome)
+// — never a literal here, so a rebadged server rebadges the header, and the
+// default reads exactly what it always did. logo.svg is the one raw-HTML
+// brand field; this innerHTML is the only place it lands.
+function installObservaChrome(chrome) {
   if (document.querySelector('.observa-hdr')) return;
   document.body.classList.add('chrome-observa');
 
@@ -1290,26 +1303,15 @@ function installObservaChrome() {
   hdr.className = 'observa-hdr';
   hdr.innerHTML = `
     <div class="observa-hdr-inner">
-      <a class="observa-brand" href="/" aria-label="Observogram home">
+      <a class="observa-brand" href="/" aria-label="${escapeHtml(chrome.homeAriaLabel)}">
         <span class="observa-logo" aria-hidden="true">
-          <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-              <linearGradient id="observaLogoG" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%"  stop-color="#3b82f6"/>
-                <stop offset="50%" stop-color="#a855f7"/>
-                <stop offset="100%" stop-color="#10b981"/>
-              </linearGradient>
-            </defs>
-            <path d="M18 3 L31 11 L31 25 L18 33 L5 25 L5 11 Z" stroke="url(#observaLogoG)" stroke-width="2" fill="none"/>
-            <path d="M18 11 L25 15 L25 22 L18 26 L11 22 L11 15 Z" stroke="url(#observaLogoG)" stroke-width="1.4" fill="rgba(168,85,247,0.12)"/>
-            <circle cx="18" cy="18" r="2.4" fill="url(#observaLogoG)"/>
-          </svg>
+          ${chrome.logoHtml('observa-logo-img')}
         </span>
         <span class="observa-brand-text">
-          <span class="observa-wordmark">OBSERVO<strong>GRAM</strong></span>
+          <span class="observa-wordmark">${chrome.wordmarkHtml('strong', '', { upper: true })}</span>
           <span class="observa-tagline">
             <!-- Home names no journey: the stepper appears once one is chosen. -->
-            <span class="observa-tagline-home">the observability compiler</span>
+            <span class="observa-tagline-home">${escapeHtml(chrome.tagline)}</span>
             <span class="observa-tagline-step">Discover</span>
             <span class="observa-tagline-dot">·</span>
             <span class="observa-tagline-step">Diagnose</span>
@@ -1320,7 +1322,7 @@ function installObservaChrome() {
       </a>
 
       <!-- The active org (Stage 2 tenancy) — same rule as the SERVICE
-           chip: which workspace Observogram is reading must never be a
+           chip: which workspace the studio is reading must never be a
            mystery. Becomes a switcher when the user has several orgs. -->
       <span class="observa-service observa-org" id="observa-org" hidden>
         <span class="observa-service-key">ORG</span>
@@ -1328,7 +1330,7 @@ function installObservaChrome() {
       </span>
 
       <!-- The active service — always visible once chosen (the gate or
-           the header SERVICE selector set it). "Observogram is configured
+           the header SERVICE selector set it). "The studio is configured
            for MY service" must never be a mystery. -->
       <span class="observa-service" id="observa-service" hidden>
         <span class="observa-service-key">SERVICE</span>
@@ -1372,7 +1374,7 @@ function installObservaChrome() {
               <span class="observa-adv-item-sub">drop uploaded packs and saved state · asks first</span>
             </button>
             <button type="button" class="observa-adv-item observa-adv-about" role="menuitem" data-action="about">
-              <span class="observa-adv-item-label">About Observogram</span>
+              <span class="observa-adv-item-label">${escapeHtml(chrome.aboutLabel)}</span>
               <span class="observa-adv-item-sub" id="observa-about-sub">version &amp; build</span>
             </button>
           </div>
@@ -1506,9 +1508,11 @@ function paintObservaActiveTab() {
 }
 
 async function boot() {
-  // Mount the new chrome FIRST so the user sees the demo shape even
-  // while the catalog loads.
-  installObservaChrome();
+  // The brand first (kicked off at module top level, see brandReady), then
+  // the chrome — mounted before anything else so the user sees the demo
+  // shape even while the catalog loads.
+  state.brand = await brandReady;
+  installObservaChrome(state.brand.chrome);
   // The shared service rules (tools/lib/service-keys.mjs), bound before the
   // first catalogue read — loaded at call time like every tools/lib module.
   ({ normalizeServiceKey, serviceNamesForPack, serviceKeyForPack, isLiveAggregatePack, servicesForPack }
@@ -1540,7 +1544,7 @@ async function boot() {
   syncApiLink();
   try { await loadCatalog(); }
   catch (e) {
-    document.body.innerHTML = `<pre class="json" style="margin:48px;max-width:800px">Failed to reach Observogram's API.\n\n${escapeHtml(e.message)}\n\nMake sure the server is running: \`node server/index.mjs\` or \`npm run serve\`.</pre>`;
+    document.body.innerHTML = `<pre class="json" style="margin:48px;max-width:800px">${escapeHtml(state.brand.chrome.apiUnreachable)}\n\n${escapeHtml(e.message)}\n\nMake sure the server is running: \`node server/index.mjs\` or \`npm run serve\`.</pre>`;
     return;
   }
 
@@ -1963,7 +1967,7 @@ function setupResetButton() {
   const btn = $('#reset-btn');
   if (!btn) return;
   btn.onclick = async () => {
-    const ok = confirm('Reset Observogram?\n\n' +
+    const ok = confirm(`${state.brand.chrome.resetTitle}\n\n` +
       'This will:\n' +
       '  • drop every uploaded / scanned / drafted pack from the server\n' +
       '  • clear saved view + filter + focus + trace preferences from localStorage\n' +
@@ -2848,7 +2852,7 @@ function renderHomeView() {
       ${homeGreetingHtml()}
       <h1 class="home-hero-title" id="home-title">What would you like to do?</h1>
       <p class="home-hero-lede">
-        Observogram compares what a service's repository <em>declares</em> with
+        ${escapeHtml(state.brand.chrome.name)} compares what a service's repository <em>declares</em> with
         what the live platform <em>verifies</em>, and helps you close the gap.
       </p>
 
@@ -5008,7 +5012,7 @@ function renderDraftMcpResult(out) {
     ${alertsFiringCount > 0 || recordingFallbackCount > 0 ? `
       <div class="crawl-evidence-note">
         Rows in italic = fallback evidence. The standard rule endpoints came back empty,
-        but Observogram found evidence in metric data: firing alerts via the
+        but ${escapeHtml(state.brand.chrome.name)} found evidence in metric data: firing alerts via the
         <code>ALERTS</code> series, recording rules via metric names following the
         <code>&lt;ns&gt;:&lt;metric&gt;:&lt;op&gt;</code> convention.
       </div>
@@ -5116,21 +5120,22 @@ async function loadVersion() {
   const [info, health] = await Promise.all([loadBuildInfo(), loadHealth()]);
   serverVersion = health;
   serverBuild = buildLabelModel(info);
-  renderVersionChrome(document, serverBuild);
+  renderVersionChrome(document, serverBuild, state.brand.chrome);
 }
 
 function openAboutModal() {
   document.getElementById('about-modal')?.remove();
   const v = serverVersion || {};
   const b = serverBuild;
+  const chrome = state.brand.chrome;
   const row = (k, val) => val ? `<div class="about-row"><span class="about-key">${k}</span><span class="about-val">${escapeHtml(String(val))}</span></div>` : '';
   const overlay = document.createElement('div');
   overlay.id = 'about-modal';
   overlay.className = 'about-overlay';
   overlay.innerHTML = `
-    <div class="about-card" role="dialog" aria-modal="true" aria-label="About Observogram">
-      <div class="about-brand">Observo<i>gram</i></div>
-      <div class="about-tagline">the observability compiler</div>
+    <div class="about-card" role="dialog" aria-modal="true" aria-label="${escapeHtml(chrome.aboutLabel)}">
+      <div class="about-brand">${chrome.wordmarkHtml('i')}</div>
+      <div class="about-tagline">${escapeHtml(chrome.tagline)}</div>
       <div class="about-version">${escapeHtml(b ? `v${b.version ?? '?'}` : v.version ? `v${v.version}` : 'version unknown')}<span class="about-build">${escapeHtml(b ? ` · build ${b.build ?? 'unknown'}` : v.build ? ` · build ${v.build}` : '')}</span></div>
       <div class="about-rows">
         ${row('commit', b?.commit ? [b.commit, b.branch, b.dirty ? 'dirty' : null].filter(Boolean).join(' · ') : null)}
@@ -5142,7 +5147,7 @@ function openAboutModal() {
         ${row('identity', state.identity?.mode || 'local (no sign-in)')}
         ${state.identity?.orgs?.length ? row('org', state.identity.orgs.map(o => o.name || o.id).join(' · ')) : ''}
       </div>
-      <a class="about-link" href="https://github.com/MoebiusX/Observogram/blob/develop/docs/CHANGELOG.md" target="_blank" rel="noopener">changelog</a>
+      ${chrome.aboutChangelogHref ? `<a class="about-link" href="${escapeHtml(chrome.aboutChangelogHref)}" target="_blank" rel="noopener">changelog</a>` : ''}
       <button type="button" class="about-close" aria-label="Close">esc</button>
     </div>
   `;

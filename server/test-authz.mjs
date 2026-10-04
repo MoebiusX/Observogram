@@ -587,7 +587,7 @@ test('the account menu mounts in the one bar every screen shows — not the cont
   assert.match(fn, /\n {2}actions\.appendChild\(chip\);\n\}$/, 'the chip is its last child');
   assert.doesNotMatch(fn, /insertBefore\(chip,/, 'not beside the theme toggle in the context bar');
   const boot = functionSource(src, 'boot');
-  const chromeAt = boot.indexOf('installObservaChrome();');
+  const chromeAt = boot.indexOf('installObservaChrome(state.brand.chrome);');
   assert.ok(chromeAt >= 0 && chromeAt < boot.indexOf('setupIdentityChip();'), 'boot mounts the chrome before the chip');
   // Beside the tabs the chip's name gives way — ten characters at a laptop
   // width, the glyph at phone width — so the tabs keep their room and the

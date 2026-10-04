@@ -69,7 +69,10 @@ export function renderBuildLabel(container, model) {
 // in the Advanced menu, the header subtitle (the short form, appended once)
 // and the brand tooltip. `container` is what to search (document at
 // runtime, a stub headlessly); a target that is not there is skipped.
-export function renderVersionChrome(container, model) {
+// `chrome` is the brand's (studio/brand.mjs, state.brand.chrome): the
+// tooltip is its versionTitle; without one no tooltip is painted — the
+// product's name is never a literal here.
+export function renderVersionChrome(container, model, chrome = null) {
   if (!container || !model) return;
   renderBuildLabel(container.querySelector('#build-label'), model);
   const sub = container.querySelector('#observa-about-sub');
@@ -77,5 +80,5 @@ export function renderVersionChrome(container, model) {
   const hdrSub = container.querySelector('.hdr-sub');
   if (hdrSub && !hdrSub.textContent.includes('build')) hdrSub.textContent += ` · ${model.shortLabel}`;
   const brand = container.querySelector('.observa-brand');
-  if (brand) brand.title = `Observogram ${model.label}`;
+  if (brand && chrome) brand.title = chrome.versionTitle(model.label);
 }

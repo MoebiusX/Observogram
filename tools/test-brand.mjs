@@ -19,6 +19,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import * as fsSync from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
@@ -283,4 +284,139 @@ test('loadBrand: a missing, unreadable or invalid file throws naming the path an
 test('golden proof: nothing under compile, crawl or gen-site imports the brand', () => {
   const files = ['tools/lib/compile.mjs', 'tools/lib/crawler.mjs', 'tools/lib/adapter.mjs', 'tools/lib/site/run.mjs', 'tools/lib/site/derive.mjs', 'tools/lib/site/expected.mjs', 'tools/lib/site/inventory.mjs', 'tools/gen-site.mjs'];
   for (const f of files) assert.doesNotMatch(read(f), /from ['"][^'"]*brand(?:-env)?\.mjs['"]/, `${f} imports the brand`);
+});
+
+// ---------- the studio loader (studio/brand.mjs) ----------
+
+test('studio/brand.mjs: loadBrand with the injected import reads #brand-config or falls back to the default; the module has no static import', async () => {
+  const src = read('studio/brand.mjs');
+  assert.ok(!/^import\s/m.test(src), 'studio/brand.mjs has no static import (the house way: /lib at call time)');
+  assert.ok(src.includes("import('/lib/brand.mjs')"), 'the default import is the server\'s /lib mount (the bundle\'s import map resolves the same specifier)');
+  const { loadBrand: loadStudioBrand, readBrandConfig } = await import('../studio/brand.mjs');
+  const importFn = () => import('./lib/brand.mjs');
+  const docWith = (json) => ({ getElementById: (id) => (id === 'brand-config' && json !== undefined ? { textContent: json } : null) });
+  const none = await loadStudioBrand({ importFn, doc: docWith(undefined) });
+  assert.deepEqual({ ...none, chrome: undefined }, { ...DEFAULT_BRAND, chrome: undefined });
+  assert.equal(none.chrome.scannerTitle, 'OBSERVOGRAM SCAN');
+  const branded = await loadStudioBrand({ importFn, doc: docWith(JSON.stringify(ACME)) });
+  assert.equal(branded.name, 'Acme Watch');
+  assert.equal(branded.chrome.compassMark, 'ACME');
+  assert.deepEqual({ ...branded, chrome: undefined }, { ...ACME, chrome: undefined });
+  assert.equal(readBrandConfig(docWith('not json')), null, 'a malformed config counts as none');
+  assert.equal(readBrandConfig(docWith('[1]')), null);
+  assert.deepEqual((await loadStudioBrand({ importFn, doc: docWith('{broken') })).name, 'Observogram');
+  assert.deepEqual((await loadStudioBrand({ importFn, doc: null })).name, 'Observogram', 'no document (headless) ⇒ the default');
+  // The escaped config round-trips from the real shell.
+  const html = brandShellHtml(SHELL, normalizeBrand({ name: '</script><b>' }));
+  const json = /id="brand-config">([^]*?)<\/script>/.exec(html)[1];
+  assert.equal(readBrandConfig(docWith(json)).name, '</script><b>');
+});
+
+// ---------- SOURCE GUARD: no second source of truth ----------
+//
+// The product's name appears, as chrome, in exactly one source file:
+// tools/lib/brand.mjs. Every other studio and auth-page source must be free
+// of it outside comments. The pattern is the two chrome spellings —
+// `Observogram` / `Observo<` (the split wordmark) and `OBSERVOGRAM` /
+// `OBSERVO<` — and deliberately NOT:
+//   - lowercase `observogram…` identifiers and paths: observogram_* cookies,
+//     observogram.* annotation keys, `.observogram/`, /assets/observogram-hero.png,
+//     window._observogramQuickLabel, req.observogramSelf;
+//   - `Observogram-` in the protocol headers X-Observogram-CSRF / -Org;
+//   - `OBSERVOGRAM_` env-variable names and `ERR_OBSERVOGRAM_*` codes.
+// Comments are stripped by a tokenizer that walks strings, template literals
+// (with nested ${}), regex literals and both comment forms — a bare `//`
+// regex would truncate 'https://…' literals.
+// studio/static-backend.mjs is exempt: its notices name the server a static
+// bundle lacks, and the bundle is built from an unbranded shell (a
+// `--brand` for tools/build-studio-bundle.mjs is the follow-up).
+
+const CHROME_LITERAL = /Observo(?:gram(?![-_])|<)|OBSERVO(?:GRAM(?![_A-Z])|<)/;
+
+export function stripJsComments(src) {
+  let out = '';
+  let i = 0;
+  const n = src.length;
+  // The template-literal stack: each entry is the brace depth of the ${} we are in (0 = in the template text itself).
+  const tpl = [];
+  let braces = 0;
+  const regexAllowed = (back) => {
+    const m = /([^\s]|^)\s*$/.exec(back);
+    const c = m ? m[1] : '';
+    return c === '' || '(,=:[!&|?{};+-*%<>~^'.includes(c) || /\b(return|typeof|case|do|else|in|of|instanceof|new|delete|void|throw)$/.test(back);
+  };
+  while (i < n) {
+    const ch = src[i];
+    const next = src[i + 1];
+    if (tpl.length && tpl[tpl.length - 1] === 0) {
+      // Inside template text.
+      if (ch === '\\') { out += ch + (next ?? ''); i += 2; continue; }
+      if (ch === '`') { tpl.pop(); out += ch; i++; continue; }
+      if (ch === '$' && next === '{') { tpl[tpl.length - 1] = 1; out += '${'; i += 2; continue; }
+      out += ch; i++; continue;
+    }
+    // Code (top level or inside a ${}).
+    if (ch === '/' && next === '/') { while (i < n && src[i] !== '\n') i++; continue; }
+    if (ch === '/' && next === '*') { const end = src.indexOf('*/', i + 2); i = end < 0 ? n : end + 2; out += ' '; continue; }
+    if (ch === "'" || ch === '"') {
+      let j = i + 1;
+      while (j < n && src[j] !== ch && src[j] !== '\n') { if (src[j] === '\\') j++; j++; }
+      out += src.slice(i, j + 1); i = j + 1; continue;
+    }
+    if (ch === '`') { tpl.push(0); out += ch; i++; continue; }
+    if (ch === '/' && regexAllowed(out)) {
+      let j = i + 1; let inClass = false;
+      while (j < n && src[j] !== '\n') {
+        if (src[j] === '\\') { j += 2; continue; }
+        if (src[j] === '[') inClass = true;
+        else if (src[j] === ']') inClass = false;
+        else if (src[j] === '/' && !inClass) break;
+        j++;
+      }
+      out += src.slice(i, j + 1); i = j + 1; continue;
+    }
+    if (tpl.length) {
+      if (ch === '{') braces++;
+      else if (ch === '}') {
+        if (braces === 0) { tpl[tpl.length - 1] = 0; out += ch; i++; continue; }
+        braces--;
+      }
+    }
+    out += ch; i++;
+  }
+  return out;
+}
+
+test('source guard: the tokenizer strips comments and keeps strings, templates (nested), and regex literals', () => {
+  assert.equal(stripJsComments("const u = 'https://x/Observogram'; // Observogram here\n/* and Observogram */ x"), "const u = 'https://x/Observogram'; \n  x");
+  assert.equal(stripJsComments('a = `t ${ b ? `in ${c} // not a comment` : "q" } // nor this` // comment'), 'a = `t ${ b ? `in ${c} // not a comment` : "q" } // nor this` ');
+  assert.equal(stripJsComments('r = /\\/\\/ Observogram/; s = x / y; // c'), 'r = /\\/\\/ Observogram/; s = x / y; ');
+  assert.equal(stripJsComments("'it\\'s' // Observogram"), "'it\\'s' ");
+  assert.match(stripJsComments("if (a) {\n  // Observogram\n  return `${x}`;\n}"), /^if \(a\) \{\n {2}\n {2}return `\$\{x\}`;\n\}$/);
+});
+
+test('source guard: no studio or auth-page source names the product as chrome outside tools/lib/brand.mjs', () => {
+  const { readdirSync } = fsSync;
+  const EXEMPT = new Set(['static-backend.mjs']);
+  const files = [
+    ...readdirSync(join(ROOT, 'studio')).filter((f) => f.endsWith('.mjs') && !EXEMPT.has(f)).map((f) => `studio/${f}`),
+    'server/auth.mjs', 'server/auth-proxy.mjs',
+  ];
+  assert.ok(files.length > 40, `the studio was walked (${files.length} files)`);
+  const offenders = [];
+  for (const f of files) {
+    const code = stripJsComments(read(f));
+    code.split('\n').forEach((line, i) => { if (CHROME_LITERAL.test(line)) offenders.push(`${f}:${i + 1}: ${line.trim().slice(0, 100)}`); });
+  }
+  assert.deepEqual(offenders, [], 'a chrome literal outside tools/lib/brand.mjs');
+  // The protocol literals the regex deliberately passes still exist (the guard is not vacuous).
+  assert.match(read('studio/api.mjs'), /X-Observogram-CSRF/);
+  assert.match(read('server/auth.mjs'), /OBSERVOGRAM_OIDC_ISSUER/);
+  assert.match(read('server/auth.mjs'), /ERR_OBSERVOGRAM_UNUSABLE_SUB/);
+  assert.ok(CHROME_LITERAL.test('Observogram home') && CHROME_LITERAL.test('Observo<i>gram') && CHROME_LITERAL.test('OBSERVOGRAM SCAN') && CHROME_LITERAL.test('OBSERVO</text>'));
+  assert.ok(!CHROME_LITERAL.test('X-Observogram-CSRF') && !CHROME_LITERAL.test('OBSERVOGRAM_OIDC') && !CHROME_LITERAL.test('ERR_OBSERVOGRAM_X') && !CHROME_LITERAL.test('observogram_session'));
+  // The shell's own literals are exactly the anchors brandShellHtml replaces: branded, nothing is left.
+  assert.doesNotMatch(brandShellHtml(SHELL, NAME_ONLY), LEAK, 'studio/index.html names the product only where an anchor replaces it');
+  // The default header SVG lives in brand.mjs alone.
+  assert.ok(!read('studio/app.mjs').includes('observaLogoG'));
 });

@@ -75,6 +75,9 @@ export const state = {
   homeVariant: 'hero',
   // /auth/me result (identity postures only; null in local mode).
   identity: null,
+  // The brand (studio/brand.mjs loadBrand): the normalized brand with its
+  // `chrome` strings; set first in boot, before any chrome is painted.
+  brand: null,
   catalog: [],
   selectedService: null,
   selectedPackId: null,

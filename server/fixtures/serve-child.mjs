@@ -28,7 +28,7 @@ export const STRIP = [
   // The brand (tools/lib/brand-env.mjs BRAND_ENV): the shell, the chrome and the auth pages read it.
   'BRAND_FILE', 'BRAND_NAME', 'BRAND_SHORT_NAME', 'BRAND_TAGLINE', 'BRAND_LOGO_URL', 'BRAND_DOCS_URL', 'BRAND_FOOTER', 'BRAND_ACCENT', 'BRAND_ACCENT_DARK',
   // The studio-bundle suite's own knobs (tools/test-studio-bundle.mjs): read by no boot, stripped so a child never sees a test knob.
-  'PLAYWRIGHT', 'BUNDLE_SMOKE',
+  'PLAYWRIGHT', 'BUNDLE_SMOKE', 'BRAND_SMOKE',
 ];
 
 export function childEnv(ws, extra = {}) {

@@ -212,3 +212,62 @@ test('REFUSED: a brand file that is not there refuses the start, naming the path
   }
 });
 
+
+// ---------- BROWSER: the studio chrome in headless Chromium ----------
+
+async function loadPlaywright() {
+  const spec = process.env.OBSERVOGRAM_PLAYWRIGHT || 'playwright';
+  try { return { pw: await import(spec) }; }
+  catch (e) { return { error: `cannot import ${spec}: ${e.message.split('\n')[0]}` }; }
+}
+
+test('BROWSER: the studio header, About card, footer and title read the brand (default and acme), at laptop and phone widths', async (t) => {
+  const required = process.env.OBSERVOGRAM_BRAND_SMOKE === 'require';
+  const skip = (why) => { if (required) assert.fail(`OBSERVOGRAM_BRAND_SMOKE=require: ${why}`); t.skip(why); };
+  const { pw, error } = await loadPlaywright();
+  if (!pw) return skip(error);
+  let browser;
+  try { browser = await pw.chromium.launch(); }
+  catch (e) { return skip(`chromium.launch failed: ${e.message.split('\n')[0]}`); }
+  t.after(() => browser.close());
+  const sizes = [{ width: 1366, height: 800 }, { width: 390, height: 844 }];
+  const cases = [
+    { label: 'default', env: {}, title: 'Observogram — the Observability Compiler', wordmark: 'OBSERVOGRAM', tagline: 'the observability compiler', aria: 'Observogram home', aboutAria: 'About Observogram', footer: /^Observogram · the Observability Compiler · v/, leak: true, changelog: 'https://github.com/MoebiusX/Observogram/blob/develop/docs/CHANGELOG.md' },
+    { label: 'acme', env: { OBSERVOGRAM_BRAND_FILE: ACME_FILE }, title: 'Acme Watch — the Reliability Console', wordmark: 'ACMEWATCH', tagline: 'reliability, watched', aria: 'Acme Watch home', aboutAria: 'About Acme Watch', footer: /^Acme Watch · a product of Acme Corp · v/, leak: false, changelog: 'https://docs.example.com/acme-watch/releases' },
+  ];
+  for (const c of cases) {
+    const ws = workspace();
+    const s = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off', ...c.env } });
+    try {
+      for (const viewport of sizes) {
+        const where = `${c.label} @${viewport.width}`;
+        const page = await browser.newPage({ viewport });
+        const pageErrors = [];
+        page.on('pageerror', (e) => pageErrors.push(e.message));
+        // Nothing leaves the loopback (the shell's font links are aborted, not fetched).
+        await page.route('**/*', (route) => (route.request().url().startsWith(s.base) ? route.continue() : route.abort()));
+        await page.goto(`${s.base}/`, { waitUntil: 'networkidle' });
+        await page.waitForSelector('.observa-wordmark', { state: 'attached' });
+        assert.equal(await page.title(), c.title, where);
+        assert.equal(await page.textContent('.observa-wordmark'), c.wordmark, where);
+        assert.equal(await page.textContent('.observa-tagline-home'), c.tagline, where);
+        assert.equal(await page.getAttribute('.observa-brand', 'aria-label'), c.aria, where);
+        assert.match(await page.getAttribute('.observa-brand', 'title'), new RegExp(`^${c.aria.replace(' home', '')} v`), `${where}: the version tooltip names the brand`);
+        assert.match((await page.textContent('footer.ftr')).replace(/\s+/g, ' ').trim(), c.footer, where);
+        assert.equal(/observogram/i.test(await page.evaluate('document.body.innerText')), c.leak, `${where}: rendered text`);
+        await page.click('.observa-adv-toggle');
+        await page.click('button.observa-adv-item:has(#observa-about-sub)');
+        await page.waitForSelector('.about-card', { state: 'attached' });
+        assert.equal(await page.getAttribute('.about-card', 'aria-label'), c.aboutAria, where);
+        assert.equal(await page.textContent('.about-tagline'), c.tagline, where);
+        assert.equal(await page.getAttribute('.about-link', 'href'), c.changelog, where);
+        assert.equal(/observogram/i.test(await page.textContent('.about-card')), c.leak, `${where}: About`);
+        assert.deepEqual(pageErrors, [], where);
+        await page.close();
+      }
+    } finally {
+      await s.stop();
+      rmSync(ws, { recursive: true, force: true });
+    }
+  }
+});

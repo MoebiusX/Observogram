@@ -185,6 +185,10 @@ export function styleBlock(name, css) {
 }
 
 const STYLESHEET_RE = /^([ \t]*)<link rel="stylesheet" href="\/([\w.-]+\.css)">[ \t]*$/gm;
+// The shell's modulepreload of /lib/brand.mjs (and any other /lib module): in
+// the bundle the module is a data: URL in the import map, so there is
+// nothing to preload — the line goes.
+const MODULEPRELOAD_RE = /^[ \t]*<link rel="modulepreload" href="\/lib\/[\w./-]+">[ \t]*\n/gm;
 const FONT_LINE_RE = /^[ \t]*<link [^>\n]*fonts\.g(?:oogleapis|static)\.com[^>\n]*>[ \t]*\n/gm;
 const APP_SCRIPT = '<script type="module" src="/app.mjs"></script>';
 
@@ -227,6 +231,7 @@ export function buildStudioBundle({ root = DEFAULT_ROOT, packs = [], remoteFonts
     stylesheets.push(name);
     return block;
   };
+  html = html.replace(MODULEPRELOAD_RE, '');
   html = html.replace(STYLESHEET_RE, (whole, indent, name) => `${indent}${inlineCss(name)}`);
   if (!stylesheets.length) throw new Error('studio/index.html: no <link rel="stylesheet" href="/…css"> to inline');
   // The notice's stylesheet, after the adapter (reskin.css) — the live studio never links it.
