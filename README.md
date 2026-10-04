@@ -1879,8 +1879,10 @@ Below, `/healthz`, `/api/version`, `/` and `/index.html` are `public` and
 and every `/api/mcp-endpoints` route but its `GET` is `admin` (an endpoint
 record is where the server will send the org's read token: its changes take
 the identity API's defences — the `X-Observogram-CSRF: 1` header in every
-posture, closed on an exposed server without sign-in); every other `GET` is
-`viewer` and every other route `operator`.
+posture, closed on an exposed server without sign-in); `GET /api/audit` is
+`admin` (the org's rows; an owner reads the deployment's; closed in the
+open, exposed posture); every other `GET` is `viewer` and every other route
+`operator`.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -1947,6 +1949,7 @@ posture, closed on an exposed server without sign-in); every other `GET` is
 | `POST` | `/api/org/members` | Add an existing user by login or verified email (201), or change a member's role |
 | `PATCH` | `/api/org/members/:userId` | Change a member's role |
 | `DELETE` | `/api/org/members/:userId` | Remove a member |
+| `GET` | `/api/audit?scope=&actor=&action=&kind=&targetKind=&targetId=&since=&until=&limit=&before=` | The org's audit rows, newest first (admins; an owner reads every org's and the deployment's with `scope=all` or `scope=deployment`); `next` pages. Closed in the open, exposed posture. |
 | `POST` | `/auth/signout-others` | Sign out my other sessions: this browser's cookie is re-issued, every other one refused |
 
 ## Repository Map

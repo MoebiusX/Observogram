@@ -70,6 +70,7 @@ import { deployRoutes } from './routes/deploy.mjs';
 import { auditAfter, actorForRecord, bounded, finite } from './audit-after.mjs';
 import { identityRoutes } from './routes/identity.mjs';
 import { servicesRoutes } from './routes/services.mjs';
+import { auditRoutes } from './routes/audit.mjs';
 import { resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
 import { authGate, orgContext, authorize, effectiveRoleOf, rankOf, rankOfRole } from './authz.mjs';
 import { versionInfo } from './version.mjs';
@@ -699,6 +700,12 @@ app.use(identityRoutes({ authorize }));
 // /api/services (viewer reads, operator writes) and their environments
 // under /api/environments, every rule server/service-admin.mjs's.
 app.use(servicesRoutes({ authorize }));
+
+// The audit reader (STORE_PLAN slice 5) lives in server/routes/audit.mjs:
+// GET /api/audit — the request's org's rows to its admins, the
+// deployment's to owners, filtered and paged; the scope and every query
+// rule server/audit-admin.mjs's.
+app.use(auditRoutes({ authorize }));
 
 // ---------- saved journeys (VALUE_BACKLOG item 11, studio surface) ----------
 

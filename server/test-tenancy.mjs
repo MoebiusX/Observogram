@@ -281,12 +281,16 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   return { packId, deployId, journey, serviceId, environmentId, mcpEndpointId };
 }
 
-// The cross-org route sweep: `who` (a session in another org) calls every
-// org-scoped route with the other org's ids — a user of the other org only
-// among them; each answers 404, an empty list or "no snapshot", no MCP call
-// is made, nothing under `dir` changes and that user's memberships stay as
-// they were. An /api route in no table fails the test.
-async function sweep({ root, cookie, who, ids, mcp, dir }) {
+// The cross-org route sweep: `who` (a session in another org — `org` is its
+// context org; an `owner` reads the deployment's audit by default) calls
+// every org-scoped route with the other org's (`otherOrg`) ids — a user of
+// the other org only among them; each answers 404, an empty list or "no
+// snapshot", no MCP call is made, nothing under `dir` changes, that user's
+// memberships stay as they were and the audit of the other org gains no row
+// (STORE_PLAN slice 5: the sweep's own RESET writes one pack.clear row in
+// the sweeper's org, none in the other's). An /api route in no table fails
+// the test.
+async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir }) {
   const h = { Cookie: cookie, 'X-Observogram-CSRF': '1' };
   const call = async (method, path, body) => {
     const r = await fetch(`${root}${path}`, {
@@ -360,12 +364,22 @@ async function sweep({ root, cookie, who, ids, mcp, dir }) {
     'POST /api/mcp-endpoints': ['/api/mcp-endpoints', {}, (r) => assert(r.status === 400, `${who}: POST /api/mcp-endpoints {} → 400`, r.status, 400)],
     'PATCH /api/mcp-endpoints/:id': [`/api/mcp-endpoints/${mcpEndpointId}`, { name: 'renamed' }, is404('PATCH /api/mcp-endpoints/:id')],
     'DELETE /api/mcp-endpoints/:id': [`/api/mcp-endpoints/${mcpEndpointId}`, undefined, is404('DELETE /api/mcp-endpoints/:id')],
+    // The audit reader (STORE_PLAN slice 5; `who` is an admin or an owner in
+    // their org): the org-scoped listing is the sweeper's org's — every row
+    // its own, none of the other org's deploy or journey rows, none by alice
+    // (who acted in the other org only); the owner-aware check because an
+    // owner's default scope is `all`, so the row asks scope=org explicitly.
+    'GET /api/audit': ['/api/audit?scope=org&limit=500', undefined, (r) => assert(r.status === 200 && r.json.scope === 'org' && r.json.org === org
+      && r.json.rows.every(x => x.orgId === org) && !r.json.rows.some(x => x.targetId === deployId || x.targetId === journey || x.actor === 'alice'),
+    `${who}: GET /api/audit?scope=org lists ${org}'s rows only — none of ${otherOrg}'s deploy or journey rows, none by alice`, r.json)],
   };
   const memberships = () => JSON.stringify(listMembershipsForUser(currentStore(), userId));
   const membershipsBefore = memberships();
   assert(membershipsBefore !== '[]', `${who}: the other org's user is a member there`, membershipsBefore);
   const before = tree(dir);
   const mcpCalls = mcp.calls.length;
+  const otherRows = () => listAudit(currentStore(), { orgId: otherOrg, limit: 1000 }).length;
+  const otherRowsBefore = otherRows();
   const routes = apiRoutes();
   const unclassified = routes.filter(k => !DEPLOYMENT_GLOBAL.has(k) && !ORG_SCOPED[k] && !OWNER_ONLY.has(k));
   assert(unclassified.length === 0, 'every /api route is classified org-scoped, deployment-global or owner-only', unclassified, []);
@@ -380,6 +394,23 @@ async function sweep({ root, cookie, who, ids, mcp, dir }) {
   assert(mcp.calls.length === mcpCalls, `${who}: the sweep made no MCP call`, mcp.calls.length - mcpCalls, 0);
   assert(JSON.stringify(tree(dir)) === JSON.stringify(before), `${who}: nothing under ${dir} changed`);
   assert(memberships() === membershipsBefore, `${who}: the other org's user's memberships are unchanged`, memberships(), membershipsBefore);
+  assert(otherRows() === otherRowsBefore, `${who}: the sweep wrote no audit row of ${otherOrg}'s`, otherRows(), otherRowsBefore);
+  // The admin / owner split of GET /api/audit (STORE_PLAN slice 5, design
+  // §6): a non-owner's plain listing is its org's (scope org, no deployment
+  // row); an owner's scope=all is the deployment's — alice's rows in the
+  // other org among them.
+  const plain = await call('GET', '/api/audit?limit=500');
+  const all = await call('GET', '/api/audit?scope=all&limit=500');
+  if (owner) {
+    assert(plain.status === 200 && plain.json.scope === 'all' && plain.json.org === null, `${who}, an owner: a plain GET /api/audit is scope all`, [plain.status, plain.json?.scope]);
+    assert(all.status === 200 && all.json.rows.some(x => x.actor === 'alice' && x.orgId === otherOrg) && all.json.rows.some(x => x.targetId === deployId),
+      `${who}, an owner: GET /api/audit?scope=all holds alice's rows of ${otherOrg} and the deploy row`, all.json?.rows?.length);
+  } else {
+    assert(plain.status === 200 && plain.json.scope === 'org' && plain.json.org === org && !plain.json.rows.some(x => x.orgId === null),
+      `${who}, an admin: a plain GET /api/audit is scope org (${org}), no deployment row`, [plain.status, plain.json?.scope, plain.json?.org]);
+    assert(all.status === 400 && all.json.error === `the deployment's audit (scope=deployment, scope=all) is an owner's: as an admin of org '${org}' you read its rows (scope=org, the default) — drop scope, or ask an owner`,
+      `${who}, an admin: GET /api/audit?scope=all is refused, naming ${org}`, [all.status, all.json?.error]);
+  }
 }
 
 const mcp = await startFakeMcp();
@@ -585,7 +616,7 @@ try {
   // ---- the cross-org route sweep: bob (bravo) against acme's objects ----
   const acmeIds = await createObjects({ root: base, cookie: alice, org: 'acme', journey: 'acme-sweep', mcp, dir: join(WORKSPACE, 'orgs', 'acme') });
   const aliceId = listUsers(currentStore()).find(u => u.login === 'alice').id;   // acme's admin, no member of bravo
-  await sweep({ root: base, cookie: bob, who: 'bob (bravo)', ids: { ...acmeIds, userId: aliceId }, mcp, dir: join(WORKSPACE, 'orgs', 'acme') });
+  await sweep({ root: base, cookie: bob, who: 'bob (bravo)', owner: false, org: 'bravo', otherOrg: 'acme', ids: { ...acmeIds, userId: aliceId }, mcp, dir: join(WORKSPACE, 'orgs', 'acme') });
 } finally {
   await new Promise(res => srv.close(res));
 }
@@ -739,7 +770,7 @@ try {
     r = await fetch(`${base4}/api/journeys`, { headers: { Cookie: carlos } });
     j = await r.json();
     assert(!j.journeys.some(x => x.name === ids.journey), "carlos's /api/journeys in default never lists delta's journey");
-    await sweep({ root: base4, cookie: carlos, who: 'carlos (default at .)', ids: { ...ids, userId: dora.id }, mcp, dir: deltaDir });
+    await sweep({ root: base4, cookie: carlos, who: 'carlos (default at .)', owner: true, org: 'default', otherOrg: 'delta', ids: { ...ids, userId: dora.id }, mcp, dir: deltaDir });
 
     // The refresh writes the caller's org's live pack — orgs/delta/live/ —
     // and never the default org's at the base (whose root contains delta's).

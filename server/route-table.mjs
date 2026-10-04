@@ -27,8 +27,9 @@
 //                identityApi; true for the MCP endpoint mutations too, a
 //                durable record the server will send a token to
 //   closedAs     how the posture refusals name the route — 'the identity
-//                API' (default) or 'the MCP endpoint API' (a singular
-//                subject: the texts say `is closed`, `answers only`)
+//                API' (default), 'the MCP endpoint API' or 'the audit API'
+//                (a singular subject: the texts say `is closed`, `answers
+//                only`)
 //   modes        where the route is registered: local, oidc, proxy, off
 //                (the /auth/* routes follow initAuth()'s mode)
 //   self         { pwflow, session, unauth } — class self only
@@ -169,6 +170,14 @@ export const ROUTES = Object.freeze({
   'POST /api/mcp-endpoints': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoint API', audit: ['mcp_endpoint.create'] },
   'PATCH /api/mcp-endpoints/:id': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoint API', audit: ['mcp_endpoint.update'] },
   'DELETE /api/mcp-endpoints/:id': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoint API', audit: ['mcp_endpoint.delete'] },
+  // The org's audit (STORE_PLAN §5, slice 5; server/routes/audit.mjs): the
+  // rows with its org_id, to its admins; an owner reads the deployment's
+  // (scope=all, the default for an owner; scope=deployment for the rows
+  // with no org). It lists every login and every MCP origin, so it is
+  // closed where the member and user lists are: in the open, exposed
+  // posture, and without sign-in answered only to a direct loopback
+  // request — without being the identity API. A read: it writes no row.
+  'GET /api/audit': { class: 'admin', exposed: 'refuse', direct: true, closedAs: 'the audit API' },
 
   // ---------- owner: the deployment's users, orgs and join role ----------
   // The identity API (server/routes/identity.mjs), whatever org the request
