@@ -80,7 +80,9 @@ them; change them at the source and update the gate in the same commit.
   `server/store/mcp-endpoints.mjs`), applied by `server/routes/services.mjs`
   and the refresh, draft and deploy routes; the audit reader's query rule
   — the scope by principal, every filter, the 500-row cap — lives once in
-  `server/audit-admin.mjs` (`GET /api/audit`, `server/routes/audit.mjs`),
+  `server/audit-admin.mjs` (`GET /api/audit` in `server/routes/audit.mjs`;
+  `packc store audit` in `tools/store-admin.mjs` — the `cli` surface of the
+  same rule),
   and the file-first routes write their row through
   `server/audit-after.mjs`, after the file, never inside the operation. A
   refusal's `kind` (invalid / missing / conflict → 400 / 404 / 409) and the

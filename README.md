@@ -875,8 +875,8 @@ file — the verify's 500 carries its flagged row the same way. A request
 refused before the MCP was contacted (400, 404, 409, 412) writes neither;
 a capture, run or refresh whose file write threw writes no row (nothing of
 the org's changed), the run's `vantage-lost` path excepted. CLI runs
-(`packc journey run`, the CronJob) are not audited: the CLI never opens the
-database.
+(`packc journey run`, the CronJob) are not audited: that CLI never opens the
+database (`packc store audit`, below, opens it to read and is not a run).
 
 **Reading it — `GET /api/audit`** (`admin`). An org admin reads the rows of
 the request's org (`X-Observogram-Org`, `?org=`): `scope=org`, the only
@@ -923,6 +923,36 @@ the audit API answers only requests sent straight to a loopback address …`),
 as [the identity API](#the-identity-api) is. Below `admin` it is the
 guard's 403 `role`; the bearer is an operator and cannot read it. The read
 writes no row.
+
+**From a shell — `packc store audit`.** The bearer is an operator and
+cannot read `GET /api/audit`, so a shell on the pod or a CI job lists the
+audit from the database file instead: `packc store audit` (the store is
+`OBSERVOGRAM_DB`, else `<workspace>/observogram.db`; WAL makes the read
+safe while the server runs). It is read-only — it writes no row — and it
+is an owner's view: every org's and the deployment's rows by default,
+`--org <id>` one org's, `--deployment` the rows with no org (`--all` says
+the default). The filters are the route's as flags — `--actor`, `--action`,
+`--kind`, `--target-kind`, `--target`, `--since`, `--until`, `--limit`
+(1–500, default 100), `--before` — with the same rule and the same refusal
+texts spelled with the flags (`--limit must be an integer from 1 to 500`).
+One JSON row per line on stdout, newest first, the row the API serves;
+the `store: <path>` line and, when more rows exist, `next: <seq>` go to
+stderr, so stdout pipes into `jq` as it is:
+
+```bash
+# acme's deploy rows since a date, 50 a page; the next page by the stderr line
+packc store audit --org acme --kind deploy --since 2026-09-28 --limit 50
+packc store audit --org acme --kind deploy --since 2026-09-28 --limit 50 --before 318
+# the deployment-level rows (users, orgs, owners, imports), as JSON lines
+packc store audit --deployment | jq -c '[.seq, .action, .actor, .targetId]'
+```
+
+Like its siblings it refuses `OBSERVOGRAM_DB=:memory:` and a workspace
+whose `users.json` / `orgs.json` the server has not imported yet, and it
+never creates a database (`no database at … — nothing to list`). On a
+loopback server without sign-in, the refusal of an indirect `GET /api/audit`
+names it as the way out from this machine (`…, or list it from this machine
+with packc store audit`).
 
 ### Run In Docker Or Kubernetes
 

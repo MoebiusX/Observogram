@@ -364,12 +364,13 @@ test('authzDecision: every refusal names a way out', () => {
   assert.equal(text(mcpWrite, ctxOf('identity', P.operator)), "requires the admin role in org 'acme' (you are operator) — ask an admin of acme");
   assert.equal(csrfAlwaysText(adminApi), text(ownerApi, ctxOf('identity', P.owner, { csrf: false })), 'csrfAlwaysText: the identity text, byte for byte');
   // The audit reader (slice 5): closed under its own name, with the
-  // posture's way out; the direct-rule text names the studio, no CLI.
+  // posture's way out; the direct-rule text names the studio and the CLI
+  // reader, `packc store audit` (tools/store-admin.mjs).
   const auditRead = synth({ class: 'admin', direct: true, exposed: 'refuse', closedAs: 'the audit API' });
   assert.equal(text(auditRead, ctxOf('open-exposed', P.local)),
     'the audit API is closed on a server bound to 0.0.0.0 without sign-in (OBSERVOGRAM_INSECURE_NO_AUTH=1): add the first user with npm run users -- add <login> (it arms sign-in without a restart; the first local user is an owner), or configure OIDC');
   assert.equal(text(auditRead, ctxOf('open-loopback', P.local, { direct: false, port: 8123 })),
-    'on a server without sign-in the audit API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:8123');
+    'on a server without sign-in the audit API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:8123, or list it from this machine with packc store audit');
   assert.equal(text(auditRead, ctxOf('identity', P.operator)), "requires the admin role in org 'acme' (you are operator) — ask an admin of acme");
   assert.equal(text(auditRead, ctxOf('identity', P.bearer)), "the bearer token acts as an operator in org 'acme'; the admin role needs a signed-in user with that role");
 });
@@ -1997,11 +1998,11 @@ for (const posture of OPEN) {
         // The audit reader (slice 5) in the posture a fresh install has:
         // `local`, an owner, reads the deployment's rows — the ones `writes`
         // asserts below — to a direct loopback request; a foreign Host is
-        // refused under the reader's own name, with no CLI way out.
+        // refused under the reader's own name, naming the CLI reader.
         r = await call(srv.base, PROBES['GET /api/audit'], { headers: { Host: `rebind.attacker.example:${port}` }, raw: true });
         assert.deepEqual([r.status, r.json.denied, r.json.error], [403, 'posture',
           'on a server without sign-in the audit API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; '
-          + `no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${port}`]);
+          + `no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${port}, or list it from this machine with packc store audit`]);
         r = await call(srv.base, PROBES['GET /api/audit']);
         assert.deepEqual([r.status, r.json.scope, r.json.org, r.json.next], [200, 'all', null, null], 'local, an owner: the deployment\'s rows, one page');
         assert.deepEqual(r.json.rows.filter((x) => x.seq > seq).reverse().map((x) => [x.action, x.actor, x.orgId, x.targetId]), [

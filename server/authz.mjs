@@ -305,10 +305,12 @@ export function authzDecision(entry, ctx) {
     return deny(403, 'posture', why);
   }
   // 2. Without sign-in, a `direct` entry (the identity API, the MCP endpoint
-  //    changes) answers a person at this machine only. The CLI way out is
-  //    the identity API's: no CLI manages endpoints.
+  //    changes, the audit reader) answers a person at this machine only.
+  //    The CLI way out is the identity API's, or the audit's reader
+  //    (`packc store audit`, tools/store-admin.mjs): no CLI manages endpoints.
   if (open && entry.direct && !ctx.direct) {
-    const cli = entry.identityApi ? ', or use the CLIs from this machine (npm run users -- add <login>, passwd <login>, owner <login>)' : '';
+    const cli = entry.identityApi ? ', or use the CLIs from this machine (npm run users -- add <login>, passwd <login>, owner <login>)'
+      : entry.closedAs === 'the audit API' ? ', or list it from this machine with packc store audit' : '';
     return deny(403, 'posture', `on a server without sign-in ${entry.closedAs} answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${ctx.port ?? '<port>'}${cli}`);
   }
   // 3. An always-CSRF change carries the header from every principal but the bearer.

@@ -154,8 +154,10 @@ decisions were all taken as recommended (a CLI reader as the last, droppable com
 changed sentence; viewers see logins; an org admin sees a non-member owner's actor as is).
 Suites: `server/test-audit-api.mjs` (new); test-store, test-deploy-helpers, test-smoke,
 test-tenancy, test-authz, test-auth-oidc, test-chain-history, test-store-guards extended.
-What waits: `packc store audit`, the CLI reader (design §8, the droppable C7); the studio
-reads nothing of the audit yet (6b pages by `next`).
+`packc store audit` (`tools/store-admin.mjs`, design §8) lists the audit from a shell —
+one JSON row per line, the route's filters as flags, the same rule through `parseAuditQuery`'s
+`cli` surface, no row written. What waits: the studio reads nothing of the audit yet (6b
+pages by `next`).
 Next is slice 6 (6a, the Services home).
 
 ### otel-observability-pack (the spec) — `develop` at the merge of PR #8

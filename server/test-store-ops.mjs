@@ -16,7 +16,9 @@
  * import --replace` the next start re-imports them. `packc store
  * rekey-issuer` (--to, --clear) closes the OIDC upgrade gate's IdP moves;
  * `packc store purge-org` deletes a removed org's files, and `packc store
- * restore` warns when the workspace's marker names another store.
+ * restore` warns when the workspace's marker names another store. `packc
+ * store audit` (slice 5, the audit) lists the rows from a shell, newest
+ * first, one JSON line each, and writes none.
  *
  * Slice 4 (the pack registry on the store): the in-place export reconciles
  * each org's pack files with its rows BEFORE it writes packs/index.json in
@@ -57,7 +59,7 @@ const memberships = await import('./store/memberships.mjs');
 const meta = await import('./store/meta.mjs');
 const { getOrg, listOrgs } = await import('./store/orgs.mjs');
 const { getUserByLogin, listUsers } = await import('./store/users.mjs');
-const { listAudit } = await import('./store/audit.mjs');
+const { listAudit, writeAudit } = await import('./store/audit.mjs');
 const legacy = await import('./store/legacy-files.mjs');
 const {
   exportStore, formatExport, formatPurge, formatRekey, COOKIE_NOTE, purgeOrg, rekeyIssuer, REPLACE_REQUESTED, requestReplace, restoreMarkerWarning,
@@ -2412,6 +2414,153 @@ test('packc store purge-org: usage exits 2; the store line, the report; a refusa
   const rm = spawnSync(process.execPath, [join(HERE, '..', 'tools', 'org-admin.mjs'), 'remove', 'beta'], { env, encoding: 'utf8', timeout: 60_000 });
   assert.equal(rm.status, 0, rm.stderr);
   assert.match(rm.stdout, /removed org beta — its files under .*orgs.beta stay; `packc store purge-org beta` deletes them with the server stopped/);
+});
+
+// ---------- audit: the CLI reader ----------
+
+// A flat deployment with two orgs and planted rows: the deployment's by
+// `system` and `cli`, acme's and beta's by their people, in one order.
+async function auditedDeployment() {
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  await start(base);
+  await change(base, (db) => {
+    admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'alice', base });
+    admin.createOrgFromAdmin(db, 'cli', { id: 'beta', name: 'Beta', admin: 'alice', base });
+    tx(db, () => {
+      writeAudit(db, 'olive', { action: 'user.create', targetKind: 'user', targetId: 'oscar', detail: { kind: 'local', isOwner: false } });
+      writeAudit(db, 'oscar', { orgId: 'acme', action: 'deploy.run', targetKind: 'deploy', targetId: 'dep_1', detail: { ok: 1, failed: 0, origin: 'https://mcp.acme.test' } });
+      writeAudit(db, 'bob', { orgId: 'beta', action: 'pack.register', targetKind: 'pack', targetId: 'p-beta', detail: { label: 'Beta' } });
+      writeAudit(db, 'oscar', { orgId: 'acme', action: 'journey.run', targetKind: 'journey', targetId: 'nightly', detail: { outcome: 'pass' } });
+      writeAudit(db, 'oscar', { orgId: 'acme', action: 'deploy.verify', targetKind: 'deploy', targetId: 'dep_1', detail: { outcome: 'aligned' } });
+    });
+  });
+  return base;
+}
+
+test('packc store audit: one JSON row per line newest first, the store line and `next` on stderr; --org, --deployment, --kind, --actor, --target, --since/--until; --limit + --before page to the end; nothing written', async () => {
+  const base = await auditedDeployment();
+  const env = cliEnv(base);
+  const run = (...args) => spawnSync(process.execPath, [PACKC, 'store', 'audit', ...args], { env, encoding: 'utf8', timeout: 60_000 });
+  const rowsOf = (r) => { assert.equal(r.status, 0, r.stderr); return r.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l)); };
+  const all = await read(base, (db) => listAudit(db, { limit: 1000 }));
+  const seqs = (rows) => rows.map((x) => x.seq);
+  const keyOf = (x) => [x.action, x.actor, x.orgId, x.targetId];
+
+  // Every row, newest first, each the eight fields of the API's row — stdout is the rows and nothing else.
+  const every = run();
+  const rows = rowsOf(every);
+  assert.deepEqual(seqs(rows), seqs(all), 'every row of every org and the deployment, newest first');
+  assert.deepEqual(Object.keys(rows[0]), ['seq', 'at', 'orgId', 'actor', 'action', 'targetKind', 'targetId', 'detail']);
+  assert.deepEqual(rows.slice(0, 5).map(keyOf), [
+    ['deploy.verify', 'oscar', 'acme', 'dep_1'], ['journey.run', 'oscar', 'acme', 'nightly'], ['pack.register', 'bob', 'beta', 'p-beta'],
+    ['deploy.run', 'oscar', 'acme', 'dep_1'], ['user.create', 'olive', null, 'oscar'],
+  ]);
+  assert.deepEqual(rows[0].detail, { outcome: 'aligned' }, 'the detail parsed');
+  assert.equal(every.stderr, `store: ${dbOf(base)}\n`, 'one page: the store line only, no next');
+
+  // The scopes: one org's rows; the rows with no org; the same again by --all; the org must exist.
+  const acme = rowsOf(run('--org', 'acme'));
+  assert.deepEqual(acme.map(keyOf), [
+    ['deploy.verify', 'oscar', 'acme', 'dep_1'], ['journey.run', 'oscar', 'acme', 'nightly'], ['deploy.run', 'oscar', 'acme', 'dep_1'], ['membership.add', 'cli', 'acme', 'alice'],
+  ], 'acme\'s rows: the planted three and the admin membership its creation wrote; never beta\'s, never a deployment row');
+  assert.deepEqual(seqs(acme), seqs(all.filter((x) => x.orgId === 'acme')));
+  const dep = rowsOf(run('--deployment'));
+  assert.ok(dep.length >= 4 && dep.every((x) => x.orgId === null), 'the deployment: the planted user.create, the two org.create rows and the import');
+  assert.deepEqual(dep.slice(0, 3).map(keyOf), [['user.create', 'olive', null, 'oscar'], ['org.create', 'cli', null, 'beta'], ['org.create', 'cli', null, 'acme']]);
+  assert.deepEqual(seqs(rowsOf(run('--all'))), seqs(all));
+  const none = run('--org', 'nope');
+  assert.equal(none.status, 1);
+  assert.equal(none.stdout, '');
+  assert.equal(none.stderr, `store: ${dbOf(base)}\npackc store audit: no org "nope" in store ${dbOf(base)}\n`);
+
+  // The filters, ANDed with the scope.
+  assert.deepEqual(rowsOf(run('--kind', 'deploy')).map(keyOf), [['deploy.verify', 'oscar', 'acme', 'dep_1'], ['deploy.run', 'oscar', 'acme', 'dep_1']]);
+  assert.deepEqual(rowsOf(run('--org', 'acme', '--kind', 'journey')).map(keyOf), [['journey.run', 'oscar', 'acme', 'nightly']]);
+  assert.deepEqual(rowsOf(run('--actor', 'bob')).map(keyOf), [['pack.register', 'bob', 'beta', 'p-beta']]);
+  assert.deepEqual(rowsOf(run('--action', 'deploy.verify', '--target', 'dep_1', '--target-kind', 'deploy')).map(keyOf), [['deploy.verify', 'oscar', 'acme', 'dep_1']]);
+  assert.deepEqual(rowsOf(run('--since', '2000-01-01', '--until', '2099-01-01', '--actor', 'bob')).length, 1);
+  assert.deepEqual(rowsOf(run('--until', '2000-01-01')), [], 'an empty listing is no row and exit 0');
+
+  // Paging: --limit 2, then --before <next> until no next; the pages concatenate to the whole listing, no row twice.
+  const paged = [];
+  let before = null;
+  for (let page = 0; page < 20; page += 1) {
+    const r = run('--limit', '2', ...(before ? ['--before', String(before)] : []));
+    const got = rowsOf(r);
+    paged.push(...got);
+    const m = r.stderr.match(/^next: (\d+)$/m);
+    if (!m) { assert.equal(r.stderr, `store: ${dbOf(base)}\n`, 'the last page: no next line'); break; }
+    assert.equal(got.length, 2, 'a full page when more exist');
+    assert.equal(Number(m[1]), got[1].seq, 'next is the seq of the page\'s last row');
+    before = Number(m[1]);
+  }
+  assert.deepEqual(seqs(paged), seqs(all), 'the pages are the whole listing, in order, no row twice');
+  assert.deepEqual(seqs(rowsOf(run('--limit', '2', '--before', String(all[0].seq)))), seqs(all).slice(1, 3));
+
+  // The refusals: the rule's texts spell the flags; usage errors exit 2 and print the usage; a refusal is one line, exit 1.
+  for (const [args, text] of [
+    [['--limit', '0'], 'packc store audit: --limit must be an integer from 1 to 500'],
+    [['--limit', '501'], 'packc store audit: --limit must be an integer from 1 to 500'],
+    [['--before', 'x'], 'packc store audit: --before must be a positive integer — the next value of the previous page'],
+    [['--since', '2026-02-30'], 'packc store audit: --since must be a date or a UTC time: 2026-10-04 or 2026-10-04T09:00:00Z'],
+    [['--since', '2026-10-04', '--until', '2026-10-04'], 'packc store audit: --since must be before --until'],
+    [['--action', 'deploy'], 'packc store audit: --action must be <kind>.<verb>, lower case, e.g. deploy.run or mcp_endpoint.create'],
+    [['--kind', 'Deploy'], 'packc store audit: --kind must be a lower-case word, e.g. deploy, pack or mcp_endpoint'],
+    [['--target-kind', 'x'.repeat(101)], 'packc store audit: --target-kind must be 1–100 characters'],
+    [['--target', 'x'.repeat(201)], 'packc store audit: --target must be 1–200 characters'],
+  ]) {
+    const r = run(...args);
+    assert.deepEqual([r.status, r.stdout, r.stderr], [1, '', `${text}\n`], args.join(' '));
+  }
+  for (const [args, re] of [
+    [['--bogus'], /^packc store audit: unknown argument --bogus$/m], [['--org'], /^packc store audit: --org takes an org id$/m],
+    [['--org', 'acme', '--all'], /^packc store audit: name one of --org <id>, --deployment or --all/m], [['--actor'], /^packc store audit: --actor takes a value$/m],
+    [['--actor', 'a', '--actor', 'b'], /^packc store audit: --actor is given twice$/m], [['acme'], /^packc store audit: unknown argument acme$/m],
+  ]) {
+    const r = run(...args);
+    assert.equal(r.status, 2, args.join(' '));
+    assert.equal(r.stdout, '');
+    assert.match(r.stderr, re);
+    assert.match(r.stderr, /packc store audit \[--org <id> \| --deployment \| --all\]/, 'the usage follows');
+  }
+
+  // A reader: the listing wrote no row, and the store is as it was.
+  assert.deepEqual(await read(base, (db) => listAudit(db, { limit: 1000 })), all, 'no new row after every listing above');
+});
+
+test('packc store audit: refused on :memory: and on a missing database (never created), a workspace with un-imported legacy files like its siblings; bare `packc` and `packc store` name it', async () => {
+  const base = await auditedDeployment();
+  const env = cliEnv(base);
+  const run = (vars, ...args) => spawnSync(process.execPath, [PACKC, 'store', 'audit', ...args], { env: { ...env, ...vars }, encoding: 'utf8', timeout: 60_000 });
+  const mem = run({ OBSERVOGRAM_DB: ':memory:' });
+  assert.deepEqual([mem.status, mem.stdout, mem.stderr], [1, '', 'packc store audit: OBSERVOGRAM_DB is :memory: — a CLI needs the server\'s database file\n']);
+  const empty = tempDir();
+  const missing = run({ OBSERVOGRAM_WORKSPACE: empty });
+  assert.equal(missing.status, 1);
+  assert.equal(missing.stdout, '');
+  assert.match(missing.stderr, /^packc store audit: no database at .* — nothing to list \(this command never creates one; check OBSERVOGRAM_DB and OBSERVOGRAM_WORKSPACE\)\n$/);
+  assert.ok(!existsSync(dbOf(empty)), 'a reader creates no database');
+  const legacyBase = tempDir();
+  usersJson(legacyBase, ['alice']);
+  const notImported = run({ OBSERVOGRAM_WORKSPACE: legacyBase });
+  assert.equal(notImported.status, 1);
+  assert.match(notImported.stderr, /^packc store audit: no database at /, 'a legacy workspace with no store: no database, nothing to list');
+  assert.ok(!existsSync(dbOf(legacyBase)));
+  // The usages: `packc store` (2) and bare `packc` (0) each have the line.
+  for (const [args, status] of [[['store'], 2], [[], 0]]) {
+    const r = spawnSync(process.execPath, [PACKC, ...args], { env, encoding: 'utf8', timeout: 60_000 });
+    assert.equal(r.status, status);
+    assert.match(r.stderr + r.stdout, /packc store +audit/, `packc ${args.join(' ')} names packc store audit`);
+  }
+  // The direct-rule text of GET /api/audit names the CLI as the way out from a shell (server/authz.mjs).
+  const { authzDecision } = await import('./authz.mjs');
+  const { routeEntry } = await import('./route-table.mjs');
+  const d = authzDecision(routeEntry('GET /api/audit'), {
+    principal: { kind: 'local', owner: true, role: 'admin' }, posture: 'open-loopback', direct: false, csrf: false, org: 'default', authOff: false, host: '127.0.0.1', port: 8123,
+  });
+  assert.equal(d.status, 403);
+  assert.match(d.body.error, /— open the studio at http:\/\/127\.0\.0\.1:8123, or list it from this machine with packc store audit$/);
 });
 
 // ---------- restore: the marker warning ----------
