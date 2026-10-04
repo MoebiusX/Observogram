@@ -483,7 +483,10 @@ credential value of the URL (userinfo, `token=`-style parameters) from the
 hook's own error text — a `prepareRequest` throw, a `fetchImpl` rejection
 and the text of a Response the `fetchImpl` *returns* (a non-OK body, a
 JSON-RPC or SSE error message) — since the raw caller URL reaches the hook;
-a native `fetch` answer is not hook text and passes through untouched; a
+a native `fetch` answer is not hook text and passes through untouched; the
+journey run record and its kept live snapshot persist `packB.mcp.url` in
+`safeMcpUrl()`'s form too (found while checking this: the record had carried
+the def's URL with its `token=` parameter since the engine was written); a
 `fetchImpl`-only hook skips the final-URL re-check (the URL is the caller's,
 already validated); every swallowing catch — the fetcher's `safe`, `quiet`,
 initialize/notify/tools-list, the per-kind inventory catch and the three
