@@ -16,7 +16,7 @@ import { chmodSync, chownSync, copyFileSync, existsSync, mkdirSync, mkdtempSync,
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { win32Skip, WIN32 } from './fixtures/platform.mjs';
+import { isLinux, win32Skip, WIN32 } from './fixtures/platform.mjs';
 
 // Hermetic (§0): a developer shell's store or identity variables never reach
 // this process's imports (the identity-admin cases below read the server's
@@ -221,7 +221,7 @@ test('checkFilesystem refuses a database on NFS, warns on FUSE, passes local dis
   assert.match(warned[0], /FUSE/);
   assert.equal(checkFilesystem('/x', { platform: 'linux', statfs: statfs(0xef53) }).kind, 'local');
   assert.equal(checkFilesystem('/x', { platform: 'darwin', statfs: () => { throw new Error('not called'); } }).kind, 'unchecked');
-  if (process.platform === 'linux') assert.equal(checkFilesystem(tmpdir()).kind === 'network', false, 'the real temp dir is not refused');
+  assert.equal(checkFilesystem(tmpdir()).kind === 'network', false, 'the real temp dir is not refused (unchecked off linux)');
 });
 
 // ---------- Runtime: opening ----------
@@ -738,7 +738,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
 // The real thing: node as PID 1 of a fresh PID namespace, signalled from
 // outside it, as kubelet does. Skipped where unshare is unavailable.
 const UNSHARE = (() => {
-  if (process.platform !== 'linux') return null;
+  if (!isLinux) return null;
   const base = ['--pid', '--fork', '--kill-child'];
   const tries = [base, ['--user', '--map-root-user', ...base]];
   for (const args of tries) {

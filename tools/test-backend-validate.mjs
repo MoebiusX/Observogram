@@ -33,7 +33,7 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { compileCatalog, compileArtifact } from './lib/compile.mjs';
 import { createHarness } from './lib/harness.mjs';
-import { isWin32 } from '../server/fixtures/platform.mjs';
+import { isWin32, PLATFORM } from '../server/fixtures/platform.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -75,7 +75,7 @@ for (const [name, path] of Object.entries(VALIDATORS)) {
     catch (e) { v = (e.stdout || e.stderr || '').split('\n')[0]; } // amtool prints version to stderr
     process.stdout.write(`validator: ${name} → ${path} (${String(v).trim()})\n`);
   } else if (NO_BUILD_HERE.has(name)) {
-    process.stdout.write(`validator: ${name} → SKIPPED (no ${process.platform} build published — runs in CI on linux)\n`);
+    process.stdout.write(`validator: ${name} → SKIPPED (no ${PLATFORM} build published — runs in CI on linux)\n`);
   } else if (STRICT) {
     assert(false, `${name} available (--strict requires every validator; run npm run fetch-validators)`);
   } else {

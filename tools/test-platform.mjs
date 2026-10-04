@@ -8,12 +8,13 @@
 //   P2  the studio-bundle T1 missing-module assertion normalises the host
 //       separator (and the site still does);
 //   P3  server/fixtures/platform.mjs: win32 skips with the reason, linux runs;
-//   P4  no URL.pathname is used as a filesystem path anywhere under server/,
-//       tools/ or studio/;
+//   P4  every `.pathname` under server/ and tools/ is one of the known URL
+//       paths — none is a filesystem path;
 //   P5  every platform branch of a suite goes through the fixture — no other
-//       suite or fixture spells 'win32';
-//   P6  every win32 skip states its reason, and README's count of the skip
-//       sites is the count in the sources.
+//       suite or fixture reads process.platform or spells 'win32';
+//   P6  every win32 skip states its reason, isWin32 is a data read in the two
+//       allowed places only (never a silent branch), and README's count of
+//       the skip sites is the count in the sources.
 //
 // A predicted-portable test that fails on a downstream's Windows run is fixed
 // by a new reasoned skip site AND a README count bump — P6 forces both.
@@ -23,7 +24,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep, win32, posix } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tokenize } from './gen-vendor-manifest.mjs';
-import { WIN32, platformHelpers, isWin32 } from '../server/fixtures/platform.mjs';
+import { WIN32, platformHelpers, isWin32, isLinux, PLATFORM } from '../server/fixtures/platform.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -47,35 +48,56 @@ const ALL_SOURCES = ['server', 'tools', 'studio'].flatMap((d) => sourceFiles(joi
 const SUITES = ALL_SOURCES.filter((f) => /^(?:server|tools)\/test-[^/]+\.mjs$/.test(f) || /^server\/fixtures\/[^/]+\.mjs$/.test(f));
 const read = (rel) => readFileSync(join(ROOT, ...rel.split('/')), 'utf8');
 
-// Comments may explain the rules; only code must follow them.
-const withoutComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|\s)\/\/[^\n]*/g, '$1');
 const lineOf = (src, index) => src.slice(0, index).split('\n').length;
 
-// P4: `new URL(…, import.meta.url).pathname` is `/C:/repo/…` on win32 and
-// percent-encoded everywhere — over tokenizer-blanked code (strings, comments,
-// templates and regex literals blanked, so a mention is not a use).
-const PATHNAME_RE = /import\.meta\.url[^;\n]*\.pathname\b/;
-// A hand-rolled drive strip of a pathname (the regex must survive, so this
-// one runs over comment-stripped source, not the tokenizer's blanked code).
-const DRIVE_STRIP_RE = /\.pathname\s*\.replace\(\s*\/\^\\\/\(\[A-Za-z\]:\)\//;
+// P4: `.pathname` of a URL is a URL path. Used as a filesystem path it is
+// `/C:/repo/…` on win32 and percent-encoded everywhere, so every `.pathname`
+// under server/ and tools/ (tokenizer-blanked code: a comment or a string is
+// not a use) must be one of these known URL paths, pinned per file. studio/
+// is browser code (window.location, fetch URLs) and is not scanned.
+const PATHNAME_ALLOWED = Object.freeze({
+  'server/store/identity.mjs': 1,       // the OIDC issuer URL's well-known suffix
+  'server/test-auth-oidc.mjs': 4,       // the fake IdP's HTTP request paths
+  'tools/build-studio-bundle.mjs': 1,   // a --pack-url (http) path, for an id
+  'tools/record-mcp-fixtures.mjs': 1,   // an MCP URL, printed without its query
+});
 // P6: the fixture's two call forms and what a well-formed argument is.
 const SKIP_CALL_RE = /\b(win32Skip|skipOnWin32)\(([^)]*)\)/g;
 const REASON = "(?:'[^']{8,}'|WIN32\\.(?:modes|signals|symlinks))";
 const WIN32_SKIP_ARG_RE = new RegExp(`^\\s*${REASON}\\s*$`);
 const SKIP_ON_WIN32_ARG_RE = new RegExp(`^\\s*(?:t|null)\\s*,\\s*${REASON}\\s*$`);
 const README_COUNT_RE = /(\d+) win32-skip sites/;
+// isWin32 is a data read (a ternary over an expected value), never a branch
+// that silently skips: the two places, and the two shapes refused everywhere.
+const ISWIN32_ALLOWED = Object.freeze({ 'server/test-store-ops.mjs': 1, 'tools/test-backend-validate.mjs': 2 });
+const ISWIN32_IF_RE = /\bif\s*\([^)]*\bisWin32\b/;
+const ISWIN32_SKIP_RE = /\bskip:\s*[^,}]*\bisWin32\b/;
+const PROCESS_PLATFORM_RE = /\bprocess\s*\.\s*platform\b/;
 
 function pathnameUses(src) {
   const out = [];
-  const { code } = tokenize(src);
-  for (const [i, line] of code.split('\n').entries()) if (PATHNAME_RE.test(line)) out.push({ line: i + 1, rule: 'URL.pathname as a filesystem path' });
-  const stripped = withoutComments(src);
-  for (const [i, line] of stripped.split('\n').entries()) if (DRIVE_STRIP_RE.test(line)) out.push({ line: i + 1, rule: 'a hand-rolled drive strip of URL.pathname' });
+  for (const [i, line] of tokenize(src).code.split('\n').entries()) if (/\.pathname\b/.test(line)) out.push(i + 1);
   return out;
 }
 
-function win32Literals(src) {
-  return tokenize(src).strings.filter((s) => s.value === 'win32').map((s) => lineOf(src, s.start));
+// The lines where a source reads process.platform or spells 'win32'.
+function platformReads(src) {
+  const { code, strings } = tokenize(src);
+  const out = new Set(strings.filter((s) => s.value === 'win32').map((s) => lineOf(src, s.start)));
+  for (const [i, line] of code.split('\n').entries()) if (PROCESS_PLATFORM_RE.test(line)) out.add(i + 1);
+  return [...out].sort((a, b) => a - b);
+}
+
+// The lines where a source names isWin32 in code, and the silent-branch shapes among them.
+function isWin32Uses(src) {
+  const uses = [];
+  const silent = [];
+  for (const [i, line] of tokenize(src).code.split('\n').entries()) {
+    if (!/\bisWin32\b/.test(line) || /\bimport\b/.test(line)) continue;   // the binding is not a read
+    uses.push(i + 1);
+    if (ISWIN32_IF_RE.test(line) || ISWIN32_SKIP_RE.test(line)) silent.push(i + 1);
+  }
+  return { uses, silent };
 }
 
 function skipCalls(src) {
@@ -144,46 +166,61 @@ test('P3 the fixture: win32 skips with the reason, linux runs', () => {
   assert.deepEqual(linuxCalls, []);
   assert.deepEqual(linuxLines, []);
 
+  assert.equal(w.isLinux, false);
+  assert.equal(l.isLinux, true);
   assert.equal(isWin32, process.platform === 'win32', 'the default export is this host');
+  assert.equal(isLinux, process.platform === 'linux');
+  assert.equal(PLATFORM, process.platform, 'PLATFORM is for a printout naming the host');
   assert.deepEqual(Object.keys(WIN32).sort(), ['modes', 'signals', 'symlinks']);
   for (const [k, v] of Object.entries(WIN32)) assert.ok(typeof v === 'string' && v.length >= 8, `WIN32.${k} is a reason`);
   assert.ok(Object.isFrozen(WIN32));
 });
 
-test('P4 no URL.pathname is used as a filesystem path', () => {
+test('P4 every .pathname under server/ and tools/ is a known URL path — none is a filesystem path', () => {
   const offenders = [];
-  for (const f of ALL_SOURCES) for (const u of pathnameUses(read(f))) offenders.push(`${f}:${u.line} — ${u.rule}`);
-  assert.deepEqual(offenders, [], `use fileURLToPath(new URL(…, import.meta.url)):\n${offenders.join('\n')}`);
+  const counts = {};
+  for (const f of ALL_SOURCES) {
+    if (f.startsWith('studio/') || f === SELF) continue;
+    const lines = pathnameUses(read(f));
+    if (!lines.length) continue;
+    counts[f] = lines.length;
+    if (!(f in PATHNAME_ALLOWED)) for (const l of lines) offenders.push(`${f}:${l}`);
+  }
+  assert.deepEqual(offenders, [], `a .pathname outside the known URL paths — a filesystem path is fileURLToPath(new URL(…, import.meta.url)); a new URL path is added to PATHNAME_ALLOWED with its reason:\n${offenders.join('\n')}`);
+  assert.deepEqual(counts, { ...PATHNAME_ALLOWED }, 'the known URL-path files hold exactly the pinned number of .pathname lines (a new one is reviewed and pinned)');
 
-  // Negative cases: the three lines this guard was written against…
+  // Negative cases: the three lines this guard was written against — the
+  // two-step form included — are uses; a comment or a string is not.
   const bad = [
     "const ROOT = resolve(new URL('..', import.meta.url).pathname);",
     "const ROOT = new URL('./fixtures/crawl/operational-alerts/', import.meta.url).pathname;",
-    "const K8S = join(ROOT.pathname.replace(/^\\/([A-Za-z]:)/, '$1'), 'deploy', 'k8s');",
+    "const ROOT = new URL('../', import.meta.url);\nconst K8S = join(ROOT.pathname.replace(/^\\/([A-Za-z]:)/, '$1'), 'deploy', 'k8s');",
+    "const u = new URL('..', import.meta.url);\nconst ROOT = u.pathname;",
   ];
-  for (const line of bad) assert.equal(pathnameUses(line).length, 1, `reported: ${line}`);
-  // …and what is not a filesystem path: an http URL's pathname, a comment, a string.
+  for (const src of bad) assert.equal(pathnameUses(src).length, 1, `reported: ${src}`);
   const fine = [
-    'const id = defaultPackId(new URL(href).pathname);',
     '// new URL(import.meta.url).pathname used to be the idiom',
     "const note = 'new URL(x, import.meta.url).pathname';",
-    "u.pathname = u.pathname.replace(/\\/\\.well-known\\/openid-configuration\\/?$/, '');",
+    'const pathnames = [];',
   ];
-  for (const line of fine) assert.deepEqual(pathnameUses(line), [], `not reported: ${line}`);
+  for (const src of fine) assert.deepEqual(pathnameUses(src), [], `not reported: ${src}`);
 });
 
 test('P5 every platform branch of a suite goes through server/fixtures/platform.mjs', () => {
   const offenders = [];
   for (const f of SUITES) {
     if (f === FIXTURE || f === SELF) continue;
-    for (const line of win32Literals(read(f))) offenders.push(`${f}:${line}`);
+    for (const line of platformReads(read(f))) offenders.push(`${f}:${line}`);
   }
-  assert.deepEqual(offenders, [], `a suite spells 'win32': import isWin32 / win32Skip / skipOnWin32 from ${FIXTURE} instead:\n${offenders.join('\n')}`);
-  assert.deepEqual(win32Literals(read(FIXTURE)), [32], 'the fixture is the one place');
+  assert.deepEqual(offenders, [], `a suite reads process.platform or spells 'win32': import isWin32 / isLinux / PLATFORM / win32Skip / skipOnWin32 from ${FIXTURE} instead:\n${offenders.join('\n')}`);
+  const fixture = read(FIXTURE);
+  assert.deepEqual(platformReads(fixture), [31, 32, 46], 'the fixture is the one place: the default parameter, the isWin32 fact, PLATFORM');
 
-  assert.deepEqual(win32Literals("if (process.platform === 'win32') return;"), [1], 'reported');
-  assert.deepEqual(win32Literals('if (process.platform === "win32") return;'), [1], 'reported (double quotes)');
-  assert.deepEqual(win32Literals("const p = 'darwin';\n// 'win32' in a comment is fine"), [], 'not reported');
+  assert.deepEqual(platformReads("if (process.platform === 'win32') return;"), [1], 'reported');
+  assert.deepEqual(platformReads('if (process.platform === "win32") return;'), [1], 'reported (double quotes)');
+  assert.deepEqual(platformReads("if (process.platform !== 'linux') return null;"), [1], 'reported (a linux read is isLinux)');
+  assert.deepEqual(platformReads('log(`no ${process.platform} build`);'), [1], 'reported (a printout is PLATFORM)');
+  assert.deepEqual(platformReads("const p = 'darwin';\n// 'win32' in a comment is fine\n// process.platform too"), [], 'not reported');
 });
 
 test('P6 every win32 skip states its reason; README counts them', () => {
@@ -195,7 +232,7 @@ test('P6 every win32 skip states its reason; README counts them', () => {
     if (calls.length) perFile[f] = calls.length;
     for (const c of calls) if (!c.ok) malformed.push(`${f}:${c.line} ${c.fn}(${c.arg})`);
   }
-  assert.deepEqual(malformed, [], `a skip without a reason (a literal of 8+ characters or WIN32.<fact>; skipOnWin32 takes t or null first):\n${malformed.join('\n')}`);
+  assert.deepEqual(malformed, [], `a skip without a reason — WIN32.<fact> or a single-quoted literal of 8+ characters; skipOnWin32 takes t or null first. This check fails closed: a reason containing ')' or not single-quoted is reported too (use WIN32.<fact>, or a paren-free literal):\n${malformed.join('\n')}`);
   const total = Object.values(perFile).reduce((a, b) => a + b, 0);
   assert.ok(total >= 15, `at least the 15 sites this batch added (${total})`);
 
@@ -208,8 +245,24 @@ test('P6 every win32 skip states its reason; README counts them', () => {
   assert.equal(Number(m[1]), total, `README says ${m[1]} win32-skip sites, the sources hold ${total}: ${JSON.stringify(perFile)}`);
   for (const [f, n] of Object.entries(perFile)) assert.ok(platforms.includes(`\`${f}\` (${n})`), `README names ${f} (${n})`);
 
+  // isWin32 is a data read in the two allowed places and never a silent branch.
+  const isWin32Counts = {};
+  const silent = [];
+  for (const f of SUITES) {
+    if (f === FIXTURE || f === SELF) continue;
+    const { uses, silent: bad } = isWin32Uses(read(f));
+    if (uses.length) isWin32Counts[f] = uses.length;
+    for (const l of bad) silent.push(`${f}:${l}`);
+  }
+  assert.deepEqual(silent, [], `isWin32 inside an if(…) or a skip: option is a silent skip — use win32Skip(reason) / skipOnWin32(t, reason):\n${silent.join('\n')}`);
+  assert.deepEqual(isWin32Counts, { ...ISWIN32_ALLOWED }, 'isWin32 is read as data in the allowed places only (the 0666 expectation, the .exe suffix and the mimirtool notice); a new read is a reviewed addition to ISWIN32_ALLOWED');
+  for (const src of ['if (isWin32) return;', '{ skip: isWin32 }', "{ skip: isWin32 && 'x' }", "test('x', { skip: isWin32 }, () => {})"]) {
+    assert.deepEqual(isWin32Uses(src).silent, [1], `reported: ${src}`);
+  }
+  assert.deepEqual(isWin32Uses("assert.equal(mode, isWin32 ? 0o666 : 0o644);").silent, [], 'a data read is not reported');
+
   // Negative cases.
-  for (const src of ['win32Skip()', "win32Skip('')", "win32Skip('short')", 'skipOnWin32(t)', 'skipOnWin32(t, reason)', 'win32Skip(WIN32.other)']) {
+  for (const src of ['win32Skip()', "win32Skip('')", "win32Skip('short')", 'skipOnWin32(t)', 'skipOnWin32(t, reason)', 'win32Skip(WIN32.other)', 'win32Skip("a double-quoted reason")', "win32Skip('a reason with (parens) inside')"]) {
     const calls = skipCalls(src);
     assert.equal(calls.length, 1, src);
     assert.equal(calls[0].ok, false, `reported: ${src}`);

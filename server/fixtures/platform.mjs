@@ -17,7 +17,7 @@ export const WIN32 = Object.freeze({
 
 /**
  * The helpers for a given platform (injectable for the guard's own tests).
- *   isWin32              — the fact.
+ *   isWin32, isLinux     — the facts (the one place a suite reads process.platform).
  *   win32Skip(reason)    — node:test's option form: test('…', { skip: win32Skip(WIN32.modes) }, …);
  *                          false runs the test, a string skips it with that reason.
  *   skipOnWin32(t, reason) — mid-suite: t is the node:test context (t.skip(reason) is
@@ -30,6 +30,7 @@ export const WIN32 = Object.freeze({
  */
 export function platformHelpers(platform = process.platform, out = (s) => process.stdout.write(s)) {
   const isWin32 = platform === 'win32';
+  const isLinux = platform === 'linux';
   const win32Skip = (reason) => (isWin32 ? `win32: ${reason}` : false);
   const skipOnWin32 = (t, reason) => {
     if (!isWin32) return false;
@@ -37,7 +38,9 @@ export function platformHelpers(platform = process.platform, out = (s) => proces
     if (t && typeof t.skip === 'function') t.skip(text); else out(`- SKIP ${text}\n`);
     return true;
   };
-  return { isWin32, win32Skip, skipOnWin32 };
+  return { isWin32, isLinux, win32Skip, skipOnWin32 };
 }
 
-export const { isWin32, win32Skip, skipOnWin32 } = platformHelpers();
+export const { isWin32, isLinux, win32Skip, skipOnWin32 } = platformHelpers();
+// For a printout only (a notice naming the host); a branch reads isWin32 / isLinux.
+export const PLATFORM = process.platform;
