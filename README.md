@@ -1018,7 +1018,7 @@ and `npm run build:stamp` refuses it (exit 2) until the history is there —
 ### Scan A Repo
 
 ```bash
-npm run crawl -- path/to/service-repo --name krystalinex-core --env prod > repo.pack.yaml
+npm run crawl -- path/to/service-repo --name payments-api --env prod > repo.pack.yaml
 npm run validate-pack -- repo.pack.yaml
 ```
 
@@ -1033,8 +1033,22 @@ The crawler reads source files such as:
 - Docker Compose files
 
 It emits a canonical v1.4 pack plus crawler annotations describing what was
-scanned and what was inferred. A fresh crawl validates; `npm run
-pack-conformance -- repo.pack.yaml` lists what it had to stub. Every alert rule is kept: a rule whose
+scanned and what was inferred. A fresh crawl validates (exit 0) and needs no
+upconversion; `npm run pack-conformance -- repo.pack.yaml` lists what it had to
+stub. Names (`--name`, `--env`, `--owners`) must be spec Slugs — 2-64 lowercase
+letters, digits, `_` or `-`, starting with a letter — and `--criticality` /
+`--binding` must be spec values: a flag the spec cannot hold is refused before
+the crawl with exit 2, the rule in the message and nothing on stdout. Without
+`--name` the folder's name is normalized to a Slug and the original kept in
+`crawler.nameNormalizedFrom`. Exit 3 means the pack failed its own schema — a
+crawler bug, report it. Recording rules not named `<service>:<metric>:<op>`
+cannot be declared in `spec.queries.recording_rules`; they are recorded in
+`crawler.omitted.recording_rules` (their expressions still feed the metric
+inventory). Every value the crawler invents — the stub SLI/SLO, an assumed
+port, an Alertmanager address the config does not state, the default owner,
+the OTel SDK defaults — carries a `crawler.scaffold.<symbol>` annotation with
+the reason; the conformance tool turns those into rows
+([`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §12). Every alert rule is kept: a rule whose
 expression references a recorded SLO series is a burn-rate alert
 (`spec.policy.burn_rate_alerts`); every other rule — a pod restarting, a pool
 saturated, a certificate expiring — is an operational alert and is declared in

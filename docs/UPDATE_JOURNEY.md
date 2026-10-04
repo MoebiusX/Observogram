@@ -773,3 +773,35 @@ shared-section markers now count: 9→15, 27→33, 29→35, 39→45), with the
 annotation key order preserved. Tests: 17 new (`tools/test-pack-conformance.mjs` 9,
 `tools/test-upconvert-merge.mjs` 8) plus one pin in `tools/test-legacy-pack.mjs`.
 
+**Rebadge batch 2, B2b — the crawler emits canonical packs.** Delivered in
+`tools/lib/crawler.mjs`, `tools/crawl-repo.mjs`, `tools/lib/slug.mjs`
+(`packSlug`), `tools/lib/sli-inference.mjs` (`isSpecRecordingRuleName`,
+`SPEC_DURATION_RE`) and `tools/lib/alert-routes.mjs` (the `invented`
+collector); [`DOWNSTREAM.md`](DOWNSTREAM.md) §12 is the end state. Decisions,
+in the house style: an input the crawler can spell canonically is normalized
+and the original kept (names, environments; owners only in the summary, since
+an owner string may be an address); an input with a closed vocabulary is
+refused by the CLI (exit 2, before the crawl) and defaulted-with-a-warning by
+the library (criticality, binding) — a throw would be a 500 that registers
+nothing for the server and the studio; a value the spec cannot hold is
+recorded as evidence rather than declared (rule names outside
+`<service>:<metric>:<op>`, dashboard schemaVersions below 30, intervals that
+are not Durations) — the reading the live side already applied to rule names.
+Provenance marks are field-level wherever an artefact-level mark would move
+Compare (the five otel fields, a backend's endpoints, a route's channels) and
+artefact-level only where the live side marks the same kind of stub (the
+stub and alert-derived SLI/SLO pairs — a repository with no recording rules
+now shows its two L1 placeholders as parked, not declared-not-live). Channel
+inventions are collected by position, never by value, so a stated `#oncall`
+beside a receiver named `oncall` marks exactly one channel. `provider.version`
+carries the Grafana image tag or nothing — never the dashboard's revision
+counter. `otel.sdk.languages` is read off the source files (a heuristic over
+extensions, stated as such). Inference defaults stay unmarked (symmetry with
+the fetcher) and are a named follow-up. The hand-written mirrors of the
+schema's Slug / Duration / Binding / Criticality rules are pinned against the
+vendored `$defs`. Goldens: the validity commit byte-identical; the provenance
+and languages commits regenerated with the stated diffs. Tests: 857 → 858
+(`tools/test-crawl-canonical.mjs`, one harness suite over three fixture
+repositories), plus pins in `tools/test-crawl.mjs` and
+`tools/test-pack-conformance.mjs`.
+

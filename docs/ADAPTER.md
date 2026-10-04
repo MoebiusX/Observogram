@@ -240,6 +240,19 @@ Conversion contract:
   Declared. Legacy `GAP` items are always scaffolds. (`sourceOf` honours a
   second prefix, `mcp.scaffold.<symbol>`, for the placeholders the live
   fetcher is forced to invent — see `MCP_INTEGRATION.md`.)
+- **Two kinds of symbol.** An *artefact symbol* is exactly an id `sourceOf`
+  is asked for (`slis.<id>`, `slos.<id>`, `otel`, `telemetry.backends.<id>`,
+  `pipelines.receivers[i]`, `pipelines.exporters.<signal>`,
+  `queries.recording_rules[i]`, `dashboards.<id>`,
+  `dashboards.<id>.panels.<panel>`, `policy.burn_rate_alerts[i]`,
+  `alerting.routes[i]`, `alerting.rules[i]`, `remediation[i]`, `baselines`,
+  `validation.synthetic_checks.<id>`, …); a marker on it parks the artefact as
+  Scaffold. Any other dotted or indexed path under one — a *field symbol*
+  such as `otel.semconv`, `telemetry.backends.<id>.endpoints`,
+  `alerting.routes[0].channels[1]`, `metadata.owners` — matches nothing in
+  `sourceOf` and is conformance evidence only: the crawler writes those for
+  the values it invents without moving the artefact in Discover or Compare
+  (`tools/lib/pack-conformance.mjs` reads both; `DOWNSTREAM.md` §11.1).
 - **Deterministic** — same input, same manifest (timestamps only via
   `opts.now`).
 
