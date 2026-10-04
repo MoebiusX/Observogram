@@ -187,7 +187,7 @@ test('GET /api/admin/orgs: every org, removed ones too, with its member count; G
     { id: 'bravo', name: 'Bravo', root: 'orgs/bravo', default: false, removedAt: null, createdAt: 'T', members: 2 },
   ]);
   ({ json, rows } = await ok('GET /api/admin/join-role', 'olive', '/api/admin/join-role'));
-  assert.deepEqual([json, rows], [{ ok: true, role: getMeta(db, 'oidc_join_role'), oidc: false, issuerKey: null }, []]);
+  assert.deepEqual([json, rows], [{ ok: true, role: getMeta(db, 'oidc_join_role'), oidc: false, issuerKey: null, mode: 'local' }, []]);
 });
 function getMetaRoot(id) { return prepare(db, 'SELECT root FROM orgs WHERE id = ?').get(id).root; }
 

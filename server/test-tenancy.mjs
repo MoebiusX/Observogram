@@ -34,7 +34,7 @@ delete process.env.OBSERVOGRAM_SESSION_SECRET;
 delete process.env.OBSERVOGRAM_AUTH;
 delete process.env.TOMOGRAPH_AUTH;
 // Hermetic store: each block's database lives in its own workspace.
-const STORE_ENV = ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH'];
+const STORE_ENV = ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH', 'TRUST_PROXY_AUTH'];
 for (const k of STORE_ENV) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];

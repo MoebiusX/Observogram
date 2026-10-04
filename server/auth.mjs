@@ -31,6 +31,11 @@
 //     (Entra ID, Google, Okta, Keycloak, dex). Users are recorded as
 //     <issuerKey>#<sub> (the issuer key is canonIssuer() of the variable,
 //     never the token's iss).
+//   - REVERSE PROXY (OBSERVOGRAM_TRUST_PROXY_AUTH=1 — server/auth-proxy.mjs;
+//     wins over local users, refuses to start beside OIDC): the proxy in
+//     front of this port sends the caller's identity in headers, and every
+//     request resolves them against the store — no cookie, no login page.
+//     Users are recorded as proxy://<realm>#<user>, kind 'oidc'.
 //
 // In BOTH authenticated postures the session is the same signed
 // (HMAC-SHA256) HttpOnly SameSite=Lax cookie, carrying the user's login
@@ -62,6 +67,9 @@
 //   OBSERVOGRAM_SESSION_TTL_HOURS  optional, default 8
 //   OBSERVOGRAM_OIDC_ALLOW_HTTP    '1' permits an http:// issuer (tests,
 //                                  dex-in-docker) — never production
+//   OBSERVOGRAM_TRUST_PROXY_AUTH   '1' takes identity from a reverse proxy's
+//                                  headers (server/auth-proxy.mjs lists the
+//                                  PROXY_AUTH_* knobs and the ACK flag)
 
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -80,6 +88,8 @@ import {
 // imports this module too: a cycle ESM resolves because neither module
 // calls the other at load, only from functions.
 import { signOutEverywhere } from './identity-admin.mjs';
+// The reverse-proxy mode (the same kind of cycle: functions only).
+import { assertProxyAuthEnv, initProxyAuth, proxyAuthConfig, proxyAuthEnabled, resolveProxySession } from './auth-proxy.mjs';
 
 const SESSION_COOKIE = 'observogram_session';
 // Sessions signed before the rebrand stay valid (same HMAC secret): read
@@ -110,9 +120,9 @@ export function oidcEnabled() { return !authDisabled() && !!brandEnv('OIDC_ISSUE
 // request, so `npm run users -- add` arms a running server, and nothing
 // disarms it. Throws when the store is not open — only without start()
 // (fail closed).
-export function localUsersEnabled() { return !authDisabled() && !oidcEnabled() && isIdentityArmed(currentStore()); }
+export function localUsersEnabled() { return !authDisabled() && !oidcEnabled() && !proxyAuthEnabled() && isIdentityArmed(currentStore()); }
 
-export function authEnabled() { return oidcEnabled() || localUsersEnabled(); }
+export function authEnabled() { return oidcEnabled() || proxyAuthEnabled() || localUsersEnabled(); }
 
 // The issuer key OIDC logins are recorded under: canonIssuer() of the
 // variable (never the token's iss), memoised per raw value.
@@ -248,6 +258,9 @@ function clearCookie(res, name) {
 // write: the first sight of a pre-upgrade OIDC cookie creates its row.
 export function resolveSession(req, { db = currentStore() } = {}) {
   if (!authEnabled()) return null;
+  // Behind a reverse proxy the request's headers ARE the session; a cookie
+  // carried over from another mode is ignored (server/auth-proxy.mjs).
+  if (proxyAuthEnabled()) return resolveProxySession(req, { db });
   const cookies = parseCookies(req);
   const payload = verify(cookies[SESSION_COOKIE] || cookies[LEGACY_SESSION_COOKIE]);
   if (!payload) return null;
@@ -383,7 +396,11 @@ export function initAuth(app, { authorize } = {}) {
   // this module never imports it); the route table classifies each one.
   if (typeof authorize !== 'function') throw new TypeError('initAuth(app, { authorize }): the route guard factory is required');
   if (authDisabled()) return;
+  // After the off switch (it wins), before OIDC: the proxy mode's contract,
+  // including "not beside OIDC" — else OIDC would silently win.
+  assertProxyAuthEnv();
   if (oidcEnabled()) { initOidc(app, authorize); registerShared(app, 'oidc', authorize); return; }
+  if (proxyAuthEnabled()) { initProxyAuth(app, authorize); registerShared(app, 'proxy', authorize); return; }
   // Stand-alone routes register unconditionally and gate on
   // identity_armed PER REQUEST: route registration is load-time in
   // Express, but the store is not open yet at import — the flag may be
@@ -423,8 +440,15 @@ function registerShared(app, mode, authorize) {
       // Tenancy is always on: the client picks an active org
       // (X-Observogram-Org) from these before the first /api call.
       orgs: orgsOf(db, s.user),
+      // Proxy mode: where the studio goes after sign-out (the proxy's own
+      // session outlives this app's; null when none is configured).
+      ...(mode === 'proxy' ? { logoutUrl: proxyAuthConfig()?.logoutUrl ?? null } : {}),
     });
   });
+  // Not behind a reverse proxy: there is no session of this app's to end
+  // (every request is signed in by its headers), so the route is not
+  // registered and the account menu hides the item.
+  if (mode === 'proxy') return;
   // "Sign out my other sessions" (the account menu): a self route — the
   // caller's own session, never the pwflow cookie; the CSRF header in
   // every mode (selfGate, server/authz.mjs). The caller's epoch is bumped
@@ -442,7 +466,7 @@ function registerShared(app, mode, authorize) {
 
 // ---------- stand-alone: password login against the store ----------
 
-const AUTH_PAGE_STYLE = `<style>
+export const AUTH_PAGE_STYLE = `<style>
   body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f1623;color:#e5e8ec;
        font-family:'IBM Plex Sans',system-ui,sans-serif}
   form{background:#18202e;border:1px solid #2a3548;border-radius:10px;padding:32px 36px;min-width:320px}

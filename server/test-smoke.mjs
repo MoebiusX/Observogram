@@ -32,7 +32,7 @@ delete process.env.TOMOGRAPH_BUILD;
 // imports; a shell's OBSERVOGRAM_DB (or a seed / join-role knob) must not
 // leak in. The store lands in SMOKE_WORKSPACE. Read at start(), so these
 // land before it despite the hoisted import below.
-for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH', 'TRANSPORT_HOOK', 'TAXONOMY']) {
+for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH', 'TRANSPORT_HOOK', 'TAXONOMY', 'TRUST_PROXY_AUTH']) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
 }

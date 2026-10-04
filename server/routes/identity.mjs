@@ -29,6 +29,7 @@
 import express from 'express';
 import { join } from 'node:path';
 import { authDisabled, authEnabled, oidcEnabled } from '../auth.mjs';
+import { proxyAuthConfig } from '../auth-proxy.mjs';
 import { apiTokenLabel } from '../authz.mjs';
 import {
   AdminRefusal, addLocalUser, addMember, createOrgFromAdmin, disableUser, enableUser, findMemberCandidate, liveSignInMode,
@@ -225,8 +226,18 @@ export function identityRoutes({ authorize }) {
 
   // ---------- the join role ----------
 
+  // `mode` is the sign-in mode this server runs (local | oidc | proxy): the
+  // recorded join role rules OIDC and local rows only — behind a reverse
+  // proxy (server/auth-proxy.mjs) the first-sight role is the env's
+  // OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE, or the groups header when configured,
+  // and `proxy` says which.
   router.get('/api/admin/join-role', authorize('GET /api/admin/join-role'), handler((req, res, { db }) => {
-    res.json({ ok: true, role: getMeta(db, 'oidc_join_role'), oidc: oidcEnabled(), issuerKey: getMeta(db, 'oidc_issuer') });
+    const proxy = proxyAuthConfig();
+    res.json({
+      ok: true, role: getMeta(db, 'oidc_join_role'), oidc: oidcEnabled(), issuerKey: getMeta(db, 'oidc_issuer'),
+      mode: oidcEnabled() ? 'oidc' : proxy ? 'proxy' : 'local',
+      ...(proxy ? { proxy: { joinRole: proxy.joinRole, groupsConfigured: !!proxy.groupsHeader, org: proxy.org } } : {}),
+    });
   }));
 
   // The role an IdP user gets in the default org when their row is created

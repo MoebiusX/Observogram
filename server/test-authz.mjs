@@ -854,6 +854,7 @@ const MODE_ENV = {
     OBSERVOGRAM_OIDC_ISSUER: 'http://127.0.0.1:9', OBSERVOGRAM_OIDC_CLIENT_ID: 'studio', OBSERVOGRAM_OIDC_ALLOW_HTTP: '1',
     OBSERVOGRAM_SESSION_SECRET: 'authz-suite-session-secret-0123456789-abc',
   },
+  proxy: { OBSERVOGRAM_TRUST_PROXY_AUTH: '1', OBSERVOGRAM_TRUST_PROXY_AUTH_ACK: 'only-the-proxy-reaches-this-port' },
   off: { OBSERVOGRAM_AUTH: 'off' },
 };
 function inventory(mode) {

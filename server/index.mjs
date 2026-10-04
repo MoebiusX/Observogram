@@ -63,6 +63,7 @@ import {
 } from '../tools/lib/journey.mjs';
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
+import { describeProxyAuth } from './auth-proxy.mjs';
 import { validateMcpUrl, redactCredentials, stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
@@ -1977,6 +1978,9 @@ export async function start({ port = PORT, host = HOST, silent = false, legacyLi
   // Logged here once, by this entrypoint — the loader is silent.
   const transport = await mcpTransport();
   if (transport.hookPath) log(`[studio] MCP transport hook: ${describeTransport(transport)}`);
+  // Identity from a reverse proxy (OBSERVOGRAM_TRUST_PROXY_AUTH=1,
+  // server/auth-proxy.mjs): said once here, header names only, never the secret.
+  if (ctx.proxyAuth) log(`[studio] identity from the reverse proxy: ${describeProxyAuth(ctx.proxyAuth)}`);
   if (localUsersEnabled()) touchSessionSecret();
   // Journeys/runs live in the engine (tools/lib/journey.mjs) — wire its
   // root through the same context-aware resolver the registry uses.

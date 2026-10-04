@@ -5236,7 +5236,9 @@ function setupIdentityChip() {
   }
 
   // Account menu: who you are, change password (stand-alone mode — OIDC
-  // passwords belong to the IdP), sign out my other sessions, sign out.
+  // passwords belong to the IdP), sign out my other sessions (not behind a
+  // reverse proxy: the headers are the session, the route is not
+  // registered), sign out.
   // The name is its own span: beside the tabs it gives way (ux.css — ten
   // characters at a laptop width, the glyph alone at phone width), so the
   // tab titles keep their room; the title and the menu say it in full.
@@ -5252,7 +5254,7 @@ function setupIdentityChip() {
     <div class="hdr-user-menu" hidden>
       <div class="hdr-user-menu-id" aria-live="polite">signed in as <strong>${escapeHtml(me.email || me.sub)}</strong><span class="hdr-user-menu-mode">${escapeHtml(me.mode)}</span></div>
       ${me.mode === 'local-users' ? '<a class="hdr-user-menu-item" href="/auth/change-password">change password…</a>' : ''}
-      <button type="button" class="hdr-user-menu-item hdr-user-others">sign out my other sessions</button>
+      ${me.mode === 'proxy' ? '' : '<button type="button" class="hdr-user-menu-item hdr-user-others">sign out my other sessions</button>'}
       <button type="button" class="hdr-user-menu-item hdr-user-out">sign out</button>
     </div>
   `;
@@ -5268,7 +5270,7 @@ function setupIdentityChip() {
   // browser's cookie comes back re-issued (Set-Cookie). The id line says
   // what happened — or the server's refusal, as it words it.
   const others = chip.querySelector('.hdr-user-others');
-  others.addEventListener('click', async () => {
+  if (others) others.addEventListener('click', async () => {
     others.disabled = true;
     let status = 0;
     let body;
@@ -5282,9 +5284,17 @@ function setupIdentityChip() {
     chip.querySelector('.hdr-user-menu-id').textContent = signOutOthersText(status, body);
     others.disabled = false;
   });
+  // Behind a reverse proxy the proxy's session outlives this app's: go to
+  // its logout URL when the server names one (/auth/me logoutUrl); without
+  // one, say what happened instead of landing on the 401 explainer.
   chip.querySelector('.hdr-user-out').addEventListener('click', async () => {
     forgetMcpUrls(me.user?.login);   // a shared browser keeps no MCP URL or deploy profile of this user
     await fetch('/auth/logout', { method: 'POST', headers: { ...authHeaders() } }).catch(() => {});
+    if (me.mode === 'proxy') {
+      if (me.logoutUrl) { window.location.assign(me.logoutUrl); return; }
+      chip.querySelector('.hdr-user-menu-id').textContent = 'signed out of this app only — the reverse proxy still knows you; end its session there';
+      return;
+    }
     window.location.assign('/auth/login');
   });
   actions.appendChild(chip);

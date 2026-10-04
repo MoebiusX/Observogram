@@ -35,7 +35,7 @@ delete process.env.TOMOGRAPH_WORKSPACE;
 const DB_DIR = mkdtempSync(join(tmpdir(), 'observogram-ws-db-'));
 const DB_PATH = join(DB_DIR, 'observogram.db');
 process.env.OBSERVOGRAM_DB = DB_PATH;
-for (const k of ['BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH']) {
+for (const k of ['BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH', 'TRUST_PROXY_AUTH']) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
 }

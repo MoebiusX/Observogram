@@ -21,6 +21,10 @@ export const STRIP = [
   'DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH', 'WORKSPACE', 'USERS_FILE',
   'OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_REDIRECT_URL', 'OIDC_ALLOW_HTTP', 'OIDC_SECURE_COOKIES',
   'SESSION_SECRET', 'API_TOKEN', 'API_TOKEN_LABEL', 'AUTH', 'TRANSPORT_HOOK', 'TAXONOMY',
+  // The reverse-proxy identity mode (server/auth-proxy.mjs PROXY_AUTH_ENV).
+  'TRUST_PROXY_AUTH', 'TRUST_PROXY_AUTH_ACK', 'PROXY_AUTH_REALM', 'PROXY_AUTH_USER_HEADER', 'PROXY_AUTH_EMAIL_HEADER',
+  'PROXY_AUTH_NAME_HEADER', 'PROXY_AUTH_GROUPS_HEADER', 'PROXY_AUTH_GROUP_ROLES', 'PROXY_AUTH_ORG', 'PROXY_AUTH_JOIN_ROLE',
+  'PROXY_AUTH_OWNERS', 'PROXY_AUTH_SHARED_SECRET', 'PROXY_AUTH_SECRET_HEADER', 'PROXY_AUTH_LOGOUT_URL',
 ];
 
 export function childEnv(ws, extra = {}) {
@@ -33,9 +37,13 @@ export function childEnv(ws, extra = {}) {
 
 // ---------- the children ----------
 
+// The import is inside the try: initAuth() runs at import and refuses a
+// malformed identity contract there (the reverse-proxy mode's ACK, OIDC
+// beside it), so that refusal prints REFUSED too — its message raw, no
+// nothingMoved (nothing ran that could write).
 export const BOOT_CODE = `
-const { start } = await import(${JSON.stringify(INDEX_URL)});
 try {
+  const { start } = await import(${JSON.stringify(INDEX_URL)});
   const srv = await start({ port: Number(process.env.BOOT_PORT || 0), host: process.env.BOOT_HOST, silent: process.env.BOOT_SILENT === '1', legacyLivePack: process.env.BOOT_LEGACY_LIVE_PACK || undefined });
   process.stdout.write('LISTENING ' + srv.address().port + '\\n');
   if (process.env.BOOT_KEEP !== '1') { srv.close(); process.exit(0); }

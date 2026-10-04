@@ -23,12 +23,12 @@
 //   exposed      allow · refuse · rule — the open-exposed posture's answer;
 //                admin / owner → refuse, else allow
 //   identityApi  the identity API (/api/admin/*, /api/org*)
-//   modes        where the route is registered: local, oidc, off (the
-//                /auth/* routes follow initAuth()'s mode)
+//   modes        where the route is registered: local, oidc, proxy, off
+//                (the /auth/* routes follow initAuth()'s mode)
 //   self         { pwflow, session, unauth } — class self only
 
 export const CLASSES = Object.freeze(['public', 'self', 'viewer', 'operator', 'admin', 'owner']);
-export const MODES = Object.freeze(['local', 'oidc', 'off']);
+export const MODES = Object.freeze(['local', 'oidc', 'proxy', 'off']);
 
 // A route that registers a pack (server/pack-registry.mjs): the pack's row
 // (pack.register, or pack.update for the same content under another label
@@ -43,14 +43,14 @@ export const ROUTES = Object.freeze({
   // ---------- public ----------
   'GET /healthz': { class: 'public' },
   'GET /api/version': { class: 'public' },
-  'GET /auth/login': { class: 'public', modes: ['local', 'oidc'] },
+  'GET /auth/login': { class: 'public', modes: ['local', 'oidc', 'proxy'] },
   'POST /auth/login': { class: 'public', csrf: 'form', modes: ['local'] },
   'GET /auth/callback': {
     class: 'public', modes: ['oidc'],
     audit: ['user.jit', 'membership.jit', 'owner.bootstrap', 'user.update'],
   },
-  'POST /auth/logout': { class: 'public', csrf: 'none', modes: ['local', 'oidc'] },
-  'GET /auth/me': { class: 'public', modes: ['local', 'oidc'] },
+  'POST /auth/logout': { class: 'public', csrf: 'none', modes: ['local', 'oidc', 'proxy'] },
+  'GET /auth/me': { class: 'public', modes: ['local', 'oidc', 'proxy'] },
   'GET /^(?!\\/api\\/).*/': { class: 'public' },
 
   // ---------- self: the caller's own row ----------
@@ -67,7 +67,8 @@ export const ROUTES = Object.freeze({
     self: { pwflow: true, session: false, unauth: 'flow-expired' },
   },
   // "Sign out my other sessions": a session only (never the pwflow cookie),
-  // and an identity change, so the CSRF header in every mode.
+  // and an identity change, so the CSRF header in every mode. Not behind a
+  // reverse proxy: the headers are the session, there is none to end.
   'POST /auth/signout-others': {
     class: 'self', csrf: 'always', modes: ['local', 'oidc'], audit: ['user.signout'],
     self: { pwflow: false, session: true, unauth: 'json' },
