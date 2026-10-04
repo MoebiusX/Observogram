@@ -420,3 +420,45 @@ test('source guard: no studio or auth-page source names the product as chrome ou
   // The default header SVG lives in brand.mjs alone.
   assert.ok(!read('studio/app.mjs').includes('observaLogoG'));
 });
+
+// ---------- gen-design-tokens with a brand ----------
+
+test('design tokens: an unconfigured brand yields the one-argument document; a configured one overrides per theme and names itself', async () => {
+  const { designTokensDocument, designTokensJson, runDesignTokensCli, WRITE_WITH_BRAND_REFUSED } = await import('./gen-design-tokens.mjs');
+  const css = read('studio/design-tokens.css');
+  const plain = designTokensJson(css);
+  assert.equal(designTokensJson(css, normalizeBrand({})), plain, 'gated on configured, not on non-null');
+  assert.equal(designTokensJson(css, null), plain);
+  assert.equal(designTokensJson(css, DEFAULT_BRAND), plain);
+  assert.equal(plain, read('studio/design-tokens.json').replace(/\r\n/g, '\n'), 'the committed default is the one-argument output');
+  const base = designTokensDocument(css);
+  assert.ok(!('brand' in base));
+  const doc = designTokensDocument(css, ACME);
+  assert.equal(doc.brand, 'Acme Watch');
+  assert.equal(doc.themes.light.accent, '#b3261e');
+  assert.equal(doc.themes.light['accent-solid'], '#f28b82');
+  assert.equal(doc.themes.dark.accent, '#f28b82');
+  assert.equal(doc.themes.dark['accent-solid'], '#f28b82', 'a light override applies to dark too unless the dark map restates it (the CSS restates accent-solid; the injected :root{} still wins the cascade)');
+  for (const theme of ['light', 'dark']) {
+    for (const [name, value] of Object.entries(base.themes[theme])) {
+      if (['accent', 'accent-solid'].includes(name)) continue;
+      assert.equal(doc.themes[theme][name], value, `${theme}.${name} untouched`);
+    }
+    assert.deepEqual(Object.keys(doc.themes[theme]).sort(), Object.keys(base.themes[theme]).sort(), `${theme}: the same token set`);
+  }
+  assert.deepEqual(Object.keys(doc), ['$comment', 'version', 'prefix', 'brand', 'themes']);
+  assert.throws(() => designTokensDocument(css, normalizeBrand({ tokens: { light: { 'not-a-token': '#000' } } })), /brand: tokens\.light\.not-a-token is not a token studio\/design-tokens\.css defines/);
+  // The CLI: --brand explicit, --write refused with a brand, --out for the branded JSON, no env read.
+  const writes = [];
+  const io = { css, writeDefault: (j) => writes.push(['default', j.length]), writeOut: (p, j) => writes.push([p, j.length]), readBrandFile: (p) => (p === 'acme.json' ? JSON.parse(read('tools/fixtures/brand/acme.json')) : (() => { throw new Error(`no ${p}`); })()) };
+  assert.equal(runDesignTokensCli([], io).json, plain);
+  assert.equal(runDesignTokensCli(['--brand', 'acme.json'], io).json, designTokensJson(css, ACME));
+  assert.throws(() => runDesignTokensCli(['--brand', 'acme.json', '--write'], io), new RegExp(`^Error: ${WRITE_WITH_BRAND_REFUSED.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
+  assert.deepEqual(writes, [], 'a refused write writes nothing');
+  assert.deepEqual(runDesignTokensCli(['--brand', 'acme.json', '--out', 'dist/tokens.json'], io).wrote, 'dist/tokens.json');
+  assert.deepEqual(runDesignTokensCli(['--write'], io).wrote, 'studio/design-tokens.json');
+  assert.deepEqual(writes.map((w) => w[0]), ['dist/tokens.json', 'default']);
+  assert.throws(() => runDesignTokensCli(['--brand'], io), /--brand needs a value/);
+  assert.throws(() => runDesignTokensCli(['--brand', '--out', 'x'], io), /--brand needs a value/);
+  assert.ok(!read('tools/gen-design-tokens.mjs').includes('brand-env'), 'the generator never reads OBSERVOGRAM_BRAND_FILE: --write in a branded shell still regenerates the default');
+});
