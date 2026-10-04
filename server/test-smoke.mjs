@@ -57,6 +57,12 @@ const { currentStore } = await import('./store/db.mjs');
 const { runWithOrg } = await import('./tenancy.mjs');
 const { listPacks } = await import('./store/packs.mjs');
 const { listServices } = await import('./store/services.mjs');
+const { listAudit } = await import('./store/audit.mjs');
+
+// The default org's newest audit rows (STORE_PLAN slice 5): the deploy
+// routes write theirs after the deploys.jsonl append.
+const auditRows = (filter = {}) => runWithOrg('default', () => listAudit(currentStore(), { limit: 5, ...filter }));
+const auditSeq = () => auditRows({ limit: 1 })[0]?.seq ?? 0;
 
 const failures = [];
 function assert(cond, label, got, want) {
@@ -543,6 +549,17 @@ try {
   assert(auditRec?.items?.[0]?.error && !/Bearer|token=/i.test(auditRec.items[0].error),
          'audited error is present and credential-free');
   assert(!('verify' in (auditRec || {})), 'no verify field until re-verify writes one back');
+  // The deploy.run row after the line (STORE_PLAN slice 5): the same actor,
+  // counts and the MCP origin — never the URL's path or the item's error.
+  const runRow = auditRows({ action: 'deploy.run', limit: 1 })[0];
+  assert(runRow?.targetId === deployErr.deployId && runRow.actor === 'local' && runRow.orgId === 'default' && runRow.targetKind === 'deploy',
+         'the failed deploy writes one deploy.run row by local naming its deployId', runRow);
+  assert(JSON.stringify(runRow?.detail) === JSON.stringify({
+    pack: { id: 'payment-service', version: auditRec.pack.version }, env: null, target: { product: 'grafana', version: '12', folder: null },
+    mode: 'upsert', dryRun: false, origin: 'http://127.0.0.1:1', mcpEndpoint: null, items: 1, ok: 0, failed: 1, tookMs: auditRec.tookMs,
+  }), 'the deploy.run row: the exact detail — failed: 1, the origin, no snapshot key, no fileError key', runRow?.detail);
+  assert(!JSON.stringify(runRow?.detail).includes('no-mcp'), 'the row carries the origin, never the URL\'s path', runRow?.detail);
+  assert(!('auditError' in deployErr), 'a written row: no auditError key in the response');
 
   // Post-deploy re-verify write-back (item 9): the verify outcome lands as
   // its own audit record and merges into the deploy at read time.
@@ -557,6 +574,11 @@ try {
     }),
   });
   assert(verifyRes.status === 200, 'POST /api/deploys/:id/verify accepts a verify outcome');
+  const verifyRow = auditRows({ action: 'deploy.verify', limit: 1 })[0];
+  assert(verifyRow?.targetId === deployErr.deployId && verifyRow.actor === 'local'
+         && JSON.stringify(verifyRow.detail) === JSON.stringify({ outcome: 'pending', alignment: null, attempts: 2 }),
+         'the verify writes one deploy.verify row: outcome, alignment, attempts — summary and transitions stay in the line', verifyRow);
+  const seqBeforeRefusals = auditSeq();
   const auditAfter = await getJson(base, `/api/deploys?pack=payment-service&limit=10`);
   const mergedRec = auditAfter.deploys.find(d => d.deployId === deployErr.deployId);
   assert(mergedRec?.verify?.outcome === 'pending', 'verify outcome merges into the deploy record');
@@ -569,6 +591,7 @@ try {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
   });
   assert(verify400.status === 400, 'verify with malformed deployId → 400');
+  assert(auditSeq() === seqBeforeRefusals, 'the refused verifies (404, 400) write no row');
 
   // --- write-route auth (10B) — token read lazily per request, so the
   // posture can be flipped mid-suite. ---
@@ -619,6 +642,10 @@ try {
   const authedRec = authedAudit.deploys.find(d => d.deployId === authedDeploy.deployId);
   assert(authedRec?.actor === 'smoke-ci', 'audit actor is the token label', authedRec?.actor, 'smoke-ci');
   assert(!JSON.stringify(authedRec).includes('smoke-secret'), 'the token secret never lands in the audit log');
+  const authedRow = auditRows({ action: 'deploy.run', limit: 1 })[0];
+  assert(authedRow?.targetId === authedDeploy.deployId && authedRow.actor === 'smoke-ci',
+         'the bearer\'s deploy.run row names the token label as its actor — the line and the row agree', authedRow);
+  assert(!JSON.stringify(authedRow).includes('smoke-secret'), 'the token secret never lands in the audit row');
   delete process.env.OBSERVOGRAM_API_TOKEN;
   delete process.env.OBSERVOGRAM_API_TOKEN_LABEL;
   const reopened = await fetch(`${base}/api/validate`, {
@@ -1029,6 +1056,13 @@ try {
     const bulkBody = await deployBulk.json();
     assert(bulkBody.ok === true && bulkBody.summary?.ok === 2,
            'deploy-bulk reports both artefacts as deployed', bulkBody.summary, { ok: 2 });
+    const bulkRow = auditRows({ action: 'deploy.bulk', limit: 1 })[0];
+    assert(bulkRow?.targetId === bulkBody.deployId && bulkRow.actor === 'local'
+           && bulkRow.detail.items === 2 && bulkRow.detail.ok === 2 && bulkRow.detail.failed === 0 && bulkRow.detail.snapshot === 'captured'
+           && bulkRow.detail.origin === new URL(fakeMcp.url).origin && bulkRow.detail.mcpEndpoint === null
+           && bulkRow.detail.target.folder === 'observability-pack' && !('fileError' in bulkRow.detail),
+           'deploy-bulk writes one deploy.bulk row: ok 2 of 2, snapshot captured, the fake\'s origin', bulkRow);
+    assert(!('auditError' in bulkBody), 'deploy-bulk: no auditError key when the row was written');
 
     // Pre-deploy snapshot (10D): the read calls land BEFORE the writes.
     const callNames = fakeMcp.calls.map(c => c.name);
@@ -1082,12 +1116,19 @@ try {
     const rbAudit = await getJson(base, `/api/deploys?pack=payment-service&limit=3`);
     assert(rbAudit.deploys.find(d => d.deployId === rb.deployId)?.rollbackOf === bulkBody.deployId,
            'the rollback lands in the audit log with rollbackOf');
+    const rbRow = auditRows({ action: 'deploy.rollback', limit: 1 })[0];
+    assert(rbRow?.targetId === rb.deployId && rbRow.actor === 'local' && rbRow.detail.rollbackOf === bulkBody.deployId
+           && rbRow.detail.items === 1 && rbRow.detail.ok === 1 && rbRow.detail.failed === 0 && rbRow.detail.manual === rb.manual.length
+           && rbRow.detail.pack?.id === 'payment-service' && rbRow.detail.origin === new URL(fakeMcp.url).origin,
+           'the rollback writes one deploy.rollback row: its own deployId as the target, rollbackOf the original, the manual count', rbRow);
+    const seqBefore409 = auditSeq();
 
     // A deploy with no snapshot (the earlier single-route 502) can't roll back.
     const rb409 = await fetch(`${base}/api/deploys/${deployErr.deployId}/rollback`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mcpUrl: fakeMcp.url }),
     });
     assert(rb409.status === 409, 'rollback without a usable snapshot → 409');
+    assert(auditSeq() === seqBefore409, 'the 409 rollback writes no row');
   } finally {
     await fakeMcp.close();
   }

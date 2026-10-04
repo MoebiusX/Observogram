@@ -20,9 +20,10 @@
 // (docs/ARCHITECTURE_EVOLUTION.md §3.2).
 
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
-import { redactCredentials } from './mcp-url.mjs';
+import { redactCredentials, mcpUrlOrigin } from './mcp-url.mjs';
 import { isTransportHookError } from '../tools/lib/mcp-client.mjs';
 import { saveDeploySnapshot } from './workspace.mjs';
+import { bounded } from './audit-after.mjs';
 
 export const DEPLOY_PRODUCTS = ['grafana'];
 export const DEPLOY_VERSIONS = {
@@ -245,4 +246,60 @@ export async function captureDeploySnapshot({ deployId, callTool, availableTools
     process.stderr.write(`[deploy-bulk]   snapshot write failed: ${e.message}\n`);
   }
   return { status: meta.status, itemCount: meta.items.length };
+}
+
+// ---------------------------------------------------------------------------
+// The audit row of a deploys.jsonl record (STORE_PLAN slice 5): counts and
+// the MCP origin, never the URL, an item's error or a tool name — the record
+// itself stays the file of record, keyed by the deployId the row names. The
+// action is the caller's (the route's table row: deploy.run, deploy.bulk,
+// deploy.rollback — a one-item bulk deploy is a deploy.bulk), never inferred
+// from the shape. Every request-supplied text is bounded before it enters
+// the permanent row; `fileError: true` only when the caller says the line
+// could not be appended; `manual` (a rollback's by-hand steps) only when
+// given.
+// ---------------------------------------------------------------------------
+export function deployAuditRow(record, { action, mcpEndpoint = null, manual, fileError = false } = {}) {
+  if (!['deploy.run', 'deploy.bulk', 'deploy.rollback'].includes(action)) {
+    throw new TypeError(`deployAuditRow: action must be deploy.run, deploy.bulk or deploy.rollback (got ${JSON.stringify(action)})`);
+  }
+  const items = Array.isArray(record.items) ? record.items : [];
+  const pack = record.pack && typeof record.pack === 'object'
+    ? { id: bounded(record.pack.id), version: bounded(record.pack.version) }
+    : null;
+  const counts = {
+    items: items.length,
+    ok: items.filter((i) => i && i.ok).length,
+    failed: items.filter((i) => !(i && i.ok)).length,
+  };
+  const common = {
+    env: bounded(record.env),
+    dryRun: record.dryRun === true,
+    origin: typeof record.mcpUrl === 'string' ? mcpUrlOrigin(record.mcpUrl) : null,
+    mcpEndpoint: mcpEndpoint ? { id: mcpEndpoint.id, name: bounded(mcpEndpoint.name) } : null,
+  };
+  const tail = {
+    ...counts,
+    ...(action === 'deploy.rollback' ? { manual: Number.isFinite(manual) ? manual : 0 } : {}),
+    tookMs: Number.isFinite(record.tookMs) ? record.tookMs : 0,
+    ...(fileError ? { fileError: true } : {}),
+  };
+  if (action === 'deploy.rollback') {
+    return {
+      action, targetKind: 'deploy', targetId: record.deployId,
+      detail: { rollbackOf: bounded(record.rollbackOf), pack, ...common, ...tail },
+    };
+  }
+  const target = record.target && typeof record.target === 'object'
+    ? { product: bounded(record.target.product), version: bounded(record.target.version), folder: bounded(record.target.folder) }
+    : null;
+  return {
+    action, targetKind: 'deploy', targetId: record.deployId,
+    detail: {
+      pack, env: common.env, target, mode: bounded(record.mode), dryRun: common.dryRun,
+      origin: common.origin, mcpEndpoint: common.mcpEndpoint,
+      ...(action === 'deploy.bulk' ? { snapshot: bounded(record.snapshot?.status) } : {}),
+      ...tail,
+    },
+  };
 }

@@ -685,7 +685,7 @@ app.get('/api/packs/:id/export.zip', authorize('GET /api/packs/:id/export.zip'),
 // plan/execute, bulk + single deploy) live in server/routes/deploy.mjs;
 // the shaping transforms in server/deploy-helpers.mjs. The pack-registry
 // seam is injected until the registry extraction slice.
-app.use(deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, actorForRequest: actorOf, contentHash, authorize }));
+app.use(deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, contentHash, authorize }));
 
 // The identity API (STORE_PLAN slice 3b) lives in server/routes/identity.mjs:
 // the deployment's users, orgs and join role under /api/admin/* (owners),

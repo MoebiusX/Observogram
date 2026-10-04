@@ -55,6 +55,8 @@ const { listMembershipsForUser } = await import('./store/memberships.mjs');
 const { orgWorkspaceRoot, runWithOrg } = await import('./tenancy.mjs');
 const { listPacks } = await import('./store/packs.mjs');
 const { listServices } = await import('./store/services.mjs');
+const { listAudit } = await import('./store/audit.mjs');
+const { routeEntry } = await import('./route-table.mjs');
 const { orgChipModel } = await import('../studio/api.mjs');
 const { GRAFANA_ALERT_RULE_TOOL, GRAFANA_DASHBOARD_TOOL } = await import('./deploy-helpers.mjs');
 const { allKnownToolNames } = await import('../tools/lib/contracts/mcp-capabilities.mjs');
@@ -169,13 +171,24 @@ const OWNER_ONLY = new Set([
   'GET /api/admin/orgs', 'POST /api/admin/orgs', 'DELETE /api/admin/orgs/:id', 'GET /api/admin/join-role', 'PUT /api/admin/join-role',
 ]);
 
+// The audit's newest seq, and the rows written after `seq` (oldest first) as
+// [action, actor, orgId, targetId, detail] — STORE_PLAN slice 5: the deploy
+// routes write their row after the deploys.jsonl line, in the request's org,
+// by the principal's login; each action must be one the route table lists
+// for its route, so a typo in the table fails here.
+const auditSeq = () => listAudit(currentStore(), { limit: 1 })[0]?.seq ?? 0;
+const rowsAfter = (seq) => listAudit(currentStore(), { limit: 1000 }).filter(r => r.seq > seq).reverse()
+  .map(r => [r.action, r.actor, r.orgId, r.targetId, r.detail]);
+const listedFor = (key, rows) => rows.every(([action]) => routeEntry(key).audit.includes(action));
+
 // alice, in `org`, creates the objects the sweep addresses: a registered
-// pack, a deploy with a snapshot against the fake MCP, a verify on it, a
-// journey captured and run once, the org's live pack (planted; the
-// route's own write into a created org is the default-at-'.' block's), and
-// — STORE_PLAN slice 4 — a service record with one environment and an MCP
-// endpoint record (its variable named with the org's own prefix) through
-// the API (rows in the store, nothing under `dir`).
+// pack, a deploy with a snapshot against the fake MCP (its deploy.bulk row),
+// a verify on it (its deploy.verify row), a journey captured and run once,
+// the org's live pack (planted; the route's own write into a created org is
+// the default-at-'.' block's), and — STORE_PLAN slice 4 — a service record
+// with one environment and an MCP endpoint record (its variable named with
+// the org's own prefix) through the API (rows in the store, nothing under
+// `dir`).
 async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   const h = { Cookie: cookie, 'X-Observogram-CSRF': '1', 'X-Observogram-Org': org };
   mkdirSync(join(dir, 'live'), { recursive: true });
@@ -190,6 +203,7 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   j = await r.json();
   const packId = j.registered?.id;
   assert(!!packId && existsSync(join(dir, 'packs', `${packId}.pack.yaml`)), `alice registers a pack into ${org}`, j.registered);
+  let seq = auditSeq();
   r = await fetch(`${root}/api/packs/${packId}/deploy-bulk`, {
     method: 'POST', headers: { ...h, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -204,10 +218,22 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   const deployId = j.deployId;
   assert(r.status === 200 && !!deployId && existsSync(join(dir, 'snapshots', deployId, 'meta.json')),
     `alice deploys in ${org}: a deployId with a snapshot under its root`, [r.status, deployId]);
+  let rows = rowsAfter(seq);
+  assert(rows.length === 1 && listedFor('POST /api/packs/:id/deploy-bulk', rows)
+    && JSON.stringify(rows[0].slice(0, 4)) === JSON.stringify(['deploy.bulk', 'alice', org, deployId])
+    && rows[0][4].items === 2 && rows[0][4].ok === 2 && rows[0][4].failed === 0 && rows[0][4].snapshot === 'captured'
+    && rows[0][4].origin === new URL(mcp.url).origin && !('fileError' in rows[0][4]),
+    `alice's deploy in ${org}: exactly one deploy.bulk row by alice in ${org} (an action the table lists), ok 2 of 2, snapshot captured`, rows);
+  assert(!('auditError' in j), `alice's deploy in ${org}: the row was written (no auditError)`, j.auditError);
+  seq = auditSeq();
   r = await fetch(`${root}/api/deploys/${deployId}/verify`, {
     method: 'POST', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ outcome: 'pending' }),
   });
   assert(r.status === 200, `alice records a verify in ${org}`, r.status, 200);
+  rows = rowsAfter(seq);
+  assert(rows.length === 1 && listedFor('POST /api/deploys/:deployId/verify', rows)
+    && JSON.stringify(rows) === JSON.stringify([['deploy.verify', 'alice', org, deployId, { outcome: 'pending', alignment: null, attempts: null }]]),
+    `alice's verify in ${org}: exactly one deploy.verify row by alice in ${org} (an action the table lists)`, rows);
   r = await fetch(`${root}/api/journeys/capture`, {
     method: 'POST', headers: { ...h, 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: journey, packAId: packId, packBId: 'production-curated', env: 'prod' }),

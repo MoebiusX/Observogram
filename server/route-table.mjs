@@ -123,10 +123,10 @@ export const ROUTES = Object.freeze({
   // ---------- operator: every existing mutation ----------
   'DELETE /api/uploads': { class: 'operator', audit: ['pack.clear'] },
   'POST /api/packs/:id/retrofeed': { class: 'operator' }, // computes; writes nothing
-  'POST /api/deploys/:deployId/verify': { class: 'operator' },
-  'POST /api/deploys/:deployId/rollback': { class: 'operator' },
-  'POST /api/packs/:id/deploy-bulk': { class: 'operator' },
-  'POST /api/packs/:id/deploy/:target': { class: 'operator' },
+  'POST /api/deploys/:deployId/verify': { class: 'operator', audit: ['deploy.verify'] },
+  'POST /api/deploys/:deployId/rollback': { class: 'operator', audit: ['deploy.rollback'] },
+  'POST /api/packs/:id/deploy-bulk': { class: 'operator', audit: ['deploy.bulk'] },
+  'POST /api/packs/:id/deploy/:target': { class: 'operator', audit: ['deploy.run'] },
   'POST /api/journeys/:name/run': { class: 'operator' },
   'POST /api/journeys/capture': { class: 'operator' },
   'POST /api/draft-from-mcp': { class: 'operator', audit: PACK_REGISTER },
