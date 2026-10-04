@@ -681,6 +681,16 @@ reads each org's own live pack, `<org root>/live/production-live.pack.yaml`
 refresh; `OUTPUT=<org root>/live/production-live.pack.yaml npm run fetch-live`
 feeds it from the CLI. Both keep the same safe URL: no userinfo, fragment or
 credential query parameter (`MCP_AUTH` is the place for a token).
+Behind a gateway with its own auth, extra headers, a proxy or a private CA,
+`OBSERVOGRAM_TRANSPORT_HOOK=<path.mjs>` names a module whose
+`prepareRequest({ url, headers })` (sync or async) is applied to every MCP
+request the CLI, the recorder, the live probes, a journey and the studio
+server make, and whose optional `fetchImpl` replaces the fetcher; the URL it
+returns passes the same http(s)/local-address policy as the caller's. A hook
+that fails to load or breaks its contract is a hard failure — exit 1, no pack
+written; the server refuses to start on a load failure — while network
+failures through it stay ordinary probe failures. Unset, nothing changes
+(`docs/MCP_INTEGRATION.md`, "Transport hook").
 When the MCP exposes `metrics_query`, the fetch also samples the observability
 stack's own self-metrics (scrape, ruler, notify, tsdb, collector, dashboards,
 synthetic, logs, traces) as point-in-time signals — never verdicts, stamps or

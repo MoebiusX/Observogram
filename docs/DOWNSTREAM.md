@@ -174,7 +174,31 @@ The golden suites read `tools/fixtures/` — copy that directory with them.
   `artifact-model`, `constants`, `verify-deploy`, `metric-readers`): still the
   prose table, still CI-asserted zero-import; folding them into the manifest
   (which would also let `retrofeed.mjs` enter the set) is a follow-up.
-- The other downstream seams — transport hook, artefact taxonomy, branding,
-  proxy identity, the embeddable studio bundle — are documented where they
-  land; the *Decisions — downstream seams* section of
+- The other downstream seams — artefact taxonomy, branding, proxy identity,
+  the embeddable studio bundle — are documented where they land; the
+  *Decisions — downstream seams* section of
   [`UPDATE_JOURNEY.md`](UPDATE_JOURNEY.md) tracks them.
+
+## 9. The private plugin layer
+
+A downstream runs the vendored snapshot plus a thin layer of its own. Each
+seam is configuration the snapshot reads, never a patch to it — so a bump is
+a bump. The surface so far:
+
+| Seam | Configuration | Where it is documented |
+|---|---|---|
+| Backend access (W2) | `OBSERVOGRAM_TRANSPORT_HOOK=<path.mjs \| file:URL>` — a module exporting `prepareRequest({ url, headers })` and/or `fetchImpl(url, init)`, applied to every MCP request of the CLI, the recorder, the probes, journeys and the studio server; `OBSERVOGRAM_ALLOW_LOCAL_MCP=0` still binds the URL it returns | [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md), "Transport hook" |
+
+A minimal plugin layer for the backend seam is one file the deployment
+points at:
+
+```bash
+# hooks/gateway.mjs: export function prepareRequest({ url, headers }) { … }
+OBSERVOGRAM_TRANSPORT_HOOK=/opt/observogram-plugins/hooks/gateway.mjs npm run dev
+```
+
+The client the hook plugs into, `tools/lib/mcp-client.mjs`, is itself a
+listed module of this manifest: a downstream that vendors it gets the same
+`transport` parameter (`createMcpClient({ mcpUrl, mcpAuth, timeoutMs,
+transport })`) and the same `TransportHookError` contract in its own
+tooling.

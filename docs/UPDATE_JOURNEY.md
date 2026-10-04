@@ -459,3 +459,39 @@ removed. Config surface at runtime: none — nothing under `server/`,
 `studio/` or `tools/lib` reads the manifest. Scripts: `vendor-manifest`,
 `vendor-manifest:check`, `lint:vendor-manifest`, `test:vendor-manifest`.
 Tests: 689 → 700.
+
+**W2 — the transport hook.** Delivered as `OBSERVOGRAM_TRANSPORT_HOOK`
+([`MCP_INTEGRATION.md`](MCP_INTEGRATION.md), "Transport hook"): one MCP send
+path in the new, vendorable `tools/lib/mcp-client.mjs` (the client left
+`tools/fetch-live-pack.mjs`, which keeps re-exporting `createMcpClient` so
+the recorder and the deploy routes import it unchanged), a Node-only loader
+`tools/mcp-transport.mjs`, and the URL policy moved into
+`tools/lib/mcp-url-safety.mjs` (`mcpUrlPolicy`; `server/mcp-url.mjs`
+delegates byte-identically). Decisions: the hook path resolves against the
+working directory, the way `OUTPUT` and `MCP_URL` are read; the hook applies
+to the server's MCP calls too — loaded once per process, logged once by each
+entrypoint (the CLI on stderr, the server through `log()` so a silent boot
+stays silent), never by the loader; only contract faults are wrapped as
+`TransportHookError` — a rejection from native `fetch` or from the hook's own
+`fetchImpl` stays an ordinary wire error, so a 503 on one probe is retried
+and annotated exactly as without a hook, and installing a header hook never
+turns a transient failure into a FATAL exit; returned headers are merged over
+the built ones, so a hook that adds one header does not drop
+`Mcp-Session-Id`; CR or LF in a returned header is a fault, because a custom
+`fetchImpl` may not refuse it; the client redacts the bearer *and* every
+credential value of the URL (userinfo, `token=`-style parameters) from the
+hook's own error text, since the raw caller URL reaches the hook; a
+`fetchImpl`-only hook skips the final-URL re-check (the URL is the caller's,
+already validated); every swallowing catch — the fetcher's `safe`, `quiet`,
+initialize/notify/tools-list, the per-kind inventory catch and the three
+default `quietly` fallbacks of the probe helpers, the recorder's `attempt`,
+the journey engine's vantage-lost and inventory catches, the deploy routes'
+per-item catches and the snapshot capture — rethrows a hook fault, so the
+hard fail is hard everywhere: no pack, no fixture, no run record, no deploy
+or rollback record, one 502. Config surface: `OBSERVOGRAM_TRANSPORT_HOOK`
+(legacy `TOMOGRAPH_TRANSPORT_HOOK` honoured, the modern name in every
+message); no route, no flag. Inert when unset: the request log is identical
+with no hook and with an identity hook, and the goldens are byte-identical.
+Tests: 700 → 706 (`tools/test-mcp-transport.mjs`,
+`server/test-transport-hook.mjs`; `test-fetch-live`, `test-record-fixtures`
+and `test-journey` extended and made hermetic to the variable).
