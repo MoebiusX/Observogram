@@ -29,6 +29,8 @@ import {
 } from './fetch-live-pack.mjs';
 import { isTransportHookError } from './lib/mcp-client.mjs';
 import { STACK_SELF_METRIC_PROBES } from './lib/contracts/stack-self-metrics.mjs';
+import { capabilityTool } from './lib/contracts/mcp-capabilities.mjs';
+import { expectedFromSite } from './lib/inventory-coverage.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = JSON.parse(readFileSync(
@@ -2173,12 +2175,34 @@ const healthFor = (uid) => (uid === HEALTH_ERR.datasource?.uid ? HEALTH_ERR : HE
     const loading = await failing(() => fetchMcp({ mcpUrl: fake.url, transport: Promise.reject(Object.assign(new Error('OBSERVOGRAM_TRANSPORT_HOOK: cannot load /x/nope.mjs: no'), { name: 'TransportHookError' })) }));
     assert(isTransportHookError(loading) && /cannot load/.test(loading.message), 'a transport promise that rejects fails fetchMcp before any wire call', loading?.message);
 
-    const expected = { kinds: { host: { count: 2, labels: ['a', 'b'] } } };
+    const expected = expectedFromSite({ expected: { kinds: { host: { label: 'instance', jobs: ['node'], names: ['a', 'b'] } } } });
     const invFirst = await failing(() => observeInventory({ mcpUrl: fake.url, expected, transport: { hookPath: '/x/hook.mjs', prepareRequest: () => { throw new Error('boom'); } } }));
     assert(isTransportHookError(invFirst), 'observeInventory rejects on a hook that throws at initialize', invFirst?.message);
     const invLate = throwingFrom(3);
     const invThird = await failing(() => observeInventory({ mcpUrl: fake.url, expected, transport: invLate.transport }));
     assert(isTransportHookError(invThird) && invLate.calls() === 3, 'observeInventory rejects on a hook that throws from its 3rd call (tools/list), never a "failed" observation', { message: invThird?.message, calls: invLate.calls() });
+    // The per-kind catch: the default fake does not advertise the metrics
+    // tool, so observeInventory returns 'not-attempted' after tools/list and
+    // the loop never runs. Against a fake that advertises it (name resolved
+    // through the registry, never a literal), with one expected kind the
+    // 4th call is the first tools/call of the loop — after initialize,
+    // notify and tools/list — so the fault lands inside observeInventory's
+    // own per-kind catch, which must rethrow instead of filing it under
+    // observations[kind].error with a 'checked' status (a journey would
+    // otherwise record inventory evidence for a misconfigured hook).
+    const metricsTool = capabilityTool('stack_self_metrics');
+    const withMetrics = await withFakeMcp(() => ({ status: 'success', data: { resultType: 'vector', result: [{ metric: { instance: 'a' }, value: [0, '1'] }] } }), [metricsTool]);
+    try {
+      const invKind = throwingFrom(4);
+      const invFourth = await failing(() => observeInventory({ mcpUrl: withMetrics.url, expected, transport: invKind.transport }));
+      assert(isTransportHookError(invFourth) && invKind.calls() === 4,
+             'observeInventory rejects on a hook that throws from its 4th call (the per-kind tools/call), never a "checked" record with observations[kind].error', { message: invFourth?.message, calls: invKind.calls() });
+      const invOk = await observeInventory({ mcpUrl: withMetrics.url, expected, transport: throwingFrom(99).transport });
+      assert(invOk.status === 'checked' && invOk.callsMade === 1 && invOk.observations.host && !invOk.observations.host.error && invOk.observations.host.values.a === 1,
+             'the same fake with a hook that never throws reaches the per-kind loop and records a checked observation (the 4th-call case exercises the loop\'s catch)', invOk);
+    } finally {
+      await withMetrics.close();
+    }
 
     // The probe helpers called WITHOUT a `quiet` — their default `quietly`
     // must rethrow too (a caller outside fetchMcp gets the same hard fail).
