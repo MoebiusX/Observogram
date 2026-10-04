@@ -33,7 +33,7 @@ const pkg = JSON.parse(read('package.json'));
 const EXPECTED_MODULES = [
   'tools/lib/adapter.mjs', 'tools/lib/alert-routes.mjs', 'tools/lib/artefact-classify.mjs', 'tools/lib/artefact-model.mjs',
   'tools/lib/assurance-rules.mjs',
-  'tools/lib/backend-products.mjs', 'tools/lib/blast-radius.mjs', 'tools/lib/burn-rules.mjs', 'tools/lib/chain-history.mjs',
+  'tools/lib/backend-products.mjs', 'tools/lib/blast-radius.mjs', 'tools/lib/brand.mjs', 'tools/lib/burn-rules.mjs', 'tools/lib/chain-history.mjs',
   'tools/lib/compile.mjs', 'tools/lib/conformance.mjs', 'tools/lib/contracts/mcp-capabilities.mjs',
   'tools/lib/contracts/response-shapes.mjs', 'tools/lib/contracts/stack-self-metrics.mjs', 'tools/lib/crawler.mjs',
   'tools/lib/dashboards/generic.mjs', 'tools/lib/dashboards/lib.mjs', 'tools/lib/diff.mjs', 'tools/lib/good-when.mjs',

@@ -31,6 +31,7 @@ prose contracts that follow.
 | [`tools/lib/diff.mjs`](../tools/lib/diff.mjs) | imports `artefact-model.mjs` | pack arithmetic — the diff buckets everything downstream consumes |
 | [`tools/lib/artefact-model.mjs`](../tools/lib/artefact-model.mjs) | imports `promql-canon.mjs`, `artefact-classify.mjs` | behavioural identity + contract projection — `identityKeyOf`, `behaviorOf`, `deltasOf`, `classify` (delegates to `familyOf`) |
 | [`tools/lib/artefact-classify.mjs`](../tools/lib/artefact-classify.mjs) | zero-import, no Node APIs | the artefact taxonomy — `FAMILIES`, `FAMILY_HOME`, `ID_RULES`, `classifyArtefact` (type → defines → override ids → id prefix), `compileTaxonomy` / `configureTaxonomy` for the operator override |
+| [`tools/lib/brand.mjs`](../tools/lib/brand.mjs) | zero-import, no Node APIs | the brand config — `DEFAULT_BRAND`, `normalizeBrand`, `brandChrome`, `brandTokensCss`, `brandShellHtml`; a downstream studio reads the same object its server injects (`#brand-config`) |
 | [`tools/lib/promql-canon.mjs`](../tools/lib/promql-canon.mjs) | imports `promql.mjs` | parser-proven PromQL canonicalisation |
 | [`tools/lib/promql.mjs`](../tools/lib/promql.mjs) | pure ESM, no Node APIs | PromQL tokeniser/dependency reader |
 | [`tools/lib/protocols.mjs`](../tools/lib/protocols.mjs) | pure data | the versioned protocol/feature canon |

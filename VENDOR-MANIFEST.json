@@ -145,6 +145,27 @@
       "npm": [],
       "changedSinceRelease": false
     },
+    "tools/lib/brand.mjs": {
+      "sha256": "a3965a788f7d0073eef71ea05a690d51ba410fc755e15789e8496a047ea6238f",
+      "bytes": 12914,
+      "exports": [
+        "DEFAULT_BRAND",
+        "DEFAULT_LOGO_SVG",
+        "SHELL_ANCHORS",
+        "SPEC_LINK",
+        "TOKEN_NAME_RE",
+        "brandChrome",
+        "brandConfigScript",
+        "brandShellHtml",
+        "brandTokensCss",
+        "escapeHtml",
+        "normalizeBrand"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
     "tools/lib/burn-rules.mjs": {
       "sha256": "4ae27bf6b1805fea24fb1cee2b71a00e02da6fbcb54417677b79a88c4021664b",
       "bytes": 45089,

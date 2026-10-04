@@ -1,0 +1,25 @@
+{
+  "name": "Acme Watch",
+  "shortName": "Acme",
+  "wordmark": { "lead": "Acme", "tail": "Watch" },
+  "tagline": "reliability, watched",
+  "titleSuffix": "the Reliability Console",
+  "description": "Acme Watch — Acme's reliability console: compile one manifest, scan the posture, score the conformance.",
+  "logo": { "url": "/assets/acme-mark.svg" },
+  "favicon": "/assets/acme.ico",
+  "docsUrl": "https://docs.example.com/acme-watch",
+  "footer": {
+    "text": "Acme Watch · a product of Acme Corp",
+    "links": [
+      { "label": "docs", "href": "https://docs.example.com/acme-watch" },
+      { "label": "support", "href": "https://support.example.com/?product=watch&tier=\"gold\"" },
+      { "label": "status <live>", "href": "https://status.example.com" }
+    ]
+  },
+  "about": { "changelogUrl": "https://docs.example.com/acme-watch/releases" },
+  "hero": { "src": "/assets/acme-hero.png", "alt": "Acme Watch posture scan" },
+  "tokens": {
+    "light": { "accent": "#b3261e", "accent-solid": "#f28b82" },
+    "dark": { "accent": "#f28b82" }
+  }
+}
