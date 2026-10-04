@@ -545,15 +545,22 @@
       "changedSinceRelease": false
     },
     "tools/lib/legacy.mjs": {
-      "sha256": "b499d1b87bc91130997126e60c8b6daedc3639ed8d9050042f48b75c2e255b06",
-      "bytes": 17774,
+      "sha256": "25f36814cc42cbe9a7e49a77e8a583f31e1a375065d0ad3166b85fb611f06969",
+      "bytes": 25574,
       "exports": [
         "isLegacyLayeredPack",
+        "mergeUpconvert",
         "upconvertLegacyPack"
       ],
-      "imports": [],
+      "imports": [
+        "tools/lib/pack-conformance.mjs"
+      ],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "isLegacyLayeredPack",
+        "upconvertLegacyPack"
+      ]
     },
     "tools/lib/library.mjs": {
       "sha256": "6961c316f175d05d2c93ce2636fd5508b066ad2804080fc01ec4814144071009",
@@ -692,8 +699,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/pack-conformance.mjs": {
-      "sha256": "e1f76ed316879ce6c9c02816aed600c3e71127cd50d7dd025f6fcaed83e900fb",
-      "bytes": 33956,
+      "sha256": "88aec49336b8161c682bb53d2014065ef2f0f648d013e7de5ce3f4dfd7f62f04",
+      "bytes": 34066,
       "exports": [
         "PLACEHOLDER_FIELDS",
         "SCAFFOLD_PREFIXES",

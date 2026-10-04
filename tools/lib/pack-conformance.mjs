@@ -79,7 +79,7 @@ const REST = '(?:\\.(.+))?';
 // ---------- 1.1 the symbol grammar ----------
 
 const listFamily = (family, re, section, identity) => ({
-  family, kind: 'list', re,
+  family, kind: 'list', re, section,
   resolve(canonical, m) {
     const list = asList(walk(canonical, section));
     const index = Number(m[1]);
@@ -88,7 +88,7 @@ const listFamily = (family, re, section, identity) => ({
   identity,
 });
 const idFamily = (family, re, section, groups = { id: 1, rest: 2 }) => ({
-  family, kind: 'id', re,
+  family, kind: 'id', re, section,
   resolve(canonical, m) {
     const list = asList(walk(canonical, section));
     const id = m[groups.id];
@@ -98,7 +98,7 @@ const idFamily = (family, re, section, groups = { id: 1, rest: 2 }) => ({
   identity: (item) => (item && item.id != null ? String(item.id) : null),
 });
 const keyFamily = (family, re, section) => ({
-  family, kind: 'key', re,
+  family, kind: 'key', re, section,
   resolve(canonical, m) {
     const obj = walk(canonical, section);
     const key = m[1];
@@ -108,7 +108,7 @@ const keyFamily = (family, re, section) => ({
   identity: (_item, _i, _list, key) => key,
 });
 const bareFamily = (family, re, section) => ({
-  family, kind: 'bare', re,
+  family, kind: 'bare', re, section,
   resolve(canonical, m) {
     const item = walk(canonical, section);
     return { item, exists: item !== undefined, position: 0, path: `$.${section.join('.')}`, rest: m[1] };
@@ -116,7 +116,7 @@ const bareFamily = (family, re, section) => ({
   identity: () => null,
 });
 
-/** The adapter's artefact families, in report order. `identity` is what mergeUpconvert pairs items by. */
+/** The adapter's artefact families, in report order. `section` is the pack path of the family's container; `identity(item, i, list, key)` is what mergeUpconvert pairs items by. */
 export const SYMBOL_FAMILIES = Object.freeze([
   {
     family: 'metadata', kind: 'metadata', re: /^metadata\.([A-Za-z0-9_-]+)$/,

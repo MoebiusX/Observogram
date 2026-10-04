@@ -19,7 +19,22 @@
 //
 // PUBLIC API
 //   isLegacyLayeredPack(obj)            -> boolean
-//   upconvertLegacyPack(obj, opts?)     -> { canonical, report }
+//   upconvertLegacyPack(obj, opts?)     -> { canonical, report, provenance }
+//   mergeUpconvert({ canonical, provenance }, existing, opts?)
+//                                       -> { canonical, report }
+//
+// A CANONICAL PACK IS NEVER CONVERTED: isLegacyLayeredPack() is false on
+// anything that carries apiVersion/kind, so the server gate, the CLI and the
+// studio pass a canonical upload through untouched (f(f(x)) = f(x)).
+//
+// MERGE RULE (mergeUpconvert): re-running the upconvert over a legacy source
+// whose output file already exists must never regress a real value to a
+// scaffold. One rule: the existing pack wins for every artefact it has; the
+// upconvert only ADDS artefacts whose legacy source item the existing pack
+// has never seen (by the `legacy.artefact.<LAYER>.<ID>` record), and skips
+// the schema-required stubs (the existing pack already validates). The whole
+// `legacy.*` block (records, format, upconvertedAt) is the designed
+// exception: it is refreshed to the current legacy source on every merge.
 //
 // PRINCIPLES (mirror the crawler, the other partial-knowledge importer):
 //   - One pipeline: emit a canonical manifest so validation, conformance,
@@ -33,6 +48,8 @@
 //     `metadata.annotations['legacy.artefact.<LAYER>.<ID>']`, so nothing
 //     the old pack said is thrown away even when the canonical projection
 //     is lossy (tags, tool strings, exact titles).
+
+import { SYMBOL_FAMILIES } from './pack-conformance.mjs';
 
 const PLACEHOLDER_NOTE = 'legacy import: schema-required field has no machine detail in the layered format — REPLACE WITH REAL VALUE';
 
@@ -71,6 +88,9 @@ function metricSeg(s, fallback = 'rule') {
 
 function items(x) { return Array.isArray(x) ? x : []; }
 
+// The lossless record's key — one helper for keep() and the merge provenance.
+function recordKey(layer, item) { return `legacy.artefact.${layer}.${item.id || 'item'}`; }
+
 function text(item) {
   return [item.title, item.desc].filter(Boolean).join(' — ') || item.id || '(untitled)';
 }
@@ -107,11 +127,15 @@ export function upconvertLegacyPack(legacy, opts = {}) {
   const scaffoldSymbols = [];
   const notes = [];
   const annotations = {};
+  // symbol -> the `legacy.artefact.<LAYER>.<ID>` record key of the legacy item
+  // it maps to, or null for a schema-required stub that has no legacy source
+  // (mergeUpconvert reads this to tell "seen before" from "new").
+  const provenance = {};
   let mapped = 0;
 
-  const scaffold = (symbol) => { scaffoldSymbols.push(symbol); };
+  const scaffold = (symbol) => { scaffoldSymbols.push(symbol); if (!(symbol in provenance)) provenance[symbol] = null; };
   const keep = (layer, item) => {
-    annotations[`legacy.artefact.${layer}.${item.id || 'item'}`] = JSON.stringify(item);
+    annotations[recordKey(layer, item)] = JSON.stringify(item);
     mapped++;
   };
   // A layered item that carries a `type` (a typed pack from another
@@ -122,6 +146,8 @@ export function upconvertLegacyPack(legacy, opts = {}) {
   const declareType = (symbol, item) => {
     if (typeof item.type === 'string' && item.type.trim()) annotations[`observogram.artefact.type.${symbol}`] = item.type.trim();
   };
+  // Every mapped item places its symbol: the declared type and the provenance record.
+  const place = (symbol, layer, item) => { declareType(symbol, item); provenance[symbol] = recordKey(layer, item); };
 
   // ----- L1: SLIs / SLOs / error-budget policies -----
   const slis = [];
@@ -150,7 +176,7 @@ export function upconvertLegacyPack(legacy, opts = {}) {
       total: `sum(rate(http_requests_total{service="${service}"}[5m]))`,
     });
     scaffold(`slis.${id}`);   // good/total are placeholders — never Declared
-    declareType(`slis.${id}`, item);
+    place(`slis.${id}`, 'L1', item);
     keep('L1', item);
   }
   if (!slis.length) {
@@ -170,7 +196,7 @@ export function upconvertLegacyPack(legacy, opts = {}) {
     const sli = slis[Math.min(i, slis.length - 1)].id;
     slos.push({ id, sli, objective: 0.99, window: '30d', error_budget_policy: ebpRef });
     scaffold(`slos.${id}`);   // objective/window are placeholders
-    declareType(`slos.${id}`, item);
+    place(`slos.${id}`, 'L1', item);
     keep('L1', item);
   });
   if (!slos.length) {
@@ -209,7 +235,7 @@ export function upconvertLegacyPack(legacy, opts = {}) {
         storage[family] = { backend: slug(item.tool, 'storage'), backend_ref: undefined };
         delete storage[family].backend_ref;
         if (item.source === 'GAP') scaffold(`storage.${family}`);
-        declareType(`storage.${family}`, item);
+        place(`storage.${family}`, 'L2', item);
         continue;
       }
     }
@@ -217,7 +243,7 @@ export function upconvertLegacyPack(legacy, opts = {}) {
     if (backends.some(b => b.id === id)) continue;
     backends.push({ id, signal: signalOf(item), product: slug(item.tool, 'backend') });
     if (item.source === 'GAP') scaffold(`telemetry.backends.${id}`);
-    declareType(`telemetry.backends.${id}`, item);
+    place(`telemetry.backends.${id}`, 'L2', item);
   }
 
   // ----- L3: recording rules + dashboards -----
@@ -238,13 +264,13 @@ export function upconvertLegacyPack(legacy, opts = {}) {
         source: `file://dashboards/${id}.json`,
       });
       scaffold(`dashboards.${id}`);
-      declareType(`dashboards.${id}`, item);
+      place(`dashboards.${id}`, 'L3', item);
     } else {
       const name = `${metricSeg(service, 'svc')}:${metricSeg(item.title || item.id)}:legacy`;
       if (recordingRules.some(r => r.name === name)) continue;
       recordingRules.push({ name, expr: 'vector(1)' });
       scaffold(`queries.recording_rules[${recordingRules.length - 1}]`);   // expr is a placeholder
-      declareType(`queries.recording_rules[${recordingRules.length - 1}]`, item);
+      place(`queries.recording_rules[${recordingRules.length - 1}]`, 'L3', item);
     }
   }
   if (!dashboards.length) {
@@ -268,7 +294,7 @@ export function upconvertLegacyPack(legacy, opts = {}) {
       ],
     });
     scaffold(`policy.burn_rate_alerts[${burnRateAlerts.length - 1}]`);   // windows are placeholders
-    declareType(`policy.burn_rate_alerts[${burnRateAlerts.length - 1}]`, item);
+    place(`policy.burn_rate_alerts[${burnRateAlerts.length - 1}]`, 'L4', item);
   });
   if (!burnRateAlerts.length) {
     burnRateAlerts.push({
@@ -287,7 +313,7 @@ export function upconvertLegacyPack(legacy, opts = {}) {
     keep('L4', item);
     routes.push({ severity: severityOf(item, i), channels: [channelOf(item, service)] });
     scaffold(`alerting.routes[${routes.length - 1}]`);   // channel values are placeholders
-    declareType(`alerting.routes[${routes.length - 1}]`, item);
+    place(`alerting.routes[${routes.length - 1}]`, 'L4', item);
   });
   if (!routes.length) {
     routes.push({ severity: 'SEV1', channels: [{ msteams: `#${service}-oncall` }] });
@@ -305,7 +331,7 @@ export function upconvertLegacyPack(legacy, opts = {}) {
       guardrails: { max_invocations_per_hour: 1, requires_human_above: 'SEV2', rollback_on_failure: true },
     });
     scaffold(`remediation[${remediation.length - 1}]`);   // guardrails are placeholders
-    declareType(`remediation[${remediation.length - 1}]`, item);
+    place(`remediation[${remediation.length - 1}]`, 'L4', item);
   });
 
   // ----- L5: synthetic checks (+ baselines stub, like the crawler) -----
@@ -322,7 +348,7 @@ export function upconvertLegacyPack(legacy, opts = {}) {
       on_fail_severity: 'SEV3',
     });
     scaffold(`validation.synthetic_checks.${id}`);   // target/interval are placeholders
-    declareType(`validation.synthetic_checks.${id}`, item);
+    place(`validation.synthetic_checks.${id}`, 'L5', item);
   }
   const baselines = { mttd_target_p50: '15m', mttr_target_p50: '1d', review_cadence: 'monthly' };
   scaffold('baselines');
@@ -331,7 +357,7 @@ export function upconvertLegacyPack(legacy, opts = {}) {
   // so the original item rides along losslessly) -----
   const imports = items(L.GOV).map((item, i) => {
     keep('GOV', item);
-    declareType(`imports[${i}]`, item);
+    place(`imports[${i}]`, 'GOV', item);
     return {
       ref: `legacy/${slug(item.id, 'gov')}`,
       with: { title: item.title || '', desc: item.desc || '', tool: item.tool || '', source: item.source || '' },
@@ -399,8 +425,8 @@ export function upconvertLegacyPack(legacy, opts = {}) {
   // pushed AFTER the direct writes so the annotation keys keep their order
   // (re-assigning an existing key keeps its position in JS key order) — the
   // one byte run that changes in the output is the count's value.
-  scaffoldSymbols.push('otel', 'pipelines.receivers[0]', 'pipelines.processors[0]',
-    'pipelines.exporters.metrics', 'pipelines.exporters.logs', 'pipelines.exporters.traces');
+  for (const symbol of ['otel', 'pipelines.receivers[0]', 'pipelines.processors[0]',
+    'pipelines.exporters.metrics', 'pipelines.exporters.logs', 'pipelines.exporters.traces']) scaffold(symbol);
   annotations['legacy.scaffoldCount'] = String(scaffoldSymbols.length);
   if (!canonical.metadata.imports) delete canonical.metadata.imports;
 
@@ -411,5 +437,107 @@ export function upconvertLegacyPack(legacy, opts = {}) {
     scaffolded: scaffoldSymbols.length,
     notes,
   };
-  return { canonical, report };
+  return { canonical, report, provenance };
+}
+
+// ---------- the merge ----------
+
+const MERGE_FAMILIES = [
+  'imports', 'slis', 'slos', 'telemetry.backends', 'storage', 'pipelines.receivers', 'pipelines.processors',
+  'pipelines.exporters', 'queries.recording_rules', 'dashboards', 'policy.burn_rate_alerts', 'alerting.routes',
+  'remediation', 'validation.synthetic_checks',
+];
+const clone = (x) => JSON.parse(JSON.stringify(x));
+const getPath = (root, segs) => segs.reduce((cur, s) => (cur == null ? undefined : cur[s]), root);
+const ensurePath = (root, segs, leaf) => {
+  let cur = root;
+  for (const s of segs.slice(0, -1)) { if (cur[s] == null || typeof cur[s] !== 'object') cur[s] = {}; cur = cur[s]; }
+  const last = segs[segs.length - 1];
+  if (cur[last] == null) cur[last] = leaf;
+  return cur[last];
+};
+const symbolOf = (fam, item, i, key) => (fam.kind === 'id' ? `${fam.family}.${item.id}` : fam.kind === 'key' ? `${fam.family}.${key}` : `${fam.family}[${i}]`);
+
+/**
+ * Merge a fresh upconvert into an existing canonical pack without regressing a real value.
+ *
+ *   mergeUpconvert(upconvertLegacyPack(legacy, { now }), existing) -> { canonical, report }
+ *   report: { kept, added, skipped, scaffoldCount, danglingRefs }
+ *
+ * Rules (per family in SYMBOL_FAMILIES order, list and keyed sections only):
+ *   (a) an existing item with the same identity   -> KEPT   (existing value, marker state and type annotation)
+ *   (b) else the fresh item's legacy record is already in the existing annotations
+ *                                                 -> SKIPPED (seen before; the operator removed or renamed it)
+ *   (c) else the fresh item has no legacy source   -> SKIPPED (a schema-required stub; existing already validates)
+ *   (d) else                                       -> ADDED  (appended; its marker, type annotation and record
+ *                                                             written under the symbol RE-INDEXED to its final position)
+ * Metadata scalars and the unlisted sections (otel, baselines, environments) are the existing pack's, untouched.
+ * Annotations: existing keys keep their order and values; every fresh `legacy.*` key is refreshed; the markers
+ * and types of added items are appended; `legacy.scaffoldCount` is recounted. Pure and idempotent.
+ */
+export function mergeUpconvert({ canonical: fresh, provenance = {} }, existing, _opts = {}) {
+  if (!existing || typeof existing !== 'object' || Array.isArray(existing)
+    || existing.apiVersion !== 'observability.platform/v1' || existing.kind !== 'ObservabilityPack') {
+    throw new Error('mergeUpconvert: the existing pack is not a canonical ObservabilityPack (apiVersion/kind)');
+  }
+  const result = clone(existing);
+  const existingAnn = existing.metadata?.annotations || {};
+  const freshAnn = fresh.metadata?.annotations || {};
+  const report = { kept: 0, added: 0, skipped: 0, scaffoldCount: 0, danglingRefs: 0 };
+  const addedMarkers = {};
+  const addedSlos = [];
+  const addedBurn = [];
+
+  for (const family of MERGE_FAMILIES) {
+    const fam = SYMBOL_FAMILIES.find(f => f.family === family);
+    const freshContainer = getPath(fresh, fam.section);
+    if (freshContainer == null) continue;
+    if (fam.kind === 'key') {
+      const target = ensurePath(result, fam.section, {});
+      for (const [key, item] of Object.entries(freshContainer)) {
+        const symbol = symbolOf(fam, item, 0, key);
+        if (Object.prototype.hasOwnProperty.call(target, key)) { report.kept++; continue; }
+        const rec = provenance[symbol];
+        if (rec == null || rec in existingAnn) { report.skipped++; continue; }
+        target[key] = clone(item);
+        report.added++;
+        if (freshAnn[`crawler.scaffold.${symbol}`]) addedMarkers[`crawler.scaffold.${symbol}`] = freshAnn[`crawler.scaffold.${symbol}`];
+        if (freshAnn[`observogram.artefact.type.${symbol}`]) addedMarkers[`observogram.artefact.type.${symbol}`] = freshAnn[`observogram.artefact.type.${symbol}`];
+      }
+      continue;
+    }
+    const freshList = Array.isArray(freshContainer) ? freshContainer : [];
+    if (!freshList.length) continue;
+    const target = ensurePath(result, fam.section, []);
+    const existingIds = new Set(target.map((it, i) => fam.identity(it, i, target)));
+    freshList.forEach((item, i) => {
+      const symbol = symbolOf(fam, item, i);
+      const identity = fam.identity(item, i, freshList);
+      if (identity != null && existingIds.has(identity)) { report.kept++; return; }
+      const rec = provenance[symbol];
+      if (rec == null || rec in existingAnn) { report.skipped++; return; }
+      const at = target.length;
+      target.push(clone(item));
+      existingIds.add(fam.identity(target[at], at, target));
+      report.added++;
+      const newSymbol = symbolOf(fam, item, at);
+      if (freshAnn[`crawler.scaffold.${symbol}`]) addedMarkers[`crawler.scaffold.${newSymbol}`] = freshAnn[`crawler.scaffold.${symbol}`];
+      if (freshAnn[`observogram.artefact.type.${symbol}`]) addedMarkers[`observogram.artefact.type.${newSymbol}`] = freshAnn[`observogram.artefact.type.${symbol}`];
+      if (family === 'slos') addedSlos.push(item);
+      if (family === 'policy.burn_rate_alerts') addedBurn.push(item);
+    });
+  }
+
+  const legacyKeys = Object.fromEntries(Object.entries(freshAnn).filter(([k]) => k.startsWith('legacy.')));
+  const annotations = { ...existingAnn, ...legacyKeys, ...addedMarkers };
+  annotations['legacy.scaffoldCount'] = String(Object.keys(annotations).filter(k => k.startsWith('crawler.scaffold.')).length);
+  if (!result.metadata) result.metadata = {};
+  result.metadata.annotations = annotations;
+  if (Array.isArray(result.metadata.imports) && !result.metadata.imports.length) delete result.metadata.imports;
+
+  const sliIds = new Set((result.spec?.slis || []).map(s => s.id));
+  const sloIds = new Set((result.spec?.slos || []).map(s => s.id));
+  report.danglingRefs = addedSlos.filter(s => !sliIds.has(s.sli)).length + addedBurn.filter(b => !sloIds.has(b.slo)).length;
+  report.scaffoldCount = Number(annotations['legacy.scaffoldCount']);
+  return { canonical: result, report };
 }
