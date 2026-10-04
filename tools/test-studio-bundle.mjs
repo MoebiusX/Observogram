@@ -40,7 +40,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve, dirname } from 'node:path';
+import { join, resolve, dirname, sep } from 'node:path';
 
 import {
   collectModuleGraph, rewriteSpecifiers, assertRewritten, inlineJson, styleBlock, buildStudioBundle,
@@ -202,7 +202,7 @@ test('T1 collectModuleGraph: every module under studio/ or lib/, the dynamic /li
   assert.ok(markAt > 0 && compileSrc.indexOf('`/* === ${', markAt) > markAt, 'compile.mjs still carries the `/*`-in-comment and `*/`-in-template pair this guards');
   const probeAt = compileSrc.indexOf('\n', markAt) + 1;
   const probed = `${compileSrc.slice(0, probeAt)}export const probe = () => import('./does-not-exist.mjs');\n${compileSrc.slice(probeAt)}`;
-  assert.throws(() => collectModuleGraph(ROOT, ENTRIES, { read: (p) => (p === 'tools/lib/compile.mjs' ? probed : readFileSync(join(ROOT, p), 'utf8')) }), /tools\/lib\/does-not-exist\.mjs/, 'the probe past compile.mjs:605 is collected and resolved');
+  assert.throws(() => collectModuleGraph(ROOT, ENTRIES, { read: (p) => (p === 'tools/lib/compile.mjs' ? probed : readFileSync(join(ROOT, p), 'utf8')) }), (e) => /tools\/lib\/does-not-exist\.mjs/.test(String(e.message).split(sep).join('/')), 'the probe past compile.mjs:605 is collected and resolved (the ENOENT text names the host path, so its separator is normalised)');
 });
 
 // ---------- T2 the rewrite ----------
