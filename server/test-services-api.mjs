@@ -80,6 +80,8 @@ const { WAYS, serviceTierFor } = await import('./service-admin.mjs');
 const { envNameOwnerText, envNameShapeText } = await import('./store/mcp-endpoints.mjs');
 const { routeEntry } = await import('./route-table.mjs');
 const { evaluateConformance } = await import('../tools/lib/conformance.mjs');
+const { instantiatePack, validationSummary, todosFromAnnotations } = await import('../tools/lib/library.mjs');
+const { loadLibrary, findEntry } = await import('./library.mjs');
 const { parse: parseYaml } = await import('../tools/lib/mini-yaml.mjs');
 const serviceKeys = await import('../tools/lib/service-keys.mjs');
 
@@ -923,6 +925,41 @@ test('GET /api/packs/:id/conformance grades an uploaded pack at its service reco
   // Another org's member reads none of it: the pack is acme's.
   const other = await call('bob', 'GET', `/api/packs/${packId}/conformance`);
   assert.equal(other.status, 404);
+});
+
+// Trap 24: the placeholder list follows the graded tier too. onPlaceholder is
+// validationSummary over the graded copy — the clauses that apply at the
+// record's tier — never over the pack's own tier. A library-built pack is the
+// only kind that carries one (the §12.3 skeleton above has no library.todo.*).
+test('GET /api/packs/:id/conformance names the placeholder passes at the graded tier: a library-built pack registered at tier-2 lists them for tier-2 without a record tier (the register summary\'s list) and, once the service says tier-3, only those applying there — the list is worked out over the graded copy, not the pack\'s own', async () => {
+  const lib = loadLibrary();
+  const { canonical } = instantiatePack(['kafka', 'http-service'].map((id) => findEntry(lib, id)), { name: 'orders-api', tier: 'tier-2', environment: 'prod', owners: ['team-orders'] });
+  // The scorer's own list at a tier: validationSummary over a copy with that criticality, the pack's todos.
+  const placeholdersAt = (tier) => validationSummary({ ...canonical, metadata: { ...canonical.metadata, bindings: { ...canonical.metadata.bindings, criticality: tier } } }, todosFromAnnotations(canonical)).onPlaceholder;
+  assert.ok(placeholdersAt('tier-2').length > placeholdersAt('tier-3').length, 'the fixture tells the tiers apart: fewer placeholder clauses apply at tier-3');
+  const reg = await call('oscar', 'POST', '/api/library/register', JSON.stringify({ canonical }), { 'Content-Type': 'application/json' });
+  assert.equal(reg.status, 200, reg.text.slice(0, 300));
+  const packId = reg.json.registered.id;
+  assert.deepEqual(reg.json.summary.onPlaceholder, placeholdersAt('tier-2'), 'the register summary lists the pack\'s own tier');
+  const svc = (await ok('GET /api/services', 'vera', '/api/services')).json.services.find((s) => s.slug === 'orders-api');
+  assert.equal(svc?.tier, null, 'the register sets no tier');
+
+  // No record tier: graded at the pack's own tier-2, the register summary's list.
+  const own = await conformance('vera', `/api/packs/${packId}/conformance?env=prod`);
+  assert.deepEqual([own.tier.graded, own.tier.from, own.onPlaceholder], ['tier-2', 'pack', reg.json.summary.onPlaceholder]);
+
+  // The service's tier-3: fewer clauses apply, and the placeholder list is theirs — not the pack's own.
+  await ok('PATCH /api/services/:id', 'oscar', `/api/services/${svc.id}`, { tier: 'tier-3' });
+  const graded = await conformance('vera', `/api/packs/${packId}/conformance?env=prod`);
+  assert.deepEqual([graded.tier.graded, graded.tier.pack, graded.tier.mismatch, graded.declaredTier], ['tier-3', 'tier-2', true, 'tier-3']);
+  assert.deepEqual(graded.onPlaceholder, placeholdersAt('tier-3'), 'onPlaceholder is worked out over the graded copy');
+  assert.notDeepEqual(graded.onPlaceholder, reg.json.summary.onPlaceholder, 'not the pack\'s own list');
+  assert.ok(graded.onPlaceholder.every((p) => graded.clauses.find((c) => c.id === p.id)?.applies === true), 'every clause named applies at the graded tier');
+  // And tier-1 the other way: the list grows with the clauses that apply.
+  await ok('PATCH /api/services/:id', 'oscar', `/api/services/${svc.id}`, { tier: 'tier-1' });
+  const strict = await conformance('vera', `/api/packs/${packId}/conformance?env=prod`);
+  assert.deepEqual([strict.tier.graded, strict.onPlaceholder], ['tier-1', placeholdersAt('tier-1')]);
+  assert.ok(strict.onPlaceholder.every((p) => strict.clauses.find((c) => c.id === p.id)?.applies === true));
 });
 
 // ---------- a service's deletion and the registry ----------
