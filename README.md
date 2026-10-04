@@ -246,6 +246,29 @@ the floor because it fixes a `StatementSync` use-after-free and the `run()`
 statement reset that a store hits. CI runs the suites on 22.16.0 and on the
 latest 22. See [docs/STORE_PLAN.md](docs/STORE_PLAN.md).
 
+### Platforms
+
+Linux is the reference platform: CI runs `npm test` on Ubuntu on Node 22.16.0
+(the floor) and the latest 22. Windows (Node ≥ 22.16, PowerShell or cmd) is
+supported for the CLI, the server, the studio and the static bundle; `npm test`
+is green there except the explicit skips — every one printed by `node --test`
+as `# SKIP win32: <reason>` (or `- SKIP win32: <reason>` in a harness suite),
+never a silent pass — for facts Windows cannot express: POSIX mode bits
+(`0600`/`0644`, `chmod 0000`), signal delivery (`process.kill` ends a Windows
+process outright, so the store's SIGTERM/SIGINT self-close cannot be
+exercised) and symlink creation (a privilege). There are 15 win32-skip sites —
+`server/test-store.mjs` (8), `server/test-store-ops.mjs` (4),
+`server/test-store-import.mjs` (2), `tools/test-journey.mjs` (1) — 19 tests
+once the loops unroll, plus the PID 1 namespace test that skips wherever
+`unshare` is unavailable: 20 `SKIP` lines on a Windows run. `tools/test-platform.mjs`
+(`npm run test:platform`) keeps this count and the reasons honest and proves
+the module-relative path resolvers (`fileURLToPath`, never `URL.pathname`) on
+every platform. Every suite names the platform only through
+`server/fixtures/platform.mjs` (`isWin32`, `win32Skip(reason)`,
+`skipOnWin32(t, reason)`). The checkout is LF everywhere (`.gitattributes`),
+so goldens and `VENDOR-MANIFEST.json`'s hashes verify under any
+`core.autocrlf`. macOS is not in CI; the POSIX suites run there.
+
 ```bash
 git clone https://github.com/MoebiusX/Observogram.git
 cd Observogram
