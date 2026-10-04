@@ -608,7 +608,8 @@ try {
     body: JSON.stringify(authRaw),
   }).then(r => r.json());
   assert(rightTok.ok === true, 'correct bearer token → mutating route works');
-  // The audit actor becomes the token's ownership label, never the secret.
+  // The audit actor is the principal's — here the bearer's ownership label
+  // (open loopback above wrote `local`), never the secret.
   const authedDeploy = await fetch(`${base}/api/packs/payment-service/deploy/prometheus-rules`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer smoke-secret' },

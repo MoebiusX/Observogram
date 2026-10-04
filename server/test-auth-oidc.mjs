@@ -11,7 +11,7 @@
 
 import { createServer } from 'node:http';
 import { createHash, createHmac, createSign, generateKeyPairSync, randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -133,6 +133,7 @@ const { listMembershipsForUser } = await import('./store/memberships.mjs');
 const { getMeta } = await import('./store/meta.mjs');
 const { listAudit } = await import('./store/audit.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
+const { orgWorkspaceRoot, runWithOrg } = await import('./tenancy.mjs');
 const srv = await start({ port: 0, host: '127.0.0.1', silent: true });
 const base = `http://127.0.0.1:${srv.address().port}`;
 process.env.OBSERVOGRAM_OIDC_REDIRECT_URL = `${base}/auth/callback`;
@@ -207,6 +208,23 @@ try {
     method: 'POST', headers: { Cookie: session, 'Content-Type': 'text/yaml' }, body: 'x: 1',
   });
   assert(r.status === 403, 'OIDC session mutation without CSRF header → 403', r.status, 403);
+
+  // ---- the deploy record's actor is the login, never the email (STORE_PLAN slice 5) ----
+  // user-42 joined default as operator (the empty workspace's import); the ID
+  // token carried email: ada@example.test. The MCP is unreachable, so the
+  // deploy fails (502) — and the attempt is still recorded, with the
+  // principal's actor: the oidcLogin() form <issuerKey>#<sub>.
+  r = await fetch(`${base}/api/packs/payment-service/deploy/prometheus-rules`, {
+    method: 'POST',
+    headers: { Cookie: session, 'X-Observogram-CSRF': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mcpUrl: 'http://127.0.0.1:1/no-mcp' }),
+  });
+  const deployBody = await r.json();
+  assert(r.status === 502 && typeof deployBody.deployId === 'string', 'an OIDC operator deploys to an unreachable MCP → 502 with a deployId', [r.status, deployBody.deployId]);
+  const deployLines = readFileSync(join(runWithOrg('default', () => orgWorkspaceRoot()), 'deploys.jsonl'), 'utf8').trim().split('\n');
+  const deployLine = deployLines.find(l => l.includes(`"deployId":"${deployBody.deployId}"`)) || '';
+  assert(JSON.parse(deployLine || '{}').actor === loginOf('user-42') && !deployLine.includes('ada@example.test'),
+    `the deploys.jsonl line says actor ${loginOf('user-42')}, never the email`, deployLine);
 
   // ---- replaying the callback (stale flow) is rejected ----
   r = await fetch(cbUrl, { redirect: 'manual', headers: { Cookie: flowCookie } });

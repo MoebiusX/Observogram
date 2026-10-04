@@ -88,7 +88,6 @@ export function authGate(req, res, next) {
   // Bearer token: the service-account / CI path — works in every posture.
   const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization || '');
   if (m && token && tokenEquals(m[1].trim(), token)) {
-    req.observogramActor = apiTokenLabel();
     req.observogramBearer = true;
     return next();
   }
@@ -103,7 +102,6 @@ export function authGate(req, res, next) {
       if (mutating && isApi && !hasCsrfHeader(req)) {
         return res.status(403).json({ ok: false, error: 'missing X-Observogram-CSRF header on a session-authenticated mutation', denied: 'csrf' });
       }
-      req.observogramActor = session.email || session.sub;
       req.observogramUser = session.user;   // the org middleware resolves memberships by the store row
       return next();
     }

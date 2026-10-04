@@ -13,7 +13,7 @@
 //   loadPackCanonical(meta)     → canonical pack object
 //   overlaidCanonical(c, env)   → { canonical } with env overlay applied
 //   readEnv(query)              → ?env= param or null
-//   actorForRequest(req)        → audit actor label
+//   actorForRequest(req)        → the principal's actor: a login, the bearer's label, `local`
 //   contentHash(canonical)      → 8-char content hash for audit records
 
 import express from 'express';
@@ -603,7 +603,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
       appendDeployRecord({
         deployId,
         at: new Date().toISOString(),
-        actor: actor || 'local',
+        actor,
         pack: { id: meta.id, version: canonical?.metadata?.version || null, contentHash: contentHash(canonical) },
         env: env || null,
         mcpUrl: safeMcpUrl,
