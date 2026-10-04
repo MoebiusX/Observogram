@@ -178,20 +178,29 @@ test('the tokenizer: comments, strings, templates with nested ${} and regex lite
 test('changedSinceRelease is computed from the last release baseline, carried across regenerations', () => {
   const build = (previous) => buildVendorManifest({ repoRoot: ROOT, previous, pkg });
   const P = 'tools/lib/slug.mjs';
-  const prevFrom = (mutate) => { const prev = JSON.parse(committedText); mutate(prev); return prev; };
+  // Fixtures start from a release-reset manifest (nothing flagged) and derive from the module's
+  // current export list, never a literal copy of it: a real export rename must fail only the
+  // sync/namespace tests and the CHANGELOG guard, not these — before and after the CHANGELOG entry.
+  const pristine = build(null);
+  const pristineText = renderManifest(pristine);
+  const prevFrom = (mutate) => { const prev = JSON.parse(pristineText); mutate(prev); return prev; };
+  const live = pristine.modules[P].exports;
+  assert.ok(live.length >= 2, `${P} needs at least two exports for this fixture`);
+  const renamedAway = live[live.length - 1];
+  const baseline = [...live.slice(0, -1), 'oldName'].sort();
   // (a) same exports → false, no releasedExports.
-  const same = build(committed);
+  const same = build(pristine);
   assert.equal(same.modules[P].changedSinceRelease, false);
   assert.ok(!('releasedExports' in same.modules[P]));
   // (b) a renamed export → true, releasedExports = the baseline.
-  const renamed = prevFrom(p => { p.modules[P].exports = ['fileSlug', 'metricPrefix', 'oldName', 'symbolSlug']; });
+  const renamed = prevFrom(p => { p.modules[P].exports = baseline; });
   const b = build(renamed);
   assert.equal(b.modules[P].changedSinceRelease, true);
-  assert.deepEqual(b.modules[P].releasedExports, ['fileSlug', 'metricPrefix', 'oldName', 'symbolSlug']);
+  assert.deepEqual(b.modules[P].releasedExports, baseline);
   // (c) rename then revert across two regenerations → false again (the baseline was carried, not replaced).
   const c1 = build(b);
-  assert.deepEqual(c1.modules[P].releasedExports, ['fileSlug', 'metricPrefix', 'oldName', 'symbolSlug'], 'the baseline is carried');
-  const reverted = prevFrom(p => { p.modules[P].changedSinceRelease = true; p.modules[P].releasedExports = committed.modules[P].exports; p.modules[P].exports = ['fileSlug']; });
+  assert.deepEqual(c1.modules[P].releasedExports, baseline, 'the baseline is carried');
+  const reverted = prevFrom(p => { p.modules[P].changedSinceRelease = true; p.modules[P].releasedExports = live; p.modules[P].exports = live.slice(0, 1); });
   const c2 = build(reverted);
   assert.equal(c2.modules[P].changedSinceRelease, false);
   assert.ok(!('releasedExports' in c2.modules[P]));
@@ -225,7 +234,7 @@ test('changedSinceRelease is computed from the last release baseline, carried ac
   const rehashed = prevFrom(p => { p.modules[P].sha256 = 'deadbeef'; p.modules[P].bytes = 1; });
   assert.equal(build(rehashed).modules[P].changedSinceRelease, false);
   assert.ok(diffManifests(rehashed, build(rehashed)).some(l => l === `~ ${P} body changed (sha256), exports unchanged`));
-  assert.ok(diffManifests(renamed, b).some(l => l === `~ ${P} exports: -oldName +serviceSlug`), 'the --check diff names the export delta');
+  assert.ok(diffManifests(renamed, b).some(l => l === `~ ${P} exports: -oldName +${renamedAway}`), 'the --check diff names the export delta');
 });
 
 /** The guard's rule, as the live test applies it: every message is a failure. */
@@ -315,13 +324,15 @@ test('--verify and --smoke run a vendored copy against its manifest, with manife
     // alert-routes.mjs without artefact-model.mjs fails on the import; a manifest whose exports lie fails on the comparison.
     copy('tools/lib/alert-routes.mjs');
     const lying = subset(['tools/lib/alert-routes.mjs', 'tools/lib/slug.mjs']);
-    lying.modules['tools/lib/slug.mjs'] = { ...lying.modules['tools/lib/slug.mjs'], exports: ['fileSlug'] };
+    const slugExports = committed.modules['tools/lib/slug.mjs'].exports;
+    const lie = slugExports.slice(0, 1);
+    lying.modules['tools/lib/slug.mjs'] = { ...lying.modules['tools/lib/slug.mjs'], exports: lie };
     writeManifest(lying);
     const smoke = await smokeVendoredTree(dir);
     assert.equal(smoke[0].status, 'fail');
     assert.match(smoke[0].error, /artefact-model\.mjs|Cannot find module/, 'the missing dependency is named');
     assert.equal(smoke[1].status, 'fail');
-    assert.match(smoke[1].error, /^exports differ: manifest \["fileSlug"\], module \["fileSlug","metricPrefix","serviceSlug","symbolSlug"\]$/);
+    assert.equal(smoke[1].error, `exports differ: manifest ${JSON.stringify(lie)}, module ${JSON.stringify(slugExports)}`);
     // Paths: every key must stay under root.
     for (const bad of ['tools/lib/../../etc/passwd', '/tools/lib/x.mjs', 'tools\\lib\\x.mjs', 'studio/app.mjs', 'tools/lib//x.mjs', 'tools/lib/./x.mjs']) {
       assert.equal(validManifestPath(bad, 'tools/lib'), false, bad);
