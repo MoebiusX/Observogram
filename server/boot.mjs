@@ -46,6 +46,7 @@ import { existsSync, lstatSync, readdirSync, rmdirSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { baseWorkspacePath, brandEnv } from '../tools/lib/brand-env.mjs';
 import { authDisabled, hashPassword, oidcEnabled } from './auth.mjs';
+import { assertProxyAuthEnv, EXPOSED_REFUSAL } from './auth-proxy.mjs';
 import { migrateFlatWorkspace, planFlatMigration, resetOrgRootCache } from './tenancy.mjs';
 import { listPackFiles, packFileStat, readPackFile } from './workspace.mjs';
 import { runWithOrg } from './org-context.mjs';
@@ -109,7 +110,12 @@ export function bootContext({ host }) {
   let issuerKey;
   let joinRoleEnv;
   let bootstrap;
+  let proxyAuth;
   try {
+    // The reverse-proxy mode's contract first (null when off, or under
+    // OBSERVOGRAM_AUTH=off): "not beside OIDC" is its refusal, not a
+    // malformed issuer's.
+    proxyAuth = assertProxyAuthEnv();
     issuerKey = issuerRaw ? canonIssuer(issuerRaw) : null;
     joinRoleEnv = parseJoinRole(brandEnv('OIDC_JOIN_ROLE'));
     bootstrap = issuerRaw ? parseBootstrapAdmin(brandEnv('BOOTSTRAP_ADMIN')) : null;
@@ -122,6 +128,8 @@ export function bootContext({ host }) {
     host, loopback: isLoopbackHost(host), base: baseWorkspacePath(), now: nowIso(),
     dbPath, memory: dbPath === ':memory:',
     authOff: authDisabled(), oidc: oidcEnabled(),
+    // The reverse proxy (server/auth-proxy.mjs): its configuration, or null.
+    proxyAuth, proxyFlagIgnored: !proxyAuth && brandEnv('TRUST_PROXY_AUTH') === '1' && authDisabled(),
     issuerRaw, issuerKey, identityMode: issuerRaw ? 'oidc' : 'local',
     token: !!brandEnv('API_TOKEN'), adminPassword: brandEnv('ADMIN_PASSWORD') || null,
     insecure: brandEnv('INSECURE_NO_AUTH') === '1',
@@ -136,9 +144,10 @@ export function bootContext({ host }) {
 const none = (reason) => ({ kind: 'none', password: null, reason });
 
 // Pure. Never a row or an id: the write re-reads the row it changes.
-export function seedDecision({ authOff, oidc, token, armed, adminPassword, loopback, adminStillSeeded }) {
+export function seedDecision({ authOff, oidc, proxy = false, token, armed, adminPassword, loopback, adminStillSeeded }) {
   if (authOff) return none('OBSERVOGRAM_AUTH=off');
   if (oidc) return none('OIDC');
+  if (proxy) return none('OBSERVOGRAM_TRUST_PROXY_AUTH=1');
   if (token) return none('OBSERVOGRAM_API_TOKEN');
   if (armed) {
     if (!adminPassword) return none('identity is armed');
@@ -155,7 +164,7 @@ function storeAdminStillSeeded(db) {
 }
 
 const postureOf = (ctx) => ({
-  authOff: ctx.authOff, oidc: ctx.oidc, token: ctx.token, adminPassword: ctx.adminPassword, loopback: ctx.loopback,
+  authOff: ctx.authOff, oidc: ctx.oidc, proxy: !!ctx.proxyAuth, token: ctx.token, adminPassword: ctx.adminPassword, loopback: ctx.loopback,
 });
 
 // Step 3: the users file's facts (a CLI-armed store that was never
@@ -226,7 +235,7 @@ export function defaultCredentialActive(db, ctx, decision = null) {
 }
 
 function stillSeededRows(db, ctx, decision) {
-  if (ctx.authOff || ctx.oidc || !isIdentityArmed(db)) return [];
+  if (ctx.authOff || ctx.oidc || ctx.proxyAuth || !isIdentityArmed(db)) return [];
   const rescue = decision?.kind === 'rescue' ? 1 : 0;
   return prepare(db, `SELECT login, disabled FROM users WHERE kind = 'local' AND seeded_default = 1
     AND must_change = 1 AND NOT (:rescue = 1 AND login = 'admin' AND disabled = 0) ORDER BY login`).all({ rescue });
@@ -262,11 +271,12 @@ export function legacyChecksInput(db, ctx, legacy, decision, plan1) {
   const usersFile = legacy.users.exists;
   return {
     step: 'import', host: ctx.host, loopback: ctx.loopback, token: ctx.token, insecure: ctx.insecure, dbPath: ctx.dbPath,
-    auth: !ctx.authOff && (ctx.oidc || usersFile || armed || decision.kind === 'seed'),
-    stillSeeded: !ctx.authOff && !ctx.oidc && usersFile && legacy.users.entries.some(([name, rec]) =>
+    auth: !ctx.authOff && (ctx.oidc || !!ctx.proxyAuth || usersFile || armed || decision.kind === 'seed'),
+    stillSeeded: !ctx.authOff && !ctx.oidc && !ctx.proxyAuth && usersFile && legacy.users.entries.some(([name, rec]) =>
       rec.seededDefault && rec.mustChange && !(decision.kind === 'rescue' && name === 'admin')),
     orgIds: [...plan1.liveOrgsAfter],
-    identity: !ctx.authOff && (ctx.oidc || usersFile || armed),
+    identity: !ctx.authOff && (ctx.oidc || !!ctx.proxyAuth || usersFile || armed),
+    ...proxyChecksInput(ctx),
     // A replace that moves the default org's root to orgs/default leaves
     // nothing stranded there.
     strandedDefault: plan1.replace && plan1.rootChange ? null : strandedDefault(db, ctx, legacy.orgs.exists),
@@ -284,12 +294,22 @@ export function storeChecksInput(db, ctx, decision) {
   const armed = isIdentityArmed(db);
   return {
     step: 'store', host: ctx.host, loopback: ctx.loopback, token: ctx.token, insecure: ctx.insecure, dbPath: ctx.dbPath,
-    auth: !ctx.authOff && (ctx.oidc || armed || decision.kind === 'seed'),
+    auth: !ctx.authOff && (ctx.oidc || !!ctx.proxyAuth || armed || decision.kind === 'seed'),
     stillSeeded: defaultCredentialActive(db, ctx, decision),
     stillSeededDisabled: stillSeededDisabled(db, ctx, decision),
     orgIds: listOrgs(db).map((o) => o.id),
-    identity: !ctx.authOff && (ctx.oidc || armed),
+    identity: !ctx.authOff && (ctx.oidc || !!ctx.proxyAuth || armed),
+    ...proxyChecksInput(ctx),
     strandedDefault: strandedDefault(db, ctx, existsSync(orgsFilePath(ctx.base))),
+  };
+}
+
+// The reverse proxy's facts for checks F and G (server/auth-proxy.mjs).
+function proxyChecksInput(ctx) {
+  const p = ctx.proxyAuth;
+  return {
+    proxyAuth: !!p, proxySecret: !!p?.secret, proxyUserHeader: p?.userHeader ?? null, proxySecretHeader: p?.secretHeader ?? null,
+    proxyOrg: p?.org ?? null,
   };
 }
 
@@ -346,6 +366,19 @@ export function assertBootChecks(input) {
       : `the store holds ${n} orgs (${ids}) but no identity is configured: more than one org needs to know who the user is.\n` +
         '  Configure OIDC (OBSERVOGRAM_OIDC_*) or stand-alone users (npm run users),\n' +
         '  or keep one org — remove the others with npm run orgs -- remove <id>.',
+      { nothingMoved });
+  }
+  // F — identity from a reverse proxy beyond loopback needs the shared
+  // secret: without it any client that reaches the port could set the
+  // user header.
+  if (input.proxyAuth && !input.loopback && !input.proxySecret) {
+    throw new BootRefusal(EXPOSED_REFUSAL({ host: input.host, userHeader: input.proxyUserHeader, secretHeader: input.proxySecretHeader }), { nothingMoved });
+  }
+  // G — the org the proxy's groups rule must be one the store holds (live).
+  if (input.proxyOrg && !input.orgIds.includes(input.proxyOrg)) {
+    throw new BootRefusal(
+      `refusing to start: OBSERVOGRAM_PROXY_AUTH_ORG names org '${input.proxyOrg}', which this store does not hold (or it is removed). ` +
+      'Create it first with npm run orgs -- create <id>, or unset the variable to rule the default org. Nothing was written.',
       { nothingMoved });
   }
   // D — the replace (`packc store import --replace`) would merge twins,
@@ -722,10 +755,13 @@ export function recordIssuer(db, ctx) {
 // The sign-in mode this start runs, for the CLIs: they cannot see the
 // server's env, and a shell's may differ (a docker exec, a sudo shell).
 // 'oidc:<issuerKey>' whenever the issuer variable is set (the keys follow
-// it even with OBSERVOGRAM_AUTH=off — A-51); else 'off' (OBSERVOGRAM_AUTH=off),
-// 'local' (identity armed), 'token' (a bearer only) or 'open' (neither).
+// it even with OBSERVOGRAM_AUTH=off — A-51); 'proxy:<key>' behind a reverse
+// proxy (never under OBSERVOGRAM_AUTH=off: the flag is ignored there); else
+// 'off' (OBSERVOGRAM_AUTH=off), 'local' (identity armed), 'token' (a bearer
+// only) or 'open' (neither).
 export function identityModeOf(db, ctx) {
   if (ctx.issuerKey) return `oidc:${ctx.issuerKey}`;
+  if (ctx.proxyAuth) return `proxy:${ctx.proxyAuth.issuerKey}`;
   if (ctx.authOff) return 'off';
   if (isIdentityArmed(db)) return 'local';
   return ctx.token ? 'token' : 'open';
@@ -749,6 +785,9 @@ export function warnNoOwner(db, ctx, warn) {
   } else if (ctx.oidc && signInOwnerCount(db, { mode: 'oidc', issuerKey: ctx.issuerKey }) === 0) {
     warn(`[store] no owner who can sign in with OIDC — set OBSERVOGRAM_BOOTSTRAP_ADMIN=${ctx.issuerKey}#<sub> (or a verified email) and sign in, ` +
       `or run \`npm run users -- owner ${ctx.issuerKey}#<sub>\``);
+  } else if (ctx.proxyAuth && signInOwnerCount(db, { mode: 'oidc', issuerKey: ctx.proxyAuth.issuerKey }) === 0) {
+    warn(`[store] no owner who can sign in through the reverse proxy — set OBSERVOGRAM_PROXY_AUTH_OWNERS=<user> (or map a group to owner in ` +
+      `OBSERVOGRAM_PROXY_AUTH_GROUP_ROLES) and send a request, or run \`npm run users -- owner ${ctx.proxyAuth.issuerKey}#<user>\``);
   }
 }
 
@@ -869,6 +908,10 @@ export async function bootStore({ host, log = () => {}, warn = () => {} } = {}) 
   // step 0
   const ctx = bootContext({ host });
   if (ctx.bootstrapIgnored) warn('[store] OBSERVOGRAM_BOOTSTRAP_ADMIN applies only with OIDC (OBSERVOGRAM_OIDC_ISSUER is not set) — ignored');
+  if (ctx.proxyFlagIgnored) warn('[store] OBSERVOGRAM_TRUST_PROXY_AUTH=1 is ignored with OBSERVOGRAM_AUTH=off — headers are not read');
+  if (ctx.proxyAuth && ctx.loopback && !ctx.proxyAuth.secret) {
+    warn(`[store] OBSERVOGRAM_TRUST_PROXY_AUTH=1 on loopback without OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET: every process that reaches this port on ${ctx.host} is trusted as the proxy`);
+  }
 
   // step 1
   const db = await openStore({ path: ctx.dbPath });

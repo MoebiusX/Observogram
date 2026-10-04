@@ -625,7 +625,7 @@ test('the account menu mounts in the one bar every screen shows — not the cont
   assert.match(fn, /\n {2}actions\.appendChild\(chip\);\n\}$/, 'the chip is its last child');
   assert.doesNotMatch(fn, /insertBefore\(chip,/, 'not beside the theme toggle in the context bar');
   const boot = functionSource(src, 'boot');
-  const chromeAt = boot.indexOf('installObservaChrome();');
+  const chromeAt = boot.indexOf('installObservaChrome(state.brand.chrome);');
   assert.ok(chromeAt >= 0 && chromeAt < boot.indexOf('setupIdentityChip();'), 'boot mounts the chrome before the chip');
   // Beside the tabs the chip's name gives way — ten characters at a laptop
   // width, the glyph at phone width — so the tabs keep their room and the
@@ -800,6 +800,8 @@ test('deploy target profiles keep no credential: per user, stripped like the rem
 const EXPECTED_CLASS = Object.freeze({
   'GET /healthz': 'public',
   'GET /api/version': 'public',
+  'GET /': 'public',
+  'GET /index.html': 'public',
   'GET /auth/login': 'public',
   'POST /auth/login': 'public',
   'GET /auth/callback': 'public',
@@ -813,6 +815,7 @@ const EXPECTED_CLASS = Object.freeze({
   'GET /api/orgs': 'viewer',
   'GET /api/packs': 'viewer',
   'GET /api/examples': 'viewer',
+  'GET /api/taxonomy': 'viewer',
   'GET /api/references': 'viewer',
   'GET /api/packs/:id': 'viewer',
   'GET /api/packs/:id/canonical': 'viewer',
@@ -915,6 +918,7 @@ const MODE_ENV = {
     OBSERVOGRAM_OIDC_ISSUER: 'http://127.0.0.1:9', OBSERVOGRAM_OIDC_CLIENT_ID: 'studio', OBSERVOGRAM_OIDC_ALLOW_HTTP: '1',
     OBSERVOGRAM_SESSION_SECRET: 'authz-suite-session-secret-0123456789-abc',
   },
+  proxy: { OBSERVOGRAM_TRUST_PROXY_AUTH: '1', OBSERVOGRAM_TRUST_PROXY_AUTH_ACK: 'only-the-proxy-reaches-this-port' },
   off: { OBSERVOGRAM_AUTH: 'off' },
 };
 function inventory(mode) {
@@ -1244,6 +1248,7 @@ const PROBES = Object.freeze({
   'GET /api/orgs': ['GET', '/api/orgs'],
   'GET /api/packs': ['GET', '/api/packs'],
   'GET /api/examples': ['GET', '/api/examples'],
+  'GET /api/taxonomy': ['GET', '/api/taxonomy'],
   'GET /api/references': ['GET', '/api/references'],
   'GET /api/packs/:id': ['GET', '/api/packs/nope'],
   'GET /api/packs/:id/canonical': ['GET', '/api/packs/nope/canonical'],

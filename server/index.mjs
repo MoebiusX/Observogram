@@ -63,6 +63,7 @@ import {
 } from '../tools/lib/journey.mjs';
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
+import { describeProxyAuth } from './auth-proxy.mjs';
 import { redactCredentials, stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
@@ -79,7 +80,10 @@ import { currentStore } from './store/db.mjs';
 import { defaultOrgId } from './store/identity.mjs';
 import { getOrg, listOrgs } from './store/orgs.mjs';
 import { listMembershipsForUser } from './store/memberships.mjs';
-import { brandEnv } from '../tools/lib/brand-env.mjs';
+import { brandEnv, loadBrand, brandSource } from '../tools/lib/brand-env.mjs';
+import { brandShellHtml } from '../tools/lib/brand.mjs';
+import { loadTaxonomy, taxonomyAnswer } from './taxonomy.mjs';
+import { mcpTransport, describeTransport } from '../tools/mcp-transport.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
 import { stackSummary } from '../tools/lib/stack-evidence.mjs';
 import { parseSchedule } from '../tools/lib/schedule.mjs';
@@ -446,6 +450,16 @@ function findPackMeta(id) {
 // home screen renders these as a small "Browse examples" affordance.
 app.get('/api/examples', authorize('GET /api/examples'), (req, res) => {
   res.json({ examples: EXAMPLE_PACKS.map(catalogEntry) });
+});
+
+// The artefact taxonomy override (OBSERVOGRAM_TAXONOMY, server/taxonomy.mjs):
+// the document the studio compiles at boot to classify typed artefacts, or
+// null when none is configured. `configured` says which; the file's path
+// is logged at start, never served. `no-store` like /api/version: the
+// answer changes with the process, not with the resource.
+app.get('/api/taxonomy', authorize('GET /api/taxonomy'), (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(taxonomyAnswer());
 });
 
 // Catalogue reference packs — the curated best-practice packs surfaced in
@@ -1954,14 +1968,32 @@ app.use('/lib', express.static(resolve(ROOT, 'tools/lib'), {
   },
 }));
 
-app.use(express.static(STUDIO_DIR, { extensions: ['html'], index: 'index.html' }));
+// The studio shell (studio/index.html), one way out for every path that
+// serves it: `/`, `/index.html` and the SPA fallback below. Unbranded (the
+// default) it is res.sendFile — the same `send` pipeline express.static ran,
+// so the bytes and the headers (ETag, Last-Modified, Cache-Control, Accept-
+// Ranges) are the ones the static mount used to answer. Branded
+// (OBSERVOGRAM_BRAND_FILE / OBSERVOGRAM_BRAND_*, read once in start()), it is
+// brandShellHtml's rendering, held in memory, no-cache. The static mount
+// serves no index and tries no extension, so `/index` cannot reach the
+// on-disk shell around this handler (it falls to the SPA route instead).
+const SHELL_FILE = resolve(STUDIO_DIR, 'index.html');
+let brandedShell = null;
+function sendShell(req, res) {
+  if (brandedShell !== null) return res.type('html').set('Cache-Control', 'no-cache').send(brandedShell);
+  res.sendFile(SHELL_FILE);
+}
+app.get('/', authorize('GET /'), sendShell);
+app.get('/index.html', authorize('GET /index.html'), sendShell);
+
+app.use(express.static(STUDIO_DIR, { index: false }));
 
 // SPA-style fallback: any unknown GET returns the studio shell so the client
 // can route. The /api/* paths above already handled JSON requests.
 const SPA_FALLBACK = /^(?!\/api\/).*/;
 app.get(SPA_FALLBACK, authorize(`GET ${SPA_FALLBACK}`), (req, res, next) => {
   if (req.method !== 'GET') return next();
-  res.sendFile(resolve(STUDIO_DIR, 'index.html'));
+  sendShell(req, res);
 });
 
 // ---------- entrypoint ----------
@@ -2010,7 +2042,28 @@ function noteLegacyLivePack(db, log, legacyPath) {
 export async function start({ port = PORT, host = HOST, silent = false, legacyLivePack = resolve(ROOT, LEGACY_LIVE_PACK) } = {}) {
   const log = (m) => { if (!silent) process.stdout.write(m + '\n'); };
   const warn = (m) => { if (!silent) process.stderr.write(m + '\n'); };
+  // The artefact taxonomy override (OBSERVOGRAM_TAXONOMY, server/taxonomy.mjs)
+  // is read first: an unreadable or invalid file refuses the start before
+  // the store is touched; a loaded one is installed process-wide for the
+  // diff and the graphs and logged here once, path only.
+  loadTaxonomy({ log });
+  // The brand (tools/lib/brand-env.mjs loadBrand, tools/lib/brand.mjs): read
+  // here, not at import, so an in-process suite's env lands first; a bad
+  // brand file refuses the start before the store is touched. Said once,
+  // name and source (a path or 'env') only — never the file's contents.
+  const brand = loadBrand();
+  brandedShell = brand.configured ? brandShellHtml(readFileSync(SHELL_FILE, 'utf8'), brand) : null;
+  if (brand.configured) log(`[studio] brand: ${brand.name} (${brandSource() === 'env' ? 'OBSERVOGRAM_BRAND_* env' : brandSource()})`);
   const { db, ctx } = await bootStore({ host, log, warn });
+  // The MCP transport hook (OBSERVOGRAM_TRANSPORT_HOOK, tools/mcp-transport.mjs)
+  // loads once per process: a hook that cannot load refuses the start, and
+  // every MCP call the routes make (refresh, draft, deploy) goes through it.
+  // Logged here once, by this entrypoint — the loader is silent.
+  const transport = await mcpTransport();
+  if (transport.hookPath) log(`[studio] MCP transport hook: ${describeTransport(transport)}`);
+  // Identity from a reverse proxy (OBSERVOGRAM_TRUST_PROXY_AUTH=1,
+  // server/auth-proxy.mjs): said once here, header names only, never the secret.
+  if (ctx.proxyAuth) log(`[studio] identity from the reverse proxy: ${describeProxyAuth(ctx.proxyAuth)}`);
   if (localUsersEnabled()) touchSessionSecret();
   // Journeys/runs live in the engine (tools/lib/journey.mjs) — wire its
   // root through the same context-aware resolver the registry uses.

@@ -13,6 +13,7 @@ import { host as appHost } from './host.mjs';
 import { cardKey } from './layers-view.mjs';
 import { boundText, goodWhen, hasDirection } from './sli-direction.mjs';
 import { readChain, traceIndex } from './trace-chain.mjs';
+import { classifyArtefact } from './taxonomy.mjs';
 
 // ---------- drawer ----------
 
@@ -163,9 +164,50 @@ function jumpToRef(symbol) {
 
 // ---------- per-artefact-type drawer panels ----------
 
+// The panel per family, for an artefact the taxonomy placed by an explicit
+// `type` or by an operator override (studio/taxonomy.mjs) — a foreign id
+// says nothing to the prefix chain below. Adapted artefacts (via defines /
+// id) keep the prefix chain, whose sub-kinds read the id.
+const FAMILY_PANEL = {
+  sli: (id, s) => panelSLI(s),
+  slo: (id, s) => panelSLO(s),
+  otel: (id, s) => panelOtel(s),
+  backend: (id, s) => panelBackend(s),
+  storage_metrics: (id, s) => panelStorage(s),
+  storage_logs: (id, s) => panelStorage(s),
+  storage_traces: (id, s) => panelStorage(s),
+  metric: (id, s) => panelMetric(s),
+  scrape_job: (id, s) => panelScrapeJob(s),
+  pipeline_receiver: (id, s) => panelPipeline('PIP-RCV-', s),
+  pipeline_processor: (id, s) => panelPipeline('PIP-PRC-', s),
+  pipeline_exporter_metrics: (id, s) => panelPipeline('PIP-EXP-', s),
+  pipeline_exporter_logs: (id, s) => panelPipeline('PIP-EXP-', s),
+  pipeline_exporter_traces: (id, s) => panelPipeline('PIP-EXP-', s),
+  dashboard: (id, s) => panelDashboard(s),
+  panel: (id, s) => panelDashboardPanel(s),
+  recording_rule: (id, s) => panelRecordingRule(s),
+  derived_view: (id, s) => panelDerivedView(s),
+  burn_rate: (id, s) => panelBurnRate(s),
+  forecast: (id, s) => panelForecast(s),
+  alert_route: (id, s) => panelAlertRoute(s),
+  alert_rule: (id, s) => panelAlertRule(s),
+  remediation: (id, s) => panelRemediation(s),
+  baselines: (id, s) => panelBaselines(s),
+  chaos: (id, s) => panelChaos(s),
+  synthetic: (id, s) => panelSynthetic(s),
+  profiling: (id, s) => panelExtended('PROF-', s),
+  network: (id, s) => panelExtended('NET-', s),
+  policy_engine: (id, s) => panelExtended('POE-', s),
+  mesh: (id, s) => panelExtended('MESH-', s),
+  collection: (id, s) => panelExtended('COL-', s),
+  imports: (id, s) => panelImport(s),
+};
+
 function renderTypedPanels(artefact, def) {
   const id = artefact.id || '';
   const s = artefact.spec || {};
+  const c = classifyArtefact(artefact);
+  if ((c.via === 'type' || c.via === 'override') && FAMILY_PANEL[c.family]) return FAMILY_PANEL[c.family](id, s);
   if (id.startsWith('SLI-'))     return panelSLI(s);
   if (id.startsWith('SLO-'))     return panelSLO(s);
   if (id.startsWith('OTEL-'))    return panelOtel(s);

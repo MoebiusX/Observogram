@@ -143,7 +143,7 @@ export function renderDiscoverDashboard(view) {
         <section class="disco-panel disco-scanner-panel">
           <div class="disco-scanner-head">
             <div>
-              <div class="disco-scanner-title">OBSERVOGRAM SCAN</div>
+              <div class="disco-scanner-title">${escapeHtml(state.brand.chrome.scannerTitle)}</div>
               <div class="disco-scanner-sub">layered observability view</div>
             </div>
             <div class="disco-scan-status">
@@ -154,8 +154,10 @@ export function renderDiscoverDashboard(view) {
           </div>
 
           <div class="disco-scanner-stage">
-            <img class="disco-scanner-img" src="/assets/observogram-hero.png" alt="Observogram scan"
-                 onerror="this.classList.add('is-missing')">
+            ${state.brand.chrome.heroSrc
+              ? `<img class="disco-scanner-img" src="${escapeHtml(state.brand.chrome.heroSrc)}" alt="${escapeHtml(state.brand.chrome.heroAlt)}"
+                 onerror="this.classList.add('is-missing')">`
+              : '<img class="disco-scanner-img is-missing" alt="">'}
             <div class="disco-scanner-fallback">
               ${LAYER_DEFS.filter(d => d.id !== 'L2X' || layerArtefactCount('L2X') > 0).map(d => {
                 const cnt = layerArtefactCount(d.id);

@@ -8,9 +8,18 @@
  * makes it testable, so it gets its suite in the same commit.
  */
 
-import { validateMcpUrl, isLocalOrPrivateHost, redactCredentials, safeMcpUrl, stripMcpUrl, mcpUrlOrigin, credentialParamName } from './mcp-url.mjs';
 import { readFileSync } from 'node:fs';
 import { createHarness } from '../tools/lib/harness.mjs';
+
+// Hermetic (§0): the children's STRIP list, both spellings, before any server
+// module loads (serve-child.mjs imports no server code; the import below is
+// dynamic so it runs after). server/test-hermetic-suites.mjs guards the shape.
+const { STRIP } = await import('./fixtures/serve-child.mjs');
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
+const { validateMcpUrl, isLocalOrPrivateHost, redactCredentials, safeMcpUrl, stripMcpUrl, mcpUrlOrigin, credentialParamName } = await import('./mcp-url.mjs');
 
 const { assert, report } = createHarness({ indent: '  ', truncate: 160 });
 

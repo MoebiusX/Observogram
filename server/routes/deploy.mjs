@@ -32,11 +32,29 @@ import {
   appendDeployRecord, appendDeployVerify, readDeployRecords, readDeploySnapshot,
 } from '../workspace.mjs';
 import { createMcpClient } from '../../tools/fetch-live-pack.mjs';
+import { isTransportHookError } from '../../tools/lib/mcp-client.mjs';
 import { compile, compileArtifact } from '../../tools/lib/compile.mjs';
 
 export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, actorForRequest, contentHash, authorize }) {
   // Case-sensitive like the app (server/index.mjs): a nested router does not inherit the app's setting.
   const router = express.Router({ caseSensitive: true });
+
+  // A transport hook fault (OBSERVOGRAM_TRANSPORT_HOOK breaking its contract
+  // on a call) is one 502 for the whole request and NO deploy record: the
+  // per-item catches below rethrow it instead of recording N identical
+  // item failures for a deploy that never reached the wire. Every other
+  // error keeps its existing path (Express's own handler, or the single
+  // deploy route's audited 502).
+  const hookFaultTo502 = (handler) => async (req, res) => {
+    try {
+      await handler(req, res);
+    } catch (e) {
+      if (!isTransportHookError(e) || res.headersSent) throw e;
+      process.stderr.write(`[deploy]   transport hook fault: ${redactCredentials(e.message)}\n`);
+      res.status(502).json({ ok: false, error: redactCredentials(e.message) });
+    }
+  };
+  const rethrowHook = (e) => { if (isTransportHookError(e)) throw e; };
 
   router.get('/api/deploy/matrix', authorize('GET /api/deploy/matrix'), (req, res) => {
     // Surface the deployable targets + products + versions so the client
@@ -137,7 +155,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
   // write tools; creates need delete tools the MCP doesn't expose yet and are
   // returned as manual steps with exact identities. The rollback is itself a
   // deploy-shaped act and lands in the audit log with `rollbackOf`.
-  router.post('/api/deploys/:deployId/rollback', authorize('POST /api/deploys/:deployId/rollback'), async (req, res) => {
+  router.post('/api/deploys/:deployId/rollback', authorize('POST /api/deploys/:deployId/rollback'), hookFaultTo502(async (req, res) => {
     const rollbackOf = String(req.params.deployId || '');
     if (!/^dep_[A-Za-z0-9_-]+$/.test(rollbackOf)) return res.status(400).json({ ok: false, error: 'malformed deployId' });
     const original = readDeployRecords({ limit: 0 }).find(d => d.deployId === rollbackOf);
@@ -160,7 +178,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
       protocolVersion: '2025-06-18',
       capabilities: {},
       clientInfo: { name: 'observabilitypack-studio-rollback', version: '0.4.0' },
-    }).catch(() => {});
+    }).catch(rethrowHook);
     const availableTools = await discoverMcpToolNames(rpc);
 
     const results = [];
@@ -186,6 +204,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
           });
           results.push({ ref: it.ref, action: 'restore', ok: true, tookMs: Date.now() - itStart, result });
         } catch (e) {
+          rethrowHook(e);
           results.push({ ref: it.ref, action: 'restore', ok: false, error: redactCredentials(String(e.message)), tookMs: Date.now() - itStart });
         }
       } else if (it.kind === 'dashboard' && it.restore === 'delete') {
@@ -195,6 +214,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
             const result = await callTool('grafana_delete_dashboard', { uid: it.ref, dry_run: dryRun });
             results.push({ ref: it.ref, action: 'delete', ok: true, tookMs: Date.now() - itStart, result });
           } catch (e) {
+            rethrowHook(e);
             results.push({ ref: it.ref, action: 'delete', ok: false, error: redactCredentials(String(e.message)), tookMs: Date.now() - itStart });
           }
         } else {
@@ -237,7 +257,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
       summary: { total: results.length, ok: okCount, failed: failCount, manual: manual.length },
       tookMs: Date.now() - t0,
     });
-  });
+  }));
 
   // ----------------------------------------------------------------
   // POST /api/packs/:id/deploy-bulk — multi-artefact deploy.
@@ -252,7 +272,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
   // Returns per-item ok/error so the UI can show partial success
   // instead of failing the whole batch.
   // ----------------------------------------------------------------
-  router.post('/api/packs/:id/deploy-bulk', authorize('POST /api/packs/:id/deploy-bulk'), async (req, res) => {
+  router.post('/api/packs/:id/deploy-bulk', authorize('POST /api/packs/:id/deploy-bulk'), hookFaultTo502(async (req, res) => {
     const meta = findPackMeta(req.params.id);
     if (!meta) return res.status(404).json({ ok: false, error: `unknown pack: ${req.params.id}` });
     const body = req.body || {};
@@ -287,7 +307,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
       protocolVersion: '2025-06-18',
       capabilities: {},
       clientInfo: { name: 'observabilitypack-studio-deploy-bulk', version: '0.4.0' },
-    }).catch(() => {});
+    }).catch(rethrowHook);
     const availableTools = await discoverMcpToolNames(rpc);
     const missingTools = new Set();
 
@@ -375,6 +395,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
           result: callResults,
         });
       } catch (e) {
+        rethrowHook(e);
         results.push({ item, ok: false, error: e.message, tookMs: Date.now() - itStart });
       }
     }
@@ -423,9 +444,9 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
       env,
       tookMs: totalMs,
     });
-  });
+  }));
 
-  router.post('/api/packs/:id/deploy/:target', authorize('POST /api/packs/:id/deploy/:target'), async (req, res) => {
+  router.post('/api/packs/:id/deploy/:target', authorize('POST /api/packs/:id/deploy/:target'), hookFaultTo502(async (req, res) => {
     const meta = findPackMeta(req.params.id);
     if (!meta) return res.status(404).json({ ok: false, error: `unknown pack: ${req.params.id}` });
 
@@ -493,7 +514,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
         protocolVersion: '2025-06-18',
         capabilities: {},
         clientInfo: { name: 'observabilitypack-studio-deploy', version: '0.4.0' },
-      }).catch(() => {});
+      }).catch(rethrowHook);
 
       const availableTools = await discoverMcpToolNames(rpc);
       if (availableTools && !availableTools.includes(mcpTool)) {
@@ -559,6 +580,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
         result,
       });
     } catch (e) {
+      rethrowHook(e);   // one 502 without an audit record (hookFaultTo502)
       const tookMs = Date.now() - t0;
       process.stderr.write(`[deploy]   error in ${tookMs}ms: ${redactCredentials(e.message)}\n`);
       const deployId = auditSingleDeploy({
@@ -570,7 +592,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
         targetProduct: product, targetVersion: version, scope: scope || null, targetFolder: folder || null,
         mode, dryRun, env, tookMs });
     }
-  });
+  }));
 
   // One audit record for the single-artefact deploy route — same shape as a
   // bulk record with exactly one item, so /api/deploys consumers see a

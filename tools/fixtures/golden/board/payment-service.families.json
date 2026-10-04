@@ -1,0 +1,338 @@
+{
+  "GOV::IMP-01": {
+    "family": "imports",
+    "via": "id"
+  },
+  "GOV::IMP-02": {
+    "family": "imports",
+    "via": "id"
+  },
+  "GOV::IMP-03": {
+    "family": "imports",
+    "via": "id"
+  },
+  "L1::SLI-01": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-02": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-03": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-04": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-05": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-06": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLO-01": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-02": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-03": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-04": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-05": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-06": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L2::BAK-01": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-02": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-03": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-04": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-05": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-06": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-07": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-08": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-09": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::OTEL-01": {
+    "family": "otel",
+    "via": "id"
+  },
+  "L2::PIP-EXP-LOG": {
+    "family": "pipeline_exporter_logs",
+    "via": "id"
+  },
+  "L2::PIP-EXP-MET": {
+    "family": "pipeline_exporter_metrics",
+    "via": "id"
+  },
+  "L2::PIP-EXP-TRC": {
+    "family": "pipeline_exporter_traces",
+    "via": "id"
+  },
+  "L2::PIP-PRC-01": {
+    "family": "pipeline_processor",
+    "via": "id"
+  },
+  "L2::PIP-PRC-02": {
+    "family": "pipeline_processor",
+    "via": "id"
+  },
+  "L2::PIP-PRC-03": {
+    "family": "pipeline_processor",
+    "via": "id"
+  },
+  "L2::PIP-PRC-04": {
+    "family": "pipeline_processor",
+    "via": "id"
+  },
+  "L2::PIP-PRC-05": {
+    "family": "pipeline_processor",
+    "via": "id"
+  },
+  "L2::PIP-PRC-06": {
+    "family": "pipeline_processor",
+    "via": "id"
+  },
+  "L2::PIP-RCV-01": {
+    "family": "pipeline_receiver",
+    "via": "id"
+  },
+  "L2::PIP-RCV-02": {
+    "family": "pipeline_receiver",
+    "via": "id"
+  },
+  "L2::STO-LOG-01": {
+    "family": "storage_logs",
+    "via": "id"
+  },
+  "L2::STO-MET-01": {
+    "family": "storage_metrics",
+    "via": "id"
+  },
+  "L2::STO-TRC-01": {
+    "family": "storage_traces",
+    "via": "id"
+  },
+  "L2X::COL-01": {
+    "family": "collection",
+    "via": "id"
+  },
+  "L2X::COL-02": {
+    "family": "collection",
+    "via": "id"
+  },
+  "L2X::MESH-01": {
+    "family": "mesh",
+    "via": "id"
+  },
+  "L2X::MESH-02": {
+    "family": "mesh",
+    "via": "id"
+  },
+  "L2X::NET-01": {
+    "family": "network",
+    "via": "id"
+  },
+  "L2X::POE-01": {
+    "family": "policy_engine",
+    "via": "id"
+  },
+  "L2X::PROF-01": {
+    "family": "profiling",
+    "via": "id"
+  },
+  "L3::DASH-01": {
+    "family": "dashboard",
+    "via": "defines"
+  },
+  "L3::DASH-02": {
+    "family": "dashboard",
+    "via": "defines"
+  },
+  "L3::DASH-03": {
+    "family": "dashboard",
+    "via": "defines"
+  },
+  "L3::DASH-04": {
+    "family": "dashboard",
+    "via": "defines"
+  },
+  "L3::PANEL-01": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-02": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-03": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-04": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-05": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::QRY-01": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-02": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-03": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-04": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-05": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::VIEW-01": {
+    "family": "derived_view",
+    "via": "defines"
+  },
+  "L3::VIEW-02": {
+    "family": "derived_view",
+    "via": "defines"
+  },
+  "L4:alerting:ALR-01": {
+    "family": "alert_route",
+    "via": "id"
+  },
+  "L4:alerting:ALR-02": {
+    "family": "alert_route",
+    "via": "id"
+  },
+  "L4:alerting:ALR-03": {
+    "family": "alert_route",
+    "via": "id"
+  },
+  "L4:alerting:RULE-01": {
+    "family": "alert_rule",
+    "via": "id"
+  },
+  "L4:alerting:RULE-02": {
+    "family": "alert_rule",
+    "via": "id"
+  },
+  "L4:alerting:RULE-03": {
+    "family": "alert_rule",
+    "via": "id"
+  },
+  "L4:healing:HEAL-01": {
+    "family": "remediation",
+    "via": "id"
+  },
+  "L4:healing:HEAL-02": {
+    "family": "remediation",
+    "via": "id"
+  },
+  "L4:healing:HEAL-03": {
+    "family": "remediation",
+    "via": "id"
+  },
+  "L4:policy:FCST-01": {
+    "family": "forecast",
+    "via": "id"
+  },
+  "L4:policy:FCST-02": {
+    "family": "forecast",
+    "via": "id"
+  },
+  "L4:policy:POL-01": {
+    "family": "burn_rate",
+    "via": "id"
+  },
+  "L4:policy:POL-02": {
+    "family": "burn_rate",
+    "via": "id"
+  },
+  "L4:policy:POL-03": {
+    "family": "burn_rate",
+    "via": "id"
+  },
+  "L4:policy:POL-04": {
+    "family": "burn_rate",
+    "via": "id"
+  },
+  "L4:policy:POL-05": {
+    "family": "burn_rate",
+    "via": "id"
+  },
+  "L5::BASE-01": {
+    "family": "baselines",
+    "via": "id"
+  },
+  "L5::CHAOS-01": {
+    "family": "chaos",
+    "via": "id"
+  },
+  "L5::CHAOS-02": {
+    "family": "chaos",
+    "via": "id"
+  },
+  "L5::CHAOS-03": {
+    "family": "chaos",
+    "via": "id"
+  },
+  "L5::SYN-01": {
+    "family": "synthetic",
+    "via": "id"
+  },
+  "L5::SYN-02": {
+    "family": "synthetic",
+    "via": "id"
+  }
+}

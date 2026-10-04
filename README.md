@@ -360,6 +360,93 @@ server opens it at every start.
   org's own part of the workspace (or outside it); a path inside another
   org's part is refused.
 
+#### Behind a reverse proxy (trusted headers)
+
+An enterprise deployment that terminates SSO at a reverse proxy can have the
+server trust the identity the proxy forwards, instead of running OIDC or
+local users itself ([`server/auth-proxy.mjs`](server/auth-proxy.mjs); the
+auth seam of [docs/DOWNSTREAM.md](docs/DOWNSTREAM.md)). Opt-in, and off
+unless `OBSERVOGRAM_TRUST_PROXY_AUTH=1`: without it no header is read, in
+any posture.
+
+```bash
+OBSERVOGRAM_TRUST_PROXY_AUTH=1
+OBSERVOGRAM_TRUST_PROXY_AUTH_ACK=only-the-proxy-reaches-this-port
+OBSERVOGRAM_PROXY_AUTH_USER_HEADER=X-Forwarded-User        # default; required on every request
+OBSERVOGRAM_PROXY_AUTH_EMAIL_HEADER=X-Forwarded-Email      # default
+OBSERVOGRAM_PROXY_AUTH_NAME_HEADER=                        # unset by default
+OBSERVOGRAM_PROXY_AUTH_GROUPS_HEADER=X-Forwarded-Groups    # unset by default; a comma list
+OBSERVOGRAM_PROXY_AUTH_GROUP_ROLES='sre=admin,dev=operator,*=viewer'
+OBSERVOGRAM_PROXY_AUTH_ORG=                                # the org the groups rule; default the default org
+OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE=none                      # first-sight role when no groups header is configured (refused beside one)
+OBSERVOGRAM_PROXY_AUTH_OWNERS=root                         # comma list of user values granted owner
+OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET=<32+ chars>           # required beyond loopback
+OBSERVOGRAM_PROXY_AUTH_SECRET_HEADER=X-Proxy-Auth-Secret   # default
+OBSERVOGRAM_PROXY_AUTH_LOGOUT_URL=https://sso.example.com/logout
+OBSERVOGRAM_PROXY_AUTH_REALM=proxy                         # default; [a-z0-9._-]{1,64}
+```
+
+- **The rule.** The proxy MUST be the only route to this port, and MUST
+  strip the user, email, name, groups and secret headers from every client
+  request before adding its own — a client that can set `X-Forwarded-User`
+  is anyone. The server cannot verify that, so it refuses to start until
+  the operator says so in words: `OBSERVOGRAM_TRUST_PROXY_AUTH_ACK` must be
+  the sentence `only-the-proxy-reaches-this-port` (not `1`). The refusal:
+  `OBSERVOGRAM_TRUST_PROXY_AUTH=1 trusts identity headers from a reverse
+  proxy, which is safe only when clients cannot reach this port — set
+  OBSERVOGRAM_TRUST_PROXY_AUTH_ACK=only-the-proxy-reaches-this-port once the
+  proxy strips X-Forwarded-User, X-Forwarded-Email[, <groups header>] from
+  every client request, or unset OBSERVOGRAM_TRUST_PROXY_AUTH`.
+- **Loopback, or a shared secret.** Bind to loopback next to the proxy, or
+  set `OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET` (32 characters or more) and have
+  the proxy send it in `X-Proxy-Auth-Secret`: a request without the right
+  secret is anonymous. A bind beyond loopback without it refuses to start
+  (`refusing to bind to <host> with OBSERVOGRAM_TRUST_PROXY_AUTH=1 and no
+  OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET: beyond loopback any client could set
+  X-Forwarded-User. Set the shared secret (the proxy sends it in
+  X-Proxy-Auth-Secret), or bind to loopback (HOST=127.0.0.1) next to the
+  proxy`); on loopback without it the boot warns once that every process
+  reaching the port is trusted as the proxy. The secret is compared in
+  constant time and never printed or recorded.
+- **One sign-in mode per server.** `OBSERVOGRAM_OIDC_ISSUER` set beside the
+  flag refuses to start (`… are both set: one sign-in mode per server —
+  unset one`); `OBSERVOGRAM_AUTH=off` wins over the flag (one warn line,
+  headers not read). Local users are not consulted while the mode is on.
+- **No cookie, no login page.** The headers are the session: every request
+  resolves them against the store, once, in one transaction. `GET
+  /auth/login` answers 401 and says so; the studio's **sign out** goes to
+  `OBSERVOGRAM_PROXY_AUTH_LOGOUT_URL` when set (the proxy's session outlives
+  this app's) and otherwise says it signed out of this app only; **sign out
+  my other sessions** is not offered. The headers are ambient like a
+  cookie, so a session mutation still needs `X-Observogram-CSRF: 1`.
+- **Rows and roles.** Users are recorded as `proxy://<realm>#<user>`, kind
+  `oidc`, under the key `proxy://<realm>` — `npm run users -- owner
+  proxy://proxy#alice`, `remove`, `enable` and the identity API name them
+  that way, whatever OIDC issuer the store recorded (a store that recorded
+  one keeps refusing bare logins from a plain shell, as before). The email
+  the proxy sends is recorded as verified. With a groups header configured,
+  the groups are **authoritative in `OBSERVOGRAM_PROXY_AUTH_ORG`** (default
+  the default org) and nowhere else: on every request that carries the
+  header the membership there is added, raised, lowered or removed to match
+  (`membership.jit` / `membership.role` / `membership.remove` rows, actor
+  `system`, `via: proxy-groups`; an admin's manual edit in that org is
+  overwritten by the next request); a request without the header leaves
+  memberships alone; `*` is every user the header names. Without a groups
+  header, `OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE` applies at the first sight
+  only; beside a groups header it refuses the start (`… are both set: with
+  a groups header the groups rule every membership …`), since it would
+  otherwise apply whenever the proxy omits the header. A user in `OBSERVOGRAM_PROXY_AUTH_OWNERS`, or in a group mapped to
+  `owner`, is granted owner once (`owner.grant`, `via: proxy`) and **never
+  revoked here** — revoke with `PUT /api/admin/users/:id/owner`. A disabled
+  row is refused and never re-enabled by a request; a local row holding the
+  login is refused.
+- **Refused requests are anonymous (401), and write nothing**: a duplicated
+  identity header line, a value over 2000 characters or holding a control
+  character, an empty user header, a missing or wrong secret.
+- **`packc store rekey-issuer --clear` disables `proxy://` rows too**: they
+  are kind `oidc`, and `--clear` disables every enabled OIDC row. `--to`
+  rewrites one issuer's prefix and leaves them alone.
+
 #### Roles
 
 Who may call what is decided per route, by one table:
@@ -378,7 +465,7 @@ The role is the membership **of the request's org** (`X-Observogram-Org`,
 `admin`, `viewer` / `read` / `readonly` / `read-only` → `viewer`,
 anything else (`member`, empty) → `operator`. Per posture:
 
-- **Signed in** (local users or OIDC): the user's role in the org; an owner
+- **Signed in** (local users, OIDC or a reverse proxy): the user's role in the org; an owner
   is an admin everywhere. The bearer (`OBSERVOGRAM_API_TOKEN`) acts as an
   `operator` of its `X-Observogram-Org` (else the default org), never as an
   admin or owner.
@@ -478,7 +565,7 @@ emails go in the JSON body.
 | `GET` | `/api/admin/orgs` | owner | — | `defaultOrg` and every org, removed ones too, with its `members` count |
 | `POST` | `/api/admin/orgs` | owner | `{ id, name?, adopt? }` | a new org at `orgs/<id>/` (201), the caller its first admin; `"adopt": true` takes over a non-empty directory; a slug is never reused |
 | `DELETE` | `/api/admin/orgs/:id` | owner | — | a soft removal, never of the default org: the org is refused from its members' next request; its files stay (`packc store purge-org <id>`, with the server stopped) |
-| `GET` | `/api/admin/join-role` | owner | — | the recorded join role (`viewer`, `operator`, `admin` or `null`), `oidc`, `issuerKey` |
+| `GET` | `/api/admin/join-role` | owner | — | the recorded join role (`viewer`, `operator`, `admin` or `null`), `oidc`, `issuerKey`, `mode` (`local`, `oidc` or `proxy`; behind a reverse proxy a `proxy` object says what rules first-sight roles there instead) |
 | `PUT` | `/api/admin/join-role` | owner | `{ role, confirm? }` | the default-org role of every IdP user created from now on; `null` or `"none"`: no automatic join |
 | `PATCH` | `/api/org` | admin | `{ name }` | renames the org (1–200 characters) |
 | `GET` | `/api/org/members` | admin | — | the org and its members: `userId`, `login`, `kind`, `name`, `email`, `role`, `disabled`, `since` |
@@ -827,6 +914,16 @@ reads each org's own live pack, `<org root>/live/production-live.pack.yaml`
 refresh; `OUTPUT=<org root>/live/production-live.pack.yaml npm run fetch-live`
 feeds it from the CLI. Both keep the same safe URL: no userinfo, fragment or
 credential query parameter (`MCP_AUTH` is the place for a token).
+Behind a gateway with its own auth, extra headers, a proxy or a private CA,
+`OBSERVOGRAM_TRANSPORT_HOOK=<path.mjs>` names a module whose
+`prepareRequest({ url, headers })` (sync or async) is applied to every MCP
+request the CLI, the recorder, the live probes, a journey and the studio
+server make, and whose optional `fetchImpl` replaces the fetcher; the URL it
+returns passes the same http(s)/local-address policy as the caller's. A hook
+that fails to load or breaks its contract is a hard failure — exit 1, no pack
+written; the server refuses to start on a load failure — while network
+failures through it stay ordinary probe failures. Unset, nothing changes
+(`docs/MCP_INTEGRATION.md`, "Transport hook").
 
 The studio's `POST /api/refresh-live` and `POST /api/draft-from-mcp` take
 either `mcpUrl` (with an optional `mcpAuth`, as before) or `mcpEndpointId`:
@@ -866,6 +963,157 @@ The studio also accepts drag-and-drop or file picker upload. Uploaded, crawled,
 and MCP-drafted packs are registered in memory and become addressable through
 the same `/api/packs/:id/*` endpoints as catalog packs.
 
+### Classify Typed Packs
+
+Observogram groups a pack's artefacts into families — SLI, SLO, recording
+rule, dashboard, alert route … — and the Discover board, the drawer, the
+diff and the graphs all read that one classification
+(`tools/lib/artefact-classify.mjs`: an explicit `type` first, then the
+canonical `defines` symbol the adapter attaches, then the id prefix). A pack
+produced by another toolchain carries typed artefacts (`type: PackSLI |
+PrometheusRule | …`) with its own id scheme and would otherwise render as a
+flat wall of "Other". Point the server at a JSON file that maps those names
+and id patterns onto Observogram's families:
+
+```json
+{
+  "version": 1,
+  "types": { "PackSLI": "sli", "PackSLO": "slo",
+             "PrometheusRule": { "family": "alert_rule", "label": "Prometheus rule" } },
+  "ids":   [ { "pattern": "^promrule-", "family": "alert_rule", "flags": "i" } ]
+}
+```
+
+```bash
+OBSERVOGRAM_TAXONOMY=./taxonomy.json npm run dev
+```
+
+The server reads the file once at start (`[taxonomy] loaded <path>: N types,
+M id rules`), installs it process-wide and serves it to the studio at
+`GET /api/taxonomy` (`{ ok, taxonomy, configured }` — never the path). An
+unreadable or invalid file **refuses the start** with
+`OBSERVOGRAM_TAXONOMY: <path>: <reason>`. A value is a family name or
+`{ family, label?, role? }`; the family decides the board group
+(`FAMILY_HOME` in the classifier) and the label/role replace the row's
+plain-words kind. Type names match exactly (case-sensitive); a pattern must
+start with `^`, be at most 200 characters, use flags `""` or `"i"` and hold
+no quantified group, and is matched against the first 256 characters of the
+id. The file is operator-trusted configuration: regexes run server-side
+against the ids of uploaded packs. Observogram's own adapted artefacts are
+never re-homed by it — their canonical `defines` symbol wins over any id
+rule. In identity mode an anonymous studio boots on the default families
+until sign-in (`/api/taxonomy` is a viewer route, like `/api/examples`).
+Unset, nothing changes: the families are Observogram's own and the board
+goldens (`npm run test:golden:board`) are byte-identical.
+
+A typed pack reaches the pipeline either as a layered JSON upload whose items
+carry a `type` (kept through the upconvert as
+`metadata.annotations["observogram.artefact.type.<symbol>"]` and emitted by
+the adapter as the artefact's `type`, see [docs/ADAPTER.md](docs/ADAPTER.md),
+"Id families and the classifier") or as a layered pack a downstream server
+or bundle serves directly. `tools/fixtures/taxonomy/` holds a worked example
+of both the pack and the override.
+
+### Rebadge The Studio (brand config)
+
+Everything the studio says about the *product* — its name, wordmark,
+tagline, logo, page title and description, footer text and links, the About
+card, the Discover scanner title and hero, the sign-in pages — comes from
+one brand object (`tools/lib/brand.mjs`, zero-import, vendorable). With no
+brand configured the server serves `studio/index.html` byte for byte and
+every chrome string is today's Observogram (`DEFAULT_BRAND`). A downstream
+rebadges with a JSON file, or with a few environment scalars; **one `name` is
+enough** — every other string derives from it unless the file names it:
+
+```json
+{
+  "name": "Acme Watch",
+  "shortName": "Acme",
+  "wordmark": { "lead": "Acme", "tail": "Watch" },
+  "tagline": "reliability, watched",
+  "titleSuffix": "the Reliability Console",
+  "description": "Acme Watch — …",
+  "logo": { "url": "/assets/acme-mark.svg" },
+  "favicon": "/assets/acme.ico",
+  "docsUrl": "https://docs.example.com/acme-watch",
+  "footer": { "text": "Acme Watch · a product of Acme Corp",
+              "links": [{ "label": "docs", "href": "https://docs.example.com/acme-watch" }] },
+  "about": { "changelogUrl": "https://docs.example.com/acme-watch/releases" },
+  "hero": { "src": "/assets/acme-hero.png", "alt": "Acme Watch posture scan" },
+  "tokens": { "light": { "accent": "#b3261e" }, "dark": { "accent": "#f28b82" } }
+}
+```
+
+```bash
+OBSERVOGRAM_BRAND_FILE=./brand.json npm run dev
+# or, without a file (a file's values first, these on top):
+OBSERVOGRAM_BRAND_NAME="Acme Watch" OBSERVOGRAM_BRAND_ACCENT="#b3261e" npm run dev
+```
+
+The scalars are `OBSERVOGRAM_BRAND_NAME`, `_SHORT_NAME`, `_TAGLINE`,
+`_LOGO_URL`, `_DOCS_URL` (→ the footer's `docs` link and the About card's
+changelog link), `_FOOTER` (→ `footer.text`), `_ACCENT` and `_ACCENT_DARK`
+(→ `tokens.light.accent` / `tokens.dark.accent`); the legacy `TOMOGRAPH_*`
+spelling is honoured. The defaults, and what derives from `name` when a
+brand names one: `shortName` ← `name`; the wordmark ← `name` in one piece
+(the default's `Observo`/`gram` split is upstream's); the scanner title
+`<SHORTNAME> SCAN`; the atlas compass mark `<SHORTNAME>` (default `OBSERVO`);
+the footer text `<name> · <titleSuffix>`; the hero alt `<name> scan` — and a
+named brand shows the CSS fallback instead of upstream's hero art until it
+sets `hero.src`; the description `<name> — write one ObservabilityPack
+manifest, …`; the footer links keep the spec link and drop the upstream repo
+link (a `docsUrl` adds a `docs` link); the About changelog link ← `docsUrl`
+(none ⇒ no link). `tokens.light` / `tokens.dark` override design-token values
+by name (`accent`, `accent-solid`, `bg`, … — the names in
+`studio/design-tokens.css` without the `--og-` prefix); a light override
+applies to both themes unless the dark map restates it.
+
+What the server does with it: `GET /`, `GET /index.html` and every
+non-`/api` path answer the shell with the title, meta description, legacy
+header, footer text (the `#build-label` version span kept) and links
+replaced, plus — after the design-tokens link — a `<style id="brand-tokens">`
+when tokens are set, the normalized brand as `<script type="application/json"
+id="brand-config">` (the studio reads it back; never the file's path), and a
+`<link rel="icon">` when a favicon is set. The studio (`studio/brand.mjs`,
+`state.brand.chrome`) paints the header, About, scanner, origin tip, compass
+mark, reset confirm, API-unreachable screen and version tooltip from it;
+`server/auth.mjs` renders the sign-in, change-password and reverse-proxy
+explainer pages from it. The start log says `[studio] brand: <name> (<path> |
+OBSERVOGRAM_BRAND_* env)` once. An unreadable or invalid file **refuses the
+start** with `brand file <path>: not found | is a directory | unreadable | not
+valid JSON | not a JSON object` — the message never carries the contents;
+`brand: tokens.<theme>.<name> is not a design token name`, `brand: token
+value for <name> contains ;{}<>` and `brand: logo.svg is not inline SVG`
+refuse a malformed brand.
+
+Trust: every brand string is escaped where it lands (text and attributes).
+The one raw field is `logo.svg` — inline SVG markup, injected only into the
+JS header through `innerHTML` (never into the server-rendered shell or the
+auth pages); it must start with `<svg` and must not contain `<script`, which
+is a tripwire for a pasted page, not a sanitizer — the brand file is
+operator config like any other server file. `studio/reskin.css` re-strokes
+the header SVG with `--og-accent`, so a custom mark inherits the accent.
+
+What is **never** rebranded, because it is protocol or storage, not chrome:
+the `X-Observogram-CSRF` / `X-Observogram-Org` headers, the `observogram_*`
+cookies, the `observogram.*` annotation keys in packs, the `.observogram/`
+workspace directory, `/api/*` JSON (`/healthz`, `/api/version`), compiled
+artefacts and the gen-site output (golden-gated, brand-free), the CLI's
+banner, and the `/assets/observogram-hero.png` path the default hero reads.
+`tools/test-brand.mjs` keeps the product's name out of every studio and
+auth-page source outside `tools/lib/brand.mjs` (a comment-stripping source
+guard), and proves the inert case: the unconfigured shell is the same string,
+the default chrome is the literal it replaced, `loadBrand({ env: {} })` is
+the default.
+
+The design tokens as JSON follow the same rule: `node
+tools/gen-design-tokens.mjs --brand brand.json --out dist/design-tokens.json`
+writes the rebadged document (a `brand` key names it); the generator never
+reads `OBSERVOGRAM_BRAND_FILE`, and `--brand` with `--write` refuses, so
+`studio/design-tokens.json` stays the vendorable default. The static bundle
+(`npm run build:studio`) is built from the unbranded shell and stays
+unbranded; a `--brand` for it is the follow-up.
+
 ### Compile Artifacts
 
 ```bash
@@ -891,6 +1139,66 @@ alias table. Opt out per pack with the annotation
 as the `assurance` item with its own file. See
 [`docs/ASSURANCE_RULES.md`](docs/ASSURANCE_RULES.md) for the rules and a sample
 heartbeat route.
+
+### Serve The Studio Without The Server (static bundle)
+
+A downstream that serves the studio behind its own static host — a CDN, an
+S3 bucket, a reverse proxy's `root` — builds it as one HTML file:
+
+```bash
+# One file: every module, every stylesheet, the packs it names.
+npm run build:studio -- \
+  --pack vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml --label "Payment service" \
+  --pack my-service.pack.yaml --id my-service --description "Checkout, orders and the ledger" \
+  --out dist/studio/index.html
+
+# A pack the page fetches at its first catalogue read (the host must answer CORS):
+npm run build:studio -- --pack-url https://packs.example.com/orders.pack.yaml --label Orders
+
+# Check the build without writing (also --json): the graph, the stylesheets, the packs.
+npm run build:studio -- --check --pack my-service.pack.yaml
+```
+
+Each `--pack` / `--pack-url` takes its own `--id` (default: the file name),
+`--label` (default: the pack's `metadata.name`, else the id) and
+`--description` — the catalogue row the bundled studio shows, field for field
+what a server-side pack row carries. `--no-remote-fonts` drops the Google Fonts
+links for an offline host.
+
+What the file is (`tools/build-studio-bundle.mjs`): `studio/index.html` with
+every stylesheet inlined in place, an inline **import map** whose keys are the
+studio and `tools/lib` modules and whose addresses are `data:` URLs of each
+module (only the import-specifier strings are rewritten — no transform of the
+code), the packs' canonical manifests and the spec schema inlined as JSON, and
+`studio/static-backend.mjs` installed before the app boots. That module answers
+the read-only pack routes in the browser from the same `tools/lib` engines the
+server runs — the catalogue, Discover, Diagnose (conformance), the canonical
+manifest, Compile (the catalogue, every artefact, every target) and **Export**
+(the ZIP, downloaded as a Blob) — so the verdicts are the server's
+(`tools/test-studio-bundle.mjs` compares every ported route against a running
+server). Everything the server alone can do — Scan a repo, Draft from MCP,
+uploads, Compare, Deploy, Journeys, Build, sign-in — answers
+`501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
+this studio is a static bundle built without one.' }`, which the studio shows
+as the sentence, and a dismissable notice at the bottom of the window says so
+once ("Static studio — no Observogram server behind this page …"). Compare is
+out by design: the server's diff carries the traceability graph, whose PromQL
+parser is a bare node dependency the bundle cannot inline, and a diff without
+it would grade differently from the server.
+
+Notes: `--pack` is validated against the spec schema at build time (a failing
+pack fails the build with the validator's text); `--pack-url` refuses a URL
+with userinfo or a credential query parameter — the URL is baked into a file
+you distribute — and `--json` prints URLs stripped; the Google Fonts links stay
+unless `--no-remote-fonts` (offline, the fallback stacks apply); a
+Content-Security-Policy that forbids `data:` in `script-src` cannot run the
+single-file form (a `--split` directory mode is the follow-up); import maps
+need Chrome 89, Firefox 108 or Safari 16.4. Without `--pack` the studio boots
+with an empty catalogue and the notice. The live server is untouched: it
+serves `studio/static-backend.mjs` and `.css` publicly like every studio file,
+and nothing in the live studio imports them. `docs/DOWNSTREAM.md` §10 is the
+downstream view (build from the vendored snapshot, swap packs, upgrade by
+rebuilding).
 
 ### Build A Pack From The Library
 
@@ -1565,8 +1873,8 @@ of it may be needed again.
 
 Every route's class — public, self, viewer, operator, admin, owner — is in
 [`server/route-table.mjs`](server/route-table.mjs) (see [Roles](#roles)).
-Below, `/healthz` and `/api/version` are `public` and `/auth/signout-others`
-is `self`; `/api/org` and every `/api/org/…` route are `admin`, every
+Below, `/healthz`, `/api/version`, `/` and `/index.html` are `public` and
+`/auth/signout-others` is `self`; `/api/org` and every `/api/org/…` route are `admin`, every
 `/api/admin/…` route `owner` (see [The Identity API](#the-identity-api)),
 and every `/api/mcp-endpoints` route but its `GET` is `admin` (an endpoint
 record is where the server will send the org's read token: its changes take
@@ -1578,8 +1886,11 @@ posture, closed on an exposed server without sign-in); every other `GET` is
 |---|---|---|
 | `GET` | `/healthz` | Health and vendored spec version |
 | `GET` | `/api/version` | Which build is this: version, build (commit count), commit, branch, dirty, date, shallow, source, label — public, no-store |
+| `GET` | `/` | The studio shell (`studio/index.html`) — the file as shipped, or its branded rendering when `OBSERVOGRAM_BRAND_FILE` / `OBSERVOGRAM_BRAND_*` is set (see Rebadging); every non-`/api` path the router does not know answers the same |
+| `GET` | `/index.html` | The same shell by name |
 | `GET` | `/api/packs` | In-memory and catalog pack registry |
 | `GET` | `/api/examples` | Bundled example packs |
+| `GET` | `/api/taxonomy` | The artefact taxonomy override the server was started with (`OBSERVOGRAM_TAXONOMY`): `{ ok, taxonomy, configured }` — the document or `null`, never its path; no-store |
 | `GET` | `/api/references` | Curated catalogue reference packs |
 | `GET` | `/api/packs/:id` | Adapted layered pack |
 | `GET` | `/api/packs/:id/canonical` | Canonical pack with env overlay |
@@ -1656,8 +1967,10 @@ studio/
   compare-view.mjs         Assessment (diagnostic grade), Compare, drift, traceability
   compile-view.mjs         Remediate, compile catalog, deploy surfaces
   layers-view.mjs          Discover Observogram and artifact cards
+  brand.mjs                The studio's brand: reads the shell's #brand-config, loads /lib/brand.mjs the house way, hands state.brand its chrome strings
   neuron-view.mjs          Advanced → Neuron: fleet tiles, trend / heatmap / bar panels, the journey in focus, the newest record opened up
   journeys-view.mjs        Saved journeys: capture, run-now, history, stack chips, chains + cause lines (the cards Neuron composes)
+  static-backend.mjs       The static bundle's backend in the browser: the read-only pack routes from tools/lib, 501 no-backend for the rest, the Export download, the notice (bundle-only; the live studio never imports it)
   build-model.mjs          The BUILD journey's pure models (define / compile / verify, the stack, the definition column, the layer sheet, the clause checklist's three states, step reachability)
   build-api.mjs            The BUILD journey's loaders over /api/library/* (fetchFn injectable)
   build-definition-view.mjs  BUILD — the definition column on every step (service, the tier as a segmented control, the entries as chips, the conformance summary)
@@ -1671,12 +1984,15 @@ tools/
   cli.mjs                  packc CLI (journey run / list, compile, init, store backup / restore, …)
   crawl-repo.mjs           CLI repo crawler
   fetch-live-pack.mjs      MCP live-pack fetcher
+  build-studio-bundle.mjs  The studio as one static HTML file: an import map of data: modules, inlined stylesheets, the packs (npm run build:studio)
   pack-init.mjs            packc init: build a pack from the library (list / show / instantiate)
   test-build-model.mjs     The BUILD journey's studio models over captured API responses (tools/fixtures/build/)
   validate-pack.mjs        Canonical pack validator
   lib/
     adapter.mjs            Canonical pack -> layered UI model
     blast-radius.mjs       Blind-spot blast radius over the requirement graph (zero-import, vendorable)
+    brand.mjs              The one brand config: DEFAULT_BRAND (today's Observogram), normalizeBrand, the chrome / shell / token renderers (zero-import, vendorable)
+    brand-env.mjs          OBSERVOGRAM_* / TOMOGRAPH_* env names, the workspace root, loadBrand() (node-only)
     chain-history.mjs      Requirement-chain records per run, transitions, candidate causes (zero-import, vendorable)
     compile.mjs            packc compiler
     conformance.mjs        Maturity rubric
@@ -1733,6 +2049,7 @@ deploy/k8s/
 - [`docs/REFACTORING_PLAN.md`](docs/REFACTORING_PLAN.md) - maintainability refactor backlog from the 2026-06 audit
 - [`docs/BRANCHING.md`](docs/BRANCHING.md) - the branching model: lanes, per-commit bar, multi-writer rules, promotion cadence
 - [`docs/VENDORING.md`](docs/VENDORING.md) - vendoring the verdict/diff engines into a downstream studio, and how to stay current
+- [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) - vendoring the pure libraries by manifest (`VENDOR-MANIFEST.json`): snapshot → verify hashes → smoke → bump
 - [`docs/UI_CONVENTIONS.md`](docs/UI_CONVENTIONS.md) - studio view-module conventions: the host seam, loader/renderer split, render signatures, CSS zones
 
 Superseded planning docs live in [`docs/archive/`](docs/archive/README.md).

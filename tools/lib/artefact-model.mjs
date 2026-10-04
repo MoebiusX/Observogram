@@ -26,6 +26,7 @@
 // Pure ESM, no Node APIs — the studio imports this same file in the browser.
 
 import { canonicalizePromql } from './promql-canon.mjs';
+import { familyOf } from './artefact-classify.mjs';
 
 // ---------------------------------------------------------------------------
 // Normalisation primitives
@@ -145,48 +146,13 @@ function sortedObject(value) {
 // Family classification
 // ---------------------------------------------------------------------------
 
-// Resolve an artefact to its behavioural family. Prefers the canonical
-// `defines` symbol the adapter attaches; otherwise reads the id prefix. The
-// positional number in the id is never used as identity — only as a family
-// discriminator here.
+// Resolve an artefact to its behavioural family — tools/lib/artefact-classify.mjs
+// decides (an explicit `type` first, then the canonical `defines` symbol the
+// adapter attaches, then the taxonomy override's id rules, then the id
+// prefix). The positional number in the id is never used as identity — only
+// as a family discriminator there.
 export function classify(artefact) {
-  if (!artefact) return 'unknown';
-  const defines = artefact.defines || '';
-  if (defines.startsWith('slis.'))               return 'sli';
-  if (defines.startsWith('slos.'))               return 'slo';
-  if (defines.startsWith('telemetry.backends.')) return 'backend';
-  if (defines.startsWith('queries.derived_views.')) return 'derived_view';
-  if (defines.startsWith('dashboards.'))         return 'dashboard';
-
-  const id = artefact.id || '';
-  if (id === 'OTEL-01')          return 'otel';
-  if (id.startsWith('PIP-RCV-')) return 'pipeline_receiver';
-  if (id.startsWith('PIP-PRC-')) return 'pipeline_processor';
-  if (id === 'PIP-EXP-MET')      return 'pipeline_exporter_metrics';
-  if (id === 'PIP-EXP-LOG')      return 'pipeline_exporter_logs';
-  if (id === 'PIP-EXP-TRC')      return 'pipeline_exporter_traces';
-  if (id === 'STO-MET-01')       return 'storage_metrics';
-  if (id === 'STO-LOG-01')       return 'storage_logs';
-  if (id === 'STO-TRC-01')       return 'storage_traces';
-  if (id.startsWith('SCRAPE-'))  return 'scrape_job';
-  if (id.startsWith('METRIC-'))  return 'metric';
-  if (id === 'PROF-01')          return 'profiling';
-  if (id === 'NET-01')           return 'network';
-  if (id === 'POE-01')           return 'policy_engine';
-  if (id.startsWith('MESH-'))    return 'mesh';
-  if (id.startsWith('COL-'))     return 'collection';
-  if (id.startsWith('QRY-'))     return 'recording_rule';
-  if (id.startsWith('PANEL-'))   return 'panel';
-  if (id.startsWith('POL-'))     return 'burn_rate';
-  if (id.startsWith('FCST-'))    return 'forecast';
-  if (id.startsWith('ALR-'))     return 'alert_route';
-  if (id.startsWith('RULE-'))    return 'alert_rule';
-  if (id.startsWith('HEAL-'))    return 'remediation';
-  if (id === 'BASE-01')          return 'baselines';
-  if (id.startsWith('CHAOS-'))   return 'chaos';
-  if (id.startsWith('SYN-'))     return 'synthetic';
-  if (id.startsWith('IMP-'))     return 'imports';
-  return 'unknown';
+  return artefact ? familyOf(artefact) : 'unknown';
 }
 
 // ---------------------------------------------------------------------------

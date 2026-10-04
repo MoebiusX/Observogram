@@ -1,0 +1,2402 @@
+{
+  "L1::SLI-01": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-02": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-03": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-04": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-05": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-06": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-07": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-08": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-09": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-10": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-11": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-12": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-13": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-14": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-15": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-16": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-17": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-18": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLO-01": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-02": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-03": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-04": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-05": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-06": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-07": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-08": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-09": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-10": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-11": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-12": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-13": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-14": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-15": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-16": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-17": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-18": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L2::BAK-01": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-02": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-03": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-04": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-05": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-06": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-07": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-08": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-09": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-10": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-11": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::METRIC-SRC-01": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-02": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-03": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-04": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-05": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-06": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-07": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-08": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-09": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-10": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-100": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-101": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-102": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-103": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-104": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-105": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-106": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-107": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-108": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-109": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-11": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-110": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-111": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-112": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-113": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-114": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-115": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-116": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-117": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-118": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-119": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-12": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-120": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-121": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-122": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-123": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-124": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-125": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-126": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-127": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-128": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-129": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-13": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-130": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-131": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-132": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-133": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-134": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-135": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-136": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-137": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-138": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-139": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-14": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-140": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-141": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-142": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-143": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-144": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-145": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-146": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-147": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-148": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-149": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-15": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-150": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-151": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-152": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-153": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-154": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-155": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-156": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-157": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-158": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-159": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-16": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-160": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-161": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-162": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-163": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-164": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-165": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-166": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-167": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-168": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-169": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-17": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-170": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-171": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-172": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-173": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-174": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-175": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-176": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-177": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-178": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-179": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-18": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-180": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-181": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-182": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-183": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-19": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-20": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-21": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-22": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-23": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-24": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-25": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-26": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-27": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-28": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-29": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-30": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-31": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-32": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-33": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-34": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-35": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-36": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-37": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-38": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-39": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-40": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-41": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-42": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-43": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-44": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-45": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-46": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-47": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-48": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-49": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-50": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-51": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-52": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-53": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-54": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-55": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-56": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-57": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-58": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-59": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-60": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-61": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-62": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-63": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-64": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-65": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-66": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-67": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-68": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-69": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-70": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-71": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-72": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-73": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-74": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-75": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-76": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-77": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-78": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-79": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-80": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-81": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-82": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-83": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-84": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-85": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-86": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-87": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-88": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-89": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-90": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-91": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-92": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-93": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-94": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-95": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-96": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-97": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-98": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::METRIC-SRC-99": {
+    "family": "metric",
+    "via": "id"
+  },
+  "L2::OTEL-01": {
+    "family": "otel",
+    "via": "id"
+  },
+  "L2::PIP-EXP-LOG": {
+    "family": "pipeline_exporter_logs",
+    "via": "id"
+  },
+  "L2::PIP-EXP-MET": {
+    "family": "pipeline_exporter_metrics",
+    "via": "id"
+  },
+  "L2::PIP-EXP-TRC": {
+    "family": "pipeline_exporter_traces",
+    "via": "id"
+  },
+  "L2::PIP-PRC-01": {
+    "family": "pipeline_processor",
+    "via": "id"
+  },
+  "L2::PIP-PRC-02": {
+    "family": "pipeline_processor",
+    "via": "id"
+  },
+  "L2::PIP-PRC-03": {
+    "family": "pipeline_processor",
+    "via": "id"
+  },
+  "L2::PIP-PRC-04": {
+    "family": "pipeline_processor",
+    "via": "id"
+  },
+  "L2::PIP-RCV-01": {
+    "family": "pipeline_receiver",
+    "via": "id"
+  },
+  "L2::PIP-RCV-02": {
+    "family": "pipeline_receiver",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-01": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-02": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-03": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-04": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-05": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-06": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-07": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-08": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-09": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-10": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-11": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-12": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-13": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-14": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-15": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-16": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-17": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-18": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-19": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-20": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2::SCRAPE-SRC-21": {
+    "family": "scrape_job",
+    "via": "id"
+  },
+  "L2X::MESH-01": {
+    "family": "mesh",
+    "via": "id"
+  },
+  "L3::DASH-01": {
+    "family": "dashboard",
+    "via": "defines"
+  },
+  "L3::DASH-02": {
+    "family": "dashboard",
+    "via": "defines"
+  },
+  "L3::DASH-03": {
+    "family": "dashboard",
+    "via": "defines"
+  },
+  "L3::DASH-04": {
+    "family": "dashboard",
+    "via": "defines"
+  },
+  "L3::DASH-05": {
+    "family": "dashboard",
+    "via": "defines"
+  },
+  "L3::DASH-06": {
+    "family": "dashboard",
+    "via": "defines"
+  },
+  "L3::PANEL-01": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-02": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-03": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-04": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-05": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-06": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-07": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-08": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-09": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-10": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-100": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-101": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-102": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-103": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-104": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-105": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-106": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-107": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-108": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-109": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-11": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-110": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-111": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-112": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-113": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-114": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-115": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-116": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-117": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-118": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-119": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-12": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-120": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-121": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-122": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-123": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-124": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-125": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-126": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-127": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-128": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-129": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-13": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-130": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-131": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-132": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-133": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-134": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-135": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-136": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-137": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-138": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-139": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-14": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-140": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-141": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-142": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-143": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-144": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-145": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-146": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-147": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-148": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-149": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-15": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-150": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-151": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-152": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-153": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-154": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-155": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-156": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-157": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-158": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-159": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-16": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-160": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-161": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-162": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-163": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-164": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-165": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-166": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-167": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-168": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-169": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-17": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-170": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-171": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-172": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-173": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-174": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-175": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-176": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-177": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-178": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-179": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-18": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-180": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-181": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-182": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-183": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-184": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-185": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-186": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-187": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-188": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-189": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-19": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-190": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-191": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-192": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-193": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-194": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-195": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-196": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-197": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-198": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-199": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-20": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-200": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-201": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-202": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-203": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-204": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-205": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-206": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-207": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-208": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-209": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-21": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-210": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-211": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-212": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-213": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-214": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-215": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-216": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-217": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-218": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-219": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-22": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-220": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-221": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-222": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-223": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-224": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-225": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-226": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-227": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-228": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-229": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-23": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-230": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-231": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-232": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-233": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-234": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-235": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-236": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-237": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-238": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-239": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-24": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-240": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-241": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-242": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-243": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-244": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-245": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-246": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-247": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-248": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-249": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-25": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-250": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-251": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-252": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-253": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-254": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-255": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-256": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-257": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-258": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-259": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-26": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-260": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-261": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-262": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-263": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-264": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-265": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-266": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-267": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-268": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-269": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-27": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-270": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-271": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-272": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-273": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-274": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-275": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-276": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-28": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-29": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-30": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-31": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-32": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-33": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-34": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-35": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-36": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-37": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-38": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-39": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-40": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-41": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-42": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-43": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-44": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-45": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-46": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-47": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-48": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-49": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-50": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-51": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-52": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-53": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-54": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-55": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-56": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-57": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-58": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-59": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-60": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-61": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-62": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-63": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-64": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-65": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-66": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-67": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-68": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-69": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-70": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-71": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-72": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-73": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-74": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-75": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-76": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-77": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-78": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-79": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-80": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-81": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-82": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-83": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-84": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-85": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-86": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-87": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-88": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-89": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-90": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-91": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-92": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-93": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-94": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-95": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-96": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-97": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-98": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-99": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::QRY-01": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-02": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-03": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-04": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-05": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-06": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-07": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-08": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-09": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-10": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-11": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-12": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-13": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-14": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-15": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-16": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-17": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-18": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-19": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-20": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-21": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-22": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-23": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-24": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-25": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-26": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-27": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-28": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-29": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-30": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-31": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-32": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-33": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-34": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-35": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-36": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-37": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-38": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L3::QRY-39": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L4:alerting:ALR-01": {
+    "family": "alert_route",
+    "via": "id"
+  },
+  "L4:alerting:ALR-02": {
+    "family": "alert_route",
+    "via": "id"
+  },
+  "L4:alerting:ALR-03": {
+    "family": "alert_route",
+    "via": "id"
+  },
+  "L4:alerting:ALR-04": {
+    "family": "alert_route",
+    "via": "id"
+  },
+  "L4:alerting:ALR-05": {
+    "family": "alert_route",
+    "via": "id"
+  },
+  "L4:alerting:ALR-06": {
+    "family": "alert_route",
+    "via": "id"
+  },
+  "L4:alerting:ALR-07": {
+    "family": "alert_route",
+    "via": "id"
+  },
+  "L4:policy:POL-01": {
+    "family": "burn_rate",
+    "via": "id"
+  },
+  "L4:policy:POL-02": {
+    "family": "burn_rate",
+    "via": "id"
+  },
+  "L4:policy:POL-03": {
+    "family": "burn_rate",
+    "via": "id"
+  },
+  "L4:policy:POL-04": {
+    "family": "burn_rate",
+    "via": "id"
+  },
+  "L4:policy:POL-05": {
+    "family": "burn_rate",
+    "via": "id"
+  },
+  "L4:policy:POL-06": {
+    "family": "burn_rate",
+    "via": "id"
+  },
+  "L4:policy:POL-07": {
+    "family": "burn_rate",
+    "via": "id"
+  },
+  "L4:policy:POL-08": {
+    "family": "burn_rate",
+    "via": "id"
+  },
+  "L5::BASE-01": {
+    "family": "baselines",
+    "via": "id"
+  },
+  "L5::SYN-01": {
+    "family": "synthetic",
+    "via": "id"
+  }
+}

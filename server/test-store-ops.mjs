@@ -34,10 +34,9 @@
  * workspace and store; the CLI child gets an explicit env.
  */
 
-const STRIP = [
-  'DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH', 'WORKSPACE', 'USERS_FILE',
-  'OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'SESSION_SECRET', 'API_TOKEN', 'AUTH',
-];
+// The children's STRIP list is this process's too (serve-child.mjs imports
+// no server code; server/test-hermetic-suites.mjs guards the shape).
+const { STRIP } = await import('./fixtures/serve-child.mjs');
 for (const k of STRIP) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];

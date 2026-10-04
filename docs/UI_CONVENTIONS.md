@@ -77,6 +77,17 @@ the testable layer).
   stays testable: the models it draws are pure (`studio/build-model.mjs`,
   `tools/test-build-model.mjs`), and the actions are whatever the caller
   passes.
+- Chrome text that names the product — the header wordmark and logo, the
+  About card, the scanner title, the reset confirm, the API-unreachable
+  screen, the origin chip's tip, the atlas compass mark, the version
+  tooltip — comes from `state.brand.chrome` (`studio/brand.mjs`, the
+  normalized brand `tools/lib/brand.mjs` owns), never from a literal:
+  `tools/test-brand.mjs`'s source guard fails the suite on `Observogram` /
+  `Observo<` / `OBSERVOGRAM` / `OBSERVO<` in any `studio/*.mjs` outside
+  comments. A renderer that cannot reach the state takes the chrome (or
+  the one string it needs) as an argument and paints nothing in its place
+  when none is given (`renderVersionChrome(container, model, chrome)`,
+  the atlas `opts.compassMark`).
 
 ## 4. CSS: one class-prefix per functional zone, split files only along the vendoring seam
 
@@ -92,3 +103,10 @@ emitted by verdict-ui.mjs) is the precedent: it documents the CSS custom
 properties it expects from the host theme in its header, and app.css keeps
 the shared production styles (`.drift-*`, `.diag-*` banners) verdict-ui also
 emits.
+
+The other split along that seam is `studio/static-backend.css`: the static
+bundle's notice (`.no-backend-notice`, a status row pinned to the bottom of the
+window like `.toast`, `role="status"`, dismissable), inlined by
+`tools/build-studio-bundle.mjs` after `reskin.css` and never linked by the live
+studio. It reads the `--og-*` tokens only and is registered in
+`tools/test-studio-layout.mjs`'s EXEMPT list (pinned, but under neither bar).

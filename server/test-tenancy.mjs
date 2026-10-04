@@ -23,22 +23,24 @@ import { join, resolve as resolvePath } from 'node:path';
 import { createServer, request } from 'node:http';
 import { spawnSync } from 'node:child_process';
 
-// Environment BEFORE the server module loads.
+// Hermetic (§0): a developer shell's store, identity, taxonomy, transport-hook
+// or brand variables never reach this process's imports — the children's STRIP
+// list (server/fixtures/serve-child.mjs imports no server code), both
+// spellings, BEFORE the suite sets its own posture and before any server
+// module loads (every server import below is dynamic: a static one is
+// hoisted above this line). server/test-hermetic-suites.mjs guards the shape.
+const { STRIP } = await import('./fixtures/serve-child.mjs');
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
+// Environment BEFORE the server module loads; each block's database lives in
+// its own workspace.
 const WORKSPACE = mkdtempSync(join(tmpdir(), 'observogram-tenancy-'));
 process.env.OBSERVOGRAM_WORKSPACE = WORKSPACE;
 process.env.OBSERVOGRAM_API_TOKEN = 'ci-token-tenancy-0123456789';
 process.env.OBSERVOGRAM_API_TOKEN_LABEL = 'ci-bot';
 process.env.OBSERVOGRAM_USERS_FILE = join(WORKSPACE, 'users.json');
-delete process.env.OBSERVOGRAM_OIDC_ISSUER;
-delete process.env.OBSERVOGRAM_SESSION_SECRET;
-delete process.env.OBSERVOGRAM_AUTH;
-delete process.env.TOMOGRAPH_AUTH;
-// Hermetic store: each block's database lives in its own workspace.
-const STORE_ENV = ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH'];
-for (const k of STORE_ENV) {
-  delete process.env[`OBSERVOGRAM_${k}`];
-  delete process.env[`TOMOGRAPH_${k}`];
-}
 
 import { createHarness } from '../tools/lib/harness.mjs';
 const { assert, report } = createHarness({ indent: '  ', truncate: 200 });
@@ -152,7 +154,7 @@ function apiRoutes() {
 // The catalogue and the stateless routes. (The live pack is per org since
 // STORE_PLAN slice 3: its two routes are org-scoped below.)
 const DEPLOYMENT_GLOBAL = new Set([
-  'GET /api/version', 'GET /api/orgs', 'GET /api/examples', 'GET /api/references', 'GET /api/library',
+  'GET /api/version', 'GET /api/orgs', 'GET /api/examples', 'GET /api/taxonomy', 'GET /api/references', 'GET /api/library',
   'GET /api/library/:id', 'GET /api/library/requirements/:tier', 'POST /api/library/instantiate',
   'POST /api/library/compile', 'GET /api/maturity-rubric', 'GET /api/compile/targets', 'GET /api/deploy/matrix',
 ]);
@@ -659,7 +661,11 @@ try {
   // The CLIs against the running server's store: an explicit env, spawned
   // as process.execPath with the script (never npm run).
   const env = { ...process.env };
-  for (const k of STORE_ENV) { delete env[`OBSERVOGRAM_${k}`]; delete env[`TOMOGRAPH_${k}`]; }
+  for (const k of STRIP) { delete env[`OBSERVOGRAM_${k}`]; delete env[`TOMOGRAPH_${k}`]; }
+  // The suite's own posture (set above, after the strip) is the child's too.
+  for (const k of ['WORKSPACE', 'USERS_FILE', 'API_TOKEN', 'API_TOKEN_LABEL']) {
+    if (process.env[`OBSERVOGRAM_${k}`] !== undefined) env[`OBSERVOGRAM_${k}`] = process.env[`OBSERVOGRAM_${k}`];
+  }
   const cli = (script, args, input) => spawnSync(process.execPath, [script, ...args], { env, input, encoding: 'utf8' });
   try {
     assert(getOrg(currentStore(), 'default')?.root === '.', 'a flat stand-alone workspace: the default org at .');

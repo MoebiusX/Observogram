@@ -21,6 +21,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
+<!-- The brand module (tools/lib/brand.mjs): app.mjs imports it first thing at boot — preloaded so that costs no extra round trip. -->
+<link rel="modulepreload" href="/lib/brand.mjs">
 <!-- The design system (docs/VENDORING.md): the tokens first, so every stylesheet below can read them. -->
 <link rel="stylesheet" href="/design-tokens.css">
 <link rel="stylesheet" href="/app.css">

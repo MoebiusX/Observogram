@@ -83,6 +83,18 @@ The June 10, 2026 dry run is ready when:
 - Remediate compiles the settlement latency Grafana-managed rules
 - Deploy stays gated until the MCP write target has explicit credentials
 
+## Release Commit
+
+The commit that bumps `package.json` `version` also runs
+`npm run vendor-manifest` and commits `VENDOR-MANIFEST.json`: the manifest
+carries the version, and its breaking-change flags (`changedSinceRelease`,
+`releasedExports`, `removedSinceRelease`) are computed against the committed
+manifest of the *same* version, so the bump resets them to the new release
+baseline. Without the regeneration, `tools/test-vendor-manifest.mjs` fails
+the first post-bump run as stale. Before the bump, every module the manifest
+flags must be named in the `## Unreleased` section that becomes the release
+notes — see `docs/DOWNSTREAM.md`, *What upstream promises*.
+
 ## Production Hardening Gate
 
 Before a broad V1 release, complete these gates:

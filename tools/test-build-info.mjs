@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { buildInfo, buildLabel, buildShortLabel, readBuildInfo, BUILD_FILE } from '../server/build-info.mjs';
 import { loadBuildInfo, loadHealth, buildLabelModel, renderBuildLabel, renderVersionChrome } from '../studio/build-label.mjs';
+import { DEFAULT_BRAND, normalizeBrand, brandChrome } from './lib/brand.mjs';
 import { createHarness } from './lib/harness.mjs';
 
 const { assert, report } = createHarness();
@@ -141,12 +142,16 @@ try {
   assert(nodes['#build-label'].textContent === 'v0.4.0' && nodes['#observa-about-sub'].textContent === 'version unknown' && nodes['.hdr-sub'].textContent === 'the observability compiler',
     'renderVersionChrome: a null model paints nothing (the fallbacks stay)');
   renderVersionChrome(doc, model);
+  assert(nodes['.observa-brand'].title === '', 'renderVersionChrome: without a brand chrome no tooltip is painted (no literal product name)');
+  renderVersionChrome(doc, model, brandChrome(DEFAULT_BRAND));
   assert(nodes['#build-label'].textContent === model.label && nodes['#build-label'].title === model.title, 'renderVersionChrome: the footer span', nodes['#build-label']);
   assert(nodes['#observa-about-sub'].textContent === model.label, 'renderVersionChrome: the About entry carries the full label', nodes['#observa-about-sub'].textContent);
   assert(nodes['.hdr-sub'].textContent === `the observability compiler · ${model.shortLabel}`, 'renderVersionChrome: the header subtitle gets the short label', nodes['.hdr-sub'].textContent);
   assert(nodes['.observa-brand'].title === `Observogram ${model.label}`, 'renderVersionChrome: the brand tooltip', nodes['.observa-brand'].title);
-  renderVersionChrome(doc, model);
+  renderVersionChrome(doc, model, brandChrome(DEFAULT_BRAND));
   assert(nodes['.hdr-sub'].textContent === `the observability compiler · ${model.shortLabel}`, 'renderVersionChrome: painting twice appends the subtitle once', nodes['.hdr-sub'].textContent);
+  renderVersionChrome(doc, model, brandChrome(normalizeBrand({ name: 'Acme Watch' })));
+  assert(nodes['.observa-brand'].title === `Acme Watch ${model.label}`, 'renderVersionChrome: a branded chrome names the brand in the tooltip', nodes['.observa-brand'].title);
   let threw = false;
   try { renderVersionChrome({ querySelector: () => null }, model); } catch { threw = true; }
   assert(!threw, 'renderVersionChrome: missing targets are skipped, never thrown on');

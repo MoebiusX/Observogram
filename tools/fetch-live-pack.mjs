@@ -36,6 +36,11 @@
  *               (generated locally; ignored by git)
  *   MCP_AUTH  — Optional bearer token if your MCP requires auth.
  *   PACK_NAME — Pack metadata.name.  Default: production-live
+ *   OBSERVOGRAM_TRANSPORT_HOOK — Optional path of a module whose
+ *               prepareRequest({ url, headers }) / fetchImpl(url, init) shape
+ *               every MCP request (docs/MCP_INTEGRATION.md "Transport hook").
+ *               A hook that fails to load or breaks its contract is a hard
+ *               failure: exit 1, no file written.
  *
  * Exit codes:
  *   0  success
@@ -48,6 +53,8 @@ import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emit as emitYaml, parse as parseYaml } from './lib/mini-yaml.mjs';
+import { createMcpClient as createMcpClientCore, isTransportHookError } from './lib/mcp-client.mjs';
+import { mcpTransport, describeTransport } from './mcp-transport.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
 import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule } from './lib/sli-inference.mjs';
 import { materializeL2XFromBackends } from './lib/l2x.mjs';
@@ -117,91 +124,20 @@ function annotationJson(value) {
 // ============================================================
 
 // createMcpClient is exported so the server can drive ad-hoc MCP
-// interactions (deploy, refresh) without spawning a subprocess.
-export function createMcpClient({ mcpUrl, mcpAuth = null } = {}) {
-  if (!mcpUrl) throw new Error('createMcpClient: mcpUrl required');
-  let session = null;
-  let nextId = 1;
-
-  async function rpc(method, params = {}) {
-    const headers = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json, text/event-stream',
-      'MCP-Protocol-Version': '2025-06-18',
-    };
-    if (mcpAuth) headers['Authorization'] = `Bearer ${mcpAuth}`;
-    if (session) headers['Mcp-Session-Id'] = session;
-
-    const res = await fetch(mcpUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ jsonrpc: '2.0', id: nextId++, method, params }),
-      signal: AbortSignal.timeout(MCP_TIMEOUT_MS),
-    });
-    if (!res.ok) throw new Error(`MCP HTTP ${res.status} on ${method}: ${await res.text().catch(() => '')}`);
-    if (res.headers.get('mcp-session-id')) session = res.headers.get('mcp-session-id');
-
-    const ctype = res.headers.get('content-type') || '';
-    if (ctype.includes('text/event-stream')) {
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (value) buf += decoder.decode(value, { stream: true });
-        const frameEnd = buf.indexOf('\n\n');
-        if (frameEnd !== -1) {
-          const frame = buf.slice(0, frameEnd);
-          const text = frame.split('\n').filter(l => l.startsWith('data:')).map(l => l.replace(/^data:\s?/, '')).join('\n');
-          if (text) {
-            const obj = JSON.parse(text);
-            if (obj.error) throw new Error(`${method}: ${obj.error.message}`);
-            return obj.result;
-          }
-          buf = buf.slice(frameEnd + 2);
-        }
-        if (done) break;
-      }
-      throw new Error(`MCP ${method}: SSE stream ended with no complete frame`);
-    }
-    const data = await res.json();
-    if (data.error) throw new Error(`${method}: ${data.error.message}`);
-    return data.result;
-  }
-
-  async function notify(method, params = {}) {
-    const headers = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json, text/event-stream',
-      'MCP-Protocol-Version': '2025-06-18',
-    };
-    if (mcpAuth) headers['Authorization'] = `Bearer ${mcpAuth}`;
-    if (session) headers['Mcp-Session-Id'] = session;
-
-    const res = await fetch(mcpUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ jsonrpc: '2.0', method, params }),
-      signal: AbortSignal.timeout(MCP_TIMEOUT_MS),
-    });
-    if (!res.ok) throw new Error(`MCP HTTP ${res.status} on ${method}: ${await res.text().catch(() => '')}`);
-    if (res.headers.get('mcp-session-id')) session = res.headers.get('mcp-session-id');
-  }
-
-  async function callTool(name, args = {}) {
-    const result = await rpc('tools/call', { name, arguments: args });
-    if (result?.isError) {
-      const txt = result?.content?.map(c => c.text).filter(Boolean).join(' ') || 'tool returned isError';
-      throw new Error(`${name}: ${txt}`);
-    }
-    const text = result?.content?.[0]?.text;
-    if (typeof text !== 'string') return result;
-    try { return JSON.parse(text); }
-    catch { return text; }
-  }
-
-  return { rpc, notify, callTool };
+// interactions (deploy, refresh) without spawning a subprocess. The client
+// itself lives in tools/lib/mcp-client.mjs (pure, vendorable); this wrapper
+// fills in the Node-side defaults — the MCP_TIMEOUT_MS budget and the
+// transport (docs/MCP_INTEGRATION.md "Transport hook") — so the recorder
+// and the server's deploy routes keep importing it from here.
+export function createMcpClient({ mcpUrl, mcpAuth = null, transport = mcpTransport() } = {}) {
+  return createMcpClientCore({ mcpUrl, mcpAuth, timeoutMs: MCP_TIMEOUT_MS, transport });
 }
+
+// A transport hook fault is never a probe failure: every catch below that
+// swallows a tool's error into an annotation lets it through, so a
+// misconfigured hook rejects fetchMcp (the CLI exits 1 writing nothing)
+// instead of producing a pack that says "tools failed".
+const rethrowHook = (e) => { if (isTransportHookError(e)) throw e; };
 
 // ============================================================
 // Pack builder — pure, takes stubbed MCP responses, returns a canonical
@@ -880,7 +816,7 @@ export async function sampleStackSelfMetrics({
   }
   const inv = trust.set;
   const seen = seenProducts instanceof Set ? seenProducts : new Set(seenProducts || []);
-  const quietly = quiet || (async (_name, fn) => { try { return await fn(); } catch { return null; } });
+  const quietly = quiet || (async (_name, fn) => { try { return await fn(); } catch (e) { rethrowHook(e); return null; } });
 
   let callsMade = 0;
   const out = [];
@@ -976,7 +912,7 @@ export async function observeAlertmanager({
   statusTool, silencesTool,
 } = {}) {
   const advertised = (name) => !!name && (!hasToolsList || (discoveredToolNames?.has?.(name) ?? false));
-  const quietly = quiet || (async (_name, fn) => { try { return await fn(); } catch { return null; } });
+  const quietly = quiet || (async (_name, fn) => { try { return await fn(); } catch (e) { rethrowHook(e); return null; } });
   const out = { version: null, uptime: null, clusterStatus: null, silences: null, toolsAnswered: [], error: null };
   const errors = [];
   let attempted = false;
@@ -1051,7 +987,7 @@ export async function observeGrafana({
   healthLimit = GRAFANA_DATASOURCE_HEALTH_LIMIT,
 } = {}) {
   const advertised = (name) => !!name && (!hasToolsList || (discoveredToolNames?.has?.(name) ?? false));
-  const quietly = quiet || (async (_name, fn) => { try { return await fn(); } catch { return null; } });
+  const quietly = quiet || (async (_name, fn) => { try { return await fn(); } catch (e) { rethrowHook(e); return null; } });
   const out = { datasources: null, contactPoints: null, toolsAnswered: [], error: null };
   const errors = [];
   let attempted = false;
@@ -2373,7 +2309,10 @@ export const PROBES = [
   },
 ];
 
-export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null } = {}) {
+export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, transport = mcpTransport() } = {}) {
+  // The hook is resolved before anything touches the wire — a load failure
+  // is a hard failure here, never inside a swallowing wrapper below.
+  const t = await transport;
   if (!mcpUrl) throw new Error('fetchMcp: mcpUrl required');
   // When THIS fetch began, and when each probe family answered — the
   // fetcher's own clock, independent of whatever `refreshedAt` the caller
@@ -2383,10 +2322,10 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null } = 
   // observations, then mcp.fetchStartedAt, then mcp.refreshedAt.
   const fetchStartedAt = new Date().toISOString();
   const observedAt = {};
-  const { rpc, notify, callTool } = createMcpClient({ mcpUrl, mcpAuth });
+  const { rpc, notify, callTool } = createMcpClient({ mcpUrl, mcpAuth, transport: t });
   const errors = {};
   const safe = async (name, fn) => {
-    try { return await fn(); } catch (e) { errors[name] = e.message; return null; }
+    try { return await fn(); } catch (e) { rethrowHook(e); errors[name] = e.message; return null; }
   };
   // Per-probe failures recorded so the user can see WHY a probe didn't
   // succeed (input validation, network, etc.) — distinct from the
@@ -2406,9 +2345,11 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null } = 
     // for diagnostics, and retries once on transient 5xx.
     try { return await fn(); }
     catch (e) {
+      rethrowHook(e);
       if (isTransient(e.message)) {
         try { return await fn(); }
         catch (e2) {
+          rethrowHook(e2);
           if (!probeFailures[name]) probeFailures[name] = e2.message;
           if (brandEnv('DEBUG')) {
             process.stderr.write(`[fetch-live-pack] probe ${name} failed twice: ${e2.message}\n`);
@@ -2428,8 +2369,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null } = 
     protocolVersion: '2025-06-18',
     capabilities: {},
     clientInfo: { name: 'observogram-fetcher', version: '0.4.0' },
-  }).then(() => true).catch(() => false);
-  if (initialized) await notify('notifications/initialized').catch(() => {});
+  }).then(() => true).catch((e) => { rethrowHook(e); return false; });
+  if (initialized) await notify('notifications/initialized').catch(rethrowHook);
 
   // Discover what the MCP actually exposes via tools/list. This is the
   // foundation for honest probing — instead of guessing candidate tool
@@ -2906,9 +2847,9 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null } = 
 
 // Convenience entrypoint used by the CLI + the server: end-to-end build,
 // validate, and (optionally) write to disk. Returns the canonical pack.
-export async function buildAndValidate({ mcpUrl, mcpAuth, packName, refreshedAt }) {
+export async function buildAndValidate({ mcpUrl, mcpAuth, packName, refreshedAt, transport } = {}) {
   const at = refreshedAt || new Date().toISOString();
-  const fetched = await fetchMcp({ mcpUrl, mcpAuth, refreshedAt: at });
+  const fetched = await fetchMcp({ mcpUrl, mcpAuth, refreshedAt: at, transport });
   const pack = buildCanonicalPack({ refreshedAt: at, mcpUrl, packName, ...fetched });
   const errors = validateCanonical(pack, SCHEMA);
   if (errors.length) {
@@ -2927,7 +2868,11 @@ async function main() {
   const safeUrl = safe ?? MCP_URL_DEFAULT;
   process.stderr.write(`[fetch-live-pack] talking to ${safeUrl}\n`);
   if (dropped.length) process.stderr.write(`[fetch-live-pack] not kept in the pack: the ${dropped.join(', ')} parameter(s) of MCP_URL — put a token in MCP_AUTH instead\n`);
-  const fetched = await fetchMcp({ mcpUrl: MCP_URL_DEFAULT, mcpAuth: MCP_AUTH_DEFAULT });
+  // The transport hook loads once here (a bad one is FATAL before any wire
+  // call); the path is logged once, by this entrypoint alone.
+  const transport = await mcpTransport();
+  if (transport.hookPath) process.stderr.write(`[fetch-live-pack] transport hook: ${describeTransport(transport)}\n`);
+  const fetched = await fetchMcp({ mcpUrl: MCP_URL_DEFAULT, mcpAuth: MCP_AUTH_DEFAULT, transport });
   const refreshedAt = new Date().toISOString();
   const pack = buildCanonicalPack({ refreshedAt, mcpUrl: safeUrl, ...fetched });
 
@@ -2968,18 +2913,19 @@ if (invokedDirectly) {
 // { [kind]: { values: { [labelValue]: number }, query, series?, error? } } }. A kind whose
 // query failed carries `error` and empty values — a fact the record keeps, never a zero.
 // ============================================================
-export async function observeInventory({ mcpUrl, mcpAuth = null, expected, kinds = null, maxCalls = 16 } = {}) {
+export async function observeInventory({ mcpUrl, mcpAuth = null, expected, kinds = null, maxCalls = 16, transport = mcpTransport() } = {}) {
   if (!mcpUrl) throw new Error('observeInventory: mcpUrl required');
+  const t = await transport;
   const wanted = expected && expected.kinds ? Object.entries(expected.kinds).filter(([k]) => !kinds || kinds.includes(k)) : [];
   const tool = TOOL.stackSelfMetrics;
-  const { rpc, notify, callTool } = createMcpClient({ mcpUrl, mcpAuth });
+  const { rpc, notify, callTool } = createMcpClient({ mcpUrl, mcpAuth, transport: t });
   const initialized = await rpc('initialize', {
     protocolVersion: '2025-06-18',
     capabilities: {},
     clientInfo: { name: 'observogram-inventory', version: '0.4.0' },
-  }).then(() => true).catch(() => false);
-  if (initialized) await notify('notifications/initialized').catch(() => {});
-  const toolsList = await rpc('tools/list').catch(() => null);
+  }).then(() => true).catch((e) => { rethrowHook(e); return false; });
+  if (initialized) await notify('notifications/initialized').catch(rethrowHook);
+  const toolsList = await rpc('tools/list').catch((e) => { rethrowHook(e); return null; });
   const hasToolsList = Array.isArray(toolsList?.tools);
   const advertised = new Set(hasToolsList ? toolsList.tools.map(t => t.name) : []);
   if (hasToolsList && !advertised.has(tool)) {
@@ -3007,6 +2953,7 @@ export async function observeInventory({ mcpUrl, mcpAuth = null, expected, kinds
       }
       observations[k] = { values, query, series: result.length };
     } catch (e) {
+      rethrowHook(e);
       observations[k] = { values: {}, query, error: trimError(e?.message || String(e)) };
     }
   }

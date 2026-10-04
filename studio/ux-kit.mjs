@@ -22,6 +22,7 @@
 
 import { escapeHtml } from './util.mjs';
 import { LAYER_DEFS } from './constants.mjs';
+import { state } from './state.mjs';
 
 // ---------- the four status properties ----------
 //
@@ -36,7 +37,8 @@ export const STATUS_PROPERTIES = {
     label: 'Origin',
     question: 'Where did this come from?',
     values: {
-      library:    { label: 'Library',    tone: 'neutral', tip: 'Instantiated from the Observogram library.' },
+      // The one tip that names the product: a function of the brand (state.brand.chrome.libraryTip).
+      library:    { label: 'Library',    tone: 'neutral', tip: (chrome) => chrome ? chrome.libraryTip : 'Instantiated from the pack library.' },
       imported:   { label: 'Imported',   tone: 'neutral', tip: 'Loaded from an uploaded or scanned pack.' },
       discovered: { label: 'Discovered', tone: 'neutral', tip: 'Found on the live platform, not declared in the repository.' },
       authored:   { label: 'Authored',   tone: 'neutral', tip: 'Written or edited by a person in the studio.' },
@@ -118,11 +120,15 @@ export function statusFromLegacy(word) {
   return hit ? { property: hit[0], value: hit[1] } : null;
 }
 
-// Resolve a (property, value) pair to its display record, or null.
-export function statusRecord(property, value) {
+// Resolve a (property, value) pair to its display record, or null. A tip
+// that is a function of the brand is resolved against state.brand.chrome
+// (or the `chrome` given — a headless test passes one).
+export function statusRecord(property, value, { chrome = state.brand?.chrome ?? null } = {}) {
   const p = STATUS_PROPERTIES[property];
   const v = p?.values?.[value];
-  return v ? { property, value, propertyLabel: p.label, question: p.question, ...v } : null;
+  if (!v) return null;
+  const tip = typeof v.tip === 'function' ? v.tip(chrome) : v.tip;
+  return { property, value, propertyLabel: p.label, question: p.question, ...v, tip };
 }
 
 // One chip for one property. `label` overrides the display text (a count, a

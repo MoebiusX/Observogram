@@ -39,6 +39,15 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// Hermetic (§0): one case imports server/auth.mjs in-process; the children's
+// STRIP list, both spellings, goes first (serve-child.mjs imports no server
+// code). server/test-hermetic-suites.mjs guards the shape.
+const { STRIP } = await import('./fixtures/serve-child.mjs');
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
 const SELF = relative(ROOT, fileURLToPath(import.meta.url)).split(sep).join('/');

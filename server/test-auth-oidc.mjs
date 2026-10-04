@@ -106,23 +106,24 @@ issuer = `http://127.0.0.1:${idp.address().port}`;
 
 // ---------- boot the server in OIDC posture ----------
 
+// Hermetic (§0): a developer shell's store, identity, taxonomy, transport-hook
+// or brand variables never reach this process's imports — the children's STRIP
+// list (server/fixtures/serve-child.mjs imports no server code), both
+// spellings, BEFORE the suite sets its own posture and before any server
+// module loads (every server import below is dynamic: a static one is
+// hoisted above this line). server/test-hermetic-suites.mjs guards the shape.
+const { STRIP } = await import('./fixtures/serve-child.mjs');
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
+// Each block's database lives in its own workspace (docs/STORE_PLAN.md slice 2).
 const WORKSPACE = mkdtempSync(join(tmpdir(), 'observogram-auth-oidc-'));
 process.env.OBSERVOGRAM_WORKSPACE = WORKSPACE;
 process.env.OBSERVOGRAM_OIDC_ISSUER = issuer;
 process.env.OBSERVOGRAM_OIDC_CLIENT_ID = CLIENT_ID;
 process.env.OBSERVOGRAM_OIDC_ALLOW_HTTP = '1';
 process.env.OBSERVOGRAM_SESSION_SECRET = 'test-session-secret-0123456789-abcdef-XYZ';
-delete process.env.OBSERVOGRAM_OIDC_CLIENT_SECRET;
-delete process.env.OBSERVOGRAM_API_TOKEN;
-delete process.env.OBSERVOGRAM_USERS_FILE;
-delete process.env.OBSERVOGRAM_AUTH;
-delete process.env.TOMOGRAPH_AUTH;
-// Hermetic store (docs/STORE_PLAN.md slice 2): each block's database lives
-// in its own workspace.
-for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH']) {
-  delete process.env[`OBSERVOGRAM_${k}`];
-  delete process.env[`TOMOGRAPH_${k}`];
-}
 
 const { start } = await import('./index.mjs');
 const { currentStore } = await import('./store/db.mjs');
@@ -271,8 +272,8 @@ try {
   assert(made.status === 201 && made.json.note === `local users cannot sign in while this server signs in through OIDC issuer ${KEY}`,
     'with a local owner already there, the note says a local user cannot sign in here', made);
   const joinRole = await asBoss('GET', '/api/admin/join-role');
-  assert(joinRole.status === 200 && JSON.stringify(joinRole.json) === JSON.stringify({ ok: true, role: 'operator', oidc: true, issuerKey: KEY }),
-    'GET /api/admin/join-role: the recorded role, OIDC on, its issuer key', joinRole.json);
+  assert(joinRole.status === 200 && JSON.stringify(joinRole.json) === JSON.stringify({ ok: true, role: 'operator', oidc: true, issuerKey: KEY, mode: 'oidc' }),
+    'GET /api/admin/join-role: the recorded role, OIDC on, its issuer key, the mode', joinRole.json);
   process.env.OBSERVOGRAM_BOOTSTRAP_ADMIN = `${issuer}#user-42`;
   got = await signIn(base, DEFAULT_CLAIMS);
   assert(got.status === 302 && getUserByLogin(db, loginOf('user-42')).isOwner === false && listAudit(db, { action: 'owner.bootstrap' }).length === 1,

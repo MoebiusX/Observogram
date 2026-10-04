@@ -13,6 +13,15 @@
 import { annotationList, buildRequirementTraceability } from './traceability.mjs';
 import { boundText, hasDirection } from './good-when.mjs';
 import { SPEC_VERSION } from './validator.mjs';
+
+// `metadata.annotations["observogram.artefact.type.<symbol>"]` declares the
+// type of the artefact a canonical symbol projects to (`slis.<id>`,
+// `alerting.routes[i]`, `imports[i]` … — the symbols `source` is read for),
+// and adapt() carries it through as that artefact's top-level `type`. The
+// legacy upconvert writes it for a layered item that carried a `type`;
+// nothing else in this repository does, so adapted packs carry no `type`
+// unless a producer declared one.
+export const DECLARED_TYPE_PREFIX = 'observogram.artefact.type.';
 //
 // LAYERED DISPLAY OBJECT shape:
 //   {
@@ -81,6 +90,7 @@ export function adapt(canonical, opts = {}) {
   // endpoint; tools/lib/library.mjs, `library.todo.<symbol>`). All project as
   // Scaffold — never Declared — so the grade parks them.
   const scaffoldPrefixes = ['crawler.scaffold.', 'mcp.scaffold.', 'library.todo.'];
+  const typePrefix = DECLARED_TYPE_PREFIX;
 
   const ctx = {
     spec,
@@ -92,6 +102,13 @@ export function adapt(canonical, opts = {}) {
         : scaffoldPrefixes.some(p => annotations[`${p}${id}`]) ? 'Scaffold' : 'Declared'
     ),
     mcpEvidence: (id) => annotations[`${verifyPrefix}${id}`] ?? undefined,
+    // A declared per-artefact type (`observogram.artefact.type.<symbol>`,
+    // written by the legacy upconvert for a layered item that carried one,
+    // or by any producer of typed packs) rides through as the artefact's
+    // top-level `type`, which the taxonomy reads first
+    // (tools/lib/artefact-classify.mjs). Absent — every pack the crawler, the
+    // fetcher or the library produces — nothing is added: no key, no change.
+    typed: (id) => (typeof annotations[`${typePrefix}${id}`] === 'string' && annotations[`${typePrefix}${id}`] ? { type: annotations[`${typePrefix}${id}`] } : {}),
   };
 
   const layers = {
@@ -216,6 +233,8 @@ function adaptSLIs(ctx) {
     tool: SLI_TYPE_LABEL[sli.type] || 'SLI',
     tags: ['sli', sli.type, ...(sli.semconv_metric ? ['semconv'] : [])].filter(Boolean),
     source: ctx.sourceOf(`slis.${sli.id}`),
+
+    ...ctx.typed(`slis.${sli.id}`),
     defines: `slis.${sli.id}`,
     spec: sli,
     mcp: ctx.mcpEvidence(`slis.${sli.id}`),
@@ -233,6 +252,8 @@ function adaptSLOs(ctx) {
     tool: 'SLO',
     tags: ['slo', slo.window].filter(Boolean),
     source: ctx.sourceOf(`slos.${slo.id}`),
+
+    ...ctx.typed(`slos.${slo.id}`),
     defines: `slos.${slo.id}`,
     refs: [normalizeSliRef(slo.sli)],
     spec: slo,
@@ -258,6 +279,8 @@ function adaptOtel(ctx) {
       ...(o.sdk?.log_correlation ? ['log-correlation'] : []),
     ],
     source: ctx.sourceOf('otel'),
+
+    ...ctx.typed('otel'),
     spec: o,
     mcp: ctx.mcpEvidence('otel'),
   }];
@@ -280,6 +303,8 @@ function adaptBackends(ctx) {
       b.default && 'default',
     ].filter(Boolean),
     source: ctx.sourceOf(`telemetry.backends.${b.id}`),
+
+    ...ctx.typed(`telemetry.backends.${b.id}`),
     defines: `telemetry.backends.${b.id}`,
     spec: b,
     mcp: ctx.mcpEvidence(`telemetry.backends.${b.id}`),
@@ -296,6 +321,8 @@ function adaptPipelines(ctx) {
     tool: 'OTel Collector',
     tags: ['receiver', r.name].filter(Boolean),
     source: ctx.sourceOf(`pipelines.receivers[${i}]`),
+
+    ...ctx.typed(`pipelines.receivers[${i}]`),
     spec: r,
   }));
   (p.processors || []).forEach((pr, i) => out.push({
@@ -305,6 +332,8 @@ function adaptPipelines(ctx) {
     tool: 'OTel Collector',
     tags: ['processor', pr.name].filter(Boolean),
     source: ctx.sourceOf(`pipelines.processors[${i}]`),
+
+    ...ctx.typed(`pipelines.processors[${i}]`),
     spec: pr,
   }));
   const FAM = { metrics: 'MET', logs: 'LOG', traces: 'TRC' };
@@ -318,6 +347,8 @@ function adaptPipelines(ctx) {
       tool: e.kind,
       tags: ['exporter', family],
       source: ctx.sourceOf(`pipelines.exporters.${family}`),
+
+      ...ctx.typed(`pipelines.exporters.${family}`),
       spec: e,
     });
   }
@@ -344,6 +375,8 @@ function adaptStorage(ctx) {
         v.sampling && `sampling-${v.sampling}`,
       ].filter(Boolean),
       source: ctx.sourceOf(`storage.${family}`),
+
+      ...ctx.typed(`storage.${family}`),
       spec: v,
     });
   }
@@ -478,6 +511,8 @@ function adaptProfiling(ctx) {
     tool: p.product || 'profiling',
     tags: ['profiling', ...(p.profile_types || [])],
     source: ctx.sourceOf('profiling'),
+
+    ...ctx.typed('profiling'),
     refs: p.backend ? [`telemetry.backends.${p.backend}`] : [],
     spec: p,
   }];
@@ -493,6 +528,8 @@ function adaptNetwork(ctx) {
     tool: n.product || 'network',
     tags: ['network', ...(n.observe || [])],
     source: ctx.sourceOf('network'),
+
+    ...ctx.typed('network'),
     refs: n.backend ? [`telemetry.backends.${n.backend}`] : [],
     spec: n,
   }];
@@ -508,6 +545,8 @@ function adaptPolicyEngine(ctx) {
     tool: pe.product || 'policy_engine',
     tags: ['policy-engine', ...(pe.bundles || []).map(b => `bundle:${b}`)],
     source: ctx.sourceOf('policy_engine'),
+
+    ...ctx.typed('policy_engine'),
     refs: pe.backend ? [`telemetry.backends.${pe.backend}`] : [],
     spec: pe,
   }];
@@ -521,6 +560,8 @@ function adaptMesh(ctx) {
     tool: m.product,
     tags: ['mesh', m.role, m.version?.gating && `gating-${m.version.gating}`].filter(Boolean),
     source: ctx.sourceOf(`mesh[${i}]`),
+
+    ...ctx.typed(`mesh[${i}]`),
     refs: m.backend ? [`telemetry.backends.${m.backend}`] : [],
     spec: m,
   }));
@@ -534,6 +575,8 @@ function adaptCollection(ctx) {
     tool: c.product,
     tags: ['collection', c.role].filter(Boolean),
     source: ctx.sourceOf(`collection[${i}]`),
+
+    ...ctx.typed(`collection[${i}]`),
     refs: c.backend ? [`telemetry.backends.${c.backend}`] : [],
     spec: c,
   }));
@@ -549,6 +592,8 @@ function adaptQueries(ctx) {
     tool: 'Prometheus recording rule',
     tags: ['recording'],
     source: ctx.sourceOf(`queries.recording_rules[${i}]`),
+
+    ...ctx.typed(`queries.recording_rules[${i}]`),
     refs: extractRefs(r.expr),
     spec: r,
   }));
@@ -559,6 +604,8 @@ function adaptQueries(ctx) {
     tool: 'derived view',
     tags: ['view', 'derived'],
     source: ctx.sourceOf(`queries.derived_views.${v.id}`),
+
+    ...ctx.typed(`queries.derived_views.${v.id}`),
     defines: `queries.derived_views.${v.id}`,
     refs: v.bind ? [v.bind] : [],
     spec: v,
@@ -578,6 +625,8 @@ function adaptDashboards(ctx) {
     tool: d.provider?.kind || 'dashboard',
     tags: ['dashboard', d.provider?.kind].filter(Boolean),
     source: ctx.sourceOf(`dashboards.${d.id}`),
+
+    ...ctx.typed(`dashboards.${d.id}`),
     defines: `dashboards.${d.id}`,
     refs: (d.panel_bindings || []).map(b => b.binds_to),
     spec: d,
@@ -619,6 +668,8 @@ function adaptDashboardPanels(ctx) {
         tool: 'dashboard panel',
         tags: ['panel', d.provider?.kind].filter(Boolean),
         source: ctx.sourceOf(`dashboards.${d.id}.panels.${b.panel}`),
+
+        ...ctx.typed(`dashboards.${d.id}.panels.${b.panel}`),
         refs: b.binds_to ? [b.binds_to] : [],
         expand: true,   // hidden behind L3 Expand toggle
         parent: `dashboards.${d.id}`,
@@ -670,6 +721,8 @@ function adaptBurnRateAlerts(ctx) {
       tool: 'Prometheus alerting',
       tags: ['burn-rate', ...severities],
       source: ctx.sourceOf(`policy.burn_rate_alerts[${i}]`),
+
+      ...ctx.typed(`policy.burn_rate_alerts[${i}]`),
       refs: [normalizeSliRef(a.slo, 'slos')],
       spec: a,
     };
@@ -684,6 +737,8 @@ function adaptForecasts(ctx) {
     tool: 'forecast',
     tags: ['forecast', f.method].filter(Boolean),
     source: ctx.sourceOf(`policy.forecasts[${i}]`),
+
+    ...ctx.typed(`policy.forecasts[${i}]`),
     refs: [normalizeSliRef(f.slo, 'slos')],
     spec: f,
   }));
@@ -703,6 +758,8 @@ function adaptAlertingRoutes(ctx) {
       tool: 'Alertmanager',
       tags: ['routing', r.severity, ...channelKinds],
       source: ctx.sourceOf(`alerting.routes[${i}]`),
+
+      ...ctx.typed(`alerting.routes[${i}]`),
       spec: r,
     };
   });
@@ -734,6 +791,8 @@ function adaptAlertRules(ctx) {
       tool: ALERT_RULE_TOOL[engine] || 'PrometheusRule',
       tags: ['alert-rule', engine, r.severity].filter(Boolean),
       source: ctx.sourceOf(`alerting.rules[${i}]`),
+
+      ...ctx.typed(`alerting.rules[${i}]`),
       spec: r,
       mcp: ctx.mcpEvidence(`alerting.rules[${i}]`),
     };
@@ -752,6 +811,8 @@ function adaptRemediation(ctx) {
       r.guardrails?.circuit_breaker && 'circuit-breaker',
     ].filter(Boolean),
     source: ctx.sourceOf(`remediation[${i}]`),
+
+    ...ctx.typed(`remediation[${i}]`),
     refs: [r.trigger],
     spec: r,
   }));
@@ -768,6 +829,8 @@ function adaptBaselines(ctx) {
     tool: 'baselines',
     tags: ['baseline', 'mttd', 'mttr', b.review_cadence].filter(Boolean),
     source: ctx.sourceOf('baselines'),
+
+    ...ctx.typed('baselines'),
     spec: b,
     mcp: ctx.mcpEvidence('baselines'),
   }];
@@ -785,6 +848,8 @@ function adaptChaos(ctx) {
     tool: c.engine,
     tags: ['chaos', c.engine, c.schedule, c.environment].filter(Boolean),
     source: ctx.sourceOf(`validation.chaos_experiments.${c.id}`),
+
+    ...ctx.typed(`validation.chaos_experiments.${c.id}`),
     refs: [
       c.steady_state_hypothesis,
       ...(c.expected_alerts || []).map(a => `alert:${a}`),
@@ -804,11 +869,14 @@ function adaptSynthetic(ctx) {
     tool: s.kind,
     tags: ['synthetic', s.kind, s.on_fail_severity].filter(Boolean),
     source: ctx.sourceOf(`validation.synthetic_checks.${s.id}`),
+
+    ...ctx.typed(`validation.synthetic_checks.${s.id}`),
     spec: s,
   }));
 }
 
 function adaptImports(canonical) {
+  const annotations = canonical.metadata?.annotations || {};
   return (canonical.metadata?.imports || []).map((imp, i) => ({
     id: `IMP-${pad(i + 1)}`,
     title: imp.ref,
@@ -816,6 +884,8 @@ function adaptImports(canonical) {
     tool: 'imports',
     tags: ['governance', 'import'],
     source: 'Declared',
+    ...(typeof annotations[`${DECLARED_TYPE_PREFIX}imports[${i}]`] === 'string' && annotations[`${DECLARED_TYPE_PREFIX}imports[${i}]`]
+      ? { type: annotations[`${DECLARED_TYPE_PREFIX}imports[${i}]`] } : {}),
     spec: imp,
   }));
 }

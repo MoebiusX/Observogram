@@ -11,10 +11,25 @@ import { join, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 
+import { SPEC_DIR, SPEC_VERSION } from '../tools/lib/validator.mjs';
+import { createServer } from 'node:http';
+
+// Hermetic (§0): a developer shell's store, identity, taxonomy, transport-hook
+// or brand variables never reach this process's imports — the children's STRIP
+// list (server/fixtures/serve-child.mjs imports no server code), both
+// spellings, BEFORE the suite sets its own posture and before any server
+// module loads. server/index.mjs runs initAuth() at import (the reverse-proxy
+// mode's contract is asserted there), so the server imports below are
+// dynamic: a static one is hoisted above this line and would read the shell.
+// server/test-hermetic-suites.mjs guards the shape.
+const { STRIP, boot } = await import('./fixtures/serve-child.mjs');
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
 // Redirect the pack workspace to a temp dir BEFORE the server boots, so
-// smoke-test registrations never pollute the repo's .observogram/. Workspace
-// resolution is lazy (read at start(), not at import), which is what makes
-// this ordering work despite the hoisted import below.
+// smoke-test registrations never pollute the repo's .observogram/; the store
+// lands there too (docs/STORE_PLAN.md slice 2).
 const SMOKE_WORKSPACE = mkdtempSync(join(tmpdir(), 'observogram-smoke-ws-'));
 process.env.OBSERVOGRAM_WORKSPACE = SMOKE_WORKSPACE;
 // This suite asserts the OPEN posture (every route reachable without a
@@ -25,17 +40,9 @@ process.env.OBSERVOGRAM_AUTH = 'off';
 // /healthz's composite build must come from the reader, not from a
 // BUILD override exported in the shell that runs the suite (the /healthz
 // vs /api/version assertions below compare the two). server/version.mjs
-// resolves on first request, so this still lands before it reads.
+// resolves on first request.
 delete process.env.OBSERVOGRAM_BUILD;
 delete process.env.TOMOGRAPH_BUILD;
-// Hermetic store (docs/STORE_PLAN.md slice 2): start() opens the store and
-// imports; a shell's OBSERVOGRAM_DB (or a seed / join-role knob) must not
-// leak in. The store lands in SMOKE_WORKSPACE. Read at start(), so these
-// land before it despite the hoisted import below.
-for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH']) {
-  delete process.env[`OBSERVOGRAM_${k}`];
-  delete process.env[`TOMOGRAPH_${k}`];
-}
 // The one per-org MCP read token this suite's endpoint names (STORE_PLAN
 // slice 4 §7.6): a value of this process alone, set before start() and
 // read at request time; a shell's real OBSERVOGRAM_ORG_* variables never
@@ -45,14 +52,11 @@ const SMOKE_TOKEN_VAR = 'OBSERVOGRAM_ORG_DEFAULT_SMOKE_TOKEN';
 const SMOKE_TOKEN_VALUE = 'smoke-read-token-value';
 process.env[SMOKE_TOKEN_VAR] = SMOKE_TOKEN_VALUE;
 
-import { start } from './index.mjs';
-import { boot } from './fixtures/serve-child.mjs';
-import { currentStore } from './store/db.mjs';
-import { runWithOrg } from './tenancy.mjs';
-import { listPacks } from './store/packs.mjs';
-import { listServices } from './store/services.mjs';
-import { SPEC_DIR, SPEC_VERSION } from '../tools/lib/validator.mjs';
-import { createServer } from 'node:http';
+const { start } = await import('./index.mjs');
+const { currentStore } = await import('./store/db.mjs');
+const { runWithOrg } = await import('./tenancy.mjs');
+const { listPacks } = await import('./store/packs.mjs');
+const { listServices } = await import('./store/services.mjs');
 
 const failures = [];
 function assert(cond, label, got, want) {
@@ -189,6 +193,15 @@ try {
   const catalog = await getJson(base, '/api/packs');
   assert(Array.isArray(catalog.packs), 'GET /api/packs returns packs[]');
   assert(catalog.packs.length === 0, 'GET /api/packs returns empty catalog (Phase 7q)', catalog.packs.length, 0);
+
+  // /api/taxonomy — the artefact taxonomy override (server/taxonomy.mjs):
+  // unconfigured here (the in-process strip above), so the studio binds the
+  // default families; the path is never in the body.
+  const taxRes = await fetch(`${base}/api/taxonomy`);
+  const tax = await taxRes.json();
+  assert(taxRes.status === 200, 'GET /api/taxonomy answers 200');
+  assert(JSON.stringify(tax) === JSON.stringify({ ok: true, taxonomy: null, configured: false }), 'GET /api/taxonomy unconfigured: { ok, taxonomy: null, configured: false }', tax, { ok: true, taxonomy: null, configured: false });
+  assert((taxRes.headers.get('cache-control') || '') === 'no-store', 'GET /api/taxonomy is Cache-Control: no-store', taxRes.headers.get('cache-control'), 'no-store');
 
   // /api/examples — the curated reference packs. Trimmed to the three
   // hand-authored baselines; demo-skeleton and production-live are no

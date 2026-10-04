@@ -17,11 +17,22 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import {
+// Hermetic (§0): a developer shell's store or identity variables never reach
+// this process's imports (the identity-admin cases below read the server's
+// own environment) — the children's STRIP list, both spellings, before any
+// server module loads; hence the dynamic imports. serve-child.mjs imports no
+// server code; server/test-hermetic-suites.mjs guards the shape.
+const { STRIP } = await import('./fixtures/serve-child.mjs');
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
+
+const {
   atomic, checkFilesystem, checkNodeVersion, classifyFilesystem, closeStore, execScript,
   isSqliteExperimentalWarning, openRaw, openStore, pragma, prepare, resolveDbPath, tx,
-} from './store/db.mjs';
-import { SCHEMA_VERSION, STEPS, runMigrations, userVersion } from './store/migrations.mjs';
+} = await import('./store/db.mjs');
+const { SCHEMA_VERSION, STEPS, runMigrations, userVersion } = await import('./store/migrations.mjs');
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DB_URL = pathToFileURL(join(HERE, 'store', 'db.mjs')).href;

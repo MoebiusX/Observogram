@@ -55,6 +55,117 @@ MCP_AUTH=$MCP_CLIENT_KEY \
 npm run fetch-live
 ```
 
+## Transport hook
+
+Every MCP request Observogram makes — `npm run fetch-live`, `npm run
+record-fixtures`, the live probes (`buildAndValidate`), a journey's live
+source and the studio server's `POST /api/refresh-live`,
+`POST /api/draft-from-mcp` and the deploy and rollback routes — goes through
+one client, `tools/lib/mcp-client.mjs`, and its single `send()`. A
+distribution behind a gateway with its own auth, extra headers, a proxy or a
+private CA shapes those requests there, without forking the client:
+
+```bash
+OBSERVOGRAM_TRANSPORT_HOOK=./hooks/gateway.mjs npm run fetch-live
+```
+
+The value is a path — absolute, or relative to the working directory — or a
+`file:` URL, of an ES module with one or both of these named exports:
+
+```js
+// hooks/gateway.mjs — runs in Node, with the process's trust.
+import { Agent } from 'undici';           // the operator's own dependency, not Observogram's
+
+// Applied to EVERY request. Sync or async. Return what you change: an
+// omitted field keeps the input, returned headers are merged over the built
+// ones ({ ...headers, ...returned }), so Mcp-Session-Id and the rest survive.
+export async function prepareRequest({ url, headers }) {
+  const exchanged = await exchangeToken(headers.Authorization);   // the bearer is visible: Bearer <MCP_AUTH>
+  return {
+    url: url.replace('https://otel-mcp.example.com/', 'https://gateway.internal/otel-mcp/'),
+    headers: { ...headers, Authorization: `Bearer ${exchanged}`, 'X-Tenant': 'payments' },
+  };
+}
+
+// Optional: replace the fetcher wholesale (a private CA, a corporate proxy,
+// mTLS). init is { method: 'POST', headers, body, signal } — the AbortSignal
+// carries OBSERVOGRAM_MCP_TIMEOUT_MS and may be honoured or ignored.
+const dispatcher = new Agent({ connect: { ca: process.env.PRIVATE_CA_PEM } });
+export const fetchImpl = (url, init) => fetch(url, { ...init, dispatcher });
+```
+
+What the hook sees and what it must do with it:
+
+- `headers` is the request as the client built it — `Content-Type`,
+  `Accept`, `MCP-Protocol-Version`, `Authorization: Bearer <token>` when a
+  token was given (`MCP_AUTH`, `mcpAuth`, a journey's `authEnv`), and
+  `Mcp-Session-Id` once the server issued one. `url` is the caller's URL as
+  given, credential query parameters included (they are stripped for
+  persistence, not for the wire). The hook may replace both. It is
+  operator-installed code running with the process's trust: **never log the
+  headers or the URL**. As a backstop the client replaces the bearer, the
+  URL's userinfo and every credential-named query value with `<redacted>` in
+  the hook's *own* error text; nothing else the hook does is redacted for it.
+- The URL a `prepareRequest` returns passes the same policy the caller's URL
+  passed: it must parse and be `http(s)`, and under
+  `OBSERVOGRAM_ALLOW_LOCAL_MCP=0` it may not name a local or private address
+  (`tools/lib/mcp-url-safety.mjs` `mcpUrlPolicy`, the pure form of the
+  server's `validateMcpUrl`). A `fetchImpl`-only hook leaves the URL alone,
+  so no second check runs. A hook cannot turn a public URL into `file:` or,
+  in the strict posture, into a loopback one.
+- A `fetchImpl` must answer a Response-like object (`ok`, `status`,
+  `headers.get()`, `text()`, `json()`, and `body.getReader()` when it answers
+  `text/event-stream`); `new Response(…)` satisfies all of it.
+
+Only a **contract fault** is a hard failure (`TransportHookError`): the module
+cannot load or exports neither function; `prepareRequest` throws or returns a
+non-object, a non-string `url`, non-object `headers`, a header name or value
+carrying CR or LF, a non-`http(s)` URL or one the policy refuses; `fetchImpl`
+returns something that is not a Response. Then nothing is written:
+`fetch-live` exits 1 at its FATAL line with the previous `OUTPUT` untouched,
+the recorder exits 1 before its `--write` block, a journey run exits 2 with
+no run record (a configuration error, like an unset `authEnv` — never a
+`vantage-lost` record and never a `failed` inventory record), the studio
+server refuses to start on a load failure (`[studio] failed to start:
+OBSERVOGRAM_TRANSPORT_HOOK: cannot load …`) and answers a call-time fault
+with one `502 { ok: false, error }` and no live pack, no per-item results
+and no deploy or rollback record. **Network failures are not hook faults**:
+a rejection from `fetchImpl` (or from native `fetch` through a
+`prepareRequest`-only hook), a refused connection or an HTTP 503 on one probe
+behave exactly as without a hook — retried once when transient, annotated as
+that probe's failure, the pack written. A `fetchImpl` rejection's message is
+still hook text, so it is redacted like a `prepareRequest` throw's (the
+error itself stays ordinary: same name and code, the original kept as
+`cause`).
+
+The texts, exact: `OBSERVOGRAM_TRANSPORT_HOOK: cannot load <path>: <message>`
+· `OBSERVOGRAM_TRANSPORT_HOOK: <path> exports neither prepareRequest nor
+fetchImpl` · `OBSERVOGRAM_TRANSPORT_HOOK: <path> exports prepareRequest,
+which is not a function` (same for `fetchImpl`) · `transport hook <path>:
+prepareRequest threw: <redacted message>` · `transport hook <path>:
+prepareRequest returned <null|string|…>, not { url, headers }` · `… returned
+a url that is not a string` · `… returned headers that are not an object` ·
+`… returned header "<name>" containing CR or LF` · `… returned a URL that is
+not http(s): <safe url>` · `transport hook <path>: mcpUrl targets a
+local/private address (<host>), which OBSERVOGRAM_ALLOW_LOCAL_MCP=0 forbids`
+· `transport hook <path>: fetchImpl returned <type>, not a Response`.
+
+The hook loads **once per process** (`tools/mcp-transport.mjs`
+`mcpTransport()`) and cannot be swapped at runtime; each entrypoint logs the
+path once — `[fetch-live-pack] transport hook: OBSERVOGRAM_TRANSPORT_HOOK=…
+(prepareRequest: yes, fetchImpl: no)` on stderr, `[studio] MCP transport
+hook: …` at start (a silent boot prints nothing) — never a header or a URL.
+The legacy `TOMOGRAPH_TRANSPORT_HOOK` spelling is honoured
+(`tools/lib/brand-env.mjs`'s rule, the modern name wins); every message
+spells the modern name. Unset or empty, the hook is inert: no import, no log
+line, `globalThis.fetch`, the same URL and the same headers in the same
+order, no second URL check (`tools/test-mcp-transport.mjs` proves the request
+log identical with no hook and with an identity hook). The hook runs in Node
+only — the studio in the browser never loads it; the client module itself is
+browser-safe and vendorable (`docs/DOWNSTREAM.md`). A suite that needs a hook
+sets the variable for a child process, never for its own
+(`server/fixtures/serve-child.mjs` strips it from every child it starts).
+
 ## What The Live Pack Contains
 
 The live pack is not just a health summary. It carries the artifacts needed for
