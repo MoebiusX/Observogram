@@ -5,9 +5,18 @@
 // a deployment event (users, orgs, owners); an org's rows carry its id.
 // The schema's triggers refuse UPDATE, DELETE and any insert at or below
 // the newest seq, so there is deliberately no way to change a row here.
+//
+// Slice 5: the file-first routes (deploys.jsonl, the journey file, the run
+// record, the live pack) write their row through appendAudit after their
+// file; GET /api/audit reads the rows. A detail is bounded: writeAudit
+// refuses one that serializes past DETAIL_MAX, so nothing uncapped reaches
+// a permanent row.
 
 import { atomic, nowIso, prepare } from './db.mjs';
 import { requireActor, requireText, fromJson } from './rows.mjs';
+
+// The longest serialized detail a row may hold.
+export const DETAIL_MAX = 8192;
 
 const INSERT = `INSERT INTO audit (at, org_id, actor, action, target_kind, target_id, detail)
   VALUES (:at, :org_id, :actor, :action, :target_kind, :target_id, :detail) RETURNING *`;
@@ -23,6 +32,10 @@ export function rowToAudit(r) {
 // For repositories: must run inside the tx() of the change it records.
 export function writeAudit(db, actor, { orgId = null, action, targetKind = null, targetId = null, detail = null }) {
   if (!db.isTransaction) throw new Error('observogram store: writeAudit() runs inside the tx() of the change it records');
+  const text = detail === null || detail === undefined ? null : JSON.stringify(detail);
+  if (text !== null && text.length > DETAIL_MAX) {
+    throw new TypeError(`observogram store: an audit detail must serialize to at most ${DETAIL_MAX} characters`);
+  }
   return rowToAudit(prepare(db, INSERT).get({
     at: nowIso(),
     org_id: orgId,
@@ -30,7 +43,7 @@ export function writeAudit(db, actor, { orgId = null, action, targetKind = null,
     action: requireText(action, 'action', { max: 100 }),
     target_kind: targetKind,
     target_id: targetId === null || targetId === undefined ? null : String(targetId),
-    detail: detail === null || detail === undefined ? null : JSON.stringify(detail),
+    detail: text,
   }));
 }
 
@@ -40,14 +53,17 @@ export function appendAudit(db, actor, row) {
 }
 
 // Newest first. orgId: undefined = every row, null = deployment rows only,
-// a string = that org's rows. beforeSeq pages backwards.
-export function listAudit(db, { orgId, actor, action, targetKind, targetId, since, until, beforeSeq, limit = 100 } = {}) {
+// a string = that org's rows. kind = the actions `<kind>.*` (a prefix
+// equality on the text before the dot, no LIKE: `_` is literal). beforeSeq
+// pages backwards; limit is clamped to 1..1000.
+export function listAudit(db, { orgId, actor, action, kind, targetKind, targetId, since, until, beforeSeq, limit = 100 } = {}) {
   const where = [];
   const params = {};
   if (orgId === null) where.push('org_id IS NULL');
   else if (orgId !== undefined) { where.push('org_id = :org_id'); params.org_id = orgId; }
   if (actor !== undefined) { where.push('actor = :actor'); params.actor = actor; }
   if (action !== undefined) { where.push('action = :action'); params.action = action; }
+  if (kind !== undefined) { where.push("substr(action, 1, length(:kind) + 1) = :kind || '.'"); params.kind = String(kind); }
   if (targetKind !== undefined) { where.push('target_kind = :target_kind'); params.target_kind = targetKind; }
   if (targetId !== undefined) { where.push('target_id = :target_id'); params.target_id = String(targetId); }
   if (since !== undefined) { where.push('at >= :since'); params.since = since; }

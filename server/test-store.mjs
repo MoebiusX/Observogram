@@ -979,6 +979,98 @@ test('audit: appendAudit and listAudit filters (deployment rows, one org, actor,
   }
 });
 
+test('audit: listAudit kind is a prefix equality on the text before the dot (never LIKE: _ is literal, xy does not match x)', async () => {
+  const { db, close } = await freshStore('auditkind');
+  try {
+    auditRepo.appendAudit(db, 'alice', { action: 'x.one' });
+    auditRepo.appendAudit(db, 'alice', { orgId: 'acme', action: 'x.two' });
+    auditRepo.appendAudit(db, 'alice', { action: 'y.one' });
+    auditRepo.appendAudit(db, 'alice', { action: 'xy.one' });
+    auditRepo.appendAudit(db, 'alice', { action: 'mcp_endpoint.create' });
+    auditRepo.appendAudit(db, 'alice', { action: 'mcp_endpointx.create' });
+    auditRepo.appendAudit(db, 'alice', { action: 'mcp-endpoint.create' });
+    auditRepo.appendAudit(db, 'alice', { action: 'mcpXendpoint.create' });
+    const kinds = (filter) => auditRepo.listAudit(db, filter).reverse().map((r) => r.action);
+    assert.deepEqual(kinds({ kind: 'x' }), ['x.one', 'x.two'], 'x.* only: neither y.one nor xy.one');
+    assert.deepEqual(kinds({ kind: 'y' }), ['y.one']);
+    assert.deepEqual(kinds({ kind: 'xy' }), ['xy.one']);
+    assert.deepEqual(kinds({ kind: 'mcp_endpoint' }), ['mcp_endpoint.create'], 'the _ is literal: no mcp-endpoint, no mcpXendpoint, no mcp_endpointx');
+    assert.deepEqual(kinds({ kind: 'x', orgId: 'acme' }), ['x.two'], 'kind ANDs with the other filters');
+    assert.deepEqual(kinds({ kind: 'x', action: 'y.one' }), [], 'kind ANDs with action');
+    assert.deepEqual(kinds({ kind: 'nope' }), []);
+    assert.deepEqual(kinds({ kind: '' }), [], 'an empty kind matches no action (no action starts with a dot)');
+    assert.deepEqual(kinds({ kind: 'x.one' }), [], 'a whole action is not a kind');
+    assert.equal(kinds({}).length, 8, 'kind undefined = no predicate');
+  } finally {
+    close();
+  }
+});
+
+test('audit: beforeSeq paging is exact over 7 rows at limit 3, and reaches all 1001 rows at the 1000 clamp', async () => {
+  const { db, close } = await freshStore('auditpage');
+  try {
+    for (let i = 1; i <= 7; i++) auditRepo.appendAudit(db, 'alice', { orgId: 'acme', action: 'p.row', targetId: i });
+    const all = auditRepo.listAudit(db, { orgId: 'acme', limit: 1000 });
+    assert.equal(all.length, 7);
+    const pages = [];
+    let before;
+    for (;;) {
+      const page = auditRepo.listAudit(db, { orgId: 'acme', limit: 3, beforeSeq: before });
+      if (page.length === 0) break;
+      pages.push(page);
+      before = page[page.length - 1].seq;
+    }
+    assert.deepEqual(pages.map((p) => p.length), [3, 3, 1], 'three pages, the last one short');
+    assert.deepEqual(pages.flat().map((r) => r.seq), all.map((r) => r.seq), 'same seqs, same order, no duplicate, no gap');
+    assert.deepEqual(pages.flat().map((r) => r.targetId), ['7', '6', '5', '4', '3', '2', '1']);
+    assert.deepEqual(auditRepo.listAudit(db, { orgId: 'acme', beforeSeq: all[all.length - 1].seq }), [], 'before the smallest seq: nothing');
+
+    // The clamp: 1001 rows, limit 1000 (and anything above it) yields 1000;
+    // one beforeSeq step reaches the last row. An API that asked for
+    // limit + 1 at a cap of 1000 would be clamped here and never see it.
+    for (let i = 0; i < 1001; i++) auditRepo.appendAudit(db, 'bob', { orgId: 'bravo', action: 'q.row' });
+    const first = auditRepo.listAudit(db, { orgId: 'bravo', limit: 1000 });
+    assert.equal(first.length, 1000, 'the clamp');
+    assert.equal(auditRepo.listAudit(db, { orgId: 'bravo', limit: 5000 }).length, 1000, 'a limit above the clamp is clamped');
+    assert.equal(auditRepo.listAudit(db, { orgId: 'bravo', limit: -3 }).length, 1, 'a limit below 1 is 1');
+    assert.equal(auditRepo.listAudit(db, { orgId: 'bravo', limit: 0 }).length, 100, 'limit 0 (falsy) is the default 100, as before');
+    const rest = auditRepo.listAudit(db, { orgId: 'bravo', limit: 1000, beforeSeq: first[first.length - 1].seq });
+    assert.equal(rest.length, 1, 'the 1001st row on the second page');
+    assert.ok(rest[0].seq < first[first.length - 1].seq);
+    assert.equal(new Set([...first, ...rest].map((r) => r.seq)).size, 1001, 'all 1001 reached, none twice');
+  } finally {
+    close();
+  }
+});
+
+test('audit: writeAudit bounds the detail — a serialized detail over DETAIL_MAX is a TypeError and no row; one at the bound is a row', async () => {
+  const { db, close } = await freshStore('auditsize');
+  try {
+    assert.equal(auditRepo.DETAIL_MAX, 8192);
+    const n0 = auditRepo.listAudit(db, { limit: 1000 }).length;
+    // {"s":"<x…>"} serializes to 8 + s.length characters.
+    const atBound = { s: 'x'.repeat(auditRepo.DETAIL_MAX - 8) };
+    assert.equal(JSON.stringify(atBound).length, auditRepo.DETAIL_MAX);
+    const row = auditRepo.appendAudit(db, 'alice', { action: 'z.fits', detail: atBound });
+    assert.deepEqual(row.detail, atBound, 'exactly DETAIL_MAX characters is a row');
+    const over = { s: 'x'.repeat(auditRepo.DETAIL_MAX - 7) };
+    assert.throws(() => auditRepo.appendAudit(db, 'alice', { action: 'z.over', detail: over }), (e) => e instanceof TypeError && /at most 8192 characters/.test(e.message));
+    const big = { blob: 'y'.repeat(9 * 1024) };
+    assert.throws(() => auditRepo.appendAudit(db, 'alice', { action: 'z.big', detail: big }), (e) => e instanceof TypeError && /at most 8192/.test(e.message));
+    assert.deepEqual(auditRepo.listAudit(db, { limit: 1000 }).slice(0, -n0 || undefined).map((r) => r.action), ['z.fits'], 'the refused details wrote no row');
+    // Inside a repository's tx() the refusal rolls the change back too.
+    assert.throws(() => tx(db, () => {
+      auditRepo.writeAudit(db, 'alice', { action: 'z.inner' });
+      auditRepo.writeAudit(db, 'alice', { action: 'z.inner-over', detail: big });
+    }), TypeError);
+    assert.deepEqual(auditRepo.listAudit(db, { action: 'z.inner' }), [], 'the tx rolled back with the refused row');
+    auditRepo.appendAudit(db, 'alice', { action: 'z.none' });
+    assert.equal(auditRepo.listAudit(db, { limit: 1 })[0].detail, null, 'a null detail is unaffected');
+  } finally {
+    close();
+  }
+});
+
 test('meta: get and set with an audit row; store_id is fixed', async () => {
   const { db, close } = await freshStore('meta');
   try {

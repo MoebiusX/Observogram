@@ -975,7 +975,6 @@ test('completeness: the table agrees with the independent classification, and ev
     assert.ok(['allow', 'refuse', 'rule'].includes(e.exposed), `${key}: exposed`);
     // <kind>.<verb>, lower case; a kind of two words joins them with _ (mcp_endpoint.create).
     assert.ok(Array.isArray(e.audit) && e.audit.every((a) => /^[a-z]+(?:_[a-z]+)*(?:[.-][a-z]+(?:_[a-z]+)*)+$/.test(a)), `${key}: audit actions`);
-    assert.ok(e.later === null || (typeof e.later === 'string' && e.later.length > 0), `${key}: later`);
     const isApi = e.path.startsWith('/api/');
     if (isApi && e.method !== 'GET') {
       assert.ok(['session', 'always'].includes(e.csrf), `${key}: an /api mutation needs csrf session or always`);

@@ -17,7 +17,6 @@
 //   class        public · self · viewer · operator · admin · owner (required)
 //   audit        the audit actions a successful call writes in this build,
 //                exactly; [] = none
-//   later        the rows a later slice adds, for review; not asserted
 //   csrf         none · session · always · form — GET → none, any other
 //                /api method → session
 //   exposed      allow · refuse · rule — the open-exposed posture's answer;
@@ -123,20 +122,20 @@ export const ROUTES = Object.freeze({
 
   // ---------- operator: every existing mutation ----------
   'DELETE /api/uploads': { class: 'operator', audit: ['pack.clear'] },
-  'POST /api/packs/:id/retrofeed': { class: 'operator', later: 'none (computes; writes nothing)' },
-  'POST /api/deploys/:deployId/verify': { class: 'operator', later: 'slice 5: deploy.verify' },
-  'POST /api/deploys/:deployId/rollback': { class: 'operator', later: 'slice 5: deploy.rollback' },
-  'POST /api/packs/:id/deploy-bulk': { class: 'operator', later: 'slice 5: deploy.bulk' },
-  'POST /api/packs/:id/deploy/:target': { class: 'operator', later: 'slice 5: deploy.run' },
-  'POST /api/journeys/:name/run': { class: 'operator', later: 'slice 5: journey.run' },
-  'POST /api/journeys/capture': { class: 'operator', later: 'slice 5: journey.capture' },
+  'POST /api/packs/:id/retrofeed': { class: 'operator' }, // computes; writes nothing
+  'POST /api/deploys/:deployId/verify': { class: 'operator' },
+  'POST /api/deploys/:deployId/rollback': { class: 'operator' },
+  'POST /api/packs/:id/deploy-bulk': { class: 'operator' },
+  'POST /api/packs/:id/deploy/:target': { class: 'operator' },
+  'POST /api/journeys/:name/run': { class: 'operator' },
+  'POST /api/journeys/capture': { class: 'operator' },
   'POST /api/draft-from-mcp': { class: 'operator', audit: PACK_REGISTER },
-  'POST /api/refresh-live': { class: 'operator', later: 'slice 5: live.refresh' },
+  'POST /api/refresh-live': { class: 'operator' },
   'POST /api/crawl': { class: 'operator', audit: PACK_REGISTER },
   'POST /api/crawl-github': { class: 'operator', audit: PACK_REGISTER },
   'POST /api/validate': { class: 'operator', audit: PACK_REGISTER },
-  'POST /api/library/instantiate': { class: 'operator', later: 'none (computes)' },
-  'POST /api/library/compile': { class: 'operator', later: 'none (computes)' },
+  'POST /api/library/instantiate': { class: 'operator' }, // computes; writes nothing
+  'POST /api/library/compile': { class: 'operator' }, // computes; writes nothing
   'POST /api/library/register': { class: 'operator', audit: PACK_REGISTER },
   // The services and environments API (server/routes/services.mjs): a
   // service's deletion cascades its environments and pack links, which
@@ -223,7 +222,6 @@ export function routeEntry(key) {
     path,
     class: raw.class,
     audit: Object.freeze([...(raw.audit || [])]),
-    later: raw.later ?? null,
     csrf: raw.csrf ?? (method === 'GET' || !isApi ? 'none' : 'session'),
     exposed: raw.exposed ?? (raw.class === 'admin' || raw.class === 'owner' ? 'refuse' : 'allow'),
     identityApi: raw.identityApi === true,
