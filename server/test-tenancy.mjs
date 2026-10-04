@@ -173,9 +173,10 @@ const OWNER_ONLY = new Set([
 
 // The audit's newest seq, and the rows written after `seq` (oldest first) as
 // [action, actor, orgId, targetId, detail] — STORE_PLAN slice 5: the deploy
-// routes write their row after the deploys.jsonl line, in the request's org,
-// by the principal's login; each action must be one the route table lists
-// for its route, so a typo in the table fails here.
+// routes write their row after the deploys.jsonl line, the journey routes
+// after the journey file and the run, in the request's org, by the
+// principal's login; each action must be one the route table lists for its
+// route, so a typo in the table fails here.
 const auditSeq = () => listAudit(currentStore(), { limit: 1 })[0]?.seq ?? 0;
 const rowsAfter = (seq) => listAudit(currentStore(), { limit: 1000 }).filter(r => r.seq > seq).reverse()
   .map(r => [r.action, r.actor, r.orgId, r.targetId, r.detail]);
@@ -183,7 +184,8 @@ const listedFor = (key, rows) => rows.every(([action]) => routeEntry(key).audit.
 
 // alice, in `org`, creates the objects the sweep addresses: a registered
 // pack, a deploy with a snapshot against the fake MCP (its deploy.bulk row),
-// a verify on it (its deploy.verify row), a journey captured and run once,
+// a verify on it (its deploy.verify row), a journey captured and run once
+// (its journey.capture and journey.run rows),
 // the org's live pack (planted; the route's own write into a created org is
 // the default-at-'.' block's), and — STORE_PLAN slice 4 — a service record
 // with one environment and an MCP endpoint record (its variable named with
@@ -234,15 +236,29 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   assert(rows.length === 1 && listedFor('POST /api/deploys/:deployId/verify', rows)
     && JSON.stringify(rows) === JSON.stringify([['deploy.verify', 'alice', org, deployId, { outcome: 'pending', alignment: null, attempts: null }]]),
     `alice's verify in ${org}: exactly one deploy.verify row by alice in ${org} (an action the table lists)`, rows);
+  seq = auditSeq();
   r = await fetch(`${root}/api/journeys/capture`, {
     method: 'POST', headers: { ...h, 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: journey, packAId: packId, packBId: 'production-curated', env: 'prod' }),
   });
   j = await r.json();
   assert(j.ok === true && existsSync(join(dir, 'journeys', `${journey}.journey.yaml`)), `alice captures ${journey} in ${org}`, j);
+  rows = rowsAfter(seq);
+  assert(rows.length === 1 && listedFor('POST /api/journeys/capture', rows)
+    && JSON.stringify(rows) === JSON.stringify([['journey.capture', 'alice', org, journey, { packA: packId, packB: 'production-curated', live: false, env: 'prod', service: null, scopeMode: null }]]),
+    `alice's capture in ${org}: exactly one journey.capture row by alice in ${org} (an action the table lists): the pack ids, live false, env prod`, rows);
+  seq = auditSeq();
   r = await fetch(`${root}/api/journeys/${journey}/run`, { method: 'POST', headers: { ...h, 'Content-Type': 'application/json' }, body: '{}' });
   j = await r.json();
   assert(j.ok === true && existsSync(join(dir, 'runs')), `alice runs ${journey} once in ${org} (a runs/ record)`, j.error);
+  rows = rowsAfter(seq);
+  assert(rows.length === 1 && listedFor('POST /api/journeys/:name/run', rows)
+    && JSON.stringify(rows[0].slice(0, 4)) === JSON.stringify(['journey.run', 'alice', org, journey])
+    && JSON.stringify(Object.keys(rows[0][4])) === JSON.stringify(['startedAt', 'outcome', 'alignmentPct', 'gradeScore', 'gradePass', 'breaches', 'tookMs'])
+    && rows[0][4].startedAt === j.record.startedAt && rows[0][4].outcome === j.record.outcome && ['pass', 'gate-failed'].includes(rows[0][4].outcome)
+    && rows[0][4].alignmentPct === j.record.drift.alignmentPct && rows[0][4].gradeScore === j.record.grade.score && rows[0][4].gradePass === j.record.grade.pass
+    && rows[0][4].breaches === j.record.gate.breaches.length && rows[0][4].tookMs === j.record.tookMs,
+    `alice's run in ${org}: exactly one journey.run row by alice in ${org} (an action the table lists), the record's seven scalars`, rows);
   r = await fetch(`${root}/api/services`, {
     method: 'POST', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: `${org} sweep service` }),
   });
@@ -511,12 +527,20 @@ try {
       `packA: { crawl: { path: ${JSON.stringify(bravoRoot)}, name: svc } }`,
       `packB: { file: ../packs/${pack} }`,
     ].join('\n') + '\n');
+    const crawlSeq = auditSeq();
     r = await fetch(`${base}/api/journeys/acme-crawl/run`, {
       method: 'POST', headers: { Cookie: alice, 'Content-Type': 'application/json', 'X-Observogram-CSRF': '1' }, body: '{}',
     });
     j = await r.json();
     assert(r.status === 502 && j.error === `crawl source ${bravoRoot} belongs to another org's part of the workspace — refused`,
       "alice's crawl: journey whose root is orgs/bravo → 502 'belongs to another org'", [r.status, j.error]);
+    // The attempt is on the record (slice 5): a journey.run row with outcome
+    // `error` — a file source, not a lost vantage — and never the message.
+    const crawlRows = rowsAfter(crawlSeq);
+    assert(crawlRows.length === 1 && JSON.stringify(crawlRows[0].slice(0, 4)) === JSON.stringify(['journey.run', 'alice', 'acme', 'acme-crawl'])
+      && crawlRows[0][4].outcome === 'error' && crawlRows[0][4].alignmentPct === null && crawlRows[0][4].breaches === null
+      && typeof crawlRows[0][4].startedAt === 'string' && typeof crawlRows[0][4].tookMs === 'number' && !JSON.stringify(crawlRows).includes('bravo'),
+      "alice's refused crawl run: one journey.run row, outcome error, no path in it", crawlRows);
     rmSync(join(bravoRoot, 'leak.yaml'));
     rmSync(join(WORKSPACE, 'orgs', 'acme', 'journeys', 'acme-crawl.journey.yaml'));
   }

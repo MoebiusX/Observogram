@@ -686,6 +686,14 @@ try {
   assert(jRun.ok === true && jRun.record?.journey === 'smoke-journey', 'POST /api/journeys/:name/run executes the journey');
   assert(typeof jRun.record.drift?.alignmentPct === 'number', 'run record carries drift facts');
   assert(jRun.record.outcome === 'pass', 'permissive gate passes', jRun.record.gate?.breaches, []);
+  // Slice 5: the run's audit row — the record's seven scalars by `local`
+  // (the open posture's principal), never the record or a path.
+  const jRunRow = auditRows({ action: 'journey.run', limit: 1 })[0];
+  assert(jRunRow && jRunRow.actor === 'local' && jRunRow.orgId === 'default' && jRunRow.targetKind === 'journey' && jRunRow.targetId === 'smoke-journey'
+         && JSON.stringify(jRunRow.detail) === JSON.stringify({ startedAt: jRun.record.startedAt, outcome: 'pass', alignmentPct: jRun.record.drift.alignmentPct,
+           gradeScore: jRun.record.grade.score, gradePass: jRun.record.grade.pass, breaches: 0, tookMs: jRun.record.tookMs }),
+         'the run writes one journey.run row by local: the record\'s startedAt, outcome, alignment, grade, breaches and tookMs', jRunRow);
+  assert(jRun.auditError === undefined, 'the run\'s response carries no auditError', jRun.auditError);
 
   const jRuns = await getJson(base, '/api/journeys/smoke-journey/runs?limit=5');
   assert(jRuns.runs.length === 1 && jRuns.runs[0].startedAt === jRun.record.startedAt,
@@ -866,17 +874,54 @@ try {
   assert(chainRuns.runs[0]?.branches?.length === 4 && chainRuns.runs[0].transition.changed.length === 2 && chainRuns.runs[0].livePack.kept === false,
          'GET /api/journeys/:name/runs hands the record through unchanged (branches, transition, livePack)');
 
+  const seqBefore404 = auditSeq();
   const jRun404 = await fetch(`${base}/api/journeys/never-saved/run`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
   });
   assert(jRun404.status === 404, 'running an unknown journey → 404');
+  assert(auditSeq() === seqBefore404, 'the 404 run writes no row');
+
+  // Slice 5: a live Pack B that cannot be reached loses its vantage — the
+  // engine writes a run record (outcome vantage-lost) before it throws, the
+  // route answers 502, and the attempt is on the audit: one journey.run row
+  // with outcome vantage-lost, the four record scalars null, never the
+  // error's message (it names the URL).
+  writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'smoke-lost.journey.yaml'), [
+    'name: smoke-lost',
+    `packA: { file: ${PAY.replaceAll('\\', '/')} }`,
+    'packB: { mcp: { url: http://127.0.0.1:1/no-mcp } }',
+    'gate: { minAlignmentPct: 1 }',
+  ].join('\n'));
+  const lostRes = await fetch(`${base}/api/journeys/smoke-lost/run`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+  });
+  const lost = await lostRes.json();
+  assert(lostRes.status === 502 && lost.ok === false, 'a run whose live Pack B is unreachable → 502', [lostRes.status, lost]);
+  const lostRuns = await getJson(base, '/api/journeys/smoke-lost/runs?limit=5');
+  assert(lostRuns.runs.length === 1 && lostRuns.runs[0].outcome === 'vantage-lost', 'the engine kept a vantage-lost run record', lostRuns.runs);
+  const lostRow = auditRows({ action: 'journey.run', limit: 1 })[0];
+  assert(lostRow && lostRow.actor === 'local' && lostRow.targetId === 'smoke-lost'
+         && JSON.stringify(Object.keys(lostRow.detail)) === JSON.stringify(['startedAt', 'outcome', 'alignmentPct', 'gradeScore', 'gradePass', 'breaches', 'tookMs'])
+         && lostRow.detail.outcome === 'vantage-lost' && lostRow.detail.alignmentPct === null && lostRow.detail.gradeScore === null
+         && lostRow.detail.gradePass === null && lostRow.detail.breaches === null
+         && typeof lostRow.detail.startedAt === 'string' && Number.isFinite(Date.parse(lostRow.detail.startedAt)) && typeof lostRow.detail.tookMs === 'number'
+         && !JSON.stringify(lostRow).includes('127.0.0.1:1'),
+         'the lost run writes one journey.run row: outcome vantage-lost, the record scalars null, no URL', lostRow);
 
   // Capture: freeze a comparison of two known packs as a journey.
+  const seqBeforeCap = auditSeq();
   const cap = await fetch(`${base}/api/journeys/capture`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: 'captured-pair', packAId: 'payment-service', packBId: 'production-curated', env: 'prod' }),
   }).then(r => r.json());
   assert(cap.ok === true && cap.name === 'captured-pair', 'POST /api/journeys/capture saves a journey');
+  // Slice 5: the capture's row — the two pack ids and the scope, live false
+  // (Pack B is a file), never a path.
+  const capRows = auditRows({ limit: 5 }).filter(r => r.seq > seqBeforeCap);
+  assert(capRows.length === 1 && capRows[0].action === 'journey.capture' && capRows[0].actor === 'local' && capRows[0].targetId === 'captured-pair'
+         && JSON.stringify(capRows[0].detail) === JSON.stringify({ packA: 'payment-service', packB: 'production-curated', live: false, env: 'prod', service: null, scopeMode: null })
+         && !JSON.stringify(capRows[0]).includes('.pack.yaml'),
+         'the capture writes one journey.capture row by local: the pack ids, live false, env prod, no path', capRows);
   const capRun = await fetch(`${base}/api/journeys/captured-pair/run`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
   }).then(r => r.json());
@@ -1364,8 +1409,21 @@ try {
              'the live pack was written with the record\'s URL', liveById.slice(0, 300));
       assert(!JSON.stringify(byId).includes(SMOKE_TOKEN_VALUE) && !liveById.includes(SMOKE_TOKEN_VALUE),
              'the token\'s value is in no response and not in the live pack');
+      // Slice 5: the refresh's row — the MCP origin as the target, the
+      // record used, counts from the annotations; never the URL or the token.
+      const byIdRow = auditRows({ action: 'live.refresh', limit: 1 })[0];
+      assert(byIdRow && byIdRow.actor === 'local' && byIdRow.orgId === 'default' && byIdRow.targetKind === 'live' && byIdRow.targetId === new URL(fakeRestricted.url).origin
+             && JSON.stringify(byIdRow.detail.mcpEndpoint) === JSON.stringify({ id: mcpEndpointId, name: 'smoke' }) && byIdRow.detail.refreshedAt === byId.refreshedAt
+             && byIdRow.detail.servicesDiscovered === (byId.annotations['mcp.servicesDiscovered'] || '').split(',').filter(Boolean).length
+             && byIdRow.detail.toolsFailed === 0 && JSON.stringify(Object.keys(byIdRow.detail)) === JSON.stringify(['mcpEndpoint', 'refreshedAt', 'servicesDiscovered', 'toolsFailed'])
+             && !JSON.stringify(byIdRow).includes(SMOKE_TOKEN_VALUE),
+             'refresh-live { mcpEndpointId } writes one live.refresh row by local: the fake\'s origin, the record { id, name }, the counts', byIdRow);
+      assert(byId.auditError === undefined, 'the refresh\'s response carries no auditError', byId.auditError);
       const byUrl = await (await postJson('/api/refresh-live', { mcpUrl: fakeRestricted.url })).json();
       assert(byUrl.ok === true && byUrl.mcpEndpoint === null, 'refresh-live { mcpUrl }: mcpEndpoint null', byUrl.mcpEndpoint);
+      const byUrlRow = auditRows({ action: 'live.refresh', limit: 1 })[0];
+      assert(byUrlRow && byUrlRow.seq > byIdRow.seq && byUrlRow.detail.mcpEndpoint === null && byUrlRow.targetId === new URL(fakeRestricted.url).origin,
+             'refresh-live { mcpUrl }: its live.refresh row names no record (mcpEndpoint null), the same origin', byUrlRow);
       const draftById = await (await postJson('/api/draft-from-mcp', { mcpEndpointId })).json();
       assert(draftById.ok === true && JSON.stringify(draftById.mcpEndpoint) === JSON.stringify({ id: mcpEndpointId, name: 'smoke' })
              && draftById.summary.mcpUrl === fakeRestricted.url,

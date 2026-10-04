@@ -1686,7 +1686,8 @@ test('the AuthZ matrix — identity posture: every /api route × every principal
     // POST /api/validate of examples/demo-skeleton.pack.yaml registers the
     // pack (pack.register, source = the pack's name: no ?source= hint) and
     // links it to the service and environment it names, created by him;
-    // the capture writes none (slice 5); RESET writes one pack.clear.
+    // the capture writes its journey.capture row (slice 5: the two pack ids,
+    // live false — Pack B is a file —, no scope); RESET writes one pack.clear.
     const oscar = variants.find((v) => v.name === 'oscar@acme').headers;
     const yaml = readFileSync(join(REPO, 'examples', 'demo-skeleton.pack.yaml'), 'utf8');
     const seq = await auditSeq(ws);
@@ -1699,13 +1700,17 @@ test('the AuthZ matrix — identity posture: every /api route × every principal
       ['environment.create', 'oscar', 'acme', 'demo-skeleton/prod', { via: 'register', pack: id }],
       ['pack.link', 'oscar', 'acme', id, { service: 'demo-skeleton', role: 'primary' }],
     ], 'the register\'s exact rows, by oscar, in acme');
-    const afterReg = await auditSeq(ws);
+    let afterReg = await auditSeq(ws);
     const again = await call(srv.base, PROBES['POST /api/validate'], { headers: { ...oscar, 'Content-Type': 'application/x-yaml' }, body: yaml });
     assert.equal(again.json?.registered?.id, id);
     assert.equal(await auditSeq(ws), afterReg, 'the same YAML again: the same id, a touch, no new row');
     const cap = await call(srv.base, ['POST', '/api/journeys/capture'], { headers: oscar, body: JSON.stringify({ name: 'authz-capture', packAId: id, packBId: id }) });
     assert.equal(cap.json?.ok, true, cap.text.slice(0, 200));
-    assert.equal(await auditSeq(ws), afterReg, 'the capture wrote no audit row (slice 5)');
+    assert.equal(cap.json.auditError, undefined, 'the capture\'s row was written (no auditError)');
+    assert.deepEqual(await auditRowsAfter(ws, afterReg), [
+      ['journey.capture', 'oscar', 'acme', 'authz-capture', { packA: id, packB: id, live: false, env: null, service: null, scopeMode: null }],
+    ], 'the capture: one journey.capture row by oscar, in acme');
+    afterReg = await auditSeq(ws);
     const wipe = await call(srv.base, ['DELETE', '/api/uploads'], { headers: oscar });
     assert.equal(wipe.json?.dropped, 1, wipe.text);
     assert.deepEqual(await auditRowsAfter(ws, afterReg), [['pack.clear', 'oscar', 'acme', null, { dropped: 1 }]], 'RESET: one pack.clear row; the service stays (no service.delete)');
