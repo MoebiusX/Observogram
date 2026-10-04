@@ -20,7 +20,15 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { boot, serve, childEnv, STRIP } from './fixtures/serve-child.mjs';
-import { readTaxonomyConfig, TAXONOMY_ENV } from './taxonomy.mjs';
+
+// Hermetic (§0): this process strips the children's list too, both spellings,
+// before any server module loads (hence the dynamic import).
+// server/test-hermetic-suites.mjs guards the shape.
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
+const { readTaxonomyConfig, TAXONOMY_ENV } = await import('./taxonomy.mjs');
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const FIXTURE = join(ROOT, 'tools', 'fixtures', 'taxonomy', 'taxonomy.json');

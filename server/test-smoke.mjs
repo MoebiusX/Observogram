@@ -11,10 +11,25 @@ import { join, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 
+import { SPEC_DIR, SPEC_VERSION } from '../tools/lib/validator.mjs';
+import { createServer } from 'node:http';
+
+// Hermetic (§0): a developer shell's store, identity, taxonomy, transport-hook
+// or brand variables never reach this process's imports — the children's STRIP
+// list (server/fixtures/serve-child.mjs imports no server code), both
+// spellings, BEFORE the suite sets its own posture and before any server
+// module loads. server/index.mjs runs initAuth() at import (the reverse-proxy
+// mode's contract is asserted there), so the server imports below are
+// dynamic: a static one is hoisted above this line and would read the shell.
+// server/test-hermetic-suites.mjs guards the shape.
+const { STRIP, boot } = await import('./fixtures/serve-child.mjs');
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
 // Redirect the pack workspace to a temp dir BEFORE the server boots, so
-// smoke-test registrations never pollute the repo's .observogram/. Workspace
-// resolution is lazy (read at start(), not at import), which is what makes
-// this ordering work despite the hoisted import below.
+// smoke-test registrations never pollute the repo's .observogram/; the store
+// lands there too (docs/STORE_PLAN.md slice 2).
 const SMOKE_WORKSPACE = mkdtempSync(join(tmpdir(), 'observogram-smoke-ws-'));
 process.env.OBSERVOGRAM_WORKSPACE = SMOKE_WORKSPACE;
 // This suite asserts the OPEN posture (every route reachable without a
@@ -25,27 +40,15 @@ process.env.OBSERVOGRAM_AUTH = 'off';
 // /healthz's composite build must come from the reader, not from a
 // BUILD override exported in the shell that runs the suite (the /healthz
 // vs /api/version assertions below compare the two). server/version.mjs
-// resolves on first request, so this still lands before it reads.
+// resolves on first request.
 delete process.env.OBSERVOGRAM_BUILD;
 delete process.env.TOMOGRAPH_BUILD;
-// Hermetic store (docs/STORE_PLAN.md slice 2): start() opens the store and
-// imports; a shell's OBSERVOGRAM_DB (or a seed / join-role knob) must not
-// leak in. The store lands in SMOKE_WORKSPACE. Read at start(), so these
-// land before it despite the hoisted import below.
-for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH', 'TRANSPORT_HOOK', 'TAXONOMY', 'TRUST_PROXY_AUTH',
-  'BRAND_FILE', 'BRAND_NAME', 'BRAND_SHORT_NAME', 'BRAND_TAGLINE', 'BRAND_LOGO_URL', 'BRAND_DOCS_URL', 'BRAND_FOOTER', 'BRAND_ACCENT', 'BRAND_ACCENT_DARK']) {
-  delete process.env[`OBSERVOGRAM_${k}`];
-  delete process.env[`TOMOGRAPH_${k}`];
-}
 
-import { start } from './index.mjs';
-import { boot } from './fixtures/serve-child.mjs';
-import { currentStore } from './store/db.mjs';
-import { runWithOrg } from './tenancy.mjs';
-import { listPacks } from './store/packs.mjs';
-import { listServices } from './store/services.mjs';
-import { SPEC_DIR, SPEC_VERSION } from '../tools/lib/validator.mjs';
-import { createServer } from 'node:http';
+const { start } = await import('./index.mjs');
+const { currentStore } = await import('./store/db.mjs');
+const { runWithOrg } = await import('./tenancy.mjs');
+const { listPacks } = await import('./store/packs.mjs');
+const { listServices } = await import('./store/services.mjs');
 
 const failures = [];
 function assert(cond, label, got, want) {

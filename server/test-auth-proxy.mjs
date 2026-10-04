@@ -32,12 +32,22 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { boot, serve, cli, childEnv, STRIP } from './fixtures/serve-child.mjs';
-import { ACK_REFUSAL, EXPOSED_REFUSAL, OIDC_REFUSAL, PROXY_ACK, PROXY_AUTH_ENV, duplicatedHeader, parseProxyAuthEnv, rolesOf } from './auth-proxy.mjs';
-import { hashPassword } from './auth.mjs';
-import { openRaw, prepare } from './store/db.mjs';
-import { isProxyIssuerKey, proxyIssuerKey } from './store/identity.mjs';
-import { resolveLogin, serverSignInMode } from './identity-admin.mjs';
-import { writeUsersFile } from './store/legacy-files.mjs';
+
+// Hermetic (§0): a developer shell's store or identity variables never reach
+// this process's imports — the children's STRIP list, both spellings, before
+// any server module loads; hence the dynamic imports (a static one is
+// hoisted above this line). server/test-hermetic-suites.mjs guards the shape.
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
+
+const { ACK_REFUSAL, EXPOSED_REFUSAL, OIDC_REFUSAL, PROXY_ACK, PROXY_AUTH_ENV, duplicatedHeader, parseProxyAuthEnv, rolesOf } = await import('./auth-proxy.mjs');
+const { hashPassword } = await import('./auth.mjs');
+const { openRaw, prepare } = await import('./store/db.mjs');
+const { isProxyIssuerKey, proxyIssuerKey } = await import('./store/identity.mjs');
+const { resolveLogin, serverSignInMode } = await import('./identity-admin.mjs');
+const { writeUsersFile } = await import('./store/legacy-files.mjs');
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const USERS_CLI = join(ROOT, 'tools', 'user-admin.mjs');

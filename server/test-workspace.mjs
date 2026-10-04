@@ -20,11 +20,19 @@ import { tmpdir } from 'node:os';
 import { createHarness } from '../tools/lib/harness.mjs';
 const { assert, report } = createHarness();
 
+// Hermetic (§0): the children's STRIP list, both spellings, before this
+// suite points its own workspace and store and before any server module
+// loads (serve-child.mjs imports no server code; the server imports below
+// are dynamic). server/test-hermetic-suites.mjs guards the shape.
+const { STRIP } = await import('./fixtures/serve-child.mjs');
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
 // Point the workspace at a fresh temp dir BEFORE first use — resolution is
 // lazy by design, exactly so tests can do this.
 const TMP = mkdtempSync(join(tmpdir(), 'observogram-ws-'));
 process.env.OBSERVOGRAM_WORKSPACE = TMP;
-delete process.env.TOMOGRAPH_WORKSPACE;
 // Tenancy is always on (docs/STORE_PLAN.md slice 2): the workspace root is
 // the org's root from the store, so the suite runs inside the default org
 // at '.'. It re-points its workspace below (TMP2, TMP3), so the store is
@@ -35,12 +43,6 @@ delete process.env.TOMOGRAPH_WORKSPACE;
 const DB_DIR = mkdtempSync(join(tmpdir(), 'observogram-ws-db-'));
 const DB_PATH = join(DB_DIR, 'observogram.db');
 process.env.OBSERVOGRAM_DB = DB_PATH;
-for (const k of ['BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH', 'TRUST_PROXY_AUTH',
-  'BRAND_FILE', 'BRAND_NAME', 'BRAND_SHORT_NAME', 'BRAND_TAGLINE', 'BRAND_LOGO_URL', 'BRAND_DOCS_URL', 'BRAND_FOOTER', 'BRAND_ACCENT', 'BRAND_ACCENT_DARK']) {
-  delete process.env[`OBSERVOGRAM_${k}`];
-  delete process.env[`TOMOGRAPH_${k}`];
-}
-delete process.env.TOMOGRAPH_DB;
 
 const {
   saveWorkspacePack, deleteWorkspacePack, listPackFiles, readPackFile, packFileStat, workspaceInfo,

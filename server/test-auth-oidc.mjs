@@ -106,24 +106,24 @@ issuer = `http://127.0.0.1:${idp.address().port}`;
 
 // ---------- boot the server in OIDC posture ----------
 
+// Hermetic (§0): a developer shell's store, identity, taxonomy, transport-hook
+// or brand variables never reach this process's imports — the children's STRIP
+// list (server/fixtures/serve-child.mjs imports no server code), both
+// spellings, BEFORE the suite sets its own posture and before any server
+// module loads (every server import below is dynamic: a static one is
+// hoisted above this line). server/test-hermetic-suites.mjs guards the shape.
+const { STRIP } = await import('./fixtures/serve-child.mjs');
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
+// Each block's database lives in its own workspace (docs/STORE_PLAN.md slice 2).
 const WORKSPACE = mkdtempSync(join(tmpdir(), 'observogram-auth-oidc-'));
 process.env.OBSERVOGRAM_WORKSPACE = WORKSPACE;
 process.env.OBSERVOGRAM_OIDC_ISSUER = issuer;
 process.env.OBSERVOGRAM_OIDC_CLIENT_ID = CLIENT_ID;
 process.env.OBSERVOGRAM_OIDC_ALLOW_HTTP = '1';
 process.env.OBSERVOGRAM_SESSION_SECRET = 'test-session-secret-0123456789-abcdef-XYZ';
-delete process.env.OBSERVOGRAM_OIDC_CLIENT_SECRET;
-delete process.env.OBSERVOGRAM_API_TOKEN;
-delete process.env.OBSERVOGRAM_USERS_FILE;
-delete process.env.OBSERVOGRAM_AUTH;
-delete process.env.TOMOGRAPH_AUTH;
-// Hermetic store (docs/STORE_PLAN.md slice 2): each block's database lives
-// in its own workspace.
-for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH', 'TRUST_PROXY_AUTH',
-  'BRAND_FILE', 'BRAND_NAME', 'BRAND_SHORT_NAME', 'BRAND_TAGLINE', 'BRAND_LOGO_URL', 'BRAND_DOCS_URL', 'BRAND_FOOTER', 'BRAND_ACCENT', 'BRAND_ACCENT_DARK']) {
-  delete process.env[`OBSERVOGRAM_${k}`];
-  delete process.env[`TOMOGRAPH_${k}`];
-}
 
 const { start } = await import('./index.mjs');
 const { currentStore } = await import('./store/db.mjs');

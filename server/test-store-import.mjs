@@ -14,9 +14,12 @@
  * own temp-file store.
  */
 
-for (const suffix of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH', 'USERS_FILE', 'WORKSPACE', 'OIDC_ISSUER']) {
-  delete process.env[`OBSERVOGRAM_${suffix}`];
-  delete process.env[`TOMOGRAPH_${suffix}`];
+// The children's STRIP list is this process's too (serve-child.mjs imports
+// no server code; server/test-hermetic-suites.mjs guards the shape).
+const { STRIP } = await import('./fixtures/serve-child.mjs');
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
 }
 
 const { test } = await import('node:test');

@@ -11,23 +11,23 @@ import { existsSync, mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// Hermetic (§0): a developer shell's store, identity, taxonomy, transport-hook
+// or brand variables never reach this process's imports — the children's STRIP
+// list (server/fixtures/serve-child.mjs imports no server code), both
+// spellings, BEFORE the suite sets its own posture and before any server
+// module loads (every server import below is dynamic: a static one is
+// hoisted above this line). server/test-hermetic-suites.mjs guards the shape.
+const { STRIP } = await import('./fixtures/serve-child.mjs');
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
 // Environment BEFORE the server module loads — initAuth reads it at import.
+// Each block's database lives in its own workspace (docs/STORE_PLAN.md slice 2).
 const WORKSPACE = mkdtempSync(join(tmpdir(), 'observogram-auth-local-'));
 process.env.OBSERVOGRAM_WORKSPACE = WORKSPACE;
 process.env.OBSERVOGRAM_API_TOKEN = 'ci-token-abcdef-0123456789';
 process.env.OBSERVOGRAM_API_TOKEN_LABEL = 'ci-bot';
-delete process.env.OBSERVOGRAM_OIDC_ISSUER;
-delete process.env.OBSERVOGRAM_SESSION_SECRET;
-delete process.env.OBSERVOGRAM_AUTH;
-delete process.env.TOMOGRAPH_AUTH;
-delete process.env.OBSERVOGRAM_ADMIN_PASSWORD;
-// Hermetic store (docs/STORE_PLAN.md slice 2): each block's database lives
-// in its own workspace; a shell's OBSERVOGRAM_DB or seed knobs never leak in.
-for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH', 'TRUST_PROXY_AUTH',
-  'BRAND_FILE', 'BRAND_NAME', 'BRAND_SHORT_NAME', 'BRAND_TAGLINE', 'BRAND_LOGO_URL', 'BRAND_DOCS_URL', 'BRAND_FOOTER', 'BRAND_ACCENT', 'BRAND_ACCENT_DARK']) {
-  delete process.env[`OBSERVOGRAM_${k}`];
-  delete process.env[`TOMOGRAPH_${k}`];
-}
 process.env.OBSERVOGRAM_USERS_FILE = join(WORKSPACE, 'users.json');
 
 import { createHarness } from '../tools/lib/harness.mjs';
