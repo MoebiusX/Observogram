@@ -337,6 +337,8 @@ test('POST /api/services/:id/environments: every refusal, its status and text, a
   for (const id of BAD_IDS) await refused(K, 'oscar', `/api/services/${id}/environments`, { name: 'prod' }, 400, SERVICE_ID_TEXT);
   for (const name of [undefined, '', 'x'.repeat(201), 3]) await refused(K, 'oscar', P, { name }, 400, WAYS.environmentName);
   await refused(K, 'oscar', P, { name: 'prod' }, 409, `environment "prod" of checkout-service exists (id ${ids.prod}) — PATCH /api/environments/${ids.prod} changes it`);
+  // Names are trimmed like owners: ' prod ' is the existing prod, not a second one.
+  await refused(K, 'oscar', P, { name: ' prod ' }, 409, `environment "prod" of checkout-service exists (id ${ids.prod}) — PATCH /api/environments/${ids.prod} changes it`);
   await refused(K, 'oscar', P, { name: 'qa', tier: 'gold' }, 400, WAYS.tier('gold'));
   for (const bindings of ['eu', [], { region: 1 }, { region: '' }, { ['k'.repeat(257)]: 'v' }, { region: 'v'.repeat(257) },
     Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`k${i}`, 'v']))]) {
@@ -397,7 +399,8 @@ test('GET /api/services/:id/environments and GET /api/environments/:id: the view
 test('PATCH /api/environments/:id: name, tier, bindings, endpoints, mcpEndpointId with `changed` and one row; a rename clash is 409; nothing differing → no row', async () => {
   const K = 'PATCH /api/environments/:id';
   const P = `/api/environments/${ids.prod}`;
-  const { json, rows } = await ok(K, 'oscar', P, { name: 'production', tier: 'tier-2', bindings: { region: 'eu-west-1' }, endpoints: {}, mcpEndpointId: null });
+  // The name is stored trimmed (' production ' → 'production').
+  const { json, rows } = await ok(K, 'oscar', P, { name: ' production ', tier: 'tier-2', bindings: { region: 'eu-west-1' }, endpoints: {}, mcpEndpointId: null });
   assert.deepEqual(json.changed, ['name', 'tier', 'bindings', 'endpoints']);   // mcpEndpointId: null on an unbound environment differs in nothing
   assert.deepEqual(stamped(json.environment), {
     id: ids.prod, serviceId: ids.checkout, name: 'production', tier: 'tier-2', effectiveTier: 'tier-2',

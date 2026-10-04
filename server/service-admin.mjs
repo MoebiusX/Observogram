@@ -117,9 +117,10 @@ export function parseOwners(owners) {
   });
 }
 
+// A name of 1–200 characters, trimmed like owners: ' prod ' is prod.
 function parseName(value, text) {
   if (!textOk(value, { max: TEXT_MAX })) invalid(text);
-  return value;
+  return value.trim();
 }
 
 function parseDescription(value) {
@@ -187,7 +188,7 @@ function changedFields(current, next) {
 // ---------- services ----------
 
 export function createServiceFromApi(db, actor, { slug, name, owners, tier, description } = {}) {
-  parseName(name, WAYS.serviceName);
+  name = parseName(name, WAYS.serviceName);
   const fields = {
     slug: parseSlug(slug, name), name, owners: parseOwners(owners), tier: parseTier(tier), description: parseDescription(description),
   };
@@ -236,7 +237,7 @@ export function createEnvironmentFromApi(db, actor, serviceId, { name, tier, bin
   return atomic(db, () => {
     const service = getService(db, serviceId);
     if (!service) missing(WAYS.noService(serviceId));
-    parseName(name, WAYS.environmentName);
+    name = parseName(name, WAYS.environmentName);
     const fields = {
       serviceId: service.id, name, tier: parseTier(tier), bindings: parseBindings(bindings), endpoints: parseEndpoints(endpoints),
       mcpEndpointId: parseMcpEndpointId(db, mcpEndpointId),
@@ -283,7 +284,7 @@ export function deleteEnvironmentFromApi(db, actor, id) {
 // ---------- MCP endpoints ----------
 
 export function createMcpEndpointFromApi(db, actor, { name, url, readTokenEnv } = {}) {
-  parseName(name, WAYS.mcpEndpointName);
+  name = parseName(name, WAYS.mcpEndpointName);
   return atomic(db, () => {
     const existing = listMcpEndpoints(db).find((ep) => ep.name === name);
     if (existing) refuse(WAYS.mcpEndpointExists(existing));
