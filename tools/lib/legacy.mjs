@@ -114,6 +114,14 @@ export function upconvertLegacyPack(legacy, opts = {}) {
     annotations[`legacy.artefact.${layer}.${item.id || 'item'}`] = JSON.stringify(item);
     mapped++;
   };
+  // A layered item that carries a `type` (a typed pack from another
+  // toolchain) keeps it as the declared type of the canonical symbol it maps
+  // to — `observogram.artefact.type.<symbol>` — which adapt() carries through
+  // as the artefact's top-level `type` for the taxonomy
+  // (tools/lib/artefact-classify.mjs). An item without one writes nothing.
+  const declareType = (symbol, item) => {
+    if (typeof item.type === 'string' && item.type.trim()) annotations[`observogram.artefact.type.${symbol}`] = item.type.trim();
+  };
 
   // ----- L1: SLIs / SLOs / error-budget policies -----
   const slis = [];
@@ -142,6 +150,7 @@ export function upconvertLegacyPack(legacy, opts = {}) {
       total: `sum(rate(http_requests_total{service="${service}"}[5m]))`,
     });
     scaffold(`slis.${id}`);   // good/total are placeholders — never Declared
+    declareType(`slis.${id}`, item);
     keep('L1', item);
   }
   if (!slis.length) {
@@ -161,6 +170,7 @@ export function upconvertLegacyPack(legacy, opts = {}) {
     const sli = slis[Math.min(i, slis.length - 1)].id;
     slos.push({ id, sli, objective: 0.99, window: '30d', error_budget_policy: ebpRef });
     scaffold(`slos.${id}`);   // objective/window are placeholders
+    declareType(`slos.${id}`, item);
     keep('L1', item);
   });
   if (!slos.length) {
@@ -199,6 +209,7 @@ export function upconvertLegacyPack(legacy, opts = {}) {
         storage[family] = { backend: slug(item.tool, 'storage'), backend_ref: undefined };
         delete storage[family].backend_ref;
         if (item.source === 'GAP') scaffold(`storage.${family}`);
+        declareType(`storage.${family}`, item);
         continue;
       }
     }
@@ -206,6 +217,7 @@ export function upconvertLegacyPack(legacy, opts = {}) {
     if (backends.some(b => b.id === id)) continue;
     backends.push({ id, signal: signalOf(item), product: slug(item.tool, 'backend') });
     if (item.source === 'GAP') scaffold(`telemetry.backends.${id}`);
+    declareType(`telemetry.backends.${id}`, item);
   }
 
   // ----- L3: recording rules + dashboards -----
@@ -226,11 +238,13 @@ export function upconvertLegacyPack(legacy, opts = {}) {
         source: `file://dashboards/${id}.json`,
       });
       scaffold(`dashboards.${id}`);
+      declareType(`dashboards.${id}`, item);
     } else {
       const name = `${metricSeg(service, 'svc')}:${metricSeg(item.title || item.id)}:legacy`;
       if (recordingRules.some(r => r.name === name)) continue;
       recordingRules.push({ name, expr: 'vector(1)' });
       scaffold(`queries.recording_rules[${recordingRules.length - 1}]`);   // expr is a placeholder
+      declareType(`queries.recording_rules[${recordingRules.length - 1}]`, item);
     }
   }
   if (!dashboards.length) {
@@ -254,6 +268,7 @@ export function upconvertLegacyPack(legacy, opts = {}) {
       ],
     });
     scaffold(`policy.burn_rate_alerts[${burnRateAlerts.length - 1}]`);   // windows are placeholders
+    declareType(`policy.burn_rate_alerts[${burnRateAlerts.length - 1}]`, item);
   });
   if (!burnRateAlerts.length) {
     burnRateAlerts.push({
@@ -272,6 +287,7 @@ export function upconvertLegacyPack(legacy, opts = {}) {
     keep('L4', item);
     routes.push({ severity: severityOf(item, i), channels: [channelOf(item, service)] });
     scaffold(`alerting.routes[${routes.length - 1}]`);   // channel values are placeholders
+    declareType(`alerting.routes[${routes.length - 1}]`, item);
   });
   if (!routes.length) {
     routes.push({ severity: 'SEV1', channels: [{ msteams: `#${service}-oncall` }] });
@@ -289,6 +305,7 @@ export function upconvertLegacyPack(legacy, opts = {}) {
       guardrails: { max_invocations_per_hour: 1, requires_human_above: 'SEV2', rollback_on_failure: true },
     });
     scaffold(`remediation[${remediation.length - 1}]`);   // guardrails are placeholders
+    declareType(`remediation[${remediation.length - 1}]`, item);
   });
 
   // ----- L5: synthetic checks (+ baselines stub, like the crawler) -----
@@ -305,14 +322,16 @@ export function upconvertLegacyPack(legacy, opts = {}) {
       on_fail_severity: 'SEV3',
     });
     scaffold(`validation.synthetic_checks.${id}`);   // target/interval are placeholders
+    declareType(`validation.synthetic_checks.${id}`, item);
   }
   const baselines = { mttd_target_p50: '15m', mttr_target_p50: '1d', review_cadence: 'monthly' };
   scaffold('baselines');
 
   // ----- GOV: governance items become imports (the `with` map is free-form,
   // so the original item rides along losslessly) -----
-  const imports = items(L.GOV).map((item) => {
+  const imports = items(L.GOV).map((item, i) => {
     keep('GOV', item);
+    declareType(`imports[${i}]`, item);
     return {
       ref: `legacy/${slug(item.id, 'gov')}`,
       with: { title: item.title || '', desc: item.desc || '', tool: item.tool || '', source: item.source || '' },

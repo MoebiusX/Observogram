@@ -61,6 +61,7 @@ Each `artefact` is:
   tags: string[],
   source: 'Declared' | 'Verified' | 'Scaffold',
                                           // 'Missing' added by Phase 3b conformance pass
+  type?: string,                         // the declared type, only when metadata.annotations["observogram.artefact.type.<symbol>"] names one (see "Id families and the classifier")
   defines?: string,                      // symbol it defines, e.g. "slis.api_availability"
   refs?: string[],                       // symbols it references (for cross-ref checker)
   spec: object,                          // raw canonical section/item (drawer detail)

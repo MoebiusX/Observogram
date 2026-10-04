@@ -6,9 +6,10 @@
   "root": "tools/lib",
   "modules": {
     "tools/lib/adapter.mjs": {
-      "sha256": "9e695294d167e964d8dad82b8cbe89c075cc2f0714efde5a34c0c621dbcd46d0",
-      "bytes": 31207,
+      "sha256": "692bfb391a895d9cd12befd56ea7cd1503984b6723094ff898b1f230e65da2d6",
+      "bytes": 33779,
       "exports": [
+        "DECLARED_TYPE_PREFIX",
         "adapt",
         "applyEnvironmentOverlay",
         "listEnvironments"
@@ -19,7 +20,12 @@
         "tools/lib/validator.mjs"
       ],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "adapt",
+        "applyEnvironmentOverlay",
+        "listEnvironments"
+      ]
     },
     "tools/lib/alert-routes.mjs": {
       "sha256": "f3f1c8c0d15eb274f6d5c7c1a6468044e3c78c55066a669f5494fd961bac091d",
@@ -518,8 +524,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/legacy.mjs": {
-      "sha256": "6e74f2b42b9f177ac5c7ae26df5dbfcb047df2dd9d7fcfca89d42cf5c5d65e62",
-      "bytes": 16072,
+      "sha256": "9dfd59186e16e3799255c24549c318b3c62be3fa0249e33c251709848255b508",
+      "bytes": 17224,
       "exports": [
         "isLegacyLayeredPack",
         "upconvertLegacyPack"
