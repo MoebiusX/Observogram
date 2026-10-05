@@ -73,8 +73,14 @@ export const FEATURES = [
   ['/api/journeys', 'Journeys'],
   ['/api/library', 'Build'],
   ['/api/admin', 'Administration'],
+  ['/api/waivers', 'Waivers'],                        // /api/waivers/:id/revoke
   ['/auth/', 'Sign-in'],
 ];
+// The waivers live on a service record (GAP batch 2, B3.2): a bundled pack
+// has none, so `GET`/`POST /api/services/:id/waivers` is the server's alone
+// — named here rather than under a '/api/services' prefix, which would claim
+// the record routes too (follow-up `B3.2-bundle-waivers` for a baked sidecar).
+const SERVICE_WAIVERS = /^\/api\/services\/[^/]+\/waivers(?:[/?]|$)/;
 // The per-pack sub-routes the server alone answers — `verdicts` for its
 // writes (PUT / DELETE; the GET is answered below with the empty document)
 // and `audit-report` (GAP batch 2, B3.5: its goes-blind section is the blast
@@ -85,6 +91,7 @@ const PACK_FEATURES = { retrofeed: 'Compare', 'deploy-bulk': 'Deploy', verdicts:
 export function featureOf(pathname) {
   const sub = /^\/api\/packs\/[^/]+\/([^/?]+)/.exec(pathname)?.[1];
   if (sub && PACK_FEATURES[sub]) return PACK_FEATURES[sub];
+  if (SERVICE_WAIVERS.test(pathname)) return 'Waivers';
   let best = null;
   for (const [prefix, name] of FEATURES) {
     if (pathname.startsWith(prefix) && (!best || prefix.length > best[0].length)) best = [prefix, name];

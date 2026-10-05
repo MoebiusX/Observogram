@@ -1661,7 +1661,8 @@ manifest, Compile (the catalogue, every artefact, every target) and **Export**
 server; `GET /api/packs/:id/verdicts` answers the empty document — a
 bundled pack is never registered, so that IS the server's answer). Everything
 the server alone can do — Scan a repo, Draft from MCP, uploads, Compare,
-Deploy, Journeys, Build, recording a Verdict, the Audit report (its goes-blind
+Deploy, Journeys, Build, recording a Verdict, Waivers (they live on a service
+record, which a bundled pack has none of), the Audit report (its goes-blind
 section needs the PromQL parser the bundle cannot inline), sign-in — answers
 `501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
 this studio is a static bundle built without one.' }`, which the studio shows

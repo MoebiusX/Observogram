@@ -729,6 +729,9 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   await expectDenied('/api/packs/p/verdicts/SLI-01', { method: 'DELETE' }, 'Verdicts');
   await expectDenied('/api/packs/p/audit-report', undefined, 'Audit report');
   await expectDenied('/api/packs/p/audit-report?format=html', undefined, 'Audit report');
+  await expectDenied('/api/services/1/waivers', undefined, 'Waivers');
+  await expectDenied('/api/services/1/waivers', { method: 'POST' }, 'Waivers');
+  await expectDenied('/api/waivers/7/revoke', { method: 'POST' }, 'Waivers');
   await expectDenied('/api/journeys', undefined, 'Journeys');
   await expectDenied('/api/library', undefined, 'Build');
   await expectDenied('/api/admin/join-role', undefined, 'Administration');
@@ -745,6 +748,9 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   assert.equal(featureOf('/api/packs/x/verdicts/SLI-01'), 'Verdicts');
   assert.equal(featureOf('/api/packs/x/verdicts'), 'Verdicts', 'the feature name; the GET itself is answered before the denial');
   assert.equal(featureOf('/api/packs/x/audit-report?format=html'), 'Audit report');
+  assert.equal(featureOf('/api/services/x/waivers'), 'Waivers', 'the service record route, not a /api/services prefix');
+  assert.equal(featureOf('/api/services/x'), 'This action');
+  assert.equal(featureOf('/api/waivers/x/revoke'), 'Waivers');
   assert.equal(featureOf('/api/packs/x/placeholders'), 'This action', 'placeholders is answered, not a feature');
   assert.equal(featureOf('/auth/login'), 'Sign-in');
   // /auth/me is the open posture; an unknown pack is 404 with the server's text.
