@@ -305,6 +305,9 @@ test('the CLI: refusals, exit codes, --strict, --quiet, --json, determinism', ()
     assert.equal(run(up, '--strict').status, 1);
     const q = run(up, '--quiet');
     assert.equal(q.status, 0); assert.equal(q.stdout.split('\n').filter(l => /^ {4}/.test(l)).length, 0, 'no row lines'); assert.match(q.stdout, /by source:/);
+    assert.doesNotMatch(q.stdout, /rubric @/, '--quiet omits the rubric line (it refers to the rows above)');
+    assert.deepEqual(q.stdout.split('\n').filter(Boolean).map(l => l.slice(0, 2)), ['✗ ', '  '], '--quiet: the headline and the counts line only');
+    assert.equal(run(up).stdout, r.stdout, 'the full output is unchanged');
     const j = run(up, '--json');
     assert.equal(j.status, 0); assert.equal(j.stderr, '');
     const doc = JSON.parse(j.stdout);

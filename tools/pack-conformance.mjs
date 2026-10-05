@@ -14,7 +14,7 @@
  *   node tools/pack-conformance.mjs <pack.yaml|pack.json> [...] [--json] [--strict] [--quiet]
  *     --json     one JSON document on stdout (shape below) instead of the summary
  *     --strict   exit 1 when any pack still carries a placeholder row (default: exit 0, rows are informational)
- *     --quiet    headline lines only (no rows)
+ *     --quiet    the headline and the counts line only (no rows, no rubric line)
  *
  *   exit 0  every pack read, canonical and schema-valid (placeholders may remain)
  *   exit 1  a pack is unreadable, not canonical, previous-format, or schema-invalid; or --strict and any pack has rows
@@ -42,7 +42,7 @@ const SCHEMA = JSON.parse(readFileSync(resolve(dirname(fileURLToPath(import.meta
 const USAGE = `usage: node tools/pack-conformance.mjs <pack.yaml|pack.json> [...] [--json] [--strict] [--quiet]
   --json     one JSON document on stdout instead of the summary
   --strict   exit 1 when any pack still carries a placeholder row (default: exit 0, rows are informational)
-  --quiet    headline lines only (no rows)
+  --quiet    the headline and the counts line only (no rows, no rubric line)
 exit 0  every pack read, canonical and schema-valid (placeholders may remain)
 exit 1  a pack is unreadable, not canonical, previous-format, or schema-invalid; or --strict and any pack has rows
 exit 2  usage (no file, unknown flag)
@@ -120,7 +120,7 @@ export function summaryText(entry, { quiet = false } = {}) {
     }
   }
   lines.push(`  by source: ${SOURCES.map(s => `${s} ${report.counts.bySource[s]}`).join(' · ')}    by state: ${STATES.map(s => `${s} ${report.counts.byState[s]}`).join(' · ')}`);
-  lines.push(`  rubric @ ${rubric.declaredTier}: MUST ${rubric.mustPassed}/${rubric.mustTotal} · score ${rubric.scorePercent}% — the rubric grades what is declared, placeholders included; the rows above are what still has to become real`);
+  if (!quiet) lines.push(`  rubric @ ${rubric.declaredTier}: MUST ${rubric.mustPassed}/${rubric.mustTotal} · score ${rubric.scorePercent}% — the rubric grades what is declared, placeholders included; the rows above are what still has to become real`);
   return lines.join('\n') + '\n';
 }
 
