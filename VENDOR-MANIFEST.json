@@ -801,6 +801,32 @@
       "npm": [],
       "changedSinceRelease": false
     },
+    "tools/lib/remediation-flow.mjs": {
+      "sha256": "2e77ce4c873dacb591bbf56520fbed45a74adc0cf91cf949fd492722c843d61a",
+      "bytes": 27163,
+      "exports": [
+        "BLOCKING_STATES",
+        "FLOW_STATES",
+        "LINK_TIERS",
+        "MAX_SUGGESTIONS",
+        "OTHER_SIDES",
+        "REMEDIATES_ANNOTATION_PREFIX",
+        "STEP_KINDS",
+        "alertStatesFromDiff",
+        "buildRemediationFlowModel",
+        "burnRuleNames",
+        "remediationTargets",
+        "resolveTrigger",
+        "slugKey",
+        "triggerSlug"
+      ],
+      "imports": [
+        "tools/lib/artefact-model.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
     "tools/lib/schedule-snippets.mjs": {
       "sha256": "122ba489bfaacadf592410a82d01a3c44ed10e4f6f947f33b1d740b1cd553b8f",
       "bytes": 15744,
