@@ -122,6 +122,44 @@
       "npm": [],
       "changedSinceRelease": false
     },
+    "tools/lib/audit-report.mjs": {
+      "sha256": "095ab15152f19cccb7060da8445e5a3502710771acc8be76935b02ba87720f93",
+      "bytes": 39301,
+      "exports": [
+        "AUDIT_REPORT_VERSION",
+        "CLAUSE_FAMILIES",
+        "COVERAGE_STATUSES",
+        "DEFAULT_RISK_TOP",
+        "L4_SUBGROUPS",
+        "LAYER_ORDER",
+        "REPORT_CSS",
+        "RISK_TOP_MAX",
+        "SOURCES",
+        "VERDICT_STATES",
+        "WAIVER_STATUSES",
+        "assessmentSummary",
+        "auditReportFilename",
+        "buildAuditReport",
+        "coverageByFamily",
+        "flattenArtefacts",
+        "goesBlindRisks",
+        "placeholdersOf",
+        "renderAuditReportHtml",
+        "responsePath",
+        "splitClauses",
+        "waiverSummary"
+      ],
+      "imports": [
+        "tools/lib/artefact-classify.mjs",
+        "tools/lib/blast-radius.mjs",
+        "tools/lib/brand.mjs",
+        "tools/lib/pack-conformance.mjs",
+        "tools/lib/remediation-flow.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
     "tools/lib/backend-products.mjs": {
       "sha256": "f63099877b804e06c90520df63afce5e6ca72ee938b6fdda9da2f1ae7631783e",
       "bytes": 8470,

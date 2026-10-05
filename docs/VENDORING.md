@@ -38,6 +38,7 @@ prose contracts that follow.
 | [`tools/lib/pack-conformance.mjs`](../tools/lib/pack-conformance.mjs) | imports `waivers.mjs` (which imports `conformance.mjs`); no Node APIs | the placeholder report — `packConformance`, `scaffoldMarkers`, `parseSymbol` / `resolveSymbol`, `SYMBOL_FAMILIES`, `PLACEHOLDER_FIELDS`; `SCAFFOLD_PREFIXES` is a pinned copy of the adapter's three marker prefixes |
 | [`tools/lib/waivers.mjs`](../tools/lib/waivers.mjs) | imports `conformance.mjs` | waivers (GAP batch 2) — `normalizeWaiver`, `waiverState` / `expiresInDays` / `waiverView`, `matchesFinding`, `applyWaiversToFindings` (the findings seam), `applyWaiversToConformance` (the overlay: the same report object without an open waiver), `readWaiverFile` (the sidecar) |
 | [`tools/lib/remediation-flow.mjs`](../tools/lib/remediation-flow.mjs) | imports `artefact-model.mjs` (`classify`, `identityKeyOf`) | the diagnose → remediate flow (GAP batch 2) — `buildRemediationFlowModel({ pack, diff, liveAnnotations, otherSide })`: a remediation's trigger resolved to its alert artefacts (`observogram.remediates.*` annotation, rule name, compiled burn-rule name, SLO — `resolveTrigger`, `remediationTargets`, `burnRuleNames`, `slugKey` / `triggerSlug`), the alerts' states from the comparison (`alertStatesFromDiff`), the next steps; pure, no clock, never throws |
+| [`tools/lib/audit-report.mjs`](../tools/lib/audit-report.mjs) | imports `artefact-classify.mjs`, `blast-radius.mjs`, `brand.mjs`, `pack-conformance.mjs`, `remediation-flow.mjs`; no Node APIs | the service audit report (GAP batch 2) — `buildAuditReport` (the document), the section builders, `renderAuditReportHtml` (the first standalone document over `design-tokens.css` + `design-kit.css`), `auditReportFilename`; the traceability graph arrives as a shape |
 | [`tools/lib/legacy.mjs`](../tools/lib/legacy.mjs) | imports `pack-conformance.mjs` | the layered-JSON upconvert and the merge — `isLegacyLayeredPack`, `upconvertLegacyPack` (→ `{ canonical, report, provenance }`), `mergeUpconvert`; copy the two together |
 | [`tools/lib/stack-evidence.mjs`](../tools/lib/stack-evidence.mjs) | imports `contracts/stack-self-metrics.mjs` only | pure history helpers over journey run records — `stackSeries`, `latestByFamily`, `stackSummary`, `stackPostureBudget`, `nonzeroRuns`, `formatStackValue`, `stackOutcomeLabel`; explicit inputs, no Node APIs, every output a point-in-time signal |
 | [`tools/lib/contracts/stack-self-metrics.mjs`](../tools/lib/contracts/stack-self-metrics.mjs) | pure data + lookups | the stack self-metric alias table `stack-evidence.mjs` orders by — copy the two together |
@@ -228,7 +229,7 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
      tools/lib/promql-canon.mjs tools/lib/promql.mjs \
      tools/lib/protocols.mjs \
      tools/lib/stack-evidence.mjs tools/lib/contracts/stack-self-metrics.mjs \
-     tools/lib/blast-radius.mjs tools/lib/chain-history.mjs \
+     tools/lib/blast-radius.mjs tools/lib/chain-history.mjs tools/lib/audit-report.mjs \
      studio/diagnostic-grade.mjs studio/artifact-model.mjs \
      studio/constants.mjs studio/verdict-ui.mjs studio/verdict-ui.css \
      studio/compare-catalog.mjs studio/host.mjs studio/proto-synthesis.mjs \
