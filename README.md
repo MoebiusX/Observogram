@@ -883,9 +883,13 @@ are table rows like the services': written in the transaction of the
 change, by the repository. `verdict.set` on target `artefact`
 `<pack>/<artefact>` with `{ pack, artefact, family, from, to, reason }`
 (`from` null for a first record; the reason cut to 200); `verdict.clear`
-with `{ pack, artefact, from }`. A verdict cascades with its pack (an
-eviction, `DELETE /api/uploads`, the rehydrate's prune) without a row of
-its own.
+with `{ pack, artefact, from }`; `verdict.carry` on target `pack` (the new
+pack id) with `{ from, kept, dropped, droppedCount }` when a re-upload under
+the same label replaced a pack that held verdicts — written by the register
+routes (`POST /api/validate`, `/api/crawl`, `/api/crawl-github`,
+`/api/draft-from-mcp`, `/api/library/register`) between `pack.register` and
+the link rows, and only then. A verdict cascades with its pack (an eviction,
+`DELETE /api/uploads`, the rehydrate's prune) without a row of its own.
 
 **The file-first rows.** The deploy routes, the journey capture and run,
 and the live refresh change a file of the org's, not a table, so their row

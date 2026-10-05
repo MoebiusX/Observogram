@@ -39,11 +39,12 @@ export const MODES = Object.freeze(['local', 'oidc', 'proxy', 'off']);
 
 // A route that registers a pack (server/pack-registry.mjs): the pack's row
 // (pack.register, or pack.update for the same content under another label
-// or source), the quick-start dedup (pack.replace), the cap (pack.evict),
+// or source), the quick-start dedup (pack.replace — with verdict.carry when
+// the replaced pack held verdicts, GAP batch 2), the cap (pack.evict),
 // and the reconcile of its service links (pack.link / pack.unlink, with
 // service.create / environment.create for the rows it names when absent).
 const PACK_REGISTER = Object.freeze([
-  'pack.register', 'pack.update', 'pack.replace', 'pack.evict', 'pack.link', 'pack.unlink', 'service.create', 'environment.create',
+  'pack.register', 'pack.update', 'pack.replace', 'pack.evict', 'pack.link', 'pack.unlink', 'service.create', 'environment.create', 'verdict.carry',
 ]);
 
 export const ROUTES = Object.freeze({

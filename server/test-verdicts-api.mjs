@@ -56,6 +56,8 @@ const { start } = await import('./index.mjs');
 const { currentStore, closeStore, prepare } = await import('./store/db.mjs');
 const { routeEntry } = await import('./route-table.mjs');
 const { WAYS } = await import('./verdict-admin.mjs');
+const { registerPack } = await import('./pack-registry.mjs');
+const { runWithOrg } = await import('./org-context.mjs');
 const { SPEC_DIR } = await import('../tools/lib/validator.mjs');
 const { parse: parseYaml } = await import('../tools/lib/mini-yaml.mjs');
 const { adapt } = await import('../tools/lib/adapter.mjs');
@@ -227,6 +229,65 @@ test('a re-upload of the same content is the same pack id: the verdicts stay; DE
   await refused(K, 'oscar', `/api/packs/${ids.pay}/verdicts/SLI-01`, 404, WAYS.noVerdict(ids.pay, 'SLI-01'));
   const after = await ok('GET /api/packs/:id/verdicts', 'vera', `/api/packs/${ids.pay}/verdicts`);
   assert.deepEqual(after.json.summary, { artefacts: 84, trusted: 1, suspect: 0, failed: 0, unreviewed: 83, orphaned: 0 });
+});
+
+// ---------- the carry (a label re-registration) ----------
+
+test('the quick-start dedup carries verdicts: the same label on new content writes pack.replace, pack.register, then one verdict.carry — a verdict whose artefact kept its identity lands on the new id (carriedFrom), one whose artefact is gone is dropped and counted', async () => {
+  const canonical = parseYaml(PAY_YAML);
+  const v1 = { ...canonical, metadata: { ...canonical.metadata, name: 'carry-pay', version: '1.0.0', bindings: { ...canonical.metadata.bindings, service: 'carry-pay' } } };
+  let first;
+  runWithOrg('acme', () => { first = registerPack(db, 'oscar', { canonical: v1, source: 'quick-start', label: 'Carry' }); });
+  const adapted = adapt(v1);
+  const lastSli = adapted.layers.L1.filter((a) => a.id.startsWith('SLI-')).at(-1);
+  const K = 'PUT /api/packs/:id/verdicts/:artefact';
+  await ok(K, 'oscar', `/api/packs/${first}/verdicts/SLI-01`, { status: 'trusted', reason: 'reviewed in v1' });
+  await ok(K, 'ada', `/api/packs/${first}/verdicts/${lastSli.id}`, { status: 'suspect' });
+  await ok(K, 'ada', `/api/packs/${first}/verdicts/SLO-01`, { status: 'failed', reason: 'budget never met' });
+  // v2: a new version, the last SLI gone (its SLO stays; the SLO's behavioural identity is its id).
+  const v2 = { ...v1, metadata: { ...v1.metadata, version: '2.0.0' }, spec: { ...v1.spec, slis: v1.spec.slis.slice(0, -1) } };
+  const seq = seqNow();
+  let second;
+  runWithOrg('acme', () => { second = registerPack(db, 'oscar', { canonical: v2, source: 'quick-start', label: 'Carry' }); });
+  assert.notEqual(second, first);
+  const rows = rowsAfter(seq);
+  const carried = [`L1/SLI-01`, `L1/SLO-01`];
+  assert.deepEqual(rows.slice(0, 3), [
+    ['pack.replace', 'oscar', 'acme', 'pack', first, { label: 'Carry', replacedBy: second }],
+    ['pack.register', 'oscar', 'acme', 'pack', second, { label: 'Carry', source: 'quick-start' }],
+    ['verdict.carry', 'oscar', 'acme', 'pack', second, { from: first, kept: 2, dropped: [rows[2][5].dropped[0]], droppedCount: 1 }],
+  ], 'pack.replace, pack.register, then the carry — before the links');
+  assert.match(rows[2][5].dropped[0], /^sli::/, 'the dropped key is the gone SLI\'s identity key');
+  assert.ok(rows.slice(3).every((r) => ['pack.link', 'pack.unlink', 'service.create', 'environment.create'].includes(r[0])), `then the links: ${rows.slice(3).map((r) => r[0])}`);
+  for (const [action] of rows) assert.ok(routeEntry('POST /api/validate').audit.includes(action), `${action} is listed for a register route`);
+  const doc = await ok('GET /api/packs/:id/verdicts', 'vera', `/api/packs/${second}/verdicts`);
+  assert.deepEqual(doc.json.verdicts.map((v) => [v.artefact, v.key, v.status, v.reason, v.actor, v.carriedFrom]), [
+    ['SLI-01', carried[0], 'trusted', 'reviewed in v1', 'oscar', first],
+    ['SLO-01', carried[1], 'failed', 'budget never met', 'ada', first],
+  ], 'the reviewer and the reason travel; carriedFrom names the old pack');
+  assert.equal(doc.json.summary.unreviewed, doc.json.summary.artefacts - 2);
+  await refused('GET /api/packs/:id/verdicts', 'vera', `/api/packs/${first}/verdicts`, 404, `unknown pack: ${first}`);
+  assert.equal(prepare(db, 'SELECT count(*) AS n FROM verdicts WHERE pack_id = ?').get(first).n, 0, 'the old rows cascaded with the old pack');
+  // A reviewer's own record on the new pack clears the carry mark.
+  const own = await ok(K, 'oscar', `/api/packs/${second}/verdicts/SLI-01`, { status: 'trusted', reason: 'reviewed in v2' });
+  assert.deepEqual([own.json.changed, own.json.verdict.carriedFrom], [['reason'], null]);
+  ids.carry = second;
+});
+
+test('a replace of a pack without verdicts writes no carry row: pack.replace, pack.register, the links — exactly as before GAP batch 2', async () => {
+  const canonical = parseYaml(PAY_YAML);
+  const v1 = { ...canonical, metadata: { ...canonical.metadata, name: 'plain', version: '1.0.0', bindings: { ...canonical.metadata.bindings, service: 'plain' } } };
+  const v2 = { ...v1, metadata: { ...v1.metadata, version: '2.0.0' } };
+  let first;
+  let second;
+  runWithOrg('acme', () => { first = registerPack(db, 'oscar', { canonical: v1, source: 'quick-start', label: 'Plain' }); });
+  const seq = seqNow();
+  runWithOrg('acme', () => { second = registerPack(db, 'oscar', { canonical: v2, source: 'quick-start', label: 'Plain' }); });
+  assert.deepEqual(rowsAfter(seq), [
+    ['pack.replace', 'oscar', 'acme', 'pack', first, { label: 'Plain', replacedBy: second }],
+    ['pack.register', 'oscar', 'acme', 'pack', second, { label: 'Plain', source: 'quick-start' }],
+    ['pack.link', 'oscar', 'acme', 'pack', second, { service: 'plain', role: 'primary' }],
+  ]);
 });
 
 test('DELETE /api/uploads drops the pack and, with it, its verdicts (the cascade): the id is unknown afterwards', async () => {
