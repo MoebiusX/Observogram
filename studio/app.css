@@ -4952,6 +4952,9 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
   border-color: var(--ink-4);
   background: var(--hover);
 }
+.home-alt-btn.is-unavailable, .home-mcp-connect-btn.is-unavailable { opacity: .6; cursor: not-allowed; }
+.home-alt-btn.is-unavailable:hover { border-color: var(--line); background: var(--card); }
+.home-mcp-connect-btn.is-unavailable:hover { transform: none; filter: none; }
 .home-alt-key {
   font: 600 14px/1 var(--mono);
   color: var(--ink-4);
@@ -8113,6 +8116,9 @@ body.chrome-observa .disco {
 .home-choice-card.is-check:hover { border-color: var(--obs-cyan); box-shadow: 0 0 22px color-mix(in srgb, var(--obs-cyan) 22%, transparent); }
 .home-choice-card.is-build:hover { border-color: var(--BLD); box-shadow: 0 0 22px color-mix(in srgb, var(--BLD) 22%, transparent); }
 .home-choice-card:active { transform: translateY(1px); }
+/* Drawn, not removed: a journey the reader's rank cannot start (the reason is a why-line inside it, Services zone). */
+.home-choice-card.is-unavailable { opacity: .6; cursor: not-allowed; }
+.home-choice-card.is-unavailable:hover, .home-choice-card.is-unavailable:active { border-color: var(--line); box-shadow: none; transform: none; }
 .home-choice-key { font: 600 16px/1 var(--mono); color: var(--ink-4); }
 .home-choice-card.is-build .home-choice-key { color: var(--BLD); }
 .home-choice-card.is-check .home-choice-key { color: var(--obs-cyan); }
@@ -8983,6 +8989,80 @@ select.build-edit-input { appearance: auto; }
 .svc-gate-new:hover { color: var(--ink); border-bottom-color: var(--CMP); }
 .svc-gate-actions { display: flex; flex-wrap: wrap; gap: 8px 22px; justify-content: center; }
 .svc-gate-actions .svc-gate-new { margin-top: 26px; }
+
+/* The record card (one per row of the services table): the slug in the mono, one meta line, one row per
+   environment with its verdict pill. A pill says its state in words; the tint and the left border repeat it,
+   never carry it alone — pass on the L3 tint, placeholders on the L1 tint (never green), a base grade and
+   "no verdict" on the hairline tint, fail on the L4 tint. Text is --ink-2 / --ink-3 throughout (the ratios on
+   the tints are recorded beside the scan, tools/test-build-model.mjs). */
+.svc-card { display: flex; flex-direction: column; gap: 4px; }
+.svc-card .svc-gate-name { margin-bottom: 0; }
+.svc-card-slug {
+  display: block;
+  font: 12.5px/1.3 var(--mono);
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.svc-card-envs {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.svc-env {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  font-size: 13px;
+}
+.svc-env-name {
+  flex: 0 0 auto;
+  min-width: 56px;
+  font: 600 12.5px/1.4 var(--mono);
+  color: var(--ink-2);
+}
+.svc-env-none { color: var(--ink-3); }
+.svc-verdict {
+  display: inline-block;
+  padding: 2px 8px 2px 7px;
+  border-radius: var(--r-md);
+  border-left: 3px solid var(--line);
+  background: var(--line-2);
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+.svc-verdict.is-pass { background: var(--L3-tint); border-left-color: var(--pass-border); }
+.svc-verdict.is-placeholder { background: var(--L1-tint); border-left-color: var(--warn); }
+.svc-verdict.is-base { background: var(--line-2); border-left-color: var(--ink-3); }
+.svc-verdict.is-fail { background: var(--L4-tint); border-left-color: var(--fail-border); }
+.svc-verdict.is-none, .svc-verdict.is-loading, .svc-verdict.is-error { color: var(--ink-3); background: var(--line-2); }
+.svc-verdict-detail { font-size: 11.5px; color: var(--ink-3); }
+.svc-card .svc-gate-activity { margin-top: 8px; }
+.svc-status {
+  margin: 0 0 14px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+.svc-status .ux-secondary-btn { margin-left: 8px; }
+/* The reason a control cannot be used by this rank, inside the control it explains. */
+.svc-why {
+  display: block;
+  margin-top: 6px;
+  font: italic 12.5px/1.4 var(--serif);
+  color: var(--ink-3);
+}
+.svc-catalogue { margin-top: 22px; }
+.svc-catalogue .home-pick-row { width: 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+  .svc-card { transition: none; animation: none; }
+}
 
 /* The no-org home: a signed-in user in no organisation sees the server's refusal (a ux-kit empty state) and a
    hint in --ink-3 — the same column as the gate, nothing else on the screen. */

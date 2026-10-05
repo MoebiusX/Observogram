@@ -31,7 +31,7 @@ import {
 } from './focus.mjs';
 import { escapeHtml, toast, fmtRelative, installDialogFocusTrap, downloadText } from './util.mjs';
 import {
-  personalName, announce, parseRecentServices, orderServicesByRecent,
+  personalName, announce, parseRecentServices,
 } from './ux-kit.mjs';
 import { renderSchemaView } from './schema-view.mjs';
 import { renderConformanceView } from './conformance-view.mjs';
@@ -47,8 +47,9 @@ import { catalogToDeployManifest } from './artifact-model.mjs';
 import { computeDeployTransitions } from './verify-deploy.mjs';
 import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-view.mjs';
 import { initHost } from './host.mjs';
-import { recentServicesKey, buildNoOrgModel } from './services-model.mjs';
-import { renderNoOrgHome } from './services-view.mjs';
+import { recentServicesKey, buildNoOrgModel, buildServicesHomeModel, accessModel, servicesStatusOf, packForService } from './services-model.mjs';
+import { loadOrgs, loadServices, verdictLoader } from './services-api.mjs';
+import { renderNoOrgHome, renderServicesHome, markUnavailable } from './services-view.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
@@ -965,7 +966,7 @@ async function handleFile(file) {
       // Refresh the catalog so the picker shows the new uploaded pack
       // alongside the file-backed ones. Pack B picker reads the same
       // catalog so it's available there too.
-      await loadCatalog();
+      await refreshCatalogue();
     }
     state.selectedService = serviceKeyForPack(state.catalog.find(p => p.id === state.selectedPackId))
       || normalizeServiceKey(state.pack?.meta?.service)
@@ -1564,12 +1565,17 @@ async function boot() {
       // sentence as is, under the chrome — not the API-unreachable screen.
       // GET /api/orgs is not attempted (it would refuse the same way).
       applyModeChrome();
-      renderNoOrgHome($('#layer-view'), buildNoOrgModel({ identity: state.identity, error: e, chromeName: state.brand.chrome.name }), noOrgHost);
+      renderNoOrgHome($('#layer-view'), buildNoOrgModel({ identity: state.identity, error: e, chromeName: state.brand.chrome.name }), servicesHost);
       return;
     }
     document.body.innerHTML = `<pre class="json" style="margin:48px;max-width:800px">${escapeHtml(state.brand.chrome.apiUnreachable)}\n\n${escapeHtml(e.message)}\n\nMake sure the server is running: \`node server/index.mjs\` or \`npm run serve\`.</pre>`;
     return;
   }
+  // The services axis (STORE_PLAN §6, slice 6a): the rank the guard applies
+  // here (GET /api/orgs) and the services table (GET /api/services), read
+  // once the catalogue answered — so a user in no org never reaches them.
+  // Both viewer routes; a bundle's 501 leaves the derived tiles, silently.
+  await Promise.all([refreshAccess(), refreshServices()]);
 
   setupUpload();
   setupTheme();
@@ -1658,7 +1664,11 @@ function goHome() {
   // you working on?", not the marketing hero. The hero stays for local
   // mode and for true cold starts (no services yet); the gate links to
   // it for "start something new".
-  state.homeVariant = (state.identity?.authenticated && serviceCatalogue({ ownOnly: true }).length) ? 'gate' : 'hero';
+  // The gate opens on service records in every posture (the registry writes
+  // them whoever registered — a developer's `npm run dev` sees cards after
+  // the first scan), and on derived services for a signed-in user where the
+  // table is unavailable (a bundle, a failed read).
+  state.homeVariant = ((state.services?.length > 0) || (state.identity?.authenticated && serviceCatalogue({ ownOnly: true }).length)) ? 'gate' : 'hero';
   applyModeChrome();
   if (state.homeVariant === 'gate') renderServiceGate();
   else renderHomeView();
@@ -1741,51 +1751,137 @@ function forgetRecentServices() {
   } catch { /* storage unavailable */ }
 }
 
-// A tile carries what tells two services apart: environments, packs and
-// drafts, tier, when it was last opened, and the one issue worth knowing.
-function serviceTileHtml(s, openedAt) {
-  const packs = [
-    s.packCount ? `${s.packCount} pack${s.packCount === 1 ? '' : 's'}` : '',
-    s.liveCount ? `${s.liveCount} live draft${s.liveCount === 1 ? '' : 's'}` : '',
-  ].filter(Boolean).join(' · ') || 'no packs';
-  const envs = (s.environments || []).join(', ');
-  const tiers = (s.tiers || []).join(', ');
-  const issue = !s.packCount && s.liveCount ? 'Live draft only — no repository pack to compare with' : '';
-  return `
-    <button type="button" class="svc-gate-card" data-service="${escapeHtml(s.key)}"
-            data-search="${escapeHtml(`${s.label} ${envs} ${tiers}`.toLowerCase())}">
-      <span class="svc-gate-name">${escapeHtml(s.label)}</span>
-      <span class="svc-gate-meta">${escapeHtml([envs, packs, tiers].filter(Boolean).join(' · '))}</span>
-      <span class="svc-gate-activity">${openedAt ? `Opened ${escapeHtml(fmtRelative(openedAt))}` : 'Not opened here yet'}</span>
-      ${issue ? `<span class="svc-gate-issue">${escapeHtml(issue)}</span>` : ''}
-    </button>`;
+// ---------- the services table, the rank, the catalogue refresh ----------
+
+// GET /api/orgs → what this browser may do in the active org and the org's
+// name (services-model.mjs accessModel). The call failing is not an error
+// the home shows: the /auth/me memberships are the fallback, and a bundle's
+// 501 is the static posture. Logs nothing (the bundle smoke fails on a
+// console.error).
+async function refreshAccess() {
+  let orgs = null;
+  let orgsError = null;
+  try { orgs = await loadOrgs(); }
+  catch (e) { orgsError = e; }
+  state.access = accessModel({ orgs, identity: state.identity, activeOrg: getActiveOrg(), orgsError });
+  state.orgName = state.access.orgName;
 }
 
-// The check branch's next step: recent services first, a search, then the
-// sources a pack can come from (filled in by the caller).
-function homeCheckHtml(services, open) {
-  const opened = recentServices();
-  const ordered = orderServicesByRecent(services, opened);
-  const anyRecent = services.some(s => opened[s.key]);
-  return `
-    <div class="home-check" id="home-check"${open ? '' : ' hidden'}>
-      ${services.length ? `
-      <div class="home-check-head">
-        <h2 class="home-check-title" id="svc-gate-which">${anyRecent ? 'Recent services' : 'Your services'}</h2>
-        <label class="home-check-search">
-          <span class="sr-text">Search services</span>
-          <input type="search" id="home-service-search" placeholder="Search by service, environment or tier" autocomplete="off" aria-controls="home-service-grid">
-        </label>
-      </div>
-      <div class="svc-gate-grid" id="home-service-grid">
-        ${ordered.map(s => serviceTileHtml(s, opened[s.key])).join('')}
-      </div>
-      <p class="home-check-none" id="home-service-none" role="status" hidden>No service matches that search.</p>` : `
-      <p class="home-check-empty">No services yet. Bring a pack in from one of the sources below.</p>`}
-      <h2 class="home-check-title home-check-sources-title">Import or scan another source</h2>
-      <div class="home-sources" id="home-sources"></div>
-    </div>`;
+// GET /api/services → state.services, or null with the reason in
+// state.servicesStatus (static · denied · error). Never throws, logs nothing.
+async function refreshServices() {
+  try {
+    state.services = await loadServices();
+    state.servicesStatus = { kind: 'ok', error: null };
+  } catch (e) {
+    state.services = null;
+    state.servicesStatus = servicesStatusOf(e);
+  }
 }
+
+// Every register path refreshes the catalogue; the services table follows
+// it (a register writes service rows) and the verdict cache is dropped (a
+// new primary pack changes what a card grades). loadCatalog()'s own failure
+// still propagates as it did; the table's never does.
+async function refreshCatalogue() {
+  await loadCatalog();
+  state.serviceVerdicts = {};
+  await refreshServices();
+}
+
+// The home's model from the state (services-model.mjs buildServicesHomeModel):
+// the table, the rank, the catalogue and the derived services as of now.
+function homeServicesModel() {
+  return buildServicesHomeModel({
+    status: state.servicesStatus, services: state.services, catalog: state.catalog, examples: state._examplesCache || [],
+    derived: serviceCatalogue({ ownOnly: true }), verdicts: state.serviceVerdicts, opened: recentServices(),
+    access: state.access, orgName: state.orgName, isLiveAggregatePack,
+  });
+}
+
+// The verdict per environment on the cards on screen: the current primary
+// pack's conformance report at the environment's name, fetched lazily and
+// pooled (four in flight), cached for the session in state.serviceVerdicts.
+// One repaint of the services section per settled batch — and only while
+// the home is still on screen (a settled report never repaints a page the
+// user left). A failed report reads "Unavailable" with the parsed refusal.
+const homeVerdicts = verdictLoader();
+function loadHomeVerdicts(model) {
+  const wanted = model.cards.flatMap(c => c.envs).filter(e => e.verdict.state === 'loading' && e.packId && e.key && !(e.key in state.serviceVerdicts));
+  if (!wanted.length) return;
+  Promise.allSettled(wanted.map(e => homeVerdicts.load(e.packId, e.name)
+    .then(report => { state.serviceVerdicts[e.key] = report; }, err => { state.serviceVerdicts[e.key] = { error: err?.message || 'no answer' }; })))
+    .then(() => { if (state.mode === 'home') repaintHomeServices(); });
+}
+
+// Repaint the services section in place (not the whole home: the import
+// sources below it keep what was typed), keeping the search as typed and
+// the focus where it was.
+function repaintHomeServices() {
+  const section = $('#home-services');
+  if (!section) return;
+  const search = section.querySelector('#home-service-search');
+  const q = search?.value ?? '';
+  const focused = search && document.activeElement === search;
+  const model = homeServicesModel();
+  renderServicesHome(section, model, servicesHost);
+  const again = section.querySelector('#home-service-search');
+  if (again && q) { again.value = q; again.dispatchEvent(new Event('input')); }
+  if (focused) again?.focus({ preventScroll: true });
+  loadHomeVerdicts(model);
+}
+
+// A refused affordance explains itself when activated: the reason the rank
+// cannot use it, as the server's effective role words it.
+function explainUnavailable(reason) {
+  const text = reason ? reason.charAt(0).toUpperCase() + reason.slice(1) : 'Not available for your role here.';
+  toast(text);
+  announce(text);
+}
+
+// A record card opens the service: until the service page lands, its current
+// primary pack (the one resolver every entry point shares, services-model.mjs
+// packForService) opens in Discover at its first environment — the same
+// pack today's tile opened. A record without a pack says so, for the rank
+// that reads it, and records nothing.
+function openServiceRecord(id) {
+  const service = (state.services || []).find(s => s.id === id);
+  if (!service) return;
+  const { pack } = packForService(service, state.catalog, { isLiveAggregatePack });
+  if (!pack) {
+    toast(state.access?.canWrite === false
+      ? `No pack is linked to ${service.name} yet — an operator registers one (Build, a scan, a draft or an upload).`
+      : `No pack is linked to ${service.name} yet. Build one, or import or scan one under "Import or scan another source".`);
+    return;
+  }
+  recordRecentService(service.slug);
+  state.selectedService = service.slug;
+  enterAnalyzeMode(pack.id, defaultEnvFor(pack.id));
+}
+
+// A catalogue pack (an example, a file-backed entry) opens as Pack A; an
+// example lives only in its cache, so it is promoted into the catalogue first.
+function openCataloguePack(id) {
+  if (!id) return;
+  if (!(state.catalog || []).find(p => p.id === id)) {
+    const ex = (state._examplesCache || []).find(p => p.id === id);
+    if (ex) (state.catalog = state.catalog || []).push(ex);
+  }
+  enterAnalyzeMode(id, defaultEnvFor(id));
+}
+
+// The host the services renderers get (docs/UI_CONVENTIONS.md §3): the two
+// stable hooks plus the axis's actions under `services`. Sign-out is the
+// account menu's handler, proxied — one place knows the IdP logout rules.
+const servicesActions = {
+  openService: openServiceRecord,
+  openDerived: (key) => enterServiceWorkspace(key),
+  openPack: openCataloguePack,
+  retry: async () => { await refreshServices(); if (state.mode === 'home') repaintHomeServices(); },
+  explain: explainUnavailable,
+  signOut: () => document.querySelector('.hdr-user-out')?.click(),
+};
+const servicesHost = { renderMainView, renderTabs, services: servicesActions };
 
 // Greet a person only by a name that is a name — "Welcome back, Admin" read
 // as a role label, not a greeting.
@@ -1800,7 +1896,7 @@ function homeCheckRemembered() {
   try { return localStorage.getItem('studioHomeChoice') === 'check'; } catch (_) { return false; }
 }
 
-function wireHomeChoice(view) {
+function wireHomeChoice(view, model) {
   const checkBtn = view.querySelector('#home-choice-check');
   const panel = view.querySelector('#home-check');
   checkBtn?.addEventListener('click', () => {
@@ -1814,22 +1910,11 @@ function wireHomeChoice(view) {
       (view.querySelector('#home-service-search') || view.querySelector('#home-mcp-url'))?.focus({ preventScroll: true });
     }
   });
-  view.querySelector('#home-choice-build')?.addEventListener('click', () => enterBuildMode('define'));
-  view.querySelectorAll('.svc-gate-card').forEach(card => {
-    card.addEventListener('click', () => enterServiceWorkspace(card.dataset.service));
-  });
-  const search = view.querySelector('#home-service-search');
-  search?.addEventListener('input', () => {
-    const q = search.value.trim().toLowerCase();
-    let shown = 0;
-    view.querySelectorAll('.svc-gate-card').forEach(card => {
-      const hit = !q || card.dataset.search.includes(q);
-      card.hidden = !hit;
-      if (hit) shown++;
-    });
-    const none = view.querySelector('#home-service-none');
-    if (none) none.hidden = shown > 0;
-  });
+  // Build is operator work (POST /api/library/instantiate): a rank without it
+  // sees the card drawn unavailable with the reason, and the click explains.
+  const buildBtn = view.querySelector('#home-choice-build');
+  if (!model.build.enabled) markUnavailable(buildBtn, model.build.reason);
+  buildBtn?.addEventListener('click', () => (model.build.enabled ? enterBuildMode('define') : explainUnavailable(model.build.reason)));
 }
 
 // The signed-in service gate and the local hero are one screen now: the
@@ -2610,7 +2695,7 @@ const buildActions = {
     b.registeredId = id;
     const left = placeholdersRemaining(b.result);
     const onPh = res.summary?.onPlaceholder?.length || 0;
-    try { await loadCatalog(); } catch (e) { toast(`Registered, but the catalog did not refresh: ${e.message}`, 'error'); }
+    try { await refreshCatalogue(); } catch (e) { toast(`Registered, but the catalog did not refresh: ${e.message}`, 'error'); }
     state.pack = res.adapted;
     state.conformance = withPlaceholderPasses(res);
     state.symbolTable = buildSymbolTable(res.adapted);
@@ -2642,11 +2727,6 @@ const buildActions = {
 
 // The host the Build renderers get (docs/UI_CONVENTIONS.md §3): the two stable hooks plus the journey's actions.
 const buildHost = { renderMainView, renderTabs, build: buildActions };
-
-// The host the no-org home gets (services-view.mjs renderNoOrgHome): its one
-// action is the account menu's sign-out, proxied — one handler, one place
-// that knows the proxy and the IdP logout rules (setupIdentityChip).
-const noOrgHost = { renderMainView, renderTabs, services: { signOut: () => document.querySelector('.hdr-user-out')?.click() } };
 
 // The build view — the pack is the axis (docs/BUILD_JOURNEY.md "The axis"): the
 // definition column on the left (service, tier, entries, the conformance summary,
@@ -2892,9 +2972,12 @@ function renderHomeView() {
   const mcpUrl = recallMcpUrl() || DEFAULT_MCP_URL;
 
   // One question, two journeys. The signed-in gate opens on the user's
-  // services; the check branch is otherwise remembered from last time.
-  const services = serviceCatalogue({ ownOnly: true });
-  const checkOpen = (state.homeVariant === 'gate' && services.length > 0) || homeCheckRemembered();
+  // services — the records of the services table, or the services the
+  // loaded packs name where the table is unavailable (services-view.mjs
+  // renderServicesHome); the check branch is otherwise remembered from last time.
+  const model = homeServicesModel();
+  const hasServices = model.kind === 'table' || model.derived.length > 0;
+  const checkOpen = (state.homeVariant === 'gate' && hasServices) || homeCheckRemembered();
   view.innerHTML = `
     <section class="home-hero">
       ${homeGreetingHtml()}
@@ -2905,9 +2988,14 @@ function renderHomeView() {
       </p>
 
       ${homeChoiceHtml({ checkOpen })}
-      ${homeCheckHtml(services, checkOpen)}
+      <div class="home-check" id="home-check"${checkOpen ? '' : ' hidden'}>
+        <div class="home-services" id="home-services"></div>
+        <h2 class="home-check-title home-check-sources-title">Import or scan another source</h2>
+        <div class="home-sources" id="home-sources"></div>
+      </div>
     </section>
   `;
+  renderServicesHome(view.querySelector('#home-services'), model, servicesHost);
   // The import sources live inside the check branch.
   const sources = view.querySelector('#home-sources');
   sources.innerHTML = `
@@ -2973,7 +3061,22 @@ function renderHomeView() {
   // The header (and its upload popover) is hidden on home: go straight to the file picker.
   $('#home-shortcut-upload').onclick = () => $('#file-input')?.click();
   $('#home-shortcut-crawl').onclick  = () => $('#crawl-btn')?.click();
-  wireHomeChoice(view);
+  // The three sources are operator routes (POST /api/draft-from-mcp, /api/validate,
+  // /api/crawl): a rank without them sees the buttons drawn unavailable with the
+  // reason and every activation explains; the URL field stays editable (a
+  // viewer may paste a URL for Pack B, a viewer read).
+  if (!model.sources.enabled) {
+    const explain = () => explainUnavailable(model.sources.reason);
+    for (const id of ['home-mcp-connect', 'home-shortcut-upload', 'home-shortcut-crawl']) {
+      const btn = $(`#${id}`);
+      // The Connect button is a filled action with no room for a line: its reason sits in the status slot beside it.
+      markUnavailable(btn, model.sources.reason, { into: id === 'home-mcp-connect' ? $('#home-mcp-status') : btn });
+      btn.onclick = explain;
+    }
+    $('#home-mcp-url').onkeydown = (e) => { if (e.key === 'Enter') explain(); };
+  }
+  wireHomeChoice(view, model);
+  loadHomeVerdicts(model);
 }
 
 async function doHomeMcpConnect() {
@@ -3438,7 +3541,7 @@ async function refreshLive() {
       await refresh();
     } else {
       // Refresh the catalog so the production-live entry's ok-state updates.
-      await loadCatalog();
+      await refreshCatalogue();
       renderServiceSelect();
       renderPackSelect();
       renderPackBSelect();
@@ -4008,7 +4111,7 @@ async function adoptValidatedPack(res, sourceLabel, kind) {
     return false;
   }
 
-  await loadCatalog();
+  await refreshCatalogue();
   if (kind === 'repo') {
     state.selectedService = serviceKeyForPack(state.catalog.find(p => p.id === newId)) || state.selectedService;
   }
@@ -4054,7 +4157,7 @@ async function adoptValidatedPack(res, sourceLabel, kind) {
 // replacement, and is left as it is.
 async function followReplacedPack(newId) {
   if (!newId || (state.mode !== 'single' && state.mode !== 'compare')) return;
-  await loadCatalog();
+  await refreshCatalogue();
   const replaced = (id) => typeof id === 'string' && id.startsWith('uploaded-') && !state.catalog.some(p => p.id === id);
   const aGone = replaced(state.selectedPackId);
   const bGone = replaced(state.compareBId);

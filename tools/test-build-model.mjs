@@ -2871,7 +2871,7 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   assert.ok(!/color:\s*var\(--ink-[45]\)/.test(servicesSlice), 'no --ink-4 / --ink-5 text in the Services zone');
   assert.ok(!/(?<![-\w])color:\s*var\(--CMP\)/.test(servicesSlice), 'the text tokens rule: --CMP only ever colours a border in the Services zone');
   // The override check: ux.css and reskin.css restyle none of the new prefixes, so the scan's verdict on them is the shipped one.
-  const NEW_PREFIXES = /\.svc-(card|page|env|tab|tabs|panel|verdict|actions?|packs?|pack-row|why|status|editor)\b/;
+  const NEW_PREFIXES = /\.svc-(card|page|env|tab|tabs|panel|verdict|actions?|packs?|pack-row|why|status|editor|catalogue|noorg)\b/;
   for (const file of ['studio/ux.css', 'studio/reskin.css']) {
     const text = readFileSync(resolve(ROOT, file), 'utf8');
     const sels = [...text.matchAll(/(?:^|\n)([^@{}\n][^{}]*?)\s*\{/g)].map(m => m[1].trim()).filter(s => NEW_PREFIXES.test(s));

@@ -54,7 +54,9 @@ async function openPayment(page, base) {
   assert.equal(j.ok, true, JSON.stringify(j.errors));
   await page.goto(`${base}/`, { waitUntil: 'networkidle' });
   await page.waitForSelector('.svc-gate-card[data-service="payment-service"]', { state: 'attached', timeout: 30_000 });
-  await page.click('#home-choice-check');
+  // The gate opens on the service records in every posture (STORE_PLAN slice 6a): the Check branch is already
+  // open when the table has the row — the card toggles it, so only open it when it is still closed.
+  if (await page.getAttribute('#home-choice-check', 'aria-expanded') !== 'true') await page.click('#home-choice-check');
   await page.click('.svc-gate-card[data-service="payment-service"]');
   await page.waitForSelector('#layer-view .dv-layer[data-layer="L1"] .dvb-group', { state: 'attached', timeout: 30_000 });
 }

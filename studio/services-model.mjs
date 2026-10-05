@@ -170,7 +170,7 @@ function envModels(service, { verdicts, catalog, isLiveAggregatePack }) {
     const key = resolved.pack ? verdictKey(resolved.pack.id, env.name) : null;
     const report = key ? (verdicts?.[key] ?? null) : null;
     const declared = !resolved.pack || declaredEnvs.includes(env.name);
-    return { id: env.id, name: env.name, key, verdict: verdictModel(report, { packId: resolved.pack?.id ?? null, env: env.name, declared, how: resolved.how }) };
+    return { id: env.id, name: env.name, key, packId: resolved.pack?.id ?? null, verdict: verdictModel(report, { packId: resolved.pack?.id ?? null, env: env.name, declared, how: resolved.how }) };
   });
   return { resolved, envs };
 }
@@ -188,11 +188,18 @@ export function serviceCardModel(service, { verdicts = {}, opened = {}, now = Da
   };
 }
 
-// Most recently opened first, then by name — the home's order (the derived
-// tiles use ux-kit's orderServicesByRecent on { key, label }; same rule).
+// Most recently opened first, then by name — the home's order, for the
+// record cards ({ slug, name }) and the derived tiles ({ key, label }) alike.
+const openedAt = (opened, k) => (Object.hasOwn(opened || {}, k) && typeof opened[k] === 'string' ? opened[k] : '');
 function orderByRecent(services, opened) {
-  const at = (s) => (Object.hasOwn(opened || {}, s.slug) && typeof opened[s.slug] === 'string' ? opened[s.slug] : '');
-  return [...services].sort((a, b) => at(b).localeCompare(at(a)) || String(a.name).localeCompare(String(b.name)));
+  return [...services].sort((a, b) => openedAt(opened, b.slug).localeCompare(openedAt(opened, a.slug)) || String(a.name).localeCompare(String(b.name)));
+}
+// The derived tiles (serviceCatalogue({ ownOnly: true }) entries) with when
+// each was opened here, most recent first.
+function derivedTiles(derived, opened) {
+  return (Array.isArray(derived) ? derived : [])
+    .map((d) => ({ ...d, openedAt: openedAt(opened, d.key) || null }))
+    .sort((a, b) => (b.openedAt || '').localeCompare(a.openedAt || '') || String(a.label).localeCompare(String(b.label)));
 }
 
 // ---------- the home ----------
@@ -201,8 +208,15 @@ const gate = (access) => ({ enabled: access?.canWrite !== false, reason: access?
 
 // `status` is state.servicesStatus ({ kind: 'ok'|'static'|'denied'|'error'|'loading', error }).
 // `derived` is the controller's serviceCatalogue({ ownOnly: true }) — the
-// tiles the fallback kinds draw (its rule needs the call-time /lib module).
+// tiles the fallback kinds draw (its rule needs the call-time /lib module),
+// returned most recently opened first with each tile's `openedAt`.
 // `examples` are GET /api/examples entries not in the catalogue.
+// → { kind: 'table'|'empty'|'derived'|'error', heading, cards: [serviceCardModel], derived: [tile],
+//     empty: { title, body, primary: 'build'|'catalogue' }|null, error: string|null,
+//     catalogue: [{ id, label, tier, version }], build: { enabled, reason }, sources: { enabled, reason } }
+// `kind` 'table' and 'empty' need status 'ok'; 'error' carries the status
+// line's text beside the derived tiles; 'derived' is the bundle (static)
+// and the loading state — today's tiles, nothing said.
 export function buildServicesHomeModel({
   status = { kind: 'loading', error: null }, services = null, catalog = [], examples = [], derived = [],
   verdicts = {}, opened = {}, access = null, orgName = null, now = Date.now(), isLiveAggregatePack = () => false,
@@ -213,7 +227,7 @@ export function buildServicesHomeModel({
     .map((p) => ({ id: p.id, label: p.label ?? p.name ?? p.id, tier: p.criticality ?? null, version: p.version ?? null }));
   const anyRecent = Object.keys(opened || {}).length > 0;
   const base = {
-    kind: 'derived', heading: anyRecent ? 'Recent services' : 'Your services', cards: [], derived: Array.isArray(derived) ? derived : [],
+    kind: 'derived', heading: anyRecent ? 'Recent services' : 'Your services', cards: [], derived: derivedTiles(derived, opened),
     empty: null, error: null, catalogue, build: gate(access), sources: gate(access),
   };
   if (status.kind === 'ok' && Array.isArray(services) && services.length) {

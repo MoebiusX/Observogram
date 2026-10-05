@@ -19,7 +19,7 @@ import {
 import { servicesRefusal, loadOrgs, loadServices, loadService, loadVerdict, patchService, verdictLoader } from '../studio/services-api.mjs';
 import { WAYS } from '../server/service-admin.mjs';
 import { persistence } from '../studio/state.mjs';
-import { renderNoOrgHome } from '../studio/services-view.mjs';
+import { renderNoOrgHome, renderServicesHome, markUnavailable } from '../studio/services-view.mjs';
 import { readFileSync } from 'node:fs';
 
 // ---------- fixtures ----------
@@ -215,10 +215,20 @@ test('buildServicesHomeModel: the table ordered by recent then name; empty state
   // The bundle (501 → static): today's derived tiles, no notice, no error line.
   const derived = [{ key: 'payment-service', label: 'payment service', packCount: 1, liveCount: 0, environments: ['prod'], tiers: [] }];
   const stat = buildServicesHomeModel({ status: { kind: 'static', error: null }, services: null, derived, access: { posture: 'static', canWrite: true, reason: null } });
-  assert.deepEqual([stat.kind, stat.derived, stat.error, stat.cards], ['derived', derived, null, []]);
+  assert.deepEqual([stat.kind, stat.derived, stat.error, stat.cards], ['derived', [{ ...derived[0], openedAt: null }], null, []]);
+  assert.deepEqual([stat.build, stat.sources], [{ enabled: true, reason: null }, { enabled: true, reason: null }], 'a bundle draws every affordance');
   // Any other failure: the derived tiles plus the status line with the parsed refusal.
   const err = buildServicesHomeModel({ status: { kind: 'error', error: '500: boom' }, services: null, derived });
-  assert.deepEqual([err.kind, err.derived, err.error], ['error', derived, 'The services table could not be read — 500: boom. Showing the services the loaded packs name.']);
+  assert.deepEqual([err.kind, err.derived.map((d) => d.key), err.error], ['error', ['payment-service'], 'The services table could not be read — 500: boom. Showing the services the loaded packs name.']);
+  // The derived tiles are ordered as the cards are: most recently opened first, then by label, each with its openedAt.
+  const two = [{ key: 'zeta', label: 'zeta' }, { key: 'alpha', label: 'alpha' }, { key: 'mid', label: 'mid' }];
+  const ordered = buildServicesHomeModel({ status: { kind: 'static', error: null }, derived: two, opened: { zeta: '2026-10-01T00:00:00.000Z' } }).derived;
+  assert.deepEqual(ordered.map((d) => [d.key, d.openedAt]), [['zeta', '2026-10-01T00:00:00.000Z'], ['alpha', null], ['mid', null]]);
+  // The loading state (before GET /api/services answered) is the derived kind too, with nothing said.
+  assert.deepEqual(buildServicesHomeModel({ derived }).kind, 'derived');
+  // Every environment on a card names the pack its verdict is fetched from.
+  assert.deepEqual(table.cards.find((c) => c.slug === 'orders-api').envs.map((e) => e.packId), ['uploaded-orders-api-aaaa', 'uploaded-orders-api-aaaa', 'uploaded-orders-api-aaaa']);
+  assert.deepEqual(table.cards.find((c) => c.slug === 'ledger').envs, []);
   // Examples not in the catalogue join the catalogue list; an uploaded pack never does.
   const withExamples = buildServicesHomeModel({ status: ok, services: [orders], catalog, examples: [{ id: 'ex-1', label: 'Example', version: '1.0' }, { id: 'payment-service', label: 'dup' }] });
   assert.deepEqual(withExamples.catalogue.map((c) => c.id), ['payment-service', 'ex-1']);
@@ -396,6 +406,152 @@ test('renderNoOrgHome: the refusal as is and escaped, the login checked, one Sig
   renderNoOrgHome(c2, buildNoOrgModel({}), { services: {} });
   assert.doesNotThrow(() => c2.btn.fire('click'));
   assert.ok(c2.innerHTML.includes('/api/packs as you'));
+});
+
+// A headless container for the Services home: the markup as a string, and the buttons the renderer wires
+// read back from it (class, data-*), so a click can be fired without a DOM.
+function homeContainer() {
+  let html = '';
+  let els = [];
+  const fakeEl = (attrs) => {
+    const handlers = {};
+    return {
+      dataset: attrs, hidden: false, value: '',
+      addEventListener: (t, fn) => { handlers[t] = fn; }, fire: (t) => handlers[t]?.(),
+    };
+  };
+  const c = {
+    get innerHTML() { return html; },
+    set innerHTML(v) {
+      html = v;
+      els = [...v.matchAll(/<button type="button" class="([^"]*)"([^>]*)>/g)].map((m) => {
+        const attrs = Object.fromEntries([...m[2].matchAll(/data-([\w-]+)="([^"]*)"/g)].map((a) => [a[1].replace(/-([a-z])/g, (_, ch) => ch.toUpperCase()), a[2].replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')]));
+        const el = fakeEl(attrs);
+        el.className = m[1];
+        el.id = (m[2].match(/\bid="([^"]+)"/) || [])[1] || null;
+        return el;
+      });
+      if (/id="home-service-search"/.test(v)) { c.search = fakeEl({}); c.search.id = 'home-service-search'; } else c.search = null;
+      if (/id="home-service-none"/.test(v)) c.none = { hidden: true }; else c.none = null;
+    },
+    querySelectorAll: (sel) => els.filter((e) => (sel === '.svc-gate-card' ? /\bsvc-gate-card\b/.test(e.className) : sel === '.home-pick-row' ? /\bhome-pick-row\b/.test(e.className) : false)),
+    querySelector: (sel) => {
+      if (sel === '#home-services-retry') return els.find((e) => e.id === 'home-services-retry') || null;
+      if (sel === '#home-service-search') return c.search;
+      if (sel === '#home-service-none') return c.none;
+      return null;
+    },
+    cards: () => els.filter((e) => /\bsvc-gate-card\b/.test(e.className)),
+  };
+  return c;
+}
+const OPERATOR = { posture: 'identity', role: 'operator', rank: 1, canWrite: true, reason: null, orgName: 'Acme' };
+const VIEWER = { posture: 'identity', role: 'viewer', rank: 0, canWrite: false, reason: 'needs the operator role in Acme — yours is viewer', orgName: 'Acme' };
+
+test('renderServicesHome: the table — one record card per row with tier, owners, packs, the verdict per environment, escaped at the seam; a card opens the service; the catalogue packs apart; the search filters', () => {
+  const xss = { ...orders, name: 'Orders<img src=x onerror="window.__xss=1">', owners: ['team-<b>x</b>'] };
+  const verdicts = { 'uploaded-orders-api-aaaa::prod': report({ tier: { ...report().tier, mismatch: true, pack: 'tier-3' } }), 'uploaded-orders-api-aaaa::dev': { error: '404: unknown pack: {x}' } };
+  const m = buildServicesHomeModel({ status: { kind: 'ok', error: null }, services: [xss, bare, memberOnly], catalog, verdicts, opened: { ledger: '2026-10-05T11:00:00.000Z' }, access: OPERATOR, orgName: 'Acme', now: NOW, isLiveAggregatePack });
+  const c = homeContainer();
+  const calls = [];
+  renderServicesHome(c, m, { services: { openService: (id, slug) => calls.push(['service', id, slug]), openPack: (id) => calls.push(['pack', id]), openDerived: (k) => calls.push(['derived', k]) } });
+  const html = c.innerHTML;
+  assert.ok(html.includes('id="svc-gate-which">Recent services</h2>') && html.includes('id="home-service-search"') && html.includes('id="home-service-grid"'), 'the heading, the search and the grid T7 and the glossary suite know');
+  assert.equal(c.cards().length, 3, 'one card per record');
+  assert.ok(c.cards().every((e) => /\bsvc-card\b/.test(e.className)), 'a record card carries .svc-card beside the tile class');
+  assert.deepEqual(c.cards().map((e) => [e.dataset.service, e.dataset.serviceId]), [['ledger', '2'], ['billing', '3'], ['orders-api', '1']], 'the opened one first, then by name; the slug is the selector, the id the record');
+  assert.ok(html.includes('aria-describedby="svc-card-1-meta"') && html.includes('id="svc-card-1-meta">tier-2 · team-&lt;b&gt;x&lt;/b&gt; · 3 packs</span>'), 'the meta line describes the card; owners are escaped');
+  assert.ok(html.includes('Orders&lt;img src=x onerror=') && !html.includes('<img'), 'the name is escaped — nothing from it reaches the page');
+  assert.ok(html.includes('<span class="svc-card-slug">orders-api</span>'));
+  assert.ok(html.includes('id="svc-card-2-meta">graded by the pack · no owners yet · no pack yet</span>'), 'a bare record says what it lacks, never a zero');
+  assert.ok(html.includes('<li class="svc-env svc-env-none">no environments yet</li>'));
+  // The pills: pass with the mismatch detail, loading with aria-busy on the list, an error with the parsed refusal in its title, a member-only service with no fetch.
+  assert.ok(html.includes('<span class="svc-verdict is-pass is-mismatch">Conformant · 92% · tier-2 (service) <small class="svc-verdict-detail">· pack says tier-3</small></span>'));
+  assert.ok(html.includes('<span class="svc-verdict is-loading">Loading…</span>') && html.includes('aria-label="Environments" aria-busy="true"'), 'staging awaits its report');
+  assert.ok(html.includes('<span class="svc-verdict is-error" title="404: unknown pack: {x}">Unavailable</span>'), 'a failed report reads Unavailable with the parsed text in its title');
+  assert.ok(html.includes('<span class="svc-verdict is-none">Member pack only — open it under Packs linked</span>'));
+  assert.ok(html.includes('<span class="svc-gate-activity">Opened 1 hour ago</span>'));
+  // The catalogue packs apart, closed, as pick rows — never as cards.
+  assert.ok(html.includes('<details class="ux-disclosure svc-catalogue"><summary>Catalogue packs (1)</summary>'), 'closed by default');
+  assert.ok(html.includes('data-pack-id="payment-service"') && html.includes('<span class="home-pick-tier">tier-1</span>'));
+  assert.ok(!html.includes('data-service="payment-service"'), 'a catalogue pack is not a card');
+  assert.ok(!html.includes('home-sources') && !html.includes('svc-status'), 'the sources are the controller\'s; no status line when the table read');
+  // The wiring: a card opens the service record, a row the catalogue pack.
+  c.cards()[2].fire('click');
+  c.querySelectorAll('.home-pick-row')[0].fire('click');
+  assert.deepEqual(calls, [['service', 1, 'orders-api'], ['pack', 'payment-service']]);
+  // The search filters by the card's search text; the "no match" line shows when nothing matches.
+  c.search.value = 'ledger';
+  c.search.fire('input');
+  assert.deepEqual(c.cards().map((e) => e.hidden), [false, true, true]);
+  assert.equal(c.none.hidden, true);
+  c.search.value = 'nothing-like-it';
+  c.search.fire('input');
+  assert.equal(c.none.hidden, false);
+  c.search.value = '';
+  c.search.fire('input');
+  assert.deepEqual(c.cards().map((e) => e.hidden), [false, false, false]);
+  // A headless host without the actions never throws.
+  const c2 = homeContainer();
+  renderServicesHome(c2, m, { services: {} });
+  assert.doesNotThrow(() => c2.cards()[0].fire('click'));
+});
+
+test('renderServicesHome: the empty states by rank, the derived tiles where the table is unavailable, the status line with Retry on a failed read', () => {
+  const ok = { kind: 'ok', error: null };
+  const op = homeContainer();
+  renderServicesHome(op, buildServicesHomeModel({ status: ok, services: [], catalog, access: OPERATOR, orgName: 'Acme' }), { services: {} });
+  assert.ok(op.innerHTML.includes('<p class="home-check-empty">No services in Acme yet. Build a pack — Define · Compile · Verify — or import one below; registering it writes the service row.</p>'));
+  assert.ok(op.innerHTML.includes('Catalogue packs (1)'), 'the catalogue packs under the empty state too');
+  assert.equal(op.cards().length, 0);
+  const v = homeContainer();
+  renderServicesHome(v, buildServicesHomeModel({ status: ok, services: [], catalog, access: VIEWER, orgName: 'Acme' }), { services: {} });
+  assert.ok(v.innerHTML.includes('No services in Acme yet. An operator registers the first pack (Build, a scan, a draft or an upload) — your role in Acme is viewer. You can read the catalogue packs below.</p>'));
+  // The derived tiles (the bundle): today's markup — the tile class and data-service, no .svc-card, no record id, no catalogue list.
+  const derived = [{ key: 'payment-service', label: 'payment service', packCount: 1, liveCount: 0, environments: ['prod'], tiers: ['tier-1'] }, { key: 'live-only', label: 'live only', packCount: 0, liveCount: 1, environments: [], tiers: [] }];
+  const d = homeContainer();
+  const calls = [];
+  renderServicesHome(d, buildServicesHomeModel({ status: { kind: 'static', error: null }, derived, catalog, opened: { 'live-only': new Date(NOW - 3600e3).toISOString() } }), { services: { openDerived: (k) => calls.push(k), openService: () => calls.push('wrong') } });
+  assert.deepEqual(d.cards().map((e) => [e.dataset.service, e.dataset.serviceId, /\bsvc-card\b/.test(e.className)]), [['live-only', undefined, false], ['payment-service', undefined, false]]);
+  assert.ok(d.innerHTML.includes('<span class="svc-gate-meta">prod · 1 pack · tier-1</span>') && d.innerHTML.includes('Not opened here yet') && d.innerHTML.includes('Live draft only — no repository pack to compare with'));
+  assert.ok(d.innerHTML.includes('id="svc-gate-which">Recent services</h2>'));
+  assert.ok(!d.innerHTML.includes('svc-catalogue') && !d.innerHTML.includes('home-services-status'), 'nothing said in a bundle — its notice already says what needs the server');
+  d.cards()[1].fire('click');
+  assert.deepEqual(calls, ['payment-service'], 'a derived tile opens the workspace as today');
+  // A failed read: the tiles plus the status line with the parsed refusal and a Retry wired to host.services.retry.
+  const e = homeContainer();
+  let retried = 0;
+  renderServicesHome(e, buildServicesHomeModel({ status: { kind: 'error', error: '500: <boom>' }, derived, catalog }), { services: { retry: () => { retried++; } } });
+  assert.ok(e.innerHTML.includes('<p class="svc-status" id="home-services-status" role="status">The services table could not be read — 500: &lt;boom&gt;. Showing the services the loaded packs name. <button type="button" class="ux-secondary-btn" id="home-services-retry">Retry</button></p>'));
+  e.querySelector('#home-services-retry').fire('click');
+  assert.equal(retried, 1);
+  assert.equal(e.cards().length, 2);
+  // No derived services at all: today's sentence.
+  const none = homeContainer();
+  renderServicesHome(none, buildServicesHomeModel({ status: { kind: 'static', error: null }, derived: [] }), { services: {} });
+  assert.ok(none.innerHTML.includes('<p class="home-check-empty">No services yet. Bring a pack in from one of the sources below.</p>'));
+});
+
+test('markUnavailable: aria-disabled (never disabled), .is-unavailable and the reason as one .svc-why — in the control or in the slot beside it; repainting does not repeat it', () => {
+  const fakeControl = () => {
+    const attrs = {}; const classes = new Set(); let why = null;
+    return {
+      attrs, classes, disabled: false,
+      setAttribute: (k, v) => { attrs[k] = v; }, classList: { add: (c) => classes.add(c) },
+      querySelector: (sel) => (sel === '.svc-why' ? why : null),
+      insertAdjacentHTML: (where, html) => { assert.equal(where, 'beforeend'); assert.equal(html, '<span class="svc-why"></span>'); why = { textContent: '' }; },
+      why: () => why,
+    };
+  };
+  const build = fakeControl();
+  markUnavailable(build, VIEWER.reason);
+  assert.deepEqual([build.attrs['aria-disabled'], build.disabled, [...build.classes], build.why().textContent], ['true', false, ['is-unavailable'], 'needs the operator role in Acme — yours is viewer']);
+  markUnavailable(build, 'needs the operator role — this server takes mutations with its API token only, not from a browser');
+  assert.equal(build.why().textContent, 'needs the operator role — this server takes mutations with its API token only, not from a browser', 'the one .svc-why is updated, not doubled');
+  const connect = fakeControl(); const slot = fakeControl();
+  markUnavailable(connect, VIEWER.reason, { into: slot });
+  assert.deepEqual([connect.attrs['aria-disabled'], connect.why(), slot.why().textContent], ['true', null, VIEWER.reason]);
+  assert.doesNotThrow(() => markUnavailable(null, 'x'));
 });
 
 test('services-view.mjs is a renderer module: it imports host.mjs, util.mjs and ux-kit.mjs only — never app.mjs or state.mjs — and reads no state, fetches nothing', () => {

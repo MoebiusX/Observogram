@@ -77,6 +77,25 @@ export const state = {
   homeVariant: 'hero',
   // /auth/me result (identity postures only; null in local mode).
   identity: null,
+  // The services axis (docs/STORE_PLAN.md §6, slice 6a). `services` is the
+  // GET /api/services table (ServiceView[]) or null while unknown or
+  // unavailable; `servicesStatus.kind` says why it is null — 'static' (the
+  // bundle's 501, silent), 'denied' (a guard's 403), 'error' (anything
+  // else, with the parsed refusal text) — or 'ok' / 'loading'. The home
+  // draws record cards from the table and today's pack-derived tiles
+  // otherwise (services-model.mjs buildServicesHomeModel). None persisted.
+  services: null,
+  servicesStatus: { kind: 'loading', error: null },
+  // `${packId}::${env}` → the conformance report (or { error }) a card's
+  // verdict pill reads; a session cache, cleared on every catalogue refresh.
+  serviceVerdicts: {},
+  // What this browser may do in the active org, from GET /api/orgs
+  // (services-model.mjs accessModel): the effective role the guard applies
+  // decides which write affordances are drawn usable. Null until read.
+  access: null,
+  // The active org's name from GET /api/orgs; null when unknown (the texts
+  // then say "this organisation").
+  orgName: null,
   // The brand (studio/brand.mjs loadBrand): the normalized brand with its
   // `chrome` strings; set first in boot, before any chrome is painted.
   brand: null,
