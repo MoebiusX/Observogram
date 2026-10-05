@@ -259,6 +259,17 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
     && rows[0][4].alignmentPct === j.record.drift.alignmentPct && rows[0][4].gradeScore === j.record.grade.score && rows[0][4].gradePass === j.record.grade.pass
     && rows[0][4].breaches === j.record.gate.breaches.length && rows[0][4].tookMs === j.record.tookMs,
     `alice's run in ${org}: exactly one journey.run row by alice in ${org} (an action the table lists), the record's seven scalars`, rows);
+  // A verdict by alice on the registered pack's first SLI (GAP batch 2, B3.1): a row in the store.
+  seq = auditSeq();
+  r = await fetch(`${root}/api/packs/${packId}/verdicts/SLI-01`, {
+    method: 'PUT', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'trusted', reason: 'reviewed' }),
+  });
+  j = await r.json();
+  assert(r.status === 200 && j.verdict?.status === 'trusted', `alice records a verdict in ${org}`, [r.status, j]);
+  rows = rowsAfter(seq);
+  assert(rows.length === 1 && listedFor('PUT /api/packs/:id/verdicts/:artefact', rows)
+    && JSON.stringify(rows) === JSON.stringify([['verdict.set', 'alice', org, `${packId}/SLI-01`, { pack: packId, artefact: 'SLI-01', family: 'sli', from: null, to: 'trusted', reason: 'reviewed' }]]),
+    `alice's verdict in ${org}: exactly one verdict.set row by alice in ${org} (an action the table lists)`, rows);
   r = await fetch(`${root}/api/services`, {
     method: 'POST', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: `${org} sweep service` }),
   });
@@ -309,6 +320,10 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     'GET /api/packs/:id': [`/api/packs/${p}`, undefined, is404('GET /api/packs/:id')],
     'GET /api/packs/:id/canonical': [`/api/packs/${p}/canonical`, undefined, is404('GET /api/packs/:id/canonical')],
     'GET /api/packs/:id/conformance': [`/api/packs/${p}/conformance`, undefined, is404('GET /api/packs/:id/conformance')],
+    // The verdicts (GAP batch 2, B3.1): the other org's pack is unknown here, on every method.
+    'GET /api/packs/:id/verdicts': [`/api/packs/${p}/verdicts`, undefined, is404('GET /api/packs/:id/verdicts')],
+    'PUT /api/packs/:id/verdicts/:artefact': [`/api/packs/${p}/verdicts/SLI-01`, { status: 'failed' }, is404('PUT /api/packs/:id/verdicts/:artefact')],
+    'DELETE /api/packs/:id/verdicts/:artefact': [`/api/packs/${p}/verdicts/SLI-01`, undefined, is404('DELETE /api/packs/:id/verdicts/:artefact')],
     'GET /api/packs/:id/compile-catalog': [`/api/packs/${p}/compile-catalog`, undefined, is404('GET /api/packs/:id/compile-catalog')],
     'GET /api/packs/:id/compile-artifact': [`/api/packs/${p}/compile-artifact?group=rules`, undefined, is404('GET /api/packs/:id/compile-artifact')],
     'GET /api/packs/:id/export.zip': [`/api/packs/${p}/export.zip`, undefined, is404('GET /api/packs/:id/export.zip')],

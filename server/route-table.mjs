@@ -94,6 +94,10 @@ export const ROUTES = Object.freeze({
   'GET /api/packs/:id': { class: 'viewer' },
   'GET /api/packs/:id/canonical': { class: 'viewer' },
   'GET /api/packs/:id/conformance': { class: 'viewer' },
+  // A reviewer's verdicts on a registered pack's artefacts (GAP batch 2,
+  // B3.1; server/routes/verdicts.mjs): a catalogue pack answers the empty
+  // document.
+  'GET /api/packs/:id/verdicts': { class: 'viewer' },
   'GET /api/diff': { class: 'viewer' },
   'GET /api/compile/targets': { class: 'viewer' },
   'GET /api/packs/:id/compile-catalog': { class: 'viewer' },
@@ -147,6 +151,10 @@ export const ROUTES = Object.freeze({
   'POST /api/services/:id/environments': { class: 'operator', audit: ['environment.create'] },
   'PATCH /api/environments/:id': { class: 'operator', audit: ['environment.update'] },
   'DELETE /api/environments/:id': { class: 'operator', audit: ['environment.delete'] },
+  // The verdicts (server/routes/verdicts.mjs): a record on one artefact of a
+  // registered pack; the same status and reason again writes no row.
+  'PUT /api/packs/:id/verdicts/:artefact': { class: 'operator', audit: ['verdict.set'] },
+  'DELETE /api/packs/:id/verdicts/:artefact': { class: 'operator', audit: ['verdict.clear'] },
 
   // ---------- admin: the request's org — its name and its members ----------
   // The identity API (server/routes/identity.mjs) for the org the request

@@ -878,6 +878,15 @@ users; the audit does show them the login of every owner who ever changed
 their org, because who changed your org is yours to know. A deployment row
 (`orgId: null`) is an owner's only.
 
+**The verdict rows** (GAP batch 2; [Record Verdicts](#record-verdicts))
+are table rows like the services': written in the transaction of the
+change, by the repository. `verdict.set` on target `artefact`
+`<pack>/<artefact>` with `{ pack, artefact, family, from, to, reason }`
+(`from` null for a first record; the reason cut to 200); `verdict.clear`
+with `{ pack, artefact, from }`. A verdict cascades with its pack (an
+eviction, `DELETE /api/uploads`, the rehydrate's prune) without a row of
+its own.
+
 **The file-first rows.** The deploy routes, the journey capture and run,
 and the live refresh change a file of the org's, not a table, so their row
 is written after the file ([`server/audit-after.mjs`](server/audit-after.mjs)),
@@ -1152,6 +1161,41 @@ npm run validate-pack -- path/to/pack.yaml
 The studio also accepts drag-and-drop or file picker upload. Uploaded, crawled,
 and MCP-drafted packs are registered in memory and become addressable through
 the same `/api/packs/:id/*` endpoints as catalog packs.
+
+### Record Verdicts
+
+A verdict is a reviewer's record on one artefact of a registered pack —
+`trusted`, `suspect` or `failed`, with a reason, who and when — kept in the
+store beside the pack's row ([docs/ADAPTER.md](docs/ADAPTER.md), "Verdicts —
+a reviewer's record per artefact"). It is a trust record, not a scorer
+input: nothing sums verdicts into the conformance score or the diagnostic
+grade, and `unreviewed` is the absence of a record. The artefact is named by
+the adapter's positional id (`SLI-01`, `ALR-02`; `GET /api/packs/:id` lists
+them), which is frozen within a pack id because the id is a content hash; a
+re-upload of the same content keeps the verdicts, and a re-upload under the
+same label with changed content carries each verdict onto the new pack's
+artefact when the artefact's behavioural identity is unchanged (`carriedFrom`
+names the old pack; the rest are dropped and the `verdict.carry` audit row
+counts them). A catalogue or example pack holds no verdicts — register it
+first (`POST /api/validate`) and record on the registered id.
+
+```bash
+# record (operator): the body is { status, reason? }
+curl -sS -X PUT -b cookies.txt -H 'X-Observogram-CSRF: 1' -H 'Content-Type: application/json' \
+  -d '{"status":"suspect","reason":"the window is shorter than the SLO period"}' \
+  http://127.0.0.1:8000/api/packs/uploaded-payment-service-1a2b3c4d/verdicts/SLO-01
+# read (viewer): the document, every artefact counted in summary
+curl -sS -b cookies.txt http://127.0.0.1:8000/api/packs/uploaded-payment-service-1a2b3c4d/verdicts
+# clear (operator)
+curl -sS -X DELETE -b cookies.txt -H 'X-Observogram-CSRF: 1' \
+  http://127.0.0.1:8000/api/packs/uploaded-payment-service-1a2b3c4d/verdicts/SLO-01
+```
+
+In the studio, Discover shows a verdict as a badge on the board and a chip
+on the row, the Refine control filters a layer by verdict, and the drawer's
+Verdict section records one (operators and admins; everyone in the open
+postures). The `actor` is the audit actor — a login or the token label,
+never an email.
 
 ### Report Placeholders (pack conformance)
 
@@ -2168,6 +2212,7 @@ open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
 | `GET` | `/api/references` | Curated catalogue reference packs |
 | `GET` | `/api/packs/:id` | Adapted layered pack |
 | `GET` | `/api/packs/:id/canonical` | Canonical pack with env overlay |
+| `GET` | `/api/packs/:id/verdicts` | A reviewer's verdicts on the pack's artefacts (GAP batch 2): `{ ok, pack, verdicts[], summary }` — each `{ artefact, key, family, title, status, reason, actor, setAt, carriedFrom }`, `status` one of `trusted`, `suspect`, `failed`; `unreviewed` is the absence of a record; a catalogue pack answers the empty document (`?env=` is ignored: verdicts are per pack) — see [Record Verdicts](#record-verdicts) |
 | `GET` | `/api/packs/:id/conformance` | Maturity-rubric scoring (the rubric grades what is declared, placeholders included; `npm run pack-conformance` lists the placeholders) (`onPlaceholder` when the pack carries `library.todo.*` annotations), graded at the service record's tier when one is set (the environment's for `?env=`, else the service's): `declaredTier` is the graded tier, `tier.pack` the pack's own, `tier.mismatch` says they differ; a pack with no record (a catalogue pack, a service without a tier) is graded at its own tier, `tier.from: 'pack'` |
 | `GET` | `/api/diff?a=&b=` | Repo/live or pack/pack structural diff |
 | `GET` | `/api/packs/:id/compile-catalog` | Per-artifact compile tree |
@@ -2204,6 +2249,8 @@ open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
 | `GET` | `/api/environments/:id` | One environment with its service |
 | `PATCH` | `/api/environments/:id` | Changes `name`, `tier`, `bindings`, `endpoints`, `mcpEndpointId` (`null` unbinds) |
 | `DELETE` | `/api/environments/:id` | Removes an environment |
+| `PUT` | `/api/packs/:id/verdicts/:artefact` | Records a reviewer's verdict on one artefact of a registered pack: `{ status, reason? }` → `{ ok, verdict, changed }` (`changed` lists what differed; the same status and reason again writes no row); a catalogue pack is 409, an unknown artefact 404; an audit row: `verdict.set` |
+| `DELETE` | `/api/packs/:id/verdicts/:artefact` | Clears it (the artefact is unreviewed again) → `{ ok, cleared }`; an audit row: `verdict.clear` |
 | `GET` | `/api/mcp-endpoints` | The org's MCP endpoint records, by name: `id`, `name`, `origin`, how many environments are checked through each; `url` and `readTokenEnv` to operators and above, `null` to a viewer |
 | `POST` | `/api/mcp-endpoints` | An MCP endpoint record (201): `{ name, url, readTokenEnv? }` — the URL carries no credential (a query parameter named like one is refused by name), `readTokenEnv` names a variable of this org, `OBSERVOGRAM_ORG_<ORG>_<NAME>` |
 | `PATCH` | `/api/mcp-endpoints/:id` | Changes `name`, `url`, `readTokenEnv` (`null` clears it; `changed` lists what differed) |
@@ -2237,7 +2284,8 @@ server/
   boot.mjs                 The boot order: opens the store, imports users.json / orgs.json once, the seed and the fail-closed checks
   identity-admin.mjs       The user and org rules behind npm run users / npm run orgs
   service-admin.mjs        The service, environment and MCP endpoint rules behind /api/services, /api/environments and /api/mcp-endpoints; the tier rule; an MCP target picked by id
-  routes/                  The identity API (identity.mjs), the services API (services.mjs), the deploy routes, and the handler helpers they share (util.mjs)
+  verdict-admin.mjs        The verdict rules behind /api/packs/:id/verdicts (GAP batch 2): the artefact index, the views, the carry on a label re-registration
+  routes/                  The identity API (identity.mjs), the services API (services.mjs), the verdicts API (verdicts.mjs), the deploy routes, and the handler helpers they share (util.mjs)
   store/                   The embedded store (docs/STORE_PLAN.md): db.mjs (the one node:sqlite door), migrations, repositories, the legacy import and import --replace, backup/restore, ops.mjs (export, the replace request, rekey-issuer, purge-org)
   fixtures/                What the suites share: serve-child.mjs (a hermetic child server, the STRIP list), platform.mjs (isWin32, the reasoned win32 skips), pre-store-build.mjs, route-inventory.mjs, store-050-guard.mjs
   test-smoke.mjs           End-to-end route smoke tests

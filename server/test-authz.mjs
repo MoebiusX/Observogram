@@ -849,6 +849,7 @@ const EXPECTED_CLASS = Object.freeze({
   'GET /api/packs/:id': 'viewer',
   'GET /api/packs/:id/canonical': 'viewer',
   'GET /api/packs/:id/conformance': 'viewer',
+  'GET /api/packs/:id/verdicts': 'viewer',
   'GET /api/diff': 'viewer',
   'GET /api/compile/targets': 'viewer',
   'GET /api/packs/:id/compile-catalog': 'viewer',
@@ -893,6 +894,8 @@ const EXPECTED_CLASS = Object.freeze({
   'POST /api/services/:id/environments': 'operator',
   'PATCH /api/environments/:id': 'operator',
   'DELETE /api/environments/:id': 'operator',
+  'PUT /api/packs/:id/verdicts/:artefact': 'operator',
+  'DELETE /api/packs/:id/verdicts/:artefact': 'operator',
   'PATCH /api/org': 'admin',
   'GET /api/org/members': 'admin',
   'POST /api/org/members': 'admin',
@@ -1295,6 +1298,11 @@ const PROBES = Object.freeze({
   'GET /api/packs/:id': ['GET', '/api/packs/nope'],
   'GET /api/packs/:id/canonical': ['GET', '/api/packs/nope/canonical'],
   'GET /api/packs/:id/conformance': ['GET', '/api/packs/nope/conformance'],
+  // The verdicts (GAP batch 2, B3.1): an unknown pack is 404 on every method
+  // (the PUT names a valid status, so the pack is what it answers) — nothing is written.
+  'GET /api/packs/:id/verdicts': ['GET', '/api/packs/nope/verdicts'],
+  'PUT /api/packs/:id/verdicts/:artefact': ['PUT', '/api/packs/nope/verdicts/SLI-01', '{"status":"trusted"}'],
+  'DELETE /api/packs/:id/verdicts/:artefact': ['DELETE', '/api/packs/nope/verdicts/SLI-01'],
   'GET /api/diff': ['GET', '/api/diff'],
   'GET /api/compile/targets': ['GET', '/api/compile/targets'],
   'GET /api/packs/:id/compile-catalog': ['GET', '/api/packs/nope/compile-catalog'],

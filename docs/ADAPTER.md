@@ -150,6 +150,81 @@ for the static bundle; README "Classify Typed Packs"), which can also place
 foreign ids by pattern — but never an
 artefact that carries `defines`.
 
+## Verdicts — a reviewer's record per artefact
+
+A **verdict** (GAP batch 2, B3.1; `server/verdict-admin.mjs`,
+`server/store/verdicts.mjs`) is a reviewer's record on ONE artefact of ONE
+registered pack: `trusted | suspect | failed`, with a reason, the actor and
+the time. `unreviewed` is the absence of a record. It is a trust record,
+never a scorer input: nothing sums verdicts into the conformance score or
+the diagnostic grade (Diagnose's "verdict", `studio/verdict-ui.mjs`, is the
+engine's grade — a different thing with the same word).
+
+**Keying.** The artefact is the adapter's positional id (`SLI-01`,
+`ALR-02`), which is frozen within a pack id because the id is a content
+hash (`server/pack-registry.mjs`). The row also carries the artefact's
+behavioural identity key (`identityKeyOf`, `#01..#0n`-suffixed within a
+colliding group in the board's walk order — L1, L2, L2X, L3, L4 policy →
+alerting → healing, L5, GOV — `tools/lib/diff.mjs`'s rule) and a 16-hex
+hash of its behavioural contract (`behaviorOf`). A re-upload of the same
+content is the same pack id and keeps the verdicts. A re-upload under the
+same label with changed content (the quick-start dedup, `pack.replace`)
+carries each verdict onto the new pack's artefact with the same identity
+key (`carriedFrom` names the old pack); the rest are dropped and the
+`verdict.carry` audit row counts them. The identity key follows the
+classifier, so a taxonomy change between two registrations can drop
+verdicts (the typed burn alert of `tools/fixtures/taxonomy/` is the
+suite's example). An eviction, `DELETE /api/uploads` and the rehydrate's
+prune cascade the rows silently.
+
+**VerdictView** — the shape every route serves:
+
+```json
+{
+  "artefact": "SLO-01",
+  "key": "L1/SLO-01",
+  "family": "slo",
+  "title": "API latency p99 < 500ms",
+  "status": "suspect",
+  "reason": "the window is shorter than the SLO period",
+  "actor": "ada",
+  "setAt": "2026-10-05T09:12:44.120Z",
+  "carriedFrom": null
+}
+```
+
+`key` is the studio's card key (`<layer>/<id>`, `L4/<subgroup>/<id>`),
+`family` the LIVE classifier's family (the server's bound taxonomy — the
+stored family is audit detail only), `title` the artefact's. A row whose
+artefact the pack no longer has (an orphan — only possible across an
+adapter upgrade) is served with `key: null`, `title: null`, the stored
+family and `orphaned: true`, and counted in `summary.orphaned`.
+
+**The document** — `GET /api/packs/:id/verdicts` (viewer; a catalogue pack
+answers it with no rows; `?env=` is ignored):
+
+```json
+{ "ok": true, "pack": "uploaded-payment-service-1a2b3c4d",
+  "verdicts": [ VerdictView, … ],
+  "summary": { "artefacts": 84, "trusted": 1, "suspect": 0, "failed": 1, "unreviewed": 82, "orphaned": 0 } }
+```
+
+**Record** — `PUT /api/packs/:id/verdicts/:artefact` (operator) with
+`{ "status": "trusted" | "suspect" | "failed", "reason"?: "≤ 2000 chars" }` →
+`{ "ok": true, "verdict": VerdictView, "changed": ["status", "reason"] }`.
+`changed` lists what differed from the record as it was (`[]`: nothing — no
+row written, no audit row). An omitted or empty reason clears the reason.
+Refusals, each `{ ok: false, error }` naming a way out: 400 a status outside
+the three, a reason over 2000 characters, an id that is not a positional id;
+404 an unknown pack (`unknown pack: <id>`), an artefact the pack does not
+have; 409 a catalogue or example pack (register it first). **Clear** —
+`DELETE /api/packs/:id/verdicts/:artefact` (operator) → `{ "ok": true,
+"cleared": VerdictView }`; 404 when there is no verdict. Audit rows:
+`verdict.set` on target `artefact` `<pack>/<artefact>` with `{ pack,
+artefact, family, from, to, reason }`, `verdict.clear` with `{ pack,
+artefact, from }`, `verdict.carry` on the new pack with `{ from, kept,
+dropped, droppedCount }`.
+
 ## Cross-references and the symbol table
 
 The client builds a symbol table from every artefact's `defines`. Each artefact's `refs` is classified:

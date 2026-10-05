@@ -18,6 +18,7 @@
  *   GET  /api/packs/:id                   Adapted layered pack (?env=<name>)
  *   GET  /api/packs/:id/canonical         Canonical manifest + env overlay (?env=<name>)
  *   GET  /api/packs/:id/conformance       Maturity-rubric scoring (?env=<name>; onPlaceholder for a library-built pack; graded at the service record's tier when one is set — `tier`)
+ *   GET  /api/packs/:id/verdicts          A reviewer's verdicts on the pack's artefacts (server/routes/verdicts.mjs; PUT / DELETE …/verdicts/:artefact record and clear one)
  *   GET  /api/maturity-rubric             Rubric metadata (clause definitions)
  *   POST /api/validate                    Validate uploaded JSON/YAML body (summary.onPlaceholder for a library-built pack)
  *   GET  /api/library                     The pack library index (BUILD journey, docs/BUILD_JOURNEY.md)
@@ -71,6 +72,7 @@ import { auditAfter, actorForRecord, bounded, finite } from './audit-after.mjs';
 import { identityRoutes } from './routes/identity.mjs';
 import { servicesRoutes } from './routes/services.mjs';
 import { auditRoutes } from './routes/audit.mjs';
+import { verdictsRoutes } from './routes/verdicts.mjs';
 import { resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
 import { authGate, orgContext, authorize, effectiveRoleOf, rankOf, rankOfRole } from './authz.mjs';
 import { versionInfo } from './version.mjs';
@@ -692,6 +694,13 @@ app.use(identityRoutes({ authorize }));
 // /api/services (viewer reads, operator writes) and their environments
 // under /api/environments, every rule server/service-admin.mjs's.
 app.use(servicesRoutes({ authorize }));
+
+// The verdicts API (GAP batch 2, B3.1) lives in server/routes/verdicts.mjs:
+// a reviewer's trusted | suspect | failed record per artefact of a
+// registered pack under /api/packs/:id/verdicts (viewer reads, operator
+// writes), every rule server/verdict-admin.mjs's. The pack-registry seam is
+// injected as the deploy routes take it.
+app.use(verdictsRoutes({ findPackMeta, loadPackCanonical, authorize }));
 
 // The audit reader (STORE_PLAN slice 5) lives in server/routes/audit.mjs:
 // GET /api/audit — the request's org's rows to its admins, the
