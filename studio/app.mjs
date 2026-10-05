@@ -47,6 +47,7 @@ import { catalogToDeployManifest } from './artifact-model.mjs';
 import { computeDeployTransitions } from './verify-deploy.mjs';
 import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-view.mjs';
 import { initHost } from './host.mjs';
+import { recentServicesKey } from './services-model.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
@@ -1533,6 +1534,9 @@ async function boot() {
   // header has to be resolved before the catalog loads.
   await loadIdentity();
   resolveActiveOrg();
+  // The persisted snapshot is this login's in this org (state.mjs): scoped
+  // here, after the org is known and before the rehydrate reads it.
+  persistence.scope(signedInLogin(), getActiveOrg());
   // The artefact taxonomy (tools/lib/artefact-classify.mjs), bound before
   // the first render with the server's override (GET /api/taxonomy, a
   // viewer route — hence after the identity): the Discover board groups
@@ -1692,19 +1696,38 @@ function homeChoiceHtml({ checkOpen }) {
 }
 
 // When each service was last opened here — the tiles' "last activity". The
-// catalogue carries no timestamps, so this is this browser's own record.
-const RECENT_SERVICES_KEY = 'studioRecentServices';
+// catalogue carries no timestamps, so this is this browser's own record,
+// kept per org (services-model.mjs recentServicesKey): the services of one
+// org are not another's recents. The unscoped pre-slice-6a key is adopted
+// once into the default org's and never read again.
+const LEGACY_RECENT_SERVICES_KEY = 'studioRecentServices';
 function recentServices() {
-  try { return parseRecentServices(localStorage.getItem(RECENT_SERVICES_KEY)); }
-  catch { return parseRecentServices(null); }
+  try {
+    const legacy = localStorage.getItem(LEGACY_RECENT_SERVICES_KEY);
+    if (legacy !== null) {
+      localStorage.removeItem(LEGACY_RECENT_SERVICES_KEY);
+      if (localStorage.getItem(recentServicesKey(null)) === null) localStorage.setItem(recentServicesKey(null), legacy);
+    }
+    return parseRecentServices(localStorage.getItem(recentServicesKey(getActiveOrg())));
+  } catch { return parseRecentServices(null); }
 }
 function recordRecentService(key) {
   if (!key) return;
   try {
     const all = recentServices();
     all[key] = new Date().toISOString();
-    localStorage.setItem(RECENT_SERVICES_KEY, JSON.stringify(all));
+    localStorage.setItem(recentServicesKey(getActiveOrg()), JSON.stringify(all));
   } catch (_) {}
+}
+// Sign-out: the recents of every org go with the snapshots — a shared
+// browser keeps no record of which services a user who left had opened.
+function forgetRecentServices() {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(LEGACY_RECENT_SERVICES_KEY)) localStorage.removeItem(k);
+    }
+  } catch { /* storage unavailable */ }
 }
 
 // A tile carries what tells two services apart: environments, packs and
@@ -5171,6 +5194,12 @@ function openAboutModal() {
 
 // /auth/me → state.identity. Local mode: the endpoint 404s and identity
 // stays null — every downstream check degrades to today's behaviour.
+// The signed-in login, or null in the open posture and before /auth/me
+// answered — the first half of every per-user storage key.
+function signedInLogin() {
+  return state.identity?.authenticated ? (state.identity.user?.login || null) : null;
+}
+
 async function loadIdentity() {
   try {
     const r = await fetch('/auth/me');
@@ -5304,6 +5333,8 @@ function setupIdentityChip() {
   // one, say what happened instead of landing on the 401 explainer.
   chip.querySelector('.hdr-user-out').addEventListener('click', async () => {
     forgetMcpUrls(me.user?.login);   // a shared browser keeps no MCP URL or deploy profile of this user
+    persistence.forget(me.user?.login);   // nor a snapshot of this user in any org — the Build draft included
+    forgetRecentServices();
     await fetch('/auth/logout', { method: 'POST', headers: { ...authHeaders() } }).catch(() => {});
     if (me.mode === 'proxy') {
       if (me.logoutUrl) { window.location.assign(me.logoutUrl); return; }

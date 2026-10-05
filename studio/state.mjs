@@ -6,6 +6,8 @@
 // app.mjs and the view modules; `state` is never reassigned, only its
 // properties, so the imported binding stays live across modules.
 
+import { persistedStateKey } from './services-model.mjs';
+
 // ---------- DOM helpers ----------
 export const $  = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -197,7 +199,17 @@ export const state = {
 // a small whitelist of state under a versioned key and re-hydrate on
 // boot — re-fetching packs the normal way (no skipping validation) so a
 // pack that vanished from the catalog just drops silently.
-const PERSIST_KEY = 'studioState.v1';
+//
+// The snapshot is one login's in one org (docs/STORE_PLAN.md §6.4): the key
+// is `studioState.v2:<login|local>:<org|default>` (services-model.mjs
+// persistedStateKey), set by persistence.scope() from boot() once the
+// identity and the active org are resolved and before the rehydrate — a
+// Build draft prefilled from one org's record never outlives that org,
+// and sign-out forgets every snapshot of the login (persistence.forget).
+// The unscoped pre-slice-6a key is read once, when the scoped key is
+// absent, adopted into it and removed (the mcpUrl.v2 precedent, api.mjs).
+const LEGACY_PERSIST_KEY = 'studioState.v1';
+const PERSIST_KEY_PREFIX = 'studioState.v2:';
 const PERSIST_FIELDS = [
   'mode',                        // only 'build' is acted on at rehydrate; the pack ids decide the rest
   'build',                       // snapshotted through BUILD_PERSIST_FIELDS (inputs only, never the canonical)
@@ -219,11 +231,25 @@ const PERSIST_FIELDS = [
 export const persistence = {
   _suspended: true,  // boot-phase guard — flipped to false once rehydrate finishes
   _timer: null,
+  _key: persistedStateKey(null, null),
   suspend() { this._suspended = true; if (this._timer) { clearTimeout(this._timer); this._timer = null; } },
   resume()  { this._suspended = false; },
+  // Which login's snapshot in which org this is (null → 'local' / 'default').
+  scope(login, org) { this._key = persistedStateKey(login, org); },
+  key() { return this._key; },
   read() {
     try {
-      const raw = localStorage.getItem(PERSIST_KEY);
+      let raw = localStorage.getItem(this._key);
+      if (!raw) {
+        // The one-time adoption of the unscoped snapshot into the first
+        // scoped key it is read under; the old key is never read again.
+        const legacy = localStorage.getItem(LEGACY_PERSIST_KEY);
+        if (legacy) {
+          localStorage.removeItem(LEGACY_PERSIST_KEY);
+          localStorage.setItem(this._key, legacy);
+          raw = legacy;
+        }
+      }
       if (!raw) return null;
       const data = JSON.parse(raw);
       return (data && typeof data === 'object') ? data : null;
@@ -236,12 +262,24 @@ export const persistence = {
     // The build draft persists as inputs only: the instantiate result (a
     // ~20 KB canonical plus its YAML) is re-derived on reload, never stored.
     snap.build = Object.fromEntries(BUILD_PERSIST_FIELDS.map(k => [k, state.build?.[k]]));
-    try { localStorage.setItem(PERSIST_KEY, JSON.stringify(snap)); } catch (_) {}
+    try { localStorage.setItem(this._key, JSON.stringify(snap)); } catch (_) {}
   },
   schedule() {
     if (this._suspended) return;
     if (this._timer) clearTimeout(this._timer);
     this._timer = setTimeout(() => { this._timer = null; this.write(); }, 250);
   },
-  clear() { try { localStorage.removeItem(PERSIST_KEY); } catch (_) {} },
+  clear() { try { localStorage.removeItem(this._key); } catch (_) {} },
+  // Sign-out: every snapshot of this login, in every org, and the unscoped
+  // one — a shared browser keeps no draft of a user who left.
+  forget(login) {
+    try {
+      const prefix = `${PERSIST_KEY_PREFIX}${login || 'local'}:`;
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(prefix)) localStorage.removeItem(k);
+      }
+      localStorage.removeItem(LEGACY_PERSIST_KEY);
+    } catch { /* storage unavailable */ }
+  },
 };

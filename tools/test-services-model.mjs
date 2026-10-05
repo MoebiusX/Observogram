@@ -18,6 +18,7 @@ import {
 } from '../studio/services-model.mjs';
 import { servicesRefusal, loadOrgs, loadServices, loadService, loadVerdict, patchService, verdictLoader } from '../studio/services-api.mjs';
 import { WAYS } from '../server/service-admin.mjs';
+import { persistence } from '../studio/state.mjs';
 
 // ---------- fixtures ----------
 
@@ -379,6 +380,70 @@ test('the persisted keys are one login\'s in one org', () => {
   assert.equal(persistedStateKey('', ''), 'studioState.v2:local:default');
   assert.equal(recentServicesKey('acme'), 'studioRecentServices:acme');
   assert.equal(recentServicesKey(null), 'studioRecentServices:default');
+});
+
+// A Storage double for the persistence layer (state.mjs): the studio's
+// snapshot is read and written under the scoped key only.
+function fakeStorage(initial = {}) {
+  const m = new Map(Object.entries(initial));
+  return {
+    get length() { return m.size; },
+    key: (i) => [...m.keys()][i] ?? null,
+    getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => { m.set(k, String(v)); },
+    removeItem: (k) => { m.delete(k); },
+    keys: () => [...m.keys()].sort(),
+  };
+}
+const withStorage = (store, fn) => {
+  const before = globalThis.localStorage;
+  globalThis.localStorage = store;
+  try { return fn(); } finally {
+    if (before === undefined) delete globalThis.localStorage; else globalThis.localStorage = before;
+  }
+};
+
+test('persistence.scope keys the snapshot per login and org; the unscoped v1 snapshot is adopted once into the first scoped key it is read under, then removed', () => {
+  const v1 = JSON.stringify({ mode: 'build', build: { name: 'Orders API', step: 'define' } });
+  const store = fakeStorage({ 'studioState.v1': v1 });
+  withStorage(store, () => {
+    assert.equal(persistence.key(), 'studioState.v2:local:default', 'before boot scopes it: the open posture\'s key');
+    persistence.scope('olive', 'acme');
+    assert.equal(persistence.key(), persistedStateKey('olive', 'acme'));
+    assert.deepEqual(persistence.read(), JSON.parse(v1), 'the first read under a scoped key adopts the old snapshot');
+    assert.deepEqual(store.keys(), ['studioState.v2:olive:acme'], 'the v1 key is removed, the snapshot lives under the scoped key');
+    // The same user in another org starts empty: the draft is acme\'s (STORE_PLAN §6.4, C-2).
+    persistence.scope('olive', 'bravo');
+    assert.equal(persistence.read(), null, 'bravo has no snapshot — the acme draft does not cross the org boundary');
+    assert.deepEqual(store.keys(), ['studioState.v2:olive:acme'], 'nothing written by a read');
+    // A write lands under the current scope; clear() removes that key only.
+    persistence.resume();
+    persistence.write();
+    persistence.suspend();
+    assert.deepEqual(store.keys(), ['studioState.v2:olive:acme', 'studioState.v2:olive:bravo']);
+    persistence.clear();
+    assert.deepEqual(store.keys(), ['studioState.v2:olive:acme']);
+  });
+});
+
+test('persistence.forget removes every snapshot of the login and the unscoped one, and no other user\'s', () => {
+  const store = fakeStorage({
+    'studioState.v1': '{}',
+    'studioState.v2:olive:acme': '{}', 'studioState.v2:olive:bravo': '{}',
+    'studioState.v2:vera:acme': '{}', 'studioOrg.v1': 'acme', 'mcpUrl.v2:olive:acme': 'https://mcp.example',
+  });
+  withStorage(store, () => {
+    persistence.forget('olive');
+    assert.deepEqual(store.keys(), ['mcpUrl.v2:olive:acme', 'studioOrg.v1', 'studioState.v2:vera:acme']);
+    persistence.forget(null);
+    assert.deepEqual(store.keys(), ['mcpUrl.v2:olive:acme', 'studioOrg.v1', 'studioState.v2:vera:acme'], 'the open posture\'s login is local: nothing of a signed-in user goes');
+  });
+  // Without a Storage at all (a private window that throws) the calls are no-ops.
+  const throwing = new Proxy({}, { get() { throw new Error('SecurityError'); } });
+  withStorage(throwing, () => {
+    assert.doesNotThrow(() => persistence.forget('olive'));
+    assert.equal(persistence.read(), null);
+  });
 });
 
 // ---------- the loaders ----------
