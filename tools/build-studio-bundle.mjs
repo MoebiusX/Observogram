@@ -198,6 +198,9 @@ const MODULEPRELOAD_RE = /^[ \t]*<link rel="modulepreload" href="\/lib\/[\w./-]+
 const FONT_LINE_RE = /^[ \t]*<link [^>\n]*fonts\.g(?:oogleapis|static)\.com[^>\n]*>[ \t]*\n/gm;
 const APP_SCRIPT = '<script type="module" src="/app.mjs"></script>';
 
+const NORMALIZED_BRAND_KEYS = Object.keys(DEFAULT_BRAND);
+const isNormalizedBrand = (o) => NORMALIZED_BRAND_KEYS.every((k) => k in o) && typeof o.configured === 'boolean';
+
 function toBase64(text) {
   return Buffer.from(text, 'utf8').toString('base64');
 }
@@ -220,10 +223,12 @@ export function buildStudioBundle({ root = DEFAULT_ROOT, packs = [], remoteFonts
     const errs = validateTaxonomy(taxonomy);
     if (errs.length) throw new Error(errs[0]);
   }
-  // `brand` is normalizeBrand's output (recognised by its boolean `configured`
-  // — normalizing it again would count its own defaults as given and bake
-  // the upstream strings) or a raw object, normalized here.
-  const b = brand ? (typeof brand.configured === 'boolean' ? brand : normalizeBrand(brand)) : null;
+  // `brand` is normalizeBrand's output (recognised by its shape: every key
+  // normalizeBrand writes, `configured` among them — normalizing it again
+  // would count its own defaults as given and bake the upstream strings) or
+  // a raw object, normalized here. A raw object that merely carries a
+  // `configured` key is still raw: it has not the full shape.
+  const b = brand ? (isNormalizedBrand(brand) ? brand : normalizeBrand(brand)) : null;
   const branded = b && b.configured ? b : null;
   if (branded) checkBrandUrls(branded);
 

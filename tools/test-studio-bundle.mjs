@@ -511,6 +511,15 @@ test('T4b inert by default: a build with nothing baked is the same tree\'s build
     const branded = buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', brand: JSON.parse(readFileSync(ACME_STATIC, 'utf8')) });
     assert.ok(branded.html.includes('id="brand-config"'));
     assert.throws(() => buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', brand: { name: 'X', tokens: { light: { accent: '#000' } } }, taxonomy: { version: 2 } }), { message: /^taxonomy: version must be 1/ });
+    // A raw brand is told from normalizeBrand's output by its shape, not by a `configured` key it may happen to carry:
+    // such an object is normalized (so baked, named, and URL-checked) rather than read as is.
+    for (const configured of [true, false]) {
+      const raw = buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', brand: { configured, name: 'Raw' } });
+      assert.equal(raw.brand?.name, 'Raw', `raw brand with configured: ${configured} is normalized and baked`);
+      assert.ok(raw.html.includes('id="brand-config"') && raw.html.includes('Raw'), `configured: ${configured}: the shell is branded`);
+      assert.equal(raw.html, buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', brand: normalizeBrand({ configured, name: 'Raw' }) }).html, 'the same bytes as its normalized form');
+    }
+    assert.throws(() => buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', brand: { configured: true, name: 'Raw', logo: { url: '/assets/logo.svg' } } }), { message: /^brand logo\.url .* is a server path/ }, 'a raw brand with a server path is refused as a brand, not a TypeError');
   });
 });
 
