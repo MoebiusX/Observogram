@@ -290,6 +290,35 @@ test('CLI merge: -o onto an existing canonical merges, --overwrite replaces, a b
   }
 });
 
+test('CLI merge: --merge <base> refuses an existing distinct -o without --overwrite (never clobbers it); --overwrite writes it; -o naming the base itself merges in place', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'upconvert-merge-'));
+  try {
+    const { e, L2 } = scenario();
+    const legacyPath = join(dir, 'legacy.json'); writeFileSync(legacyPath, JSON.stringify(L2));
+    const basePath = join(dir, 'base.pack.json'); writeFileSync(basePath, JSON.stringify(e, null, 2) + '\n');
+    const other = upconvertLegacyPack(legacyOf('production-curated.json'), { now: NOW }).canonical;
+    const otherPath = join(dir, 'other.pack.json'); const otherText = JSON.stringify(other, null, 2) + '\n'; writeFileSync(otherPath, otherText);
+    const r = run(legacyPath, '--merge', basePath, '-o', otherPath);
+    assert.equal(r.status, 1, r.stderr);
+    assert.match(r.stderr, /other\.pack\.json exists and is not the merge base .*base\.pack\.json — pass --overwrite to replace it/);
+    assert.doesNotMatch(r.stderr, /wrote /);
+    assert.equal(readFileSync(otherPath, 'utf8'), otherText, 'the distinct -o file is untouched');
+    assert.equal(readFileSync(basePath, 'utf8'), JSON.stringify(e, null, 2) + '\n', 'the base is untouched too');
+    const r2 = run(legacyPath, '--merge', basePath, '-o', otherPath, '--overwrite');
+    assert.equal(r2.status, 0, r2.stderr);
+    assert.match(r2.stderr, /merged .*legacy\.json into .*base\.pack\.json/);
+    const written = JSON.parse(readFileSync(otherPath, 'utf8'));
+    assert.deepEqual(written.spec, mergeUpconvert(upconvertLegacyPack(L2, { now: NOW }), e).canonical.spec, '--overwrite writes the merge of the base into -o');
+    const r3 = run(legacyPath, '--merge', basePath, '-o', basePath);
+    assert.equal(r3.status, 0, r3.stderr);
+    assert.deepEqual(JSON.parse(readFileSync(basePath, 'utf8')).spec, written.spec, '-o naming the base merges in place without --overwrite');
+    const fresh = join(dir, 'fresh.pack.json');
+    assert.equal(run(legacyPath, '--merge', basePath, '-o', fresh).status, 0, 'a -o that does not exist yet needs no --overwrite');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('determinism: two upconverts with the same `now` are byte-identical', () => {
   const legacy = legacyOf(FILES[0]);
   assert.equal(JSON.stringify(upconvertLegacyPack(legacy, { now: 'X' }).canonical), JSON.stringify(upconvertLegacyPack(legacy, { now: 'X' }).canonical));

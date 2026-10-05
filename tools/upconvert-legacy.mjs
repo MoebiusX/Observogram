@@ -33,7 +33,7 @@ import { validateCanonical, SPEC_VERSION, SPEC_SCHEMA_PATH } from './lib/validat
 const USAGE = `usage: node tools/upconvert-legacy.mjs <legacy-pack.json | pack.json|yaml> [-o out.pack.json] [--merge <existing.pack.json|yaml>] [--overwrite]
   -o <file>        write the result there; an existing canonical file is MERGED into (the existing pack wins)
   --merge <file>   merge into this canonical pack instead of the -o file
-  --overwrite      replace an existing -o file instead of merging into it
+  --overwrite      replace an existing -o file instead of merging into it (with --merge: instead of refusing)
 exit 0  converted · merged · already canonical (passed through)
 exit 1  input neither legacy nor canonical · merge base refused · result invalid
 exit 2  usage`;
@@ -101,6 +101,10 @@ if (!isLegacyLayeredPack(raw)) {
 // ----- legacy input: convert, then merge when a canonical base exists -----
 const fresh = upconvertLegacyPack(raw, { now: new Date().toISOString() });
 const basePath = mergeBase ?? (output && existsSync(output) && !overwrite ? output : null);
+if (mergeBase && output && existsSync(output) && !overwrite && resolve(output) !== resolve(mergeBase)) {
+  console.error(`${output} exists and is not the merge base ${mergeBase} — pass --overwrite to replace it`);
+  process.exit(1);
+}
 
 if (basePath) {
   let base;
