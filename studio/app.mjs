@@ -49,9 +49,9 @@ import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-
 import { initHost } from './host.mjs';
 import {
   recentServicesKey, buildNoOrgModel, buildServicesHomeModel, buildServicePageModel, accessModel, servicesStatusOf,
-  packForService, newestPack, serviceChipModel, servicesSelectModel, discoverEmptyNote, buildPrefillFromService, verdictKey,
+  packForService, newestPack, serviceChipModel, servicesSelectModel, discoverEmptyNote, buildPrefillFromService, verdictKey, buildHandoffPlan, buildDefineOriginNote,
 } from './services-model.mjs';
-import { loadOrgs, loadServices, loadService, verdictLoader } from './services-api.mjs';
+import { loadOrgs, loadServices, loadService, patchService, verdictLoader } from './services-api.mjs';
 import { renderNoOrgHome, renderServicesHome, renderServicePage, markUnavailable } from './services-view.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
@@ -2789,6 +2789,9 @@ const buildActions = {
     rerenderBuild();
     scheduleBuildInstantiate(0);
   },
+  // The slug guard as typed (design §6.4): the DEFINE view repaints its note on every keystroke from this —
+  // the key rule lives here, bound at boot (T19), never imported by a view (T8). null when nothing is to say.
+  originNote(name) { return buildDefineOriginNote(buildDefineOrigin(name)); },
   // DEFINE's primary action: the definition is confirmed once (seeded, persisted) and COMPILE opens; the
   // column recedes into the seed card there. Idempotent: once seeded it is "Continue to Compile →".
   seed() {
@@ -2985,6 +2988,13 @@ const buildActions = {
     const left = placeholdersRemaining(b.result);
     const onPh = res.summary?.onPlaceholder?.length || 0;
     try { await refreshCatalogue(); } catch (e) { toast(`Registered, but the catalog did not refresh: ${e.message}`, 'error'); }
+    // Build ends by writing the service row (docs/STORE_PLAN.md §6, slice 6a; design §6.1): the register linked the
+    // pack by its service's slug and created the row when none existed — tier null, owners []. The tier and the
+    // owners typed on DEFINE go onto that row only where it has none (a person's values are never overwritten; a
+    // differing tier is said), and never onto a row that is not the record Build was opened from (a renamed record
+    // or an explicit slug lands the pack under another service — named, not repaired: there is no re-link by id).
+    // The pack IS registered whatever happens here: nothing below throws out of the hand-off.
+    const handoff = await writeServiceRowAfterRegister(b, id);
     state.pack = res.adapted;
     state.conformance = withPlaceholderPasses(res);
     state.symbolTable = buildSymbolTable(res.adapted);
@@ -2995,6 +3005,8 @@ const buildActions = {
     state.layerFilter = 'all';
     const annotatedEnv = canonical.metadata?.annotations?.['library.environment'] || null;
     const env = annotatedEnv || defaultEnvFor(id);
+    // The workspace is bound to the service the pack landed under (the origin when it landed elsewhere) and the environment DEFINE named.
+    if (handoff) { state.serviceId = handoff.serviceId; state.serviceEnv = b.environment || env; }
     // enterAnalyzeMode refetches the pack and its conformance report, which
     // names the placeholder passes itself for a library-built pack.
     enterAnalyzeMode(id, env);
@@ -3008,11 +3020,58 @@ const buildActions = {
       todosLeft ? `${todosLeft} todo${todosLeft === 1 ? '' : 's'} to write or measure` : '',
     ].filter(Boolean);
     const opened = `Opened ${canonical.metadata.name} in Discover — the same kind of pack you inspect and improve there. `
-      + (gaps.length ? `It carries ${gaps.length > 1 ? `${gaps.slice(0, -1).join(', ')} and ${gaps[gaps.length - 1]}` : gaps[0]} as visible gaps.` : 'Every value is filled and no clause rests on a placeholder.');
+      + (gaps.length ? `It carries ${gaps.length > 1 ? `${gaps.slice(0, -1).join(', ')} and ${gaps[gaps.length - 1]}` : gaps[0]} as visible gaps.` : 'Every value is filled and no clause rests on a placeholder.')
+      + (handoff?.sentence || '');
     toast(opened);
     announce(opened);
   },
 };
+
+// The service row after a register (design §6.1 steps 1–5), from the table refreshCatalogue() just re-read:
+// the row whose primary link is the registered pack, the plan over it (services-model.mjs buildHandoffPlan —
+// pure), the PATCH when the plan has one, and what the hand-off says. Returns null in a bundle (no table
+// exists there — nothing to say), else { serviceId, sentence }. A refusal of the PATCH is the server's
+// sentence in a toast (a 401/403 auth/role also downgrades the rank the affordances draw from) and the
+// hand-off goes on — the pack is registered; a retry must not re-register.
+async function writeServiceRowAfterRegister(build, packId) {
+  if (state.servicesStatus?.kind === 'static') return null;
+  const tableRead = Array.isArray(state.services);
+  if (!tableRead) toast(`Registered, but the services table did not refresh: ${state.servicesStatus?.error || 'no answer'}`, 'error');
+  const row = tableRead ? state.services.find(s => (s.packs || []).some(p => p.id === packId && p.role === 'primary')) || null : null;
+  const origin = build.serviceId != null ? (findServiceRecord(build.serviceId) || { id: build.serviceId, name: null, slug: null }) : null;
+  const plan = buildHandoffPlan(build, row, { origin, tableRead });
+  let changed = [];
+  if (row && Object.keys(plan.patch).length) {
+    try {
+      const res = await patchService(row.id, plan.patch);
+      changed = res.changed;
+      if (res.service) state.services = state.services.map(s => (s.id === row.id ? res.service : s));
+      forgetServiceVerdicts(row);   // the tier grades the pack: the cached reports are stale (A-M3)
+    } catch (e) {
+      toast(`Registered, but the service row was not written: ${e.message}`, 'error');
+      if (e.denied === 'auth' || e.denied === 'role') state.access = { ...(state.access || {}), canWrite: false, reason: e.message };
+    }
+  }
+  const serviceId = (plan.outcome === 'other-service' ? origin?.id : row?.id) ?? null;
+  return { serviceId, sentence: plan.sentence(changed) };
+}
+
+// Drop every cached verdict of a service's packs: a tier written on the row changes what every report grades at.
+function forgetServiceVerdicts(service) {
+  const ids = new Set((service?.packs || []).map(p => p.id));
+  for (const key of Object.keys(state.serviceVerdicts || {})) {
+    if (ids.has(key.split('::')[0])) delete state.serviceVerdicts[key];
+  }
+}
+
+// The slug guard's inputs (design §6.4, T19): the record DEFINE was prefilled from (state.build.serviceId) and the
+// service keys of `name` and of the record's name — the key rule is /lib/service-keys.mjs, bound at boot, so the
+// pure model takes the computed keys, not the function.
+function buildDefineOrigin(name) {
+  const origin = state.build.serviceId != null ? findServiceRecord(state.build.serviceId) : null;
+  if (!origin) return { origin: null, nameKey: null, originNameKey: null };
+  return { origin: { id: origin.id, slug: origin.slug, name: origin.name }, nameKey: normalizeServiceKey(name) || null, originNameKey: normalizeServiceKey(origin.name) || null };
+}
 
 // The host the Build renderers get (docs/UI_CONVENTIONS.md §3): the two stable hooks plus the journey's actions.
 const buildHost = { renderMainView, renderTabs, build: buildActions };
@@ -3067,7 +3126,7 @@ function renderBuildView(view) {
   let stack;
   switch (b.step) {
     case 'verify': {
-      const m = buildVerifyModel({ build: b, library, clauses, targets: buildTargets || [] });
+      const m = buildVerifyModel({ build: b, library, clauses, targets: buildTargets || [], access: state.access || { canWrite: true } });
       stack = m.stack;
       renderBuildVerify(stepEl, m, host);
       break;
@@ -3080,7 +3139,7 @@ function renderBuildView(view) {
     }
     case 'define':
     default: {
-      const m = buildDefineModel({ build: b, library, requirements });
+      const m = buildDefineModel({ build: b, library, requirements, ...buildDefineOrigin(b.name) });
       stack = m.stack;
       renderBuildDefine(stepEl, m, host);
       break;

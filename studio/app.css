@@ -8479,6 +8479,9 @@ button.observa-service:focus-visible { outline: 2px solid var(--CMP); outline-of
 .build-def-hint { font: italic 13px/1.4 var(--serif); color: var(--ink-3); min-height: 15px; }
 .build-def-hint code { font: 12.5px/1.4 var(--mono); background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 .build-def-needed { margin-top: 12px; font: italic 13.5px/1.5 var(--serif); color: var(--warn); }
+/* The slug guard under the service fields (slice 6a, design §6.4): a note, never a block — the one-click name beside it. */
+.build-def-origin { margin: 10px 0 0; padding: 10px 12px; border-radius: var(--r-md); font: 13px/1.5 var(--serif); color: var(--ink-2); background: var(--card); border: 1px solid var(--line-2); }
+.build-def-origin .build-def-origin-use { margin-left: 6px; vertical-align: baseline; }
 
 /* The segmented tier control: three segments, one sliding thumb (--seg-index is the chosen one). */
 .build-seg { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 3px; background: var(--line-2); border-radius: 12px; isolation: isolate; }

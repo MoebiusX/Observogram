@@ -52,6 +52,7 @@
 import { LAYER_DEFS, L4_SUBGROUPS } from './constants.mjs';
 import { OVERRIDE_FIELDS, overrideFor, effectiveSli, effectiveId, customisedFields, promqlEdited, customEffective, sliEditorModel, sliName, boundWords } from './build-copies-model.mjs';
 import { boundText } from './sli-direction.mjs';
+import { buildDefineOriginNote } from './services-model.mjs';
 
 export const BUILD_STEPS = ['define', 'compile', 'verify'];
 /** Least stringent first — the order the engine lists them and the DEFINE step shows them. */
@@ -498,15 +499,19 @@ export function instantiateBody(build, library = null) {
 // ---------- DEFINE ----------
 
 /**
- * buildDefineModel({ build, library, requirements }) → what the DEFINE step renders, in
- * four substeps (defineSubsteps): the fields, the three tiers with the clauses each adds
- * and what each asks of the pack (tierConsequences), the entries as cards (selected,
- * evidence, SLI counts per tier, the SLIs each suggests at the tier), the proposed SLIs
- * grouped by technology (defineSuggestions), why they are suggested (defineWhy), the
- * silhouette stack, the selection's params. `requirements` is { [tier]: clauses[] }
- * (whatever tiers have loaded).
+ * buildDefineModel({ build, library, requirements, origin, nameKey, originNameKey }) → what the
+ * DEFINE step renders, in four substeps (defineSubsteps): the fields, the three tiers with the
+ * clauses each adds and what each asks of the pack (tierConsequences), the entries as cards
+ * (selected, evidence, SLI counts per tier, the SLIs each suggests at the tier), the proposed
+ * SLIs grouped by technology (defineSuggestions), why they are suggested (defineWhy), the
+ * silhouette stack, the selection's params. `requirements` is { [tier]: clauses[] } (whatever
+ * tiers have loaded). `origin` is the service record DEFINE was prefilled from ({ id, slug, name },
+ * a Build opened from a service page — docs/STORE_PLAN.md §6, slice 6a) or null; `nameKey` and
+ * `originNameKey` the service keys of the typed name and of the origin's name, computed by the
+ * controller (the rule is /lib/service-keys.mjs, bound at boot): `originNote` says when the pack
+ * would register under another slug than the origin's — said, never blocked.
  */
-export function buildDefineModel({ build, library, requirements = {} }) {
+export function buildDefineModel({ build, library, requirements = {}, origin = null, nameKey = null, originNameKey = null }) {
   const rows = library?.entries || [];
   const selected = new Set(build?.entries || []);
   const name = build?.name || '';
@@ -560,6 +565,9 @@ export function buildDefineModel({ build, library, requirements = {} }) {
     placeholders: { flagged: params.filter(p => p.placeholder && p.atDefault).length, remaining: r ? placeholdersRemaining(r) : null },
     libraryErrors: library?.errors || [],
     valid: errors.length === 0, errors,
+    // The slug guard (slice 6a, design §6.4): the register links by the name's key, never by the record's id.
+    origin: origin ? { id: origin.id ?? null, slug: origin.slug ?? null, name: origin.name ?? null } : null,
+    originNote: buildDefineOriginNote({ origin, nameKey, originNameKey }),
     // DEFINE is the seeding step: its primary action seeds the pack once, then reads as a continue.
     seeded: isSeeded(build),
     nextLabel: isSeeded(build) ? 'Continue to Compile' : 'Seed the pack',
@@ -900,14 +908,17 @@ export function groupTodos(todos, params) {
 }
 
 /**
- * buildVerifyModel({ build, library, clauses, targets }) → the conformance verdict
+ * buildVerifyModel({ build, library, clauses, targets, access }) → the conformance verdict
  * at the tier with the three clause states, the schema verdict, the warnings,
  * the stack with the todos pinned to their slabs (each with the param rows that
  * fill it) and the per-layer maturity, the todos grouped by artefact family, the
  * compile targets as artefact cards, and the hand-off facts (placeholders
- * remaining, registered id).
+ * remaining, registered id). `access` is the studio's rank in the active org
+ * (services-model.mjs accessModel: { canWrite, reason }); the register is an
+ * operator's, so `canWrite: false` makes the hand-off 'unavailable' with the
+ * reason — the pack YAML stays downloadable. Defaults to writable.
  */
-export function buildVerifyModel({ build, library, clauses, targets }) {
+export function buildVerifyModel({ build, library, clauses, targets, access = { canWrite: true } }) {
   const r = build?.result || null;
   const params = paramRows({ build, library });
   const checklist = buildClauseChecklist(clauses || [], r?.summary || null);
@@ -920,13 +931,15 @@ export function buildVerifyModel({ build, library, clauses, targets }) {
   const blocking = (r?.warnings || []).some(w => w.kind === 'promql');
   const schemaOk = (r?.schemaErrors || []).length === 0;
   const error = build?.error ? splitBuildErrors(build.error) : null;
-  // What the footer says about the hand-off, in priority order.
-  const handoff = build?.registeredId ? 'registered' : error ? 'error' : blocking ? 'promql' : !schemaOk ? 'schema' : 'ready';
+  // What the footer says about the hand-off, in priority order: a rank that cannot register first (no
+  // affordance is drawn usable for it — docs/STORE_PLAN.md §6, slice 6a).
+  const writable = access?.canWrite !== false;
+  const handoff = !writable ? 'unavailable' : build?.registeredId ? 'registered' : error ? 'error' : blocking ? 'promql' : !schemaOk ? 'schema' : 'ready';
   const gaps = placeholdersRemaining(r);
   const accepted = build?.accepted || {};
   const readiness = buildReadiness({ result: r, error, accepted });
   const tier = s?.tier || build?.tier;
-  const canRegister = !!r && schemaOk && !blocking && !error;
+  const canRegister = !!r && schemaOk && !blocking && !error && writable;
   const remains = r ? verifyRemains({ result: r, checklist, params, editors: stackCardActions({ build, library }), accepted }) : null;
   return {
     ready: !!r, pending: !!build?.pending, error, stale: isStale(build),
@@ -969,6 +982,8 @@ export function buildVerifyModel({ build, library, clauses, targets }) {
     source: r?.provenance?.source || '',
     registeredId: build?.registeredId || null,
     handoff,
+    // Why the hand-off is not this rank's, as the server words the effective role; the way out that works for it.
+    unavailableText: writable ? null : `Registering the pack ${access?.reason || 'needs the operator role here'} — download the pack YAML instead.`,
     // The hand-off — VERIFY's exits (docs/BUILD_JOURNEY.md "Where it starts"; the review's §1: Verify leads to
     // "Open pack in Discover"): resolve or adjust (back at Define), or open the pack in Discover with the gaps
     // visible — they stay on the pack as library.todo.* annotations, so Diagnose grades them as gaps, never as verified.

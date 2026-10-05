@@ -85,6 +85,7 @@ const { instantiatePack, validationSummary, todosFromAnnotations } = await impor
 const { loadLibrary, findEntry } = await import('./library.mjs');
 const { parse: parseYaml } = await import('../tools/lib/mini-yaml.mjs');
 const serviceKeys = await import('../tools/lib/service-keys.mjs');
+const { buildHandoffPlan } = await import('../studio/services-model.mjs');   // the pure plan Build's hand-off runs over the table (Node-safe: no DOM, no state)
 
 let srv = await start({ port: 0, host: '127.0.0.1', silent: true });
 let BASE = `http://127.0.0.1:${srv.address().port}`;
@@ -1021,6 +1022,84 @@ test('GET /api/packs/:id/conformance names the placeholder passes at the graded 
   const strict = await conformance('vera', `/api/packs/${packId}/conformance?env=prod`);
   assert.deepEqual([strict.tier.graded, strict.onPlaceholder], ['tier-1', placeholdersAt('tier-1')]);
   assert.ok(strict.onPlaceholder.every((p) => strict.clauses.find((c) => c.id === p.id)?.applies === true));
+});
+
+// Build's end over HTTP (docs/STORE_PLAN.md §6, slice 6a; design §6.1, A-9,
+// A-B1, A-B2): the exact sequence the studio runs — POST /api/library/register
+// (the register links the pack by its service's slug and creates the row,
+// tier null, owners []), GET /api/services (the row by the registered pack's
+// primary link), PATCH /api/services/:id with only the fields the row lacks
+// (one service.update row) — and the three facts the plan rests on: a set tier
+// is never overwritten (the mismatch is shown; the record's tier grades the
+// pack), a second Build naming the service is a second primary of the same
+// row, and a Build opened from a record whose name no longer yields its slug
+// lands under a new row that is never the origin's to patch.
+test('Build\'s hand-off over HTTP: a library register, GET /api/services finds the row by the pack\'s primary link, PATCH { tier, owners } writes one service.update row; a second Build PATCHes nothing when the row has them and is a second primary (A-B1); a renamed record + a Build naming it lands under a new row and never patches the origin (A-B2); the record\'s tier grades the pack with mismatch: true', async () => {
+  const lib = loadLibrary();
+  const entries = (ids) => ids.map((id) => findEntry(lib, id));
+  // A DEFINE draft as the studio holds it (state.build), and its canonical as POST /api/library/instantiate answers it.
+  const draft = (over = {}) => ({ name: 'inventory-api', owners: 'team-inventory, sre', tier: 'tier-2', environment: 'prod', serviceId: null, ...over });
+  const canonicalOf = (b, entryIds) => instantiatePack(entries(entryIds), { name: b.name, tier: b.tier, environment: b.environment, owners: b.owners.split(',').map((o) => o.trim()).filter(Boolean) }).canonical;
+  const register = async (canonical) => {
+    const reg = await call('oscar', 'POST', '/api/library/register', JSON.stringify({ canonical }), { 'Content-Type': 'application/json' });
+    assert.equal(reg.status, 200, reg.text.slice(0, 300));
+    return reg.json.registered.id;
+  };
+  const rowFor = async (packId) => (await ok('GET /api/services', 'oscar', '/api/services')).json.services.find((s) => s.packs.some((p) => p.id === packId && p.role === 'primary')) ?? null;
+
+  // 1. The first Build: the register creates the row (tier null, owners []) — the studio computes no slug (A-9).
+  const build1 = draft();
+  const pack1 = await register(canonicalOf(build1, ['http-service']));
+  const row1 = await rowFor(pack1);
+  assert.ok(row1, 'the row is found by the registered pack\'s primary link');
+  assert.deepEqual([row1.slug, row1.name, row1.tier, row1.owners, row1.environments.map((e) => e.name)], ['inventory-api', 'inventory-api', null, [], ['prod']], 'the register sets neither tier nor owners; the environment row exists');
+  const plan1 = buildHandoffPlan(build1, row1);
+  assert.deepEqual([plan1.outcome, plan1.patch, plan1.environment], ['written', { tier: 'tier-2', owners: ['team-inventory', 'sre'] }, 'linked']);
+  const K = 'PATCH /api/services/:id';
+  const written = await ok(K, 'oscar', `/api/services/${row1.id}`, plan1.patch);
+  assert.deepEqual(written.json.changed, ['owners', 'tier']);
+  assert.deepEqual(written.rows, [['service.update', 'oscar', 'acme', 'inventory-api', { fields: ['owners', 'tier'] }]], 'one row, naming the fields');
+  assert.equal(plan1.sentence(written.json.changed), ' Service inventory-api written: tier-2, owners team-inventory, sre.');
+
+  // 2. A second Build naming the same service, built at another tier: nothing is patched (mutation check 2), the mismatch is
+  //    said, and the pack is a SECOND primary of the same row — the fact A-B1 (the newest in catalogue order wins) rests on.
+  const build2 = draft({ tier: 'tier-1', owners: 'someone-else' });
+  const seq = seqNow();
+  const pack2 = await register(canonicalOf(build2, ['http-service', 'kafka']));
+  assert.notEqual(pack2, pack1, 'other content: another pack id');
+  assert.deepEqual(rowsAfter(seq).map(([action]) => action).filter((a) => a.startsWith('service.')), [], 'the second register creates no service row and updates none');
+  const row2 = await rowFor(pack2);
+  assert.equal(row2.id, row1.id, 'the same row');
+  assert.equal(row2.packs.filter((p) => p.role === 'primary').length, 2, 'a service accumulates one primary per pack that names it');
+  assert.deepEqual(row2.packs.filter((p) => p.role === 'primary').map((p) => p.id).sort(), [pack1, pack2].sort());
+  const plan2 = buildHandoffPlan(build2, row2);
+  assert.deepEqual([plan2.outcome, plan2.patch, plan2.mismatch], ['mismatch', {}, { record: 'tier-2', built: 'tier-1' }]);
+  assert.equal(plan2.sentence(), ' Service inventory-api linked — it already says tier-2 (its tier grades the pack; the pack was built at tier-1).');
+  assert.deepEqual([row2.tier, row2.owners], ['tier-2', ['team-inventory', 'sre']], 'the person\'s values stand');
+  // The record's tier grades the pack: the conformance report says so, with the mismatch — shown, never blocked.
+  const graded = await conformance('vera', `/api/packs/${pack2}/conformance?env=prod`);
+  assert.deepEqual([graded.tier.graded, graded.tier.pack, graded.tier.from, graded.tier.mismatch, graded.tier.service], ['tier-2', 'tier-1', 'service', true, { id: row1.id, slug: 'inventory-api' }]);
+
+  // 3. The record renamed (the editor): its slug is fixed. A Build opened from its page is prefilled with the new name,
+  //    whose key is another slug — the register lands the pack under a NEW row, and the hand-off never patches it with
+  //    the origin's values (mutation check 2b); the origin keeps its tier and owners.
+  const renamed = await ok(K, 'oscar', `/api/services/${row1.id}`, { name: 'Inventory Platform' });
+  assert.deepEqual([renamed.json.changed, renamed.json.service.slug], [['name'], 'inventory-api'], 'the slug stays');
+  const origin = { id: row1.id, name: 'Inventory Platform', slug: 'inventory-api' };
+  const build3 = draft({ name: 'Inventory Platform', owners: 'team-inventory, sre', tier: 'tier-3', serviceId: row1.id });
+  assert.equal(serviceKeys.normalizeServiceKey(build3.name), 'inventory-platform', 'DEFINE\'s note: the typed name yields another slug than the origin\'s');
+  const pack3 = await register(canonicalOf(build3, ['http-service']));
+  const row3 = await rowFor(pack3);
+  assert.ok(row3 && row3.id !== row1.id, 'a new row');
+  assert.deepEqual([row3.slug, row3.name, row3.tier, row3.owners], ['inventory-platform', 'inventory-platform', null, []]);
+  const plan3 = buildHandoffPlan(build3, row3, { origin });
+  assert.deepEqual([plan3.outcome, plan3.patch], ['other-service', {}], 'nothing is written on a row that is not the origin');
+  assert.equal(plan3.sentence(), " Registered under a new service inventory-platform — Inventory Platform (inventory-api) was not linked: the pack's service name yields another slug, and a slug is fixed. Open Inventory Platform to compare.");
+  const after = (await ok('GET /api/services/:id', 'vera', `/api/services/${row1.id}`)).json.service;
+  assert.deepEqual([after.name, after.slug, after.tier, after.owners, after.packs.filter((p) => p.role === 'primary').length], ['Inventory Platform', 'inventory-api', 'tier-2', ['team-inventory', 'sre'], 2], 'the origin is untouched and pack3 is not its');
+  assert.ok(!after.packs.some((p) => p.id === pack3));
+  // The same Build from the origin row itself (the name kept): the origin IS the row — written where it lacks, here nothing.
+  assert.equal(buildHandoffPlan(draft({ serviceId: row1.id }), after, { origin }).outcome, 'linked');
 });
 
 // ---------- a service's deletion and the registry ----------

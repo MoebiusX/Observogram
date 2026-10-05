@@ -604,6 +604,60 @@ test('a usage error keeps the previous pack: the error is split per param, the r
   assert.equal(buildVerifyModel({ build: draft({ result: { ...draft().result, schemaErrors: ['$.spec: missing required key'] } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }).handoff, 'schema');
 });
 
+// Slice 6a (docs/STORE_PLAN.md §6; design §6.1): the register is an operator's — a rank that cannot write never gets the
+// hand-off drawn usable, and the footer says why in the server's words with the way out that works for it.
+test('buildVerifyModel: access.canWrite false → handoff unavailable (ranked first), canRegister false, the reason worded; the default is writable and every other state unchanged', () => {
+  const verify = (over, access) => buildVerifyModel({ build: draft(over), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS, ...(access ? { access } : {}) });
+  const viewer = verify({}, { canWrite: false, reason: 'needs the operator role in Acme — yours is viewer' });
+  assert.deepEqual([viewer.handoff, viewer.canRegister, viewer.unavailableText],
+    ['unavailable', false, 'Registering the pack needs the operator role in Acme — yours is viewer — download the pack YAML instead.']);
+  assert.ok(![viewer.next.primary, ...viewer.next.secondary].some(a => a?.action === 'open-discover'), 'no hand-off action is offered to a rank that cannot register');
+  assert.ok([verify().next.primary, ...verify().next.secondary].some(a => a?.action === 'open-discover'), 'the same draft offers it to a writable rank');
+  assert.equal(verify({ registeredId: 'uploaded-x' }, { canWrite: false, reason: 'r' }).handoff, 'unavailable', 'unavailable ranks first');
+  assert.equal(verify({}, { canWrite: false }).unavailableText, 'Registering the pack needs the operator role here — download the pack YAML instead.', 'a reason-less access still names the rank');
+  const open = verify({}, { canWrite: true, reason: null });
+  assert.deepEqual([open.handoff, open.canRegister, open.unavailableText], ['ready', true, null]);
+  assert.deepEqual([verify().handoff, verify().canRegister], ['ready', true], 'the default access is writable: every existing caller is unchanged');
+  // The footer: the status is the reason, #build-open is disabled with it as its title; download pack yaml stays.
+  const c = stubContainer();
+  renderBuildVerify(c, viewer, { build: {} });
+  assert.ok(c.innerHTML.includes('Registering the pack needs the operator role in Acme — yours is viewer — download the pack YAML instead.'), 'the footer status says why');
+  assert.match(c.innerHTML, /id="build-open" disabled title="Registering the pack needs the operator role in Acme — yours is viewer — download the pack YAML instead\."/);
+  assert.ok(c.innerHTML.includes('id="build-yaml-download"'), 'the YAML download is the way out that works');
+  const ok = stubContainer();
+  renderBuildVerify(ok, open, { build: {} });
+  assert.match(ok.innerHTML, /id="build-open" >/, 'a writable rank gets the usable button, no title');
+});
+
+// Slice 6a (design §6.4, A-B2): a Build opened from a service page registers under the typed name's slug, never by the
+// record's id — DEFINE says before Compile when the two differ, offers the one name that yields the slug, and blocks nothing.
+test('buildDefineModel: the origin note — nothing when the name yields the origin slug; the sentence with "use <name>" when the origin name still does; without it for a renamed record; the field is never blocked', () => {
+  const origin = { id: 7, slug: 'payment-service', name: 'payment service' };
+  const define = (over, extra) => buildDefineModel({ build: draft(over), library: LIBRARY, requirements: REQUIREMENTS, ...extra });
+  assert.deepEqual([define().origin, define().originNote], [null, null], 'no origin: no note (every existing caller unchanged)');
+  const same = define({ name: 'payment service' }, { origin, nameKey: 'payment-service', originNameKey: 'payment-service' });
+  assert.deepEqual([same.origin, same.originNote], [{ id: 7, slug: 'payment-service', name: 'payment service' }, null]);
+  const other = define({ name: 'Payments Platform' }, { origin, nameKey: 'payments-platform', originNameKey: 'payment-service' });
+  assert.deepEqual(other.originNote, {
+    text: 'This pack will register under a new service "payments-platform", not payment-service — a slug is fixed. Keep a name that yields payment-service, or go on and get a second service.',
+    useName: 'payment service',
+  });
+  assert.equal(other.valid, true, 'said, not blocked: the definition stays valid and Compile reachable');
+  const renamed = define({ name: 'Payments Platform' }, { origin: { ...origin, name: 'Payments Platform' }, nameKey: 'payments-platform', originNameKey: 'payments-platform' });
+  assert.equal(renamed.originNote.useName, null, 'a renamed record has no name that yields its slug but the slug itself, which the sentence names');
+  // The renderer: the note under the service fields with the button, escaped at the seam; none without a note.
+  const html = (m) => { const c = stubContainer(); renderBuildDefine(c, m, { build: { update() {} } }); return c.innerHTML; };
+  const withNote = html(other);
+  assert.ok(withNote.includes('id="build-origin-note" role="status"') && withNote.includes('not payment-service — a slug is fixed.'));
+  assert.ok(withNote.includes('<button type="button" class="ctrl-btn build-def-origin-use" id="build-use-origin-name">use payment service</button>'));
+  assert.ok(!withNote.includes('id="build-next" disabled'), 'Compile is not blocked by the note');
+  assert.ok(!html(renamed).includes('id="build-use-origin-name"'), 'no one-click fix without a name that yields the slug');
+  assert.ok(!html(same).includes('build-origin-note'), 'no note when the keys agree');
+  const payload = '<img src=x onerror="window.__xss=1">';
+  const hostile = html(define({ name: payload }, { origin: { ...origin, name: payload }, nameKey: 'img-src-x-onerror-window-xss-1', originNameKey: 'img-src-x-onerror-window-xss-1' }));
+  assert.ok(!hostile.includes('<img'), 'the origin name and the key are escaped at the seam');
+});
+
 test('the stale note on each step says where the rejected value is marked, in one sentence', () => {
   const stale = draft({ error: ['param kafka.bootstrap: a value may not contain a double quote'] });
   const render = (fn, model) => { const c = stubContainer(); fn(c, model, { build: {} }); return c.innerHTML; };
