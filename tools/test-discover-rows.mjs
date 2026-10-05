@@ -260,7 +260,12 @@ test('verdict-html.mjs is pure: it imports util.mjs and ux-kit.mjs only, and ren
   }
   for (const a of allArtefacts(carlos).slice(0, 40)) {
     for (const view of DISCOVER_VIEWS.map(v => v.id)) {
-      assert.equal(artefactRowHtml(a, { view, verdict: null }), artefactRowHtml(a, { view }), `${a.id} ${view}: verdict null draws the row as before`);
+      const row = artefactRowHtml(a, { view });
+      assert.equal(artefactRowHtml(a, { view, verdict: null }), row, `${a.id} ${view}: verdict null draws the row as before`);
+      assert.ok(!row.includes('ux-chip-verdict'), `${a.id} ${view}: no verdict chip without a verdict`);
+    }
+    for (const view of ['tiles', 'list']) {
+      assert.ok(!artefactLightRowHtml(a, { view }).includes('ux-chip-verdict'), `${a.id} light ${view}: no verdict chip without a verdict`);
     }
   }
   const entries = carlos.layers.L1.slice(0, 6).map((a, i) => ({ a, key: `L1//${a.id}#${i}` }));
