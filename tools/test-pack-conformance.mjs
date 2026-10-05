@@ -357,6 +357,23 @@ test('the CLI: refusals, exit codes, --strict, --quiet, --json, determinism', ()
   }
 });
 
+test('the CLI: every flag it accepts is in its usage, the packc help line, the README synopsis and the CHANGELOG entry', () => {
+  const src = read('tools/pack-conformance.mjs');
+  const flags = [...new Set([...src.matchAll(/a === '(--[a-z-]+)'/g)].map(m => m[1]))].filter(f => f !== '--help');
+  assert.deepEqual(flags.sort(), ['--json', '--quiet', '--strict'], 'the three flags the CLI parses (besides --help)');
+  const usage = src.match(/^const USAGE = `([^`]*)`/m)[1];
+  const helpLine = read('tools/cli.mjs').split('\n').find(l => /^\s*packc conformance /.test(l));
+  const readme = read('README.md');
+  const synopsis = readme.slice(readme.indexOf('### Report Placeholders (pack conformance)')).match(/```bash\n([^`]*)```/)[1];
+  const changelog = read('docs/CHANGELOG.md').split('\n').find(l => l.includes('`tools/pack-conformance.mjs`** (new;'));
+  assert.ok(usage && helpLine && synopsis && changelog, 'the four documented places exist');
+  for (const f of flags) {
+    for (const [name, text] of [['usage', usage], ['packc help line', helpLine], ['README synopsis', synopsis], ['CHANGELOG entry', changelog]]) {
+      assert.ok(text.includes(`[${f}]`), `${f} is documented in the ${name}`);
+    }
+  }
+});
+
 // ---------- 9. inert by default ----------
 
 test('inert: no server/ or studio/ file imports the engine; the static bundle graph reaches neither it nor legacy.mjs; the CLIs resolve the schema through fileURLToPath', () => {

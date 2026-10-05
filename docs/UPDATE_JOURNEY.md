@@ -872,3 +872,9 @@ the guard now also keeps, for every flat suite this batch added, the counts
 the journey narrates for it summing to the `test(` calls the file holds.
 Tests: 881 → 883 (one in `tools/test-pack-conformance.mjs`, one in
 `tools/test-doc-test-totals.mjs`).
+`packc --help` listed `conformance <file...> [--json] [--strict]` while the
+tool also takes `--quiet` (its own usage said so; `packc` hands the arguments
+through unparsed, so the flag worked unadvertised). The help line names it,
+and the conformance suite now keeps every flag the CLI parses in its usage,
+the `packc` help line, the README synopsis and the CHANGELOG entry.
+Tests: 883 → 884 (one more test in `tools/test-pack-conformance.mjs`).
