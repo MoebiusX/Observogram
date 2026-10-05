@@ -128,8 +128,10 @@ const EXPIRING_DAYS = 30;
  * block covers whole), placeholder (passes only on a template value, when
  * the report names them), passed, and notApplicable (excluded at this
  * tier). Pure; the verdict fields are the engine's. `waived`, `effective`,
- * `waiverCounts` and `expiringSoon` default to [], null, null and 0 on a
- * report without a waivers block.
+ * `waiverCounts`, `expiringSoon` and `unused` (the block's active waivers
+ * that match no failing clause: a passing clause, a symbol the pack does not
+ * define) default to [], null, null, 0 and [] on a report without a waivers
+ * block.
  */
 export function readConformance(c, pack = null) {
   const ph = placeholderEntries(c);
@@ -169,6 +171,7 @@ export function readConformance(c, pack = null) {
     effective: waiversOf(c)?.effective || null,
     waiverCounts: waiversOf(c)?.counts || null,
     expiringSoon: soon.size,
+    unused: Array.isArray(waiversOf(c)?.unused) ? waiversOf(c).unused : [],
   };
 }
 
@@ -323,6 +326,25 @@ function groupHtml(id, title, note, rows, kind, model, { collapsible = false, op
     </section>`;
 }
 
+// The waivers block's `unused`: active waivers that match no failing clause
+// (the clause passes or does not apply, or the symbol is not one this pack
+// defines — a typo, or an SLO renamed since). GET /api/services/:id/waivers
+// lists them active and the CLI prints "n waiver(s) match no failing clause";
+// the screen names them too, under the Waived group, or nothing on the page
+// would say the waiver covers nothing.
+function unusedWaiversHtml(model) {
+  const rows = model.unused;
+  if (!rows.length) return '';
+  const n = rows.length;
+  const note = `${cap(plural(n, 'active waiver names', 'active waivers name'))} nothing that fails here: the clause passes or does not apply at this tier, or the symbol is not one this pack defines (a typo, or an SLO renamed since). Such a waiver covers nothing until it is revoked or recorded again on a symbol the pack names.`;
+  return `
+    <section class="conf-group conf-group-unused ux-tone-info ux-section-target" id="conf-unused" tabindex="-1" aria-labelledby="conf-unused-title">
+      <h3 class="conf-group-title" id="conf-unused-title">Waivers that match nothing <span class="conf-group-count">${n}</span></h3>
+      <p class="conf-group-note">${escapeHtml(note)}</p>
+      <ul class="conf-unused-list">${rows.map(w => `<li class="conf-unused-item"><code>${escapeHtml(w.ruleId ?? '')}</code>${waiverLine(w, 'Waiver')}</li>`).join('')}</ul>
+    </section>`;
+}
+
 function scoringHtml(model) {
   const { must, should } = model;
   const tier = tierLabel(model.tier);
@@ -374,6 +396,7 @@ export function renderConformanceView() {
   const nBlock = g.blocking.length;
   const nPh = g.placeholder.length;
   const nWaived = g.waived.length;
+  const nUnused = model.unused.length;
   const hasWaivers = model.waiverCounts !== null;
 
   // The governing result, in one sentence.
@@ -426,7 +449,7 @@ export function renderConformanceView() {
     })),
     measures: [
       { label: 'Required (MUST)', value: `${model.must.passed} / ${model.must.total}`, note: nBlock ? `${nBlock} blocking` : 'none blocking', tone: nBlock ? 'fail' : 'ok' },
-      hasWaivers ? { label: 'Waived', value: String(nWaived), note: model.effective ? `effective ${model.effective.must.passed} / ${model.effective.must.total} MUST${model.expiringSoon ? ` · ${plural(model.expiringSoon, 'waiver')} expiring within ${EXPIRING_DAYS} days` : ''}` : 'time-boxed, with a reason', tone: 'info' } : null,
+      hasWaivers ? { label: 'Waived', value: String(nWaived), note: `${model.effective ? `effective ${model.effective.must.passed} / ${model.effective.must.total} MUST${model.expiringSoon ? ` · ${plural(model.expiringSoon, 'waiver')} expiring within ${EXPIRING_DAYS} days` : ''}` : 'time-boxed, with a reason'}${nUnused ? ` · ${plural(nUnused, 'waiver matches', 'waivers match')} nothing` : ''}`, tone: 'info' } : null,
       { label: 'Recommended (SHOULD)', value: `${model.should.passed} / ${model.should.total}`, note: 'lower the score; never block' },
       { label: 'Weighted score', value: `${model.scorePercent}%`, note: 'not the conformance decision' },
       { label: 'Not applicable', value: String(g.notApplicable.length), note: `excluded at ${tier}`, tone: 'muted' },
@@ -454,6 +477,7 @@ export function renderConformanceView() {
     nBlock ? { id: 'conf-blocking', label: 'Blocking', count: nBlock, tone: 'fail' } : null,
     g.recommended.length ? { id: 'conf-recommended', label: 'Recommended', count: g.recommended.length, tone: 'warn' } : null,
     hasWaivers && nWaived ? { id: 'conf-waived', label: 'Waived', count: nWaived, tone: 'info' } : null,
+    hasWaivers && nUnused ? { id: 'conf-unused', label: 'Waivers that match nothing', count: nUnused, tone: 'info' } : null,
     nPh ? { id: 'conf-placeholder', label: 'On placeholders', count: nPh, tone: 'warn' } : null,
     g.passed.length ? { id: 'conf-passed', label: 'Passed', count: g.passed.length, tone: 'ok' } : null,
     g.notApplicable.length ? { id: 'conf-na', label: 'Not applicable', count: g.notApplicable.length, tone: 'muted' } : null,
@@ -491,7 +515,7 @@ export function renderConformanceView() {
     ${nav}
     ${dimGrid}
     ${groupHtml('conf-blocking', 'Blocking requirements', `Required clauses that apply at ${tier} and fail. Each one alone keeps the pack from conformance.`, g.blocking, 'blocking', model, { tone: 'fail' })}
-    ${groupHtml('conf-recommended', 'Recommended, not met', 'Recommended (SHOULD) clauses that fail. They lower the score but never block conformance.', g.recommended, 'recommended', model, { tone: 'warn' })}${hasWaivers ? groupHtml('conf-waived', 'Waived requirements', 'Clauses that fail and that a time-boxed waiver covers whole. The rubric still counts them as not met; the effective numbers read them as met until the waiver expires.', g.waived, 'waived', model, { tone: 'info' }) : ''}
+    ${groupHtml('conf-recommended', 'Recommended, not met', 'Recommended (SHOULD) clauses that fail. They lower the score but never block conformance.', g.recommended, 'recommended', model, { tone: 'warn' })}${hasWaivers ? groupHtml('conf-waived', 'Waived requirements', 'Clauses that fail and that a time-boxed waiver covers whole. The rubric still counts them as not met; the effective numbers read them as met until the waiver expires.', g.waived, 'waived', model, { tone: 'info' }) + unusedWaiversHtml(model) : ''}
     ${groupHtml('conf-placeholder', 'Passes on placeholders', phNote, g.placeholder, 'placeholder', model, { tone: 'warn' })}
     ${groupHtml('conf-passed', model.passedIsReal ? 'Passed with real values' : 'Passed', passedNote, g.passed, 'passed', model, { collapsible: true, open: !nBlock && !nPh })}
     ${groupHtml('conf-na', `Not applicable at ${tier}`, `These clauses apply only at a more critical tier. They were not evaluated for this pack and do not count towards the score or conformance.`, g.notApplicable, 'notApplicable', model, { collapsible: true, open: false })}

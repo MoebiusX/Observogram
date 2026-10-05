@@ -55,6 +55,9 @@ details.conf-group > summary { gap: 8px; }
 .conf-row-fix-key { font-weight: 600; color: var(--ux-ink-3); }
 .conf-row-todos, .conf-row-caveat, .conf-row-waiver { margin: 6px 0 0; font-size: 14px; color: var(--ux-ink-2); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .conf-row-todos code { font-size: 13px; }
+.conf-unused-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.conf-unused-item code { font-size: 13px; }
+.conf-unused-item .conf-row-waiver { margin-top: 2px; }
 .conf-row-meta {
   display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px;
   font-size: 13px; color: var(--ux-ink-3);

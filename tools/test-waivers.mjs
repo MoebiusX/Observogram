@@ -332,7 +332,7 @@ test('the Conformance view over a bare report renders byte for byte what it rend
   const { readConformance } = await import('../studio/conformance-view.mjs');
   const c = bareReport();
   const model = readConformance(c, adapt(payment()));
-  assert.deepEqual([model.waived, model.effective, model.waiverCounts, model.expiringSoon, model.groups.waived], [[], null, null, 0, []]);
+  assert.deepEqual([model.waived, model.effective, model.waiverCounts, model.expiringSoon, model.unused, model.groups.waived], [[], null, null, 0, [], []]);
   assert.ok(model.groups.blocking.every(r => r.waiver === null));
   const html = await renderHeadless(c);
   assert.equal(html, read(FIXTURE), 'the bare render is the capture, byte for byte');
@@ -375,10 +375,26 @@ test('the Conformance view over a report with a waivers block: the waived clause
   assert.ok(html.includes('<strong>Waivers</strong> suppress a finding for a time') && html.includes('required 23 of 25'), 'the scoring bullet with the effective numbers');
   assert.match(html, /Not conformant at tier 1: three required clauses need attention\. 1 further required clause is waived for a time\./, 'the headline stays the rubric\'s');
   assert.ok(html.includes('Covered:') && html.includes('<code>slos.settlement_consumers_99_9_min_2</code>'), 'the covered subjects');
-  // An overlay with nothing waived (every waiver unused): the measure reads 0, no group, no nav item.
-  const none = applyWaiversToConformance(c, [normalizeWaiver(base({ id: 9, ruleId: 'L1.MUST.availability_slo' }))], { now: NOW, canonical: pack });
+  // An overlay with nothing waived (every waiver unused): the measure reads 0, no Waived group, no nav item —
+  // and the unused waivers are named (the API lists them active; the CLI prints "n waiver(s) match no failing
+  // clause"): a group of their own with a nav item, each with its clause, symbol, author, expiry and reason,
+  // escaped, and the count on the Waived measure.
+  const none = applyWaiversToConformance(c, [
+    normalizeWaiver(base({ id: 9, ruleId: 'L1.MUST.availability_slo', reason: hostile })),
+    normalizeWaiver(base({ id: 10, ruleId: L4, artefactId: 'slos.nope_not_in_pack', reason: 'a typo, or a renamed SLO' })),
+  ], { now: NOW, canonical: pack });
+  const m2 = readConformance(none, adapt(pack));
+  assert.deepEqual([m2.groups.waived, m2.waiverCounts.unused, m2.unused.map(w => [w.id, w.ruleId, w.artefactId, w.state])], [[], 2, [[9, 'L1.MUST.availability_slo', null, 'active'], [10, L4, 'slos.nope_not_in_pack', 'active']]]);
   const h2 = await renderHeadless(none);
   assert.ok(h2.includes('<dt>Waived</dt>') && h2.includes('<span class="ux-measure-val">0</span>') && !h2.includes('id="conf-waived"') && !h2.includes('data-ux-section="conf-waived"'));
+  assert.match(h2, /<dt>Waived<\/dt>\s*<dd><span class="ux-measure-val">0<\/span><span class="ux-measure-note">effective 21 \/ 25 MUST · 2 waivers match nothing<\/span>/);
+  assert.ok(h2.includes('id="conf-unused"') && h2.includes('data-ux-section="conf-unused"') && h2.includes('Waivers that match nothing <span class="conf-group-count">2</span>'), 'the group and its nav item');
+  assert.ok(h2.includes('2 active waivers name nothing that fails here') && h2.includes('revoked or recorded again'), 'the note says why and names the way out');
+  assert.ok(h2.includes(`<code>${L4}</code><p class="conf-row-waiver"><span class="conf-row-fix-key">Waiver:</span> <span>by oscar on <code>slos.nope_not_in_pack</code> until 2026-11-04 (in 30 days) — a typo, or a renamed SLO</span></p>`), 'the symbol that is not in the pack, named');
+  assert.ok(h2.includes('<code>L1.MUST.availability_slo</code><p class="conf-row-waiver">') && !h2.includes(hostile) && h2.includes('&lt;img src=x onerror=alert(1)&gt; &amp; &quot;quotes&quot;'), 'the pack-level one, its reason escaped');
+  // One unused waiver beside a waived clause: the group sits under Waived, the measure counts both.
+  const h3 = await renderHeadless(applyWaiversToConformance(c, [normalizeWaiver(base({ id: 1 })), normalizeWaiver(base({ id: 10, ruleId: L4, artefactId: 'slos.nope_not_in_pack' }))], { now: NOW, canonical: pack }));
+  assert.ok(h3.indexOf('id="conf-waived"') < h3.indexOf('id="conf-unused"') && h3.includes('1 waiver matches nothing</span>') && h3.includes('1 active waiver names nothing'));
   // ux-kit: the assessment vocabulary gained `waived` and nothing else moved.
   const { STATUS_PROPERTIES } = await import('../studio/ux-kit.mjs');
   assert.deepEqual(Object.keys(STATUS_PROPERTIES.assessment.values), ['pass', 'placeholder', 'waived', 'warning', 'fail', 'notEvaluated', 'notApplicable']);
