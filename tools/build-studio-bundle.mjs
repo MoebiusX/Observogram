@@ -345,9 +345,12 @@ export function checkBrandUrls(b) {
 // one-field rebadge), over a synthetic env: the chosen file absolute so the
 // cwd is ours, the legacy file spelling silenced so it cannot shadow the
 // flag; an env that is not process.env is never cached. The refusal names
-// what was actually set. Returns { brand: normalized | null, source: 'flag'
-// | 'env' | null, file: absolute | null } — `env` with `file: null` is the
-// scalars alone.
+// what was actually set — a brand the environment supplied is refused behind
+// its variable, the server-path refusal included, so a build machine
+// configured for a server is told where the brand came from (the --brand
+// case keeps checkBrandUrls' own text: the flag is on the command line).
+// Returns { brand: normalized | null, source: 'flag' | 'env' | null, file:
+// absolute | null } — `env` with `file: null` is the scalars alone.
 export function loadBundleBrand(opts, env = process.env, cwd = process.cwd()) {
   const flag = opts.brand ? resolve(cwd, opts.brand) : null;
   const envFile = brandEnvFrom(env, 'BRAND_FILE');
@@ -358,7 +361,8 @@ export function loadBundleBrand(opts, env = process.env, cwd = process.cwd()) {
   catch (e) { throw new Error(`${origin}: ${e.message}`, { cause: e }); }
   if (flag && !brand.configured) throw new Error(`--brand: brand file ${file}: an empty brand (no field set) — nothing to bake`);
   if (!brand.configured) return { brand: null, source: null, file: null };
-  checkBrandUrls(brand);
+  try { checkBrandUrls(brand); }
+  catch (e) { throw flag ? e : new Error(`${origin}: ${e.message}`, { cause: e }); }
   return { brand, source: flag ? 'flag' : 'env', file };
 }
 

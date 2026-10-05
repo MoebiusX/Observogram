@@ -1098,6 +1098,9 @@ test('T8b baked brand: a --brand bundle carries the branded server\'s shell frag
   writeFileSync(empty, '{}');
   refuse(['--brand', empty], {}, new RegExp(`^--brand: brand file ${esc(empty)}: an empty brand \\(no field set\\) — nothing to bake\\n$`));
   refuse(['--brand', ACME], {}, /^brand favicon "\/assets\/acme\.ico" is a server path — the bundle is served without the server; use an absolute URL \(https:\/\/…, data:…\) or a path relative to the bundle's own directory \("assets\/acme\.ico"\)\n$/);
+  // The same server path from the environment names the variable that was set — a build machine configured for a server learns where the brand came from.
+  refuse([], { OBSERVOGRAM_BRAND_FILE: ACME }, /^OBSERVOGRAM_BRAND_FILE: brand favicon "\/assets\/acme\.ico" is a server path — the bundle is served without the server; use an absolute URL \(https:\/\/…, data:…\) or a path relative to the bundle's own directory \("assets\/acme\.ico"\)\n$/);
+  refuse([], { OBSERVOGRAM_BRAND_NAME: 'Zed', OBSERVOGRAM_BRAND_LOGO_URL: '/logo.svg' }, /^OBSERVOGRAM_BRAND_\*: brand logo\.url "\/logo\.svg" is a server path — the bundle is served without the server; use an absolute URL \(https:\/\/…, data:…\) or a path relative to the bundle's own directory \("logo\.svg"\)\n$/);
   const badToken = join(TMP, 'bad-token-brand.json');
   writeFileSync(badToken, JSON.stringify({ name: 'X', tokens: { light: { 'Bad Name': '1' } } }));
   refuse(['--brand', badToken], {}, /^--brand: brand: tokens\.light\.Bad Name is not a design token name\n$/);
