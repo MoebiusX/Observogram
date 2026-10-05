@@ -608,6 +608,12 @@ test('T5 parity: the shim answers every ported route as a running server does â€
       await same(backend, `${base}/compile-catalog?env=${encodeURIComponent(env)}`);
     }
     const conf = await sameConformance(backend, `${base}/conformance`);
+    // GAP batch 2, B3.1: a bundled pack is never registered, so the empty
+    // verdicts document IS the server's answer (the registered pack has no
+    // verdict recorded on this fresh server either).
+    const verdicts = await same(backend, `${base}/verdicts`);
+    assert.deepEqual(verdicts.body.verdicts, []);
+    assert.equal(verdicts.body.summary.unreviewed, verdicts.body.summary.artefacts);
     if (id === ordersId) assert.ok(Array.isArray(conf.body.onPlaceholder) && conf.body.onPlaceholder.length, 'the library-built pack says onPlaceholder');
     else assert.ok(!('onPlaceholder' in conf.body), 'the example pack omits onPlaceholder');
     await same(backend, `${base}/canonical`);
@@ -707,6 +713,8 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   await expectDenied('/api/deploy/matrix', undefined, 'Deploy');
   await expectDenied('/api/deploys?pack=p', undefined, 'Deploy');
   await expectDenied('/api/packs/p/deploy-bulk', { method: 'POST' }, 'Deploy');
+  await expectDenied('/api/packs/p/verdicts/SLI-01', { method: 'PUT' }, 'Verdicts');
+  await expectDenied('/api/packs/p/verdicts/SLI-01', { method: 'DELETE' }, 'Verdicts');
   await expectDenied('/api/journeys', undefined, 'Journeys');
   await expectDenied('/api/library', undefined, 'Build');
   await expectDenied('/api/admin/join-role', undefined, 'Administration');
@@ -720,6 +728,8 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   await expectDenied(new URL('https://studio.example/api/journeys'), undefined, 'Journeys');
   assert.equal(featureOf('/api/crawl-github'), 'Scan a repo');
   assert.equal(featureOf('/api/packs/x/retrofeed?y'), 'Compare');
+  assert.equal(featureOf('/api/packs/x/verdicts/SLI-01'), 'Verdicts');
+  assert.equal(featureOf('/api/packs/x/verdicts'), 'Verdicts', 'the feature name; the GET itself is answered before the denial');
   assert.equal(featureOf('/auth/login'), 'Sign-in');
   // /auth/me is the open posture; an unknown pack is 404 with the server's text.
   const me = await backend.handle('/auth/me');

@@ -21,6 +21,8 @@ import { LENS_PRODUCTS } from './compare-view.mjs';
 import { buildSymbolTable, defaultEnvFor, layerArtefactCount, refresh, runBenchmark } from './app.mjs';
 import { wireUxActions, emptyStateHtml, LAYER_PURPOSE, layerSpecTip, plural, announce } from './ux-kit.mjs';
 import { boardHeadHtml, boardGroupsHtml } from './discover-board.mjs';
+import { verdictFilterHtml, passesVerdictFilter } from './verdict-html.mjs';
+import { verdictOf, hasVerdicts, verdictCounts } from './verdicts.mjs';
 
 export function renderDiscoverDashboard(view) {
   view.innerHTML = '';
@@ -380,15 +382,17 @@ function layerEntries(layerId) {
 
 // The whole-pack model the header and the overview read: each layer with its
 // artefacts. Each entry carries its own status (the row draws it — the
-// artefact's source, a template value, an unresolved reference); nothing is
-// summed into a verdict. Filters do not enter it, so its counts are stable.
+// artefact's source, a template value, an unresolved reference) and the
+// reviewer's verdict on it when one is recorded (studio/verdicts.mjs; null
+// for the catalogue, so the board draws nothing); nothing is summed into a
+// pack-level judgement. Filters do not enter it, so its counts are stable.
 function discoverModel() {
   const broken = state.symbolTable?.broken;
   const layers = [];
   for (const def of LAYER_DEFS) {
     const entries = layerEntries(def.id).map(({ a, sub }) => {
       const key = cardKey(def.id, sub, a.id);
-      return { a, sub, key, status: artefactStatus(a, { broken: broken?.get(key)?.length || 0 }) };
+      return { a, sub, key, status: artefactStatus(a, { broken: broken?.get(key)?.length || 0 }), verdict: verdictOf(a.id) };
     });
     // L2X is optional in the spec: no row when the pack has nothing there.
     if (def.id === 'L2X' && !entries.length) continue;
@@ -398,7 +402,8 @@ function discoverModel() {
 }
 
 function refineActive() {
-  return !!(state.layersSearch || '').trim() || (!!state.layersDomain && state.layersDomain !== 'all');
+  return !!(state.layersSearch || '').trim() || (!!state.layersDomain && state.layersDomain !== 'all')
+    || (hasVerdicts() && !!state.layersVerdict && state.layersVerdict !== 'all');
 }
 
 // ---------- the view ----------
@@ -483,6 +488,10 @@ function renderRefine(ctx) {
   // A previously-selected domain that no longer exists (pack switch) falls
   // back to 'all' so we never filter everything out invisibly.
   if (state.layersDomain && state.layersDomain !== 'all' && !domCounts.has(state.layersDomain)) state.layersDomain = 'all';
+  // The Verdict facet (studio/verdicts.mjs) — offered only when the pack has
+  // a verdict recorded; a pack without any resets the choice the same way.
+  const withVerdicts = hasVerdicts();
+  if (!withVerdicts && state.layersVerdict !== 'all') state.layersVerdict = 'all';
 
   wrap.innerHTML = `
     <span class="dv-filter-key" id="dv-refine-key">Refine</span>
@@ -494,6 +503,7 @@ function renderRefine(ctx) {
           ${domOptions.map(d => `<option value="${escapeHtml(d.id)}">${escapeHtml(d.label)} (${domCounts.get(d.id)})</option>`).join('')}
         </select>
       </label>` : ''}
+    ${withVerdicts ? verdictFilterHtml(state.layersVerdict || 'all', verdictCounts(layerArtefactsWithLayer().map(x => x.a))) : ''}
     <label class="dv-refine-search">
       <span class="sr-text">Search artefacts</span>
       <input type="search" class="dv-refine-input" placeholder="Search names, IDs, tags…" aria-describedby="dv-refine-hint">
@@ -501,10 +511,15 @@ function renderRefine(ctx) {
     <button type="button" class="ux-link-btn dv-refine-clear" data-ux-action="dv-clear-refine"${refineActive() ? '' : ' hidden'}>Clear refinement</button>
     <span class="dv-refine-hint" id="dv-refine-hint">Narrows the list of the open layer. The board above stays whole-pack; “match” on a band shows what the refinement leaves.</span>`;
 
-  const sel = wrap.querySelector('.dv-refine-select');
+  const sel = wrap.querySelector('.dv-refine-domain .dv-refine-select');
   if (sel) {
     sel.value = state.layersDomain || 'all';
     sel.addEventListener('change', () => { state.layersDomain = sel.value; afterRefine(ctx); });
+  }
+  const verdictSel = wrap.querySelector('.dv-refine-verdict-select');
+  if (verdictSel) {
+    verdictSel.value = state.layersVerdict || 'all';
+    verdictSel.addEventListener('change', () => { state.layersVerdict = verdictSel.value; afterRefine(ctx); });
   }
   const input = wrap.querySelector('.dv-refine-input');
   input.value = state.layersSearch || '';
@@ -743,6 +758,7 @@ function discoverHandlers(ctx) {
     'dv-clear-refine': () => {
       state.layersSearch = '';
       state.layersDomain = 'all';
+      state.layersVerdict = 'all';
       persistence.schedule();
       renderRefine(ctx);
       renderLayerList(ctx);
@@ -899,6 +915,7 @@ function layerArtefactsWithLayer() {
 function passesLayersFilter(a, layerId) {
   const dom = state.layersDomain || 'all';
   if (dom !== 'all' && artefactDomain(a, layerId) !== dom) return false;
+  if (hasVerdicts() && !passesVerdictFilter(verdictOf(a.id), state.layersVerdict || 'all')) return false;
   const q = (state.layersSearch || '').trim().toLowerCase();
   if (q) {
     const hay = [a.id, a.title, a.desc, a.tool, ...(a.tags || [])]
@@ -978,7 +995,7 @@ export function renderCard(artefact, def, sublayerKey, { outsideFilter = false, 
     return { name: hit || name, found: !!hit };
   }) : null;
 
-  row.innerHTML = artefactRowHtml(artefact, { broken, benchmark, rules, outsideFilter, view });
+  row.innerHTML = artefactRowHtml(artefact, { broken, benchmark, rules, outsideFilter, view, verdict: verdictOf(artefact.id) });
   row.addEventListener('click', (ev) => {
     const t = ev.target;
     const cta = t.closest?.('.benchmark-cta');

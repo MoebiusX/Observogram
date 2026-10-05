@@ -74,8 +74,9 @@ export const FEATURES = [
   ['/api/admin', 'Administration'],
   ['/auth/', 'Sign-in'],
 ];
-// The per-pack sub-routes the server alone answers.
-const PACK_FEATURES = { retrofeed: 'Compare', 'deploy-bulk': 'Deploy' };
+// The per-pack sub-routes the server alone answers — `verdicts` for its
+// writes (PUT / DELETE); the GET is answered below with the empty document.
+const PACK_FEATURES = { retrofeed: 'Compare', 'deploy-bulk': 'Deploy', verdicts: 'Verdicts' };
 
 export function featureOf(pathname) {
   const sub = /^\/api\/packs\/[^/]+\/([^/?]+)/.exec(pathname)?.[1];
@@ -139,6 +140,22 @@ function overlaidCanonical(canonical, envName) {
     };
   }
   return { canonical: next, effective };
+}
+
+// server/verdict-admin.mjs artefactIndex's walk — the layers and the L4
+// subgroups of the studio board (studio/constants.mjs), inlined there and
+// here so neither the server nor the bundle reads the other; tools/test-
+// verdict-admin.mjs holds the two to the same count over payment-service.
+const LAYER_WALK = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
+const L4_WALK = ['policy', 'alerting', 'healing'];
+function artefactCount(adapted) {
+  const layers = adapted?.layers || {};
+  let n = 0;
+  for (const id of LAYER_WALK) {
+    if (id === 'L4') for (const sub of L4_WALK) n += (layers.L4?.[sub] || []).length;
+    else n += (layers[id] || []).length;
+  }
+  return n;
 }
 
 // server/index.mjs librarySummaryFor: validationSummary over the todos a
@@ -314,6 +331,23 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
     }
   }
 
+  // GET /api/packs/:id/verdicts — server/verdict-admin.mjs verdictsDocument
+  // (GAP batch 2, B3.1): a reviewer's verdicts live in the server's store on
+  // a REGISTERED pack, and a bundled pack is never registered, so the
+  // server's own answer for it is the empty document — every artefact
+  // unreviewed. The writes (PUT / DELETE …/verdicts/:artefact) are
+  // PACK_FEATURES 'Verdicts' (501).
+  async function verdicts(id) {
+    const p = await packFor(id, { ok: false });
+    if (p instanceof Response) return p;
+    try {
+      const n = artefactCount(adapt(p.canonical));
+      return json(200, { ok: true, pack: p.meta.id, verdicts: [], summary: { artefacts: n, trusted: 0, suspect: 0, failed: 0, unreviewed: n, orphaned: 0 } });
+    } catch (e) {
+      return json(500, { ok: false, error: e.message });
+    }
+  }
+
   // GET /api/packs/:id/compile-catalog
   async function catalogOfCompile(id, params) {
     const p = await packFor(id, { ok: false });
@@ -424,6 +458,7 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
       if (rest === undefined) return layered(id, url.searchParams);
       if (rest === 'canonical') return canonical(id, url.searchParams);
       if (rest === 'conformance') return conformance(id, url.searchParams);
+      if (rest === 'verdicts') return verdicts(id);
       if (rest === 'compile-catalog') return catalogOfCompile(id, url.searchParams);
       if (rest === 'compile-artifact') return artifact(id, url.searchParams);
       if (rest === 'export.zip') return exportZip(id, url.searchParams);

@@ -14,6 +14,7 @@ import { cardKey } from './layers-view.mjs';
 import { boundText, goodWhen, hasDirection } from './sli-direction.mjs';
 import { readChain, traceIndex } from './trace-chain.mjs';
 import { classifyArtefact } from './taxonomy.mjs';
+import { verdictPanel } from './verdicts.mjs';
 
 // ---------- drawer ----------
 
@@ -73,6 +74,13 @@ export function openDrawer(artefact, def, sublayerKey, side = 'b') {
   // drawer in single-pack views; in compare we check both packs.
   const panels = $(els.panels);
   panels.innerHTML = '';
+  // The reviewer's verdict on it (studio/verdicts.mjs, GAP batch 2): the
+  // record as it stands and the form for whoever may record one — the
+  // single-pack drawer only (Compare's two drawers show two packs' artefacts
+  // and a verdict is per registered pack).
+  if (side === 'b' && state.activeLayer !== 'COMPARE') {
+    panels.appendChild(verdictPanel(artefact, { onSaved: () => appHost.renderMainView() }));
+  }
   const broken = state.symbolTable?.broken?.get(ckey);
   if (broken && broken.length) {
     const sec = panel('Broken references', 'broken-refs');

@@ -28,6 +28,7 @@
 import { escapeHtml } from './util.mjs';
 import { statusChipHtml, statusRecord } from './ux-kit.mjs';
 import { classifyArtefact } from './taxonomy.mjs';
+import { verdictChipHtml } from './verdict-html.mjs';
 
 /**
  * artefactCardHtml(artefact, { broken, benchmark, tagLimit, note }) → the HTML inside a `.card`.
@@ -305,8 +306,8 @@ function liveWhenOf(artefact) {
  * row's Details. Tiles and List are artefactLightRowHtml; Cards is the card
  * body (artefactCardHtml) with its title as the button that opens the record.
  */
-export function artefactRowHtml(artefact, { broken = 0, benchmark = null, rules = null, outsideFilter = false, view = DISCOVER_VIEW_DEFAULT } = {}) {
-  if (view === 'tiles' || view === 'list') return artefactLightRowHtml(artefact, { broken, outsideFilter, view });
+export function artefactRowHtml(artefact, { broken = 0, benchmark = null, rules = null, outsideFilter = false, view = DISCOVER_VIEW_DEFAULT, verdict = null } = {}) {
+  if (view === 'tiles' || view === 'list') return artefactLightRowHtml(artefact, { broken, outsideFilter, view, verdict });
   if (view === 'cards') {
     return artefactCardHtml(artefact || {}, { broken, benchmark, titleButton: true, note: outsideFilter ? 'Open in the detail panel · outside this filter' : null });
   }
@@ -388,7 +389,7 @@ export function artefactRowHtml(artefact, { broken = 0, benchmark = null, rules 
         <span class="dv-row-name">${escapeHtml(name)}</span>
         ${a.subtitle ? `<span class="dv-row-bound">${escapeHtml(a.subtitle)}</span>` : ''}
       </button>
-      <span class="dv-row-status">${artefactStatusChipsHtml(status, { liveWhen })}</span>
+      <span class="dv-row-status">${artefactStatusChipsHtml(status, { liveWhen })}${verdict ? verdictChipHtml(verdict) : ''}</span>
     </div>
     ${what ? `<p class="dv-row-what">${escapeHtml(what)}</p>` : ''}
     ${specLine ? `<p class="dv-row-spec">${escapeHtml(specLine)}</p>` : ''}
@@ -427,7 +428,7 @@ function breakableHtml(text) {
  * Both are one `.dv-row-main` button that opens the full record, as the full
  * row's name does; what the row leaves out is there.
  */
-export function artefactLightRowHtml(artefact, { broken = 0, outsideFilter = false, view = 'tiles' } = {}) {
+export function artefactLightRowHtml(artefact, { broken = 0, outsideFilter = false, view = 'tiles', verdict = null } = {}) {
   const a = artefact || {};
   const { kind } = artefactKind(a);
   const status = artefactStatus(a, { broken });
@@ -454,7 +455,7 @@ export function artefactLightRowHtml(artefact, { broken = 0, outsideFilter = fal
         <span class="dv-row-kind">${escapeHtml(kind)}</span>
         ${a.subtitle ? `<span class="dv-row-bound">${escapeHtml(a.subtitle)}</span>` : ''}
       </span>
-      <span class="dv-row-status">${artefactStatusChipsHtml(status, { liveWhen: liveWhenOf(a), short: true })}</span>
+      <span class="dv-row-status">${artefactStatusChipsHtml(status, { liveWhen: liveWhenOf(a), short: true })}${verdict ? verdictChipHtml(verdict, { short: true }) : ''}</span>
     </button>
     ${outsideFilter ? `<span class="dv-row-pinned" title="${PINNED_TIP}">Open in the detail panel · outside this filter</span>` : ''}
   `;

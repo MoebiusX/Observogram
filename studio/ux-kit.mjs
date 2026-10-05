@@ -24,9 +24,9 @@ import { escapeHtml } from './util.mjs';
 import { LAYER_DEFS } from './constants.mjs';
 import { state } from './state.mjs';
 
-// ---------- the four status properties ----------
+// ---------- the five status properties ----------
 //
-// Origin, completion, evidence and assessment answer different questions.
+// Origin, completion, evidence, assessment and verdict answer different questions.
 // The studio used to render all of them as one badge vocabulary (verified ·
 // declared · scaffold · candidate · recorded live · pass · pass on placeholder
 // · conformant · valid · warning · gap · todo), which read as interchangeable.
@@ -73,6 +73,18 @@ export const STATUS_PROPERTIES = {
       fail:          { label: 'Fail',            tone: 'fail',    tip: 'Did not meet this check.' },
       notEvaluated:  { label: 'Not evaluated',   tone: 'neutral', tip: 'This check has not run, or could not run, for this item.' },
       notApplicable: { label: 'Not applicable',  tone: 'muted',   tip: 'Excluded at this tier: shown for reference only, not counted.' },
+    },
+  },
+  // A reviewer's record (GAP batch 2, B3.1; studio/verdict-html.mjs): never
+  // an engine's word, never summed into a score or a grade.
+  verdict: {
+    label: 'Verdict',
+    question: 'Does a reviewer trust it?',
+    values: {
+      trusted:    { label: 'Trusted',    tone: 'ok',      tip: 'A reviewer recorded this artefact as trusted.' },
+      suspect:    { label: 'Suspect',    tone: 'warn',    tip: 'A reviewer recorded a doubt about this artefact; the reason says what.' },
+      failed:     { label: 'Failed',     tone: 'fail',    tip: 'A reviewer recorded this artefact as failed review.' },
+      unreviewed: { label: 'Unreviewed', tone: 'neutral', tip: 'No verdict is recorded: nobody has reviewed this artefact.' },
     },
   },
 };

@@ -152,13 +152,15 @@ body { font-size: 15px; line-height: 1.5; }
 .ux-chip-info    { color: var(--ux-info); border-color: currentColor; background: var(--ux-info-bg); }
 .ux-chip-muted   { color: var(--ux-ink-3); border-style: dashed; }
 /* Shape encodes the property, so colour is never the only cue:
-   origin = square, completion = pill, evidence = dot, assessment = pill with mark. */
+   origin = square, completion = pill, evidence = dot, assessment = pill with mark,
+   verdict = pill with a diamond (a reviewer's record, studio/verdict-html.mjs). */
 .ux-chip-origin { border-radius: 4px; }
 .ux-chip-evidence::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .ux-chip-assessment.ux-chip-ok::before   { content: "✓"; }
 .ux-chip-assessment.ux-chip-fail::before { content: "✕"; }
 .ux-chip-assessment.ux-chip-warn::before { content: "!"; }
 .ux-chip-assessment.ux-chip-muted::before { content: "–"; }
+.ux-chip-verdict::before { content: "◆"; font-size: 10px; }
 
 .ux-term {
   text-decoration: underline dotted; text-underline-offset: 3px; cursor: help;

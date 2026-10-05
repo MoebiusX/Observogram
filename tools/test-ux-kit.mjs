@@ -16,8 +16,8 @@ import {
 } from '../studio/ux-kit.mjs';
 import { LAYER_NAMES } from '../studio/constants.mjs';
 
-test('four separate status properties, each with its own question', () => {
-  assert.deepEqual(Object.keys(STATUS_PROPERTIES), ['origin', 'completion', 'evidence', 'assessment']);
+test('five separate status properties, each with its own question', () => {
+  assert.deepEqual(Object.keys(STATUS_PROPERTIES), ['origin', 'completion', 'evidence', 'assessment', 'verdict']);
   for (const p of Object.values(STATUS_PROPERTIES)) {
     assert.ok(p.question.endsWith('?'));
     assert.ok(Object.keys(p.values).length >= 3);
@@ -42,6 +42,8 @@ test('a chip names its plain meaning, carries its property class and explains it
   assert.match(html, />Live evidence found</);
   assert.match(html, /title="Evidence — What supports it\?/);
   assert.match(statusChipHtml('assessment', 'notApplicable'), /ux-chip-muted/);
+  assert.match(statusChipHtml('verdict', 'suspect'), /class="ux-chip ux-chip-warn ux-chip-verdict"[^>]*title="Verdict — Does a reviewer trust it\?/);
+  assert.equal(statusRecord('verdict', 'unreviewed').tone, 'neutral');
   assert.match(statusChipHtml('completion', 'needsInput', { showProperty: true }), /<span class="ux-chip-prop">Completion<\/span>Needs input/);
   assert.match(statusChipHtml('evidence', 'live', { label: '12' }), />12<\/span>$/);
   assert.equal(statusChipHtml('evidence', 'nope'), '');

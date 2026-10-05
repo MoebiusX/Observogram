@@ -1487,8 +1487,10 @@ server runs — the catalogue, Discover, Diagnose (conformance), the canonical
 manifest, Compile (the catalogue, every artefact, every target) and **Export**
 (the ZIP, downloaded as a Blob) — so the verdicts are the server's
 (`tools/test-studio-bundle.mjs` compares every ported route against a running
-server). Everything the server alone can do — Scan a repo, Draft from MCP,
-uploads, Compare, Deploy, Journeys, Build, sign-in — answers
+server; `GET /api/packs/:id/verdicts` answers the empty document — a
+bundled pack is never registered, so that IS the server's answer). Everything
+the server alone can do — Scan a repo, Draft from MCP, uploads, Compare,
+Deploy, Journeys, Build, recording a Verdict, sign-in — answers
 `501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
 this studio is a static bundle built without one.' }`, which the studio shows
 as the sentence, and a dismissable notice at the bottom of the window says so

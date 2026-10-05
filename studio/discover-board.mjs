@@ -10,6 +10,7 @@
 
 import { escapeHtml } from './util.mjs';
 import { classifyArtefact, requireTaxonomy } from './taxonomy.mjs';
+import { verdictBadgeHtml } from './verdict-html.mjs';
 
 // Items a group draws before "+N more" (which opens the layer's full list).
 export const BOARD_ITEMS_SHOWN = 6;
@@ -105,6 +106,9 @@ function tip(a) {
   return [a.id, a.title, a.desc].filter(Boolean).join(' · ');
 }
 const itemAttrs = (e, cls) => `type="button" class="dvb-item ${cls}" data-ux-action="dv-item" data-key="${escapeHtml(e.key)}" title="${escapeHtml(tip(e.a))}"`;
+// A reviewer's verdict on the entry (`e.verdict`, set by the Discover screen
+// from state; the goldens' entries carry none): the last child of the item.
+const badge = (e) => (e.verdict ? verdictBadgeHtml(e.verdict) : '');
 
 // ---------- one item, per drawing ----------
 
@@ -114,13 +118,13 @@ const DRAW = {
     const a = e.a;
     const name = shortTitle(a);
     const sub = a.desc && a.desc !== a.title ? a.desc : '';
-    return `<button ${itemAttrs(e, 'dvb-line')}><span class="dvb-name">${escapeHtml(name)}</span>${sub ? `<span class="dvb-sub">${escapeHtml(sub)}</span>` : ''}</button>`;
+    return `<button ${itemAttrs(e, 'dvb-line')}><span class="dvb-name">${escapeHtml(name)}</span>${sub ? `<span class="dvb-sub">${escapeHtml(sub)}</span>` : ''}${badge(e)}</button>`;
   },
   // An indicator: what it measures and how (ratio, threshold).
   sli(e) {
     const a = e.a;
     const type = String(a.spec?.type || '').toLowerCase();
-    return `<button ${itemAttrs(e, 'dvb-tile')}>${icon(type === 'ratio' ? 'shield' : 'gauge')}<span class="dvb-name">${escapeHtml(a.title || a.id)}</span>${type ? `<span class="dvb-sub">${escapeHtml(type)}</span>` : ''}</button>`;
+    return `<button ${itemAttrs(e, 'dvb-tile')}>${icon(type === 'ratio' ? 'shield' : 'gauge')}<span class="dvb-name">${escapeHtml(a.title || a.id)}</span>${type ? `<span class="dvb-sub">${escapeHtml(type)}</span>` : ''}${badge(e)}</button>`;
   },
   // An objective: the target as a dial, its indicator and window.
   slo(e) {
@@ -130,7 +134,7 @@ const DRAW = {
     return `<button ${itemAttrs(e, 'dvb-tile dvb-slo')}>
         <span class="dvb-dial" style="--dvb-fill:${fill}"><span class="dvb-dial-val">${escapeHtml(pct || '—')}</span></span>
         <span class="dvb-name">${escapeHtml(a.spec?.sli || a.title || a.id)}</span>
-        ${a.spec?.window ? `<span class="dvb-sub">/ ${escapeHtml(a.spec.window)}</span>` : ''}
+        ${a.spec?.window ? `<span class="dvb-sub">/ ${escapeHtml(a.spec.window)}</span>` : ''}${badge(e)}
       </button>`;
   },
   // The instrumentation contract: its settings as facts.
@@ -146,7 +150,7 @@ const DRAW = {
     ].filter(([, v]) => v);
     return `<button ${itemAttrs(e, 'dvb-facts-item')}>
         <span class="dvb-name">${escapeHtml(e.a.tool || e.a.title || e.a.id)}</span>
-        ${facts.map(([k, v]) => `<span class="dvb-kv"><span class="dvb-k">${escapeHtml(k)}</span><span class="dvb-v">${escapeHtml(v)}</span></span>`).join('')}
+        ${facts.map(([k, v]) => `<span class="dvb-kv"><span class="dvb-k">${escapeHtml(k)}</span><span class="dvb-v">${escapeHtml(v)}</span></span>`).join('')}${badge(e)}
       </button>`;
   },
   // An exporter, backend or store: the signal, then where it goes.
@@ -155,7 +159,7 @@ const DRAW = {
     const signal = a.spec?.signal || (a.tags || []).find(t => ['metrics', 'logs', 'traces', 'profiles'].includes(t)) || '';
     const target = a.spec?.product || a.spec?.kind || a.tool || '';
     if (!signal || !target) return DRAW.line(e);
-    return `<button ${itemAttrs(e, 'dvb-line dvb-signal')}><span class="dvb-chip" data-signal="${escapeHtml(signal)}">${escapeHtml(signal)}</span><span class="dvb-arrow" aria-hidden="true">→</span><span class="dvb-name">${escapeHtml(target)}</span></button>`;
+    return `<button ${itemAttrs(e, 'dvb-line dvb-signal')}><span class="dvb-chip" data-signal="${escapeHtml(signal)}">${escapeHtml(signal)}</span><span class="dvb-arrow" aria-hidden="true">→</span><span class="dvb-name">${escapeHtml(target)}</span>${badge(e)}</button>`;
   },
   // An alert route: the severity, then who is told.
   route(e) {
@@ -163,12 +167,12 @@ const DRAW = {
     const sev = a.spec?.severity || (a.tags || []).find(t => /^SEV\d$/i.test(t)) || '';
     const channels = (a.spec?.channels || []).map(c => (c && typeof c === 'object' ? Object.entries(c).map(([k, v]) => `${k} ${v}`).join(', ') : String(c))).join(' · ');
     if (!sev) return DRAW.line(e);
-    return `<button ${itemAttrs(e, 'dvb-line dvb-route')}><span class="dvb-sev" data-sev="${escapeHtml(String(sev).toUpperCase())}">${escapeHtml(sev)}</span><span class="dvb-arrow" aria-hidden="true">→</span><span class="dvb-name">${escapeHtml(channels || a.desc || '')}</span></button>`;
+    return `<button ${itemAttrs(e, 'dvb-line dvb-route')}><span class="dvb-sev" data-sev="${escapeHtml(String(sev).toUpperCase())}">${escapeHtml(sev)}</span><span class="dvb-arrow" aria-hidden="true">→</span><span class="dvb-name">${escapeHtml(channels || a.desc || '')}</span>${badge(e)}</button>`;
   },
   // A dashboard: a thumbnail tile.
   dash(e) {
     const a = e.a;
-    return `<button ${itemAttrs(e, 'dvb-tile dvb-dash')}>${icon('chart', 'dvb-ico dvb-ico-wide')}<span class="dvb-name">${escapeHtml(a.title || a.id)}</span>${a.tool ? `<span class="dvb-sub">${escapeHtml(a.tool)}</span>` : ''}</button>`;
+    return `<button ${itemAttrs(e, 'dvb-tile dvb-dash')}>${icon('chart', 'dvb-ico dvb-ico-wide')}<span class="dvb-name">${escapeHtml(a.title || a.id)}</span>${a.tool ? `<span class="dvb-sub">${escapeHtml(a.tool)}</span>` : ''}${badge(e)}</button>`;
   },
   // Baselines: the detection and recovery targets.
   baseline(e) {
@@ -181,7 +185,7 @@ const DRAW = {
     if (!facts.length) return DRAW.line(e);
     return `<button ${itemAttrs(e, 'dvb-facts-item')}>
         <span class="dvb-name">${escapeHtml(e.a.title || e.a.id)}</span>
-        ${facts.map(([k, v]) => `<span class="dvb-kv"><span class="dvb-k">${escapeHtml(k)}</span><span class="dvb-v">${escapeHtml(v)}</span></span>`).join('')}
+        ${facts.map(([k, v]) => `<span class="dvb-kv"><span class="dvb-k">${escapeHtml(k)}</span><span class="dvb-v">${escapeHtml(v)}</span></span>`).join('')}${badge(e)}
       </button>`;
   },
 };
@@ -214,7 +218,7 @@ function groupHtml(g, layerId) {
     body = '<p class="dvb-none">None in this pack</p>';
   } else if (g.draw === 'inventory') {
     // A long inventory (every metric, every panel): its size and a few names.
-    const names = g.entries.slice(0, 3).map(e => `<span class="dvb-inv-name">${escapeHtml(shortTitle(e.a))}</span>`).join('');
+    const names = g.entries.slice(0, 3).map(e => `<span class="dvb-inv-name">${escapeHtml(shortTitle(e.a))}${badge(e)}</span>`).join('');
     body = `<button type="button" class="dvb-item dvb-inv" data-ux-action="dv-open" data-layer="${escapeHtml(layerId)}" title="Open the layer's full list">
         <span class="dvb-inv-n">${n}</span>${names}<span class="dvb-more-text">Open the list →</span>
       </button>`;

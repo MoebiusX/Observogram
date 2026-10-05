@@ -92,8 +92,11 @@ the testable layer).
 ## 4. CSS: one class-prefix per functional zone, split files only along the vendoring seam
 
 Zone prefixes (`.mc-*` verdict widgets, `.rq-*` triage queue, `.disco-*`
-Discover, `.diag-*` Diagnose, `.cpc-*`/`.compare-*` Compare) — keep new
-classes inside their zone's prefix. **Never mass-rename existing classes**:
+Discover, `.diag-*` Diagnose, `.cpc-*`/`.compare-*` Compare; `.dvb-verdict`
+the Discover board's reviewer-verdict badge and `.ux-chip-verdict` the fifth
+status property's chip in `ux.css`, `.verdict-*` the drawer's Verdict
+section — all drawn by `studio/verdict-html.mjs` / `studio/verdicts.mjs`,
+nothing without a verdict) — keep new classes inside their zone's prefix. **Never mass-rename existing classes**:
 they are referenced from both .css and .mjs template strings and there is no
 visual-regression net.
 
