@@ -7914,80 +7914,8 @@ body.chrome-observa .disco {
 .hdr-user-menu-item:hover { background: var(--hover); color: var(--ink); }
 .hdr-user-menu-item:focus-visible { outline: 2px solid var(--CMP); outline-offset: 1px; }
 
-/* ============================================================
-   SERVICE GATE — the post-sign-in landing (which service are
-   you working on?) + the always-visible active-service chip in
-   the OBSERVA bar. docs/PRODUCTIZATION_PLAN.md Stage 1 UX.
-   ============================================================ */
-.svc-gate {
-  max-width: 880px;
-  margin: 9vh auto 0;
-  padding: 0 28px;
-}
-.svc-gate-eyebrow {
-  font: 700 13px/1 var(--mono);
-  letter-spacing: 0.22em;
-  color: var(--CMP);
-}
-.svc-gate-title {
-  font-family: var(--serif);
-  font-size: 42px;
-  font-weight: 600;
-  margin: 14px 0 4px;
-  color: var(--ink);
-}
-.svc-gate-sub {
-  font-size: 16px;
-  color: var(--ink-3);
-  margin: 0 0 30px;
-}
-.svc-gate-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 12px;
-}
-.svc-gate-card {
-  appearance: none;
-  text-align: left;
-  cursor: pointer;
-  padding: 18px 20px;
-  border-radius: var(--r-lg);
-  border: 1px solid var(--line);
-  background:
-    radial-gradient(120% 100% at 0% 0%, color-mix(in srgb, var(--CMP) 7%, transparent), transparent 60%),
-    var(--card);
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.05s;
-}
-.svc-gate-card:hover {
-  border-color: var(--CMP);
-  box-shadow: 0 0 22px color-mix(in srgb, var(--CMP) 22%, transparent);
-}
-.svc-gate-card:active { transform: translateY(1px); }
-.svc-gate-name {
-  display: block;
-  font: 700 15px/1.3 var(--mono);
-  color: var(--ink);
-  margin-bottom: 6px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.svc-gate-meta {
-  display: block;
-  font-size: 13px;
-  color: var(--ink-4);
-}
-.svc-gate-new {
-  appearance: none;
-  margin-top: 26px;
-  padding: 8px 2px;
-  border: 0;
-  background: none;
-  cursor: pointer;
-  font-size: 14px;
-  color: var(--ink-3);
-  border-bottom: 1px dashed var(--line);
-}
-.svc-gate-new:hover { color: var(--CMP); border-bottom-color: var(--CMP); }
+/* The service gate's rules (the post-sign-in landing) live at the end of this file, in the
+   Services zone the AA scan reads (tools/test-build-model.mjs). */
 
 /* Active-service chip in the OBSERVA bar. */
 .observa-service {
@@ -8193,8 +8121,6 @@ body.chrome-observa .disco {
 .home-choice-path { margin-top: 4px; font: 600 12.5px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-4); }
 .home-choice-card.is-build .home-choice-path { color: var(--BLD); }
 .home-choice-card.is-check .home-choice-path { color: var(--obs-cyan); }
-.svc-gate-actions { display: flex; flex-wrap: wrap; gap: 8px 22px; justify-content: center; }
-.svc-gate-actions .svc-gate-new { margin-top: 26px; }
 
 .build-exit { margin-bottom: 6px; }
 .build-exit-btn {
@@ -8977,3 +8903,83 @@ select.build-edit-input { appearance: auto; }
   .build-seg-thumb, .build-switch, .build-switch-knob, .build-rolo-card, .build-chip, .build-slab-add, .build-def-field input, .build-summary, .build-sheet-close, .build-rolodex-nav, .build-seg-btn, .build-seed-change, .build-rolo-edit, .build-rolo-create, .build-edit-reset, .build-editor-close, .build-slab .card.is-editable, .build-seed-chip.is-entry, .build-edit-dir-thumb, .build-edit-dir-btn { transition: none; }
   .build-rolodex-track { scroll-behavior: auto; }
 }
+
+/* ==== Services (docs/STORE_PLAN.md §6, slice 6a): the Services home cards and the service page — the axis
+   language: the card tokens, 14 px radii, hairlines, the mono for slugs and origins, text in --ink / --ink-2 /
+   --ink-3 only, tone by tint and a left border, never by text colour alone; both themes through the tokens.
+   What ux.css and reskin.css override here (.svc-gate-name/-meta/-activity/-eyebrow, the card surface) is
+   recorded in tools/test-build-model.mjs beside the scan; the new prefixes have no override, asserted. ==== */
+
+/* The service gate — the post-sign-in landing (which service are you working on?), moved here from the
+   chrome block so the AA scan reads it. The record cards and the service page (slice 6a) follow. */
+.svc-gate {
+  max-width: 880px;
+  margin: 9vh auto 0;
+  padding: 0 28px;
+}
+.svc-gate-eyebrow {
+  font: 700 13px/1 var(--mono);
+  letter-spacing: 0.22em;
+  color: var(--ink-3);
+}
+.svc-gate-title {
+  font-family: var(--serif);
+  font-size: 42px;
+  font-weight: 600;
+  margin: 14px 0 4px;
+  color: var(--ink);
+}
+.svc-gate-sub {
+  font-size: 16px;
+  color: var(--ink-3);
+  margin: 0 0 30px;
+}
+.svc-gate-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.svc-gate-card {
+  appearance: none;
+  text-align: left;
+  cursor: pointer;
+  padding: 18px 20px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(120% 100% at 0% 0%, color-mix(in srgb, var(--CMP) 7%, transparent), transparent 60%),
+    var(--card);
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.05s;
+}
+.svc-gate-card:hover {
+  border-color: var(--CMP);
+  box-shadow: 0 0 22px color-mix(in srgb, var(--CMP) 22%, transparent);
+}
+.svc-gate-card:active { transform: translateY(1px); }
+.svc-gate-name {
+  display: block;
+  font: 700 15px/1.3 var(--mono);
+  color: var(--ink);
+  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.svc-gate-meta {
+  display: block;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.svc-gate-new {
+  appearance: none;
+  margin-top: 26px;
+  padding: 8px 2px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--ink-3);
+  border-bottom: 1px dashed var(--line);
+}
+.svc-gate-new:hover { color: var(--ink); border-bottom-color: var(--CMP); }
+.svc-gate-actions { display: flex; flex-wrap: wrap; gap: 8px 22px; justify-content: center; }
+.svc-gate-actions .svc-gate-new { margin-top: 26px; }

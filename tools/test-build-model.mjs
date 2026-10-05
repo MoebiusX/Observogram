@@ -2803,9 +2803,20 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   // color-mix(in srgb, A p%, B): a per-channel blend of the gamma-encoded values.
   const mix = (a, b, p) => '#' + [1, 3, 5].map(i => Math.round(parseInt(a.slice(i, i + 2), 16) * p + parseInt(b.slice(i, i + 2), 16) * (1 - p)).toString(16).padStart(2, '0')).join('');
   const LAYERS = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
-  const axis = CSS_TEXT.slice(CSS_TEXT.indexOf('==== The axis'));
-  const rules = [...axis.matchAll(/(?:^|\n)([^@{}\n][^{}]*?)\s*\{([^{}]*)\}/g)].map(m => ({ sel: m[1].trim(), body: m[2] }));
+  // The zones the scan reads, in file order: the axis block (Build) and the Services block (STORE_PLAN slice 6a,
+  // the .svc-* rules). The slice runs from the first marker to EOF, so every zone after it is covered.
+  const ZONES = ['==== The axis', '==== Services'];
+  const starts = ZONES.map(z => { const i = CSS_TEXT.indexOf(z); assert.ok(i >= 0, `${z} marker`); return i; });
+  assert.ok(starts.every((s, i) => i === 0 || s > starts[i - 1]), 'the zones are in order');
+  const axis = CSS_TEXT.slice(starts[0]);
+  const servicesSlice = CSS_TEXT.slice(starts[1]);
+  const ruleRe = /(?:^|\n)([^@{}\n][^{}]*?)\s*\{([^{}]*)\}/g;
+  const rules = [...axis.matchAll(ruleRe)].map(m => ({ sel: m[1].trim(), body: m[2] }));
   assert.ok(rules.length > 100, `the axis block parsed (${rules.length} rules)`);
+  // The zone guard: every rule whose SELECTOR names .svc- sits inside a scanned zone — in any selector position.
+  const rulesBefore = [...CSS_TEXT.slice(0, starts[0]).matchAll(ruleRe)].map(m => m[1].trim());
+  assert.deepEqual(rulesBefore.filter(sel => /\.svc-/.test(sel)), [], 'no .svc- rule before the scanned zones');
+  assert.ok([...servicesSlice.matchAll(ruleRe)].some(m => /\.svc-gate-card/.test(m[1])), 'the service gate rules are in the Services zone');
   const sizeOf = (body) => { const m = body.match(/font(?:-size)?:[^;]*?(\d+(?:\.\d+)?)px/); return m ? Number(m[1]) : null; };
   const weightOf = (body) => Number(body.match(/font:\s*(?:italic\s+)?(\d{3})\s/)?.[1] || 400);
   const large = (body) => { const s = sizeOf(body); return s != null && (s >= 18.66 || (s >= 14 && weightOf(body) >= 700)); };
@@ -2845,4 +2856,25 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   assert.ok(!cssRule('.build-rolo-card.is-open') && !cssRule('.build-rolo-customise') && !cssRule('.build-edit-face'), 'the in-card face and its rules are gone');
   assert.ok(reduced.includes('.build-seed-change') && reduced.includes('.build-rolo-edit') && reduced.includes('.build-edit-reset') && reduced.includes('.build-editor,'), 'the new transitions and the editor\'s entrance respect reduced motion');
   assert.match(cssRule('.build-evidence-custom'), /color:\s*var\(--ink-2\)/, 'the custom evidence badge is ink on a tint, not a colour literal');
+  // ---- The Services zone (docs/STORE_PLAN.md §6, slice 6a): what the scan proves and what it cannot see ----
+  // The scan reads app.css only. For the moved .svc-gate-* rules it proves the app.css tokens; the SHIPPED colours are
+  // the later stylesheets' (studio/index.html links ux.css, then reskin.css, after app.css): ux.css sets
+  // .svc-gate-name/-meta/-activity to --ux-ink/-2/-3 unconditionally, and reskin.css under body.chrome-observa (the
+  // class every boot adds) sets .svc-gate-card { background: --og-panel }, .svc-gate-name → --og-text and
+  // .svc-gate-meta / -activity / -eyebrow → --og-muted. Measured by hand from studio/design-tokens.css: light
+  // --og-muted #5a6779 on --og-panel #ffffff 5.75:1, dark #9ba9bc on #131a25 7.32:1 — AA. The Services tokens on the
+  // card's real surface --og-panel: light --ink-2 11.48:1, --ink-3 8.86:1; dark --ink-2 9.40:1, --ink-3 6.83:1. (Dark
+  // --ink-4 is 4.27:1 on --card and 4.56:1 on --og-panel — the --ink-3 move is right either way.) Verdict text --ink-2
+  // on the tints the scan does not pair it with: light --L1-tint 10.96:1, --L3-tint 10.43:1, --L4-tint 10.24:1; dark
+  // 9.26:1, 8.92:1, 9.65:1.
+  for (const sel of ['.svc-gate-meta', '.svc-gate-eyebrow']) assert.match(cssRule(sel), /color:\s*var\(--ink-3\)/, `${sel} is --ink-3 (not --ink-4, which fails AA in dark; not --CMP, which the scan cannot see)`);
+  assert.ok(!/color:\s*var\(--ink-[45]\)/.test(servicesSlice), 'no --ink-4 / --ink-5 text in the Services zone');
+  assert.ok(!/(?<![-\w])color:\s*var\(--CMP\)/.test(servicesSlice), 'the text tokens rule: --CMP only ever colours a border in the Services zone');
+  // The override check: ux.css and reskin.css restyle none of the new prefixes, so the scan's verdict on them is the shipped one.
+  const NEW_PREFIXES = /\.svc-(card|page|env|tab|tabs|panel|verdict|actions?|packs?|pack-row|why|status|editor)\b/;
+  for (const file of ['studio/ux.css', 'studio/reskin.css']) {
+    const text = readFileSync(resolve(ROOT, file), 'utf8');
+    const sels = [...text.matchAll(/(?:^|\n)([^@{}\n][^{}]*?)\s*\{/g)].map(m => m[1].trim()).filter(s => NEW_PREFIXES.test(s));
+    assert.deepEqual(sels, [], `${file} does not restyle the Services zone`);
+  }
 });
