@@ -308,6 +308,10 @@ test('servicesSelectModel: records by name, own derived keys apart, never the ex
   const off = servicesSelectModel(null, ownDerived, 'nope');
   assert.deepEqual(off.options.map((o) => [o.value, o.serviceId, o.hasPack]), [['orders-api', null, true], ['orphan', null, true]]);
   assert.equal(off.value, '', 'a selected key not listed selects nothing');
+  // The table unavailable with an example open: its service is still the one "(catalogue pack)" option, selected.
+  const offCur = servicesSelectModel(null, ownDerived, 'payment-service', { current: 'payment-service' });
+  assert.deepEqual(offCur.extra, [{ value: 'payment-service', label: 'payment-service (catalogue pack)' }]);
+  assert.equal(offCur.value, 'payment-service');
   assert.deepEqual(servicesSelectModel([], [], null), { options: [], extra: [], disabled: true, value: '' });
 });
 

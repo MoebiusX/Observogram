@@ -49,7 +49,7 @@ import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-
 import { initHost } from './host.mjs';
 import {
   recentServicesKey, buildNoOrgModel, buildServicesHomeModel, buildServicePageModel, accessModel, servicesStatusOf,
-  packForService, newestPack, serviceChipModel, discoverEmptyNote, buildPrefillFromService, verdictKey,
+  packForService, newestPack, serviceChipModel, servicesSelectModel, discoverEmptyNote, buildPrefillFromService, verdictKey,
 } from './services-model.mjs';
 import { loadOrgs, loadServices, loadService, verdictLoader } from './services-api.mjs';
 import { renderNoOrgHome, renderServicesHome, renderServicePage, markUnavailable } from './services-view.mjs';
@@ -346,39 +346,76 @@ function clearPackBState() {
   state.viewFocus = 'a';
 }
 
+// The header SERVICE selector reads the table (design §6.3): one option per
+// record — sorted by name — then, apart after a disabled separator, the own
+// derived services no record covers (never the examples' services, A-M5) and
+// the open catalogue pack's own service as "(catalogue pack)". With the table
+// unavailable, the list is today's own derived one. Choosing a record goes
+// through the SAME resolver as the card → page → Discover path (A-M4); a
+// record with no pack opens its page (D2); a derived-only key re-picks Pack A
+// by the resolver's rule (the newest declared pack, else the newest aggregate).
 function renderServiceSelect() {
   const sel = $('#service-select');
   if (!sel) return;
-  const services = serviceCatalogue();
+  ensureServiceFromPack();
+  const currentA = state.catalog.find(p => p.id === state.selectedPackId);
+  const current = state.selectedPackId
+    ? (serviceKeyForPack(currentA) || normalizeServiceKey(state.pack?.meta?.service) || null)
+    : null;
+  const m = servicesSelectModel(Array.isArray(state.services) ? state.services : null,
+    serviceCatalogue({ ownOnly: true }), state.selectedService, { current });
   sel.innerHTML = '';
-  if (!services.length) {
+  if (m.disabled) {
     const opt = document.createElement('option');
     opt.value = '';
     opt.textContent = '— service —';
     sel.appendChild(opt);
     sel.disabled = true;
+    updateObservaServiceChip();
     return;
   }
   sel.disabled = false;
-  if (!state.selectedService || !services.some(s => s.key === state.selectedService)) {
-    ensureServiceFromPack();
-    if (!state.selectedService || !services.some(s => s.key === state.selectedService)) {
-      state.selectedService = services[0].key;
-    }
-  }
-  for (const service of services) {
+  // A key nothing lists any more (a record deleted since the state was saved):
+  // the first listed service, as today — the open pack's own key is always listed.
+  if (!m.value) state.selectedService = m.options[0]?.value ?? m.extra[0]?.value ?? null;
+  const addOption = (o) => {
     const opt = document.createElement('option');
-    opt.value = service.key;
-    opt.textContent = service.label;
+    opt.value = o.value;
+    opt.textContent = o.label;
+    if (o.serviceId != null) opt.dataset.serviceId = String(o.serviceId);
     sel.appendChild(opt);
+  };
+  m.options.forEach(addOption);
+  if (m.extra.length) {
+    if (m.options.length) {
+      const sep = document.createElement('option');
+      sep.disabled = true;
+      sep.value = '';
+      sep.textContent = '— from packs only —';
+      sel.appendChild(sep);
+    }
+    m.extra.forEach(addOption);
   }
   sel.value = state.selectedService || '';
   updateObservaServiceChip();
   sel.onchange = () => {
-    state.selectedService = sel.value || null;
-    const currentA = state.catalog.find(p => p.id === state.selectedPackId);
+    const value = sel.value || null;
+    const record = m.options.find(o => o.value === value && o.serviceId != null);
+    if (record) {
+      const service = findServiceRecord(record.serviceId);
+      const { pack } = packForService(service, state.catalog, { isLiveAggregatePack });
+      const currentB = [...(state.catalog || []), ...(state._examplesCache || [])].find(p => p.id === state.compareBId);
+      if (state.compareBId && !packMatchesService(currentB, record.value, { side: 'b' })) clearPackBState();
+      state.diff = null;
+      if (!pack) { enterServicePage(record.serviceId, state.selectedEnv); return; }
+      const view = ['layers', 'compare', 'compile'].includes(state.view) ? state.view : 'layers';
+      openServiceIn(view, { serviceId: record.serviceId, env: state.selectedEnv });
+      return;
+    }
+    state.selectedService = value;
     if (state.selectedPackId && !packMatchesService(currentA, state.selectedService, { side: 'a' })) {
-      const nextA = state.catalog.find(p => p.ok && packMatchesService(p, state.selectedService, { side: 'a' }));
+      const matches = state.catalog.filter(p => p.ok && packMatchesService(p, state.selectedService, { side: 'a' }));
+      const nextA = newestPack(matches, p => !isLiveAggregatePack(p)).pack;
       state.selectedPackId = nextA?.id || null;
       state.selectedEnv = state.selectedPackId ? defaultEnvFor(state.selectedPackId) : null;
       state.pack = null;
@@ -417,8 +454,17 @@ function renderPackSelect() {
     if (!p.ok) opt.disabled = true;
     sel.appendChild(opt);
   }
+  // A service with no pack here (a record opened from its page): the bar says
+  // so instead of keeping the previous pack's text.
+  if (!options.length) {
+    const opt = document.createElement('option');
+    opt.value = ''; opt.textContent = '— no pack —';
+    sel.appendChild(opt);
+  }
+  sel.disabled = !options.length;
   sel.value = state.selectedPackId || (options.find(p => p.ok)?.id ?? '');
   sel.onchange = () => {
+    if (!sel.value) return;
     state.selectedPackId = sel.value;
     state.selectedEnv = defaultEnvFor(state.selectedPackId);
     const entry = state.catalog.find(p => p.id === state.selectedPackId);
@@ -2032,6 +2078,13 @@ function openServiceIn(view, { serviceId, env = null } = {}) {
   emptyVerdicts();
   state.activeLayer = ({ compile: 'COMPILE', compare: 'COMPARE' })[view] || 'L1';
   applyModeChrome();
+  // The context bar is redrawn for the empty workspace: the service listed
+  // and selected, "— no pack —", no environment, the meta strip blank.
+  renderServiceSelect();
+  renderPackSelect();
+  renderPackBSelect();
+  renderEnvSelect();
+  renderMeta();
   paintObservaActiveTab();
   renderTabs();
   renderMainView();
