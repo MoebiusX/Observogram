@@ -338,6 +338,9 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     'GET /api/packs/:id/verdicts': [`/api/packs/${p}/verdicts`, undefined, is404('GET /api/packs/:id/verdicts')],
     'PUT /api/packs/:id/verdicts/:artefact': [`/api/packs/${p}/verdicts/SLI-01`, { status: 'failed' }, is404('PUT /api/packs/:id/verdicts/:artefact')],
     'DELETE /api/packs/:id/verdicts/:artefact': [`/api/packs/${p}/verdicts/SLI-01`, undefined, is404('DELETE /api/packs/:id/verdicts/:artefact')],
+    // The audit report and the placeholders (GAP batch 2, B3.5): the other org's pack is unknown here.
+    'GET /api/packs/:id/placeholders': [`/api/packs/${p}/placeholders`, undefined, is404('GET /api/packs/:id/placeholders')],
+    'GET /api/packs/:id/audit-report': [`/api/packs/${p}/audit-report`, undefined, is404('GET /api/packs/:id/audit-report')],
     'GET /api/packs/:id/compile-catalog': [`/api/packs/${p}/compile-catalog`, undefined, is404('GET /api/packs/:id/compile-catalog')],
     'GET /api/packs/:id/compile-artifact': [`/api/packs/${p}/compile-artifact?group=rules`, undefined, is404('GET /api/packs/:id/compile-artifact')],
     'GET /api/packs/:id/export.zip': [`/api/packs/${p}/export.zip`, undefined, is404('GET /api/packs/:id/export.zip')],

@@ -850,6 +850,8 @@ const EXPECTED_CLASS = Object.freeze({
   'GET /api/packs/:id/canonical': 'viewer',
   'GET /api/packs/:id/conformance': 'viewer',
   'GET /api/packs/:id/verdicts': 'viewer',
+  'GET /api/packs/:id/placeholders': 'viewer',
+  'GET /api/packs/:id/audit-report': 'viewer',
   'GET /api/diff': 'viewer',
   'GET /api/compile/targets': 'viewer',
   'GET /api/packs/:id/compile-catalog': 'viewer',
@@ -1306,6 +1308,9 @@ const PROBES = Object.freeze({
   'GET /api/packs/:id/verdicts': ['GET', '/api/packs/nope/verdicts'],
   'PUT /api/packs/:id/verdicts/:artefact': ['PUT', '/api/packs/nope/verdicts/SLI-01', '{"status":"trusted"}'],
   'DELETE /api/packs/:id/verdicts/:artefact': ['DELETE', '/api/packs/nope/verdicts/SLI-01'],
+  // The audit report and the placeholders (GAP batch 2, B3.5): an unknown pack is 404, nothing written.
+  'GET /api/packs/:id/placeholders': ['GET', '/api/packs/nope/placeholders'],
+  'GET /api/packs/:id/audit-report': ['GET', '/api/packs/nope/audit-report'],
   // The waivers (GAP batch 2, B3.2): an unknown service or waiver is 404 on every
   // method (the POST carries a valid body, so the row is what it answers) — nothing is written.
   'GET /api/services/:id/waivers': ['GET', '/api/services/999999/waivers'],

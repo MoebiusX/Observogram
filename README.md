@@ -1289,7 +1289,9 @@ canonical and valid (rows are informational); 1 for an unreadable, layered
 has rows; 2 for usage. `--json` prints `{ tool, specVersion, strict, packs:
 [{ path, valid, errors, rubric, rows, counts, … }], totals, exitCode }`. The
 maturity rubric (Diagnose) grades what is declared, placeholders included; the
-rows are what still has to become real. The workflow, the marker contract and
+rows are what still has to become real; the server answers the same report at
+`GET /api/packs/:id/placeholders` (and the static bundle in the browser). The
+workflow, the marker contract and
 the merge-safe `upconvert-legacy` (`-o` onto an existing canonical file merges;
 `--merge`, `--overwrite`) are in [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §11.
 
@@ -1657,7 +1659,8 @@ manifest, Compile (the catalogue, every artefact, every target) and **Export**
 server; `GET /api/packs/:id/verdicts` answers the empty document — a
 bundled pack is never registered, so that IS the server's answer). Everything
 the server alone can do — Scan a repo, Draft from MCP, uploads, Compare,
-Deploy, Journeys, Build, recording a Verdict, sign-in — answers
+Deploy, Journeys, Build, recording a Verdict, the Audit report (its goes-blind
+section needs the PromQL parser the bundle cannot inline), sign-in — answers
 `501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
 this studio is a static bundle built without one.' }`, which the studio shows
 as the sentence, and a dismissable notice at the bottom of the window says so
@@ -2387,6 +2390,8 @@ open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
 | `GET` | `/api/packs/:id/canonical` | Canonical pack with env overlay |
 | `GET` | `/api/packs/:id/verdicts` | A reviewer's verdicts on the pack's artefacts (GAP batch 2): `{ ok, pack, verdicts[], summary }` — each `{ artefact, key, family, title, status, reason, actor, setAt, carriedFrom }`, `status` one of `trusted`, `suspect`, `failed`; `unreviewed` is the absence of a record; a catalogue pack answers the empty document (`?env=` is ignored: verdicts are per pack) — see [Record Verdicts](#record-verdicts) |
 | `GET` | `/api/packs/:id/conformance` | Maturity-rubric scoring (the rubric grades what is declared, placeholders included; `npm run pack-conformance` lists the placeholders) (`onPlaceholder` when the pack carries `library.todo.*` annotations), graded at the service record's tier when one is set (the environment's for `?env=`, else the service's): `declaredTier` is the graded tier, `tier.pack` the pack's own, `tier.mismatch` says they differ; a pack with no record (a catalogue pack, a service without a tier) is graded at its own tier, `tier.from: 'pack'` |
+| `GET` | `/api/packs/:id/audit-report` | The service audit report (GAP batch 2; [Export A Service Audit Report](#export-a-service-audit-report)): `?format=json` (default) or `html`, `?top=<1..100>` the goes-blind listing size, `?download=1` an attachment named `<id>.audit-report.<ext>`, `?env=` grades the environment. Its conformance section is this route's `/conformance` body; its verdict and waiver rows are the store's (the pack's and its primary service's), the author the audit actor; no-store. 400 names a bad `format` or `top`; 404 `{ error: 'unknown pack: <id>' }` |
+| `GET` | `/api/packs/:id/placeholders` | The placeholder report `npm run pack-conformance` prints, for the pack as the env overlay leaves it (`?env=`): `{ name, writers, markers, rows, counts, conformant }` (`tools/lib/pack-conformance.mjs` `packConformance`); no-store |
 | `GET` | `/api/diff?a=&b=` | Repo/live or pack/pack structural diff |
 | `GET` | `/api/packs/:id/compile-catalog` | Per-artifact compile tree |
 | `GET` | `/api/packs/:id/compile-artifact` | Compile one artifact or group |

@@ -484,13 +484,16 @@ test('the CLI --waivers: the file is read before any pack (unreadable → exit 2
 
 // ---------- 9. inert by default ----------
 
-test('inert: no server/ or studio/ file imports the engine; the static bundle graph reaches neither it nor legacy.mjs; the CLIs resolve the schema through fileURLToPath', () => {
+// GAP batch 2, B3.5 built the reserved GET /api/packs/:id/placeholders route (server/routes/audit-report.mjs) and
+// the bundle's in-browser answer (studio/static-backend.mjs), so exactly those two runtime files import the engine
+// (the audit report's model imports it too, under tools/lib) and the bundle graph now reaches pack-conformance.mjs
+// — the one declared bundle-bytes change. Nothing reaches legacy.mjs.
+test('inert: exactly the two placeholder routes (server/routes/audit-report.mjs, studio/static-backend.mjs) import the engine, no other server/ or studio/ file; the static bundle graph reaches it and never legacy.mjs; the CLIs resolve the schema through fileURLToPath', () => {
   const walk = (d) => readdirSync(rel(d), { withFileTypes: true }).flatMap(e => (e.isDirectory() ? walk(`${d}/${e.name}`) : e.name.endsWith('.mjs') ? [`${d}/${e.name}`] : []));
-  for (const f of [...walk('server'), ...walk('studio')]) {
-    assert.ok(!/pack-conformance\.mjs/.test(read(f)), `${f} does not import pack-conformance.mjs`);
-  }
+  const importers = [...walk('server'), ...walk('studio')].filter(f => !/\/test-[^/]+\.mjs$/.test(f) && /from '[^']*pack-conformance\.mjs'/.test(read(f)));
+  assert.deepEqual(importers.sort(), ['server/routes/audit-report.mjs', 'studio/static-backend.mjs']);
   const graph = collectModuleGraph();
-  assert.ok(!graph.has('tools/lib/pack-conformance.mjs') && !graph.has('lib/pack-conformance.mjs'), 'bundle graph has no pack-conformance');
+  assert.ok(graph.has('lib/pack-conformance.mjs'), 'bundle graph reaches pack-conformance through the shim\'s /placeholders answer');
   assert.ok(![...graph.keys()].some(k => /legacy\.mjs$/.test(k)), 'bundle graph has no legacy.mjs');
   for (const cli of ['tools/pack-conformance.mjs', 'tools/upconvert-legacy.mjs']) {
     const src = read(cli);

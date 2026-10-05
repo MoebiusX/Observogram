@@ -74,9 +74,10 @@ import { servicesRoutes } from './routes/services.mjs';
 import { auditRoutes } from './routes/audit.mjs';
 import { verdictsRoutes } from './routes/verdicts.mjs';
 import { waiversRoutes } from './routes/waivers.mjs';
+import { auditReportRoutes } from './routes/audit-report.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
 import { resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
-import { conformanceWaivers } from './waiver-admin.mjs';
+import { conformanceWaivers, listWaiverViews } from './waiver-admin.mjs';
 import { authGate, orgContext, authorize, effectiveRoleOf, rankOf, rankOfRole } from './authz.mjs';
 import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
@@ -88,7 +89,7 @@ import { defaultOrgId } from './store/identity.mjs';
 import { getOrg, listOrgs } from './store/orgs.mjs';
 import { listMembershipsForUser } from './store/memberships.mjs';
 import { brandEnv, loadBrand, brandSource } from '../tools/lib/brand-env.mjs';
-import { brandShellHtml } from '../tools/lib/brand.mjs';
+import { brandShellHtml, DEFAULT_BRAND } from '../tools/lib/brand.mjs';
 import { loadTaxonomy, taxonomyAnswer } from './taxonomy.mjs';
 import { mcpTransport, describeTransport } from '../tools/mcp-transport.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
@@ -515,13 +516,13 @@ app.get('/api/packs/:id/canonical', authorize('GET /api/packs/:id/canonical'), (
 // report here and here only: with no open waiver the report is the same
 // object (byte-identical body); /api/validate and the library routes keep
 // the bare report.
-function conformanceReportFor(meta, canonical, env) {
+function conformanceReportFor(meta, canonical, env, { now = new Date().toISOString() } = {}) {
   const { canonical: overlaid } = overlaidCanonical(canonical, env);
   const packTier = packTierOf(overlaid);
   const record = meta.uploaded ? serviceTierFor(currentStore(), meta.id, env) : null;
   const graded = record?.tier ? withCriticality(overlaid, record.tier) : overlaid;
   const engine = evaluateConformance(graded);
-  const report = record?.service ? conformanceWaivers(currentStore(), record.service, engine, graded, { now: new Date().toISOString() }) : engine;
+  const report = record?.service ? conformanceWaivers(currentStore(), record.service, engine, graded, { now }) : engine;
   // Which clauses pass only on a placeholder, for this env overlay at the
   // graded tier — the same list /api/validate and /api/library/register
   // put in summary.onPlaceholder. Only a pack carrying library.todo.*
@@ -724,6 +725,33 @@ app.use(verdictsRoutes({ findPackMeta, loadPackCanonical, authorize }));
 // operator writes), every rule server/waiver-admin.mjs's; the overlay they
 // produce is read by conformanceReportFor above.
 app.use(waiversRoutes({ authorize }));
+
+// The service audit report (GAP batch 2, B3.5) lives in
+// server/routes/audit-report.mjs: GET /api/packs/:id/audit-report (JSON or
+// HTML, branded like the shell) and GET /api/packs/:id/placeholders, both
+// viewer reads. The report's conformance section is conformanceReportFor's
+// body (the one builder), its verdict and waiver rows the admin modules'
+// views over the store — mapped field by field here, the one `now` shared
+// with the conformance overlay. The brand is the one start() loads; the
+// styles (the studio's design tokens and kit) are read at the first request.
+app.use(auditReportRoutes({
+  authorize, findPackMeta, loadPackCanonical, readEnv, conformanceReportFor, overlaidCanonical, currentStore,
+  brand: () => brand,
+  styles: () => `${readFileSync(resolve(STUDIO_DIR, 'design-tokens.css'), 'utf8')}\n${readFileSync(resolve(STUDIO_DIR, 'design-kit.css'), 'utf8')}`,
+  generator: () => ({ name: `${brand.name} server`, version: buildInfo().version }),
+  assessments: {
+    // A pack's verdict rows (server/verdict-admin.mjs verdictsDocument): a catalogue pack has none, by construction.
+    verdictsFor: (db, meta, _env, adapted) => verdictsDocument(db, { meta, adapted }).verdicts
+      .map((v) => ({ artefactKey: v.artefact, key: v.key, family: v.family, title: v.title, state: v.status, reason: v.reason, at: v.setAt, by: v.actor })),
+    // The pack's primary service record's waivers (server/waiver-admin.mjs listWaiverViews), history included; no service → none.
+    waiversFor: (db, meta, env, now) => {
+      const service = meta.uploaded ? serviceTierFor(db, meta.id, env)?.service : null;
+      if (!service) return [];
+      return listWaiverViews(db, service, now).waivers
+        .map((w) => ({ id: w.id, artefactKey: w.artefactId, rule: w.ruleId, reason: w.reason, expiresAt: w.expiresAt, at: w.createdAt, by: w.author, status: w.state, revokedAt: w.revokedAt, revokedBy: w.revokedBy, revokeReason: w.revokeReason }));
+    },
+  },
+}));
 
 // The audit reader (STORE_PLAN slice 5) lives in server/routes/audit.mjs:
 // GET /api/audit — the request's org's rows to its admins, the
@@ -2055,6 +2083,9 @@ app.use('/lib', express.static(resolve(ROOT, 'tools/lib'), {
 // on-disk shell around this handler (it falls to the SPA route instead).
 const SHELL_FILE = resolve(STUDIO_DIR, 'index.html');
 let brandedShell = null;
+// The brand start() loaded (DEFAULT_BRAND until then): the audit report's
+// chrome and tokens read it through the closure above.
+let brand = DEFAULT_BRAND;
 function sendShell(req, res) {
   if (brandedShell !== null) return res.type('html').set('Cache-Control', 'no-cache').send(brandedShell);
   res.sendFile(SHELL_FILE);
@@ -2127,7 +2158,7 @@ export async function start({ port = PORT, host = HOST, silent = false, legacyLi
   // here, not at import, so an in-process suite's env lands first; a bad
   // brand file refuses the start before the store is touched. Said once,
   // name and source (a path or 'env') only — never the file's contents.
-  const brand = loadBrand();
+  brand = loadBrand();
   brandedShell = brand.configured ? brandShellHtml(readFileSync(SHELL_FILE, 'utf8'), brand) : null;
   if (brand.configured) log(`[studio] brand: ${brand.name} (${brandSource() === 'env' ? 'OBSERVOGRAM_BRAND_* env' : brandSource()})`);
   const { db, ctx } = await bootStore({ host, log, warn });

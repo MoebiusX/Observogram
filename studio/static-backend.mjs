@@ -44,6 +44,7 @@ import { adapt, listEnvironments, applyEnvironmentOverlay } from '../tools/lib/a
 import { serviceMetadata } from '../tools/lib/service-keys.mjs';
 import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from '../tools/lib/validator.mjs';
 import { evaluateConformance, RUBRIC } from '../tools/lib/conformance.mjs';
+import { packConformance } from '../tools/lib/pack-conformance.mjs';
 import { compile, listTargets, compileCatalog, compileArtifact } from '../tools/lib/compile.mjs';
 import { makeZip } from '../tools/lib/zip.mjs';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
@@ -75,8 +76,11 @@ export const FEATURES = [
   ['/auth/', 'Sign-in'],
 ];
 // The per-pack sub-routes the server alone answers — `verdicts` for its
-// writes (PUT / DELETE); the GET is answered below with the empty document.
-const PACK_FEATURES = { retrofeed: 'Compare', 'deploy-bulk': 'Deploy', verdicts: 'Verdicts' };
+// writes (PUT / DELETE; the GET is answered below with the empty document)
+// and `audit-report` (GAP batch 2, B3.5: its goes-blind section is the blast
+// radius over the traceability graph, whose PromQL parser the bundle cannot
+// inline — the Compare blocker; `placeholders` IS answered below).
+const PACK_FEATURES = { retrofeed: 'Compare', 'deploy-bulk': 'Deploy', verdicts: 'Verdicts', 'audit-report': 'Audit report' };
 
 export function featureOf(pathname) {
   const sub = /^\/api\/packs\/[^/]+\/([^/?]+)/.exec(pathname)?.[1];
@@ -444,6 +448,21 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
     }
   }
 
+  // GET /api/packs/:id/placeholders — server/routes/audit-report.mjs (GAP
+  // batch 2, B3.5): packConformance over the overlaid canonical, bare — the
+  // rows `packc conformance` prints; the engine is zero-store, so the bundle
+  // answers it in the browser.
+  async function placeholders(id, params) {
+    const p = await packFor(id);
+    if (p instanceof Response) return p;
+    try {
+      const { canonical: overlaid } = overlaidCanonical(p.canonical, readEnv(params));
+      return json(200, packConformance(overlaid), { 'Cache-Control': 'no-store' });
+    } catch (e) {
+      return json(500, { error: e.message });
+    }
+  }
+
   const deny = (pathname) => json(501, { ok: false, denied: DENIED, error: denialText(featureOf(pathname), product) });
 
   async function route(url, method) {
@@ -459,6 +478,7 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
       if (rest === 'canonical') return canonical(id, url.searchParams);
       if (rest === 'conformance') return conformance(id, url.searchParams);
       if (rest === 'verdicts') return verdicts(id);
+      if (rest === 'placeholders') return placeholders(id, url.searchParams);
       if (rest === 'compile-catalog') return catalogOfCompile(id, url.searchParams);
       if (rest === 'compile-artifact') return artifact(id, url.searchParams);
       if (rest === 'export.zip') return exportZip(id, url.searchParams);

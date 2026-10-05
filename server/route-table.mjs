@@ -99,6 +99,11 @@ export const ROUTES = Object.freeze({
   // B3.1; server/routes/verdicts.mjs): a catalogue pack answers the empty
   // document.
   'GET /api/packs/:id/verdicts': { class: 'viewer' },
+  // The placeholder report and the service audit report (GAP batch 2, B3.5;
+  // server/routes/audit-report.mjs): reads over the pack and the store's
+  // verdict and waiver rows, JSON or HTML.
+  'GET /api/packs/:id/placeholders': { class: 'viewer' },
+  'GET /api/packs/:id/audit-report': { class: 'viewer' },
   'GET /api/diff': { class: 'viewer' },
   'GET /api/compile/targets': { class: 'viewer' },
   'GET /api/packs/:id/compile-catalog': { class: 'viewer' },

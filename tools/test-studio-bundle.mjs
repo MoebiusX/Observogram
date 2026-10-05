@@ -616,6 +616,11 @@ test('T5 parity: the shim answers every ported route as a running server does â€
     const verdicts = await same(backend, `${base}/verdicts`);
     assert.deepEqual(verdicts.body.verdicts, []);
     assert.equal(verdicts.body.summary.unreviewed, verdicts.body.summary.artefacts);
+    // GAP batch 2, B3.5: the placeholder report is the zero-store engine's, answered in the browser (no-store on both sides).
+    const placeholders = await same(backend, `${base}/placeholders`, { headers: ['cache-control'] });
+    assert.equal(typeof placeholders.body.conformant, 'boolean');
+    if (id === ordersId) assert.ok(placeholders.body.rows.length > 0, 'the library-built pack has placeholder rows');
+    for (const env of packEnvs) await same(backend, `${base}/placeholders?env=${encodeURIComponent(env)}`);
     if (id === ordersId) assert.ok(Array.isArray(conf.body.onPlaceholder) && conf.body.onPlaceholder.length, 'the library-built pack says onPlaceholder');
     else assert.ok(!('onPlaceholder' in conf.body), 'the example pack omits onPlaceholder');
     await same(backend, `${base}/canonical`);
@@ -665,7 +670,7 @@ test('T5 parity: the shim answers every ported route as a running server does â€
     else assert.deepEqual(b.body, a.body, path);
   }
   // Unknown pack: the server's shapes.
-  for (const path of ['/api/packs/nope', '/api/packs/nope/conformance', '/api/packs/nope/canonical', '/api/packs/nope/compile-catalog', '/api/packs/nope/compile-artifact?group=x', '/api/packs/nope/compile/prometheus-rules', '/api/packs/nope/export.zip']) {
+  for (const path of ['/api/packs/nope', '/api/packs/nope/conformance', '/api/packs/nope/placeholders', '/api/packs/nope/canonical', '/api/packs/nope/compile-catalog', '/api/packs/nope/compile-artifact?group=x', '/api/packs/nope/compile/prometheus-rules', '/api/packs/nope/export.zip']) {
     await same(backend, path);
   }
   // /auth/me: server/auth.mjs's stand-alone answer when no identity is
@@ -717,6 +722,8 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   await expectDenied('/api/packs/p/deploy-bulk', { method: 'POST' }, 'Deploy');
   await expectDenied('/api/packs/p/verdicts/SLI-01', { method: 'PUT' }, 'Verdicts');
   await expectDenied('/api/packs/p/verdicts/SLI-01', { method: 'DELETE' }, 'Verdicts');
+  await expectDenied('/api/packs/p/audit-report', undefined, 'Audit report');
+  await expectDenied('/api/packs/p/audit-report?format=html', undefined, 'Audit report');
   await expectDenied('/api/journeys', undefined, 'Journeys');
   await expectDenied('/api/library', undefined, 'Build');
   await expectDenied('/api/admin/join-role', undefined, 'Administration');
@@ -732,6 +739,8 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   assert.equal(featureOf('/api/packs/x/retrofeed?y'), 'Compare');
   assert.equal(featureOf('/api/packs/x/verdicts/SLI-01'), 'Verdicts');
   assert.equal(featureOf('/api/packs/x/verdicts'), 'Verdicts', 'the feature name; the GET itself is answered before the denial');
+  assert.equal(featureOf('/api/packs/x/audit-report?format=html'), 'Audit report');
+  assert.equal(featureOf('/api/packs/x/placeholders'), 'This action', 'placeholders is answered, not a feature');
   assert.equal(featureOf('/auth/login'), 'Sign-in');
   // /auth/me is the open posture; an unknown pack is 404 with the server's text.
   const me = await backend.handle('/auth/me');
