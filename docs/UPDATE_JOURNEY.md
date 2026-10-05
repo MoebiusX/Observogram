@@ -986,3 +986,55 @@ Deferred by name: `remediation-trigger-ref`, `remediation-flow-graph-unify`,
 `remediation-flow-live-state`, `alert-rule-deploy`, `catalogue-triggers`.
 Tests: 934 → 958 (`tools/test-remediation-flow.mjs` 14,
 `tools/test-remediation-flow-view.mjs` 10).
+
+**G4 — glossary widgets.** Definitions for the taxonomy's families and for
+spec terms, sourced from a `glossary` section of the taxonomy file and shown
+as an accessible mark beside the label they explain (README "Classify Typed
+Packs"; `DOWNSTREAM.md` §14 `glossary`). Decisions: the W3 schema is
+versioned rather than loosened — `TAXONOMY_VERSIONS` `[1, 2]`,
+`TAXONOMY_VERSION_LATEST` 2, and `TAXONOMY_VERSION` KEEPS the value 1, so a
+downstream that writes `version: TAXONOMY_VERSION` keeps emitting files its
+deployed server accepts and a v1 file stays valid here (it compiles to the
+frozen empty glossary; `glossary` under `version: 1` is an unknown key);
+every entry field is bounded and refused with an exact text, the `link` must
+be `http(s)` and carry no credentials because `GET /api/taxonomy` serves it
+to every viewer, at most one entry per family and no term or alias twice; a
+glossary changes no classification (`classifyArtefact` reads `types` and
+`ids` only — pinned over the fixtures and the vendored example); no server
+code changes (`server/taxonomy.mjs` validates and serves the document as
+loaded, the bundle bake uses the same validator, so B1's bake carries the
+glossary and the bundle draws the same marks with no shim change). The mark
+is a toggletip, not a tooltip — a real button named "What is <label>?" with
+`aria-expanded` / `aria-controls` / `aria-describedby`, the definition
+`hidden` until opened and previewed on hover and on `:focus-visible` by CSS
+so nothing is hover-only, Escape closing the open mark and returning the
+focus (swallowed only then: with no mark open the drawer's Escape in
+`studio/app.mjs` is literally untouched), a click elsewhere closing it, the
+link a "Learn more" anchor in a new tab; drawn by `studio/glossary.mjs`
+(imports `util.mjs` and `taxonomy.mjs` only; the `.ux-gloss*` zone of
+`ux.css` beside `.ux-term`, `--ux-*` tokens only, the focus ring restated
+after `all: unset`, in-flow inside the drawer because `.drawer` scrolls its
+own box) on the Discover row's kind (between the name button and the status
+chips — the row's click guard lets it keep its job; B3.1's verdict chip sits
+inside `.dv-row-status`, so the two never touch the same characters), the
+board's group titles (the first family at home in the group that has an
+entry, else the title as a term or alias) and head facts, the drawer's kind
+row, section heads and field labels; the Tiles, List and Cards views draw no
+mark because the row is one button there (`glossary-light-views`). Inert by
+proof: `glossaryLabelHtml(text) === escapeHtml(text)` and every mark is `''`
+with no entry, so the 24 board goldens, the crawl and compile goldens and
+every Discover row are byte-identical with no glossary, a v1 file or an
+unknown label; the one new golden `typed.glossary.board.html` (the typed
+fixture under `tools/fixtures/taxonomy/taxonomy.v2.json`) stripped of its
+marks (`stripGlossaryMarks`, a balanced span walk) is `typed.mapped.board.html`
+with the same families; `taxonomy.json` stays v1. The browser smoke
+(`server/test-glossary-shell.mjs`, modelled on `test-brand-shell.mjs` so no
+strip loop wipes `OBSERVOGRAM_PLAYWRIGHT` or `OBSERVOGRAM_GLOSSARY_SMOKE`;
+STRIP gains the knob) opens the vendored example on a v2 child at 1366 and
+390 px and proves the keyboard toggle, the focus return, the hover preview,
+and Escape closing a mark in the drawer before the drawer; a v1 and an
+unconfigured child draw zero marks. Deferred by name: `glossary-light-views`,
+`glossary-termhtml-override`, `glossary-seed-from-spec`.
+Tests: 958 → 975 (`tools/test-glossary.mjs` 9, `server/test-glossary-shell.mjs` 1,
+four more in `tools/test-artefact-classify.mjs`, one in `server/test-taxonomy.mjs`,
+one in `tools/test-discover-rows.mjs`, one in `tools/test-studio-bundle.mjs` — T8c).
