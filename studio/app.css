@@ -9050,8 +9050,8 @@ select.build-edit-input { appearance: auto; }
 .svc-verdict.is-placeholder { background: var(--L1-tint); border-left-color: var(--warn); }
 .svc-verdict.is-base { background: var(--line-2); border-left-color: var(--ink-3); }
 .svc-verdict.is-fail { background: var(--L4-tint); border-left-color: var(--fail-border); }
-.svc-verdict.is-none, .svc-verdict.is-loading, .svc-verdict.is-error { color: var(--ink-3); background: var(--line-2); }
-.svc-verdict-detail { font-size: 11.5px; color: var(--ink-3); }
+.svc-verdict.is-none, .svc-verdict.is-loading, .svc-verdict.is-error { color: var(--ink-2); background: var(--line-2); }
+.svc-verdict-detail { font-size: 11.5px; color: var(--ink-2); }
 .svc-card .svc-gate-activity { margin-top: 8px; }
 .svc-status {
   margin: 0 0 14px;

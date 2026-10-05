@@ -2933,4 +2933,35 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
     const sels = [...text.matchAll(/(?:^|\n)([^@{}\n][^{}]*?)\s*\{/g)].map(m => m[1].trim()).filter(s => NEW_PREFIXES.test(s));
     assert.deepEqual(sels, [], `${file} does not restyle the Services zone`);
   }
+  // The bridge check: studio/index.html links design-bridge.css after app.css, and the bridge remaps the neutrals on
+  // :root (--ink-N → --og-text/-2/--og-muted, --card → --og-panel, --line-2 → --og-line), so the SHIPPED pill colours
+  // are design-tokens.css's, not app.css's. The scan above pairs the app.css values (--ink-3 #4A4A4A on --line-2
+  // #E5E8EC, ~8:1) and stays green while the bridged pair fails: light --og-muted #5a6779 on --og-line #d8dde6 is
+  // 4.22:1 — below AA for 11.5–13.5 px text. So every Services rule that colours text with an --ink-N token is
+  // re-read through the bridge, on --og-panel (the card and the page panel) and, for a rule whose own background is
+  // --line-2 or whose text sits inside such a pill (the <small> detail inside .is-base), on --og-line.
+  const bridgeBlock = readFileSync(resolve(ROOT, 'studio/design-bridge.css'), 'utf8').match(/(?:^|\n):root, \[data-theme="dark"\], \[data-theme="light"\]\s*\{([\s\S]*?)\n\}/);
+  assert.ok(bridgeBlock, 'the bridge remaps the tokens on :root and both themes');
+  const bridge = Object.fromEntries([...bridgeBlock[1].matchAll(/--([\w-]+):\s*var\(--(og-[\w-]+)\)/g)].map(m => [m[1], m[2]]));
+  for (const tok of ['ink-1', 'ink-2', 'ink-3', 'card', 'line-2']) assert.ok(bridge[tok], `the bridge maps --${tok}`);
+  const ogText = readFileSync(resolve(ROOT, 'studio/design-tokens.css'), 'utf8');
+  const ogOf = (block) => { const m = ogText.match(new RegExp(`(?:^|\\n)${block}\\s*\\{([\\s\\S]*?)\\n\\}`)); assert.ok(m, `${block} og token block`); return Object.fromEntries([...m[1].matchAll(/--([\w-]+):\s*(#[0-9a-fA-F]{6})\b/g)].map(t => [t[1], t[2]])); };
+  const og = { light: ogOf(':root'), dark: ogOf('\\[data-theme="dark"\\]') };
+  const PILL_CONTENT = /^\.svc-verdict-detail$/;                       // rendered inside the .is-base pill, whose background is --line-2
+  const bridged = [];
+  for (const r of [...servicesSlice.matchAll(ruleRe)].map(m => ({ sel: m[1].trim(), body: m[2] }))) {
+    const tok = r.body.match(/(?:^|[;{\s])color:\s*var\(--(ink-[1-5])\)/)?.[1];
+    if (!tok) continue;
+    const onLine = /background:\s*var\(--line-2\)/.test(r.body) || PILL_CONTENT.test(r.sel);
+    const min = large(r.body) ? 3 : 4.5;
+    for (const [name, t] of Object.entries(og)) {
+      const ink = t[bridge[tok]];
+      for (const surface of onLine ? ['card', 'line-2'] : ['card']) {
+        const ratio = contrast(ink, t[bridge[surface]]);
+        if (ratio < min) bridged.push(`${r.sel}: --${tok} (--${bridge[tok]}) on --${surface} (--${bridge[surface]}) ${ratio.toFixed(2)}:1 (${name}, needs ${min})`);
+      }
+    }
+  }
+  assert.deepEqual(bridged, [], 'every Services text colour clears AA through the bridge, on the panel and inside a --line-2 pill');
+  assert.ok(contrast(og.light['og-muted'], og.light['og-line']) < 4.5, 'the ratio the live review measured, for the record: light --og-muted on --og-line fails AA, so a muted pill\'s text is --ink-2');
 });
