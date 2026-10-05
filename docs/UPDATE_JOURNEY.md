@@ -885,3 +885,34 @@ chain check read it. The guard now holds every head-of-branch count the
 CHANGELOG or a delivery report states for a flat suite this batch added to
 the `test(` calls the file holds.
 Tests: 884 → 885 (one more test in `tools/test-doc-test-totals.mjs`).
+
+### Rebadge batch 2, PR 2 — GAP batch 2
+
+**G1 — verdicts.** A reviewer's `trusted | suspect | failed` record, with a
+reason, the actor and the time, on one artefact of one registered pack
+(`docs/ADAPTER.md` "Verdicts — a reviewer's record per artefact"; README
+"Record Verdicts"; `DOWNSTREAM.md` §14 `verdicts`). Decisions: `unreviewed`
+is the absence of a row, never a stored value; a verdict is a trust record
+and never feeds the conformance score or the diagnostic grade (Diagnose's
+"verdict" is the engine's grade — the two share a word and nothing else);
+the artefact is keyed by the adapter's positional id, frozen within a
+content-hash pack id, with the behavioural identity key and a contract hash
+beside it so a label re-registration carries the record onto the new
+pack's artefact (`pack.replace`, `pack.register`, then one `verdict.carry`
+row; a replaced pack without verdicts plans nothing and writes nothing); an
+`operator` records (a CI bearer can record an automated review), a viewer
+reads; a catalogue pack answers the empty document (the static bundle
+answers the same, by construction, so the bundle's parity suite compares
+it) and refuses a record with 409 naming the way (register it); the store
+door is one migration for the whole PR (schema v2: `verdicts` and B3.2's
+`waivers` in one step, one set of re-pins) and is one-way (back up before
+upgrading; `packc store export` writes no verdict). Inert by proof: the 24
+board goldens are byte-identical (the badge renders only on an entry's
+`verdict`, which the golden renderer never sets), the rows are pinned with
+`verdict: null`, `/conformance`, `/export.zip` and the deploy answers are
+byte-identical through the shared `conformanceReportFor` /
+`overlaidCanonical` refactor; the intended changes are the drawer's Verdict
+section, `verdicts.json` in the export only while a pack has a verdict,
+`user_version` 1 → 2 and the bundle's bytes in `static-backend.mjs`.
+Tests: 885 → 911 (`server/test-verdict-admin.mjs` 9, `server/test-verdicts-api.mjs` 9,
+five more in `server/test-store.mjs`, three in `tools/test-discover-rows.mjs`).

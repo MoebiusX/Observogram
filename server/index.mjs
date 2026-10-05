@@ -73,6 +73,7 @@ import { identityRoutes } from './routes/identity.mjs';
 import { servicesRoutes } from './routes/services.mjs';
 import { auditRoutes } from './routes/audit.mjs';
 import { verdictsRoutes } from './routes/verdicts.mjs';
+import { verdictsDocument } from './verdict-admin.mjs';
 import { resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
 import { authGate, orgContext, authorize, effectiveRoleOf, rankOf, rankOfRole } from './authz.mjs';
 import { versionInfo } from './version.mjs';
@@ -642,7 +643,11 @@ app.get('/api/packs/:id/compile-artifact', authorize('GET /api/packs/:id/compile
 
 // GET /api/packs/:id/export.zip — the whole pack as one download: the
 // canonical pack.yaml plus every compiled artefact (the 'all' bundle of each
-// compile group × flavor) under artefacts/. Hand-rolled ZIP, no zip dep.
+// compile group × flavor) under artefacts/, and — only when the pack carries
+// any — the reviewer's verdicts as verdicts.json (the GET
+// /api/packs/:id/verdicts document, GAP batch 2 B3.1; a catalogue pack and
+// a pack nobody reviewed export exactly what they did before, so the static
+// bundle's ZIP stays the server's). Hand-rolled ZIP, no zip dep.
 app.get('/api/packs/:id/export.zip', authorize('GET /api/packs/:id/export.zip'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ error: `unknown pack: ${req.params.id}` });
@@ -664,6 +669,10 @@ app.get('/api/packs/:id/export.zip', authorize('GET /api/packs/:id/export.zip'),
           files.push({ name: `artefacts/${g.id}/${out.filename}`, data: out.content });
         } catch (_) { /* a flavor that can't compile for this pack — skip it */ }
       }
+    }
+    if (meta.uploaded) {
+      const doc = verdictsDocument(currentStore(), { meta, adapted: adapt(canonical) });
+      if (doc.verdicts.length > 0) files.push({ name: 'verdicts.json', data: `${JSON.stringify(doc, null, 2)}\n` });
     }
 
     const zip = makeZip(files);

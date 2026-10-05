@@ -1199,7 +1199,9 @@ In the studio, Discover shows a verdict as a badge on the board and a chip
 on the row, the Refine control filters a layer by verdict, and the drawer's
 Verdict section records one (operators and admins; everyone in the open
 postures). The `actor` is the audit actor — a login or the token label,
-never an email.
+never an email. `GET /api/packs/:id/export.zip` adds `verdicts.json` (the
+GET document) after the compiled artefacts — only while the pack has a
+verdict, so a pack without one exports exactly what it did before.
 
 ### Report Placeholders (pack conformance)
 

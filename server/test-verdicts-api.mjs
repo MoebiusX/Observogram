@@ -274,6 +274,52 @@ test('the quick-start dedup carries verdicts: the same label on new content writ
   ids.carry = second;
 });
 
+// ---------- the export ----------
+
+// The ZIP's central directory, as tools/test-studio-bundle.mjs reads it.
+function zipEntryNames(bytes) {
+  const b = Buffer.from(bytes);
+  let eocd = b.length - 22;
+  while (eocd >= 0 && b.readUInt32LE(eocd) !== 0x06054b50) eocd--;
+  assert.ok(eocd >= 0, 'the zip has an end-of-central-directory record');
+  const count = b.readUInt16LE(eocd + 10);
+  let at = b.readUInt32LE(eocd + 16);
+  const names = [];
+  for (let i = 0; i < count; i++) {
+    assert.equal(b.readUInt32LE(at), 0x02014b50, 'a central file header');
+    const nameLen = b.readUInt16LE(at + 28);
+    const extraLen = b.readUInt16LE(at + 30);
+    const commentLen = b.readUInt16LE(at + 32);
+    names.push(b.subarray(at + 46, at + 46 + nameLen).toString('utf8'));
+    at += 46 + nameLen + extraLen + commentLen;
+  }
+  return names;
+}
+
+test('GET /api/packs/:id/export.zip carries verdicts.json only while the pack has verdicts: N entries → N+1 (the GET document, stable JSON) → N again; a catalogue pack never has it', async () => {
+  const zipOf = async (id) => {
+    const r = await fetch(`${BASE}/api/packs/${id}/export.zip`, { headers: { Cookie: cookies.vera } });
+    assert.equal(r.status, 200);
+    const bytes = Buffer.from(await r.arrayBuffer());
+    return { names: zipEntryNames(bytes), files: Number(r.headers.get('x-bundle-files')), bytes };
+  };
+  const catalogue = await zipOf('payment-service');
+  assert.ok(!catalogue.names.includes('verdicts.json') && catalogue.files === catalogue.names.length, 'a catalogue pack exports as before');
+  // ids.carry (from the carry test) holds two verdicts.
+  const withVerdicts = await zipOf(ids.carry);
+  assert.equal(withVerdicts.names.at(-1), 'verdicts.json', 'the last entry, after the compiled artefacts');
+  assert.equal(withVerdicts.files, withVerdicts.names.length);
+  assert.equal(withVerdicts.names.length, catalogue.names.length + 1, 'N + 1 — the same compiled artefacts as the catalogue copy of this pack, plus the verdicts');
+  const doc = (await ok('GET /api/packs/:id/verdicts', 'vera', `/api/packs/${ids.carry}/verdicts`)).json;
+  const text = `${JSON.stringify(doc, null, 2)}\n`;
+  assert.ok(withVerdicts.bytes.includes(Buffer.from(text)), 'the entry is the GET document, pretty-printed, newline-terminated (the ZIP stores it uncompressed)');
+  // Clear both: N again.
+  for (const v of doc.verdicts) await ok('DELETE /api/packs/:id/verdicts/:artefact', 'oscar', `/api/packs/${ids.carry}/verdicts/${v.artefact}`);
+  const cleared = await zipOf(ids.carry);
+  assert.deepEqual(cleared.names, withVerdicts.names.slice(0, -1), 'N entries, the same names, no verdicts.json');
+  assert.equal(cleared.files, catalogue.files);
+});
+
 test('a replace of a pack without verdicts writes no carry row: pack.replace, pack.register, the links — exactly as before GAP batch 2', async () => {
   const canonical = parseYaml(PAY_YAML);
   const v1 = { ...canonical, metadata: { ...canonical.metadata, name: 'plain', version: '1.0.0', bindings: { ...canonical.metadata.bindings, service: 'plain' } } };

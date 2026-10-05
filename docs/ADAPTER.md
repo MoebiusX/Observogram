@@ -209,6 +209,11 @@ answers it with no rows; `?env=` is ignored):
   "summary": { "artefacts": 84, "trusted": 1, "suspect": 0, "failed": 1, "unreviewed": 82, "orphaned": 0 } }
 ```
 
+**Export** — `GET /api/packs/:id/export.zip` carries the document as
+`verdicts.json` (pretty-printed, newline-terminated) after the compiled
+artefacts, only while the pack has at least one verdict; `X-Bundle-Files`
+counts it. Nothing else changes in the ZIP.
+
 **Record** — `PUT /api/packs/:id/verdicts/:artefact` (operator) with
 `{ "status": "trusted" | "suspect" | "failed", "reason"?: "≤ 2000 chars" }` →
 `{ "ok": true, "verdict": VerdictView, "changed": ["status", "reason"] }`.

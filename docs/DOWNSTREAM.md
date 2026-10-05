@@ -575,3 +575,48 @@ guard forces; a skip that would pass there is a test to un-skip (the fixture
 can probe `symlinkSync` once and skip only on EPERM). The Windows CI leg
 itself (`windows-latest`, `npm ci && npm test`, no `fetch-validators`, no
 docker) is deferred until that first run confirms the count.
+
+## 14. Reliability-workflow features (GAP batch 2)
+
+The five generic reliability-workflow features of rebadge batch 2 (B3), one
+`###` per feature name; downstreams plan retirement waves against these
+names. Each is a full build behind a documented seam, inert without data
+and free of downstream vocabulary; the follow-ups are named, with their
+blocker, so a wave can be scheduled against them.
+
+| feature | status | seam | what a downstream retires | follow-ups |
+|---|---|---|---|---|
+| `verdicts` | shipped — full build | `GET/PUT/DELETE /api/packs/:id/verdicts[/:artefact]` (`docs/ADAPTER.md` "Verdicts"), the `verdicts.json` entry of `/export.zip`, the `verdict.set` / `verdict.clear` / `verdict.carry` audit rows, the `verdict` status property (`studio/ux-kit.mjs`) and `studio/verdict-html.mjs` | its per-artefact review / trust record and its badge, filter and record form | `verdicts-service-scope`, `verdicts-bundle-bake`, `verdicts-cli`, `verdicts-on-adapter-upgrade` |
+
+### verdicts
+
+A reviewer's `trusted | suspect | failed` record, with a reason, the actor
+and the time, on one artefact of one registered pack; `unreviewed` is the
+absence of a record. Persisted in the store (schema v2, `verdicts`, cascading
+with the pack), surfaced on Discover as a board badge, a row chip and a
+Refine facet, recorded from the drawer, exported as `verdicts.json`. Never a
+scorer input: the conformance score and the diagnostic grade do not read it.
+The artefact address is the adapter's positional id (`SLI-01`) within a
+content-hash pack id; a re-upload under the same label carries each record
+by behavioural identity (`identityKeyOf`) and drops the rest, counted in
+`verdict.carry`. Everything a downstream integrates against is in
+`docs/ADAPTER.md` ("Verdicts — a reviewer's record per artefact": the
+VerdictView, the document, the PUT body, every refusal text) and README
+"Record Verdicts".
+
+Follow-ups, by name:
+
+- *`verdicts-service-scope`* — a verdict is per pack; a service-level record
+  that survives a pack's eviction (the service row outlives its packs) is
+  the next shape, keyed by the canonical symbol as the waivers are.
+- *`verdicts-bundle-bake`* — the static bundle answers the empty document;
+  baking a `verdicts.json` into a `--pack` (a read-only badge in a bundle)
+  needs a build flag and a shim read, like the taxonomy and the brand.
+- *`verdicts-cli`* — no `packc verdicts` yet: the API is the one door
+  (`curl` in README "Record Verdicts"); a CLI over the same admin module is
+  a small follow-up once a downstream asks for a batch path.
+- *`verdicts-on-adapter-upgrade`* — a positional id is frozen within a pack
+  id, but an adapter change that renumbers artefacts of an already-registered
+  pack would orphan its rows (served flagged `orphaned: true`, counted in
+  `summary.orphaned`); a migration-time re-key by identity key is the fix
+  when such an upgrade ships.
