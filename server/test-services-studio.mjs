@@ -21,8 +21,9 @@
  * vera (viewer): the Build card and the three source buttons are
  * aria-disabled with the reason naming the org, the page has no Edit, the
  * empty Discover sentence names an operator. As olive (owner in acme and
- * bravo): the one `.observa-org-select` switcher; a draft started from an
- * acme service page is gone in bravo and back in acme. As nora (no org):
+ * bravo): the one `.observa-org-select` switcher; a service opened in acme
+ * is recorded under acme's recents key alone; a draft started from an acme
+ * service page is gone in bravo and back in acme. As nora (no org):
  * the server's refusal and the account menu. The token-only posture (a
  * second child with OBSERVOGRAM_API_TOKEN and no identity): the home's
  * Build card is disabled with the token reason. The phone width (390 px)
@@ -432,6 +433,11 @@ test('BROWSER: the services journey — the home, the page, the bound workspace,
       assert.equal(await $value(page, '.observa-org-select'), 'acme');
       assert.equal(await $attr(page, '#observa-org', 'title'), 'organisation: acme (role: admin)');
       await openPage(page, 'payment-service');
+      // Opening the page records the service under acme's recents key alone (§6.6, A-m2): the default
+      // org's key — the legacy key's heir — holds nothing, and bravo's never learns of it.
+      const recentsOf = (org) => page.evaluate((k) => Object.keys(JSON.parse(localStorage.getItem(k) || '{}')), `studioRecentServices:${org}`);
+      assert.deepEqual(await recentsOf('acme'), ['payment-service'], 'the recents are keyed by the active org');
+      assert.deepEqual(await recentsOf('default'), [], 'the default org\'s key is not every org\'s');
       await openBuildFromPage(page);
       assert.equal(await $value(page, '#build-name'), 'Payments Platform', 'DEFINE prefilled from the acme record');
       await page.waitForFunction(() => /Payments Platform/.test(localStorage.getItem('studioState.v2:olive:acme') || ''), null, { timeout: T });
@@ -440,6 +446,7 @@ test('BROWSER: the services journey — the home, the page, the bound workspace,
       await page.waitForSelector('.home-check-empty', { state: 'attached', timeout: T });   // inside the Check card, collapsed on an empty home
       assert.match(await $text(page, '.home-check-empty'), /^No services in Bravo yet\./);
       assert.equal(await $attr(page, '#observa-org', 'title'), 'organisation: bravo (role: admin)');
+      assert.deepEqual(await recentsOf('bravo'), [], 'acme\'s opened service is not a bravo recent');
       await page.click('#home-choice-build');
       await page.waitForSelector('#build-name', { timeout: T });
       assert.equal(await $value(page, '#build-name'), '', 'DEFINE is empty in bravo');
