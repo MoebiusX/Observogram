@@ -99,7 +99,10 @@ section — all drawn by `studio/verdict-html.mjs` / `studio/verdicts.mjs`,
 nothing without a verdict; `.rflow-*` the response path of
 `studio/remediation-flow-view.mjs`, one zone in `ux-remediate.css` drawn on
 Remediate and on Diagnose alike, nothing for a pack without
-`spec.remediation`) — keep new classes inside their zone's prefix. **Never mass-rename existing classes**:
+`spec.remediation`; `.ux-gloss-*` the glossary marks of `studio/glossary.mjs`
+in `ux.css` — a toggletip beside a family label or a spec term, drawn only
+when the taxonomy file's v2 `glossary` explains it, `--ux-*` tokens only) —
+keep new classes inside their zone's prefix. **Never mass-rename existing classes**:
 they are referenced from both .css and .mjs template strings and there is no
 visual-regression net.
 

@@ -243,7 +243,7 @@ entry names) against a running server:
 
 | Answered in the browser | Answered `501 { ok: false, denied: 'no-backend', error: '<Feature> needs the Observogram server; this studio is a static bundle built without one.' }` |
 |---|---|
-| `GET /api/packs`, `/api/packs/:id` (+ `?env=`), `/canonical` (JSON, `?format=yaml`), `/conformance`, `/compile-catalog`, `/compile-artifact`, `/compile/:target`, `/export.zip` (the Export button downloads it as a Blob); `/api/compile/targets`, `/api/maturity-rubric`, `/api/version`, `/healthz`, `/api/taxonomy` (unconfigured, or the document `--taxonomy` baked), `/api/examples` and `/api/references` (empty), `/api/live-status` (`present: false`); `/api/packs/:id/verdicts` (the empty document — a bundled pack is never registered, so this is the server's own answer); `/auth/me` → `404 { ok: false, error: 'identity not configured' }` (the open posture) | every other `/api` or `/auth` path and every non-GET: Scan a repo (`/api/crawl*`), Draft from MCP, Refresh from MCP, uploads (`/api/validate`, `/api/uploads`), Compare (`/api/diff`, retrofeed), Deploy, Journeys, Build (`/api/library*`), Verdicts (`PUT` / `DELETE …/verdicts/:artefact`), sign-in (`/auth/*`) |
+| `GET /api/packs`, `/api/packs/:id` (+ `?env=`), `/canonical` (JSON, `?format=yaml`), `/conformance`, `/compile-catalog`, `/compile-artifact`, `/compile/:target`, `/export.zip` (the Export button downloads it as a Blob); `/api/compile/targets`, `/api/maturity-rubric`, `/api/version`, `/healthz`, `/api/taxonomy` (unconfigured, or the document `--taxonomy` baked — a v2 file's `glossary` included, so the glossary marks draw as on a server), `/api/examples` and `/api/references` (empty), `/api/live-status` (`present: false`); `/api/packs/:id/verdicts` (the empty document — a bundled pack is never registered, so this is the server's own answer); `/auth/me` → `404 { ok: false, error: 'identity not configured' }` (the open posture) | every other `/api` or `/auth` path and every non-GET: Scan a repo (`/api/crawl*`), Draft from MCP, Refresh from MCP, uploads (`/api/validate`, `/api/uploads`), Compare (`/api/diff`, retrofeed), Deploy, Journeys, Build (`/api/library*`), Verdicts (`PUT` / `DELETE …/verdicts/:artefact`), sign-in (`/auth/*`) |
 
 Swapping packs is a rebuild: `--pack` inlines a file validated against the
 schema at build time; `--pack-url` names a URL the page fetches at its first
@@ -589,6 +589,7 @@ blocker, so a wave can be scheduled against them.
 |---|---|---|---|---|
 | `waivers` | shipped — full build | `GET/POST /api/services/:id/waivers`, `POST /api/waivers/:id/revoke`, the `waivers` block of `GET /api/packs/:id/conformance` (`docs/ADAPTER.md` "Waivers"), the sidecar file of `packc conformance --waivers`, `tools/lib/waivers.mjs` (listed), the `waiver.create` / `waiver.revoke` audit rows | its exception / suppression list for conformance findings and its expiry bookkeeping | `B3.2-studio-waive`, `B3.2-bundle-waivers`, `B3.2-env-scope`, `B3.2-supersedes` |
 | `diagnose-remediate-flow` | shipped — full build | `tools/lib/remediation-flow.mjs` (listed): `buildRemediationFlowModel`, the linking rule and the `observogram.remediates.remediation[<i>]` annotation (`docs/ADAPTER.md` "Response path"); the panel `studio/remediation-flow-view.mjs` on Diagnose (`#diag-flow`) and Remediate (`#rm-flow`), the `.rflow-*` zone | its alert → runbook / automation "what next" page and its trigger-to-alert matching | `remediation-trigger-ref`, `remediation-flow-graph-unify`, `remediation-flow-live-state`, `alert-rule-deploy`, `catalogue-triggers` |
+| `glossary` | shipped — full build | the taxonomy file's schema version 2 `glossary` (`OBSERVOGRAM_TAXONOMY` / `--taxonomy`; README "Classify Typed Packs"), `tools/lib/artefact-classify.mjs` `glossaryFor` / `glossaryByText` / `glossaryEntries` (listed), the mark `studio/glossary.mjs` (`.ux-gloss-*`) on Discover rows, board titles, head facts and the drawer | its hover/inline definitions for artefact families and domain terms, and the file that held them | `glossary-light-views`, `glossary-termhtml-override`, `glossary-seed-from-spec` |
 | `verdicts` | shipped — full build | `GET/PUT/DELETE /api/packs/:id/verdicts[/:artefact]` (`docs/ADAPTER.md` "Verdicts"), the `verdicts.json` entry of `/export.zip`, the `verdict.set` / `verdict.clear` / `verdict.carry` audit rows, the `verdict` status property (`studio/ux-kit.mjs`) and `studio/verdict-html.mjs` | its per-artefact review / trust record and its badge, filter and record form | `verdicts-service-scope`, `verdicts-bundle-bake`, `verdicts-cli`, `verdicts-on-adapter-upgrade` |
 
 ### waivers
@@ -701,3 +702,35 @@ Follow-ups, by name:
   pack would orphan its rows (served flagged `orphaned: true`, counted in
   `summary.orphaned`); a migration-time re-key by identity key is the fix
   when such an upgrade ships.
+
+### glossary
+
+Definitions for the taxonomy's families and for spec terms, sourced from a
+`glossary` section of the taxonomy file — the W3 seam at schema version 2
+(`TAXONOMY_VERSION_LATEST`; `TAXONOMY_VERSION` stays 1 so a file written for
+an older server keeps validating, and a v1 file stays valid here). An entry
+is `{ term, definition, family?, aliases?, link? }`; the classifier refuses a
+bad one with an exact text and compiles a good one to `{ entries, byFamily,
+byText }` behind `glossaryFor`, `glossaryByText`, `glossaryEntries` (listed,
+`tools/lib/artefact-classify.mjs`). A glossary changes no classification. The
+studio draws an entry as an accessible mark (`studio/glossary.mjs`: a named
+button, the definition opened in place, hover and focus previews, Escape,
+a "Learn more" anchor for `link`) beside the Discover row's kind, the board's
+group titles and head facts, and the drawer's kind row and labels; the static
+bundle draws the same from a baked v2 file (B1's bake carries the document,
+`tools/test-studio-bundle.mjs` T8c). Byte-identical without one: the 24 board
+goldens, every row (README "Classify Typed Packs", *The glossary marks*).
+
+Follow-ups, by name:
+
+- *`glossary-light-views`* — the Tiles, List and Cards views draw no mark
+  (the row is one button there, and a button cannot hold a button); a
+  side-mark outside the button is the next shape.
+- *`glossary-termhtml-override`* — `termHtml()` (the studio's own formal
+  terms, `studio/ux-kit.mjs` GLOSSARY) and the operator's glossary are two
+  voices; letting a v2 entry override a `termHtml` key's definition by name
+  is a small follow-up once a downstream asks for it.
+- *`glossary-seed-from-spec`* — the vendored spec names every family and
+  term; a generator that seeds a v2 glossary from the spec's descriptions
+  (`tools/sync-spec.mjs` pins the spec, so the seed is a tool, not an edit)
+  would give every downstream a starting file.

@@ -105,6 +105,15 @@ The formal term follows the plain meaning, never replaces it:
 `termHtml()` shows the plain words with the formal term and its definition on
 hover and focus; `GLOSSARY` is the single place a definition lives.
 
+The operator's glossary is the other voice beside it: a taxonomy file at
+schema version 2 may carry a `glossary` (README "Classify Typed Packs"), and
+`studio/glossary.mjs` draws its definitions as a mark (`.ux-gloss`, a real
+button that opens the definition; hover and focus preview it, Escape closes
+it) beside the family label of a Discover row, a board group title, a head
+fact, and the drawer's kind row and section heads. `termHtml` explains the
+studio's own words; the glossary mark explains the operator's families and
+terms. Neither is drawn when nothing explains the label.
+
 ## Interaction rules
 
 - One primary action per state.

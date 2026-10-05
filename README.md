@@ -1384,6 +1384,27 @@ static bundle bakes it like any other taxonomy file.
 `tools/fixtures/taxonomy/taxonomy.v2.json` is the worked v2 example beside
 the v1 `taxonomy.json`.
 
+**The glossary marks.** Where the studio names something the glossary
+explains, a small `?` mark follows the label: on Discover, the kind of each
+row (its family's entry, else an entry whose term or alias is the label), the
+board's group titles (the first family at home in the group that has an
+entry, else the title as a term or alias) and the head facts (`Criticality`,
+`Backends` … by label); in the drawer, a *kind* row with the family's entry
+and any section head or field label the glossary knows. The mark is a real
+button, not a tooltip: its name reads "What is <label>?", it opens the
+definition in place (`aria-expanded`, `aria-controls`), hover and keyboard
+focus preview it, Escape closes it and hands the focus back (and is swallowed
+only then — with nothing open Escape still closes the drawer), a click
+elsewhere closes it; `link` is a "Learn more" anchor to the operator's page in
+a new tab. Nothing is hover-only and no colour is the only cue. Without a
+glossary — no file, a v1 file, or a label the glossary does not know — the
+mark is not drawn and every row, board and drawer is byte for byte what it
+was (`npm run test:golden:board` keeps the 24 goldens and adds
+`typed.glossary.board.html`, the typed fixture under the v2 file, which
+stripped of its marks is the mapped golden). The static bundle shows the same
+marks from the baked v2 file (`--taxonomy`). The Tiles, List and Cards views
+carry no mark (`glossary-light-views`, `docs/DOWNSTREAM.md` §14).
+
 A typed pack reaches the pipeline either as a layered JSON upload whose items
 carry a `type` (kept through the upconvert as
 `metadata.annotations["observogram.artefact.type.<symbol>"]` and emitted by

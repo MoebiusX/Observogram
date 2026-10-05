@@ -7,10 +7,13 @@
 // catalogue made visible: every item is an artefact of the pack and opens its
 // record; nothing is scored. Pure HTML builders over the adapted pack (no
 // state, no DOM), like card-html.mjs; layers-view.mjs wires the actions.
+// A group title and a head fact carry a glossary mark (studio/glossary.mjs)
+// when the bound taxonomy's v2 glossary explains them — nothing otherwise.
 
 import { escapeHtml } from './util.mjs';
 import { classifyArtefact, requireTaxonomy } from './taxonomy.mjs';
 import { verdictBadgeHtml } from './verdict-html.mjs';
+import { glossaryGroupMarkHtml, glossaryLabelHtml } from './glossary.mjs';
 
 // Items a group draws before "+N more" (which opens the layer's full list).
 export const BOARD_ITEMS_SHOWN = 6;
@@ -231,7 +234,7 @@ function groupHtml(g, layerId) {
   }
   return `
     <section class="dvb-group${g.aside ? ' is-aside' : ''}${n ? '' : ' is-empty'}" data-group="${escapeHtml(g.id)}" aria-label="${escapeHtml(`${g.title}: ${n}`)}">
-      <h4 class="dvb-group-title">${escapeHtml(g.title)}${n ? ` <span class="dvb-group-n">${n}</span>` : ''}</h4>
+      <h4 class="dvb-group-title">${escapeHtml(g.title)}${glossaryGroupMarkHtml(layerId, g.id, g.title)}${n ? ` <span class="dvb-group-n">${n}</span>` : ''}</h4>
       ${body}
     </section>`;
 }
@@ -279,6 +282,6 @@ export function boardHeadHtml({ meta = {}, env = '', total = 0, layers = 0, arte
         <p class="dvb-lede">${escapeHtml([name, version].filter(Boolean).join(' '))}${name || version ? ' · ' : ''}${escapeHtml(size)}</p>
       </div>
       ${facts.length ? `<dl class="dvb-facts">${facts.map(([ic, k, v]) => `
-        <div class="dvb-fact">${icon(ic, 'dvb-fact-ico')}<dt>${escapeHtml(k)}</dt><dd title="${escapeHtml(v)}">${escapeHtml(v)}</dd></div>`).join('')}</dl>` : ''}
+        <div class="dvb-fact">${icon(ic, 'dvb-fact-ico')}<dt>${glossaryLabelHtml(k)}</dt><dd title="${escapeHtml(v)}">${escapeHtml(v)}</dd></div>`).join('')}</dl>` : ''}
     </header>`;
 }

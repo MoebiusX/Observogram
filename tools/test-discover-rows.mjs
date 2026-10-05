@@ -304,6 +304,38 @@ test('the Refine control\'s Verdict filter: the options with their counts, the p
   assert.equal(passesVerdictFilter({ status: 'maybe' }, 'unreviewed'), true, 'a malformed record is no verdict');
 });
 
+// ---------- the glossary marks (GAP batch 2, B3.4) ----------
+
+test('glossary marks: with the default families or a v1 override every row and board drawing is byte-identical; with the v2 glossary the details row sets one mark between the name button and .dv-row-status, the board titles and head facts theirs', () => {
+  const V1 = JSON.parse(fs.readFileSync(new URL('./fixtures/taxonomy/taxonomy.json', import.meta.url), 'utf8'));
+  const V2 = JSON.parse(fs.readFileSync(new URL('./fixtures/taxonomy/taxonomy.v2.json', import.meta.url), 'utf8'));
+  const entries = carlos.layers.L1.slice(0, 6).map((a, i) => ({ a, key: `L1//${a.id}#${i}` }));
+  const draw = () => ({
+    rows: allArtefacts(carlos).slice(0, 40).flatMap(a => DISCOVER_VIEWS.map(v => artefactRowHtml(a, { view: v.id }))),
+    board: boardGroupsHtml('L1', entries) + boardHeadHtml({ meta: carlos.meta, total: 6, layers: 1, artefacts: allArtefacts(carlos) }),
+  });
+  const plain = draw();
+  assert.ok(!plain.rows.join('').includes('ux-gloss') && !plain.board.includes('ux-gloss'), 'nothing without a glossary');
+  try {
+    bindTaxonomy(artefactClassify, V1);
+    assert.deepEqual(draw(), plain, 'a v1 override: byte-identical');
+    bindTaxonomy(artefactClassify, V2);
+    const sli = carlos.layers.L1.find(a => a.id.startsWith('SLI-'));
+    const row = artefactRowHtml(sli);
+    assert.equal(artefactKind(sli).kind, 'Service level indicator');
+    assert.match(row, /<\/button><span class="ux-gloss"><button type="button" class="ux-gloss-btn" aria-label="What is Service level indicator\?" aria-expanded="false" aria-controls="(ux-gloss-\d+)" aria-describedby="\1">\?<\/button><span class="ux-gloss-def" id="\1" role="note" hidden>[\s\S]*?<\/span><\/span>\s*<span class="dv-row-status">/);
+    assert.equal((row.match(/ux-gloss-btn/g) || []).length, 1, 'one mark per row');
+    for (const view of ['tiles', 'list', 'cards']) assert.ok(!artefactRowHtml(sli, { view }).includes('ux-gloss'), `${view}: the lighter views carry no mark`);
+    const board = boardGroupsHtml('L1', entries);
+    assert.match(board, /<h4 class="dvb-group-title">SLIs<span class="ux-gloss">/);
+    assert.match(board, /<h4 class="dvb-group-title">SLOs · targets<span class="ux-gloss">/);
+    assert.match(boardHeadHtml({ meta: carlos.meta, total: 6, layers: 1, artefacts: allArtefacts(carlos) }), /<dt>Criticality<span class="ux-gloss">/);
+  } finally {
+    bindTaxonomy(artefactClassify, null);
+  }
+  assert.deepEqual(draw(), plain, 'the default families again: byte-identical');
+});
+
 test('the board places every artefact of a layer in a group, and hides none', () => {
   const layerEntries = (pack, L) => (L === 'L4'
     ? ['policy', 'alerting', 'healing'].flatMap(k => pack.layers.L4?.[k] || [])

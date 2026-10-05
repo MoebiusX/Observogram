@@ -44,3 +44,24 @@ export function requireTaxonomy() {
 export function classifyArtefact(a) {
   return lib ? lib.classifyArtefact(a) : { ...UNBOUND };
 }
+
+// ---------- the glossary (taxonomy schema v2; studio/glossary.mjs) ----------
+// Each passthrough is typeof-guarded: an older classifier module (no
+// glossary accessors) or no binding at all reads as the empty glossary.
+
+/** The glossary entry for a family, or null. */
+export function glossaryFor(family) {
+  return lib && typeof lib.glossaryFor === 'function' ? (lib.glossaryFor(family) ?? null) : null;
+}
+
+/** The entry whose term or alias is `text`, or null. */
+export function glossaryByText(text) {
+  return lib && typeof lib.glossaryByText === 'function' ? (lib.glossaryByText(text) ?? null) : null;
+}
+
+/** The families whose home (FAMILY_HOME) is this board group, in vocabulary order; [] unbound. */
+export function familiesAt(layer, group) {
+  const home = lib?.FAMILY_HOME;
+  if (!home || typeof home !== 'object') return [];
+  return Object.entries(home).filter(([, h]) => h?.layer === layer && h?.group === group).map(([f]) => f);
+}

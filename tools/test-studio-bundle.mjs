@@ -16,7 +16,8 @@
 // unset, byte for byte (config-vs-no-config identity on the same tree — the
 // shim's source changed, so no cross-tree claim) · T8 a --taxonomy bundle
 // answers /api/taxonomy as a server started with OBSERVOGRAM_TAXONOMY does
-// and its board is the typed-canonical mapped golden · T8b a --brand bundle
+// and its board is the typed-canonical mapped golden · T8c a v2 taxonomy's
+// glossary is baked and answered as the server answers it · T8b a --brand bundle
 // carries the branded server's shell fragments · T9 the baked bundle in
 // headless Chromium (skips like T7).
 //
@@ -67,6 +68,7 @@ const LIBRARY_BUILT = 'tools/fixtures/build/orders-api.tier-2.instantiate.json';
 // The seams' fixtures: the taxonomy override, the canonical pack with seven declared
 // types (the golden-board fixture), the bundle-safe brand and the server's brand (root-relative URLs).
 const TAX = resolve(DEFAULT_ROOT, 'tools/fixtures/taxonomy/taxonomy.json');
+const TAX_V2 = resolve(DEFAULT_ROOT, 'tools/fixtures/taxonomy/taxonomy.v2.json');
 const TYPED_CANONICAL = resolve(DEFAULT_ROOT, 'tools/fixtures/taxonomy/typed-canonical.pack.json');
 const ACME_STATIC = resolve(DEFAULT_ROOT, 'tools/fixtures/brand/acme-static.json');
 const ACME = resolve(DEFAULT_ROOT, 'tools/fixtures/brand/acme.json');
@@ -1018,6 +1020,40 @@ test('T8 baked taxonomy: a --taxonomy bundle answers /api/taxonomy as a server s
   // The programmatic guard.
   assert.throws(() => buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', taxonomy: { version: 3 } }), { message: /^taxonomy: version must be 1 or 2/ });
   assert.throws(() => loadTaxonomyFile(indicator, 'OBSERVOGRAM_TAXONOMY'), { message: new RegExp(`^OBSERVOGRAM_TAXONOMY: ${esc(indicator)}: taxonomy: types\\.PackSLI`) });
+});
+
+// ---------- T8c the baked v2 taxonomy (a glossary) ----------
+
+test('T8c baked glossary: a bundle built with a v2 taxonomy answers /api/taxonomy — the glossary included — as a server started with that file does, and --check counts the terms', async (t) => {
+  const ws = mkdtempSync(join(tmpdir(), 'observogram-bundle-glossary-'));
+  const child = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off', OBSERVOGRAM_TAXONOMY: TAX_V2 } });
+  t.after(async () => { await child.stop(); rmSync(ws, { recursive: true, force: true }); });
+  const fixture = JSON.parse(readFileSync(TAX_V2, 'utf8'));
+  assert.equal(fixture.version, 2);
+  assert.equal(fixture.glossary.length, 6);
+  const built = buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', taxonomy: fixture });
+  assert.deepEqual(built.config.taxonomy, fixture, 'baked verbatim, glossary included');
+  const backend = createStaticBackend(built.config);
+  assert.equal(backend.taxonomyConfigured, true);
+  const r = await fetch(`${child.base}/api/taxonomy`, { headers: { Accept: 'application/json' } });
+  const server = { status: r.status, type: r.headers.get('content-type'), cc: r.headers.get('cache-control'), body: await bodyOf(r) };
+  const s = await backend.handle('/api/taxonomy');
+  const shim = { status: s.status, type: s.headers.get('content-type'), cc: s.headers.get('cache-control'), body: await bodyOf(s) };
+  assert.deepEqual(shim, server, 'status, content-type, cache-control and body: the server\'s answer');
+  assert.deepEqual(server.body, { ok: true, taxonomy: fixture, configured: true });
+  assert.deepEqual(server.body.taxonomy.glossary.map((e) => e.term), ['Service level indicator', 'Service level objective', 'Alert rule', 'Telemetry backend', 'Error budget', 'Criticality tier']);
+  // The studio binds either answer the same way: the glossary accessors read the same entries.
+  bindTaxonomy(artefactClassify, shim.body.taxonomy);
+  try {
+    assert.equal(artefactClassify.glossaryFor('sli').term, 'Service level indicator');
+    assert.equal(artefactClassify.describeTaxonomy(artefactClassify.activeTaxonomy()), '7 types, 1 id rule, 6 glossary terms');
+  } finally { bindTaxonomy(artefactClassify, null); }
+  const human = cli(['--check', '--taxonomy', TAX_V2]);
+  assert.equal(human.status, 0, human.stderr);
+  assert.match(human.stdout, /· taxonomy: 7 types, 1 id rule, 6 glossary terms\n$/);
+  const j = cli(['--check', '--json', '--taxonomy', TAX_V2]);
+  assert.equal(j.status, 0, j.stderr);
+  assert.deepEqual(JSON.parse(j.stdout).taxonomy, { source: 'flag', file: TAX_V2, types: 7, ids: 1 }, 'the report counts types and ids as before (no glossary contents)');
 });
 
 // ---------- T8b the baked brand ----------

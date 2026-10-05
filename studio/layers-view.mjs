@@ -23,6 +23,7 @@ import { wireUxActions, emptyStateHtml, LAYER_PURPOSE, layerSpecTip, plural, ann
 import { boardHeadHtml, boardGroupsHtml } from './discover-board.mjs';
 import { verdictFilterHtml, passesVerdictFilter } from './verdict-html.mjs';
 import { verdictOf, hasVerdicts, verdictCounts } from './verdicts.mjs';
+import { wireGlossary } from './glossary.mjs';
 
 export function renderDiscoverDashboard(view) {
   view.innerHTML = '';
@@ -443,6 +444,10 @@ export function renderLayersView(view) {
   renderRefine(ctx);
   renderLayerList(ctx);
   wireUxActions(root, discoverHandlers(ctx));
+  // The glossary marks on the board and the rows (studio/glossary.mjs):
+  // delegated on the root, so rows a layer draws later are covered; a root
+  // without a mark (no glossary bound) wires nothing.
+  wireGlossary(root);
   wireScrollMemory();
 
   // Arriving on an artefact (the traceability "open" action sets the layer
@@ -1012,8 +1017,9 @@ export function renderCard(artefact, def, sublayerKey, { outsideFilter = false, 
       if (rule) openDrawer(rule, LAYER_DEFS.find(d => d.id === 'L3'), undefined);
       return;
     }
-    // Details expands in place; anything else interactive keeps its own job.
-    if (t.closest?.('details, a, input, select, textarea, [data-ux-action]')) return;
+    // Details expands in place; anything else interactive keeps its own job
+    // (a glossary mark toggles its definition, studio/glossary.mjs).
+    if (t.closest?.('details, a, input, select, textarea, [data-ux-action], .ux-gloss')) return;
     openDrawer(artefact, layerDef, sublayerKey);
   });
   return row;

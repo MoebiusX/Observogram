@@ -15,6 +15,7 @@ import { boundText, goodWhen, hasDirection } from './sli-direction.mjs';
 import { readChain, traceIndex } from './trace-chain.mjs';
 import { classifyArtefact } from './taxonomy.mjs';
 import { verdictPanel } from './verdicts.mjs';
+import { glossaryEntryFor, glossaryLabelHtml, glossaryMarkFor, wireGlossary } from './glossary.mjs';
 
 // ---------- drawer ----------
 
@@ -56,6 +57,16 @@ export function openDrawer(artefact, def, sublayerKey, side = 'b') {
   const meta = $(els.meta);
   meta.innerHTML = '';
   const rows = [];
+  // The kind, with its glossary mark — only when the bound taxonomy's v2
+  // glossary explains this family (studio/glossary.mjs); otherwise the
+  // strip is exactly what it was.
+  const kind = classifyArtefact(artefact);
+  const kindEntry = kind.label ? glossaryEntryFor(kind.label, { family: kind.family }) : null;
+  if (kindEntry) {
+    const dd = document.createElement('span');
+    dd.innerHTML = `${escapeHtml(kind.label)}${glossaryMarkFor(kind.label, { family: kind.family })}`;
+    rows.push(['kind', dd]);
+  }
   if (artefact.tool)         rows.push(['tool', artefact.tool]);
   if (artefact.tags?.length) rows.push(['tags', artefact.tags.join(', ')]);
   if (artefact.source)       rows.push(['source', artefact.source]);
@@ -103,12 +114,18 @@ export function openDrawer(artefact, def, sublayerKey, side = 'b') {
   pre.textContent = JSON.stringify(artefact.spec ?? artefact, null, 2);
   src.appendChild(pre);
   panels.appendChild(src);
+
+  // The glossary marks of this drawer, if any: wired once on the drawer
+  // itself (delegated), so every re-render is covered; nothing without a mark.
+  wireGlossary(drawer);
 }
 
+// A section head; glossaryLabelHtml is escapeHtml(title) unless the bound
+// glossary explains the title (then the mark follows it).
 function panel(title, className = '') {
   const sec = document.createElement('section');
   sec.className = 'drawer-section ' + className;
-  sec.innerHTML = `<h3>${escapeHtml(title)}</h3>`;
+  sec.innerHTML = `<h3>${glossaryLabelHtml(title)}</h3>`;
   return sec;
 }
 
@@ -291,7 +308,9 @@ function dl(rows) {
   dl.className = 'panel-dl';
   for (const [k, v] of rows) {
     if (v == null || v === '') continue;
-    const dt = document.createElement('dt'); dt.textContent = k;
+    const dt = document.createElement('dt');
+    // A label the glossary explains carries its mark; every other label is text, as before.
+    if (glossaryEntryFor(k)) dt.innerHTML = glossaryLabelHtml(k); else dt.textContent = k;
     const dd = document.createElement('dd');
     if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') dd.textContent = String(v);
     else dd.appendChild(v);
