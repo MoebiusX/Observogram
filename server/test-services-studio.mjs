@@ -17,7 +17,9 @@
  * hand-off survives a table that 500s once (the toast names the unchecked
  * row and blames the table, never the catalogue, Discover still opens the
  * pack); a Build whose name lands under
- * another slug registers a new service and never writes the origin. As
+ * another slug registers a new service and never writes the origin; leaving
+ * a Build whose service row was deleted meanwhile lands home with the
+ * reason, never stuck in Build. As
  * vera (viewer): the Build card and the three source buttons are
  * aria-disabled with the reason naming the org, the page has no Edit, the
  * empty Discover sentence names an operator. As olive (owner in acme and
@@ -367,6 +369,32 @@ test('BROWSER: the services journey — the home, the page, the bound workspace,
       await page.click('#observa-service');
       await page.waitForSelector('.svc-page', { timeout: T });
       assert.equal(await $text(page, '.svc-page-slug'), 'payments-platform');
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  await t.test('oscar: leaving a Build whose service row was deleted meanwhile lands home and says why', async () => {
+    // The honesty rule: a refusal names a way out that works. With the row gone, "← Back to <service>" cannot
+    // land on the page (404) — the exit falls back to home and the toast says so, instead of leaving the
+    // user in Build with the server's bare `no service <id>`.
+    const made = await call('oscar', 'POST', '/api/services', { name: 'Ephemeral' });
+    assert.equal(made.status, 201, made.text);
+    const { page, ctx } = await open(child.base, 'oscar');
+    try {
+      await openPage(page, 'ephemeral');
+      await openBuildFromPage(page);
+      assert.equal(await $text(page, '.build-exit-btn'), '← Back to Ephemeral');
+      const gone = await call('oscar', 'DELETE', `/api/services/${made.json.service.id}`);
+      assert.equal(gone.status, 200, gone.text);
+      await page.click('.build-exit-btn');
+      await page.waitForFunction(() => document.body.dataset.mode === 'home', null, { timeout: T });
+      assert.match(await toast(page), /^Ephemeral is gone \(404: no service \d+\) — back to home instead\.$/);
+      await page.waitForSelector('#home-services', { state: 'attached', timeout: T });
+      // The stale binding is dropped with it: a reload lands home, not back in a Build bound to a ghost.
+      await page.waitForTimeout(300);   // the persistence debounce (state.mjs schedule, 250 ms)
+      await page.reload();
+      await page.waitForFunction(() => document.body.dataset.mode === 'home', null, { timeout: T });
     } finally {
       await ctx.close();
     }

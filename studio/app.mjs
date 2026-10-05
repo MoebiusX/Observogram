@@ -1958,18 +1958,17 @@ function adoptServiceRecord(service) {
 // them — a reload lands here again). The service counts as opened (the home's
 // recents) only once the read succeeded. A refusal (404 `no service <id>`,
 // a 403) is the server's sentence in a toast; a rehydrate answers false
-// instead so the boot falls back to home. The selected tab's verdict is
-// always read anew here (a tier change since the home's cache must show).
-async function enterServicePage(id, env = null, { rehydrate = false } = {}) {
+// instead so the boot falls back to home, and `onRefused` (Build's exit)
+// takes the sentence in place of the toast so the caller can name its own
+// way out. The selected tab's verdict is always read anew here (a tier
+// change since the home's cache must show).
+async function enterServicePage(id, env = null, { rehydrate = false, onRefused = null } = {}) {
   const nav = ++navGeneration;
+  const refused = (why) => { if (rehydrate) return false; if (onRefused) onRefused(why); else toast(why, 'error'); return false; };
   let service;
   try { service = await loadService(id); }
-  catch (e) {
-    if (rehydrate) return false;
-    toast(e.message || `Could not read service ${id}`, 'error');
-    return false;
-  }
-  if (!service) { if (!rehydrate) toast(`${id}: no service answered`, 'error'); return false; }
+  catch (e) { return refused(e.message || `Could not read service ${id}`); }
+  if (!service) return refused(`${id}: no service answered`);
   if (nav !== navGeneration) return false;   // the user went elsewhere meanwhile
   adoptServiceRecord(service);
   recordRecentService(service.slug);
@@ -2600,8 +2599,17 @@ function exitBuildMode() {
   if (state.mode !== 'build') return;
   state.build.editor = null;   // the pop-up editor is UI state of the journey; the render that follows clears its host
   if (state.selectedPackId) { state.mode = 'single'; state.view = 'layers'; enterAnalyzeMode(state.selectedPackId, state.selectedEnv); return; }
-  // Opened from a service page (no pack was open): back to that page.
-  if (state.serviceId) { enterServicePage(state.serviceId, state.serviceEnv); return; }
+  // Opened from a service page (no pack was open): back to that page. A row
+  // deleted meanwhile (404) or refused since cannot be landed on — the exit
+  // still works: home, with the server's sentence and where the user ended up
+  // (a refusal names a way out that works), and the stale binding dropped.
+  if (state.serviceId) {
+    const name = findServiceRecord(state.serviceId)?.name || 'The service this Build was opened from';
+    enterServicePage(state.serviceId, state.serviceEnv, {
+      onRefused: (why) => { if (state.mode !== 'build') return; goHome(); toast(`${name} is gone (${why}) — back to home instead.`, 'error'); },
+    });
+    return;
+  }
   goHome();
 }
 
