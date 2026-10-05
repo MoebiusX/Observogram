@@ -359,7 +359,7 @@ test('the CLI: refusals, exit codes, --strict, --quiet, --json, determinism', ()
   }
 });
 
-test('the CLI: every flag it accepts is in its usage, the packc help line, the README synopsis and the CHANGELOG entries', () => {
+test('the CLI: every flag it accepts is in its usage, the packc help line, the README synopsis and the CHANGELOG entries; the sidecar file is a DOWNSTREAM §9 seam row', () => {
   const src = read('tools/pack-conformance.mjs');
   const flags = [...new Set([...src.matchAll(/a === '(--[a-z-]+)'/g)].map(m => m[1]))].filter(f => f !== '--help');
   assert.deepEqual(flags.sort(), ['--json', '--quiet', '--strict', '--waivers'], 'the four flags the CLI parses (besides --help)');
@@ -376,6 +376,15 @@ test('the CLI: every flag it accepts is in its usage, the packc help line, the R
     for (const [name, text] of [['usage', usage], ['packc help line', helpLine], ['README synopsis', synopsis], ['CHANGELOG entry', changelog]]) {
       assert.ok(documented(text, f), `${f} is documented in the ${name}`);
     }
+  }
+  // The sidecar file is a seam of the private plugin layer (DOWNSTREAM §9): its row names the flag
+  // that reads it, the file's shape and the three places the waiver object is specified.
+  const downstream = read('docs/DOWNSTREAM.md');
+  const seamRow = downstream.slice(downstream.indexOf('## 9. The private plugin layer'), downstream.indexOf('## 10. Embedding the studio'))
+    .split('\n').find(l => l.startsWith('| Waivers (sidecar)'));
+  assert.ok(seamRow, 'DOWNSTREAM §9 has the "Waivers (sidecar)" row');
+  for (const text of ['--waivers <file>', '"version": 1', 'readWaiverFile', 'CONFORMANCE.md', 'ADAPTER.md', 'Waive A Conformance Finding']) {
+    assert.ok(seamRow.includes(text), `the sidecar row names ${text}`);
   }
 });
 
