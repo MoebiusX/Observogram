@@ -1544,6 +1544,41 @@ as the `assurance` item with its own file. See
 [`docs/ASSURANCE_RULES.md`](docs/ASSURANCE_RULES.md) for the rules and a sample
 heartbeat route.
 
+### Export A Service Audit Report
+
+```bash
+npm run audit-report -- path/to/pack.yaml [--env <name>] [--format json|html|both] [--out <path>] [--brand <file.json>] [--taxonomy <file.json>] [--top <n>] [--generated-at <iso> | --no-timestamp] [--verdicts <file.json>] [--waivers <file.json>] [--schema <file>]
+packc audit-report path/to/pack.yaml --format html --out report.html
+packc audit-report path/to/pack.yaml --env prod --waivers waivers.json --no-timestamp
+```
+
+One report per pack (GAP batch 2), as JSON or HTML, in seven sections: the
+maturity rubric's grade (the engine's numbers headline; with waivers the
+`effective` numbers sit beside them, never in their place), the placeholders
+(`packc conformance`'s rows beside the library-todo and Scaffold counts), a
+reviewer's verdicts, the service's waivers, the coverage by artefact family
+(a family a rubric clause that applies at the graded tier names is
+*required*; required with nothing declared is *missing*, otherwise *absent*),
+the goes-blind risks (the blast radius over the traceability graph: what
+WOULD go blind if a node died, never that something is blind) and the
+declared response path (which remediations answer to an alert). The HTML is
+one self-contained document over the studio's design tokens and kit, no
+script, print-friendly; the JSON shape is in
+[`docs/ADAPTER.md`](docs/ADAPTER.md) ("The service audit report"). The
+engine is `tools/lib/audit-report.mjs` (vendorable); nothing in it grades,
+scores or classifies on its own, and a verdict never feeds the conformance
+numbers.
+
+The CLI has no store: without `--verdicts` (a saved `GET
+/api/packs/:id/verdicts` document) and `--waivers` (the waiver file `packc
+conformance --waivers` reads) those sections say *not recorded by this
+build*. `--brand` is the only brand the CLI reads — never
+`OBSERVOGRAM_BRAND_*`, unlike the bundle build, so a report is reproducible
+from its arguments — and `--no-timestamp` leaves `generatedAt` null for
+byte-identical output (`--generated-at` stamps a given time). Exit 0 written;
+1 an unreadable, layered or invalid pack; 2 usage. This is the pack's audit
+report, not the store's audit log ([The Audit](#the-audit)).
+
 ### Serve The Studio Without The Server (static bundle)
 
 A downstream that serves the studio behind its own static host — a CDN, an

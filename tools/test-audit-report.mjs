@@ -20,17 +20,22 @@
  *   node tools/test-audit-report.mjs --update
  * then review `git diff tools/fixtures/golden/audit-report/`.
  *
+ * The CLI: the --no-timestamp document against the golden, the HTML, --out,
+ * every flag, every refusal and the flag-documentation pin.
+ *
  * Run: node --test tools/test-audit-report.mjs
  */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { SPEC_DIR } from './lib/validator.mjs';
-import { adapt } from './lib/adapter.mjs';
+import { adapt, overlaidCanonical } from './lib/adapter.mjs';
 import { RUBRIC, evaluateConformance } from './lib/conformance.mjs';
 import { FAMILIES } from './lib/artefact-classify.mjs';
 import { buildDependencyGraph, graphShape } from './lib/traceability-graph.mjs';
@@ -318,4 +323,145 @@ test('goldens: the JSON document and the HTML of the four inputs are byte-identi
   const branded = read(`${GOLDEN_DIR}/payment-service.branded.audit-report.golden.json`);
   const plain = read(`${GOLDEN_DIR}/payment-service.audit-report.golden.json`);
   assert.equal(branded, plain, 'the brand changes the HTML only; the document is the same');
+});
+
+// ---------- 3. the CLI ----------
+
+const CLI = rel('tools/audit-report.mjs');
+const run = (...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', env: { ...process.env, OBSERVOGRAM_BRAND_NAME: 'Zed' } });
+const PAY_FILE = rel(PAYMENT);
+const cliDoc = (...args) => {
+  const r = run(PAY_FILE, '--no-timestamp', ...args);
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+};
+const unstamp = (doc) => ({ ...doc, generator: null, pack: { ...doc.pack, source: null } });
+
+test('the CLI: --no-timestamp JSON is the golden document (the generator and the file source aside), the HTML is the renderer\'s over the studio\'s styles, --out writes a file or a directory\'s pair; OBSERVOGRAM_BRAND_* is never read', () => {
+  const doc = cliDoc();
+  assert.deepEqual([doc.generator.name, doc.generatedAt, doc.pack.source], ['packc audit-report', null, 'file']);
+  assert.equal(`${JSON.stringify(unstamp(doc), null, 2)}\n`, read(`${GOLDEN_DIR}/payment-service.audit-report.golden.json`), 'the CLI document is the golden');
+  const html = run(PAY_FILE, '--no-timestamp', '--format', 'html');
+  assert.equal(html.status, 0, html.stderr);
+  assert.equal(html.stdout, renderAuditReportHtml(doc, { styles: STYLES }));
+  assert.ok(html.stdout.includes('Observogram · the Observability Compiler') && !html.stdout.includes('Zed'), 'the environment brand is not read');
+  const dir = mkdtempSync(join(tmpdir(), 'audit-report-cli-'));
+  try {
+    const both = run(PAY_FILE, '--no-timestamp', '--format', 'both', '--out', dir);
+    assert.equal(both.status, 0, both.stderr);
+    assert.deepEqual(both.stderr.trim().split('\n'), [`wrote ${join(dir, 'payment-service.audit-report.json')}`, `wrote ${join(dir, 'payment-service.audit-report.html')}`]);
+    assert.equal(both.stdout, '');
+    assert.equal(readFileSync(join(dir, 'payment-service.audit-report.json'), 'utf8'), `${JSON.stringify(doc, null, 2)}\n`);
+    assert.equal(readFileSync(join(dir, 'payment-service.audit-report.html'), 'utf8'), html.stdout);
+    const one = run(PAY_FILE, '--no-timestamp', '--format', 'html', '--out', join(dir, 'r.html'));
+    assert.equal(one.status, 0, one.stderr);
+    assert.equal(readFileSync(join(dir, 'r.html'), 'utf8'), html.stdout);
+    const stamped = run(PAY_FILE, '--out', join(dir, 'stamped.json'));
+    assert.equal(stamped.status, 0, stamped.stderr);
+    assert.match(JSON.parse(readFileSync(join(dir, 'stamped.json'), 'utf8')).generatedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, 'the clock by default');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the CLI flags: --env grades the environment and names it, --generated-at normalises the stamp, --top sizes the listing, --brand brands the HTML, --taxonomy binds the coverage classifier, --verdicts and --waivers feed the two sections (the rubric overlay too)', () => {
+  const staging = cliDoc('--env', 'staging');
+  assert.deepEqual([staging.pack.environment, staging.conformance.declaredTier], ['staging', evaluateConformance(overlaidCanonical(load(PAYMENT), 'staging').canonical).declaredTier]);
+  assert.notDeepEqual(staging.conformance, cliDoc().conformance, 'the overlay grades differently');
+  assert.equal(JSON.parse(run(PAY_FILE, '--generated-at', '2026-10-05T12:00:00Z').stdout).generatedAt, NOW);
+  assert.equal(cliDoc('--top', '2').goesBlind.risks.length, 2);
+  const branded = run(PAY_FILE, '--no-timestamp', '--format', 'html', '--brand', rel('tools/fixtures/brand/acme.json'));
+  assert.equal(branded.status, 0, branded.stderr);
+  assert.ok(branded.stdout.includes('<style id="brand-tokens">') && branded.stdout.includes('Acme Watch · a product of Acme Corp'));
+  // The typed-canonical fixture under the taxonomy override: POL-01 moves from burn_rate (id) to alert_rule (type) — the board golden's move.
+  const typed = rel('tools/fixtures/taxonomy/typed-canonical.pack.json');
+  const count = (doc, f) => doc.coverage.families.find((x) => x.family === f).count;
+  const plain = JSON.parse(run(typed, '--no-timestamp').stdout);
+  const mapped = JSON.parse(run(typed, '--no-timestamp', '--taxonomy', rel('tools/fixtures/taxonomy/taxonomy.json')).stdout);
+  assert.deepEqual([count(mapped, 'alert_rule'), count(mapped, 'burn_rate'), mapped.pack.artefacts], [count(plain, 'alert_rule') + 1, count(plain, 'burn_rate') - 1, plain.pack.artefacts]);
+  const dir = mkdtempSync(join(tmpdir(), 'audit-report-cli-rows-'));
+  try {
+    const vfile = join(dir, 'verdicts.json');
+    writeFileSync(vfile, JSON.stringify({ ok: true, pack: 'payment-service', verdicts: [{ artefact: 'SLI-01', key: 'L1/SLI-01', family: 'sli', title: 'api_availability', status: 'suspect', reason: 'short window', actor: 'oscar', setAt: NOW, carriedFrom: null }], summary: {} }));
+    const wfile = join(dir, 'waivers.json');
+    writeFileSync(wfile, JSON.stringify({ version: 1, waivers: [
+      { ruleId: 'L5.MUST.tier1_weekly_prod_chaos', reason: 'chaos day is scheduled for Q1', expiresAt: '2099-01-01T00:00:00.000Z', author: 'oscar', createdAt: NOW },
+      { ruleId: 'L3.MUST.recording_rule_per_slo', artefactId: 'slos.consumer_success_99_95', reason: 'lapsed', expiresAt: PAST, author: 'ada', createdAt: '2025-12-01T00:00:00.000Z' },
+    ] }));
+    const doc = cliDoc('--verdicts', vfile, '--waivers', wfile);
+    assert.deepEqual([doc.assessments.available, doc.assessments.counts.suspect, doc.assessments.verdicts[0]], [true, 1, { artefactKey: 'SLI-01', key: 'L1/SLI-01', family: 'sli', title: 'api_availability', state: 'suspect', reason: 'short window', at: NOW, by: 'oscar' }]);
+    assert.deepEqual([doc.waivers.available, doc.waivers.counts], [true, { active: 1, expired: 1, revoked: 0, unknown: 0 }]);
+    assert.deepEqual(doc.waivers.waivers.map((w) => [w.rule, w.status]), [['L5.MUST.tier1_weekly_prod_chaos', 'active'], ['L3.MUST.recording_rule_per_slo', 'expired']]);
+    assert.deepEqual(doc.conformance.clauses.waived.map((c) => c.id), ['L5.MUST.tier1_weekly_prod_chaos']);
+    assert.deepEqual([doc.conformance.must, doc.conformance.effective.must], [{ passed: 21, total: 25 }, { passed: 22, total: 25 }]);
+    // An array of views is a verdicts file too; the bare document without rows reads "none recorded".
+    writeFileSync(vfile, '[]');
+    const none = cliDoc('--verdicts', vfile);
+    assert.deepEqual([none.assessments.available, none.assessments.counts.unreviewed], [true, 84]);
+    assert.ok(renderAuditReportHtml(none).includes('None recorded: every artefact is unreviewed.'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the CLI refusals: usage is exit 2 naming the problem (no pack, two packs, an unknown flag, a bad --format / --top / --generated-at, an undeclared --env, an unreadable --waivers / --verdicts / --brand / --taxonomy file, --format both without --out); an unreadable, layered or invalid pack is exit 1 with the way out', () => {
+  const usage = (r, text) => { assert.equal(r.status, 2, r.stderr); assert.ok(r.stderr.startsWith(text), r.stderr.split('\n')[0]); assert.equal(r.stdout, ''); };
+  usage(run(), 'no pack given');
+  usage(run(PAY_FILE, PAY_FILE), 'one pack at a time');
+  usage(run(PAY_FILE, '--bogus'), 'unknown flag: --bogus');
+  usage(run(PAY_FILE, '--format', 'pdf'), '--format must be one of json, html, both');
+  usage(run(PAY_FILE, '--format'), '--format needs a value');
+  usage(run(PAY_FILE, '--top', '0'), '--top must be an integer from 1 to 100');
+  usage(run(PAY_FILE, '--top', '101'), '--top must be an integer from 1 to 100');
+  usage(run(PAY_FILE, '--generated-at', 'yesterday'), '--generated-at is not a date: yesterday');
+  usage(run(PAY_FILE, '--env', 'nope'), '--env nope: the pack declares prod, staging');
+  usage(run(PAY_FILE, '--waivers', rel('tools/fixtures/no-such.json')), `--waivers ${rel('tools/fixtures/no-such.json')}: file not found`);
+  usage(run(PAY_FILE, '--verdicts', PAY_FILE), `--verdicts ${PAY_FILE}:`);
+  usage(run(PAY_FILE, '--brand', PAY_FILE), `--brand ${PAY_FILE}:`);
+  usage(run(PAY_FILE, '--taxonomy', rel('tools/fixtures/taxonomy/typed.pack.json')), 'taxonomy:');
+  usage(run(PAY_FILE, '--format', 'both'), '--format both needs --out <directory>');
+  const dir = mkdtempSync(join(tmpdir(), 'audit-report-cli-bad-'));
+  try {
+    writeFileSync(join(dir, 'v.json'), '{"ok":true}');
+    usage(run(PAY_FILE, '--verdicts', join(dir, 'v.json')), 'expected the GET /api/packs/:id/verdicts document');
+    usage(run(PAY_FILE, '--format', 'both', '--out', join(dir, 'file.json')), `--out ${join(dir, 'file.json')}: --format both needs an existing directory`);
+    const invalid = join(dir, 'invalid.pack.json');
+    writeFileSync(invalid, JSON.stringify({ ...load(PAYMENT), spec: { ...load(PAYMENT).spec, slis: [] } }));
+    let r = run(invalid);
+    assert.equal(r.status, 1, r.stderr);
+    assert.match(r.stderr, /^✗ .*invalid\.pack\.json: not a valid manifest \(\d+ error\(s\)\) — npm run validate-pack -- /);
+    r = run(rel('examples/legacy/demo-skeleton.json'));
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /previous-format \(layered JSON\) pack — upconvert it first/);
+    r = run(join(dir, 'missing.pack.yaml'));
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /file not found/);
+    const help = run('--help');
+    assert.equal(help.status, 0);
+    assert.ok(help.stdout.startsWith('usage: node tools/audit-report.mjs'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the CLI: every flag it accepts is in its usage, the packc help line, the README synopsis and the CHANGELOG entry; the CLI resolves paths through fileURLToPath and never .pathname', () => {
+  const src = read('tools/audit-report.mjs');
+  const flags = [...new Set([...src.matchAll(/'(--[a-z][a-z-]*)'/g)].map((m) => m[1]))].filter((f) => f !== '--help');
+  assert.ok(flags.length >= 11, flags.join(' '));
+  const usage = src.match(/^const USAGE = `([^`]*)`/m)[1];
+  const helpLine = read('tools/cli.mjs').split('\n').find((l) => /^\s+packc audit-report /.test(l));
+  const readme = read('README.md');
+  const synopsis = readme.slice(readme.indexOf('### Export A Service Audit Report'), readme.indexOf('### Serve The Studio Without The Server'));
+  const changelog = read('docs/CHANGELOG.md').split('\n').filter((l) => l.includes('`tools/audit-report.mjs`')).join('\n');
+  assert.ok(usage && helpLine && synopsis && changelog, 'the four documented places exist');
+  // A flag is documented as `[--flag]`, `[--flag <value>]`, `[--flag a|b]` or after a `|` (`| --no-timestamp]`).
+  const documented = (text, f) => new RegExp(`(?:\\[|\\| )${f}(?:\\]| )`).test(text);
+  for (const f of flags) {
+    for (const [name, text] of [['usage', usage], ['packc help line', helpLine], ['README synopsis', synopsis], ['CHANGELOG entry', changelog]]) {
+      assert.ok(documented(text, f), `${f} is documented in the ${name}`);
+    }
+  }
+  assert.ok(/fileURLToPath\(import\.meta\.url\)/.test(src) && !/\.pathname/.test(src));
+  assert.ok(/case 'audit-report':\s*\n\s*delegate\('tools\/audit-report\.mjs', rest\)/.test(read('tools/cli.mjs')), 'packc dispatches it');
+  assert.equal(JSON.parse(read('package.json')).scripts['audit-report'], 'node tools/audit-report.mjs');
 });
