@@ -1038,3 +1038,47 @@ unconfigured child draw zero marks. Deferred by name: `glossary-light-views`,
 Tests: 958 → 975 (`tools/test-glossary.mjs` 9, `server/test-glossary-shell.mjs` 1,
 four more in `tools/test-artefact-classify.mjs`, one in `server/test-taxonomy.mjs`,
 one in `tools/test-discover-rows.mjs`, one in `tools/test-studio-bundle.mjs` — T8c).
+
+**G5 — the service audit report.** One exportable report per pack, HTML and
+JSON, that reads every engine this repository ships and adds no judgement of
+its own (README "Export A Service Audit Report"; `docs/ADAPTER.md` "The
+service audit report" and "Artefact addresses"; `DOWNSTREAM.md` §14
+`service-audit-report`). Decisions: the engine's conformance numbers headline
+and a waivers overlay's `effective` sits beside them, never in their place
+(D6); a verdict never feeds them (D2); the report's conformance section IS
+the one `conformanceReportFor()` body the `/conformance` route sends —
+injected into the route, so the two cannot grade one pack differently, and
+the server's verdict and waiver rows are `verdictsDocument`'s and
+`listWaiverViews`' views mapped field by field with the one `now` the
+conformance overlay used; the placeholders section is `packConformance`'s
+rows beside the Conformance view's two template counts, and the reserved
+`GET /api/packs/:id/placeholders` is built (answered by the bundle too);
+coverage names a family `required` when a rubric clause that applies at the
+graded tier names it (`CLAUSE_FAMILIES` over every rubric id, `[]` for the
+referential L2X clause — a tier-3 pack's L2X families are absent, never
+missing); the goes-blind section is the blast radius over the traceability
+graph's SHAPE (the parser-bound module is never imported by the model), the
+top N by what goes blind and the count of nodes whose loss would blind an
+SLO; the response path is B3.3's model, `compared: false` by construction;
+two artefact addresses are printed as their engines name them (D4); a source
+not given reads "not recorded by this build" (the CLI and the bundle have no
+store), an empty one "none recorded"; the CLI reads `--brand` only — never
+`OBSERVOGRAM_BRAND_*` — and `--no-timestamp` makes the bytes reproducible;
+the HTML is one standalone document over the design tokens and kit (the first
+such) with the brand's chrome and tokens, no script, every value escaped, a
+`</style` stylesheet refused; the bundle answers `/audit-report` 501 because
+the goes-blind section needs the PromQL parser (the Compare blocker). Inert
+by proof: a new module, CLI and route — crawl, compile and board goldens are
+byte-identical, `/conformance` and `/export.zip` unchanged, the Conformance
+view's headless capture byte-identical (the anchors render only with a
+focused pack id); the intended changes are the two download anchors on the
+Conformance view and the bundle's bytes (the shim's `pack-conformance.mjs`
+import for `/placeholders`). Deferred by name: `B3.5-bundle-audit-report`,
+`B3.5-export-zip`, `B3.5-dark-print`.
+Tests: 975 → 998 (`tools/test-audit-report.mjs` 18, `server/test-audit-report-api.mjs` 5).
+
+The batch's delivery report, `docs/DELIVERY-GAP-BATCH2.md`, is written per
+feature — what shipped, the measured `Tests:` pair, what is deferred by name and why —
+and `tools/test-doc-test-totals.mjs` guards it as it guards
+`docs/DELIVERY-REBADGE-BATCH2.md` (every pair it quotes is one this journey
+states; the two new flat suites join the ledger).

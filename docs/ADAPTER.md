@@ -410,6 +410,68 @@ wait). **Revoke** — `POST /api/waivers/:id/revoke` (operator) with `{
 `waiver.revoke` with `{ service, ruleId, artefactId, reason }`; a service's
 deletion cascades its waivers (counted in `service.delete`).
 
+## Artefact addresses
+
+Two addresses name an artefact in this repository, and every engine prints
+its own (GAP batch 2; nothing unifies them):
+
+- the **positional id** the adapter mints (`SLI-01`, `ALR-02`, `HEAL-01`),
+  frozen within a content-hash pack id, with its card key (`L1/SLI-01`,
+  `L4/alerting/ALR-02`) — the key of a verdict and of the studio's card;
+- the **canonical symbol** (`slis.<id>`, `slos.<id>`, `alerting.rules[<j>]`,
+  `remediation[<i>]`, the adapter's `defines` vocabulary and
+  `tools/lib/pack-conformance.mjs`'s `symbol`) — the key of a waiver, a
+  conformance subject (`clauseSubjects`), a placeholder row, a declared type
+  and a `observogram.remediates.*` annotation.
+
+The service audit report prints each as its engine names it; the verdict row
+also carries the card key and the behavioural identity key.
+
+## The service audit report
+
+`tools/lib/audit-report.mjs` `buildAuditReport(input)` (GAP batch 2, B3.5;
+`GET /api/packs/:id/audit-report`, `packc audit-report`) returns one document,
+keys in this order:
+
+```js
+{
+  reportVersion: 1,
+  generator: { name, version } | null,
+  generatedAt: '<iso>' | null,                       // the caller's stamp; null = unstamped (reproducible bytes)
+  pack: { id, label, source, name, version, service, environment, environments[], criticality, artefacts, sources: { Declared, Verified, Scaffold } },
+  tier: { graded, pack, from, service: { id, slug } | null, environment: { id, name } | null, mismatch },
+  conformance: {                                     // the /conformance body split; the engine's numbers headline
+    declaredTier, conformant, scorePercent, mustPercent, must: { passed, total }, should: { passed, total }, byDimension,
+    effective: { conformant, scorePercent, mustPercent, must, should, byDimension } | null,   // the waivers overlay's, beside the numbers
+    counts: { blocking, waived, recommended, passed, notApplicable },
+    clauses: { blocking: [Clause], waived: [Clause], recommended: [Clause], passed: [Clause], notApplicable: [Clause] },
+    onPlaceholder: [clauseId] | null,
+  },
+  placeholders: { conformant, markers, writers, counts, templates: { todos, scaffolds }, rows: [PlaceholderRow] },   // packConformance's
+  assessments: { available, artefacts, counts: { unreviewed, trusted, suspect, failed }, orphaned, verdicts: [VerdictRow] },
+  waivers: { available, counts: { active, expired, revoked, unknown }, waivers: [WaiverRow] },
+  coverage: { families: [FamilyRow], counts: { present, absent, missing } },
+  goesBlind: { available, top, nodes, edges, sloBlindingNodes, risks: [Risk] },
+  responsePath: { configured, compared: false, counts, links[], unresolved[], uncovered[], families[], warnings[] },
+}
+// Clause      { id, dimension, severity, minTier, description, specRef, families, waiver?: { status, subjects, waivers: [WaiverRow] } }
+// VerdictRow  { artefactKey, key, family, title, state, reason, at, by }          — artefactKey the positional id; by the audit actor
+// WaiverRow   { id, artefactKey, rule, reason, expiresAt, at, by, status, revokedAt?, revokedBy?, revokeReason? } — artefactKey a canonical symbol
+// FamilyRow   { family, label, layer, group, count, declared, verified, scaffold, required, clauses, status: present | absent | missing }
+// Risk        { key, kind, label, summary: { slos, alerts, panels, dashboards, routes, remediations, total }, weight, byKind, unprotected: { slos: [{ key, label }], alerts: [...] } }
+```
+
+`available: false` means the source was not given ("not recorded by this
+build": the CLI without `--verdicts` / `--waivers`, a bundle); an empty list
+with `available: true` means none recorded. `goesBlind.available` is false
+when no graph shape was given (the bundle has no PromQL parser). `required`
+on a family is "named by a rubric clause that applies at the graded tier"
+(`CLAUSE_FAMILIES`); the referential L2X clause names none. The `by` fields
+are the audit actor — a login or the token label, never an email.
+`renderAuditReportHtml(report, { brand, styles })` renders the same document
+as one HTML file over `studio/design-tokens.css` + `design-kit.css`
+(`styles`, read by the caller) and the brand's chrome and tokens.
+
 ## Cross-references and the symbol table
 
 The client builds a symbol table from every artefact's `defines`. Each artefact's `refs` is classified:

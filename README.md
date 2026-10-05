@@ -2467,7 +2467,7 @@ server/
   service-admin.mjs        The service, environment and MCP endpoint rules behind /api/services, /api/environments and /api/mcp-endpoints; the tier rule; an MCP target picked by id
   verdict-admin.mjs        The verdict rules behind /api/packs/:id/verdicts (GAP batch 2): the artefact index, the views, the carry on a label re-registration
   waiver-admin.mjs         The waiver rules behind /api/services/:id/waivers and /api/waivers/:id/revoke (GAP batch 2): the body, the views, the conformance report's overlay
-  routes/                  The identity API (identity.mjs), the services API (services.mjs), the verdicts API (verdicts.mjs), the waivers API (waivers.mjs), the deploy routes, and the handler helpers they share (util.mjs)
+  routes/                  The identity API (identity.mjs), the services API (services.mjs), the verdicts API (verdicts.mjs), the waivers API (waivers.mjs), the audit report and placeholders (audit-report.mjs), the deploy routes, and the handler helpers they share (util.mjs)
   store/                   The embedded store (docs/STORE_PLAN.md): db.mjs (the one node:sqlite door), migrations, repositories, the legacy import and import --replace, backup/restore, ops.mjs (export, the replace request, rekey-issuer, purge-org)
   fixtures/                What the suites share: serve-child.mjs (a hermetic child server, the STRIP list), platform.mjs (isWin32, the reasoned win32 skips), pre-store-build.mjs, route-inventory.mjs, store-050-guard.mjs
   test-smoke.mjs           End-to-end route smoke tests
@@ -2504,6 +2504,8 @@ tools/
   test-doc-test-totals.mjs The `Tests: a → b` totals in docs/UPDATE_JOURNEY.md chain within a section and agree with docs/CHANGELOG.md's Unreleased pairs and with the batch delivery report (docs/DELIVERY-*.md)
   validate-pack.mjs        Canonical pack validator
   pack-conformance.mjs     The placeholders a pack still carries: path, field, what it needs, where it comes from (--json, --strict)
+  audit-report.mjs         packc audit-report: a pack's service audit report as JSON or HTML (--env, --format, --out, --brand, --taxonomy, --verdicts, --waivers, --no-timestamp)
+  test-audit-report.mjs    The service audit report: the model's sections, determinism, escaping, the goldens (tools/fixtures/golden/audit-report/), the CLI, the Conformance view's download anchors
   upconvert-legacy.mjs     Layered JSON -> canonical; idempotent, merges into an existing output (--merge, --overwrite)
   lib/
     adapter.mjs            Canonical pack -> layered UI model
@@ -2518,6 +2520,7 @@ tools/
     journey.mjs            Journey definitions, runner, gate, run history (node-only)
     legacy.mjs             Layered-JSON upconvert and the merge-safe re-run (mergeUpconvert); imports pack-conformance.mjs
     library.mjs            The BUILD journey engine: entries, tier scaffold, instantiation, todos, provenance (browser-safe)
+    audit-report.mjs       The service audit report: buildAuditReport (seven sections over the engines), renderAuditReportHtml over the design kit and the brand (vendorable)
     pack-conformance.mjs   Scaffold markers -> {path, field, needs, source, hint} rows; the adapter's symbol grammar (zero-import, vendorable)
     stack-evidence.mjs     Stack self-metric history helpers (browser-safe, vendorable)
     traceability.mjs       Requirement chains
@@ -2571,6 +2574,7 @@ deploy/k8s/
 - [`docs/VENDORING.md`](docs/VENDORING.md) - vendoring the verdict/diff engines into a downstream studio, and how to stay current
 - [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) - vendoring the pure libraries by manifest (`VENDOR-MANIFEST.json`): snapshot → verify hashes → smoke → bump
 - [`docs/UI_CONVENTIONS.md`](docs/UI_CONVENTIONS.md) - studio view-module conventions: the host seam, loader/renderer split, render signatures, CSS zones
+- [`docs/DELIVERY-GAP-BATCH2.md`](docs/DELIVERY-GAP-BATCH2.md) - delivery report for rebadge batch 2, PR 2 (B3, GAP batch 2: verdicts, waivers, diagnose → remediate flow, glossary widgets, service audit report): what shipped per feature, the measured test totals, what is deferred by name and why
 - [`docs/DELIVERY-REBADGE-BATCH2.md`](docs/DELIVERY-REBADGE-BATCH2.md) - delivery report for rebadge batch 2, PR 1 (B1, B2, B4): what shipped per item, the measured test totals, what is deferred and why
 
 Superseded planning docs live in [`docs/archive/`](docs/archive/README.md).

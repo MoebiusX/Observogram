@@ -116,6 +116,15 @@ placeholder rows (`waived` partition; `--strict` fails on unwaived rows alone). 
 `revokedBy` are the audit actor — a login or the token label, never an email — visible to every member and
 to anyone a sidecar file or report is shared with.
 
+## The service audit report
+
+`GET /api/packs/:id/audit-report` and `packc audit-report` (GAP batch 2; README "Export A Service Audit
+Report", `docs/ADAPTER.md` "The service audit report") put this rubric's grade first in one document — the
+engine's numbers headline, a waivers overlay's `effective` beside them — followed by the placeholders, the
+verdicts, the waivers, the coverage by family (a family a clause that applies at the graded tier names is
+*required*), the goes-blind risks and the declared response path. The report reads the same
+`conformanceReportFor()` body the `/conformance` route sends, so the two never grade one pack differently.
+
 ## Extending the rubric
 
 Each clause is a self-contained `{...}` block in `tools/lib/conformance.mjs`. Add new ones inline with their `specRef`. The server's `GET /api/maturity-rubric` will pick them up automatically; `tools/test-packs.mjs` will re-score every bundled pack against the new clause set.

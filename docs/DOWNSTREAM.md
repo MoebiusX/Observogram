@@ -243,7 +243,7 @@ entry names) against a running server:
 
 | Answered in the browser | Answered `501 { ok: false, denied: 'no-backend', error: '<Feature> needs the Observogram server; this studio is a static bundle built without one.' }` |
 |---|---|
-| `GET /api/packs`, `/api/packs/:id` (+ `?env=`), `/canonical` (JSON, `?format=yaml`), `/conformance`, `/compile-catalog`, `/compile-artifact`, `/compile/:target`, `/export.zip` (the Export button downloads it as a Blob); `/api/compile/targets`, `/api/maturity-rubric`, `/api/version`, `/healthz`, `/api/taxonomy` (unconfigured, or the document `--taxonomy` baked — a v2 file's `glossary` included, so the glossary marks draw as on a server), `/api/examples` and `/api/references` (empty), `/api/live-status` (`present: false`); `/api/packs/:id/verdicts` (the empty document — a bundled pack is never registered, so this is the server's own answer); `/auth/me` → `404 { ok: false, error: 'identity not configured' }` (the open posture) | every other `/api` or `/auth` path and every non-GET: Scan a repo (`/api/crawl*`), Draft from MCP, Refresh from MCP, uploads (`/api/validate`, `/api/uploads`), Compare (`/api/diff`, retrofeed), Deploy, Journeys, Build (`/api/library*`), Verdicts (`PUT` / `DELETE …/verdicts/:artefact`), sign-in (`/auth/*`) |
+| `GET /api/packs`, `/api/packs/:id` (+ `?env=`), `/canonical` (JSON, `?format=yaml`), `/conformance`, `/compile-catalog`, `/compile-artifact`, `/compile/:target`, `/export.zip` (the Export button downloads it as a Blob); `/api/compile/targets`, `/api/maturity-rubric`, `/api/version`, `/healthz`, `/api/taxonomy` (unconfigured, or the document `--taxonomy` baked — a v2 file's `glossary` included, so the glossary marks draw as on a server), `/api/examples` and `/api/references` (empty), `/api/live-status` (`present: false`); `/api/packs/:id/verdicts` (the empty document — a bundled pack is never registered, so this is the server's own answer); `/api/packs/:id/placeholders` (the placeholder report, the zero-store engine in the browser); `/auth/me` → `404 { ok: false, error: 'identity not configured' }` (the open posture) | every other `/api` or `/auth` path and every non-GET: Scan a repo (`/api/crawl*`), Draft from MCP, Refresh from MCP, uploads (`/api/validate`, `/api/uploads`), Compare (`/api/diff`, retrofeed), Deploy, Journeys, Build (`/api/library*`), Verdicts (`PUT` / `DELETE …/verdicts/:artefact`), Audit report (`/api/packs/:id/audit-report` — its goes-blind section needs the parser below), sign-in (`/auth/*`) |
 
 Swapping packs is a rebuild: `--pack` inlines a file validated against the
 schema at build time; `--pack-url` names a URL the page fetches at its first
@@ -296,7 +296,7 @@ the `typed-canonical.mapped` golden of `tools/test-golden-board.mjs`), T8b a
 unconfigured build with the same tree's build with the seams unset (byte for
 byte), T9 the baked bundle in headless Chromium.
 
-Compare stays excluded in this batch; the inlining itself is not the blocker. Measured at the pinned versions (node_modules, 2026-10-04): `@prometheus-io/lezer-promql@0.312.0-rc.0` `dist/index.es.js` 24,549 B (imports `@lezer/lr`, `@lezer/highlight`), `@lezer/lr@1.4.10` `dist/index.js` 71,678 B (imports `@lezer/common`; one guarded `typeof process != 'undefined' && process.env.LOG` read), `@lezer/highlight@1.2.3` `dist/index.js` 29,915 B, `@lezer/common@1.5.2` `dist/index.js` 83,319 B — 209,461 B, 279,284 B as base64 (+7 % on today's 3.9 MB), all ESM (`"type": "module"`, `exports.import`), no CommonJS, no `node:` import; every specifier between them is bare and equal to the package name, so the import map can carry them under their own names with no rewrite, and `import.meta.resolve(<package>)` (Node ≥ 22.16) gives each dist's path without a bundler. What blocks it: (1) `GET /api/diff` (server/index.mjs:556-580 — `diffPacks(aLayered, bLayered, { scopeMode, service })` plus `traceabilityGraph: comparePackBranches(aLayered, bLayered)`, `scopeMode` from the query or the `observogram.diff.scopeMode` annotation) has to be ported to `studio/static-backend.mjs` over two bundled packs and proven T5-style against a server body for body, and the Compare view's server-only limbs (uploads as pack B, live refresh, retrofeed) have to degrade visibly; (2) the bundle would redistribute third-party code under MIT (`@lezer/*`) and Apache-2.0 (`@prometheus-io/lezer-promql`), so the build must embed the license texts and copyright notices in the file and the docs must state it; (3) the build would depend on an installed `node_modules` (today it reads the repository tree only), which changes the snapshot recipe above; (4) `tools/lib/promql-lezer.mjs` is documented as not for browser-served modules and `tools/test-studio-bundle.mjs` T1 asserts no bare specifier in the graph — both become an allowlist of exactly these four names, with the vendor manifest's `npm` field as its source. Until then `/api/diff` answers `501 denied: 'no-backend'`, the notice names Compare among the server-only features, and a diff without the graph is never shown because it would grade differently from the server.
+Compare stays excluded in this batch; the inlining itself is not the blocker. Measured at the pinned versions (node_modules, 2026-10-04): `@prometheus-io/lezer-promql@0.312.0-rc.0` `dist/index.es.js` 24,549 B (imports `@lezer/lr`, `@lezer/highlight`), `@lezer/lr@1.4.10` `dist/index.js` 71,678 B (imports `@lezer/common`; one guarded `typeof process != 'undefined' && process.env.LOG` read), `@lezer/highlight@1.2.3` `dist/index.js` 29,915 B, `@lezer/common@1.5.2` `dist/index.js` 83,319 B — 209,461 B, 279,284 B as base64 (+7 % on today's 3.9 MB), all ESM (`"type": "module"`, `exports.import`), no CommonJS, no `node:` import; every specifier between them is bare and equal to the package name, so the import map can carry them under their own names with no rewrite, and `import.meta.resolve(<package>)` (Node ≥ 22.16) gives each dist's path without a bundler. What blocks it: (1) `GET /api/diff` (server/index.mjs:556-580 — `diffPacks(aLayered, bLayered, { scopeMode, service })` plus `traceabilityGraph: comparePackBranches(aLayered, bLayered)`, `scopeMode` from the query or the `observogram.diff.scopeMode` annotation) has to be ported to `studio/static-backend.mjs` over two bundled packs and proven T5-style against a server body for body, and the Compare view's server-only limbs (uploads as pack B, live refresh, retrofeed) have to degrade visibly; (2) the bundle would redistribute third-party code under MIT (`@lezer/*`) and Apache-2.0 (`@prometheus-io/lezer-promql`), so the build must embed the license texts and copyright notices in the file and the docs must state it; (3) the build would depend on an installed `node_modules` (today it reads the repository tree only), which changes the snapshot recipe above; (4) `tools/lib/promql-lezer.mjs` is documented as not for browser-served modules and `tools/test-studio-bundle.mjs` T1 asserts no bare specifier in the graph — both become an allowlist of exactly these four names, with the vendor manifest's `npm` field as its source. Until then `/api/diff` answers `501 denied: 'no-backend'`, the notice names Compare among the server-only features, and a diff without the graph is never shown because it would grade differently from the server. The service audit report shares the blocker: its goes-blind section is the blast radius over the same graph, so `GET /api/packs/:id/audit-report` is a 501 in the bundle until the parser is inlined (`B3.5-bundle-audit-report`, §14).
 
 The other follow-up is `--split`, a directory form without `data:` URLs for a
 host whose Content-Security-Policy forbids them in `script-src`.
@@ -531,9 +531,10 @@ npm run pack-conformance -- pack.yaml --strict   # CI, once the pack is conforma
 - *Waivers (GAP batch 2, B3.2)* — delivered (§14 `waivers`): the engine
   honours `opts.waivers` and answers the `waived` partition; `packc
   conformance --waivers <file>` drives it.
-- *Service audit report (GAP batch 2, B3.5)* — one exportable report per
-  pack whose conformance summary consumes `packConformance(canonical)`; a
-  `GET /api/packs/:id/placeholders` route belongs there.
+- *Service audit report (GAP batch 2, B3.5)* — delivered (§14
+  `service-audit-report`): the report's placeholders section is
+  `packConformance(canonical)`'s rows, and `GET /api/packs/:id/placeholders`
+  answers the same rows (the static bundle too).
 - *Imports as Scaffold* — the adapter hardcodes `source: 'Declared'` for
   `metadata.imports`, so the upconvert's `legacy/<slug>` pseudo-refs are
   reported `unmarked` and never parked; a board change.
@@ -591,6 +592,7 @@ blocker, so a wave can be scheduled against them.
 | `diagnose-remediate-flow` | shipped — full build | `tools/lib/remediation-flow.mjs` (listed): `buildRemediationFlowModel`, the linking rule and the `observogram.remediates.remediation[<i>]` annotation (`docs/ADAPTER.md` "Response path"); the panel `studio/remediation-flow-view.mjs` on Diagnose (`#diag-flow`) and Remediate (`#rm-flow`), the `.rflow-*` zone | its alert → runbook / automation "what next" page and its trigger-to-alert matching | `remediation-trigger-ref`, `remediation-flow-graph-unify`, `remediation-flow-live-state`, `alert-rule-deploy`, `catalogue-triggers` |
 | `glossary` | shipped — full build | the taxonomy file's schema version 2 `glossary` (`OBSERVOGRAM_TAXONOMY` / `--taxonomy`; README "Classify Typed Packs"), `tools/lib/artefact-classify.mjs` `glossaryFor` / `glossaryByText` / `glossaryEntries` (listed), the mark `studio/glossary.mjs` (`.ux-gloss-*`) on Discover rows, board titles, head facts and the drawer | its hover/inline definitions for artefact families and domain terms, and the file that held them | `glossary-light-views`, `glossary-termhtml-override`, `glossary-seed-from-spec` |
 | `verdicts` | shipped — full build | `GET/PUT/DELETE /api/packs/:id/verdicts[/:artefact]` (`docs/ADAPTER.md` "Verdicts"), the `verdicts.json` entry of `/export.zip`, the `verdict.set` / `verdict.clear` / `verdict.carry` audit rows, the `verdict` status property (`studio/ux-kit.mjs`) and `studio/verdict-html.mjs` | its per-artefact review / trust record and its badge, filter and record form | `verdicts-service-scope`, `verdicts-bundle-bake`, `verdicts-cli`, `verdicts-on-adapter-upgrade` |
+| `service-audit-report` | shipped — full build | `GET /api/packs/:id/audit-report?format=json\|html` and `GET /api/packs/:id/placeholders` (`docs/ADAPTER.md` "The service audit report"), `packc audit-report` (`--verdicts`, `--waivers`, `--brand`, `--taxonomy`, `--no-timestamp`), `tools/lib/audit-report.mjs` (listed: `buildAuditReport`, `renderAuditReportHtml`), the Conformance view's two download anchors | its per-service audit page and export (conformance, exceptions, review state, coverage, single points of failure, runbook linkage) | `B3.5-bundle-audit-report`, `B3.5-export-zip`, `B3.5-dark-print` |
 
 ### waivers
 
@@ -734,3 +736,56 @@ Follow-ups, by name:
   term; a generator that seeds a v2 glossary from the spec's descriptions
   (`tools/sync-spec.mjs` pins the spec, so the seed is a tool, not an edit)
   would give every downstream a starting file.
+
+### service-audit-report
+
+One exportable report per pack, HTML and JSON, in seven sections that each
+quote an engine this repository already ships: the maturity rubric's grade
+(the engine's numbers headline; a waivers overlay's `effective` sits beside
+them), the placeholders (`packConformance` rows beside the library-todo and
+Scaffold counts), a reviewer's verdicts, the service's waivers, the coverage
+by family (`required` = named by a rubric clause that applies at the graded
+tier; required with nothing declared is `missing`, else `absent`), the
+goes-blind risks (`tools/lib/blast-radius.mjs` over the traceability graph:
+what WOULD go blind, never that something is blind) and the declared response
+path (B3.3's model, never compared). Nothing in the report grades, scores or
+classifies on its own, and a verdict never feeds the conformance numbers.
+Two artefact addresses appear and each engine's own is printed — a verdict by
+the adapter's positional id (`SLI-01`, card `L1/SLI-01`), a waiver or a
+placeholder row by the canonical symbol (`slos.<id>`) — `docs/ADAPTER.md`
+"Artefact addresses".
+
+The seams: `GET /api/packs/:id/audit-report?format=json|html&top=&download=1&env=`
+(viewer; its conformance section is the one `conformanceReportFor()` body the
+`/conformance` route sends, its verdict and waiver rows the store's), `GET
+/api/packs/:id/placeholders` (the rows `packc conformance` prints; answered
+by the static bundle too), `packc audit-report <pack> [--env] [--format]
+[--out] [--brand] [--taxonomy] [--top] [--generated-at | --no-timestamp]
+[--verdicts] [--waivers] [--schema]` (the CLI has no store: `--verdicts` is a
+saved `GET /verdicts` document, `--waivers` the sidecar file; without them
+the sections read "not recorded by this build"; `--brand` is the only brand
+it reads, so a report is reproducible from its arguments), the model and the
+renderer in `tools/lib/audit-report.mjs` (listed; `buildAuditReport(input)`,
+`renderAuditReportHtml(report, { brand, styles })` over
+`studio/design-tokens.css` + `design-kit.css` and the `.ar-*` zone — the first
+standalone document over the design kit), the Conformance view's two
+download anchors. Goldens `tools/fixtures/golden/audit-report/*` pin the
+document and the HTML for four inputs (unstamped). A downstream with its own
+sections writes a sibling renderer over the same document: the JSON shape is
+the contract (`reportVersion: 1`).
+
+Follow-ups, by name:
+
+- *`B3.5-bundle-audit-report`* — the bundle answers `/audit-report` 501: the
+  goes-blind section needs the traceability graph's PromQL parser (§10, the
+  Compare blocker). When the parser is inlined, the shim builds the report in
+  the browser with `goesBlind.available: true`; until then a bundle build
+  could ship the report with `goesBlind.available: false` ("not computed by
+  this build") — a product call, deferred with the Compare decision.
+- *`B3.5-export-zip`* — `GET /api/packs/:id/export.zip` could carry
+  `audit-report.json` / `.html` beside `verdicts.json`; held back because the
+  ZIP's entry list is pinned by the bundle parity suite and the report is
+  stamped (the ZIP is reproducible today).
+- *`B3.5-dark-print`* — the HTML is one light theme; a `prefers-color-scheme`
+  dark variant and a print stylesheet beyond `@media print` basics wait for a
+  downstream that prints or embeds it.
