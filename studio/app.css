@@ -5067,6 +5067,15 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
   font: 14px/1.6 var(--sans);
   color: var(--ink-3, var(--ink-4));
 }
+/* The service sentence (STORE_PLAN slice 6a, design §5.4): opened from a
+   service page with no pack, one line above the lede in the lede's voice,
+   with the Build button inline at its end. */
+.discover-empty-service {
+  margin: 0 0 8px;
+  max-width: 60ch;
+  font: 14px/1.6 var(--sans);
+  color: var(--ink-3, var(--ink-4));
+}
 .discover-load {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

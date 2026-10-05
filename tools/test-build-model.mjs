@@ -1493,6 +1493,17 @@ test('a Scaffold card keeps its focus ring: the dashed frame is an outline, so a
   }
 });
 
+test('the Discover empty state\'s service sentence is styled: one rule in the lede\'s voice, so it never falls back to the browser <p> margins and body ink', () => {
+  // renderDiscoverEmpty emits <p class="discover-empty-service"> between the title and the lede (slice 6a, design §5.4).
+  const lede = cssRule('.discover-empty-lede');
+  const sentence = cssRule('.discover-empty-service');
+  assert.ok(lede, '.discover-empty-lede exists');
+  assert.ok(sentence, '.discover-empty-service has a rule');
+  assert.match(sentence, /margin:\s*0 0 8px/, 'the title\'s gap below, not the browser\'s 1em');
+  const voice = (body) => body.replace(/margin:[^;]*;/, '').replace(/\s+/g, ' ').trim();
+  assert.equal(voice(sentence), voice(lede), 'the sentence reads in the lede\'s measure, font and colour');
+});
+
 test('the slab verdict reads at WCAG AA in both themes: each state colour the rules name, on the surface the pill sits on', () => {
   const tokensOf = (block) => { const m = CSS_TEXT.match(new RegExp(`(?:^|\\n)${block}\\s*\\{([\\s\\S]*?)\\n\\}`)); assert.ok(m, `${block} token block`); return Object.fromEntries([...m[1].matchAll(/--([\w-]+):\s*(#[0-9a-fA-F]{6})\b/g)].map(t => [t[1], t[2]])); };
   const themes = { light: tokensOf(':root'), dark: tokensOf('\\[data-theme="dark"\\]') };
