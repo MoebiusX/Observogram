@@ -16,10 +16,15 @@
 // Who sees the form: in the open postures (no sign-in — /auth/me answers
 // no identity) everyone; with sign-in, an operator or admin of the active
 // org (`effectiveRole` of /auth/me's org list: an owner is an admin
-// everywhere). A viewer reads the record. A pack that is not registered (a
-// catalogue or example pack, or any pack of the static bundle) takes no
-// verdict — the section says so and names the way (upload it) instead of
-// showing a form the server would refuse.
+// everywhere). A viewer reads the record. /auth/me answers no identity in
+// the token-only posture too (OBSERVOGRAM_API_TOKEN without identity), where
+// an anonymous browser is a viewer whose writes answer 401 naming a bearer
+// header the studio cannot send — so without an identity the role is read
+// from GET /api/orgs (loadAnonymousRole, below) and the note names the
+// bearer route instead of a form the server would refuse. A pack that is
+// not registered (a catalogue or example pack, or any pack of the static
+// bundle) takes no verdict — the section says so and names the way (upload
+// it) instead of showing a form the server would refuse.
 
 import { state } from './state.mjs';
 import { api, getActiveOrg } from './api.mjs';
@@ -49,6 +54,7 @@ export function emptyVerdicts() {
 export async function loadVerdicts(packId) {
   emptyVerdicts();
   if (!packId) return null;
+  if (!state.identity) await loadAnonymousRole();
   try {
     const doc = await api(`/api/packs/${encodeURIComponent(packId)}/verdicts`);
     const rows = Array.isArray(doc?.verdicts) ? doc.verdicts.filter((v) => v && !v.orphaned) : [];
@@ -97,10 +103,46 @@ function packIsRegistered(packId) {
   return entry?.source === 'uploaded';
 }
 
+// The role the server gives this browser without sign-in. /auth/me answers
+// 404 both in the open postures (the caller is `local`, an owner) and in
+// the token-only posture (OBSERVOGRAM_API_TOKEN without identity), where an
+// anonymous caller is a viewer; GET /api/orgs — a viewer route, open in
+// both — tells them apart by the active org's `effectiveRole` (server/
+// index.mjs: admin for `local`, viewer beside a token). Probed once per
+// session, the first time verdicts load without an identity: undefined is
+// not probed, null is a server that did not answer (the static bundle's
+// 501) — the form then stays as it always did, rather than hiding a
+// control that may work. `refresh` re-probes (tests).
+let anonymousRole;
+export async function loadAnonymousRole({ refresh = false } = {}) {
+  if (anonymousRole !== undefined && !refresh) return anonymousRole;
+  anonymousRole = null;
+  try {
+    const doc = await api('/api/orgs');
+    const orgs = Array.isArray(doc?.orgs) ? doc.orgs : [];
+    const active = getActiveOrg() || doc?.active;
+    const here = orgs.find((o) => o.id === active) || orgs[0] || null;
+    if (typeof here?.effectiveRole === 'string') anonymousRole = here.effectiveRole;
+  } catch { /* unanswered: not known */ }
+  return anonymousRole;
+}
+
+// Without sign-in, does the server read this browser as a viewer (the
+// token-only posture)? Its writes need the bearer, which the studio cannot
+// send — the Verdict section names that route instead of a form.
+export function anonymousViewer() {
+  const me = state.identity;
+  return (!me || me.authenticated !== true) && anonymousRole === 'viewer';
+}
+
 // May the signed-in person (or anyone, without sign-in) record a verdict?
 export function canRecordVerdict() {
   const me = state.identity;
-  if (!me || me.authenticated !== true) return true;   // the open postures
+  if (!me || me.authenticated !== true) {
+    // No identity: the open postures (everyone), unless the server said
+    // this browser is a viewer beside its API token.
+    return anonymousRole == null || ['operator', 'admin'].includes(anonymousRole);
+  }
   const org = getActiveOrg();
   const orgs = Array.isArray(me.orgs) ? me.orgs : [];
   const here = (org ? orgs.find((o) => o.id === org) : orgs[0]) || null;
@@ -145,7 +187,9 @@ export function verdictPanel(artefact, { onSaved = () => host.renderMainView() }
         </div>
         <div class="verdict-status" role="status"></div>
       </form>`
-      : '<p class="verdict-note">Operators and admins record verdicts; this record is read-only for your role.</p>'}`);
+      : anonymousViewer()
+        ? `<p class="verdict-note">Without sign-in this server records a verdict only with its API token, so this browser reads as a viewer: this record is read-only here. From CI or a script: <code>PUT /api/packs/${escapeHtml(packId)}/verdicts/${escapeHtml(artefact.id)}</code> with <code>Authorization: Bearer &lt;OBSERVOGRAM_API_TOKEN&gt;</code> and <code>{ "status": "trusted" | "suspect" | "failed", "reason"?: "…" }</code>; <code>DELETE</code> on the same path clears it.</p>`
+        : '<p class="verdict-note">Operators and admins record verdicts; this record is read-only for your role.</p>'}`);
 
   const form = sec.querySelector('.verdict-form');
   if (!form) return sec;
