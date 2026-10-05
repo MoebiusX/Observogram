@@ -19,6 +19,8 @@ import {
 import { servicesRefusal, loadOrgs, loadServices, loadService, loadVerdict, patchService, verdictLoader } from '../studio/services-api.mjs';
 import { WAYS } from '../server/service-admin.mjs';
 import { persistence } from '../studio/state.mjs';
+import { renderNoOrgHome } from '../studio/services-view.mjs';
+import { readFileSync } from 'node:fs';
 
 // ---------- fixtures ----------
 
@@ -365,6 +367,44 @@ test('buildNoOrgModel: the server\'s sentence as is, the login checked, sign-out
   assert.equal(m.hint, 'Acme Watch has no member screen yet (Settings is slice 6b); an admin adds you with POST /api/org/members.');
   assert.deepEqual(m.actions, [{ id: 'sign-out', label: 'Sign out' }]);
   assert.equal(buildNoOrgModel({}).checked, '/api/packs as you');
+});
+
+// A headless container (the tools/test-build-model.mjs stubContainer shape): the markup and the one wired button.
+function noOrgContainer() {
+  const handlers = {};
+  const btn = { addEventListener: (t, fn) => { handlers[t] = fn; }, fire: (t) => handlers[t]?.() };
+  return { innerHTML: '', querySelector: (sel) => (sel === '#svc-noorg-sign-out' ? btn : null), btn };
+}
+
+test('renderNoOrgHome: the refusal as is and escaped, the login checked, one Sign out button proxied to host.services.signOut; a headless host never throws', () => {
+  const err = Object.assign(new Error('403: no org membership — ask <an admin> to add you'), { denied: 'org', status: 403 });
+  const m = buildNoOrgModel({ identity: me('nora<img src=x onerror="window.__xss=1">', []), error: err, chromeName: 'Acme Watch' });
+  const c = noOrgContainer();
+  let signedOut = 0;
+  renderNoOrgHome(c, m, { services: { signOut: () => { signedOut++; } } });
+  assert.ok(c.innerHTML.includes('<section class="svc-noorg">'), 'the Services zone\'s prefix');
+  assert.ok(c.innerHTML.includes('Signed in, but in no organisation yet'));
+  assert.ok(c.innerHTML.includes('403: no org membership — ask &lt;an admin&gt; to add you'), 'the server\'s sentence, escaped at the seam');
+  assert.ok(c.innerHTML.includes('/api/packs as nora&lt;img') && !c.innerHTML.includes('<img'), 'the login is escaped — nothing from it reaches the page');
+  assert.ok(c.innerHTML.includes('Acme Watch has no member screen yet'), 'the hint names the product through chromeName');
+  assert.equal((c.innerHTML.match(/<button /g) || []).length, 1, 'one action: Sign out — no fabricated way in');
+  assert.ok(c.innerHTML.includes('id="svc-noorg-sign-out"') && c.innerHTML.includes('>Sign out</button>'));
+  c.btn.fire('click');
+  assert.equal(signedOut, 1, 'the button proxies the account menu\'s sign-out');
+  // The headless render with an empty host: the click is a no-op, never a throw.
+  const c2 = noOrgContainer();
+  renderNoOrgHome(c2, buildNoOrgModel({}), { services: {} });
+  assert.doesNotThrow(() => c2.btn.fire('click'));
+  assert.ok(c2.innerHTML.includes('/api/packs as you'));
+});
+
+test('services-view.mjs is a renderer module: it imports host.mjs, util.mjs and ux-kit.mjs only — never app.mjs or state.mjs — and reads no state, fetches nothing', () => {
+  const src = readFileSync(new URL('../studio/services-view.mjs', import.meta.url), 'utf8');
+  const imports = [...src.matchAll(/from '([^']+)'/g)].map(x => x[1]).sort();
+  assert.deepEqual(imports, ['./host.mjs', './util.mjs', './ux-kit.mjs']);
+  const code = src.replace(/\/\/[^\n]*/g, '');
+  assert.ok(!/\bfetch\(|\bapi\(|\bstate\./.test(code), 'no fetch, no api(), no state');
+  assert.ok(!/Observogram|OBSERVOGRAM/.test(code), 'the brand: no product name literal');
 });
 
 test('servicesStatusOf: a 501 no-backend is static (silent), a 403 org is denied, anything else an error with the text', () => {

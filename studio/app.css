@@ -8983,3 +8983,17 @@ select.build-edit-input { appearance: auto; }
 .svc-gate-new:hover { color: var(--ink); border-bottom-color: var(--CMP); }
 .svc-gate-actions { display: flex; flex-wrap: wrap; gap: 8px 22px; justify-content: center; }
 .svc-gate-actions .svc-gate-new { margin-top: 26px; }
+
+/* The no-org home: a signed-in user in no organisation sees the server's refusal (a ux-kit empty state) and a
+   hint in --ink-3 — the same column as the gate, nothing else on the screen. */
+.svc-noorg {
+  max-width: 640px;
+  margin: 9vh auto 0;
+  padding: 0 28px;
+}
+.svc-noorg-hint {
+  margin: 14px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}

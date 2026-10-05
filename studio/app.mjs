@@ -47,7 +47,8 @@ import { catalogToDeployManifest } from './artifact-model.mjs';
 import { computeDeployTransitions } from './verify-deploy.mjs';
 import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-view.mjs';
 import { initHost } from './host.mjs';
-import { recentServicesKey } from './services-model.mjs';
+import { recentServicesKey, buildNoOrgModel } from './services-model.mjs';
+import { renderNoOrgHome } from './services-view.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
@@ -1553,15 +1554,25 @@ async function boot() {
   // (state.identity stays null in the open posture, which adopts here.)
   if (state.identity?.authenticated !== false) loadDeployProfiles().catch(() => {});
   syncApiLink();
+  // The account menu before the first catalogue read: a signed-in user the
+  // org middleware refuses (no membership) still has a way to sign out.
+  setupIdentityChip();
   try { await loadCatalog(); }
   catch (e) {
+    if (e.denied === 'org') {
+      // Signed in, in no organisation (STORE_PLAN §6, slice 6a): the server's
+      // sentence as is, under the chrome — not the API-unreachable screen.
+      // GET /api/orgs is not attempted (it would refuse the same way).
+      applyModeChrome();
+      renderNoOrgHome($('#layer-view'), buildNoOrgModel({ identity: state.identity, error: e, chromeName: state.brand.chrome.name }), noOrgHost);
+      return;
+    }
     document.body.innerHTML = `<pre class="json" style="margin:48px;max-width:800px">${escapeHtml(state.brand.chrome.apiUnreachable)}\n\n${escapeHtml(e.message)}\n\nMake sure the server is running: \`node server/index.mjs\` or \`npm run serve\`.</pre>`;
     return;
   }
 
   setupUpload();
   setupTheme();
-  setupIdentityChip();
   setupResetButton();
   setupExportButton();
   // Eagerly fetch /api/examples so the Pack B picker has the archived
@@ -2631,6 +2642,11 @@ const buildActions = {
 
 // The host the Build renderers get (docs/UI_CONVENTIONS.md §3): the two stable hooks plus the journey's actions.
 const buildHost = { renderMainView, renderTabs, build: buildActions };
+
+// The host the no-org home gets (services-view.mjs renderNoOrgHome): its one
+// action is the account menu's sign-out, proxied — one handler, one place
+// that knows the proxy and the IdP logout rules (setupIdentityChip).
+const noOrgHost = { renderMainView, renderTabs, services: { signOut: () => document.querySelector('.hdr-user-out')?.click() } };
 
 // The build view — the pack is the axis (docs/BUILD_JOURNEY.md "The axis"): the
 // definition column on the left (service, tier, entries, the conformance summary,
