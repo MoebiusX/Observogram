@@ -2282,9 +2282,14 @@ function wireHomeChoice(view, model) {
 // user's services; both keep the import sources one step down.
 function renderServiceGate() { renderHomeView(); }
 
-// Reflect the active service into the always-visible OBSERVA-bar chip.
-// Called wherever the selection can change (service select, analyze
-// mode entry, mode chrome) — hidden on home where no service is active.
+// The one ORG chip (STORE_PLAN §6, slice 6a D6/D7): on every screen in the
+// OBSERVA bar — a switcher for a user in a second org, a label for one org
+// that is not the default one, nothing otherwise (orgChipModel). The list is
+// the user's memberships (/auth/me `orgs`: an org the chip offers is one the
+// next boot can re-select); the role in the title is the EFFECTIVE one the
+// guard applies in the active org (GET /api/orgs → state.access — an owner
+// reads admin), the membership's as the fallback before that call answered.
+// Called wherever the chrome repaints (updateObservaServiceChip).
 function updateObservaOrgChip() {
   const chip = document.getElementById('observa-org');
   if (!chip) return;
@@ -2313,7 +2318,8 @@ function updateObservaOrgChip() {
   const sel = chip.querySelector('select');
   if (sel) sel.value = active.id;
   else name.textContent = active.name || active.id;
-  chip.title = `organisation: ${active.id} (role: ${active.role || 'member'})`;
+  const role = (state.access?.posture === 'identity' && state.access.role) || active.effectiveRole || active.role || 'member';
+  chip.title = `organisation: ${active.id} (role: ${role})`;
   chip.hidden = false;
 }
 
@@ -5821,43 +5827,8 @@ function setupIdentityChip() {
   const actions = document.querySelector('.observa-hdr .observa-actions');
   if (!actions || document.getElementById('hdr-user')) return;
 
-  // Org indicator (orgChipModel) — a switcher when the user belongs to
-  // several orgs, a static label for one org that is not the default one,
-  // nothing for the default org alone. Switching reloads: every view is a
-  // projection of the active org's workspace, so a clean re-boot is the
-  // honest refresh.
-  // This copy sits with the pack pickers in the context bar; the OBSERVA
-  // bar's own ORG chip (updateObservaOrgChip) shows on every screen.
-  const orgs = me.orgs || [];
-  const orgChip = orgChipModel(orgs, getActiveOrg());
-  const anchor = $('#theme-toggle');
-  if (anchor && orgChip.kind !== 'none' && !document.getElementById('hdr-org')) {
-    const wrap = document.createElement('span');
-    wrap.id = 'hdr-org';
-    wrap.className = 'hdr-org';
-    if (orgChip.kind === 'switcher') {
-      wrap.innerHTML = `<span class="ctrl-key">ORG</span>`;
-      const sel = document.createElement('select');
-      sel.setAttribute('aria-label', 'Active organisation');
-      for (const o of orgs) {
-        const opt = document.createElement('option');
-        opt.value = o.id;
-        opt.textContent = o.name || o.id;
-        if (o.id === getActiveOrg()) opt.selected = true;
-        sel.appendChild(opt);
-      }
-      sel.addEventListener('change', () => {
-        setActiveOrg(sel.value);
-        window.location.reload();
-      });
-      wrap.appendChild(sel);
-    } else {
-      const active = orgChip.active;
-      wrap.innerHTML = `<span class="ctrl-key">ORG</span><span class="hdr-org-name">${escapeHtml(active.name || active.id)}</span>`;
-      wrap.title = `organisation: ${active.id}`;
-    }
-    anchor.parentNode.insertBefore(wrap, anchor);
-  }
+  // The ORG indicator / switcher is the OBSERVA bar's chip alone
+  // (updateObservaOrgChip), on every screen; the context bar carries no copy.
 
   // Account menu: who you are, change password (stand-alone mode — OIDC
   // passwords belong to the IdP), sign out my other sessions (not behind a

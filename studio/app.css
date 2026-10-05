@@ -7959,22 +7959,17 @@ button.observa-service {
 button.observa-service:hover { background: color-mix(in srgb, var(--CMP) 18%, transparent); }
 button.observa-service:focus-visible { outline: 2px solid var(--CMP); outline-offset: 2px; }
 
-/* Stage 2 tenancy — active-org indicator/switcher in the header */
-.hdr-org { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; }
-.hdr-org .ctrl-key { font-size: 11.5px; letter-spacing: .14em; color: var(--ink-3, #788396); }
-.hdr-org-name { font-family: var(--mono, 'IBM Plex Mono', monospace); font-size: 13px; font-weight: 600; }
-.hdr-org select {
-  background: transparent; color: inherit; border: 1px solid var(--line, #2a3548);
-  border-radius: 5px; padding: 3px 6px; font-size: 13px;
-  font-family: var(--mono, 'IBM Plex Mono', monospace); cursor: pointer;
-}
+/* Tenancy — the one active-org indicator / switcher, in the OBSERVA bar (app.mjs updateObservaOrgChip). The
+   dropdown's options are drawn by the browser on its own surface: the ink token on the card surface in both
+   themes, no colour literal. */
 .observa-org { margin-right: 2px; }
 .observa-org-select {
   background: transparent; color: inherit; border: 0; padding: 0;
   font: inherit; font-family: var(--mono, 'IBM Plex Mono', monospace);
   font-size: 13.5px; font-weight: 600; cursor: pointer; outline-offset: 2px;
 }
-.observa-org-select option { color: #0f1623; }
+.observa-org-select option { color: var(--ink); background: var(--card); }
+[data-theme="dark"] .observa-org-select option { color: var(--ink); background: var(--card); }
 
 /* ============================================================
    Advanced → Neuron (.nrn-*) — the observability control neuron as one
