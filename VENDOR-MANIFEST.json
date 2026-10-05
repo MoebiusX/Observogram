@@ -1109,6 +1109,33 @@
       "npm": [],
       "changedSinceRelease": false
     },
+    "tools/lib/waivers.mjs": {
+      "sha256": "f92da51f3e471cbcc8a24f1c60a7e34f1539a51e81550b9f719acae1dae3219c",
+      "bytes": 13975,
+      "exports": [
+        "CLAUSE_WAIVER_STATUSES",
+        "FINDING_STATUSES",
+        "MAX_REASON",
+        "MAX_TEXT",
+        "WAIVER_FILE_VERSION",
+        "WAIVER_STATES",
+        "applyWaiversToConformance",
+        "applyWaiversToFindings",
+        "expiresInDays",
+        "matchesFinding",
+        "normalizeWaiver",
+        "oneLine",
+        "readWaiverFile",
+        "waiverState",
+        "waiverView"
+      ],
+      "imports": [
+        "tools/lib/conformance.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
     "tools/lib/zip.mjs": {
       "sha256": "c5277647671a51503d112ea6203e5e0691d1aed55853ce2ed19322f891bb4d5b",
       "bytes": 4856,

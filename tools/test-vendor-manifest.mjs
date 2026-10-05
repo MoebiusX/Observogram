@@ -44,7 +44,7 @@ const EXPECTED_MODULES = [
   'tools/lib/site/derive.mjs', 'tools/lib/site/expected.mjs', 'tools/lib/site/inventory.mjs', 'tools/lib/site/run.mjs',
   'tools/lib/site/timing.mjs', 'tools/lib/sli-inference.mjs', 'tools/lib/slug.mjs', 'tools/lib/stack-evidence.mjs',
   'tools/lib/svg-charts.mjs', 'tools/lib/traceability-graph.mjs', 'tools/lib/traceability.mjs', 'tools/lib/validator.mjs',
-  'tools/lib/zip.mjs',
+  'tools/lib/waivers.mjs', 'tools/lib/zip.mjs',
 ];
 const EXPECTED_EXCLUDED = ['tools/lib/brand-env.mjs', 'tools/lib/grafana-mcp-bridge.mjs', 'tools/lib/harness.mjs', 'tools/lib/journey.mjs', 'tools/lib/retrofeed.mjs'];
 const EXPECTED_DATA = ['tools/lib/site/inventory.schema.json'];
