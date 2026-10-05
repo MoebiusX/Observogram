@@ -61,6 +61,16 @@ or *build a new pack* (Define · Compile · Verify). The two paths join at *Pack
 available in Discover*: a compiled pack enters the same audit journey as an imported
 one, with its unresolved placeholders still visible.
 
+The home is the org's **services**, one card per record (tier, owners, the packs
+linked, the verdict per environment), and a card opens the **service page**: the
+environments as tabs with the verdict the pack is graded to at the record's tier
+and the MCP endpoint it is checked through, and the four actions — Discover ·
+Diagnose · Remediate · Build — bound to that service and environment through the
+newest primary pack ([Services, Environments And MCP
+Endpoints](#services-environments-and-mcp-endpoints)). Catalogue packs are listed
+apart; what a viewer can open and what only an operator can is drawn from the role
+the server reports for the active org.
+
 ### No pack yet? Build one
 
 A second, parallel journey for a service that has no pack: **Build** — three
@@ -851,6 +861,31 @@ with their URLs, and never changes an endpoint.
   `{ id, name, origin }`. The MCP URL itself and the variable's name go to
   operators and above (`GET /api/mcp-endpoints`); the token's value to
   nobody.
+- **In the studio** (STORE_PLAN slice 6a). The home reads the table: one card
+  per record — the tier (`graded by the pack` for `null`), the owners, the
+  packs linked, and per environment the verdict of the newest primary pack
+  graded at the record's tier (a base grade named as such when the pack
+  declares no overlay for that environment; a report resting on placeholders
+  is never plain green). A card opens the service page: the environments as
+  tabs with their MCP endpoint (name and origin only) and verdict, the packs
+  linked with the newest primary marked current, and Discover · Diagnose ·
+  Remediate · Build opening bound to the service and the environment; the
+  header SERVICE selector reads the same table through the same resolver.
+  Operators edit the record from the page (name, owners, tier, description
+  over `PATCH /api/services/:id` — the slug stays, the verdict is re-read
+  after a tier save). Build ends by writing the row: the register links the
+  pack by slug and creates its environment, then the tier and owners typed on
+  DEFINE go onto the record where it has none — a tier a person set is never
+  overwritten (the mismatch with the pack's own tier is shown); a DEFINE name
+  that yields another slug is said on DEFINE first, and such a pack registers a
+  new service with the origin untouched. A viewer opens every page and reads
+  every verdict; the Build card, the home's sources and Edit are drawn disabled
+  with the reason (`needs the operator role in <org> — yours is viewer`); a
+  browser beside `OBSERVOGRAM_API_TOKEN` without sign-in reads as a viewer with
+  the token reason. One org switcher (the chip in the OBSERVA bar, its title
+  naming the effective role); the studio's persisted state is one login's in
+  one org, so a draft started in one org is not in another. A signed-in user
+  in no org sees the server's refusal and the account menu.
 
 ### The Audit
 
@@ -1670,7 +1705,9 @@ as the sentence, and a dismissable notice at the bottom of the window says so
 once ("Static studio — no Observogram server behind this page …"). Compare is
 out by design: the server's diff carries the traceability graph, whose PromQL
 parser is a bare node dependency the bundle cannot inline, and a diff without
-it would grade differently from the server.
+it would grade differently from the server. The Services home and the service
+page need the server (the services table); a bundle lists the services its
+packs name, as before.
 
 Notes: `--pack` is validated against the spec schema at build time (a failing
 pack fails the build with the validator's text); `--pack-url` refuses a URL

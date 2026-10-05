@@ -70,8 +70,9 @@ the testable layer).
   the view isn't vendored.
 - A journey with its own actions (the BUILD steps: `update`, `setTier`,
   `toggleEntry`, `setParam`, `setSli`, `setToggle`, `setStep`, `openEditor`,
-  `closeEditor`, `preview`, `openInDiscover`, …) rides them on that argument as a namespace
-  (`host.build`), built by app.mjs's controller and handed to the renderer at
+  `closeEditor`, `preview`, `openInDiscover`, …; the services actions `openService`,
+  `openIn`, `openBuild`, `openEditor`, `saveService`, …) rides them on that argument as a namespace
+  (`host.build`, `host.services`), built by app.mjs's controller and handed to the renderer at
   the call site — never added to `host.mjs` (convention 1: the host stays the
   four stable hooks) and never reached by importing app.mjs. The renderer
   stays testable: the models it draws are pure (`studio/build-model.mjs`,

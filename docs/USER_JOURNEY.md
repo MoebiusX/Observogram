@@ -155,7 +155,9 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
    a user create or load a pack immediately.
 
 2. **The three primary tabs are the workflow.** Do not add another first-class
-   navigation layer that competes with Discover, Diagnose, Remediate.
+   navigation layer that competes with Discover, Diagnose, Remediate. The
+   service page is the home's second level — a card opens it, its actions
+   open the three tabs bound to the service — not a fourth tab.
 
 3. **Pack identity must be explicit.** Uploaded/crawled/drafted pack selectors
    must show enough source context to prevent stale or typo uploads from being
@@ -178,7 +180,43 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
 8. **State must not create false confidence.** Persisted local state is useful,
    but reset and source labels must make stale comparisons easy to clear.
 
+9. **Services are records.** The home and the SERVICE selector read the
+   services table (`GET /api/services`); a service page binds Discover ·
+   Diagnose · Remediate · Build to a service and an environment through one
+   pack resolver (the newest primary); a pack-derived tile appears only where
+   the table is unavailable (the static bundle) and behaves as before.
+
 ## What Belongs In Each Step
+
+### Home and the service page
+
+The home is the org's services table, one card per record, and a card opens
+the service page: the environments as tabs, each with the verdict the pack is
+graded to at the record's tier (a base grade is named as such when the pack
+declares no overlay for that environment; "no verdict yet" is said, never a
+zero), the MCP endpoint it is checked through, and the four actions —
+Discover · Diagnose · Remediate · Build — bound to the service and the
+environment through one pack resolver. Catalogue packs are listed apart; the
+affordances are drawn from the effective role the server reports for the
+active org (`GET /api/orgs`).
+
+Belongs here:
+
+- the services table and the record's facts (tier, owners, the packs linked,
+  the newest primary marked current);
+- the verdict per environment — the conformance report at the record's tier,
+  the mismatch with the pack's own tier said;
+- the MCP endpoint as its name and origin only;
+- the four actions, worded for the rank that reads them (a control a role
+  cannot use is drawn disabled with its reason, never as usable);
+- the record editor (name, owners, tier, description) for operators;
+- catalogue packs, apart from the records.
+
+Does not belong here:
+
+- a URL or a token (the endpoint's safe form is all the page shows);
+- environment CRUD, members, MCP endpoint records (Settings, slice 6b);
+- journeys (Neuron) and the deploy history.
 
 ### Build (no pack yet)
 

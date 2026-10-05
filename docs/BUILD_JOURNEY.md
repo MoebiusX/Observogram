@@ -32,7 +32,9 @@ flowchart TD
     F --> G{"Ready to continue?"}
     G -->|"Resolve or adjust"| D
     G -->|"Open pack in Discover (with visible gaps)"| H["Pack available in Discover"]
+    F -->|"Open pack in Discover"| H2["Service row written: tier, owners"] --> H
     C --> H
+    C --> C2["Service page<br/>environments · verdict · endpoint"] --> H
     H --> I["DISCOVER<br/>What do we have?"]
     I --> J["DIAGNOSE<br/>How reliable is this pack?"]
     J --> K["REMEDIATE<br/>Resolve gaps"]
@@ -52,8 +54,13 @@ returns to DEFINE; *Open pack in Discover with visible gaps* (*Open pack in Disc
 no placeholder remains) registers the produced pack in the studio's upload registry (the
 same path an uploaded pack takes) and switches to the existing journey:
 Discover shows its layers, Diagnose compares it with a live pack, Remediate compiles
-and deploys the delta. Nothing in Discover / Diagnose / Remediate changes; a
-library-built pack is an ordinary canonical pack with provenance annotations.
+and deploys the delta — and **writes the service row**: the register links the pack to
+the service by slug and creates its environment; Build then sets the record's tier and
+owners from DEFINE where the record has none — a tier a person already set is never
+overwritten, the mismatch is shown; a pack whose name yields another slug lands under a
+new service and the origin is left alone — DEFINE says so first. Nothing in Discover /
+Diagnose / Remediate changes; a library-built pack is an ordinary canonical pack with
+provenance annotations.
 
 ## The screens, after the 2026-09 UX review
 
@@ -969,6 +976,10 @@ the metric; the CLI).
 
 ## What the next slices add
 
+- **Build from a service page** — done (STORE_PLAN slice 6a): *Build a pack for
+  `<env>`* on the service page opens DEFINE prefilled from the record (name,
+  owners, tier, the environment) with the record as the origin; a kept draft is
+  left as it was and said so; the hand-off writes the row as above.
 - **Slice 3.** Seeding DEFINE from a repo scan or a live MCP draft (the crawler's
   discovered backends and scrape jobs pre-select entries and fill params); live
   metric-name verification of an entry's `metrics[]` through the MCP capability

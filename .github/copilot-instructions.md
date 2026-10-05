@@ -94,6 +94,13 @@ them; change them at the source and update the gate in the same commit.
   must not import `node:*` APIs or read `process.env`. Node-only code lives
   in `tools/*.mjs`, `server/`, or `tools/lib/journey.mjs` (the known
   exception).
+- **Studio conventions** (`docs/UI_CONVENTIONS.md`): views import
+  `studio/host.mjs`, never `app.mjs`; a journey's actions ride
+  `host.<namespace>` (`host.build`, `host.services`); the services loaders go
+  through `requestJson()` / `servicesRefusal()` in `studio/services-api.mjs`
+  (never a bare `fetch`, never a raw body in a status line); a `.svc-*` rule
+  lives under the `==== Services` marker in `studio/app.css`, which the AA
+  scan in `tools/test-build-model.mjs` reads.
 
 ## Git hygiene
 

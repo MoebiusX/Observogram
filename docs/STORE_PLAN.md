@@ -75,8 +75,12 @@ the route table lost `later`. The design's §19 decisions were all taken as
 recommended: a CLI reader as the last, droppable commit; the `journey.run`
 row on a 502; the `fileError` row; no email in any row (§5's sentence
 below is the one plan sentence this slice changed); viewers see logins;
-an org admin sees a non-member owner's actor as is. Slice 6 (6a, the
-Services home) is next.*
+an org admin sees a non-member owner's actor as is.*
+
+*Slice 6a is built (`codex/services-axis`): the Services home on the table,
+the service page, Check and Build wired to the table (Build writes tier and
+owners where the row has none), one org switcher, the no-org screen; the
+`.svc-*` zone under the AA scan. Slice 6 (6b, Settings) is next.*
 
 ## 0 · Status quo — what exists and what is missing
 
@@ -1158,9 +1162,9 @@ Views follow [UI_CONVENTIONS.md](UI_CONVENTIONS.md):
 
 WCAG AA in both themes is a rule ([HANDOVER.md](HANDOVER.md) §2). The scan
 in `tools/test-build-model.mjs` reads only `studio/app.css` after `==== The
-axis`, and only rules whose `color:` uses its text tokens. The `.svc-*`
-rules sit before that marker today. Slices 6a and 6b therefore extend the
-scan to the zones they add or touch.
+axis`, and only rules whose `color:` uses its text tokens. Slice 6a moved the
+`.svc-*` rules under a `==== Services` marker the scan reads and recorded
+what the later stylesheets override; 6b does the same for its zone.
 
 ## 7 · Slices — each its own PR against `develop`, each green alone
 
