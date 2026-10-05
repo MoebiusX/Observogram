@@ -8,7 +8,7 @@ and B4 decision paragraphs) and `docs/DOWNSTREAM.md` (§10 bundle baking,
 §11 the conformance workflow, §12 packs born canonical, §13 platforms) — and
 quotes nothing those documents do not state. The totals below are the chain
 `tools/test-doc-test-totals.mjs` guards: `npm test` on Linux, measured at
-each item's last commit, from 843 on the base (`origin/develop`) to 881 at
+each item's last commit, from 843 on the base (`origin/develop`) to 883 at
 the head of this PR. B3 is not in this PR (see "Deferred", last section).
 
 ## B1 — bundle parity: taxonomy and brand baked into the static bundle
@@ -86,7 +86,9 @@ to the key count. Default-behaviour changes of the CLI: a canonical input
 exits 0 (was exit 1); `-o` onto an existing canonical pack merges (was an
 overwrite; `--overwrite` restores it).
 
-**Tests.** Tests: 847 → 864 — `tools/test-pack-conformance.mjs` (9) and
+**Tests.** Tests: 847 → 864 — `tools/test-pack-conformance.mjs` (9 then; 11 at
+the head of this PR — B2b's hostile crawl and the review fixes' phone
+fingerprint, counted under 864 → 866 and 881 → 883 below) and
 `tools/test-upconvert-merge.mjs` (8, including the count pins and the
 annotation key order, the never-regresses property over the four examples
 and the CLI merge paths), plus one pin in `tools/test-legacy-pack.mjs`. Two
@@ -183,9 +185,15 @@ brand's server-path refusal names the variable that was set.
 Tests: 880 → 881 — one more in `tools/test-doc-test-totals.mjs`: this report
 exists and every `Tests: a → b` it quotes is one the journey states.
 
+Tests: 881 → 883 — one in `tools/test-pack-conformance.mjs` (the unmarked
+`+0-000-` phone fingerprint, a review fix that had landed without its note,
+leaving the chain one short of `npm test`) and one in
+`tools/test-doc-test-totals.mjs`: for every flat suite this batch added, the
+counts the journey narrates for it sum to the `test(` calls the file holds.
+
 ## Whole-batch acceptance, as it stands at the head of this PR
 
-- `npm test` green on Linux (881 tests; the browser smokes skip without
+- `npm test` green on Linux (883 tests; the browser smokes skip without
   `OBSERVOGRAM_PLAYWRIGHT`); green-with-counted-skips on Windows is expected,
   not verified (above).
 - `npm run vendor-manifest:check` and `node tools/sync-spec.mjs --check`

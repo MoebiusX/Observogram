@@ -119,3 +119,45 @@ test('each batch delivery report exists and quotes the journey\'s measured total
   }
   assert.deepEqual(problems, [], 'the delivery report states the totals the journey measured');
 });
+
+// The suites this batch added, each a flat file of top-level `test(` calls
+// (no subtests, no loops), so the number of tests it holds is the number of
+// lines that start with `test(`. The journey narrates how many tests each
+// `Tests: a → b` note put into such a suite — `` `file` 9 `` on its creation,
+// `two in `file``, `one more test in `file`` as it grows — and those
+// narrations must sum to what the file holds: a test added without its note
+// leaves the chain's last total short of `npm test`, which no total-only
+// check can see.
+const LEDGER = [
+  'tools/test-pack-conformance.mjs',
+  'tools/test-upconvert-merge.mjs',
+  'tools/test-platform.mjs',
+  'tools/test-doc-test-totals.mjs',
+];
+const WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
+const count = (w) => (/^\d+$/.test(w) ? Number(w) : WORDS[w.toLowerCase()]);
+
+/** Every test count the journey narrates for `file`, in order of appearance. */
+function narratedCounts(text, file) {
+  const flat = text.replace(/\s+/g, ' ');
+  const f = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(?:\`${f}\` (\\d+)\\b|\\b(\\d+|${Object.keys(WORDS).join('|')})(?: more)?(?: tests?)? in \`${f}\`)`, 'gi');
+  return [...flat.matchAll(re)].map((m) => count(m[1] ?? m[2]));
+}
+
+test('the counts the journey narrates for each flat suite this batch added sum to the tests the file holds', () => {
+  const problems = [];
+  for (const file of LEDGER) {
+    const lines = readFileSync(resolve(ROOT, file), 'utf8').split('\n');
+    const nested = lines.filter((l) => /^\s+(test|it|describe)\(/.test(l) || /\bt\.test\(/.test(l));
+    if (nested.length > 0) {
+      problems.push(`${file}: has nested or indented tests (${nested.length}); a flat count no longer measures it — take it off LEDGER and state its total another way`);
+      continue;
+    }
+    const held = lines.filter((l) => /^test\(/.test(l)).length;
+    const narrated = narratedCounts(journey, file);
+    const sum = narrated.reduce((a, b) => a + b, 0);
+    if (sum !== held) problems.push(`${file} holds ${held} tests; docs/UPDATE_JOURNEY.md narrates ${narrated.join(' + ') || 'none'} = ${sum} — a test landed without its \`Tests: a → b\` note (or a note without its test)`);
+  }
+  assert.deepEqual(problems, [], 'every test in a batch-added suite is counted by one journey note');
+});

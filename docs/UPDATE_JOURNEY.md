@@ -838,7 +838,7 @@ surface: none. Inert when unconfigured: on Linux every edited suite runs what
 it ran (every `skip` option is `false`), no module under `tools/lib`,
 `server/` runtime or `studio/` changes, so the goldens, `VENDOR-MANIFEST.json`
 and `studio/design-tokens.json` are untouched. Tests: 866 → 875
-(`tools/test-platform.mjs`; the three POSIX paragraphs now subtests or their
+(`tools/test-platform.mjs` 6; the three POSIX paragraphs now subtests or their
 own test). Expected on Windows — predicted from code reading, no Windows run exists
 yet: 19 `SKIP win32:` lines (18 `# SKIP win32:` from node:test, one
 `- SKIP win32:` from `tools/test-journey.mjs`), plus the PID 1 test's
@@ -865,3 +865,10 @@ was owed and is written: per item what shipped, the totals of this chain,
 what is deferred and why, and B3 as the second PR; the guard now also fails
 when the report is missing or quotes a pair the journey does not.
 Tests: 880 → 881 (one in `tools/test-doc-test-totals.mjs`).
+One review fix then landed a test without its note — the unmarked `+0-000-`
+phone fingerprint in `tools/test-pack-conformance.mjs` — and the chain's
+last total fell one short of `npm test`, which no total-only check can see;
+the guard now also keeps, for every flat suite this batch added, the counts
+the journey narrates for it summing to the `test(` calls the file holds.
+Tests: 881 → 883 (one in `tools/test-pack-conformance.mjs`, one in
+`tools/test-doc-test-totals.mjs`).
