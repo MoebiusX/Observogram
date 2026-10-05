@@ -260,6 +260,9 @@ test('GET /api/packs/:id/conformance with waivers on the pack\'s service: the en
   assert.deepEqual(waivers.clauses[L5].status, 'waived');
   assert.deepEqual(waivers.clauses[L5].subjects, { failing: THREE, waived: THREE, remaining: [] });
   assert.deepEqual(waivers.clauses[L5].waivers.map((w) => [w.id, w.author, w.state]), [[ids.whole, 'oscar', 'active']]);
+  // Every quoted view is the list route's WaiverView: its keys in its order, the org never echoed.
+  for (const c of Object.values(waivers.clauses)) for (const w of c.waivers) assert.deepEqual(Object.keys(w), VIEW_KEYS);
+  for (const w of waivers.unused) assert.deepEqual(Object.keys(w), VIEW_KEYS);
   assert.deepEqual(waivers.clauses[L3], { status: 'waived', waivers: [waivers.clauses[L3].waivers[0]], subjects: { failing: [THREE[2]], waived: [THREE[2]], remaining: [] } });
   assert.equal(waivers.clauses[L3].waivers[0].id, ids.scoped);
   assert.deepEqual([waivers.clauses['L4.MUST.multi_window_burn_rate'].status, waivers.clauses['L4.MUST.multi_window_burn_rate'].waivers[0].id], ['waived', ids.l4]);

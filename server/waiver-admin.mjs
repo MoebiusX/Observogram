@@ -135,9 +135,11 @@ export function revokeWaiverFromApi(db, actor, id, body, { now = new Date().toIS
 // The `/conformance` body's hook (server/index.mjs conformanceReportFor):
 // the service's waivers applied to the engine's report over the graded
 // canonical. With no open waiver the SAME report comes back — the inert
-// proof; else the overlay names the service in its `waivers` block.
+// proof; else the overlay names the service in its `waivers` block. The
+// quoted views are waiverViewOf's — the list route's shape, the org never
+// echoed — not the repository's rows.
 export function conformanceWaivers(db, service, report, canonical, { now = new Date().toISOString() } = {}) {
-  const waivers = listWaivers(db, service.id);
+  const waivers = listWaivers(db, service.id).map((row) => waiverViewOf(row, now));
   const applied = applyWaiversToConformance(report, waivers, { now, canonical });
   if (applied === report) return report;
   return { ...applied, waivers: { service: { id: service.id, slug: service.slug }, ...applied.waivers } };
