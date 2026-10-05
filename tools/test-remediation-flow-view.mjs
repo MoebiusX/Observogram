@@ -289,7 +289,8 @@ test('the views reach the panel through the view module and the host seam: compi
   const imports = [...view.matchAll(/^import .* from '([^']+)';$/gm)].map((m) => m[1]);
   assert.deepEqual(imports, ['./util.mjs', './ux-kit.mjs', './host.mjs', './diagnostic-grade.mjs', './artifact-model.mjs']);
   assert.ok(!view.includes("from './app.mjs'") && !view.includes("from './state.mjs'"));
-  assert.match(view, /import\(ENGINE_SPECIFIER\)/, 'the engine is loaded at call time');
+  assert.match(view, /importFn = \(\) => import\('\/lib\/remediation-flow\.mjs'\)/, 'the engine is loaded at call time through a LITERAL specifier (the bundler collects no const)');
+  assert.ok(!/import\(ENGINE_SPECIFIER\)/.test(view), 'no import(ENGINE_SPECIFIER): the bundler would not collect it');
   const compile = read('studio/compile-view.mjs');
   assert.match(compile, /from '\.\/remediation-flow-view\.mjs'/);
   assert.match(compile, /packDeclaresRemediation\(state\.pack\)/);

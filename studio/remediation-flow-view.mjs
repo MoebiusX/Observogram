@@ -48,12 +48,16 @@ export function packDeclaresRemediation(pack) {
 let engine;          // undefined: not asked yet or loading; null: failed; else the module
 let loading = null;  // the one in-flight import
 
+// The default import is written as a literal, never through the const above:
+// the bundler (tools/build-studio-bundle.mjs, importSpecifiers) collects only
+// literal specifiers, so a const here would leave the engine out of the
+// bundle's import map and the panel off there (T1 pins the real graph).
 /**
  * The engine module when it is loaded, `null` when its import failed, `undefined`
  * while it loads — the first call starts the import and `onLoaded` runs once when
  * it lands (the caller repaints); later calls while it loads schedule nothing.
  */
-export function remediationFlowEngine({ importFn = () => import(ENGINE_SPECIFIER), onLoaded = null } = {}) {
+export function remediationFlowEngine({ importFn = () => import('/lib/remediation-flow.mjs'), onLoaded = null } = {}) {
   if (engine !== undefined) return engine;
   if (!loading) {
     loading = importFn()

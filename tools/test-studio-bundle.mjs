@@ -156,9 +156,13 @@ test('T1 collectModuleGraph: every module under studio/ or lib/, the dynamic /li
   const keys = [...graph.keys()];
   assert.ok(keys.length > 60, `a real graph (${keys.length} modules)`);
   assert.ok(keys.every((k) => k.startsWith('studio/') || k.startsWith('lib/')), 'every key is studio/… or lib/…');
-  for (const k of ['studio/app.mjs', 'studio/static-backend.mjs', 'lib/service-keys.mjs', 'lib/crawler.mjs', 'lib/mcp-url-safety.mjs', 'lib/artefact-classify.mjs', 'lib/library.mjs', 'lib/zip.mjs']) {
+  for (const k of ['studio/app.mjs', 'studio/static-backend.mjs', 'lib/service-keys.mjs', 'lib/crawler.mjs', 'lib/mcp-url-safety.mjs', 'lib/artefact-classify.mjs', 'lib/library.mjs', 'lib/zip.mjs', 'lib/brand.mjs', 'lib/remediation-flow.mjs']) {
     assert.ok(graph.has(k), `${k} is in the graph`);
   }
+  // The call-time engines reach the graph through the REAL views' dynamic imports — a
+  // literal specifier each (a const would not be collected and the panel would stay off).
+  assert.deepEqual(graph.get('studio/brand.mjs').imports.map((i) => i.spec).filter((sp) => sp.startsWith('/lib/')), ['/lib/brand.mjs'], 'studio/brand.mjs → /lib/brand.mjs');
+  assert.deepEqual(graph.get('studio/remediation-flow-view.mjs').imports.map((i) => i.spec).filter((sp) => sp.startsWith('/lib/')), ['/lib/remediation-flow.mjs'], 'studio/remediation-flow-view.mjs → /lib/remediation-flow.mjs (B3.3: the response path renders in the bundle)');
   for (const [k, mod] of graph) {
     assert.ok(!/from\s+['"]node:/.test(mod.src), `${k} imports no node:* module`);
     assert.equal(mod.path, k.startsWith('lib/') ? `tools/lib/${k.slice(4)}` : k);
