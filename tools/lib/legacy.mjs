@@ -493,12 +493,15 @@ export function mergeUpconvert({ canonical: fresh, provenance = {} }, existing, 
     const freshContainer = getPath(fresh, fam.section);
     if (freshContainer == null) continue;
     if (fam.kind === 'key') {
-      const target = ensurePath(result, fam.section, {});
+      // The container is created on the first ADD only: a section the existing pack removed stays removed
+      // when every fresh item is kept or skipped (an invented empty container fails the schema's minItems).
+      let target = getPath(result, fam.section);
       for (const [key, item] of Object.entries(freshContainer)) {
         const symbol = symbolOf(fam, item, 0, key);
-        if (Object.prototype.hasOwnProperty.call(target, key)) { report.kept++; continue; }
+        if (target != null && Object.prototype.hasOwnProperty.call(target, key)) { report.kept++; continue; }
         const rec = provenance[symbol];
         if (rec == null || rec in existingAnn) { report.skipped++; continue; }
+        if (target == null) target = ensurePath(result, fam.section, {});
         target[key] = clone(item);
         report.added++;
         if (freshAnn[`crawler.scaffold.${symbol}`]) addedMarkers[`crawler.scaffold.${symbol}`] = freshAnn[`crawler.scaffold.${symbol}`];
@@ -508,14 +511,15 @@ export function mergeUpconvert({ canonical: fresh, provenance = {} }, existing, 
     }
     const freshList = Array.isArray(freshContainer) ? freshContainer : [];
     if (!freshList.length) continue;
-    const target = ensurePath(result, fam.section, []);
-    const existingIds = new Set(target.map((it, i) => fam.identity(it, i, target)));
+    let target = getPath(result, fam.section);
+    const existingIds = new Set(target == null ? [] : target.map((it, i) => fam.identity(it, i, target)));
     freshList.forEach((item, i) => {
       const symbol = symbolOf(fam, item, i);
       const identity = fam.identity(item, i, freshList);
       if (identity != null && existingIds.has(identity)) { report.kept++; return; }
       const rec = provenance[symbol];
       if (rec == null || rec in existingAnn) { report.skipped++; return; }
+      if (target == null) target = ensurePath(result, fam.section, []);
       const at = target.length;
       target.push(clone(item));
       existingIds.add(fam.identity(target[at], at, target));

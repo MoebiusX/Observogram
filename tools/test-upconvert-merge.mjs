@@ -172,6 +172,36 @@ test('merge keeps every real value, adds only the unseen, re-indexes markers, re
   assert.deepEqual(again, m, 'idempotent');
 });
 
+test('a section the base removed stays removed: no empty container is invented when every fresh item is kept or skipped; the section returns only for an unseen item', () => {
+  // spec.telemetry and spec.remediation are optional, so a base without them is schema-valid; the merge must not
+  // hand the CLI an invalid pack (`backends: 0 items < minItems 1`) that it refuses as a bug.
+  const fresh = upconvertLegacyPack(legacyOf('production-curated.json'), { now: NOW });
+  const e = clone(fresh.canonical);
+  delete e.spec.telemetry; delete e.spec.remediation;
+  for (const k of Object.keys(e.metadata.annotations)) if (/^crawler\.scaffold\.(telemetry|remediation)/.test(k)) delete e.metadata.annotations[k];
+  assert.deepEqual(validateCanonical(e, SCHEMA), [], 'the base without the two sections is valid');
+  const { canonical: m, report } = mergeUpconvert(fresh, e);
+  assert.deepEqual(validateCanonical(m, SCHEMA), []);
+  assert.ok(!('telemetry' in m.spec), 'spec.telemetry is not invented'); assert.ok(!('remediation' in m.spec), 'spec.remediation is not invented');
+  assert.equal(report.added, 0, JSON.stringify(report));
+  assert.deepEqual(mergeUpconvert(fresh, m).canonical, m, 'idempotent');
+  // The CLI accepts the same base: exit 0, no "bug" refusal.
+  const dir = mkdtempSync(join(tmpdir(), 'obs-merge-'));
+  try {
+    const base = join(dir, 'base.json'); writeFileSync(base, JSON.stringify(e));
+    const r = run(rel('examples/legacy/production-curated.json'), '-o', base);
+    assert.equal(r.status, 0, r.stderr); assert.ok(!/bug/.test(r.stderr), r.stderr);
+    assert.ok(!('remediation' in JSON.parse(readFileSync(base, 'utf8')).spec));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  // Counter-case: forget one remediation item's legacy record and the section comes back holding exactly that item.
+  const [symbol, rec] = Object.entries(fresh.provenance).find(([k, v]) => k.startsWith('remediation[') && v != null);
+  const e2 = clone(e); delete e2.metadata.annotations[rec];
+  const { canonical: m2, report: r2 } = mergeUpconvert(fresh, e2);
+  assert.deepEqual(validateCanonical(m2, SCHEMA), []);
+  assert.deepEqual(m2.spec.remediation, [fresh.canonical.spec.remediation[Number(symbol.match(/\[(\d+)\]/)[1])]]);
+  assert.ok(!('telemetry' in m2.spec)); assert.equal(r2.added, 1, JSON.stringify(r2));
+});
+
 test('never regresses — property over the four examples: every scaffolded value made real and every marker deleted comes back untouched', () => {
   const IDENTITY = new Set(['id', 'name', 'ref', 'slo', 'sli', 'trigger', 'severity', 'type', 'kind', 'signal', 'engine', 'provider', 'with']);
   const mutate = (v) => (typeof v === 'string' ? `${v}_real` : typeof v === 'number' ? v + 0.001 : Array.isArray(v) ? [...v].reverse() : v);
