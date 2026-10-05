@@ -9,6 +9,7 @@
 //   adapt(canonicalPack, opts?)         -> layeredDisplayPack
 //   listEnvironments(canonicalPack)     -> string[]
 //   applyEnvironmentOverlay(spec, env)  -> { spec, effective }
+//   overlaidCanonical(canonical, env)   -> { canonical, effective }
 
 import { annotationList, buildRequirementTraceability } from './traceability.mjs';
 import { boundText, hasDirection } from './good-when.mjs';
@@ -192,6 +193,29 @@ export function listEnvironments(canonical) {
     if (typeof env === 'string' && env.trim()) out.add(env.trim());
   }
   return [...out];
+}
+
+// A canonical object with the env overlay applied to spec.* AND the
+// effective criticality / target propagated up to metadata.bindings, so a
+// non-adapter consumer (the conformance scorer, the compilers, the export)
+// sees the correct tier for the selected environment. adapt() takes
+// opts.environment and makes its own metadata projection; this is the
+// helper for everything else, shared by the server, the static bundle and
+// the CLIs (server/index.mjs used to hold it privately).
+export function overlaidCanonical(canonical, envName) {
+  const { spec, effective } = applyEnvironmentOverlay(canonical.spec || {}, envName);
+  const next = { ...canonical, spec };
+  if (effective.criticality || effective.target) {
+    next.metadata = {
+      ...(canonical.metadata || {}),
+      bindings: {
+        ...(canonical.metadata?.bindings || {}),
+        ...(effective.criticality ? { criticality: effective.criticality } : {}),
+        ...(effective.target ? { default_target: effective.target } : {}),
+      },
+    };
+  }
+  return { canonical: next, effective };
 }
 
 export function applyEnvironmentOverlay(specInput, envName) {

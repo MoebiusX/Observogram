@@ -6,13 +6,14 @@
   "root": "tools/lib",
   "modules": {
     "tools/lib/adapter.mjs": {
-      "sha256": "692bfb391a895d9cd12befd56ea7cd1503984b6723094ff898b1f230e65da2d6",
-      "bytes": 33779,
+      "sha256": "e1df9c697a218ac58e680faa31cb9a9de1aa7ff54c5163b8db75fe8a6c8ffbcf",
+      "bytes": 34920,
       "exports": [
         "DECLARED_TYPE_PREFIX",
         "adapt",
         "applyEnvironmentOverlay",
-        "listEnvironments"
+        "listEnvironments",
+        "overlaidCanonical"
       ],
       "imports": [
         "tools/lib/good-when.mjs",

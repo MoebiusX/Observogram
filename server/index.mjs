@@ -38,7 +38,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
-import { adapt, listEnvironments, applyEnvironmentOverlay } from '../tools/lib/adapter.mjs';
+import { adapt, listEnvironments, overlaidCanonical } from '../tools/lib/adapter.mjs';
 import { serviceMetadata, catalogEntryOf } from '../tools/lib/service-keys.mjs';
 import { isLegacyLayeredPack, upconvertLegacyPack } from '../tools/lib/legacy.mjs';
 import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from '../tools/lib/validator.mjs';
@@ -269,26 +269,10 @@ function readEnv(query) {
 // MCP endpoint by id — STORE_PLAN slice 4 §7.6), and stderr logs use
 // redactCredentials()/safeUrl, never the raw URL.
 
-// Returns a canonical object with the env overlay applied to spec.* AND
-// effective criticality/target propagated up to metadata.bindings so the
-// conformance scorer sees the correct tier for the selected environment.
-// (The adapter already takes opts.environment and produces its own metadata
-// projection — this helper is for non-adapter consumers.)
-function overlaidCanonical(canonical, envName) {
-  const { spec, effective } = applyEnvironmentOverlay(canonical.spec || {}, envName);
-  const next = { ...canonical, spec };
-  if (effective.criticality || effective.target) {
-    next.metadata = {
-      ...(canonical.metadata || {}),
-      bindings: {
-        ...(canonical.metadata?.bindings || {}),
-        ...(effective.criticality ? { criticality: effective.criticality } : {}),
-        ...(effective.target ? { default_target: effective.target } : {}),
-      },
-    };
-  }
-  return { canonical: next, effective };
-}
+// overlaidCanonical (the env overlay applied to spec.* with the effective
+// criticality / target propagated up to metadata.bindings) is the adapter's
+// (tools/lib/adapter.mjs): one helper for the server, the static bundle and
+// the CLIs.
 
 // The default tools/lib/conformance.mjs grades at (tierOf) — the pack's own
 // tier once the env overlay has lifted the environment's criticality.
@@ -518,36 +502,44 @@ app.get('/api/packs/:id/canonical', authorize('GET /api/packs/:id/canonical'), (
 // (the record's tier differs from the pack's — shown, never blocked) }.
 // tools/lib/conformance.mjs is untouched: the tier goes in through a copy
 // of the canonical.
+// conformanceReportFor(meta, canonical, env) is the one builder of that
+// body: the route answers it, and GET /api/packs/:id/audit-report (GAP batch
+// 2, server/routes/audit-report.mjs) reads the same object, so the two can
+// never grade one pack differently.
+function conformanceReportFor(meta, canonical, env) {
+  const { canonical: overlaid } = overlaidCanonical(canonical, env);
+  const packTier = packTierOf(overlaid);
+  const record = meta.uploaded ? serviceTierFor(currentStore(), meta.id, env) : null;
+  const graded = record?.tier ? withCriticality(overlaid, record.tier) : overlaid;
+  const report = evaluateConformance(graded);
+  // Which clauses pass only on a placeholder, for this env overlay at the
+  // graded tier — the same list /api/validate and /api/library/register
+  // put in summary.onPlaceholder. Only a pack carrying library.todo.*
+  // annotations can say; for any other pack the key is omitted (not []),
+  // because "no placeholder" is not known there and the view keeps its hedge.
+  const onPlaceholder = librarySummaryFor(graded)?.onPlaceholder;
+  return {
+    environment: env,
+    ...report,
+    ...(Array.isArray(onPlaceholder) ? { onPlaceholder } : {}),
+    tier: {
+      graded: report.declaredTier,
+      pack: packTier,
+      from: record?.from ?? 'pack',
+      service: record?.service ?? null,
+      environment: record?.environment ?? null,
+      mismatch: !!record?.tier && record.tier !== packTier,
+    },
+  };
+}
+
 app.get('/api/packs/:id/conformance', authorize('GET /api/packs/:id/conformance'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ error: `unknown pack: ${req.params.id}` });
   try {
     const canonical = loadPackCanonical(meta);
     const env = readEnv(req.query);
-    const { canonical: overlaid } = overlaidCanonical(canonical, env);
-    const packTier = packTierOf(overlaid);
-    const record = meta.uploaded ? serviceTierFor(currentStore(), meta.id, env) : null;
-    const graded = record?.tier ? withCriticality(overlaid, record.tier) : overlaid;
-    const report = evaluateConformance(graded);
-    // Which clauses pass only on a placeholder, for this env overlay at the
-    // graded tier — the same list /api/validate and /api/library/register
-    // put in summary.onPlaceholder. Only a pack carrying library.todo.*
-    // annotations can say; for any other pack the key is omitted (not []),
-    // because "no placeholder" is not known there and the view keeps its hedge.
-    const onPlaceholder = librarySummaryFor(graded)?.onPlaceholder;
-    res.json({
-      environment: env,
-      ...report,
-      ...(Array.isArray(onPlaceholder) ? { onPlaceholder } : {}),
-      tier: {
-        graded: report.declaredTier,
-        pack: packTier,
-        from: record?.from ?? 'pack',
-        service: record?.service ?? null,
-        environment: record?.environment ?? null,
-        mismatch: !!record?.tier && record.tier !== packTier,
-      },
-    });
+    res.json(conformanceReportFor(meta, canonical, env));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

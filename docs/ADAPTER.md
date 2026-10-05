@@ -5,7 +5,7 @@ The adapter (`tools/lib/adapter.mjs`) projects a canonical ObservabilityPack v1.
 ## Public API
 
 ```js
-import { adapt, listEnvironments, applyEnvironmentOverlay } from './tools/lib/adapter.mjs';
+import { adapt, listEnvironments, applyEnvironmentOverlay, overlaidCanonical } from './tools/lib/adapter.mjs';
 
 const layered = adapt(canonical, { environment: 'staging' });
 // layered = { id, name, badge, description, meta, layers: { L1, L2, L2X, L3, L4: {policy,alerting,healing}, L5, GOV }, traceability }
@@ -16,6 +16,12 @@ const envs = listEnvironments(canonical);
 const { spec, effective } = applyEnvironmentOverlay(canonical.spec, 'staging');
 // spec = deep-cloned spec with dotted-path overrides applied
 // effective = { target, criticality, backendWiring }
+
+const { canonical: overlaid } = overlaidCanonical(canonical, 'staging');
+// the same overlay applied to a copy of the whole manifest, with the effective
+// criticality / default_target propagated up to metadata.bindings — what the
+// conformance scorer, the compilers and the export read for one environment
+// (the server, the static bundle and the CLIs share this one helper)
 ```
 
 ## Layered output shape
