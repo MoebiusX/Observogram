@@ -878,3 +878,10 @@ through unparsed, so the flag worked unadvertised). The help line names it,
 and the conformance suite now keeps every flag the CLI parses in its usage,
 the `packc` help line, the README synopsis and the CHANGELOG entry.
 Tests: 883 → 884 (one more test in `tools/test-pack-conformance.mjs`).
+That pin left the CHANGELOG's B2a Tests entry saying
+`tools/test-pack-conformance.mjs` held 11 at the head of the branch when it
+held 12 — a count stated beside a measured pair but not one, so no
+chain check read it. The guard now holds every head-of-branch count the
+CHANGELOG or a delivery report states for a flat suite this batch added to
+the `test(` calls the file holds.
+Tests: 884 → 885 (one more test in `tools/test-doc-test-totals.mjs`).

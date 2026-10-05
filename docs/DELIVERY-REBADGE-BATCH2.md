@@ -8,7 +8,7 @@ and B4 decision paragraphs) and `docs/DOWNSTREAM.md` (§10 bundle baking,
 §11 the conformance workflow, §12 packs born canonical, §13 platforms) — and
 quotes nothing those documents do not state. The totals below are the chain
 `tools/test-doc-test-totals.mjs` guards: `npm test` on Linux, measured at
-each item's last commit, from 843 on the base (`origin/develop`) to 884 at
+each item's last commit, from 843 on the base (`origin/develop`) to 885 at
 the head of this PR. B3 is not in this PR (see "Deferred", last section).
 
 ## B1 — bundle parity: taxonomy and brand baked into the static bundle
@@ -197,9 +197,14 @@ Tests: 883 → 884 — one more in `tools/test-pack-conformance.mjs`: `packc
 every flag the CLI parses stays in its usage, the `packc` help line, the README
 synopsis and the CHANGELOG entry.
 
+Tests: 884 → 885 — one more in `tools/test-doc-test-totals.mjs`: the
+CHANGELOG's B2a entry still said the conformance suite held 11 at the head of
+the branch after that pin made it 12; every such head-of-branch count a
+document states for a flat suite now has to equal the tests the file holds.
+
 ## Whole-batch acceptance, as it stands at the head of this PR
 
-- `npm test` green on Linux (884 tests; the browser smokes skip without
+- `npm test` green on Linux (885 tests; the browser smokes skip without
   `OBSERVOGRAM_PLAYWRIGHT`); green-with-counted-skips on Windows is expected,
   not verified (above).
 - `npm run vendor-manifest:check` and `node tools/sync-spec.mjs --check`

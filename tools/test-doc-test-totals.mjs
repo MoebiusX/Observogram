@@ -161,3 +161,30 @@ test('the counts the journey narrates for each flat suite this batch added sum t
   }
   assert.deepEqual(problems, [], 'every test in a batch-added suite is counted by one journey note');
 });
+
+// A document may also state, next to a suite's creation count, how many tests
+// the file holds now — `` `file` (9 tests at this entry's commit, 11 at the
+// head of the branch …) `` in the CHANGELOG, `` `file` (9 then; 12 at the head
+// of this PR …) `` in the delivery report. That phrase is a claim about the
+// file as it is, so it must equal the `test(` calls the file holds: it is not
+// a `Tests: a → b` pair and no chain check reads it, which is how one grew
+// stale while the pair beside it was kept current.
+const HEAD_COUNT = /`([^`]+\.mjs)` \((\d+)(?: tests)?[^()]*?[;,] (\d+) at the head of (?:the branch|this PR)\b/g;
+
+test('every "N at the head of the branch / this PR" count a document states for a ledger suite is the tests the file holds', () => {
+  const docs = ['docs/CHANGELOG.md', ...DELIVERY_REPORTS];
+  const problems = [];
+  let stated = 0;
+  for (const file of docs) {
+    const flat = readFileSync(resolve(ROOT, file), 'utf8').replace(/\s+/g, ' ');
+    for (const m of flat.matchAll(HEAD_COUNT)) {
+      const suite = m[1];
+      if (!LEDGER.includes(suite)) continue;
+      stated++;
+      const held = readFileSync(resolve(ROOT, suite), 'utf8').split('\n').filter((l) => /^test\(/.test(l)).length;
+      if (Number(m[3]) !== held) problems.push(`${file}: says \`${suite}\` holds ${m[3]} at the head of the branch; the file holds ${held}`);
+    }
+  }
+  assert.ok(stated > 0, 'at least one document states a head-of-branch count for a ledger suite');
+  assert.deepEqual(problems, [], 'a head-of-branch count is a claim about the file as it is — restate it with the test that grew the suite');
+});
