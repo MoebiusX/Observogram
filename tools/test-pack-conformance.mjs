@@ -142,6 +142,22 @@ test('every upconverted example: valid, not conformant, every marker row `placeh
   assert.deepEqual(pc.writers, { legacy: true, crawler: false, fetcher: false, library: false });
 });
 
+test('the `+0-000-` phone stub: the upconvert writes it for a voice/whatsapp item under a mark (placeholder); with the mark deleted the unmarked fingerprint still names the route', () => {
+  const legacy = { id: 'phone-svc', name: 'Phone', layers: { L4: { alerting: [{ id: 'ALR-01', title: 'Phone call the on-call engineer' }, { id: 'ALR-02', title: 'WhatsApp the pager group' }] } } };
+  const pack = upconvertLegacyPack(legacy, { now: '2026-01-01T00:00:00.000Z' }).canonical;
+  assert.deepEqual(pack.spec.alerting.routes.map(r => r.channels), [[{ voice: '+0-000-alr-01' }], [{ whatsapp: '+0-000-alr-02' }]], 'legacy.mjs still writes the +0-000- literal');
+  const marked = packConformance(pack).rows.filter(x => x.symbol.startsWith('alerting.routes[') && x.field === 'channels');
+  assert.deepEqual(marked.map(x => [x.symbol, x.state, x.writer, x.marker]), [['alerting.routes[0]', 'placeholder', 'legacy', 'crawler.scaffold.alerting.routes[0]'], ['alerting.routes[1]', 'placeholder', 'legacy', 'crawler.scaffold.alerting.routes[1]']]);
+  const older = clone(pack); delete older.metadata.annotations['crawler.scaffold.alerting.routes[0]']; delete older.metadata.annotations['crawler.scaffold.alerting.routes[1]'];
+  const rows = packConformance(older).rows.filter(x => x.symbol.startsWith('alerting.routes['));
+  assert.deepEqual(rows.map(x => [x.symbol, x.field, x.state, x.writer, x.marker, x.rule, x.path]), [
+    ['alerting.routes[0]', 'channels', 'unmarked', 'legacy', null, 'placeholder.alerting.routes.channels', '$.spec.alerting.routes[0]'],
+    ['alerting.routes[1]', 'channels', 'unmarked', 'legacy', null, 'placeholder.alerting.routes.channels', '$.spec.alerting.routes[1]'],
+  ], 'an older upconvert that lost its route marks still reports the phone stub as unmarked');
+  const real = clone(older); real.spec.alerting.routes[0].channels[0].voice = 'tel:+15551234567'; real.spec.alerting.routes[1].channels[0].whatsapp = 'tel:+15551234568';
+  assert.deepEqual(packConformance(real).rows.filter(x => x.symbol.startsWith('alerting.routes[')), [], 'a real unmarked number is silent');
+});
+
 // ---------- 4. transitions ----------
 
 test('transitions on production-curated: real value → marker-only; marker deleted → silent; id renamed → dangling; real metadata → no rows; `x or vector(1)` never fingerprints', () => {
