@@ -1695,11 +1695,13 @@ manifest, Compile (the catalogue, every artefact, every target) and **Export**
 (`tools/test-studio-bundle.mjs` compares every ported route against a running
 server; `GET /api/packs/:id/verdicts` answers the empty document — a
 bundled pack is never registered, so that IS the server's answer). Everything
-the server alone can do — Scan a repo, Draft from MCP, uploads, Compare,
-Deploy, Journeys, Build, recording a Verdict, Waivers (they live on a service
-record, which a bundled pack has none of), the Audit report (its goes-blind
-section needs the PromQL parser the bundle cannot inline), sign-in — answers
-`501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
+the server alone can do — Scan a repo, Draft from MCP, Refresh from MCP,
+uploads, Compare, Deploy, Journeys, Build, recording a Verdict, Waivers (they
+live on a service record, which a bundled pack has none of), the Audit report
+(its goes-blind section needs the PromQL parser the bundle cannot inline),
+Services (the records behind the home's cards and the service page — a bundle
+has no services table), Organisations (the active org's name and role),
+sign-in — answers `501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
 this studio is a static bundle built without one.' }`, which the studio shows
 as the sentence, and a dismissable notice at the bottom of the window says so
 once ("Static studio — no Observogram server behind this page …"). Compare is
