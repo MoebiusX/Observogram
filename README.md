@@ -2259,7 +2259,7 @@ tools/
   pack-init.mjs            packc init: build a pack from the library (list / show / instantiate)
   test-build-model.mjs     The BUILD journey's studio models over captured API responses (tools/fixtures/build/)
   test-platform.mjs        The Windows support statement's Linux-runnable proofs: fileURLToPath over URL.pathname, the T1 separator idiom, the platform fixture, and the guards (no URL.pathname as a path, 'win32' only in the fixture, every skip reasoned and counted in README "Platforms")
-  test-doc-test-totals.mjs The `Tests: a → b` totals in docs/UPDATE_JOURNEY.md chain within a section and agree with docs/CHANGELOG.md's Unreleased pairs
+  test-doc-test-totals.mjs The `Tests: a → b` totals in docs/UPDATE_JOURNEY.md chain within a section and agree with docs/CHANGELOG.md's Unreleased pairs and with the batch delivery report (docs/DELIVERY-*.md)
   validate-pack.mjs        Canonical pack validator
   pack-conformance.mjs     The placeholders a pack still carries: path, field, what it needs, where it comes from (--json, --strict)
   upconvert-legacy.mjs     Layered JSON -> canonical; idempotent, merges into an existing output (--merge, --overwrite)
@@ -2328,6 +2328,7 @@ deploy/k8s/
 - [`docs/VENDORING.md`](docs/VENDORING.md) - vendoring the verdict/diff engines into a downstream studio, and how to stay current
 - [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) - vendoring the pure libraries by manifest (`VENDOR-MANIFEST.json`): snapshot → verify hashes → smoke → bump
 - [`docs/UI_CONVENTIONS.md`](docs/UI_CONVENTIONS.md) - studio view-module conventions: the host seam, loader/renderer split, render signatures, CSS zones
+- [`docs/DELIVERY-REBADGE-BATCH2.md`](docs/DELIVERY-REBADGE-BATCH2.md) - delivery report for rebadge batch 2, PR 1 (B1, B2, B4): what shipped per item, the measured test totals, what is deferred and why
 
 Superseded planning docs live in [`docs/archive/`](docs/archive/README.md).
 

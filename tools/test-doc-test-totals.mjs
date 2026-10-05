@@ -11,6 +11,9 @@
 // entries quote the same kind of pair (`a → b tests`, `Suite total a → b`):
 // no two may start from the same total, and one that starts where a journey
 // entry starts must end where it ends, so the two documents cannot disagree.
+// A batch's delivery report (`docs/DELIVERY-*.md`, the batch acceptance's
+// "short delivery report") quotes the same pairs per work item: it must exist
+// and every pair it states must be one the journey states.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -20,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const journey = readFileSync(resolve(ROOT, 'docs/UPDATE_JOURNEY.md'), 'utf8');
 const changelog = readFileSync(resolve(ROOT, 'docs/CHANGELOG.md'), 'utf8');
+const DELIVERY_REPORTS = ['docs/DELIVERY-REBADGE-BATCH2.md'];
 
 const PAIR = /Tests: (\d+) → (\d+)/g;
 
@@ -90,4 +94,28 @@ test('the CHANGELOG\'s Unreleased test totals agree with each other and with the
     if (stated && stated.end !== q.end) problems.push(`docs/CHANGELOG.md:${q.line} says ${q.start} → ${q.end}; docs/UPDATE_JOURNEY.md:${stated.line} says ${q.start} → ${stated.end}`);
   }
   assert.deepEqual(problems, [], 'docs/CHANGELOG.md and docs/UPDATE_JOURNEY.md quote the same measured totals');
+});
+
+test('each batch delivery report exists and quotes the journey\'s measured totals', () => {
+  const problems = [];
+  for (const file of DELIVERY_REPORTS) {
+    let text;
+    try {
+      text = readFileSync(resolve(ROOT, file), 'utf8');
+    } catch {
+      problems.push(`${file}: missing — the batch acceptance asks for a short delivery report (per work item: what shipped, test counts, anything deferred and why)`);
+      continue;
+    }
+    const quoted = [];
+    text.split('\n').forEach((line, i) => {
+      for (const m of line.matchAll(PAIR)) quoted.push({ line: i + 1, start: Number(m[1]), end: Number(m[2]) });
+    });
+    if (quoted.length === 0) problems.push(`${file}: quotes no \`Tests: a → b\` total`);
+    for (const q of quoted) {
+      const stated = JOURNEY_BY_START.get(q.start);
+      if (!stated) problems.push(`${file}:${q.line} says ${q.start} → ${q.end}; docs/UPDATE_JOURNEY.md has no entry starting at ${q.start}`);
+      else if (stated.end !== q.end) problems.push(`${file}:${q.line} says ${q.start} → ${q.end}; docs/UPDATE_JOURNEY.md:${stated.line} says ${q.start} → ${stated.end}`);
+    }
+  }
+  assert.deepEqual(problems, [], 'the delivery report states the totals the journey measured');
 });

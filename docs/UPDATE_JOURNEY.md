@@ -860,3 +860,8 @@ keeps it so — within a section every `Tests:` note starts where the
 previous entry ends, and the CHANGELOG's `## Unreleased` pairs start from one
 total only and agree with the journey. Tests: 875 → 880 (two in
 `tools/test-upconvert-merge.mjs`, three in `tools/test-doc-test-totals.mjs`).
+The batch acceptance's delivery report, `docs/DELIVERY-REBADGE-BATCH2.md`,
+was owed and is written: per item what shipped, the totals of this chain,
+what is deferred and why, and B3 as the second PR; the guard now also fails
+when the report is missing or quotes a pair the journey does not.
+Tests: 880 → 881 (one in `tools/test-doc-test-totals.mjs`).
