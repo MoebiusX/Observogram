@@ -329,6 +329,17 @@ test('BROWSER: the services journey — the home, the page, the bound workspace,
       await openPage(page, 'payment-service');
       await openBuildFromPage(page);
       assert.equal(await $value(page, '#build-name'), 'Payments Platform');
+      // The binding survives a reload inside Build: the exit bar still names the page, and leaving lands on it, not home.
+      assert.equal(await $text(page, '.build-exit-btn'), '← Back to Payments Platform');
+      await page.waitForTimeout(300);   // the persistence debounce (state.mjs schedule, 250 ms)
+      await page.reload();
+      await page.waitForSelector('.build-shell.build-step-define', { timeout: T });
+      assert.equal(await $text(page, '.build-exit-btn'), '← Back to Payments Platform', 'the exit bar names the page after a reload');
+      await page.click('.build-exit-btn');
+      await page.waitForSelector('.svc-page', { timeout: T });
+      assert.equal(await $text(page, '.svc-page-slug'), 'payment-service', 'leaving Build lands on the page it was opened from');
+      await openBuildFromPage(page);
+      assert.equal(await $value(page, '#build-name'), 'Payments Platform', 'the draft was kept');
       await page.waitForSelector('#build-origin-note', { timeout: T });
       assert.match(await $text(page, '#build-origin-note'), /new service "payments-platform", not payment-service/);
       assert.equal(await $count(page, '#build-use-origin-name'), 0, 'no name of the renamed record yields its slug — no one-click fix');

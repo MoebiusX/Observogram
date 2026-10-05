@@ -114,6 +114,12 @@ async function rehydrateFromPersistence() {
   // canonical is re-instantiated from them, never read back. A session
   // that was building resumes on its step whether or not a pack was open.
   if (saved.build && typeof saved.build === 'object') restoreBuildDraft(saved.build);
+  // A Build or a workspace opened from a service page keeps its binding across a
+  // reload (the exit bar back to the page, the bound environment option, the
+  // empty Discover's sentence) — read before the build branch returns; the
+  // service-page branch below sets both again from the record.
+  if (Number.isInteger(saved.serviceId)) state.serviceId = saved.serviceId;
+  if (typeof saved.serviceEnv === 'string') state.serviceEnv = saved.serviceEnv;
   if (saved.mode === 'build') {
     enterBuildMode(state.build.step);
     return true;
@@ -127,10 +133,6 @@ async function rehydrateFromPersistence() {
     persistence.clear();
     return false;
   }
-  // A workspace opened from a service page keeps its binding across a reload
-  // (the breadcrumb back, the bound environment option, the empty Discover's sentence).
-  if (Number.isInteger(saved.serviceId)) state.serviceId = saved.serviceId;
-  if (typeof saved.serviceEnv === 'string') state.serviceEnv = saved.serviceEnv;
   const allKnown = [...(state.catalog || []), ...(state._examplesCache || [])];
   const aMeta = allKnown.find(p => p.id === saved.selectedPackId);
   if (!aMeta) {
