@@ -5,7 +5,9 @@
 // rule }. "Conformance" here is the second half of the word the maturity
 // rubric (tools/lib/conformance.mjs) owns: the rubric grades what is DECLARED,
 // placeholders included; this module lists what still has to become REAL.
-// Zero-import, no Node APIs, browser-safe, vendorable (a listed module).
+// No Node APIs, browser-safe, vendorable (a listed module); imports
+// ./waivers.mjs (GAP batch 2, B3.2 — which imports ./conformance.mjs) for
+// `opts.waivers` and nothing else.
 //
 // THE DETECTION RULE (no new marker). A placeholder is an artefact whose
 // adapter symbol carries a scaffold marker — an annotation key
@@ -55,8 +57,21 @@
 //               windows, severities, guardrails, cadence, owners, criticality).
 //
 // Every family, field and stub literal below is upstream's own (legacy.mjs,
-// crawler.mjs, fetch-live-pack.mjs, library.mjs). `opts` is reserved (waivers
-// land there, not in the CLI); unknown keys are ignored.
+// crawler.mjs, fetch-live-pack.mjs, library.mjs).
+//
+// WAIVERS (`opts.waivers`, GAP batch 2 B3.2). Given waivers — the objects
+// tools/lib/waivers.mjs normalizeWaiver returns, a sidecar file's or the
+// API's — every row is a finding `{ ruleId: row.rule, subject: row.symbol }`
+// and goes through applyWaiversToFindings: a row an active waiver covers
+// keeps its state and gains `waived: { id, reason, expiresAt, author }`, a
+// row whose only waiver has lapsed gains `lapsed: { … }`; the report gains
+// the `waived` partition, `counts.byState.waived`, `counts.waivers` and
+// `unusedWaivers`. Without `opts.waivers` the report is exactly what it was
+// (no new key). `conformant` stays "no rows at all": a waived placeholder is
+// still a placeholder; what a waiver changes is what --strict fails on.
+// Unknown keys of `opts` are ignored.
+
+import { applyWaiversToFindings } from './waivers.mjs';
 
 export const SCAFFOLD_PREFIXES = Object.freeze(['crawler.scaffold.', 'mcp.scaffold.', 'library.todo.']);
 export const SOURCES = Object.freeze(['crawl', 'operator', 'telemetry']);
@@ -379,10 +394,11 @@ function detectWriters(canonical, markers) {
 }
 
 /**
- * The placeholder report of a canonical pack: { name, writers, markers, rows, counts, conformant }.
- * Pure — never mutates its input. `opts` is reserved (waivers), unknown keys are ignored.
+ * The placeholder report of a canonical pack: { name, writers, markers, rows, counts, conformant } — with
+ * `opts.waivers` also `waived`, `counts.byState.waived`, `counts.waivers`, `unusedWaivers` (see WAIVERS above).
+ * Pure — never mutates its input; unknown keys of `opts` are ignored.
  */
-export function packConformance(canonical, _opts = {}) {
+export function packConformance(canonical, opts = {}) {
   const markers = scaffoldMarkers(canonical);
   const writers = detectWriters(canonical, markers);
   const rows = [];
@@ -473,12 +489,34 @@ export function packConformance(canonical, _opts = {}) {
     const fam = resolveSymbol(canonical, row.symbol).family || 'unknown';
     bySection[fam] = (bySection[fam] || 0) + 1;
   }
-  return {
+  const report = {
     name: typeof md.name === 'string' ? md.name : null,
     writers,
     markers: markers.length,
     rows: clean,
     counts: { rows: clean.length, symbols: new Set(clean.map(r => r.symbol)).size, byState, bySource, bySection },
     conformant: clean.length === 0,
+  };
+  if (!Array.isArray(opts.waivers) || !opts.waivers.length) return report;
+  return withWaivers(report, opts.waivers, opts.now);
+}
+
+// The waived partition (WAIVERS above): the rows re-stated with their waiver, the partition, the counts.
+const waiverRef = (w) => ({ id: w.id, reason: w.reason, expiresAt: w.expiresAt, author: w.author });
+function withWaivers(report, waivers, now) {
+  const applied = applyWaiversToFindings(report.rows.map(r => ({ ruleId: r.rule, subject: r.symbol })), waivers, { now });
+  const rows = report.rows.map((r, i) => {
+    const f = applied.findings[i];
+    if (f.status === 'waived') return { ...r, waived: waiverRef(f.waiver) };
+    if (f.status === 'expired') return { ...r, lapsed: waiverRef(f.waiver) };
+    return r;
+  });
+  const waived = rows.filter(r => r.waived);
+  return {
+    ...report,
+    rows,
+    waived,
+    counts: { ...report.counts, byState: { ...report.counts.byState, waived: waived.length }, waivers: applied.counts },
+    unusedWaivers: applied.unused,
   };
 }

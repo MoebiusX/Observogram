@@ -916,3 +916,34 @@ section, `verdicts.json` in the export only while a pack has a verdict,
 `user_version` 1 → 2 and the bundle's bytes in `static-backend.mjs`.
 Tests: 885 → 911 (`server/test-verdict-admin.mjs` 9, `server/test-verdicts-api.mjs` 9,
 five more in `server/test-store.mjs`, three in `tools/test-discover-rows.mjs`).
+
+**G2 — waivers.** A time-boxed, reasoned suppression of one conformance
+finding — a rubric clause and, for the four per-item clauses, optionally one
+canonical symbol of it (`docs/CONFORMANCE.md` "Waivers"; `docs/ADAPTER.md`
+"Waivers — a service record's suppression of a finding"; README "Waive A
+Conformance Finding"; `DOWNSTREAM.md` §14 `waivers`). Decisions: the server
+keeps a waiver on the SERVICE record a pack is primarily linked to (a
+re-upload keeps it; a catalogue pack has no service and no waiver), the CLI
+reads the same object from a sidecar file (`packc conformance --waivers`) —
+pack-side annotations were rejected (a pack must not waive itself); the
+address is the canonical symbol (`slos.<id>`, the adapter's `defines`
+vocabulary), never a JSONPath, and never the verdicts' positional id (both
+addresses kept and documented); a waiver never rewrites the rubric — the
+report keeps the engine's numbers and gains `waivers` with `effective`
+beside them, and a clause is `waived` only when every failing subject is
+covered (`clauseSubjects`, subjects ≡ verdict by construction), else
+`partial`; expired is failing again with the lapsed waiver shown, revoke is
+soft (history), one active waiver per key with renewal after expiry, schema
+errors are not waivable; the author is the audit actor (a login or the
+token label, never an email) and every member reads it; each engine sees the
+waivers of its own vocabulary (rubric ids to the rubric overlay, placeholder
+rules to the rows). Inert by proof: `/conformance` is the same object
+without an open waiver (the API suite captures the body before any waiver
+and matches it byte for byte after every one is revoked), `/api/validate`
+and the library routes keep the bare report, the CLI's stdout and `--json`
+are byte-identical without `--waivers`; the intended change is `DELETE
+/api/services/:id` answering `waivers: n`. Deferred by name:
+`B3.2-studio-waive`, `B3.2-bundle-waivers`, `B3.2-env-scope`,
+`B3.2-supersedes`.
+Tests: 911 → 932 (`server/test-waivers-api.mjs` 9, `tools/test-waivers.mjs` 10,
+two more in `tools/test-pack-conformance.mjs`).

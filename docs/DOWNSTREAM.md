@@ -527,9 +527,9 @@ npm run pack-conformance -- pack.yaml --strict   # CI, once the pack is conforma
   legacy liveness URL verbatim into the annotations; a URL carrying userinfo
   or a token query parameter would be stored (none of the shipped examples
   does). A default-output change for such packs, with its own CHANGELOG line.
-- *Waivers (GAP batch 2, B3.2)* — time-boxed, reasoned suppression of a
-  conformance row, scoped to its `(symbol, rule)`; the engine reserves
-  `opts.waivers` and a `waived` partition.
+- *Waivers (GAP batch 2, B3.2)* — delivered (§14 `waivers`): the engine
+  honours `opts.waivers` and answers the `waived` partition; `packc
+  conformance --waivers <file>` drives it.
 - *Service audit report (GAP batch 2, B3.5)* — one exportable report per
   pack whose conformance summary consumes `packConformance(canonical)`; a
   `GET /api/packs/:id/placeholders` route belongs there.
@@ -586,7 +586,40 @@ blocker, so a wave can be scheduled against them.
 
 | feature | status | seam | what a downstream retires | follow-ups |
 |---|---|---|---|---|
+| `waivers` | shipped — full build | `GET/POST /api/services/:id/waivers`, `POST /api/waivers/:id/revoke`, the `waivers` block of `GET /api/packs/:id/conformance` (`docs/ADAPTER.md` "Waivers"), the sidecar file of `packc conformance --waivers`, `tools/lib/waivers.mjs` (listed), the `waiver.create` / `waiver.revoke` audit rows | its exception / suppression list for conformance findings and its expiry bookkeeping | `B3.2-studio-waive`, `B3.2-bundle-waivers`, `B3.2-env-scope`, `B3.2-supersedes` |
 | `verdicts` | shipped — full build | `GET/PUT/DELETE /api/packs/:id/verdicts[/:artefact]` (`docs/ADAPTER.md` "Verdicts"), the `verdicts.json` entry of `/export.zip`, the `verdict.set` / `verdict.clear` / `verdict.carry` audit rows, the `verdict` status property (`studio/ux-kit.mjs`) and `studio/verdict-html.mjs` | its per-artefact review / trust record and its badge, filter and record form | `verdicts-service-scope`, `verdicts-bundle-bake`, `verdicts-cli`, `verdicts-on-adapter-upgrade` |
+
+### waivers
+
+A time-boxed, reasoned suppression of one conformance finding: a rubric
+clause and, for the four per-item clauses, optionally one canonical symbol
+of it (`slos.<id>` / `slis.<id>` — the adapter's `defines` vocabulary, never
+a JSONPath). Persisted on the service record (schema v2, `waivers`,
+cascading with the service; a revoke keeps the row as history), applied by
+`GET /api/packs/:id/conformance` as a `waivers` block beside the engine's
+untouched numbers (`effective` carries the numbers with the waived clauses
+met), read by the CLI from a sidecar file (`packc conformance --waivers
+<file>`: the rubric line and `rubric.waivers`, and the placeholder rows'
+`waived` partition — the seam §11 reserved). Everything a downstream
+integrates against is in `docs/ADAPTER.md` ("Waivers — a service record's
+suppression of a finding": the waiver object, the overlay block, the POST
+body, every refusal text), `docs/CONFORMANCE.md` "Waivers" and README "Waive
+A Conformance Finding".
+
+Follow-ups, by name:
+
+- *`B3.2-studio-waive`* — the studio shows waivers on the Conformance view
+  and does not record one; the record form is the API's (`curl` in the
+  README) until a downstream asks for it in the drawer.
+- *`B3.2-bundle-waivers`* — the static bundle grades a pack bare (no service
+  record); baking a sidecar file into a `--pack` needs a build flag and a
+  shim read, like the taxonomy and the brand.
+- *`B3.2-env-scope`* — a waiver applies to every environment of its service;
+  `?env=` grades per overlay, so a per-environment scope is the next shape
+  (`serviceTierFor` already returns the environment as the hook).
+- *`B3.2-supersedes`* — a renewal is a new row after an expiry; a
+  `supersedes` link from the renewal to the lapsed waiver would keep the
+  chain readable in the audit.
 
 ### verdicts
 

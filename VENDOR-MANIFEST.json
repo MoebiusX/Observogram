@@ -707,8 +707,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/pack-conformance.mjs": {
-      "sha256": "76eadb25ceeae94cecdb8c7a872d3d779901c4f64d38445935c7937c21989f36",
-      "bytes": 35131,
+      "sha256": "0c52ba13ddc252daf2000cf8aaeee8299c4acbc4e067675ba13ff1792b320d45",
+      "bytes": 37134,
       "exports": [
         "PLACEHOLDER_FIELDS",
         "SCAFFOLD_PREFIXES",
@@ -720,7 +720,9 @@
         "resolveSymbol",
         "scaffoldMarkers"
       ],
-      "imports": [],
+      "imports": [
+        "tools/lib/waivers.mjs"
+      ],
       "npm": [],
       "changedSinceRelease": true,
       "releasedExports": null

@@ -1255,8 +1255,9 @@ sidecar file drives `packc conformance --waivers <file>` (next section).
 ### Report Placeholders (pack conformance)
 
 ```bash
-npm run pack-conformance -- path/to/pack.yaml [more.pack.json ...] [--json] [--strict] [--quiet]
+npm run pack-conformance -- path/to/pack.yaml [more.pack.json ...] [--json] [--strict] [--quiet] [--waivers <file>]
 packc conformance path/to/pack.yaml
+packc conformance path/to/pack.yaml --waivers waivers.json --strict
 ```
 
 A valid pack can still be full of placeholders — the values an importer (the
@@ -1280,6 +1281,21 @@ maturity rubric (Diagnose) grades what is declared, placeholders included; the
 rows are what still has to become real. The workflow, the marker contract and
 the merge-safe `upconvert-legacy` (`-o` onto an existing canonical file merges;
 `--merge`, `--overwrite`) are in [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §11.
+
+`--waivers <file>` applies a waiver file — `{ "version": 1, "waivers": [{
+"ruleId", "artefactId"?, "reason", "expiresAt", "author" }] }`, the same
+object the server's `GET /api/services/:id/waivers` serves per row, so a
+file can be written by hand or saved from the API ([Waive A Conformance
+Finding](#waive-a-conformance-finding)) — to every pack: a placeholder row
+whose `(rule, symbol)` an active waiver covers (`ruleId` the row's rule,
+`placeholder.slos.objective`; `artefactId` the row's symbol, or omitted for
+every row of that rule) keeps its state, gains `waived` and is counted in
+`waived`, and `--strict` no longer fails on it; a waived rubric clause is met
+in the rubric line's `(+n waived)` and `(m% with waivers)` and in `--json`'s
+`rubric.waivers.effective`, the engine's own numbers never rewritten. An
+expired waiver is shown as lapsed and covers nothing; a revoked one is
+history. Without the flag the output is byte-identical to before; an
+unreadable file is exit 2 naming the entry.
 
 ### Classify Typed Packs
 

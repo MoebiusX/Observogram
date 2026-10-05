@@ -86,10 +86,11 @@ to the key count. Default-behaviour changes of the CLI: a canonical input
 exits 0 (was exit 1); `-o` onto an existing canonical pack merges (was an
 overwrite; `--overwrite` restores it).
 
-**Tests.** Tests: 847 → 864 — `tools/test-pack-conformance.mjs` (9 then; 12 at
-the head of this PR — B2b's hostile crawl, the review fixes' phone
+**Tests.** Tests: 847 → 864 — `tools/test-pack-conformance.mjs` (9 then; 14 at
+the head of the branch — B2b's hostile crawl, the review fixes' phone
 fingerprint and the flag-documentation pin, counted under 864 → 866,
-881 → 883 and 883 → 884 below) and
+881 → 883 and 883 → 884 below, and PR 2's two `--waivers` cases, counted
+under its own 911 → 932) and
 `tools/test-upconvert-merge.mjs` (8, including the count pins and the
 annotation key order, the never-regresses property over the four examples
 and the CLI merge paths), plus one pin in `tools/test-legacy-pack.mjs`. Two

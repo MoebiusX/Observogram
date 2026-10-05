@@ -29,6 +29,8 @@ import { instantiatePack, parseLibraryEntry, symbolOf } from './lib/library.mjs'
 import { adapt } from './lib/adapter.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { buildCanonicalPack } from './fetch-live-pack.mjs';
+import { evaluateConformance } from './lib/conformance.mjs';
+import { normalizeWaiver } from './lib/waivers.mjs';
 import { collectModuleGraph } from './build-studio-bundle.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -357,20 +359,126 @@ test('the CLI: refusals, exit codes, --strict, --quiet, --json, determinism', ()
   }
 });
 
-test('the CLI: every flag it accepts is in its usage, the packc help line, the README synopsis and the CHANGELOG entry', () => {
+test('the CLI: every flag it accepts is in its usage, the packc help line, the README synopsis and the CHANGELOG entries', () => {
   const src = read('tools/pack-conformance.mjs');
   const flags = [...new Set([...src.matchAll(/a === '(--[a-z-]+)'/g)].map(m => m[1]))].filter(f => f !== '--help');
-  assert.deepEqual(flags.sort(), ['--json', '--quiet', '--strict'], 'the three flags the CLI parses (besides --help)');
+  assert.deepEqual(flags.sort(), ['--json', '--quiet', '--strict', '--waivers'], 'the four flags the CLI parses (besides --help)');
   const usage = src.match(/^const USAGE = `([^`]*)`/m)[1];
   const helpLine = read('tools/cli.mjs').split('\n').find(l => /^\s*packc conformance /.test(l));
   const readme = read('README.md');
   const synopsis = readme.slice(readme.indexOf('### Report Placeholders (pack conformance)')).match(/```bash\n([^`]*)```/)[1];
-  const changelog = read('docs/CHANGELOG.md').split('\n').find(l => l.includes('`tools/pack-conformance.mjs`** (new;'));
+  // Every CHANGELOG line that names the CLI (B2a's entry and the GAP batch 2 waivers entry), together.
+  const changelog = read('docs/CHANGELOG.md').split('\n').filter(l => l.includes('`tools/pack-conformance.mjs`')).join('\n');
   assert.ok(usage && helpLine && synopsis && changelog, 'the four documented places exist');
+  // A flag taking a value is written `[--flag <file>]`.
+  const documented = (text, f) => text.includes(`[${f}]`) || text.includes(`[${f} <`);
   for (const f of flags) {
     for (const [name, text] of [['usage', usage], ['packc help line', helpLine], ['README synopsis', synopsis], ['CHANGELOG entry', changelog]]) {
-      assert.ok(text.includes(`[${f}]`), `${f} is documented in the ${name}`);
+      assert.ok(documented(text, f), `${f} is documented in the ${name}`);
     }
+  }
+});
+
+// ---------- 8b. waivers (GAP batch 2, B3.2) ----------
+
+const NOW = '2026-10-05T12:00:00.000Z';
+const waiverOf = (over) => normalizeWaiver({ reason: 'agreed with the owning team', expiresAt: '2027-01-01T00:00:00.000Z', author: 'oscar', createdAt: NOW, ...over });
+
+test('the engine honours opts.waivers: without them the report is exactly what it was (no new key); a scoped waiver marks its (rule, symbol) row `waived`, a rule-wide one every row of the rule, a lapsed one `lapsed`; the partition, the counts and the unused waivers; conformant stays "no rows"', () => {
+  const pack = upconverted['demo-skeleton.json'];
+  const bare = packConformance(pack);
+  assert.deepEqual(packConformance(pack, {}), bare);
+  assert.deepEqual(packConformance(pack, { waivers: [] }), bare, 'an empty list is no waiver');
+  assert.ok(!('waived' in bare) && !('unusedWaivers' in bare) && !('waived' in bare.counts.byState) && !('waivers' in bare.counts) && bare.rows.every(r => !('waived' in r) && !('lapsed' in r)), 'no new key without waivers');
+  const row = bare.rows.find(r => r.rule === 'placeholder.slos.objective');
+  assert.ok(row, 'the upconvert leaves an SLO objective placeholder');
+  const sameRule = bare.rows.filter(r => r.rule === 'placeholder.slos.objective');
+  const windowRows = bare.rows.filter(r => r.rule === 'placeholder.slos.window');
+  assert.ok(windowRows.length >= 1);
+  const scoped = waiverOf({ id: 1, ruleId: 'placeholder.slos.objective', artefactId: row.symbol });
+  const wide = waiverOf({ id: 2, ruleId: 'placeholder.slos.window' });
+  const lapsed = waiverOf({ id: 3, ruleId: 'placeholder.metadata.owners', expiresAt: '2000-01-01T00:00:00.000Z' });
+  const unused = waiverOf({ id: 4, ruleId: 'placeholder.slis.good', artefactId: 'slis.no-such-sli' });
+  const before = clone(pack);
+  const r = packConformance(pack, { waivers: [scoped, wide, lapsed, unused], now: NOW });
+  assert.deepEqual(pack, before, 'input not mutated');
+  assert.deepEqual(Object.keys(r), ['name', 'writers', 'markers', 'rows', 'counts', 'conformant', 'waived', 'unusedWaivers']);
+  assert.deepEqual(r.rows.map(({ waived: _w, lapsed: _l, ...rest }) => rest), bare.rows, 'every row as it was, the waiver beside it');
+  const waivedKeys = r.rows.filter(x => x.waived).map(x => [x.rule, x.symbol]);
+  assert.deepEqual(waivedKeys, [['placeholder.slos.objective', row.symbol], ...windowRows.map(x => ['placeholder.slos.window', x.symbol])].sort((a, b) => bare.rows.findIndex(x => x.rule === a[0] && x.symbol === a[1]) - bare.rows.findIndex(x => x.rule === b[0] && x.symbol === b[1])));
+  assert.ok(sameRule.length === 1 || r.rows.filter(x => x.rule === 'placeholder.slos.objective' && !x.waived).length === sameRule.length - 1, 'the scoped waiver covers its symbol alone');
+  assert.deepEqual(r.rows.find(x => x.waived).waived, { id: 1, reason: 'agreed with the owning team', expiresAt: '2027-01-01T00:00:00.000Z', author: 'oscar' });
+  assert.deepEqual(r.rows.filter(x => x.lapsed).map(x => [x.rule, x.lapsed.id, x.state]), [['placeholder.metadata.owners', 3, bare.rows.find(x => x.rule === 'placeholder.metadata.owners').state]], 'a lapsed waiver is shown on its row, which keeps its state and is not waived');
+  assert.deepEqual(r.waived, r.rows.filter(x => x.waived));
+  assert.equal(r.counts.byState.waived, r.waived.length);
+  assert.deepEqual({ ...r.counts.byState, waived: undefined }, { ...bare.counts.byState, waived: undefined }, 'the states are as they were');
+  assert.deepEqual(r.counts.waivers, { failing: bare.rows.length - r.waived.length - 1, waived: r.waived.length, expired: 1, unused: 1 });
+  assert.deepEqual(r.unusedWaivers.map(w => [w.id, w.state]), [[4, 'active']]);
+  assert.equal(r.conformant, false, 'a waived placeholder is still a placeholder');
+  assert.deepEqual(packConformance(pack, { waivers: [scoped, wide, lapsed, unused], now: NOW }), r, 'deterministic');
+  // Every row waived rule by rule: the partition is the whole report, nothing failing.
+  const all = packConformance(pack, { waivers: [...new Set(bare.rows.map(x => x.rule))].map((rule, i) => waiverOf({ id: 100 + i, ruleId: rule })), now: NOW });
+  assert.deepEqual([all.waived.length, all.counts.waivers.failing, all.conformant], [bare.rows.length, 0, false]);
+});
+
+test('the CLI --waivers: the file is read before any pack (unreadable → exit 2 naming it; a missing value → 2); waived rows, the counts line and the rubric line say so; --strict passes when every row is waived; --json carries the file, the partition and rubric.waivers; without the flag stdout and --json are byte-identical to before', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pack-conformance-wv-'));
+  try {
+    const run = (...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', env: { ...process.env } });
+    const up = join(dir, 'up.pack.json'); writeFileSync(up, JSON.stringify(upconverted['demo-skeleton.json'], null, 2) + '\n');
+    const payPath = `${SPEC_SCHEMA_PATH.replace(/\/[^/]+$/, '')}/examples/payment-service.pack.yaml`;
+    const clean = join(dir, 'clean.pack.yaml'); writeFileSync(clean, read(payPath));
+    const file = (name, doc) => { const p = join(dir, name); writeFileSync(p, JSON.stringify(doc, null, 2)); return p; };
+    const bareRows = packConformance(upconverted['demo-skeleton.json']).rows;
+    const entry = (over) => ({ reason: 'agreed with the owning team', expiresAt: '2999-01-01T00:00:00.000Z', author: 'oscar', ...over });
+    const some = file('some.json', { version: 1, waivers: [entry({ ruleId: bareRows[0].rule, artefactId: bareRows[0].symbol }), entry({ ruleId: 'L5.MUST.tier1_chaos_for_each_slo' })] });
+    const every = file('every.json', { version: 1, waivers: [...new Set(bareRows.map(x => x.rule))].map(rule => entry({ ruleId: rule })) });
+    const empty = file('empty.json', { version: 1, waivers: [] });
+    const bad = file('bad.json', { version: 1, waivers: [entry({ ruleId: 'x', reason: '' })] });
+    // Byte-identical without the flag: the human output has no waiver text, the JSON no new key — and an empty file changes no line of the summary.
+    const plain = run(up);
+    assert.doesNotMatch(plain.stdout, /waiv/);
+    assert.equal(run(up, '--waivers', empty).stdout, plain.stdout, 'an empty waiver file: the summary is byte-identical');
+    const plainJson = JSON.parse(run(up, '--json').stdout);
+    assert.ok(!('waivers' in plainJson) && !('waived' in plainJson.packs[0]) && !('waivers' in plainJson.packs[0].rubric) && !('waived' in plainJson.totals.byState), 'no new key without the flag');
+    // With waivers: the rows, the counts line, the partition.
+    const r = run(up, '--waivers', some);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /\[waived until 2999-01-01 by oscar: agreed with the owning team\]/);
+    assert.match(r.stdout, /by state: placeholder \d+ · marker-only \d+ · unmarked \d+ · dangling \d+ · waived 1$/m);
+    assert.doesNotMatch(r.stdout, /\(\+\d+ waived\)|with waivers/, 'the L5 rubric waiver applies to no failing clause of this tier-3 pack: no MUST met, no score moved');
+    assert.match(r.stdout, /· score \d+% · 1 waiver matches no failing clause —/);
+    const j = JSON.parse(run(up, '--waivers', some, '--json').stdout);
+    assert.deepEqual(j.waivers, { file: some, counts: { active: 2, expired: 0, revoked: 0 } });
+    assert.deepEqual([j.packs[0].waived.length, j.packs[0].counts.byState.waived, j.totals.byState.waived, j.packs[0].rows.filter(x => x.waived).length], [1, 1, 1, 1]);
+    assert.deepEqual(j.packs[0].rows[0].waived, { id: null, reason: 'agreed with the owning team', expiresAt: '2999-01-01T00:00:00.000Z', author: 'oscar' });
+    assert.deepEqual([j.packs[0].rubric.waivers.unused.length, Object.keys(j.packs[0].rubric.waivers.clauses), j.packs[0].unusedWaivers], [1, [], []], 'the rubric overlay holds the L5 waiver as unused; the rows have none unused');
+    // --strict: unwaived rows fail; every row waived passes.
+    assert.equal(run(up, '--waivers', some, '--strict').status, 1);
+    const all = run(up, '--waivers', every, '--strict');
+    assert.equal(all.status, 0, all.stderr);
+    assert.match(all.stdout, new RegExp(`· waived ${bareRows.length}$`, 'm'));
+    assert.equal(JSON.parse(run(up, '--waivers', every, '--json', '--strict').stdout).exitCode, 0);
+    // The rubric overlay on the spec's example: L5 chaos waived → (+1 waived), the effective score, rubric.waivers.
+    const rubric = evaluateConformance(parseYaml(read(payPath)));
+    const c = run(clean, '--waivers', some);
+    assert.equal(c.status, 0);
+    assert.match(c.stdout, new RegExp(`rubric @ tier-1: MUST ${rubric.must.passed}/${rubric.must.total} \\(\\+1 waived\\) · score ${rubric.scorePercent}% \\(\\d+% with waivers\\) —`));
+    const cj = JSON.parse(run(clean, '--waivers', some, '--json').stdout).packs[0];
+    assert.deepEqual([cj.rubric.mustPassed, cj.rubric.waivers.effective.must.passed, cj.rubric.waivers.clauses['L5.MUST.tier1_chaos_for_each_slo'].status, cj.rubric.waivers.unused, cj.rows, cj.waived, cj.unusedWaivers.length], [rubric.must.passed, rubric.must.passed + 1, 'waived', [], [], [], 1], 'each engine sees its own vocabulary: the placeholder-rule waiver is the rows\' unused one, never the rubric\'s');
+    assert.equal(run(clean, '--waivers', some, '--quiet').stdout.includes('rubric @'), false);
+    // Refusals.
+    const b = run(up, '--waivers', bad);
+    assert.equal(b.status, 2); assert.equal(b.stdout, ''); assert.match(b.stderr, /^--waivers .*bad\.json: waiver file: waivers\[0\]: a reason is one line of 1–2000 characters\n$/);
+    const m = run(up, '--waivers', join(dir, 'nope.json'));
+    assert.equal(m.status, 2); assert.match(m.stderr, /^--waivers .*nope\.json: file not found\n$/);
+    const notJson = join(dir, 'text.json'); writeFileSync(notJson, 'not json');
+    assert.equal(run(up, '--waivers', notJson).status, 2);
+    assert.equal(run(up, '--waivers').status, 2);
+    assert.equal(run(up, '--waivers', '--json').status, 2);
+    assert.equal(run('--waivers', some).status, 2, 'no pack');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
