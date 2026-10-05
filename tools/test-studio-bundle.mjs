@@ -732,6 +732,11 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   await expectDenied('/api/services/1/waivers', undefined, 'Waivers');
   await expectDenied('/api/services/1/waivers', { method: 'POST' }, 'Waivers');
   await expectDenied('/api/waivers/7/revoke', { method: 'POST' }, 'Waivers');
+  // The two routes the Services home calls (STORE_PLAN slice 6a) — no shim: the home falls back to the derived tiles.
+  await expectDenied('/api/services', undefined, 'Services');
+  await expectDenied('/api/services/1', undefined, 'Services');
+  await expectDenied('/api/services/1', { method: 'PATCH' }, 'Services');
+  await expectDenied('/api/orgs', undefined, 'Organisations');
   await expectDenied('/api/journeys', undefined, 'Journeys');
   await expectDenied('/api/library', undefined, 'Build');
   await expectDenied('/api/admin/join-role', undefined, 'Administration');
@@ -749,7 +754,8 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   assert.equal(featureOf('/api/packs/x/verdicts'), 'Verdicts', 'the feature name; the GET itself is answered before the denial');
   assert.equal(featureOf('/api/packs/x/audit-report?format=html'), 'Audit report');
   assert.equal(featureOf('/api/services/x/waivers'), 'Waivers', 'the service record route, not a /api/services prefix');
-  assert.equal(featureOf('/api/services/x'), 'This action');
+  assert.equal(featureOf('/api/services/x'), 'Services');
+  assert.equal(featureOf('/api/orgs'), 'Organisations');
   assert.equal(featureOf('/api/waivers/x/revoke'), 'Waivers');
   assert.equal(featureOf('/api/packs/x/placeholders'), 'This action', 'placeholders is answered, not a feature');
   assert.equal(featureOf('/auth/login'), 'Sign-in');
