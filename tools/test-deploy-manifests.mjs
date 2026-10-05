@@ -22,13 +22,14 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, posix } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createHarness } from './lib/harness.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { k8sCronJobManifest, K8S_WORKSPACE_PVC, K8S_WORKSPACE_MOUNT } from './lib/schedule-snippets.mjs';
 
 const { assert, report } = createHarness();
-const ROOT = new URL('../', import.meta.url);
-const K8S = join(ROOT.pathname.replace(/^\/([A-Za-z]:)/, '$1'), 'deploy', 'k8s');
+const ROOT = fileURLToPath(new URL('../', import.meta.url));
+const K8S = join(ROOT, 'deploy', 'k8s');
 
 function walk(dir) {
   const out = [];
@@ -301,7 +302,7 @@ function smp(base, patch, key) {
 // its own, or `kubectl set image … studio=$OLD_IMAGE` changes nothing.
 {
   const readme = readFileSync(join(K8S, 'README.md'), 'utf8');
-  const version = JSON.parse(readFileSync(new URL('package.json', ROOT), 'utf8')).version;
+  const version = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
   const store = readme.match(/^STORE_IMAGE=(.*)$/m)?.[1] ?? '';
   const old = (readme.match(/^OLD_IMAGE=(\S*)/m)?.[1] ?? '').trim();
   const tagOf = ref => ref.slice(ref.lastIndexOf('/') + 1).split(':')[1] ?? '';

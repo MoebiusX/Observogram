@@ -27,6 +27,14 @@
 // diff without the graph would grade differently from the server for the
 // same two packs, and a different verdict is worse than none.
 //
+// The baked taxonomy (`config.taxonomy`, written by --taxonomy) is served at
+// GET /api/taxonomy in the server's shape (server/taxonomy.mjs
+// taxonomyAnswer); the studio's boot() binds it exactly as it binds a
+// server's. The product name in the notices comes from the shell's
+// #brand-config (written by --brand, the script studio/brand.mjs reads for
+// the header), the default being DEFAULT_BRAND.name — so this file spells
+// the product nowhere and the chrome and the notices agree by construction.
+//
 // Guards this file is written against (server/test-authz.mjs scans every
 // studio module): it never spells a fetch call — the page's fetch is
 // captured once as `upstream` — and no statement holds an '/api/' literal
@@ -41,6 +49,8 @@ import { makeZip } from '../tools/lib/zip.mjs';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
 import { hasLibraryTodos, todosFromAnnotations, validationSummary } from '../tools/lib/library.mjs';
 import { focusedPackId, focusedEnv } from './focus.mjs';
+import { normalizeBrand, DEFAULT_BRAND } from '../tools/lib/brand.mjs';
+import { readBrandConfig } from './brand.mjs';
 
 export const DENIED = 'no-backend';
 export const NOTICE_CLASS = 'no-backend-notice';
@@ -77,14 +87,22 @@ export function featureOf(pathname) {
   return best ? best[1] : 'This action';
 }
 
-export function denialText(feature) {
-  return `${feature} needs the Observogram server; this studio is a static bundle built without one.`;
+// The three texts that name the product take it as `product`, defaulting to
+// the upstream name: an unbranded bundle reads today's strings character
+// for character, a --brand bundle names its own product.
+export function denialText(feature, product = DEFAULT_BRAND.name) {
+  return `${feature} needs the ${product} server; this studio is a static bundle built without one.`;
 }
 
 // The sentence the notice shows. `n` is the number of packs built in.
-export function noticeText(n) {
+export function noticeText(n, product = DEFAULT_BRAND.name) {
   const packs = n === 1 ? '1 pack' : `${n} packs`;
-  return `Static studio — no Observogram server behind this page. Discover, Diagnose, Compile and conformance read the ${packs} built in; Scan a repo, Draft from MCP, Compare, Deploy, Journeys, Build and sign-in need the server.`;
+  return `Static studio — no ${product} server behind this page. Discover, Diagnose, Compile and conformance read the ${packs} built in; Scan a repo, Draft from MCP, Compare, Deploy, Journeys, Build and sign-in need the server.`;
+}
+
+// The Advanced menu's API item sub text (disableApiMenuItem).
+export function apiMenuSubText(product = DEFAULT_BRAND.name) {
+  return `needs the ${product} server · this studio is a static bundle`;
 }
 
 // ---------- ports of server/index.mjs ----------
@@ -161,13 +179,19 @@ function parsePackText(text, url) {
 
 // ---------- the backend ----------
 
-// config: { version, schema, packs: [{ id, label, description?, canonical } | { id, label, description?, url }] }
+// config: { version, schema, packs: [{ id, label, description?, canonical } | { id, label, description?, url }], taxonomy? }
 // fetchImpl: the page's own fetch, for the pack URLs (never for the routes).
 // origin: the page's origin; an absolute request to another origin is not ours.
-export function createStaticBackend(config, { fetchImpl, origin = 'http://static-studio.invalid' } = {}) {
+// product: the name the denials spell (installStaticBackend reads it from #brand-config).
+export function createStaticBackend(config, { fetchImpl, origin = 'http://static-studio.invalid', product = DEFAULT_BRAND.name } = {}) {
   const schema = config?.schema;
   const version = typeof config?.version === 'string' ? config.version : '0.0.0';
   const declared = Array.isArray(config?.packs) ? config.packs : [];
+  // The taxonomy override --taxonomy baked (a plain object), else none. The
+  // shim serves it; the studio's boot() compiles and binds it from GET
+  // /api/taxonomy exactly as against a server (studio/app.mjs
+  // bindTaxonomyFromServer) — the import map gives both the one classifier.
+  const taxonomy = config && typeof config.taxonomy === 'object' && config.taxonomy !== null && !Array.isArray(config.taxonomy) ? config.taxonomy : null;
   const upstream = fetchImpl;
 
   // Every pack, resolved once: { meta, canonical } or { meta, error }. A URL
@@ -225,8 +249,9 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
     '/api/examples': () => json(200, { examples: [] }),
     '/api/references': () => json(200, { references: [] }),
     '/api/live-status': () => json(200, { present: false }),
-    // GET /api/taxonomy — server/taxonomy.mjs taxonomyAnswer(), unconfigured.
-    '/api/taxonomy': () => json(200, { ok: true, taxonomy: null, configured: false }, { 'Cache-Control': 'no-store' }),
+    // GET /api/taxonomy — server/taxonomy.mjs taxonomyAnswer(): the baked
+    // document or none, `configured` saying which; no-store like the server.
+    '/api/taxonomy': () => json(200, { ok: true, taxonomy, configured: taxonomy !== null }, { 'Cache-Control': 'no-store' }),
     '/api/compile/targets': () => json(200, { targets: listTargets() }),
     '/api/maturity-rubric': () => json(200, {
       specVersion: SPEC_VERSION,
@@ -385,7 +410,7 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
     }
   }
 
-  const deny = (pathname) => json(501, { ok: false, denied: DENIED, error: denialText(featureOf(pathname)) });
+  const deny = (pathname) => json(501, { ok: false, denied: DENIED, error: denialText(featureOf(pathname), product) });
 
   async function route(url, method) {
     const path = url.pathname;
@@ -435,7 +460,7 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
     return route(req.url, req.method).catch((e) => json(500, { error: e.message }));
   }
 
-  return { handle, catalog, isOurs: (input, init) => requestOf(input, init) !== null, packCount: declared.length };
+  return { handle, catalog, isOurs: (input, init) => requestOf(input, init) !== null, packCount: declared.length, product, taxonomyConfigured: taxonomy !== null };
 }
 
 // ---------- the page ----------
@@ -448,18 +473,23 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
 export function installStaticBackend(config, win = globalThis.window) {
   const upstream = win.fetch.bind(win);
   const origin = win.location.origin;
-  const backend = createStaticBackend(config, { fetchImpl: upstream, origin });
+  const doc = win.document;
+  // The product: the #brand-config a --brand build wrote into the shell (the
+  // same script studio/brand.mjs reads for the header); an unbranded shell
+  // has none, a malformed one is no brand — the default name either way.
+  let product = DEFAULT_BRAND.name;
+  try { product = normalizeBrand(readBrandConfig(doc)).name; } catch { /* a malformed #brand-config is no brand */ }
+  const backend = createStaticBackend(config, { fetchImpl: upstream, origin, product });
   win.fetch = (input, init) => backend.handle(input, init) ?? upstream(input, init);
 
-  const doc = win.document;
   const whenReady = (fn) => (doc.readyState === 'loading' ? doc.addEventListener('DOMContentLoaded', fn, { once: true }) : fn());
   whenReady(() => {
     // `hidden` alone is beaten by the author `display` on .ctrl-link
     // (app.css, reskin.css): set the style too.
     const link = doc.getElementById('api-link');
     if (link) { link.hidden = true; link.style.display = 'none'; }
-    disableApiMenuItem(doc, win);
-    mountNotice(doc, win, backend.packCount);
+    disableApiMenuItem(doc, win, product);
+    mountNotice(doc, win, backend.packCount, product);
   });
   // Capture phase, on the document: runs before studio/app.mjs's own
   // handlers on the buttons, and stops them.
@@ -481,14 +511,14 @@ export function installStaticBackend(config, win = globalThis.window) {
 // The Advanced menu's "Pack catalogue API" item (studio/app.mjs
 // installObservaChrome mounts it after this module runs): disabled, with its
 // sub text saying why. One observer, disconnected once the item is seen.
-function disableApiMenuItem(doc, win) {
+function disableApiMenuItem(doc, win, product) {
   const disable = () => {
     const item = doc.querySelector('.observa-adv-item[data-action="api"]');
     if (!item) return false;
     item.disabled = true;
     item.setAttribute('aria-disabled', 'true');
     const sub = item.querySelector('.observa-adv-item-sub');
-    if (sub) sub.textContent = 'needs the Observogram server · this studio is a static bundle';
+    if (sub) sub.textContent = apiMenuSubText(product);
     return true;
   };
   if (disable()) return;
@@ -529,14 +559,14 @@ function writeDismissed(win) {
 }
 
 // The notice: a status row at the bottom of the window (studio/static-backend.css).
-function mountNotice(doc, win, packCount) {
+function mountNotice(doc, win, packCount, product) {
   if (readDismissed(win) || doc.querySelector(`.${NOTICE_CLASS}`)) return;
   const el = doc.createElement('div');
   el.className = NOTICE_CLASS;
   el.setAttribute('role', 'status');
   const text = doc.createElement('span');
   text.className = `${NOTICE_CLASS}-text`;
-  text.textContent = noticeText(packCount);
+  text.textContent = noticeText(packCount, product);
   const btn = doc.createElement('button');
   btn.type = 'button';
   btn.className = `${NOTICE_CLASS}-dismiss`;

@@ -355,6 +355,10 @@ assert(canonical.spec.validation.synthetic_checks.length >= 1, 'synthetic checks
 assert((summary.scaffold || []).includes('baselines'), 'schema-required baselines marked as scaffold');
 assert((summary.scaffold || []).some(s => s.startsWith('validation.synthetic_checks.')),
        'schema-required synthetic check marked as scaffold');
+assert(!(summary.scaffold || []).some(s => /^telemetry\.backends\.[^.]+$/.test(s)),
+       'a real backend is never parked as a scaffold: an assumed port marks the endpoints FIELD only');
+assert((summary.scaffold || []).includes('otel.semconv') && !(summary.scaffold || []).includes('otel'),
+       'the invented otel block is marked field by field, never as the otel artefact (Compare keeps it not-observed)');
 
 assert(Object.keys(evidence).length >= 5, `evidence map populated (${Object.keys(evidence).length} entries)`);
 

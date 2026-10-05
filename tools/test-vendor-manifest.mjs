@@ -39,7 +39,7 @@ const EXPECTED_MODULES = [
   'tools/lib/dashboards/generic.mjs', 'tools/lib/dashboards/lib.mjs', 'tools/lib/diff.mjs', 'tools/lib/good-when.mjs',
   'tools/lib/inventory-coverage.mjs', 'tools/lib/journey-notify.mjs', 'tools/lib/l2x.mjs', 'tools/lib/legacy.mjs',
   'tools/lib/library.mjs', 'tools/lib/mcp-client.mjs', 'tools/lib/mcp-url-safety.mjs', 'tools/lib/mini-yaml.mjs', 'tools/lib/neuron-model.mjs',
-  'tools/lib/profiles.mjs', 'tools/lib/promql-canon.mjs', 'tools/lib/promql-lezer.mjs', 'tools/lib/promql.mjs',
+  'tools/lib/pack-conformance.mjs', 'tools/lib/profiles.mjs', 'tools/lib/promql-canon.mjs', 'tools/lib/promql-lezer.mjs', 'tools/lib/promql.mjs',
   'tools/lib/protocols.mjs', 'tools/lib/schedule-snippets.mjs', 'tools/lib/schedule.mjs', 'tools/lib/service-keys.mjs',
   'tools/lib/site/derive.mjs', 'tools/lib/site/expected.mjs', 'tools/lib/site/inventory.mjs', 'tools/lib/site/run.mjs',
   'tools/lib/site/timing.mjs', 'tools/lib/sli-inference.mjs', 'tools/lib/slug.mjs', 'tools/lib/stack-evidence.mjs',

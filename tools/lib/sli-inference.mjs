@@ -27,8 +27,18 @@
 import { symbolSlug } from './slug.mjs';
 import { normalizeSeverity } from './alert-routes.mjs';
 
-// `<service>:<metric>:<op>` — Prometheus recording-rule naming convention.
+// `<service>:<metric>:<op>` — Prometheus recording-rule naming convention,
+// and the spec's `queries.recording_rules[].name` pattern.
 const RULE_NAME_RE = /^([a-z][a-z0-9_]*):([a-z][a-z0-9_]*):([a-z0-9_]+)$/;
+
+/** True when a recording rule's name is one the spec can declare (`<service>:<metric>:<op>`). The one reading for the crawler and the live fetcher. */
+export function isSpecRecordingRuleName(name) {
+  return RULE_NAME_RE.test(typeof name === 'string' ? name : '');
+}
+
+// The spec's `$defs.Duration` pattern, mirrored by hand (a browser-safe module
+// cannot read the schema file); tools/test-crawl-canonical.mjs pins the mirror.
+export const SPEC_DURATION_RE = /^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h|d|w|mo|y))+$/;
 // The compiler's policy records (`<service>:errorbudget:burn_5m|1h`, one series
 // per SLO) share the metric segment `errorbudget`; it is reserved and never an SLI.
 const POLICY_SEGMENT = 'errorbudget';

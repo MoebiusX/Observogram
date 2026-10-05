@@ -126,7 +126,7 @@ process.env.OBSERVOGRAM_OIDC_ALLOW_HTTP = '1';
 process.env.OBSERVOGRAM_SESSION_SECRET = 'test-session-secret-0123456789-abcdef-XYZ';
 
 const { start } = await import('./index.mjs');
-const { currentStore } = await import('./store/db.mjs');
+const { currentStore, closeStore } = await import('./store/db.mjs');
 const { createUser, getUserByLogin, listUsers, setDisabled } = await import('./store/users.mjs');
 const { hashPassword } = await import('./auth.mjs');
 const { listMembershipsForUser } = await import('./store/memberships.mjs');
@@ -353,6 +353,7 @@ try {
 } finally {
   delete process.env.OBSERVOGRAM_BOOTSTRAP_ADMIN;
   await new Promise(res => srv.close(res));
+  closeStore();
   rmSync(WORKSPACE, { recursive: true, force: true });
 }
 
@@ -383,6 +384,7 @@ async function bootBlock(ws, { env = {} } = {}) {
   } finally {
     delete process.env.OBSERVOGRAM_BOOTSTRAP_ADMIN;
     await new Promise(res => s.close(res));
+    closeStore();
     rmSync(WS, { recursive: true, force: true });
   }
 }
@@ -401,6 +403,7 @@ async function bootBlock(ws, { env = {} } = {}) {
     assert(me.authenticated === true && Array.isArray(me.orgs) && me.orgs.length === 0, 'no join role: /auth/me orgs []', me.orgs);
   } finally {
     await new Promise(res => s.close(res));
+    closeStore();
     rmSync(WS, { recursive: true, force: true });
   }
 }
@@ -446,6 +449,7 @@ async function bootBlock(ws, { env = {} } = {}) {
   } finally {
     process.env.OBSERVOGRAM_OIDC_ISSUER = issuer;
     if (booted?.srv) await new Promise(res => booted.srv.close(res));
+    closeStore();
     rmSync(WS, { recursive: true, force: true });
   }
 }

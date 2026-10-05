@@ -246,6 +246,37 @@ the floor because it fixes a `StatementSync` use-after-free and the `run()`
 statement reset that a store hits. CI runs the suites on 22.16.0 and on the
 latest 22. See [docs/STORE_PLAN.md](docs/STORE_PLAN.md).
 
+### Platforms
+
+Linux is the reference platform: CI runs `npm test` on Ubuntu on Node 22.16.0
+(the floor) and the latest 22. Windows (Node ≥ 22.16, PowerShell or cmd) is
+intended to run the CLI, the server, the studio and the static bundle, and
+`npm test` is expected to be green there except the explicit skips — every
+one printed by `node --test` as `# SKIP win32: <reason>` (or `- SKIP win32:
+<reason>` in a harness suite), never a silent pass — for facts Windows cannot
+express: POSIX mode bits (`0600`/`0644`, `chmod 0000`), signal delivery
+(`process.kill` ends a Windows process outright, so the store's SIGTERM/SIGINT
+self-close cannot be exercised) and symlink creation (a privilege). *Expected,
+not verified*: the skip set is predicted from code reading, no Windows run
+exists yet, and the downstream's first `npm test` on Windows is the
+acceptance. There are 15 win32-skip sites — `server/test-store.mjs` (8),
+`server/test-store-ops.mjs` (4), `server/test-store-import.mjs` (2),
+`tools/test-journey.mjs` (1) — 19 skipped tests once the loops unroll, so a
+Windows run prints 19 `SKIP win32:` lines (18 `# SKIP win32:` from node:test,
+one `- SKIP win32:` from `tools/test-journey.mjs`), plus the PID 1 namespace
+test's `# SKIP unshare --pid is unavailable here` and the browser suites'
+Playwright skips when `OBSERVOGRAM_PLAYWRIGHT` is unset. An elevated runner
+(GitHub's `windows-latest`) can create symlinks, so it sees the 4 symlink
+skips as tests it could run — fewer `SKIP win32:` lines there is the next
+step, not a bug. `tools/test-platform.mjs` (`npm run test:platform`) keeps
+this count and the reasons honest and proves the module-relative path
+resolvers (`fileURLToPath`, never `URL.pathname`) on every platform. Every
+suite names the platform only through `server/fixtures/platform.mjs`
+(`isWin32`, `isLinux`, `PLATFORM`, `win32Skip(reason)`, `skipOnWin32(t,
+reason)`). The checkout is LF everywhere (`.gitattributes`), so goldens and
+`VENDOR-MANIFEST.json`'s hashes verify under any `core.autocrlf`. macOS is
+not in CI; the POSIX suites run there.
+
 ```bash
 git clone https://github.com/MoebiusX/Observogram.git
 cd Observogram
@@ -1018,7 +1049,7 @@ and `npm run build:stamp` refuses it (exit 2) until the history is there —
 ### Scan A Repo
 
 ```bash
-npm run crawl -- path/to/service-repo --name krystalinex-core --env prod > repo.pack.yaml
+npm run crawl -- path/to/service-repo --name payments-api --env prod > repo.pack.yaml
 npm run validate-pack -- repo.pack.yaml
 ```
 
@@ -1033,7 +1064,22 @@ The crawler reads source files such as:
 - Docker Compose files
 
 It emits a canonical v1.4 pack plus crawler annotations describing what was
-scanned and what was inferred. Every alert rule is kept: a rule whose
+scanned and what was inferred. A fresh crawl validates (exit 0) and needs no
+upconversion; `npm run pack-conformance -- repo.pack.yaml` lists what it had to
+stub. Names (`--name`, `--env`, `--owners`) must be spec Slugs — 2-64 lowercase
+letters, digits, `_` or `-`, starting with a letter — and `--criticality` /
+`--binding` must be spec values: a flag the spec cannot hold is refused before
+the crawl with exit 2, the rule in the message and nothing on stdout. Without
+`--name` the folder's name is normalized to a Slug and the original kept in
+`crawler.nameNormalizedFrom`. Exit 3 means the pack failed its own schema — a
+crawler bug, report it. Recording rules not named `<service>:<metric>:<op>`
+cannot be declared in `spec.queries.recording_rules`; they are recorded in
+`crawler.omitted.recording_rules` (their expressions still feed the metric
+inventory). Every value the crawler invents — the stub SLI/SLO, an assumed
+port, an Alertmanager address the config does not state, the default owner,
+the OTel SDK defaults — carries a `crawler.scaffold.<symbol>` annotation with
+the reason; the conformance tool turns those into rows
+([`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §12). Every alert rule is kept: a rule whose
 expression references a recorded SLO series is a burn-rate alert
 (`spec.policy.burn_rate_alerts`); every other rule — a pod restarting, a pool
 saturated, a certificate expiring — is an operational alert and is declared in
@@ -1107,6 +1153,35 @@ The studio also accepts drag-and-drop or file picker upload. Uploaded, crawled,
 and MCP-drafted packs are registered in memory and become addressable through
 the same `/api/packs/:id/*` endpoints as catalog packs.
 
+### Report Placeholders (pack conformance)
+
+```bash
+npm run pack-conformance -- path/to/pack.yaml [more.pack.json ...] [--json] [--strict] [--quiet]
+packc conformance path/to/pack.yaml
+```
+
+A valid pack can still be full of placeholders — the values an importer (the
+upconvert, the crawler, the live fetcher, Build) had to invent to satisfy the
+schema. This tool lists them as rows: the pack path (`$.spec.slis[0]`), the
+field, what it needs, and where the value normally comes from — **crawl** (it
+exists in the service repository: `npm run crawl` reads it), **telemetry** (a
+fact of the running backends: the live fetcher or the backend's API) or
+**operator** (a decision only the owning team can make). The detection rule is
+the studio's: an artefact whose symbol carries a `crawler.scaffold.*`,
+`mcp.scaffold.*` or `library.todo.*` annotation is a placeholder, so the rows
+are what Discover parks as Scaffold. Each row's state is `placeholder` (marker
+present, value still a stub), `marker-only` (value changed — if real, delete the
+marker), `unmarked` (no marker, but the value is an importer's stub literal) or
+`dangling` (a marker naming nothing). Exit 0 when every pack is readable,
+canonical and valid (rows are informational); 1 for an unreadable, layered
+(upconvert it first) or invalid pack, or with `--strict` when any pack still
+has rows; 2 for usage. `--json` prints `{ tool, specVersion, strict, packs:
+[{ path, valid, errors, rubric, rows, counts, … }], totals, exitCode }`. The
+maturity rubric (Diagnose) grades what is declared, placeholders included; the
+rows are what still has to become real. The workflow, the marker contract and
+the merge-safe `upconvert-legacy` (`-o` onto an existing canonical file merges;
+`--merge`, `--overwrite`) are in [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §11.
+
 ### Classify Typed Packs
 
 Observogram groups a pack's artefacts into families — SLI, SLO, recording
@@ -1156,7 +1231,10 @@ carry a `type` (kept through the upconvert as
 the adapter as the artefact's `type`, see [docs/ADAPTER.md](docs/ADAPTER.md),
 "Id families and the classifier") or as a layered pack a downstream server
 or bundle serves directly. `tools/fixtures/taxonomy/` holds a worked example
-of both the pack and the override.
+of both the pack and the override. The static bundle bakes the same file with
+`npm run build:studio -- --taxonomy <file>` (or `OBSERVOGRAM_TAXONOMY` when
+the flag is absent) and groups as the server does ("Serve The Studio Without
+The Server", *Bake the seams*).
 
 ### Rebadge The Studio (brand config)
 
@@ -1255,8 +1333,10 @@ tools/gen-design-tokens.mjs --brand brand.json --out dist/design-tokens.json`
 writes the rebadged document (a `brand` key names it); the generator never
 reads `OBSERVOGRAM_BRAND_FILE`, and `--brand` with `--write` refuses, so
 `studio/design-tokens.json` stays the vendorable default. The static bundle
-(`npm run build:studio`) is built from the unbranded shell and stays
-unbranded; a `--brand` for it is the follow-up.
+(`npm run build:studio`) bakes the same file with `--brand` — the server's
+loader and the server's shell renderer, so the chrome is the same — and
+honours `OBSERVOGRAM_BRAND_FILE` / the scalars when the flag is absent ("Serve
+The Studio Without The Server", *Bake the seams*).
 
 ### Compile Artifacts
 
@@ -1299,6 +1379,11 @@ npm run build:studio -- \
 # A pack the page fetches at its first catalogue read (the host must answer CORS):
 npm run build:studio -- --pack-url https://packs.example.com/orders.pack.yaml --label Orders
 
+# The two seams a server reads from its environment, baked in: the taxonomy
+# override ("Classify Typed Packs") and the brand ("Rebadge The Studio").
+npm run build:studio -- --pack my-service.pack.yaml \
+  --taxonomy tools/fixtures/taxonomy/taxonomy.json --brand brand.json
+
 # Check the build without writing (also --json): the graph, the stylesheets, the packs.
 npm run build:studio -- --check --pack my-service.pack.yaml
 ```
@@ -1308,6 +1393,40 @@ Each `--pack` / `--pack-url` takes its own `--id` (default: the file name),
 `--description` — the catalogue row the bundled studio shows, field for field
 what a server-side pack row carries. `--no-remote-fonts` drops the Google Fonts
 links for an offline host.
+
+**Bake the seams.** `--taxonomy <file.json>` bakes the artefact-taxonomy
+override (the file a server reads from `OBSERVOGRAM_TAXONOMY`, "Classify
+Typed Packs"): validated at build time with the server's `validateTaxonomy` —
+a bad file fails the build with `--taxonomy: <path>: <reason>`, the server's
+own texts — and served by the bundle's `GET /api/taxonomy` as
+`{ ok, taxonomy, configured: true }`, so Discover groups a typed pack exactly
+as a server started with that file does (`tools/test-studio-bundle.mjs` T8
+proves it byte for byte against the board goldens). `--brand <file.json>`
+bakes the brand ("Rebadge The Studio"): the server's loader
+(`tools/lib/brand-env.mjs`, so the `OBSERVOGRAM_BRAND_*` scalars apply on top
+of the file, as on a server) and the server's shell renderer
+(`brandShellHtml`: title, description, header, footer, `#brand-config`,
+`#brand-tokens`, favicon), which the studio chrome, the notice and the `501`
+texts all read — a `--brand` bundle names its own product and never the
+upstream one. When a flag is absent the server's variables are honoured —
+`OBSERVOGRAM_TAXONOMY`, `OBSERVOGRAM_BRAND_FILE`, the `OBSERVOGRAM_BRAND_*`
+scalars (the one-field rebadge is `OBSERVOGRAM_BRAND_NAME=Acme npm run
+build:studio`, POSIX shell syntax) — so a build machine configured for a
+server bakes what that server shows; build unbranded there by unsetting or
+emptying the variable, since an empty value counts as unset:
+`env -u OBSERVOGRAM_BRAND_FILE …` or `OBSERVOGRAM_BRAND_FILE= …` in a POSIX
+shell, `set OBSERVOGRAM_BRAND_FILE=` in cmd, `$env:OBSERVOGRAM_BRAND_FILE=''`
+in PowerShell (there is no `--no-brand`). The summary line and `--json` always
+say what was baked (`taxonomy: { source, file, types, ids } | null`, `brand:
+{ source, file, name } | null` — the paths, never the contents, and neither
+path lands in the bundle). Brand URLs must not be server paths: `favicon`,
+`logo.url` and `hero.src` are an absolute URL, a `data:` URL or a path
+relative to the bundle's own directory (resolved against the page's URL by
+the static host) — `/assets/x.ico` fails the build naming the field and the
+fix. A configured brand that gives no `name` keeps the upstream strings, as on
+a server; and the unbranded bundle's Discover hero is the server asset
+`/assets/observogram-hero.png` (the default brand's `hero.src`), so a static
+host serves that asset or the brand names its own `hero.src`.
 
 What the file is (`tools/build-studio-bundle.mjs`): `studio/index.html` with
 every stylesheet inlined in place, an inline **import map** whose keys are the
@@ -2040,7 +2159,7 @@ open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
 | `GET` | `/api/references` | Curated catalogue reference packs |
 | `GET` | `/api/packs/:id` | Adapted layered pack |
 | `GET` | `/api/packs/:id/canonical` | Canonical pack with env overlay |
-| `GET` | `/api/packs/:id/conformance` | Maturity-rubric scoring (`onPlaceholder` when the pack carries `library.todo.*` annotations), graded at the service record's tier when one is set (the environment's for `?env=`, else the service's): `declaredTier` is the graded tier, `tier.pack` the pack's own, `tier.mismatch` says they differ; a pack with no record (a catalogue pack, a service without a tier) is graded at its own tier, `tier.from: 'pack'` |
+| `GET` | `/api/packs/:id/conformance` | Maturity-rubric scoring (the rubric grades what is declared, placeholders included; `npm run pack-conformance` lists the placeholders) (`onPlaceholder` when the pack carries `library.todo.*` annotations), graded at the service record's tier when one is set (the environment's for `?env=`, else the service's): `declaredTier` is the graded tier, `tier.pack` the pack's own, `tier.mismatch` says they differ; a pack with no record (a catalogue pack, a service without a tier) is graded at its own tier, `tier.from: 'pack'` |
 | `GET` | `/api/diff?a=&b=` | Repo/live or pack/pack structural diff |
 | `GET` | `/api/packs/:id/compile-catalog` | Per-artifact compile tree |
 | `GET` | `/api/packs/:id/compile-artifact` | Compile one artifact or group |
@@ -2111,6 +2230,7 @@ server/
   service-admin.mjs        The service, environment and MCP endpoint rules behind /api/services, /api/environments and /api/mcp-endpoints; the tier rule; an MCP target picked by id
   routes/                  The identity API (identity.mjs), the services API (services.mjs), the deploy routes, and the handler helpers they share (util.mjs)
   store/                   The embedded store (docs/STORE_PLAN.md): db.mjs (the one node:sqlite door), migrations, repositories, the legacy import and import --replace, backup/restore, ops.mjs (export, the replace request, rekey-issuer, purge-org)
+  fixtures/                What the suites share: serve-child.mjs (a hermetic child server, the STRIP list), platform.mjs (isWin32, the reasoned win32 skips), pre-store-build.mjs, route-inventory.mjs, store-050-guard.mjs
   test-smoke.mjs           End-to-end route smoke tests
 
 studio/
@@ -2138,7 +2258,11 @@ tools/
   build-studio-bundle.mjs  The studio as one static HTML file: an import map of data: modules, inlined stylesheets, the packs (npm run build:studio)
   pack-init.mjs            packc init: build a pack from the library (list / show / instantiate)
   test-build-model.mjs     The BUILD journey's studio models over captured API responses (tools/fixtures/build/)
+  test-platform.mjs        The Windows support statement's Linux-runnable proofs: fileURLToPath over URL.pathname, the T1 separator idiom, the platform fixture, and the guards (no URL.pathname as a path, 'win32' only in the fixture, every skip reasoned and counted in README "Platforms")
+  test-doc-test-totals.mjs The `Tests: a → b` totals in docs/UPDATE_JOURNEY.md chain within a section and agree with docs/CHANGELOG.md's Unreleased pairs and with the batch delivery report (docs/DELIVERY-*.md)
   validate-pack.mjs        Canonical pack validator
+  pack-conformance.mjs     The placeholders a pack still carries: path, field, what it needs, where it comes from (--json, --strict)
+  upconvert-legacy.mjs     Layered JSON -> canonical; idempotent, merges into an existing output (--merge, --overwrite)
   lib/
     adapter.mjs            Canonical pack -> layered UI model
     blast-radius.mjs       Blind-spot blast radius over the requirement graph (zero-import, vendorable)
@@ -2149,7 +2273,9 @@ tools/
     conformance.mjs        Maturity rubric
     diff.mjs               Structural pack diff
     journey.mjs            Journey definitions, runner, gate, run history (node-only)
+    legacy.mjs             Layered-JSON upconvert and the merge-safe re-run (mergeUpconvert); imports pack-conformance.mjs
     library.mjs            The BUILD journey engine: entries, tier scaffold, instantiation, todos, provenance (browser-safe)
+    pack-conformance.mjs   Scaffold markers -> {path, field, needs, source, hint} rows; the adapter's symbol grammar (zero-import, vendorable)
     stack-evidence.mjs     Stack self-metric history helpers (browser-safe, vendorable)
     traceability.mjs       Requirement chains
 
@@ -2202,6 +2328,7 @@ deploy/k8s/
 - [`docs/VENDORING.md`](docs/VENDORING.md) - vendoring the verdict/diff engines into a downstream studio, and how to stay current
 - [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) - vendoring the pure libraries by manifest (`VENDOR-MANIFEST.json`): snapshot → verify hashes → smoke → bump
 - [`docs/UI_CONVENTIONS.md`](docs/UI_CONVENTIONS.md) - studio view-module conventions: the host seam, loader/renderer split, render signatures, CSS zones
+- [`docs/DELIVERY-REBADGE-BATCH2.md`](docs/DELIVERY-REBADGE-BATCH2.md) - delivery report for rebadge batch 2, PR 1 (B1, B2, B4): what shipped per item, the measured test totals, what is deferred and why
 
 Superseded planning docs live in [`docs/archive/`](docs/archive/README.md).
 

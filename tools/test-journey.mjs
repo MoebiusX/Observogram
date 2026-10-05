@@ -17,6 +17,7 @@ import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { spawnSync, spawn } from 'node:child_process';
 import { createHarness } from './lib/harness.mjs';
+import { skipOnWin32, WIN32 } from '../server/fixtures/platform.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { SPEC_DIR } from './lib/validator.mjs';
 import { adapt } from './lib/adapter.mjs';
@@ -1639,7 +1640,7 @@ try {
       assert(siteRun.rec?.inventory?.status === 'failed' && /another org's part of the workspace — refused/.test(siteRun.rec?.inventory?.reason || ''), 'crawlScope: from orgs/acme an inventory site in the default org\'s part is not read', siteRun.err || siteRun.rec?.inventory);
 
       // A symlinked file into <base>/orgs/bravo is skipped.
-      if (process.platform !== 'win32') {
+      if (!skipOnWin32(null, WIN32.symlinks)) {
         mkdirSync(join(ACME, 'linked'), { recursive: true });
         symlinkSync(join(WS, 'orgs', 'bravo', 'svc', 'main.go'), join(ACME, 'linked', 'main.go'));
         const link = crawlDef('scope-link', 'linked');

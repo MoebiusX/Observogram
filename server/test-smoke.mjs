@@ -53,7 +53,7 @@ const SMOKE_TOKEN_VALUE = 'smoke-read-token-value';
 process.env[SMOKE_TOKEN_VAR] = SMOKE_TOKEN_VALUE;
 
 const { start } = await import('./index.mjs');
-const { currentStore } = await import('./store/db.mjs');
+const { currentStore, closeStore } = await import('./store/db.mjs');
 const { runWithOrg } = await import('./tenancy.mjs');
 const { listPacks } = await import('./store/packs.mjs');
 const { listServices } = await import('./store/services.mjs');
@@ -1985,6 +1985,7 @@ try {
   }
 } finally {
   await new Promise(r => srv.close(r));
+  closeStore();
   rmSync(SMOKE_WORKSPACE, { recursive: true, force: true });
 }
 

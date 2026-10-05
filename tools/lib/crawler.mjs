@@ -26,12 +26,29 @@ import {
   inferSlisFromRecordingRules, ruleNameToSliId,
   burnCandidateFromAlertRule, recordedSloForExpr, mergeBurnAlertsBySlo, defaultBurnWindows,
   operationalAlertRules, isGrafanaManagedRule, alertRuleExpr,
+  isSpecRecordingRuleName, canonicalRuleDuration, SPEC_DURATION_RE,
 } from './sli-inference.mjs';
 import { materializeL2XFromBackends } from './l2x.mjs';
 import { routesFromAlertmanagerConfig } from './alert-routes.mjs';
 import { BACKEND_PATTERNS } from './backend-products.mjs';
 import { PROMQL_KEYWORDS, extractPromqlMetricNames } from './promql.mjs';
-import { symbolSlug as slug } from './slug.mjs';
+import { symbolSlug as slug, packSlug } from './slug.mjs';
+
+// The spec's closed vocabularies, mirrored by hand (a browser-safe module
+// cannot read the schema file; tools/test-crawl-canonical.mjs pins the
+// mirrors against the vendored $defs). An input outside them is defaulted
+// with a warning, never copied into the manifest.
+const SPEC_BINDINGS = new Set(['otel-elastic-prometheus-grafana', 'otel-grafanalabs', 'otel-aws-managed', 'otel-multi-backend', 'legacy']);
+const SPEC_CRITICALITIES = new Set(['tier-1', 'tier-2', 'tier-3']);
+const SLUG_MAX = 64;
+
+// `<base><suffix>` as a spec Slug: the base is cut so the whole fits in 64 and
+// never ends the base in a non-alphanumeric.
+function suffixedId(base, suffix) {
+  const room = SLUG_MAX - suffix.length;
+  const head = String(base).slice(0, room).replace(/[^a-z0-9]+$/, '') || 'svc';
+  return `${head}${suffix}`;
+}
 
 // ---------- which files of a repository a scan reads ----------
 // One rule for every way a repository reaches the scanner — the CLI walker
@@ -148,6 +165,7 @@ function registerBackendFromImage(image, relPath, backends, evidence, summary, {
       auth: { kind: 'none' },
     };
     if (tag && /^v?\d/.test(tag)) backend.version = { declared: tag.replace(/^v/, ''), gating: 'off' };
+    if (summary.invented) summary.invented.endpoints.push(id);   // a workload image states no port
     backends.push(backend);
     evidence[id] = relPath;
     summary.discovered.backends++;
@@ -425,13 +443,47 @@ export function crawlFiles(filesInput, opts = {}) {
   const rawFiles = filesInput instanceof Map
     ? filesInput
     : new Map(Object.entries(filesInput));
-  const repoName = opts.repoName || 'crawled-service';
-  const environment = opts.environment || 'prod';
-  const binding = opts.binding || 'otel-elastic-prometheus-grafana';
-  const owners = opts.owners || ['team-platform'];
+  // Inputs the manifest spells as spec Slugs are normalized (the original is
+  // kept in the summary and, for the name and the environment, in an
+  // annotation); inputs with a closed vocabulary are defaulted with a warning.
+  // A fresh crawl therefore never emits an invalid pack for an input the
+  // operator can spell differently — the CLI refuses such flags before the
+  // crawl, programmatic callers (the server, the studio) get the warning.
+  const nameRaw = opts.repoName ?? 'crawled-service';
+  const repoName = packSlug(nameRaw, 'crawled-service');
+  const envRaw = opts.environment || 'prod';
+  const environment = packSlug(envRaw, 'prod', { prefix: 'env-' });
+  const ownersRaw = Array.isArray(opts.owners) ? opts.owners.map(o => String(o ?? '')) : [];
+  const ownersSlugged = ownersRaw.map(o => packSlug(o, '', { prefix: 'owner-' })).filter(Boolean);
+  const ownersDefaulted = ownersSlugged.length === 0;
+  const owners = ownersDefaulted ? ['team-platform'] : ownersSlugged;
+  const bindingIgnored = opts.binding !== undefined && opts.binding !== null && !SPEC_BINDINGS.has(opts.binding);
+  const binding = !opts.binding || bindingIgnored ? 'otel-elastic-prometheus-grafana' : opts.binding;
+  const criticalityIgnored = opts.criticality !== undefined && opts.criticality !== null && !SPEC_CRITICALITIES.has(opts.criticality);
   const diffScopeMode = normalizeDiffScopeMode(opts.diffScopeMode || opts.diffScope || opts.liveScope);
-  const envScope = scopeFilesForEnvironment(rawFiles, environment);
+  // Profile detection reads the environment as given (it lowercases itself).
+  const envScope = scopeFilesForEnvironment(rawFiles, envRaw);
   const files = envScope.files;
+  const inputWarnings = [];
+  const normalized = { name: null, environment: null, owners: [] };
+  if (repoName !== String(nameRaw)) {
+    normalized.name = { from: String(nameRaw), to: repoName };
+    inputWarnings.push(`metadata.name '${nameRaw}' is not a spec Slug; normalized to '${repoName}' (pass --name to choose).`);
+  }
+  if (environment !== String(envRaw)) {
+    normalized.environment = { from: String(envRaw), to: environment };
+    inputWarnings.push(`environment '${envRaw}' is not a spec Slug; normalized to '${environment}'.`);
+  }
+  ownersRaw.forEach((raw, i) => {
+    const to = packSlug(raw, '', { prefix: 'owner-' });
+    if (to !== raw) {
+      normalized.owners.push({ from: raw, to: to || null });
+      inputWarnings.push(to ? `owner '${raw}' is not a spec Slug; normalized to '${to}'.` : `owner '${raw}' is not a spec Slug and has no usable characters; dropped.`);
+    }
+    if (i === ownersRaw.length - 1 && ownersDefaulted && ownersRaw.length) inputWarnings.push('no usable owner remains; the default \'team-platform\' is used.');
+  });
+  if (criticalityIgnored) inputWarnings.push(`criticality '${opts.criticality}' is not tier-1|tier-2|tier-3; the inferred tier is used.`);
+  if (bindingIgnored) inputWarnings.push(`binding '${opts.binding}' is not a spec Binding; the default 'otel-elastic-prometheus-grafana' is used.`);
 
   // ----- per-kind buckets -----
   const summary = {
@@ -443,7 +495,7 @@ export function crawlFiles(filesInput, opts = {}) {
       byKind: {},
     },
     environment: {
-      requested: environment,
+      requested: envRaw,
       profile: envScope.profile,
       scoped: envScope.applied,
       surfaces: envScope.surfaces,
@@ -460,9 +512,14 @@ export function crawlFiles(filesInput, opts = {}) {
     },
     inferred: { slis: 0, slos: 0, baselines: false, tier: null },
     warnings: [],
-    omitted: { syntheticRecordingRules: [], unresolvedChannels: [] },
+    omitted: { syntheticRecordingRules: [], unresolvedChannels: [], recordingRules: [], ruleIntervals: [] },
+    normalized,
+    // What the crawler had to INVENT (no evidence in the repository): every
+    // entry below becomes a `crawler.scaffold.<symbol>` mark (see `mark`).
+    invented: { endpoints: [], channels: [] },
     scaffold: [],
   };
+  summary.warnings.push(...inputWarnings);
   if (envScope.applied) {
     summary.warnings.push(`Environment scope "${envScope.profile}" excluded ${envScope.excluded.length} file(s) from other deployment surfaces.`);
   }
@@ -477,7 +534,23 @@ export function crawlFiles(filesInput, opts = {}) {
   const dashboards = [];
   const alertingRoutes = [];
   const pipelines = { receivers: [], processors: [], exporters: { metrics: null, logs: null, traces: null } };
-  const scaffoldSymbols = [];
+  // symbol → why the crawler could not know it. An ARTEFACT symbol (exactly an
+  // id adapter.mjs passes to sourceOf: `baselines`, `dashboards.<id>`,
+  // `slis.<id>`, …) parks that artefact as Scaffold; a FIELD symbol (an
+  // artefact symbol plus `.<field>` or an index: `otel.semconv`,
+  // `telemetry.backends.<id>.endpoints`, `alerting.routes[0].channels[1]`,
+  // `metadata.owners`) parks nothing in the studio or in Compare and exists
+  // for the conformance report (tools/lib/pack-conformance.mjs). Same grammar
+  // as legacy.mjs (`crawler.scaffold.*`), library.mjs (`library.todo.*`) and
+  // the fetcher (`mcp.scaffold.*`).
+  const SCAFFOLD_NOTE = 'schema-required fallback; no source evidence found in selected environment';
+  const scaffoldMarks = new Map();
+  const mark = (symbol, note = SCAFFOLD_NOTE) => { if (!scaffoldMarks.has(symbol)) scaffoldMarks.set(symbol, note); };
+  const scaffoldSymbols = { push: (...symbols) => symbols.forEach(s => mark(s)) };
+  // Marks for what the crawler invents beside the schema-required stubs are
+  // appended AFTER those (the existing marks keep their order and text).
+  const inventedMarks = [];
+  const markInvented = (symbol, note) => { inventedMarks.push([symbol, note]); };
 
   // ----- pass 1: classify -----
   const classified = [];
@@ -554,15 +627,25 @@ export function crawlFiles(filesInput, opts = {}) {
   // policy rather than manufacturing junk L1 contracts that can never match
   // the live system.
   const haveRecordedSlis = sliMap.size > 0;
+  // The ids an alert name derives must be spec Slugs (and Refs): letter-led,
+  // at most 64 characters, trailing separators trimmed.
+  const repoNs = String(repoName).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'svc';
+  const symbolId = (s, fallback) => {
+    let out = slug(s);
+    if (out && !/^[a-z]/.test(out)) out = `${repoNs}_${out}`;
+    out = out.slice(0, SLUG_MAX).replace(/[^a-z0-9]+$/, '');
+    return out.length >= 2 ? out : fallback;
+  };
   for (const alert of burnRateAlerts) {
     const linked = recordedSloForExpr(alert.expr, (id) => sloMap.has(id));
     if (linked) { alert.slo = linked; continue; }
 
     if (haveRecordedSlis) { alert._drop = true; continue; }
 
-    const sloId = alert.slo;
+    const sloId = symbolId(alert.slo, `${repoNs}_slo`);
+    alert.slo = sloId;
     if (!sloMap.has(sloId)) {
-      const sliId = sloId.replace(/_99|_999|_995|_slo$/i, '') || sloId;
+      const sliId = symbolId(sloId.replace(/_99|_999|_995|_slo$/i, '') || sloId, `${repoNs}_sli`);
       sloMap.set(sloId, {
         id: sloId,
         sli: sliId,
@@ -571,6 +654,7 @@ export function crawlFiles(filesInput, opts = {}) {
         error_budget_policy: 'ref:platform/default-budget',
       });
       summary.inferred.slos++;
+      markInvented(`slos.${sloId}`, 'derived from the alert name only; good/total, objective and window are defaults');
       if (!sliMap.has(sliId)) {
         sliMap.set(sliId, {
           id: sliId,
@@ -580,6 +664,7 @@ export function crawlFiles(filesInput, opts = {}) {
           total: `sum(rate(http_requests_total{service="${repoName}"}[5m]))`,
         });
         summary.inferred.slis++;
+        markInvented(`slis.${sliId}`, 'derived from the alert name only; good/total, objective and window are defaults');
       }
     }
   }
@@ -623,6 +708,15 @@ export function crawlFiles(filesInput, opts = {}) {
   operational.kept.forEach((r, i) => { evidence[`RULE-${i + 1}`] = r.source; });
 
 
+  if (summary.omitted.recordingRules.length) {
+    const names = summary.omitted.recordingRules.map(r => r.name);
+    summary.warnings.push(`${names.length} recording rule(s) are not named <service>:<metric>:<op> and cannot be declared in spec.queries.recording_rules: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}. Recorded in crawler.omitted.recording_rules; their expressions still feed the metric inventory.`);
+  }
+  if (summary.omitted.ruleIntervals.length) {
+    summary.warnings.push(`${summary.omitted.ruleIntervals.length} rule-group interval(s) are not a spec Duration and are left out: ${summary.omitted.ruleIntervals.slice(0, 8).map(o => `${o.group}=${o.value} (${o.source})`).join(', ')}.`);
+  }
+  summary.discovered.recordingRulesOmitted = summary.omitted.recordingRules.length;
+
   // If still no SLI/SLO discovered, fill the minimum tier-3 stub so the
   // result validates.
   if (sliMap.size === 0) {
@@ -642,6 +736,8 @@ export function crawlFiles(filesInput, opts = {}) {
     });
     summary.inferred.slis = 1;
     summary.inferred.slos = 1;
+    markInvented('slis.service_availability', 'stub; no recording rule or SLO reference found — REPLACE WITH REAL QUERY');
+    markInvented('slos.service_availability_99', 'stub; no recording rule or SLO reference found — REPLACE WITH REAL QUERY');
     summary.warnings.push('No burn-rate alerts found — emitted stub SLI/SLO that must be replaced.');
   }
 
@@ -693,13 +789,14 @@ export function crawlFiles(filesInput, opts = {}) {
 
   // ----- minimum dashboards -----
   if (dashboards.length === 0) {
+    const stubDashboardId = suffixedId(repoName, '-overview');
     dashboards.push({
-      id: `${repoName}-overview`,
+      id: stubDashboardId,
       provider: { kind: 'grafana' },
       folder: repoName,
-      source: `file://dashboards/${repoName}-overview.json`,
+      source: `file://dashboards/${stubDashboardId}.json`,
     });
-    scaffoldSymbols.push(`dashboards.${repoName}-overview`);
+    scaffoldSymbols.push(`dashboards.${stubDashboardId}`);
     summary.warnings.push('No Grafana dashboards found — emitted stub service-overview pointer.');
   }
 
@@ -718,7 +815,6 @@ export function crawlFiles(filesInput, opts = {}) {
   // had no source provenance in the repo and were indistinguishable from
   // deployable rules in the Remediate flow. Keep the candidate names in the
   // crawl summary, but do not place them in spec.queries.recording_rules.
-  const repoNs = String(repoName).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'svc';
   for (const slo of sloMap.values()) {
     const sliName = (slo.sli || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'sli';
     const ruleName = `${repoNs}:${sliName}:ratio_5m`;
@@ -746,16 +842,56 @@ export function crawlFiles(filesInput, opts = {}) {
   let tier = 'tier-3';
   if (realRules && realDashboards && realAlerting) tier = 'tier-2';
   summary.inferred.tier = tier;
-  const criticality = opts.criticality || tier;
+  const criticality = opts.criticality && !criticalityIgnored ? opts.criticality : tier;
   const l2x = materializeL2XFromBackends(backends);
   summary.discovered.extendedSurfaces = l2x.evidence.length;
-  const syntheticCheckId = `${repoName}-health-canary`;
+  const syntheticCheckId = suffixedId(repoName, '-health-canary');
   scaffoldSymbols.push(`validation.synthetic_checks.${syntheticCheckId}`);
-  summary.scaffold = [...scaffoldSymbols];
+
+  // ----- dashboards: the provider version is the Grafana the repository
+  // deploys (its image tag), never the dashboard's own revision counter; two
+  // files with the same uid get distinct ids -----
+  const grafana = backends.find(b => b.product === 'grafana' && b.version?.declared);
+  const seenDashIds = new Set();
+  const dashDupes = new Map();
+  for (const d of dashboards) {
+    if (d.provider?.kind === 'grafana') {
+      if (grafana) d.provider.version = grafana.version.declared;
+      else delete d.provider.version;
+    }
+    if (seenDashIds.has(d.id)) {
+      const base = d.id;
+      let n = 2, next = suffixedId(base, `-${n}`);
+      while (seenDashIds.has(next)) next = suffixedId(base, `-${++n}`);
+      dashDupes.set(base, (dashDupes.get(base) || [base]).concat(next));
+      d.id = next;
+    }
+    seenDashIds.add(d.id);
+  }
+  for (const [base, ids] of dashDupes) {
+    summary.warnings.push(`dashboard uid '${base}' appears in ${ids.length} files; declared as ${ids.join(', ')}.`);
+  }
+
+  // ----- every value the crawler invented, marked -----
+  for (const id of summary.invented.endpoints) {
+    markInvented(`telemetry.backends.${id}.endpoints`, 'port not stated in the repository; http://<product>:80 assumed');
+  }
+  for (const ch of summary.invented.channels) {
+    markInvented(`alerting.routes[${ch.routeIndex}].channels[${ch.channelIndex}]`, `address invented: the Alertmanager ${ch.kind} receiver '${ch.receiver ?? 'oncall'}' has no spec channel or states no address`);
+  }
+  if (ownersDefaulted) markInvented('metadata.owners', "default owner 'team-platform'; no source evidence (pass --owners)");
+  // The SDK languages are read off the repository's source files (test paths
+  // aside); only a repository with none keeps the default, marked.
+  const sdkLanguages = inferSdkLanguages(files);
+  for (const field of ['semconv', 'resource_attributes', ...(sdkLanguages.length ? [] : ['sdk.languages']), 'sdk.sampling', 'sdk.propagators']) {
+    markInvented(`otel.${field}`, 'default; the repository states no SDK configuration');
+  }
+  for (const [symbol, note] of inventedMarks) mark(symbol, note);
+  summary.scaffold = [...scaffoldMarks.keys()];
 
   const scaffoldAnnotations = {};
-  for (const symbol of scaffoldSymbols) {
-    scaffoldAnnotations[`crawler.scaffold.${symbol}`] = 'schema-required fallback; no source evidence found in selected environment';
+  for (const [symbol, note] of scaffoldMarks) {
+    scaffoldAnnotations[`crawler.scaffold.${symbol}`] = note;
   }
   curateMetricDefinitions(metricDefinitions, summary);
   const metricAnnotations = buildMetricDefinitionAnnotations(metricDefinitions);
@@ -787,7 +923,20 @@ export function crawlFiles(filesInput, opts = {}) {
         'crawler.warningCount':    String(summary.warnings.length),
         'crawler.syntheticRecordingRulesSkipped': String(summary.omitted.syntheticRecordingRules.length),
         'crawler.extendedSurfaces': String(summary.discovered.extendedSurfaces),
-        'crawler.scaffoldCount':   String(scaffoldSymbols.length),
+        'crawler.scaffoldCount':   String(scaffoldMarks.size),
+        // An input that was not a spec Slug or not in a spec vocabulary — the
+        // original name and environment are kept here (owners only in the
+        // summary: an owner string may be an address).
+        ...(normalized.name ? { 'crawler.nameNormalizedFrom': normalized.name.from } : {}),
+        ...(normalized.environment ? { 'crawler.environmentNormalizedFrom': normalized.environment.from } : {}),
+        ...(criticalityIgnored ? { 'crawler.criticalityIgnored': String(opts.criticality) } : {}),
+        ...(bindingIgnored ? { 'crawler.bindingIgnored': String(opts.binding) } : {}),
+        // Recording rules the spec cannot declare (name outside
+        // <service>:<metric>:<op>) — evidence, never silently dropped.
+        ...(summary.omitted.recordingRules.length ? {
+          'crawler.omittedRecordingRuleCount': String(summary.omitted.recordingRules.length),
+          'crawler.omitted.recording_rules': annotationJson(summary.omitted.recordingRules),
+        } : {}),
         // Channels whose address is an unresolved ${VAR} placeholder — evidence
         // of declared intent the crawler could not resolve at crawl time.
         ...(summary.omitted.unresolvedChannels.length ? {
@@ -795,6 +944,7 @@ export function crawlFiles(filesInput, opts = {}) {
           'crawler.unresolved.alerting': summary.omitted.unresolvedChannels
             .map(u => `${u.severity || '?'}:${u.value}${u.source ? ` (${u.source})` : ''}`).join(' · '),
         } : {}),
+        ...(sdkLanguages.length ? { 'crawler.discovered.sdk_languages': annotationJson(sdkLanguages) } : {}),
         ...metricAnnotations,
         ...scrapeAnnotations,
         ...scaffoldAnnotations,
@@ -805,7 +955,7 @@ export function crawlFiles(filesInput, opts = {}) {
         semconv: '1.26.0',
         resource_attributes: { required: ['service.name'] },
         sdk: {
-          languages: ['go'],
+          languages: sdkLanguages.length ? sdkLanguages : ['go'],
           sampling: { policy: 'parentbased_traceidratio', ratio: 0.1 },
           propagators: ['tracecontext'],
         },
@@ -1043,6 +1193,24 @@ function looksLikeMetricSource(content, relPath = '') {
 // files, where such lines are sample input, not a declaration.
 const EXPOSITION_TYPE_RE = /#\s*TYPE\s+[A-Za-z_:][A-Za-z0-9_:]*\s+(?:counter|gauge|histogram|summary|untyped)\b/;
 
+// The OTel SDK languages a repository's source files imply (the schema's
+// enum: java, node, python, go, dotnet, rust, …), test paths excluded; sorted,
+// unique. A heuristic over extensions — a Go service with a scripts/*.js
+// helper reports both — stated as such in the DOWNSTREAM table.
+const SDK_LANGUAGE_BY_EXT = [
+  [/\.go$/i, 'go'], [/\.(java|kt)$/i, 'java'], [/\.py$/i, 'python'],
+  [/\.(js|mjs|cjs|jsx|ts|tsx)$/i, 'node'], [/\.rs$/i, 'rust'], [/\.cs$/i, 'dotnet'],
+];
+function inferSdkLanguages(files) {
+  const out = new Set();
+  for (const relPath of files.keys()) {
+    const p = normalizeRepoPath(relPath);
+    if (isTestPath(p)) continue;
+    for (const [re, lang] of SDK_LANGUAGE_BY_EXT) if (re.test(p)) { out.add(lang); break; }
+  }
+  return [...out].sort();
+}
+
 function isTestPath(relPath) {
   return /(^|\/)(tests?|__tests__|specs?|fixtures?|testdata)(\/|$)|\.(?:test|spec)\.[a-z]+$|_test\.[a-z]+$/i.test(normalizeRepoPath(relPath));
 }
@@ -1069,8 +1237,7 @@ function normalizePrometheusMetricName(name) {
 function serviceFromPath(relPath, fallback = null) {
   const parts = normalizeRepoPath(relPath).split('/').filter(Boolean);
   if (!parts.length) return fallback;
-  if (parts[0] === 'server') return 'krystalinex-server';
-  if (['src', 'app', 'lib'].includes(parts[0])) return fallback;
+  if (['src', 'app', 'lib', 'server'].includes(parts[0])) return fallback;
   return parts[0];
 }
 
@@ -1411,9 +1578,10 @@ const STATIC_FRAGMENT_STOPWORDS = new Set([
 ]);
 
 function javaMetricPrefix(relPath, text) {
+  // A product rule only: the Solace exporters prefix their metrics `solace_`
+  // when the path or the source literally says so.
   const p = normalizeRepoPath(relPath);
-  if (/otel-collector|syslog|event/.test(p)) return 'sol_event_';
-  if (/metrics-exporter|solace/.test(p) || /solace/i.test(text)) return 'solace_';
+  if (/solace/.test(p) || /solace/i.test(text)) return 'solace_';
   return '';
 }
 
@@ -1733,6 +1901,7 @@ function walkDockerCompose(f, backends, pipelines, evidence, summary) {
         if (versionTag && /^v?\d/.test(versionTag)) {
           backend.version = { declared: versionTag.replace(/^v/, ''), gating: 'off' };
         }
+        if (!endpoint && summary.invented) summary.invented.endpoints.push(id);
         backends.push(backend);
         evidence[id] = f.relPath;
         summary.discovered.backends++;
@@ -1827,28 +1996,44 @@ function walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metr
 
 function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary) {
   if (rule.record) {
-    const id = `QRY-${recordingRules.length + 1}-${slug(rule.record).slice(0, 16)}`;
-    const expr = typeof rule.expr === 'string' ? rule.expr : String(rule.expr || '');
-    const entry = {
-      name: rule.record,
-      expr,
-    };
-    if (group.interval) entry.interval = group.interval;
-    recordingRules.push(entry);
-    evidence[id] = `${f.relPath}#${group.name || '_'}/${rule.record}`;
-    summary.discovered.recordingRules++;
-    const origin = `${f.relPath}#${group.name || '_'}/${rule.record}`;
-    addRecordingRuleOutputMetric(metricDefinitions, evidence, summary, rule, {
+    // The Prometheus form (`record: <name>`, `expr`) and the Grafana
+    // unified-alerting recording form (`record: { metric, from }`, the
+    // expression in `data[].model.expr`).
+    const name = rule.record && typeof rule.record === 'object' ? String(rule.record.metric ?? '') : String(rule.record);
+    const grafanaExpr = typeof rule.expr === 'string' ? null : grafanaRuleExpr(rule);
+    const expr = typeof rule.expr === 'string' ? rule.expr : grafanaExpr !== null ? grafanaExpr : String(rule.expr || '');
+    const origin = `${f.relPath}#${group.name || '_'}/${name}`;
+    // The expressions feed the metric inventory whether or not the rule can
+    // be declared: evidence is never lost.
+    addRecordingRuleOutputMetric(metricDefinitions, evidence, summary, { ...rule, record: name }, {
       origin,
       expr,
-      usedBy: `recording_rule:${rule.record}`,
+      usedBy: `recording_rule:${name}`,
     });
     addPromqlMetricReferences(metricDefinitions, evidence, summary, expr, {
       kind: 'recording-rule',
-      name: rule.record,
+      name,
       origin,
-      usedBy: `recording_rule:${rule.record}`,
+      usedBy: `recording_rule:${name}`,
     });
+    // The spec declares `<service>:<metric>:<op>` names only (the reading the
+    // live fetcher already applies); any other name is recorded as omitted.
+    if (!isSpecRecordingRuleName(name)) {
+      summary.omitted.recordingRules.push({ name, source: origin });
+      return;
+    }
+    const id = `QRY-${recordingRules.length + 1}-${slug(name).slice(0, 16)}`;
+    const entry = { name, expr };
+    if (group.interval !== undefined && group.interval !== null && group.interval !== '') {
+      // A string the repository wrote is kept verbatim when it is a spec
+      // Duration; a bare number is seconds (`30` → `30s`).
+      const text = typeof group.interval === 'number' ? canonicalRuleDuration(group.interval) : String(group.interval).trim();
+      if (text && SPEC_DURATION_RE.test(text)) entry.interval = text;
+      else summary.omitted.ruleIntervals.push({ group: group.name || '_', value: String(group.interval), source: f.relPath });
+    }
+    recordingRules.push(entry);
+    evidence[id] = origin;
+    summary.discovered.recordingRules++;
   } else if (rule.alert || rule.title) {
     // `rule.alert` is the Prometheus form; `rule.title` is the Grafana
     // unified-alerting form (provisioned alert rules). Both target an
@@ -1964,10 +2149,17 @@ function walkAlertmanager(f, routes, evidence, summary) {
     // severity. The reading itself is shared with the live fetcher
     // (alert-routes.mjs): the config a repo ships and the config a running
     // Alertmanager reports give the same routes.
+    const invented = [];
     const collected = routesFromAlertmanagerConfig(obj, {
       unresolved: summary.omitted.unresolvedChannels,
+      invented,
       source: f.relPath,
     });
+    // Positions are relative to this config's routes; the bucket may already
+    // hold routes from another file.
+    for (const ch of invented) {
+      summary.invented.channels.push({ ...ch, routeIndex: routes.length + ch.routeIndex, source: f.relPath });
+    }
     for (const r of collected) {
       const id = `ALR-${routes.length + 1}`;
       routes.push(r);
@@ -2013,7 +2205,7 @@ function walkOtelCollector(f, pipelines, evidence, summary) {
 function mapExporterKind(name) {
   // The spec's exporter kind taxonomy is small; map common collector
   // exporters to it.
-  if (/^prometheus|otlphttp?$/i.test(name)) return 'prometheusremotewrite';
+  if (/^prometheus/i.test(name))            return 'prometheusremotewrite';
   if (/^otlp$|^otlphttp$/i.test(name))      return 'otlp';
   if (/^elasticsearch$/i.test(name))         return 'elasticsearch';
   if (/^jaeger|tempo$/i.test(name))          return 'jaeger';
@@ -2021,19 +2213,44 @@ function mapExporterKind(name) {
   return name;
 }
 
+// A dashboard's spec Slug id: the uid, else the title, mapped as before
+// (lowercase, runs outside [a-z0-9-] → '-', edges trimmed, cut at 60), the
+// first non-empty result wins (a uid of `--` yields nothing; the title does);
+// trailing separators trimmed AFTER the cut; `d-` in front when the first
+// character is not a letter.
+function dashboardId(dash, dashboards) {
+  let id = '';
+  for (const candidate of [dash.uid, dash.title]) {
+    if (candidate === undefined || candidate === null || candidate === '') continue;
+    id = String(candidate).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60).replace(/[^a-z0-9]+$/, '');
+    if (id) break;
+  }
+  if (!id) id = `dash-${dashboards.length + 1}`;
+  if (!/^[a-z]/.test(id)) id = `d-${id}`;
+  return id;
+}
+
 function walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summary) {
   const dash = JSON.parse(f.content);
-  let id = (dash.uid || dash.title || `dash-${dashboards.length + 1}`)
-    .toString().toLowerCase().replace(/[^a-z0-9-]+/g, '-')
-    .replace(/^-+|-+$/g, '').slice(0, 60);
-  if (!/^[a-z]/.test(id)) id = 'd-' + id;
+  const id = dashboardId(dash, dashboards);
   const panels = dashboardPromqlQueries(dash);
+  // provider.schemaVersion has a spec minimum (30): an older dashboard keeps
+  // its value in the free-form params instead of failing the schema.
+  // A dashboard that states no schemaVersion declares none (the key is
+  // optional); one below the minimum keeps its value in params. The
+  // provider version is filled in by crawlFiles from the Grafana image the
+  // repository deploys — the dashboard's own `version` is a revision counter.
+  const sv = dash.schemaVersion;
+  const stated = typeof sv === 'number';
+  const declaredSchemaVersion = stated && Number.isInteger(sv) && sv >= 30 ? sv : null;
+  if (stated && declaredSchemaVersion === null) {
+    summary.warnings.push(`dashboard ${id}: schemaVersion ${sv} is below the spec minimum (30) and is not declared; kept in params.schema_version.`);
+  }
   dashboards.push({
     id,
     provider: {
       kind: 'grafana',
-      version: dash.version ? String(dash.version) : '12.0',
-      schemaVersion: Number.isFinite(dash.schemaVersion) ? dash.schemaVersion : 41,
+      ...(declaredSchemaVersion !== null ? { schemaVersion: declaredSchemaVersion } : {}),
     },
     folder: dash.tags?.[0] || 'crawled',
     source: `file://${f.relPath}`,
@@ -2043,6 +2260,7 @@ function walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summar
       panel_count: countDashboardPanels(dash.panels),
       query_panel_count: panels.length,
       panels,
+      ...(stated && declaredSchemaVersion === null ? { schema_version: sv } : {}),
     },
   });
   evidence[id] = f.relPath;

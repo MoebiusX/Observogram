@@ -47,7 +47,7 @@ const { assert, report } = createHarness({ indent: '  ', truncate: 200 });
 
 const { hashPassword } = await import('./auth.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
-const { currentStore } = await import('./store/db.mjs');
+const { currentStore, closeStore } = await import('./store/db.mjs');
 const { getOrg } = await import('./store/orgs.mjs');
 const { getMeta, getMetaJson } = await import('./store/meta.mjs');
 const { listUsers } = await import('./store/users.mjs');
@@ -686,6 +686,7 @@ try {
     assert(r2.ok && j2.packs.some(p => p.id === 'flat-pack'), 'the migrated pack is served from orgs/default/');
   } finally {
     await new Promise(res => srv2.close(res));
+    closeStore();
     rmSync(WS2, { recursive: true, force: true });
   }
 }
@@ -704,6 +705,7 @@ try {
     'a two-org orgs.json without identity refuses to start with a clear message', rejected?.message?.slice(0, 80));
   assert(getMeta(currentStore(), 'import_done') === null, 'the refused boot imported nothing (no import_done)');
   assert(readFileSync(join(WS3, 'orgs.json')).equals(orgsBytes), 'orgs.json is byte-identical after the refusal');
+  closeStore();
   rmSync(WS3, { recursive: true, force: true });
 }
 
@@ -727,6 +729,7 @@ try {
     assert(r.ok && j.ok === true && existsSync(join(WS3B, 'orgs', 'solo', 'packs', `${j.registered?.id}.pack.yaml`)), 'one-org orgs.json + bearer: bearer POST works, into orgs/solo');
   } finally {
     await new Promise(res => srv3.close(res));
+    closeStore();
     rmSync(WS3B, { recursive: true, force: true });
   }
 }
@@ -795,10 +798,12 @@ try {
     assert(r.headers.get('x-observogram-org') === 'default' && j.present === false, "carlos's live-status in default: still no live pack", [r.headers.get('x-observogram-org'), j.present]);
   } finally {
     await new Promise(res => srv4.close(res));
+    closeStore();
     rmSync(WS4, { recursive: true, force: true });
   }
 }
 
 await mcp.close();
+closeStore();
 rmSync(WORKSPACE, { recursive: true, force: true });
 report('tenancy');

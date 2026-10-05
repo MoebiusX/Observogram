@@ -1,3 +1,7 @@
+# Every text file is LF so goldens, fixtures and the vendor manifest's sha256
+# verify under any core.autocrlf (the rules below stay as the explicit list).
+* text=auto eol=lf
+
 # Vendored upstream spec files MUST remain byte-identical to upstream so the
 # sha256 checksums in vendor/observability-pack-spec/VERSIONS.json verify on
 # every platform. Force LF regardless of core.autocrlf.

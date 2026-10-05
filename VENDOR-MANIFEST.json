@@ -28,8 +28,8 @@
       ]
     },
     "tools/lib/alert-routes.mjs": {
-      "sha256": "f3f1c8c0d15eb274f6d5c7c1a6468044e3c78c55066a669f5494fd961bac091d",
-      "bytes": 6527,
+      "sha256": "ab5be6d93f293c69a0896f4805e0dd4fd0836654b52a5afae9b859e881a0c1ef",
+      "bytes": 7876,
       "exports": [
         "REDACTED_CHANNEL_VALUE",
         "UNRESOLVED_CHANNEL_PREFIX",
@@ -337,8 +337,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "8b9a50cb86df2cf7b76ab80fb0c694d6b8d4cf9dbc3c7d087f1d8770019c356e",
-      "bytes": 95954,
+      "sha256": "412ff5619f8bc1ae2cc5924c2fda244ab6226bcc992cdbea671beb1b38940f47",
+      "bytes": 109957,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
@@ -545,15 +545,22 @@
       "changedSinceRelease": false
     },
     "tools/lib/legacy.mjs": {
-      "sha256": "9dfd59186e16e3799255c24549c318b3c62be3fa0249e33c251709848255b508",
-      "bytes": 17224,
+      "sha256": "9ce0d7ef1da2b4b7f5ecf55e8ace64030540599df520612095ccfdacffe6f7be",
+      "bytes": 25958,
       "exports": [
         "isLegacyLayeredPack",
+        "mergeUpconvert",
         "upconvertLegacyPack"
       ],
-      "imports": [],
+      "imports": [
+        "tools/lib/pack-conformance.mjs"
+      ],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "isLegacyLayeredPack",
+        "upconvertLegacyPack"
+      ]
     },
     "tools/lib/library.mjs": {
       "sha256": "6961c316f175d05d2c93ce2636fd5508b066ad2804080fc01ec4814144071009",
@@ -690,6 +697,25 @@
       ],
       "npm": [],
       "changedSinceRelease": false
+    },
+    "tools/lib/pack-conformance.mjs": {
+      "sha256": "76eadb25ceeae94cecdb8c7a872d3d779901c4f64d38445935c7937c21989f36",
+      "bytes": 35131,
+      "exports": [
+        "PLACEHOLDER_FIELDS",
+        "SCAFFOLD_PREFIXES",
+        "SOURCES",
+        "STATES",
+        "SYMBOL_FAMILIES",
+        "packConformance",
+        "parseSymbol",
+        "resolveSymbol",
+        "scaffoldMarkers"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
     },
     "tools/lib/profiles.mjs": {
       "sha256": "027f2d9004a0858641baab79192a2a4019f58e608fb7c08380ddbace4de3141f",
@@ -918,9 +944,33 @@
       "changedSinceRelease": false
     },
     "tools/lib/sli-inference.mjs": {
-      "sha256": "87f29b696dd15818aa20fadb54fb57f279b707fe7ccb1a4f38ba17c46312d5cf",
-      "bytes": 18160,
+      "sha256": "945c3d06dfea10502c9952ccd295816f302766526aefa66fa2035fc178cffb15",
+      "bytes": 18734,
       "exports": [
+        "SPEC_DURATION_RE",
+        "alertRuleExpr",
+        "alertRuleWindows",
+        "burnAlertsFromAlertRules",
+        "burnCandidateFromAlertRule",
+        "canonicalRuleDuration",
+        "defaultBurnWindows",
+        "inferSlisFromRecordingRules",
+        "isGrafanaManagedRule",
+        "isSpecRecordingRuleName",
+        "mergeBurnAlertsBySlo",
+        "operationalAlertRule",
+        "operationalAlertRules",
+        "recordedSloForExpr",
+        "ruleNameToSliId",
+        "ruleNameToSloId"
+      ],
+      "imports": [
+        "tools/lib/alert-routes.mjs",
+        "tools/lib/slug.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": [
         "alertRuleExpr",
         "alertRuleWindows",
         "burnAlertsFromAlertRules",
@@ -935,26 +985,27 @@
         "recordedSloForExpr",
         "ruleNameToSliId",
         "ruleNameToSloId"
-      ],
-      "imports": [
-        "tools/lib/alert-routes.mjs",
-        "tools/lib/slug.mjs"
-      ],
-      "npm": [],
-      "changedSinceRelease": false
+      ]
     },
     "tools/lib/slug.mjs": {
-      "sha256": "d98eb3b9e65000345b805caf6efff135219556474828d10cf40a6c76fafd7f4f",
-      "bytes": 1747,
+      "sha256": "bf9f4c4816363d65c66203e4f7fdbc061b9a144f909545278b7192b4ec903c51",
+      "bytes": 2741,
       "exports": [
         "fileSlug",
         "metricPrefix",
+        "packSlug",
         "serviceSlug",
         "symbolSlug"
       ],
       "imports": [],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "fileSlug",
+        "metricPrefix",
+        "serviceSlug",
+        "symbolSlug"
+      ]
     },
     "tools/lib/stack-evidence.mjs": {
       "sha256": "c49cf35064c8e3cefc72ce19ce4a667deb126294d543adc8e8d8978acf0e048a",

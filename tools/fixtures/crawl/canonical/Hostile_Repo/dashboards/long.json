@@ -1,0 +1,17 @@
+{
+  "uid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbb",
+  "title": "Long",
+  "schemaVersion": 41,
+  "version": 3,
+  "panels": [
+    {
+      "title": "Requests",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total[5m]))"
+        }
+      ]
+    }
+  ]
+}

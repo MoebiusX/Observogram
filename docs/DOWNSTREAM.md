@@ -117,13 +117,14 @@ coverage copy the upstream unit test of a module and run it with
 | `blast-radius.mjs` | `tools/test-blast-radius.mjs` |
 | `chain-history.mjs` | `tools/test-chain-history.mjs` |
 | `compile.mjs`, `burn-rules.mjs`, `dashboards/*` | `tools/test-compile.mjs`, `tools/test-golden-compile.mjs` |
-| `crawler.mjs` | `tools/test-crawl.mjs`, `tools/test-golden-crawl.mjs` |
+| `crawler.mjs` | `tools/test-crawl.mjs`, `tools/test-golden-crawl.mjs`, `tools/test-crawl-canonical.mjs` |
 | `diff.mjs` | `tools/test-diff.mjs` |
 | `inventory-coverage.mjs`, `site/*` | `tools/test-inventory-coverage.mjs`, `tools/test-gen-site.mjs` |
-| `legacy.mjs` | `tools/test-legacy-pack.mjs` |
+| `legacy.mjs` | `tools/test-legacy-pack.mjs`, `tools/test-upconvert-merge.mjs` |
 | `library.mjs` | `tools/test-library.mjs` |
 | `mini-yaml.mjs` | `tools/test-mini-yaml.mjs` |
 | `neuron-model.mjs` | `tools/test-neuron-model.mjs` |
+| `pack-conformance.mjs` | `tools/test-pack-conformance.mjs` |
 | `profiles.mjs` | `tools/test-profiles.mjs` |
 | `promql.mjs`, `promql-lezer.mjs`, `promql-canon.mjs` | `tools/test-promql.mjs`, `tools/test-promql-canon.mjs` |
 | `schedule.mjs`, `schedule-snippets.mjs` | `tools/test-schedule.mjs`, `tools/test-schedule-snippets.mjs` |
@@ -178,6 +179,9 @@ The golden suites read `tools/fixtures/` — copy that directory with them.
   transport hook, the taxonomy, the reverse-proxy identity, the brand; §10:
   the embeddable studio bundle); the *Decisions — downstream seams* section
   of [`UPDATE_JOURNEY.md`](UPDATE_JOURNEY.md) tracks them.
+- Platform-specific behaviour beyond what §13 states: Windows as §13 says
+  (expected, not yet verified by a Windows run); macOS is untested (the POSIX
+  suites run there, no CI leg).
 
 ## 9. The private plugin layer
 
@@ -189,9 +193,9 @@ a bump. The surface so far:
 |---|---|---|
 | Backend access (W2) | `OBSERVOGRAM_TRANSPORT_HOOK=<path.mjs \| file:URL>` — a module exporting `prepareRequest({ url, headers })` and/or `fetchImpl(url, init)`, applied to every MCP request of the CLI, the recorder, the probes, journeys and the studio server; `OBSERVOGRAM_ALLOW_LOCAL_MCP=0` still binds the URL it returns | [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md), "Transport hook" |
 | Reverse-proxy identity (W5) | `OBSERVOGRAM_TRUST_PROXY_AUTH=1` + `OBSERVOGRAM_TRUST_PROXY_AUTH_ACK=only-the-proxy-reaches-this-port`, the header names (`PROXY_AUTH_USER_HEADER`, `_EMAIL_HEADER`, `_NAME_HEADER`, `_GROUPS_HEADER`), `PROXY_AUTH_GROUP_ROLES` (`g=role,*=role`, authoritative in `PROXY_AUTH_ORG`), `PROXY_AUTH_JOIN_ROLE`, `PROXY_AUTH_OWNERS` (grant-only), `PROXY_AUTH_SHARED_SECRET` + `_SECRET_HEADER` (required beyond loopback), `PROXY_AUTH_LOGOUT_URL`, `PROXY_AUTH_REALM`; users are `proxy://<realm>#<user>` rows of kind `oidc`; refuses to start without the ACK, beside OIDC, exposed without the secret, or with a join role beside a groups header | README, "Behind a reverse proxy (trusted headers)" |
-| Studio bundle (W6) | `npm run build:studio -- [--pack <file> [--id] [--label] [--description]]… [--pack-url <url> [--id] [--label] [--description]]… [--out dist/studio/index.html] [--no-remote-fonts]` — one static HTML file: every studio and `tools/lib` module in an import map of `data:` URLs, the stylesheets inlined, the packs and the schema as JSON, `studio/static-backend.mjs` answering the read-only pack routes in the browser and `501 denied: 'no-backend'` for the rest; no server configuration at all | §10 below; README, "Serve The Studio Without The Server" |
-| Branding (W4) | `OBSERVOGRAM_BRAND_FILE=<path.json>` — `{ name, shortName?, wordmark?: { lead, tail }, tagline?, titleSuffix?, description?, logo?: { url \| svg }, favicon?, docsUrl?, footer?: { text, links[] }, about?: { changelogUrl }, hero?: { src, alt }, tokens?: { light, dark } }`, and/or the scalars `OBSERVOGRAM_BRAND_NAME` / `_SHORT_NAME` / `_TAGLINE` / `_LOGO_URL` / `_DOCS_URL` / `_FOOTER` / `_ACCENT` / `_ACCENT_DARK`; one `name` derives every other string. Read once at start (a bad file refuses the start), rendered into the shell (`GET /`, `GET /index.html`, the SPA fallback: title, description, header, footer, `#brand-config`, `#brand-tokens`, favicon), the auth pages and, through `#brand-config`, the studio chrome; `node tools/gen-design-tokens.mjs --brand <file> --out <path>` for the tokens as JSON. The brand module (`tools/lib/brand.mjs`) is a listed module: a downstream studio can normalize and render the same object | README, "Rebadge The Studio (brand config)"; [`UI_CONVENTIONS.md`](UI_CONVENTIONS.md) §3 |
-| Artefact taxonomy (W3) | `OBSERVOGRAM_TAXONOMY=<path.json>` — `{ version: 1, types: { <TypeName>: <family> \| { family, label?, role? } }, ids: [{ pattern, family, flags?, label?, role? }] }`, read once at start, installed process-wide for the diff and the graphs, served to the studio at `GET /api/taxonomy`; an unreadable or invalid file refuses the start. The classifier itself (`tools/lib/artefact-classify.mjs`) is a listed module | README, "Classify Typed Packs"; [`ADAPTER.md`](ADAPTER.md), "Id families and the classifier" |
+| Studio bundle (W6) | `npm run build:studio -- [--pack <file> [--id] [--label] [--description]]… [--pack-url <url> [--id] [--label] [--description]]… [--taxonomy <file.json>] [--brand <file.json>] [--out dist/studio/index.html] [--no-remote-fonts]` — one static HTML file: every studio and `tools/lib` module in an import map of `data:` URLs, the stylesheets inlined, the packs and the schema as JSON, `studio/static-backend.mjs` answering the read-only pack routes in the browser and `501 denied: 'no-backend'` for the rest; no server configuration at all; the taxonomy and the brand baked (W3/W4 kept at the edge: `--taxonomy` / `--brand`, or the server's own variables when the flags are absent) | §10 below; README, "Serve The Studio Without The Server" |
+| Branding (W4) | `OBSERVOGRAM_BRAND_FILE=<path.json>` — `{ name, shortName?, wordmark?: { lead, tail }, tagline?, titleSuffix?, description?, logo?: { url \| svg }, favicon?, docsUrl?, footer?: { text, links[] }, about?: { changelogUrl }, hero?: { src, alt }, tokens?: { light, dark } }`, and/or the scalars `OBSERVOGRAM_BRAND_NAME` / `_SHORT_NAME` / `_TAGLINE` / `_LOGO_URL` / `_DOCS_URL` / `_FOOTER` / `_ACCENT` / `_ACCENT_DARK`; one `name` derives every other string. Read once at start (a bad file refuses the start), rendered into the shell (`GET /`, `GET /index.html`, the SPA fallback: title, description, header, footer, `#brand-config`, `#brand-tokens`, favicon), the auth pages and, through `#brand-config`, the studio chrome; `node tools/gen-design-tokens.mjs --brand <file> --out <path>` for the tokens as JSON. The brand module (`tools/lib/brand.mjs`) is a listed module: a downstream studio can normalize and render the same object. Baked into the static bundle by `--brand` (§10) | README, "Rebadge The Studio (brand config)"; [`UI_CONVENTIONS.md`](UI_CONVENTIONS.md) §3 |
+| Artefact taxonomy (W3) | `OBSERVOGRAM_TAXONOMY=<path.json>` — `{ version: 1, types: { <TypeName>: <family> \| { family, label?, role? } }, ids: [{ pattern, family, flags?, label?, role? }] }`, read once at start, installed process-wide for the diff and the graphs, served to the studio at `GET /api/taxonomy`; an unreadable or invalid file refuses the start. The classifier itself (`tools/lib/artefact-classify.mjs`) is a listed module. Baked into the static bundle by `--taxonomy` (§10) | README, "Classify Typed Packs"; [`ADAPTER.md`](ADAPTER.md), "Id families and the classifier" |
 
 A minimal plugin layer for the backend seam is one file the deployment
 points at:
@@ -218,6 +222,7 @@ as one file and serves that:
 node tools/build-studio-bundle.mjs \
   --pack packs/orders.pack.yaml --id orders --label "Orders" --description "Order intake and fulfilment" \
   --pack-url https://packs.example.internal/payments.pack.yaml --label "Payments" \
+  --taxonomy taxonomy.json --brand brand.json \
   --out dist/studio/index.html --no-remote-fonts
 ```
 
@@ -237,7 +242,7 @@ entry names) against a running server:
 
 | Answered in the browser | Answered `501 { ok: false, denied: 'no-backend', error: '<Feature> needs the Observogram server; this studio is a static bundle built without one.' }` |
 |---|---|
-| `GET /api/packs`, `/api/packs/:id` (+ `?env=`), `/canonical` (JSON, `?format=yaml`), `/conformance`, `/compile-catalog`, `/compile-artifact`, `/compile/:target`, `/export.zip` (the Export button downloads it as a Blob); `/api/compile/targets`, `/api/maturity-rubric`, `/api/version`, `/healthz`, `/api/taxonomy` (unconfigured), `/api/examples` and `/api/references` (empty), `/api/live-status` (`present: false`); `/auth/me` → `404 { ok: false, error: 'identity not configured' }` (the open posture) | every other `/api` or `/auth` path and every non-GET: Scan a repo (`/api/crawl*`), Draft from MCP, Refresh from MCP, uploads (`/api/validate`, `/api/uploads`), Compare (`/api/diff`, retrofeed), Deploy, Journeys, Build (`/api/library*`), sign-in (`/auth/*`) |
+| `GET /api/packs`, `/api/packs/:id` (+ `?env=`), `/canonical` (JSON, `?format=yaml`), `/conformance`, `/compile-catalog`, `/compile-artifact`, `/compile/:target`, `/export.zip` (the Export button downloads it as a Blob); `/api/compile/targets`, `/api/maturity-rubric`, `/api/version`, `/healthz`, `/api/taxonomy` (unconfigured, or the document `--taxonomy` baked), `/api/examples` and `/api/references` (empty), `/api/live-status` (`present: false`); `/auth/me` → `404 { ok: false, error: 'identity not configured' }` (the open posture) | every other `/api` or `/auth` path and every non-GET: Scan a repo (`/api/crawl*`), Draft from MCP, Refresh from MCP, uploads (`/api/validate`, `/api/uploads`), Compare (`/api/diff`, retrofeed), Deploy, Journeys, Build (`/api/library*`), sign-in (`/auth/*`) |
 
 Swapping packs is a rebuild: `--pack` inlines a file validated against the
 schema at build time; `--pack-url` names a URL the page fetches at its first
@@ -247,11 +252,326 @@ credential query parameter is refused, because the file is distributed).
 Upgrading is a snapshot bump and a rebuild — the bundle has no configuration
 of its own to migrate.
 
-Compare is excluded on purpose: the server's `GET /api/diff` carries
-`comparePackBranches` (`tools/lib/traceability-graph.mjs`), whose PromQL parser
-is the bare node dependency `@prometheus-io/lezer-promql`; a diff without the
-graph changes the diagnostic grade, and the bundle must never show a verdict
-the server would not. Inlining that dependency's ESM dists is the follow-up
-that would bring Compare offline. The other follow-up is `--split`, a
-directory form without `data:` URLs for a host whose Content-Security-Policy
-forbids them in `script-src`.
+### Rebadge batch 2, B1: baking the taxonomy and the brand
+
+The two seams a server reads from its environment (§9, W3 and W4) are baked
+at build time, through the server's own code on both sides. `--taxonomy
+<file.json>` is read, parsed and validated with `validateTaxonomy`
+(`tools/lib/artefact-classify.mjs`) exactly as `server/taxonomy.mjs` does — a
+bad file fails the build with `--taxonomy: <path>: <reason>`, the server's
+texts — and the document is written into the bundle's config; the shim's
+`GET /api/taxonomy` then answers `{ ok, taxonomy, configured: true }` with
+`Cache-Control: no-store`, the server's shape, and the studio's boot binds it
+as it binds a server's, so Discover groups a typed pack as a server started
+with `OBSERVOGRAM_TAXONOMY` does. `--brand <file.json>` goes through
+`tools/lib/brand-env.mjs loadBrand` — the server's one loader, so the
+`OBSERVOGRAM_BRAND_*` scalars apply on top of the file as on a server — and
+the shell is `brandShellHtml`'s rendering of `studio/index.html` (title,
+description, header, footer, `#brand-config`, `#brand-tokens`, favicon)
+before the stylesheets are inlined, so `#brand-tokens` lands after
+`design-tokens.css` as on the server; the chrome, the notice and the `501`
+texts read the product from `#brand-config`, and a branded bundle renders
+the upstream name nowhere. When a flag is absent the server's variables are
+honoured (`OBSERVOGRAM_TAXONOMY`, `OBSERVOGRAM_BRAND_FILE`, the scalars, the
+legacy `TOMOGRAPH_` spelling): a build machine configured for a server bakes
+what that server shows; build unbranded there by unsetting or emptying the
+variable (an empty value counts as unset): `env -u OBSERVOGRAM_BRAND_FILE` in
+a POSIX shell, `set OBSERVOGRAM_BRAND_FILE=` in cmd,
+`$env:OBSERVOGRAM_BRAND_FILE=''` in PowerShell. Brand URLs must
+not be server paths — `favicon`, `logo.url` and `hero.src` are an absolute
+URL, a `data:` URL or a path relative to the bundle's own directory (resolved
+against the page's URL by the static host; the builder copies no asset), and
+`/assets/x` fails the build naming the field and the fix. The default brand's
+Discover hero is the server asset `/assets/observogram-hero.png` in every
+unbranded bundle, and an unnamed but configured brand inherits it: the static
+host serves that asset or the brand names its own `hero.src`. The summary
+line and `--json` always say what was baked (`taxonomy: { source, file,
+types, ids } | null`, `brand: { source, file, name } | null` — the paths,
+never the contents; no operator path lands in the bundle). Proof:
+`tools/test-studio-bundle.mjs` T8 compares a `--taxonomy` bundle with a
+server started with the same file (body, header, the board byte-identical to
+the `typed-canonical.mapped` golden of `tools/test-golden-board.mjs`), T8b a
+`--brand` bundle's shell fragments with a branded server's, T4b the
+unconfigured build with the same tree's build with the seams unset (byte for
+byte), T9 the baked bundle in headless Chromium.
+
+Compare stays excluded in this batch; the inlining itself is not the blocker. Measured at the pinned versions (node_modules, 2026-10-04): `@prometheus-io/lezer-promql@0.312.0-rc.0` `dist/index.es.js` 24,549 B (imports `@lezer/lr`, `@lezer/highlight`), `@lezer/lr@1.4.10` `dist/index.js` 71,678 B (imports `@lezer/common`; one guarded `typeof process != 'undefined' && process.env.LOG` read), `@lezer/highlight@1.2.3` `dist/index.js` 29,915 B, `@lezer/common@1.5.2` `dist/index.js` 83,319 B — 209,461 B, 279,284 B as base64 (+7 % on today's 3.9 MB), all ESM (`"type": "module"`, `exports.import`), no CommonJS, no `node:` import; every specifier between them is bare and equal to the package name, so the import map can carry them under their own names with no rewrite, and `import.meta.resolve(<package>)` (Node ≥ 22.16) gives each dist's path without a bundler. What blocks it: (1) `GET /api/diff` (server/index.mjs:556-580 — `diffPacks(aLayered, bLayered, { scopeMode, service })` plus `traceabilityGraph: comparePackBranches(aLayered, bLayered)`, `scopeMode` from the query or the `observogram.diff.scopeMode` annotation) has to be ported to `studio/static-backend.mjs` over two bundled packs and proven T5-style against a server body for body, and the Compare view's server-only limbs (uploads as pack B, live refresh, retrofeed) have to degrade visibly; (2) the bundle would redistribute third-party code under MIT (`@lezer/*`) and Apache-2.0 (`@prometheus-io/lezer-promql`), so the build must embed the license texts and copyright notices in the file and the docs must state it; (3) the build would depend on an installed `node_modules` (today it reads the repository tree only), which changes the snapshot recipe above; (4) `tools/lib/promql-lezer.mjs` is documented as not for browser-served modules and `tools/test-studio-bundle.mjs` T1 asserts no bare specifier in the graph — both become an allowlist of exactly these four names, with the vendor manifest's `npm` field as its source. Until then `/api/diff` answers `501 denied: 'no-backend'`, the notice names Compare among the server-only features, and a diff without the graph is never shown because it would grade differently from the server.
+
+The other follow-up is `--split`, a directory form without `data:` URLs for a
+host whose Content-Security-Policy forbids them in `script-src`.
+
+## 11. From validates to conformant
+
+A pack that passes `npm run validate-pack` is *valid*: every schema-required
+field holds a value of the right shape. It is *conformant* when every one of
+those values is real — none is a placeholder an importer had to invent. The
+upconvert of a large layered pack emits hundreds of placeholders; this section
+is the paved road from the first state to the second.
+
+### 11.1 The marker contract
+
+A placeholder is **an artefact whose adapter symbol carries a scaffold
+marker**: an annotation key `crawler.scaffold.<symbol>` (the upconvert and the
+crawler), `mcp.scaffold.<symbol>` (the live fetcher) or `library.todo.<symbol>`
+(Build) with a non-empty string value — exactly the three prefixes
+`tools/lib/adapter.mjs` reads in `sourceOf`, so what the conformance tool
+reports is what the studio parks as **Scaffold**. The key is the contract; the
+value is advisory. A library-style value (`<field>: <what> · <field>: <what>`,
+with `placeholder '<literal>'` naming the stub) names its own fields; any other
+value (the crawler's, the fetcher's, the upconvert's one-line reason) falls
+back to the engine's per-family field table. There is no second index: the
+keys are the list.
+
+Two kinds of symbol share the grammar. An **artefact symbol** is exactly an id
+the adapter passes to `sourceOf` — `slis.<id>`, `slos.<id>`, `otel`,
+`telemetry.backends.<id>`, `storage.<key>`, `pipelines.receivers[i]`,
+`pipelines.processors[i]`, `pipelines.exporters.<signal>`,
+`queries.recording_rules[i]`, `dashboards.<id>`,
+`dashboards.<id>.panels.<panel>`, `policy.burn_rate_alerts[i]`,
+`alerting.routes[i]`, `alerting.rules[i]`, `remediation[i]`, `baselines`,
+`validation.synthetic_checks.<id>`, … — and parks that artefact. Any other
+dotted or indexed path under an artefact symbol is a **field symbol**
+(`otel.semconv`, `telemetry.backends.<id>.endpoints`,
+`alerting.routes[0].channels[1]`, `metadata.owners`): it parks nothing in the
+studio or in Compare and exists for the conformance report. Three doors write
+`otel` at the artefact level or not at all: the upconvert
+(`crawler.scaffold.otel`, `tools/lib/legacy.mjs`) and the fetcher
+(`mcp.scaffold.otel`) park OTEL-01; the crawler marks the five otel fields so
+a repo-vs-live Compare keeps `otel` in its not-observed bucket. The engine
+reads both shapes.
+
+`tools/lib/pack-conformance.mjs` (a listed module, zero-import, browser-safe)
+turns the markers into rows:
+
+```
+{ path, symbol, field, needs, source, hint, state, marker, writer, rule }
+```
+
+`path` is the JSONPath of the artefact in the validator's style
+(`$.spec.slis[0]`); `field` the spec field that needs a real value; `needs`
+what it needs in one line; `source` where that value normally comes from:
+
+- **crawl** — the value exists in the service repository (rule files,
+  dashboards, collector and Alertmanager config, runbooks): `npm run crawl`
+  reads it, or copy it from the file;
+- **telemetry** — a fact of the running backends (products, versions, semconv,
+  endpoints, incident history): the live fetcher (`npm run fetch-live`) or the
+  backend's own API;
+- **operator** — a decision only the owning team can make (objectives,
+  windows, severities, guardrails, cadence, owners, criticality).
+
+`state` is one of **placeholder** (marker present, the value still matches an
+upstream stub literal — or the field has no stub test and the marker decides),
+**marker-only** (marker present, the value no longer matches a stub: if it is
+real, delete the marker), **unmarked** (no marker, but the value is an
+importer's stub literal — `0.1.0-legacy`, `binding: legacy`,
+`imports[].ref: legacy/…`, `expr: vector(1)`, a `+0-000-` phone stub,
+`REPLACE WITH REAL QUERY` in an SLI description; the crawler's `0.1.0-crawled`
+and `['team-platform']` only on a crawler-written pack) and **dangling** (a
+marker whose symbol names nothing: delete it or fix the symbol). `rule` is the
+stable `placeholder.<family>.<field>` string a waiver will scope to (with the
+symbol); `writer` says which door wrote the marker. The state heuristics are
+advisory — a real `objective: 0.99` under a standing marker still reads
+`placeholder` — the marker key is the only contract, and the report says so.
+
+### 11.2 The workflow
+
+```sh
+npm run upconvert-legacy -- old.json -o svc.pack.json      # once: the layered archive → canonical
+npm run pack-conformance -- svc.pack.json                   # the rows: path · field · source · what it needs
+npm run pack-conformance -- svc.pack.json --json > todo.json
+# fill the rows by source: crawl → put the value in the repository and re-crawl, or copy it in;
+#                          telemetry → read it off the backend; operator → decide it;
+# then delete the artefact's marker (the tail line of each group names it) and re-run
+npm run pack-conformance -- svc.pack.json --strict          # CI: exit 1 while any row remains
+```
+
+`packc conformance <file...>` is the same tool. Exit codes: 0 every pack read,
+canonical and schema-valid (rows are informational); 1 a pack is unreadable, a
+previous-format (layered) pack — never auto-converted, so every row points
+into a file the operator can edit — or schema-invalid, or `--strict` and any
+pack has rows (any state: a marker-only artefact is still parked Scaffold, a
+dangling marker is a broken contract); 2 usage. The maturity rubric
+(`GET /api/packs/:id/conformance`, the Diagnose view) is bridged, not hidden:
+one `rubric @ tier` line per pack — the rubric grades what is declared,
+placeholders included; the rows are what still has to become real.
+
+**Re-running the upconvert is safe.** `upconvert-legacy` is idempotent in two
+ways. A canonical input (apiVersion/kind) is validated and passed through
+unchanged. A legacy input whose `-o` target already holds a canonical pack —
+or whose `--merge <file>` names one — **merges** under one rule: *the existing
+pack wins for every artefact it has; the upconvert only adds artefacts whose
+legacy item the existing pack has never seen* (by the
+`legacy.artefact.<LAYER>.<ID>` record — a deleted artefact stays deleted, a
+schema-required stub is skipped). Added items land at the end of their list
+with their marker and type annotation re-indexed to the final position;
+existing annotations keep their order and values (a marker you cleared stays
+cleared); the whole `legacy.*` block is refreshed to the current source. No
+real value can regress to a scaffold by construction
+(`tools/test-upconvert-merge.mjs` proves it over every example).
+`--overwrite` restores the plain write.
+
+### 11.3 Packs born canonical
+
+The recommended end state is not to upconvert at all: crawl the service
+repository with the upstream crawler. See §12 for what a fresh crawl promises.
+
+## 12. Packs born canonical: the recommended end state
+
+**Three doors, one pipeline.** Crawl (`tools/lib/crawler.mjs`, `npm run
+crawl`), upconvert (`tools/upconvert-legacy.mjs`, for packs from the archived
+layered format) and Build (`tools/lib/library.mjs`) all emit the canonical
+manifest; validation (`npm run validate-pack`), conformance
+(`tools/pack-conformance.mjs`, §11), compile, deploy and Compare read only
+that. The recommendation: crawl the service repository with the upstream
+crawler — a fresh crawl validates on exit 0 and needs no upconversion; the
+upconvert is for the archive, and a re-crawl supersedes an upconverted pack.
+
+**What a fresh crawl promises.**
+
+1. It validates against the vendored spec or exits 3 — and exit 3 is a bug
+   to report, never an input error.
+2. Flags that cannot yield a valid pack are refused before the crawl
+   (exit 2, the rule in the message, nothing on stdout): `--name`, `--env`
+   and each `--owners` entry must be spec Slugs, `--criticality` and
+   `--binding` spec values. The programmatic doors (`POST /api/crawl`, the
+   studio's folder scan, a journey definition) get the same rule as a
+   default-plus-warning: an unknown criticality yields the inferred tier and
+   `crawler.criticalityIgnored`, an unknown binding the default and
+   `crawler.bindingIgnored`.
+3. Names are normalized to the spec Slug and the original kept: the folder
+   name in `crawler.nameNormalizedFrom`, the environment in
+   `crawler.environmentNormalizedFrom`; owners only in the response's
+   `summary.normalized.owners` (an owner string may be an address and never
+   reaches the stored pack). A name that does not start with a letter is
+   prefixed (`1password` → `svc-1password`), never truncated at the front.
+4. What the spec cannot hold is omitted and recorded as evidence, never
+   invented and never silently dropped: recording rules not named
+   `<service>:<metric>:<op>` in `crawler.omitted.recording_rules` (name +
+   `<file>#<group>/<name>`; their expressions still feed the metric
+   inventory), a dashboard `schemaVersion` below 30 in
+   `params.schema_version`, a rule-group interval that is not a Duration in
+   the response's `summary.omitted.ruleIntervals`.
+5. Every value it had to invent is marked (`crawler.scaffold.<symbol>`, the
+   table below).
+
+**The scaffold table** — one row per symbol: why the crawler cannot know it,
+where the real value comes from (§11.1's three sources), how to make it real.
+
+| Symbol | Why invented | Source | How to make it real |
+|---|---|---|---|
+| `metadata.owners` | no repository file names the owning team | operator | `--owners` |
+| `otel.semconv`, `otel.resource_attributes`, `otel.sdk.sampling`, `otel.sdk.propagators` | the SDK configuration is not in observability files | operator / telemetry | state them in the pack (or `OTEL_*` in the deployment, which a later crawl may read) |
+| `otel.sdk.languages` | invented only when the repository has no source files | crawl | the source files name the SDK languages (a heuristic over extensions: a Go service with a `scripts/*.js` helper reports both) |
+| `slis.<id>`, `slos.<id>` (stub or alert-derived) | no recording rule or SLO reference found | operator | add `<service>:<metric>:<op>` recording rules, which the crawler reads back as SLIs; or write the SLI |
+| `pipelines.receivers[0]`, `pipelines.processors[0]`, `pipelines.exporters.<signal>` | no collector config or backend image | crawl | a collector config, or a backend image in compose/Helm |
+| `alerting.routes[0]` (stub) | no Alertmanager config | crawl | an Alertmanager config |
+| `alerting.routes[i].channels[j]` | a receiver kind the spec Channel cannot carry, or a config that states no address | operator | the real address (a webhook URL, a Teams channel URL) |
+| `dashboards.<svc>-overview` (stub) | no dashboard JSON | crawl | a dashboard JSON in the repository |
+| `telemetry.backends.<id>.endpoints` | the compose service or workload states no port (`http://<product>:80` assumed) | telemetry / operator | the port |
+| `baselines` | MTTD/MTTR come from incident history, not files | telemetry | measure them |
+| `validation.synthetic_checks.<svc>-health-canary` | no probe definition in the repository | operator | the real health URL, interval and severity |
+
+**The symbol grammar** is §11.1's, shared by `crawler.scaffold.*`,
+`mcp.scaffold.*` and `library.todo.*`: artefact symbols are the adapter's
+`sourceOf` ids and park the artefact as Scaffold (the stub and alert-derived
+SLI/SLO pairs — Compare files them in its scaffold bucket, the reading the
+live side already applies to its own stubs); field symbols add `.<field>` or
+an index and park nothing — they exist for the conformance report. A mark's
+value is a one-line reason. The keys are the index: there is no second JSON
+list.
+
+**Known unmarked defaults** (the conformance tool's value heuristics carry
+them until the named follow-up lands): SLO `objective 0.99 / window 30d /
+error_budget_policy ref:platform/default-budget`; SLI `total: '1'`; SLI
+`threshold: 1` with `unit: 'ratio'`; burn windows `5m/1h/14/SEV1 +
+30m/6h/6/SEV2`. Why unmarked: the live fetcher derives the same values through
+`tools/lib/sli-inference.mjs`, and Compare pairs them; marking one side would
+park them. The crawler's `version: 0.1.0-crawled` is reported `unmarked` on a
+crawler-written pack: a fresh crawl *validates* but is not *conformant* until
+the operator names the version.
+
+**The workflow.**
+
+```sh
+npm run crawl -- <repo> --name <slug> --env <slug> > pack.yaml
+npm run validate-pack -- pack.yaml
+npm run pack-conformance -- pack.yaml      # fill the rows: a value a later crawl can read (a rule, a port)
+                                           # belongs in the repository, the rest in the pack; delete the mark
+npm run pack-conformance -- pack.yaml --strict   # CI, once the pack is conformant
+```
+
+**Named follow-ups** (one line each; downstreams plan against these names):
+
+- *Inference defaults marked on both sides* — SLO objective/window/budget
+  ref, SLI total/threshold and the default burn windows need a joint change
+  in `sli-inference.mjs` applied by the crawler and the fetcher plus a diff
+  test; marking one side alone would move every crawled SLO out of Compare's
+  `inBoth`.
+- *Artefact-level `otel` scaffold on the repo side* — a product decision:
+  it would move OTEL-01 from Compare's not-observed bucket to its scaffold
+  bucket.
+- *Omitting the fabricated synthetic check* — the schema allows an empty
+  `validation`, but the rubric's L5 MUST and the studio pin the parked stub;
+  a product decision on which reading is the honest one.
+- *HTTP 400 for invalid crawl options on `POST /api/crawl`* — today the
+  library's default-plus-warning keeps the response a valid pack.
+- *`-burn-?rate` suffix handling in `burnCandidateFromAlertRule`* — a
+  hyphenated alert name yields `shop-availability_99` while the recording-rule
+  derivation yields `shop_availability_99`; unifying the separator renames L1
+  ids on both producers.
+- *`javaMetricPrefix`'s `solace_` product rule* — kept as a product rule
+  (the path or the source literally says `solace`); a generic prefix rule
+  read from configuration is the follow-up.
+- *`legacy.liveness.mcpUrl` through `stripMcpUrl`* — the upconvert copies a
+  legacy liveness URL verbatim into the annotations; a URL carrying userinfo
+  or a token query parameter would be stored (none of the shipped examples
+  does). A default-output change for such packs, with its own CHANGELOG line.
+- *Waivers (GAP batch 2, B3.2)* — time-boxed, reasoned suppression of a
+  conformance row, scoped to its `(symbol, rule)`; the engine reserves
+  `opts.waivers` and a `waived` partition.
+- *Service audit report (GAP batch 2, B3.5)* — one exportable report per
+  pack whose conformance summary consumes `packConformance(canonical)`; a
+  `GET /api/packs/:id/placeholders` route belongs there.
+- *Imports as Scaffold* — the adapter hardcodes `source: 'Declared'` for
+  `metadata.imports`, so the upconvert's `legacy/<slug>` pseudo-refs are
+  reported `unmarked` and never parked; a board change.
+
+## 13. Platforms
+
+Linux is the reference platform (CI: Ubuntu, Node 22.16.0 and the latest 22).
+Windows (Node ≥ 22.16, PowerShell or cmd) is intended to run the CLI, the
+server, the studio and the static bundle, and `npm test` is expected to be
+green there except the explicit skips, every one printed as `# SKIP win32:
+<reason>` by `node --test` or `- SKIP win32: <reason>` by a harness suite —
+never a silent pass. The skipped facts are the ones Windows cannot express:
+POSIX mode bits (`0600`, `0644`, `chmod 0000`), signal delivery
+(`process.kill` ends a Windows process outright, so the store's SIGTERM/SIGINT
+self-close cannot be exercised) and symlink creation (a privilege). There are
+15 skip sites — `server/test-store.mjs` (8), `server/test-store-ops.mjs` (4),
+`server/test-store-import.mjs` (2), `tools/test-journey.mjs` (1) — 19 skipped
+tests once the loops unroll: **a Windows run is expected to print 19
+`SKIP win32:` lines** (18 `# SKIP win32:` from node:test, one `- SKIP win32:`
+from `tools/test-journey.mjs`), plus the PID 1 namespace test's `# SKIP
+unshare --pid is unavailable here` and the browser suites' Playwright skips
+when `OBSERVOGRAM_PLAYWRIGHT` is unset. Expected, not verified: the set is
+predicted from code reading (TerminateProcess semantics, `stat.mode` 0666, no
+`FILE_SHARE_DELETE` on the sqlite handle); no Windows run exists yet. Every
+suite names the platform only through `server/fixtures/platform.mjs`
+(`isWin32`, `isLinux`, `PLATFORM`, `win32Skip(reason)`, `skipOnWin32(t,
+reason)`); `tools/test-platform.mjs` keeps the count and the reasons honest
+and proves the module-relative resolvers (`fileURLToPath`, never
+`URL.pathname`, which is `/C:/…` on Windows and percent-encoded everywhere) on
+every platform. The checkout is LF everywhere (`.gitattributes`: `* text=auto
+eol=lf`), so the goldens and `VENDOR-MANIFEST.json`'s sha256 verify under any
+`core.autocrlf`.
+
+The downstream's first `npm test` on Windows is the acceptance. Report the
+`SKIP win32:` lines it prints: a count other than 19 — or fewer on an
+elevated runner, where symlinks work and the 4 symlink skips are tests that
+could run — is the bug report. A predicted-portable test that fails there is
+fixed upstream by a new reasoned skip site and the README count bump the
+guard forces; a skip that would pass there is a test to un-skip (the fixture
+can probe `symlinkSync` once and skip only on EPERM). The Windows CI leg
+itself (`windows-latest`, `npm ci && npm test`, no `fetch-validators`, no
+docker) is deferred until that first run confirms the count.

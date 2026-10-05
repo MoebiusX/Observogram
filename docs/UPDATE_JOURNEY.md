@@ -704,3 +704,184 @@ default-behaviour change, acknowledged in the CHANGELOG). Inert when unused:
 nothing under `server/`, `tools/lib` or the live studio changes and a build
 leaves every source file byte-identical (proven), so the goldens are
 byte-identical. Tests: 745 → 753 (`tools/test-studio-bundle.mjs`).
+
+### Rebadge batch 2
+
+**B1 — the taxonomy and the brand baked into the bundle.** Delivered as
+`--taxonomy` and `--brand` on `tools/build-studio-bundle.mjs` and a
+`config.taxonomy`-aware, product-aware `studio/static-backend.mjs` (README,
+"Serve The Studio Without The Server", *Bake the seams*;
+[`DOWNSTREAM.md`](DOWNSTREAM.md) §10). Decisions: one function per seam on
+both sides — the server's own `validateTaxonomy` and its texts for the
+taxonomy, the server's own `loadBrand` and `brandShellHtml` for the brand —
+so "renders identically" holds by construction and nothing under `server/` or
+`tools/lib` changes. The `OBSERVOGRAM_BRAND_*` scalars are honoured by the
+build (the server's loader applies them on top of the file; the one-field
+rebadge the README promises is `OBSERVOGRAM_BRAND_NAME=Acme npm run
+build:studio`, POSIX shell syntax), and so are `OBSERVOGRAM_TAXONOMY` and
+`OBSERVOGRAM_BRAND_FILE` when the flags are absent — a build machine with the
+server's env bakes what the server shows, the summary line and `--json` always
+say so, and the escape hatch is unsetting or emptying the variable, an empty
+value counting as unset: `env -u OBSERVOGRAM_BRAND_FILE` in a POSIX shell,
+`set OBSERVOGRAM_BRAND_FILE=` in cmd, `$env:OBSERVOGRAM_BRAND_FILE=''` in
+PowerShell (no `--no-brand`: every flag costs three documented places).
+Root-relative brand URLs are refused with the field and the fix
+named — the bundle has no server behind it, and the leftover guard would
+refuse the favicon anyway with a worse message; the default hero an unnamed
+brand inherits is exempt, as in every unbranded bundle (documented, not
+fixed). `--json` carries `taxonomy` and `brand` always (`null` when nothing is
+baked): the report already printed every key unconditionally and no golden
+covers it; the bundle bytes are what inert-by-default governs. The shim does
+not configure the classifier itself: the studio's `boot()` binds it from
+`GET /api/taxonomy` exactly as against a server, and the import map gives
+both modules the one `lib/artefact-classify.mjs`. `builtAt` is the only
+non-determinism the build has, so the inert proof pins it and compares a
+no-flag, stripped-env build with the same tree's build with the seams unset
+(byte for byte) — not with the previous tree's, since the shim's source
+changed and is inlined as a `data:` address (outside the import map the two
+are identical, measured). Compare is deferred with its four blockers measured
+and written down in §10 (the inlining is feasible; the port of `/api/diff`,
+the licence embedding, the `node_modules` dependence at build and the
+bare-specifier allowlist are the work). Tests: 843 → 847
+(`tools/test-studio-bundle.mjs` 9 → 13; `tools/test-golden-board.mjs` +4
+goldens, none changed).
+
+**Rebadge batch 2, B2a — pack conformance and the merge-safe upconvert.**
+Delivered as `tools/lib/pack-conformance.mjs` (zero-import, listed) with the
+CLI `tools/pack-conformance.mjs` / `packc conformance`, and `mergeUpconvert` in
+`tools/lib/legacy.mjs` behind `tools/upconvert-legacy.mjs`;
+[`DOWNSTREAM.md`](DOWNSTREAM.md) §11 is the workflow. Decisions: a separate
+CLI rather than a `validate-pack --conformance` mode, because validate-pack's
+contract (exit code by validity, `✓/✗ path` per file) is pinned by the README
+and every script that pipes it, and the two tools answer different questions
+(schema vs. "is what it says real"); the engine is the browser-safe module and
+the CLI the thin Node wrapper, as validator.mjs ↔ validate-pack.mjs. No new
+marker: a placeholder is an artefact whose adapter symbol carries one of the
+three scaffold prefixes with a non-empty value — the adapter's own test, so the
+report equals what the studio parks as Scaffold and packs already upconverted
+downstream report correctly without re-conversion; the prefixes are a
+text-pinned copy, never an import, because the adapter is in the static
+bundle's module graph. The stub-shape heuristic that splits `placeholder`
+from `marker-only` is advisory and says so; every upconverter, crawler,
+fetcher and library stub literal is recognised (a drift guard pins it). The
+crawler-default fingerprints (`0.1.0-crawled`, `team-platform`) fire only on a
+crawler-written pack, so every shipped catalogue pack reports zero rows
+(`examples/demo-skeleton.pack.yaml` names `team-platform` for real).
+`--strict` fails on any row. The merge rule is "existing wins" by artefact
+identity, with provenance recorded for every mapped item (not only scaffolded
+ones) so a deleted BAU backend or GOV import stays deleted; the `legacy.*`
+block is the designed exception and is refreshed. The one deliberate
+default-output change is the `legacy.scaffoldCount` value (the six
+shared-section markers now count: 9→15, 27→33, 29→35, 39→45), with the
+annotation key order preserved. Tests: 847 → 864 (`tools/test-pack-conformance.mjs`
+9, `tools/test-upconvert-merge.mjs` 8) plus one pin in `tools/test-legacy-pack.mjs`.
+
+**Rebadge batch 2, B2b — the crawler emits canonical packs.** Delivered in
+`tools/lib/crawler.mjs`, `tools/crawl-repo.mjs`, `tools/lib/slug.mjs`
+(`packSlug`), `tools/lib/sli-inference.mjs` (`isSpecRecordingRuleName`,
+`SPEC_DURATION_RE`) and `tools/lib/alert-routes.mjs` (the `invented`
+collector); [`DOWNSTREAM.md`](DOWNSTREAM.md) §12 is the end state. Decisions,
+in the house style: an input the crawler can spell canonically is normalized
+and the original kept (names, environments; owners only in the summary, since
+an owner string may be an address); an input with a closed vocabulary is
+refused by the CLI (exit 2, before the crawl) and defaulted-with-a-warning by
+the library (criticality, binding) — a throw would be a 500 that registers
+nothing for the server and the studio; a value the spec cannot hold is
+recorded as evidence rather than declared (rule names outside
+`<service>:<metric>:<op>`, dashboard schemaVersions below 30, intervals that
+are not Durations) — the reading the live side already applied to rule names.
+Provenance marks are field-level wherever an artefact-level mark would move
+Compare (the five otel fields, a backend's endpoints, a route's channels) and
+artefact-level only where the live side marks the same kind of stub (the
+stub and alert-derived SLI/SLO pairs — a repository with no recording rules
+now shows its two L1 placeholders as parked, not declared-not-live). Channel
+inventions are collected by position, never by value, so a stated `#oncall`
+beside a receiver named `oncall` marks exactly one channel. `provider.version`
+carries the Grafana image tag or nothing — never the dashboard's revision
+counter. `otel.sdk.languages` is read off the source files (a heuristic over
+extensions, stated as such). Inference defaults stay unmarked (symmetry with
+the fetcher) and are a named follow-up. The hand-written mirrors of the
+schema's Slug / Duration / Binding / Criticality rules are pinned against the
+vendored `$defs`. Goldens: the validity commit byte-identical; the provenance
+and languages commits regenerated with the stated diffs. Tests: 864 → 866
+(`tools/test-crawl-canonical.mjs`, one harness suite over three fixture
+repositories, and one more test in `tools/test-pack-conformance.mjs`), plus
+pins in `tools/test-crawl.mjs` and `tools/test-pack-conformance.mjs`.
+
+**B4 — Windows portability.** Delivered as tests, fixtures and docs only:
+`server/fixtures/platform.mjs` (`isWin32`, `isLinux`, `PLATFORM`, `win32Skip`,
+`skipOnWin32`, the three `WIN32` reasons), `tools/test-platform.mjs` (the Linux-runnable guard),
+`fileURLToPath` in the three module-relative resolvers, the separator-safe
+studio-bundle T1 assertion, `closeStore()` before the five in-process suites
+remove their workspace, `* text=auto eol=lf` in `.gitattributes` (README,
+"Platforms"; [`DOWNSTREAM.md`](DOWNSTREAM.md) §13). Decisions: *fileURLToPath
+over `URL.pathname`, everywhere* — `.pathname` is `/C:/…` on Windows and
+percent-encoded on every platform, so the guard refuses the idiom under
+`server/`, `tools/` and `studio/` rather than fixing the two sites that bit;
+*skips are reasoned and counted, never silent* — a skip is `win32Skip(reason)`
+in node:test's option form or `skipOnWin32(t, reason)`, both print
+`win32: <reason>`, the guard rejects an argument that is not `WIN32.<fact>` or
+a literal of substance, and README pins the site count so a new skip is a
+README edit too; *a POSIX paragraph inside a portable test becomes a subtest*
+with the option form, because a mid-test `t.skip()` reports the whole test
+skipped after its assertions ran; *the store closes before its workspace is
+removed* — the portable fix, not a retrying `rmSync`, since on Linux the
+earlier close costs nothing and a use-after-close throws at once; *the
+fixture is the one place a suite reads `process.platform`* — the guard bans
+the identifier elsewhere, the two data reads of `isWin32` (the `.exe` suffix
+and mimirtool notice, the flat-export 0666 expectation) are allowlisted and a
+`skip: isWin32` or `if (isWin32)` is refused as a silent skip; *no Windows CI leg yet* — no Windows runner here
+to prove it green before it gates `develop`; the downstream's first Windows
+run is the acceptance, and a predicted-portable test failing there is fixed by
+a new reasoned skip site plus the README bump the guard forces. Config
+surface: none. Inert when unconfigured: on Linux every edited suite runs what
+it ran (every `skip` option is `false`), no module under `tools/lib`,
+`server/` runtime or `studio/` changes, so the goldens, `VENDOR-MANIFEST.json`
+and `studio/design-tokens.json` are untouched. Tests: 866 → 875
+(`tools/test-platform.mjs` 6; the three POSIX paragraphs now subtests or their
+own test). Expected on Windows — predicted from code reading, no Windows run exists
+yet: 19 `SKIP win32:` lines (18 `# SKIP win32:` from node:test, one
+`- SKIP win32:` from `tools/test-journey.mjs`), plus the PID 1 test's
+`unshare` skip and the browser suites' Playwright skips when unset; an
+elevated runner sees the 4 symlink skips as tests it could run. Verified
+here by the Linux-runnable proofs only; the downstream's first Windows run
+is the acceptance.
+
+**Review fixes on the batch.** Fixed in place: `mergeUpconvert` creates a
+family's container on the first add only (a section the base removed stays
+removed), `--merge <base>` refuses an existing distinct `-o` without
+`--overwrite`, the unbrand escape hatch names its cmd and PowerShell forms,
+and an env-sourced brand's server-path refusal names the variable that was
+set. And the counts above: each item had quoted the total it measured alone
+on its parent (`843 → 847`, `17 new`, `857 → 858`, `843 → 852`), four
+numbers that cannot coexist on one branch; they are now the chain, measured
+per commit at each item's last commit, and `tools/test-doc-test-totals.mjs`
+keeps it so — within a section every `Tests:` note starts where the
+previous entry ends, and the CHANGELOG's `## Unreleased` pairs start from one
+total only and agree with the journey. Tests: 875 → 880 (two in
+`tools/test-upconvert-merge.mjs`, three in `tools/test-doc-test-totals.mjs`).
+The batch acceptance's delivery report, `docs/DELIVERY-REBADGE-BATCH2.md`,
+was owed and is written: per item what shipped, the totals of this chain,
+what is deferred and why, and B3 as the second PR; the guard now also fails
+when the report is missing or quotes a pair the journey does not.
+Tests: 880 → 881 (one in `tools/test-doc-test-totals.mjs`).
+One review fix then landed a test without its note — the unmarked `+0-000-`
+phone fingerprint in `tools/test-pack-conformance.mjs` — and the chain's
+last total fell one short of `npm test`, which no total-only check can see;
+the guard now also keeps, for every flat suite this batch added, the counts
+the journey narrates for it summing to the `test(` calls the file holds.
+Tests: 881 → 883 (one in `tools/test-pack-conformance.mjs`, one in
+`tools/test-doc-test-totals.mjs`).
+`packc --help` listed `conformance <file...> [--json] [--strict]` while the
+tool also takes `--quiet` (its own usage said so; `packc` hands the arguments
+through unparsed, so the flag worked unadvertised). The help line names it,
+and the conformance suite now keeps every flag the CLI parses in its usage,
+the `packc` help line, the README synopsis and the CHANGELOG entry.
+Tests: 883 → 884 (one more test in `tools/test-pack-conformance.mjs`).
+That pin left the CHANGELOG's B2a Tests entry saying
+`tools/test-pack-conformance.mjs` held 11 at the head of the branch when it
+held 12 — a count stated beside a measured pair but not one, so no
+chain check read it. The guard now holds every head-of-branch count the
+CHANGELOG or a delivery report states for a flat suite this batch added to
+the `test(` calls the file holds.
+Tests: 884 → 885 (one more test in `tools/test-doc-test-totals.mjs`).

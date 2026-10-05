@@ -110,3 +110,6 @@ window like `.toast`, `role="status"`, dismissable), inlined by
 `tools/build-studio-bundle.mjs` after `reskin.css` and never linked by the live
 studio. It reads the `--og-*` tokens only and is registered in
 `tools/test-studio-layout.mjs`'s EXEMPT list (pinned, but under neither bar).
+The notice's text reads the product name from the shell's `#brand-config`
+(`studio/static-backend.mjs` `noticeText(n, product)`, defaulting to
+`DEFAULT_BRAND.name`), so a `--brand` bundle leaks no upstream name.

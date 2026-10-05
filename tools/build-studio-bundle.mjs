@@ -4,8 +4,8 @@
 // Without The Server").
 //
 //   node tools/build-studio-bundle.mjs [--pack <file> [--id <id>] [--label <text>] [--description <text>]]…
-//        [--pack-url <url> [--id <id>] [--label <text>] [--description <text>]]… [--out dist/studio/index.html]
-//        [--no-remote-fonts] [--check] [--json]
+//        [--pack-url <url> [--id <id>] [--label <text>] [--description <text>]]… [--taxonomy <file.json>]
+//        [--brand <file.json>] [--out dist/studio/index.html] [--no-remote-fonts] [--check] [--json]
 //
 // --pack is parsed (YAML or .json) and validated against the spec schema at
 // build time; its canonical is inlined. --pack-url is fetched by the page at
@@ -15,6 +15,22 @@
 // --check builds in memory and writes nothing. --no-remote-fonts drops the
 // Google Fonts links (the fallback stacks apply). Without --pack the bundle
 // boots with an empty catalogue and the notice.
+//
+// --taxonomy bakes the artefact-taxonomy override (the file OBSERVOGRAM_TAXONOMY
+// names on a server; honoured here too when the flag is absent), validated
+// with validateTaxonomy — the server's validator, the server's texts — and
+// served by the bundle's GET /api/taxonomy in the server's shape. --brand
+// bakes the brand (OBSERVOGRAM_BRAND_FILE and the OBSERVOGRAM_BRAND_* scalars
+// honoured when the flag is absent — the server's loader, tools/lib/brand-env.mjs),
+// validated with normalizeBrand and rendered into the shell by brandShellHtml,
+// so the bundle's shell IS the server's branded shell, then transformed as
+// before. A root-relative brand URL (favicon, logo.url, hero.src) is a
+// server path and is refused: the bundle is served without the server.
+// Without either, nothing is read: brandShellHtml is the identity for an
+// unconfigured brand and the config gains no key, so the bytes are those of
+// a build with no flags on the same tree, for the same builtAt. The summary
+// and --json always say what was baked, never the files' contents, and no
+// operator path lands in the bundle.
 //
 // A downstream that serves the studio behind its own static host gets the
 // whole studio — every module, every stylesheet, the packs it names — in one
@@ -45,6 +61,9 @@ import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { validateCanonical, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { stripMcpUrl } from './lib/mcp-url-safety.mjs';
 import { fileSlug } from './lib/slug.mjs';
+import { validateTaxonomy, compileTaxonomy, describeTaxonomy } from './lib/artefact-classify.mjs';
+import { brandShellHtml, normalizeBrand, DEFAULT_BRAND } from './lib/brand.mjs';
+import { loadBrand as loadBrandFromEnv, brandEnvFrom } from './lib/brand-env.mjs';
 import { importSpecifiers } from './gen-vendor-manifest.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -53,7 +72,7 @@ export const ENTRIES = ['studio/app.mjs', 'studio/static-backend.mjs'];
 export const CONFIG_ID = 'observogram-static-config';
 export const DEFAULT_OUT = 'dist/studio/index.html';
 const NOTICE_CSS = 'static-backend.css';
-const usage = `usage: build-studio-bundle.mjs [--pack <file> [--id <id>] [--label <text>] [--description <text>]]… [--pack-url <url> [--id <id>] [--label <text>] [--description <text>]]… [--out ${DEFAULT_OUT}] [--no-remote-fonts] [--check] [--json]`;
+const usage = `usage: build-studio-bundle.mjs [--pack <file> [--id <id>] [--label <text>] [--description <text>]]… [--pack-url <url> [--id <id>] [--label <text>] [--description <text>]]… [--taxonomy <file.json>] [--brand <file.json>] [--out ${DEFAULT_OUT}] [--no-remote-fonts] [--check] [--json]`;
 
 // ---------- the module graph ----------
 
@@ -179,15 +198,39 @@ const MODULEPRELOAD_RE = /^[ \t]*<link rel="modulepreload" href="\/lib\/[\w./-]+
 const FONT_LINE_RE = /^[ \t]*<link [^>\n]*fonts\.g(?:oogleapis|static)\.com[^>\n]*>[ \t]*\n/gm;
 const APP_SCRIPT = '<script type="module" src="/app.mjs"></script>';
 
+const NORMALIZED_BRAND_KEYS = Object.keys(DEFAULT_BRAND);
+const isNormalizedBrand = (o) => NORMALIZED_BRAND_KEYS.every((k) => k in o) && typeof o.configured === 'boolean';
+
 function toBase64(text) {
   return Buffer.from(text, 'utf8').toString('base64');
 }
 
-// { html, modules: [{ key, bytes }], stylesheets: [names], config, bytes }
-export function buildStudioBundle({ root = DEFAULT_ROOT, packs = [], remoteFonts = true, version, builtAt = new Date().toISOString() } = {}) {
+// { html, modules: [{ key, bytes }], stylesheets: [names], config, bytes, taxonomy, brand }
+// taxonomy: the override document (a plain object) to bake, or null. brand:
+// the brand to render into the shell — normalizeBrand's output (used as is)
+// or a raw object (normalized here) — or null. Both are inert when
+// null or unconfigured: the shell is the one shipped and the config has no
+// `taxonomy` key, so the bytes are those of a build without them.
+export function buildStudioBundle({ root = DEFAULT_ROOT, packs = [], remoteFonts = true, version, builtAt = new Date().toISOString(), taxonomy = null, brand = null } = {}) {
   const readRel = (rel) => readFileSync(resolve(root, rel), 'utf8');
   const pkgVersion = version ?? JSON.parse(readRel('package.json')).version;
   const schema = JSON.parse(readRel(SPEC_SCHEMA_PATH));
+
+  // The seams, guarded here too: the CLI validated already, a programmatic
+  // caller gets the same refusals (the classifier's `taxonomy: …` reason;
+  // normalizeBrand's `brand: …`; a server path in a brand URL).
+  if (taxonomy !== null) {
+    const errs = validateTaxonomy(taxonomy);
+    if (errs.length) throw new Error(errs[0]);
+  }
+  // `brand` is normalizeBrand's output (recognised by its shape: every key
+  // normalizeBrand writes, `configured` among them — normalizing it again
+  // would count its own defaults as given and bake the upstream strings) or
+  // a raw object, normalized here. A raw object that merely carries a
+  // `configured` key is still raw: it has not the full shape.
+  const b = brand ? (isNormalizedBrand(brand) ? brand : normalizeBrand(brand)) : null;
+  const branded = b && b.configured ? b : null;
+  if (branded) checkBrandUrls(branded);
 
   // The modules.
   const graph = collectModuleGraph(root, ENTRIES);
@@ -200,7 +243,9 @@ export function buildStudioBundle({ root = DEFAULT_ROOT, packs = [], remoteFonts
     modules.push({ key, bytes: Buffer.byteLength(rewritten, 'utf8') });
   }
 
-  // The config the page reads: the packs with their canonical, the schema.
+  // The config the page reads: the packs with their canonical, the schema,
+  // and — only when baked, after `packs`, so the unconfigured config is the
+  // same four keys in the same order — the taxonomy document the shim serves.
   const config = {
     version: pkgVersion,
     builtAt,
@@ -208,10 +253,18 @@ export function buildStudioBundle({ root = DEFAULT_ROOT, packs = [], remoteFonts
     packs: packs.map((p) => (p.url
       ? { id: p.id, label: p.label, ...(p.description ? { description: p.description } : {}), url: p.url }
       : { id: p.id, label: p.label, ...(p.description ? { description: p.description } : {}), source: 'bundle', canonical: p.canonical })),
+    ...(taxonomy ? { taxonomy } : {}),
   };
 
-  // The page: studio/index.html with its stylesheets, fonts and script replaced.
-  let html = readRel('studio/index.html');
+  // The page: studio/index.html — the server's branded rendering when a
+  // brand is baked (tools/lib/brand.mjs brandShellHtml, exactly what
+  // server/index.mjs sendShell serves; the identity when none) — with its
+  // stylesheets, fonts and script replaced. The brand goes first: its
+  // anchors are on the shipped shell, and it keeps the design-tokens link
+  // alone on its line, so the inlining below still matches every sheet and
+  // #brand-tokens lands right after design-tokens.css, the server's cascade
+  // position.
+  let html = brandShellHtml(readRel('studio/index.html'), branded || DEFAULT_BRAND);
   const stylesheets = [];
   const inlineCss = (name) => {
     const block = styleBlock(name, readRel(`studio/${name}`));
@@ -242,7 +295,80 @@ export function buildStudioBundle({ root = DEFAULT_ROOT, packs = [], remoteFonts
   const leftover = /(?:href|src)="\/[^"]*"/.exec(html);
   if (leftover) throw new Error(`the bundle still references the server: ${leftover[0]}`);
 
-  return { html, modules, stylesheets, config, bytes: Buffer.byteLength(html, 'utf8') };
+  return { html, modules, stylesheets, config, bytes: Buffer.byteLength(html, 'utf8'), taxonomy, brand: branded };
+}
+
+// ---------- the seams: the taxonomy and the brand ----------
+
+// Which taxonomy file to bake: the flag, else the file OBSERVOGRAM_TAXONOMY
+// (TOMOGRAPH_TAXONOMY honoured, the modern name in the text — server/taxonomy.mjs)
+// names, so a build machine configured for a server bakes the same override;
+// else none. A relative path resolves against `cwd`, as the server resolves
+// its own against the working directory. Returns { file, origin } or null.
+export function resolveTaxonomySource(opts, env = process.env, cwd = process.cwd()) {
+  if (opts.taxonomy) return { file: resolve(cwd, opts.taxonomy), origin: '--taxonomy' };
+  const fromEnv = brandEnvFrom(env, 'TAXONOMY');
+  if (fromEnv) return { file: resolve(cwd, fromEnv), origin: 'OBSERVOGRAM_TAXONOMY' };
+  return null;
+}
+
+// The taxonomy file read, parsed and validated — server/taxonomy.mjs
+// readTaxonomyConfig text for text with the origin swapped (that module
+// holds the process-wide override and names the variable even for a flag).
+// Returns { taxonomy, compiled, file, origin }; throws `<origin>: <file>:
+// <the ENOENT text | invalid JSON: … | taxonomy: … (+N more)>`.
+export function loadTaxonomyFile(file, origin = '--taxonomy') {
+  let text;
+  try { text = readFileSync(file, 'utf8'); } catch (e) { throw new Error(`${origin}: ${file}: ${e.message}`, { cause: e }); }
+  let json;
+  try { json = JSON.parse(text); } catch (e) { throw new Error(`${origin}: ${file}: invalid JSON: ${e.message}`, { cause: e }); }
+  const errors = validateTaxonomy(json);
+  if (errors.length) throw new Error(`${origin}: ${file}: ${errors[0]}${errors.length > 1 ? ` (+${errors.length - 1} more)` : ''}`);
+  return { taxonomy: json, compiled: compileTaxonomy(json), file, origin };
+}
+
+// The bundle is served without the server, so a root-relative brand URL is
+// a server path: refused with the field named and the fix spelled (the
+// leftover guard in buildStudioBundle would refuse the favicon anyway, with
+// a worse message). The default hero is not a brand's choice — an unnamed
+// but configured brand inherits '/assets/observogram-hero.png' exactly as
+// every unbranded bundle does — so it passes: the static host serves that
+// asset or the brand names its own hero.src (docs/DOWNSTREAM.md §10).
+export function checkBrandUrls(b) {
+  for (const [field, value, dflt] of [['favicon', b.favicon, DEFAULT_BRAND.favicon], ['logo.url', b.logo.url, DEFAULT_BRAND.logo.url], ['hero.src', b.hero.src, DEFAULT_BRAND.hero.src]]) {
+    if (value && value !== dflt && /^\/(?!\/)/.test(value)) {
+      throw new Error(`brand ${field} ${JSON.stringify(value)} is a server path — the bundle is served without the server; use an absolute URL (https://…, data:…) or a path relative to the bundle's own directory (${JSON.stringify(value.slice(1))})`);
+    }
+  }
+  return b;
+}
+
+// The brand to bake: the --brand file, else the file OBSERVOGRAM_BRAND_FILE
+// names, with the OBSERVOGRAM_BRAND_* scalars on top either way — tools/lib/
+// brand-env.mjs loadBrand, the server's one loader (so "renders identically"
+// holds by construction, and OBSERVOGRAM_BRAND_NAME=Acme alone is the
+// one-field rebadge), over a synthetic env: the chosen file absolute so the
+// cwd is ours, the legacy file spelling silenced so it cannot shadow the
+// flag; an env that is not process.env is never cached. The refusal names
+// what was actually set — a brand the environment supplied is refused behind
+// its variable, the server-path refusal included, so a build machine
+// configured for a server is told where the brand came from (the --brand
+// case keeps checkBrandUrls' own text: the flag is on the command line).
+// Returns { brand: normalized | null, source: 'flag' | 'env' | null, file:
+// absolute | null } — `env` with `file: null` is the scalars alone.
+export function loadBundleBrand(opts, env = process.env, cwd = process.cwd()) {
+  const flag = opts.brand ? resolve(cwd, opts.brand) : null;
+  const envFile = brandEnvFrom(env, 'BRAND_FILE');
+  const file = flag ?? (envFile ? resolve(cwd, envFile) : null);
+  const origin = flag ? '--brand' : envFile ? 'OBSERVOGRAM_BRAND_FILE' : 'OBSERVOGRAM_BRAND_*';
+  let brand;
+  try { brand = loadBrandFromEnv({ env: { ...env, OBSERVOGRAM_BRAND_FILE: file ?? '', TOMOGRAPH_BRAND_FILE: '' } }); }
+  catch (e) { throw new Error(`${origin}: ${e.message}`, { cause: e }); }
+  if (flag && !brand.configured) throw new Error(`--brand: brand file ${file}: an empty brand (no field set) — nothing to bake`);
+  if (!brand.configured) return { brand: null, source: null, file: null };
+  try { checkBrandUrls(brand); }
+  catch (e) { throw flag ? e : new Error(`${origin}: ${e.message}`, { cause: e }); }
+  return { brand, source: flag ? 'flag' : 'env', file };
 }
 
 // ---------- the packs ----------
@@ -281,7 +407,7 @@ export function checkPackUrl(raw) {
 // ---------- the CLI ----------
 
 export function parseArgs(argv) {
-  const opts = { packs: [], out: DEFAULT_OUT, remoteFonts: true, check: false, json: false, help: false };
+  const opts = { packs: [], out: DEFAULT_OUT, remoteFonts: true, check: false, json: false, help: false, taxonomy: null, brand: null };
   const need = (i, a) => {
     const v = argv[i];
     if (v === undefined || v.startsWith('--')) throw new Error(`${a} needs a value\n${usage}`);
@@ -294,6 +420,12 @@ export function parseArgs(argv) {
     if (a === '--json') { opts.json = true; continue; }
     if (a === '--no-remote-fonts') { opts.remoteFonts = false; continue; }
     if (a === '--out') { opts.out = need(++i, a); continue; }
+    if (a === '--taxonomy' || a === '--brand') {
+      const key = a.slice(2);
+      if (opts[key] !== null) throw new Error(`${a} given twice\n${usage}`);
+      opts[key] = need(++i, a);
+      continue;
+    }
     if (a === '--pack') { opts.packs.push({ file: need(++i, a) }); continue; }
     if (a === '--pack-url') { opts.packs.push({ url: need(++i, a) }); continue; }
     if (a === '--id' || a === '--label' || a === '--description') {
@@ -307,7 +439,10 @@ export function parseArgs(argv) {
   return opts;
 }
 
-export async function main(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, cwd = process.cwd(), root = DEFAULT_ROOT } = {}) {
+// `env` is the environment the seams fall back to (OBSERVOGRAM_TAXONOMY,
+// OBSERVOGRAM_BRAND_FILE, OBSERVOGRAM_BRAND_*): a parameter so a suite stays
+// hermetic against the developer's shell.
+export async function main(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, cwd = process.cwd(), root = DEFAULT_ROOT, env = process.env } = {}) {
   let opts;
   try { opts = parseArgs(argv); }
   catch (e) { stderr.write(`${e.message}\n`); return 2; }
@@ -331,13 +466,21 @@ export async function main(argv = process.argv.slice(2), { stdout = process.stdo
       ids.add(entry.id);
       packs.push(entry);
     }
-    const built = buildStudioBundle({ root, packs, remoteFonts: opts.remoteFonts });
+    // The seams: the taxonomy (the flag, else the server's variable) and the
+    // brand (the flag, else the server's file and scalars) — each refusal is
+    // the server's text behind the origin that was set.
+    const tax = resolveTaxonomySource(opts, env, cwd);
+    const taxLoaded = tax ? loadTaxonomyFile(tax.file, tax.origin) : null;
+    const br = loadBundleBrand(opts, env, cwd);
+    const built = buildStudioBundle({ root, packs, remoteFonts: opts.remoteFonts, taxonomy: taxLoaded?.taxonomy ?? null, brand: br.brand });
     const out = resolve(cwd, opts.out);
     if (!opts.check) {
       mkdirSync(dirname(out), { recursive: true });
       writeFileSync(out, built.html);
     }
-    const summary = `${built.modules.length} modules · ${built.stylesheets.length} stylesheets · ${built.bytes} bytes · ${packs.length} pack${packs.length === 1 ? '' : 's'}`;
+    // What was baked, said only when something was: the unconfigured line is unchanged.
+    const baked = `${taxLoaded ? ` · taxonomy: ${describeTaxonomy(taxLoaded.compiled)}` : ''}${br.brand ? ` · brand: ${br.brand.name}` : ''}`;
+    const summary = `${built.modules.length} modules · ${built.stylesheets.length} stylesheets · ${built.bytes} bytes · ${packs.length} pack${packs.length === 1 ? '' : 's'}${baked}`;
     if (opts.json) {
       stdout.write(`${JSON.stringify({
         ok: true,
@@ -348,6 +491,9 @@ export async function main(argv = process.argv.slice(2), { stdout = process.stdo
         stylesheets: built.stylesheets,
         remoteFonts: opts.remoteFonts,
         packs: packs.map((p) => ({ id: p.id, label: p.label, source: p.url ? 'url' : 'file', ...(p.url ? { url: stripMcpUrl(p.url).safe } : {}) })),
+        // Always present so a script can read them; the paths, never the contents.
+        taxonomy: taxLoaded ? { source: tax.origin === '--taxonomy' ? 'flag' : 'env', file: tax.file, types: taxLoaded.compiled.types.size, ids: taxLoaded.compiled.ids.length } : null,
+        brand: br.brand ? { source: br.source, file: br.file, name: br.brand.name } : null,
       }, null, 2)}\n`);
     } else {
       stdout.write(opts.check ? `ok (not written): ${summary}\n` : `wrote ${out} — ${summary}\n`);

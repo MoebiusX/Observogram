@@ -22,13 +22,14 @@ import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import * as fsSync from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_BRAND, DEFAULT_LOGO_SVG, SPEC_LINK, SHELL_ANCHORS, normalizeBrand, brandChrome, brandTokensCss, brandShellHtml,
   brandConfigScript, escapeHtml,
 } from './lib/brand.mjs';
 import { loadBrand, brandSource, resetBrandCache, BRAND_ENV } from './lib/brand-env.mjs';
 
-const ROOT = resolve(new URL('..', import.meta.url).pathname);
+const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const read = (rel) => readFileSync(join(ROOT, rel), 'utf8');
 const SHELL = read('studio/index.html');
 const ACME_FILE = join(ROOT, 'tools/fixtures/brand/acme.json');
@@ -327,9 +328,9 @@ test('studio/brand.mjs: loadBrand with the injected import reads #brand-config o
 // Comments are stripped by a tokenizer that walks strings, template literals
 // (with nested ${}), regex literals and both comment forms — a bare `//`
 // regex would truncate 'https://…' literals.
-// studio/static-backend.mjs is exempt: its notices name the server a static
-// bundle lacks, and the bundle is built from an unbranded shell (a
-// `--brand` for tools/build-studio-bundle.mjs is the follow-up).
+// studio/static-backend.mjs is walked like every other studio module: its
+// notices take the product from the shell's #brand-config (written by
+// tools/build-studio-bundle.mjs --brand) and default to DEFAULT_BRAND.name.
 
 const CHROME_LITERAL = /Observo(?:gram(?![-_])|<)|OBSERVO(?:GRAM(?![_A-Z])|<)/;
 
@@ -397,9 +398,8 @@ test('source guard: the tokenizer strips comments and keeps strings, templates (
 
 test('source guard: no studio or auth-page source names the product as chrome outside tools/lib/brand.mjs', () => {
   const { readdirSync } = fsSync;
-  const EXEMPT = new Set(['static-backend.mjs']);
   const files = [
-    ...readdirSync(join(ROOT, 'studio')).filter((f) => f.endsWith('.mjs') && !EXEMPT.has(f)).map((f) => `studio/${f}`),
+    ...readdirSync(join(ROOT, 'studio')).filter((f) => f.endsWith('.mjs')).map((f) => `studio/${f}`),
     'server/auth.mjs', 'server/auth-proxy.mjs',
   ];
   assert.ok(files.length > 40, `the studio was walked (${files.length} files)`);

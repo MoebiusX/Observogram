@@ -1,0 +1,24 @@
+route:
+  receiver: oncall
+  routes:
+    - matchers: ['severity="critical"']
+      receiver: slack
+    - match_re:
+        severity: warning|minor
+      receiver: pd
+    - match:
+        severity: info
+      receiver: stated
+receivers:
+  - name: oncall
+    msteams_configs:
+      - send_resolved: true
+  - name: slack
+    slack_configs:
+      - channel: '#hostile-alerts'
+  - name: pd
+    pagerduty_configs:
+      - routing_key: REDACTED
+  - name: stated
+    msteams_configs:
+      - channel_url: '#oncall'

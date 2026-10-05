@@ -139,8 +139,9 @@ Nothing the crawler, the live fetcher or the library produces declares one,
 so every pack of the catalogue adapts without a `type` key — the guard the
 classifier's inert-by-default argument rests on. A family name in `type`
 (`sli`, `alert_rule` …) classifies by itself; a foreign name (`PackSLI`)
-needs the operator override (`OBSERVOGRAM_TAXONOMY`, README "Classify
-Typed Packs"), which can also place foreign ids by pattern — but never an
+needs the operator override (`OBSERVOGRAM_TAXONOMY` on a server, `--taxonomy`
+for the static bundle; README "Classify Typed Packs"), which can also place
+foreign ids by pattern — but never an
 artefact that carries `defines`.
 
 ## Cross-references and the symbol table
@@ -204,14 +205,27 @@ manifest, so the one canonical pipeline serves old packs too.
 import { isLegacyLayeredPack, upconvertLegacyPack } from './tools/lib/legacy.mjs';
 
 if (isLegacyLayeredPack(parsed)) {
-  const { canonical, report } = upconvertLegacyPack(parsed);
+  const { canonical, report, provenance } = upconvertLegacyPack(parsed);
   // report = { format, service, mapped, scaffolded, notes }
+  // provenance = { '<symbol>': 'legacy.artefact.<LAYER>.<ID>' | null }  (null: a schema-required stub)
 }
 ```
 
 Wired in at the ingestion gate (`POST /api/validate` — uploads convert
 transparently; the response carries the `legacy` report) and as a CLI
-(`npm run upconvert-legacy <file> [-o out.pack.json]`).
+(`npm run upconvert-legacy <file> [-o out.pack.json] [--merge <existing>] [--overwrite]`).
+A canonical input is never converted: `isLegacyLayeredPack` is false on
+anything with `apiVersion`/`kind`, the gate passes it through and the CLI
+echoes it (exit 0). A legacy input whose `-o` target already holds a canonical
+pack merges into it (`mergeUpconvert({ canonical, provenance }, existing)`):
+the existing pack wins for every artefact it has, the upconvert only adds
+artefacts whose legacy record the existing pack has never seen, added items
+get their marker re-indexed to their final position, and the `legacy.*` block
+is refreshed — so a real value never regresses to a scaffold; `--overwrite`
+restores the plain write. `report.scaffolded` and `legacy.scaffoldCount` count
+every `crawler.scaffold.*` key, the six shared-section markers (`otel`,
+`pipelines.*`) included. `npm run pack-conformance -- <pack>` lists the
+placeholders that remain ([`DOWNSTREAM.md`](DOWNSTREAM.md) §11).
 
 Conversion contract:
 
@@ -226,8 +240,25 @@ Conversion contract:
   Declared. Legacy `GAP` items are always scaffolds. (`sourceOf` honours a
   second prefix, `mcp.scaffold.<symbol>`, for the placeholders the live
   fetcher is forced to invent — see `MCP_INTEGRATION.md`.)
+- **Two kinds of symbol.** An *artefact symbol* is exactly an id `sourceOf`
+  is asked for (`slis.<id>`, `slos.<id>`, `otel`, `telemetry.backends.<id>`,
+  `pipelines.receivers[i]`, `pipelines.exporters.<signal>`,
+  `queries.recording_rules[i]`, `dashboards.<id>`,
+  `dashboards.<id>.panels.<panel>`, `policy.burn_rate_alerts[i]`,
+  `alerting.routes[i]`, `alerting.rules[i]`, `remediation[i]`, `baselines`,
+  `validation.synthetic_checks.<id>`, …); a marker on it parks the artefact as
+  Scaffold. Any other dotted or indexed path under one — a *field symbol*
+  such as `otel.semconv`, `telemetry.backends.<id>.endpoints`,
+  `alerting.routes[0].channels[1]`, `metadata.owners` — matches nothing in
+  `sourceOf` and is conformance evidence only: the crawler writes those for
+  the values it invents without moving the artefact in Discover or Compare
+  (`tools/lib/pack-conformance.mjs` reads both; `DOWNSTREAM.md` §11.1).
 - **Deterministic** — same input, same manifest (timestamps only via
   `opts.now`).
 
 `tools/test-legacy-pack.mjs` gates the four restored examples on every
-`npm test`.
+`npm test`; `tools/test-upconvert-merge.mjs` gates the merge. The lossless
+record key does not say which L4 sublist (policy / alerting / healing) an item
+came from, so two L4 items sharing an id across sublists collide in the record
+and in the merge provenance — left as is, because changing the key would break
+the record of packs already upconverted downstream.
