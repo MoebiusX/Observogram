@@ -11,7 +11,8 @@
 // pack) and a library-built pack registered through POST /api/validate, so
 // onPlaceholder is compared too; export.zip headers and entry names · T6 the
 // denial table · T7 the REAL bundle booted in headless Chromium against the
-// fixture pack, the Export download asserted · T4b inert by default: a build
+// fixture pack, the Export download and the audit-report anchor's 501 sentence
+// asserted · T4b inert by default: a build
 // with nothing baked is the build of the same tree with --taxonomy/--brand
 // unset, byte for byte (config-vs-no-config identity on the same tree — the
 // shim's source changed, so no cross-tree claim) · T8 a --taxonomy bundle
@@ -812,7 +813,7 @@ async function loadPlaywright() {
   catch (e) { return { error: `cannot import ${spec}: ${e.message.split('\n')[0]}` }; }
 }
 
-test('T7 the REAL bundle boots in headless Chromium against the fixture pack: the notice, the open posture, the pack opened, 501 for a live feature, the Export download, no page error, no request off the loopback', async (t) => {
+test('T7 the REAL bundle boots in headless Chromium against the fixture pack: the notice, the open posture, the pack opened, 501 for a live feature, the Export download, the audit-report anchor answered with the 501 sentence, no page error, no request off the loopback', async (t) => {
   const required = process.env.OBSERVOGRAM_BUNDLE_SMOKE === 'require';
   const skip = (why) => { if (required) assert.fail(`OBSERVOGRAM_BUNDLE_SMOKE=require: ${why}`); t.skip(why); };
   const { pw, error } = await loadPlaywright();
@@ -895,6 +896,20 @@ test('T7 the REAL bundle boots in headless Chromium against the fixture pack: th
   const names = zipEntryNames(readFileSync(downloaded));
   assert.equal(names[0], 'payment-service.pack.yaml');
   assert.ok(names.some((n) => n.startsWith('artefacts/')));
+  // The Conformance view's audit-report anchors: an `<a download>` navigation
+  // never reaches a fetch wrapper, so the shim's click handler answers it —
+  // the 501 sentence in the notice row, no navigation, no request to the
+  // static host (which would 404 and cancel the download without a word).
+  await page.click('.observa-adv-toggle');
+  await page.click('.observa-adv-item[data-view="conformance"]');
+  await page.waitForSelector('.conf-exports a[download]', { timeout: 30_000 });
+  assert.match(await page.getAttribute('.conf-exports a[download]', 'href'), /^\/api\/packs\/payment-service\/audit-report\?format=html/);
+  await page.click('.conf-exports a[download]');
+  await page.waitForFunction(() => /^Audit report needs the Observogram server/.test(document.querySelector('.no-backend-notice-text')?.textContent || ''), null, { timeout: 10_000 });
+  assert.equal(await page.textContent('.no-backend-notice-text'), 'Audit report needs the Observogram server; this studio is a static bundle built without one.');
+  assert.equal(await page.$('.no-backend-notice.is-error') !== null, true, 'the notice row carries the error');
+  assert.equal(page.url(), `${base}/`, 'no navigation');
+  assert.deepEqual(served.filter((u) => u.includes('/api/')), [], 'the anchor never reached the static host');
   // Dismiss the notice; it stays dismissed on reload (localStorage).
   await page.click('.no-backend-notice-dismiss');
   assert.equal(await page.isVisible('.no-backend-notice'), false);

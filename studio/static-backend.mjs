@@ -523,8 +523,11 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
 // Installs the backend on a window: its fetch answers our routes and hands
 // everything else to the page's own; the `api` link and menu item, which
 // navigate to /api/packs, are disabled (a navigation never reaches a fetch
-// wrapper); the Export button downloads the ZIP this backend builds; the
-// notice says what the page is.
+// wrapper); the Export button downloads the ZIP this backend builds; a
+// download anchor on one of our routes (the Conformance view's audit-report
+// anchors) is answered by this backend too — a denial shows its sentence in
+// the notice row instead of a canceled download; the notice says what the
+// page is.
 export function installStaticBackend(config, win = globalThis.window) {
   const upstream = win.fetch.bind(win);
   const origin = win.location.origin;
@@ -558,9 +561,33 @@ export function installStaticBackend(config, win = globalThis.window) {
     } else if (t.closest('[data-action="api"]')) {
       e.stopImmediatePropagation();
       e.preventDefault();
+    } else {
+      const a = t.closest('a[download]');
+      if (a && backend.isOurs(a.href)) {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        downloadThroughBackend(backend, doc, win, a.href).catch((err) => showError(doc, `Download failed: ${err.message}`));
+      }
     }
   }, true);
   return backend;
+}
+
+// An `<a download>` on one of our routes: the browser would fetch the href
+// itself — a static host answers 404 and the download is canceled with no
+// sentence — so the click is answered here. A denial (501 no-backend, 404)
+// shows the body's sentence in the notice row; an answer downloads as a Blob
+// named by the server's rule, as the Export button does.
+async function downloadThroughBackend(backend, doc, win, href) {
+  const r = await backend.handle(href);
+  if (!r) throw new Error('no answer');
+  if (!r.ok) {
+    const body = await r.json().catch(() => null);
+    showError(doc, body?.error || `${r.status} ${r.statusText || ''}`.trim());
+    return;
+  }
+  const filename = /filename="([^"]+)"/.exec(r.headers.get('content-disposition') || '')?.[1] || new URL(href, win.location.href).pathname.split('/').pop();
+  saveBlob(doc, win, await r.blob(), filename);
 }
 
 // The Advanced menu's "Pack catalogue API" item (studio/app.mjs
@@ -596,6 +623,11 @@ async function exportFocusedPack(backend, doc, win) {
   const blob = await r.blob();
   const disposition = r.headers.get('content-disposition') || '';
   const filename = /filename="([^"]+)"/.exec(disposition)?.[1] || `${id}.bundle.zip`;
+  saveBlob(doc, win, blob, filename);
+}
+
+// A Blob download: an object URL on a transient anchor, revoked later.
+function saveBlob(doc, win, blob, filename) {
   const a = doc.createElement('a');
   const blobUrl = win.URL.createObjectURL(blob);
   a.href = blobUrl;

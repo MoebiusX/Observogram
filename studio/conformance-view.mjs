@@ -436,8 +436,9 @@ export function renderConformanceView() {
   // The service audit report (GAP batch 2, B3.5; README "Export A Service
   // Audit Report"): the server's GET /api/packs/:id/audit-report as a
   // download, HTML and JSON, for the focused pack and environment, org-scoped
-  // like every navigation (orgQuery). The static bundle answers it 501 and the
-  // browser shows the server's sentence on the download; nothing is hidden.
+  // like every navigation (orgQuery). In the static bundle the shim's click
+  // handler answers the anchors (a navigation never reaches a fetch wrapper)
+  // and shows its 501 sentence in the notice row; nothing is hidden.
   const packId = focusedPackId();
   const env = c.environment || focusedEnv() || '';
   const reportHref = (format) => `/api/packs/${encodeURIComponent(packId)}/audit-report?format=${format}&download=1${env ? `&env=${encodeURIComponent(env)}` : ''}${orgQuery('&')}`;
