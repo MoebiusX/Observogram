@@ -313,8 +313,26 @@ test('the CLI: refusals, exit codes, --strict, --quiet, --json, determinism', ()
     const jm = JSON.parse(run(up, invalid, '--json').stdout);
     assert.equal(jm.packs.length, 2); assert.equal(jm.packs[1].valid, false); assert.deepEqual(jm.packs[1].rows, []); assert.equal(jm.totals.valid, 1);
     r = run(crawl, '--strict');
-    assert.equal(r.status, 1, 'an unmarked row alone fails --strict');
+    assert.equal(r.status, 1, 'the crawl pack (placeholder + unmarked rows) fails --strict');
     assert.equal(run(crawl).status, 0);
+    // --strict is "any row fails" (DOWNSTREAM §11.2): one pack per non-placeholder state, each carrying rows of
+    // that state alone — a strict rule that only counts `placeholder` rows lets all three through.
+    const unmarkedOnly = clone(emptyCrawl());
+    for (const k of Object.keys(unmarkedOnly.metadata.annotations)) if (k.startsWith('crawler.scaffold.')) delete unmarkedOnly.metadata.annotations[k];
+    const cleanPack = parseYaml(readFileSync(clean, 'utf8'));
+    const markerOnly = clone(cleanPack); markerOnly.metadata.annotations[`crawler.scaffold.slis.${cleanPack.spec.slis[0].id}`] = 'stub';
+    const danglingOnly = clone(cleanPack); danglingOnly.metadata.annotations['crawler.scaffold.slis.no-such-sli'] = 'stub';
+    const single = { unmarked: unmarkedOnly, 'marker-only': markerOnly, dangling: danglingOnly };
+    for (const [state, pack] of Object.entries(single)) {
+      assert.deepEqual(validateCanonical(pack, SCHEMA), [], `${state}-only pack is schema-valid`);
+      const by = packConformance(pack).counts.byState;
+      assert.ok(by[state] > 0 && STATES.every(s => s === state || by[s] === 0), `${state}-only pack carries ${state} rows alone: ${JSON.stringify(by)}`);
+      const file = join(dir, `${state}-only.pack.json`); writeFileSync(file, JSON.stringify(pack));
+      assert.equal(run(file).status, 0, `${state}-only pack: rows are informational without --strict`);
+      const s = run(file, '--strict');
+      assert.equal(s.status, 1, `a ${state} row alone fails --strict`);
+      assert.equal(JSON.parse(run(file, '--json', '--strict').stdout).exitCode, 1, `${state}-only pack: --json --strict reports exitCode 1`);
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
