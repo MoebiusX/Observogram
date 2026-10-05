@@ -49,7 +49,7 @@ import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-
 import { initHost } from './host.mjs';
 import {
   recentServicesKey, buildNoOrgModel, buildServicesHomeModel, buildServicePageModel, accessModel, servicesStatusOf,
-  packForService, newestPack, serviceChipModel, servicesSelectModel, discoverEmptyNote, buildPrefillFromService, verdictKey, buildHandoffPlan, buildDefineOriginNote,
+  packForService, newestPack, serviceChipModel, servicesSelectModel, discoverEmptyNote, buildPrefillFromService, verdictKey, buildHandoffPlan, buildDefineOriginNote, buildExitRefusal,
   buildServiceEditorModel, buildServicePatch, serviceSaveStatus,
 } from './services-model.mjs';
 import { loadOrgs, loadServices, loadService, patchService, verdictLoader } from './services-api.mjs';
@@ -2606,7 +2606,7 @@ function exitBuildMode() {
   if (state.serviceId) {
     const name = findServiceRecord(state.serviceId)?.name || 'The service this Build was opened from';
     enterServicePage(state.serviceId, state.serviceEnv, {
-      onRefused: (why) => { if (state.mode !== 'build') return; goHome(); toast(`${name} is gone (${why}) — back to home instead.`, 'error'); },
+      onRefused: (why) => { if (state.mode !== 'build') return; goHome(); toast(buildExitRefusal(name, why), 'error'); },
     });
     return;
   }

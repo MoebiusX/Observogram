@@ -539,6 +539,17 @@ export function buildNoOrgModel({ identity = null, error = null, chromeName = 't
 // state.servicesStatus from a thrown error: the bundle's 501 is 'static'
 // (silent), a guard's 403 `org` is 'denied', anything else 'error' with the
 // text the loader built (`<status>: <sentence>`, never a raw body).
+// Build's exit when the service page it was opened from cannot be landed on:
+// the toast says what happened in the server's words and where the user ended
+// up. A 404 is a deletion ("is gone"); any other refusal (a membership removed
+// → 403, the API down) is not — the row still exists, so the sentence says it
+// could not be opened instead of inventing a deletion.
+export function buildExitRefusal(name, why) {
+  const text = String(why || '');
+  const verb = /^404\b/.test(text) ? 'is gone' : 'could not be opened';
+  return `${name} ${verb} (${text}) — back to home instead.`;
+}
+
 export function servicesStatusOf(error) {
   if (error?.denied === 'no-backend') return { kind: 'static', error: null };
   if (error?.denied === 'org') return { kind: 'denied', error: error.message };

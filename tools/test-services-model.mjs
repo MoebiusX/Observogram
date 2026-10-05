@@ -13,7 +13,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   TIERS, TIER_BY_PACK, accessModel, verdictModel, verdictKey, newestPack, packForService, serviceCardModel, agoText,
-  buildServicesHomeModel, buildServicePageModel, servicesSelectModel, buildHandoffPlan, buildDefineOriginNote,
+  buildServicesHomeModel, buildServicePageModel, servicesSelectModel, buildHandoffPlan, buildDefineOriginNote, buildExitRefusal,
   buildServicePatch, buildNoOrgModel, servicesStatusOf, persistedStateKey, recentServicesKey,
   serviceChipModel, discoverEmptyNote, buildPrefillFromService, buildServiceEditorModel, serviceSaveStatus,
 } from '../studio/services-model.mjs';
@@ -387,6 +387,13 @@ test('buildHandoffPlan: tier and owners written only where the row has none; a s
   assert.equal(other.sentence(), " Registered under a new service payments-platform — Payments Platform (payment-service) was not linked: the pack's service name yields another slug, and a slug is fixed. Open Payments Platform to compare. The environment prod is not one of Payments Platform's — POST /api/services/9/environments { \"name\": \"prod\" } adds it.");
   assert.equal(buildHandoffPlan(build, { ...fresh, id: 9 }, { originId: 1 }).outcome, 'other-service', 'originId alone serves');
   assert.equal(buildHandoffPlan(build, fresh, { originId: 1 }).outcome, 'written', 'the origin row itself is written');
+});
+
+test('buildExitRefusal: a 404 is a deletion ("is gone"); any other refusal says the page could not be opened — the row still exists', () => {
+  assert.equal(buildExitRefusal('Ephemeral', '404: no service 3'), 'Ephemeral is gone (404: no service 3) — back to home instead.');
+  assert.equal(buildExitRefusal('Ephemeral', '403: no org membership — ask an admin to add you'), 'Ephemeral could not be opened (403: no org membership — ask an admin to add you) — back to home instead.');
+  assert.equal(buildExitRefusal('The service this Build was opened from', 'API unreachable'), 'The service this Build was opened from could not be opened (API unreachable) — back to home instead.');
+  assert.doesNotMatch(buildExitRefusal('X', '401: sign in'), /is gone/, 'a 401 is not a deletion');
 });
 
 test('buildDefineOriginNote: nothing when the name yields the slug; the sentence with the one-click fix when the origin name still does; without it otherwise', () => {
