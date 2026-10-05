@@ -74,7 +74,7 @@ test('the walk is the studio board\'s: LAYER_WALK and L4_WALK equal studio/const
 
 test('the refusal texts name a way out', () => {
   assert.equal(WAYS.status('maybe'), 'status must be one of trusted, suspect, failed (unreviewed is the absence of a verdict: DELETE it), not "maybe"');
-  assert.equal(WAYS.reason, 'reason must be a string of at most 2000 characters');
+  assert.equal(WAYS.reason, 'reason must be a string of at most 2000 characters with no control character (a line break and a tab are fine)');
   assert.equal(WAYS.artefactId, 'artefact id must be the adapter\'s positional id (SLI-01, ALR-02 …), 1–100 characters');
   assert.equal(WAYS.noArtefact('p', 'SLI-99'), 'no artefact SLI-99 in pack p — GET /api/packs/p lists its layers and their ids');
   assert.equal(WAYS.notRegistered('payment-service'), 'pack payment-service is a catalogue pack: a verdict is recorded on a registered pack — upload it (POST /api/validate) and record the verdict on the registered id');
@@ -155,6 +155,8 @@ test('the rules over a store: a catalogue pack is 409 (nothing to record on) and
     refuses(() => setVerdictFromApi(db, 'ada', { ...catalogue, artefactId: 'SLI-01', body: {} }), 'invalid', WAYS.status(undefined));
     refuses(() => setVerdictFromApi(db, 'ada', { ...catalogue, artefactId: 'SLI-01', body: { status: 'trusted', reason: 'x'.repeat(2001) } }), 'invalid', WAYS.reason);
     refuses(() => setVerdictFromApi(db, 'ada', { ...catalogue, artefactId: 'SLI-01', body: { status: 'trusted', reason: 7 } }), 'invalid', WAYS.reason);
+    // A control character outside a paragraph's own is refused as a waiver's text refuses it (tools/lib/waivers.mjs oneLine): NUL, escape, backspace, DEL.
+    for (const bad of ['x\u0000y', 'x\u001by', 'x\u0008y', 'x\u007fy', '\u0001']) refuses(() => setVerdictFromApi(db, 'ada', { ...catalogue, artefactId: 'SLI-01', body: { status: 'trusted', reason: bad } }), 'invalid', WAYS.reason);
     for (const bad of ['', 'x'.repeat(101), '1-SLI', 'SLI 01', 'SLI/01']) refuses(() => setVerdictFromApi(db, 'ada', { ...catalogue, artefactId: bad, body: { status: 'trusted' } }), 'invalid', WAYS.artefactId);
     assert.deepEqual(actions(), [], 'nothing written');
 
@@ -171,9 +173,13 @@ test('the rules over a store: a catalogue pack is 409 (nothing to record on) and
     assert.deepEqual([reasonOnly.changed, reasonOnly.verdict.reason, reasonOnly.verdict.actor], [['reason'], null, 'oscar'], 'an omitted reason clears the reason');
     const statusOnly = setVerdictFromApi(db, 'oscar', { ...pack, artefactId: 'SLI-01', body: { status: 'trusted', reason: '' } });
     assert.deepEqual([statusOnly.changed, statusOnly.verdict.status], [['status'], 'trusted'], 'an empty reason is no reason');
+    const paragraph = setVerdictFromApi(db, 'oscar', { ...pack, artefactId: 'SLI-01', body: { status: 'trusted', reason: 'two\nlines,\r\n\ta tab' } });
+    assert.deepEqual([paragraph.changed, paragraph.verdict.reason], [['reason'], 'two\nlines,\r\n\ta tab'], 'a line break and a tab are a paragraph\'s own');
+    const back = setVerdictFromApi(db, 'oscar', { ...pack, artefactId: 'SLI-01', body: { status: 'trusted', reason: '' } });
+    assert.deepEqual(back.changed, ['reason']);
     const doc = verdictsDocument(db, pack);
     assert.deepEqual([doc.verdicts.length, doc.summary], [1, { artefacts: 84, trusted: 1, suspect: 0, failed: 0, unreviewed: 83, orphaned: 0 }]);
-    assert.deepEqual(actions(), ['pack.register', 'verdict.set', 'verdict.set', 'verdict.set'], 'three records, the no-change call wrote none');
+    assert.deepEqual(actions(), ['pack.register', 'verdict.set', 'verdict.set', 'verdict.set', 'verdict.set', 'verdict.set'], 'five records, the no-change call and every refusal wrote none');
     const cleared = clearVerdictFromApi(db, 'ada', { ...pack, artefactId: 'SLI-01' });
     assert.deepEqual([cleared.cleared.artefact, cleared.cleared.status], ['SLI-01', 'trusted']);
     assert.deepEqual(verdictsDocument(db, pack).summary.unreviewed, 84);

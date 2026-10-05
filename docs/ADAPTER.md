@@ -317,7 +317,8 @@ counts it. Nothing else changes in the ZIP.
 `changed` lists what differed from the record as it was (`[]`: nothing — no
 row written, no audit row). An omitted or empty reason clears the reason.
 Refusals, each `{ ok: false, error }` naming a way out: 400 a status outside
-the three, a reason over 2000 characters, an id that is not a positional id;
+the three, a reason over 2000 characters or carrying a control character
+other than a line break or a tab, an id that is not a positional id;
 404 an unknown pack (`unknown pack: <id>`), an artefact the pack does not
 have; 409 a catalogue or example pack (register it first). **Clear** —
 `DELETE /api/packs/:id/verdicts/:artefact` (operator) → `{ "ok": true,

@@ -60,7 +60,7 @@ export const L4_WALK = Object.freeze(['policy', 'alerting', 'healing']);
 // The way out each refusal names.
 export const WAYS = Object.freeze({
   status: (x) => `status must be one of ${VERDICT_STATUSES.join(', ')} (unreviewed is the absence of a verdict: DELETE it), not ${JSON.stringify(x)}`,
-  reason: `reason must be a string of at most ${REASON_MAX} characters`,
+  reason: `reason must be a string of at most ${REASON_MAX} characters with no control character (a line break and a tab are fine)`,
   artefactId: `artefact id must be the adapter's positional id (SLI-01, ALR-02 …), 1–${ARTEFACT_ID_MAX} characters`,
   noArtefact: (packId, id) => `no artefact ${id} in pack ${packId} — GET /api/packs/${packId} lists its layers and their ids`,
   notRegistered: (packId) => `pack ${packId} is a catalogue pack: a verdict is recorded on a registered pack — upload it (POST /api/validate) and record the verdict on the registered id`,
@@ -169,10 +169,24 @@ export function verdictsDocument(db, { meta, adapted }) {
 
 // ---------- the rules ----------
 
+// A control character that is not a paragraph's own — U+0000–U+001F and
+// U+007F less the line break (LF, CR) and the tab. A reason is a paragraph,
+// so the breaks a waiver's one-line text refuses (tools/lib/waivers.mjs
+// oneLine) are legitimate here; a NUL, an escape or a backspace is not: the
+// row would carry it into the badge's tooltip and the audit detail, and
+// SQLite cuts a text at the NUL.
+const hasForeignControl = (s) => {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if ((c < 32 && c !== 10 && c !== 13 && c !== 9) || c === 127) return true;
+  }
+  return false;
+};
+
 function parseBody(body) {
   if (!VERDICT_STATUSES.includes(body.status)) invalid(WAYS.status(body.status));
   const reason = body.reason === undefined || body.reason === null || body.reason === '' ? null : body.reason;
-  if (reason !== null && (typeof reason !== 'string' || reason.length > REASON_MAX)) invalid(WAYS.reason);
+  if (reason !== null && (typeof reason !== 'string' || reason.length > REASON_MAX || hasForeignControl(reason))) invalid(WAYS.reason);
   return { status: body.status, reason };
 }
 

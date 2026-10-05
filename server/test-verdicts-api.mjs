@@ -207,6 +207,7 @@ test('every refusal on a registered pack: an unknown artefact 404, a bad status,
   await refused(K, 'oscar', `/api/packs/${ids.pay}/verdicts/SLI-99`, { status: 'trusted' }, 404, WAYS.noArtefact(ids.pay, 'SLI-99'));
   await refused(K, 'oscar', `/api/packs/${ids.pay}/verdicts/SLI-01`, { status: 'unreviewed' }, 400, WAYS.status('unreviewed'));
   await refused(K, 'oscar', `/api/packs/${ids.pay}/verdicts/SLI-01`, { status: 'trusted', reason: ['a'] }, 400, WAYS.reason);
+  await refused(K, 'oscar', `/api/packs/${ids.pay}/verdicts/SLI-01`, { status: 'trusted', reason: 'x\u0000y' }, 400, WAYS.reason);
   await refused(K, 'oscar', `/api/packs/${ids.pay}/verdicts/${encodeURIComponent('x'.repeat(101))}`, { status: 'trusted' }, 400, WAYS.artefactId);
   await refused('DELETE /api/packs/:id/verdicts/:artefact', 'oscar', `/api/packs/${ids.pay}/verdicts/SLI-02`, 404, WAYS.noVerdict(ids.pay, 'SLI-02'));
   const seq = seqNow();
