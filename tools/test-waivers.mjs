@@ -9,7 +9,11 @@
 // wins, expired surfaces, revoked is history), the conformance overlay — the SAME report object
 // without an open waiver (the inert proof), the engine's numbers untouched and `effective`
 // beside them with one — and the sidecar file. Pure modules under node:test; paths through
-// fileURLToPath, nothing platform-specific.
+// fileURLToPath, nothing platform-specific. The Conformance view (studio/conformance-view.mjs) is
+// rendered headless over a document stub: a bare report renders byte for byte what it did before
+// waivers existed (tools/fixtures/golden/conformance-view/payment-service.bare.html, captured at
+// the commit before the view learned of them), a report with a waivers block gains the Waived
+// group, measure and caveats with every operator text escaped.
 //
 // Run: node --test tools/test-waivers.mjs
 
@@ -21,6 +25,7 @@ import { fileURLToPath } from 'node:url';
 import { RUBRIC, SUBJECT_CLAUSES, clauseSubjects, evaluateConformance } from './lib/conformance.mjs';
 import { SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
+import { adapt } from './lib/adapter.mjs';
 import {
   CLAUSE_WAIVER_STATUSES, FINDING_STATUSES, MAX_REASON, MAX_TEXT, WAIVER_FILE_VERSION, WAIVER_STATES,
   applyWaiversToConformance, applyWaiversToFindings, expiresInDays, matchesFinding, normalizeWaiver, oneLine, readWaiverFile, waiverState, waiverView,
@@ -298,3 +303,86 @@ test('tools/lib/waivers.mjs is browser-safe (imports ./conformance.mjs only, no 
   assert.deepEqual(manifest.modules['tools/lib/waivers.mjs'].imports, ['tools/lib/conformance.mjs']);
   assert.ok(read('docs/CHANGELOG.md').includes('`tools/lib/waivers.mjs`'), 'the CHANGELOG names the new module');
 });
+
+// ---------- 7. the Conformance view, headless ----------
+
+// The DOM the view needs: createElement → an element with className, dataset, innerHTML and the
+// query/listener methods wireUxActions and wireSectionNav call (each answering "nothing here").
+const stubElement = () => ({ className: '', dataset: {}, innerHTML: '', addEventListener() {}, querySelector() { return null; }, querySelectorAll() { return []; }, contains() { return false; } });
+async function renderHeadless(conformance) {
+  globalThis.document = { createElement: stubElement };
+  try {
+    const { state } = await import('../studio/state.mjs');
+    const { renderConformanceView } = await import('../studio/conformance-view.mjs');
+    state.pack = adapt(payment());
+    state.conformance = conformance;
+    const wrap = renderConformanceView();
+    return `${wrap.className}|${JSON.stringify(wrap.dataset)}\n${wrap.innerHTML}`;
+  } finally {
+    delete globalThis.document;
+  }
+}
+const bareReport = () => {
+  const report = evaluateConformance(payment());
+  return { environment: null, ...report, tier: { graded: report.declaredTier, pack: report.declaredTier, from: 'pack', service: null, environment: null, mismatch: false } };
+};
+const FIXTURE = 'tools/fixtures/golden/conformance-view/payment-service.bare.html';
+
+test('the Conformance view over a bare report renders byte for byte what it rendered before waivers existed (the committed capture); readConformance defaults waived [], effective null, waiverCounts null, expiringSoon 0 and names no waiver', async () => {
+  const { readConformance } = await import('../studio/conformance-view.mjs');
+  const c = bareReport();
+  const model = readConformance(c, adapt(payment()));
+  assert.deepEqual([model.waived, model.effective, model.waiverCounts, model.expiringSoon, model.groups.waived], [[], null, null, 0, []]);
+  assert.ok(model.groups.blocking.every(r => r.waiver === null));
+  const html = await renderHeadless(c);
+  assert.equal(html, read(FIXTURE), 'the bare render is the capture, byte for byte');
+  assert.ok(!/conf-waived|Waived|waiver/i.test(html), 'no waiver word on a bare report');
+  // The gate is the object: an array or a string in `waivers` is not a block.
+  assert.equal(await renderHeadless({ ...c, waivers: [] }), html);
+  assert.equal(await renderHeadless({ ...c, waivers: 'yes' }), html);
+});
+
+test('the Conformance view over a report with a waivers block: the waived clause leaves Blocking for the Waived group (nav item, measure, scoring bullet), a partial clause stays blocking with its caveat and remaining subjects, an expired one says so; every reason, author and symbol is escaped', async () => {
+  const { readConformance, CLAUSE_FIX } = await import('../studio/conformance-view.mjs');
+  const pack = payment();
+  const c = bareReport();
+  const L5 = 'L5.MUST.tier1_chaos_for_each_slo';
+  const L3 = 'L3.MUST.recording_rule_per_slo';
+  const L4 = 'L4.MUST.multi_window_burn_rate';
+  const hostile = '<img src=x onerror=alert(1)> & "quotes"';
+  const waivers = [
+    normalizeWaiver(base({ id: 1, reason: hostile, author: 'o<b>scar</b>' })),
+    normalizeWaiver(base({ id: 2, ruleId: L4, artefactId: 'slos.api_latency_99_p99_500ms', expiresAt: '2026-10-15T12:00:00.000Z' })),
+    normalizeWaiver(base({ id: 3, ruleId: L3, artefactId: 'slos.consumer_success_99_95', expiresAt: PAST })),
+  ];
+  const applied = applyWaiversToConformance(c, waivers, { now: NOW, canonical: pack });
+  // Make the L4 one partial: pretend a second subject remains.
+  applied.waivers.clauses[L4].status = 'partial';
+  applied.waivers.clauses[L4].subjects = { failing: ['slos.api_latency_99_p99_500ms', 'slos.<other>'], waived: ['slos.api_latency_99_p99_500ms'], remaining: ['slos.<other>'] };
+  const model = readConformance(applied, adapt(pack));
+  assert.deepEqual(model.groups.waived.map(r => r.id), [L5]);
+  assert.deepEqual(model.groups.blocking.map(r => [r.id, r.waiver?.status ?? null]), [[L3, 'expired'], [L4, 'partial'], ['L5.MUST.tier1_weekly_prod_chaos', null]]);
+  assert.deepEqual([model.waived.length, model.effective.must.passed, model.waiverCounts.waived, model.expiringSoon], [1, 23, 4, 2], 'one clause shown waived (the engine read L4 as waived too before the test pretended it partial: effective 23); the L5 and L4 waivers lapse within 30 days');
+  const html = await renderHeadless(applied);
+  assert.notEqual(html, read(FIXTURE));
+  assert.ok(html.includes('id="conf-waived"') && html.includes('data-ux-section="conf-waived"'), 'the group and its nav item');
+  assert.match(html, /<dt>Waived<\/dt>\s*<dd><span class="ux-measure-val">1<\/span><span class="ux-measure-note">effective 23 \/ 25 MUST · 2 waivers expiring within 30 days<\/span>/);
+  assert.ok(html.includes(`data-group="waived" data-dim="L5"`) && html.includes(escapeHtmlLike(CLAUSE_FIX[L5].reason)), 'the L5 row in the waived group');
+  assert.ok(!html.includes(hostile) && html.includes('&lt;img src=x onerror=alert(1)&gt; &amp; &quot;quotes&quot;'), 'the reason is escaped');
+  assert.ok(!html.includes('o<b>scar</b>') && html.includes('o&lt;b&gt;scar&lt;/b&gt;'), 'the author is escaped');
+  assert.ok(html.includes('Partially waived') && html.includes('<code>slos.&lt;other&gt;</code>'), 'the partial caveat names the remaining subject, escaped');
+  assert.ok(html.includes('Waiver expired') && html.includes('Lapsed:'), 'the expired caveat and its lapsed waiver line');
+  assert.ok(html.includes('<strong>Waivers</strong> suppress a finding for a time') && html.includes('required 23 of 25'), 'the scoring bullet with the effective numbers');
+  assert.match(html, /Not conformant at tier 1: three required clauses need attention\. 1 further required clause is waived for a time\./, 'the headline stays the rubric\'s');
+  assert.ok(html.includes('Covered:') && html.includes('<code>slos.settlement_consumers_99_9_min_2</code>'), 'the covered subjects');
+  // An overlay with nothing waived (every waiver unused): the measure reads 0, no group, no nav item.
+  const none = applyWaiversToConformance(c, [normalizeWaiver(base({ id: 9, ruleId: 'L1.MUST.availability_slo' }))], { now: NOW, canonical: pack });
+  const h2 = await renderHeadless(none);
+  assert.ok(h2.includes('<dt>Waived</dt>') && h2.includes('<span class="ux-measure-val">0</span>') && !h2.includes('id="conf-waived"') && !h2.includes('data-ux-section="conf-waived"'));
+  // ux-kit: the assessment vocabulary gained `waived` and nothing else moved.
+  const { STATUS_PROPERTIES } = await import('../studio/ux-kit.mjs');
+  assert.deepEqual(Object.keys(STATUS_PROPERTIES.assessment.values), ['pass', 'placeholder', 'waived', 'warning', 'fail', 'notEvaluated', 'notApplicable']);
+  assert.equal(STATUS_PROPERTIES.assessment.values.waived.tone, 'info');
+});
+
+const escapeHtmlLike = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');

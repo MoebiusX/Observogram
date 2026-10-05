@@ -69,6 +69,8 @@ export const STATUS_PROPERTIES = {
     values: {
       pass:          { label: 'Pass',            tone: 'ok',      tip: 'Met this check with real values.' },
       placeholder:   { label: 'Represented',     tone: 'warn',    tip: 'Requirement represented; real value still needed. It passes the rubric on a placeholder.' },
+      // GAP batch 2, B3.2: a failing clause a time-boxed waiver covers. The engine's numbers still count it as not met.
+      waived:        { label: 'Waived',          tone: 'info',    tip: 'A time-boxed waiver covers this failing requirement: the rubric still counts it as not met, the effective numbers read it as met until the waiver expires.' },
       warning:       { label: 'Warning',         tone: 'warn',    tip: 'Met the check, with a finding worth reviewing.' },
       fail:          { label: 'Fail',            tone: 'fail',    tip: 'Did not meet this check.' },
       notEvaluated:  { label: 'Not evaluated',   tone: 'neutral', tip: 'This check has not run, or could not run, for this item.' },

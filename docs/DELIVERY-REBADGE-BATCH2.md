@@ -90,7 +90,7 @@ overwrite; `--overwrite` restores it).
 the head of the branch — B2b's hostile crawl, the review fixes' phone
 fingerprint and the flag-documentation pin, counted under 864 → 866,
 881 → 883 and 883 → 884 below, and PR 2's two `--waivers` cases, counted
-under its own 911 → 932) and
+under its own 911 → 934) and
 `tools/test-upconvert-merge.mjs` (8, including the count pins and the
 annotation key order, the never-regresses property over the four examples
 and the CLI merge paths), plus one pin in `tools/test-legacy-pack.mjs`. Two

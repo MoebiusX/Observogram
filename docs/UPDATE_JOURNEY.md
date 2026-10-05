@@ -945,5 +945,5 @@ are byte-identical without `--waivers`; the intended change is `DELETE
 /api/services/:id` answering `waivers: n`. Deferred by name:
 `B3.2-studio-waive`, `B3.2-bundle-waivers`, `B3.2-env-scope`,
 `B3.2-supersedes`.
-Tests: 911 → 932 (`server/test-waivers-api.mjs` 9, `tools/test-waivers.mjs` 10,
+Tests: 911 → 934 (`server/test-waivers-api.mjs` 9, `tools/test-waivers.mjs` 12,
 two more in `tools/test-pack-conformance.mjs`).
