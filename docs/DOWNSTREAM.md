@@ -195,6 +195,7 @@ a bump. The surface so far:
 | Reverse-proxy identity (W5) | `OBSERVOGRAM_TRUST_PROXY_AUTH=1` + `OBSERVOGRAM_TRUST_PROXY_AUTH_ACK=only-the-proxy-reaches-this-port`, the header names (`PROXY_AUTH_USER_HEADER`, `_EMAIL_HEADER`, `_NAME_HEADER`, `_GROUPS_HEADER`), `PROXY_AUTH_GROUP_ROLES` (`g=role,*=role`, authoritative in `PROXY_AUTH_ORG`), `PROXY_AUTH_JOIN_ROLE`, `PROXY_AUTH_OWNERS` (grant-only), `PROXY_AUTH_SHARED_SECRET` + `_SECRET_HEADER` (required beyond loopback), `PROXY_AUTH_LOGOUT_URL`, `PROXY_AUTH_REALM`; users are `proxy://<realm>#<user>` rows of kind `oidc`; refuses to start without the ACK, beside OIDC, exposed without the secret, or with a join role beside a groups header | README, "Behind a reverse proxy (trusted headers)" |
 | Studio bundle (W6) | `npm run build:studio -- [--pack <file> [--id] [--label] [--description]]… [--pack-url <url> [--id] [--label] [--description]]… [--taxonomy <file.json>] [--brand <file.json>] [--out dist/studio/index.html] [--no-remote-fonts]` — one static HTML file: every studio and `tools/lib` module in an import map of `data:` URLs, the stylesheets inlined, the packs and the schema as JSON, `studio/static-backend.mjs` answering the read-only pack routes in the browser and `501 denied: 'no-backend'` for the rest; no server configuration at all; the taxonomy and the brand baked (W3/W4 kept at the edge: `--taxonomy` / `--brand`, or the server's own variables when the flags are absent) | §10 below; README, "Serve The Studio Without The Server" |
 | Branding (W4) | `OBSERVOGRAM_BRAND_FILE=<path.json>` — `{ name, shortName?, wordmark?: { lead, tail }, tagline?, titleSuffix?, description?, logo?: { url \| svg }, favicon?, docsUrl?, footer?: { text, links[] }, about?: { changelogUrl }, hero?: { src, alt }, tokens?: { light, dark } }`, and/or the scalars `OBSERVOGRAM_BRAND_NAME` / `_SHORT_NAME` / `_TAGLINE` / `_LOGO_URL` / `_DOCS_URL` / `_FOOTER` / `_ACCENT` / `_ACCENT_DARK`; one `name` derives every other string. Read once at start (a bad file refuses the start), rendered into the shell (`GET /`, `GET /index.html`, the SPA fallback: title, description, header, footer, `#brand-config`, `#brand-tokens`, favicon), the auth pages and, through `#brand-config`, the studio chrome; `node tools/gen-design-tokens.mjs --brand <file> --out <path>` for the tokens as JSON. The brand module (`tools/lib/brand.mjs`) is a listed module: a downstream studio can normalize and render the same object. Baked into the static bundle by `--brand` (§10) | README, "Rebadge The Studio (brand config)"; [`UI_CONVENTIONS.md`](UI_CONVENTIONS.md) §3 |
+| Response path annotation (B3.3) | `metadata.annotations["observogram.remediates.remediation[<i>]"] = "<symbol>[, <symbol>…]"` in a pack — `alerting.rules[<j>]`, `policy.burn_rate_alerts[<j>]`, `slos.<id>` or `alert:<slug>` — names the alert(s) a remediation answers to when its `trigger` does not; read by `tools/lib/remediation-flow.mjs`, a symbol naming nothing is a warning, never a link. No server configuration | §14 `diagnose-remediate-flow`; [`ADAPTER.md`](ADAPTER.md), "Response path" |
 | Artefact taxonomy (W3) | `OBSERVOGRAM_TAXONOMY=<path.json>` — `{ version: 1, types: { <TypeName>: <family> \| { family, label?, role? } }, ids: [{ pattern, family, flags?, label?, role? }] }`, read once at start, installed process-wide for the diff and the graphs, served to the studio at `GET /api/taxonomy`; an unreadable or invalid file refuses the start. The classifier itself (`tools/lib/artefact-classify.mjs`) is a listed module. Baked into the static bundle by `--taxonomy` (§10) | README, "Classify Typed Packs"; [`ADAPTER.md`](ADAPTER.md), "Id families and the classifier" |
 
 A minimal plugin layer for the backend seam is one file the deployment
@@ -587,6 +588,7 @@ blocker, so a wave can be scheduled against them.
 | feature | status | seam | what a downstream retires | follow-ups |
 |---|---|---|---|---|
 | `waivers` | shipped — full build | `GET/POST /api/services/:id/waivers`, `POST /api/waivers/:id/revoke`, the `waivers` block of `GET /api/packs/:id/conformance` (`docs/ADAPTER.md` "Waivers"), the sidecar file of `packc conformance --waivers`, `tools/lib/waivers.mjs` (listed), the `waiver.create` / `waiver.revoke` audit rows | its exception / suppression list for conformance findings and its expiry bookkeeping | `B3.2-studio-waive`, `B3.2-bundle-waivers`, `B3.2-env-scope`, `B3.2-supersedes` |
+| `diagnose-remediate-flow` | shipped — full build | `tools/lib/remediation-flow.mjs` (listed): `buildRemediationFlowModel`, the linking rule and the `observogram.remediates.remediation[<i>]` annotation (`docs/ADAPTER.md` "Response path"); the panel `studio/remediation-flow-view.mjs` on Diagnose (`#diag-flow`) and Remediate (`#rm-flow`), the `.rflow-*` zone | its alert → runbook / automation "what next" page and its trigger-to-alert matching | `remediation-trigger-ref`, `remediation-flow-graph-unify`, `remediation-flow-live-state`, `alert-rule-deploy`, `catalogue-triggers` |
 | `verdicts` | shipped — full build | `GET/PUT/DELETE /api/packs/:id/verdicts[/:artefact]` (`docs/ADAPTER.md` "Verdicts"), the `verdicts.json` entry of `/export.zip`, the `verdict.set` / `verdict.clear` / `verdict.carry` audit rows, the `verdict` status property (`studio/ux-kit.mjs`) and `studio/verdict-html.mjs` | its per-artefact review / trust record and its badge, filter and record form | `verdicts-service-scope`, `verdicts-bundle-bake`, `verdicts-cli`, `verdicts-on-adapter-upgrade` |
 
 ### waivers
@@ -620,6 +622,52 @@ Follow-ups, by name:
 - *`B3.2-supersedes`* — a renewal is a new row after an expiry; a
   `supersedes` link from the renewal to the lapsed waiver would keep the
   chain readable in the audit.
+
+### diagnose-remediate-flow
+
+The response path from a firing alert to the remediation the pack declares
+for it, computed from pack data alone (the existing `spec.remediation`
+family; no external call, no store, no route, no env). The spec names a
+remediation's trigger as an alert id (`trigger: alert:<slug>`) and nothing
+else binds the two, so `tools/lib/remediation-flow.mjs` is the one linking
+rule — the annotation `metadata.annotations["observogram.remediates.remediation[<i>]"]`
+(`alerting.rules[<j>]`, `policy.burn_rate_alerts[<j>]`, `slos.<id>`,
+`alert:<slug>`, comma-separated), then the rule name, then a compiled
+burn-rule name (`<slo>_burn_<factor>x_<short>_<long>`), then the SLO; the
+first tier with a hit wins and every hit of it links; no hit is `unresolved`
+with name-based suggestions that never link. States come from the comparison
+(`live`, `drifted`, `missing`, `unverified`, `placeholder`, `unhealthy` from
+the live side's `mcp.discovered.alert_rules_unhealthy`; `declared` without
+one) and the steps are what a responder walks (deploy the missing burn alert
+through the deploy modal, reconcile, fix, route, register the automation,
+open the runbook, annotate an unresolved trigger). The studio draws it on
+Diagnose (a `.diag-block` with its sticky-index entry) and on Remediate (after
+the plan, where the deploy button lives); the static bundle draws it too (the
+engine rides the import map). Everything a downstream integrates against is
+in `docs/ADAPTER.md` ("Response path": the annotation grammar, the model
+shape, the states and steps). **Honest status**: not one trigger of the
+catalogue's 17 remediations resolves today — the panel lists them all as
+unresolved with their suggestions (pinned in `tools/test-remediation-flow.mjs`).
+
+Follow-ups, by name:
+
+- *`remediation-trigger-ref`* — the spec could let a remediation name its
+  alert as a reference (`trigger: ref:alerting.rules[0]`) instead of a free
+  slug; an upstream proposal (the vendored spec is pinned by `sync-spec`),
+  after which the annotation becomes the fallback.
+- *`remediation-flow-graph-unify`* — the traceability graph infers its own
+  `remediates` edges by text; one rule should serve both, and the graph's
+  verdicts should feed the path's states.
+- *`remediation-flow-live-state`* — the path reads the comparison; a live
+  probe of the automation backend (did the workflow run?) and of the route
+  (did the channel receive?) is the next evidence rung.
+- *`alert-rule-deploy`* — a declared alert rule (`alerting.rules[j]`) is not a
+  compiled artefact, so a missing one has no deploy action; compiling the
+  declared rules as a deploy surface would give it one.
+- *`catalogue-triggers`* — the reference packs' triggers resolve to nothing;
+  renaming them to their alerts (or annotating them) is a reviewed golden
+  change (the board goldens and `tools/test-remediation-flow.mjs` pin the
+  catalogue), to land with a maintainer's eye on each pack.
 
 ### verdicts
 

@@ -150,6 +150,99 @@ for the static bundle; README "Classify Typed Packs"), which can also place
 foreign ids by pattern — but never an
 artefact that carries `defines`.
 
+The symbol an artefact is addressed by elsewhere — `slos.<id>` (the
+adapter's `defines`), `remediation[<i>]`, `alerting.rules[<j>]`,
+`policy.burn_rate_alerts[<j>]` — is the canonical address; the positional id
+(`SLO-01`, `HEAL-01`, frozen within a content-hash pack id) is the studio's
+card and a verdict's key. The response path below prints both.
+
+## Response path: `observogram.remediates.remediation[<i>]`
+
+The **response path** (GAP batch 2, B3.3; `tools/lib/remediation-flow.mjs`,
+a listed module) links each remediation the pack declares (`spec.remediation`,
+adapted as `L4.healing` `HEAL-NN`, addressed `remediation[<i>]`) to the alert
+artefacts its trigger means — the L4 `policy` burn alerts (`burn_rate`,
+`policy.burn_rate_alerts[<j>]`) and `alerting` rules (`alert_rule`,
+`alerting.rules[<j>]`) — and says what stands between the declaration and a
+working path. The spec names a trigger as an alert id (`trigger:
+alert:<slug>`) and nothing else binds the two, so the linking rule is this
+module's and is normative:
+
+| tier | rule | example |
+|---|---|---|
+| T0 `annotation` | `metadata.annotations["observogram.remediates.remediation[<i>]"] = "<symbol>[, <symbol>…]"` — `alerting.rules[<j>]`, `policy.burn_rate_alerts[<j>]`, `slos.<id>` (every burn alert of that SLO), `alert:<slug>` (T1 then T2 over the slug); a symbol naming nothing is a `warnings[]` entry, never a link | `"policy.burn_rate_alerts[0], alerting.rules[2]"` |
+| T1 `rule-name` | `slugKey(rule.name) === triggerSlug(trigger)` — lowercase, every non-alphanumeric stripped; `ref:` then `alert:` dropped from the trigger | `alert:High-Error-Rate` ↔ `HighErrorRate` |
+| T2 `burn-name` | a compiled burn-rule name of a burn alert equals the slug: `<slo>_burn_<factor>x_<short>_<long>`, runs outside `[A-Za-z0-9_]` → `_` (the compiler's own formula, `14.4` → `14_4x`) | `alert:api_availability_99_9_burn_14x_5m_1h` |
+| T3 `slo` | `slugKey(burn.spec.slo) === triggerSlug(trigger)` | `alert:api-availability-99-9` |
+
+The first tier with at least one hit wins and every hit of that tier links;
+a containment is never a match. No hit → `unresolved`, with `suggestions`
+scored on shared name tokens (the service and pack name tokens dropped; two
+shared, or a unique single; at most three) that never link, never count as
+covered and never carry a deploy action — the panel quotes the annotation to
+write. The symbol index is the artefact's position among its family in the
+layer walk: the adapter's own symbol for a canonical pack, the same rule for a
+typed one.
+
+**The model** — `buildRemediationFlowModel({ pack, diff = null, liveAnnotations
+= null, otherSide = 'live' })` over the adapted pack (the comparison is
+`/api/diff`'s body or `diffPacks`' result; `liveAnnotations` the live side's
+`metadata.annotations`; `otherSide` `live | baseline` for the copy):
+
+```json
+{
+  "configured": true, "compared": true, "otherSide": "live",
+  "counts": { "remediations": 3, "alerts": 8, "linked": 3, "unresolved": 0, "uncovered": 5, "blocked": 1, "suggestions": 0, "placeholder": 0 },
+  "links": [{
+    "remediation": { "id": "HEAL-01", "symbol": "remediation[0]", "identityKey": "remediation::{…}", "family": "remediation", "title": "alert:…", "layer": "L4", "sub": "healing", "source": "Declared",
+                     "trigger": "alert:…", "runbook": "file://…", "automation": "argo-workflow://…", "guardrails": { … }, "placeholder": false },
+    "trigger": "alert:api_availability_99_9_burn_14x_5m_1h", "tier": "burn-name",
+    "alerts": [{ "ref": { "id": "POL-01", "symbol": "policy.burn_rate_alerts[0]", "identityKey": "burn_rate::{…}", "family": "burn_rate", "title": "…", "layer": "L4", "sub": "policy", "source": "Declared", "names": ["…_burn_14x_5m_1h", "…"], "severities": ["SEV1", "SEV2"], "slo": "api_availability_99_9" },
+                 "state": "missing", "deltas": [] }],
+    "routes": [{ "id": "ALR-01", "symbol": "alerting.routes[0]", "severity": "SEV1", "channels": ["msteams", "voice"], … }],
+    "state": "missing", "blocked": true, "placeholder": false,
+    "steps": [
+      { "kind": "deploy-alert", "tone": "fail", "alert": "policy.burn_rate_alerts[0]", "text": "Deploy the burn-rate rules of api_availability_99_9: declared, not live.",
+        "action": { "type": "deploy", "identity": "api_availability_99_9", "artefactId": "SLO-01", "symbol": "slos.api_availability_99_9", "rows": 2 } },
+      { "kind": "route", "tone": "ok", "severity": "SEV1", "text": "SEV1 reaches ALR-01 (msteams, voice)." },
+      { "kind": "register-automation", "tone": "info", "text": "Register argo-workflow://… to run when the alert fires." },
+      { "kind": "human", "tone": "info", "text": "SEV1 and above need a human before the automation runs (requires_human_above)." },
+      { "kind": "runbook", "tone": "info", "text": "Runbook: file://runbooks/api-oom.md.", "href": null },
+      { "kind": "guardrails", "tone": "info", "text": "Guardrails: at most 3/hour · cooldown 15m · rolls back on failure · circuit breaker 2 failures in 1h." }
+    ]
+  }],
+  "unresolved": [{ "remediation": { … }, "trigger": "alert:payment-api-cert-expiring", "placeholder": false,
+                   "suggestions": [{ "ref": { "id": "RULE-03", … }, "score": 2, "shared": ["cert~", "expiring"] }],
+                   "steps": [{ "kind": "annotate", "tone": "warn", "text": "No alert of this pack answers to …", "annotation": "observogram.remediates.remediation[2]", "example": "alerting.rules[2]" }, …] }],
+  "uncovered": [{ "ref": { "id": "POL-02", … }, "state": "live" }],
+  "families": [{ "family": "burn_rate", "alerts": 5, "covered": 1, "uncovered": 4, "remediations": ["remediation[0]"], "blocked": 1 }, { "family": "alert_rule", … }],
+  "warnings": []
+}
+```
+
+`configured` is false — and everything else empty — for a pack without a
+remediation. States: `declared` (no comparison), `live` (aligned on both
+sides; "in the baseline" when `otherSide` is `baseline`), `drifted` (with the
+`deltas` fields), `missing` (declared, not on the other side), `unverified`
+(the other side did not observe the family, or the comparison did not cover
+the artefact), `placeholder` (a Scaffold on the declared side), `unhealthy`
+(live, and listed in the live side's `mcp.discovered.alert_rules_unhealthy`);
+a path's `state` is its worst alert, `uncompared` without a comparison,
+`placeholder` when the remediation itself is a Scaffold (the legacy upconvert
+marks every one it invents — its automation, guardrails and runbook are
+template values); `blocked` for `missing | unhealthy | drifted | placeholder`.
+Steps, in the order a responder walks them: `deploy-alert` (a missing burn
+alert carries the SLO's deploy action — the studio opens the deploy modal
+preselected with it; a missing alert rule carries none, it is not a compiled
+artefact), `reconcile-alert`, `fix-alert`, `complete-alert`, `route` (per
+severity: the routes that carry it, or a warning that none does),
+`register-automation` for a URI automation or `human` for a manual one
+(`manual-only`), `human` for `requires_human_above`, `runbook` (`href` only
+for `https?://`), `guardrails`, and `annotate` for an unresolved trigger. The
+model is pure and deterministic (pack order), reads no clock, never throws
+and never mutates its inputs; states are indexed by each diff entry's
+artefact through `identityKeyOf`, never by parsing a key.
+
 ## Verdicts — a reviewer's record per artefact
 
 A **verdict** (GAP batch 2, B3.1; `server/verdict-admin.mjs`,

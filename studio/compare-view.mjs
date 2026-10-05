@@ -37,6 +37,7 @@ import { catalogEntryFor, LAYERS_FOR_DIFF } from './compare-catalog.mjs';
 // traceability section's own ux-kit imports can never collide with these.
 import * as diagUx from './ux-kit.mjs';
 import { driftedEntryBadness as diagDriftCost } from './diagnostic-grade.mjs';
+import { buildRemediationFlowViewModel, packDeclaresRemediation, remediationFlowEngine, remediationFlowHtml } from './remediation-flow-view.mjs';
 
 // Requirements traceability (the TRACEABILITY VIEW section below).
 import { decisionHeaderHtml, disclosureHtml, emptyStateHtml, LAYER_PURPOSE, layerTitle, plural, wireUxActions } from './ux-kit.mjs';
@@ -1096,6 +1097,14 @@ export function renderBenchmarkView(view) {
   const lensLabel = lens !== 'all' ? (LENS_PRODUCTS.find(lp => lp.slug === lens)?.label || lens) : '';
   const decision = buildAssessmentDecision({ diagnostic, digest, roles: ctx.roles, liveEvidence, haveB, baselineName: ctx.b?.name || '', lensLabel });
   const parts = renderDiagnosticGradeVerdict(diagnostic);
+  // The response path (GAP batch 2, B3.3): only for a pack that declares a
+  // remediation; the engine loads at call time and repaints once when it
+  // lands, so the block and its index entry appear together.
+  const flowModel = packDeclaresRemediation(state.pack)
+    ? buildRemediationFlowViewModel(remediationFlowEngine({ onLoaded: () => appHost.renderMainView() }), {
+      pack: state.pack, packB: haveB ? state.packB : null, diff: diffSafe, compareBId: state.compareBId, packId: state.selectedPackId,
+    })
+    : null;
 
   const report = document.createElement('div');
   report.className = 'diag-report diag-assess';
@@ -1123,6 +1132,7 @@ export function renderBenchmarkView(view) {
     { id: 'diag-compare', label: 'Comparison', count: digest ? decision.qualityGaps : null, tone: countTone(decision.qualityGaps, 'warn') },
     { id: 'diag-evidence', label: 'Evidence', count: parts.failingChecks, tone: countTone(parts.failingChecks, 'warn') },
     parts.requirementsHtml ? { id: 'diag-requirements', label: 'Requirements', count: (rollup?.broken || 0) + (rollup?.partial || 0), tone: countTone((rollup?.broken || 0) + (rollup?.partial || 0), 'warn') } : null,
+    flowModel ? { id: 'diag-flow', label: 'Response path', count: flowModel.counts.blocked + flowModel.counts.unresolved, tone: countTone(flowModel.counts.blocked + flowModel.counts.unresolved, 'warn') } : null,
     { id: 'diag-layers', label: 'Layer scores', count: thinLayers, tone: countTone(thinLayers, 'warn') },
   ];
   report.insertAdjacentHTML('beforeend', assessmentStickyHtml(decision, ctx, navSections));
@@ -1162,6 +1172,7 @@ export function renderBenchmarkView(view) {
   // Evidence (the scored checks + the evidence ledger), then requirement chains.
   report.insertAdjacentHTML('beforeend', parts.evidenceHtml);
   if (parts.requirementsHtml) report.insertAdjacentHTML('beforeend', parts.requirementsHtml);
+  if (flowModel) report.insertAdjacentHTML('beforeend', remediationFlowHtml(flowModel, { screen: 'diagnose' }));
 
   // Layer scores — per-layer × per-mechanism coverage. Pack-A-derived, so
   // it's the "why" behind the coverage checks whether or not a Pack B exists.

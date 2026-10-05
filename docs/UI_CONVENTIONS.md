@@ -96,7 +96,10 @@ Discover, `.diag-*` Diagnose, `.cpc-*`/`.compare-*` Compare; `.dvb-verdict`
 the Discover board's reviewer-verdict badge and `.ux-chip-verdict` the fifth
 status property's chip in `ux.css`, `.verdict-*` the drawer's Verdict
 section — all drawn by `studio/verdict-html.mjs` / `studio/verdicts.mjs`,
-nothing without a verdict) — keep new classes inside their zone's prefix. **Never mass-rename existing classes**:
+nothing without a verdict; `.rflow-*` the response path of
+`studio/remediation-flow-view.mjs`, one zone in `ux-remediate.css` drawn on
+Remediate and on Diagnose alike, nothing for a pack without
+`spec.remediation`) — keep new classes inside their zone's prefix. **Never mass-rename existing classes**:
 they are referenced from both .css and .mjs template strings and there is no
 visual-regression net.
 

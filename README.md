@@ -235,6 +235,17 @@ Deployable artifacts can be pushed through an MCP write target. Non-deployable
 or inferred artifacts remain visible as manual follow-up, not silent production
 changes.
 
+When the pack declares remediations (`spec.remediation`), Diagnose and
+Remediate also draw the **response path**: each remediation, the alert its
+`trigger: alert:<slug>` names (matched by rule name, compiled burn-rule name
+or SLO, or declared outright with the annotation
+`observogram.remediates.remediation[<i>]` — `docs/ADAPTER.md` "Response
+path"), that alert's state against live, and what next — deploy the missing
+burn alert, reconcile the drifted one, route the severity, register the
+automation, open the runbook. A trigger no alert answers to is listed as
+unresolved with name-based suggestions; nothing is inferred into a link. Pure
+pack data, no external call; a pack without remediations shows nothing.
+
 ![Observogram Remediate view showing the Pack A minus Pack B deploy delta](docs/img/xray-remediate.png)
 
 ## Quickstart
@@ -2371,6 +2382,7 @@ studio/
   app.mjs                  Browser app shell and three-step workflow
   compare-view.mjs         Assessment (diagnostic grade), Compare, drift, traceability
   compile-view.mjs         Remediate, compile catalog, deploy surfaces
+  remediation-flow-view.mjs  The response path (GAP batch 2): the engine loaded at call time, the view model, the panel Diagnose and Remediate share
   layers-view.mjs          Discover Observogram and artifact cards
   brand.mjs                The studio's brand: reads the shell's #brand-config, loads /lib/brand.mjs the house way, hands state.brand its chrome strings
   neuron-view.mjs          Advanced → Neuron: fleet tiles, trend / heatmap / bar panels, the journey in focus, the newest record opened up
@@ -2393,6 +2405,8 @@ tools/
   pack-init.mjs            packc init: build a pack from the library (list / show / instantiate)
   test-build-model.mjs     The BUILD journey's studio models over captured API responses (tools/fixtures/build/)
   test-platform.mjs        The Windows support statement's Linux-runnable proofs: fileURLToPath over URL.pathname, the T1 separator idiom, the platform fixture, and the guards (no URL.pathname as a path, 'win32' only in the fixture, every skip reasoned and counted in README "Platforms")
+  test-remediation-flow.mjs  The response-path engine: the linking rule, the catalogue pin, states from a diff, the steps
+  test-remediation-flow-view.mjs  The response-path panel: loader, gate, view model, HTML on both screens, escaping, the .rflow-* zone's tokens and AA
   test-doc-test-totals.mjs The `Tests: a → b` totals in docs/UPDATE_JOURNEY.md chain within a section and agree with docs/CHANGELOG.md's Unreleased pairs and with the batch delivery report (docs/DELIVERY-*.md)
   validate-pack.mjs        Canonical pack validator
   pack-conformance.mjs     The placeholders a pack still carries: path, field, what it needs, where it comes from (--json, --strict)
@@ -2405,6 +2419,7 @@ tools/
     chain-history.mjs      Requirement-chain records per run, transitions, candidate causes (zero-import, vendorable)
     compile.mjs            packc compiler
     conformance.mjs        Maturity rubric
+    remediation-flow.mjs   The response path: a remediation's trigger resolved to its alerts, states from the comparison, next steps (vendorable)
     diff.mjs               Structural pack diff
     journey.mjs            Journey definitions, runner, gate, run history (node-only)
     legacy.mjs             Layered-JSON upconvert and the merge-safe re-run (mergeUpconvert); imports pack-conformance.mjs

@@ -947,3 +947,42 @@ are byte-identical without `--waivers`; the intended change is `DELETE
 `B3.2-supersedes`.
 Tests: 911 → 934 (`server/test-waivers-api.mjs` 9, `tools/test-waivers.mjs` 12,
 two more in `tools/test-pack-conformance.mjs`).
+
+**G3 — diagnose → remediate flow.** The response path from a firing alert to
+the remediation the pack declares for it, computed from pack data alone
+(`docs/ADAPTER.md` "Response path"; README "Remediate"; `DOWNSTREAM.md` §14
+`diagnose-remediate-flow`). Decisions: the spec binds a remediation to its
+alert by a free slug (`trigger: alert:<slug>`) and the vendored spec cannot
+be edited here (`sync-spec` pins it), so the linking rule lives in
+`tools/lib/remediation-flow.mjs` and is normative — the
+`observogram.remediates.remediation[<i>]` annotation first (one spelling,
+the only operator seam), then the rule name, then a compiled burn-rule name
+(the compiler's own formula, cross-checked against the rules it emits), then
+the SLO; the first tier with a hit wins, every hit of it links, a containment
+never matches, and no hit is `unresolved` with name-based suggestions that
+never link, never count and never deploy (the upstream proposal is the named
+follow-up `remediation-trigger-ref`); states come from the comparison's
+buckets indexed by each entry's ARTEFACT through `identityKeyOf` (never by
+parsing a `…@a#01` or `#02` key), `unhealthy` from the live side's
+`mcp.discovered.alert_rules_unhealthy` — read only when the other side is
+live, a baseline's list is not this pack's; a Scaffold remediation (the
+legacy upconvert's) is a `placeholder` with template values; a missing burn
+alert carries the SLO's deploy action and the deploy button renders on
+Remediate alone, only when compared, only for a deployable SLO (an alert rule
+is not a compiled artefact: `alert-rule-deploy`); the panel is one HTML on
+both screens (`studio/remediation-flow-view.mjs`, the `.rflow-*` zone of
+`ux-remediate.css`), the engine loaded at call time through `/lib` and the
+view repainting once when it lands, the gate `packDeclaresRemediation` keeping
+every pack without `spec.remediation` off the import and off the DOM; no
+server, no route, no store, no env, no adapter or diff change. Inert by
+proof: the 24 board goldens, crawl and compile goldens are byte-identical
+(the panel touches neither Discover nor any golden renderer), the three
+catalogue packs without a remediation are unconfigured and empty; the
+intended change is the response-path block on Diagnose (with its sticky-index
+entry) and Remediate for packs WITH remediations — the five catalogue packs,
+every upconverted legacy pack and the typed fixture — all-unresolved for the
+catalogue today (zero triggers resolve; pinned, `catalogue-triggers`).
+Deferred by name: `remediation-trigger-ref`, `remediation-flow-graph-unify`,
+`remediation-flow-live-state`, `alert-rule-deploy`, `catalogue-triggers`.
+Tests: 934 → 958 (`tools/test-remediation-flow.mjs` 14,
+`tools/test-remediation-flow-view.mjs` 10).
