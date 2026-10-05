@@ -528,7 +528,7 @@ export function buildNoOrgModel({ identity = null, error = null, chromeName = 't
     title: 'Signed in, but in no organisation yet',
     checked: `/api/packs as ${login}`,
     body: error?.message || '403: no org membership — ask an admin to add you',
-    hint: `${chromeName} has no member screen yet (Settings is slice 6b); an admin adds you with POST /api/org/members.`,
+    hint: `${chromeName} has no member screen yet; an admin adds you with POST /api/org/members.`,
     actions: [{ id: 'sign-out', label: 'Sign out' }],
   };
 }

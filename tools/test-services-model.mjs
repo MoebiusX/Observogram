@@ -432,7 +432,9 @@ test('buildNoOrgModel: the server\'s sentence as is, the login checked, sign-out
   const err = Object.assign(new Error('403: no org membership — ask an admin to add you'), { denied: 'org', status: 403 });
   const m = buildNoOrgModel({ identity: me('nora', []), error: err, chromeName: 'Acme Watch' });
   assert.deepEqual([m.title, m.checked, m.body], ['Signed in, but in no organisation yet', '/api/packs as nora', '403: no org membership — ask an admin to add you']);
-  assert.equal(m.hint, 'Acme Watch has no member screen yet (Settings is slice 6b); an admin adds you with POST /api/org/members.');
+  assert.equal(m.hint, 'Acme Watch has no member screen yet; an admin adds you with POST /api/org/members.');
+  // Product wording, not plan wording: no roadmap slice reference reaches a signed-in user.
+  assert.doesNotMatch(`${m.title} ${m.body} ${m.hint}`, /slice\s*\d|\b6b\b/i, 'the no-org screen never names a roadmap slice');
   assert.deepEqual(m.actions, [{ id: 'sign-out', label: 'Sign out' }]);
   assert.equal(buildNoOrgModel({}).checked, '/api/packs as you');
 });
