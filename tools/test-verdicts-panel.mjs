@@ -9,15 +9,20 @@
 // write answers 401 naming a bearer header the studio cannot send. The panel
 // must not draw a control the API refuses: without an identity the role is
 // probed from GET /api/orgs once, and a viewer gets the note naming the
-// bearer route. fetch() is stubbed per test (studio/api.mjs reads the
+// bearer route. With sign-in /auth/me's `orgs[].effectiveRole` of the active
+// org decides, and an owner outside every membership (server/authz.mjs lands
+// them in the default org as admin) reads the form from `user.owner` — the
+// flag's name on the wire (server/auth.mjs GET /auth/me), not the store
+// row's `isOwner`. fetch() is stubbed per test (studio/api.mjs reads the
 // global), the probe re-run with `refresh`; nothing here touches a server.
+// Also here: the load's orphan filter, the Refine counts, refusalText.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const { state } = await import('../studio/state.mjs');
 const { setActiveOrg } = await import('../studio/api.mjs');
-const { loadVerdicts, loadAnonymousRole, anonymousViewer, canRecordVerdict, verdictPanel } = await import('../studio/verdicts.mjs');
+const { loadVerdicts, loadAnonymousRole, anonymousViewer, canRecordVerdict, verdictPanel, verdictOf, verdictCounts, refusalText } = await import('../studio/verdicts.mjs');
 
 const PACK = 'uploaded-payment-service-1a2b3c4d';
 const ARTEFACT = { id: 'SLI-01', name: 'api_availability' };
@@ -107,7 +112,7 @@ test('a server that does not answer /api/orgs (the static bundle\'s 501) leaves 
 test('with sign-in the probe is not consulted: /auth/me\'s effectiveRole of the active org decides, a viewer reads the role sentence', async () => {
   const calls = stubServer('viewer');
   await loadAnonymousRole({ refresh: true });   // a stale viewer answer must not leak into the identity postures
-  state.identity = { ok: true, mode: 'local', authenticated: true, user: { login: 'vera', isOwner: false }, orgs: [{ id: 'acme', role: 'viewer', effectiveRole: 'viewer' }, { id: 'bravo', role: 'operator', effectiveRole: 'operator' }] };
+  state.identity = { ok: true, mode: 'local', authenticated: true, user: { login: 'vera', kind: 'local', owner: false }, orgs: [{ id: 'acme', role: 'viewer', effectiveRole: 'viewer' }, { id: 'bravo', role: 'operator', effectiveRole: 'operator' }] };
   setActiveOrg('acme');
   calls.length = 0;
   await loadVerdicts(PACK);
@@ -118,4 +123,42 @@ test('with sign-in the probe is not consulted: /auth/me\'s effectiveRole of the 
   setActiveOrg('bravo');
   assert.equal(canRecordVerdict(), true, 'an operator of the active org records');
   setActiveOrg(null);
+});
+
+test('an owner with no membership of the active org records: /auth/me names the flag `user.owner`, and that is what the panel reads', async () => {
+  stubServer('viewer');
+  await loadAnonymousRole({ refresh: true });
+  state.identity = { ok: true, mode: 'local', authenticated: true, user: { login: 'olive', kind: 'local', owner: true }, orgs: [] };
+  setActiveOrg(null);
+  await loadVerdicts(PACK);
+  assert.equal(canRecordVerdict(), true, 'the org gate lands an owner in the default org as admin (server/authz.mjs)');
+  assert.match(verdictPanel(ARTEFACT).innerHTML, /class="verdict-form"/);
+  state.identity = { ok: true, mode: 'local', authenticated: true, user: { login: 'nobody', kind: 'local', owner: false }, orgs: [] };
+  assert.equal(canRecordVerdict(), false, 'not an owner, no membership: the gate refuses every call');
+  assert.match(verdictPanel(ARTEFACT).innerHTML, /read-only for your role/);
+});
+
+test('loadVerdicts keeps the live rows only — an orphaned row (its artefact gone from the pack) is dropped — and verdictCounts files the rest under unreviewed', async () => {
+  stubServer('admin');
+  await loadAnonymousRole({ refresh: true });
+  const row = (artefact, status, extra = {}) => ({ artefact, status, actor: 'rev', setAt: '2026-10-01T00:00:00Z', reason: null, carriedFrom: null, orphaned: false, ...extra });
+  globalThis.fetch = async (path) => (path === `/api/packs/${PACK}/verdicts`
+    ? json(200, { ok: true, pack: PACK, verdicts: [row('SLI-01', 'trusted'), row('SLO-01', 'failed'), row('ALERT-09', 'suspect', { orphaned: true }), null], summary: {} })
+    : json(404, { ok: false, error: `unknown ${path}` }));
+  const map = await loadVerdicts(PACK);
+  assert.deepEqual([...map.keys()], ['SLI-01', 'SLO-01'], 'the orphan and the null row are not verdicts of this pack');
+  assert.equal(verdictOf('ALERT-09'), null);
+  assert.equal(state.verdictsPack, PACK);
+  assert.deepEqual(verdictCounts([{ id: 'SLI-01' }, { id: 'SLO-01' }, { id: 'ALERT-09' }, { id: 'SLO-02' }]), { trusted: 1, suspect: 0, failed: 1, unreviewed: 2 });
+  globalThis.fetch = async () => json(500, { ok: false, error: 'boom' });
+  assert.equal(await loadVerdicts(PACK), null, 'an unanswered load is null, never a throw');
+  assert.equal(state.verdictsPack, PACK, 'the pack is still the one asked for: the panel addresses it');
+  assert.deepEqual(verdictCounts([{ id: 'SLI-01' }]), { trusted: 0, suspect: 0, failed: 0, unreviewed: 1 });
+});
+
+test('refusalText quotes the body\'s error from an api() failure, else the message', () => {
+  assert.equal(refusalText(new Error('409 Conflict on /api/packs/x/verdicts/y: {"ok":false,"error":"a catalogue pack has no verdicts — upload it"}')), 'a catalogue pack has no verdicts — upload it');
+  assert.equal(refusalText(new Error('502 Bad Gateway on /api/x: <html>')), '502 Bad Gateway on /api/x: <html>');
+  assert.equal(refusalText(new Error('401 Unauthorized on /api/x: {"ok":false}')), '401 Unauthorized on /api/x: {"ok":false}', 'a body without an error string falls back to the message');
+  assert.equal(refusalText(null), 'null');
 });

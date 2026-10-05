@@ -146,7 +146,10 @@ export function canRecordVerdict() {
   const org = getActiveOrg();
   const orgs = Array.isArray(me.orgs) ? me.orgs : [];
   const here = (org ? orgs.find((o) => o.id === org) : orgs[0]) || null;
-  return here ? ['operator', 'admin'].includes(here.effectiveRole) : me.user?.isOwner === true;
+  // No membership of the active org: an owner is still an admin there
+  // (server/authz.mjs principalOf; /auth/me publishes the flag as
+  // `user.owner`), anyone else is refused by the org gate.
+  return here ? ['operator', 'admin'].includes(here.effectiveRole) : me.user?.owner === true;
 }
 
 const section = (html) => {
