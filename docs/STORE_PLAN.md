@@ -368,6 +368,48 @@ audit           seq PK AUTOINCREMENT, at, org_id NULL, actor, action, target_kin
     actions. A later retention policy is an explicit migration that
     archives with `VACUUM INTO` and then prunes.
 
+### Schema v2 (GAP batch 2)
+
+The second migration step (`gap-batch-2`, `server/store/migrations.mjs`
+`SCHEMA_V2`) adds two tables; nothing of v1 changes. `SCHEMA_VERSION` is 2;
+a v1 build refuses a v2 database and a v2 backup (the one-way door of §1 and
+`backup.mjs`), and `packc store export` writes neither table (a pre-store
+build has nowhere to hold them).
+
+```text
+verdicts        org_id, pack_id, artefact_id, artefact_key, family NULL,
+                status NOT NULL CHECK (status IN ('trusted','suspect','failed')),
+                reason NULL, behavior_hash, actor, set_at, carried_from NULL;
+                PK(org_id, pack_id, artefact_id);
+                FK(org_id, pack_id) → packs(org_id, id) ON DELETE CASCADE
+waivers         id PK, org_id FK, service_id, artefact_id NULL (never ''), rule_id, reason,
+                author, expires_at, created_at, revoked_at NULL, revoked_by NULL,
+                revoke_reason NULL;  CHECK ((revoked_at IS NULL) = (revoked_by IS NULL));
+                FK(service_id, org_id) → services(id, org_id) ON DELETE CASCADE;
+                INDEX waivers_service (service_id, org_id)
+```
+
+- **`verdicts`** (B3.1, `server/store/verdicts.mjs`) is a reviewer's record
+  on one artefact of one registered pack — the pack by its content-hash id,
+  the artefact by the adapter's positional id (`SLI-01`), frozen within that
+  pack id. `unreviewed` is the absence of a row. `artefact_key` (the
+  behavioural identity key, `tools/lib/artefact-model.mjs identityKeyOf`,
+  `#NN`-suffixed within a colliding group) and `behavior_hash` are how a
+  label re-registration carries the row onto the new pack's artefact
+  (`carried_from` names the old pack); an eviction, a replace or the
+  rehydrate's prune cascades it silently. Audit: `verdict.set`,
+  `verdict.clear` on target `artefact` `<pack>/<artefact>`; `verdict.carry`
+  on the new pack.
+- **`waivers`** (B3.2, `server/store/waivers.mjs`) is a service record's
+  time-boxed waiver of one rubric clause (`rule_id`), optionally scoped to
+  one canonical symbol (`artefact_id`: `slos.<id>`). `author` is the audit
+  actor (a login or the token label, never an email). A revoke keeps the
+  row (`revoked_at`, `revoked_by`, `revoke_reason`); expiry is computed by
+  the rule that reads the row, never stored, so there is no unique index —
+  "one active waiver per (service, rule, artefact)" is the admin rule's,
+  inside its `atomic()`. Audit: `waiver.create`, `waiver.revoke` on target
+  `waiver` `<id>`.
+
 ## 3 · What stays a file, where the database lives, and operations
 
 Records move. Artefacts stay where `cat`, `git diff` and a volume backup can

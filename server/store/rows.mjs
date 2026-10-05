@@ -55,6 +55,17 @@ export function requireText(value, field, { max = 200 } = {}) {
   return value;
 }
 
+// What nowIso() and new Date(ms).toISOString() produce — the one time
+// format the rows hold, so ISO strings sort as time.
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+export function requireIso(value, field) {
+  if (typeof value !== 'string' || !ISO_TIME.test(value)) {
+    throw new TypeError(`observogram store: ${field} must be an ISO time string (toISOString()), not ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
 export function optionalText(value, field, opts) {
   return value === undefined || value === null ? null : requireText(value, field, opts);
 }

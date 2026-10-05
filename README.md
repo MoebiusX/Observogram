@@ -1734,7 +1734,7 @@ included: a checkpoint between two file copies tears it. Safe options:
 ```bash
 packc store backup /backups/observogram-2026-09-24.db
 # backup written: /backups/observogram-2026-09-24.db
-# store_id: 3f0c… (schema v1, from /app/.observogram/observogram.db)
+# store_id: 3f0c… (schema v2, from /app/.observogram/observogram.db)
 ```
 
 It runs `VACUUM INTO` outside any transaction into `<path>.tmp` and renames
@@ -1753,7 +1753,7 @@ users, orgs, memberships or audit.
 ```bash
 packc store restore /backups/observogram-2026-09-24.db
 # restored … -> /app/.observogram/observogram.db
-# store_id: 3f0c… (schema v1); previous store_id: 3f0c…
+# store_id: 3f0c… (schema v2); previous store_id: 3f0c…
 # moved aside: /app/.observogram/observogram.db.pre-restore-20260924T101500123Z
 ```
 
@@ -1799,6 +1799,15 @@ stderr — `the restored store is <id>; <base>/.store-imported names <other>
    the file's canonical SHA-256 (its entries without `lastUsedAt`) under a
    key of its own; the file stays where it is, frozen (an upgrade from
    0.5.0 does only this half). Take a `packc store backup` once it runs.
+3. **Schema v2** (GAP batch 2): a store build from this version on migrates a
+   v1 database to v2 at its first start — two tables, `verdicts` (a
+   reviewer's record per artefact of a registered pack) and `waivers` (a
+   service record's time-boxed waivers of conformance findings); every row
+   a v1 store held is kept. The door is one-way: a v1 build refuses a v2
+   database (`the database is at schema v2, but this build knows up to v1`)
+   and `packc store restore` refuses a v2 backup on a v1 build, so take a
+   `packc store backup` before the upgrade. `packc store export` writes no
+   verdict or waiver (a pre-store build has nowhere to hold them).
 
 **Roll back** to a pre-store build (the image before the store) only this
 way. A pre-store build reads `users.json` / `orgs.json`, not the store, so

@@ -8,23 +8,13 @@
 
 import { atomic, nowIso, prepare } from './db.mjs';
 import { writeAudit } from './audit.mjs';
-import { notFound, optionalText, requireOrg, requireText } from './rows.mjs';
+import { notFound, optionalText, requireIso, requireOrg, requireText } from './rows.mjs';
 
 const REPO = 'packs';
 const TEXT_MAX = 200;
 // The removal actions a caller may record: the rehydrate's prune, the
 // quick-start dedup (replaced by label) and the MAX_UPLOADS eviction.
 export const PACK_REMOVE_ACTIONS = Object.freeze(['pack.remove', 'pack.replace', 'pack.evict']);
-// What nowIso() and new Date(ms).toISOString() produce — the one time
-// format the rows hold, so ISO strings sort as time.
-const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-
-function requireIso(value, field) {
-  if (typeof value !== 'string' || !ISO_TIME.test(value)) {
-    throw new TypeError(`observogram store: ${field} must be an ISO time string (toISOString()), not ${JSON.stringify(value)}`);
-  }
-  return value;
-}
 
 export function rowToPack(r) {
   if (!r) return null;

@@ -1,5 +1,6 @@
 // server/store/migrations.mjs — ordered schema steps keyed by PRAGMA
-// user_version (docs/STORE_PLAN.md §1 "Migrations", §2 "Schema v1").
+// user_version (docs/STORE_PLAN.md §1 "Migrations", §2 "Schema v1" and
+// "Schema v2").
 //
 // Step N takes the store from user_version N-1 to N. For each pending step
 // the runner:
@@ -160,6 +161,52 @@ WHEN NEW.seq <> -1 AND NEW.seq <= (SELECT coalesce(max(seq), 0) FROM audit)
 BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;
 `;
 
+// ---------- schema v2 — GAP batch 2 ----------
+//
+// A reviewer's verdicts per artefact of a registered pack (B3.1, keyed by the
+// adapter's positional id within a content-hash pack id; the row cascades
+// with the pack — an eviction, a replace or the rehydrate's prune drops it
+// silently, a label re-registration carries it by behavioural identity
+// first) and a service record's time-boxed waivers of rubric findings (B3.2;
+// the row cascades with the service; a revoke keeps the row as history, so
+// no unique index: expiry is time-dependent and the admin rule keeps one
+// active waiver per (service, rule, artefact) inside its atomic()).
+const SCHEMA_V2 = `
+CREATE TABLE verdicts (
+  org_id        TEXT NOT NULL,
+  pack_id       TEXT NOT NULL,
+  artefact_id   TEXT NOT NULL,
+  artefact_key  TEXT NOT NULL,
+  family        TEXT,
+  status        TEXT NOT NULL CHECK (status IN ('trusted', 'suspect', 'failed')),
+  reason        TEXT,
+  behavior_hash TEXT NOT NULL,
+  actor         TEXT NOT NULL,
+  set_at        TEXT NOT NULL,
+  carried_from  TEXT,
+  PRIMARY KEY (org_id, pack_id, artefact_id),
+  FOREIGN KEY (org_id, pack_id) REFERENCES packs (org_id, id) ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE waivers (
+  id            INTEGER PRIMARY KEY,
+  org_id        TEXT    NOT NULL REFERENCES orgs (id) ON DELETE CASCADE,
+  service_id    INTEGER NOT NULL,
+  artefact_id   TEXT    CHECK (artefact_id IS NULL OR length(artefact_id) > 0),
+  rule_id       TEXT    NOT NULL,
+  reason        TEXT    NOT NULL,
+  author        TEXT    NOT NULL,
+  expires_at    TEXT    NOT NULL,
+  created_at    TEXT    NOT NULL,
+  revoked_at    TEXT,
+  revoked_by    TEXT,
+  revoke_reason TEXT,
+  CHECK ((revoked_at IS NULL) = (revoked_by IS NULL)),
+  FOREIGN KEY (service_id, org_id) REFERENCES services (id, org_id) ON DELETE CASCADE
+) STRICT;
+CREATE INDEX waivers_service ON waivers (service_id, org_id);
+`;
+
 export const STEPS = [
   {
     version: 1,
@@ -167,6 +214,13 @@ export const STEPS = [
     up(db) {
       execScript(db, SCHEMA_V1);
       prepare(db, 'INSERT INTO schema_meta (key, value) VALUES (?, ?)').run('store_id', randomUUID());
+    },
+  },
+  {
+    version: 2,
+    name: 'gap-batch-2',
+    up(db) {
+      execScript(db, SCHEMA_V2);
     },
   },
 ];
