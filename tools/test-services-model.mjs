@@ -365,7 +365,14 @@ test('buildHandoffPlan: tier and owners written only where the row has none; a s
   // The environment the draft names is not a row of the service: said, not fixed.
   const missing = buildHandoffPlan({ ...build, environment: 'staging' }, fresh);
   assert.equal(missing.environment, 'missing');
-  assert.match(missing.sentence(['tier']), / The environment staging was not declared by the pack — add it on the service page \(6b\)\.$/);
+  assert.equal(missing.sentence(['tier']), ' Service Orders API written: tier-2. The environment staging is not one of Orders API\'s — POST /api/services/1/environments { "name": "staging" } adds it.');
+  assert.doesNotMatch(missing.sentence(['tier']), /slice\s*\d|\b6b\b|service page|Settings/i, 'the hand-off never names a roadmap slice or a screen 6a does not have');
+  // A blank DEFINE environment builds for prod (instantiateBody's default): the row's prod is linked, nothing is "missing" (reverify finding).
+  const blank = buildHandoffPlan({ ...build, environment: '' }, fresh);
+  assert.equal(blank.environment, 'linked');
+  assert.equal(blank.sentence(['tier']), ' Service Orders API written: tier-2.');
+  assert.equal(buildHandoffPlan({ ...build, environment: undefined }, fresh).environment, 'linked');
+  assert.equal(buildHandoffPlan({ ...build, environment: '' }, { ...fresh, environments: [{ name: 'staging' }] }).sentence(['tier']), ' Service Orders API written: tier-2. The environment prod is not one of Orders API\'s — POST /api/services/1/environments { "name": "prod" } adds it.', 'a blank field compares as prod');
   // No row (an aggregate with no primary).
   const noRow = buildHandoffPlan(build, null);
   assert.deepEqual([noRow.outcome, noRow.row, noRow.patch, noRow.environment], ['no-row', null, {}, 'none']);
@@ -377,7 +384,7 @@ test('buildHandoffPlan: tier and owners written only where the row has none; a s
   // Build was opened from record 1 but the register landed on another row (renamed record / explicit slug): nothing patched there (A-B2, mutation check 2b).
   const other = buildHandoffPlan(build, { id: 9, slug: 'payments-platform', name: 'Payments Platform', tier: null, owners: [], environments: [] }, { origin: { id: 1, name: 'Payments Platform', slug: 'payment-service' } });
   assert.deepEqual([other.outcome, other.patch, other.environment], ['other-service', {}, 'missing']);
-  assert.equal(other.sentence(), " Registered under a new service payments-platform — Payments Platform (payment-service) was not linked: the pack's service name yields another slug, and a slug is fixed. Open Payments Platform to compare. The environment prod was not declared by the pack — add it on the service page (6b).");
+  assert.equal(other.sentence(), " Registered under a new service payments-platform — Payments Platform (payment-service) was not linked: the pack's service name yields another slug, and a slug is fixed. Open Payments Platform to compare. The environment prod is not one of Payments Platform's — POST /api/services/9/environments { \"name\": \"prod\" } adds it.");
   assert.equal(buildHandoffPlan(build, { ...fresh, id: 9 }, { originId: 1 }).outcome, 'other-service', 'originId alone serves');
   assert.equal(buildHandoffPlan(build, fresh, { originId: 1 }).outcome, 'written', 'the origin row itself is written');
 });

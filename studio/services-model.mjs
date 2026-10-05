@@ -414,7 +414,7 @@ export function buildHandoffPlan(build, row, { originId = null, origin = null, t
   const from = origin?.id ?? originId ?? null;
   const builtTier = build?.tier || null;
   const builtOwners = splitOwners(build?.owners);
-  const env = build?.environment || null;
+  const env = build?.environment || 'prod';   // what the pack declares: a blank DEFINE field builds for prod (build-model.mjs instantiateBody)
   const plan = { row: row ? { id: row.id, name: row.name, slug: row.slug } : null, outcome: 'linked', patch: {}, mismatch: null, environment: 'none' };
   if (!tableRead) return finish({ ...plan, row: null, outcome: 'unchecked' });
   if (!row) return finish({ ...plan, outcome: 'no-row' });
@@ -427,7 +427,8 @@ export function buildHandoffPlan(build, row, { originId = null, origin = null, t
   return finish(plan);
 
   function finish(p) {
-    const envNote = p.environment === 'missing' ? ` The environment ${env} was not declared by the pack — add it on the service page (6b).` : '';
+    // Said, not fixed, and in the product's words: no roadmap slice, no screen 6a does not have — the route is the way out (design A-4).
+    const envNote = p.environment === 'missing' ? ` The environment ${env} is not one of ${row.name}'s — POST /api/services/${row.id}/environments { "name": "${env}" } adds it.` : '';
     const sentence = (changed = []) => {
       let s;
       switch (p.outcome) {
