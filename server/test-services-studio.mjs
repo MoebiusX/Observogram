@@ -15,7 +15,8 @@
  * page's "current", Discover's pack); DEFINE's slug note offers the origin's
  * name while it still yields the slug, and not after a rename; a Build
  * hand-off survives a table that 500s once (the toast names the unchecked
- * row, Discover still opens the pack); a Build whose name lands under
+ * row and blames the table, never the catalogue, Discover still opens the
+ * pack); a Build whose name lands under
  * another slug registers a new service and never writes the origin. As
  * vera (viewer): the Build card and the three source buttons are
  * aria-disabled with the reason naming the org, the page has no Edit, the
@@ -285,10 +286,17 @@ test('BROWSER: the services journey — the home, the page, the bound workspace,
       await page.route(servicesTable, (route) => { if (route.request().method() === 'GET' && failed === 0) { failed++; route.fulfill({ status: 500, contentType: 'application/json', body: '{"ok":false,"error":"boom"}' }); } else route.continue(); });
       const toasts = [];
       await page.exposeFunction('__servicesToast', (x) => toasts.push(x));
-      await page.evaluate(() => { const el = document.querySelector('#toast'); new MutationObserver(() => { if (!el.hidden) window.__servicesToast(el.textContent); }).observe(el, { childList: true, attributes: true, characterData: true, subtree: true }); });
+      // Every message toast() set, in order — read off the mutation records (each toast replaces the text node), not the
+      // element after the fact: two toasts set in one synchronous run would collapse into the last one.
+      await page.evaluate(() => { const el = document.querySelector('#toast'); new MutationObserver((records) => { for (const r of records) for (const n of r.addedNodes) if (n.nodeType === 3 && n.data) window.__servicesToast(n.data); }).observe(el, { childList: true }); });
       await handoff(page);
       assert.equal(failed, 1, 'the table was asked once and refused once');
       assert.ok(toasts.some((x) => x.includes(UNCHECKED)), `the toast names the unchecked row: ${JSON.stringify(toasts)}`);
+      // The table's failure stays inside refreshServices(): it must never surface as the catalogue's failure (openInDiscover's
+      // older catch would swallow a throw and blame the catalogue — design §7.4 mutation check 9, A-M8).
+      const didNotRefresh = toasts.filter((x) => x.includes('Registered, but'));
+      assert.ok(didNotRefresh.length > 0, `a toast says what did not refresh: ${JSON.stringify(toasts)}`);
+      assert.ok(didNotRefresh.every((x) => x.includes('the services table did not refresh')), `every refresh toast blames the table, never the catalogue: ${JSON.stringify(didNotRefresh)}`);
       assert.equal(await mode(page), 'single');
       assert.ok(await $value(page, '#pack-select'), 'Discover opened the pack');
       await page.unroute(servicesTable);
