@@ -1,0 +1,1390 @@
+{
+  "reportVersion": 1,
+  "generator": null,
+  "generatedAt": null,
+  "pack": {
+    "id": "http-service.tier-3",
+    "label": null,
+    "source": null,
+    "name": "checkout-api",
+    "version": "0.1.0",
+    "service": "checkout-api",
+    "environment": null,
+    "environments": [
+      "prod"
+    ],
+    "criticality": "tier-3",
+    "artefacts": 26,
+    "sources": {
+      "Declared": 12,
+      "Verified": 0,
+      "Scaffold": 14
+    }
+  },
+  "tier": {
+    "graded": "tier-3",
+    "pack": "tier-3",
+    "from": "pack",
+    "service": null,
+    "environment": null,
+    "mismatch": false
+  },
+  "conformance": {
+    "declaredTier": "tier-3",
+    "conformant": true,
+    "scorePercent": 100,
+    "mustPercent": 100,
+    "must": {
+      "passed": 9,
+      "total": 9
+    },
+    "should": {
+      "passed": 0,
+      "total": 0
+    },
+    "byDimension": {
+      "L1": {
+        "applicable": 2,
+        "mustPassed": 2,
+        "mustTotal": 2,
+        "shouldPassed": 0,
+        "shouldTotal": 0
+      },
+      "L2": {
+        "applicable": 3,
+        "mustPassed": 3,
+        "mustTotal": 3,
+        "shouldPassed": 0,
+        "shouldTotal": 0
+      },
+      "L2X": {
+        "applicable": 1,
+        "mustPassed": 1,
+        "mustTotal": 1,
+        "shouldPassed": 0,
+        "shouldTotal": 0
+      },
+      "L3": {
+        "applicable": 2,
+        "mustPassed": 2,
+        "mustTotal": 2,
+        "shouldPassed": 0,
+        "shouldTotal": 0
+      },
+      "L5": {
+        "applicable": 1,
+        "mustPassed": 1,
+        "mustTotal": 1,
+        "shouldPassed": 0,
+        "shouldTotal": 0
+      }
+    },
+    "effective": null,
+    "counts": {
+      "blocking": 0,
+      "waived": 0,
+      "recommended": 0,
+      "passed": 9,
+      "notApplicable": 21
+    },
+    "clauses": {
+      "blocking": [],
+      "waived": [],
+      "recommended": [],
+      "passed": [
+        {
+          "id": "L1.MUST.availability_slo",
+          "dimension": "L1",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "At least one availability SLO (ratio-type SLI).",
+          "specRef": "§5.1",
+          "families": [
+            "sli",
+            "slo"
+          ]
+        },
+        {
+          "id": "L1.MUST.sli_covered_by_slo",
+          "dimension": "L1",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "Every declared SLI is referenced by at least one SLO.",
+          "specRef": "§5.1",
+          "families": [
+            "sli",
+            "slo"
+          ]
+        },
+        {
+          "id": "L2.MUST.otlp_receiver",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "OTel Collector pipeline declares an `otlp` receiver.",
+          "specRef": "§5.2",
+          "families": [
+            "pipeline_receiver"
+          ]
+        },
+        {
+          "id": "L2.MUST.service_name_required",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "`service.name` listed in otel.resource_attributes.required.",
+          "specRef": "§5.3",
+          "families": [
+            "otel"
+          ]
+        },
+        {
+          "id": "L2.MUST.semconv_floor",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "OTel SemConv version >= 1.26.0 (binding floor).",
+          "specRef": "§5.3",
+          "families": [
+            "otel"
+          ]
+        },
+        {
+          "id": "L2X.MUST.extended_backend_refs_resolve",
+          "dimension": "L2X",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "Every extended surface references a declared telemetry backend or explicit external ref.",
+          "specRef": "§5.12.4",
+          "families": []
+        },
+        {
+          "id": "L3.MUST.recording_rule_per_slo",
+          "dimension": "L3",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "Every SLO has at least one recording rule materialising its SLI.",
+          "specRef": "§5.5",
+          "families": [
+            "recording_rule"
+          ]
+        },
+        {
+          "id": "L3.MUST.service_overview_dashboard",
+          "dimension": "L3",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "At least one dashboard declared (service overview).",
+          "specRef": "§5.6",
+          "families": [
+            "dashboard"
+          ]
+        },
+        {
+          "id": "L5.MUST.synthetic_probe",
+          "dimension": "L5",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "At least one synthetic check declared.",
+          "specRef": "§5.11",
+          "families": [
+            "synthetic"
+          ]
+        }
+      ],
+      "notApplicable": [
+        {
+          "id": "L1.MUST.latency_slo",
+          "dimension": "L1",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "At least one latency SLO (threshold or distribution SLI).",
+          "specRef": "§5.1",
+          "families": [
+            "sli",
+            "slo"
+          ]
+        },
+        {
+          "id": "L1.SHOULD.domain_slo",
+          "dimension": "L1",
+          "severity": "SHOULD",
+          "minTier": "tier-1",
+          "description": "A third, domain-specific SLO beyond availability and latency (4+ SLOs total).",
+          "specRef": "§5.1",
+          "families": [
+            "slo"
+          ]
+        },
+        {
+          "id": "L2.MUST.semconv_current",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "OTel SemConv at currently-tracked version (1.27.0).",
+          "specRef": "§5.3",
+          "families": [
+            "otel"
+          ]
+        },
+        {
+          "id": "L2.MUST.resource_attrs_5plus",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "At least five required resource attributes declared.",
+          "specRef": "§5.3",
+          "families": [
+            "otel"
+          ]
+        },
+        {
+          "id": "L2.MUST.log_correlation",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "`otel.sdk.log_correlation: true` (trace IDs injected into logs).",
+          "specRef": "§5.3",
+          "families": [
+            "otel"
+          ]
+        },
+        {
+          "id": "L2.MUST.metrics_exporter",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "Pipelines export metrics.",
+          "specRef": "§5.2",
+          "families": [
+            "pipeline_exporter_metrics"
+          ]
+        },
+        {
+          "id": "L2.MUST.logs_and_traces_exporters",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "Pipelines export logs and traces.",
+          "specRef": "§5.2",
+          "families": [
+            "pipeline_exporter_logs",
+            "pipeline_exporter_traces"
+          ]
+        },
+        {
+          "id": "L2.MUST.tail_sampling",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "Pipelines include a tail_sampling processor.",
+          "specRef": "§5.2",
+          "families": [
+            "pipeline_processor"
+          ]
+        },
+        {
+          "id": "L2.MUST.metrics_logs_traces_backends",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "spec.telemetry.backends covers metrics + logs + traces.",
+          "specRef": "§5.12.1",
+          "families": [
+            "backend"
+          ]
+        },
+        {
+          "id": "L2.SHOULD.backend_gating_enforce",
+          "dimension": "L2",
+          "severity": "SHOULD",
+          "minTier": "tier-1",
+          "description": "tier-1 backends pin a `min` version with `gating: enforce`.",
+          "specRef": "§5.12.3",
+          "families": [
+            "backend"
+          ]
+        },
+        {
+          "id": "L3.SHOULD.derived_view",
+          "dimension": "L3",
+          "severity": "SHOULD",
+          "minTier": "tier-2",
+          "description": "At least one derived view (e.g. golden signals or per-tenant rollup).",
+          "specRef": "§5.5",
+          "families": [
+            "derived_view"
+          ]
+        },
+        {
+          "id": "L3.MUST.slo_burn_dashboard",
+          "dimension": "L3",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "A second dashboard (SLO burn) on top of service overview.",
+          "specRef": "§5.6",
+          "families": [
+            "dashboard"
+          ]
+        },
+        {
+          "id": "L3.MUST.tier1_dashboards",
+          "dimension": "L3",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "Service overview + SLO burn + deployment overlay + customer impact (4+ dashboards).",
+          "specRef": "§5.6",
+          "families": [
+            "dashboard"
+          ]
+        },
+        {
+          "id": "L4.MUST.multi_window_burn_rate",
+          "dimension": "L4",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "Every SLO has at least one burn-rate alert with multi-window policy.",
+          "specRef": "§5.7",
+          "families": [
+            "burn_rate"
+          ]
+        },
+        {
+          "id": "L4.SHOULD.forecast_on_availability",
+          "dimension": "L4",
+          "severity": "SHOULD",
+          "minTier": "tier-1",
+          "description": "At least one forecast declared on a primary availability SLO.",
+          "specRef": "§5.7",
+          "families": [
+            "forecast"
+          ]
+        },
+        {
+          "id": "L4.MUST.tier1_voice_route",
+          "dimension": "L4",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "SEV1 route includes a voice channel.",
+          "specRef": "§5.8",
+          "families": [
+            "alert_route"
+          ]
+        },
+        {
+          "id": "L4.MUST.tier1_at_least_one_automation",
+          "dimension": "L4",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "At least one self-healing remediation declared.",
+          "specRef": "§5.9",
+          "families": [
+            "remediation"
+          ]
+        },
+        {
+          "id": "L5.SHOULD.tier1_release_gate",
+          "dimension": "L5",
+          "severity": "SHOULD",
+          "minTier": "tier-1",
+          "description": "Regression gate set to a release-blocking mode.",
+          "specRef": "§5.10",
+          "families": [
+            "synthetic"
+          ]
+        },
+        {
+          "id": "L5.MUST.tier1_chaos_for_each_slo",
+          "dimension": "L5",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "Every SLO is the steady-state hypothesis of at least one chaos experiment.",
+          "specRef": "§5.11",
+          "families": [
+            "chaos"
+          ]
+        },
+        {
+          "id": "L5.MUST.tier2_chaos_staging",
+          "dimension": "L5",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "At least one chaos experiment scheduled monthly+ in staging.",
+          "specRef": "§5.11",
+          "families": [
+            "chaos"
+          ]
+        },
+        {
+          "id": "L5.MUST.tier1_weekly_prod_chaos",
+          "dimension": "L5",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "At least one chaos experiment runs weekly+ in production with OTel-instrumented synthetic probes.",
+          "specRef": "§5.11",
+          "families": [
+            "chaos"
+          ]
+        }
+      ]
+    },
+    "onPlaceholder": null
+  },
+  "placeholders": {
+    "conformant": false,
+    "markers": 15,
+    "writers": {
+      "legacy": false,
+      "crawler": false,
+      "fetcher": false,
+      "library": true
+    },
+    "counts": {
+      "rows": 19,
+      "symbols": 15,
+      "byState": {
+        "placeholder": 19,
+        "marker-only": 0,
+        "unmarked": 0,
+        "dangling": 0
+      },
+      "bySource": {
+        "crawl": 4,
+        "operator": 1,
+        "telemetry": 14
+      },
+      "bySection": {
+        "metadata": 1,
+        "telemetry.backends": 6,
+        "storage": 4,
+        "pipelines.exporters": 3,
+        "alerting.routes": 3,
+        "baselines": 1,
+        "validation.synthetic_checks": 1
+      }
+    },
+    "templates": {
+      "todos": 15,
+      "scaffolds": 14
+    },
+    "rows": [
+      {
+        "symbol": "metadata.owners",
+        "path": "$.metadata.owners",
+        "field": "owners",
+        "needs": "the owning team(s)",
+        "source": "operator",
+        "hint": "name the team that answers for the service",
+        "state": "placeholder",
+        "marker": "library.todo.metadata.owners",
+        "writer": "library",
+        "rule": "placeholder.metadata.owners"
+      },
+      {
+        "symbol": "telemetry.backends.metrics-prom",
+        "path": "$.spec.telemetry.backends[0]",
+        "field": "version.declared",
+        "needs": "Prometheus version you run: placeholder '3.14' (param prometheus_version) — The version of the Prometheus that stores the metrics (telemetry.backends metrics-prom version.declared, storage.metrics.version); min stays 2.53, the floor the expressions are known to work from, and tier-1 enforces the block.",
+        "source": "telemetry",
+        "hint": "the backend's build-info endpoint, or the image tag",
+        "state": "placeholder",
+        "marker": "library.todo.telemetry.backends.metrics-prom",
+        "writer": "library",
+        "rule": "placeholder.telemetry.backends.version"
+      },
+      {
+        "symbol": "telemetry.backends.metrics-prom",
+        "path": "$.spec.telemetry.backends[0]",
+        "field": "endpoints.0",
+        "needs": "Prometheus query endpoint: placeholder 'http://prometheus:9090' (param metrics_endpoint) — Where the metrics backend answers PromQL (telemetry.backends metrics-prom).",
+        "source": "telemetry",
+        "hint": "the port the deployment publishes; http://<product>:80 is the crawler's assumption",
+        "state": "placeholder",
+        "marker": "library.todo.telemetry.backends.metrics-prom",
+        "writer": "library",
+        "rule": "placeholder.telemetry.backends.endpoints"
+      },
+      {
+        "symbol": "telemetry.backends.logs-loki",
+        "path": "$.spec.telemetry.backends[1]",
+        "field": "version.declared",
+        "needs": "Loki version you run: placeholder '3.7' (param loki_version) — The version of the Loki that stores the logs (telemetry.backends logs-loki version.declared, storage.logs.version); min stays 3.0.",
+        "source": "telemetry",
+        "hint": "the backend's build-info endpoint, or the image tag",
+        "state": "placeholder",
+        "marker": "library.todo.telemetry.backends.logs-loki",
+        "writer": "library",
+        "rule": "placeholder.telemetry.backends.version"
+      },
+      {
+        "symbol": "telemetry.backends.logs-loki",
+        "path": "$.spec.telemetry.backends[1]",
+        "field": "endpoints.0",
+        "needs": "Loki endpoint: placeholder 'http://loki:3100' (param logs_endpoint) — Where the logs backend answers (telemetry.backends logs-loki).",
+        "source": "telemetry",
+        "hint": "the port the deployment publishes; http://<product>:80 is the crawler's assumption",
+        "state": "placeholder",
+        "marker": "library.todo.telemetry.backends.logs-loki",
+        "writer": "library",
+        "rule": "placeholder.telemetry.backends.endpoints"
+      },
+      {
+        "symbol": "telemetry.backends.traces-tempo",
+        "path": "$.spec.telemetry.backends[2]",
+        "field": "version.declared",
+        "needs": "Tempo version you run: placeholder '2.10' (param tempo_version) — The version of the Tempo that stores the traces (telemetry.backends traces-tempo version.declared, storage.traces.version); min stays 2.5.",
+        "source": "telemetry",
+        "hint": "the backend's build-info endpoint, or the image tag",
+        "state": "placeholder",
+        "marker": "library.todo.telemetry.backends.traces-tempo",
+        "writer": "library",
+        "rule": "placeholder.telemetry.backends.version"
+      },
+      {
+        "symbol": "telemetry.backends.traces-tempo",
+        "path": "$.spec.telemetry.backends[2]",
+        "field": "endpoints.0",
+        "needs": "Tempo endpoint: placeholder 'http://tempo:3200' (param traces_endpoint) — Where the traces backend answers (telemetry.backends traces-tempo).",
+        "source": "telemetry",
+        "hint": "the port the deployment publishes; http://<product>:80 is the crawler's assumption",
+        "state": "placeholder",
+        "marker": "library.todo.telemetry.backends.traces-tempo",
+        "writer": "library",
+        "rule": "placeholder.telemetry.backends.endpoints"
+      },
+      {
+        "symbol": "storage.metrics",
+        "path": "$.spec.storage.metrics",
+        "field": "version",
+        "needs": "Prometheus version you run: placeholder '3.14' (param prometheus_version) — The version of the Prometheus that stores the metrics (telemetry.backends metrics-prom version.declared, storage.metrics.version); min stays 2.53, the floor the expressions are known to work from, and tier-1 enforces the block.",
+        "source": "telemetry",
+        "hint": "the backend's build-info endpoint, or the image tag",
+        "state": "placeholder",
+        "marker": "library.todo.storage.metrics",
+        "writer": "library",
+        "rule": "placeholder.storage.version"
+      },
+      {
+        "symbol": "storage.metrics",
+        "path": "$.spec.storage.metrics",
+        "field": "remote_write.0.url",
+        "needs": "Prometheus remote-write URL: placeholder 'http://prometheus:9090/api/v1/write' (param remote_write_url) — Where the collector remote-writes metrics (pipelines.exporters.metrics).",
+        "source": "telemetry",
+        "hint": null,
+        "state": "placeholder",
+        "marker": "library.todo.storage.metrics",
+        "writer": "library",
+        "rule": "placeholder.storage.remote_write.0.url"
+      },
+      {
+        "symbol": "storage.logs",
+        "path": "$.spec.storage.logs",
+        "field": "version",
+        "needs": "Loki version you run: placeholder '3.7' (param loki_version) — The version of the Loki that stores the logs (telemetry.backends logs-loki version.declared, storage.logs.version); min stays 3.0.",
+        "source": "telemetry",
+        "hint": "the backend's build-info endpoint, or the image tag",
+        "state": "placeholder",
+        "marker": "library.todo.storage.logs",
+        "writer": "library",
+        "rule": "placeholder.storage.version"
+      },
+      {
+        "symbol": "storage.traces",
+        "path": "$.spec.storage.traces",
+        "field": "version",
+        "needs": "Tempo version you run: placeholder '2.10' (param tempo_version) — The version of the Tempo that stores the traces (telemetry.backends traces-tempo version.declared, storage.traces.version); min stays 2.5.",
+        "source": "telemetry",
+        "hint": "the backend's build-info endpoint, or the image tag",
+        "state": "placeholder",
+        "marker": "library.todo.storage.traces",
+        "writer": "library",
+        "rule": "placeholder.storage.version"
+      },
+      {
+        "symbol": "pipelines.exporters.metrics",
+        "path": "$.spec.pipelines.exporters.metrics",
+        "field": "endpoint",
+        "needs": "Prometheus remote-write URL: placeholder 'http://prometheus:9090/api/v1/write' (param remote_write_url) — Where the collector remote-writes metrics (pipelines.exporters.metrics).",
+        "source": "telemetry",
+        "hint": null,
+        "state": "placeholder",
+        "marker": "library.todo.pipelines.exporters.metrics",
+        "writer": "library",
+        "rule": "placeholder.pipelines.exporters.endpoint"
+      },
+      {
+        "symbol": "pipelines.exporters.logs",
+        "path": "$.spec.pipelines.exporters.logs",
+        "field": "endpoints.0",
+        "needs": "Loki OTLP ingest endpoint: placeholder 'http://loki:3100/otlp' (param logs_otlp_endpoint) — Where the collector pushes logs over OTLP/HTTP (pipelines.exporters.logs).",
+        "source": "telemetry",
+        "hint": null,
+        "state": "placeholder",
+        "marker": "library.todo.pipelines.exporters.logs",
+        "writer": "library",
+        "rule": "placeholder.pipelines.exporters.endpoints.0"
+      },
+      {
+        "symbol": "pipelines.exporters.traces",
+        "path": "$.spec.pipelines.exporters.traces",
+        "field": "endpoint",
+        "needs": "Tempo OTLP ingest endpoint: placeholder 'tempo:4317' (param traces_otlp_endpoint) — Where the collector pushes traces over OTLP/gRPC (pipelines.exporters.traces).",
+        "source": "telemetry",
+        "hint": null,
+        "state": "placeholder",
+        "marker": "library.todo.pipelines.exporters.traces",
+        "writer": "library",
+        "rule": "placeholder.pipelines.exporters.endpoint"
+      },
+      {
+        "symbol": "alerting.routes[0]",
+        "path": "$.spec.alerting.routes[0]",
+        "field": "channels.0.msteams",
+        "needs": "Chat channel for SEV1/SEV2: placeholder '#checkout-api-oncall' (param oncall_channel) — The Teams channel the SEV1 and SEV2 routes post to.",
+        "source": "crawl",
+        "hint": "alertmanager.yml receivers",
+        "state": "placeholder",
+        "marker": "library.todo.alerting.routes[0]",
+        "writer": "library",
+        "rule": "placeholder.alerting.routes.channels"
+      },
+      {
+        "symbol": "alerting.routes[1]",
+        "path": "$.spec.alerting.routes[1]",
+        "field": "channels.0.msteams",
+        "needs": "Chat channel for SEV1/SEV2: placeholder '#checkout-api-oncall' (param oncall_channel) — The Teams channel the SEV1 and SEV2 routes post to.",
+        "source": "crawl",
+        "hint": "alertmanager.yml receivers",
+        "state": "placeholder",
+        "marker": "library.todo.alerting.routes[1]",
+        "writer": "library",
+        "rule": "placeholder.alerting.routes.channels"
+      },
+      {
+        "symbol": "alerting.routes[2]",
+        "path": "$.spec.alerting.routes[2]",
+        "field": "channels.0.msteams",
+        "needs": "Chat channel for SEV3: placeholder '#checkout-api-team' (param team_channel) — The Teams channel the SEV3 route posts to.",
+        "source": "crawl",
+        "hint": "alertmanager.yml receivers",
+        "state": "placeholder",
+        "marker": "library.todo.alerting.routes[2]",
+        "writer": "library",
+        "rule": "placeholder.alerting.routes.channels"
+      },
+      {
+        "symbol": "baselines",
+        "path": "$.spec.baselines",
+        "field": "mttd_target_p50",
+        "needs": "MTTD / MTTR targets are the tier-3 defaults, not measured: set them from the service's incident history",
+        "source": "telemetry",
+        "hint": "15m / 5m / 2m are the importers' per-tier stubs",
+        "state": "placeholder",
+        "marker": "library.todo.baselines",
+        "writer": "library",
+        "rule": "placeholder.baselines.mttd_target_p50"
+      },
+      {
+        "symbol": "validation.synthetic_checks.health-probe",
+        "path": "$.spec.validation.synthetic_checks[0]",
+        "field": "target",
+        "needs": "Health endpoint URL: placeholder 'http://checkout-api:8080/health' (param health_url) — The URL the blackbox probe hits to prove the service answers.",
+        "source": "crawl",
+        "hint": "the service's health endpoint; https://<svc>.example.com/health is the importers' stub",
+        "state": "placeholder",
+        "marker": "library.todo.validation.synthetic_checks.health-probe",
+        "writer": "library",
+        "rule": "placeholder.validation.synthetic_checks.target"
+      }
+    ]
+  },
+  "assessments": {
+    "available": false,
+    "artefacts": 26,
+    "counts": {
+      "unreviewed": 26,
+      "trusted": 0,
+      "suspect": 0,
+      "failed": 0
+    },
+    "orphaned": 0,
+    "verdicts": []
+  },
+  "waivers": {
+    "available": false,
+    "counts": {
+      "active": 0,
+      "expired": 0,
+      "revoked": 0,
+      "unknown": 0
+    },
+    "waivers": []
+  },
+  "coverage": {
+    "families": [
+      {
+        "family": "sli",
+        "label": "Service level indicator",
+        "layer": "L1",
+        "group": "sli",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L1.MUST.availability_slo",
+          "L1.MUST.sli_covered_by_slo"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "slo",
+        "label": "Objective",
+        "layer": "L1",
+        "group": "slo",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L1.MUST.availability_slo",
+          "L1.MUST.sli_covered_by_slo"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "otel",
+        "label": "Instrumentation contract",
+        "layer": "L2",
+        "group": "otel",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L2.MUST.service_name_required",
+          "L2.MUST.semconv_floor"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "backend",
+        "label": "Telemetry backend",
+        "layer": "L2",
+        "group": "exp",
+        "count": 3,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 3,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "pipeline_receiver",
+        "label": "Pipeline receiver",
+        "layer": "L2",
+        "group": "rcv",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L2.MUST.otlp_receiver"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "pipeline_processor",
+        "label": "Pipeline processor",
+        "layer": "L2",
+        "group": "prc",
+        "count": 2,
+        "declared": 2,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "pipeline_exporter_metrics",
+        "label": "Pipeline exporter",
+        "layer": "L2",
+        "group": "exp",
+        "count": 1,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 1,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "pipeline_exporter_logs",
+        "label": "Pipeline exporter",
+        "layer": "L2",
+        "group": "exp",
+        "count": 1,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 1,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "pipeline_exporter_traces",
+        "label": "Pipeline exporter",
+        "layer": "L2",
+        "group": "exp",
+        "count": 1,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 1,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "storage_metrics",
+        "label": "Storage",
+        "layer": "L2",
+        "group": "exp",
+        "count": 1,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 1,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "storage_logs",
+        "label": "Storage",
+        "layer": "L2",
+        "group": "exp",
+        "count": 1,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 1,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "storage_traces",
+        "label": "Storage",
+        "layer": "L2",
+        "group": "exp",
+        "count": 1,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 1,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "scrape_job",
+        "label": "Scrape job",
+        "layer": "L2",
+        "group": "rcv",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "metric",
+        "label": "Metric",
+        "layer": "L2",
+        "group": "metrics",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "profiling",
+        "label": "Profiling",
+        "layer": "L2X",
+        "group": "prof",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "network",
+        "label": "Network telemetry",
+        "layer": "L2X",
+        "group": "net",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "policy_engine",
+        "label": "Policy engine",
+        "layer": "L2X",
+        "group": "poe",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "mesh",
+        "label": "Service mesh telemetry",
+        "layer": "L2X",
+        "group": "mesh",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "collection",
+        "label": "Collection",
+        "layer": "L2X",
+        "group": "col",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "recording_rule",
+        "label": "Recording rule",
+        "layer": "L3",
+        "group": "qry",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L3.MUST.recording_rule_per_slo"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "derived_view",
+        "label": "Derived view",
+        "layer": "L3",
+        "group": "view",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "dashboard",
+        "label": "Dashboard",
+        "layer": "L3",
+        "group": "dash",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L3.MUST.service_overview_dashboard"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "panel",
+        "label": "Dashboard panel",
+        "layer": "L3",
+        "group": "panel",
+        "count": 2,
+        "declared": 2,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "burn_rate",
+        "label": "Burn-rate alert",
+        "layer": "L4",
+        "group": "pol",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "forecast",
+        "label": "Forecast",
+        "layer": "L4",
+        "group": "pol",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "alert_route",
+        "label": "Alert route",
+        "layer": "L4",
+        "group": "alr",
+        "count": 3,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 3,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "alert_rule",
+        "label": "Alert rule",
+        "layer": "L4",
+        "group": "rule",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "remediation",
+        "label": "Self-healing action",
+        "layer": "L4",
+        "group": "heal",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "baselines",
+        "label": "Baselines",
+        "layer": "L5",
+        "group": "base",
+        "count": 1,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 1,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "chaos",
+        "label": "Chaos experiment",
+        "layer": "L5",
+        "group": "chaos",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "synthetic",
+        "label": "Synthetic check",
+        "layer": "L5",
+        "group": "syn",
+        "count": 1,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 1,
+        "required": true,
+        "clauses": [
+          "L5.MUST.synthetic_probe"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "imports",
+        "label": "Import",
+        "layer": "GOV",
+        "group": "imp",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      }
+    ],
+    "counts": {
+      "present": 20,
+      "absent": 12,
+      "missing": 0
+    }
+  },
+  "goesBlind": {
+    "available": true,
+    "top": 10,
+    "nodes": 28,
+    "edges": 15,
+    "sloBlindingNodes": 5,
+    "risks": [
+      {
+        "key": "metric::{\"name\":\"checkout_api:availability:ratio_5m\"}",
+        "kind": "metric",
+        "label": "checkout_api:availability:ratio_5m",
+        "summary": {
+          "slos": 1,
+          "alerts": 1,
+          "panels": 2,
+          "dashboards": 1,
+          "routes": 0,
+          "remediations": 0,
+          "total": 7
+        },
+        "weight": 11.05,
+        "byKind": {
+          "slo": 1,
+          "sli": 1,
+          "burn_rate": 1,
+          "recording_rule": 1,
+          "panel": 2,
+          "dashboard": 1
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "metric::{\"name\":\"http_server_request_duration_seconds_count\"}",
+        "kind": "metric",
+        "label": "http_server_request_duration_seconds_count",
+        "summary": {
+          "slos": 1,
+          "alerts": 1,
+          "panels": 2,
+          "dashboards": 1,
+          "routes": 0,
+          "remediations": 0,
+          "total": 6
+        },
+        "weight": 9.05,
+        "byKind": {
+          "slo": 1,
+          "sli": 1,
+          "burn_rate": 1,
+          "panel": 2,
+          "dashboard": 1
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "recording_rule::{\"record\":\"checkout_api:availability:ratio_5m\"}",
+        "kind": "recording_rule",
+        "label": "checkout_api:availability:ratio_5m",
+        "summary": {
+          "slos": 1,
+          "alerts": 1,
+          "panels": 2,
+          "dashboards": 1,
+          "routes": 0,
+          "remediations": 0,
+          "total": 6
+        },
+        "weight": 9.05,
+        "byKind": {
+          "slo": 1,
+          "sli": 1,
+          "burn_rate": 1,
+          "panel": 2,
+          "dashboard": 1
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "sli::{\"id\":\"availability\"}",
+        "kind": "sli",
+        "label": "availability",
+        "summary": {
+          "slos": 1,
+          "alerts": 1,
+          "panels": 2,
+          "dashboards": 1,
+          "routes": 0,
+          "remediations": 0,
+          "total": 5
+        },
+        "weight": 6.05,
+        "byKind": {
+          "slo": 1,
+          "burn_rate": 1,
+          "panel": 2,
+          "dashboard": 1
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "slo::{\"id\":\"availability_99\"}",
+        "kind": "slo",
+        "label": "availability_99",
+        "summary": {
+          "slos": 0,
+          "alerts": 1,
+          "panels": 1,
+          "dashboards": 1,
+          "routes": 0,
+          "remediations": 0,
+          "total": 3
+        },
+        "weight": 2.7,
+        "byKind": {
+          "burn_rate": 1,
+          "panel": 1,
+          "dashboard": 1
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "burn_rate::{\"slo\":\"availability_99\"}",
+        "kind": "burn_rate",
+        "label": "burn-rate alert: availability_99",
+        "summary": {
+          "slos": 1,
+          "alerts": 0,
+          "panels": 0,
+          "dashboards": 0,
+          "routes": 0,
+          "remediations": 0,
+          "total": 1
+        },
+        "weight": 0,
+        "byKind": {},
+        "unprotected": {
+          "slos": [
+            {
+              "key": "slo::{\"id\":\"availability_99\"}",
+              "label": "availability_99"
+            }
+          ],
+          "alerts": []
+        }
+      },
+      {
+        "key": "panel::{\"binds_to\":\"slis.availability\",\"parent\":\"dashboards.checkout-api-overview\"}",
+        "kind": "panel",
+        "label": "slis-availability",
+        "summary": {
+          "slos": 0,
+          "alerts": 0,
+          "panels": 0,
+          "dashboards": 1,
+          "routes": 0,
+          "remediations": 0,
+          "total": 1
+        },
+        "weight": 0.35,
+        "byKind": {
+          "dashboard": 1
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "panel::{\"binds_to\":\"slos.availability_99\",\"parent\":\"dashboards.checkout-api-overview\"}",
+        "kind": "panel",
+        "label": "slos-availability-99",
+        "summary": {
+          "slos": 0,
+          "alerts": 0,
+          "panels": 0,
+          "dashboards": 1,
+          "routes": 0,
+          "remediations": 0,
+          "total": 1
+        },
+        "weight": 0.35,
+        "byKind": {
+          "dashboard": 1
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      }
+    ]
+  },
+  "responsePath": {
+    "configured": false,
+    "compared": false,
+    "counts": {
+      "remediations": 0,
+      "alerts": 0,
+      "linked": 0,
+      "unresolved": 0,
+      "uncovered": 0,
+      "blocked": 0,
+      "suggestions": 0,
+      "placeholder": 0
+    },
+    "links": [],
+    "unresolved": [],
+    "uncovered": [],
+    "families": [],
+    "warnings": []
+  }
+}

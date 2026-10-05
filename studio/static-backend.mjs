@@ -44,6 +44,7 @@ import { adapt, listEnvironments, applyEnvironmentOverlay } from '../tools/lib/a
 import { serviceMetadata } from '../tools/lib/service-keys.mjs';
 import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from '../tools/lib/validator.mjs';
 import { evaluateConformance, RUBRIC } from '../tools/lib/conformance.mjs';
+import { packConformance } from '../tools/lib/pack-conformance.mjs';
 import { compile, listTargets, compileCatalog, compileArtifact } from '../tools/lib/compile.mjs';
 import { makeZip } from '../tools/lib/zip.mjs';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
@@ -72,14 +73,25 @@ export const FEATURES = [
   ['/api/journeys', 'Journeys'],
   ['/api/library', 'Build'],
   ['/api/admin', 'Administration'],
+  ['/api/waivers', 'Waivers'],                        // /api/waivers/:id/revoke
   ['/auth/', 'Sign-in'],
 ];
-// The per-pack sub-routes the server alone answers.
-const PACK_FEATURES = { retrofeed: 'Compare', 'deploy-bulk': 'Deploy' };
+// The waivers live on a service record (GAP batch 2, B3.2): a bundled pack
+// has none, so `GET`/`POST /api/services/:id/waivers` is the server's alone
+// — named here rather than under a '/api/services' prefix, which would claim
+// the record routes too (follow-up `B3.2-bundle-waivers` for a baked sidecar).
+const SERVICE_WAIVERS = /^\/api\/services\/[^/]+\/waivers(?:[/?]|$)/;
+// The per-pack sub-routes the server alone answers — `verdicts` for its
+// writes (PUT / DELETE; the GET is answered below with the empty document)
+// and `audit-report` (GAP batch 2, B3.5: its goes-blind section is the blast
+// radius over the traceability graph, whose PromQL parser the bundle cannot
+// inline — the Compare blocker; `placeholders` IS answered below).
+const PACK_FEATURES = { retrofeed: 'Compare', 'deploy-bulk': 'Deploy', verdicts: 'Verdicts', 'audit-report': 'Audit report' };
 
 export function featureOf(pathname) {
   const sub = /^\/api\/packs\/[^/]+\/([^/?]+)/.exec(pathname)?.[1];
   if (sub && PACK_FEATURES[sub]) return PACK_FEATURES[sub];
+  if (SERVICE_WAIVERS.test(pathname)) return 'Waivers';
   let best = null;
   for (const [prefix, name] of FEATURES) {
     if (pathname.startsWith(prefix) && (!best || prefix.length > best[0].length)) best = [prefix, name];
@@ -139,6 +151,22 @@ function overlaidCanonical(canonical, envName) {
     };
   }
   return { canonical: next, effective };
+}
+
+// server/verdict-admin.mjs artefactIndex's walk — the layers and the L4
+// subgroups of the studio board (studio/constants.mjs), inlined there and
+// here so neither the server nor the bundle reads the other; tools/test-
+// verdict-admin.mjs holds the two to the same count over payment-service.
+const LAYER_WALK = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
+const L4_WALK = ['policy', 'alerting', 'healing'];
+function artefactCount(adapted) {
+  const layers = adapted?.layers || {};
+  let n = 0;
+  for (const id of LAYER_WALK) {
+    if (id === 'L4') for (const sub of L4_WALK) n += (layers.L4?.[sub] || []).length;
+    else n += (layers[id] || []).length;
+  }
+  return n;
 }
 
 // server/index.mjs librarySummaryFor: validationSummary over the todos a
@@ -314,6 +342,23 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
     }
   }
 
+  // GET /api/packs/:id/verdicts — server/verdict-admin.mjs verdictsDocument
+  // (GAP batch 2, B3.1): a reviewer's verdicts live in the server's store on
+  // a REGISTERED pack, and a bundled pack is never registered, so the
+  // server's own answer for it is the empty document — every artefact
+  // unreviewed. The writes (PUT / DELETE …/verdicts/:artefact) are
+  // PACK_FEATURES 'Verdicts' (501).
+  async function verdicts(id) {
+    const p = await packFor(id, { ok: false });
+    if (p instanceof Response) return p;
+    try {
+      const n = artefactCount(adapt(p.canonical));
+      return json(200, { ok: true, pack: p.meta.id, verdicts: [], summary: { artefacts: n, trusted: 0, suspect: 0, failed: 0, unreviewed: n, orphaned: 0 } });
+    } catch (e) {
+      return json(500, { ok: false, error: e.message });
+    }
+  }
+
   // GET /api/packs/:id/compile-catalog
   async function catalogOfCompile(id, params) {
     const p = await packFor(id, { ok: false });
@@ -410,6 +455,21 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
     }
   }
 
+  // GET /api/packs/:id/placeholders — server/routes/audit-report.mjs (GAP
+  // batch 2, B3.5): packConformance over the overlaid canonical, bare — the
+  // rows `packc conformance` prints; the engine is zero-store, so the bundle
+  // answers it in the browser.
+  async function placeholders(id, params) {
+    const p = await packFor(id);
+    if (p instanceof Response) return p;
+    try {
+      const { canonical: overlaid } = overlaidCanonical(p.canonical, readEnv(params));
+      return json(200, packConformance(overlaid), { 'Cache-Control': 'no-store' });
+    } catch (e) {
+      return json(500, { error: e.message });
+    }
+  }
+
   const deny = (pathname) => json(501, { ok: false, denied: DENIED, error: denialText(featureOf(pathname), product) });
 
   async function route(url, method) {
@@ -424,6 +484,8 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
       if (rest === undefined) return layered(id, url.searchParams);
       if (rest === 'canonical') return canonical(id, url.searchParams);
       if (rest === 'conformance') return conformance(id, url.searchParams);
+      if (rest === 'verdicts') return verdicts(id);
+      if (rest === 'placeholders') return placeholders(id, url.searchParams);
       if (rest === 'compile-catalog') return catalogOfCompile(id, url.searchParams);
       if (rest === 'compile-artifact') return artifact(id, url.searchParams);
       if (rest === 'export.zip') return exportZip(id, url.searchParams);
@@ -468,8 +530,11 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
 // Installs the backend on a window: its fetch answers our routes and hands
 // everything else to the page's own; the `api` link and menu item, which
 // navigate to /api/packs, are disabled (a navigation never reaches a fetch
-// wrapper); the Export button downloads the ZIP this backend builds; the
-// notice says what the page is.
+// wrapper); the Export button downloads the ZIP this backend builds; a
+// download anchor on one of our routes (the Conformance view's audit-report
+// anchors) is answered by this backend too — a denial shows its sentence in
+// the notice row instead of a canceled download; the notice says what the
+// page is.
 export function installStaticBackend(config, win = globalThis.window) {
   const upstream = win.fetch.bind(win);
   const origin = win.location.origin;
@@ -503,9 +568,33 @@ export function installStaticBackend(config, win = globalThis.window) {
     } else if (t.closest('[data-action="api"]')) {
       e.stopImmediatePropagation();
       e.preventDefault();
+    } else {
+      const a = t.closest('a[download]');
+      if (a && backend.isOurs(a.href)) {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        downloadThroughBackend(backend, doc, win, a.href).catch((err) => showError(doc, `Download failed: ${err.message}`));
+      }
     }
   }, true);
   return backend;
+}
+
+// An `<a download>` on one of our routes: the browser would fetch the href
+// itself — a static host answers 404 and the download is canceled with no
+// sentence — so the click is answered here. A denial (501 no-backend, 404)
+// shows the body's sentence in the notice row; an answer downloads as a Blob
+// named by the server's rule, as the Export button does.
+async function downloadThroughBackend(backend, doc, win, href) {
+  const r = await backend.handle(href);
+  if (!r) throw new Error('no answer');
+  if (!r.ok) {
+    const body = await r.json().catch(() => null);
+    showError(doc, body?.error || `${r.status} ${r.statusText || ''}`.trim());
+    return;
+  }
+  const filename = /filename="([^"]+)"/.exec(r.headers.get('content-disposition') || '')?.[1] || new URL(href, win.location.href).pathname.split('/').pop();
+  saveBlob(doc, win, await r.blob(), filename);
 }
 
 // The Advanced menu's "Pack catalogue API" item (studio/app.mjs
@@ -541,6 +630,11 @@ async function exportFocusedPack(backend, doc, win) {
   const blob = await r.blob();
   const disposition = r.headers.get('content-disposition') || '';
   const filename = /filename="([^"]+)"/.exec(disposition)?.[1] || `${id}.bundle.zip`;
+  saveBlob(doc, win, blob, filename);
+}
+
+// A Blob download: an object URL on a transient anchor, revoked later.
+function saveBlob(doc, win, blob, filename) {
   const a = doc.createElement('a');
   const blobUrl = win.URL.createObjectURL(blob);
   a.href = blobUrl;

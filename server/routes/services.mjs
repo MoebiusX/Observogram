@@ -28,8 +28,8 @@
 // The audit actor is the principal's; the rows each route writes are
 // listed in server/route-table.mjs.
 //
-// A service's deletion cascades its environments and its pack links; the
-// packs stay registered (a pack is not a service) and the deletion holds
+// A service's deletion cascades its environments, its pack links and its
+// waivers (server/routes/waivers.mjs); the packs stay registered (a pack is not a service) and the deletion holds
 // across restarts and rehydrates — the next register of a pack naming the
 // service re-creates it, by the person registering (server/pack-registry.mjs).
 
@@ -102,13 +102,13 @@ export function servicesRoutes({ authorize }) {
     res.json({ ok: true, service: serviceViewOf(db, service), changed });
   }));
 
-  // The environments and the pack links cascade (they write no row of
-  // their own; the detail counts them); the packs stay registered.
+  // The environments, the pack links and the waivers cascade (they write
+  // no row of their own; the detail counts them); the packs stay registered.
   router.delete('/api/services/:id', authorize('DELETE /api/services/:id'), handler((req, res, { db, actor }) => {
     const id = pathId(req, res, 'id', 'service');
     if (id === null) return;
-    const { service, environments, packLinks } = deleteServiceFromApi(db, actor, id);
-    res.json({ ok: true, deleted: service, environments, packLinks });
+    const { service, environments, packLinks, waivers } = deleteServiceFromApi(db, actor, id);
+    res.json({ ok: true, deleted: service, environments, packLinks, waivers });
   }));
 
   // ---------- environments ----------

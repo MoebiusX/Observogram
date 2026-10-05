@@ -12,8 +12,9 @@
 // no two may start from the same total, and one that starts where a journey
 // entry starts must end where it ends, so the two documents cannot disagree.
 // A batch's delivery report (`docs/DELIVERY-*.md`, the batch acceptance's
-// "short delivery report") quotes the same pairs per work item: it must exist
-// and every pair it states must be one the journey states.
+// "short delivery report" — one per PR of rebadge batch 2) quotes the same
+// pairs per work item: it must exist and every pair it states must be one
+// the journey states.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -23,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const journey = readFileSync(resolve(ROOT, 'docs/UPDATE_JOURNEY.md'), 'utf8');
 const changelog = readFileSync(resolve(ROOT, 'docs/CHANGELOG.md'), 'utf8');
-const DELIVERY_REPORTS = ['docs/DELIVERY-REBADGE-BATCH2.md'];
+const DELIVERY_REPORTS = ['docs/DELIVERY-REBADGE-BATCH2.md', 'docs/DELIVERY-GAP-BATCH2.md'];
 
 const PAIR = /Tests: (\d+) → (\d+)/g;
 
@@ -133,6 +134,13 @@ const LEDGER = [
   'tools/test-upconvert-merge.mjs',
   'tools/test-platform.mjs',
   'tools/test-doc-test-totals.mjs',
+  'tools/test-waivers.mjs',
+  'tools/test-remediation-flow.mjs',
+  'tools/test-remediation-flow-view.mjs',
+  'tools/test-glossary.mjs',
+  'server/test-glossary-shell.mjs',
+  'tools/test-audit-report.mjs',
+  'server/test-audit-report-api.mjs',
 ];
 const WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
 const count = (w) => (/^\d+$/.test(w) ? Number(w) : WORDS[w.toLowerCase()]);

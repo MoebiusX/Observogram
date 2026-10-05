@@ -278,6 +278,8 @@ Belongs here:
 - evidence table
 - drift drill
 - traceability to explain why an artifact matters
+- the response path: which alert each declared remediation answers to, and
+  whether that alert is live (read-only here; the fixes are on Remediate)
 - comparison and atlas analysis as advanced diagnostics
 
 Does not belong here:
@@ -297,6 +299,8 @@ Belongs here:
 - deploy modal
 - validation status
 - rollback/dry-run affordances
+- the response path's next steps: deploy a missing burn alert, reconcile a
+  drifted one, name the alert an unresolved trigger means
 
 Does not belong here:
 

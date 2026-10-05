@@ -92,8 +92,22 @@ the testable layer).
 ## 4. CSS: one class-prefix per functional zone, split files only along the vendoring seam
 
 Zone prefixes (`.mc-*` verdict widgets, `.rq-*` triage queue, `.disco-*`
-Discover, `.diag-*` Diagnose, `.cpc-*`/`.compare-*` Compare) — keep new
-classes inside their zone's prefix. **Never mass-rename existing classes**:
+Discover, `.diag-*` Diagnose, `.cpc-*`/`.compare-*` Compare; `.dvb-verdict`
+the Discover board's reviewer-verdict badge and `.ux-chip-verdict` the fifth
+status property's chip in `ux.css`, `.verdict-*` the drawer's Verdict
+section — all drawn by `studio/verdict-html.mjs` / `studio/verdicts.mjs`,
+nothing without a verdict; `.rflow-*` the response path of
+`studio/remediation-flow-view.mjs`, one zone in `ux-remediate.css` drawn on
+Remediate and on Diagnose alike, nothing for a pack without
+`spec.remediation`; `.ux-gloss-*` the glossary marks of `studio/glossary.mjs`
+in `ux.css` — a toggletip beside a family label or a spec term, drawn only
+when the taxonomy file's v2 `glossary` explains it, `--ux-*` tokens only;
+`.conf-exports` the Conformance view's audit-report download row in `app.css`,
+drawn only with a focused pack id) — keep new classes inside their zone's
+prefix. The service audit report's `.ar-*` zone is not a studio stylesheet:
+it is `REPORT_CSS` in `tools/lib/audit-report.mjs`, inlined into one
+standalone document over `design-tokens.css` + `design-kit.css` (it qualifies
+kit classes under `.ar-*` and redefines none). **Never mass-rename existing classes**:
 they are referenced from both .css and .mjs template strings and there is no
 visual-regression net.
 

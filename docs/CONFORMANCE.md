@@ -83,6 +83,48 @@ conformant     = must.passed === must.total   (per spec §8 definition)
 
 The canonical example itself fails 4 MUSTs (`L3.MUST.recording_rule_per_slo`, `L4.MUST.multi_window_burn_rate`, `L5.MUST.tier1_chaos_for_each_slo`, `L5.MUST.tier1_weekly_prod_chaos`) because two of its five SLOs (`api_latency_99_p99_500ms`, `consumer_success_99_95`) aren't covered by a recording rule, burn-rate alert, or chaos experiment. The studio surfaces these as red-X items in Advanced -> Conformance: visible drift the spec's own reference example carries.
 
+## Waivers
+
+A **waiver** (GAP batch 2, B3.2; `tools/lib/waivers.mjs`) is a time-boxed, reasoned suppression of
+one finding: a rubric clause (`ruleId`) and, for the four per-item clauses — `L1.MUST.sli_covered_by_slo`,
+`L3.MUST.recording_rule_per_slo`, `L4.MUST.multi_window_burn_rate`, `L5.MUST.tier1_chaos_for_each_slo`
+(`SUBJECT_CLAUSES`) — optionally one canonical symbol of it (`artefactId`: `slos.<id>` / `slis.<id>`, the
+adapter's `defines` vocabulary, never a JSONPath). `clauseSubjects(clauseId, canonical)` names the FAILING
+subjects of such a clause (the spec's own example fails L3 on `slos.consumer_success_99_95`, L4 on
+`slos.api_latency_99_p99_500ms` and L5 chaos on three SLOs — the "orphan SLOs" above, per clause); it is
+`[]` exactly when the clause passes, so subjects and verdict cannot disagree.
+
+**A waiver never rewrites the rubric.** `evaluateConformance` is untouched; `applyWaiversToConformance`
+returns the SAME report object when no open waiver exists and otherwise adds a `waivers` block beside the
+engine's numbers: per clause `waived` (every failing subject covered — a pack-level waiver covers them all,
+a scoped one its own and beats the pack-level), `partial` (some covered: the clause still fails) or
+`expired` (none covered; a lapsed waiver would have — the finding fails again and the waiver is shown),
+the waivers quoted, `effective` — the same arithmetic as *Scoring* with the waived clauses read as met
+(`conformant`, `must`, `should`, `scorePercent`, `mustPercent`, `byDimension`) — and the `unused` waivers
+that match no failing clause. States are computed, never stored: `active`, `expired` (at or after
+`expiresAt`), `revoked` (history; matches nothing). Schema errors are not waivable: an invalid pack is
+never graded.
+
+Two homes, one object. On the server a waiver lives on the **service record** a pack is primarily linked
+to (`POST /api/services/:id/waivers`, operator; at most 366 days ahead; one active per `(ruleId,
+artefactId)`, a new one after expiry; `POST /api/waivers/:id/revoke`; README "Waive A Conformance
+Finding") and `GET /api/packs/:id/conformance` carries the overlay — `/api/validate` and the library routes
+keep the bare report. Without a server, `packc conformance --waivers <file>` reads `{ "version": 1,
+"waivers": [...] }` — the object the API serves per row — and applies the rubric waivers to the rubric line
+and `--json`'s `rubric.waivers`, and the placeholder-rule waivers (`placeholder.<family>.<field>`) to the
+placeholder rows (`waived` partition; `--strict` fails on unwaived rows alone). The `author` and
+`revokedBy` are the audit actor — a login or the token label, never an email — visible to every member and
+to anyone a sidecar file or report is shared with.
+
+## The service audit report
+
+`GET /api/packs/:id/audit-report` and `packc audit-report` (GAP batch 2; README "Export A Service Audit
+Report", `docs/ADAPTER.md` "The service audit report") put this rubric's grade first in one document — the
+engine's numbers headline, a waivers overlay's `effective` beside them — followed by the placeholders, the
+verdicts, the waivers, the coverage by family (a family a clause that applies at the graded tier names is
+*required*), the goes-blind risks and the declared response path. The report reads the same
+`conformanceReportFor()` body the `/conformance` route sends, so the two never grade one pack differently.
+
 ## Extending the rubric
 
 Each clause is a self-contained `{...}` block in `tools/lib/conformance.mjs`. Add new ones inline with their `specRef`. The server's `GET /api/maturity-rubric` will pick them up automatically; `tools/test-packs.mjs` will re-score every bundled pack against the new clause set.

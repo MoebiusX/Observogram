@@ -28,6 +28,7 @@ import {
 } from './compare-view.mjs';
 import { compareModeFor } from './diagnostic-grade.mjs';
 import { artefactLabel, deploySelectionFromEntries, deploySurfaceForArtefact } from './artifact-model.mjs';
+import { buildRemediationFlowViewModel, packDeclaresRemediation, remediationFlowEngine, renderRemediationFlow } from './remediation-flow-view.mjs';
 import {
   decisionHeaderHtml, wireUxActions, emptyStateHtml, statusChipHtml, GLOSSARY, announce, plural, listSentence,
 } from './ux-kit.mjs';
@@ -1024,6 +1025,22 @@ function yamlScalar(value) {
   return JSON.stringify(s);
 }
 
+// The response path (GAP batch 2, B3.3) — after the plan, before the
+// compiler: each declared remediation, the alert its trigger names, that
+// alert's state against live, and what next. Gated: nothing for a pack
+// without spec.remediation, nothing while a comparison is loading or after
+// it failed (the plan's own header says so then). The engine loads at call
+// time through the view module, which repaints once when it lands.
+function renderRemediateFlow(root) {
+  if (!packDeclaresRemediation(state.pack)) return {};
+  if (state.packB && (!state.diff || state.diff.error)) return {};
+  const engine = remediationFlowEngine({ onLoaded: () => appHost.renderMainView() });
+  const model = buildRemediationFlowViewModel(engine, {
+    pack: state.pack, packB: state.packB, diff: state.diff, compareBId: state.compareBId, packId: state.selectedPackId,
+  });
+  return renderRemediationFlow(root, model, appHost, { screen: 'remediate' });
+}
+
 export function renderCompileView(host) {
   // The decision header and the strategies lead the view; the artefact
   // compiler below is a focused, collapsed subview — the drill-down to
@@ -1032,9 +1049,11 @@ export function renderCompileView(host) {
   root.className = 'ux-rm-view';
   host.appendChild(root);
   const planHandlers = renderRemediationPlan(root);
+  const flowHandlers = renderRemediateFlow(root);
   renderCompiler(root);
   wireUxActions(root, {
     ...planHandlers,
+    ...flowHandlers,
     'rm-compiler-open': () => { compilerUi.open = true; appHost.renderMainView(); focusCompiler(); },
     'rm-compiler-close': () => { compilerUi.open = false; appHost.renderMainView(); focusCompiler(); },
   });

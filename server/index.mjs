@@ -18,6 +18,7 @@
  *   GET  /api/packs/:id                   Adapted layered pack (?env=<name>)
  *   GET  /api/packs/:id/canonical         Canonical manifest + env overlay (?env=<name>)
  *   GET  /api/packs/:id/conformance       Maturity-rubric scoring (?env=<name>; onPlaceholder for a library-built pack; graded at the service record's tier when one is set — `tier`)
+ *   GET  /api/packs/:id/verdicts          A reviewer's verdicts on the pack's artefacts (server/routes/verdicts.mjs; PUT / DELETE …/verdicts/:artefact record and clear one)
  *   GET  /api/maturity-rubric             Rubric metadata (clause definitions)
  *   POST /api/validate                    Validate uploaded JSON/YAML body (summary.onPlaceholder for a library-built pack)
  *   GET  /api/library                     The pack library index (BUILD journey, docs/BUILD_JOURNEY.md)
@@ -38,7 +39,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
-import { adapt, listEnvironments, applyEnvironmentOverlay } from '../tools/lib/adapter.mjs';
+import { adapt, listEnvironments, overlaidCanonical } from '../tools/lib/adapter.mjs';
 import { serviceMetadata, catalogEntryOf } from '../tools/lib/service-keys.mjs';
 import { isLegacyLayeredPack, upconvertLegacyPack } from '../tools/lib/legacy.mjs';
 import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from '../tools/lib/validator.mjs';
@@ -71,7 +72,12 @@ import { auditAfter, actorForRecord, bounded, finite } from './audit-after.mjs';
 import { identityRoutes } from './routes/identity.mjs';
 import { servicesRoutes } from './routes/services.mjs';
 import { auditRoutes } from './routes/audit.mjs';
+import { verdictsRoutes } from './routes/verdicts.mjs';
+import { waiversRoutes } from './routes/waivers.mjs';
+import { auditReportRoutes } from './routes/audit-report.mjs';
+import { verdictsDocument } from './verdict-admin.mjs';
 import { resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
+import { conformanceWaivers, listWaiverViews } from './waiver-admin.mjs';
 import { authGate, orgContext, authorize, effectiveRoleOf, rankOf, rankOfRole } from './authz.mjs';
 import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
@@ -83,7 +89,7 @@ import { defaultOrgId } from './store/identity.mjs';
 import { getOrg, listOrgs } from './store/orgs.mjs';
 import { listMembershipsForUser } from './store/memberships.mjs';
 import { brandEnv, loadBrand, brandSource } from '../tools/lib/brand-env.mjs';
-import { brandShellHtml } from '../tools/lib/brand.mjs';
+import { brandShellHtml, DEFAULT_BRAND } from '../tools/lib/brand.mjs';
 import { loadTaxonomy, taxonomyAnswer } from './taxonomy.mjs';
 import { mcpTransport, describeTransport } from '../tools/mcp-transport.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
@@ -269,26 +275,10 @@ function readEnv(query) {
 // MCP endpoint by id — STORE_PLAN slice 4 §7.6), and stderr logs use
 // redactCredentials()/safeUrl, never the raw URL.
 
-// Returns a canonical object with the env overlay applied to spec.* AND
-// effective criticality/target propagated up to metadata.bindings so the
-// conformance scorer sees the correct tier for the selected environment.
-// (The adapter already takes opts.environment and produces its own metadata
-// projection — this helper is for non-adapter consumers.)
-function overlaidCanonical(canonical, envName) {
-  const { spec, effective } = applyEnvironmentOverlay(canonical.spec || {}, envName);
-  const next = { ...canonical, spec };
-  if (effective.criticality || effective.target) {
-    next.metadata = {
-      ...(canonical.metadata || {}),
-      bindings: {
-        ...(canonical.metadata?.bindings || {}),
-        ...(effective.criticality ? { criticality: effective.criticality } : {}),
-        ...(effective.target ? { default_target: effective.target } : {}),
-      },
-    };
-  }
-  return { canonical: next, effective };
-}
+// overlaidCanonical (the env overlay applied to spec.* with the effective
+// criticality / target propagated up to metadata.bindings) is the adapter's
+// (tools/lib/adapter.mjs): one helper for the server, the static bundle and
+// the CLIs.
 
 // The default tools/lib/conformance.mjs grades at (tierOf) — the pack's own
 // tier once the env overlay has lifted the environment's criticality.
@@ -518,36 +508,49 @@ app.get('/api/packs/:id/canonical', authorize('GET /api/packs/:id/canonical'), (
 // (the record's tier differs from the pack's — shown, never blocked) }.
 // tools/lib/conformance.mjs is untouched: the tier goes in through a copy
 // of the canonical.
+// conformanceReportFor(meta, canonical, env) is the one builder of that
+// body: the route answers it, and GET /api/packs/:id/audit-report (GAP batch
+// 2, server/routes/audit-report.mjs) reads the same object, so the two can
+// never grade one pack differently. The service record's waivers (GAP batch
+// 2 B3.2, server/waiver-admin.mjs conformanceWaivers) overlay the engine's
+// report here and here only: with no open waiver the report is the same
+// object (byte-identical body); /api/validate and the library routes keep
+// the bare report.
+function conformanceReportFor(meta, canonical, env, { now = new Date().toISOString() } = {}) {
+  const { canonical: overlaid } = overlaidCanonical(canonical, env);
+  const packTier = packTierOf(overlaid);
+  const record = meta.uploaded ? serviceTierFor(currentStore(), meta.id, env) : null;
+  const graded = record?.tier ? withCriticality(overlaid, record.tier) : overlaid;
+  const engine = evaluateConformance(graded);
+  const report = record?.service ? conformanceWaivers(currentStore(), record.service, engine, graded, { now }) : engine;
+  // Which clauses pass only on a placeholder, for this env overlay at the
+  // graded tier — the same list /api/validate and /api/library/register
+  // put in summary.onPlaceholder. Only a pack carrying library.todo.*
+  // annotations can say; for any other pack the key is omitted (not []),
+  // because "no placeholder" is not known there and the view keeps its hedge.
+  const onPlaceholder = librarySummaryFor(graded)?.onPlaceholder;
+  return {
+    environment: env,
+    ...report,
+    ...(Array.isArray(onPlaceholder) ? { onPlaceholder } : {}),
+    tier: {
+      graded: report.declaredTier,
+      pack: packTier,
+      from: record?.from ?? 'pack',
+      service: record?.service ?? null,
+      environment: record?.environment ?? null,
+      mismatch: !!record?.tier && record.tier !== packTier,
+    },
+  };
+}
+
 app.get('/api/packs/:id/conformance', authorize('GET /api/packs/:id/conformance'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ error: `unknown pack: ${req.params.id}` });
   try {
     const canonical = loadPackCanonical(meta);
     const env = readEnv(req.query);
-    const { canonical: overlaid } = overlaidCanonical(canonical, env);
-    const packTier = packTierOf(overlaid);
-    const record = meta.uploaded ? serviceTierFor(currentStore(), meta.id, env) : null;
-    const graded = record?.tier ? withCriticality(overlaid, record.tier) : overlaid;
-    const report = evaluateConformance(graded);
-    // Which clauses pass only on a placeholder, for this env overlay at the
-    // graded tier — the same list /api/validate and /api/library/register
-    // put in summary.onPlaceholder. Only a pack carrying library.todo.*
-    // annotations can say; for any other pack the key is omitted (not []),
-    // because "no placeholder" is not known there and the view keeps its hedge.
-    const onPlaceholder = librarySummaryFor(graded)?.onPlaceholder;
-    res.json({
-      environment: env,
-      ...report,
-      ...(Array.isArray(onPlaceholder) ? { onPlaceholder } : {}),
-      tier: {
-        graded: report.declaredTier,
-        pack: packTier,
-        from: record?.from ?? 'pack',
-        service: record?.service ?? null,
-        environment: record?.environment ?? null,
-        mismatch: !!record?.tier && record.tier !== packTier,
-      },
-    });
+    res.json(conformanceReportFor(meta, canonical, env));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -648,7 +651,11 @@ app.get('/api/packs/:id/compile-artifact', authorize('GET /api/packs/:id/compile
 
 // GET /api/packs/:id/export.zip — the whole pack as one download: the
 // canonical pack.yaml plus every compiled artefact (the 'all' bundle of each
-// compile group × flavor) under artefacts/. Hand-rolled ZIP, no zip dep.
+// compile group × flavor) under artefacts/, and — only when the pack carries
+// any — the reviewer's verdicts as verdicts.json (the GET
+// /api/packs/:id/verdicts document, GAP batch 2 B3.1; a catalogue pack and
+// a pack nobody reviewed export exactly what they did before, so the static
+// bundle's ZIP stays the server's). Hand-rolled ZIP, no zip dep.
 app.get('/api/packs/:id/export.zip', authorize('GET /api/packs/:id/export.zip'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ error: `unknown pack: ${req.params.id}` });
@@ -670,6 +677,10 @@ app.get('/api/packs/:id/export.zip', authorize('GET /api/packs/:id/export.zip'),
           files.push({ name: `artefacts/${g.id}/${out.filename}`, data: out.content });
         } catch (_) { /* a flavor that can't compile for this pack — skip it */ }
       }
+    }
+    if (meta.uploaded) {
+      const doc = verdictsDocument(currentStore(), { meta, adapted: adapt(canonical) });
+      if (doc.verdicts.length > 0) files.push({ name: 'verdicts.json', data: `${JSON.stringify(doc, null, 2)}\n` });
     }
 
     const zip = makeZip(files);
@@ -700,6 +711,47 @@ app.use(identityRoutes({ authorize }));
 // /api/services (viewer reads, operator writes) and their environments
 // under /api/environments, every rule server/service-admin.mjs's.
 app.use(servicesRoutes({ authorize }));
+
+// The verdicts API (GAP batch 2, B3.1) lives in server/routes/verdicts.mjs:
+// a reviewer's trusted | suspect | failed record per artefact of a
+// registered pack under /api/packs/:id/verdicts (viewer reads, operator
+// writes), every rule server/verdict-admin.mjs's. The pack-registry seam is
+// injected as the deploy routes take it.
+app.use(verdictsRoutes({ findPackMeta, loadPackCanonical, authorize }));
+
+// The waivers API (GAP batch 2, B3.2) lives in server/routes/waivers.mjs: a
+// service record's time-boxed waivers of conformance findings under
+// /api/services/:id/waivers and /api/waivers/:id/revoke (viewer reads,
+// operator writes), every rule server/waiver-admin.mjs's; the overlay they
+// produce is read by conformanceReportFor above.
+app.use(waiversRoutes({ authorize }));
+
+// The service audit report (GAP batch 2, B3.5) lives in
+// server/routes/audit-report.mjs: GET /api/packs/:id/audit-report (JSON or
+// HTML, branded like the shell) and GET /api/packs/:id/placeholders, both
+// viewer reads. The report's conformance section is conformanceReportFor's
+// body (the one builder), its verdict and waiver rows the admin modules'
+// views over the store — mapped field by field here, the one `now` shared
+// with the conformance overlay. The brand is the one start() loads; the
+// styles (the studio's design tokens and kit) are read at the first request.
+app.use(auditReportRoutes({
+  authorize, findPackMeta, loadPackCanonical, readEnv, conformanceReportFor, overlaidCanonical, currentStore,
+  brand: () => brand,
+  styles: () => `${readFileSync(resolve(STUDIO_DIR, 'design-tokens.css'), 'utf8')}\n${readFileSync(resolve(STUDIO_DIR, 'design-kit.css'), 'utf8')}`,
+  generator: () => ({ name: `${brand.name} server`, version: buildInfo().version }),
+  assessments: {
+    // A pack's verdict rows (server/verdict-admin.mjs verdictsDocument): a catalogue pack has none, by construction.
+    verdictsFor: (db, meta, _env, adapted) => verdictsDocument(db, { meta, adapted }).verdicts
+      .map((v) => ({ artefactKey: v.artefact, key: v.key, family: v.family, title: v.title, state: v.status, reason: v.reason, at: v.setAt, by: v.actor })),
+    // The pack's primary service record's waivers (server/waiver-admin.mjs listWaiverViews), history included; no service → none.
+    waiversFor: (db, meta, env, now) => {
+      const service = meta.uploaded ? serviceTierFor(db, meta.id, env)?.service : null;
+      if (!service) return [];
+      return listWaiverViews(db, service, now).waivers
+        .map((w) => ({ id: w.id, artefactKey: w.artefactId, rule: w.ruleId, reason: w.reason, expiresAt: w.expiresAt, at: w.createdAt, by: w.author, status: w.state, revokedAt: w.revokedAt, revokedBy: w.revokedBy, revokeReason: w.revokeReason }));
+    },
+  },
+}));
 
 // The audit reader (STORE_PLAN slice 5) lives in server/routes/audit.mjs:
 // GET /api/audit — the request's org's rows to its admins, the
@@ -2031,6 +2083,9 @@ app.use('/lib', express.static(resolve(ROOT, 'tools/lib'), {
 // on-disk shell around this handler (it falls to the SPA route instead).
 const SHELL_FILE = resolve(STUDIO_DIR, 'index.html');
 let brandedShell = null;
+// The brand start() loaded (DEFAULT_BRAND until then): the audit report's
+// chrome and tokens read it through the closure above.
+let brand = DEFAULT_BRAND;
 function sendShell(req, res) {
   if (brandedShell !== null) return res.type('html').set('Cache-Control', 'no-cache').send(brandedShell);
   res.sendFile(SHELL_FILE);
@@ -2103,7 +2158,7 @@ export async function start({ port = PORT, host = HOST, silent = false, legacyLi
   // here, not at import, so an in-process suite's env lands first; a bad
   // brand file refuses the start before the store is touched. Said once,
   // name and source (a path or 'env') only — never the file's contents.
-  const brand = loadBrand();
+  brand = loadBrand();
   brandedShell = brand.configured ? brandShellHtml(readFileSync(SHELL_FILE, 'utf8'), brand) : null;
   if (brand.configured) log(`[studio] brand: ${brand.name} (${brandSource() === 'env' ? 'OBSERVOGRAM_BRAND_* env' : brandSource()})`);
   const { db, ctx } = await bootStore({ host, log, warn });

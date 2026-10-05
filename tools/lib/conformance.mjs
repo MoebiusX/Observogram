@@ -67,6 +67,18 @@ function stripRef(id) {
   return id.replace(/^ref:/, '').replace(/^(slis|slos)\./, '');
 }
 
+// Whether a recording rule materialises an SLO's SLI: the expression names
+// `slis.<id>` (or `ref:slis.<id>`, which contains it) or `slos.<id>`, or the
+// rule's name carries the SLI's or the SLO's id. The one predicate behind
+// L3.MUST.recording_rule_per_slo and clauseSubjects, so the two agree.
+function ruleCovers(rule, slo, sliId) {
+  const expr = String(rule.expr || '');
+  if (expr.includes(`slis.${sliId}`)) return true;
+  if (expr.includes(`slos.${slo.id}`)) return true;
+  const name = String(rule.name || '');
+  return name.includes(sliId) || name.includes(slo.id);
+}
+
 function semverGte(a, b) {
   const pa = String(a).split('.').map(n => parseInt(n, 10) || 0);
   const pb = String(b).split('.').map(n => parseInt(n, 10) || 0);
@@ -220,20 +232,7 @@ export const RUBRIC = [
     evaluate(c) {
       const rules = recordingRules(c);
       if (!rules.length) return slos(c).length === 0;
-      return slos(c).every(s => {
-        const sliId = stripRef(s.sli);
-        return rules.some(r => {
-          const expr = String(r.expr || '');
-          // accept either ref:slis.<id>, slis.<id>, or the bare id token
-          if (expr.includes(`slis.${sliId}`)) return true;
-          if (expr.includes(`ref:slis.${sliId}`)) return true;
-          // also accept a rule that mentions the SLO id
-          if (expr.includes(`slos.${s.id}`)) return true;
-          // or a rule whose name matches the SLI/SLO name
-          const name = String(r.name || '');
-          return name.includes(sliId) || name.includes(s.id);
-        });
-      });
+      return slos(c).every(s => rules.some(r => ruleCovers(r, s, stripRef(s.sli))));
     },
   },
   {
@@ -333,6 +332,54 @@ export const RUBRIC = [
     },
   },
 ];
+
+// ---------- the per-item clauses and their subjects ----------
+
+// The four clauses that fail per SLI or per SLO rather than for the pack as
+// a whole. clauseSubjects names the FAILING subjects of one of them as
+// canonical symbols — `slis.<id>` for the SLI clause, `slos.<id>` for the
+// three SLO clauses: the adapter's `defines` vocabulary (tools/lib/
+// adapter.mjs), never a JSONPath — so a waiver (tools/lib/waivers.mjs, GAP
+// batch 2 B3.2) can cover one subject of a clause and the report can say
+// which remain. Subjects and verdict agree by construction: a clause passes
+// exactly when its subject list is empty.
+export const SUBJECT_CLAUSES = Object.freeze([
+  'L1.MUST.sli_covered_by_slo', 'L3.MUST.recording_rule_per_slo', 'L4.MUST.multi_window_burn_rate', 'L5.MUST.tier1_chaos_for_each_slo',
+]);
+
+const SUBJECTS = {
+  'L1.MUST.sli_covered_by_slo': (c) => {
+    const referenced = new Set(slos(c).map(s => stripRef(s.sli)));
+    return slis(c).filter(s => !referenced.has(s.id)).map(s => `slis.${s.id}`);
+  },
+  'L3.MUST.recording_rule_per_slo': (c) => {
+    const rules = recordingRules(c);
+    if (!rules.length) return slos(c).map(s => `slos.${s.id}`);
+    return slos(c).filter(s => !rules.some(r => ruleCovers(r, s, stripRef(s.sli)))).map(s => `slos.${s.id}`);
+  },
+  'L4.MUST.multi_window_burn_rate': (c) => {
+    const covered = new Set(burnRateAlerts(c).filter(a => (a.windows || []).length >= 2).map(a => stripRef(a.slo)));
+    return slos(c).filter(s => !covered.has(s.id)).map(s => `slos.${s.id}`);
+  },
+  'L5.MUST.tier1_chaos_for_each_slo': (c) => {
+    const stressed = new Set(chaos(c).map(x => stripRef(x.steady_state_hypothesis)));
+    return slos(c).filter(s => !stressed.has(s.id)).map(s => `slos.${s.id}`);
+  },
+};
+
+/**
+ * The failing subjects of a per-item clause, as canonical symbols
+ * (`slis.<id>` / `slos.<id>`), in declaration order: `[]` when the clause
+ * passes, `null` for a clause that grades the whole pack (or an unknown id).
+ * Pure; evaluates nothing else of the rubric. A pack the predicate cannot
+ * read fails the clause (safeEval), so every declared item is a subject then.
+ */
+export function clauseSubjects(clauseId, canonical) {
+  const fn = SUBJECTS[clauseId];
+  if (!fn) return null;
+  try { return fn(canonical); }
+  catch { return (clauseId.startsWith('L1.') ? slis(canonical).map(s => `slis.${s.id}`) : slos(canonical).map(s => `slos.${s.id}`)); }
+}
 
 // ---------- evaluator ----------
 

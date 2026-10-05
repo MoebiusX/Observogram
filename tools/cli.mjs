@@ -12,6 +12,7 @@
 //   packc x-ray    <repo-dir>         → tools/crawl-repo.mjs
 //   packc compile  <file> [target]    → tools/lib/compile.mjs (programmatic)
 //   packc init     …                  → tools/pack-init.mjs (build a pack from the library)
+//   packc audit-report <file> …       → tools/audit-report.mjs (a pack's service audit report, JSON or HTML)
 //   packc store    backup|restore|export|import --replace|rekey-issuer|purge-org|audit … → tools/store-admin.mjs (back up / restore / export the embedded store; request a re-import; rekey the OIDC issuer; purge a removed org's files; list the audit)
 //   packc serve                       → server/index.mjs (boots the studio)
 //   observogram                       → same as `serve`
@@ -109,7 +110,8 @@ function printHelp() {
 
 Usage:
   packc validate <file...>        Validate pack(s) against spec v${SPEC_VERSION}
-  packc conformance <file...> [--json] [--strict] [--quiet]  Report the placeholders a pack still carries: path, field, what it needs, where it comes from
+  packc conformance <file...> [--json] [--strict] [--quiet] [--waivers <file>]  Report the placeholders a pack still carries: path, field, what it needs, where it comes from; --waivers applies a waiver file
+  packc audit-report <file> [--env <name>] [--format json|html|both] [--out <path>] [--brand <file.json>] [--taxonomy <file.json>] [--top <n>] [--generated-at <iso> | --no-timestamp] [--verdicts <file.json>] [--waivers <file.json>] [--schema <file>]  A pack's service audit report: conformance, placeholders, verdicts, waivers, coverage, goes-blind risks, response path
   packc adapt    <file> [env]     Adapt a pack into the layered projection
   packc x-ray    <repo-dir>       Crawl a repo into a draft pack
   packc compile  <file> [target]  Compile a pack into a backend artefact
@@ -268,6 +270,9 @@ switch (command) {
     break;
   case 'conformance':
     delegate('tools/pack-conformance.mjs', rest);
+    break;
+  case 'audit-report':
+    delegate('tools/audit-report.mjs', rest);
     break;
   case 'adapt':
     delegate('tools/adapt-spec-pack.mjs', rest);

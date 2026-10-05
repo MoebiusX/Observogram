@@ -1,4 +1,4 @@
-/* studio/ux-remediate.css — Remediate — strategies + compiler: screen-specific rules on top of the shared grammar in studio/ux.css. */
+/* studio/ux-remediate.css — Remediate — strategies + compiler: screen-specific rules on top of the shared grammar in studio/ux.css. The `.rflow-*` zone at the end (the response path) is drawn on Remediate AND on Diagnose. */
 
 /* ============================================================
    Remediate (studio/compile-view.mjs): decision header, strategies named
@@ -206,3 +206,66 @@
 /* A long effect ("Changes the repository and live systems") wraps inside a
    narrow strategy card instead of running past its edge. */
 .ux-rm-effect { white-space: normal; max-width: 100%; }
+
+/* ============================================================
+   The response path (studio/remediation-flow-view.mjs, GAP batch 2): the
+   `.rflow-*` zone. The same HTML is drawn on Remediate (`.ux-rm-flow`, after
+   the plan) AND on Diagnose (inside a `.diag-block` of the assessment
+   report), so the zone lives here once; --ux-* tokens only, nothing fixed or
+   sticky, and nothing at all for a pack without spec.remediation. The state
+   colours (--ux-ok / -warn / -fail / -info) carry 13 px bold chip text on
+   --ux-bg / --ux-bg-2 and clear WCAG AA on every theme surface
+   (tools/test-remediation-flow-view.mjs measures them).
+   ============================================================ */
+.rflow { font-family: var(--sans); }
+.ux-rm-flow {
+  margin-top: 20px; padding: 14px 18px 16px;
+  border: 1px solid var(--ux-line); border-radius: 10px; background: var(--ux-bg);
+}
+.rflow-title { margin: 0 0 4px; font: 600 17px/1.3 var(--sans); color: var(--ux-ink); }
+.rflow-lede { margin: 0 0 10px; font-size: 14px; color: var(--ux-ink-2); max-width: 80ch; }
+.rflow-summary { margin: 0 0 4px; font-size: 15px; color: var(--ux-ink-2); }
+.rflow-summary strong { color: var(--ux-ink); font-weight: 600; }
+.rflow-note { margin: 0 0 12px; font-size: 14px; color: var(--ux-ink-2); }
+
+.rflow-paths { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.rflow-paths + .rflow-paths { margin-top: 10px; }
+.rflow-path {
+  --rflow-tone: var(--ux-info);
+  padding: 10px 14px; border-radius: 8px;
+  border: 1px solid var(--ux-line); border-left: 4px solid var(--rflow-tone);
+  background: var(--ux-bg-2);
+}
+.rflow-path.is-live { --rflow-tone: var(--ux-ok); }
+.rflow-path.is-missing, .rflow-path.is-unhealthy { --rflow-tone: var(--ux-fail); }
+.rflow-path.is-drifted, .rflow-path.is-placeholder, .rflow-path.is-unresolved { --rflow-tone: var(--ux-warn); }
+.rflow-path-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.rflow-state {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid currentColor; font: 600 13px/1.2 var(--sans);
+  color: var(--ux-info); white-space: nowrap;
+}
+.rflow-state.is-live { color: var(--ux-ok); }
+.rflow-state.is-missing, .rflow-state.is-unhealthy { color: var(--ux-fail); }
+.rflow-state.is-drifted, .rflow-state.is-placeholder, .rflow-state.is-unresolved { color: var(--ux-warn); }
+.rflow-id { font: 600 14px/1.3 var(--mono); color: var(--ux-ink); }
+.rflow-trigger { font: 500 13px/1.3 var(--mono); color: var(--ux-ink-2); overflow-wrap: anywhere; }
+.rflow-arrow { color: var(--ux-ink-3); }
+.rflow-alert { font-size: 14px; color: var(--ux-ink); display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.rflow-tier { font-size: 12.5px; color: var(--ux-ink-3); }
+.rflow-steps { margin: 8px 0 0; padding-left: 22px; display: grid; gap: 4px; }
+.rflow-step { font-size: 14px; line-height: 1.45; color: var(--ux-ink-2); overflow-wrap: anywhere; }
+.rflow-step.is-fail, .rflow-step.is-warn { color: var(--ux-ink); }
+.rflow-step.is-fail::marker { color: var(--ux-fail); }
+.rflow-step.is-warn::marker { color: var(--ux-warn); }
+.rflow-step.is-ok::marker { color: var(--ux-ok); }
+.rflow-step code { font: 13px/1.3 var(--mono); color: var(--ux-ink); background: var(--ux-bg); padding: 0 4px; border-radius: 4px; }
+.rflow-link { color: var(--ux-accent); font-weight: 600; }
+.rflow-deploy { margin-left: 8px; }
+.rflow-suggest { margin: 8px 0 0; font-size: 14px; color: var(--ux-ink-2); }
+.rflow-uncovered { margin: 12px 0 0; font-size: 14px; color: var(--ux-ink-2); }
+.rflow-uncovered summary { cursor: pointer; font-weight: 600; color: var(--ux-ink); }
+.rflow-uncovered ul { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 4px; }
+.rflow-warnings { margin: 10px 0 0; padding-left: 20px; font-size: 13.5px; color: var(--ux-ink-2); }
+.rflow-warnings li::marker { color: var(--ux-warn); }
+.rflow-foot { margin: 12px 0 0; }

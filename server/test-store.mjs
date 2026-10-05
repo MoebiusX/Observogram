@@ -378,14 +378,16 @@ test('tx: commits, rolls back and rethrows on throw, refuses a thenable (rolled 
 
 // ---------- Migrations ----------
 
-const V1_TABLES = ['audit', 'environments', 'mcp_endpoints', 'memberships', 'orgs', 'pack_services', 'packs', 'schema_meta', 'services', 'users'];
+const V2_TABLES = ['audit', 'environments', 'mcp_endpoints', 'memberships', 'orgs', 'pack_services', 'packs', 'schema_meta', 'services', 'users', 'verdicts', 'waivers'];
+// The synthetic steps below sit after every real one.
+const NEXT = SCHEMA_VERSION + 1;
 
-test('migrations from user_version 0: schema v1 exactly, with a store_id and the audit triggers', async () => {
+test('migrations from user_version 0: schema v2 exactly, with a store_id and the audit triggers', async () => {
   const path = join(tempDir(), 'm.db');
   const db = await openStore({ path });
   try {
-    assert.equal(userVersion(db), 1);
-    assert.deepEqual(tables(db), V1_TABLES);
+    assert.equal(userVersion(db), 2);
+    assert.deepEqual(tables(db), V2_TABLES);
     const id = prepare(db, "SELECT value FROM schema_meta WHERE key = 'store_id'").get().value;
     assert.match(id, /^[0-9a-f-]{36}$/);
     const triggers = prepare(db, "SELECT name FROM sqlite_schema WHERE type = 'trigger' ORDER BY name").all().map((r) => r.name);
@@ -405,14 +407,14 @@ test('migrations from user_version 0: schema v1 exactly, with a store_id and the
   }
   // A second open applies nothing.
   const raw = await openRaw(path);
-  assert.deepEqual(runMigrations(raw), { from: 1, to: 1, applied: [] });
+  assert.deepEqual(runMigrations(raw), { from: 2, to: 2, applied: [] });
   raw.close();
 });
 
-// A v2 step that rebuilds `users` under `memberships` the plan's way:
+// A next step that rebuilds `users` under `memberships` the plan's way:
 // X_new, copy, drop X, rename — never renaming the parent away first.
-const V2_REBUILD_USERS = {
-  version: 2,
+const REBUILD_USERS = {
+  version: NEXT,
   name: 'rebuild users (test)',
   up(db) {
     execScript(db, `
@@ -443,13 +445,13 @@ async function v1WithChildren(path) {
   return openRaw(path);
 }
 
-test('migrations from v1: a v2 step that rebuilds users under memberships keeps every child row', async () => {
+test('migrations from the current schema: a next step that rebuilds users under memberships keeps every child row', async () => {
   const path = join(tempDir(), 'v1.db');
   const db = await v1WithChildren(path);
   try {
     pragma(db, 'foreign_keys=ON');
-    const r = runMigrations(db, [...STEPS, V2_REBUILD_USERS]);
-    assert.deepEqual(r, { from: 1, to: 2, applied: [2] });
+    const r = runMigrations(db, [...STEPS, REBUILD_USERS]);
+    assert.deepEqual(r, { from: SCHEMA_VERSION, to: NEXT, applied: [NEXT] });
     assert.equal(prepare(db, 'SELECT count(*) AS n FROM memberships').get().n, 3);
     assert.deepEqual(pragma(db, 'foreign_key_check'), []);
     const fk = pragma(db, 'foreign_key_list(memberships)').map((r) => r.table).sort();
@@ -466,17 +468,64 @@ test('a failing step rolls back, leaves user_version and foreign_keys ON; a step
   const db = await v1WithChildren(path);
   try {
     pragma(db, 'foreign_keys=ON');
-    const throwing = { version: 2, name: 'throws', up(d) { execScript(d, 'CREATE TABLE half_done (a)'); throw new Error('step exploded'); } };
+    const throwing = { version: NEXT, name: 'throws', up(d) { execScript(d, 'CREATE TABLE half_done (a)'); throw new Error('step exploded'); } };
     assert.throws(() => runMigrations(db, [...STEPS, throwing]), /step exploded/);
-    assert.equal(userVersion(db), 1);
+    assert.equal(userVersion(db), SCHEMA_VERSION);
     assert.equal(pragma(db, 'foreign_keys')[0].foreign_keys, 1, 'foreign_keys back ON after a failure');
     assert.ok(!tables(db).includes('half_done'), 'the step rolled back');
-    const orphaning = { version: 2, name: 'orphans memberships', up(d) { execScript(d, "DELETE FROM users WHERE login = 'bob'"); } };
+    const orphaning = { version: NEXT, name: 'orphans memberships', up(d) { execScript(d, "DELETE FROM users WHERE login = 'bob'"); } };
     assert.throws(() => runMigrations(db, [...STEPS, orphaning]), /foreign-key violation/);
-    assert.equal(userVersion(db), 1);
+    assert.equal(userVersion(db), SCHEMA_VERSION);
     assert.equal(prepare(db, "SELECT count(*) AS n FROM users WHERE login = 'bob'").get().n, 1, 'bob is back');
     assert.equal(pragma(db, 'foreign_keys')[0].foreign_keys, 1);
-    assert.throws(() => runMigrations(db, [{ ...V2_REBUILD_USERS, version: 3 }]), /numbered 1\.\.n/);
+    assert.throws(() => runMigrations(db, [{ ...REBUILD_USERS, version: NEXT + 1 }]), /numbered 1\.\.n/);
+  } finally {
+    db.close();
+  }
+});
+
+// The one-way door GAP batch 2 opened: a v1 file (every pre-batch store)
+// gets the two tables with every row it held intact. Built through openRaw
+// + the first STEP alone: openStore would write a v2 store.
+test('a real v1 file migrates to v2: the verdicts and waivers tables with their foreign keys, every pre-existing row intact', async () => {
+  const path = join(tempDir('v1-real'), 'observogram.db');
+  const db = await openRaw(path);
+  try {
+    assert.deepEqual(runMigrations(db, STEPS.slice(0, 1)), { from: 0, to: 1, applied: [1] });
+    assert.deepEqual(tables(db), V2_TABLES.filter((t) => t !== 'verdicts' && t !== 'waivers'), 'a v1 store exactly');
+    const at = new Date().toISOString();
+    prepare(db, "INSERT INTO users (kind, login, created_at) VALUES ('local', 'alice', ?), ('local', 'bob', ?)").run(at, at);
+    prepare(db, "INSERT INTO orgs (id, name, root, created_at) VALUES ('default', 'Default', '.', ?), ('acme', 'Acme', 'orgs/acme', ?)").run(at, at);
+    prepare(db, "INSERT INTO memberships (org_id, user_id, role, created_at) VALUES ('default', 1, 'admin', ?), ('acme', 2, 'viewer', ?)").run(at, at);
+    prepare(db, "INSERT INTO services (id, org_id, slug, name, created_at, updated_at) VALUES (1, 'acme', 'pay', 'Payments', ?, ?)").run(at, at);
+    prepare(db, "INSERT INTO packs (org_id, id, created_at) VALUES ('acme', 'uploaded-pay-0123abcd', ?)").run(at);
+    prepare(db, "INSERT INTO pack_services (org_id, pack_id, service_id, role) VALUES ('acme', 'uploaded-pay-0123abcd', 1, 'primary')").run();
+    prepare(db, "INSERT INTO audit (at, org_id, actor, action) VALUES (?, 'acme', 'alice', 'pack.register')").run(at);
+    const counts = () => Object.fromEntries(['users', 'orgs', 'memberships', 'services', 'packs', 'pack_services', 'audit'].map((t) => [t, prepare(db, `SELECT count(*) AS n FROM ${t}`).get().n]));
+    const before = counts();
+    pragma(db, 'foreign_keys=ON');
+    assert.deepEqual(runMigrations(db), { from: 1, to: 2, applied: [2] });
+    assert.deepEqual(tables(db), V2_TABLES);
+    assert.deepEqual(counts(), before, 'every pre-existing row is still there');
+    assert.deepEqual(pragma(db, 'foreign_key_check'), []);
+    assert.deepEqual(pragma(db, 'foreign_key_list(verdicts)').map((r) => [r.table, r.from, r.to]).sort(), [['packs', 'org_id', 'org_id'], ['packs', 'pack_id', 'id']]);
+    assert.deepEqual(pragma(db, 'foreign_key_list(waivers)').map((r) => [r.table, r.from, r.to]).sort(),
+      [['orgs', 'org_id', 'id'], ['services', 'org_id', 'org_id'], ['services', 'service_id', 'id']]);
+    const indexes = prepare(db, "SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'waivers' AND name NOT LIKE 'sqlite_%'").all().map((r) => r.name);
+    assert.deepEqual(indexes, ['waivers_service']);
+    // The cascades and the CHECKs hold in the file.
+    prepare(db, "INSERT INTO verdicts (org_id, pack_id, artefact_id, artefact_key, status, behavior_hash, actor, set_at) VALUES ('acme', 'uploaded-pay-0123abcd', 'SLI-01', 'k', 'trusted', 'h', 'alice', ?)").run(at);
+    assert.throws(() => prepare(db, "INSERT INTO verdicts (org_id, pack_id, artefact_id, artefact_key, status, behavior_hash, actor, set_at) VALUES ('acme', 'uploaded-pay-0123abcd', 'SLI-02', 'k', 'maybe', 'h', 'alice', ?)").run(at), /CHECK/);
+    assert.throws(() => prepare(db, "INSERT INTO verdicts (org_id, pack_id, artefact_id, artefact_key, status, behavior_hash, actor, set_at) VALUES ('acme', 'no-such-pack', 'SLI-01', 'k', 'trusted', 'h', 'alice', ?)").run(at), /FOREIGN KEY/);
+    prepare(db, "INSERT INTO waivers (org_id, service_id, rule_id, reason, author, expires_at, created_at) VALUES ('acme', 1, 'L3.MUST.recording_rule_per_slo', 'r', 'alice', ?, ?)").run(at, at);
+    assert.throws(() => prepare(db, "INSERT INTO waivers (org_id, service_id, artefact_id, rule_id, reason, author, expires_at, created_at) VALUES ('acme', 1, '', 'x', 'r', 'alice', ?, ?)").run(at, at), /CHECK/, 'an empty artefact id is NULL, not \'\'');
+    assert.throws(() => prepare(db, "UPDATE waivers SET revoked_at = ? WHERE id = 1").run(at), /CHECK/, 'revoked_at and revoked_by go together');
+    assert.throws(() => prepare(db, "INSERT INTO waivers (org_id, service_id, rule_id, reason, author, expires_at, created_at) VALUES ('acme', 7, 'x', 'r', 'alice', ?, ?)").run(at, at), /FOREIGN KEY/);
+    prepare(db, "DELETE FROM packs WHERE id = 'uploaded-pay-0123abcd'").run();
+    assert.equal(prepare(db, 'SELECT count(*) AS n FROM verdicts').get().n, 0, 'a verdict cascades with its pack');
+    prepare(db, 'DELETE FROM services WHERE id = 1').run();
+    assert.equal(prepare(db, 'SELECT count(*) AS n FROM waivers').get().n, 0, 'a waiver cascades with its service');
+    assert.equal(prepare(db, 'SELECT count(*) AS n FROM audit').get().n, before.audit, 'the audit outlives what it names');
   } finally {
     db.close();
   }
@@ -487,7 +536,7 @@ test('a database from a newer build is refused, not migrated', async () => {
   const db = await v1WithChildren(path);
   pragma(db, 'user_version=7');
   db.close();
-  await assert.rejects(openStore({ path }), /schema v7, but this build knows up to v1/);
+  await assert.rejects(openStore({ path }), /schema v7, but this build knows up to v2/);
 });
 
 // ---------- Concurrency ----------
@@ -536,8 +585,8 @@ test('Concurrency: a migration waits out a child holding BEGIN IMMEDIATE, then a
     const holder = lockHolder(path, 700);
     await holder.until(/locked/);
     const t0 = Date.now();
-    const step = { version: 2, name: 'add a table', up(d) { execScript(d, 'CREATE TABLE later (a INTEGER)'); } };
-    assert.deepEqual(runMigrations(db, [...STEPS, step]).applied, [2]);
+    const step = { version: NEXT, name: 'add a table', up(d) { execScript(d, 'CREATE TABLE later (a INTEGER)'); } };
+    assert.deepEqual(runMigrations(db, [...STEPS, step]).applied, [NEXT]);
     const waited = Date.now() - t0;
     assert.equal((await holder.exited(10_000, 'the migration')).code, 0);
     assert.ok(waited >= 300, `the migration waited on the lock (${waited} ms)`);
@@ -801,6 +850,8 @@ const mcpEndpoints = await import('./store/mcp-endpoints.mjs');
 const packs = await import('./store/packs.mjs');
 const packServices = await import('./store/pack-services.mjs');
 const packLinks = await import('./store/pack-links.mjs');
+const verdicts = await import('./store/verdicts.mjs');
+const waivers = await import('./store/waivers.mjs');
 const serviceAdmin = await import('./service-admin.mjs');
 
 async function freshStore(tag) {
@@ -1117,6 +1168,16 @@ test('context-scoped repositories throw outside runWithOrg()', async () => {
       'pack_services.linkIfAbsent': () => packServices.linkPackService(db, 'a', { packId: 'p', serviceId: 1 }, { ifAbsent: true }),
       'pack_services.unlink': () => packServices.unlinkPackService(db, 'a', 'p', 1, { detail: { service: 's', reason: 'replan' } }),
       'pack_links.link': () => packLinks.linkPack(db, 'a', { packId: 'p', entry: { id: 'p', service: 's' }, canonical: {}, via: 'register' }),
+      'verdicts.list': () => verdicts.listVerdicts(db, 'p'),
+      'verdicts.get': () => verdicts.getVerdict(db, 'p', 'SLI-01'),
+      'verdicts.set': () => verdicts.setVerdict(db, 'a', { packId: 'p', artefactId: 'SLI-01', artefactKey: 'k', status: 'trusted', behaviorHash: 'h' }),
+      'verdicts.clear': () => verdicts.clearVerdict(db, 'a', 'p', 'SLI-01'),
+      'verdicts.carry': () => verdicts.carryVerdicts(db, 'a', { fromPackId: 'p', toPackId: 'q', rows: [], map: new Map() }),
+      'waivers.get': () => waivers.getWaiver(db, 1),
+      'waivers.list': () => waivers.listWaivers(db, 1),
+      'waivers.count': () => waivers.countWaivers(db, 1),
+      'waivers.create': () => waivers.createWaiver(db, 'a', { serviceId: 1, ruleId: 'x', reason: 'r', expiresAt: '2030-01-01T00:00:00.000Z' }),
+      'waivers.revoke': () => waivers.revokeWaiver(db, 'a', 1),
     };
     for (const [name, call] of Object.entries(calls)) assert.throws(call, /org-scoped — call it inside runWithOrg\(\)/, name);
     assert.deepEqual(auditActions(db), []);
@@ -1471,6 +1532,186 @@ test('linkPack: creates the service, environment and link rows a pack names once
   }
 });
 
+// ---------- GAP batch 2: verdicts and waivers ----------
+
+const VERDICT_KEYS = ['orgId', 'packId', 'artefactId', 'artefactKey', 'family', 'status', 'reason', 'behaviorHash', 'actor', 'setAt', 'carriedFrom'];
+const WAIVER_KEYS = ['id', 'orgId', 'serviceId', 'artefactId', 'ruleId', 'reason', 'author', 'expiresAt', 'createdAt', 'revokedAt', 'revokedBy', 'revokeReason'];
+const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+test('verdicts: set (insert, then replace with the transition audited), get, list in artefact order, clear; the statuses and the text rules; a verdict cascades with its pack', async () => {
+  const { db, close } = await freshStore('verdicts');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    const rows = (action) => auditRepo.listAudit(db, { orgId: 'acme', action, limit: 1000 }).reverse().map((r) => [r.actor, r.targetKind, r.targetId, r.detail]);
+    runWithOrg('acme', () => {
+      assert.deepEqual(verdicts.VERDICT_STATUSES, ['trusted', 'suspect', 'failed']);
+      packs.addPack(db, 'alice', { id: 'uploaded-pay-0123abcd', label: 'Pay' });
+      assert.deepEqual(verdicts.listVerdicts(db, 'uploaded-pay-0123abcd'), []);
+      assert.equal(verdicts.getVerdict(db, 'uploaded-pay-0123abcd', 'SLI-01'), null);
+      const first = verdicts.setVerdict(db, 'alice', { packId: 'uploaded-pay-0123abcd', artefactId: 'SLO-01', artefactKey: 'slo::{"id":"a"}', family: 'slo', status: 'suspect', reason: 'window too short', behaviorHash: 'abc123' });
+      assert.equal(first.previous, null);
+      assert.deepEqual(Object.keys(first.verdict), VERDICT_KEYS);
+      assert.ok(ISO_RE.test(first.verdict.setAt));
+      assert.deepEqual({ ...first.verdict, setAt: 'T' }, {
+        orgId: 'acme', packId: 'uploaded-pay-0123abcd', artefactId: 'SLO-01', artefactKey: 'slo::{"id":"a"}', family: 'slo', status: 'suspect',
+        reason: 'window too short', behaviorHash: 'abc123', actor: 'alice', setAt: 'T', carriedFrom: null,
+      });
+      const second = verdicts.setVerdict(db, 'bob', { packId: 'uploaded-pay-0123abcd', artefactId: 'SLI-01', artefactKey: 'sli::{"id":"b"}', family: 'sli', status: 'trusted', behaviorHash: 'def456' });
+      assert.deepEqual([second.verdict.reason, second.verdict.family, second.verdict.actor], [null, 'sli', 'bob']);
+      // A replace: the row is rewritten (actor, time, reason), the previous status returned and audited as `from`.
+      const replaced = verdicts.setVerdict(db, 'carol', { packId: 'uploaded-pay-0123abcd', artefactId: 'SLO-01', artefactKey: 'slo::{"id":"a"}', family: 'slo', status: 'failed', reason: 'x'.repeat(2000), behaviorHash: 'abc123' });
+      assert.deepEqual([replaced.previous.status, replaced.verdict.status, replaced.verdict.actor, replaced.verdict.reason.length], ['suspect', 'failed', 'carol', 2000]);
+      assert.deepEqual(verdicts.listVerdicts(db, 'uploaded-pay-0123abcd').map((v) => [v.artefactId, v.status]), [['SLI-01', 'trusted'], ['SLO-01', 'failed']], 'artefact order');
+      assert.deepEqual(rows('verdict.set'), [
+        ['alice', 'artefact', 'uploaded-pay-0123abcd/SLO-01', { pack: 'uploaded-pay-0123abcd', artefact: 'SLO-01', family: 'slo', from: null, to: 'suspect', reason: 'window too short' }],
+        ['bob', 'artefact', 'uploaded-pay-0123abcd/SLI-01', { pack: 'uploaded-pay-0123abcd', artefact: 'SLI-01', family: 'sli', from: null, to: 'trusted', reason: null }],
+        ['carol', 'artefact', 'uploaded-pay-0123abcd/SLO-01', { pack: 'uploaded-pay-0123abcd', artefact: 'SLO-01', family: 'slo', from: 'suspect', to: 'failed', reason: 'x'.repeat(200) }],
+      ], 'the reason is cut to 200 in the row');
+      // The rules: the status vocabulary, the text limits, an unknown pack; nothing written.
+      const base = { packId: 'uploaded-pay-0123abcd', artefactId: 'SLI-02', artefactKey: 'k', status: 'trusted', behaviorHash: 'h' };
+      assert.throws(() => verdicts.setVerdict(db, 'alice', { ...base, status: 'maybe' }), /a verdict status is one of trusted, suspect, failed, not "maybe"/);
+      assert.throws(() => verdicts.setVerdict(db, 'alice', { ...base, reason: 'x'.repeat(2001) }), /reason must be a non-empty string of at most 2000/);
+      assert.throws(() => verdicts.setVerdict(db, 'alice', { ...base, artefactId: 'x'.repeat(101) }), /artefactId must be a non-empty string of at most 100/);
+      assert.throws(() => verdicts.setVerdict(db, 'alice', { ...base, packId: 'nope' }), /no pack "nope"/);
+      assert.throws(() => verdicts.setVerdict(db, '', base), /needs an actor/);
+      assert.equal(verdicts.getVerdict(db, 'uploaded-pay-0123abcd', 'SLI-02'), null);
+      // clear: the row that was; a second clear is not found.
+      const cleared = verdicts.clearVerdict(db, 'alice', 'uploaded-pay-0123abcd', 'SLI-01');
+      assert.deepEqual([cleared.status, cleared.actor], ['trusted', 'bob']);
+      assert.throws(() => verdicts.clearVerdict(db, 'alice', 'uploaded-pay-0123abcd', 'SLI-01'), /no verdict "uploaded-pay-0123abcd\/SLI-01"/);
+      assert.deepEqual(rows('verdict.clear'), [['alice', 'artefact', 'uploaded-pay-0123abcd/SLI-01', { pack: 'uploaded-pay-0123abcd', artefact: 'SLI-01', from: 'trusted' }]]);
+      // The cascade: the pack's removal drops the verdict, writing no verdict row.
+      packs.removePack(db, 'alice', 'uploaded-pay-0123abcd', { action: 'pack.evict', detail: { cap: 200 } });
+      assert.deepEqual(verdicts.listVerdicts(db, 'uploaded-pay-0123abcd'), []);
+    });
+    assert.deepEqual(auditActions(db, { orgId: 'acme' }), ['pack.register', 'verdict.set', 'verdict.set', 'verdict.set', 'verdict.clear', 'pack.evict']);
+  } finally {
+    close();
+  }
+});
+
+test('verdicts: carryVerdicts writes the replaced pack\'s rows onto the new pack by identity key (carried_from set, a verdict already there wins), drops the rest, one verdict.carry row — none at all for no rows', async () => {
+  const { db, close } = await freshStore('carry');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    runWithOrg('acme', () => {
+      packs.addPack(db, 'alice', { id: 'old', label: 'Pay' });
+      packs.addPack(db, 'alice', { id: 'new', label: 'Pay' });
+      assert.throws(() => verdicts.carryVerdicts(db, 'alice', { fromPackId: 'old', toPackId: 'new', rows: null, map: new Map() }), /rows as an array/);
+      assert.throws(() => verdicts.carryVerdicts(db, 'alice', { fromPackId: 'old', toPackId: 'new', rows: [], map: {} }), /artefact index as a Map/);
+      assert.deepEqual(verdicts.carryVerdicts(db, 'alice', { fromPackId: 'old', toPackId: 'new', rows: [], map: new Map() }), { kept: 0, dropped: [] });
+      assert.deepEqual(auditActions(db, { orgId: 'acme' }), ['pack.register', 'pack.register'], 'no rows, no carry row');
+      verdicts.setVerdict(db, 'alice', { packId: 'old', artefactId: 'SLO-01', artefactKey: 'slo::a', family: 'slo', status: 'trusted', reason: 'ok', behaviorHash: 'h1' });
+      verdicts.setVerdict(db, 'bob', { packId: 'old', artefactId: 'SLO-02', artefactKey: 'slo::b', family: 'slo', status: 'failed', behaviorHash: 'h2' });
+      verdicts.setVerdict(db, 'bob', { packId: 'old', artefactId: 'ALR-01', artefactKey: 'alert::c', family: 'alert_rule', status: 'suspect', behaviorHash: 'h3' });
+      verdicts.setVerdict(db, 'carol', { packId: 'new', artefactId: 'SLO-07', artefactKey: 'slo::b', family: 'slo', status: 'trusted', behaviorHash: 'h2' });
+      const rows = verdicts.listVerdicts(db, 'old');
+      const map = new Map([['slo::a', { artefactId: 'SLO-03', family: 'slo', behaviorHash: 'h1x' }], ['slo::b', { artefactId: 'SLO-07', family: 'slo', behaviorHash: 'h2' }]]);
+      const r = verdicts.carryVerdicts(db, 'alice', { fromPackId: 'old', toPackId: 'new', rows, map });
+      assert.deepEqual(r, { kept: 1, dropped: ['alert::c', 'slo::b'] }, 'alert::c is not in the new pack; slo::b already has a verdict there (it wins) — in the rows\' artefact order');
+      const carried = verdicts.getVerdict(db, 'new', 'SLO-03');
+      assert.deepEqual({ ...carried, setAt: 'T' }, { orgId: 'acme', packId: 'new', artefactId: 'SLO-03', artefactKey: 'slo::a', family: 'slo', status: 'trusted', reason: 'ok', behaviorHash: 'h1x', actor: 'alice', setAt: 'T', carriedFrom: 'old' });
+      assert.equal(carried.setAt, rows.find((v) => v.artefactId === 'SLO-01').setAt, 'the reviewer\'s time travels with the verdict');
+      assert.equal(verdicts.getVerdict(db, 'new', 'SLO-07').actor, 'carol', 'the verdict already on the new pack is untouched');
+      const carry = auditRepo.listAudit(db, { orgId: 'acme', action: 'verdict.carry' }).map((x) => [x.actor, x.targetKind, x.targetId, x.detail]);
+      assert.deepEqual(carry, [['alice', 'pack', 'new', { from: 'old', kept: 1, dropped: ['alert::c', 'slo::b'], droppedCount: 2 }]]);
+      // A reviewer's own record afterwards clears the carry mark.
+      verdicts.setVerdict(db, 'dave', { packId: 'new', artefactId: 'SLO-03', artefactKey: 'slo::a', family: 'slo', status: 'suspect', behaviorHash: 'h1x' });
+      assert.equal(verdicts.getVerdict(db, 'new', 'SLO-03').carriedFrom, null);
+      assert.throws(() => verdicts.carryVerdicts(db, 'alice', { fromPackId: 'old', toPackId: 'gone', rows, map }), /no pack "gone"/);
+    });
+  } finally {
+    close();
+  }
+});
+
+test('waivers: create (the author is the actor), get, list newest first, count, revoke once (history kept, a second revoke refused); the rules; a waiver cascades with its service', async () => {
+  const { db, close } = await freshStore('waivers');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    const rows = (action) => auditRepo.listAudit(db, { orgId: 'acme', action, limit: 1000 }).reverse().map((r) => [r.actor, r.targetKind, r.targetId, r.detail]);
+    runWithOrg('acme', () => {
+      const svc = services.createService(db, 'alice', { slug: 'pay', name: 'Payments' });
+      assert.deepEqual([waivers.listWaivers(db, svc.id), waivers.countWaivers(db, svc.id), waivers.getWaiver(db, 1)], [[], 0, null]);
+      const w1 = waivers.createWaiver(db, 'alice', { serviceId: svc.id, ruleId: 'L3.MUST.recording_rule_per_slo', reason: 'the rule ships next sprint', expiresAt: '2030-01-01T00:00:00.000Z' });
+      assert.deepEqual(Object.keys(w1), WAIVER_KEYS);
+      assert.ok(ISO_RE.test(w1.createdAt));
+      assert.deepEqual({ ...w1, createdAt: 'T' }, {
+        id: w1.id, orgId: 'acme', serviceId: svc.id, artefactId: null, ruleId: 'L3.MUST.recording_rule_per_slo', reason: 'the rule ships next sprint', author: 'alice',
+        expiresAt: '2030-01-01T00:00:00.000Z', createdAt: 'T', revokedAt: null, revokedBy: null, revokeReason: null,
+      });
+      const w2 = waivers.createWaiver(db, 'bob', { serviceId: svc.id, artefactId: 'slos.api_latency', ruleId: 'L4.MUST.multi_window_burn_rate', reason: 'r'.repeat(2000), expiresAt: '2030-06-01T00:00:00.000Z' });
+      assert.deepEqual([w2.artefactId, w2.author, w2.reason.length], ['slos.api_latency', 'bob', 2000]);
+      assert.deepEqual(waivers.listWaivers(db, svc.id).map((w) => w.id), [w2.id, w1.id], 'newest first');
+      assert.equal(waivers.countWaivers(db, svc.id), 2);
+      assert.deepEqual(rows('waiver.create'), [
+        ['alice', 'waiver', String(w1.id), { service: 'pay', ruleId: 'L3.MUST.recording_rule_per_slo', artefactId: null, expiresAt: '2030-01-01T00:00:00.000Z', reason: 'the rule ships next sprint' }],
+        ['bob', 'waiver', String(w2.id), { service: 'pay', ruleId: 'L4.MUST.multi_window_burn_rate', artefactId: 'slos.api_latency', expiresAt: '2030-06-01T00:00:00.000Z', reason: 'r'.repeat(200) }],
+      ]);
+      // The rules: an ISO expiry, a reason, a rule id, a known service; nothing written.
+      const base = { serviceId: svc.id, ruleId: 'x', reason: 'r', expiresAt: '2030-01-01T00:00:00.000Z' };
+      assert.throws(() => waivers.createWaiver(db, 'alice', { ...base, expiresAt: '2030-01-01' }), /expiresAt must be an ISO time string/);
+      assert.throws(() => waivers.createWaiver(db, 'alice', { ...base, reason: '' }), /reason must be a non-empty string of at most 2000/);
+      assert.throws(() => waivers.createWaiver(db, 'alice', { ...base, reason: 'r'.repeat(2001) }), /reason must be a non-empty string of at most 2000/);
+      assert.throws(() => waivers.createWaiver(db, 'alice', { ...base, ruleId: '' }), /ruleId must be a non-empty string/);
+      assert.throws(() => waivers.createWaiver(db, 'alice', { ...base, artefactId: '' }), /artefactId must be a non-empty string/);
+      assert.throws(() => waivers.createWaiver(db, 'alice', { ...base, serviceId: 999 }), /no service 999/);
+      assert.equal(waivers.countWaivers(db, svc.id), 2);
+      // revoke: soft, once.
+      const revoked = waivers.revokeWaiver(db, 'carol', w1.id, { reason: 'the rule shipped' });
+      assert.ok(ISO_RE.test(revoked.revokedAt));
+      assert.deepEqual([revoked.revokedBy, revoked.revokeReason, revoked.reason], ['carol', 'the rule shipped', 'the rule ships next sprint']);
+      assert.equal(waivers.countWaivers(db, svc.id), 2, 'history stays');
+      assert.throws(() => waivers.revokeWaiver(db, 'carol', w1.id), new RegExp(`waiver ${w1.id} is revoked already \\(${revoked.revokedAt.replace(/[.]/g, '\\.')}, by carol\\)`));
+      assert.throws(() => waivers.revokeWaiver(db, 'carol', 999), /no waiver 999/);
+      const w3 = waivers.revokeWaiver(db, 'dave', w2.id);
+      assert.deepEqual([w3.revokedBy, w3.revokeReason], ['dave', null]);
+      assert.deepEqual(rows('waiver.revoke'), [
+        ['carol', 'waiver', String(w1.id), { service: 'pay', ruleId: 'L3.MUST.recording_rule_per_slo', artefactId: null, reason: 'the rule shipped' }],
+        ['dave', 'waiver', String(w2.id), { service: 'pay', ruleId: 'L4.MUST.multi_window_burn_rate', artefactId: 'slos.api_latency', reason: null }],
+      ]);
+      // The cascade: the service's deletion drops its waivers, writing no waiver row.
+      services.deleteService(db, 'alice', svc.id);
+      assert.deepEqual([waivers.listWaivers(db, svc.id), waivers.getWaiver(db, w1.id)], [[], null]);
+    });
+    assert.deepEqual(auditActions(db, { orgId: 'acme' }), ['service.create', 'waiver.create', 'waiver.create', 'waiver.revoke', 'waiver.revoke', 'service.delete']);
+  } finally {
+    close();
+  }
+});
+
+test('Tenancy isolation: org B reads and writes no verdict or waiver of org A\'s', async () => {
+  const { db, close } = await freshStore('iso-v2');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    orgs.createOrg(db, 'system', { id: 'bravo', name: 'Bravo' });
+    const a = runWithOrg('acme', () => {
+      const svc = services.createService(db, 'alice', { slug: 'pay', name: 'Payments' });
+      const pack = packs.addPack(db, 'alice', { id: 'uploaded-pay-0123abcd', label: 'Pay' });
+      const v = verdicts.setVerdict(db, 'alice', { packId: pack.id, artefactId: 'SLI-01', artefactKey: 'k', status: 'trusted', behaviorHash: 'h' }).verdict;
+      const w = waivers.createWaiver(db, 'alice', { serviceId: svc.id, ruleId: 'x', reason: 'r', expiresAt: '2030-01-01T00:00:00.000Z' });
+      return { svc, pack, v, w };
+    });
+    runWithOrg('bravo', () => {
+      assert.deepEqual(verdicts.listVerdicts(db, a.pack.id), []);
+      assert.equal(verdicts.getVerdict(db, a.pack.id, 'SLI-01'), null);
+      assert.throws(() => verdicts.setVerdict(db, 'bob', { packId: a.pack.id, artefactId: 'SLI-01', artefactKey: 'k', status: 'failed', behaviorHash: 'h' }), /no pack/);
+      assert.throws(() => verdicts.clearVerdict(db, 'bob', a.pack.id, 'SLI-01'), /no verdict/);
+      assert.throws(() => verdicts.carryVerdicts(db, 'bob', { fromPackId: a.pack.id, toPackId: a.pack.id, rows: [a.v], map: new Map([['k', { artefactId: 'SLI-01', family: null, behaviorHash: 'h' }]]) }), /no pack/);
+      assert.deepEqual([waivers.listWaivers(db, a.svc.id), waivers.countWaivers(db, a.svc.id), waivers.getWaiver(db, a.w.id)], [[], 0, null]);
+      assert.throws(() => waivers.createWaiver(db, 'bob', { serviceId: a.svc.id, ruleId: 'x', reason: 'r', expiresAt: '2030-01-01T00:00:00.000Z' }), /no service/);
+      assert.throws(() => waivers.revokeWaiver(db, 'bob', a.w.id), /no waiver/);
+    });
+    runWithOrg('acme', () => {
+      assert.deepEqual([verdicts.getVerdict(db, a.pack.id, 'SLI-01').status, waivers.getWaiver(db, a.w.id).revokedAt], ['trusted', null]);
+    });
+    assert.deepEqual(auditActions(db, { orgId: 'bravo' }), []);
+    assert.deepEqual(auditActions(db, { orgId: 'acme' }), ['service.create', 'pack.register', 'verdict.set', 'waiver.create']);
+  } finally {
+    close();
+  }
+});
+
 test('an MCP endpoint URL carrying a secret is refused, on create and update, without echoing it', async () => {
   const { db, close } = await freshStore('mcp-url-secrets');
   try {
@@ -1776,7 +2017,7 @@ test('packc store backup while a server holds the store: every committed row, no
     assert.equal((await writer.exited(10_000, 'the backup')).code, 0);
     const got = await readStore(dest);
     assert.match(r.stdout, new RegExp(`backup written: ${dest.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
-    assert.match(r.stdout, new RegExp(`store_id: ${got.storeId} \\(schema v1`));
+    assert.match(r.stdout, new RegExp(`store_id: ${got.storeId} \\(schema v2`));
     assert.deepEqual(got.logins, ['committed-before']);
     assert.equal(got.journal, 'delete', 'a VACUUM INTO file is rollback-journal');
     const raw = await openRaw(dest);
@@ -1895,7 +2136,7 @@ test('packc store restore end to end: the in-use probe checkpoints an unclean st
 
   const r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: dbPath });
   assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stdout, new RegExp(`store_id: ${backupId} \\(schema v1\\); previous store_id: ${backupId}`));
+  assert.match(r.stdout, new RegExp(`store_id: ${backupId} \\(schema v2\\); previous store_id: ${backupId}`));
   assert.match(r.stdout, /moved aside: .*observogram\.db\.pre-restore-\d{8}T\d{9}Z/);
   assert.match(r.stdout, /in WAL mode already/);
   const aside = readdirSync(dir).filter((n) => n.startsWith('observogram.db.pre-restore-') && !/-(wal|shm)$/.test(n));
@@ -1924,7 +2165,7 @@ test('packc store restore end to end: the in-use probe checkpoints an unclean st
   assert.notEqual(otherId, backupId);
   const r2 = await packc(['store', 'restore', otherBackup], { OBSERVOGRAM_DB: dbPath });
   assert.equal(r2.code, 0, r2.stderr);
-  assert.match(r2.stdout, new RegExp(`store_id: ${otherId} \\(schema v1\\); previous store_id: ${backupId}`));
+  assert.match(r2.stdout, new RegExp(`store_id: ${otherId} \\(schema v2\\); previous store_id: ${backupId}`));
 
   // A fresh deployment with no database yet: restore just puts it in place.
   const freshPath = join(tempDir('rs-fresh'), 'db', 'observogram.db');

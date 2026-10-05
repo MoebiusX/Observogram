@@ -69,6 +69,7 @@ import { renderBuildSheet } from './build-sheet-view.mjs';
 import { revealTodo } from './build-atoms.mjs';
 import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from './build-label.mjs';
 import { loadBrand } from './brand.mjs';
+import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
 
 // The brand (studio/brand.mjs): kicked off here, at module top level, so the
 // one fetch (/lib/brand.mjs, modulepreloaded by the shell) overlaps the
@@ -210,6 +211,10 @@ async function loadPack(id, env) {
   state.conformance = conformance;
   state.uploadedSource = null;
   state.symbolTable = buildSymbolTable(pack);
+  // The reviewer's verdicts on it (GAP batch 2; none for a catalogue pack):
+  // after the pack, never blocking it — a server that cannot answer leaves
+  // the studio as it was.
+  await loadVerdicts(id);
 }
 
 // ---------- selectors ----------
@@ -360,6 +365,7 @@ function renderServiceSelect() {
       state.pack = null;
       state.conformance = null;
       state.symbolTable = null;
+      emptyVerdicts();
     }
     const currentB = [...(state.catalog || []), ...(state._examplesCache || [])].find(p => p.id === state.compareBId);
     if (state.compareBId && !packMatchesService(currentB, state.selectedService, { side: 'b' })) clearPackBState();
@@ -941,6 +947,7 @@ async function handleFile(file) {
     state.pack = res.adapted;
     state.conformance = withPlaceholderPasses(res);
     state.symbolTable = buildSymbolTable(res.adapted);
+    await loadVerdicts(res.registered?.id);
     state.uploadedSource = file.name;
     state.activeLayer = 'L1';
     state.activeCardKey = null;
@@ -1611,6 +1618,7 @@ async function boot() {
 function goHome() {
   state.mode = 'home';
   state.pack = null;
+  emptyVerdicts();
   state.packB = null;
   state.diff = null;
   state.compileCatalog = null;
@@ -2572,6 +2580,7 @@ const buildActions = {
     state.pack = res.adapted;
     state.conformance = withPlaceholderPasses(res);
     state.symbolTable = buildSymbolTable(res.adapted);
+    await loadVerdicts(res.registered?.id);
     state.uploadedSource = res.registered.source;
     state.mode = 'single';
     state.view = 'layers';
@@ -3935,6 +3944,7 @@ async function adoptValidatedPack(res, sourceLabel, kind) {
     state.pack = res.adapted;
     state.conformance = withPlaceholderPasses(res);
     state.symbolTable = buildSymbolTable(res.adapted);
+    await loadVerdicts(res.registered?.id);
   }
   state.uploadedSource = sourceLabel;
   state.activeCardKey = null;

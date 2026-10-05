@@ -43,6 +43,7 @@ import {
 } from './store/mcp-endpoints.mjs';
 import { getPack } from './store/packs.mjs';
 import { listLinksForOrg, listPacksForService, listServicesForPack } from './store/pack-services.mjs';
+import { countWaivers } from './store/waivers.mjs';
 import { textOk } from './store/rows.mjs';
 
 const refuse = (message, kind = 'conflict') => { throw new AdminRefusal(message, kind); };
@@ -217,8 +218,10 @@ export function updateServiceFromApi(db, actor, id, patch = {}) {
   });
 }
 
-// → { service: ServiceView (as it was), environments: n, packLinks: n }.
-// The packs stay registered; their links cascade with the environments.
+// → { service: ServiceView (as it was), environments: n, packLinks: n,
+// waivers: n }. The packs stay registered; their links cascade with the
+// environments, and so do the record's waivers (GAP batch 2, B3.2 —
+// history included).
 export function deleteServiceFromApi(db, actor, id) {
   return atomic(db, () => {
     const current = getService(db, id);
@@ -226,8 +229,9 @@ export function deleteServiceFromApi(db, actor, id) {
     const view = serviceViewOf(db, current);
     const environments = view.environments.length;
     const packLinks = view.packs.length;
-    deleteService(db, actor, id, { detail: { environments, packLinks } });
-    return { service: view, environments, packLinks };
+    const waivers = countWaivers(db, id);
+    deleteService(db, actor, id, { detail: { environments, packLinks, waivers } });
+    return { service: view, environments, packLinks, waivers };
   });
 }
 

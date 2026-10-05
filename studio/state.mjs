@@ -85,6 +85,8 @@ export const state = {
   pack: null,
   conformance: null,
   symbolTable: null,
+  verdicts: null,              // Map artefact id → VerdictView for the selected pack (studio/verdicts.mjs; never persisted), null = none
+  verdictsPack: null,          // the pack id state.verdicts was loaded for
   // Primary view selector (top nav). One of: layers, conformance,
   // compile, atlas, schema. Compare mode hides conformance + compile.
   view: 'layers',
@@ -119,6 +121,7 @@ export const state = {
   // Discover content filters (only active on view='layers').
   layersSearch: '',            // free-text over card id/title/desc/tags/tool
   layersDomain: 'all',         // facet over artefact tool/system
+  layersVerdict: 'all',        // a reviewer's verdict (trusted | suspect | failed | unreviewed), offered only when the pack has verdicts
   // Discover's one expanded layer (the layer overview opens one at a time).
   // 'all' = the overview with every layer collapsed; a layer id expands
   // that layer. Anything that routes to Discover with a layer id (the
@@ -210,7 +213,7 @@ const PERSIST_FIELDS = [
   'compileGroupB', 'compileFlavorB', 'compileArtifactB',
   'tracePrefs',
   'expandL2', 'expandL3Panels', 'expandL3Queries',
-  'layersSearch', 'layersDomain',
+  'layersSearch', 'layersDomain', 'layersVerdict',
   'discoverDetail',
 ];
 export const persistence = {

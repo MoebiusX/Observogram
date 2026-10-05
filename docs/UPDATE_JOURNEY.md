@@ -885,3 +885,200 @@ chain check read it. The guard now holds every head-of-branch count the
 CHANGELOG or a delivery report states for a flat suite this batch added to
 the `test(` calls the file holds.
 Tests: 884 → 885 (one more test in `tools/test-doc-test-totals.mjs`).
+
+### Rebadge batch 2, PR 2 — GAP batch 2
+
+**G1 — verdicts.** A reviewer's `trusted | suspect | failed` record, with a
+reason, the actor and the time, on one artefact of one registered pack
+(`docs/ADAPTER.md` "Verdicts — a reviewer's record per artefact"; README
+"Record Verdicts"; `DOWNSTREAM.md` §14 `verdicts`). Decisions: `unreviewed`
+is the absence of a row, never a stored value; a verdict is a trust record
+and never feeds the conformance score or the diagnostic grade (Diagnose's
+"verdict" is the engine's grade — the two share a word and nothing else);
+the artefact is keyed by the adapter's positional id, frozen within a
+content-hash pack id, with the behavioural identity key and a contract hash
+beside it so a label re-registration carries the record onto the new
+pack's artefact (`pack.replace`, `pack.register`, then one `verdict.carry`
+row; a replaced pack without verdicts plans nothing and writes nothing); an
+`operator` records (a CI bearer can record an automated review), a viewer
+reads; a catalogue pack answers the empty document (the static bundle
+answers the same, by construction, so the bundle's parity suite compares
+it) and refuses a record with 409 naming the way (register it); the store
+door is one migration for the whole PR (schema v2: `verdicts` and B3.2's
+`waivers` in one step, one set of re-pins) and is one-way (back up before
+upgrading; `packc store export` writes no verdict). Inert by proof: the 24
+board goldens are byte-identical (the badge renders only on an entry's
+`verdict`, which the golden renderer never sets), the rows are pinned with
+`verdict: null`, `/conformance`, `/export.zip` and the deploy answers are
+byte-identical through the shared `conformanceReportFor` /
+`overlaidCanonical` refactor; the intended changes are the drawer's Verdict
+section, `verdicts.json` in the export only while a pack has a verdict,
+`user_version` 1 → 2 and the bundle's bytes in `static-backend.mjs`.
+Tests: 885 → 911 (`server/test-verdict-admin.mjs` 9, `server/test-verdicts-api.mjs` 9,
+five more in `server/test-store.mjs`, three in `tools/test-discover-rows.mjs`).
+
+**G2 — waivers.** A time-boxed, reasoned suppression of one conformance
+finding — a rubric clause and, for the four per-item clauses, optionally one
+canonical symbol of it (`docs/CONFORMANCE.md` "Waivers"; `docs/ADAPTER.md`
+"Waivers — a service record's suppression of a finding"; README "Waive A
+Conformance Finding"; `DOWNSTREAM.md` §14 `waivers`). Decisions: the server
+keeps a waiver on the SERVICE record a pack is primarily linked to (a
+re-upload keeps it; a catalogue pack has no service and no waiver), the CLI
+reads the same object from a sidecar file (`packc conformance --waivers`) —
+pack-side annotations were rejected (a pack must not waive itself); the
+address is the canonical symbol (`slos.<id>`, the adapter's `defines`
+vocabulary), never a JSONPath, and never the verdicts' positional id (both
+addresses kept and documented); a waiver never rewrites the rubric — the
+report keeps the engine's numbers and gains `waivers` with `effective`
+beside them, and a clause is `waived` only when every failing subject is
+covered (`clauseSubjects`, subjects ≡ verdict by construction), else
+`partial`; expired is failing again with the lapsed waiver shown, revoke is
+soft (history), one active waiver per key with renewal after expiry, schema
+errors are not waivable; the author is the audit actor (a login or the
+token label, never an email) and every member reads it; each engine sees the
+waivers of its own vocabulary (rubric ids to the rubric overlay, placeholder
+rules to the rows). Inert by proof: `/conformance` is the same object
+without an open waiver (the API suite captures the body before any waiver
+and matches it byte for byte after every one is revoked), `/api/validate`
+and the library routes keep the bare report, the CLI's stdout and `--json`
+are byte-identical without `--waivers`; the intended change is `DELETE
+/api/services/:id` answering `waivers: n`. Deferred by name:
+`B3.2-studio-waive`, `B3.2-bundle-waivers`, `B3.2-env-scope`,
+`B3.2-supersedes`.
+Tests: 911 → 934 (`server/test-waivers-api.mjs` 9, `tools/test-waivers.mjs` 12,
+two more in `tools/test-pack-conformance.mjs`).
+
+**G3 — diagnose → remediate flow.** The response path from a firing alert to
+the remediation the pack declares for it, computed from pack data alone
+(`docs/ADAPTER.md` "Response path"; README "Remediate"; `DOWNSTREAM.md` §14
+`diagnose-remediate-flow`). Decisions: the spec binds a remediation to its
+alert by a free slug (`trigger: alert:<slug>`) and the vendored spec cannot
+be edited here (`sync-spec` pins it), so the linking rule lives in
+`tools/lib/remediation-flow.mjs` and is normative — the
+`observogram.remediates.remediation[<i>]` annotation first (one spelling,
+the only operator seam), then the rule name, then a compiled burn-rule name
+(the compiler's own formula, cross-checked against the rules it emits), then
+the SLO; the first tier with a hit wins, every hit of it links, a containment
+never matches, and no hit is `unresolved` with name-based suggestions that
+never link, never count and never deploy (the upstream proposal is the named
+follow-up `remediation-trigger-ref`); states come from the comparison's
+buckets indexed by each entry's ARTEFACT through `identityKeyOf` (never by
+parsing a `…@a#01` or `#02` key), `unhealthy` from the live side's
+`mcp.discovered.alert_rules_unhealthy` — read only when the other side is
+live, a baseline's list is not this pack's; a Scaffold remediation (the
+legacy upconvert's) is a `placeholder` with template values; a missing burn
+alert carries the SLO's deploy action and the deploy button renders on
+Remediate alone, only when compared, only for a deployable SLO (an alert rule
+is not a compiled artefact: `alert-rule-deploy`); the panel is one HTML on
+both screens (`studio/remediation-flow-view.mjs`, the `.rflow-*` zone of
+`ux-remediate.css`), the engine loaded at call time through `/lib` and the
+view repainting once when it lands, the gate `packDeclaresRemediation` keeping
+every pack without `spec.remediation` off the import and off the DOM; no
+server, no route, no store, no env, no adapter or diff change. Inert by
+proof: the 24 board goldens, crawl and compile goldens are byte-identical
+(the panel touches neither Discover nor any golden renderer), the three
+catalogue packs without a remediation are unconfigured and empty; the
+intended change is the response-path block on Diagnose (with its sticky-index
+entry) and Remediate for packs WITH remediations — the five catalogue packs,
+every upconverted legacy pack and the typed fixture — all-unresolved for the
+catalogue today (zero triggers resolve; pinned, `catalogue-triggers`).
+Deferred by name: `remediation-trigger-ref`, `remediation-flow-graph-unify`,
+`remediation-flow-live-state`, `alert-rule-deploy`, `catalogue-triggers`.
+Tests: 934 → 958 (`tools/test-remediation-flow.mjs` 14,
+`tools/test-remediation-flow-view.mjs` 10).
+
+**G4 — glossary widgets.** Definitions for the taxonomy's families and for
+spec terms, sourced from a `glossary` section of the taxonomy file and shown
+as an accessible mark beside the label they explain (README "Classify Typed
+Packs"; `DOWNSTREAM.md` §14 `glossary`). Decisions: the W3 schema is
+versioned rather than loosened — `TAXONOMY_VERSIONS` `[1, 2]`,
+`TAXONOMY_VERSION_LATEST` 2, and `TAXONOMY_VERSION` KEEPS the value 1, so a
+downstream that writes `version: TAXONOMY_VERSION` keeps emitting files its
+deployed server accepts and a v1 file stays valid here (it compiles to the
+frozen empty glossary; `glossary` under `version: 1` is an unknown key);
+every entry field is bounded and refused with an exact text, the `link` must
+be `http(s)` and carry no credentials because `GET /api/taxonomy` serves it
+to every viewer, at most one entry per family and no term or alias twice; a
+glossary changes no classification (`classifyArtefact` reads `types` and
+`ids` only — pinned over the fixtures and the vendored example); no server
+code changes (`server/taxonomy.mjs` validates and serves the document as
+loaded, the bundle bake uses the same validator, so B1's bake carries the
+glossary and the bundle draws the same marks with no shim change). The mark
+is a toggletip, not a tooltip — a real button named "What is <label>?" with
+`aria-expanded` / `aria-controls` / `aria-describedby`, the definition
+`hidden` until opened and previewed on hover and on `:focus-visible` by CSS
+so nothing is hover-only, Escape closing the open mark and returning the
+focus (swallowed only then: with no mark open the drawer's Escape in
+`studio/app.mjs` is literally untouched), a click elsewhere closing it, the
+link a "Learn more" anchor in a new tab; drawn by `studio/glossary.mjs`
+(imports `util.mjs` and `taxonomy.mjs` only; the `.ux-gloss*` zone of
+`ux.css` beside `.ux-term`, `--ux-*` tokens only, the focus ring restated
+after `all: unset`, in-flow inside the drawer because `.drawer` scrolls its
+own box) on the Discover row's kind (between the name button and the status
+chips — the row's click guard lets it keep its job; B3.1's verdict chip sits
+inside `.dv-row-status`, so the two never touch the same characters), the
+board's group titles (the first family at home in the group that has an
+entry, else the title as a term or alias) and head facts, the drawer's kind
+row, section heads and field labels; the Tiles, List and Cards views draw no
+mark because the row is one button there (`glossary-light-views`). Inert by
+proof: `glossaryLabelHtml(text) === escapeHtml(text)` and every mark is `''`
+with no entry, so the 24 board goldens, the crawl and compile goldens and
+every Discover row are byte-identical with no glossary, a v1 file or an
+unknown label; the one new golden `typed.glossary.board.html` (the typed
+fixture under `tools/fixtures/taxonomy/taxonomy.v2.json`) stripped of its
+marks (`stripGlossaryMarks`, a balanced span walk) is `typed.mapped.board.html`
+with the same families; `taxonomy.json` stays v1. The browser smoke
+(`server/test-glossary-shell.mjs`, modelled on `test-brand-shell.mjs` so no
+strip loop wipes `OBSERVOGRAM_PLAYWRIGHT` or `OBSERVOGRAM_GLOSSARY_SMOKE`;
+STRIP gains the knob) opens the vendored example on a v2 child at 1366 and
+390 px and proves the keyboard toggle, the focus return, the hover preview,
+and Escape closing a mark in the drawer before the drawer; a v1 and an
+unconfigured child draw zero marks. Deferred by name: `glossary-light-views`,
+`glossary-termhtml-override`, `glossary-seed-from-spec`.
+Tests: 958 → 975 (`tools/test-glossary.mjs` 9, `server/test-glossary-shell.mjs` 1,
+four more in `tools/test-artefact-classify.mjs`, one in `server/test-taxonomy.mjs`,
+one in `tools/test-discover-rows.mjs`, one in `tools/test-studio-bundle.mjs` — T8c).
+
+**G5 — the service audit report.** One exportable report per pack, HTML and
+JSON, that reads every engine this repository ships and adds no judgement of
+its own (README "Export A Service Audit Report"; `docs/ADAPTER.md` "The
+service audit report" and "Artefact addresses"; `DOWNSTREAM.md` §14
+`service-audit-report`). Decisions: the engine's conformance numbers headline
+and a waivers overlay's `effective` sits beside them, never in their place
+(D6); a verdict never feeds them (D2); the report's conformance section IS
+the one `conformanceReportFor()` body the `/conformance` route sends —
+injected into the route, so the two cannot grade one pack differently, and
+the server's verdict and waiver rows are `verdictsDocument`'s and
+`listWaiverViews`' views mapped field by field with the one `now` the
+conformance overlay used; the placeholders section is `packConformance`'s
+rows beside the Conformance view's two template counts, and the reserved
+`GET /api/packs/:id/placeholders` is built (answered by the bundle too);
+coverage names a family `required` when a rubric clause that applies at the
+graded tier names it (`CLAUSE_FAMILIES` over every rubric id, `[]` for the
+referential L2X clause — a tier-3 pack's L2X families are absent, never
+missing); the goes-blind section is the blast radius over the traceability
+graph's SHAPE (the parser-bound module is never imported by the model), the
+top N by what goes blind and the count of nodes whose loss would blind an
+SLO; the response path is B3.3's model, `compared: false` by construction;
+two artefact addresses are printed as their engines name them (D4); a source
+not given reads "not recorded by this build" (the CLI and the bundle have no
+store), an empty one "none recorded"; the CLI reads `--brand` only — never
+`OBSERVOGRAM_BRAND_*` — and `--no-timestamp` makes the bytes reproducible;
+the HTML is one standalone document over the design tokens and kit (the first
+such) with the brand's chrome and tokens, no script, every value escaped, a
+`</style` stylesheet refused; the bundle answers `/audit-report` 501 because
+the goes-blind section needs the PromQL parser (the Compare blocker). Inert
+by proof: a new module, CLI and route — crawl, compile and board goldens are
+byte-identical, `/conformance` and `/export.zip` unchanged, the Conformance
+view's headless capture byte-identical (the anchors render only with a
+focused pack id); the intended changes are the two download anchors on the
+Conformance view and the bundle's bytes (the shim's `pack-conformance.mjs`
+import for `/placeholders`). Deferred by name: `B3.5-bundle-audit-report`,
+`B3.5-export-zip`, `B3.5-dark-print`.
+Tests: 975 → 998 (`tools/test-audit-report.mjs` 18, `server/test-audit-report-api.mjs` 5).
+
+The batch's delivery report, `docs/DELIVERY-GAP-BATCH2.md`, is written per
+feature — what shipped, the measured `Tests:` pair, what is deferred by name and why —
+and `tools/test-doc-test-totals.mjs` guards it as it guards
+`docs/DELIVERY-REBADGE-BATCH2.md` (every pair it quotes is one this journey
+states; the two new flat suites join the ledger).

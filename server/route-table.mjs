@@ -39,11 +39,12 @@ export const MODES = Object.freeze(['local', 'oidc', 'proxy', 'off']);
 
 // A route that registers a pack (server/pack-registry.mjs): the pack's row
 // (pack.register, or pack.update for the same content under another label
-// or source), the quick-start dedup (pack.replace), the cap (pack.evict),
+// or source), the quick-start dedup (pack.replace — with verdict.carry when
+// the replaced pack held verdicts, GAP batch 2), the cap (pack.evict),
 // and the reconcile of its service links (pack.link / pack.unlink, with
 // service.create / environment.create for the rows it names when absent).
 const PACK_REGISTER = Object.freeze([
-  'pack.register', 'pack.update', 'pack.replace', 'pack.evict', 'pack.link', 'pack.unlink', 'service.create', 'environment.create',
+  'pack.register', 'pack.update', 'pack.replace', 'pack.evict', 'pack.link', 'pack.unlink', 'service.create', 'environment.create', 'verdict.carry',
 ]);
 
 export const ROUTES = Object.freeze({
@@ -94,6 +95,15 @@ export const ROUTES = Object.freeze({
   'GET /api/packs/:id': { class: 'viewer' },
   'GET /api/packs/:id/canonical': { class: 'viewer' },
   'GET /api/packs/:id/conformance': { class: 'viewer' },
+  // A reviewer's verdicts on a registered pack's artefacts (GAP batch 2,
+  // B3.1; server/routes/verdicts.mjs): a catalogue pack answers the empty
+  // document.
+  'GET /api/packs/:id/verdicts': { class: 'viewer' },
+  // The placeholder report and the service audit report (GAP batch 2, B3.5;
+  // server/routes/audit-report.mjs): reads over the pack and the store's
+  // verdict and waiver rows, JSON or HTML.
+  'GET /api/packs/:id/placeholders': { class: 'viewer' },
+  'GET /api/packs/:id/audit-report': { class: 'viewer' },
   'GET /api/diff': { class: 'viewer' },
   'GET /api/compile/targets': { class: 'viewer' },
   'GET /api/packs/:id/compile-catalog': { class: 'viewer' },
@@ -116,6 +126,9 @@ export const ROUTES = Object.freeze({
   'GET /api/services': { class: 'viewer' },
   'GET /api/services/:id': { class: 'viewer' },
   'GET /api/services/:id/environments': { class: 'viewer' },
+  // A service record's waivers of conformance findings (GAP batch 2, B3.2;
+  // server/routes/waivers.mjs): history included, newest first.
+  'GET /api/services/:id/waivers': { class: 'viewer' },
   'GET /api/environments/:id': { class: 'viewer' },
   // The org's MCP endpoint records: the name and origin to every member,
   // the URL and the token variable's name to operators and above.
@@ -139,14 +152,22 @@ export const ROUTES = Object.freeze({
   'POST /api/library/compile': { class: 'operator' }, // computes; writes nothing
   'POST /api/library/register': { class: 'operator', audit: PACK_REGISTER },
   // The services and environments API (server/routes/services.mjs): a
-  // service's deletion cascades its environments and pack links, which
-  // write no row of their own (the service.delete detail counts them).
+  // service's deletion cascades its environments, pack links and waivers,
+  // which write no row of their own (the service.delete detail counts them).
   'POST /api/services': { class: 'operator', audit: ['service.create'] },
   'PATCH /api/services/:id': { class: 'operator', audit: ['service.update'] },
   'DELETE /api/services/:id': { class: 'operator', audit: ['service.delete'] },
   'POST /api/services/:id/environments': { class: 'operator', audit: ['environment.create'] },
   'PATCH /api/environments/:id': { class: 'operator', audit: ['environment.update'] },
   'DELETE /api/environments/:id': { class: 'operator', audit: ['environment.delete'] },
+  // The verdicts (server/routes/verdicts.mjs): a record on one artefact of a
+  // registered pack; the same status and reason again writes no row.
+  'PUT /api/packs/:id/verdicts/:artefact': { class: 'operator', audit: ['verdict.set'] },
+  'DELETE /api/packs/:id/verdicts/:artefact': { class: 'operator', audit: ['verdict.clear'] },
+  // The waivers (server/routes/waivers.mjs): a time-boxed suppression of a
+  // conformance finding on a service record; a revoke keeps the row.
+  'POST /api/services/:id/waivers': { class: 'operator', audit: ['waiver.create'] },
+  'POST /api/waivers/:id/revoke': { class: 'operator', audit: ['waiver.revoke'] },
 
   // ---------- admin: the request's org — its name and its members ----------
   // The identity API (server/routes/identity.mjs) for the org the request

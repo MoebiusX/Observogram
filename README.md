@@ -235,6 +235,17 @@ Deployable artifacts can be pushed through an MCP write target. Non-deployable
 or inferred artifacts remain visible as manual follow-up, not silent production
 changes.
 
+When the pack declares remediations (`spec.remediation`), Diagnose and
+Remediate also draw the **response path**: each remediation, the alert its
+`trigger: alert:<slug>` names (matched by rule name, compiled burn-rule name
+or SLO, or declared outright with the annotation
+`observogram.remediates.remediation[<i>]` — `docs/ADAPTER.md` "Response
+path"), that alert's state against live, and what next — deploy the missing
+burn alert, reconcile the drifted one, route the severity, register the
+automation, open the runbook. A trigger no alert answers to is listed as
+unresolved with name-based suggestions; nothing is inferred into a link. Pure
+pack data, no external call; a pack without remediations shows nothing.
+
 ![Observogram Remediate view showing the Pack A minus Pack B deploy delta](docs/img/xray-remediate.png)
 
 ## Quickstart
@@ -736,7 +747,7 @@ org is never found (404, or 400 for `mcpEndpointId`).
 | `POST` | `/api/services` | operator | `{ name, slug?, owners?, tier?, description? }` | a service record (201); `slug` defaults to the name's key; `owners` at most 50 names; a slug in use is 409 naming its id |
 | `GET` | `/api/services/:id` | viewer | — | one service record with its environments and packs; 404 `no service <id>` |
 | `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description` | `changed` lists the fields that differed (none: no audit row); `slug` in the body is 400 — the slug is fixed, create a new service instead |
-| `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments` and `packLinks` removed with it |
+| `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments`, `packLinks` and `waivers` removed with it |
 | `GET` | `/api/services/:id/environments` | viewer | — | `service` (`id`, `slug`, `name`, `tier`) and its `environments` |
 | `POST` | `/api/services/:id/environments` | operator | `{ name, tier?, bindings?, endpoints?, mcpEndpointId? }` | an environment (201); `bindings` at most 32 string values of 1–256 characters, `endpoints` at most 20 http(s) URLs by name, `mcpEndpointId` one of the org's MCP endpoints; a name in use is 409 |
 | `GET` | `/api/environments/:id` | viewer | — | `environment` and its `service` (`id`, `slug`, `name`, `tier`); `effectiveTier` is the environment's tier, else the service's |
@@ -877,6 +888,27 @@ a member, the bearer, `system`. An admin cannot list the deployment's
 users; the audit does show them the login of every owner who ever changed
 their org, because who changed your org is yours to know. A deployment row
 (`orgId: null`) is an owner's only.
+
+**The verdict rows** (GAP batch 2; [Record Verdicts](#record-verdicts))
+are table rows like the services': written in the transaction of the
+change, by the repository. `verdict.set` on target `artefact`
+`<pack>/<artefact>` with `{ pack, artefact, family, from, to, reason }`
+(`from` null for a first record; the reason cut to 200); `verdict.clear`
+with `{ pack, artefact, from }`; `verdict.carry` on target `pack` (the new
+pack id) with `{ from, kept, dropped, droppedCount }` when a re-upload under
+the same label replaced a pack that held verdicts — written by the register
+routes (`POST /api/validate`, `/api/crawl`, `/api/crawl-github`,
+`/api/draft-from-mcp`, `/api/library/register`) between `pack.register` and
+the link rows, and only then. A verdict cascades with its pack (an eviction,
+`DELETE /api/uploads`, the rehydrate's prune) without a row of its own.
+
+**The waiver rows** (GAP batch 2; [Waive A Conformance
+Finding](#waive-a-conformance-finding)) are table rows too: `waiver.create`
+on target `waiver` `<id>` with `{ service, ruleId, artefactId, expiresAt,
+reason }` (the service's slug; the reason cut to 200), `waiver.revoke` with
+`{ service, ruleId, artefactId, reason }` (the revoke's reason). A waiver
+cascades with its service (`DELETE /api/services/:id` counts them in its
+`service.delete` detail as `waivers`) without a row of its own.
 
 **The file-first rows.** The deploy routes, the journey capture and run,
 and the live refresh change a file of the org's, not a table, so their row
@@ -1153,11 +1185,92 @@ The studio also accepts drag-and-drop or file picker upload. Uploaded, crawled,
 and MCP-drafted packs are registered in memory and become addressable through
 the same `/api/packs/:id/*` endpoints as catalog packs.
 
+### Record Verdicts
+
+A verdict is a reviewer's record on one artefact of a registered pack —
+`trusted`, `suspect` or `failed`, with a reason, who and when — kept in the
+store beside the pack's row ([docs/ADAPTER.md](docs/ADAPTER.md), "Verdicts —
+a reviewer's record per artefact"). It is a trust record, not a scorer
+input: nothing sums verdicts into the conformance score or the diagnostic
+grade, and `unreviewed` is the absence of a record. The artefact is named by
+the adapter's positional id (`SLI-01`, `ALR-02`; `GET /api/packs/:id` lists
+them), which is frozen within a pack id because the id is a content hash; a
+re-upload of the same content keeps the verdicts, and a re-upload under the
+same label with changed content carries each verdict onto the new pack's
+artefact when the artefact's behavioural identity is unchanged (`carriedFrom`
+names the old pack; the rest are dropped and the `verdict.carry` audit row
+counts them). A catalogue or example pack holds no verdicts — register it
+first (`POST /api/validate`) and record on the registered id.
+
+```bash
+# record (operator): the body is { status, reason? }
+curl -sS -X PUT -b cookies.txt -H 'X-Observogram-CSRF: 1' -H 'Content-Type: application/json' \
+  -d '{"status":"suspect","reason":"the window is shorter than the SLO period"}' \
+  http://127.0.0.1:8000/api/packs/uploaded-payment-service-1a2b3c4d/verdicts/SLO-01
+# read (viewer): the document, every artefact counted in summary
+curl -sS -b cookies.txt http://127.0.0.1:8000/api/packs/uploaded-payment-service-1a2b3c4d/verdicts
+# clear (operator)
+curl -sS -X DELETE -b cookies.txt -H 'X-Observogram-CSRF: 1' \
+  http://127.0.0.1:8000/api/packs/uploaded-payment-service-1a2b3c4d/verdicts/SLO-01
+```
+
+In the studio, Discover shows a verdict as a badge on the board and a chip
+on the row, the Refine control filters a layer by verdict, and the drawer's
+Verdict section records one (operators and admins; everyone in the open
+postures — beside `OBSERVOGRAM_API_TOKEN` without sign-in the browser is a
+viewer, and the section names the bearer route for CI instead of a form the
+API would refuse). The `actor` is the audit actor — a login or the token
+label, never an email. `GET /api/packs/:id/export.zip` adds `verdicts.json` (the
+GET document) after the compiled artefacts — only while the pack has a
+verdict, so a pack without one exports exactly what it did before.
+
+### Waive A Conformance Finding
+
+A waiver is a time-boxed, reasoned suppression of one conformance finding:
+one rubric clause (`GET /api/maturity-rubric` lists the ids) and, for the
+four per-item clauses (`L1.MUST.sli_covered_by_slo`,
+`L3.MUST.recording_rule_per_slo`, `L4.MUST.multi_window_burn_rate`,
+`L5.MUST.tier1_chaos_for_each_slo`), optionally one canonical symbol of it —
+`slos.<id>` or `slis.<id>`, the adapter's `defines` vocabulary, never a
+JSONPath ([docs/CONFORMANCE.md](docs/CONFORMANCE.md), "Waivers"). It lives on
+the **service record** the pack is primarily linked to, so a re-upload of
+the service's pack keeps it; a catalogue pack has no service and no waiver.
+A waiver never rewrites the rubric: `GET /api/packs/:id/conformance` keeps
+the engine's numbers and, while the service holds an open waiver, gains a
+`waivers` block — the service, the counts, per clause `waived` (every
+failing subject covered), `partial` (some) or `expired` (the finding fails
+again; the lapsed waiver is shown) with the waivers quoted, the `effective`
+numbers (conformant, MUST, SHOULD, score, per layer) and the `unused`
+waivers that match no finding. Expiry is at most 366 days ahead; a waiver is
+immutable but for its revoke, which keeps the row as history; one active
+waiver per `(service, clause, symbol)`, a new one after it expires. Schema
+errors are not waivable — an invalid pack is never graded. `/api/validate`
+and the library routes answer the bare report.
+
+```bash
+# waive (operator): the body is { ruleId, artefactId?, reason, expiresAt }
+curl -sS -X POST -b cookies.txt -H 'X-Observogram-CSRF: 1' -H 'Content-Type: application/json' \
+  -d '{"ruleId":"L5.MUST.tier1_chaos_for_each_slo","artefactId":"slos.consumer_success_99_95","reason":"chaos day is scheduled for Q1","expiresAt":"2027-03-31T00:00:00Z"}' \
+  http://127.0.0.1:8000/api/services/12/waivers
+# list (viewer): history included, newest first
+curl -sS -b cookies.txt http://127.0.0.1:8000/api/services/12/waivers
+# revoke (operator)
+curl -sS -X POST -b cookies.txt -H 'X-Observogram-CSRF: 1' -H 'Content-Type: application/json' \
+  -d '{"reason":"the chaos experiment landed"}' http://127.0.0.1:8000/api/waivers/7/revoke
+```
+
+The `author` and `revokedBy` a waiver shows are the audit actor — a login
+or the token label, never an email — and every member of the org reads them
+(the list is a viewer route), as does anyone the exported report or a
+sidecar file is shared with. Without a server, the same waiver object in a
+sidecar file drives `packc conformance --waivers <file>` (next section).
+
 ### Report Placeholders (pack conformance)
 
 ```bash
-npm run pack-conformance -- path/to/pack.yaml [more.pack.json ...] [--json] [--strict] [--quiet]
+npm run pack-conformance -- path/to/pack.yaml [more.pack.json ...] [--json] [--strict] [--quiet] [--waivers <file>]
 packc conformance path/to/pack.yaml
+packc conformance path/to/pack.yaml --waivers waivers.json --strict
 ```
 
 A valid pack can still be full of placeholders — the values an importer (the
@@ -1178,9 +1291,26 @@ canonical and valid (rows are informational); 1 for an unreadable, layered
 has rows; 2 for usage. `--json` prints `{ tool, specVersion, strict, packs:
 [{ path, valid, errors, rubric, rows, counts, … }], totals, exitCode }`. The
 maturity rubric (Diagnose) grades what is declared, placeholders included; the
-rows are what still has to become real. The workflow, the marker contract and
+rows are what still has to become real; the server answers the same report at
+`GET /api/packs/:id/placeholders` (and the static bundle in the browser). The
+workflow, the marker contract and
 the merge-safe `upconvert-legacy` (`-o` onto an existing canonical file merges;
 `--merge`, `--overwrite`) are in [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §11.
+
+`--waivers <file>` applies a waiver file — `{ "version": 1, "waivers": [{
+"ruleId", "artefactId"?, "reason", "expiresAt", "author" }] }`, the same
+object the server's `GET /api/services/:id/waivers` serves per row, so a
+file can be written by hand or saved from the API ([Waive A Conformance
+Finding](#waive-a-conformance-finding)) — to every pack: a placeholder row
+whose `(rule, symbol)` an active waiver covers (`ruleId` the row's rule,
+`placeholder.slos.objective`; `artefactId` the row's symbol, or omitted for
+every row of that rule) keeps its state, gains `waived` and is counted in
+`waived`, and `--strict` no longer fails on it; a waived rubric clause is met
+in the rubric line's `(+n waived)` and `(m% with waivers)` and in `--json`'s
+`rubric.waivers.effective`, the engine's own numbers never rewritten. An
+expired waiver is shown as lapsed and covers nothing; a revoked one is
+history. Without the flag the output is byte-identical to before; an
+unreadable file is exit 2 naming the entry.
 
 ### Classify Typed Packs
 
@@ -1224,6 +1354,60 @@ rule. In identity mode an anonymous studio boots on the default families
 until sign-in (`/api/taxonomy` is a viewer route, like `/api/examples`).
 Unset, nothing changes: the families are Observogram's own and the board
 goldens (`npm run test:golden:board`) are byte-identical.
+
+**Schema version 2 adds a glossary.** With `"version": 2` the file may carry
+a `glossary` — the definitions the studio shows beside a family label or a
+spec term, as a mark a person can open (below, *The glossary marks*):
+
+```json
+{
+  "version": 2,
+  "types": { "PackSLI": "sli" },
+  "glossary": [
+    { "term": "Service level indicator", "family": "sli", "aliases": ["SLI", "SLIs"],
+      "definition": "A measurement of how the service behaves for its users.",
+      "link": "https://example.com/handbook/sli" },
+    { "term": "Error budget", "definition": "The share of the window an objective allows to fail." }
+  ]
+}
+```
+
+An entry is `{ term, definition, family?, aliases?, link? }`: `term` and each
+alias one line of 1–80 characters, `definition` one line of 1–600, `family`
+one of Observogram's families (at most one entry per family), `link` an
+`http(s)` URL of at most 2000 characters that carries no credentials (it is
+served to every viewer); at most 500 entries, and no term or alias defined
+twice (case-insensitive). A glossary never changes a classification — the
+families, the board, the diff and the graphs read `types` and `ids` only — and
+a version 1 file stays valid: it compiles exactly as before, to an empty
+glossary; `glossary` under `version: 1` is refused as an unknown key, so a
+file written for an older server keeps working on this one and the other way
+round. The boot line counts the terms (`…: 7 types, 1 id rule, 6 glossary
+terms`), `GET /api/taxonomy` serves the document with its glossary, and the
+static bundle bakes it like any other taxonomy file.
+`tools/fixtures/taxonomy/taxonomy.v2.json` is the worked v2 example beside
+the v1 `taxonomy.json`.
+
+**The glossary marks.** Where the studio names something the glossary
+explains, a small `?` mark follows the label: on Discover, the kind of each
+row (its family's entry, else an entry whose term or alias is the label), the
+board's group titles (the first family at home in the group that has an
+entry, else the title as a term or alias) and the head facts (`Criticality`,
+`Backends` … by label); in the drawer, a *kind* row with the family's entry
+and any section head or field label the glossary knows. The mark is a real
+button, not a tooltip: its name reads "What is <label>?", it opens the
+definition in place (`aria-expanded`, `aria-controls`), hover and keyboard
+focus preview it, Escape closes it and hands the focus back (and is swallowed
+only then — with nothing open Escape still closes the drawer), a click
+elsewhere closes it; `link` is a "Learn more" anchor to the operator's page in
+a new tab. Nothing is hover-only and no colour is the only cue. Without a
+glossary — no file, a v1 file, or a label the glossary does not know — the
+mark is not drawn and every row, board and drawer is byte for byte what it
+was (`npm run test:golden:board` keeps the 24 goldens and adds
+`typed.glossary.board.html`, the typed fixture under the v2 file, which
+stripped of its marks is the mapped golden). The static bundle shows the same
+marks from the baked v2 file (`--taxonomy`). The Tiles, List and Cards views
+carry no mark (`glossary-light-views`, `docs/DOWNSTREAM.md` §14).
 
 A typed pack reaches the pipeline either as a layered JSON upload whose items
 carry a `type` (kept through the upconvert as
@@ -1364,6 +1548,41 @@ as the `assurance` item with its own file. See
 [`docs/ASSURANCE_RULES.md`](docs/ASSURANCE_RULES.md) for the rules and a sample
 heartbeat route.
 
+### Export A Service Audit Report
+
+```bash
+npm run audit-report -- path/to/pack.yaml [--env <name>] [--format json|html|both] [--out <path>] [--brand <file.json>] [--taxonomy <file.json>] [--top <n>] [--generated-at <iso> | --no-timestamp] [--verdicts <file.json>] [--waivers <file.json>] [--schema <file>]
+packc audit-report path/to/pack.yaml --format html --out report.html
+packc audit-report path/to/pack.yaml --env prod --waivers waivers.json --no-timestamp
+```
+
+One report per pack (GAP batch 2), as JSON or HTML, in seven sections: the
+maturity rubric's grade (the engine's numbers headline; with waivers the
+`effective` numbers sit beside them, never in their place), the placeholders
+(`packc conformance`'s rows beside the library-todo and Scaffold counts), a
+reviewer's verdicts, the service's waivers, the coverage by artefact family
+(a family a rubric clause that applies at the graded tier names is
+*required*; required with nothing declared is *missing*, otherwise *absent*),
+the goes-blind risks (the blast radius over the traceability graph: what
+WOULD go blind if a node died, never that something is blind) and the
+declared response path (which remediations answer to an alert). The HTML is
+one self-contained document over the studio's design tokens and kit, no
+script, print-friendly; the JSON shape is in
+[`docs/ADAPTER.md`](docs/ADAPTER.md) ("The service audit report"). The
+engine is `tools/lib/audit-report.mjs` (vendorable); nothing in it grades,
+scores or classifies on its own, and a verdict never feeds the conformance
+numbers.
+
+The CLI has no store: without `--verdicts` (a saved `GET
+/api/packs/:id/verdicts` document) and `--waivers` (the waiver file `packc
+conformance --waivers` reads) those sections say *not recorded by this
+build*. `--brand` is the only brand the CLI reads — never
+`OBSERVOGRAM_BRAND_*`, unlike the bundle build, so a report is reproducible
+from its arguments — and `--no-timestamp` leaves `generatedAt` null for
+byte-identical output (`--generated-at` stamps a given time). Exit 0 written;
+1 an unreadable, layered or invalid pack; 2 usage. This is the pack's audit
+report, not the store's audit log ([The Audit](#the-audit)).
+
 ### Serve The Studio Without The Server (static bundle)
 
 A downstream that serves the studio behind its own static host — a CDN, an
@@ -1439,8 +1658,12 @@ server runs — the catalogue, Discover, Diagnose (conformance), the canonical
 manifest, Compile (the catalogue, every artefact, every target) and **Export**
 (the ZIP, downloaded as a Blob) — so the verdicts are the server's
 (`tools/test-studio-bundle.mjs` compares every ported route against a running
-server). Everything the server alone can do — Scan a repo, Draft from MCP,
-uploads, Compare, Deploy, Journeys, Build, sign-in — answers
+server; `GET /api/packs/:id/verdicts` answers the empty document — a
+bundled pack is never registered, so that IS the server's answer). Everything
+the server alone can do — Scan a repo, Draft from MCP, uploads, Compare,
+Deploy, Journeys, Build, recording a Verdict, Waivers (they live on a service
+record, which a bundled pack has none of), the Audit report (its goes-blind
+section needs the PromQL parser the bundle cannot inline), sign-in — answers
 `501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
 this studio is a static bundle built without one.' }`, which the studio shows
 as the sentence, and a dismissable notice at the bottom of the window says so
@@ -1734,7 +1957,7 @@ included: a checkpoint between two file copies tears it. Safe options:
 ```bash
 packc store backup /backups/observogram-2026-09-24.db
 # backup written: /backups/observogram-2026-09-24.db
-# store_id: 3f0c… (schema v1, from /app/.observogram/observogram.db)
+# store_id: 3f0c… (schema v2, from /app/.observogram/observogram.db)
 ```
 
 It runs `VACUUM INTO` outside any transaction into `<path>.tmp` and renames
@@ -1753,7 +1976,7 @@ users, orgs, memberships or audit.
 ```bash
 packc store restore /backups/observogram-2026-09-24.db
 # restored … -> /app/.observogram/observogram.db
-# store_id: 3f0c… (schema v1); previous store_id: 3f0c…
+# store_id: 3f0c… (schema v2); previous store_id: 3f0c…
 # moved aside: /app/.observogram/observogram.db.pre-restore-20260924T101500123Z
 ```
 
@@ -1799,6 +2022,15 @@ stderr — `the restored store is <id>; <base>/.store-imported names <other>
    the file's canonical SHA-256 (its entries without `lastUsedAt`) under a
    key of its own; the file stays where it is, frozen (an upgrade from
    0.5.0 does only this half). Take a `packc store backup` once it runs.
+3. **Schema v2** (GAP batch 2): a store build from this version on migrates a
+   v1 database to v2 at its first start — two tables, `verdicts` (a
+   reviewer's record per artefact of a registered pack) and `waivers` (a
+   service record's time-boxed waivers of conformance findings); every row
+   a v1 store held is kept. The door is one-way: a v1 build refuses a v2
+   database (`the database is at schema v2, but this build knows up to v1`)
+   and `packc store restore` refuses a v2 backup on a v1 build, so take a
+   `packc store backup` before the upgrade. `packc store export` writes no
+   verdict or waiver (a pre-store build has nowhere to hold them).
 
 **Roll back** to a pre-store build (the image before the store) only this
 way. A pre-store build reads `users.json` / `orgs.json`, not the store, so
@@ -2159,7 +2391,10 @@ open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
 | `GET` | `/api/references` | Curated catalogue reference packs |
 | `GET` | `/api/packs/:id` | Adapted layered pack |
 | `GET` | `/api/packs/:id/canonical` | Canonical pack with env overlay |
+| `GET` | `/api/packs/:id/verdicts` | A reviewer's verdicts on the pack's artefacts (GAP batch 2): `{ ok, pack, verdicts[], summary }` — each `{ artefact, key, family, title, status, reason, actor, setAt, carriedFrom }`, `status` one of `trusted`, `suspect`, `failed`; `unreviewed` is the absence of a record; a catalogue pack answers the empty document (`?env=` is ignored: verdicts are per pack) — see [Record Verdicts](#record-verdicts) |
 | `GET` | `/api/packs/:id/conformance` | Maturity-rubric scoring (the rubric grades what is declared, placeholders included; `npm run pack-conformance` lists the placeholders) (`onPlaceholder` when the pack carries `library.todo.*` annotations), graded at the service record's tier when one is set (the environment's for `?env=`, else the service's): `declaredTier` is the graded tier, `tier.pack` the pack's own, `tier.mismatch` says they differ; a pack with no record (a catalogue pack, a service without a tier) is graded at its own tier, `tier.from: 'pack'` |
+| `GET` | `/api/packs/:id/audit-report` | The service audit report (GAP batch 2; [Export A Service Audit Report](#export-a-service-audit-report)): `?format=json` (default) or `html`, `?top=<1..100>` the goes-blind listing size, `?download=1` an attachment named `<id>.audit-report.<ext>`, `?env=` grades the environment. Its conformance section is this route's `/conformance` body; its verdict and waiver rows are the store's (the pack's and its primary service's), the author the audit actor; no-store. 400 names a bad `format` or `top`; 404 `{ error: 'unknown pack: <id>' }` |
+| `GET` | `/api/packs/:id/placeholders` | The placeholder report `npm run pack-conformance` prints, for the pack as the env overlay leaves it (`?env=`): `{ name, writers, markers, rows, counts, conformant }` (`tools/lib/pack-conformance.mjs` `packConformance`); no-store |
 | `GET` | `/api/diff?a=&b=` | Repo/live or pack/pack structural diff |
 | `GET` | `/api/packs/:id/compile-catalog` | Per-artifact compile tree |
 | `GET` | `/api/packs/:id/compile-artifact` | Compile one artifact or group |
@@ -2189,12 +2424,17 @@ open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
 | `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack) |
 | `GET` | `/api/services/:id` | One service record with its environments and packs |
 | `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description` (`changed` lists what differed; nothing → no audit row) |
-| `DELETE` | `/api/services/:id` | Removes the service with its environments and pack links (the packs stay registered; registering a pack that names the service re-creates it) |
+| `DELETE` | `/api/services/:id` | Removes the service with its environments, pack links and waivers (the packs stay registered; registering a pack that names the service re-creates it); the body counts `environments`, `packLinks` and `waivers` |
 | `GET` | `/api/services/:id/environments` | The service's environments |
+| `GET` | `/api/services/:id/waivers` | The service's waivers of conformance findings (GAP batch 2), newest first, history included: `{ ok, service: { id, slug }, waivers[], counts: { active, expired, revoked } }` — each `{ id, serviceId, ruleId, artefactId, reason, expiresAt, author, createdAt, state, expiresInDays, revokedAt, revokedBy, revokeReason }`; the `author` is the audit actor, visible to every member — see [Waive A Conformance Finding](#waive-a-conformance-finding) |
 | `POST` | `/api/services/:id/environments` | An environment (201): `{ name, tier?, bindings?, endpoints?, mcpEndpointId? }`; `endpoints` are links every member may open — never put a token in one |
 | `GET` | `/api/environments/:id` | One environment with its service |
 | `PATCH` | `/api/environments/:id` | Changes `name`, `tier`, `bindings`, `endpoints`, `mcpEndpointId` (`null` unbinds) |
 | `DELETE` | `/api/environments/:id` | Removes an environment |
+| `PUT` | `/api/packs/:id/verdicts/:artefact` | Records a reviewer's verdict on one artefact of a registered pack: `{ status, reason? }` → `{ ok, verdict, changed }` (`changed` lists what differed; the same status and reason again writes no row); a catalogue pack is 409, an unknown artefact 404; an audit row: `verdict.set` |
+| `DELETE` | `/api/packs/:id/verdicts/:artefact` | Clears it (the artefact is unreviewed again) → `{ ok, cleared }`; an audit row: `verdict.clear` |
+| `POST` | `/api/services/:id/waivers` | Waives a conformance finding on the service (201): `{ ruleId, artefactId?, reason, expiresAt }` → `{ ok, waiver }` — `ruleId` a rubric clause (`GET /api/maturity-rubric`), `artefactId` a canonical symbol (`slos.<id>`, `slis.<id>`) of one of the four per-item clauses or omitted for the whole clause, `expiresAt` after now and at most 366 days ahead; the `author` is the caller; one active waiver per `(ruleId, artefactId)` (409 names it); an audit row: `waiver.create` |
+| `POST` | `/api/waivers/:id/revoke` | Revokes it (`{ reason? }` → `{ ok, waiver }`, state `revoked`; the row stays as history); a second revoke is 409; an audit row: `waiver.revoke` |
 | `GET` | `/api/mcp-endpoints` | The org's MCP endpoint records, by name: `id`, `name`, `origin`, how many environments are checked through each; `url` and `readTokenEnv` to operators and above, `null` to a viewer |
 | `POST` | `/api/mcp-endpoints` | An MCP endpoint record (201): `{ name, url, readTokenEnv? }` — the URL carries no credential (a query parameter named like one is refused by name), `readTokenEnv` names a variable of this org, `OBSERVOGRAM_ORG_<ORG>_<NAME>` |
 | `PATCH` | `/api/mcp-endpoints/:id` | Changes `name`, `url`, `readTokenEnv` (`null` clears it; `changed` lists what differed) |
@@ -2228,7 +2468,9 @@ server/
   boot.mjs                 The boot order: opens the store, imports users.json / orgs.json once, the seed and the fail-closed checks
   identity-admin.mjs       The user and org rules behind npm run users / npm run orgs
   service-admin.mjs        The service, environment and MCP endpoint rules behind /api/services, /api/environments and /api/mcp-endpoints; the tier rule; an MCP target picked by id
-  routes/                  The identity API (identity.mjs), the services API (services.mjs), the deploy routes, and the handler helpers they share (util.mjs)
+  verdict-admin.mjs        The verdict rules behind /api/packs/:id/verdicts (GAP batch 2): the artefact index, the views, the carry on a label re-registration
+  waiver-admin.mjs         The waiver rules behind /api/services/:id/waivers and /api/waivers/:id/revoke (GAP batch 2): the body, the views, the conformance report's overlay
+  routes/                  The identity API (identity.mjs), the services API (services.mjs), the verdicts API (verdicts.mjs), the waivers API (waivers.mjs), the audit report and placeholders (audit-report.mjs), the deploy routes, and the handler helpers they share (util.mjs)
   store/                   The embedded store (docs/STORE_PLAN.md): db.mjs (the one node:sqlite door), migrations, repositories, the legacy import and import --replace, backup/restore, ops.mjs (export, the replace request, rekey-issuer, purge-org)
   fixtures/                What the suites share: serve-child.mjs (a hermetic child server, the STRIP list), platform.mjs (isWin32, the reasoned win32 skips), pre-store-build.mjs, route-inventory.mjs, store-050-guard.mjs
   test-smoke.mjs           End-to-end route smoke tests
@@ -2237,6 +2479,7 @@ studio/
   app.mjs                  Browser app shell and three-step workflow
   compare-view.mjs         Assessment (diagnostic grade), Compare, drift, traceability
   compile-view.mjs         Remediate, compile catalog, deploy surfaces
+  remediation-flow-view.mjs  The response path (GAP batch 2): the engine loaded at call time, the view model, the panel Diagnose and Remediate share
   layers-view.mjs          Discover Observogram and artifact cards
   brand.mjs                The studio's brand: reads the shell's #brand-config, loads /lib/brand.mjs the house way, hands state.brand its chrome strings
   neuron-view.mjs          Advanced → Neuron: fleet tiles, trend / heatmap / bar panels, the journey in focus, the newest record opened up
@@ -2259,9 +2502,13 @@ tools/
   pack-init.mjs            packc init: build a pack from the library (list / show / instantiate)
   test-build-model.mjs     The BUILD journey's studio models over captured API responses (tools/fixtures/build/)
   test-platform.mjs        The Windows support statement's Linux-runnable proofs: fileURLToPath over URL.pathname, the T1 separator idiom, the platform fixture, and the guards (no URL.pathname as a path, 'win32' only in the fixture, every skip reasoned and counted in README "Platforms")
+  test-remediation-flow.mjs  The response-path engine: the linking rule, the catalogue pin, states from a diff, the steps
+  test-remediation-flow-view.mjs  The response-path panel: loader, gate, view model, HTML on both screens, escaping, the .rflow-* zone's tokens and AA
   test-doc-test-totals.mjs The `Tests: a → b` totals in docs/UPDATE_JOURNEY.md chain within a section and agree with docs/CHANGELOG.md's Unreleased pairs and with the batch delivery report (docs/DELIVERY-*.md)
   validate-pack.mjs        Canonical pack validator
   pack-conformance.mjs     The placeholders a pack still carries: path, field, what it needs, where it comes from (--json, --strict)
+  audit-report.mjs         packc audit-report: a pack's service audit report as JSON or HTML (--env, --format, --out, --brand, --taxonomy, --verdicts, --waivers, --no-timestamp)
+  test-audit-report.mjs    The service audit report: the model's sections, determinism, escaping, the goldens (tools/fixtures/golden/audit-report/), the CLI, the Conformance view's download anchors
   upconvert-legacy.mjs     Layered JSON -> canonical; idempotent, merges into an existing output (--merge, --overwrite)
   lib/
     adapter.mjs            Canonical pack -> layered UI model
@@ -2271,10 +2518,12 @@ tools/
     chain-history.mjs      Requirement-chain records per run, transitions, candidate causes (zero-import, vendorable)
     compile.mjs            packc compiler
     conformance.mjs        Maturity rubric
+    remediation-flow.mjs   The response path: a remediation's trigger resolved to its alerts, states from the comparison, next steps (vendorable)
     diff.mjs               Structural pack diff
     journey.mjs            Journey definitions, runner, gate, run history (node-only)
     legacy.mjs             Layered-JSON upconvert and the merge-safe re-run (mergeUpconvert); imports pack-conformance.mjs
     library.mjs            The BUILD journey engine: entries, tier scaffold, instantiation, todos, provenance (browser-safe)
+    audit-report.mjs       The service audit report: buildAuditReport (seven sections over the engines), renderAuditReportHtml over the design kit and the brand (vendorable)
     pack-conformance.mjs   Scaffold markers -> {path, field, needs, source, hint} rows; the adapter's symbol grammar (zero-import, vendorable)
     stack-evidence.mjs     Stack self-metric history helpers (browser-safe, vendorable)
     traceability.mjs       Requirement chains
@@ -2328,6 +2577,7 @@ deploy/k8s/
 - [`docs/VENDORING.md`](docs/VENDORING.md) - vendoring the verdict/diff engines into a downstream studio, and how to stay current
 - [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) - vendoring the pure libraries by manifest (`VENDOR-MANIFEST.json`): snapshot → verify hashes → smoke → bump
 - [`docs/UI_CONVENTIONS.md`](docs/UI_CONVENTIONS.md) - studio view-module conventions: the host seam, loader/renderer split, render signatures, CSS zones
+- [`docs/DELIVERY-GAP-BATCH2.md`](docs/DELIVERY-GAP-BATCH2.md) - delivery report for rebadge batch 2, PR 2 (B3, GAP batch 2: verdicts, waivers, diagnose → remediate flow, glossary widgets, service audit report): what shipped per feature, the measured test totals, what is deferred by name and why
 - [`docs/DELIVERY-REBADGE-BATCH2.md`](docs/DELIVERY-REBADGE-BATCH2.md) - delivery report for rebadge batch 2, PR 1 (B1, B2, B4): what shipped per item, the measured test totals, what is deferred and why
 
 Superseded planning docs live in [`docs/archive/`](docs/archive/README.md).

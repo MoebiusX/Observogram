@@ -16,9 +16,20 @@
 // in a collapsed "Scoring rules" section.
 //
 // View layer only: the verdict is tools/lib/conformance.mjs's, unchanged.
+//
+// Waivers (GAP batch 2, B3.2): when the report carries a `waivers` block
+// (the service record's open waivers, server/waiver-admin.mjs over
+// tools/lib/waivers.mjs) a failing clause the block marks `waived` moves
+// to its own group, the header gains a Waived measure, the scoring rules a
+// bullet, and a blocking clause whose waiver is `partial` or `expired` says
+// so. Every piece is gated on `c.waivers` being an object — a bare report
+// renders byte for byte what it did (tools/test-waivers.mjs pins it) — and
+// every operator-typed text (reason, author, symbol) goes through
+// escapeHtml. The headline stays the engine's; `effective` sits beside it.
 
 import { state } from './state.mjs';
-import { effectiveFocus, focusedConformance, focusedPack } from './focus.mjs';
+import { effectiveFocus, focusedConformance, focusedEnv, focusedPack, focusedPackId } from './focus.mjs';
+import { orgQuery } from './api.mjs';
 import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { layerItemsFor } from './diagnostic-grade.mjs';
@@ -106,24 +117,41 @@ function templateValues(pack) {
   return { todos, scaffolds, byLayer, any: todos + scaffolds > 0 };
 }
 
+// The report's waivers block when it carries one (an object), else null.
+const waiversOf = (c) => (c?.waivers && typeof c.waivers === 'object' && !Array.isArray(c.waivers) ? c.waivers : null);
+const EXPIRING_DAYS = 30;
+
 /**
  * readConformance(c, pack) → the report split the way the screen reads it:
  * blocking (a MUST that applies and fails), recommended (a SHOULD that
- * fails — never blocking), placeholder (passes only on a template value,
- * when the report names them), passed, and notApplicable (excluded at this
- * tier). Pure; the verdict fields are the engine's.
+ * fails — never blocking), waived (a failing clause the report's waivers
+ * block covers whole), placeholder (passes only on a template value, when
+ * the report names them), passed, and notApplicable (excluded at this
+ * tier). Pure; the verdict fields are the engine's. `waived`, `effective`,
+ * `waiverCounts`, `expiringSoon` and `unused` (the block's active waivers
+ * that match no failing clause: a passing clause, a symbol the pack does not
+ * define) default to [], null, null, 0 and [] on a report without a waivers
+ * block.
  */
 export function readConformance(c, pack = null) {
   const ph = placeholderEntries(c);
   const templates = templateValues(pack);
-  const groups = { blocking: [], recommended: [], placeholder: [], passed: [], notApplicable: [] };
+  const wv = waiversOf(c)?.clauses || null;
+  const groups = { blocking: [], recommended: [], waived: [], placeholder: [], passed: [], notApplicable: [] };
   for (const cl of c?.clauses || []) {
     const fix = CLAUSE_FIX[cl.id] || { reason: cl.description, action: `Review ${layerTitle(cl.dimension)}` };
-    const row = { ...cl, ...fix, name: cap(clauseGhostLabel(cl.id)), placeholderTodos: ph?.get(cl.id)?.todos || [] };
+    const row = { ...cl, ...fix, name: cap(clauseGhostLabel(cl.id)), placeholderTodos: ph?.get(cl.id)?.todos || [], waiver: wv?.[cl.id] || null };
     if (!cl.applies) groups.notApplicable.push(row);
-    else if (!cl.pass) (cl.severity === 'MUST' ? groups.blocking : groups.recommended).push(row);
-    else if (ph?.has(cl.id)) groups.placeholder.push(row);
+    else if (!cl.pass) {
+      if (row.waiver?.status === 'waived') groups.waived.push(row);
+      else (cl.severity === 'MUST' ? groups.blocking : groups.recommended).push(row);
+    } else if (ph?.has(cl.id)) groups.placeholder.push(row);
     else groups.passed.push(row);
+  }
+  // The active waivers quoted on any clause (waived or partial) that lapse within EXPIRING_DAYS, counted once each.
+  const soon = new Set();
+  for (const r of [...groups.waived, ...groups.blocking, ...groups.recommended]) {
+    for (const w of r.waiver?.waivers || []) if (typeof w.expiresInDays === 'number' && w.expiresInDays >= 0 && w.expiresInDays <= EXPIRING_DAYS) soon.add(w.id ?? `${w.ruleId}|${w.artefactId}|${w.expiresAt}`);
   }
   return {
     tier: c?.declaredTier,
@@ -139,6 +167,11 @@ export function readConformance(c, pack = null) {
     // placeholder passes, or the pack carries no template value at all.
     passedIsReal: !!ph || !templates.any,
     placeholderMust: groups.placeholder.filter(r => r.severity === 'MUST').length,
+    waived: groups.waived,
+    effective: waiversOf(c)?.effective || null,
+    waiverCounts: waiversOf(c)?.counts || null,
+    expiringSoon: soon.size,
+    unused: Array.isArray(waiversOf(c)?.unused) ? waiversOf(c).unused : [],
   };
 }
 
@@ -187,6 +220,23 @@ export function passChipHtml(passedIsReal) {
   return `<span class="ux-chip ux-chip-${r.tone} ux-chip-assessment" title="${escapeHtml(tip)}">${escapeHtml(r.label)}</span>`;
 }
 
+// One waiver, as the row quotes it: who, until when, why — every text the operator typed, escaped.
+function waiverLine(w, lead) {
+  const days = typeof w.expiresInDays === 'number' ? ` (${w.expiresInDays < 0 ? `${plural(-w.expiresInDays, 'day')} ago` : `in ${plural(w.expiresInDays, 'day')}`})` : '';
+  const scope = w.artefactId ? ` on <code>${escapeHtml(w.artefactId)}</code>` : '';
+  return `<p class="conf-row-waiver"><span class="conf-row-fix-key">${escapeHtml(lead)}:</span> <span>by ${escapeHtml(w.author ?? '')}${scope} until ${escapeHtml(String(w.expiresAt ?? '').slice(0, 10))}${escapeHtml(days)} — ${escapeHtml(w.reason ?? '')}</span></p>`;
+}
+
+// A blocking or recommended clause the waivers block marks partial or expired: the caveat under the fix.
+function waiverCaveatHtml(r) {
+  const w = r.waiver;
+  if (!w || (w.status !== 'partial' && w.status !== 'expired')) return '';
+  const label = w.status === 'expired' ? 'Waiver expired' : 'Partially waived';
+  const remaining = w.subjects?.remaining?.length ? ` Still failing: ${w.subjects.remaining.map(s => `<code>${escapeHtml(s)}</code>`).join(', ')}.` : '';
+  const text = w.status === 'expired' ? 'A waiver covered this requirement and has lapsed: it fails again until it is renewed or fixed.' : 'A waiver covers some of this requirement\'s subjects, not all: the clause still fails.';
+  return `<p class="conf-row-caveat">${statusChipHtml('assessment', 'waived', { label })} ${escapeHtml(text)}${remaining}</p>${(w.waivers || []).map(x => waiverLine(x, w.status === 'expired' ? 'Lapsed' : 'Waived')).join('')}`;
+}
+
 function rowHtml(r, kind, model) {
   const tier = tierLabel(model.tier);
   if (kind === 'blocking' || kind === 'recommended') {
@@ -199,7 +249,22 @@ function rowHtml(r, kind, model) {
         <div class="conf-row-body">
           <p class="conf-row-title">${escapeHtml(r.reason)}</p>
           <p class="conf-row-desc">${escapeHtml(r.description)}</p>
-          ${fixLine(r)}
+          ${fixLine(r)}${waiverCaveatHtml(r)}
+          ${metaLine(r)}
+        </div>
+      </li>`;
+  }
+  if (kind === 'waived') {
+    const covered = r.waiver.subjects?.waived?.length ? `<p class="conf-row-todos"><span class="conf-row-fix-key">Covered:</span> ${r.waiver.subjects.waived.map(s => `<code>${escapeHtml(s)}</code>`).join(' ')}</p>` : '';
+    return `
+      <li class="conf-row" data-group="waived" data-dim="${escapeHtml(r.dimension)}" data-sev="${escapeHtml(r.severity)}">
+        <div class="conf-row-status">${statusChipHtml('assessment', 'waived')}</div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">${escapeHtml(r.reason)}</p>
+          <p class="conf-row-desc">${escapeHtml(r.description)}</p>
+          ${(r.waiver.waivers || []).map(w => waiverLine(w, 'Waived')).join('')}
+          ${covered}
+          ${fixLine(r, 'Before it lapses')}
           ${metaLine(r)}
         </div>
       </li>`;
@@ -261,6 +326,25 @@ function groupHtml(id, title, note, rows, kind, model, { collapsible = false, op
     </section>`;
 }
 
+// The waivers block's `unused`: active waivers that match no failing clause
+// (the clause passes or does not apply, or the symbol is not one this pack
+// defines — a typo, or an SLO renamed since). GET /api/services/:id/waivers
+// lists them active and the CLI prints "n waiver(s) match no failing clause";
+// the screen names them too, under the Waived group, or nothing on the page
+// would say the waiver covers nothing.
+function unusedWaiversHtml(model) {
+  const rows = model.unused;
+  if (!rows.length) return '';
+  const n = rows.length;
+  const note = `${cap(plural(n, 'active waiver names', 'active waivers name'))} nothing that fails here: the clause passes or does not apply at this tier, or the symbol is not one this pack defines (a typo, or an SLO renamed since). Such a waiver covers nothing until it is revoked or recorded again on a symbol the pack names.`;
+  return `
+    <section class="conf-group conf-group-unused ux-tone-info ux-section-target" id="conf-unused" tabindex="-1" aria-labelledby="conf-unused-title">
+      <h3 class="conf-group-title" id="conf-unused-title">Waivers that match nothing <span class="conf-group-count">${n}</span></h3>
+      <p class="conf-group-note">${escapeHtml(note)}</p>
+      <ul class="conf-unused-list">${rows.map(w => `<li class="conf-unused-item"><code>${escapeHtml(w.ruleId ?? '')}</code>${waiverLine(w, 'Waiver')}</li>`).join('')}</ul>
+    </section>`;
+}
+
 function scoringHtml(model) {
   const { must, should } = model;
   const tier = tierLabel(model.tier);
@@ -277,11 +361,20 @@ function scoringHtml(model) {
             (${must.passed} + 0.5 × ${should.passed}) ÷ (${must.total} + 0.5 × ${should.total}) = ${escapeHtml(denom ? `${numer} ÷ ${denom}` : 'nothing to score')} = <strong>${escapeHtml(String(model.scorePercent))}%</strong>.
             Required clauses alone: ${must.passed} of ${must.total} = ${escapeHtml(String(model.mustPercent))}%.</li>
           <li><strong>Not applicable</strong> clauses apply only at a more critical tier. They are excluded from both the score and conformance, and listed for reference.</li>
-          <li><strong>Template values count as passes.</strong> The rubric reads the pack’s declarations: a placeholder satisfies a clause like a real value would, and nothing here checks live evidence. Conformance says nothing about deployment readiness.</li>
+          <li><strong>Template values count as passes.</strong> The rubric reads the pack’s declarations: a placeholder satisfies a clause like a real value would, and nothing here checks live evidence. Conformance says nothing about deployment readiness.</li>${waiversBulletHtml(model)}
         </ul>
         <p>Scored against the <a href="${RUBRIC_URL}" target="_blank" rel="noopener">maturity rubric</a> (spec §8).</p>
       </div>
     </details>`;
+}
+
+// The scoring bullet on waivers — only when the report carries a waivers block.
+function waiversBulletHtml(model) {
+  if (!model.waiverCounts) return '';
+  const e = model.effective;
+  const n = model.waived.length;
+  const effective = e ? ` With ${plural(n, 'waived clause')} read as met: required ${e.must.passed} of ${e.must.total}, score ${escapeHtml(String(e.scorePercent))}%, ${e.conformant ? 'conformant' : 'not conformant'} (effective).` : '';
+  return `<li><strong>Waivers</strong> suppress a finding for a time, with a reason and an author; they never change the numbers above, which stay the rubric’s.${escapeHtml(effective)} An expired waiver fails again until it is renewed or the finding is fixed.</li>`;
 }
 
 export function renderConformanceView() {
@@ -302,6 +395,9 @@ export function renderConformanceView() {
   const tier = tierLabel(model.tier);
   const nBlock = g.blocking.length;
   const nPh = g.placeholder.length;
+  const nWaived = g.waived.length;
+  const nUnused = model.unused.length;
+  const hasWaivers = model.waiverCounts !== null;
 
   // The governing result, in one sentence.
   let tone = 'ok';
@@ -314,6 +410,8 @@ export function renderConformanceView() {
     // The sentence already says "Not conformant": the chip carries the count behind it.
     tone = 'fail'; verdict = `${model.must.passed}/${model.must.total} MUST`;
     decision = `Not conformant at ${tier}: ${countWord(nBlock)} required clause${nBlock === 1 ? ' needs' : 's need'} attention.`;
+    // The headline stays the rubric's; the waivers' reading sits beside it.
+    if (hasWaivers && nWaived) decision += model.effective?.conformant ? ` With ${plural(nWaived, 'waived clause')} read as met, every required clause is covered (effective).` : ` ${cap(plural(nWaived, 'further required clause is', 'further required clauses are'))} waived for a time.`;
   } else if (nPh) {
     tone = 'warn';
     decision = `Meets the ${tier} rubric, but ${countWord(nPh)} clause${nPh === 1 ? ' passes' : 's pass'} only on a template value.`;
@@ -351,15 +449,35 @@ export function renderConformanceView() {
     })),
     measures: [
       { label: 'Required (MUST)', value: `${model.must.passed} / ${model.must.total}`, note: nBlock ? `${nBlock} blocking` : 'none blocking', tone: nBlock ? 'fail' : 'ok' },
+      hasWaivers ? { label: 'Waived', value: String(nWaived), note: `${model.effective ? `effective ${model.effective.must.passed} / ${model.effective.must.total} MUST${model.expiringSoon ? ` · ${plural(model.expiringSoon, 'waiver')} expiring within ${EXPIRING_DAYS} days` : ''}` : 'time-boxed, with a reason'}${nUnused ? ` · ${plural(nUnused, 'waiver matches', 'waivers match')} nothing` : ''}`, tone: 'info' } : null,
       { label: 'Recommended (SHOULD)', value: `${model.should.passed} / ${model.should.total}`, note: 'lower the score; never block' },
       { label: 'Weighted score', value: `${model.scorePercent}%`, note: 'not the conformance decision' },
       { label: 'Not applicable', value: String(g.notApplicable.length), note: `excluded at ${tier}`, tone: 'muted' },
-    ],
+    ].filter(Boolean),
   });
+
+  // The service audit report (GAP batch 2, B3.5; README "Export A Service
+  // Audit Report"): the server's GET /api/packs/:id/audit-report as a
+  // download, HTML and JSON, for the focused pack and environment, org-scoped
+  // like every navigation (orgQuery). In the static bundle the shim's click
+  // handler answers the anchors (a navigation never reaches a fetch wrapper)
+  // and shows its 501 sentence in the notice row; nothing is hidden.
+  const packId = focusedPackId();
+  const env = c.environment || focusedEnv() || '';
+  const reportHref = (format) => `/api/packs/${encodeURIComponent(packId)}/audit-report?format=${format}&download=1${env ? `&env=${encodeURIComponent(env)}` : ''}${orgQuery('&')}`;
+  const exports = packId ? `
+    <div class="conf-exports" aria-label="Export the audit report">
+      <span class="conf-exports-label">Audit report</span>
+      <a class="ux-link-btn" href="${escapeHtml(reportHref('html'))}" download>Download HTML</a>
+      <a class="ux-link-btn" href="${escapeHtml(reportHref('json'))}" download>Download JSON</a>
+      <span class="conf-exports-note">conformance, placeholders, verdicts, waivers, coverage, goes-blind risks and the response path in one document</span>
+    </div>` : '';
 
   const nav = sectionNavHtml([
     nBlock ? { id: 'conf-blocking', label: 'Blocking', count: nBlock, tone: 'fail' } : null,
     g.recommended.length ? { id: 'conf-recommended', label: 'Recommended', count: g.recommended.length, tone: 'warn' } : null,
+    hasWaivers && nWaived ? { id: 'conf-waived', label: 'Waived', count: nWaived, tone: 'info' } : null,
+    hasWaivers && nUnused ? { id: 'conf-unused', label: 'Waivers that match nothing', count: nUnused, tone: 'info' } : null,
     nPh ? { id: 'conf-placeholder', label: 'On placeholders', count: nPh, tone: 'warn' } : null,
     g.passed.length ? { id: 'conf-passed', label: 'Passed', count: g.passed.length, tone: 'ok' } : null,
     g.notApplicable.length ? { id: 'conf-na', label: 'Not applicable', count: g.notApplicable.length, tone: 'muted' } : null,
@@ -393,11 +511,11 @@ export function renderConformanceView() {
     : `This report does not say which passes rest on template values, and the pack still carries ${plural(model.templates.todos + model.templates.scaffolds, 'template value')}${Object.keys(model.templates.byLayer).length ? ` (in ${Object.keys(model.templates.byLayer).join(', ')})` : ''}. Passes in those layers may rest on one.`;
 
   wrap.innerHTML = `
-    ${header}
+    ${header}${exports}
     ${nav}
     ${dimGrid}
     ${groupHtml('conf-blocking', 'Blocking requirements', `Required clauses that apply at ${tier} and fail. Each one alone keeps the pack from conformance.`, g.blocking, 'blocking', model, { tone: 'fail' })}
-    ${groupHtml('conf-recommended', 'Recommended, not met', 'Recommended (SHOULD) clauses that fail. They lower the score but never block conformance.', g.recommended, 'recommended', model, { tone: 'warn' })}
+    ${groupHtml('conf-recommended', 'Recommended, not met', 'Recommended (SHOULD) clauses that fail. They lower the score but never block conformance.', g.recommended, 'recommended', model, { tone: 'warn' })}${hasWaivers ? groupHtml('conf-waived', 'Waived requirements', 'Clauses that fail and that a time-boxed waiver covers whole. The rubric still counts them as not met; the effective numbers read them as met until the waiver expires.', g.waived, 'waived', model, { tone: 'info' }) + unusedWaiversHtml(model) : ''}
     ${groupHtml('conf-placeholder', 'Passes on placeholders', phNote, g.placeholder, 'placeholder', model, { tone: 'warn' })}
     ${groupHtml('conf-passed', model.passedIsReal ? 'Passed with real values' : 'Passed', passedNote, g.passed, 'passed', model, { collapsible: true, open: !nBlock && !nPh })}
     ${groupHtml('conf-na', `Not applicable at ${tier}`, `These clauses apply only at a more critical tier. They were not evaluated for this pack and do not count towards the score or conformance.`, g.notApplicable, 'notApplicable', model, { collapsible: true, open: false })}
@@ -406,7 +524,7 @@ export function renderConformanceView() {
 
   const handlers = {};
   for (const d of DIMENSIONS) handlers[`conf-open:${d}`] = () => openLayer(d);
-  for (const id of ['conf-blocking', 'conf-placeholder']) {
+  for (const id of ['conf-blocking', 'conf-placeholder', 'conf-waived']) {
     handlers[`conf-goto:${id}`] = () => {
       const el = wrap.querySelector(`#${id}`);
       el?.scrollIntoView({ behavior: 'smooth', block: 'start' });

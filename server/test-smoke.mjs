@@ -290,6 +290,11 @@ try {
   const failClause = conformance.clauses.find(c => c.id === 'L3.MUST.recording_rule_per_slo');
   assert(failClause?.pass === false, 'recording-rule-per-SLO clause flags real gap in example');
 
+  // /api/packs/:id/verdicts (GAP batch 2, B3.1): a catalogue pack answers the empty document.
+  const verdicts = await getJson(base, '/api/packs/payment-service/verdicts');
+  assert(verdicts.ok === true && verdicts.pack === 'payment-service' && Array.isArray(verdicts.verdicts) && verdicts.verdicts.length === 0, 'verdicts: the empty document for a catalogue pack');
+  assert(verdicts.summary?.artefacts === 84 && verdicts.summary.unreviewed === 84 && verdicts.summary.trusted === 0, 'verdicts summary counts every artefact as unreviewed');
+
   // /api/packs/:id/conformance ?env= overlays
   const stgConf = await getJson(base, '/api/packs/payment-service/conformance?env=staging');
   assert(stgConf.declaredTier === 'tier-2', 'staging env overlay reports tier-2');

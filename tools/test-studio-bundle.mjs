@@ -11,12 +11,14 @@
 // pack) and a library-built pack registered through POST /api/validate, so
 // onPlaceholder is compared too; export.zip headers and entry names · T6 the
 // denial table · T7 the REAL bundle booted in headless Chromium against the
-// fixture pack, the Export download asserted · T4b inert by default: a build
+// fixture pack, the Export download and the audit-report anchor's 501 sentence
+// asserted · T4b inert by default: a build
 // with nothing baked is the build of the same tree with --taxonomy/--brand
 // unset, byte for byte (config-vs-no-config identity on the same tree — the
 // shim's source changed, so no cross-tree claim) · T8 a --taxonomy bundle
 // answers /api/taxonomy as a server started with OBSERVOGRAM_TAXONOMY does
-// and its board is the typed-canonical mapped golden · T8b a --brand bundle
+// and its board is the typed-canonical mapped golden · T8c a v2 taxonomy's
+// glossary is baked and answered as the server answers it · T8b a --brand bundle
 // carries the branded server's shell fragments · T9 the baked bundle in
 // headless Chromium (skips like T7).
 //
@@ -67,6 +69,7 @@ const LIBRARY_BUILT = 'tools/fixtures/build/orders-api.tier-2.instantiate.json';
 // The seams' fixtures: the taxonomy override, the canonical pack with seven declared
 // types (the golden-board fixture), the bundle-safe brand and the server's brand (root-relative URLs).
 const TAX = resolve(DEFAULT_ROOT, 'tools/fixtures/taxonomy/taxonomy.json');
+const TAX_V2 = resolve(DEFAULT_ROOT, 'tools/fixtures/taxonomy/taxonomy.v2.json');
 const TYPED_CANONICAL = resolve(DEFAULT_ROOT, 'tools/fixtures/taxonomy/typed-canonical.pack.json');
 const ACME_STATIC = resolve(DEFAULT_ROOT, 'tools/fixtures/brand/acme-static.json');
 const ACME = resolve(DEFAULT_ROOT, 'tools/fixtures/brand/acme.json');
@@ -153,9 +156,13 @@ test('T1 collectModuleGraph: every module under studio/ or lib/, the dynamic /li
   const keys = [...graph.keys()];
   assert.ok(keys.length > 60, `a real graph (${keys.length} modules)`);
   assert.ok(keys.every((k) => k.startsWith('studio/') || k.startsWith('lib/')), 'every key is studio/… or lib/…');
-  for (const k of ['studio/app.mjs', 'studio/static-backend.mjs', 'lib/service-keys.mjs', 'lib/crawler.mjs', 'lib/mcp-url-safety.mjs', 'lib/artefact-classify.mjs', 'lib/library.mjs', 'lib/zip.mjs']) {
+  for (const k of ['studio/app.mjs', 'studio/static-backend.mjs', 'lib/service-keys.mjs', 'lib/crawler.mjs', 'lib/mcp-url-safety.mjs', 'lib/artefact-classify.mjs', 'lib/library.mjs', 'lib/zip.mjs', 'lib/brand.mjs', 'lib/remediation-flow.mjs']) {
     assert.ok(graph.has(k), `${k} is in the graph`);
   }
+  // The call-time engines reach the graph through the REAL views' dynamic imports — a
+  // literal specifier each (a const would not be collected and the panel would stay off).
+  assert.deepEqual(graph.get('studio/brand.mjs').imports.map((i) => i.spec).filter((sp) => sp.startsWith('/lib/')), ['/lib/brand.mjs'], 'studio/brand.mjs → /lib/brand.mjs');
+  assert.deepEqual(graph.get('studio/remediation-flow-view.mjs').imports.map((i) => i.spec).filter((sp) => sp.startsWith('/lib/')), ['/lib/remediation-flow.mjs'], 'studio/remediation-flow-view.mjs → /lib/remediation-flow.mjs (B3.3: the response path renders in the bundle)');
   for (const [k, mod] of graph) {
     assert.ok(!/from\s+['"]node:/.test(mod.src), `${k} imports no node:* module`);
     assert.equal(mod.path, k.startsWith('lib/') ? `tools/lib/${k.slice(4)}` : k);
@@ -510,7 +517,7 @@ test('T4b inert by default: a build with nothing baked is the same tree\'s build
     // A branded build is self-guarding against a reordering of the shell transform: the anchors are on the shipped shell only.
     const branded = buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', brand: JSON.parse(readFileSync(ACME_STATIC, 'utf8')) });
     assert.ok(branded.html.includes('id="brand-config"'));
-    assert.throws(() => buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', brand: { name: 'X', tokens: { light: { accent: '#000' } } }, taxonomy: { version: 2 } }), { message: /^taxonomy: version must be 1/ });
+    assert.throws(() => buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', brand: { name: 'X', tokens: { light: { accent: '#000' } } }, taxonomy: { version: 3 } }), { message: /^taxonomy: version must be 1 or 2/ });
     // A raw brand is told from normalizeBrand's output by its shape, not by a `configured` key it may happen to carry:
     // such an object is normalized (so baked, named, and URL-checked) rather than read as is.
     for (const configured of [true, false]) {
@@ -608,6 +615,17 @@ test('T5 parity: the shim answers every ported route as a running server does �
       await same(backend, `${base}/compile-catalog?env=${encodeURIComponent(env)}`);
     }
     const conf = await sameConformance(backend, `${base}/conformance`);
+    // GAP batch 2, B3.1: a bundled pack is never registered, so the empty
+    // verdicts document IS the server's answer (the registered pack has no
+    // verdict recorded on this fresh server either).
+    const verdicts = await same(backend, `${base}/verdicts`);
+    assert.deepEqual(verdicts.body.verdicts, []);
+    assert.equal(verdicts.body.summary.unreviewed, verdicts.body.summary.artefacts);
+    // GAP batch 2, B3.5: the placeholder report is the zero-store engine's, answered in the browser (no-store on both sides).
+    const placeholders = await same(backend, `${base}/placeholders`, { headers: ['cache-control'] });
+    assert.equal(typeof placeholders.body.conformant, 'boolean');
+    if (id === ordersId) assert.ok(placeholders.body.rows.length > 0, 'the library-built pack has placeholder rows');
+    for (const env of packEnvs) await same(backend, `${base}/placeholders?env=${encodeURIComponent(env)}`);
     if (id === ordersId) assert.ok(Array.isArray(conf.body.onPlaceholder) && conf.body.onPlaceholder.length, 'the library-built pack says onPlaceholder');
     else assert.ok(!('onPlaceholder' in conf.body), 'the example pack omits onPlaceholder');
     await same(backend, `${base}/canonical`);
@@ -657,7 +675,7 @@ test('T5 parity: the shim answers every ported route as a running server does �
     else assert.deepEqual(b.body, a.body, path);
   }
   // Unknown pack: the server's shapes.
-  for (const path of ['/api/packs/nope', '/api/packs/nope/conformance', '/api/packs/nope/canonical', '/api/packs/nope/compile-catalog', '/api/packs/nope/compile-artifact?group=x', '/api/packs/nope/compile/prometheus-rules', '/api/packs/nope/export.zip']) {
+  for (const path of ['/api/packs/nope', '/api/packs/nope/conformance', '/api/packs/nope/placeholders', '/api/packs/nope/canonical', '/api/packs/nope/compile-catalog', '/api/packs/nope/compile-artifact?group=x', '/api/packs/nope/compile/prometheus-rules', '/api/packs/nope/export.zip']) {
     await same(backend, path);
   }
   // /auth/me: server/auth.mjs's stand-alone answer when no identity is
@@ -707,6 +725,13 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   await expectDenied('/api/deploy/matrix', undefined, 'Deploy');
   await expectDenied('/api/deploys?pack=p', undefined, 'Deploy');
   await expectDenied('/api/packs/p/deploy-bulk', { method: 'POST' }, 'Deploy');
+  await expectDenied('/api/packs/p/verdicts/SLI-01', { method: 'PUT' }, 'Verdicts');
+  await expectDenied('/api/packs/p/verdicts/SLI-01', { method: 'DELETE' }, 'Verdicts');
+  await expectDenied('/api/packs/p/audit-report', undefined, 'Audit report');
+  await expectDenied('/api/packs/p/audit-report?format=html', undefined, 'Audit report');
+  await expectDenied('/api/services/1/waivers', undefined, 'Waivers');
+  await expectDenied('/api/services/1/waivers', { method: 'POST' }, 'Waivers');
+  await expectDenied('/api/waivers/7/revoke', { method: 'POST' }, 'Waivers');
   await expectDenied('/api/journeys', undefined, 'Journeys');
   await expectDenied('/api/library', undefined, 'Build');
   await expectDenied('/api/admin/join-role', undefined, 'Administration');
@@ -720,6 +745,13 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   await expectDenied(new URL('https://studio.example/api/journeys'), undefined, 'Journeys');
   assert.equal(featureOf('/api/crawl-github'), 'Scan a repo');
   assert.equal(featureOf('/api/packs/x/retrofeed?y'), 'Compare');
+  assert.equal(featureOf('/api/packs/x/verdicts/SLI-01'), 'Verdicts');
+  assert.equal(featureOf('/api/packs/x/verdicts'), 'Verdicts', 'the feature name; the GET itself is answered before the denial');
+  assert.equal(featureOf('/api/packs/x/audit-report?format=html'), 'Audit report');
+  assert.equal(featureOf('/api/services/x/waivers'), 'Waivers', 'the service record route, not a /api/services prefix');
+  assert.equal(featureOf('/api/services/x'), 'This action');
+  assert.equal(featureOf('/api/waivers/x/revoke'), 'Waivers');
+  assert.equal(featureOf('/api/packs/x/placeholders'), 'This action', 'placeholders is answered, not a feature');
   assert.equal(featureOf('/auth/login'), 'Sign-in');
   // /auth/me is the open posture; an unknown pack is 404 with the server's text.
   const me = await backend.handle('/auth/me');
@@ -791,7 +823,7 @@ async function loadPlaywright() {
   catch (e) { return { error: `cannot import ${spec}: ${e.message.split('\n')[0]}` }; }
 }
 
-test('T7 the REAL bundle boots in headless Chromium against the fixture pack: the notice, the open posture, the pack opened, 501 for a live feature, the Export download, no page error, no request off the loopback', async (t) => {
+test('T7 the REAL bundle boots in headless Chromium against the fixture pack: the notice, the open posture, the pack opened, 501 for a live feature, the Export download, the audit-report anchor answered with the 501 sentence, no page error, no request off the loopback', async (t) => {
   const required = process.env.OBSERVOGRAM_BUNDLE_SMOKE === 'require';
   const skip = (why) => { if (required) assert.fail(`OBSERVOGRAM_BUNDLE_SMOKE=require: ${why}`); t.skip(why); };
   const { pw, error } = await loadPlaywright();
@@ -874,6 +906,20 @@ test('T7 the REAL bundle boots in headless Chromium against the fixture pack: th
   const names = zipEntryNames(readFileSync(downloaded));
   assert.equal(names[0], 'payment-service.pack.yaml');
   assert.ok(names.some((n) => n.startsWith('artefacts/')));
+  // The Conformance view's audit-report anchors: an `<a download>` navigation
+  // never reaches a fetch wrapper, so the shim's click handler answers it —
+  // the 501 sentence in the notice row, no navigation, no request to the
+  // static host (which would 404 and cancel the download without a word).
+  await page.click('.observa-adv-toggle');
+  await page.click('.observa-adv-item[data-view="conformance"]');
+  await page.waitForSelector('.conf-exports a[download]', { timeout: 30_000 });
+  assert.match(await page.getAttribute('.conf-exports a[download]', 'href'), /^\/api\/packs\/payment-service\/audit-report\?format=html/);
+  await page.click('.conf-exports a[download]');
+  await page.waitForFunction(() => /^Audit report needs the Observogram server/.test(document.querySelector('.no-backend-notice-text')?.textContent || ''), null, { timeout: 10_000 });
+  assert.equal(await page.textContent('.no-backend-notice-text'), 'Audit report needs the Observogram server; this studio is a static bundle built without one.');
+  assert.equal(await page.$('.no-backend-notice.is-error') !== null, true, 'the notice row carries the error');
+  assert.equal(page.url(), `${base}/`, 'no navigation');
+  assert.deepEqual(served.filter((u) => u.includes('/api/')), [], 'the anchor never reached the static host');
   // Dismiss the notice; it stays dismissed on reload (localStorage).
   await page.click('.no-backend-notice-dismiss');
   assert.equal(await page.isVisible('.no-backend-notice'), false);
@@ -1001,13 +1047,47 @@ test('T8 baked taxonomy: a --taxonomy bundle answers /api/taxonomy as a server s
   const indicator = join(TMP, 'indicator.json');
   writeFileSync(indicator, '{"version":1,"types":{"PackSLI":"indicator"}}');
   assert.equal(refuse(['--taxonomy', indicator], {}, /unknown family/), `--taxonomy: ${indicator}: taxonomy: types.PackSLI: unknown family "indicator"\n`);
-  const v2 = join(TMP, 'v2.json');
-  writeFileSync(v2, '{"version":2,"nope":1}');
-  assert.equal(refuse(['--taxonomy', v2], {}, /version must be 1/), `--taxonomy: ${v2}: taxonomy: version must be 1 (+1 more)\n`);
+  const v3 = join(TMP, 'v3.json');
+  writeFileSync(v3, '{"version":3,"nope":1}');
+  assert.equal(refuse(['--taxonomy', v3], {}, /version must be 1 or 2/), `--taxonomy: ${v3}: taxonomy: version must be 1 or 2 (+1 more)\n`);
   refuse([], { TOMOGRAPH_TAXONOMY: missing }, new RegExp(`^OBSERVOGRAM_TAXONOMY: ${esc(missing)}: ENOENT`));
   // The programmatic guard.
-  assert.throws(() => buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', taxonomy: { version: 2 } }), { message: /^taxonomy: version must be 1/ });
+  assert.throws(() => buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', taxonomy: { version: 3 } }), { message: /^taxonomy: version must be 1 or 2/ });
   assert.throws(() => loadTaxonomyFile(indicator, 'OBSERVOGRAM_TAXONOMY'), { message: new RegExp(`^OBSERVOGRAM_TAXONOMY: ${esc(indicator)}: taxonomy: types\\.PackSLI`) });
+});
+
+// ---------- T8c the baked v2 taxonomy (a glossary) ----------
+
+test('T8c baked glossary: a bundle built with a v2 taxonomy answers /api/taxonomy — the glossary included — as a server started with that file does, and --check counts the terms', async (t) => {
+  const ws = mkdtempSync(join(tmpdir(), 'observogram-bundle-glossary-'));
+  const child = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off', OBSERVOGRAM_TAXONOMY: TAX_V2 } });
+  t.after(async () => { await child.stop(); rmSync(ws, { recursive: true, force: true }); });
+  const fixture = JSON.parse(readFileSync(TAX_V2, 'utf8'));
+  assert.equal(fixture.version, 2);
+  assert.equal(fixture.glossary.length, 6);
+  const built = buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', taxonomy: fixture });
+  assert.deepEqual(built.config.taxonomy, fixture, 'baked verbatim, glossary included');
+  const backend = createStaticBackend(built.config);
+  assert.equal(backend.taxonomyConfigured, true);
+  const r = await fetch(`${child.base}/api/taxonomy`, { headers: { Accept: 'application/json' } });
+  const server = { status: r.status, type: r.headers.get('content-type'), cc: r.headers.get('cache-control'), body: await bodyOf(r) };
+  const s = await backend.handle('/api/taxonomy');
+  const shim = { status: s.status, type: s.headers.get('content-type'), cc: s.headers.get('cache-control'), body: await bodyOf(s) };
+  assert.deepEqual(shim, server, 'status, content-type, cache-control and body: the server\'s answer');
+  assert.deepEqual(server.body, { ok: true, taxonomy: fixture, configured: true });
+  assert.deepEqual(server.body.taxonomy.glossary.map((e) => e.term), ['Service level indicator', 'Service level objective', 'Alert rule', 'Telemetry backend', 'Error budget', 'Criticality tier']);
+  // The studio binds either answer the same way: the glossary accessors read the same entries.
+  bindTaxonomy(artefactClassify, shim.body.taxonomy);
+  try {
+    assert.equal(artefactClassify.glossaryFor('sli').term, 'Service level indicator');
+    assert.equal(artefactClassify.describeTaxonomy(artefactClassify.activeTaxonomy()), '7 types, 1 id rule, 6 glossary terms');
+  } finally { bindTaxonomy(artefactClassify, null); }
+  const human = cli(['--check', '--taxonomy', TAX_V2]);
+  assert.equal(human.status, 0, human.stderr);
+  assert.match(human.stdout, /· taxonomy: 7 types, 1 id rule, 6 glossary terms\n$/);
+  const j = cli(['--check', '--json', '--taxonomy', TAX_V2]);
+  assert.equal(j.status, 0, j.stderr);
+  assert.deepEqual(JSON.parse(j.stdout).taxonomy, { source: 'flag', file: TAX_V2, types: 7, ids: 1 }, 'the report counts types and ids as before (no glossary contents)');
 });
 
 // ---------- T8b the baked brand ----------

@@ -46,6 +46,14 @@
  * not know places nothing); with it POL-01 moves from burn_rate/id to
  * alert_rule/type — the L4 band regroups.
  *
+ * The glossary golden (typed.glossary.*): the typed fixture rendered with
+ * tools/fixtures/taxonomy/taxonomy.v2.json — taxonomy.json plus a v2
+ * `glossary` — bound. The marks (studio/glossary.mjs) are the only
+ * difference: stripGlossaryMarks(glossary board) === the mapped board, byte
+ * for byte, and the families file is the mapped one (a glossary changes no
+ * classification). With taxonomy.json still v1, the 24 goldens above are
+ * untouched — the inert proof of B3.4.
+ *
  * To update after an INTENDED output change:
  *   node tools/test-golden-board.mjs --update
  * then review `git diff tools/fixtures/golden/board/`. Exit 0 = pass.
@@ -64,6 +72,7 @@ import { bindTaxonomy } from '../studio/taxonomy.mjs';
 import { createHarness } from './lib/harness.mjs';
 import { LAYER_DEFS, L4_SUBGROUPS } from '../studio/constants.mjs';
 import { boardHeadHtml, boardGroupsHtml } from '../studio/discover-board.mjs';
+import { resetGlossaryIds, stripGlossaryMarks } from '../studio/glossary.mjs';
 
 const { classifyArtefact } = artefactClassify;
 // The board groups through the bound taxonomy (studio/taxonomy.mjs), as the
@@ -157,6 +166,7 @@ const loadJson = (path) => JSON.parse(readFileSync(resolve(ROOT, path), 'utf8'))
 const TYPED = loadJson('tools/fixtures/taxonomy/typed.pack.json');
 const TYPED_CANONICAL = adapt(loadJson('tools/fixtures/taxonomy/typed-canonical.pack.json'));
 const OVERRIDE = loadJson('tools/fixtures/taxonomy/taxonomy.json');
+const OVERRIDE_V2 = loadJson('tools/fixtures/taxonomy/taxonomy.v2.json');
 // The [group, n] pairs of one layer's band, in board order (studio/discover-board.mjs
 // boardGroupsHtml writes data-group and aria-label="<title>: <n>" on every section).
 export const boardGroupCounts = (html, layer) => [...(html.split(`<!-- ${layer} -->`)[1] || '').split('<!-- ')[0].matchAll(/data-group="([a-z]+)" aria-label="[^"]*: (\d+)"/g)].map(m => [m[1], Number(m[2])]);
@@ -228,6 +238,36 @@ function typedCases() {
   assert(selfDiff(TYPED) === unmappedDiff, 'configureTaxonomy(null) restores the unmapped self-diff byte for byte');
 }
 
+// The typed fixture under the v2 override (the same types and ids plus a
+// glossary): one more golden, and the proof that the marks are the only
+// difference from the mapped board.
+function typedGlossaryCases() {
+  bindTaxonomy(artefactClassify, OVERRIDE);
+  let mappedHtml;
+  let mappedFamilies;
+  try { mappedHtml = renderBoard(TYPED, { env: 'prod' }); mappedFamilies = JSON.stringify(familiesOf(TYPED), null, 2) + '\n'; }
+  finally { bindTaxonomy(artefactClassify, null); }
+  assert(!mappedHtml.includes('ux-gloss'), 'the v1 override draws no mark');
+  bindTaxonomy(artefactClassify, OVERRIDE_V2);
+  try {
+    resetGlossaryIds();
+    const glossaryHtml = renderBoard(TYPED, { env: 'prod' });
+    checkGolden('typed.glossary.board.html', glossaryHtml, 'typed glossary board');
+    const marks = (glossaryHtml.match(/<span class="ux-gloss">/g) || []).length;
+    assert(marks === 6, 'six marks: the head\'s Criticality and Backends facts, the SLIs, SLOs · targets, Exporters & storage and Operational alert rules groups', marks, 6);
+    for (const label of ['Criticality', 'Backends', 'SLIs', 'SLOs · targets', 'Exporters &amp; storage', 'Operational alert rules']) assert(glossaryHtml.includes(`aria-label="What is ${label}?"`), `a mark explains ${label}`);
+    assert(stripGlossaryMarks(glossaryHtml) === mappedHtml, 'the marks stripped, the glossary board is the mapped board byte for byte');
+    assert(JSON.stringify(familiesOf(TYPED), null, 2) + '\n' === mappedFamilies, 'the glossary changes no family and no via');
+    assert(glossaryHtml.includes('aria-label="What is SLIs?"') && glossaryHtml.includes('id="ux-gloss-1"'), 'the first mark is the SLI group\'s, numbered from 1');
+    assert(!glossaryHtml.includes('title="What'), 'a mark is a button with a definition, never a tooltip');
+  } finally {
+    bindTaxonomy(artefactClassify, null);
+  }
+  assert(artefactClassify.activeTaxonomy() === null, 'the v2 override is gone again');
+  resetGlossaryIds();
+  assert(renderBoard(TYPED, { env: 'prod' }) !== mappedHtml, 'unbound again: the unmapped board');
+}
+
 // The typed-canonical fixture: a canonical pack with seven declared types,
 // adapted — the shape --pack and the server accept. Unmapped, the adapter's
 // `defines`/ids place everything; mapped, the declared types win where they
@@ -292,5 +332,7 @@ if (isMain) {
   typedCases();
   process.stdout.write('\ntyped-canonical (tools/fixtures/taxonomy/typed-canonical.pack.json)\n');
   typedCanonicalCases();
+  process.stdout.write('\ntyped with the v2 glossary (tools/fixtures/taxonomy/taxonomy.v2.json)\n');
+  typedGlossaryCases();
   report('golden board', UPDATE ? 'board goldens updated — review git diff tools/fixtures/golden/board/' : 'all board goldens byte-identical.');
 }

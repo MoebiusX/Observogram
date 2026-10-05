@@ -26,6 +26,14 @@
 // its prune — are written by `system`; a register's by the principal's
 // actor. The one audit-free write is the debounced lastUsedAt touch
 // (packs.touchMany: bookkeeping, plan §5).
+//
+// Verdicts (GAP batch 2, B3.1; server/verdict-admin.mjs): a replaced pack's
+// verdicts are carried onto the new pack by behavioural identity — planned
+// before the old row goes (its rows cascade with it), applied after the new
+// row exists, inside the same atomic(); a replaced pack without verdicts
+// plans nothing and writes nothing (the audit rows of such a replace are
+// unchanged: pack.replace, pack.register, then the links). An eviction and
+// the rehydrate's prune carry nothing: their cascades drop the rows.
 
 import { createHash } from 'node:crypto';
 import { parse as parseYaml } from '../tools/lib/mini-yaml.mjs';
@@ -39,6 +47,7 @@ import { addPack, clampPackText, clearPacks as clearPackRows, getPack, listPacks
 import { linkPack } from './store/pack-links.mjs';
 import { SYSTEM } from './store/identity.mjs';
 import { currentOrg, runWithOrg } from './org-context.mjs';
+import { applyVerdictCarry, planVerdictCarry } from './verdict-admin.mjs';
 
 // Capped to bound memory; the oldest entry (least recently used) is
 // evicted on overflow, its file and row with it.
@@ -148,10 +157,12 @@ export function registerPack(db, actor, { canonical, source, label }) {
   for (const otherId of [...replaced, ...evicted]) deleteWorkspacePack(otherId);
   // Rows, all or nothing.
   const pack = atomic(db, () => {
+    const plans = replaced.filter((otherId) => getPack(db, otherId)).map((otherId) => planVerdictCarry(db, { fromPackId: otherId, toCanonical: canonical }));
     for (const otherId of replaced) {
       if (getPack(db, otherId)) removePack(db, actor, otherId, { action: 'pack.replace', detail: { label, replacedBy: id } });
     }
     const { pack: row } = upsertPack(db, actor, { id, label, source });
+    for (const plan of plans) applyVerdictCarry(db, actor, { toPackId: id, plan });
     linkPack(db, actor, { packId: id, entry, canonical, via: 'register' });
     for (const otherId of evicted) {
       if (getPack(db, otherId)) removePack(db, actor, otherId, { action: 'pack.evict', detail: { cap: MAX_UPLOADS } });

@@ -19,6 +19,9 @@ import {
 import { BOARD_LAYERS, BOARD_ITEMS_SHOWN, boardGroups, boardGroupsHtml, boardHeadHtml, objectivePct } from '../studio/discover-board.mjs';
 import { bindTaxonomy, classifyArtefact, taxonomyBound, UNBOUND } from '../studio/taxonomy.mjs';
 import * as artefactClassify from './lib/artefact-classify.mjs';
+import {
+  VERDICT_STATUSES, VERDICT_FILTERS, verdictBadgeHtml, verdictChipHtml, verdictFilterHtml, passesVerdictFilter, verdictTip,
+} from '../studio/verdict-html.mjs';
 
 const allArtefacts = (pack) => Object.values(pack.layers).flatMap(v => (Array.isArray(v) ? v : Object.values(v).flat()));
 const carlos = adapt(parse(fs.readFileSync(new URL('../examples/krystaline-repo-carlos.pack.yaml', import.meta.url), 'utf8')));
@@ -227,15 +230,115 @@ test('no adapted artefact is ever Missing, so Discover never claims a missing ar
   assert.equal(artefactStatus({ source: 'Missing' }).attention, false);
 });
 
-test('Discover is a catalogue: no verdict, no evidence count, no task filter, no next step', () => {
+test('Discover is a catalogue: no pack-level verdict, no evidence count, no task filter, no next step', () => {
   const src = fs.readFileSync(new URL('../studio/layers-view.mjs', import.meta.url), 'utf8');
   const discover = src.slice(src.indexOf('export function renderLayersView'));
   for (const word of ['needs attention', 'Needs attention', 'live evidence', 'Live evidence', 'declared only', 'Declared only', 'required check', 'assessment'])
     assert.ok(!discover.includes(word), `the Discover screen says nothing about "${word}"`);
+  // A reviewer's verdict is drawn per artefact by verdict-html.mjs; the screen itself spells no verdict word.
+  for (const w of ['Trusted', 'Suspect', 'Failed', 'Unreviewed']) assert.ok(!src.includes(w), `layers-view.mjs spells no "${w}"`);
   for (const gone of ['statusChipHtml', 'matchesTask', 'DISCOVER_TASKS', 'dv-task', 'dv-review', 'dv-assess', 'dv-show-missing', 'primary:', 'causes', 'measures'])
     assert.ok(!src.includes(gone), `${gone} is not part of Discover`);
   const state = fs.readFileSync(new URL('../studio/state.mjs', import.meta.url), 'utf8');
   assert.ok(!state.includes('discoverTask'), 'no task filter is kept or restored');
+});
+
+// ---------- a reviewer's verdict (GAP batch 2, B3.1) ----------
+
+const VERDICT = { artefact: 'SLI-01', key: 'L1/SLI-01', family: 'sli', title: 'Availability', status: 'suspect', reason: 'the <window> is short', actor: 'ada', setAt: '2026-10-05T09:12:44.120Z', carriedFrom: null };
+
+test('verdict-html.mjs is pure: it imports util.mjs and ux-kit.mjs only, and renders NOTHING without a verdict — the badge, the chip and every row drawing are byte-identical with verdict null', () => {
+  const src = fs.readFileSync(new URL('../studio/verdict-html.mjs', import.meta.url), 'utf8');
+  const imports = [...src.matchAll(/from '([^']+)'/g)].map(m => m[1]).sort();
+  assert.deepEqual(imports, ['./util.mjs', './ux-kit.mjs']);
+  assert.ok(!/\bfetch\(|\bdocument\b|\bstate\b/.test(src.replace(/\/\/[^\n]*/g, '')), 'no fetch, no DOM, no state');
+  assert.deepEqual([...VERDICT_STATUSES], ['trusted', 'suspect', 'failed']);
+  assert.deepEqual(VERDICT_FILTERS.map(f => f.id), ['all', 'trusted', 'suspect', 'failed', 'unreviewed']);
+  for (const none of [null, undefined, {}, { status: 'maybe' }]) {
+    assert.equal(verdictBadgeHtml(none), '', JSON.stringify(none));
+    assert.equal(verdictChipHtml(none), '', JSON.stringify(none));
+  }
+  for (const a of allArtefacts(carlos).slice(0, 40)) {
+    for (const view of DISCOVER_VIEWS.map(v => v.id)) {
+      const row = artefactRowHtml(a, { view });
+      assert.equal(artefactRowHtml(a, { view, verdict: null }), row, `${a.id} ${view}: verdict null draws the row as before`);
+      assert.ok(!row.includes('ux-chip-verdict'), `${a.id} ${view}: no verdict chip without a verdict`);
+    }
+    for (const view of ['tiles', 'list']) {
+      assert.ok(!artefactLightRowHtml(a, { view }).includes('ux-chip-verdict'), `${a.id} light ${view}: no verdict chip without a verdict`);
+    }
+  }
+  const entries = carlos.layers.L1.slice(0, 6).map((a, i) => ({ a, key: `L1//${a.id}#${i}` }));
+  assert.equal(boardGroupsHtml('L1', entries.map(e => ({ ...e, verdict: null }))), boardGroupsHtml('L1', entries), 'the board with verdict null is the board without the key');
+});
+
+test('with a verdict: the board badge is the LAST child of the item button, the row chip sits inside .dv-row-status after the status chips (details and tiles), the list view keeps its marks; everything escaped', () => {
+  const badge = verdictBadgeHtml(VERDICT);
+  assert.match(badge, /^<span class="dvb-verdict" data-verdict="suspect" title="Verdict: Suspect — the &lt;window&gt; is short \(ada, 2026-10-05\)"><span class="sr-text">Verdict: <\/span>Suspect<\/span>$/);
+  assert.equal(verdictTip({ ...VERDICT, reason: null, carriedFrom: 'old' }), 'Verdict: Suspect (ada, 2026-10-05) · carried from an earlier upload');
+  const a = carlos.layers.L1[0];
+  const html = boardGroupsHtml('L1', [{ a, key: 'L1//x', verdict: VERDICT }]);
+  const button = /<button[^>]*class="dvb-item[^"]*"[^>]*>([\s\S]*?)<\/button>/.exec(html);
+  assert.ok(button, 'an item button');
+  assert.ok(button[1].trimEnd().endsWith(badge), 'the badge is the last child of the button');
+  assert.equal((html.match(/dvb-verdict/g) || []).length, 1, 'one badge per verdict');
+  const chip = verdictChipHtml(VERDICT);
+  assert.match(chip, /^<span class="ux-chip ux-chip-warn ux-chip-verdict" title="Verdict — Does a reviewer trust it\? .*Reason: the &lt;window&gt; is short\. Recorded by ada on 2026-10-05\.">Suspect<\/span>$/);
+  const row = artefactRowHtml(a, { verdict: VERDICT });
+  const status = /<span class="dv-row-status">([\s\S]*?)<\/span>\s*<\/div>/.exec(row);
+  assert.ok(status && status[1].endsWith(chip), 'the chip ends .dv-row-status, after the status chips');
+  assert.ok(!row.slice(0, row.indexOf('dv-row-status')).includes('ux-chip-verdict'), 'nothing before the status span');
+  const tiles = artefactRowHtml(a, { view: 'tiles', verdict: VERDICT });
+  assert.ok(/dv-row-status">[\s\S]*ux-chip-verdict/.test(tiles), 'the tile draws the chip too');
+  const list = artefactRowHtml(a, { view: 'list', verdict: VERDICT });
+  assert.equal(list, artefactRowHtml(a, { view: 'list' }), 'the list view draws marks, not chips: unchanged');
+  assert.equal(artefactRowHtml(a, { view: 'cards', verdict: VERDICT }), artefactRowHtml(a, { view: 'cards' }), 'the card body is unchanged (the verdict lives on the board and the rows)');
+});
+
+test('the Refine control\'s Verdict filter: the options with their counts, the predicate over verdict and none', () => {
+  const html = verdictFilterHtml('failed', { trusted: 2, suspect: 1, failed: 0, unreviewed: 9 });
+  assert.match(html, /<label class="dv-refine-verdict">/);
+  assert.match(html, /<select class="dv-refine-select dv-refine-verdict-select" aria-describedby="dv-refine-hint">/);
+  assert.deepEqual([...html.matchAll(/<option value="([a-z]+)"( selected)?>([^<]*)<\/option>/g)].map(m => [m[1], !!m[2], m[3]]),
+    [['all', false, 'Any verdict'], ['trusted', false, 'Trusted (2)'], ['suspect', false, 'Suspect (1)'], ['failed', true, 'Failed (0)'], ['unreviewed', false, 'Unreviewed (9)']]);
+  assert.match(verdictFilterHtml('nonsense'), /<option value="all" selected>/, 'an unknown choice selects all');
+  assert.doesNotMatch(verdictFilterHtml('all'), /\(\d+\)/, 'no counts without counts');
+  for (const f of ['all', undefined, null, '']) assert.equal(passesVerdictFilter(VERDICT, f) && passesVerdictFilter(null, f), true, `${f}: everything passes`);
+  assert.deepEqual(['trusted', 'suspect', 'failed', 'unreviewed'].map(f => passesVerdictFilter(VERDICT, f)), [false, true, false, false]);
+  assert.deepEqual(['trusted', 'suspect', 'failed', 'unreviewed'].map(f => passesVerdictFilter(null, f)), [false, false, false, true]);
+  assert.equal(passesVerdictFilter({ status: 'maybe' }, 'unreviewed'), true, 'a malformed record is no verdict');
+});
+
+// ---------- the glossary marks (GAP batch 2, B3.4) ----------
+
+test('glossary marks: with the default families or a v1 override every row and board drawing is byte-identical; with the v2 glossary the details row sets one mark between the name button and .dv-row-status, the board titles and head facts theirs', () => {
+  const V1 = JSON.parse(fs.readFileSync(new URL('./fixtures/taxonomy/taxonomy.json', import.meta.url), 'utf8'));
+  const V2 = JSON.parse(fs.readFileSync(new URL('./fixtures/taxonomy/taxonomy.v2.json', import.meta.url), 'utf8'));
+  const entries = carlos.layers.L1.slice(0, 6).map((a, i) => ({ a, key: `L1//${a.id}#${i}` }));
+  const draw = () => ({
+    rows: allArtefacts(carlos).slice(0, 40).flatMap(a => DISCOVER_VIEWS.map(v => artefactRowHtml(a, { view: v.id }))),
+    board: boardGroupsHtml('L1', entries) + boardHeadHtml({ meta: carlos.meta, total: 6, layers: 1, artefacts: allArtefacts(carlos) }),
+  });
+  const plain = draw();
+  assert.ok(!plain.rows.join('').includes('ux-gloss') && !plain.board.includes('ux-gloss'), 'nothing without a glossary');
+  try {
+    bindTaxonomy(artefactClassify, V1);
+    assert.deepEqual(draw(), plain, 'a v1 override: byte-identical');
+    bindTaxonomy(artefactClassify, V2);
+    const sli = carlos.layers.L1.find(a => a.id.startsWith('SLI-'));
+    const row = artefactRowHtml(sli);
+    assert.equal(artefactKind(sli).kind, 'Service level indicator');
+    assert.match(row, /<\/button><span class="ux-gloss"><button type="button" class="ux-gloss-btn" aria-label="What is Service level indicator\?" aria-expanded="false" aria-controls="(ux-gloss-\d+)" aria-describedby="\1">\?<\/button><span class="ux-gloss-def" id="\1" role="note" hidden>[\s\S]*?<\/span><\/span>\s*<span class="dv-row-status">/);
+    assert.equal((row.match(/ux-gloss-btn/g) || []).length, 1, 'one mark per row');
+    for (const view of ['tiles', 'list', 'cards']) assert.ok(!artefactRowHtml(sli, { view }).includes('ux-gloss'), `${view}: the lighter views carry no mark`);
+    const board = boardGroupsHtml('L1', entries);
+    assert.match(board, /<h4 class="dvb-group-title">SLIs<span class="ux-gloss">/);
+    assert.match(board, /<h4 class="dvb-group-title">SLOs · targets<span class="ux-gloss">/);
+    assert.match(boardHeadHtml({ meta: carlos.meta, total: 6, layers: 1, artefacts: allArtefacts(carlos) }), /<dt>Criticality<span class="ux-gloss">/);
+  } finally {
+    bindTaxonomy(artefactClassify, null);
+  }
+  assert.deepEqual(draw(), plain, 'the default families again: byte-identical');
 });
 
 test('the board places every artefact of a layer in a group, and hides none', () => {

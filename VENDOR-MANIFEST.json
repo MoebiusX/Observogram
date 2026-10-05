@@ -6,13 +6,14 @@
   "root": "tools/lib",
   "modules": {
     "tools/lib/adapter.mjs": {
-      "sha256": "692bfb391a895d9cd12befd56ea7cd1503984b6723094ff898b1f230e65da2d6",
-      "bytes": 33779,
+      "sha256": "e1df9c697a218ac58e680faa31cb9a9de1aa7ff54c5163b8db75fe8a6c8ffbcf",
+      "bytes": 34920,
       "exports": [
         "DECLARED_TYPE_PREFIX",
         "adapt",
         "applyEnvironmentOverlay",
-        "listEnvironments"
+        "listEnvironments",
+        "overlaidCanonical"
       ],
       "imports": [
         "tools/lib/good-when.mjs",
@@ -47,22 +48,28 @@
       "changedSinceRelease": false
     },
     "tools/lib/artefact-classify.mjs": {
-      "sha256": "a00440b810c9b29c1bb211b25ead2e20adbb5615a2326de2254752c706a43db8",
-      "bytes": 16695,
+      "sha256": "7f9bdf084e40caaf191d01c745b8d95bb2f088f2fd6c5869e71cf8fa404df2c4",
+      "bytes": 24077,
       "exports": [
         "DEFINES_RULES",
         "FAMILIES",
         "FAMILY_HOME",
+        "GLOSSARY_LIMITS",
         "ID_MATCH_LENGTH",
         "ID_RULES",
         "PATTERN_MAX_LENGTH",
         "TAXONOMY_VERSION",
+        "TAXONOMY_VERSIONS",
+        "TAXONOMY_VERSION_LATEST",
         "activeTaxonomy",
         "classifyArtefact",
         "compileTaxonomy",
         "configureTaxonomy",
         "describeTaxonomy",
         "familyOf",
+        "glossaryByText",
+        "glossaryEntries",
+        "glossaryFor",
         "validateTaxonomy"
       ],
       "imports": [],
@@ -114,6 +121,44 @@
       ],
       "npm": [],
       "changedSinceRelease": false
+    },
+    "tools/lib/audit-report.mjs": {
+      "sha256": "095ab15152f19cccb7060da8445e5a3502710771acc8be76935b02ba87720f93",
+      "bytes": 39301,
+      "exports": [
+        "AUDIT_REPORT_VERSION",
+        "CLAUSE_FAMILIES",
+        "COVERAGE_STATUSES",
+        "DEFAULT_RISK_TOP",
+        "L4_SUBGROUPS",
+        "LAYER_ORDER",
+        "REPORT_CSS",
+        "RISK_TOP_MAX",
+        "SOURCES",
+        "VERDICT_STATES",
+        "WAIVER_STATUSES",
+        "assessmentSummary",
+        "auditReportFilename",
+        "buildAuditReport",
+        "coverageByFamily",
+        "flattenArtefacts",
+        "goesBlindRisks",
+        "placeholdersOf",
+        "renderAuditReportHtml",
+        "responsePath",
+        "splitClauses",
+        "waiverSummary"
+      ],
+      "imports": [
+        "tools/lib/artefact-classify.mjs",
+        "tools/lib/blast-radius.mjs",
+        "tools/lib/brand.mjs",
+        "tools/lib/pack-conformance.mjs",
+        "tools/lib/remediation-flow.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
     },
     "tools/lib/backend-products.mjs": {
       "sha256": "f63099877b804e06c90520df63afce5e6ca72ee938b6fdda9da2f1ae7631783e",
@@ -275,16 +320,23 @@
       "changedSinceRelease": false
     },
     "tools/lib/conformance.mjs": {
-      "sha256": "54afecfd79ff410dfd9886a2e6782812fc002f6aac05b0d732a7696f7d9abbbf",
-      "bytes": 16272,
+      "sha256": "a234869139b1b096d8f2e23f5e5122da6cc163f1d352e9b3f2df244e9f12a8ff",
+      "bytes": 18711,
       "exports": [
         "RUBRIC",
+        "SUBJECT_CLAUSES",
         "TIER_RANK",
+        "clauseSubjects",
         "evaluateConformance"
       ],
       "imports": [],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "RUBRIC",
+        "TIER_RANK",
+        "evaluateConformance"
+      ]
     },
     "tools/lib/contracts/mcp-capabilities.mjs": {
       "sha256": "8986224da15734c74d08799f990268b19b8beba2cd9ee54143cb474d44148c88",
@@ -699,8 +751,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/pack-conformance.mjs": {
-      "sha256": "76eadb25ceeae94cecdb8c7a872d3d779901c4f64d38445935c7937c21989f36",
-      "bytes": 35131,
+      "sha256": "0c52ba13ddc252daf2000cf8aaeee8299c4acbc4e067675ba13ff1792b320d45",
+      "bytes": 37134,
       "exports": [
         "PLACEHOLDER_FIELDS",
         "SCAFFOLD_PREFIXES",
@@ -712,7 +764,9 @@
         "resolveSymbol",
         "scaffoldMarkers"
       ],
-      "imports": [],
+      "imports": [
+        "tools/lib/waivers.mjs"
+      ],
       "npm": [],
       "changedSinceRelease": true,
       "releasedExports": null
@@ -790,6 +844,32 @@
       "imports": [],
       "npm": [],
       "changedSinceRelease": false
+    },
+    "tools/lib/remediation-flow.mjs": {
+      "sha256": "2e77ce4c873dacb591bbf56520fbed45a74adc0cf91cf949fd492722c843d61a",
+      "bytes": 27163,
+      "exports": [
+        "BLOCKING_STATES",
+        "FLOW_STATES",
+        "LINK_TIERS",
+        "MAX_SUGGESTIONS",
+        "OTHER_SIDES",
+        "REMEDIATES_ANNOTATION_PREFIX",
+        "STEP_KINDS",
+        "alertStatesFromDiff",
+        "buildRemediationFlowModel",
+        "burnRuleNames",
+        "remediationTargets",
+        "resolveTrigger",
+        "slugKey",
+        "triggerSlug"
+      ],
+      "imports": [
+        "tools/lib/artefact-model.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
     },
     "tools/lib/schedule-snippets.mjs": {
       "sha256": "122ba489bfaacadf592410a82d01a3c44ed10e4f6f947f33b1d740b1cd553b8f",
@@ -1100,6 +1180,33 @@
       "imports": [],
       "npm": [],
       "changedSinceRelease": false
+    },
+    "tools/lib/waivers.mjs": {
+      "sha256": "f92da51f3e471cbcc8a24f1c60a7e34f1539a51e81550b9f719acae1dae3219c",
+      "bytes": 13975,
+      "exports": [
+        "CLAUSE_WAIVER_STATUSES",
+        "FINDING_STATUSES",
+        "MAX_REASON",
+        "MAX_TEXT",
+        "WAIVER_FILE_VERSION",
+        "WAIVER_STATES",
+        "applyWaiversToConformance",
+        "applyWaiversToFindings",
+        "expiresInDays",
+        "matchesFinding",
+        "normalizeWaiver",
+        "oneLine",
+        "readWaiverFile",
+        "waiverState",
+        "waiverView"
+      ],
+      "imports": [
+        "tools/lib/conformance.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
     },
     "tools/lib/zip.mjs": {
       "sha256": "c5277647671a51503d112ea6203e5e0691d1aed55853ce2ed19322f891bb4d5b",

@@ -1,5 +1,11 @@
 # Delivery report — rebadge batch 2, PR 1 (B1, B2, B4)
 
+Rebadge batch 2 landed as two PRs on the same branch contract: this report
+covers PR 1 (B1, B2, B4; `codex/rebadge-batch2`); PR 2 — B3, GAP batch 2 —
+has its own, [`docs/DELIVERY-GAP-BATCH2.md`](DELIVERY-GAP-BATCH2.md), and
+the last section below names what it delivered against the names reserved
+here.
+
 The short report the batch's acceptance asks for, per work item: what shipped,
 the test counts, what is deferred and why. It is a reading aid over the
 documents that carry the detail — `docs/CHANGELOG.md` (`## Unreleased`, the
@@ -9,7 +15,7 @@ and B4 decision paragraphs) and `docs/DOWNSTREAM.md` (§10 bundle baking,
 quotes nothing those documents do not state. The totals below are the chain
 `tools/test-doc-test-totals.mjs` guards: `npm test` on Linux, measured at
 each item's last commit, from 843 on the base (`origin/develop`) to 885 at
-the head of this PR. B3 is not in this PR (see "Deferred", last section).
+the head of this PR. B3 is not in this PR (see the last section).
 
 ## B1 — bundle parity: taxonomy and brand baked into the static bundle
 
@@ -86,10 +92,11 @@ to the key count. Default-behaviour changes of the CLI: a canonical input
 exits 0 (was exit 1); `-o` onto an existing canonical pack merges (was an
 overwrite; `--overwrite` restores it).
 
-**Tests.** Tests: 847 → 864 — `tools/test-pack-conformance.mjs` (9 then; 12 at
-the head of this PR — B2b's hostile crawl, the review fixes' phone
+**Tests.** Tests: 847 → 864 — `tools/test-pack-conformance.mjs` (9 then; 14 at
+the head of the branch — B2b's hostile crawl, the review fixes' phone
 fingerprint and the flag-documentation pin, counted under 864 → 866,
-881 → 883 and 883 → 884 below) and
+881 → 883 and 883 → 884 below, and PR 2's two `--waivers` cases, counted
+under its own 911 → 934) and
 `tools/test-upconvert-merge.mjs` (8, including the count pins and the
 annotation key order, the never-regresses property over the four examples
 and the CLI merge paths), plus one pin in `tools/test-legacy-pack.mjs`. Two
@@ -217,13 +224,28 @@ document states for a flat suite now has to equal the tests the file holds.
   packs born canonical and the named follow-ups (two of them carry their GAP
   names, B3.2 and B3.5), §13 the Windows statement.
 
-## Deferred — B3, GAP batch 2
+## PR 2 — B3, GAP batch 2
 
 The five generic reliability-workflow features (verdict / trust model,
 waivers, diagnose → remediate flow, glossary widgets, service audit report)
-are not in this PR by decision, not by omission: they are a second PR on the
-same branch contract, so that B1, B2 and B4 — the three items the downstream's
-cutover blocks on — review and land on their own. Nothing of B3 is designed
-here; `docs/DOWNSTREAM.md` §12 only reserves the names *Waivers (GAP batch 2,
-B3.2)* and *Service audit report (GAP batch 2, B3.5)* where the conformance
-engine will meet them.
+were not in PR 1 by decision, not by omission: they are a second PR on the
+same branch contract (`codex/gap-batch2`), so that B1, B2 and B4 — the three
+items the downstream's cutover blocked on — reviewed and landed on their
+own. PR 2 delivered all five as full builds; its own report is
+[`docs/DELIVERY-GAP-BATCH2.md`](DELIVERY-GAP-BATCH2.md). The chain
+continues from 885 in `docs/UPDATE_JOURNEY.md` "Rebadge batch 2, PR 2 — GAP
+batch 2" (G1–G5):
+
+| feature | `DOWNSTREAM.md` §14 name | tests | deferred by name |
+|---|---|---|---|
+| B3.1 verdicts | `verdicts` | Tests: 885 → 911 | `verdicts-service-scope`, `verdicts-bundle-bake`, `verdicts-cli`, `verdicts-on-adapter-upgrade` |
+| B3.2 waivers | `waivers` | Tests: 911 → 934 | `B3.2-studio-waive`, `B3.2-bundle-waivers`, `B3.2-env-scope`, `B3.2-supersedes` |
+| B3.3 diagnose → remediate flow | `diagnose-remediate-flow` | Tests: 934 → 958 | `remediation-trigger-ref`, `remediation-flow-graph-unify`, `remediation-flow-live-state`, `alert-rule-deploy`, `catalogue-triggers` |
+| B3.4 glossary widgets | `glossary` | Tests: 958 → 975 | `glossary-light-views`, `glossary-termhtml-override`, `glossary-seed-from-spec` |
+| B3.5 service audit report | `service-audit-report` | Tests: 975 → 998 | `B3.5-bundle-audit-report`, `B3.5-export-zip`, `B3.5-dark-print` |
+
+The two names §12 reserved here — *Waivers (GAP batch 2, B3.2)* and *Service
+audit report (GAP batch 2, B3.5)* — are delivered: the engine honours
+`opts.waivers` and `packc conformance --waivers` drives it; the report's
+placeholders section is `packConformance`'s rows and `GET
+/api/packs/:id/placeholders` answers them.
