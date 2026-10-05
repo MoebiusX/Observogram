@@ -130,7 +130,10 @@ async function refused(key, who, path, body, status, error) {
 }
 
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-const VIEW_KEYS = ['id', 'artefactId', 'ruleId', 'reason', 'expiresAt', 'author', 'createdAt', 'revokedAt', 'revokedBy', 'revokeReason', 'state', 'expiresInDays', 'serviceId'];
+// The served key order is the documented one: docs/ADAPTER.md's waiver
+// object example and the README's API Surface row for the list route both
+// spell it, and a saved GET body is a sidecar entry byte for byte.
+const VIEW_KEYS = ['id', 'serviceId', 'ruleId', 'artefactId', 'reason', 'expiresAt', 'author', 'createdAt', 'state', 'expiresInDays', 'revokedAt', 'revokedBy', 'revokeReason'];
 const PAY_YAML = readFileSync(join(ROOT, `${SPEC_DIR}/examples/payment-service.pack.yaml`), 'utf8');
 const YAML = { 'Content-Type': 'text/yaml' };
 const L5 = 'L5.MUST.tier1_chaos_for_each_slo';
@@ -146,6 +149,19 @@ const ids = {};
 let T0 = null;
 
 // ---------- T0 and the reads ----------
+
+test('the documented waiver object is the served one, key for key in order: docs/ADAPTER.md\'s example and the README\'s GET /api/services/:id/waivers row both spell VIEW_KEYS', () => {
+  const adapter = readFileSync(join(ROOT, 'docs/ADAPTER.md'), 'utf8');
+  const example = adapter.match(/\*\*The waiver object\*\*[^]*?```json\n([^]*?)\n```/);
+  assert.ok(example, 'ADAPTER.md keeps the waiver object example');
+  assert.deepEqual(Object.keys(JSON.parse(example[1])), VIEW_KEYS);
+  const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+  const row = readme.split('\n').find((l) => l.startsWith('| `GET` | `/api/services/:id/waivers` |'));
+  assert.ok(row, 'the README API Surface lists the waivers route');
+  const each = row.match(/each `\{ ([^}]*) \}`/);
+  assert.ok(each, 'the row spells the waiver object');
+  assert.deepEqual(each[1].split(',').map((k) => k.trim()), VIEW_KEYS);
+});
 
 test('T0: a registered pack\'s /conformance body before any waiver has no `waivers` key (captured as text); /api/validate carries none either; GET /api/services/:id/waivers answers the empty list to a viewer, no row', async () => {
   const r = await call('ada', 'POST', '/api/validate?source=pay.yaml', PAY_YAML, YAML);

@@ -84,10 +84,14 @@ function parseRevokeBody(body) {
 // ---------- the views ----------
 
 // The repository's row with its computed state (tools/lib/waivers.mjs
-// waiverView), in the engine's key order, the org never echoed.
+// waiverView), the org never echoed, in the documented key order — the
+// object docs/ADAPTER.md's example and the README's API Surface row spell
+// (identity, scope, reason, expiry, state, then the revocation), so a saved
+// GET body is the sidecar entry byte for byte.
 export function waiverViewOf(row, now) {
-  const { id, artefactId, ruleId, reason, expiresAt, author, createdAt, revokedAt, revokedBy, revokeReason } = row;
-  return { ...waiverView({ id, artefactId, ruleId, reason, expiresAt, author, createdAt, revokedAt, revokedBy, revokeReason }, now), serviceId: row.serviceId };
+  const { id, serviceId, artefactId, ruleId, reason, expiresAt, author, createdAt, revokedAt, revokedBy, revokeReason } = row;
+  const { state, expiresInDays } = waiverView({ id, artefactId, ruleId, reason, expiresAt, author, createdAt, revokedAt, revokedBy, revokeReason }, now);
+  return { id, serviceId, ruleId, artefactId, reason, expiresAt, author, createdAt, state, expiresInDays, revokedAt, revokedBy, revokeReason };
 }
 
 // GET /api/services/:id/waivers: newest first, history included (a revoked
