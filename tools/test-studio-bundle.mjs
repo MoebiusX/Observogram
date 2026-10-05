@@ -510,7 +510,7 @@ test('T4b inert by default: a build with nothing baked is the same tree\'s build
     // A branded build is self-guarding against a reordering of the shell transform: the anchors are on the shipped shell only.
     const branded = buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', brand: JSON.parse(readFileSync(ACME_STATIC, 'utf8')) });
     assert.ok(branded.html.includes('id="brand-config"'));
-    assert.throws(() => buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', brand: { name: 'X', tokens: { light: { accent: '#000' } } }, taxonomy: { version: 2 } }), { message: /^taxonomy: version must be 1/ });
+    assert.throws(() => buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', brand: { name: 'X', tokens: { light: { accent: '#000' } } }, taxonomy: { version: 3 } }), { message: /^taxonomy: version must be 1 or 2/ });
     // A raw brand is told from normalizeBrand's output by its shape, not by a `configured` key it may happen to carry:
     // such an object is normalized (so baked, named, and URL-checked) rather than read as is.
     for (const configured of [true, false]) {
@@ -1011,12 +1011,12 @@ test('T8 baked taxonomy: a --taxonomy bundle answers /api/taxonomy as a server s
   const indicator = join(TMP, 'indicator.json');
   writeFileSync(indicator, '{"version":1,"types":{"PackSLI":"indicator"}}');
   assert.equal(refuse(['--taxonomy', indicator], {}, /unknown family/), `--taxonomy: ${indicator}: taxonomy: types.PackSLI: unknown family "indicator"\n`);
-  const v2 = join(TMP, 'v2.json');
-  writeFileSync(v2, '{"version":2,"nope":1}');
-  assert.equal(refuse(['--taxonomy', v2], {}, /version must be 1/), `--taxonomy: ${v2}: taxonomy: version must be 1 (+1 more)\n`);
+  const v3 = join(TMP, 'v3.json');
+  writeFileSync(v3, '{"version":3,"nope":1}');
+  assert.equal(refuse(['--taxonomy', v3], {}, /version must be 1 or 2/), `--taxonomy: ${v3}: taxonomy: version must be 1 or 2 (+1 more)\n`);
   refuse([], { TOMOGRAPH_TAXONOMY: missing }, new RegExp(`^OBSERVOGRAM_TAXONOMY: ${esc(missing)}: ENOENT`));
   // The programmatic guard.
-  assert.throws(() => buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', taxonomy: { version: 2 } }), { message: /^taxonomy: version must be 1/ });
+  assert.throws(() => buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', taxonomy: { version: 3 } }), { message: /^taxonomy: version must be 1 or 2/ });
   assert.throws(() => loadTaxonomyFile(indicator, 'OBSERVOGRAM_TAXONOMY'), { message: new RegExp(`^OBSERVOGRAM_TAXONOMY: ${esc(indicator)}: taxonomy: types\\.PackSLI`) });
 });
 

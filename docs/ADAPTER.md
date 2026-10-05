@@ -148,7 +148,11 @@ classifier's inert-by-default argument rests on. A family name in `type`
 needs the operator override (`OBSERVOGRAM_TAXONOMY` on a server, `--taxonomy`
 for the static bundle; README "Classify Typed Packs"), which can also place
 foreign ids by pattern — but never an
-artefact that carries `defines`.
+artefact that carries `defines`. The taxonomy file's schema version 2 adds a
+`glossary` (definitions for families and spec terms, `{ term, definition,
+family?, aliases?, link? }`; README "Classify Typed Packs"); a glossary
+never changes a classification — `classifyArtefact` reads `types` and `ids`
+only, and a v1 file compiles exactly as before, to the empty glossary.
 
 The symbol an artefact is addressed by elsewhere — `slos.<id>` (the
 adapter's `defines`), `remediation[<i>]`, `alerting.rules[<j>]`,

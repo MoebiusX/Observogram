@@ -30,6 +30,21 @@
 // ReDoS shape), and is matched against the first 256 characters of the
 // id; compileTaxonomy also times each pattern against adversarial ids. The
 // file is operator-trusted configuration, not user input.
+//
+// Schema version 2 (TAXONOMY_VERSION_LATEST) adds one optional section, a
+// glossary — the definitions the studio shows beside a family label or a
+// spec term (studio/glossary.mjs; GAP batch 2, B3.4):
+//   { "version": 2, "types": …, "ids": …,
+//     "glossary": [ { "term": "Service level indicator", "family": "sli",
+//                     "aliases": ["SLI"], "definition": "…", "link": "https://…" } ] }
+// An entry is `{ term, definition, family?, aliases?, link? }` within
+// GLOSSARY_LIMITS; at most one entry per family, and no term or alias
+// defined twice (case-insensitive). A glossary never changes a
+// classification: classifyArtefact() reads `types` and `ids` only. A v1
+// file stays valid and compiles to the frozen empty glossary; `glossary`
+// under `version: 1` is an unknown key, so a downstream that keeps writing
+// `version: TAXONOMY_VERSION` (still 1) keeps emitting files its deployed
+// server accepts.
 
 // ---------- the vocabulary ----------
 
@@ -143,7 +158,14 @@ export const ID_RULES = Object.freeze([
 // ---------- the override: compile and validate ----------
 
 export const TAXONOMY_VERSION = 1;
+// The versions compileTaxonomy accepts, and the latest one (the glossary
+// needs `version: 2`). TAXONOMY_VERSION keeps the value 1 on purpose: see
+// the header.
+export const TAXONOMY_VERSIONS = Object.freeze([1, 2]);
+export const TAXONOMY_VERSION_LATEST = 2;
 export const PATTERN_MAX_LENGTH = 200;
+// The glossary's bounds (schema v2): characters per field, entries per file.
+export const GLOSSARY_LIMITS = Object.freeze({ term: 80, definition: 600, alias: 80, link: 2000, entries: 500 });
 export const ID_MATCH_LENGTH = 256;
 // A quantified group — `(…)+`, `(…)*`, `(…){n,}` — is the shape every
 // catastrophic pattern takes; refused outright rather than analysed.
@@ -159,6 +181,14 @@ const PATTERN_BUDGET_MS = 50;
 
 const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const isFamily = (f) => typeof f === 'string' && f !== 'unknown' && FAMILIES.includes(f);
+// One line of text within [1, max] characters: not blank, no control
+// character (U+0000–U+001F, U+007F: a line break, a tab, an escape).
+const hasControl = (s) => { for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); if (c < 32 || c === 127) return true; } return false; };
+const isLine = (v, max) => typeof v === 'string' && v.trim().length > 0 && v.length <= max && !hasControl(v);
+// The key a term or alias is matched by: trimmed, inner whitespace collapsed, lower-cased.
+const textKey = (text) => String(text).trim().replace(/\s+/g, ' ').toLowerCase();
+const EMPTY = Object.freeze([]);
+const EMPTY_GLOSSARY = Object.freeze({ entries: EMPTY, byFamily: new Map(), byText: new Map() });
 
 // One entry — a family string or { family, label?, role? } — to { family, label?, role? }.
 function readTarget(value, where, errors) {
@@ -193,12 +223,73 @@ function compileRule(rule, i, errors) {
   return Object.freeze({ re, pattern, flags, ...target });
 }
 
-// { compiled: { types: Map<name, {family,label?,role?}>, ids: [{ re, pattern, flags, family, label?, role? }] } | null, errors: string[] }
+// One glossary entry → { term, definition, family, aliases, link } (frozen), or null with the reasons pushed.
+const GLOSSARY_KEYS = ['term', 'definition', 'family', 'aliases', 'link'];
+function compileGlossaryEntry(raw, i, errors) {
+  const where = `glossary[${i}]`;
+  if (!isPlainObject(raw)) { errors.push(`taxonomy: ${where}: expected { term, definition, family?, aliases?, link? }`); return null; }
+  for (const k of Object.keys(raw)) if (!GLOSSARY_KEYS.includes(k)) { errors.push(`taxonomy: ${where}: unknown key ${JSON.stringify(k)}`); return null; }
+  if (!isLine(raw.term, GLOSSARY_LIMITS.term)) { errors.push(`taxonomy: ${where}: term must be one line of 1–${GLOSSARY_LIMITS.term} characters`); return null; }
+  if (!isLine(raw.definition, GLOSSARY_LIMITS.definition)) { errors.push(`taxonomy: ${where}: definition must be one line of 1–${GLOSSARY_LIMITS.definition} characters`); return null; }
+  let family = null;
+  if (raw.family !== undefined) {
+    if (!isFamily(raw.family)) { errors.push(`taxonomy: ${where}: unknown family ${JSON.stringify(raw.family)}`); return null; }
+    family = raw.family;
+  }
+  let aliases = EMPTY;
+  if (raw.aliases !== undefined) {
+    if (!Array.isArray(raw.aliases) || !raw.aliases.every(a => isLine(a, GLOSSARY_LIMITS.alias))) {
+      errors.push(`taxonomy: ${where}: aliases must be an array of one-line strings of 1–${GLOSSARY_LIMITS.alias} characters`);
+      return null;
+    }
+    aliases = Object.freeze(raw.aliases.map(a => a.trim()));
+  }
+  let link = null;
+  if (raw.link !== undefined) {
+    if (!isLine(raw.link, GLOSSARY_LIMITS.link) || !/^https?:\/\/\S+$/i.test(raw.link.trim())) { errors.push(`taxonomy: ${where}: link must be an http(s) URL of at most ${GLOSSARY_LIMITS.link} characters`); return null; }
+    // `https://user:secret@host/…` — the link is served to every viewer (GET /api/taxonomy).
+    if (/^https?:\/\/[^/?#]*@/i.test(raw.link.trim())) { errors.push(`taxonomy: ${where}: link must not carry credentials`); return null; }
+    link = raw.link.trim();
+  }
+  return Object.freeze({ term: raw.term.trim(), definition: raw.definition.trim(), family, aliases, link });
+}
+
+// The glossary section → { entries, byFamily, byText } (frozen), or null with the reasons pushed.
+function compileGlossary(raw, errors) {
+  if (!Array.isArray(raw)) { errors.push('taxonomy: glossary must be an array'); return null; }
+  if (raw.length > GLOSSARY_LIMITS.entries) { errors.push(`taxonomy: glossary: more than ${GLOSSARY_LIMITS.entries} entries`); return null; }
+  const entries = [];
+  const byFamily = new Map();
+  const byText = new Map();
+  const owner = new Map();   // text key / family → the index that defined it
+  let ok = true;
+  raw.forEach((item, i) => {
+    const e = compileGlossaryEntry(item, i, errors);
+    if (!e) { ok = false; return; }
+    if (e.family !== null) {
+      if (byFamily.has(e.family)) { errors.push(`taxonomy: glossary[${i}]: family ${JSON.stringify(e.family)} is already defined by glossary[${owner.get(`family:${e.family}`)}]`); ok = false; return; }
+    }
+    const seen = new Set();   // an alias repeating the term (or another alias) of the same entry
+    for (const text of [e.term, ...e.aliases]) {
+      const k = textKey(text);
+      if (byText.has(k) || seen.has(k)) { errors.push(`taxonomy: glossary[${i}]: ${JSON.stringify(text)} is already defined by glossary[${owner.get(`text:${k}`) ?? i}]`); ok = false; return; }
+      seen.add(k);
+    }
+    entries.push(e);
+    if (e.family !== null) { byFamily.set(e.family, e); owner.set(`family:${e.family}`, i); }
+    for (const text of [e.term, ...e.aliases]) { const k = textKey(text); byText.set(k, e); owner.set(`text:${k}`, i); }
+  });
+  if (!ok) return null;
+  return Object.freeze({ entries: Object.freeze(entries), byFamily, byText });
+}
+
+// { compiled: { types: Map<name, {family,label?,role?}>, ids: [{ re, pattern, flags, family, label?, role? }], glossary: { entries, byFamily, byText } } | null, errors: string[] }
 function compileAll(json) {
   const errors = [];
   if (!isPlainObject(json)) return { compiled: null, errors: ['taxonomy: must be an object'] };
-  if (json.version !== TAXONOMY_VERSION) errors.push(`taxonomy: version must be ${TAXONOMY_VERSION}`);
-  for (const k of Object.keys(json)) if (!['version', 'types', 'ids'].includes(k)) errors.push(`taxonomy: unknown key ${JSON.stringify(k)}`);
+  if (!TAXONOMY_VERSIONS.includes(json.version)) errors.push(`taxonomy: version must be ${TAXONOMY_VERSIONS.join(' or ')}`);
+  const allowed = json.version === 2 ? ['version', 'types', 'ids', 'glossary'] : ['version', 'types', 'ids'];
+  for (const k of Object.keys(json)) if (!allowed.includes(k)) errors.push(`taxonomy: unknown key ${JSON.stringify(k)}`);
   const types = new Map();
   if (json.types !== undefined) {
     if (!isPlainObject(json.types)) errors.push('taxonomy: types must be an object of type name → family');
@@ -215,8 +306,10 @@ function compileAll(json) {
     if (!Array.isArray(json.ids)) errors.push('taxonomy: ids must be an array');
     else json.ids.forEach((rule, i) => { const c = compileRule(rule, i, errors); if (c) ids.push(c); });
   }
+  let glossary = EMPTY_GLOSSARY;
+  if (json.version === 2 && json.glossary !== undefined) glossary = compileGlossary(json.glossary, errors) || EMPTY_GLOSSARY;
   if (errors.length) return { compiled: null, errors };
-  return { compiled: Object.freeze({ types, ids: Object.freeze(ids) }), errors };
+  return { compiled: Object.freeze({ types, ids: Object.freeze(ids), glossary }), errors };
 }
 
 /** The compiled override, or an Error whose message starts `taxonomy: ` (the first reason). */
@@ -231,12 +324,13 @@ export function validateTaxonomy(json) {
   return compileAll(json).errors;
 }
 
-/** `N types, M id rules` — for the one log line an entrypoint prints. */
+/** `N types, M id rules[, G glossary terms]` — for the one log line an entrypoint prints (the glossary only when it has entries). */
 export function describeTaxonomy(compiled) {
   if (!compiled) return 'no override';
   const n = compiled.types.size;
   const m = compiled.ids.length;
-  return `${n} type${n === 1 ? '' : 's'}, ${m} id rule${m === 1 ? '' : 's'}`;
+  const g = compiled.glossary?.entries.length ?? 0;
+  return `${n} type${n === 1 ? '' : 's'}, ${m} id rule${m === 1 ? '' : 's'}${g ? `, ${g} glossary term${g === 1 ? '' : 's'}` : ''}`;
 }
 
 // ---------- the active override (module state, default none) ----------
@@ -255,6 +349,28 @@ export function configureTaxonomy(compiled) {
 }
 
 export function activeTaxonomy() { return active; }
+
+// ---------- the glossary (schema v2) ----------
+// Every accessor guards `taxonomy?.glossary?.…`: a compiled object from an
+// older build (no `glossary` key) installs through isCompiled unchanged and
+// reads as the empty glossary.
+
+/** The glossary entry for a family (`sli`, `alert_rule` …), or null. */
+export function glossaryFor(family, taxonomy = active) {
+  if (typeof family !== 'string' || !family) return null;
+  return taxonomy?.glossary?.byFamily?.get(family) ?? null;
+}
+
+/** The entry whose term or alias is `text` (trimmed, whitespace collapsed, case-insensitive), or null. */
+export function glossaryByText(text, taxonomy = active) {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  return taxonomy?.glossary?.byText?.get(textKey(text)) ?? null;
+}
+
+/** Every entry, in file order (the frozen empty array when there is no glossary). */
+export function glossaryEntries(taxonomy = active) {
+  return taxonomy?.glossary?.entries ?? EMPTY;
+}
 
 // ---------- the classification ----------
 

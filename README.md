@@ -1351,6 +1351,39 @@ until sign-in (`/api/taxonomy` is a viewer route, like `/api/examples`).
 Unset, nothing changes: the families are Observogram's own and the board
 goldens (`npm run test:golden:board`) are byte-identical.
 
+**Schema version 2 adds a glossary.** With `"version": 2` the file may carry
+a `glossary` — the definitions the studio shows beside a family label or a
+spec term, as a mark a person can open (below, *The glossary marks*):
+
+```json
+{
+  "version": 2,
+  "types": { "PackSLI": "sli" },
+  "glossary": [
+    { "term": "Service level indicator", "family": "sli", "aliases": ["SLI", "SLIs"],
+      "definition": "A measurement of how the service behaves for its users.",
+      "link": "https://example.com/handbook/sli" },
+    { "term": "Error budget", "definition": "The share of the window an objective allows to fail." }
+  ]
+}
+```
+
+An entry is `{ term, definition, family?, aliases?, link? }`: `term` and each
+alias one line of 1–80 characters, `definition` one line of 1–600, `family`
+one of Observogram's families (at most one entry per family), `link` an
+`http(s)` URL of at most 2000 characters that carries no credentials (it is
+served to every viewer); at most 500 entries, and no term or alias defined
+twice (case-insensitive). A glossary never changes a classification — the
+families, the board, the diff and the graphs read `types` and `ids` only — and
+a version 1 file stays valid: it compiles exactly as before, to an empty
+glossary; `glossary` under `version: 1` is refused as an unknown key, so a
+file written for an older server keeps working on this one and the other way
+round. The boot line counts the terms (`…: 7 types, 1 id rule, 6 glossary
+terms`), `GET /api/taxonomy` serves the document with its glossary, and the
+static bundle bakes it like any other taxonomy file.
+`tools/fixtures/taxonomy/taxonomy.v2.json` is the worked v2 example beside
+the v1 `taxonomy.json`.
+
 A typed pack reaches the pipeline either as a layered JSON upload whose items
 carry a `type` (kept through the upconvert as
 `metadata.annotations["observogram.artefact.type.<symbol>"]` and emitted by
