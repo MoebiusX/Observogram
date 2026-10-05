@@ -99,16 +99,20 @@ function catalogueHtml(catalogue) {
 // The services section of the home (design §3.2), from buildServicesHomeModel:
 // the table as record cards, the empty state worded for the reader's rank,
 // or today's derived tiles — with the status line and its Retry when the
-// table could not be read — then the catalogue packs apart. The controller
+// table could not be read — then the catalogue packs apart. With the table
+// read, `model.derived` is the own services no record covers (a registered
+// pack whose row was deleted): tiles after the cards, or under the empty
+// sentence, so the pack stays reachable from the home. The controller
 // fills the import sources below this container. Actions: a card →
 // host.services.openService(id, slug); a derived tile → openDerived(key); a
 // catalogue row → openPack(id); Retry → retry(). The search filters the grid.
 export function renderServicesHome(container, model, host = appHost) {
   let section;
+  const tiles = model.derived.map(derivedTileHtml).join('');
   if (model.kind === 'table') {
-    section = gridHtml(model.heading, model.cards.map(serviceCardHtml).join(''));
+    section = gridHtml(model.heading, model.cards.map(serviceCardHtml).join('') + tiles);
   } else if (model.kind === 'empty') {
-    section = `<p class="home-check-empty">${escapeHtml(model.empty.title)} ${escapeHtml(model.empty.body)}</p>`;
+    section = `<p class="home-check-empty">${escapeHtml(model.empty.title)} ${escapeHtml(model.empty.body)}</p>${tiles ? gridHtml(model.heading, tiles) : ''}`;
   } else {
     section = model.derived.length
       ? gridHtml(model.heading, model.derived.map(derivedTileHtml).join(''))

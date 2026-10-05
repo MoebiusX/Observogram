@@ -184,7 +184,8 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
    services table (`GET /api/services`); a service page binds Discover ·
    Diagnose · Remediate · Build to a service and an environment through one
    pack resolver (the newest primary); a pack-derived tile appears only where
-   the table is unavailable (the static bundle) and behaves as before.
+   the table is unavailable (the static bundle) or for a registered pack whose
+   service row was deleted, and behaves as before.
 
 ## What Belongs In Each Step
 

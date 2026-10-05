@@ -209,7 +209,12 @@ const gate = (access) => ({ enabled: access?.canWrite !== false, reason: access?
 // `status` is state.servicesStatus ({ kind: 'ok'|'static'|'denied'|'error'|'loading', error }).
 // `derived` is the controller's serviceCatalogue({ ownOnly: true }) — the
 // tiles the fallback kinds draw (its rule needs the call-time /lib module),
-// returned most recently opened first with each tile's `openedAt`.
+// returned most recently opened first with each tile's `openedAt`. When the
+// table is read, only the own derived services no record covers are kept —
+// a registered pack whose service row was deleted (the selector's "from
+// packs only" group, §6.3) — drawn as tiles beside the cards or under the
+// empty sentence, so a pack GET /api/packs lists is never unreachable from
+// the home; the sentence then says so instead of "No services".
 // `examples` are GET /api/examples entries not in the catalogue.
 // → { kind: 'table'|'empty'|'derived'|'error', heading, cards: [serviceCardModel], derived: [tile],
 //     empty: { title, body, primary: 'build'|'catalogue' }|null, error: string|null,
@@ -230,19 +235,29 @@ export function buildServicesHomeModel({
     kind: 'derived', heading: anyRecent ? 'Recent services' : 'Your services', cards: [], derived: derivedTiles(derived, opened),
     empty: null, error: null, catalogue, build: gate(access), sources: gate(access),
   };
+  // The own derived services no record covers (slugs and derived keys are
+  // the same normalised service key — servicesSelectModel's rule).
+  const covered = new Set((Array.isArray(services) ? services : []).map((s) => s.slug));
+  const orphans = base.derived.filter((d) => !covered.has(d.key));
   if (status.kind === 'ok' && Array.isArray(services) && services.length) {
     const cards = orderByRecent(services, opened).map((s) => serviceCardModel(s, { verdicts, opened, now, catalog, isLiveAggregatePack }));
-    return { ...base, kind: 'table', cards, derived: [] };
+    return { ...base, kind: 'table', cards, derived: orphans };
   }
   if (status.kind === 'ok') {
     const canWrite = access?.canWrite !== false;
     const role = access?.role ?? 'viewer';
-    return {
-      ...base, kind: 'empty', derived: [],
-      empty: canWrite
+    let empty;
+    if (orphans.length) {
+      const named = `The registered packs name ${plural(orphans.length, 'service')} without a row — a tile below opens the pack`;
+      empty = canWrite
+        ? { title: `No service records in ${org} yet.`, body: `${named}; registering a pack again (Build, a scan, a draft or an upload) writes the row.`, primary: 'build' }
+        : { title: `No service records in ${org} yet.`, body: `${named}; an operator registers a pack again to write the row — your role in ${org} is ${role}.`, primary: 'catalogue' };
+    } else {
+      empty = canWrite
         ? { title: `No services in ${org} yet.`, body: 'Build a pack — Define · Compile · Verify — or import one below; registering it writes the service row.', primary: 'build' }
-        : { title: `No services in ${org} yet.`, body: `An operator registers the first pack (Build, a scan, a draft or an upload) — your role in ${org} is ${role}. You can read the catalogue packs below.`, primary: 'catalogue' },
-    };
+        : { title: `No services in ${org} yet.`, body: `An operator registers the first pack (Build, a scan, a draft or an upload) — your role in ${org} is ${role}. You can read the catalogue packs below.`, primary: 'catalogue' };
+    }
+    return { ...base, kind: 'empty', derived: orphans, empty };
   }
   if (status.kind === 'error' || status.kind === 'denied') {
     return { ...base, kind: 'error', error: `The services table could not be read — ${status.error || 'no answer'}. Showing the services the loaded packs name.` };

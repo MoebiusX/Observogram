@@ -235,6 +235,34 @@ test('buildServicesHomeModel: the table ordered by recent then name; empty state
   assert.deepEqual(withExamples.catalogue.map((c) => c.id), ['payment-service', 'ex-1']);
 });
 
+test('buildServicesHomeModel: a registered pack whose service row was deleted stays reachable — its derived tile beside the cards, or under an empty sentence that says so, never "No services"', () => {
+  const operator = { posture: 'identity', role: 'operator', rank: 1, canWrite: true, reason: null, orgName: 'Acme' };
+  const viewer = { posture: 'identity', role: 'viewer', rank: 0, canWrite: false, reason: 'needs the operator role in Acme — yours is viewer', orgName: 'Acme' };
+  const ok = { kind: 'ok', error: null };
+  // serviceCatalogue({ ownOnly: true }): the orphan's key, and the keys the records cover.
+  const orphan = { key: 'orphan-svc', label: 'orphan svc', packCount: 1, liveCount: 0, environments: ['prod'], tiers: [] };
+  const derived = [orphan, { key: 'orders-api', label: 'Orders API', packCount: 2, liveCount: 1, environments: ['prod', 'staging'], tiers: [] }, { key: 'billing', label: 'Billing', packCount: 0, liveCount: 1, environments: [], tiers: [] }];
+  // With records: the cards, then only the uncovered key as a tile (the selector's "from packs only" rule).
+  const table = buildServicesHomeModel({ status: ok, services: [orders, memberOnly], catalog, derived, access: operator, orgName: 'Acme', now: NOW, isLiveAggregatePack });
+  assert.equal(table.kind, 'table');
+  assert.deepEqual(table.cards.map((c) => c.slug), ['billing', 'orders-api']);
+  assert.deepEqual(table.derived, [{ ...orphan, openedAt: null }], 'a covered key is a card, never a tile too');
+  // No records at all: the orphan is the only service here — the sentence is true and names the way back.
+  const emptyOp = buildServicesHomeModel({ status: ok, services: [], catalog, derived: [orphan], access: operator, orgName: 'Acme' });
+  assert.equal(emptyOp.kind, 'empty');
+  assert.deepEqual(emptyOp.derived, [{ ...orphan, openedAt: null }]);
+  assert.deepEqual(emptyOp.empty, { title: 'No service records in Acme yet.', body: 'The registered packs name 1 service without a row — a tile below opens the pack; registering a pack again (Build, a scan, a draft or an upload) writes the row.', primary: 'build' });
+  const emptyV = buildServicesHomeModel({ status: ok, services: [], catalog, derived: [orphan, { key: 'other', label: 'other', packCount: 1, liveCount: 0, environments: [], tiers: [] }], access: viewer, orgName: 'Acme' });
+  assert.equal(emptyV.empty.body, 'The registered packs name 2 services without a row — a tile below opens the pack; an operator registers a pack again to write the row — your role in Acme is viewer.');
+  assert.equal(emptyV.empty.primary, 'catalogue');
+  assert.ok(!/\byou (scan|upload|build|register)\b/i.test(emptyV.empty.body), 'a viewer is never told to register');
+  // The sentence that says "No services" is kept for a truly empty org (no own derived service either).
+  assert.equal(buildServicesHomeModel({ status: ok, services: [], catalog, derived: [], access: operator, orgName: 'Acme' }).empty.title, 'No services in Acme yet.');
+  // The orphan tiles are ordered as the fallback tiles are: most recently opened first.
+  const two = buildServicesHomeModel({ status: ok, services: [bare], derived: [{ key: 'zeta', label: 'zeta' }, { key: 'alpha', label: 'alpha' }], opened: { zeta: '2026-10-01T00:00:00.000Z' } }).derived;
+  assert.deepEqual(two.map((d) => d.key), ['zeta', 'alpha']);
+});
+
 // ---------- the page ----------
 
 test('buildServicePageModel: tabs, the selected panel (verdict, endpoint as name and origin only, tier line, bindings, http(s) links), the actions, Packs linked with the current one', () => {
@@ -560,6 +588,31 @@ test('renderServicesHome: the empty states by rank, the derived tiles where the 
   const none = homeContainer();
   renderServicesHome(none, buildServicesHomeModel({ status: { kind: 'static', error: null }, derived: [] }), { services: {} });
   assert.ok(none.innerHTML.includes('<p class="home-check-empty">No services yet. Bring a pack in from one of the sources below.</p>'));
+});
+
+test('renderServicesHome: the orphan derived tiles — after the cards in the table, under the sentence when the table is empty — open the workspace; nothing drawn when every key is covered', () => {
+  const ok = { kind: 'ok', error: null };
+  const orphan = { key: 'orphan-svc', label: 'orphan svc', packCount: 1, liveCount: 0, environments: ['prod'], tiers: ['tier-2'] };
+  const calls = [];
+  const host = { services: { openDerived: (k) => calls.push(['derived', k]), openService: (id, slug) => calls.push(['record', id, slug]) } };
+  const t = homeContainer();
+  renderServicesHome(t, buildServicesHomeModel({ status: ok, services: [bare], catalog, derived: [orphan, { key: 'ledger', label: 'Ledger', packCount: 1 }], access: OPERATOR, orgName: 'Acme' }), host);
+  assert.deepEqual(t.cards().map((e) => [e.dataset.service, e.dataset.serviceId, /\bsvc-card\b/.test(e.className)]), [['ledger', '2', true], ['orphan-svc', undefined, false]], 'the record card first, the orphan as a tile, the covered key once');
+  assert.ok(t.innerHTML.includes('<span class="svc-gate-meta">prod · 1 pack · tier-2</span>'));
+  t.cards()[1].fire('click');
+  t.cards()[0].fire('click');
+  assert.deepEqual(calls, [['derived', 'orphan-svc'], ['record', 2, 'ledger']]);
+  const e = homeContainer();
+  renderServicesHome(e, buildServicesHomeModel({ status: ok, services: [], catalog, derived: [orphan], access: OPERATOR, orgName: 'Acme' }), host);
+  assert.ok(e.innerHTML.includes('<p class="home-check-empty">No service records in Acme yet. The registered packs name 1 service without a row — a tile below opens the pack; registering a pack again (Build, a scan, a draft or an upload) writes the row.</p>'));
+  assert.deepEqual(e.cards().map((c) => c.dataset.service), ['orphan-svc'], 'the tile under the sentence');
+  assert.ok(e.search, 'the grid with its search');
+  assert.ok(e.innerHTML.includes('Catalogue packs (1)'), 'the catalogue packs still apart, after the tiles');
+  assert.ok(e.innerHTML.indexOf('home-check-empty') < e.innerHTML.indexOf('svc-gate-grid') && e.innerHTML.indexOf('svc-gate-grid') < e.innerHTML.indexOf('svc-catalogue'));
+  const none = homeContainer();
+  renderServicesHome(none, buildServicesHomeModel({ status: ok, services: [], catalog, derived: [], access: OPERATOR, orgName: 'Acme' }), host);
+  assert.equal(none.cards().length, 0);
+  assert.equal(none.search, null, 'no grid when there is nothing to draw in it');
 });
 
 test('markUnavailable: aria-disabled (never disabled), .is-unavailable and the reason as one .svc-why — in the control or in the slot beside it; repainting does not repeat it', () => {
