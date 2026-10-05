@@ -276,16 +276,23 @@
       "changedSinceRelease": false
     },
     "tools/lib/conformance.mjs": {
-      "sha256": "54afecfd79ff410dfd9886a2e6782812fc002f6aac05b0d732a7696f7d9abbbf",
-      "bytes": 16272,
+      "sha256": "a234869139b1b096d8f2e23f5e5122da6cc163f1d352e9b3f2df244e9f12a8ff",
+      "bytes": 18711,
       "exports": [
         "RUBRIC",
+        "SUBJECT_CLAUSES",
         "TIER_RANK",
+        "clauseSubjects",
         "evaluateConformance"
       ],
       "imports": [],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "RUBRIC",
+        "TIER_RANK",
+        "evaluateConformance"
+      ]
     },
     "tools/lib/contracts/mcp-capabilities.mjs": {
       "sha256": "8986224da15734c74d08799f990268b19b8beba2cd9ee54143cb474d44148c88",
