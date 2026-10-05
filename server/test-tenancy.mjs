@@ -289,7 +289,21 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   j = await r.json();
   const mcpEndpointId = j.endpoint?.id;
   assert(r.status === 201 && Number.isInteger(mcpEndpointId) && j.endpoint.url === `https://${org}.mcp.test/mcp`, `alice (an admin) creates an MCP endpoint in ${org}`, [r.status, j]);
-  return { packId, deployId, journey, serviceId, environmentId, mcpEndpointId };
+  // A waiver by alice on the service (GAP batch 2, B3.2): a row in the store, the author her login.
+  const expiresAt = new Date(Date.now() + 30 * 86400000).toISOString();
+  seq = auditSeq();
+  r = await fetch(`${root}/api/services/${serviceId}/waivers`, {
+    method: 'POST', headers: { ...h, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ruleId: 'L5.MUST.synthetic_probe', reason: 'the probe ships next sprint', expiresAt }),
+  });
+  j = await r.json();
+  const waiverId = j.waiver?.id;
+  assert(r.status === 201 && Number.isInteger(waiverId) && j.waiver.author === 'alice' && j.waiver.state === 'active', `alice records a waiver in ${org}`, [r.status, j]);
+  rows = rowsAfter(seq);
+  assert(rows.length === 1 && listedFor('POST /api/services/:id/waivers', rows)
+    && JSON.stringify(rows) === JSON.stringify([['waiver.create', 'alice', org, String(waiverId), { service: `${org}-sweep-service`, ruleId: 'L5.MUST.synthetic_probe', artefactId: null, expiresAt, reason: 'the probe ships next sprint' }]]),
+    `alice's waiver in ${org}: exactly one waiver.create row by alice in ${org} (an action the table lists)`, rows);
+  return { packId, deployId, journey, serviceId, environmentId, mcpEndpointId, waiverId };
 }
 
 // The cross-org route sweep: `who` (a session in another org — `org` is its
@@ -312,7 +326,7 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     const parse = () => { try { return JSON.parse(text); } catch { return null; } };
     return { status: r.status, json: parse() };
   };
-  const { packId, deployId, journey, userId, serviceId, environmentId, mcpEndpointId } = ids;
+  const { packId, deployId, journey, userId, serviceId, environmentId, mcpEndpointId, waiverId } = ids;
   const p = encodeURIComponent(packId);
   const is404 = (label) => (r) => assert(r.status === 404, `${who}: ${label} → 404`, r.status, 404);
   const ORG_SCOPED = {
@@ -373,6 +387,10 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     'POST /api/services/:id/environments': [`/api/services/${serviceId}/environments`, { name: 'staging' }, is404('POST /api/services/:id/environments')],
     'PATCH /api/environments/:id': [`/api/environments/${environmentId}`, { tier: 'tier-1' }, is404('PATCH /api/environments/:id')],
     'DELETE /api/environments/:id': [`/api/environments/${environmentId}`, undefined, is404('DELETE /api/environments/:id')],
+    // The waivers (GAP batch 2, B3.2): the other org's service and waiver are unknown here.
+    'GET /api/services/:id/waivers': [`/api/services/${serviceId}/waivers`, undefined, is404('GET /api/services/:id/waivers')],
+    'POST /api/services/:id/waivers': [`/api/services/${serviceId}/waivers`, { ruleId: 'L5.MUST.synthetic_probe', reason: 'sweep', expiresAt: new Date(Date.now() + 86400000).toISOString() }, is404('POST /api/services/:id/waivers')],
+    'POST /api/waivers/:id/revoke': [`/api/waivers/${waiverId}/revoke`, {}, is404('POST /api/waivers/:id/revoke')],
     // The MCP endpoints (admin; `who` is an admin or an owner in their org):
     // the list holds none of the other org's, each :id route 404, {} → 400.
     'GET /api/mcp-endpoints': ['/api/mcp-endpoints', undefined, (r) => assert(r.status === 200 && !r.json.endpoints.some(e => e.id === mcpEndpointId), `${who}: GET /api/mcp-endpoints lacks the other org's endpoint`, r.json)],

@@ -740,9 +740,9 @@ test('DELETE /api/services/:id on a record without packs: the view as it was, th
       environments: [{ id: ids.paymentsDev, serviceId: ids.payments, name: 'dev', tier: null, effectiveTier: null, bindings: {}, endpoints: {}, mcpEndpoint: null, createdAt: 'T', updatedAt: 'T' }],
       packs: [],
     },
-    environments: 1, packLinks: 0,
+    environments: 1, packLinks: 0, waivers: 0,
   });
-  assert.deepEqual(rows, [['service.delete', 'ada', 'acme', 'payments', { environments: 1, packLinks: 0 }]]);
+  assert.deepEqual(rows, [['service.delete', 'ada', 'acme', 'payments', { environments: 1, packLinks: 0, waivers: 0 }]]);
   await refused('GET /api/services/:id', 'vera', `/api/services/${ids.payments}`, 404, `no service ${ids.payments}`);
   await refused('GET /api/environments/:id', 'vera', `/api/environments/${ids.paymentsDev}`, 404, `no environment ${ids.paymentsDev}`);
   await refused(K, 'ada', `/api/services/${ids.payments}`, 404, `no service ${ids.payments}`);
@@ -1036,9 +1036,9 @@ test('DELETE /api/services/:id cascades the environments and the pack links; the
       environments: [{ id: ids.demoProd, serviceId: ids.demo, name: 'prod', tier: null, effectiveTier: 'tier-1', bindings: {}, endpoints: {}, mcpEndpoint: null, createdAt: 'T', updatedAt: 'T' }],
       packs: [{ id: ids.demoPack, label: null, source: 'demo-skeleton', role: 'primary' }],
     },
-    environments: 1, packLinks: 1,
+    environments: 1, packLinks: 1, waivers: 0,
   });
-  assert.deepEqual(rows, [['service.delete', 'oscar', 'acme', 'demo-skeleton', { environments: 1, packLinks: 1 }]]);
+  assert.deepEqual(rows, [['service.delete', 'oscar', 'acme', 'demo-skeleton', { environments: 1, packLinks: 1, waivers: 0 }]]);
   await refused('GET /api/environments/:id', 'vera', `/api/environments/${ids.demoProd}`, 404, `no environment ${ids.demoProd}`);
   const packs = (await call('vera', 'GET', '/api/packs')).json.packs;
   assert.ok(packs.some((p) => p.id === ids.demoPack), 'the pack stays registered');
@@ -1123,7 +1123,7 @@ test('a restart (a child server on the same workspace) rehydrates the packs with
   assert.equal(r.status, 200, r.text.slice(0, 300));
   const demo = (await call('vera', 'GET', '/api/services')).json.services.find((s) => s.slug === 'demo-skeleton');
   const del = await ok('DELETE /api/services/:id', 'oscar', `/api/services/${demo.id}`);
-  assert.deepEqual([del.json.environments, del.json.packLinks], [1, 1]);
+  assert.deepEqual([del.json.environments, del.json.packLinks, del.json.waivers], [1, 1, 0]);
   const slugsBefore = (await call('vera', 'GET', '/api/services')).json.services.map((s) => s.slug);
   const seq = seqNow();
   await closeInProcess();

@@ -736,7 +736,7 @@ org is never found (404, or 400 for `mcpEndpointId`).
 | `POST` | `/api/services` | operator | `{ name, slug?, owners?, tier?, description? }` | a service record (201); `slug` defaults to the name's key; `owners` at most 50 names; a slug in use is 409 naming its id |
 | `GET` | `/api/services/:id` | viewer | — | one service record with its environments and packs; 404 `no service <id>` |
 | `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description` | `changed` lists the fields that differed (none: no audit row); `slug` in the body is 400 — the slug is fixed, create a new service instead |
-| `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments` and `packLinks` removed with it |
+| `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments`, `packLinks` and `waivers` removed with it |
 | `GET` | `/api/services/:id/environments` | viewer | — | `service` (`id`, `slug`, `name`, `tier`) and its `environments` |
 | `POST` | `/api/services/:id/environments` | operator | `{ name, tier?, bindings?, endpoints?, mcpEndpointId? }` | an environment (201); `bindings` at most 32 string values of 1–256 characters, `endpoints` at most 20 http(s) URLs by name, `mcpEndpointId` one of the org's MCP endpoints; a name in use is 409 |
 | `GET` | `/api/environments/:id` | viewer | — | `environment` and its `service` (`id`, `slug`, `name`, `tier`); `effectiveTier` is the environment's tier, else the service's |
@@ -890,6 +890,14 @@ routes (`POST /api/validate`, `/api/crawl`, `/api/crawl-github`,
 `/api/draft-from-mcp`, `/api/library/register`) between `pack.register` and
 the link rows, and only then. A verdict cascades with its pack (an eviction,
 `DELETE /api/uploads`, the rehydrate's prune) without a row of its own.
+
+**The waiver rows** (GAP batch 2; [Waive A Conformance
+Finding](#waive-a-conformance-finding)) are table rows too: `waiver.create`
+on target `waiver` `<id>` with `{ service, ruleId, artefactId, expiresAt,
+reason }` (the service's slug; the reason cut to 200), `waiver.revoke` with
+`{ service, ruleId, artefactId, reason }` (the revoke's reason). A waiver
+cascades with its service (`DELETE /api/services/:id` counts them in its
+`service.delete` detail as `waivers`) without a row of its own.
 
 **The file-first rows.** The deploy routes, the journey capture and run,
 and the live refresh change a file of the org's, not a table, so their row
@@ -1202,6 +1210,47 @@ postures). The `actor` is the audit actor — a login or the token label,
 never an email. `GET /api/packs/:id/export.zip` adds `verdicts.json` (the
 GET document) after the compiled artefacts — only while the pack has a
 verdict, so a pack without one exports exactly what it did before.
+
+### Waive A Conformance Finding
+
+A waiver is a time-boxed, reasoned suppression of one conformance finding:
+one rubric clause (`GET /api/maturity-rubric` lists the ids) and, for the
+four per-item clauses (`L1.MUST.sli_covered_by_slo`,
+`L3.MUST.recording_rule_per_slo`, `L4.MUST.multi_window_burn_rate`,
+`L5.MUST.tier1_chaos_for_each_slo`), optionally one canonical symbol of it —
+`slos.<id>` or `slis.<id>`, the adapter's `defines` vocabulary, never a
+JSONPath ([docs/CONFORMANCE.md](docs/CONFORMANCE.md), "Waivers"). It lives on
+the **service record** the pack is primarily linked to, so a re-upload of
+the service's pack keeps it; a catalogue pack has no service and no waiver.
+A waiver never rewrites the rubric: `GET /api/packs/:id/conformance` keeps
+the engine's numbers and, while the service holds an open waiver, gains a
+`waivers` block — the service, the counts, per clause `waived` (every
+failing subject covered), `partial` (some) or `expired` (the finding fails
+again; the lapsed waiver is shown) with the waivers quoted, the `effective`
+numbers (conformant, MUST, SHOULD, score, per layer) and the `unused`
+waivers that match no finding. Expiry is at most 366 days ahead; a waiver is
+immutable but for its revoke, which keeps the row as history; one active
+waiver per `(service, clause, symbol)`, a new one after it expires. Schema
+errors are not waivable — an invalid pack is never graded. `/api/validate`
+and the library routes answer the bare report.
+
+```bash
+# waive (operator): the body is { ruleId, artefactId?, reason, expiresAt }
+curl -sS -X POST -b cookies.txt -H 'X-Observogram-CSRF: 1' -H 'Content-Type: application/json' \
+  -d '{"ruleId":"L5.MUST.tier1_chaos_for_each_slo","artefactId":"slos.consumer_success_99_95","reason":"chaos day is scheduled for Q1","expiresAt":"2027-03-31T00:00:00Z"}' \
+  http://127.0.0.1:8000/api/services/12/waivers
+# list (viewer): history included, newest first
+curl -sS -b cookies.txt http://127.0.0.1:8000/api/services/12/waivers
+# revoke (operator)
+curl -sS -X POST -b cookies.txt -H 'X-Observogram-CSRF: 1' -H 'Content-Type: application/json' \
+  -d '{"reason":"the chaos experiment landed"}' http://127.0.0.1:8000/api/waivers/7/revoke
+```
+
+The `author` and `revokedBy` a waiver shows are the audit actor — a login
+or the token label, never an email — and every member of the org reads them
+(the list is a viewer route), as does anyone the exported report or a
+sidecar file is shared with. Without a server, the same waiver object in a
+sidecar file drives `packc conformance --waivers <file>` (next section).
 
 ### Report Placeholders (pack conformance)
 
@@ -2251,14 +2300,17 @@ open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
 | `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack) |
 | `GET` | `/api/services/:id` | One service record with its environments and packs |
 | `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description` (`changed` lists what differed; nothing → no audit row) |
-| `DELETE` | `/api/services/:id` | Removes the service with its environments and pack links (the packs stay registered; registering a pack that names the service re-creates it) |
+| `DELETE` | `/api/services/:id` | Removes the service with its environments, pack links and waivers (the packs stay registered; registering a pack that names the service re-creates it); the body counts `environments`, `packLinks` and `waivers` |
 | `GET` | `/api/services/:id/environments` | The service's environments |
+| `GET` | `/api/services/:id/waivers` | The service's waivers of conformance findings (GAP batch 2), newest first, history included: `{ ok, service: { id, slug }, waivers[], counts: { active, expired, revoked } }` — each `{ id, serviceId, ruleId, artefactId, reason, expiresAt, author, createdAt, state, expiresInDays, revokedAt, revokedBy, revokeReason }`; the `author` is the audit actor, visible to every member — see [Waive A Conformance Finding](#waive-a-conformance-finding) |
 | `POST` | `/api/services/:id/environments` | An environment (201): `{ name, tier?, bindings?, endpoints?, mcpEndpointId? }`; `endpoints` are links every member may open — never put a token in one |
 | `GET` | `/api/environments/:id` | One environment with its service |
 | `PATCH` | `/api/environments/:id` | Changes `name`, `tier`, `bindings`, `endpoints`, `mcpEndpointId` (`null` unbinds) |
 | `DELETE` | `/api/environments/:id` | Removes an environment |
 | `PUT` | `/api/packs/:id/verdicts/:artefact` | Records a reviewer's verdict on one artefact of a registered pack: `{ status, reason? }` → `{ ok, verdict, changed }` (`changed` lists what differed; the same status and reason again writes no row); a catalogue pack is 409, an unknown artefact 404; an audit row: `verdict.set` |
 | `DELETE` | `/api/packs/:id/verdicts/:artefact` | Clears it (the artefact is unreviewed again) → `{ ok, cleared }`; an audit row: `verdict.clear` |
+| `POST` | `/api/services/:id/waivers` | Waives a conformance finding on the service (201): `{ ruleId, artefactId?, reason, expiresAt }` → `{ ok, waiver }` — `ruleId` a rubric clause (`GET /api/maturity-rubric`), `artefactId` a canonical symbol (`slos.<id>`, `slis.<id>`) of one of the four per-item clauses or omitted for the whole clause, `expiresAt` after now and at most 366 days ahead; the `author` is the caller; one active waiver per `(ruleId, artefactId)` (409 names it); an audit row: `waiver.create` |
+| `POST` | `/api/waivers/:id/revoke` | Revokes it (`{ reason? }` → `{ ok, waiver }`, state `revoked`; the row stays as history); a second revoke is 409; an audit row: `waiver.revoke` |
 | `GET` | `/api/mcp-endpoints` | The org's MCP endpoint records, by name: `id`, `name`, `origin`, how many environments are checked through each; `url` and `readTokenEnv` to operators and above, `null` to a viewer |
 | `POST` | `/api/mcp-endpoints` | An MCP endpoint record (201): `{ name, url, readTokenEnv? }` — the URL carries no credential (a query parameter named like one is refused by name), `readTokenEnv` names a variable of this org, `OBSERVOGRAM_ORG_<ORG>_<NAME>` |
 | `PATCH` | `/api/mcp-endpoints/:id` | Changes `name`, `url`, `readTokenEnv` (`null` clears it; `changed` lists what differed) |
@@ -2293,7 +2345,8 @@ server/
   identity-admin.mjs       The user and org rules behind npm run users / npm run orgs
   service-admin.mjs        The service, environment and MCP endpoint rules behind /api/services, /api/environments and /api/mcp-endpoints; the tier rule; an MCP target picked by id
   verdict-admin.mjs        The verdict rules behind /api/packs/:id/verdicts (GAP batch 2): the artefact index, the views, the carry on a label re-registration
-  routes/                  The identity API (identity.mjs), the services API (services.mjs), the verdicts API (verdicts.mjs), the deploy routes, and the handler helpers they share (util.mjs)
+  waiver-admin.mjs         The waiver rules behind /api/services/:id/waivers and /api/waivers/:id/revoke (GAP batch 2): the body, the views, the conformance report's overlay
+  routes/                  The identity API (identity.mjs), the services API (services.mjs), the verdicts API (verdicts.mjs), the waivers API (waivers.mjs), the deploy routes, and the handler helpers they share (util.mjs)
   store/                   The embedded store (docs/STORE_PLAN.md): db.mjs (the one node:sqlite door), migrations, repositories, the legacy import and import --replace, backup/restore, ops.mjs (export, the replace request, rekey-issuer, purge-org)
   fixtures/                What the suites share: serve-child.mjs (a hermetic child server, the STRIP list), platform.mjs (isWin32, the reasoned win32 skips), pre-store-build.mjs, route-inventory.mjs, store-050-guard.mjs
   test-smoke.mjs           End-to-end route smoke tests

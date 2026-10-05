@@ -73,8 +73,10 @@ import { identityRoutes } from './routes/identity.mjs';
 import { servicesRoutes } from './routes/services.mjs';
 import { auditRoutes } from './routes/audit.mjs';
 import { verdictsRoutes } from './routes/verdicts.mjs';
+import { waiversRoutes } from './routes/waivers.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
 import { resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
+import { conformanceWaivers } from './waiver-admin.mjs';
 import { authGate, orgContext, authorize, effectiveRoleOf, rankOf, rankOfRole } from './authz.mjs';
 import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
@@ -508,13 +510,18 @@ app.get('/api/packs/:id/canonical', authorize('GET /api/packs/:id/canonical'), (
 // conformanceReportFor(meta, canonical, env) is the one builder of that
 // body: the route answers it, and GET /api/packs/:id/audit-report (GAP batch
 // 2, server/routes/audit-report.mjs) reads the same object, so the two can
-// never grade one pack differently.
+// never grade one pack differently. The service record's waivers (GAP batch
+// 2 B3.2, server/waiver-admin.mjs conformanceWaivers) overlay the engine's
+// report here and here only: with no open waiver the report is the same
+// object (byte-identical body); /api/validate and the library routes keep
+// the bare report.
 function conformanceReportFor(meta, canonical, env) {
   const { canonical: overlaid } = overlaidCanonical(canonical, env);
   const packTier = packTierOf(overlaid);
   const record = meta.uploaded ? serviceTierFor(currentStore(), meta.id, env) : null;
   const graded = record?.tier ? withCriticality(overlaid, record.tier) : overlaid;
-  const report = evaluateConformance(graded);
+  const engine = evaluateConformance(graded);
+  const report = record?.service ? conformanceWaivers(currentStore(), record.service, engine, graded, { now: new Date().toISOString() }) : engine;
   // Which clauses pass only on a placeholder, for this env overlay at the
   // graded tier — the same list /api/validate and /api/library/register
   // put in summary.onPlaceholder. Only a pack carrying library.todo.*
@@ -710,6 +717,13 @@ app.use(servicesRoutes({ authorize }));
 // writes), every rule server/verdict-admin.mjs's. The pack-registry seam is
 // injected as the deploy routes take it.
 app.use(verdictsRoutes({ findPackMeta, loadPackCanonical, authorize }));
+
+// The waivers API (GAP batch 2, B3.2) lives in server/routes/waivers.mjs: a
+// service record's time-boxed waivers of conformance findings under
+// /api/services/:id/waivers and /api/waivers/:id/revoke (viewer reads,
+// operator writes), every rule server/waiver-admin.mjs's; the overlay they
+// produce is read by conformanceReportFor above.
+app.use(waiversRoutes({ authorize }));
 
 // The audit reader (STORE_PLAN slice 5) lives in server/routes/audit.mjs:
 // GET /api/audit — the request's org's rows to its admins, the

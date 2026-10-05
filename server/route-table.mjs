@@ -121,6 +121,9 @@ export const ROUTES = Object.freeze({
   'GET /api/services': { class: 'viewer' },
   'GET /api/services/:id': { class: 'viewer' },
   'GET /api/services/:id/environments': { class: 'viewer' },
+  // A service record's waivers of conformance findings (GAP batch 2, B3.2;
+  // server/routes/waivers.mjs): history included, newest first.
+  'GET /api/services/:id/waivers': { class: 'viewer' },
   'GET /api/environments/:id': { class: 'viewer' },
   // The org's MCP endpoint records: the name and origin to every member,
   // the URL and the token variable's name to operators and above.
@@ -144,8 +147,8 @@ export const ROUTES = Object.freeze({
   'POST /api/library/compile': { class: 'operator' }, // computes; writes nothing
   'POST /api/library/register': { class: 'operator', audit: PACK_REGISTER },
   // The services and environments API (server/routes/services.mjs): a
-  // service's deletion cascades its environments and pack links, which
-  // write no row of their own (the service.delete detail counts them).
+  // service's deletion cascades its environments, pack links and waivers,
+  // which write no row of their own (the service.delete detail counts them).
   'POST /api/services': { class: 'operator', audit: ['service.create'] },
   'PATCH /api/services/:id': { class: 'operator', audit: ['service.update'] },
   'DELETE /api/services/:id': { class: 'operator', audit: ['service.delete'] },
@@ -156,6 +159,10 @@ export const ROUTES = Object.freeze({
   // registered pack; the same status and reason again writes no row.
   'PUT /api/packs/:id/verdicts/:artefact': { class: 'operator', audit: ['verdict.set'] },
   'DELETE /api/packs/:id/verdicts/:artefact': { class: 'operator', audit: ['verdict.clear'] },
+  // The waivers (server/routes/waivers.mjs): a time-boxed suppression of a
+  // conformance finding on a service record; a revoke keeps the row.
+  'POST /api/services/:id/waivers': { class: 'operator', audit: ['waiver.create'] },
+  'POST /api/waivers/:id/revoke': { class: 'operator', audit: ['waiver.revoke'] },
 
   // ---------- admin: the request's org — its name and its members ----------
   // The identity API (server/routes/identity.mjs) for the org the request

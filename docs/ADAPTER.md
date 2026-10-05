@@ -230,6 +230,89 @@ artefact, family, from, to, reason }`, `verdict.clear` with `{ pack,
 artefact, from }`, `verdict.carry` on the new pack with `{ from, kept,
 dropped, droppedCount }`.
 
+## Waivers — a service record's suppression of a finding
+
+A **waiver** (GAP batch 2, B3.2; `tools/lib/waivers.mjs`,
+`server/waiver-admin.mjs`, `server/store/waivers.mjs`) is a time-boxed,
+reasoned suppression of ONE conformance finding: a rubric clause
+(`ruleId`, `tools/lib/conformance.mjs` RUBRIC) and, for the four per-item
+clauses (`SUBJECT_CLAUSES`), optionally ONE canonical symbol of it
+(`artefactId`: `slos.<id>` / `slis.<id>` — the adapter's `defines`
+vocabulary, the address every conformance subject, placeholder row and
+declared type uses; a verdict, by contrast, is keyed by the positional id).
+The server keeps waivers on the **service record** a pack is primarily
+linked to (`serviceTierFor`); the CLI reads the same object from a sidecar
+file (`packc conformance --waivers <file>`).
+
+**The waiver object** — what `GET /api/services/:id/waivers` serves per row
+and what a sidecar file holds per entry (`id`, `serviceId`, `state` and
+`expiresInDays` are the server's; a file needs `ruleId`, `reason`,
+`expiresAt`, `author`, optionally `artefactId`, `createdAt`, `id`):
+
+```json
+{
+  "id": 7,
+  "serviceId": 12,
+  "ruleId": "L5.MUST.tier1_chaos_for_each_slo",
+  "artefactId": "slos.consumer_success_99_95",
+  "reason": "chaos day is scheduled for Q1",
+  "expiresAt": "2027-03-31T00:00:00.000Z",
+  "author": "oscar",
+  "createdAt": "2026-10-05T09:12:44.120Z",
+  "state": "active",
+  "expiresInDays": 176,
+  "revokedAt": null,
+  "revokedBy": null,
+  "revokeReason": null
+}
+```
+
+`state` is computed, never stored: `revoked` when `revokedAt` is set (the
+row stays as history and matches nothing), `expired` once `expiresAt` has
+passed (the finding fails again and the report surfaces the lapsed waiver),
+else `active`. `author` / `revokedBy` are the audit actor (a login or the
+token label, never an email).
+
+**The overlay** — `GET /api/packs/:id/conformance` while the pack's service
+holds an open waiver: every engine field as it was, plus
+
+```json
+{ "waivers": {
+    "service": { "id": 12, "slug": "payment-service" },
+    "counts": { "failing": 1, "waived": 3, "expired": 0, "unused": 0 },
+    "clauses": { "L5.MUST.tier1_chaos_for_each_slo": {
+        "status": "waived",
+        "waivers": [ WaiverView, … ],
+        "subjects": { "failing": ["slos.a", "slos.b", "slos.c"], "waived": ["slos.a", "slos.b", "slos.c"], "remaining": [] } } },
+    "effective": { "conformant": false, "scorePercent": 89, "mustPercent": 88, "must": { "passed": 22, "total": 25 }, "should": { "passed": 5, "total": 5 }, "byDimension": { "L1": { "applicable": 4, "mustPassed": 3, "mustTotal": 3, "shouldPassed": 1, "shouldTotal": 1 }, "…": {} } },
+    "unused": [ WaiverView, … ] } }
+```
+
+A clause is `waived` when every failing subject is covered (a pack-level
+waiver covers them all; a scoped one its own and beats the pack-level),
+`partial` when some are, `expired` when none is and a lapsed waiver would
+have been; `subjects` is `null` for a whole-pack clause. `effective` is the
+evaluator's arithmetic with the waived clauses read as met — the same shape
+as the engine's, so a per-layer grid can show both. With no open waiver the
+body carries no `waivers` key and is the same object as before.
+
+**Record** — `POST /api/services/:id/waivers` (operator) with `{ "ruleId",
+"artefactId"?, "reason": "one line ≤ 2000", "expiresAt": "ISO, after now, ≤
+366 days ahead" }` → 201 `{ "ok": true, "waiver": WaiverView }`; the body's
+`author` and `createdAt` are ignored (the principal and the server's clock
+sign it). Refusals, each `{ ok: false, error }` naming a way out: 400 a
+`ruleId` outside the rubric, an `artefactId` that is not `slis.<id>` /
+`slos.<id>` or that names a whole-pack clause, a reason that is not one line
+of 1–2000 characters, an expiry in the past, too far or unreadable, a
+malformed service id; 404 `no service <id>`; 409 an active waiver of the same
+`(ruleId, artefactId)` on the service (its id and expiry quoted; revoke it or
+wait). **Revoke** — `POST /api/waivers/:id/revoke` (operator) with `{
+"reason"? }` → `{ "ok": true, "waiver": WaiverView }` (state `revoked`); 404
+`no waiver <id>`, 409 revoked already. Audit rows: `waiver.create` on target
+`waiver` `<id>` with `{ service, ruleId, artefactId, expiresAt, reason }`,
+`waiver.revoke` with `{ service, ruleId, artefactId, reason }`; a service's
+deletion cascades its waivers (counted in `service.delete`).
+
 ## Cross-references and the symbol table
 
 The client builds a symbol table from every artefact's `defines`. Each artefact's `refs` is classified:

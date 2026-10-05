@@ -168,13 +168,13 @@ test('services: create with every refusal, the 409, update (changed fields; the 
       packServices.linkPackService(db, 'oscar', { packId: 'uploaded-checkout-0123abcd', serviceId: svc.id, role: 'primary' });
       assert.throws(() => admin.deleteServiceFromApi(db, 'oscar', 999999), missing('no service 999999'));
       const gone = admin.deleteServiceFromApi(db, 'oscar', svc.id);
-      assert.deepEqual([gone.environments, gone.packLinks, gone.service.slug, gone.service.environments.map((e) => e.name), gone.service.packs],
-        [2, 1, 'checkout-api', ['prod', 'staging'], [{ id: 'uploaded-checkout-0123abcd', label: 'Checkout', source: 'upload', role: 'primary' }]]);
+      assert.deepEqual([gone.environments, gone.packLinks, gone.waivers, gone.service.slug, gone.service.environments.map((e) => e.name), gone.service.packs],
+        [2, 1, 0, 'checkout-api', ['prod', 'staging'], [{ id: 'uploaded-checkout-0123abcd', label: 'Checkout', source: 'upload', role: 'primary' }]]);
       assert.equal(services.getService(db, svc.id), null);
       assert.deepEqual(environments.listEnvironmentsForOrg(db), []);
       assert.deepEqual(packServices.listLinksForOrg(db), []);
       assert.equal(packs.getPack(db, 'uploaded-checkout-0123abcd').label, 'Checkout', 'the pack stays registered');
-      assert.deepEqual(rows(db, 'acme', 'service.delete'), [['service.delete', 'oscar', 'checkout-api', { environments: 2, packLinks: 1 }]]);
+      assert.deepEqual(rows(db, 'acme', 'service.delete'), [['service.delete', 'oscar', 'checkout-api', { environments: 2, packLinks: 1, waivers: 0 }]]);
       assert.deepEqual(rows(db, 'acme').map((r) => r[0]), [
         'service.create', 'service.create', 'service.update', 'service.update', 'mcp_endpoint.create', 'environment.create', 'environment.create',
         'pack.register', 'pack.link', 'service.delete',

@@ -870,6 +870,7 @@ const EXPECTED_CLASS = Object.freeze({
   'GET /api/services': 'viewer',
   'GET /api/services/:id': 'viewer',
   'GET /api/services/:id/environments': 'viewer',
+  'GET /api/services/:id/waivers': 'viewer',
   'GET /api/environments/:id': 'viewer',
   'GET /api/mcp-endpoints': 'viewer',
   'DELETE /api/uploads': 'operator',
@@ -896,6 +897,8 @@ const EXPECTED_CLASS = Object.freeze({
   'DELETE /api/environments/:id': 'operator',
   'PUT /api/packs/:id/verdicts/:artefact': 'operator',
   'DELETE /api/packs/:id/verdicts/:artefact': 'operator',
+  'POST /api/services/:id/waivers': 'operator',
+  'POST /api/waivers/:id/revoke': 'operator',
   'PATCH /api/org': 'admin',
   'GET /api/org/members': 'admin',
   'POST /api/org/members': 'admin',
@@ -1303,6 +1306,11 @@ const PROBES = Object.freeze({
   'GET /api/packs/:id/verdicts': ['GET', '/api/packs/nope/verdicts'],
   'PUT /api/packs/:id/verdicts/:artefact': ['PUT', '/api/packs/nope/verdicts/SLI-01', '{"status":"trusted"}'],
   'DELETE /api/packs/:id/verdicts/:artefact': ['DELETE', '/api/packs/nope/verdicts/SLI-01'],
+  // The waivers (GAP batch 2, B3.2): an unknown service or waiver is 404 on every
+  // method (the POST carries a valid body, so the row is what it answers) — nothing is written.
+  'GET /api/services/:id/waivers': ['GET', '/api/services/999999/waivers'],
+  'POST /api/services/:id/waivers': ['POST', '/api/services/999999/waivers', JSON.stringify({ ruleId: 'L1.MUST.availability_slo', reason: 'probe', expiresAt: new Date(Date.now() + 86400000).toISOString() })],
+  'POST /api/waivers/:id/revoke': ['POST', '/api/waivers/999999/revoke', '{}'],
   'GET /api/diff': ['GET', '/api/diff'],
   'GET /api/compile/targets': ['GET', '/api/compile/targets'],
   'GET /api/packs/:id/compile-catalog': ['GET', '/api/packs/nope/compile-catalog'],
