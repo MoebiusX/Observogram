@@ -292,7 +292,9 @@ test('buildServicePageModel: tabs, the selected panel (verdict, endpoint as name
   assert.equal(staging.panel.verdict.state, 'base');
   assert.equal(staging.panel.tierLine, "tier-1 — this environment's override (the service says tier-2)");
   assert.equal(staging.panel.mcp.kind, 'none');
-  assert.match(staging.panel.mcp.text, /^No MCP endpoint bound to dev — Diagnose compares .* PATCH \/api\/environments\/13 \{ "mcpEndpointId": <n> \} — GET \/api\/mcp-endpoints lists them\.$/);
+  assert.equal(staging.panel.mcp.text, 'No MCP endpoint bound to dev — Diagnose compares with whatever live pack you load as Pack B; an admin binds one with PATCH /api/environments/13 { "mcpEndpointId": <n> } — GET /api/mcp-endpoints lists them.');
+  // Product wording, not plan wording: no roadmap slice reference (and no screen that does not exist yet) reaches the service page.
+  assert.doesNotMatch(JSON.stringify([staging.panel, staging.noEnvironments, staging.actions]), /slice\s*\d|\b6b\b|Settings/i, 'the service page never names a roadmap slice or an unbuilt screen');
   assert.deepEqual([staging.panel.bindings, staging.panel.links], [[], []]);
   // An unknown env name falls back to the first tab.
   assert.equal(buildServicePageModel({ service: orders, envName: 'nope', catalog, isLiveAggregatePack }).tabs[0].selected, true);

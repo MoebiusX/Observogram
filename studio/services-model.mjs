@@ -299,7 +299,7 @@ export function buildServicePageModel({ service, envName = null, verdicts = {}, 
   else tierLine = `${TIER_BY_PACK} — neither the service nor the environment sets a tier`;
   const mcp = env?.mcpEndpoint
     ? { kind: 'bound', name: env.mcpEndpoint.name, origin: env.mcpEndpoint.origin }
-    : { kind: 'none', text: env ? `No MCP endpoint bound to ${env.name} — Diagnose compares with whatever live pack you load as Pack B; an admin binds one in Settings (slice 6b) or with PATCH /api/environments/${env.id} { "mcpEndpointId": <n> } — GET /api/mcp-endpoints lists them.` : 'No environment, so no MCP endpoint.' };
+    : { kind: 'none', text: env ? `No MCP endpoint bound to ${env.name} — Diagnose compares with whatever live pack you load as Pack B; an admin binds one with PATCH /api/environments/${env.id} { "mcpEndpointId": <n> } — GET /api/mcp-endpoints lists them.` : 'No environment, so no MCP endpoint.' };
   const panel = {
     env, verdict: selected ? selected.verdict : null, tierLine, mcp,
     bindings: Object.entries(env?.bindings && typeof env.bindings === 'object' ? env.bindings : {}),
