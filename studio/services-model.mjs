@@ -451,6 +451,38 @@ export function buildDefineOriginNote({ origin = null, nameKey = null, originNam
 
 // ---------- the record editor ----------
 
+// The editor's model over one record (design §6.5): the four fields as the
+// dialog holds them — the record's values until typed (`draft` is what was
+// typed: name, owners as text, tier, description) — the tier choices with
+// "graded by the pack" for null, the limits the server applies (WAYS), the
+// note under the name (a slug is fixed — WAYS.slugFixed — so no slug field),
+// and the status line: `{ kind: 'idle' | 'pending' | 'saved' | 'error', text }`.
+export function buildServiceEditorModel(service, { draft = null, status = null } = {}) {
+  const d = draft || {};
+  const name = typeof d.name === 'string' ? d.name : service.name;
+  const owners = typeof d.owners === 'string' ? d.owners : (service.owners || []).join(', ');
+  const tier = d.tier !== undefined ? (TIERS.includes(d.tier) ? d.tier : null) : (service.tier ?? null);
+  const description = typeof d.description === 'string' ? d.description : (service.description ?? '');
+  const st = status || { kind: 'idle', text: 'Name, owners, tier and description. The slug is fixed.' };
+  return {
+    id: service.id,
+    slug: service.slug,
+    title: `Edit ${service.name}`,
+    fields: { name, owners, tier, description },
+    limits: { name: 200, owners: 50, description: 4000 },
+    tiers: [...TIERS.map((t) => ({ value: t, label: t, selected: tier === t })), { value: null, label: TIER_BY_PACK, selected: tier === null }],
+    slugNote: `The slug ${service.slug} stays; packs link to it by slug — a renamed service still receives the packs that name ${service.slug}, and a Build from this page says when its name would land elsewhere.`,
+    status: st,
+    saving: st.kind === 'pending',
+  };
+}
+
+// What the status line says after a PATCH answered: the fields the server
+// names in `changed`, or that nothing differed (no call was made).
+export function serviceSaveStatus(changed = []) {
+  return changed.length ? { kind: 'saved', text: `Saved: ${changed.join(', ')}` } : { kind: 'idle', text: 'Nothing changed.' };
+}
+
 // The PATCH body: only the fields that differ from `current` (a ServiceView),
 // parsed — owners text → array, tier → one of TIERS or null (the "graded by
 // the pack" choice), an empty description → null. The slug is never here.

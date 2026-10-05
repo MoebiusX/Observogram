@@ -10,7 +10,7 @@
 // `{ services: {} }` never throws. Every field is escaped at the seam.
 
 import { host as appHost } from './host.mjs';
-import { escapeHtml, fmtRelative } from './util.mjs';
+import { escapeHtml, fmtRelative, TRAPPED_DIALOGS } from './util.mjs';
 import { disclosureHtml, emptyStateHtml } from './ux-kit.mjs';
 
 // ---------- the Services home ----------
@@ -245,8 +245,9 @@ export function wireServiceTabs(tablist, onSelect) {
 // the four actions (Discover · Diagnose · Remediate bound to the service and
 // the environment; Build a pack for <env>, disabled with its reason for a
 // rank without the operator role), and every pack linked. Actions:
-// host.services.home / selectEnv / openIn / openBuild / openPack / explain.
-// The record editor (Edit) is the next commit's; a viewer never gets one.
+// host.services.home / selectEnv / openIn / openBuild / openPack / explain /
+// openEditor. Edit (the record editor, renderServiceEditor) is drawn only
+// when the rank may PATCH (model.canEdit); a viewer reads the facts as they are.
 export function renderServicePage(container, model, host = appHost) {
   const envName = model.panel.env?.name ?? null;
   const bind = { serviceId: model.id, env: envName };
@@ -255,6 +256,7 @@ export function renderServicePage(container, model, host = appHost) {
     <section class="svc-page" aria-labelledby="svc-page-name">
       <div class="svc-page-bar">
         <button type="button" class="svc-page-back" id="svc-page-back">← Services</button>
+        ${model.canEdit ? '<button type="button" class="svc-edit ux-secondary-btn" id="svc-edit">Edit</button>' : ''}
       </div>
       <header class="svc-page-head">
         <h1 class="svc-page-name" id="svc-page-name" tabindex="-1">${escapeHtml(model.name)}</h1>
@@ -271,6 +273,7 @@ export function renderServicePage(container, model, host = appHost) {
     </section>`;
 
   container.querySelector('#svc-page-back')?.addEventListener('click', () => host.services?.home?.());
+  container.querySelector('#svc-edit')?.addEventListener('click', () => host.services?.openEditor?.(model.id));
   wireServiceTabs(container.querySelector('.svc-tabs'), (name) => host.services?.selectEnv?.(name));
   for (const a of model.actions) {
     const btn = container.querySelector(`#${ACTION_IDS[a.view]}`);
@@ -284,6 +287,134 @@ export function renderServicePage(container, model, host = appHost) {
   }
   container.querySelectorAll('.svc-pack-open').forEach((btn) => {
     btn.addEventListener('click', () => host.services?.openPack?.(btn.dataset.packId, envName));
+  });
+}
+
+// The record editor (design §6.5): a pop-up over one record in the Build SLI
+// editor's idiom — a scrim and a centred dialog (role="dialog" aria-modal,
+// labelled by its title, described by its status line; installDialogFocusTrap
+// covers it by selector), the four fields — name, owners as text, the tier as
+// a radio group with "graded by the pack" for null, the description — and NO
+// slug field: the note under the name says the slug stays and what that
+// means for packs and for a Build from the page. Save hands the draft to
+// host.services.saveService(id, draft) — the controller diffs it
+// (buildServicePatch), PATCHes and comes back with a status — Save reads
+// aria-disabled while that is pending, so the focus stays on it; Close, the
+// scrim, the esc button and Escape → host.services.closeEditor(). Rendered
+// again for the same record (a status change), only the status line and the
+// Save button are repainted: what was typed and the focus stay.
+export function renderServiceEditor(container, model, host = appHost) {
+  const mounted = container.querySelector('.svc-editor');
+  if (mounted && mounted.getAttribute('data-service-id') === String(model.id)) {
+    paintServiceEditorStatus(container, model.status);
+    container.querySelector('#svc-editor-save')?.setAttribute('aria-disabled', model.saving ? 'true' : 'false');
+    return;
+  }
+  const f = model.fields;
+  container.innerHTML = `
+    <div class="svc-editor-scrim" data-editor-close aria-hidden="true"></div>
+    <div class="svc-editor" role="dialog" aria-modal="true" aria-labelledby="svc-editor-title" aria-describedby="svc-editor-status" data-service-id="${escapeHtml(String(model.id))}" tabindex="-1">
+      <header class="svc-editor-head">
+        <span class="svc-editor-eyebrow">Service record · ${escapeHtml(model.slug)}</span>
+        <h2 class="svc-editor-title" id="svc-editor-title">${escapeHtml(model.title)}</h2>
+        <button type="button" class="svc-editor-close" data-editor-close aria-label="Close the editor (Esc)" title="Close (Esc)"><span aria-hidden="true">esc</span></button>
+      </header>
+      <div class="svc-editor-body">
+        <label class="svc-editor-field">
+          <span class="svc-editor-label">Name</span>
+          <input id="svc-edit-name" type="text" value="${escapeHtml(f.name)}" maxlength="${model.limits.name}" autocomplete="off" spellcheck="false" aria-describedby="svc-editor-slug-note">
+        </label>
+        <p class="svc-editor-note" id="svc-editor-slug-note">${escapeHtml(model.slugNote)}</p>
+        <label class="svc-editor-field">
+          <span class="svc-editor-label">Owners <span class="svc-editor-help">comma-separated, at most ${model.limits.owners}</span></span>
+          <input id="svc-edit-owners" type="text" value="${escapeHtml(f.owners)}" autocomplete="off" spellcheck="false" placeholder="team-orders, sre-platform">
+        </label>
+        <div class="svc-editor-field" role="radiogroup" aria-labelledby="svc-edit-tier-label">
+          <span class="svc-editor-label" id="svc-edit-tier-label">Tier <span class="svc-editor-help">the tier the pack is graded at; the environment may override it</span></span>
+          <div class="svc-editor-seg">
+            ${model.tiers.map((t) => `<button type="button" role="radio" class="svc-editor-seg-btn" data-tier="${t.value ?? ''}" aria-checked="${t.selected ? 'true' : 'false'}" tabindex="${t.selected ? '0' : '-1'}">${escapeHtml(t.label)}</button>`).join('')}
+          </div>
+        </div>
+        <label class="svc-editor-field">
+          <span class="svc-editor-label">Description <span class="svc-editor-help">at most ${model.limits.description} characters</span></span>
+          <textarea id="svc-edit-desc" rows="3" maxlength="${model.limits.description}">${escapeHtml(f.description)}</textarea>
+        </label>
+      </div>
+      <footer class="svc-editor-foot">
+        <div class="svc-editor-status is-${escapeHtml(model.status.kind)}" id="svc-editor-status" role="status" aria-live="polite">${escapeHtml(model.status.text)}</div>
+        <div class="svc-editor-actions">
+          <button type="button" class="ctrl-btn svc-editor-cancel" data-editor-close>Close</button>
+          <button type="button" class="mcp-refresh-btn svc-editor-save" id="svc-editor-save" aria-disabled="${model.saving ? 'true' : 'false'}">Save</button>
+        </div>
+      </footer>
+    </div>`;
+  const act = host.services || {};
+  const dialog = container.querySelector('.svc-editor');
+  for (const el of container.querySelectorAll('[data-editor-close]') || []) el.addEventListener('click', () => act.closeEditor?.());
+  dialog?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopPropagation();
+    act.closeEditor?.();
+  });
+  bindDocumentEscape(container, host);
+  // The tier radios: a click checks one; ArrowLeft / ArrowRight / Home / End move and check (roving tabindex).
+  let tier = f.tier;
+  const radios = [...(container.querySelectorAll('.svc-editor-seg-btn') || [])];
+  const check = (btn) => {
+    tier = btn.dataset.tier || null;
+    for (const r of radios) { r.setAttribute('aria-checked', r === btn ? 'true' : 'false'); r.setAttribute('tabindex', r === btn ? '0' : '-1'); }
+  };
+  radios.forEach((btn) => btn.addEventListener('click', () => check(btn)));
+  container.querySelector('.svc-editor-seg')?.addEventListener('keydown', (e) => {
+    const i = radios.indexOf(e.target.closest?.('[role="radio"]'));
+    if (i < 0 || !radios.length) return;
+    let next = null;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (i + 1) % radios.length;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (i - 1 + radios.length) % radios.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = radios.length - 1;
+    if (next === null) return;
+    e.preventDefault();
+    radios[next].focus();
+    check(radios[next]);
+  });
+  container.querySelector('#svc-editor-save')?.addEventListener('click', () => {
+    act.saveService?.(model.id, {
+      name: container.querySelector('#svc-edit-name')?.value ?? f.name,
+      owners: container.querySelector('#svc-edit-owners')?.value ?? f.owners,
+      tier,
+      description: container.querySelector('#svc-edit-desc')?.value ?? f.description,
+    });
+  });
+}
+
+// The editor's status line repainted in place (the live region stays the
+// same node, so the change is announced): the text and the kind class.
+export function paintServiceEditorStatus(container, status) {
+  const el = container.querySelector('#svc-editor-status');
+  if (!el || !status) return;
+  el.className = `svc-editor-status is-${status.kind}`;
+  el.textContent = status.text;
+}
+
+// One document listener per editor host (bound once; idle while no dialog is
+// mounted): Escape closes the editor when nothing inside it has the focus —
+// the Build editor's rule. Another modal on top keeps its own Escape.
+const DOC_ESC = new WeakMap();
+function bindDocumentEscape(container, host) {
+  if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+  const bound = DOC_ESC.has(container);
+  DOC_ESC.set(container, host);
+  if (bound) return;
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const dialog = container.querySelector('.svc-editor');
+    if (!dialog || (e.target && dialog.contains?.(e.target))) return;
+    const open = document.querySelectorAll(TRAPPED_DIALOGS);
+    if (open.length && open[open.length - 1] !== dialog) return;
+    e.preventDefault();
+    DOC_ESC.get(container)?.services?.closeEditor?.();
   });
 }
 

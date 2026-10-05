@@ -15,12 +15,12 @@ import {
   TIERS, TIER_BY_PACK, accessModel, verdictModel, verdictKey, newestPack, packForService, serviceCardModel, agoText,
   buildServicesHomeModel, buildServicePageModel, servicesSelectModel, buildHandoffPlan, buildDefineOriginNote,
   buildServicePatch, buildNoOrgModel, servicesStatusOf, persistedStateKey, recentServicesKey,
-  serviceChipModel, discoverEmptyNote, buildPrefillFromService,
+  serviceChipModel, discoverEmptyNote, buildPrefillFromService, buildServiceEditorModel, serviceSaveStatus,
 } from '../studio/services-model.mjs';
 import { servicesRefusal, loadOrgs, loadServices, loadService, loadVerdict, patchService, verdictLoader } from '../studio/services-api.mjs';
 import { WAYS } from '../server/service-admin.mjs';
 import { persistence, state, defaultBuildState, BUILD_PERSIST_FIELDS } from '../studio/state.mjs';
-import { renderNoOrgHome, renderServicesHome, renderServicePage, wireServiceTabs, markUnavailable } from '../studio/services-view.mjs';
+import { renderNoOrgHome, renderServicesHome, renderServicePage, renderServiceEditor, paintServiceEditorStatus, wireServiceTabs, markUnavailable } from '../studio/services-view.mjs';
 import { readFileSync } from 'node:fs';
 
 // ---------- fixtures ----------
@@ -377,6 +377,28 @@ test('buildServicePatch: only the fields that differ, parsed; never the slug', (
 });
 
 // ---------- the no-org home, the status, the keys ----------
+
+test('buildServiceEditorModel: the record\'s values until typed, the tier choices with "graded by the pack" for null, the limits the server applies, the slug note and no slug field; serviceSaveStatus names what changed', () => {
+  const m = buildServiceEditorModel(orders);
+  assert.deepEqual(m.fields, { name: 'Orders API', owners: 'team-orders, sre-platform', tier: 'tier-2', description: 'Order intake and payment hand-off' });
+  assert.deepEqual(m.tiers.map((t) => [t.value, t.label, t.selected]), [['tier-1', 'tier-1', false], ['tier-2', 'tier-2', true], ['tier-3', 'tier-3', false], [null, TIER_BY_PACK, false]]);
+  assert.deepEqual(m.limits, { name: 200, owners: 50, description: 4000 }, 'WAYS.serviceName, WAYS.owners, WAYS.description');
+  assert.match(WAYS.serviceName, /200/); assert.match(WAYS.owners, /50/); assert.match(WAYS.description, /4000/);
+  assert.equal(m.slugNote, 'The slug orders-api stays; packs link to it by slug — a renamed service still receives the packs that name orders-api, and a Build from this page says when its name would land elsewhere.');
+  assert.ok(!('slug' in m.fields), 'no slug field: WAYS.slugFixed');
+  assert.deepEqual([m.id, m.slug, m.title, m.saving], [1, 'orders-api', 'Edit Orders API', false]);
+  assert.deepEqual(m.status, { kind: 'idle', text: 'Name, owners, tier and description. The slug is fixed.' });
+  // The draft wins over the record; an unknown tier is "graded by the pack"; a pending status is `saving`.
+  const typed = buildServiceEditorModel(orders, { draft: { name: 'Orders Platform', owners: '', tier: 'x', description: '' }, status: { kind: 'pending', text: 'Saving…' } });
+  assert.deepEqual(typed.fields, { name: 'Orders Platform', owners: '', tier: null, description: '' });
+  assert.equal(typed.tiers.find((t) => t.selected).value, null);
+  assert.equal(typed.saving, true);
+  // A record without tier, owners or description.
+  const bareM = buildServiceEditorModel(bare);
+  assert.deepEqual(bareM.fields, { name: bare.name, owners: '', tier: null, description: '' });
+  assert.deepEqual(serviceSaveStatus(['owners', 'tier']), { kind: 'saved', text: 'Saved: owners, tier' });
+  assert.deepEqual(serviceSaveStatus([]), { kind: 'idle', text: 'Nothing changed.' });
+});
 
 test('buildNoOrgModel: the server\'s sentence as is, the login checked, sign-out the one action', () => {
   const err = Object.assign(new Error('403: no org membership — ask an admin to add you'), { denied: 'org', status: 403 });
@@ -799,9 +821,14 @@ test('renderServicePage: the head, the tabs with the selected one marked, the pa
   const m = buildServicePageModel({ service: nasty, envName: 'prod', verdicts, catalog, access: OPERATOR, orgName: 'Acme', isLiveAggregatePack });
   const c = pageContainer();
   const calls = [];
-  const host = { services: { home: () => calls.push(['home']), selectEnv: (n) => calls.push(['selectEnv', n]), openIn: (v, b) => calls.push(['openIn', v, b]), openBuild: (b) => calls.push(['openBuild', b]), openPack: (id, env) => calls.push(['openPack', id, env]), explain: (r) => calls.push(['explain', r]) } };
+  const host = { services: { home: () => calls.push(['home']), selectEnv: (n) => calls.push(['selectEnv', n]), openIn: (v, b) => calls.push(['openIn', v, b]), openBuild: (b) => calls.push(['openBuild', b]), openPack: (id, env) => calls.push(['openPack', id, env]), explain: (r) => calls.push(['explain', r]), openEditor: (id) => calls.push(['openEditor', id]) } };
   renderServicePage(c, m, host);
   const h = c.innerHTML;
+  // Edit, for a rank that may PATCH: in the page bar, opening the editor over this record.
+  assert.ok(h.includes('<button type="button" class="svc-edit ux-secondary-btn" id="svc-edit">Edit</button>'));
+  c.byId('svc-edit').fire('click');
+  assert.deepEqual(calls, [['openEditor', 1]]);
+  calls.length = 0;
   assert.ok(h.includes('<section class="svc-page" aria-labelledby="svc-page-name">'));
   assert.ok(h.includes('<h1 class="svc-page-name" id="svc-page-name" tabindex="-1">Orders &lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;</h1>') && !h.includes('<img'), 'the name is escaped — nothing from it reaches the page');
   assert.ok(h.includes('<span class="svc-page-slug">orders-api</span>'));
@@ -862,7 +889,7 @@ test('renderServicePage: a viewer gets Build drawn aria-disabled with the reason
   assert.equal(build.why.textContent, VIEWER.reason);
   build.fire('click');
   assert.deepEqual(calls, [VIEWER.reason], 'the click explains, never opens Build');
-  assert.ok(!c.innerHTML.includes('svc-edit'), 'a viewer has no Edit (the editor is the next commit\'s; it is drawn for operators only)');
+  assert.ok(!c.innerHTML.includes('svc-edit'), 'a viewer has no Edit: a viewer has no PATCH, the facts are read-only for them');
   assert.ok(c.innerHTML.includes('Base grade (no staging overlay in the pack)') === false, 'the verdict for a tab not yet read is Loading…');
   assert.ok(c.innerHTML.includes('<span class="svc-verdict is-loading">Loading…</span>'));
   // No environments: the status line for the rank, no tablist, the actions with the service only.
@@ -878,6 +905,115 @@ test('renderServicePage: a viewer gets Build drawn aria-disabled with the reason
   assert.ok(c3.innerHTML.includes('An operator registers a pack that declares one') && !c3.innerHTML.includes('<code>'));
   // wireServiceTabs alone tolerates no tablist.
   assert.doesNotThrow(() => wireServiceTabs(null, () => {}));
+});
+
+// A headless container for the editor: every <button>, <input>, <textarea> and the two status / dialog <div>s wired
+// by the renderer are read back from the markup (id, class, role, data-*, value) so a click or a key can be fired.
+function editorContainer() {
+  let html = '';
+  let els = [];
+  const unesc = (v) => v.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  const fakeEl = (tag, attrText, text) => {
+    const handlers = {};
+    const attrs = Object.fromEntries([
+      ...[...attrText.matchAll(/(?:^|\s)([\w-]+)(?=\s|$)/g)].map((a) => [a[1], '']),   // a bare attribute (data-editor-close, disabled)
+      ...[...attrText.matchAll(/([\w-]+)="([^"]*)"/g)].map((a) => [a[1], unesc(a[2])]),
+    ]);
+    const el = {
+      tag, attrs, handlers, id: attrs.id || null, className: attrs.class || '', role: attrs.role || null, disabled: /\bdisabled\b/.test(attrText),
+      dataset: Object.fromEntries(Object.entries(attrs).filter(([k]) => k.startsWith('data-')).map(([k, v]) => [k.slice(5).replace(/-([a-z])/g, (_, ch) => ch.toUpperCase()), v])),
+      value: tag === 'textarea' ? unesc(text) : (attrs.value ?? ''), textContent: unesc(text),
+      setAttribute(k, v) { el.attrs[k] = v; }, getAttribute(k) { return el.attrs[k] ?? null; },
+      addEventListener: (t, fn) => { handlers[t] = fn; }, fire: (t, ev = {}) => handlers[t]?.(ev),
+      focus() { c.focused = el; }, closest(sel) { return sel === '[role="radio"]' && el.role === 'radio' ? el : null; },
+      contains() { return false; },
+    };
+    return el;
+  };
+  const match = (el, sel) => {
+    if (sel.startsWith('#')) return el.id === sel.slice(1);
+    if (sel.startsWith('.')) return el.className.split(/\s+/).includes(sel.slice(1));
+    const m = /^\[([\w-]+)\]$/.exec(sel);
+    return m ? m[1] in el.attrs : false;
+  };
+  const c = {
+    focused: null,
+    get innerHTML() { return html; },
+    set innerHTML(v) {
+      html = v;
+      els = [
+        ...[...v.matchAll(/<(button|input)([^>]*)>/g)].map((m) => fakeEl(m[1], m[2], '')),
+        ...[...v.matchAll(/<textarea([^>]*)>([\s\S]*?)<\/textarea>/g)].map((m) => fakeEl('textarea', m[1], m[2])),
+        ...[...v.matchAll(/<div (class="svc-editor(?:-status|-seg|-scrim)?(?: [^"]*)?"[^>]*)>([^<]*)/g)].map((m) => fakeEl('div', m[1], m[2])),
+      ];
+    },
+    querySelector(sel) { return els.find((e) => match(e, sel)) || null; },
+    querySelectorAll(sel) { return els.filter((e) => match(e, sel)); },
+    byId: (id) => els.find((e) => e.id === id) || null,
+  };
+  return c;
+}
+
+test('renderServiceEditor: a modal dialog over one record — name, owners, tier as a radio group, description, no slug field and the slug note; Save hands the typed draft to saveService; every close goes to closeEditor; escaped at the seam', () => {
+  const nasty = { ...orders, name: 'Orders "API" <img src=x onerror="window.__xss=1">', description: '</textarea><script>1</script>' };
+  const m = buildServiceEditorModel(nasty);
+  const c = editorContainer();
+  const calls = [];
+  const host = { services: { saveService: (id, draft) => calls.push(['save', id, draft]), closeEditor: () => calls.push(['close']) } };
+  renderServiceEditor(c, m, host);
+  const h = c.innerHTML;
+  assert.ok(h.includes('<div class="svc-editor-scrim" data-editor-close aria-hidden="true"></div>'));
+  assert.ok(h.includes('<div class="svc-editor" role="dialog" aria-modal="true" aria-labelledby="svc-editor-title" aria-describedby="svc-editor-status" data-service-id="1" tabindex="-1">'));
+  assert.ok(h.includes('<h2 class="svc-editor-title" id="svc-editor-title">Edit Orders &quot;API&quot; &lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;</h2>') && !h.includes('<img') && !h.includes('<script'), 'the name and the description are escaped — nothing from them reaches the page');
+  assert.ok(h.includes('<input id="svc-edit-name" type="text" value="Orders &quot;API&quot; &lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;" maxlength="200"'));
+  assert.ok(h.includes('<p class="svc-editor-note" id="svc-editor-slug-note">The slug orders-api stays; packs link to it by slug'));
+  assert.ok(h.includes('<input id="svc-edit-owners" type="text" value="team-orders, sre-platform"'));
+  assert.ok(h.includes('<div class="svc-editor-field" role="radiogroup" aria-labelledby="svc-edit-tier-label">'));
+  assert.ok(h.includes('<textarea id="svc-edit-desc" rows="3" maxlength="4000">&lt;/textarea&gt;&lt;script&gt;1&lt;/script&gt;</textarea>'));
+  assert.ok(!/id="svc-edit-slug"|name="slug"/.test(h), 'no slug field');
+  assert.ok(h.includes('<div class="svc-editor-status is-idle" id="svc-editor-status" role="status" aria-live="polite">Name, owners, tier and description. The slug is fixed.</div>'));
+  assert.ok(h.includes('<button type="button" class="mcp-refresh-btn svc-editor-save" id="svc-editor-save" aria-disabled="false">Save</button>'));
+  const radios = c.querySelectorAll('.svc-editor-seg-btn');
+  assert.deepEqual(radios.map((r) => [r.dataset.tier, r.getAttribute('aria-checked'), r.getAttribute('tabindex')]), [['tier-1', 'false', '-1'], ['tier-2', 'true', '0'], ['tier-3', 'false', '-1'], ['', 'false', '-1']]);
+  // Save with nothing touched: the draft as the record reads.
+  c.byId('svc-editor-save').fire('click');
+  assert.deepEqual(calls, [['save', 1, { name: nasty.name, owners: 'team-orders, sre-platform', tier: 'tier-2', description: nasty.description }]]);
+  // Type a name and owners, check tier-1 by click, "graded by the pack" by keyboard (End), then Save.
+  calls.length = 0;
+  c.byId('svc-edit-name').value = ' Orders Platform ';
+  c.byId('svc-edit-owners').value = 'team-orders';
+  radios[0].fire('click');
+  assert.deepEqual(radios.map((r) => r.getAttribute('aria-checked')), ['true', 'false', 'false', 'false']);
+  const seg = c.querySelector('.svc-editor-seg');
+  seg.fire('keydown', { key: 'End', target: radios[0], preventDefault() { c.prevented = (c.prevented || 0) + 1; } });
+  assert.deepEqual(radios.map((r) => r.getAttribute('aria-checked')), ['false', 'false', 'false', 'true']);
+  assert.equal(c.focused, radios[3], 'the roving focus follows');
+  seg.fire('keydown', { key: 'ArrowRight', target: radios[3], preventDefault() { c.prevented += 1; } });
+  seg.fire('keydown', { key: 'Enter', target: radios[0], preventDefault() { c.prevented += 1; } });
+  assert.deepEqual(radios.map((r) => r.getAttribute('aria-checked')), ['true', 'false', 'false', 'false'], 'ArrowRight wraps; Enter is left to the button');
+  assert.equal(c.prevented, 2);
+  c.byId('svc-editor-save').fire('click');
+  assert.deepEqual(calls, [['save', 1, { name: ' Orders Platform ', owners: 'team-orders', tier: 'tier-1', description: nasty.description }]], 'the draft as typed — the controller trims and diffs it (buildServicePatch)');
+  // Every close: the scrim, the esc button, Close, Escape on the dialog.
+  calls.length = 0;
+  for (const el of c.querySelectorAll('[data-editor-close]')) el.fire('click');
+  c.querySelector('.svc-editor').fire('keydown', { key: 'Escape', preventDefault() {}, stopPropagation() {} });
+  c.querySelector('.svc-editor').fire('keydown', { key: 'a', preventDefault() { throw new Error('not consumed'); }, stopPropagation() {} });
+  assert.deepEqual(calls, [['close'], ['close'], ['close'], ['close']]);
+  // Rendered again for the same record with a status: the status line and the Save button alone are repainted — the typed name stays.
+  renderServiceEditor(c, buildServiceEditorModel(nasty, { status: { kind: 'pending', text: 'Saving…' } }), host);
+  assert.equal(c.byId('svc-edit-name').value, ' Orders Platform ');
+  assert.deepEqual([c.byId('svc-editor-status').className, c.byId('svc-editor-status').textContent, c.byId('svc-editor-save').getAttribute('aria-disabled')], ['svc-editor-status is-pending', 'Saving…', 'true'], 'aria-disabled, never disabled: the focus stays on Save while the PATCH runs');
+  renderServiceEditor(c, buildServiceEditorModel(nasty, { status: { kind: 'error', text: '400: a tier is tier-1, tier-2 or tier-3 (or null: graded by the pack), not "x"' } }), host);
+  assert.deepEqual([c.byId('svc-editor-status').className, c.byId('svc-editor-save').getAttribute('aria-disabled')], ['svc-editor-status is-error', 'false']);
+  assert.ok(!c.byId('svc-editor-status').textContent.includes('{'), 'the server\'s sentence, never a raw body');
+  paintServiceEditorStatus(c, serviceSaveStatus(['tier']));
+  assert.deepEqual([c.byId('svc-editor-status').className, c.byId('svc-editor-status').textContent], ['svc-editor-status is-saved', 'Saved: tier']);
+  // Another record: drawn whole.
+  renderServiceEditor(c, buildServiceEditorModel(bare), host);
+  assert.ok(c.innerHTML.includes('data-service-id="2"') && c.byId('svc-edit-name').value === bare.name);
+  // A headless host never throws.
+  assert.doesNotThrow(() => { const c2 = editorContainer(); renderServiceEditor(c2, buildServiceEditorModel(orders), { services: {} }); c2.byId('svc-editor-save').fire('click'); c2.querySelector('.svc-editor-close').fire('click'); });
 });
 
 test('the service page persists: mode, serviceId and serviceEnv are in the snapshot, the draft\'s origin id with the Build fields', () => {

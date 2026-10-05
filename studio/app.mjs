@@ -50,9 +50,10 @@ import { initHost } from './host.mjs';
 import {
   recentServicesKey, buildNoOrgModel, buildServicesHomeModel, buildServicePageModel, accessModel, servicesStatusOf,
   packForService, newestPack, serviceChipModel, servicesSelectModel, discoverEmptyNote, buildPrefillFromService, verdictKey, buildHandoffPlan, buildDefineOriginNote,
+  buildServiceEditorModel, buildServicePatch, serviceSaveStatus,
 } from './services-model.mjs';
 import { loadOrgs, loadServices, loadService, patchService, verdictLoader } from './services-api.mjs';
-import { renderNoOrgHome, renderServicesHome, renderServicePage, markUnavailable } from './services-view.mjs';
+import { renderNoOrgHome, renderServicesHome, renderServicePage, renderServiceEditor, markUnavailable } from './services-view.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
@@ -832,6 +833,8 @@ export function renderMainView() {
   // Persistence: every mutation chain ends here, so this is the single
   // hook for the debounced write. Cheap when suspended (boot phase).
   persistence.schedule();
+  // The record editor lives in its own host on <body> (syncServiceEditor draws or clears it).
+  syncServiceEditor();
   if (state.mode === 'home') {
     if (state.homeVariant === 'gate') renderServiceGate();
     else renderHomeView();
@@ -1938,6 +1941,16 @@ function findServiceRecord(id) {
   return (state.services || []).find(s => s.id === id) || null;
 }
 
+// A record as the server just answered it (GET /api/services/:id, a PATCH's
+// view) replaces the table's row and becomes the page's.
+function adoptServiceRecord(service) {
+  if (Array.isArray(state.services)) {
+    const i = state.services.findIndex(s => s.id === service.id);
+    if (i >= 0) state.services[i] = service; else state.services.push(service);
+  }
+  servicePageRecord = service;
+}
+
 // Enter the page: GET /api/services/:id, then mode 'service' with the record
 // id and the selected environment set BEFORE the render (the render persists
 // them — a reload lands here again). The service counts as opened (the home's
@@ -1956,11 +1969,7 @@ async function enterServicePage(id, env = null, { rehydrate = false } = {}) {
   }
   if (!service) { if (!rehydrate) toast(`${id}: no service answered`, 'error'); return false; }
   if (nav !== navGeneration) return false;   // the user went elsewhere meanwhile
-  if (Array.isArray(state.services)) {
-    const i = state.services.findIndex(s => s.id === service.id);
-    if (i >= 0) state.services[i] = service; else state.services.push(service);
-  }
-  servicePageRecord = service;
+  adoptServiceRecord(service);
   recordRecentService(service.slug);
   const names = (service.environments || []).map(e => e.name);
   // On the page the service is the axis, not a pack: Pack A is let go (an
@@ -2120,6 +2129,100 @@ function openPack(id, env = null) {
   enterAnalyzeMode(id, env || defaultEnvFor(id));
 }
 
+// ---------- the record editor (design §6.5) ----------
+
+// The pop-up over the page's record: UI state of the page, never persisted
+// (a reload lands on the page, closed). It is drawn into its own host on
+// <body>, outside #layer-view, so the page behind it repaints (a verdict
+// settles, a save lands) without the dialog losing the focus or what was
+// typed — renderServiceEditor repaints the status alone for the same record.
+let serviceEditor = null;   // { serviceId, draft, status } | null
+
+function serviceEditorHost() {
+  let el = document.getElementById('svc-editor-host');
+  if (!el) { el = document.createElement('div'); el.id = 'svc-editor-host'; document.body.appendChild(el); }
+  return el;
+}
+
+// Draw the editor over the page's record, or clear it: leaving the page (any
+// mode change, another record) closes it.
+function syncServiceEditor() {
+  const el = document.getElementById('svc-editor-host');
+  const service = serviceEditor ? findServiceRecord(serviceEditor.serviceId) : null;
+  if (state.mode !== 'service' || !service || state.serviceId !== service.id) {
+    serviceEditor = null;
+    if (el && el.innerHTML) el.innerHTML = '';
+    return;
+  }
+  renderServiceEditor(serviceEditorHost(), buildServiceEditorModel(service, { draft: serviceEditor.draft, status: serviceEditor.status }), servicesHost);
+}
+
+// Edit (the page's button): the rank that may PATCH gets the dialog with the
+// focus in its first field; another rank is told why (the button is not
+// drawn for it, but the access can downgrade while the page is open).
+function openServiceEditor(serviceId) {
+  if (state.mode !== 'service' || !findServiceRecord(serviceId)) return;
+  if (state.access?.canWrite === false) { explainUnavailable(state.access.reason); return; }
+  serviceEditor = { serviceId, draft: null, status: null };
+  syncServiceEditor();
+  document.getElementById('svc-edit-name')?.focus({ preventScroll: true });
+}
+
+// Close (the scrim, esc, Close, Escape): the focus returns to the Edit button.
+function closeServiceEditor() {
+  if (!serviceEditor) return;
+  serviceEditor = null;
+  const el = document.getElementById('svc-editor-host');
+  if (el) el.innerHTML = '';
+  document.getElementById('svc-edit')?.focus({ preventScroll: true });
+}
+
+// Save: the draft diffed against the record (services-model.mjs
+// buildServicePatch — only the fields that differ, parsed; never the slug);
+// nothing differing → "Nothing changed." without a call; else PATCH
+// /api/services/:id (CSRF and org headers through requestJson). A refusal
+// is the server's sentence in the status line (`400: a tier is …`; a 401/403
+// auth/role also downgrades the rank the affordances draw from). On success
+// the record is read anew (GET /api/services/:id — the PATCH's view stands if
+// that fails), the cached verdicts of its packs are dropped (the tier grades
+// them, A-M3), the page repaints — which re-reads the selected tab's verdict —
+// the header SERVICE selector follows a rename, and the status names what
+// the server says changed. Returns { ok, service, changed } or null.
+async function saveServiceRecord(serviceId, draft) {
+  const current = findServiceRecord(serviceId);
+  if (!serviceEditor || serviceEditor.serviceId !== serviceId || !current) return null;
+  if (serviceEditor.status?.kind === 'pending') return null;   // one PATCH at a time: a second Save while it runs is ignored
+  serviceEditor.draft = draft;
+  const patch = buildServicePatch(current, draft);
+  if (!Object.keys(patch).length) {
+    serviceEditor.status = serviceSaveStatus([]);
+    syncServiceEditor();
+    return { ok: true, service: current, changed: [] };
+  }
+  serviceEditor.status = { kind: 'pending', text: 'Saving…' };
+  syncServiceEditor();
+  let res;
+  try { res = await patchService(serviceId, patch); }
+  catch (e) {
+    if (e.denied === 'auth' || e.denied === 'role') state.access = { ...(state.access || {}), canWrite: false, reason: e.message };
+    if (!serviceEditor || serviceEditor.serviceId !== serviceId) return null;
+    serviceEditor.status = { kind: 'error', text: e.message || 'no answer' };
+    if (state.mode === 'service' && state.serviceId === serviceId) repaintServicePage(); else syncServiceEditor();
+    return null;
+  }
+  let service = res.service || current;
+  try { service = (await loadService(serviceId)) || service; } catch { /* the PATCH's own view of the record stands */ }
+  adoptServiceRecord(service);
+  forgetServiceVerdicts(current);
+  state.selectedService = service.slug;
+  if (res.changed.includes('name')) renderServiceSelect();
+  const status = serviceSaveStatus(res.changed);
+  if (serviceEditor && serviceEditor.serviceId === serviceId) { serviceEditor.status = status; serviceEditor.draft = null; }
+  if (state.mode === 'service' && state.serviceId === serviceId) repaintServicePage(); else syncServiceEditor();
+  announce(status.text);
+  return { ok: true, service, changed: res.changed };
+}
+
 // The host the services renderers get (docs/UI_CONVENTIONS.md §3): the two
 // stable hooks plus the axis's actions under `services`. Sign-out is the
 // account menu's handler, proxied — one place knows the IdP logout rules.
@@ -2133,6 +2236,9 @@ const servicesActions = {
   home: () => goHome(),
   retry: async () => { await refreshServices(); if (state.mode === 'home') repaintHomeServices(); },
   explain: explainUnavailable,
+  openEditor: openServiceEditor,
+  closeEditor: closeServiceEditor,
+  saveService: saveServiceRecord,
   signOut: () => document.querySelector('.hdr-user-out')?.click(),
 };
 const servicesHost = { renderMainView, renderTabs, services: servicesActions };
