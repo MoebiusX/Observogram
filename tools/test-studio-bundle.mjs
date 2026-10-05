@@ -1049,6 +1049,19 @@ test('T8b baked brand: a --brand bundle carries the branded server\'s shell frag
   assert.deepEqual(JSON.parse(envFile.stdout).brand, { source: 'env', file: ACME_STATIC, name: 'Acme Watch' });
   const legacy = cli(['--check', '--json', '--pack', resolve(ROOT, PAYMENT)], TMP, { TOMOGRAPH_BRAND_FILE: ACME_STATIC });
   assert.deepEqual(JSON.parse(legacy.stdout).brand, { source: 'env', file: ACME_STATIC, name: 'Acme Watch' });
+  // The escape hatch on a machine whose env carries the server's brand: an empty value is unset — the form
+  // cmd (`set X=`) and PowerShell (`$env:X=''`) can express, where coreutils' `env -u` does not exist. The three
+  // docs that name `env -u` name both Windows spellings beside it.
+  const emptied = cli(['--check', '--json', '--pack', resolve(ROOT, PAYMENT)], TMP, { OBSERVOGRAM_BRAND_FILE: '', OBSERVOGRAM_BRAND_NAME: '', OBSERVOGRAM_TAXONOMY: '' });
+  assert.equal(emptied.status, 0, emptied.stderr);
+  assert.deepEqual(JSON.parse(emptied.stdout).brand, null, 'an empty OBSERVOGRAM_BRAND_FILE / _NAME bakes no brand');
+  assert.equal(JSON.parse(emptied.stdout).taxonomy, null, 'an empty OBSERVOGRAM_TAXONOMY bakes no taxonomy');
+  for (const doc of ['README.md', 'docs/DOWNSTREAM.md', 'docs/UPDATE_JOURNEY.md']) {
+    const text = readFileSync(join(DEFAULT_ROOT, doc), 'utf8');
+    for (const form of ['`env -u OBSERVOGRAM_BRAND_FILE', '`set OBSERVOGRAM_BRAND_FILE=`', "`$env:OBSERVOGRAM_BRAND_FILE=''`"]) {
+      assert.ok(text.includes(form), `${doc} names the unbrand escape hatch ${form}`);
+    }
+  }
   const onTop = join(TMP, 'brand-on-top', 'index.html');
   const top = cli(['--brand', ACME_STATIC, '--out', onTop], TMP, { OBSERVOGRAM_BRAND_TAGLINE: 'scalar wins' });
   assert.equal(top.status, 0, top.stderr);

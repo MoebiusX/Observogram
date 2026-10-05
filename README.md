@@ -1411,17 +1411,20 @@ texts all read — a `--brand` bundle names its own product and never the
 upstream one. When a flag is absent the server's variables are honoured —
 `OBSERVOGRAM_TAXONOMY`, `OBSERVOGRAM_BRAND_FILE`, the `OBSERVOGRAM_BRAND_*`
 scalars (the one-field rebadge is `OBSERVOGRAM_BRAND_NAME=Acme npm run
-build:studio`) — so a build machine configured for a server bakes what that
-server shows; build unbranded there with `env -u OBSERVOGRAM_BRAND_FILE …`
-(there is no `--no-brand`). The summary line and `--json` always say what was
-baked (`taxonomy: { source, file, types, ids } | null`, `brand: { source,
-file, name } | null` — the paths, never the contents, and neither path lands
-in the bundle). Brand URLs must not be server paths: `favicon`, `logo.url`
-and `hero.src` are an absolute URL, a `data:` URL or a path relative to the
-bundle's own directory (resolved against the page's URL by the static host) —
-`/assets/x.ico` fails the build naming the field and the fix. A configured
-brand that gives no `name` keeps the upstream strings, as on a server; and
-the unbranded bundle's Discover hero is the server asset
+build:studio`, POSIX shell syntax) — so a build machine configured for a
+server bakes what that server shows; build unbranded there by unsetting or
+emptying the variable, since an empty value counts as unset:
+`env -u OBSERVOGRAM_BRAND_FILE …` or `OBSERVOGRAM_BRAND_FILE= …` in a POSIX
+shell, `set OBSERVOGRAM_BRAND_FILE=` in cmd, `$env:OBSERVOGRAM_BRAND_FILE=''`
+in PowerShell (there is no `--no-brand`). The summary line and `--json` always
+say what was baked (`taxonomy: { source, file, types, ids } | null`, `brand:
+{ source, file, name } | null` — the paths, never the contents, and neither
+path lands in the bundle). Brand URLs must not be server paths: `favicon`,
+`logo.url` and `hero.src` are an absolute URL, a `data:` URL or a path
+relative to the bundle's own directory (resolved against the page's URL by
+the static host) — `/assets/x.ico` fails the build naming the field and the
+fix. A configured brand that gives no `name` keeps the upstream strings, as on
+a server; and the unbranded bundle's Discover hero is the server asset
 `/assets/observogram-hero.png` (the default brand's `hero.src`), so a static
 host serves that asset or the brand names its own `hero.src`.
 

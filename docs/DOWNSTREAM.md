@@ -274,7 +274,10 @@ texts read the product from `#brand-config`, and a branded bundle renders
 the upstream name nowhere. When a flag is absent the server's variables are
 honoured (`OBSERVOGRAM_TAXONOMY`, `OBSERVOGRAM_BRAND_FILE`, the scalars, the
 legacy `TOMOGRAPH_` spelling): a build machine configured for a server bakes
-what that server shows; build unbranded there with `env -u`. Brand URLs must
+what that server shows; build unbranded there by unsetting or emptying the
+variable (an empty value counts as unset): `env -u OBSERVOGRAM_BRAND_FILE` in
+a POSIX shell, `set OBSERVOGRAM_BRAND_FILE=` in cmd,
+`$env:OBSERVOGRAM_BRAND_FILE=''` in PowerShell. Brand URLs must
 not be server paths — `favicon`, `logo.url` and `hero.src` are an absolute
 URL, a `data:` URL or a path relative to the bundle's own directory (resolved
 against the page's URL by the static host; the builder copies no asset), and

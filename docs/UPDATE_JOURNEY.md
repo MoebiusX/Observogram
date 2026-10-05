@@ -718,11 +718,14 @@ so "renders identically" holds by construction and nothing under `server/` or
 `tools/lib` changes. The `OBSERVOGRAM_BRAND_*` scalars are honoured by the
 build (the server's loader applies them on top of the file; the one-field
 rebadge the README promises is `OBSERVOGRAM_BRAND_NAME=Acme npm run
-build:studio`), and so are `OBSERVOGRAM_TAXONOMY` and `OBSERVOGRAM_BRAND_FILE`
-when the flags are absent — a build machine with the server's env bakes what
-the server shows, the summary line and `--json` always say so, and `env -u`
-is the escape hatch (no `--no-brand`: every flag costs three documented
-places). Root-relative brand URLs are refused with the field and the fix
+build:studio`, POSIX shell syntax), and so are `OBSERVOGRAM_TAXONOMY` and
+`OBSERVOGRAM_BRAND_FILE` when the flags are absent — a build machine with the
+server's env bakes what the server shows, the summary line and `--json` always
+say so, and the escape hatch is unsetting or emptying the variable, an empty
+value counting as unset: `env -u OBSERVOGRAM_BRAND_FILE` in a POSIX shell,
+`set OBSERVOGRAM_BRAND_FILE=` in cmd, `$env:OBSERVOGRAM_BRAND_FILE=''` in
+PowerShell (no `--no-brand`: every flag costs three documented places).
+Root-relative brand URLs are refused with the field and the fix
 named — the bundle has no server behind it, and the leftover guard would
 refuse the favicon anyway with a worse message; the default hero an unnamed
 brand inherits is exempt, as in every unbranded bundle (documented, not
