@@ -1,8 +1,8 @@
 // studio/services-view.mjs
 //
 // The renderers of the services axis (docs/STORE_PLAN.md §6, slice 6a): the
-// Services home (renderServicesHome, markUnavailable), the service page and
-// the no-org home. Renderers only
+// Services home (renderServicesHome, markUnavailable), the service page
+// (renderServicePage, wireServiceTabs) and the no-org home. Renderers only
 // (docs/UI_CONVENTIONS.md §2–3): render(container, model, host) over a model
 // studio/services-model.mjs built, no state read, no fetch; the services
 // actions ride `host.services`, built by the app.mjs controller — reached
@@ -140,6 +140,150 @@ export function renderServicesHome(container, model, host = appHost) {
     });
     const none = container.querySelector('#home-service-none');
     if (none) none.hidden = shown > 0;
+  });
+}
+
+// ---------- the service page ----------
+
+const ACTION_IDS = { layers: 'svc-action-discover', compare: 'svc-action-diagnose', compile: 'svc-action-remediate', build: 'svc-action-build' };
+
+// The environments as a tablist (roving tabindex; ArrowLeft / ArrowRight /
+// Home / End move and select — the Advanced menu's pattern), the selected
+// tab's panel below it.
+function tabsHtml(tabs) {
+  return `
+    <div class="svc-tabs" role="tablist" aria-label="Environments">
+      ${tabs.map((t) => `<button type="button" role="tab" class="svc-tab" id="svc-tab-${escapeHtml(String(t.id))}" data-env="${escapeHtml(t.name)}"
+        aria-selected="${t.selected ? 'true' : 'false'}" aria-controls="svc-env-${escapeHtml(String(t.id))}" tabindex="${t.selected ? '0' : '-1'}">${escapeHtml(t.name)}</button>`).join('')}
+    </div>`;
+}
+
+const row = (dt, ddHtml, cls = '') => `<div class="svc-panel-row${cls ? ` ${cls}` : ''}"><dt>${escapeHtml(dt)}</dt><dd>${ddHtml}</dd></div>`;
+
+// What the selected environment shows: the verdict pill (the conformance
+// report of the current primary pack, §4.3), the MCP endpoint as its safe
+// form only — name and origin, never a URL — the tier line, the bindings,
+// the http(s) links (rel="noopener noreferrer" — a third-party dashboard gets
+// no Referer), the pack it is graded with, and the drift note (D3).
+function panelHtml(m) {
+  const p = m.panel;
+  const env = p.env;
+  const rows = [];
+  if (p.verdict) rows.push(row('Verdict', verdictPillHtml(p.verdict), 'svc-panel-verdict'));
+  if (env) {
+    rows.push(row('Checked through', p.mcp.kind === 'bound'
+      ? `<span class="svc-env-mcp"><span class="svc-env-mcp-name">${escapeHtml(p.mcp.name)}</span> · <span class="svc-env-mcp-origin">${escapeHtml(p.mcp.origin)}</span></span>`
+      : `<span class="svc-env-mcp-none">${escapeHtml(p.mcp.text)}</span>`));
+  }
+  rows.push(row('Tier', escapeHtml(p.tierLine)));
+  if (p.bindings.length) {
+    rows.push(row('Bindings', `<dl class="svc-env-bindings">${p.bindings.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(String(v))}</dd></div>`).join('')}</dl>`));
+  }
+  if (p.links.length) {
+    rows.push(row('Links', `<span class="svc-env-links">${p.links.map(([name, url]) => `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(name)} ↗</a>`).join(' · ')}</span>`));
+  }
+  rows.push(row('Pack', p.pack
+    ? `<span class="svc-env-pack">${escapeHtml(p.pack.label)}${p.pack.version ? ` v${escapeHtml(String(p.pack.version))}` : ''} <span class="svc-env-pack-how">(${p.pack.how === 'primary' ? 'current primary' : 'member pack — a live aggregate'}${p.pack.source ? ` · ${escapeHtml(p.pack.source)}` : ''})</span></span>`
+    : '<span class="svc-env-pack svc-env-pack-none">No pack yet for this service — Discover below says how one is registered.</span>'));
+  rows.push(row('Drift runs', escapeHtml(p.driftNote), 'svc-panel-drift'));
+  const ids = env ? ` id="svc-env-${escapeHtml(String(env.id))}" aria-labelledby="svc-tab-${escapeHtml(String(env.id))}" role="tabpanel"` : '';
+  return `<div class="svc-panel"${ids} tabindex="0"><dl class="svc-panel-facts">${rows.join('')}</dl></div>`;
+}
+
+function actionsHtml(m) {
+  return `
+    <div class="svc-actions" role="group" aria-label="Open this service in">
+      ${m.actions.map((a) => `<button type="button" class="svc-action${a.view === 'build' ? ' is-build' : ''}" id="${ACTION_IDS[a.view]}" data-view="${a.view}">${escapeHtml(a.label)}</button>`).join('')}
+    </div>`;
+}
+
+// Every pack linked to the record, the chosen primary marked "current"; each
+// row opens on its own, so an older primary or a member pack is one click
+// away but never the default. A link to a pack no longer in the catalogue
+// here is listed, not opened.
+function packsHtml(m) {
+  const rows = m.packs.map((p) => `
+      <li class="svc-pack-row${p.current ? ' is-current' : ''}" data-pack-id="${escapeHtml(p.id)}">
+        <span class="svc-pack-label">${escapeHtml(p.label ?? p.id)}</span>
+        <span class="svc-pack-meta">${escapeHtml([p.role, p.source].filter(Boolean).join(' · '))}${p.current ? ' <span class="svc-pack-current">current</span>' : ''}</span>
+        ${p.inCatalogue
+    ? `<button type="button" class="svc-pack-open ux-secondary-btn" data-pack-id="${escapeHtml(p.id)}">open in Discover</button>`
+    : '<span class="svc-pack-gone">not in the catalogue here</span>'}
+      </li>`).join('');
+  return `
+    <section class="svc-packs" aria-labelledby="svc-packs-title">
+      <h2 class="svc-packs-title" id="svc-packs-title">Packs linked to this service (${m.packs.length})</h2>
+      ${m.packs.length ? `<ul class="svc-pack-list">${rows}</ul>` : '<p class="svc-packs-none">None yet — a register (Build, a scan, a draft or an upload) that names this service links its pack here.</p>'}
+    </section>`;
+}
+
+// The tablist's keyboard: ArrowLeft / ArrowRight / Home / End move the focus
+// and select; a click selects. `onSelect(envName)` is the controller's.
+export function wireServiceTabs(tablist, onSelect) {
+  if (!tablist) return;
+  const tabs = () => [...tablist.querySelectorAll('[role="tab"]')];
+  tabs().forEach((tab) => tab.addEventListener('click', () => onSelect(tab.dataset.env)));
+  tablist.addEventListener('keydown', (e) => {
+    const all = tabs();
+    const i = all.indexOf(e.target.closest?.('[role="tab"]'));
+    if (i < 0 || !all.length) return;
+    let next = null;
+    if (e.key === 'ArrowRight') next = (i + 1) % all.length;
+    else if (e.key === 'ArrowLeft') next = (i - 1 + all.length) % all.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = all.length - 1;
+    if (next === null) return;
+    e.preventDefault();
+    all[next].focus();
+    onSelect(all[next].dataset.env);
+  });
+}
+
+// The service page (design §5): the breadcrumb back to Services, the head
+// (name, slug, facts, description), the environments as tabs with the
+// selected one's panel — or the rank-worded line when the record has none —
+// the four actions (Discover · Diagnose · Remediate bound to the service and
+// the environment; Build a pack for <env>, disabled with its reason for a
+// rank without the operator role), and every pack linked. Actions:
+// host.services.home / selectEnv / openIn / openBuild / openPack / explain.
+// The record editor (Edit) is the next commit's; a viewer never gets one.
+export function renderServicePage(container, model, host = appHost) {
+  const envName = model.panel.env?.name ?? null;
+  const bind = { serviceId: model.id, env: envName };
+  const noEnv = model.noEnvironments;
+  container.innerHTML = `
+    <section class="svc-page" aria-labelledby="svc-page-name">
+      <div class="svc-page-bar">
+        <button type="button" class="svc-page-back" id="svc-page-back">← Services</button>
+      </div>
+      <header class="svc-page-head">
+        <h1 class="svc-page-name" id="svc-page-name" tabindex="-1">${escapeHtml(model.name)}</h1>
+        <span class="svc-page-slug">${escapeHtml(model.slug)}</span>
+        <p class="svc-page-facts">${escapeHtml(`${model.facts.tierText} · ${model.facts.ownersText} · ${model.facts.packsText}`)}</p>
+        ${model.description ? `<p class="svc-page-desc">${escapeHtml(model.description)}</p>` : ''}
+      </header>
+      ${noEnv
+    ? `<p class="svc-status svc-noenv" role="status">${escapeHtml(noEnv.text)}${noEnv.apiLine ? ` <code>${escapeHtml(noEnv.apiLine)}</code>` : ''}</p>`
+    : tabsHtml(model.tabs)}
+      ${panelHtml(model)}
+      ${actionsHtml(model)}
+      ${packsHtml(model)}
+    </section>`;
+
+  container.querySelector('#svc-page-back')?.addEventListener('click', () => host.services?.home?.());
+  wireServiceTabs(container.querySelector('.svc-tabs'), (name) => host.services?.selectEnv?.(name));
+  for (const a of model.actions) {
+    const btn = container.querySelector(`#${ACTION_IDS[a.view]}`);
+    if (!btn) continue;
+    if (!a.enabled) markUnavailable(btn, a.reason);
+    btn.addEventListener('click', () => {
+      if (!a.enabled) { host.services?.explain?.(a.reason); return; }
+      if (a.view === 'build') host.services?.openBuild?.(bind);
+      else host.services?.openIn?.(a.view, bind);
+    });
+  }
+  container.querySelectorAll('.svc-pack-open').forEach((btn) => {
+    btn.addEventListener('click', () => host.services?.openPack?.(btn.dataset.packId, envName));
   });
 }
 

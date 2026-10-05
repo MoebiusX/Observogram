@@ -47,9 +47,12 @@ import { catalogToDeployManifest } from './artifact-model.mjs';
 import { computeDeployTransitions } from './verify-deploy.mjs';
 import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-view.mjs';
 import { initHost } from './host.mjs';
-import { recentServicesKey, buildNoOrgModel, buildServicesHomeModel, accessModel, servicesStatusOf, packForService } from './services-model.mjs';
-import { loadOrgs, loadServices, verdictLoader } from './services-api.mjs';
-import { renderNoOrgHome, renderServicesHome, markUnavailable } from './services-view.mjs';
+import {
+  recentServicesKey, buildNoOrgModel, buildServicesHomeModel, buildServicePageModel, accessModel, servicesStatusOf,
+  packForService, newestPack, serviceChipModel, discoverEmptyNote, buildPrefillFromService, verdictKey,
+} from './services-model.mjs';
+import { loadOrgs, loadServices, loadService, verdictLoader } from './services-api.mjs';
+import { renderNoOrgHome, renderServicesHome, renderServicePage, markUnavailable } from './services-view.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
@@ -114,6 +117,19 @@ async function rehydrateFromPersistence() {
     enterBuildMode(state.build.step);
     return true;
   }
+  // The service page (STORE_PLAN §6, slice 6a): GET /api/services/:id again —
+  // a record deleted meanwhile (404) drops the snapshot and lands on home.
+  // The key is one org's, so an org mismatch can no longer happen here.
+  if (saved.mode === 'service' && Number.isInteger(saved.serviceId)) {
+    const ok = await enterServicePage(saved.serviceId, typeof saved.serviceEnv === 'string' ? saved.serviceEnv : null, { rehydrate: true });
+    if (ok) return true;
+    persistence.clear();
+    return false;
+  }
+  // A workspace opened from a service page keeps its binding across a reload
+  // (the breadcrumb back, the bound environment option, the empty Discover's sentence).
+  if (Number.isInteger(saved.serviceId)) state.serviceId = saved.serviceId;
+  if (typeof saved.serviceEnv === 'string') state.serviceEnv = saved.serviceEnv;
   const allKnown = [...(state.catalog || []), ...(state._examplesCache || [])];
   const aMeta = allKnown.find(p => p.id === saved.selectedPackId);
   if (!aMeta) {
@@ -556,6 +572,14 @@ function renderEnvSelect() {
     return;
   }
   sel.disabled = false;
+  // An environment bound from a service record that the pack does not declare
+  // (the row exists; the overlay is a no-op and the grade is the pack's base
+  // grade): the select says so instead of showing another environment.
+  if (state.selectedEnv && !envs.includes(state.selectedEnv)) {
+    const opt = document.createElement('option');
+    opt.value = state.selectedEnv; opt.textContent = `${state.selectedEnv} (service record — no overlay in the pack)`;
+    sel.appendChild(opt);
+  }
   for (const e of envs) {
     const opt = document.createElement('option');
     opt.value = e; opt.textContent = e;
@@ -767,6 +791,8 @@ export function renderMainView() {
     else renderHomeView();
     return;
   }
+  // The service page (STORE_PLAN §6, slice 6a): one record, its environments as tabs.
+  if (state.mode === 'service') { renderServicePageHost(view); return; }
   // The BUILD journey renders its own three steps (Define · Compile ·
   // Verify) under BUILD_TABS; nothing below applies until "Open in
   // Discover" hands the produced pack to the analysis journey. Its pop-up
@@ -1267,7 +1293,14 @@ function routeTo(id) {
   // mode='home' and every tab would keep rendering the landing hero (the
   // bug behind "why is Discover like the landing hero page?"). The pack is
   // still null until the user loads one — Discover's empty state handles that.
-  if (state.mode === 'home' || state.mode === 'build') state.mode = 'single';
+  // A journey tab clicked on the service page opens the service's pack bound
+  // to the page's environment (the one resolver, services-model.mjs
+  // packForService) — never the empty workspace.
+  if (state.mode === 'service' && (id === 'layers' || id === 'compare' || id === 'compile') && state.serviceId) {
+    openServiceIn(id, { serviceId: state.serviceId, env: state.serviceEnv });
+    return;
+  }
+  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service') state.mode = 'single';
   state.view = id;
   state.activeCardKey = null;
   state.activeLayer = ({ compile: 'COMPILE', conformance: 'CONF', schema: 'CONF', atlas: 'ATLAS', layers: state.layerFilter !== 'all' ? state.layerFilter : 'L1' })[id] || 'L1';
@@ -1503,7 +1536,7 @@ function paintObservaActiveTab() {
   // The landing/reset hero is NOT a tab — it's the pre-workspace start
   // screen. Clearing the active marker there is what keeps Discover from
   // "being" the landing hero: you only light a tab once you're working.
-  const onLanding = state.mode === 'home';
+  const onLanding = state.mode === 'home' || state.mode === 'service';
   for (const btn of document.querySelectorAll('.observa-tab')) {
     // A workflow tab is active only when we're NOT in an advanced view
     // and NOT on the landing screen.
@@ -1637,6 +1670,7 @@ async function boot() {
 // ============================================================
 
 function goHome() {
+  navGeneration++;
   state.mode = 'home';
   state.pack = null;
   emptyVerdicts();
@@ -1649,6 +1683,9 @@ function goHome() {
   state.selectedService = null;
   state.selectedPackId = null;
   state.selectedEnv = null;
+  state.serviceId = null;
+  state.serviceEnv = null;
+  servicePageRecord = null;
   state.compareBId = null;
   state.compareBEnv = null;
   state.conformanceB = null;
@@ -1805,11 +1842,11 @@ function homeServicesModel() {
 // One repaint of the services section per settled batch — and only while
 // the home is still on screen (a settled report never repaints a page the
 // user left). A failed report reads "Unavailable" with the parsed refusal.
-const homeVerdicts = verdictLoader();
+const verdictPool = verdictLoader();
 function loadHomeVerdicts(model) {
   const wanted = model.cards.flatMap(c => c.envs).filter(e => e.verdict.state === 'loading' && e.packId && e.key && !(e.key in state.serviceVerdicts));
   if (!wanted.length) return;
-  Promise.allSettled(wanted.map(e => homeVerdicts.load(e.packId, e.name)
+  Promise.allSettled(wanted.map(e => verdictPool.load(e.packId, e.name)
     .then(report => { state.serviceVerdicts[e.key] = report; }, err => { state.serviceVerdicts[e.key] = { error: err?.message || 'no answer' }; })))
     .then(() => { if (state.mode === 'home') repaintHomeServices(); });
 }
@@ -1839,44 +1876,208 @@ function explainUnavailable(reason) {
   announce(text);
 }
 
-// A record card opens the service: until the service page lands, its current
-// primary pack (the one resolver every entry point shares, services-model.mjs
-// packForService) opens in Discover at its first environment — the same
-// pack today's tile opened. A record without a pack says so, for the rank
-// that reads it, and records nothing.
-function openServiceRecord(id) {
-  const service = (state.services || []).find(s => s.id === id);
-  if (!service) return;
-  const { pack } = packForService(service, state.catalog, { isLiveAggregatePack });
-  if (!pack) {
-    toast(state.access?.canWrite === false
-      ? `No pack is linked to ${service.name} yet — an operator registers one (Build, a scan, a draft or an upload).`
-      : `No pack is linked to ${service.name} yet. Build one, or import or scan one under "Import or scan another source".`);
-    return;
-  }
-  recordRecentService(service.slug);
-  state.selectedService = service.slug;
-  enterAnalyzeMode(pack.id, defaultEnvFor(pack.id));
+// ---------- the service page (STORE_PLAN §6, slice 6a, design §5) ----------
+
+// The record the page shows, as GET /api/services/:id answered it (the table's
+// row is replaced by it too). Not persisted: a reload reads it again.
+let servicePageRecord = null;
+// The next render of the page moves the focus to its heading (entering it).
+let servicePageFocusNext = false;
+// Bumped by every mode transition: a GET /api/services/:id that answers after
+// the user went elsewhere (home, a pack, Build) must not paint the page over it.
+let navGeneration = 0;
+
+function findServiceRecord(id) {
+  if (servicePageRecord && servicePageRecord.id === id) return servicePageRecord;
+  return (state.services || []).find(s => s.id === id) || null;
 }
 
-// A catalogue pack (an example, a file-backed entry) opens as Pack A; an
-// example lives only in its cache, so it is promoted into the catalogue first.
-function openCataloguePack(id) {
+// Enter the page: GET /api/services/:id, then mode 'service' with the record
+// id and the selected environment set BEFORE the render (the render persists
+// them — a reload lands here again). The service counts as opened (the home's
+// recents) only once the read succeeded. A refusal (404 `no service <id>`,
+// a 403) is the server's sentence in a toast; a rehydrate answers false
+// instead so the boot falls back to home. The selected tab's verdict is
+// always read anew here (a tier change since the home's cache must show).
+async function enterServicePage(id, env = null, { rehydrate = false } = {}) {
+  const nav = ++navGeneration;
+  let service;
+  try { service = await loadService(id); }
+  catch (e) {
+    if (rehydrate) return false;
+    toast(e.message || `Could not read service ${id}`, 'error');
+    return false;
+  }
+  if (!service) { if (!rehydrate) toast(`${id}: no service answered`, 'error'); return false; }
+  if (nav !== navGeneration) return false;   // the user went elsewhere meanwhile
+  if (Array.isArray(state.services)) {
+    const i = state.services.findIndex(s => s.id === service.id);
+    if (i >= 0) state.services[i] = service; else state.services.push(service);
+  }
+  servicePageRecord = service;
+  recordRecentService(service.slug);
+  const names = (service.environments || []).map(e => e.name);
+  // On the page the service is the axis, not a pack: Pack A is let go (an
+  // action re-resolves it through packForService; Build's exit and a reload
+  // come back here, not to a pack). Pack B, a comparison's other side, stays.
+  state.selectedPackId = null;
+  state.selectedEnv = null;
+  state.pack = null;
+  state.conformance = null;
+  state.symbolTable = null;
+  emptyVerdicts();
+  state.mode = 'service';
+  state.serviceId = service.id;
+  state.serviceEnv = names.includes(env) ? env : (names[0] ?? null);
+  state.selectedService = service.slug;
+  state.activeCardKey = null;
+  if (state.serviceEnv) {
+    const { pack, how } = packForService(service, state.catalog, { isLiveAggregatePack });
+    if (pack && how === 'primary') delete state.serviceVerdicts[verdictKey(pack.id, state.serviceEnv)];
+  }
+  servicePageFocusNext = true;
+  applyModeChrome();
+  paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+  return true;
+}
+
+function servicePageModel(service) {
+  return buildServicePageModel({
+    service, envName: state.serviceEnv, verdicts: state.serviceVerdicts, catalog: state.catalog,
+    access: state.access, orgName: state.orgName, isLiveAggregatePack,
+  });
+}
+
+// renderMainView's branch for mode 'service': the page from the record, the
+// focus on its heading when just entered, the selected tab's verdict read
+// lazily through the pool — repainting only while this page is still on screen.
+function renderServicePageHost(view) {
+  const service = findServiceRecord(state.serviceId);
+  if (!service) { goHome(); return; }
+  const model = servicePageModel(service);
+  renderServicePage(view, model, servicesHost);
+  if (servicePageFocusNext) {
+    servicePageFocusNext = false;
+    view.querySelector('.svc-page-name')?.focus({ preventScroll: true });
+    window.scrollTo({ top: 0 });
+  }
+  const v = model.panel.verdict;
+  const env = model.panel.env;
+  if (v && v.state === 'loading' && v.fetch && model.panel.pack && env) {
+    const key = v.key;
+    verdictPool.load(model.panel.pack.id, env.name)
+      .then(report => { state.serviceVerdicts[key] = report; }, err => { state.serviceVerdicts[key] = { error: err?.message || 'no answer' }; })
+      .then(() => {
+        if (state.mode !== 'service' || state.serviceId !== service.id || state.serviceEnv !== env.name) return;   // the user left
+        repaintServicePage();
+        const fresh = servicePageModel(findServiceRecord(service.id) || service).panel.verdict;
+        if (fresh) announce(`${env.name}: ${fresh.text}`);
+      });
+  }
+}
+
+// Repaint the page keeping the focus where it is (a verdict settled, a tab
+// selected by keyboard): the heading just entered, a tab, an action, a row.
+function repaintServicePage() {
+  const active = document.activeElement;
+  const focusedTab = active?.closest?.('.svc-tabs') ? active.dataset.env : null;
+  const focusedId = !focusedTab && active?.id && active.closest?.('.svc-page') ? active.id : null;
+  renderMainView();
+  if (focusedTab) document.querySelector(`.svc-tab[data-env="${CSS.escape(focusedTab)}"]`)?.focus({ preventScroll: true });
+  else if (focusedId) document.getElementById(focusedId)?.focus({ preventScroll: true });
+}
+
+// The tab: the environment NAME selected on the page; its verdict is read if
+// the cache has none for it (the render above issues the read).
+function selectServiceEnv(name) {
+  if (state.mode !== 'service' || !name) return;
+  const service = findServiceRecord(state.serviceId);
+  if (!service || !(service.environments || []).some(e => e.name === name)) return;
+  state.serviceEnv = name;
+  repaintServicePage();
+}
+
+// Discover · Diagnose · Remediate bound to the service and the environment
+// (design §5.4–5.5): the page decides the pack (the one resolver,
+// packForService) and the environment; the user never picks a file. Without
+// a pack the workspace opens empty, and Discover's empty state says, for the
+// rank that reads it, how one is registered.
+function openServiceIn(view, { serviceId, env = null } = {}) {
+  const service = findServiceRecord(serviceId);
+  if (!service) { toast(`Service ${serviceId} is not in the table here — reload the page.`, 'error'); return; }
+  const names = (service.environments || []).map(e => e.name);
+  const envName = names.includes(env) ? env : (names[0] ?? null);
+  state.serviceId = service.id;
+  state.serviceEnv = envName;
+  const { pack } = packForService(service, state.catalog, { isLiveAggregatePack });
+  state.view = view;
+  state.activeCardKey = null;
+  if (pack) {
+    enterAnalyzeMode(pack.id, envName || defaultEnvFor(pack.id));
+    state.selectedService = service.slug;
+    state.activeLayer = ({ compile: 'COMPILE', compare: 'COMPARE' })[view] || 'L1';
+    paintObservaActiveTab();
+    renderTabs();
+    return;
+  }
+  state.mode = 'single';
+  state.selectedService = service.slug;
+  state.selectedPackId = null;
+  state.selectedEnv = envName;
+  state.pack = null;
+  state.conformance = null;
+  state.symbolTable = null;
+  emptyVerdicts();
+  state.activeLayer = ({ compile: 'COMPILE', compare: 'COMPARE' })[view] || 'L1';
+  applyModeChrome();
+  paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+}
+
+// Build from the page (design §6.4): DEFINE prefilled from the record — name,
+// owners, tier, the tab's environment, and the ORIGIN id the hand-off may
+// write — only when the draft is empty; a draft in progress is kept and said so.
+function openBuild({ serviceId, env = null } = {}) {
+  const service = findServiceRecord(serviceId);
+  if (!service) { toast(`Service ${serviceId} is not in the table here — reload the page.`, 'error'); return; }
+  if (state.access?.canWrite === false) { explainUnavailable(state.access.reason); return; }
+  state.serviceId = service.id;
+  state.serviceEnv = env ?? state.serviceEnv;
+  const plan = buildPrefillFromService(state.build, service, env);
+  if (plan.apply) Object.assign(state.build, plan.patch);
+  else if (plan.note) toast(plan.note);
+  enterBuildMode('define');
+}
+
+// A pack opens as Pack A at the given environment (else the pack's first): a
+// row under "Packs linked" on the page (the binding kept — an older primary or
+// a member pack is one click away but never the default), or a catalogue pack
+// (an example, a file-backed entry) from the home — an example lives only in
+// its cache, so it is promoted into the catalogue first.
+function openPack(id, env = null) {
   if (!id) return;
   if (!(state.catalog || []).find(p => p.id === id)) {
     const ex = (state._examplesCache || []).find(p => p.id === id);
     if (ex) (state.catalog = state.catalog || []).push(ex);
   }
-  enterAnalyzeMode(id, defaultEnvFor(id));
+  state.view = 'layers';
+  enterAnalyzeMode(id, env || defaultEnvFor(id));
 }
 
 // The host the services renderers get (docs/UI_CONVENTIONS.md §3): the two
 // stable hooks plus the axis's actions under `services`. Sign-out is the
 // account menu's handler, proxied — one place knows the IdP logout rules.
 const servicesActions = {
-  openService: openServiceRecord,
+  openService: (id, env = null) => { enterServicePage(id, typeof env === 'string' ? env : null); },
   openDerived: (key) => enterServiceWorkspace(key),
-  openPack: openCataloguePack,
+  selectEnv: selectServiceEnv,
+  openIn: openServiceIn,
+  openBuild,
+  openPack,
+  home: () => goHome(),
   retry: async () => { await refreshServices(); if (state.mode === 'home') repaintHomeServices(); },
   explain: explainUnavailable,
   signOut: () => document.querySelector('.hdr-user-out')?.click(),
@@ -1957,15 +2158,38 @@ function updateObservaOrgChip() {
   chip.hidden = false;
 }
 
+// The chip resolves the active service key against the table (services-model.mjs
+// serviceChipModel): a record → a <button> back to its page; a key no record
+// covers (the table unavailable, a derived-only service) → today's label, not
+// interactive; hidden on home, on the page itself and in Build.
 function updateObservaServiceChip() {
   updateObservaOrgChip();
-  const chip = document.getElementById('observa-service');
+  let chip = document.getElementById('observa-service');
   if (!chip) return;
+  const derived = serviceCatalogue().find(s => s.key === state.selectedService);
+  const m = serviceChipModel({ services: state.services, selected: state.selectedService, derivedLabel: derived?.label ?? null });
+  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || m.kind === 'none') { chip.hidden = true; return; }
+  const wantTag = m.kind === 'record' ? 'BUTTON' : 'SPAN';
+  if (chip.tagName !== wantTag) {
+    const next = document.createElement(wantTag.toLowerCase());
+    next.className = chip.className;
+    next.id = chip.id;
+    if (wantTag === 'BUTTON') next.type = 'button';
+    next.innerHTML = chip.innerHTML;
+    chip.replaceWith(next);
+    chip = next;
+  }
   const name = document.getElementById('observa-service-name');
-  const services = serviceCatalogue();
-  const active = services.find(s => s.key === state.selectedService);
-  if (state.mode === 'home' || state.mode === 'build' || !active) { chip.hidden = true; return; }
-  name.textContent = active.label;
+  if (name) name.textContent = m.label;
+  if (m.kind === 'record') {
+    chip.title = `Back to the service page of ${m.label}`;
+    chip.setAttribute('aria-label', `Service ${m.label} — back to its page`);
+    chip.onclick = () => enterServicePage(m.serviceId, state.serviceEnv);
+  } else {
+    chip.removeAttribute('title');
+    chip.removeAttribute('aria-label');
+    chip.onclick = null;
+  }
   chip.hidden = false;
 }
 
@@ -1980,8 +2204,9 @@ function enterServiceWorkspace(serviceKey) {
   // snapshot of some other service is never opened as this one's Pack A.
   const matches = state.catalog.filter(p => p.ok
     && (serviceKeyForPack(p) === serviceKey || packMatchesService(p, serviceKey, { side: 'a' })));
-  const declared = matches.filter(p => !isLiveAggregatePack(p));
-  const pack = declared[declared.length - 1] || matches[matches.length - 1];
+  // The same rule the record card, the page and the selector apply
+  // (services-model.mjs newestPack): the newest declared pack, else the newest aggregate.
+  const { pack } = newestPack(matches, p => !isLiveAggregatePack(p));
   if (!pack) {
     // Nothing loadable for it here: say so, open nothing, and record
     // nothing — the tile must not then read "Opened".
@@ -1998,6 +2223,7 @@ function enterServiceWorkspace(serviceKey) {
 
 function enterAnalyzeMode(packId, env) {
   if (!packId) return;
+  navGeneration++;
   state.mode = 'single';
   state.selectedPackId = packId;
   state.selectedEnv    = env || defaultEnvFor(packId);
@@ -2035,7 +2261,7 @@ function enterCompareMode(aId, aEnv, bId, bEnv) {
 function applyModeChrome() {
   // The BUILD journey hides the pack controls like home does: there is no
   // pack until VERIFY's "Open pack in Discover" (with visible gaps, or without) registers one.
-  const isHome = state.mode === 'home' || state.mode === 'build';
+  const isHome = state.mode === 'home' || state.mode === 'build' || state.mode === 'service';
   updateObservaServiceChip();
   // Under the OBSERVA chrome the pack/env selectors are PINNED as a
   // permanent master row — they are the user's primary controls and
@@ -2181,6 +2407,7 @@ function restoreBuildDraft(saved) {
 }
 
 export function enterBuildMode(step) {
+  navGeneration++;
   state.mode = 'build';
   state.activeCardKey = null;
   // The step clamped to what is reachable now; a demoted step (VERIFY before the
@@ -2206,7 +2433,16 @@ function exitBuildMode() {
   if (state.mode !== 'build') return;
   state.build.editor = null;   // the pop-up editor is UI state of the journey; the render that follows clears its host
   if (state.selectedPackId) { state.mode = 'single'; state.view = 'layers'; enterAnalyzeMode(state.selectedPackId, state.selectedEnv); return; }
+  // Opened from a service page (no pack was open): back to that page.
+  if (state.serviceId) { enterServicePage(state.serviceId, state.serviceEnv); return; }
   goHome();
+}
+
+// Where leaving Build goes, said plainly: the open pack, the service page it was opened from, or home.
+function buildExitLabel() {
+  if (state.selectedPackId) return 'Back to the open pack';
+  if (state.serviceId) return `Back to ${findServiceRecord(state.serviceId)?.name || 'the service'}`;
+  return 'Back to home';
 }
 
 // `todo` (a todo path) lands the step on that todo instead of its top — a card's
@@ -2741,7 +2977,7 @@ function renderBuildView(view) {
   const exitBar = document.createElement('div');
   exitBar.className = 'build-exit';
   // Where leaving goes, said plainly: the open pack, or home (where the journeys are chosen).
-  exitBar.innerHTML = `<button type="button" class="build-exit-btn" title="Leave the Build journey — your definition is kept">← ${state.selectedPackId ? 'Back to the open pack' : 'Back to home'}</button>`;
+  exitBar.innerHTML = `<button type="button" class="build-exit-btn" title="Leave the Build journey — your definition is kept">← ${escapeHtml(buildExitLabel())}</button>`;
   exitBar.querySelector('button').addEventListener('click', exitBuildMode);
   const def = document.createElement('aside');
   def.className = 'build-def';
@@ -2865,10 +3101,16 @@ function packPickerRowsHtml() {
 // ============================================================
 function renderDiscoverEmpty(view) {
   const pickerRows = packPickerRowsHtml();
+  // Opened from a service page with no pack (design §5.4): one sentence for
+  // the rank — an operator is offered Build with DEFINE prefilled, a viewer
+  // told who registers one.
+  const bound = state.serviceId ? findServiceRecord(state.serviceId) : null;
+  const note = discoverEmptyNote({ service: bound, env: state.serviceEnv, access: state.access });
   view.innerHTML = `
     <section class="discover-empty">
       <header class="discover-empty-head">
         <h2 class="discover-empty-title">What do we have?</h2>
+        ${note ? `<p class="discover-empty-service" id="discover-empty-service">${escapeHtml(note.text)}${note.build ? ' <button type="button" class="ux-secondary-btn" id="discover-empty-build">Build one</button>' : ''}</p>` : ''}
         <p class="discover-empty-lede">
           Load or generate an ObservabilityPack to draw its observogram — the
           per-layer inventory of every contract, signal, dashboard, alert
@@ -2932,6 +3174,7 @@ function renderDiscoverEmpty(view) {
   view.querySelectorAll('.discover-load-card').forEach(card => {
     card.onclick = () => $(proxy[card.dataset.load])?.click();
   });
+  view.querySelector('#discover-empty-build')?.addEventListener('click', () => openBuild({ serviceId: state.serviceId, env: state.serviceEnv }));
   wirePackPickerRows(view);
 }
 

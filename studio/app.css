@@ -4503,6 +4503,9 @@ a:hover { color: var(--ink); }
    ============================================================ */
 body[data-mode="home"] .meta { display: none; }
 body[data-mode="home"] .tabs { display: none; }
+/* The service page (STORE_PLAN §6, slice 6a) hides the pack chrome as home does. */
+body[data-mode="service"] .meta { display: none; }
+body[data-mode="service"] .tabs { display: none; }
 body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
 
 /* ===================== HOME — PREMIUM FINTECH ===================== */
@@ -6874,6 +6877,7 @@ body.chrome-observa .hdr {
   padding: 10px 28px;
 }
 body.chrome-observa[data-mode="home"] .hdr { display: none !important; }
+body.chrome-observa[data-mode="service"] .hdr { display: none !important; }
 
 /* Meta strip stays hidden under the chrome for now — the audit
    content carries that detail. */
@@ -7946,6 +7950,14 @@ body.chrome-observa .disco {
   white-space: nowrap;
 }
 .observa-service[hidden] { display: none; }
+/* The chip is a button when it resolves a service record (back to its page): the control's own look, as a button. */
+button.observa-service {
+  font: inherit;
+  cursor: pointer;
+  color: inherit;
+}
+button.observa-service:hover { background: color-mix(in srgb, var(--CMP) 18%, transparent); }
+button.observa-service:focus-visible { outline: 2px solid var(--CMP); outline-offset: 2px; }
 
 /* Stage 2 tenancy — active-org indicator/switcher in the header */
 .hdr-org { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; }
@@ -9060,8 +9072,196 @@ select.build-edit-input { appearance: auto; }
 .svc-catalogue { margin-top: 22px; }
 .svc-catalogue .home-pick-row { width: 100%; }
 
+/* The service page (design §5): the breadcrumb bar, the head (the name in the serif, the slug in the mono, the
+   facts in --ink-3), the environments as tabs — the selected one is --ink with a --CMP border below it: the
+   border carries the accent, never the text — the panel as a definition list (labels --ink-3, values --ink),
+   the MCP endpoint in the mono as name · origin, the four actions in the ctrl-btn idiom, the packs linked. */
+/* The chrome zeroes #layer-view's padding and each screen pads its own root (ux.css): the page carries the gutter. */
+.svc-page {
+  max-width: 1096px;
+  margin: 0 auto;
+  padding: 24px 28px 80px;
+}
+.svc-page-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.svc-page-back {
+  font: 500 13.5px/1.2 var(--sans);
+  color: var(--ink-2);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.svc-page-back:hover { color: var(--ink); border-color: var(--ink-3); background: var(--hover); }
+.svc-page-head { margin-bottom: 22px; }
+.svc-page-name {
+  margin: 0;
+  font: 600 28px/1.2 var(--serif);
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  outline: none;
+}
+.svc-page-name:focus-visible { outline: 2px solid var(--CMP); outline-offset: 4px; border-radius: 4px; }
+.svc-page-slug {
+  display: inline-block;
+  margin-top: 6px;
+  font: 13px/1.3 var(--mono);
+  color: var(--ink-3);
+}
+.svc-page-facts {
+  margin: 8px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+.svc-page-desc {
+  margin: 10px 0 0;
+  max-width: 68ch;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+.svc-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 16px;
+}
+.svc-tab {
+  font: 600 13.5px/1.2 var(--mono);
+  color: var(--ink-3);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: color .15s ease, border-color .15s ease;
+}
+.svc-tab:hover { color: var(--ink-2); }
+.svc-tab[aria-selected="true"] { color: var(--ink); border-bottom: 2px solid var(--CMP); }
+.svc-tab:focus-visible { outline: 2px solid var(--CMP); outline-offset: -2px; border-radius: 4px; }
+.svc-panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 20px;
+  outline: none;
+}
+.svc-panel:focus-visible { outline: 2px solid var(--CMP); outline-offset: 2px; }
+.svc-panel-facts { margin: 0; }
+.svc-panel-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 160px) 1fr;
+  gap: 6px 18px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line-2);
+}
+.svc-panel-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.svc-panel-row:first-child { padding-top: 0; }
+.svc-panel-row dt {
+  font: 600 12px/1.6 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.svc-panel-row dd {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.svc-panel-verdict .svc-verdict { font-size: 13.5px; }
+.svc-env-mcp { font: 13.5px/1.6 var(--mono); color: var(--ink-2); }
+.svc-env-mcp-name { font-weight: 600; }
+.svc-env-mcp-none, .svc-env-pack-none, .svc-panel-drift dd { color: var(--ink-2); }
+.svc-env-bindings {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+}
+.svc-env-bindings div { display: flex; gap: 6px; align-items: baseline; }
+.svc-env-bindings dt { font: 12.5px/1.6 var(--mono); color: var(--ink-3); text-transform: none; letter-spacing: 0; }
+.svc-env-bindings dd { margin: 0; font: 13.5px/1.6 var(--mono); color: var(--ink); }
+.svc-env-links a {
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.svc-env-links a:hover { color: var(--ink); }
+.svc-env-pack-how { color: var(--ink-3); }
+.svc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 18px 0 30px;
+}
+.svc-action {
+  font: 600 13.5px/1.2 var(--sans);
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 16px;
+  cursor: pointer;
+  text-align: left;
+}
+.svc-action:hover { border-color: var(--ink-3); background: var(--hover); }
+.svc-action:focus-visible { outline: 2px solid var(--CMP); outline-offset: 2px; }
+.svc-action.is-build { margin-left: auto; color: var(--ink-2); }
+.svc-action.is-unavailable { opacity: .55; cursor: not-allowed; }
+.svc-action.is-unavailable:hover { border-color: var(--line); background: var(--card); }
+.svc-action .svc-why { font-size: 12px; margin-top: 4px; }
+.svc-packs-title {
+  margin: 0 0 10px;
+  font: 600 16px/1.3 var(--serif);
+  color: var(--ink);
+}
+.svc-pack-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.svc-pack-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+}
+.svc-pack-row.is-current { border-left: 3px solid var(--CMP); }
+.svc-pack-label { font: 600 14px/1.4 var(--sans); color: var(--ink); }
+.svc-pack-meta { font: 12.5px/1.4 var(--mono); color: var(--ink-3); }
+.svc-pack-current {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font: 600 11px/1.5 var(--mono);
+  color: var(--ink-2);
+}
+.svc-pack-open { margin-left: auto; }
+.svc-pack-gone { margin-left: auto; font: 12.5px/1.4 var(--mono); color: var(--ink-3); }
+.svc-packs-none { margin: 0; font-size: 14px; line-height: 1.5; color: var(--ink-3); }
+.svc-noenv code { font: 12.5px/1.6 var(--mono); color: var(--ink-2); }
+@media (max-width: 720px) {
+  .svc-page { padding: 16px 16px 64px; }
+  .svc-panel-row { grid-template-columns: 1fr; gap: 2px; }
+  .svc-action.is-build { margin-left: 0; }
+  .svc-pack-open, .svc-pack-gone { margin-left: 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .svc-card { transition: none; animation: none; }
+  .svc-card, .svc-tab { transition: none; animation: none; }
 }
 
 /* The no-org home: a signed-in user in no organisation sees the server's refusal (a ux-kit empty state) and a

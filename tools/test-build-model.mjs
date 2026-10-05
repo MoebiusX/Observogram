@@ -979,6 +979,8 @@ test('the persisted build draft is inputs only — never the result, the preview
     assert.deepEqual([r.step, r.seeded], [step, seeded], `${legacy} → ${step}, seeded ${seeded} (a pre-seed draft past DEFINE was seeded in all but name)`);
   }
   assert.deepEqual([restore({ step: 'nonsense' }).step, restore({ step: 'compile', seeded: false }).seeded, restore({ tier: 'tier-9' }).tier, restore(null).step], ['define', false, 'tier-2', 'define'], 'an unknown step or tier falls to the default; an explicit seeded=false is kept; no draft is the defaults');
+  // The origin record of a Build opened from a service page (slice 6a): a positive integer id or nothing.
+  assert.deepEqual([restore({ serviceId: 7 }).serviceId, restore({ serviceId: '7' }).serviceId, restore({ serviceId: 0 }).serviceId, restore({}).serviceId], [7, null, null, null]);
 });
 
 test('build-api loaders: the paths and bodies the six routes take, with an injected fetcher', async () => {

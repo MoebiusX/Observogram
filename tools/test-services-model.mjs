@@ -15,11 +15,12 @@ import {
   TIERS, TIER_BY_PACK, accessModel, verdictModel, verdictKey, newestPack, packForService, serviceCardModel, agoText,
   buildServicesHomeModel, buildServicePageModel, servicesSelectModel, buildHandoffPlan, buildDefineOriginNote,
   buildServicePatch, buildNoOrgModel, servicesStatusOf, persistedStateKey, recentServicesKey,
+  serviceChipModel, discoverEmptyNote, buildPrefillFromService,
 } from '../studio/services-model.mjs';
 import { servicesRefusal, loadOrgs, loadServices, loadService, loadVerdict, patchService, verdictLoader } from '../studio/services-api.mjs';
 import { WAYS } from '../server/service-admin.mjs';
-import { persistence } from '../studio/state.mjs';
-import { renderNoOrgHome, renderServicesHome, markUnavailable } from '../studio/services-view.mjs';
+import { persistence, state, defaultBuildState, BUILD_PERSIST_FIELDS } from '../studio/state.mjs';
+import { renderNoOrgHome, renderServicesHome, renderServicePage, wireServiceTabs, markUnavailable } from '../studio/services-view.mjs';
 import { readFileSync } from 'node:fs';
 
 // ---------- fixtures ----------
@@ -243,7 +244,7 @@ test('buildServicePageModel: tabs, the selected panel (verdict, endpoint as name
   const withUrl = { ...orders, environments: orders.environments.map((e) => (e.mcpEndpoint ? { ...e, mcpEndpoint: { ...e.mcpEndpoint, url: 'https://x/secret?token=1' } } : e)) };
   const m = buildServicePageModel({ service: withUrl, envName: 'prod', verdicts, catalog, access: operator, orgName: 'Acme', isLiveAggregatePack });
   assert.deepEqual([m.id, m.slug, m.name, m.description], [1, 'orders-api', 'Orders API', 'Order intake and payment hand-off']);
-  assert.deepEqual(m.facts, { tierText: 'tier-2', ownersText: 'team-orders, sre-platform', packsText: '3 packs' });
+  assert.deepEqual(m.facts, { tierText: 'tier-2 (service)', ownersText: 'team-orders, sre-platform', packsText: '3 packs' });
   assert.deepEqual(m.tabs, [{ id: 11, name: 'prod', selected: true }, { id: 12, name: 'staging', selected: false }, { id: 13, name: 'dev', selected: false }]);
   assert.equal(m.panel.env.id, 11);
   assert.equal(m.panel.verdict.text, 'Conformant · 92% · tier-2 (service)');
@@ -253,7 +254,9 @@ test('buildServicePageModel: tabs, the selected panel (verdict, endpoint as name
   assert.deepEqual(m.panel.links, [['dashboard', 'https://grafana.example/d/orders'], ['runbook', 'https://wiki.example/orders']], 'the javascript: fixture is dropped');
   assert.deepEqual(m.panel.pack, { id: 'uploaded-orders-api-aaaa', label: 'Orders API (library)', version: '1.4', source: 'library', how: 'primary' });
   assert.deepEqual(m.actions.map((a) => [a.view, a.label, a.enabled]), [['layers', 'Discover', true], ['compare', 'Diagnose', true], ['compile', 'Remediate', true], ['build', 'Build a pack for prod', true]]);
-  assert.deepEqual(m.packs.map((p) => [p.id, p.role, p.current]), [['uploaded-orders-api-aaaa', 'primary', true], ['uploaded-orders-api-zzzz', 'primary', false], ['uploaded-live-agg-1111', 'member', false]], 'current marks the newest primary, not the first by id');
+  assert.deepEqual(m.packs.map((p) => [p.id, p.role, p.current, p.inCatalogue]), [['uploaded-orders-api-aaaa', 'primary', true, true], ['uploaded-orders-api-zzzz', 'primary', false, true], ['uploaded-live-agg-1111', 'member', false, true]], 'current marks the newest primary, not the first by id');
+  assert.equal(buildServicePageModel({ service: orders, envName: 'prod', catalog: catalog.slice(2), isLiveAggregatePack }).packs[1].inCatalogue, false, 'a link to a pack no longer in the catalogue is listed, not openable');
+  assert.match(m.panel.driftNote, /^Drift runs: Neuron/, 'the verdict is the conformance report only; drift runs are named, not folded in (D3)');
   assert.equal(m.canEdit, true);
   assert.equal(m.noEnvironments, null);
   // A tab the pack does not declare: the base grade; an environment with its own tier; the unbound endpoint names the way out.
@@ -278,6 +281,7 @@ test('buildServicePageModel: tabs, the selected panel (verdict, endpoint as name
   assert.deepEqual(none.noEnvironments, { text: 'No environments yet. Register a pack that declares one — Build (its DEFINE environment becomes a row), a scan, a draft or an upload — and it appears here.', apiLine: 'POST /api/services/2/environments { "name": "prod" }' });
   assert.equal(none.actions[3].label, 'Build a pack');
   assert.equal(none.panel.tierLine, `${TIER_BY_PACK} — neither the service nor the environment sets a tier`);
+  assert.equal(none.facts.tierText, TIER_BY_PACK);
   const noneV = buildServicePageModel({ service: bare, access: viewer, orgName: 'Acme' });
   assert.deepEqual(noneV.noEnvironments, { text: 'No environments yet. An operator registers a pack that declares one (Build, a scan, a draft or an upload) — your role in Acme is viewer.', apiLine: null });
   // One environment, member pack only: the aggregate row is current and the verdict says so without a fetch.
@@ -697,4 +701,193 @@ test('verdictLoader: at most `concurrency` reports in flight, one promise per (p
   assert.deepEqual(await c, { conformant: false });
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(pool.pending(), 0);
+});
+
+// ---------- the service page: the chip, the empty Discover, the Build prefill ----------
+
+test('serviceChipModel: a record → a button back to its page; a derived-only key → today\'s label; nothing active → hidden', () => {
+  assert.deepEqual(serviceChipModel({ services: [orders, bare], selected: 'orders-api', derivedLabel: 'orders api' }), { kind: 'record', label: 'Orders API', serviceId: 1 });
+  assert.deepEqual(serviceChipModel({ services: [orders], selected: 'payment-service', derivedLabel: 'payment service' }), { kind: 'derived', label: 'payment service', serviceId: null });
+  assert.deepEqual(serviceChipModel({ services: null, selected: 'payment-service', derivedLabel: 'payment service' }), { kind: 'derived', label: 'payment service', serviceId: null }, 'the table unavailable: the derived label');
+  assert.deepEqual(serviceChipModel({ services: [orders], selected: 'nothing', derivedLabel: null }), { kind: 'none', label: '', serviceId: null });
+  assert.deepEqual(serviceChipModel({ services: [orders], selected: null, derivedLabel: 'x' }), { kind: 'none', label: '', serviceId: null });
+});
+
+test('discoverEmptyNote: the sentence by rank — an operator is offered Build, a viewer told who registers; nothing without a service', () => {
+  assert.equal(discoverEmptyNote({ service: null }), null);
+  assert.deepEqual(discoverEmptyNote({ service: orders, env: 'prod', access: OPERATOR }), { text: 'No pack for Orders API (prod) yet — scan its repository, draft from its MCP, upload one, or Build one (the DEFINE step is prefilled).', build: true });
+  assert.deepEqual(discoverEmptyNote({ service: orders, env: null, access: null }), { text: 'No pack for Orders API yet — scan its repository, draft from its MCP, upload one, or Build one (the DEFINE step is prefilled).', build: true }, 'no access known (a bundle, the unknown posture): the server decides');
+  const v = discoverEmptyNote({ service: orders, env: 'prod', access: VIEWER });
+  assert.deepEqual(v, { text: 'No pack for Orders API (prod) yet — an operator scans, drafts, uploads or builds one; you can read the catalogue packs on the home.', build: false });
+  assert.ok(!/\byou (scan|upload|build)\b/i.test(v.text), 'the viewer is never told to scan, upload or Build');
+});
+
+test('buildPrefillFromService: an empty draft takes the record (name, owners, tier, the tab\'s environment, the origin id); a draft in progress is kept and said so', () => {
+  const empty = defaultBuildState();
+  const p = buildPrefillFromService(empty, orders, 'staging');
+  assert.deepEqual(p, { apply: true, note: null, patch: { name: 'Orders API', owners: 'team-orders, sre-platform', tier: 'tier-2', environment: 'staging', serviceId: 1 } });
+  assert.deepEqual(buildPrefillFromService(empty, bare, null).patch, { name: 'Ledger', owners: '', tier: 'tier-2', environment: 'prod', serviceId: 2 }, 'a record with no tier keeps the draft\'s default; no environment keeps the draft\'s');
+  const busy = { ...empty, name: 'Payments', owners: 'team-pay', seeded: true };
+  const kept = buildPrefillFromService(busy, orders, 'prod');
+  assert.equal(kept.apply, false);
+  assert.equal(kept.note, 'Your Build draft is kept — its DEFINE fields are as you left them; edit them to start from Orders API.');
+  const same = buildPrefillFromService({ ...empty, name: 'Orders API', owners: 'team-orders, sre-platform', tier: 'tier-2', environment: 'prod', seeded: true }, orders, 'prod');
+  assert.deepEqual([same.apply, same.note], [false, null], 'the same fields: nothing to say');
+  assert.ok(BUILD_PERSIST_FIELDS.includes('serviceId') && 'serviceId' in empty && empty.serviceId === null, 'the origin id persists with the draft');
+});
+
+// A headless container for the service page: the markup as a string, every <button> wired by the renderer read
+// back from it (id, class, role, data-*) so a click or a key can be fired without a DOM.
+function pageContainer() {
+  let html = '';
+  let els = [];
+  const fakeEl = (attrs, id, className, role) => {
+    const handlers = {};
+    const el = {
+      dataset: attrs, id, className, role, hidden: false, focused: false, attrs: {},
+      classList: { add(c) { if (!el.className.includes(c)) el.className += ` ${c}`; }, contains(c) { return el.className.split(/\s+/).includes(c); } },
+      setAttribute(k, v) { el.attrs[k] = v; }, getAttribute(k) { return el.attrs[k] ?? null; }, removeAttribute(k) { delete el.attrs[k]; },
+      why: null,
+      querySelector(sel) { return sel === '.svc-why' ? el.why : null; },
+      insertAdjacentHTML(_pos, markup) { if (/svc-why/.test(markup)) el.why = { textContent: '' }; },
+      addEventListener: (t, fn) => { handlers[t] = fn; }, fire: (t, ev = {}) => handlers[t]?.(ev),
+      focus() { el.focused = true; c.focused = el; },
+      closest(sel) { return sel === '[role="tab"]' && el.role === 'tab' ? el : null; },
+    };
+    return el;
+  };
+  const c = {
+    focused: null,
+    get innerHTML() { return html; },
+    set innerHTML(v) {
+      html = v;
+      els = [...v.matchAll(/<button type="button"([^>]*)>/g)].map((m) => {
+        const attrs = Object.fromEntries([...m[1].matchAll(/data-([\w-]+)="([^"]*)"/g)].map((a) => [a[1].replace(/-([a-z])/g, (_, ch) => ch.toUpperCase()), a[2].replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')]));
+        const id = (m[1].match(/\bid="([^"]+)"/) || [])[1] || null;
+        const className = (m[1].match(/\bclass="([^"]*)"/) || [])[1] || '';
+        const role = (m[1].match(/\brole="([^"]+)"/) || [])[1] || null;
+        return fakeEl(attrs, id, className, role);
+      });
+      const tabs = els.filter((e) => e.role === 'tab');
+      const tablistHandlers = {};
+      c.tablist = /class="svc-tabs" role="tablist"/.test(v) ? {
+        querySelectorAll: (sel) => (sel === '[role="tab"]' ? tabs : []),
+        addEventListener: (t, fn) => { tablistHandlers[t] = fn; },
+        key: (key, from) => tablistHandlers.keydown?.({ key, target: from, preventDefault() { c.prevented = (c.prevented || 0) + 1; } }),
+      } : null;
+    },
+    querySelector(sel) {
+      if (sel === '.svc-tabs') return c.tablist;
+      const m = /^#([\w-]+)$/.exec(sel);
+      return m ? els.find((e) => e.id === m[1]) || null : null;
+    },
+    querySelectorAll(sel) { return sel === '.svc-pack-open' ? els.filter((e) => /\bsvc-pack-open\b/.test(e.className)) : []; },
+    byId: (id) => els.find((e) => e.id === id) || null,
+    tabs: () => els.filter((e) => e.role === 'tab'),
+  };
+  return c;
+}
+
+test('renderServicePage: the head, the tabs with the selected one marked, the panel — the endpoint as name · origin only, http(s) links with rel="noopener noreferrer", the pack, the drift note — the four actions bound to the service and the environment, the packs linked; escaped at the seam', () => {
+  const verdicts = { 'uploaded-orders-api-aaaa::prod': report() };
+  const nasty = { ...orders, name: 'Orders <img src=x onerror="window.__xss=1">', description: 'Hand-off <b>x</b>',
+    environments: orders.environments.map((e) => (e.mcpEndpoint ? { ...e, mcpEndpoint: { ...e.mcpEndpoint, url: 'https://mcp.example/secret/path?token=1' } } : e)) };
+  const m = buildServicePageModel({ service: nasty, envName: 'prod', verdicts, catalog, access: OPERATOR, orgName: 'Acme', isLiveAggregatePack });
+  const c = pageContainer();
+  const calls = [];
+  const host = { services: { home: () => calls.push(['home']), selectEnv: (n) => calls.push(['selectEnv', n]), openIn: (v, b) => calls.push(['openIn', v, b]), openBuild: (b) => calls.push(['openBuild', b]), openPack: (id, env) => calls.push(['openPack', id, env]), explain: (r) => calls.push(['explain', r]) } };
+  renderServicePage(c, m, host);
+  const h = c.innerHTML;
+  assert.ok(h.includes('<section class="svc-page" aria-labelledby="svc-page-name">'));
+  assert.ok(h.includes('<h1 class="svc-page-name" id="svc-page-name" tabindex="-1">Orders &lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;</h1>') && !h.includes('<img'), 'the name is escaped — nothing from it reaches the page');
+  assert.ok(h.includes('<span class="svc-page-slug">orders-api</span>'));
+  assert.ok(h.includes('<p class="svc-page-facts">tier-2 (service) · team-orders, sre-platform · 3 packs</p>'));
+  assert.ok(h.includes('<p class="svc-page-desc">Hand-off &lt;b&gt;x&lt;/b&gt;</p>'));
+  // The tabs: a tablist, the selected one aria-selected with tabindex 0, the others -1, each controlling the panel.
+  assert.ok(h.includes('<div class="svc-tabs" role="tablist" aria-label="Environments">'));
+  assert.deepEqual(c.tabs().map((t) => [t.dataset.env, t.id]), [['prod', 'svc-tab-11'], ['staging', 'svc-tab-12'], ['dev', 'svc-tab-13']]);
+  assert.match(h, /id="svc-tab-11"[^>]*aria-selected="true"[^>]*aria-controls="svc-env-11"[^>]*tabindex="0"/);
+  assert.match(h, /id="svc-tab-12"[^>]*aria-selected="false"[^>]*tabindex="-1"/);
+  assert.ok(h.includes('<div class="svc-panel" id="svc-env-11" aria-labelledby="svc-tab-11" role="tabpanel" tabindex="0">'));
+  // The panel: the verdict pill with its text; the endpoint as name · origin and nothing past the origin — the fixture\'s URL carries a path and a token.
+  assert.ok(h.includes('<span class="svc-verdict is-pass">Conformant · 92% · tier-2 (service)</span>'));
+  assert.ok(h.includes('<span class="svc-env-mcp-name">prod-grafana-mcp</span> · <span class="svc-env-mcp-origin">https://mcp.example</span>'));
+  assert.ok(!h.includes('secret') && !h.includes('token=1') && !h.includes('mcp.example/'), 'never the URL, nothing past the origin');
+  assert.ok(h.includes('<dd>tier-2 — the service&#39;s (no environment override)</dd>'));
+  assert.ok(h.includes('<dl class="svc-env-bindings"><div><dt>cluster</dt><dd>eks-eu-1</dd></div><div><dt>namespace</dt><dd>orders</dd></div></dl>'));
+  assert.ok(h.includes('<a href="https://grafana.example/d/orders" target="_blank" rel="noopener noreferrer">dashboard ↗</a>'));
+  assert.ok(!h.includes('javascript:'), 'the javascript: endpoint is not linked');
+  assert.ok(h.includes('<span class="svc-env-pack">Orders API (library) v1.4 <span class="svc-env-pack-how">(current primary · library)</span></span>'));
+  assert.ok(h.includes('<dt>Drift runs</dt><dd>Drift runs: Neuron (Advanced) keeps the saved journeys and their runs — not part of this verdict.</dd>'));
+  // The four actions, bound to the service and the environment; Build is usable for an operator.
+  assert.deepEqual(['svc-action-discover', 'svc-action-diagnose', 'svc-action-remediate', 'svc-action-build'].map((id) => c.byId(id)?.dataset.view), ['layers', 'compare', 'compile', 'build']);
+  assert.equal(c.byId('svc-action-build').getAttribute('aria-disabled'), null);
+  c.byId('svc-action-discover').fire('click');
+  c.byId('svc-action-remediate').fire('click');
+  c.byId('svc-action-build').fire('click');
+  c.byId('svc-page-back').fire('click');
+  assert.deepEqual(calls, [['openIn', 'layers', { serviceId: 1, env: 'prod' }], ['openIn', 'compile', { serviceId: 1, env: 'prod' }], ['openBuild', { serviceId: 1, env: 'prod' }], ['home']]);
+  // Packs linked: every row, the current one marked, each opens on its own at the tab\'s environment.
+  assert.ok(h.includes('Packs linked to this service (3)'));
+  assert.match(h, /<li class="svc-pack-row is-current" data-pack-id="uploaded-orders-api-aaaa">[\s\S]*?<span class="svc-pack-current">current<\/span>/);
+  assert.equal((h.match(/svc-pack-current/g) || []).length, 1, 'one current');
+  calls.length = 0;
+  c.querySelectorAll('.svc-pack-open')[1].fire('click');
+  assert.deepEqual(calls, [['openPack', 'uploaded-orders-api-zzzz', 'prod']]);
+  // The tabs: a click selects; ArrowRight / ArrowLeft / Home / End move the focus and select.
+  calls.length = 0;
+  const [prod, staging, dev] = c.tabs();
+  staging.fire('click');
+  c.tablist.key('ArrowRight', prod);
+  c.tablist.key('ArrowLeft', prod);
+  c.tablist.key('End', staging);
+  c.tablist.key('Home', dev);
+  c.tablist.key('Enter', dev);
+  assert.deepEqual(calls, [['selectEnv', 'staging'], ['selectEnv', 'staging'], ['selectEnv', 'dev'], ['selectEnv', 'dev'], ['selectEnv', 'prod']]);
+  assert.equal(c.prevented, 4, 'the arrow keys are consumed; Enter is left to the button');
+  assert.equal(c.focused, prod, 'Home moved the focus to the first tab');
+});
+
+test('renderServicePage: a viewer gets Build drawn aria-disabled with the reason (the click explains) and no Edit; a record with no environments gets the rank-worded line; a headless host never throws', () => {
+  const c = pageContainer();
+  const calls = [];
+  renderServicePage(c, buildServicePageModel({ service: orders, envName: 'staging', catalog, access: VIEWER, orgName: 'Acme', isLiveAggregatePack }), { services: { explain: (r) => calls.push(r), openBuild: () => calls.push('BUILD') } });
+  const build = c.byId('svc-action-build');
+  assert.equal(build.getAttribute('aria-disabled'), 'true');
+  assert.ok(build.classList.contains('is-unavailable'));
+  assert.equal(build.why.textContent, VIEWER.reason);
+  build.fire('click');
+  assert.deepEqual(calls, [VIEWER.reason], 'the click explains, never opens Build');
+  assert.ok(!c.innerHTML.includes('svc-edit'), 'a viewer has no Edit (the editor is the next commit\'s; it is drawn for operators only)');
+  assert.ok(c.innerHTML.includes('Base grade (no staging overlay in the pack)') === false, 'the verdict for a tab not yet read is Loading…');
+  assert.ok(c.innerHTML.includes('<span class="svc-verdict is-loading">Loading…</span>'));
+  // No environments: the status line for the rank, no tablist, the actions with the service only.
+  const c2 = pageContainer();
+  renderServicePage(c2, buildServicePageModel({ service: bare, access: OPERATOR, orgName: 'Acme' }), { services: {} });
+  assert.ok(c2.innerHTML.includes('<p class="svc-status svc-noenv" role="status">No environments yet. Register a pack that declares one') && c2.innerHTML.includes('<code>POST /api/services/2/environments { &quot;name&quot;: &quot;prod&quot; }</code>'));
+  assert.equal(c2.tablist, null);
+  assert.ok(c2.innerHTML.includes('No pack yet for this service'));
+  assert.ok(c2.innerHTML.includes('None yet — a register'));
+  assert.doesNotThrow(() => { c2.byId('svc-action-discover').fire('click'); c2.byId('svc-action-build').fire('click'); c2.byId('svc-page-back').fire('click'); });
+  const c3 = pageContainer();
+  renderServicePage(c3, buildServicePageModel({ service: bare, access: VIEWER, orgName: 'Acme' }), { services: {} });
+  assert.ok(c3.innerHTML.includes('An operator registers a pack that declares one') && !c3.innerHTML.includes('<code>'));
+  // wireServiceTabs alone tolerates no tablist.
+  assert.doesNotThrow(() => wireServiceTabs(null, () => {}));
+});
+
+test('the service page persists: mode, serviceId and serviceEnv are in the snapshot, the draft\'s origin id with the Build fields', () => {
+  const store = fakeStorage();
+  withStorage(store, () => {
+    persistence.scope('oscar', 'acme');
+    const before = { mode: state.mode, serviceId: state.serviceId, serviceEnv: state.serviceEnv, buildServiceId: state.build.serviceId };
+    state.mode = 'service'; state.serviceId = 7; state.serviceEnv = 'prod'; state.build.serviceId = 7;
+    persistence.resume();
+    persistence.write();
+    persistence.suspend();
+    const snap = JSON.parse(store.getItem('studioState.v2:oscar:acme'));
+    assert.deepEqual([snap.mode, snap.serviceId, snap.serviceEnv, snap.build.serviceId], ['service', 7, 'prod', 7]);
+    state.mode = before.mode; state.serviceId = before.serviceId; state.serviceEnv = before.serviceEnv; state.build.serviceId = before.buildServiceId;
+    persistence.clear();
+  });
 });

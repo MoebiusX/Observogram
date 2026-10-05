@@ -227,6 +227,7 @@ export function restoreBuildDraft(saved, defaults, fields) {
     if (k === 'slis' && Array.isArray(v)) { next.slis = v.filter(x => typeof x === 'string'); continue; }
     if (k === 'step') { const step = LEGACY_STEP[v] || v; if (BUILD_STEPS.includes(step)) next.step = step; continue; }
     if (k === 'tier') { if (TIERS.includes(v)) next.tier = v; continue; }
+    if (k === 'serviceId') { if (Number.isInteger(v) && v > 0) next.serviceId = v; continue; }
     if (['name', 'owners', 'environment', 'registeredId'].includes(k) && typeof v === 'string') next[k] = v;
   }
   if (typeof src.seeded !== 'boolean' && ['compile', 'verify'].includes(LEGACY_STEP[src.step] || src.step)) next.seeded = true;

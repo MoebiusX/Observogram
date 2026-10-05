@@ -289,20 +289,70 @@ export function buildServicePageModel({ service, envName = null, verdicts = {}, 
     env, verdict: selected ? selected.verdict : null, tierLine, mcp,
     bindings: Object.entries(env?.bindings && typeof env.bindings === 'object' ? env.bindings : {}),
     links: httpLinks(env?.endpoints), pack,
+    // The verdict is the conformance report only (design §4.3, D3): a saved
+    // journey's drift runs are another thing, named here, read under Neuron.
+    driftNote: 'Drift runs: Neuron (Advanced) keeps the saved journeys and their runs — not part of this verdict.',
   };
   const actions = [
     ...ACTIONS.map(([view, label]) => ({ view, label, enabled: true, reason: null })),
     { view: 'build', label: env ? `Build a pack for ${env.name}` : 'Build a pack', enabled: canWrite, reason: canWrite ? null : access.reason },
   ];
-  const packs = (service.packs || []).map((p) => ({ id: p.id, label: p.label ?? null, source: p.source ?? null, role: p.role, current: resolved.pack !== null && p.id === resolved.pack.id }));
+  const inCatalogue = new Set((Array.isArray(catalog) ? catalog : []).filter((p) => p && p.ok !== false).map((p) => p.id));
+  const packs = (service.packs || []).map((p) => ({ id: p.id, label: p.label ?? null, source: p.source ?? null, role: p.role, current: resolved.pack !== null && p.id === resolved.pack.id, inCatalogue: inCatalogue.has(p.id) }));
   const role = access?.role ?? 'viewer';
   const noEnvironments = envs.length ? null : (canWrite
     ? { text: 'No environments yet. Register a pack that declares one — Build (its DEFINE environment becomes a row), a scan, a draft or an upload — and it appears here.', apiLine: `POST /api/services/${service.id}/environments { "name": "prod" }` }
     : { text: `No environments yet. An operator registers a pack that declares one (Build, a scan, a draft or an upload) — your role in ${org} is ${role}.`, apiLine: null });
   return {
     id: service.id, slug: service.slug, name: service.name, description: service.description ?? null,
-    facts: { tierText: tierText(service.tier), ownersText: ownersText(service.owners), packsText: packsText(service.packs) },
+    facts: { tierText: service.tier ? `${service.tier} (service)` : TIER_BY_PACK, ownersText: ownersText(service.owners), packsText: packsText(service.packs) },
     tabs, panel, actions, packs, canEdit: canWrite, noEnvironments,
+  };
+}
+
+// ---------- the SERVICE chip, the empty Discover, the Build prefill ----------
+
+// The OBSERVA bar's SERVICE chip resolves the active service key against the
+// table: a record → a button back to its page (`record`); a key no record
+// covers (the table unavailable, a derived-only service) → today's
+// non-interactive label (`derived`, with the catalogue's label); nothing
+// active → hidden (`none`).
+export function serviceChipModel({ services = null, selected = null, derivedLabel = null } = {}) {
+  if (!selected) return { kind: 'none', label: '', serviceId: null };
+  const record = Array.isArray(services) ? services.find((s) => s.slug === selected) : null;
+  if (record) return { kind: 'record', label: record.name, serviceId: record.id };
+  if (derivedLabel) return { kind: 'derived', label: derivedLabel, serviceId: null };
+  return { kind: 'none', label: '', serviceId: null };
+}
+
+// Discover opened from a service page with no pack: one sentence worded for
+// the rank (design §5.4) — an operator is offered Build (DEFINE prefilled),
+// a viewer is told who registers one. null without a service.
+export function discoverEmptyNote({ service = null, env = null, access = null } = {}) {
+  if (!service) return null;
+  const where = `${service.name}${env ? ` (${env})` : ''}`;
+  if (access?.canWrite === false) {
+    return { text: `No pack for ${where} yet — an operator scans, drafts, uploads or builds one; you can read the catalogue packs on the home.`, build: false };
+  }
+  return { text: `No pack for ${where} yet — scan its repository, draft from its MCP, upload one, or Build one (the DEFINE step is prefilled).`, build: true };
+}
+
+// Build opened from a service page: DEFINE is prefilled from the record only
+// when the draft is empty (no name typed, not seeded) — a draft in progress
+// is never overwritten; `note` then says so when the fields differ. `patch`
+// is what the controller assigns onto state.build (the origin id included).
+export function buildPrefillFromService(build, service, env = null) {
+  const owners = Array.isArray(service?.owners) ? service.owners.join(', ') : '';
+  const patch = {
+    name: service?.name ?? '', owners, tier: service?.tier ?? build?.tier ?? 'tier-2',
+    environment: env ?? build?.environment ?? 'prod', serviceId: service?.id ?? null,
+  };
+  const empty = !build || ((build.name ?? '') === '' && !build.seeded);
+  if (empty) return { apply: true, patch, note: null };
+  const same = build.name === patch.name && build.owners === patch.owners && build.tier === patch.tier && build.environment === patch.environment;
+  return {
+    apply: false, patch,
+    note: same ? null : `Your Build draft is kept — its DEFINE fields are as you left them; edit them to start from ${service?.name ?? 'the service'}.`,
   };
 }
 
