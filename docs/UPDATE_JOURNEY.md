@@ -773,8 +773,8 @@ ones) so a deleted BAU backend or GOV import stays deleted; the `legacy.*`
 block is the designed exception and is refreshed. The one deliberate
 default-output change is the `legacy.scaffoldCount` value (the six
 shared-section markers now count: 9→15, 27→33, 29→35, 39→45), with the
-annotation key order preserved. Tests: 17 new (`tools/test-pack-conformance.mjs` 9,
-`tools/test-upconvert-merge.mjs` 8) plus one pin in `tools/test-legacy-pack.mjs`.
+annotation key order preserved. Tests: 847 → 864 (`tools/test-pack-conformance.mjs`
+9, `tools/test-upconvert-merge.mjs` 8) plus one pin in `tools/test-legacy-pack.mjs`.
 
 **Rebadge batch 2, B2b — the crawler emits canonical packs.** Delivered in
 `tools/lib/crawler.mjs`, `tools/crawl-repo.mjs`, `tools/lib/slug.mjs`
@@ -803,10 +803,10 @@ extensions, stated as such). Inference defaults stay unmarked (symmetry with
 the fetcher) and are a named follow-up. The hand-written mirrors of the
 schema's Slug / Duration / Binding / Criticality rules are pinned against the
 vendored `$defs`. Goldens: the validity commit byte-identical; the provenance
-and languages commits regenerated with the stated diffs. Tests: 857 → 858
+and languages commits regenerated with the stated diffs. Tests: 864 → 866
 (`tools/test-crawl-canonical.mjs`, one harness suite over three fixture
-repositories), plus pins in `tools/test-crawl.mjs` and
-`tools/test-pack-conformance.mjs`.
+repositories, and one more test in `tools/test-pack-conformance.mjs`), plus
+pins in `tools/test-crawl.mjs` and `tools/test-pack-conformance.mjs`.
 
 **B4 — Windows portability.** Delivered as tests, fixtures and docs only:
 `server/fixtures/platform.mjs` (`isWin32`, `isLinux`, `PLATFORM`, `win32Skip`,
@@ -837,7 +837,7 @@ a new reasoned skip site plus the README bump the guard forces. Config
 surface: none. Inert when unconfigured: on Linux every edited suite runs what
 it ran (every `skip` option is `false`), no module under `tools/lib`,
 `server/` runtime or `studio/` changes, so the goldens, `VENDOR-MANIFEST.json`
-and `studio/design-tokens.json` are untouched. Tests: 843 → 852
+and `studio/design-tokens.json` are untouched. Tests: 866 → 875
 (`tools/test-platform.mjs`; the three POSIX paragraphs now subtests or their
 own test). Expected on Windows — predicted from code reading, no Windows run exists
 yet: 19 `SKIP win32:` lines (18 `# SKIP win32:` from node:test, one
@@ -846,3 +846,17 @@ yet: 19 `SKIP win32:` lines (18 `# SKIP win32:` from node:test, one
 elevated runner sees the 4 symlink skips as tests it could run. Verified
 here by the Linux-runnable proofs only; the downstream's first Windows run
 is the acceptance.
+
+**Review fixes on the batch.** Fixed in place: `mergeUpconvert` creates a
+family's container on the first add only (a section the base removed stays
+removed), `--merge <base>` refuses an existing distinct `-o` without
+`--overwrite`, the unbrand escape hatch names its cmd and PowerShell forms,
+and an env-sourced brand's server-path refusal names the variable that was
+set. And the counts above: each item had quoted the total it measured alone
+on its parent (`843 → 847`, `17 new`, `857 → 858`, `843 → 852`), four
+numbers that cannot coexist on one branch; they are now the chain, measured
+per commit at each item's last commit, and `tools/test-doc-test-totals.mjs`
+keeps it so — within a section every `Tests:` note starts where the
+previous entry ends, and the CHANGELOG's `## Unreleased` pairs start from one
+total only and agree with the journey. Tests: 875 → 880 (two in
+`tools/test-upconvert-merge.mjs`, three in `tools/test-doc-test-totals.mjs`).
