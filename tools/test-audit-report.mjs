@@ -21,7 +21,8 @@
  * then review `git diff tools/fixtures/golden/audit-report/`.
  *
  * The CLI: the --no-timestamp document against the golden, the HTML, --out,
- * every flag, every refusal and the flag-documentation pin.
+ * every flag, every refusal and the flag-documentation pin. The Conformance
+ * view's two download anchors, rendered headless.
  *
  * Run: node --test tools/test-audit-report.mjs
  */
@@ -464,4 +465,49 @@ test('the CLI: every flag it accepts is in its usage, the packc help line, the R
   assert.ok(/fileURLToPath\(import\.meta\.url\)/.test(src) && !/\.pathname/.test(src));
   assert.ok(/case 'audit-report':\s*\n\s*delegate\('tools\/audit-report\.mjs', rest\)/.test(read('tools/cli.mjs')), 'packc dispatches it');
   assert.equal(JSON.parse(read('package.json')).scripts['audit-report'], 'node tools/audit-report.mjs');
+});
+
+// ---------- 4. the Conformance view's export links ----------
+
+// The DOM the view needs (tools/test-waivers.mjs renderHeadless's stub): an element with className, dataset,
+// innerHTML and the query/listener methods the wiring calls, each answering "nothing here".
+const stubElement = () => ({ className: '', dataset: {}, innerHTML: '', addEventListener() {}, querySelector() { return null; }, querySelectorAll() { return []; }, contains() { return false; } });
+async function renderConformanceHeadless({ packId, env = null, org = null }) {
+  globalThis.document = { createElement: stubElement };
+  try {
+    const { state } = await import('../studio/state.mjs');
+    const api = await import('../studio/api.mjs');
+    const { renderConformanceView } = await import('../studio/conformance-view.mjs');
+    const canonical = load(PAYMENT);
+    const report = evaluateConformance(canonical);
+    state.pack = adapt(canonical);
+    state.selectedPackId = packId;
+    state.selectedEnv = env;
+    state.conformance = { environment: env, ...report, tier: { graded: report.declaredTier, pack: report.declaredTier, from: 'pack', service: null, environment: null, mismatch: false } };
+    api.setActiveOrg(org);
+    return renderConformanceView().innerHTML;
+  } finally {
+    delete globalThis.document;
+  }
+}
+
+test('the Conformance view links the audit report: two download anchors (HTML, JSON) under the decision header for the focused pack and environment, org-scoped through orgQuery; none without a focused pack id (the headless capture of tools/test-waivers.mjs is unchanged)', async () => {
+  const html = await renderConformanceHeadless({ packId: 'uploaded-payment-service-1a2b3c4d', env: 'staging' });
+  const hrefs = [...html.matchAll(/<a class="ux-link-btn" href="([^"]+)" download>([^<]+)<\/a>/g)].map((m) => [m[1], m[2]]);
+  assert.deepEqual(hrefs, [
+    ['/api/packs/uploaded-payment-service-1a2b3c4d/audit-report?format=html&amp;download=1&amp;env=staging', 'Download HTML'],
+    ['/api/packs/uploaded-payment-service-1a2b3c4d/audit-report?format=json&amp;download=1&amp;env=staging', 'Download JSON'],
+  ]);
+  assert.ok(html.indexOf('class="conf-exports"') > html.indexOf('id="conf-decision"') && html.indexOf('class="conf-exports"') < html.indexOf('Conformance sections'), 'under the decision header, before the section nav');
+  const plain = await renderConformanceHeadless({ packId: 'payment-service' });
+  assert.ok(plain.includes('/api/packs/payment-service/audit-report?format=html&amp;download=1"'), 'no env, no org: the bare query');
+  const org = await renderConformanceHeadless({ packId: 'payment-service', org: 'acme' });
+  assert.ok(org.includes('/api/packs/payment-service/audit-report?format=json&amp;download=1&amp;org=acme"'), 'the active org rides on the href');
+  await renderConformanceHeadless({ packId: null, org: null });
+  const none = await renderConformanceHeadless({ packId: null });
+  assert.ok(!none.includes('conf-exports') && !none.includes('audit-report'), 'no focused pack id: no link (the headless capture renders this way)');
+  const src = read('studio/conformance-view.mjs');
+  assert.ok(/audit-report\?format=\$\{format\}&download=1.*orgQuery\('&'\)/.test(src), 'the href carries the org query (server/test-authz.mjs scans every /api navigation for it)');
+  assert.ok(!/from '\.\/app\.mjs'/.test(src), 'a view imports host.mjs, never app.mjs');
+  assert.ok(/^\.conf-exports \{/m.test(read('studio/app.css')), 'the zone rule lives with the other .conf-* rules');
 });

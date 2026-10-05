@@ -3408,6 +3408,12 @@ a:hover { color: var(--ink); }
   color: var(--ink-4);
 }
 
+/* The Conformance view's export links (GAP batch 2, B3.5): one row under the
+   decision header, drawn only with a focused pack id. */
+.conf-exports { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin: 10px 0 2px; font-size: 13px; color: var(--ink-2); }
+.conf-exports-label { font-weight: 600; color: var(--ink); }
+.conf-exports-note { flex-basis: 100%; }
+
 .conf-dim-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));

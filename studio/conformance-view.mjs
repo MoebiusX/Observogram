@@ -28,7 +28,8 @@
 // escapeHtml. The headline stays the engine's; `effective` sits beside it.
 
 import { state } from './state.mjs';
-import { effectiveFocus, focusedConformance, focusedPack } from './focus.mjs';
+import { effectiveFocus, focusedConformance, focusedEnv, focusedPack, focusedPackId } from './focus.mjs';
+import { orgQuery } from './api.mjs';
 import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { layerItemsFor } from './diagnostic-grade.mjs';
@@ -432,6 +433,22 @@ export function renderConformanceView() {
     ].filter(Boolean),
   });
 
+  // The service audit report (GAP batch 2, B3.5; README "Export A Service
+  // Audit Report"): the server's GET /api/packs/:id/audit-report as a
+  // download, HTML and JSON, for the focused pack and environment, org-scoped
+  // like every navigation (orgQuery). The static bundle answers it 501 and the
+  // browser shows the server's sentence on the download; nothing is hidden.
+  const packId = focusedPackId();
+  const env = c.environment || focusedEnv() || '';
+  const reportHref = (format) => `/api/packs/${encodeURIComponent(packId)}/audit-report?format=${format}&download=1${env ? `&env=${encodeURIComponent(env)}` : ''}${orgQuery('&')}`;
+  const exports = packId ? `
+    <div class="conf-exports" aria-label="Export the audit report">
+      <span class="conf-exports-label">Audit report</span>
+      <a class="ux-link-btn" href="${escapeHtml(reportHref('html'))}" download>Download HTML</a>
+      <a class="ux-link-btn" href="${escapeHtml(reportHref('json'))}" download>Download JSON</a>
+      <span class="conf-exports-note">conformance, placeholders, verdicts, waivers, coverage, goes-blind risks and the response path in one document</span>
+    </div>` : '';
+
   const nav = sectionNavHtml([
     nBlock ? { id: 'conf-blocking', label: 'Blocking', count: nBlock, tone: 'fail' } : null,
     g.recommended.length ? { id: 'conf-recommended', label: 'Recommended', count: g.recommended.length, tone: 'warn' } : null,
@@ -469,7 +486,7 @@ export function renderConformanceView() {
     : `This report does not say which passes rest on template values, and the pack still carries ${plural(model.templates.todos + model.templates.scaffolds, 'template value')}${Object.keys(model.templates.byLayer).length ? ` (in ${Object.keys(model.templates.byLayer).join(', ')})` : ''}. Passes in those layers may rest on one.`;
 
   wrap.innerHTML = `
-    ${header}
+    ${header}${exports}
     ${nav}
     ${dimGrid}
     ${groupHtml('conf-blocking', 'Blocking requirements', `Required clauses that apply at ${tier} and fail. Each one alone keeps the pack from conformance.`, g.blocking, 'blocking', model, { tone: 'fail' })}
