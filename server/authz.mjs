@@ -278,7 +278,12 @@ export function effectiveRoleOf(principal, membershipRole = null) {
 
 // ---------- the decision ----------
 
+// The token posture's way in. Under OBSERVOGRAM_AUTH=off adding a user arms
+// nothing (authDisabled() beats an armed store, auth.mjs), so the way in
+// there is a restart without it.
 const NO_SIGN_IN_WAY = 'this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC';
+const NO_SIGN_IN_WAY_AUTH_OFF = 'this server has no sign-in (OBSERVOGRAM_AUTH=off): restart it without OBSERVOGRAM_AUTH=off once a user exists (npm run users -- add <login>), or configure OIDC';
+const noSignInWay = (ctx) => (ctx.authOff ? NO_SIGN_IN_WAY_AUTH_OFF : NO_SIGN_IN_WAY);
 // The csrf: 'always' refusal, by what the entry is closed as: 'identity
 // changes' for the identity API (and the self route that changes a
 // session), 'changes to the MCP endpoint API' for those rows.
@@ -322,10 +327,10 @@ export function authzDecision(entry, ctx) {
   const role = p.owner ? 'admin' : p.role;
   const extra = { need: entry.class, role, owner: p.owner === true, org: ctx.org ?? null };
   if (p.kind === 'bearer') {
-    return deny(403, 'role', `the bearer token acts as an operator in org '${ctx.org}'; ${need} needs a signed-in user with that role${ctx.posture === 'token' ? `; ${NO_SIGN_IN_WAY}` : ''}`, extra);
+    return deny(403, 'role', `the bearer token acts as an operator in org '${ctx.org}'; ${need} needs a signed-in user with that role${ctx.posture === 'token' ? `; ${noSignInWay(ctx)}` : ''}`, extra);
   }
   if (p.kind === 'anonymous') {
-    return deny(403, 'role', `anonymous callers are viewers here; ${need} needs a signed-in user; ${NO_SIGN_IN_WAY}`, extra);
+    return deny(403, 'role', `anonymous callers are viewers here; ${need} needs a signed-in user; ${noSignInWay(ctx)}`, extra);
   }
   if (entry.class === 'owner') {
     return deny(403, 'role', `requires an owner of this deployment (you are ${role} in org '${ctx.org}') — ask an owner`, extra);

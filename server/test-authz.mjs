@@ -349,6 +349,10 @@ test('authzDecision: every refusal names a way out', () => {
     "the bearer token acts as an operator in org 'acme'; an owner needs a signed-in user with that role; this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC");
   assert.equal(text(opWrite, ctxOf('token', P.anon)),
     'anonymous callers are viewers here; the operator role needs a signed-in user; this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC');
+  // Under OBSERVOGRAM_AUTH=off adding a user arms nothing: the way in is a restart without it.
+  assert.equal(text(opWrite, ctxOf('token', P.anon, { authOff: true })),
+    'anonymous callers are viewers here; the operator role needs a signed-in user; this server has no sign-in (OBSERVOGRAM_AUTH=off): restart it without OBSERVOGRAM_AUTH=off once a user exists (npm run users -- add <login>), or configure OIDC');
+  assert.doesNotMatch(text(ownerApi, ctxOf('token', P.bearer, { authOff: true })), /no sign-in: add the first user/);
   const body = authzDecision(opWrite, ctxOf('identity', P.viewer)).body;
   assert.deepEqual({ ...body, error: undefined }, { ok: false, error: undefined, denied: 'role', need: 'operator', role: 'viewer', owner: false, org: 'acme' });
   // The MCP endpoint changes: the same refusals named after them — and no
