@@ -58,7 +58,7 @@ import {
   BUILT_SECTIONS, BUILT_EDITORS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsSectionHead, settingsAboveRank,
   buildEnvironmentsSectionModel, buildEndpointsSectionModel, buildMembersSectionModel, buildAuditSectionModel, auditQuery,
   buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus,
-  buildMemberAddBody, memberSaveStatus, orgRenameStatus, lastAdmin,
+  buildMemberAddBody, memberSaveStatus, orgRenameStatus, lastAdmin, leftOrgText,
   buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
   mcpTargetModel, mcpTargetBody, mcpPickerCanAdmin, profileEndpointNote, endpointDrift,
 } from './settings-model.mjs';
@@ -3041,7 +3041,7 @@ async function removeMemberEditor(ed) {
   try { await removeMember(ed.record.userId); }
   catch (e) { return memberWriteRefused(ed, e); }
   if (login === signedInLogin()) {
-    const text = `You left ${orgName}; this browser switches to your next organisation.`;
+    const text = leftOrgText(orgName, settingsAccess().owner);
     if (settingsEditor === ed) { ed.status = { kind: 'saved', text }; syncSettingsEditor(); }
     announce(text);
     leaveOrgAndReload();

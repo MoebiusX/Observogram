@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import {
   SETTINGS_SECTIONS, BUILT_SECTIONS, BUILT_EDITORS, settingsSectionHead, AUDIT_KINDS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsAboveRank,
   buildEnvironmentsSectionModel, buildEndpointsSectionModel, buildMembersSectionModel, buildAuditSectionModel, auditQuery,
-  buildSettingsEditorModel, buildEnvironmentPatch, buildEnvironmentCreate, buildEndpointPatch, buildEndpointCreate, buildMemberAddBody,
+  buildSettingsEditorModel, buildEnvironmentPatch, buildEnvironmentCreate, buildEndpointPatch, buildEndpointCreate, buildMemberAddBody, leftOrgText,
   parseKeyValueLines, environmentSaveStatus, endpointSaveStatus, memberSaveStatus, orgRenameStatus, endpointDeleteStatus,
   lastAdmin, orgEnvPrefix, mcpTargetModel, mcpTargetBody, mcpPickerCanAdmin, profileEndpointNote, endpointDrift,
 } from '../studio/settings-model.mjs';
@@ -398,12 +398,19 @@ test('the member editors: add by login or email, a role change, the remove step;
   assert.equal(self.fields[0].help, self.remove.reason, 'the role group says once why its other choices are unavailable');
   assert.equal(buildSettingsEditorModel('member', MEMBERS[1], { ctx }).fields[0].help, null, 'no lock, no help');
   const oscar = buildSettingsEditorModel('member', MEMBERS[1], { ctx, step: 'confirm-delete' });
-  assert.equal(oscar.confirm.text, 'Remove oscar from Acme? Their sessions keep working elsewhere; here their next request is refused.');
+  assert.equal(oscar.confirm.text, 'Remove oscar from Acme? Their sessions keep working elsewhere; here their next request is refused, unless they are an owner.');
   assert.equal(oscar.id, 3);
   // ada not the last admin any more: removing herself says so first.
   const two = [...MEMBERS, { userId: 9, login: 'abe', role: 'admin', disabled: false }];
   const leave = buildSettingsEditorModel('member', MEMBERS[0], { ctx: { ...ctx, members: two }, step: 'confirm-delete' });
   assert.equal(leave.confirm.text, 'Remove ada from Acme? Their sessions keep working elsewhere; here their next request is refused. This is you: you lose access to Acme at once.');
+  // An owner removing herself: no "next request is refused" — an owner's never is (authz orgContext).
+  const olive = { userId: 7, login: 'olive', role: 'admin', disabled: false };
+  const ownerLeave = buildSettingsEditorModel('member', olive, { ctx: { ...ctx, access: OLIVE, me: 'olive', members: [olive] }, step: 'confirm-delete' });
+  assert.ok(!/refused/.test(ownerLeave.confirm.text), ownerLeave.confirm.text);
+  assert.equal(ownerLeave.confirm.text, "Remove olive from Acme? This is you: your membership changes, but as an owner you keep the admin role in Acme. olive is Acme's last admin: afterwards only an owner can manage its members, endpoints and audit.");
+  assert.equal(leftOrgText('Acme'), 'You left Acme; this browser switches to your next organisation.');
+  assert.equal(leftOrgText('Acme', true), 'You left Acme; this browser reloads into your first organisation, or the default one.');
   const demote = buildSettingsEditorModel('member', MEMBERS[0], { ctx: { ...ctx, members: two }, step: 'confirm-action', draft: { role: 'operator' } });
   assert.equal(demote.confirm.text, "Change ada's role to operator? This is you: you lose the admin role at once.");
   // An owner demoting the last admin: allowed, and warned (A12).

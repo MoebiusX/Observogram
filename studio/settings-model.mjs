@@ -301,6 +301,16 @@ function selfNotes(org, owner) {
   return { demote: 'This is you: you lose the admin role at once.', remove: `This is you: you lose access to ${org} at once.` };
 }
 
+// The status after removing oneself from the org on screen: the page
+// reloads with no active org — a member lands in their next organisation; an
+// owner, whose requests are never refused, in their first membership or the
+// default org (server/authz.mjs orgContext).
+export function leftOrgText(orgName, owner = false) {
+  return owner
+    ? `You left ${orgName}; this browser reloads into your first organisation, or the default one.`
+    : `You left ${orgName}; this browser switches to your next organisation.`;
+}
+
 // `members` already email-free; `org` the GET /api/org/members `org`; `me`
 // the caller's login (/auth/me has no user id — "you" is by login).
 export function buildMembersSectionModel({ members, org = null, access, me = null, acting = false, error = null } = {}) {
@@ -688,7 +698,12 @@ export function buildSettingsEditorModel(kind, record = null, { draft = null, st
     if (owner && lastAdmin(record, members, { owner: false })) notes.push(`${record.login} is ${orgName}'s last admin: afterwards only an owner can manage its members, endpoints and audit.`);
     if (step === 'confirm-delete') {
       if (you) notes.unshift(selfNotes(orgName, owner).remove);
-      confirm = { text: [`Remove ${record.login} from ${orgName}? Their sessions keep working elsewhere; here their next request is refused.`, ...notes].join(' '), danger: `Remove ${record.login}` };
+      // An owner may request any live org (server/authz.mjs orgContext): the
+      // refusal is never theirs. The caller knows whether they are one;
+      // another member's row carries no owner flag, so it says "unless".
+      const refused = `Remove ${record.login} from ${orgName}? Their sessions keep working elsewhere; here their next request is refused`;
+      const lead = !you ? `${refused}, unless they are an owner.` : owner ? `Remove ${record.login} from ${orgName}?` : `${refused}.`;
+      confirm = { text: [lead, ...notes].join(' '), danger: `Remove ${record.login}` };
     } else if (step === 'confirm-action') {
       if (you) notes.unshift(selfNotes(orgName, owner).demote);
       confirm = { text: [`Change ${record.login}'s role to ${role}?`, ...notes].join(' '), danger: `Make ${record.login} ${role}` };
