@@ -451,6 +451,19 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       assert.equal(await text(page, '#deploy-modal-status'), 'gw now points at https://mcp2.acme.test (it showed https://mcp.acme.test) — check the target and send again.');
       assert.equal(deploys.length, deploysBefore, 'nothing deployed');
       assert.equal(anyAuth.length, authBefore, 'no request carried mcpAuth');
+      // The typed write key is "sent with this request only, never stored" (§0).
+      const kept = await page.evaluate((key) => {
+        const hits = [];
+        for (const [name, store] of [['localStorage', localStorage], ['sessionStorage', sessionStorage]]) {
+          for (let i = 0; i < store.length; i++) {
+            const k = store.key(i);
+            if (`${k}\n${store.getItem(k)}`.includes(key)) hits.push(`${name}:${k}`);
+          }
+        }
+        if (document.cookie.includes(key)) hits.push('cookie');
+        return hits;
+      }, 'write-key-2');
+      assert.deepEqual(kept, [], 'the typed MCP write key is never stored');
       assert.deepEqual(await pickerOptions(page, 'deploy'), [[String(gwId), 'gw — https://mcp2.acme.test', true], ['', 'Type a URL…', false]], 'the option names the new origin');
       assert.equal((await call('ada', 'PATCH', `/api/mcp-endpoints/${gwId}`, { url: GW.url })).status, 200);
       await page.fill('#deploy-target-auth', '');
