@@ -54,15 +54,19 @@
 // somewhere else. An MCP behind a redirect (http → https, a trailing slash)
 // is configured with the URL it points at.
 //
-// Redaction: a hook's own error text goes through redact() before it is
-// rethrown — wrapped for prepareRequest, kept an ordinary error for a
-// fetchImpl rejection or for the text of a Response fetchImpl RETURNS (a
-// non-OK body, a JSON-RPC or SSE error message) — so the bearer, the URL's
-// userinfo and every credential-named query parameter value of mcpUrl
-// (stripMcpUrl's rule) become <redacted> in every log line, 502 body and
-// run record downstream. Native fetch's answers pass through untouched.
-// Nothing else the hook does is redacted for it; it runs with the
-// process's trust.
+// Redaction, by value, always: every text an MCP answer or a fetcher puts
+// into an error goes through redact() — a non-OK body, a JSON-RPC or SSE
+// error message, a tool's isError text, a fetcher's rejection, a hook's own
+// error text (wrapped for prepareRequest) — whether native fetch or a
+// hook's fetchImpl answered; for a body that is not JSON the parser's
+// message, which quotes a cut of the body, is replaced whole. An upstream
+// that repeats the request (a 401 page quoting the Authorization header)
+// cannot carry the credential back: the bearer, the URL's userinfo and
+// every credential-named query parameter value of mcpUrl (stripMcpUrl's
+// rule) become <redacted> in every log line, 502 body, annotation and run
+// record downstream. An error that held none
+// of them is rethrown as it was. Nothing else the hook does is redacted for
+// it; it runs with the process's trust.
 
 import { mcpUrlOrigin, safeMcpUrl, stripMcpUrl } from './mcp-url-safety.mjs';
 
@@ -196,15 +200,15 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
     }
 
     // (4) the wire. A rejection here is NOT a hook fault (see the header).
-    // A fetchImpl's own rejection is still hook text, so it is redacted —
-    // the error stays ordinary (same name and code, cause kept), only its
-    // message changes; native fetch's rejections pass through untouched.
+    // Its text is redacted like an answer's — the error stays ordinary (same
+    // name and code, cause kept), only its message changes; a native
+    // rejection that holds no secret is rethrown as it was.
     const fetcher = t.fetchImpl || globalThis.fetch;
     const body = JSON.stringify(notification ? { jsonrpc: '2.0', method, params } : { jsonrpc: '2.0', id: nextId++, method, params });
     let res;
     try { res = await fetcher(url, { method: 'POST', headers: reqHeaders, body, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) }); }
     catch (e) {
-      if (!t.fetchImpl) throw e;
+      if (!t.fetchImpl && redact(e?.message ?? e) === String(e?.message ?? e)) throw e;
       const err = new Error(redact(e?.message ?? e), { cause: e });
       if (e?.name && e.name !== 'Error') err.name = e.name;
       if (e?.code !== undefined) err.code = e.code;
@@ -222,10 +226,25 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
       throw new Error(redirectError(res, url, method));
     }
 
-    // (6) the answer, exactly as before — except that what a fetchImpl
-    // RETURNS is hook text too (a non-OK body, an error message), so it is
-    // redacted like its rejection; a native Response passes through as is.
-    const wireText = (text) => (t.fetchImpl ? redact(text) : String(text));
+    // (6) the answer, exactly as before — except that every text it puts
+    // into an error is redacted, whoever answered (see the header).
+    const wireText = (text) => redact(text);
+    // A body that is not JSON: the parser's message quotes a cut of the
+    // answer, which by-value redaction cannot catch when the cut splits a
+    // secret, so it is replaced whole; any other failure (an abort while
+    // reading) is redacted like the rest. Neither keeps the original as its
+    // cause: it holds the unredacted text.
+    const parsed = async (read) => {
+      let failure;
+      try { return await read(); } catch (e) { failure = e; }
+      if (failure instanceof SyntaxError) throw new SyntaxError(`MCP ${method}: the answer is not valid JSON`);
+      const message = String(failure?.message ?? failure);
+      if (redact(message) === message) throw failure;
+      const err = new Error(redact(message));
+      if (failure?.name && failure.name !== 'Error') err.name = failure.name;
+      if (failure?.code !== undefined) err.code = failure.code;
+      throw err;
+    };
     if (!res.ok) throw new Error(`MCP HTTP ${res.status} on ${method}: ${wireText(await res.text().catch(() => ''))}`);
     if (res.headers.get('mcp-session-id')) session = res.headers.get('mcp-session-id');
     if (notification) return undefined;
@@ -244,7 +263,7 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
           const frame = buf.slice(0, frameEnd);
           const text = frame.split('\n').filter(l => l.startsWith('data:')).map(l => l.replace(/^data:\s?/, '')).join('\n');
           if (text) {
-            const obj = JSON.parse(text);
+            const obj = await parsed(() => JSON.parse(text));
             if (obj.error) throw new Error(`${method}: ${wireText(obj.error.message)}`);
             return obj.result;
           }
@@ -254,7 +273,7 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
       }
       throw new Error(`MCP ${method}: SSE stream ended with no complete frame`);
     }
-    const data = await res.json();
+    const data = await parsed(() => res.json());
     if (data.error) throw new Error(`${method}: ${wireText(data.error.message)}`);
     return data.result;
   }
@@ -266,7 +285,7 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
     const result = await rpc('tools/call', { name, arguments: args });
     if (result?.isError) {
       const txt = result?.content?.map(c => c.text).filter(Boolean).join(' ') || 'tool returned isError';
-      throw new Error(`${name}: ${txt}`);
+      throw new Error(`${name}: ${redact(txt)}`);
     }
     const text = result?.content?.[0]?.text;
     if (typeof text !== 'string') return result;

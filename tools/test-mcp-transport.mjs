@@ -252,15 +252,51 @@ for (const [label, hook] of [
       'an SSE error message a fetchImpl returns is redacted', e7?.message);
   } finally { await fake2.close(); }
 
-  // Inert: a native fetch answer is not hook text — the body of a real
-  // upstream's 502 reaches the caller byte-for-byte as before.
+  // A native fetch answer is redacted the same way (a declared change: it
+  // used to pass through untouched) — the body of a real upstream's 502
+  // that repeats the bearer.
   const fake3 = await startFakeMcp({ failWith: { tool: SYSTEM_HEALTH, status: 502, text: 'upstream says Bearer tok' } });
   try {
     const { callTool: nativeCall, rpc: nativeRpc } = createMcpClient({ mcpUrl: `${fake3.url}?token=URLTOKENSENTINEL9`, mcpAuth: 'tok', transport: null });
     await nativeRpc('initialize', {});
     const e8 = await expectFail(() => nativeCall(SYSTEM_HEALTH, {}));
-    assert(e8?.message === `MCP HTTP 502 on tools/call: upstream says Bearer tok`, 'without a fetchImpl the upstream body passes through untouched', e8?.message);
+    assert(e8?.message === `MCP HTTP 502 on tools/call: upstream says Bearer <redacted>`, 'without a fetchImpl the upstream body is redacted too', e8?.message);
   } finally { await fake3.close(); }
+}
+
+// ---------- 5c. an echoing MCP: every answer text redacted by value, native fetch included ----------
+{
+  // A loopback MCP that repeats the request's Authorization header and URL
+  // in each kind of error answer, reached with native fetch (no hook).
+  const echoServer = (mode) => createServer(async (req, res) => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    let msg = {};
+    try { msg = JSON.parse(raw || '{}'); } catch { /* not JSON */ }
+    const echoed = `you sent ${req.headers.authorization} to ${req.url}`;
+    if (mode === 'http') { res.writeHead(401, { 'Content-Type': 'text/plain' }); return res.end(echoed); }
+    if (mode === 'nonjson') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(echoed); }
+    const frame = (body) => JSON.stringify({ jsonrpc: '2.0', id: msg.id ?? 1, ...body });
+    if (mode === 'sse') { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); return res.end(`data: ${frame({ error: { code: -32001, message: echoed } })}\n\n`); }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    if (mode === 'rpc') return res.end(frame({ error: { code: -32001, message: echoed } }));
+    return res.end(frame({ result: { isError: true, content: [{ type: 'text', text: echoed }] } }));   // 'tool'
+  });
+  const echoes = {};
+  for (const mode of ['http', 'rpc', 'sse', 'tool', 'nonjson']) {
+    const srv = echoServer(mode);
+    await new Promise(r => srv.listen(0, '127.0.0.1', r));
+    try {
+      const base = `http://127.0.0.1:${srv.address().port}/mcp`;
+      const { callTool } = createMcpClient({ mcpUrl: `${base}?token=URLTOKENSENTINEL9&tier=x`, mcpAuth: 'BEARERSENTINEL7', transport: null });
+      echoes[mode] = (await expectFail(() => callTool(SYSTEM_HEALTH, {})))?.message ?? null;
+    } finally { await new Promise(r => srv.close(r)); }
+  }
+  const said = 'you sent Bearer <redacted> to /mcp?token=<redacted>&tier=x';
+  assert(echoes.http === `MCP HTTP 401 on tools/call: ${said}`, 'native fetch: a 401 body repeating the Authorization header is redacted', echoes.http);
+  assert(echoes.rpc === `tools/call: ${said}` && echoes.sse === `tools/call: ${said}`, 'native fetch: a JSON-RPC error and an SSE error frame repeating it are redacted', { rpc: echoes.rpc, sse: echoes.sse });
+  assert(echoes.tool === `${SYSTEM_HEALTH}: ${said}`, 'a tool\'s isError text repeating it is redacted', echoes.tool);
+  assert(echoes.nonjson === 'MCP tools/call: the answer is not valid JSON', 'a body that is not JSON: the parser\'s message, which quotes a cut of it, is replaced whole', echoes.nonjson);
 }
 
 // ---------- 5b. redirects are never followed (D10) ----------

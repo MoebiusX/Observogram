@@ -139,7 +139,13 @@ still hook text, so it is redacted like a `prepareRequest` throw's (the
 error itself stays ordinary: same name and code, the original kept as
 `cause`); so is the text of a Response the `fetchImpl` *returns* — the body
 of a non-OK answer (`MCP HTTP <status> on <method>: …`) and a JSON-RPC or
-SSE `error.message` — while a native `fetch` answer passes through as is.
+SSE `error.message`. Native `fetch` is redacted the same way: every text an
+MCP answer puts into an error — a non-OK body, a JSON-RPC or SSE
+`error.message`, a tool's `isError` text — goes through the redaction
+whoever answered, so an upstream that repeats the request's Authorization
+header never carries the token back; a body that is not JSON is reported as
+`MCP <method>: the answer is not valid JSON` (the parser's message would
+quote it).
 
 The texts, exact: `OBSERVOGRAM_TRANSPORT_HOOK: cannot load <path>: <message>`
 · `OBSERVOGRAM_TRANSPORT_HOOK: <path> exports neither prepareRequest nor
