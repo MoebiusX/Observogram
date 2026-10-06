@@ -93,10 +93,12 @@ test('settingsAccessModel: each rank, each posture — the reasons name a way ou
   assert.equal(OSCAR.why.admin, 'needs the admin role in Acme — yours is operator; ask an admin of Acme');
   assert.equal(VERA.can.operate, false);
   assert.equal(VERA.why.operate, 'needs the operator role in Acme — yours is viewer', "6a's reason");
-  // The token posture: the probe's 403 is the banner, verbatim; every write carries 6a's one reason (B16).
+  // The token posture: the probe's 403 is the banner, verbatim; every write carries 6a's one reason (B16);
+  // the admin's and the owner's reads (why.read) point at the banner — never the operator role, which opens neither (§3.3).
   assert.deepEqual(TOKEN.banner, { kind: 'token', text: `403: ${TOKEN_TEXT}` });
   assert.deepEqual(TOKEN.can, { operate: false, admin: false, own: false, createOrg: false });
   for (const k of ['operate', 'admin', 'own', 'createOrg']) assert.equal(TOKEN.why[k], TOKEN_ACCESS.reason, `token why.${k}`);
+  assert.deepEqual(TOKEN.why.read, { admin: 'needs the admin role and a signed-in user — the banner above names the way in', own: 'needs a signed-in owner — the banner above names the way in' });
   assert.equal(TOKEN.why.operate, 'needs the operator role — this server takes mutations with its API token only, not from a browser');
   assert.equal(settingsAccessModel({ access: TOKEN_ACCESS }).banner, null, 'no banner before the probe answers — never a made-up sentence');
   // Open, the probe 200: an owner (local); a second org needs sign-in; the open banner.
@@ -144,10 +146,11 @@ test('the frame: the scope line, the nav lists only the built sections, each unr
   const audit = buildSettingsFrameModel({ access: ADA, section: 'audit', statusOf: (id) => ({ kind: 'loading', text: `Reading ${id}…` }), builtSections: FOUR });
   assert.deepEqual([audit.section, audit.status], ['audit', { kind: 'loading', text: 'Reading audit…' }]);
   assert.ok(audit.nav.find((n) => n.id === 'audit').current);
-  // The token posture: environments and endpoints readable, members and audit disabled with 6a's reason.
+  // The token posture: environments and endpoints readable, members and audit disabled with the banner's pointer.
   const token = buildSettingsFrameModel({ access: TOKEN, orgName: 'Default', orgId: 'default', builtSections: FOUR });
   assert.equal(token.scope, 'Settings · Default (default) · you are viewer');
-  assert.deepEqual(token.nav.filter((n) => !n.enabled).map((n) => [n.id, n.reason]), [['members', TOKEN_ACCESS.reason], ['audit', TOKEN_ACCESS.reason]]);
+  assert.deepEqual(token.nav.filter((n) => !n.enabled).map((n) => [n.id, n.reason]), [['members', TOKEN.why.read.admin], ['audit', TOKEN.why.read.admin]]);
+  assert.ok(token.nav.every((n) => n.reason !== TOKEN_ACCESS.reason), 'no read names the operator role');
   assert.equal(token.banner.kind, 'token');
   // Static: the banner only — no nav, no section.
   const stat = buildSettingsFrameModel({ access: STATIC });
@@ -458,6 +461,7 @@ test('the audit section: the caption, the scope control for an owner, the actor 
   const before = buildAuditSectionModel({ doc: null, rows: [], access: ADA, orgId: 'acme' });
   assert.deepEqual([before.caption, before.more, before.end, before.canRead], [null, false, null, true]);
   assert.deepEqual([buildAuditSectionModel({ access: OSCAR }).canRead, buildAuditSectionModel({ access: OSCAR }).reason], [false, 'needs the admin role in Acme — yours is operator; ask an admin of Acme']);
+  assert.equal(buildAuditSectionModel({ access: TOKEN }).reason, TOKEN.why.read.admin, 'the token posture: the audit is a read — the banner, not the operator role');
 });
 
 // ---------- the MCP target ----------
@@ -699,10 +703,10 @@ test('renderSettings: the head, the banner as served, the nav by rank, the envir
   // A section the rank cannot read: drawn, aria-disabled with its reason; its click explains.
   const members = c3.querySelector('.set-nav-item[data-section="members"]');
   assert.equal(members.getAttribute('aria-disabled'), 'true');
-  assert.equal(members.why.textContent, TOKEN_ACCESS.reason);
+  assert.equal(members.why.textContent, TOKEN.why.read.admin);
   members.fire('click');
   c3.querySelector('#set-retry').fire('click');
-  assert.deepEqual(calls, [['explain', TOKEN_ACCESS.reason], ['retry', 'environments']]);
+  assert.deepEqual(calls, [['explain', TOKEN.why.read.admin], ['retry', 'environments']]);
 
   // No service yet, an operator: the Build sentence and its button; reading: the status says so.
   const c4 = settingsContainer();

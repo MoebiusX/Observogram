@@ -63,6 +63,7 @@ const PAYMENT = parseYaml(readFileSync(join(ROOT, 'vendor', 'observability-pack-
 const TOKEN = 'settings-studio-token-secret';
 const NO_ORG = '403: no org membership — ask an admin to add you';
 const TOKEN_REASON = 'needs the operator role — this server takes mutations with its API token only, not from a browser';
+const TOKEN_READ_REASON = 'needs the admin role and a signed-in user — the banner above names the way in';
 const CLOSED_REASON = 'closed on this server without sign-in — the banner above names the way in';
 const ADMIN_REASON = (org, role) => `needs the admin role in ${org} — yours is ${role}; ask an admin of ${org}`;
 const LOCK = 'ada is the last admin of Acme: only an owner can demote or remove them — make another member an admin first';
@@ -670,6 +671,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
         assert.equal(await text(page, '.set-banner'), served(probe));
         if (srv === tokenOffChild) assert.match(await text(page, '.set-banner'), /restart it without OBSERVOGRAM_AUTH=off/);
         else assert.match(await text(page, '.set-banner'), /^403: anonymous callers are viewers here; /);
+        for (const id of ['members', 'audit']) assert.equal(await text(page, `.set-nav-item[data-section="${id}"] .svc-why`), TOKEN_READ_REASON, id);
         for (const section of ['environments', 'endpoints']) {
           if (section !== 'environments') await toSection(page, section);
           assert.equal(await attr(page, '#set-primary', 'aria-disabled'), 'true', section);

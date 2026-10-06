@@ -40,6 +40,11 @@ const SECTION_NEEDS = { environments: null, endpoints: null, members: 'admin', a
 const RANKS = { viewer: 0, operator: 1, admin: 2 };
 const ORG_FALLBACK = 'this organisation';
 const CLOSED_REASON = 'closed on this server without sign-in — the banner above names the way in';
+// The token posture's reads that need a signed-in user (the members and the
+// audit, design §3.3 "— (banner)"): `why.read`, which names no role that would
+// not open them; 6a's write reason stays on every write (§3.4, B16).
+const TOKEN_ADMIN_REASON = 'needs the admin role and a signed-in user — the banner above names the way in';
+const TOKEN_OWN_REASON = 'needs a signed-in owner — the banner above names the way in';
 const OWN_REASON = "users, organisations and the join role belong to the deployment's owners — ask an owner";
 const CREATE_ORG_REASON = 'a second organisation needs sign-in, and this server runs without it — start it with sign-in (npm run users -- add <login>, or OIDC) and sign in as an owner';
 const OPEN_BANNER = 'This server runs without sign-in: you act as local, an owner, and every change here is audited as local.';
@@ -81,7 +86,7 @@ export function settingsAccessModel({ access, identity = null, probe = null, chr
     const reason = access?.reason ?? null;
     return {
       posture, role, owner: false, closed: null, can: none,
-      why: { operate: reason, admin: reason, own: reason, closed: null, createOrg: reason },
+      why: { operate: reason, admin: reason, own: reason, closed: null, createOrg: reason, read: { admin: TOKEN_ADMIN_REASON, own: TOKEN_OWN_REASON } },
       banner: refusal ? { kind: 'token', text: refusal.text } : null,
     };
   }
@@ -103,6 +108,10 @@ export function settingsAccessModel({ access, identity = null, probe = null, chr
   else if (posture === 'open' && probe?.ok === true) banner = { kind: 'open', text: OPEN_BANNER };
   return { posture, role, owner, closed, can: { operate, admin, own, createOrg }, why, banner };
 }
+
+// Why a section that needs `need` cannot be read: the posture's read reason
+// where it has one (the token posture's), else the role's.
+const readWhy = (access, need) => access.why?.read?.[need] ?? access.why?.[need] ?? null;
 
 // Can this access read `section`? (environments and endpoints: everyone
 // but the bundle; members and the audit: can.admin; the deployment: can.own).
@@ -132,7 +141,7 @@ export function buildSettingsFrameModel({ access, section = null, orgName = null
   const nav = access.posture === 'static' ? [] : SETTINGS_SECTIONS.filter((id) => builtSections.includes(id)).map((id) => {
     const enabled = sectionReadable(access, id);
     const need = SECTION_NEEDS[id];
-    return { id, label: SECTION_LABEL[id], group: SECTION_GROUP[id], current: id === current, enabled, reason: enabled ? null : (access.why[need] ?? null) };
+    return { id, label: SECTION_LABEL[id], group: SECTION_GROUP[id], current: id === current, enabled, reason: enabled ? null : readWhy(access, need) };
   });
   return {
     title: 'Settings', scope, banner: access.banner, nav, section: current,
@@ -387,7 +396,7 @@ export function buildAuditSectionModel({ doc = null, rows = [], filters = {}, ac
   const more = Boolean(doc) && doc.next !== null && doc.next !== undefined;
   const end = doc && (doc.next === null || doc.next === undefined) ? 'No older rows.' : null;
   return {
-    canRead: access.can.admin === true, reason: access.can.admin ? null : access.why.admin,
+    canRead: access.can.admin === true, reason: access.can.admin ? null : readWhy(access, 'admin'),
     caption, showOrg, scopeControl, scopeSentence, kinds: AUDIT_KINDS, rows: out, more, end, error,
     // A filter the server refused (400) is answered by changing the filters, not by Retry.
     retry: error ? !/^400:/.test(String(error)) : null,
