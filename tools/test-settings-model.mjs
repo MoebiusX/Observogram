@@ -169,6 +169,16 @@ test('the frame: the scope line, the nav lists only the built sections, each unr
   for (const id of BUILT_SECTIONS) assert.doesNotMatch(settingsSectionHead(id).scope ?? '', /slice|Settings →/, 'no roadmap wording, no control named that is not built');
 });
 
+test('the Advanced → Settings item\'s sub-line names every built section (§3.1) — and nothing not built', () => {
+  const src = readFileSync(new URL('../studio/app.mjs', import.meta.url), 'utf8');
+  const item = src.match(/data-action="settings">[\s\S]*?<span class="observa-adv-item-sub">([^<]*)<\/span>/);
+  assert.ok(item, 'the Settings menu item carries a sub-line');
+  const sub = item[1];
+  const WORDS = { environments: /\benvironments\b/, endpoints: /\bMCP endpoints\b/, members: /\bmembers\b/, audit: /\baudit\b/ };
+  for (const id of BUILT_SECTIONS) assert.match(sub, WORDS[id] ?? /(?!)/, `the sub-line names the built section ${id}`);
+  assert.doesNotMatch(sub, /slice|users|organisations|join/i, 'no roadmap wording, no section not built');
+});
+
 test('settingsAboveRank: a downgrade forgets what the new rank may not read (C-6)', () => {
   const cached = {
     probe: null, endpoints: EP_OP, members: MEMBERS, org: ACME,

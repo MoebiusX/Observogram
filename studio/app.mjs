@@ -1478,7 +1478,7 @@ function installObservaChrome(chrome) {
             <div class="observa-adv-menu-head">Administration</div>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="settings">
               <span class="observa-adv-item-label">Settings</span>
-              <span class="observa-adv-item-sub">this organisation's environments and MCP endpoints</span>
+              <span class="observa-adv-item-sub">environments, MCP endpoints, members, the audit…</span>
             </button>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="mcp">
               <span class="observa-adv-item-label">Live MCP connection</span>

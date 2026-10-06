@@ -644,6 +644,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     try {
       await page.waitForSelector('.svc-noorg', { timeout: T });
       await page.click('.observa-adv-toggle');
+      assert.equal(await text(page, '.observa-adv-item[data-action="settings"] .observa-adv-item-sub'), 'environments, MCP endpoints, members, the audit…', 'the menu names every built section');
       await page.click('.observa-adv-item[data-action="settings"]');
       await page.waitForFunction(() => document.querySelector('#toast')?.hidden === false, null, { timeout: T });
       assert.equal(await text(page, '#toast'), NO_ORG);
