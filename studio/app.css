@@ -9678,8 +9678,12 @@ select.build-edit-input { appearance: auto; }
 .set-editor-status.is-saved { color: var(--ink-2); padding-left: 10px; border-left: 3px solid var(--pass-border); }
 .set-editor-status.is-error { color: var(--ink); padding-left: 10px; border-left: 3px solid var(--fail-border); }
 .set-editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-.set-editor-save[aria-disabled="true"] { opacity: 0.5; cursor: progress; }
+.set-editor-save[aria-disabled="true"]:not(.is-unavailable) { opacity: 0.5; cursor: progress; }
 .set-primary.is-unavailable, .set-editor-save.is-unavailable { cursor: not-allowed; }
+/* The reason line inside an unavailable primary or Save takes the button's own text colour (--paper on --ink here,
+   --og-on-accent on the accent under the reskin): the shared .svc-why --ink-3 is drawn for the card, and on the
+   button it fails AA. No opacity on an unavailable button either — the reason line is what marks it. */
+.set-primary .svc-why, .set-editor-save .svc-why { color: inherit; }
 
 /* The MCP target select: drawn inside each host's field (the deploy modal, the MCP panel, the home card), whose
    rules colour it — this rule only sizes it. */

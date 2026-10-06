@@ -3010,7 +3010,15 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   // aria-hidden layer under the dialog (studio/settings-view.mjs draws it with no content, asserted below), and the
   // head's accent bar, a ::before whose content is ''.
   const SET_NO_TEXT = new Set(['.set-editor-scrim', '.set-editor-head::before']);
+  // The reason line inside an unavailable primary or Save inherits the button's own text colour, and only it: the
+  // button wears the mcp-refresh-btn idiom, whose pair is measured below (the shared .svc-why --ink-3 is drawn for
+  // the card; on the lime button under the reskin it read 1.85:1 dark and 4.46:1 light).
+  const SET_INHERIT = new Set(['.set-primary .svc-why, .set-editor-save .svc-why']);
   for (const r of setRules) {
+    if (SET_INHERIT.has(r.sel)) {
+      if (!/(?:^|[;{\s])color:\s*inherit\s*(?:;|$)/.test(r.body)) setOffenders.push(`${r.sel}: inherits the button's text colour`);
+      continue;
+    }
     if (SET_NO_TEXT.has(r.sel)) {
       if (/(?:^|[;{\s])color:/.test(r.body)) setOffenders.push(`${r.sel}: draws no text, so it names no colour`);
       if (r.sel.endsWith('::before') && !/content:\s*''/.test(r.body)) setOffenders.push(`${r.sel}: an accent bar has no content`);
@@ -3042,6 +3050,29 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
     }
   }
   assert.deepEqual(setOffenders, [], 'every .set- text colour clears AA on the background its own rule draws, in both themes and through the bridge');
+  // The button those reason lines inherit from, as shipped: app.css's .mcp-refresh-btn (--paper on --ink, and through
+  // the bridge --og-bg on --og-text) and the reskin's (--og-on-accent on --og-accent-solid, under body.chrome-observa,
+  // which every boot adds). Each pair clears AA for the line's 12.5 px text, in both themes.
+  assert.ok([...settingsSlice.matchAll(ruleRe)].some(m => SET_INHERIT.has(m[1].replace(/\/\*[\s\S]*?\*\//g, '').trim())), 'the inheriting rule is in the Settings zone');
+  assert.match(cssRule('.mcp-refresh-btn') || '', /background:\s*var\(--ink\);\s*color:\s*var\(--paper\)/, 'app.css: the button is --paper on --ink');
+  const reskinText = readFileSync(resolve(ROOT, 'studio/reskin.css'), 'utf8');
+  const reskinBtn = reskinText.match(/body\.chrome-observa \.mcp-refresh-btn,[^{]*\{([^}]*)\}/)?.[1] || '';
+  assert.match(reskinBtn, /background:\s*var\(--og-accent-solid\)[\s\S]*(?:^|[;\s])color:\s*var\(--og-on-accent\)/, 'reskin.css: the button is --og-on-accent on --og-accent-solid');
+  const whyBody = cssRule('.svc-why') || '';
+  const whyMin = large(whyBody) ? 3 : 4.5;
+  const buttonPairs = [];
+  for (const name of ['light', 'dark']) {
+    const pairs = [['app.css', themes[name].paper, themes[name].ink], ['bridge', og[name][bridge.paper], og[name][bridge.ink]], ['reskin', og[name]['og-on-accent'], og[name]['og-accent-solid']]];
+    for (const [where, fg, bgc] of pairs) {
+      assert.ok(fg && bgc, `${where} ${name}: both tokens read`);
+      const ratio = contrast(fg, bgc);
+      if (ratio < whyMin) buttonPairs.push(`${where} ${name}: ${fg} on ${bgc} ${ratio.toFixed(2)}:1`);
+    }
+  }
+  assert.deepEqual(buttonPairs, [], 'the reason line inside the primary and Save clears AA on the button it inherits from');
+  // An unavailable Save is not a pending one: the pending dimming skips it, so the reason line is not halved.
+  assert.ok(!cssRule('.set-editor-save[aria-disabled="true"]'), 'no opacity on every aria-disabled Save');
+  assert.match(cssRule('.set-editor-save[aria-disabled="true"]:not(.is-unavailable)') || '', /opacity:\s*0\.5/, 'only the pending Save dims');
   // The tint pairs are measured, not assumed: the banners and the danger button carry their colour beside their tint.
   for (const sel of ['.set-banner.is-token, .set-banner.is-closed', '.set-banner.is-static', '.set-banner.is-open', '.set-danger']) assert.match(cssRule(sel) || '', /color:\s*var\(--ink(-2)?\)[\s\S]*background:\s*var\(--/, `${sel} names its colour beside its background`);
   assert.match(readFileSync(resolve(ROOT, 'studio/settings-view.mjs'), 'utf8'), /<div class="set-editor-scrim" data-editor-close aria-hidden="true"><\/div>/, 'the scrim is empty and aria-hidden');

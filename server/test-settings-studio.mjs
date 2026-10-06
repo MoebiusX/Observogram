@@ -178,6 +178,36 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     await page.waitForFunction((s) => document.querySelector('#set-section')?.dataset.section === s, id, { timeout: T });
     await settled(page);
   };
+  // The reason line (.svc-why) inside an unavailable button that wears the mcp-refresh-btn idiom — the section's
+  // primary and the editor's Save (a probe drawn the way paintEditorButtons leaves it) — measured on the button's
+  // own computed background under the shipped stylesheets, in both themes: WCAG AA for its 12.5 px text, and no
+  // opacity on the button (an unavailable button is not a pending one).
+  const whyOnButton = (page) => page.evaluate(() => {
+    const rgb = (c) => (c.match(/[\d.]+/g) || []).slice(0, 3).map(Number);
+    const lum = (c) => { const [r, g, b] = rgb(c).map((v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    const contrast = (a, b) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+    const probe = document.createElement('div');
+    probe.innerHTML = '<button type="button" class="mcp-refresh-btn set-editor-save is-unavailable" aria-disabled="true">Save<span class="svc-why">needs the admin role</span></button>';
+    document.body.append(probe);
+    const root = document.documentElement;
+    const before = root.getAttribute('data-theme');
+    const out = [];
+    for (const theme of ['light', 'dark']) {
+      root.setAttribute('data-theme', theme);
+      for (const btn of [document.querySelector('#set-primary'), probe.querySelector('button')]) {
+        const id = btn.id || 'set-editor-save (probe)';
+        const why = btn.querySelector('.svc-why');
+        if (!why) { out.push(`${id}: no reason line`); continue; }
+        const cs = getComputedStyle(btn);
+        const ratio = contrast(getComputedStyle(why).color, cs.backgroundColor);
+        if (ratio < 4.5) out.push(`${id} (${theme}): ${getComputedStyle(why).color} on ${cs.backgroundColor} ${ratio.toFixed(2)}:1`);
+        if (cs.opacity !== '1') out.push(`${id} (${theme}): opacity ${cs.opacity}`);
+      }
+    }
+    if (before === null) root.removeAttribute('data-theme'); else root.setAttribute('data-theme', before);
+    probe.remove();
+    return out;
+  });
   const editorStatus = (page, re) => page.waitForFunction((src) => new RegExp(src).test(document.getElementById('set-editor-status')?.textContent || ''), re.source, { timeout: T });
   const editorError = async (page) => {
     await page.waitForFunction(() => document.querySelector('#set-editor-status')?.classList.contains('is-error'), null, { timeout: T });
@@ -229,6 +259,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await toSection(page, 'endpoints');
       assert.equal(await attr(page, '#set-primary', 'aria-disabled'), 'true');
       assert.equal(await text(page, '#set-primary .svc-why'), ADMIN_REASON('Acme', 'operator'));
+      assert.deepEqual(await whyOnButton(page), [], 'the reason line inside an unavailable primary and Save reads at AA on the button, in both themes');
       await page.click('#set-primary', { force: true });
       await page.waitForTimeout(200);
       assert.equal(await page.$('#set-editor-host .set-editor'), null, 'its click explains, opens nothing');
