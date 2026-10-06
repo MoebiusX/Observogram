@@ -24,7 +24,7 @@ import {
   loadMembers, addMember, patchMember, removeMember, renameOrg, loadAudit,
 } from '../studio/settings-api.mjs';
 import { accessModel, TIER_BY_PACK } from '../studio/services-model.mjs';
-import { renderSettings, renderSettingsEditor } from '../studio/settings-view.mjs';
+import { renderSettings, renderSettingsEditor, renderMcpTarget } from '../studio/settings-view.mjs';
 import { readFileSync } from 'node:fs';
 import { servicesRefusal } from '../studio/services-api.mjs';
 import { orgEnvPrefix as serverOrgEnvPrefix } from '../server/store/mcp-endpoints.mjs';
@@ -469,6 +469,12 @@ test('mcpTargetModel: the list first, "Type a URL…" last; the preselection ord
   const typed = mcpTargetModel({ endpoints: EP_OP, typedUrl: 'https://x.test' });
   assert.deepEqual([typed.value, typed.showUrl, typed.authHelp], ['', true, null]);
   assert.equal(mcpTargetModel({ endpoints: EP_OP, typedUrl: '   ' }).value, '3');
+  // The person's choice in the picker outranks every preselection: '' is Type a URL…, an id while listed.
+  const typedChoice = mcpTargetModel({ endpoints: EP_OP, remembered: 5, chosen: '' });
+  assert.deepEqual([typedChoice.value, typedChoice.showUrl, typedChoice.authHelp], ['', true, null]);
+  assert.equal(mcpTargetModel({ endpoints: EP_OP, remembered: 3, chosen: '5' }).value, '5');
+  assert.equal(mcpTargetModel({ endpoints: EP_OP, remembered: 5, chosen: '99' }).value, '5', 'a choice no longer listed falls back to the preselection');
+  assert.deepEqual(m.options.map((o) => [o.name, o.origin]), [['gw', 'https://mcp.acme.test'], ['spare', 'https://spare.acme.test'], [null, null]], 'each option names its endpoint and the origin it shows');
   assert.equal(mcpTargetModel({ endpoints: EP_OP, remembered: 5 }).authHelp, 'Optional — this endpoint names no token variable; send one here if the server needs it.');
   assert.equal(mcpTargetModel({ endpoints: EP_VIEWER }).authHelp, 'Optional.');
   assert.equal(mcpTargetModel({ endpoints: EP_OP, purpose: 'write' }).authHelp, "MCP client key — a write token, sent with this request only, never stored. (The endpoint's read variable is never used to write.)");
@@ -849,6 +855,52 @@ test('the environments section and editor: Add environment and Edit… for an op
   a.querySelector('#set-editor-save').fire('click');
   assert.deepEqual(calls, [['save', { serviceId: 2, name: 'qa', tier: null, mcpEndpointId: null, bindings: '', endpoints: '' }]], 'a field untouched reads as drawn');
   assert.deepEqual(buildEnvironmentCreate(calls[0][1]), { name: 'qa' });
+});
+
+test('renderMcpTarget: the endpoints first and "Type a URL…" last, each option its name and origin (never a URL or a variable); the empty line; a change is the controller\'s', () => {
+  const calls = [];
+  const host = { settings: new Proxy({}, { get: (_, k) => (...a) => calls.push([k, ...a]) }) };
+  const handlers = {};
+  const mk = () => {
+    let html = '';
+    const sel = { value: '', addEventListener: (t, fn) => { handlers[`sel:${t}`] = fn; } };
+    const btn = { addEventListener: (t, fn) => { handlers[`btn:${t}`] = fn; } };
+    return {
+      hidden: false,
+      get innerHTML() { return html; },
+      set innerHTML(v) { html = v; },
+      querySelector: (q) => (q === 'select.set-mcp-target' && html.includes('<select') ? sel : q === '[data-mcp-target-settings]' && html.includes('data-mcp-target-settings') ? btn : null),
+      sel,
+    };
+  };
+  const xss = { id: 9, name: '<img src=x onerror=1>', origin: 'https://evil.test', url: 'https://evil.test/p?secret=1', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_X' };
+  const c = mk();
+  renderMcpTarget(c, mcpTargetModel({ endpoints: [...EP_OP, xss], orgName: 'Acme' }), host);
+  assert.equal(c.hidden, false);
+  const values = [...c.innerHTML.matchAll(/<option value="([^"]*)"/g)].map((x) => x[1]);
+  assert.deepEqual(values, ['3', '5', '9', ''], 'the list first, Type a URL… last');
+  assert.match(c.innerHTML, /<select class="set-mcp-target" aria-label="Registered MCP endpoint">/);
+  assert.match(c.innerHTML, /<option value="3" selected data-name="gw" data-origin="https:\/\/mcp\.acme\.test">gw — https:\/\/mcp\.acme\.test<\/option>/);
+  assert.match(c.innerHTML, /<option value="">Type a URL…<\/option>\s*<\/select>/);
+  assert.ok(!c.innerHTML.includes('<img'), 'escaped');
+  for (const secret of ['/obs', 'secret=1', 'OBSERVOGRAM_ORG_']) assert.ok(!c.innerHTML.includes(secret), `no URL path or variable in the picker: ${secret}`);
+  c.sel.value = '';
+  handlers['sel:change']();
+  assert.deepEqual(calls.pop(), ['pickMcpTarget', c, '']);
+  // None registered: the sentence; the button only for a reader known to be an admin (C-7).
+  const e = mk();
+  renderMcpTarget(e, mcpTargetModel({ endpoints: [], orgName: 'Acme' }), host);
+  assert.equal(e.hidden, false);
+  assert.ok(!e.innerHTML.includes('<select') && !e.innerHTML.includes('<button'));
+  assert.match(e.innerHTML, /<span class="set-mcp-target-hint">No MCP endpoint is registered in Acme yet — an admin registers them\.<\/span>/);
+  renderMcpTarget(e, mcpTargetModel({ endpoints: [], orgName: 'Acme', canAdmin: true }), host);
+  assert.match(e.innerHTML, /data-mcp-target-settings>Settings → MCP endpoints<\/button>/);
+  handlers['btn:click']();
+  assert.deepEqual(calls.pop(), ['openMcpEndpoints']);
+  // Unread or failed: nothing drawn, the container hidden (the typed URL alone).
+  const n = mk();
+  renderMcpTarget(n, mcpTargetModel({ endpoints: null }), host);
+  assert.deepEqual([n.innerHTML, n.hidden], ['', true]);
 });
 
 test('settings-view.mjs is a renderer module: it imports host.mjs, util.mjs and services-view.mjs only — never app.mjs or state.mjs — and reads no state, fetches nothing', () => {

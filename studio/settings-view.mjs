@@ -377,6 +377,29 @@ export function paintSettingsEditorStatus(container, status) {
   el.textContent = status.text;
 }
 
+// The MCP target (design §6): drawn before a picker's URL field — the org's
+// registered endpoints (`name — origin`, each option carrying the name and
+// the origin it shows, never a URL or a variable), then "Type a URL…"; or,
+// when the org has none, the sentence saying so (with the way to Settings →
+// MCP endpoints for a reader known to be an admin). `model` is
+// mcpTargetModel(); the container is hidden when there is nothing to draw.
+// A change is the controller's (host.settings.pickMcpTarget: the URL row and
+// the auth help follow); the select is not redrawn under the focus.
+export function renderMcpTarget(container, model, host = appHost) {
+  if (!container) return;
+  const select = model?.show ? `
+    <select class="set-mcp-target" aria-label="Registered MCP endpoint">${model.options.map((o) => `
+      <option value="${escapeHtml(o.value)}"${o.value === model.value ? ' selected' : ''}${o.name ? ` data-name="${escapeHtml(o.name)}"` : ''}${o.origin ? ` data-origin="${escapeHtml(o.origin)}"` : ''}>${escapeHtml(o.label)}</option>`).join('')}
+    </select>` : '';
+  const hint = model?.hint ? `
+    <span class="set-mcp-target-hint">${escapeHtml(model.hint.text)}${model.hint.button ? ` <button type="button" class="ux-secondary-btn" data-mcp-target-settings>${escapeHtml(model.hint.button)}</button>` : ''}</span>` : '';
+  container.innerHTML = select + hint;
+  container.hidden = !select && !hint;
+  const sel = container.querySelector('select.set-mcp-target');
+  sel?.addEventListener('change', () => host?.settings?.pickMcpTarget?.(container, sel.value));
+  container.querySelector('[data-mcp-target-settings]')?.addEventListener('click', () => host?.settings?.openMcpEndpoints?.());
+}
+
 // One document listener per editor host (bound once; idle while no dialog is
 // mounted): Escape closes the editor when nothing inside it has the focus,
 // unless another modal is on top of it (that one keeps its own Escape).

@@ -112,6 +112,29 @@ export function recallMcpUrl() {
   try { return localStorage.getItem(mcpUrlKey()) || null; } catch { return null; }
 }
 
+// ---------- the remembered MCP endpoint (per user and org) ----------
+//
+// The pickers' choice of one of the org's registered MCP endpoints (design
+// §6): its id, stored under mcpEndpoint.v1:<login or 'local'>:<active org or
+// 'default'> — an id means something in one org only — and cleared at
+// sign-out with the remembered URLs. null removes it (a typed URL was used).
+const MCP_ENDPOINT_KEY_PREFIX = 'mcpEndpoint.v1:';
+const mcpEndpointKey = () => `${MCP_ENDPOINT_KEY_PREFIX}${signedInLogin || 'local'}:${activeOrg || 'default'}`;
+
+export function recallMcpEndpoint() {
+  try {
+    const v = localStorage.getItem(mcpEndpointKey());
+    return v && /^[1-9][0-9]{0,15}$/.test(v) ? Number(v) : null;
+  } catch { return null; }
+}
+
+export function rememberMcpEndpoint(id) {
+  try {
+    if (Number.isInteger(id) && id >= 1) localStorage.setItem(mcpEndpointKey(), String(id));
+    else localStorage.removeItem(mcpEndpointKey());
+  } catch { /* storage unavailable: nothing remembered */ }
+}
+
 // The safety rule (tools/lib/mcp-url-safety.mjs), loaded at call time —
 // never statically: the Node suites that import this module have no /lib/.
 // A load that failed is not kept: the next call tries again (a server
@@ -254,16 +277,17 @@ export async function removeDeployProfile(name) {
   writeDeployProfiles(profiles);
 }
 
-// At sign-out: every URL this login remembered, in every org, and the
-// legacy key — and every deploy target profile in the browser (every
+// At sign-out: every URL and MCP endpoint this login remembered, in every
+// org, and the legacy key — and every deploy target profile in the browser (every
 // user's, and the pre-slice-3 key): a shared browser keeps neither past
 // a sign-out.
 export function forgetMcpUrls(login = signedInLogin) {
   try {
     const prefix = `${MCP_URL_KEY_PREFIX}${login || 'local'}:`;
+    const endpointPrefix = `${MCP_ENDPOINT_KEY_PREFIX}${login || 'local'}:`;
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const k = localStorage.key(i);
-      if (k && (k.startsWith(prefix) || k.startsWith(DEPLOY_PROFILES_KEY_PREFIX))) localStorage.removeItem(k);
+      if (k && (k.startsWith(prefix) || k.startsWith(endpointPrefix) || k.startsWith(DEPLOY_PROFILES_KEY_PREFIX))) localStorage.removeItem(k);
     }
     localStorage.removeItem(LEGACY_MCP_URL_KEY);
     localStorage.removeItem(LEGACY_DEPLOY_PROFILES_KEY);

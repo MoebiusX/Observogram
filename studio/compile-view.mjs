@@ -1416,6 +1416,17 @@ function templateValueCount(pack) {
   return todos + scaffolds;
 }
 
+// The gateway the review names (T17): the registered MCP endpoint chosen in
+// the modal's MCP target — the origin its option shows — else the typed URL.
+// A local read of the modal's DOM (app.mjs draws the picker; this view never
+// imports it).
+function deployTargetForReview(doc) {
+  const slot = doc.querySelector?.('[data-mcp-target="deploy"]');
+  const sel = slot && !slot.hidden ? slot.querySelector('select.set-mcp-target') : null;
+  const origin = sel?.value ? sel.selectedOptions?.[0]?.dataset?.origin : null;
+  return origin || String(doc.getElementById('deploy-target-mcp')?.value ?? '').trim();
+}
+
 function readDeployReview(doc) {
   const val = (id) => String(doc.getElementById(id)?.value ?? '').trim();
   const packId = val('deploy-source-pack');
@@ -1449,7 +1460,7 @@ function readDeployReview(doc) {
       version: val('deploy-target-version'),
       url: val('deploy-target-url'),
       folder: val('deploy-target-folder'),
-      mcpUrl: val('deploy-target-mcp'),
+      mcpUrl: deployTargetForReview(doc),
       profile: profileSel?.value ? profileSel.selectedOptions?.[0]?.textContent : '',
     },
     source: { id: packId, label: entry?.label || packId, version: entry?.version || (sameAsOpen ? state.pack?.meta?.version : '') },

@@ -17,7 +17,7 @@ import {
 import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } from './state.mjs';
 import {
   api, loadCatalog, loadTaxonomy, validateUploaded, registeredOrValidated, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError, deployRefusal,
-  setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls, signOutOthersText,
+  setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls, signOutOthersText, recallMcpEndpoint, rememberMcpEndpoint,
   loadDeployProfiles, storeDeployProfile, removeDeployProfile,
 } from './api.mjs';
 import {
@@ -52,18 +52,19 @@ import {
   packForService, newestPack, serviceChipModel, servicesSelectModel, discoverEmptyNote, buildPrefillFromService, verdictKey, buildHandoffPlan, buildDefineOriginNote, buildExitRefusal,
   buildServiceEditorModel, buildServicePatch, serviceSaveStatus,
 } from './services-model.mjs';
-import { loadOrgs, loadServices, loadService, patchService, verdictLoader } from './services-api.mjs';
+import { loadOrgs, loadServices, loadService, patchService, verdictLoader, requestJson } from './services-api.mjs';
 import { renderNoOrgHome, renderServicesHome, renderServicePage, renderServiceEditor, markUnavailable } from './services-view.mjs';
 import {
   BUILT_SECTIONS, BUILT_EDITORS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsSectionHead, settingsAboveRank,
   buildEnvironmentsSectionModel, buildEndpointsSectionModel,
   buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus,
   buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
+  mcpTargetModel, mcpTargetBody, profileEndpointNote, endpointDrift,
 } from './settings-model.mjs';
 import {
   loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
 } from './settings-api.mjs';
-import { renderSettings, renderSettingsEditor } from './settings-view.mjs';
+import { renderSettings, renderSettingsEditor, renderMcpTarget } from './settings-view.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
@@ -2914,6 +2915,8 @@ const settingsActions = {
   save: (draft) => saveSettingsEditor(draft),
   step: (step, draft = null) => setSettingsEditorStep(step, draft),
   confirm: () => confirmSettingsEditor(),
+  pickMcpTarget: (container, value) => pickMcpTarget(container, value),
+  openMcpEndpoints: () => openMcpEndpointsFromPicker(),
 };
 const settingsHost = { renderMainView, renderTabs, settings: settingsActions };
 
@@ -4228,27 +4231,40 @@ function renderHomeView() {
     }
     $('#home-mcp-url').onkeydown = (e) => { if (e.key === 'Enter') explain(); };
   }
+  paintHomeMcpTarget();
   wireHomeChoice(view, model);
   loadHomeVerdicts(model);
 }
 
+// The home's source card lists the org's MCP endpoints (D-J) for a rank that
+// may connect, in the identity and open postures: read once, then only the
+// picker is repainted when the read settles; a re-render reuses the list. An
+// empty list, a refusal or a failure leaves today's card (the URL typed).
+let homeMcpEndpointsRead = false;
+function paintHomeMcpTarget() {
+  paintMcpTarget('home');
+  if (homeMcpEndpointsRead || state.mcpEndpoints !== null || !mcpPickersReadable() || state.access?.canWrite === false) return;
+  homeMcpEndpointsRead = true;
+  readMcpEndpointsForPickers().then((list) => {
+    if (list?.length && document.getElementById('home-mcp-url')) paintMcpTarget('home');
+  });
+}
+
 async function doHomeMcpConnect() {
   const urlInput  = $('#home-mcp-url');
-  const authInput = $('#home-mcp-auth');
   const statusEl  = $('#home-mcp-status');
   const goBtn     = $('#home-mcp-connect');
   const capEl     = $('#home-mcp-capabilities');
   const adoptBar  = $('#home-mcp-adopt-bar');
   if (!urlInput || !statusEl) return;
 
-  const url  = urlInput.value.trim();
-  const auth = authInput?.value || '';
-  if (!url) {
-    statusEl.textContent = 'enter your MCP URL first';
+  const { body: target, chosen } = mcpTargetOf('home');
+  if (!target) {
+    statusEl.textContent = 'choose an MCP endpoint or type a URL';
     statusEl.className = 'home-mcp-status is-error';
     return;
   }
-  rememberMcpUrl(url).catch(() => {});
+  if (target.mcpUrl) rememberMcpUrl(target.mcpUrl).catch(() => {});
 
   goBtn.disabled = true;
   statusEl.textContent = 'contacting MCP…';
@@ -4261,8 +4277,7 @@ async function doHomeMcpConnect() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
-        mcpUrl: url,
-        mcpAuth: auth || undefined,
+        ...target,
         // Forward the quick-start friendly label when the user came
         // through the Upload popover. window._observogramQuickLabel is
         // cleared after consumption so manual draft-from-mcp from the
@@ -4277,6 +4292,7 @@ async function doHomeMcpConnect() {
     }
     const out = await r.json();
     if (!out.ok) throw new Error(out.error || 'MCP draft failed');
+    rememberMcpEndpoint(chosen ? chosen.id : null);
     draftMcpState.lastResult = out;
     followReplacedPack(out.registered?.id).catch(() => {});
 
@@ -4610,6 +4626,186 @@ function renderMcpStatusBody(status) {
   el.innerHTML = '<dl>' + rows.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${k === 'refreshed' ? v : escapeHtml(v)}</dd>`).join('') + '</dl>';
 }
 
+// ---------- the MCP pickers: a registered endpoint, or a typed URL (design §6) ----------
+//
+// Four pickers — the refresh panel, the draft panel, the deploy modal (its
+// rollback and its post-deploy verify ride it) and the home's source card —
+// draw the org's registered MCP endpoints before their URL field
+// (renderMcpTarget over mcpTargetModel), list first and preselected, "Type a
+// URL…" last. With an endpoint chosen the URL row is hidden (its value kept)
+// and the request names it by id (mcpTargetBody: an id or a URL, never
+// both); the read token stays on the server, named by the record. The list
+// (state.mcpEndpoints) is read in the identity and open postures only — the
+// bundle and the token posture never read it, and keep the typed URL.
+const MCP_PICKERS = {
+  refresh: { url: 'mcp-url', auth: 'mcp-auth', purpose: 'read', field: 'mcp-field', key: 'mcp-field-key', hint: true },
+  draft: { url: 'draft-mcp-url', auth: 'draft-mcp-auth', purpose: 'read', field: 'mcp-field', key: 'mcp-field-key', hint: true },
+  deploy: { url: 'deploy-target-mcp', auth: 'deploy-target-auth', purpose: 'write', field: 'deploy-field', key: 'deploy-field-key', hint: true },
+  // D-J: the home reads the list for a rank that may connect, and says
+  // nothing when the org has none (today's card, the demo URL typed).
+  home: { url: 'home-mcp-url', auth: 'home-mcp-auth', purpose: 'read', field: 'home-mcp-url-row', key: 'home-mcp-url-label', hint: false, needsWrite: true },
+};
+
+function mcpPickersReadable() {
+  const posture = state.access?.posture;
+  return posture === 'identity' || posture === 'open';
+}
+
+// The empty list's way to Settings → MCP endpoints, for a reader known to be
+// an admin of the org (C-7: never guessed — the open postures may close it).
+function mcpPickerCanAdmin() {
+  return state.access?.posture === 'identity' && state.access?.role === 'admin';
+}
+
+// GET /api/mcp-endpoints for the pickers. Silent: a refusal or a failure
+// leaves the typed URL alone (state.mcpEndpoints null), and Settings is
+// where a failed read is said. `keep` keeps the list already read when this
+// read fails (the pre-send check: its own sentence says it could not check).
+async function readMcpEndpointsForPickers({ keep = false } = {}) {
+  if (!mcpPickersReadable()) return null;
+  try {
+    state.mcpEndpoints = await loadMcpEndpoints();
+    return state.mcpEndpoints;
+  } catch {
+    if (!keep) state.mcpEndpoints = null;
+    return null;
+  }
+}
+
+// The picker's slot before its URL row (created once per row: the home's is
+// drawn anew with its card), in the host's own field idiom.
+function mcpTargetSlot(id) {
+  const p = MCP_PICKERS[id];
+  const row = document.getElementById(p.url)?.closest('label');
+  if (!row?.parentElement) return null;
+  const prev = row.previousElementSibling;
+  if (prev?.dataset?.mcpTarget === id) return prev;
+  const slot = document.createElement('div');
+  slot.className = p.field;
+  slot.dataset.mcpTarget = id;
+  slot.hidden = true;
+  slot.innerHTML = `<span class="${p.key}" aria-hidden="true">Registered MCP endpoint</span><div class="mcp-target-body" hidden></div>`;
+  row.before(slot);
+  return slot;
+}
+
+function mcpPickerModel(id, chosen = null) {
+  const p = MCP_PICKERS[id];
+  const readable = mcpPickersReadable() && (!p.needsWrite || state.access?.canWrite !== false);
+  const model = mcpTargetModel({
+    endpoints: readable ? state.mcpEndpoints : null,
+    remembered: recallMcpEndpoint(),
+    liveUrl: state.mcpStatus?.url || null,
+    // The remembered typed URL — or, in the deploy modal (which remembers
+    // none), what its field holds (a profile's URL).
+    typedUrl: id === 'deploy' ? (document.getElementById(p.url)?.value || '') : (recallMcpUrl() || ''),
+    purpose: p.purpose, orgName: state.orgName, canAdmin: mcpPickerCanAdmin(), chosen,
+  });
+  return p.hint ? model : { ...model, hint: null };
+}
+
+// The URL row and the auth field's help follow the choice: an endpoint hides
+// the URL row (its value kept) and says where the token comes from.
+function applyMcpTargetChoice(id, model) {
+  const p = MCP_PICKERS[id];
+  const row = document.getElementById(p.url)?.closest('label');
+  if (row) row.hidden = !model.showUrl;
+  if (id === 'home') {
+    const urlKey = row?.querySelector('.home-mcp-url-label');
+    if (urlKey) urlKey.textContent = model.show ? 'MCP URL' : 'MCP endpoint';
+  }
+  const key = document.getElementById(p.auth)?.closest('label')?.querySelector('span');
+  if (!key) return;
+  if (key.dataset.mcpKeyHtml === undefined) key.dataset.mcpKeyHtml = key.innerHTML;
+  if (!model.authHelp) { key.innerHTML = key.dataset.mcpKeyHtml; return; }
+  if (p.purpose === 'write') { key.textContent = model.authHelp; return; }
+  const label = [...key.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim())?.textContent.trim() || 'Auth token';
+  key.innerHTML = `${escapeHtml(label)} <em>${escapeHtml(model.authHelp)}</em>`;
+}
+
+// (Re)draw a picker: the person's choice in it is kept across a repaint
+// while its endpoint is listed; `chosen` replaces it ('' = Type a URL…).
+function paintMcpTarget(id, { chosen } = {}) {
+  const slot = mcpTargetSlot(id);
+  if (!slot) return;
+  const body = slot.querySelector('.mcp-target-body');
+  const current = body.querySelector('select.set-mcp-target')?.value;
+  const model = mcpPickerModel(id, chosen !== undefined ? chosen : (current ?? null));
+  renderMcpTarget(body, model, settingsHost);
+  slot.hidden = body.hidden;
+  applyMcpTargetChoice(id, model);
+  if (id === 'deploy') updateDeployTargetSummary();
+}
+
+// What a picker would send: { body, chosen, url } — `chosen` is the
+// endpoint as its option shows it ({ id, name, origin }), null when typed.
+function mcpTargetOf(id) {
+  const p = MCP_PICKERS[id];
+  const slot = document.querySelector(`[data-mcp-target="${id}"]`);
+  const sel = slot && !slot.hidden ? slot.querySelector('select.set-mcp-target') : null;
+  const value = sel?.value || '';
+  const opt = value ? sel.selectedOptions?.[0] : null;
+  const chosen = opt ? { id: Number(value), name: opt.dataset.name, origin: opt.dataset.origin } : null;
+  const url = document.getElementById(p.url)?.value ?? '';
+  const auth = document.getElementById(p.auth)?.value ?? '';
+  return { body: mcpTargetBody(value, url, auth), chosen, url: url.trim() };
+}
+
+// The deploy modal's target — Deploy, rollback and the post-deploy verify
+// all send it.
+function deployTargetBody() {
+  return mcpTargetOf('deploy').body;
+}
+
+// Before a write is sent (C-3): the chosen endpoint is re-read; when its
+// origin moved, or it is gone, nothing is sent — the picker is repainted
+// (the option names the new origin; a gone one falls back to Type a URL…)
+// and the sentence says why. null: send.
+async function checkEndpointDrift(id) {
+  const { chosen } = mcpTargetOf(id);
+  if (!chosen) return null;
+  const list = await readMcpEndpointsForPickers({ keep: true });
+  const drift = endpointDrift(chosen, list, { orgName: state.orgName });
+  if (drift && Array.isArray(list)) {
+    paintMcpTarget(id, { chosen: list.some((ep) => ep.id === chosen.id) ? String(chosen.id) : '' });
+  }
+  return drift;
+}
+
+// A picker opening: drawn from the list already read, then — when the list
+// is unread, or `fresh` (the deploy modal: every open) — read and redrawn.
+function openMcpTarget(id, { fresh = false } = {}) {
+  paintMcpTarget(id);
+  if (!mcpPickersReadable() || (!fresh && state.mcpEndpoints !== null)) return;
+  readMcpEndpointsForPickers().then(() => paintMcpTarget(id));
+}
+
+// The focus a picker opens on: the URL field, or the select while it hides it.
+function focusMcpTarget(id) {
+  const url = document.getElementById(MCP_PICKERS[id].url);
+  if (url && !url.closest('label')?.hidden) url.focus();
+  else document.querySelector(`[data-mcp-target="${id}"] select.set-mcp-target`)?.focus();
+}
+
+// The picker's change (host.settings.pickMcpTarget): the URL row and the
+// auth help follow; the select is not redrawn under the focus.
+function pickMcpTarget(container, value) {
+  const id = container?.closest?.('[data-mcp-target]')?.dataset?.mcpTarget;
+  if (!MCP_PICKERS[id]) return;
+  applyMcpTargetChoice(id, mcpPickerModel(id, value));
+  if (id === 'deploy') updateDeployTargetSummary();
+  if (value === '') document.getElementById(MCP_PICKERS[id].url)?.focus();
+}
+
+// The empty list's button: Settings → MCP endpoints, the pickers' panels closed first.
+function openMcpEndpointsFromPicker() {
+  closeMcpPanel();
+  const draft = $('#draft-mcp-panel');
+  if (draft) draft.hidden = true;
+  if ($('#deploy-modal') && !$('#deploy-modal').hidden) closeDeployModal();
+  enterSettings('endpoints');
+}
+
 function openMcpPanel() {
   const panel = $('#mcp-panel');
   if (!panel) return;
@@ -4622,7 +4818,8 @@ function openMcpPanel() {
     const liveUrl = state.mcpStatus?.url || null; // served to operators only
     urlInput.value = saved || liveUrl || '';
   }
-  urlInput.focus();
+  openMcpTarget('refresh');
+  focusMcpTarget('refresh');
 }
 function closeMcpPanel() {
   const panel = $('#mcp-panel');
@@ -4632,13 +4829,13 @@ function closeMcpPanel() {
 }
 
 async function refreshLive() {
-  const url = $('#mcp-url').value.trim();
-  const auth = $('#mcp-auth').value;
-  if (!url) {
-    setRefreshStatus('mcp url required', 'error');
+  const { body: target, chosen } = mcpTargetOf('refresh');
+  if (!target) {
+    setRefreshStatus('choose an MCP endpoint or type a URL', 'error');
     return;
   }
-  const dropped = await rememberMcpUrl(url).catch(() => []);
+  // A typed URL is remembered (its safe form); an endpoint's choice is, on success.
+  const dropped = target.mcpUrl ? await rememberMcpUrl(target.mcpUrl).catch(() => []) : [];
   const btn = $('#mcp-refresh-btn');
   btn.disabled = true;
   $('#mcp-btn').dataset.mcpState = 'active';
@@ -4647,7 +4844,7 @@ async function refreshLive() {
     const r = await fetch('/api/refresh-live', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ mcpUrl: url, mcpAuth: auth || undefined }),
+      body: JSON.stringify(target),
     });
     // Read as text first so we can surface a useful error if the server
     // returned HTML (typical when the dev server is stale and the route
@@ -4676,10 +4873,12 @@ async function refreshLive() {
       $('#mcp-btn').dataset.mcpState = 'error';
       return;
     }
+    rememberMcpEndpoint(chosen ? chosen.id : null);
     // Say what was not kept: the server's note (the live pack) and ours
-    // (the remembered URL).
+    // (the remembered URL) — and the endpoint the server went through.
     setRefreshStatus([
       `refreshed · ${fmtRelative(body.refreshedAt)}`,
+      body.mcpEndpoint?.name ? `through ${body.mcpEndpoint.name}` : null,
       body.note || null,
       dropped.length ? `remembered without its ${dropped.map((n) => `"${n}"`).join(', ')} parameter${dropped.length === 1 ? '' : 's'} — put the token in the auth field` : null,
     ].filter(Boolean).join(' · '), 'ok');
@@ -5442,6 +5641,9 @@ export function openDeployModal({ packId, packLabel, presetIdentities } = {}) {
   if (verifyHost) { verifyHost.hidden = true; verifyHost.innerHTML = ''; }
   cancelDeployVerify();
   loadDeployManifest(packId || state.selectedPackId);
+  // The org's endpoints, re-read on every open (C-3): a write goes where
+  // the option shows.
+  openMcpTarget('deploy', { fresh: true });
   updateDeployTargetSummary();
   loadDeployHistory(packId || state.selectedPackId);
 }
@@ -5492,21 +5694,32 @@ async function loadDeployHistory(packId) {
   } catch (_) { /* history is optional context — never block the modal */ }
 }
 
-// Roll a deploy back to its pre-deploy snapshot (10D). Reuses the MCP
-// target fields already in the modal; the result lands in the audit log
-// as its own record (rollbackOf) and the history refreshes to show it.
+// Roll a deploy back to its pre-deploy snapshot (10D). Reuses the modal's
+// MCP target (a registered endpoint, re-read before it is sent — C-3 — or
+// the typed URL); the result lands in the audit log as its own record
+// (rollbackOf) and the history refreshes to show it. A refusal reads as the
+// server's sentence (C-1); a result where every restore failed (a 502 with
+// its summary) still reads as a result.
 async function doRollback(deployId, packId, btn) {
-  const url = $('#deploy-target-mcp')?.value.trim();
-  const auth = $('#deploy-target-auth')?.value;
-  if (!url) { toast('Enter the MCP URL in the target form first', 'error'); return; }
+  if (!deployTargetBody()) { toast('Choose an MCP endpoint or type the MCP URL in the target form first', 'error'); return; }
+  const moved = await checkEndpointDrift('deploy');
+  if (moved) { toast(moved, 'error'); return; }
   if (!confirm(`Roll back ${deployId}?\n\nRestorable artefacts are re-upserted from the pre-deploy snapshot. Anything this deploy created is listed for manual removal.`)) return;
+  const drift = await checkEndpointDrift('deploy');
+  if (drift) { toast(drift, 'error'); return; }
+  const target = deployTargetBody();
+  if (!target) return;
   btn.disabled = true;
   try {
-    const r = await api(`/api/deploys/${encodeURIComponent(deployId)}/rollback`, {
+    const res = await fetch(`/api/deploys/${encodeURIComponent(deployId)}/rollback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...authHeaders() },
-      body: JSON.stringify({ mcpUrl: url, mcpAuth: auth || undefined }),
+      body: JSON.stringify(target),
     });
+    const r = await res.json().catch(() => null);
+    if (res.status === 401 && r?.login) { window.location.assign(r.login); return; }
+    const refusal = deployRefusal(res.status, r);
+    if (refusal) throw refusal;
     const manualNote = r.manual?.length ? ` · ${r.manual.length} manual step${r.manual.length === 1 ? '' : 's'}` : '';
     toast(r.ok
       ? `Rolled back: ${r.summary.ok}/${r.summary.total} restored${manualNote}`
@@ -5579,7 +5792,28 @@ async function loadDeployProfile(name) {
   $('#deploy-target-product').value = p.product || 'grafana';
   $('#deploy-target-version').value = p.version || '12';
   $('#deploy-target-mcp').value     = p.mcpUrl || '';
+  // A profile that names an endpoint selects it in the org it belongs to,
+  // while it is listed; anywhere else the typed mode, empty, and the note
+  // says why (A-12: another org's id is never sent). A typed profile is typed.
+  const { select, note } = profileEndpointNote(p, {
+    orgId: state.orgId ?? getActiveOrg(), orgName: state.orgName,
+    endpoints: mcpPickersReadable() ? state.mcpEndpoints : null, profileName: name,
+  });
+  if (p.mcpEndpoint) {
+    if (select === null) $('#deploy-target-mcp').value = '';
+    paintMcpTarget('deploy', { chosen: select === null ? '' : String(select) });
+  } else if (p.mcpUrl) {
+    paintMcpTarget('deploy', { chosen: '' });
+  }
+  setDeployStatus(note || '', note ? 'error' : '');
   updateDeployTargetSummary();
+}
+
+// The endpoint a saved profile names, with the org it belongs to (A-12) —
+// none when the URL is typed.
+function chosenEndpointForProfile() {
+  const { chosen } = mcpTargetOf('deploy');
+  return chosen ? { orgId: state.orgId ?? getActiveOrg() ?? 'default', id: chosen.id, name: chosen.name } : undefined;
 }
 async function saveDeployProfile() {
   const name = prompt('Profile name (e.g. "Prod Grafana"):', $('#deploy-target-profile').selectedOptions?.[0]?.value || '');
@@ -5594,6 +5828,7 @@ async function saveDeployProfile() {
       product:   $('#deploy-target-product').value,
       version:   $('#deploy-target-version').value,
       mcpUrl:    $('#deploy-target-mcp').value.trim(),
+      mcpEndpoint: chosenEndpointForProfile(),
     });
   } catch (e) {
     toast(`Profile not saved: ${e.message}`, 'error');
@@ -5715,13 +5950,11 @@ function updateManifestCounter(selected, total) {
 
 async function doDeployBulk() {
   if (deployModalState.inflight) return;
-  const url  = $('#deploy-target-mcp').value.trim();
-  const auth = $('#deploy-target-auth').value;
   const folder = $('#deploy-target-folder').value.trim();
   const product = $('#deploy-target-product').value;
   const version = $('#deploy-target-version').value;
   const setStatus = setDeployStatus;
-  if (!url) { setStatus('mcp url required', 'error'); return; }
+  if (!deployTargetBody()) { setStatus('choose an MCP endpoint or type a URL', 'error'); return; }
   // Deploy what the review shows: a selected row the type filter hides is
   // not counted, not reviewed — and so not deployed.
   const types = new Set([...document.querySelectorAll('#deploy-type-filters input:checked')].map(i => i.value));
@@ -5745,6 +5978,16 @@ async function doDeployBulk() {
   deployModalState.inflight = true;
   const goBtn = $('#deploy-modal-go');
   goBtn.disabled = true;
+  // A registered endpoint is re-read just before the write (C-3): moved or
+  // gone → nothing is sent, and the status line says why.
+  const drift = await checkEndpointDrift('deploy');
+  const target = drift ? null : deployTargetBody();
+  if (!target) {
+    if (drift) setStatus(drift, 'error');
+    deployModalState.inflight = false;
+    goBtn.disabled = false;
+    return;
+  }
   setStatus(`deploying ${items.length} artefact${items.length === 1 ? '' : 's'}…`);
 
   try {
@@ -5755,7 +5998,7 @@ async function doDeployBulk() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
-        mcpUrl: url, mcpAuth: auth || undefined,
+        ...target,
         targetProduct: product, targetVersion: version, targetFolder: folder || undefined,
         items,
       }),
@@ -5784,8 +6027,7 @@ async function doDeployBulk() {
         deployId: body.deployId,
         packId: deployModalState.packId,
         env: state.selectedEnv || null,
-        mcpUrl: url,
-        mcpAuth: auth || undefined,
+        target,
         items: okItems,
       });
     }
@@ -5816,9 +6058,12 @@ function cancelDeployVerify() {
 
 const VERIFY_DELAYS_MS = [3000, 15000, 30000, 60000];
 
-export async function startDeployVerify({ deployId, packId, env, mcpUrl, mcpAuth, items }) {
+// `target` is the deploy's MCP target (deployTargetBody(): a registered
+// endpoint by id, or the typed URL — with the deploy's typed key when one was
+// typed; without one, the server reads the endpoint's own variable).
+export async function startDeployVerify({ deployId, packId, env, target, items }) {
   const host = $('#deploy-modal-verify');
-  if (!host || !items.length || !mcpUrl) return;
+  if (!host || !items.length || !target) return;
   if (deployVerifyState.running) cancelDeployVerify();
   deployVerifyState.cancelled = false;
   deployVerifyState.running = true;
@@ -5833,10 +6078,12 @@ export async function startDeployVerify({ deployId, packId, env, mcpUrl, mcpAuth
     try {
       host.querySelector('.deploy-verify-status')?.replaceChildren(
         document.createTextNode(`check ${attempt}/${VERIFY_DELAYS_MS.length}: drafting live state…`));
-      const out = await api('/api/draft-from-mcp', {
+      // requestJson: a refusal (an endpoint whose token variable is unset,
+      // one gone from the org) reads as the server's sentence, never a `{`.
+      const out = await requestJson('/api/draft-from-mcp', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...authHeaders() },
-        body: JSON.stringify({ mcpUrl, mcpAuth }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(target),
       });
       if (!out.ok) throw new Error(out.error || 'MCP draft failed');
       // The draft is registered by the route that answered it; it replaces
@@ -5860,6 +6107,10 @@ export async function startDeployVerify({ deployId, packId, env, mcpUrl, mcpAuth
       if (last.summary.outcome !== 'pending') break;
     } catch (e) {
       lastError = e;
+      // The server refused the draft (a 4xx: the endpoint's token variable
+      // unset, the endpoint gone, the role): waiting changes nothing — the
+      // panel settles on the sentence now instead of polling behind it.
+      if (e.status >= 400 && e.status < 500) break;
       renderDeployVerifyPanel(host, last, { attempt, packBId, final: false, error: e.message });
     }
   }
@@ -6018,7 +6269,8 @@ function setupDraftFromMcpPanel() {
       if (!urlInput.value) {
         urlInput.value = recallMcpUrl() || '';
       }
-      urlInput.focus();
+      openMcpTarget('draft');
+      focusMcpTarget('draft');
     }
   };
   closeBtn.onclick = () => { panel.hidden = true; };
@@ -6036,16 +6288,15 @@ function setupDraftFromMcpPanel() {
 }
 
 async function doDraftFromMcp() {
-  const url  = $('#draft-mcp-url').value.trim();
-  const auth = $('#draft-mcp-auth').value;
+  const { body: target, chosen } = mcpTargetOf('draft');
   const name = $('#draft-mcp-name').value.trim();
   const statusEl = $('#draft-mcp-status');
   const setStatus = (msg, kind) => {
     statusEl.textContent = msg;
     statusEl.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
   };
-  if (!url) { setStatus('mcp url required', 'error'); return; }
-  rememberMcpUrl(url).catch(() => {});
+  if (!target) { setStatus('choose an MCP endpoint or type a URL', 'error'); return; }
+  if (target.mcpUrl) rememberMcpUrl(target.mcpUrl).catch(() => {});
 
   const goBtn = $('#draft-mcp-go-btn');
   goBtn.disabled = true;
@@ -6056,7 +6307,7 @@ async function doDraftFromMcp() {
     const r = await fetch('/api/draft-from-mcp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ mcpUrl: url, mcpAuth: auth || undefined, packName: name || undefined }),
+      body: JSON.stringify({ ...target, packName: name || undefined }),
     });
     const ct = r.headers.get('content-type') || '';
     const raw = await r.text();
@@ -6066,6 +6317,7 @@ async function doDraftFromMcp() {
     }
     const out = JSON.parse(raw);
     if (!out.ok) { setStatus(`error: ${out.error || 'unknown'}`, 'error'); return; }
+    rememberMcpEndpoint(chosen ? chosen.id : null);
     draftMcpState.lastResult = out;
     renderDraftMcpResult(out);
     followReplacedPack(out.registered?.id).catch(() => {});

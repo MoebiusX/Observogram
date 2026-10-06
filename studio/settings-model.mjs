@@ -704,34 +704,38 @@ const AUTH_WRITE = "MCP client key — a write token, sent with this request onl
 // org; `liveUrl` the live status's URL; `typedUrl` the remembered typed URL
 // (not a default demo URL — a default would outrank the list); `purpose`
 // 'read' | 'write'; `canAdmin` whether the empty-list hint may offer a
-// button to Settings → MCP endpoints (known true only — C-7).
+// button to Settings → MCP endpoints (known true only — C-7); `chosen` the
+// choice the person made in this picker ('' = Type a URL…, an id = that
+// endpoint while it is listed), which outranks every preselection.
 // Preselection: remembered endpoint > the endpoint whose url is the live
 // status's > the remembered typed URL > the first endpoint > typed.
-export function mcpTargetModel({ endpoints = null, remembered = null, liveUrl = null, typedUrl = '', purpose = 'read', orgName = null, canAdmin = false } = {}) {
+export function mcpTargetModel({ endpoints = null, remembered = null, liveUrl = null, typedUrl = '', purpose = 'read', orgName = null, canAdmin = false, chosen = null } = {}) {
   const list = isArr(endpoints) ? endpoints : [];
   const options = [
-    ...list.map((ep) => ({ value: String(ep.id), label: endpointLabel(ep), origin: ep.origin, tokenText: ep.readTokenEnv ?? null })),
-    { value: '', label: 'Type a URL…', origin: null, tokenText: null },
+    ...list.map((ep) => ({ value: String(ep.id), label: endpointLabel(ep), name: ep.name, origin: ep.origin, tokenText: ep.readTokenEnv ?? null })),
+    { value: '', label: 'Type a URL…', name: null, origin: null, tokenText: null },
   ];
   const has = (id) => id !== null && id !== undefined && list.some((ep) => String(ep.id) === String(id));
   let value = '';
-  if (has(remembered)) value = String(remembered);
+  if (chosen === '' && list.length) value = '';
+  else if (has(chosen)) value = String(chosen);
+  else if (has(remembered)) value = String(remembered);
   else if (liveUrl && list.some((ep) => ep.url && ep.url === liveUrl)) value = String(list.find((ep) => ep.url === liveUrl).id);
   else if (typedUrl && String(typedUrl).trim()) value = '';
   else if (list.length) value = String(list[0].id);
-  const chosen = list.find((ep) => String(ep.id) === value) || null;
+  const picked = list.find((ep) => String(ep.id) === value) || null;
   let authHelp = null;
-  if (chosen) {
+  if (picked) {
     if (purpose === 'write') authHelp = AUTH_WRITE;
-    else if (chosen.readTokenEnv) authHelp = `Optional — empty uses ${chosen.readTokenEnv} on the server.`;
-    else if (chosen.url) authHelp = 'Optional — this endpoint names no token variable; send one here if the server needs it.';
+    else if (picked.readTokenEnv) authHelp = `Optional — empty uses ${picked.readTokenEnv} on the server.`;
+    else if (picked.url) authHelp = 'Optional — this endpoint names no token variable; send one here if the server needs it.';
     else authHelp = 'Optional.';
   }
   const org = orgName || ORG_FALLBACK;
   const hint = isArr(endpoints) && !endpoints.length
     ? (canAdmin ? { text: `No MCP endpoint is registered in ${org} yet.`, button: 'Settings → MCP endpoints' } : { text: `No MCP endpoint is registered in ${org} yet — an admin registers them.`, button: null })
     : null;
-  return { show: list.length > 0, options, value, showUrl: chosen === null, authHelp, hint };
+  return { show: list.length > 0, options, value, showUrl: picked === null, authHelp, hint };
 }
 
 // The request's target: an endpoint → { mcpEndpointId, mcpAuth? }; a typed
