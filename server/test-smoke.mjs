@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 
 import { SPEC_DIR, SPEC_VERSION } from '../tools/lib/validator.mjs';
-import { startFakeMcp, registerMcpEndpoint } from './fixtures/fake-mcp.mjs';
+import { startFakeMcp, registerMcpEndpoint, endpointIdFor } from './fixtures/fake-mcp.mjs';
 
 // Hermetic (§0): a developer shell's store, identity, taxonomy, transport-hook
 // or brand variables never reach this process's imports — the children's STRIP
@@ -424,10 +424,14 @@ try {
   const exportBadPack = await fetch(`${base}/api/packs/does-not-exist/export.zip`);
   assert(exportBadPack.status === 404, 'export.zip unknown pack → 404');
 
+  // Every write below sends the CSRF header, as the studio does: the MCP
+  // routes take it in every posture (the live MCP API rule).
+  const JSON_CSRF = { 'Content-Type': 'application/json', 'X-Observogram-CSRF': '1' };
+
   // POST /api/packs/:id/deploy/:target — missing mcpUrl → 400
   const deployNoUrl = await fetch(`${base}/api/packs/payment-service/deploy/prometheus-rules`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_CSRF,
     body: JSON.stringify({}),
   });
   assert(deployNoUrl.status === 400, 'deploy without mcpUrl → 400');
@@ -438,9 +442,19 @@ try {
   // any fetch happens, on every endpoint that takes an mcpUrl.
   const postJson = (path, body) => fetch(`${base}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_CSRF,
     body: JSON.stringify(body),
   });
+  // The unreachable MCP (nothing listens on port 1) as a registered
+  // endpoint: the deploy, draft and refresh pins that reach the wire send
+  // its id, as every caller below the admin will. The typed-URL pins that
+  // stay typed are the refusals (scheme, parse, ALLOW_LOCAL_MCP=0), the
+  // credential-hygiene pins and "both fields".
+  const NO_MCP = 'http://127.0.0.1:1/no-mcp';
+  const noMcp = await registerMcpEndpoint(base, { name: 'unreachable', url: NO_MCP });
+  assert(noMcp.status === 201 && noMcp.json?.endpoint?.url === NO_MCP, 'the unreachable MCP registers as an endpoint (open loopback, the CSRF header)', noMcp.json);
+  const noMcpId = noMcp.id;
+  const NO_MCP_ENDPOINT = { id: noMcpId, name: 'unreachable' };
   for (const [path, body] of [
     ['/api/packs/payment-service/deploy/prometheus-rules', { mcpUrl: 'file:///etc/passwd' }],
     ['/api/packs/payment-service/deploy-bulk', { mcpUrl: 'ftp://mcp.example/x', items: [{ group: 'rules' }] }],
@@ -478,16 +492,16 @@ try {
   // POST /api/packs/:id/deploy/:target — unknown pack → 404
   const deployBadPack = await fetch(`${base}/api/packs/does-not-exist/deploy/prometheus-rules`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mcpUrl: 'http://127.0.0.1:1/no' }),
+    headers: JSON_CSRF,
+    body: JSON.stringify({ mcpEndpointId: noMcpId }),
   });
   assert(deployBadPack.status === 404, 'deploy unknown pack → 404');
 
   // POST /api/packs/:id/deploy/:target — unreachable MCP → 502 (still JSON)
   const deployBadMcp = await fetch(`${base}/api/packs/payment-service/deploy/prometheus-rules`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mcpUrl: 'http://127.0.0.1:1/no-mcp' }),
+    headers: JSON_CSRF,
+    body: JSON.stringify({ mcpEndpointId: noMcpId }),
   });
   assert(deployBadMcp.status === 502, 'deploy unreachable MCP → 502');
   const deployErr = await deployBadMcp.json();
@@ -519,8 +533,8 @@ try {
          'the failed deploy writes one deploy.run row by local naming its deployId', runRow);
   assert(JSON.stringify(runRow?.detail) === JSON.stringify({
     pack: { id: 'payment-service', version: auditRec.pack.version }, env: null, target: { product: 'grafana', version: '12', folder: null },
-    mode: 'upsert', dryRun: false, origin: 'http://127.0.0.1:1', mcpEndpoint: null, items: 1, ok: 0, failed: 1, tookMs: auditRec.tookMs,
-  }), 'the deploy.run row: the exact detail — failed: 1, the origin, no snapshot key, no fileError key', runRow?.detail);
+    mode: 'upsert', dryRun: false, origin: 'http://127.0.0.1:1', mcpEndpoint: NO_MCP_ENDPOINT, items: 1, ok: 0, failed: 1, tookMs: auditRec.tookMs,
+  }), 'the deploy.run row: the exact detail — failed: 1, the origin, the endpoint used, no snapshot key, no fileError key', runRow?.detail);
   assert(!JSON.stringify(runRow?.detail).includes('no-mcp'), 'the row carries the origin, never the URL\'s path', runRow?.detail);
   assert(!('auditError' in deployErr), 'a written row: no auditError key in the response');
 
@@ -599,7 +613,7 @@ try {
   const authedDeploy = await fetch(`${base}/api/packs/payment-service/deploy/prometheus-rules`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer smoke-secret' },
-    body: JSON.stringify({ mcpUrl: 'http://127.0.0.1:1/no-mcp' }),
+    body: JSON.stringify({ mcpEndpointId: noMcpId }),
   }).then(r => r.json());
   const authedAudit = await getJson(base, `/api/deploys?pack=payment-service&limit=5`);
   const authedRec = authedAudit.deploys.find(d => d.deployId === authedDeploy.deployId);
@@ -999,8 +1013,8 @@ try {
   // Deploy on a non-deployable target → 400 with a clear message
   const deployUndeployable = await fetch(`${base}/api/packs/payment-service/deploy/otel-collector`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mcpUrl: 'http://127.0.0.1:1/no' }),
+    headers: JSON_CSRF,
+    body: JSON.stringify({ mcpEndpointId: noMcpId }),
   });
   assert(deployUndeployable.status === 400, 'deploy to undeployable target → 400');
   const undeployableBody = await deployUndeployable.json();
@@ -1010,8 +1024,8 @@ try {
   // Deploy with unknown target version → 400
   const deployBadVer = await fetch(`${base}/api/packs/payment-service/deploy/prometheus-rules`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mcpUrl: 'http://127.0.0.1:1/no', targetVersion: '11' }),
+    headers: JSON_CSRF,
+    body: JSON.stringify({ mcpEndpointId: noMcpId, targetVersion: '11' }),
   });
   assert(deployBadVer.status === 400, 'deploy with bad target version → 400');
   const badVerBody = await deployBadVer.json();
@@ -1021,8 +1035,8 @@ try {
   // Deploy with scope=recording → same Grafana alert-rule writer; scope filters the compiled rules.
   const deployRecording = await fetch(`${base}/api/packs/payment-service/deploy/prometheus-rules`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mcpUrl: 'http://127.0.0.1:1/no', scope: 'recording' }),
+    headers: JSON_CSRF,
+    body: JSON.stringify({ mcpEndpointId: noMcpId, scope: 'recording' }),
   });
   assert(deployRecording.status === 502, 'deploy with scope=recording → 502 from unreachable mcp');
   const recBody = await deployRecording.json();
@@ -1033,8 +1047,8 @@ try {
   // Deploy with scope=alerting → same tool, different scope.
   const deployAlerting = await fetch(`${base}/api/packs/payment-service/deploy/prometheus-rules`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mcpUrl: 'http://127.0.0.1:1/no', scope: 'alerting', targetVersion: '13' }),
+    headers: JSON_CSRF,
+    body: JSON.stringify({ mcpEndpointId: noMcpId, scope: 'alerting', targetVersion: '13' }),
   });
   const alrBody = await deployAlerting.json();
   assert(alrBody.tool === 'grafana_create_alert_rule',
@@ -1048,11 +1062,12 @@ try {
     'grafana_alert_rules', 'grafana_dashboard_get',
   ]);
   try {
+    const fakeMcpId = await endpointIdFor(base, fakeMcp.url, { name: 'smoke-deploy' });
     const deployBulk = await fetch(`${base}/api/packs/payment-service/deploy-bulk`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_CSRF,
       body: JSON.stringify({
-        mcpUrl: fakeMcp.url,
+        mcpEndpointId: fakeMcpId,
         targetProduct: 'grafana',
         targetVersion: '12',
         targetFolder: 'observability-pack',
@@ -1069,9 +1084,9 @@ try {
     const bulkRow = auditRows({ action: 'deploy.bulk', limit: 1 })[0];
     assert(bulkRow?.targetId === bulkBody.deployId && bulkRow.actor === 'local'
            && bulkRow.detail.items === 2 && bulkRow.detail.ok === 2 && bulkRow.detail.failed === 0 && bulkRow.detail.snapshot === 'captured'
-           && bulkRow.detail.origin === new URL(fakeMcp.url).origin && bulkRow.detail.mcpEndpoint === null
+           && bulkRow.detail.origin === new URL(fakeMcp.url).origin && JSON.stringify(bulkRow.detail.mcpEndpoint) === JSON.stringify({ id: fakeMcpId, name: 'smoke-deploy' })
            && bulkRow.detail.target.folder === 'observability-pack' && !('fileError' in bulkRow.detail),
-           'deploy-bulk writes one deploy.bulk row: ok 2 of 2, snapshot captured, the fake\'s origin', bulkRow);
+           'deploy-bulk writes one deploy.bulk row: ok 2 of 2, snapshot captured, the fake\'s origin, the endpoint used', bulkRow);
     assert(!('auditError' in bulkBody), 'deploy-bulk: no auditError key when the row was written');
 
     // Pre-deploy snapshot (10D): the read calls land BEFORE the writes.
@@ -1115,8 +1130,8 @@ try {
     const preRollbackCalls = fakeMcp.calls.length;
     const rb = await fetch(`${base}/api/deploys/${bulkBody.deployId}/rollback`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mcpUrl: fakeMcp.url }),
+      headers: JSON_CSRF,
+      body: JSON.stringify({ mcpEndpointId: fakeMcpId }),
     }).then(r => r.json());
     assert(rb.ok === true && rb.rollbackOf === bulkBody.deployId, 'rollback runs and references the original deploy');
     const rbCall = fakeMcp.calls.slice(preRollbackCalls).find(c => c.name === 'grafana_create_dashboard');
@@ -1140,7 +1155,7 @@ try {
 
     // A deploy with no snapshot (the earlier single-route 502) can't roll back.
     const rb409 = await fetch(`${base}/api/deploys/${deployErr.deployId}/rollback`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mcpUrl: fakeMcp.url }),
+      method: 'POST', headers: JSON_CSRF, body: JSON.stringify({ mcpEndpointId: fakeMcpId }),
     });
     assert(rb409.status === 409, 'rollback without a usable snapshot → 409');
     assert(auditSeq() === seqBefore409, 'the 409 rollback writes no row');
@@ -1250,7 +1265,7 @@ try {
       return {};
     });
     try {
-      const draft = await (await postJson('/api/draft-from-mcp', { mcpUrl: fakeStack.url })).json();
+      const draft = await (await postJson('/api/draft-from-mcp', { mcpEndpointId: await endpointIdFor(base, fakeStack.url, { name: 'smoke-stack' }) })).json();
       assert(draft.ok === true, 'draft-from-mcp against the stack fake succeeds', draft.error);
       const st = draft.summary?.stack;
       assert(st && st.status === 'sampled', 'summary.stack.status is sampled when metrics_query is advertised', st);
@@ -1295,7 +1310,7 @@ try {
       return {};
     });
     try {
-      const draft = await (await postJson('/api/draft-from-mcp', { mcpUrl: fakeRestricted.url })).json();
+      const draft = await (await postJson('/api/draft-from-mcp', { mcpEndpointId: await endpointIdFor(base, fakeRestricted.url, { name: 'smoke-restricted' }) })).json();
       assert(draft.ok === true, 'draft-from-mcp against the restricted fake succeeds', draft.error);
       assert(draft.validation?.ok === true && typeof draft.registered?.id === 'string',
              'the restricted fake\'s draft validates and registers (so a refresh from it can write a live pack)', draft.validation);
@@ -1452,7 +1467,7 @@ try {
   // POST /api/refresh-live — missing mcpUrl
   const badRefresh = await fetch(`${base}/api/refresh-live`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_CSRF,
     body: JSON.stringify({}),
   });
   assert(badRefresh.status === 400, 'POST /api/refresh-live rejects empty body with 400');
@@ -1460,11 +1475,11 @@ try {
   assert(badRefreshBody.ok === false && /mcpUrl/.test(badRefreshBody.error || ''),
          'refresh-live error mentions mcpUrl');
 
-  // POST /api/refresh-live — unreachable mcpUrl
+  // POST /api/refresh-live — an unreachable MCP endpoint
   const unreachable = await fetch(`${base}/api/refresh-live`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mcpUrl: 'http://127.0.0.1:1/no-mcp' }),
+    headers: JSON_CSRF,
+    body: JSON.stringify({ mcpEndpointId: noMcpId }),
   });
   assert(unreachable.status === 502, 'POST /api/refresh-live surfaces 502 on MCP failure');
 
@@ -1671,7 +1686,7 @@ try {
 
   // /api/draft-from-mcp — empty body
   const draftEmpty = await fetch(`${base}/api/draft-from-mcp`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    method: 'POST', headers: JSON_CSRF, body: '{}',
   });
   assert(draftEmpty.status === 400, 'POST /api/draft-from-mcp without mcpUrl → 400');
   const draftEmptyBody = await draftEmpty.json();
@@ -1680,8 +1695,8 @@ try {
 
   // /api/draft-from-mcp — unreachable MCP returns 502 with JSON
   const draftBad = await fetch(`${base}/api/draft-from-mcp`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mcpUrl: 'http://127.0.0.1:1/no-mcp' }),
+    method: 'POST', headers: JSON_CSRF,
+    body: JSON.stringify({ mcpEndpointId: noMcpId }),
   });
   assert(draftBad.status === 502, 'POST /api/draft-from-mcp unreachable → 502');
   assert((draftBad.headers.get('content-type') || '').includes('application/json'),

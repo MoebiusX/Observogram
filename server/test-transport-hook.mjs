@@ -9,6 +9,10 @@
  * its contract is one 502 with nothing written (no live pack, no deploy or
  * rollback record), and a child started without the variable never inherits the
  * parent's (serve-child STRIP). Every server is a child with an explicit env.
+ * The fake MCP is the org's endpoint, planted through the store repository
+ * beside the running child (the token posture has no principal that may
+ * register one), and every route takes it by mcpEndpointId: the bearer is
+ * an operator.
  */
 
 import { test } from 'node:test';
@@ -17,7 +21,17 @@ import { createServer } from 'node:http';
 import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { boot, serve } from './fixtures/serve-child.mjs';
+import { STRIP, boot, serve } from './fixtures/serve-child.mjs';
+
+// Hermetic (server/test-hermetic-suites.mjs): this process imports the store
+// repository to plant the endpoints, so the shell's variables go first.
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
+const { openRaw } = await import('./store/db.mjs');
+const { createMcpEndpoint } = await import('./store/mcp-endpoints.mjs');
+const { runWithOrg } = await import('./org-context.mjs');
 
 const TMP = mkdtempSync(join(tmpdir(), 'observogram-transport-hook-'));
 process.on('exit', () => { try { rmSync(TMP, { recursive: true, force: true }); } catch { /* best effort */ } });
@@ -58,13 +72,23 @@ async function startFakeMcp(toolNames) {
 }
 const TOOLS = ['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines',
   'grafana_create_alert_rule', 'grafana_create_dashboard', 'grafana_alert_rules', 'grafana_dashboard_get'];
-const BULK_BODY = (mcpUrl) => ({
-  mcpUrl, targetProduct: 'grafana', targetVersion: '12', targetFolder: 'observability-pack',
+const BULK_BODY = (mcpEndpointId) => ({
+  mcpEndpointId, targetProduct: 'grafana', targetVersion: '12', targetFolder: 'observability-pack',
   items: [
     { group: 'rules', flavor: 'prometheus', artifact: 'declared:0', scope: 'recording' },
     { group: 'dashboards', flavor: 'grafana', dashboardId: 'payment-overview' },
   ],
 });
+// The fake as the default org's endpoint, written into the running child's
+// store (WAL) by a repository call: its id.
+async function plantEndpoint(ws, url, name = 'fake') {
+  const db = await openRaw(join(ws, 'observogram.db'));
+  try {
+    return runWithOrg('default', () => createMcpEndpoint(db, 'system', { name, url })).id;
+  } finally {
+    db.close();
+  }
+}
 const deployRecords = (ws) => (existsSync(join(ws, 'deploys.jsonl')) ? readFileSync(join(ws, 'deploys.jsonl'), 'utf8').split('\n').filter(Boolean) : []);
 
 test('a hook that cannot load refuses the start, naming the variable and the path only', () => {
@@ -101,17 +125,18 @@ test('a header hook reaches every MCP call of refresh-live, draft-from-mcp and d
   const fake = await startFakeMcp(TOOLS);
   const s = await serve(ws, { env: { ...TOKEN, OBSERVOGRAM_TRANSPORT_HOOK: gateway } });
   try {
-    const refresh = await post(s.base, '/api/refresh-live', { mcpUrl: fake.url });
+    const mcpEndpointId = await plantEndpoint(ws, fake.url);
+    const refresh = await post(s.base, '/api/refresh-live', { mcpEndpointId });
     assert.equal(refresh.status, 200, `refresh-live: ${await refresh.text()}`);
     assert.ok(fake.requests.length > 0 && fake.requests.every(r => r.headers['x-gateway'] === 'studio'), 'refresh-live: every request carries X-Gateway');
     assert.ok(existsSync(join(ws, 'live', 'production-live.pack.yaml')), 'the live pack was written');
     fake.requests.length = 0;
-    const draft = await post(s.base, '/api/draft-from-mcp', { mcpUrl: fake.url, mcpAuth: 'draft-tok' });
+    const draft = await post(s.base, '/api/draft-from-mcp', { mcpEndpointId, mcpAuth: 'draft-tok' });
     assert.equal(draft.status, 200);
     assert.ok(fake.requests.length > 0 && fake.requests.every(r => r.headers['x-gateway'] === 'studio' && r.headers.authorization === 'Bearer draft-tok'),
       'draft-from-mcp: every request carries X-Gateway and the caller\'s bearer');
     fake.requests.length = 0;
-    const bulk = await post(s.base, '/api/packs/payment-service/deploy-bulk', BULK_BODY(fake.url));
+    const bulk = await post(s.base, '/api/packs/payment-service/deploy-bulk', BULK_BODY(mcpEndpointId));
     const bulkText = await bulk.text();
     assert.equal(bulk.status, 200, `deploy-bulk: ${bulkText}`);
     const body = JSON.parse(bulkText);
@@ -134,10 +159,12 @@ test('a hook that breaks its contract at call time: one 502 naming the hook, no 
   let seeded;
   let before;
   let s;
+  let mcpEndpointId;
   try {
     const seed = await serve(ws, { env: { ...TOKEN, OBSERVOGRAM_TRANSPORT_HOOK: identity } });
     try {
-      const r = await post(seed.base, '/api/packs/payment-service/deploy-bulk', BULK_BODY(fake.url));
+      mcpEndpointId = await plantEndpoint(ws, fake.url);
+      const r = await post(seed.base, '/api/packs/payment-service/deploy-bulk', BULK_BODY(mcpEndpointId));
       const text = await r.text();
       assert.equal(r.status, 200, `seed deploy: ${text}`);
       seeded = JSON.parse(text).deployId;
@@ -146,18 +173,18 @@ test('a hook that breaks its contract at call time: one 502 naming the hook, no 
     assert.equal(before.length, 1, 'one seeded deploy record');
     fake.requests.length = 0;
     s = await serve(ws, { env: { ...TOKEN, OBSERVOGRAM_TRANSPORT_HOOK: throwing } });
-    const refresh = await post(s.base, '/api/refresh-live', { mcpUrl: fake.url, mcpAuth: 'secret-bearer-1' });
+    const refresh = await post(s.base, '/api/refresh-live', { mcpEndpointId, mcpAuth: 'secret-bearer-1' });
     assert.equal(refresh.status, 502);
     const rj = await refresh.json();
     assert.equal(rj.error, `transport hook ${throwing}: prepareRequest threw: gateway refused Bearer <redacted>`);
     assert.ok(!JSON.stringify(rj).includes('secret-bearer-1'), 'the bearer is redacted');
     assert.ok(!existsSync(join(ws, 'live', 'production-live.pack.yaml')), 'no live pack written');
 
-    const draft = await post(s.base, '/api/draft-from-mcp', { mcpUrl: fake.url });
+    const draft = await post(s.base, '/api/draft-from-mcp', { mcpEndpointId });
     assert.equal(draft.status, 502);
     assert.match((await draft.json()).error, /transport hook .*prepareRequest threw/);
 
-    const bulk = await post(s.base, '/api/packs/payment-service/deploy-bulk', BULK_BODY(fake.url));
+    const bulk = await post(s.base, '/api/packs/payment-service/deploy-bulk', BULK_BODY(mcpEndpointId));
     assert.equal(bulk.status, 502, 'deploy-bulk: one 502, not N item failures');
     const bj = await bulk.json();
     assert.equal(bj.ok, false);
@@ -165,12 +192,12 @@ test('a hook that breaks its contract at call time: one 502 naming the hook, no 
     assert.equal(bj.results, undefined, 'no per-item results');
     assert.deepEqual(deployRecords(ws), before, 'no deploy record for a deploy that never reached the wire');
 
-    const single = await post(s.base, '/api/packs/payment-service/deploy/grafana-dashboard', { mcpUrl: fake.url, dashboardId: 'payment-overview' });
+    const single = await post(s.base, '/api/packs/payment-service/deploy/grafana-dashboard', { mcpEndpointId, dashboardId: 'payment-overview' });
     assert.equal(single.status, 502);
     assert.match((await single.json()).error, /transport hook .*prepareRequest threw/);
     assert.deepEqual(deployRecords(ws), before, 'the single deploy route audits nothing either');
 
-    const rollback = await post(s.base, `/api/deploys/${seeded}/rollback`, { mcpUrl: fake.url });
+    const rollback = await post(s.base, `/api/deploys/${seeded}/rollback`, { mcpEndpointId });
     assert.equal(rollback.status, 502, 'rollback: one 502');
     const rbj = await rollback.json();
     assert.equal(rbj.ok, false);
@@ -193,7 +220,7 @@ test('a child started without the variable never inherits the parent\'s hook (se
   let s;
   try {
     s = await serve(ws, { env: TOKEN });
-    const refresh = await post(s.base, '/api/refresh-live', { mcpUrl: fake.url });
+    const refresh = await post(s.base, '/api/refresh-live', { mcpEndpointId: await plantEndpoint(ws, fake.url) });
     assert.equal(refresh.status, 200);
     assert.ok(fake.requests.length > 0 && fake.requests.every(r => r.headers['x-gateway'] === undefined), 'no request carries the parent\'s header');
   } finally {

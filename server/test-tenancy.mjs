@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 import { createServer, request } from 'node:http';
 import { spawnSync } from 'node:child_process';
+import { endpointIdFor } from './fixtures/fake-mcp.mjs';
 
 // Hermetic (§0): a developer shell's store, identity, taxonomy, transport-hook
 // or brand variables never reach this process's imports — the children's STRIP
@@ -205,11 +206,13 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   j = await r.json();
   const packId = j.registered?.id;
   assert(!!packId && existsSync(join(dir, 'packs', `${packId}.pack.yaml`)), `alice registers a pack into ${org}`, j.registered);
+  // The fake MCP as this org's endpoint: the deploys go by its id.
+  const fakeEndpointId = await endpointIdFor(root, mcp.url, { name: `${org} fake mcp`, headers: h });
   let seq = auditSeq();
   r = await fetch(`${root}/api/packs/${packId}/deploy-bulk`, {
     method: 'POST', headers: { ...h, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      mcpUrl: mcp.url, targetProduct: 'grafana', targetVersion: '12', targetFolder: 'observability-pack',
+      mcpEndpointId: fakeEndpointId, targetProduct: 'grafana', targetVersion: '12', targetFolder: 'observability-pack',
       items: [
         { group: 'rules', flavor: 'prometheus', artifact: 'declared:0', scope: 'recording' },
         { group: 'dashboards', flavor: 'grafana', dashboardId: 'payment-overview' },
@@ -303,7 +306,7 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   assert(rows.length === 1 && listedFor('POST /api/services/:id/waivers', rows)
     && JSON.stringify(rows) === JSON.stringify([['waiver.create', 'alice', org, String(waiverId), { service: `${org}-sweep-service`, ruleId: 'L5.MUST.synthetic_probe', artefactId: null, expiresAt, reason: 'the probe ships next sprint' }]]),
     `alice's waiver in ${org}: exactly one waiver.create row by alice in ${org} (an action the table lists)`, rows);
-  return { packId, deployId, journey, serviceId, environmentId, mcpEndpointId, waiverId };
+  return { packId, deployId, journey, serviceId, environmentId, mcpEndpointId, fakeEndpointId, waiverId };
 }
 
 // The cross-org route sweep: `who` (a session in another org — `org` is its
@@ -326,7 +329,9 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     const parse = () => { try { return JSON.parse(text); } catch { return null; } };
     return { status: r.status, json: parse() };
   };
-  const { packId, deployId, journey, userId, serviceId, environmentId, mcpEndpointId, waiverId } = ids;
+  // The deploy rows send the other org's endpoint for the fake: the route
+  // refuses the pack or the deploy first, so the fake sees no call.
+  const { packId, deployId, journey, userId, serviceId, environmentId, mcpEndpointId, fakeEndpointId, waiverId } = ids;
   const p = encodeURIComponent(packId);
   const is404 = (label) => (r) => assert(r.status === 404, `${who}: ${label} → 404`, r.status, 404);
   const ORG_SCOPED = {
@@ -346,12 +351,12 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     'GET /api/packs/:id/export.zip': [`/api/packs/${p}/export.zip`, undefined, is404('GET /api/packs/:id/export.zip')],
     'GET /api/packs/:id/compile/:target': [`/api/packs/${p}/compile/prometheus-rules`, undefined, is404('GET /api/packs/:id/compile/:target')],
     'GET /api/diff': [`/api/diff?a=${p}&b=${p}`, undefined, is404('GET /api/diff')],
-    'POST /api/packs/:id/deploy-bulk': [`/api/packs/${p}/deploy-bulk`, { mcpUrl: mcp.url, items: [{ group: 'dashboards', flavor: 'grafana', dashboardId: 'payment-overview' }] }, is404('POST /api/packs/:id/deploy-bulk')],
-    'POST /api/packs/:id/deploy/:target': [`/api/packs/${p}/deploy/grafana-dashboard`, { mcpUrl: mcp.url }, is404('POST /api/packs/:id/deploy/:target')],
+    'POST /api/packs/:id/deploy-bulk': [`/api/packs/${p}/deploy-bulk`, { mcpEndpointId: fakeEndpointId, items: [{ group: 'dashboards', flavor: 'grafana', dashboardId: 'payment-overview' }] }, is404('POST /api/packs/:id/deploy-bulk')],
+    'POST /api/packs/:id/deploy/:target': [`/api/packs/${p}/deploy/grafana-dashboard`, { mcpEndpointId: fakeEndpointId }, is404('POST /api/packs/:id/deploy/:target')],
     'POST /api/packs/:id/retrofeed': [`/api/packs/${p}/retrofeed`, {}, is404('POST /api/packs/:id/retrofeed')],
     'GET /api/deploys': ['/api/deploys?limit=500', undefined, (r) => assert(r.status === 200 && !r.json.deploys.some(d => d.deployId === deployId), `${who}: GET /api/deploys lacks the other org's deployId`)],
     'GET /api/deploys/:deployId/rollback-plan': [`/api/deploys/${deployId}/rollback-plan`, undefined, (r) => assert(r.json?.canRollback === false && (r.json.plan || []).length === 0, `${who}: rollback-plan of the other org's deploy → no snapshot`, r.json)],
-    'POST /api/deploys/:deployId/rollback': [`/api/deploys/${deployId}/rollback`, { mcpUrl: mcp.url }, (r) => assert(r.status === 404 || r.status === 409, `${who}: rollback of the other org's deploy → 404/409`, r.status, '404|409')],
+    'POST /api/deploys/:deployId/rollback': [`/api/deploys/${deployId}/rollback`, { mcpEndpointId: fakeEndpointId }, (r) => assert(r.status === 404 || r.status === 409, `${who}: rollback of the other org's deploy → 404/409`, r.status, '404|409')],
     'POST /api/deploys/:deployId/verify': [`/api/deploys/${deployId}/verify`, { outcome: 'verified' }, is404('POST /api/deploys/:deployId/verify')],
     'GET /api/journeys': ['/api/journeys', undefined, (r) => assert(r.status === 200 && !r.json.journeys.some(x => x.name === journey), `${who}: GET /api/journeys lacks the other org's journey`)],
     'GET /api/journeys/:name/runs': [`/api/journeys/${journey}/runs`, undefined, (r) => assert(r.status === 404 || (r.status === 200 && (r.json.runs || []).length === 0), `${who}: runs of the other org's journey → empty`, r.json)],
@@ -816,10 +821,12 @@ try {
     const deltaLive = join(deltaDir, 'live', 'production-live.pack.yaml');
     const baseLive = join(WS4, 'live', 'production-live.pack.yaml');
     const liveUrl = `${mcp.url}?from=delta`;
+    const deltaH = { Cookie: alice, 'X-Observogram-CSRF': '1', 'X-Observogram-Org': 'delta' };
+    const liveEndpointId = await endpointIdFor(base4, liveUrl, { name: 'delta live mcp', headers: deltaH });
     r = await fetch(`${base4}/api/refresh-live`, {
       method: 'POST',
-      headers: { Cookie: alice, 'X-Observogram-CSRF': '1', 'X-Observogram-Org': 'delta', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mcpUrl: liveUrl }),
+      headers: { ...deltaH, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mcpEndpointId: liveEndpointId }),
     });
     j = await r.json();
     assert(r.status === 200 && j.ok === true && j.annotations?.['mcp.url'] === liveUrl, 'alice refreshes the live pack in delta', [r.status, j.error]);

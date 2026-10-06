@@ -134,8 +134,13 @@ const { getMeta } = await import('./store/meta.mjs');
 const { listAudit } = await import('./store/audit.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
 const { orgWorkspaceRoot, runWithOrg } = await import('./tenancy.mjs');
+const { createMcpEndpoint } = await import('./store/mcp-endpoints.mjs');
 const srv = await start({ port: 0, host: '127.0.0.1', silent: true });
 const base = `http://127.0.0.1:${srv.address().port}`;
+// The unreachable MCP as the default org's endpoint, planted through the
+// repository before any request: the OIDC operator below deploys by its id,
+// as every caller below the admin does.
+const NO_MCP_ID = runWithOrg('default', () => createMcpEndpoint(currentStore(), 'system', { name: 'unreachable', url: 'http://127.0.0.1:1/no-mcp' })).id;
 process.env.OBSERVOGRAM_OIDC_REDIRECT_URL = `${base}/auth/callback`;
 
 const cookieOf = (res, name) =>
@@ -213,11 +218,12 @@ try {
   // user-42 joined default as operator (the empty workspace's import); the ID
   // token carried email: ada@example.test. The MCP is unreachable, so the
   // deploy fails (502) — and the attempt is still recorded, with the
-  // principal's actor: the oidcLogin() form <issuerKey>#<sub>.
+  // principal's actor: the oidcLogin() form <issuerKey>#<sub>. The target is
+  // the org's endpoint by id.
   r = await fetch(`${base}/api/packs/payment-service/deploy/prometheus-rules`, {
     method: 'POST',
     headers: { Cookie: session, 'X-Observogram-CSRF': '1', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mcpUrl: 'http://127.0.0.1:1/no-mcp' }),
+    body: JSON.stringify({ mcpEndpointId: NO_MCP_ID }),
   });
   const deployBody = await r.json();
   assert(r.status === 502 && typeof deployBody.deployId === 'string', 'an OIDC operator deploys to an unreachable MCP → 502 with a deployId', [r.status, deployBody.deployId]);

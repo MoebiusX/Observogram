@@ -490,7 +490,11 @@ test('the slice\'s rows by oscar (an operator with an email): the register, the 
   assert.deepEqual([detail.startedAt, detail.outcome], [run.json.record.startedAt, run.json.record.outcome]);
   assert.ok(['pass', 'gate-failed'].includes(detail.outcome));
 
-  const dep = await ok('POST /api/packs/:id/deploy/:target', 'oscar', `/api/packs/${encodeURIComponent(ids.pack)}/deploy/prometheus-rules`, { mcpUrl: NO_MCP }, 502);
+  // The unreachable MCP as acme's endpoint (ada registers it): oscar, an
+  // operator, deploys by its id, as every caller below the admin does.
+  const ep = await ok('POST /api/mcp-endpoints', 'ada', '/api/mcp-endpoints', { name: 'unreachable', url: NO_MCP }, 201);
+  ids.noMcp = ep.json.endpoint.id;
+  const dep = await ok('POST /api/packs/:id/deploy/:target', 'oscar', `/api/packs/${encodeURIComponent(ids.pack)}/deploy/prometheus-rules`, { mcpEndpointId: ids.noMcp }, 502);
   ids.deploy = dep.json.deployId;
   assert.match(ids.deploy ?? '', /^dep_/, 'the 502 names its deployId');
   assert.ok(!('auditError' in dep.json));
@@ -498,7 +502,7 @@ test('the slice\'s rows by oscar (an operator with an email): the register, the 
   assert.deepEqual(dep.rows[0].slice(0, 4), ['deploy.run', 'oscar', 'acme', ids.deploy]);
   const d = dep.rows[0][4];
   assert.deepEqual(Object.keys(d), ['pack', 'env', 'target', 'mode', 'dryRun', 'origin', 'mcpEndpoint', 'items', 'ok', 'failed', 'tookMs']);
-  assert.deepEqual([d.pack.id, d.origin, d.mcpEndpoint, d.items, d.ok, d.failed, d.target.product, d.mode, d.dryRun], [ids.pack, 'http://127.0.0.1:1', null, 1, 0, 1, 'grafana', 'upsert', false]);
+  assert.deepEqual([d.pack.id, d.origin, d.mcpEndpoint, d.items, d.ok, d.failed, d.target.product, d.mode, d.dryRun], [ids.pack, 'http://127.0.0.1:1', { id: ids.noMcp, name: 'unreachable' }, 1, 0, 1, 'grafana', 'upsert', false]);
   assert.ok(!('fileError' in d), 'fileError is an absent key on a normal row');
   const line = readFileSync(DEPLOYS, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((l) => l.deployId === ids.deploy && l.type === 'deploy');
   assert.equal(line.actor, 'oscar', 'the deploys.jsonl line says the login');
@@ -514,7 +518,7 @@ test('the slice\'s rows by oscar (an operator with an email): the register, the 
   assert.deepEqual(big.rows.map(([a, , , t, dd]) => [a, t, dd.outcome.length, dd.alignment, dd.attempts]), [['deploy.verify', ids.deploy, 100, null, null]]);
 
   // The refusals write none.
-  await refused('POST /api/packs/:id/deploy/:target', 'oscar', '/api/packs/nope/deploy/prometheus-rules', { mcpUrl: NO_MCP }, 404, 'unknown pack: nope');
+  await refused('POST /api/packs/:id/deploy/:target', 'oscar', '/api/packs/nope/deploy/prometheus-rules', { mcpEndpointId: ids.noMcp }, 404, 'unknown pack: nope');
   await refused('POST /api/deploys/:deployId/verify', 'oscar', '/api/deploys/x/verify', { outcome: 'verified' }, 400, 'malformed deployId');
   await refused('POST /api/deploys/:deployId/verify', 'oscar', '/api/deploys/dep_nope/verify', { outcome: 'verified' }, 404, 'unknown deployId: dep_nope');
   const seq = seqNow();
@@ -545,7 +549,7 @@ test('auditError: with the audit blocked by a trigger the deploy and the verify 
     const lines = () => readFileSync(DEPLOYS, 'utf8').trim().split('\n').length;
     const n = lines();
     const seq = seqNow();
-    const { result: dep, output } = await logged(() => call('oscar', 'POST', `/api/packs/${encodeURIComponent(ids.pack)}/deploy/prometheus-rules`, { mcpUrl: NO_MCP }));
+    const { result: dep, output } = await logged(() => call('oscar', 'POST', `/api/packs/${encodeURIComponent(ids.pack)}/deploy/prometheus-rules`, { mcpEndpointId: ids.noMcp }));
     assert.equal(dep.status, 502);
     assert.match(dep.json.deployId ?? '', /^dep_/);
     assert.match(dep.json.auditError ?? '', /test: audit blocked/, 'the response says the row failed');
@@ -560,7 +564,7 @@ test('auditError: with the audit blocked by a trigger the deploy and the verify 
   } finally {
     execScript(db, 'DROP TRIGGER audit_test_block');
   }
-  const dep = await ok('POST /api/packs/:id/deploy/:target', 'oscar', `/api/packs/${encodeURIComponent(ids.pack)}/deploy/prometheus-rules`, { mcpUrl: NO_MCP }, 502);
+  const dep = await ok('POST /api/packs/:id/deploy/:target', 'oscar', `/api/packs/${encodeURIComponent(ids.pack)}/deploy/prometheus-rules`, { mcpEndpointId: ids.noMcp }, 502);
   assert.ok(!('auditError' in dep.json), 'unblocked: no auditError key');
   assert.equal(dep.rows.length, 1);
 });
@@ -584,7 +588,7 @@ test('fileError: with deploys.jsonl a directory the deploy answers as before and
   renameSync(DEPLOYS, BAK);
   mkdirSync(DEPLOYS);
   try {
-    const { result: dep, output } = await logged(() => ok('POST /api/packs/:id/deploy/:target', 'oscar', `/api/packs/${encodeURIComponent(ids.pack)}/deploy/prometheus-rules`, { mcpUrl: NO_MCP }, 502));
+    const { result: dep, output } = await logged(() => ok('POST /api/packs/:id/deploy/:target', 'oscar', `/api/packs/${encodeURIComponent(ids.pack)}/deploy/prometheus-rules`, { mcpEndpointId: ids.noMcp }, 502));
     assert.ok(!('auditError' in dep.json), 'the row was written');
     assert.match(output, /\[deploy\] {3}audit append failed: .*EISDIR/, 'stderr names the failed append');
     assert.equal(dep.rows.length, 1);
@@ -599,7 +603,7 @@ test('fileError: with deploys.jsonl a directory the deploy answers as before and
     rmSync(DEPLOYS, { recursive: true, force: true });
     renameSync(BAK, DEPLOYS);
   }
-  const dep = await ok('POST /api/packs/:id/deploy/:target', 'oscar', `/api/packs/${encodeURIComponent(ids.pack)}/deploy/prometheus-rules`, { mcpUrl: NO_MCP }, 502);
+  const dep = await ok('POST /api/packs/:id/deploy/:target', 'oscar', `/api/packs/${encodeURIComponent(ids.pack)}/deploy/prometheus-rules`, { mcpEndpointId: ids.noMcp }, 502);
   assert.ok(!('fileError' in dep.rows[0][4]), 'restored: no fileError key');
   const ver = await ok('POST /api/deploys/:deployId/verify', 'oscar', `/api/deploys/${ids.deploy}/verify`, { outcome: 'verified' });
   assert.deepEqual(ver.rows, [['deploy.verify', 'oscar', 'acme', ids.deploy, { outcome: 'verified', alignment: null, attempts: null }]]);
