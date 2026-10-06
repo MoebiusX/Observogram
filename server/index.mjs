@@ -66,6 +66,7 @@ import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
 import { describeProxyAuth } from './auth-proxy.mjs';
 import { redactCredentials, stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
+import { redactTarget } from './mcp-target-policy.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
 import { auditAfter, actorForRecord, bounded, finite } from './audit-after.mjs';
@@ -1466,8 +1467,9 @@ app.post('/api/draft-from-mcp', authorize('POST /api/draft-from-mcp'), async (re
       tookMs: Date.now() - t0,
     });
   } catch (e) {
-    process.stderr.write(`[draft-from-mcp]   error in ${Date.now() - t0}ms: ${redactCredentials(e.message)}\n`);
-    res.status(502).json({ ok: false, error: e.message, tookMs: Date.now() - t0 });
+    const error = redactTarget(e.message, target);
+    process.stderr.write(`[draft-from-mcp]   error in ${Date.now() - t0}ms: ${error}\n`);
+    res.status(502).json({ ok: false, error, tookMs: Date.now() - t0 });
   }
 });
 
@@ -1541,8 +1543,9 @@ app.post('/api/refresh-live', authorize('POST /api/refresh-live'), async (req, r
       ...(auditError ? { auditError } : {}),
     });
   } catch (e) {
-    process.stderr.write(`[refresh-live]   error in ${Date.now() - t0}ms: ${redactCredentials(e.message)}\n`);
-    res.status(502).json({ ok: false, error: e.message, details: e.details });
+    const error = redactTarget(e.message, target);
+    process.stderr.write(`[refresh-live]   error in ${Date.now() - t0}ms: ${error}\n`);
+    res.status(502).json({ ok: false, error, details: e.details });
   }
 });
 

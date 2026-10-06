@@ -34,7 +34,7 @@ import {
   newDeployId, captureDeploySnapshot, deployAuditRow,
 } from '../deploy-helpers.mjs';
 import { auditAfter, actorForRecord, bounded, finite } from '../audit-after.mjs';
-import { redactCredentials } from '../mcp-url.mjs';
+import { redactTarget } from '../mcp-target-policy.mjs';
 import { resolveMcpTarget } from '../service-admin.mjs';
 import { currentStore } from '../store/db.mjs';
 import { brandEnv } from '../../tools/lib/brand-env.mjs';
@@ -60,8 +60,9 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
       await handler(req, res);
     } catch (e) {
       if (!isTransportHookError(e) || res.headersSent) throw e;
-      process.stderr.write(`[deploy]   transport hook fault: ${redactCredentials(e.message)}\n`);
-      res.status(502).json({ ok: false, error: redactCredentials(e.message) });
+      const error = redactTarget(e.message, res.locals.mcpTarget ?? null);
+      process.stderr.write(`[deploy]   transport hook fault: ${error}\n`);
+      res.status(502).json({ ok: false, error });
     }
   };
   const rethrowHook = (e) => { if (isTransportHookError(e)) throw e; };
@@ -214,6 +215,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     // write token is the request's, never a stored variable's).
     const target = resolveMcpTarget(currentStore(), b, { forWrite: true });
     if (target.status) return res.status(target.status).json({ ok: false, error: target.error });
+    res.locals.mcpTarget = target;   // hookFaultTo502 redacts with it
     const { mcpUrl, safeMcpUrl, mcpAuth } = target;
     const dryRun = b.dryRun === true || b.dry_run === true;
 
@@ -250,7 +252,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
           results.push({ ref: it.ref, action: 'restore', ok: true, tookMs: Date.now() - itStart, result });
         } catch (e) {
           rethrowHook(e);
-          results.push({ ref: it.ref, action: 'restore', ok: false, error: redactCredentials(String(e.message)), tookMs: Date.now() - itStart });
+          results.push({ ref: it.ref, action: 'restore', ok: false, error: redactTarget(e.message, target), tookMs: Date.now() - itStart });
         }
       } else if (it.kind === 'dashboard' && it.restore === 'delete') {
         if (availableTools && availableTools.includes('grafana_delete_dashboard')) {
@@ -260,7 +262,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
             results.push({ ref: it.ref, action: 'delete', ok: true, tookMs: Date.now() - itStart, result });
           } catch (e) {
             rethrowHook(e);
-            results.push({ ref: it.ref, action: 'delete', ok: false, error: redactCredentials(String(e.message)), tookMs: Date.now() - itStart });
+            results.push({ ref: it.ref, action: 'delete', ok: false, error: redactTarget(e.message, target), tookMs: Date.now() - itStart });
           }
         } else {
           manual.push({ ref: it.ref, kind: it.kind, why: 'created by the deploy; the MCP does not advertise grafana_delete_dashboard — remove it by hand' });
@@ -332,6 +334,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
 
     const target = resolveMcpTarget(currentStore(), body, { forWrite: true });
     if (target.status) return res.status(target.status).json({ ok: false, error: target.error });
+    res.locals.mcpTarget = target;   // hookFaultTo502 redacts with it
     const { mcpUrl, safeMcpUrl, mcpAuth } = target;
     if (!items || items.length === 0) return res.status(400).json({ ok: false, error: 'items array required and must be non-empty' });
     if (!DEPLOY_PRODUCTS.includes(product)) return res.status(400).json({ ok: false, error: `unsupported target product: ${product}` });
@@ -442,7 +445,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
         });
       } catch (e) {
         rethrowHook(e);
-        results.push({ item, ok: false, error: e.message, tookMs: Date.now() - itStart });
+        results.push({ item, ok: false, error: redactTarget(e.message, target), tookMs: Date.now() - itStart });
       }
     }
     const totalMs = Date.now() - t0;
@@ -467,7 +470,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
           operations: r.operations || 0,
           bytes: r.bytes || 0,
           tookMs: r.tookMs || 0,
-          ...(r.error ? { error: redactCredentials(String(r.error)) } : {}),
+          ...(r.error ? { error: redactTarget(r.error, target) } : {}),
         })),
         summary: { total: results.length, ok: okCount, failed: failCount },
         tookMs: totalMs,
@@ -536,6 +539,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     // write token stays the request's mcpAuth).
     const mcp = resolveMcpTarget(currentStore(), body, { forWrite: true });
     if (mcp.status) return res.status(mcp.status).json({ ok: false, error: mcp.error });
+    res.locals.mcpTarget = mcp;   // hookFaultTo502 redacts with it
     const { mcpUrl, safeMcpUrl, mcpAuth } = mcp;
 
     const t0 = Date.now();
@@ -629,18 +633,19 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     } catch (e) {
       rethrowHook(e);   // one 502 without an audit record (hookFaultTo502)
       const tookMs = Date.now() - t0;
-      process.stderr.write(`[deploy]   error in ${tookMs}ms: ${redactCredentials(e.message)}\n`);
+      const error = redactTarget(e.message, mcp);
+      process.stderr.write(`[deploy]   error in ${tookMs}ms: ${error}\n`);
       let recorded;
       try {
         recorded = auditSingleDeploy({
           req, meta, canonical, env, safeMcpUrl, mcpEndpoint: mcp.endpoint, product, version, folder, mode, dryRun,
-          item: { target, scope: scope || null, ok: false, tool: mcpTool, tookMs, error: redactCredentials(String(e.message)) },
+          item: { target, scope: scope || null, ok: false, tool: mcpTool, tookMs, error },
         });
       } catch (actorErr) {
         return res.status(500).json({ ok: false, error: actorErr.message });
       }
       const { deployId, auditError } = recorded;
-      res.status(502).json({ ok: false, deployId, error: e.message, tool: mcpTool, target,
+      res.status(502).json({ ok: false, deployId, error, tool: mcpTool, target,
         targetProduct: product, targetVersion: version, scope: scope || null, targetFolder: folder || null,
         mode, dryRun, env, tookMs, ...withAuditError(auditError) });
     }

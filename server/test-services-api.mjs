@@ -710,6 +710,46 @@ test('POST /api/refresh-live { mcpEndpointId }: both fields, neither, the id sha
   assert.deepEqual((await ok('GET /api/mcp-endpoints', 'vera', '/api/mcp-endpoints')).json.endpoints.map((e) => e.name), ['prod-mcp', 'staging-mcp']);
 });
 
+// An MCP that repeats the request's Authorization header in its 401 body
+// (server/fixtures/fake-mcp.mjs, echo 'http'): the credential the route
+// resolved — the endpoint's variable or the caller's mcpAuth — must not
+// travel back. The 502 bodies, the server's stderr and the rows hold
+// <redacted>, never the value.
+test('an MCP echoing the Authorization header: the draft, refresh and deploy 502 bodies, stderr and the rows hold <redacted>, never the server-held variable\'s value or a sent mcpAuth', async () => {
+  const { startFakeMcp } = await import('./fixtures/fake-mcp.mjs');
+  const echo = await startFakeMcp([], null, { echo: 'http' });
+  const reg = await ok('POST /api/mcp-endpoints', 'ada', '/api/mcp-endpoints', { name: 'echo-mcp', url: echo.url, readTokenEnv: ACME_TOKEN }, 201);
+  const echoId = reg.json.endpoint.id;
+  const SECRETS = ['echo-env-secret-value', 'echo-sent-secret-value', 'echo-write-secret-value'];
+  const clean = (text) => !SECRETS.some((v) => text.includes(v));
+  process.env[ACME_TOKEN] = SECRETS[0];
+  try {
+    const cases = [
+      ['POST /api/draft-from-mcp', '/api/draft-from-mcp', { mcpEndpointId: echoId }, SECRETS[0]],
+      ['POST /api/refresh-live', '/api/refresh-live', { mcpEndpointId: echoId }, SECRETS[0]],
+      ['POST /api/draft-from-mcp', '/api/draft-from-mcp', { mcpEndpointId: echoId, mcpAuth: SECRETS[1] }, SECRETS[1]],
+      ['POST /api/refresh-live', '/api/refresh-live', { mcpEndpointId: echoId, mcpAuth: SECRETS[1] }, SECRETS[1]],
+      ['POST /api/packs/:id/deploy/:target', '/api/packs/payment-service/deploy/grafana-dashboard', { mcpEndpointId: echoId, mcpAuth: SECRETS[2], dryRun: true }, SECRETS[2]],
+    ];
+    for (const [key, path, body, sent] of cases) {
+      const before = echo.authHeaders.length;
+      const seq = seqNow();
+      const { result, output } = await logged(() => call('oscar', 'POST', path, body));
+      assert.equal(result.status, 502, `${key}: the MCP's 401 is a 502: ${result.text.slice(0, 200)}`);
+      assert.equal(echo.authHeaders[before], `Bearer ${sent}`, `${key}: the credential reached the MCP, which echoed it`);
+      assert.match(result.json.error, /MCP HTTP 401 on [a-z/]+: unauthorized — the request said Authorization: Bearer <redacted>/, `${key}: the 502 body says what came back, redacted`);
+      assert.ok(clean(result.text), `${key}: no credential in the 502 body: ${result.text.slice(0, 300)}`);
+      assert.ok(output.includes('Bearer <redacted>'), `${key}: the error line was logged: ${JSON.stringify(output)}`);
+      assert.ok(clean(output), `${key}: no credential in a log line: ${JSON.stringify(output)}`);
+      assert.ok(clean(JSON.stringify(rowsAfter(seq))), `${key}: no credential in a row`);
+    }
+  } finally {
+    delete process.env[ACME_TOKEN];
+    await echo.close();
+    await ok('DELETE /api/mcp-endpoints/:id', 'ada', `/api/mcp-endpoints/${echoId}`);
+  }
+});
+
 test('DELETE /api/mcp-endpoints/:id: the view as it was, the environments it unbinds, one row { origin, unbound }; the environment reads mcpEndpoint null; gone afterwards; the id rule; the guard', async () => {
   const K = 'DELETE /api/mcp-endpoints/:id';
   await denied(K, 'oscar', `/api/mcp-endpoints/${ids.mcp}`, 'role', "requires the admin role in org 'acme' (you are operator) — ask an admin of acme");
