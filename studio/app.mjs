@@ -56,13 +56,15 @@ import { loadOrgs, loadServices, loadService, patchService, verdictLoader, reque
 import { renderNoOrgHome, renderServicesHome, renderServicePage, renderServiceEditor, markUnavailable } from './services-view.mjs';
 import {
   BUILT_SECTIONS, BUILT_EDITORS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsSectionHead, settingsAboveRank,
-  buildEnvironmentsSectionModel, buildEndpointsSectionModel,
+  buildEnvironmentsSectionModel, buildEndpointsSectionModel, buildMembersSectionModel,
   buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus,
+  buildMemberAddBody, memberSaveStatus, orgRenameStatus, lastAdmin,
   buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
   mcpTargetModel, mcpTargetBody, profileEndpointNote, endpointDrift,
 } from './settings-model.mjs';
 import {
   loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
+  addMember, patchMember, removeMember, renameOrg,
 } from './settings-api.mjs';
 import { renderSettings, renderSettingsEditor, renderMcpTarget } from './settings-view.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
@@ -1678,7 +1680,7 @@ async function boot() {
       // with it instead of opening.
       state.noOrg = e;
       applyModeChrome();
-      renderNoOrgHome($('#layer-view'), buildNoOrgModel({ identity: state.identity, error: e, chromeName: state.brand.chrome.name }), servicesHost);
+      renderNoOrgHome($('#layer-view'), buildNoOrgModel({ identity: state.identity, error: e }), servicesHost);
       return;
     }
     document.body.innerHTML = `<pre class="json" style="margin:48px;max-width:800px">${escapeHtml(state.brand.chrome.apiUnreachable)}\n\n${escapeHtml(e.message)}\n\nMake sure the server is running: \`node server/index.mjs\` or \`npm run serve\`.</pre>`;
@@ -2295,7 +2297,7 @@ let settingsFocusNext = false;
 // a downgrade a read met, each section's status line, the endpoints read's
 // refusal. Never persisted; a new entry starts afresh.
 function freshSettings() {
-  return { probe: null, denied: null, deniedAdmin: null, status: {}, members: null, org: null, endpointsError: null };
+  return { probe: null, denied: null, deniedAdmin: null, status: {}, members: null, org: null, membersError: null, endpointsError: null };
 }
 
 // What this reader may do in Settings (settings-model.mjs settingsAccessModel)
@@ -2413,6 +2415,7 @@ async function loadSettingsSection(id, { notice = null } = {}) {
   const gen = ++settingsGeneration;
   settings.status[id] = { kind: 'loading', text: settingsSectionHead(id).loading };
   repaintSettings();
+  if (id === 'members') return loadMembersSection(settings, gen, notice);
   let endpointsRefusal = null;
   await Promise.all([
     refreshServices(),
@@ -2431,6 +2434,35 @@ async function loadSettingsSection(id, { notice = null } = {}) {
   }
   settings.status[id] = { kind: 'ok', text: notice ?? '' };
   if (gen !== settingsGeneration || state.settingsSection !== id) return;   // the user moved on meanwhile
+  repaintSettings();
+}
+
+// The members and the org's row (GET /api/org/members, an admin's read): a
+// refusal by the role (demoted meanwhile) takes the admin's sections away
+// with the server's sentence; one by the gate (the session, the membership)
+// every control. Either way the frame moves to a section the rank reads,
+// which is read with the sentence in its status line.
+async function loadMembersSection(settings, gen, notice) {
+  let refusal = null;
+  try {
+    const body = await loadMembers();
+    if (state.settings === settings) Object.assign(settings, { members: body.members, org: body.org, membersError: null });
+  } catch (e) {
+    refusal = e;
+    if (state.settings === settings) Object.assign(settings, { members: null, membersError: e?.message || 'no answer' });
+  }
+  if (state.mode !== 'settings' || state.settings !== settings) return;
+  if (refusal && ['auth', 'role', 'posture', 'org'].includes(refusal.denied)) {
+    if (refusal.denied === 'role') settings.deniedAdmin = refusal.message || 'refused';
+    else settings.denied = refusal.message || 'refused';
+    forgetSettingsAbove(settingsAccess());
+    if (gen === settingsGeneration && state.settingsSection && state.settingsSection !== 'members') {
+      loadSettingsSection(state.settingsSection, { notice: settings.denied || settings.deniedAdmin });
+      return;
+    }
+  }
+  settings.status.members = { kind: 'ok', text: notice ?? '' };
+  if (gen !== settingsGeneration || state.settingsSection !== 'members') return;
   repaintSettings();
 }
 
@@ -2460,6 +2492,13 @@ function settingsSectionView(id, access) {
   const settings = state.settings || freshSettings();
   const head = settingsSectionHead(id, { orgName: state.orgName });
   const status = settings.status[id] ?? null;
+  if (id === 'members') {
+    const model = buildMembersSectionModel({
+      members: settings.members, org: settings.org ?? { id: state.orgId, name: state.orgName }, access,
+      me: signedInLogin(), error: settings.membersError,
+    });
+    return { id, head, model, status };
+  }
   const model = id === 'environments'
     ? buildEnvironmentsSectionModel({
       services: state.services, access, orgName: state.orgName,
@@ -2558,10 +2597,18 @@ function adoptEnvironment(env, { remove = false } = {}) {
 
 // The record the editor is over, as the section's list has it now.
 function settingsEditorRecord(ed) {
+  if (ed.kind === 'org-name') return settingsOrgRecord();
   if (ed.id === null) return null;
+  if (ed.kind === 'member') return Array.isArray(state.settings?.members) ? (state.settings.members.find((m) => m.userId === ed.id) ?? undefined) : ed.record;
   if (ed.kind === 'endpoint' && Array.isArray(state.mcpEndpoints)) return state.mcpEndpoints.find((ep) => ep.id === ed.id) ?? undefined;
   if (ed.kind === 'environment' && (state.mode === 'service' || Array.isArray(state.services))) return environmentRecord(ed.id) ?? undefined;
   return ed.record;
+}
+
+// The org the members section is about: its row as GET /api/org/members
+// answered, else the active org's id and name.
+function settingsOrgRecord() {
+  return state.settings?.org ?? { id: state.orgId, name: state.orgName };
 }
 
 // The editor belongs where it was opened: Settings, or the page of the
@@ -2588,6 +2635,7 @@ function syncSettingsEditor() {
     ctx: {
       access: settingsAccess(), orgName: state.orgName, orgId: state.orgId, services: ed.kind === 'environment' ? settingsEditorServices() : state.services,
       endpoints: state.mcpEndpoints, endpointsError: ed.endpointsError ?? state.settings?.endpointsError ?? null, serviceId: ed.serviceId ?? null,
+      members: state.settings?.members ?? null, me: signedInLogin(),
     },
   });
   renderSettingsEditor(settingsEditorHost(), model, settingsHost);
@@ -2600,6 +2648,8 @@ function settingsOpenerSelector(el) {
   if (!el) return null;
   if (el.dataset?.editEndpoint) return `[data-edit-endpoint="${CSS.escape(el.dataset.editEndpoint)}"]`;
   if (el.dataset?.editEnv) return `[data-edit-env="${CSS.escape(el.dataset.editEnv)}"]`;
+  if (el.dataset?.memberRole) return `[data-member-role="${CSS.escape(el.dataset.memberRole)}"]`;
+  if (el.dataset?.memberRemove) return `[data-member-remove="${CSS.escape(el.dataset.memberRemove)}"]`;
   return el.id ? `#${CSS.escape(el.id)}` : null;
 }
 
@@ -2611,18 +2661,22 @@ function settingsOpenerSelector(el) {
 // opens it without Settings having read them — A4), so its select never
 // offers "none" alone over a bound record. An open MCP panel closes first —
 // one dialog at a time (T11).
-async function openSettingsEditor(kind, id = null, serviceId = null) {
+async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'edit' } = {}) {
   const page = state.mode === 'service' ? state.serviceId : null;
-  if (kind === 'endpoint' ? state.mode !== 'settings' : !(kind === 'environment' && (state.mode === 'settings' || state.mode === 'service'))) return;
+  if (!BUILT_EDITORS.includes(kind)) return;
+  if (kind === 'environment' ? !(state.mode === 'settings' || state.mode === 'service') : state.mode !== 'settings') return;
   const access = settingsAccess();
-  const need = kind === 'endpoint' ? 'admin' : 'operate';
+  const need = kind === 'environment' ? 'operate' : 'admin';
   if (!access.can[need]) { explainUnavailable(access.why[need]); return; }
   const opening = ++settingsEditorOpening;
   const opener = settingsOpenerSelector(document.activeElement);
   const mode = state.mode;
-  const find = () => (kind === 'endpoint'
-    ? (Array.isArray(state.mcpEndpoints) ? state.mcpEndpoints.find((ep) => ep.id === id) : null)
-    : environmentRecord(id));
+  const find = () => {
+    if (kind === 'endpoint') return Array.isArray(state.mcpEndpoints) ? state.mcpEndpoints.find((ep) => ep.id === id) : null;
+    if (kind === 'member') return Array.isArray(state.settings?.members) ? state.settings.members.find((m) => m.userId === id) : null;
+    if (kind === 'org-name') return settingsOrgRecord();
+    return environmentRecord(id);
+  };
   if (id !== null && !find()) return;
   let endpointsError = null;
   if (kind === 'environment') {
@@ -2644,7 +2698,7 @@ async function openSettingsEditor(kind, id = null, serviceId = null) {
   if (draftPanel) draftPanel.hidden = true;
   settingsEditor = {
     kind, id, serviceId: record?.serviceId ?? serviceId ?? page, page: kind === 'environment' ? page : null,
-    record, draft: null, status: null, step: 'edit', opener, endpointsError,
+    record, draft: null, status: null, step: kind === 'member' && step === 'confirm-delete' ? 'confirm-delete' : 'edit', opener, endpointsError,
   };
   syncSettingsEditor();
   focusSettingsEditor();
@@ -2652,7 +2706,8 @@ async function openSettingsEditor(kind, id = null, serviceId = null) {
 
 function focusSettingsEditor() {
   const dialog = document.querySelector('#set-editor-host .set-editor');
-  const first = dialog?.querySelector('input, textarea, select') || dialog?.querySelector('#set-editor-confirm') || dialog;
+  const first = dialog?.querySelector('input, textarea, select') || dialog?.querySelector('#set-editor-confirm')
+    || dialog?.querySelector('[role="radio"][tabindex="0"]') || dialog;
   first?.focus({ preventScroll: true });
 }
 
@@ -2672,7 +2727,7 @@ function closeSettingsEditor({ focus = true } = {}) {
 function setSettingsEditorStep(step, draft = null) {
   if (!settingsEditor || settingsEditor.status?.kind === 'pending') return;
   if (draft) settingsEditor.draft = draft;
-  settingsEditor.step = step === 'confirm-delete' ? 'confirm-delete' : 'edit';
+  settingsEditor.step = ['confirm-delete', 'confirm-action'].includes(step) ? step : 'edit';
   settingsEditor.status = null;
   syncSettingsEditor();
   focusSettingsEditor();
@@ -2708,6 +2763,9 @@ async function saveSettingsEditor(draft) {
   const ed = settingsEditor;
   if (!ed || ed.status?.kind === 'pending') return null;
   if (ed.kind === 'environment') return saveEnvironmentEditor(ed, draft);
+  if (ed.kind === 'org-name') return saveOrgName(ed, draft);
+  if (ed.kind === 'member-add') return saveMemberAdd(ed, draft);
+  if (ed.kind === 'member') return saveMemberRole(ed, draft);
   if (ed.kind !== 'endpoint') return null;
   ed.draft = draft;
   const record = ed.record;
@@ -2753,7 +2811,10 @@ async function saveSettingsEditor(draft) {
 // before the delete) in the section's status line; the dialog closes.
 async function confirmSettingsEditor() {
   const ed = settingsEditor;
-  if (!ed || ed.step !== 'confirm-delete' || ed.status?.kind === 'pending' || !ed.record) return null;
+  if (!ed || ed.status?.kind === 'pending' || !ed.record) return null;
+  if (ed.kind === 'member' && ed.step === 'confirm-action') return patchMemberRole(ed, ed.draft?.role);
+  if (ed.step !== 'confirm-delete') return null;
+  if (ed.kind === 'member') return removeMemberEditor(ed);
   if (ed.kind === 'environment') return deleteEnvironmentEditor(ed);
   if (ed.kind !== 'endpoint') return null;
   ed.status = { kind: 'pending', text: 'Deleting…' };
@@ -2773,6 +2834,164 @@ async function confirmSettingsEditor() {
   announce(status.text);
   await rereadAfterSettingsWrite(status.text);
   return { ok: true };
+}
+
+// ---------- the members and the org's name (design §5.4) ----------
+
+// A members write refused: the server's sentence in the dialog's status line
+// (the last-admin 409 among them, as served); the gate's refusals downgrade.
+function memberWriteRefused(ed, e) {
+  if (settingsEditor !== ed) return null;
+  ed.status = { kind: 'error', text: e?.message || 'no answer' };
+  syncSettingsEditor();
+  settingsWriteRefused(e);
+  return null;
+}
+
+// The org renamed: the name everywhere this page shows it — the Settings
+// head, the section, the ORG chip (its option or its label) and the
+// membership /auth/me listed; the next boot reads it anew.
+function adoptOrgName(org) {
+  if (!org?.name) return;
+  if (state.settings) state.settings.org = { ...(state.settings.org || {}), ...org };
+  if (org.id === state.orgId || !org.id) {
+    state.orgName = org.name;
+    if (state.access) state.access = { ...state.access, orgName: org.name };
+  }
+  const entry = (state.identity?.orgs || []).find((o) => o.id === org.id);
+  if (entry) entry.name = org.name;
+  const option = [...document.querySelectorAll('#observa-org select option')].find((o) => o.value === org.id);
+  if (option) option.textContent = org.name;
+  updateObservaOrgChip();
+}
+
+// Rename… (PATCH /api/org): nothing differing → "Nothing changed." without a
+// call; the answer has no `changed`, so the status compares the names (A-16).
+async function saveOrgName(ed, draft) {
+  ed.draft = draft;
+  const before = ed.record?.name ?? state.orgName ?? '';
+  const name = String(draft?.name ?? '').trim();
+  if (name === before) {
+    ed.status = orgRenameStatus(before, before);
+    syncSettingsEditor();
+    return { ok: true, changed: [] };
+  }
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let org;
+  try { org = await renameOrg(name); }
+  catch (e) { return memberWriteRefused(ed, e); }
+  const status = orgRenameStatus(before, org?.name ?? name);
+  adoptOrgName(org ?? { id: ed.record?.id ?? state.orgId, name });
+  if (settingsEditor === ed) { ed.status = status; ed.draft = null; }
+  repaintSettings();
+  syncSettingsEditor();
+  announce(status.text);
+  return { ok: true };
+}
+
+// Add member (POST /api/org/members, an upsert — A-23): by login or by
+// verified email; the status says what the server did (added, the role
+// changed, nothing). The dialog stays for the next one; the list is read anew.
+async function saveMemberAdd(ed, draft) {
+  ed.draft = draft;
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let answer;
+  try { answer = await addMember(buildMemberAddBody(draft)); }
+  catch (e) { return memberWriteRefused(ed, e); }
+  const status = memberSaveStatus(answer, { login: draft?.by === 'email' ? null : String(draft?.value ?? '').trim() });
+  if (settingsEditor === ed) ed.status = status;
+  syncSettingsEditor();
+  announce(status.text);
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
+// Save on a member's dialog: the role chosen. The same role → "Nothing
+// changed." without a call; a change the reader should weigh first — their
+// own role, or an owner demoting the org's last admin (A12) — goes to the
+// confirm step, which says what it leaves; any other is sent at once.
+async function saveMemberRole(ed, draft) {
+  ed.draft = draft;
+  const role = draft?.role ?? ed.record.role;
+  if (role === ed.record.role) {
+    ed.status = { kind: 'idle', text: 'Nothing changed.' };
+    syncSettingsEditor();
+    return { ok: true, changed: [] };
+  }
+  const access = settingsAccess();
+  const you = ed.record.login === signedInLogin();
+  const ownerNote = access.owner && lastAdmin(ed.record, state.settings?.members || [], { owner: false }) && role !== 'admin';
+  if (you || ownerNote) { setSettingsEditorStep('confirm-action', draft); return { ok: true, confirm: true }; }
+  return patchMemberRole(ed, role);
+}
+
+// PATCH /api/org/members/:userId { role }: `<login>: <from> → <to>.` A
+// reader who demoted themselves out of the admin role (still a member)
+// reads their rank anew: the members and the audit go, with what they held,
+// and the frame moves to a section the new rank reads (A-29, C-6).
+async function patchMemberRole(ed, role) {
+  if (!role) return null;
+  const login = ed.record.login;
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let res;
+  try { res = await patchMember(ed.record.userId, role); }
+  catch (e) { return memberWriteRefused(ed, e); }
+  const status = memberSaveStatus(res, { login });
+  announce(status.text);
+  if (login === signedInLogin() && !settingsAccess().owner && role !== 'admin') {
+    closeSettingsEditor({ focus: false });
+    await refreshAccess();
+    if (state.settings) state.settings.deniedAdmin = null;
+    forgetSettingsAbove(settingsAccess());
+    updateObservaOrgChip();
+    if (state.mode === 'settings' && state.settingsSection) await loadSettingsSection(state.settingsSection, { notice: status.text });
+    document.querySelector('.set-title')?.focus({ preventScroll: true });
+    return { ok: true };
+  }
+  if (settingsEditor === ed) { ed.status = status; ed.step = 'edit'; ed.draft = null; }
+  syncSettingsEditor();
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
+// Remove (DELETE /api/org/members/:userId): `Removed <login>.` in the
+// section's status line. The reader removing themselves from the org on
+// screen never stays on it: the next request would carry an org they are no
+// longer in (A3, C-2) — the status says so, and the page reloads into their
+// next organisation (or the no-org screen).
+async function removeMemberEditor(ed) {
+  const login = ed.record.login;
+  const orgName = settingsOrgRecord().name || state.orgName || state.orgId;
+  ed.status = { kind: 'pending', text: 'Removing…' };
+  syncSettingsEditor();
+  try { await removeMember(ed.record.userId); }
+  catch (e) { return memberWriteRefused(ed, e); }
+  if (login === signedInLogin()) {
+    const text = `You left ${orgName}; this browser switches to your next organisation.`;
+    if (settingsEditor === ed) { ed.status = { kind: 'saved', text }; syncSettingsEditor(); }
+    announce(text);
+    leaveOrgAndReload();
+    return { ok: true, left: true };
+  }
+  const text = `Removed ${login}.`;
+  // The row it was opened from goes with the membership: the focus goes to the section's primary.
+  if (settingsEditor === ed) { ed.opener = null; closeSettingsEditor(); }
+  announce(text);
+  await rereadAfterSettingsWrite(text);
+  return { ok: true };
+}
+
+// This browser leaves the org on screen: its snapshot is written now, the
+// active org forgotten — the boot picks the first live membership, or draws
+// the no-org screen — and the page reloads.
+function leaveOrgAndReload() {
+  persistence.write();
+  persistence.suspend();
+  setActiveOrg(null);
+  window.location.reload();
 }
 
 // ---------- the environment editor (design §5.1–5.2: one editor, two doors) ----------
@@ -2910,7 +3129,7 @@ const settingsActions = {
   explain: explainUnavailable,
   build: () => enterBuildMode('define'),
   openService: (id) => { enterServicePage(id); },
-  openEditor: ({ kind, id = null, serviceId = null } = {}) => openSettingsEditor(kind, id, serviceId),
+  openEditor: ({ kind, id = null, serviceId = null, step = 'edit' } = {}) => openSettingsEditor(kind, id, serviceId, { step }),
   closeEditor: () => closeSettingsEditor(),
   save: (draft) => saveSettingsEditor(draft),
   step: (step, draft = null) => setSettingsEditorStep(step, draft),

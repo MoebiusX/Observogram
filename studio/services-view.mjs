@@ -460,8 +460,8 @@ export function markUnavailable(control, reason, { into = control } = {}) {
 // `403: no org membership — ask an admin to add you` — under what was
 // checked and as whom, and the one action that works for this user, Sign
 // out (the account menu's handler, proxied through host.services.signOut).
-// No fabricated way in: the studio has no member screen until Settings
-// (6b); the server's sentence names the way out that works.
+// No fabricated way in: the hint names where an admin adds a member
+// (Settings → Members) and that a reload is enough once they have.
 export function renderNoOrgHome(container, model, host = appHost) {
   const actions = (model.actions || []).map((a) => ({ id: `svc-noorg-${a.id}`, label: a.label }));
   container.innerHTML = `

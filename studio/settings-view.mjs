@@ -70,6 +70,35 @@ function endpointsHtml(model) {
         </ul>`;
 }
 
+// The members: the login, the name, the role, a disabled badge, since when;
+// "you" on the reader's own row. No email (the loaders dropped it). For an
+// admin, Change role… and Remove… — Remove… unavailable with the last-admin
+// sentence on the org's only enabled admin (an owner passes that rule).
+function membersHtml(model) {
+  if (!model.rows.length) return '';
+  return `
+        <ul class="set-list" aria-label="${escapeHtml(`Members of ${model.org.name}`)}">${model.rows.map((r) => `
+          <li class="set-row" data-member-id="${escapeHtml(String(r.userId))}">
+            <span class="set-row-name">${escapeHtml(r.login)}</span>${r.you ? `
+            <span class="set-you">you</span>` : ''}
+            <span class="set-row-meta">${escapeHtml([r.name, r.role, r.since ? `since ${String(r.since).slice(0, 10)}` : null].filter(Boolean).join(' · '))}</span>${r.disabled ? `
+            <span class="set-badge is-disabled">disabled</span>` : ''}${r.canEdit ? `
+            <span class="set-row-actions">
+              <button type="button" class="ux-secondary-btn" data-member-role="${escapeHtml(String(r.userId))}" aria-label="${escapeHtml(`Change the role of ${r.login}`)}">Change role…</button>
+              <button type="button" class="ux-secondary-btn" data-member-remove="${escapeHtml(String(r.userId))}" aria-label="${escapeHtml(`Remove ${r.login}`)}">Remove…</button>
+            </span>` : ''}
+          </li>`).join('')}
+        </ul>`;
+}
+
+// The members section's head line: the org's name and id, and Rename… (an
+// admin's; unavailable with its reason otherwise).
+function membersOrgHtml(model) {
+  return `
+        <p class="set-section-scope"><span class="set-row-name">${escapeHtml(model.org.name)}</span>${model.org.id ? ` <span class="set-row-meta">(${escapeHtml(model.org.id)})</span>` : ''}
+          <button type="button" class="ux-secondary-btn" id="set-rename">Rename…</button></p>`;
+}
+
 // The section's status line: reading…, the read's refusal as served with
 // Retry, what the last write did, or the empty sentence (with Build for a rank that may build, when
 // the org has no service yet).
@@ -87,19 +116,24 @@ function statusHtml(section) {
 // The section's primary action (the editor that creates a record), drawn
 // once its editor is built — unavailable with its reason for a rank that
 // cannot use it.
-const PRIMARY_LABEL = { environments: 'Add environment', endpoints: 'New MCP endpoint' };
+const PRIMARY_LABEL = { environments: 'Add environment', endpoints: 'New MCP endpoint', members: 'Add member' };
+const PRIMARY_KIND = { environments: 'environment', endpoints: 'endpoint', members: 'member-add' };
 
 function sectionHtml(section) {
   if (!section?.id) return '';
   const primary = section.model?.primary && PRIMARY_LABEL[section.id]
     ? `<button type="button" class="mcp-refresh-btn set-primary" id="set-primary">${escapeHtml(PRIMARY_LABEL[section.id])}</button>` : '';
   const body = section.id === 'environments' ? environmentsHtml(section.model)
-    : section.id === 'endpoints' ? endpointsHtml(section.model) : '';
+    : section.id === 'endpoints' ? endpointsHtml(section.model)
+      : section.id === 'members' ? membersHtml(section.model) : '';
   const loading = section.status?.kind === 'loading';
+  // The scope sentence: the head's, or the section model's own (the members name the org's id).
+  const scope = section.head.scope ?? section.model?.scopeSentence ?? null;
   return `
       <section class="set-section" id="set-section" data-section="${escapeHtml(section.id)}" aria-labelledby="set-section-title"${loading ? ' aria-busy="true"' : ''}>
         <h2 class="set-section-title" id="set-section-title">${escapeHtml(section.head.title)}</h2>
-        ${section.head.scope ? `<p class="set-section-scope">${escapeHtml(section.head.scope)}</p>` : ''}
+        ${scope ? `<p class="set-section-scope">${escapeHtml(scope)}</p>` : ''}
+        ${section.id === 'members' && section.model?.org ? membersOrgHtml(section.model) : ''}
         ${primary}
         ${body}
         <p class="set-status" id="set-section-status" role="status" aria-live="polite">${statusHtml(section)}</p>
@@ -149,7 +183,7 @@ export function renderSettings(container, frame, section, host = appHost) {
   const primaryBtn = container.querySelector('#set-primary');
   if (primaryBtn && primary) {
     if (!primary.enabled) markUnavailable(primaryBtn, primary.reason);
-    const kind = section.id === 'endpoints' ? 'endpoint' : 'environment';
+    const kind = PRIMARY_KIND[section.id];
     primaryBtn.addEventListener('click', () => {
       if (!primary.enabled) { host.settings?.explain?.(primary.reason); return; }
       host.settings?.openEditor?.({ kind });
@@ -160,6 +194,35 @@ export function renderSettings(container, frame, section, host = appHost) {
   });
   container.querySelectorAll('[data-edit-env]').forEach((btn) => {
     btn.addEventListener('click', () => host.settings?.openEditor?.({ kind: 'environment', id: Number(btn.dataset.editEnv) }));
+  });
+  if (section.id === 'members') wireMembers(container, section.model, host);
+}
+
+// The members' controls: Rename… (the org's name), and each row's Change
+// role… and Remove… — Remove… opens the member's dialog on its remove step;
+// one the rank or the last-admin rule refuses is unavailable with its reason,
+// and its click explains.
+function wireMembers(container, model, host) {
+  const rename = container.querySelector('#set-rename');
+  if (rename && model?.org) {
+    if (!model.org.canRename) markUnavailable(rename, model.org.renameReason);
+    rename.addEventListener('click', () => {
+      if (!model.org.canRename) { host.settings?.explain?.(model.org.renameReason); return; }
+      host.settings?.openEditor?.({ kind: 'org-name', id: model.org.id });
+    });
+  }
+  const rowOf = (id) => (model?.rows || []).find((r) => String(r.userId) === id) || null;
+  container.querySelectorAll('[data-member-role]').forEach((btn) => {
+    btn.addEventListener('click', () => host.settings?.openEditor?.({ kind: 'member', id: Number(btn.dataset.memberRole) }));
+  });
+  container.querySelectorAll('[data-member-remove]').forEach((btn) => {
+    const row = rowOf(btn.dataset.memberRemove);
+    const reason = row?.reasons?.remove ?? null;
+    if (reason) markUnavailable(btn, reason);
+    btn.addEventListener('click', () => {
+      if (reason) { host.settings?.explain?.(reason); return; }
+      host.settings?.openEditor?.({ kind: 'member', id: Number(btn.dataset.memberRemove), step: 'confirm-delete' });
+    });
   });
 }
 
@@ -207,13 +270,15 @@ function fieldHtml(f, limits) {
           ${help}
         </label>`;
   }
-  if (f.type === 'segmented') {
+  if (f.type === 'segmented' || f.type === 'radio') {
     // A radio group of buttons (roving tabindex): an option's value null is "".
+    // An option the reader cannot choose is aria-disabled (its reason is the
+    // group's help, said once).
     return `
         <div class="set-editor-field" role="radiogroup" aria-labelledby="${id}-label"${described}>
           <span class="set-editor-label" id="${id}-label">${escapeHtml(f.label)}</span>
           <div class="set-editor-seg" id="${id}">${(f.options || []).map((o) => `
-            <button type="button" role="radio" class="set-editor-seg-btn" data-seg="${escapeHtml(f.name)}" data-value="${escapeHtml(o.value === null || o.value === undefined ? '' : String(o.value))}" aria-checked="${o.selected ? 'true' : 'false'}" tabindex="${o.selected ? '0' : '-1'}">${escapeHtml(o.label)}</button>`).join('')}
+            <button type="button" role="radio" class="set-editor-seg-btn" data-seg="${escapeHtml(f.name)}" data-value="${escapeHtml(o.value === null || o.value === undefined ? '' : String(o.value))}" aria-checked="${o.selected ? 'true' : 'false'}"${o.enabled === false ? ' aria-disabled="true"' : ''} tabindex="${o.selected ? '0' : '-1'}">${escapeHtml(o.label)}</button>`).join('')}
           </div>
           ${help}
         </div>`;
@@ -224,14 +289,14 @@ function fieldHtml(f, limits) {
 // The footer's buttons by step: editing — Close, Delete… (a record), the
 // primary; the delete step — Back and the danger button naming the record.
 function editorActionsHtml(model) {
-  if (model.step === 'confirm-delete' && model.confirm) {
+  if ((model.step === 'confirm-delete' || model.step === 'confirm-action') && model.confirm) {
     return `
           <button type="button" class="ctrl-btn set-editor-cancel" id="set-editor-back">Back</button>
           <button type="button" class="set-danger" id="set-editor-confirm" aria-disabled="${model.saving ? 'true' : 'false'}">${escapeHtml(model.confirm.danger)}</button>`;
   }
   return `
           <button type="button" class="ctrl-btn set-editor-cancel" data-editor-close>Close</button>${model.remove ? `
-          <button type="button" class="ctrl-btn set-editor-delete" id="set-editor-delete">Delete…</button>` : ''}
+          <button type="button" class="ctrl-btn set-editor-delete" id="set-editor-delete">${escapeHtml(model.remove.label || 'Delete…')}</button>` : ''}
           <button type="button" class="mcp-refresh-btn set-editor-save" id="set-editor-save" aria-disabled="${model.primary.enabled ? 'false' : 'true'}">${escapeHtml(model.primary.label)}</button>`;
 }
 
@@ -254,7 +319,7 @@ export function renderSettingsEditor(container, model, host = appHost) {
     paintEditorButtons(container, model);
     return;
   }
-  const confirming = model.step === 'confirm-delete' && model.confirm;
+  const confirming = (model.step === 'confirm-delete' || model.step === 'confirm-action') && model.confirm;
   container.innerHTML = `
     <div class="set-editor-scrim" data-editor-close aria-hidden="true"></div>
     <div class="set-editor" role="dialog" aria-modal="true" aria-labelledby="set-editor-title" aria-describedby="set-editor-status" data-kind="${escapeHtml(model.kind)}" data-record-id="${escapeHtml(String(model.id ?? ''))}" data-editor-key="${escapeHtml(key)}" tabindex="-1">
@@ -281,12 +346,22 @@ export function renderSettingsEditor(container, model, host = appHost) {
     act().closeEditor?.();
   });
   bindDocumentEscape(container, host);
-  const segs = wireSegmented(container, model.fields || []);
+  const segs = wireSegmented(container, model.fields || [], {
+    explain: (reason) => act().explain?.(reason),
+    // Add member: "by login" / "by verified email" relabels the one input.
+    change: (name, value) => {
+      if (model.kind !== 'member-add' || name !== 'by') return;
+      const input = container.querySelector(`#${fieldId('value')}`);
+      const label = input?.closest?.('.set-editor-field')?.querySelector?.('.set-editor-label');
+      if (input) input.type = value === 'email' ? 'email' : 'text';
+      if (label) label.textContent = value === 'email' ? 'Verified email' : 'Login';
+    },
+  });
   // What was typed, by field: a segmented group's checked value ("" → null);
   // a select the reader cannot change is left out (undefined — the binding it
   // shows is kept, never resent nor nulled); the rest by its value.
   const readDraft = () => Object.fromEntries((model.fields || []).map((f) => {
-    if (f.type === 'segmented') return [f.name, Object.hasOwn(segs, f.name) ? segs[f.name] : (f.value ?? null)];
+    if (f.type === 'segmented' || f.type === 'radio') return [f.name, Object.hasOwn(segs, f.name) ? segs[f.name] : (f.value ?? null)];
     if (f.type === 'select' && f.disabled) return [f.name, undefined];
     return [f.name, container.querySelector(`#${fieldId(f.name)}`)?.value ?? f.value];
   }));
@@ -321,29 +396,37 @@ export function renderSettingsEditor(container, model, host = appHost) {
 // The segmented groups: a click checks one; ArrowLeft / ArrowRight / Home /
 // End move and check (roving tabindex — 6a's tier radios). Returns the
 // checked value per group, kept current ("" → null).
-function wireSegmented(container, fields) {
+function wireSegmented(container, fields, { explain = null, change = null } = {}) {
   const values = {};
-  for (const f of fields.filter((x) => x.type === 'segmented')) {
+  for (const f of fields.filter((x) => x.type === 'segmented' || x.type === 'radio')) {
     const radios = [...(container.querySelectorAll(`[data-seg="${f.name}"]`) || [])];
     if (!radios.length) continue;
     values[f.name] = f.value ?? null;
+    // An option drawn aria-disabled is not checked: its click says why (the group's help).
+    const off = (btn) => btn.getAttribute?.('aria-disabled') === 'true';
     const check = (btn) => {
+      if (off(btn)) { explain?.(f.help); return; }
       values[f.name] = btn.dataset.value === '' ? null : btn.dataset.value;
       for (const r of radios) { r.setAttribute('aria-checked', r === btn ? 'true' : 'false'); r.setAttribute('tabindex', r === btn ? '0' : '-1'); }
+      change?.(f.name, values[f.name]);
     };
     radios.forEach((btn) => btn.addEventListener('click', () => check(btn)));
     container.querySelector(`#${fieldId(f.name)}`)?.addEventListener('keydown', (e) => {
       const i = radios.indexOf(e.target?.closest?.('[role="radio"]'));
       if (i < 0) return;
+      // The arrows move over the choices that can be made.
+      const usable = radios.filter((r) => !off(r));
+      const at = usable.indexOf(radios[i]);
       let next = null;
-      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (i + 1) % radios.length;
-      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (i - 1 + radios.length) % radios.length;
-      else if (e.key === 'Home') next = 0;
-      else if (e.key === 'End') next = radios.length - 1;
-      if (next === null) return;
+      if (!usable.length) return;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = usable[(at + 1) % usable.length];
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = usable[(at - 1 + usable.length) % usable.length];
+      else if (e.key === 'Home') next = usable[0];
+      else if (e.key === 'End') next = usable[usable.length - 1];
+      if (!next) return;
       e.preventDefault();
-      radios[next].focus();
-      check(radios[next]);
+      next.focus();
+      check(next);
     });
   }
   return values;

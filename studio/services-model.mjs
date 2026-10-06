@@ -528,13 +528,16 @@ export function buildServicePatch(current, draft = {}) {
 // ---------- a signed-in user with no org ----------
 
 // `error` is the thrown denial of the boot's GET /api/packs (denied 'org').
-export function buildNoOrgModel({ identity = null, error = null, chromeName = 'the studio' } = {}) {
+// The hint names the screen an admin uses (Settings → Members) and says a
+// reload is enough: memberships are read per request, and signing out would
+// also wipe this browser's state.
+export function buildNoOrgModel({ identity = null, error = null } = {}) {
   const login = identity?.user?.login || identity?.login || identity?.email || 'you';
   return {
     title: 'Signed in, but in no organisation yet',
     checked: `/api/packs as ${login}`,
     body: error?.message || '403: no org membership — ask an admin to add you',
-    hint: `${chromeName} has no member screen yet; an admin adds you with POST /api/org/members.`,
+    hint: 'An admin of an organisation adds you in Settings → Members; reload this page once they have.',
     actions: [{ id: 'sign-out', label: 'Sign out' }],
   };
 }

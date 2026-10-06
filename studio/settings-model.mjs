@@ -23,10 +23,10 @@ import { TIERS, TIER_BY_PACK } from './services-model.mjs';
 export const SETTINGS_SECTIONS = ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role'];
 // The sections this build draws (the nav lists only these — never a
 // placeholder for one that is not built).
-export const BUILT_SECTIONS = ['environments', 'endpoints'];
+export const BUILT_SECTIONS = ['environments', 'endpoints', 'members'];
 // The record editors this build draws: a section whose editor is not built
 // draws no primary and no row action, and no sentence names one.
-export const BUILT_EDITORS = ['endpoint', 'environment'];
+export const BUILT_EDITORS = ['endpoint', 'environment', 'org-name', 'member-add', 'member'];
 
 const SECTION_LABEL = {
   environments: 'Environments', endpoints: 'MCP endpoints', members: 'Members', audit: 'Audit',
@@ -148,6 +148,7 @@ export function settingsSectionHead(id, { orgName = null } = {}) {
   const scope = {
     environments: `Every environment of ${org}'s services — its tier, the MCP endpoint it is checked through, its bindings and links. Build registers a service; each opens on its own page.`,
     endpoints: `The MCP gateways registered in ${org}, and the environments checked through each. A read token stays on the server: a gateway names the variable that holds it, never its value.`,
+    // The members' scope sentence is the section model's (it names the org's id, and an owner acting from outside).
   }[id] ?? null;
   return { title, scope, loading: `Reading ${title.replace(/^[A-Z](?=[a-z])/, (c) => c.toLowerCase())}…` };
 }
@@ -682,11 +683,13 @@ export function buildSettingsEditorModel(kind, record = null, { draft = null, st
       confirm = { text: [`Change ${record.login}'s role to ${role}?`, ...notes].join(' '), danger: `Make ${record.login} ${role}` };
     }
     const removeReason = !can ? (access?.why?.admin ?? null) : lock;
+    // The role group's help says why a choice is unavailable (once, not per button).
+    const roleHelp = !can ? (access?.why?.admin ?? null) : lock;
     return {
       ...base, id: record.userId, title: record.login, eyebrow: `Member of ${orgName}`,
-      fields: [{ name: 'role', label: 'Role', type: 'segmented', value: role, options }],
+      fields: [{ name: 'role', label: 'Role', type: 'segmented', value: role, options, help: roleHelp }],
       limits: {}, draft: { role }, confirm,
-      remove: { enabled: removeReason === null, reason: removeReason },
+      remove: { enabled: removeReason === null, reason: removeReason, label: 'Remove…' },
       status: st || idleStatus(`${record.login} is ${record.role} in ${orgName}.`),
       primary: primaryOf('Save', can, access?.why?.admin ?? null),
     };

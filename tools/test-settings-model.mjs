@@ -119,8 +119,8 @@ test('settingsAccessModel: each rank, each posture — the reasons name a way ou
 
 test('the frame: the scope line, the nav lists only the built sections, each unreadable one disabled with its reason', () => {
   assert.deepEqual(SETTINGS_SECTIONS, ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role']);
-  assert.deepEqual(BUILT_SECTIONS, ['environments', 'endpoints'], 'the sections this build draws: no members, audit or deployment group yet');
-  assert.deepEqual(BUILT_EDITORS, ['endpoint', 'environment'], 'the record editors this build draws: the MCP endpoint and the environment editors');
+  assert.deepEqual(BUILT_SECTIONS, ['environments', 'endpoints', 'members'], 'the sections this build draws: no audit or deployment group yet');
+  assert.deepEqual(BUILT_EDITORS, ['endpoint', 'environment', 'org-name', 'member-add', 'member'], 'the record editors this build draws: the MCP endpoint, the environment, the org name and the member editors');
   const FOUR = ['environments', 'endpoints', 'members', 'audit'];
   assert.deepEqual(buildSettingsFrameModel({ access: ADA }).nav.map((n) => n.id), BUILT_SECTIONS, 'the default nav is the built sections');
   const ada = buildSettingsFrameModel({ access: ADA, orgName: 'Acme', orgId: 'acme', builtSections: FOUR });
@@ -154,14 +154,15 @@ test('the frame: the scope line, the nav lists only the built sections, each unr
   assert.deepEqual([stat.nav, stat.section, stat.banner.kind, stat.scope], [[], null, 'static', 'Settings']);
   assert.equal(settingsSectionFor(STATIC, 'environments'), null);
   assert.equal(settingsSectionFor(CLOSED, 'members', FOUR), 'environments', 'closed: members falls back');
-  assert.equal(settingsSectionFor(ADA, 'members'), 'environments', 'a section not built is never opened');
+  assert.equal(settingsSectionFor(ADA, 'audit'), 'environments', 'a section not built is never opened');
+  assert.equal(settingsSectionFor(ADA, 'members'), 'members', 'Members is built');
   // The heads: the title, the scope sentence naming the org, the reading line.
   assert.deepEqual(settingsSectionHead('environments', { orgName: 'Acme' }).loading, 'Reading environments…');
   assert.equal(settingsSectionHead('endpoints').loading, 'Reading MCP endpoints…');
   assert.equal(settingsSectionHead('endpoints').title, 'MCP endpoints');
   assert.match(settingsSectionHead('environments', { orgName: 'Acme' }).scope, /^Every environment of Acme's services — /);
   assert.match(settingsSectionHead('endpoints', { orgName: 'Acme' }).scope, /never its value\.$/);
-  for (const id of BUILT_SECTIONS) assert.doesNotMatch(settingsSectionHead(id).scope, /slice|Settings →/, 'no roadmap wording, no control named that is not built');
+  for (const id of BUILT_SECTIONS) assert.doesNotMatch(settingsSectionHead(id).scope ?? '', /slice|Settings →/, 'no roadmap wording, no control named that is not built');
 });
 
 test('settingsAboveRank: a downgrade forgets what the new rank may not read (C-6)', () => {
@@ -379,7 +380,9 @@ test('the member editors: add by login or email, a role change, the remove step;
   assert.deepEqual(buildMemberAddBody({ by: 'email', value: 'o@acme.test', role: 'viewer' }), { email: 'o@acme.test', role: 'viewer' });
   const self = buildSettingsEditorModel('member', MEMBERS[0], { ctx });
   assert.deepEqual(self.fields[0].options.map((o) => [o.value, o.enabled]), [['viewer', false], ['operator', false], ['admin', true]]);
-  assert.deepEqual(self.remove, { enabled: false, reason: 'ada is the last admin of Acme: only an owner can demote or remove them — make another member an admin first' });
+  assert.deepEqual(self.remove, { enabled: false, reason: 'ada is the last admin of Acme: only an owner can demote or remove them — make another member an admin first', label: 'Remove…' });
+  assert.equal(self.fields[0].help, self.remove.reason, 'the role group says once why its other choices are unavailable');
+  assert.equal(buildSettingsEditorModel('member', MEMBERS[1], { ctx }).fields[0].help, null, 'no lock, no help');
   const oscar = buildSettingsEditorModel('member', MEMBERS[1], { ctx, step: 'confirm-delete' });
   assert.equal(oscar.confirm.text, 'Remove oscar from Acme? Their sessions keep working elsewhere; here their next request is refused.');
   assert.equal(oscar.id, 3);
@@ -629,7 +632,15 @@ function settingsContainer() {
       if (sel === '[data-edit-endpoint]') return [...html.matchAll(/data-edit-endpoint="(\d+)"/g)].map((m) => get(`edit:${m[1]}`, true, { editEndpoint: m[1] }));
       if (sel === '[data-edit-env]') return [...html.matchAll(/data-edit-env="(\d+)"/g)].map((m) => get(`env:${m[1]}`, true, { editEnv: m[1] }));
       const seg = /^\[data-seg="([\w-]+)"\]$/.exec(sel)?.[1];
-      if (seg) return [...html.matchAll(new RegExp(`data-seg="${seg}" data-value="([^"]*)"`, 'g'))].map((m) => get(`seg:${seg}:${m[1]}`, true, { seg, value: m[1] }));
+      if (seg) {
+        return [...html.matchAll(new RegExp(`data-seg="${seg}" data-value="([^"]*)" aria-checked="(\\w+)"( aria-disabled="true")?`, 'g'))].map((m) => {
+          const el = get(`seg:${seg}:${m[1]}`, true, { seg, value: m[1] });
+          if (m[3] && !el.attrs['aria-disabled']) el.attrs['aria-disabled'] = 'true';
+          return el;
+        });
+      }
+      if (sel === '[data-member-role]') return [...html.matchAll(/data-member-role="(\d+)"/g)].map((m) => get(`role:${m[1]}`, true, { memberRole: m[1] }));
+      if (sel === '[data-member-remove]') return [...html.matchAll(/data-member-remove="(\d+)"/g)].map((m) => get(`remove:${m[1]}`, true, { memberRemove: m[1] }));
       if (sel === '[data-editor-close]') return [...html.matchAll(/data-editor-close/g)].map((_, i) => get(`close:${i}`, true));
       return [];
     },
@@ -650,7 +661,7 @@ test('renderSettings: the head, the banner as served, the nav by rank, the envir
   assert.ok(h.includes('<h1 class="set-title" id="set-title" tabindex="-1">Settings</h1>'));
   assert.ok(h.includes('<p class="set-scope">Settings · Acme (acme) · you are operator</p>'));
   assert.ok(h.includes('<nav class="set-nav" aria-label="Settings sections">'));
-  assert.deepEqual([...h.matchAll(/class="set-nav-item" data-section="([\w-]+)" aria-current="(\w+)"/g)].map((m) => [m[1], m[2]]), [['environments', 'page'], ['endpoints', 'false']], 'the built sections only, the one on screen current');
+  assert.deepEqual([...h.matchAll(/class="set-nav-item" data-section="([\w-]+)" aria-current="(\w+)"/g)].map((m) => [m[1], m[2]]), [['environments', 'page'], ['endpoints', 'false'], ['members', 'false']], 'the built sections only, the one on screen current');
   assert.ok(!h.includes('<img') && h.includes('Pay &lt;img src=x onerror=&quot;window.__x=1&quot;&gt;'), 'a service name is escaped');
   assert.ok(h.includes('tier-1 · MCP: gw — https://mcp.acme.test · 2 bindings · 1 link'));
   assert.ok(h.includes('no environments'), 'a service with none says so');
@@ -855,6 +866,108 @@ test('the environments section and editor: Add environment and Edit… for an op
   a.querySelector('#set-editor-save').fire('click');
   assert.deepEqual(calls, [['save', { serviceId: 2, name: 'qa', tier: null, mcpEndpointId: null, bindings: '', endpoints: '' }]], 'a field untouched reads as drawn');
   assert.deepEqual(buildEnvironmentCreate(calls[0][1]), { name: 'qa' });
+});
+
+test('the members section: no email, "you" by login, Rename…, Add member, Change role… and Remove… — the last admin\'s Remove… unavailable with the rule, its click explains', () => {
+  const calls = [];
+  const host = { settings: new Proxy({}, { get: (_, k) => (...a) => calls.push([k, ...a]) }) };
+  const xss = '<img src=x onerror="window.__x=1">';
+  const raw = [...MEMBERS_RAW, { userId: 6, login: `eve${xss}`, kind: 'local', name: null, email: 'eve@acme.test', role: 'viewer', disabled: true, since: '2026-10-03T00:00:00.000Z' }];
+  // What the loader keeps (no email), as the section reads it.
+  const members = raw.map(strip);
+  const model = buildMembersSectionModel({ members, org: { id: 'acme', name: 'Acme', default: false }, access: ADA, me: 'ada' });
+  const c = settingsContainer();
+  renderSettings(c, buildSettingsFrameModel({ access: ADA, section: 'members', orgName: 'Acme', orgId: 'acme' }), { id: 'members', head: settingsSectionHead('members', { orgName: 'Acme' }), model, status: null }, host);
+  const h = c.innerHTML;
+  assert.deepEqual([...h.matchAll(/class="set-nav-item" data-section="([\w-]+)"/g)].map((m) => m[1]), ['environments', 'endpoints', 'members'], 'Members is built; the audit is not yet');
+  assert.ok(h.includes('<p class="set-section-scope">The members of Acme (acme) and their roles.</p>'), 'the model\'s scope sentence');
+  assert.ok(h.includes('<button type="button" class="mcp-refresh-btn set-primary" id="set-primary">Add member</button>'));
+  assert.ok(h.includes('id="set-rename">Rename…</button>'));
+  assert.ok(!/@acme\.test|x@y\.test/.test(h), 'C-8: no member email anywhere');
+  assert.ok(!h.includes('<img') && h.includes('eve&lt;img src=x onerror=&quot;window.__x=1&quot;&gt;'), 'a login is escaped');
+  assert.ok(/data-member-id="2">\s*<span class="set-row-name">ada<\/span>\s*<span class="set-you">you<\/span>/.test(h), '"you" on the reader\'s row');
+  assert.ok(h.includes('<span class="set-row-meta">Ada · admin · since 2026-10-01</span>'));
+  assert.ok(h.includes('<span class="set-badge is-disabled">disabled</span>'));
+  const lock = 'ada is the last admin of Acme: only an owner can demote or remove them — make another member an admin first';
+  const [adaRemove, oscarRemove] = c.querySelectorAll('[data-member-remove]');
+  assert.deepEqual([adaRemove.getAttribute('aria-disabled'), adaRemove.why.textContent], ['true', lock]);
+  assert.equal(oscarRemove.getAttribute('aria-disabled'), null);
+  adaRemove.fire('click');
+  oscarRemove.fire('click');
+  c.querySelectorAll('[data-member-role]')[1].fire('click');
+  c.querySelector('#set-rename').fire('click');
+  c.querySelector('#set-primary').fire('click');
+  assert.deepEqual(calls, [
+    ['explain', lock],
+    ['openEditor', { kind: 'member', id: 3, step: 'confirm-delete' }],
+    ['openEditor', { kind: 'member', id: 3 }],
+    ['openEditor', { kind: 'org-name', id: 'acme' }],
+    ['openEditor', { kind: 'member-add' }],
+  ]);
+  // An owner passes the rule: every Remove… usable.
+  const o = settingsContainer();
+  renderSettings(o, buildSettingsFrameModel({ access: OLIVE, section: 'members', orgName: 'Acme', orgId: 'acme' }), { id: 'members', head: settingsSectionHead('members'), model: buildMembersSectionModel({ members, org: ACME, access: OLIVE, me: 'olive' }), status: null }, host);
+  assert.ok(o.querySelectorAll('[data-member-remove]').every((b) => b.getAttribute('aria-disabled') === null));
+  // A read refused: the server's sentence and Retry.
+  const f = settingsContainer();
+  renderSettings(f, buildSettingsFrameModel({ access: ADA, section: 'members' }), { id: 'members', head: settingsSectionHead('members'), model: buildMembersSectionModel({ members: null, org: ACME, access: ADA, error: '403: <no>' }), status: null }, host);
+  assert.ok(f.innerHTML.includes('403: &lt;no&gt; <button type="button" class="ux-secondary-btn" id="set-retry">Retry</button>'));
+});
+
+test('the member editors: the role group with the locked choices unavailable, Remove…, the confirm step for one\'s own role; Add member by login or verified email', () => {
+  const calls = [];
+  const host = { settings: new Proxy({}, { get: (_, k) => (...a) => calls.push([k, ...a]) }) };
+  const ctx = { access: ADA, orgName: 'Acme', orgId: 'acme', members: MEMBERS, me: 'ada' };
+  const c = settingsContainer();
+  renderSettingsEditor(c, buildSettingsEditorModel('member', MEMBERS[0], { ctx }), host);
+  const h = c.innerHTML;
+  assert.ok(h.includes('data-kind="member" data-record-id="2" data-editor-key="member:2:edit"'));
+  assert.ok(h.includes('role="radiogroup" aria-labelledby="set-edit-role-label" aria-describedby="set-edit-role-help"'));
+  assert.deepEqual([...h.matchAll(/data-seg="role" data-value="(\w+)" aria-checked="(\w+)"( aria-disabled="true")?/g)].map((m) => [m[1], m[2], Boolean(m[3])]), [['viewer', 'false', true], ['operator', 'false', true], ['admin', 'true', false]]);
+  const lock = 'ada is the last admin of Acme: only an owner can demote or remove them — make another member an admin first';
+  assert.ok(h.includes(`<span class="set-editor-help" id="set-edit-role-help">${lock}</span>`), 'the reason said once, under the group');
+  assert.ok(h.includes('id="set-editor-delete">Remove…</button>'));
+  assert.ok(!h.includes('@acme.test'));
+  // A locked choice is not taken: its click explains; Save sends the role still checked.
+  c.querySelectorAll('[data-seg="role"]')[0].fire('click');
+  c.querySelector('#set-editor-save').fire('click');
+  c.querySelector('#set-editor-delete').fire('click');
+  assert.deepEqual(calls, [['explain', lock], ['save', { role: 'admin' }], ['explain', lock]]);
+
+  // oscar (not locked): a choice is taken and sent.
+  calls.length = 0;
+  const o = settingsContainer();
+  renderSettingsEditor(o, buildSettingsEditorModel('member', MEMBERS[1], { ctx }), host);
+  o.querySelectorAll('[data-seg="role"]')[2].fire('click');
+  o.querySelector('#set-editor-save').fire('click');
+  assert.deepEqual(calls, [['save', { role: 'admin' }]]);
+
+  // The confirm step for one's own role: the sentence, Back and the danger button.
+  calls.length = 0;
+  const two = [...MEMBERS, { userId: 9, login: 'abe', role: 'admin', disabled: false }];
+  const d = settingsContainer();
+  renderSettingsEditor(d, buildSettingsEditorModel('member', MEMBERS[0], { ctx: { ...ctx, members: two }, step: 'confirm-action', draft: { role: 'operator' } }), host);
+  assert.ok(d.innerHTML.includes("<p class=\"set-confirm\" id=\"set-editor-confirm-text\">Change ada&#39;s role to operator? This is you: you lose the admin role at once.</p>"));
+  assert.ok(d.innerHTML.includes('id="set-editor-confirm" aria-disabled="false">Make ada operator</button>'));
+  d.querySelector('#set-editor-back').fire('click');
+  d.querySelector('#set-editor-confirm').fire('click');
+  assert.deepEqual(calls, [['step', 'edit'], ['confirm']]);
+
+  // Add member: by login or by verified email (a radio group), the value, the role (operator by default).
+  calls.length = 0;
+  const a = settingsContainer();
+  renderSettingsEditor(a, buildSettingsEditorModel('member-add', null, { ctx }), host);
+  assert.deepEqual([...a.innerHTML.matchAll(/data-seg="by" data-value="(\w+)" aria-checked="(\w+)"/g)].map((m) => [m[1], m[2]]), [['login', 'true'], ['email', 'false']]);
+  assert.ok(a.innerHTML.includes('<input id="set-edit-value" name="value" type="text" value="" maxlength="200" autocomplete="off" spellcheck="false">'));
+  a.querySelector('#set-edit-value').value = 'oscar';
+  a.querySelector('#set-editor-save').fire('click');
+  assert.deepEqual(calls, [['save', { by: 'login', value: 'oscar', role: 'operator' }]]);
+
+  // Rename: the name, the id that stays.
+  const r = settingsContainer();
+  renderSettingsEditor(r, buildSettingsEditorModel('org-name', { id: 'acme', name: 'Acme' }, { ctx }), host);
+  assert.ok(r.innerHTML.includes('<input id="set-edit-name" name="name" type="text" value="Acme" maxlength="200"') && r.innerHTML.includes('The id acme stays; only the name changes.'));
+  assert.ok(!r.innerHTML.includes('set-editor-delete'), 'an org is not removed here');
 });
 
 test('renderMcpTarget: the endpoints first and "Type a URL…" last, each option its name and origin (never a URL or a variable); the empty line; a change is the controller\'s', () => {

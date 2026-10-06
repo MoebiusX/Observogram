@@ -9510,6 +9510,9 @@ select.build-edit-input { appearance: auto; }
   overflow-wrap: anywhere;
 }
 .set-row .ux-secondary-btn { margin-left: auto; }
+/* A row's several actions (a member's Change role… and Remove…): one group at the row's end — layout only. */
+.set-row-actions { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+.set-row-actions .ux-secondary-btn { margin-left: 0; }
 /* A record's further facts, and a service's environments: full-width lines under the row's name. */
 .set-row-facts, .set-envs {
   flex: 1 0 100%;

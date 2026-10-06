@@ -449,9 +449,9 @@ test('buildServiceEditorModel: the record\'s values until typed, the tier choice
 
 test('buildNoOrgModel: the server\'s sentence as is, the login checked, sign-out the one action', () => {
   const err = Object.assign(new Error('403: no org membership — ask an admin to add you'), { denied: 'org', status: 403 });
-  const m = buildNoOrgModel({ identity: me('nora', []), error: err, chromeName: 'Acme Watch' });
+  const m = buildNoOrgModel({ identity: me('nora', []), error: err });
   assert.deepEqual([m.title, m.checked, m.body], ['Signed in, but in no organisation yet', '/api/packs as nora', '403: no org membership — ask an admin to add you']);
-  assert.equal(m.hint, 'Acme Watch has no member screen yet; an admin adds you with POST /api/org/members.');
+  assert.equal(m.hint, 'An admin of an organisation adds you in Settings → Members; reload this page once they have.', 'the screen an admin uses, and a reload is enough');
   // Product wording, not plan wording: no roadmap slice reference reaches a signed-in user.
   assert.doesNotMatch(`${m.title} ${m.body} ${m.hint}`, /slice\s*\d|\b6b\b/i, 'the no-org screen never names a roadmap slice');
   assert.deepEqual(m.actions, [{ id: 'sign-out', label: 'Sign out' }]);
@@ -467,7 +467,7 @@ function noOrgContainer() {
 
 test('renderNoOrgHome: the refusal as is and escaped, the login checked, one Sign out button proxied to host.services.signOut; a headless host never throws', () => {
   const err = Object.assign(new Error('403: no org membership — ask <an admin> to add you'), { denied: 'org', status: 403 });
-  const m = buildNoOrgModel({ identity: me('nora<img src=x onerror="window.__xss=1">', []), error: err, chromeName: 'Acme Watch' });
+  const m = buildNoOrgModel({ identity: me('nora<img src=x onerror="window.__xss=1">', []), error: err });
   const c = noOrgContainer();
   let signedOut = 0;
   renderNoOrgHome(c, m, { services: { signOut: () => { signedOut++; } } });
@@ -475,7 +475,7 @@ test('renderNoOrgHome: the refusal as is and escaped, the login checked, one Sig
   assert.ok(c.innerHTML.includes('Signed in, but in no organisation yet'));
   assert.ok(c.innerHTML.includes('403: no org membership — ask &lt;an admin&gt; to add you'), 'the server\'s sentence, escaped at the seam');
   assert.ok(c.innerHTML.includes('/api/packs as nora&lt;img') && !c.innerHTML.includes('<img'), 'the login is escaped — nothing from it reaches the page');
-  assert.ok(c.innerHTML.includes('Acme Watch has no member screen yet'), 'the hint names the product through chromeName');
+  assert.ok(c.innerHTML.includes('An admin of an organisation adds you in Settings → Members; reload this page once they have.'), 'the hint names Settings → Members');
   assert.equal((c.innerHTML.match(/<button /g) || []).length, 1, 'one action: Sign out — no fabricated way in');
   assert.ok(c.innerHTML.includes('id="svc-noorg-sign-out"') && c.innerHTML.includes('>Sign out</button>'));
   c.btn.fire('click');
