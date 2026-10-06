@@ -215,7 +215,9 @@ function sectionHtml(section) {
 
 // The page. `frame` is buildSettingsFrameModel(); `section` is { id, head
 // (settingsSectionHead), model (the section's build*SectionModel), status
-// ({ kind, text } | null) } — or null (the static bundle: the banner alone).
+// ({ kind, text } | null); the audit's also its applied filters and the
+// drafts readAuditDrafts() read before the repaint } — or null (the static
+// bundle: the banner alone).
 export function renderSettings(container, frame, section, host = appHost) {
   const banner = frame.banner;
   container.innerHTML = `
@@ -269,7 +271,24 @@ export function renderSettings(container, frame, section, host = appHost) {
     btn.addEventListener('click', () => host.settings?.openEditor?.({ kind: 'environment', id: Number(btn.dataset.editEnv) }));
   });
   if (section.id === 'members') wireMembers(container, section.model, host);
-  if (section.id === 'audit') wireAudit(container, section.model, host);
+  if (section.id === 'audit') {
+    for (const [name, v] of section.drafts || []) { const el = container.querySelector(`#${auditFieldId(name)}`); if (el) el.value = v; }
+    wireAudit(container, section.model, host);
+  }
+}
+
+// The audit's filters as typed in the form on screen (Apply not pressed
+// yet), read before a repaint of the section (a read settling, Older rows)
+// so it draws them again (section.drafts) instead of the applied ones —
+// typing during a read loses nothing. Null when no audit form is on screen.
+export function readAuditDrafts(container) {
+  if (!container.querySelector('#set-audit-filters')) return null;
+  const out = [];
+  for (const name of ['scope', ...AUDIT_FIELDS.map((d) => d.name)]) {
+    const v = container.querySelector(`#${auditFieldId(name)}`)?.value;
+    if (typeof v === 'string') out.push([name, v]);
+  }
+  return out;
 }
 
 // The audit's controls: Apply hands the filled filters to

@@ -66,7 +66,7 @@ import {
   loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
   addMember, patchMember, removeMember, renameOrg, loadAudit,
 } from './settings-api.mjs';
-import { renderSettings, renderSettingsEditor, renderMcpTarget } from './settings-view.mjs';
+import { renderSettings, renderSettingsEditor, renderMcpTarget, readAuditDrafts } from './settings-view.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
@@ -850,6 +850,8 @@ export function renderLayerFilterChips() {
 
 export function renderMainView() {
   const view = $('#layer-view');
+  // The audit's filters as typed but not applied survive the repaint.
+  const auditDrafts = state.mode === 'settings' ? readAuditDrafts(view) : null;
   view.innerHTML = '';
   // Persistence: every mutation chain ends here, so this is the single
   // hook for the debounced write. Cheap when suspended (boot phase).
@@ -864,7 +866,7 @@ export function renderMainView() {
     return;
   }
   // Settings (STORE_PLAN §6 item 3, slice 6b): the org's environments and MCP endpoints.
-  if (state.mode === 'settings') { renderSettingsHost(view); return; }
+  if (state.mode === 'settings') { renderSettingsHost(view, auditDrafts); return; }
   // The service page (STORE_PLAN §6, slice 6a): one record, its environments as tabs.
   if (state.mode === 'service') { renderServicePageHost(view); return; }
   // The BUILD journey renders its own three steps (Define · Compile ·
@@ -2579,11 +2581,13 @@ function settingsSectionView(id, access) {
 
 // renderMainView's branch for mode 'settings': the frame and the section
 // from the state, the focus on the h1 when just entered.
-function renderSettingsHost(view) {
+function renderSettingsHost(view, auditDrafts = null) {
   const access = settingsAccess();
   const section = settingsSectionFor(access, state.settingsSection, BUILT_SECTIONS);
   const frame = buildSettingsFrameModel({ access, section, orgName: state.orgName, orgId: state.orgId, builtSections: BUILT_SECTIONS });
-  renderSettings(view, frame, section ? settingsSectionView(section, access) : null, settingsHost);
+  const sectionView = section ? settingsSectionView(section, access) : null;
+  if (sectionView?.id === 'audit') sectionView.drafts = auditDrafts;
+  renderSettings(view, frame, sectionView, settingsHost);
   if (settingsFocusNext) {
     settingsFocusNext = false;
     view.querySelector('.set-title')?.focus({ preventScroll: true });

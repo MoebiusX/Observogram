@@ -24,7 +24,7 @@ import {
   loadMembers, addMember, patchMember, removeMember, renameOrg, loadAudit,
 } from '../studio/settings-api.mjs';
 import { accessModel, TIER_BY_PACK } from '../studio/services-model.mjs';
-import { renderSettings, renderSettingsEditor, renderMcpTarget } from '../studio/settings-view.mjs';
+import { renderSettings, renderSettingsEditor, renderMcpTarget, readAuditDrafts } from '../studio/settings-view.mjs';
 import { readFileSync } from 'node:fs';
 import { servicesRefusal } from '../studio/services-api.mjs';
 import { orgEnvPrefix as serverOrgEnvPrefix } from '../server/store/mcp-endpoints.mjs';
@@ -1013,6 +1013,21 @@ test('the audit section: the filters (the scope an owner\'s), the kinds listed, 
   c.querySelector('#set-audit-filters').fire('submit');
   c.querySelector('#set-audit-more').fire('click');
   assert.deepEqual(calls, [['auditApply', { actor: 'ada', kind: 'membership', from: '2026-10-06', through: '2026-10-06' }], ['auditMore']]);
+
+  // A repaint (a read settling) keeps what was typed but not applied: the
+  // drafts read off the form on screen are drawn over the applied filters.
+  c.querySelector('#set-audit-kind').value = 'store';
+  const drafts = readAuditDrafts(c);
+  assert.deepEqual(drafts.find(([n]) => n === 'kind'), ['kind', 'store']);
+  assert.deepEqual(drafts.find(([n]) => n === 'actor'), ['actor', ' ada ']);
+  assert.ok(!drafts.some(([n]) => n === 'scope'), 'no scope control: no scope draft');
+  calls.length = 0;
+  renderSettings(c, buildSettingsFrameModel({ access: ADA, section: 'audit', orgName: 'Acme', orgId: 'acme' }), { id: 'audit', head: settingsSectionHead('audit', { orgName: 'Acme' }), model, status: null, filters, drafts }, host);
+  assert.deepEqual([c.querySelector('#set-audit-kind').value, c.querySelector('#set-audit-actor').value], ['store', ' ada '], 'the typed values survive the repaint');
+  c.querySelector('#set-audit-filters').fire('submit');
+  assert.deepEqual(calls, [['auditApply', { actor: 'ada', kind: 'store', from: '2026-10-06', through: '2026-10-06' }]]);
+  assert.equal(readAuditDrafts(settingsContainer()), null, 'no audit form on screen: no drafts');
+  calls.length = 0;
 
   // An owner: the scope control, the org column; the last page says so.
   const olive = buildAuditSectionModel({ doc: { scope: 'all', org: null, rows: [rows[1]], next: null }, rows: [rows[1]], filters: { scope: 'deployment' }, access: OLIVE, orgId: 'acme' });
