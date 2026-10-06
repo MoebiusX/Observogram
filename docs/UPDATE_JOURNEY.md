@@ -1098,5 +1098,5 @@ profile remembers its endpoint per org. Operators edit an environment's MCP
 endpoint, tier and bindings from Settings or the service page; admins
 register the endpoints. Nothing about the pack, the compile or the verify
 rules changed; crawl, compile and board goldens are byte-identical.
-Tests: 1055 → 1097 (`tools/test-settings-model.mjs` and the Settings journey,
+Tests: 1055 → 1102 (`tools/test-settings-model.mjs` and the Settings journey,
 `server/test-settings-studio.mjs`, new; T7's Settings step).
