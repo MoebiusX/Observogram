@@ -20,7 +20,8 @@
  * before the server says it, the org renamed, no email in a row; the audit —
  * a kind filter, a same-day range, a range refused, older pages; leaving the
  * org reloads this browser into the next, where nothing is writable. As
- * olive (owner), in one browser: a profile remembers its endpoint per org.
+ * olive (owner), in one browser: a profile remembers its endpoint per org;
+ * leaving bravo, the status says the reload lands in her first org.
  * As vera (viewer): no Edit, no URL. As nora (no org): the boot's refusal.
  * The token posture (with and without OBSERVOGRAM_AUTH=off) and an open
  * server bound off the loopback: the banner is the server's text, the
@@ -34,7 +35,7 @@
  * (OBSERVOGRAM_PLAYWRIGHT, else the bare 'playwright') and Chromium
  * launches; OBSERVOGRAM_SETTINGS_SMOKE=require fails instead.
  */
-/* global document, getComputedStyle */
+/* global document, getComputedStyle, MutationObserver */
 
 // The two knobs are read before the strip (STRIP carries both so no child
 // sees them); the rest of the shell never reaches this process's imports.
@@ -762,6 +763,34 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await page.waitForFunction(() => document.querySelector('#set-section')?.dataset.section === 'endpoints', null, { timeout: T });
       await settled(page);
       assert.equal(await attr(page, '#set-primary', 'aria-disabled'), null, 'New MCP endpoint usable');
+    } finally { await ctx.close(); }
+  });
+
+  await t.test('olive (an owner) — leaving bravo: the status says the reload lands in her first organisation, or the default one — never that she switches to a next one', async () => {
+    const ctx = await browser.newContext({ viewport: LAPTOP });
+    await ctx.addCookies([{ name: 'observogram_session', value: (await cookieFor('olive')).split('=')[1], url: child.base }]);
+    try {
+      const { page } = await open(child.base, 'olive', { ctx });
+      await page.waitForSelector('.observa-org-select', { timeout: T });
+      if (await page.evaluate(() => document.querySelector('.observa-org-select').value) !== 'bravo') {
+        await Promise.all([page.waitForNavigation(), page.selectOption('.observa-org-select', 'bravo')]);
+        await page.waitForFunction(() => document.body.dataset.mode, null, { timeout: 30_000 });
+      }
+      await toSettings(page);
+      await toSection(page, 'members');
+      await page.click(`[data-member-remove="${idOf('olive')}"]`);
+      await page.waitForSelector('#set-editor-confirm', { timeout: T });
+      // The status line is drawn just before the reload: kept in sessionStorage as it appears.
+      await page.evaluate(() => {
+        new MutationObserver(() => {
+          const s = document.getElementById('set-editor-status')?.textContent?.trim() || '';
+          if (/^You left /.test(s)) sessionStorage.setItem('test.leftOrgText', s);
+        }).observe(document.body, { subtree: true, childList: true, characterData: true });
+      });
+      await Promise.all([page.waitForEvent('load', { timeout: T }), page.click('#set-editor-confirm')]);
+      await page.waitForFunction(() => document.body.dataset.mode, null, { timeout: 30_000 });
+      assert.equal(await page.evaluate(() => sessionStorage.getItem('test.leftOrgText')),
+        'You left Bravo; this browser reloads into your first organisation, or the default one.');
     } finally { await ctx.close(); }
   });
 

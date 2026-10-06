@@ -434,6 +434,9 @@ test('the member editors: add by login or email, a role change, the remove step;
   assert.equal(ownerLeave.confirm.text, "Remove olive from Acme? This is you: your membership changes, but as an owner you keep the admin role in Acme. olive is Acme's last admin: afterwards only an owner can manage its members, endpoints and audit.");
   assert.equal(leftOrgText('Acme'), 'You left Acme; this browser switches to your next organisation.');
   assert.equal(leftOrgText('Acme', true), 'You left Acme; this browser reloads into your first organisation, or the default one.');
+  // The flag the controller passes is the access model's owner bit (removeMemberEditor: settingsAccess().owner).
+  assert.equal(leftOrgText('Acme', OLIVE.owner), 'You left Acme; this browser reloads into your first organisation, or the default one.');
+  assert.equal(leftOrgText('Acme', ADA.owner), 'You left Acme; this browser switches to your next organisation.');
   const demote = buildSettingsEditorModel('member', MEMBERS[0], { ctx: { ...ctx, members: two }, step: 'confirm-action', draft: { role: 'operator' } });
   assert.equal(demote.confirm.text, "Change ada's role to operator? This is you: you lose the admin role at once.");
   // An owner demoting the last admin: allowed, and warned (A12).
