@@ -29,6 +29,7 @@ import { normalizeServiceKey } from '../tools/lib/service-keys.mjs';
 import { mcpUrlOrigin } from '../tools/lib/mcp-url-safety.mjs';
 import { rankOfRole } from './authz.mjs';
 import { AdminRefusal } from './identity-admin.mjs';
+import { credentialThatRides, mcpOriginDecision } from './mcp-target-policy.mjs';
 import { validateMcpUrl } from './mcp-url.mjs';
 import { currentOrg } from './org-context.mjs';
 import { atomic } from './store/db.mjs';
@@ -292,9 +293,22 @@ export function createMcpEndpointFromApi(db, actor, { name, url, readTokenEnv } 
   return atomic(db, () => {
     const existing = listMcpEndpoints(db).find((ep) => ep.name === name);
     if (existing) refuse(WAYS.mcpEndpointExists(existing));
-    // The URL and env-var rules are the repository's (TypeError → 400).
-    return createMcpEndpoint(db, actor, { name, url, readTokenEnv: readTokenEnv === undefined ? null : readTokenEnv });
+    // The URL and env-var rules are the repository's (TypeError → 400); the
+    // origin rule then judges the record as written, and a refusal undoes
+    // the row and its audit row with it.
+    const endpoint = createMcpEndpoint(db, actor, { name, url, readTokenEnv: readTokenEnv === undefined ? null : readTokenEnv });
+    checkRegistration(db, endpoint);
+    return endpoint;
   });
+}
+
+// The origin rule at registration (mcp-target-policy.mjs): an endpoint that
+// names readTokenEnv carries the server's credential.
+function checkRegistration(db, ep) {
+  const refusal = mcpOriginDecision(db, ep.url, {
+    use: 'register', credential: credentialThatRides({ serverToken: !!ep.readTokenEnv, hook: false }), tokenVar: ep.readTokenEnv,
+  });
+  if (refusal) invalid(refusal.error);
 }
 
 // → { endpoint, changed }; `readTokenEnv: null` clears it.
@@ -313,6 +327,9 @@ export function updateMcpEndpointFromApi(db, actor, id, patch = {}) {
       if (clash) refuse(WAYS.mcpEndpointExists(clash));
     }
     const endpoint = updateMcpEndpoint(db, actor, id, Object.fromEntries(changed.map((k) => [k, next[k]])));
+    // A new URL or variable meets the origin rule against the state after
+    // the change; a rename alone does not.
+    if (changed.includes('url') || changed.includes('readTokenEnv')) checkRegistration(db, endpoint);
     return { endpoint, changed };
   });
 }
@@ -436,9 +453,12 @@ const MISSING = Symbol('missing');
 // from the named variable when the request sends no mcpAuth, after the
 // variable's ownership is checked again against the orgs that exist now.
 // With forWrite (deploy, rollback) the record's URL only: write tokens
-// stay per-request pass-through. The SSRF rule (validateMcpUrl) runs last,
-// where it does today. Returns { mcpUrl, safeMcpUrl, mcpAuth, endpoint }
-// or { status: 400, error }; the token's value is in mcpAuth alone.
+// stay per-request pass-through. The SSRF rule (validateMcpUrl) runs
+// next, then the origin allowlist (server/mcp-target-policy.mjs: no
+// credential leaves for an unlisted origin but loopback). Returns
+// { mcpUrl, safeMcpUrl, mcpAuth, endpoint }, or { status: 400, error } /
+// { status: 403, denied: 'origin', error } (mcpRefusalBody answers it);
+// the token's value is in mcpAuth alone.
 export function resolveMcpTarget(db, body = {}, { forWrite = false } = {}) {
   const bad = (error) => ({ status: 400, error });
   // The body's fields as the routes read them: a trimmed URL or null, a
@@ -450,6 +470,7 @@ export function resolveMcpTarget(db, body = {}, { forWrite = false } = {}) {
   let mcpUrl;
   let mcpAuth;
   let endpoint = null;
+  let serverVar = null;   // the variable whose value rides, when one does
   if (byId) {
     const id = positiveId(body.mcpEndpointId);
     if (id === null) return bad(WAYS.mcpEndpointIdShape);
@@ -467,6 +488,7 @@ export function resolveMcpTarget(db, body = {}, { forWrite = false } = {}) {
     mcpUrl = ep.url;
     mcpAuth = sentAuth ?? (readsToken ? process.env[ep.readTokenEnv] ?? MISSING : null);
     if (mcpAuth === MISSING) return bad(WAYS.tokenUnset(ep));
+    if (readsToken && !sentAuth) serverVar = ep.readTokenEnv;
     endpoint = { id: ep.id, name: ep.name };
   } else {
     if (!sentUrl) return bad(WAYS.neitherTarget);
@@ -475,5 +497,11 @@ export function resolveMcpTarget(db, body = {}, { forWrite = false } = {}) {
   }
   const { error, safeUrl } = validateMcpUrl(mcpUrl);
   if (error) return bad(error);
+  // The origin rule (server/mcp-target-policy.mjs, every caller): the
+  // strongest credential that rides — the endpoint's variable, the
+  // request's mcpAuth, one in a typed URL, a loaded transport hook.
+  const credential = credentialThatRides({ serverToken: !!serverVar, requestToken: !!sentAuth, url: endpoint ? null : mcpUrl });
+  const refusal = mcpOriginDecision(db, mcpUrl, { use: endpoint ? 'registered' : 'typed', credential, tokenVar: serverVar });
+  if (refusal) return refusal;
   return { mcpUrl, safeMcpUrl: safeUrl, mcpAuth, endpoint };
 }

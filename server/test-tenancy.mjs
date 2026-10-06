@@ -42,6 +42,11 @@ process.env.OBSERVOGRAM_WORKSPACE = WORKSPACE;
 process.env.OBSERVOGRAM_API_TOKEN = 'ci-token-tenancy-0123456789';
 process.env.OBSERVOGRAM_API_TOKEN_LABEL = 'ci-bot';
 process.env.OBSERVOGRAM_USERS_FILE = join(WORKSPACE, 'users.json');
+// The MCP origin allowlist per org (server/mcp-target-policy.mjs): each org
+// lists only its own sweep origin, where its endpoint sends a server-held token.
+for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
+process.env.OBSERVOGRAM_ORG_ACME_MCP_ORIGINS = 'https://acme.mcp.test';
+process.env.OBSERVOGRAM_ORG_DELTA_MCP_ORIGINS = 'https://delta.mcp.test';
 
 import { createHarness } from '../tools/lib/harness.mjs';
 const { assert, report } = createHarness({ indent: '  ', truncate: 200 });
@@ -292,6 +297,16 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   j = await r.json();
   const mcpEndpointId = j.endpoint?.id;
   assert(r.status === 201 && Number.isInteger(mcpEndpointId) && j.endpoint.url === `https://${org}.mcp.test/mcp`, `alice (an admin) creates an MCP endpoint in ${org}`, [r.status, j]);
+  // The other org's listed origin is not this org's: its variable lists its own.
+  const other = org === 'acme' ? 'delta' : 'acme';
+  seq = auditSeq();
+  r = await fetch(`${root}/api/mcp-endpoints`, {
+    method: 'POST', headers: { ...h, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: `${org} other mcp`, url: `https://${other}.mcp.test/mcp`, readTokenEnv: `OBSERVOGRAM_ORG_${org.toUpperCase()}_MCP_TOKEN` }),
+  });
+  j = await r.json();
+  assert(r.status === 400 && j.error === `https://${other}.mcp.test is not in OBSERVOGRAM_ORG_${org.toUpperCase()}_MCP_ORIGINS — the server's operator adds it there (comma-separated origins, e.g. https://mcp.example.com), or register an endpoint at a listed origin`
+    && rowsAfter(seq).length === 0, `${other}'s listed MCP origin is not ${org}'s: registering it in ${org} is refused (400, no row)`, [r.status, j]);
   // A waiver by alice on the service (GAP batch 2, B3.2): a row in the store, the author her login.
   const expiresAt = new Date(Date.now() + 30 * 86400000).toISOString();
   seq = auditSeq();

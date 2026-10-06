@@ -116,7 +116,9 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
   });
   const ws = workspace('id');
   fixture(ws);
-  const child = await serve(ws);
+  // gw names a server-held token at a remote origin, and the drift case moves
+  // it: both origins listed for the MCP origin rule (server/mcp-target-policy.mjs).
+  const child = await serve(ws, { env: { OBSERVOGRAM_MCP_ORIGINS: 'https://mcp.acme.test,https://mcp2.acme.test' } });
   children.push(child);
   const tokenChild = await serve(workspace('token'), { env: { OBSERVOGRAM_API_TOKEN: TOKEN } });
   children.push(tokenChild);

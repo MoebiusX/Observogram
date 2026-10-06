@@ -32,6 +32,9 @@ export const STRIP = [
   // The live fetcher's knobs: server/index.mjs imports tools/fetch-live-pack.mjs at boot, which reads these at
   // import (brandEnv), and server/mcp-url.mjs reads ALLOW_LOCAL_MCP per call.
   'ALLOW_LOCAL_MCP', 'MCP_TIMEOUT_MS', 'GRAFANA_DASHBOARD_LIMIT', 'GRAFANA_PANEL_LIMIT', 'GRAFANA_INCLUDE_JSON', 'DEBUG',
+  // The MCP origin allowlist (server/mcp-target-policy.mjs), read per request; the per-org
+  // OBSERVOGRAM_ORG_<KEY>_MCP_ORIGINS goes with every inherited OBSERVOGRAM_ORG_* below.
+  'MCP_ORIGINS',
 ];
 
 // The per-org variables (an MCP endpoint's read token, OBSERVOGRAM_ORG_<KEY>_<NAME>) are read at request time

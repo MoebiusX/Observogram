@@ -489,6 +489,41 @@ try {
     delete process.env.OBSERVOGRAM_ALLOW_LOCAL_MCP;
   }
 
+  // The MCP origin allowlist (server/mcp-target-policy.mjs, D2 (c)): with no
+  // OBSERVOGRAM_MCP_ORIGINS, a credential — the caller's mcpAuth here — never
+  // leaves for an unlisted origin but loopback, refused before any wire call;
+  // an endpoint registered while `*` was set meets the list as it is at use.
+  process.env.OBSERVOGRAM_MCP_ORIGINS = '*';
+  let farId;
+  try {
+    const far = await registerMcpEndpoint(base, { name: 'far', url: 'https://mcp.far.test/mcp' });
+    assert(far.status === 201, 'an endpoint at a remote origin registers while OBSERVOGRAM_MCP_ORIGINS=*', far.json);
+    farId = far.id;
+  } finally {
+    delete process.env.OBSERVOGRAM_MCP_ORIGINS;
+  }
+  const FAR_WAY = 'the server\'s operator adds https://mcp.far.test to OBSERVOGRAM_MCP_ORIGINS (or OBSERVOGRAM_ORG_DEFAULT_MCP_ORIGINS), or send the request without mcpAuth';
+  for (const [path, body] of [
+    ['/api/refresh-live', { mcpEndpointId: farId, mcpAuth: 'Bearer smoke-secret' }],
+    ['/api/draft-from-mcp', { mcpEndpointId: farId, mcpAuth: 'Bearer smoke-secret' }],
+    ['/api/packs/payment-service/deploy/prometheus-rules', { mcpEndpointId: farId, mcpAuth: 'Bearer smoke-secret' }],
+  ]) {
+    const r = await postJson(path, body);
+    const j = await r.json();
+    assert(r.status === 403 && j.denied === 'origin'
+      && j.error === `https://mcp.far.test is not a listed MCP origin, and the server sends a credential (the auth key sent with this request) only to a listed origin or this machine — ${FAR_WAY}`,
+      `${path}: mcpAuth to an unlisted remote origin, no list set → 403 origin, the token never echoed`, [r.status, j]);
+  }
+  process.env.OBSERVOGRAM_MCP_ORIGINS = 'https://mcp.other.test';
+  try {
+    const r = await postJson('/api/refresh-live', { mcpEndpointId: farId });
+    const j = await r.json();
+    assert(r.status === 403 && j.denied === 'origin' && j.error.startsWith('https://mcp.far.test is not in OBSERVOGRAM_MCP_ORIGINS — '),
+      'a list set: the endpoint registered under `*` is refused at use, even without a credential', [r.status, j]);
+  } finally {
+    delete process.env.OBSERVOGRAM_MCP_ORIGINS;
+  }
+
   // POST /api/packs/:id/deploy/:target — unknown pack → 404
   const deployBadPack = await fetch(`${base}/api/packs/does-not-exist/deploy/prometheus-rules`, {
     method: 'POST',

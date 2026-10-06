@@ -34,7 +34,7 @@ import {
   newDeployId, captureDeploySnapshot, deployAuditRow,
 } from '../deploy-helpers.mjs';
 import { auditAfter, actorForRecord, bounded, finite } from '../audit-after.mjs';
-import { redactTarget } from '../mcp-target-policy.mjs';
+import { mcpRefusalBody, redactTarget } from '../mcp-target-policy.mjs';
 import { resolveMcpTarget } from '../service-admin.mjs';
 import { currentStore } from '../store/db.mjs';
 import { brandEnv } from '../../tools/lib/brand-env.mjs';
@@ -214,7 +214,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     // mcpUrl, or the org's MCP endpoint by mcpEndpointId (its URL only: a
     // write token is the request's, never a stored variable's).
     const target = resolveMcpTarget(currentStore(), b, { forWrite: true });
-    if (target.status) return res.status(target.status).json({ ok: false, error: target.error });
+    if (target.status) return res.status(target.status).json(mcpRefusalBody(target));
     res.locals.mcpTarget = target;   // hookFaultTo502 redacts with it
     const { mcpUrl, safeMcpUrl, mcpAuth } = target;
     const dryRun = b.dryRun === true || b.dry_run === true;
@@ -333,7 +333,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     const env = readEnv(req.query);
 
     const target = resolveMcpTarget(currentStore(), body, { forWrite: true });
-    if (target.status) return res.status(target.status).json({ ok: false, error: target.error });
+    if (target.status) return res.status(target.status).json(mcpRefusalBody(target));
     res.locals.mcpTarget = target;   // hookFaultTo502 redacts with it
     const { mcpUrl, safeMcpUrl, mcpAuth } = target;
     if (!items || items.length === 0) return res.status(400).json({ ok: false, error: 'items array required and must be non-empty' });
@@ -538,7 +538,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     // mcpUrl, or the org's MCP endpoint by mcpEndpointId (its URL only; the
     // write token stays the request's mcpAuth).
     const mcp = resolveMcpTarget(currentStore(), body, { forWrite: true });
-    if (mcp.status) return res.status(mcp.status).json({ ok: false, error: mcp.error });
+    if (mcp.status) return res.status(mcp.status).json(mcpRefusalBody(mcp));
     res.locals.mcpTarget = mcp;   // hookFaultTo502 redacts with it
     const { mcpUrl, safeMcpUrl, mcpAuth } = mcp;
 

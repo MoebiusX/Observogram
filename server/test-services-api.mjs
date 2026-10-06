@@ -46,6 +46,11 @@ for (const k of STRIP) {
   delete process.env[`TOMOGRAPH_${k}`];
 }
 for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
+// The remote origins this suite registers (several with readTokenEnv) are
+// listed for the origin rule (server/mcp-target-policy.mjs); its own cases
+// unset or change the list, each restoring it.
+const SUITE_ORIGINS = 'https://mcp.acme.test,https://mcp2.acme.test,http://mcp-staging.acme.test:8080,https://mcp.bravo.test';
+process.env.OBSERVOGRAM_MCP_ORIGINS = SUITE_ORIGINS;
 
 const { test, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
@@ -596,6 +601,34 @@ test('PATCH /api/mcp-endpoints/:id: name, url, readTokenEnv (null clears) with `
   // The same name as its own is no clash.
   const own = await ok(K, 'ada', P, { name: 'prod-mcp' });
   assert.deepEqual([own.json.changed, own.rows], [[], []]);
+});
+
+test('the MCP origin rule at registration (server/mcp-target-policy.mjs): no list set, readTokenEnv names a credential that goes to loopback only — POST and a PATCH of url or readTokenEnv refused (400, no row); a listed origin and a loopback one are 201; without readTokenEnv anywhere', async () => {
+  const P = '/api/mcp-endpoints';
+  const text = (origin) => `${origin} is not a listed MCP origin, and the server sends a credential (the endpoint's variable ${ACME_TOKEN}) only to a listed origin or this machine — the server's operator adds ${origin} to OBSERVOGRAM_MCP_ORIGINS (or OBSERVOGRAM_ORG_ACME_MCP_ORIGINS), or register it without readTokenEnv`;
+  const made = [];
+  delete process.env.OBSERVOGRAM_MCP_ORIGINS;
+  try {
+    await refused('POST /api/mcp-endpoints', 'ada', P, { name: 'far', url: 'https://mcp.far.test/mcp/s/sk-path-secret?tier=x', readTokenEnv: ACME_TOKEN }, 400, text('https://mcp.far.test'));
+    const loop = await ok('POST /api/mcp-endpoints', 'ada', P, { name: 'loop', url: 'http://127.0.0.1:9/mcp', readTokenEnv: ACME_TOKEN }, 201);
+    made.push(loop.json.endpoint.id);
+    const plain = await ok('POST /api/mcp-endpoints', 'ada', P, { name: 'far-plain', url: 'https://mcp.far.test/mcp' }, 201);
+    made.push(plain.json.endpoint.id);
+    await refused('PATCH /api/mcp-endpoints/:id', 'ada', `${P}/${plain.json.endpoint.id}`, { readTokenEnv: ACME_TOKEN }, 400, text('https://mcp.far.test'));
+    await refused('PATCH /api/mcp-endpoints/:id', 'ada', `${P}/${loop.json.endpoint.id}`, { url: 'https://mcp.far.test/v2' }, 400, text('https://mcp.far.test'));
+    process.env.OBSERVOGRAM_ORG_ACME_MCP_ORIGINS = 'https://mcp.far.test';
+    try {
+      const listed = await ok('PATCH /api/mcp-endpoints/:id', 'ada', `${P}/${plain.json.endpoint.id}`, { readTokenEnv: ACME_TOKEN });
+      assert.deepEqual(listed.json.changed, ['readTokenEnv'], "listed in the org's own variable");
+      const far = await ok('POST /api/mcp-endpoints', 'ada', P, { name: 'far', url: 'https://mcp.far.test/mcp', readTokenEnv: ACME_TOKEN }, 201);
+      made.push(far.json.endpoint.id);
+    } finally {
+      delete process.env.OBSERVOGRAM_ORG_ACME_MCP_ORIGINS;
+    }
+  } finally {
+    process.env.OBSERVOGRAM_MCP_ORIGINS = SUITE_ORIGINS;
+    for (const id of made) await call('ada', 'DELETE', `${P}/${id}`);
+  }
 });
 
 test('an environment bound to an endpoint: PATCH /api/environments/:id { mcpEndpointId } with its row; the view says { id, name, origin } — a viewer reads no url; the endpoint counts it', async () => {

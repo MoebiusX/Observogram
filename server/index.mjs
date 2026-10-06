@@ -66,7 +66,7 @@ import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
 import { describeProxyAuth } from './auth-proxy.mjs';
 import { redactCredentials, stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
-import { redactTarget } from './mcp-target-policy.mjs';
+import { mcpRefusalBody, redactTarget } from './mcp-target-policy.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
 import { auditAfter, actorForRecord, bounded, finite } from './audit-after.mjs';
@@ -1268,7 +1268,7 @@ app.post('/api/draft-from-mcp', authorize('POST /api/draft-from-mcp'), async (re
     ? body.packName.trim()
     : null;
   const target = resolveMcpTarget(currentStore(), body, { forWrite: false });
-  if (target.status) return res.status(target.status).json({ ok: false, error: target.error });
+  if (target.status) return res.status(target.status).json(mcpRefusalBody(target));
   const { mcpUrl, safeMcpUrl, mcpAuth, endpoint: mcpEndpoint } = target;
   // The draft is a registered pack every viewer of the org reads: it keeps
   // the safe URL (a journey captured from it re-drafts from it; a header
@@ -1499,7 +1499,7 @@ function banner(pack) {
 app.post('/api/refresh-live', authorize('POST /api/refresh-live'), async (req, res) => {
   const body = req.body || {};
   const target = resolveMcpTarget(currentStore(), body, { forWrite: false });
-  if (target.status) return res.status(target.status).json({ ok: false, error: target.error });
+  if (target.status) return res.status(target.status).json(mcpRefusalBody(target));
   const { mcpUrl, safeMcpUrl, mcpAuth, endpoint: mcpEndpoint } = target;
   const { dropped } = stripMcpUrl(mcpUrl);
   // The audit (STORE_PLAN slice 5): the principal is checked before any

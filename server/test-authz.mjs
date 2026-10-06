@@ -1934,7 +1934,8 @@ const CSRF_HEADER = Object.freeze({ 'X-Observogram-CSRF': '1' });
 // variable's name carries the org's prefix.
 const MCP_BODY = Object.freeze({ name: 'local-mcp', url: 'https://mcp.local.test/mcp/obs?tier=x', readTokenEnv: 'OBSERVOGRAM_ORG_DEFAULT_MCP_TOKEN' });
 const OPEN = [
-  { tag: 'open-loopback', host: '127.0.0.1', env: { OBSERVOGRAM_AUTH: 'off' } },
+  // MCP_BODY names a server-held token at a remote origin: the origin rule (server/mcp-target-policy.mjs) wants it listed.
+  { tag: 'open-loopback', host: '127.0.0.1', env: { OBSERVOGRAM_AUTH: 'off', OBSERVOGRAM_MCP_ORIGINS: 'https://mcp.local.test' } },
   {
     tag: 'open-exposed-a', host: '0.0.0.0', env: { OBSERVOGRAM_AUTH: 'off', OBSERVOGRAM_INSECURE_NO_AUTH: '1' },
     setup: (ws) => writeUsersFile({ users: { solo: { name: 'solo', createdAt: 'test', password: hashPassword(pw('solo')) } } }, join(ws, 'users.json')),

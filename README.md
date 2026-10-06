@@ -1240,6 +1240,29 @@ anything is fetched. The response says which record was used (`mcpEndpoint:
 { id, name }`, or `null` for a URL); the live pack and the draft keep the safe
 URL and never the token. The deploy and rollback routes take `mcpEndpointId`
 for the URL only — a write token stays the request's `mcpAuth`.
+
+**The MCP origin allowlist.** Every MCP target the server reaches — a typed
+`mcpUrl`, a registered endpoint at each use, and an endpoint when it is
+registered or its `url` or `readTokenEnv` changes — meets an origin rule,
+whatever the caller's role. `OBSERVOGRAM_MCP_ORIGINS` lists origins for every
+org and `OBSERVOGRAM_ORG_<ORG>_MCP_ORIGINS` for one org (read only by the org
+that owns the name, the same longest-prefix rule); an org's list is the union
+of the two, so a deployment that keeps tenants apart leaves the global list
+empty. Entries are comma-separated origins — `https://mcp.example.com`,
+`http://mcp.lab:3001`: no path, query, fragment, credentials or `*` in a host;
+a rejected entry is named once on stderr and ignored, and a list with no
+accepted entry allows nothing. A lone `*` allows every origin. Loopback
+(`localhost`, `127.0.0.0/8`, `[::1]`) always passes (`OBSERVOGRAM_ALLOW_LOCAL_MCP=0`
+still closes it). With a list set, every other origin must be in it. **With
+none set, no credential leaves for an origin other than loopback** — not an
+endpoint's server-held token, not the caller's `mcpAuth` (every deploy sends
+one), not a credential in a typed URL, and nothing at all while a transport
+hook is loaded, since the hook may attach its own; a typed URL without a
+credential reaches only an origin one of the org's endpoints uses, and an
+endpoint without `readTokenEnv` may be registered and used anywhere. A refusal
+is 403 `origin` at a fetch (400 at registration) and names the origin only and
+the variable to add it to. An install that sends a credential to a remote MCP
+sets `OBSERVOGRAM_MCP_ORIGINS` before upgrading.
 When the MCP exposes `metrics_query`, the fetch also samples the observability
 stack's own self-metrics (scrape, ruler, notify, tsdb, collector, dashboards,
 synthetic, logs, traces) as point-in-time signals — never verdicts, stamps or

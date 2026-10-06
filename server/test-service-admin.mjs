@@ -8,7 +8,10 @@
  *
  * Hermetic: the environment is stripped before any server module loads,
  * and the one variable the token test sets (OBSERVOGRAM_ORG_ACME_TEST_TOKEN)
- * is deleted inside the test.
+ * is deleted inside the test. The suite lists its remote origins in
+ * OBSERVOGRAM_MCP_ORIGINS (its typed URLs point at origins no endpoint uses,
+ * and its readTokenEnv and mcpAuth cases carry credentials); the origin
+ * rule's own cases unset it, each restoring it in a finally.
  */
 
 const { STRIP } = await import('./fixtures/serve-child.mjs');
@@ -17,6 +20,8 @@ for (const k of STRIP) {
   delete process.env[`TOMOGRAPH_${k}`];
 }
 for (const k of Object.keys(process.env)) if (/^OBSERVOGRAM_ORG_/.test(k)) delete process.env[k];
+const SUITE_ORIGINS = 'https://mcp.example,https://mcp.acme.example,https://mcp2.acme.example,http://mcp.lab.example:3001,https://mcp.lab.example,https://mcp.eu.example';
+process.env.OBSERVOGRAM_MCP_ORIGINS = SUITE_ORIGINS;
 
 const { test } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
@@ -438,6 +443,113 @@ test('resolveMcpTarget: mcpUrl as today, or mcpEndpointId — the record\'s URL,
       const acmeId = runWithOrg('acme', () => mcpEndpoints.listMcpEndpoints(db)[0].id);
       assert.deepEqual(admin.resolveMcpTarget(db, { mcpEndpointId: acmeId }), { status: 400, error: `no MCP endpoint ${acmeId} in this org — GET /api/mcp-endpoints lists them` }, 'another org\'s id is never found');
     });
+  } finally {
+    close();
+  }
+});
+
+// The origin rule (server/mcp-target-policy.mjs, D2 (c)) at use and at
+// registration: one case per row of the table, the variable unset, then set.
+async function withOrigins(value, fn) {
+  if (value === undefined) delete process.env.OBSERVOGRAM_MCP_ORIGINS; else process.env.OBSERVOGRAM_MCP_ORIGINS = value;
+  try { return await fn(); } finally { process.env.OBSERVOGRAM_MCP_ORIGINS = SUITE_ORIGINS; }
+}
+
+test('the origin rule, no list set: a credential (the endpoint\'s variable, mcpAuth, one in a typed URL) leaves only for loopback; a typed URL without one reaches only an origin of the org\'s endpoints; a registered endpoint without one is allowed', async () => {
+  const { db, close } = await freshStore('origins-unset');
+  const VAR = 'OBSERVOGRAM_ORG_ACME_ORIGIN_TOKEN';
+  try {
+    await withOrigins(undefined, () => runWithOrg('acme', () => {
+      const remote = mcpEndpoints.createMcpEndpoint(db, 'ada', { name: 'remote', url: 'https://mcp.acme.example/mcp' });
+      const tokened = mcpEndpoints.createMcpEndpoint(db, 'ada', { name: 'tokened', url: 'https://mcp.tok.example/mcp', readTokenEnv: VAR });
+      const local = mcpEndpoints.createMcpEndpoint(db, 'ada', { name: 'local', url: 'http://127.0.0.1:9/mcp', readTokenEnv: VAR });
+      const refused = (body, error, opts) => assert.deepEqual(admin.resolveMcpTarget(db, body, opts), { status: 403, denied: 'origin', error }, JSON.stringify(body));
+      const way = 'the server\'s operator adds https://mcp.acme.example to OBSERVOGRAM_MCP_ORIGINS (or OBSERVOGRAM_ORG_ACME_MCP_ORIGINS)';
+      process.env[VAR] = 'Bearer held';
+      try {
+        // typed, no credential: an origin of this org's endpoints, or loopback
+        assert.equal(admin.resolveMcpTarget(db, { mcpUrl: 'https://mcp.acme.example/other' }).mcpUrl, 'https://mcp.acme.example/other');
+        assert.equal(admin.resolveMcpTarget(db, { mcpUrl: 'http://localhost:7/mcp' }).mcpUrl, 'http://localhost:7/mcp');
+        refused({ mcpUrl: 'https://mcp.elsewhere.example/mcp?tier=x' },
+          'https://mcp.elsewhere.example is not an origin this org\'s MCP endpoints use — an admin registers the endpoint in Settings → MCP endpoints, or the server\'s operator lists the origin in OBSERVOGRAM_MCP_ORIGINS (or OBSERVOGRAM_ORG_ACME_MCP_ORIGINS)');
+        runWithOrg('bravo', () => refused({ mcpUrl: 'https://mcp.acme.example/mcp' },
+          'https://mcp.acme.example is not an origin this org\'s MCP endpoints use — an admin registers the endpoint in Settings → MCP endpoints, or the server\'s operator lists the origin in OBSERVOGRAM_MCP_ORIGINS (or OBSERVOGRAM_ORG_BRAVO_MCP_ORIGINS)'));
+        // typed with a credential: loopback only
+        refused({ mcpUrl: 'https://mcp.acme.example/mcp', mcpAuth: 'Bearer mine' },
+          `https://mcp.acme.example is not a listed MCP origin, and the server sends a credential (the auth key sent with this request) only to a listed origin or this machine — ${way}, or send the request without mcpAuth`);
+        refused({ mcpUrl: 'https://mcp.acme.example/mcp?token=abc' },
+          `https://mcp.acme.example is not a listed MCP origin, and the server sends a credential (a credential in the URL) only to a listed origin or this machine — ${way}, or send the URL without its credential`);
+        refused({ mcpUrl: 'https://u:p@mcp.acme.example/mcp' },
+          `https://mcp.acme.example is not a listed MCP origin, and the server sends a credential (a credential in the URL) only to a listed origin or this machine — ${way}, or send the URL without its credential`);
+        assert.equal(admin.resolveMcpTarget(db, { mcpUrl: 'http://127.0.0.1:9/mcp', mcpAuth: 'Bearer mine' }).mcpAuth, 'Bearer mine', 'loopback takes a credential');
+        // registered, no credential: allowed; with one: loopback only
+        assert.equal(admin.resolveMcpTarget(db, { mcpEndpointId: remote.id }).mcpUrl, 'https://mcp.acme.example/mcp');
+        assert.equal(admin.resolveMcpTarget(db, { mcpEndpointId: remote.id }, { forWrite: true }).mcpAuth, null, 'a write without a token');
+        refused({ mcpEndpointId: remote.id, mcpAuth: 'Bearer write' },
+          `https://mcp.acme.example is not a listed MCP origin, and the server sends a credential (the auth key sent with this request) only to a listed origin or this machine — ${way}, or send the request without mcpAuth`, { forWrite: true });
+        refused({ mcpEndpointId: tokened.id },
+          `https://mcp.tok.example is not a listed MCP origin, and the server sends a credential (the endpoint's variable ${VAR}) only to a listed origin or this machine — the server's operator adds https://mcp.tok.example to OBSERVOGRAM_MCP_ORIGINS (or OBSERVOGRAM_ORG_ACME_MCP_ORIGINS)`);
+        assert.equal(admin.resolveMcpTarget(db, { mcpEndpointId: tokened.id }, { forWrite: true }).mcpAuth, null, 'a write sends no variable: nothing rides');
+        assert.equal(admin.resolveMcpTarget(db, { mcpEndpointId: local.id }).mcpAuth, 'Bearer held', 'the variable rides to a loopback endpoint');
+        for (const r of [admin.resolveMcpTarget(db, { mcpEndpointId: tokened.id }), admin.resolveMcpTarget(db, { mcpEndpointId: remote.id, mcpAuth: 'Bearer write' })]) {
+          assert.ok(!JSON.stringify(r).includes('Bearer'), 'a refusal never carries the token');
+        }
+      } finally {
+        delete process.env[VAR];
+      }
+
+      // registration: with readTokenEnv loopback only; without, anywhere
+      const reg = (url) => `${url} is not a listed MCP origin, and the server sends a credential (the endpoint's variable OBSERVOGRAM_ORG_ACME_MCP_TOKEN) only to a listed origin or this machine — the server's operator adds ${url} to OBSERVOGRAM_MCP_ORIGINS (or OBSERVOGRAM_ORG_ACME_MCP_ORIGINS), or register it without readTokenEnv`;
+      const before = rows(db, 'acme').length;
+      assert.throws(() => admin.createMcpEndpointFromApi(db, 'ada', { name: 'x', url: 'https://mcp.new.example/mcp?tier=1', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' }), invalid(reg('https://mcp.new.example')));
+      assert.equal(mcpEndpoints.listMcpEndpoints(db).some((ep) => ep.name === 'x'), false, 'the refused record is not there');
+      assert.equal(rows(db, 'acme').length, before, 'and wrote no row');
+      assert.equal(admin.createMcpEndpointFromApi(db, 'ada', { name: 'loop', url: 'http://[::1]:3001/mcp', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' }).name, 'loop');
+      const open = admin.createMcpEndpointFromApi(db, 'ada', { name: 'open', url: 'https://mcp.new.example/mcp' });
+      assert.equal(open.readTokenEnv, null, 'token-less, anywhere');
+      // a PATCH that makes the record carry the server's credential to an unlisted origin
+      assert.throws(() => admin.updateMcpEndpointFromApi(db, 'ada', open.id, { readTokenEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' }), invalid(reg('https://mcp.new.example')));
+      const loop = mcpEndpoints.listMcpEndpoints(db).find((ep) => ep.name === 'loop');
+      assert.throws(() => admin.updateMcpEndpointFromApi(db, 'ada', loop.id, { url: 'https://mcp.moved.example/mcp' }), invalid(reg('https://mcp.moved.example')));
+      assert.deepEqual([mcpEndpoints.getMcpEndpoint(db, open.id).readTokenEnv, mcpEndpoints.getMcpEndpoint(db, loop.id).url], [null, 'http://[::1]:3001/mcp'], 'both records as they were');
+      assert.equal(admin.updateMcpEndpointFromApi(db, 'ada', loop.id, { name: 'loop-2' }).changed.join(), 'name', 'a rename alone is not judged');
+    }));
+  } finally {
+    close();
+  }
+});
+
+test('the origin rule, a list set: every origin but loopback must be in OBSERVOGRAM_MCP_ORIGINS ∪ OBSERVOGRAM_ORG_<KEY>_MCP_ORIGINS — at use and at registration; an endpoint registered under `*` is refused once the list no longer has it', async () => {
+  const { db, close } = await freshStore('origins-set');
+  try {
+    let wide;
+    await withOrigins('*', () => runWithOrg('acme', () => {
+      wide = admin.createMcpEndpointFromApi(db, 'ada', { name: 'wide', url: 'https://mcp.wide.example/mcp', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_WIDE_TOKEN' });
+    }));
+    await withOrigins('https://mcp.acme.example', () => runWithOrg('acme', () => {
+      const refused = (body, error, opts) => assert.deepEqual(admin.resolveMcpTarget(db, body, opts), { status: 403, denied: 'origin', error }, JSON.stringify(body));
+      refused({ mcpEndpointId: wide.id, mcpAuth: 'Bearer x' }, 'https://mcp.wide.example is not in OBSERVOGRAM_MCP_ORIGINS — the server\'s operator adds it there (comma-separated origins, e.g. https://mcp.example.com), or choose another registered endpoint');
+      refused({ mcpUrl: 'https://mcp.wide.example/mcp' }, 'https://mcp.wide.example is not in OBSERVOGRAM_MCP_ORIGINS — the server\'s operator adds it there (comma-separated origins, e.g. https://mcp.example.com), or choose one of the org\'s registered endpoints');
+      assert.equal(admin.resolveMcpTarget(db, { mcpUrl: 'HTTPS://MCP.ACME.EXAMPLE:443/mcp', mcpAuth: 'Bearer x' }).mcpAuth, 'Bearer x', 'listed: a credential rides; the origin compared normalised');
+      assert.equal(admin.resolveMcpTarget(db, { mcpUrl: 'http://127.0.0.1:9/mcp', mcpAuth: 'Bearer x' }).mcpAuth, 'Bearer x', 'loopback always');
+      assert.throws(() => admin.createMcpEndpointFromApi(db, 'ada', { name: 'n', url: 'https://mcp.new.example/mcp' }),
+        invalid('https://mcp.new.example is not in OBSERVOGRAM_MCP_ORIGINS — the server\'s operator adds it there (comma-separated origins, e.g. https://mcp.example.com), or register an endpoint at a listed origin'));
+      // the org's own list joins the deployment's, for that org only
+      process.env.OBSERVOGRAM_ORG_ACME_MCP_ORIGINS = 'https://mcp.new.example';
+      try {
+        assert.equal(admin.createMcpEndpointFromApi(db, 'ada', { name: 'n', url: 'https://mcp.new.example/mcp', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_N_TOKEN' }).name, 'n');
+        refused({ mcpEndpointId: wide.id, mcpAuth: 'Bearer x' }, 'https://mcp.wide.example is not in OBSERVOGRAM_MCP_ORIGINS, nor in OBSERVOGRAM_ORG_ACME_MCP_ORIGINS — the server\'s operator adds it there (comma-separated origins, e.g. https://mcp.example.com), or choose another registered endpoint');
+        runWithOrg('bravo', () => assert.throws(() => admin.createMcpEndpointFromApi(db, 'bob', { name: 'n', url: 'https://mcp.new.example/mcp' }),
+          invalid('https://mcp.new.example is not in OBSERVOGRAM_MCP_ORIGINS — the server\'s operator adds it there (comma-separated origins, e.g. https://mcp.example.com), or register an endpoint at a listed origin')));
+      } finally {
+        delete process.env.OBSERVOGRAM_ORG_ACME_MCP_ORIGINS;
+      }
+    }));
+    // a list set with no accepted entry allows nothing but loopback (fail closed)
+    await withOrigins('mcp.acme.example', () => runWithOrg('acme', () => {
+      assert.equal(admin.resolveMcpTarget(db, { mcpEndpointId: wide.id }, { forWrite: true }).denied, 'origin', 'even without a credential');
+      assert.equal(admin.resolveMcpTarget(db, { mcpUrl: 'http://localhost:9/' }).error, undefined);
+    }));
   } finally {
     close();
   }
