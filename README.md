@@ -1701,6 +1701,7 @@ live on a service record, which a bundled pack has none of), the Audit report
 (its goes-blind section needs the PromQL parser the bundle cannot inline),
 Services (the records behind the home's cards and the service page — a bundle
 has no services table), Organisations (the active org's name and role),
+Settings (members, environments, MCP endpoints, the audit — a bundle has no org),
 sign-in — answers `501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
 this studio is a static bundle built without one.' }`, which the studio shows
 as the sentence, and a dismissable notice at the bottom of the window says so
