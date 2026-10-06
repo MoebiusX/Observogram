@@ -29,11 +29,20 @@ export const STRIP = [
   'BRAND_FILE', 'BRAND_NAME', 'BRAND_SHORT_NAME', 'BRAND_TAGLINE', 'BRAND_LOGO_URL', 'BRAND_DOCS_URL', 'BRAND_FOOTER', 'BRAND_ACCENT', 'BRAND_ACCENT_DARK',
   // The browser suites' own knobs (tools/test-studio-bundle.mjs, server/test-brand-shell.mjs, server/test-glossary-shell.mjs, server/test-services-studio.mjs, server/test-settings-studio.mjs): read by no boot, stripped so a child never sees a test knob.
   'PLAYWRIGHT', 'BUNDLE_SMOKE', 'BRAND_SMOKE', 'GLOSSARY_SMOKE', 'SERVICES_SMOKE', 'SETTINGS_SMOKE',
+  // The live fetcher's knobs: server/index.mjs imports tools/fetch-live-pack.mjs at boot, which reads these at
+  // import (brandEnv), and server/mcp-url.mjs reads ALLOW_LOCAL_MCP per call.
+  'ALLOW_LOCAL_MCP', 'MCP_TIMEOUT_MS', 'GRAFANA_DASHBOARD_LIMIT', 'GRAFANA_PANEL_LIMIT', 'GRAFANA_INCLUDE_JSON', 'DEBUG',
 ];
+
+// The per-org variables (an MCP endpoint's read token, OBSERVOGRAM_ORG_<KEY>_<NAME>) are read at request time
+// by the variable an endpoint names, so no fixed list covers them: childEnv deletes every inherited one, and a
+// suite passes its own through `extra`.
+export const ORG_PREFIX = 'OBSERVOGRAM_ORG_';
 
 export function childEnv(ws, extra = {}) {
   const env = { ...process.env };
   for (const k of STRIP) { delete env[`OBSERVOGRAM_${k}`]; delete env[`TOMOGRAPH_${k}`]; }
+  for (const k of Object.keys(env)) if (k.startsWith(ORG_PREFIX)) delete env[k];
   if (ws) env.OBSERVOGRAM_WORKSPACE = ws;
   for (const [k, v] of Object.entries(extra)) { if (v === undefined) delete env[k]; else env[k] = v; }
   return env;

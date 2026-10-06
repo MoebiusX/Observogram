@@ -121,6 +121,26 @@ test('the children\'s STRIP list carries every variable the series added, both s
   }
 });
 
+test('a child never sees the fetcher knobs a boot imports, nor an inherited per-org variable; a suite passes its own through extra', async () => {
+  const { STRIP, childEnv, ORG_PREFIX } = await import(SERVE_CHILD);
+  for (const k of ['ALLOW_LOCAL_MCP', 'MCP_TIMEOUT_MS', 'GRAFANA_DASHBOARD_LIMIT', 'GRAFANA_PANEL_LIMIT', 'GRAFANA_INCLUDE_JSON', 'DEBUG']) assert.ok(STRIP.includes(k), `STRIP names ${k}`);
+  assert.equal(ORG_PREFIX, 'OBSERVOGRAM_ORG_');
+  const planted = { OBSERVOGRAM_ORG_ACME_MCP_TOKEN: 'from-the-shell', OBSERVOGRAM_ORG_DEFAULT_X: 'y', OBSERVOGRAM_MCP_TIMEOUT_MS: '1', TOMOGRAPH_DEBUG: '1' };
+  const saved = Object.fromEntries(Object.keys(planted).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, planted);
+  try {
+    const env = childEnv(null);
+    assert.deepEqual(Object.keys(env).filter((k) => k.startsWith(ORG_PREFIX)), [], 'every inherited OBSERVOGRAM_ORG_* is deleted');
+    assert.equal(env.OBSERVOGRAM_MCP_TIMEOUT_MS, undefined);
+    assert.equal(env.TOMOGRAPH_DEBUG, undefined);
+    const own = childEnv(null, { OBSERVOGRAM_ORG_ACME_MCP_TOKEN: 'the-suite-s-own' });
+    assert.deepEqual(Object.keys(own).filter((k) => k.startsWith(ORG_PREFIX)), ['OBSERVOGRAM_ORG_ACME_MCP_TOKEN']);
+    assert.equal(own.OBSERVOGRAM_ORG_ACME_MCP_TOKEN, 'the-suite-s-own', 'extra is applied after the strip');
+  } finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+});
+
 const GOOD = `import { readFileSync } from 'node:fs';
 // a comment naming import { x } from './index.mjs' is not an import
 const { STRIP } = await import('./fixtures/serve-child.mjs');
