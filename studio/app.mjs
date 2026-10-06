@@ -57,9 +57,10 @@ import { renderNoOrgHome, renderServicesHome, renderServicePage, renderServiceEd
 import {
   BUILT_SECTIONS, BUILT_EDITORS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsSectionHead, settingsAboveRank,
   buildEnvironmentsSectionModel, buildEndpointsSectionModel,
+  buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus,
 } from './settings-model.mjs';
-import { loadMcpEndpoints, loadMembers } from './settings-api.mjs';
-import { renderSettings } from './settings-view.mjs';
+import { loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint } from './settings-api.mjs';
+import { renderSettings, renderSettingsEditor } from './settings-view.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
@@ -847,8 +848,10 @@ export function renderMainView() {
   // Persistence: every mutation chain ends here, so this is the single
   // hook for the debounced write. Cheap when suspended (boot phase).
   persistence.schedule();
-  // The record editor lives in its own host on <body> (syncServiceEditor draws or clears it).
+  // The record editors live in their own hosts on <body> (syncServiceEditor
+  // and syncSettingsEditor draw or clear them).
   syncServiceEditor();
+  syncSettingsEditor();
   if (state.mode === 'home') {
     if (state.homeVariant === 'gate') renderServiceGate();
     else renderHomeView();
@@ -1759,6 +1762,7 @@ function goHome() {
   state.serviceId = null;
   state.serviceEnv = null;
   servicePageRecord = null;
+  closeSettingsEditor({ focus: false });
   state.settingsFrom = null;
   state.settings = null;
   state.compareBId = null;
@@ -2283,7 +2287,7 @@ let settingsFocusNext = false;
 // a downgrade a read met, each section's status line, the endpoints read's
 // refusal. Never persisted; a new entry starts afresh.
 function freshSettings() {
-  return { probe: null, denied: null, status: {}, members: null, org: null, endpointsError: null };
+  return { probe: null, denied: null, deniedAdmin: null, status: {}, members: null, org: null, endpointsError: null };
 }
 
 // What this reader may do in Settings (settings-model.mjs settingsAccessModel)
@@ -2293,6 +2297,16 @@ function freshSettings() {
 function settingsAccess() {
   const access = settingsAccessModel({ access: state.access, identity: state.identity, probe: state.settings?.probe ?? null, chromeName: state.brand?.chrome?.name });
   const denied = state.settings?.denied;
+  const deniedAdmin = state.settings?.deniedAdmin;
+  if (!denied && deniedAdmin) {
+    // An admin write refused by the role (demoted meanwhile): the admin's
+    // controls and the owner's go, with the server's sentence; the rest stays.
+    return {
+      ...access,
+      can: { ...access.can, admin: false, own: false, createOrg: false },
+      why: { ...access.why, admin: deniedAdmin, own: deniedAdmin, createOrg: deniedAdmin },
+    };
+  }
   if (!denied) return access;
   return {
     ...access,
@@ -2340,6 +2354,7 @@ function enterSettings(section = null, { rehydrate = false } = {}) {
 // gone meanwhile lands home with the server's sentence.
 function leaveSettings() {
   const from = state.settingsFrom;
+  closeSettingsEditor({ focus: false });
   state.settingsFrom = null;
   state.settings = null;
   if (from?.mode === 'service' && Number.isInteger(from.serviceId)) {
@@ -2384,7 +2399,7 @@ async function loadSettingsFrame() {
 // (shared with the pickers — state.mcpEndpoints). The status line says
 // "Reading …" meanwhile, the refusal as served after. A refusal by the gate
 // (the session ended, the membership went) downgrades the frame first.
-async function loadSettingsSection(id) {
+async function loadSettingsSection(id, { notice = null } = {}) {
   if (state.mode !== 'settings' || !id) return;
   const settings = state.settings;
   const gen = ++settingsGeneration;
@@ -2406,7 +2421,7 @@ async function loadSettingsSection(id) {
     settings.denied = gate.message || 'refused';
     forgetSettingsAbove(settingsAccess());
   }
-  settings.status[id] = { kind: 'ok', text: '' };
+  settings.status[id] = { kind: 'ok', text: notice ?? '' };
   if (gen !== settingsGeneration || state.settingsSection !== id) return;   // the user moved on meanwhile
   repaintSettings();
 }
@@ -2476,6 +2491,197 @@ function reloadIntoSettings(orgId, section = null) {
   window.location.reload();
 }
 
+// ---------- the Settings record editor (design §5, the editor idiom) ----------
+
+// The pop-up over one record of a section (this build: an MCP endpoint, new
+// or registered): UI state, never persisted — a reload lands on the section,
+// closed. Drawn into its own host on <body>, outside #layer-view, so a
+// section repaint keeps what was typed and the focus. `record` is the row as
+// last read (kept when a re-read fails; a re-read that lacks it closes the
+// editor); `opener` the selector the focus returns to.
+let settingsEditor = null;   // { kind, id, record, draft, status, step, opener } | null
+
+function settingsEditorHost() {
+  let el = document.getElementById('set-editor-host');
+  if (!el) { el = document.createElement('div'); el.id = 'set-editor-host'; document.body.appendChild(el); }
+  return el;
+}
+
+// The record the editor is over, as the section's list has it now.
+function settingsEditorRecord(ed) {
+  if (ed.id === null) return null;
+  if (ed.kind === 'endpoint' && Array.isArray(state.mcpEndpoints)) return state.mcpEndpoints.find((ep) => ep.id === ed.id) ?? undefined;
+  return ed.record;
+}
+
+// Draw the editor, or clear it: leaving Settings (any mode change) closes
+// it, and so does its record gone from a list read anew.
+function syncSettingsEditor() {
+  const el = document.getElementById('set-editor-host');
+  const ed = settingsEditor;
+  const record = ed ? settingsEditorRecord(ed) : null;
+  if (!ed || state.mode !== 'settings' || record === undefined) {
+    settingsEditor = null;
+    if (el && el.innerHTML) el.innerHTML = '';
+    return;
+  }
+  if (record) ed.record = record;
+  const model = buildSettingsEditorModel(ed.kind, ed.record, {
+    draft: ed.draft, status: ed.status, step: ed.step,
+    ctx: { access: settingsAccess(), orgName: state.orgName, orgId: state.orgId, services: state.services, endpoints: state.mcpEndpoints },
+  });
+  renderSettingsEditor(settingsEditorHost(), model, settingsHost);
+}
+
+// Where the focus returns on close: the opener (Edit… of its row, or the
+// section's primary), else the section's primary, else the page's h1.
+function settingsOpenerSelector(el) {
+  if (!el) return null;
+  if (el.dataset?.editEndpoint) return `[data-edit-endpoint="${CSS.escape(el.dataset.editEndpoint)}"]`;
+  return el.id ? `#${CSS.escape(el.id)}` : null;
+}
+
+// Open (a section's primary, a row's Edit…): the rank that may write gets
+// the dialog with the focus in its first field; another is told why (the
+// controls say so already, but the access can downgrade meanwhile). An
+// open MCP panel closes first — one dialog at a time (T11).
+function openSettingsEditor(kind, id = null) {
+  if (state.mode !== 'settings' || kind !== 'endpoint') return;
+  const access = settingsAccess();
+  if (!access.can.admin) { explainUnavailable(access.why.admin); return; }
+  const record = id === null ? null : (Array.isArray(state.mcpEndpoints) ? state.mcpEndpoints.find((ep) => ep.id === id) : null);
+  if (id !== null && !record) return;
+  closeMcpPanel();
+  const draftPanel = document.getElementById('draft-mcp-panel');
+  if (draftPanel) draftPanel.hidden = true;
+  settingsEditor = { kind, id, record, draft: null, status: null, step: 'edit', opener: settingsOpenerSelector(document.activeElement) };
+  syncSettingsEditor();
+  focusSettingsEditor();
+}
+
+function focusSettingsEditor() {
+  const dialog = document.querySelector('#set-editor-host .set-editor');
+  const first = dialog?.querySelector('input, textarea, select') || dialog?.querySelector('#set-editor-confirm') || dialog;
+  first?.focus({ preventScroll: true });
+}
+
+// Close (the scrim, esc, Close, Escape, a delete done, leaving Settings):
+// the focus returns to the opener when it is still on the page.
+function closeSettingsEditor({ focus = true } = {}) {
+  if (!settingsEditor) return;
+  const opener = settingsEditor.opener;
+  settingsEditor = null;
+  const el = document.getElementById('set-editor-host');
+  if (el) el.innerHTML = '';
+  if (!focus) return;
+  const back = (opener && document.querySelector(opener)) || document.getElementById('set-primary') || document.querySelector('.set-title');
+  back?.focus({ preventScroll: true });
+}
+
+// The delete step and back: the body swaps for the consequence sentence; what
+// was typed is kept for the way back.
+function setSettingsEditorStep(step, draft = null) {
+  if (!settingsEditor || settingsEditor.status?.kind === 'pending') return;
+  if (draft) settingsEditor.draft = draft;
+  settingsEditor.step = step === 'confirm-delete' ? 'confirm-delete' : 'edit';
+  settingsEditor.status = null;
+  syncSettingsEditor();
+  focusSettingsEditor();
+}
+
+// A write refused by the gate: the session ended, the membership went or the
+// server closed the API (every control goes, with the server's sentence), or
+// the role went (the admin's controls go). Then what the rank may no longer
+// read is forgotten and the page repaints (design §4).
+function settingsWriteRefused(e) {
+  if (!state.settings) return;
+  if (e?.denied === 'role') state.settings.deniedAdmin = e.message || 'refused';
+  else if (['auth', 'posture', 'org'].includes(e?.denied)) state.settings.denied = e.message || 'refused';
+  else return;
+  forgetSettingsAbove(settingsAccess());
+  repaintSettings();
+}
+
+// The section's lists after a write: the MCP endpoints (the pickers read the
+// same list) and the services (bindings may have gone), the section
+// repainted with `notice` in its status line.
+async function rereadAfterSettingsWrite(notice = null) {
+  if (state.mode === 'settings' && state.settingsSection) await loadSettingsSection(state.settingsSection, { notice });
+  syncSettingsEditor();
+}
+
+// Save (Create or Save): an endpoint created — POST with the non-empty
+// fields, `Created <name> (<origin>).`, and the dialog stays over the new
+// record — or saved: only the differing fields PATCHed (nothing differing →
+// "Nothing changed." without a call), the status naming what the server
+// says changed. A refusal is the server's sentence in the status line.
+async function saveSettingsEditor(draft) {
+  const ed = settingsEditor;
+  if (!ed || ed.status?.kind === 'pending' || ed.kind !== 'endpoint') return null;
+  ed.draft = draft;
+  const record = ed.record;
+  const patch = record ? buildEndpointPatch(record, draft) : null;
+  if (record && !Object.keys(patch).length) {
+    ed.status = endpointSaveStatus([]);
+    syncSettingsEditor();
+    return { ok: true, changed: [] };
+  }
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let status;
+  try {
+    if (record) {
+      const res = await patchEndpoint(record.id, patch);
+      if (settingsEditor === ed && res.endpoint) ed.record = res.endpoint;
+      status = endpointSaveStatus(res.changed);
+    } else {
+      const created = await createEndpoint(buildEndpointCreate(draft));
+      status = { kind: 'saved', text: `Created ${created?.name ?? draft.name} (${created?.origin ?? ''}).` };
+      // The list holds it until the re-read below answers (the editor stays over it).
+      if (created && Array.isArray(state.mcpEndpoints)) state.mcpEndpoints = [...state.mcpEndpoints, created];
+      if (settingsEditor === ed && created) Object.assign(ed, { id: created.id, record: created });
+    }
+  } catch (e) {
+    if (settingsEditor !== ed) return null;
+    ed.status = { kind: 'error', text: e?.message || 'no answer' };
+    syncSettingsEditor();
+    settingsWriteRefused(e);
+    return null;
+  }
+  const opened = settingsEditor === ed;
+  if (opened) { ed.status = status; ed.draft = null; }
+  syncSettingsEditor();
+  if (opened && !record) focusSettingsEditor();
+  announce(status.text);
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
+// The danger button of the delete step: DELETE, then the sentence naming the
+// environments it unbound (resolved through the services table as read
+// before the delete) in the section's status line; the dialog closes.
+async function confirmSettingsEditor() {
+  const ed = settingsEditor;
+  if (!ed || ed.step !== 'confirm-delete' || ed.status?.kind === 'pending' || ed.kind !== 'endpoint' || !ed.record) return null;
+  ed.status = { kind: 'pending', text: 'Deleting…' };
+  syncSettingsEditor();
+  let res;
+  try { res = await deleteEndpoint(ed.record.id); }
+  catch (e) {
+    if (settingsEditor !== ed) return null;
+    ed.status = { kind: 'error', text: e?.message || 'no answer' };
+    syncSettingsEditor();
+    settingsWriteRefused(e);
+    return null;
+  }
+  const status = endpointDeleteStatus(ed.record.name, res.unbound, state.services);
+  // The row it was opened from goes with the record: the focus goes to the section's primary.
+  if (settingsEditor === ed) { ed.opener = null; closeSettingsEditor(); }
+  announce(status.text);
+  await rereadAfterSettingsWrite(status.text);
+  return { ok: true };
+}
+
 // The host the Settings renderers get (docs/UI_CONVENTIONS.md §3): the two
 // stable hooks plus Settings' actions under `settings`.
 const settingsActions = {
@@ -2486,6 +2692,11 @@ const settingsActions = {
   explain: explainUnavailable,
   build: () => enterBuildMode('define'),
   openService: (id) => { enterServicePage(id); },
+  openEditor: ({ kind, id = null } = {}) => openSettingsEditor(kind, id),
+  closeEditor: () => closeSettingsEditor(),
+  save: (draft) => saveSettingsEditor(draft),
+  step: (step, draft = null) => setSettingsEditorStep(step, draft),
+  confirm: () => confirmSettingsEditor(),
 };
 const settingsHost = { renderMainView, renderTabs, settings: settingsActions };
 

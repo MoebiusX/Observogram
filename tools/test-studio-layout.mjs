@@ -68,6 +68,8 @@ const EXEMPT = {
   '.build-editor': 'a centred modal',
   '.svc-editor-scrim': 'a modal scrim (the service record editor)',
   '.svc-editor': 'a centred modal (the service record editor)',
+  '.set-editor-scrim': 'a modal scrim (the Settings record editor)',
+  '.set-editor': 'a centred modal (the Settings record editor)',
   '.proto-switcher': 'prototype only (?proto)',
   '.proto-actionbar': 'prototype only (?proto)',
   '.proto-deploybar': 'prototype only (?proto)',
@@ -111,7 +113,7 @@ test('a modal is stacked over the chrome and the context bar, never under them',
   const chrome = Math.max(...z('.observa-hdr'));
   const bar = Math.max(...z('.hdr', 'chrome-observa'));
   assert.ok(chrome > 0 && bar > 0, 'the two bars set a z-index');
-  for (const modal of ['.deploy-modal', '.about-overlay']) {
+  for (const modal of ['.deploy-modal', '.about-overlay', '.set-editor']) {
     const top = Math.max(...z(modal));
     assert.ok(top > chrome && top > bar, `${modal} (z ${top}) sits over the chrome (${chrome}) and the context bar (${bar})`);
   }

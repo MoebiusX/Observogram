@@ -26,7 +26,7 @@ export const SETTINGS_SECTIONS = ['environments', 'endpoints', 'members', 'audit
 export const BUILT_SECTIONS = ['environments', 'endpoints'];
 // The record editors this build draws: a section whose editor is not built
 // draws no primary and no row action, and no sentence names one.
-export const BUILT_EDITORS = [];
+export const BUILT_EDITORS = ['endpoint'];
 
 const SECTION_LABEL = {
   environments: 'Environments', endpoints: 'MCP endpoints', members: 'Members', audit: 'Audit',
@@ -255,6 +255,9 @@ export function buildEndpointsSectionModel({ endpoints, services = null, access,
       url: full ? (ep.url ?? null) : null,
       tokenText: full ? (ep.readTokenEnv ? `token: ${ep.readTokenEnv}` : 'token: none (requests send their own)') : null,
       boundText,
+      // Edit… on the row: an admin's (the editor's writes are admin class);
+      // not drawn for another rank — the row already shows every fact.
+      canEdit: admin && editable,
     };
   });
   const how = editable ? ` ${admin ? 'New MCP endpoint registers one.' : 'An admin registers them.'}` : '';
@@ -619,6 +622,7 @@ export function buildSettingsEditorModel(kind, record = null, { draft = null, st
     return {
       ...base, title: record ? `Edit ${record.name}` : 'New MCP endpoint', eyebrow: 'MCP endpoint',
       fields, limits: { name: 200, url: 2000 }, draft: eff, confirm,
+      remove: record ? { enabled: can, reason: can ? null : (access?.why?.admin ?? null) } : null,
       status: st || idleStatus('A name, the gateway URL and, if the server holds its token, the variable naming it.'),
       primary: primaryOf(record ? 'Save' : 'Create', can, access?.why?.admin ?? null),
     };

@@ -3003,10 +3003,19 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   assert.ok(!/color:\s*var\(--ink-[45]\)/.test(settingsSlice), 'no --ink-4 / --ink-5 text in the Settings zone');
   assert.ok(!/(?<![-\w])color:\s*var\(--CMP\)/.test(settingsSlice), 'the text tokens rule: --CMP only ever colours a border in the Settings zone');
   const SET_TEXT = new Set(['ink', 'ink-2', 'ink-3']);
-  const setRules = [...settingsSlice.matchAll(ruleRe)].map(m => ({ sel: m[1].trim(), body: m[2] })).filter(r => /\.set-/.test(r.sel));
+  const setRules = [...settingsSlice.matchAll(ruleRe)].map(m => ({ sel: m[1].replace(/\/\*[\s\S]*?\*\//g, '').trim(), body: m[2] })).filter(r => /\.set-/.test(r.sel));
   assert.ok(setRules.length > 30, `the Settings block parsed (${setRules.length} .set- rules)`);
   const setOffenders = [];
+  // The .set- rules that draw a background and no text, skipped by name and only they: the editor's scrim, an empty
+  // aria-hidden layer under the dialog (studio/settings-view.mjs draws it with no content, asserted below), and the
+  // head's accent bar, a ::before whose content is ''.
+  const SET_NO_TEXT = new Set(['.set-editor-scrim', '.set-editor-head::before']);
   for (const r of setRules) {
+    if (SET_NO_TEXT.has(r.sel)) {
+      if (/(?:^|[;{\s])color:/.test(r.body)) setOffenders.push(`${r.sel}: draws no text, so it names no colour`);
+      if (r.sel.endsWith('::before') && !/content:\s*''/.test(r.body)) setOffenders.push(`${r.sel}: an accent bar has no content`);
+      continue;
+    }
     const colour = r.body.match(/(?:^|[;{\s])color:\s*([^;]+?)\s*(?:;|$)/)?.[1];
     const bgDecl = r.body.match(/(?:^|[;{\s])background(?:-color)?:\s*([^;]+?)\s*(?:;|$)/)?.[1];
     const bg = bgDecl && !/^(transparent|none)$/.test(bgDecl) ? bgDecl : null;
@@ -3035,7 +3044,9 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   assert.deepEqual(setOffenders, [], 'every .set- text colour clears AA on the background its own rule draws, in both themes and through the bridge');
   // The tint pairs are measured, not assumed: the banners and the danger button carry their colour beside their tint.
   for (const sel of ['.set-banner.is-token, .set-banner.is-closed', '.set-banner.is-static', '.set-banner.is-open', '.set-danger']) assert.match(cssRule(sel) || '', /color:\s*var\(--ink(-2)?\)[\s\S]*background:\s*var\(--/, `${sel} names its colour beside its background`);
-  for (const sel of ['.set-row-meta', '.set-status', '.set-scope', '.set-nav-group']) assert.match(cssRule(sel) || '', /color:\s*var\(--ink-3\)/, `${sel} is --ink-3`);
+  assert.match(readFileSync(resolve(ROOT, 'studio/settings-view.mjs'), 'utf8'), /<div class="set-editor-scrim" data-editor-close aria-hidden="true"><\/div>/, 'the scrim is empty and aria-hidden');
+  assert.match(cssRule('.set-editor') || '', /color:\s*var\(--ink\);\s*background:\s*var\(--card\)/, 'the editor names its colour beside its background');
+  for (const sel of ['.set-row-meta', '.set-status', '.set-scope', '.set-nav-group', '.set-editor-status']) assert.match(cssRule(sel) || '', /color:\s*var\(--ink-3\)/, `${sel} is --ink-3`);
   assert.match(cssRule('.set-nav-item[aria-current="page"]') || '', /color:\s*var\(--ink\);\s*border-left:\s*2px solid var\(--CMP\)/, 'the current section is --ink; the border carries --CMP');
   assert.ok(!/(?:^|[;{\s])(color|background(?:-color)?):/.test(cssRule('.set-mcp-target') || 'color:'), 'the MCP target select is layout only: its host field colours it');
 });

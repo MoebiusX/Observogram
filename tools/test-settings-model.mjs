@@ -24,7 +24,7 @@ import {
   loadMembers, addMember, patchMember, removeMember, renameOrg, loadAudit,
 } from '../studio/settings-api.mjs';
 import { accessModel, TIER_BY_PACK } from '../studio/services-model.mjs';
-import { renderSettings } from '../studio/settings-view.mjs';
+import { renderSettings, renderSettingsEditor } from '../studio/settings-view.mjs';
 import { readFileSync } from 'node:fs';
 import { servicesRefusal } from '../studio/services-api.mjs';
 import { orgEnvPrefix as serverOrgEnvPrefix } from '../server/store/mcp-endpoints.mjs';
@@ -120,7 +120,7 @@ test('settingsAccessModel: each rank, each posture — the reasons name a way ou
 test('the frame: the scope line, the nav lists only the built sections, each unreadable one disabled with its reason', () => {
   assert.deepEqual(SETTINGS_SECTIONS, ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role']);
   assert.deepEqual(BUILT_SECTIONS, ['environments', 'endpoints'], 'the sections this build draws: no members, audit or deployment group yet');
-  assert.deepEqual(BUILT_EDITORS, [], 'no record editor in this build');
+  assert.deepEqual(BUILT_EDITORS, ['endpoint'], 'the record editors this build draws: the MCP endpoint editor only');
   const FOUR = ['environments', 'endpoints', 'members', 'audit'];
   assert.deepEqual(buildSettingsFrameModel({ access: ADA }).nav.map((n) => n.id), BUILT_SECTIONS, 'the default nav is the built sections');
   const ada = buildSettingsFrameModel({ access: ADA, orgName: 'Acme', orgId: 'acme', builtSections: FOUR });
@@ -277,7 +277,11 @@ test('buildEnvironmentPatch, parseKeyValueLines: only what differs, objects whol
 
 test('endpoints: a viewer reads name and origin only, an operator the URL and the variable name; the bound environments named', () => {
   const op = buildEndpointsSectionModel({ endpoints: EP_OP, services: SERVICES, access: OSCAR, orgName: 'Acme' });
-  assert.deepEqual(op.rows[0], { id: 3, name: 'gw', origin: 'https://mcp.acme.test', url: 'https://mcp.acme.test/obs', tokenText: 'token: OBSERVOGRAM_ORG_ACME_MCP_TOKEN', boundText: 'checked by 2 environments: payment-service / prod, payment-service / staging' });
+  assert.deepEqual(op.rows[0], { id: 3, name: 'gw', origin: 'https://mcp.acme.test', url: 'https://mcp.acme.test/obs', tokenText: 'token: OBSERVOGRAM_ORG_ACME_MCP_TOKEN', boundText: 'checked by 2 environments: payment-service / prod, payment-service / staging', canEdit: false });
+  // Edit… is an admin's (the editor's writes are admin class), and only once the editor is built.
+  assert.deepEqual(buildEndpointsSectionModel({ endpoints: EP_OP, services: SERVICES, access: ADA, orgName: 'Acme' }).rows.map((r) => r.canEdit), [true, true]);
+  assert.deepEqual(buildEndpointsSectionModel({ endpoints: EP_OP, services: SERVICES, access: ADA, orgName: 'Acme', editable: false }).rows.map((r) => r.canEdit), [false, false]);
+  assert.deepEqual(buildEndpointsSectionModel({ endpoints: EP_VIEWER, access: CLOSED }).rows.map((r) => r.canEdit), [false, false]);
   assert.deepEqual([op.rows[1].tokenText, op.rows[1].boundText], ['token: none (requests send their own)', 'checked by 0 environments']);
   assert.deepEqual(op.primary, { enabled: false, reason: 'needs the admin role in Acme — yours is operator; ask an admin of Acme' });
   // Mutation check 3: even a fixture that carries the URL is not read for a viewer.
@@ -321,6 +325,12 @@ test('the endpoint editor: the token variable under the org prefix, never a valu
   assert.equal(buildSettingsEditorModel('endpoint', EP_OP[1], { ctx, step: 'confirm-delete' }).confirm.text, 'Delete spare? No environment is checked through it.');
   assert.equal(buildSettingsEditorModel('endpoint', { ...gw, environments: 1 }, { ctx: { ...ctx, services: null }, step: 'confirm-delete' }).confirm.text, 'Delete gw? 1 environment is checked through it; they keep their rows, unbound.');
   assert.deepEqual(buildSettingsEditorModel('endpoint', null, { ctx: { ...ctx, access: OSCAR } }).primary, { label: 'Create', enabled: false, reason: 'needs the admin role in Acme — yours is operator; ask an admin of Acme' });
+  // Delete… is a record's, an admin's; a new endpoint has none.
+  assert.equal(create.remove, null);
+  assert.deepEqual(edit.remove, { enabled: true, reason: null });
+  assert.deepEqual(buildSettingsEditorModel('endpoint', gw, { ctx: { ...ctx, access: OSCAR } }).remove, { enabled: false, reason: 'needs the admin role in Acme — yours is operator; ask an admin of Acme' });
+  // While a call is pending the primary is not usable, and says why.
+  assert.deepEqual(buildSettingsEditorModel('endpoint', gw, { ctx, status: { kind: 'pending', text: 'Saving…' } }).primary, { label: 'Save', enabled: false, reason: 'Saving…' });
 });
 
 // ---------- members and the org's name ----------
@@ -598,11 +608,19 @@ function settingsContainer() {
       if (id) return get(sel, html.includes(`id="${id}"`));
       const nav = /^\.set-nav-item\[data-section="([\w-]+)"\]$/.exec(sel)?.[1];
       if (nav) return get(sel, html.includes(`class="set-nav-item" data-section="${nav}"`), { section: nav });
+      if (sel === '.set-editor') {
+        const el = get(sel, html.includes('class="set-editor"'));
+        if (el && !el.attrs['data-editor-key']) el.attrs['data-editor-key'] = /data-editor-key="([^"]*)"/.exec(html)?.[1] ?? null;
+        return el;
+      }
       return null;
     },
-    querySelectorAll: (sel) => (sel === '[data-open-service]'
-      ? [...html.matchAll(/data-open-service="(\d+)"/g)].map((m) => get(`open:${m[1]}`, true, { openService: m[1] }))
-      : []),
+    querySelectorAll: (sel) => {
+      if (sel === '[data-open-service]') return [...html.matchAll(/data-open-service="(\d+)"/g)].map((m) => get(`open:${m[1]}`, true, { openService: m[1] }));
+      if (sel === '[data-edit-endpoint]') return [...html.matchAll(/data-edit-endpoint="(\d+)"/g)].map((m) => get(`edit:${m[1]}`, true, { editEndpoint: m[1] }));
+      if (sel === '[data-editor-close]') return [...html.matchAll(/data-editor-close/g)].map((_, i) => get(`close:${i}`, true));
+      return [];
+    },
   };
 }
 
@@ -669,6 +687,92 @@ test('renderSettings: the head, the banner as served, the nav by rank, the envir
   assert.ok(c6.innerHTML.includes(`<div class="set-banner is-static" role="status">${STATIC_ERR.message}</div>`));
   assert.ok(!c6.innerHTML.includes('set-nav') && !c6.innerHTML.includes('set-section'));
   assert.doesNotThrow(() => c6.querySelector('#set-back').fire('click'));
+});
+
+test('the endpoints section: New MCP endpoint and Edit… for an admin; for an operator the primary unavailable with its reason and no Edit…', () => {
+  const calls = [];
+  const host = { settings: new Proxy({}, { get: (_, k) => (...a) => calls.push([k, ...a]) }) };
+  const xss = '<img src=x onerror="window.__x=1">';
+  const eps = [{ ...EP_OP[0], name: `gw ${xss}` }, EP_OP[1]];
+  const ada = settingsContainer();
+  renderSettings(ada, buildSettingsFrameModel({ access: ADA, section: 'endpoints', orgName: 'Acme', orgId: 'acme' }), { id: 'endpoints', head: settingsSectionHead('endpoints', { orgName: 'Acme' }), model: buildEndpointsSectionModel({ endpoints: eps, services: SERVICES, access: ADA, orgName: 'Acme' }), status: null }, host);
+  const h = ada.innerHTML;
+  assert.ok(h.includes('<button type="button" class="mcp-refresh-btn set-primary" id="set-primary">New MCP endpoint</button>'));
+  assert.deepEqual([...h.matchAll(/data-edit-endpoint="(\d+)" aria-label="([^"]*)">Edit…/g)].map((m) => m[1]), ['3', '5']);
+  assert.ok(!h.includes('<img') && h.includes('aria-label="Edit gw &lt;img src=x onerror=&quot;window.__x=1&quot;&gt;"'), 'the name in the label is escaped');
+  assert.equal(ada.querySelector('#set-primary').getAttribute('aria-disabled'), null, 'usable');
+  ada.querySelector('#set-primary').fire('click');
+  ada.querySelectorAll('[data-edit-endpoint]')[1].fire('click');
+  assert.deepEqual(calls, [['openEditor', { kind: 'endpoint' }], ['openEditor', { kind: 'endpoint', id: 5 }]]);
+
+  calls.length = 0;
+  const oscar = settingsContainer();
+  renderSettings(oscar, buildSettingsFrameModel({ access: OSCAR, section: 'endpoints', orgName: 'Acme', orgId: 'acme' }), { id: 'endpoints', head: settingsSectionHead('endpoints', { orgName: 'Acme' }), model: buildEndpointsSectionModel({ endpoints: EP_OP, services: SERVICES, access: OSCAR, orgName: 'Acme' }), status: null }, host);
+  assert.ok(!oscar.innerHTML.includes('data-edit-endpoint'), 'no Edit… for an operator: the row shows every fact');
+  const primary = oscar.querySelector('#set-primary');
+  assert.equal(primary.getAttribute('aria-disabled'), 'true');
+  assert.equal(primary.why.textContent, 'needs the admin role in Acme — yours is operator; ask an admin of Acme');
+  primary.fire('click');
+  assert.deepEqual(calls, [['explain', 'needs the admin role in Acme — yours is operator; ask an admin of Acme']]);
+
+  // What the last write did stays in the status line (a delete: the row is gone).
+  const done = settingsContainer();
+  renderSettings(done, buildSettingsFrameModel({ access: ADA, section: 'endpoints', orgName: 'Acme', orgId: 'acme' }), { id: 'endpoints', head: settingsSectionHead('endpoints', { orgName: 'Acme' }), model: buildEndpointsSectionModel({ endpoints: [], access: ADA, orgName: 'Acme' }), status: { kind: 'ok', text: 'Deleted <gw>.' } }, host);
+  assert.ok(done.innerHTML.includes('>Deleted &lt;gw&gt;. No MCP endpoints in Acme yet. New MCP endpoint registers one.</p>'));
+});
+
+test('renderSettingsEditor: a modal dialog over one endpoint — the fields escaped, the variable named never a value, save / delete step / confirm, a repaint in place', () => {
+  const calls = [];
+  const host = { settings: new Proxy({}, { get: (_, k) => (...a) => calls.push([k, ...a]) }) };
+  const ctx = { access: ADA, orgName: 'Acme', orgId: 'acme', services: SERVICES };
+  const gw = { ...EP_OP[0], name: 'gw"><img src=x onerror=alert(1)>' };
+  const c = settingsContainer();
+  renderSettingsEditor(c, buildSettingsEditorModel('endpoint', gw, { ctx }), host);
+  const h = c.innerHTML;
+  assert.ok(h.includes('<div class="set-editor-scrim" data-editor-close aria-hidden="true"></div>'));
+  assert.ok(h.includes('class="set-editor" role="dialog" aria-modal="true" aria-labelledby="set-editor-title" aria-describedby="set-editor-status" data-kind="endpoint" data-record-id="3" data-editor-key="endpoint:3:edit" tabindex="-1"'));
+  assert.ok(h.includes('<div class="set-editor-status is-idle" id="set-editor-status" role="status" aria-live="polite">'));
+  assert.ok(!h.includes('<img') && h.includes('value="gw&quot;&gt;&lt;img src=x onerror=alert(1)&gt;"'), 'a typed value is escaped');
+  assert.ok(h.includes('<input id="set-edit-url" name="url" type="url" value="https://mcp.acme.test/obs" maxlength="2000" autocomplete="off" spellcheck="false" aria-describedby="set-edit-url-help">'));
+  assert.ok(h.includes('<input id="set-edit-readTokenEnv" name="readTokenEnv" type="text" value="OBSERVOGRAM_ORG_ACME_MCP_TOKEN" autocomplete="off" spellcheck="false" autocapitalize="characters" aria-describedby="set-edit-readTokenEnv-help">'));
+  assert.ok(h.includes('OBSERVOGRAM_ORG_ACME_&lt;NAME&gt;'), 'the prefix help, escaped');
+  assert.ok(h.includes('id="set-editor-delete">Delete…</button>') && h.includes('id="set-editor-save" aria-disabled="false">Save</button>'));
+  assert.ok(!/\btitle="/.test(h), 'no title attribute');
+  c.querySelector('#set-edit-url').value = 'https://mcp2.acme.test/obs';
+  c.querySelector('#set-editor-save').fire('click');
+  c.querySelector('#set-editor-delete').fire('click');
+  c.querySelectorAll('[data-editor-close]').forEach((el) => el.fire('click'));
+  const draft = { name: gw.name, url: 'https://mcp2.acme.test/obs', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' };
+  assert.deepEqual(calls, [['save', draft], ['step', 'confirm-delete', draft], ['closeEditor'], ['closeEditor'], ['closeEditor']]);
+
+  // The same record and step again: the status and the buttons only — what was typed stays.
+  calls.length = 0;
+  const typed = c.querySelector('#set-edit-url');
+  renderSettingsEditor(c, buildSettingsEditorModel('endpoint', gw, { ctx, status: { kind: 'pending', text: 'Saving…' } }), host);
+  assert.equal(c.querySelector('#set-edit-url'), typed, 'not redrawn');
+  assert.equal(c.querySelector('#set-editor-save').getAttribute('aria-disabled'), 'true');
+  c.querySelector('#set-editor-save').fire('click');
+  assert.deepEqual(calls, [], 'a second Save while one is pending does nothing');
+
+  // The delete step: the consequence sentence, Back and the danger button naming the record.
+  const d = settingsContainer();
+  calls.length = 0;
+  renderSettingsEditor(d, buildSettingsEditorModel('endpoint', EP_OP[0], { ctx, step: 'confirm-delete' }), host);
+  assert.ok(d.innerHTML.includes('<p class="set-confirm" id="set-editor-confirm-text">Delete gw? 2 environments are checked through it (payment-service / prod, payment-service / staging); they keep their rows, unbound.</p>'));
+  assert.ok(d.innerHTML.includes('class="set-danger" id="set-editor-confirm" aria-disabled="false">Delete gw</button>') && !d.innerHTML.includes('set-edit-name'));
+  d.querySelector('#set-editor-back').fire('click');
+  d.querySelector('#set-editor-confirm').fire('click');
+  assert.deepEqual(calls, [['step', 'edit'], ['confirm']]);
+
+  // A rank that cannot write (the access downgraded while it was open): unavailable with the reason; the click explains.
+  const o = settingsContainer();
+  calls.length = 0;
+  renderSettingsEditor(o, buildSettingsEditorModel('endpoint', null, { ctx: { ...ctx, access: OSCAR } }), host);
+  const save = o.querySelector('#set-editor-save');
+  assert.deepEqual([save.getAttribute('aria-disabled'), save.why.textContent], ['true', 'needs the admin role in Acme — yours is operator; ask an admin of Acme']);
+  assert.ok(!o.innerHTML.includes('set-editor-delete'), 'a new record has no Delete…');
+  save.fire('click');
+  assert.deepEqual(calls, [['explain', 'needs the admin role in Acme — yours is operator; ask an admin of Acme']]);
 });
 
 test('settings-view.mjs is a renderer module: it imports host.mjs, util.mjs and services-view.mjs only — never app.mjs or state.mjs — and reads no state, fetches nothing', () => {
