@@ -204,7 +204,12 @@ export function buildEnvironmentsSectionModel({ services, access, orgName = null
     return { groups: [], primary: primaryOf({ enabled: false, reason: text }), empty: null, error: text, build: false };
   }
   if (!services.length) {
-    const text = `No service in ${org} yet — Build registers one (its DEFINE names the service).`;
+    // Build is offered to a rank that may build; any other reader is told who
+    // registers one (the 6a home's viewer wording) and gets no Build.
+    const role = access.role ?? 'viewer';
+    const text = can
+      ? `No service in ${org} yet — Build registers one (its DEFINE names the service).`
+      : `No service in ${org} yet — an operator registers one with Build (its DEFINE names the service); your role in ${org} is ${role}.`;
     return { groups: [], primary: primaryOf({ enabled: false, reason: text }), empty: text, error: null, build: can };
   }
   const groups = services.map((s) => ({

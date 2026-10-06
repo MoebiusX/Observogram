@@ -230,6 +230,15 @@ test('environments: the services table flattened, the binding named, the edit by
   const buildText = 'No service in Acme yet — Build registers one (its DEFINE names the service).';
   assert.deepEqual([none.primary, none.empty, none.build], [{ enabled: false, reason: buildText }, buildText, true]);
   assert.equal(buildEnvironmentsSectionModel({ services: [], access: VERA, orgName: 'Acme' }).build, false);
+  // A reader who cannot Build (a viewer, the token posture's anonymous reader) is told who registers one — no Build button,
+  // no sentence offering Build as hers (the 6a home's viewer wording).
+  for (const [who, access, text] of [
+    ['vera', VERA, 'No service in Acme yet — an operator registers one with Build (its DEFINE names the service); your role in Acme is viewer.'],
+    ['token', TOKEN, 'No service in Default yet — an operator registers one with Build (its DEFINE names the service); your role in Default is viewer.'],
+  ]) {
+    const m = buildEnvironmentsSectionModel({ services: [], access, orgName: access === TOKEN ? 'Default' : 'Acme' });
+    assert.deepEqual([m.primary, m.empty, m.build], [{ enabled: false, reason: text }, text, false], who);
+  }
   // Services but no environment.
   assert.equal(buildEnvironmentsSectionModel({ services: [LEDGER], access: OSCAR, orgName: 'Acme' }).empty, 'No environments in Acme yet. Add environment registers one.');
   assert.equal(buildEnvironmentsSectionModel({ services: [LEDGER], access: VERA, orgName: 'Acme' }).empty, 'No environments in Acme yet.');
@@ -759,6 +768,10 @@ test('renderSettings: the head, the banner as served, the nav by rank, the envir
   assert.ok(c4.innerHTML.includes('No service in Acme yet — Build registers one (its DEFINE names the service). <button type="button" class="ux-secondary-btn" id="set-build">Build</button>'));
   c4.querySelector('#set-build').fire('click');
   assert.deepEqual(calls, [['build']]);
+  const c4v = settingsContainer();
+  renderSettings(c4v, frame, { id: 'environments', head: settingsSectionHead('environments', { orgName: 'Acme' }), model: buildEnvironmentsSectionModel({ services: [], access: VERA, orgName: 'Acme', editable: false }), status: null }, host);
+  assert.ok(c4v.innerHTML.includes('No service in Acme yet — an operator registers one with Build (its DEFINE names the service); your role in Acme is viewer.'));
+  assert.equal(c4v.querySelector('#set-build'), null, 'no Build control for a viewer');
   const c5 = settingsContainer();
   renderSettings(c5, frame, { id: 'environments', head: settingsSectionHead('environments'), model: buildEnvironmentsSectionModel({ services: SERVICES, access: OSCAR, editable: false }), status: { kind: 'loading', text: 'Reading environments…' } }, host);
   assert.ok(c5.innerHTML.includes('aria-busy="true"') && c5.innerHTML.includes('>Reading environments…</p>'));
