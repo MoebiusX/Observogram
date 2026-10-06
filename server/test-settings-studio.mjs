@@ -587,14 +587,24 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       const first = await page.evaluate(() => [...document.querySelector('.set-audit tbody tr').querySelectorAll('td')].map((td) => td.textContent.replace(/\s+/g, ' ').trim()));
       assert.equal(first[1], 'ada', 'the actor as the server writes it');
       assert.equal(first[2], 'membership.role');
-      // Older rows: before=<next>.
+      // Older rows: before=<next>. The read is held while a kind is typed:
+      // its answer repaints the section, and what was typed (not yet
+      // applied) stays in its field.
+      let release;
+      const held = new Promise((r) => { release = r; });
+      const hold = async (route) => { await held; await route.fallback(); };
+      await page.route(/\/api\/audit\?/, hold);
       await page.click('#set-audit-more');
-      await page.waitForFunction(() => /^1\d\d rows/.test(document.querySelector('.set-audit caption')?.textContent || ''), null, { timeout: T });
+      await page.waitForSelector('#set-section[aria-busy="true"]', { timeout: T });
+      await page.fill('#set-audit-kind', 'membership');
+      release();
+      await page.waitForFunction(() => /^1\d\d rows/.test(document.querySelector('.set-audit caption')?.textContent || '') && !document.querySelector('#set-section[aria-busy]'), null, { timeout: T });
+      await page.unroute(/\/api\/audit\?/, hold);
       assert.match(audits.at(-1), /^\?limit=100&before=\d+$/);
+      assert.equal(await page.inputValue('#set-audit-kind'), 'membership', 'a kind typed during a read survives its repaint');
       // kind=membership, from = through = today (whole UTC days).
       const today = new Date().toISOString().slice(0, 10);
       const next = new Date(Date.parse(`${today}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
-      await page.fill('#set-audit-kind', 'membership');
       await page.fill('#set-audit-from', today);
       await page.fill('#set-audit-through', today);
       await page.click('#set-audit-apply');
