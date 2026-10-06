@@ -2870,13 +2870,16 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   // color-mix(in srgb, A p%, B): a per-channel blend of the gamma-encoded values.
   const mix = (a, b, p) => '#' + [1, 3, 5].map(i => Math.round(parseInt(a.slice(i, i + 2), 16) * p + parseInt(b.slice(i, i + 2), 16) * (1 - p)).toString(16).padStart(2, '0')).join('');
   const LAYERS = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
-  // The zones the scan reads, in file order: the axis block (Build) and the Services block (STORE_PLAN slice 6a,
-  // the .svc-* rules). The slice runs from the first marker to EOF, so every zone after it is covered.
-  const ZONES = ['==== The axis', '==== Services'];
+  // The zones the scan reads, in file order: the axis block (Build), the Services block (STORE_PLAN slice 6a, the
+  // .svc-* rules) and the Settings block (slice 6b, the .set-* rules). The AA loop below reads from the first marker
+  // to EOF, so every zone is covered; each zone's own assertions read its own slice, to the next marker.
+  const ZONES = ['==== The axis', '==== Services', '==== Settings'];
   const starts = ZONES.map(z => { const i = CSS_TEXT.indexOf(z); assert.ok(i >= 0, `${z} marker`); return i; });
   assert.ok(starts.every((s, i) => i === 0 || s > starts[i - 1]), 'the zones are in order');
+  const zoneSlice = (i) => CSS_TEXT.slice(starts[i], starts[i + 1] ?? CSS_TEXT.length);
   const axis = CSS_TEXT.slice(starts[0]);
-  const servicesSlice = CSS_TEXT.slice(starts[1]);
+  const servicesSlice = zoneSlice(1);
+  const settingsSlice = zoneSlice(2);
   const ruleRe = /(?:^|\n)([^@{}\n][^{}]*?)\s*\{([^{}]*)\}/g;
   const rules = [...axis.matchAll(ruleRe)].map(m => ({ sel: m[1].trim(), body: m[2] }));
   assert.ok(rules.length > 100, `the axis block parsed (${rules.length} rules)`);
@@ -2884,6 +2887,10 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   const rulesBefore = [...CSS_TEXT.slice(0, starts[0]).matchAll(ruleRe)].map(m => m[1].trim());
   assert.deepEqual(rulesBefore.filter(sel => /\.svc-/.test(sel)), [], 'no .svc- rule before the scanned zones');
   assert.ok([...servicesSlice.matchAll(ruleRe)].some(m => /\.svc-gate-card/.test(m[1])), 'the service gate rules are in the Services zone');
+  // The same guard for the Settings prefix: no rule names .set- before the Settings marker, in any selector position.
+  const rulesBeforeSettings = [...CSS_TEXT.slice(0, starts[2]).matchAll(ruleRe)].map(m => m[1].trim());
+  assert.deepEqual(rulesBeforeSettings.filter(sel => /(^|[\s,>+~(])\.set-/.test(sel)), [], 'no .set- rule outside the Settings zone');
+  assert.ok([...settingsSlice.matchAll(ruleRe)].some(m => /^\.set-page$/.test(m[1].trim())), 'the Settings frame rules are in the Settings zone');
   const sizeOf = (body) => { const m = body.match(/font(?:-size)?:[^;]*?(\d+(?:\.\d+)?)px/); return m ? Number(m[1]) : null; };
   const weightOf = (body) => Number(body.match(/font:\s*(?:italic\s+)?(\d{3})\s/)?.[1] || 400);
   const large = (body) => { const s = sizeOf(body); return s != null && (s >= 18.66 || (s >= 14 && weightOf(body) >= 700)); };
@@ -2944,6 +2951,15 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
     const sels = [...text.matchAll(/(?:^|\n)([^@{}\n][^{}]*?)\s*\{/g)].map(m => m[1].trim()).filter(s => NEW_PREFIXES.test(s));
     assert.deepEqual(sels, [], `${file} does not restyle the Services zone`);
   }
+  // The same for the Settings prefix, over every other stylesheet the studio ships (ux.css and reskin.css among them):
+  // none names a .set- selector, so the scan's verdict on the Settings zone is the shipped one.
+  const otherSheets = readdirSync(resolve(ROOT, 'studio')).filter(f => f.endsWith('.css') && f !== 'app.css');
+  assert.ok(otherSheets.includes('ux.css') && otherSheets.includes('reskin.css'), 'the later stylesheets are read');
+  for (const file of otherSheets) {
+    const text = readFileSync(resolve(ROOT, 'studio', file), 'utf8');
+    const sels = [...text.matchAll(/(?:^|\n)([^@{}\n][^{}]*?)\s*\{/g)].map(m => m[1].trim()).filter(sel => /(^|[\s,>+~(])\.set-/.test(sel));
+    assert.deepEqual(sels, [], `studio/${file} does not restyle the Settings zone`);
+  }
   // The bridge check: studio/index.html links design-bridge.css after app.css, and the bridge remaps the neutrals on
   // :root (--ink-N → --og-text/-2/--og-muted, --card → --og-panel, --line-2 → --og-line), so the SHIPPED pill colours
   // are design-tokens.css's, not app.css's. The scan above pairs the app.css values (--ink-3 #4A4A4A on --line-2
@@ -2960,7 +2976,7 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   const og = { light: ogOf(':root'), dark: ogOf('\\[data-theme="dark"\\]') };
   const PILL_CONTENT = /^\.svc-verdict-detail$/;                       // rendered inside the .is-base pill, whose background is --line-2
   const bridged = [];
-  for (const r of [...servicesSlice.matchAll(ruleRe)].map(m => ({ sel: m[1].trim(), body: m[2] }))) {
+  for (const r of [servicesSlice, settingsSlice].flatMap(slice => [...slice.matchAll(ruleRe)]).map(m => ({ sel: m[1].trim(), body: m[2] }))) {
     const tok = r.body.match(/(?:^|[;{\s])color:\s*var\(--(ink-[1-5])\)/)?.[1];
     if (!tok) continue;
     const onLine = /background:\s*var\(--line-2\)/.test(r.body) || PILL_CONTENT.test(r.sel);
@@ -2973,6 +2989,53 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
       }
     }
   }
-  assert.deepEqual(bridged, [], 'every Services text colour clears AA through the bridge, on the panel and inside a --line-2 pill');
+  assert.deepEqual(bridged, [], 'every Services and Settings text colour clears AA through the bridge, on the panel and inside a --line-2 pill');
   assert.ok(contrast(og.light['og-muted'], og.light['og-line']) < 4.5, 'the ratio the live review measured, for the record: light --og-muted on --og-line fails AA, so a muted pill\'s text is --ink-2');
+  // ---- The Settings zone (docs/STORE_PLAN.md §6, slice 6b): the pass the shared loops cannot make ----
+  // The loops above match --ink-N only, so bare --ink is never measured, and they pair a colour with the card (or
+  // --line-2), never with the tint a rule draws. So here every .set- rule's text colour is measured on the background
+  // its OWN rule declares (the card and the page when it declares none), in both themes, and again through the bridge
+  // (a token the bridge does not remap — the L-tints — keeps its app.css value under the bridged text). For that to
+  // see every pair: (a) a .set- rule that draws a background names its text colour in the same body; (c) the text is
+  // --ink / --ink-2 / --ink-3 only — no --ink-4/5, no --CMP, no tone token as text. What it cannot see: a .set- element
+  // drawn inside another zone's surface (.set-mcp-target, which therefore sets no colour), and a nested element
+  // inheriting a tint from an ancestor rule (none in the block: the danger button and the banners declare their own pair).
+  assert.ok(!/color:\s*var\(--ink-[45]\)/.test(settingsSlice), 'no --ink-4 / --ink-5 text in the Settings zone');
+  assert.ok(!/(?<![-\w])color:\s*var\(--CMP\)/.test(settingsSlice), 'the text tokens rule: --CMP only ever colours a border in the Settings zone');
+  const SET_TEXT = new Set(['ink', 'ink-2', 'ink-3']);
+  const setRules = [...settingsSlice.matchAll(ruleRe)].map(m => ({ sel: m[1].trim(), body: m[2] })).filter(r => /\.set-/.test(r.sel));
+  assert.ok(setRules.length > 30, `the Settings block parsed (${setRules.length} .set- rules)`);
+  const setOffenders = [];
+  for (const r of setRules) {
+    const colour = r.body.match(/(?:^|[;{\s])color:\s*([^;]+?)\s*(?:;|$)/)?.[1];
+    const bgDecl = r.body.match(/(?:^|[;{\s])background(?:-color)?:\s*([^;]+?)\s*(?:;|$)/)?.[1];
+    const bg = bgDecl && !/^(transparent|none)$/.test(bgDecl) ? bgDecl : null;
+    if (bg && !colour) { setOffenders.push(`${r.sel}: draws a background (${bg}) without naming its text colour (a)`); continue; }
+    if (!colour) continue;
+    const tok = colour.match(/^var\(--([\w-]+)\)$/)?.[1];
+    if (!tok || !SET_TEXT.has(tok)) { setOffenders.push(`${r.sel}: text is ${colour} — --ink / --ink-2 / --ink-3 only (c)`); continue; }
+    const bgTok = bg ? bg.match(/^var\(--([\w-]+)\)$/)?.[1] : null;
+    if (bg && !bgTok) { setOffenders.push(`${r.sel}: a background the scan cannot read (${bg}) — one token`); continue; }
+    const min = large(r.body) ? 3 : 4.5;
+    const surfaces = bgTok ? [bgTok] : ['card', 'chrome'];
+    for (const name of ['light', 'dark']) {
+      for (const s of surfaces) {
+        const own = themes[name][s];
+        if (!own) { setOffenders.push(`${r.sel}: --${s} is not a theme token`); continue; }
+        const ratio = contrast(themes[name][tok], own);
+        if (ratio < min) setOffenders.push(`${r.sel}: --${tok} on --${s} ${ratio.toFixed(2)}:1 (${name}, needs ${min})`);
+        // Through the bridge: the text is the og token; the surface is the og token where the bridge remaps it (the
+        // page is --og-bg), else the app.css value.
+        const ogSurface = s === 'chrome' ? og[name]['og-bg'] : bridge[s] ? og[name][bridge[s]] : own;
+        const bridgedRatio = contrast(og[name][bridge[tok]], ogSurface);
+        if (bridgedRatio < min) setOffenders.push(`${r.sel}: --${tok} (--${bridge[tok]}) on --${s} through the bridge ${bridgedRatio.toFixed(2)}:1 (${name}, needs ${min})`);
+      }
+    }
+  }
+  assert.deepEqual(setOffenders, [], 'every .set- text colour clears AA on the background its own rule draws, in both themes and through the bridge');
+  // The tint pairs are measured, not assumed: the banners and the danger button carry their colour beside their tint.
+  for (const sel of ['.set-banner.is-token, .set-banner.is-closed', '.set-banner.is-static', '.set-banner.is-open', '.set-danger']) assert.match(cssRule(sel) || '', /color:\s*var\(--ink(-2)?\)[\s\S]*background:\s*var\(--/, `${sel} names its colour beside its background`);
+  for (const sel of ['.set-row-meta', '.set-status', '.set-scope', '.set-nav-group']) assert.match(cssRule(sel) || '', /color:\s*var\(--ink-3\)/, `${sel} is --ink-3`);
+  assert.match(cssRule('.set-nav-item[aria-current="page"]') || '', /color:\s*var\(--ink\);\s*border-left:\s*2px solid var\(--CMP\)/, 'the current section is --ink; the border carries --CMP');
+  assert.ok(!/(?:^|[;{\s])(color|background(?:-color)?):/.test(cssRule('.set-mcp-target') || 'color:'), 'the MCP target select is layout only: its host field colours it');
 });
