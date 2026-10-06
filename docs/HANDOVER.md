@@ -34,7 +34,7 @@ latest 22, `node-floor` (`npm test` on exactly 22.16.0), `store-prestore` (from 
 the Export gate against a `v0.4.0` worktree). `refresh-live-pack` runs only on
 demand or when the fetcher changes.
 
-**The store (backlog 0) — slices 1 and 2 on `develop`; slice 3a (roles enforced) and 3b (the identity API) delivered; slice 4a (the pack registry on the store, PR #140) and 4b (services, environments, MCP endpoints) delivered; slice 5 (the audit) delivered; slice 6a (the Services home, the service page) delivered; slice 6 (6b, Settings) is next.**
+**The store (backlog 0) — slices 1 and 2 on `develop`; slice 3a (roles enforced) and 3b (the identity API) delivered; slice 4a (the pack registry on the store, PR #140) and 4b (services, environments, MCP endpoints) delivered; slice 5 (the audit) delivered; slice 6a (the Services home, the service page) delivered; slice 6b-i (Settings for operators and admins) delivered; slice 6 (6b, Settings) is next — its owner sections.**
 Slice 1 (the store foundation: `server/store/*`, `packc store backup` / `restore`, the k8s
 store volume) is PR #109. Slice 2a (PR #111, branch `codex/store-identity`, stacked on it)
 moves identity onto the store: `start()` runs `bootStore()` (`server/boot.mjs`: the boot
@@ -127,8 +127,9 @@ synthetic entries, test-tenancy's `ORG_SCOPED`, test-smoke's restricted-tier fak
 the token case (no new tool literal). The design's §19 decisions were all taken as
 recommended (`OBSERVOGRAM_ORG_<ORGKEY>_*` with the longest-prefix owner, the MCP endpoint
 mutations behind the identity API's defences, null tiers, the tier enum, `environments.endpoints`
-in full to viewers). What waits: the studio's pickers still type a URL — 6b replaces them with
-the org's list and sends `mcpEndpointId`; the deploy audit (`deploys.jsonl` → rows) was slice 5.
+in full to viewers). The studio's pickers list the org's endpoints first and keep a typed URL;
+a chosen endpoint is sent as `mcpEndpointId` (6b). The deploy audit (`deploys.jsonl` → rows)
+was slice 5.
 
 **Slice 5 delivered (`codex/audit`): the audit.** Every change a principal makes through the
 server is a row, and the rows can be read. The file-first routes — deploy, deploy-bulk,
@@ -156,10 +157,12 @@ Suites: `server/test-audit-api.mjs` (new); test-store, test-deploy-helpers, test
 test-tenancy, test-authz, test-auth-oidc, test-chain-history, test-store-guards extended.
 `packc store audit` (`tools/store-admin.mjs`, design §8) lists the audit from a shell —
 one JSON row per line, the route's filters as flags, the same rule through `parseAuditQuery`'s
-`cli` surface, no row written. What waits: the studio reads nothing of the audit yet (6b
-pages by `next`).
+`cli` surface, no row written. Settings → Audit reads it, paging by `next` (6b).
 Slice 6a delivered the Services home and the service page on the table
-(`codex/services-axis`). Next is slice 6 (6b, Settings).
+(`codex/services-axis`). Slice 6b-i delivered Settings for operators and admins
+(`codex/settings`): environments, the org's MCP endpoint records and the pickers on
+`mcpEndpointId`, members and the org's name, the audit. Next is slice 6 (6b, Settings): its
+owner sections — users, organisations, the join role.
 
 ### otel-observability-pack (the spec) — `develop` at the merge of PR #8
 
@@ -274,7 +277,8 @@ store, PR #111) and 2b (export, `import --replace`, `rekey-issuer`, `purge-org`)
 (roles enforced, the live pack per org; PR #119) and 3b (the identity API) are delivered; slice
 4a (the pack registry on the store, PR #140) and 4b (services, environments, MCP endpoints) are
 delivered; slice 5 (the audit) is delivered; slice 6a (the Services home, the service page) is
-delivered; slice 6 (6b, Settings) is next — see §1.
+delivered; slice 6b-i (Settings for operators and admins) is delivered; slice 6 (6b, Settings)
+is next — see §1.
 
 **A. Decide: "the draft becomes the pack".** The root cause of every remaining Build gap is
 that the draft is a set of inputs re-instantiated from the seed on each change, with

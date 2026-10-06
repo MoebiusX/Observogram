@@ -71,10 +71,13 @@ the testable layer).
 - A journey with its own actions (the BUILD steps: `update`, `setTier`,
   `toggleEntry`, `setParam`, `setSli`, `setToggle`, `setStep`, `openEditor`,
   `closeEditor`, `preview`, `openInDiscover`, …; the services actions `openService`,
-  `openIn`, `openBuild`, `openEditor`, `saveService`, …) rides them on that argument as a namespace
-  (`host.build`, `host.services`), built by app.mjs's controller and handed to the renderer at
-  the call site — never added to `host.mjs` (convention 1: the host stays the
-  four stable hooks) and never reached by importing app.mjs. The renderer
+  `openIn`, `openBuild`, `openEditor`, `saveService`, …; the Settings actions `open`, `back`,
+  `selectSection`, `retry`, `explain`, `openEditor`, `closeEditor`, `save`, `step`, `confirm`,
+  `auditApply`, `auditMore`, `pickMcpTarget`, `openMcpEndpoints`) rides them on that argument as a
+  namespace (`host.build`, `host.services`, `host.settings`), built by app.mjs's controller and
+  handed to the renderer at the call site — never added to `host.mjs`
+  (convention 1: the host stays the four stable hooks) and never reached by
+  importing app.mjs. The renderer
   stays testable: the models it draws are pure (`studio/build-model.mjs`,
   `tools/test-build-model.mjs`), and the actions are whatever the caller
   passes.
@@ -104,8 +107,11 @@ Remediate and on Diagnose alike, nothing for a pack without
 in `ux.css` — a toggletip beside a family label or a spec term, drawn only
 when the taxonomy file's v2 `glossary` explains it, `--ux-*` tokens only;
 `.conf-exports` the Conformance view's audit-report download row in `app.css`,
-drawn only with a focused pack id) — keep new classes inside their zone's
-prefix. The service audit report's `.ar-*` zone is not a studio stylesheet:
+drawn only with a focused pack id; `.set-*` Settings and its editors in
+`app.css`, under its own `==== Settings` marker the AA scan in
+`tools/test-build-model.mjs` reads, each colour measured on its own
+background and none restyled by `ux.css` / `reskin.css`) — keep new classes
+inside their zone's prefix. The service audit report's `.ar-*` zone is not a studio stylesheet:
 it is `REPORT_CSS` in `tools/lib/audit-report.mjs`, inlined into one
 standalone document over `design-tokens.css` + `design-kit.css` (it qualifies
 kit classes under `.ar-*` and redefines none). **Never mass-rename existing classes**:

@@ -1082,3 +1082,21 @@ feature — what shipped, the measured `Tests:` pair, what is deferred by name a
 and `tools/test-doc-test-totals.mjs` guards it as it guards
 `docs/DELIVERY-REBADGE-BATCH2.md` (every pair it quotes is one this journey
 states; the two new flat suites join the ledger).
+
+### STORE_PLAN slice 6b — Settings
+
+The journey's live target is the org's now. **6b-i** (`codex/settings`):
+the MCP pickers this journey reaches — the refresh panel that loads the live
+pack, the draft panel, the deploy modal of Hand off, its rollback and its
+verify — list the org's registered MCP endpoints first and keep a typed URL;
+a chosen endpoint is sent as `mcpEndpointId` (never with `mcpUrl`), its read
+token stays a variable on the server, and a write token is still typed per
+request and never stored. A deploy re-reads the endpoint before it sends: an
+endpoint moved or deleted since the modal drew it sends nothing and says so,
+so a Hand off never writes to a gateway the reviewer did not see. A deploy
+profile remembers its endpoint per org. Operators edit an environment's MCP
+endpoint, tier and bindings from Settings or the service page; admins
+register the endpoints. Nothing about the pack, the compile or the verify
+rules changed; crawl, compile and board goldens are byte-identical.
+Tests: 1055 → 1097 (`tools/test-settings-model.mjs` and the Settings journey,
+`server/test-settings-studio.mjs`, new; T7's Settings step).

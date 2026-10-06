@@ -80,7 +80,18 @@ an org admin sees a non-member owner's actor as is.*
 *Slice 6a is built (`codex/services-axis`): the Services home on the table,
 the service page, Check and Build wired to the table (Build writes tier and
 owners where the row has none), one org switcher, the no-org screen; the
-`.svc-*` zone under the AA scan. Slice 6 (6b, Settings) is next.*
+`.svc-*` zone under the AA scan.*
+
+*Slice 6b-i is built (`codex/settings`): Settings for operators and admins —
+a mode entered from Advanced and the account menu, its sections by the
+server's rank, the banner naming the way in where the server names one;
+environments (one editor, from Settings and from the service page), the
+org's MCP endpoint records (the token a variable's name under the org's
+prefix), the MCP pickers listing the org's endpoints first and sending
+`mcpEndpointId`, members and the org's name, the audit; the `.set-*` zone
+under the AA scan. The token posture's refusal under `OBSERVOGRAM_AUTH=off`
+now says to restart without it. Slice 6 (6b, Settings) is next: its owner
+sections — users, organisations, the join role.*
 
 ## 0 · Status quo — what exists and what is missing
 
@@ -1164,7 +1175,8 @@ WCAG AA in both themes is a rule ([HANDOVER.md](HANDOVER.md) §2). The scan
 in `tools/test-build-model.mjs` reads only `studio/app.css` after `==== The
 axis`, and only rules whose `color:` uses its text tokens. Slice 6a moved the
 `.svc-*` rules under a `==== Services` marker the scan reads and recorded
-what the later stylesheets override; 6b does the same for its zone.
+what the later stylesheets override. Slice 6b put the Settings zone
+(`.set-*`) under its own `==== Settings` marker, each zone its own slice.
 
 ## 7 · Slices — each its own PR against `develop`, each green alone
 
