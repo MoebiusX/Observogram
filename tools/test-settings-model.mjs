@@ -152,6 +152,20 @@ test('the frame: the scope line, the nav lists only the built sections, each unr
   assert.deepEqual(token.nav.filter((n) => !n.enabled).map((n) => [n.id, n.reason]), [['members', TOKEN.why.read.admin], ['audit', TOKEN.why.read.admin]]);
   assert.ok(token.nav.every((n) => n.reason !== TOKEN_ACCESS.reason), 'no read names the operator role');
   assert.equal(token.banner.kind, 'token');
+  // The token posture whose probe FAILED (no answer, or a 5xx): the banner shows that failure, which names no way
+  // in — so the nav's reason does not point at it; it says what is true (the read failed) and what works (reload).
+  const failedNav = (probe) => buildSettingsFrameModel({ access: settingsAccessModel({ access: TOKEN_ACCESS, probe }), builtSections: FOUR })
+    .nav.filter((n) => !n.enabled).map((n) => [n.id, n.reason]);
+  const FAILED_ADMIN = 'needs the admin role and a signed-in user — the read above failed; reload this page to retry';
+  for (const probe of [new TypeError('Failed to fetch'), refused(500, { ok: false, error: 'boom' })]) {
+    const tokenFailed = settingsAccessModel({ access: TOKEN_ACCESS, probe });
+    assert.deepEqual(tokenFailed.banner, { kind: 'token', text: probe.message }, 'the failure is shown as is');
+    assert.deepEqual(tokenFailed.why.read, { admin: FAILED_ADMIN, own: 'needs a signed-in owner — the read above failed; reload this page to retry' });
+    assert.deepEqual(failedNav(probe), [['members', FAILED_ADMIN], ['audit', FAILED_ADMIN]], probe.message);
+    assert.ok(failedNav(probe).every(([, r]) => !/names the way in/.test(r)), `${probe.message}: no claim the banner names a way in`);
+  }
+  // Before the probe answers there is no banner, and no reason points at one.
+  assert.deepEqual(failedNav(null), [['members', 'needs the admin role and a signed-in user'], ['audit', 'needs the admin role and a signed-in user']]);
   // Static: the banner only — no nav, no section.
   const stat = buildSettingsFrameModel({ access: STATIC });
   assert.deepEqual([stat.nav, stat.section, stat.banner.kind, stat.scope], [[], null, 'static', 'Settings']);

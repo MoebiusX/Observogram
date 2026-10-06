@@ -42,9 +42,16 @@ const ORG_FALLBACK = 'this organisation';
 const CLOSED_REASON = 'closed on this server without sign-in — the banner above names the way in';
 // The token posture's reads that need a signed-in user (the members and the
 // audit, design §3.3 "— (banner)"): `why.read`, which names no role that would
-// not open them; 6a's write reason stays on every write (§3.4, B16).
-const TOKEN_ADMIN_REASON = 'needs the admin role and a signed-in user — the banner above names the way in';
-const TOKEN_OWN_REASON = 'needs a signed-in owner — the banner above names the way in';
+// not open them; 6a's write reason stays on every write (§3.4, B16). They
+// point at the banner only when it holds the probe's 403 (`denied: 'role'`,
+// the server's sentence naming the way in); a probe that failed otherwise (no
+// answer, a 5xx) is a banner naming no way in, and before it answers there is
+// no banner at all.
+const TOKEN_READ_NEEDS = { admin: 'needs the admin role and a signed-in user', own: 'needs a signed-in owner' };
+function tokenReadReasons(refusal) {
+  const tail = !refusal ? '' : refusal.denied === 'role' ? ' — the banner above names the way in' : ' — the read above failed; reload this page to retry';
+  return { admin: `${TOKEN_READ_NEEDS.admin}${tail}`, own: `${TOKEN_READ_NEEDS.own}${tail}` };
+}
 const OWN_REASON = "users, organisations and the join role belong to the deployment's owners — ask an owner";
 const CREATE_ORG_REASON = 'a second organisation needs sign-in, and this server runs without it — start it with sign-in (npm run users -- add <login>, or OIDC) and sign in as an owner';
 const OPEN_BANNER = 'This server runs without sign-in: you act as local, an owner, and every change here is audited as local.';
@@ -86,7 +93,7 @@ export function settingsAccessModel({ access, identity = null, probe = null, chr
     const reason = access?.reason ?? null;
     return {
       posture, role, owner: false, closed: null, can: none,
-      why: { operate: reason, admin: reason, own: reason, closed: null, createOrg: reason, read: { admin: TOKEN_ADMIN_REASON, own: TOKEN_OWN_REASON } },
+      why: { operate: reason, admin: reason, own: reason, closed: null, createOrg: reason, read: tokenReadReasons(refusal) },
       banner: refusal ? { kind: 'token', text: refusal.text } : null,
     };
   }
