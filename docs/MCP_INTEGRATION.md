@@ -88,8 +88,9 @@ export async function prepareRequest({ url, headers }) {
 }
 
 // Optional: replace the fetcher wholesale (a private CA, a corporate proxy,
-// mTLS). init is { method: 'POST', headers, body, signal } — the AbortSignal
-// carries OBSERVOGRAM_MCP_TIMEOUT_MS and may be honoured or ignored.
+// mTLS). init is { method: 'POST', headers, body, redirect: 'manual', signal } —
+// the AbortSignal carries OBSERVOGRAM_MCP_TIMEOUT_MS and may be honoured or
+// ignored; a redirect the fetcher returns is refused either way.
 const dispatcher = new Agent({ connect: { ca: process.env.PRIVATE_CA_PEM } });
 export const fetchImpl = (url, init) => fetch(url, { ...init, dispatcher });
 ```

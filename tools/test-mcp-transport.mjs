@@ -205,7 +205,7 @@ for (const [label, hook] of [
     assert(fake.requests.length === 0, 'the fake server saw no request');
     assert(inits.length === 2 && inits.every(i => i.url === fake.url && i.init.method === 'POST' && typeof i.init.body === 'string'
       && i.init.headers.Authorization === 'Bearer tok' && i.init.signal instanceof AbortSignal),
-      'fetchImpl receives (url, { method: POST, headers, body, signal: AbortSignal })', inits.map(i => Object.keys(i.init)));
+      'fetchImpl receives (url, { method: POST, headers, body, redirect, signal: AbortSignal })', inits.map(i => Object.keys(i.init)));
   } finally { await fake.close(); }
 
   // fetchImpl's own rejection is an ordinary error — NOT a hook fault.
@@ -261,6 +261,35 @@ for (const [label, hook] of [
     const e8 = await expectFail(() => nativeCall(SYSTEM_HEALTH, {}));
     assert(e8?.message === `MCP HTTP 502 on tools/call: upstream says Bearer tok`, 'without a fetchImpl the upstream body passes through untouched', e8?.message);
   } finally { await fake3.close(); }
+}
+
+// ---------- 5b. redirects are never followed (D10) ----------
+{
+  // A fetchImpl that answers 307: refused, naming the Location's origin only
+  // (never its path or query), and every request asked for redirect: 'manual'.
+  const inits = [];
+  const redirecting = {
+    fetchImpl: async (url, init) => { inits.push(init); return new Response('', { status: 307, headers: { location: 'https://elsewhere.example:8443/mcp/v2?token=LOCSECRET5' } }); },
+    hookPath: '/x/gw.mjs',
+  };
+  const { rpc: rRedirect } = createMcpClient({ mcpUrl: 'http://127.0.0.1:9/mcp', mcpAuth: 'tok', transport: redirecting });
+  const e1 = await expectFail(() => rRedirect('initialize', {}));
+  assert(e1 && !isTransportHookError(e1) && e1.message === 'MCP HTTP 307 on initialize: the MCP answered with a redirect to https://elsewhere.example:8443 — Observogram does not follow redirects; register (or type) the URL it points at',
+    'a 307 a fetchImpl returns is refused, naming the origin it pointed at and nothing of its path or query', e1?.message);
+  assert(inits.length === 1 && inits[0].redirect === 'manual', 'every request asks the fetcher for redirect: manual', inits.map(i => i.redirect));
+
+  // Native fetch against a loopback server answering 302 to a second one:
+  // the error names the target's origin and the target sees no request.
+  const target = await startFakeMcp();
+  const bouncer = createServer((req, res) => { req.resume(); res.writeHead(302, { Location: `${target.url}?from=bounce` }); res.end(); });
+  await new Promise(r => bouncer.listen(0, '127.0.0.1', r));
+  try {
+    const { rpc: nativeRpc } = createMcpClient({ mcpUrl: `http://127.0.0.1:${bouncer.address().port}/mcp`, mcpAuth: 'tok', transport: null });
+    const e2 = await expectFail(() => nativeRpc('initialize', {}));
+    assert(e2?.message === `MCP HTTP 302 on initialize: the MCP answered with a redirect to ${target.origin} — Observogram does not follow redirects; register (or type) the URL it points at`
+      && target.requests.length === 0,
+    'native fetch: a 302 is refused with the same text and the redirect target receives no request', { message: e2?.message, reached: target.requests.length });
+  } finally { await new Promise(r => bouncer.close(r)); await target.close(); }
 }
 
 // ---------- 6. load failures ----------

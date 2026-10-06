@@ -24,8 +24,9 @@
 //     hook sees the Authorization header (Bearer <mcpAuth>) and the raw
 //     caller URL and may replace both; it must never log them.
 //   - fetchImpl(url, init) → Promise<Response-like>: replaces globalThis.fetch.
-//     init carries { method: 'POST', headers, body, signal } — the
-//     AbortSignal is advisory, a custom fetcher may ignore it. The result
+//     init carries { method: 'POST', headers, body, redirect: 'manual',
+//     signal } — `redirect` and the AbortSignal are advice, a custom fetcher
+//     may ignore them; a 3xx it RETURNS is refused all the same. The result
 //     must offer ok, status, headers.get(name), text(), json(), and
 //     body.getReader() when it answers text/event-stream. `new Response()`
 //     satisfies all of it.
@@ -44,6 +45,14 @@
 //   an ordinary error, exactly as native fetch's — callers keep their
 //   probe-level retry/annotate semantics with a hook present.
 //   isTransportHookError() is name-based so it survives module duplication.
+//
+// Redirects: never followed. Every request is sent with redirect: 'manual',
+// and an answer that is a redirect — a 3xx, or a browser's opaqueredirect —
+// is an error naming only the origin the Location header pointed at (never
+// its path or query): an allowlist judges the URL the caller chose, and a
+// redirect would carry the request, its Authorization header included,
+// somewhere else. An MCP behind a redirect (http → https, a trailing slash)
+// is configured with the URL it points at.
 //
 // Redaction: a hook's own error text goes through redact() before it is
 // rethrown — wrapped for prepareRequest, kept an ordinary error for a
@@ -112,6 +121,22 @@ function secretsOf(mcpUrl, mcpAuth) {
   return [...set].sort((a, b) => b.length - a.length);
 }
 
+// The error for an answer that is a redirect: the status, the method and
+// the origin of the Location header (resolved against the request URL), never
+// its path, query or userinfo. A browser's opaqueredirect hides the Location.
+function redirectError(res, url, method) {
+  let location = null;
+  try { location = res.headers.get('location'); } catch { /* no headers */ }
+  let where;
+  if (res.type === 'opaqueredirect' || location == null || location === '') where = 'a redirect whose target it did not show';
+  else {
+    let origin = null;
+    try { origin = mcpUrlOrigin(new URL(location, url).href); } catch { /* not a URL */ }
+    where = origin ? `a redirect to ${origin}` : 'a redirect to a location that is not an http(s) URL';
+  }
+  return `MCP HTTP ${res.status} on ${method}: the MCP answered with ${where} — Observogram does not follow redirects; register (or type) the URL it points at`;
+}
+
 // Build the client. Synchronous: the transport (possibly a promise) is
 // awaited inside send(), once per request, so every destructuring caller
 // (`const { rpc, callTool } = createMcpClient(…)`) keeps working.
@@ -177,7 +202,7 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
     const fetcher = t.fetchImpl || globalThis.fetch;
     const body = JSON.stringify(notification ? { jsonrpc: '2.0', method, params } : { jsonrpc: '2.0', id: nextId++, method, params });
     let res;
-    try { res = await fetcher(url, { method: 'POST', headers: reqHeaders, body, signal: AbortSignal.timeout(timeoutMs) }); }
+    try { res = await fetcher(url, { method: 'POST', headers: reqHeaders, body, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) }); }
     catch (e) {
       if (!t.fetchImpl) throw e;
       const err = new Error(redact(e?.message ?? e), { cause: e });
@@ -190,7 +215,14 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
       throw fault(`fetchImpl returned ${describe(res)}, not a Response`);
     }
 
-    // (5) the answer, exactly as before — except that what a fetchImpl
+    // (5) a redirect is refused before anything of the answer is read: only
+    // the origin of its Location reaches the error text.
+    if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
+      try { await res.body?.cancel?.(); } catch { /* nothing to release */ }
+      throw new Error(redirectError(res, url, method));
+    }
+
+    // (6) the answer, exactly as before — except that what a fetchImpl
     // RETURNS is hook text too (a non-OK body, an error message), so it is
     // redacted like its rejection; a native Response passes through as is.
     const wireText = (text) => (t.fetchImpl ? redact(text) : String(text));
