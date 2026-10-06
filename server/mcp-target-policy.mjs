@@ -1,6 +1,17 @@
-// server/mcp-target-policy.mjs — which MCP targets the server may reach, and
-// what it does with a resolved target beyond fetching it. SQL-free: the
-// org's endpoints and the variable owners come from server/store/*.
+// server/mcp-target-policy.mjs — who may name an MCP target, which targets
+// the server may reach, and what it does with a resolved target beyond
+// fetching it. SQL-free: the org's endpoints and the variable owners come
+// from server/store/*.
+//
+// The typed-URL rule (rebadge batch 3, RULINGS R2/R4): supplying a target URL
+// is the privilege, not which endpoint uses it. A typed `mcpUrl` needs
+// TYPED_MCP_URL_ROLE (admin, owner included) — one constant, against which
+// every principal that has a role is judged by rank: a session and the
+// bearer (an operator). The anonymous `local` caller of the open postures is
+// refused by kind, even on loopback: its role is admin, so a rank check
+// alone would let it type. Everyone else fetches from the org's registered
+// endpoints (mcpEndpointId). typedMcpUrlDecision answers it;
+// mcpTargetView tells the studio (GET /api/mcp-endpoints `policy`).
 //
 // The origin allowlist (rebadge batch 3, RULINGS R4, decision D2). Every MCP
 // target — a typed URL, a registered endpoint at use, and an endpoint at
@@ -35,15 +46,64 @@
 
 import { brandEnvFrom } from '../tools/lib/brand-env.mjs';
 import { mcpTransportLoaded } from '../tools/mcp-transport.mjs';
+import { authDisabled } from './auth.mjs';
+import { directLoopbackRequest, noSignInWay, rankOf, rankOfRole, requestPosture } from './authz.mjs';
 import { redactCredentials, stripMcpUrl } from './mcp-url.mjs';
 import { currentOrg } from './org-context.mjs';
 import { envNameOwnedBy, listMcpEndpoints, orgEnvPrefix } from './store/mcp-endpoints.mjs';
 
+export const TYPED_MCP_URL_ROLE = 'admin';            // R4, confirmed 2026-10-06 — the one constant
 export const MCP_ORIGINS_VAR = 'OBSERVOGRAM_MCP_ORIGINS';
 export const ORG_MCP_ORIGINS_NAME = 'MCP_ORIGINS';    // OBSERVOGRAM_ORG_<KEY>_MCP_ORIGINS
 
 // OBSERVOGRAM_ORG_<KEY>_MCP_ORIGINS for an org id.
 export const orgMcpOriginsVar = (org) => `${orgEnvPrefix(org)}${ORG_MCP_ORIGINS_NAME}`;
+
+// ---------- the caller ----------
+
+// Who the request acts as, and the facts the rules read — pure over the
+// request the org middleware stamped: { principal, org, port, posture,
+// direct, authOff }.
+export function mcpCallerOf(req) {
+  return {
+    principal: req.observogramPrincipal ?? null,
+    org: req.observogramOrg ?? null,
+    port: req.socket?.localPort ?? null,
+    posture: requestPosture(req),
+    direct: directLoopbackRequest(req),
+    authOff: authDisabled(),
+  };
+}
+
+const roleOf = (p) => (p.owner ? 'admin' : p.role);
+
+// May this caller supply a target URL? `role` defaults to the constant.
+// → null | { status: 403, denied: 'posture' | 'role', need?, error } — the
+// way out each text names works for the reader, in the posture they are in.
+export function typedMcpUrlDecision(caller, { role = TYPED_MCP_URL_ROLE } = {}) {
+  const p = caller?.principal ?? null;
+  const org = caller?.org ?? null;
+  const deny = (denied, error, need) => ({ status: 403, denied, ...(need ? { need } : {}), error });
+  if (p?.kind === 'local') {
+    if (caller.posture === 'open-exposed') {
+      return deny('posture', 'a typed MCP URL is refused on a server without sign-in, and MCP endpoints cannot be registered while it is exposed — add the first user with npm run users -- add <login> (it arms sign-in; the first user is an owner), or bind the server to loopback');
+    }
+    return deny('posture', `a typed MCP URL is refused on a server without sign-in, even from this machine — choose a registered MCP endpoint (mcpEndpointId), or register one in Settings → MCP endpoints from http://127.0.0.1:${caller.port ?? '<port>'} (a loopback MCP, or an origin listed in ${MCP_ORIGINS_VAR})`);
+  }
+  if (p?.kind === 'session' || p?.kind === 'bearer') {
+    if (rankOf(p) >= rankOfRole(role)) return null;
+    if (p.kind === 'bearer') {
+      const tail = caller.posture === 'token'
+        ? `; registering one needs a signed-in admin — ${noSignInWay(caller)}`
+        : `; an admin of '${org}' registers a new one in Settings → MCP endpoints`;
+      return deny('role', `the bearer token acts as an operator: it fetches from the org's registered MCP endpoints only — send mcpEndpointId (GET /api/mcp-endpoints lists them)${tail}`, role);
+    }
+    return deny('role', `a typed MCP URL needs the ${role} role in org '${org}' (you are ${roleOf(p)}) — choose one of the org's registered MCP endpoints (mcpEndpointId; GET /api/mcp-endpoints lists them), or ask an admin of ${org} to register this one in Settings → MCP endpoints`, role);
+  }
+  // The token posture's anonymous viewer never reaches a fetching route
+  // (each is operator class); no principal at all fails closed.
+  return deny('role', `a typed MCP URL needs a signed-in ${role}; ${noSignInWay(caller ?? {})}`, role);
+}
 
 // ---------- origins ----------
 
@@ -205,6 +265,51 @@ export function mcpOriginDecision(db, url, { use, credential = 'none', caller = 
     return refuse(`${origin} is not an origin this org's MCP endpoints use — an admin registers the endpoint in Settings → MCP endpoints, or the server's operator lists the origin in ${ORIGINS_WAY(org)}`);
   }
   return null;
+}
+
+// ---------- what the studio is told ----------
+
+// The allowlist as one reader may see it: its own org's only. `listed` —
+// a list applies; `origins` — its origins, sorted (null: any origin, `*`).
+function originsView(db, org) {
+  const list = mcpOriginList(db, org);
+  if (!list.set) return { listed: false, origins: [] };
+  return { listed: true, origins: list.any ? null : [...list.origins].sort() };
+}
+
+// May this caller register an MCP endpoint (POST /api/mcp-endpoints, admin
+// class, direct and closed when exposed without sign-in)? null | the
+// reason, naming the way out for this reader.
+function registerRefusal(caller) {
+  const p = caller?.principal ?? null;
+  const org = caller?.org ?? null;
+  if (p?.kind === 'local') {
+    if (caller.posture === 'open-exposed') return 'MCP endpoints cannot be registered on a server without sign-in while it is exposed — add the first user with npm run users -- add <login> (it arms sign-in; the first user is an owner), or bind the server to loopback';
+    if (!caller.direct) return `on a server without sign-in MCP endpoints are registered only from this machine — open the studio at http://127.0.0.1:${caller.port ?? '<port>'}`;
+    return null;
+  }
+  if (p?.kind === 'session') {
+    if (rankOf(p) >= rankOfRole('admin')) return null;
+    return `registering an MCP endpoint needs the admin role in org '${org}' (you are ${roleOf(p)}) — ask an admin of ${org}`;
+  }
+  if (p?.kind === 'bearer') {
+    return `the bearer token acts as an operator and never registers an MCP endpoint — a signed-in admin of '${org}' registers it in Settings → MCP endpoints${caller.posture === 'token' ? `; ${noSignInWay(caller)}` : ''}`;
+  }
+  return `anonymous callers are viewers here; registering an MCP endpoint needs a signed-in admin; ${noSignInWay(caller ?? {})}`;
+}
+
+// What GET /api/mcp-endpoints tells the studio about this caller:
+// { typed: { allowed, why, listed, origins }, register: { allowed, why,
+// listed, origins } } — `why` the refusal's sentence (null when allowed),
+// `listed`/`origins` the reader's own org's allowlist (originsView).
+export function mcpTargetView(db, caller) {
+  const typedRefusal = typedMcpUrlDecision(caller);
+  const register = registerRefusal(caller);
+  const origins = originsView(db, caller?.org ?? currentOrg());
+  return {
+    typed: { allowed: typedRefusal === null, why: typedRefusal?.error ?? null, ...origins },
+    register: { allowed: register === null, why: register, ...origins },
+  };
 }
 
 // ---------- redaction ----------

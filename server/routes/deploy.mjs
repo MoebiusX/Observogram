@@ -34,7 +34,7 @@ import {
   newDeployId, captureDeploySnapshot, deployAuditRow,
 } from '../deploy-helpers.mjs';
 import { auditAfter, actorForRecord, bounded, finite } from '../audit-after.mjs';
-import { mcpRefusalBody, redactTarget } from '../mcp-target-policy.mjs';
+import { mcpCallerOf, mcpRefusalBody, redactTarget } from '../mcp-target-policy.mjs';
 import { resolveMcpTarget } from '../service-admin.mjs';
 import { currentStore } from '../store/db.mjs';
 import { brandEnv } from '../../tools/lib/brand-env.mjs';
@@ -213,7 +213,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     const b = req.body || {};
     // mcpUrl, or the org's MCP endpoint by mcpEndpointId (its URL only: a
     // write token is the request's, never a stored variable's).
-    const target = resolveMcpTarget(currentStore(), b, { forWrite: true });
+    const target = resolveMcpTarget(currentStore(), b, { forWrite: true, caller: mcpCallerOf(req), typedRule: 'any' });
     if (target.status) return res.status(target.status).json(mcpRefusalBody(target));
     res.locals.mcpTarget = target;   // hookFaultTo502 redacts with it
     const { mcpUrl, safeMcpUrl, mcpAuth } = target;
@@ -332,7 +332,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     const items = Array.isArray(body.items) ? body.items : null;
     const env = readEnv(req.query);
 
-    const target = resolveMcpTarget(currentStore(), body, { forWrite: true });
+    const target = resolveMcpTarget(currentStore(), body, { forWrite: true, caller: mcpCallerOf(req), typedRule: 'any' });
     if (target.status) return res.status(target.status).json(mcpRefusalBody(target));
     res.locals.mcpTarget = target;   // hookFaultTo502 redacts with it
     const { mcpUrl, safeMcpUrl, mcpAuth } = target;
@@ -537,7 +537,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     const dashboardId = typeof req.query.dashboardId === 'string' ? req.query.dashboardId : undefined;
     // mcpUrl, or the org's MCP endpoint by mcpEndpointId (its URL only; the
     // write token stays the request's mcpAuth).
-    const mcp = resolveMcpTarget(currentStore(), body, { forWrite: true });
+    const mcp = resolveMcpTarget(currentStore(), body, { forWrite: true, caller: mcpCallerOf(req), typedRule: 'any' });
     if (mcp.status) return res.status(mcp.status).json(mcpRefusalBody(mcp));
     res.locals.mcpTarget = mcp;   // hookFaultTo502 redacts with it
     const { mcpUrl, safeMcpUrl, mcpAuth } = mcp;

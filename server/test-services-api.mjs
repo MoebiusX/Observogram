@@ -560,6 +560,26 @@ test('GET /api/mcp-endpoints by rank: the url and the variable to an operator an
     const { json } = await ok(K, who, '/api/mcp-endpoints');
     assert.deepEqual(json.endpoints.map((e) => [e.name, e.url, e.readTokenEnv]), [['prod-mcp', MCP_URL, ACME_TOKEN], ['staging-mcp', 'http://mcp-staging.acme.test:8080/mcp', null]], `${who}: the url and the variable`);
   }
+  // `policy`: what each reader may do with a target — a typed URL and a
+  // registration are an admin's (olive is an owner); the reader's own org's list.
+  const LISTED = { listed: true, origins: SUITE_ORIGINS.split(',').sort() };
+  const policyOf = async (who) => (await ok(K, who, '/api/mcp-endpoints')).json.policy;
+  for (const who of ['ada', 'olive']) {
+    assert.deepEqual(await policyOf(who), { typed: { allowed: true, why: null, ...LISTED }, register: { allowed: true, why: null, ...LISTED } }, `${who}: types and registers`);
+  }
+  assert.deepEqual(await policyOf('oscar'), {
+    typed: { allowed: false, why: "a typed MCP URL needs the admin role in org 'acme' (you are operator) — choose one of the org's registered MCP endpoints (mcpEndpointId; GET /api/mcp-endpoints lists them), or ask an admin of acme to register this one in Settings → MCP endpoints", ...LISTED },
+    register: { allowed: false, why: "registering an MCP endpoint needs the admin role in org 'acme' (you are operator) — ask an admin of acme", ...LISTED },
+  }, 'oscar: the list only');
+  const veraPolicy = await policyOf('vera');
+  assert.deepEqual([veraPolicy.typed.allowed, veraPolicy.register.allowed, veraPolicy.register.why], [false, false, "registering an MCP endpoint needs the admin role in org 'acme' (you are viewer) — ask an admin of acme"]);
+  process.env.OBSERVOGRAM_ORG_BRAVO_MCP_ORIGINS = 'https://bravo-only.test';
+  try {
+    assert.deepEqual((await policyOf('ada')).typed.origins, LISTED.origins, "acme's policy never shows bravo's list");
+    assert.ok((await policyOf('bob')).typed.origins.includes('https://bravo-only.test'), "bravo's shows its own");
+  } finally {
+    delete process.env.OBSERVOGRAM_ORG_BRAVO_MCP_ORIGINS;
+  }
   // bob, bravo's admin: his org's list; acme's ids are not his to change.
   assert.deepEqual((await ok(K, 'bob', '/api/mcp-endpoints')).json.endpoints, []);
   const bravo = await ok('POST /api/mcp-endpoints', 'bob', '/api/mcp-endpoints', { name: 'bravo-mcp', url: 'https://mcp.bravo.test/mcp', readTokenEnv: 'OBSERVOGRAM_ORG_BRAVO_TOKEN' }, 201);
@@ -1249,6 +1269,71 @@ test('another org reads none of it: bob (bravo) lists no service and every acme 
   await refused('GET /api/environments/:id', 'bob', `/api/environments/${ids.prod}`, 404, `no environment ${ids.prod}`);
   await refused('PATCH /api/services/:id', 'bob', `/api/services/${ids.checkout}`, { tier: 'tier-1' }, 404, `no service ${ids.checkout}`);
   await refused('DELETE /api/services/:id', 'bob', `/api/services/${ids.checkout}`, 404, `no service ${ids.checkout}`);
+});
+
+// A typed MCP URL is an admin's (R4, server/mcp-target-policy.mjs): oscar
+// is refused before any check of the URL itself; ada's typed URL meets the
+// rules the routes always applied — the scheme, the parse, ALLOW_LOCAL_MCP=0
+// and the credential hygiene (a ?token= is dropped from every persisted form
+// and said so) — moved here from server/test-smoke.mjs, whose caller (the
+// anonymous local one) may not type at all.
+test('a typed MCP URL needs the admin role: oscar (operator) is refused 403 role at the draft and the refresh, nothing sent; ada\'s typed URL meets the scheme, parse and ALLOW_LOCAL_MCP=0 rules (400) and the credential hygiene — the dropped ?token= named, the safe mcp.url in the draft, the refresh answer, its row and the live file', async () => {
+  const { startFakeMcp } = await import('./fixtures/fake-mcp.mjs');
+  const fake = await startFakeMcp(['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines'], (name) => {
+    if (name === 'system_health') return { services: [] };
+    if (name === 'system_topology') return { dependencies: [] };
+    return {};
+  });
+  try {
+    const withToken = `${fake.url}?token=abc&tier=x`;
+    const ROLE = "a typed MCP URL needs the admin role in org 'acme' (you are operator) — choose one of the org's registered MCP endpoints (mcpEndpointId; GET /api/mcp-endpoints lists them), or ask an admin of acme to register this one in Settings → MCP endpoints";
+    for (const key of ['POST /api/draft-from-mcp', 'POST /api/refresh-live']) {
+      const path = routeEntry(key).path;
+      await denied(key, 'oscar', path, { mcpUrl: withToken }, 'role', ROLE);
+      await denied(key, 'oscar', path, { mcpUrl: 'file:///etc/passwd' }, 'role', ROLE);
+    }
+    assert.equal(fake.authHeaders.length, 0, 'nothing reached the MCP');
+    // ada: the URL's own rules, each a 400 before any fetch
+    for (const [key, path, body] of [
+      ['POST /api/draft-from-mcp', '/api/draft-from-mcp', { mcpUrl: 'gopher://127.0.0.1:70/mcp' }],
+      ['POST /api/refresh-live', '/api/refresh-live', { mcpUrl: 'file://C:/secrets' }],
+    ]) await refused(key, 'ada', path, body, 400, `mcpUrl must be http or https; got scheme '${new URL(body.mcpUrl).protocol.slice(0, -1)}'`);
+    const unparseable = await call('ada', 'POST', '/api/refresh-live', { mcpUrl: 'http://user:hunter2@' });
+    assert.equal(unparseable.status, 400);
+    assert.ok(!unparseable.text.includes('hunter2'), `the unparseable URL's error redacts its credentials: ${unparseable.text}`);
+    await refused('POST /api/refresh-live', 'ada', '/api/refresh-live', { mcpUrl: 'https://alice:pw@mcp.acme.test/mcp' }, 400, 'a typed MCP URL may not carry user:password — send the token as mcpAuth');
+    process.env.OBSERVOGRAM_ALLOW_LOCAL_MCP = '0';
+    try {
+      for (const blocked of ['http://127.0.0.1:9999/mcp', 'http://localhost:9999/mcp', 'http://169.254.169.254/latest/meta-data/', 'http://[::1]:9999/mcp', 'http://0x7f000001:9999/mcp']) {
+        const r = await call('ada', 'POST', '/api/draft-from-mcp', { mcpUrl: blocked });
+        assert.equal(r.status, 400, `ALLOW_LOCAL_MCP=0 blocks ${blocked}: ${r.text.slice(0, 200)}`);
+        assert.match(r.json.error, /which OBSERVOGRAM_ALLOW_LOCAL_MCP=0 forbids$/);
+      }
+    } finally {
+      delete process.env.OBSERVOGRAM_ALLOW_LOCAL_MCP;
+    }
+    assert.equal(fake.authHeaders.length, 0, 'still nothing reached the MCP');
+    // the hygiene: a ?token= never persisted, and said so
+    const draft = await call('ada', 'POST', '/api/draft-from-mcp', { mcpUrl: withToken });
+    assert.equal(draft.status, 200, draft.text.slice(0, 300));
+    assert.equal(draft.json.summary.mcpUrl, `${fake.url}?tier=x`, 'draft-from-mcp: summary.mcpUrl is the safe form (no token parameter)');
+    assert.equal(draft.json.canonical.metadata.annotations['mcp.url'], `${fake.url}?tier=x`);
+    assert.ok(!draft.json.canonicalYaml.includes('token=abc'), "the drafted pack's YAML keeps no token");
+    assert.ok((draft.json.summary.warnings || []).some((w) => /^not kept in the draft: the "token" parameter of the MCP URL/.test(w)), 'a summary.warnings entry names the dropped parameter');
+    assert.equal(draft.json.mcpEndpoint, null, 'a typed URL names no record');
+    const seq = seqNow();
+    const refreshed = await call('ada', 'POST', '/api/refresh-live', { mcpUrl: withToken });
+    assert.equal(refreshed.status, 200, refreshed.text.slice(0, 300));
+    assert.match(refreshed.json.note || '', /^not kept in the live pack: the "token" parameter of the MCP URL, which looks like a credential — put a token in the auth field instead$/);
+    assert.deepEqual([refreshed.json.annotations['mcp.url'], refreshed.json.mcpEndpoint], [`${fake.url}?tier=x`, null]);
+    const live = readFileSync(join(WORKSPACE, 'orgs', 'acme', 'live', 'production-live.pack.yaml'), 'utf8');
+    assert.ok(/mcp\.url: "?[^\n]*\?tier=x"?\n/.test(live) && !live.includes('token=abc'), `the live file keeps the safe URL: ${live.slice(0, 300)}`);
+    const rows = rowsAfter(seq);
+    assert.deepEqual(rows.map(([action, actor, org, target, detail]) => [action, actor, org, target, detail.mcpEndpoint]), [['live.refresh', 'ada', 'acme', fake.origin, null]], 'one live.refresh row: the origin, no record');
+    assert.ok(!JSON.stringify(rows).includes('token=abc'));
+  } finally {
+    await fake.close();
+  }
 });
 
 test('DELETE /api/uploads drops the packs (one pack.clear row) and keeps the services, now without packs', async () => {

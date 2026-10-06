@@ -29,7 +29,7 @@ import { normalizeServiceKey } from '../tools/lib/service-keys.mjs';
 import { mcpUrlOrigin } from '../tools/lib/mcp-url-safety.mjs';
 import { rankOfRole } from './authz.mjs';
 import { AdminRefusal } from './identity-admin.mjs';
-import { credentialThatRides, mcpOriginDecision } from './mcp-target-policy.mjs';
+import { credentialThatRides, mcpOriginDecision, typedMcpUrlDecision } from './mcp-target-policy.mjs';
 import { validateMcpUrl } from './mcp-url.mjs';
 import { currentOrg } from './org-context.mjs';
 import { atomic } from './store/db.mjs';
@@ -85,6 +85,7 @@ export const WAYS = Object.freeze({
   neitherTarget: 'mcpUrl or mcpEndpointId required in JSON body',
   mcpEndpointIdShape: 'mcpEndpointId must be a positive integer',
   anotherVariable: (id) => ` — PATCH /api/mcp-endpoints/${id} names another variable`,
+  typedUserinfo: 'a typed MCP URL may not carry user:password — send the token as mcpAuth',
   tokenUnset: (ep) => `MCP endpoint "${ep.name}" reads its token from ${ep.readTokenEnv}, which is not set in the server's environment — set it on the server (the k8s Deployment's env), or send mcpAuth with this request`,
 });
 
@@ -447,19 +448,32 @@ export function serviceTierFor(db, packId, envName = null) {
 
 const MISSING = Symbol('missing');
 
+// Does a typed URL carry user:password? (native fetch cannot send it, and
+// would repeat it in its error.) An unparseable URL is validateMcpUrl's.
+function hasUserinfo(raw) {
+  try { const u = new URL(raw); return !!(u.username || u.password); } catch { return false; }
+}
+
 // How a route reads its MCP target from the body: `mcpUrl` as today, or
 // `mcpEndpointId` — the org's endpoint record, whose URL is fetched and
 // whose READ token (forWrite: false — refresh-live, draft-from-mcp) comes
 // from the named variable when the request sends no mcpAuth, after the
 // variable's ownership is checked again against the orgs that exist now.
 // With forWrite (deploy, rollback) the record's URL only: write tokens
-// stay per-request pass-through. The SSRF rule (validateMcpUrl) runs
-// next, then the origin allowlist (server/mcp-target-policy.mjs: no
-// credential leaves for an unlisted origin but loopback). Returns
-// { mcpUrl, safeMcpUrl, mcpAuth, endpoint }, or { status: 400, error } /
-// { status: 403, denied: 'origin', error } (mcpRefusalBody answers it);
-// the token's value is in mcpAuth alone.
-export function resolveMcpTarget(db, body = {}, { forWrite = false } = {}) {
+// stay per-request pass-through. `caller` (mcpCallerOf(req)) is required —
+// a call site that names none throws, fail closed. A typed URL with
+// userinfo is a 400; then, under typedRule 'r4' (the default), the
+// typed-URL rule (typedMcpUrlDecision: admin and above; never the
+// anonymous local caller); 'any' lets every caller the route class
+// admitted type one (the deploy routes, until they follow R4). The SSRF
+// rule (validateMcpUrl) runs next, then the origin allowlist
+// (server/mcp-target-policy.mjs: no credential leaves for an unlisted
+// origin but loopback). Returns { mcpUrl, safeMcpUrl, mcpAuth, endpoint },
+// or { status: 400, error } / { status: 403, denied, error }
+// (mcpRefusalBody answers it); the token's value is in mcpAuth alone.
+export function resolveMcpTarget(db, body = {}, { forWrite = false, caller, typedRule = 'r4' } = {}) {
+  if (!caller || typeof caller !== 'object') throw new TypeError('resolveMcpTarget: the caller (mcpCallerOf(req)) is required');
+  if (typedRule !== 'r4' && typedRule !== 'any') throw new TypeError(`resolveMcpTarget: typedRule is 'r4' or 'any', not ${JSON.stringify(typedRule)}`);
   const bad = (error) => ({ status: 400, error });
   // The body's fields as the routes read them: a trimmed URL or null, a
   // non-empty token or null.
@@ -492,6 +506,11 @@ export function resolveMcpTarget(db, body = {}, { forWrite = false } = {}) {
     endpoint = { id: ep.id, name: ep.name };
   } else {
     if (!sentUrl) return bad(WAYS.neitherTarget);
+    if (hasUserinfo(sentUrl)) return bad(WAYS.typedUserinfo);
+    if (typedRule === 'r4') {
+      const refusal = typedMcpUrlDecision(caller);
+      if (refusal) return refusal;
+    }
     mcpUrl = sentUrl;
     mcpAuth = sentAuth;
   }
@@ -501,7 +520,7 @@ export function resolveMcpTarget(db, body = {}, { forWrite = false } = {}) {
   // strongest credential that rides — the endpoint's variable, the
   // request's mcpAuth, one in a typed URL, a loaded transport hook.
   const credential = credentialThatRides({ serverToken: !!serverVar, requestToken: !!sentAuth, url: endpoint ? null : mcpUrl });
-  const refusal = mcpOriginDecision(db, mcpUrl, { use: endpoint ? 'registered' : 'typed', credential, tokenVar: serverVar });
+  const refusal = mcpOriginDecision(db, mcpUrl, { use: endpoint ? 'registered' : 'typed', credential, caller, tokenVar: serverVar });
   if (refusal) return refusal;
   return { mcpUrl, safeMcpUrl: safeUrl, mcpAuth, endpoint };
 }

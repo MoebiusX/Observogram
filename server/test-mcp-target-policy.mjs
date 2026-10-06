@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 /**
  * server/test-mcp-target-policy.mjs — server/mcp-target-policy.mjs, in
- * process: the origin allowlist (parsing, loopback, the per-org list and
- * its owner, the rule per use and credential) over a temp store, and
+ * process: the typed-URL rule (TYPED_MCP_URL_ROLE, by rank for sessions and
+ * the bearer, by kind for the anonymous local caller) and what
+ * GET /api/mcp-endpoints says of it, the origin allowlist (parsing,
+ * loopback, the per-org list and its owner, the rule per use and
+ * credential) over a temp store, and
  * redactTarget, the route-level backstop every MCP route runs its 502
  * bodies, deploy-record errors and log lines through. The rule at the
  * routes' resolver is server/test-service-admin.mjs's.
@@ -24,7 +27,7 @@ const { tmpdir } = await import('node:os');
 const { join } = await import('node:path');
 const {
   redactTarget, parseOriginList, isLoopbackOrigin, originOf, mcpOriginList, mcpOriginDecision, credentialThatRides, mcpRefusalBody,
-  MCP_ORIGINS_VAR, orgMcpOriginsVar,
+  MCP_ORIGINS_VAR, orgMcpOriginsVar, TYPED_MCP_URL_ROLE, typedMcpUrlDecision, mcpCallerOf, mcpTargetView,
 } = await import('./mcp-target-policy.mjs');
 const { closeStore, openStore } = await import('./store/db.mjs');
 const { runWithOrg } = await import('./tenancy.mjs');
@@ -39,7 +42,7 @@ async function freshStore(...orgIds) {
   const path = join(d, 'observogram.db');
   const db = await openStore({ path });
   for (const id of orgIds) orgs.createOrg(db, 'system', { id, name: id });
-  return { db, close: () => closeStore(path) };
+  return { db, path, close: () => closeStore(path) };
 }
 
 // stderr lines written while fn runs.
@@ -195,6 +198,103 @@ test('mcpOriginDecision: every row — loopback passes; a list set admits its or
       assert.deepEqual(mcpRefusalBody({ status: 400, error: 'bad' }), { ok: false, error: 'bad' });
     });
   } finally {
+    close();
+  }
+});
+
+// ---------- the typed-URL rule ----------
+
+const SESSION = (role, owner = false) => ({ kind: 'session', actor: role, role, owner });
+const BEARER = { kind: 'bearer', actor: 'ci-bot', role: 'operator', owner: false };
+const LOCAL = { kind: 'local', actor: 'local', role: 'admin', owner: true };
+const callerOf = (principal, extra = {}) => ({ principal, org: 'acme', port: 8123, posture: 'identity', direct: false, authOff: false, ...extra });
+
+test('typedMcpUrlDecision: TYPED_MCP_URL_ROLE is admin — an admin or an owner may type; an operator, a viewer and the bearer are refused by rank, each told the way that works in its posture; the anonymous local caller by kind, even on loopback', () => {
+  assert.equal(TYPED_MCP_URL_ROLE, 'admin');
+  assert.equal(typedMcpUrlDecision(callerOf(SESSION('admin'))), null);
+  assert.equal(typedMcpUrlDecision(callerOf(SESSION('viewer', true))), null, 'an owner is an admin in every org');
+  assert.deepEqual(typedMcpUrlDecision(callerOf(SESSION('operator'))), {
+    status: 403, denied: 'role', need: 'admin',
+    error: "a typed MCP URL needs the admin role in org 'acme' (you are operator) — choose one of the org's registered MCP endpoints (mcpEndpointId; GET /api/mcp-endpoints lists them), or ask an admin of acme to register this one in Settings → MCP endpoints",
+  });
+  assert.match(typedMcpUrlDecision(callerOf(SESSION('viewer'))).error, /^a typed MCP URL needs the admin role in org 'acme' \(you are viewer\)/);
+  assert.deepEqual(typedMcpUrlDecision(callerOf(BEARER)), {
+    status: 403, denied: 'role', need: 'admin',
+    error: "the bearer token acts as an operator: it fetches from the org's registered MCP endpoints only — send mcpEndpointId (GET /api/mcp-endpoints lists them); an admin of 'acme' registers a new one in Settings → MCP endpoints",
+  });
+  assert.equal(typedMcpUrlDecision(callerOf(BEARER, { posture: 'token' })).error,
+    "the bearer token acts as an operator: it fetches from the org's registered MCP endpoints only — send mcpEndpointId (GET /api/mcp-endpoints lists them); registering one needs a signed-in admin — this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC");
+  assert.match(typedMcpUrlDecision(callerOf(BEARER, { posture: 'token', authOff: true })).error, /restart it without OBSERVOGRAM_AUTH=off once a user exists \(npm run users -- add <login>\)/);
+  assert.deepEqual(typedMcpUrlDecision(callerOf(LOCAL, { posture: 'open-loopback', direct: true })), {
+    status: 403, denied: 'posture',
+    error: 'a typed MCP URL is refused on a server without sign-in, even from this machine — choose a registered MCP endpoint (mcpEndpointId), or register one in Settings → MCP endpoints from http://127.0.0.1:8123 (a loopback MCP, or an origin listed in OBSERVOGRAM_MCP_ORIGINS)',
+  });
+  assert.deepEqual(typedMcpUrlDecision(callerOf(LOCAL, { posture: 'open-exposed' })), {
+    status: 403, denied: 'posture',
+    error: 'a typed MCP URL is refused on a server without sign-in, and MCP endpoints cannot be registered while it is exposed — add the first user with npm run users -- add <login> (it arms sign-in; the first user is an owner), or bind the server to loopback',
+  });
+  for (const c of [callerOf({ kind: 'anonymous', actor: null, role: 'viewer', owner: false }, { posture: 'token' }), callerOf(null), null]) {
+    assert.equal(typedMcpUrlDecision(c)?.denied, 'role', 'fail closed');
+  }
+});
+
+test('typedMcpUrlDecision: the constant flips in one place — with role operator a session operator and the bearer may type, a viewer may not, and local still may not', () => {
+  const flip = { role: 'operator' };
+  assert.equal(typedMcpUrlDecision(callerOf(SESSION('operator')), flip), null);
+  assert.equal(typedMcpUrlDecision(callerOf(BEARER), flip), null, 'the bearer is judged by rank, never refused by kind');
+  assert.equal(typedMcpUrlDecision(callerOf(SESSION('viewer')), flip).need, 'operator');
+  assert.equal(typedMcpUrlDecision(callerOf(LOCAL, { posture: 'open-loopback', direct: true }), flip).denied, 'posture');
+});
+
+test('mcpCallerOf: the principal, the org, the port, the posture and the direct fact of the request the org middleware stamped', async () => {
+  // The posture reads the store (is sign-in armed?): a fresh one, no user.
+  const { path, close } = await freshStore('acme');
+  process.env.OBSERVOGRAM_DB = path;
+  try {
+    const req = {
+      observogramPrincipal: SESSION('admin'), observogramOrg: 'acme', observogramListen: { loopback: true, host: '127.0.0.1' },
+      socket: { localPort: 8123 }, headers: { host: '127.0.0.1:8123' },
+    };
+    const c = mcpCallerOf(req);
+    assert.deepEqual(c, { principal: SESSION('admin'), org: 'acme', port: 8123, posture: 'open-loopback', direct: true, authOff: false });
+    assert.equal(mcpCallerOf({ ...req, headers: { host: '127.0.0.1:8123', 'x-forwarded-for': '10.0.0.1' } }).direct, false);
+    assert.deepEqual(mcpCallerOf({ headers: {} }), { principal: null, org: null, port: null, posture: 'open-exposed', direct: false, authOff: false });
+  } finally {
+    delete process.env.OBSERVOGRAM_DB;
+    close();
+  }
+});
+
+test('mcpTargetView: what GET /api/mcp-endpoints says — typed and register, allowed or why, and only the reader\'s own org\'s list', async () => {
+  const { db, close } = await freshStore('acme', 'bravo');
+  const saved = process.env.OBSERVOGRAM_MCP_ORIGINS;
+  try {
+    const view = (p, extra) => mcpTargetView(db, callerOf(p, extra));
+    assert.deepEqual(view(SESSION('admin')), {
+      typed: { allowed: true, why: null, listed: false, origins: [] },
+      register: { allowed: true, why: null, listed: false, origins: [] },
+    });
+    const op = view(SESSION('operator'));
+    assert.deepEqual([op.typed.allowed, op.register.allowed], [false, false]);
+    assert.match(op.typed.why, /^a typed MCP URL needs the admin role in org 'acme' \(you are operator\)/);
+    assert.equal(op.register.why, "registering an MCP endpoint needs the admin role in org 'acme' (you are operator) — ask an admin of acme");
+    const bearer = view(BEARER, { posture: 'token' });
+    assert.deepEqual([bearer.typed.allowed, bearer.register.allowed], [false, false]);
+    assert.match(bearer.register.why, /never registers an MCP endpoint — a signed-in admin of 'acme' registers it in Settings → MCP endpoints; this server has no sign-in: add the first user with npm run users -- add <login>/);
+    const local = view(LOCAL, { posture: 'open-loopback', direct: true });
+    assert.deepEqual([local.typed.allowed, local.register.allowed, local.register.why], [false, true, null], 'local registers from this machine, never types');
+    assert.equal(view(LOCAL, { posture: 'open-loopback', direct: false }).register.why, 'on a server without sign-in MCP endpoints are registered only from this machine — open the studio at http://127.0.0.1:8123');
+    assert.match(view(LOCAL, { posture: 'open-exposed' }).register.why, /^MCP endpoints cannot be registered on a server without sign-in while it is exposed/);
+    assert.match(view({ kind: 'anonymous', actor: null, role: 'viewer', owner: false }, { posture: 'token' }).register.why, /^anonymous callers are viewers here/);
+    process.env.OBSERVOGRAM_MCP_ORIGINS = 'https://b.example,https://a.example';
+    process.env.OBSERVOGRAM_ORG_BRAVO_MCP_ORIGINS = 'https://bravo-only.example';
+    assert.deepEqual(view(SESSION('admin')).typed, { allowed: true, why: null, listed: true, origins: ['https://a.example', 'https://b.example'] }, "acme never sees bravo's list");
+    assert.deepEqual(mcpTargetView(db, callerOf(SESSION('admin'), { org: 'bravo' })).register.origins, ['https://a.example', 'https://b.example', 'https://bravo-only.example']);
+    process.env.OBSERVOGRAM_MCP_ORIGINS = '*';
+    assert.deepEqual(view(SESSION('viewer')).register, { allowed: false, why: "registering an MCP endpoint needs the admin role in org 'acme' (you are viewer) — ask an admin of acme", listed: true, origins: null });
+  } finally {
+    if (saved === undefined) delete process.env.OBSERVOGRAM_MCP_ORIGINS; else process.env.OBSERVOGRAM_MCP_ORIGINS = saved;
+    delete process.env.OBSERVOGRAM_ORG_BRAVO_MCP_ORIGINS;
     close();
   }
 });

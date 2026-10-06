@@ -126,6 +126,14 @@ test('a header hook reaches every MCP call of refresh-live, draft-from-mcp and d
   const s = await serve(ws, { env: { ...TOKEN, OBSERVOGRAM_TRANSPORT_HOOK: gateway } });
   try {
     const mcpEndpointId = await plantEndpoint(ws, fake.url);
+    // The bearer is an operator: a typed URL is refused (R4), the way in
+    // named for the token posture, nothing sent.
+    const typed = await post(s.base, '/api/refresh-live', { mcpUrl: fake.url });
+    assert.deepEqual([typed.status, await typed.json()], [403, {
+      ok: false, denied: 'role',
+      error: "the bearer token acts as an operator: it fetches from the org's registered MCP endpoints only — send mcpEndpointId (GET /api/mcp-endpoints lists them); registering one needs a signed-in admin — this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC",
+    }]);
+    assert.equal(fake.requests.length, 0, 'the refused typed URL sent nothing');
     const refresh = await post(s.base, '/api/refresh-live', { mcpEndpointId });
     assert.equal(refresh.status, 200, `refresh-live: ${await refresh.text()}`);
     assert.ok(fake.requests.length > 0 && fake.requests.every(r => r.headers['x-gateway'] === 'studio'), 'refresh-live: every request carries X-Gateway');

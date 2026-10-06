@@ -511,7 +511,7 @@ the server registers, and each route's first handler is its guard.
 |---|---|
 | `viewer` | every read (`GET`) in the org |
 | `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys, the live refresh, RESET, and the org's services and environments ([Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)) |
-| `admin` | the org's name, members and MCP endpoints as well ([the identity API](#the-identity-api), [Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)), and the org's audit (`GET /api/audit`, [The Audit](#the-audit)) |
+| `admin` | the org's name, members and MCP endpoints as well ([the identity API](#the-identity-api), [Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)), a typed MCP URL in a draft or a live refresh ([Fetch Live From MCP](#fetch-live-from-mcp); below admin, and without sign-in, only a registered endpoint), and the org's audit (`GET /api/audit`, [The Audit](#the-audit)) |
 | owner | a deployment-level flag, not an org role: an owner acts as `admin` in every org, plus users, orgs and the join role ([the identity API](#the-identity-api)) and the deployment's audit (`GET /api/audit?scope=all`) |
 
 The role is the membership **of the request's org** (`X-Observogram-Org`,
@@ -529,7 +529,8 @@ anything else (`member`, empty) → `operator`. Per posture:
   beyond loopback): the caller is `local`, an owner — every route, as
   before, but the identity API: on a loopback server it answers only a
   request sent straight to it, and beyond loopback it is closed (see
-  [The Identity API](#the-identity-api)).
+  [The Identity API](#the-identity-api)); and `local` never sends a typed MCP
+  URL — it fetches from registered endpoints ([Fetch Live From MCP](#fetch-live-from-mcp)).
 
 Every authorization refusal carries `denied` — `auth` (401: sign in),
 `csrf`, `org` (not a member of that org), `role` or `posture` — and a
@@ -789,7 +790,7 @@ org is never found (404, or 400 for `mcpEndpointId`).
 | `GET` | `/api/environments/:id` | viewer | — | `environment` and its `service` (`id`, `slug`, `name`, `tier`); `effectiveTier` is the environment's tier, else the service's |
 | `PATCH` | `/api/environments/:id` | operator | any of `name`, `tier`, `bindings`, `endpoints`, `mcpEndpointId` | `changed`; `"mcpEndpointId": null` unbinds |
 | `DELETE` | `/api/environments/:id` | operator | — | `deleted` |
-| `GET` | `/api/mcp-endpoints` | viewer | — | `endpoints`, by name: `id`, `name`, `origin`, `environments` (how many are checked through it), `createdAt`; `url` and `readTokenEnv` to an operator and above, `null` to a viewer |
+| `GET` | `/api/mcp-endpoints` | viewer | — | `endpoints`, by name: `id`, `name`, `origin`, `environments` (how many are checked through it), `createdAt`; `url` and `readTokenEnv` to an operator and above, `null` to a viewer; `policy`: what this reader may do — `typed` (send a typed `mcpUrl`) and `register` (register an endpoint), each `{ allowed, why, listed, origins }`, `why` the refusal's sentence, `listed`/`origins` the reader's own org's origin allowlist (`origins` `null`: any) |
 | `POST` | `/api/mcp-endpoints` | admin | `{ name, url, readTokenEnv? }` | an MCP endpoint record (201), the admin's own view with `url` and `readTokenEnv`; a name in use is 409 |
 | `PATCH` | `/api/mcp-endpoints/:id` | admin | any of `name`, `url`, `readTokenEnv` | `changed`; `"readTokenEnv": null` clears it; 404 `no MCP endpoint <id>` |
 | `DELETE` | `/api/mcp-endpoints/:id` | admin | — | `deleted` and `unbound`: the ids of the environments that were checked through it (they stay, with no MCP endpoint) |
@@ -849,7 +850,8 @@ with their URLs, and never changes an endpoint.
   (a catalogue or example pack, a service whose rows carry no tier) is
   graded at its own tier, `from: 'pack'`.
 - **An endpoint picked by id.** `POST /api/refresh-live` and
-  `POST /api/draft-from-mcp` take `mcpEndpointId` in place of `mcpUrl`;
+  `POST /api/draft-from-mcp` take `mcpEndpointId` in place of `mcpUrl` (a
+  typed `mcpUrl` there is an admin's — [Fetch Live From MCP](#fetch-live-from-mcp));
   the server uses the record's URL and, when the request sends no
   `mcpAuth`, reads the read token from the record's `readTokenEnv` at
   request time. The deploy and rollback routes take `mcpEndpointId` for the
@@ -1224,8 +1226,20 @@ written; the server refuses to start on a load failure — while network
 failures through it stay ordinary probe failures. Unset, nothing changes
 (`docs/MCP_INTEGRATION.md`, "Transport hook").
 
+**A typed MCP URL is an admin's.** Supplying the URL the server fetches is
+the privilege, not which endpoint it uses: a typed `mcpUrl` in
+`POST /api/draft-from-mcp` and `POST /api/refresh-live` needs the admin role
+in the org (an owner included). An operator, the bearer token and every caller
+without sign-in — the open postures' `local`, even on loopback — fetch from the
+org's registered endpoints only (`mcpEndpointId`), and are told the way that
+works for them (403 `role` or `posture`: an admin registers the endpoint in
+Settings → MCP endpoints; in the token posture, sign-in is armed first with
+`npm run users -- add <login>`). A typed URL may not carry `user:password` (400:
+send the token as `mcpAuth`). `GET /api/mcp-endpoints` says what the reader may
+do (`policy`). The deploy routes still take a typed URL from an operator.
+
 The studio's `POST /api/refresh-live` and `POST /api/draft-from-mcp` take
-either `mcpUrl` (with an optional `mcpAuth`, as before) or `mcpEndpointId`:
+either `mcpUrl` (an admin's, with an optional `mcpAuth`) or `mcpEndpointId`:
 one of the org's named MCP endpoints (`GET /api/mcp-endpoints`; an admin
 registers them with `POST /api/mcp-endpoints`). With an id the server uses the
 record's URL, and when the request sends no `mcpAuth` it reads the endpoint's
@@ -2512,7 +2526,7 @@ open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
 | `POST` | `/api/library/register` | `{ canonical, source? }` → the upload registry as `/api/validate` registers (`registered { id, source }`, `adapted`, `conformance`, `summary`; the source defaults to `library:<entries>@<tier>` for a library-built pack, `metadata.name` otherwise) — VERIFY's "Open pack in Discover" |
 | `POST` | `/api/crawl` | Draft a pack from uploaded repo files |
 | `POST` | `/api/crawl-github` | Draft a pack from a GitHub URL |
-| `POST` | `/api/draft-from-mcp` | Draft a live pack from an MCP endpoint: `mcpUrl` (and `mcpAuth`), or `mcpEndpointId` — one of the org's MCP endpoint records, its read token from the variable the record names when the request sends none; the answer's `mcpEndpoint` says which |
+| `POST` | `/api/draft-from-mcp` | Draft a live pack from an MCP endpoint: `mcpEndpointId` — one of the org's MCP endpoint records, its read token from the variable the record names when the request sends none — or a typed `mcpUrl` (and `mcpAuth`), which needs the admin role; the answer's `mcpEndpoint` says which |
 | `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts (`mcpUrl` or `mcpEndpointId` for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.bulk` |
 | `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target (`mcpUrl` or `mcpEndpointId` for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.run` |
 | `GET` | `/api/deploys?pack=&limit=` | The org's deploy records from `deploys.jsonl`, newest first, the latest verify merged in; `actor` is the deployer's login (an OIDC deployer as `<issuerKey>#<sub>`), the bearer's label or `local` |
@@ -2524,7 +2538,7 @@ open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
 | `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule) |
 | `POST` | `/api/journeys/:name/run` | Run a saved journey now; an audit row: `journey.run`, on a failed run too |
 | `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file; an audit row: `journey.capture` |
-| `POST` | `/api/refresh-live` | Fetch the org's live pack from an MCP endpoint (`mcpUrl` or `mcpEndpointId`); an audit row: `live.refresh` |
+| `POST` | `/api/refresh-live` | Fetch the org's live pack from an MCP endpoint (`mcpEndpointId`, or a typed `mcpUrl`: the admin role); an audit row: `live.refresh` |
 | `GET` | `/api/services` | The org's service records, by slug, each with its environments (their MCP endpoint as `{ id, name, origin }`) and the packs linked to it (`id`, `label`, `source`, `role`) |
 | `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack) |
 | `GET` | `/api/services/:id` | One service record with its environments and packs |
@@ -2540,7 +2554,7 @@ open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
 | `DELETE` | `/api/packs/:id/verdicts/:artefact` | Clears it (the artefact is unreviewed again) → `{ ok, cleared }`; an audit row: `verdict.clear` |
 | `POST` | `/api/services/:id/waivers` | Waives a conformance finding on the service (201): `{ ruleId, artefactId?, reason, expiresAt }` → `{ ok, waiver }` — `ruleId` a rubric clause (`GET /api/maturity-rubric`), `artefactId` a canonical symbol (`slos.<id>`, `slis.<id>`) of one of the four per-item clauses or omitted for the whole clause, `expiresAt` after now and at most 366 days ahead; the `author` is the caller; one active waiver per `(ruleId, artefactId)` (409 names it); an audit row: `waiver.create` |
 | `POST` | `/api/waivers/:id/revoke` | Revokes it (`{ reason? }` → `{ ok, waiver }`, state `revoked`; the row stays as history); a second revoke is 409; an audit row: `waiver.revoke` |
-| `GET` | `/api/mcp-endpoints` | The org's MCP endpoint records, by name: `id`, `name`, `origin`, how many environments are checked through each; `url` and `readTokenEnv` to operators and above, `null` to a viewer |
+| `GET` | `/api/mcp-endpoints` | The org's MCP endpoint records, by name: `id`, `name`, `origin`, how many environments are checked through each; `url` and `readTokenEnv` to operators and above, `null` to a viewer; `policy` says whether this reader may send a typed MCP URL or register an endpoint, and the org's origin allowlist |
 | `POST` | `/api/mcp-endpoints` | An MCP endpoint record (201): `{ name, url, readTokenEnv? }` — the URL carries no credential (a query parameter named like one is refused by name), `readTokenEnv` names a variable of this org, `OBSERVOGRAM_ORG_<ORG>_<NAME>` |
 | `PATCH` | `/api/mcp-endpoints/:id` | Changes `name`, `url`, `readTokenEnv` (`null` clears it; `changed` lists what differed) |
 | `DELETE` | `/api/mcp-endpoints/:id` | Removes an MCP endpoint record; the environments checked through it stay, unbound (`unbound` lists their ids) |

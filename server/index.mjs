@@ -66,7 +66,7 @@ import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
 import { describeProxyAuth } from './auth-proxy.mjs';
 import { redactCredentials, stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
-import { mcpRefusalBody, redactTarget } from './mcp-target-policy.mjs';
+import { mcpCallerOf, mcpRefusalBody, redactTarget } from './mcp-target-policy.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
 import { auditAfter, actorForRecord, bounded, finite } from './audit-after.mjs';
@@ -1267,7 +1267,7 @@ app.post('/api/draft-from-mcp', authorize('POST /api/draft-from-mcp'), async (re
   const packName = typeof body.packName === 'string' && body.packName.trim()
     ? body.packName.trim()
     : null;
-  const target = resolveMcpTarget(currentStore(), body, { forWrite: false });
+  const target = resolveMcpTarget(currentStore(), body, { forWrite: false, caller: mcpCallerOf(req) });
   if (target.status) return res.status(target.status).json(mcpRefusalBody(target));
   const { mcpUrl, safeMcpUrl, mcpAuth, endpoint: mcpEndpoint } = target;
   // The draft is a registered pack every viewer of the org reads: it keeps
@@ -1498,7 +1498,7 @@ function banner(pack) {
 // the live pack keeps the safe URL, never a token.
 app.post('/api/refresh-live', authorize('POST /api/refresh-live'), async (req, res) => {
   const body = req.body || {};
-  const target = resolveMcpTarget(currentStore(), body, { forWrite: false });
+  const target = resolveMcpTarget(currentStore(), body, { forWrite: false, caller: mcpCallerOf(req) });
   if (target.status) return res.status(target.status).json(mcpRefusalBody(target));
   const { mcpUrl, safeMcpUrl, mcpAuth, endpoint: mcpEndpoint } = target;
   const { dropped } = stripMcpUrl(mcpUrl);

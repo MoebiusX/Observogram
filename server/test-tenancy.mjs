@@ -307,6 +307,10 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   j = await r.json();
   assert(r.status === 400 && j.error === `https://${other}.mcp.test is not in OBSERVOGRAM_ORG_${org.toUpperCase()}_MCP_ORIGINS — the server's operator adds it there (comma-separated origins, e.g. https://mcp.example.com), or register an endpoint at a listed origin`
     && rowsAfter(seq).length === 0, `${other}'s listed MCP origin is not ${org}'s: registering it in ${org} is refused (400, no row)`, [r.status, j]);
+  r = await fetch(`${root}/api/mcp-endpoints`, { headers: h });
+  j = await r.json();
+  assert(JSON.stringify(j.policy?.typed?.origins) === JSON.stringify([`https://${org}.mcp.test`]) && JSON.stringify(j.policy?.register?.origins) === JSON.stringify([`https://${org}.mcp.test`]),
+    `GET /api/mcp-endpoints in ${org}: its policy shows ${org}'s origin list, never ${other}'s`, j.policy);
   // A waiver by alice on the service (GAP batch 2, B3.2): a row in the store, the author her login.
   const expiresAt = new Date(Date.now() + 30 * 86400000).toISOString();
   seq = auditSeq();

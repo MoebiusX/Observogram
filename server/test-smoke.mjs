@@ -455,35 +455,42 @@ try {
   assert(noMcp.status === 201 && noMcp.json?.endpoint?.url === NO_MCP, 'the unreachable MCP registers as an endpoint (open loopback, the CSRF header)', noMcp.json);
   const noMcpId = noMcp.id;
   const NO_MCP_ENDPOINT = { id: noMcpId, name: 'unreachable' };
+  // The deploy routes still take a typed URL from every caller their class
+  // admits (typedRule 'any' until they follow R4): a non-http(s) scheme is
+  // a 400 there. The draft and the refresh refuse a typed URL from the
+  // anonymous local caller first (R2/R4: 403 posture, even on loopback) —
+  // their scheme, parse and ALLOW_LOCAL_MCP=0 pins run as an admin session
+  // in server/test-services-api.mjs.
   for (const [path, body] of [
     ['/api/packs/payment-service/deploy/prometheus-rules', { mcpUrl: 'file:///etc/passwd' }],
     ['/api/packs/payment-service/deploy-bulk', { mcpUrl: 'ftp://mcp.example/x', items: [{ group: 'rules' }] }],
-    ['/api/draft-from-mcp', { mcpUrl: 'gopher://127.0.0.1:70/mcp' }],
-    ['/api/refresh-live', { mcpUrl: 'file://C:/secrets' }],
   ]) {
     const r = await postJson(path, body);
     assert(r.status === 400, `${path} rejects non-http(s) mcpUrl scheme → 400`, r.status, 400);
     const rBody = await r.json();
     assert(/http/.test(rBody.error || ''), `${path} scheme rejection names http(s)`, rBody.error);
   }
-
-  // SSRF guard — unparseable mcpUrl → 400, with any embedded credentials
-  // redacted from the echoed error.
-  const badUrl = await postJson('/api/refresh-live', { mcpUrl: 'http://user:hunter2@' });
-  assert(badUrl.status === 400, 'unparseable mcpUrl → 400');
-  const badUrlBody = await badUrl.json();
-  assert(!/hunter2/.test(badUrlBody.error || ''), 'unparseable-mcpUrl error redacts credentials', badUrlBody.error);
+  const TYPED_REFUSED = `a typed MCP URL is refused on a server without sign-in, even from this machine — choose a registered MCP endpoint (mcpEndpointId), or register one in Settings → MCP endpoints from http://127.0.0.1:${new URL(base).port} (a loopback MCP, or an origin listed in OBSERVOGRAM_MCP_ORIGINS)`;
+  for (const [path, body] of [
+    ['/api/draft-from-mcp', { mcpUrl: 'gopher://127.0.0.1:70/mcp' }],
+    ['/api/refresh-live', { mcpUrl: 'file://C:/secrets' }],
+    ['/api/refresh-live', { mcpUrl: 'http://user:hunter2@' }],
+  ]) {
+    const r = await postJson(path, body);
+    const j = await r.json();
+    assert(r.status === 403 && j.denied === 'posture' && j.error === TYPED_REFUSED, `${path} ${body.mcpUrl}: a typed URL from local → 403 posture, before its scheme`, [r.status, j]);
+  }
 
   // SSRF guard — local/private addresses are allowed by default (the fake-MCP
-  // tests below depend on that) but refused when OBSERVOGRAM_ALLOW_LOCAL_MCP=0.
-  // The server runs in-process, so flipping process.env takes effect live.
+  // tests below depend on that) but refused when OBSERVOGRAM_ALLOW_LOCAL_MCP=0,
+  // a registered endpoint's too. The server runs in-process, so flipping
+  // process.env takes effect live.
   process.env.OBSERVOGRAM_ALLOW_LOCAL_MCP = '0';
   try {
-    for (const blocked of ['http://127.0.0.1:9999/mcp', 'http://localhost:9999/mcp',
-                           'http://169.254.169.254/latest/meta-data/', 'http://[::1]:9999/mcp',
-                           'http://0x7f000001:9999/mcp']) {
-      const r = await postJson('/api/draft-from-mcp', { mcpUrl: blocked });
-      assert(r.status === 400, `ALLOW_LOCAL_MCP=0 blocks ${blocked} → 400`, r.status, 400);
+    for (const path of ['/api/draft-from-mcp', '/api/refresh-live']) {
+      const r = await postJson(path, { mcpEndpointId: noMcpId });
+      const j = await r.json();
+      assert(r.status === 400 && j.error === 'mcpUrl targets a local/private address (127.0.0.1), which OBSERVOGRAM_ALLOW_LOCAL_MCP=0 forbids', `ALLOW_LOCAL_MCP=0 blocks the loopback endpoint by id at ${path} → 400`, [r.status, j]);
     }
   } finally {
     delete process.env.OBSERVOGRAM_ALLOW_LOCAL_MCP;
@@ -1371,32 +1378,25 @@ try {
       assert(draft.summary.alertmanager === null && draft.summary.grafana === null,
              'restricted tier → alertmanager / grafana summaries are null (not exposed), never fabricated');
 
-      // The MCP URL keeps no credential parameter — in a draft (visibly)
-      // and in the live pack, which is the org's own file.
+      // A typed URL from the anonymous local caller (R2/R4): refused by
+      // kind even on loopback — nothing reaches the MCP, no live pack is
+      // written, no row. Its credential-hygiene pins (a dropped ?token=, the
+      // safe mcp.url) run as an admin in server/test-services-api.mjs.
       const withToken = `${fakeRestricted.url}?token=abc&tier=x`;
-      const tokenDraft = await (await postJson('/api/draft-from-mcp', { mcpUrl: withToken })).json();
-      assert(tokenDraft.ok === true && tokenDraft.summary.mcpUrl === `${fakeRestricted.url}?tier=x`,
-             'draft-from-mcp: summary.mcpUrl is the safe form (no token parameter)', tokenDraft.summary?.mcpUrl);
-      assert(tokenDraft.canonical.metadata.annotations['mcp.url'] === `${fakeRestricted.url}?tier=x` && !tokenDraft.canonicalYaml.includes('token=abc'),
-             'draft-from-mcp: the drafted pack\'s mcp.url (and its YAML) keeps no token', tokenDraft.canonical.metadata.annotations['mcp.url']);
-      assert((tokenDraft.summary.warnings || []).some((w) => /^not kept in the draft: the "token" parameter of the MCP URL/.test(w)),
-             'draft-from-mcp: a summary.warnings entry names the dropped parameter', tokenDraft.summary.warnings);
+      const orgLive = join(SMOKE_WORKSPACE, 'live', 'production-live.pack.yaml');
       const legacyLive = resolvePath(dirname(fileURLToPath(import.meta.url)), '..', 'examples', 'production-live.pack.yaml');
       const legacyBefore = existsSync(legacyLive) ? readFileSync(legacyLive, 'utf8') : null;
-      const refreshed = await (await postJson('/api/refresh-live', { mcpUrl: withToken })).json();
-      assert(refreshed.ok === true, 'refresh-live against the restricted fake succeeds', refreshed.error);
-      assert(/^not kept in the live pack: the "token" parameter of the MCP URL, which looks like a credential — put a token in the auth field instead$/.test(refreshed.note || ''),
-             'refresh-live: the response\'s note names the dropped parameter', refreshed.note);
-      assert(refreshed.annotations['mcp.url'] === `${fakeRestricted.url}?tier=x`, 'refresh-live: the response\'s annotations carry the safe URL', refreshed.annotations['mcp.url']);
-      const orgLive = join(SMOKE_WORKSPACE, 'live', 'production-live.pack.yaml');
-      const written = existsSync(orgLive) ? readFileSync(orgLive, 'utf8') : '';
-      assert(/mcp\.url: "?[^\n]*\?tier=x"?\n/.test(written) && !written.includes('token=abc'),
-             'refresh-live writes <org root>/live/production-live.pack.yaml, its mcp.url ending ?tier=x', written.slice(0, 300));
-      assert((existsSync(legacyLive) ? readFileSync(legacyLive, 'utf8') : null) === legacyBefore,
-             'refresh-live leaves the install\'s examples/production-live.pack.yaml alone (not created, not changed)');
-      const status = await getJson(base, '/api/live-status');
-      assert(status.present === true && status.url === `${fakeRestricted.url}?tier=x` && status.origin === new URL(fakeRestricted.url).origin,
-             'live-status reads the org\'s refreshed pack', [status.present, status.url, status.origin]);
+      const requestsBeforeTyped = fakeRestricted.authHeaders.length;
+      const refreshRowsBefore = auditRows({ action: 'live.refresh', limit: 1000 }).length;
+      for (const path of ['/api/refresh-live', '/api/draft-from-mcp']) {
+        const r = await postJson(path, { mcpUrl: withToken });
+        const j = await r.json();
+        assert(r.status === 403 && j.denied === 'posture' && j.error === TYPED_REFUSED && !JSON.stringify(j).includes('token=abc'),
+               `${path}: local types the fake's URL → 403 posture`, [r.status, j]);
+      }
+      assert(fakeRestricted.authHeaders.length === requestsBeforeTyped, 'the refused typed URL sent nothing to the MCP', fakeRestricted.authHeaders.length - requestsBeforeTyped, 0);
+      assert(!existsSync(orgLive), 'the refused refresh wrote no live pack');
+      assert(auditRows({ action: 'live.refresh', limit: 1000 }).length === refreshRowsBefore, 'the refused refresh wrote no live.refresh row');
 
       // An endpoint picked by id (STORE_PLAN slice 4 §7.6): the org's record
       // names the fake and the variable set before start(); a refresh by
@@ -1435,11 +1435,11 @@ try {
              && !JSON.stringify(byIdRow).includes(SMOKE_TOKEN_VALUE),
              'refresh-live { mcpEndpointId } writes one live.refresh row by local: the fake\'s origin, the record { id, name }, the counts', byIdRow);
       assert(byId.auditError === undefined, 'the refresh\'s response carries no auditError', byId.auditError);
-      const byUrl = await (await postJson('/api/refresh-live', { mcpUrl: fakeRestricted.url })).json();
-      assert(byUrl.ok === true && byUrl.mcpEndpoint === null, 'refresh-live { mcpUrl }: mcpEndpoint null', byUrl.mcpEndpoint);
-      const byUrlRow = auditRows({ action: 'live.refresh', limit: 1 })[0];
-      assert(byUrlRow && byUrlRow.seq > byIdRow.seq && byUrlRow.detail.mcpEndpoint === null && byUrlRow.targetId === new URL(fakeRestricted.url).origin,
-             'refresh-live { mcpUrl }: its live.refresh row names no record (mcpEndpoint null), the same origin', byUrlRow);
+      assert((existsSync(legacyLive) ? readFileSync(legacyLive, 'utf8') : null) === legacyBefore,
+             'refresh-live leaves the install\'s examples/production-live.pack.yaml alone (not created, not changed)');
+      const status = await getJson(base, '/api/live-status');
+      assert(status.present === true && status.url === fakeRestricted.url && status.origin === new URL(fakeRestricted.url).origin,
+             'live-status reads the org\'s refreshed pack', [status.present, status.url, status.origin]);
       const draftById = await (await postJson('/api/draft-from-mcp', { mcpEndpointId })).json();
       assert(draftById.ok === true && JSON.stringify(draftById.mcpEndpoint) === JSON.stringify({ id: mcpEndpointId, name: 'smoke' })
              && draftById.summary.mcpUrl === fakeRestricted.url,
