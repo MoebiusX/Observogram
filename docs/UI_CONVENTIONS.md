@@ -72,8 +72,8 @@ the testable layer).
   `toggleEntry`, `setParam`, `setSli`, `setToggle`, `setStep`, `openEditor`,
   `closeEditor`, `preview`, `openInDiscover`, …; the services actions `openService`,
   `openIn`, `openBuild`, `openEditor`, `saveService`, …; the Settings actions `open`, `back`,
-  `selectSection`, `retry`, `explain`, `openEditor`, `closeEditor`, `save`, `step`, `confirm`,
-  `auditApply`, `auditMore`, `pickMcpTarget`, `openMcpEndpoints`) rides them on that argument as a
+  `selectSection`, `retry`, `explain`, `build`, `openService`, `openEditor`, `closeEditor`, `save`,
+  `step`, `confirm`, `auditApply`, `auditMore`, `pickMcpTarget`, `openMcpEndpoints`) rides them on that argument as a
   namespace (`host.build`, `host.services`, `host.settings`), built by app.mjs's controller and
   handed to the renderer at the call site — never added to `host.mjs`
   (convention 1: the host stays the four stable hooks) and never reached by

@@ -1140,3 +1140,18 @@ test('settings-view.mjs is a renderer module: it imports host.mjs, util.mjs and 
   assert.ok(!/Observogram|OBSERVOGRAM/.test(code), 'the brand: no product name literal');
   assert.ok(!/\btitle="|\bhref="/.test(code), 'no title, no href built from data');
 });
+
+test('the Settings actions: every host.settings call the view makes is one settingsActions defines, and docs/UI_CONVENTIONS.md §3 lists them all', () => {
+  const view = readFileSync(new URL('../studio/settings-view.mjs', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../studio/app.mjs', import.meta.url), 'utf8');
+  const doc = readFileSync(new URL('../docs/UI_CONVENTIONS.md', import.meta.url), 'utf8');
+  const called = [...new Set([...view.matchAll(/host\.settings\??\.([A-Za-z]+)/g)].map((x) => x[1]))].sort();
+  const block = app.match(/const settingsActions = \{\n([\s\S]*?)\n\};/);
+  assert.ok(block, 'app.mjs defines settingsActions');
+  const defined = [...block[1].matchAll(/^ {2}([A-Za-z]+):/gm)].map((x) => x[1]).sort();
+  for (const name of called) assert.ok(defined.includes(name), `settingsActions defines ${name}`);
+  const listed = doc.replace(/\s+/g, ' ').match(/the Settings actions ([^)]*)\)/);
+  assert.ok(listed, 'UI_CONVENTIONS.md lists the Settings actions');
+  const names = [...listed[1].matchAll(/`([A-Za-z]+)`/g)].map((x) => x[1]).sort();
+  assert.deepEqual(names, defined, 'UI_CONVENTIONS.md lists exactly the actions settingsActions defines');
+});
