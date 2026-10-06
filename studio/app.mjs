@@ -58,8 +58,11 @@ import {
   BUILT_SECTIONS, BUILT_EDITORS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsSectionHead, settingsAboveRank,
   buildEnvironmentsSectionModel, buildEndpointsSectionModel,
   buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus,
+  buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
 } from './settings-model.mjs';
-import { loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint } from './settings-api.mjs';
+import {
+  loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
+} from './settings-api.mjs';
 import { renderSettings, renderSettingsEditor } from './settings-view.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
@@ -2271,6 +2274,10 @@ const servicesActions = {
   openEditor: openServiceEditor,
   closeEditor: closeServiceEditor,
   saveService: saveServiceRecord,
+  // The environment editor is Settings' (one editor, two doors — design §5.2):
+  // the page opens it over its record without changing mode.
+  editEnvironment: (envId) => openSettingsEditor('environment', envId),
+  addEnvironment: (serviceId) => openSettingsEditor('environment', null, serviceId),
   signOut: () => document.querySelector('.hdr-user-out')?.click(),
 };
 const servicesHost = { renderMainView, renderTabs, services: servicesActions };
@@ -2493,13 +2500,20 @@ function reloadIntoSettings(orgId, section = null) {
 
 // ---------- the Settings record editor (design §5, the editor idiom) ----------
 
-// The pop-up over one record of a section (this build: an MCP endpoint, new
-// or registered): UI state, never persisted — a reload lands on the section,
-// closed. Drawn into its own host on <body>, outside #layer-view, so a
-// section repaint keeps what was typed and the focus. `record` is the row as
-// last read (kept when a re-read fails; a re-read that lacks it closes the
-// editor); `opener` the selector the focus returns to.
-let settingsEditor = null;   // { kind, id, record, draft, status, step, opener } | null
+// The pop-up over one record of a section (an MCP endpoint, an environment —
+// new or registered): UI state, never persisted — a reload lands on the
+// section, closed. Drawn into its own host on <body>, outside #layer-view, so
+// a section repaint keeps what was typed and the focus. `record` is the row
+// as last read (kept when a re-read fails; a re-read that lacks it closes the
+// editor); `opener` the selector the focus returns to. The environment
+// editor has a second door, the service page (design §5.2, D-C): `page` is
+// the service whose page opened it (null from Settings) — leaving that page
+// closes it, as leaving Settings closes one opened there. `endpointsError`
+// is the refusal of the endpoint list read when the editor opened (A4).
+let settingsEditor = null;   // { kind, id, serviceId, page, record, draft, status, step, opener, endpointsError } | null
+// Bumped by every open: an open that awaited the endpoint list and was
+// overtaken meanwhile (another open, the page left) draws nothing.
+let settingsEditorOpening = 0;
 
 function settingsEditorHost() {
   let el = document.getElementById('set-editor-host');
@@ -2507,20 +2521,62 @@ function settingsEditorHost() {
   return el;
 }
 
+// The services the environment editor reads (its service select, its
+// eyebrow): the table; on the service page with the table unavailable, the
+// page's own record.
+function settingsEditorServices() {
+  if (Array.isArray(state.services)) return state.services;
+  const own = state.mode === 'service' ? findServiceRecord(state.serviceId) : null;
+  return own ? [own] : [];
+}
+
+// The environment `id` as read now: on the service page its record first
+// (the page's own read), then the table.
+function environmentRecord(id) {
+  const rows = [state.mode === 'service' ? findServiceRecord(state.serviceId) : null, ...(Array.isArray(state.services) ? state.services : [])];
+  for (const s of rows) {
+    const e = (s?.environments || []).find((x) => x.id === id);
+    if (e) return e;
+  }
+  return null;
+}
+
+// An environment as a write answered it, put in the service rows held (the
+// table and the page's record) — or taken out of them — so the dialog and the
+// page agree before the re-read lands.
+function adoptEnvironment(env, { remove = false } = {}) {
+  const rows = new Set([...(Array.isArray(state.services) ? state.services : []), servicePageRecord].filter(Boolean));
+  for (const s of rows) {
+    if (s.id !== env.serviceId) continue;
+    const list = Array.isArray(s.environments) ? [...s.environments] : [];
+    const i = list.findIndex((e) => e.id === env.id);
+    if (remove) { if (i >= 0) list.splice(i, 1); } else if (i >= 0) list[i] = env; else list.push(env);
+    s.environments = list;
+  }
+}
+
 // The record the editor is over, as the section's list has it now.
 function settingsEditorRecord(ed) {
   if (ed.id === null) return null;
   if (ed.kind === 'endpoint' && Array.isArray(state.mcpEndpoints)) return state.mcpEndpoints.find((ep) => ep.id === ed.id) ?? undefined;
+  if (ed.kind === 'environment' && (state.mode === 'service' || Array.isArray(state.services))) return environmentRecord(ed.id) ?? undefined;
   return ed.record;
 }
 
-// Draw the editor, or clear it: leaving Settings (any mode change) closes
-// it, and so does its record gone from a list read anew.
+// The editor belongs where it was opened: Settings, or the page of the
+// service it was opened from.
+function settingsEditorHere(ed) {
+  return ed.page === null ? state.mode === 'settings' : state.mode === 'service' && state.serviceId === ed.page;
+}
+
+// Draw the editor, or clear it: leaving where it was opened (Settings, the
+// service page — any mode change, another service) closes it, and so does
+// its record gone from a list read anew.
 function syncSettingsEditor() {
   const el = document.getElementById('set-editor-host');
   const ed = settingsEditor;
   const record = ed ? settingsEditorRecord(ed) : null;
-  if (!ed || state.mode !== 'settings' || record === undefined) {
+  if (!ed || !settingsEditorHere(ed) || record === undefined) {
     settingsEditor = null;
     if (el && el.innerHTML) el.innerHTML = '';
     return;
@@ -2528,33 +2584,67 @@ function syncSettingsEditor() {
   if (record) ed.record = record;
   const model = buildSettingsEditorModel(ed.kind, ed.record, {
     draft: ed.draft, status: ed.status, step: ed.step,
-    ctx: { access: settingsAccess(), orgName: state.orgName, orgId: state.orgId, services: state.services, endpoints: state.mcpEndpoints },
+    ctx: {
+      access: settingsAccess(), orgName: state.orgName, orgId: state.orgId, services: ed.kind === 'environment' ? settingsEditorServices() : state.services,
+      endpoints: state.mcpEndpoints, endpointsError: ed.endpointsError ?? state.settings?.endpointsError ?? null, serviceId: ed.serviceId ?? null,
+    },
   });
   renderSettingsEditor(settingsEditorHost(), model, settingsHost);
 }
 
-// Where the focus returns on close: the opener (Edit… of its row, or the
-// section's primary), else the section's primary, else the page's h1.
+// Where the focus returns on close: the opener (Edit… of its row, the
+// section's primary, the service page's button), else the section's primary,
+// else the page's h1.
 function settingsOpenerSelector(el) {
   if (!el) return null;
   if (el.dataset?.editEndpoint) return `[data-edit-endpoint="${CSS.escape(el.dataset.editEndpoint)}"]`;
+  if (el.dataset?.editEnv) return `[data-edit-env="${CSS.escape(el.dataset.editEnv)}"]`;
   return el.id ? `#${CSS.escape(el.id)}` : null;
 }
 
-// Open (a section's primary, a row's Edit…): the rank that may write gets
-// the dialog with the focus in its first field; another is told why (the
-// controls say so already, but the access can downgrade meanwhile). An
-// open MCP panel closes first — one dialog at a time (T11).
-function openSettingsEditor(kind, id = null) {
-  if (state.mode !== 'settings' || kind !== 'endpoint') return;
+// Open (a section's primary, a row's Edit…, the service page's Add
+// environment / Edit environment): the rank that may write gets the dialog
+// with the focus in its first field; another is told why (the controls say so
+// already, but the access can downgrade meanwhile). The environment editor
+// awaits the org's MCP endpoints when they were never read (the service page
+// opens it without Settings having read them — A4), so its select never
+// offers "none" alone over a bound record. An open MCP panel closes first —
+// one dialog at a time (T11).
+async function openSettingsEditor(kind, id = null, serviceId = null) {
+  const page = state.mode === 'service' ? state.serviceId : null;
+  if (kind === 'endpoint' ? state.mode !== 'settings' : !(kind === 'environment' && (state.mode === 'settings' || state.mode === 'service'))) return;
   const access = settingsAccess();
-  if (!access.can.admin) { explainUnavailable(access.why.admin); return; }
-  const record = id === null ? null : (Array.isArray(state.mcpEndpoints) ? state.mcpEndpoints.find((ep) => ep.id === id) : null);
+  const need = kind === 'endpoint' ? 'admin' : 'operate';
+  if (!access.can[need]) { explainUnavailable(access.why[need]); return; }
+  const opening = ++settingsEditorOpening;
+  const opener = settingsOpenerSelector(document.activeElement);
+  const mode = state.mode;
+  const find = () => (kind === 'endpoint'
+    ? (Array.isArray(state.mcpEndpoints) ? state.mcpEndpoints.find((ep) => ep.id === id) : null)
+    : environmentRecord(id));
+  if (id !== null && !find()) return;
+  let endpointsError = null;
+  if (kind === 'environment') {
+    if (id === null && !settingsEditorServices().length) return;   // no service yet: the primary says so (A11)
+    if (state.mcpEndpoints === null) {
+      try {
+        state.mcpEndpoints = await loadMcpEndpoints();
+        if (state.settings) state.settings.endpointsError = null;
+      } catch (e) {
+        endpointsError = e?.message || 'no answer';
+      }
+      if (opening !== settingsEditorOpening || state.mode !== mode || (page !== null && state.serviceId !== page)) return;
+    }
+  }
+  const record = id === null ? null : find();
   if (id !== null && !record) return;
   closeMcpPanel();
   const draftPanel = document.getElementById('draft-mcp-panel');
   if (draftPanel) draftPanel.hidden = true;
-  settingsEditor = { kind, id, record, draft: null, status: null, step: 'edit', opener: settingsOpenerSelector(document.activeElement) };
+  settingsEditor = {
+    kind, id, serviceId: record?.serviceId ?? serviceId ?? page, page: kind === 'environment' ? page : null,
+    record, draft: null, status: null, step: 'edit', opener, endpointsError,
+  };
   syncSettingsEditor();
   focusSettingsEditor();
 }
@@ -2573,9 +2663,7 @@ function closeSettingsEditor({ focus = true } = {}) {
   settingsEditor = null;
   const el = document.getElementById('set-editor-host');
   if (el) el.innerHTML = '';
-  if (!focus) return;
-  const back = (opener && document.querySelector(opener)) || document.getElementById('set-primary') || document.querySelector('.set-title');
-  back?.focus({ preventScroll: true });
+  if (focus) closeSettingsEditorFocus(opener);
 }
 
 // The delete step and back: the body swaps for the consequence sentence; what
@@ -2617,7 +2705,9 @@ async function rereadAfterSettingsWrite(notice = null) {
 // says changed. A refusal is the server's sentence in the status line.
 async function saveSettingsEditor(draft) {
   const ed = settingsEditor;
-  if (!ed || ed.status?.kind === 'pending' || ed.kind !== 'endpoint') return null;
+  if (!ed || ed.status?.kind === 'pending') return null;
+  if (ed.kind === 'environment') return saveEnvironmentEditor(ed, draft);
+  if (ed.kind !== 'endpoint') return null;
   ed.draft = draft;
   const record = ed.record;
   const patch = record ? buildEndpointPatch(record, draft) : null;
@@ -2662,7 +2752,9 @@ async function saveSettingsEditor(draft) {
 // before the delete) in the section's status line; the dialog closes.
 async function confirmSettingsEditor() {
   const ed = settingsEditor;
-  if (!ed || ed.step !== 'confirm-delete' || ed.status?.kind === 'pending' || ed.kind !== 'endpoint' || !ed.record) return null;
+  if (!ed || ed.step !== 'confirm-delete' || ed.status?.kind === 'pending' || !ed.record) return null;
+  if (ed.kind === 'environment') return deleteEnvironmentEditor(ed);
+  if (ed.kind !== 'endpoint') return null;
   ed.status = { kind: 'pending', text: 'Deleting…' };
   syncSettingsEditor();
   let res;
@@ -2682,6 +2774,131 @@ async function confirmSettingsEditor() {
   return { ok: true };
 }
 
+// ---------- the environment editor (design §5.1–5.2: one editor, two doors) ----------
+
+// An environment write refused: the server's sentence in the status line; a
+// refusal by the session or the role also downgrades the rank the controls
+// draw from (6a's rule), and Settings forgets what the rank may no longer read.
+function environmentWriteRefused(ed, e) {
+  if (e?.denied === 'auth' || e?.denied === 'role') state.access = { ...(state.access || {}), canWrite: false, reason: e.message };
+  if (settingsEditor !== ed) return;
+  ed.status = { kind: 'error', text: e?.message || 'no answer' };
+  syncSettingsEditor();
+  settingsWriteRefused(e);
+  if (state.mode === 'service' && (e?.denied === 'auth' || e?.denied === 'role')) repaintServicePage();
+}
+
+// After a write: the cached verdicts of the service's packs are dropped (the
+// environment's tier grades them — 6a A-M3); Settings reads its section anew
+// (the table with it) with `notice` in its status line; the service page
+// reads the table and its record anew and repaints.
+async function rereadAfterEnvironmentWrite(serviceId, notice = null) {
+  forgetServiceVerdicts(findServiceRecord(serviceId));
+  if (state.mode === 'settings') {
+    if (state.settingsSection) await loadSettingsSection(state.settingsSection, { notice });
+  } else {
+    await refreshServices();
+    if (state.mode === 'service' && state.serviceId === serviceId) {
+      try { const fresh = await loadService(serviceId); if (fresh) adoptServiceRecord(fresh); } catch { /* the write's own answer stands */ }
+      if (state.mode === 'service' && state.serviceId === serviceId) repaintServicePage();
+    }
+  }
+  syncSettingsEditor();
+}
+
+// Save (Create or Save) of the environment editor: created — POST
+// /api/services/:id/environments with the non-empty fields, `Created <name>
+// on <service>.`, and the dialog stays over the new record (on its service's
+// page, its tab is selected) — or saved: only the differing fields PATCHed
+// (nothing differing → "Nothing changed." without a call), the status naming
+// what the server says changed. The binding is never resent nor nulled when
+// the endpoint list could not be read (A4). A refusal is the server's sentence.
+async function saveEnvironmentEditor(ed, draft) {
+  ed.draft = draft;
+  const d = { ...draft };
+  if (!Array.isArray(state.mcpEndpoints)) d.mcpEndpointId = undefined;
+  const record = ed.record;
+  const patch = record ? buildEnvironmentPatch(record, d) : null;
+  if (record && !Object.keys(patch).length) {
+    ed.status = environmentSaveStatus([]);
+    syncSettingsEditor();
+    return { ok: true, changed: [] };
+  }
+  const serviceId = record ? record.serviceId : Number(d.serviceId ?? ed.serviceId);
+  const service = settingsEditorServices().find((s) => s.id === serviceId) || findServiceRecord(serviceId);
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let status;
+  let env;
+  try {
+    if (record) {
+      const res = await patchEnvironment(record.id, patch);
+      env = res.environment;
+      status = environmentSaveStatus(res.changed);
+    } else {
+      const body = buildEnvironmentCreate(d);
+      env = await createEnvironment(serviceId, body);
+      status = { kind: 'saved', text: `Created ${env?.name ?? body.name} on ${service?.name ?? `service ${serviceId}`}.` };
+    }
+  } catch (e) {
+    environmentWriteRefused(ed, e);
+    return null;
+  }
+  if (env) {
+    adoptEnvironment({ ...env, serviceId: env.serviceId ?? serviceId });
+    // On its service's page the tab follows: a rename keeps it selected; a new one is shown.
+    if (state.mode === 'service' && state.serviceId === serviceId && (!record || state.serviceEnv === record.name)) state.serviceEnv = env.name;
+  }
+  const opened = settingsEditor === ed;
+  if (opened) {
+    ed.status = status;
+    ed.draft = null;
+    if (env) Object.assign(ed, { id: env.id, serviceId: env.serviceId ?? serviceId, record: { ...env, serviceId: env.serviceId ?? serviceId } });
+  }
+  if (state.mode === 'service') repaintServicePage(); else syncSettingsEditor();
+  if (opened && !record) focusSettingsEditor();
+  announce(status.text);
+  await rereadAfterEnvironmentWrite(serviceId);
+  return { ok: true };
+}
+
+// The danger button of the environment's delete step: DELETE, `Deleted
+// <env>.` (in the section's status line in Settings; said on the service
+// page), the dialog closes and the focus goes back to where it came from.
+async function deleteEnvironmentEditor(ed) {
+  const env = ed.record;
+  ed.status = { kind: 'pending', text: 'Deleting…' };
+  syncSettingsEditor();
+  try { await deleteEnvironment(env.id); }
+  catch (e) {
+    environmentWriteRefused(ed, e);
+    return null;
+  }
+  const status = { kind: 'saved', text: `Deleted ${env.name}.` };
+  adoptEnvironment(env, { remove: true });
+  if (state.mode === 'service' && state.serviceId === env.serviceId && state.serviceEnv === env.name) state.serviceEnv = null;
+  if (settingsEditor === ed) {
+    // The row it was opened from goes with the record (Settings): the focus goes to the section's primary.
+    if (ed.page === null) ed.opener = null;
+    closeSettingsEditor({ focus: false });
+    if (state.mode === 'service') repaintServicePage();
+    closeSettingsEditorFocus(ed.opener);
+  }
+  announce(status.text);
+  if (state.mode === 'service') toast(status.text);
+  await rereadAfterEnvironmentWrite(env.serviceId, status.text);
+  return { ok: true };
+}
+
+// The focus after a close: the opener when still on the page, else the
+// section's primary or the page's h1 (Settings), else the service page's
+// environment buttons or its heading.
+function closeSettingsEditorFocus(opener) {
+  const back = (opener && document.querySelector(opener)) || document.getElementById('set-primary') || document.querySelector('.set-title')
+    || document.getElementById('svc-edit-env') || document.getElementById('svc-add-env') || document.querySelector('.svc-page-name');
+  back?.focus({ preventScroll: true });
+}
+
 // The host the Settings renderers get (docs/UI_CONVENTIONS.md §3): the two
 // stable hooks plus Settings' actions under `settings`.
 const settingsActions = {
@@ -2692,7 +2909,7 @@ const settingsActions = {
   explain: explainUnavailable,
   build: () => enterBuildMode('define'),
   openService: (id) => { enterServicePage(id); },
-  openEditor: ({ kind, id = null } = {}) => openSettingsEditor(kind, id),
+  openEditor: ({ kind, id = null, serviceId = null } = {}) => openSettingsEditor(kind, id, serviceId),
   closeEditor: () => closeSettingsEditor(),
   save: (draft) => saveSettingsEditor(draft),
   step: (step, draft = null) => setSettingsEditorStep(step, draft),

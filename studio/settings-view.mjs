@@ -28,7 +28,8 @@ function navHtml(nav) {
 // The environments, grouped by service: each service's name and slug, "Open
 // service" (its page), then one line per environment — the name, the tier
 // (or "graded by the pack"), the MCP endpoint it is checked through, the
-// bindings and links counted.
+// bindings and links counted — and, for a rank that may write, Edit… (the
+// environment editor over it).
 function environmentsHtml(model) {
   if (!model.groups.length) return '';
   return `
@@ -40,7 +41,8 @@ function environmentsHtml(model) {
             <ul class="set-envs" aria-label="${escapeHtml(`Environments of ${g.name}`)}">${g.envs.length ? g.envs.map((e) => `
               <li class="set-env" data-env-id="${escapeHtml(String(e.id))}">
                 <span class="set-row-name">${escapeHtml(e.name)}</span>
-                <span class="set-row-meta">${escapeHtml(`${e.tierText} · MCP: ${e.mcpText} · ${e.bindingsCount} ${e.bindingsCount === 1 ? 'binding' : 'bindings'} · ${e.linksCount} ${e.linksCount === 1 ? 'link' : 'links'}`)}</span>
+                <span class="set-row-meta">${escapeHtml(`${e.tierText} · MCP: ${e.mcpText} · ${e.bindingsCount} ${e.bindingsCount === 1 ? 'binding' : 'bindings'} · ${e.linksCount} ${e.linksCount === 1 ? 'link' : 'links'}`)}</span>${e.canEdit ? `
+                <button type="button" class="ux-secondary-btn" data-edit-env="${escapeHtml(String(e.id))}" aria-label="${escapeHtml(`Edit ${e.name} of ${g.name}`)}">Edit…</button>` : ''}
               </li>`).join('') : `
               <li class="set-env"><span class="set-row-meta">no environments</span></li>`}
             </ul>
@@ -156,6 +158,9 @@ export function renderSettings(container, frame, section, host = appHost) {
   container.querySelectorAll('[data-edit-endpoint]').forEach((btn) => {
     btn.addEventListener('click', () => host.settings?.openEditor?.({ kind: 'endpoint', id: Number(btn.dataset.editEndpoint) }));
   });
+  container.querySelectorAll('[data-edit-env]').forEach((btn) => {
+    btn.addEventListener('click', () => host.settings?.openEditor?.({ kind: 'environment', id: Number(btn.dataset.editEnv) }));
+  });
 }
 
 // ---------- the record editor (design §5, the editor idiom) ----------
@@ -188,6 +193,30 @@ function fieldHtml(f, limits) {
           <textarea id="${id}" name="${escapeHtml(f.name)}" rows="4" spellcheck="false"${described}>${escapeHtml(String(f.value ?? ''))}</textarea>
           ${help}
         </label>`;
+  }
+  if (f.type === 'select') {
+    // An option's value null is drawn as "" (none); a field the reader cannot
+    // change stays focusable, aria-disabled, its reason the help it names.
+    const off = f.disabled ? ' aria-disabled="true"' : '';
+    return `
+        <label class="set-editor-field">
+          <span class="set-editor-label">${escapeHtml(f.label)}</span>
+          <select id="${id}" name="${escapeHtml(f.name)}"${off}${described}>${(f.options || []).map((o) => `
+            <option value="${escapeHtml(o.value === null || o.value === undefined ? '' : String(o.value))}"${o.selected ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}
+          </select>
+          ${help}
+        </label>`;
+  }
+  if (f.type === 'segmented') {
+    // A radio group of buttons (roving tabindex): an option's value null is "".
+    return `
+        <div class="set-editor-field" role="radiogroup" aria-labelledby="${id}-label"${described}>
+          <span class="set-editor-label" id="${id}-label">${escapeHtml(f.label)}</span>
+          <div class="set-editor-seg" id="${id}">${(f.options || []).map((o) => `
+            <button type="button" role="radio" class="set-editor-seg-btn" data-seg="${escapeHtml(f.name)}" data-value="${escapeHtml(o.value === null || o.value === undefined ? '' : String(o.value))}" aria-checked="${o.selected ? 'true' : 'false'}" tabindex="${o.selected ? '0' : '-1'}">${escapeHtml(o.label)}</button>`).join('')}
+          </div>
+          ${help}
+        </div>`;
   }
   throw new Error(`no Settings editor field of type ${JSON.stringify(f.type)}`);
 }
@@ -252,7 +281,21 @@ export function renderSettingsEditor(container, model, host = appHost) {
     act().closeEditor?.();
   });
   bindDocumentEscape(container, host);
-  const readDraft = () => Object.fromEntries((model.fields || []).map((f) => [f.name, container.querySelector(`#${fieldId(f.name)}`)?.value ?? f.value]));
+  const segs = wireSegmented(container, model.fields || []);
+  // What was typed, by field: a segmented group's checked value ("" → null);
+  // a select the reader cannot change is left out (undefined — the binding it
+  // shows is kept, never resent nor nulled); the rest by its value.
+  const readDraft = () => Object.fromEntries((model.fields || []).map((f) => {
+    if (f.type === 'segmented') return [f.name, Object.hasOwn(segs, f.name) ? segs[f.name] : (f.value ?? null)];
+    if (f.type === 'select' && f.disabled) return [f.name, undefined];
+    return [f.name, container.querySelector(`#${fieldId(f.name)}`)?.value ?? f.value];
+  }));
+  // A select drawn aria-disabled cannot change: a change is undone and its reason said.
+  for (const f of (model.fields || []).filter((x) => x.type === 'select' && x.disabled)) {
+    const el = container.querySelector(`#${fieldId(f.name)}`);
+    const was = el?.value;
+    el?.addEventListener('change', () => { el.value = was; act().explain?.(f.reason); });
+  }
   paintEditorButtons(container, model);
   container.querySelector('#set-editor-save')?.addEventListener('click', () => {
     const now = EDITOR_MODEL.get(container) || model;
@@ -273,6 +316,37 @@ export function renderSettingsEditor(container, model, host = appHost) {
     if (now.saving) return;
     act().confirm?.();
   });
+}
+
+// The segmented groups: a click checks one; ArrowLeft / ArrowRight / Home /
+// End move and check (roving tabindex — 6a's tier radios). Returns the
+// checked value per group, kept current ("" → null).
+function wireSegmented(container, fields) {
+  const values = {};
+  for (const f of fields.filter((x) => x.type === 'segmented')) {
+    const radios = [...(container.querySelectorAll(`[data-seg="${f.name}"]`) || [])];
+    if (!radios.length) continue;
+    values[f.name] = f.value ?? null;
+    const check = (btn) => {
+      values[f.name] = btn.dataset.value === '' ? null : btn.dataset.value;
+      for (const r of radios) { r.setAttribute('aria-checked', r === btn ? 'true' : 'false'); r.setAttribute('tabindex', r === btn ? '0' : '-1'); }
+    };
+    radios.forEach((btn) => btn.addEventListener('click', () => check(btn)));
+    container.querySelector(`#${fieldId(f.name)}`)?.addEventListener('keydown', (e) => {
+      const i = radios.indexOf(e.target?.closest?.('[role="radio"]'));
+      if (i < 0) return;
+      let next = null;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (i + 1) % radios.length;
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (i - 1 + radios.length) % radios.length;
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = radios.length - 1;
+      if (next === null) return;
+      e.preventDefault();
+      radios[next].focus();
+      check(radios[next]);
+    });
+  }
+  return values;
 }
 
 // The model the buttons were last painted from (a repaint in place keeps

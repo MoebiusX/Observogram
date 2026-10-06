@@ -9144,6 +9144,11 @@ select.build-edit-input { appearance: auto; }
   border-bottom: 1px solid var(--line);
   margin-bottom: 16px;
 }
+/* The tabs with Edit environment beside them, and the bar's tools (Add environment, Edit): layout only. */
+.svc-tabs-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 16px; }
+.svc-tabs-row .svc-tabs { flex: 1 1 auto; min-width: 0; margin-bottom: 0; }
+.svc-page-tools { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.svc-noenv-add { margin: -6px 0 16px; }
 .svc-tab {
   font: 600 13.5px/1.2 var(--mono);
   color: var(--ink-3);
@@ -9262,7 +9267,6 @@ select.build-edit-input { appearance: auto; }
 .svc-pack-open { margin-left: auto; }
 .svc-pack-gone { margin-left: auto; font: 12.5px/1.4 var(--mono); color: var(--ink-3); }
 .svc-packs-none { margin: 0; font-size: 14px; line-height: 1.5; color: var(--ink-3); }
-.svc-noenv code { font: 12.5px/1.6 var(--mono); color: var(--ink-2); }
 @media (max-width: 720px) {
   .svc-page { padding: 16px 16px 64px; }
   .svc-panel-row { grid-template-columns: 1fr; gap: 2px; }
@@ -9639,15 +9643,27 @@ select.build-edit-input { appearance: auto; }
 .set-editor-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .set-editor-label { font: 600 12.5px/1.3 var(--mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-2); }
 .set-editor-help { font: 12.5px/1.45 var(--sans); color: var(--ink-3); overflow-wrap: anywhere; }
-.set-editor-field input, .set-editor-field textarea {
+.set-editor-field input, .set-editor-field textarea, .set-editor-field select {
   width: 100%; padding: 9px 12px; box-sizing: border-box;
   font: 14px/1.4 var(--mono); color: var(--ink); background: var(--card);
   border: 1px solid var(--line); border-radius: 10px;
   transition: border-color 200ms ease-out, box-shadow 200ms ease-out;
 }
 .set-editor-field textarea { resize: vertical; min-height: 72px; }
-.set-editor-field input:focus, .set-editor-field textarea:focus { outline: none; border-color: var(--CMP); box-shadow: 0 0 0 3px color-mix(in srgb, var(--CMP) 22%, transparent); }
-.set-editor-field input:focus-visible, .set-editor-field textarea:focus-visible { outline: 2px solid var(--CMP); outline-offset: 1px; }
+.set-editor-field input:focus, .set-editor-field textarea:focus, .set-editor-field select:focus { outline: none; border-color: var(--CMP); box-shadow: 0 0 0 3px color-mix(in srgb, var(--CMP) 22%, transparent); }
+.set-editor-field input:focus-visible, .set-editor-field textarea:focus-visible, .set-editor-field select:focus-visible { outline: 2px solid var(--CMP); outline-offset: 1px; }
+/* A select the reader cannot change (the endpoint list could not be read): the help under it says why; the text keeps its contrast. */
+.set-editor-field select[aria-disabled="true"] { cursor: not-allowed; border-style: dashed; }
+/* The tier: a radio group of buttons on the card — the checked one by its --CMP border, never by text colour alone. */
+.set-editor-seg { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 3px; color: var(--ink-2); background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+.set-editor-seg-btn {
+  appearance: none; cursor: pointer; border: 1px solid transparent; background: transparent; border-radius: 10px;
+  padding: 8px 6px; font: 600 12.5px/1.3 var(--mono); color: var(--ink-2); overflow-wrap: anywhere;
+  transition: color 200ms ease-out, border-color 200ms ease-out;
+}
+.set-editor-seg-btn:hover { color: var(--ink); }
+.set-editor-seg-btn[aria-checked="true"] { color: var(--ink); background: var(--card); border-color: var(--CMP); box-shadow: inset 0 0 0 1px var(--CMP); }
+.set-editor-seg-btn:focus-visible { outline: 2px solid var(--CMP); outline-offset: -2px; }
 .set-editor-foot { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; padding: 12px 28px 16px; border-top: 1px solid var(--line-2); }
 .set-editor-status { flex: 1 1 240px; min-width: 0; font: 13px/1.45 var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
 .set-editor-status.is-pending { font-style: italic; }
@@ -9671,9 +9687,10 @@ select.build-edit-input { appearance: auto; }
   .set-row .ux-secondary-btn { margin-left: 0; }
   .set-editor { left: 12px; right: 12px; width: auto; transform: translate(0, -50%); max-height: calc(100dvh - 24px); }
   .set-editor-head, .set-editor-body, .set-editor-foot { padding-left: 18px; padding-right: 18px; }
+  .set-editor-seg { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .set-editor, .set-editor-scrim, .set-nav-item, .set-row { transition: none; animation: none; }
-  .set-editor-close, .set-editor-field input, .set-editor-field textarea { transition: none; }
+  .set-editor-close, .set-editor-seg-btn, .set-editor-field input, .set-editor-field textarea, .set-editor-field select { transition: none; }
 }

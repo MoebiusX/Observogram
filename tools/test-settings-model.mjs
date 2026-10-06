@@ -120,7 +120,7 @@ test('settingsAccessModel: each rank, each posture — the reasons name a way ou
 test('the frame: the scope line, the nav lists only the built sections, each unreadable one disabled with its reason', () => {
   assert.deepEqual(SETTINGS_SECTIONS, ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role']);
   assert.deepEqual(BUILT_SECTIONS, ['environments', 'endpoints'], 'the sections this build draws: no members, audit or deployment group yet');
-  assert.deepEqual(BUILT_EDITORS, ['endpoint'], 'the record editors this build draws: the MCP endpoint editor only');
+  assert.deepEqual(BUILT_EDITORS, ['endpoint', 'environment'], 'the record editors this build draws: the MCP endpoint and the environment editors');
   const FOUR = ['environments', 'endpoints', 'members', 'audit'];
   assert.deepEqual(buildSettingsFrameModel({ access: ADA }).nav.map((n) => n.id), BUILT_SECTIONS, 'the default nav is the built sections');
   const ada = buildSettingsFrameModel({ access: ADA, orgName: 'Acme', orgId: 'acme', builtSections: FOUR });
@@ -254,8 +254,11 @@ test('the environment editor: the endpoint list awaited — [] vs null, the bind
   const del = buildSettingsEditorModel('environment', prod, { ctx, step: 'confirm-delete' });
   assert.equal(del.confirm.text, 'Delete prod of Payment service? Its tier, bindings, links and endpoint binding go; the packs stay registered, and a pack that declares prod brings the name back without them.');
   assert.equal(del.confirm.danger, 'Delete prod');
+  assert.deepEqual(m.remove, { enabled: true, reason: null }, 'Delete… for an operator');
+  assert.equal(add.remove, null, 'a new record has no Delete…');
   const viewer = buildSettingsEditorModel('environment', prod, { ctx: { ...ctx, access: VERA } });
   assert.deepEqual(viewer.primary, { label: 'Save', enabled: false, reason: 'needs the operator role in Acme — yours is viewer' });
+  assert.deepEqual(viewer.remove, { enabled: false, reason: 'needs the operator role in Acme — yours is viewer' });
   const pending = buildSettingsEditorModel('environment', prod, { ctx, status: { kind: 'pending', text: 'Saving…' } });
   assert.deepEqual([pending.saving, pending.primary.enabled], [true, false]);
 });
@@ -618,6 +621,9 @@ function settingsContainer() {
     querySelectorAll: (sel) => {
       if (sel === '[data-open-service]') return [...html.matchAll(/data-open-service="(\d+)"/g)].map((m) => get(`open:${m[1]}`, true, { openService: m[1] }));
       if (sel === '[data-edit-endpoint]') return [...html.matchAll(/data-edit-endpoint="(\d+)"/g)].map((m) => get(`edit:${m[1]}`, true, { editEndpoint: m[1] }));
+      if (sel === '[data-edit-env]') return [...html.matchAll(/data-edit-env="(\d+)"/g)].map((m) => get(`env:${m[1]}`, true, { editEnv: m[1] }));
+      const seg = /^\[data-seg="([\w-]+)"\]$/.exec(sel)?.[1];
+      if (seg) return [...html.matchAll(new RegExp(`data-seg="${seg}" data-value="([^"]*)"`, 'g'))].map((m) => get(`seg:${seg}:${m[1]}`, true, { seg, value: m[1] }));
       if (sel === '[data-editor-close]') return [...html.matchAll(/data-editor-close/g)].map((_, i) => get(`close:${i}`, true));
       return [];
     },
@@ -773,6 +779,76 @@ test('renderSettingsEditor: a modal dialog over one endpoint — the fields esca
   assert.ok(!o.innerHTML.includes('set-editor-delete'), 'a new record has no Delete…');
   save.fire('click');
   assert.deepEqual(calls, [['explain', 'needs the admin role in Acme — yours is operator; ask an admin of Acme']]);
+});
+
+test('the environments section and editor: Add environment and Edit… for an operator; the select, the tier group and the textareas; a failed list keeps the binding (A4)', () => {
+  const calls = [];
+  const host = { settings: new Proxy({}, { get: (_, k) => (...a) => calls.push([k, ...a]) }) };
+  const xss = '<img src=x onerror="window.__x=1">';
+  // The section: the primary and one Edit… per environment, for an operator; none for a viewer.
+  const op = settingsContainer();
+  renderSettings(op, buildSettingsFrameModel({ access: OSCAR, section: 'environments', orgName: 'Acme', orgId: 'acme' }), { id: 'environments', head: settingsSectionHead('environments', { orgName: 'Acme' }), model: buildEnvironmentsSectionModel({ services: [{ ...PAYMENT, name: `Pay ${xss}` }, LEDGER], access: OSCAR, orgName: 'Acme' }), status: null }, host);
+  assert.ok(op.innerHTML.includes('<button type="button" class="mcp-refresh-btn set-primary" id="set-primary">Add environment</button>'));
+  assert.deepEqual([...op.innerHTML.matchAll(/data-edit-env="(\d+)" aria-label="([^"]*)">Edit…/g)].map((m) => [m[1], m[2]]), [['3', 'Edit prod of Pay &lt;img src=x onerror=&quot;window.__x=1&quot;&gt;'], ['7', 'Edit staging of Pay &lt;img src=x onerror=&quot;window.__x=1&quot;&gt;']]);
+  op.querySelector('#set-primary').fire('click');
+  op.querySelectorAll('[data-edit-env]')[1].fire('click');
+  assert.deepEqual(calls, [['openEditor', { kind: 'environment' }], ['openEditor', { kind: 'environment', id: 7 }]]);
+  const vw = settingsContainer();
+  calls.length = 0;
+  renderSettings(vw, buildSettingsFrameModel({ access: VERA, section: 'environments', orgName: 'Acme', orgId: 'acme' }), { id: 'environments', head: settingsSectionHead('environments', { orgName: 'Acme' }), model: buildEnvironmentsSectionModel({ services: SERVICES, access: VERA, orgName: 'Acme' }), status: null }, host);
+  assert.ok(!vw.innerHTML.includes('data-edit-env'), 'no Edit… for a viewer: the row shows every fact');
+  assert.equal(vw.querySelector('#set-primary').getAttribute('aria-disabled'), 'true');
+  vw.querySelector('#set-primary').fire('click');
+  assert.deepEqual(calls, [['explain', 'needs the operator role in Acme — yours is viewer']]);
+
+  // The editor over prod: the endpoint select (the binding selected), the tier as a radio group, the textareas.
+  const ctx = { access: OSCAR, orgName: 'Acme', orgId: 'acme', services: SERVICES, endpoints: EP_OP };
+  const prod = PAYMENT.environments[0];
+  const c = settingsContainer();
+  calls.length = 0;
+  renderSettingsEditor(c, buildSettingsEditorModel('environment', prod, { ctx }), host);
+  const h = c.innerHTML;
+  assert.ok(h.includes('data-kind="environment" data-record-id="3" data-editor-key="environment:3:edit"'));
+  assert.ok(h.includes('<select id="set-edit-mcpEndpointId" name="mcpEndpointId">'));
+  assert.deepEqual([...h.matchAll(/<option value="([^"]*)"( selected)?>([^<]*)<\/option>/g)].map((m) => [m[1], Boolean(m[2]), m[3]]), [['', false, 'none'], ['3', true, 'gw — https://mcp.acme.test'], ['5', false, 'spare — https://spare.acme.test']]);
+  assert.ok(h.includes('<div class="set-editor-field" role="radiogroup" aria-labelledby="set-edit-tier-label" aria-describedby="set-edit-tier-help">'));
+  assert.deepEqual([...h.matchAll(/data-seg="tier" data-value="([^"]*)" aria-checked="(\w+)" tabindex="(-?\d)">([^<]*)</g)].map((m) => [m[1], m[2], m[3], m[4]]),
+    [['tier-1', 'true', '0', 'tier-1'], ['tier-2', 'false', '-1', 'tier-2'], ['tier-3', 'false', '-1', 'tier-3'], ['', 'false', '-1', 'graded by the service']]);
+  assert.ok(h.includes('<textarea id="set-edit-bindings" name="bindings" rows="4" spellcheck="false" aria-describedby="set-edit-bindings-help">cluster=eks\nnamespace=pay</textarea>'));
+  assert.ok(h.includes('id="set-editor-delete">Delete…</button>') && h.includes('id="set-editor-save" aria-disabled="false">Save</button>'));
+  // Save reads every field: the tier checked, the select's value, the textareas.
+  c.querySelectorAll('[data-seg="tier"]')[3].fire('click');
+  c.querySelector('#set-edit-mcpEndpointId').value = '5';
+  c.querySelector('#set-editor-save').fire('click');
+  assert.deepEqual(calls, [['save', { name: 'prod', tier: null, mcpEndpointId: '5', bindings: 'cluster=eks\nnamespace=pay', endpoints: 'dashboard=https://grafana.test/d/pay' }]]);
+  assert.equal(c.querySelectorAll('[data-seg="tier"]')[3].getAttribute('aria-checked'), 'true');
+  assert.deepEqual(buildEnvironmentPatch(prod, calls[0][1]), { tier: null, mcpEndpointId: 5 });
+
+  // The list could not be read: the select aria-disabled with its reason; Save leaves the binding out (A4); a change is undone and explained.
+  const f = settingsContainer();
+  calls.length = 0;
+  renderSettingsEditor(f, buildSettingsEditorModel('environment', prod, { ctx: { ...ctx, endpoints: null, endpointsError: `403: ${xss}` } }), host);
+  assert.ok(f.innerHTML.includes('<select id="set-edit-mcpEndpointId" name="mcpEndpointId" aria-disabled="true" aria-describedby="set-edit-mcpEndpointId-help">'));
+  assert.ok(f.innerHTML.includes("The org&#39;s MCP endpoints could not be read — 403: &lt;img") && !f.innerHTML.includes('<img'));
+  const sel = f.querySelector('#set-edit-mcpEndpointId');
+  sel.value = '';
+  sel.fire('change');
+  f.querySelector('#set-editor-save').fire('click');
+  assert.equal(calls[0][0], 'explain');
+  assert.equal(calls[1][0], 'save');
+  assert.equal(calls[1][1].mcpEndpointId, undefined, 'the binding is neither resent nor nulled');
+  assert.deepEqual(buildEnvironmentPatch(prod, calls[1][1]), {});
+
+  // Add: the service select first, Create, no Delete….
+  const a = settingsContainer();
+  calls.length = 0;
+  renderSettingsEditor(a, buildSettingsEditorModel('environment', null, { ctx: { ...ctx, serviceId: 2 } }), host);
+  assert.ok(a.innerHTML.includes('<select id="set-edit-serviceId" name="serviceId">') && a.innerHTML.includes('<option value="2" selected>Ledger (ledger)</option>'));
+  assert.ok(a.innerHTML.includes('id="set-editor-save" aria-disabled="false">Create</button>') && !a.innerHTML.includes('set-editor-delete'));
+  a.querySelector('#set-edit-name').value = 'qa';
+  a.querySelector('#set-editor-save').fire('click');
+  assert.deepEqual(calls, [['save', { serviceId: 2, name: 'qa', tier: null, mcpEndpointId: null, bindings: '', endpoints: '' }]], 'a field untouched reads as drawn');
+  assert.deepEqual(buildEnvironmentCreate(calls[0][1]), { name: 'qa' });
 });
 
 test('settings-view.mjs is a renderer module: it imports host.mjs, util.mjs and services-view.mjs only — never app.mjs or state.mjs — and reads no state, fetches nothing', () => {

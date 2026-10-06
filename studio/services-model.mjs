@@ -299,7 +299,9 @@ export function buildServicePageModel({ service, envName = null, verdicts = {}, 
   else tierLine = `${TIER_BY_PACK} — neither the service nor the environment sets a tier`;
   const mcp = env?.mcpEndpoint
     ? { kind: 'bound', name: env.mcpEndpoint.name, origin: env.mcpEndpoint.origin }
-    : { kind: 'none', text: env ? `No MCP endpoint bound to ${env.name} — Diagnose compares with whatever live pack you load as Pack B; an admin binds one with PATCH /api/environments/${env.id} { "mcpEndpointId": <n> } — GET /api/mcp-endpoints lists them.` : 'No environment, so no MCP endpoint.' };
+    : { kind: 'none', text: !env ? 'No environment, so no MCP endpoint.' : canWrite
+      ? `No MCP endpoint bound to ${env.name} — Diagnose compares with whatever live pack you load as Pack B. Edit environment binds one of ${org}'s MCP endpoints.`
+      : `No MCP endpoint bound to ${env.name} — Diagnose compares with whatever live pack you load as Pack B; an operator binds one.` };
   const panel = {
     env, verdict: selected ? selected.verdict : null, tierLine, mcp,
     bindings: Object.entries(env?.bindings && typeof env.bindings === 'object' ? env.bindings : {}),
@@ -315,9 +317,11 @@ export function buildServicePageModel({ service, envName = null, verdicts = {}, 
   const inCatalogue = new Set((Array.isArray(catalog) ? catalog : []).filter((p) => p && p.ok !== false).map((p) => p.id));
   const packs = (service.packs || []).map((p) => ({ id: p.id, label: p.label ?? null, source: p.source ?? null, role: p.role, current: resolved.pack !== null && p.id === resolved.pack.id, inCatalogue: inCatalogue.has(p.id) }));
   const role = access?.role ?? 'viewer';
+  // An operator adds one here (Add environment — the environment editor);
+  // a viewer is told who does.
   const noEnvironments = envs.length ? null : (canWrite
-    ? { text: 'No environments yet. Register a pack that declares one — Build (its DEFINE environment becomes a row), a scan, a draft or an upload — and it appears here.', apiLine: `POST /api/services/${service.id}/environments { "name": "prod" }` }
-    : { text: `No environments yet. An operator registers a pack that declares one (Build, a scan, a draft or an upload) — your role in ${org} is ${role}.`, apiLine: null });
+    ? { text: 'No environments yet. Add one here, or register a pack that declares one — Build (its DEFINE environment becomes a row), a scan, a draft or an upload.', action: 'add-environment' }
+    : { text: `No environments yet. An operator registers a pack that declares one (Build, a scan, a draft or an upload) — your role in ${org} is ${role}.`, action: null });
   return {
     id: service.id, slug: service.slug, name: service.name, description: service.description ?? null,
     facts: { tierText: service.tier ? `${service.tier} (service)` : TIER_BY_PACK, ownersText: ownersText(service.owners), packsText: packsText(service.packs) },
@@ -427,8 +431,9 @@ export function buildHandoffPlan(build, row, { originId = null, origin = null, t
   return finish(plan);
 
   function finish(p) {
-    // Said, not fixed, and in the product's words: no roadmap slice, no screen 6a does not have — the route is the way out (design A-4).
-    const envNote = p.environment === 'missing' ? ` The environment ${env} is not one of ${row.name}'s — POST /api/services/${row.id}/environments { "name": "${env}" } adds it.` : '';
+    // Said, not fixed, and in the product's words: no roadmap slice — the service page's Add environment is the way out
+    // (the Build hand-off is an operator's, and the page draws it for that rank).
+    const envNote = p.environment === 'missing' ? ` The environment ${env} is not one of ${row.name}'s — add it on ${row.name}'s page (Add environment).` : '';
     const sentence = (changed = []) => {
       let s;
       switch (p.outcome) {

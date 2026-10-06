@@ -26,7 +26,7 @@ export const SETTINGS_SECTIONS = ['environments', 'endpoints', 'members', 'audit
 export const BUILT_SECTIONS = ['environments', 'endpoints'];
 // The record editors this build draws: a section whose editor is not built
 // draws no primary and no row action, and no sentence names one.
-export const BUILT_EDITORS = ['endpoint'];
+export const BUILT_EDITORS = ['endpoint', 'environment'];
 
 const SECTION_LABEL = {
   environments: 'Environments', endpoints: 'MCP endpoints', members: 'Members', audit: 'Audit',
@@ -594,6 +594,7 @@ export function buildSettingsEditorModel(kind, record = null, { draft = null, st
     return {
       ...base, title: record ? `Edit ${record.name}` : 'Add environment', eyebrow: record ? `Environment of ${serviceName}` : 'New environment',
       fields, limits: { name: 200, bindings: 32, endpoints: 20 }, draft: eff, confirm,
+      remove: record ? { enabled: can, reason: can ? null : (access?.why?.operate ?? null) } : null,
       status: st || idleStatus(record ? 'Name, tier, MCP endpoint, bindings and links.' : `A new environment of ${serviceName}.`),
       primary: primaryOf(record ? 'Save' : 'Create', can, access?.why?.operate ?? null),
     };
