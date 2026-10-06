@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 
 import { SPEC_DIR, SPEC_VERSION } from '../tools/lib/validator.mjs';
-import { createServer } from 'node:http';
+import { startFakeMcp, registerMcpEndpoint } from './fixtures/fake-mcp.mjs';
 
 // Hermetic (§0): a developer shell's store, identity, taxonomy, transport-hook
 // or brand variables never reach this process's imports — the children's STRIP
@@ -98,50 +98,8 @@ async function uploadedEntries(base, name) {
   return packs.filter(p => p.source === 'uploaded' && p.name === name).map(p => `${p.id} | ${p.label}`);
 }
 
-// `handler(name, args)` answers tools/call when given; the default echoes
-// { ok, name } (enough for the deploy path, whose tools return opaque ids).
-async function startFakeMcp(toolNames, handler = null) {
-  const calls = [];
-  const authHeaders = [];   // the Authorization header of every request, null when none
-  const srv = createServer(async (req, res) => {
-    authHeaders.push(req.headers.authorization ?? null);
-    let raw = '';
-    req.setEncoding('utf8');
-    for await (const chunk of req) raw += chunk;
-    let msg = {};
-    try { msg = JSON.parse(raw || '{}'); } catch (_) {}
-    const send = (result) => {
-      res.writeHead(200, {
-        'Content-Type': 'application/json',
-        'Mcp-Session-Id': 'smoke-session',
-      });
-      res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id ?? 1, result }));
-    };
-    if (msg.method === 'initialize') {
-      send({ protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'fake-mcp' } });
-      return;
-    }
-    if (msg.method === 'tools/list') {
-      send({ tools: toolNames.map(name => ({ name })) });
-      return;
-    }
-    if (msg.method === 'tools/call') {
-      calls.push(msg.params);
-      const answer = handler ? handler(msg.params?.name, msg.params?.arguments || {}) : { ok: true, name: msg.params?.name };
-      send({ content: [{ type: 'text', text: JSON.stringify(answer) }] });
-      return;
-    }
-    send({});
-  });
-  await new Promise(resolve => srv.listen(0, '127.0.0.1', resolve));
-  const addr = srv.address();
-  return {
-    url: `http://${addr.address}:${addr.port}/mcp`,
-    calls,
-    authHeaders,
-    close: () => new Promise(resolve => srv.close(resolve)),
-  };
-}
+// The fake MCP (startFakeMcp) and the endpoint registration (registerMcpEndpoint)
+// are server/fixtures/fake-mcp.mjs, shared with the other server suites.
 
 const srv = await start({ port: 0, silent: true });
 const addr = srv.address();
@@ -1396,12 +1354,8 @@ try {
       // writes the live pack with the record's URL and names the record —
       // the token's value in no response and no file. The variable unset:
       // a 400 naming it, before any fetch.
-      const epCreated = await fetch(`${base}/api/mcp-endpoints`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Observogram-CSRF': '1' },
-        body: JSON.stringify({ name: 'smoke', url: fakeRestricted.url, readTokenEnv: SMOKE_TOKEN_VAR }),
-      });
-      const epBody = await epCreated.json();
+      const epCreated = await registerMcpEndpoint(base, { name: 'smoke', url: fakeRestricted.url, readTokenEnv: SMOKE_TOKEN_VAR });
+      const epBody = epCreated.json;
       assert(epCreated.status === 201 && epBody.ok === true && epBody.endpoint?.name === 'smoke' && epBody.endpoint.readTokenEnv === SMOKE_TOKEN_VAR,
              'POST /api/mcp-endpoints (open loopback, the CSRF header): the record with the fake\'s URL and the variable', epBody);
       const mcpEndpointId = epBody.endpoint.id;
