@@ -482,10 +482,18 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await page.evaluate(() => document.getElementById('deploy-modal-close').click());
     } finally {
       await ctx.close();
-      // gw again, for the steps that follow (a new id; prod is unbound by the delete).
-      const again = await call('ada', 'POST', '/api/mcp-endpoints', GW);
-      assert.equal(again.status, 201, again.text);
-      gwId = again.json.endpoint.id;
+      // gw again, for the steps that follow (a new id; prod is unbound by the delete). Idempotent: when the body
+      // failed before its DELETE ran, gw is still there — kept (its URL put back), so the body's own failure is the
+      // one reported, never a 409 from here.
+      const kept = (await call('ada', 'GET', '/api/mcp-endpoints')).json?.endpoints?.find((e) => e.name === GW.name);
+      if (kept) {
+        gwId = kept.id;
+        await call('ada', 'PATCH', `/api/mcp-endpoints/${gwId}`, { url: GW.url });
+      } else {
+        const again = await call('ada', 'POST', '/api/mcp-endpoints', GW);
+        assert.equal(again.status, 201, again.text);
+        gwId = again.json.endpoint.id;
+      }
     }
   });
 
