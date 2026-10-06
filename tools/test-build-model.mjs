@@ -604,6 +604,60 @@ test('a usage error keeps the previous pack: the error is split per param, the r
   assert.equal(buildVerifyModel({ build: draft({ result: { ...draft().result, schemaErrors: ['$.spec: missing required key'] } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }).handoff, 'schema');
 });
 
+// Slice 6a (docs/STORE_PLAN.md §6; design §6.1): the register is an operator's — a rank that cannot write never gets the
+// hand-off drawn usable, and the footer says why in the server's words with the way out that works for it.
+test('buildVerifyModel: access.canWrite false → handoff unavailable (ranked first), canRegister false, the reason worded; the default is writable and every other state unchanged', () => {
+  const verify = (over, access) => buildVerifyModel({ build: draft(over), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS, ...(access ? { access } : {}) });
+  const viewer = verify({}, { canWrite: false, reason: 'needs the operator role in Acme — yours is viewer' });
+  assert.deepEqual([viewer.handoff, viewer.canRegister, viewer.unavailableText],
+    ['unavailable', false, 'Registering the pack needs the operator role in Acme — yours is viewer — download the pack YAML instead.']);
+  assert.ok(![viewer.next.primary, ...viewer.next.secondary].some(a => a?.action === 'open-discover'), 'no hand-off action is offered to a rank that cannot register');
+  assert.ok([verify().next.primary, ...verify().next.secondary].some(a => a?.action === 'open-discover'), 'the same draft offers it to a writable rank');
+  assert.equal(verify({ registeredId: 'uploaded-x' }, { canWrite: false, reason: 'r' }).handoff, 'unavailable', 'unavailable ranks first');
+  assert.equal(verify({}, { canWrite: false }).unavailableText, 'Registering the pack needs the operator role here — download the pack YAML instead.', 'a reason-less access still names the rank');
+  const open = verify({}, { canWrite: true, reason: null });
+  assert.deepEqual([open.handoff, open.canRegister, open.unavailableText], ['ready', true, null]);
+  assert.deepEqual([verify().handoff, verify().canRegister], ['ready', true], 'the default access is writable: every existing caller is unchanged');
+  // The footer: the status is the reason, #build-open is disabled with it as its title; download pack yaml stays.
+  const c = stubContainer();
+  renderBuildVerify(c, viewer, { build: {} });
+  assert.ok(c.innerHTML.includes('Registering the pack needs the operator role in Acme — yours is viewer — download the pack YAML instead.'), 'the footer status says why');
+  assert.match(c.innerHTML, /id="build-open" disabled title="Registering the pack needs the operator role in Acme — yours is viewer — download the pack YAML instead\."/);
+  assert.ok(c.innerHTML.includes('id="build-yaml-download"'), 'the YAML download is the way out that works');
+  const ok = stubContainer();
+  renderBuildVerify(ok, open, { build: {} });
+  assert.match(ok.innerHTML, /id="build-open" >/, 'a writable rank gets the usable button, no title');
+});
+
+// Slice 6a (design §6.4, A-B2): a Build opened from a service page registers under the typed name's slug, never by the
+// record's id — DEFINE says before Compile when the two differ, offers the one name that yields the slug, and blocks nothing.
+test('buildDefineModel: the origin note — nothing when the name yields the origin slug; the sentence with "use <name>" when the origin name still does; without it for a renamed record; the field is never blocked', () => {
+  const origin = { id: 7, slug: 'payment-service', name: 'payment service' };
+  const define = (over, extra) => buildDefineModel({ build: draft(over), library: LIBRARY, requirements: REQUIREMENTS, ...extra });
+  assert.deepEqual([define().origin, define().originNote], [null, null], 'no origin: no note (every existing caller unchanged)');
+  const same = define({ name: 'payment service' }, { origin, nameKey: 'payment-service', originNameKey: 'payment-service' });
+  assert.deepEqual([same.origin, same.originNote], [{ id: 7, slug: 'payment-service', name: 'payment service' }, null]);
+  const other = define({ name: 'Payments Platform' }, { origin, nameKey: 'payments-platform', originNameKey: 'payment-service' });
+  assert.deepEqual(other.originNote, {
+    text: 'This pack will register under a new service "payments-platform", not payment-service — a slug is fixed. Keep a name that yields payment-service, or go on and get a second service.',
+    useName: 'payment service',
+  });
+  assert.equal(other.valid, true, 'said, not blocked: the definition stays valid and Compile reachable');
+  const renamed = define({ name: 'Payments Platform' }, { origin: { ...origin, name: 'Payments Platform' }, nameKey: 'payments-platform', originNameKey: 'payments-platform' });
+  assert.equal(renamed.originNote.useName, null, 'a renamed record has no name that yields its slug but the slug itself, which the sentence names');
+  // The renderer: the note under the service fields with the button, escaped at the seam; none without a note.
+  const html = (m) => { const c = stubContainer(); renderBuildDefine(c, m, { build: { update() {} } }); return c.innerHTML; };
+  const withNote = html(other);
+  assert.ok(withNote.includes('id="build-origin-note" role="status"') && withNote.includes('not payment-service — a slug is fixed.'));
+  assert.ok(withNote.includes('<button type="button" class="ctrl-btn build-def-origin-use" id="build-use-origin-name">use payment service</button>'));
+  assert.ok(!withNote.includes('id="build-next" disabled'), 'Compile is not blocked by the note');
+  assert.ok(!html(renamed).includes('id="build-use-origin-name"'), 'no one-click fix without a name that yields the slug');
+  assert.ok(!html(same).includes('build-origin-note'), 'no note when the keys agree');
+  const payload = '<img src=x onerror="window.__xss=1">';
+  const hostile = html(define({ name: payload }, { origin: { ...origin, name: payload }, nameKey: 'img-src-x-onerror-window-xss-1', originNameKey: 'img-src-x-onerror-window-xss-1' }));
+  assert.ok(!hostile.includes('<img'), 'the origin name and the key are escaped at the seam');
+});
+
 test('the stale note on each step says where the rejected value is marked, in one sentence', () => {
   const stale = draft({ error: ['param kafka.bootstrap: a value may not contain a double quote'] });
   const render = (fn, model) => { const c = stubContainer(); fn(c, model, { build: {} }); return c.innerHTML; };
@@ -979,6 +1033,8 @@ test('the persisted build draft is inputs only — never the result, the preview
     assert.deepEqual([r.step, r.seeded], [step, seeded], `${legacy} → ${step}, seeded ${seeded} (a pre-seed draft past DEFINE was seeded in all but name)`);
   }
   assert.deepEqual([restore({ step: 'nonsense' }).step, restore({ step: 'compile', seeded: false }).seeded, restore({ tier: 'tier-9' }).tier, restore(null).step], ['define', false, 'tier-2', 'define'], 'an unknown step or tier falls to the default; an explicit seeded=false is kept; no draft is the defaults');
+  // The origin record of a Build opened from a service page (slice 6a): a positive integer id or nothing.
+  assert.deepEqual([restore({ serviceId: 7 }).serviceId, restore({ serviceId: '7' }).serviceId, restore({ serviceId: 0 }).serviceId, restore({}).serviceId], [7, null, null, null]);
 });
 
 test('build-api loaders: the paths and bodies the six routes take, with an injected fetcher', async () => {
@@ -1435,6 +1491,17 @@ test('a Scaffold card keeps its focus ring: the dashed frame is an outline, so a
     assert.equal(restored.replace(/\s+/g, ' ').trim(), focusRing.replace(/\s+/g, ' ').trim(), `.card.${flag}:focus-visible is the card focus ring`);
     assert.ok(CSS_TEXT.indexOf(`.card.${flag}:focus-visible`) > CSS_TEXT.indexOf(`.card.${flag} {`), 'declared after the frame, so it wins the cascade');
   }
+});
+
+test('the Discover empty state\'s service sentence is styled: one rule in the lede\'s voice, so it never falls back to the browser <p> margins and body ink', () => {
+  // renderDiscoverEmpty emits <p class="discover-empty-service"> between the title and the lede (slice 6a, design §5.4).
+  const lede = cssRule('.discover-empty-lede');
+  const sentence = cssRule('.discover-empty-service');
+  assert.ok(lede, '.discover-empty-lede exists');
+  assert.ok(sentence, '.discover-empty-service has a rule');
+  assert.match(sentence, /margin:\s*0 0 8px/, 'the title\'s gap below, not the browser\'s 1em');
+  const voice = (body) => body.replace(/margin:[^;]*;/, '').replace(/\s+/g, ' ').trim();
+  assert.equal(voice(sentence), voice(lede), 'the sentence reads in the lede\'s measure, font and colour');
 });
 
 test('the slab verdict reads at WCAG AA in both themes: each state colour the rules name, on the surface the pill sits on', () => {
@@ -2803,9 +2870,20 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   // color-mix(in srgb, A p%, B): a per-channel blend of the gamma-encoded values.
   const mix = (a, b, p) => '#' + [1, 3, 5].map(i => Math.round(parseInt(a.slice(i, i + 2), 16) * p + parseInt(b.slice(i, i + 2), 16) * (1 - p)).toString(16).padStart(2, '0')).join('');
   const LAYERS = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
-  const axis = CSS_TEXT.slice(CSS_TEXT.indexOf('==== The axis'));
-  const rules = [...axis.matchAll(/(?:^|\n)([^@{}\n][^{}]*?)\s*\{([^{}]*)\}/g)].map(m => ({ sel: m[1].trim(), body: m[2] }));
+  // The zones the scan reads, in file order: the axis block (Build) and the Services block (STORE_PLAN slice 6a,
+  // the .svc-* rules). The slice runs from the first marker to EOF, so every zone after it is covered.
+  const ZONES = ['==== The axis', '==== Services'];
+  const starts = ZONES.map(z => { const i = CSS_TEXT.indexOf(z); assert.ok(i >= 0, `${z} marker`); return i; });
+  assert.ok(starts.every((s, i) => i === 0 || s > starts[i - 1]), 'the zones are in order');
+  const axis = CSS_TEXT.slice(starts[0]);
+  const servicesSlice = CSS_TEXT.slice(starts[1]);
+  const ruleRe = /(?:^|\n)([^@{}\n][^{}]*?)\s*\{([^{}]*)\}/g;
+  const rules = [...axis.matchAll(ruleRe)].map(m => ({ sel: m[1].trim(), body: m[2] }));
   assert.ok(rules.length > 100, `the axis block parsed (${rules.length} rules)`);
+  // The zone guard: every rule whose SELECTOR names .svc- sits inside a scanned zone — in any selector position.
+  const rulesBefore = [...CSS_TEXT.slice(0, starts[0]).matchAll(ruleRe)].map(m => m[1].trim());
+  assert.deepEqual(rulesBefore.filter(sel => /\.svc-/.test(sel)), [], 'no .svc- rule before the scanned zones');
+  assert.ok([...servicesSlice.matchAll(ruleRe)].some(m => /\.svc-gate-card/.test(m[1])), 'the service gate rules are in the Services zone');
   const sizeOf = (body) => { const m = body.match(/font(?:-size)?:[^;]*?(\d+(?:\.\d+)?)px/); return m ? Number(m[1]) : null; };
   const weightOf = (body) => Number(body.match(/font:\s*(?:italic\s+)?(\d{3})\s/)?.[1] || 400);
   const large = (body) => { const s = sizeOf(body); return s != null && (s >= 18.66 || (s >= 14 && weightOf(body) >= 700)); };
@@ -2845,4 +2923,56 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   assert.ok(!cssRule('.build-rolo-card.is-open') && !cssRule('.build-rolo-customise') && !cssRule('.build-edit-face'), 'the in-card face and its rules are gone');
   assert.ok(reduced.includes('.build-seed-change') && reduced.includes('.build-rolo-edit') && reduced.includes('.build-edit-reset') && reduced.includes('.build-editor,'), 'the new transitions and the editor\'s entrance respect reduced motion');
   assert.match(cssRule('.build-evidence-custom'), /color:\s*var\(--ink-2\)/, 'the custom evidence badge is ink on a tint, not a colour literal');
+  // ---- The Services zone (docs/STORE_PLAN.md §6, slice 6a): what the scan proves and what it cannot see ----
+  // The scan reads app.css only. For the moved .svc-gate-* rules it proves the app.css tokens; the SHIPPED colours are
+  // the later stylesheets' (studio/index.html links ux.css, then reskin.css, after app.css): ux.css sets
+  // .svc-gate-name/-meta/-activity to --ux-ink/-2/-3 unconditionally, and reskin.css under body.chrome-observa (the
+  // class every boot adds) sets .svc-gate-card { background: --og-panel }, .svc-gate-name → --og-text and
+  // .svc-gate-meta / -activity / -eyebrow → --og-muted. Measured by hand from studio/design-tokens.css: light
+  // --og-muted #5a6779 on --og-panel #ffffff 5.75:1, dark #9ba9bc on #131a25 7.32:1 — AA. The Services tokens on the
+  // card's real surface --og-panel: light --ink-2 11.48:1, --ink-3 8.86:1; dark --ink-2 9.40:1, --ink-3 6.83:1. (Dark
+  // --ink-4 is 4.27:1 on --card and 4.56:1 on --og-panel — the --ink-3 move is right either way.) Verdict text --ink-2
+  // on the tints the scan does not pair it with: light --L1-tint 10.96:1, --L3-tint 10.43:1, --L4-tint 10.24:1; dark
+  // 9.26:1, 8.92:1, 9.65:1.
+  for (const sel of ['.svc-gate-meta', '.svc-gate-eyebrow']) assert.match(cssRule(sel), /color:\s*var\(--ink-3\)/, `${sel} is --ink-3 (not --ink-4, which fails AA in dark; not --CMP, which the scan cannot see)`);
+  assert.ok(!/color:\s*var\(--ink-[45]\)/.test(servicesSlice), 'no --ink-4 / --ink-5 text in the Services zone');
+  assert.ok(!/(?<![-\w])color:\s*var\(--CMP\)/.test(servicesSlice), 'the text tokens rule: --CMP only ever colours a border in the Services zone');
+  // The override check: ux.css and reskin.css restyle none of the new prefixes, so the scan's verdict on them is the shipped one.
+  const NEW_PREFIXES = /\.svc-(card|page|env|tab|tabs|panel|verdict|actions?|packs?|pack-row|why|status|editor|catalogue|noorg)\b/;
+  for (const file of ['studio/ux.css', 'studio/reskin.css']) {
+    const text = readFileSync(resolve(ROOT, file), 'utf8');
+    const sels = [...text.matchAll(/(?:^|\n)([^@{}\n][^{}]*?)\s*\{/g)].map(m => m[1].trim()).filter(s => NEW_PREFIXES.test(s));
+    assert.deepEqual(sels, [], `${file} does not restyle the Services zone`);
+  }
+  // The bridge check: studio/index.html links design-bridge.css after app.css, and the bridge remaps the neutrals on
+  // :root (--ink-N → --og-text/-2/--og-muted, --card → --og-panel, --line-2 → --og-line), so the SHIPPED pill colours
+  // are design-tokens.css's, not app.css's. The scan above pairs the app.css values (--ink-3 #4A4A4A on --line-2
+  // #E5E8EC, ~8:1) and stays green while the bridged pair fails: light --og-muted #5a6779 on --og-line #d8dde6 is
+  // 4.22:1 — below AA for 11.5–13.5 px text. So every Services rule that colours text with an --ink-N token is
+  // re-read through the bridge, on --og-panel (the card and the page panel) and, for a rule whose own background is
+  // --line-2 or whose text sits inside such a pill (the <small> detail inside .is-base), on --og-line.
+  const bridgeBlock = readFileSync(resolve(ROOT, 'studio/design-bridge.css'), 'utf8').match(/(?:^|\n):root, \[data-theme="dark"\], \[data-theme="light"\]\s*\{([\s\S]*?)\n\}/);
+  assert.ok(bridgeBlock, 'the bridge remaps the tokens on :root and both themes');
+  const bridge = Object.fromEntries([...bridgeBlock[1].matchAll(/--([\w-]+):\s*var\(--(og-[\w-]+)\)/g)].map(m => [m[1], m[2]]));
+  for (const tok of ['ink-1', 'ink-2', 'ink-3', 'card', 'line-2']) assert.ok(bridge[tok], `the bridge maps --${tok}`);
+  const ogText = readFileSync(resolve(ROOT, 'studio/design-tokens.css'), 'utf8');
+  const ogOf = (block) => { const m = ogText.match(new RegExp(`(?:^|\\n)${block}\\s*\\{([\\s\\S]*?)\\n\\}`)); assert.ok(m, `${block} og token block`); return Object.fromEntries([...m[1].matchAll(/--([\w-]+):\s*(#[0-9a-fA-F]{6})\b/g)].map(t => [t[1], t[2]])); };
+  const og = { light: ogOf(':root'), dark: ogOf('\\[data-theme="dark"\\]') };
+  const PILL_CONTENT = /^\.svc-verdict-detail$/;                       // rendered inside the .is-base pill, whose background is --line-2
+  const bridged = [];
+  for (const r of [...servicesSlice.matchAll(ruleRe)].map(m => ({ sel: m[1].trim(), body: m[2] }))) {
+    const tok = r.body.match(/(?:^|[;{\s])color:\s*var\(--(ink-[1-5])\)/)?.[1];
+    if (!tok) continue;
+    const onLine = /background:\s*var\(--line-2\)/.test(r.body) || PILL_CONTENT.test(r.sel);
+    const min = large(r.body) ? 3 : 4.5;
+    for (const [name, t] of Object.entries(og)) {
+      const ink = t[bridge[tok]];
+      for (const surface of onLine ? ['card', 'line-2'] : ['card']) {
+        const ratio = contrast(ink, t[bridge[surface]]);
+        if (ratio < min) bridged.push(`${r.sel}: --${tok} (--${bridge[tok]}) on --${surface} (--${bridge[surface]}) ${ratio.toFixed(2)}:1 (${name}, needs ${min})`);
+      }
+    }
+  }
+  assert.deepEqual(bridged, [], 'every Services text colour clears AA through the bridge, on the panel and inside a --line-2 pill');
+  assert.ok(contrast(og.light['og-muted'], og.light['og-line']) < 4.5, 'the ratio the live review measured, for the record: light --og-muted on --og-line fails AA, so a muted pill\'s text is --ink-2');
 });

@@ -66,6 +66,8 @@ const EXEMPT = {
   '.build-sheet': 'Build: the context bar is hidden there',
   '.build-editor-scrim': 'a modal scrim',
   '.build-editor': 'a centred modal',
+  '.svc-editor-scrim': 'a modal scrim (the service record editor)',
+  '.svc-editor': 'a centred modal (the service record editor)',
   '.proto-switcher': 'prototype only (?proto)',
   '.proto-actionbar': 'prototype only (?proto)',
   '.proto-deploybar': 'prototype only (?proto)',

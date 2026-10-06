@@ -6,6 +6,8 @@
 // app.mjs and the view modules; `state` is never reassigned, only its
 // properties, so the imported binding stays live across modules.
 
+import { persistedStateKey } from './services-model.mjs';
+
 // ---------- DOM helpers ----------
 export const $  = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -42,6 +44,7 @@ export function defaultBuildState() {
     pending: false,           // an instantiate is in flight
     preview: null,            // { target, label, filename, contentType, content, warnings } — the VERIFY artefact open
     registeredId: null,       // the id VERIFY's "Continue …" exit registered
+    serviceId: null,          // the service record DEFINE was prefilled from (a Build opened from a service page; docs/STORE_PLAN.md §6, slice 6a) — the ORIGIN the hand-off may write; null for a draft started from the home
     stackOpen: {},            // { [`${layerId}/detail`]: true } — the stack's open detail folds (UI state, never persisted)
     sheetOpen: null,          // the layer whose sheet is open ('L1' … 'GOV'), one at a time (UI state, never persisted)
     rolodexAll: false,        // the L1 rolodex shows every product's SLIs, not only the selected entries' (UI state, never persisted)
@@ -59,7 +62,7 @@ export function defaultBuildState() {
   };
 }
 // The build fields that survive a reload (never `result`, `preview`, `error`, `pending`).
-export const BUILD_PERSIST_FIELDS = ['step', 'name', 'owners', 'environment', 'tier', 'entries', 'params', 'slis', 'toggles', 'overrides', 'custom', 'seeded', 'registeredId'];
+export const BUILD_PERSIST_FIELDS = ['step', 'name', 'owners', 'environment', 'tier', 'entries', 'params', 'slis', 'toggles', 'overrides', 'custom', 'seeded', 'registeredId', 'serviceId'];
 
 export const state = {
   // 'home' starts the studio empty; user picks Analyze (one pack) or
@@ -67,7 +70,17 @@ export const state = {
   // and the header bar + tabs appear. Logo click returns to 'home'.
   // 'build' is the BUILD journey (Define · Compile · Verify) — the
   // header then renders BUILD_TABS through the same renderer.
+  // 'service' is the service page (docs/STORE_PLAN.md §6, slice 6a): one
+  // record of the services table with its environments as tabs; Discover ·
+  // Diagnose · Remediate · Build open from it bound to the service and the
+  // environment — the context bar and the tabs are hidden as on home.
   mode: 'home',
+  // The service page's record id and the environment NAME its selected tab
+  // shows — kept while a workspace opened from the page is on screen (the
+  // breadcrumb back, the empty Discover's sentence, the bound env option),
+  // nulled by goHome(). Both persisted: a reload lands on the page again.
+  serviceId: null,
+  serviceEnv: null,
   build: defaultBuildState(),
   // Which home renders: 'gate' (signed-in service picker) or 'hero'
   // (the marketing/connect landing). Authenticated users with services
@@ -75,6 +88,25 @@ export const state = {
   homeVariant: 'hero',
   // /auth/me result (identity postures only; null in local mode).
   identity: null,
+  // The services axis (docs/STORE_PLAN.md §6, slice 6a). `services` is the
+  // GET /api/services table (ServiceView[]) or null while unknown or
+  // unavailable; `servicesStatus.kind` says why it is null — 'static' (the
+  // bundle's 501, silent), 'denied' (a guard's 403), 'error' (anything
+  // else, with the parsed refusal text) — or 'ok' / 'loading'. The home
+  // draws record cards from the table and today's pack-derived tiles
+  // otherwise (services-model.mjs buildServicesHomeModel). None persisted.
+  services: null,
+  servicesStatus: { kind: 'loading', error: null },
+  // `${packId}::${env}` → the conformance report (or { error }) a card's
+  // verdict pill reads; a session cache, cleared on every catalogue refresh.
+  serviceVerdicts: {},
+  // What this browser may do in the active org, from GET /api/orgs
+  // (services-model.mjs accessModel): the effective role the guard applies
+  // decides which write affordances are drawn usable. Null until read.
+  access: null,
+  // The active org's name from GET /api/orgs; null when unknown (the texts
+  // then say "this organisation").
+  orgName: null,
   // The brand (studio/brand.mjs loadBrand): the normalized brand with its
   // `chrome` strings; set first in boot, before any chrome is painted.
   brand: null,
@@ -197,10 +229,21 @@ export const state = {
 // a small whitelist of state under a versioned key and re-hydrate on
 // boot — re-fetching packs the normal way (no skipping validation) so a
 // pack that vanished from the catalog just drops silently.
-const PERSIST_KEY = 'studioState.v1';
+//
+// The snapshot is one login's in one org (docs/STORE_PLAN.md §6.4): the key
+// is `studioState.v2:<login|local>:<org|default>` (services-model.mjs
+// persistedStateKey), set by persistence.scope() from boot() once the
+// identity and the active org are resolved and before the rehydrate — a
+// Build draft prefilled from one org's record never outlives that org,
+// and sign-out forgets every snapshot of the login (persistence.forget).
+// The unscoped pre-slice-6a key is read once, when the scoped key is
+// absent, adopted into it and removed (the mcpUrl.v2 precedent, api.mjs).
+const LEGACY_PERSIST_KEY = 'studioState.v1';
+const PERSIST_KEY_PREFIX = 'studioState.v2:';
 const PERSIST_FIELDS = [
-  'mode',                        // only 'build' is acted on at rehydrate; the pack ids decide the rest
+  'mode',                        // 'build' and 'service' are acted on at rehydrate; the pack ids decide the rest
   'build',                       // snapshotted through BUILD_PERSIST_FIELDS (inputs only, never the canonical)
+  'serviceId', 'serviceEnv',     // the service page (or the workspace opened from it)
   'selectedService',
   'selectedPackId', 'selectedEnv',
   'compareBId', 'compareBEnv',
@@ -219,11 +262,25 @@ const PERSIST_FIELDS = [
 export const persistence = {
   _suspended: true,  // boot-phase guard — flipped to false once rehydrate finishes
   _timer: null,
+  _key: persistedStateKey(null, null),
   suspend() { this._suspended = true; if (this._timer) { clearTimeout(this._timer); this._timer = null; } },
   resume()  { this._suspended = false; },
+  // Which login's snapshot in which org this is (null → 'local' / 'default').
+  scope(login, org) { this._key = persistedStateKey(login, org); },
+  key() { return this._key; },
   read() {
     try {
-      const raw = localStorage.getItem(PERSIST_KEY);
+      let raw = localStorage.getItem(this._key);
+      if (!raw) {
+        // The one-time adoption of the unscoped snapshot into the first
+        // scoped key it is read under; the old key is never read again.
+        const legacy = localStorage.getItem(LEGACY_PERSIST_KEY);
+        if (legacy) {
+          localStorage.removeItem(LEGACY_PERSIST_KEY);
+          localStorage.setItem(this._key, legacy);
+          raw = legacy;
+        }
+      }
       if (!raw) return null;
       const data = JSON.parse(raw);
       return (data && typeof data === 'object') ? data : null;
@@ -236,12 +293,24 @@ export const persistence = {
     // The build draft persists as inputs only: the instantiate result (a
     // ~20 KB canonical plus its YAML) is re-derived on reload, never stored.
     snap.build = Object.fromEntries(BUILD_PERSIST_FIELDS.map(k => [k, state.build?.[k]]));
-    try { localStorage.setItem(PERSIST_KEY, JSON.stringify(snap)); } catch (_) {}
+    try { localStorage.setItem(this._key, JSON.stringify(snap)); } catch (_) {}
   },
   schedule() {
     if (this._suspended) return;
     if (this._timer) clearTimeout(this._timer);
     this._timer = setTimeout(() => { this._timer = null; this.write(); }, 250);
   },
-  clear() { try { localStorage.removeItem(PERSIST_KEY); } catch (_) {} },
+  clear() { try { localStorage.removeItem(this._key); } catch (_) {} },
+  // Sign-out: every snapshot of this login, in every org, and the unscoped
+  // one — a shared browser keeps no draft of a user who left.
+  forget(login) {
+    try {
+      const prefix = `${PERSIST_KEY_PREFIX}${login || 'local'}:`;
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(prefix)) localStorage.removeItem(k);
+      }
+      localStorage.removeItem(LEGACY_PERSIST_KEY);
+    } catch { /* storage unavailable */ }
+  },
 };

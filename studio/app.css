@@ -4503,6 +4503,9 @@ a:hover { color: var(--ink); }
    ============================================================ */
 body[data-mode="home"] .meta { display: none; }
 body[data-mode="home"] .tabs { display: none; }
+/* The service page (STORE_PLAN §6, slice 6a) hides the pack chrome as home does. */
+body[data-mode="service"] .meta { display: none; }
+body[data-mode="service"] .tabs { display: none; }
 body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
 
 /* ===================== HOME — PREMIUM FINTECH ===================== */
@@ -4952,6 +4955,9 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
   border-color: var(--ink-4);
   background: var(--hover);
 }
+.home-alt-btn.is-unavailable, .home-mcp-connect-btn.is-unavailable { opacity: .6; cursor: not-allowed; }
+.home-alt-btn.is-unavailable:hover { border-color: var(--line); background: var(--card); }
+.home-mcp-connect-btn.is-unavailable:hover { transform: none; filter: none; }
 .home-alt-key {
   font: 600 14px/1 var(--mono);
   color: var(--ink-4);
@@ -5057,6 +5063,15 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
 }
 .discover-empty-lede {
   margin: 0;
+  max-width: 60ch;
+  font: 14px/1.6 var(--sans);
+  color: var(--ink-3, var(--ink-4));
+}
+/* The service sentence (STORE_PLAN slice 6a, design §5.4): opened from a
+   service page with no pack, one line above the lede in the lede's voice,
+   with the Build button inline at its end. */
+.discover-empty-service {
+  margin: 0 0 8px;
   max-width: 60ch;
   font: 14px/1.6 var(--sans);
   color: var(--ink-3, var(--ink-4));
@@ -6871,6 +6886,7 @@ body.chrome-observa .hdr {
   padding: 10px 28px;
 }
 body.chrome-observa[data-mode="home"] .hdr { display: none !important; }
+body.chrome-observa[data-mode="service"] .hdr { display: none !important; }
 
 /* Meta strip stays hidden under the chrome for now — the audit
    content carries that detail. */
@@ -7914,80 +7930,8 @@ body.chrome-observa .disco {
 .hdr-user-menu-item:hover { background: var(--hover); color: var(--ink); }
 .hdr-user-menu-item:focus-visible { outline: 2px solid var(--CMP); outline-offset: 1px; }
 
-/* ============================================================
-   SERVICE GATE — the post-sign-in landing (which service are
-   you working on?) + the always-visible active-service chip in
-   the OBSERVA bar. docs/PRODUCTIZATION_PLAN.md Stage 1 UX.
-   ============================================================ */
-.svc-gate {
-  max-width: 880px;
-  margin: 9vh auto 0;
-  padding: 0 28px;
-}
-.svc-gate-eyebrow {
-  font: 700 13px/1 var(--mono);
-  letter-spacing: 0.22em;
-  color: var(--CMP);
-}
-.svc-gate-title {
-  font-family: var(--serif);
-  font-size: 42px;
-  font-weight: 600;
-  margin: 14px 0 4px;
-  color: var(--ink);
-}
-.svc-gate-sub {
-  font-size: 16px;
-  color: var(--ink-3);
-  margin: 0 0 30px;
-}
-.svc-gate-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 12px;
-}
-.svc-gate-card {
-  appearance: none;
-  text-align: left;
-  cursor: pointer;
-  padding: 18px 20px;
-  border-radius: var(--r-lg);
-  border: 1px solid var(--line);
-  background:
-    radial-gradient(120% 100% at 0% 0%, color-mix(in srgb, var(--CMP) 7%, transparent), transparent 60%),
-    var(--card);
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.05s;
-}
-.svc-gate-card:hover {
-  border-color: var(--CMP);
-  box-shadow: 0 0 22px color-mix(in srgb, var(--CMP) 22%, transparent);
-}
-.svc-gate-card:active { transform: translateY(1px); }
-.svc-gate-name {
-  display: block;
-  font: 700 15px/1.3 var(--mono);
-  color: var(--ink);
-  margin-bottom: 6px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.svc-gate-meta {
-  display: block;
-  font-size: 13px;
-  color: var(--ink-4);
-}
-.svc-gate-new {
-  appearance: none;
-  margin-top: 26px;
-  padding: 8px 2px;
-  border: 0;
-  background: none;
-  cursor: pointer;
-  font-size: 14px;
-  color: var(--ink-3);
-  border-bottom: 1px dashed var(--line);
-}
-.svc-gate-new:hover { color: var(--CMP); border-bottom-color: var(--CMP); }
+/* The service gate's rules (the post-sign-in landing) live at the end of this file, in the
+   Services zone the AA scan reads (tools/test-build-model.mjs). */
 
 /* Active-service chip in the OBSERVA bar. */
 .observa-service {
@@ -8015,23 +7959,26 @@ body.chrome-observa .disco {
   white-space: nowrap;
 }
 .observa-service[hidden] { display: none; }
-
-/* Stage 2 tenancy — active-org indicator/switcher in the header */
-.hdr-org { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; }
-.hdr-org .ctrl-key { font-size: 11.5px; letter-spacing: .14em; color: var(--ink-3, #788396); }
-.hdr-org-name { font-family: var(--mono, 'IBM Plex Mono', monospace); font-size: 13px; font-weight: 600; }
-.hdr-org select {
-  background: transparent; color: inherit; border: 1px solid var(--line, #2a3548);
-  border-radius: 5px; padding: 3px 6px; font-size: 13px;
-  font-family: var(--mono, 'IBM Plex Mono', monospace); cursor: pointer;
+/* The chip is a button when it resolves a service record (back to its page): the control's own look, as a button. */
+button.observa-service {
+  font: inherit;
+  cursor: pointer;
+  color: inherit;
 }
+button.observa-service:hover { background: color-mix(in srgb, var(--CMP) 18%, transparent); }
+button.observa-service:focus-visible { outline: 2px solid var(--CMP); outline-offset: 2px; }
+
+/* Tenancy — the one active-org indicator / switcher, in the OBSERVA bar (app.mjs updateObservaOrgChip). The
+   dropdown's options are drawn by the browser on its own surface: the ink token on the card surface in both
+   themes, no colour literal. */
 .observa-org { margin-right: 2px; }
 .observa-org-select {
   background: transparent; color: inherit; border: 0; padding: 0;
   font: inherit; font-family: var(--mono, 'IBM Plex Mono', monospace);
   font-size: 13.5px; font-weight: 600; cursor: pointer; outline-offset: 2px;
 }
-.observa-org-select option { color: #0f1623; }
+.observa-org-select option { color: var(--ink); background: var(--card); }
+[data-theme="dark"] .observa-org-select option { color: var(--ink); background: var(--card); }
 
 /* ============================================================
    Advanced → Neuron (.nrn-*) — the observability control neuron as one
@@ -8185,6 +8132,9 @@ body.chrome-observa .disco {
 .home-choice-card.is-check:hover { border-color: var(--obs-cyan); box-shadow: 0 0 22px color-mix(in srgb, var(--obs-cyan) 22%, transparent); }
 .home-choice-card.is-build:hover { border-color: var(--BLD); box-shadow: 0 0 22px color-mix(in srgb, var(--BLD) 22%, transparent); }
 .home-choice-card:active { transform: translateY(1px); }
+/* Drawn, not removed: a journey the reader's rank cannot start (the reason is a why-line inside it, Services zone). */
+.home-choice-card.is-unavailable { opacity: .6; cursor: not-allowed; }
+.home-choice-card.is-unavailable:hover, .home-choice-card.is-unavailable:active { border-color: var(--line); box-shadow: none; transform: none; }
 .home-choice-key { font: 600 16px/1 var(--mono); color: var(--ink-4); }
 .home-choice-card.is-build .home-choice-key { color: var(--BLD); }
 .home-choice-card.is-check .home-choice-key { color: var(--obs-cyan); }
@@ -8193,8 +8143,6 @@ body.chrome-observa .disco {
 .home-choice-path { margin-top: 4px; font: 600 12.5px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-4); }
 .home-choice-card.is-build .home-choice-path { color: var(--BLD); }
 .home-choice-card.is-check .home-choice-path { color: var(--obs-cyan); }
-.svc-gate-actions { display: flex; flex-wrap: wrap; gap: 8px 22px; justify-content: center; }
-.svc-gate-actions .svc-gate-new { margin-top: 26px; }
 
 .build-exit { margin-bottom: 6px; }
 .build-exit-btn {
@@ -8535,6 +8483,9 @@ body.chrome-observa .disco {
 .build-def-hint { font: italic 13px/1.4 var(--serif); color: var(--ink-3); min-height: 15px; }
 .build-def-hint code { font: 12.5px/1.4 var(--mono); background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 .build-def-needed { margin-top: 12px; font: italic 13.5px/1.5 var(--serif); color: var(--warn); }
+/* The slug guard under the service fields (slice 6a, design §6.4): a note, never a block — the one-click name beside it. */
+.build-def-origin { margin: 10px 0 0; padding: 10px 12px; border-radius: var(--r-md); font: 13px/1.5 var(--serif); color: var(--ink-2); background: var(--card); border: 1px solid var(--line-2); }
+.build-def-origin .build-def-origin-use { margin-left: 6px; vertical-align: baseline; }
 
 /* The segmented tier control: three segments, one sliding thumb (--seg-index is the chosen one). */
 .build-seg { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 3px; background: var(--line-2); border-radius: 12px; isolation: isolate; }
@@ -8976,4 +8927,426 @@ select.build-edit-input { appearance: auto; }
   .build-sheet.is-entering, .build-sheet-scrim.is-entering, .build-editor, .build-editor-scrim { animation: none; }
   .build-seg-thumb, .build-switch, .build-switch-knob, .build-rolo-card, .build-chip, .build-slab-add, .build-def-field input, .build-summary, .build-sheet-close, .build-rolodex-nav, .build-seg-btn, .build-seed-change, .build-rolo-edit, .build-rolo-create, .build-edit-reset, .build-editor-close, .build-slab .card.is-editable, .build-seed-chip.is-entry, .build-edit-dir-thumb, .build-edit-dir-btn { transition: none; }
   .build-rolodex-track { scroll-behavior: auto; }
+}
+
+/* ==== Services (docs/STORE_PLAN.md §6, slice 6a): the Services home cards and the service page — the axis
+   language: the card tokens, 14 px radii, hairlines, the mono for slugs and origins, text in --ink / --ink-2 /
+   --ink-3 only, tone by tint and a left border, never by text colour alone; both themes through the tokens.
+   What ux.css and reskin.css override here (.svc-gate-name/-meta/-activity/-eyebrow, the card surface) is
+   recorded in tools/test-build-model.mjs beside the scan; the new prefixes have no override, asserted. ==== */
+
+/* The service gate — the post-sign-in landing (which service are you working on?), moved here from the
+   chrome block so the AA scan reads it. The record cards and the service page (slice 6a) follow. */
+.svc-gate {
+  max-width: 880px;
+  margin: 9vh auto 0;
+  padding: 0 28px;
+}
+.svc-gate-eyebrow {
+  font: 700 13px/1 var(--mono);
+  letter-spacing: 0.22em;
+  color: var(--ink-3);
+}
+.svc-gate-title {
+  font-family: var(--serif);
+  font-size: 42px;
+  font-weight: 600;
+  margin: 14px 0 4px;
+  color: var(--ink);
+}
+.svc-gate-sub {
+  font-size: 16px;
+  color: var(--ink-3);
+  margin: 0 0 30px;
+}
+.svc-gate-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.svc-gate-card {
+  appearance: none;
+  text-align: left;
+  cursor: pointer;
+  padding: 18px 20px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(120% 100% at 0% 0%, color-mix(in srgb, var(--CMP) 7%, transparent), transparent 60%),
+    var(--card);
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.05s;
+}
+.svc-gate-card:hover {
+  border-color: var(--CMP);
+  box-shadow: 0 0 22px color-mix(in srgb, var(--CMP) 22%, transparent);
+}
+.svc-gate-card:active { transform: translateY(1px); }
+.svc-gate-name {
+  display: block;
+  font: 700 15px/1.3 var(--mono);
+  color: var(--ink);
+  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.svc-gate-meta {
+  display: block;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.svc-gate-new {
+  appearance: none;
+  margin-top: 26px;
+  padding: 8px 2px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--ink-3);
+  border-bottom: 1px dashed var(--line);
+}
+.svc-gate-new:hover { color: var(--ink); border-bottom-color: var(--CMP); }
+.svc-gate-actions { display: flex; flex-wrap: wrap; gap: 8px 22px; justify-content: center; }
+.svc-gate-actions .svc-gate-new { margin-top: 26px; }
+
+/* The record card (one per row of the services table): the slug in the mono, one meta line, one row per
+   environment with its verdict pill. A pill says its state in words; the tint and the left border repeat it,
+   never carry it alone — pass on the L3 tint, placeholders on the L1 tint (never green), a base grade and
+   "no verdict" on the hairline tint, fail on the L4 tint. Text is --ink-2 / --ink-3 throughout (the ratios on
+   the tints are recorded beside the scan, tools/test-build-model.mjs). */
+.svc-card { display: flex; flex-direction: column; gap: 4px; }
+.svc-card .svc-gate-name { margin-bottom: 0; }
+.svc-card-slug {
+  display: block;
+  font: 12.5px/1.3 var(--mono);
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.svc-card-envs {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.svc-env {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  font-size: 13px;
+}
+.svc-env-name {
+  flex: 0 0 auto;
+  min-width: 56px;
+  font: 600 12.5px/1.4 var(--mono);
+  color: var(--ink-2);
+}
+.svc-env-none { color: var(--ink-3); }
+.svc-verdict {
+  display: inline-block;
+  padding: 2px 8px 2px 7px;
+  border-radius: var(--r-md);
+  border-left: 3px solid var(--line);
+  background: var(--line-2);
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+.svc-verdict.is-pass { background: var(--L3-tint); border-left-color: var(--pass-border); }
+.svc-verdict.is-placeholder { background: var(--L1-tint); border-left-color: var(--warn); }
+.svc-verdict.is-base { background: var(--line-2); border-left-color: var(--ink-3); }
+.svc-verdict.is-fail { background: var(--L4-tint); border-left-color: var(--fail-border); }
+.svc-verdict.is-none, .svc-verdict.is-loading, .svc-verdict.is-error { color: var(--ink-2); background: var(--line-2); }
+.svc-verdict-detail { font-size: 11.5px; color: var(--ink-2); }
+.svc-card .svc-gate-activity { margin-top: 8px; }
+.svc-status {
+  margin: 0 0 14px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+.svc-status .ux-secondary-btn { margin-left: 8px; }
+/* The reason a control cannot be used by this rank, inside the control it explains. */
+.svc-why {
+  display: block;
+  margin-top: 6px;
+  font: italic 12.5px/1.4 var(--serif);
+  color: var(--ink-3);
+}
+.svc-catalogue { margin-top: 22px; }
+.svc-catalogue .home-pick-row { width: 100%; }
+
+/* The service page (design §5): the breadcrumb bar, the head (the name in the serif, the slug in the mono, the
+   facts in --ink-3), the environments as tabs — the selected one is --ink with a --CMP border below it: the
+   border carries the accent, never the text — the panel as a definition list (labels --ink-3, values --ink),
+   the MCP endpoint in the mono as name · origin, the four actions in the ctrl-btn idiom, the packs linked. */
+/* The chrome zeroes #layer-view's padding and each screen pads its own root (ux.css): the page carries the gutter. */
+.svc-page {
+  max-width: 1096px;
+  margin: 0 auto;
+  padding: 24px 28px 80px;
+}
+.svc-page-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.svc-page-back {
+  font: 500 13.5px/1.2 var(--sans);
+  color: var(--ink-2);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.svc-page-back:hover { color: var(--ink); border-color: var(--ink-3); background: var(--hover); }
+.svc-page-head { margin-bottom: 22px; }
+.svc-page-name {
+  margin: 0;
+  font: 600 28px/1.2 var(--serif);
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  outline: none;
+}
+.svc-page-name:focus-visible { outline: 2px solid var(--CMP); outline-offset: 4px; border-radius: 4px; }
+.svc-page-slug {
+  display: inline-block;
+  margin-top: 6px;
+  font: 13px/1.3 var(--mono);
+  color: var(--ink-3);
+}
+.svc-page-facts {
+  margin: 8px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+.svc-page-desc {
+  margin: 10px 0 0;
+  max-width: 68ch;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+.svc-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 16px;
+}
+.svc-tab {
+  font: 600 13.5px/1.2 var(--mono);
+  color: var(--ink-3);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: color .15s ease, border-color .15s ease;
+}
+.svc-tab:hover { color: var(--ink-2); }
+.svc-tab[aria-selected="true"] { color: var(--ink); border-bottom: 2px solid var(--CMP); }
+.svc-tab:focus-visible { outline: 2px solid var(--CMP); outline-offset: -2px; border-radius: 4px; }
+.svc-panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 20px;
+  outline: none;
+}
+.svc-panel:focus-visible { outline: 2px solid var(--CMP); outline-offset: 2px; }
+.svc-panel-facts { margin: 0; }
+.svc-panel-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 160px) 1fr;
+  gap: 6px 18px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line-2);
+}
+.svc-panel-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.svc-panel-row:first-child { padding-top: 0; }
+.svc-panel-row dt {
+  font: 600 12px/1.6 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.svc-panel-row dd {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.svc-panel-verdict .svc-verdict { font-size: 13.5px; }
+.svc-env-mcp { font: 13.5px/1.6 var(--mono); color: var(--ink-2); }
+.svc-env-mcp-name { font-weight: 600; }
+.svc-env-mcp-none, .svc-env-pack-none, .svc-panel-drift dd { color: var(--ink-2); }
+.svc-env-bindings {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+}
+.svc-env-bindings div { display: flex; gap: 6px; align-items: baseline; }
+.svc-env-bindings dt { font: 12.5px/1.6 var(--mono); color: var(--ink-3); text-transform: none; letter-spacing: 0; }
+.svc-env-bindings dd { margin: 0; font: 13.5px/1.6 var(--mono); color: var(--ink); }
+.svc-env-links a {
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.svc-env-links a:hover { color: var(--ink); }
+.svc-env-pack-how { color: var(--ink-3); }
+.svc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 18px 0 30px;
+}
+.svc-action {
+  font: 600 13.5px/1.2 var(--sans);
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 16px;
+  cursor: pointer;
+  text-align: left;
+}
+.svc-action:hover { border-color: var(--ink-3); background: var(--hover); }
+.svc-action:focus-visible { outline: 2px solid var(--CMP); outline-offset: 2px; }
+.svc-action.is-build { margin-left: auto; color: var(--ink-2); }
+.svc-action.is-unavailable { opacity: .55; cursor: not-allowed; }
+.svc-action.is-unavailable:hover { border-color: var(--line); background: var(--card); }
+.svc-action .svc-why { font-size: 12px; margin-top: 4px; }
+.svc-packs-title {
+  margin: 0 0 10px;
+  font: 600 16px/1.3 var(--serif);
+  color: var(--ink);
+}
+.svc-pack-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.svc-pack-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+}
+.svc-pack-row.is-current { border-left: 3px solid var(--CMP); }
+.svc-pack-label { font: 600 14px/1.4 var(--sans); color: var(--ink); }
+.svc-pack-meta { font: 12.5px/1.4 var(--mono); color: var(--ink-3); }
+.svc-pack-current {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font: 600 11px/1.5 var(--mono);
+  color: var(--ink-2);
+}
+.svc-pack-open { margin-left: auto; }
+.svc-pack-gone { margin-left: auto; font: 12.5px/1.4 var(--mono); color: var(--ink-3); }
+.svc-packs-none { margin: 0; font-size: 14px; line-height: 1.5; color: var(--ink-3); }
+.svc-noenv code { font: 12.5px/1.6 var(--mono); color: var(--ink-2); }
+@media (max-width: 720px) {
+  .svc-page { padding: 16px 16px 64px; }
+  .svc-panel-row { grid-template-columns: 1fr; gap: 2px; }
+  .svc-action.is-build { margin-left: 0; }
+  .svc-pack-open, .svc-pack-gone { margin-left: 0; }
+}
+
+/* The record editor (design §6.5): the Build SLI editor's idiom with the Services prefix — a scrim, a centred
+   dialog (position: fixed; exempt in tools/test-studio-layout.mjs), the fields in the DEFINE inputs' idiom, the
+   tier as a segmented radio group whose checked choice is --ink on --card (the text carries the state; --CMP
+   only borders it), the status line in --ink-3 — an error reads --ink beside a --fail-border edge, a save --ink-2
+   beside a --pass-border one, the sentence itself saying which. The shadows are the editor's neutral rgba. */
+.svc-edit { margin-left: auto; }
+.svc-editor-scrim { position: fixed; inset: 0; z-index: 150; cursor: pointer; background: color-mix(in srgb, var(--ink) 40%, transparent); animation: svc-editor-fade 160ms ease-out; }
+.svc-editor {
+  position: fixed; z-index: 151; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(720px, calc(100vw - 48px)); max-height: calc(100dvh - 40px); display: flex; flex-direction: column; box-sizing: border-box;
+  background: var(--card); border: 1px solid color-mix(in srgb, var(--CMP) 35%, var(--line)); border-radius: 16px;
+  box-shadow: 0 1px 2px rgba(15, 27, 45, 0.06), 0 24px 48px -16px rgba(15, 27, 45, 0.32), 0 8px 16px rgba(15, 27, 45, 0.14);
+  outline: none; overscroll-behavior: contain; animation: svc-editor-in 160ms ease-out;
+}
+[data-theme="dark"] .svc-editor { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 24px 48px -16px rgba(0, 0, 0, 0.6), 0 8px 16px rgba(0, 0, 0, 0.35); }
+@keyframes svc-editor-in { from { opacity: 0; transform: translate(-50%, -50%) scale(0.98); } to { opacity: 1; transform: translate(-50%, -50%); } }
+@keyframes svc-editor-fade { from { opacity: 0; } to { opacity: 1; } }
+.svc-editor:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--CMP) 40%, transparent), 0 24px 48px -16px rgba(15, 27, 45, 0.32); }
+.svc-editor-head { position: relative; flex: 0 0 auto; padding: 20px 28px 14px; border-bottom: 1px solid var(--line-2); display: flex; flex-direction: column; gap: 6px; }
+.svc-editor-head::before { content: ''; position: absolute; left: 28px; top: 0; width: 44px; height: 3px; border-radius: 0 0 3px 3px; background: var(--CMP); }
+.svc-editor-eyebrow { padding-right: 64px; font: 600 12px/1.3 var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); overflow-wrap: anywhere; }
+.svc-editor-title { margin: 0; padding-right: 64px; font: 600 22px/1.2 var(--serif); color: var(--ink); overflow-wrap: anywhere; }
+.svc-editor-close {
+  position: absolute; top: 16px; right: 20px; appearance: none; cursor: pointer;
+  padding: 4px 9px; border-radius: 8px; border: 1px solid var(--line); background: transparent;
+  font: 600 11.5px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3);
+  transition: color 200ms ease-out, border-color 200ms ease-out, background 200ms ease-out;
+}
+.svc-editor-close:hover { color: var(--ink); border-color: var(--ink-3); background: var(--hover); }
+.svc-editor-close:focus-visible { outline: 2px solid var(--CMP); outline-offset: 2px; }
+.svc-editor-body { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 16px 28px 12px; display: flex; flex-direction: column; gap: 14px; scrollbar-width: thin; }
+.svc-editor-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.svc-editor-label { font: 600 12.5px/1.3 var(--mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-2); }
+.svc-editor-help { font: 12px/1.3 var(--sans); letter-spacing: 0; text-transform: none; color: var(--ink-3); margin-left: 6px; }
+.svc-editor-field input, .svc-editor-field textarea {
+  width: 100%; padding: 9px 12px; box-sizing: border-box;
+  font: 14px/1.4 var(--mono); background: var(--card); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 10px;
+  transition: border-color 200ms ease-out, box-shadow 200ms ease-out;
+}
+.svc-editor-field textarea { resize: vertical; min-height: 72px; font-family: var(--sans); }
+.svc-editor-field input:focus, .svc-editor-field textarea:focus { outline: none; border-color: var(--CMP); box-shadow: 0 0 0 3px color-mix(in srgb, var(--CMP) 22%, transparent); }
+.svc-editor-field input:focus-visible, .svc-editor-field textarea:focus-visible { outline: 2px solid var(--CMP); outline-offset: 1px; }
+.svc-editor-note { margin: -6px 0 0; font: 12.5px/1.5 var(--sans); color: var(--ink-3); }
+.svc-editor-seg { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 3px; background: var(--line-2); border-radius: 12px; }
+.svc-editor-seg-btn {
+  appearance: none; cursor: pointer; border: 1px solid transparent; background: transparent; border-radius: 10px;
+  padding: 8px 6px; font: 600 12.5px/1.3 var(--mono); color: var(--ink-3); transition: color 200ms ease-out, background 200ms ease-out;
+}
+.svc-editor-seg-btn:hover { color: var(--ink-2); }
+.svc-editor-seg-btn[aria-checked="true"] { color: var(--ink); background: var(--card); border-color: var(--CMP); }
+.svc-editor-seg-btn:focus-visible { outline: 2px solid var(--CMP); outline-offset: -2px; }
+.svc-editor-foot { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; padding: 12px 28px 16px; border-top: 1px solid var(--line-2); }
+.svc-editor-status { flex: 1 1 260px; min-width: 0; font: 13px/1.45 var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
+.svc-editor-status.is-pending { font-style: italic; }
+.svc-editor-status.is-saved { color: var(--ink-2); padding-left: 10px; border-left: 3px solid var(--pass-border); }
+.svc-editor-status.is-error { color: var(--ink); padding-left: 10px; border-left: 3px solid var(--fail-border); }
+.svc-editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.svc-editor-save[aria-disabled="true"] { opacity: 0.5; cursor: progress; }
+@media (max-width: 760px) {
+  .svc-editor { left: 12px; right: 12px; width: auto; transform: translate(0, -50%); max-height: calc(100dvh - 24px); }
+  .svc-editor-head, .svc-editor-body, .svc-editor-foot { padding-left: 18px; padding-right: 18px; }
+  .svc-editor-seg { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .svc-card, .svc-tab, .svc-editor, .svc-editor-scrim { transition: none; animation: none; }
+  .svc-editor-close, .svc-editor-seg-btn, .svc-editor-field input, .svc-editor-field textarea { transition: none; }
+}
+
+/* The no-org home: a signed-in user in no organisation sees the server's refusal (a ux-kit empty state) and a
+   hint in --ink-3 — the same column as the gate, nothing else on the screen. */
+.svc-noorg {
+  max-width: 640px;
+  margin: 9vh auto 0;
+  padding: 0 28px;
+}
+.svc-noorg-hint {
+  margin: 14px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-3);
 }

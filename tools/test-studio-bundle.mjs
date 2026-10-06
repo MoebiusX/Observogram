@@ -49,7 +49,7 @@ import {
   checkPackUrl, parseArgs, defaultPackId, ENTRIES, CONFIG_ID, DEFAULT_ROOT,
   resolveTaxonomySource, loadTaxonomyFile, loadBundleBrand, checkBrandUrls,
 } from './build-studio-bundle.mjs';
-import { createStaticBackend, featureOf, denialText, noticeText, apiMenuSubText, DENIED } from '../studio/static-backend.mjs';
+import { createStaticBackend, featureOf, denialText, noticeText, apiMenuSubText, DENIED, FEATURES } from '../studio/static-backend.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { listEnvironments } from './lib/adapter.mjs';
 import { listTargets } from './lib/compile.mjs';
@@ -436,6 +436,32 @@ test('T3b every flag the CLI accepts is in its usage line, the README synopsis a
   assert.match(usageLine, /--pack-url <url> \[--id <id>\] \[--label <text>\] \[--description <text>\]/);
 });
 
+test('T3c every feature the shim denies is named in the README 501 list and the DOWNSTREAM §10 denial cell', () => {
+  const readme = readFileSync(join(DEFAULT_ROOT, 'README.md'), 'utf8').replace(/\s+/g, ' ');
+  const list = readme.slice(readme.indexOf('Everything the server alone can do — '), readme.indexOf("`501 { denied: 'no-backend'"));
+  const downstream = readFileSync(join(DEFAULT_ROOT, 'docs', 'DOWNSTREAM.md'), 'utf8');
+  const row = downstream.split('\n').find(l => l.startsWith('| `GET /api/packs`'));
+  assert.ok(list.length > 0 && row, 'the two lists exist');
+  const cell = row.slice(row.indexOf('every other `/api` or `/auth` path'));
+  // The shim's name → how the two lists spell it (the README abbreviates two of them).
+  const spelled = {
+    'Refresh from MCP': /Refresh from MCP/, 'Scan a repo': /Scan a repo/, 'Draft from a live MCP server': /Draft from MCP/,
+    'Uploading a pack': /upload/i, Compare: /Compare/, Deploy: /Deploy/, Journeys: /Journeys/, Build: /Build/,
+    Waivers: /Waivers/, Services: /Services \(/, Organisations: /Organisations \(/, 'Sign-in': /sign-in/i,
+  };
+  for (const [prefix, name] of FEATURES) {
+    // The owner console has no door in a bundle (no sign-in, so no owner): neither list names it.
+    if (name === 'Administration') continue;
+    const re = spelled[name];
+    assert.ok(re, `${name} (${prefix}) has a documented spelling`);
+    for (const [doc, text] of [['README 501 list', list], ['DOWNSTREAM §10 denial cell', cell]]) assert.match(text, re, `${name} (${prefix}) is named in the ${doc}`);
+  }
+  // The two slice 6a routes beside their names in DOWNSTREAM, as every other route there.
+  assert.match(cell, /Services \(`\/api\/services`, `\/api\/services\/:id`/);
+  assert.match(cell, /Organisations \(`\/api\/orgs`/);
+  assert.ok(cell.indexOf('Services (') < cell.indexOf('sign-in (`/auth/*`)'), 'the order of the shim: sign-in last');
+});
+
 // ---------- T4 inert by default ----------
 
 test('T4 inert by default: a build changes no file under studio/, tools/lib or server/; the live studio never imports the shim; the shim links headlessly', async () => {
@@ -732,6 +758,11 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   await expectDenied('/api/services/1/waivers', undefined, 'Waivers');
   await expectDenied('/api/services/1/waivers', { method: 'POST' }, 'Waivers');
   await expectDenied('/api/waivers/7/revoke', { method: 'POST' }, 'Waivers');
+  // The two routes the Services home calls (STORE_PLAN slice 6a) — no shim: the home falls back to the derived tiles.
+  await expectDenied('/api/services', undefined, 'Services');
+  await expectDenied('/api/services/1', undefined, 'Services');
+  await expectDenied('/api/services/1', { method: 'PATCH' }, 'Services');
+  await expectDenied('/api/orgs', undefined, 'Organisations');
   await expectDenied('/api/journeys', undefined, 'Journeys');
   await expectDenied('/api/library', undefined, 'Build');
   await expectDenied('/api/admin/join-role', undefined, 'Administration');
@@ -749,7 +780,8 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   assert.equal(featureOf('/api/packs/x/verdicts'), 'Verdicts', 'the feature name; the GET itself is answered before the denial');
   assert.equal(featureOf('/api/packs/x/audit-report?format=html'), 'Audit report');
   assert.equal(featureOf('/api/services/x/waivers'), 'Waivers', 'the service record route, not a /api/services prefix');
-  assert.equal(featureOf('/api/services/x'), 'This action');
+  assert.equal(featureOf('/api/services/x'), 'Services');
+  assert.equal(featureOf('/api/orgs'), 'Organisations');
   assert.equal(featureOf('/api/waivers/x/revoke'), 'Waivers');
   assert.equal(featureOf('/api/packs/x/placeholders'), 'This action', 'placeholders is answered, not a feature');
   assert.equal(featureOf('/auth/login'), 'Sign-in');

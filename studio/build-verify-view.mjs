@@ -324,6 +324,7 @@ export function renderBuildVerify(container, model, host = appHost) {
           <button type="button" class="ctrl-btn build-adjust" id="build-adjust" title="Back to Define — change the service, its tier or the library entries">Resolve or adjust</button>
         </span>
         <span class="build-step-status">${({
+          unavailable: escapeHtml(model.unavailableText || ''),
           registered: `Registered as <code>${escapeHtml(model.registeredId || '')}</code> — opening it again re-registers the current pack.`,
           ready: escapeHtml(model.readyText),
           error: 'The last compilation failed — fix the rejected value above; the pack shown is the previous one and is not handed off.',
@@ -332,7 +333,7 @@ export function renderBuildVerify(container, model, host = appHost) {
         })[model.handoff]}</span>
         <span class="build-actions-right">
           <button type="button" class="ctrl-btn" id="build-yaml-download">download pack yaml</button>
-          <button type="button" class="${handoffIsPrimary ? 'mcp-refresh-btn build-next' : 'ctrl-btn build-next-secondary'}" id="build-open" ${model.canRegister ? '' : 'disabled'}>${escapeHtml(model.continueLabel)} <span aria-hidden="true">→</span></button>
+          <button type="button" class="${handoffIsPrimary ? 'mcp-refresh-btn build-next' : 'ctrl-btn build-next-secondary'}" id="build-open" ${model.canRegister ? '' : 'disabled'}${model.handoff === 'unavailable' ? ` title="${escapeHtml(model.unavailableText || '')}"` : ''}>${escapeHtml(model.continueLabel)} <span aria-hidden="true">→</span></button>
         </span>
       </footer>` : ''}
     </section>`;

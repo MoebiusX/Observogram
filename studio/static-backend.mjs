@@ -74,12 +74,14 @@ export const FEATURES = [
   ['/api/library', 'Build'],
   ['/api/admin', 'Administration'],
   ['/api/waivers', 'Waivers'],                        // /api/waivers/:id/revoke
+  ['/api/services', 'Services'],                      // the services table (STORE_PLAN slice 6a): a bundle has no records
+  ['/api/orgs', 'Organisations'],                     // the active org's name and effective role (slice 6a)
   ['/auth/', 'Sign-in'],
 ];
 // The waivers live on a service record (GAP batch 2, B3.2): a bundled pack
 // has none, so `GET`/`POST /api/services/:id/waivers` is the server's alone
-// — named here rather than under a '/api/services' prefix, which would claim
-// the record routes too (follow-up `B3.2-bundle-waivers` for a baked sidecar).
+// — matched before the prefixes so it keeps its own name under the
+// '/api/services' prefix (follow-up `B3.2-bundle-waivers` for a baked sidecar).
 const SERVICE_WAIVERS = /^\/api\/services\/[^/]+\/waivers(?:[/?]|$)/;
 // The per-pack sub-routes the server alone answers — `verdicts` for its
 // writes (PUT / DELETE; the GET is answered below with the empty document)

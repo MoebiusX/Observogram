@@ -47,15 +47,20 @@ async function loadPlaywright() {
 }
 
 // Register the vendored example on the child and open it the way a user does:
-// Check → the service tile → Discover.
+// Check → the service card → the service page → Discover (bound to the service and its first environment).
 async function openPayment(page, base) {
   const r = await fetch(`${base}/api/validate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(PAYMENT) });
   const j = await r.json();
   assert.equal(j.ok, true, JSON.stringify(j.errors));
   await page.goto(`${base}/`, { waitUntil: 'networkidle' });
   await page.waitForSelector('.svc-gate-card[data-service="payment-service"]', { state: 'attached', timeout: 30_000 });
-  await page.click('#home-choice-check');
+  // The gate opens on the service records in every posture (STORE_PLAN slice 6a): the Check branch is already
+  // open when the table has the row — the card toggles it, so only open it when it is still closed.
+  if (await page.getAttribute('#home-choice-check', 'aria-expanded') !== 'true') await page.click('#home-choice-check');
   await page.click('.svc-gate-card[data-service="payment-service"]');
+  // The card opens the service page (STORE_PLAN slice 6a); Discover is its first action.
+  await page.waitForSelector('.svc-page .svc-action[data-view="layers"]', { state: 'attached', timeout: 30_000 });
+  await page.click('.svc-page .svc-action[data-view="layers"]');
   await page.waitForSelector('#layer-view .dv-layer[data-layer="L1"] .dvb-group', { state: 'attached', timeout: 30_000 });
 }
 
