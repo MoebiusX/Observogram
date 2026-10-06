@@ -17,7 +17,7 @@ import {
 import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } from './state.mjs';
 import {
   api, loadCatalog, loadTaxonomy, validateUploaded, registeredOrValidated, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError, deployRefusal,
-  setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls, signOutOthersText,
+  setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls, signOutOthersText, recallMcpEndpoint, rememberMcpEndpoint,
   loadDeployProfiles, storeDeployProfile, removeDeployProfile,
 } from './api.mjs';
 import {
@@ -52,8 +52,21 @@ import {
   packForService, newestPack, serviceChipModel, servicesSelectModel, discoverEmptyNote, buildPrefillFromService, verdictKey, buildHandoffPlan, buildDefineOriginNote, buildExitRefusal,
   buildServiceEditorModel, buildServicePatch, serviceSaveStatus,
 } from './services-model.mjs';
-import { loadOrgs, loadServices, loadService, patchService, verdictLoader } from './services-api.mjs';
+import { loadOrgs, loadServices, loadService, patchService, verdictLoader, requestJson } from './services-api.mjs';
 import { renderNoOrgHome, renderServicesHome, renderServicePage, renderServiceEditor, markUnavailable } from './services-view.mjs';
+import {
+  BUILT_SECTIONS, BUILT_EDITORS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsSectionHead, settingsAboveRank,
+  buildEnvironmentsSectionModel, buildEndpointsSectionModel, buildMembersSectionModel, buildAuditSectionModel, auditQuery,
+  buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus,
+  buildMemberAddBody, memberSaveStatus, orgRenameStatus, lastAdmin, leftOrgText,
+  buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
+  mcpTargetModel, mcpTargetBody, mcpPickerCanAdmin, profileEndpointNote, endpointDrift,
+} from './settings-model.mjs';
+import {
+  loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
+  addMember, patchMember, removeMember, renameOrg, loadAudit,
+} from './settings-api.mjs';
+import { renderSettings, renderSettingsEditor, renderMcpTarget, readAuditDrafts } from './settings-view.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
@@ -132,6 +145,12 @@ async function rehydrateFromPersistence() {
     if (ok) return true;
     persistence.clear();
     return false;
+  }
+  // Settings (slice 6b): it opens in every posture — a section the rank
+  // cannot read falls back to the first it can — so it always answers true.
+  // The section is set before the first render (enterSettings does).
+  if (saved.mode === 'settings') {
+    return enterSettings(typeof saved.settingsSection === 'string' ? saved.settingsSection : null, { rehydrate: true });
   }
   const allKnown = [...(state.catalog || []), ...(state._examplesCache || [])];
   const aMeta = allKnown.find(p => p.id === saved.selectedPackId);
@@ -831,17 +850,23 @@ export function renderLayerFilterChips() {
 
 export function renderMainView() {
   const view = $('#layer-view');
+  // The audit's filters as typed but not applied survive the repaint.
+  const auditDrafts = state.mode === 'settings' ? readAuditDrafts(view) : null;
   view.innerHTML = '';
   // Persistence: every mutation chain ends here, so this is the single
   // hook for the debounced write. Cheap when suspended (boot phase).
   persistence.schedule();
-  // The record editor lives in its own host on <body> (syncServiceEditor draws or clears it).
+  // The record editors live in their own hosts on <body> (syncServiceEditor
+  // and syncSettingsEditor draw or clear them).
   syncServiceEditor();
+  syncSettingsEditor();
   if (state.mode === 'home') {
     if (state.homeVariant === 'gate') renderServiceGate();
     else renderHomeView();
     return;
   }
+  // Settings (STORE_PLAN §6 item 3, slice 6b): the org's environments and MCP endpoints.
+  if (state.mode === 'settings') { renderSettingsHost(view, auditDrafts); return; }
   // The service page (STORE_PLAN §6, slice 6a): one record, its environments as tabs.
   if (state.mode === 'service') { renderServicePageHost(view); return; }
   // The BUILD journey renders its own three steps (Define · Compile ·
@@ -1351,7 +1376,7 @@ function routeTo(id) {
     openServiceIn(id, { serviceId: state.serviceId, env: state.serviceEnv });
     return;
   }
-  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service') state.mode = 'single';
+  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings') state.mode = 'single';
   state.view = id;
   state.activeCardKey = null;
   state.activeLayer = ({ compile: 'COMPILE', conformance: 'CONF', schema: 'CONF', atlas: 'ATLAS', layers: state.layerFilter !== 'all' ? state.layerFilter : 'L1' })[id] || 'L1';
@@ -1451,6 +1476,10 @@ function installObservaChrome(chrome) {
               </button>
             `).join('')}
             <div class="observa-adv-menu-head">Administration</div>
+            <button type="button" class="observa-adv-item" role="menuitem" data-action="settings">
+              <span class="observa-adv-item-label">Settings</span>
+              <span class="observa-adv-item-sub">environments, MCP endpoints, members, the audit…</span>
+            </button>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="mcp">
               <span class="observa-adv-item-label">Live MCP connection</span>
               <span class="observa-adv-item-sub" id="observa-adv-mcp-sub">refresh production-live from an MCP server</span>
@@ -1533,6 +1562,7 @@ function installObservaChrome(chrome) {
       closeAdv();
       const action = item.dataset.action;
       if (action === 'about') { openAboutModal(); return; }
+      if (action === 'settings') { enterSettings(null); return; }
       // Admin tools proxy to the header's original controls. Deferred, so
       // this click's own document-level outside-click handlers (the MCP
       // panel closes on any click outside it) run before the panel opens.
@@ -1587,7 +1617,7 @@ function paintObservaActiveTab() {
   // The landing/reset hero is NOT a tab — it's the pre-workspace start
   // screen. Clearing the active marker there is what keeps Discover from
   // "being" the landing hero: you only light a tab once you're working.
-  const onLanding = state.mode === 'home' || state.mode === 'service';
+  const onLanding = state.mode === 'home' || state.mode === 'service' || state.mode === 'settings';
   for (const btn of document.querySelectorAll('.observa-tab')) {
     // A workflow tab is active only when we're NOT in an advanced view
     // and NOT on the landing screen.
@@ -1647,9 +1677,12 @@ async function boot() {
     if (e.denied === 'org') {
       // Signed in, in no organisation (STORE_PLAN §6, slice 6a): the server's
       // sentence as is, under the chrome — not the API-unreachable screen.
-      // GET /api/orgs is not attempted (it would refuse the same way).
+      // GET /api/orgs is not attempted (it would refuse the same way). The
+      // refusal is kept: Settings, which such a user cannot read, explains
+      // with it instead of opening.
+      state.noOrg = e;
       applyModeChrome();
-      renderNoOrgHome($('#layer-view'), buildNoOrgModel({ identity: state.identity, error: e, chromeName: state.brand.chrome.name }), servicesHost);
+      renderNoOrgHome($('#layer-view'), buildNoOrgModel({ identity: state.identity, error: e }), servicesHost);
       return;
     }
     document.body.innerHTML = `<pre class="json" style="margin:48px;max-width:800px">${escapeHtml(state.brand.chrome.apiUnreachable)}\n\n${escapeHtml(e.message)}\n\nMake sure the server is running: \`node server/index.mjs\` or \`npm run serve\`.</pre>`;
@@ -1737,6 +1770,9 @@ function goHome() {
   state.serviceId = null;
   state.serviceEnv = null;
   servicePageRecord = null;
+  closeSettingsEditor({ focus: false });
+  state.settingsFrom = null;
+  state.settings = null;
   state.compareBId = null;
   state.compareBEnv = null;
   state.conformanceB = null;
@@ -1853,6 +1889,9 @@ async function refreshAccess() {
   catch (e) { orgsError = e; }
   state.access = accessModel({ orgs, identity: state.identity, activeOrg: getActiveOrg(), orgsError });
   state.orgName = state.access.orgName;
+  // The org the server resolved — in the open and token postures no header
+  // names one, and the answer's `active` is the only source.
+  state.orgId = orgs?.active ?? getActiveOrg();
 }
 
 // GET /api/services → state.services, or null with the reason in
@@ -2240,9 +2279,938 @@ const servicesActions = {
   openEditor: openServiceEditor,
   closeEditor: closeServiceEditor,
   saveService: saveServiceRecord,
+  // The environment editor is Settings' (one editor, two doors — design §5.2):
+  // the page opens it over its record without changing mode.
+  editEnvironment: (envId) => openSettingsEditor('environment', envId),
+  addEnvironment: (serviceId) => openSettingsEditor('environment', null, serviceId),
   signOut: () => document.querySelector('.hdr-user-out')?.click(),
 };
 const servicesHost = { renderMainView, renderTabs, services: servicesActions };
+
+// ---------- Settings (STORE_PLAN §6 item 3, slice 6b; design §3–§5) ----------
+
+// Bumped by every Settings read: an answer that settles after the user left
+// the section (or Settings) never repaints it.
+let settingsGeneration = 0;
+// The next render moves the focus to the page's h1 (entering Settings).
+let settingsFocusNext = false;
+
+// The frame's answers for one entry: the probe (token and open postures),
+// a downgrade a read met, each section's status line, the endpoints read's
+// refusal. Never persisted; a new entry starts afresh.
+function freshSettings() {
+  return { probe: null, denied: null, deniedAdmin: null, status: {}, members: null, org: null, membersError: null, endpointsError: null, audit: null };
+}
+
+// What this reader may do in Settings (settings-model.mjs settingsAccessModel)
+// — 6a's access, /auth/me's owner bit, the probe's answer — and, once a read
+// was refused by the gate (the session ended, the membership went), nothing
+// at all, with the server's sentence as every reason (the downgrade, §4).
+function settingsAccess() {
+  const access = settingsAccessModel({ access: state.access, identity: state.identity, probe: state.settings?.probe ?? null, chromeName: state.brand?.chrome?.name });
+  const denied = state.settings?.denied;
+  const deniedAdmin = state.settings?.deniedAdmin;
+  if (!denied && deniedAdmin) {
+    // An admin write refused by the role (demoted meanwhile): the admin's
+    // controls and the owner's go, with the server's sentence; the rest stays.
+    return {
+      ...access,
+      can: { ...access.can, admin: false, own: false, createOrg: false },
+      why: { ...access.why, admin: deniedAdmin, own: deniedAdmin, createOrg: deniedAdmin },
+    };
+  }
+  if (!denied) return access;
+  return {
+    ...access,
+    can: { operate: false, admin: false, own: false, createOrg: false },
+    why: { operate: denied, admin: denied, own: denied, closed: access.why.closed, createOrg: denied },
+  };
+}
+
+// The cached answers the access may no longer read are dropped, and the
+// frame moves to the first section it may (C-6).
+function forgetSettingsAbove(access) {
+  state.settings = settingsAboveRank(state.settings, access, { orgId: state.orgId });
+  state.settingsSection = settingsSectionFor(access, state.settingsSection, BUILT_SECTIONS);
+}
+
+// Enter Settings (Advanced → Settings, the account menu, a reload in it):
+// where Back returns is kept unless rehydrating (a reload's Back is home);
+// the section asked for, else the last one, else the first the rank reads —
+// set before the first render, which persists it. Then the frame's reads.
+// A signed-in user in no organisation is told why instead (the boot's
+// refusal). Answers true when Settings is on screen.
+function enterSettings(section = null, { rehydrate = false } = {}) {
+  if (state.noOrg) { explainUnavailable(state.noOrg.message); return false; }
+  navGeneration++;
+  if (rehydrate) state.settingsFrom = null;
+  else if (state.mode !== 'settings') {
+    state.settingsFrom = state.mode === 'service' && Number.isInteger(state.serviceId)
+      ? { mode: 'service', serviceId: state.serviceId, env: state.serviceEnv }
+      : { mode: 'home' };
+  }
+  state.mode = 'settings';
+  state.settings = freshSettings();
+  state.settingsSection = settingsSectionFor(settingsAccess(), section ?? state.settingsSection, BUILT_SECTIONS);
+  if (state.settingsSection) state.settings.status[state.settingsSection] = { kind: 'loading', text: settingsSectionHead(state.settingsSection).loading };
+  settingsFocusNext = true;
+  applyModeChrome();
+  paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+  loadSettingsFrame();
+  return true;
+}
+
+// Back: the service page Settings was entered from, else home. A record
+// gone meanwhile lands home with the server's sentence.
+function leaveSettings() {
+  const from = state.settingsFrom;
+  closeSettingsEditor({ focus: false });
+  state.settingsFrom = null;
+  state.settings = null;
+  if (from?.mode === 'service' && Number.isInteger(from.serviceId)) {
+    enterServicePage(from.serviceId, from.env ?? null, { onRefused: (why) => { goHome(); toast(why, 'error'); } });
+    return;
+  }
+  goHome();
+}
+
+// The frame's first read, by posture (design §3.4): the bundle's — GET
+// /api/mcp-endpoints, whose 501 sentence is the banner; the token and open
+// postures' probe — GET /api/org/members, whose refusal is the banner (the
+// token posture's way in, a server bound without sign-in) and whose 200 is
+// the members list; none in the identity posture (GET /api/orgs and
+// /auth/me already said). Then the section on screen. Logs nothing.
+async function loadSettingsFrame() {
+  const settings = state.settings;
+  const here = () => state.mode === 'settings' && state.settings === settings;
+  const posture = state.access?.posture;
+  if (posture === 'static') {
+    try { state.mcpEndpoints = await loadMcpEndpoints(); }
+    catch (e) { if (here()) settings.probe = e; }
+    if (here()) repaintSettings();
+    return;
+  }
+  if (posture === 'token' || posture === 'open') {
+    try {
+      const body = await loadMembers();
+      if (here()) Object.assign(settings, { probe: { ok: true }, members: body.members, org: body.org });
+      if (here() && posture === 'open') state.openProbe = { orgId: state.orgId, ok: true };
+    } catch (e) {
+      if (here()) settings.probe = e;
+      if (here() && posture === 'open') state.openProbe = { orgId: state.orgId, ok: false };
+    }
+    if (!here()) return;
+    state.settingsSection = settingsSectionFor(settingsAccess(), state.settingsSection, BUILT_SECTIONS);
+  }
+  if (here() && state.settingsSection) loadSettingsSection(state.settingsSection);
+}
+
+// One section's reads (design §7.5): the environments and the MCP endpoints
+// both read the services table (the environments are its rows; the
+// endpoints name the environments bound to them) and the org's endpoints
+// (shared with the pickers — state.mcpEndpoints). The status line says
+// "Reading …" meanwhile, the refusal as served after. A refusal by the gate
+// (the session ended, the membership went) downgrades the frame first.
+async function loadSettingsSection(id, { notice = null } = {}) {
+  if (state.mode !== 'settings' || !id) return;
+  const settings = state.settings;
+  const gen = ++settingsGeneration;
+  settings.status[id] = { kind: 'loading', text: settingsSectionHead(id).loading };
+  repaintSettings();
+  if (id === 'members') return loadMembersSection(settings, gen, notice);
+  if (id === 'audit') return loadAuditSection(settings, gen, notice);
+  let endpointsRefusal = null;
+  await Promise.all([
+    refreshServices(),
+    loadMcpEndpoints().then((list) => { state.mcpEndpoints = list; settings.endpointsError = null; }, (e) => {
+      state.mcpEndpoints = null;
+      settings.endpointsError = e?.message || 'no answer';
+      endpointsRefusal = e;
+    }),
+  ]);
+  if (state.mode !== 'settings' || state.settings !== settings) return;
+  const gate = [endpointsRefusal, state.servicesStatus?.kind === 'denied' ? { denied: 'org', message: state.servicesStatus.error } : null]
+    .find((e) => e && ['auth', 'role', 'posture', 'org'].includes(e.denied));
+  if (gate) {
+    settings.denied = gate.message || 'refused';
+    forgetSettingsAbove(settingsAccess());
+  }
+  settings.status[id] = { kind: 'ok', text: notice ?? '' };
+  if (gen !== settingsGeneration || state.settingsSection !== id) return;   // the user moved on meanwhile
+  repaintSettings();
+}
+
+// The members and the org's row (GET /api/org/members, an admin's read): a
+// refusal by the role (demoted meanwhile) takes the admin's sections away
+// with the server's sentence; one by the gate (the session, the membership)
+// every control. Either way the frame moves to a section the rank reads,
+// which is read with the sentence in its status line.
+async function loadMembersSection(settings, gen, notice) {
+  let refusal = null;
+  try {
+    const body = await loadMembers();
+    if (state.settings === settings) Object.assign(settings, { members: body.members, org: body.org, membersError: null });
+  } catch (e) {
+    refusal = e;
+    if (state.settings === settings) Object.assign(settings, { members: null, membersError: e?.message || 'no answer' });
+  }
+  if (state.mode !== 'settings' || state.settings !== settings) return;
+  if (adminReadRefused(settings, refusal, gen, 'members')) return;
+  settings.status.members = { kind: 'ok', text: notice ?? '' };
+  if (gen !== settingsGeneration || state.settingsSection !== 'members') return;
+  repaintSettings();
+}
+
+// An admin's read (the members, the audit) refused by the gate: the role
+// (demoted meanwhile) takes the admin's sections away with the server's
+// sentence; the session or the membership every control. The frame moves to
+// a section the rank reads, read with the sentence in its status line.
+// Answers true when it moved.
+function adminReadRefused(settings, refusal, gen, id) {
+  if (!refusal || !['auth', 'role', 'posture', 'org'].includes(refusal.denied)) return false;
+  if (refusal.denied === 'role') settings.deniedAdmin = refusal.message || 'refused';
+  else settings.denied = refusal.message || 'refused';
+  forgetSettingsAbove(settingsAccess());
+  if (gen === settingsGeneration && state.settingsSection && state.settingsSection !== id) {
+    loadSettingsSection(state.settingsSection, { notice: settings.denied || settings.deniedAdmin });
+    return true;
+  }
+  return false;
+}
+
+// The audit (GET /api/audit, an admin's read; the deployment's rows an
+// owner's): the filters kept for the entry, the query only the filled ones
+// (auditQuery — "through" a day reaches the next midnight UTC). A first page
+// replaces the rows; an older page (`before`) adds to them. A refusal (a
+// filter the server refuses — `400: since must be before until`) is the
+// section's status as served.
+function settingsAudit(settings) {
+  return settings.audit || { filters: {}, doc: null, rows: [], error: null };
+}
+async function loadAuditSection(settings, gen, notice, { before = null } = {}) {
+  const prev = settingsAudit(settings);
+  let doc = null;
+  let refusal = null;
+  try { doc = await loadAudit(auditQuery(prev.filters, { owner: settingsAccess().owner, before })); }
+  catch (e) { refusal = e; }
+  if (state.mode !== 'settings' || state.settings !== settings) return;
+  const rows = Array.isArray(doc?.rows) ? doc.rows : [];
+  if (doc) settings.audit = { filters: prev.filters, doc, rows: before === null ? rows : [...prev.rows, ...rows], error: null };
+  else settings.audit = before === null ? { filters: prev.filters, doc: null, rows: [], error: refusal?.message || 'no answer' } : { ...prev, error: refusal?.message || 'no answer' };
+  if (adminReadRefused(settings, refusal, gen, 'audit')) return;
+  settings.status.audit = { kind: 'ok', text: notice ?? '' };
+  if (gen !== settingsGeneration || state.settingsSection !== 'audit') return;
+  repaintSettings();
+}
+
+// Apply: the filters change, the list starts again.
+function applyAuditFilters(filters) {
+  if (state.mode !== 'settings' || !state.settings) return;
+  state.settings.audit = { filters: { ...(filters || {}) }, doc: null, rows: [], error: null };
+  loadSettingsSection('audit');
+}
+
+// Older rows: the page before the oldest shown, added under it.
+function loadOlderAuditRows() {
+  const settings = state.settings;
+  const audit = settings?.audit;
+  if (state.mode !== 'settings' || state.settingsSection !== 'audit' || audit?.doc?.next == null) return;
+  const gen = ++settingsGeneration;
+  settings.status.audit = { kind: 'loading', text: 'Reading older rows…' };
+  repaintSettings();
+  loadAuditSection(settings, gen, null, { before: audit.doc.next });
+}
+
+// An audit row's time in this browser's local time (the ISO stays in the
+// row's <time datetime>).
+function auditTime(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? String(iso ?? '') : d.toLocaleString();
+}
+
+// The nav: a section the rank reads becomes the one on screen (persisted)
+// and is read anew; the focus stays on its nav item.
+function selectSettingsSection(id) {
+  if (state.mode !== 'settings') return;
+  if (settingsSectionFor(settingsAccess(), id, BUILT_SECTIONS) !== id) return;   // drawn unavailable: its click explains
+  state.settingsSection = id;
+  loadSettingsSection(id);
+}
+
+// Repaint Settings keeping the focus where it was: a nav item, or a control
+// of the section with an id.
+function repaintSettings() {
+  if (state.mode !== 'settings') return;
+  const active = document.activeElement;
+  const navItem = active?.closest?.('.set-nav') ? active.dataset.section : null;
+  const focusedId = !navItem && active?.id && active.closest?.('.set-page') ? active.id : null;
+  renderMainView();
+  if (navItem) document.querySelector(`.set-nav-item[data-section="${CSS.escape(navItem)}"]`)?.focus({ preventScroll: true });
+  else if (focusedId) document.getElementById(focusedId)?.focus({ preventScroll: true });
+}
+
+// The section on screen as the renderer takes it: its head, its model, its status line.
+function settingsSectionView(id, access) {
+  const settings = state.settings || freshSettings();
+  const head = settingsSectionHead(id, { orgName: state.orgName });
+  const status = settings.status[id] ?? null;
+  if (id === 'audit') {
+    const audit = settingsAudit(settings);
+    const model = buildAuditSectionModel({ doc: audit.doc, rows: audit.rows, filters: audit.filters, access, orgId: state.orgId, formatTime: auditTime, error: audit.error });
+    return { id, head, model, status, filters: audit.filters };
+  }
+  if (id === 'members') {
+    const model = buildMembersSectionModel({
+      members: settings.members, org: settings.org ?? { id: state.orgId, name: state.orgName }, access,
+      me: signedInLogin(), error: settings.membersError,
+    });
+    return { id, head, model, status };
+  }
+  const model = id === 'environments'
+    ? buildEnvironmentsSectionModel({
+      services: state.services, access, orgName: state.orgName,
+      error: state.services === null ? (state.servicesStatus?.error || null) : null,
+      editable: BUILT_EDITORS.includes('environment'),
+    })
+    : buildEndpointsSectionModel({
+      endpoints: state.mcpEndpoints, services: state.services, access, orgName: state.orgName,
+      error: settings.endpointsError, editable: BUILT_EDITORS.includes('endpoint'),
+    });
+  return { id, head, model, status };
+}
+
+// renderMainView's branch for mode 'settings': the frame and the section
+// from the state, the focus on the h1 when just entered.
+function renderSettingsHost(view, auditDrafts = null) {
+  const access = settingsAccess();
+  const section = settingsSectionFor(access, state.settingsSection, BUILT_SECTIONS);
+  const frame = buildSettingsFrameModel({ access, section, orgName: state.orgName, orgId: state.orgId, builtSections: BUILT_SECTIONS });
+  const sectionView = section ? settingsSectionView(section, access) : null;
+  if (sectionView?.id === 'audit') sectionView.drafts = auditDrafts;
+  renderSettings(view, frame, sectionView, settingsHost);
+  if (settingsFocusNext) {
+    settingsFocusNext = false;
+    view.querySelector('.set-title')?.focus({ preventScroll: true });
+    window.scrollTo({ top: 0 });
+  }
+}
+
+// A reload that lands in Settings in another org (the ORG chip changed in
+// Settings — design §3.5): this org's snapshot written now and no write
+// after it, the target org's seeded with Settings and the section, then the
+// org chosen and the page reloaded.
+function reloadIntoSettings(orgId, section = null) {
+  persistence.write();
+  persistence.suspend();
+  persistence.seed(signedInLogin(), orgId, { mode: 'settings', settingsSection: section });
+  setActiveOrg(orgId);
+  window.location.reload();
+}
+
+// ---------- the Settings record editor (design §5, the editor idiom) ----------
+
+// The pop-up over one record of a section (an MCP endpoint, an environment —
+// new or registered): UI state, never persisted — a reload lands on the
+// section, closed. Drawn into its own host on <body>, outside #layer-view, so
+// a section repaint keeps what was typed and the focus. `record` is the row
+// as last read (kept when a re-read fails; a re-read that lacks it closes the
+// editor); `opener` the selector the focus returns to. The environment
+// editor has a second door, the service page (design §5.2, D-C): `page` is
+// the service whose page opened it (null from Settings) — leaving that page
+// closes it, as leaving Settings closes one opened there. `endpointsError`
+// is the refusal of the endpoint list read when the editor opened (A4).
+let settingsEditor = null;   // { kind, id, serviceId, page, record, draft, status, step, opener, endpointsError } | null
+// Bumped by every open: an open that awaited the endpoint list and was
+// overtaken meanwhile (another open, the page left) draws nothing.
+let settingsEditorOpening = 0;
+
+function settingsEditorHost() {
+  let el = document.getElementById('set-editor-host');
+  if (!el) { el = document.createElement('div'); el.id = 'set-editor-host'; document.body.appendChild(el); }
+  return el;
+}
+
+// The services the environment editor reads (its service select, its
+// eyebrow): the table; on the service page with the table unavailable, the
+// page's own record.
+function settingsEditorServices() {
+  if (Array.isArray(state.services)) return state.services;
+  const own = state.mode === 'service' ? findServiceRecord(state.serviceId) : null;
+  return own ? [own] : [];
+}
+
+// The environment `id` as read now: on the service page its record first
+// (the page's own read), then the table.
+function environmentRecord(id) {
+  const rows = [state.mode === 'service' ? findServiceRecord(state.serviceId) : null, ...(Array.isArray(state.services) ? state.services : [])];
+  for (const s of rows) {
+    const e = (s?.environments || []).find((x) => x.id === id);
+    if (e) return e;
+  }
+  return null;
+}
+
+// An environment as a write answered it, put in the service rows held (the
+// table and the page's record) — or taken out of them — so the dialog and the
+// page agree before the re-read lands.
+function adoptEnvironment(env, { remove = false } = {}) {
+  const rows = new Set([...(Array.isArray(state.services) ? state.services : []), servicePageRecord].filter(Boolean));
+  for (const s of rows) {
+    if (s.id !== env.serviceId) continue;
+    const list = Array.isArray(s.environments) ? [...s.environments] : [];
+    const i = list.findIndex((e) => e.id === env.id);
+    if (remove) { if (i >= 0) list.splice(i, 1); } else if (i >= 0) list[i] = env; else list.push(env);
+    s.environments = list;
+  }
+}
+
+// The record the editor is over, as the section's list has it now.
+function settingsEditorRecord(ed) {
+  if (ed.kind === 'org-name') return settingsOrgRecord();
+  if (ed.id === null) return null;
+  if (ed.kind === 'member') return Array.isArray(state.settings?.members) ? (state.settings.members.find((m) => m.userId === ed.id) ?? undefined) : ed.record;
+  if (ed.kind === 'endpoint' && Array.isArray(state.mcpEndpoints)) return state.mcpEndpoints.find((ep) => ep.id === ed.id) ?? undefined;
+  if (ed.kind === 'environment' && (state.mode === 'service' || Array.isArray(state.services))) return environmentRecord(ed.id) ?? undefined;
+  return ed.record;
+}
+
+// The org the members section is about: its row as GET /api/org/members
+// answered, else the active org's id and name.
+function settingsOrgRecord() {
+  return state.settings?.org ?? { id: state.orgId, name: state.orgName };
+}
+
+// The editor belongs where it was opened: Settings, or the page of the
+// service it was opened from.
+function settingsEditorHere(ed) {
+  return ed.page === null ? state.mode === 'settings' : state.mode === 'service' && state.serviceId === ed.page;
+}
+
+// Draw the editor, or clear it: leaving where it was opened (Settings, the
+// service page — any mode change, another service) closes it, and so does
+// its record gone from a list read anew.
+function syncSettingsEditor() {
+  const el = document.getElementById('set-editor-host');
+  const ed = settingsEditor;
+  const record = ed ? settingsEditorRecord(ed) : null;
+  if (!ed || !settingsEditorHere(ed) || record === undefined) {
+    settingsEditor = null;
+    if (el && el.innerHTML) el.innerHTML = '';
+    return;
+  }
+  if (record) ed.record = record;
+  const model = buildSettingsEditorModel(ed.kind, ed.record, {
+    draft: ed.draft, status: ed.status, step: ed.step,
+    ctx: {
+      access: settingsAccess(), orgName: state.orgName, orgId: state.orgId, services: ed.kind === 'environment' ? settingsEditorServices() : state.services,
+      endpoints: state.mcpEndpoints, endpointsError: ed.endpointsError ?? state.settings?.endpointsError ?? null, serviceId: ed.serviceId ?? null,
+      members: state.settings?.members ?? null, me: signedInLogin(),
+    },
+  });
+  renderSettingsEditor(settingsEditorHost(), model, settingsHost);
+}
+
+// Where the focus returns on close: the opener (Edit… of its row, the
+// section's primary, the service page's button), else the section's primary,
+// else the page's h1.
+function settingsOpenerSelector(el) {
+  if (!el) return null;
+  if (el.dataset?.editEndpoint) return `[data-edit-endpoint="${CSS.escape(el.dataset.editEndpoint)}"]`;
+  if (el.dataset?.editEnv) return `[data-edit-env="${CSS.escape(el.dataset.editEnv)}"]`;
+  if (el.dataset?.memberRole) return `[data-member-role="${CSS.escape(el.dataset.memberRole)}"]`;
+  if (el.dataset?.memberRemove) return `[data-member-remove="${CSS.escape(el.dataset.memberRemove)}"]`;
+  return el.id ? `#${CSS.escape(el.id)}` : null;
+}
+
+// Open (a section's primary, a row's Edit…, the service page's Add
+// environment / Edit environment): the rank that may write gets the dialog
+// with the focus in its first field; another is told why (the controls say so
+// already, but the access can downgrade meanwhile). The environment editor
+// awaits the org's MCP endpoints when they were never read (the service page
+// opens it without Settings having read them — A4), so its select never
+// offers "none" alone over a bound record. An open MCP panel closes first —
+// one dialog at a time (T11).
+async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'edit' } = {}) {
+  const page = state.mode === 'service' ? state.serviceId : null;
+  if (!BUILT_EDITORS.includes(kind)) return;
+  if (kind === 'environment' ? !(state.mode === 'settings' || state.mode === 'service') : state.mode !== 'settings') return;
+  const access = settingsAccess();
+  const need = kind === 'environment' ? 'operate' : 'admin';
+  if (!access.can[need]) { explainUnavailable(access.why[need]); return; }
+  const opening = ++settingsEditorOpening;
+  const opener = settingsOpenerSelector(document.activeElement);
+  const mode = state.mode;
+  const find = () => {
+    if (kind === 'endpoint') return Array.isArray(state.mcpEndpoints) ? state.mcpEndpoints.find((ep) => ep.id === id) : null;
+    if (kind === 'member') return Array.isArray(state.settings?.members) ? state.settings.members.find((m) => m.userId === id) : null;
+    if (kind === 'org-name') return settingsOrgRecord();
+    return environmentRecord(id);
+  };
+  if (id !== null && !find()) return;
+  let endpointsError = null;
+  if (kind === 'environment') {
+    if (id === null && !settingsEditorServices().length) return;   // no service yet: the primary says so (A11)
+    if (state.mcpEndpoints === null) {
+      try {
+        state.mcpEndpoints = await loadMcpEndpoints();
+        if (state.settings) state.settings.endpointsError = null;
+      } catch (e) {
+        endpointsError = e?.message || 'no answer';
+      }
+      if (opening !== settingsEditorOpening || state.mode !== mode || (page !== null && state.serviceId !== page)) return;
+    }
+  }
+  const record = id === null ? null : find();
+  if (id !== null && !record) return;
+  closeMcpPanel();
+  const draftPanel = document.getElementById('draft-mcp-panel');
+  if (draftPanel) draftPanel.hidden = true;
+  settingsEditor = {
+    kind, id, serviceId: record?.serviceId ?? serviceId ?? page, page: kind === 'environment' ? page : null,
+    record, draft: null, status: null, step: kind === 'member' && step === 'confirm-delete' ? 'confirm-delete' : 'edit', opener, endpointsError,
+  };
+  syncSettingsEditor();
+  focusSettingsEditor();
+}
+
+function focusSettingsEditor() {
+  const dialog = document.querySelector('#set-editor-host .set-editor');
+  const first = dialog?.querySelector('input, textarea, select') || dialog?.querySelector('#set-editor-confirm')
+    || dialog?.querySelector('[role="radio"][tabindex="0"]') || dialog;
+  first?.focus({ preventScroll: true });
+}
+
+// Close (the scrim, esc, Close, Escape, a delete done, leaving Settings):
+// the focus returns to the opener when it is still on the page.
+function closeSettingsEditor({ focus = true } = {}) {
+  if (!settingsEditor) return;
+  const opener = settingsEditor.opener;
+  settingsEditor = null;
+  const el = document.getElementById('set-editor-host');
+  if (el) el.innerHTML = '';
+  if (focus) closeSettingsEditorFocus(opener);
+}
+
+// The delete step and back: the body swaps for the consequence sentence; what
+// was typed is kept for the way back.
+function setSettingsEditorStep(step, draft = null) {
+  if (!settingsEditor || settingsEditor.status?.kind === 'pending') return;
+  if (draft) settingsEditor.draft = draft;
+  settingsEditor.step = ['confirm-delete', 'confirm-action'].includes(step) ? step : 'edit';
+  settingsEditor.status = null;
+  syncSettingsEditor();
+  focusSettingsEditor();
+}
+
+// A write refused by the gate: the session ended, the membership went or the
+// server closed the API (every control goes, with the server's sentence), or
+// the role went (the admin's controls go). Then what the rank may no longer
+// read is forgotten and the page repaints (design §4).
+function settingsWriteRefused(e) {
+  if (!state.settings) return;
+  if (e?.denied === 'role') state.settings.deniedAdmin = e.message || 'refused';
+  else if (['auth', 'posture', 'org'].includes(e?.denied)) state.settings.denied = e.message || 'refused';
+  else return;
+  forgetSettingsAbove(settingsAccess());
+  repaintSettings();
+}
+
+// The section's lists after a write: the MCP endpoints (the pickers read the
+// same list) and the services (bindings may have gone), the section
+// repainted with `notice` in its status line.
+async function rereadAfterSettingsWrite(notice = null) {
+  if (state.mode === 'settings' && state.settingsSection) await loadSettingsSection(state.settingsSection, { notice });
+  syncSettingsEditor();
+}
+
+// Save (Create or Save): an endpoint created — POST with the non-empty
+// fields, `Created <name> (<origin>).`, and the dialog stays over the new
+// record — or saved: only the differing fields PATCHed (nothing differing →
+// "Nothing changed." without a call), the status naming what the server
+// says changed. A refusal is the server's sentence in the status line.
+async function saveSettingsEditor(draft) {
+  const ed = settingsEditor;
+  if (!ed || ed.status?.kind === 'pending') return null;
+  if (ed.kind === 'environment') return saveEnvironmentEditor(ed, draft);
+  if (ed.kind === 'org-name') return saveOrgName(ed, draft);
+  if (ed.kind === 'member-add') return saveMemberAdd(ed, draft);
+  if (ed.kind === 'member') return saveMemberRole(ed, draft);
+  if (ed.kind !== 'endpoint') return null;
+  ed.draft = draft;
+  const record = ed.record;
+  const patch = record ? buildEndpointPatch(record, draft) : null;
+  if (record && !Object.keys(patch).length) {
+    ed.status = endpointSaveStatus([]);
+    syncSettingsEditor();
+    return { ok: true, changed: [] };
+  }
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let status;
+  try {
+    if (record) {
+      const res = await patchEndpoint(record.id, patch);
+      if (settingsEditor === ed && res.endpoint) ed.record = res.endpoint;
+      status = endpointSaveStatus(res.changed);
+    } else {
+      const created = await createEndpoint(buildEndpointCreate(draft));
+      status = { kind: 'saved', text: `Created ${created?.name ?? draft.name} (${created?.origin ?? ''}).` };
+      // The list holds it until the re-read below answers (the editor stays over it).
+      if (created && Array.isArray(state.mcpEndpoints)) state.mcpEndpoints = [...state.mcpEndpoints, created];
+      if (settingsEditor === ed && created) Object.assign(ed, { id: created.id, record: created });
+    }
+  } catch (e) {
+    if (settingsEditor !== ed) return null;
+    ed.status = { kind: 'error', text: e?.message || 'no answer' };
+    syncSettingsEditor();
+    settingsWriteRefused(e);
+    return null;
+  }
+  const opened = settingsEditor === ed;
+  if (opened) { ed.status = status; ed.draft = null; }
+  syncSettingsEditor();
+  if (opened && !record) focusSettingsEditor();
+  announce(status.text);
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
+// The danger button of the delete step: DELETE, then the sentence naming the
+// environments it unbound (resolved through the services table as read
+// before the delete) in the section's status line; the dialog closes.
+async function confirmSettingsEditor() {
+  const ed = settingsEditor;
+  if (!ed || ed.status?.kind === 'pending' || !ed.record) return null;
+  if (ed.kind === 'member' && ed.step === 'confirm-action') return patchMemberRole(ed, ed.draft?.role);
+  if (ed.step !== 'confirm-delete') return null;
+  if (ed.kind === 'member') return removeMemberEditor(ed);
+  if (ed.kind === 'environment') return deleteEnvironmentEditor(ed);
+  if (ed.kind !== 'endpoint') return null;
+  ed.status = { kind: 'pending', text: 'Deleting…' };
+  syncSettingsEditor();
+  let res;
+  try { res = await deleteEndpoint(ed.record.id); }
+  catch (e) {
+    if (settingsEditor !== ed) return null;
+    ed.status = { kind: 'error', text: e?.message || 'no answer' };
+    syncSettingsEditor();
+    settingsWriteRefused(e);
+    return null;
+  }
+  const status = endpointDeleteStatus(ed.record.name, res.unbound, state.services);
+  // The row it was opened from goes with the record: the focus goes to the section's primary.
+  if (settingsEditor === ed) { ed.opener = null; closeSettingsEditor(); }
+  announce(status.text);
+  await rereadAfterSettingsWrite(status.text);
+  return { ok: true };
+}
+
+// ---------- the members and the org's name (design §5.4) ----------
+
+// A members write refused: the server's sentence in the dialog's status line
+// (the last-admin 409 among them, as served); the gate's refusals downgrade.
+function memberWriteRefused(ed, e) {
+  if (settingsEditor !== ed) return null;
+  ed.status = { kind: 'error', text: e?.message || 'no answer' };
+  syncSettingsEditor();
+  settingsWriteRefused(e);
+  return null;
+}
+
+// The org renamed: the name everywhere this page shows it — the Settings
+// head, the section, the ORG chip (its option or its label) and the
+// membership /auth/me listed; the next boot reads it anew.
+function adoptOrgName(org) {
+  if (!org?.name) return;
+  if (state.settings) state.settings.org = { ...(state.settings.org || {}), ...org };
+  if (org.id === state.orgId || !org.id) {
+    state.orgName = org.name;
+    if (state.access) state.access = { ...state.access, orgName: org.name };
+  }
+  const entry = (state.identity?.orgs || []).find((o) => o.id === org.id);
+  if (entry) entry.name = org.name;
+  const option = [...document.querySelectorAll('#observa-org select option')].find((o) => o.value === org.id);
+  if (option) option.textContent = org.name;
+  updateObservaOrgChip();
+}
+
+// Rename… (PATCH /api/org): nothing differing → "Nothing changed." without a
+// call; the answer has no `changed`, so the status compares the names (A-16).
+async function saveOrgName(ed, draft) {
+  ed.draft = draft;
+  const before = ed.record?.name ?? state.orgName ?? '';
+  const name = String(draft?.name ?? '').trim();
+  if (name === before) {
+    ed.status = orgRenameStatus(before, before);
+    syncSettingsEditor();
+    return { ok: true, changed: [] };
+  }
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let org;
+  try { org = await renameOrg(name); }
+  catch (e) { return memberWriteRefused(ed, e); }
+  const status = orgRenameStatus(before, org?.name ?? name);
+  adoptOrgName(org ?? { id: ed.record?.id ?? state.orgId, name });
+  if (settingsEditor === ed) { ed.status = status; ed.draft = null; }
+  repaintSettings();
+  syncSettingsEditor();
+  announce(status.text);
+  return { ok: true };
+}
+
+// Add member (POST /api/org/members, an upsert — A-23): by login or by
+// verified email; the status says what the server did (added, the role
+// changed, nothing). The dialog stays for the next one; the list is read anew.
+async function saveMemberAdd(ed, draft) {
+  ed.draft = draft;
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let answer;
+  try { answer = await addMember(buildMemberAddBody(draft)); }
+  catch (e) { return memberWriteRefused(ed, e); }
+  const status = memberSaveStatus(answer, { login: draft?.by === 'email' ? null : String(draft?.value ?? '').trim() });
+  if (settingsEditor === ed) ed.status = status;
+  syncSettingsEditor();
+  announce(status.text);
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
+// Save on a member's dialog: the role chosen. The same role → "Nothing
+// changed." without a call; a change the reader should weigh first — their
+// own role, or an owner demoting the org's last admin (A12) — goes to the
+// confirm step, which says what it leaves; any other is sent at once.
+async function saveMemberRole(ed, draft) {
+  ed.draft = draft;
+  const role = draft?.role ?? ed.record.role;
+  if (role === ed.record.role) {
+    ed.status = { kind: 'idle', text: 'Nothing changed.' };
+    syncSettingsEditor();
+    return { ok: true, changed: [] };
+  }
+  const access = settingsAccess();
+  const you = ed.record.login === signedInLogin();
+  const ownerNote = access.owner && lastAdmin(ed.record, state.settings?.members || [], { owner: false }) && role !== 'admin';
+  if (you || ownerNote) { setSettingsEditorStep('confirm-action', draft); return { ok: true, confirm: true }; }
+  return patchMemberRole(ed, role);
+}
+
+// PATCH /api/org/members/:userId { role }: `<login>: <from> → <to>.` A
+// reader who demoted themselves out of the admin role (still a member)
+// reads their rank anew: the members and the audit go, with what they held,
+// and the frame moves to a section the new rank reads (A-29, C-6).
+async function patchMemberRole(ed, role) {
+  if (!role) return null;
+  const login = ed.record.login;
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let res;
+  try { res = await patchMember(ed.record.userId, role); }
+  catch (e) { return memberWriteRefused(ed, e); }
+  const status = memberSaveStatus(res, { login });
+  announce(status.text);
+  if (login === signedInLogin() && !settingsAccess().owner && role !== 'admin') {
+    closeSettingsEditor({ focus: false });
+    await refreshAccess();
+    if (state.settings) state.settings.deniedAdmin = null;
+    forgetSettingsAbove(settingsAccess());
+    updateObservaOrgChip();
+    if (state.mode === 'settings' && state.settingsSection) await loadSettingsSection(state.settingsSection, { notice: status.text });
+    document.querySelector('.set-title')?.focus({ preventScroll: true });
+    return { ok: true };
+  }
+  if (settingsEditor === ed) { ed.status = status; ed.step = 'edit'; ed.draft = null; }
+  syncSettingsEditor();
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
+// Remove (DELETE /api/org/members/:userId): `Removed <login>.` in the
+// section's status line. The reader removing themselves from the org on
+// screen never stays on it: the next request would carry an org they are no
+// longer in (A3, C-2) — the status says so, and the page reloads into their
+// next organisation (or the no-org screen).
+async function removeMemberEditor(ed) {
+  const login = ed.record.login;
+  const orgName = settingsOrgRecord().name || state.orgName || state.orgId;
+  ed.status = { kind: 'pending', text: 'Removing…' };
+  syncSettingsEditor();
+  try { await removeMember(ed.record.userId); }
+  catch (e) { return memberWriteRefused(ed, e); }
+  if (login === signedInLogin()) {
+    const text = leftOrgText(orgName, settingsAccess().owner);
+    if (settingsEditor === ed) { ed.status = { kind: 'saved', text }; syncSettingsEditor(); }
+    announce(text);
+    leaveOrgAndReload();
+    return { ok: true, left: true };
+  }
+  const text = `Removed ${login}.`;
+  // The row it was opened from goes with the membership: the focus goes to the section's primary.
+  if (settingsEditor === ed) { ed.opener = null; closeSettingsEditor(); }
+  announce(text);
+  await rereadAfterSettingsWrite(text);
+  return { ok: true };
+}
+
+// This browser leaves the org on screen: its snapshot is written now, the
+// active org forgotten — the boot picks the first live membership, or draws
+// the no-org screen — and the page reloads.
+function leaveOrgAndReload() {
+  persistence.write();
+  persistence.suspend();
+  setActiveOrg(null);
+  window.location.reload();
+}
+
+// ---------- the environment editor (design §5.1–5.2: one editor, two doors) ----------
+
+// An environment write refused: the server's sentence in the status line; a
+// refusal by the session or the role also downgrades the rank the controls
+// draw from (6a's rule), and Settings forgets what the rank may no longer read.
+function environmentWriteRefused(ed, e) {
+  if (e?.denied === 'auth' || e?.denied === 'role') state.access = { ...(state.access || {}), canWrite: false, reason: e.message };
+  if (settingsEditor !== ed) return;
+  ed.status = { kind: 'error', text: e?.message || 'no answer' };
+  syncSettingsEditor();
+  settingsWriteRefused(e);
+  if (state.mode === 'service' && (e?.denied === 'auth' || e?.denied === 'role')) repaintServicePage();
+}
+
+// After a write: the cached verdicts of the service's packs are dropped (the
+// environment's tier grades them — 6a A-M3); Settings reads its section anew
+// (the table with it) with `notice` in its status line; the service page
+// reads the table and its record anew and repaints.
+async function rereadAfterEnvironmentWrite(serviceId, notice = null) {
+  forgetServiceVerdicts(findServiceRecord(serviceId));
+  if (state.mode === 'settings') {
+    if (state.settingsSection) await loadSettingsSection(state.settingsSection, { notice });
+  } else {
+    await refreshServices();
+    if (state.mode === 'service' && state.serviceId === serviceId) {
+      try { const fresh = await loadService(serviceId); if (fresh) adoptServiceRecord(fresh); } catch { /* the write's own answer stands */ }
+      if (state.mode === 'service' && state.serviceId === serviceId) repaintServicePage();
+    }
+  }
+  syncSettingsEditor();
+}
+
+// Save (Create or Save) of the environment editor: created — POST
+// /api/services/:id/environments with the non-empty fields, `Created <name>
+// on <service>.`, and the dialog stays over the new record (on its service's
+// page, its tab is selected) — or saved: only the differing fields PATCHed
+// (nothing differing → "Nothing changed." without a call), the status naming
+// what the server says changed. The binding is never resent nor nulled when
+// the endpoint list could not be read (A4). A refusal is the server's sentence.
+async function saveEnvironmentEditor(ed, draft) {
+  ed.draft = draft;
+  const d = { ...draft };
+  if (!Array.isArray(state.mcpEndpoints)) d.mcpEndpointId = undefined;
+  const record = ed.record;
+  const patch = record ? buildEnvironmentPatch(record, d) : null;
+  if (record && !Object.keys(patch).length) {
+    ed.status = environmentSaveStatus([]);
+    syncSettingsEditor();
+    return { ok: true, changed: [] };
+  }
+  const serviceId = record ? record.serviceId : Number(d.serviceId ?? ed.serviceId);
+  const service = settingsEditorServices().find((s) => s.id === serviceId) || findServiceRecord(serviceId);
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let status;
+  let env;
+  try {
+    if (record) {
+      const res = await patchEnvironment(record.id, patch);
+      env = res.environment;
+      status = environmentSaveStatus(res.changed);
+    } else {
+      const body = buildEnvironmentCreate(d);
+      env = await createEnvironment(serviceId, body);
+      status = { kind: 'saved', text: `Created ${env?.name ?? body.name} on ${service?.name ?? `service ${serviceId}`}.` };
+    }
+  } catch (e) {
+    environmentWriteRefused(ed, e);
+    return null;
+  }
+  if (env) {
+    adoptEnvironment({ ...env, serviceId: env.serviceId ?? serviceId });
+    // On its service's page the tab follows: a rename keeps it selected; a new one is shown.
+    if (state.mode === 'service' && state.serviceId === serviceId && (!record || state.serviceEnv === record.name)) state.serviceEnv = env.name;
+  }
+  const opened = settingsEditor === ed;
+  if (opened) {
+    ed.status = status;
+    ed.draft = null;
+    if (env) Object.assign(ed, { id: env.id, serviceId: env.serviceId ?? serviceId, record: { ...env, serviceId: env.serviceId ?? serviceId } });
+  }
+  if (state.mode === 'service') repaintServicePage(); else syncSettingsEditor();
+  if (opened && !record) focusSettingsEditor();
+  announce(status.text);
+  await rereadAfterEnvironmentWrite(serviceId);
+  return { ok: true };
+}
+
+// The danger button of the environment's delete step: DELETE, `Deleted
+// <env>.` (in the section's status line in Settings; said on the service
+// page), the dialog closes and the focus goes back to where it came from.
+async function deleteEnvironmentEditor(ed) {
+  const env = ed.record;
+  ed.status = { kind: 'pending', text: 'Deleting…' };
+  syncSettingsEditor();
+  try { await deleteEnvironment(env.id); }
+  catch (e) {
+    environmentWriteRefused(ed, e);
+    return null;
+  }
+  const status = { kind: 'saved', text: `Deleted ${env.name}.` };
+  adoptEnvironment(env, { remove: true });
+  if (state.mode === 'service' && state.serviceId === env.serviceId && state.serviceEnv === env.name) state.serviceEnv = null;
+  if (settingsEditor === ed) {
+    // The row it was opened from goes with the record (Settings): the focus goes to the section's primary.
+    if (ed.page === null) ed.opener = null;
+    closeSettingsEditor({ focus: false });
+    if (state.mode === 'service') repaintServicePage();
+    closeSettingsEditorFocus(ed.opener);
+  }
+  announce(status.text);
+  if (state.mode === 'service') toast(status.text);
+  await rereadAfterEnvironmentWrite(env.serviceId, status.text);
+  return { ok: true };
+}
+
+// The focus after a close: the opener when still on the page, else the
+// section's primary or the page's h1 (Settings), else the service page's
+// environment buttons or its heading.
+function closeSettingsEditorFocus(opener) {
+  const back = (opener && document.querySelector(opener)) || document.getElementById('set-primary') || document.querySelector('.set-title')
+    || document.getElementById('svc-edit-env') || document.getElementById('svc-add-env') || document.querySelector('.svc-page-name');
+  back?.focus({ preventScroll: true });
+}
+
+// The host the Settings renderers get (docs/UI_CONVENTIONS.md §3): the two
+// stable hooks plus Settings' actions under `settings`.
+const settingsActions = {
+  open: (section = null) => enterSettings(section),
+  back: () => leaveSettings(),
+  selectSection: (id) => selectSettingsSection(id),
+  retry: (id) => loadSettingsSection(id),
+  explain: explainUnavailable,
+  build: () => enterBuildMode('define'),
+  openService: (id) => { enterServicePage(id); },
+  openEditor: ({ kind, id = null, serviceId = null, step = 'edit' } = {}) => openSettingsEditor(kind, id, serviceId, { step }),
+  closeEditor: () => closeSettingsEditor(),
+  save: (draft) => saveSettingsEditor(draft),
+  step: (step, draft = null) => setSettingsEditorStep(step, draft),
+  confirm: () => confirmSettingsEditor(),
+  auditApply: (filters) => applyAuditFilters(filters),
+  auditMore: () => loadOlderAuditRows(),
+  pickMcpTarget: (container, value) => pickMcpTarget(container, value),
+  openMcpEndpoints: () => openMcpEndpointsFromPicker(),
+};
+const settingsHost = { renderMainView, renderTabs, settings: settingsActions };
 
 // Greet a person only by a name that is a name — "Welcome back, Admin" read
 // as a role label, not a greeting.
@@ -2309,6 +3277,9 @@ function updateObservaOrgChip() {
       sel.appendChild(opt);
     }
     sel.addEventListener('change', () => {
+      // From Settings the reload lands in Settings in the chosen org, on the
+      // same section (the target org's snapshot is seeded first).
+      if (state.mode === 'settings') { reloadIntoSettings(sel.value, state.settingsSection); return; }
       setActiveOrg(sel.value);
       // Every view is a projection of the active org's workspace — a
       // clean re-boot is the honest refresh.
@@ -2334,7 +3305,7 @@ function updateObservaServiceChip() {
   if (!chip) return;
   const derived = serviceCatalogue().find(s => s.key === state.selectedService);
   const m = serviceChipModel({ services: state.services, selected: state.selectedService, derivedLabel: derived?.label ?? null });
-  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || m.kind === 'none') { chip.hidden = true; return; }
+  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings' || m.kind === 'none') { chip.hidden = true; return; }
   const wantTag = m.kind === 'record' ? 'BUTTON' : 'SPAN';
   if (chip.tagName !== wantTag) {
     const next = document.createElement(wantTag.toLowerCase());
@@ -2427,7 +3398,7 @@ function enterCompareMode(aId, aEnv, bId, bEnv) {
 function applyModeChrome() {
   // The BUILD journey hides the pack controls like home does: there is no
   // pack until VERIFY's "Open pack in Discover" (with visible gaps, or without) registers one.
-  const isHome = state.mode === 'home' || state.mode === 'build' || state.mode === 'service';
+  const isHome = state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings';
   updateObservaServiceChip();
   // Under the OBSERVA chrome the pack/env selectors are PINNED as a
   // permanent master row — they are the user's primary controls and
@@ -3552,27 +4523,40 @@ function renderHomeView() {
     }
     $('#home-mcp-url').onkeydown = (e) => { if (e.key === 'Enter') explain(); };
   }
+  paintHomeMcpTarget();
   wireHomeChoice(view, model);
   loadHomeVerdicts(model);
 }
 
+// The home's source card lists the org's MCP endpoints (D-J) for a rank that
+// may connect, in the identity and open postures: read once, then only the
+// picker is repainted when the read settles; a re-render reuses the list. An
+// empty list, a refusal or a failure leaves today's card (the URL typed).
+let homeMcpEndpointsRead = false;
+function paintHomeMcpTarget() {
+  paintMcpTarget('home');
+  if (homeMcpEndpointsRead || state.mcpEndpoints !== null || !mcpPickersReadable() || state.access?.canWrite === false) return;
+  homeMcpEndpointsRead = true;
+  readMcpEndpointsForPickers().then((list) => {
+    if (list?.length && document.getElementById('home-mcp-url')) paintMcpTarget('home');
+  });
+}
+
 async function doHomeMcpConnect() {
   const urlInput  = $('#home-mcp-url');
-  const authInput = $('#home-mcp-auth');
   const statusEl  = $('#home-mcp-status');
   const goBtn     = $('#home-mcp-connect');
   const capEl     = $('#home-mcp-capabilities');
   const adoptBar  = $('#home-mcp-adopt-bar');
   if (!urlInput || !statusEl) return;
 
-  const url  = urlInput.value.trim();
-  const auth = authInput?.value || '';
-  if (!url) {
-    statusEl.textContent = 'enter your MCP URL first';
+  const { body: target, chosen } = mcpTargetOf('home');
+  if (!target) {
+    statusEl.textContent = 'choose an MCP endpoint or type a URL';
     statusEl.className = 'home-mcp-status is-error';
     return;
   }
-  rememberMcpUrl(url).catch(() => {});
+  if (target.mcpUrl) rememberMcpUrl(target.mcpUrl).catch(() => {});
 
   goBtn.disabled = true;
   statusEl.textContent = 'contacting MCP…';
@@ -3585,8 +4569,7 @@ async function doHomeMcpConnect() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
-        mcpUrl: url,
-        mcpAuth: auth || undefined,
+        ...target,
         // Forward the quick-start friendly label when the user came
         // through the Upload popover. window._observogramQuickLabel is
         // cleared after consumption so manual draft-from-mcp from the
@@ -3601,6 +4584,7 @@ async function doHomeMcpConnect() {
     }
     const out = await r.json();
     if (!out.ok) throw new Error(out.error || 'MCP draft failed');
+    rememberMcpEndpoint(chosen ? chosen.id : null);
     draftMcpState.lastResult = out;
     followReplacedPack(out.registered?.id).catch(() => {});
 
@@ -3934,6 +4918,187 @@ function renderMcpStatusBody(status) {
   el.innerHTML = '<dl>' + rows.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${k === 'refreshed' ? v : escapeHtml(v)}</dd>`).join('') + '</dl>';
 }
 
+// ---------- the MCP pickers: a registered endpoint, or a typed URL (design §6) ----------
+//
+// Four pickers — the refresh panel, the draft panel, the deploy modal (its
+// rollback and its post-deploy verify ride it) and the home's source card —
+// draw the org's registered MCP endpoints before their URL field
+// (renderMcpTarget over mcpTargetModel), list first and preselected, "Type a
+// URL…" last. With an endpoint chosen the URL row is hidden (its value kept)
+// and the request names it by id (mcpTargetBody: an id or a URL, never
+// both); the read token stays on the server, named by the record. The list
+// (state.mcpEndpoints) is read in the identity and open postures only — the
+// bundle and the token posture never read it, and keep the typed URL.
+const MCP_PICKERS = {
+  refresh: { url: 'mcp-url', auth: 'mcp-auth', purpose: 'read', field: 'mcp-field', key: 'mcp-field-key', hint: true },
+  draft: { url: 'draft-mcp-url', auth: 'draft-mcp-auth', purpose: 'read', field: 'mcp-field', key: 'mcp-field-key', hint: true },
+  deploy: { url: 'deploy-target-mcp', auth: 'deploy-target-auth', purpose: 'write', field: 'deploy-field', key: 'deploy-field-key', hint: true },
+  // D-J: the home reads the list for a rank that may connect, and says
+  // nothing when the org has none (today's card, the demo URL typed).
+  home: { url: 'home-mcp-url', auth: 'home-mcp-auth', purpose: 'read', field: 'home-mcp-url-row', key: 'home-mcp-url-label', hint: false, needsWrite: true },
+};
+
+function mcpPickersReadable() {
+  const posture = state.access?.posture;
+  return posture === 'identity' || posture === 'open';
+}
+
+// The empty list's way to Settings → MCP endpoints, for a reader known to be
+// an admin of the org (C-7: never guessed — an open posture only once its
+// probe answered 200 in this page; leaving Settings keeps that answer).
+function mcpPickerCanAdminNow() {
+  return mcpPickerCanAdmin({ access: state.access, probe: state.openProbe, orgId: state.orgId });
+}
+
+// GET /api/mcp-endpoints for the pickers. Silent: a refusal or a failure
+// leaves the typed URL alone (state.mcpEndpoints null), and Settings is
+// where a failed read is said. `keep` keeps the list already read when this
+// read fails (the pre-send check: its own sentence says it could not check).
+async function readMcpEndpointsForPickers({ keep = false } = {}) {
+  if (!mcpPickersReadable()) return null;
+  try {
+    state.mcpEndpoints = await loadMcpEndpoints();
+    return state.mcpEndpoints;
+  } catch {
+    if (!keep) state.mcpEndpoints = null;
+    return null;
+  }
+}
+
+// The picker's slot before its URL row (created once per row: the home's is
+// drawn anew with its card), in the host's own field idiom.
+function mcpTargetSlot(id) {
+  const p = MCP_PICKERS[id];
+  const row = document.getElementById(p.url)?.closest('label');
+  if (!row?.parentElement) return null;
+  const prev = row.previousElementSibling;
+  if (prev?.dataset?.mcpTarget === id) return prev;
+  const slot = document.createElement('div');
+  slot.className = p.field;
+  slot.dataset.mcpTarget = id;
+  slot.hidden = true;
+  slot.innerHTML = `<span class="${p.key}" aria-hidden="true">Registered MCP endpoint</span><div class="mcp-target-body" hidden></div>`;
+  row.before(slot);
+  return slot;
+}
+
+function mcpPickerModel(id, chosen = null) {
+  const p = MCP_PICKERS[id];
+  const readable = mcpPickersReadable() && (!p.needsWrite || state.access?.canWrite !== false);
+  const model = mcpTargetModel({
+    endpoints: readable ? state.mcpEndpoints : null,
+    remembered: recallMcpEndpoint(),
+    liveUrl: state.mcpStatus?.url || null,
+    // The remembered typed URL — or, in the deploy modal (which remembers
+    // none), what its field holds (a profile's URL).
+    typedUrl: id === 'deploy' ? (document.getElementById(p.url)?.value || '') : (recallMcpUrl() || ''),
+    purpose: p.purpose, orgName: state.orgName, canAdmin: mcpPickerCanAdminNow(), chosen,
+  });
+  return p.hint ? model : { ...model, hint: null };
+}
+
+// The URL row and the auth field's help follow the choice: an endpoint hides
+// the URL row (its value kept) and says where the token comes from.
+function applyMcpTargetChoice(id, model) {
+  const p = MCP_PICKERS[id];
+  const row = document.getElementById(p.url)?.closest('label');
+  if (row) row.hidden = !model.showUrl;
+  if (id === 'home') {
+    const urlKey = row?.querySelector('.home-mcp-url-label');
+    if (urlKey) urlKey.textContent = model.show ? 'MCP URL' : 'MCP endpoint';
+  }
+  const key = document.getElementById(p.auth)?.closest('label')?.querySelector('span');
+  if (!key) return;
+  if (key.dataset.mcpKeyHtml === undefined) key.dataset.mcpKeyHtml = key.innerHTML;
+  if (!model.authHelp) { key.innerHTML = key.dataset.mcpKeyHtml; return; }
+  if (p.purpose === 'write') { key.textContent = model.authHelp; return; }
+  const label = [...key.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim())?.textContent.trim() || 'Auth token';
+  key.innerHTML = `${escapeHtml(label)} <em>${escapeHtml(model.authHelp)}</em>`;
+}
+
+// (Re)draw a picker: the person's choice in it is kept across a repaint
+// while its endpoint is listed; `chosen` replaces it ('' = Type a URL…).
+function paintMcpTarget(id, { chosen } = {}) {
+  const slot = mcpTargetSlot(id);
+  if (!slot) return;
+  const body = slot.querySelector('.mcp-target-body');
+  const current = body.querySelector('select.set-mcp-target')?.value;
+  const model = mcpPickerModel(id, chosen !== undefined ? chosen : (current ?? null));
+  renderMcpTarget(body, model, settingsHost);
+  slot.hidden = body.hidden;
+  applyMcpTargetChoice(id, model);
+  if (id === 'deploy') updateDeployTargetSummary();
+}
+
+// What a picker would send: { body, chosen, url } — `chosen` is the
+// endpoint as its option shows it ({ id, name, origin }), null when typed.
+function mcpTargetOf(id) {
+  const p = MCP_PICKERS[id];
+  const slot = document.querySelector(`[data-mcp-target="${id}"]`);
+  const sel = slot && !slot.hidden ? slot.querySelector('select.set-mcp-target') : null;
+  const value = sel?.value || '';
+  const opt = value ? sel.selectedOptions?.[0] : null;
+  const chosen = opt ? { id: Number(value), name: opt.dataset.name, origin: opt.dataset.origin } : null;
+  const url = document.getElementById(p.url)?.value ?? '';
+  const auth = document.getElementById(p.auth)?.value ?? '';
+  return { body: mcpTargetBody(value, url, auth), chosen, url: url.trim() };
+}
+
+// The deploy modal's target — Deploy, rollback and the post-deploy verify
+// all send it.
+function deployTargetBody() {
+  return mcpTargetOf('deploy').body;
+}
+
+// Before a write is sent (C-3): the chosen endpoint is re-read; when its
+// origin moved, or it is gone, nothing is sent — the picker is repainted
+// (the option names the new origin; a gone one falls back to Type a URL…)
+// and the sentence says why. null: send.
+async function checkEndpointDrift(id) {
+  const { chosen } = mcpTargetOf(id);
+  if (!chosen) return null;
+  const list = await readMcpEndpointsForPickers({ keep: true });
+  const drift = endpointDrift(chosen, list, { orgName: state.orgName });
+  if (drift && Array.isArray(list)) {
+    paintMcpTarget(id, { chosen: list.some((ep) => ep.id === chosen.id) ? String(chosen.id) : '' });
+  }
+  return drift;
+}
+
+// A picker opening: drawn from the list already read, then — when the list
+// is unread, or `fresh` (the deploy modal: every open) — read and redrawn.
+function openMcpTarget(id, { fresh = false } = {}) {
+  paintMcpTarget(id);
+  if (!mcpPickersReadable() || (!fresh && state.mcpEndpoints !== null)) return;
+  readMcpEndpointsForPickers().then(() => paintMcpTarget(id));
+}
+
+// The focus a picker opens on: the URL field, or the select while it hides it.
+function focusMcpTarget(id) {
+  const url = document.getElementById(MCP_PICKERS[id].url);
+  if (url && !url.closest('label')?.hidden) url.focus();
+  else document.querySelector(`[data-mcp-target="${id}"] select.set-mcp-target`)?.focus();
+}
+
+// The picker's change (host.settings.pickMcpTarget): the URL row and the
+// auth help follow; the select is not redrawn under the focus.
+function pickMcpTarget(container, value) {
+  const id = container?.closest?.('[data-mcp-target]')?.dataset?.mcpTarget;
+  if (!MCP_PICKERS[id]) return;
+  applyMcpTargetChoice(id, mcpPickerModel(id, value));
+  if (id === 'deploy') updateDeployTargetSummary();
+  if (value === '') document.getElementById(MCP_PICKERS[id].url)?.focus();
+}
+
+// The empty list's button: Settings → MCP endpoints, the pickers' panels closed first.
+function openMcpEndpointsFromPicker() {
+  closeMcpPanel();
+  const draft = $('#draft-mcp-panel');
+  if (draft) draft.hidden = true;
+  if ($('#deploy-modal') && !$('#deploy-modal').hidden) closeDeployModal();
+  enterSettings('endpoints');
+}
+
 function openMcpPanel() {
   const panel = $('#mcp-panel');
   if (!panel) return;
@@ -3946,7 +5111,8 @@ function openMcpPanel() {
     const liveUrl = state.mcpStatus?.url || null; // served to operators only
     urlInput.value = saved || liveUrl || '';
   }
-  urlInput.focus();
+  openMcpTarget('refresh');
+  focusMcpTarget('refresh');
 }
 function closeMcpPanel() {
   const panel = $('#mcp-panel');
@@ -3956,13 +5122,13 @@ function closeMcpPanel() {
 }
 
 async function refreshLive() {
-  const url = $('#mcp-url').value.trim();
-  const auth = $('#mcp-auth').value;
-  if (!url) {
-    setRefreshStatus('mcp url required', 'error');
+  const { body: target, chosen } = mcpTargetOf('refresh');
+  if (!target) {
+    setRefreshStatus('choose an MCP endpoint or type a URL', 'error');
     return;
   }
-  const dropped = await rememberMcpUrl(url).catch(() => []);
+  // A typed URL is remembered (its safe form); an endpoint's choice is, on success.
+  const dropped = target.mcpUrl ? await rememberMcpUrl(target.mcpUrl).catch(() => []) : [];
   const btn = $('#mcp-refresh-btn');
   btn.disabled = true;
   $('#mcp-btn').dataset.mcpState = 'active';
@@ -3971,7 +5137,7 @@ async function refreshLive() {
     const r = await fetch('/api/refresh-live', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ mcpUrl: url, mcpAuth: auth || undefined }),
+      body: JSON.stringify(target),
     });
     // Read as text first so we can surface a useful error if the server
     // returned HTML (typical when the dev server is stale and the route
@@ -4000,10 +5166,12 @@ async function refreshLive() {
       $('#mcp-btn').dataset.mcpState = 'error';
       return;
     }
+    rememberMcpEndpoint(chosen ? chosen.id : null);
     // Say what was not kept: the server's note (the live pack) and ours
-    // (the remembered URL).
+    // (the remembered URL) — and the endpoint the server went through.
     setRefreshStatus([
       `refreshed · ${fmtRelative(body.refreshedAt)}`,
+      body.mcpEndpoint?.name ? `through ${body.mcpEndpoint.name}` : null,
       body.note || null,
       dropped.length ? `remembered without its ${dropped.map((n) => `"${n}"`).join(', ')} parameter${dropped.length === 1 ? '' : 's'} — put the token in the auth field` : null,
     ].filter(Boolean).join(' · '), 'ok');
@@ -4766,6 +5934,9 @@ export function openDeployModal({ packId, packLabel, presetIdentities } = {}) {
   if (verifyHost) { verifyHost.hidden = true; verifyHost.innerHTML = ''; }
   cancelDeployVerify();
   loadDeployManifest(packId || state.selectedPackId);
+  // The org's endpoints, re-read on every open (C-3): a write goes where
+  // the option shows.
+  openMcpTarget('deploy', { fresh: true });
   updateDeployTargetSummary();
   loadDeployHistory(packId || state.selectedPackId);
 }
@@ -4816,21 +5987,32 @@ async function loadDeployHistory(packId) {
   } catch (_) { /* history is optional context — never block the modal */ }
 }
 
-// Roll a deploy back to its pre-deploy snapshot (10D). Reuses the MCP
-// target fields already in the modal; the result lands in the audit log
-// as its own record (rollbackOf) and the history refreshes to show it.
+// Roll a deploy back to its pre-deploy snapshot (10D). Reuses the modal's
+// MCP target (a registered endpoint, re-read before it is sent — C-3 — or
+// the typed URL); the result lands in the audit log as its own record
+// (rollbackOf) and the history refreshes to show it. A refusal reads as the
+// server's sentence (C-1); a result where every restore failed (a 502 with
+// its summary) still reads as a result.
 async function doRollback(deployId, packId, btn) {
-  const url = $('#deploy-target-mcp')?.value.trim();
-  const auth = $('#deploy-target-auth')?.value;
-  if (!url) { toast('Enter the MCP URL in the target form first', 'error'); return; }
+  if (!deployTargetBody()) { toast('Choose an MCP endpoint or type the MCP URL in the target form first', 'error'); return; }
+  const moved = await checkEndpointDrift('deploy');
+  if (moved) { toast(moved, 'error'); return; }
   if (!confirm(`Roll back ${deployId}?\n\nRestorable artefacts are re-upserted from the pre-deploy snapshot. Anything this deploy created is listed for manual removal.`)) return;
+  const drift = await checkEndpointDrift('deploy');
+  if (drift) { toast(drift, 'error'); return; }
+  const target = deployTargetBody();
+  if (!target) return;
   btn.disabled = true;
   try {
-    const r = await api(`/api/deploys/${encodeURIComponent(deployId)}/rollback`, {
+    const res = await fetch(`/api/deploys/${encodeURIComponent(deployId)}/rollback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...authHeaders() },
-      body: JSON.stringify({ mcpUrl: url, mcpAuth: auth || undefined }),
+      body: JSON.stringify(target),
     });
+    const r = await res.json().catch(() => null);
+    if (res.status === 401 && r?.login) { window.location.assign(r.login); return; }
+    const refusal = deployRefusal(res.status, r);
+    if (refusal) throw refusal;
     const manualNote = r.manual?.length ? ` · ${r.manual.length} manual step${r.manual.length === 1 ? '' : 's'}` : '';
     toast(r.ok
       ? `Rolled back: ${r.summary.ok}/${r.summary.total} restored${manualNote}`
@@ -4903,7 +6085,28 @@ async function loadDeployProfile(name) {
   $('#deploy-target-product').value = p.product || 'grafana';
   $('#deploy-target-version').value = p.version || '12';
   $('#deploy-target-mcp').value     = p.mcpUrl || '';
+  // A profile that names an endpoint selects it in the org it belongs to,
+  // while it is listed; anywhere else the typed mode, empty, and the note
+  // says why (A-12: another org's id is never sent). A typed profile is typed.
+  const { select, note } = profileEndpointNote(p, {
+    orgId: state.orgId ?? getActiveOrg(), orgName: state.orgName,
+    endpoints: mcpPickersReadable() ? state.mcpEndpoints : null, profileName: name,
+  });
+  if (p.mcpEndpoint) {
+    if (select === null) $('#deploy-target-mcp').value = '';
+    paintMcpTarget('deploy', { chosen: select === null ? '' : String(select) });
+  } else if (p.mcpUrl) {
+    paintMcpTarget('deploy', { chosen: '' });
+  }
+  setDeployStatus(note || '', note ? 'error' : '');
   updateDeployTargetSummary();
+}
+
+// The endpoint a saved profile names, with the org it belongs to (A-12) —
+// none when the URL is typed.
+function chosenEndpointForProfile() {
+  const { chosen } = mcpTargetOf('deploy');
+  return chosen ? { orgId: state.orgId ?? getActiveOrg() ?? 'default', id: chosen.id, name: chosen.name } : undefined;
 }
 async function saveDeployProfile() {
   const name = prompt('Profile name (e.g. "Prod Grafana"):', $('#deploy-target-profile').selectedOptions?.[0]?.value || '');
@@ -4918,6 +6121,7 @@ async function saveDeployProfile() {
       product:   $('#deploy-target-product').value,
       version:   $('#deploy-target-version').value,
       mcpUrl:    $('#deploy-target-mcp').value.trim(),
+      mcpEndpoint: chosenEndpointForProfile(),
     });
   } catch (e) {
     toast(`Profile not saved: ${e.message}`, 'error');
@@ -5039,13 +6243,11 @@ function updateManifestCounter(selected, total) {
 
 async function doDeployBulk() {
   if (deployModalState.inflight) return;
-  const url  = $('#deploy-target-mcp').value.trim();
-  const auth = $('#deploy-target-auth').value;
   const folder = $('#deploy-target-folder').value.trim();
   const product = $('#deploy-target-product').value;
   const version = $('#deploy-target-version').value;
   const setStatus = setDeployStatus;
-  if (!url) { setStatus('mcp url required', 'error'); return; }
+  if (!deployTargetBody()) { setStatus('choose an MCP endpoint or type a URL', 'error'); return; }
   // Deploy what the review shows: a selected row the type filter hides is
   // not counted, not reviewed — and so not deployed.
   const types = new Set([...document.querySelectorAll('#deploy-type-filters input:checked')].map(i => i.value));
@@ -5069,6 +6271,16 @@ async function doDeployBulk() {
   deployModalState.inflight = true;
   const goBtn = $('#deploy-modal-go');
   goBtn.disabled = true;
+  // A registered endpoint is re-read just before the write (C-3): moved or
+  // gone → nothing is sent, and the status line says why.
+  const drift = await checkEndpointDrift('deploy');
+  const target = drift ? null : deployTargetBody();
+  if (!target) {
+    if (drift) setStatus(drift, 'error');
+    deployModalState.inflight = false;
+    goBtn.disabled = false;
+    return;
+  }
   setStatus(`deploying ${items.length} artefact${items.length === 1 ? '' : 's'}…`);
 
   try {
@@ -5079,7 +6291,7 @@ async function doDeployBulk() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
-        mcpUrl: url, mcpAuth: auth || undefined,
+        ...target,
         targetProduct: product, targetVersion: version, targetFolder: folder || undefined,
         items,
       }),
@@ -5108,8 +6320,7 @@ async function doDeployBulk() {
         deployId: body.deployId,
         packId: deployModalState.packId,
         env: state.selectedEnv || null,
-        mcpUrl: url,
-        mcpAuth: auth || undefined,
+        target,
         items: okItems,
       });
     }
@@ -5140,9 +6351,12 @@ function cancelDeployVerify() {
 
 const VERIFY_DELAYS_MS = [3000, 15000, 30000, 60000];
 
-export async function startDeployVerify({ deployId, packId, env, mcpUrl, mcpAuth, items }) {
+// `target` is the deploy's MCP target (deployTargetBody(): a registered
+// endpoint by id, or the typed URL — with the deploy's typed key when one was
+// typed; without one, the server reads the endpoint's own variable).
+export async function startDeployVerify({ deployId, packId, env, target, items }) {
   const host = $('#deploy-modal-verify');
-  if (!host || !items.length || !mcpUrl) return;
+  if (!host || !items.length || !target) return;
   if (deployVerifyState.running) cancelDeployVerify();
   deployVerifyState.cancelled = false;
   deployVerifyState.running = true;
@@ -5157,10 +6371,12 @@ export async function startDeployVerify({ deployId, packId, env, mcpUrl, mcpAuth
     try {
       host.querySelector('.deploy-verify-status')?.replaceChildren(
         document.createTextNode(`check ${attempt}/${VERIFY_DELAYS_MS.length}: drafting live state…`));
-      const out = await api('/api/draft-from-mcp', {
+      // requestJson: a refusal (an endpoint whose token variable is unset,
+      // one gone from the org) reads as the server's sentence, never a `{`.
+      const out = await requestJson('/api/draft-from-mcp', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...authHeaders() },
-        body: JSON.stringify({ mcpUrl, mcpAuth }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(target),
       });
       if (!out.ok) throw new Error(out.error || 'MCP draft failed');
       // The draft is registered by the route that answered it; it replaces
@@ -5184,6 +6400,10 @@ export async function startDeployVerify({ deployId, packId, env, mcpUrl, mcpAuth
       if (last.summary.outcome !== 'pending') break;
     } catch (e) {
       lastError = e;
+      // The server refused the draft (a 4xx: the endpoint's token variable
+      // unset, the endpoint gone, the role): waiting changes nothing — the
+      // panel settles on the sentence now instead of polling behind it.
+      if (e.status >= 400 && e.status < 500) break;
       renderDeployVerifyPanel(host, last, { attempt, packBId, final: false, error: e.message });
     }
   }
@@ -5342,7 +6562,8 @@ function setupDraftFromMcpPanel() {
       if (!urlInput.value) {
         urlInput.value = recallMcpUrl() || '';
       }
-      urlInput.focus();
+      openMcpTarget('draft');
+      focusMcpTarget('draft');
     }
   };
   closeBtn.onclick = () => { panel.hidden = true; };
@@ -5360,16 +6581,15 @@ function setupDraftFromMcpPanel() {
 }
 
 async function doDraftFromMcp() {
-  const url  = $('#draft-mcp-url').value.trim();
-  const auth = $('#draft-mcp-auth').value;
+  const { body: target, chosen } = mcpTargetOf('draft');
   const name = $('#draft-mcp-name').value.trim();
   const statusEl = $('#draft-mcp-status');
   const setStatus = (msg, kind) => {
     statusEl.textContent = msg;
     statusEl.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
   };
-  if (!url) { setStatus('mcp url required', 'error'); return; }
-  rememberMcpUrl(url).catch(() => {});
+  if (!target) { setStatus('choose an MCP endpoint or type a URL', 'error'); return; }
+  if (target.mcpUrl) rememberMcpUrl(target.mcpUrl).catch(() => {});
 
   const goBtn = $('#draft-mcp-go-btn');
   goBtn.disabled = true;
@@ -5380,7 +6600,7 @@ async function doDraftFromMcp() {
     const r = await fetch('/api/draft-from-mcp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ mcpUrl: url, mcpAuth: auth || undefined, packName: name || undefined }),
+      body: JSON.stringify({ ...target, packName: name || undefined }),
     });
     const ct = r.headers.get('content-type') || '';
     const raw = await r.text();
@@ -5390,6 +6610,7 @@ async function doDraftFromMcp() {
     }
     const out = JSON.parse(raw);
     if (!out.ok) { setStatus(`error: ${out.error || 'unknown'}`, 'error'); return; }
+    rememberMcpEndpoint(chosen ? chosen.id : null);
     draftMcpState.lastResult = out;
     renderDraftMcpResult(out);
     followReplacedPack(out.registered?.id).catch(() => {});
@@ -5858,6 +7079,7 @@ function setupIdentityChip() {
             title="signed in as ${escapeHtml(me.email || me.sub)} (${escapeHtml(me.mode)})">⏣ <span class="hdr-user-name">${escapeHtml(me.name || me.email || me.sub)}</span> ▾</button>
     <div class="hdr-user-menu" hidden>
       <div class="hdr-user-menu-id" aria-live="polite">signed in as <strong>${escapeHtml(me.email || me.sub)}</strong><span class="hdr-user-menu-mode">${escapeHtml(me.mode)}</span></div>
+      <button type="button" class="hdr-user-menu-item hdr-user-settings">settings</button>
       ${me.mode === 'local-users' ? '<a class="hdr-user-menu-item" href="/auth/change-password">change password…</a>' : ''}
       ${me.mode === 'proxy' ? '' : '<button type="button" class="hdr-user-menu-item hdr-user-others">sign out my other sessions</button>'}
       <button type="button" class="hdr-user-menu-item hdr-user-out">sign out</button>
@@ -5904,6 +7126,9 @@ function setupIdentityChip() {
     }
     window.location.assign('/auth/login');
   });
+  // Settings — the same door as Advanced → Settings (a user in no org is
+  // told why instead).
+  chip.querySelector('.hdr-user-settings').addEventListener('click', () => { setOpen(false); enterSettings(null); });
   actions.appendChild(chip);
 }
 

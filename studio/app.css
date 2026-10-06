@@ -851,6 +851,7 @@ a:hover { color: var(--ink); }
 }
 .mcp-panel-body { padding: 14px 16px; }
 .mcp-field { display: block; margin-bottom: 10px; }
+.mcp-field[hidden] { display: none; }   /* the URL row while a registered MCP endpoint is chosen */
 .mcp-field-key {
   display: block;
   font: 12px/1 var(--mono);
@@ -863,7 +864,7 @@ a:hover { color: var(--ink); }
   text-transform: none;
   color: var(--ink-5);
 }
-.mcp-field input {
+.mcp-field input, .mcp-field select {
   width: 100%;
   padding: 6px 8px;
   font: 13.5px/1.4 var(--mono);
@@ -872,7 +873,7 @@ a:hover { color: var(--ink); }
   border: 1px solid var(--line);
   border-radius: var(--r-md);
 }
-.mcp-field input:focus { outline: 2px solid var(--ink-2); outline-offset: 1px; }
+.mcp-field input:focus, .mcp-field select:focus { outline: 2px solid var(--ink-2); outline-offset: 1px; }
 .mcp-panel-actions {
   display: flex; align-items: center; gap: 10px;
   margin-top: 6px;
@@ -4503,9 +4504,11 @@ a:hover { color: var(--ink); }
    ============================================================ */
 body[data-mode="home"] .meta { display: none; }
 body[data-mode="home"] .tabs { display: none; }
-/* The service page (STORE_PLAN §6, slice 6a) hides the pack chrome as home does. */
+/* The service page (STORE_PLAN §6, slice 6a) and Settings (slice 6b) hide the pack chrome as home does. */
 body[data-mode="service"] .meta { display: none; }
 body[data-mode="service"] .tabs { display: none; }
+body[data-mode="settings"] .meta { display: none; }
+body[data-mode="settings"] .tabs { display: none; }
 body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
 
 /* ===================== HOME — PREMIUM FINTECH ===================== */
@@ -4549,13 +4552,14 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
   display: flex; flex-direction: column; gap: 8px;
   margin-bottom: 14px;
 }
+.home-mcp-url-row[hidden] { display: none; }
 .home-mcp-url-label {
   font: 600 12.5px/1 var(--mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-4);
 }
-.home-mcp-url-row input {
+.home-mcp-url-row input, .home-mcp-url-row select {
   width: 100%;
   padding: 14px 16px;
   font: 14.5px/1.3 var(--mono);
@@ -4566,8 +4570,8 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
   letter-spacing: -0.005em;
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
-.home-mcp-url-row input:hover  { border-color: var(--ink-4); }
-.home-mcp-url-row input:focus  {
+.home-mcp-url-row input:hover, .home-mcp-url-row select:hover  { border-color: var(--ink-4); }
+.home-mcp-url-row input:focus, .home-mcp-url-row select:focus  {
   outline: none;
   border-color: var(--ink);
   box-shadow: 0 0 0 3px rgba(15,27,45,0.08);
@@ -6152,6 +6156,7 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
   display: block;
   margin-bottom: 10px;
 }
+.deploy-field[hidden] { display: none; }
 .deploy-field-key {
   display: block;
   font: 500 12px/1.4 var(--mono);
@@ -6887,6 +6892,7 @@ body.chrome-observa .hdr {
 }
 body.chrome-observa[data-mode="home"] .hdr { display: none !important; }
 body.chrome-observa[data-mode="service"] .hdr { display: none !important; }
+body.chrome-observa[data-mode="settings"] .hdr { display: none !important; }
 
 /* Meta strip stays hidden under the chrome for now — the audit
    content carries that detail. */
@@ -9141,6 +9147,11 @@ select.build-edit-input { appearance: auto; }
   border-bottom: 1px solid var(--line);
   margin-bottom: 16px;
 }
+/* The tabs with Edit environment beside them, and the bar's tools (Add environment, Edit): layout only. */
+.svc-tabs-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 16px; }
+.svc-tabs-row .svc-tabs { flex: 1 1 auto; min-width: 0; margin-bottom: 0; }
+.svc-page-tools { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.svc-noenv-add { margin: -6px 0 16px; }
 .svc-tab {
   font: 600 13.5px/1.2 var(--mono);
   color: var(--ink-3);
@@ -9259,7 +9270,6 @@ select.build-edit-input { appearance: auto; }
 .svc-pack-open { margin-left: auto; }
 .svc-pack-gone { margin-left: auto; font: 12.5px/1.4 var(--mono); color: var(--ink-3); }
 .svc-packs-none { margin: 0; font-size: 14px; line-height: 1.5; color: var(--ink-3); }
-.svc-noenv code { font: 12.5px/1.6 var(--mono); color: var(--ink-2); }
 @media (max-width: 720px) {
   .svc-page { padding: 16px 16px 64px; }
   .svc-panel-row { grid-template-columns: 1fr; gap: 2px; }
@@ -9349,4 +9359,353 @@ select.build-edit-input { appearance: auto; }
   font-size: 13px;
   line-height: 1.5;
   color: var(--ink-3);
+}
+
+/* ==== Settings (docs/STORE_PLAN.md §6, slice 6b): the Settings page, its sections, the record editor, the MCP
+   target select — the axis language: the card tokens, 14 px radii, hairlines, the mono for logins, ids, origins
+   and variable names, text in --ink / --ink-2 / --ink-3 only, tone by a tint and a left border, never by text
+   colour alone; both themes through the tokens. ux.css and reskin.css restyle no .set- rule (asserted). ==== */
+
+/* The frame: the bar (back + the status line), the head (the h1 in the serif, the scope in --ink-3), one banner,
+   then the nav beside the section — one column under 760 px, the nav a horizontal scroller above the section.
+   Every rule that draws a background names its text colour beside it, so the scan measures the pair where it is
+   drawn (tools/test-build-model.mjs, the Settings pass). */
+.set-page {
+  max-width: 1096px;
+  margin: 0 auto;
+  padding: 24px 28px 80px;
+}
+.set-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.set-back {
+  font: 500 13.5px/1.2 var(--sans);
+  color: var(--ink-2);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.set-back:hover { color: var(--ink); border-color: var(--ink-3); background: var(--hover); }
+.set-back:focus-visible { outline: 2px solid var(--CMP); outline-offset: 2px; }
+.set-head { margin-bottom: 18px; }
+.set-title {
+  margin: 0;
+  font: 600 28px/1.2 var(--serif);
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  outline: none;
+}
+.set-title:focus-visible { outline: 2px solid var(--CMP); outline-offset: 4px; border-radius: 4px; }
+.set-scope {
+  margin: 8px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+.set-banner {
+  margin: 0 0 20px;
+  padding: 12px 16px;
+  border-radius: var(--r-md);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.set-banner.is-token, .set-banner.is-closed { color: var(--ink-2); background: var(--L1-tint); border-left: 3px solid var(--warn); }
+.set-banner.is-static { color: var(--ink-2); background: var(--line-2); }
+.set-banner.is-open { color: var(--ink-2); background: var(--card); border-left: 3px solid var(--ink-3); }
+.set-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+.set-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.set-nav-group {
+  margin: 14px 0 4px;
+  padding: 0 12px;
+  font: 600 12px/1.3 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.set-nav-item {
+  appearance: none;
+  text-align: left;
+  font: 500 14px/1.3 var(--sans);
+  color: var(--ink-2);
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: color .15s ease, border-color .15s ease;
+}
+.set-nav-item:hover { color: var(--ink); }
+.set-nav-item[aria-current="page"] { color: var(--ink); border-left: 2px solid var(--CMP); }
+.set-nav-item[aria-disabled="true"] { cursor: not-allowed; }
+.set-nav-item:focus-visible { outline: 2px solid var(--CMP); outline-offset: -2px; border-radius: 4px; }
+.set-section {
+  min-width: 0;
+  outline: none;
+}
+.set-section-title {
+  margin: 0;
+  font: 600 20px/1.3 var(--serif);
+  color: var(--ink);
+}
+.set-section-scope {
+  margin: 6px 0 14px;
+  max-width: 68ch;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+/* The section's primary action wears the mcp-refresh-btn idiom (the element carries both classes); this rule only
+   places it — its colours are that rule's, already shipped. */
+.set-primary { margin: 0 0 14px; }
+
+/* The lists: one card row per record — the name in --ink, the facts in the mono in --ink-3, a badge says its state
+   in words (an owner, a disabled user) and its border repeats it; "you" marks the reader's own row. */
+.set-list {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.set-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--ink);
+  background: var(--card);
+  transition: border-color .15s ease;
+}
+.set-row:hover { border-color: var(--ink-3); }
+.set-row-name {
+  font: 600 14px/1.4 var(--sans);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.set-row-meta {
+  font: 12.5px/1.4 var(--mono);
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+.set-row .ux-secondary-btn { margin-left: auto; }
+/* A row's several actions (a member's Change role… and Remove…): one group at the row's end — layout only. */
+.set-row-actions { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+.set-row-actions .ux-secondary-btn { margin-left: 0; }
+/* A record's further facts, and a service's environments: full-width lines under the row's name. */
+.set-row-facts, .set-envs {
+  flex: 1 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.set-envs { list-style: none; margin: 4px 0 0; padding: 8px 0 0; border-top: 1px solid var(--line-2); }
+.set-env { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
+.set-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font: 600 11.5px/1.5 var(--mono);
+  color: var(--ink-2);
+  background: var(--card);
+}
+.set-badge.is-owner { border-color: var(--CMP); }
+.set-badge.is-disabled { border-color: var(--fail-border); }
+.set-you { font: italic 13px/1.4 var(--serif); color: var(--ink-2); }
+.set-status {
+  margin: 0 0 14px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+.set-status .ux-secondary-btn { margin-left: 8px; }
+
+/* The audit: the filters as one wrapping row of fields, the rows as a table — headers in --ink-3, cells in
+   --ink-2, the actor in the mono in --ink, the detail a <details> with the JSON in the mono. */
+.set-audit-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+  margin: 0 0 16px;
+}
+/* The table scrolls inside its own box at a narrow width (never the page) — layout only. */
+.set-audit-wrap { max-width: 100%; overflow-x: auto; margin: 0 0 14px; }
+.set-audit {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.set-audit caption {
+  caption-side: top;
+  text-align: left;
+  padding: 0 0 8px;
+  font: 12.5px/1.4 var(--mono);
+  color: var(--ink-3);
+}
+.set-audit th {
+  text-align: left;
+  padding: 6px 10px 6px 0;
+  border-bottom: 1px solid var(--line);
+  font: 600 12px/1.4 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.set-audit td {
+  padding: 8px 10px 8px 0;
+  border-bottom: 1px solid var(--line-2);
+  vertical-align: top;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.set-audit-actor { font: 600 13px/1.45 var(--mono); color: var(--ink); }
+.set-audit-detail pre {
+  margin: 6px 0 0;
+  max-width: 48ch;
+  overflow: auto;
+  white-space: pre-wrap;
+  font: 12px/1.45 var(--mono);
+  color: var(--ink-2);
+}
+
+/* A destructive step: the confirmation says what it removes in --ink beside a --fail-border edge; the danger button
+   is --ink on the L4 tint, the border carrying the tone. */
+.set-confirm {
+  margin: 0;
+  padding: 8px 0 8px 12px;
+  border-left: 3px solid var(--fail-border);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.set-danger {
+  appearance: none;
+  cursor: pointer;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--fail-border);
+  font: 600 13.5px/1.2 var(--sans);
+  color: var(--ink);
+  background: var(--L4-tint);
+}
+.set-danger:focus-visible { outline: 2px solid var(--fail-border); outline-offset: 2px; }
+.set-danger[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+
+/* The record editor: the service record editor's idiom with the Settings prefix — a scrim, a centred dialog on
+   the card (its text --ink, named beside the background), the head's --CMP accent bar, the fields in the mono on
+   the card, the help and the status line in --ink-3 (an error reads --ink beside a --fail-border edge, a save
+   --ink-2 beside a --pass-border one, the sentence saying which). It takes the service editor's z-indexes: it
+   opens over Settings and over the service page, above both bars. The scrim draws no text (an empty aria-hidden
+   layer), so the scan skips it by name. */
+.set-editor-scrim { position: fixed; inset: 0; z-index: 150; cursor: pointer; background: color-mix(in srgb, var(--ink) 40%, transparent); animation: set-editor-fade 160ms ease-out; }
+.set-editor {
+  position: fixed; z-index: 151; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(640px, calc(100vw - 48px)); max-height: calc(100dvh - 40px); display: flex; flex-direction: column; box-sizing: border-box;
+  color: var(--ink); background: var(--card); border: 1px solid color-mix(in srgb, var(--CMP) 35%, var(--line)); border-radius: 16px;
+  box-shadow: 0 1px 2px rgba(15, 27, 45, 0.06), 0 24px 48px -16px rgba(15, 27, 45, 0.32), 0 8px 16px rgba(15, 27, 45, 0.14);
+  outline: none; overscroll-behavior: contain; animation: set-editor-in 160ms ease-out;
+}
+[data-theme="dark"] .set-editor { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 24px 48px -16px rgba(0, 0, 0, 0.6), 0 8px 16px rgba(0, 0, 0, 0.35); }
+@keyframes set-editor-in { from { opacity: 0; transform: translate(-50%, -50%) scale(0.98); } to { opacity: 1; transform: translate(-50%, -50%); } }
+@keyframes set-editor-fade { from { opacity: 0; } to { opacity: 1; } }
+.set-editor:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--CMP) 40%, transparent), 0 24px 48px -16px rgba(15, 27, 45, 0.32); }
+.set-editor-head { position: relative; flex: 0 0 auto; padding: 20px 28px 14px; border-bottom: 1px solid var(--line-2); display: flex; flex-direction: column; gap: 6px; }
+.set-editor-head::before { content: ''; position: absolute; left: 28px; top: 0; width: 44px; height: 3px; border-radius: 0 0 3px 3px; background: var(--CMP); }
+.set-editor-eyebrow { padding-right: 64px; font: 600 12px/1.3 var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); overflow-wrap: anywhere; }
+.set-editor-title { margin: 0; padding-right: 64px; font: 600 22px/1.2 var(--serif); color: var(--ink); overflow-wrap: anywhere; }
+.set-editor-close {
+  position: absolute; top: 16px; right: 20px; appearance: none; cursor: pointer;
+  padding: 4px 9px; border-radius: 8px; border: 1px solid var(--line); background: transparent;
+  font: 600 11.5px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3);
+  transition: color 200ms ease-out, border-color 200ms ease-out;
+}
+.set-editor-close:hover { color: var(--ink); border-color: var(--ink-3); }
+.set-editor-close:focus-visible { outline: 2px solid var(--CMP); outline-offset: 2px; }
+.set-editor-body { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 16px 28px 12px; display: flex; flex-direction: column; gap: 14px; scrollbar-width: thin; }
+.set-editor-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.set-editor-label { font: 600 12.5px/1.3 var(--mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-2); }
+.set-editor-help { font: 12.5px/1.45 var(--sans); color: var(--ink-3); overflow-wrap: anywhere; }
+.set-editor-field input, .set-editor-field textarea, .set-editor-field select {
+  width: 100%; padding: 9px 12px; box-sizing: border-box;
+  font: 14px/1.4 var(--mono); color: var(--ink); background: var(--card);
+  border: 1px solid var(--line); border-radius: 10px;
+  transition: border-color 200ms ease-out, box-shadow 200ms ease-out;
+}
+.set-editor-field textarea { resize: vertical; min-height: 72px; }
+.set-editor-field input:focus, .set-editor-field textarea:focus, .set-editor-field select:focus { outline: none; border-color: var(--CMP); box-shadow: 0 0 0 3px color-mix(in srgb, var(--CMP) 22%, transparent); }
+.set-editor-field input:focus-visible, .set-editor-field textarea:focus-visible, .set-editor-field select:focus-visible { outline: 2px solid var(--CMP); outline-offset: 1px; }
+/* A select the reader cannot change (the endpoint list could not be read): the help under it says why; the text keeps its contrast. */
+.set-editor-field select[aria-disabled="true"] { cursor: not-allowed; border-style: dashed; }
+/* The tier: a radio group of buttons on the card — the checked one by its --CMP border, never by text colour alone. */
+.set-editor-seg { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 3px; color: var(--ink-2); background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+.set-editor-seg-btn {
+  appearance: none; cursor: pointer; border: 1px solid transparent; background: transparent; border-radius: 10px;
+  padding: 8px 6px; font: 600 12.5px/1.3 var(--mono); color: var(--ink-2); overflow-wrap: anywhere;
+  transition: color 200ms ease-out, border-color 200ms ease-out;
+}
+.set-editor-seg-btn:hover { color: var(--ink); }
+.set-editor-seg-btn[aria-checked="true"] { color: var(--ink); background: var(--card); border-color: var(--CMP); box-shadow: inset 0 0 0 1px var(--CMP); }
+.set-editor-seg-btn:focus-visible { outline: 2px solid var(--CMP); outline-offset: -2px; }
+.set-editor-foot { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; padding: 12px 28px 16px; border-top: 1px solid var(--line-2); }
+.set-editor-status { flex: 1 1 240px; min-width: 0; font: 13px/1.45 var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
+.set-editor-status.is-pending { font-style: italic; }
+.set-editor-status.is-saved { color: var(--ink-2); padding-left: 10px; border-left: 3px solid var(--pass-border); }
+.set-editor-status.is-error { color: var(--ink); padding-left: 10px; border-left: 3px solid var(--fail-border); }
+.set-editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.set-editor-save[aria-disabled="true"]:not(.is-unavailable) { opacity: 0.5; cursor: progress; }
+.set-primary.is-unavailable, .set-editor-save.is-unavailable { cursor: not-allowed; }
+/* The reason line inside an unavailable primary or Save takes the button's own text colour (--paper on --ink here,
+   --og-on-accent on the accent under the reskin): the shared .svc-why --ink-3 is drawn for the card, and on the
+   button it fails AA. No opacity on an unavailable button either — the reason line is what marks it. */
+.set-primary .svc-why, .set-editor-save .svc-why { color: inherit; }
+
+/* The MCP target select: drawn inside each host's field (the deploy modal, the MCP panel, the home card), whose
+   rules colour it — this rule only sizes it. */
+.set-mcp-target { width: 100%; max-width: 420px; margin: 0; box-sizing: border-box; }
+/* The picker's line when the org has no endpoint registered: plain secondary text, no surface of its own. */
+.set-mcp-target-hint { display: block; margin: 2px 0 0; font: 12.5px/1.45 var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
+.set-mcp-target-hint .ux-secondary-btn { margin-left: 6px; }
+
+@media (max-width: 760px) {
+  .set-page { padding: 16px 16px 64px; }
+  .set-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .set-nav { flex-direction: row; overflow-x: auto; gap: 4px; padding-bottom: 4px; scrollbar-width: thin; }
+  .set-nav-group { margin: 0; padding: 8px 6px; white-space: nowrap; }
+  .set-nav-item { flex: 0 0 auto; white-space: nowrap; border-left: 0; border-bottom: 2px solid transparent; }
+  .set-nav-item[aria-current="page"] { border-left: 0; border-bottom: 2px solid var(--CMP); }
+  .set-row .ux-secondary-btn { margin-left: 0; }
+  .set-editor { left: 12px; right: 12px; width: auto; transform: translate(0, -50%); max-height: calc(100dvh - 24px); }
+  .set-editor-head, .set-editor-body, .set-editor-foot { padding-left: 18px; padding-right: 18px; }
+  .set-editor-seg { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .set-editor, .set-editor-scrim, .set-nav-item, .set-row { transition: none; animation: none; }
+  .set-editor-close, .set-editor-seg-btn, .set-editor-field input, .set-editor-field textarea, .set-editor-field select { transition: none; }
 }

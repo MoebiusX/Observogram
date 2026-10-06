@@ -76,6 +76,10 @@ export const FEATURES = [
   ['/api/waivers', 'Waivers'],                        // /api/waivers/:id/revoke
   ['/api/services', 'Services'],                      // the services table (STORE_PLAN slice 6a): a bundle has no records
   ['/api/orgs', 'Organisations'],                     // the active org's name and effective role (slice 6a)
+  ['/api/org', 'Settings'],                           // members and the org's name (slice 6b); '/api/orgs' stays longer
+  ['/api/environments', 'Settings'],                  // an environment's own record (slice 6b)
+  ['/api/mcp-endpoints', 'Settings'],                 // the org's MCP endpoints (slice 6b)
+  ['/api/audit', 'Settings'],                         // the audit rows (slice 6b)
   ['/auth/', 'Sign-in'],
 ];
 // The waivers live on a service record (GAP batch 2, B3.2): a bundled pack

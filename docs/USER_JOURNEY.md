@@ -187,6 +187,9 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
    the table is unavailable (the static bundle) or for a registered pack whose
    service row was deleted, and behaves as before.
 
+10. **Settings is entered from a menu, not a tab** (Advanced → Settings; the
+    account menu); it never competes with Discover · Diagnose · Remediate.
+
 ## What Belongs In Each Step
 
 ### Home and the service page
@@ -216,8 +219,42 @@ Belongs here:
 Does not belong here:
 
 - a URL or a token (the endpoint's safe form is all the page shows);
-- environment CRUD, members, MCP endpoint records (Settings, slice 6b);
+- environment CRUD, members, MCP endpoint records (Settings);
 - journeys (Neuron) and the deploy history.
+
+### Settings
+
+The org's administration, as a mode of its own: Advanced → Settings or the
+account menu opens it, its Back returns to where it was opened from, and a
+journey tab leaves it. The sections and every control in them are drawn from
+the rank the server reports for the active org; a section or a write that
+rank cannot use is listed `aria-disabled` with its reason, never hidden as if
+it did not exist and never drawn as usable.
+
+Belongs here:
+
+- environments — every service's, each with its tier, bindings, links and
+  MCP endpoint — read by every member, added, edited and deleted by
+  operators (the same editor opens from the service page);
+- the org's MCP endpoint records for admins — the URL and the token as the
+  NAME of a server variable under the org's prefix, never its value; a viewer
+  reads the name and the origin only;
+- members and the org's name for admins — add by login or verified email,
+  change a role, remove; the last-admin rule drawn before the server says it;
+- the audit for admins: the org's rows, filtered by whole UTC days, paged
+  back;
+- one banner naming the way in where the server names one — a token-only
+  server, a server without sign-in, the static bundle — in the server's
+  words;
+- every editor a pop-up over one record, its status line naming what the
+  server changed, or its refusal as served.
+
+Does not belong here:
+
+- services themselves (Build and the service page write them);
+- a secret's value — a token, a password — anywhere on the page;
+- an email in a member row;
+- a journey tab.
 
 ### Build (no pack yet)
 

@@ -250,17 +250,26 @@ export function wireServiceTabs(tablist, onSelect) {
 // the environment; Build a pack for <env>, disabled with its reason for a
 // rank without the operator role), and every pack linked. Actions:
 // host.services.home / selectEnv / openIn / openBuild / openPack / explain /
-// openEditor. Edit (the record editor, renderServiceEditor) is drawn only
-// when the rank may PATCH (model.canEdit); a viewer reads the facts as they are.
+// openEditor / addEnvironment / editEnvironment. Edit (the record editor,
+// renderServiceEditor), Add environment (in the bar and in the
+// no-environments line) and Edit environment (beside the tabs, over the
+// selected one — the environment editor Settings draws) are drawn only when
+// the rank may write (model.canEdit — the service and the environment routes
+// are both an operator's); a viewer reads the facts as they are.
 export function renderServicePage(container, model, host = appHost) {
   const envName = model.panel.env?.name ?? null;
+  const envId = model.panel.env?.id ?? null;
   const bind = { serviceId: model.id, env: envName };
   const noEnv = model.noEnvironments;
+  const tabs = tabsHtml(model.tabs);
   container.innerHTML = `
     <section class="svc-page" aria-labelledby="svc-page-name">
       <div class="svc-page-bar">
         <button type="button" class="svc-page-back" id="svc-page-back">← Services</button>
-        ${model.canEdit ? '<button type="button" class="svc-edit ux-secondary-btn" id="svc-edit">Edit</button>' : ''}
+        ${model.canEdit ? `<span class="svc-page-tools">
+          <button type="button" class="svc-add-env ux-secondary-btn" id="svc-add-env">Add environment</button>
+          <button type="button" class="svc-edit ux-secondary-btn" id="svc-edit">Edit</button>
+        </span>` : ''}
       </div>
       <header class="svc-page-head">
         <h1 class="svc-page-name" id="svc-page-name" tabindex="-1">${escapeHtml(model.name)}</h1>
@@ -269,8 +278,12 @@ export function renderServicePage(container, model, host = appHost) {
         ${model.description ? `<p class="svc-page-desc">${escapeHtml(model.description)}</p>` : ''}
       </header>
       ${noEnv
-    ? `<p class="svc-status svc-noenv" role="status">${escapeHtml(noEnv.text)}${noEnv.apiLine ? ` <code>${escapeHtml(noEnv.apiLine)}</code>` : ''}</p>`
-    : tabsHtml(model.tabs)}
+    ? `<p class="svc-status svc-noenv" role="status">${escapeHtml(noEnv.text)}</p>${noEnv.action === 'add-environment' && model.canEdit ? `
+      <button type="button" class="svc-noenv-add ux-secondary-btn" id="svc-noenv-add">Add environment</button>` : ''}`
+    : model.canEdit && envId !== null ? `
+      <div class="svc-tabs-row">${tabs}
+        <button type="button" class="svc-edit-env ux-secondary-btn" id="svc-edit-env" data-env-id="${escapeHtml(String(envId))}">Edit environment</button>
+      </div>` : tabs}
       ${panelHtml(model)}
       ${actionsHtml(model)}
       ${packsHtml(model)}
@@ -278,6 +291,8 @@ export function renderServicePage(container, model, host = appHost) {
 
   container.querySelector('#svc-page-back')?.addEventListener('click', () => host.services?.home?.());
   container.querySelector('#svc-edit')?.addEventListener('click', () => host.services?.openEditor?.(model.id));
+  for (const id of ['svc-add-env', 'svc-noenv-add']) container.querySelector(`#${id}`)?.addEventListener('click', () => host.services?.addEnvironment?.(model.id));
+  container.querySelector('#svc-edit-env')?.addEventListener('click', () => host.services?.editEnvironment?.(envId));
   wireServiceTabs(container.querySelector('.svc-tabs'), (name) => host.services?.selectEnv?.(name));
   for (const a of model.actions) {
     const btn = container.querySelector(`#${ACTION_IDS[a.view]}`);
@@ -445,8 +460,8 @@ export function markUnavailable(control, reason, { into = control } = {}) {
 // `403: no org membership — ask an admin to add you` — under what was
 // checked and as whom, and the one action that works for this user, Sign
 // out (the account menu's handler, proxied through host.services.signOut).
-// No fabricated way in: the studio has no member screen until Settings
-// (6b); the server's sentence names the way out that works.
+// No fabricated way in: the hint names where an admin adds a member
+// (Settings → Members) and that a reload is enough once they have.
 export function renderNoOrgHome(container, model, host = appHost) {
   const actions = (model.actions || []).map((a) => ({ id: `svc-noorg-${a.id}`, label: a.label }));
   container.innerHTML = `

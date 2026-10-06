@@ -447,7 +447,7 @@ test('T3c every feature the shim denies is named in the README 501 list and the 
   const spelled = {
     'Refresh from MCP': /Refresh from MCP/, 'Scan a repo': /Scan a repo/, 'Draft from a live MCP server': /Draft from MCP/,
     'Uploading a pack': /upload/i, Compare: /Compare/, Deploy: /Deploy/, Journeys: /Journeys/, Build: /Build/,
-    Waivers: /Waivers/, Services: /Services \(/, Organisations: /Organisations \(/, 'Sign-in': /sign-in/i,
+    Waivers: /Waivers/, Services: /Services \(/, Organisations: /Organisations \(/, Settings: /Settings \(/, 'Sign-in': /sign-in/i,
   };
   for (const [prefix, name] of FEATURES) {
     // The owner console has no door in a bundle (no sign-in, so no owner): neither list names it.
@@ -459,7 +459,10 @@ test('T3c every feature the shim denies is named in the README 501 list and the 
   // The two slice 6a routes beside their names in DOWNSTREAM, as every other route there.
   assert.match(cell, /Services \(`\/api\/services`, `\/api\/services\/:id`/);
   assert.match(cell, /Organisations \(`\/api\/orgs`/);
+  // The Settings routes (slice 6b), every one the page calls.
+  assert.match(cell, /Settings \(`\/api\/org`, `\/api\/org\/members`, `\/api\/environments\/:id`, `\/api\/mcp-endpoints`, `\/api\/audit`/);
   assert.ok(cell.indexOf('Services (') < cell.indexOf('sign-in (`/auth/*`)'), 'the order of the shim: sign-in last');
+  assert.ok(cell.indexOf('Organisations (') < cell.indexOf('Settings (') && cell.indexOf('Settings (') < cell.indexOf('sign-in (`/auth/*`)'), 'Settings sits before sign-in');
 });
 
 // ---------- T4 inert by default ----------
@@ -763,6 +766,17 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   await expectDenied('/api/services/1', undefined, 'Services');
   await expectDenied('/api/services/1', { method: 'PATCH' }, 'Services');
   await expectDenied('/api/orgs', undefined, 'Organisations');
+  // Settings (STORE_PLAN slice 6b) — a bundle has no org, so every call names Settings; /api/orgs above keeps
+  // Organisations (the longest prefix wins over '/api/org').
+  await expectDenied('/api/org', { method: 'PATCH' }, 'Settings');
+  await expectDenied('/api/org/members', undefined, 'Settings');
+  await expectDenied('/api/org/members/7', { method: 'DELETE' }, 'Settings');
+  await expectDenied('/api/environments/4', { method: 'PATCH' }, 'Settings');
+  await expectDenied('/api/mcp-endpoints', undefined, 'Settings');
+  await expectDenied('/api/mcp-endpoints/3', { method: 'DELETE' }, 'Settings');
+  await expectDenied('/api/audit?limit=100', undefined, 'Settings');
+  await expectDenied('/api/services/1/environments', { method: 'POST' }, 'Services');
+  await expectDenied('/api/admin/users', undefined, 'Administration');
   await expectDenied('/api/journeys', undefined, 'Journeys');
   await expectDenied('/api/library', undefined, 'Build');
   await expectDenied('/api/admin/join-role', undefined, 'Administration');
@@ -782,6 +796,9 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   assert.equal(featureOf('/api/services/x/waivers'), 'Waivers', 'the service record route, not a /api/services prefix');
   assert.equal(featureOf('/api/services/x'), 'Services');
   assert.equal(featureOf('/api/orgs'), 'Organisations');
+  assert.equal(featureOf('/api/orgs/acme'), 'Organisations', "'/api/org' does not swallow '/api/orgs'");
+  assert.equal(featureOf('/api/org'), 'Settings');
+  assert.equal(featureOf('/api/environments/4'), 'Settings');
   assert.equal(featureOf('/api/waivers/x/revoke'), 'Waivers');
   assert.equal(featureOf('/api/packs/x/placeholders'), 'This action', 'placeholders is answered, not a feature');
   assert.equal(featureOf('/auth/login'), 'Sign-in');
@@ -855,7 +872,7 @@ async function loadPlaywright() {
   catch (e) { return { error: `cannot import ${spec}: ${e.message.split('\n')[0]}` }; }
 }
 
-test('T7 the REAL bundle boots in headless Chromium against the fixture pack: the notice, the open posture, the pack opened, 501 for a live feature, the Export download, the audit-report anchor answered with the 501 sentence, no page error, no request off the loopback', async (t) => {
+test('T7 the REAL bundle boots in headless Chromium against the fixture pack: the notice, the open posture, the pack opened, 501 for a live feature, the Export download, the audit-report anchor answered with the 501 sentence, the Settings banner the same sentence, no page error, no request off the loopback', async (t) => {
   const required = process.env.OBSERVOGRAM_BUNDLE_SMOKE === 'require';
   const skip = (why) => { if (required) assert.fail(`OBSERVOGRAM_BUNDLE_SMOKE=require: ${why}`); t.skip(why); };
   const { pw, error } = await loadPlaywright();
@@ -959,6 +976,14 @@ test('T7 the REAL bundle boots in headless Chromium against the fixture pack: th
   await page.waitForSelector('#observa-chrome, .observa-hdr, #layer-view', { state: 'attached', timeout: 30_000 });
   await page.waitForFunction(() => (document.querySelector('#layer-view')?.textContent || '').trim().length > 0, null, { timeout: 30_000 });
   assert.equal(await page.$('.no-backend-notice'), null, 'the dismissal is remembered');
+  // Settings: the frame's first read is denied; the banner is that sentence
+  // as thrown, `501: ` included (design B15), no section list, nothing logged.
+  await page.click('.observa-adv-toggle');
+  await page.click('.observa-adv-item[data-action="settings"]');
+  await page.waitForSelector('.set-banner.is-static', { timeout: 30_000 });
+  assert.equal(await page.textContent('.set-banner'), '501: Settings needs the Observogram server; this studio is a static bundle built without one.');
+  assert.equal(await page.evaluate(() => document.body.dataset.mode), 'settings');
+  assert.equal(await page.$('.set-nav-item'), null, 'no section in the static bundle');
 
   assert.deepEqual(problems, [], 'no page error and no console.error');
   assert.deepEqual(offLoopback, [], 'no request left the loopback');

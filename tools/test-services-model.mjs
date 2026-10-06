@@ -288,11 +288,14 @@ test('buildServicePageModel: tabs, the selected panel (verdict, endpoint as name
   assert.equal(m.canEdit, true);
   assert.equal(m.noEnvironments, null);
   // A tab the pack does not declare: the base grade; an environment with its own tier; the unbound endpoint names the way out.
-  const staging = buildServicePageModel({ service: { ...orders, environments: orders.environments.map((e) => (e.name === 'dev' ? { ...e, tier: 'tier-1' } : e)) }, envName: 'dev', verdicts, catalog, access: operator, isLiveAggregatePack });
+  const staging = buildServicePageModel({ service: { ...orders, environments: orders.environments.map((e) => (e.name === 'dev' ? { ...e, tier: 'tier-1' } : e)) }, envName: 'dev', verdicts, catalog, access: operator, orgName: 'Acme', isLiveAggregatePack });
   assert.equal(staging.panel.verdict.state, 'base');
   assert.equal(staging.panel.tierLine, "tier-1 — this environment's override (the service says tier-2)");
   assert.equal(staging.panel.mcp.kind, 'none');
-  assert.equal(staging.panel.mcp.text, 'No MCP endpoint bound to dev — Diagnose compares with whatever live pack you load as Pack B; an admin binds one with PATCH /api/environments/13 { "mcpEndpointId": <n> } — GET /api/mcp-endpoints lists them.');
+  // The binding is an operator's (PATCH /api/environments/:id is operator class): the page's Edit environment, for the rank that has it.
+  assert.equal(staging.panel.mcp.text, "No MCP endpoint bound to dev — Diagnose compares with whatever live pack you load as Pack B. Edit environment binds one of Acme's MCP endpoints.");
+  assert.equal(buildServicePageModel({ service: orders, envName: 'dev', catalog, access: { posture: 'identity', role: 'viewer', rank: 0, canWrite: false, reason: 'needs the operator role in Acme — yours is viewer', orgName: 'Acme' }, orgName: 'Acme', isLiveAggregatePack }).panel.mcp.text,
+    'No MCP endpoint bound to dev — Diagnose compares with whatever live pack you load as Pack B; an operator binds one.', 'a viewer is told who binds one — never a route, never admin');
   // Product wording, not plan wording: no roadmap slice reference (and no screen that does not exist yet) reaches the service page.
   assert.doesNotMatch(JSON.stringify([staging.panel, staging.noEnvironments, staging.actions]), /slice\s*\d|\b6b\b|Settings/i, 'the service page never names a roadmap slice or an unbuilt screen');
   assert.deepEqual([staging.panel.bindings, staging.panel.links], [[], []]);
@@ -308,12 +311,12 @@ test('buildServicePageModel: tabs, the selected panel (verdict, endpoint as name
   assert.deepEqual(none.tabs, []);
   assert.equal(none.panel.env, null);
   assert.equal(none.panel.verdict, null);
-  assert.deepEqual(none.noEnvironments, { text: 'No environments yet. Register a pack that declares one — Build (its DEFINE environment becomes a row), a scan, a draft or an upload — and it appears here.', apiLine: 'POST /api/services/2/environments { "name": "prod" }' });
+  assert.deepEqual(none.noEnvironments, { text: 'No environments yet. Add one here, or register a pack that declares one — Build (its DEFINE environment becomes a row), a scan, a draft or an upload.', action: 'add-environment' });
   assert.equal(none.actions[3].label, 'Build a pack');
   assert.equal(none.panel.tierLine, `${TIER_BY_PACK} — neither the service nor the environment sets a tier`);
   assert.equal(none.facts.tierText, TIER_BY_PACK);
   const noneV = buildServicePageModel({ service: bare, access: viewer, orgName: 'Acme' });
-  assert.deepEqual(noneV.noEnvironments, { text: 'No environments yet. An operator registers a pack that declares one (Build, a scan, a draft or an upload) — your role in Acme is viewer.', apiLine: null });
+  assert.deepEqual(noneV.noEnvironments, { text: 'No environments yet. An operator registers a pack that declares one (Build, a scan, a draft or an upload) — your role in Acme is viewer.', action: null });
   // One environment, member pack only: the aggregate row is current and the verdict says so without a fetch.
   const one = buildServicePageModel({ service: memberOnly, catalog, isLiveAggregatePack });
   assert.deepEqual([one.panel.pack.how, one.panel.verdict.state, one.panel.verdict.fetch, one.packs[0].current], ['aggregate', 'none', false, true]);
@@ -365,14 +368,14 @@ test('buildHandoffPlan: tier and owners written only where the row has none; a s
   // The environment the draft names is not a row of the service: said, not fixed.
   const missing = buildHandoffPlan({ ...build, environment: 'staging' }, fresh);
   assert.equal(missing.environment, 'missing');
-  assert.equal(missing.sentence(['tier']), ' Service Orders API written: tier-2. The environment staging is not one of Orders API\'s — POST /api/services/1/environments { "name": "staging" } adds it.');
-  assert.doesNotMatch(missing.sentence(['tier']), /slice\s*\d|\b6b\b|service page|Settings/i, 'the hand-off never names a roadmap slice or a screen 6a does not have');
+  assert.equal(missing.sentence(['tier']), " Service Orders API written: tier-2. The environment staging is not one of Orders API's — add it on Orders API's page (Add environment).");
+  assert.doesNotMatch(missing.sentence(['tier']), /slice\s*\d|\b6b\b|service page|Settings|\/api\//i, 'the hand-off names no roadmap slice and no route — the page\'s Add environment is the way out');
   // A blank DEFINE environment builds for prod (instantiateBody's default): the row's prod is linked, nothing is "missing" (reverify finding).
   const blank = buildHandoffPlan({ ...build, environment: '' }, fresh);
   assert.equal(blank.environment, 'linked');
   assert.equal(blank.sentence(['tier']), ' Service Orders API written: tier-2.');
   assert.equal(buildHandoffPlan({ ...build, environment: undefined }, fresh).environment, 'linked');
-  assert.equal(buildHandoffPlan({ ...build, environment: '' }, { ...fresh, environments: [{ name: 'staging' }] }).sentence(['tier']), ' Service Orders API written: tier-2. The environment prod is not one of Orders API\'s — POST /api/services/1/environments { "name": "prod" } adds it.', 'a blank field compares as prod');
+  assert.equal(buildHandoffPlan({ ...build, environment: '' }, { ...fresh, environments: [{ name: 'staging' }] }).sentence(['tier']), " Service Orders API written: tier-2. The environment prod is not one of Orders API's — add it on Orders API's page (Add environment).", 'a blank field compares as prod');
   // No row (an aggregate with no primary).
   const noRow = buildHandoffPlan(build, null);
   assert.deepEqual([noRow.outcome, noRow.row, noRow.patch, noRow.environment], ['no-row', null, {}, 'none']);
@@ -384,7 +387,7 @@ test('buildHandoffPlan: tier and owners written only where the row has none; a s
   // Build was opened from record 1 but the register landed on another row (renamed record / explicit slug): nothing patched there (A-B2, mutation check 2b).
   const other = buildHandoffPlan(build, { id: 9, slug: 'payments-platform', name: 'Payments Platform', tier: null, owners: [], environments: [] }, { origin: { id: 1, name: 'Payments Platform', slug: 'payment-service' } });
   assert.deepEqual([other.outcome, other.patch, other.environment], ['other-service', {}, 'missing']);
-  assert.equal(other.sentence(), " Registered under a new service payments-platform — Payments Platform (payment-service) was not linked: the pack's service name yields another slug, and a slug is fixed. Open Payments Platform to compare. The environment prod is not one of Payments Platform's — POST /api/services/9/environments { \"name\": \"prod\" } adds it.");
+  assert.equal(other.sentence(), " Registered under a new service payments-platform — Payments Platform (payment-service) was not linked: the pack's service name yields another slug, and a slug is fixed. Open Payments Platform to compare. The environment prod is not one of Payments Platform's — add it on Payments Platform's page (Add environment).");
   assert.equal(buildHandoffPlan(build, { ...fresh, id: 9 }, { originId: 1 }).outcome, 'other-service', 'originId alone serves');
   assert.equal(buildHandoffPlan(build, fresh, { originId: 1 }).outcome, 'written', 'the origin row itself is written');
 });
@@ -446,9 +449,9 @@ test('buildServiceEditorModel: the record\'s values until typed, the tier choice
 
 test('buildNoOrgModel: the server\'s sentence as is, the login checked, sign-out the one action', () => {
   const err = Object.assign(new Error('403: no org membership — ask an admin to add you'), { denied: 'org', status: 403 });
-  const m = buildNoOrgModel({ identity: me('nora', []), error: err, chromeName: 'Acme Watch' });
+  const m = buildNoOrgModel({ identity: me('nora', []), error: err });
   assert.deepEqual([m.title, m.checked, m.body], ['Signed in, but in no organisation yet', '/api/packs as nora', '403: no org membership — ask an admin to add you']);
-  assert.equal(m.hint, 'Acme Watch has no member screen yet; an admin adds you with POST /api/org/members.');
+  assert.equal(m.hint, 'An admin of an organisation adds you in Settings → Members; reload this page once they have.', 'the screen an admin uses, and a reload is enough');
   // Product wording, not plan wording: no roadmap slice reference reaches a signed-in user.
   assert.doesNotMatch(`${m.title} ${m.body} ${m.hint}`, /slice\s*\d|\b6b\b/i, 'the no-org screen never names a roadmap slice');
   assert.deepEqual(m.actions, [{ id: 'sign-out', label: 'Sign out' }]);
@@ -464,7 +467,7 @@ function noOrgContainer() {
 
 test('renderNoOrgHome: the refusal as is and escaped, the login checked, one Sign out button proxied to host.services.signOut; a headless host never throws', () => {
   const err = Object.assign(new Error('403: no org membership — ask <an admin> to add you'), { denied: 'org', status: 403 });
-  const m = buildNoOrgModel({ identity: me('nora<img src=x onerror="window.__xss=1">', []), error: err, chromeName: 'Acme Watch' });
+  const m = buildNoOrgModel({ identity: me('nora<img src=x onerror="window.__xss=1">', []), error: err });
   const c = noOrgContainer();
   let signedOut = 0;
   renderNoOrgHome(c, m, { services: { signOut: () => { signedOut++; } } });
@@ -472,7 +475,7 @@ test('renderNoOrgHome: the refusal as is and escaped, the login checked, one Sig
   assert.ok(c.innerHTML.includes('Signed in, but in no organisation yet'));
   assert.ok(c.innerHTML.includes('403: no org membership — ask &lt;an admin&gt; to add you'), 'the server\'s sentence, escaped at the seam');
   assert.ok(c.innerHTML.includes('/api/packs as nora&lt;img') && !c.innerHTML.includes('<img'), 'the login is escaped — nothing from it reaches the page');
-  assert.ok(c.innerHTML.includes('Acme Watch has no member screen yet'), 'the hint names the product through chromeName');
+  assert.ok(c.innerHTML.includes('An admin of an organisation adds you in Settings → Members; reload this page once they have.'), 'the hint names Settings → Members');
   assert.equal((c.innerHTML.match(/<button /g) || []).length, 1, 'one action: Sign out — no fabricated way in');
   assert.ok(c.innerHTML.includes('id="svc-noorg-sign-out"') && c.innerHTML.includes('>Sign out</button>'));
   c.btn.fire('click');
@@ -723,6 +726,38 @@ test('persistence.scope keys the snapshot per login and org; the unscoped v1 sna
   });
 });
 
+test('persistence.seed merges Settings into another org\'s snapshot and leaves the rest of it — and the current scope — untouched (the org switch from Settings)', () => {
+  const bravo = { mode: 'home', selectedPackId: 'p1', view: 'compare', settingsSection: null, build: { name: 'Ledger' } };
+  const store = fakeStorage({ 'studioState.v2:olive:bravo': JSON.stringify(bravo), 'studioState.v2:olive:acme': '{"mode":"settings"}' });
+  withStorage(store, () => {
+    persistence.scope('olive', 'acme');
+    persistence.seed('olive', 'bravo', { mode: 'settings', settingsSection: 'endpoints' });
+    assert.deepEqual(JSON.parse(store.getItem('studioState.v2:olive:bravo')), { ...bravo, mode: 'settings', settingsSection: 'endpoints' }, 'the two fields merged, every other field kept');
+    assert.equal(persistence.key(), 'studioState.v2:olive:acme', 'the current scope is not moved');
+    assert.equal(store.getItem('studioState.v2:olive:acme'), '{"mode":"settings"}', 'this org\'s snapshot is not touched');
+    // An org never visited: the key is created with the two fields alone; a corrupt one is replaced.
+    persistence.seed('olive', 'charlie', { mode: 'settings', settingsSection: 'environments' });
+    assert.deepEqual(JSON.parse(store.getItem('studioState.v2:olive:charlie')), { mode: 'settings', settingsSection: 'environments' });
+    store.setItem('studioState.v2:local:default', '{not json');
+    persistence.seed(null, null, { mode: 'settings', settingsSection: null });
+    assert.deepEqual(JSON.parse(store.getItem('studioState.v2:local:default')), { mode: 'settings', settingsSection: null });
+  });
+  const throwing = new Proxy({}, { get() { throw new Error('SecurityError'); } });
+  withStorage(throwing, () => assert.doesNotThrow(() => persistence.seed('olive', 'bravo', { mode: 'settings' })));
+  // settingsSection is one of the persisted fields: a write carries it.
+  const store2 = fakeStorage();
+  withStorage(store2, () => {
+    const before = state.settingsSection;
+    state.settingsSection = 'endpoints';
+    persistence.scope('olive', 'acme');
+    persistence.resume();
+    persistence.write();
+    persistence.suspend();
+    state.settingsSection = before;
+    assert.equal(JSON.parse(store2.getItem('studioState.v2:olive:acme')).settingsSection, 'endpoints');
+  });
+});
+
 test('persistence.forget removes every snapshot of the login and the unscoped one, and no other user\'s', () => {
   const store = fakeStorage({
     'studioState.v1': '{}',
@@ -892,13 +927,21 @@ test('renderServicePage: the head, the tabs with the selected one marked, the pa
   const m = buildServicePageModel({ service: nasty, envName: 'prod', verdicts, catalog, access: OPERATOR, orgName: 'Acme', isLiveAggregatePack });
   const c = pageContainer();
   const calls = [];
-  const host = { services: { home: () => calls.push(['home']), selectEnv: (n) => calls.push(['selectEnv', n]), openIn: (v, b) => calls.push(['openIn', v, b]), openBuild: (b) => calls.push(['openBuild', b]), openPack: (id, env) => calls.push(['openPack', id, env]), explain: (r) => calls.push(['explain', r]), openEditor: (id) => calls.push(['openEditor', id]) } };
+  const host = { services: { home: () => calls.push(['home']), selectEnv: (n) => calls.push(['selectEnv', n]), openIn: (v, b) => calls.push(['openIn', v, b]), openBuild: (b) => calls.push(['openBuild', b]), openPack: (id, env) => calls.push(['openPack', id, env]), explain: (r) => calls.push(['explain', r]), openEditor: (id) => calls.push(['openEditor', id]),
+    addEnvironment: (id) => calls.push(['addEnvironment', id]), editEnvironment: (id) => calls.push(['editEnvironment', id]) } };
   renderServicePage(c, m, host);
   const h = c.innerHTML;
   // Edit, for a rank that may PATCH: in the page bar, opening the editor over this record.
   assert.ok(h.includes('<button type="button" class="svc-edit ux-secondary-btn" id="svc-edit">Edit</button>'));
   c.byId('svc-edit').fire('click');
   assert.deepEqual(calls, [['openEditor', 1]]);
+  calls.length = 0;
+  // The environment editor's two buttons on canEdit (B13): Add environment in the bar, Edit environment beside the tabs over the selected one.
+  assert.ok(h.includes('<button type="button" class="svc-add-env ux-secondary-btn" id="svc-add-env">Add environment</button>'));
+  assert.ok(h.includes('<div class="svc-tabs-row">') && h.includes('<button type="button" class="svc-edit-env ux-secondary-btn" id="svc-edit-env" data-env-id="11">Edit environment</button>'));
+  c.byId('svc-add-env').fire('click');
+  c.byId('svc-edit-env').fire('click');
+  assert.deepEqual(calls, [['addEnvironment', 1], ['editEnvironment', 11]]);
   calls.length = 0;
   assert.ok(h.includes('<section class="svc-page" aria-labelledby="svc-page-name">'));
   assert.ok(h.includes('<h1 class="svc-page-name" id="svc-page-name" tabindex="-1">Orders &lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;</h1>') && !h.includes('<img'), 'the name is escaped — nothing from it reaches the page');
@@ -961,19 +1004,25 @@ test('renderServicePage: a viewer gets Build drawn aria-disabled with the reason
   build.fire('click');
   assert.deepEqual(calls, [VIEWER.reason], 'the click explains, never opens Build');
   assert.ok(!c.innerHTML.includes('svc-edit'), 'a viewer has no Edit: a viewer has no PATCH, the facts are read-only for them');
+  assert.ok(!/svc-add-env|svc-edit-env|svc-tabs-row|Add environment|Edit environment/.test(c.innerHTML), 'nor Add environment / Edit environment: the environment routes are an operator\'s too');
   assert.ok(c.innerHTML.includes('Base grade (no staging overlay in the pack)') === false, 'the verdict for a tab not yet read is Loading…');
   assert.ok(c.innerHTML.includes('<span class="svc-verdict is-loading">Loading…</span>'));
   // No environments: the status line for the rank, no tablist, the actions with the service only.
   const c2 = pageContainer();
-  renderServicePage(c2, buildServicePageModel({ service: bare, access: OPERATOR, orgName: 'Acme' }), { services: {} });
-  assert.ok(c2.innerHTML.includes('<p class="svc-status svc-noenv" role="status">No environments yet. Register a pack that declares one') && c2.innerHTML.includes('<code>POST /api/services/2/environments { &quot;name&quot;: &quot;prod&quot; }</code>'));
+  const added = [];
+  renderServicePage(c2, buildServicePageModel({ service: bare, access: OPERATOR, orgName: 'Acme' }), { services: { addEnvironment: (id) => added.push(id) } });
+  assert.ok(c2.innerHTML.includes('<p class="svc-status svc-noenv" role="status">No environments yet. Add one here, or register a pack that declares one') && !c2.innerHTML.includes('<code>'), 'no route in the line: its button');
+  assert.ok(c2.innerHTML.includes('<button type="button" class="svc-noenv-add ux-secondary-btn" id="svc-noenv-add">Add environment</button>'));
+  assert.ok(!c2.innerHTML.includes('svc-edit-env'), 'no environment, no Edit environment');
+  c2.byId('svc-noenv-add').fire('click');
+  assert.deepEqual(added, [2]);
   assert.equal(c2.tablist, null);
   assert.ok(c2.innerHTML.includes('No pack yet for this service'));
   assert.ok(c2.innerHTML.includes('None yet — a register'));
   assert.doesNotThrow(() => { c2.byId('svc-action-discover').fire('click'); c2.byId('svc-action-build').fire('click'); c2.byId('svc-page-back').fire('click'); });
   const c3 = pageContainer();
   renderServicePage(c3, buildServicePageModel({ service: bare, access: VIEWER, orgName: 'Acme' }), { services: {} });
-  assert.ok(c3.innerHTML.includes('An operator registers a pack that declares one') && !c3.innerHTML.includes('<code>'));
+  assert.ok(c3.innerHTML.includes('An operator registers a pack that declares one') && !c3.innerHTML.includes('<code>') && !c3.innerHTML.includes('svc-noenv-add'));
   // wireServiceTabs alone tolerates no tablist.
   assert.doesNotThrow(() => wireServiceTabs(null, () => {}));
 });

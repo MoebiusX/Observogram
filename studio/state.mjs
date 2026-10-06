@@ -74,6 +74,9 @@ export const state = {
   // record of the services table with its environments as tabs; Discover ·
   // Diagnose · Remediate · Build open from it bound to the service and the
   // environment — the context bar and the tabs are hidden as on home.
+  // 'settings' is Settings (docs/STORE_PLAN.md §6 item 3, slice 6b): the
+  // org's environments and MCP endpoints, entered from Advanced and the
+  // account menu — the home's administrative sibling, not a journey tab.
   mode: 'home',
   // The service page's record id and the environment NAME its selected tab
   // shows — kept while a workspace opened from the page is on screen (the
@@ -81,6 +84,28 @@ export const state = {
   // nulled by goHome(). Both persisted: a reload lands on the page again.
   serviceId: null,
   serviceEnv: null,
+  // Settings: the section on screen (persisted — a reload lands on it
+  // again; one the rank cannot read falls back to the first it can), where
+  // Back returns ({ mode: 'home' | 'service', serviceId, env }; never
+  // persisted — a reload's Back is home), and the frame's answers (the
+  // probe, each section's status line; never persisted, dropped by goHome).
+  settingsSection: null,
+  settingsFrom: null,
+  settings: null,
+  // GET /api/mcp-endpoints → the org's McpEndpointView[]; null = not read or
+  // the read failed, [] = none registered. Never persisted.
+  mcpEndpoints: null,
+  // The open posture's Settings probe (GET /api/org/members) as last
+  // answered in this page — { orgId, ok } — so a picker's empty list knows
+  // the reader may register endpoints (C-7). Never persisted.
+  openProbe: null,
+  // The org the server resolved for this browser (GET /api/orgs `active` —
+  // also in the open and token postures, where no org header is sent).
+  orgId: null,
+  // The boot's refusal for a signed-in user in no organisation (the Error
+  // `403: no org membership — …`): Settings explains with it instead of
+  // opening. Null otherwise.
+  noOrg: null,
   build: defaultBuildState(),
   // Which home renders: 'gate' (signed-in service picker) or 'hero'
   // (the marketing/connect landing). Authenticated users with services
@@ -241,9 +266,10 @@ export const state = {
 const LEGACY_PERSIST_KEY = 'studioState.v1';
 const PERSIST_KEY_PREFIX = 'studioState.v2:';
 const PERSIST_FIELDS = [
-  'mode',                        // 'build' and 'service' are acted on at rehydrate; the pack ids decide the rest
+  'mode',                        // 'build', 'service' and 'settings' are acted on at rehydrate; the pack ids decide the rest
   'build',                       // snapshotted through BUILD_PERSIST_FIELDS (inputs only, never the canonical)
   'serviceId', 'serviceEnv',     // the service page (or the workspace opened from it)
+  'settingsSection',             // Settings' section on screen
   'selectedService',
   'selectedPackId', 'selectedEnv',
   'compareBId', 'compareBEnv',
@@ -301,6 +327,21 @@ export const persistence = {
     this._timer = setTimeout(() => { this._timer = null; this.write(); }, 250);
   },
   clear() { try { localStorage.removeItem(this._key); } catch (_) {} },
+  // Another org's snapshot gains `fields` (here { mode, settingsSection }) —
+  // read, merged, written under ITS key; nothing else in it changes, and the
+  // current scope is untouched (the org switch from Settings: the reload
+  // then lands in Settings in the target org, not on its last mode). Never
+  // scope() to the target first: a debounced write would put this org's
+  // fields under the target's key.
+  seed(login, org, fields) {
+    try {
+      const key = persistedStateKey(login, org);
+      let data = null;
+      try { data = JSON.parse(localStorage.getItem(key) || 'null'); } catch { data = null; }
+      const snap = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+      localStorage.setItem(key, JSON.stringify({ ...snap, ...fields }));
+    } catch { /* storage unavailable: the reload lands on the target org's last mode */ }
+  },
   // Sign-out: every snapshot of this login, in every org, and the unscoped
   // one — a shared browser keeps no draft of a user who left.
   forget(login) {

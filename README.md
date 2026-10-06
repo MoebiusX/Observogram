@@ -333,7 +333,9 @@ for a throwaway open sandbox.)
    secret itself never lands in any log. The label must not be a user's
    login: the audit names the bearer by it (default `token`), and the
    identity API refuses a new user by that name. A token configured on a fresh workspace suppresses the
-   default-admin seed: the token is the expressed auth intent.
+   default-admin seed: the token is the expressed auth intent. In the
+   studio, Settings opens read-only there, under a banner that is the
+   server's own sentence naming the way in.
 3. **Exposed without any auth.** The server **refuses to start** with a
    clear message. `OBSERVOGRAM_INSECURE_NO_AUTH=1` overrides knowingly (it
    logs a loud warning) for trusted-network demos only.
@@ -548,6 +550,15 @@ Authorization is decided when a request reaches its route: a request
 already running when its user is disabled or demoted finishes; the user's
 next one is refused.
 
+In the studio, Settings (Advanced → Settings, or the account menu) draws
+what each role may do from the server's answer for the active org: every
+member reads the environments and the MCP endpoints (a viewer an
+endpoint's name and origin only), an operator edits the environments, an
+admin the MCP endpoints, the members, the org's name and the audit; a
+section or a control the reader's rank cannot use is listed `aria-disabled`
+with the sentence naming who can. The server still decides every write; a
+refusal is shown as served.
+
 **What a viewer can no longer do in the studio** (each answers with the
 server's text): Scan (a repo or GitHub), Draft from MCP and the MCP
 panel's live refresh, dropping or uploading a pack file (even only to view
@@ -555,7 +566,8 @@ it: the upload registers it), Build (its preview computes on the server,
 and Save registers), Compare's retrofeed, journey Capture and Run, Deploy /
 Verify / Rollback, and RESET. Give such a member `operator` with
 `npm run orgs -- add-member <org> <login> --role operator`, or, as an
-admin of the org, `PATCH /api/org/members/<id>` with `{"role": "operator"}`.
+admin of the org, Settings → Members (or `PATCH /api/org/members/<id>` with
+`{"role": "operator"}`).
 
 MCP write tokens are unrelated to the API token: they pass through per
 request and are never stored server-side. Userinfo, the fragment and query
@@ -717,6 +729,20 @@ next request; this browser's is re-issued at the new session epoch and
 keeps its expiry (signing out elsewhere never extends a session). It
 answers `{ ok, sessionEpoch }` and writes one `user.signout` row, the user
 its actor.
+
+**In the studio: Settings → Members and Settings → Audit.** An admin of the
+active org adds a member by login or by verified email (an existing member is
+given the role: `oscar was already a member: operator → admin.`), changes a
+role and removes a member; the last-admin rule is drawn before the server
+says it (the last enabled admin's Remove and lower roles are `aria-disabled`
+with the sentence naming the way out), and removing oneself reloads the
+browser into the next org the user belongs to. Rename sets the org's name
+(`PATCH /api/org`); the ORG chip follows. A member row carries the login, the
+name and the role — never an email. The audit lists the org's rows to an
+admin (`GET /api/audit`, `scope=org`) and the deployment's to an owner,
+filtered by actor, kind, action, target and whole UTC days (`From` and
+`Through`, sent as `since` and an `until` of the day after), older rows paged by `next`; a filter the
+server refuses is its sentence, as served.
 
 ### Services, Environments And MCP Endpoints
 
@@ -886,6 +912,22 @@ with their URLs, and never changes an endpoint.
   naming the effective role); the studio's persisted state is one login's in
   one org, so a draft started in one org is not in another. A signed-in user
   in no org sees the server's refusal and the account menu.
+- **In the studio: Settings → Environments and Settings → MCP endpoints.**
+  Operators add, edit (name, tier, bindings, links, the MCP endpoint) and
+  delete environments in one editor, opened from Settings or from the service
+  page (Add environment, Edit environment); a save sends only what changed,
+  so a tier save neither resends nor clears the binding. Admins register,
+  edit and delete the org's MCP endpoint records: the URL, and the token as
+  the NAME of a variable under the org's prefix
+  (`OBSERVOGRAM_ORG_<ORGKEY>_<NAME>`), never its value; the server's refusal
+  of a credential in the URL or of another org's variable is shown as served.
+  A viewer sees an endpoint's name and origin only. The MCP
+  pickers — the refresh panel, the home's source card, the draft panel and
+  the deploy modal — list the org's endpoints first and keep a typed URL; a
+  chosen endpoint is sent as `mcpEndpointId` (never with `mcpUrl`), rollback
+  and verify follow it, and a write re-reads the endpoint before it sends: an
+  endpoint moved or deleted since the list was drawn sends nothing and says
+  so. A deploy profile remembers its endpoint per org.
 
 ### The Audit
 
@@ -1701,6 +1743,7 @@ live on a service record, which a bundled pack has none of), the Audit report
 (its goes-blind section needs the PromQL parser the bundle cannot inline),
 Services (the records behind the home's cards and the service page — a bundle
 has no services table), Organisations (the active org's name and role),
+Settings (members, environments, MCP endpoints, the audit — a bundle has no org),
 sign-in — answers `501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
 this studio is a static bundle built without one.' }`, which the studio shows
 as the sentence, and a dismissable notice at the bottom of the window says so

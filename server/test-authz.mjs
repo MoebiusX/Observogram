@@ -349,6 +349,10 @@ test('authzDecision: every refusal names a way out', () => {
     "the bearer token acts as an operator in org 'acme'; an owner needs a signed-in user with that role; this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC");
   assert.equal(text(opWrite, ctxOf('token', P.anon)),
     'anonymous callers are viewers here; the operator role needs a signed-in user; this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC');
+  // Under OBSERVOGRAM_AUTH=off adding a user arms nothing: the way in is a restart without it.
+  assert.equal(text(opWrite, ctxOf('token', P.anon, { authOff: true })),
+    'anonymous callers are viewers here; the operator role needs a signed-in user; this server has no sign-in (OBSERVOGRAM_AUTH=off): restart it without OBSERVOGRAM_AUTH=off once a user exists (npm run users -- add <login>), or configure OIDC');
+  assert.doesNotMatch(text(ownerApi, ctxOf('token', P.bearer, { authOff: true })), /no sign-in: add the first user/);
   const body = authzDecision(opWrite, ctxOf('identity', P.viewer)).body;
   assert.deepEqual({ ...body, error: undefined }, { ok: false, error: undefined, denied: 'role', need: 'operator', role: 'viewer', owner: false, org: 'acme' });
   // The MCP endpoint changes: the same refusals named after them — and no
@@ -695,7 +699,7 @@ test('the account menu mounts in the one bar every screen shows — not the cont
 // adopted once, every key gone at sign-out. The rule is tools/lib's
 // (server/mcp-url.mjs re-exports it), handed in as the studio hands in the
 // one it loads from /lib.
-const { deployProfilesKey, safeDeployProfile, migrateDeployProfiles, deployProfileSavedText, forgetMcpUrls, setSignedInLogin, setActiveOrg } = await import('../studio/api.mjs');
+const { deployProfilesKey, safeDeployProfile, migrateDeployProfiles, deployProfileSavedText, forgetMcpUrls, setSignedInLogin, setActiveOrg, rememberMcpEndpoint, recallMcpEndpoint } = await import('../studio/api.mjs');
 
 test('deploy target profiles keep no credential: per user, stripped like the remembered URL, the v1 key adopted once, cleared at sign-out', async () => {
   const { stripMcpUrl, droppedNote } = await import('./mcp-url.mjs');
@@ -777,10 +781,23 @@ test('deploy target profiles keep no credential: per user, stripped like the rem
     for (const [k, v] of [
       ['mcpUrl.v2:ada:acme', 'https://mcp.acme.test/obs'], ['mcpUrl.v2:ada:bravo', 'https://mcp.bravo.test/obs'], ['mcpUrl.v2:bob:acme', 'https://mcp.bob.test/obs'], ['mcpUrl', 'x'],
       ['deployProfiles.v2:ada', '{}'], ['deployProfiles.v2:bob', '{}'], ['deployProfiles.v2:local', '{}'], ['deployProfiles.v1', '{}'],
+      ['mcpEndpoint.v1:ada:bravo', '7'], ['mcpEndpoint.v1:bob:acme', '4'],
       ['studioTheme', 'dark'],
     ]) store.set(k, v);
+    // The remembered endpoint is this login's in the active org — an id means something in one org only.
+    rememberMcpEndpoint(3);
+    assert.equal(store.get('mcpEndpoint.v1:ada:acme'), '3');
+    assert.equal(recallMcpEndpoint(), 3);
+    setActiveOrg('bravo');
+    assert.equal(recallMcpEndpoint(), 7, 'another org, another choice');
+    setActiveOrg('acme');
+    store.set('mcpEndpoint.v1:ada:acme', 'x');
+    assert.equal(recallMcpEndpoint(), null, 'a stored value that is no id is no choice');
+    rememberMcpEndpoint(null);
+    assert.ok(!store.has('mcpEndpoint.v1:ada:acme'), 'a typed URL used: the choice is forgotten');
+    rememberMcpEndpoint(3);
     forgetMcpUrls('ada');
-    assert.deepEqual([...store.keys()].sort(), ['mcpUrl.v2:bob:acme', 'studioOrg.v1', 'studioTheme']);
+    assert.deepEqual([...store.keys()].sort(), ['mcpEndpoint.v1:bob:acme', 'mcpUrl.v2:bob:acme', 'studioOrg.v1', 'studioTheme'], "ada's remembered URLs and endpoints go, in every org; bob's stay");
   } finally {
     setActiveOrg(null);
     setSignedInLogin(null);
@@ -796,6 +813,8 @@ test('deploy target profiles keep no credential: per user, stripped like the rem
   const save = functionSource(app, 'saveDeployProfile');
   assert.match(save, /note = await storeDeployProfile\(name, \{/);
   assert.match(save, /mcpUrl:\s+\$\('#deploy-target-mcp'\)\.value\.trim\(\),/);
+  // A profile saved with an endpoint chosen names it with its org (A-12), beside the URL line.
+  assert.match(save, /mcpEndpoint:\s+chosenEndpointForProfile\(\),/);
   assert.match(save, /setDeployStatus\(note \|\| '', note \? 'ok' : ''\);/);
   const apiSrc = withoutComments(readFileSync(join(STUDIO, 'api.mjs'), 'utf8'));
   assert.equal((apiSrc.match(/getItem\(LEGACY_DEPLOY_PROFILES_KEY\)/g) || []).length, 1, 'v1 is read in one place');
