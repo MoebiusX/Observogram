@@ -17,7 +17,7 @@ import {
   buildEnvironmentsSectionModel, buildEndpointsSectionModel, buildMembersSectionModel, buildAuditSectionModel, auditQuery,
   buildSettingsEditorModel, buildEnvironmentPatch, buildEnvironmentCreate, buildEndpointPatch, buildEndpointCreate, buildMemberAddBody,
   parseKeyValueLines, environmentSaveStatus, endpointSaveStatus, memberSaveStatus, orgRenameStatus, endpointDeleteStatus,
-  lastAdmin, orgEnvPrefix, mcpTargetModel, mcpTargetBody, profileEndpointNote, endpointDrift,
+  lastAdmin, orgEnvPrefix, mcpTargetModel, mcpTargetBody, mcpPickerCanAdmin, profileEndpointNote, endpointDrift,
 } from '../studio/settings-model.mjs';
 import {
   loadMcpEndpoints, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
@@ -501,6 +501,19 @@ test('mcpTargetModel: the list first, "Type a URL…" last; the preselection ord
   assert.deepEqual([unread.show, unread.value, unread.showUrl, unread.hint, unread.options.length], [false, '', true, null, 1]);
   assert.deepEqual(mcpTargetModel({ endpoints: [], orgName: 'Acme' }).hint, { text: 'No MCP endpoint is registered in Acme yet — an admin registers them.', button: null });
   assert.deepEqual(mcpTargetModel({ endpoints: [], orgName: 'Acme', canAdmin: true }).hint, { text: 'No MCP endpoint is registered in Acme yet.', button: 'Settings → MCP endpoints' });
+});
+
+test('mcpPickerCanAdmin: known true only — the identity posture at rank admin, or the open posture whose probe answered 200 for this org (C-7)', () => {
+  const can = (posture, role, probe, orgId = 'acme') => mcpPickerCanAdmin({ access: { posture, role }, probe, orgId });
+  assert.equal(can('identity', 'admin', null), true);
+  for (const role of ['operator', 'viewer', null]) assert.equal(can('identity', role, null), false, `identity ${role}`);
+  // Open on loopback: the probe's 200 says you act as local, an owner.
+  assert.equal(can('open', null, { orgId: 'acme', ok: true }), true, 'open, the probe answered 200');
+  assert.equal(can('open', null, null), false, 'open, no probe yet: not guessed');
+  assert.equal(can('open', null, { orgId: 'acme', ok: false }), false, 'open-exposed: the probe was refused');
+  assert.equal(can('open', null, { orgId: 'bravo', ok: true }), false, "another org's answer");
+  for (const posture of ['token', 'static', 'unknown']) assert.equal(can(posture, 'admin', { orgId: 'acme', ok: true }), false, posture);
+  assert.equal(mcpPickerCanAdmin(), false);
 });
 
 test('mcpTargetBody: an id or a URL, never both; null for nothing (T23)', () => {

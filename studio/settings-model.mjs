@@ -713,6 +713,18 @@ export function buildSettingsEditorModel(kind, record = null, { draft = null, st
 
 const AUTH_WRITE = "MCP client key — a write token, sent with this request only, never stored. (The endpoint's read variable is never used to write.)";
 
+// Whether a picker's empty-list hint may offer Settings → MCP endpoints:
+// only when the reader is known to be an admin of the org (C-7) — the
+// identity posture at rank admin, or the open posture whose probe answered
+// 200 in this page for this org (`probe` { orgId, ok }: you act as local,
+// an owner). A closed probe, another org's, none yet, or any other posture:
+// false.
+export function mcpPickerCanAdmin({ access = null, probe = null, orgId = null } = {}) {
+  if (access?.posture === 'identity') return access.role === 'admin';
+  if (access?.posture === 'open') return probe?.ok === true && probe.orgId === orgId;
+  return false;
+}
+
 // `endpoints` is state.mcpEndpoints (null: not read or failed → typed only;
 // [] → none registered); `remembered` the remembered endpoint id for this
 // org; `liveUrl` the live status's URL; `typedUrl` the remembered typed URL

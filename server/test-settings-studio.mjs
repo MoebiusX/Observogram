@@ -24,7 +24,8 @@
  * As vera (viewer): no Edit, no URL. As nora (no org): the boot's refusal.
  * The token posture (with and without OBSERVOGRAM_AUTH=off) and an open
  * server bound off the loopback: the banner is the server's text, the
- * writes carry their reasons, the pickers offer no Settings button.
+ * writes carry their reasons, the pickers offer no Settings button. An open
+ * server on the loopback: once its probe answers 200, the pickers do.
  *
  * Its own fixture (design §12.4 B1): ada is acme's only enabled admin (olive
  * is an owner and an operator there), and ada is a viewer of bravo — she has
@@ -122,6 +123,8 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
   children.push(tokenOffChild);
   const openChild = await serve(workspace('open-exposed'), { host: '0.0.0.0', env: { OBSERVOGRAM_INSECURE_NO_AUTH: '1', OBSERVOGRAM_AUTH: 'off' } });
   children.push(openChild);
+  const loopChild = await serve(workspace('open-loopback'), { env: { OBSERVOGRAM_AUTH: 'off' } });
+  children.push(loopChild);
 
   // ---------- HTTP as a signed-in person ----------
   const cookies = {};
@@ -706,6 +709,28 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await page.waitForSelector('#mcp-panel:not([hidden])', { timeout: T });
       await page.waitForTimeout(500);
       assert.equal(await page.$('#mcp-panel [data-mcp-target-settings]'), null, 'no Settings button in a closed posture');
+    } finally { await ctx.close(); }
+  });
+
+  await t.test('an open server on the loopback: once the probe answers 200 in this page, the picker hint offers Settings → MCP endpoints, and it lands there', async () => {
+    const probe = await call(null, 'GET', '/api/org/members', undefined, { base: loopChild.base });
+    assert.equal(probe.status, 200, probe.text);
+    const { page, ctx } = await open(loopChild.base, null);
+    try {
+      await page.click('.observa-adv-toggle');
+      await page.click('.observa-adv-item[data-action="settings"]');
+      await page.waitForSelector('.set-banner', { timeout: T });
+      await settled(page);
+      assert.match(await text(page, '.set-banner'), /^This server runs without sign-in: you act as local, an owner/);
+      await page.click('#set-back');
+      await page.waitForFunction(() => document.body.dataset.mode !== 'settings', null, { timeout: T });
+      await page.evaluate(() => document.getElementById('mcp-btn').click());
+      await page.waitForSelector('#mcp-panel:not([hidden]) [data-mcp-target-settings]', { timeout: T });
+      assert.match(await text(page, '#mcp-panel .set-mcp-target-hint'), /^No MCP endpoint is registered in .+ yet\. Settings → MCP endpoints$/);
+      await page.click('#mcp-panel [data-mcp-target-settings]');
+      await page.waitForFunction(() => document.querySelector('#set-section')?.dataset.section === 'endpoints', null, { timeout: T });
+      await settled(page);
+      assert.equal(await attr(page, '#set-primary', 'aria-disabled'), null, 'New MCP endpoint usable');
     } finally { await ctx.close(); }
   });
 

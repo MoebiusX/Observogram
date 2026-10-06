@@ -60,7 +60,7 @@ import {
   buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus,
   buildMemberAddBody, memberSaveStatus, orgRenameStatus, lastAdmin,
   buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
-  mcpTargetModel, mcpTargetBody, profileEndpointNote, endpointDrift,
+  mcpTargetModel, mcpTargetBody, mcpPickerCanAdmin, profileEndpointNote, endpointDrift,
 } from './settings-model.mjs';
 import {
   loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
@@ -2396,8 +2396,10 @@ async function loadSettingsFrame() {
     try {
       const body = await loadMembers();
       if (here()) Object.assign(settings, { probe: { ok: true }, members: body.members, org: body.org });
+      if (here() && posture === 'open') state.openProbe = { orgId: state.orgId, ok: true };
     } catch (e) {
       if (here()) settings.probe = e;
+      if (here() && posture === 'open') state.openProbe = { orgId: state.orgId, ok: false };
     }
     if (!here()) return;
     state.settingsSection = settingsSectionFor(settingsAccess(), state.settingsSection, BUILT_SECTIONS);
@@ -4942,9 +4944,10 @@ function mcpPickersReadable() {
 }
 
 // The empty list's way to Settings → MCP endpoints, for a reader known to be
-// an admin of the org (C-7: never guessed — the open postures may close it).
-function mcpPickerCanAdmin() {
-  return state.access?.posture === 'identity' && state.access?.role === 'admin';
+// an admin of the org (C-7: never guessed — an open posture only once its
+// probe answered 200 in this page; leaving Settings keeps that answer).
+function mcpPickerCanAdminNow() {
+  return mcpPickerCanAdmin({ access: state.access, probe: state.openProbe, orgId: state.orgId });
 }
 
 // GET /api/mcp-endpoints for the pickers. Silent: a refusal or a failure
@@ -4989,7 +4992,7 @@ function mcpPickerModel(id, chosen = null) {
     // The remembered typed URL — or, in the deploy modal (which remembers
     // none), what its field holds (a profile's URL).
     typedUrl: id === 'deploy' ? (document.getElementById(p.url)?.value || '') : (recallMcpUrl() || ''),
-    purpose: p.purpose, orgName: state.orgName, canAdmin: mcpPickerCanAdmin(), chosen,
+    purpose: p.purpose, orgName: state.orgName, canAdmin: mcpPickerCanAdminNow(), chosen,
   });
   return p.hint ? model : { ...model, hint: null };
 }

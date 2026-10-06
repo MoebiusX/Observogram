@@ -95,6 +95,10 @@ export const state = {
   // GET /api/mcp-endpoints → the org's McpEndpointView[]; null = not read or
   // the read failed, [] = none registered. Never persisted.
   mcpEndpoints: null,
+  // The open posture's Settings probe (GET /api/org/members) as last
+  // answered in this page — { orgId, ok } — so a picker's empty list knows
+  // the reader may register endpoints (C-7). Never persisted.
+  openProbe: null,
   // The org the server resolved for this browser (GET /api/orgs `active` —
   // also in the open and token postures, where no org header is sent).
   orgId: null,
