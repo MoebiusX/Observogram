@@ -1071,7 +1071,7 @@ function jumpTo(container, key) {
 
 // Leave Neuron for the comparison the next journey is saved from.
 function goCompare(host) {
-  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service') state.mode = 'single';
+  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings') state.mode = 'single';
   state.view = state.pack ? 'compare' : 'layers';
   host.renderTabs();
   host.renderMainView();

@@ -4503,9 +4503,11 @@ a:hover { color: var(--ink); }
    ============================================================ */
 body[data-mode="home"] .meta { display: none; }
 body[data-mode="home"] .tabs { display: none; }
-/* The service page (STORE_PLAN §6, slice 6a) hides the pack chrome as home does. */
+/* The service page (STORE_PLAN §6, slice 6a) and Settings (slice 6b) hide the pack chrome as home does. */
 body[data-mode="service"] .meta { display: none; }
 body[data-mode="service"] .tabs { display: none; }
+body[data-mode="settings"] .meta { display: none; }
+body[data-mode="settings"] .tabs { display: none; }
 body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
 
 /* ===================== HOME — PREMIUM FINTECH ===================== */
@@ -6887,6 +6889,7 @@ body.chrome-observa .hdr {
 }
 body.chrome-observa[data-mode="home"] .hdr { display: none !important; }
 body.chrome-observa[data-mode="service"] .hdr { display: none !important; }
+body.chrome-observa[data-mode="settings"] .hdr { display: none !important; }
 
 /* Meta strip stays hidden under the chrome for now — the audit
    content carries that detail. */
@@ -9500,6 +9503,16 @@ select.build-edit-input { appearance: auto; }
   overflow-wrap: anywhere;
 }
 .set-row .ux-secondary-btn { margin-left: auto; }
+/* A record's further facts, and a service's environments: full-width lines under the row's name. */
+.set-row-facts, .set-envs {
+  flex: 1 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.set-envs { list-style: none; margin: 4px 0 0; padding: 8px 0 0; border-top: 1px solid var(--line-2); }
+.set-env { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
 .set-badge {
   display: inline-block;
   padding: 1px 8px;

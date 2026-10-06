@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  SETTINGS_SECTIONS, BUILT_SECTIONS, AUDIT_KINDS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsAboveRank,
+  SETTINGS_SECTIONS, BUILT_SECTIONS, BUILT_EDITORS, settingsSectionHead, AUDIT_KINDS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsAboveRank,
   buildEnvironmentsSectionModel, buildEndpointsSectionModel, buildMembersSectionModel, buildAuditSectionModel, auditQuery,
   buildSettingsEditorModel, buildEnvironmentPatch, buildEnvironmentCreate, buildEndpointPatch, buildEndpointCreate, buildMemberAddBody,
   parseKeyValueLines, environmentSaveStatus, endpointSaveStatus, memberSaveStatus, orgRenameStatus, endpointDeleteStatus,
@@ -24,6 +24,8 @@ import {
   loadMembers, addMember, patchMember, removeMember, renameOrg, loadAudit,
 } from '../studio/settings-api.mjs';
 import { accessModel, TIER_BY_PACK } from '../studio/services-model.mjs';
+import { renderSettings } from '../studio/settings-view.mjs';
+import { readFileSync } from 'node:fs';
 import { servicesRefusal } from '../studio/services-api.mjs';
 import { orgEnvPrefix as serverOrgEnvPrefix } from '../server/store/mcp-endpoints.mjs';
 
@@ -117,15 +119,18 @@ test('settingsAccessModel: each rank, each posture — the reasons name a way ou
 
 test('the frame: the scope line, the nav lists only the built sections, each unreadable one disabled with its reason', () => {
   assert.deepEqual(SETTINGS_SECTIONS, ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role']);
-  assert.deepEqual(BUILT_SECTIONS, ['environments', 'endpoints', 'members', 'audit'], 'no deployment group in this build');
-  const ada = buildSettingsFrameModel({ access: ADA, orgName: 'Acme', orgId: 'acme' });
+  assert.deepEqual(BUILT_SECTIONS, ['environments', 'endpoints'], 'the sections this build draws: no members, audit or deployment group yet');
+  assert.deepEqual(BUILT_EDITORS, [], 'no record editor in this build');
+  const FOUR = ['environments', 'endpoints', 'members', 'audit'];
+  assert.deepEqual(buildSettingsFrameModel({ access: ADA }).nav.map((n) => n.id), BUILT_SECTIONS, 'the default nav is the built sections');
+  const ada = buildSettingsFrameModel({ access: ADA, orgName: 'Acme', orgId: 'acme', builtSections: FOUR });
   assert.equal(ada.scope, 'Settings · Acme (acme) · you are admin');
   assert.equal(ada.section, 'environments', 'the first readable section by default');
   assert.deepEqual(ada.nav.map((n) => [n.id, n.label, n.group, n.enabled]), [
     ['environments', 'Environments', 'org', true], ['endpoints', 'MCP endpoints', 'org', true], ['members', 'Members', 'org', true], ['audit', 'Audit', 'org', true],
   ]);
   assert.equal(buildSettingsFrameModel({ access: OLIVE, orgName: 'Acme', orgId: 'acme' }).scope, 'Settings · Acme (acme) · you are admin, an owner');
-  const oscar = buildSettingsFrameModel({ access: OSCAR, section: 'members', orgName: 'Acme', orgId: 'acme' });
+  const oscar = buildSettingsFrameModel({ access: OSCAR, section: 'members', orgName: 'Acme', orgId: 'acme', builtSections: FOUR });
   assert.equal(oscar.scope, 'Settings · Acme (acme) · you are operator');
   assert.equal(oscar.section, 'environments', 'a section the rank cannot read falls back to the first it can');
   const members = oscar.nav.find((n) => n.id === 'members');
@@ -136,11 +141,11 @@ test('the frame: the scope line, the nav lists only the built sections, each unr
   assert.deepEqual(two.nav.map((n) => n.id), ['environments', 'endpoints']);
   assert.equal(two.section, 'environments');
   // A section asked for and readable is kept; its status comes from statusOf.
-  const audit = buildSettingsFrameModel({ access: ADA, section: 'audit', statusOf: (id) => ({ kind: 'loading', text: `Reading ${id}…` }) });
+  const audit = buildSettingsFrameModel({ access: ADA, section: 'audit', statusOf: (id) => ({ kind: 'loading', text: `Reading ${id}…` }), builtSections: FOUR });
   assert.deepEqual([audit.section, audit.status], ['audit', { kind: 'loading', text: 'Reading audit…' }]);
   assert.ok(audit.nav.find((n) => n.id === 'audit').current);
   // The token posture: environments and endpoints readable, members and audit disabled with 6a's reason.
-  const token = buildSettingsFrameModel({ access: TOKEN, orgName: 'Default', orgId: 'default' });
+  const token = buildSettingsFrameModel({ access: TOKEN, orgName: 'Default', orgId: 'default', builtSections: FOUR });
   assert.equal(token.scope, 'Settings · Default (default) · you are viewer');
   assert.deepEqual(token.nav.filter((n) => !n.enabled).map((n) => [n.id, n.reason]), [['members', TOKEN_ACCESS.reason], ['audit', TOKEN_ACCESS.reason]]);
   assert.equal(token.banner.kind, 'token');
@@ -148,7 +153,15 @@ test('the frame: the scope line, the nav lists only the built sections, each unr
   const stat = buildSettingsFrameModel({ access: STATIC });
   assert.deepEqual([stat.nav, stat.section, stat.banner.kind, stat.scope], [[], null, 'static', 'Settings']);
   assert.equal(settingsSectionFor(STATIC, 'environments'), null);
-  assert.equal(settingsSectionFor(CLOSED, 'members'), 'environments', 'closed: members falls back');
+  assert.equal(settingsSectionFor(CLOSED, 'members', FOUR), 'environments', 'closed: members falls back');
+  assert.equal(settingsSectionFor(ADA, 'members'), 'environments', 'a section not built is never opened');
+  // The heads: the title, the scope sentence naming the org, the reading line.
+  assert.deepEqual(settingsSectionHead('environments', { orgName: 'Acme' }).loading, 'Reading environments…');
+  assert.equal(settingsSectionHead('endpoints').loading, 'Reading MCP endpoints…');
+  assert.equal(settingsSectionHead('endpoints').title, 'MCP endpoints');
+  assert.match(settingsSectionHead('environments', { orgName: 'Acme' }).scope, /^Every environment of Acme's services — /);
+  assert.match(settingsSectionHead('endpoints', { orgName: 'Acme' }).scope, /never its value\.$/);
+  for (const id of BUILT_SECTIONS) assert.doesNotMatch(settingsSectionHead(id).scope, /slice|Settings →/, 'no roadmap wording, no control named that is not built');
 });
 
 test('settingsAboveRank: a downgrade forgets what the new rank may not read (C-6)', () => {
@@ -534,4 +547,136 @@ test('the loaders: one requestJson call each, ids encoded, JSON bodies, the answ
   assert.deepEqual(await deleteEndpoint(1, { fetchFn: blank }), { deleted: null, unbound: [] });
   assert.deepEqual(await patchEnvironment(1, {}, { fetchFn: blank }), { environment: null, changed: [] });
   await assert.rejects(createEndpoint({}, { fetchFn: async () => { throw servicesRefusal(400, { ok: false, error: 'an MCP endpoint name is 1–200 characters' }); } }), { message: '400: an MCP endpoint name is 1–200 characters' });
+});
+
+// ---------- what this build draws (B3) ----------
+
+test('a section whose editor is not built draws no primary and no row Edit, and its empty line names no control', () => {
+  const env = buildEnvironmentsSectionModel({ services: SERVICES, access: OSCAR, orgName: 'Acme', editable: false });
+  assert.equal(env.primary, null);
+  assert.ok(env.groups.every((g) => g.envs.every((e) => e.canEdit === false)));
+  assert.equal(buildEnvironmentsSectionModel({ services: [LEDGER], access: OSCAR, orgName: 'Acme', editable: false }).empty, 'No environments in Acme yet.');
+  const none = buildEnvironmentsSectionModel({ services: [], access: OSCAR, orgName: 'Acme', editable: false });
+  assert.deepEqual([none.primary, none.build], [null, true], 'Build is built: the no-service line keeps its button');
+  assert.equal(buildEnvironmentsSectionModel({ services: null, access: OSCAR, error: '500: boom', editable: false }).primary, null);
+  const ep = buildEndpointsSectionModel({ endpoints: [], access: ADA, orgName: 'Acme', editable: false });
+  assert.deepEqual([ep.primary, ep.empty], [null, 'No MCP endpoints in Acme yet.']);
+});
+
+// ---------- the renderer (studio/settings-view.mjs) ----------
+
+// A headless container: the markup as a string; the controls the renderer wires are read back from it
+// (an id, a nav item's data-section, the Open service buttons), so a click fires without a DOM.
+function settingsContainer() {
+  let html = '';
+  const els = new Map();
+  const fakeEl = (dataset = {}) => {
+    const handlers = {};
+    const attrs = {};
+    let why = null;
+    return {
+      dataset, attrs, classes: new Set(),
+      get classList() { const self = this; return { add: (c) => self.classes.add(c) }; },
+      setAttribute: (k, v) => { attrs[k] = String(v); },
+      getAttribute: (k) => attrs[k] ?? null,
+      querySelector: (sel) => (sel === '.svc-why' ? why : null),
+      insertAdjacentHTML: () => { why = { textContent: '' }; },
+      get why() { return why; },
+      addEventListener: (t, fn) => { handlers[t] = fn; }, fire: (t) => handlers[t]?.(),
+    };
+  };
+  const get = (key, present, dataset) => {
+    if (!present) return null;
+    if (!els.has(key)) els.set(key, fakeEl(dataset));
+    return els.get(key);
+  };
+  return {
+    get innerHTML() { return html; },
+    set innerHTML(v) { html = v; els.clear(); },
+    querySelector: (sel) => {
+      const id = /^#([\w-]+)$/.exec(sel)?.[1];
+      if (id) return get(sel, html.includes(`id="${id}"`));
+      const nav = /^\.set-nav-item\[data-section="([\w-]+)"\]$/.exec(sel)?.[1];
+      if (nav) return get(sel, html.includes(`class="set-nav-item" data-section="${nav}"`), { section: nav });
+      return null;
+    },
+    querySelectorAll: (sel) => (sel === '[data-open-service]'
+      ? [...html.matchAll(/data-open-service="(\d+)"/g)].map((m) => get(`open:${m[1]}`, true, { openService: m[1] }))
+      : []),
+  };
+}
+
+test('renderSettings: the head, the banner as served, the nav by rank, the environments and the endpoints escaped, the status line and its buttons', () => {
+  const calls = [];
+  const host = { settings: new Proxy({}, { get: (_, k) => (...a) => calls.push([k, ...a]) }) };
+  const xss = '<img src=x onerror="window.__x=1">';
+  const services = [{ ...PAYMENT, name: `Pay ${xss}` }, LEDGER];
+  // An operator in Acme, both sections built: the environments.
+  const frame = buildSettingsFrameModel({ access: OSCAR, section: 'environments', orgName: 'Acme', orgId: 'acme' });
+  const c = settingsContainer();
+  renderSettings(c, frame, { id: 'environments', head: settingsSectionHead('environments', { orgName: 'Acme' }), model: buildEnvironmentsSectionModel({ services, access: OSCAR, orgName: 'Acme', editable: false }), status: { kind: 'ok', text: '' } }, host);
+  const h = c.innerHTML;
+  assert.ok(h.includes('<section class="set-page" aria-labelledby="set-title">'));
+  assert.ok(h.includes('<h1 class="set-title" id="set-title" tabindex="-1">Settings</h1>'));
+  assert.ok(h.includes('<p class="set-scope">Settings · Acme (acme) · you are operator</p>'));
+  assert.ok(h.includes('<nav class="set-nav" aria-label="Settings sections">'));
+  assert.deepEqual([...h.matchAll(/class="set-nav-item" data-section="([\w-]+)" aria-current="(\w+)"/g)].map((m) => [m[1], m[2]]), [['environments', 'page'], ['endpoints', 'false']], 'the built sections only, the one on screen current');
+  assert.ok(!h.includes('<img') && h.includes('Pay &lt;img src=x onerror=&quot;window.__x=1&quot;&gt;'), 'a service name is escaped');
+  assert.ok(h.includes('tier-1 · MCP: gw — https://mcp.acme.test · 2 bindings · 1 link'));
+  assert.ok(h.includes('no environments'), 'a service with none says so');
+  assert.ok(!/set-banner|Edit…|Add environment|New MCP endpoint/.test(h), 'no banner in the identity posture; no control this build does not have');
+  assert.ok(h.includes('role="status" aria-live="polite"'));
+  c.querySelector('#set-back').fire('click');
+  c.querySelector('.set-nav-item[data-section="endpoints"]').fire('click');
+  c.querySelectorAll('[data-open-service]')[0].fire('click');
+  assert.deepEqual(calls, [['back'], ['selectSection', 'endpoints'], ['openService', 1]]);
+
+  // A viewer's endpoints: name and origin only — the URL and the variable never reach the page.
+  const vera = buildSettingsFrameModel({ access: VERA, section: 'endpoints', orgName: 'Acme', orgId: 'acme' });
+  const c2 = settingsContainer();
+  renderSettings(c2, vera, { id: 'endpoints', head: settingsSectionHead('endpoints', { orgName: 'Acme' }), model: buildEndpointsSectionModel({ endpoints: EP_OP, services: SERVICES, access: VERA, orgName: 'Acme', editable: false }), status: null }, host);
+  assert.ok(c2.innerHTML.includes('https://mcp.acme.test') && !c2.innerHTML.includes('/obs') && !c2.innerHTML.includes('MCP_TOKEN'));
+
+  // The token posture: the probe's sentence as the banner, as served and escaped.
+  const tok = buildSettingsFrameModel({ access: TOKEN, section: 'environments', orgName: 'Default', orgId: 'default', builtSections: ['environments', 'endpoints', 'members'] });
+  const c3 = settingsContainer();
+  calls.length = 0;
+  renderSettings(c3, tok, { id: 'environments', head: settingsSectionHead('environments'), model: buildEnvironmentsSectionModel({ services: null, access: TOKEN, error: '500: <boom>', editable: false }), status: null }, host);
+  assert.ok(c3.innerHTML.includes(`<div class="set-banner is-token" role="status">403: ${TOKEN_TEXT.replaceAll('<', '&lt;').replaceAll('>', '&gt;')}</div>`));
+  assert.ok(c3.innerHTML.includes('500: &lt;boom&gt; <button type="button" class="ux-secondary-btn" id="set-retry">Retry</button>'), 'a failed read: the refusal as served, and Retry');
+  // A section the rank cannot read: drawn, aria-disabled with its reason; its click explains.
+  const members = c3.querySelector('.set-nav-item[data-section="members"]');
+  assert.equal(members.getAttribute('aria-disabled'), 'true');
+  assert.equal(members.why.textContent, TOKEN_ACCESS.reason);
+  members.fire('click');
+  c3.querySelector('#set-retry').fire('click');
+  assert.deepEqual(calls, [['explain', TOKEN_ACCESS.reason], ['retry', 'environments']]);
+
+  // No service yet, an operator: the Build sentence and its button; reading: the status says so.
+  const c4 = settingsContainer();
+  calls.length = 0;
+  renderSettings(c4, frame, { id: 'environments', head: settingsSectionHead('environments', { orgName: 'Acme' }), model: buildEnvironmentsSectionModel({ services: [], access: OSCAR, orgName: 'Acme', editable: false }), status: null }, host);
+  assert.ok(c4.innerHTML.includes('No service in Acme yet — Build registers one (its DEFINE names the service). <button type="button" class="ux-secondary-btn" id="set-build">Build</button>'));
+  c4.querySelector('#set-build').fire('click');
+  assert.deepEqual(calls, [['build']]);
+  const c5 = settingsContainer();
+  renderSettings(c5, frame, { id: 'environments', head: settingsSectionHead('environments'), model: buildEnvironmentsSectionModel({ services: SERVICES, access: OSCAR, editable: false }), status: { kind: 'loading', text: 'Reading environments…' } }, host);
+  assert.ok(c5.innerHTML.includes('aria-busy="true"') && c5.innerHTML.includes('>Reading environments…</p>'));
+
+  // The static bundle: the banner alone — no nav, no section; a headless host never throws.
+  const c6 = settingsContainer();
+  renderSettings(c6, buildSettingsFrameModel({ access: STATIC }), null, { settings: {} });
+  assert.ok(c6.innerHTML.includes(`<div class="set-banner is-static" role="status">${STATIC_ERR.message}</div>`));
+  assert.ok(!c6.innerHTML.includes('set-nav') && !c6.innerHTML.includes('set-section'));
+  assert.doesNotThrow(() => c6.querySelector('#set-back').fire('click'));
+});
+
+test('settings-view.mjs is a renderer module: it imports host.mjs, util.mjs and services-view.mjs only — never app.mjs or state.mjs — and reads no state, fetches nothing', () => {
+  const src = readFileSync(new URL('../studio/settings-view.mjs', import.meta.url), 'utf8');
+  const imports = [...src.matchAll(/from '([^']+)'/g)].map((x) => x[1]).sort();
+  assert.deepEqual(imports, ['./host.mjs', './services-view.mjs', './util.mjs']);
+  const code = src.replace(/\/\/[^\n]*/g, '');
+  assert.ok(!/\bfetch\(|\bapi\(|\bstate\./.test(code), 'no fetch, no api(), no state');
+  assert.ok(!/Observogram|OBSERVOGRAM/.test(code), 'the brand: no product name literal');
+  assert.ok(!/\btitle="|\bhref="/.test(code), 'no title, no href built from data');
 });

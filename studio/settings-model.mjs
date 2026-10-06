@@ -23,7 +23,10 @@ import { TIERS, TIER_BY_PACK } from './services-model.mjs';
 export const SETTINGS_SECTIONS = ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role'];
 // The sections this build draws (the nav lists only these — never a
 // placeholder for one that is not built).
-export const BUILT_SECTIONS = ['environments', 'endpoints', 'members', 'audit'];
+export const BUILT_SECTIONS = ['environments', 'endpoints'];
+// The record editors this build draws: a section whose editor is not built
+// draws no primary and no row action, and no sentence names one.
+export const BUILT_EDITORS = [];
 
 const SECTION_LABEL = {
   environments: 'Environments', endpoints: 'MCP endpoints', members: 'Members', audit: 'Audit',
@@ -137,6 +140,18 @@ export function buildSettingsFrameModel({ access, section = null, orgName = null
   };
 }
 
+// A section's heading and its one-line scope sentence; the status line
+// while it is read.
+export function settingsSectionHead(id, { orgName = null } = {}) {
+  const org = orgName || ORG_FALLBACK;
+  const title = SECTION_LABEL[id] ?? id;
+  const scope = {
+    environments: `Every environment of ${org}'s services — its tier, the MCP endpoint it is checked through, its bindings and links. Build registers a service; each opens on its own page.`,
+    endpoints: `The MCP gateways registered in ${org}, and the environments checked through each. A read token stays on the server: a gateway names the variable that holds it, never its value.`,
+  }[id] ?? null;
+  return { title, scope, loading: `Reading ${title.replace(/^[A-Z](?=[a-z])/, (c) => c.toLowerCase())}…` };
+}
+
 // The cached Settings answers the access may still read (C-6): members and
 // the org row need can.admin; the audit too, and a non-owner keeps only the
 // rows of the active org; the deployment's answers need can.own. Returns a
@@ -160,17 +175,20 @@ const endpointLabel = (ep) => `${ep.name} — ${ep.origin}`;
 
 // `services` is GET /api/services (null when it failed — `error` is then the
 // thrown `<status>: <sentence>`). Each environment carries its own
-// mcpEndpoint summary, so the endpoint list is not needed here.
-export function buildEnvironmentsSectionModel({ services, access, orgName = null, error = null } = {}) {
+// mcpEndpoint summary, so the endpoint list is not needed here. `editable`
+// says whether the environment editor is built: without it there is no
+// primary (null), no row Edit, and the empty line names no control.
+export function buildEnvironmentsSectionModel({ services, access, orgName = null, error = null, editable = true } = {}) {
   const org = orgName || ORG_FALLBACK;
   const can = access.can.operate === true;
+  const primaryOf = (p) => (editable ? p : null);
   if (!isArr(services)) {
     const text = error || 'the services could not be read';
-    return { groups: [], primary: { enabled: false, reason: text }, empty: null, error: text, build: false };
+    return { groups: [], primary: primaryOf({ enabled: false, reason: text }), empty: null, error: text, build: false };
   }
   if (!services.length) {
     const text = `No service in ${org} yet — Build registers one (its DEFINE names the service).`;
-    return { groups: [], primary: { enabled: false, reason: text }, empty: text, error: null, build: can };
+    return { groups: [], primary: primaryOf({ enabled: false, reason: text }), empty: text, error: null, build: can };
   }
   const groups = services.map((s) => ({
     serviceId: s.id, name: s.name, slug: s.slug,
@@ -179,12 +197,12 @@ export function buildEnvironmentsSectionModel({ services, access, orgName = null
       tierText: e.effectiveTier ?? TIER_BY_PACK,
       mcpText: e.mcpEndpoint ? endpointLabel(e.mcpEndpoint) : 'none',
       bindingsCount: countOf(e.bindings), linksCount: countOf(e.endpoints),
-      canEdit: can,
+      canEdit: can && editable,
     })),
   }));
   const anyEnv = groups.some((g) => g.envs.length);
-  const empty = anyEnv ? null : `No environments in ${org} yet.${can ? ' Add environment registers one.' : ''}`;
-  return { groups, primary: { enabled: can, reason: can ? null : access.why.operate }, empty, error: null, build: false };
+  const empty = anyEnv ? null : `No environments in ${org} yet.${can && editable ? ' Add environment registers one.' : ''}`;
+  return { groups, primary: primaryOf({ enabled: can, reason: can ? null : access.why.operate }), empty, error: null, build: false };
 }
 
 // ---------- MCP endpoints (design §5.3) ----------
@@ -214,10 +232,12 @@ function environmentName(id, services) {
 
 const rankOfAccess = (access) => (Object.hasOwn(RANKS, access.role) ? RANKS[access.role] : -1);
 
-export function buildEndpointsSectionModel({ endpoints, services = null, access, orgName = null, error = null } = {}) {
+// `editable` as for the environments: without the endpoint editor no
+// primary, and the empty line names no control.
+export function buildEndpointsSectionModel({ endpoints, services = null, access, orgName = null, error = null, editable = true } = {}) {
   const org = orgName || ORG_FALLBACK;
   const admin = access.can.admin === true;
-  const primary = { enabled: admin, reason: admin ? null : access.why.admin };
+  const primary = editable ? { enabled: admin, reason: admin ? null : access.why.admin } : null;
   if (!isArr(endpoints)) {
     const text = error || 'the MCP endpoints could not be read';
     return { rows: [], primary, empty: null, error: text };
@@ -237,7 +257,8 @@ export function buildEndpointsSectionModel({ endpoints, services = null, access,
       boundText,
     };
   });
-  const empty = rows.length ? null : `No MCP endpoints in ${org} yet. ${admin ? 'New MCP endpoint registers one.' : 'An admin registers them.'}`;
+  const how = editable ? ` ${admin ? 'New MCP endpoint registers one.' : 'An admin registers them.'}` : '';
+  const empty = rows.length ? null : `No MCP endpoints in ${org} yet.${how}`;
   return { rows, primary, empty, error: null };
 }
 

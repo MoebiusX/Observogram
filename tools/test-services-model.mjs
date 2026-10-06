@@ -723,6 +723,38 @@ test('persistence.scope keys the snapshot per login and org; the unscoped v1 sna
   });
 });
 
+test('persistence.seed merges Settings into another org\'s snapshot and leaves the rest of it — and the current scope — untouched (the org switch from Settings)', () => {
+  const bravo = { mode: 'home', selectedPackId: 'p1', view: 'compare', settingsSection: null, build: { name: 'Ledger' } };
+  const store = fakeStorage({ 'studioState.v2:olive:bravo': JSON.stringify(bravo), 'studioState.v2:olive:acme': '{"mode":"settings"}' });
+  withStorage(store, () => {
+    persistence.scope('olive', 'acme');
+    persistence.seed('olive', 'bravo', { mode: 'settings', settingsSection: 'endpoints' });
+    assert.deepEqual(JSON.parse(store.getItem('studioState.v2:olive:bravo')), { ...bravo, mode: 'settings', settingsSection: 'endpoints' }, 'the two fields merged, every other field kept');
+    assert.equal(persistence.key(), 'studioState.v2:olive:acme', 'the current scope is not moved');
+    assert.equal(store.getItem('studioState.v2:olive:acme'), '{"mode":"settings"}', 'this org\'s snapshot is not touched');
+    // An org never visited: the key is created with the two fields alone; a corrupt one is replaced.
+    persistence.seed('olive', 'charlie', { mode: 'settings', settingsSection: 'environments' });
+    assert.deepEqual(JSON.parse(store.getItem('studioState.v2:olive:charlie')), { mode: 'settings', settingsSection: 'environments' });
+    store.setItem('studioState.v2:local:default', '{not json');
+    persistence.seed(null, null, { mode: 'settings', settingsSection: null });
+    assert.deepEqual(JSON.parse(store.getItem('studioState.v2:local:default')), { mode: 'settings', settingsSection: null });
+  });
+  const throwing = new Proxy({}, { get() { throw new Error('SecurityError'); } });
+  withStorage(throwing, () => assert.doesNotThrow(() => persistence.seed('olive', 'bravo', { mode: 'settings' })));
+  // settingsSection is one of the persisted fields: a write carries it.
+  const store2 = fakeStorage();
+  withStorage(store2, () => {
+    const before = state.settingsSection;
+    state.settingsSection = 'endpoints';
+    persistence.scope('olive', 'acme');
+    persistence.resume();
+    persistence.write();
+    persistence.suspend();
+    state.settingsSection = before;
+    assert.equal(JSON.parse(store2.getItem('studioState.v2:olive:acme')).settingsSection, 'endpoints');
+  });
+});
+
 test('persistence.forget removes every snapshot of the login and the unscoped one, and no other user\'s', () => {
   const store = fakeStorage({
     'studioState.v1': '{}',

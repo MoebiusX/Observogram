@@ -54,6 +54,12 @@ import {
 } from './services-model.mjs';
 import { loadOrgs, loadServices, loadService, patchService, verdictLoader } from './services-api.mjs';
 import { renderNoOrgHome, renderServicesHome, renderServicePage, renderServiceEditor, markUnavailable } from './services-view.mjs';
+import {
+  BUILT_SECTIONS, BUILT_EDITORS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsSectionHead, settingsAboveRank,
+  buildEnvironmentsSectionModel, buildEndpointsSectionModel,
+} from './settings-model.mjs';
+import { loadMcpEndpoints, loadMembers } from './settings-api.mjs';
+import { renderSettings } from './settings-view.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
@@ -132,6 +138,12 @@ async function rehydrateFromPersistence() {
     if (ok) return true;
     persistence.clear();
     return false;
+  }
+  // Settings (slice 6b): it opens in every posture — a section the rank
+  // cannot read falls back to the first it can — so it always answers true.
+  // The section is set before the first render (enterSettings does).
+  if (saved.mode === 'settings') {
+    return enterSettings(typeof saved.settingsSection === 'string' ? saved.settingsSection : null, { rehydrate: true });
   }
   const allKnown = [...(state.catalog || []), ...(state._examplesCache || [])];
   const aMeta = allKnown.find(p => p.id === saved.selectedPackId);
@@ -842,6 +854,8 @@ export function renderMainView() {
     else renderHomeView();
     return;
   }
+  // Settings (STORE_PLAN §6 item 3, slice 6b): the org's environments and MCP endpoints.
+  if (state.mode === 'settings') { renderSettingsHost(view); return; }
   // The service page (STORE_PLAN §6, slice 6a): one record, its environments as tabs.
   if (state.mode === 'service') { renderServicePageHost(view); return; }
   // The BUILD journey renders its own three steps (Define · Compile ·
@@ -1351,7 +1365,7 @@ function routeTo(id) {
     openServiceIn(id, { serviceId: state.serviceId, env: state.serviceEnv });
     return;
   }
-  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service') state.mode = 'single';
+  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings') state.mode = 'single';
   state.view = id;
   state.activeCardKey = null;
   state.activeLayer = ({ compile: 'COMPILE', conformance: 'CONF', schema: 'CONF', atlas: 'ATLAS', layers: state.layerFilter !== 'all' ? state.layerFilter : 'L1' })[id] || 'L1';
@@ -1451,6 +1465,10 @@ function installObservaChrome(chrome) {
               </button>
             `).join('')}
             <div class="observa-adv-menu-head">Administration</div>
+            <button type="button" class="observa-adv-item" role="menuitem" data-action="settings">
+              <span class="observa-adv-item-label">Settings</span>
+              <span class="observa-adv-item-sub">this organisation's environments and MCP endpoints</span>
+            </button>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="mcp">
               <span class="observa-adv-item-label">Live MCP connection</span>
               <span class="observa-adv-item-sub" id="observa-adv-mcp-sub">refresh production-live from an MCP server</span>
@@ -1533,6 +1551,7 @@ function installObservaChrome(chrome) {
       closeAdv();
       const action = item.dataset.action;
       if (action === 'about') { openAboutModal(); return; }
+      if (action === 'settings') { enterSettings(null); return; }
       // Admin tools proxy to the header's original controls. Deferred, so
       // this click's own document-level outside-click handlers (the MCP
       // panel closes on any click outside it) run before the panel opens.
@@ -1587,7 +1606,7 @@ function paintObservaActiveTab() {
   // The landing/reset hero is NOT a tab — it's the pre-workspace start
   // screen. Clearing the active marker there is what keeps Discover from
   // "being" the landing hero: you only light a tab once you're working.
-  const onLanding = state.mode === 'home' || state.mode === 'service';
+  const onLanding = state.mode === 'home' || state.mode === 'service' || state.mode === 'settings';
   for (const btn of document.querySelectorAll('.observa-tab')) {
     // A workflow tab is active only when we're NOT in an advanced view
     // and NOT on the landing screen.
@@ -1647,7 +1666,10 @@ async function boot() {
     if (e.denied === 'org') {
       // Signed in, in no organisation (STORE_PLAN §6, slice 6a): the server's
       // sentence as is, under the chrome — not the API-unreachable screen.
-      // GET /api/orgs is not attempted (it would refuse the same way).
+      // GET /api/orgs is not attempted (it would refuse the same way). The
+      // refusal is kept: Settings, which such a user cannot read, explains
+      // with it instead of opening.
+      state.noOrg = e;
       applyModeChrome();
       renderNoOrgHome($('#layer-view'), buildNoOrgModel({ identity: state.identity, error: e, chromeName: state.brand.chrome.name }), servicesHost);
       return;
@@ -1737,6 +1759,8 @@ function goHome() {
   state.serviceId = null;
   state.serviceEnv = null;
   servicePageRecord = null;
+  state.settingsFrom = null;
+  state.settings = null;
   state.compareBId = null;
   state.compareBEnv = null;
   state.conformanceB = null;
@@ -1853,6 +1877,9 @@ async function refreshAccess() {
   catch (e) { orgsError = e; }
   state.access = accessModel({ orgs, identity: state.identity, activeOrg: getActiveOrg(), orgsError });
   state.orgName = state.access.orgName;
+  // The org the server resolved — in the open and token postures no header
+  // names one, and the answer's `active` is the only source.
+  state.orgId = orgs?.active ?? getActiveOrg();
 }
 
 // GET /api/services → state.services, or null with the reason in
@@ -2244,6 +2271,224 @@ const servicesActions = {
 };
 const servicesHost = { renderMainView, renderTabs, services: servicesActions };
 
+// ---------- Settings (STORE_PLAN §6 item 3, slice 6b; design §3–§5) ----------
+
+// Bumped by every Settings read: an answer that settles after the user left
+// the section (or Settings) never repaints it.
+let settingsGeneration = 0;
+// The next render moves the focus to the page's h1 (entering Settings).
+let settingsFocusNext = false;
+
+// The frame's answers for one entry: the probe (token and open postures),
+// a downgrade a read met, each section's status line, the endpoints read's
+// refusal. Never persisted; a new entry starts afresh.
+function freshSettings() {
+  return { probe: null, denied: null, status: {}, members: null, org: null, endpointsError: null };
+}
+
+// What this reader may do in Settings (settings-model.mjs settingsAccessModel)
+// — 6a's access, /auth/me's owner bit, the probe's answer — and, once a read
+// was refused by the gate (the session ended, the membership went), nothing
+// at all, with the server's sentence as every reason (the downgrade, §4).
+function settingsAccess() {
+  const access = settingsAccessModel({ access: state.access, identity: state.identity, probe: state.settings?.probe ?? null, chromeName: state.brand?.chrome?.name });
+  const denied = state.settings?.denied;
+  if (!denied) return access;
+  return {
+    ...access,
+    can: { operate: false, admin: false, own: false, createOrg: false },
+    why: { operate: denied, admin: denied, own: denied, closed: access.why.closed, createOrg: denied },
+  };
+}
+
+// The cached answers the access may no longer read are dropped, and the
+// frame moves to the first section it may (C-6).
+function forgetSettingsAbove(access) {
+  state.settings = settingsAboveRank(state.settings, access, { orgId: state.orgId });
+  state.settingsSection = settingsSectionFor(access, state.settingsSection, BUILT_SECTIONS);
+}
+
+// Enter Settings (Advanced → Settings, the account menu, a reload in it):
+// where Back returns is kept unless rehydrating (a reload's Back is home);
+// the section asked for, else the last one, else the first the rank reads —
+// set before the first render, which persists it. Then the frame's reads.
+// A signed-in user in no organisation is told why instead (the boot's
+// refusal). Answers true when Settings is on screen.
+function enterSettings(section = null, { rehydrate = false } = {}) {
+  if (state.noOrg) { explainUnavailable(state.noOrg.message); return false; }
+  navGeneration++;
+  if (rehydrate) state.settingsFrom = null;
+  else if (state.mode !== 'settings') {
+    state.settingsFrom = state.mode === 'service' && Number.isInteger(state.serviceId)
+      ? { mode: 'service', serviceId: state.serviceId, env: state.serviceEnv }
+      : { mode: 'home' };
+  }
+  state.mode = 'settings';
+  state.settings = freshSettings();
+  state.settingsSection = settingsSectionFor(settingsAccess(), section ?? state.settingsSection, BUILT_SECTIONS);
+  if (state.settingsSection) state.settings.status[state.settingsSection] = { kind: 'loading', text: settingsSectionHead(state.settingsSection).loading };
+  settingsFocusNext = true;
+  applyModeChrome();
+  paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+  loadSettingsFrame();
+  return true;
+}
+
+// Back: the service page Settings was entered from, else home. A record
+// gone meanwhile lands home with the server's sentence.
+function leaveSettings() {
+  const from = state.settingsFrom;
+  state.settingsFrom = null;
+  state.settings = null;
+  if (from?.mode === 'service' && Number.isInteger(from.serviceId)) {
+    enterServicePage(from.serviceId, from.env ?? null, { onRefused: (why) => { goHome(); toast(why, 'error'); } });
+    return;
+  }
+  goHome();
+}
+
+// The frame's first read, by posture (design §3.4): the bundle's — GET
+// /api/mcp-endpoints, whose 501 sentence is the banner; the token and open
+// postures' probe — GET /api/org/members, whose refusal is the banner (the
+// token posture's way in, a server bound without sign-in) and whose 200 is
+// the members list; none in the identity posture (GET /api/orgs and
+// /auth/me already said). Then the section on screen. Logs nothing.
+async function loadSettingsFrame() {
+  const settings = state.settings;
+  const here = () => state.mode === 'settings' && state.settings === settings;
+  const posture = state.access?.posture;
+  if (posture === 'static') {
+    try { state.mcpEndpoints = await loadMcpEndpoints(); }
+    catch (e) { if (here()) settings.probe = e; }
+    if (here()) repaintSettings();
+    return;
+  }
+  if (posture === 'token' || posture === 'open') {
+    try {
+      const body = await loadMembers();
+      if (here()) Object.assign(settings, { probe: { ok: true }, members: body.members, org: body.org });
+    } catch (e) {
+      if (here()) settings.probe = e;
+    }
+    if (!here()) return;
+    state.settingsSection = settingsSectionFor(settingsAccess(), state.settingsSection, BUILT_SECTIONS);
+  }
+  if (here() && state.settingsSection) loadSettingsSection(state.settingsSection);
+}
+
+// One section's reads (design §7.5): the environments and the MCP endpoints
+// both read the services table (the environments are its rows; the
+// endpoints name the environments bound to them) and the org's endpoints
+// (shared with the pickers — state.mcpEndpoints). The status line says
+// "Reading …" meanwhile, the refusal as served after. A refusal by the gate
+// (the session ended, the membership went) downgrades the frame first.
+async function loadSettingsSection(id) {
+  if (state.mode !== 'settings' || !id) return;
+  const settings = state.settings;
+  const gen = ++settingsGeneration;
+  settings.status[id] = { kind: 'loading', text: settingsSectionHead(id).loading };
+  repaintSettings();
+  let endpointsRefusal = null;
+  await Promise.all([
+    refreshServices(),
+    loadMcpEndpoints().then((list) => { state.mcpEndpoints = list; settings.endpointsError = null; }, (e) => {
+      state.mcpEndpoints = null;
+      settings.endpointsError = e?.message || 'no answer';
+      endpointsRefusal = e;
+    }),
+  ]);
+  if (state.mode !== 'settings' || state.settings !== settings) return;
+  const gate = [endpointsRefusal, state.servicesStatus?.kind === 'denied' ? { denied: 'org', message: state.servicesStatus.error } : null]
+    .find((e) => e && ['auth', 'role', 'posture', 'org'].includes(e.denied));
+  if (gate) {
+    settings.denied = gate.message || 'refused';
+    forgetSettingsAbove(settingsAccess());
+  }
+  settings.status[id] = { kind: 'ok', text: '' };
+  if (gen !== settingsGeneration || state.settingsSection !== id) return;   // the user moved on meanwhile
+  repaintSettings();
+}
+
+// The nav: a section the rank reads becomes the one on screen (persisted)
+// and is read anew; the focus stays on its nav item.
+function selectSettingsSection(id) {
+  if (state.mode !== 'settings') return;
+  if (settingsSectionFor(settingsAccess(), id, BUILT_SECTIONS) !== id) return;   // drawn unavailable: its click explains
+  state.settingsSection = id;
+  loadSettingsSection(id);
+}
+
+// Repaint Settings keeping the focus where it was: a nav item, or a control
+// of the section with an id.
+function repaintSettings() {
+  if (state.mode !== 'settings') return;
+  const active = document.activeElement;
+  const navItem = active?.closest?.('.set-nav') ? active.dataset.section : null;
+  const focusedId = !navItem && active?.id && active.closest?.('.set-page') ? active.id : null;
+  renderMainView();
+  if (navItem) document.querySelector(`.set-nav-item[data-section="${CSS.escape(navItem)}"]`)?.focus({ preventScroll: true });
+  else if (focusedId) document.getElementById(focusedId)?.focus({ preventScroll: true });
+}
+
+// The section on screen as the renderer takes it: its head, its model, its status line.
+function settingsSectionView(id, access) {
+  const settings = state.settings || freshSettings();
+  const head = settingsSectionHead(id, { orgName: state.orgName });
+  const status = settings.status[id] ?? null;
+  const model = id === 'environments'
+    ? buildEnvironmentsSectionModel({
+      services: state.services, access, orgName: state.orgName,
+      error: state.services === null ? (state.servicesStatus?.error || null) : null,
+      editable: BUILT_EDITORS.includes('environment'),
+    })
+    : buildEndpointsSectionModel({
+      endpoints: state.mcpEndpoints, services: state.services, access, orgName: state.orgName,
+      error: settings.endpointsError, editable: BUILT_EDITORS.includes('endpoint'),
+    });
+  return { id, head, model, status };
+}
+
+// renderMainView's branch for mode 'settings': the frame and the section
+// from the state, the focus on the h1 when just entered.
+function renderSettingsHost(view) {
+  const access = settingsAccess();
+  const section = settingsSectionFor(access, state.settingsSection, BUILT_SECTIONS);
+  const frame = buildSettingsFrameModel({ access, section, orgName: state.orgName, orgId: state.orgId, builtSections: BUILT_SECTIONS });
+  renderSettings(view, frame, section ? settingsSectionView(section, access) : null, settingsHost);
+  if (settingsFocusNext) {
+    settingsFocusNext = false;
+    view.querySelector('.set-title')?.focus({ preventScroll: true });
+    window.scrollTo({ top: 0 });
+  }
+}
+
+// A reload that lands in Settings in another org (the ORG chip changed in
+// Settings — design §3.5): this org's snapshot written now and no write
+// after it, the target org's seeded with Settings and the section, then the
+// org chosen and the page reloaded.
+function reloadIntoSettings(orgId, section = null) {
+  persistence.write();
+  persistence.suspend();
+  persistence.seed(signedInLogin(), orgId, { mode: 'settings', settingsSection: section });
+  setActiveOrg(orgId);
+  window.location.reload();
+}
+
+// The host the Settings renderers get (docs/UI_CONVENTIONS.md §3): the two
+// stable hooks plus Settings' actions under `settings`.
+const settingsActions = {
+  open: (section = null) => enterSettings(section),
+  back: () => leaveSettings(),
+  selectSection: (id) => selectSettingsSection(id),
+  retry: (id) => loadSettingsSection(id),
+  explain: explainUnavailable,
+  build: () => enterBuildMode('define'),
+  openService: (id) => { enterServicePage(id); },
+};
+const settingsHost = { renderMainView, renderTabs, settings: settingsActions };
+
 // Greet a person only by a name that is a name — "Welcome back, Admin" read
 // as a role label, not a greeting.
 function homeGreetingHtml() {
@@ -2309,6 +2554,9 @@ function updateObservaOrgChip() {
       sel.appendChild(opt);
     }
     sel.addEventListener('change', () => {
+      // From Settings the reload lands in Settings in the chosen org, on the
+      // same section (the target org's snapshot is seeded first).
+      if (state.mode === 'settings') { reloadIntoSettings(sel.value, state.settingsSection); return; }
       setActiveOrg(sel.value);
       // Every view is a projection of the active org's workspace — a
       // clean re-boot is the honest refresh.
@@ -2334,7 +2582,7 @@ function updateObservaServiceChip() {
   if (!chip) return;
   const derived = serviceCatalogue().find(s => s.key === state.selectedService);
   const m = serviceChipModel({ services: state.services, selected: state.selectedService, derivedLabel: derived?.label ?? null });
-  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || m.kind === 'none') { chip.hidden = true; return; }
+  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings' || m.kind === 'none') { chip.hidden = true; return; }
   const wantTag = m.kind === 'record' ? 'BUTTON' : 'SPAN';
   if (chip.tagName !== wantTag) {
     const next = document.createElement(wantTag.toLowerCase());
@@ -2427,7 +2675,7 @@ function enterCompareMode(aId, aEnv, bId, bEnv) {
 function applyModeChrome() {
   // The BUILD journey hides the pack controls like home does: there is no
   // pack until VERIFY's "Open pack in Discover" (with visible gaps, or without) registers one.
-  const isHome = state.mode === 'home' || state.mode === 'build' || state.mode === 'service';
+  const isHome = state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings';
   updateObservaServiceChip();
   // Under the OBSERVA chrome the pack/env selectors are PINNED as a
   // permanent master row — they are the user's primary controls and
@@ -5858,6 +6106,7 @@ function setupIdentityChip() {
             title="signed in as ${escapeHtml(me.email || me.sub)} (${escapeHtml(me.mode)})">⏣ <span class="hdr-user-name">${escapeHtml(me.name || me.email || me.sub)}</span> ▾</button>
     <div class="hdr-user-menu" hidden>
       <div class="hdr-user-menu-id" aria-live="polite">signed in as <strong>${escapeHtml(me.email || me.sub)}</strong><span class="hdr-user-menu-mode">${escapeHtml(me.mode)}</span></div>
+      <button type="button" class="hdr-user-menu-item hdr-user-settings">settings</button>
       ${me.mode === 'local-users' ? '<a class="hdr-user-menu-item" href="/auth/change-password">change password…</a>' : ''}
       ${me.mode === 'proxy' ? '' : '<button type="button" class="hdr-user-menu-item hdr-user-others">sign out my other sessions</button>'}
       <button type="button" class="hdr-user-menu-item hdr-user-out">sign out</button>
@@ -5904,6 +6153,9 @@ function setupIdentityChip() {
     }
     window.location.assign('/auth/login');
   });
+  // Settings — the same door as Advanced → Settings (a user in no org is
+  // told why instead).
+  chip.querySelector('.hdr-user-settings').addEventListener('click', () => { setOpen(false); enterSettings(null); });
   actions.appendChild(chip);
 }
 
