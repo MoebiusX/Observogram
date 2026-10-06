@@ -56,7 +56,7 @@ import { loadOrgs, loadServices, loadService, patchService, verdictLoader, reque
 import { renderNoOrgHome, renderServicesHome, renderServicePage, renderServiceEditor, markUnavailable } from './services-view.mjs';
 import {
   BUILT_SECTIONS, BUILT_EDITORS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsSectionHead, settingsAboveRank,
-  buildEnvironmentsSectionModel, buildEndpointsSectionModel, buildMembersSectionModel,
+  buildEnvironmentsSectionModel, buildEndpointsSectionModel, buildMembersSectionModel, buildAuditSectionModel, auditQuery,
   buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus,
   buildMemberAddBody, memberSaveStatus, orgRenameStatus, lastAdmin,
   buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
@@ -64,7 +64,7 @@ import {
 } from './settings-model.mjs';
 import {
   loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
-  addMember, patchMember, removeMember, renameOrg,
+  addMember, patchMember, removeMember, renameOrg, loadAudit,
 } from './settings-api.mjs';
 import { renderSettings, renderSettingsEditor, renderMcpTarget } from './settings-view.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
@@ -2297,7 +2297,7 @@ let settingsFocusNext = false;
 // a downgrade a read met, each section's status line, the endpoints read's
 // refusal. Never persisted; a new entry starts afresh.
 function freshSettings() {
-  return { probe: null, denied: null, deniedAdmin: null, status: {}, members: null, org: null, membersError: null, endpointsError: null };
+  return { probe: null, denied: null, deniedAdmin: null, status: {}, members: null, org: null, membersError: null, endpointsError: null, audit: null };
 }
 
 // What this reader may do in Settings (settings-model.mjs settingsAccessModel)
@@ -2416,6 +2416,7 @@ async function loadSettingsSection(id, { notice = null } = {}) {
   settings.status[id] = { kind: 'loading', text: settingsSectionHead(id).loading };
   repaintSettings();
   if (id === 'members') return loadMembersSection(settings, gen, notice);
+  if (id === 'audit') return loadAuditSection(settings, gen, notice);
   let endpointsRefusal = null;
   await Promise.all([
     refreshServices(),
@@ -2452,18 +2453,77 @@ async function loadMembersSection(settings, gen, notice) {
     if (state.settings === settings) Object.assign(settings, { members: null, membersError: e?.message || 'no answer' });
   }
   if (state.mode !== 'settings' || state.settings !== settings) return;
-  if (refusal && ['auth', 'role', 'posture', 'org'].includes(refusal.denied)) {
-    if (refusal.denied === 'role') settings.deniedAdmin = refusal.message || 'refused';
-    else settings.denied = refusal.message || 'refused';
-    forgetSettingsAbove(settingsAccess());
-    if (gen === settingsGeneration && state.settingsSection && state.settingsSection !== 'members') {
-      loadSettingsSection(state.settingsSection, { notice: settings.denied || settings.deniedAdmin });
-      return;
-    }
-  }
+  if (adminReadRefused(settings, refusal, gen, 'members')) return;
   settings.status.members = { kind: 'ok', text: notice ?? '' };
   if (gen !== settingsGeneration || state.settingsSection !== 'members') return;
   repaintSettings();
+}
+
+// An admin's read (the members, the audit) refused by the gate: the role
+// (demoted meanwhile) takes the admin's sections away with the server's
+// sentence; the session or the membership every control. The frame moves to
+// a section the rank reads, read with the sentence in its status line.
+// Answers true when it moved.
+function adminReadRefused(settings, refusal, gen, id) {
+  if (!refusal || !['auth', 'role', 'posture', 'org'].includes(refusal.denied)) return false;
+  if (refusal.denied === 'role') settings.deniedAdmin = refusal.message || 'refused';
+  else settings.denied = refusal.message || 'refused';
+  forgetSettingsAbove(settingsAccess());
+  if (gen === settingsGeneration && state.settingsSection && state.settingsSection !== id) {
+    loadSettingsSection(state.settingsSection, { notice: settings.denied || settings.deniedAdmin });
+    return true;
+  }
+  return false;
+}
+
+// The audit (GET /api/audit, an admin's read; the deployment's rows an
+// owner's): the filters kept for the entry, the query only the filled ones
+// (auditQuery — "through" a day reaches the next midnight UTC). A first page
+// replaces the rows; an older page (`before`) adds to them. A refusal (a
+// filter the server refuses — `400: since must be before until`) is the
+// section's status as served.
+function settingsAudit(settings) {
+  return settings.audit || { filters: {}, doc: null, rows: [], error: null };
+}
+async function loadAuditSection(settings, gen, notice, { before = null } = {}) {
+  const prev = settingsAudit(settings);
+  let doc = null;
+  let refusal = null;
+  try { doc = await loadAudit(auditQuery(prev.filters, { owner: settingsAccess().owner, before })); }
+  catch (e) { refusal = e; }
+  if (state.mode !== 'settings' || state.settings !== settings) return;
+  const rows = Array.isArray(doc?.rows) ? doc.rows : [];
+  if (doc) settings.audit = { filters: prev.filters, doc, rows: before === null ? rows : [...prev.rows, ...rows], error: null };
+  else settings.audit = before === null ? { filters: prev.filters, doc: null, rows: [], error: refusal?.message || 'no answer' } : { ...prev, error: refusal?.message || 'no answer' };
+  if (adminReadRefused(settings, refusal, gen, 'audit')) return;
+  settings.status.audit = { kind: 'ok', text: notice ?? '' };
+  if (gen !== settingsGeneration || state.settingsSection !== 'audit') return;
+  repaintSettings();
+}
+
+// Apply: the filters change, the list starts again.
+function applyAuditFilters(filters) {
+  if (state.mode !== 'settings' || !state.settings) return;
+  state.settings.audit = { filters: { ...(filters || {}) }, doc: null, rows: [], error: null };
+  loadSettingsSection('audit');
+}
+
+// Older rows: the page before the oldest shown, added under it.
+function loadOlderAuditRows() {
+  const settings = state.settings;
+  const audit = settings?.audit;
+  if (state.mode !== 'settings' || state.settingsSection !== 'audit' || audit?.doc?.next == null) return;
+  const gen = ++settingsGeneration;
+  settings.status.audit = { kind: 'loading', text: 'Reading older rows…' };
+  repaintSettings();
+  loadAuditSection(settings, gen, null, { before: audit.doc.next });
+}
+
+// An audit row's time in this browser's local time (the ISO stays in the
+// row's <time datetime>).
+function auditTime(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? String(iso ?? '') : d.toLocaleString();
 }
 
 // The nav: a section the rank reads becomes the one on screen (persisted)
@@ -2492,6 +2552,11 @@ function settingsSectionView(id, access) {
   const settings = state.settings || freshSettings();
   const head = settingsSectionHead(id, { orgName: state.orgName });
   const status = settings.status[id] ?? null;
+  if (id === 'audit') {
+    const audit = settingsAudit(settings);
+    const model = buildAuditSectionModel({ doc: audit.doc, rows: audit.rows, filters: audit.filters, access, orgId: state.orgId, formatTime: auditTime, error: audit.error });
+    return { id, head, model, status, filters: audit.filters };
+  }
   if (id === 'members') {
     const model = buildMembersSectionModel({
       members: settings.members, org: settings.org ?? { id: state.orgId, name: state.orgName }, access,
@@ -3134,6 +3199,8 @@ const settingsActions = {
   save: (draft) => saveSettingsEditor(draft),
   step: (step, draft = null) => setSettingsEditorStep(step, draft),
   confirm: () => confirmSettingsEditor(),
+  auditApply: (filters) => applyAuditFilters(filters),
+  auditMore: () => loadOlderAuditRows(),
   pickMcpTarget: (container, value) => pickMcpTarget(container, value),
   openMcpEndpoints: () => openMcpEndpointsFromPicker(),
 };

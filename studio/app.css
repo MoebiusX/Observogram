@@ -9553,6 +9553,8 @@ select.build-edit-input { appearance: auto; }
   gap: 10px 14px;
   margin: 0 0 16px;
 }
+/* The table scrolls inside its own box at a narrow width (never the page) — layout only. */
+.set-audit-wrap { max-width: 100%; overflow-x: auto; margin: 0 0 14px; }
 .set-audit {
   width: 100%;
   border-collapse: collapse;

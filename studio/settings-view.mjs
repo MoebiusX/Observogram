@@ -99,17 +99,89 @@ function membersOrgHtml(model) {
           <button type="button" class="ux-secondary-btn" id="set-rename">Rename…</button></p>`;
 }
 
+// The audit (read-only): the filters — for an owner the scope first; the
+// actor as the rows show it; the kind a text input over a list of the kinds
+// the server writes today (a later kind stays reachable); the action, the
+// target; the days from and through, whole UTC days — then Apply. The rows
+// as a table under its caption: when (local time over the ISO in a <time>),
+// the org (when the scope spans orgs), the actor as served, the action, the
+// target, and the detail — JSON pretty-printed and escaped inside a
+// <details>. "Older rows" while the server says there are.
+const AUDIT_FIELDS = [
+  { name: 'actor', label: 'Actor', type: 'text', max: 200, help: 'a login, local, token, system or cli — as the rows show it' },
+  { name: 'kind', label: 'Kind', type: 'text', list: 'set-audit-kinds' },
+  { name: 'action', label: 'Action', type: 'text', help: '<kind>.<verb>' },
+  { name: 'targetKind', label: 'Target kind', type: 'text', max: 100 },
+  { name: 'targetId', label: 'Target id', type: 'text', max: 200 },
+  { name: 'from', label: 'From (UTC day)', type: 'date' },
+  { name: 'through', label: 'Through (UTC day)', type: 'date' },
+];
+const auditFieldId = (name) => `set-audit-${name}`;
+
+function auditFiltersHtml(model, filters) {
+  const f = filters || {};
+  const scope = model.scopeControl ? `
+          <label class="set-editor-field">
+            <span class="set-editor-label">Scope</span>
+            <select id="${auditFieldId('scope')}" name="scope">${model.scopeControl.options.map((o) => `
+              <option value="${escapeHtml(o.value)}"${o.value === model.scopeControl.value ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}
+            </select>
+          </label>` : '';
+  const fields = AUDIT_FIELDS.map((d) => {
+    const id = auditFieldId(d.name);
+    const help = d.help ? `<span class="set-editor-help" id="${id}-help">${escapeHtml(d.help)}</span>` : '';
+    return `
+          <label class="set-editor-field">
+            <span class="set-editor-label">${escapeHtml(d.label)}</span>
+            <input id="${id}" name="${d.name}" type="${d.type}" value="${escapeHtml(String(f[d.name] ?? ''))}"${d.max ? ` maxlength="${d.max}"` : ''}${d.list ? ` list="${d.list}"` : ''} autocomplete="off" spellcheck="false"${d.help ? ` aria-describedby="${id}-help"` : ''}>
+            ${help}
+          </label>`;
+  }).join('');
+  return `
+        <form class="set-audit-filters" id="set-audit-filters" aria-label="Filter the audit">${scope}${fields}
+          <datalist id="set-audit-kinds">${(model.kinds || []).map((k) => `<option value="${escapeHtml(k)}"></option>`).join('')}</datalist>
+          <button type="submit" class="mcp-refresh-btn" id="set-audit-apply">Apply</button>
+        </form>`;
+}
+
+function auditHtml(model, filters) {
+  const table = model.caption ? `
+        <div class="set-audit-wrap">
+        <table class="set-audit">
+          <caption>${escapeHtml(model.caption)}</caption>
+          <thead><tr><th scope="col">When</th>${model.showOrg ? '<th scope="col">Org</th>' : ''}<th scope="col">Actor</th><th scope="col">Action</th><th scope="col">Target</th><th scope="col">Detail</th></tr></thead>
+          <tbody>${model.rows.map((r) => `
+            <tr data-seq="${escapeHtml(String(r.seq))}">
+              <td><time datetime="${escapeHtml(r.iso)}">${escapeHtml(r.when)}</time></td>${model.showOrg ? `
+              <td>${escapeHtml(r.org ?? '—')}</td>` : ''}
+              <td class="set-audit-actor">${escapeHtml(r.actor)}</td>
+              <td>${escapeHtml(r.action)}</td>
+              <td>${escapeHtml(r.target)}</td>
+              <td class="set-audit-detail"><details><summary>detail</summary><pre>${escapeHtml(r.detailJson)}</pre></details></td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+        </div>` : '';
+  const more = model.more ? `
+        <button type="button" class="ux-secondary-btn" id="set-audit-more">Older rows</button>` : '';
+  return auditFiltersHtml(model, filters) + table + more;
+}
+
 // The section's status line: reading…, the read's refusal as served with
 // Retry, what the last write did, or the empty sentence (with Build for a rank that may build, when
 // the org has no service yet).
 function statusHtml(section) {
   const { model, status } = section;
   if (status?.kind === 'loading') return escapeHtml(status.text);
-  if (model?.error) return `${escapeHtml(model.error)} <button type="button" class="ux-secondary-btn" id="set-retry">Retry</button>`;
+  // A refusal of what was asked (the audit's filters: a 400) is not retried
+  // as is — the filters above are the way out.
+  if (model?.error) return `${escapeHtml(model.error)}${model.retry === false ? '' : ' <button type="button" class="ux-secondary-btn" id="set-retry">Retry</button>'}`;
   // What the last write did (a delete: the record is gone from the list,
   // so its sentence stays here), then the empty sentence.
   const notice = status?.kind === 'ok' && status.text ? escapeHtml(status.text) : '';
   if (model?.empty) return `${notice ? `${notice} ` : ''}${escapeHtml(model.empty)}${model.build ? ' <button type="button" class="ux-secondary-btn" id="set-build">Build</button>' : ''}`;
+  // The audit's last page: the server said there is nothing older.
+  if (model?.end) return `${notice ? `${notice} ` : ''}${escapeHtml(model.end)}`;
   return notice;
 }
 
@@ -125,7 +197,8 @@ function sectionHtml(section) {
     ? `<button type="button" class="mcp-refresh-btn set-primary" id="set-primary">${escapeHtml(PRIMARY_LABEL[section.id])}</button>` : '';
   const body = section.id === 'environments' ? environmentsHtml(section.model)
     : section.id === 'endpoints' ? endpointsHtml(section.model)
-      : section.id === 'members' ? membersHtml(section.model) : '';
+      : section.id === 'members' ? membersHtml(section.model)
+        : section.id === 'audit' ? auditHtml(section.model, section.filters) : '';
   const loading = section.status?.kind === 'loading';
   // The scope sentence: the head's, or the section model's own (the members name the org's id).
   const scope = section.head.scope ?? section.model?.scopeSentence ?? null;
@@ -196,6 +269,24 @@ export function renderSettings(container, frame, section, host = appHost) {
     btn.addEventListener('click', () => host.settings?.openEditor?.({ kind: 'environment', id: Number(btn.dataset.editEnv) }));
   });
   if (section.id === 'members') wireMembers(container, section.model, host);
+  if (section.id === 'audit') wireAudit(container, section.model, host);
+}
+
+// The audit's controls: Apply hands the filled filters to
+// host.settings.auditApply (the list starts again); Older rows asks for the
+// next page.
+function wireAudit(container, model, host) {
+  const form = container.querySelector('#set-audit-filters');
+  const read = () => {
+    const out = {};
+    for (const name of [...(model?.scopeControl ? ['scope'] : []), ...AUDIT_FIELDS.map((d) => d.name)]) {
+      const v = container.querySelector(`#${auditFieldId(name)}`)?.value;
+      if (typeof v === 'string' && v.trim()) out[name] = v.trim();
+    }
+    return out;
+  };
+  form?.addEventListener('submit', (e) => { e?.preventDefault?.(); host.settings?.auditApply?.(read()); });
+  container.querySelector('#set-audit-more')?.addEventListener('click', () => host.settings?.auditMore?.());
 }
 
 // The members' controls: Rename… (the org's name), and each row's Change

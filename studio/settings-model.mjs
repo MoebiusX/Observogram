@@ -23,7 +23,7 @@ import { TIERS, TIER_BY_PACK } from './services-model.mjs';
 export const SETTINGS_SECTIONS = ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role'];
 // The sections this build draws (the nav lists only these — never a
 // placeholder for one that is not built).
-export const BUILT_SECTIONS = ['environments', 'endpoints', 'members'];
+export const BUILT_SECTIONS = ['environments', 'endpoints', 'members', 'audit'];
 // The record editors this build draws: a section whose editor is not built
 // draws no primary and no row action, and no sentence names one.
 export const BUILT_EDITORS = ['endpoint', 'environment', 'org-name', 'member-add', 'member'];
@@ -389,6 +389,8 @@ export function buildAuditSectionModel({ doc = null, rows = [], filters = {}, ac
   return {
     canRead: access.can.admin === true, reason: access.can.admin ? null : access.why.admin,
     caption, showOrg, scopeControl, scopeSentence, kinds: AUDIT_KINDS, rows: out, more, end, error,
+    // A filter the server refused (400) is answered by changing the filters, not by Retry.
+    retry: error ? !/^400:/.test(String(error)) : null,
   };
 }
 

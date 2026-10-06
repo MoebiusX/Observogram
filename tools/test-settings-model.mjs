@@ -119,7 +119,7 @@ test('settingsAccessModel: each rank, each posture — the reasons name a way ou
 
 test('the frame: the scope line, the nav lists only the built sections, each unreadable one disabled with its reason', () => {
   assert.deepEqual(SETTINGS_SECTIONS, ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role']);
-  assert.deepEqual(BUILT_SECTIONS, ['environments', 'endpoints', 'members'], 'the sections this build draws: no audit or deployment group yet');
+  assert.deepEqual(BUILT_SECTIONS, ['environments', 'endpoints', 'members', 'audit'], 'the sections this build draws: the org\'s four — no deployment group yet');
   assert.deepEqual(BUILT_EDITORS, ['endpoint', 'environment', 'org-name', 'member-add', 'member'], 'the record editors this build draws: the MCP endpoint, the environment, the org name and the member editors');
   const FOUR = ['environments', 'endpoints', 'members', 'audit'];
   assert.deepEqual(buildSettingsFrameModel({ access: ADA }).nav.map((n) => n.id), BUILT_SECTIONS, 'the default nav is the built sections');
@@ -154,8 +154,9 @@ test('the frame: the scope line, the nav lists only the built sections, each unr
   assert.deepEqual([stat.nav, stat.section, stat.banner.kind, stat.scope], [[], null, 'static', 'Settings']);
   assert.equal(settingsSectionFor(STATIC, 'environments'), null);
   assert.equal(settingsSectionFor(CLOSED, 'members', FOUR), 'environments', 'closed: members falls back');
-  assert.equal(settingsSectionFor(ADA, 'audit'), 'environments', 'a section not built is never opened');
+  assert.equal(settingsSectionFor(ADA, 'users'), 'environments', 'a section not built is never opened');
   assert.equal(settingsSectionFor(ADA, 'members'), 'members', 'Members is built');
+  assert.equal(settingsSectionFor(ADA, 'audit'), 'audit', 'the audit is built');
   // The heads: the title, the scope sentence naming the org, the reading line.
   assert.deepEqual(settingsSectionHead('environments', { orgName: 'Acme' }).loading, 'Reading environments…');
   assert.equal(settingsSectionHead('endpoints').loading, 'Reading MCP endpoints…');
@@ -616,6 +617,16 @@ function settingsContainer() {
     get innerHTML() { return html; },
     set innerHTML(v) { html = v; els.clear(); },
     querySelector: (sel) => {
+      const af = /^#set-audit-([\w-]+)$/.exec(sel)?.[1];
+      if (af && af !== 'filters' && af !== 'more') {
+        const el = get(sel, html.includes(`id="set-audit-${af}"`));
+        if (el && el.value === undefined) {
+          // A select's value is its selected option's; an input's its value attribute.
+          const at = html.slice(html.indexOf(`id="set-audit-${af}"`));
+          el.value = (at.startsWith(`id="set-audit-${af}" name="${af}">`) ? /<option value="([^"]*)" selected>/.exec(at)?.[1] : null) ?? /value="([^"]*)"/.exec(at)?.[1] ?? '';
+        }
+        return el;
+      }
       const id = /^#([\w-]+)$/.exec(sel)?.[1];
       if (id) return get(sel, html.includes(`id="${id}"`));
       const nav = /^\.set-nav-item\[data-section="([\w-]+)"\]$/.exec(sel)?.[1];
@@ -661,7 +672,7 @@ test('renderSettings: the head, the banner as served, the nav by rank, the envir
   assert.ok(h.includes('<h1 class="set-title" id="set-title" tabindex="-1">Settings</h1>'));
   assert.ok(h.includes('<p class="set-scope">Settings · Acme (acme) · you are operator</p>'));
   assert.ok(h.includes('<nav class="set-nav" aria-label="Settings sections">'));
-  assert.deepEqual([...h.matchAll(/class="set-nav-item" data-section="([\w-]+)" aria-current="(\w+)"/g)].map((m) => [m[1], m[2]]), [['environments', 'page'], ['endpoints', 'false'], ['members', 'false']], 'the built sections only, the one on screen current');
+  assert.deepEqual([...h.matchAll(/class="set-nav-item" data-section="([\w-]+)" aria-current="(\w+)"/g)].map((m) => [m[1], m[2]]), [['environments', 'page'], ['endpoints', 'false'], ['members', 'false'], ['audit', 'false']], 'the built sections only, the one on screen current');
   assert.ok(!h.includes('<img') && h.includes('Pay &lt;img src=x onerror=&quot;window.__x=1&quot;&gt;'), 'a service name is escaped');
   assert.ok(h.includes('tier-1 · MCP: gw — https://mcp.acme.test · 2 bindings · 1 link'));
   assert.ok(h.includes('no environments'), 'a service with none says so');
@@ -879,7 +890,7 @@ test('the members section: no email, "you" by login, Rename…, Add member, Chan
   const c = settingsContainer();
   renderSettings(c, buildSettingsFrameModel({ access: ADA, section: 'members', orgName: 'Acme', orgId: 'acme' }), { id: 'members', head: settingsSectionHead('members', { orgName: 'Acme' }), model, status: null }, host);
   const h = c.innerHTML;
-  assert.deepEqual([...h.matchAll(/class="set-nav-item" data-section="([\w-]+)"/g)].map((m) => m[1]), ['environments', 'endpoints', 'members'], 'Members is built; the audit is not yet');
+  assert.deepEqual([...h.matchAll(/class="set-nav-item" data-section="([\w-]+)"/g)].map((m) => m[1]), ['environments', 'endpoints', 'members', 'audit'], 'the org\'s four sections');
   assert.ok(h.includes('<p class="set-section-scope">The members of Acme (acme) and their roles.</p>'), 'the model\'s scope sentence');
   assert.ok(h.includes('<button type="button" class="mcp-refresh-btn set-primary" id="set-primary">Add member</button>'));
   assert.ok(h.includes('id="set-rename">Rename…</button>'));
@@ -968,6 +979,61 @@ test('the member editors: the role group with the locked choices unavailable, Re
   renderSettingsEditor(r, buildSettingsEditorModel('org-name', { id: 'acme', name: 'Acme' }, { ctx }), host);
   assert.ok(r.innerHTML.includes('<input id="set-edit-name" name="name" type="text" value="Acme" maxlength="200"') && r.innerHTML.includes('The id acme stays; only the name changes.'));
   assert.ok(!r.innerHTML.includes('set-editor-delete'), 'an org is not removed here');
+});
+
+test('the audit section: the filters (the scope an owner\'s), the kinds listed, the rows escaped — the detail inside <details>, the time in <time>; Apply and Older rows', () => {
+  const calls = [];
+  const host = { settings: new Proxy({}, { get: (_, k) => (...a) => calls.push([k, ...a]) }) };
+  const xss = '<img src=x onerror="window.__x=1">';
+  const rows = [
+    { seq: 12, at: '2026-10-06T10:00:00.000Z', orgId: 'acme', actor: `ada${xss}`, action: 'membership.role', targetKind: 'user', targetId: '3', detail: { from: 'operator', to: 'admin', note: xss } },
+    { seq: 11, at: '2026-10-06T09:00:00.000Z', orgId: 'acme', actor: 'cli', action: 'org.rename', targetKind: 'org', targetId: 'acme', detail: null },
+  ];
+  const filters = { kind: 'membership', from: '2026-10-06', through: '2026-10-06' };
+  const model = buildAuditSectionModel({ doc: { scope: 'org', org: 'acme', rows, next: 11 }, rows, filters, access: ADA, orgId: 'acme', formatTime: () => 'local time' });
+  const c = settingsContainer();
+  renderSettings(c, buildSettingsFrameModel({ access: ADA, section: 'audit', orgName: 'Acme', orgId: 'acme' }), { id: 'audit', head: settingsSectionHead('audit', { orgName: 'Acme' }), model, status: null, filters }, host);
+  const h = c.innerHTML;
+  assert.ok(h.includes("<p class=\"set-section-scope\">This org&#39;s rows (acme) — the deployment&#39;s are an owner&#39;s.</p>"), 'an admin is told the scope, no control');
+  assert.ok(!h.includes('id="set-audit-scope"'));
+  assert.ok(h.includes('<form class="set-audit-filters" id="set-audit-filters" aria-label="Filter the audit">'));
+  assert.ok(h.includes('<input id="set-audit-kind" name="kind" type="text" value="membership" list="set-audit-kinds"'));
+  assert.ok(h.includes('<input id="set-audit-from" name="from" type="date" value="2026-10-06"') && h.includes('<input id="set-audit-through" name="through" type="date" value="2026-10-06"'));
+  assert.ok(h.includes('a login, local, token, system or cli — as the rows show it'));
+  assert.deepEqual([...h.matchAll(/<option value="([\w_]+)"><\/option>/g)].map((m) => m[1]), AUDIT_KINDS, 'the datalist: the kinds the server writes');
+  assert.ok(h.includes('<caption>2 rows, newest first · scope org · org acme</caption>'));
+  assert.ok(!h.includes('<th scope="col">Org</th>'), 'one org: no org column');
+  assert.ok(h.includes('<td><time datetime="2026-10-06T10:00:00.000Z">local time</time></td>'));
+  assert.ok(!h.includes('<img') && h.includes('<td class="set-audit-actor">ada&lt;img src=x onerror=&quot;window.__x=1&quot;&gt;</td>'), 'the actor as served, escaped');
+  assert.ok(/<td class="set-audit-detail"><details><summary>detail<\/summary><pre>\{\n {2}&quot;from&quot;: &quot;operator&quot;,[^<]*&lt;img[^<]*<\/pre><\/details><\/td>/.test(h), 'the detail pretty-printed, escaped, folded');
+  assert.ok(h.includes('<td>org acme</td>') && h.includes('<pre>null</pre>'));
+  assert.ok(h.includes('id="set-audit-more">Older rows</button>'));
+  assert.ok(!/\btitle="|\bhref="/.test(h), 'no title, no link built from a row');
+  c.querySelector('#set-audit-actor').value = ' ada ';
+  c.querySelector('#set-audit-filters').fire('submit');
+  c.querySelector('#set-audit-more').fire('click');
+  assert.deepEqual(calls, [['auditApply', { actor: 'ada', kind: 'membership', from: '2026-10-06', through: '2026-10-06' }], ['auditMore']]);
+
+  // An owner: the scope control, the org column; the last page says so.
+  const olive = buildAuditSectionModel({ doc: { scope: 'all', org: null, rows: [rows[1]], next: null }, rows: [rows[1]], filters: { scope: 'deployment' }, access: OLIVE, orgId: 'acme' });
+  const o = settingsContainer();
+  calls.length = 0;
+  renderSettings(o, buildSettingsFrameModel({ access: OLIVE, section: 'audit', orgName: 'Acme', orgId: 'acme' }), { id: 'audit', head: settingsSectionHead('audit'), model: olive, status: null, filters: { scope: 'deployment' } }, host);
+  assert.ok(o.innerHTML.includes('<option value="deployment" selected>the deployment&#39;s own rows</option>'));
+  assert.ok(o.innerHTML.includes('<th scope="col">Org</th>') && o.innerHTML.includes('<td>acme</td>'));
+  assert.ok(!o.innerHTML.includes('set-audit-more') && o.innerHTML.includes('role="status" aria-live="polite">No older rows.</p>'));
+  o.querySelector('#set-audit-filters').fire('submit');
+  assert.deepEqual(calls, [['auditApply', { scope: 'deployment' }]]);
+
+  // A refusal (a filter the server refuses): the sentence as served, no table.
+  const f = settingsContainer();
+  renderSettings(f, buildSettingsFrameModel({ access: ADA, section: 'audit' }), { id: 'audit', head: settingsSectionHead('audit'), model: buildAuditSectionModel({ access: ADA, orgId: 'acme', filters: {}, error: '400: since must be before until' }), status: null, filters: {} }, host);
+  assert.ok(f.innerHTML.includes('role="status" aria-live="polite">400: since must be before until</p>') && !f.innerHTML.includes('<table'), 'a refused filter: the sentence as served, no Retry — the filters are the way out');
+  assert.ok(f.innerHTML.includes('id="set-audit-filters"'), 'the filters stay to change');
+  assert.ok(!/maxlength="(40|80)"/.test(h), 'no limit tighter than the server\'s (kind and action have none; target kind 100)');
+  const g = settingsContainer();
+  renderSettings(g, buildSettingsFrameModel({ access: ADA, section: 'audit' }), { id: 'audit', head: settingsSectionHead('audit'), model: buildAuditSectionModel({ access: ADA, orgId: 'acme', filters: {}, error: '500: no answer' }), status: null, filters: {} }, host);
+  assert.ok(g.innerHTML.includes('500: no answer <button type="button" class="ux-secondary-btn" id="set-retry">Retry</button>'), 'any other failure offers Retry');
 });
 
 test('renderMcpTarget: the endpoints first and "Type a URL…" last, each option its name and origin (never a URL or a variable); the empty line; a change is the controller\'s', () => {
