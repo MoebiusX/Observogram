@@ -872,7 +872,7 @@ async function loadPlaywright() {
   catch (e) { return { error: `cannot import ${spec}: ${e.message.split('\n')[0]}` }; }
 }
 
-test('T7 the REAL bundle boots in headless Chromium against the fixture pack: the notice, the open posture, the pack opened, 501 for a live feature, the Export download, the audit-report anchor answered with the 501 sentence, no page error, no request off the loopback', async (t) => {
+test('T7 the REAL bundle boots in headless Chromium against the fixture pack: the notice, the open posture, the pack opened, 501 for a live feature, the Export download, the audit-report anchor answered with the 501 sentence, the Settings banner the same sentence, no page error, no request off the loopback', async (t) => {
   const required = process.env.OBSERVOGRAM_BUNDLE_SMOKE === 'require';
   const skip = (why) => { if (required) assert.fail(`OBSERVOGRAM_BUNDLE_SMOKE=require: ${why}`); t.skip(why); };
   const { pw, error } = await loadPlaywright();
@@ -976,6 +976,14 @@ test('T7 the REAL bundle boots in headless Chromium against the fixture pack: th
   await page.waitForSelector('#observa-chrome, .observa-hdr, #layer-view', { state: 'attached', timeout: 30_000 });
   await page.waitForFunction(() => (document.querySelector('#layer-view')?.textContent || '').trim().length > 0, null, { timeout: 30_000 });
   assert.equal(await page.$('.no-backend-notice'), null, 'the dismissal is remembered');
+  // Settings: the frame's first read is denied; the banner is that sentence
+  // as thrown, `501: ` included (design B15), no section list, nothing logged.
+  await page.click('.observa-adv-toggle');
+  await page.click('.observa-adv-item[data-action="settings"]');
+  await page.waitForSelector('.set-banner.is-static', { timeout: 30_000 });
+  assert.equal(await page.textContent('.set-banner'), '501: Settings needs the Observogram server; this studio is a static bundle built without one.');
+  assert.equal(await page.evaluate(() => document.body.dataset.mode), 'settings');
+  assert.equal(await page.$('.set-nav-item'), null, 'no section in the static bundle');
 
   assert.deepEqual(problems, [], 'no page error and no console.error');
   assert.deepEqual(offLoopback, [], 'no request left the loopback');
