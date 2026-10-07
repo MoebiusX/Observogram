@@ -14,7 +14,7 @@ entries), `docs/UPDATE_JOURNEY.md` ("Rebadge batch 3"), `docs/DOWNSTREAM.md`
 documents do not state. The totals below are the chain
 `tools/test-doc-test-totals.mjs` guards: `npm test` on Linux, measured at
 each item's last commit, from 1102 at the head of slice 6b-i to 1246 at the
-head of this branch.
+end of C3, and 1247 at the head of this branch with the review fixes.
 
 ## What the scout and the critique found
 
@@ -126,6 +126,14 @@ the drawer naming the key.
 `compare-modes-bundle` (blocked with Compare in the static bundle),
 `artefact-uid-annotation` (id mode for alert rules: spec 1.4's `AlertRule`
 has no uid field, so a rule's id is its name).
+
+## Review fixes
+
+- **A successful MCP answer is redacted by value** (`tools/lib/mcp-client.mjs`):
+  an MCP that repeated the endpoint's read token in a result (a version
+  string) carried it into an operator's ping (`read.detail`) and into a
+  snapshot, draft or refresh pack; every string of a result is now redacted
+  as an error's text is. Tests: 1246 → 1247.
 
 ## What a plugin bridge still does that this batch does not
 

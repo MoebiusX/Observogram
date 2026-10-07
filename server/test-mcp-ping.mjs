@@ -215,6 +215,18 @@ test('an MCP whose read is credential-free says what it did not check', async ()
   assert.ok(r.json.notChecked.includes(`${HEALTH} answers without backend credentials — whether the MCP's own credentials to its backend work was not checked`));
 });
 
+test('an MCP that repeats the token in a successful answer: the read\'s detail says <redacted>, never the value', async () => {
+  let echoing = null;
+  echoing = await fake([SYSTEM, HEALTH], (name) => (name === HEALTH ? { version: echoing.authHeaders.at(-1) } : { ok: true }));
+  const id = (await registerMcpEndpoint(BASE, { name: 'acme-repeat', url: echoing.url, readTokenEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' }, { headers: headersOf('ada') })).id;
+  const r = await ping('oscar', { mcpEndpointId: id });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.verdict, 'connected');
+  assert.equal(echoing.authHeaders.at(-1), `Bearer ${READ_TOKEN}`, 'the token rode and the MCP repeated it');
+  assert.equal(r.json.read.detail, 'version Bearer <redacted>');
+  assert.ok(!r.text.includes(READ_TOKEN), 'the repeated token is not in the answer');
+});
+
 test('an endpoint nobody answers: 200, unreachable, the sentence names the origin', async () => {
   const closed = createServer();
   await new Promise((ok) => closed.listen(0, '127.0.0.1', ok));

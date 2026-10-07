@@ -297,6 +297,43 @@ for (const [label, hook] of [
   assert(echoes.rpc === `tools/call: ${said}` && echoes.sse === `tools/call: ${said}`, 'native fetch: a JSON-RPC error and an SSE error frame repeating it are redacted', { rpc: echoes.rpc, sse: echoes.sse });
   assert(echoes.tool === `${SYSTEM_HEALTH}: ${said}`, 'a tool\'s isError text repeating it is redacted', echoes.tool);
   assert(echoes.nonjson === 'MCP tools/call: the answer is not valid JSON', 'a body that is not JSON: the parser\'s message, which quotes a cut of it, is replaced whole', echoes.nonjson);
+
+  // A successful answer that repeats the request — a tool's JSON text, a
+  // plain text, a tools/list description, over JSON and SSE — is redacted
+  // the same way; an answer that holds nothing to redact comes back as it was.
+  const okServer = (sse) => createServer(async (req, res) => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    const msg = JSON.parse(raw || '{}');
+    const echoed = `${req.headers.authorization} to ${req.url}`;
+    const result = msg.method === 'tools/list'
+      ? { tools: [{ name: SYSTEM_HEALTH, description: `sees ${echoed}` }] }
+      : msg.params?.arguments?.plain ? { content: [{ type: 'text', text: `plain ${echoed}` }] }
+        : { content: [{ type: 'text', text: JSON.stringify({ version: echoed, [echoed]: [echoed, 3], kept: 'v1' }) }] };
+    const frame = JSON.stringify({ jsonrpc: '2.0', id: msg.id ?? 1, result });
+    if (sse) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); return res.end(`data: ${frame}\n\n`); }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(frame);
+  });
+  for (const sse of [false, true]) {
+    const srv = okServer(sse);
+    await new Promise(r => srv.listen(0, '127.0.0.1', r));
+    try {
+      const base = `http://127.0.0.1:${srv.address().port}/mcp`;
+      const { rpc, callTool } = createMcpClient({ mcpUrl: `${base}?token=URLTOKENSENTINEL9&tier=x`, mcpAuth: 'BEARERSENTINEL7', transport: null });
+      const red = 'Bearer <redacted> to /mcp?token=<redacted>&tier=x';
+      const parsed = await callTool(SYSTEM_HEALTH, {});
+      assert(JSON.stringify(parsed) === JSON.stringify({ version: red, [red]: [red, 3], kept: 'v1' }),
+        `${sse ? 'SSE' : 'JSON'}: a tool's successful JSON answer repeating the Authorization header is redacted, keys included`, parsed);
+      const plain = await callTool(SYSTEM_HEALTH, { plain: true });
+      assert(plain === `plain ${red}`, `${sse ? 'SSE' : 'JSON'}: a tool's successful plain-text answer is redacted`, plain);
+      const listed = await rpc('tools/list', {});
+      assert(listed?.tools?.[0]?.description === `sees ${red}`, `${sse ? 'SSE' : 'JSON'}: a tools/list description repeating it is redacted`, listed);
+      const bare = createMcpClient({ mcpUrl: base, mcpAuth: null, transport: null });
+      const untouched = await bare.callTool(SYSTEM_HEALTH, {});
+      assert(untouched.kept === 'v1' && untouched.version === 'undefined to /mcp', 'with nothing to redact the answer comes back as it was', untouched);
+    } finally { await new Promise(r => srv.close(r)); }
+  }
 }
 
 // ---------- 5b. redirects are never followed (D10) ----------

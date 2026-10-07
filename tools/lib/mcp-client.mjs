@@ -79,7 +79,10 @@
 // cannot carry the credential back: the bearer, the URL's userinfo and
 // every credential-named query parameter value of mcpUrl (stripMcpUrl's
 // rule) become <redacted> in every log line, 502 body, annotation and run
-// record downstream. An error that held none
+// record downstream. A successful answer is redacted the same way — every
+// string of the result rpc() and callTool() return, keys included — so a
+// result that repeats it cannot carry it into a ping, a pack or a fixture;
+// a result that held none is returned as it came. An error that held none
 // of them is rethrown as it was. Nothing else the hook does is redacted for
 // it; it runs with the process's trust.
 
@@ -205,6 +208,17 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
   transportReady.catch(() => {});
   const secrets = secretsOf(mcpUrl, mcpAuth);
   const redact = (text) => secrets.reduce((acc, s) => acc.split(s).join('<redacted>'), String(text));
+  // A successful answer, redacted the same way: every string in it (keys
+  // included), so an MCP that repeats the request in a result (a version
+  // string, a description) cannot carry the credential into a ping, a pack
+  // or a fixture. With nothing to redact the answer is returned as it came.
+  const redactAnswer = (v) => {
+    if (secrets.length === 0) return v;
+    if (typeof v === 'string') return redact(v);
+    if (Array.isArray(v)) return v.map(redactAnswer);
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [redact(k), redactAnswer(x)]));
+    return v;
+  };
 
   async function send(method, params, { notification = false } = {}) {
     signal?.throwIfAborted();
@@ -279,7 +293,8 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
     }
 
     // (6) the answer, exactly as before — except that every text it puts
-    // into an error is redacted, whoever answered (see the header).
+    // into an error, and every string of a result, is redacted, whoever
+    // answered (see the header).
     const wireText = (text) => redact(text);
     // A body that is not JSON: the parser's message quotes a cut of the
     // answer, which by-value redaction cannot catch when the cut splits a
@@ -322,7 +337,7 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
           if (text) {
             const obj = await parsed(() => JSON.parse(text));
             if (obj.error) throw new Error(`${method}: ${wireText(obj.error.message)}`);
-            return obj.result;
+            return redactAnswer(obj.result);
           }
           buf = buf.slice(frameEnd + 2);
         }
@@ -332,7 +347,7 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
     }
     const data = await parsed(async () => JSON.parse(await readAnswer(res, method)));
     if (data.error) throw new Error(`${method}: ${wireText(data.error.message)}`);
-    return data.result;
+    return redactAnswer(data.result);
   }
 
   const rpc = (method, params = {}) => send(method, params);
@@ -346,7 +361,9 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
     }
     const text = result?.content?.[0]?.text;
     if (typeof text !== 'string') return result;
-    try { return JSON.parse(text); }
+    // The text was redacted as it came; a secret JSON escapes (a quote, a
+    // backslash) is caught once it is parsed.
+    try { return redactAnswer(JSON.parse(text)); }
     catch { return text; }
   }
 

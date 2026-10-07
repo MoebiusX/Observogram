@@ -78,8 +78,9 @@ request is sent with `redirect: 'manual'`, and a 3xx (or a browser's
 `opaqueredirect`) is an error naming only the origin it pointed at — the
 server, `npm run fetch-live`, the scheduled refresh and journeys alike. An MCP
 behind a redirect is configured with its final URL. **Every answer text is
-redacted by value** before it reaches an error, a 502 body, a log line, a
-gate-log message or a `mcp.probeErrors.*` annotation: the bearer, the URL's
+redacted by value** — an error's and a successful result's alike — before
+it reaches an error, a 502 body, a log line, a gate-log message, a
+`mcp.probeErrors.*` annotation, a ping's answer or a pack: the bearer, the URL's
 userinfo and credential-named query values become `<redacted>`, and the
 server's routes redact the credential they resolved once more. One answer is
 read up to 32 MiB (`MAX_MCP_ANSWER_BYTES`), and a caller's `AbortSignal` ends

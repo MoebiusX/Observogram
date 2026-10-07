@@ -1155,6 +1155,12 @@ byte-identical (the stored goldens run with `identity: 'behaviour'` too).
 Tests: 1222 → 1246 (`tools/test-identity-modes.mjs`, new; one browser case
 in `server/test-live-studio.mjs`).
 
+A review fix: the MCP client redacts a successful answer by value as it
+redacts an error, so an MCP that repeats the endpoint's read token in a
+result (a version string) no longer carries it into an operator's ping or a
+pack every viewer of the org reads. Tests: 1246 → 1247 (one more in
+`server/test-mcp-ping.mjs`; six assertions in `tools/test-mcp-transport.mjs`).
+
 The batch's delivery report, `docs/DELIVERY-REBADGE-BATCH3.md`, is written
 per item — what shipped, the measured `Tests:` pair, what is deferred by name
 — and `tools/test-doc-test-totals.mjs` guards it as it guards the batch 2
