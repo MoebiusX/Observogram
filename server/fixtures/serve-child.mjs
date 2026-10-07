@@ -90,10 +90,14 @@ export function boot(ws, { host = '127.0.0.1', env = {}, silent = true, port = 0
   return out;
 }
 
-// A server that keeps running: { base, stop() }.
-export async function serve(ws, { host = '127.0.0.1', env = {} } = {}) {
+// A server that keeps running: { base, stop(), logs() }. logs() is
+// { stdout, stderr }: everything the child printed so far, kept after it
+// stops — the server has no access log, so a suite proving a value never
+// reached the server's output scans this. `verbose: true` boots without
+// BOOT_SILENT, so the start lines are in it too.
+export async function serve(ws, { host = '127.0.0.1', env = {}, verbose = false } = {}) {
   const proc = spawn(process.execPath, ['--input-type=module', '-e', BOOT_CODE], {
-    env: childEnv(ws, { ...env, BOOT_HOST: host, BOOT_SILENT: '1', BOOT_KEEP: '1' }), stdio: ['ignore', 'pipe', 'pipe'],
+    env: childEnv(ws, { ...env, BOOT_HOST: host, BOOT_SILENT: verbose ? '0' : '1', BOOT_KEEP: '1' }), stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '';
   let stderr = '';
@@ -112,6 +116,8 @@ export async function serve(ws, { host = '127.0.0.1', env = {} } = {}) {
   });
   return {
     base: `http://127.0.0.1:${port}`,
+    // The stdout listener above keeps appending after LISTENING, and stderr's from the start.
+    logs: () => ({ stdout, stderr }),
     stop: async () => {
       proc.kill('SIGTERM');
       const t = setTimeout(() => proc.kill('SIGKILL'), 10_000);
