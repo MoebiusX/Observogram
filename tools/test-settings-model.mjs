@@ -1398,6 +1398,16 @@ test('the user editors: New local user has no password field and the organisatio
   assert.equal(reset.secret.text, 'Temporary password for ada — shown once. It is not stored in this browser and cannot be shown again; ada sets their own at their next sign-in. Reset it to get a new one.');
   assert.ok(!reset.status || !reset.status.text.includes(PW), 'the reset password is in its secret block only, never in the status text (§7.6)');
   assert.ok(!JSON.stringify({ ...reset, secret: null }).includes(PW), 'the reset password appears exactly once in the model');
+  // Without sign-in (OBSERVOGRAM_AUTH=off — local is an owner): the reset never says "at their next sign-in"; the
+  // secret step drops the clause (as under A13) and the confirm says when they sign in, as a create does.
+  const openCtx = { ...OWNER_CTX, access: OPEN, me: null, joinRole: { mode: 'local', role: null } };
+  assert.deepEqual(buildSettingsEditorModel('user', USERS[1], { ctx: { ...openCtx, action: 'reset' }, step: 'confirm-action' }).confirm, {
+    text: "Reset ada's password? Every session of ada ends; a new temporary password is shown once. This server runs without sign-in (OBSERVOGRAM_AUTH=off): ada signs in once it starts without it, and sets their own then.",
+    danger: "Reset ada's password" });
+  assert.equal(buildSettingsEditorModel('user', USERS[1], { ctx: { ...openCtx, secret: { login: 'ada', value: PW, forced: true } }, step: 'secret' }).secret.text,
+    'Temporary password for ada — shown once. It is not stored in this browser and cannot be shown again. Reset it to get a new one.');
+  assert.equal(buildSettingsEditorModel('user-create', null, { ctx: { ...openCtx, secret: { login: 'nina', value: PW, forced: true } }, step: 'secret' }).secret.text,
+    'Temporary password for nina — shown once. It is not stored in this browser and cannot be shown again. Reset it to get a new one.', 'a second user created without sign-in: no "at first sign-in" either');
   assert.equal(buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, signIn: true }, step: 'notice' }).signIn, true);
   // A non-owner (the access downgraded while open): Create unavailable with the owner reason.
   assert.deepEqual(buildSettingsEditorModel('user-create', null, { ctx: { ...OWNER_CTX, access: ADA } }).primary.enabled, false);
@@ -1410,6 +1420,8 @@ test('the user editors: New local user has no password field and the organisatio
 test('the user statuses: what the server did, by action; a create that armed sign-in says which way (D-E); a refused reset says the password is not forced', () => {
   const s = (a, ans = {}) => userActionStatus(a, ans, { login: 'ada', defaultOrg: 'default' }).text;
   assert.equal(s('reset'), 'Every session of ada ended; they set a new password at their next sign-in.');
+  assert.equal(userActionStatus('reset', {}, { login: 'ada', open: true }).text,
+    'Every session of ada ended. This server runs without sign-in (OBSERVOGRAM_AUTH=off): ada signs in once it starts without it, with the password below, and sets a new one then.');
   assert.equal(s('disable'), 'ada disabled — every session ended.');
   assert.equal(s('disable', { you: true }), 'You disabled your own account — this browser is signed out at its next request.');
   assert.equal(s('enable'), 'ada enabled.');

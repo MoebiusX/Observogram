@@ -1225,6 +1225,21 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       assert.deepEqual(await traces(page, secret, 1), []);
       await closeButton(page);
       assert.equal(await page.evaluate((p) => document.documentElement.outerHTML.includes(p), secret), false);
+      // Reset first: nobody signs in here, so the dialog never says "at their next sign-in".
+      await page.waitForSelector(`[data-user-manage="${answer.user.id}"]`, { timeout: T });
+      await manage(page, answer.user.id);
+      await page.click('[data-user-action="reset"]');
+      await page.waitForSelector('#set-editor-confirm', { timeout: T });
+      assert.equal(await text(page, '#set-editor-confirm-text'), "Reset first's password? Every session of first ends; a new temporary password is shown once. This server runs without sign-in (OBSERVOGRAM_AUTH=off): first signs in once it starts without it, and sets their own then.");
+      await page.click('#set-editor-confirm');
+      await editorStatus(page, /^Every session of first ended\. /);
+      assert.equal(await text(page, '#set-editor-status'), 'Every session of first ended. This server runs without sign-in (OBSERVOGRAM_AUTH=off): first signs in once it starts without it, with the password below, and sets a new one then.');
+      assert.equal(await text(page, '.set-secret-text'), 'Temporary password for first — shown once. It is not stored in this browser and cannot be shown again. Reset it to get a new one.');
+      const reset = await text(page, '#set-secret-value');
+      assert.match(reset, PASSWORD);
+      assert.deepEqual(await traces(page, reset, 1), []);
+      assert.deepEqual(writes, ['/api/admin/users', `/api/admin/users/${answer.user.id}/password`]);
+      await closeButton(page);
     } finally { await ctx.close(); }
   });
 
