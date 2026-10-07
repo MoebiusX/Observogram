@@ -20,7 +20,7 @@
  * identity children (acme: ada admin, oscar operator): off → 404 before the
  * body is read; admin only (an operator, the bearer refused by class), a
  * typed URL an admin's; an mcpAuth and a malformed body refused without
- * quoting it (another route's malformed body answered as before); the path
+ * quoting it (another route's malformed body the app-wide JSON 400); the path
  * is the server's (a described submit goes to the description's endpoint
  * whatever the caller says, a generic one only to the configured path);
  * describe and submit pass back no upstream text (the outcome shape only);
@@ -360,7 +360,7 @@ test('who may: an operator and the bearer are refused by class, a typed URL is a
   assert.equal(f.adminRequests.length, 1);
 });
 
-test('a malformed body holding the secret is a 400 that quotes none of it, nothing logged; a body over 64 KiB is a 400; another route\'s malformed body is answered as before (the app-wide parser\'s page)', async () => {
+test('a malformed body holding the secret is a 400 that quotes none of it, nothing logged; a body over 64 KiB is a 400; another route\'s malformed body is the app-wide handler\'s JSON 400, the same text', async () => {
   const f = await fakeMcp({});
   const s = await studio();
   for (const path of [DESCRIBE, SUBMIT]) {
@@ -372,8 +372,8 @@ test('a malformed body holding the secret is a 400 that quotes none of it, nothi
     assert.deepEqual([big.status, big.json], [400, { ok: false, error: 'the request body is larger than 64 KiB' }], path);
   }
   const other = await s.post('/api/mcp/ping', null, { raw: `{"mcpUrl":"${f.url}","mcpAuth":"not-json` });
-  assert.equal(other.status, 400);
-  assert.match(other.type, /^text\/html/, 'the app-wide parser\'s answer, unchanged (M6 (b): the follow-up fixes it app-wide)');
+  assert.deepEqual([other.status, other.json], [400, { ok: false, error: 'the request body is not valid JSON' }]);
+  assert.match(other.type, /^application\/json/, 'the app-wide handler\'s answer (malformed-json-app-wide; server/test-malformed-json.mjs)');
   assert.deepEqual(f.adminRequests, []);
   assertNowhere(s, [SECRET]);
 });
