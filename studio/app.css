@@ -9527,7 +9527,14 @@ select.build-edit-input { appearance: auto; }
 .mss-radio { display: inline-flex; gap: 6px; align-items: baseline; font: 13px/1.4 var(--sans); color: var(--ink); }
 .mss-generic-why { margin: 4px 0 0; font: 12.5px/1.45 var(--sans); color: var(--ink); }
 .mss-generic-why:empty { display: none; }
+.mss-policy { display: grid; gap: 8px; }
 .mss-policy:empty { display: none; }
+.mss-rule { display: grid; gap: 6px; padding-left: 10px; border-left: 3px solid var(--warn); }
+.mss-warn { display: grid; gap: 2px; }
+.mss-warn-line { margin: 0; font: 13px/1.5 var(--sans); color: var(--ink); overflow-wrap: anywhere; }
+.mss-warn-key { font-weight: 600; color: var(--ink); }
+.mss-warn-note { margin: 0; font: 12.5px/1.45 var(--sans); color: var(--ink-2); overflow-wrap: anywhere; }
+.mss-ack { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: baseline; cursor: pointer; font: 600 13px/1.45 var(--sans); color: var(--ink); overflow-wrap: anywhere; }
 .mss-foot { padding: 12px 24px 18px; display: grid; gap: 10px; }
 .mss-status { font: 13px/1.5 var(--mono); color: var(--ink-2); overflow-wrap: anywhere; }
 .mss-status.is-ok { padding-left: 10px; border-left: 3px solid var(--pass-border); color: var(--ink); }

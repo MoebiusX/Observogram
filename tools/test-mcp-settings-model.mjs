@@ -6,7 +6,8 @@
  * rule (the studio's own origin, a loopback MCP from a remote page in each
  * posture's words, plain http, the allowlist mirror, file://, the URL
  * policy), what a descriptor read means, the status line of every state,
- * the inputs' attributes, what an action sends, why the primary waits, and
+ * the inputs' attributes, what an action sends, what the settings policy
+ * shows and when its acknowledgement blocks, why the primary waits, and
  * the line after the connection test — from the read's outcome, never from
  * the verdict alone. The URL rules and the contract are the real tools/lib
  * modules, handed in as the browser hands in its /lib imports.
@@ -19,7 +20,7 @@ import * as lib from './lib/mcp-server-settings.mjs';
 import * as safety from './lib/mcp-url-safety.mjs';
 import {
   pageIsLoopback, settingsGateModel, settingsTargetModel, descriptorReadModel, statusLine, ledeText,
-  fieldInputSpec, actionNote, primaryBlock, verifiedLine,
+  fieldInputSpec, actionNote, primaryBlock, policyView, verifiedLine,
 } from '../studio/mcp-settings-model.mjs';
 import { pingResultModel } from '../studio/live-model.mjs';
 
@@ -154,13 +155,44 @@ test('what an action sends: its carried fields by label, and an empty one named 
   assert.equal(actionNote([]), 'Sends: only the action.');
 });
 
-test('why the primary waits: a served policy (until this build applies it), an unreadable one, the generic form\'s expectations, a missing field', () => {
-  assert.equal(primaryBlock({ policyState: 'served', requestReason: 'x' }), 'This deployment has a settings policy, which this studio build does not apply yet — send nothing until it does.');
+test('why the primary waits: an unreadable policy, the generic form\'s expectations, an unticked ack, a missing field — a served policy alone blocks nothing', () => {
+  assert.equal(primaryBlock({ policyState: 'served' }), null, 'a served policy blocks only through its findings');
   assert.equal(primaryBlock({ policyState: 'failed' }), 'Could not read the settings policy, so its checks cannot run — close and reopen to try again.');
   assert.match(primaryBlock({ policyState: 'loading' }), /^Reading the settings policy/);
-  assert.equal(primaryBlock({ genericReason: 'the field name "url" is used twice', requestReason: 'x' }), 'What the server expects: the field name "url" is used twice.');
+  assert.equal(primaryBlock({ genericReason: 'the field name "url" is used twice', requestReason: 'x', ackReason: 'y' }), 'What the server expects: the field name "url" is used twice.');
+  assert.equal(primaryBlock({ policyState: 'served', ackReason: 'Tick "a" to send — w.', requestReason: 'x' }), 'Tick "a" to send — w.');
   assert.equal(primaryBlock({ requestReason: 'fill in Backend base URL — the server requires it' }), 'Fill in Backend base URL — the server requires it.');
   assert.equal(primaryBlock({}), null);
+});
+
+test('the settings policy in the modal: one entry per rule, its notes, and the first unticked ack blocks the send — a ticked one, or a rule without an ack, does not', () => {
+  const { policy } = lib.compileSettingsPolicy({
+    version: 1,
+    rules: [
+      { when: { field: 'grafanaUrl', pattern: '^(?!https://approved\\.)' }, warn: 'Non-approved backend host.', require: { ack: 'I have operator approval for this target' } },
+      { when: { type: 'text', pattern: '^root$' }, warn: 'A shared login.' },
+    ],
+  }, { timed: false });
+  const form = lib.parseSettingsDescriptor(JSON.stringify({ version: 1, endpoint: '/configure', fields: [{ name: 'grafanaUrl', label: 'Backend base URL', type: 'url', required: true }, { name: 'user', label: 'User', type: 'text' }] })).descriptor;
+  assert.deepEqual(policyView(lib.policyFindings(policy, form, {}), []), { rules: [], block: null }, 'an empty form finds nothing');
+  const bad = policyView(lib.policyFindings(policy, form, { grafanaUrl: 'https://elsewhere.example', user: 'root' }), []);
+  assert.deepEqual(bad.rules, [
+    { rule: 0, warn: 'Non-approved backend host.', ack: 'I have operator approval for this target', notes: [] },
+    { rule: 1, warn: 'A shared login.', ack: null, notes: [] },
+  ]);
+  assert.equal(bad.block, 'Tick "I have operator approval for this target" to send — Non-approved backend host.');
+  assert.equal(policyView(lib.policyFindings(policy, form, { grafanaUrl: 'https://elsewhere.example' }), [0]).block, null, 'ticked');
+  assert.equal(policyView(lib.policyFindings(policy, form, { grafanaUrl: 'HTTPS://APPROVED.example/' }), []).rules.length, 0, 'matched as the normalised href');
+  // The generic form names its URL "url": the grafanaUrl rule cannot run, and its ack is required all the same.
+  const generic = lib.genericDescriptor();
+  const unevaluated = policyView(lib.policyFindings(policy, generic, {}), ['1']);
+  assert.deepEqual(unevaluated.rules, [{ rule: 0, warn: 'Non-approved backend host.', ack: 'I have operator approval for this target', notes: ['Policy rule 1 checks grafanaUrl, which this form does not have, so it cannot run.'] }]);
+  assert.match(unevaluated.block, /^Tick "I have operator approval for this target" to send/);
+  assert.equal(policyView(lib.policyFindings(policy, generic, {}), ['0']).block, null, 'the indexes read from the DOM are strings');
+  // A type rule that matches two fields warns once.
+  const two = lib.parseSettingsDescriptor(JSON.stringify({ version: 1, endpoint: '/configure', fields: [{ name: 'a', label: 'A', type: 'text' }, { name: 'b', label: 'B', type: 'text' }] })).descriptor;
+  assert.deepEqual(policyView(lib.policyFindings(policy, two, { a: 'root', b: 'root' })).rules.map((r) => r.rule), [0, 1], 'rule 0 unevaluated, rule 1 once for two fields');
+  assert.deepEqual(policyView(null), { rules: [], block: null });
 });
 
 const ping = (verdict, read) => {

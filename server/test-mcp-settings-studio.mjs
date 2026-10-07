@@ -13,14 +13,22 @@
  *      studio's origin with no cookie, no X-Observogram-* and the API key as
  *      the descriptor's Bearer.
  *   2. No description (404) and a JSON-RPC 200: the generic form, named, its
- *      path and names editable, the API key in the body.
+ *      path and names editable, the API key in the body. With a settings
+ *      policy on grafanaUrl, the generic form (its URL named "url") cannot
+ *      run the rule: its note shows and its ack is required; with the
+ *      policy's generic.names.url = grafanaUrl the rule matches as written,
+ *      and a policy's warning and ack are text.
  *   3. Failure: a 401 shown verbatim; a secret the server echoes (raw,
  *      JSON-escaped, Basic) shown as <redacted> and counted; nothing left in
  *      the DOM, storage or the studio's log.
  *   4. The disable action, the SPEC's descriptor as written: what it sends,
  *      the key typed, the connection test then reading "the read failed";
  *      a confirm text asks for a second click.
- *   5. A served settings policy refuses the send until this build applies it.
+ *   5. The settings policy: a non-approved URL warns, the send waits for the
+ *      ack and the click names it; a URL with userinfo is refused, not
+ *      matched; an upper-case approved URL is not warned; an ack whose rule
+ *      stops matching goes, and comes back unticked; tick, send; an action
+ *      skips the ack; close and reopen — the ack is unticked again.
  *   6. Target refusals: a typed ftp:// URL, an unlisted remote origin, plain
  *      http, the studio's own origin — no request to anyone.
  *   7. The gate: oscar's button is aria-disabled with the reason and opens
@@ -59,7 +67,7 @@ for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) 
 
 const { test, before, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
-const { mkdtempSync, rmSync } = await import('node:fs');
+const { mkdtempSync, rmSync, readFileSync, writeFileSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
 const { join, resolve, dirname } = await import('node:path');
 const { fileURLToPath } = await import('node:url');
@@ -115,6 +123,18 @@ after(async () => {
   await env.studio?.stop();
   await env.browser?.close();
 });
+
+// The studio with the fixture's settings policy (journeys 2 and 5), started once when first asked.
+let policyChild = null;
+function policyStudio() {
+  policyChild ??= startChild({ OBSERVOGRAM_MCP_SETTINGS_POLICY: POLICY_FILE });
+  return policyChild;
+}
+after(async () => { if (policyChild) await (await policyChild).stop(); });
+
+const ACK = 'I have operator approval for this target';
+const TICK = `Tick "${ACK}" to send — Non-approved backend host.`;
+const postsTo = (f) => f.adminRequests.filter((r) => r.method === 'POST');
 
 function skipUnlessBrowser(t) {
   if (env.browser) return false;
@@ -322,6 +342,66 @@ test('BROWSER 2: no description (404) and a JSON-RPC answer give the generic for
   assert.match(await w.status(), /\(what it answered is not a settings description: a JSON-RPC message\)/);
   await closeSettings(w);
   await w.done();
+
+  // A policy on grafanaUrl and a 404: the generic form names its URL "url", so the rule cannot run — its note shows and its ack is required.
+  const ps = await policyStudio();
+  const pf = await fake({ descriptor: null, cors: ps.child.base });
+  const p = await openPage(ps, 'ada');
+  await aim(p, { url: pf.url });
+  await openSettings(p);
+  await p.waitStatus(/^This server publishes no settings description/);
+  await p.page.waitForSelector('#mss-host .mss-policy .mss-rule');
+  assert.equal(await p.text('.mss-warn-line'), 'Policy: Non-approved backend host.');
+  assert.equal(await p.text('.mss-warn-note'), 'Policy rule 1 checks grafanaUrl, which this form does not have, so it cannot run.');
+  assert.equal(await p.page.getAttribute('.mss-warn', 'role'), 'note');
+  assert.equal(await p.page.getAttribute('.mss-policy', 'aria-live'), 'polite');
+  await fill(p, 'url', 'https://approved.example/');
+  await fill(p, 'apiKey', API_KEY);
+  assert.equal(await p.page.getAttribute('.mss-primary', 'aria-disabled'), 'true', 'the unevaluated rule\'s ack is required');
+  await p.page.click('.mss-primary', { force: true });
+  assert.equal(await p.status(), TICK);
+  assert.equal(postsTo(pf).length, 0, 'nothing posted');
+  await p.page.check('#mss-host input[data-ack="0"]');
+  assert.equal(await p.page.getAttribute('.mss-primary', 'aria-disabled'), null);
+  await p.page.click('.mss-primary');
+  await p.waitStatus(/Connection test:/);
+  assert.deepEqual(postsTo(pf).map((r) => r.body), [{ url: 'https://approved.example/', apiKey: API_KEY }]);
+  await closeSettings(p);
+  await p.done();
+
+  // The policy's generic.names.url = grafanaUrl: the generic form is prefilled with it and the rule matches as written. Its warning and ack are text.
+  const dir = mkdtempSync(join(tmpdir(), 'observogram-mss-policy-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const named = join(dir, 'policy.json');
+  const fixture = JSON.parse(readFileSync(POLICY_FILE, 'utf8'));
+  writeFileSync(named, JSON.stringify({
+    ...fixture,
+    rules: [...fixture.rules, { when: { type: 'text', pattern: '^markup$' }, warn: `Markup${ADMIN_MARKUP}`, require: { ack: `Ack${ADMIN_MARKUP}` } }],
+    generic: { names: { url: 'grafanaUrl' } },
+  }));
+  const gs = await startChild({ OBSERVOGRAM_MCP_SETTINGS_POLICY: named });
+  t.after(() => gs.stop());
+  const gf = await fake({ descriptor: null, cors: gs.child.base });
+  const g = await openPage(gs, 'ada');
+  await aim(g, { url: gf.url });
+  await openSettings(g);
+  await g.waitStatus(/^This server publishes no settings description/);
+  assert.deepEqual(await g.page.evaluate(() => [...document.querySelectorAll('#mss-host input[data-field]')].map((i) => i.dataset.field)), ['grafanaUrl', 'user', 'secret', 'apiKey'], 'prefilled from the policy');
+  assert.equal(await g.page.$('#mss-host .mss-rule'), null, 'an empty form: nothing to warn about, nothing that cannot run');
+  await fill(g, 'grafanaUrl', 'https://elsewhere.example/');
+  await g.page.waitForSelector('#mss-host .mss-rule[data-rule="0"]');
+  assert.equal(await g.text('.mss-rule[data-rule="0"] .mss-warn'), 'Policy: Non-approved backend host.');
+  await fill(g, 'grafanaUrl', 'https://approved.example/');
+  await g.page.waitForFunction(() => !document.querySelector('#mss-host .mss-rule'), null, { timeout: T });
+  await fill(g, 'user', 'markup');
+  await g.page.waitForSelector('#mss-host .mss-rule[data-rule="1"]');
+  assert.equal(await g.text('.mss-rule[data-rule="1"] .mss-warn'), `Policy: Markup${ADMIN_MARKUP}`.replace(/\s+/g, ' ').trim());
+  assert.equal(await g.text('.mss-rule[data-rule="1"] .mss-ack'), `Ack${ADMIN_MARKUP}`.replace(/\s+/g, ' ').trim());
+  assert.equal(await g.page.evaluate(() => document.querySelectorAll('#mss-host img, #mss-host svg, #mss-host b').length), 0, 'no element from a policy string');
+  assert.equal(await g.page.evaluate(() => window.__pwn ?? null), null, 'nothing ran');
+  assert.equal(postsTo(gf).length, 0);
+  await closeSettings(g);
+  await g.done();
 });
 
 // ---------- 3 ----------
@@ -420,21 +500,69 @@ test('BROWSER 4: the disable action, the SPEC descriptor as written — what it 
 
 // ---------- 5 ----------
 
-test('BROWSER 5: while a settings policy is served, the send is refused with the reason — this build does not apply it yet; nothing is posted', async (t) => {
+test('BROWSER 5: the settings policy — a non-approved URL warns and the send waits for its ack; userinfo is refused, not matched; an approved URL in capitals is not warned; an ack comes back unticked; an action skips it; nothing is remembered', async (t) => {
   if (skipUnlessBrowser(t)) return;
-  const studio = await startChild({ OBSERVOGRAM_MCP_SETTINGS_POLICY: POLICY_FILE });
-  t.after(() => studio.stop());
+  const studio = await policyStudio();
   const f = await fake({ descriptor: EXAMPLE_SETTINGS_DESCRIPTOR, cors: studio.child.base });
   const w = await openPage(studio, 'ada');
   await aim(w, { url: f.url });
   await openSettings(w);
   await w.waitStatus(/describes its settings/);
+  const url = '#mss-host input[data-field="grafanaUrl"]';
+  const tick = '#mss-host input[data-ack="0"]';
+  const noRule = () => w.page.waitForFunction(() => !document.querySelector('#mss-host .mss-rule'), null, { timeout: T });
+  assert.equal(await w.page.$('#mss-host .mss-rule'), null, 'nothing warned before anything is typed');
+
   await fill(w, 'grafanaUrl', 'https://elsewhere.example/');
+  await w.page.waitForSelector('#mss-host .mss-rule');
+  assert.equal(await w.text('.mss-warn'), 'Policy: Non-approved backend host.');
+  assert.equal(await w.text('.mss-ack'), ACK);
+  assert.equal(await w.page.isChecked(tick), false);
   assert.equal(await w.page.getAttribute('.mss-primary', 'aria-disabled'), 'true');
   await w.page.click('.mss-primary', { force: true });
-  assert.equal(await w.status(), 'This deployment has a settings policy, which this studio build does not apply yet — send nothing until it does.');
-  await w.page.press('#mss-host input[data-field="grafanaUrl"]', 'Enter');
-  assert.equal(f.adminRequests.filter((r) => r.method !== 'GET').length, 0, 'nothing posted');
+  assert.equal(await w.status(), TICK);
+  await w.page.press(url, 'Enter');
+  assert.equal(await w.status(), TICK);
+  assert.equal(postsTo(f).length, 0, 'nothing posted');
+
+  // Userinfo is refused as a URL, so the policy never matches it; capitals are matched as the normalised href.
+  await fill(w, 'grafanaUrl', 'https://approved.example@evil.example/');
+  await noRule();
+  await w.page.click('.mss-primary', { force: true });
+  assert.equal(await w.status(), 'Backend base URL: the backend URL carries a user or password before "@" — put them in their own fields, so they are treated as secrets.');
+  await fill(w, 'grafanaUrl', 'HTTPS://APPROVED.example/');
+  await w.page.waitForTimeout(300);
+  assert.equal(await w.page.$('#mss-host .mss-rule'), null, 'not warned');
+  assert.equal(await w.page.getAttribute('.mss-primary', 'aria-disabled'), null);
+
+  // Ticked, then the rule stops matching: the ack goes; it matches again: the ack is back, unticked.
+  await fill(w, 'grafanaUrl', 'https://elsewhere.example/');
+  await w.page.waitForSelector(tick);
+  await w.page.check(tick);
+  assert.equal(await w.page.getAttribute('.mss-primary', 'aria-disabled'), null, 'ticked: the send may go');
+  await fill(w, 'grafanaUrl', 'https://approved.example/');
+  await noRule();
+  await fill(w, 'grafanaUrl', 'https://elsewhere.example/');
+  await w.page.waitForSelector(tick);
+  assert.equal(await w.page.isChecked(tick), false, 'back unticked');
+  assert.equal(await w.page.getAttribute('.mss-primary', 'aria-disabled'), 'true');
+  await w.page.check(tick);
+  await w.page.click('.mss-primary');
+  await w.waitStatus(/Connection test:/);
+  assert.deepEqual(postsTo(f).map((r) => r.body), [{ grafanaUrl: 'https://elsewhere.example/' }], 'sent once the ack is ticked');
+  await closeSettings(w);
+
+  // Reopened: every input empty, the ack unticked; an action skips it.
+  await openSettings(w);
+  await w.waitStatus(/describes its settings/);
+  assert.deepEqual(await values(w), [], 'every input empty at reopen');
+  assert.equal(await w.page.$('#mss-host .mss-rule'), null);
+  await fill(w, 'grafanaUrl', 'https://elsewhere.example/');
+  await w.page.waitForSelector(tick);
+  assert.equal(await w.page.isChecked(tick), false, 'nothing remembered: the ack is unticked');
+  await w.page.click('.mss-action');
+  await w.page.waitForFunction(() => document.querySelector('#mss-host .mss-outcome:not([hidden])'), null, { timeout: T });
+  assert.deepEqual(postsTo(f).map((r) => r.body).at(-1), { action: 'disable' }, 'the action went without the ack');
   await closeSettings(w);
   await w.done();
 });

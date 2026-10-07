@@ -21,10 +21,11 @@
 // controller (studio/app.mjs) reads at send and empties.
 //
 // Rendered again with the same `model.key`, only the status line, the
-// primary's state, the actions' notes, the outcome, the extra buttons and
-// the generic form's field names are patched: what was typed and the focus
-// stay. The actions go to host.mcpSettings: close, send, action(name),
-// retry, useGeneric, input, generic, test, openLive.
+// primary's state, the actions' notes, the outcome, the extra buttons, the
+// generic form's field names and the settings policy's findings are
+// patched: what was typed, a ticked acknowledgement and the focus stay. The
+// actions go to host.mcpSettings: close, send, action(name), retry,
+// useGeneric, input, generic, ack, test, openLive.
 
 import { host as appHost } from './host.mjs';
 
@@ -217,6 +218,9 @@ function patch(container, model, host) {
     }
     const why = form.querySelector('.mss-generic-why');
     if (why) why.textContent = model.generic?.reason ?? '';
+    const policy = form.querySelector('.mss-policy');
+    if (policy) paintPolicy(policy, model.policy ?? [], host);
+    for (const tick of form.querySelectorAll('input[data-ack]')) tick.disabled = !!model.busy;
   }
   const primary = container.querySelector('.mss-primary');
   if (primary && model.primary) {
@@ -254,6 +258,51 @@ function patch(container, model, host) {
   }
   const outcome = container.querySelector('.mss-outcome');
   if (outcome) paintOutcome(outcome, model.outcome);
+}
+
+// The settings policy's findings (A.3.4), one block per rule in rule order:
+// the word "Policy:", the rule's warning and its notes, then its
+// acknowledgement box. A rule still found keeps its block and its box as
+// they are (ticked stays ticked); a rule no longer found loses both, so a
+// rule found again brings its box back unticked. The ticks live in these
+// boxes only — the host empties them on close.
+function paintPolicy(slot, rules, host) {
+  const want = new Set(rules.map((r) => String(r.rule)));
+  for (const box of [...slot.children]) if (!want.has(box.getAttribute('data-rule'))) box.remove();
+  let prev = null;
+  for (const r of rules) {
+    const id = String(r.rule);
+    let box = [...slot.children].find((b) => b.getAttribute('data-rule') === id);
+    if (!box) {
+      box = el('div', 'mss-rule');
+      box.setAttribute('data-rule', id);
+      const warn = el('div', 'mss-warn');
+      warn.setAttribute('role', 'note');
+      box.append(warn);
+      if (r.ack) {
+        const label = el('label', 'mss-ack');
+        const tick = document.createElement('input');
+        tick.type = 'checkbox';
+        tick.setAttribute('data-ack', id);
+        tick.addEventListener('change', () => act(host).ack?.());
+        label.append(tick, el('span', 'mss-ack-text', r.ack));
+        box.append(label);
+      }
+    }
+    const warn = box.querySelector('.mss-warn');
+    const sig = JSON.stringify([r.warn, r.notes]);
+    if (warn.getAttribute('data-sig') !== sig) {
+      warn.setAttribute('data-sig', sig);
+      warn.textContent = '';
+      const line = el('p', 'mss-warn-line');
+      line.append(el('span', 'mss-warn-key', 'Policy:'), ' ', el('span', 'mss-warn-text', r.warn));
+      warn.append(line);
+      for (const note of r.notes) warn.append(el('p', 'mss-warn-note', note));
+    }
+    const at = prev ? prev.nextElementSibling : slot.firstElementChild;
+    if (at !== box) slot.insertBefore(box, at);
+    prev = box;
+  }
 }
 
 const BUTTONS = Object.freeze({

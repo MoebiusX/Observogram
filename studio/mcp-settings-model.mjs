@@ -4,8 +4,9 @@
 // D1/D2): who may open it (settingsGateModel), whether the browser may send
 // settings to the target at all (settingsTargetModel), what the descriptor
 // read means (descriptorReadModel), the status line of each state, the
-// inputs' attributes, what an action sends, and what the modal says after
-// the connection test (verifiedLine). No DOM, no state, no fetch
+// inputs' attributes, what an action sends, what the settings policy's
+// findings show and block (policyView), and what the modal says after the
+// connection test (verifiedLine). No DOM, no state, no fetch
 // (docs/UI_CONVENTIONS.md §2): every input explicit — the URL rules of
 // tools/lib/mcp-url-safety.mjs and the contract of
 // tools/lib/mcp-server-settings.mjs are handed in (`safety`, `lib`), because
@@ -236,18 +237,44 @@ export function actionNote(carries) {
   return `Sends: ${listOf(full)}. ${listOf(empty)} ${are} empty, so a server that needs ${it} will refuse; type ${it} above.`;
 }
 
+// ---------- the settings policy in the modal (A.3.4) ----------
+
 /**
- * Why the primary may not send yet, or null: the policy (served while this
- * build cannot apply it, or unreadable), then a missing required field
- * (settingsRequest's reason), then a generic form whose expectations do not
- * hold.
+ * What the modal shows of the policy's findings (tools/lib/
+ * mcp-server-settings.mjs policyFindings: [{ rule, field, warn, ack,
+ * unevaluated, note }]), one entry per rule in rule order — a `type` rule
+ * that matches two fields warns once — and whether an acknowledgement still
+ * blocks the send. `ticked` lists the rule indexes whose ack box is ticked
+ * (read from the DOM: acks live nowhere else).
+ * → { rules: [{ rule, warn, ack, notes }], block }: `block` (null when
+ * none) names the first unticked ack and its rule's warning.
+ */
+export function policyView(findings, ticked = []) {
+  const byRule = new Map();
+  for (const f of Array.isArray(findings) ? findings : []) {
+    let r = byRule.get(f.rule);
+    if (!r) { r = { rule: f.rule, warn: f.warn, ack: f.ack ?? null, notes: [] }; byRule.set(f.rule, r); }
+    const note = f.note ? sentence(f.note) : '';
+    if (note && !r.notes.includes(note)) r.notes.push(note);
+  }
+  const rules = [...byRule.values()].sort((a, b) => a.rule - b.rule);
+  const done = new Set((ticked ?? []).map(Number));
+  const open = rules.find((r) => r.ack && !done.has(r.rule));
+  return { rules, block: open ? `Tick "${open.ack}" to send — ${open.warn}` : null };
+}
+
+/**
+ * Why the primary may not send yet, or null: an unreadable (or unread)
+ * settings policy, then a generic form whose expectations do not hold, then
+ * an unticked policy acknowledgement (policyView's `block`), then a missing
+ * required field (settingsRequest's reason).
  *   policyState  'none' | 'served' | 'failed' | 'loading'
  */
-export function primaryBlock({ policyState = 'none', requestReason = null, genericReason = null } = {}) {
-  if (policyState === 'served') return 'This deployment has a settings policy, which this studio build does not apply yet — send nothing until it does.';
+export function primaryBlock({ policyState = 'none', requestReason = null, genericReason = null, ackReason = null } = {}) {
   if (policyState === 'failed') return 'Could not read the settings policy, so its checks cannot run — close and reopen to try again.';
   if (policyState === 'loading') return 'Reading the settings policy…';
   if (genericReason) return sentence(`What the server expects: ${genericReason}`);
+  if (ackReason) return ackReason;
   if (requestReason) return sentence(requestReason);
   return null;
 }
