@@ -170,8 +170,9 @@ export function buildSettingsFrameModel({ access, section = null, orgName = null
   });
   // The deployment group (the owner's sections), under its own head; for a
   // signed-in reader who is not an owner, collapsed to one line naming who to
-  // ask (A-27) — never a list of sections they cannot open. Other postures
-  // draw the items unavailable with their reasons (the banner names the way).
+  // ask (A-27) — never a list of sections they cannot open. The token and
+  // closed postures draw the items unavailable with their reasons (the banner
+  // names the way); on the open loopback, local is an owner (D-E).
   let deployment = null;
   if (nav.some((n) => n.group === 'deployment')) {
     const collapse = access.posture === 'identity' && access.owner !== true;

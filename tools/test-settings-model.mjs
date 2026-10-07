@@ -1299,6 +1299,10 @@ test('the deployment group: an owner\'s nav lists Users under its head; a signed
   const closed = buildSettingsFrameModel({ access: CLOSED }).nav.find((n) => n.id === 'users');
   assert.deepEqual([closed.enabled, closed.reason], [false, 'closed on this server without sign-in — the banner above names the way in']);
   assert.equal(buildSettingsFrameModel({ access: OPEN }).nav.find((n) => n.id === 'users').enabled, true, 'without sign-in, on the loopback: local is an owner (D-E)');
+  // The CHANGELOG's entry says the same: the token and closed postures, never the open one.
+  const entry = readFileSync(new URL('../docs/CHANGELOG.md', import.meta.url), 'utf8').split('\n').find((l) => l.startsWith("- **6b-ii — the nav's deployment group**"));
+  assert.ok(entry, "docs/CHANGELOG.md has the deployment group's entry");
+  assert.match(entry, /the token and closed postures draw the items unavailable with their reasons\.$/);
   assert.deepEqual(buildSettingsFrameModel({ access: STATIC }).deployment, null);
   assert.match(settingsSectionHead('users').scope, /temporary password, shown once\.$/);
   assert.equal(settingsSectionHead('users').loading, 'Reading users…');
