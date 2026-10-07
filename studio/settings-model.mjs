@@ -1135,7 +1135,9 @@ export function buildSettingsEditorModel(kind, record = null, { draft = null, st
       status: st || idleStatus('Each action asks first, then takes effect at once.'),
       primary: null,
     };
-    if (step === 'confirm-action') out.confirm = userConfirm(ctx.action, record.login, { self, defaultOrg: ctx.defaultOrg ?? null });
+    // The rank refused (an owner revoked while the dialog was open): no
+    // danger button — the actions again, each with the reason (as org remove).
+    if (step === 'confirm-action' && can) out.confirm = userConfirm(ctx.action, record.login, { self, defaultOrg: ctx.defaultOrg ?? null });
     if (step === 'secret' && ctx.secret) out.secret = { text: secretText(record.login, { forced: ctx.secret.forced !== false, reason: 'reset', localSignIn: signInModeLine(ctx.joinRole) === null }), value: ctx.secret.value };
     return out;
   }

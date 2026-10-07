@@ -1395,6 +1395,10 @@ test('the user editors: New local user has no password field and the organisatio
   assert.equal(buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, signIn: true }, step: 'notice' }).signIn, true);
   // A non-owner (the access downgraded while open): Create unavailable with the owner reason.
   assert.deepEqual(buildSettingsEditorModel('user-create', null, { ctx: { ...OWNER_CTX, access: ADA } }).primary.enabled, false);
+  // …and a user's confirm step after the owner role went: no danger button, the actions back with the reason.
+  const revoked = buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, access: ADA, action: 'disable' }, step: 'confirm-action' });
+  assert.equal(revoked.confirm, null);
+  assert.ok(revoked.actions.length > 0 && revoked.actions.every((a) => a.enabled === false && a.reason === ADA.why.own));
 });
 
 test('the user statuses: what the server did, by action; a create that armed sign-in says which way (D-E); a refused reset says the password is not forced', () => {
@@ -1501,6 +1505,11 @@ test('renderSettings and the user editor: Users under the deployment head, no em
   ]);
   const unavailable = u.querySelectorAll('[data-user-action]').find((b) => b.dataset.userAction === 'reset');
   assert.equal(unavailable.getAttribute('aria-disabled'), 'true');
+  // The confirm step after the owner role went elsewhere (a 403 by role): no danger button left usable; the actions, unavailable.
+  const r = settingsContainer();
+  renderSettingsEditor(r, buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, access: ADA, action: 'disable' }, step: 'confirm-action' }), host);
+  assert.equal(r.querySelector('#set-editor-confirm'), null);
+  assert.equal(r.querySelectorAll('[data-user-action]').find((b) => b.dataset.userAction === 'disable').getAttribute('aria-disabled'), 'true');
 });
 
 // ---------- the organisations and the join role (design §5.8–5.9, C12) ----------
