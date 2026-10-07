@@ -2873,13 +2873,15 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   // The zones the scan reads, in file order: the axis block (Build), the Services block (STORE_PLAN slice 6a, the
   // .svc-* rules) and the Settings block (slice 6b, the .set-* rules). The AA loop below reads from the first marker
   // to EOF, so every zone is covered; each zone's own assertions read its own slice, to the next marker.
-  const ZONES = ['==== The axis', '==== Services', '==== Settings'];
+  // The live MCP connection block (rebadge batch 3, C2; the .mcpc-* rules) is the fourth, after Settings.
+  const ZONES = ['==== The axis', '==== Services', '==== Settings', '==== Live MCP connection'];
   const starts = ZONES.map(z => { const i = CSS_TEXT.indexOf(z); assert.ok(i >= 0, `${z} marker`); return i; });
   assert.ok(starts.every((s, i) => i === 0 || s > starts[i - 1]), 'the zones are in order');
   const zoneSlice = (i) => CSS_TEXT.slice(starts[i], starts[i + 1] ?? CSS_TEXT.length);
   const axis = CSS_TEXT.slice(starts[0]);
   const servicesSlice = zoneSlice(1);
   const settingsSlice = zoneSlice(2);
+  const mcpcSlice = zoneSlice(3);
   const ruleRe = /(?:^|\n)([^@{}\n][^{}]*?)\s*\{([^{}]*)\}/g;
   const rules = [...axis.matchAll(ruleRe)].map(m => ({ sel: m[1].trim(), body: m[2] }));
   assert.ok(rules.length > 100, `the axis block parsed (${rules.length} rules)`);
@@ -3050,6 +3052,37 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
     }
   }
   assert.deepEqual(setOffenders, [], 'every .set- text colour clears AA on the background its own rule draws, in both themes and through the bridge');
+  // ---- The live MCP connection zone (rebadge batch 3, C2): the MCP panel's ping result and the rebuild ----
+  // Drawn inside the panel's card (.mcp-panel: background --card), with no surface of its own: so every .mcpc- rule
+  // names no background, and its text — --ink / --ink-2 / --ink-3 only — is measured on --card in both themes and
+  // through the bridge (--og-panel). No .mcpc- rule sits outside the zone, and no other stylesheet restyles one.
+  const rulesBeforeMcpc = [...CSS_TEXT.slice(0, starts[3]).matchAll(ruleRe)].map(m => m[1].trim());
+  assert.deepEqual(rulesBeforeMcpc.filter(sel => /(^|[\s,>+~(])\.mcpc-/.test(sel)), [], 'no .mcpc- rule outside the live MCP connection zone');
+  assert.match(cssRule('.mcp-panel') || '', /background:\s*var\(--card\)/, 'the panel the zone draws inside is the card');
+  for (const file of otherSheets) {
+    const text = readFileSync(resolve(ROOT, 'studio', file), 'utf8');
+    const sels = [...text.matchAll(/(?:^|\n)([^@{}\n][^{}]*?)\s*\{/g)].map(m => m[1].trim()).filter(sel => /(^|[\s,>+~(])\.mcpc-/.test(sel));
+    assert.deepEqual(sels, [], `studio/${file} does not restyle the live MCP connection zone`);
+  }
+  const mcpcRules = [...mcpcSlice.matchAll(ruleRe)].map(m => ({ sel: m[1].replace(/\/\*[\s\S]*?\*\//g, '').trim(), body: m[2] })).filter(r => /\.mcpc-/.test(r.sel));
+  assert.ok(mcpcRules.length >= 10, `the live MCP connection block parsed (${mcpcRules.length} .mcpc- rules)`);
+  const mcpcOffenders = [];
+  for (const r of mcpcRules) {
+    const bgDecl = r.body.match(/(?:^|[;{\s])background(?:-color)?:\s*([^;]+?)\s*(?:;|$)/)?.[1];
+    if (bgDecl && !/^(transparent|none)$/.test(bgDecl)) mcpcOffenders.push(`${r.sel}: draws a background (${bgDecl}) — the zone has no surface of its own`);
+    const colour = r.body.match(/(?:^|[;{\s])color:\s*([^;]+?)\s*(?:;|$)/)?.[1];
+    if (!colour) continue;
+    const tok = colour.match(/^var\(--([\w-]+)\)$/)?.[1];
+    if (!tok || !SET_TEXT.has(tok)) { mcpcOffenders.push(`${r.sel}: text is ${colour} — --ink / --ink-2 / --ink-3 only`); continue; }
+    const min = large(r.body) ? 3 : 4.5;
+    for (const name of ['light', 'dark']) {
+      const ratio = contrast(themes[name][tok], themes[name].card);
+      if (ratio < min) mcpcOffenders.push(`${r.sel}: --${tok} on --card ${ratio.toFixed(2)}:1 (${name}, needs ${min})`);
+      const bridgedRatio = contrast(og[name][bridge[tok]], og[name][bridge.card]);
+      if (bridgedRatio < min) mcpcOffenders.push(`${r.sel}: --${tok} (--${bridge[tok]}) on --card through the bridge ${bridgedRatio.toFixed(2)}:1 (${name}, needs ${min})`);
+    }
+  }
+  assert.deepEqual(mcpcOffenders, [], 'every .mcpc- text colour clears AA on the panel\'s card, in both themes and through the bridge');
   // The button those reason lines inherit from, as shipped: app.css's .mcp-refresh-btn (--paper on --ink, and through
   // the bridge --og-bg on --og-text) and the reskin's (--og-on-accent on --og-accent-solid, under body.chrome-observa,
   // which every boot adds). Each pair clears AA for the line's 12.5 px text, in both themes.

@@ -446,6 +446,7 @@ test('T3c every feature the shim denies is named in the README 501 list and the 
   // The shim's name → how the two lists spell it (the README abbreviates two of them).
   const spelled = {
     'Refresh from MCP': /Refresh from MCP/, 'Scan a repo': /Scan a repo/, 'Draft from a live MCP server': /Draft from MCP/,
+    'Testing an MCP connection': /Testing an MCP connection/,
     'Uploading a pack': /upload/i, Compare: /Compare/, Deploy: /Deploy/, Journeys: /Journeys/, Build: /Build/,
     Waivers: /Waivers/, Services: /Services \(/, Organisations: /Organisations \(/, Settings: /Settings \(/, 'Sign-in': /sign-in/i,
   };
@@ -747,6 +748,7 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   await expectDenied('/api/crawl', { method: 'POST' }, 'Scan a repo');
   await expectDenied('/api/crawl-github', { method: 'POST' }, 'Scan a repo');
   await expectDenied('/api/draft-from-mcp', { method: 'POST' }, 'Draft from a live MCP server');
+  await expectDenied('/api/mcp/ping', { method: 'POST' }, 'Testing an MCP connection');
   await expectDenied('/api/validate', { method: 'POST' }, 'Uploading a pack');
   await expectDenied('/api/uploads', { method: 'DELETE' }, 'Uploading a pack');
   await expectDenied('/api/diff?a=p&b=p', undefined, 'Compare');
@@ -789,6 +791,8 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   await expectDenied(new Request('https://studio.example/api/refresh-live', { method: 'POST' }), undefined, 'Refresh from MCP');
   await expectDenied(new URL('https://studio.example/api/journeys'), undefined, 'Journeys');
   assert.equal(featureOf('/api/crawl-github'), 'Scan a repo');
+  assert.equal(featureOf('/api/mcp/ping'), 'Testing an MCP connection');
+  assert.equal(featureOf('/api/mcp-endpoints/3'), 'Settings', "'/api/mcp/ping' is no prefix of the endpoints");
   assert.equal(featureOf('/api/packs/x/retrofeed?y'), 'Compare');
   assert.equal(featureOf('/api/packs/x/verdicts/SLI-01'), 'Verdicts');
   assert.equal(featureOf('/api/packs/x/verdicts'), 'Verdicts', 'the feature name; the GET itself is answered before the denial');
@@ -942,6 +946,17 @@ test('T7 the REAL bundle boots in headless Chromium against the fixture pack: th
   assert.equal(denied.status, 501);
   assert.equal(denied.body.denied, 'no-backend');
   assert.match(denied.body.error, /^Refresh from MCP needs the Observogram server/);
+  // The MCP panel's "test connection" (rebadge batch 3, C2): the ping is the
+  // server's, so its status line is the 501 sentence as thrown — no result
+  // block, nothing logged.
+  await page.evaluate(() => document.getElementById('mcp-btn').click());
+  await page.waitForSelector('#mcp-panel:not([hidden])', { timeout: 10_000 });
+  await page.fill('#mcp-url', 'http://127.0.0.1:9/mcp');
+  await page.click('#mcp-refresh-btn');
+  await page.waitForFunction(() => /^error: 501: /.test(document.getElementById('mcp-ping-status')?.textContent || ''), null, { timeout: 10_000 });
+  assert.equal(await page.textContent('#mcp-ping-status'), 'error: 501: Testing an MCP connection needs the Observogram server; this studio is a static bundle built without one.');
+  assert.equal(await page.isHidden('#mcp-ping-result'), true, 'no result block for a ping that did not run');
+  await page.evaluate(() => document.getElementById('mcp-panel-close').click());
   // The pack routes from the page: the shim's answers.
   const conformance = await page.evaluate(async () => (await fetch('/api/packs/payment-service/conformance')).json());
   assert.equal(typeof conformance.scorePercent, 'number');

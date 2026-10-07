@@ -109,7 +109,7 @@
     <input id="crawl-file-input" type="file" multiple webkitdirectory hidden>
     <button id="draft-mcp-btn" class="ctrl-btn" type="button" title="Draft a pack from a live MCP server — interrogate it for backends, baselines, anomalies">new from live</button>
     <button id="export-btn" class="ctrl-btn" type="button" title="Export this pack — the pack.yaml plus every compiled artefact (rules · dashboards · pipelines · routes) as a ZIP" hidden>export</button>
-    <button id="mcp-btn" class="ctrl-btn mcp-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Refresh production-live from an MCP server">
+    <button id="mcp-btn" class="ctrl-btn mcp-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Live MCP connection — test it, rebuild production-live">
       <span class="mcp-dot" aria-hidden="true"></span>
       <span class="mcp-btn-label">mcp</span>
       <span class="mcp-btn-age" id="mcp-btn-age"></span>
@@ -459,7 +459,7 @@
 
 <div class="mcp-panel" id="mcp-panel" role="dialog" aria-labelledby="mcp-panel-title" hidden>
   <div class="mcp-panel-head">
-    <div id="mcp-panel-title" class="mcp-panel-title">Refresh production-live from MCP</div>
+    <div id="mcp-panel-title" class="mcp-panel-title">Live MCP connection</div>
     <button id="mcp-panel-close" class="drawer-close" type="button" aria-label="Close MCP panel">esc</button>
   </div>
   <div class="mcp-panel-body">
@@ -472,8 +472,16 @@
       <input id="mcp-auth" type="password" placeholder="bearer token" autocomplete="off">
     </label>
     <div class="mcp-panel-actions">
-      <button id="mcp-refresh-btn" class="mcp-refresh-btn" type="button">refresh now</button>
-      <span id="mcp-refresh-status" class="mcp-refresh-status"></span>
+      <button id="mcp-refresh-btn" class="mcp-refresh-btn" type="button">test connection</button>
+      <span id="mcp-ping-status" class="mcp-refresh-status" role="status" aria-live="polite"></span>
+    </div>
+    <div id="mcp-ping-result" class="mcpc-result" hidden></div>
+    <div class="mcpc-rebuild">
+      <div class="mcp-panel-actions">
+        <button id="mcp-rebuild-btn" class="ux-secondary-btn" type="button">rebuild production-live</button>
+        <span id="mcp-rebuild-status" class="mcp-refresh-status" role="status" aria-live="polite"></span>
+      </div>
+      <p class="mcpc-note" id="mcp-rebuild-note"></p>
     </div>
     <div class="mcp-panel-status" id="mcp-status-body"></div>
   </div>

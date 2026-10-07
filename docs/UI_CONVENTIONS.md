@@ -110,7 +110,12 @@ when the taxonomy file's v2 `glossary` explains it, `--ux-*` tokens only;
 drawn only with a focused pack id; `.set-*` Settings and its editors in
 `app.css`, under its own `==== Settings` marker the AA scan in
 `tools/test-build-model.mjs` reads, each colour measured on its own
-background and none restyled by `ux.css` / `reskin.css`) — keep new classes
+background and none restyled by `ux.css` / `reskin.css`; `.mcpc-*` the MCP
+panel's live connection — the "test connection" result and the rebuild beside
+it — in `app.css` under its own `==== Live MCP connection` marker after
+Settings, drawn inside the panel's card with no surface of its own, text in
+`--ink` / `--ink-2` / `--ink-3` measured on the card by the same AA scan, every
+MCP-sourced string set as text by `studio/live-view.mjs`) — keep new classes
 inside their zone's prefix. The service audit report's `.ar-*` zone is not a studio stylesheet:
 it is `REPORT_CSS` in `tools/lib/audit-report.mjs`, inlined into one
 standalone document over `design-tokens.css` + `design-kit.css` (it qualifies

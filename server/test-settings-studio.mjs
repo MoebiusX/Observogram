@@ -409,10 +409,16 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await page.evaluate(() => document.getElementById('mcp-btn').click());
       await page.waitForSelector('#mcp-panel:not([hidden]) [data-mcp-target="refresh"] select', { timeout: T });
       assert.deepEqual(await pickerOptions(page, 'refresh'), GW_OPTIONS);
+      // test connection (rebadge batch 3, C2) pings with the id; rebuilding production-live is its own button.
+      const pings = posts(page, /\/api\/mcp\/ping$/);
       await page.click('#mcp-refresh-btn');
-      await page.waitForFunction(() => /^error: /.test(document.getElementById('mcp-refresh-status')?.textContent || ''), null, { timeout: T });
+      await page.waitForFunction(() => /^error: /.test(document.getElementById('mcp-ping-status')?.textContent || ''), null, { timeout: T });
+      assert.deepEqual(pings.at(-1), { mcpEndpointId: gwId }, 'the ping: the id, no mcpUrl');
+      assert.match((await text(page, '#mcp-ping-status')).replace(/^error: 400: /, ''), UNSET);
+      await page.click('#mcp-rebuild-btn');
+      await page.waitForFunction(() => /^error: /.test(document.getElementById('mcp-rebuild-status')?.textContent || ''), null, { timeout: T });
       assert.deepEqual(refreshes.at(-1), { mcpEndpointId: gwId }, 'the id, no mcpUrl');
-      assert.match((await text(page, '#mcp-refresh-status')).replace(/^error: /, ''), UNSET);
+      assert.match((await text(page, '#mcp-rebuild-status')).replace(/^error: /, ''), UNSET);
       await page.evaluate(() => document.getElementById('mcp-panel-close').click());
 
       // The draft panel (A6: no "URL required" guard with an endpoint chosen).

@@ -53,6 +53,9 @@ import {
   buildServiceEditorModel, buildServicePatch, serviceSaveStatus,
 } from './services-model.mjs';
 import { loadOrgs, loadServices, loadService, patchService, verdictLoader, requestJson } from './services-api.mjs';
+import { pingMcp } from './live-api.mjs';
+import { pingResultModel, rebuildNoteText } from './live-model.mjs';
+import { renderPingResult } from './live-view.mjs';
 import { renderNoOrgHome, renderServicesHome, renderServicePage, renderServiceEditor, markUnavailable } from './services-view.mjs';
 import {
   BUILT_SECTIONS, BUILT_EDITORS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsSectionHead, settingsAboveRank,
@@ -1482,7 +1485,7 @@ function installObservaChrome(chrome) {
             </button>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="mcp">
               <span class="observa-adv-item-label">Live MCP connection</span>
-              <span class="observa-adv-item-sub" id="observa-adv-mcp-sub">refresh production-live from an MCP server</span>
+              <span class="observa-adv-item-sub" id="observa-adv-mcp-sub">test it, rebuild production-live</span>
             </button>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="api">
               <span class="observa-adv-item-label">Pack catalogue API</span>
@@ -4901,7 +4904,7 @@ function renderMcpBadge(status) {
   if (!status?.present) {
     btn.dataset.mcpState = 'idle';
     ageEl.textContent = 'idle';
-    btn.title = 'No live pack yet — open to refresh from MCP';
+    btn.title = 'No live pack yet — open to test the MCP connection and rebuild production-live';
     return;
   }
   const stale = status.refreshedAt && (Date.now() - Date.parse(status.refreshedAt) > MCP_STALE_HOURS * 3600_000);
@@ -4931,7 +4934,7 @@ function renderMcpStatusBody(status) {
   const el = $('#mcp-status-body');
   if (!el) return;
   if (!status?.present) {
-    el.innerHTML = '<em>No live pack for this org yet — refresh from an MCP server.</em>';
+    el.innerHTML = '<em>No live pack for this org yet — rebuild production-live from an MCP server.</em>';
     return;
   }
   const rows = [
@@ -5187,6 +5190,7 @@ function pickMcpTarget(container, value) {
   if (!MCP_PICKERS[id]) return;
   applyMcpTargetChoice(id, mcpPickerModel(id, value));
   if (id === 'deploy') updateDeployTargetSummary();
+  if (id === 'refresh') clearPingResult();
   if (value === '') document.getElementById(MCP_PICKERS[id].url)?.focus();
 }
 
@@ -5221,6 +5225,52 @@ function closeMcpPanel() {
   if (btn) btn.setAttribute('aria-expanded', 'false');
 }
 
+// ---------- the MCP panel: test the connection; rebuilding production-live is its own action ----------
+//
+// "test connection" (#mcp-refresh-btn — the id a habit or a script clicks as
+// a connectivity check) pings: POST /api/mcp/ping with the picker's target,
+// which writes no live pack and no pack (rebadge batch 3, C2). The result
+// block (studio/live-view.mjs over pingResultModel) says what was checked
+// and what was not; any change to the picker or the auth field clears it,
+// so a result never describes a target other than the one shown.
+// "rebuild production-live" (#mcp-rebuild-btn) is the explicit, separate
+// action that reads every family again and rewrites the live pack.
+
+function clearPingResult() {
+  renderPingResult($('#mcp-ping-result'), null);
+  setPingStatus('');
+}
+
+function setPingStatus(msg, kind = '') {
+  const el = $('#mcp-ping-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
+}
+
+async function pingFromPanel() {
+  const { body: target } = mcpTargetOf('refresh');
+  renderPingResult($('#mcp-ping-result'), null);
+  if (!target) {
+    setPingStatus(mcpTargetMissing('refresh'), 'error');
+    return;
+  }
+  const btn = $('#mcp-refresh-btn');
+  btn.disabled = true;
+  setPingStatus('testing the connection…');
+  try {
+    const model = pingResultModel(await pingMcp(target));
+    if (!model) { setPingStatus('error: the server sent no ping result', 'error'); return; }
+    setPingStatus(model.status, model.tone === 'ok' ? 'ok' : 'error');
+    renderPingResult($('#mcp-ping-result'), model);
+  } catch (e) {
+    // The server's refusal (400 / 403 / 502), or the bundle's 501 sentence.
+    setPingStatus(`error: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function refreshLive() {
   const { body: target, chosen } = mcpTargetOf('refresh');
   if (!target) {
@@ -5229,7 +5279,7 @@ async function refreshLive() {
   }
   // A typed URL is remembered (its safe form); an endpoint's choice is, on success.
   const dropped = target.mcpUrl ? await rememberMcpUrl(target.mcpUrl).catch(() => []) : [];
-  const btn = $('#mcp-refresh-btn');
+  const btn = $('#mcp-rebuild-btn');
   btn.disabled = true;
   $('#mcp-btn').dataset.mcpState = 'active';
   setRefreshStatus('contacting mcp…');
@@ -5280,17 +5330,11 @@ async function refreshLive() {
     renderMcpBadge(state.mcpStatus);
     renderMcpStatusBody(state.mcpStatus);
     toast('Live pack refreshed');
-    // If the user is currently viewing production-live, reload it so the
-    // adapter projection updates.
-    if (state.selectedPackId === 'production-live') {
-      await refresh();
-    } else {
-      // Refresh the catalog so the production-live entry's ok-state updates.
-      await refreshCatalogue();
-      renderServiceSelect();
-      renderPackSelect();
-      renderPackBSelect();
-    }
+    // Refresh the catalog so the production-live entry's ok-state updates.
+    await refreshCatalogue();
+    renderServiceSelect();
+    renderPackSelect();
+    renderPackBSelect();
   } catch (e) {
     setRefreshStatus(`error: ${e.message}`, 'error');
     $('#mcp-btn').dataset.mcpState = 'error';
@@ -5300,7 +5344,7 @@ async function refreshLive() {
 }
 
 function setRefreshStatus(msg, kind = '') {
-  const el = $('#mcp-refresh-status');
+  const el = $('#mcp-rebuild-status');
   if (!el) return;
   el.textContent = msg;
   el.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
@@ -7030,7 +7074,12 @@ function setupMcpPanel() {
     if (open) closeMcpPanel(); else openMcpPanel();
   };
   $('#mcp-panel-close').onclick = closeMcpPanel;
-  $('#mcp-refresh-btn').onclick = refreshLive;
+  $('#mcp-refresh-btn').onclick = pingFromPanel;
+  $('#mcp-rebuild-btn').onclick = refreshLive;
+  const note = $('#mcp-rebuild-note');
+  if (note) note.textContent = rebuildNoteText();
+  // A result never describes a target other than the one shown.
+  for (const id of ['#mcp-url', '#mcp-auth']) $(id)?.addEventListener('input', clearPingResult);
 
   // Close on outside click
   document.addEventListener('click', (e) => {

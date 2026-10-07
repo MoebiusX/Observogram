@@ -9709,3 +9709,22 @@ select.build-edit-input { appearance: auto; }
   .set-editor, .set-editor-scrim, .set-nav-item, .set-row { transition: none; animation: none; }
   .set-editor-close, .set-editor-seg-btn, .set-editor-field input, .set-editor-field textarea, .set-editor-field select { transition: none; }
 }
+
+/* ==== Live MCP connection (rebadge batch 3, C2): the MCP panel's "test connection" result and the rebuild beside
+   it, drawn inside the panel's card — no surface of its own, hairlines only; text in --ink / --ink-2 / --ink-3
+   only; a state is a word (connected, refused, unreachable, timed out, not an MCP server), never colour alone.
+   ux.css and reskin.css restyle no .mcpc- rule (asserted with the AA scan in tools/test-build-model.mjs). ==== */
+.mcpc-result { margin-top: 10px; font: 13px/1.45 var(--mono); color: var(--ink-2); overflow-wrap: anywhere; }
+.mcpc-result[hidden] { display: none; }
+.mcpc-sentence { margin: 0 0 6px; font: 13.5px/1.45 var(--sans); color: var(--ink); }
+.mcpc-meta { margin: 0 0 4px; font: 12.5px/1.45 var(--mono); color: var(--ink-3); }
+.mcpc-reads { list-style: none; margin: 6px 0; padding: 0; display: grid; gap: 2px; }
+.mcpc-read { font: 12.5px/1.45 var(--mono); color: var(--ink-2); }
+.mcpc-read-label { color: var(--ink-3); }
+.mcpc-tool { font: 12.5px/1.45 var(--mono); color: var(--ink); }
+.mcpc-gaps { margin: 6px 0; font: 12.5px/1.45 var(--mono); color: var(--ink-2); }
+.mcpc-unchecked { margin-top: 6px; }
+.mcpc-unchecked-summary { cursor: pointer; font: 12.5px/1.45 var(--mono); color: var(--ink-2); }
+.mcpc-lines { margin: 4px 0 6px; padding-left: 18px; font: 12.5px/1.45 var(--mono); color: var(--ink-2); }
+.mcpc-rebuild { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.mcpc-note { margin: 6px 0 0; font: 12.5px/1.45 var(--mono); color: var(--ink-3); }
