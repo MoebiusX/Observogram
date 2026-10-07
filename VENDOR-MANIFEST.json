@@ -560,6 +560,28 @@
       "npm": [],
       "changedSinceRelease": false
     },
+    "tools/lib/identity-modes.mjs": {
+      "sha256": "6b6bad523bf2c58c7438b0eecf32c14805255a6296c9e1619e471b519926b3d3",
+      "bytes": 10442,
+      "exports": [
+        "DEFAULT_IDENTITY_MODE",
+        "IDENTITY_MODES",
+        "idKeyOf",
+        "idOf",
+        "identityFamilies",
+        "identityMode",
+        "nameKeyOf",
+        "nameOf",
+        "pairingOf"
+      ],
+      "imports": [
+        "tools/lib/artefact-classify.mjs",
+        "tools/lib/artefact-model.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
     "tools/lib/inventory-coverage.mjs": {
       "sha256": "075cf2a9c79e98432a043c94596179c52882926ebbf828a5ffb584d07054f476",
       "bytes": 16614,

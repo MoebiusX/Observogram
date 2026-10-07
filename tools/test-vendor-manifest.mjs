@@ -36,7 +36,7 @@ const EXPECTED_MODULES = [
   'tools/lib/backend-products.mjs', 'tools/lib/blast-radius.mjs', 'tools/lib/brand.mjs', 'tools/lib/burn-rules.mjs', 'tools/lib/chain-history.mjs',
   'tools/lib/compile.mjs', 'tools/lib/conformance.mjs', 'tools/lib/contracts/mcp-capabilities.mjs',
   'tools/lib/contracts/response-shapes.mjs', 'tools/lib/contracts/stack-self-metrics.mjs', 'tools/lib/crawler.mjs',
-  'tools/lib/dashboards/generic.mjs', 'tools/lib/dashboards/lib.mjs', 'tools/lib/diff.mjs', 'tools/lib/good-when.mjs',
+  'tools/lib/dashboards/generic.mjs', 'tools/lib/dashboards/lib.mjs', 'tools/lib/diff.mjs', 'tools/lib/good-when.mjs', 'tools/lib/identity-modes.mjs',
   'tools/lib/inventory-coverage.mjs', 'tools/lib/journey-notify.mjs', 'tools/lib/l2x.mjs', 'tools/lib/legacy.mjs',
   'tools/lib/library.mjs', 'tools/lib/live-fetch.mjs', 'tools/lib/mcp-client.mjs', 'tools/lib/mcp-url-safety.mjs', 'tools/lib/mini-yaml.mjs', 'tools/lib/neuron-model.mjs',
   'tools/lib/pack-conformance.mjs', 'tools/lib/profiles.mjs', 'tools/lib/promql-canon.mjs', 'tools/lib/promql-lezer.mjs', 'tools/lib/promql.mjs',
