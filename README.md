@@ -1028,6 +1028,7 @@ written the same way, after the answer is known.
 | `POST /api/journeys/:name/run` | `journey.run` | the journey name | `{ startedAt, outcome, alignmentPct, gradeScore, gradePass, breaches, tookMs }` — **one row per attempt past the 404** (and past a refused Pack B MCP target, which writes none): a run that fails from the studio leaves a row with `outcome: "error"`, or `"vantage-lost"` when a live source lost its vantage (the engine wrote a run record and may have notified), the four record fields `null`; never the error's message |
 | `POST /api/refresh-live` | `live.refresh` | the MCP origin | `{ mcpEndpoint, refreshedAt, servicesDiscovered, toolsFailed }` (counts) |
 | `POST /api/mcp/ping` | `live.ping` | the MCP origin | `{ verdict, typed: true }` — only when the caller typed the URL (an admin's privilege); a ping by `mcpEndpointId` writes no row |
+| `POST /api/mcp/jobs` (and its `…/cancel`) | `live.fetch` | the MCP origin | `{ kind, outcome: done \| failed \| cancelled, typed, mcpEndpoint, jobId, packId, stages: { done, skipped, failed }, gaps: [stage ids] }` — one row when the job ends, whether or not it registered a pack (whose own rows come first) |
 
 When one of the two writes fails: the operation stands. A row the store
 refused (a blocked insert, a `detail` over 8192 characters) puts
@@ -2543,8 +2544,8 @@ route is `operator` (the live MCP API: a server-side request to an MCP
 target, so without sign-in it answers only a request sent straight to a
 loopback address, it is closed on an exposed server without sign-in, and
 every request takes the `X-Observogram-CSRF: 1` header but the bearer
-token's — `POST /api/draft-from-mcp` and `POST /api/refresh-live` take the
-same posture); every other `GET` is `viewer` and every other route `operator`.
+token's; a live job's gate log is its starter's — `POST /api/draft-from-mcp`
+and `POST /api/refresh-live` take the same posture); every other `GET` is `viewer` and every other route `operator`.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -2588,6 +2589,10 @@ same posture); every other `GET` is `viewer` and every other route `operator`.
 | `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file (a live Pack B as the org's registered endpoint, `mcp: { url, endpointId }`; an unregistered URL kept for an admin, else a file); an audit row: `journey.capture` |
 | `POST` | `/api/refresh-live` | Fetch the org's live pack from an MCP endpoint (`mcpEndpointId`, or a typed `mcpUrl`: the admin role); an audit row: `live.refresh`. The live MCP API's posture, as the draft's |
 | `POST` | `/api/mcp/ping` | Test an MCP connection without building a pack (rebadge batch 3): `{ mcpEndpointId }` (the endpoint's read token rides as a draft's would; `mcpAuth` overrides it) or a typed `mcpUrl` (the admin role). `initialize`, the whole `tools/list` and one cheap read, within 10 s; answers `{ ok, verdict, origin, mcpEndpoint, reachable, auth: { outcome, sent }, tools: { count, capabilities, unmatched, complete }, read, timings, sentence, checked, notChecked }` — `verdict` one of `connected`, `auth-refused`, `unreachable`, `timeout`, `not-mcp`; 200 whenever the ping ran, 400 / 403 for the target, 502 a transport hook fault. Writes no live file and no pack; an audit row `live.ping` only for a typed URL |
+| `GET` | `/api/mcp/jobs` | The live jobs' context in this org (rebadge batch 3): `{ ok, scope: { defaults: { metricPrefixes, folderUids, datasourceUid }, from: org \| deployment \| null, errors }, running, lastTook: { snapshot, draft } }` — the snapshot scope the server is configured with (`OBSERVOGRAM_SNAPSHOT_*`, or the org's `OBSERVOGRAM_ORG_<ORG>_SNAPSHOT_*`), your own running job here (`null` otherwise), how long the org's last finished snapshot and draft took (ms) |
+| `POST` | `/api/mcp/jobs` | Start a live job: `{ kind: snapshot \| draft, mcpEndpointId \| mcpUrl, mcpAuth?, scope?, packName?, label? }` — the target as for a draft (a typed `mcpUrl` is the admin role's); `scope` (`metricPrefixes`, `folderUids`, `datasourceUid`) is a snapshot's and replaces the configured one. Answers **202** `{ ok, job, poll }` with `Location` at once; the job registers the pack when it ends (`live: 'snapshot'` or `'scaffold'` in `GET /api/packs`). One running job per org, four in the server (409, naming who started it); a label held by a pack of the other live kind is a 409; in memory — a restart loses running and finished jobs. Audit rows: the pack's when it registers, and `live.fetch` at every end |
+| `GET` | `/api/mcp/jobs/:jobId?since=` | Your job's gate log: `{ ok, job, stages, next, result?, error? }` — the stage records after the cursor `since` (send `next` back), each `{ seq, stage, label, state, counts, startedAt, finishedAt, message, gap }`; at the end `result` (`registered`, `validation`, `counts`, `gaps`, `tookMs`, a draft's `draft` summary) or `error`. Another member's job, another org's, one that expired (15 minutes after it ended) or that a restart lost: 404 `{ gone: true }` |
+| `POST` | `/api/mcp/jobs/:jobId/cancel` | Stop a running job (its starter, or an admin of the org — who gets `{ id, state }` and never the gate log): it ends `cancelled`, nothing registered; 409 once it has ended |
 | `GET` | `/api/services` | The org's service records, by slug, each with its environments (their MCP endpoint as `{ id, name, origin }`) and the packs linked to it (`id`, `label`, `source`, `role`) |
 | `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack) |
 | `GET` | `/api/services/:id` | One service record with its environments and packs |

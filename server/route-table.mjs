@@ -158,6 +158,15 @@ export const ROUTES = Object.freeze({
   // The ping (server/routes/live.mjs): initialize, tools/list and one read;
   // it writes nothing but a typed URL's row (an admin's privilege, R4).
   'POST /api/mcp/ping': { class: 'operator', ...LIVE, csrf: 'always', audit: ['live.ping'] },
+  // The live jobs (server/routes/live.mjs, server/live-jobs.mjs): a snapshot
+  // or a draft as a job, its gate log read by its starter only. The start
+  // registers the pack (when the job ends) and writes a live.fetch row at
+  // every end; the cancel's live.fetch is the row the job writes when the
+  // cancel ends it.
+  'GET /api/mcp/jobs': { class: 'operator', ...LIVE },
+  'POST /api/mcp/jobs': { class: 'operator', ...LIVE, csrf: 'always', audit: [...PACK_REGISTER, 'live.fetch'] },
+  'GET /api/mcp/jobs/:jobId': { class: 'operator', ...LIVE },
+  'POST /api/mcp/jobs/:jobId/cancel': { class: 'operator', ...LIVE, csrf: 'always', audit: ['live.fetch'] },
   'POST /api/crawl': { class: 'operator', audit: PACK_REGISTER },
   'POST /api/crawl-github': { class: 'operator', audit: PACK_REGISTER },
   'POST /api/validate': { class: 'operator', audit: PACK_REGISTER },

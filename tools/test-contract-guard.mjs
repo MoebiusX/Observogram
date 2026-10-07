@@ -46,11 +46,11 @@ const { assert, report } = createHarness({ indent: '  ', truncate: 160 });
 
 // The recorder verifies the registry against a live server, so it must
 // not carry a second copy of any name either.
-const GUARDED_FILES = ['tools/fetch-live-pack.mjs', 'tools/record-mcp-fixtures.mjs', 'tools/lib/mcp-client.mjs', 'server/routes/live.mjs', 'tools/lib/live-fetch.mjs'];
+const GUARDED_FILES = ['tools/fetch-live-pack.mjs', 'tools/record-mcp-fixtures.mjs', 'tools/lib/mcp-client.mjs', 'server/routes/live.mjs', 'server/live-jobs.mjs', 'tools/lib/live-fetch.mjs'];
 // The live MCP API's own files (rebadge batch 3) spell no tool name at all:
 // not at a call site, not anywhere — every name they report comes from the
 // MCP's answer through the registry's mapping (capabilityInventory).
-const SPELLS_NO_TOOL_NAME = ['server/routes/live.mjs'];
+const SPELLS_NO_TOOL_NAME = ['server/routes/live.mjs', 'server/live-jobs.mjs'];
 // tools/lib/live-fetch.mjs names the CAPABILITY ids each stage reads, and five
 // capability ids are also the name of their one candidate (system_health …):
 // there a literal may equal a capability id, and nothing else a tool is called.

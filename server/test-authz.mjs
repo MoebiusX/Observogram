@@ -952,6 +952,10 @@ const EXPECTED_CLASS = Object.freeze({
   'POST /api/draft-from-mcp': 'operator',
   'POST /api/refresh-live': 'operator',
   'POST /api/mcp/ping': 'operator',
+  'GET /api/mcp/jobs': 'operator',
+  'POST /api/mcp/jobs': 'operator',
+  'GET /api/mcp/jobs/:jobId': 'operator',
+  'POST /api/mcp/jobs/:jobId/cancel': 'operator',
   'POST /api/crawl': 'operator',
   'POST /api/crawl-github': 'operator',
   'POST /api/validate': 'operator',
@@ -1012,7 +1016,10 @@ const EXPECTED_AUDIT_API = Object.freeze(['GET /api/audit']);
 // machine, closed when exposed, the CSRF header on every request.
 // The draft and the refresh join it (D7): one posture for every
 // server-side MCP request.
-const EXPECTED_LIVE_MCP = Object.freeze(['POST /api/mcp/ping', 'POST /api/draft-from-mcp', 'POST /api/refresh-live']);
+const EXPECTED_LIVE_MCP = Object.freeze([
+  'POST /api/mcp/ping', 'GET /api/mcp/jobs', 'POST /api/mcp/jobs', 'GET /api/mcp/jobs/:jobId', 'POST /api/mcp/jobs/:jobId/cancel',
+  'POST /api/draft-from-mcp', 'POST /api/refresh-live',
+]);
 // How each direct entry outside the identity API is named by the posture
 // refusals; every other direct entry is 'the identity API'.
 const CLOSED_AS = Object.freeze({ 'the MCP endpoint API': EXPECTED_MCP_ENDPOINT_CHANGES, 'the audit API': EXPECTED_AUDIT_API, 'the live MCP API': EXPECTED_LIVE_MCP });
@@ -1452,6 +1459,13 @@ const PROBES = Object.freeze({
   // The live MCP API (rebadge batch 3): no target named → 400 before any
   // wire call; nothing is written.
   'POST /api/mcp/ping': ['POST', '/api/mcp/ping'],
+  // The live jobs: the list (the caller's own running job, none here), a
+  // start without a kind (400, nothing started), an unknown id (404, no
+  // `denied`) for the poll and the cancel.
+  'GET /api/mcp/jobs': ['GET', '/api/mcp/jobs'],
+  'POST /api/mcp/jobs': ['POST', '/api/mcp/jobs'],
+  'GET /api/mcp/jobs/:jobId': ['GET', '/api/mcp/jobs/nope'],
+  'POST /api/mcp/jobs/:jobId/cancel': ['POST', '/api/mcp/jobs/nope/cancel'],
   // The admin routes: invalid bodies, and a user id that is no member (the
   // PATCH names a valid role, so the membership is what it answers).
   'PATCH /api/org': ['PATCH', '/api/org'],
@@ -1556,7 +1570,7 @@ async function auditSeq(ws) {
 // The case rows (the /API/… regression of C1): never a JSON 2xx.
 const CASE_PROBES = [
   ['GET', '/API/live-status'], ['GET', '/Api/deploy/matrix'], ['POST', '/API/validate'], ['DELETE', '/API/uploads'],
-  ['POST', '/API/refresh-live'], ['POST', '/API/deploys/x/verify'], ['POST', '/API/mcp/ping'],
+  ['POST', '/API/refresh-live'], ['POST', '/API/deploys/x/verify'], ['POST', '/API/mcp/ping'], ['GET', '/API/mcp/jobs'],
 ];
 async function caseRows(base, headers = {}) {
   const bad = [];
@@ -2047,7 +2061,8 @@ for (const posture of OPEN) {
         // The live MCP API (the ping; the draft and the refresh, D7) to a
         // request that did not come straight to loopback: refused, naming the
         // studio and the fetcher that needs no server; without the header, the
-        // CSRF refusal that says requests.
+        // CSRF refusal that says requests — a read (the live jobs' GETs) takes
+        // no header, as every GET.
         for (const key of EXPECTED_LIVE_MCP) {
           const live = await call(srv.base, PROBES[key], { headers: { ...CSRF_HEADER, 'X-Forwarded-For': '203.0.113.9' }, raw: true });
           assert.deepEqual([live.status, live.json.denied, live.json.error], [403, 'posture',
@@ -2055,6 +2070,7 @@ for (const posture of OPEN) {
             + `no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${port}, `
             + 'or fetch without the server from this machine with node tools/fetch-live-pack.mjs (MCP_URL, OUTPUT)'], key);
           const bare = await call(srv.base, PROBES[key]);
+          if (key.startsWith('GET ')) { assert.equal(bare.json.denied, undefined, `${key}: a read without the header answers`); continue; }
           assert.deepEqual([bare.status, bare.json.denied, bare.json.error], [403, 'csrf',
             "missing X-Observogram-CSRF: 1 — requests to the live MCP API need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')"], key);
         }
