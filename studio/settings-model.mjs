@@ -360,14 +360,17 @@ const membershipsOf = (identity) => (isArr(identity?.orgs) ? identity.orgs : [])
 const signedInOwner = (identity) => identity?.authenticated === true && identity?.user?.owner === true;
 
 // The org this browser sends at boot (`identity` the /auth/me body, `saved`
-// the persisted choice): the saved one when it is a membership — or, for a
-// signed-in owner, whatever it is (the server is the check: an org removed
-// since is refused, and the boot recovers once — actingRecovery); else the
-// first membership; else none (the open posture, or an owner in no org:
-// the server lands the request in the default org).
-export function activeOrgChoice({ identity = null, saved = null } = {}) {
+// the persisted choice, `savedBy` the login that saved it): the saved one
+// when it is a membership — or, for a signed-in owner, whatever this owner
+// saved (the server is the check: an org removed since is refused, and the
+// boot recovers once — actingRecovery; an org another login chose on this
+// browser is never inherited); else the first membership; else none (the
+// open posture, or an owner in no org: the server lands the request in the
+// default org).
+export function activeOrgChoice({ identity = null, saved = null, savedBy = null } = {}) {
   const orgs = membershipsOf(identity);
-  if (saved && (orgs.some((o) => o.id === saved) || signedInOwner(identity))) return saved;
+  if (saved && orgs.some((o) => o.id === saved)) return saved;
+  if (saved && signedInOwner(identity) && savedBy && savedBy === identity.user?.login) return saved;
   return orgs[0]?.id ?? null;
 }
 

@@ -1551,9 +1551,14 @@ test('an owner acting in an org they are not a member of (D-M): the boot keeps i
   // activeOrgChoice: a membership kept for anyone; a non-membership kept for an owner only (6a A-17 unchanged otherwise).
   assert.equal(activeOrgChoice({ identity: member, saved: 'bravo' }), 'bravo');
   assert.equal(activeOrgChoice({ identity: member, saved: 'delta' }), 'acme', 'a member: the first membership');
-  assert.equal(activeOrgChoice({ identity: owner, saved: 'delta' }), 'delta', 'an owner keeps an org they are not a member of');
+  assert.equal(activeOrgChoice({ identity: owner, saved: 'delta', savedBy: 'olive' }), 'delta', 'an owner keeps an org they are not a member of');
   assert.equal(activeOrgChoice({ identity: owner, saved: null }), 'acme');
-  assert.equal(activeOrgChoice({ identity: { ...me('olive', true), orgs: [] }, saved: 'delta' }), 'delta', 'an owner in no org');
+  assert.equal(activeOrgChoice({ identity: { ...me('olive', true), orgs: [] }, saved: 'delta', savedBy: 'olive' }), 'delta', 'an owner in no org');
+  // A shared browser: an org another login chose is never inherited by an owner who is not its member.
+  assert.equal(activeOrgChoice({ identity: owner, saved: 'delta', savedBy: 'ada' }), 'acme', 'another login\'s choice: the first membership');
+  assert.equal(activeOrgChoice({ identity: owner, saved: 'delta' }), 'acme', 'a choice saved by no login: the first membership');
+  assert.equal(activeOrgChoice({ identity: { ...me('olive', true), orgs: [] }, saved: 'delta', savedBy: 'ada' }), null, 'an owner in no org: the server lands the request in the default org');
+  assert.equal(activeOrgChoice({ identity: member, saved: 'bravo', savedBy: 'olive' }), 'bravo', 'a membership is kept whoever saved it');
   assert.equal(activeOrgChoice({ identity: { ...me('olive', true), orgs: [] }, saved: null }), null, 'none: the server lands the owner in the default org');
   assert.equal(activeOrgChoice({ identity: { ...me('ada'), orgs: [] }, saved: 'delta' }), null);
   assert.equal(activeOrgChoice({ identity: null, saved: 'delta' }), null, 'the open posture sends no org');

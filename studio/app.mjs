@@ -16,7 +16,7 @@ import {
 } from './constants.mjs';
 import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } from './state.mjs';
 import {
-  api, loadCatalog, loadTaxonomy, validateUploaded, registeredOrValidated, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError, deployRefusal,
+  api, loadCatalog, loadTaxonomy, validateUploaded, registeredOrValidated, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, savedOrgBy, orgChipModel, deniedError, deployRefusal,
   setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls, signOutOthersText, recallMcpEndpoint, rememberMcpEndpoint,
   rememberLiveJob, recallLiveJob, forgetLiveJob,
   loadDeployProfiles, storeDeployProfile, removeDeployProfile,
@@ -7645,13 +7645,14 @@ async function loadIdentity() {
 // Stage 2 tenancy: pick the active org from the session's memberships
 // (/auth/me carries them in every identity posture) — the persisted choice
 // when still valid, the first membership otherwise; an owner keeps a
-// persisted org they are not a member of (acting in it, design §3.5 D-M —
-// the server is the check, and the boot recovers once when it refuses).
+// persisted org they are not a member of when they persisted it (acting in
+// it, design §3.5 D-M; never one another login chose on this browser). The
+// server is the check, and the boot recovers once when it refuses.
 // Without memberships (the open posture) no org header is sent: the server
 // runs the request in the default org. The header is sent whatever the ORG
 // chip shows.
 function resolveActiveOrg() {
-  setActiveOrg(activeOrgChoice({ identity: state.identity, saved: savedOrg() }));
+  setActiveOrg(activeOrgChoice({ identity: state.identity, saved: savedOrg(), savedBy: savedOrgBy() }));
 }
 
 // The boot's one-time recovery from an acting org the server refuses (an

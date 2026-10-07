@@ -1071,7 +1071,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       assert.equal(await page.evaluate(() => localStorage.getItem('studioOrg.v1')), 'acme');
       assert.equal(await page.evaluate(() => document.querySelector('.observa-org-select')?.value), 'acme');
       // Acting in delta again; then delta is removed elsewhere: the boot recovers once, into a membership.
-      await page.evaluate(() => localStorage.setItem('studioOrg.v1', 'delta'));
+      await page.evaluate(() => { localStorage.setItem('studioOrg.v1', 'delta'); localStorage.setItem('studioOrgBy.v1', 'olive'); });
       await page.reload();
       await page.waitForFunction(() => document.querySelector('.observa-org-select')?.value === 'delta', null, { timeout: 30_000 });
       assert.equal((await call('olive', 'DELETE', '/api/admin/orgs/delta')).status, 200);
@@ -1079,6 +1079,21 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await page.waitForFunction(() => document.body.dataset.mode && localStorage.getItem('studioOrg.v1') && localStorage.getItem('studioOrg.v1') !== 'delta', null, { timeout: 30_000 });
       await page.waitForFunction(() => sessionStorage.getItem('studioActingRecovery.v1') === null, null, { timeout: 30_000 });
       assert.ok(['default', 'acme'].includes(await page.evaluate(() => localStorage.getItem('studioOrg.v1'))), 'one of her memberships');
+    } finally { await ctx.close(); }
+  });
+
+  await t.test('a shared browser: olive (an owner, not in bravo) signing in after ada (who chose bravo) lands in one of her own memberships, not acting in bravo', async () => {
+    const { page, ctx } = await open(child.base, 'ada');
+    try {
+      await page.waitForFunction(() => localStorage.getItem('studioOrg.v1') === 'bravo', null, { timeout: T });
+      await ctx.clearCookies();
+      await ctx.addCookies([{ name: 'observogram_session', value: (await cookieFor('olive')).split('=')[1], url: child.base }]);
+      await page.reload();
+      await page.waitForFunction(() => document.body.dataset.mode && document.querySelector('.observa-org-select'), null, { timeout: 30_000 });
+      const org = await page.evaluate(() => localStorage.getItem('studioOrg.v1'));
+      assert.ok(['default', 'acme'].includes(org), `one of her memberships, not ada's bravo: ${org}`);
+      assert.equal(await page.evaluate(() => localStorage.getItem('studioOrgBy.v1')), 'olive');
+      assert.ok(!(await text(page, '.observa-org-select')).includes('acting as owner'), 'no acting org she never chose');
     } finally { await ctx.close(); }
   });
 

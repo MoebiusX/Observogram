@@ -844,7 +844,7 @@ test('deploy target profiles keep no credential: per user, stripped like the rem
     assert.ok(!store.has('mcpEndpoint.v1:ada:acme'), 'a typed URL used: the choice is forgotten');
     rememberMcpEndpoint(3);
     forgetMcpUrls('ada');
-    assert.deepEqual([...store.keys()].sort(), ['mcpEndpoint.v1:bob:acme', 'mcpUrl.v2:bob:acme', 'studioOrg.v1', 'studioTheme'], "ada's remembered URLs and endpoints go, in every org; bob's stay");
+    assert.deepEqual([...store.keys()].sort(), ['mcpEndpoint.v1:bob:acme', 'mcpUrl.v2:bob:acme', 'studioOrg.v1', 'studioOrgBy.v1', 'studioTheme'], "ada's remembered URLs and endpoints go, in every org; bob's stay");
   } finally {
     setActiveOrg(null);
     setSignedInLogin(null);
