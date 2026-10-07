@@ -5,7 +5,8 @@
 // startFakeMcp(toolNames, handler, { echo }) is a plain node:http server on
 // 127.0.0.1 that speaks the MCP JSON-RPC methods the fetcher and the deploy
 // routes send: initialize, tools/list (the names given) and tools/call
-// (`handler(name, args)` answers when given; the default echoes { ok, name },
+// (`handler(name, args)` answers when given — an answer `{ __isError: text }`
+// is a tool error result carrying that text; the default echoes { ok, name },
 // enough for the deploy path, whose tools return opaque ids). It records
 // every tools/call's params (`calls`) and every request's Authorization
 // header (`authHeaders`, null when none). Two test seams:
@@ -75,6 +76,7 @@ export async function startFakeMcp(toolNames, handler = null, { echo = null } = 
       if (echo === 'rpc') { reply({ error: { code: -32001, message: echoed } }); return; }
       if (echo === 'tool') { send({ isError: true, content: [{ type: 'text', text: echoed }] }); return; }
       const answer = handler ? handler(msg.params?.name, msg.params?.arguments || {}) : { ok: true, name: msg.params?.name };
+      if (typeof answer?.__isError === 'string') { send({ isError: true, content: [{ type: 'text', text: answer.__isError }] }); return; }
       send({ content: [{ type: 'text', text: JSON.stringify(answer) }] });
       return;
     }

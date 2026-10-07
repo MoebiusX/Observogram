@@ -15,6 +15,7 @@ import { LAYER_DEFS, LAYER_NAMES, L4_SUBGROUPS } from './constants.mjs';
 import { openDrawer } from './drawer.mjs';
 import { defaultEnvFor, refresh } from './app.mjs';
 import { host as appHost } from './host.mjs';
+import { liveKindSuffix, liveChipText } from './live-model.mjs';
 import { cardKey } from './layers-view.mjs';
 import { diffEntryLabel, deploySelectionFromEntries, deploySurfaceForArtefact, prettyDiffKey } from './artifact-model.mjs';
 import {
@@ -2560,14 +2561,24 @@ function uploadedSourceHint(p) {
 function packOptionLabel(p) {
   const version = p.version || '?';
   const source = uploadedSourceHint(p);
-  return `${p.label || p.id} · v${version}${source ? ` · from ${source}` : ''}`;
+  return `${p.label || p.id}${liveKindSuffix(p)} · v${version}${source ? ` · from ${source}` : ''}`;
+}
+
+// The chip under a live pack's name (rebadge batch 3, C1): a scaffold is
+// never presented as a snapshot. The snapshot's origin and time are its own
+// annotations (a provenance claim, as every annotation).
+function liveChipOf(entry, pack) {
+  const ann = pack?.meta?.annotations ?? {};
+  let source = null;
+  try { source = JSON.parse(ann['observogram.live.source'] ?? 'null'); } catch { /* not JSON: no origin to name */ }
+  return liveChipText(entry?.live ?? null, { origin: source?.origin ?? null, at: ann['mcp.refreshedAt'] ?? null });
 }
 
 function renderComparePackHeader(side, pack, diffMeta) {
   const card = document.createElement('div');
   card.className = `compare-pack-card compare-pack-card-${side}`;
   const tier = pack?.meta?.criticality || '?';
-  const sourcePill = inferPackSource(pack);   // 'Repo' | 'Live' | 'Target' | 'Pack'
+  const sourcePill = inferPackSource(pack, catalogEntryFor(side === 'a' ? state.selectedPackId : state.compareBId));   // 'Repo' | 'Live' | 'Target' | 'Pack'
   // Artefact count: sum across all layers (L4 has sub-buckets).
   let count = 0;
   for (const L of LAYERS_FOR_DIFF) {
@@ -2618,6 +2629,7 @@ function renderComparePackHeader(side, pack, diffMeta) {
       <span class="cpc-source-pill" data-source="${escapeHtml(sourcePill)}">${escapeHtml(sourcePill)}</span>
       <span class="cpc-name" title="catalog label">${escapeHtml(displayLabel)}</span>
     </div>
+    ${liveChipOf(catalogEntry, pack) ? `<p class="cpc-live-chip" data-live="${escapeHtml(catalogEntry.live)}">${escapeHtml(liveChipOf(catalogEntry, pack))}</p>` : ''}
     <div class="cpc-meta">
       <span class="cpc-meta-pill" data-tier="${escapeHtml(tierResolved)}">${escapeHtml(tierResolved)}</span>
       <span class="cpc-meta-pill">v${escapeHtml(versionResolved)}</span>
@@ -2894,9 +2906,11 @@ function renderCoveragePopoverBody(pack) {
   `;
 }
 
-function inferPackSource(pack) {
+function inferPackSource(pack, entry = null) {
   // The studio's source taxonomy is per-artefact, not per-pack. We
-  // infer the pack-level label from id + dominant artefact source.
+  // infer the pack-level label from id + dominant artefact source —
+  // after what the catalogue says of a live pack (its `live` kind).
+  if (entry?.live) return 'Live';
   if (!pack) return 'Pack';
   const id = (pack.id || '').toLowerCase();
   if (id.includes('live'))     return 'Live';

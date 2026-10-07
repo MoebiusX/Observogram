@@ -1804,7 +1804,7 @@ manifest, Compile (the catalogue, every artefact, every target) and **Export**
 server; `GET /api/packs/:id/verdicts` answers the empty document — a
 bundled pack is never registered, so that IS the server's answer). Everything
 the server alone can do — Scan a repo, Draft from MCP, Refresh from MCP,
-Testing an MCP connection, uploads, Compare, Deploy, Journeys, Build, recording a Verdict, Waivers (they
+Testing an MCP connection, Building a pack from a live MCP server, uploads, Compare, Deploy, Journeys, Build, recording a Verdict, Waivers (they
 live on a service record, which a bundled pack has none of), the Audit report
 (its goes-blind section needs the PromQL parser the bundle cannot inline),
 Services (the records behind the home's cards and the service page — a bundle

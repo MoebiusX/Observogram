@@ -2,7 +2,9 @@
 //
 // The pure models of the live MCP connection (rebadge batch 3, C2): what
 // the MCP panel draws from a POST /api/mcp/ping answer, and the duration
-// sentences a long fetch states. No DOM, no state, no fetch
+// sentences a long fetch states — and of the live panel (C1): when step 2
+// may be drawn, the plan, the scope fields, the gate log, a job's result,
+// and the pickers' scaffold / snapshot suffix. No DOM, no state, no fetch
 // (docs/UI_CONVENTIONS.md §2): every input explicit, so the same functions
 // run headlessly under node:test (tools/test-live-model.mjs).
 //
@@ -110,4 +112,142 @@ export function durationText(kind, lastTookMs = null) {
 // The rebuild's note under its button: what it does, how long, what it writes.
 export function rebuildNoteText() {
   return `Rebuilds the live pack the LIVE badge reads — every inventory family is read again (usually about ${MEASURED_RANGE}); it writes an audit row.`;
+}
+
+// ---------- the live panel (rebadge batch 3, C1): test, choose, follow ----------
+
+// What a picker would send, as one string — the key a ping is held under, so
+// a ping never stands for another target (in memory only: it may hold the
+// typed auth key, and is never stored).
+export function liveTargetKey(body) {
+  if (!body || typeof body !== 'object') return null;
+  const id = body.mcpEndpointId ?? null;
+  return JSON.stringify([id, id === null ? (body.mcpUrl ?? null) : null, body.mcpAuth ?? null]);
+}
+
+// Step 2 is drawn only after a connected ping for the target on screen: a
+// change of the picker or of the auth field makes it stale.
+//   pingFor: { key, ok } | null — the last ping; target: the picker's body
+export function stepTwoVisible(pingFor, target) {
+  return !!pingFor && pingFor.ok === true && pingFor.key !== null && pingFor.key === liveTargetKey(target);
+}
+
+// The kind the choice opens on: Draft (the default the SPEC keeps), Snapshot
+// when the org configured a snapshot scope (GET /api/mcp/jobs scope.from).
+export function preselectedKind(scopeFrom) {
+  return scopeFrom === 'org' || scopeFrom === 'deployment' ? 'snapshot' : 'draft';
+}
+
+const splitList = (text) => String(text ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+
+// The scope fields, prefilled from the configured scope ({ defaults, from }).
+export function scopeFormModel(scope) {
+  const d = scope?.defaults ?? {};
+  const from = scope?.from ?? null;
+  return {
+    prefixes: (d.metricPrefixes ?? []).join(', '),
+    folders: (d.folderUids ?? []).join(', '),
+    note: from === 'org' ? 'Prefilled from this org\'s configured snapshot scope.'
+      : from === 'deployment' ? 'Prefilled from the server\'s configured snapshot scope.'
+        : 'No snapshot scope is configured: empty fields read every metric name, dashboard and rule.',
+    errors: Array.isArray(scope?.errors) ? [...scope.errors] : [],
+  };
+}
+
+// The request's scope from the two fields (what the person sees is what is sent).
+export function scopeFromForm({ prefixes = '', folders = '' } = {}) {
+  return { metricPrefixes: splitList(prefixes), folderUids: splitList(folders) };
+}
+
+// The plan before a snapshot (fetchPlan's rows, the stages' labels) → the
+// sentences: what this MCP does not offer, and what cannot be told.
+//   plan: [{ stage, will, reason }]; stages: [{ id, label }]
+export function planModel(plan, stages = []) {
+  const label = new Map(stages.map((s) => [s.id, String(s.label).replace(/\s*\(.*\)\s*$/, '').toLowerCase()]));
+  const rows = Array.isArray(plan) ? plan : [];
+  const gaps = rows.filter((r) => r.will === 'gap').map((r) => label.get(r.stage) ?? r.stage);
+  const unknown = rows.filter((r) => r.will === 'unknown').map((r) => label.get(r.stage) ?? r.stage);
+  return {
+    gaps,
+    unknown,
+    gapText: gaps.length ? `Not offered by this MCP: ${gaps.join(', ')} — the snapshot will name ${gaps.length === 1 ? 'it' : 'them'}` : null,
+    unknownText: unknown.length ? `Not known before the fetch (tools/list was not read whole): ${unknown.join(', ')}` : null,
+  };
+}
+
+// A gate-log state as a word and an icon — never colour alone.
+export const STAGE_WORDS = Object.freeze({ pending: 'waiting', running: 'reading…', done: 'done', failed: 'failed', skipped: 'skipped' });
+export const STAGE_ICONS = Object.freeze({ pending: '○', running: '◐', done: '✓', failed: '✗', skipped: '–' });
+
+const countsText = (counts) => (counts && typeof counts === 'object'
+  ? Object.entries(counts).filter(([, v]) => Number.isFinite(v)).map(([k, v]) => `${k} ${v}`).join(' · ') || null
+  : null);
+
+// The job's records (any order, any repetition) → one row per stage of the
+// kind, in fetch order: the last record of a stage wins; a stage without
+// one is waiting.
+//   stages: stagesFor(kind) — [{ id, label }]
+export function gateLogModel(records, stages) {
+  const last = new Map();
+  for (const r of Array.isArray(records) ? records : []) {
+    if (r && typeof r.stage === 'string') last.set(r.stage, r);
+  }
+  return (Array.isArray(stages) ? stages : []).map((s) => {
+    const r = last.get(s.id);
+    const state = r && Object.hasOwn(STAGE_WORDS, r.state) ? r.state : 'pending';
+    return {
+      id: s.id,
+      label: s.label,
+      state,
+      word: STAGE_WORDS[state],
+      icon: STAGE_ICONS[state],
+      counts: countsText(r?.counts),
+      message: r?.gap?.reason ?? r?.message ?? null,
+    };
+  });
+}
+
+// "1 min 12 s" / "8 s".
+export function elapsedText(ms) {
+  const s = Math.max(0, Math.round((Number(ms) || 0) / 1000));
+  return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min${s % 60 ? ` ${s % 60} s` : ''}`;
+}
+
+// The sentence for a job the server no longer has.
+export const LIVE_JOB_GONE_TEXT = 'The server no longer has this job — it restarted, or the result expired 15 minutes after it finished. If it had finished, its pack is in the catalogue; otherwise start it again.';
+
+// A finished job's poll answer → what the result block says: { state, tone,
+// sentence, registered: { id, label } | null }. Running → null.
+export function liveResultModel(answer) {
+  const job = answer?.job;
+  if (!job || job.state === 'running') return null;
+  const result = answer.result ?? null;
+  if (job.state === 'done' && result?.registered) {
+    const n = Object.values(result.counts ?? {}).reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
+    const gaps = (result.gaps ?? []).map((g) => g.stage.replace(/_/g, ' '));
+    return {
+      state: 'done',
+      tone: 'ok',
+      sentence: `Registered ${result.registered.label} — ${n} artefact${n === 1 ? '' : 's'}; gaps: ${gaps.length ? gaps.join(', ') : 'none'}`,
+      registered: { ...result.registered },
+    };
+  }
+  if (job.state === 'cancelled') return { state: 'cancelled', tone: 'error', sentence: 'Cancelled — nothing was registered.', registered: null };
+  return { state: job.state, tone: 'error', sentence: answer.error ? `Failed: ${answer.error}` : 'Failed — nothing was registered.', registered: null };
+}
+
+// The pickers' suffix for a live pack (GET /api/packs `live`): a scaffold is
+// never presented as a snapshot.
+export function liveKindSuffix(entry) {
+  if (entry?.live === 'scaffold') return ' · scaffold';
+  if (entry?.live === 'snapshot') return ' · snapshot';
+  return '';
+}
+
+// Compare's chip for a live pack: what the pack is, in one sentence.
+//   { origin, at } from the snapshot's own annotations
+export function liveChipText(live, { origin = null, at = null } = {}) {
+  if (live === 'scaffold') return 'Scaffold — drafted from MCP discovery; sections marked scaffold are not compared';
+  if (live === 'snapshot') return `Snapshot — inventory read from ${origin || 'a live MCP server'}${at ? ` at ${at}` : ''}`;
+  return null;
 }

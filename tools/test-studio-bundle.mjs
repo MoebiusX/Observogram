@@ -447,6 +447,7 @@ test('T3c every feature the shim denies is named in the README 501 list and the 
   const spelled = {
     'Refresh from MCP': /Refresh from MCP/, 'Scan a repo': /Scan a repo/, 'Draft from a live MCP server': /Draft from MCP/,
     'Testing an MCP connection': /Testing an MCP connection/,
+    'Building a pack from a live MCP server': /Building a pack from a live MCP server/,
     'Uploading a pack': /upload/i, Compare: /Compare/, Deploy: /Deploy/, Journeys: /Journeys/, Build: /Build/,
     Waivers: /Waivers/, Services: /Services \(/, Organisations: /Organisations \(/, Settings: /Settings \(/, 'Sign-in': /sign-in/i,
   };
@@ -749,6 +750,8 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   await expectDenied('/api/crawl-github', { method: 'POST' }, 'Scan a repo');
   await expectDenied('/api/draft-from-mcp', { method: 'POST' }, 'Draft from a live MCP server');
   await expectDenied('/api/mcp/ping', { method: 'POST' }, 'Testing an MCP connection');
+  await expectDenied('/api/mcp/jobs', { method: 'POST' }, 'Building a pack from a live MCP server');
+  await expectDenied('/api/mcp/jobs', {}, 'Building a pack from a live MCP server');
   await expectDenied('/api/validate', { method: 'POST' }, 'Uploading a pack');
   await expectDenied('/api/uploads', { method: 'DELETE' }, 'Uploading a pack');
   await expectDenied('/api/diff?a=p&b=p', undefined, 'Compare');
@@ -792,6 +795,7 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   await expectDenied(new URL('https://studio.example/api/journeys'), undefined, 'Journeys');
   assert.equal(featureOf('/api/crawl-github'), 'Scan a repo');
   assert.equal(featureOf('/api/mcp/ping'), 'Testing an MCP connection');
+  assert.equal(featureOf('/api/mcp/jobs/abc/cancel'), 'Building a pack from a live MCP server');
   assert.equal(featureOf('/api/mcp-endpoints/3'), 'Settings', "'/api/mcp/ping' is no prefix of the endpoints");
   assert.equal(featureOf('/api/packs/x/retrofeed?y'), 'Compare');
   assert.equal(featureOf('/api/packs/x/verdicts/SLI-01'), 'Verdicts');

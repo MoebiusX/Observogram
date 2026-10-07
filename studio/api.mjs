@@ -135,6 +135,35 @@ export function rememberMcpEndpoint(id) {
   } catch { /* storage unavailable: nothing remembered */ }
 }
 
+// ---------- the remembered live job (per user and org) ----------
+//
+// The live panel's running job (rebadge batch 3, C1): { id, kind, startedAt,
+// origin, label } under liveJob.v1:<login or 'local'>:<active org or
+// 'default'> — an id and an origin only, never a credential — so a reload in
+// the same org resumes the poll. Cleared once its result was shown, on the
+// server's 404, and at sign-out with the remembered URLs.
+const LIVE_JOB_KEY_PREFIX = 'liveJob.v1:';
+const liveJobKey = () => `${LIVE_JOB_KEY_PREFIX}${signedInLogin || 'local'}:${activeOrg || 'default'}`;
+const LIVE_JOB_ID = /^[A-Za-z0-9_-]{16,64}$/;
+
+export function rememberLiveJob({ id, kind, startedAt = null, origin = null, label = null } = {}) {
+  if (typeof id !== 'string' || !LIVE_JOB_ID.test(id)) return;
+  try {
+    localStorage.setItem(liveJobKey(), JSON.stringify({ id, kind: kind === 'snapshot' ? 'snapshot' : 'draft', startedAt, origin, label }));
+  } catch { /* storage unavailable: nothing remembered */ }
+}
+
+export function recallLiveJob() {
+  try {
+    const v = JSON.parse(localStorage.getItem(liveJobKey()) || 'null');
+    return v && typeof v.id === 'string' && LIVE_JOB_ID.test(v.id) ? v : null;
+  } catch { return null; }
+}
+
+export function forgetLiveJob() {
+  try { localStorage.removeItem(liveJobKey()); } catch { /* storage unavailable */ }
+}
+
 // The safety rule (tools/lib/mcp-url-safety.mjs), loaded at call time —
 // never statically: the Node suites that import this module have no /lib/.
 // A load that failed is not kept: the next call tries again (a server
@@ -277,17 +306,18 @@ export async function removeDeployProfile(name) {
   writeDeployProfiles(profiles);
 }
 
-// At sign-out: every URL and MCP endpoint this login remembered, in every
-// org, and the legacy key — and every deploy target profile in the browser (every
+// At sign-out: every URL, MCP endpoint and live job this login remembered,
+// in every org, and the legacy key — and every deploy target profile in the browser (every
 // user's, and the pre-slice-3 key): a shared browser keeps neither past
 // a sign-out.
 export function forgetMcpUrls(login = signedInLogin) {
   try {
     const prefix = `${MCP_URL_KEY_PREFIX}${login || 'local'}:`;
     const endpointPrefix = `${MCP_ENDPOINT_KEY_PREFIX}${login || 'local'}:`;
+    const liveJobPrefix = `${LIVE_JOB_KEY_PREFIX}${login || 'local'}:`;
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const k = localStorage.key(i);
-      if (k && (k.startsWith(prefix) || k.startsWith(endpointPrefix) || k.startsWith(DEPLOY_PROFILES_KEY_PREFIX))) localStorage.removeItem(k);
+      if (k && (k.startsWith(prefix) || k.startsWith(endpointPrefix) || k.startsWith(liveJobPrefix) || k.startsWith(DEPLOY_PROFILES_KEY_PREFIX))) localStorage.removeItem(k);
     }
     localStorage.removeItem(LEGACY_MCP_URL_KEY);
     localStorage.removeItem(LEGACY_DEPLOY_PROFILES_KEY);

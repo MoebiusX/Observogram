@@ -20,6 +20,18 @@
  * and only then does the live pack exist. No page error and no
  * console.error; nothing leaves the loopback.
  *
+ * The live panel (C1), driven as oscar: "New pack from a live MCP
+ * server". Step 2 is drawn only after a connected test for the target on
+ * screen (an auth change hides it); Draft is preselected without a
+ * configured scope; under Snapshot the plan names what this MCP does not
+ * offer. A snapshot and a draft run as live jobs (POST /api/mcp/jobs): the
+ * gate log draws every stage of the kind with a word and an icon, an MCP
+ * error carrying markup creates no element, and the result says what was
+ * registered, with "open it". Both pack pickers then say " · snapshot" and
+ * " · scaffold". A job held open by the fake survives a reload: the
+ * "new from live" button says a job is running, the panel opens on its
+ * gate log, and the result comes when the fake answers.
+ *
  * Skipped unless Playwright imports (OBSERVOGRAM_PLAYWRIGHT, else the bare
  * 'playwright') and Chromium launches; OBSERVOGRAM_LIVE_SMOKE=require fails
  * instead.
@@ -46,7 +58,11 @@ const { join } = await import('node:path');
 const { hashPassword } = await import('./auth.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
 const { startFakeMcp, endpointIdFor } = await import('./fixtures/fake-mcp.mjs');
-const { capabilityTool } = await import('../tools/lib/contracts/mcp-capabilities.mjs');
+const { readFileSync } = await import('node:fs');
+const { resolve, dirname } = await import('node:path');
+const { fileURLToPath } = await import('node:url');
+const { capabilityTool, candidateTool, probeCandidates, productAttestedByTool } = await import('../tools/lib/contracts/mcp-capabilities.mjs');
+const { stagesFor } = await import('../tools/lib/live-fetch.mjs');
 
 const password = (login) => `${login}-passw0rd-live`;
 const LOGINS = ['ada', 'oscar'];
@@ -160,4 +176,151 @@ test('BROWSER: the MCP panel tests the connection without rewriting production-l
   await ctx.close();
   assert.deepEqual(problems, [], 'no page error and no console.error');
   assert.deepEqual(offLoopback.filter((u) => !/fonts\.(googleapis|gstatic)\.com/.test(u)), [], 'nothing but fonts was asked of another origin, and those were aborted');
+});
+
+// ---------- the live panel (C1) ----------
+
+const FIXTURES = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'tools', 'fixtures');
+const recorded = (f) => JSON.parse(readFileSync(join(FIXTURES, 'mcp', f), 'utf8'));
+const synthetic = (f) => JSON.parse(readFileSync(join(FIXTURES, 'snapshot', f), 'utf8'));
+const nameOf = (c) => (typeof c === 'string' ? c : c.name);
+const HOSTILE_ERROR = '<img src=z onerror="window.__pwned=3">';
+
+test('BROWSER: the live panel — test, choose Draft or Snapshot, the gate log, the result; the pickers say scaffold or snapshot; a running job resumes after a reload', async (t) => {
+  const skip = (why) => { if (REQUIRED) assert.fail(`OBSERVOGRAM_LIVE_SMOKE=require: ${why}`); t.skip(why); };
+  const { pw, error } = await loadPlaywright();
+  if (!pw) return skip(error);
+  let browser;
+  try { browser = await pw.chromium.launch(); }
+  catch (e) { return skip(`chromium.launch failed: ${e.message.split('\n')[0]}`); }
+  t.after(() => browser.close());
+
+  const ws = mkdtempSync(join(tmpdir(), 'observogram-live-panel-'));
+  writeUsersFile({ users: Object.fromEntries(LOGINS.map((l) => [l, { name: l, createdAt: 'test', password: hashPassword(password(l)) }])) }, join(ws, 'users.json'));
+  writeOrgsFile({
+    default: { name: 'Default', members: { ada: 'admin' } },
+    acme: { name: 'Acme', members: { ada: 'admin', oscar: 'operator' } },
+  }, join(ws, 'orgs.json'));
+  const SEARCH = synthetic('grafana_dashboards_search.json');
+  const DETAIL = synthetic('grafana_dashboard_get.json');
+  const tools = {
+    [SYSTEM]: () => ({ services: [] }),
+    [TOPOLOGY]: () => ({ dependencies: [] }),
+    [HEALTH]: () => ({ version: '12.4.4' }),
+    [nameOf(probeCandidates('alert_rules').find((c) => productAttestedByTool(nameOf(c)) === 'vmalert'))]: () => recorded('vmalert_rules.json'),
+    [nameOf(probeCandidates('metric_names')[0])]: () => recorded('metrics_label_values.json'),
+    [nameOf(probeCandidates('scrape_configs')[0])]: () => ({ __isError: HOSTILE_ERROR }),
+    [candidateTool('dashboards', 'search')]: () => ({ count: SEARCH.count, results: SEARCH.results }),
+    [capabilityTool('dashboard_detail')]: (args) => DETAIL.byUid[args.uid] ?? {},
+  };
+  const DETAIL_TOOL = capabilityTool('dashboard_detail');
+  const fake = await startFakeMcp(Object.keys(tools), (name, args) => (tools[name] ? tools[name](args) : { ok: true }));
+  const child = await serve(ws);
+  t.after(async () => { await child.stop(); await fake.close(); rmSync(ws, { recursive: true, force: true }); });
+
+  const cookies = {};
+  for (const l of LOGINS) {
+    const s = await signIn(child.base, l, password(l));
+    assert.equal(s.status, 200, `${l} signs in`);
+    cookies[l] = s.session;
+  }
+  const acme = (login) => ({ Cookie: cookies[login], 'X-Observogram-Org': 'acme' });
+  const gwId = await endpointIdFor(child.base, fake.url, { name: 'gw', headers: acme('ada') });
+
+  const problems = [];
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  await ctx.addCookies([{ name: 'observogram_session', value: cookies.oscar.split('=')[1], url: child.base }]);
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
+  page.on('console', (m) => { if (m.type() === 'error' && !/^Failed to load resource: /.test(m.text())) problems.push(`console.error: ${m.text()}`); });
+  await page.route('**/*', (route) => (route.request().url().startsWith(child.base) ? route.fallback() : route.abort()));
+  const posts = (re) => { const list = []; page.on('request', (r) => { if (re.test(r.url()) && r.method() === 'POST') list.push(JSON.parse(r.postData() || 'null')); }); return list; };
+  const starts = posts(/\/api\/mcp\/jobs$/);
+  const drafts = posts(/\/api\/draft-from-mcp$/);
+  const text = (sel) => page.evaluate((q) => document.querySelector(q)?.textContent?.replace(/\s+/g, ' ').trim() ?? null, sel);
+  const hidden = (sel) => page.evaluate((q) => { const el = document.querySelector(q); return !el || el.hidden || el.closest('[hidden]') !== null; }, sel);
+  const openPanel = async () => {
+    await page.evaluate(() => { if (document.getElementById('draft-mcp-panel').hidden) document.getElementById('draft-mcp-btn').click(); });
+    await page.waitForSelector('#draft-mcp-panel:not([hidden]) [data-mcp-target="draft"] select', { timeout: T });
+  };
+  const testConnection = async () => {
+    await page.click('#live-test-btn');
+    await page.waitForFunction(() => /^connected/.test(document.getElementById('live-ping-status')?.textContent || ''), null, { timeout: T });
+  };
+  const waitResult = () => page.waitForFunction(() => /^Registered /.test(document.querySelector('#live-result .mcpc-sentence')?.textContent || ''), null, { timeout: 60_000 });
+
+  await page.goto(`${child.base}/`);
+  await page.waitForFunction(() => document.body.dataset.mode, null, { timeout: 30_000 });
+  await openPanel();
+  assert.equal(await text('#draft-mcp-panel-title'), 'New pack from a live MCP server');
+  assert.equal(await hidden('#live-step-choose'), true, 'no choice before a test');
+  assert.deepEqual(await page.evaluate(() => ['role', 'aria-live'].map((a) => document.getElementById('live-ping-status').getAttribute(a))), ['status', 'polite']);
+
+  await testConnection();
+  assert.equal(await hidden('#live-step-choose'), false, 'the choice after a connected test');
+  assert.equal(await page.isChecked('#live-kind-draft'), true, 'Draft preselected without a configured scope');
+  assert.equal(await text('#draft-mcp-go-btn'), 'start draft');
+  assert.equal(await text('#live-duration'), 'Usually about 1–1.5 minutes on a full MCP tier (measured); dashboards are read one by one.');
+  assert.equal(await hidden('#live-snapshot-opts'), true, 'no snapshot fields for a draft');
+  // An auth change hides the choice: a test never stands for another target.
+  await page.evaluate(() => { const a = document.getElementById('draft-mcp-auth'); a.value = 'k'; a.dispatchEvent(new Event('input', { bubbles: true })); });
+  assert.equal(await hidden('#live-step-choose'), true, 'the choice hidden after an auth change');
+  await page.evaluate(() => { const a = document.getElementById('draft-mcp-auth'); a.value = ''; a.dispatchEvent(new Event('input', { bubbles: true })); });
+  await testConnection();
+
+  // Snapshot: the plan, the start, the gate log, the result.
+  await page.check('#live-kind-snapshot');
+  assert.equal(await text('#draft-mcp-go-btn'), 'start snapshot');
+  await page.waitForFunction(() => document.getElementById('live-plan')?.textContent, null, { timeout: T });
+  assert.equal(await text('#live-plan'), 'Not offered by this MCP: alerting routes — the snapshot will name it');
+  await page.fill('#live-label', 'acme snapshot');
+  await page.click('#draft-mcp-go-btn');
+  await waitResult();
+  assert.deepEqual(starts.at(-1), { kind: 'snapshot', mcpEndpointId: gwId, label: 'acme snapshot', scope: { metricPrefixes: [], folderUids: [] } });
+  const rows = await page.evaluate(() => [...document.querySelectorAll('#live-gatelog .mcpc-stage')].map((li) => [li.dataset.stage, li.dataset.state, li.querySelector('.mcpc-stage-word')?.textContent]));
+  assert.deepEqual(rows.map((r) => r[0]), stagesFor('snapshot').map((s) => s.id), 'every snapshot stage, in order');
+  assert.deepEqual(rows.find((r) => r[0] === 'register'), ['register', 'done', 'done']);
+  assert.deepEqual(rows.find((r) => r[0] === 'scrape_targets').slice(1), ['failed', 'failed']);
+  assert.match(await text('#live-gatelog [data-stage="scrape_targets"] .mcpc-stage-message'), /^the scrape targets tool got no answer: .*<img src=z onerror=/, 'the MCP\'s error shown as text');
+  assert.equal(await page.evaluate(() => document.querySelectorAll('#draft-mcp-panel img').length), 0, 'no element from an MCP string');
+  assert.equal(await page.evaluate(() => window.__pwned ?? null), null);
+  assert.match(await text('#live-result .mcpc-sentence'), /^Registered acme snapshot — \d+ artefacts; gaps: /);
+  assert.equal(await page.isVisible('#live-open-btn'), true, 'open it');
+
+  // Draft: also a job (never POST /api/draft-from-mcp from the panel).
+  await page.check('#live-kind-draft');
+  await page.fill('#live-label', 'acme draft');
+  await page.click('#draft-mcp-go-btn');
+  await page.waitForFunction(() => /^Registered acme draft/.test(document.querySelector('#live-result .mcpc-sentence')?.textContent || ''), null, { timeout: 60_000 });
+  assert.equal(starts.at(-1).kind, 'draft');
+  assert.deepEqual(drafts, [], 'the panel posts no draft of its own');
+  assert.ok(await page.evaluate(() => document.querySelectorAll('#live-gatelog [data-stage="signals"]').length === 1), 'a draft\'s gate log has the signals stage');
+
+  // The pickers say scaffold or snapshot.
+  await page.waitForFunction(() => [...document.querySelectorAll('#pack-select option')].some((o) => o.textContent.includes('acme draft · scaffold')), null, { timeout: T });
+  const options = await page.evaluate(() => [...document.querySelectorAll('#pack-select option')].map((o) => o.textContent));
+  assert.ok(options.some((o) => o.includes('acme snapshot · snapshot')), options.join(' | '));
+  assert.ok(options.some((o) => o.includes('acme draft · scaffold')), options.join(' | '));
+
+  // A job held open by the fake survives a reload.
+  const gate = fake.hold(DETAIL_TOOL);
+  await page.check('#live-kind-snapshot');
+  await page.fill('#live-label', 'held snapshot');
+  await page.click('#draft-mcp-go-btn');
+  await gate.reached;
+  await page.waitForFunction(() => document.getElementById('draft-mcp-btn').textContent === 'new from live · live job running', null, { timeout: T });
+  await page.reload();
+  await page.waitForFunction(() => document.body.dataset.mode, null, { timeout: 30_000 });
+  await page.waitForFunction(() => document.getElementById('draft-mcp-btn').textContent === 'new from live · live job running', null, { timeout: T });
+  await openPanel();
+  assert.equal(await hidden('#live-step-progress'), false, 'the panel opens on the job');
+  assert.match(await text('#live-job-status'), /^snapshot running/);
+  assert.equal(await page.isVisible('#live-cancel-btn'), true);
+  gate.release();
+  await page.waitForFunction(() => /^Registered held snapshot/.test(document.querySelector('#live-result .mcpc-sentence')?.textContent || ''), null, { timeout: 60_000 });
+  assert.equal(await text('#draft-mcp-btn'), 'new from live');
+  assert.equal(await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('liveJob.v1:')).length), 0, 'the remembered job cleared once its result was shown');
+
+  await ctx.close();
+  assert.deepEqual(problems, [], 'no page error and no console.error');
 });

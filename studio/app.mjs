@@ -18,6 +18,7 @@ import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } fr
 import {
   api, loadCatalog, loadTaxonomy, validateUploaded, registeredOrValidated, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError, deployRefusal,
   setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls, signOutOthersText, recallMcpEndpoint, rememberMcpEndpoint,
+  rememberLiveJob, recallLiveJob, forgetLiveJob,
   loadDeployProfiles, storeDeployProfile, removeDeployProfile,
 } from './api.mjs';
 import {
@@ -53,9 +54,12 @@ import {
   buildServiceEditorModel, buildServicePatch, serviceSaveStatus,
 } from './services-model.mjs';
 import { loadOrgs, loadServices, loadService, patchService, verdictLoader, requestJson } from './services-api.mjs';
-import { pingMcp } from './live-api.mjs';
-import { pingResultModel, rebuildNoteText } from './live-model.mjs';
-import { renderPingResult } from './live-view.mjs';
+import { pingMcp, readLiveJobs, startLiveJob, pollLiveJob, cancelLiveJob } from './live-api.mjs';
+import {
+  pingResultModel, rebuildNoteText, durationText, liveTargetKey, stepTwoVisible, preselectedKind, scopeFormModel, scopeFromForm,
+  planModel, gateLogModel, elapsedText, liveResultModel, LIVE_JOB_GONE_TEXT, liveKindSuffix,
+} from './live-model.mjs';
+import { renderPingResult, renderGateLog, renderLiveResult } from './live-view.mjs';
 import { renderNoOrgHome, renderServicesHome, renderServicePage, renderServiceEditor, markUnavailable } from './services-view.mjs';
 import {
   BUILT_SECTIONS, BUILT_EDITORS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsSectionHead, settingsAboveRank,
@@ -275,7 +279,7 @@ function packSelectLabel(p, { prefixUploaded = false } = {}) {
   const prefix = prefixUploaded && p.source === 'uploaded' ? '📂 ' : '';
   const version = p.version || '?';
   const source = uploadedSourceHint(p);
-  return `${prefix}${p.label} · v${version}${source ? ` · from ${source}` : ''}`;
+  return `${prefix}${p.label}${liveKindSuffix(p)} · v${version}${source ? ` · from ${source}` : ''}`;
 }
 
 // The service rules — the key every service goes by, the names a pack
@@ -1156,8 +1160,9 @@ function setupUpload() {
         setTimeout(() => {
           const panelUrl = document.getElementById('draft-mcp-url');
           if (panelUrl) panelUrl.value = 'https://www.krystaline.io/mcp/public';
-          const goBtn = document.getElementById('draft-mcp-go-btn');
-          if (goBtn) goBtn.click();
+          // Test the connection first; the person then chooses Draft or Snapshot (D8).
+          const testBtn = document.getElementById('live-test-btn');
+          if (testBtn) testBtn.click();
         }, 60);
         return;
       }
@@ -1728,6 +1733,8 @@ async function boot() {
   setupMcpPanel();
   setupCrawlPanel();
   setupDraftFromMcpPanel();
+  // A live job remembered for this login and org resumes its poll (never in the bundle or the token posture).
+  resumeLiveJob();
   setupDeployModal();
   installDialogFocusTrap();
   setupHomeAffordance();   // logo click returns home
@@ -5191,6 +5198,7 @@ function pickMcpTarget(container, value) {
   applyMcpTargetChoice(id, mcpPickerModel(id, value));
   if (id === 'deploy') updateDeployTargetSummary();
   if (id === 'refresh') clearPingResult();
+  if (id === 'draft') clearLivePing();
   if (value === '') document.getElementById(MCP_PICKERS[id].url)?.focus();
 }
 
@@ -6712,7 +6720,12 @@ function setupDraftFromMcpPanel() {
         urlInput.value = recallMcpUrl() || '';
       }
       openMcpTarget('draft');
-      focusMcpTarget('draft');
+      paintLiveSteps();
+      if (liveUi.job) document.getElementById('live-step-progress-title')?.scrollIntoView?.({ block: 'nearest' });
+      else focusMcpTarget('draft');
+      readLiveJobsForPanel().catch(() => {});
+      // A finished job's result is on screen now: its key goes.
+      if (liveUi.job && liveUi.job.view.state !== 'running') forgetLiveJob();
     }
   };
   closeBtn.onclick = () => { panel.hidden = true; };
@@ -6721,53 +6734,344 @@ function setupDraftFromMcpPanel() {
     $('#draft-mcp-url').value = '';
     $('#draft-mcp-auth').value = '';
     $('#draft-mcp-name').value = '';
+    $('#live-label').value = '';
     $('#draft-mcp-result').hidden = true;
-    $('#draft-mcp-status').textContent = '';
+    setLiveStatus('draft-mcp-status', '');
     draftMcpState.lastResult = null;
+    liveUi.kindChosen = null;
+    clearLivePing();
   };
-  goBtn.onclick = () => doDraftFromMcp();
+  // Any change to the target or its key: a ping never stands for another.
+  for (const id of ['draft-mcp-url', 'draft-mcp-auth']) $(`#${id}`)?.addEventListener('input', clearLivePing);
+  $('#live-test-btn').onclick = () => testLiveConnection();
+  for (const radio of document.querySelectorAll('input[name="live-kind"]')) {
+    radio.addEventListener('change', () => { liveUi.kindChosen = liveKind(); paintLiveChoice(); });
+  }
+  goBtn.onclick = () => startLiveFromPanel();
+  $('#live-cancel-btn').onclick = () => cancelLiveFromPanel();
   adoptBtn.onclick = () => adoptDraftFromMcpResult();
 }
 
-async function doDraftFromMcp() {
-  const { body: target, chosen } = mcpTargetOf('draft');
-  const name = $('#draft-mcp-name').value.trim();
-  const statusEl = $('#draft-mcp-status');
-  const setStatus = (msg, kind) => {
-    statusEl.textContent = msg;
-    statusEl.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
-  };
-  if (!target) { setStatus(mcpTargetMissing('draft'), 'error'); return; }
-  if (target.mcpUrl) rememberMcpUrl(target.mcpUrl).catch(() => {});
+// ---------- the live panel: test, choose Draft or Snapshot, follow the job ----------
+//
+// "New pack from a live MCP server" (#draft-mcp-panel, rebadge batch 3, C1):
+// three steps. (1) Test the connection — the draft picker, the auth field,
+// POST /api/mcp/ping. (2) Choose what to build — drawn only after a
+// connected ping for the target on screen (stepTwoVisible: a change of the
+// picker or the auth field hides it again): Draft (a scaffold) or Snapshot
+// (an inventory), Draft preselected unless the org configured a snapshot
+// scope; under Snapshot the plan (fetchPlan over the ping's mapped
+// inventory, /lib/live-fetch.mjs) and the scope fields prefilled from
+// GET /api/mcp/jobs; the duration from this org's last finished job.
+// (3) Progress and result — both kinds run as live jobs (POST
+// /api/mcp/jobs), polled every second while the panel is open, every five
+// while closed, ten after a lost connection; the gate log drawn from the
+// stages of the kind. The job's id is remembered per login and org
+// (rememberLiveJob: an id and an origin, never a credential), so a reload
+// resumes the poll; opening the panel also finds a job started in another
+// tab (GET /api/mcp/jobs `running`). POST /api/draft-from-mcp stays for
+// the API, the home's connect and the deploy verify.
 
-  const goBtn = $('#draft-mcp-go-btn');
-  goBtn.disabled = true;
-  setStatus('contacting mcp…');
-  $('#draft-mcp-result').hidden = true;
+const liveUi = {
+  ping: null,        // { key, ok, answer } — the last ping, for one target
+  jobs: null,        // GET /api/mcp/jobs's answer (scope, running, lastTook)
+  job: null,         // { id, kind, label, records, since, view, answer }
+  timer: null,
+  kindChosen: null,  // the person's own choice in this panel
+};
+let liveFetchLib = null;
+const loadLiveFetchLib = async () => (liveFetchLib ??= await import('/lib/live-fetch.mjs'));
 
+function liveJobsReadable() {
+  const posture = state.access?.posture;
+  return posture === 'identity' || posture === 'open';
+}
+
+function setLiveStatus(id, msg, kind = '') {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
+}
+
+// A change of the picker or the auth field: the ping no longer stands.
+function clearLivePing() {
+  liveUi.ping = null;
+  renderPingResult($('#live-ping-result'), null);
+  setLiveStatus('live-ping-status', '');
+  paintLiveSteps();
+}
+
+function liveKind() {
+  return document.querySelector('input[name="live-kind"]:checked')?.value === 'snapshot' ? 'snapshot' : 'draft';
+}
+
+function paintLiveSteps() {
+  const running = liveUi.job?.view?.state === 'running';
+  const two = stepTwoVisible(liveUi.ping, mcpTargetOf('draft').body);
+  const choose = $('#live-step-choose');
+  if (choose) choose.hidden = !two || running;
+  const progress = $('#live-step-progress');
+  if (progress) progress.hidden = !liveUi.job;
+  paintLiveBadge();
+}
+
+// The "new from live" button says a job is running (text, never colour alone).
+function paintLiveBadge() {
+  const btn = $('#draft-mcp-btn');
+  if (!btn) return;
+  const running = liveUi.job?.view?.state === 'running';
+  btn.dataset.liveJob = running ? 'running' : '';
+  btn.textContent = running ? 'new from live · live job running' : 'new from live';
+}
+
+async function paintLiveChoice() {
+  const kind = liveKind();
+  const answer = liveUi.ping?.answer;
+  const snapshot = kind === 'snapshot';
+  $('#live-snapshot-opts').hidden = !snapshot;
+  $('#draft-mcp-go-btn').textContent = snapshot ? 'start snapshot' : 'start draft';
+  const name = $('#draft-mcp-name');
+  name.placeholder = snapshot ? 'live-snapshot' : 'production-live';
+  $('#draft-mcp-name-hint').textContent = `(defaults to "${name.placeholder}")`;
+  $('#live-duration').textContent = durationText(kind, liveUi.jobs?.lastTook?.[kind] ?? null);
+  if (!snapshot) return;
   try {
-    const r = await fetch('/api/draft-from-mcp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ ...target, packName: name || undefined }),
-    });
-    const ct = r.headers.get('content-type') || '';
-    const raw = await r.text();
-    if (!ct.includes('application/json')) {
-      setStatus(`server returned ${r.status} ${ct || 'no content-type'} — restart \`npm run dev\` if you just changed server code`, 'error');
-      return;
-    }
-    const out = JSON.parse(raw);
-    if (!out.ok) { setStatus(`error: ${out.error || 'unknown'}`, 'error'); return; }
-    rememberMcpEndpoint(chosen ? chosen.id : null);
-    draftMcpState.lastResult = out;
-    renderDraftMcpResult(out);
-    followReplacedPack(out.registered?.id).catch(() => {});
-    setStatus(`drafted in ${out.tookMs}ms · ${out.summary.discovered.backends} backend(s) discovered`, 'ok');
+    const lib = await loadLiveFetchLib();
+    const plan = lib.fetchPlan(answer?.tools?.capabilities ?? null, { kind, complete: answer?.tools ? answer.tools.complete !== false : false });
+    const model = planModel(plan, lib.stagesFor(kind));
+    $('#live-plan').textContent = [model.gapText, model.unknownText].filter(Boolean).join('. ') || 'This MCP offers a tool for every inventory family.';
+  } catch {
+    $('#live-plan').textContent = '';
+  }
+}
+
+async function testLiveConnection() {
+  const { body: target } = mcpTargetOf('draft');
+  liveUi.ping = null;
+  renderPingResult($('#live-ping-result'), null);
+  paintLiveSteps();
+  if (!target) { setLiveStatus('live-ping-status', mcpTargetMissing('draft'), 'error'); return; }
+  const btn = $('#live-test-btn');
+  btn.disabled = true;
+  setLiveStatus('live-ping-status', 'testing the connection…');
+  try {
+    const answer = await pingMcp(target);
+    const model = pingResultModel(answer);
+    if (!model) { setLiveStatus('live-ping-status', 'error: the server sent no ping result', 'error'); return; }
+    renderPingResult($('#live-ping-result'), model);
+    if (target.mcpUrl) rememberMcpUrl(target.mcpUrl).catch(() => {});
+    if (!model.ok) { setLiveStatus('live-ping-status', model.status, 'error'); return; }
+    liveUi.ping = { key: liveTargetKey(target), ok: true, answer };
+    try { liveUi.jobs = await readLiveJobs(); } catch { liveUi.jobs = null; }
+    const form = scopeFormModel(liveUi.jobs?.scope);
+    $('#live-scope-prefixes').value = form.prefixes;
+    $('#live-scope-folders').value = form.folders;
+    $('#live-scope-note').textContent = form.errors.length ? `The configured scope does not parse: ${form.errors.join('; ')}` : form.note;
+    const kind = liveUi.kindChosen ?? preselectedKind(liveUi.jobs?.scope?.from);
+    document.querySelector(`input[name="live-kind"][value="${kind}"]`).checked = true;
+    paintLiveSteps();
+    await paintLiveChoice();
+    // Said once step 2 is drawn: the status names what the person can do next.
+    setLiveStatus('live-ping-status', model.status, model.tone === 'ok' ? 'ok' : 'error');
   } catch (e) {
-    setStatus(`error: ${e.message}`, 'error');
+    setLiveStatus('live-ping-status', `error: ${e.message}`, 'error');
   } finally {
-    goBtn.disabled = false;
+    btn.disabled = false;
+  }
+}
+
+async function startLiveFromPanel() {
+  const { body: target, chosen } = mcpTargetOf('draft');
+  if (!stepTwoVisible(liveUi.ping, target)) { clearLivePing(); return; }
+  const kind = liveKind();
+  const name = $('#draft-mcp-name').value.trim();
+  const label = $('#live-label').value.trim();
+  const body = {
+    kind, ...target,
+    ...(name ? { packName: name } : {}),
+    ...(label ? { label } : {}),
+    ...(kind === 'snapshot' ? { scope: scopeFromForm({ prefixes: $('#live-scope-prefixes').value, folders: $('#live-scope-folders').value }) } : {}),
+  };
+  const btn = $('#draft-mcp-go-btn');
+  btn.disabled = true;
+  setLiveStatus('draft-mcp-status', `starting the ${kind}…`);
+  try {
+    const out = await startLiveJob(body);
+    setLiveStatus('draft-mcp-status', '');
+    rememberMcpEndpoint(chosen ? chosen.id : null);
+    $('#draft-mcp-result').hidden = true;
+    followLiveJob(out.job);
+  } catch (e) {
+    setLiveStatus('draft-mcp-status', `error: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Follows a job: the gate log, the elapsed time, and its end.
+function followLiveJob(view, { records = [], since = 0 } = {}) {
+  clearTimeout(liveUi.timer);
+  liveUi.job = { id: view.id, kind: view.kind, label: view.label, records: [...records], since, view, answer: null };
+  rememberLiveJob({ id: view.id, kind: view.kind, startedAt: view.startedAt, origin: view.target?.origin ?? null, label: view.label });
+  renderLiveResult($('#live-result'), null);
+  paintLiveJob();
+  paintLiveSteps();
+  pollLiveOnce();
+}
+
+async function paintLiveJob() {
+  const job = liveUi.job;
+  if (!job) return;
+  const view = job.view;
+  const running = view.state === 'running';
+  setLiveStatus('live-job-status', running
+    ? `${view.kind === 'snapshot' ? 'snapshot' : 'draft'} running${view.cancelRequested ? ' — cancel requested' : ''}`
+    : `${view.kind} ${view.state}`, running ? '' : (view.state === 'done' ? 'ok' : 'error'));
+  $('#live-elapsed').textContent = `elapsed ${elapsedText(view.elapsedMs)}`;
+  $('#live-cancel-btn').hidden = !running;
+  try {
+    const lib = await loadLiveFetchLib();
+    renderGateLog($('#live-gatelog'), gateLogModel(job.records, lib.stagesFor(job.kind)));
+  } catch { /* the stage rows need /lib: a static bundle never runs a job */ }
+}
+
+function liveJobGone() {
+  forgetLiveJob();
+  clearTimeout(liveUi.timer);
+  if (liveUi.job) liveUi.job.view = { ...liveUi.job.view, state: 'gone' };
+  setLiveStatus('live-job-status', '');
+  $('#live-cancel-btn').hidden = true;
+  renderLiveResult($('#live-result'), { state: 'gone', sentence: LIVE_JOB_GONE_TEXT, registered: null });
+  paintLiveBadge();
+}
+
+async function pollLiveOnce() {
+  const job = liveUi.job;
+  if (!job || job.view.state !== 'running') return;
+  let answer;
+  try {
+    answer = await pollLiveJob(job.id, job.since);
+  } catch (e) {
+    if (liveUi.job !== job) return;
+    if (e.status === 404) { liveJobGone(); return; }
+    if (e.status) { setLiveStatus('live-job-status', `error: ${e.message}`, 'error'); return; }
+    setLiveStatus('live-job-status', 'connection lost — retrying', 'error');
+    liveUi.timer = setTimeout(pollLiveOnce, 10_000);
+    return;
+  }
+  if (liveUi.job !== job) return;
+  job.records.push(...(answer.stages ?? []));
+  job.since = answer.next ?? job.since;
+  job.view = answer.job;
+  job.label = answer.job.label ?? job.label;
+  job.answer = answer;
+  await paintLiveJob();
+  if (answer.job.state === 'running') {
+    liveUi.timer = setTimeout(pollLiveOnce, $('#draft-mcp-panel').hidden ? 5000 : 1000);
+    return;
+  }
+  await finishLiveJob(answer);
+}
+
+async function finishLiveJob(answer) {
+  const model = liveResultModel(answer);
+  // The result is shown here (the panel open), or the toast below says it: the key goes.
+  forgetLiveJob();
+  paintLiveSteps();
+  renderLiveResult($('#live-result'), model, {
+    onOpen: (id) => openLivePack(id),
+    onCompare: (id) => compareWithLivePack(id),
+    compareWith: state.selectedPackId && state.selectedPackId !== model?.registered?.id
+      ? (state.catalog.find((p) => p.id === state.selectedPackId)?.label ?? state.selectedPackId) : null,
+  });
+  if (model?.registered) {
+    // The catalogue gains the pack: the pickers name it (with its kind).
+    try { await refreshCatalogue(); renderPackSelect(); renderPackBSelect(); } catch { /* the next load lists it */ }
+    followReplacedPack(model.registered.id).catch(() => {});
+    if ($('#draft-mcp-panel').hidden) toast(`Registered: ${model.registered.label}`, 'ok');
+    if (answer.job.kind === 'draft' && answer.result?.draft) showLiveDraftResult(answer).catch(() => {});
+  }
+}
+
+// A draft job's result block: today's draft review, from the job's summary
+// and the registered pack (its canonical and YAML read by id).
+async function showLiveDraftResult(answer) {
+  const id = answer.result.registered.id;
+  const [canonical, yaml] = await Promise.all([
+    api(`/api/packs/${encodeURIComponent(id)}/canonical`),
+    fetch(`/api/packs/${encodeURIComponent(id)}/canonical?format=yaml`, { headers: authHeaders() }).then((r) => r.text()),
+  ]);
+  const out = {
+    ok: true, canonical, canonicalYaml: yaml, summary: answer.result.draft.summary, annotations: canonical?.metadata?.annotations ?? {},
+    validation: { ok: true, errors: [] }, conformance: answer.result.draft.conformance, registered: answer.result.registered,
+    mcpEndpoint: answer.result.draft.mcpEndpoint, tookMs: answer.result.tookMs,
+  };
+  draftMcpState.lastResult = out;
+  renderDraftMcpResult(out);
+}
+
+async function openLivePack(id) {
+  $('#draft-mcp-panel').hidden = true;
+  await refreshCatalogue();
+  state.view = 'layers';
+  enterAnalyzeMode(id, defaultEnvFor(id));
+}
+
+async function compareWithLivePack(id) {
+  const aId = state.selectedPackId;
+  if (!aId) return openLivePack(id);
+  $('#draft-mcp-panel').hidden = true;
+  await refreshCatalogue();
+  state.view = 'compare';
+  enterCompareMode(aId, state.selectedEnv ?? defaultEnvFor(aId), id, defaultEnvFor(id));
+}
+
+async function cancelLiveFromPanel() {
+  const job = liveUi.job;
+  if (!job) return;
+  try {
+    const out = await cancelLiveJob(job.id);
+    if (out?.job?.cancelRequested) job.view = { ...job.view, cancelRequested: true };
+    paintLiveJob();
+  } catch (e) {
+    if (e.status === 404) liveJobGone();
+    else setLiveStatus('live-job-status', `error: ${e.message}`, 'error');
+  }
+}
+
+// Opening the panel: a job started in another tab (or before a reload) is
+// followed; its step 3 shows.
+async function readLiveJobsForPanel() {
+  if (!liveJobsReadable()) return;
+  try { liveUi.jobs = await readLiveJobs(); } catch { return; }
+  const running = liveUi.jobs?.running;
+  if (running && liveUi.job?.id !== running.id) followLiveJob(running);
+}
+
+// At boot, once the org is known: one poll for a remembered job (identity
+// and open postures only — never the bundle, never the token posture).
+async function resumeLiveJob() {
+  if (!liveJobsReadable()) return;
+  const remembered = recallLiveJob();
+  if (!remembered) return;
+  try {
+    const answer = await pollLiveJob(remembered.id, 0);
+    liveUi.job = { id: remembered.id, kind: answer.job.kind, label: answer.job.label, records: [...(answer.stages ?? [])], since: answer.next ?? 0, view: answer.job, answer };
+    paintLiveSteps();
+    await paintLiveJob();
+    if (answer.job.state === 'running') liveUi.timer = setTimeout(pollLiveOnce, 5000);
+    else {
+      // Finished while the page was away: the result waits for the panel.
+      renderLiveResult($('#live-result'), liveResultModel(answer), {
+        onOpen: (id) => openLivePack(id), onCompare: (id) => compareWithLivePack(id), compareWith: null,
+      });
+      toast(answer.job.state === 'done' && answer.result?.registered ? `Registered: ${answer.result.registered.label}` : `The live ${answer.job.kind} ${answer.job.state}`, answer.job.state === 'done' ? 'ok' : 'error');
+      forgetLiveJob();
+    }
+  } catch (e) {
+    if (e.status === 404) { forgetLiveJob(); return; }
+    // The server unreachable at boot: the key stays for the next load.
   }
 }
 

@@ -421,15 +421,19 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       assert.match((await text(page, '#mcp-rebuild-status')).replace(/^error: /, ''), UNSET);
       await page.evaluate(() => document.getElementById('mcp-panel-close').click());
 
-      // The draft panel (A6: no "URL required" guard with an endpoint chosen).
+      // The live panel (A6: no "URL required" guard with an endpoint chosen):
+      // step 1 tests the connection with the id (rebadge batch 3, C1) — the
+      // endpoint's unset variable is the server's refusal, and step 2 stays
+      // hidden; the panel never posts a draft itself.
       await page.evaluate(() => document.getElementById('draft-mcp-btn').click());
       await page.waitForSelector('#draft-mcp-panel:not([hidden]) [data-mcp-target="draft"] select', { timeout: T });
       assert.deepEqual(await pickerOptions(page, 'draft'), GW_OPTIONS);
-      await page.fill('#draft-mcp-name', 'nightly');
-      await page.click('#draft-mcp-go-btn');
-      await page.waitForFunction(() => /^error: /.test(document.getElementById('draft-mcp-status')?.textContent || ''), null, { timeout: T });
-      assert.deepEqual(drafts.at(-1), { mcpEndpointId: gwId, packName: 'nightly' });
-      assert.match((await text(page, '#draft-mcp-status')).replace(/^error: /, ''), UNSET);
+      await page.click('#live-test-btn');
+      await page.waitForFunction(() => /^error: /.test(document.getElementById('live-ping-status')?.textContent || ''), null, { timeout: T });
+      assert.deepEqual(pings.at(-1), { mcpEndpointId: gwId }, 'the live panel\'s test: the id, no mcpUrl');
+      assert.match((await text(page, '#live-ping-status')).replace(/^error: 400: /, ''), UNSET);
+      assert.equal(await page.isHidden('#live-step-choose'), true, 'no choice without a connected test');
+      assert.equal(drafts.length, 0, 'the panel posts no draft of its own');
       await page.evaluate(() => document.getElementById('draft-mcp-panel-close').click());
 
       // The deploy modal: deploy, then the verify reads the server's refusal as a sentence (C-1).
