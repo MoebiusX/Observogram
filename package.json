@@ -89,6 +89,8 @@
     "test:golden:board:update": "node tools/test-golden-board.mjs --update",
     "test:golden:diff": "node tools/test-golden-diff.mjs",
     "test:golden:diff:update": "node tools/test-golden-diff.mjs --update",
+    "test:golden:snapshot": "node tools/test-live-snapshot.mjs",
+    "test:golden:snapshot:update": "node tools/test-live-snapshot.mjs --update",
     "test:contracts": "node tools/test-contract-guard.mjs && node tools/test-contract-shapes.mjs && node tools/test-stack-self-metrics.mjs",
     "test:stack": "node tools/test-stack-self-metrics.mjs",
     "test:stack-evidence": "node tools/test-stack-evidence.mjs",

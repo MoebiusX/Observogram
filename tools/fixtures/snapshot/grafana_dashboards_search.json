@@ -1,0 +1,71 @@
+{
+  "_synthetic": "2026-10-07 — hand-written for tools/test-live-snapshot.mjs (rebadge batch 3, C1): five dashboards whose uids are the shapes the fetcher and the crawler once slugged differently (an underscore, a digit-led md5, a double dash, a plain kebab, a digit-led underscore). Replace with a recording of grafana_dashboards_search when one carries these shapes.",
+  "count": 5,
+  "results": [
+    {
+      "id": 100,
+      "uid": "node_exporter_full",
+      "title": "Node Exporter Full",
+      "type": "dash-db",
+      "url": "/d/node_exporter_full/node-exporter-full",
+      "uri": "db/node-exporter-full",
+      "tags": [
+        "synthetic"
+      ],
+      "folderUid": "ab12",
+      "folderTitle": "Payments"
+    },
+    {
+      "id": 101,
+      "uid": "3b5d5c3712955042212316173ccf37be",
+      "title": "Kubernetes Pods",
+      "type": "dash-db",
+      "url": "/d/3b5d5c3712955042212316173ccf37be/kubernetes-pods",
+      "uri": "db/kubernetes-pods",
+      "tags": [
+        "synthetic"
+      ],
+      "folderUid": "ab12",
+      "folderTitle": "Payments"
+    },
+    {
+      "id": 102,
+      "uid": "a--b",
+      "title": "A to B traffic",
+      "type": "dash-db",
+      "url": "/d/a--b/a-to-b-traffic",
+      "uri": "db/a-to-b-traffic",
+      "tags": [
+        "synthetic"
+      ],
+      "folderUid": "ab12",
+      "folderTitle": "Payments"
+    },
+    {
+      "id": 103,
+      "uid": "orders-main",
+      "title": "Orders",
+      "type": "dash-db",
+      "url": "/d/orders-main/orders",
+      "uri": "db/orders",
+      "tags": [
+        "synthetic"
+      ],
+      "folderUid": "cd34",
+      "folderTitle": "Orders"
+    },
+    {
+      "id": 104,
+      "uid": "9xyz_abc",
+      "title": "Platform health",
+      "type": "dash-db",
+      "url": "/d/9xyz_abc/platform-health",
+      "uri": "db/platform-health",
+      "tags": [
+        "synthetic"
+      ],
+      "folderUid": "cd34",
+      "folderTitle": "Orders"
+    }
+  ]
+}
