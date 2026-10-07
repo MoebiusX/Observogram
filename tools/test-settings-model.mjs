@@ -19,10 +19,13 @@ import {
   parseKeyValueLines, environmentSaveStatus, endpointSaveStatus, memberSaveStatus, orgRenameStatus, endpointDeleteStatus,
   lastAdmin, orgEnvPrefix, mcpTargetModel, mcpTargetBody, mcpPickerCanAdmin, profileEndpointNote, endpointDrift,
   mcpTargetMissingText, mcpRegisterCheck,
+  noOwnerText, PASSWORD_ALPHABET, temporaryPassword, signInModeLine, buildUsersSectionModel, userActions, userActionStatus,
+  buildUserCreateBody, userCreateStatus,
 } from '../studio/settings-model.mjs';
 import {
   loadMcpEndpoints, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
   loadMembers, addMember, patchMember, removeMember, renameOrg, loadAudit,
+  loadUsers, createUser, userAction, setOwner, loadAdminOrgs, loadJoinRole,
 } from '../studio/settings-api.mjs';
 import { accessModel, TIER_BY_PACK } from '../studio/services-model.mjs';
 import { renderSettings, renderSettingsEditor, renderMcpTarget, readAuditDrafts } from '../studio/settings-view.mjs';
@@ -122,10 +125,11 @@ test('settingsAccessModel: each rank, each posture — the reasons name a way ou
 
 test('the frame: the scope line, the nav lists only the built sections, each unreadable one disabled with its reason', () => {
   assert.deepEqual(SETTINGS_SECTIONS, ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role']);
-  assert.deepEqual(BUILT_SECTIONS, ['environments', 'endpoints', 'members', 'audit'], 'the sections this build draws: the org\'s four — no deployment group yet');
-  assert.deepEqual(BUILT_EDITORS, ['endpoint', 'environment', 'org-name', 'member-add', 'member'], 'the record editors this build draws: the MCP endpoint, the environment, the org name and the member editors');
+  assert.deepEqual(BUILT_SECTIONS, ['environments', 'endpoints', 'members', 'audit', 'users'], 'the sections this build draws: the org\'s four and the deployment\'s users');
+  assert.deepEqual(BUILT_EDITORS, ['endpoint', 'environment', 'org-name', 'member-add', 'member', 'user-create', 'user'], 'the record editors this build draws: the MCP endpoint, the environment, the org name, the member editors and the user editors');
   const FOUR = ['environments', 'endpoints', 'members', 'audit'];
-  assert.deepEqual(buildSettingsFrameModel({ access: ADA }).nav.map((n) => n.id), BUILT_SECTIONS, 'the default nav is the built sections');
+  assert.deepEqual(buildSettingsFrameModel({ access: OLIVE }).nav.map((n) => n.id), BUILT_SECTIONS, 'the default nav is the built sections (an owner\'s)');
+  assert.deepEqual(buildSettingsFrameModel({ access: ADA }).nav.map((n) => n.id), FOUR, 'a non-owner\'s nav: the org\'s sections — the deployment\'s collapse into one line');
   const ada = buildSettingsFrameModel({ access: ADA, orgName: 'Acme', orgId: 'acme', builtSections: FOUR });
   assert.equal(ada.scope, 'Settings · Acme (acme) · you are admin');
   assert.equal(ada.section, 'environments', 'the first readable section by default');
@@ -172,7 +176,9 @@ test('the frame: the scope line, the nav lists only the built sections, each unr
   assert.deepEqual([stat.nav, stat.section, stat.banner.kind, stat.scope], [[], null, 'static', 'Settings']);
   assert.equal(settingsSectionFor(STATIC, 'environments'), null);
   assert.equal(settingsSectionFor(CLOSED, 'members', FOUR), 'environments', 'closed: members falls back');
-  assert.equal(settingsSectionFor(ADA, 'users'), 'environments', 'a section not built is never opened');
+  assert.equal(settingsSectionFor(OLIVE, 'orgs'), 'environments', 'a section not built is never opened');
+  assert.equal(settingsSectionFor(ADA, 'users'), 'environments', 'a section the rank cannot read is never opened');
+  assert.equal(settingsSectionFor(OLIVE, 'users'), 'users', 'Users is built, and an owner\'s');
   assert.equal(settingsSectionFor(ADA, 'members'), 'members', 'Members is built');
   assert.equal(settingsSectionFor(ADA, 'audit'), 'audit', 'the audit is built');
   // The heads: the title, the scope sentence naming the org, the reading line.
@@ -189,9 +195,9 @@ test('the Advanced → Settings item\'s sub-line names every built section (§3.
   const item = src.match(/data-action="settings">[\s\S]*?<span class="observa-adv-item-sub">([^<]*)<\/span>/);
   assert.ok(item, 'the Settings menu item carries a sub-line');
   const sub = item[1];
-  const WORDS = { environments: /\benvironments\b/, endpoints: /\bMCP endpoints\b/, members: /\bmembers\b/, audit: /\baudit\b/ };
+  const WORDS = { environments: /\benvironments\b/, endpoints: /\bMCP endpoints\b/, members: /\bmembers\b/, audit: /\baudit\b/, users: /\busers\b/ };
   for (const id of BUILT_SECTIONS) assert.match(sub, WORDS[id] ?? /(?!)/, `the sub-line names the built section ${id}`);
-  assert.doesNotMatch(sub, /slice|users|organisations|join/i, 'no roadmap wording, no section not built');
+  assert.doesNotMatch(sub, /slice|organisations|join/i, 'no roadmap wording, no section not built');
 });
 
 test('settingsAboveRank: a downgrade forgets what the new rank may not read (C-6)', () => {
@@ -446,7 +452,7 @@ test('the member editors: add by login or email, a role change, the remove step;
   assert.equal(owner.remove.enabled, true);
   const rename = buildSettingsEditorModel('org-name', { id: 'acme', name: 'Acme' }, { ctx, draft: { name: 'Acme Corp' } });
   assert.deepEqual([rename.title, rename.draft, rename.fields[0].help], ['Rename Acme', { name: 'Acme Corp' }, 'The id acme stays; only the name changes.']);
-  assert.throws(() => buildSettingsEditorModel('user', null, { ctx }), /no Settings editor of kind "user"/);
+  assert.throws(() => buildSettingsEditorModel('org', null, { ctx }), /no Settings editor of kind "org"/);
 });
 
 test('the status sentences name what the server changed, by label', () => {
@@ -714,6 +720,8 @@ function settingsContainer() {
       if (sel === '[data-member-role]') return [...html.matchAll(/data-member-role="(\d+)"/g)].map((m) => get(`role:${m[1]}`, true, { memberRole: m[1] }));
       if (sel === '[data-member-remove]') return [...html.matchAll(/data-member-remove="(\d+)"/g)].map((m) => get(`remove:${m[1]}`, true, { memberRemove: m[1] }));
       if (sel === '[data-editor-close]') return [...html.matchAll(/data-editor-close/g)].map((_, i) => get(`close:${i}`, true));
+      if (sel === '[data-user-manage]') return [...html.matchAll(/data-user-manage="(\d+)"/g)].map((m) => get(`user:${m[1]}`, true, { userManage: m[1] }));
+      if (sel === '[data-user-action]') return [...html.matchAll(/data-user-action="([\w-]+)"/g)].map((m) => get(`uact:${m[1]}`, true, { userAction: m[1] }));
       return [];
     },
   };
@@ -1250,4 +1258,240 @@ test('loadMcpEndpoints({ withPolicy }): { endpoints, policy } — the policy as 
   assert.deepEqual(await loadMcpEndpoints({ fetchFn: async () => ({ ok: true, endpoints: EP_OP, policy }), withPolicy: true }), { endpoints: EP_OP, policy });
   assert.deepEqual(await loadMcpEndpoints({ fetchFn: async () => ({ ok: true, endpoints: [] }), withPolicy: true }), { endpoints: [], policy: null });
   assert.deepEqual(await loadMcpEndpoints({ fetchFn: async () => ({ ok: true, endpoints: EP_OP, policy }) }), EP_OP);
+});
+
+// ---------- the deployment's users (6b-ii: an owner's) ----------
+
+// GET /api/admin/users in the server's shape (emails included — the loader drops them).
+const USERS_RAW = [
+  { id: 1, login: 'olive', kind: 'local', name: 'Olive', email: 'olive@mail.test', emailVerified: true, owner: true, disabled: false, mustChange: false, seededDefault: false, createdAt: 't', lastLoginAt: '2026-10-06T09:00:00.000Z', memberships: [{ orgId: 'default', role: 'admin' }, { orgId: 'acme', role: 'operator' }] },
+  { id: 2, login: 'ada', kind: 'local', name: 'Ada', email: 'ada@mail.test', emailVerified: false, owner: false, disabled: false, mustChange: true, seededDefault: false, createdAt: 't', lastLoginAt: null, memberships: [{ orgId: 'acme', role: 'admin' }] },
+  { id: 3, login: 'https://idp.test#u1', kind: 'oidc', name: null, email: 'u1@mail.test', emailVerified: true, owner: false, disabled: true, mustChange: false, seededDefault: false, createdAt: 't', lastLoginAt: null, memberships: [] },
+];
+const USERS = USERS_RAW.map(({ email: _e, emailVerified: _v, ...u }) => u);
+const OWNER_CTX = { access: OLIVE, orgName: 'Acme', orgId: 'acme', me: 'olive', users: USERS, defaultOrg: 'default',
+  orgs: [{ id: 'default', name: 'Default', removedAt: null }, { id: 'acme', name: 'Acme', removedAt: null }, { id: 'gone', name: 'Gone', removedAt: 't' }] };
+
+test('the deployment group: an owner\'s nav lists Users under its head; a signed-in non-owner reads one line saying who to ask (D-H); the token and closed postures draw it unavailable with their reasons', () => {
+  const owner = buildSettingsFrameModel({ access: OLIVE, orgName: 'Acme', orgId: 'acme' });
+  assert.deepEqual(owner.deployment, { head: 'The deployment', note: null });
+  assert.deepEqual(owner.nav.filter((n) => n.group === 'deployment').map((n) => [n.id, n.label, n.enabled]), [['users', 'Users', true]]);
+  for (const access of [ADA, OSCAR, VERA]) {
+    const f = buildSettingsFrameModel({ access, orgName: 'Acme', orgId: 'acme' });
+    assert.ok(!f.nav.some((n) => n.group === 'deployment'), 'no section a non-owner cannot open is listed');
+    assert.match(f.deployment.note, /^Users are an owner's — ask one\. /);
+    assert.equal(f.deployment.note, "Users are an owner's — ask one. (A deployment with no owner gets one from the server's shell: npm run users -- owner <login>.)");
+  }
+  // The line names only the deployment sections built (B3) — the full set once all three are.
+  assert.equal(noOwnerText(['users']), noOwnerText());
+  assert.equal(noOwnerText(['users', 'orgs', 'join-role']), "Users, organisations and the join role are an owner's — ask one. (A deployment with no owner gets one from the server's shell: npm run users -- owner <login>.)");
+  assert.equal(noOwnerText(['environments']), null);
+  assert.equal(buildSettingsFrameModel({ access: ADA, builtSections: ['environments', 'endpoints', 'members', 'audit'] }).deployment, null, 'no deployment section built: no group, no line');
+  const token = buildSettingsFrameModel({ access: TOKEN }).nav.find((n) => n.id === 'users');
+  assert.deepEqual([token.enabled, token.reason], [false, 'needs a signed-in owner — the banner above names the way in']);
+  const closed = buildSettingsFrameModel({ access: CLOSED }).nav.find((n) => n.id === 'users');
+  assert.deepEqual([closed.enabled, closed.reason], [false, 'closed on this server without sign-in — the banner above names the way in']);
+  assert.equal(buildSettingsFrameModel({ access: OPEN }).nav.find((n) => n.id === 'users').enabled, true, 'without sign-in, on the loopback: local is an owner (D-E)');
+  assert.deepEqual(buildSettingsFrameModel({ access: STATIC }).deployment, null);
+  assert.match(settingsSectionHead('users').scope, /temporary password, shown once\.$/);
+  assert.equal(settingsSectionHead('users').loading, 'Reading users…');
+});
+
+test('PASSWORD_ALPHABET and temporaryPassword (D-D, C-9): exactly 32 symbols, no look-alikes, 20 symbols of one byte each in groups of four', () => {
+  assert.equal(PASSWORD_ALPHABET.length, 32);
+  assert.equal(new Set(PASSWORD_ALPHABET).size, 32, 'no duplicate symbol');
+  assert.ok(!/[lo01A-Z]/.test(PASSWORD_ALPHABET), 'no l, o, 0, 1, no capitals');
+  const fixed = temporaryPassword(Uint8Array.from({ length: 20 }, (_, i) => i * 13));
+  assert.equal(fixed, 'ap4h-wbq5-ixcr-6jyd-s7kz');
+  assert.equal(fixed.length, 24);
+  assert.match(fixed, /^[a-km-np-z2-9]{4}(-[a-km-np-z2-9]{4}){4}$/);
+  for (let b = 0; b < 256; b++) {
+    const p = temporaryPassword(new Uint8Array(20).fill(b));
+    assert.ok(!p.includes('undefined') && p.length === 24, `byte ${b}`);
+    assert.equal(p[0], PASSWORD_ALPHABET[b & 31]);
+  }
+  assert.throws(() => temporaryPassword(new Uint8Array(19)), /20 random bytes/);
+});
+
+test('the users section: no email, the badges, the memberships, "you" by login; the last enabled owner; Manage… for an owner only', () => {
+  const m = buildUsersSectionModel({ users: USERS, access: OLIVE, me: 'olive' });
+  assert.equal(m.enabledOwners, 1);
+  assert.deepEqual(m.primary, { enabled: true, reason: null });
+  assert.deepEqual(m.rows.map((r) => [r.login, r.badges, r.memberships, r.lastSignIn, r.you, r.lastOwner, r.canManage]), [
+    ['olive', ['owner'], 'default:admin, acme:operator', 'last sign-in 2026-10-06T09:00:00.000Z', true, true, true],
+    ['ada', ['must change password'], 'acme:admin', 'never signed in', false, false, true],
+    ['https://idp.test#u1', ['disabled'], 'no organisation', 'never signed in', false, false, true],
+  ]);
+  assert.ok(!JSON.stringify(m).includes('@mail.test'), 'C-8: no email in the model');
+  const failed = buildUsersSectionModel({ users: null, access: OLIVE, error: '500: boom' });
+  assert.deepEqual([failed.rows, failed.error], [[], '500: boom']);
+  assert.equal(buildUsersSectionModel({ users: [], access: OLIVE }).empty, 'No users yet. New local user creates one.');
+  const ada = buildUsersSectionModel({ users: USERS, access: ADA });
+  assert.deepEqual(ada.primary, { enabled: false, reason: "users, organisations and the join role belong to the deployment's owners — ask an owner" });
+  assert.ok(ada.rows.every((r) => !r.canManage));
+});
+
+test('userActions: the server\'s rules drawn first — the last enabled owner, one\'s own password, an IdP user\'s, a disabled user made owner', () => {
+  const by = (rec, users = USERS, me = 'olive') => Object.fromEntries(userActions(rec, users, { me }).map((a) => [a.id, a.reason]));
+  assert.deepEqual(by(USERS[0]), {
+    reset: 'this is your own account — change your password at /auth/change-password',
+    disable: 'olive is the last enabled owner — make another user an owner first',
+    signout: null,
+    'owner-revoke': 'olive is the last enabled owner — make another user an owner first',
+  });
+  assert.deepEqual(by(USERS[1]), { reset: null, disable: null, signout: null, 'owner-grant': null });
+  assert.deepEqual(by(USERS[2]), {
+    reset: 'https://idp.test#u1 signs in through the IdP and has no password here — sign them out everywhere, or disable them',
+    enable: null, signout: null, 'owner-grant': 'https://idp.test#u1 is disabled — enable them first',
+  });
+  // A second enabled owner lifts the last-owner rule.
+  const two = USERS.map((u) => (u.login === 'ada' ? { ...u, owner: true } : u));
+  assert.deepEqual([by(two[0], two).disable, by(two[0], two)['owner-revoke']], [null, null]);
+  // A reader who may not act: every action carries their reason.
+  assert.ok(userActions(USERS[1], USERS, { can: false, reason: 'r' }).every((a) => !a.enabled && a.reason === 'r'));
+});
+
+test('the user editors: New local user has no password field and the organisation choice; the secret step shows the password once and the status never; a user\'s actions confirm first', () => {
+  const create = buildSettingsEditorModel('user-create', null, { ctx: OWNER_CTX });
+  assert.deepEqual(create.fields.map((f) => f.name), ['login', 'name', 'email', 'role', 'orgId'], 'no password field (D-D)');
+  assert.deepEqual(create.draft, { login: '', name: '', email: '', role: 'operator', orgId: 'acme' });
+  assert.deepEqual(create.fields.find((f) => f.name === 'orgId').options.map((o) => [o.value, o.selected]), [['default', false], ['acme', true]], 'live orgs only, the active one chosen');
+  assert.equal(create.primary.label, 'Create');
+  assert.equal(create.status.text, 'A local user who signs in with a password: a temporary one is drawn on Create and shown once.');
+  // The sign-in mode line (A13).
+  assert.equal(signInModeLine({ mode: 'local' }), null);
+  const oidcCtx = { ...OWNER_CTX, joinRole: { mode: 'oidc', issuerKey: 'https://idp.test' } };
+  assert.equal(buildSettingsEditorModel('user-create', null, { ctx: oidcCtx }).status.text, 'This server signs in through OIDC issuer https://idp.test: a local user cannot sign in here until it runs local sign-in.');
+  assert.equal(signInModeLine({ mode: 'proxy' }), 'This server signs in through its reverse proxy: a local user cannot sign in here until it runs local sign-in.');
+  assert.deepEqual(buildUserCreateBody({ login: ' nina ', name: '', email: ' n@x.test ', role: 'viewer', orgId: 'acme' }), { login: 'nina', email: 'n@x.test', role: 'viewer', orgId: 'acme' });
+  assert.deepEqual(buildUserCreateBody({ login: 'nina' }), { login: 'nina', role: 'operator' });
+  // The secret step.
+  const PW = 'abcd-efgh-ijkm-npqr-stuv';
+  const secret = buildSettingsEditorModel('user-create', null, { ctx: { ...OWNER_CTX, secret: { login: 'nina', value: PW, forced: true } }, step: 'secret', status: userCreateStatus({ user: { login: 'nina' }, owner: false, joined: [{ orgId: 'acme', role: 'viewer' }] }, { orgId: 'acme', orgName: 'Acme' }) });
+  assert.deepEqual(secret.secret, { text: 'Temporary password for nina — shown once. It is not stored in this browser and cannot be shown again; nina sets their own at first sign-in. Reset it to get a new one.', value: PW });
+  assert.equal(secret.primary, null);
+  assert.equal(secret.status.text, 'Created nina (viewer in Acme). Copy the temporary password before closing.');
+  assert.ok(!secret.status.text.includes(PW));
+  const oidcSecret = buildSettingsEditorModel('user-create', null, { ctx: { ...oidcCtx, secret: { login: 'nina', value: PW } }, step: 'secret' });
+  assert.ok(!/sets their own/.test(oidcSecret.secret.text), 'under OIDC the clause about setting their own goes (A13)');
+  // A user's dialog.
+  const ada = buildSettingsEditorModel('user', USERS[1], { ctx: OWNER_CTX });
+  assert.deepEqual([ada.title, ada.primary, ada.facts], ['ada', null, ['local · must change password', 'organisations: acme:admin', 'never signed in']]);
+  assert.deepEqual(ada.actions.map((a) => [a.id, a.label, a.enabled]), [['reset', 'Reset password…', true], ['disable', 'Disable…', true], ['signout', 'Sign out everywhere…', true], ['owner-grant', 'Make owner…', true]]);
+  const confirm = (action, rec = USERS[1]) => buildSettingsEditorModel('user', rec, { ctx: { ...OWNER_CTX, action }, step: 'confirm-action' }).confirm;
+  assert.deepEqual(confirm('reset'), { text: "Reset ada's password? Every session of ada ends; a new temporary password is shown once, and ada sets their own at their next sign-in.", danger: "Reset ada's password" });
+  assert.equal(confirm('owner-grant').text, "Make ada an owner? An owner manages this deployment's users and acts as an admin in every organisation; ada also becomes an admin of default.");
+  assert.match(confirm('signout', USERS[0]).text, / This is you: this browser is signed out too\.$/);
+  assert.match(confirm('disable').text, /^Disable ada\? Every session of ada ends/);
+  const reset = buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, secret: { login: 'ada', value: PW, forced: true } }, step: 'secret' });
+  assert.equal(reset.secret.text, 'Temporary password for ada — shown once. It is not stored in this browser and cannot be shown again; ada sets their own at their next sign-in. Reset it to get a new one.');
+  assert.equal(buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, signIn: true }, step: 'notice' }).signIn, true);
+  // A non-owner (the access downgraded while open): Create unavailable with the owner reason.
+  assert.deepEqual(buildSettingsEditorModel('user-create', null, { ctx: { ...OWNER_CTX, access: ADA } }).primary.enabled, false);
+});
+
+test('the user statuses: what the server did, by action; a create that armed sign-in says which way (D-E); a refused reset says the password is not forced', () => {
+  const s = (a, ans = {}) => userActionStatus(a, ans, { login: 'ada', defaultOrg: 'default' }).text;
+  assert.equal(s('reset'), 'Every session of ada ended; they set a new password at their next sign-in.');
+  assert.equal(s('disable'), 'ada disabled — every session ended.');
+  assert.equal(s('disable', { you: true }), 'You disabled your own account — this browser is signed out at its next request.');
+  assert.equal(s('enable'), 'ada enabled.');
+  assert.equal(s('signout'), 'Every session of ada ended.');
+  assert.equal(s('signout', { you: true }), 'You signed out everywhere — this browser is signed out at its next request.');
+  assert.equal(s('owner-grant', { changed: true, note: null }), 'ada is an owner (and an admin of default).');
+  assert.equal(s('owner-revoke', { changed: true, note: 'ada is still an admin of default: …' }), 'ada is no longer an owner. ada is still an admin of default: …');
+  assert.equal(s('owner-revoke', { changed: false }), 'ada is not an owner — nothing changed.');
+  const created = { user: { login: 'first' }, owner: true, joined: [{ orgId: 'default', role: 'admin' }], armed: false, note: null };
+  assert.equal(userCreateStatus(created, { orgId: null }).text, 'Created first (admin in default) — an owner: the first local user. Copy the temporary password before closing.');
+  const refused = userCreateStatus(created, { orgId: null, reset: '409: no' });
+  assert.equal(refused.kind, 'error');
+  assert.equal(refused.text, "Created first (admin in default) — an owner: the first local user, but making its password temporary was refused — 409: no. The password below is not forced to change: reset it from first's Manage….");
+  const armed = { ...created, armed: true };
+  assert.equal(userCreateStatus(armed, { signIn: true }).text, 'Sign-in is on now: first is an owner. Sign in as first with the password below.');
+  assert.equal(userCreateStatus(armed, { signIn: false }).text, 'first is created (an owner: the first local user). This server runs without sign-in (OBSERVOGRAM_AUTH=off): first signs in once it starts without it, with the password below. It is not forced to change — change it at /auth/change-password after signing in.');
+  assert.equal(userCreateStatus({ ...created, owner: false, joined: [{ orgId: 'acme', role: 'viewer' }], note: 'local users cannot sign in while …' }, { orgId: 'acme', orgName: 'Acme' }).text,
+    'Created first (viewer in Acme). Copy the temporary password before closing. local users cannot sign in while …');
+});
+
+test('the users loaders: one requestJson call each, ids and actions encoded, the password in the body only — and no email kept', async () => {
+  const calls = [];
+  const answer = { ok: true, users: USERS_RAW, user: USERS_RAW[1], owner: false, joined: [{ orgId: 'acme', role: 'viewer' }], armed: false, note: null, you: true, mustChange: true, changed: true, defaultOrg: 'default', orgs: [{ id: 'acme' }], role: null, mode: 'local', oidc: false, issuerKey: null };
+  const fetchFn = async (path, opts) => { calls.push([path, opts?.method ?? 'GET', opts?.body ?? null]); return answer; };
+  const users = await loadUsers({ fetchFn });
+  assert.deepEqual(users, USERS);
+  assert.ok(!JSON.stringify(users).includes('@mail.test') && !JSON.stringify(users).includes('emailVerified'), 'C-8: loadUsers drops every email');
+  const made = await createUser({ login: 'nina', password: 'pw-pw-pw-pw', role: 'viewer' }, { fetchFn });
+  assert.deepEqual([made.user.login, 'email' in made.user, made.armed, made.joined], ['ada', false, false, [{ orgId: 'acme', role: 'viewer' }]]);
+  assert.ok(!JSON.stringify(made).includes('pw-pw'), 'nothing of the password comes back');
+  assert.deepEqual(await userAction(2, 'password', { password: 'x' }, { fetchFn }), { user: USERS[1], you: true, mustChange: true });
+  await userAction('2/x', 'disable', null, { fetchFn });
+  assert.deepEqual(await setOwner(2, true, { fetchFn }), { user: USERS[1], changed: true, note: null });
+  assert.deepEqual(await loadAdminOrgs({ fetchFn }), { defaultOrg: 'default', orgs: [{ id: 'acme' }] });
+  assert.equal((await loadJoinRole({ fetchFn })).mode, 'local');
+  assert.equal('ok' in (await loadJoinRole({ fetchFn })), false);
+  assert.deepEqual(calls.slice(0, 6), [
+    ['/api/admin/users', 'GET', null],
+    ['/api/admin/users', 'POST', '{"login":"nina","password":"pw-pw-pw-pw","role":"viewer"}'],
+    ['/api/admin/users/2/password', 'POST', '{"password":"x"}'],
+    ['/api/admin/users/2%2Fx/disable', 'POST', '{}'],
+    ['/api/admin/users/2/owner', 'PUT', '{"owner":true}'],
+    ['/api/admin/orgs', 'GET', null],
+  ]);
+  assert.deepEqual(await loadUsers({ fetchFn: async () => ({}) }), []);
+});
+
+test('renderSettings and the user editor: Users under the deployment head, no email, Manage…; the no-owner line; the secret drawn once, never in the status; Copy and Go to sign-in', () => {
+  const calls = [];
+  const host = { settings: new Proxy({}, { get: (_, k) => (...a) => calls.push([k, ...a]) }) };
+  const xss = '<img src=x onerror="window.__x=1">';
+  const rows = [{ ...USERS[1], login: xss }, USERS[0]];
+  const frame = buildSettingsFrameModel({ access: OLIVE, section: 'users', orgName: 'Acme', orgId: 'acme' });
+  const c = settingsContainer();
+  renderSettings(c, frame, { id: 'users', head: settingsSectionHead('users'), model: buildUsersSectionModel({ users: rows, access: OLIVE, me: 'olive' }), status: { kind: 'ok', text: '' } }, host);
+  const h = c.innerHTML;
+  assert.ok(h.includes('<p class="set-nav-group" id="set-nav-deployment">The deployment</p>'));
+  assert.ok(h.indexOf('id="set-nav-deployment"') < h.indexOf('data-section="users"'), 'Users under the deployment head');
+  assert.ok(!h.includes('<img') && h.includes('&lt;img src=x onerror=&quot;window.__x=1&quot;&gt;'), 'a login is escaped');
+  assert.ok(!h.includes('@mail.test'));
+  assert.ok(h.includes('<span class="set-badge is-owner">owner</span>') && h.includes('<span class="set-badge">must change password</span>'));
+  assert.ok(h.includes('id="set-primary">New local user</button>'));
+  c.querySelectorAll('[data-user-manage]').forEach((b) => b.fire('click'));
+  c.querySelector('#set-primary').fire('click');
+  assert.deepEqual(calls, [['openEditor', { kind: 'user', id: 2 }], ['openEditor', { kind: 'user', id: 1 }], ['openEditor', { kind: 'user-create' }]]);
+  // A non-owner: the head and the line, no Users item.
+  const n = settingsContainer();
+  renderSettings(n, buildSettingsFrameModel({ access: ADA, orgName: 'Acme', orgId: 'acme' }), null, host);
+  assert.ok(n.innerHTML.includes('<p class="set-nav-note" id="set-nav-no-owner">Users are an owner&#39;s — ask one. (A deployment with no owner gets one from the server&#39;s shell: npm run users -- owner &lt;login&gt;.)</p>'));
+  assert.ok(!n.innerHTML.includes('data-section="users"'));
+
+  // The secret step: the password exactly once, in the <code>; never in the status line (mutation check 8).
+  const PW = 'abcd-efgh-ijkm-npqr-stuv';
+  const e = settingsContainer();
+  calls.length = 0;
+  const status = userCreateStatus({ user: { login: 'nina' }, joined: [{ orgId: 'acme', role: 'viewer' }] }, { orgId: 'acme', orgName: 'Acme' });
+  renderSettingsEditor(e, buildSettingsEditorModel('user-create', null, { ctx: { ...OWNER_CTX, secret: { login: 'nina', value: PW, forced: true }, signIn: true }, step: 'secret', status }), host);
+  const eh = e.innerHTML;
+  assert.equal(eh.split(PW).length - 1, 1, 'the password appears exactly once');
+  assert.ok(eh.includes(`<code class="set-secret-value" id="set-secret-value">${PW}</code>`));
+  const statusLine = eh.slice(eh.indexOf('id="set-editor-status"'), eh.indexOf('</div>', eh.indexOf('id="set-editor-status"')));
+  assert.ok(!statusLine.includes(PW) && statusLine.includes('Copy the temporary password before closing.'));
+  assert.ok(!/\b(title|aria-label)="[^"]*abcd-/.test(eh), 'never in a title or a label');
+  assert.ok(!eh.includes('set-editor-save" id="set-editor-save"'), 'no Create on the secret step');
+  e.querySelector('#set-secret-copy').fire('click');
+  e.querySelector('#set-editor-signin').fire('click');
+  assert.deepEqual(calls, [['copySecret'], ['signIn']]);
+  // A user's dialog: the facts, the actions; an unavailable one explains; another opens its confirm step.
+  const u = settingsContainer();
+  calls.length = 0;
+  renderSettingsEditor(u, buildSettingsEditorModel('user', USERS[0], { ctx: OWNER_CTX }), host);
+  assert.ok(u.innerHTML.includes('data-user-action="reset">Reset password…</button>') && !u.innerHTML.includes('set-edit-'));
+  for (const b of u.querySelectorAll('[data-user-action]')) b.fire('click');
+  assert.deepEqual(calls, [
+    ['explain', 'this is your own account — change your password at /auth/change-password'],
+    ['explain', 'olive is the last enabled owner — make another user an owner first'],
+    ['step', 'confirm-action:signout'],
+    ['explain', 'olive is the last enabled owner — make another user an owner first'],
+  ]);
+  const unavailable = u.querySelectorAll('[data-user-action]').find((b) => b.dataset.userAction === 'reset');
+  assert.equal(unavailable.getAttribute('aria-disabled'), 'true');
 });

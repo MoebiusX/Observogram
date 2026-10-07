@@ -68,10 +68,12 @@ import {
   buildMemberAddBody, memberSaveStatus, orgRenameStatus, lastAdmin, leftOrgText,
   buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
   mcpTargetModel, mcpTargetBody, mcpTargetMissingText, mcpRegisterCheck, profileEndpointNote, endpointDrift,
+  buildUsersSectionModel, buildUserCreateBody, userCreateStatus, userActionStatus, temporaryPassword,
 } from './settings-model.mjs';
 import {
   loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
   addMember, patchMember, removeMember, renameOrg, loadAudit,
+  loadUsers, createUser, userAction, setOwner, loadAdminOrgs, loadJoinRole,
 } from './settings-api.mjs';
 import { renderSettings, renderSettingsEditor, renderMcpTarget, readAuditDrafts } from './settings-view.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
@@ -1486,7 +1488,7 @@ function installObservaChrome(chrome) {
             <div class="observa-adv-menu-head">Administration</div>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="settings">
               <span class="observa-adv-item-label">Settings</span>
-              <span class="observa-adv-item-sub">environments, MCP endpoints, members, the audit…</span>
+              <span class="observa-adv-item-sub">environments, MCP endpoints, members, the audit, users…</span>
             </button>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="mcp">
               <span class="observa-adv-item-label">Live MCP connection</span>
@@ -2309,7 +2311,10 @@ let settingsFocusNext = false;
 // a downgrade a read met, each section's status line, the endpoints read's
 // refusal. Never persisted; a new entry starts afresh.
 function freshSettings() {
-  return { probe: null, denied: null, deniedAdmin: null, status: {}, members: null, org: null, membersError: null, endpointsError: null, audit: null };
+  return {
+    probe: null, denied: null, deniedAdmin: null, deniedOwn: null, status: {}, members: null, org: null, membersError: null, endpointsError: null, audit: null,
+    users: null, usersError: null, orgs: null, joinRole: null,
+  };
 }
 
 // What this reader may do in Settings (settings-model.mjs settingsAccessModel)
@@ -2320,6 +2325,12 @@ function settingsAccess() {
   const access = settingsAccessModel({ access: state.access, identity: state.identity, probe: state.settings?.probe ?? null, chromeName: state.brand?.chrome?.name });
   const denied = state.settings?.denied;
   const deniedAdmin = state.settings?.deniedAdmin;
+  const deniedOwn = state.settings?.deniedOwn;
+  if (!denied && !deniedAdmin && deniedOwn) {
+    // An owner's read or write refused by the role (no longer an owner): the
+    // deployment's controls go, with the server's sentence; the org's stay.
+    return { ...access, owner: false, can: { ...access.can, own: false, createOrg: false }, why: { ...access.why, own: deniedOwn, createOrg: deniedOwn } };
+  }
   if (!denied && deniedAdmin) {
     // An admin write refused by the role (demoted meanwhile): the admin's
     // controls and the owner's go, with the server's sentence; the rest stays.
@@ -2431,6 +2442,7 @@ async function loadSettingsSection(id, { notice = null } = {}) {
   repaintSettings();
   if (id === 'members') return loadMembersSection(settings, gen, notice);
   if (id === 'audit') return loadAuditSection(settings, gen, notice);
+  if (id === 'users') return loadUsersSection(settings, gen, notice);
   let endpointsRefusal = null;
   await Promise.all([
     refreshServices(),
@@ -2478,16 +2490,40 @@ async function loadMembersSection(settings, gen, notice) {
 // sentence; the session or the membership every control. The frame moves to
 // a section the rank reads, read with the sentence in its status line.
 // Answers true when it moved.
-function adminReadRefused(settings, refusal, gen, id) {
+function adminReadRefused(settings, refusal, gen, id, { need = 'admin' } = {}) {
   if (!refusal || !['auth', 'role', 'posture', 'org'].includes(refusal.denied)) return false;
-  if (refusal.denied === 'role') settings.deniedAdmin = refusal.message || 'refused';
+  if (refusal.denied === 'role' && need === 'own') settings.deniedOwn = refusal.message || 'refused';
+  else if (refusal.denied === 'role') settings.deniedAdmin = refusal.message || 'refused';
   else settings.denied = refusal.message || 'refused';
   forgetSettingsAbove(settingsAccess());
   if (gen === settingsGeneration && state.settingsSection && state.settingsSection !== id) {
-    loadSettingsSection(state.settingsSection, { notice: settings.denied || settings.deniedAdmin });
+    loadSettingsSection(state.settingsSection, { notice: settings.denied || settings.deniedAdmin || settings.deniedOwn });
     return true;
   }
   return false;
+}
+
+// The deployment's users (GET /api/admin/users, an owner's read), with the
+// live organisations a new user may join (GET /api/admin/orgs) and the
+// sign-in mode the server runs (GET /api/admin/join-role — a dialog says when
+// a local user cannot sign in here, A13). The users' refusal is the
+// section's; the other two only narrow the dialog (no organisation select,
+// no mode line) when they fail.
+async function loadUsersSection(settings, gen, notice) {
+  const [users, orgs, joinRole] = await Promise.allSettled([loadUsers(), loadAdminOrgs(), loadJoinRole()]);
+  if (state.settings === settings) {
+    Object.assign(settings, {
+      users: users.status === 'fulfilled' ? users.value : null,
+      usersError: users.status === 'fulfilled' ? null : (users.reason?.message || 'no answer'),
+      orgs: orgs.status === 'fulfilled' ? orgs.value : null,
+      joinRole: joinRole.status === 'fulfilled' ? joinRole.value : null,
+    });
+  }
+  if (state.mode !== 'settings' || state.settings !== settings) return;
+  if (adminReadRefused(settings, users.status === 'rejected' ? users.reason : null, gen, 'users', { need: 'own' })) return;
+  settings.status.users = { kind: 'ok', text: notice ?? '' };
+  if (gen !== settingsGeneration || state.settingsSection !== 'users') return;
+  repaintSettings();
 }
 
 // The audit (GET /api/audit, an admin's read; the deployment's rows an
@@ -2571,6 +2607,10 @@ function settingsSectionView(id, access) {
     const model = buildAuditSectionModel({ doc: audit.doc, rows: audit.rows, filters: audit.filters, access, orgId: state.orgId, formatTime: auditTime, error: audit.error });
     return { id, head, model, status, filters: audit.filters };
   }
+  if (id === 'users') {
+    const model = buildUsersSectionModel({ users: settings.users, access, me: signedInLogin(), error: settings.usersError, formatTime: auditTime });
+    return { id, head, model, status };
+  }
   if (id === 'members') {
     const model = buildMembersSectionModel({
       members: settings.members, org: settings.org ?? { id: state.orgId, name: state.orgName }, access,
@@ -2631,7 +2671,11 @@ function reloadIntoSettings(orgId, section = null) {
 // the service whose page opened it (null from Settings) — leaving that page
 // closes it, as leaving Settings closes one opened there. `endpointsError`
 // is the refusal of the endpoint list read when the editor opened (A4).
-let settingsEditor = null;   // { kind, id, serviceId, page, record, draft, status, step, opener, endpointsError } | null
+let settingsEditor = null;   // { kind, id, serviceId, page, record, draft, status, step, action, opener, endpointsError, secret, signIn } | null
+// A temporary password (users, D-D) lives in `settingsEditor.secret` only —
+// never in `state`, the draft, a status, a toast, announce() or the console —
+// for as long as the dialog shows it; while it does, a pagehide listener
+// empties the dialog (the back-forward cache would restore it — C-4).
 // Bumped by every open: an open that awaited the endpoint list and was
 // overtaken meanwhile (another open, the page left) draws nothing.
 let settingsEditorOpening = 0;
@@ -2681,6 +2725,7 @@ function settingsEditorRecord(ed) {
   if (ed.kind === 'org-name') return settingsOrgRecord();
   if (ed.id === null) return null;
   if (ed.kind === 'member') return Array.isArray(state.settings?.members) ? (state.settings.members.find((m) => m.userId === ed.id) ?? undefined) : ed.record;
+  if (ed.kind === 'user') return Array.isArray(state.settings?.users) ? (state.settings.users.find((u) => u.id === ed.id) ?? undefined) : ed.record;
   if (ed.kind === 'endpoint' && Array.isArray(state.mcpEndpoints)) return state.mcpEndpoints.find((ep) => ep.id === ed.id) ?? undefined;
   if (ed.kind === 'environment' && (state.mode === 'service' || Array.isArray(state.services))) return environmentRecord(ed.id) ?? undefined;
   return ed.record;
@@ -2707,6 +2752,7 @@ function syncSettingsEditor() {
   const record = ed ? settingsEditorRecord(ed) : null;
   if (!ed || !settingsEditorHere(ed) || record === undefined) {
     settingsEditor = null;
+    dropSettingsSecret(ed);
     if (el && el.innerHTML) el.innerHTML = '';
     return;
   }
@@ -2717,6 +2763,8 @@ function syncSettingsEditor() {
       access: settingsAccess(), orgName: state.orgName, orgId: state.orgId, services: ed.kind === 'environment' ? settingsEditorServices() : state.services,
       endpoints: state.mcpEndpoints, endpointsError: ed.endpointsError ?? state.settings?.endpointsError ?? null, serviceId: ed.serviceId ?? null,
       members: state.settings?.members ?? null, me: signedInLogin(),
+      users: state.settings?.users ?? null, orgs: state.settings?.orgs?.orgs ?? null, defaultOrg: state.settings?.orgs?.defaultOrg ?? null,
+      joinRole: state.settings?.joinRole ?? null, action: ed.action ?? null, secret: ed.secret ?? null, signIn: ed.signIn === true, formatTime: auditTime,
     },
   });
   renderSettingsEditor(settingsEditorHost(), model, settingsHost);
@@ -2731,6 +2779,7 @@ function settingsOpenerSelector(el) {
   if (el.dataset?.editEnv) return `[data-edit-env="${CSS.escape(el.dataset.editEnv)}"]`;
   if (el.dataset?.memberRole) return `[data-member-role="${CSS.escape(el.dataset.memberRole)}"]`;
   if (el.dataset?.memberRemove) return `[data-member-remove="${CSS.escape(el.dataset.memberRemove)}"]`;
+  if (el.dataset?.userManage) return `[data-user-manage="${CSS.escape(el.dataset.userManage)}"]`;
   return el.id ? `#${CSS.escape(el.id)}` : null;
 }
 
@@ -2747,7 +2796,7 @@ async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'e
   if (!BUILT_EDITORS.includes(kind)) return;
   if (kind === 'environment' ? !(state.mode === 'settings' || state.mode === 'service') : state.mode !== 'settings') return;
   const access = settingsAccess();
-  const need = kind === 'environment' ? 'operate' : 'admin';
+  const need = kind === 'environment' ? 'operate' : (kind === 'user' || kind === 'user-create') ? 'own' : 'admin';
   if (!access.can[need]) { explainUnavailable(access.why[need]); return; }
   const opening = ++settingsEditorOpening;
   const opener = settingsOpenerSelector(document.activeElement);
@@ -2755,6 +2804,7 @@ async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'e
   const find = () => {
     if (kind === 'endpoint') return Array.isArray(state.mcpEndpoints) ? state.mcpEndpoints.find((ep) => ep.id === id) : null;
     if (kind === 'member') return Array.isArray(state.settings?.members) ? state.settings.members.find((m) => m.userId === id) : null;
+    if (kind === 'user') return Array.isArray(state.settings?.users) ? state.settings.users.find((u) => u.id === id) : null;
     if (kind === 'org-name') return settingsOrgRecord();
     return environmentRecord(id);
   };
@@ -2777,6 +2827,7 @@ async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'e
   closeMcpPanel();
   const draftPanel = document.getElementById('draft-mcp-panel');
   if (draftPanel) draftPanel.hidden = true;
+  dropSettingsSecret(settingsEditor);
   settingsEditor = {
     kind, id, serviceId: record?.serviceId ?? serviceId ?? page, page: kind === 'environment' ? page : null,
     record, draft: null, status: null, step: kind === 'member' && step === 'confirm-delete' ? 'confirm-delete' : 'edit', opener, endpointsError,
@@ -2788,6 +2839,7 @@ async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'e
 function focusSettingsEditor() {
   const dialog = document.querySelector('#set-editor-host .set-editor');
   const first = dialog?.querySelector('input, textarea, select') || dialog?.querySelector('#set-editor-confirm')
+    || dialog?.querySelector('#set-secret-copy, #set-editor-signin, [data-user-action]')
     || dialog?.querySelector('[role="radio"][tabindex="0"]') || dialog;
   first?.focus({ preventScroll: true });
 }
@@ -2797,6 +2849,7 @@ function focusSettingsEditor() {
 function closeSettingsEditor({ focus = true } = {}) {
   if (!settingsEditor) return;
   const opener = settingsEditor.opener;
+  dropSettingsSecret(settingsEditor);
   settingsEditor = null;
   const el = document.getElementById('set-editor-host');
   if (el) el.innerHTML = '';
@@ -2808,7 +2861,10 @@ function closeSettingsEditor({ focus = true } = {}) {
 function setSettingsEditorStep(step, draft = null) {
   if (!settingsEditor || settingsEditor.status?.kind === 'pending') return;
   if (draft) settingsEditor.draft = draft;
-  settingsEditor.step = ['confirm-delete', 'confirm-action'].includes(step) ? step : 'edit';
+  // 'confirm-action:<action>' — a user's action (reset, disable, …) to confirm.
+  const [base, action = null] = String(step).split(':');
+  settingsEditor.step = ['confirm-delete', 'confirm-action'].includes(base) ? base : 'edit';
+  settingsEditor.action = settingsEditor.step === 'confirm-action' ? (action ?? settingsEditor.action ?? null) : null;
   settingsEditor.status = null;
   syncSettingsEditor();
   focusSettingsEditor();
@@ -2818,9 +2874,10 @@ function setSettingsEditorStep(step, draft = null) {
 // server closed the API (every control goes, with the server's sentence), or
 // the role went (the admin's controls go). Then what the rank may no longer
 // read is forgotten and the page repaints (design §4).
-function settingsWriteRefused(e) {
+function settingsWriteRefused(e, { need = 'admin' } = {}) {
   if (!state.settings) return;
-  if (e?.denied === 'role') state.settings.deniedAdmin = e.message || 'refused';
+  if (e?.denied === 'role' && need === 'own') state.settings.deniedOwn = e.message || 'refused';
+  else if (e?.denied === 'role') state.settings.deniedAdmin = e.message || 'refused';
   else if (['auth', 'posture', 'org'].includes(e?.denied)) state.settings.denied = e.message || 'refused';
   else return;
   forgetSettingsAbove(settingsAccess());
@@ -2847,6 +2904,7 @@ async function saveSettingsEditor(draft) {
   if (ed.kind === 'org-name') return saveOrgName(ed, draft);
   if (ed.kind === 'member-add') return saveMemberAdd(ed, draft);
   if (ed.kind === 'member') return saveMemberRole(ed, draft);
+  if (ed.kind === 'user-create') return createUserEditor(ed, draft);
   if (ed.kind !== 'endpoint') return null;
   ed.draft = draft;
   const record = ed.record;
@@ -2894,6 +2952,7 @@ async function confirmSettingsEditor() {
   const ed = settingsEditor;
   if (!ed || ed.status?.kind === 'pending' || !ed.record) return null;
   if (ed.kind === 'member' && ed.step === 'confirm-action') return patchMemberRole(ed, ed.draft?.role);
+  if (ed.kind === 'user' && ed.step === 'confirm-action') return userActionEditor(ed);
   if (ed.step !== 'confirm-delete') return null;
   if (ed.kind === 'member') return removeMemberEditor(ed);
   if (ed.kind === 'environment') return deleteEnvironmentEditor(ed);
@@ -2921,11 +2980,11 @@ async function confirmSettingsEditor() {
 
 // A members write refused: the server's sentence in the dialog's status line
 // (the last-admin 409 among them, as served); the gate's refusals downgrade.
-function memberWriteRefused(ed, e) {
+function memberWriteRefused(ed, e, { need = 'admin' } = {}) {
   if (settingsEditor !== ed) return null;
   ed.status = { kind: 'error', text: e?.message || 'no answer' };
   syncSettingsEditor();
-  settingsWriteRefused(e);
+  settingsWriteRefused(e, { need });
   return null;
 }
 
@@ -3075,6 +3134,174 @@ function leaveOrgAndReload() {
   window.location.reload();
 }
 
+// ---------- the deployment's users (design §5.7 — an owner's) ----------
+
+// The temporary password: 20 random bytes from Web Crypto (D-D).
+function drawTemporaryPassword() {
+  return temporaryPassword(crypto.getRandomValues(new Uint8Array(20)));
+}
+
+// The pagehide listener held while a dialog shows a password (C-4): the
+// dialog is emptied before the page can enter the back-forward cache.
+function onSettingsSecretPagehide() {
+  closeSettingsEditor({ focus: false });
+}
+
+// The dialog now holds a password: the step that shows it, and the pagehide
+// clearing while it does.
+function holdSettingsSecret(ed, secret) {
+  ed.secret = secret;
+  ed.step = 'secret';
+  window.addEventListener('pagehide', onSettingsSecretPagehide);
+}
+
+// The dialog lets go of its password (Close, leaving, pagehide, a sign-in).
+function dropSettingsSecret(ed) {
+  if (!ed?.secret) return;
+  ed.secret = null;
+  window.removeEventListener('pagehide', onSettingsSecretPagehide);
+}
+
+// Copy: the clipboard, else the password selected for the reader to copy.
+// Nothing about it is announced but that it happened.
+async function copySettingsSecret() {
+  const value = settingsEditor?.secret?.value;
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+    announce('Copied.');
+  } catch {
+    const code = document.getElementById('set-secret-value');
+    const range = document.createRange();
+    if (code) { range.selectNodeContents(code); const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range); }
+    announce('Selected — copy it with the keyboard.');
+  }
+}
+
+// Go to sign-in: the dialog (and any password it shows) is cleared first.
+function goToSignIn() {
+  closeSettingsEditor({ focus: false });
+  window.location.assign('/auth/login');
+}
+
+// This browser's traces of a user whose session ends from Settings (their
+// own disable or sign-out everywhere — C-5): the MCP URLs, endpoints and
+// deploy profiles, every snapshot in every org, the recent services — as the
+// account menu's sign-out clears them. Nothing is written after.
+function forgetBrowserTraces(login) {
+  persistence.suspend();
+  forgetMcpUrls(login);
+  persistence.forget(login);
+  forgetRecentServices();
+}
+
+// Create (POST /api/admin/users) with a temporary password drawn here, then
+// the reset with the same value (POST …/password) so the account must change
+// it at first sign-in (D-D: the create alone leaves it unforced). The dialog
+// then shows the password once. A create that armed sign-in (the first
+// local user on a store never armed — D-E) makes no second call: /auth/me
+// says whether sign-in is on now (any further call would then redirect) —
+// a JSON answer when it is; without sign-in (OBSERVOGRAM_AUTH=off) the route
+// is not mounted and the shell answers instead, as the boot's
+// loadIdentity() reads it.
+async function createUserEditor(ed, draft) {
+  ed.draft = draft;
+  const body = buildUserCreateBody(draft);
+  ed.status = { kind: 'pending', text: 'Creating…' };
+  syncSettingsEditor();
+  const password = drawTemporaryPassword();
+  let answer;
+  try { answer = await createUser({ ...body, password }); }
+  catch (e) { return memberWriteRefused(ed, e, { need: 'own' }); }
+  if (settingsEditor !== ed) return null;
+  const login = answer.user?.login ?? body.login;
+  const orgs = state.settings?.orgs?.orgs || [];
+  const orgName = orgs.find((o) => o.id === body.orgId)?.name ?? null;
+  let reset = null;
+  let signIn = false;
+  let forced = false;
+  if (answer.armed) {
+    try {
+      const r = await fetch('/auth/me');
+      const body = r.ok ? await r.json().catch(() => null) : null;
+      signIn = Boolean(body && typeof body === 'object' && 'authenticated' in body);
+    } catch { signIn = false; }
+  } else {
+    try { await userAction(answer.user.id, 'password', { password }); reset = 'ok'; forced = true; }
+    catch (e) { reset = e?.message || 'no answer'; }
+  }
+  const status = userCreateStatus(answer, { login, orgId: body.orgId ?? null, orgName, reset: answer.armed ? 'ok' : reset, signIn });
+  if (settingsEditor !== ed) return null;
+  holdSettingsSecret(ed, { login, value: password, forced });
+  Object.assign(ed, { status, signIn, draft: null });
+  syncSettingsEditor();
+  document.getElementById('set-secret-copy')?.focus({ preventScroll: true });
+  announce(status.text);
+  if (answer.armed && signIn) return { ok: true, armed: true };
+  if (state.mode === 'settings' && state.settingsSection) await loadSettingsSection(state.settingsSection);
+  return { ok: true };
+}
+
+// One user action, confirmed: reset (a new temporary password, shown once),
+// disable / enable, sign out everywhere, make or revoke owner. The status
+// says what the server did. One's own disable or sign-out ends this
+// browser's session: its traces go first, then the sentence and Go to
+// sign-in — and no further call (it would redirect mid-dialog, T8). One's
+// own owner revoke reads /auth/me again and re-gates the page.
+async function userActionEditor(ed) {
+  const action = ed.action;
+  const row = ed.record;
+  if (!action || !row) return null;
+  const login = row.login;
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let answer;
+  let password = null;
+  try {
+    if (action === 'reset') { password = drawTemporaryPassword(); answer = await userAction(row.id, 'password', { password }); }
+    else if (action === 'disable' || action === 'enable' || action === 'signout') answer = await userAction(row.id, action);
+    else if (action === 'owner-grant' || action === 'owner-revoke') answer = await setOwner(row.id, action === 'owner-grant');
+    else return null;
+  } catch (e) { return memberWriteRefused(ed, e, { need: 'own' }); }
+  const status = userActionStatus(action, answer, { login, defaultOrg: state.settings?.orgs?.defaultOrg ?? null });
+  if (answer.you && (action === 'disable' || action === 'signout')) {
+    forgetBrowserTraces(signedInLogin());
+    if (settingsEditor === ed) { Object.assign(ed, { step: 'notice', action: null, status, signIn: true }); syncSettingsEditor(); }
+    document.getElementById('set-editor-signin')?.focus({ preventScroll: true });
+    announce(status.text);
+    return { ok: true, signedOut: true };
+  }
+  if (settingsEditor === ed) {
+    if (action === 'reset') holdSettingsSecret(ed, { login, value: password, forced: true });
+    else ed.step = 'edit';
+    Object.assign(ed, { action: null, status });
+    syncSettingsEditor();
+    focusSettingsEditor();
+  }
+  announce(status.text);
+  if (action === 'owner-revoke' && login === signedInLogin()) return afterOwnOwnerRevoke(status.text);
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
+// One's own owner role revoked: /auth/me read again; in an org this user is
+// a member of, the page re-gates (the deployment's sections go, with what
+// they held) and lands on a section the rank reads; else this browser
+// reloads into their first organisation.
+async function afterOwnOwnerRevoke(notice) {
+  closeSettingsEditor({ focus: false });
+  await loadIdentity();
+  const member = (state.identity?.orgs || []).some((o) => o.id === state.orgId);
+  if (!member) { leaveOrgAndReload(); return { ok: true, left: true }; }
+  await refreshAccess();
+  if (state.settings) state.settings.deniedOwn = null;
+  forgetSettingsAbove(settingsAccess());
+  updateObservaOrgChip();
+  if (state.mode === 'settings' && state.settingsSection) await loadSettingsSection(state.settingsSection, { notice });
+  document.querySelector('.set-title')?.focus({ preventScroll: true });
+  return { ok: true };
+}
+
 // ---------- the environment editor (design §5.1–5.2: one editor, two doors) ----------
 
 // An environment write refused: the server's sentence in the status line; a
@@ -3219,6 +3446,8 @@ const settingsActions = {
   auditMore: () => loadOlderAuditRows(),
   pickMcpTarget: (container, value) => pickMcpTarget(container, value),
   openMcpEndpoints: () => openMcpEndpointsFromPicker(),
+  copySecret: () => copySettingsSecret(),
+  signIn: () => goToSignIn(),
 };
 const settingsHost = { renderMainView, renderTabs, settings: settingsActions };
 

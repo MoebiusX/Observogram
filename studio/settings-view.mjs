@@ -19,10 +19,19 @@ import { escapeHtml, TRAPPED_DIALOGS } from './util.mjs';
 import { markUnavailable } from './services-view.mjs';
 
 // The nav: one button per built section — aria-current names the one on
-// screen (a section is a page, not a tab panel).
-function navHtml(nav) {
-  return nav.map((n) => `
-          <button type="button" class="set-nav-item" data-section="${escapeHtml(n.id)}" aria-current="${n.current ? 'page' : 'false'}">${escapeHtml(n.label)}</button>`).join('');
+// screen (a section is a page, not a tab panel). The deployment's sections
+// (an owner's) under their own head; for a reader who is not an owner, the
+// head and one line saying who to ask instead.
+function navHtml(nav, deployment = null) {
+  const item = (n) => `
+          <button type="button" class="set-nav-item" data-section="${escapeHtml(n.id)}" aria-current="${n.current ? 'page' : 'false'}">${escapeHtml(n.label)}</button>`;
+  const org = nav.filter((n) => n.group !== 'deployment').map(item).join('');
+  if (!deployment) return org;
+  const head = `
+          <p class="set-nav-group" id="set-nav-deployment">${escapeHtml(deployment.head)}</p>`;
+  const rest = deployment.note ? `
+          <p class="set-nav-note" id="set-nav-no-owner">${escapeHtml(deployment.note)}</p>` : nav.filter((n) => n.group === 'deployment').map(item).join('');
+  return org + head + rest;
 }
 
 // The environments, grouped by service: each service's name and slug, "Open
@@ -87,6 +96,26 @@ function membersHtml(model) {
               <button type="button" class="ux-secondary-btn" data-member-role="${escapeHtml(String(r.userId))}" aria-label="${escapeHtml(`Change the role of ${r.login}`)}">Change role…</button>
               <button type="button" class="ux-secondary-btn" data-member-remove="${escapeHtml(String(r.userId))}" aria-label="${escapeHtml(`Remove ${r.login}`)}">Remove…</button>
             </span>` : ''}
+          </li>`).join('')}
+        </ul>`;
+}
+
+// The deployment's users: the login, "you", the badges (owner, disabled,
+// must change password, seeded default), how they sign in, their
+// organisations and their last sign-in. No email (the loader dropped it).
+// For an owner, Manage… (the user's dialog).
+function usersHtml(model) {
+  if (!model.rows.length) return '';
+  return `
+        <ul class="set-list" aria-label="Users of this deployment">${model.rows.map((r) => `
+          <li class="set-row" data-user-id="${escapeHtml(String(r.id))}">
+            <span class="set-row-name">${escapeHtml(r.login)}</span>${r.you ? `
+            <span class="set-you">you</span>` : ''}${r.badges.map((b) => `
+            <span class="set-badge${b === 'owner' ? ' is-owner' : b === 'disabled' ? ' is-disabled' : ''}">${escapeHtml(b)}</span>`).join('')}
+            <span class="set-row-facts">
+              <span class="set-row-meta">${escapeHtml([r.name, r.kind, r.memberships, r.lastSignIn].filter(Boolean).join(' · '))}</span>
+            </span>${r.canManage ? `
+            <button type="button" class="ux-secondary-btn" data-user-manage="${escapeHtml(String(r.id))}" aria-label="${escapeHtml(`Manage ${r.login}`)}">Manage…</button>` : ''}
           </li>`).join('')}
         </ul>`;
 }
@@ -188,8 +217,8 @@ function statusHtml(section) {
 // The section's primary action (the editor that creates a record), drawn
 // once its editor is built — unavailable with its reason for a rank that
 // cannot use it.
-const PRIMARY_LABEL = { environments: 'Add environment', endpoints: 'New MCP endpoint', members: 'Add member' };
-const PRIMARY_KIND = { environments: 'environment', endpoints: 'endpoint', members: 'member-add' };
+const PRIMARY_LABEL = { environments: 'Add environment', endpoints: 'New MCP endpoint', members: 'Add member', users: 'New local user' };
+const PRIMARY_KIND = { environments: 'environment', endpoints: 'endpoint', members: 'member-add', users: 'user-create' };
 
 function sectionHtml(section) {
   if (!section?.id) return '';
@@ -198,7 +227,8 @@ function sectionHtml(section) {
   const body = section.id === 'environments' ? environmentsHtml(section.model)
     : section.id === 'endpoints' ? endpointsHtml(section.model)
       : section.id === 'members' ? membersHtml(section.model)
-        : section.id === 'audit' ? auditHtml(section.model, section.filters) : '';
+        : section.id === 'audit' ? auditHtml(section.model, section.filters)
+          : section.id === 'users' ? usersHtml(section.model) : '';
   const loading = section.status?.kind === 'loading';
   // The scope sentence: the head's, or the section model's own (the members name the org's id).
   const scope = section.head.scope ?? section.model?.scopeSentence ?? null;
@@ -232,7 +262,7 @@ export function renderSettings(container, frame, section, host = appHost) {
       ${banner ? `<div class="set-banner is-${escapeHtml(banner.kind)}" role="status">${escapeHtml(banner.text)}</div>` : ''}
       ${frame.nav.length ? `
       <div class="set-layout">
-        <nav class="set-nav" aria-label="Settings sections">${navHtml(frame.nav)}
+        <nav class="set-nav" aria-label="Settings sections">${navHtml(frame.nav, frame.deployment)}
         </nav>
         ${sectionHtml(section)}
       </div>` : ''}
@@ -271,6 +301,9 @@ export function renderSettings(container, frame, section, host = appHost) {
     btn.addEventListener('click', () => host.settings?.openEditor?.({ kind: 'environment', id: Number(btn.dataset.editEnv) }));
   });
   if (section.id === 'members') wireMembers(container, section.model, host);
+  container.querySelectorAll('[data-user-manage]').forEach((btn) => {
+    btn.addEventListener('click', () => host.settings?.openEditor?.({ kind: 'user', id: Number(btn.dataset.userManage) }));
+  });
   if (section.id === 'audit') {
     for (const [name, v] of section.drafts || []) { const el = container.querySelector(`#${auditFieldId(name)}`); if (el) el.value = v; }
     wireAudit(container, section.model, host);
@@ -399,6 +432,13 @@ function fieldHtml(f, limits) {
 // The footer's buttons by step: editing — Close, Delete… (a record), the
 // primary; the delete step — Back and the danger button naming the record.
 function editorActionsHtml(model) {
+  // The secret step and the step after one's own sign-out: Close, and Go to
+  // sign-in when this browser's session has ended or sign-in just came on.
+  if (model.step === 'secret' || model.step === 'notice') {
+    return `
+          <button type="button" class="ctrl-btn set-editor-cancel" data-editor-close>Close</button>${model.signIn ? `
+          <button type="button" class="mcp-refresh-btn set-editor-save" id="set-editor-signin">Go to sign-in</button>` : ''}`;
+  }
   if ((model.step === 'confirm-delete' || model.step === 'confirm-action') && model.confirm) {
     return `
           <button type="button" class="ctrl-btn set-editor-cancel" id="set-editor-back">Back</button>
@@ -406,8 +446,31 @@ function editorActionsHtml(model) {
   }
   return `
           <button type="button" class="ctrl-btn set-editor-cancel" data-editor-close>Close</button>${model.remove ? `
-          <button type="button" class="ctrl-btn set-editor-delete" id="set-editor-delete">${escapeHtml(model.remove.label || 'Delete…')}</button>` : ''}
-          <button type="button" class="mcp-refresh-btn set-editor-save" id="set-editor-save" aria-disabled="${model.primary.enabled ? 'false' : 'true'}">${escapeHtml(model.primary.label)}</button>`;
+          <button type="button" class="ctrl-btn set-editor-delete" id="set-editor-delete">${escapeHtml(model.remove.label || 'Delete…')}</button>` : ''}${model.primary ? `
+          <button type="button" class="mcp-refresh-btn set-editor-save" id="set-editor-save" aria-disabled="${model.primary.enabled ? 'false' : 'true'}">${escapeHtml(model.primary.label)}</button>` : ''}`;
+}
+
+// The editor's body by step: the consequence sentence (a confirm step); the
+// temporary password, once, beside its sentence and Copy (the secret step);
+// nothing but the status line (the step after one's own sign-out); a user's
+// facts and actions; else the kind's fields.
+function editorBodyHtml(model) {
+  const confirming = (model.step === 'confirm-delete' || model.step === 'confirm-action') && model.confirm;
+  if (confirming) return `
+        <p class="set-confirm" id="set-editor-confirm-text">${escapeHtml(model.confirm.text)}</p>`;
+  if (model.step === 'secret' && model.secret) return `
+        <div class="set-secret">
+          <p class="set-secret-text">${escapeHtml(model.secret.text)}</p>
+          <code class="set-secret-value" id="set-secret-value">${escapeHtml(model.secret.value)}</code>
+          <button type="button" class="ux-secondary-btn" id="set-secret-copy">Copy</button>
+        </div>`;
+  if (model.step === 'notice') return '';
+  if (model.kind === 'user') return `${(model.facts || []).map((f) => `
+        <p class="set-row-meta set-user-fact">${escapeHtml(f)}</p>`).join('')}
+        <div class="set-row-actions set-user-actions" role="group" aria-label="${escapeHtml(`Actions on ${model.title}`)}">${(model.actions || []).map((a) => `
+          <button type="button" class="ux-secondary-btn" data-user-action="${escapeHtml(a.id)}">${escapeHtml(a.label)}</button>`).join('')}
+        </div>`;
+  return (model.fields || []).map((f) => fieldHtml(f, model.limits)).join('');
 }
 
 // The editor (buildSettingsEditorModel): a scrim and a modal dialog drawn
@@ -422,14 +485,15 @@ function editorActionsHtml(model) {
 // host.settings.save(draft); Delete… / Back → host.settings.step(step,
 // draft); the danger button → host.settings.confirm().
 export function renderSettingsEditor(container, model, host = appHost) {
-  const key = `${model.kind}:${model.id ?? 'new'}:${model.step}`;
+  // A user's dialog is drawn anew when its facts or its actions change (an
+  // action done: Disable… becomes Enable…); every other kind by record and step.
+  const key = `${model.kind}:${model.id ?? 'new'}:${model.step}${model.kind === 'user' ? `:${shortHash(JSON.stringify([model.facts, model.actions]))}` : ''}`;
   const mounted = container.querySelector('.set-editor');
   if (mounted && mounted.getAttribute('data-editor-key') === key) {
     paintSettingsEditorStatus(container, model.status);
     paintEditorButtons(container, model);
     return;
   }
-  const confirming = (model.step === 'confirm-delete' || model.step === 'confirm-action') && model.confirm;
   container.innerHTML = `
     <div class="set-editor-scrim" data-editor-close aria-hidden="true"></div>
     <div class="set-editor" role="dialog" aria-modal="true" aria-labelledby="set-editor-title" aria-describedby="set-editor-status" data-kind="${escapeHtml(model.kind)}" data-record-id="${escapeHtml(String(model.id ?? ''))}" data-editor-key="${escapeHtml(key)}" tabindex="-1">
@@ -438,8 +502,7 @@ export function renderSettingsEditor(container, model, host = appHost) {
         <h2 class="set-editor-title" id="set-editor-title">${escapeHtml(model.title)}</h2>
         <button type="button" class="set-editor-close" data-editor-close aria-label="Close the editor (Esc)"><span aria-hidden="true">esc</span></button>
       </header>
-      <div class="set-editor-body">${confirming ? `
-        <p class="set-confirm" id="set-editor-confirm-text">${escapeHtml(model.confirm.text)}</p>` : model.fields.map((f) => fieldHtml(f, model.limits)).join('')}
+      <div class="set-editor-body">${editorBodyHtml(model)}
       </div>
       <footer class="set-editor-foot">
         <div class="set-editor-status is-${escapeHtml(model.status.kind)}" id="set-editor-status" role="status" aria-live="polite">${escapeHtml(model.status.text)}</div>
@@ -496,11 +559,29 @@ export function renderSettingsEditor(container, model, host = appHost) {
     act().step?.('confirm-delete', readDraft());
   });
   container.querySelector('#set-editor-back')?.addEventListener('click', () => act().step?.('edit'));
+  // A user's actions: each opens its confirm step, or says why it is unavailable.
+  container.querySelectorAll('[data-user-action]').forEach((btn) => {
+    const a = (model.actions || []).find((x) => x.id === btn.dataset.userAction);
+    if (a && !a.enabled) markUnavailable(btn, a.reason);
+    btn.addEventListener('click', () => {
+      if (!a || !a.enabled) { host.settings?.explain?.(a?.reason ?? null); return; }
+      host.settings?.step?.(`confirm-action:${a.id}`);
+    });
+  });
+  container.querySelector('#set-secret-copy')?.addEventListener('click', () => host.settings?.copySecret?.());
+  container.querySelector('#set-editor-signin')?.addEventListener('click', () => host.settings?.signIn?.());
   container.querySelector('#set-editor-confirm')?.addEventListener('click', () => {
     const now = EDITOR_MODEL.get(container) || model;
     if (now.saving) return;
     act().confirm?.();
   });
+}
+
+// A short, stable digest of a string (an editor key's part; not a secret's).
+function shortHash(text) {
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+  return h.toString(36);
 }
 
 // The segmented groups: a click checks one; ArrowLeft / ArrowRight / Home /
@@ -551,7 +632,7 @@ const EDITOR_MODEL = new WeakMap();
 // `disabled`: the reason stays reachable); the same for Delete….
 function paintEditorButtons(container, model) {
   EDITOR_MODEL.set(container, model);
-  const save = container.querySelector('#set-editor-save');
+  const save = model.primary ? container.querySelector('#set-editor-save') : null;
   if (save) {
     if (!model.primary.enabled && !model.saving) markUnavailable(save, model.primary.reason);
     else save.setAttribute('aria-disabled', model.saving ? 'true' : 'false');

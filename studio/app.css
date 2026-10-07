@@ -9424,11 +9424,23 @@ select.build-edit-input { appearance: auto; }
 .set-mcp-target-hint { display: block; margin: 2px 0 0; font: 12.5px/1.45 var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
 .set-mcp-target-hint .ux-secondary-btn { margin-left: 6px; }
 
+/* The deployment group's line for a reader who is not an owner: who to ask, plain secondary text in the nav. */
+.set-nav-note { margin: 0; padding: 4px 12px 0; font: 12.5px/1.45 var(--sans); color: var(--ink-3); overflow-wrap: anywhere; }
+/* A user's dialog: its facts as tight lines, its actions in one wrapping group under them. */
+.set-user-fact { margin: 0; }
+.set-user-actions { margin: 6px 0 0; justify-content: flex-start; }
+/* The temporary password, shown once: the sentence, the value in the mono (selectable as one), Copy. The card with
+   a hairline; text --ink / --ink-2 on it. */
+.set-secret { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 14px 16px; color: var(--ink-2); background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+.set-secret-text { flex: 1 0 100%; margin: 0; font-size: 14px; line-height: 1.5; color: var(--ink-2); }
+.set-secret-value { font: 600 16px/1.4 var(--mono); color: var(--ink); user-select: all; overflow-wrap: anywhere; }
+
 @media (max-width: 760px) {
   .set-page { padding: 16px 16px 64px; }
   .set-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .set-nav { flex-direction: row; overflow-x: auto; gap: 4px; padding-bottom: 4px; scrollbar-width: thin; }
   .set-nav-group { margin: 0; padding: 8px 6px; white-space: nowrap; }
+  .set-nav-note { flex: 0 0 260px; padding: 4px 6px; }
   .set-nav-item { flex: 0 0 auto; white-space: nowrap; border-left: 0; border-bottom: 2px solid transparent; }
   .set-nav-item[aria-current="page"] { border-left: 0; border-bottom: 2px solid var(--CMP); }
   .set-row .ux-secondary-btn { margin-left: 0; }

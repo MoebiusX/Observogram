@@ -5,8 +5,9 @@
 // typed URL). Every function takes its inputs explicitly — 6a's accessModel()
 // (studio/services-model.mjs), the /auth/me body, the probe's answer, the
 // GET /api/services rows (ServiceView), GET /api/mcp-endpoints
-// (McpEndpointView), GET /api/org/members (already email-free: the loaders in
-// studio/settings-api.mjs drop it), GET /api/audit — and returns plain data
+// (McpEndpointView), GET /api/org/members and GET /api/admin/users (already
+// email-free: the loaders in studio/settings-api.mjs drop it), GET /api/audit,
+// GET /api/admin/orgs and /api/admin/join-role — and returns plain data
 // for the renderers and the controller (studio/app.mjs). No state reads, no
 // fetches, no DOM: tools/test-settings-model.mjs exercises it under node:test
 // (docs/UI_CONVENTIONS.md §2). Its one import is the tier vocabulary of
@@ -16,17 +17,18 @@
 // use is drawn disabled with a reason that names a way out working for the
 // rank reading it; the server's refusal is shown as is (`<status>: <text>`);
 // the MCP read token is a server environment variable's NAME, never a value;
-// no member's email reaches a model.
+// no member's or user's email reaches a model; a temporary password reaches
+// the editor model of the one step that shows it, and no status sentence.
 
 import { TIERS, TIER_BY_PACK } from './services-model.mjs';
 
 export const SETTINGS_SECTIONS = ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role'];
 // The sections this build draws (the nav lists only these — never a
 // placeholder for one that is not built).
-export const BUILT_SECTIONS = ['environments', 'endpoints', 'members', 'audit'];
+export const BUILT_SECTIONS = ['environments', 'endpoints', 'members', 'audit', 'users'];
 // The record editors this build draws: a section whose editor is not built
 // draws no primary and no row action, and no sentence names one.
-export const BUILT_EDITORS = ['endpoint', 'environment', 'org-name', 'member-add', 'member'];
+export const BUILT_EDITORS = ['endpoint', 'environment', 'org-name', 'member-add', 'member', 'user-create', 'user'];
 
 const SECTION_LABEL = {
   environments: 'Environments', endpoints: 'MCP endpoints', members: 'Members', audit: 'Audit',
@@ -57,6 +59,19 @@ const CREATE_ORG_REASON = 'a second organisation needs sign-in, and this server 
 const OPEN_BANNER = 'This server runs without sign-in: you act as local, an owner, and every change here is audited as local.';
 
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const DEPLOYMENT_HEAD = 'The deployment';
+
+// The deployment group's line for a signed-in reader who is not an owner
+// (design §3.4, A-7, D-H): it cannot say whether an owner exists — only who
+// to ask, and how a deployment with none gets one. It names the deployment
+// sections this build draws, and no other.
+export function noOwnerText(builtSections = BUILT_SECTIONS) {
+  const ids = SETTINGS_SECTIONS.filter((id) => SECTION_GROUP[id] === 'deployment' && builtSections.includes(id));
+  if (!ids.length) return null;
+  const words = ids.map((id, i) => (id === 'join-role' ? 'the join role' : i === 0 ? SECTION_LABEL[id] : SECTION_LABEL[id].toLowerCase()));
+  const list = words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+  return `${list} ${words.length === 1 && ids[0] !== 'users' ? 'is' : 'are'} an owner's — ask one. (A deployment with no owner gets one from the server's shell: npm run users -- owner <login>.)`;
+}
 const isArr = Array.isArray;
 
 // The probe's answer as the controller hands it: null (not issued or not
@@ -145,13 +160,23 @@ export function buildSettingsFrameModel({ access, section = null, orgName = null
   const where = orgName && orgId ? `${orgName} (${orgId})` : (orgName || orgId || null);
   const who = access.role ? `you are ${access.role}${access.owner ? ', an owner' : ''}` : null;
   const scope = ['Settings', where, who].filter(Boolean).join(' · ');
-  const nav = access.posture === 'static' ? [] : SETTINGS_SECTIONS.filter((id) => builtSections.includes(id)).map((id) => {
+  let nav = access.posture === 'static' ? [] : SETTINGS_SECTIONS.filter((id) => builtSections.includes(id)).map((id) => {
     const enabled = sectionReadable(access, id);
     const need = SECTION_NEEDS[id];
     return { id, label: SECTION_LABEL[id], group: SECTION_GROUP[id], current: id === current, enabled, reason: enabled ? null : readWhy(access, need) };
   });
+  // The deployment group (the owner's sections), under its own head; for a
+  // signed-in reader who is not an owner, collapsed to one line naming who to
+  // ask (A-27) — never a list of sections they cannot open. Other postures
+  // draw the items unavailable with their reasons (the banner names the way).
+  let deployment = null;
+  if (nav.some((n) => n.group === 'deployment')) {
+    const collapse = access.posture === 'identity' && access.owner !== true;
+    deployment = { head: DEPLOYMENT_HEAD, note: collapse ? noOwnerText(builtSections) : null };
+    if (collapse) nav = nav.filter((n) => n.group !== 'deployment');
+  }
   return {
-    title: 'Settings', scope, banner: access.banner, nav, section: current,
+    title: 'Settings', scope, banner: access.banner, nav, deployment, section: current,
     status: current && typeof statusOf === 'function' ? (statusOf(current) ?? null) : null,
   };
 }
@@ -164,6 +189,7 @@ export function settingsSectionHead(id, { orgName = null } = {}) {
   const scope = {
     environments: `Every environment of ${org}'s services — its tier, the MCP endpoint it is checked through, its bindings and links. Build registers a service; each opens on its own page.`,
     endpoints: `The MCP gateways registered in ${org}, and the environments checked through each. A read token stays on the server: a gateway names the variable that holds it, never its value.`,
+    users: 'Every user of this deployment: how they sign in, whether they are an owner, and the organisations they belong to. A new local user gets a temporary password, shown once.',
     // The members' scope sentence is the section model's (it names the org's id, and an owner acting from outside).
   }[id] ?? null;
   return { title, scope, loading: `Reading ${title.replace(/^[A-Z](?=[a-z])/, (c) => c.toLowerCase())}…` };
@@ -423,6 +449,148 @@ export function buildAuditSectionModel({ doc = null, rows = [], filters = {}, ac
     // A filter the server refused (400) is answered by changing the filters, not by Retry.
     retry: error ? !/^400:/.test(String(error)) : null,
   };
+}
+
+// ---------- users (design §5.7 — an owner's) ----------
+
+// The temporary password (D-D): 20 symbols of a 32-symbol alphabet — lower
+// case without l and o, digits without 0 and 1 — each from one random byte's
+// low five bits (32 divides 256: no modulo bias), in groups of four: 24
+// characters, 100 bits. `bytes` is crypto.getRandomValues(new Uint8Array(20)).
+export const PASSWORD_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
+export function temporaryPassword(bytes) {
+  const symbols = Array.from(bytes || [], (b) => PASSWORD_ALPHABET[b & 31]);
+  if (symbols.length !== 20) throw new Error('a temporary password takes 20 random bytes');
+  return symbols.join('').match(/.{4}/g).join('-');
+}
+
+// The line a Users dialog shows when the server does not sign in with local
+// passwords (A13): GET /api/admin/join-role `mode`. Null for local sign-in.
+export function signInModeLine(joinRole) {
+  if (joinRole?.mode === 'oidc') return `This server signs in through OIDC issuer ${joinRole.issuerKey ?? '(unrecorded)'}: a local user cannot sign in here until it runs local sign-in.`;
+  if (joinRole?.mode === 'proxy') return 'This server signs in through its reverse proxy: a local user cannot sign in here until it runs local sign-in.';
+  return null;
+}
+
+const enabledOwnerCount = (users) => (isArr(users) ? users : []).filter((u) => u.owner && !u.disabled).length;
+const lastOwnerText = (login) => `${login} is the last enabled owner — make another user an owner first`;
+const membershipsText = (u) => (isArr(u.memberships) && u.memberships.length ? u.memberships.map((m) => `${m.orgId}:${m.role}`).join(', ') : 'no organisation');
+function userBadges(u) {
+  return [u.owner && 'owner', u.disabled && 'disabled', u.mustChange && 'must change password', u.seededDefault && 'seeded default'].filter(Boolean);
+}
+
+// `users` already email-free (null when the read failed — `error` the
+// thrown `<status>: <sentence>`); `me` the caller's login ("you", by login).
+export function buildUsersSectionModel({ users, access, me = null, error = null, formatTime = (iso) => iso } = {}) {
+  const own = access.can.own === true;
+  const primary = { enabled: own, reason: own ? null : (readWhy(access, 'own') ?? access.why.own) };
+  if (!isArr(users)) return { rows: [], primary, empty: null, error: error || 'the users could not be read', enabledOwners: 0 };
+  const owners = enabledOwnerCount(users);
+  const rows = users.map((u) => ({
+    id: u.id, login: u.login, kind: u.kind, name: u.name ?? null,
+    badges: userBadges(u),
+    memberships: membershipsText(u),
+    lastSignIn: u.lastLoginAt ? `last sign-in ${formatTime(u.lastLoginAt)}` : 'never signed in',
+    you: Boolean(me) && u.login === me,
+    lastOwner: u.owner === true && !u.disabled && owners === 1,
+    canManage: own,
+  }));
+  return { rows, primary, empty: rows.length ? null : `No users yet.${own ? ' New local user creates one.' : ''}`, error: null, enabledOwners: owners };
+}
+
+// What the owner may do to one user (the Manage… dialog), each with the
+// reason it is unavailable — the server's own rules drawn first: the last
+// enabled owner is neither disabled nor revoked; one's own password is
+// changed at /auth/change-password; an IdP user has no password here; a
+// disabled user is enabled before being made an owner.
+export function userActions(record, users, { me = null, can = true, reason = null } = {}) {
+  const login = record.login;
+  const last = record.owner === true && !record.disabled && enabledOwnerCount(users) === 1;
+  const self = Boolean(me) && login === me;
+  const gate = (own) => (!can ? reason : own);
+  return [
+    { id: 'reset', label: 'Reset password…', reason: gate(self ? 'this is your own account — change your password at /auth/change-password'
+      : record.kind !== 'local' ? `${login} signs in through the IdP and has no password here — sign them out everywhere, or disable them` : null) },
+    record.disabled ? { id: 'enable', label: 'Enable…', reason: gate(null) } : { id: 'disable', label: 'Disable…', reason: gate(last ? lastOwnerText(login) : null) },
+    { id: 'signout', label: 'Sign out everywhere…', reason: gate(null) },
+    record.owner
+      ? { id: 'owner-revoke', label: 'Revoke owner…', reason: gate(last ? lastOwnerText(login) : null) }
+      : { id: 'owner-grant', label: 'Make owner…', reason: gate(record.disabled ? `${login} is disabled — enable them first` : null) },
+  ].map((a) => ({ ...a, enabled: a.reason === null }));
+}
+
+// The confirm step of one user action: the consequence, then the danger
+// button naming it. `self` the row is the caller's.
+function userConfirm(action, login, { self = false, defaultOrg = null } = {}) {
+  const def = defaultOrg || 'the default organisation';
+  switch (action) {
+    case 'reset': return { text: `Reset ${login}'s password? Every session of ${login} ends; a new temporary password is shown once, and ${login} sets their own at their next sign-in.`, danger: `Reset ${login}'s password` };
+    case 'disable': return { text: `Disable ${login}? Every session of ${login} ends, and they cannot sign in until an owner enables them; their memberships stay.${self ? ' This is you: this browser is signed out at its next request.' : ''}`, danger: `Disable ${login}` };
+    case 'enable': return { text: `Enable ${login}? They can sign in again with their password.`, danger: `Enable ${login}` };
+    case 'signout': return { text: `Sign ${login} out everywhere? Every session of ${login} ends at its next request; they can sign in again.${self ? ' This is you: this browser is signed out too.' : ''}`, danger: `Sign ${login} out everywhere` };
+    case 'owner-grant': return { text: `Make ${login} an owner? An owner manages this deployment's users and acts as an admin in every organisation; ${login} also becomes an admin of ${def}.`, danger: `Make ${login} an owner` };
+    case 'owner-revoke': return { text: `Revoke ${login}'s owner role? Their memberships stay as they are.${self ? ' This is you: you lose the owner role at once.' : ''}`, danger: `Revoke ${login}'s owner role` };
+    default: return null;
+  }
+}
+
+// The status after one user action, from the server's answer (`you`: the
+// caller acted on their own account — this browser is signed out next).
+export function userActionStatus(action, answer = {}, { login = 'the user', defaultOrg = null } = {}) {
+  const note = answer?.note ? ` ${answer.note}` : '';
+  const def = defaultOrg || 'the default organisation';
+  const saved = (text) => ({ kind: 'saved', text });
+  switch (action) {
+    case 'reset': return saved(`Every session of ${login} ended; they set a new password at their next sign-in.`);
+    case 'disable': return saved(answer?.you ? 'You disabled your own account — this browser is signed out at its next request.' : `${login} disabled — every session ended.`);
+    case 'enable': return saved(`${login} enabled.`);
+    case 'signout': return saved(answer?.you ? 'You signed out everywhere — this browser is signed out at its next request.' : `Every session of ${login} ended.`);
+    case 'owner-grant': return answer?.changed === false ? { kind: 'idle', text: `${login} is already an owner — nothing changed.` } : saved(`${login} is an owner (and an admin of ${def}).${note}`);
+    case 'owner-revoke': return answer?.changed === false ? { kind: 'idle', text: `${login} is not an owner — nothing changed.` } : saved(`${login} is no longer an owner.${note}`);
+    default: return { kind: 'idle', text: 'Nothing changed.' };
+  }
+}
+
+// The POST /api/admin/users body without the password (the controller adds
+// the one it generated): the login, the non-empty name and email, the role,
+// the organisation when one is chosen.
+export function buildUserCreateBody(draft = {}) {
+  const body = { login: String(draft.login ?? '').trim() };
+  for (const k of ['name', 'email']) { const v = String(draft[k] ?? '').trim(); if (v) body[k] = v; }
+  body.role = ROLES.includes(draft.role) ? draft.role : 'operator';
+  if (typeof draft.orgId === 'string' && draft.orgId) body.orgId = draft.orgId;
+  return body;
+}
+
+// The status after a create (D-D, D-E). `answer` POST /api/admin/users';
+// `reset`: 'ok' (the password is temporary now), the refusal's sentence (it
+// is not), or null (not attempted — the create armed sign-in); `signIn`:
+// after an arming create, whether /auth/me answered (sign-in is on now).
+export function userCreateStatus(answer = {}, { login = 'the user', orgId = null, orgName = null, reset = 'ok', signIn = false } = {}) {
+  const who = answer?.user?.login ?? login;
+  const first = answer?.owner ? ' — an owner: the first local user' : '';
+  const note = answer?.note ? ` ${answer.note}` : '';
+  if (answer?.armed) {
+    if (signIn) return { kind: 'saved', text: `Sign-in is on now: ${who}${answer.owner ? ' is an owner' : ' is created'}. Sign in as ${who} with the password below.${note}` };
+    return { kind: 'saved', text: `${who} is created${answer.owner ? ' (an owner: the first local user)' : ''}. This server runs without sign-in (OBSERVOGRAM_AUTH=off): ${who} signs in once it starts without it, with the password below. It is not forced to change — change it at /auth/change-password after signing in.${note}` };
+  }
+  const joined = isArr(answer?.joined) ? answer.joined : [];
+  const entry = joined.find((j) => j.orgId === orgId) ?? joined[joined.length - 1] ?? null;
+  const where = entry ? ` (${entry.role} in ${entry.orgId === orgId && orgName ? orgName : entry.orgId})` : '';
+  if (reset !== 'ok') {
+    return { kind: 'error', text: `Created ${who}${where}${first}, but making its password temporary was refused — ${reset || 'no answer'}. The password below is not forced to change: reset it from ${who}'s Manage….${note}` };
+  }
+  return { kind: 'saved', text: `Created ${who}${where}${first}. Copy the temporary password before closing.${note}` };
+}
+
+// The secret step's sentence (the password itself is drawn beside it, once).
+// `forced`: changed at the next sign-in; `reason` 'create' | 'reset';
+// `localSignIn`: the server signs in with local passwords (else the clause
+// about setting their own is dropped — A13).
+function secretText(login, { forced = true, reason = 'create', localSignIn = true } = {}) {
+  const head = `${forced ? 'Temporary password' : 'Password'} for ${login} — shown once. It is not stored in this browser and cannot be shown again`;
+  const own = forced && localSignIn ? `; ${login} sets their own at ${reason === 'reset' ? 'their next' : 'first'} sign-in.` : '.';
+  return `${head}${own} Reset it to get a new one.`;
 }
 
 // ---------- the editors (design §5) ----------
@@ -731,6 +899,61 @@ export function buildSettingsEditorModel(kind, record = null, { draft = null, st
       status: st || idleStatus(`${record.login} is ${record.role} in ${orgName}.`),
       primary: primaryOf('Save', can, access?.why?.admin ?? null),
     };
+  }
+
+  // A new local user (an owner's): no password field — the controller draws
+  // a temporary one on Create and the secret step shows it once (D-D).
+  if (kind === 'user-create') {
+    const can = access?.can?.own === true;
+    const why = access?.why?.own ?? null;
+    const orgs = isArr(ctx.orgs) ? ctx.orgs.filter((o) => !o.removedAt) : null;
+    const role = ROLES.includes(d.role) ? d.role : 'operator';
+    const orgId = typeof d.orgId === 'string' && d.orgId ? d.orgId : (orgs ? (orgs.find((o) => o.id === ctx.orgId) ?? orgs[0])?.id ?? null : null);
+    const eff = { login: str('login', ''), name: str('name', ''), email: str('email', ''), role, orgId };
+    const modeLine = signInModeLine(ctx.joinRole);
+    const out = {
+      ...base, title: 'New local user', eyebrow: 'Users', limits: { login: 64, name: 200, email: 254 }, draft: eff, signIn: ctx.signIn === true, secret: null,
+      fields: [
+        { name: 'login', label: 'Login', type: 'text', value: eff.login, max: 64, help: '2–64 of a–z, A–Z, 0–9 . _ @ -' },
+        { name: 'name', label: 'Name (optional)', type: 'text', value: eff.name, max: 200 },
+        { name: 'email', label: 'Email (optional)', type: 'email', value: eff.email, max: 254, help: 'not verified — an email counts for adding members only when a sign-in verified it' },
+        { name: 'role', label: 'Role', type: 'segmented', value: role, options: ROLES.map((x) => ({ value: x, label: x, selected: x === role })) },
+        ...(orgs ? [{ name: 'orgId', label: 'Organisation', type: 'select', value: orgId,
+          options: orgs.map((o) => ({ value: o.id, label: `${o.name} (${o.id})`, selected: o.id === orgId })),
+          help: orgs.length > 1 ? 'Required: this deployment has more than one organisation.' : null }] : []),
+      ],
+      status: st || idleStatus(modeLine ?? 'A local user who signs in with a password: a temporary one is drawn on Create and shown once.'),
+      primary: primaryOf('Create', can, why),
+    };
+    if (step === 'secret' && ctx.secret) {
+      out.secret = { text: secretText(ctx.secret.login, { forced: ctx.secret.forced !== false, reason: 'create', localSignIn: modeLine === null }), value: ctx.secret.value };
+      out.primary = null;
+    }
+    return out;
+  }
+
+  // One user (an owner's): the facts, then the actions — each a confirm
+  // step, then one call; a reset ends on the secret step, one's own sign-out
+  // or disable on a step with "Go to sign-in".
+  if (kind === 'user') {
+    const can = access?.can?.own === true;
+    const users = isArr(ctx.users) ? ctx.users : [record];
+    const self = Boolean(ctx.me) && record.login === ctx.me;
+    const facts = [
+      [record.kind, ...userBadges(record)].join(' · '),
+      `organisations: ${membershipsText(record)}`,
+      record.lastLoginAt ? `last sign-in ${typeof ctx.formatTime === 'function' ? ctx.formatTime(record.lastLoginAt) : record.lastLoginAt}` : 'never signed in',
+    ];
+    const actions = userActions(record, users, { me: ctx.me ?? null, can, reason: access?.why?.own ?? null });
+    const out = {
+      ...base, id: record.id, title: record.login, eyebrow: self ? 'User — you' : 'User', fields: [], limits: {}, draft: {}, facts, actions,
+      signIn: ctx.signIn === true, secret: null,
+      status: st || idleStatus('Each action asks first, then takes effect at once.'),
+      primary: null,
+    };
+    if (step === 'confirm-action') out.confirm = userConfirm(ctx.action, record.login, { self, defaultOrg: ctx.defaultOrg ?? null });
+    if (step === 'secret' && ctx.secret) out.secret = { text: secretText(record.login, { forced: ctx.secret.forced !== false, reason: 'reset', localSignIn: signInModeLine(ctx.joinRole) === null }), value: ctx.secret.value };
+    return out;
   }
 
   throw new Error(`no Settings editor of kind ${JSON.stringify(kind)}`);

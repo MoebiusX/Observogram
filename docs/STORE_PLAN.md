@@ -873,8 +873,11 @@ import the database is authoritative, and the legacy files are only hashed
 - **New local users** (`npm run users -- add`, or Settings):
   - The first local user created while no owner exists becomes owner plus
     `admin` of the default org, whatever `--role` says, as the seed would
-    have. The CLI prints this. It is safe because Settings cannot create a
-    user without an owner, so only shell access triggers it. Only while
+    have. The CLI prints this. It is safe because Settings creates a user
+    only for an owner, so with no owner only shell access triggers it — or
+    the studio opened at `127.0.0.1` on a server without sign-in, which
+    answers the identity API to a person at this machine only (the `direct`
+    rule). Only while
     the server's sign-in mode is local: a local user cannot sign in under
     OIDC, so there the user is created without owner and the CLI prints
     why, naming the mode it used.
