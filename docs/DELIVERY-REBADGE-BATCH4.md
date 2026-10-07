@@ -107,7 +107,8 @@ The static bundle answers both `501`.
 **Tests.** Tests: 1308 → 1324. Tests: 1324 → 1334. Tests: 1335 → 1347.
 Tests: 1347 → 1351.
 
-**Deferred.** `malformed-json-app-wide`, `settings-browser-audit-note`,
+**Deferred.** `malformed-json-app-wide` (since done, by its own follow-up:
+see the open items), `settings-browser-audit-note`,
 `settings-endpoint-path-column`.
 
 ## D4 — the mock MCP, the tests and the docs
@@ -210,7 +211,9 @@ pin.
 - **The policy acknowledgement is advisory on the browser-direct path.** A
   reader with developer tools or curl skips it; the pass-through re-checks
   it; a downstream that needs enforcement enforces it in the MCP server.
-- **`malformed-json-app-wide`** (pre-existing): every route but the two new
-  ones still answers a malformed JSON body with Express's HTML page, which
-  quotes a fragment of it (a `POST /api/mcp/ping` `mcpAuth` included), and
-  logs it.
+- **`malformed-json-app-wide`** (pre-existing; **fixed by the follow-up
+  `codex/malformed-json-app-wide`**): every route but the two new ones still
+  answered a malformed JSON body with Express's HTML page, which quoted a
+  fragment of it (a `POST /api/mcp/ping` `mcpAuth` included), and logged it.
+  Every route now answers it `400 { ok: false, error: 'the request body is
+  not valid JSON' }`, quoting and logging none of it.

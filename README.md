@@ -2666,6 +2666,11 @@ route is `admin` (the MCP server-settings API, off unless `OBSERVOGRAM_MCP_ADMIN
 a server-side request carrying an admin's settings to the MCP server, so the
 live MCP API's posture with the admin class); every other `GET` is `viewer` and every other route `operator`.
 
+A request body the server cannot read is answered as JSON on every route,
+`{ ok: false, error }` with a fixed text and quoting none of the body:
+`400` when it is not valid JSON, `413` when it is over the cap, `415` for an
+unsupported charset or content encoding. The body is not logged.
+
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/healthz` | Health and vendored spec version |

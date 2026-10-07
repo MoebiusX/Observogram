@@ -262,7 +262,7 @@ export const STATIC_MOUNTS = Object.freeze({ '/lib': 'public', '/': 'public' });
 // The only non-route, non-router, non-static layers the app may hold, by
 // function name (an anonymous app.use fails the completeness test).
 export const MIDDLEWARE = Object.freeze([
-  'authGate', 'orgContext', 'jsonParser', 'textParser', 'urlencodedParser', 'payloadTooLarge',
+  'authGate', 'orgContext', 'jsonParser', 'textParser', 'urlencodedParser', 'bodyParserError',
 ]);
 
 // One entry with its class defaults filled; throws on a key the table does

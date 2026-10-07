@@ -1278,3 +1278,15 @@ tests or change docs; the count is unchanged.
 The batch's delivery report, `docs/DELIVERY-REBADGE-BATCH4.md`, is written
 per item and guarded by `tools/test-doc-test-totals.mjs` as the batch 3
 report is.
+
+### Follow-up: a malformed JSON body, app-wide
+
+The batch fixed a malformed body's echo on its own two routes; every other
+route still answered it with Express's HTML error page — V8's message quotes
+a fragment of the body, an `mcpAuth` or a password — and printed the same
+stack on stderr. The app-wide parsers' errors are now answered on every path
+as JSON in the house shape, `{ ok: false, error }`, with a fixed text and the
+parser's status (400 not JSON, 413 too large, 415 an unsupported charset or
+encoding), and nothing is logged. The parsers still run after the auth gate
+and before every route's `authorize()`, so who is refused, and in what order,
+does not move. Tests: 1357 → 1359 (`server/test-malformed-json.mjs` 2, new).

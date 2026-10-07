@@ -1194,10 +1194,16 @@ sends from the browser.
 
 ### 16.4 Follow-ups, by name
 
-- *`malformed-json-app-wide`* — the parse error answered as JSON on every
-  route, closing the existing quote of a malformed `POST /api/mcp/ping` body
-  (with its `mcpAuth`) in Express's error page and on stderr; this batch
-  fixed it on the two new routes only.
+- *`malformed-json-app-wide`* — **done** (the follow-up that followed this
+  batch): the parse error is answered as JSON on every route, closing the
+  existing quote of a malformed `POST /api/mcp/ping` body (with its
+  `mcpAuth`) in Express's error page and on stderr; this batch had fixed it
+  on the two new routes only. Every body the app-wide parsers refuse is now
+  `{ ok: false, error }` with a fixed text and the parser's status — `400 the
+  request body is not valid JSON`, 413 too large, 415 an unsupported charset
+  or encoding — no fragment of the body, nothing logged
+  (`server/index.mjs` `bodyParserError`; `server/test-malformed-json.mjs`).
+  The two pass-through routes keep their own parser and answers.
 - *`settings-current-values`* — an authenticated read of the server's current
   non-secret values to prefill the form (version 1 reads no values).
 - *`settings-policy-target-rules`* — rules on the MCP origin itself
