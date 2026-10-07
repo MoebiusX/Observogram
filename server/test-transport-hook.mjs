@@ -157,9 +157,17 @@ test('a header hook reaches every MCP call of refresh-live, draft-from-mcp and d
   }
 });
 
+// The throwing hook's text names its own upstream with a userinfo the MCP
+// client does not know (it redacts the target's secrets only): the route-level
+// backstop, redactTarget (server/mcp-target-policy.mjs), is what masks it in
+// every 502 below — refresh-live, draft-from-mcp and the deploy routes'
+// hookFaultTo502.
+const HOOK_UPSTREAM_SECRET = 'gw-svc:hunter2-upstream';
+const leaksUpstream = (text) => text.includes('hunter2-upstream') || text.includes('gw-svc');
+
 test('a hook that breaks its contract at call time: one 502 naming the hook, no live pack, no deploy record', async () => {
   const ws = workspace();
-  const throwing = hookFile('throwing.mjs', 'export function prepareRequest({ headers }) { throw new Error(`gateway refused ${headers.Authorization}`); }\n');
+  const throwing = hookFile('throwing.mjs', `export function prepareRequest({ headers }) { throw new Error(\`gateway https://${HOOK_UPSTREAM_SECRET}@gw.internal/ refused \${headers.Authorization}\`); }\n`);
   const fake = await startFakeMcp(TOOLS);
   // One real deploy first (an identity hook), so the rollback route has a
   // record and a snapshot to work from; the throwing child must add nothing.
@@ -184,25 +192,31 @@ test('a hook that breaks its contract at call time: one 502 naming the hook, no 
     const refresh = await post(s.base, '/api/refresh-live', { mcpEndpointId, mcpAuth: 'secret-bearer-1' });
     assert.equal(refresh.status, 502);
     const rj = await refresh.json();
-    assert.equal(rj.error, `transport hook ${throwing}: prepareRequest threw: gateway refused Bearer <redacted>`);
+    assert.equal(rj.error, `transport hook ${throwing}: prepareRequest threw: gateway https://***@gw.internal/ refused Bearer <redacted>`);
     assert.ok(!JSON.stringify(rj).includes('secret-bearer-1'), 'the bearer is redacted');
+    assert.ok(!leaksUpstream(JSON.stringify(rj)), 'refresh-live: the hook\'s upstream userinfo is masked by the route');
     assert.ok(!existsSync(join(ws, 'live', 'production-live.pack.yaml')), 'no live pack written');
 
     const draft = await post(s.base, '/api/draft-from-mcp', { mcpEndpointId });
     assert.equal(draft.status, 502);
-    assert.match((await draft.json()).error, /transport hook .*prepareRequest threw/);
+    const dj = await draft.json();
+    assert.match(dj.error, /transport hook .*prepareRequest threw: gateway https:\/\/\*\*\*@gw\.internal\/ refused/);
+    assert.ok(!leaksUpstream(JSON.stringify(dj)), 'draft-from-mcp: the hook\'s upstream userinfo is masked by the route');
 
     const bulk = await post(s.base, '/api/packs/payment-service/deploy-bulk', BULK_BODY(mcpEndpointId));
     assert.equal(bulk.status, 502, 'deploy-bulk: one 502, not N item failures');
     const bj = await bulk.json();
     assert.equal(bj.ok, false);
-    assert.match(bj.error, /transport hook .*prepareRequest threw/);
+    assert.match(bj.error, /transport hook .*prepareRequest threw: gateway https:\/\/\*\*\*@gw\.internal\/ refused/);
+    assert.ok(!leaksUpstream(JSON.stringify(bj)), 'deploy-bulk: the hook\'s upstream userinfo is masked by the route');
     assert.equal(bj.results, undefined, 'no per-item results');
     assert.deepEqual(deployRecords(ws), before, 'no deploy record for a deploy that never reached the wire');
 
     const single = await post(s.base, '/api/packs/payment-service/deploy/grafana-dashboard', { mcpEndpointId, dashboardId: 'payment-overview' });
     assert.equal(single.status, 502);
-    assert.match((await single.json()).error, /transport hook .*prepareRequest threw/);
+    const sj = await single.json();
+    assert.match(sj.error, /transport hook .*prepareRequest threw/);
+    assert.ok(!leaksUpstream(JSON.stringify(sj)), 'deploy: the hook\'s upstream userinfo is masked by the route');
     assert.deepEqual(deployRecords(ws), before, 'the single deploy route audits nothing either');
 
     const rollback = await post(s.base, `/api/deploys/${seeded}/rollback`, { mcpEndpointId });
@@ -210,6 +224,7 @@ test('a hook that breaks its contract at call time: one 502 naming the hook, no 
     const rbj = await rollback.json();
     assert.equal(rbj.ok, false);
     assert.match(rbj.error, /transport hook .*prepareRequest threw/);
+    assert.ok(!leaksUpstream(JSON.stringify(rbj)), 'rollback: the hook\'s upstream userinfo is masked by the route');
     assert.equal(rbj.results, undefined, 'rollback: no per-item results');
     assert.deepEqual(deployRecords(ws), before, 'rollback: no audit record for a rollback that never reached the wire');
     assert.equal(fake.requests.length, 0, 'nothing reached the fake');
