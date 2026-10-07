@@ -728,8 +728,10 @@ const JOIN_ROLE_CHOICES = ['viewer', 'operator', 'admin', null];
 
 // The sign-in mode the server runs, first (GET /api/admin/join-role): what
 // the recorded join role does under it — and, behind a reverse proxy, that
-// it does nothing (the proxy's own setting rules).
-export function joinRoleModeSentence(doc, { defaultOrgName = null } = {}) {
+// it does nothing (the proxy's own setting rules). `open` the open posture:
+// the server answers mode 'local' under OBSERVOGRAM_AUTH=off, but nobody signs
+// in there, so the head says the server runs without sign-in.
+export function joinRoleModeSentence(doc, { defaultOrgName = null, open = false } = {}) {
   const role = doc?.role ?? null;
   const def = defaultOrgName || 'the default organisation';
   if (doc?.mode === 'oidc') {
@@ -740,7 +742,8 @@ export function joinRoleModeSentence(doc, { defaultOrgName = null } = {}) {
     const groups = doc.proxy?.groupsConfigured ? ' — the groups header decides when it names a group' : '';
     return `Sign-in: a reverse proxy. Its first-sight role is the proxy's (OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE: ${doc.proxy?.joinRole ?? 'none'})${groups}; the recorded join role below does not apply to proxy users.`;
   }
-  return `Sign-in: local users. The join role applies to IdP users once OIDC is configured: ${role ?? 'none'}.`;
+  const head = open ? 'This server runs without sign-in.' : 'Sign-in: local users.';
+  return `${head} The join role applies to IdP users once OIDC is configured: ${role ?? 'none'}.`;
 }
 
 // `doc` GET /api/admin/join-role minus ok (null when the read failed —
@@ -752,7 +755,7 @@ export function buildJoinRoleSectionModel({ doc, access, defaultOrgName = null, 
   if (!doc || typeof doc !== 'object') return { scopeSentence: null, role: null, roleText: null, primary, empty: null, error: error || 'the join role could not be read' };
   const role = doc.role ?? null;
   return {
-    scopeSentence: joinRoleModeSentence(doc, { defaultOrgName }), role,
+    scopeSentence: joinRoleModeSentence(doc, { defaultOrgName, open: access.posture === 'open' }), role,
     roleText: `Recorded join role: ${role ?? 'none — no automatic join'}`,
     primary, empty: null, error: null,
   };
@@ -1204,7 +1207,7 @@ export function buildSettingsEditorModel(kind, record = null, { draft = null, st
         { name: 'confirm', type: 'checkbox', checked: eff.confirm, showWhen: { field: 'role', value: 'admin', now: role === 'admin' }, required: 'tick the box first',
           label: `I understand: every user the IdP lets in becomes an admin of ${def} — its name, its members and its MCP endpoints. To add admins one by one, use Members.` },
       ],
-      status: st || idleStatus(record ? joinRoleModeSentence(record, { defaultOrgName: ctx.defaultOrgName }) : 'The role an IdP user gets at their first sign-in.'),
+      status: st || idleStatus(record ? joinRoleModeSentence(record, { defaultOrgName: ctx.defaultOrgName, open: access?.posture === 'open' }) : 'The role an IdP user gets at their first sign-in.'),
       primary: primaryOf('Save', can, access?.why?.own ?? null),
     };
   }

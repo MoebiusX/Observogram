@@ -1639,6 +1639,10 @@ test('the join role: the sign-in mode first, per mode; joinRoleBody sends confir
     'Sign-in: OIDC issuer https://idp.test. An IdP user gets no membership at first sign-in (an admin adds them).');
   assert.equal(joinRoleModeSentence({ mode: 'local', role: null }), 'Sign-in: local users. The join role applies to IdP users once OIDC is configured: none.');
   assert.equal(joinRoleModeSentence({ mode: 'local', role: 'operator' }), 'Sign-in: local users. The join role applies to IdP users once OIDC is configured: operator.');
+  // OBSERVOGRAM_AUTH=off answers mode 'local' too: the open posture says the server has no sign-in, never "local users".
+  assert.equal(joinRoleModeSentence({ mode: 'local', role: null }, { open: true }), 'This server runs without sign-in. The join role applies to IdP users once OIDC is configured: none.');
+  assert.equal(buildJoinRoleSectionModel({ doc: { mode: 'local', role: null }, access: OPEN }).scopeSentence, 'This server runs without sign-in. The join role applies to IdP users once OIDC is configured: none.');
+  assert.equal(buildSettingsEditorModel('join-role', { mode: 'local', role: null }, { ctx: { access: OPEN } }).status.text, 'This server runs without sign-in. The join role applies to IdP users once OIDC is configured: none.');
   assert.equal(joinRoleModeSentence({ mode: 'proxy', role: 'viewer', proxy: { joinRole: 'operator', groupsConfigured: false } }),
     "Sign-in: a reverse proxy. Its first-sight role is the proxy's (OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE: operator); the recorded join role below does not apply to proxy users.");
   assert.equal(joinRoleModeSentence({ mode: 'proxy', role: null, proxy: { joinRole: 'viewer', groupsConfigured: true } }),

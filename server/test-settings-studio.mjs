@@ -1207,6 +1207,8 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await toSection(page, 'orgs');
       assert.equal(await attr(page, '#set-primary', 'aria-disabled'), 'true');
       assert.match(await text(page, '#set-primary .svc-why'), /^a second organisation needs sign-in, and this server runs without it — /);
+      await toSection(page, 'join-role');
+      assert.equal(await text(page, '.set-section-scope'), 'This server runs without sign-in. The join role applies to IdP users once OIDC is configured: none.');
       await toSection(page, 'users');
       await page.click('#set-primary');
       await page.waitForSelector('.set-editor[data-kind="user-create"]', { timeout: T });
