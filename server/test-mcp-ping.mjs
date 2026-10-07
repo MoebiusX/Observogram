@@ -131,11 +131,11 @@ test('by id, an operator: connected through the endpoint\'s variable — the fak
   assert.deepEqual(Object.keys(a.timings), ['initializeMs', 'toolsListMs', 'readMs', 'totalMs']);
   assert.equal(a.sentence, `Connected to ${full.origin} in ${a.timings.totalMs} ms: the MCP answered initialize, listed 5 tools (3 that a fetch reads), and ${SEARCH} answered with the token sent.`);
   assert.deepEqual(a.checked, ['the MCP answered initialize', 'tools/list listed 5 tools', `${SEARCH} answered`]);
-  assert.deepEqual(a.notChecked, ['whether each other family answers — a draft finds that out', 'the backends behind every other tool']);
+  assert.deepEqual(a.notChecked, ['whether each other family answers — a snapshot or a draft finds that out', 'the backends behind every other tool']);
   const seen = full.authHeaders.slice(before);
   assert.equal(seen.length, 4, 'initialize, notifications/initialized, tools/list, one read');
   assert.ok(seen.every((h) => h === `Bearer ${READ_TOKEN}`), 'the endpoint\'s read token rode');
-  for (const leak of [READ_TOKEN, ...UNMATCHED, 'protocol', 'snapshot', 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN']) assert.ok(!r.text.includes(leak), `the answer holds no ${leak}`);
+  for (const leak of [READ_TOKEN, ...UNMATCHED, 'protocol', '"snapshot":', 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN']) assert.ok(!r.text.includes(leak), `the answer holds no ${leak}`);
   assert.equal(full.calls.at(-1).arguments.limit, 1, 'the search asked for one item');
 });
 

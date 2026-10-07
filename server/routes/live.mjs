@@ -166,7 +166,7 @@ export function pingAnswer(r, { origin, mcpEndpoint = null, sent = 'none', token
       checked.push(`${read.tool} was called (it answered with an error)`);
     }
     sentence = `Connected to ${origin} in ${r.timings.totalMs} ms: the MCP answered initialize, ${listed}${tail}`;
-    notChecked.push('whether each other family answers — a draft finds that out', 'the backends behind every other tool');
+    notChecked.push('whether each other family answers — a snapshot or a draft finds that out', 'the backends behind every other tool');
   } else if (r.verdict === 'auth-refused' && r.stage === 'tools/call') {
     checked.push(`${r.read?.tool ?? 'the tool call'} was refused by the MCP`);
     const why = auth.sent === 'none'
