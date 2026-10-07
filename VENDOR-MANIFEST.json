@@ -528,8 +528,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/diff.mjs": {
-      "sha256": "b555c5235218ca24d5517e933e4b0bfaac367602f9d60aae4e20ba273aef984e",
-      "bytes": 24313,
+      "sha256": "7cc5232f146720997dacc0fa06afd91afd6c807c642eecf9bbd2bcb8edf9de28",
+      "bytes": 26446,
       "exports": [
         "deltasOf",
         "diffPacks",
@@ -538,6 +538,7 @@
       ],
       "imports": [
         "tools/lib/artefact-model.mjs",
+        "tools/lib/identity-modes.mjs",
         "tools/lib/live-fetch.mjs"
       ],
       "npm": [],

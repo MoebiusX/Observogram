@@ -20,7 +20,9 @@
  * Why: the goldens were written from the engine as it stood before rebadge
  * batch 3 touched diff.mjs (a snapshot's scope parking, identity modes).
  * Those changes must leave the default answer byte-identical: no later
- * commit regenerates these files. The cases cover the catalogue's self-diffs
+ * commit regenerates these files. Each case also runs with `identity:
+ * 'behaviour'` and `identity: identityKeyOf` (the identity modes' default
+ * path) and must give the same bytes. The cases cover the catalogue's self-diffs
  * (the pairs the board suite renders, the typed fixture with and without its
  * taxonomy override), payment-service and krystaline-repo-carlos against
  * production-curated in every scope mode and with a service override, the
@@ -41,6 +43,7 @@ import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { SPEC_DIR } from './lib/validator.mjs';
 import { adapt } from './lib/adapter.mjs';
 import { diffPacks } from './lib/diff.mjs';
+import { identityKeyOf } from './lib/artefact-model.mjs';
 import * as artefactClassify from './lib/artefact-classify.mjs';
 import { bindTaxonomy } from '../studio/taxonomy.mjs';
 import { createHarness } from './lib/harness.mjs';
@@ -207,6 +210,12 @@ for (const c of CASES) {
   checkGolden(file, text, c.name);
   assert(!('identity' in diff), `${c.name}: the default answer carries no identity key`, Object.keys(diff));
   assert(goldenOf(c).text === text, `${c.name}: two runs give the same answer`);
+  // The identity modes' default path (tools/lib/identity-modes.mjs, C3): the
+  // behaviour mode by name and identityKeyOf itself reproduce the golden.
+  for (const [label, identity] of [['identity: "behaviour"', 'behaviour'], ['identity: identityKeyOf', identityKeyOf]]) {
+    const same = JSON.stringify(goldenOf({ ...c, opts: { ...(c.opts || {}), identity } }).diff);
+    assert(same === JSON.stringify(diff), `${c.name}: ${label} is byte-identical to the default`);
+  }
 }
 
 process.stdout.write('\nthe cases cover every bucket\n');

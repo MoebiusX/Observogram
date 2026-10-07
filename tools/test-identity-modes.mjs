@@ -25,6 +25,7 @@ import {
 import { FAMILIES } from './lib/artefact-classify.mjs';
 import { identityKeyOf, classify } from './lib/artefact-model.mjs';
 import { adapt } from './lib/adapter.mjs';
+import { diffPacks } from './lib/diff.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 
 const art = (type, spec = {}, extra = {}) => ({ type, id: `${type.toUpperCase()}-01`, spec, ...extra });
@@ -215,4 +216,119 @@ test('pure: no artefact is mutated, and the module imports no node: built-in', (
   const src = readFileSync(new URL('./lib/identity-modes.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /from\s+['"]node:/);
   assert.doesNotMatch(src, /process\.env/);
+});
+
+// ---------- the diff engine takes the identity (tools/lib/diff.mjs) ----------
+
+const FIXTURE = (side) => parseYaml(readFileSync(new URL(`./fixtures/compare-modes/${side}.pack.yaml`, import.meta.url), 'utf8'));
+const counts = (d) => ({ inBoth: d.summary.inBoth, onlyInA: d.summary.onlyInA, onlyInB: d.summary.onlyInB, aligned: d.summary.aligned, drifted: d.summary.drifted });
+const entries = (d, bucket) => Object.values(d.layers).flatMap((l) => l[bucket]);
+const K = 13; // the sections A and B share verbatim
+
+test('the compare-modes fixture: three modes, three distinct count sets (behaviour still decides drift)', () => {
+  const a = adapt(FIXTURE('a'));
+  const b = adapt(FIXTURE('b'));
+  assert.deepEqual(counts(diffPacks(a, b)), { inBoth: K + 2, onlyInA: 5, onlyInB: 5, aligned: 13, drifted: 2 });
+  assert.deepEqual(counts(diffPacks(a, b, { identity: 'name' })), { inBoth: K + 3, onlyInA: 4, onlyInB: 4, aligned: 13, drifted: 3 });
+  assert.deepEqual(counts(diffPacks(a, b, { identity: 'id' })), { inBoth: K + 4, onlyInA: 3, onlyInB: 3, aligned: 13, drifted: 4 });
+  for (const mode of ['behaviour', 'name', 'id']) {
+    const d = diffPacks(a, b, { identity: mode });
+    assert.equal(d.summary.outOfScope + d.summary.scaffold + d.summary.notObserved, 0, `${mode}: every artefact is in a counted bucket`);
+  }
+});
+
+test('renamed with the same uid pairs by id, not by name; same name with another expression pairs by name and drifts', () => {
+  const a = adapt(FIXTURE('a'));
+  const b = adapt(FIXTURE('b'));
+  const pairOf = (d, aDefines) => entries(d, 'inBoth').find((e) => e.a.defines === aDefines);
+  assert.equal(pairOf(diffPacks(a, b, { identity: 'id' }), 'dashboards.orders')?.b.defines, 'dashboards.orders-v2');
+  assert.equal(pairOf(diffPacks(a, b, { identity: 'name' }), 'dashboards.orders'), undefined);
+  assert.equal(pairOf(diffPacks(a, b, { identity: 'name' }), 'dashboards.payments')?.b.defines, 'dashboards.payments-new');
+  for (const mode of ['behaviour', 'name', 'id']) {
+    const rule = entries(diffPacks(a, b, { identity: mode }), 'inBoth').find((e) => e.a.spec?.name === 'HighLatency');
+    assert.equal(rule?.match, 'drifted', mode);
+    assert.deepEqual(rule.deltas.map((x) => x.field), ['expr'], `${mode}: the expression is the delta`);
+  }
+  const backend = (d) => entries(d, 'inBoth').find((e) => e.a.spec?.id === 'prom-main');
+  assert.ok(backend(diffPacks(a, b)), 'the backend pairs by behaviour');
+  assert.equal(backend(diffPacks(a, b, { identity: 'name' })), undefined, 'not by name');
+});
+
+test('the default path is byte-identical: omitted, "behaviour" and identityKeyOf give the same answer, with no identity key', () => {
+  const pairs = [
+    [adapt(FIXTURE('a')), adapt(FIXTURE('b'))],
+    [adapt(parseYaml(readFileSync(new URL('../examples/production-curated.pack.yaml', import.meta.url), 'utf8'))),
+      adapt(parseYaml(readFileSync(new URL('../examples/krystaline-repo-carlos.pack.yaml', import.meta.url), 'utf8')))],
+  ];
+  for (const [a, b] of pairs) {
+    const base = JSON.stringify(diffPacks(a, b));
+    assert.ok(!('identity' in diffPacks(a, b)));
+    assert.equal(JSON.stringify(diffPacks(a, b, { identity: 'behaviour' })), base);
+    assert.equal(JSON.stringify(diffPacks(a, b, { identity: identityKeyOf })), base);
+    assert.equal(JSON.stringify(diffPacks(a, b, { identity: undefined, scopeMode: undefined })), base);
+  }
+  const named = diffPacks(pairs[0][0], pairs[0][1], { identity: 'name' });
+  assert.deepEqual(named.identity, { mode: 'name' });
+  assert.deepEqual(Object.keys(named).slice(0, 4), ['a', 'b', 'scope', 'identity']);
+});
+
+test('a custom key function: called with the side, keyed as custom; one without the <kind>:: prefix is a TypeError', () => {
+  const a = adapt(FIXTURE('a'));
+  const b = adapt(FIXTURE('b'));
+  const sides = new Set();
+  const custom = (artefact, { side }) => { sides.add(side); return nameKeyOf(artefact, { side }); };
+  const d = diffPacks(a, b, { identity: custom });
+  assert.deepEqual([...sides].sort(), ['a', 'b']);
+  assert.deepEqual(d.identity, { mode: 'custom' });
+  assert.deepEqual(counts(d), counts(diffPacks(a, b, { identity: 'name' })));
+  assert.throws(() => diffPacks(a, b, { identity: (x) => `name::${x.id}` }),
+    (e) => e instanceof TypeError && /^diffPacks: an identity function must return "\w+::…" for each artefact \(got "name::[^"]+" for a \w+\)$/.test(e.message));
+  assert.throws(() => diffPacks(a, b, { identity: () => null }), TypeError);
+  assert.throws(() => diffPacks(a, b, { identity: 'uid' }), (e) => e instanceof TypeError && /behaviour, name, id/.test(e.message));
+  assert.throws(() => diffPacks(a, b, { identity: 42 }), TypeError);
+});
+
+test('in the diff, two artefacts without a name never pair (the side is in the key), and a placeholder is keyed by the mode', () => {
+  const pack = (artefacts) => ({ id: 'p', meta: { service: 'svc' }, layers: { L3: artefacts } });
+  const unnamed = () => ({ type: 'dashboard', id: 'DASH-01', spec: {} });
+  const byName = diffPacks(pack([unnamed()]), pack([unnamed()]), { identity: 'name', scopeMode: 'all' });
+  assert.equal(byName.summary.inBoth, 0);
+  assert.equal(byName.summary.onlyInA, 1);
+  assert.equal(byName.summary.onlyInB, 1);
+  assert.equal(entries(byName, 'onlyInA')[0].key, 'dashboard::{"unnamed":"a:DASH-01"}');
+  assert.equal(diffPacks(pack([unnamed()]), pack([unnamed()]), { scopeMode: 'all' }).summary.inBoth, 1, 'behaviour pairs them by the positional fallback, as today');
+  const placeholder = { type: 'dashboard', id: 'DASH-02', source: 'Scaffold', spec: { params: { title: 'Fallback Board' } } };
+  const parked = diffPacks(pack([placeholder]), pack([]), { identity: 'name' });
+  assert.equal(entries(parked, 'scaffold')[0].key, 'dashboard::{"name":"fallback board"}@a#01');
+});
+
+test('parity: diffPacks over the JSON the server answers for two packs equals GET /api/diff without traceabilityGraph', async (t) => {
+  const { serve } = await import('../server/fixtures/serve-child.mjs');
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const ws = mkdtempSync(join(tmpdir(), 'observogram-identity-parity-'));
+  const child = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off' } });
+  t.after(async () => { await child.stop(); rmSync(ws, { recursive: true, force: true }); });
+  const register = async (side) => {
+    const r = await fetch(`${child.base}/api/validate?source=compare-modes-${side}.pack.yaml`, {
+      method: 'POST', headers: { 'Content-Type': 'text/yaml' },
+      body: readFileSync(new URL(`./fixtures/compare-modes/${side}.pack.yaml`, import.meta.url), 'utf8'),
+    });
+    const json = await r.json();
+    assert.equal(json.ok, true, JSON.stringify(json.errors));
+    return json.registered.id;
+  };
+  const pairs = [[await register('a'), await register('b')], ['payment-service', 'production-curated']];
+  for (const [aId, bId] of pairs) {
+    const get = async (path) => (await fetch(`${child.base}${path}`)).json();
+    const server = await get(`/api/diff?a=${encodeURIComponent(aId)}&b=${encodeURIComponent(bId)}`);
+    assert.ok(server.traceabilityGraph, `${aId} vs ${bId}: the server answers a graph`);
+    delete server.traceabilityGraph;
+    const aPack = await get(`/api/packs/${encodeURIComponent(aId)}`);
+    const bPack = await get(`/api/packs/${encodeURIComponent(bId)}`);
+    const client = JSON.parse(JSON.stringify(diffPacks(aPack, bPack, { scopeMode: server.scope.mode })));
+    assert.deepEqual(client, server, `${aId} vs ${bId}`);
+    assert.ok(server.summary.inBoth > 0);
+  }
 });
