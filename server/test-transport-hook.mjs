@@ -18,10 +18,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { STRIP, boot, serve } from './fixtures/serve-child.mjs';
+import { SPEC_DIR } from '../tools/lib/validator.mjs';
 
 // Hermetic (server/test-hermetic-suites.mjs): this process imports the store
 // repository to plant the endpoints, so the shell's variables go first.
@@ -160,8 +161,8 @@ test('a header hook reaches every MCP call of refresh-live, draft-from-mcp and d
 // The throwing hook's text names its own upstream with a userinfo the MCP
 // client does not know (it redacts the target's secrets only): the route-level
 // backstop, redactTarget (server/mcp-target-policy.mjs), is what masks it in
-// every 502 below — refresh-live, draft-from-mcp and the deploy routes'
-// hookFaultTo502.
+// every 502 below — refresh-live, draft-from-mcp, the deploy routes'
+// hookFaultTo502 and the journey run's live Pack B.
 const HOOK_UPSTREAM_SECRET = 'gw-svc:hunter2-upstream';
 const leaksUpstream = (text) => text.includes('hunter2-upstream') || text.includes('gw-svc');
 
@@ -227,6 +228,21 @@ test('a hook that breaks its contract at call time: one 502 naming the hook, no 
     assert.ok(!leaksUpstream(JSON.stringify(rbj)), 'rollback: the hook\'s upstream userinfo is masked by the route');
     assert.equal(rbj.results, undefined, 'rollback: no per-item results');
     assert.deepEqual(deployRecords(ws), before, 'rollback: no audit record for a rollback that never reached the wire');
+
+    // A journey whose live Pack B names the same endpoint (D6): the hook
+    // fault's 502 is masked by the route too (redactTarget in the run route).
+    mkdirSync(join(ws, 'journeys'), { recursive: true });
+    writeFileSync(join(ws, 'journeys', 'hook-journey.journey.yaml'), [
+      'name: hook-journey',
+      `packA: { file: ${resolve(SPEC_DIR, 'examples/payment-service.pack.yaml').replaceAll('\\', '/')} }`,
+      `packB: { mcp: { endpointId: ${JSON.stringify(mcpEndpointId)} } }`,
+      'gate: { minAlignmentPct: 1 }',
+    ].join('\n'));
+    const journey = await post(s.base, '/api/journeys/hook-journey/run', {});
+    const jj = await journey.json();
+    assert.equal(journey.status, 502, `journey run: ${JSON.stringify(jj)}`);
+    assert.match(jj.error, /transport hook .*prepareRequest threw: gateway https:\/\/\*\*\*@gw\.internal\/ refused/);
+    assert.ok(!leaksUpstream(JSON.stringify(jj)), 'journey run: the hook\'s upstream userinfo is masked by the route');
     assert.equal(fake.requests.length, 0, 'nothing reached the fake');
   } finally {
     if (s) await s.stop();
