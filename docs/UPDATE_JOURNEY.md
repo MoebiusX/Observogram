@@ -1160,6 +1160,11 @@ redacts an error, so an MCP that repeats the endpoint's read token in a
 result (a version string) no longer carries it into an operator's ping or a
 pack every viewer of the org reads. Tests: 1246 → 1247 (one more in
 `server/test-mcp-ping.mjs`; six assertions in `tools/test-mcp-transport.mjs`).
+Only a secret of 12 characters or more is redacted from a successful result,
+and a tool's JSON text is parsed before it is redacted, so a short
+credential-named value (`sortkey=title`) or a placeholder bearer never
+renames a key, cuts an id or breaks the JSON of a pack or the deploy's
+rollback snapshot.
 
 The batch's delivery report, `docs/DELIVERY-REBADGE-BATCH3.md`, is written
 per item — what shipped, the measured `Tests:` pair, what is deferred by name

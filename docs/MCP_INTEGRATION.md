@@ -81,7 +81,11 @@ behind a redirect is configured with its final URL. **Every answer text is
 redacted by value** — an error's and a successful result's alike — before
 it reaches an error, a 502 body, a log line, a gate-log message, a
 `mcp.probeErrors.*` annotation, a ping's answer or a pack: the bearer, the URL's
-userinfo and credential-named query values become `<redacted>`, and the
+userinfo and credential-named query values become `<redacted>` (in a
+successful result only a secret of 12 characters or more, and in a tool's
+JSON text only once it is parsed, so a short credential-named value such as
+`sortkey=title` or a placeholder bearer never renames a key or breaks the
+JSON), and the
 server's routes redact the credential they resolved once more. One answer is
 read up to 32 MiB (`MAX_MCP_ANSWER_BYTES`), and a caller's `AbortSignal` ends
 every request in flight.

@@ -80,9 +80,12 @@
 // every credential-named query parameter value of mcpUrl (stripMcpUrl's
 // rule) become <redacted> in every log line, 502 body, annotation and run
 // record downstream. A successful answer is redacted the same way — every
-// string of the result rpc() and callTool() return, keys included — so a
-// result that repeats it cannot carry it into a ping, a pack or a fixture;
-// a result that held none is returned as it came. An error that held none
+// string of the result rpc() and callTool() return, keys included, a tool's
+// JSON text once parsed — so a result that repeats it cannot carry it into
+// a ping, a pack or a fixture; a result that held none is returned as it
+// came. There only secrets of ANSWER_SECRET_MIN characters or more count: a
+// short credential-named value (sortkey=title, partitionkey=1) or a
+// placeholder bearer is ordinary data a real answer holds too. An error that held none
 // of them is rethrown as it was. Nothing else the hook does is redacted for
 // it; it runs with the process's trust.
 
@@ -92,6 +95,10 @@ export const MCP_PROTOCOL_VERSION = '2025-06-18';
 
 // The most one MCP answer may hold before the client stops reading it.
 export const MAX_MCP_ANSWER_BYTES = 32 * 1024 * 1024;
+
+// The shortest secret redacted from a successful answer (an error's text is
+// redacted for every secret, whatever its length).
+const ANSWER_SECRET_MIN = 12;
 
 // A byte count as the cap's sentence says it: MiB, KiB or bytes, whole.
 const sizeText = (n) => (n % 1048576 === 0 ? `${n / 1048576} MiB` : n % 1024 === 0 ? `${n / 1024} KiB` : `${n} bytes`);
@@ -211,12 +218,18 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
   // A successful answer, redacted the same way: every string in it (keys
   // included), so an MCP that repeats the request in a result (a version
   // string, a description) cannot carry the credential into a ping, a pack
-  // or a fixture. With nothing to redact the answer is returned as it came.
+  // or a fixture — but only the secrets of ANSWER_SECRET_MIN characters or
+  // more: a short value ('1', 'title', a placeholder 'dev') also occurs in
+  // real data, and replacing it there would rename keys, cut ids and break
+  // the JSON a tool answers. With nothing to redact the answer is returned
+  // as it came.
+  const answerSecrets = secrets.filter((s) => s.length >= ANSWER_SECRET_MIN);
+  const redactInAnswer = (text) => answerSecrets.reduce((acc, s) => acc.split(s).join('<redacted>'), text);
   const redactAnswer = (v) => {
-    if (secrets.length === 0) return v;
-    if (typeof v === 'string') return redact(v);
+    if (answerSecrets.length === 0) return v;
+    if (typeof v === 'string') return redactInAnswer(v);
     if (Array.isArray(v)) return v.map(redactAnswer);
-    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [redact(k), redactAnswer(x)]));
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [redactInAnswer(k), redactAnswer(x)]));
     return v;
   };
 
@@ -337,7 +350,7 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
           if (text) {
             const obj = await parsed(() => JSON.parse(text));
             if (obj.error) throw new Error(`${method}: ${wireText(obj.error.message)}`);
-            return redactAnswer(obj.result);
+            return obj.result;
           }
           buf = buf.slice(frameEnd + 2);
         }
@@ -347,24 +360,27 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
     }
     const data = await parsed(async () => JSON.parse(await readAnswer(res, method)));
     if (data.error) throw new Error(`${method}: ${wireText(data.error.message)}`);
-    return redactAnswer(data.result);
+    return data.result;
   }
 
-  const rpc = (method, params = {}) => send(method, params);
+  const rpc = async (method, params = {}) => redactAnswer(await send(method, params));
   const notify = (method, params = {}) => send(method, params, { notification: true });
 
   async function callTool(name, args = {}) {
-    const result = await rpc('tools/call', { name, arguments: args });
+    // The answer as it came: a tool's JSON text is parsed before it is
+    // redacted, so redaction touches only its strings (never a number, a
+    // quote or a brace) and a secret JSON escapes is caught as well.
+    const result = await send('tools/call', { name, arguments: args });
     if (result?.isError) {
       const txt = result?.content?.map(c => c.text).filter(Boolean).join(' ') || 'tool returned isError';
       throw new Error(`${name}: ${redact(txt)}`);
     }
     const text = result?.content?.[0]?.text;
-    if (typeof text !== 'string') return result;
-    // The text was redacted as it came; a secret JSON escapes (a quote, a
-    // backslash) is caught once it is parsed.
-    try { return redactAnswer(JSON.parse(text)); }
-    catch { return text; }
+    if (typeof text !== 'string') return redactAnswer(result);
+    let parsedText;
+    try { parsedText = JSON.parse(text); }
+    catch { return redactAnswer(text); }
+    return redactAnswer(parsedText);
   }
 
   return { rpc, notify, callTool };

@@ -334,6 +334,35 @@ for (const [label, hook] of [
       assert(untouched.kept === 'v1' && untouched.version === 'undefined to /mcp', 'with nothing to redact the answer comes back as it was', untouched);
     } finally { await new Promise(r => srv.close(r)); }
   }
+
+  // A short credential-named value (the URL-safety rule counts sortkey and
+  // partitionkey as credentials) or a placeholder bearer is ordinary data a
+  // real answer holds too: a successful answer is not redacted for it — no
+  // key renamed, no id cut, no JSON text left unparsed — while an error's
+  // text still is.
+  const data = { count: 2, results: [{ uid: 'a1', title: 'Orders' }, { uid: 'b2', title: 'Payments' }] };
+  const dataServer = createServer(async (req, res) => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    const msg = JSON.parse(raw || '{}');
+    const result = msg.params?.arguments?.fail
+      ? { isError: true, content: [{ type: 'text', text: `refused ${req.headers.authorization}` }] }
+      : { content: [{ type: 'text', text: JSON.stringify(data) }] };
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id ?? 1, result }));
+  });
+  await new Promise(r => dataServer.listen(0, '127.0.0.1', r));
+  try {
+    const base = `http://127.0.0.1:${dataServer.address().port}/mcp`;
+    for (const [query, auth] of [['?sortkey=title', null], ['?partitionkey=1', null], ['?apikey=Orders', null], ['?partitionkey=2', null], ['', 'dev'], ['', 'a']]) {
+      const c = createMcpClient({ mcpUrl: base + query, mcpAuth: auth, transport: null });
+      const got = await c.callTool(SYSTEM_HEALTH, {});
+      assert(JSON.stringify(got) === JSON.stringify(data), `a short secret (${query || `bearer ${auth}`}) leaves a successful answer intact`, got);
+    }
+    const dev = createMcpClient({ mcpUrl: base, mcpAuth: 'dev', transport: null });
+    const failed = await expectFail(() => dev.callTool(SYSTEM_HEALTH, { fail: true }));
+    assert(failed?.message === `${SYSTEM_HEALTH}: refused Bearer <redacted>`, 'an error\'s text is still redacted for a short secret', failed?.message);
+  } finally { await new Promise(r => dataServer.close(r)); }
 }
 
 // ---------- 5b. redirects are never followed (D10) ----------

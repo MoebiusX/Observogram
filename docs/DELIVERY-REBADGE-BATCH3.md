@@ -134,6 +134,12 @@ has no uid field, so a rule's id is its name).
   string) carried it into an operator's ping (`read.detail`) and into a
   snapshot, draft or refresh pack; every string of a result is now redacted
   as an error's text is. Tests: 1246 → 1247.
+- **A short secret leaves a successful answer intact** (`tools/lib/mcp-client.mjs`):
+  only a secret of 12 characters or more is redacted from a result, and a
+  tool's JSON text is parsed first, so a credential-named `sortkey=title` or
+  `partitionkey=1`, or a placeholder bearer, no longer renames keys, cuts
+  ids or leaves a pack's JSON unparsed. Assertions in
+  `tools/test-mcp-transport.mjs`; the test count is unchanged.
 
 ## What a plugin bridge still does that this batch does not
 
