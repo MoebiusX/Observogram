@@ -41,7 +41,7 @@
 // next to a navigation sink.
 
 import { adapt, listEnvironments, applyEnvironmentOverlay } from '../tools/lib/adapter.mjs';
-import { serviceMetadata } from '../tools/lib/service-keys.mjs';
+import { serviceMetadata, livePackKind } from '../tools/lib/service-keys.mjs';
 import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from '../tools/lib/validator.mjs';
 import { evaluateConformance, RUBRIC } from '../tools/lib/conformance.mjs';
 import { packConformance } from '../tools/lib/pack-conformance.mjs';
@@ -187,6 +187,7 @@ function librarySummaryFor(canonical) {
 // server/index.mjs catalogEntry: the field set of GET /api/packs.
 function catalogEntry(meta, canonical) {
   const svc = serviceMetadata(canonical);
+  const live = livePackKind(canonical);
   return {
     id: meta.id,
     label: meta.label,
@@ -199,6 +200,7 @@ function catalogEntry(meta, canonical) {
     namespace: svc.namespace,
     services: svc.services,
     environments: listEnvironments(canonical),
+    ...(live ? { live } : {}),
     ok: true,
   };
 }

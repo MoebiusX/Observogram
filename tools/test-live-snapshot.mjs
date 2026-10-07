@@ -29,8 +29,11 @@
  * tools/fixtures/mcp/grafana_alert_rules.json) unioned with vmalert's, read
  * by title with their folder uid — the rule folder scope applied when every
  * rule names one — and paired with a crawled provisioning file
- * (tools/fixtures/snapshot/repo-grafana/). Tool names come from the
- * capability registry, never typed here.
+ * (tools/fixtures/snapshot/repo-grafana/). And pack-conformance's report
+ * says liveKind: snapshot for a snapshot only (kept here, beside the
+ * snapshot it reads, rather than in the ledger-counted
+ * tools/test-pack-conformance.mjs). Tool names come from the capability
+ * registry, never typed here.
  *
  *   node tools/test-live-snapshot.mjs            (npm run test:golden:snapshot)
  *   node tools/test-live-snapshot.mjs --update   (rewrite the goldens; review the diff)
@@ -53,6 +56,8 @@ import { crawlFiles } from './lib/crawler.mjs';
 import { adapt } from './lib/adapter.mjs';
 import { diffPacks } from './lib/diff.mjs';
 import { validateCanonical, SPEC_DIR } from './lib/validator.mjs';
+import { packConformance } from './lib/pack-conformance.mjs';
+import { parse as parseYaml } from './lib/mini-yaml.mjs';
 
 delete process.env.OBSERVOGRAM_TRANSPORT_HOOK;
 delete process.env.TOMOGRAPH_TRANSPORT_HOOK;
@@ -647,4 +652,29 @@ test('Grafana-managed rules alone: the rule folder scope is applied and recorded
   assert.equal(parked.length, 1);
   assert.equal(parked[0].reason, 'the snapshot read only the folders payments-alerts; Pack A does not say which folder this alert rule is in, so it was not checked');
   assert.equal(entries(d, 'onlyInA', 'alert_rule').length, 0);
+});
+
+// ---------- pack-conformance: a live snapshot says so ----------
+
+const LIVE_INPUTS = { health: { services: [{ name: 'svc-checkout' }] }, topology: { dependencies: [] }, anomaliesActive: {}, baselinesData: { baselines: [] }, errors: {} };
+
+test('pack-conformance liveKind: a snapshot\'s report carries liveKind: snapshot beside writers.fetcher; another mode value has none', () => {
+  const snap = buildSnapshotPack(LIVE_INPUTS, { refreshedAt: '2026-06-06T00:00:00Z', origin: 'https://fake-mcp.test' });
+  const pc = packConformance(snap);
+  assert.equal(pc.liveKind, 'snapshot');
+  assert.equal(pc.writers.fetcher, true);
+  assert.deepEqual(Object.keys(pc).slice(0, 3), ['name', 'writers', 'liveKind']);
+  const other = packConformance({ ...snap, metadata: { ...snap.metadata, annotations: { ...snap.metadata.annotations, 'observogram.live.mode': 'draft' } } });
+  assert.ok(!('liveKind' in other), 'only the snapshot mode is read');
+});
+
+test('pack-conformance: a draft\'s report is unchanged — no liveKind key, the keys in their order (a fetcher-written report without liveKind is a scaffold); no example pack has one', () => {
+  const draft = buildCanonicalPack({ refreshedAt: '2026-06-06T00:00:00Z', mcpUrl: 'https://fake-mcp.test/observability', ...LIVE_INPUTS });
+  const pc = packConformance(draft);
+  assert.ok(!('liveKind' in pc));
+  assert.equal(pc.writers.fetcher, true);
+  assert.deepEqual(Object.keys(pc), ['name', 'writers', 'markers', 'rows', 'counts', 'conformant']);
+  for (const f of readdirSync(resolve(ROOT, 'examples')).filter((x) => x.endsWith('.pack.yaml'))) {
+    assert.ok(!('liveKind' in packConformance(parseYaml(readFileSync(resolve(ROOT, 'examples', f), 'utf8')))), `${f}: no liveKind`);
+  }
 });

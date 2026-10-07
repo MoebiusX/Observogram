@@ -40,7 +40,7 @@ import { resolve, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
 import { adapt, listEnvironments, overlaidCanonical } from '../tools/lib/adapter.mjs';
-import { serviceMetadata, catalogEntryOf } from '../tools/lib/service-keys.mjs';
+import { serviceMetadata, catalogEntryOf, livePackKind } from '../tools/lib/service-keys.mjs';
 import { isLegacyLayeredPack, upconvertLegacyPack } from '../tools/lib/legacy.mjs';
 import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from '../tools/lib/validator.mjs';
 import { evaluateConformance, RUBRIC } from '../tools/lib/conformance.mjs';
@@ -248,6 +248,7 @@ function catalogEntry(meta) {
   try {
     const c = loadPackFile(meta.path);
     const svc = serviceMetadata(c);
+    const live = livePackKind(c);   // 'scaffold' | 'snapshot' for a live pack only
     return {
       id: meta.id,
       label: meta.label,
@@ -260,6 +261,7 @@ function catalogEntry(meta) {
       namespace: svc.namespace,
       services: svc.services,
       environments: listEnvironments(c),
+      ...(live ? { live } : {}),
       ok: true,
     };
   } catch (e) {

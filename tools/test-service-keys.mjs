@@ -20,8 +20,9 @@ import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { listEnvironments } from './lib/adapter.mjs';
 import {
   normalizeServiceKey, serviceMetadata, serviceNamesForPack, primaryServiceName, serviceKeyForPack,
-  isLiveAggregatePack, servicesForPack, catalogEntryOf,
+  isLiveAggregatePack, servicesForPack, catalogEntryOf, livePackKind,
 } from './lib/service-keys.mjs';
+import { buildCanonicalPack, buildSnapshotPack } from './fetch-live-pack.mjs';
 
 const { assert, report } = createHarness({ indent: '  ', truncate: 240 });
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -35,7 +36,7 @@ const source = readFileSync(join(ROOT, 'tools/lib/service-keys.mjs'), 'utf8')
 assert(!/^\s*import\b/m.test(source) && !/\bimport\s*\(/.test(source), 'service-keys.mjs has no import at all (static or dynamic)');
 assert(!/\bnode:/.test(source) && !/\bprocess\.env\b/.test(source) && !/\brequire\s*\(/.test(source),
   'service-keys.mjs touches no node: API, process.env or require');
-assert(/^export function (normalizeServiceKey|serviceMetadata|serviceNamesForPack|primaryServiceName|serviceKeyForPack|isLiveAggregatePack|servicesForPack|catalogEntryOf)\(/m.test(source),
+assert(/^export function (normalizeServiceKey|serviceMetadata|serviceNamesForPack|primaryServiceName|serviceKeyForPack|isLiveAggregatePack|servicesForPack|catalogEntryOf|livePackKind)\(/m.test(source),
   'the module exports plain functions');
 
 // ---------- the studio reads the module, and keeps no copy ----------
@@ -241,5 +242,38 @@ assert(same(catalogEntryOf('uploaded-pack-3', { label: null }, namelessCanonical
 assert(catalogEntryOf('uploaded-pack-3', { label: null, source: 'upload' }, namelessCanonical, []).label === 'uploaded-pack-3'
   && servicesForPack(catalogEntryOf('uploaded-pack-3', { label: null, source: 'upload' }, namelessCanonical, []))[0]?.key === 'uploaded-pack-3',
   'a pack with no name gets primary = its id in the rows, as the studio does with the tile');
+
+// ---------- livePackKind: a live pack says scaffold or snapshot (rebadge batch 3, C1) ----------
+const liveInputs = { health: { services: [] }, topology: { dependencies: [] }, anomaliesActive: {}, baselinesData: { baselines: [] }, errors: {} };
+const draftCanonical = buildCanonicalPack({ refreshedAt: '2026-10-07T12:00:00.000Z', mcpUrl: 'https://mcp.example.test/mcp', ...liveInputs });
+const snapshotCanonical = buildSnapshotPack(liveInputs, { refreshedAt: '2026-10-07T12:00:00.000Z', origin: 'https://mcp.example.test' });
+for (const [canonical, want, why] of [
+  [draftCanonical, 'scaffold', 'a pack the fetcher drafted (mcp.refreshedAt)'],
+  [snapshotCanonical, 'snapshot', 'a snapshot (observogram.live.mode: snapshot)'],
+  [{ metadata: { annotations: { 'observogram.live.mode': 'snapshot' } } }, 'snapshot', 'the mode alone'],
+  [{ metadata: { annotations: { 'observogram.live.mode': 'other', 'mcp.refreshedAt': 'x' } } }, 'scaffold', 'an unknown mode falls back to the draft rule'],
+  [{ metadata: { annotations: { 'mcp.refreshedAt': '' } } }, null, 'an empty refreshedAt says nothing'],
+  [{ metadata: {} }, null, 'no annotations'],
+  [null, null, 'nothing'],
+]) assert(livePackKind(canonical) === want, `livePackKind: ${why} → ${want}`, livePackKind(canonical));
+assert([...canonicals.values()].every(c => livePackKind(c) === null)
+  && [...canonicals].every(([rel, c]) => !('live' in catalogEntryOf(`u-${rel}`, { source: rel }, c, []))),
+  'no example or reference pack is a live pack: their entries carry no `live` key (byte-identical, as pinned above)');
+{
+  const draftEntry = catalogEntryOf('uploaded-draft', { label: 'gw (live MCP draft)', source: 'gw (live MCP draft)' }, draftCanonical, listEnvironments(draftCanonical));
+  const snapEntry = catalogEntryOf('uploaded-snap', { label: 'live-snapshot (live MCP snapshot)', source: 'live-snapshot (live MCP snapshot)' }, snapshotCanonical, listEnvironments(snapshotCanonical));
+  assert(draftEntry.live === 'scaffold' && snapEntry.live === 'snapshot', 'catalogEntryOf: a drafted pack reads live: scaffold, a snapshot live: snapshot', [draftEntry.live, snapEntry.live]);
+  assert(same(Object.keys(snapEntry), ['id', 'label', 'description', 'name', 'version', 'binding', 'criticality', 'service', 'namespace', 'services', 'environments', 'live', 'source', 'ok']),
+    'catalogEntryOf: `live` sits after environments, every other key where it was', Object.keys(snapEntry));
+}
+{
+  const custom = catalogEntryOf('uploaded-snap-2', { label: 'Payments prod', source: 'Payments prod' }, snapshotCanonical, []);
+  assert(isLiveAggregatePack(custom) && !servicesForPack(custom).some(s => s.role === 'primary'),
+    'a snapshot under a custom label (Payments prod) is an aggregate — never one service\'s pack');
+  const namedDraft = buildCanonicalPack({ refreshedAt: '2026-10-07T12:00:00.000Z', mcpUrl: 'https://mcp.example.test/mcp', packName: 'payments', ...liveInputs });
+  const draftCustom = catalogEntryOf('uploaded-draft-2', { label: 'Payments prod', source: 'Payments prod' }, namedDraft, []);
+  assert(draftCustom.live === 'scaffold', 'the named draft is still a scaffold');
+  assert(!isLiveAggregatePack(draftCustom), 'a draft keeps the label rule (a custom label without a live word is no aggregate; documented, unchanged)');
+}
 
 report('service-keys', 'all service-keys assertions pass.');

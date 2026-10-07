@@ -1365,3 +1365,29 @@ test('T9 the baked bundle in headless Chromium: the brand in the title, wordmark
   assert.deepEqual(offLoopback, [], 'no request left the loopback');
   assert.ok(served.every((u) => u === `${base}/` || u.startsWith(`${base}/?`)), `the page fetched only itself (the data: favicon and the inline logo fetch nothing): ${served.filter((u) => u !== `${base}/`)}`);
 });
+
+// ---------- the catalogue labels a live pack (rebadge batch 3, C1) ----------
+
+test('the bundle\'s catalogue says scaffold or snapshot as the server\'s does: live from service-keys livePackKind, absent for every other pack', async () => {
+  const withAnnotations = (extra) => ({ ...paymentCanonical, metadata: { ...paymentCanonical.metadata, annotations: { ...(paymentCanonical.metadata.annotations || {}), ...extra } } });
+  const draft = withAnnotations({ 'mcp.refreshedAt': '2026-10-07T12:00:00.000Z' });
+  const snapshot = withAnnotations({ 'mcp.refreshedAt': '2026-10-07T12:00:00.000Z', 'observogram.live.mode': 'snapshot' });
+  const backend = createStaticBackend({ version: '1', schema, packs: [
+    { id: 'plain', label: 'Plain', canonical: paymentCanonical },
+    { id: 'draft', label: 'gw (live MCP draft)', canonical: draft },
+    { id: 'snap', label: 'Payments prod', canonical: snapshot },
+  ] });
+  const packs = (await (await backend.handle('/api/packs')).json()).packs;
+  const byId = Object.fromEntries(packs.map((p) => [p.id, p]));
+  assert.ok(!('live' in byId.plain), 'a pack that is no live pack carries no live key');
+  assert.equal(byId.draft.live, 'scaffold');
+  assert.equal(byId.snap.live, 'snapshot');
+  // The same field, in the same place, as the registry's entry for the same canonical.
+  const { catalogEntryOf } = await import('./lib/service-keys.mjs');
+  const registry = catalogEntryOf('snap', { label: 'Payments prod', source: 'Payments prod' }, snapshot, listEnvironments(snapshot));
+  const { source, description: _d, ...registryFields } = registry;
+  const { description: _sd, ...shimFields } = byId.snap;
+  assert.equal(source, 'uploaded');
+  assert.deepEqual(shimFields, registryFields);
+  assert.deepEqual(Object.keys(byId.snap).slice(-2), ['live', 'ok']);
+});
