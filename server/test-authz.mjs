@@ -1265,8 +1265,10 @@ test('the README Roles section lists every orgs.json role the import maps to adm
 
 // docs/STORE_PLAN.md's build status (the italic paragraphs before §0) and
 // docs/HANDOVER.md say which slice is next: one slice, the same in both,
-// and never one the build status already calls built.
-test('docs/STORE_PLAN.md\'s build status and docs/HANDOVER.md name one next slice, after every slice built', () => {
+// and never one the build status already calls built. The plan can end
+// (D-G): once the build status says every slice of §7 is built, neither doc
+// says a slice is next, and docs/HANDOVER.md says every slice is built.
+test('docs/STORE_PLAN.md\'s build status and docs/HANDOVER.md name one next slice, after every slice built — or none, once every slice of §7 is built', () => {
   const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
   const plan = readFileSync(join(REPO, 'docs', 'STORE_PLAN.md'), 'utf8');
   const start = plan.indexOf('*Build status');
@@ -1279,6 +1281,11 @@ test('docs/STORE_PLAN.md\'s build status and docs/HANDOVER.md name one next slic
     ...[...status.matchAll(NEXT)].map(([phrase, n]) => ({ doc: 'STORE_PLAN.md', phrase, n: Number(n) })),
     ...[...handover.matchAll(NEXT)].map(([phrase, n]) => ({ doc: 'HANDOVER.md', phrase, n: Number(n) })),
   ];
+  if (/\bevery slice of §7 is built\b/i.test(status)) {
+    assert.deepEqual(next.map((x) => `${x.doc}: "${x.phrase}"`), [], 'every slice of §7 is built: no doc says a slice is next');
+    assert.match(handover, /\bevery STORE_PLAN slice is built\b/i, 'docs/HANDOVER.md says every slice is built');
+    return;
+  }
   assert.ok(next.some((x) => x.doc === 'STORE_PLAN.md') && next.some((x) => x.doc === 'HANDOVER.md'), 'both docs say which slice is next');
   const slices = [...new Set(next.map((x) => x.n))];
   assert.equal(slices.length, 1, `one next slice, not ${next.map((x) => `${x.doc}: "${x.phrase}"`).join(', ')}`);

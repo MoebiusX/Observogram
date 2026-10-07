@@ -82,16 +82,17 @@ the service page, Check and Build wired to the table (Build writes tier and
 owners where the row has none), one org switcher, the no-org screen; the
 `.svc-*` zone under the AA scan.*
 
-*Slice 6b-i is built (`codex/settings`): Settings for operators and admins —
+*Slice 6b is built (`codex/settings`, `codex/settings-owner`): Settings —
 a mode entered from Advanced and the account menu, its sections by the
 server's rank, the banner naming the way in where the server names one;
-environments (one editor, from Settings and from the service page), the
-org's MCP endpoint records (the token a variable's name under the org's
-prefix), the MCP pickers listing the org's endpoints first and sending
-`mcpEndpointId`, members and the org's name, the audit; the `.set-*` zone
-under the AA scan. The token posture's refusal under `OBSERVOGRAM_AUTH=off`
-now says to restart without it. Slice 6 (6b, Settings) is next: its owner
-sections — users, organisations, the join role.*
+environments (one editor, from Settings and from the service page), MCP
+endpoints (the token a variable's name under the org's prefix) and the
+pickers on `mcpEndpointId`, members and the org's name, the audit, users (a
+temporary password shown once and changed at first sign-in), organisations
+(an owner acts in one they are not a member of), the join role; the `.set-*`
+zone under the AA scan. The token posture's refusal under
+`OBSERVOGRAM_AUTH=off` now says to restart without it. Every slice of §7 is
+built.*
 
 ## 0 · Status quo — what exists and what is missing
 

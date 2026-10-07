@@ -1188,3 +1188,19 @@ per item — what shipped, the measured `Tests:` pair, what is deferred by name
 — and `tools/test-doc-test-totals.mjs` guards it as it guards the batch 2
 reports, and holds the total its opening sentence states for the head of
 the branch to the last pair it quotes.
+
+### STORE_PLAN slice 6b-ii — Settings for owners
+
+**6b-ii** (`codex/settings-owner`) adds the deployment's sections to
+Settings for owners — users, organisations, the join role — and nothing to
+the journey's steps: Discover, Diagnose, Remediate and the Hand off read and
+send as in 6b-i. Two things reach the people who run it. A new local user
+gets a temporary password the browser draws, shown once and changed at
+first sign-in, so an owner can give a teammate a way in without a shell. And
+an owner can act in an org they are not a member of (D-M): the org's
+members, environments and MCP endpoints — the journey's live target — can be
+rescued when its last admin left; the ORG chip then reads `<name> — acting
+as owner`, and a member's chip is unchanged. Crawl, compile and board
+goldens are byte-identical.
+Tests: 1250 → 1271 (`server/test-settings-studio.mjs`'s owner block and
+the owner models in `tools/test-settings-model.mjs`).
