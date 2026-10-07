@@ -18,6 +18,7 @@ import {
   buildSettingsEditorModel, buildEnvironmentPatch, buildEnvironmentCreate, buildEndpointPatch, buildEndpointCreate, buildMemberAddBody, leftOrgText,
   parseKeyValueLines, environmentSaveStatus, endpointSaveStatus, memberSaveStatus, orgRenameStatus, endpointDeleteStatus,
   lastAdmin, orgEnvPrefix, mcpTargetModel, mcpTargetBody, mcpPickerCanAdmin, profileEndpointNote, endpointDrift,
+  mcpTargetMissingText, mcpRegisterCheck,
 } from '../studio/settings-model.mjs';
 import {
   loadMcpEndpoints, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
@@ -1184,4 +1185,69 @@ test('the Settings actions: every host.settings call the view makes is one setti
   assert.ok(listed, 'UI_CONVENTIONS.md lists the Settings actions');
   const names = [...listed[1].matchAll(/`([A-Za-z]+)`/g)].map((x) => x[1]).sort();
   assert.deepEqual(names, defined, 'UI_CONVENTIONS.md lists exactly the actions settingsActions defines');
+});
+
+// ---------- the MCP target for a reader the server refuses a typed URL (rebadge batch 3, C0) ----------
+
+test('mcpTargetModel with typed { allowed: false } (R4): list-only — no "Type a URL…", the value never typed, no URL row; the empty list names the way in per posture and per register; an unreadable list is said', () => {
+  const closed = { allowed: false };
+  const m = mcpTargetModel({ endpoints: EP_OP, orgName: 'Acme', typed: closed, typedUrl: 'https://x.test', chosen: '' });
+  assert.deepEqual(m.options.map((o) => o.value), EP_OP.map((ep) => String(ep.id)), 'the endpoints only');
+  assert.equal(m.value, String(EP_OP[0].id), 'a typed choice or a remembered typed URL falls to the first endpoint');
+  assert.deepEqual([m.show, m.showUrl, m.hint], [true, false, null]);
+  assert.equal(mcpTargetModel({ endpoints: EP_OP, remembered: 5, typed: closed }).value, '5', 'the preselection otherwise as before');
+  assert.equal(mcpTargetModel({ endpoints: EP_OP, typed: { allowed: true }, typedUrl: 'https://x.test' }).value, '', 'allowed: as 6b-i');
+  const none = mcpTargetModel({ endpoints: [], orgName: 'Acme', typed: closed });
+  assert.deepEqual([none.show, none.showUrl, none.options], [false, false, []]);
+  assert.deepEqual(none.hint, { text: 'No MCP endpoint is registered in Acme yet — an admin registers them in Settings → MCP endpoints.', button: null });
+  assert.deepEqual(mcpTargetModel({ endpoints: [], orgName: 'Acme', typed: closed, posture: 'token' }).hint,
+    { text: 'No MCP endpoint is registered in Acme yet — registering one needs a signed-in admin (npm run users -- add <login>).', button: null });
+  assert.deepEqual(mcpTargetModel({ endpoints: [], orgName: 'Acme', typed: closed, canAdmin: true }).hint,
+    { text: 'No MCP endpoint is registered in Acme yet.', button: 'Settings → MCP endpoints' }, 'a reader who may register: the button');
+  assert.deepEqual(mcpTargetModel({ endpoints: null, orgName: 'Acme', typed: closed, unreadable: true }).hint,
+    { text: "Acme's MCP endpoints could not be read just now — reopen this to try again.", button: null });
+  assert.equal(mcpTargetModel({ endpoints: null, orgName: 'Acme', typed: closed }).hint, null, 'not read yet: nothing said');
+  assert.equal(mcpTargetModel({ endpoints: null, typed: closed }).showUrl, false, 'closed when unknown: no URL row');
+});
+
+test('mcpTargetMissingText: the typed URL named only for a reader who may type one', () => {
+  assert.equal(mcpTargetMissingText(), 'choose an MCP endpoint or type a URL');
+  assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme' }), "choose one of Acme's MCP endpoints");
+  assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty: true }), 'no MCP endpoint is registered in Acme yet — an admin registers them in Settings → MCP endpoints');
+  assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty: true, canRegister: true }), 'no MCP endpoint is registered in Acme yet — register one in Settings → MCP endpoints', 'a reader the server lets register');
+});
+
+test('profileEndpointNote and endpointDrift with typedAllowed false: no sentence offers typing a URL; a typed profile is said', () => {
+  const p = { mcpEndpoint: { orgId: 'acme', id: 3, name: 'gw' } };
+  assert.equal(profileEndpointNote(p, { orgId: 'bravo', orgName: 'Bravo', endpoints: [], profileName: 'nightly', typedAllowed: false }).note,
+    'Profile "nightly" names MCP endpoint "gw" of acme — choose one of Bravo\'s MCP endpoints.');
+  assert.deepEqual(profileEndpointNote({ mcpUrl: 'https://x.test/mcp' }, { orgId: 'acme', orgName: 'Acme', endpoints: EP_OP, profileName: 'old', typedAllowed: false }),
+    { select: null, note: 'Profile "old" sends a typed MCP URL, which only an admin may send — choose one of Acme\'s MCP endpoints.' });
+  assert.equal(profileEndpointNote({ mcpUrl: 'https://x.test/mcp' }, { orgId: 'acme', endpoints: EP_OP }).note, null, 'allowed: nothing to say, as before');
+  const shown = { id: 3, name: 'gw', origin: 'https://mcp.acme.test' };
+  assert.equal(endpointDrift(shown, [EP_OP[1]], { orgName: 'Acme', typedAllowed: false }), "gw is no longer one of Acme's MCP endpoints — choose another of Acme's MCP endpoints.");
+  assert.equal(endpointDrift(shown, null, { orgName: 'Acme', typedAllowed: false }), "gw could not be checked against Acme's MCP endpoints just now — send again.");
+  for (const text of [endpointDrift(shown, [EP_OP[1]], { typedAllowed: false }), endpointDrift(shown, null, { typedAllowed: false })]) assert.ok(!/type a URL/.test(text), text);
+});
+
+test('mcpRegisterCheck (D4): Register and connect is sent only for an origin the server would accept from this reader — loopback, a listed origin, or any while no list applies to a signed-in admin', () => {
+  const local = { allowed: true, why: null, listed: false, origins: [], listedOnly: true };
+  assert.deepEqual(mcpRegisterCheck('http://127.0.0.1:3001/mcp', local), { origin: 'http://127.0.0.1:3001', name: '127.0.0.1:3001', error: null });
+  assert.equal(mcpRegisterCheck('http://localhost/mcp', local).error, null);
+  assert.equal(mcpRegisterCheck('http://[::1]:9/mcp', local).error, null);
+  assert.equal(mcpRegisterCheck('https://demo.example/mcp?x=1', local).error,
+    'https://demo.example cannot be registered on a server without sign-in — only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS; the server\'s operator lists it there, or a first user arms sign-in (npm run users -- add <login>)');
+  assert.equal(mcpRegisterCheck('https://demo.example/mcp', { ...local, listed: true, origins: ['https://demo.example'] }).error, null, 'listed');
+  assert.equal(mcpRegisterCheck('https://demo.example/mcp', { ...local, listed: true, origins: null }).error, null, 'any (`*`)');
+  assert.equal(mcpRegisterCheck('https://demo.example/mcp', { allowed: true, listed: false, origins: [], listedOnly: false }).error, null, 'a session admin, no list');
+  assert.equal(mcpRegisterCheck('https://demo.example/mcp', { allowed: false, why: 'registering an MCP endpoint needs the admin role' }).error, 'registering an MCP endpoint needs the admin role');
+  assert.equal(mcpRegisterCheck('not a url', local).error, 'type the MCP URL (http:// or https://)');
+  assert.equal(mcpRegisterCheck('https://demo.example/', local).name, 'demo.example', 'the name is the host');
+});
+
+test('loadMcpEndpoints({ withPolicy }): { endpoints, policy } — the policy as the server sent it, null when none; without it the array as before', async () => {
+  const policy = { typed: { allowed: false, why: 'w', listed: false, origins: [] }, register: { allowed: true, why: null, listed: false, origins: [], listedOnly: true } };
+  assert.deepEqual(await loadMcpEndpoints({ fetchFn: async () => ({ ok: true, endpoints: EP_OP, policy }), withPolicy: true }), { endpoints: EP_OP, policy });
+  assert.deepEqual(await loadMcpEndpoints({ fetchFn: async () => ({ ok: true, endpoints: [] }), withPolicy: true }), { endpoints: [], policy: null });
+  assert.deepEqual(await loadMcpEndpoints({ fetchFn: async () => ({ ok: true, endpoints: EP_OP, policy }) }), EP_OP);
 });

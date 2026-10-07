@@ -127,8 +127,9 @@ synthetic entries, test-tenancy's `ORG_SCOPED`, test-smoke's restricted-tier fak
 the token case (no new tool literal). The design's §19 decisions were all taken as
 recommended (`OBSERVOGRAM_ORG_<ORGKEY>_*` with the longest-prefix owner, the MCP endpoint
 mutations behind the identity API's defences, null tiers, the tier enum, `environments.endpoints`
-in full to viewers). The studio's pickers list the org's endpoints first and keep a typed URL;
-a chosen endpoint is sent as `mcpEndpointId` (6b). The deploy audit (`deploys.jsonl` → rows)
+in full to viewers). The studio's pickers list the org's endpoints first and keep a typed URL
+for an admin only — list-only for every reader the server refuses a typed URL (rebadge batch 3,
+C0); a chosen endpoint is sent as `mcpEndpointId` (6b). The deploy audit (`deploys.jsonl` → rows)
 was slice 5.
 
 **Slice 5 delivered (`codex/audit`): the audit.** Every change a principal makes through the

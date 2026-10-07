@@ -394,13 +394,16 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       page.on('request', (r) => { if (r.method() === 'POST' && /mcpAuth/.test(r.postData() || '')) anyAuth.push(r.url()); });
       const drafts = posts(page, /\/api\/draft-from-mcp$/);
       const refreshes = posts(page, /\/api\/refresh-live$/);
-      const GW_OPTIONS = [[String(gwId), 'gw — https://mcp.acme.test', true], ['', 'Type a URL…', false]];
+      // R4 (rebadge batch 3, C0): the server refuses oscar, an operator, a
+      // typed URL — GET /api/mcp-endpoints says so — so every picker is
+      // list-only: no "Type a URL…", no URL row.
+      const GW_OPTIONS = [[String(gwId), 'gw — https://mcp.acme.test', true]];
 
       // The home's source card (D-J): the select, its label, the URL label.
       await page.waitForSelector('[data-mcp-target="home"] select.set-mcp-target', { state: 'attached', timeout: T });
       assert.deepEqual(await pickerOptions(page, 'home'), GW_OPTIONS);
       assert.equal(await attr(page, '[data-mcp-target="home"] select', 'aria-label'), 'Registered MCP endpoint');
-      assert.equal(await text(page, 'label.home-mcp-url-row .home-mcp-url-label'), 'MCP URL');
+      assert.equal(await page.evaluate(() => document.getElementById('home-mcp-url').closest('label').hidden), true, 'no URL row for a reader who may not type one');
 
       // The refresh panel.
       await page.evaluate(() => document.getElementById('mcp-btn').click());
@@ -467,7 +470,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
         return hits;
       }, 'write-key-2');
       assert.deepEqual(kept, [], 'the typed MCP write key is never stored');
-      assert.deepEqual(await pickerOptions(page, 'deploy'), [[String(gwId), 'gw — https://mcp2.acme.test', true], ['', 'Type a URL…', false]], 'the option names the new origin');
+      assert.deepEqual(await pickerOptions(page, 'deploy'), [[String(gwId), 'gw — https://mcp2.acme.test', true]], 'the option names the new origin');
       assert.equal((await call('ada', 'PATCH', `/api/mcp-endpoints/${gwId}`, { url: GW.url })).status, 200);
       await page.fill('#deploy-target-auth', '');
 
@@ -480,8 +483,12 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       const rollbacksBefore = rollbacks.length;
       await page.click('.deploy-hist-rollback');
       await page.waitForFunction(() => /is no longer one of/.test(document.body.textContent), null, { timeout: T });
-      assert.match(await page.evaluate(() => document.body.textContent), /gw is no longer one of Acme's MCP endpoints — choose another or type a URL\./);
+      assert.match(await page.evaluate(() => document.body.textContent), /gw is no longer one of Acme's MCP endpoints — choose another of Acme's MCP endpoints\./);
+      assert.ok(!/type a URL/.test(await page.evaluate(() => document.body.textContent)), 'no sentence offers oscar a typed URL');
       assert.equal(rollbacks.length, rollbacksBefore, 'no rollback sent');
+      // The list is empty now: the picker names the way in for an operator, and nothing typed is sent.
+      await page.waitForFunction(() => /No MCP endpoint is registered in Acme yet — an admin registers them in Settings → MCP endpoints\./.test(document.querySelector('[data-mcp-target="deploy"]')?.textContent || ''), null, { timeout: T });
+      assert.equal(await page.evaluate(() => document.getElementById('deploy-target-mcp').closest('label').hidden), true, 'still no URL row');
       await page.evaluate(() => document.getElementById('deploy-modal-close').click());
     } finally {
       await ctx.close();
@@ -529,7 +536,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await page.waitForFunction(() => [...document.querySelectorAll('#deploy-target-profile option')].some((o) => o.value === 'p1'), null, { timeout: T });
       await page.selectOption('#deploy-target-profile', 'p1');
       await page.waitForFunction(() => /^Profile "p1"/.test(document.getElementById('deploy-modal-status')?.textContent || ''), null, { timeout: T });
-      assert.equal(await text(page, '#deploy-modal-status'), 'Profile "p1" names MCP endpoint "gw" of acme — choose one of Bravo\'s, or type a URL.');
+      assert.equal(await text(page, '#deploy-modal-status'), 'Profile "p1" names MCP endpoint "gw" of acme — choose one of Bravo\'s, or type a URL.', 'olive is an owner: she may type a URL (R4)');
       assert.equal(await page.evaluate(() => document.getElementById('deploy-target-mcp').value), '');
       assert.equal(await page.evaluate(() => document.getElementById('deploy-target-mcp').closest('label').getClientRects().length > 0), true, 'typed mode');
     } finally { await ctx.close(); }
@@ -746,7 +753,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('an open server on the loopback: once the probe answers 200 in this page, the picker hint offers Settings → MCP endpoints, and it lands there', async () => {
+  await t.test('an open server on the loopback: the server says local may register (GET /api/mcp-endpoints policy.register), so the picker hint offers Settings → MCP endpoints, and it lands there', async () => {
     const probe = await call(null, 'GET', '/api/org/members', undefined, { base: loopChild.base });
     assert.equal(probe.status, 200, probe.text);
     const { page, ctx } = await open(loopChild.base, null);
@@ -766,6 +773,45 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await settled(page);
       assert.equal(await attr(page, '#set-primary', 'aria-disabled'), null, 'New MCP endpoint usable');
     } finally { await ctx.close(); }
+  });
+
+  // R4 + D4 (rebadge batch 3, C0): without sign-in the home never sends a
+  // typed URL; with no endpoint its Connect is Register and connect, offered
+  // only for an origin the server would accept (loopback, or listed) — the
+  // demo URL is refused beside the button, nothing sent; a loopback MCP is
+  // registered, then drafted by its id.
+  await t.test('an open server on the loopback, the home: Register and connect — a remote origin refused beside the button with nothing sent, a loopback MCP registered and drafted by mcpEndpointId', async () => {
+    const { startFakeMcp } = await import('./fixtures/fake-mcp.mjs');
+    const fake = await startFakeMcp(['system_health', 'system_topology'], (name) => (name === 'system_health' ? { services: [] } : { dependencies: [] }));
+    const { page, ctx } = await open(loopChild.base, null);
+    try {
+      const registers = posts(page, /\/api\/mcp-endpoints$/);
+      const drafts = posts(page, /\/api\/draft-from-mcp$/);
+      await page.waitForSelector('#home-choice-check', { timeout: T });
+      if (await page.evaluate(() => document.getElementById('home-check')?.hidden)) await page.click('#home-choice-check');
+      await page.waitForFunction(() => document.querySelector('#home-mcp-connect .home-mcp-connect-label')?.textContent === 'Register and connect', null, { timeout: T });
+      assert.equal(await text(page, 'label.home-mcp-url-row .home-mcp-url-label'), 'MCP URL to register');
+      const demo = await page.evaluate(() => document.getElementById('home-mcp-url').value);
+      const demoOrigin = new URL(demo).origin;
+      assert.equal(await text(page, '#home-mcp-status'), `${demoOrigin} cannot be registered on a server without sign-in — only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS; the server's operator lists it there, or a first user arms sign-in (npm run users -- add <login>)`);
+      assert.equal(await attr(page, '#home-mcp-connect', 'aria-disabled'), 'true');
+      await page.evaluate(() => document.getElementById('home-mcp-connect').click());   // a click anyway (Playwright will not click aria-disabled)
+      await page.waitForTimeout(300);
+      assert.deepEqual([registers.length, drafts.length], [0, 0], 'nothing sent for the refused origin');
+      await page.fill('#home-mcp-url', fake.url);
+      await page.waitForFunction(() => document.getElementById('home-mcp-connect').getAttribute('aria-disabled') === null, null, { timeout: T });
+      assert.equal(await text(page, '#home-mcp-status'), '', 'a loopback MCP: the sentence goes');
+      await page.click('#home-mcp-connect');
+      await page.waitForFunction(() => /^connected · /.test(document.getElementById('home-mcp-status')?.textContent || ''), null, { timeout: 30_000 });
+      assert.deepEqual(registers, [{ name: new URL(fake.url).host, url: fake.url }], 'registered once, named by its host');
+      const listed = (await call(null, 'GET', '/api/mcp-endpoints', undefined, { base: loopChild.base })).json.endpoints;
+      assert.deepEqual(listed.map((e) => e.url), [fake.url]);
+      assert.deepEqual(drafts, [{ mcpEndpointId: listed[0].id }], 'drafted by its id, never the typed URL');
+      assert.deepEqual(await pickerOptions(page, 'home'), [[String(listed[0].id), `${new URL(fake.url).host} — ${new URL(fake.url).origin}`, true]], 'the home now lists it, list-only');
+    } finally {
+      await ctx.close();
+      await fake.close();
+    }
   });
 
   await t.test('olive (an owner) — leaving bravo: the status says the reload lands in her first organisation, or the default one — never that she switches to a next one', async () => {

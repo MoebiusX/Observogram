@@ -60,7 +60,7 @@ import {
   buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus,
   buildMemberAddBody, memberSaveStatus, orgRenameStatus, lastAdmin, leftOrgText,
   buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
-  mcpTargetModel, mcpTargetBody, mcpPickerCanAdmin, profileEndpointNote, endpointDrift,
+  mcpTargetModel, mcpTargetBody, mcpTargetMissingText, mcpRegisterCheck, profileEndpointNote, endpointDrift,
 } from './settings-model.mjs';
 import {
   loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
@@ -4498,6 +4498,7 @@ function renderHomeView() {
 
   $('#home-mcp-connect').onclick = () => doHomeMcpConnect();
   $('#home-mcp-url').onkeydown = (e) => { if (e.key === 'Enter') doHomeMcpConnect(); };
+  $('#home-mcp-url').oninput = () => paintHomeRegisterCheck();
   $('#home-mcp-advanced-toggle').onclick = () => {
     const adv = $('#home-mcp-advanced');
     const tog = $('#home-mcp-advanced-toggle');
@@ -4535,10 +4536,12 @@ function renderHomeView() {
 let homeMcpEndpointsRead = false;
 function paintHomeMcpTarget() {
   paintMcpTarget('home');
-  if (homeMcpEndpointsRead || state.mcpEndpoints !== null || !mcpPickersReadable() || state.access?.canWrite === false) return;
+  if (homeMcpEndpointsRead || (state.mcpEndpoints !== null && state.mcpTargetPolicy !== null) || !mcpPickersReadable() || state.access?.canWrite === false) return;
   homeMcpEndpointsRead = true;
-  readMcpEndpointsForPickers().then((list) => {
-    if (list?.length && document.getElementById('home-mcp-url')) paintMcpTarget('home');
+  // Repainted when the read settles: the list, and what the policy says
+  // this reader may do (a list-only card, or Register and connect).
+  readMcpEndpointsForPickers().then(() => {
+    if (document.getElementById('home-mcp-url')) paintMcpTarget('home');
   });
 }
 
@@ -4550,9 +4553,36 @@ async function doHomeMcpConnect() {
   const adoptBar  = $('#home-mcp-adopt-bar');
   if (!urlInput || !statusEl) return;
 
-  const { body: target, chosen } = mcpTargetOf('home');
+  let { body: target, chosen } = mcpTargetOf('home');
+  if (!target && homeRegisterMode()) {
+    // D4: register the typed URL as the org's endpoint (the server judges
+    // its origin again), then connect by its id.
+    const check = mcpRegisterCheck(urlInput.value, state.mcpTargetPolicy.register);
+    if (check.error) {
+      statusEl.textContent = check.error;
+      statusEl.className = 'home-mcp-status is-error';
+      return;
+    }
+    goBtn.disabled = true;
+    statusEl.textContent = 'registering the MCP endpoint…';
+    statusEl.className = 'home-mcp-status is-pending';
+    let created;
+    try {
+      created = await createEndpoint({ name: check.name, url: urlInput.value.trim() });
+    } catch (e) {
+      statusEl.textContent = `error: ${e.message}`;
+      statusEl.className = 'home-mcp-status is-error';
+      goBtn.disabled = false;
+      return;
+    }
+    goBtn.disabled = false;
+    if (!created) return;
+    state.mcpEndpoints = [created];
+    paintMcpTarget('home', { chosen: String(created.id) });
+    ({ body: target, chosen } = mcpTargetOf('home'));
+  }
   if (!target) {
-    statusEl.textContent = 'choose an MCP endpoint or type a URL';
+    statusEl.textContent = mcpTargetMissing('home');
     statusEl.className = 'home-mcp-status is-error';
     return;
   }
@@ -4929,12 +4959,18 @@ function renderMcpStatusBody(status) {
 // both); the read token stays on the server, named by the record. The list
 // (state.mcpEndpoints) is read in the identity and open postures only — the
 // bundle and the token posture never read it, and keep the typed URL.
+// Typing a URL is the server's to allow (R4): the list's read carries
+// `policy` (state.mcpTargetPolicy), and a reader it refuses a typed URL —
+// below admin, or without sign-in — gets the pickers list-only, with the
+// way in for that reader where the list is empty (rebadge batch 3, C0).
 const MCP_PICKERS = {
   refresh: { url: 'mcp-url', auth: 'mcp-auth', purpose: 'read', field: 'mcp-field', key: 'mcp-field-key', hint: true },
   draft: { url: 'draft-mcp-url', auth: 'draft-mcp-auth', purpose: 'read', field: 'mcp-field', key: 'mcp-field-key', hint: true },
   deploy: { url: 'deploy-target-mcp', auth: 'deploy-target-auth', purpose: 'write', field: 'deploy-field', key: 'deploy-field-key', hint: true },
   // D-J: the home reads the list for a rank that may connect, and says
-  // nothing when the org has none (today's card, the demo URL typed).
+  // nothing when the org has none (today's card, the demo URL typed) —
+  // unless the reader may not type a URL: then its hint names the way in,
+  // and without sign-in it offers Register and connect (D4).
   home: { url: 'home-mcp-url', auth: 'home-mcp-auth', purpose: 'read', field: 'home-mcp-url-row', key: 'home-mcp-url-label', hint: false, needsWrite: true },
 };
 
@@ -4943,24 +4979,53 @@ function mcpPickersReadable() {
   return posture === 'identity' || posture === 'open';
 }
 
-// The empty list's way to Settings → MCP endpoints, for a reader known to be
-// an admin of the org (C-7: never guessed — an open posture only once its
-// probe answered 200 in this page; leaving Settings keeps that answer).
+// The empty list's way to Settings → MCP endpoints: the server says whether
+// this reader may register one (GET /api/mcp-endpoints `policy.register` —
+// a session admin, or the open posture's caller on a direct loopback
+// request), never guessed (C-7).
 function mcpPickerCanAdminNow() {
-  return mcpPickerCanAdmin({ access: state.access, probe: state.openProbe, orgId: state.orgId });
+  return state.mcpTargetPolicy?.register?.allowed === true;
 }
 
-// GET /api/mcp-endpoints for the pickers. Silent: a refusal or a failure
-// leaves the typed URL alone (state.mcpEndpoints null), and Settings is
-// where a failed read is said. `keep` keeps the list already read when this
-// read fails (the pre-send check: its own sentence says it could not check).
+// May this picker send a typed URL (R4)? The server's answer in the
+// postures that read the list (unknown or failed: no — closed); where the
+// list is never read (the bundle, the token posture) or the rank cannot
+// send at all (the home's buttons say why), the URL row stays as it was
+// and the server decides.
+function mcpTypedAllowed(id) {
+  const p = MCP_PICKERS[id];
+  if (!mcpPickersReadable()) return true;
+  if (p?.needsWrite && state.access?.canWrite === false) return true;
+  return state.mcpTargetPolicy?.typed?.allowed === true;
+}
+
+// The status line when a picker has nothing to send.
+function mcpTargetMissing(id) {
+  return mcpTargetMissingText({
+    typedAllowed: mcpTypedAllowed(id), orgName: state.orgName,
+    empty: Array.isArray(state.mcpEndpoints) && state.mcpEndpoints.length === 0, canRegister: mcpPickerCanAdminNow(),
+  });
+}
+
+// GET /api/mcp-endpoints for the pickers, with the caller's policy. Silent:
+// a refusal or a failure leaves the list unread (state.mcpEndpoints null)
+// and the policy closed (state.mcpTargetPolicy `failed`), and Settings is
+// where a failed read is said. `keep` keeps the list and the policy already
+// read when this read fails (the pre-send check: its own sentence says it
+// could not check).
+const CLOSED_MCP_POLICY = Object.freeze({ typed: { allowed: false }, register: { allowed: false }, failed: true });
 async function readMcpEndpointsForPickers({ keep = false } = {}) {
   if (!mcpPickersReadable()) return null;
   try {
-    state.mcpEndpoints = await loadMcpEndpoints();
+    const { endpoints, policy } = await loadMcpEndpoints({ withPolicy: true });
+    state.mcpEndpoints = endpoints;
+    state.mcpTargetPolicy = policy ?? CLOSED_MCP_POLICY;
     return state.mcpEndpoints;
   } catch {
-    if (!keep) state.mcpEndpoints = null;
+    if (!keep) {
+      state.mcpEndpoints = null;
+      state.mcpTargetPolicy = CLOSED_MCP_POLICY;
+    }
     return null;
   }
 }
@@ -4993,8 +5058,39 @@ function mcpPickerModel(id, chosen = null) {
     // none), what its field holds (a profile's URL).
     typedUrl: id === 'deploy' ? (document.getElementById(p.url)?.value || '') : (recallMcpUrl() || ''),
     purpose: p.purpose, orgName: state.orgName, canAdmin: mcpPickerCanAdminNow(), chosen,
+    typed: { allowed: mcpTypedAllowed(id) }, posture: state.access?.posture ?? null,
+    unreadable: state.mcpTargetPolicy?.failed === true,
   });
-  return p.hint ? model : { ...model, hint: null };
+  return p.hint || !mcpTypedAllowed(id) ? model : { ...model, hint: null };
+}
+
+// The home card without sign-in and with no endpoint (D4): the URL row
+// stays, and Connect registers the typed URL as the org's endpoint first —
+// offered only while the server would accept it (policy.register).
+function homeRegisterMode() {
+  return !mcpTypedAllowed('home') && state.mcpTargetPolicy?.register?.allowed === true
+    && Array.isArray(state.mcpEndpoints) && state.mcpEndpoints.length === 0;
+}
+
+// Register and connect: the typed URL checked against the server's rule as
+// it is typed — a refusal is said beside the button, which then does
+// nothing (aria-disabled), never a request the server would refuse.
+function paintHomeRegisterCheck() {
+  const btn = document.getElementById('home-mcp-connect');
+  const statusEl = document.getElementById('home-mcp-status');
+  const label = btn?.querySelector('.home-mcp-connect-label');
+  const on = homeRegisterMode();
+  if (label) label.textContent = on ? 'Register and connect' : 'Connect';
+  if (!btn || btn.classList.contains('is-unavailable')) return;
+  const check = on ? mcpRegisterCheck(document.getElementById('home-mcp-url')?.value, state.mcpTargetPolicy.register) : null;
+  if (check?.error) {
+    btn.setAttribute('aria-disabled', 'true');
+    if (statusEl) { statusEl.textContent = check.error; statusEl.className = 'home-mcp-status is-error'; }
+  } else if (btn.dataset.registerBlocked) {
+    btn.removeAttribute('aria-disabled');
+    if (statusEl) { statusEl.textContent = ''; statusEl.className = 'home-mcp-status'; }
+  }
+  if (check?.error) btn.dataset.registerBlocked = '1'; else delete btn.dataset.registerBlocked;
 }
 
 // The URL row and the auth field's help follow the choice: an endpoint hides
@@ -5002,10 +5098,12 @@ function mcpPickerModel(id, chosen = null) {
 function applyMcpTargetChoice(id, model) {
   const p = MCP_PICKERS[id];
   const row = document.getElementById(p.url)?.closest('label');
-  if (row) row.hidden = !model.showUrl;
+  const registering = id === 'home' && homeRegisterMode();
+  if (row) row.hidden = !(model.showUrl || registering);
   if (id === 'home') {
     const urlKey = row?.querySelector('.home-mcp-url-label');
-    if (urlKey) urlKey.textContent = model.show ? 'MCP URL' : 'MCP endpoint';
+    if (urlKey) urlKey.textContent = registering ? 'MCP URL to register' : (model.show ? 'MCP URL' : 'MCP endpoint');
+    paintHomeRegisterCheck();
   }
   const key = document.getElementById(p.auth)?.closest('label')?.querySelector('span');
   if (!key) return;
@@ -5039,7 +5137,9 @@ function mcpTargetOf(id) {
   const value = sel?.value || '';
   const opt = value ? sel.selectedOptions?.[0] : null;
   const chosen = opt ? { id: Number(value), name: opt.dataset.name, origin: opt.dataset.origin } : null;
-  const url = document.getElementById(p.url)?.value ?? '';
+  // A hidden field's leftover is never sent: the typed URL only for a
+  // reader the server lets type one (R4).
+  const url = mcpTypedAllowed(id) ? (document.getElementById(p.url)?.value ?? '') : '';
   const auth = document.getElementById(p.auth)?.value ?? '';
   return { body: mcpTargetBody(value, url, auth), chosen, url: url.trim() };
 }
@@ -5058,9 +5158,9 @@ async function checkEndpointDrift(id) {
   const { chosen } = mcpTargetOf(id);
   if (!chosen) return null;
   const list = await readMcpEndpointsForPickers({ keep: true });
-  const drift = endpointDrift(chosen, list, { orgName: state.orgName });
+  const drift = endpointDrift(chosen, list, { orgName: state.orgName, typedAllowed: mcpTypedAllowed(id) });
   if (drift && Array.isArray(list)) {
-    paintMcpTarget(id, { chosen: list.some((ep) => ep.id === chosen.id) ? String(chosen.id) : '' });
+    paintMcpTarget(id, { chosen: list.some((ep) => ep.id === chosen.id) ? String(chosen.id) : (mcpTypedAllowed(id) ? '' : null) });
   }
   return drift;
 }
@@ -5069,7 +5169,7 @@ async function checkEndpointDrift(id) {
 // is unread, or `fresh` (the deploy modal: every open) — read and redrawn.
 function openMcpTarget(id, { fresh = false } = {}) {
   paintMcpTarget(id);
-  if (!mcpPickersReadable() || (!fresh && state.mcpEndpoints !== null)) return;
+  if (!mcpPickersReadable() || (!fresh && state.mcpEndpoints !== null && state.mcpTargetPolicy !== null)) return;
   readMcpEndpointsForPickers().then(() => paintMcpTarget(id));
 }
 
@@ -5124,7 +5224,7 @@ function closeMcpPanel() {
 async function refreshLive() {
   const { body: target, chosen } = mcpTargetOf('refresh');
   if (!target) {
-    setRefreshStatus('choose an MCP endpoint or type a URL', 'error');
+    setRefreshStatus(mcpTargetMissing('refresh'), 'error');
     return;
   }
   // A typed URL is remembered (its safe form); an endpoint's choice is, on success.
@@ -5994,7 +6094,7 @@ async function loadDeployHistory(packId) {
 // server's sentence (C-1); a result where every restore failed (a 502 with
 // its summary) still reads as a result.
 async function doRollback(deployId, packId, btn) {
-  if (!deployTargetBody()) { toast('Choose an MCP endpoint or type the MCP URL in the target form first', 'error'); return; }
+  if (!deployTargetBody()) { toast(`${mcpTargetMissing('deploy').replace(/^./, (c) => c.toUpperCase())} in the target form first`, 'error'); return; }
   const moved = await checkEndpointDrift('deploy');
   if (moved) { toast(moved, 'error'); return; }
   if (!confirm(`Roll back ${deployId}?\n\nRestorable artefacts are re-upserted from the pre-deploy snapshot. Anything this deploy created is listed for manual removal.`)) return;
@@ -6088,15 +6188,20 @@ async function loadDeployProfile(name) {
   // A profile that names an endpoint selects it in the org it belongs to,
   // while it is listed; anywhere else the typed mode, empty, and the note
   // says why (A-12: another org's id is never sent). A typed profile is typed.
+  // A typed profile opened by a reader who may not type a URL (R4) is
+  // said, and the list stays chosen: its URL is never sent. The policy is
+  // read first when the modal's own read has not settled yet.
+  if (mcpPickersReadable() && state.mcpTargetPolicy === null) await readMcpEndpointsForPickers({ keep: true });
+  const typedAllowed = mcpTypedAllowed('deploy');
   const { select, note } = profileEndpointNote(p, {
     orgId: state.orgId ?? getActiveOrg(), orgName: state.orgName,
-    endpoints: mcpPickersReadable() ? state.mcpEndpoints : null, profileName: name,
+    endpoints: mcpPickersReadable() ? state.mcpEndpoints : null, profileName: name, typedAllowed,
   });
   if (p.mcpEndpoint) {
     if (select === null) $('#deploy-target-mcp').value = '';
-    paintMcpTarget('deploy', { chosen: select === null ? '' : String(select) });
+    paintMcpTarget('deploy', { chosen: select === null ? (typedAllowed ? '' : null) : String(select) });
   } else if (p.mcpUrl) {
-    paintMcpTarget('deploy', { chosen: '' });
+    paintMcpTarget('deploy', { chosen: typedAllowed ? '' : null });
   }
   setDeployStatus(note || '', note ? 'error' : '');
   updateDeployTargetSummary();
@@ -6247,7 +6352,7 @@ async function doDeployBulk() {
   const product = $('#deploy-target-product').value;
   const version = $('#deploy-target-version').value;
   const setStatus = setDeployStatus;
-  if (!deployTargetBody()) { setStatus('choose an MCP endpoint or type a URL', 'error'); return; }
+  if (!deployTargetBody()) { setStatus(mcpTargetMissing('deploy'), 'error'); return; }
   // Deploy what the review shows: a selected row the type filter hides is
   // not counted, not reviewed — and so not deployed.
   const types = new Set([...document.querySelectorAll('#deploy-type-filters input:checked')].map(i => i.value));
@@ -6588,7 +6693,7 @@ async function doDraftFromMcp() {
     statusEl.textContent = msg;
     statusEl.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
   };
-  if (!target) { setStatus('choose an MCP endpoint or type a URL', 'error'); return; }
+  if (!target) { setStatus(mcpTargetMissing('draft'), 'error'); return; }
   if (target.mcpUrl) rememberMcpUrl(target.mcpUrl).catch(() => {});
 
   const goBtn = $('#draft-mcp-go-btn');

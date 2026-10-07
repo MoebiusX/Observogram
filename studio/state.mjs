@@ -95,6 +95,11 @@ export const state = {
   // GET /api/mcp-endpoints → the org's McpEndpointView[]; null = not read or
   // the read failed, [] = none registered. Never persisted.
   mcpEndpoints: null,
+  // The same read's `policy` (rebadge batch 3, R4): { typed, register },
+  // each { allowed, why, listed, origins } (register + listedOnly) — what
+  // this reader may do with an MCP target; null = not read yet, `failed`
+  // (closed) when the read failed. Never persisted.
+  mcpTargetPolicy: null,
   // The open posture's Settings probe (GET /api/org/members) as last
   // answered in this page — { orgId, ok } — so a picker's empty list knows
   // the reader may register endpoints (C-7). Never persisted.

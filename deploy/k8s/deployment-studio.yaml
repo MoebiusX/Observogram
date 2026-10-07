@@ -85,6 +85,12 @@ spec:
             # - name: OBSERVOGRAM_API_TOKEN
             #   valueFrom:
             #     secretKeyRef: { name: studio-api-token, key: token }
+            # The MCP origins the server may send a credential to (an
+            # endpoint's read token, a deploy's write token, a transport
+            # hook's): unset, only loopback. Comma-separated origins; an
+            # org's own list is OBSERVOGRAM_ORG_<KEY>_MCP_ORIGINS.
+            # - name: OBSERVOGRAM_MCP_ORIGINS
+            #   value: https://mcp.example.com
             # Optional: raises GitHub API rate limits and enables private
             # repos for POST /api/crawl-github.
             # - name: GITHUB_TOKEN

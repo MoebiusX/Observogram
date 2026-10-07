@@ -1420,11 +1420,15 @@ function templateValueCount(pack) {
 // the modal's MCP target — the origin its option shows — else the typed URL.
 // A local read of the modal's DOM (app.mjs draws the picker; this view never
 // imports it).
+// The typed field only where the request would send it (R4): a reader the
+// server refuses a typed URL sends none, so the review never names one.
 function deployTargetForReview(doc) {
   const slot = doc.querySelector?.('[data-mcp-target="deploy"]');
   const sel = slot && !slot.hidden ? slot.querySelector('select.set-mcp-target') : null;
   const origin = sel?.value ? sel.selectedOptions?.[0]?.dataset?.origin : null;
-  return origin || String(doc.getElementById('deploy-target-mcp')?.value ?? '').trim();
+  const readsPolicy = state.access?.posture === 'identity' || state.access?.posture === 'open';
+  const typedOk = !readsPolicy || state.mcpTargetPolicy?.typed?.allowed === true;
+  return origin || (typedOk ? String(doc.getElementById('deploy-target-mcp')?.value ?? '').trim() : '');
 }
 
 function readDeployReview(doc) {

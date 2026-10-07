@@ -21,10 +21,15 @@ const memberOf = (m) => ({ userId: m.userId, login: m.login, kind: m.kind, name:
 
 // ---------- MCP endpoints ----------
 
-// GET /api/mcp-endpoints → McpEndpointView[] (url / readTokenEnv null for a viewer).
-export async function loadMcpEndpoints({ fetchFn = requestJson } = {}) {
+// GET /api/mcp-endpoints → McpEndpointView[] (url / readTokenEnv null for a
+// viewer); `withPolicy` → { endpoints, policy } — policy the server's
+// { typed, register } for this reader (R4), null when it sent none.
+export async function loadMcpEndpoints({ fetchFn = requestJson, withPolicy = false } = {}) {
   const doc = await fetchFn('/api/mcp-endpoints');
-  return Array.isArray(doc?.endpoints) ? doc.endpoints : [];
+  const endpoints = Array.isArray(doc?.endpoints) ? doc.endpoints : [];
+  if (!withPolicy) return endpoints;
+  const policy = doc?.policy && typeof doc.policy === 'object' ? doc.policy : null;
+  return { endpoints, policy };
 }
 
 // POST /api/mcp-endpoints → the endpoint (admin).

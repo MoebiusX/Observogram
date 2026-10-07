@@ -933,11 +933,23 @@ with their URLs, and never changes an endpoint.
   of a credential in the URL or of another org's variable is shown as served.
   A viewer sees an endpoint's name and origin only. The MCP
   pickers — the refresh panel, the home's source card, the draft panel and
-  the deploy modal — list the org's endpoints first and keep a typed URL; a
-  chosen endpoint is sent as `mcpEndpointId` (never with `mcpUrl`), rollback
-  and verify follow it, and a write re-reads the endpoint before it sends: an
+  the deploy modal — list the org's endpoints first, and keep a typed URL
+  for a reader the server lets type one (an admin; `policy.typed` of
+  `GET /api/mcp-endpoints`): for everyone else — an operator, and every
+  caller without sign-in — they are list-only, no sentence offers typing a
+  URL, a hidden field's leftover is never sent, and an empty list names the
+  way in for that reader (an admin registers one in Settings → MCP
+  endpoints; the button when the server says this reader may register).
+  Without sign-in and with no endpoint, the home's Connect is **Register and
+  connect**: the typed URL is registered as the org's endpoint (named by its
+  host) and drafted by its id, offered only for a loopback MCP or a listed
+  origin — any other is refused beside the button, nothing sent. A chosen
+  endpoint is sent as `mcpEndpointId` (never with `mcpUrl`), rollback and
+  verify follow it, and a write re-reads the endpoint before it sends: an
   endpoint moved or deleted since the list was drawn sends nothing and says
-  so. A deploy profile remembers its endpoint per org.
+  so. A deploy profile remembers its endpoint per org; a profile with a
+  typed URL, opened by a reader who may not type one, says so and sends the
+  list's endpoint.
 
 ### The Audit
 
