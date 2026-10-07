@@ -16,12 +16,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   SETTINGS_DESCRIPTOR_VERSION, SETTINGS_DESCRIPTOR_PATH, SETTINGS_LIMITS, FIELD_TYPES, GENERIC_NAMES,
   genericDescriptor, settingsRoot, resolveSettingsPath, parseSettingsDescriptor, normaliseUrlValue,
   settingsRequest, outcomeOf, redactEchoes, redactSecretKeys, compileSettingsPolicy, policyFindings,
 } from './lib/mcp-server-settings.mjs';
 import { compileBoundedPattern } from './lib/artefact-classify.mjs';
+import * as settingsModule from './lib/mcp-server-settings.mjs';
 
 const MCP = 'http://127.0.0.1:9000/mcp';
 const GW = 'https://gw.example/team-a/mcp';
@@ -59,7 +61,7 @@ const policyOf = (doc) => {
 
 // ---------- the descriptor ----------
 
-test('the constants: version 1, admin/schema under the root, the four field types and the generic names', () => {
+test('the constants: version 1, admin/schema under the root, the four field types and the generic names; docs/VENDORING.md lists the module', () => {
   assert.equal(SETTINGS_DESCRIPTOR_VERSION, 1);
   assert.equal(SETTINGS_DESCRIPTOR_PATH, 'admin/schema');
   assert.deepEqual([...FIELD_TYPES], ['text', 'url', 'secret', 'boolean']);
@@ -67,6 +69,15 @@ test('the constants: version 1, admin/schema under the root, the four field type
   assert.ok(Object.isFrozen(SETTINGS_LIMITS) && SETTINGS_LIMITS.descriptorBytes === 16384 && SETTINGS_LIMITS.policyValue === 512);
   assert.equal(resolveSettingsPath(SETTINGS_DESCRIPTOR_PATH, MCP).url, 'http://127.0.0.1:9000/admin/schema');
   assert.equal(resolveSettingsPath(SETTINGS_DESCRIPTOR_PATH, GW).url, 'https://gw.example/team-a/admin/schema');
+  // The vendorable set's table names this module, its sibling imports and
+  // every export, and the taxonomy's row names the pattern rule it shares.
+  const rows = readFileSync(new URL('../docs/VENDORING.md', import.meta.url), 'utf8').split('\n');
+  const row = rows.find((l) => l.startsWith('| [`tools/lib/mcp-server-settings.mjs`]'));
+  assert.ok(row, 'docs/VENDORING.md has a row for tools/lib/mcp-server-settings.mjs');
+  for (const dep of ['artefact-classify.mjs', 'mcp-url-safety.mjs']) assert.ok(row.includes(`\`${dep}\``), `the row names its import ${dep}`);
+  for (const name of Object.keys(settingsModule)) assert.ok(row.includes(`\`${name}\``), `the row names the export ${name}`);
+  const taxonomy = rows.find((l) => l.startsWith('| [`tools/lib/artefact-classify.mjs`]'));
+  assert.ok(taxonomy?.includes('`compileBoundedPattern`'), "artefact-classify.mjs's row names compileBoundedPattern");
 });
 
 test('the SPEC descriptor parses into the normalised, frozen description', () => {
