@@ -1169,7 +1169,7 @@ pack or the deploy's rollback snapshot. The credential itself — the bearer
 — is redacted from it at any length: a 7-character read token the MCP
 repeats in its version no longer reaches an operator's ping.
 
-Two more review fixes. A ping nothing answered before `initialize`
+Three more review fixes. A ping nothing answered before `initialize`
 (unreachable, or silent until the deadline) says `null` for the token's outcome, never `sent`, which would
 claim the MCP answered. Tests: 1247 → 1248 (one more in
 `server/test-mcp-ping.mjs`). The ping's deadline aborts the request still in
@@ -1178,9 +1178,13 @@ after the route has answered `timeout`. Tests: 1248 → 1249 (one more in
 `tools/test-mcp-ping.mjs`). A short server-held read token is redacted from
 a successful answer like a long one — the minimum length applies only to
 credential-named query values. Tests: 1249 → 1250 (one more in
-`server/test-mcp-ping.mjs`).
+`server/test-mcp-ping.mjs`). And the journey run's live Pack B 502 is now
+under the route-level redaction backstop's test, as the refresh, draft and
+deploy 502s are: a hook fault naming its own credentialed upstream is masked
+there (assertions only; the count is unchanged).
 
 The batch's delivery report, `docs/DELIVERY-REBADGE-BATCH3.md`, is written
 per item — what shipped, the measured `Tests:` pair, what is deferred by name
 — and `tools/test-doc-test-totals.mjs` guards it as it guards the batch 2
-reports.
+reports, and holds the total its opening sentence states for the head of
+the branch to the last pair it quotes.

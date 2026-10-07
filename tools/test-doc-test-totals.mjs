@@ -112,6 +112,12 @@ test('each batch delivery report exists and quotes the journey\'s measured total
       for (const m of line.matchAll(PAIR)) quoted.push({ line: i + 1, start: Number(m[1]), end: Number(m[2]) });
     });
     if (quoted.length === 0) problems.push(`${file}: quotes no \`Tests: a → b\` total`);
+    // The total a report states for the head of its branch is the last one
+    // its own pairs reach: a review fix's pair grows the chain, and the
+    // opening sentence must follow it.
+    const head = /\b(\d+) at the head of this branch\b/.exec(text.replace(/\s+/g, ' '));
+    const reached = Math.max(...quoted.map((q) => q.end));
+    if (head && quoted.length > 0 && Number(head[1]) !== reached) problems.push(`${file}: says ${head[1]} at the head of this branch; its last \`Tests:\` pair reaches ${reached}`);
     for (const q of quoted) {
       const stated = JOURNEY_BY_START.get(q.start);
       if (!stated) problems.push(`${file}:${q.line} says ${q.start} → ${q.end}; docs/UPDATE_JOURNEY.md has no entry starting at ${q.start}`);

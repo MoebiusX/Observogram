@@ -14,7 +14,7 @@ entries), `docs/UPDATE_JOURNEY.md` ("Rebadge batch 3"), `docs/DOWNSTREAM.md`
 documents do not state. The totals below are the chain
 `tools/test-doc-test-totals.mjs` guards: `npm test` on Linux, measured at
 each item's last commit, from 1102 at the head of slice 6b-i to 1246 at the
-end of C3, and 1247 at the head of this branch with the review fixes.
+end of C3, and 1250 at the head of this branch with the review fixes.
 
 ## What the scout and the critique found
 
@@ -161,6 +161,17 @@ has no uid field, so a rule's id is its name).
   golden telling id pairing from name pairing, and DOWNSTREAM §15.2's stage
   table (signals now carry the code's label) read against `LIVE_STAGES`. Assertions only; the count is
   unchanged.
+- **The credential is redacted from a successful answer at any length**
+  (`tools/lib/mcp-client.mjs`): a 7-character server-held read token the MCP
+  repeated in its version reached an operator's ping (`read.detail`); the
+  bearer and the URL's userinfo are now redacted from a result whatever
+  their length, and only a value taken from a credential-named query
+  parameter keeps the 12-character minimum. Tests: 1249 → 1250.
+- **The journey run's 502 is under the redaction backstop's test**
+  (`server/index.mjs`, `POST /api/journeys/:name/run`): a hook fault naming
+  its own credentialed upstream is masked in a live Pack B's 502 as in the
+  refresh-live, draft-from-mcp and deploy 502s. Assertions in
+  `server/test-transport-hook.mjs`; the count is unchanged.
 
 ## What a plugin bridge still does that this batch does not
 
