@@ -669,6 +669,34 @@
       "npm": [],
       "changedSinceRelease": false
     },
+    "tools/lib/live-fetch.mjs": {
+      "sha256": "c095215c05f2a8615460cca0c79f1c53ac758953dfe38933968754bcd3a7d72b",
+      "bytes": 16778,
+      "exports": [
+        "LIVE_KINDS",
+        "LIVE_SCOPE_ANNOTATION",
+        "LIVE_STAGES",
+        "SCOPE_ANNOTATION_PREFIX",
+        "SCOPE_FAMILIES",
+        "SCOPE_LIMITS",
+        "SNAPSHOT_LIMITS",
+        "STAGE_STATES",
+        "fetchPlan",
+        "folderUidOf",
+        "inScope",
+        "normalizeScope",
+        "scopeAnnotations",
+        "scopeIsEmpty",
+        "scopeOf",
+        "scopeReason",
+        "stageNoun",
+        "stagesFor"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
     "tools/lib/mcp-client.mjs": {
       "sha256": "c0544bf8eee8baaaa175db59316936f1bfa7e049548ae2b1e13336b6e42af9cd",
       "bytes": 16043,
