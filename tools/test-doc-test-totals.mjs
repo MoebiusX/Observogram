@@ -128,11 +128,9 @@ test('each batch delivery report exists and quotes the journey\'s measured total
 });
 
 // The suites batch 2 and rebadge batches 3 and 4 added (the two MCP ping
-// suites, which review fixes grew; the three flat MCP server-settings suites —
-// tools/test-mcp-server-settings.mjs declares tests in a loop, so it is not
-// listed), each a flat file of top-level `test(` calls (no subtests, no
-// loops), so the number of tests it holds is the number of lines that start
-// with `test(`. The journey narrates how many tests each
+// suites and the four MCP server-settings suites, which review fixes grew),
+// each a flat file of top-level `test(` calls (no subtests, no loops), so the
+// number of tests it holds is the number of lines that start with `test(`. The journey narrates how many tests each
 // `Tests: a → b` note put into such a suite — `` `file` 9 `` on its creation,
 // `two in `file``, `one more test in `file`` as it grows — and those
 // narrations must sum to what the file holds: a test added without its note
@@ -152,6 +150,7 @@ const LEDGER = [
   'server/test-audit-report-api.mjs',
   'tools/test-mcp-ping.mjs',
   'server/test-mcp-ping.mjs',
+  'tools/test-mcp-server-settings.mjs',
   'server/test-mcp-settings.mjs',
   'tools/test-mcp-settings-model.mjs',
   'server/test-mcp-settings-studio.mjs',

@@ -14,8 +14,8 @@ the documents that carry the detail — `docs/CHANGELOG.md` (`## Unreleased`,
 `docs/DOWNSTREAM.md` §9, §10 and §16, and the README — and quotes nothing
 those documents do not state. The totals below are the chain
 `tools/test-doc-test-totals.mjs` guards: `npm test` on Linux, measured at
-each commit, from 1250 at the head of rebadge batch 3 to 1353 at the head of
-this branch.
+each commit, from 1250 at the head of rebadge batch 3 to 1353 at the end of
+D4, and 1355 at the head of this branch with the review fixes.
 
 ## What the scout and the critique found
 
@@ -126,6 +126,19 @@ server), DOWNSTREAM §9's row and §16, the README note on configuring the
 server versus the studio's connection to it, the UI_CONVENTIONS zone.
 
 **Tests.** Tests: 1351 → 1353.
+
+## Review fixes
+
+- **The settings policy's timing run covers digits, capitals and white
+  space** (`tools/lib/mcp-server-settings.mjs`): a slow `\d`, `[A-Z]` or `\s`
+  part is refused in milliseconds rather than blocking the server for
+  seconds. Tests: 1353 → 1354.
+- **It covers every printable ASCII character and every character the pattern
+  names, on a budget per filler** (`tools/lib/mcp-server-settings.mjs`): a
+  slow part built on `_`, `%`, `=`, `&`, `~`, `:`, `?` or `é` is refused too.
+  Tests: 1354 → 1355.
+- The other review fixes add assertions to existing tests or change docs;
+  the count is unchanged.
 
 ## Mutation checks
 

@@ -1208,7 +1208,7 @@ pattern rule became one export (`compileBoundedPattern`) the settings policy
 reuses, and the loopback rule moved into `tools/lib/mcp-url-safety.mjs` for
 the browser. Tests: 1250 → 1253 (`compileBoundedPattern`'s direct cases in
 `tools/test-artefact-classify.mjs`). Tests: 1253 → 1299
-(`tools/test-mcp-server-settings.mjs`, new).
+(`tools/test-mcp-server-settings.mjs` 46, new).
 
 **D3 — the settings policy.** `OBSERVOGRAM_MCP_SETTINGS_POLICY` names a
 strict JSON file read once at start (an unreadable or invalid file refuses
@@ -1250,6 +1250,16 @@ a sign-out and a sign-in, and a scan of storage, cookies, the DOM, every
 request to the studio, the audit, the workspace, the store file and the
 server's log for the secret and the API key. Tests: 1351 → 1353 (two more in
 `server/test-mcp-settings-studio.mjs`).
+
+**Review fixes.** The settings policy's timing run fills with a digit, a
+capital and a space too, so a slow `\d`, `[A-Z]` or `\s` part is refused in
+milliseconds rather than blocking the server for seconds. Tests: 1353 → 1354
+(one more in `tools/test-mcp-server-settings.mjs`). It then fills with every
+printable ASCII character and every character the pattern names, on a budget
+per filler, so a slow part built on `_`, `%`, `=`, `&`, `~`, `:`, `?` or `é`
+is refused too. Tests: 1354 → 1355 (one more in
+`tools/test-mcp-server-settings.mjs`). The other review fixes add assertions
+to existing tests or change docs; the count is unchanged.
 
 The batch's delivery report, `docs/DELIVERY-REBADGE-BATCH4.md`, is written
 per item and guarded by `tools/test-doc-test-totals.mjs` as the batch 3

@@ -246,24 +246,29 @@ const REFUSED_SHAPE = ['//evil.example/x', 'https://evil/x', 'http:x', '..;/team
   '/%zz', '%00', '\\evil', '/a?b', '/a#b', ' /a', '/a//b', 'javascript:alert(1)', '/a@b', '/a b', '/'];
 const REFUSED_SEGMENT = ['/../x', '..x', '/a/./b', 'a/..', '/a/..b/c'];
 
-for (const [label, mcp, root] of [['a loopback root', MCP, 'http://127.0.0.1:9000/'], ['a path-prefixed https root', GW, 'https://gw.example/team-a/']]) {
-  test(`the path rule under ${label}: plain paths resolve under the root, a leading / relative to it`, () => {
-    for (const [path, tail] of ACCEPTED) assert.deepEqual(resolveSettingsPath(path, mcp), { url: `${root}${tail}` }, path);
-  });
-
-  test(`the path rule under ${label}: every escape, scheme, authority, dot segment and over-long path is refused by name`, () => {
-    for (const path of REFUSED_SHAPE) {
-      const r = resolveSettingsPath(path, mcp);
-      assert.ok(r.reason, `${JSON.stringify(path)} must be refused`);
-      assert.equal(r.reason, `the server's settings endpoint ${JSON.stringify(path)} is not a plain path under ${root} (letters, digits, "-", "_", ".", "~" and "/" only) — the studio sends settings only to the MCP server itself; its author fixes the descriptor`);
-    }
-    for (const path of REFUSED_SEGMENT) assert.match(resolveSettingsPath(path, mcp).reason, /has a segment that is "\." or starts with "\.\." — the studio sends settings only to the MCP server itself/, path);
-    assert.match(resolveSettingsPath('a'.repeat(129), mcp).reason, /is longer than 128 characters/);
-    assert.ok(resolveSettingsPath('a'.repeat(128), mcp).url);
-    assert.match(resolveSettingsPath('', mcp).reason, /is missing/);
-    assert.match(resolveSettingsPath(42, mcp).reason, /is missing/);
-  });
+// Two roots, each test a top-level `test(` (tools/test-doc-test-totals.mjs
+// counts them against the journey's notes).
+function acceptsUnder(mcp, root) {
+  for (const [path, tail] of ACCEPTED) assert.deepEqual(resolveSettingsPath(path, mcp), { url: `${root}${tail}` }, path);
 }
+
+function refusesUnder(mcp, root) {
+  for (const path of REFUSED_SHAPE) {
+    const r = resolveSettingsPath(path, mcp);
+    assert.ok(r.reason, `${JSON.stringify(path)} must be refused`);
+    assert.equal(r.reason, `the server's settings endpoint ${JSON.stringify(path)} is not a plain path under ${root} (letters, digits, "-", "_", ".", "~" and "/" only) — the studio sends settings only to the MCP server itself; its author fixes the descriptor`);
+  }
+  for (const path of REFUSED_SEGMENT) assert.match(resolveSettingsPath(path, mcp).reason, /has a segment that is "\." or starts with "\.\." — the studio sends settings only to the MCP server itself/, path);
+  assert.match(resolveSettingsPath('a'.repeat(129), mcp).reason, /is longer than 128 characters/);
+  assert.ok(resolveSettingsPath('a'.repeat(128), mcp).url);
+  assert.match(resolveSettingsPath('', mcp).reason, /is missing/);
+  assert.match(resolveSettingsPath(42, mcp).reason, /is missing/);
+}
+
+test('the path rule under a loopback root: plain paths resolve under the root, a leading / relative to it', () => acceptsUnder(MCP, 'http://127.0.0.1:9000/'));
+test('the path rule under a loopback root: every escape, scheme, authority, dot segment and over-long path is refused by name', () => refusesUnder(MCP, 'http://127.0.0.1:9000/'));
+test('the path rule under a path-prefixed https root: plain paths resolve under the root, a leading / relative to it', () => acceptsUnder(GW, 'https://gw.example/team-a/'));
+test('the path rule under a path-prefixed https root: every escape, scheme, authority, dot segment and over-long path is refused by name', () => refusesUnder(GW, 'https://gw.example/team-a/'));
 
 test('the path rule words its reason for its caller', () => {
   const r = resolveSettingsPath('/a?b', MCP, { noun: 'the settings path', fix: 'correct it under "What the server expects"' });
