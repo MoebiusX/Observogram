@@ -710,10 +710,11 @@
       "releasedExports": null
     },
     "tools/lib/mcp-client.mjs": {
-      "sha256": "ab9a1bb43a36fed504d02c20c81efbe2bed27f14dbc0da5c0d5a14aaca3ddf15",
-      "bytes": 16735,
+      "sha256": "b994369626896364ef44b8caf32eafa6aa683825b48f2c914af1ab5a008925c7",
+      "bytes": 19281,
       "exports": [
         "INERT_TRANSPORT",
+        "MAX_MCP_ANSWER_BYTES",
         "MCP_PROTOCOL_VERSION",
         "TransportHookError",
         "createMcpClient",

@@ -19,7 +19,7 @@ import { join, resolve, dirname, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createHarness } from './lib/harness.mjs';
-import { createMcpClient, INERT_TRANSPORT, isTransportHookError, TransportHookError, normaliseTransport } from './lib/mcp-client.mjs';
+import { createMcpClient, MAX_MCP_ANSWER_BYTES, INERT_TRANSPORT, isTransportHookError, TransportHookError, normaliseTransport } from './lib/mcp-client.mjs';
 import { loadTransportHook, mcpTransport, mcpTransportLoaded, validateUrlFrom, hookImportUrl, describeTransport, TRANSPORT_HOOK_VAR } from './mcp-transport.mjs';
 import { mcpUrlPolicy, isLocalOrPrivateHost, redactCredentials } from './lib/mcp-url-safety.mjs';
 import { capabilityTool } from './lib/contracts/mcp-capabilities.mjs';
@@ -374,6 +374,64 @@ for (const [label, hook] of [
   const recording = { fetchImpl: async (url, init) => { plain.push(init); return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }), { headers: { 'content-type': 'application/json' } }); } };
   await createMcpClient({ mcpUrl: 'http://127.0.0.1:9/mcp', transport: recording }).rpc('tools/list', {});
   assert(plain.length === 1 && plain[0].signal instanceof AbortSignal && !plain[0].signal.aborted, 'no caller signal: the request\'s timeout signal alone');
+}
+
+// ---------- 5e. an MCP answer is capped (C1): counted while read, past it the client stops ----------
+{
+  const KIB = 1024;
+  const rpcBody = (result) => JSON.stringify({ jsonrpc: '2.0', id: 1, result });
+  // The text as a stream of `size`-byte chunks, recording how many were pulled and whether it was released.
+  const streamed = (text, { size = 512 } = {}) => {
+    const bytes = new TextEncoder().encode(text);
+    const pulled = { n: 0, cancelled: false };
+    const body = new ReadableStream({
+      pull(controller) {
+        const start = pulled.n * size;
+        if (start >= bytes.length) { controller.close(); return; }
+        pulled.n++;
+        controller.enqueue(bytes.slice(start, start + size));
+      },
+      cancel() { pulled.cancelled = true; },
+    });
+    return { body, pulled };
+  };
+  const client = (respond) => createMcpClient({ mcpUrl: 'http://127.0.0.1:9/mcp', mcpAuth: 'tok', maxAnswerBytes: 4 * KIB, transport: { fetchImpl: async () => respond() } });
+
+  assert(MAX_MCP_ANSWER_BYTES === 32 * 1024 * 1024, 'the default cap is 32 MiB');
+  // JSON past the cap: refused with the sentence, the stream released after the cap, not read to its end.
+  const big = streamed(rpcBody({ blob: 'x'.repeat(64 * KIB) }));
+  const e1 = await expectFail(() => client(() => new Response(big.body, { headers: { 'content-type': 'application/json' } })).rpc('tools/list', {}));
+  assert(e1?.message === 'MCP tools/list: the answer exceeded 4 KiB — Observogram stopped reading it' && !isTransportHookError(e1),
+    'a JSON body past the cap is cut with the cap\'s text', e1?.message);
+  assert(big.pulled.n <= 10 && big.pulled.cancelled, 'the client stopped reading at the cap and released the stream', big.pulled);
+  // An SSE stream past the cap before its first complete frame.
+  const sse = streamed(`data: ${rpcBody({ blob: 'y'.repeat(64 * KIB) })}\n\n`);
+  const e2 = await expectFail(() => client(() => new Response(sse.body, { headers: { 'content-type': 'text/event-stream' } })).rpc('tools/list', {}));
+  assert(e2?.message === 'MCP tools/list: the answer exceeded 4 KiB — Observogram stopped reading it' && sse.pulled.cancelled,
+    'an SSE stream past the cap is cut with the same text and released', { message: e2?.message, pulled: sse.pulled });
+  // Under the cap: answered as before, JSON and SSE.
+  const small = await client(() => new Response(rpcBody({ ok: 'é'.repeat(100) }), { headers: { 'content-type': 'application/json' } })).rpc('tools/list', {});
+  const smallSse = await client(() => new Response(`data: ${rpcBody({ ok: 1 })}\n\n`, { headers: { 'content-type': 'text/event-stream' } })).rpc('tools/list', {});
+  assert(small?.ok === 'é'.repeat(100) && smallSse?.ok === 1, 'an answer under the cap reads as before (multi-byte text decoded whole)', [small, smallSse]);
+  // A non-OK body past the cap: the error says so in place of the body.
+  const e3 = await expectFail(() => client(() => new Response(streamed('z'.repeat(64 * KIB)).body, { status: 502 })).rpc('tools/call', {}));
+  assert(e3?.message === 'MCP HTTP 502 on tools/call: the answer exceeded 4 KiB — Observogram stopped reading it', 'a non-OK body past the cap: the status, and the cap in place of the body', e3?.message);
+  // A Response-like without a readable body: its content-length refuses it unread; else counted after text().
+  let textRead = false;
+  const declared = { ok: true, status: 200, headers: new Headers({ 'content-type': 'application/json', 'content-length': String(64 * KIB) }), text: async () => { textRead = true; return rpcBody({}); }, json: async () => ({}) };
+  const e4 = await expectFail(() => client(() => declared).rpc('tools/list', {}));
+  assert(e4?.message === 'MCP tools/list: the answer exceeded 4 KiB — Observogram stopped reading it' && !textRead, 'a declared content-length past the cap is refused without reading', e4?.message);
+  const undeclared = { ok: true, status: 200, headers: new Headers({ 'content-type': 'application/json' }), text: async () => rpcBody({ blob: 'w'.repeat(64 * KIB) }), json: async () => ({}) };
+  const e5 = await expectFail(() => client(() => undeclared).rpc('tools/list', {}));
+  assert(e5?.message === 'MCP tools/list: the answer exceeded 4 KiB — Observogram stopped reading it', 'without a readable body or a length, text() is counted', e5?.message);
+  // Native fetch against loopback, a 1 MiB cap and a 2 MiB answer.
+  const huge = createServer((req, res) => { req.resume(); res.writeHead(200, { 'content-type': 'application/json' }); res.end(rpcBody({ blob: 'v'.repeat(2 * 1024 * 1024) })); });
+  await new Promise(r => huge.listen(0, '127.0.0.1', r));
+  try {
+    const { rpc: nativeRpc } = createMcpClient({ mcpUrl: `http://127.0.0.1:${huge.address().port}/mcp`, maxAnswerBytes: 1024 * 1024, transport: null });
+    const e6 = await expectFail(() => nativeRpc('tools/list', {}));
+    assert(e6?.message === 'MCP tools/list: the answer exceeded 1 MiB — Observogram stopped reading it', 'native fetch: a JSON body past the cap is cut', e6?.message);
+  } finally { await new Promise(r => huge.close(r)); }
 }
 
 // ---------- 6. load failures ----------

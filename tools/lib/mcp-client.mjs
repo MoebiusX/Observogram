@@ -1,6 +1,6 @@
 // tools/lib/mcp-client.mjs — the ONE place Observogram speaks MCP over HTTP.
 //
-// createMcpClient({ mcpUrl, mcpAuth, timeoutMs, transport, signal }) returns the
+// createMcpClient({ mcpUrl, mcpAuth, timeoutMs, transport, signal, maxAnswerBytes }) returns the
 // { rpc, notify, callTool } trio the fetch-live CLI, the fixture recorder,
 // the live probes and the studio server all drive (tools/fetch-live-pack.mjs
 // re-exports it with the Node-side defaults filled in). Every request —
@@ -61,6 +61,14 @@
 // or the wire sees it; the rejection is the signal's AbortError. Without it each request carries the timeout
 // alone, as before.
 //
+// Bounded: one MCP answer is read up to `maxAnswerBytes` (default
+// MAX_MCP_ANSWER_BYTES, 32 MiB), counted while it is read — the SSE stream,
+// the JSON body and a non-OK body alike (through body.getReader(); a
+// Response-like without one is refused on its content-length, else counted
+// after text()). Past it the client stops reading, releases the stream and
+// throws `MCP <method>: the answer exceeded 32 MiB — Observogram stopped
+// reading it`; a non-OK answer's error says the same in place of its body.
+//
 // Redaction, by value, always: every text an MCP answer or a fetcher puts
 // into an error goes through redact() — a non-OK body, a JSON-RPC or SSE
 // error message, a tool's isError text, a fetcher's rejection, a hook's own
@@ -78,6 +86,13 @@
 import { mcpUrlOrigin, safeMcpUrl, stripMcpUrl } from './mcp-url-safety.mjs';
 
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
+
+// The most one MCP answer may hold before the client stops reading it.
+export const MAX_MCP_ANSWER_BYTES = 32 * 1024 * 1024;
+
+// A byte count as the cap's sentence says it: MiB, KiB or bytes, whole.
+const sizeText = (n) => (n % 1048576 === 0 ? `${n / 1048576} MiB` : n % 1024 === 0 ? `${n / 1024} KiB` : `${n} bytes`);
+const utf8Bytes = (text) => new TextEncoder().encode(text).length;
 
 export class TransportHookError extends Error {
   constructor(message, { hookPath = null, cause } = {}) {
@@ -151,8 +166,35 @@ function redirectError(res, url, method) {
 // Build the client. Synchronous: the transport (possibly a promise) is
 // awaited inside send(), once per request, so every destructuring caller
 // (`const { rpc, callTool } = createMcpClient(…)`) keeps working.
-export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, transport = null, signal = null } = {}) {
+export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, transport = null, signal = null, maxAnswerBytes = MAX_MCP_ANSWER_BYTES } = {}) {
   if (!mcpUrl) throw new Error('createMcpClient: mcpUrl required');
+  const cap = Number.isSafeInteger(maxAnswerBytes) && maxAnswerBytes > 0 ? maxAnswerBytes : MAX_MCP_ANSWER_BYTES;
+  const cappedText = `the answer exceeded ${sizeText(cap)} — Observogram stopped reading it`;
+  const capped = (method) => Object.assign(new Error(`MCP ${method}: ${cappedText}`), { capped: true });
+  // A whole answer body as text, counted while it is read (see the header).
+  async function readAnswer(res, method) {
+    if (typeof res.body?.getReader === 'function') {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let bytes = 0;
+      let text = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (value) {
+          bytes += value.byteLength;
+          if (bytes > cap) { try { await reader.cancel(); } catch { /* already released */ } throw capped(method); }
+          text += decoder.decode(value, { stream: true });
+        }
+        if (done) break;
+      }
+      return text + decoder.decode();
+    }
+    const declared = Number(res.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > cap) throw capped(method);
+    const text = await res.text();
+    if (text.length > cap || (text.length > cap / 4 && utf8Bytes(text) > cap)) throw capped(method);
+    return text;
+  }
   // One request's signal: its timeout, and the caller's cancel when given.
   const requestSignal = () => (signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs));
   let session = null;
@@ -255,7 +297,7 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
       if (failure?.code !== undefined) err.code = failure.code;
       throw err;
     };
-    if (!res.ok) throw new Error(`MCP HTTP ${res.status} on ${method}: ${wireText(await res.text().catch(() => ''))}`);
+    if (!res.ok) throw new Error(`MCP HTTP ${res.status} on ${method}: ${wireText(await readAnswer(res, method).catch((e) => (e?.capped ? cappedText : '')))}`);
     if (res.headers.get('mcp-session-id')) session = res.headers.get('mcp-session-id');
     if (notification) return undefined;
 
@@ -265,9 +307,14 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
+      let bytes = 0;
       while (true) {
         const { done, value } = await reader.read();
-        if (value) buf += decoder.decode(value, { stream: true });
+        if (value) {
+          bytes += value.byteLength;
+          if (bytes > cap) { try { await reader.cancel(); } catch { /* already released */ } throw capped(method); }
+          buf += decoder.decode(value, { stream: true });
+        }
         const frameEnd = buf.indexOf('\n\n');
         if (frameEnd !== -1) {
           const frame = buf.slice(0, frameEnd);
@@ -283,7 +330,7 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
       }
       throw new Error(`MCP ${method}: SSE stream ended with no complete frame`);
     }
-    const data = await parsed(() => res.json());
+    const data = await parsed(async () => JSON.parse(await readAnswer(res, method)));
     if (data.error) throw new Error(`${method}: ${wireText(data.error.message)}`);
     return data.result;
   }
