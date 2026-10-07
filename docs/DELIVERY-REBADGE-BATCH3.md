@@ -140,6 +140,26 @@ has no uid field, so a rule's id is its name).
   `partitionkey=1`, or a placeholder bearer, no longer renames keys, cuts
   ids or leaves a pack's JSON unparsed. Assertions in
   `tools/test-mcp-transport.mjs`; the test count is unchanged.
+- **D8: Connect tests before it fetches** (`studio/app.mjs`): the home
+  card's **Connect** opens the live panel, which tests the connection and
+  offers Draft or Snapshot; it no longer drafts in one click. Assertions in
+  `server/test-settings-studio.mjs`; the test count is unchanged.
+- **A connected ping's *not checked* line names a way to learn more**
+  (`server/routes/live.mjs`): a snapshot or a draft, both of which the panel
+  offers. Assertions in `server/test-mcp-ping.mjs`; the count is unchanged.
+- **A ping nothing answered says `null` for the token's outcome**
+  (`server/routes/live.mjs`): unreachable, or silent before `initialize`, it
+  never says `sent`, which would claim the MCP answered. Tests: 1247 → 1248.
+- **The ping's deadline aborts the request in flight**
+  (`tools/fetch-live-pack.mjs`): its signal reaches the client, so nothing
+  stays open to the MCP after the route has answered `timeout`.
+  Tests: 1248 → 1249.
+- **Tests for what the review found untested or mis-paired**: the route-level
+  redaction backstop (a hook fault naming its credentialed upstream is masked
+  in the refresh-live, draft-from-mcp and deploy 502s), the mock-MCP snapshot
+  golden telling id pairing from name pairing, and DOWNSTREAM §15.2's stage
+  table (signals now carry the code's label) read against `LIVE_STAGES`. Assertions only; the count is
+  unchanged.
 
 ## What a plugin bridge still does that this batch does not
 

@@ -121,7 +121,8 @@ test('each batch delivery report exists and quotes the journey\'s measured total
   assert.deepEqual(problems, [], 'the delivery report states the totals the journey measured');
 });
 
-// The suites this batch added, each a flat file of top-level `test(` calls
+// The suites batch 2 and rebadge batch 3 added (the two MCP ping suites, which
+// review fixes grew), each a flat file of top-level `test(` calls
 // (no subtests, no loops), so the number of tests it holds is the number of
 // lines that start with `test(`. The journey narrates how many tests each
 // `Tests: a → b` note put into such a suite — `` `file` 9 `` on its creation,
@@ -141,6 +142,8 @@ const LEDGER = [
   'server/test-glossary-shell.mjs',
   'tools/test-audit-report.mjs',
   'server/test-audit-report-api.mjs',
+  'tools/test-mcp-ping.mjs',
+  'server/test-mcp-ping.mjs',
 ];
 const WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
 const count = (w) => (/^\d+$/.test(w) ? Number(w) : WORDS[w.toLowerCase()]);

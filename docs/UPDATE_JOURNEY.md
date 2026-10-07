@@ -1129,8 +1129,8 @@ and what it did not. The MCP panel's refresh button is that test; rebuilding
 production-live is its own, explicit action, so a connectivity check no
 longer rewrites the live pack or writes an audit row. The draft and the
 refresh take the ping's posture: without sign-in, a direct loopback request
-with the CSRF header. Tests: 1134 → 1169 (`tools/test-mcp-ping.mjs` and
-`server/test-mcp-ping.mjs`, new; `tools/test-live-model.mjs` and
+with the CSRF header. Tests: 1134 → 1169 (`tools/test-mcp-ping.mjs` 17 and
+`server/test-mcp-ping.mjs` 9, new; `tools/test-live-model.mjs` and
 `server/test-live-studio.mjs`, new).
 
 **C1 — a true-snapshot live pack.** The live side can now be a **snapshot**
@@ -1165,6 +1165,14 @@ and a tool's JSON text is parsed before it is redacted, so a short
 credential-named value (`sortkey=title`) or a placeholder bearer never
 renames a key, cuts an id or breaks the JSON of a pack or the deploy's
 rollback snapshot.
+
+Two more review fixes. A ping nothing answered before `initialize`
+(unreachable, or silent until the deadline) says `null` for the token's outcome, never `sent`, which would
+claim the MCP answered. Tests: 1247 → 1248 (one more in
+`server/test-mcp-ping.mjs`). The ping's deadline aborts the request still in
+flight — its signal reaches the client — so nothing stays open to the MCP
+after the route has answered `timeout`. Tests: 1248 → 1249 (one more in
+`tools/test-mcp-ping.mjs`).
 
 The batch's delivery report, `docs/DELIVERY-REBADGE-BATCH3.md`, is written
 per item — what shipped, the measured `Tests:` pair, what is deferred by name
