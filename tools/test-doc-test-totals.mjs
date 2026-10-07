@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const journey = readFileSync(resolve(ROOT, 'docs/UPDATE_JOURNEY.md'), 'utf8');
 const changelog = readFileSync(resolve(ROOT, 'docs/CHANGELOG.md'), 'utf8');
-const DELIVERY_REPORTS = ['docs/DELIVERY-REBADGE-BATCH2.md', 'docs/DELIVERY-GAP-BATCH2.md', 'docs/DELIVERY-REBADGE-BATCH3.md'];
+const DELIVERY_REPORTS = ['docs/DELIVERY-REBADGE-BATCH2.md', 'docs/DELIVERY-GAP-BATCH2.md', 'docs/DELIVERY-REBADGE-BATCH3.md', 'docs/DELIVERY-REBADGE-BATCH4.md'];
 
 const PAIR = /Tests: (\d+) → (\d+)/g;
 
@@ -127,10 +127,12 @@ test('each batch delivery report exists and quotes the journey\'s measured total
   assert.deepEqual(problems, [], 'the delivery report states the totals the journey measured');
 });
 
-// The suites batch 2 and rebadge batch 3 added (the two MCP ping suites, which
-// review fixes grew), each a flat file of top-level `test(` calls
-// (no subtests, no loops), so the number of tests it holds is the number of
-// lines that start with `test(`. The journey narrates how many tests each
+// The suites batch 2 and rebadge batches 3 and 4 added (the two MCP ping
+// suites, which review fixes grew; the three flat MCP server-settings suites —
+// tools/test-mcp-server-settings.mjs declares tests in a loop, so it is not
+// listed), each a flat file of top-level `test(` calls (no subtests, no
+// loops), so the number of tests it holds is the number of lines that start
+// with `test(`. The journey narrates how many tests each
 // `Tests: a → b` note put into such a suite — `` `file` 9 `` on its creation,
 // `two in `file``, `one more test in `file`` as it grows — and those
 // narrations must sum to what the file holds: a test added without its note
@@ -150,6 +152,9 @@ const LEDGER = [
   'server/test-audit-report-api.mjs',
   'tools/test-mcp-ping.mjs',
   'server/test-mcp-ping.mjs',
+  'server/test-mcp-settings.mjs',
+  'tools/test-mcp-settings-model.mjs',
+  'server/test-mcp-settings-studio.mjs',
 ];
 const WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
 const count = (w) => (/^\d+$/.test(w) ? Number(w) : WORDS[w.toLowerCase()]);
