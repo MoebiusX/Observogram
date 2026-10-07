@@ -27,7 +27,7 @@
 //                identityApi; true for the MCP endpoint mutations too, a
 //                durable record the server will send a token to, and for
 //                the live MCP API, a server-side request to an MCP target
-//                (operator by class: the one direct entry below admin)
+//                (operator by class: the only direct entries below admin)
 //   closedAs     how the posture refusals name the route — 'the identity
 //                API' (default), 'the MCP endpoint API', 'the audit API' or
 //                'the live MCP API' (a singular subject: the texts say `is
@@ -151,8 +151,10 @@ export const ROUTES = Object.freeze({
   'POST /api/packs/:id/deploy/:target': { class: 'operator', audit: ['deploy.run'] },
   'POST /api/journeys/:name/run': { class: 'operator', audit: ['journey.run'] },
   'POST /api/journeys/capture': { class: 'operator', audit: ['journey.capture'] },
-  'POST /api/draft-from-mcp': { class: 'operator', audit: PACK_REGISTER },
-  'POST /api/refresh-live': { class: 'operator', audit: ['live.refresh'] },
+  // The two fetches join the live MCP API's posture (rebadge batch 3, D7):
+  // one posture for every server-side MCP request.
+  'POST /api/draft-from-mcp': { class: 'operator', ...LIVE, csrf: 'always', audit: PACK_REGISTER },
+  'POST /api/refresh-live': { class: 'operator', ...LIVE, csrf: 'always', audit: ['live.refresh'] },
   // The ping (server/routes/live.mjs): initialize, tools/list and one read;
   // it writes nothing but a typed URL's row (an admin's privilege, R4).
   'POST /api/mcp/ping': { class: 'operator', ...LIVE, csrf: 'always', audit: ['live.ping'] },

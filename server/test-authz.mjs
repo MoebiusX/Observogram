@@ -1010,7 +1010,9 @@ const EXPECTED_AUDIT_API = Object.freeze(['GET /api/audit']);
 // The live MCP API (rebadge batch 3, R2): a server-side request to an MCP
 // target — operator by class, yet answered without sign-in only at this
 // machine, closed when exposed, the CSRF header on every request.
-const EXPECTED_LIVE_MCP = Object.freeze(['POST /api/mcp/ping']);
+// The draft and the refresh join it (D7): one posture for every
+// server-side MCP request.
+const EXPECTED_LIVE_MCP = Object.freeze(['POST /api/mcp/ping', 'POST /api/draft-from-mcp', 'POST /api/refresh-live']);
 // How each direct entry outside the identity API is named by the posture
 // refusals; every other direct entry is 'the identity API'.
 const CLOSED_AS = Object.freeze({ 'the MCP endpoint API': EXPECTED_MCP_ENDPOINT_CHANGES, 'the audit API': EXPECTED_AUDIT_API, 'the live MCP API': EXPECTED_LIVE_MCP });
@@ -1101,8 +1103,8 @@ test('completeness: the table agrees with the independent classification, and ev
     if (e.identityApi) assert.ok(['admin', 'owner'].includes(e.class), `${key}: the identity API is admin or owner`);
     if (e.identityApi) assert.equal(e.direct, true, `${key}: the identity API is direct`);
     // R2: the live MCP API is a server-side request to an MCP target, operator
-    // by class, that answers without sign-in only at this machine — the one
-    // direct entry below admin.
+    // by class, that answers without sign-in only at this machine — the only
+    // direct entries below admin.
     if (e.direct) assert.ok(['admin', 'owner'].includes(e.class) || e.closedAs === 'the live MCP API', `${key}: a direct entry is admin or owner, or the live MCP API (R2: a server-side request to an MCP target, operator by class, answers without sign-in only at this machine)`);
     if (e.closedAs === 'the live MCP API') assert.ok(e.direct && e.class === 'operator', `${key}: the live MCP API is direct and operator`);
     if (e.direct) assert.equal(e.exposed === 'allow', false, `${key}: a direct entry is closed (or its rule's) when exposed`);
@@ -2042,6 +2044,20 @@ for (const posture of OPEN) {
           + 'or use the CLIs from this machine (npm run users -- add <login>, passwd <login>, owner <login>)']);
         const direct = await call(srv.base, PROBES['GET /api/admin/users'], { headers: { Host: `localhost:${port}`, Origin: `http://localhost:${port}` }, raw: true });
         assert.deepEqual([direct.status, direct.json.users], [200, []], 'Host localhost with its own Origin is a direct request');
+        // The live MCP API (the ping; the draft and the refresh, D7) to a
+        // request that did not come straight to loopback: refused, naming the
+        // studio and the fetcher that needs no server; without the header, the
+        // CSRF refusal that says requests.
+        for (const key of EXPECTED_LIVE_MCP) {
+          const live = await call(srv.base, PROBES[key], { headers: { ...CSRF_HEADER, 'X-Forwarded-For': '203.0.113.9' }, raw: true });
+          assert.deepEqual([live.status, live.json.denied, live.json.error], [403, 'posture',
+            'on a server without sign-in the live MCP API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; '
+            + `no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${port}, `
+            + 'or fetch without the server from this machine with node tools/fetch-live-pack.mjs (MCP_URL, OUTPUT)'], key);
+          const bare = await call(srv.base, PROBES[key]);
+          assert.deepEqual([bare.status, bare.json.denied, bare.json.error], [403, 'csrf',
+            "missing X-Observogram-CSRF: 1 — requests to the live MCP API need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')"], key);
+        }
       } else {
         const r = await call(srv.base, PROBES['GET /api/admin/users'], { headers: CSRF_HEADER });
         assert.deepEqual([r.status, r.json.denied], [403, 'posture']);
@@ -2063,6 +2079,14 @@ for (const posture of OPEN) {
             },
           },
         }, 'the list is a read: open; its policy says neither a typed URL nor a registration is possible here, and the way in');
+        // The live MCP API — the ping, and the draft and the refresh with it
+        // (D7) — is closed here too, under its own name, before any MCP is
+        // named.
+        for (const key of EXPECTED_LIVE_MCP) {
+          const live = await call(srv.base, PROBES[key], { headers: CSRF_HEADER, body: '{"mcpEndpointId":1}' });
+          assert.deepEqual([live.status, live.json.denied], [403, 'posture'], key);
+          assert.match(live.json.error, /^the live MCP API is closed on a server bound to 0\.0\.0\.0 without sign-in \(OBSERVOGRAM_INSECURE_NO_AUTH=1/, key);
+        }
         // The audit reader (slice 5) is closed here too, under its own name.
         const audit = await call(srv.base, PROBES['GET /api/audit']);
         assert.deepEqual([audit.status, audit.json.denied], [403, 'posture']);

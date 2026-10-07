@@ -2543,7 +2543,8 @@ route is `operator` (the live MCP API: a server-side request to an MCP
 target, so without sign-in it answers only a request sent straight to a
 loopback address, it is closed on an exposed server without sign-in, and
 every request takes the `X-Observogram-CSRF: 1` header but the bearer
-token's); every other `GET` is `viewer` and every other route `operator`.
+token's — `POST /api/draft-from-mcp` and `POST /api/refresh-live` take the
+same posture); every other `GET` is `viewer` and every other route `operator`.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -2573,7 +2574,7 @@ token's); every other `GET` is `viewer` and every other route `operator`.
 | `POST` | `/api/library/register` | `{ canonical, source? }` → the upload registry as `/api/validate` registers (`registered { id, source }`, `adapted`, `conformance`, `summary`; the source defaults to `library:<entries>@<tier>` for a library-built pack, `metadata.name` otherwise) — VERIFY's "Open pack in Discover" |
 | `POST` | `/api/crawl` | Draft a pack from uploaded repo files |
 | `POST` | `/api/crawl-github` | Draft a pack from a GitHub URL |
-| `POST` | `/api/draft-from-mcp` | Draft a live pack from an MCP endpoint: `mcpEndpointId` — one of the org's MCP endpoint records, its read token from the variable the record names when the request sends none — or a typed `mcpUrl` (and `mcpAuth`), which needs the admin role; the answer's `mcpEndpoint` says which |
+| `POST` | `/api/draft-from-mcp` | Draft a live pack from an MCP endpoint: `mcpEndpointId` — one of the org's MCP endpoint records, its read token from the variable the record names when the request sends none — or a typed `mcpUrl` (and `mcpAuth`), which needs the admin role; the answer's `mcpEndpoint` says which. The live MCP API's posture: without sign-in only a direct loopback request, closed when exposed, the CSRF header in every posture |
 | `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts (`mcpEndpointId`, or a typed `mcpUrl`: the admin role, for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.bulk` |
 | `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target (`mcpEndpointId`, or a typed `mcpUrl`: the admin role, for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.run` |
 | `GET` | `/api/deploys?pack=&limit=` | The org's deploy records from `deploys.jsonl`, newest first, the latest verify merged in; `actor` is the deployer's login (an OIDC deployer as `<issuerKey>#<sub>`), the bearer's label or `local` |
@@ -2585,7 +2586,7 @@ token's); every other `GET` is `viewer` and every other route `operator`.
 | `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule) |
 | `POST` | `/api/journeys/:name/run` | Run a saved journey now (a live Pack B through its `endpointId`, or a raw `url`: the admin role); an audit row: `journey.run`, on a failed run too |
 | `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file (a live Pack B as the org's registered endpoint, `mcp: { url, endpointId }`; an unregistered URL kept for an admin, else a file); an audit row: `journey.capture` |
-| `POST` | `/api/refresh-live` | Fetch the org's live pack from an MCP endpoint (`mcpEndpointId`, or a typed `mcpUrl`: the admin role); an audit row: `live.refresh` |
+| `POST` | `/api/refresh-live` | Fetch the org's live pack from an MCP endpoint (`mcpEndpointId`, or a typed `mcpUrl`: the admin role); an audit row: `live.refresh`. The live MCP API's posture, as the draft's |
 | `POST` | `/api/mcp/ping` | Test an MCP connection without building a pack (rebadge batch 3): `{ mcpEndpointId }` (the endpoint's read token rides as a draft's would; `mcpAuth` overrides it) or a typed `mcpUrl` (the admin role). `initialize`, the whole `tools/list` and one cheap read, within 10 s; answers `{ ok, verdict, origin, mcpEndpoint, reachable, auth: { outcome, sent }, tools: { count, capabilities, unmatched, complete }, read, timings, sentence, checked, notChecked }` — `verdict` one of `connected`, `auth-refused`, `unreachable`, `timeout`, `not-mcp`; 200 whenever the ping ran, 400 / 403 for the target, 502 a transport hook fault. Writes no live file and no pack; an audit row `live.ping` only for a typed URL |
 | `GET` | `/api/services` | The org's service records, by slug, each with its environments (their MCP endpoint as `{ id, name, origin }`) and the packs linked to it (`id`, `label`, `source`, `role`) |
 | `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack) |
