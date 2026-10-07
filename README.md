@@ -1014,7 +1014,9 @@ and the live refresh change a file of the org's, not a table, so their row
 is written after the file ([`server/audit-after.mjs`](server/audit-after.mjs)),
 in a transaction of its own. `deploys.jsonl` stays the deploy file of
 record, keyed by the `deployId` the row names: the row carries counts and
-the MCP **origin**, never the URL, an item's error or a tool name.
+the MCP **origin**, never the URL, an item's error or a tool name. The
+ping changes nothing of the org's; its one row — for a typed URL only — is
+written the same way, after the answer is known.
 
 | Route | Action | `targetId` | `detail` |
 |---|---|---|---|
@@ -1025,6 +1027,7 @@ the MCP **origin**, never the URL, an item's error or a tool name.
 | `POST /api/journeys/capture` | `journey.capture` | the journey name | `{ packA, packB, live, env, service, scopeMode }` — the two pack ids and whether Pack B was saved as a live `mcp:` source, never the paths or the MCP URL the file holds |
 | `POST /api/journeys/:name/run` | `journey.run` | the journey name | `{ startedAt, outcome, alignmentPct, gradeScore, gradePass, breaches, tookMs }` — **one row per attempt past the 404** (and past a refused Pack B MCP target, which writes none): a run that fails from the studio leaves a row with `outcome: "error"`, or `"vantage-lost"` when a live source lost its vantage (the engine wrote a run record and may have notified), the four record fields `null`; never the error's message |
 | `POST /api/refresh-live` | `live.refresh` | the MCP origin | `{ mcpEndpoint, refreshedAt, servicesDiscovered, toolsFailed }` (counts) |
+| `POST /api/mcp/ping` | `live.ping` | the MCP origin | `{ verdict, typed: true }` — only when the caller typed the URL (an admin's privilege); a ping by `mcpEndpointId` writes no row |
 
 When one of the two writes fails: the operation stands. A row the store
 refused (a blocked insert, a `detail` over 8192 characters) puts
@@ -2535,8 +2538,12 @@ record is where the server will send the org's read token: its changes take
 the identity API's defences — the `X-Observogram-CSRF: 1` header in every
 posture, closed on an exposed server without sign-in); `GET /api/audit` is
 `admin` (the org's rows; an owner reads the deployment's; closed in the
-open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
-`viewer` and every other route `operator`.
+open, exposed posture — see [The Audit](#the-audit)); every `/api/mcp/…`
+route is `operator` (the live MCP API: a server-side request to an MCP
+target, so without sign-in it answers only a request sent straight to a
+loopback address, it is closed on an exposed server without sign-in, and
+every request takes the `X-Observogram-CSRF: 1` header but the bearer
+token's); every other `GET` is `viewer` and every other route `operator`.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -2579,6 +2586,7 @@ open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
 | `POST` | `/api/journeys/:name/run` | Run a saved journey now (a live Pack B through its `endpointId`, or a raw `url`: the admin role); an audit row: `journey.run`, on a failed run too |
 | `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file (a live Pack B as the org's registered endpoint, `mcp: { url, endpointId }`; an unregistered URL kept for an admin, else a file); an audit row: `journey.capture` |
 | `POST` | `/api/refresh-live` | Fetch the org's live pack from an MCP endpoint (`mcpEndpointId`, or a typed `mcpUrl`: the admin role); an audit row: `live.refresh` |
+| `POST` | `/api/mcp/ping` | Test an MCP connection without building a pack (rebadge batch 3): `{ mcpEndpointId }` (the endpoint's read token rides as a draft's would; `mcpAuth` overrides it) or a typed `mcpUrl` (the admin role). `initialize`, the whole `tools/list` and one cheap read, within 10 s; answers `{ ok, verdict, origin, mcpEndpoint, reachable, auth: { outcome, sent }, tools: { count, capabilities, unmatched, complete }, read, timings, sentence, checked, notChecked }` — `verdict` one of `connected`, `auth-refused`, `unreachable`, `timeout`, `not-mcp`; 200 whenever the ping ran, 400 / 403 for the target, 502 a transport hook fault. Writes no live file and no pack; an audit row `live.ping` only for a typed URL |
 | `GET` | `/api/services` | The org's service records, by slug, each with its environments (their MCP endpoint as `{ id, name, origin }`) and the packs linked to it (`id`, `label`, `source`, `role`) |
 | `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack) |
 | `GET` | `/api/services/:id` | One service record with its environments and packs |

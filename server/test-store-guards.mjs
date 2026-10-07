@@ -224,14 +224,14 @@ test('only the boot, the migration, the store import/ops/cli, the suites and fix
 // rule, boot step 5, the file-first routes' after-the-file audit row
 // (slice 5) — hold none of their own.
 const SQL_LITERAL = /['"`]\s*(?:SELECT\s|INSERT\s+INTO\b|UPDATE\s+\w+\s+SET\b|DELETE\s+FROM\b|WITH\s+\w+\s+AS\b)/i;
-const SQL_FREE = ['server/pack-registry.mjs', 'server/service-admin.mjs', 'server/store/pack-links.mjs', 'server/store/pack-import.mjs', 'server/audit-after.mjs', 'server/audit-admin.mjs', 'server/verdict-admin.mjs', 'server/waiver-admin.mjs', 'server/mcp-target-policy.mjs'];
+const SQL_FREE = ['server/pack-registry.mjs', 'server/service-admin.mjs', 'server/store/pack-links.mjs', 'server/store/pack-import.mjs', 'server/audit-after.mjs', 'server/audit-admin.mjs', 'server/verdict-admin.mjs', 'server/waiver-admin.mjs', 'server/mcp-target-policy.mjs', 'server/routes/live.mjs'];
 
 test('the SQL-literal matcher flags what it must and passes what it must', () => {
   for (const bad of ["prepare(db, 'SELECT * FROM packs')", 'prepare(db, `\n  UPDATE packs SET x = 1`)', 'x("delete from a")']) assert.ok(SQL_LITERAL.test(bad), bad);
   for (const good of ["removePack(db, actor, id, { action: 'pack.remove' })", "'DELETE /api/uploads'", "const selected = 'yes'", "'update the label'"]) assert.ok(!SQL_LITERAL.test(good), good);
 });
 
-test('server/pack-registry.mjs, service-admin.mjs, pack-links.mjs, pack-import.mjs, audit-after.mjs, audit-admin.mjs, verdict-admin.mjs, waiver-admin.mjs and mcp-target-policy.mjs hold no SQL of their own (the repositories do)', () => {
+test('server/pack-registry.mjs, service-admin.mjs, pack-links.mjs, pack-import.mjs, audit-after.mjs, audit-admin.mjs, verdict-admin.mjs, waiver-admin.mjs, mcp-target-policy.mjs and routes/live.mjs hold no SQL of their own (the repositories do)', () => {
   for (const f of SQL_FREE) {
     const code = withoutComments(readFileSync(join(ROOT, f), 'utf8'));
     assert.ok(!SQL_LITERAL.test(code), `${f}: new SQL lives in server/store/{packs,pack-services,services,environments,mcp-endpoints,audit,verdicts,waivers}.mjs`);

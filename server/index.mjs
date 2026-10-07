@@ -76,6 +76,7 @@ import { auditRoutes } from './routes/audit.mjs';
 import { verdictsRoutes } from './routes/verdicts.mjs';
 import { waiversRoutes } from './routes/waivers.mjs';
 import { auditReportRoutes } from './routes/audit-report.mjs';
+import { liveRoutes } from './routes/live.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
 import { journeyPackBSource, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
 import { conformanceWaivers, listWaiverViews } from './waiver-admin.mjs';
@@ -759,6 +760,12 @@ app.use(auditReportRoutes({
 // deployment's to owners, filtered and paged; the scope and every query
 // rule server/audit-admin.mjs's.
 app.use(auditRoutes({ authorize }));
+
+// The live MCP API (rebadge batch 3) lives in server/routes/live.mjs:
+// POST /api/mcp/ping — initialize, tools/list and one cheap read against
+// the request's MCP target (resolveMcpTarget's, as a draft's), writing no
+// live file and no pack.
+app.use(liveRoutes({ authorize }));
 
 // ---------- saved journeys (VALUE_BACKLOG item 11, studio surface) ----------
 

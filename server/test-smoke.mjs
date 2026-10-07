@@ -467,10 +467,21 @@ try {
     ['/api/refresh-live', { mcpUrl: 'http://user:hunter2@' }],
     ['/api/packs/payment-service/deploy/prometheus-rules', { mcpUrl: 'file:///etc/passwd' }],
     ['/api/packs/payment-service/deploy-bulk', { mcpUrl: 'ftp://mcp.example/x', items: [{ group: 'rules' }] }],
+    ['/api/mcp/ping', { mcpUrl: 'http://127.0.0.1:1/mcp' }],
   ]) {
     const r = await postJson(path, body);
     const j = await r.json();
     assert(r.status === 403 && j.denied === 'posture' && j.error === TYPED_REFUSED, `${path} ${body.mcpUrl}: a typed URL from local → 403 posture, before its scheme`, [r.status, j]);
+  }
+  // The ping by id (rebadge batch 3, C2): local, on loopback with the CSRF
+  // header, reaches a registered endpoint; nothing listens there, which the
+  // answer says (200 — the ping ran) without writing a row.
+  {
+    const r = await postJson('/api/mcp/ping', { mcpEndpointId: noMcpId });
+    const j = await r.json();
+    assert(r.status === 200 && j.ok === false && j.verdict === 'unreachable' && j.origin === 'http://127.0.0.1:1'
+      && j.sentence.startsWith('http://127.0.0.1:1 could not be reached: ') && JSON.stringify(j.mcpEndpoint) === JSON.stringify(NO_MCP_ENDPOINT),
+    'POST /api/mcp/ping { mcpEndpointId } from local: 200, unreachable, the origin named', [r.status, j]);
   }
 
   // SSRF guard — local/private addresses are allowed by default (the fake-MCP

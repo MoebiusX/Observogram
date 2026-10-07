@@ -392,6 +392,10 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     // refresh (here refused before any fetch) could only write the caller's.
     'GET /api/live-status': ['/api/live-status', undefined, (r) => assert(r.status === 200 && r.json.present === false, `${who}: GET /api/live-status does not read the other org's live pack`, r.json)],
     'POST /api/refresh-live': ['/api/refresh-live', {}, (r) => assert(r.status === 400, `${who}: POST /api/refresh-live {} → 400`, r.status, 400)],
+    // The ping (rebadge batch 3, C2): the other org's endpoint id is no
+    // endpoint here — 400 before any wire call (the sweep counts the fake's calls).
+    'POST /api/mcp/ping': ['/api/mcp/ping', { mcpEndpointId }, (r) => assert(r.status === 400 && r.json?.error === `no MCP endpoint ${mcpEndpointId} in this org — GET /api/mcp-endpoints lists them`,
+      `${who}: POST /api/mcp/ping by the other org's endpoint id → 400, no MCP endpoint in this org`, [r.status, r.json?.error])],
     'DELETE /api/uploads': ['/api/uploads', undefined, (r) => assert(r.status === 200, `${who}: DELETE /api/uploads clears only the caller's org`, r.status, 200)],
     // The request's org, its name and its members (STORE_PLAN slice 3b): the
     // list holds none of the other org's users, and a member route naming

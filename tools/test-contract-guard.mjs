@@ -46,7 +46,11 @@ const { assert, report } = createHarness({ indent: '  ', truncate: 160 });
 
 // The recorder verifies the registry against a live server, so it must
 // not carry a second copy of any name either.
-const GUARDED_FILES = ['tools/fetch-live-pack.mjs', 'tools/record-mcp-fixtures.mjs', 'tools/lib/mcp-client.mjs'];
+const GUARDED_FILES = ['tools/fetch-live-pack.mjs', 'tools/record-mcp-fixtures.mjs', 'tools/lib/mcp-client.mjs', 'server/routes/live.mjs'];
+// The live MCP API's own files (rebadge batch 3) spell no tool name at all:
+// not at a call site, not anywhere — every name they report comes from the
+// MCP's answer through the registry's mapping (capabilityInventory).
+const SPELLS_NO_TOOL_NAME = ['server/routes/live.mjs'];
 // String literal directly inside a tool-call position. `rpc('tools/list')`
 // and safe/quiet LABELS are out of scope: rpc takes protocol methods, and
 // labels are diagnostics (kept aligned by sharing the TOOL constants).
@@ -58,6 +62,15 @@ for (const file of GUARDED_FILES) {
   assert(hits.length === 0,
     `${file}: no hardcoded tool names at call sites (all resolve via the contract registry)`,
     hits.slice(0, 10));
+}
+
+{
+  const known = allKnownToolNames();
+  for (const file of SPELLS_NO_TOOL_NAME) {
+    const src = readFileSync(resolve(ROOT, file), 'utf8');
+    const literals = [...src.matchAll(/(['"`])([a-z][a-z0-9_]*)\1/g)].map((m) => m[2]).filter((s) => known.has(s));
+    assert(literals.length === 0, `${file}: no string literal equal to a known MCP tool name anywhere`, literals.slice(0, 10));
+  }
 }
 
 // ---------- 2. registry integrity + tool-surface snapshot ----------
