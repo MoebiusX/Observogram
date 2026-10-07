@@ -99,6 +99,8 @@ export const ROUTES = Object.freeze({
   'GET /api/packs': { class: 'viewer' },
   'GET /api/examples': { class: 'viewer' },
   'GET /api/taxonomy': { class: 'viewer' },
+  // The MCP server-settings policy and the proxy flag (server/routes/mcp-settings.mjs; rebadge batch 4).
+  'GET /api/mcp-settings': { class: 'viewer' },
   'GET /api/references': { class: 'viewer' },
   'GET /api/packs/:id': { class: 'viewer' },
   'GET /api/packs/:id/canonical': { class: 'viewer' },

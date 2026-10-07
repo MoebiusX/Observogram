@@ -911,6 +911,7 @@ const EXPECTED_CLASS = Object.freeze({
   'GET /api/packs': 'viewer',
   'GET /api/examples': 'viewer',
   'GET /api/taxonomy': 'viewer',
+  'GET /api/mcp-settings': 'viewer',
   'GET /api/references': 'viewer',
   'GET /api/packs/:id': 'viewer',
   'GET /api/packs/:id/canonical': 'viewer',
@@ -1387,6 +1388,7 @@ const PROBES = Object.freeze({
   'GET /api/packs': ['GET', '/api/packs'],
   'GET /api/examples': ['GET', '/api/examples'],
   'GET /api/taxonomy': ['GET', '/api/taxonomy'],
+  'GET /api/mcp-settings': ['GET', '/api/mcp-settings'],
   'GET /api/references': ['GET', '/api/references'],
   'GET /api/packs/:id': ['GET', '/api/packs/nope'],
   'GET /api/packs/:id/canonical': ['GET', '/api/packs/nope/canonical'],
@@ -1571,6 +1573,7 @@ async function auditSeq(ws) {
 const CASE_PROBES = [
   ['GET', '/API/live-status'], ['GET', '/Api/deploy/matrix'], ['POST', '/API/validate'], ['DELETE', '/API/uploads'],
   ['POST', '/API/refresh-live'], ['POST', '/API/deploys/x/verify'], ['POST', '/API/mcp/ping'], ['GET', '/API/mcp/jobs'],
+  ['GET', '/API/mcp-settings'],
 ];
 async function caseRows(base, headers = {}) {
   const bad = [];

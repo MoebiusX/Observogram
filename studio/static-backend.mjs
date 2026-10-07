@@ -290,6 +290,11 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
     // GET /api/taxonomy — server/taxonomy.mjs taxonomyAnswer(): the baked
     // document or none, `configured` saying which; no-store like the server.
     '/api/taxonomy': () => json(200, { ok: true, taxonomy, configured: taxonomy !== null }, { 'Cache-Control': 'no-store' }),
+    // GET /api/mcp-settings — server/mcp-settings-policy.mjs
+    // settingsPolicyAnswer(): no settings policy and no pass-through (a
+    // bundle has no studio server to pass settings through); no-store like
+    // the server.
+    '/api/mcp-settings': () => json(200, { ok: true, proxy: false, policy: null, configured: false }, { 'Cache-Control': 'no-store' }),
     '/api/compile/targets': () => json(200, { targets: listTargets() }),
     '/api/maturity-rubric': () => json(200, {
       specVersion: SPEC_VERSION,

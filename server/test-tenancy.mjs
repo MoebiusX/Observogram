@@ -164,7 +164,7 @@ function apiRoutes() {
 // The catalogue and the stateless routes. (The live pack is per org since
 // STORE_PLAN slice 3: its two routes are org-scoped below.)
 const DEPLOYMENT_GLOBAL = new Set([
-  'GET /api/version', 'GET /api/orgs', 'GET /api/examples', 'GET /api/taxonomy', 'GET /api/references', 'GET /api/library',
+  'GET /api/version', 'GET /api/orgs', 'GET /api/examples', 'GET /api/taxonomy', 'GET /api/mcp-settings', 'GET /api/references', 'GET /api/library',
   'GET /api/library/:id', 'GET /api/library/requirements/:tier', 'POST /api/library/instantiate',
   'POST /api/library/compile', 'GET /api/maturity-rubric', 'GET /api/compile/targets', 'GET /api/deploy/matrix',
 ]);

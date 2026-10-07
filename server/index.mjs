@@ -77,6 +77,7 @@ import { verdictsRoutes } from './routes/verdicts.mjs';
 import { waiversRoutes } from './routes/waivers.mjs';
 import { auditReportRoutes } from './routes/audit-report.mjs';
 import { liveRoutes, livePackCounts } from './routes/live.mjs';
+import { mcpSettingsRoutes } from './routes/mcp-settings.mjs';
 import { abortAllLiveJobs } from './live-jobs.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
 import { journeyPackBSource, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
@@ -94,6 +95,7 @@ import { listMembershipsForUser } from './store/memberships.mjs';
 import { brandEnv, loadBrand, brandSource } from '../tools/lib/brand-env.mjs';
 import { brandShellHtml, DEFAULT_BRAND } from '../tools/lib/brand.mjs';
 import { loadTaxonomy, taxonomyAnswer } from './taxonomy.mjs';
+import { loadSettingsPolicy } from './mcp-settings-policy.mjs';
 import { mcpTransport, describeTransport } from '../tools/mcp-transport.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
 import { stackSummary } from '../tools/lib/stack-evidence.mjs';
@@ -770,6 +772,12 @@ app.use(auditRoutes({ authorize }));
 // live file and no pack; the live jobs — /api/mcp/jobs, a snapshot or a
 // draft (draftFromMcp, below) run in the server's memory, polled by id.
 app.use(liveRoutes({ authorize, draftFromMcp }));
+
+// The MCP server-settings API (rebadge batch 4) lives in
+// server/routes/mcp-settings.mjs: GET /api/mcp-settings — the settings
+// policy (OBSERVOGRAM_MCP_SETTINGS_POLICY) and whether the opt-in
+// pass-through is on, read by the studio when its Server settings modal opens.
+app.use(mcpSettingsRoutes({ authorize }));
 
 // ---------- saved journeys (VALUE_BACKLOG item 11, studio surface) ----------
 
@@ -2216,6 +2224,11 @@ export async function start({ port = PORT, host = HOST, silent = false, legacyLi
   // the store is touched; a loaded one is installed process-wide for the
   // diff and the graphs and logged here once, path only.
   loadTaxonomy({ log });
+  // The MCP server-settings policy (OBSERVOGRAM_MCP_SETTINGS_POLICY,
+  // server/mcp-settings-policy.mjs), the taxonomy's twin: an unreadable or
+  // invalid file refuses the start before the store is touched; a loaded one
+  // is logged here once, path and rule count only.
+  loadSettingsPolicy({ log });
   // The brand (tools/lib/brand-env.mjs loadBrand, tools/lib/brand.mjs): read
   // here, not at import, so an in-process suite's env lands first; a bad
   // brand file refuses the start before the store is touched. Said once,

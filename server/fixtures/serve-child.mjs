@@ -38,6 +38,9 @@ export const STRIP = [
   // The configured snapshot scope (server/live-jobs.mjs snapshotScopeConfig), read per request; the per-org
   // OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_* go with every inherited OBSERVOGRAM_ORG_* below.
   'SNAPSHOT_METRIC_PREFIXES', 'SNAPSHOT_FOLDER_UIDS', 'SNAPSHOT_DATASOURCE_UID',
+  // The MCP server-settings policy (server/mcp-settings-policy.mjs), read once at start, and the opt-in
+  // pass-through's switch, read per request.
+  'MCP_SETTINGS_POLICY', 'MCP_ADMIN_PROXY',
 ];
 
 // The per-org variables (an MCP endpoint's read token, OBSERVOGRAM_ORG_<KEY>_<NAME>) are read at request time

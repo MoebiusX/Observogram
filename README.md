@@ -2633,6 +2633,7 @@ and `POST /api/refresh-live` take the same posture); every other `GET` is `viewe
 | `GET` | `/api/packs` | In-memory and catalog pack registry |
 | `GET` | `/api/examples` | Bundled example packs |
 | `GET` | `/api/taxonomy` | The artefact taxonomy override the server was started with (`OBSERVOGRAM_TAXONOMY`): `{ ok, taxonomy, configured }` — the document or `null`, never its path; no-store |
+| `GET` | `/api/mcp-settings` | The MCP server-settings policy the server was started with (`OBSERVOGRAM_MCP_SETTINGS_POLICY`, rebadge batch 4) and whether the opt-in pass-through is on (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`): `{ ok, proxy, policy, configured }` — the document or `null`, never its path; no-store. The studio reads it when its Server settings modal opens |
 | `GET` | `/api/references` | Curated catalogue reference packs |
 | `GET` | `/api/packs/:id` | Adapted layered pack |
 | `GET` | `/api/packs/:id/canonical` | Canonical pack with env overlay |

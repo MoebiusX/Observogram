@@ -697,7 +697,7 @@ test('T5 parity: the shim answers every ported route as a running server does â€
     assert.ok(namesB.length === Number(zb.headers.get('x-bundle-files')) && namesB[0].endsWith('.pack.yaml') && namesB.some((n) => n.startsWith('artefacts/')));
   }
   // The pack-independent routes.
-  for (const path of ['/api/compile/targets', '/api/maturity-rubric', '/api/taxonomy', '/api/examples', '/api/references', '/api/live-status']) {
+  for (const path of ['/api/compile/targets', '/api/maturity-rubric', '/api/taxonomy', '/api/mcp-settings', '/api/examples', '/api/references', '/api/live-status']) {
     const a = await server(path);
     const b = await shim(backend, path);
     assert.equal(b.status, a.status, path);
