@@ -47,6 +47,7 @@
 // then redactCredentials masks any `//user:pass@` left in the text.
 
 import { brandEnvFrom } from '../tools/lib/brand-env.mjs';
+import { isLoopbackOrigin } from '../tools/lib/mcp-url-safety.mjs';
 import { mcpTransportLoaded } from '../tools/mcp-transport.mjs';
 import { authDisabled } from './auth.mjs';
 import { directLoopbackRequest, noSignInWay, rankOf, rankOfRole, requestPosture } from './authz.mjs';
@@ -118,17 +119,10 @@ export function originOf(raw) {
   return url.origin;
 }
 
-const LOOPBACK_V4 = /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
-// [::ffff:127.x.y.z] normalises to [::ffff:7fxx:yyzz].
-const LOOPBACK_MAPPED = /^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/;
-
-// This machine, after URL normalisation: localhost, 127.0.0.0/8, [::1],
-// [::ffff:7f00:0]/104. Takes an origin or any http(s) URL.
-export function isLoopbackOrigin(origin) {
-  let host;
-  try { host = new URL(String(origin)).hostname; } catch { return false; }
-  return host === 'localhost' || LOOPBACK_V4.test(host) || host === '[::1]' || LOOPBACK_MAPPED.test(host);
-}
+// isLoopbackOrigin (this machine, after URL normalisation) lives in
+// tools/lib/mcp-url-safety.mjs so the browser can run it; re-exported here
+// unchanged.
+export { isLoopbackOrigin };
 
 // A list's value → { any, origins: Set<origin>, rejected: [entry] }. Entries
 // are comma-separated; a lone `*` is the any-origin switch. An entry is kept
