@@ -214,6 +214,10 @@ export const state = {
   compareSlice: 'all',         // 'all' | 'onlyA' | 'onlyB' | 'both' | 'a-b' | 'a+b'
   compareSearch: '',           // text filter applied to card id/title
   compareDetail: 'cards',      // Compare's View: 'list' | 'tiles' | 'cards' | 'details' (compare-view.mjs COMPARE_VIEWS). Persisted.
+  compareIdentity: 'behaviour', // Compare's Pair by: 'behaviour' (the server's diff) | 'name' | 'id', re-keyed in the
+                               // browser (studio/compare-identity.mjs). Not persisted, not in diffSelection(): no refetch.
+  taxonomyBindError: '',       // why the taxonomy override did not bind as the server's ('' when it did): name and id
+                               // pairing classify in the browser, so they stay off when the two could disagree.
   compareLens: 'all',          // 'all' | <product-slug>. Filters Compare/Benchmark to
                                // only artefacts in a product's surface (e.g. 'grafana'
                                // keeps backends with product=grafana, dashboards whose

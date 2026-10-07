@@ -332,3 +332,74 @@ test('parity: diffPacks over the JSON the server answers for two packs equals GE
     assert.ok(server.summary.inBoth > 0);
   }
 });
+
+// ---------- the studio's Pair by (studio/compare-identity.mjs) ----------
+
+test('studio: the switch\'s modes are the registry\'s; behaviour shows the server\'s diff itself, name and id re-key the packs on screen', async () => {
+  const studio = await import('../studio/compare-identity.mjs');
+  const lib = await import('./lib/identity-modes.mjs');
+  assert.deepEqual(studio.PAIRING_MODES.map(({ id, label, matchedBy, hint }) => ({ id, label, matchedBy, hint })),
+    lib.IDENTITY_MODES.map(({ id, label, matchedBy, hint }) => ({ id, label, matchedBy, hint })));
+  const diffLib = await import('./lib/diff.mjs');
+  const engine = { identity: lib, diff: diffLib };
+  const a = JSON.parse(JSON.stringify(adapt(FIXTURE('a'))));
+  const b = JSON.parse(JSON.stringify(adapt(FIXTURE('b'))));
+  const server = { ...JSON.parse(JSON.stringify(diffPacks(a, b, { scopeMode: 'service' }))), traceabilityGraph: { rollup: {} }, __for: { a: 'x', b: 'y', scopeMode: 'service', service: null } };
+  const behaviour = studio.viewDiffFor({ engine, diff: server, pack: a, packB: b, mode: 'behaviour' });
+  assert.equal(behaviour.diff, server, 'behaviour is the server answer, the same object');
+  const byId = studio.viewDiffFor({ engine, diff: server, pack: a, packB: b, mode: 'id' });
+  assert.equal(byId.mode, 'id');
+  assert.equal(byId.unavailable, '');
+  assert.deepEqual([byId.diff.summary.inBoth, byId.diff.summary.onlyInA, byId.diff.summary.onlyInB], [K + 4, 3, 3]);
+  assert.equal(byId.diff.traceabilityGraph, server.traceabilityGraph, 'the graph and __for ride along');
+  assert.equal(byId.diff.__for, server.__for);
+  assert.equal(studio.viewDiffFor({ engine, diff: server, pack: a, packB: b, mode: 'id' }), byId, 'memoised on (diff, mode, packs)');
+  const byName = studio.viewDiffFor({ engine, diff: server, pack: a, packB: b, mode: 'name' });
+  assert.deepEqual([byName.diff.summary.inBoth, byName.diff.summary.onlyInA, byName.diff.summary.onlyInB], [K + 3, 4, 4]);
+});
+
+test('studio: behaviour is shown, with a sentence, when the packs are not the compared ones, the engine failed, or the taxonomy did not bind', async () => {
+  const studio = await import('../studio/compare-identity.mjs');
+  const lib = await import('./lib/identity-modes.mjs');
+  const diffLib = await import('./lib/diff.mjs');
+  const engine = { identity: lib, diff: diffLib };
+  const a = adapt(FIXTURE('a'));
+  const b = adapt(FIXTURE('b'));
+  const server = { ...diffPacks(a, b), __for: { scopeMode: 'service' } };
+  const other = adapt(parseYaml(readFileSync(new URL('../examples/demo-skeleton.pack.yaml', import.meta.url), 'utf8')));
+  const stale = studio.viewDiffFor({ engine, diff: server, pack: other, packB: b, mode: 'name' });
+  assert.equal(stale.diff, server);
+  assert.equal(stale.mode, 'behaviour');
+  assert.match(stale.unavailable, /not the ones the server compared/);
+  assert.match(studio.viewDiffFor({ engine: null, diff: server, pack: a, packB: b, mode: 'id' }).unavailable, /did not load/);
+  assert.match(studio.viewDiffFor({ engine, diff: server, pack: a, packB: b, mode: 'id', taxonomyError: 'GET /api/taxonomy failed' }).unavailable, /taxonomy/);
+  assert.equal(studio.viewDiffFor({ engine: undefined, diff: server, pack: a, packB: b, mode: 'id' }).unavailable, 'still loading');
+  const failed = studio.identitySwitchModel({ chosen: 'id', shown: 'behaviour', engineState: 'failed', unavailable: 'x' });
+  assert.deepEqual(failed.radios.map((r) => r.disabled), [false, true, true]);
+  assert.equal(failed.sentence, 'Name and id pairing could not load in this browser (x) — behaviour pairing is shown.');
+  const loadingNow = studio.identitySwitchModel({ chosen: 'behaviour', shown: 'behaviour', engineState: 'loading', unavailable: '' });
+  assert.equal(loadingNow.sentence, '');
+  assert.deepEqual(loadingNow.radios.map((r) => r.disabled), [false, true, true]);
+  const ready = studio.identitySwitchModel({ chosen: 'name', shown: 'name', engineState: 'ready', unavailable: '' });
+  assert.equal(ready.checked, 'name');
+  assert.ok(ready.radios.every((r) => !r.disabled));
+  assert.match(ready.note, /^Paired by name in this browser over the two packs on screen; behaviour still decides aligned vs drifted\. Chains, Diagnose and every action pair by behaviour\.$/);
+  assert.equal(studio.identitySwitchModel({ chosen: 'behaviour', shown: 'behaviour', engineState: 'ready', unavailable: '' }).note, '');
+});
+
+test('studio: the announcement, the pill titles and the unpaired hints', async () => {
+  const studio = await import('../studio/compare-identity.mjs');
+  const lib = await import('./lib/identity-modes.mjs');
+  const engine = { identity: lib, diff: null };
+  assert.equal(studio.identityAnnouncement('name', { shared: 12, onlyInA: 9, onlyInB: 7 }), 'Pairing by name: 12 in both, 9 only in A, 7 only in B.');
+  const dash = { type: 'dashboard', id: 'DASH-01', defines: 'dashboards.orders', spec: { params: { title: 'Orders', uid: 'ord-1' } } };
+  assert.equal(studio.pairingTitle(engine, dash, 'id'), 'Paired by id: dashboard uid "ord-1"');
+  assert.equal(studio.pairingTitle(engine, dash, 'behaviour'), '');
+  assert.equal(studio.pairingTitle(null, dash, 'id'), '');
+  const bare = { type: 'dashboard', id: 'DASH-02', spec: {} };
+  assert.equal(studio.unpairedHint(engine, bare, 'name'), 'has no name');
+  assert.equal(studio.unpairedHint(engine, bare, 'id'), 'has no stable id');
+  assert.equal(studio.unpairedHint(engine, dash, 'id'), '');
+  assert.equal(studio.unpairedHint(engine, bare, 'behaviour'), '');
+  assert.equal(studio.pairingModeOf('nope').id, 'behaviour');
+});

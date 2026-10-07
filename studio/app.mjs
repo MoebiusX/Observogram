@@ -7415,11 +7415,16 @@ let serverBuild = null;     // buildLabelModel(/api/version)
 async function bindTaxonomyFromServer() {
   const mod = await import('/lib/artefact-classify.mjs');
   let json = null;
+  state.taxonomyBindError = '';
   try { json = await loadTaxonomy(); }
-  catch (e) { console.warn(`[taxonomy] GET /api/taxonomy failed — classifying with the default families: ${e.message}`); }
+  catch (e) {
+    console.warn(`[taxonomy] GET /api/taxonomy failed — classifying with the default families: ${e.message}`);
+    state.taxonomyBindError = 'GET /api/taxonomy failed';
+  }
   try { bindTaxonomy(mod, json); }
   catch (e) {
     console.warn(`[taxonomy] the server's override does not compile — classifying with the default families: ${e.message}`);
+    state.taxonomyBindError = 'the server\'s override does not compile here';
     bindTaxonomy(mod, null);
   }
 }

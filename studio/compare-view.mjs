@@ -16,6 +16,10 @@ import { openDrawer } from './drawer.mjs';
 import { defaultEnvFor, refresh } from './app.mjs';
 import { host as appHost } from './host.mjs';
 import { liveKindSuffix, liveChipText } from './live-model.mjs';
+import {
+  compareIdentityEngine, viewDiffFor, identitySwitchModel, identityAnnouncement, pairingModeOf, pairingTitle, unpairedHint,
+  renderCompareIdentitySwitch, DEFAULT_PAIRING,
+} from './compare-identity.mjs';
 import { cardKey } from './layers-view.mjs';
 import { diffEntryLabel, deploySelectionFromEntries, deploySurfaceForArtefact, prettyDiffKey } from './artifact-model.mjs';
 import {
@@ -2370,19 +2374,44 @@ function renderCompareView(view) {
   // B cards (each with its own pickers, swap between them) and the set
   // arithmetic are always on screen. ONE switch follows — Side by side
   // (default) · Changes needing review · Summary — over the same lensed digest.
+  // The diff on screen is a parameter, not the global: behaviour is the
+  // server's state.diff; name or id is re-keyed in this browser over the two
+  // packs on screen (studio/compare-identity.mjs), no refetch. Every Compare
+  // helper below that reads a diff takes `diff`; Diagnose, Atlas, Compile,
+  // trace preferences, verdicts and every action keep state.diff (behaviour).
+  const engine = compareIdentityEngine({ onLoaded: () => { if (state.view === 'compare' && state.diagnoseSub === 'compare') appHost.renderMainView(); } });
+  const engineState = engine === undefined ? 'loading' : engine === null ? 'failed' : 'ready';
+  const shown = viewDiffFor({ engine, diff: state.diff, pack: state.pack, packB: state.packB, mode: state.compareIdentity, taxonomyError: state.taxonomyBindError || '' });
+  const diff = shown.diff;
+  const pairing = { mode: shown.mode, matchedBy: pairingModeOf(shown.mode).matchedBy, engine: engineState === 'ready' ? engine : null };
+
   const lens = state.compareLens || 'all';
   const ctx = diagnoseContext();
-  const digest = diffDigest(state.diff, state.packB, lens);
+  ctx.matchedBy = pairing.matchedBy;
+  const digest = diffDigest(diff, state.packB, lens);
   const cmp = buildCompareDecision(digest, ctx);
   const focus = ['summary', 'review', 'all'].includes(state.compareFocus) ? state.compareFocus : 'all';
 
   // Build per-layer key-set lookups once (the roles ride along so every
   // card and column names its side the same way).
-  const sets = buildCompareKeySets();
+  const sets = buildCompareKeySets(diff);
   sets.roles = ctx.roles;
+  sets.pairing = pairing;
 
-  scaffold.appendChild(renderComparePackHeaders());
-  scaffold.appendChild(renderCompareSummary(digest));
+  scaffold.appendChild(renderComparePackHeaders(diff));
+  scaffold.appendChild(renderCompareSummary(digest, pairing.matchedBy));
+  renderCompareIdentitySwitch(scaffold, identitySwitchModel({
+    chosen: state.compareIdentity, shown: shown.mode, engineState, unavailable: shown.unavailable,
+  }), {
+    onChange: (mode) => {
+      state.compareIdentity = pairingModeOf(mode).id;
+      appHost.renderMainView();
+      const now = viewDiffFor({ engine, diff: state.diff, pack: state.pack, packB: state.packB, mode: state.compareIdentity, taxonomyError: state.taxonomyBindError || '' });
+      const totals = diffDigest(now.diff, state.packB, state.compareLens || 'all')?.totals;
+      diagUx.announce(identityAnnouncement(now.mode, totals));
+      document.querySelector(`.compare-identity input[value="${state.compareIdentity}"]`)?.focus();
+    },
+  });
 
   const lead = document.createElement('div');
   lead.className = 'compare-digest compare-focus-row';
@@ -2404,7 +2433,7 @@ function renderCompareView(view) {
     // Side by side: slice filters + lens + scope + search, then the
     // per-layer rows (layer head spanning both columns, A grid left, B
     // grid right).
-    scaffold.appendChild(renderCompareFilters());
+    scaffold.appendChild(renderCompareFilters(pairing.matchedBy));
     scaffold.appendChild(renderCompareColumnHeads(ctx));
     for (const L of LAYERS_FOR_DIFF) {
       const row = renderCompareLayerRow(L, sets);
@@ -2446,7 +2475,7 @@ function renderCompareColumnHeads(ctx) {
   return wrap;
 }
 
-function buildCompareKeySets() {
+function buildCompareKeySets(diff) {
   // Diff entry keys are behavioural identity keys (identityKeyOf, server-side)
   // — a keyspace the client can't rebuild from `defines`/id. Every entry
   // embeds the artefact object(s) it paired though, and artefact ids are
@@ -2457,7 +2486,7 @@ function buildCompareKeySets() {
   const aReason = new Map(), bReason = new Map();
   const aEntry = new Map(), bEntry = new Map();
   for (const L of LAYERS_FOR_DIFF) {
-    const bucket = state.diff.layers[L] || {};
+    const bucket = diff.layers[L] || {};
     const a = new Map(), b = new Map();
     // A metric family stands for several of the pack's own artefacts (a
     // histogram's _bucket / _count / _sum series): every member takes the
@@ -2487,7 +2516,7 @@ function buildCompareKeySets() {
     aStatus[L] = a;
     bStatus[L] = b;
   }
-  return { aStatus, bStatus, aReason, bReason, aEntry, bEntry };
+  return { aStatus, bStatus, aReason, bReason, aEntry, bEntry, diff };
 }
 
 // Why a card could not be checked, or ''.
@@ -2516,10 +2545,10 @@ function compareStatusFor(side, L, art, sets) {
 }
 
 // New: stacked PACK A + PACK B header band, side-by-side.
-function renderComparePackHeaders() {
+function renderComparePackHeaders(diff) {
   const wrap = document.createElement('div');
   wrap.className = 'compare-pack-headers';
-  wrap.appendChild(renderComparePackHeader('a', state.pack,  state.diff?.a));
+  wrap.appendChild(renderComparePackHeader('a', state.pack,  diff?.a));
 
   // Swap button BETWEEN the two cards — visually anchors the
   // "A vs B" relationship and removes the need for a separate
@@ -2546,7 +2575,7 @@ function renderComparePackHeaders() {
   };
   wrap.appendChild(swapWrap);
 
-  wrap.appendChild(renderComparePackHeader('b', state.packB, state.diff?.b));
+  wrap.appendChild(renderComparePackHeader('b', state.packB, diff?.b));
   return wrap;
 }
 
@@ -2938,7 +2967,7 @@ export function compareView(id) {
   return COMPARE_VIEWS.some(v => v.id === id) ? id : COMPARE_VIEW_DEFAULT;
 }
 
-function renderCompareFilters() {
+function renderCompareFilters(matchedBy = DEFAULT_PAIRING) {
   const wrap = document.createElement('div');
   wrap.className = 'compare-filters';
   // The slices are named by the A / B letters the pack cards carry; each
@@ -2948,7 +2977,7 @@ function renderCompareFilters() {
     { id: 'all',   label: 'All',       hint: 'Every artefact from both packs, side by side.' },
     { id: 'onlyA', label: 'Only in A', hint: `Artefacts in Pack A (the ${roles.aNoun}) with no counterpart in Pack B (the ${roles.bNoun}). The right column is empty.` },
     { id: 'onlyB', label: 'Only in B', hint: `Artefacts in Pack B (the ${roles.bNoun}) with no counterpart in Pack A (the ${roles.aNoun}). The left column is empty.` },
-    { id: 'both',  label: 'In both',   hint: 'In both packs (matched by behavioural identity — the same deployed control, whatever it is named).' },
+    { id: 'both',  label: 'In both',   hint: matchedBy === DEFAULT_PAIRING ? 'In both packs (matched by behavioural identity — the same deployed control, whatever it is named).' : `In both packs (matched by ${matchedBy}; behaviour still decides aligned vs drifted).` },
     { id: 'a-b',   label: 'A − B',     hint: 'Set difference: every artefact in A, minus anything also in B.' },
     { id: 'a+b',   label: 'A + B',     hint: 'Union: combined view of both packs without duplication.' },
   ];
@@ -3304,7 +3333,7 @@ function renderCompareLayerColumn(side, L, items, sets) {
   // side holds; then what the comparison does not pair (template
   // placeholders, live inventory outside the declared scope, dashboard panels).
   const pairAt = new Map();
-  (state.diff?.layers?.[L]?.inBoth || []).forEach((e, i) => {
+  (sets.diff?.layers?.[L]?.inBoth || []).forEach((e, i) => {
     const art = side === 'a' ? e.a : e.b;
     // The members of a metric family sit together, at the family's place.
     for (const id of [art?.id, ...(art?.memberIds || [])]) if (id && !pairAt.has(id)) pairAt.set(id, i);
@@ -3337,7 +3366,7 @@ function renderCompareLayerColumn(side, L, items, sets) {
   const onlyWhy = readersSentence(readersDigest([...onlyByEntry.values()]), { holder: letter, other, otherIsLive });
   const reasons = [...new Set(groups.unchecked.map(art => compareUncheckedReason(side, L, art, sets)).filter(Boolean))];
   const titles = {
-    both: ['In both', 'In both packs, matched by behaviour. The same order on both sides.'],
+    both: ['In both', `In both packs, matched by ${sets.pairing?.matchedBy || DEFAULT_PAIRING}. The same order on both sides.`],
     only: [`Only in ${letter}`, `In Pack ${letter}, with no counterpart in Pack ${other}.`],
     unchecked: [`Not checked in ${other}`, `In Pack ${letter}; Pack ${other} had no way to observe ${groups.unchecked.length === 1 ? 'this family' : 'these families'}, so ${groups.unchecked.length === 1 ? 'it is' : 'they are'} neither matched nor missing.${reasons.length ? ` Why: ${reasons.join('; ')}.` : ''}`],
     rest: ['Not compared', 'Not paired by the comparison: template placeholders, live inventory outside the declared scope and dashboard panels.'],
@@ -3477,8 +3506,12 @@ function renderCompareCard(artefact, def, sublayerKey, side, sets) {
   // Comparison status pill — what this card means in the diff.
   let statusPill = '';
   const noun = side === 'a' ? sets?.roles?.aNoun : sets?.roles?.bNoun;
-  if (inBoth) statusPill = '<span class="diff-chip chip-both" title="In both packs, matched by behaviour">in both</span>';
-  else if (isOnlySide) statusPill = `<span class="diff-chip chip-only-${side}" title="${escapeHtml(noun ? `Only in the ${noun}` : `Pack ${side.toUpperCase()} only`)}">only in ${side.toUpperCase()}</span>`;
+  // In a name or id view the pill says which key paired it, or why it did not.
+  const pairing = sets?.pairing;
+  const pairedBy = inBoth ? pairingTitle(pairing?.engine, artefact, pairing?.mode) : '';
+  const notPaired = isOnlySide ? unpairedHint(pairing?.engine, artefact, pairing?.mode) : '';
+  if (inBoth) statusPill = `<span class="diff-chip chip-both" title="${escapeHtml(pairedBy || 'In both packs, matched by behaviour')}">in both</span>`;
+  else if (isOnlySide) statusPill = `<span class="diff-chip chip-only-${side}" title="${escapeHtml(`${noun ? `Only in the ${noun}` : `Pack ${side.toUpperCase()} only`}${notPaired ? ` — ${notPaired}` : ''}`)}">only in ${side.toUpperCase()}</span>`;
   else if (isUnchecked) {
     const otherLetter = side === 'a' ? 'B' : 'A';
     const why = compareUncheckedReason(side, def.id, artefact, sets);
@@ -3515,7 +3548,8 @@ function renderCompareCard(artefact, def, sublayerKey, side, sets) {
       ${artefact.tool ? `<span class="tool">${escapeHtml(artefact.tool)}</span>` : ''}
     </div>
   `;
-  btn.onclick = () => openDrawer(artefact, def, sublayerKey, side);
+  const pairingLine = pairedBy || (notPaired ? `Not paired by ${pairing.matchedBy}: ${notPaired}` : '');
+  btn.onclick = () => openDrawer(artefact, def, sublayerKey, side, pairingLine ? { pairing: pairingLine } : {});
   return btn;
 }
 
@@ -3598,7 +3632,7 @@ export function renderComparePicker() {
 // The set arithmetic, always under the two pack cards. Counts come from the
 // same lensed digest as the summary so every number on the screen agrees;
 // the cells are named by the A / B letters of the cards above them.
-function renderCompareSummary(digest) {
+function renderCompareSummary(digest, matchedBy = DEFAULT_PAIRING) {
   const t = digest?.totals || { onlyInA: 0, onlyInB: 0, shared: 0, universe: 0, notObserved: 0 };
   const jaccard = t.universe ? `${Math.round((t.shared / t.universe) * 100)}%` : '—';
   // Shown only when there is something to say: artefacts one pack holds in
@@ -3611,12 +3645,14 @@ function renderCompareSummary(digest) {
   wrap.className = 'compare-summary';
   wrap.innerHTML = `
     <div class="compare-cell c-a" title="In Pack A, with no counterpart in Pack B"><div class="c-key">only in A</div><div class="c-val">${t.onlyInA}</div></div>
-    <div class="compare-cell c-both" title="In both A and B, matched by behaviour"><div class="c-key">in both</div><div class="c-val">${t.shared}</div></div>
+    <div class="compare-cell c-both" title="In both A and B, matched by ${escapeHtml(matchedBy)}"><div class="c-key">in both</div><div class="c-val">${t.shared}</div></div>
     <div class="compare-cell c-b" title="In Pack B, with no counterpart in Pack A"><div class="c-key">only in B</div><div class="c-val">${t.onlyInB}</div></div>
     <div class="compare-cell c-union" title="Union: A + B without duplicates"><div class="c-key">union</div><div class="c-val">${t.universe}</div></div>
     <div class="compare-cell c-jacc"><div class="c-key">${diagUx.termHtml('jaccard', 'jaccard')}</div><div class="c-val"${t.universe ? '' : ' title="Nothing was compared, so there is no overlap to measure"'}>${jaccard}</div></div>
     ${unchecked}
+    <div class="compare-cell c-mode" title="Which key paired A with B (the Pair by switch below)"><div class="c-key">paired by</div><div class="c-val">${escapeHtml(matchedBy)}</div></div>
   `;
+  wrap.classList.add('has-mode');
   if (t.notObserved) wrap.classList.add('has-unchecked');
   return wrap;
 }
@@ -4405,13 +4441,15 @@ function compareSummaryHtml(digest, cmp, ctx) {
       title: 'Pack A only — in A, with no behavioural counterpart in B',
     }),
     tile({
-      label: 'Shared', name: 'in both packs, matched by behaviour', n: t.shared,
+      label: 'Shared', name: `in both packs, matched by ${ctx.matchedBy || DEFAULT_PAIRING}`, n: t.shared,
       tone: t.drifted ? 'warn' : 'ok', zeroTone: 'neutral',
       means: t.drifted ? `${t.aligned} match · ${t.drifted} differ in at least one field.` : `All ${t.shared} match field for field.`,
       zero: 'No artefact appears in both packs: they describe different things.',
       action: t.drifted ? 'cmp-focus:review' : 'cmp-slice:both',
       actionLabel: t.drifted ? `Review ${diagUx.plural(t.drifted, 'change')}` : `Show ${t.shared}`,
-      title: 'In both A and B, paired by behavioural identity — the same deployed control, whatever it is named',
+      title: (ctx.matchedBy || DEFAULT_PAIRING) === DEFAULT_PAIRING
+        ? 'In both A and B, paired by behavioural identity — the same deployed control, whatever it is named'
+        : `In both A and B, paired by ${ctx.matchedBy}; behaviour still decides whether they match field for field`,
     }),
     tile({
       label: r.bOnly, name: ctx.b ? packLine(ctx.b) : '', n: t.onlyInB,

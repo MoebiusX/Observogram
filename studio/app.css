@@ -9749,3 +9749,21 @@ select.build-edit-input { appearance: auto; }
 .mcpc-stage-label { min-width: 16em; color: var(--ink); }
 .mcpc-stage-word { color: var(--ink-2); }
 .mcpc-stage-message { flex-basis: 100%; padding-left: 1.6em; color: var(--ink-3); overflow-wrap: anywhere; }
+/* ==== Compare pairing (rebadge batch 3, C3): the Pair by switch under the stat bar, its note and its could-not-load
+   sentence, and the stat bar's "paired by" cell. The switch sits on the page with no surface of its own, hairlines only;
+   the cell is a .compare-cell (its card background). Text in --ink / --ink-2 / --ink-3 only, measured on --card by the
+   AA scan in tools/test-build-model.mjs; ux.css and reskin.css restyle no .compare-identity- rule (asserted). ==== */
+.compare-summary.has-mode { grid-template-columns: repeat(6, 1fr); }
+.compare-summary.has-mode.has-unchecked { grid-template-columns: repeat(7, 1fr); }
+.compare-cell.c-mode { border-top: 1px solid var(--line); }
+.compare-cell.c-mode .c-val { font: 600 16px/1.4 var(--sans); font-style: normal; color: var(--ink); }
+.compare-identity { margin: 10px 28px 0; padding: 6px 12px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); }
+.compare-identity-legend { padding: 0 4px; font: 600 12.5px/1.45 var(--sans); color: var(--ink-2); }
+.compare-identity-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 18px; }
+.compare-identity-option { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; align-items: baseline; cursor: pointer; }
+.compare-identity-label { font: 600 13px/1.45 var(--sans); color: var(--ink); }
+.compare-identity-hint { grid-column: 2; font: 12.5px/1.45 var(--sans); color: var(--ink-3); }
+.compare-identity-option input:disabled ~ .compare-identity-label { color: var(--ink-3); }
+.compare-identity-note { margin: 6px 0 0; font: 12.5px/1.45 var(--sans); color: var(--ink-2); }
+.compare-identity-unavailable { margin: 6px 0 0; font: 12.5px/1.45 var(--sans); color: var(--ink-2); }
+@media (max-width: 900px) { .compare-summary.has-mode, .compare-summary.has-mode.has-unchecked { grid-template-columns: 1fr 1fr; } .compare-identity-options { grid-template-columns: 1fr; } }

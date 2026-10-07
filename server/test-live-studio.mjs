@@ -32,6 +32,16 @@
  * "new from live" button says a job is running, the panel opens on its
  * gate log, and the result comes when the fake answers.
  *
+ * Compare pairs by behaviour, name or id (C3), with sign-in off: the
+ * compare-modes fixture packs (tools/fixtures/compare-modes/) side by side.
+ * Name then Id (the second by an arrow key, as a native radio group) move the
+ * stat bar to the fixture's three count sets with NO request to /api/diff
+ * after the first; in every mode the cards' per-column counts equal the stat
+ * bar's; the "paired by" cell restates the mode; an in-both pill's title
+ * names the key (dashboard uid "ord-1") and the drawer says it; the note
+ * says chains, Diagnose and every action pair by behaviour; the change is
+ * announced; back to Behaviour shows the server's numbers again.
+ *
  * Skipped unless Playwright imports (OBSERVOGRAM_PLAYWRIGHT, else the bare
  * 'playwright') and Chromium launches; OBSERVOGRAM_LIVE_SMOKE=require fails
  * instead.
@@ -322,5 +332,123 @@ test('BROWSER: the live panel — test, choose Draft or Snapshot, the gate log, 
   assert.equal(await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('liveJob.v1:')).length), 0, 'the remembered job cleared once its result was shown');
 
   await ctx.close();
+  assert.deepEqual(problems, [], 'no page error and no console.error');
+});
+
+test('BROWSER: Compare pairs by behaviour, name or id — re-keyed in the browser, no refetch; the stat bar restates the mode', async (t) => {
+  const skip = (why) => { if (REQUIRED) assert.fail(`OBSERVOGRAM_LIVE_SMOKE=require: ${why}`); t.skip(why); };
+  const { pw, error } = await loadPlaywright();
+  if (!pw) return skip(error);
+  let browser;
+  try { browser = await pw.chromium.launch(); }
+  catch (e) { return skip(`chromium.launch failed: ${e.message.split('\n')[0]}`); }
+  t.after(() => browser.close());
+
+  const ws = mkdtempSync(join(tmpdir(), 'observogram-compare-modes-'));
+  const child = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off' } });
+  t.after(async () => { await child.stop(); rmSync(ws, { recursive: true, force: true }); });
+  const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const register = async (side) => {
+    const r = await fetch(`${child.base}/api/validate?source=compare-modes-${side}.pack.yaml`, {
+      method: 'POST', headers: { 'Content-Type': 'text/yaml' }, body: readFileSync(join(ROOT, `tools/fixtures/compare-modes/${side}.pack.yaml`), 'utf8'),
+    });
+    const json = await r.json();
+    assert.equal(json.ok, true, JSON.stringify(json.errors));
+    return json.registered.id;
+  };
+  const aId = await register('a');
+  const bId = await register('b');
+
+  const problems = [];
+  const offLoopback = [];
+  const diffRequests = [];
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await ctx.addInitScript(([a, b]) => {
+    if (!sessionStorage.getItem('seeded')) {
+      sessionStorage.setItem('seeded', '1');
+      localStorage.setItem('studioState.v1', JSON.stringify({ selectedPackId: a, selectedEnv: 'prod', compareBId: b, compareBEnv: 'prod', view: 'compare' }));
+    }
+  }, [aId, bId]);
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
+  page.on('console', (m) => { if (m.type() === 'error' && !/^Failed to load resource: /.test(m.text())) problems.push(`console.error: ${m.text()}`); });
+  page.on('request', (r) => { if (/\/api\/diff\?/.test(r.url())) diffRequests.push(r.url()); });
+  await page.route('**/*', (route) => {
+    if (route.request().url().startsWith(child.base)) return route.fallback();
+    offLoopback.push(route.request().url());
+    return route.abort();
+  });
+  const text = (sel) => page.evaluate((s) => document.querySelector(s)?.textContent?.replace(/\s+/g, ' ').trim() ?? null, sel);
+  // The stat bar and the cards' per-column counts (the group heads' numbers, summed over the layers).
+  const counts = () => page.evaluate(() => {
+    const cell = (c) => Number(document.querySelector(`.compare-summary .compare-cell.${c} .c-val`)?.textContent);
+    const sum = (sel) => [...document.querySelectorAll(sel)].reduce((n, el) => n + Number(el.textContent), 0);
+    return {
+      bar: { onlyInA: cell('c-a'), inBoth: cell('c-both'), onlyInB: cell('c-b') },
+      cards: {
+        onlyInA: sum('.compare-layer-col-a .compare-col-group.is-only .compare-col-group-n'),
+        inBothA: sum('.compare-layer-col-a .compare-col-group.is-both .compare-col-group-n'),
+        inBothB: sum('.compare-layer-col-b .compare-col-group.is-both .compare-col-group-n'),
+        onlyInB: sum('.compare-layer-col-b .compare-col-group.is-only .compare-col-group-n'),
+      },
+      mode: document.querySelector('.compare-summary .c-mode .c-val')?.textContent,
+      checked: document.querySelector('.compare-identity input:checked')?.value,
+    };
+  });
+  const expectMode = async (mode, [onlyInA, inBoth, onlyInB]) => {
+    await page.waitForFunction((m) => document.querySelector('.compare-summary .c-mode .c-val')?.textContent === m, mode, { timeout: T });
+    const c = await counts();
+    assert.deepEqual(c.bar, { onlyInA, inBoth, onlyInB }, `${mode}: the stat bar`);
+    assert.deepEqual(c.cards, { onlyInA, inBothA: inBoth, inBothB: inBoth, onlyInB }, `${mode}: the cards' per-column counts equal the stat bar's`);
+    assert.equal(c.checked, mode);
+  };
+
+  await page.goto(`${child.base}/`);
+  await page.waitForSelector('.diag-subtab[data-sub="compare"]', { timeout: 30_000 });
+  await page.click('.diag-subtab[data-sub="compare"]');
+  await page.waitForSelector('.compare-summary .c-mode', { timeout: T });
+  await expectMode('behaviour', [5, 15, 5]);
+  assert.equal(await page.getAttribute('.compare-summary .c-both', 'title'), 'In both A and B, matched by behaviour');
+  assert.equal(await text('.compare-identity-legend'), 'Pair by');
+  assert.equal(await page.$('.compare-identity-note'), null, 'no note in behaviour');
+  assert.equal(diffRequests.length, 1, 'the server diffed once');
+
+  // Name: the radio enables once the engine has loaded from /lib.
+  await page.waitForSelector('.compare-identity input[value="name"]:not([disabled])', { timeout: T });
+  await page.click('.compare-identity input[value="name"]');
+  await expectMode('name', [4, 16, 4]);
+  assert.equal(await page.getAttribute('.compare-summary .c-both', 'title'), 'In both A and B, matched by name');
+  assert.equal(await text('.compare-identity-note'), 'Paired by name in this browser over the two packs on screen; behaviour still decides aligned vs drifted. Chains, Diagnose and every action pair by behaviour.');
+  await page.waitForFunction(() => document.getElementById('ux-status')?.textContent === 'Pairing by name: 16 in both, 4 only in A, 4 only in B.', null, { timeout: T });
+  assert.equal(await page.evaluate(() => document.activeElement?.value), 'name', 'the focus stays on the radio');
+
+  // Id, from the keyboard: the arrow moves the native radio group.
+  await page.keyboard.press('ArrowRight');
+  await expectMode('id', [3, 17, 3]);
+  const pill = await page.evaluate(() => [...document.querySelectorAll('.compare-layer-col-a .compare-side-card .chip-both')].map((el) => el.title).find((tt) => /ord-1/.test(tt)));
+  assert.equal(pill, 'Paired by id: dashboard uid "ord-1"');
+  await page.evaluate(() => [...document.querySelectorAll('.compare-layer-col-a .compare-side-card')].find((el) => el.querySelector('.chip-both')?.title?.includes('ord-1')).click());
+  await page.waitForFunction(() => /paired by\s*Paired by id: dashboard uid "ord-1"/.test(document.getElementById('drawer-a-meta')?.textContent || ''), null, { timeout: T });
+  assert.equal(diffRequests.length, 1, 'no request to /api/diff after the first');
+  await page.click('#drawer-a-close');
+
+  // Back to Behaviour: the server's numbers.
+  await page.focus('.compare-identity input[value="id"]');
+  await page.keyboard.press('ArrowLeft');
+  await expectMode('name', [4, 16, 4]);
+  await page.keyboard.press('ArrowLeft');
+  await expectMode('behaviour', [5, 15, 5]);
+  assert.equal(diffRequests.length, 1, 'still one diff request');
+  // Diagnose stays on behaviour: in Id, the Assessment's drift drill reads the server's diff, not the view's.
+  await page.click('.compare-identity input[value="id"]');
+  await expectMode('id', [3, 17, 3]);
+  await page.click('.diag-subtab[data-sub="grade"]');
+  await page.waitForSelector('.benchmark-view', { timeout: T });
+  assert.equal(diffRequests.length, 1, 'the Assessment reads the diff already held');
+  await page.click('.diag-subtab[data-sub="compare"]');
+  await expectMode('id', [3, 17, 3]);
+
+  await ctx.close();
+  assert.deepEqual(offLoopback.filter((u) => !/fonts\.(googleapis|gstatic)\.com/.test(u)), [], 'nothing but fonts was asked of another origin, and those were aborted');
   assert.deepEqual(problems, [], 'no page error and no console.error');
 });

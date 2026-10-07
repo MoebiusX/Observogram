@@ -2873,8 +2873,9 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   // The zones the scan reads, in file order: the axis block (Build), the Services block (STORE_PLAN slice 6a, the
   // .svc-* rules) and the Settings block (slice 6b, the .set-* rules). The AA loop below reads from the first marker
   // to EOF, so every zone is covered; each zone's own assertions read its own slice, to the next marker.
-  // The live MCP connection block (rebadge batch 3, C2; the .mcpc-* rules) is the fourth, after Settings.
-  const ZONES = ['==== The axis', '==== Services', '==== Settings', '==== Live MCP connection'];
+  // The live MCP connection block (rebadge batch 3, C2; the .mcpc-* rules) is the fourth, after Settings; the
+  // Compare pairing block (C3; the .compare-identity-* rules and the stat bar's .c-mode cell) the fifth.
+  const ZONES = ['==== The axis', '==== Services', '==== Settings', '==== Live MCP connection', '==== Compare pairing'];
   const starts = ZONES.map(z => { const i = CSS_TEXT.indexOf(z); assert.ok(i >= 0, `${z} marker`); return i; });
   assert.ok(starts.every((s, i) => i === 0 || s > starts[i - 1]), 'the zones are in order');
   const zoneSlice = (i) => CSS_TEXT.slice(starts[i], starts[i + 1] ?? CSS_TEXT.length);
@@ -3083,6 +3084,40 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
     }
   }
   assert.deepEqual(mcpcOffenders, [], 'every .mcpc- text colour clears AA on the panel\'s card, in both themes and through the bridge');
+  // The Compare pairing zone (C3): the Pair by switch sits on the page (no surface of its own: every rule names no
+  // background) and the "paired by" cell is a .compare-cell (the card). So each text colour — --ink / --ink-2 /
+  // --ink-3 only — is measured on --card and on --paper, in both themes and through the bridge. No .compare-identity-
+  // or .c-mode rule sits outside the zone, and no other stylesheet restyles a .compare-identity- rule.
+  const cmpSlice = zoneSlice(4);
+  const rulesBeforeCmp = [...CSS_TEXT.slice(0, starts[4]).matchAll(ruleRe)].map(m => m[1].trim());
+  assert.deepEqual(rulesBeforeCmp.filter(sel => /(^|[\s,>+~(])\.compare-identity|\.c-mode\b/.test(sel)), [], 'no .compare-identity- or .c-mode rule outside the Compare pairing zone');
+  for (const file of otherSheets) {
+    const text = readFileSync(resolve(ROOT, 'studio', file), 'utf8');
+    const sels = [...text.matchAll(/(?:^|\n)([^@{}\n][^{}]*?)\s*\{/g)].map(m => m[1].trim()).filter(sel => /(^|[\s,>+~(])\.compare-identity/.test(sel));
+    assert.deepEqual(sels, [], `studio/${file} does not restyle the Compare pairing zone`);
+  }
+  const cmpRules = [...cmpSlice.matchAll(ruleRe)].map(m => ({ sel: m[1].replace(/\/\*[\s\S]*?\*\//g, '').trim(), body: m[2] })).filter(r => /\.compare-identity|\.c-mode\b/.test(r.sel));
+  assert.ok(cmpRules.length >= 8, `the Compare pairing block parsed (${cmpRules.length} rules)`);
+  const cmpOffenders = [];
+  for (const r of cmpRules) {
+    const bgDecl = r.body.match(/(?:^|[;{\s])background(?:-color)?:\s*([^;]+?)\s*(?:;|$)/)?.[1];
+    if (bgDecl && !/^(transparent|none)$/.test(bgDecl)) cmpOffenders.push(`${r.sel}: draws a background (${bgDecl})`);
+    const colour = r.body.match(/(?:^|[;{\s])color:\s*([^;]+?)\s*(?:;|$)/)?.[1];
+    if (!colour) continue;
+    const tok = colour.match(/^var\(--([\w-]+)\)$/)?.[1];
+    if (!tok || !SET_TEXT.has(tok)) { cmpOffenders.push(`${r.sel}: text is ${colour} — --ink / --ink-2 / --ink-3 only`); continue; }
+    const min = large(r.body) ? 3 : 4.5;
+    for (const name of ['light', 'dark']) {
+      for (const surface of ['card', 'paper']) {
+        const ratio = contrast(themes[name][tok], themes[name][surface]);
+        if (ratio < min) cmpOffenders.push(`${r.sel}: --${tok} on --${surface} ${ratio.toFixed(2)}:1 (${name}, needs ${min})`);
+        if (!bridge[surface]) continue;
+        const bridgedRatio = contrast(og[name][bridge[tok]], og[name][bridge[surface]]);
+        if (bridgedRatio < min) cmpOffenders.push(`${r.sel}: --${tok} (--${bridge[tok]}) on --${surface} through the bridge ${bridgedRatio.toFixed(2)}:1 (${name}, needs ${min})`);
+      }
+    }
+  }
+  assert.deepEqual(cmpOffenders, [], 'every Compare pairing text colour clears AA on the card and the page, in both themes and through the bridge');
   // The button those reason lines inherit from, as shipped: app.css's .mcp-refresh-btn (--paper on --ink, and through
   // the bridge --og-bg on --og-text) and the reskin's (--og-on-accent on --og-accent-solid, under body.chrome-observa,
   // which every boot adds). Each pair clears AA for the line's 12.5 px text, in both themes.
