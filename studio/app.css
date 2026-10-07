@@ -9493,3 +9493,63 @@ select.build-edit-input { appearance: auto; }
 .compare-identity-note { margin: 6px 0 0; font: 12.5px/1.45 var(--sans); color: var(--ink-2); }
 .compare-identity-unavailable { margin: 6px 0 0; font: 12.5px/1.45 var(--sans); color: var(--ink-2); }
 @media (max-width: 900px) { .compare-summary.has-mode, .compare-summary.has-mode.has-unchecked { grid-template-columns: 1fr 1fr; } .compare-identity-options { grid-template-columns: 1fr; } }
+/* ==== MCP server settings (rebadge batch 4, D2): the MCP panel's Server settings modal — studio/mcp-settings-view.mjs,
+   drawn into #mss-host (appended last to <body>) over a scrim, in the .set-editor pattern. The dialog is the card
+   (--card); every other .mss- rule draws no surface of its own, and the tones (warn, error, ok) are a left border, never
+   the text colour: text in --ink / --ink-2 / --ink-3 only, measured on --card by the AA scan in
+   tools/test-build-model.mjs, in both themes and through the bridge; no other stylesheet restyles a .mss- rule. ==== */
+.mss-scrim { position: fixed; inset: 0; z-index: 160; cursor: pointer; background: color-mix(in srgb, var(--ink) 40%, transparent); }
+.mss {
+  position: fixed; z-index: 161; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(620px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow: auto; overscroll-behavior: contain; box-sizing: border-box;
+  color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 16px; outline: none;
+  box-shadow: 0 24px 48px -16px rgba(15, 27, 45, 0.32), 0 8px 16px rgba(15, 27, 45, 0.14);
+}
+.mss-head { position: relative; padding: 18px 24px 12px; border-bottom: 1px solid var(--line-2); display: flex; flex-direction: column; gap: 6px; }
+.mss-eyebrow { padding-right: 64px; font: 600 12px/1.3 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); overflow-wrap: anywhere; }
+.mss-title { margin: 0; font: 600 21px/1.2 var(--serif); color: var(--ink); }
+.mss-close { position: absolute; top: 14px; right: 18px; appearance: none; cursor: pointer; padding: 4px 9px; border-radius: 8px; border: 1px solid var(--line); background: transparent; font: 600 11.5px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+.mss-close:hover, .mss-close:focus-visible { color: var(--ink); border-color: var(--ink-3); }
+.mss-lede { margin: 12px 24px 0; font: 13.5px/1.5 var(--sans); color: var(--ink-2); }
+.mss-form { padding: 12px 24px 4px; display: grid; gap: 12px; }
+.mss-field { display: grid; gap: 4px; }
+.mss-field.is-check { grid-template-columns: auto 1fr; align-items: baseline; column-gap: 8px; }
+.mss-field-key { font: 600 12.5px/1.4 var(--sans); color: var(--ink-2); }
+.mss-req { font: 500 11.5px/1.4 var(--mono); color: var(--ink-3); }
+.mss-input { box-sizing: border-box; width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font: 13.5px/1.4 var(--mono); color: var(--ink); background: transparent; }
+.mss-field.is-check .mss-input, .mss-radio input { width: auto; }
+.mss-input:focus-visible { outline: 2px solid var(--ink-3); outline-offset: 1px; }
+.mss-help { font: 12.5px/1.45 var(--sans); color: var(--ink-3); }
+.mss-generic { border: 1px solid var(--line-2); border-radius: 8px; padding: 6px 10px; }
+.mss-generic-summary { cursor: pointer; font: 600 12.5px/1.6 var(--sans); color: var(--ink-2); }
+.mss-generic-grid { display: grid; gap: 8px; padding: 8px 0 4px; }
+.mss-generic-auth { margin: 0; padding: 0; border: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
+.mss-radio { display: inline-flex; gap: 6px; align-items: baseline; font: 13px/1.4 var(--sans); color: var(--ink); }
+.mss-generic-why { margin: 4px 0 0; font: 12.5px/1.45 var(--sans); color: var(--ink); }
+.mss-generic-why:empty { display: none; }
+.mss-policy:empty { display: none; }
+.mss-foot { padding: 12px 24px 18px; display: grid; gap: 10px; }
+.mss-status { font: 13px/1.5 var(--mono); color: var(--ink-2); overflow-wrap: anywhere; }
+.mss-status.is-ok { padding-left: 10px; border-left: 3px solid var(--pass-border); color: var(--ink); }
+.mss-status.is-warn { padding-left: 10px; border-left: 3px solid var(--warn); color: var(--ink); }
+.mss-status.is-error { padding-left: 10px; border-left: 3px solid var(--fail-border); color: var(--ink); }
+.mss-actions, .mss-more { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mss-more:empty { display: none; }
+.mss-primary, .mss-action, .mss-more-btn { appearance: none; cursor: pointer; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--ink-3); background: transparent; font: 600 13px/1.3 var(--sans); color: var(--ink); }
+.mss-primary { border-width: 2px; }
+.mss-primary[aria-disabled="true"], .mss-action[aria-disabled="true"] { cursor: not-allowed; border-style: dashed; color: var(--ink-2); }
+.mss-server-actions { display: grid; gap: 8px; padding-top: 6px; border-top: 1px solid var(--line-2); }
+.mss-server-action { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.mss-action-note { font: 12.5px/1.45 var(--sans); color: var(--ink-3); }
+.mss-action-confirm { flex-basis: 100%; margin: 0; padding-left: 10px; border-left: 3px solid var(--warn); font: 12.5px/1.45 var(--sans); color: var(--ink); }
+.mss-outcome { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--line-2); }
+.mss-outcome-title { margin: 0; font: 600 13.5px/1.4 var(--sans); color: var(--ink); }
+.mss-outcome-message { margin: 0; font: 13.5px/1.5 var(--sans); color: var(--ink); overflow-wrap: anywhere; }
+.mss-checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.mss-check { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; font: 13px/1.45 var(--sans); color: var(--ink); }
+.mss-check-label { font-weight: 600; color: var(--ink); }
+.mss-check-status { font: 600 12px/1.4 var(--mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-2); }
+.mss-check-detail { flex-basis: 100%; color: var(--ink-3); overflow-wrap: anywhere; }
+.mss-outcome-note { margin: 0; font: italic 12.5px/1.45 var(--serif); color: var(--ink-2); }
+.mss-raw-summary { cursor: pointer; font: 600 12.5px/1.5 var(--sans); color: var(--ink-2); }
+.mss-raw-body { margin: 6px 0 0; max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.45 var(--mono); color: var(--ink); }

@@ -539,8 +539,15 @@ function fetchCalls(code) {
   }
   return calls;
 }
+// The exemptions, by file and exact text: fetch('/auth/me') anywhere (it
+// sends no header by design), and the Server settings modal's one request
+// to the MCP server (rebadge batch 4) — another origin, to which nothing of
+// the studio's session may go (no CSRF header, no X-Observogram-Org, no
+// cookie). Its guard is the test below.
 const EXEMPT_FETCH = new Set(["fetch('/auth/me')"]);
-const unguardedFetches = (code) => fetchCalls(code).filter((c) => !EXEMPT_FETCH.has(c) && !c.includes('authHeaders()'));
+const EXEMPT_FETCH_IN = Object.freeze({ 'studio/mcp-settings-api.mjs': ['fetch(direct.href, direct.init)'] });
+const unguardedFetches = (code, file = null) => fetchCalls(code)
+  .filter((c) => !EXEMPT_FETCH.has(c) && !(EXEMPT_FETCH_IN[file] ?? []).includes(c) && !c.includes('authHeaders()'));
 
 // Statements (split at `;` and at a line ending in a brace) that hold a
 // string or template beginning /api/ and a navigation sink, without orgQuery(.
@@ -590,8 +597,33 @@ test('every studio fetch() sends authHeaders() — the CSRF header and the activ
   const sources = studioSources();
   const all = sources.flatMap(({ file, code }) => fetchCalls(code).map((c) => `${file}: ${c}`));
   assert.ok(all.length >= 17, `found the studio's fetch() calls (${all.length})`);
-  const offenders = sources.flatMap(({ file, code }) => unguardedFetches(code).map((c) => `${file}: ${c.slice(0, 120)}`));
-  assert.deepEqual(offenders, [], 'a studio fetch() without ...authHeaders() (only fetch(\'/auth/me\') is exempt)');
+  const offenders = sources.flatMap(({ file, code }) => unguardedFetches(code, file).map((c) => `${file}: ${c.slice(0, 120)}`));
+  assert.deepEqual(offenders, [], 'a studio fetch() without ...authHeaders() (only fetch(\'/auth/me\') and the MCP settings request are exempt)');
+  // The file-scoped exemption is the file's own: the same text elsewhere is an offender.
+  assert.equal(unguardedFetches('fetch(direct.href, direct.init)', 'studio/app.mjs').length, 1, 'the exemption is keyed by file');
+});
+
+test('the Server settings request to the MCP server: one fetch(), built by directRequest — no credentials, CORS, no redirect followed — and nothing of the studio\'s session', () => {
+  const code = withoutComments(readFileSync(join(STUDIO, 'mcp-settings-api.mjs'), 'utf8'));
+  assert.deepEqual(fetchCalls(code), ['fetch(direct.href, direct.init)'], 'exactly one fetch(), with the exempted text');
+  assert.ok(!/authHeaders|X-Observogram|CSRF/i.test(code), 'it never mentions authHeaders, the CSRF header or the org header');
+  const body = code.match(/export function directRequest\(url, init = \{\}\) \{([\s\S]*?)\n\}/)?.[1] ?? '';
+  for (const opt of ["credentials: 'omit'", "redirect: 'manual'", "mode: 'cors'", "referrerPolicy: 'no-referrer'", "cache: 'no-store'"]) {
+    assert.ok(body.includes(opt), `directRequest sets ${opt}`);
+  }
+  assert.ok(!/credentials:\s*'(include|same-origin)'/.test(code), 'no other credentials mode anywhere in the file');
+  assert.ok(/send\(directRequest\(/.test(code) && (code.match(/\bsend\(/g) ?? []).length === 3, 'every request goes through directRequest (the helper and its two callers)');
+});
+
+test('the Server settings view builds every node with createElement and textContent: no innerHTML, outerHTML or insertAdjacentHTML but the host\'s emptying', () => {
+  const code = withoutComments(readFileSync(join(STUDIO, 'mcp-settings-view.mjs'), 'utf8'));
+  const html = [...code.matchAll(/\.(innerHTML|outerHTML)\s*(?:\+?=)\s*([^;\n]*)/g)].map((m) => `${m[1]} = ${m[2].trim()}`);
+  assert.deepEqual(html, ["innerHTML = ''"], 'the only HTML assignment empties the host');
+  assert.ok(!/insertAdjacentHTML|createContextualFragment|DOMParser|document\.write/.test(code), 'no other way to parse markup');
+  assert.ok(/createElement\(/.test(code) && /textContent = /.test(code), 'nodes by createElement, text by textContent');
+  const imports = [...code.matchAll(/from '([^']+)'/g)].map((m) => m[1]);
+  assert.deepEqual(imports, ['./host.mjs'], 'a renderer: it imports host.mjs only');
+  assert.ok(!/\bfetch\(|\bapi\(|\bstate\./.test(code), 'no fetch, no api(), no state');
 });
 
 test('every studio navigation to /api names the active org (orgQuery())', () => {
