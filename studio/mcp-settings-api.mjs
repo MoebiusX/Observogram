@@ -17,7 +17,7 @@
 //                               Authorization when the descriptor says so,
 //                               no redirect followed, 15 s, read with a
 //                               64 KiB cap
-////   describeViaProxy(target)    POST /api/mcp-settings/describe on the studio
+//   describeViaProxy(target)    POST /api/mcp-settings/describe on the studio
 //   submitViaProxy(payload)     server, and /submit — the opt-in pass-through
 //                               (OBSERVOGRAM_MCP_ADMIN_PROXY=1), used for every
 //                               request while GET /api/mcp-settings says
