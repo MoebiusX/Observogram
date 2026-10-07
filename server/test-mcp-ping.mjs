@@ -227,17 +227,29 @@ test('an MCP that repeats the token in a successful answer: the read\'s detail s
   assert.ok(!r.text.includes(READ_TOKEN), 'the repeated token is not in the answer');
 });
 
-test('an endpoint nobody answers: 200, unreachable, the sentence names the origin', async () => {
+test('an endpoint nobody answers: 200, unreachable, the sentence names the origin — and the token\'s outcome is null, never sent', async () => {
   const closed = createServer();
   await new Promise((ok) => closed.listen(0, '127.0.0.1', ok));
   const url = `http://127.0.0.1:${closed.address().port}/mcp`;
   await new Promise((ok) => closed.close(ok));
-  const id = (await registerMcpEndpoint(BASE, { name: 'acme-gone', url }, { headers: headersOf('ada') })).id;
+  const id = (await registerMcpEndpoint(BASE, { name: 'acme-gone', url, readTokenEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' }, { headers: headersOf('ada') })).id;
   const r = await ping('oscar', { mcpEndpointId: id });
   assert.equal(r.status, 200, r.text);
   assert.equal(r.json.verdict, 'unreachable');
   assert.deepEqual(r.json.reachable, { initialized: false });
+  assert.deepEqual(r.json.auth, { outcome: null, sent: 'endpoint-variable' }, 'nothing answered: the ping does not claim the token was sent to an MCP');
+  assert.ok(!r.text.includes(READ_TOKEN));
   assert.match(r.json.sentence, new RegExp(`^${new URL(url).origin.replace(/[.]/g, '\\.')} could not be reached: .*ECONNREFUSED`));
+});
+
+test('pingAnswer: silent before initialize leaves the token\'s outcome null; once initialize answered, a later timeout keeps sent', async () => {
+  const { pingAnswer } = await import('./routes/live.mjs');
+  const base = { tools: null, read: null, httpStatus: null, error: null, timings: { totalMs: 1 }, limitMs: 1000 };
+  const ctx = { origin: 'http://127.0.0.1:1', sent: 'endpoint-variable', tokenVar: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' };
+  assert.deepEqual(pingAnswer({ ...base, verdict: 'timeout', stage: 'initialize', initialized: false }, ctx).auth, { outcome: null, sent: 'endpoint-variable' });
+  assert.deepEqual(pingAnswer({ ...base, verdict: 'unreachable', stage: 'initialize', initialized: false, error: 'connect ECONNREFUSED 127.0.0.1:1' }, ctx).auth, { outcome: null, sent: 'endpoint-variable' });
+  assert.deepEqual(pingAnswer({ ...base, verdict: 'timeout', stage: 'tools/list', initialized: true }, ctx).auth, { outcome: 'sent', sent: 'endpoint-variable' });
+  assert.deepEqual(pingAnswer({ ...base, verdict: 'timeout', stage: 'initialize', initialized: false }, { ...ctx, sent: 'none' }).auth, { outcome: 'not-sent', sent: 'none' });
 });
 
 test('a viewer is refused by the guard', async () => {

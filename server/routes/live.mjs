@@ -128,7 +128,10 @@ export function pingAnswer(r, { origin, mcpEndpoint = null, sent = 'none', token
     }
     : null;
   const product = r.read?.tool ? (productAttestedByTool(r.read.tool) ?? 'its backend') : 'its backend';
-  const outcome = r.verdict === 'auth-refused' ? 'refused' : auth.sent === 'none' ? 'not-sent' : 'sent';
+  // Nothing answered (refused, unresolved, or silent before initialize): what
+  // became of a token is unknown — null, never 'sent', which says the MCP answered.
+  const unanswered = !r.initialized && (r.verdict === 'unreachable' || r.verdict === 'timeout');
+  const outcome = r.verdict === 'auth-refused' ? 'refused' : auth.sent === 'none' ? 'not-sent' : unanswered ? null : 'sent';
   const listed = r.tools
     ? `listed ${plural(count, 'tool')}${r.tools.more ? ` in ${r.tools.pages} pages, and more remained` : ''} (${reads} that a fetch reads)`
     : null;
