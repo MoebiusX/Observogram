@@ -348,6 +348,28 @@ export function allKnownToolNames() {
   return names;
 }
 
+// An MCP's advertised tools (tools/list names) mapped to the capabilities
+// Observogram reads: { capabilities: { <capabilityId>: [advertised tool
+// names, in candidate order] }, unmatched: <count of advertised names no
+// capability calls> }. A capability none of whose candidates is advertised
+// is left out; a name advertised twice counts once. Rows only — the names
+// it returns are the caller's own, so a ping or a fetch plan reports what an
+// MCP offers without spelling a tool name (tools/test-contract-guard.mjs).
+export function capabilityInventory(toolNames) {
+  const advertised = new Set();
+  for (const n of toolNames ?? []) if (typeof n === 'string' && n !== '') advertised.add(n);
+  const capabilities = {};
+  const matched = new Set();
+  for (const [id, cap] of Object.entries(CAPABILITIES)) {
+    const names = [];
+    for (const c of cap.candidates) {
+      if (advertised.has(c.tool) && !names.includes(c.tool)) { names.push(c.tool); matched.add(c.tool); }
+    }
+    if (names.length) capabilities[id] = names;
+  }
+  return { capabilities, unmatched: advertised.size - matched.size };
+}
+
 // Rows carrying deprecation metadata, flattened for the CI window check.
 export function deprecatedAliases() {
   const rows = [];

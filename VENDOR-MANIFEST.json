@@ -339,9 +339,24 @@
       ]
     },
     "tools/lib/contracts/mcp-capabilities.mjs": {
-      "sha256": "8986224da15734c74d08799f990268b19b8beba2cd9ee54143cb474d44148c88",
-      "bytes": 16874,
+      "sha256": "f1d3065a32fb237b6a6602cebc0bd8c7e22c60a5921b24899e55c225e9890e4e",
+      "bytes": 17988,
       "exports": [
+        "BUILD_INFO_PROBES",
+        "CAPABILITIES",
+        "allKnownToolNames",
+        "candidateTool",
+        "capability",
+        "capabilityInventory",
+        "capabilityTool",
+        "deprecatedAliases",
+        "probeCandidates",
+        "productAttestedByTool"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": [
         "BUILD_INFO_PROBES",
         "CAPABILITIES",
         "allKnownToolNames",
@@ -351,10 +366,7 @@
         "deprecatedAliases",
         "probeCandidates",
         "productAttestedByTool"
-      ],
-      "imports": [],
-      "npm": [],
-      "changedSinceRelease": false
+      ]
     },
     "tools/lib/contracts/response-shapes.mjs": {
       "sha256": "dd2e604c658de4b0619fbbac92e6056437a28ec7a661c0339086e48e8c4a3a9d",

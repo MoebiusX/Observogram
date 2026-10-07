@@ -33,7 +33,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   CAPABILITIES, BUILD_INFO_PROBES, probeCandidates, capabilityTool,
-  candidateTool, allKnownToolNames, deprecatedAliases,
+  candidateTool, allKnownToolNames, deprecatedAliases, capabilityInventory,
 } from './lib/contracts/mcp-capabilities.mjs';
 import { parseVersion, compareVersions } from './lib/protocols.mjs';
 import { createHarness } from './lib/harness.mjs';
@@ -160,6 +160,29 @@ if (surfaceMatches) {
   assert(false,
     'tool surface drifted from the pinned snapshot — if intended, update EXPECTED_TOOL_SURFACE in the same commit',
     { added, removed });
+}
+
+// capabilityInventory: every name the registry may call maps back to each
+// capability that lists it, and nothing else does.
+{
+  const all = [...allKnownToolNames()];
+  const inv = capabilityInventory(all);
+  const misses = [];
+  for (const [id, cap] of Object.entries(CAPABILITIES)) {
+    const want = [...new Set(cap.candidates.map((c) => c.tool))];
+    if (JSON.stringify(inv.capabilities[id]) !== JSON.stringify(want)) misses.push(id);
+  }
+  assert(misses.length === 0 && inv.unmatched === 0
+    && Object.keys(inv.capabilities).length === Object.keys(CAPABILITIES).length,
+    'capabilityInventory maps every known tool name back to its capability id(s), in candidate order', { misses, unmatched: inv.unmatched });
+}
+// An advertised list: unknown names are a count, duplicates count once, a
+// capability with no advertised candidate is left out.
+{
+  const known = candidateTool('dashboards', 'search');
+  const inv = capabilityInventory([known, known, 'zz_not_a_capability_tool', 'zz_other', '', null]);
+  assert(JSON.stringify(inv) === JSON.stringify({ capabilities: { dashboards: [known] }, unmatched: 2 }),
+    'capabilityInventory counts unmatched names (never lists them), once each', JSON.stringify(inv));
 }
 
 // ---------- 3. deprecation windows ----------
