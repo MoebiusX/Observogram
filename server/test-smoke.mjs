@@ -455,26 +455,18 @@ try {
   assert(noMcp.status === 201 && noMcp.json?.endpoint?.url === NO_MCP, 'the unreachable MCP registers as an endpoint (open loopback, the CSRF header)', noMcp.json);
   const noMcpId = noMcp.id;
   const NO_MCP_ENDPOINT = { id: noMcpId, name: 'unreachable' };
-  // The deploy routes still take a typed URL from every caller their class
-  // admits (typedRule 'any' until they follow R4): a non-http(s) scheme is
-  // a 400 there. The draft and the refresh refuse a typed URL from the
-  // anonymous local caller first (R2/R4: 403 posture, even on loopback) —
-  // their scheme, parse and ALLOW_LOCAL_MCP=0 pins run as an admin session
-  // in server/test-services-api.mjs.
-  for (const [path, body] of [
-    ['/api/packs/payment-service/deploy/prometheus-rules', { mcpUrl: 'file:///etc/passwd' }],
-    ['/api/packs/payment-service/deploy-bulk', { mcpUrl: 'ftp://mcp.example/x', items: [{ group: 'rules' }] }],
-  ]) {
-    const r = await postJson(path, body);
-    assert(r.status === 400, `${path} rejects non-http(s) mcpUrl scheme → 400`, r.status, 400);
-    const rBody = await r.json();
-    assert(/http/.test(rBody.error || ''), `${path} scheme rejection names http(s)`, rBody.error);
-  }
+  // A typed URL is refused from the anonymous local caller first (R2/R4:
+  // 403 posture, even on loopback) — at the draft, the refresh and, since
+  // they follow R4 (D3), the deploy routes; their scheme, parse and
+  // ALLOW_LOCAL_MCP=0 pins run as an admin session in
+  // server/test-services-api.mjs.
   const TYPED_REFUSED = `a typed MCP URL is refused on a server without sign-in, even from this machine — choose a registered MCP endpoint (mcpEndpointId), or register one in Settings → MCP endpoints from http://127.0.0.1:${new URL(base).port} (a loopback MCP, or an origin listed in OBSERVOGRAM_MCP_ORIGINS)`;
   for (const [path, body] of [
     ['/api/draft-from-mcp', { mcpUrl: 'gopher://127.0.0.1:70/mcp' }],
     ['/api/refresh-live', { mcpUrl: 'file://C:/secrets' }],
     ['/api/refresh-live', { mcpUrl: 'http://user:hunter2@' }],
+    ['/api/packs/payment-service/deploy/prometheus-rules', { mcpUrl: 'file:///etc/passwd' }],
+    ['/api/packs/payment-service/deploy-bulk', { mcpUrl: 'ftp://mcp.example/x', items: [{ group: 'rules' }] }],
   ]) {
     const r = await postJson(path, body);
     const j = await r.json();

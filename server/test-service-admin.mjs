@@ -399,7 +399,7 @@ test('resolveMcpTarget: mcpUrl as today, or mcpEndpointId — the record\'s URL,
       assert.deepEqual(resolve(db, { mcpUrl: 'https://mcp.example/mcp?token=t&tier=x', mcpAuth: 'Bearer x' }),
         { mcpUrl: 'https://mcp.example/mcp?token=t&tier=x', safeMcpUrl: 'https://mcp.example/mcp?tier=x', mcpAuth: 'Bearer x', endpoint: null });
       bad({ mcpUrl: 'https://alice:pw@mcp.example/mcp?token=t', mcpAuth: 'Bearer x' }, 'a typed MCP URL may not carry user:password — send the token as mcpAuth');
-      bad({ mcpUrl: 'https://alice@mcp.example/mcp' }, 'a typed MCP URL may not carry user:password — send the token as mcpAuth', { typedRule: 'any' });
+      bad({ mcpUrl: 'https://alice@mcp.example/mcp' }, 'a typed MCP URL may not carry user:password — send the token as mcpAuth', { forWrite: true });
       assert.deepEqual(resolve(db, { mcpUrl: 'https://mcp.example/mcp' }).mcpAuth, null, 'no token sent → null, as the routes passed it');
       assert.deepEqual(resolve(db, { mcpUrl: '  https://mcp.example/mcp ', mcpAuth: '' }),
         { mcpUrl: 'https://mcp.example/mcp', safeMcpUrl: 'https://mcp.example/mcp', mcpAuth: null, endpoint: null }, 'the URL trimmed, an empty token none — the routes\' reading of the body');
@@ -561,13 +561,12 @@ test('the origin rule, a list set: every origin but loopback must be in OBSERVOG
   }
 });
 
-test('resolveMcpTarget takes the caller: none throws; a typed URL needs the admin role (owner included) — an operator session, the bearer and the anonymous local caller are refused before any other check but userinfo; typedRule \'any\' (the deploy routes) admits them; by id every caller the class admitted', async () => {
+test('resolveMcpTarget takes the caller: none throws; a typed URL needs the admin role (owner included) — an operator session, the bearer and the anonymous local caller are refused before any other check but userinfo, the deploy routes\' forWrite included (D3); by id every caller the class admitted', async () => {
   const { db, close } = await freshStore('caller');
   try {
     runWithOrg('acme', () => {
       const ep = mcpEndpoints.createMcpEndpoint(db, 'ada', { name: 'lab', url: 'https://mcp.lab.example/mcp' });
       assert.throws(() => admin.resolveMcpTarget(db, { mcpEndpointId: ep.id }), { name: 'TypeError', message: 'resolveMcpTarget: the caller (mcpCallerOf(req)) is required' });
-      assert.throws(() => admin.resolveMcpTarget(db, { mcpEndpointId: ep.id }, { caller: callerIn('acme'), typedRule: 'operator' }), TypeError);
       const oscar = callerIn('acme', { kind: 'session', actor: 'oscar', role: 'operator', owner: false });
       const bearer = { ...callerIn('acme', { kind: 'bearer', actor: 'ci-bot', role: 'operator', owner: false }), posture: 'token' };
       const local = { ...callerIn('acme', { kind: 'local', actor: 'local', role: 'admin', owner: true }), posture: 'open-loopback' };
@@ -583,7 +582,8 @@ test('resolveMcpTarget takes the caller: none throws; a typed URL needs the admi
       assert.equal(resolve(db, { mcpUrl: 'https://u:p@mcp.lab.example/' }, { caller: local }).status, 400, 'userinfo first: native fetch would repeat it');
       for (const c of [plainAdmin, callerIn('acme')]) assert.equal(resolve(db, typed, { caller: c }).mcpAuth, 'Bearer t', `${c.principal.actor} (admin${c.principal.owner ? ', an owner' : ''}) types a URL`);
       for (const c of [oscar, bearer, local]) {
-        assert.equal(resolve(db, typed, { caller: c, typedRule: 'any' }).mcpAuth, 'Bearer t', `${c.principal.kind}: typedRule any`);
+        assert.equal(resolve(db, typed, { caller: c, forWrite: true }).denied, c.principal.kind === 'local' ? 'posture' : 'role', `${c.principal.kind}: the deploy routes' forWrite refuses it too (D3)`);
+        assert.equal(resolve(db, { mcpEndpointId: ep.id, mcpAuth: 'Bearer w' }, { caller: c, forWrite: true }).mcpUrl, 'https://mcp.lab.example/mcp', `${c.principal.kind}: a deploy by id`);
         assert.equal(resolve(db, { mcpEndpointId: ep.id }, { caller: c }).mcpUrl, 'https://mcp.lab.example/mcp', `${c.principal.kind}: by id`);
       }
     });

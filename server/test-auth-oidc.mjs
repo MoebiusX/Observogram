@@ -232,6 +232,21 @@ try {
   assert(JSON.parse(deployLine || '{}').actor === loginOf('user-42') && !deployLine.includes('ada@example.test'),
     `the deploys.jsonl line says actor ${loginOf('user-42')}, never the email`, deployLine);
 
+  // ---- a typed MCP URL at the deploy routes is an admin's (R4, D3) ----
+  // The same OIDC operator typing the URL is refused before any request
+  // leaves, and nothing is recorded.
+  const linesBefore = readFileSync(join(runWithOrg('default', () => orgWorkspaceRoot()), 'deploys.jsonl'), 'utf8').trim().split('\n').length;
+  r = await fetch(`${base}/api/packs/payment-service/deploy/prometheus-rules`, {
+    method: 'POST',
+    headers: { Cookie: session, 'X-Observogram-CSRF': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mcpUrl: 'http://127.0.0.1:1/no-mcp' }),
+  });
+  const typedBody = await r.json();
+  assert(r.status === 403 && typedBody.denied === 'role' && /^a typed MCP URL needs the admin role in org 'default' \(you are operator\)/.test(typedBody.error || ''),
+    'an OIDC operator typing an MCP URL at deploy → 403 role', [r.status, typedBody]);
+  assert(readFileSync(join(runWithOrg('default', () => orgWorkspaceRoot()), 'deploys.jsonl'), 'utf8').trim().split('\n').length === linesBefore,
+    'the refused deploy writes no deploys.jsonl line');
+
   // ---- replaying the callback (stale flow) is rejected ----
   r = await fetch(cbUrl, { redirect: 'manual', headers: { Cookie: flowCookie } });
   assert(r.status === 401, 'replayed code rejected (single-use at the IdP)', r.status, 401);

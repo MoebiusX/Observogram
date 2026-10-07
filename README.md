@@ -511,7 +511,7 @@ the server registers, and each route's first handler is its guard.
 |---|---|
 | `viewer` | every read (`GET`) in the org |
 | `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys, the live refresh, RESET, and the org's services and environments ([Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)) |
-| `admin` | the org's name, members and MCP endpoints as well ([the identity API](#the-identity-api), [Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)), a typed MCP URL in a draft or a live refresh ([Fetch Live From MCP](#fetch-live-from-mcp); below admin, and without sign-in, only a registered endpoint), and the org's audit (`GET /api/audit`, [The Audit](#the-audit)) |
+| `admin` | the org's name, members and MCP endpoints as well ([the identity API](#the-identity-api), [Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)), a typed MCP URL in a draft, a live refresh, a deploy or a rollback ([Fetch Live From MCP](#fetch-live-from-mcp); below admin, and without sign-in, only a registered endpoint), and the org's audit (`GET /api/audit`, [The Audit](#the-audit)) |
 | owner | a deployment-level flag, not an org role: an owner acts as `admin` in every org, plus users, orgs and the join role ([the identity API](#the-identity-api)) and the deployment's audit (`GET /api/audit?scope=all`) |
 
 The role is the membership **of the request's org** (`X-Observogram-Org`,
@@ -855,7 +855,8 @@ with their URLs, and never changes an endpoint.
   the server uses the record's URL and, when the request sends no
   `mcpAuth`, reads the read token from the record's `readTokenEnv` at
   request time. The deploy and rollback routes take `mcpEndpointId` for the
-  URL only: a write token stays the request's `mcpAuth`, never a record's.
+  URL only (a typed `mcpUrl` there is an admin's too): a write token stays
+  the request's `mcpAuth`, never a record's.
   Sending both `mcpUrl` and `mcpEndpointId` is 400 (`send mcpUrl or
   mcpEndpointId, not both`); see [Fetch Live From MCP](#fetch-live-from-mcp).
 - **The read-token variable.** `readTokenEnv` must be
@@ -1228,15 +1229,18 @@ failures through it stay ordinary probe failures. Unset, nothing changes
 
 **A typed MCP URL is an admin's.** Supplying the URL the server fetches is
 the privilege, not which endpoint it uses: a typed `mcpUrl` in
-`POST /api/draft-from-mcp` and `POST /api/refresh-live` needs the admin role
-in the org (an owner included). An operator, the bearer token and every caller
+`POST /api/draft-from-mcp`, `POST /api/refresh-live` and the deploy routes
+(`POST /api/packs/:id/deploy/:target`, `…/deploy-bulk`,
+`POST /api/deploys/:deployId/rollback`, which send the caller's write token)
+needs the admin role in the org (an owner included). An operator, the bearer token and every caller
 without sign-in — the open postures' `local`, even on loopback — fetch from the
 org's registered endpoints only (`mcpEndpointId`), and are told the way that
 works for them (403 `role` or `posture`: an admin registers the endpoint in
 Settings → MCP endpoints; in the token posture, sign-in is armed first with
 `npm run users -- add <login>`). A typed URL may not carry `user:password` (400:
 send the token as `mcpAuth`). `GET /api/mcp-endpoints` says what the reader may
-do (`policy`). The deploy routes still take a typed URL from an operator.
+do (`policy`). An operator's CI deploy (the bearer is an operator) registers
+its target once and sends `mcpEndpointId`.
 
 The studio's `POST /api/refresh-live` and `POST /api/draft-from-mcp` take
 either `mcpUrl` (an admin's, with an optional `mcpAuth`) or `mcpEndpointId`:
@@ -2527,11 +2531,11 @@ open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
 | `POST` | `/api/crawl` | Draft a pack from uploaded repo files |
 | `POST` | `/api/crawl-github` | Draft a pack from a GitHub URL |
 | `POST` | `/api/draft-from-mcp` | Draft a live pack from an MCP endpoint: `mcpEndpointId` — one of the org's MCP endpoint records, its read token from the variable the record names when the request sends none — or a typed `mcpUrl` (and `mcpAuth`), which needs the admin role; the answer's `mcpEndpoint` says which |
-| `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts (`mcpUrl` or `mcpEndpointId` for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.bulk` |
-| `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target (`mcpUrl` or `mcpEndpointId` for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.run` |
+| `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts (`mcpEndpointId`, or a typed `mcpUrl`: the admin role, for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.bulk` |
+| `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target (`mcpEndpointId`, or a typed `mcpUrl`: the admin role, for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.run` |
 | `GET` | `/api/deploys?pack=&limit=` | The org's deploy records from `deploys.jsonl`, newest first, the latest verify merged in; `actor` is the deployer's login (an OIDC deployer as `<issuerKey>#<sub>`), the bearer's label or `local` |
 | `POST` | `/api/deploys/:deployId/verify` | Record a post-deploy verification (`outcome`, `alignment`, `attempts`, `summary`, …) against a deploy; an audit row: `deploy.verify` |
-| `POST` | `/api/deploys/:deployId/rollback` | Roll a deploy back from its snapshot (`mcpUrl` or `mcpEndpointId` for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.rollback` |
+| `POST` | `/api/deploys/:deployId/rollback` | Roll a deploy back from its snapshot (`mcpEndpointId`, or a typed `mcpUrl`: the admin role, for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.rollback` |
 | `DELETE` | `/api/uploads` | Clear uploaded/crawled/drafted packs |
 | `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`, `inventory` `{ status, reason, environment, kinds }`) |
 | `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series) |

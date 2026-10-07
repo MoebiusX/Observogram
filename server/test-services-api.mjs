@@ -1336,6 +1336,33 @@ test('a typed MCP URL needs the admin role: oscar (operator) is refused 403 role
   }
 });
 
+test('the deploy routes take a typed MCP URL from an admin only (D3): oscar is refused 403 role at deploy and deploy-bulk, nothing sent; ada\'s typed URL meets the scheme rule (400) and deploys, the response naming the safe URL (no ?token=)', async () => {
+  const { startFakeMcp } = await import('./fixtures/fake-mcp.mjs');
+  const { GRAFANA_DASHBOARD_TOOL } = await import('./deploy-helpers.mjs');
+  const fake = await startFakeMcp([GRAFANA_DASHBOARD_TOOL], () => ({ ok: true }));
+  try {
+    const withToken = `${fake.url}?token=abc&tier=x`;
+    const ROLE = "a typed MCP URL needs the admin role in org 'acme' (you are operator) — choose one of the org's registered MCP endpoints (mcpEndpointId; GET /api/mcp-endpoints lists them), or ask an admin of acme to register this one in Settings → MCP endpoints";
+    const DEPLOY = '/api/packs/payment-service/deploy/grafana-dashboard';
+    const BULK = '/api/packs/payment-service/deploy-bulk';
+    await denied('POST /api/packs/:id/deploy/:target', 'oscar', DEPLOY, { mcpUrl: withToken, mcpAuth: 'w', dryRun: true }, 'role', ROLE);
+    await denied('POST /api/packs/:id/deploy-bulk', 'oscar', BULK, { mcpUrl: withToken, mcpAuth: 'w', items: [{ group: 'dashboards' }], dryRun: true }, 'role', ROLE);
+    await denied('POST /api/packs/:id/deploy-bulk', 'oscar', BULK, { mcpUrl: 'ftp://mcp.example/x', items: [{ group: 'rules' }] }, 'role', ROLE);
+    assert.equal(fake.authHeaders.length, 0, 'nothing reached the MCP');
+    // ada: the URL's own rules first (the pins test-smoke held while the
+    // deploy routes took a typed URL from every caller)
+    await refused('POST /api/packs/:id/deploy/:target', 'ada', '/api/packs/payment-service/deploy/prometheus-rules', { mcpUrl: 'file:///etc/passwd' }, 400, "mcpUrl must be http or https; got scheme 'file'");
+    await refused('POST /api/packs/:id/deploy-bulk', 'ada', BULK, { mcpUrl: 'ftp://mcp.example/x', items: [{ group: 'rules' }] }, 400, "mcpUrl must be http or https; got scheme 'ftp'");
+    const r = await call('ada', 'POST', DEPLOY, { mcpUrl: withToken, dryRun: true });
+    assert.equal(r.status, 200, r.text.slice(0, 300));
+    assert.equal(r.json.mcpUrl, `${fake.url}?tier=x`, 'the deploy answer names the safe URL');
+    assert.ok(!r.text.includes('token=abc'), 'no token parameter in the answer');
+    assert.ok(fake.calls.some((c) => c.name === GRAFANA_DASHBOARD_TOOL), 'the deploy reached the MCP');
+  } finally {
+    await fake.close();
+  }
+});
+
 test('DELETE /api/uploads drops the packs (one pack.clear row) and keeps the services, now without packs', async () => {
   const before = (await call('vera', 'GET', '/api/services')).json.services;
   const uploaded = (await call('vera', 'GET', '/api/packs')).json.packs.filter((p) => p.source === 'uploaded').length;

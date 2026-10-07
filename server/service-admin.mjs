@@ -462,18 +462,15 @@ function hasUserinfo(raw) {
 // With forWrite (deploy, rollback) the record's URL only: write tokens
 // stay per-request pass-through. `caller` (mcpCallerOf(req)) is required —
 // a call site that names none throws, fail closed. A typed URL with
-// userinfo is a 400; then, under typedRule 'r4' (the default), the
-// typed-URL rule (typedMcpUrlDecision: admin and above; never the
-// anonymous local caller); 'any' lets every caller the route class
-// admitted type one (the deploy routes, until they follow R4). The SSRF
-// rule (validateMcpUrl) runs next, then the origin allowlist
+// userinfo is a 400; then the typed-URL rule (typedMcpUrlDecision: admin
+// and above; never the anonymous local caller) — at every call site, the
+// deploy routes included (decision D3). The SSRF rule (validateMcpUrl) runs next, then the origin allowlist
 // (server/mcp-target-policy.mjs: no credential leaves for an unlisted
 // origin but loopback). Returns { mcpUrl, safeMcpUrl, mcpAuth, endpoint },
 // or { status: 400, error } / { status: 403, denied, error }
 // (mcpRefusalBody answers it); the token's value is in mcpAuth alone.
-export function resolveMcpTarget(db, body = {}, { forWrite = false, caller, typedRule = 'r4' } = {}) {
+export function resolveMcpTarget(db, body = {}, { forWrite = false, caller } = {}) {
   if (!caller || typeof caller !== 'object') throw new TypeError('resolveMcpTarget: the caller (mcpCallerOf(req)) is required');
-  if (typedRule !== 'r4' && typedRule !== 'any') throw new TypeError(`resolveMcpTarget: typedRule is 'r4' or 'any', not ${JSON.stringify(typedRule)}`);
   const bad = (error) => ({ status: 400, error });
   // The body's fields as the routes read them: a trimmed URL or null, a
   // non-empty token or null.
@@ -507,10 +504,8 @@ export function resolveMcpTarget(db, body = {}, { forWrite = false, caller, type
   } else {
     if (!sentUrl) return bad(WAYS.neitherTarget);
     if (hasUserinfo(sentUrl)) return bad(WAYS.typedUserinfo);
-    if (typedRule === 'r4') {
-      const refusal = typedMcpUrlDecision(caller);
-      if (refusal) return refusal;
-    }
+    const refusal = typedMcpUrlDecision(caller);
+    if (refusal) return refusal;
     mcpUrl = sentUrl;
     mcpAuth = sentAuth;
   }
