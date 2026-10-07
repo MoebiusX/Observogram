@@ -1100,3 +1100,62 @@ register the endpoints. Nothing about the pack, the compile or the verify
 rules changed; crawl, compile and board goldens are byte-identical.
 Tests: 1055 → 1102 (`tools/test-settings-model.mjs` and the Settings journey,
 `server/test-settings-studio.mjs`, new; T7's Settings step).
+
+### Rebadge batch 3
+
+The live side of the journey — the Pack B a change is checked against — is
+fetched under new rules and can be a true snapshot.
+
+**C0 — a caller-supplied MCP URL is a privilege.** Whoever reaches the live
+side now does it through the org's registered MCP endpoints: a typed MCP URL
+in a draft, a refresh, a deploy, a rollback or a journey's Pack B is an
+admin's, and operators, the bearer token and every caller without sign-in
+pick a registered endpoint from a list (the studio's pickers are list-only
+for them, and an empty list says who registers one). Every target meets the
+MCP origin allowlist on the server (`OBSERVOGRAM_MCP_ORIGINS`, per org too):
+with none set, no credential leaves for an origin other than loopback. The
+MCP client refuses redirects and redacts every answer text by value. A
+journey's live Pack B is captured as a registered endpoint and resolved at
+run time through it. The deploy of Hand off sends its write token only to a
+listed origin, or to loopback. Crawl, compile and board goldens are byte-identical.
+Tests: 1102 → 1134 (`server/test-mcp-target-policy.mjs`, new, with the
+policy cases in the services, authz, tenancy, smoke, settings and journey
+suites).
+
+**C2 — test the connection, then fetch.** Before a live side is built the
+connection is tested (`POST /api/mcp/ping`: initialize, the whole tools
+listing and one cheap read within 10 s), and the answer says what it checked
+and what it did not. The MCP panel's refresh button is that test; rebuilding
+production-live is its own, explicit action, so a connectivity check no
+longer rewrites the live pack or writes an audit row. The draft and the
+refresh take the ping's posture: without sign-in, a direct loopback request
+with the CSRF header. Tests: 1134 → 1169 (`tools/test-mcp-ping.mjs` and
+`server/test-mcp-ping.mjs`, new; `tools/test-live-model.mjs` and
+`server/test-live-studio.mjs`, new).
+
+**C1 — a true-snapshot live pack.** The live side can now be a **snapshot**
+— an inventory of what is deployed, read stage by stage with every gap named
+and parked as *not checked*, a scope (metric prefixes, folder uids) the diff
+honours, the crawler's dashboard id rule, every alert-rule engine — or the
+**draft** scaffold as before, byte for byte. Both run as live jobs: a job id
+at once, the gate log polled, cancel, a reload resuming the poll; the pickers
+and Compare say scaffold or snapshot. The default diff is byte-identical to
+the stored goldens written before the engine was touched. Tests: 1169 → 1222
+(`tools/test-golden-diff.mjs`, `tools/test-live-snapshot.mjs` and
+`server/test-mcp-jobs.mjs`, new).
+
+**C3 — comparison identity modes.** Compare pairs by behaviour (the default
+and the server's answer), by name or by id — re-keyed in the browser over the
+two packs on screen with the vendorable `tools/lib/identity-modes.mjs` and
+`diffPacks(a, b, { identity })`, no refetch; behaviour still decides aligned
+vs drifted, the stat bar says which key paired the packs, and chains,
+Diagnose and every action stay on behaviour. A dashboard renamed under the
+same uid pairs by id and shows its rename as drift. The default diff is
+byte-identical (the stored goldens run with `identity: 'behaviour'` too).
+Tests: 1222 → 1246 (`tools/test-identity-modes.mjs`, new; one browser case
+in `server/test-live-studio.mjs`).
+
+The batch's delivery report, `docs/DELIVERY-REBADGE-BATCH3.md`, is written
+per item — what shipped, the measured `Tests:` pair, what is deferred by name
+— and `tools/test-doc-test-totals.mjs` guards it as it guards the batch 2
+reports.

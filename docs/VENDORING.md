@@ -28,14 +28,16 @@ prose contracts that follow.
 
 | Module | Dependencies | Notes |
 | --- | --- | --- |
-| [`tools/lib/diff.mjs`](../tools/lib/diff.mjs) | imports `artefact-model.mjs` | pack arithmetic — the diff buckets everything downstream consumes |
+| [`tools/lib/diff.mjs`](../tools/lib/diff.mjs) | imports `artefact-model.mjs`, `live-fetch.mjs`, `identity-modes.mjs` — copy the three together | pack arithmetic — the diff buckets everything downstream consumes; `diffPacks(a, b, { scopeMode, service, identity })` (an identity mode or key function; behaviour the byte-identical default), and a snapshot's `observogram.scope.<kind>` parked as *not checked* |
+| [`tools/lib/identity-modes.mjs`](../tools/lib/identity-modes.mjs) | imports `artefact-model.mjs`, `artefact-classify.mjs`; no Node APIs | comparison identity modes (rebadge batch 3, R3) — `IDENTITY_MODES` (`behaviour` = `identityKeyOf`, `name`, `id`), `DEFAULT_IDENTITY_MODE`, `identityMode`, `nameOf`, `idOf`, `nameKeyOf` / `idKeyOf` (`(artefact, { side })`), `pairingOf`, `identityFamilies`; the studio's Compare loads the same file |
+| [`tools/lib/live-fetch.mjs`](../tools/lib/live-fetch.mjs) | zero-import, no Node APIs | the live fetch's contract (rebadge batch 3) — `LIVE_STAGES` (the stage ids, docs/DOWNSTREAM.md §15.2), `stagesFor`, `stageNoun`, `fetchPlan`, `normalizeScope`, `scopeAnnotations`, `scopeOf`, `inScope`, `scopeReason`, `SCOPE_LIMITS`, `SNAPSHOT_LIMITS` |
 | [`tools/lib/artefact-model.mjs`](../tools/lib/artefact-model.mjs) | imports `promql-canon.mjs`, `artefact-classify.mjs` | behavioural identity + contract projection — `identityKeyOf`, `behaviorOf`, `deltasOf`, `classify` (delegates to `familyOf`) |
 | [`tools/lib/artefact-classify.mjs`](../tools/lib/artefact-classify.mjs) | zero-import, no Node APIs | the artefact taxonomy — `FAMILIES`, `FAMILY_HOME`, `ID_RULES`, `classifyArtefact` (type → defines → override ids → id prefix), `compileTaxonomy` / `configureTaxonomy` for the operator override (schema v1 or v2 — `TAXONOMY_VERSIONS`, `TAXONOMY_VERSION_LATEST`; `TAXONOMY_VERSION` stays 1), and the v2 glossary's accessors `glossaryFor`, `glossaryByText`, `glossaryEntries` (`GLOSSARY_LIMITS`) |
 | [`tools/lib/brand.mjs`](../tools/lib/brand.mjs) | zero-import, no Node APIs | the brand config — `DEFAULT_BRAND`, `normalizeBrand`, `brandChrome`, `brandTokensCss`, `brandShellHtml`; a downstream studio reads the same object its server injects (`#brand-config`) |
 | [`tools/lib/promql-canon.mjs`](../tools/lib/promql-canon.mjs) | imports `promql.mjs` | parser-proven PromQL canonicalisation |
 | [`tools/lib/promql.mjs`](../tools/lib/promql.mjs) | pure ESM, no Node APIs | PromQL tokeniser/dependency reader |
 | [`tools/lib/protocols.mjs`](../tools/lib/protocols.mjs) | pure data | the versioned protocol/feature canon |
-| [`tools/lib/pack-conformance.mjs`](../tools/lib/pack-conformance.mjs) | imports `waivers.mjs` (which imports `conformance.mjs`); no Node APIs | the placeholder report — `packConformance`, `scaffoldMarkers`, `parseSymbol` / `resolveSymbol`, `SYMBOL_FAMILIES`, `PLACEHOLDER_FIELDS`; `SCAFFOLD_PREFIXES` is a pinned copy of the adapter's three marker prefixes |
+| [`tools/lib/pack-conformance.mjs`](../tools/lib/pack-conformance.mjs) | imports `waivers.mjs` (which imports `conformance.mjs`); no Node APIs | the placeholder report — `packConformance` (a live snapshot's report says `liveKind: 'snapshot'`), `scaffoldMarkers`, `parseSymbol` / `resolveSymbol`, `SYMBOL_FAMILIES`, `PLACEHOLDER_FIELDS`; `SCAFFOLD_PREFIXES` is a pinned copy of the adapter's three marker prefixes |
 | [`tools/lib/waivers.mjs`](../tools/lib/waivers.mjs) | imports `conformance.mjs` | waivers (GAP batch 2) — `normalizeWaiver`, `waiverState` / `expiresInDays` / `waiverView`, `matchesFinding`, `applyWaiversToFindings` (the findings seam), `applyWaiversToConformance` (the overlay: the same report object without an open waiver), `readWaiverFile` (the sidecar) |
 | [`tools/lib/remediation-flow.mjs`](../tools/lib/remediation-flow.mjs) | imports `artefact-model.mjs` (`classify`, `identityKeyOf`) | the diagnose → remediate flow (GAP batch 2) — `buildRemediationFlowModel({ pack, diff, liveAnnotations, otherSide })`: a remediation's trigger resolved to its alert artefacts (`observogram.remediates.*` annotation, rule name, compiled burn-rule name, SLO — `resolveTrigger`, `remediationTargets`, `burnRuleNames`, `slugKey` / `triggerSlug`), the alerts' states from the comparison (`alertStatesFromDiff`), the next steps; pure, no clock, never throws |
 | [`tools/lib/audit-report.mjs`](../tools/lib/audit-report.mjs) | imports `artefact-classify.mjs`, `blast-radius.mjs`, `brand.mjs`, `pack-conformance.mjs`, `remediation-flow.mjs`; no Node APIs | the service audit report (GAP batch 2) — `buildAuditReport` (the document), the section builders, `renderAuditReportHtml` (the first standalone document over `design-tokens.css` + `design-kit.css`), `auditReportFilename`; the traceability graph arrives as a shape |
@@ -61,6 +63,27 @@ prose contracts that follow.
 | [`studio/discover-board.mjs`](../studio/discover-board.mjs) | `escapeHtml` from `util.mjs`; `classifyArtefact` / `requireTaxonomy` from `taxonomy.mjs`; `verdictBadgeHtml` from `verdict-html.mjs`; `glossaryGroupMarkHtml` / `glossaryLabelHtml` from `glossary.mjs` | the pack board: `boardHeadHtml`, `boardGroupsHtml`, `boardGroups`, `BOARD_LAYERS` — pure HTML builders over an adapted pack, grouping by the family's home (`FAMILY_HOME`); `bindTaxonomy()` must have run before `boardGroups` (it throws `taxonomy unbound: …` otherwise); its styles are still in `ux-discover.css` (the `.dv-band*` / `.dvb-*` rules) and `reskin.css` |
 | [`studio/taxonomy.mjs`](../studio/taxonomy.mjs) | zero-import; bound at boot to `tools/lib/artefact-classify.mjs` | the studio's taxonomy binding: `bindTaxonomy(mod, json)`, `classifyArtefact` (degrades to `via: 'unbound'` before boot), `requireTaxonomy`; the `typeof`-guarded glossary passthroughs `glossaryFor`, `glossaryByText`, `familiesAt(layer, group)` (an older classifier reads as the empty glossary) |
 | [`studio/static-backend.mjs`](../studio/static-backend.mjs) | `tools/lib` adapter, service-keys, validator, conformance, compile, zip, mini-yaml, library, brand (`normalizeBrand`, `DEFAULT_BRAND`); `studio/focus.mjs` (the focused pack for Export), `studio/brand.mjs` (`readBrandConfig`) | the static bundle's backend: `createStaticBackend(config, { fetchImpl, origin, product })` answers the read-only pack routes from these engines in the browser and `/api/taxonomy` from the baked document (`config.taxonomy`, written by `--taxonomy`), `installStaticBackend(config, win)` wraps the page's fetch and names the product from `#brand-config` (written by `--brand`); `tools/build-studio-bundle.mjs` is the reference host of this table's modules — one file that runs them without the server |
+
+**Rebadge batch 3 (live-fetch UX).** Besides the two new modules above, these
+listed modules changed — each named in the CHANGELOG's `## Unreleased`:
+`tools/lib/contracts/mcp-capabilities.mjs` gains `capabilityInventory(toolNames)`
+(an MCP's advertised tools mapped to the capabilities Observogram reads);
+`tools/lib/service-keys.mjs` gains `livePackKind(canonical)` (`snapshot` /
+`scaffold` / `null`, and the catalogue's `live`); `tools/lib/crawler.mjs` gains
+`dashboardSpecId(dash)` (the one dashboard id rule a crawled pack and a
+snapshot share); `tools/lib/mcp-client.mjs` (behaviour) refuses redirects,
+redacts every answer text by value, takes a caller's `signal` and caps an
+answer at `MAX_MCP_ANSWER_BYTES` (32 MiB). `tools/lib/journey.mjs` (excluded:
+the server-side journey runner) gains `validatePackBMcp`, `runJourney`'s `resolveMcp`
+option and a Pack B's `mcp.endpointId`. A downstream's own diff verification
+calls the identity modes directly:
+
+```js
+import { diffPacks } from './vendor/observogram/diff.mjs';
+import { identityMode } from './vendor/observogram/identity-modes.mjs';
+diffPacks(a, b, { identity: 'name' });                 // pairs by name; behaviour still decides drift
+identityMode('id').keyOf(artefact, { side: 'a' });     // the id key the diff uses
+```
 
 `tools/test-diagnostic-grade.mjs` fails CI if an import ever creeps into the
 two studio zero-import modules, and `tools/test-blast-radius.mjs` /

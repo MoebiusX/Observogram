@@ -226,6 +226,21 @@ The drift drill shows:
 - live-only shadow signals
 - out-of-scope live inventory that belongs to the wider platform
 
+**Compare** (Diagnose → Compare) puts the two packs side by side. Its stat
+bar counts what is only in A, in both and only in B, and its **paired by**
+cell says how the pairs were formed. Under it, the **Pair by** switch chooses
+the key: **Behaviour** (the default — what each artefact does: a series, a
+product and signal, a contract handle), **Name** (the name or title) or **Id**
+(a stable id or uid, such as a Grafana dashboard uid; a family whose name is
+its id uses the name). Name and Id are worked out in your browser over the two
+packs already on screen — no new request — with the same vendorable
+`tools/lib/identity-modes.mjs` and `diff.mjs` the server runs; behaviour still
+decides whether a pair matches field for field, so a dashboard renamed under
+the same uid pairs by id and shows its title change as drift. An in-both
+card's badge says which key paired it (`Paired by id: dashboard uid
+"ord-1"`), and so does its detail drawer. Chains, the Assessment and every
+action keep pairing by behaviour.
+
 Traceability shows requirement chains from SLO to SLI, metrics, recording
 rules, exporters, scrape evidence, dashboards, alerts, and runbooks.
 
@@ -312,7 +327,11 @@ lands — or change it any time from the account menu, top right on every
 screen, which also has **sign out my other sessions**). From
 there it's a signed-in app: your packs, deploy audit and run history
 belong to you. (`OBSERVOGRAM_AUTH=off` skips login entirely
-for a throwaway open sandbox.)
+for a throwaway open sandbox.) To draft from a live MCP there, the home's
+**Register and connect** registers a loopback MCP as the org's endpoint and
+drafts from it in one click; a remote MCP needs its origin listed first —
+`OBSERVOGRAM_MCP_ORIGINS=https://mcp.example.com npm run dev` — or a signed-in
+admin ([Fetch Live From MCP](#fetch-live-from-mcp)).
 
 ### Security Posture
 
@@ -510,8 +529,8 @@ the server registers, and each route's first handler is its guard.
 | Role | May |
 |---|---|
 | `viewer` | every read (`GET`) in the org |
-| `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys, the live refresh, RESET, and the org's services and environments ([Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)) |
-| `admin` | the org's name, members and MCP endpoints as well ([the identity API](#the-identity-api), [Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)), a typed MCP URL in a draft, a live refresh, a deploy or a rollback ([Fetch Live From MCP](#fetch-live-from-mcp); below admin, and without sign-in, only a registered endpoint), and the org's audit (`GET /api/audit`, [The Audit](#the-audit)) |
+| `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys, the live refresh, testing an MCP connection and live jobs against a registered endpoint ([Test An MCP Connection And Build A Live Pack](#test-an-mcp-connection-and-build-a-live-pack)), RESET, and the org's services and environments ([Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)) |
+| `admin` | the org's name, members and MCP endpoints as well ([the identity API](#the-identity-api), [Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)), a typed MCP URL in a ping, a live job, a draft, a live refresh, a deploy, a rollback or a journey's Pack B ([Fetch Live From MCP](#fetch-live-from-mcp); below admin, and without sign-in, only a registered endpoint), cancelling another member's live job, and the org's audit (`GET /api/audit`, [The Audit](#the-audit)) |
 | owner | a deployment-level flag, not an org role: an owner acts as `admin` in every org, plus users, orgs and the join role ([the identity API](#the-identity-api)) and the deployment's audit (`GET /api/audit?scope=all`) |
 
 The role is the membership **of the request's org** (`X-Observogram-Org`,
@@ -1317,6 +1336,64 @@ pinned versions in Docker (`docker/stack.compose.yaml`; skips without Docker).
 
 See [`docs/MCP_INTEGRATION.md`](docs/MCP_INTEGRATION.md) for the live fetch and
 write-back contract.
+
+### Test An MCP Connection And Build A Live Pack
+
+The studio's **Live MCP connection** panel and **new from live** panel do
+this in three steps — test the connection, choose **Draft** (a scaffold from
+MCP discovery) or **Snapshot** (an inventory of what is actually deployed),
+then follow the gate log — and the same routes serve a script (rebadge batch
+3; docs/DOWNSTREAM.md §15 has every shape). Without sign-in the live MCP API
+answers only a request sent straight to a loopback address, and every POST
+takes `X-Observogram-CSRF: 1` (the bearer is exempt). Below, `$H` is your
+auth (`-H "Authorization: Bearer $OBSERVOGRAM_API_TOKEN"` or a session
+cookie) and endpoint 3 is one of the org's registered MCP endpoints:
+
+```bash
+# 1. Test the connection — writes nothing
+curl -s -X POST http://127.0.0.1:8000/api/mcp/ping $H \
+  -H 'Content-Type: application/json' -H 'X-Observogram-CSRF: 1' \
+  -d '{"mcpEndpointId":3}'
+# → { "verdict": "connected", "tools": { "capabilities": { … } }, "read": { … }, "checked": [ … ], "notChecked": [ … ] }
+
+# 2. Start a snapshot (or "kind":"draft") — 202 at once
+curl -s -X POST http://127.0.0.1:8000/api/mcp/jobs $H \
+  -H 'Content-Type: application/json' -H 'X-Observogram-CSRF: 1' \
+  -d '{"kind":"snapshot","mcpEndpointId":3,"scope":{"metricPrefixes":["payments_"]},"label":"Payments prod"}'
+# → { "ok": true, "job": { "id": "<id>", "state": "running", … }, "poll": "/api/mcp/jobs/<id>" }
+
+# 3. Poll the gate log; send back "next" as since
+curl -s "http://127.0.0.1:8000/api/mcp/jobs/<id>?since=0" $H
+# → { "job": { "state": "running" }, "stages": [ { "seq": 1, "stage": "connect", "state": "done", … } ], "next": 1 }
+#   … until job.state is done (result.registered.id is the new pack), failed or cancelled
+
+# Stop it
+curl -s -X POST http://127.0.0.1:8000/api/mcp/jobs/<id>/cancel $H -H 'X-Observogram-CSRF: 1'
+```
+
+The ping runs `initialize`, the whole `tools/list` and one cheap read within
+10 s and says what it checked and what it did not. A job is its starter's
+(another member's or org's, an expired or a lost one is a 404 `{ gone: true }`);
+one runs per org, four per server; jobs live in the server's memory, so a
+restart loses them (a pack already registered stays). A snapshot is labelled
+`snapshot` in the pickers and the catalogue (`live: 'snapshot'`), a draft
+`scaffold`; Compare's pack header says which. A typed `mcpUrl` in place of
+`mcpEndpointId` is an admin's, under the origin allowlist ([Fetch Live From
+MCP](#fetch-live-from-mcp)).
+
+**The snapshot scope** (inert when unset; a request's `scope` replaces it
+whole; the draft and the refresh never read it):
+
+| Variable | Meaning |
+|---|---|
+| `OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES` | comma-separated metric-name prefixes a snapshot keeps (`payments_,checkout_`) |
+| `OBSERVOGRAM_SNAPSHOT_FOLDER_UIDS` | comma-separated Grafana folder uids for dashboards and, when every rule names one, alert rules |
+| `OBSERVOGRAM_SNAPSHOT_DATASOURCE_UID` | a datasource uid — named in the gate log as not applied while no advertised tool takes one |
+| `OBSERVOGRAM_ORG_<ORG>_SNAPSHOT_METRIC_PREFIXES`, `…_FOLDER_UIDS`, `…_DATASOURCE_UID` | the same for one org (read only by the org that owns the name); each field overrides the deployment's |
+| `OBSERVOGRAM_MCP_ORIGINS`, `OBSERVOGRAM_ORG_<ORG>_MCP_ORIGINS` | the MCP origin allowlist, unioned ([Fetch Live From MCP](#fetch-live-from-mcp)) |
+
+A variable that does not parse is a 400 naming it when a snapshot starts, and
+`GET /api/mcp/jobs` lists it under `scope.errors`.
 
 ### Validate Or Upload A Pack
 
@@ -2641,9 +2718,11 @@ server/
   boot.mjs                 The boot order: opens the store, imports users.json / orgs.json once, the seed and the fail-closed checks
   identity-admin.mjs       The user and org rules behind npm run users / npm run orgs
   service-admin.mjs        The service, environment and MCP endpoint rules behind /api/services, /api/environments and /api/mcp-endpoints; the tier rule; an MCP target picked by id
+  mcp-target-policy.mjs    Who may type an MCP URL (TYPED_MCP_URL_ROLE), the MCP origin allowlist, the redaction of a resolved credential (rebadge batch 3)
+  live-jobs.mjs            The live MCP jobs in memory: start, the gate log, cancel, the bounds, the configured snapshot scope (rebadge batch 3)
   verdict-admin.mjs        The verdict rules behind /api/packs/:id/verdicts (GAP batch 2): the artefact index, the views, the carry on a label re-registration
   waiver-admin.mjs         The waiver rules behind /api/services/:id/waivers and /api/waivers/:id/revoke (GAP batch 2): the body, the views, the conformance report's overlay
-  routes/                  The identity API (identity.mjs), the services API (services.mjs), the verdicts API (verdicts.mjs), the waivers API (waivers.mjs), the audit report and placeholders (audit-report.mjs), the deploy routes, and the handler helpers they share (util.mjs)
+  routes/                  The identity API (identity.mjs), the services API (services.mjs), the verdicts API (verdicts.mjs), the waivers API (waivers.mjs), the audit report and placeholders (audit-report.mjs), the live MCP API — the ping and the live jobs (live.mjs), the deploy routes, and the handler helpers they share (util.mjs)
   store/                   The embedded store (docs/STORE_PLAN.md): db.mjs (the one node:sqlite door), migrations, repositories, the legacy import and import --replace, backup/restore, ops.mjs (export, the replace request, rekey-issuer, purge-org)
   fixtures/                What the suites share: serve-child.mjs (a hermetic child server, the STRIP list), platform.mjs (isWin32, the reasoned win32 skips), pre-store-build.mjs, route-inventory.mjs, store-050-guard.mjs
   test-smoke.mjs           End-to-end route smoke tests
@@ -2651,6 +2730,8 @@ server/
 studio/
   app.mjs                  Browser app shell and three-step workflow
   compare-view.mjs         Assessment (diagnostic grade), Compare, drift, traceability
+  compare-identity.mjs     Compare's Pair by switch: behaviour (the server's diff), name or id re-keyed in the browser with /lib/identity-modes.mjs and /lib/diff.mjs
+  live-model.mjs           The live MCP connection's pure models: the ping's result, the live panel's steps, plan, gate log and result (live-api.mjs loads, live-view.mjs draws)
   compile-view.mjs         Remediate, compile catalog, deploy surfaces
   remediation-flow-view.mjs  The response path (GAP batch 2): the engine loaded at call time, the view model, the panel Diagnose and Remediate share
   layers-view.mjs          Discover Observogram and artifact cards
@@ -2692,7 +2773,9 @@ tools/
     compile.mjs            packc compiler
     conformance.mjs        Maturity rubric
     remediation-flow.mjs   The response path: a remediation's trigger resolved to its alerts, states from the comparison, next steps (vendorable)
-    diff.mjs               Structural pack diff
+    diff.mjs               Structural pack diff (an identity mode or key function; a snapshot's scope parked as not checked)
+    identity-modes.mjs     Comparison identity modes: behaviour (identityKeyOf), name and id keys, pairingOf (vendorable)
+    live-fetch.mjs         The live fetch's contract: the stage ids, the plan, the snapshot scope and its annotations (zero-import, vendorable)
     journey.mjs            Journey definitions, runner, gate, run history (node-only)
     legacy.mjs             Layered-JSON upconvert and the merge-safe re-run (mergeUpconvert); imports pack-conformance.mjs
     library.mjs            The BUILD journey engine: entries, tier scaffold, instantiation, todos, provenance (browser-safe)
@@ -2750,6 +2833,7 @@ deploy/k8s/
 - [`docs/VENDORING.md`](docs/VENDORING.md) - vendoring the verdict/diff engines into a downstream studio, and how to stay current
 - [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) - vendoring the pure libraries by manifest (`VENDOR-MANIFEST.json`): snapshot → verify hashes → smoke → bump
 - [`docs/UI_CONVENTIONS.md`](docs/UI_CONVENTIONS.md) - studio view-module conventions: the host seam, loader/renderer split, render signatures, CSS zones
+- [`docs/DELIVERY-REBADGE-BATCH3.md`](docs/DELIVERY-REBADGE-BATCH3.md) - delivery report for rebadge batch 3 (live-fetch UX: a caller-supplied MCP URL is a privilege, the ping, the true snapshot and live jobs, comparison identity modes): what shipped per item, the measured test totals, what is deferred by name, what a plugin bridge still does
 - [`docs/DELIVERY-GAP-BATCH2.md`](docs/DELIVERY-GAP-BATCH2.md) - delivery report for rebadge batch 2, PR 2 (B3, GAP batch 2: verdicts, waivers, diagnose → remediate flow, glossary widgets, service audit report): what shipped per feature, the measured test totals, what is deferred by name and why
 - [`docs/DELIVERY-REBADGE-BATCH2.md`](docs/DELIVERY-REBADGE-BATCH2.md) - delivery report for rebadge batch 2, PR 1 (B1, B2, B4): what shipped per item, the measured test totals, what is deferred and why
 

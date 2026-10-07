@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const journey = readFileSync(resolve(ROOT, 'docs/UPDATE_JOURNEY.md'), 'utf8');
 const changelog = readFileSync(resolve(ROOT, 'docs/CHANGELOG.md'), 'utf8');
-const DELIVERY_REPORTS = ['docs/DELIVERY-REBADGE-BATCH2.md', 'docs/DELIVERY-GAP-BATCH2.md'];
+const DELIVERY_REPORTS = ['docs/DELIVERY-REBADGE-BATCH2.md', 'docs/DELIVERY-GAP-BATCH2.md', 'docs/DELIVERY-REBADGE-BATCH3.md'];
 
 const PAIR = /Tests: (\d+) → (\d+)/g;
 

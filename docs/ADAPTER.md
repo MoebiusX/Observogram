@@ -411,6 +411,70 @@ wait). **Revoke** — `POST /api/waivers/:id/revoke` (operator) with `{
 `waiver.revoke` with `{ service, ruleId, artefactId, reason }`; a service's
 deletion cascades its waivers (counted in `service.delete`).
 
+## Live packs: scaffold or snapshot
+
+A pack the live fetcher wrote says which kind it is (rebadge batch 3, C1),
+read by `livePackKind(canonical)` (`tools/lib/service-keys.mjs`): `'snapshot'`
+when `metadata.annotations["observogram.live.mode"]` is `snapshot`, else
+`'scaffold'` when `mcp.refreshedAt` is present (every pack the fetcher drafts),
+else `null`. The catalogue entry (`catalogEntryOf`, `GET /api/packs`, the
+static bundle's) carries `live: 'scaffold' | 'snapshot'` after `environments`
+for a live pack only — every other entry is byte-identical; a snapshot is a
+live aggregate whatever its label (`isLiveAggregatePack`). A snapshot's
+conformance report (`tools/lib/pack-conformance.mjs`) gains `liveKind:
+'snapshot'` beside `writers` (`writers.fetcher` is true for a draft and a
+snapshot alike); a draft's report is byte-identical. A snapshot's annotations:
+
+| Annotation | Value |
+|---|---|
+| `observogram.live.mode` | `snapshot` |
+| `observogram.live.source` | JSON `{ origin, endpoint: { id, name } \| null }` — where it was read |
+| `observogram.live.scope` | the scope the snapshot was asked for (`metricPrefixes`, `folderUids`, `datasourceUid`) and the families it applied to; always written |
+| `observogram.live.gaps` | JSON `[{ stage, reason }]` — the stages that could not run; only when there are any |
+| `observogram.scope.<kind>` | written only for a family the scope narrowed (`metric`, `dashboard`, `alert_rule`): what was read — the diff parks an artefact outside it as *not checked* (docs/DIFF.md) |
+| `observogram.unobserved.<kind>` | every family of a gapped stage, with the stage's reason (`alert_rule` included) |
+
+`mcp.url` of a snapshot is the MCP's origin only. These are provenance
+claims like any annotation: a hand-uploaded pack can make them, and the
+catalogue shows what the pack says.
+
+## Identity modes
+
+What pairs an artefact of pack A with one of pack B in `diffPacks(a, b, {
+identity })` (docs/DIFF.md, "Identity modes"): `tools/lib/identity-modes.mjs`
+reads one row of material per family — total over `FAMILIES`
+(`tools/lib/artefact-classify.mjs`; `tools/test-identity-modes.mjs` iterates
+the list, so a family added later fails until it has a row). Positional
+`XXX-NN` ids are never material, and neither is the prose `title` an adapter
+writes for a family with no name. Names are trimmed, white space collapsed
+and lower-cased; ids are trimmed (a uid keeps its case).
+
+| Family | `nameOf` (name mode) | `idOf` (id mode) |
+|---|---|---|
+| dashboard | `spec.params.title`, else the spec id (`defines`) | `spec.params.uid`, else the spec id |
+| sli, slo, derived_view | the spec id (`defines`) | the same |
+| backend | `spec.id` | the same |
+| pipeline_receiver, pipeline_processor | `spec.name` | the same |
+| pipeline_exporter_metrics / logs / traces | `spec.name`, else `spec.kind` | the same |
+| storage_metrics / logs / traces | `spec.backend` | the same |
+| scrape_job, metric, recording_rule, alert_rule | the name (`spec.job` / `spec.name`) | the name — the name is the id (spec 1.4's `AlertRule` has no uid field) |
+| profiling, network, policy_engine | `spec.product` | the same |
+| mesh, collection | `spec.product` / `spec.role` | the same |
+| panel | `parent` / `spec.panel` (or `spec.title`) | `parent` / `spec.binds_to`, else the name |
+| burn_rate, forecast | the objective (`spec.slo`) | the same |
+| alert_route | `spec.severity` | the same |
+| remediation | `spec.id`, else `spec.trigger` | the same |
+| chaos, synthetic | `spec.id` | the same |
+| imports | `spec.ref` | the same |
+| otel, baselines | the family itself — one per pack, they pair with each other | the same |
+| unknown | `defines`, else none | the same |
+
+With no material the key carries the side and the artefact's own id
+(`<kind>::{"unnamed":"<side>:<id>"}`, `{"unidentified":…}`), so it never
+pairs. `pairingOf(artefact, mode)` says why in words — `dashboard uid
+"ord-1"`, `rule name "highlatency" (the name is the id)`, `no name — never
+paired by name` — and the studio's Compare shows it on an in-both card.
+
 ## Artefact addresses
 
 Two addresses name an artefact in this repository, and every engine prints
