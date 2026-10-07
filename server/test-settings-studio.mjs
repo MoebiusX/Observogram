@@ -404,13 +404,22 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       assert.deepEqual(await pickerOptions(page, 'home'), GW_OPTIONS);
       assert.equal(await attr(page, '[data-mcp-target="home"] select', 'aria-label'), 'Registered MCP endpoint');
       assert.equal(await page.evaluate(() => document.getElementById('home-mcp-url').closest('label').hidden), true, 'no URL row for a reader who may not type one');
+      // D8: the home's Connect tests gw in the live panel and drafts nothing; the unset variable is the server's refusal.
+      const pings = posts(page, /\/api\/mcp\/ping$/);
+      await page.evaluate(() => document.getElementById('home-mcp-connect').click());
+      await page.waitForFunction(() => /^the connection test failed/.test(document.getElementById('home-mcp-status')?.textContent || ''), null, { timeout: T });
+      assert.equal(await text(page, '#home-mcp-status'), 'the connection test failed — the live panel says why');
+      assert.deepEqual(pings, [{ mcpEndpointId: gwId }], 'the home pings with the id, no mcpUrl');
+      assert.match((await text(page, '#live-ping-status')).replace(/^error: 400: /, ''), UNSET);
+      assert.equal(await page.isHidden('#live-step-choose'), true, 'no choice without a connected test');
+      assert.equal(drafts.length, 0, 'the home posts no draft');
+      await page.evaluate(() => document.getElementById('draft-mcp-panel-close').click());
 
       // The refresh panel.
       await page.evaluate(() => document.getElementById('mcp-btn').click());
       await page.waitForSelector('#mcp-panel:not([hidden]) [data-mcp-target="refresh"] select', { timeout: T });
       assert.deepEqual(await pickerOptions(page, 'refresh'), GW_OPTIONS);
       // test connection (rebadge batch 3, C2) pings with the id; rebuilding production-live is its own button.
-      const pings = posts(page, /\/api\/mcp\/ping$/);
       await page.click('#mcp-refresh-btn');
       await page.waitForFunction(() => /^error: /.test(document.getElementById('mcp-ping-status')?.textContent || ''), null, { timeout: T });
       assert.deepEqual(pings.at(-1), { mcpEndpointId: gwId }, 'the ping: the id, no mcpUrl');
@@ -789,8 +798,9 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
   // typed URL; with no endpoint its Connect is Register and connect, offered
   // only for an origin the server would accept (loopback, or listed) — the
   // demo URL is refused beside the button, nothing sent; a loopback MCP is
-  // registered, then drafted by its id.
-  await t.test('an open server on the loopback, the home: Register and connect — a remote origin refused beside the button with nothing sent, a loopback MCP registered and drafted by mcpEndpointId', async () => {
+  // registered, then tested by its id in the live panel, which offers Draft or
+  // Snapshot (D8).
+  await t.test('an open server on the loopback, the home: Register and connect — a remote origin refused beside the button with nothing sent, a loopback MCP registered and tested by mcpEndpointId, then Draft or Snapshot offered (D8)', async () => {
     const { startFakeMcp } = await import('./fixtures/fake-mcp.mjs');
     const fake = await startFakeMcp(['system_health', 'system_topology'], (name) => (name === 'system_health' ? { services: [] } : { dependencies: [] }));
     const { page, ctx } = await open(loopChild.base, null);
@@ -811,12 +821,21 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await page.fill('#home-mcp-url', fake.url);
       await page.waitForFunction(() => document.getElementById('home-mcp-connect').getAttribute('aria-disabled') === null, null, { timeout: T });
       assert.equal(await text(page, '#home-mcp-status'), '', 'a loopback MCP: the sentence goes');
+      const pings = posts(page, /\/api\/mcp\/ping$/);
       await page.click('#home-mcp-connect');
-      await page.waitForFunction(() => /^connected · /.test(document.getElementById('home-mcp-status')?.textContent || ''), null, { timeout: 30_000 });
+      // D8: Connect tests the connection, then the live panel offers Draft or Snapshot — nothing drafted yet.
+      await page.waitForFunction(() => /^connected — /.test(document.getElementById('home-mcp-status')?.textContent || ''), null, { timeout: 30_000 });
+      assert.equal(await text(page, '#home-mcp-status'), 'connected — choose Draft or Snapshot in the live panel');
       assert.deepEqual(registers, [{ name: new URL(fake.url).host, url: fake.url }], 'registered once, named by its host');
       const listed = (await call(null, 'GET', '/api/mcp-endpoints', undefined, { base: loopChild.base })).json.endpoints;
       assert.deepEqual(listed.map((e) => e.url), [fake.url]);
-      assert.deepEqual(drafts, [{ mcpEndpointId: listed[0].id }], 'drafted by its id, never the typed URL');
+      assert.deepEqual(pings, [{ mcpEndpointId: listed[0].id }], 'pinged by its id, never the typed URL');
+      assert.equal(drafts.length, 0, 'Connect drafts nothing: the reader chooses');
+      assert.equal(await page.isVisible('#draft-mcp-panel'), true, 'the live panel is open');
+      assert.equal(await page.isVisible('#live-step-choose'), true, 'step 2 drawn after the connected test');
+      assert.equal(await page.isVisible('#live-kind-snapshot'), true, 'Snapshot is offered');
+      assert.equal(await page.evaluate(() => document.querySelector('[data-mcp-target="draft"] select')?.value), String(listed[0].id), 'the panel tests the endpoint Connect registered');
+      await page.evaluate(() => document.getElementById('draft-mcp-panel-close').click());
       assert.deepEqual(await pickerOptions(page, 'home'), [[String(listed[0].id), `${new URL(fake.url).host} — ${new URL(fake.url).origin}`, true]], 'the home now lists it, list-only');
     } finally {
       await ctx.close();

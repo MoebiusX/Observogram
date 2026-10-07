@@ -1021,10 +1021,6 @@ the studio re-keys in the browser over the two packs on screen.
   rule and single-page listing, kept byte-identical.
 - *`draft-mcp-url-origin`* — a draft keeps the safe URL with its path in
   `mcp.url` (a snapshot keeps the origin).
-- *`home-connect-ping-then-choose`* — decided (D8) but not built: the home
-  card's **Connect** still drafts in one click (`POST /api/draft-from-mcp`);
-  the quick start and the live panel test first and let the reader choose
-  Draft or Snapshot.
 - *`journey-notify-env-ownership`* (security, pre-existing, open) — a
   journey's `notify` may name any process variable as its auth; which
   variables a server-run journey may read needs its own design.

@@ -102,9 +102,9 @@ rule shape is evidenced, the MCP's envelope around it is not.
 (the datasource uid), `live-jobs-durable`, `journey-snapshot-source`,
 `refresh-live-as-job`, `draft-alert-rule-unobserved`, `draft-dashboard-ids`,
 `draft-tools-list-pages`, `draft-mcp-url-origin` — each named in
-`docs/DOWNSTREAM.md` §15.5. **D8 is decided but not built on the home card:**
-its **Connect** still drafts in one click (`home-connect-ping-then-choose`);
-the quick start and the live panel test first and let the reader choose.
+`docs/DOWNSTREAM.md` §15.5. **D8:** the home card's **Connect**, the quick
+start and the live panel all test the connection first and let the reader
+choose Draft or Snapshot; the home's Connect drafts nothing itself.
 
 ## C3 — comparison identity modes
 

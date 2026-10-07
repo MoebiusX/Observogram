@@ -4478,16 +4478,6 @@ function renderHomeView() {
             <input id="home-mcp-auth" type="password" placeholder="bearer" autocomplete="off">
           </label>
         </div>
-
-        <!-- Capabilities surface here once the MCP responds. -->
-        <div id="home-mcp-capabilities" class="home-mcp-capabilities" hidden></div>
-
-        <div id="home-mcp-adopt-bar" class="home-mcp-adopt-bar" hidden>
-          <button id="home-mcp-adopt" type="button" class="home-mcp-adopt-btn">
-            <span class="home-mcp-adopt-title">Render the manifest</span>
-            <span class="home-mcp-adopt-sub" id="home-mcp-adopt-hint">canonical v1.4 · ready to compile and deploy</span>
-          </button>
-        </div>
       </div>
 
       <div class="home-alt">
@@ -4559,8 +4549,6 @@ async function doHomeMcpConnect() {
   const urlInput  = $('#home-mcp-url');
   const statusEl  = $('#home-mcp-status');
   const goBtn     = $('#home-mcp-connect');
-  const capEl     = $('#home-mcp-capabilities');
-  const adoptBar  = $('#home-mcp-adopt-bar');
   if (!urlInput || !statusEl) return;
 
   let { body: target, chosen } = mcpTargetOf('home');
@@ -4596,250 +4584,27 @@ async function doHomeMcpConnect() {
     statusEl.className = 'home-mcp-status is-error';
     return;
   }
-  if (target.mcpUrl) rememberMcpUrl(target.mcpUrl).catch(() => {});
-
+  // D8: the home's Connect tests the connection first, in the live panel,
+  // which then offers Draft or Snapshot — the same target (the endpoint, or
+  // the typed URL for a reader the server lets type one) and its key.
+  const panel = $('#draft-mcp-panel');
+  if (panel?.hidden) $('#draft-mcp-btn')?.click();
+  if (target.mcpUrl) $('#draft-mcp-url').value = target.mcpUrl;
+  $('#draft-mcp-auth').value = $('#home-mcp-auth')?.value ?? '';
+  paintMcpTarget('draft', { chosen: chosen ? String(chosen.id) : '' });
   goBtn.disabled = true;
-  statusEl.textContent = 'contacting MCP…';
+  statusEl.textContent = 'testing the connection in the live panel…';
   statusEl.className = 'home-mcp-status is-pending';
-  capEl.hidden = true;
-  adoptBar.hidden = true;
-
   try {
-    const r = await fetch('/api/draft-from-mcp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({
-        ...target,
-        // Forward the quick-start friendly label when the user came
-        // through the Upload popover. window._observogramQuickLabel is
-        // cleared after consumption so manual draft-from-mcp from the
-        // panel keeps the auto-generated label.
-        label: window._observogramQuickLabel || undefined,
-      }),
-    });
-    if (window._observogramQuickLabel) window._observogramQuickLabel = null;
-    const ct = r.headers.get('content-type') || '';
-    if (!ct.includes('application/json')) {
-      throw new Error(`server returned ${r.status} ${ct || 'no content-type'}`);
-    }
-    const out = await r.json();
-    if (!out.ok) throw new Error(out.error || 'MCP draft failed');
-    rememberMcpEndpoint(chosen ? chosen.id : null);
-    draftMcpState.lastResult = out;
-    followReplacedPack(out.registered?.id).catch(() => {});
-
-    statusEl.textContent = `connected · ${out.summary.discovered.backends} backend(s) · ${out.tookMs}ms`;
-    statusEl.className = 'home-mcp-status is-ok';
-
-    renderHomeMcpCapabilities(out, capEl);
-    capEl.hidden = false;
-    adoptBar.hidden = false;
-
-    const hint = $('#home-mcp-adopt-hint');
-    if (hint) hint.textContent = out.canonical?.metadata?.name
-      ? `pack name: ${out.canonical.metadata.name}` : '';
-
-    $('#home-mcp-adopt').onclick = () => adoptDraftFromMcpResult();
-  } catch (e) {
-    statusEl.textContent = `error: ${e.message}`;
-    statusEl.className = 'home-mcp-status is-error';
+    await testLiveConnection();
   } finally {
     goBtn.disabled = false;
   }
-}
-
-function renderHomeMcpCapabilities(out, host) {
-  const s = out.summary?.discovered || {};
-  const ann = out.annotations || {};
-  const tools = (ann['mcp.toolsCalled'] || '').split(',').filter(Boolean);
-  const failed = (ann['mcp.toolsFailed'] || '').split(',').filter(Boolean);
-  const services = (ann['mcp.servicesDiscovered'] || '').split(',').filter(Boolean);
-  const baselines = parseInt(ann['mcp.baselinesComputed'] || '0', 10);
-  const anomalies = parseInt(ann['mcp.activeAnomalies'] || '0', 10);
-  const backends = s.backends ?? 0;
-
-  // tools/list inventory: the full set of tools the MCP advertised, and the
-  // subset Observogram doesn't yet have a probe pattern for. These come from
-  // the post-rename fetcher that calls `tools/list` instead of guessing.
-  const toolsExposed   = (ann['mcp.toolsExposed']   || '').split(',').filter(Boolean);
-  const toolsUnmatched = (ann['mcp.toolsUnmatched'] || '').split(',').filter(Boolean);
-
-  // backend_capabilities inventory: the canonical skill → backend →
-  // product → version matrix the MCP exposes. When present, render the
-  // full version-gating story below the 4-card grid so the user sees
-  // EVERYTHING their MCP can speak to before drafting a pack.
-  const capabilities = out.summary?.capabilities || null;
-
-  // Live version captures — authoritative version strings pulled from
-  // grafana_health / metrics_query vm_app_version etc. Threaded into
-  // the capability chips so the demo audience sees ground truth, not
-  // just the policy band.
-  const liveVersions = {};
-  for (const [k, v] of Object.entries(ann)) {
-    const m = /^mcp\.versions\.([a-z0-9_-]+)$/.exec(k);
-    if (m) liveVersions[m[1]] = v;
-  }
-
-  // Recognised vs unrecognised tools (over what we CALLED, not what was
-  // advertised). Tracks the canonical otel-mcp-server tool catalog
-  // (metrics_*, grafana_*, alertmanager_*, pipeline_*) plus the generic
-  // system + zk-proof tools.
-  const knownTools = new Set([
-    // generic / system
-    'system_health', 'system_topology',
-    'anomalies_active', 'anomalies_baselines',
-    // zk-proofs skill
-    'zk_proof_get', 'zk_proof_verify', 'zk_solvency', 'zk_stats',
-    // metrics skill (Prometheus)
-    'metrics_query', 'metrics_query_range', 'metrics_targets',
-    'metrics_alerts', 'metrics_metadata', 'metrics_label_values',
-    // grafana skill
-    'grafana_health', 'grafana_datasources', 'grafana_datasource_health',
-    'grafana_datasource_query', 'grafana_dashboards_search',
-    'grafana_dashboard_get', 'grafana_folders', 'grafana_alert_rules',
-    'grafana_alerts', 'grafana_contact_points',
-    // alertmanager skill
-    'alertmanager_alerts', 'alertmanager_groups', 'alertmanager_silences',
-    'alertmanager_status',
-    // pipeline skill
-    'pipeline_alloy', 'pipeline_beats', 'pipeline_fluentbit', 'pipeline_vector',
-  ]);
-  const recognised   = tools.filter(t => knownTools.has(t));
-  const unrecognised = tools.filter(t => !knownTools.has(t));
-  const mcpHost = (() => {
-    try { return new URL(out.summary?.mcpUrl || '').host || 'mcp'; }
-    catch (_) { return 'mcp'; }
-  })();
-
-  // Four-card grid: each capability owns its own card with detail
-  // content inside. Connection status sits above as a pulse-dot line.
-  // Styling kept from the premium pass (subtle borders, serif numbers,
-  // ink-tone accents) but the per-card content is back so the user can
-  // SEE which tools were called, which services were discovered, etc.
-  host.innerHTML = `
-    <div class="home-mcp-report">
-      <div class="home-mcp-report-head">
-        <span class="home-mcp-report-dot" aria-hidden="true"></span>
-        Connected to <strong>${escapeHtml(mcpHost)}</strong>${out.tookMs ? ` <span class="home-mcp-report-meta">· ${out.tookMs}ms</span>` : ''}
-      </div>
-      <div class="home-mcp-cap-grid">
-        <div class="home-mcp-cap" data-cap="tools">
-          <div class="home-mcp-cap-num">${toolsExposed.length || tools.length}</div>
-          <div class="home-mcp-cap-key">${toolsExposed.length ? 'tools exposed' : 'tools called'}</div>
-          <div class="home-mcp-cap-detail">${recognised.length ? recognised.map(t => `<code>${escapeHtml(t)}</code>`).join(' ') : '<em>none recognised</em>'}</div>
-          ${toolsUnmatched.length ? `<div class="home-mcp-cap-detail home-mcp-cap-detail-unknown">+${toolsUnmatched.length} not yet probed: ${toolsUnmatched.slice(0, 8).map(t => `<code>${escapeHtml(t)}</code>`).join(' ')}${toolsUnmatched.length > 8 ? ` <em>+${toolsUnmatched.length - 8} more</em>` : ''}</div>` : ''}
-          ${unrecognised.length && !toolsUnmatched.length ? `<div class="home-mcp-cap-detail home-mcp-cap-detail-unknown">+${unrecognised.length} unrecognised: ${unrecognised.map(t => `<code>${escapeHtml(t)}</code>`).join(' ')}</div>` : ''}
-          ${failed.length ? `<div class="home-mcp-cap-detail home-mcp-cap-detail-fail">⚠ failed: ${failed.map(t => `<code>${escapeHtml(t)}</code>`).join(' ')}</div>` : ''}
-        </div>
-        <div class="home-mcp-cap" data-cap="services">
-          <div class="home-mcp-cap-num">${services.length}</div>
-          <div class="home-mcp-cap-key">services discovered</div>
-          <div class="home-mcp-cap-detail">${services.length ? services.slice(0, 6).map(s => `<code>${escapeHtml(s)}</code>`).join(' ') + (services.length > 6 ? `<div class="home-mcp-cap-more">+${services.length - 6} more</div>` : '') : '<em>none</em>'}</div>
-        </div>
-        <div class="home-mcp-cap" data-cap="backends">
-          <div class="home-mcp-cap-num">${backends}</div>
-          <div class="home-mcp-cap-key">backends inferred</div>
-          <div class="home-mcp-cap-detail">${backends ? 'metrics / logs / traces<div class="home-mcp-cap-meta">pipelines inferred from topology</div>' : '<em>none observed</em>'}</div>
-        </div>
-        <div class="home-mcp-cap" data-cap="anomalies">
-          <div class="home-mcp-cap-num">${anomalies}</div>
-          <div class="home-mcp-cap-key">active anomalies</div>
-          <div class="home-mcp-cap-detail">${baselines} baseline${baselines === 1 ? '' : 's'} computed<div class="home-mcp-cap-meta">from recent telemetry</div></div>
-        </div>
-      </div>
-      ${renderCapabilitiesPanel(capabilities, liveVersions)}
-      ${out.summary?.warnings?.length ? `
-        <div class="home-mcp-gaps">
-          <div class="home-mcp-gaps-head">⚠ Honest gaps</div>
-          <ul>${out.summary.warnings.slice(0, 5).map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul>
-        </div>` : ''}
-    </div>
-  `;
-}
-
-// Render the skill → backend → product → version matrix the MCP
-// exposes via `backend_capabilities`. The signal-class skills
-// (metrics/logs/traces/profiles + alerting/dashboards) lead because
-// they're what drive Observogram's L1–L4 projection; the rest follow
-// in a compact tail.
-//
-// When `liveVersions` carries an authoritative live version for a
-// product (e.g. {grafana: "12.4.0", victoriametrics: "v1.113.0"} from
-// grafana_health + metrics_query), the chip flips to "live mode": the
-// live version is shown in bold instead of the policy must[0], and a
-// "● LIVE" indicator hangs off the chip so the audience can see at a
-// glance which versions are attested vs which are inferred from
-// capabilities.
-function renderCapabilitiesPanel(capabilities, liveVersions = {}) {
-  if (!capabilities || !Array.isArray(capabilities.inventory) || !capabilities.inventory.length) return '';
-
-  // The spec's Signal enum order — used to group + sort entries.
-  const SIGNAL_SKILLS = ['metrics', 'logs', 'traces', 'pyroscope', 'alertmanager', 'grafana'];
-  const grouped = new Map();
-  for (const row of capabilities.inventory) {
-    if (!grouped.has(row.skill)) grouped.set(row.skill, []);
-    grouped.get(row.skill).push(row);
-  }
-  const orderedSkills = [
-    ...SIGNAL_SKILLS.filter(s => grouped.has(s)),
-    ...[...grouped.keys()].filter(s => !SIGNAL_SKILLS.includes(s)).sort(),
-  ];
-
-  const liveCount = Object.keys(liveVersions).length;
-
-  const rows = orderedSkills.map(skill => {
-    const backends = grouped.get(skill);
-    const chips = backends.map(b => {
-      const product = b.product || b.backend;
-      // `liveVersions[product]` carries either a real version string
-      // (e.g. "12.4.0") OR the sentinel "live" when the backend
-      // responded to a probe but doesn't expose a readable version
-      // (Jaeger via traces_services). Both flip the chip to live mode.
-      const live = liveVersions[product];
-      const policyVer = (b.versions?.must || [])[0] || '';
-      const isLive = !!live;
-      // When the capture has a real version, show it. When it's the
-      // "live" sentinel, keep showing the policy version (jaeger 2.x)
-      // because that's the only number we have — but still mark it
-      // ● LIVE so the user knows the backend itself is responding.
-      const isAliveSentinel = isLive && live === 'live';
-      const ver = isAliveSentinel ? policyVer : (isLive ? live : policyVer);
-      const liveTooltip = !isLive ? '' :
-        (isAliveSentinel
-          ? ` · live=responding (version not exposed)`
-          : ` · live=${live}`);
-      return `<span class="home-mcp-skill-chip${isLive ? ' is-live' : ''}" title="${escapeHtml(b.backend)} · must=${escapeHtml((b.versions?.must||[]).join(','))}${liveTooltip}">
-        <strong>${escapeHtml(product)}</strong>${ver ? ` <em>${escapeHtml(ver)}</em>` : ''}${isLive ? `<span class="home-mcp-skill-chip-live" aria-label="live version">●&nbsp;LIVE</span>` : ''}
-      </span>`;
-    }).join('');
-    return `
-      <div class="home-mcp-skill-row" data-skill="${escapeHtml(skill)}">
-        <div class="home-mcp-skill-name">${escapeHtml(skill)}</div>
-        <div class="home-mcp-skill-chips">${chips}</div>
-      </div>
-    `;
-  }).join('');
-
-  const liveSummary = liveCount
-    ? ` · <span class="home-mcp-skills-meta-live">${liveCount} live version${liveCount === 1 ? '' : 's'}</span>`
-    : '';
-
-  return `
-    <div class="home-mcp-skills">
-      <div class="home-mcp-skills-head">
-        <div class="home-mcp-skills-title">
-          Backend capabilities
-          <span class="home-mcp-skills-meta">
-            ${capabilities.skillCount} skill${capabilities.skillCount === 1 ? '' : 's'}
-            · ${capabilities.backendCount} backend${capabilities.backendCount === 1 ? '' : 's'}
-            · gating <code>${escapeHtml(capabilities.gatingMode)}</code>${liveSummary}
-          </span>
-        </div>
-        <div class="home-mcp-skills-sub">From <code>backend_capabilities</code> — every skill the MCP can speak to, the products it implements, and the version policy it enforces. <strong>LIVE</strong> chips carry an authoritative version captured from the backend itself.</div>
-      </div>
-      <div class="home-mcp-skills-body">${rows}</div>
-    </div>
-  `;
+  const ok = liveUi.ping?.ok === true;
+  statusEl.textContent = ok
+    ? 'connected — choose Draft or Snapshot in the live panel'
+    : 'the connection test failed — the live panel says why';
+  statusEl.className = `home-mcp-status ${ok ? 'is-ok' : 'is-error'}`;
 }
 
 async function loadAndCacheExamples() {
@@ -6769,8 +6534,9 @@ function setupDraftFromMcpPanel() {
 // stages of the kind. The job's id is remembered per login and org
 // (rememberLiveJob: an id and an origin, never a credential), so a reload
 // resumes the poll; opening the panel also finds a job started in another
-// tab (GET /api/mcp/jobs `running`). POST /api/draft-from-mcp stays for
-// the API, the home's connect and the deploy verify.
+// tab (GET /api/mcp/jobs `running`). The home's Connect opens this panel
+// and tests its target here (D8). POST /api/draft-from-mcp stays for the
+// API and the deploy verify.
 
 const liveUi = {
   ping: null,        // { key, ok, answer } — the last ping, for one target

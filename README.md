@@ -328,8 +328,8 @@ screen, which also has **sign out my other sessions**). From
 there it's a signed-in app: your packs, deploy audit and run history
 belong to you. (`OBSERVOGRAM_AUTH=off` skips login entirely
 for a throwaway open sandbox.) To draft from a live MCP there, the home's
-**Register and connect** registers a loopback MCP as the org's endpoint and
-drafts from it in one click; a remote MCP needs its origin listed first —
+**Register and connect** registers a loopback MCP as the org's endpoint,
+tests the connection and offers Draft or Snapshot; a remote MCP needs its origin listed first —
 `OBSERVOGRAM_MCP_ORIGINS=https://mcp.example.com npm run dev` — or a signed-in
 admin ([Fetch Live From MCP](#fetch-live-from-mcp)).
 
@@ -961,7 +961,7 @@ with their URLs, and never changes an endpoint.
   endpoints; the button when the server says this reader may register).
   Without sign-in and with no endpoint, the home's Connect is **Register and
   connect**: the typed URL is registered as the org's endpoint (named by its
-  host) and drafted by its id, offered only for a loopback MCP or a listed
+  host) and tested by its id, offered only for a loopback MCP or a listed
   origin — any other is refused beside the button, nothing sent. A chosen
   endpoint is sent as `mcpEndpointId` (never with `mcpUrl`), rollback and
   verify follow it, and a write re-reads the endpoint before it sends: an
