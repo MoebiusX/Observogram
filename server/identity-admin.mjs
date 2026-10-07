@@ -719,7 +719,7 @@ export function setJoinRole(db, actor, role, { confirm = false } = {}) {
   }
   return atomic(db, () => {
     if (value === 'admin' && confirm !== true) {
-      refuse(`every user the IdP lets in would become an admin of ${defaultOrgId(db)} — its name, its members and, from slice 4, `
+      refuse(`every user the IdP lets in would become an admin of ${defaultOrgId(db)} — its name, its members and `
         + 'its MCP endpoints; to add admins one by one use POST /api/org/members with {"role": "admin"}, '
         + 'or send {"role": "admin", "confirm": true}');
     }

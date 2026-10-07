@@ -3474,7 +3474,7 @@ test('identity-admin setJoinRole: a role, or null / "none" for no automatic join
     const n = trail(db).length;
     assert.deepEqual(admin.setJoinRole(db, 'olive', 'viewer'), { role: 'viewer', from: null, changed: true });
     assert.deepEqual(admin.setJoinRole(db, 'olive', ' viewer '), { role: 'viewer', from: 'viewer', changed: false });
-    const risk = 'every user the IdP lets in would become an admin of default — its name, its members and, from slice 4, its MCP endpoints; '
+    const risk = 'every user the IdP lets in would become an admin of default — its name, its members and its MCP endpoints; '
       + 'to add admins one by one use POST /api/org/members with {"role": "admin"}, or send {"role": "admin", "confirm": true}';
     for (const confirm of [undefined, false, 'true', 1]) {
       assert.throws(() => admin.setJoinRole(db, 'olive', 'admin', { confirm }), refusedAs(risk, 'conflict'), String(confirm));
