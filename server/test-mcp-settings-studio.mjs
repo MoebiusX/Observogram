@@ -52,6 +52,21 @@
  *      not in its answer, the DOM, the studio's log, the audit or the
  *      workspace; an answer outside the outcome shape is named by status,
  *      type and size, never shown.
+ *  12. The acceptance flow with nothing but the studio page, browser-direct:
+ *      the connection test's read fails; configure from the modal; the read
+ *      now answers and the modal says so; Open the live panel (the draft
+ *      picker on the same endpoint, its test run) → Snapshot → the gate log
+ *      ends with the registration. The modal reopens empty on the same page;
+ *      then reload, sign out, sign in, reopen — empty again. The secret and
+ *      the API key are in none of localStorage, sessionStorage,
+ *      document.cookie, the context's cookies, the DOM and every input, any
+ *      request the page sent to the studio (URL, headers, body) or its
+ *      answer, the audit, any file under the workspace (the store file and
+ *      its -wal included, UTF-8 and UTF-16LE) and the child's log.
+ *  13. The same through the studio server (OBSERVOGRAM_MCP_ADMIN_PROXY=1, a
+ *      fake without CORS): the values are expected in exactly one place, the
+ *      body of POST /api/mcp-settings/submit, and the pass-through's audit
+ *      row names fields only.
  *
  * Every test asserts no page error, no console.error beyond a failed load
  * (and, where CORS is the point, the browser's CORS message), no popup, and
@@ -877,3 +892,129 @@ test('BROWSER 11: through the studio server — the page asks nothing of the MCP
   }
   await w.done();
 });
+
+// ---------- 12 and 13: the acceptance flow and the secret scan ----------
+
+// configure → verify → snapshot with nothing but the studio page, then close,
+// reload, sign out and sign in, and scan every place a value could stay. On a
+// studio of its own (the sign-out ends ada's session there), browser-direct or
+// through the studio server (the fake then sends no CORS headers).
+async function acceptance(t, { proxy }) {
+  if (skipUnlessBrowser(t)) return;
+  const studio = await startChild(proxy ? { OBSERVOGRAM_MCP_ADMIN_PROXY: '1' } : {});
+  t.after(() => studio.stop());
+  const secret = `S3cr3t-${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`;
+  const apiKey = `k3y-${Math.random().toString(36).slice(2, 12)}`;
+  const VALUES = [secret, apiKey];
+  const holds = (s) => VALUES.some((v) => String(s).includes(v));
+  const f = await fake({ descriptor: BEARER, cors: proxy ? false : studio.child.base, requireKey: { key: apiKey, in: 'header' } });
+  const gwId = await endpointIdFor(studio.child.base, f.url, { name: 'gw-accept', headers: { Cookie: studio.cookies.ada } });
+  const w = await openPage(studio, 'ada', { cors: proxy });
+  const answers = [];
+  w.page.on('response', async (r) => { if (r.url().startsWith(studio.child.base)) answers.push({ url: r.url(), text: await r.text().catch(() => '') }); });
+
+  // Before: the connection test connects, but the read fails (the backend is not configured).
+  await aim(w, { id: gwId });
+  await w.page.click('#mcp-refresh-btn');
+  await w.page.waitForFunction(() => /^connected · \d+ ms$/.test(document.getElementById('mcp-ping-status')?.textContent || ''), null, { timeout: T });
+  assert.equal(await w.page.getAttribute('#mcp-ping-status', 'class'), 'mcp-refresh-status is-error', 'the read failed before the configure');
+  assert.equal(f.adminConfigured(), false);
+
+  // Configure, from the modal.
+  await openSettings(w);
+  await w.waitStatus(/^The server describes its settings \(version 1\)\.$/);
+  await fill(w, 'grafanaUrl', 'https://backend.example/');
+  await fill(w, 'user', 'svc-observogram');
+  await fill(w, 'secret', secret);
+  await fill(w, 'apiKey', apiKey);
+  await w.page.click('.mss-primary', { force: true });
+  // Verify: the read now answers, and the modal says so.
+  await w.waitStatus(/Connection test:/);
+  assert.match(await w.status(), new RegExp(`^The server reports the settings verified \\(HTTP 200\\)\\. Connection test: connected, and the read ${READ_TOOL} answered: `));
+  assert.equal(await w.page.getAttribute('#mcp-ping-status', 'class'), 'mcp-refresh-status is-ok', 'the read answers after the configure');
+  assert.equal(f.adminConfigured(), true);
+  assert.deepEqual(f.adminSettings(), { grafanaUrl: 'https://backend.example/', user: 'svc-observogram', secret });
+  assert.deepEqual(await w.page.evaluate(() => [...document.querySelectorAll('#mss-host input[type="password"]')].map((i) => i.value)), ['', '']);
+
+  // Open the live panel: the draft picker on the same endpoint, its test run; then a snapshot.
+  await w.page.click('.mss-more-btn[data-mss="openLive"]');
+  await w.page.waitForFunction(() => !document.querySelector('#mss-host .mss'), null, { timeout: T });
+  assert.equal(await w.page.isHidden('#mcp-panel'), true, 'the MCP panel gave way to the live panel');
+  await w.page.waitForSelector('#draft-mcp-panel:not([hidden])', { timeout: T });
+  assert.equal(await w.page.inputValue('#draft-mcp-panel [data-mcp-target="draft"] select'), String(gwId), 'the draft picker is on the configured endpoint');
+  await w.page.waitForFunction(() => /^connected/.test(document.getElementById('live-ping-status')?.textContent || ''), null, { timeout: T });
+  await w.page.check('#live-kind-snapshot');
+  await w.page.fill('#live-label', 'accepted snapshot');
+  await w.page.click('#draft-mcp-go-btn');
+  await w.page.waitForFunction(() => /^Registered /.test(document.querySelector('#live-result .mcpc-sentence')?.textContent || ''), null, { timeout: 60_000 });
+  assert.match(await w.text('#live-result .mcpc-sentence'), /^Registered accepted snapshot — \d+ artefacts?; gaps: /);
+  const stages = await w.page.evaluate(() => [...document.querySelectorAll('#live-gatelog .mcpc-stage')].map((li) => [li.dataset.stage, li.dataset.state]));
+  assert.deepEqual(stages.at(-1), ['register', 'done'], 'the gate log ends with the registration');
+
+  // Back in the MCP panel, on the same page: the modal reopens empty.
+  await w.page.click('#draft-mcp-panel-close');
+  await aim(w, { id: gwId });
+  await openSettings(w);
+  await w.waitStatus(/^The server describes its settings \(version 1\)\.$/);
+  assert.deepEqual(await values(w), [], 'every input is empty when reopened on the same page');
+  await closeSettings(w);
+
+  // Close, reload, sign out and sign in again.
+  await w.page.reload();
+  await w.page.waitForFunction(() => document.body.dataset.mode, null, { timeout: 30_000 });
+  await w.page.click('.hdr-user-btn');
+  await w.page.click('.hdr-user-out');
+  await w.page.waitForURL(`${studio.child.base}/auth/login`, { timeout: T });
+  await w.page.fill('#u', 'ada');
+  await w.page.fill('#p', password('ada'));
+  await Promise.all([w.page.waitForURL(`${studio.child.base}/`, { timeout: T }), w.page.click('button[type="submit"]')]);
+  await w.page.waitForFunction(() => document.body.dataset.mode, null, { timeout: 30_000 });
+
+  // Reopened, the modal's fields are empty: nothing kept a value.
+  await aim(w, { id: gwId });
+  await openSettings(w);
+  await w.waitStatus(/^The server describes its settings \(version 1\)\.$/);
+  assert.deepEqual(await values(w), [], 'every input is empty after the reopen');
+  const inputs = await w.page.evaluate(() => [...document.querySelectorAll('input, textarea')].map((i) => i.value));
+  assert.ok(!inputs.some(holds), 'no input on the page holds a value');
+  assert.ok(!holds(await w.page.evaluate(() => document.documentElement.outerHTML)), 'no value in the DOM');
+  await closeSettings(w);
+
+  // Storage and cookies.
+  const stored = await w.page.evaluate(() => JSON.stringify([Object.entries(localStorage), Object.entries(sessionStorage), document.cookie]));
+  assert.ok(!holds(stored), 'no value in localStorage, sessionStorage or document.cookie');
+  assert.ok(!holds(JSON.stringify(await w.ctx.cookies())), 'no value in the context\'s cookies');
+
+  // Every request the page sent to the studio (URL, headers, body), and every answer.
+  const toStudio = w.requests.filter((r) => r.url.startsWith(studio.child.base));
+  const carrying = toStudio.filter((r) => holds(JSON.stringify(r)));
+  if (proxy) {
+    assert.deepEqual(carrying.map((r) => `${r.method} ${r.url.slice(studio.child.base.length)}`), ['POST /api/mcp-settings/submit'], 'the values travel to the studio in exactly one body');
+    assert.ok(holds(carrying[0].postData) && !holds(carrying[0].url) && !holds(JSON.stringify(carrying[0].headers)), 'in its body only');
+    assert.deepEqual(w.requests.filter((r) => r.url.startsWith(f.origin)), [], 'the browser never contacted the MCP server');
+  } else {
+    assert.deepEqual(carrying, [], 'no request to the studio carried a value');
+    assert.deepEqual(w.requests.filter((r) => r.url.startsWith(f.origin) && holds(JSON.stringify(r))).map((r) => `${r.method} ${r.url.slice(f.origin.length)}`), ['POST /configure'], 'the values went only to the MCP server\'s configure');
+  }
+  assert.ok(answers.length > 0 && !answers.some((a) => holds(a.text)), 'no studio answer carries a value');
+
+  // The audit, the workspace (the store file and its -wal included) and the server's log.
+  // (ada's first session ended at the sign-out: a fresh one reads the audit.)
+  const again = await signIn(studio.child.base, 'ada', password('ada'));
+  const audit = await (await fetch(`${studio.child.base}/api/audit?limit=200`, { headers: { Cookie: again.session } })).json();
+  assert.ok(Array.isArray(audit.rows) && audit.rows.length > 0, 'the audit is read');
+  assert.ok(!holds(JSON.stringify(audit)), 'no value in the audit');
+  assert.deepEqual(audit.rows.filter((r) => r.action === 'live.mcp-settings').map((r) => [r.targetId, r.detail.status]), proxy ? [[f.origin, 200]] : [], proxy ? 'the pass-through\'s row, names only' : 'browser-direct writes no settings row');
+  const files = filesUnder(studio.ws);
+  assert.ok(files.some(([p]) => /observogram\.db$/.test(p)), 'the store file is scanned');
+  for (const [path, bytes] of files) {
+    for (const v of VALUES) assert.ok(!bytes.includes(Buffer.from(v, 'utf8')) && !bytes.includes(Buffer.from(v, 'utf16le')), `no value in ${path}`);
+  }
+  const logs = studio.child.logs();
+  assert.ok(!holds(`${logs.stdout}${logs.stderr}`), 'no value in the studio server\'s output');
+  await w.done();
+}
+
+test('BROWSER 12: the acceptance flow, browser-direct — configure → verify → snapshot with nothing but the studio page; then no value in storage, cookies, the DOM, any studio request or answer, the audit, the workspace, the store file or the server\'s log', (t) => acceptance(t, { proxy: false }));
+
+test('BROWSER 13: the acceptance flow through the studio server — the same, the values only in the submit\'s body', (t) => acceptance(t, { proxy: true }));
