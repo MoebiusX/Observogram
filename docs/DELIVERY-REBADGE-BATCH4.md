@@ -129,7 +129,7 @@ server versus the studio's connection to it, the UI_CONVENTIONS zone.
 
 ## Mutation checks
 
-Run during the build; each change, made alone, failed the named test.
+Run during the build and the review; each change, made alone, failed the named test.
 
 | Mutation | Fails |
 |---|---|
@@ -139,6 +139,25 @@ Run during the build; each change, made alone, failed the named test.
 | Secret inputs not emptied once the request is sent | BROWSER 1 (the inputs while the outcome shows) |
 | The pass-through's own parse-error handler removed | `server/test-mcp-settings.mjs`, the malformed-body case |
 | The endpoint's read token resolved and sent with the description read | `server/test-mcp-settings.mjs`, the describe-by-id and described-submit cases (the headers recorded upstream) |
+| `credentials: 'include'` in `directRequest` | `server/test-authz.mjs`, the fetch-exemption guard; also BROWSER 1–5, 8, 9, 10 and 12 (the fake MCP's CORS answer grants no credentials, so the browser refuses every answer) |
+| One `textContent` in the view's node helper swapped for `innerHTML` | `server/test-authz.mjs`, the no-`innerHTML` guard; BROWSER 10 |
+| The path character class widened (`%`, `;`, `:` admitted) | `tools/test-mcp-server-settings.mjs`, the path rule under a loopback root and under a path-prefixed https root |
+| Redaction after parse dropped (the parsed body walked without the secret's forms) | `tools/test-mcp-server-settings.mjs`, the after-parse case (`\u0022`, `\u00e9`, `\/`) |
+| Redaction dropped entirely | `tools/test-mcp-server-settings.mjs`, four redaction cases; `server/test-mcp-settings.mjs`, the no-upstream-text case (the echoed secret); BROWSER 3 |
+| The document Escape handler's yield to the open modal removed (`if (mssOpen()) return`, `studio/app.mjs`) | BROWSER 9 (Escape on `<body>` closes the panel too) |
+| The outside-click handler's `isConnected` test removed | BROWSER 9 (a click on the scrim, which the repaint removes, closes the panel too) |
+| The browser following redirects (`redirect: 'follow'`) | `server/test-authz.mjs`, the fetch-exemption guard; BROWSER 8 (the redirect's sink) |
+| The pass-through following redirects | `server/test-mcp-settings.mjs`, the redirect case (the sink receives nothing) |
+| The pass-through's acknowledgement check removed | `server/test-mcp-settings.mjs`, the settings-policy re-check case (the 409) |
+| The pass-through building a described submit from the caller's `generic` block instead of the description it read again | `server/test-mcp-settings.mjs`, the described-submit case (the description's endpoint, not the caller's path) |
+| The pass-through's upstream request sent through the transport hook (M10) | `server/test-mcp-settings.mjs`, the transport-hook case |
+| The line after the connection test mirroring the ping's `status` instead of its read's outcome | `tools/test-mcp-settings-model.mjs`, the after-the-connection-test case; BROWSER 1, 4 and 12 |
+
+Dropping the path re-check in `resolveSettingsPath` (the same origin, under
+the root, no userinfo, search or hash) fails no test: every path the shape
+rule admits — letters, digits, `-`, `_`, `.`, `~` and `/`, no `.` or `..`
+segment — resolves under the root, so no input reaches the re-check. It is
+a second line behind the shape rule, as the widened-class row shows.
 
 Resolving the read token (`forWrite: false`) without attaching it fails no
 test: the pass-through builds its upstream headers itself and never reads
