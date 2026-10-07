@@ -624,8 +624,8 @@ test('BROWSER 6: target refusals — a typed ftp:// URL, an unlisted remote orig
   const w = await openPage(studio, 'ada');
   const cases = [
     ['ftp://127.0.0.1/mcp', /^MCP URL must be http or https|scheme/i],
-    ['https://mcp.example/mcp', /^Https:\/\/mcp\.example is not a listed MCP origin, and settings carry a credential, which goes only to a listed origin or this machine — the server's operator adds https:\/\/mcp\.example to OBSERVOGRAM_MCP_ORIGINS/],
-    ['http://mcp.example/mcp', /^Http:\/\/mcp\.example is plain http, and settings carry a credential across the network — serve the MCP server over https, or run it on this machine\.$/],
+    ['https://mcp.example/mcp', /^https:\/\/mcp\.example is not a listed MCP origin, and settings carry a credential, which goes only to a listed origin or this machine — the server's operator adds https:\/\/mcp\.example to OBSERVOGRAM_MCP_ORIGINS/],
+    ['http://mcp.example/mcp', /^http:\/\/mcp\.example is plain http, and settings carry a credential across the network — serve the MCP server over https, or run it on this machine\.$/],
     [`${studio.child.base}/mcp`, /^The MCP server shares the studio's origin \(http:\/\/127\.0\.0\.1:\d+\), so its settings would go to the studio server — give the MCP server its own origin \(another port or host\)\.$/],
   ];
   for (const [url, re] of cases) {

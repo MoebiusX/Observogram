@@ -240,7 +240,8 @@ const toneKind = (tone) => (tone === 'ok' ? 'ok' : tone === 'error' ? 'error' : 
 function sentence(s) {
   const t = String(s ?? '').trim();
   if (!t) return '';
-  const up = t.charAt(0).toUpperCase() + t.slice(1);
+  // A reason that starts with a URL keeps it as the operator types it.
+  const up = /^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : t.charAt(0).toUpperCase() + t.slice(1);
   return /[.…?!]$/.test(up) ? up : `${up}.`;
 }
 

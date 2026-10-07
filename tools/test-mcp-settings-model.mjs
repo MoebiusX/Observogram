@@ -127,6 +127,8 @@ test('the status line of every state, exactly', () => {
   assert.equal(statusLine({ ...m, state: 'unreachable', redirect: true }).text, "The server answered with a redirect, which the studio never follows — configure the MCP endpoint's final URL.");
   assert.equal(statusLine({ ...m, state: 'refused', reason: 'duplicate field name "user"' }).text, 'Duplicate field name "user".');
   assert.equal(statusLine({ ...m, state: 'target-refused', reason: 'x is plain http' }).kind, 'error');
+  assert.equal(statusLine({ ...m, state: 'target-refused', reason: 'http://mcp.example is plain http' }).text, 'http://mcp.example is plain http.', 'a reason that starts with an origin keeps its scheme as typed');
+  assert.equal(statusLine({ ...m, state: 'refused', reason: 'https://mcp.example is not a listed MCP origin' }).text, 'https://mcp.example is not a listed MCP origin.');
   assert.equal(statusLine({ ...m, state: 'sending', sendingTo: 'http://127.0.0.1:9000/configure' }).text, 'Sending to http://127.0.0.1:9000/configure…');
   assert.deepEqual(statusLine({ ...m, state: 'outcome', outcome: { headline: 'The server reports the settings verified (HTTP 200).', tone: 'ok' } }), { text: 'The server reports the settings verified (HTTP 200).', kind: 'ok' });
   assert.match(statusLine({ ...m, state: 'unknown' }).text, /^The request was sent, but its answer could not be read \(no CORS header on the answer, a network error, or no answer within 15 s\)\. The server may have applied the settings/);
