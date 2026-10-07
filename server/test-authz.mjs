@@ -627,11 +627,11 @@ test('the Server settings request to the MCP server: one fetch(), built by direc
   assert.ok(/send\(directRequest\(/.test(code) && (code.match(/\bsend\(/g) ?? []).length === 3, 'every request goes through directRequest (the helper and its two callers)');
 });
 
-test('the Server settings view builds every node with createElement and textContent: no innerHTML, outerHTML or insertAdjacentHTML but the host\'s emptying', () => {
+test('the Server settings view builds every node with createElement and textContent: no innerHTML, outerHTML, insertAdjacentHTML or setHTML(Unsafe) but the host\'s emptying', () => {
   const code = withoutComments(readFileSync(join(STUDIO, 'mcp-settings-view.mjs'), 'utf8'));
   const html = [...code.matchAll(/\.(innerHTML|outerHTML)\s*(?:\+?=)\s*([^;\n]*)/g)].map((m) => `${m[1]} = ${m[2].trim()}`);
   assert.deepEqual(html, ["innerHTML = ''"], 'the only HTML assignment empties the host');
-  assert.ok(!/insertAdjacentHTML|createContextualFragment|DOMParser|document\.write/.test(code), 'no other way to parse markup');
+  assert.ok(!/insertAdjacentHTML|createContextualFragment|DOMParser|document\.write|\bsetHTML(?:Unsafe)?\b|\bparseHTML(?:Unsafe)?\b|srcdoc/.test(code), 'no other way to parse markup');
   assert.ok(/createElement\(/.test(code) && /textContent = /.test(code), 'nodes by createElement, text by textContent');
   const imports = [...code.matchAll(/from '([^']+)'/g)].map((m) => m[1]);
   assert.deepEqual(imports, ['./host.mjs'], 'a renderer: it imports host.mjs only');
