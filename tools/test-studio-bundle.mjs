@@ -453,6 +453,7 @@ test('T3c every feature the shim denies is named in the README 501 list and the 
     'Refresh from MCP': /Refresh from MCP/, 'Scan a repo': /Scan a repo/, 'Draft from a live MCP server': /Draft from MCP/,
     'Testing an MCP connection': /Testing an MCP connection/,
     'Building a pack from a live MCP server': /Building a pack from a live MCP server/,
+    'Passing MCP server settings through the studio server': /Passing MCP server settings through the studio server/,
     'Uploading a pack': /upload/i, Compare: /Compare/, Deploy: /Deploy/, Journeys: /Journeys/, Build: /Build/,
     Waivers: /Waivers/, Services: /Services \(/, Organisations: /Organisations \(/, Settings: /Settings \(/, 'Sign-in': /sign-in/i,
   };
@@ -765,6 +766,9 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   await expectDenied('/api/mcp/ping', { method: 'POST' }, 'Testing an MCP connection');
   await expectDenied('/api/mcp/jobs', { method: 'POST' }, 'Building a pack from a live MCP server');
   await expectDenied('/api/mcp/jobs', {}, 'Building a pack from a live MCP server');
+  // The MCP server-settings pass-through (rebadge batch 4): both POSTs; the GET is the shim's (T5).
+  await expectDenied('/api/mcp-settings/describe', { method: 'POST' }, 'Passing MCP server settings through the studio server');
+  await expectDenied('/api/mcp-settings/submit', { method: 'POST' }, 'Passing MCP server settings through the studio server');
   await expectDenied('/api/validate', { method: 'POST' }, 'Uploading a pack');
   await expectDenied('/api/uploads', { method: 'DELETE' }, 'Uploading a pack');
   await expectDenied('/api/diff?a=p&b=p', undefined, 'Compare');

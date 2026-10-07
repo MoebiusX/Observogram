@@ -74,6 +74,7 @@ export const FEATURES = [
   ['/api/draft-from-mcp', 'Draft from a live MCP server'],
   ['/api/mcp/ping', 'Testing an MCP connection'],     // the live MCP API (rebadge batch 3); not a prefix of /api/mcp-endpoints
   ['/api/mcp/jobs', 'Building a pack from a live MCP server'],   // the live jobs (rebadge batch 3, C1); not a prefix of /api/mcp-endpoints
+  ['/api/mcp-settings/', 'Passing MCP server settings through the studio server'],   // the opt-in pass-through (rebadge batch 4); GET /api/mcp-settings is the shim's
   ['/api/validate', 'Uploading a pack'],
   ['/api/uploads', 'Uploading a pack'],
   ['/api/diff', 'Compare'],

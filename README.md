@@ -1047,6 +1047,7 @@ written the same way, after the answer is known.
 | `POST /api/journeys/:name/run` | `journey.run` | the journey name | `{ startedAt, outcome, alignmentPct, gradeScore, gradePass, breaches, tookMs }` — **one row per attempt past the 404** (and past a refused Pack B MCP target, which writes none): a run that fails from the studio leaves a row with `outcome: "error"`, or `"vantage-lost"` when a live source lost its vantage (the engine wrote a run record and may have notified), the four record fields `null`; never the error's message |
 | `POST /api/refresh-live` | `live.refresh` | the MCP origin | `{ mcpEndpoint, refreshedAt, servicesDiscovered, toolsFailed }` (counts) |
 | `POST /api/mcp/ping` | `live.ping` | the MCP origin | `{ verdict, typed: true }` — only when the caller typed the URL (an admin's privilege); a ping by `mcpEndpointId` writes no row |
+| `POST /api/mcp-settings/submit` | `live.mcp-settings` | the MCP origin | `{ op: configure \| action:<name>, path, endpointId, typed, status, fields: [names], acks: [rule indexes] }` — the opt-in pass-through only (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`), once a request left for the MCP server (`status` null when no answer came); never a value. A settings request the browser sends straight to the MCP server leaves no studio row: the MCP server audits its own |
 | `POST /api/mcp/jobs` (and its `…/cancel`) | `live.fetch` | the MCP origin | `{ kind, outcome: done \| failed \| cancelled, typed, mcpEndpoint, jobId, packId, stages: { done, skipped, failed }, gaps: [stage ids] }` — one row when the job ends, whether or not it registered a pack (whose own rows come first) |
 
 When one of the two writes fails: the operation stands. A row the store
@@ -1897,7 +1898,8 @@ live on a service record, which a bundled pack has none of), the Audit report
 Services (the records behind the home's cards and the service page — a bundle
 has no services table), Organisations (the active org's name and role),
 Settings (members, environments, MCP endpoints, the audit — a bundle has no org),
-sign-in — answers `501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
+Passing MCP server settings through the studio server (the Server settings
+modal sends from the browser in a bundle), sign-in — answers `501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
 this studio is a static bundle built without one.' }`, which the studio shows
 as the sentence, and a dismissable notice at the bottom of the window says so
 once ("Static studio — no Observogram server behind this page …"). Compare is
@@ -2632,7 +2634,10 @@ target, so without sign-in it answers only a request sent straight to a
 loopback address, it is closed on an exposed server without sign-in, and
 every request takes the `X-Observogram-CSRF: 1` header but the bearer
 token's; a live job's gate log is its starter's — `POST /api/draft-from-mcp`
-and `POST /api/refresh-live` take the same posture); every other `GET` is `viewer` and every other route `operator`.
+and `POST /api/refresh-live` take the same posture); every `/api/mcp-settings/…`
+route is `admin` (the MCP server-settings API, off unless `OBSERVOGRAM_MCP_ADMIN_PROXY=1`:
+a server-side request carrying an admin's settings to the MCP server, so the
+live MCP API's posture with the admin class); every other `GET` is `viewer` and every other route `operator`.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -2644,6 +2649,8 @@ and `POST /api/refresh-live` take the same posture); every other `GET` is `viewe
 | `GET` | `/api/examples` | Bundled example packs |
 | `GET` | `/api/taxonomy` | The artefact taxonomy override the server was started with (`OBSERVOGRAM_TAXONOMY`): `{ ok, taxonomy, configured }` — the document or `null`, never its path; no-store |
 | `GET` | `/api/mcp-settings` | The MCP server-settings policy the server was started with (`OBSERVOGRAM_MCP_SETTINGS_POLICY`, rebadge batch 4) and whether the opt-in pass-through is on (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`): `{ ok, proxy, policy, configured }` — the document or `null`, never its path; no-store. The studio reads it when its Server settings modal opens |
+| `POST` | `/api/mcp-settings/describe` | The opt-in pass-through (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`, rebadge batch 4; `404 { denied: 'off' }` otherwise): `{ mcpEndpointId }` or an admin's typed `mcpUrl` → the studio server reads `<MCP server root>/admin/schema` (no token: the endpoint's read token never rides, `mcpAuth` is refused) and answers `{ ok, status, descriptor \| notDescriptor \| reason }` — the validated description re-serialised, never the upstream text. Under the origin allowlist, https unless loopback, no redirect followed, 10 s, 16 KiB, never through the transport hook |
+| `POST` | `/api/mcp-settings/submit` | The same pass-through's configure (or a declared action): `{ mcpEndpointId \| mcpUrl, mode: 'described' \| 'generic', generic?, action?, values, acks }`. The path is the server's — the endpoint of the description it reads again now, or the settings policy's `generic.path` (else `/configure`) —, the settings policy is re-checked (a missing acknowledgement is a 409), and the answer is `{ ok, status, contentType, bytes, outcome: { ok?, message?, checks? } \| null, redacted }` — the outcome shape redacted, never another body. A malformed body is a 400 that quotes none of it; the body is never logged or kept; one `live.mcp-settings` row (field names and acknowledged rule indexes, never a value) |
 | `GET` | `/api/references` | Curated catalogue reference packs |
 | `GET` | `/api/packs/:id` | Adapted layered pack |
 | `GET` | `/api/packs/:id/canonical` | Canonical pack with env overlay |

@@ -405,6 +405,18 @@ test('authzDecision: every refusal names a way out', () => {
   assert.equal(text(livePing, ctxOf('identity', P.operator, { csrf: false })),
     "missing X-Observogram-CSRF: 1 — requests to the live MCP API need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')");
   assert.equal(text(livePing, ctxOf('identity', P.viewer)), "requires the operator role in org 'acme' (you are viewer) — ask an admin of acme");
+  // The MCP server-settings API (rebadge batch 4): closed under its own
+  // name; the direct-rule text names the studio only (no CLI configures an
+  // MCP server); the CSRF text says requests.
+  const settingsProxy = synth({ class: 'admin', direct: true, csrf: 'always', exposed: 'refuse', closedAs: 'the MCP server-settings API' });
+  assert.equal(text(settingsProxy, ctxOf('open-exposed', P.local)),
+    'the MCP server-settings API is closed on a server bound to 0.0.0.0 without sign-in (OBSERVOGRAM_INSECURE_NO_AUTH=1): add the first user with npm run users -- add <login> (it arms sign-in without a restart; the first local user is an owner), or configure OIDC');
+  assert.equal(text(settingsProxy, ctxOf('open-loopback', P.local, { direct: false, port: 8123 })),
+    'on a server without sign-in the MCP server-settings API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:8123');
+  assert.equal(text(settingsProxy, ctxOf('identity', P.admin, { csrf: false })),
+    "missing X-Observogram-CSRF: 1 — requests to the MCP server-settings API need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')");
+  assert.equal(text(settingsProxy, ctxOf('identity', P.operator)), "requires the admin role in org 'acme' (you are operator) — ask an admin of acme");
+  assert.equal(text(settingsProxy, ctxOf('identity', P.bearer)), "the bearer token acts as an operator in org 'acme'; the admin role needs a signed-in user with that role");
 });
 
 // A typed MCP URL (R2/R4, server/mcp-target-policy.mjs) is refused below
@@ -944,6 +956,8 @@ const EXPECTED_CLASS = Object.freeze({
   'GET /api/examples': 'viewer',
   'GET /api/taxonomy': 'viewer',
   'GET /api/mcp-settings': 'viewer',
+  'POST /api/mcp-settings/describe': 'admin',
+  'POST /api/mcp-settings/submit': 'admin',
   'GET /api/references': 'viewer',
   'GET /api/packs/:id': 'viewer',
   'GET /api/packs/:id/canonical': 'viewer',
@@ -1053,16 +1067,23 @@ const EXPECTED_LIVE_MCP = Object.freeze([
   'POST /api/mcp/ping', 'GET /api/mcp/jobs', 'POST /api/mcp/jobs', 'GET /api/mcp/jobs/:jobId', 'POST /api/mcp/jobs/:jobId/cancel',
   'POST /api/draft-from-mcp', 'POST /api/refresh-live',
 ]);
+// The MCP server-settings API (rebadge batch 4, the opt-in pass-through):
+// a server-side request carrying an admin's secret — admin by class, direct
+// without sign-in, closed when exposed, the CSRF header on every request.
+const EXPECTED_MCP_SETTINGS = Object.freeze(['POST /api/mcp-settings/describe', 'POST /api/mcp-settings/submit']);
 // How each direct entry outside the identity API is named by the posture
 // refusals; every other direct entry is 'the identity API'.
-const CLOSED_AS = Object.freeze({ 'the MCP endpoint API': EXPECTED_MCP_ENDPOINT_CHANGES, 'the audit API': EXPECTED_AUDIT_API, 'the live MCP API': EXPECTED_LIVE_MCP });
+const CLOSED_AS = Object.freeze({
+  'the MCP endpoint API': EXPECTED_MCP_ENDPOINT_CHANGES, 'the audit API': EXPECTED_AUDIT_API, 'the live MCP API': EXPECTED_LIVE_MCP,
+  'the MCP server-settings API': EXPECTED_MCP_SETTINGS,
+});
 // Every `direct` entry, and every csrf: 'always' entry (the identity
 // mutations, the self route that changes a session, the MCP endpoint
 // changes, the live MCP API's requests).
-const EXPECTED_DIRECT = Object.freeze([...EXPECTED_IDENTITY_API, ...EXPECTED_MCP_ENDPOINT_CHANGES, ...EXPECTED_AUDIT_API, ...EXPECTED_LIVE_MCP]);
+const EXPECTED_DIRECT = Object.freeze([...EXPECTED_IDENTITY_API, ...EXPECTED_MCP_ENDPOINT_CHANGES, ...EXPECTED_AUDIT_API, ...EXPECTED_LIVE_MCP, ...EXPECTED_MCP_SETTINGS]);
 const EXPECTED_CSRF_ALWAYS = Object.freeze([
   ...EXPECTED_IDENTITY_API.filter((k) => !k.startsWith('GET ')), 'POST /auth/signout-others', ...EXPECTED_MCP_ENDPOINT_CHANGES,
-  ...EXPECTED_LIVE_MCP.filter((k) => !k.startsWith('GET ')),
+  ...EXPECTED_LIVE_MCP.filter((k) => !k.startsWith('GET ')), ...EXPECTED_MCP_SETTINGS,
 ]);
 
 const { spawnSync } = await import('node:child_process');
@@ -1190,6 +1211,7 @@ test('the README API Surface: its intro states each row\'s class — public and 
   assert.match(intro, /every `\/api\/mcp-endpoints` route but its `GET` is `admin`/, 'the intro states the MCP endpoint rows');
   assert.match(intro, /`GET \/api\/audit` is\s+`admin` \([^)]*— see \[The Audit\]\(#the-audit\)\)/, 'the intro states the audit reader\'s class and links The Audit');
   assert.match(intro, /every `\/api\/mcp\/…` route is `operator` \(the live MCP API:/, 'the intro states the live MCP API rule');
+  assert.match(intro, /every `\/api\/mcp-settings\/…` route is `admin` \(the MCP server-settings API, off unless `OBSERVOGRAM_MCP_ADMIN_PROXY=1`/, 'the intro states the MCP server-settings API rule');
   assert.match(intro, /every other `GET` is `viewer`/, 'the intro states the GET rule');
   assert.match(intro, /every other route `operator`/, 'the intro states the rule for every other row');
   const stated = (method, path) => {
@@ -1199,6 +1221,7 @@ test('the README API Surface: its intro states each row\'s class — public and 
     if (path.startsWith('/api/admin/')) return 'owner';
     if (path.startsWith('/api/mcp-endpoints') && method !== 'GET') return 'admin';
     if (path === '/api/audit') return 'admin';
+    if (path.startsWith('/api/mcp-settings/')) return 'admin';
     if (path.startsWith('/api/mcp/')) return 'operator';
     return method === 'GET' ? 'viewer' : 'operator';
   };
@@ -1421,6 +1444,8 @@ const PROBES = Object.freeze({
   'GET /api/examples': ['GET', '/api/examples'],
   'GET /api/taxonomy': ['GET', '/api/taxonomy'],
   'GET /api/mcp-settings': ['GET', '/api/mcp-settings'],
+  'POST /api/mcp-settings/describe': ['POST', '/api/mcp-settings/describe'],
+  'POST /api/mcp-settings/submit': ['POST', '/api/mcp-settings/submit'],
   'GET /api/references': ['GET', '/api/references'],
   'GET /api/packs/:id': ['GET', '/api/packs/nope'],
   'GET /api/packs/:id/canonical': ['GET', '/api/packs/nope/canonical'],
@@ -1564,7 +1589,9 @@ function rawCall(url, method, headers, payload) {
     req.end(payload);
   });
 }
-const outcome = (r) => ((r.status === 401 || r.status === 403 || r.json?.denied)
+// The MCP server-settings pass-through answers 404 `denied: 'off'` past the
+// guard while OBSERVOGRAM_MCP_ADMIN_PROXY is unset: the route's own answer.
+const outcome = (r) => ((r.status === 401 || r.status === 403 || (r.json?.denied && !(r.status === 404 && r.json.denied === 'off')))
   ? `${r.status} ${r.json?.denied ?? '(no denied)'}` : 'allowed');
 
 // Every probe for every variant; the mismatches, as readable lines.
@@ -1605,7 +1632,7 @@ async function auditSeq(ws) {
 const CASE_PROBES = [
   ['GET', '/API/live-status'], ['GET', '/Api/deploy/matrix'], ['POST', '/API/validate'], ['DELETE', '/API/uploads'],
   ['POST', '/API/refresh-live'], ['POST', '/API/deploys/x/verify'], ['POST', '/API/mcp/ping'], ['GET', '/API/mcp/jobs'],
-  ['GET', '/API/mcp-settings'],
+  ['GET', '/API/mcp-settings'], ['POST', '/API/mcp-settings/describe'], ['POST', '/API/mcp-settings/submit'],
 ];
 async function caseRows(base, headers = {}) {
   const bad = [];
@@ -2109,6 +2136,20 @@ for (const posture of OPEN) {
           assert.deepEqual([bare.status, bare.json.denied, bare.json.error], [403, 'csrf',
             "missing X-Observogram-CSRF: 1 — requests to the live MCP API need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')"], key);
         }
+        // The MCP server-settings API (rebadge batch 4): the same posture,
+        // its way out the studio at this machine (no CLI configures an MCP
+        // server); without the header, the CSRF refusal that says requests.
+        for (const key of EXPECTED_MCP_SETTINGS) {
+          const proxied = await call(srv.base, PROBES[key], { headers: { ...CSRF_HEADER, 'X-Forwarded-For': '203.0.113.9' }, raw: true });
+          assert.deepEqual([proxied.status, proxied.json.denied, proxied.json.error], [403, 'posture',
+            'on a server without sign-in the MCP server-settings API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; '
+            + `no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${port}`], key);
+          const bare = await call(srv.base, PROBES[key]);
+          assert.deepEqual([bare.status, bare.json.denied, bare.json.error], [403, 'csrf',
+            "missing X-Observogram-CSRF: 1 — requests to the MCP server-settings API need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')"], key);
+          const direct = await call(srv.base, PROBES[key], { headers: CSRF_HEADER });
+          assert.deepEqual([direct.status, direct.json.denied], [404, 'off'], `${key}: a direct request passes the guard; the switch is off`);
+        }
       } else {
         const r = await call(srv.base, PROBES['GET /api/admin/users'], { headers: CSRF_HEADER });
         assert.deepEqual([r.status, r.json.denied], [403, 'posture']);
@@ -2137,6 +2178,11 @@ for (const posture of OPEN) {
           const live = await call(srv.base, PROBES[key], { headers: CSRF_HEADER, body: '{"mcpEndpointId":1}' });
           assert.deepEqual([live.status, live.json.denied], [403, 'posture'], key);
           assert.match(live.json.error, /^the live MCP API is closed on a server bound to 0\.0\.0\.0 without sign-in \(OBSERVOGRAM_INSECURE_NO_AUTH=1/, key);
+        }
+        for (const key of EXPECTED_MCP_SETTINGS) {
+          const closed = await call(srv.base, PROBES[key], { headers: CSRF_HEADER, body: '{"mcpEndpointId":1}' });
+          assert.deepEqual([closed.status, closed.json.denied], [403, 'posture'], key);
+          assert.match(closed.json.error, /^the MCP server-settings API is closed on a server bound to 0\.0\.0\.0 without sign-in \(OBSERVOGRAM_INSECURE_NO_AUTH=1/, key);
         }
         // The audit reader (slice 5) is closed here too, under its own name.
         const audit = await call(srv.base, PROBES['GET /api/audit']);

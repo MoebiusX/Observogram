@@ -57,6 +57,7 @@ const lineOf = (src, index) => src.slice(0, index).split('\n').length;
 // is browser code (window.location, fetch URLs) and is not scanned.
 const PATHNAME_ALLOWED = Object.freeze({
   'server/store/identity.mjs': 1,       // the OIDC issuer URL's well-known suffix
+  'server/routes/mcp-settings.mjs': 2,  // an MCP server's settings URL path, for a refusal and the audit row
   'server/test-auth-oidc.mjs': 4,       // the fake IdP's HTTP request paths
   'tools/build-studio-bundle.mjs': 1,   // a --pack-url (http) path, for an id
   'tools/record-mcp-fixtures.mjs': 1,   // an MCP URL, printed without its query

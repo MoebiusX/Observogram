@@ -341,6 +341,17 @@ app.get('/api/version', authorize('GET /api/version'), (req, res) => {
 app.use(authGate);
 app.use(orgContext);
 
+// The MCP server-settings API (rebadge batch 4) lives in
+// server/routes/mcp-settings.mjs: GET /api/mcp-settings — the settings
+// policy (OBSERVOGRAM_MCP_SETTINGS_POLICY) and whether the opt-in
+// pass-through is on, read by the studio when its Server settings modal
+// opens — and the pass-through itself (OBSERVOGRAM_MCP_ADMIN_PROXY=1), whose
+// two POSTs carry a secret in their body. Mounted BEFORE the body parsers:
+// those two read their own body (64 KiB) and answer a malformed one with a
+// fixed JSON text, where the app-wide parser's error page would quote it
+// (M6 (b) — every other route's answer is unchanged).
+app.use(mcpSettingsRoutes({ authorize }));
+
 app.use(express.json({ limit: '16mb' }));   // /api/crawl can carry a whole repo's worth of YAML
 app.use(express.text({ type: ['application/x-yaml', 'text/yaml', 'text/plain'], limit: '4mb' }));
 app.use(express.urlencoded({ extended: false, limit: '64kb' }));   // /auth/login form
@@ -772,12 +783,6 @@ app.use(auditRoutes({ authorize }));
 // live file and no pack; the live jobs — /api/mcp/jobs, a snapshot or a
 // draft (draftFromMcp, below) run in the server's memory, polled by id.
 app.use(liveRoutes({ authorize, draftFromMcp }));
-
-// The MCP server-settings API (rebadge batch 4) lives in
-// server/routes/mcp-settings.mjs: GET /api/mcp-settings — the settings
-// policy (OBSERVOGRAM_MCP_SETTINGS_POLICY) and whether the opt-in
-// pass-through is on, read by the studio when its Server settings modal opens.
-app.use(mcpSettingsRoutes({ authorize }));
 
 // ---------- saved journeys (VALUE_BACKLOG item 11, studio surface) ----------
 
