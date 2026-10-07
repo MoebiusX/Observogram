@@ -31,6 +31,12 @@ export function pageIsLoopback(pageOrigin) {
   return host === 'localhost' || LOOPBACK_V4.test(host) || host === '[::1]' || LOOPBACK_MAPPED.test(host);
 }
 
+function effectivePort(u) {
+  let url;
+  try { url = u instanceof URL ? u : new URL(String(u)); } catch { return null; }
+  return url.port || (url.protocol === 'https:' ? '443' : url.protocol === 'http:' ? '80' : null);
+}
+
 const NO_SIGN_IN = 'this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC';
 
 // ---------- the gate (A.2.1) ----------
@@ -105,7 +111,10 @@ export function settingsTargetModel({ url, posture = 'identity', origins = null,
     return d.reason ? refuse(d.reason) : { ok: true, origin, descriptorUrl: d.url };
   };
   if (proxy) return describeAt();
-  if (origin === pageOrigin) {
+  // The studio's own origin, or another name for it: a loopback page and a
+  // target that may be this machine on the page's port reach the studio
+  // process (the server form compares ports for loopback the same way).
+  if (origin === pageOrigin || (pageIsLoopback(pageOrigin) && safety.mayBeThisMachine(target.hostname) && effectivePort(target) === effectivePort(pageOrigin))) {
     return refuse(`the MCP server shares the studio's origin (${origin}), so its settings would go to the studio server — give the MCP server its own origin (another port or host)`);
   }
   const loopback = safety.isLoopbackOrigin(origin);

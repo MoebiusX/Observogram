@@ -73,6 +73,11 @@ test('the target rule: the URL policy first, then never the studio\'s own origin
   assert.equal(target('ftp://127.0.0.1/mcp').reason, safety.mcpUrlPolicy('ftp://127.0.0.1/mcp').error);
   assert.equal(target('not a url').ok, false);
   assert.equal(target(`${PAGE}/mcp`).reason, "the MCP server shares the studio's origin (http://127.0.0.1:8090), so its settings would go to the studio server — give the MCP server its own origin (another port or host)");
+  for (const u of ['http://localhost:8090/mcp', 'http://[::1]:8090/mcp', 'http://127.0.0.2:8090/mcp', 'http://a.localhost:8090/mcp', 'https://localhost:8090/mcp']) {
+    assert.match(target(u).reason ?? '', /^the MCP server shares the studio's origin \(/, `${u}: another name for the studio's own address`);
+  }
+  assert.equal(target('http://localhost:9000/mcp').ok, true, 'another port on this machine is not the studio');
+  assert.equal(target('http://localhost/mcp', { pageOrigin: 'http://127.0.0.1' }).ok, false, 'the default port, spelled or not');
 });
 
 test('the target rule: a target that may be this machine, from a page that is not, is refused in each posture\'s words (file:// is the static one)', () => {

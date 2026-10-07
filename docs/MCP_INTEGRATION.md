@@ -264,8 +264,9 @@ a rule matched: then it waits for that acknowledgement (and for a readable
 policy), as the pass-through does.
 
 The **target** is checked before any request (`studio/mcp-settings-model.mjs`
-`settingsTargetModel`): `mcpUrlPolicy`; never the studio's own origin (a
-settings request there would reach the studio server); a loopback MCP server
+`settingsTargetModel`): `mcpUrlPolicy`; never the studio's own origin, nor
+another name for this machine on the loopback page's port (a settings request
+there would reach the studio server); a loopback MCP server
 (or a host that may be this machine — `*.localhost`, `0.0.0.0`, `[::]`) only
 from a page that is itself on loopback; `https:` unless loopback; and a
 loopback or **listed** origin — the server's `OBSERVOGRAM_MCP_ORIGINS` (or the
