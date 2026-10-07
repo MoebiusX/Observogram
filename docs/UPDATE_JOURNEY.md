@@ -1188,3 +1188,93 @@ per item — what shipped, the measured `Tests:` pair, what is deferred by name
 — and `tools/test-doc-test-totals.mjs` guards it as it guards the batch 2
 reports, and holds the total its opening sentence states for the head of
 the branch to the last pair it quotes.
+
+### Rebadge batch 4
+
+The live side of the journey can now start from a configured MCP server
+without leaving the studio: the MCP panel's **Server settings…** configures
+the MCP server itself — its backend URL, user, secret and API key — from the
+page, and the configure → verify → snapshot flow needs no other page. Nothing
+about the pack, the compile or the verify rules changed; crawl, compile and
+board goldens are byte-identical, and an unconfigured server answers every
+request as before (the panel's new button asks nothing until it is clicked).
+
+**D1 — the settings description.** An MCP server publishes its settings as a
+small versioned description at `<MCP server root>/admin/schema`;
+`tools/lib/mcp-server-settings.mjs` (new, listed) parses it, resolves every
+path under the MCP server's root by a strict rule, builds the request and
+reads the outcome, hiding any secret the server echoes back. The taxonomy's
+pattern rule became one export (`compileBoundedPattern`) the settings policy
+reuses, and the loopback rule moved into `tools/lib/mcp-url-safety.mjs` for
+the browser. Tests: 1250 → 1253 (`compileBoundedPattern`'s direct cases in
+`tools/test-artefact-classify.mjs`). Tests: 1253 → 1299
+(`tools/test-mcp-server-settings.mjs` 46, new).
+
+**D3 — the settings policy.** `OBSERVOGRAM_MCP_SETTINGS_POLICY` names a
+strict JSON file read once at start (an unreadable or invalid file refuses
+the start) and served at `GET /api/mcp-settings`; a rule warns on a field's
+value and can require an acknowledgement before the send. It adds friction
+only, and on the browser-direct path it is advisory. Tests: 1299 → 1307
+(`server/test-mcp-settings.mjs` 8, new). The static bundle bakes the policy
+and the MCP origin list (`--mcp-settings-policy`, `--mcp-origins`).
+Tests: 1307 → 1308 (one test in `tools/test-studio-bundle.mjs`).
+
+**D2 — the modal.** For whoever may register an MCP endpoint, the button
+opens a modal in the page that reads the description from the browser,
+checks the target (never the studio's own origin, loopback only from a
+loopback page, https otherwise, a loopback or listed origin), and sends the
+settings from the browser straight to the MCP server — no cookie, no studio
+header, secrets emptied as soon as they are sent. The outcome is shown as the
+server returned it; after a verified configure the connection test runs and
+the modal says whether the backend read answered, then offers the live panel
+on the same target. Tests: 1308 → 1324 (`tools/test-mcp-settings-model.mjs`
+14, new; the fetch exemption and the view's markup guards in
+`server/test-authz.mjs`). The journeys in headless Chromium:
+Tests: 1324 → 1334 (`server/test-mcp-settings-studio.mjs` 10, new). The
+policy in the modal: Tests: 1334 → 1335 (one more in
+`tools/test-mcp-settings-model.mjs`).
+
+**The opt-in pass-through.** With `OBSERVOGRAM_MCP_ADMIN_PROXY=1` the modal
+sends through `POST /api/mcp-settings/describe` and `/submit` instead: admin,
+the endpoint's read token never sent, the origin allowlist, only the paths
+the server read, the platform's `fetch` and never the transport hook, no
+redirect, the body never logged or kept, the outcome shape only, one audit
+row without values. Tests: 1335 → 1347 (twelve more in
+`server/test-mcp-settings.mjs`). The modal on it: Tests: 1347 → 1351 (three
+more in `tools/test-mcp-settings-model.mjs`, one more in
+`server/test-mcp-settings-studio.mjs`).
+
+**The acceptance flow.** Configure → verify → snapshot with nothing but the
+studio page — browser-direct, and through the pass-through — then a reload,
+a sign-out and a sign-in, and a scan of storage, cookies, the DOM, every
+request to the studio, the audit, the workspace, the store file and the
+server's log for the secret and the API key. Tests: 1351 → 1353 (two more in
+`server/test-mcp-settings-studio.mjs`).
+
+**Review fixes.** The settings policy's timing run fills with a digit, a
+capital and a space too, so a slow `\d`, `[A-Z]` or `\s` part is refused in
+milliseconds rather than blocking the server for seconds. Tests: 1353 → 1354
+(one more in `tools/test-mcp-server-settings.mjs`). It then fills with every
+printable ASCII character and every character the pattern names, on a budget
+per filler, so a slow part built on `_`, `%`, `=`, `&`, `~`, `:`, `?` or `é`
+is refused too. Tests: 1354 → 1355 (one more in
+`tools/test-mcp-server-settings.mjs`). A third bypass ended the timing run: a
+pattern whose slow part is followed by something a probe's last character
+satisfies (`^.*_{0,60}_{0,60}_{0,60}_{0,60}!$`) failed fast on every probe and
+backtracked for minutes on a real value, blocking the whole studio server
+through the pass-through. The pass-through now evaluates the policy in a
+worker (`server/mcp-settings-eval.mjs`, new) with a 100 ms deadline and fails
+closed — a rule that does not finish counts as matched, so its warning
+applies and its acknowledgement is required, and one log line names the rule,
+never the value — and the start checks a pattern's shape only (the timing
+run is gone; the nested-quantifier, one-unbounded-quantifier and
+200-character rules stay). The studio still evaluates the policy in the page,
+where a slow pattern freezes only the admin's own tab. Tests: 1355 → 1357
+(two more in `server/test-mcp-settings.mjs`: the evaluator's deadline, and a
+child server that answers the slow submit with the 409 within 2 s and serves
+another request meanwhile). The other review fixes add assertions to existing
+tests or change docs; the count is unchanged.
+
+The batch's delivery report, `docs/DELIVERY-REBADGE-BATCH4.md`, is written
+per item and guarded by `tools/test-doc-test-totals.mjs` as the batch 3
+report is.

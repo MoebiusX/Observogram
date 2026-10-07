@@ -29,9 +29,9 @@
 //                the live MCP API, a server-side request to an MCP target
 //                (operator by class: the only direct entries below admin)
 //   closedAs     how the posture refusals name the route — 'the identity
-//                API' (default), 'the MCP endpoint API', 'the audit API' or
-//                'the live MCP API' (a singular subject: the texts say `is
-//                closed`, `answers only`)
+//                API' (default), 'the MCP endpoint API', 'the audit API',
+//                'the live MCP API' or 'the MCP server-settings API' (a
+//                singular subject: the texts say `is closed`, `answers only`)
 //   modes        where the route is registered: local, oidc, proxy, off
 //                (the /auth/* routes follow initAuth()'s mode)
 //   self         { pwflow, session, unauth } — class self only
@@ -99,6 +99,8 @@ export const ROUTES = Object.freeze({
   'GET /api/packs': { class: 'viewer' },
   'GET /api/examples': { class: 'viewer' },
   'GET /api/taxonomy': { class: 'viewer' },
+  // The MCP server-settings policy and the proxy flag (server/routes/mcp-settings.mjs; rebadge batch 4).
+  'GET /api/mcp-settings': { class: 'viewer' },
   'GET /api/references': { class: 'viewer' },
   'GET /api/packs/:id': { class: 'viewer' },
   'GET /api/packs/:id/canonical': { class: 'viewer' },
@@ -221,6 +223,12 @@ export const ROUTES = Object.freeze({
   // posture, and without sign-in answered only to a direct loopback
   // request — without being the identity API. A read: it writes no row.
   'GET /api/audit': { class: 'admin', exposed: 'refuse', direct: true, closedAs: 'the audit API' },
+  // The MCP server-settings API (rebadge batch 4, server/routes/mcp-settings.mjs): the opt-in
+  // pass-through of an admin's settings to the MCP server — a server-side request carrying a
+  // secret, so admin, closed when exposed, direct without sign-in, the CSRF header always. Off
+  // (404) unless OBSERVOGRAM_MCP_ADMIN_PROXY=1.
+  'POST /api/mcp-settings/describe': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP server-settings API' },
+  'POST /api/mcp-settings/submit': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP server-settings API', audit: ['live.mcp-settings'] },
 
   // ---------- owner: the deployment's users, orgs and join role ----------
   // The identity API (server/routes/identity.mjs), whatever org the request

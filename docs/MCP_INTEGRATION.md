@@ -134,6 +134,372 @@ and the stage table). The configured scope is
 (deployment) or `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` (one org); a datasource uid
 is named in the gate log as not applied, since no advertised tool takes one.
 
+## Server settings (admin configuration)
+
+Rebadge batch 4. The MCP panel's **Server settings…** button configures the
+**MCP server itself** — the backend base URL, user and secret it reads its
+backend with, its own API key — not the studio's connection to it (the
+panel's URL, endpoint and token stay what they were). The studio never keeps
+any of it: by default the browser sends the settings straight to the MCP
+server, and an opt-in pass-through (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`, below)
+exists for a deployment whose browser cannot reach the MCP server. This
+section is the contract an MCP server implements to be configured from the
+studio; `tools/lib/mcp-server-settings.mjs` (a listed module, pure and
+browser-safe) holds the parser, the path rule, the request builder and the
+outcome model, so a server author can vendor it and check their own
+description against it.
+
+### The settings description, version 1
+
+The server describes its settings at `<MCP server root>/admin/schema`
+(`SETTINGS_DESCRIPTOR_PATH`):
+
+```jsonc
+{
+  "version": 1,                                   // required, an integer; only 1 is read
+  "endpoint": "/configure",                       // required; the path rule below
+  "auth": { "field": "apiKey", "scheme": "bearer" },   // optional: that secret field goes as Authorization: Bearer
+  "fields": [                                     // required, 1–24
+    { "name": "grafanaUrl",                       // /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/, unique; never
+                                                  //   __proto__, constructor, prototype or action
+      "label": "Backend base URL",                // required, 1–80 characters, one line
+      "type": "url",                              // text | url | secret | boolean; any other type is read as text
+      "required": true,                           // optional (default false)
+      "help": "…",                                // optional, ≤ 240, one line
+      "placeholder": "https://…" }                // optional, ≤ 120; ignored on a secret
+  ],
+  "actions": [                                    // optional, 0–4
+    { "name": "disable",                          // the field-name rule; unique among actions
+      "label": "Clear server credential",         // required, 1–80
+      "endpoint": "/configure",                   // optional (default: the description's endpoint); the path rule
+      "fields": ["apiKey"],                       // optional: the fields the action sends
+      "confirm": "The server forgets the backend credential." }   // optional, ≤ 160: asks for a second click
+  ]
+}
+```
+
+- **At most 16 KiB.** A label, help, placeholder, confirm or action label
+  holding a control character (U+0000–U+001F, U+007F) is refused, as are
+  duplicate names, a reserved name, an action naming an unknown field, an
+  `auth.field` that is not a `secret` field and an `auth.scheme` other than
+  `bearer`. Each refusal names its rule (`fields[2].name "__proto__" is
+  reserved`, `duplicate field name "user"`), and the modal shows it with
+  **Try again** and **Use the generic form**.
+- **A 200 that is not a description** — JSON without `version` and `fields`
+  (a JSON-RPC answer such as `{"jsonrpc":"2.0","id":1,"result":{}}`), or a
+  content type that is not JSON — is named as such and treated as no
+  description: the generic form is offered.
+- **Unknown keys are ignored** at every level, so an additive change stays
+  version 1; a breaking change is a new version, which this studio refuses
+  with `this server describes its settings in version N; this studio reads
+  version 1 — update the studio, or use the generic form`.
+- **A description carries no current values.** It is read without a
+  credential; a `value` key is an unknown key, never read and never shown.
+- **Field types.** `text` is a text input, `url` a URL input, `secret` a
+  password input, `boolean` a checkbox; every text-like input takes at most
+  2048 characters. A `url` value is sent normalised (`new URL`, http or https
+  only, scheme and host lower-cased) and is refused when it carries a user or
+  password before `@` — those go in their own fields, so they are treated as
+  secrets. The studio checks nothing else about that URL: the MCP server owns
+  its SSRF policy for its backend.
+
+### Where it lives: the root and the path rule
+
+**The MCP server root** is the MCP URL with its last path segment dropped
+(one trailing slash ignored) and no query, fragment or userinfo:
+`http://127.0.0.1:9000/mcp` and `…/mcp/` give `http://127.0.0.1:9000/`;
+`https://gw.example/team-a/mcp` gives `https://gw.example/team-a/`. A server
+behind a path-prefix gateway therefore publishes its description under its
+own prefix (`https://gw.example/team-a/admin/schema`).
+
+**Every path** — the description's `endpoint`, each action's `endpoint`, the
+generic form's path and the settings policy's `generic.path` — is 1–128
+characters of `^/?[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*$`, with no segment
+`.` or `..` and none starting with `..`: no `%` escape, `;`, `:`, `@`, `\`,
+`?`, `#`, white space or empty segment. A leading `/` is relative to the
+**root**, not the origin (`/configure` under `https://gw.example/team-a/` is
+`https://gw.example/team-a/configure`). The resolved URL is checked again —
+the same origin, under the root, no userinfo, query or fragment, and
+`mcpUrlPolicy` clean — in the browser and again in the pass-through. A path
+that fails is refused by name (`… is not a plain path under <root> … — the
+studio sends settings only to the MCP server itself; its author fixes the
+descriptor`), and nothing is sent.
+
+### The generic form (servers without a description)
+
+A 404, 405, 501, 401 or 403 on the description, or an answer that is not a
+description, gives the **generic form**, which always says it is generic and
+why: `Backend base URL` (`url`, required), `User`, `Password / token` and
+`Server API key` (`secret`, "leave empty only if the server needs none"),
+named `url`, `user`, `secret` and `apiKey`, sent to `/configure`, every field
+in the body (`genericDescriptor`). Under **What the server expects** the
+reader may rename the four fields, change the path and send the API key as
+`Authorization: Bearer` instead. A deployment sets the prefill in its
+settings policy's optional `generic` block (`{ path, names, auth: 'body' |
+'bearer' }`, below); nothing the reader changes is remembered.
+
+### The request
+
+Opening the modal sends nothing at boot and nothing when the panel opens. On
+open the studio reads `GET /api/mcp-settings` (the settings policy, and
+whether the pass-through is on) and, once the target passes the checks below,
+the description — from the browser, a CORS simple `GET` with **no header and
+no credential** (`credentials: 'omit'`, `redirect: 'manual'`,
+`referrerPolicy: 'no-referrer'`, `cache: 'no-store'`), 10 s, read with a
+16 KiB cap.
+
+**Send to the server** POSTs `application/json` from the browser to the
+resolved endpoint (`credentials: 'omit'`, `redirect: 'manual'`, 15 s): one
+key per field — a URL normalised, a secret exactly as typed, a boolean as
+`true`/`false`, an empty optional field omitted — at most 64 KiB. When the
+description has `auth`, that field leaves the body and goes as
+`Authorization: Bearer <value>`. Nothing of the studio goes with it: no
+cookie, no `X-Observogram-*` header (no CSRF header, no active org), no
+referrer. An **action** sends `{ "action": "<name>" }` plus its declared
+`fields`; without them, the `auth` field when there is one, else every
+secret the reader typed — the note under the button says which, and that an
+empty one means a server that needs it will refuse. An action skips the
+required fields, and the policy's acknowledgements unless it carries a field
+a rule matched: then it waits for that acknowledgement (and for a readable
+policy), as the pass-through does.
+
+The **target** is checked before any request (`studio/mcp-settings-model.mjs`
+`settingsTargetModel`): `mcpUrlPolicy`; never the studio's own origin, nor
+another name for this machine on the loopback page's port (a settings request
+there would reach the studio server); a loopback MCP server
+(or a host that may be this machine — `*.localhost`, `0.0.0.0`, `[::]`) only
+from a page that is itself on loopback; `https:` unless loopback; and a
+loopback or **listed** origin — the server's `OBSERVOGRAM_MCP_ORIGINS` (or the
+org's `OBSERVOGRAM_ORG_<KEY>_MCP_ORIGINS`), or in the static bundle the list
+`--mcp-origins` baked. Each refusal names its reason and the way out for the
+reader's posture. Who sees the button enabled: whoever may register an MCP
+endpoint (`GET /api/mcp-endpoints` `policy.register.allowed` — a session
+admin or owner, or the open posture's caller on a direct loopback request);
+anyone else sees it `aria-disabled` with the reason.
+
+Secret inputs are password inputs with `autocomplete="new-password"` and the
+password managers' ignore attributes, in no `<form>` and with no `name`, so a
+saved studio login is never offered; their values are emptied as soon as the
+request is sent, and every input is gone when the modal closes.
+
+### The outcome
+
+A server answers its configure (and each action) with the outcome shape —
+optional, and the only source of "verified":
+
+```jsonc
+{ "ok": true,                                  // the server's verdict
+  "message": "Connected as svc-observogram",   // ≤ 500 characters shown
+  "checks": [ { "label": "Identity", "status": "pass", "detail": "role Viewer" },   // ≤ 24
+              { "label": "Toolset: alerting", "status": "fail", "detail": "403 from backend" } ] }
+```
+
+| The answer | The modal says |
+|---|---|
+| 2xx, `ok: true` | `The server reports the settings verified (HTTP <s>).` — then the panel's connection test runs |
+| 2xx, `ok` absent or not JSON | `The server accepted the settings (HTTP <s>). It reported no verification.` |
+| 2xx, `ok: false` | `The server answered HTTP <s> but reports a failure.` |
+| any other status | `The server refused the settings: HTTP <s>.` |
+| a redirect | `The server answered with a redirect, which the studio never follows.` and that it may have applied the settings |
+| sent, but the answer could not be read (network, no CORS on the answer, timeout) | that the outcome is unknown — never that nothing happened — with **Test the connection** |
+
+A check's status is shown as a word (`pass`, `fail`, `skip`, anything else
+`unknown`). The body is shown as the server returned it — pretty-printed when
+it is JSON, 8 KiB of the 64 KiB read — as text only, after the studio hides
+every submitted secret of 4+ characters it finds echoed back (raw,
+URI-encoded, JSON-escaped, base64, and base64 `<user>:<secret>`), then, in
+parsed JSON, every value under a submitted secret's name or a
+credential-like key (`password`, `secret`, `token`, `apiKey`, `credential`,
+`authorization`) whatever its length; the modal says how many it hid.
+
+After a verified configure the panel's **connection test** runs, and the
+modal reports its read's outcome, not only the verdict — `connected, and the
+read <tool> answered: …` or `connected, but the read failed: …` — since the
+connection test says `connected` even when the MCP server's backend read
+fails. **Open the live panel** then opens the live panel on the same target
+with its test run, so a Snapshot is one click away.
+
+### What your server must do
+
+The studio cannot enforce any of this on the browser-direct path; the MCP
+server's configure endpoint is what holds. The server author:
+
+1. **Authenticates the configure endpoint and every action** — `auth`
+   (`Authorization: Bearer`) or a body field the action also sends. An
+   unauthenticated configure endpoint makes **every studio user, every
+   script running on the studio's origin and every process on that machine**
+   the server's admin: any of them can point it at a backend of their choosing
+   (packs built from a backend they control, requests from the MCP server to
+   an internal host). They need no existing secret — they bring their own
+   backend. The only tolerable exception is a single-user development
+   machine, at that cost.
+2. **Restricts CORS to the studio's origin(s), on every response** — the
+   description, the configure and every action path, **errors and 401
+   included** (set CORS before auth and before the error handler): an exact
+   `Access-Control-Allow-Origin: <studio origin>` with `Vary: Origin`. Never
+   `*` on the configure endpoint and never `null` (a `file://` page sends
+   `Origin: null`); never `Access-Control-Allow-Credentials` (the studio sends
+   no cookie). The `OPTIONS` preflight allows `POST` and the headers
+   `content-type, authorization`.
+3. **Checks `Origin` on the configure POST**: refuses a present Origin that is
+   not a listed studio origin; accepts an absent Origin only from an
+   authenticated caller (the pass-through sends none); requires
+   `Content-Type: application/json`. CORS alone does not stop a cross-site
+   form POST.
+4. **Checks the `Host` header** against its own bind address(es). A loopback
+   server without this check can be reached by DNS rebinding from any page.
+5. **Never redirects** the description or the configure endpoint (the studio
+   follows no redirect), and **never echoes a submitted secret** — the
+   studio's redaction is a backstop, not the contract.
+6. **Serves the description without credentials and without current
+   values**, as `application/json` with `Cache-Control: no-store`: it is a
+   schema, not a state read.
+7. **Validates the values itself**, including its own SSRF policy for a `url`
+   field: the MCP server is what will call that backend.
+8. **Answers the outcome shape and audits its own configure calls.** A
+   configure the browser sends directly leaves no studio record.
+9. **Serves over https unless it binds to loopback** — the studio refuses a
+   plain-http settings target that is not loopback.
+
+### What the studio does, and what it cannot do
+
+The studio's guarantee is that **it** never sends a settings value anywhere
+but the MCP server the panel names, and never keeps one: no value reaches
+`localStorage`, `sessionStorage`, a cookie, the studio's state, the
+workspace, the store, a server log, an audit row or any studio API body
+(`server/test-mcp-settings-studio.mjs` scans all of them after a configure,
+a verify and a snapshot, a reload, a sign-out and a sign-in). On the
+browser-direct path the role gate, the target checks and the settings
+policy's acknowledgements are the studio's affordances: a request sent from
+the browser meets none of the studio server's authorization, its origin
+allowlist, its no-redirect client or its audit, and a reader with the
+browser's developer tools (or curl) can skip all of them. The MCP server's
+own authentication, CORS, Origin and Host checks (above) are what enforce. A
+page reached through an SSH tunnel on `127.0.0.1` passes the studio's
+same-machine check while the MCP server is remote from the reader; there,
+too, the MCP server's Host and Origin checks are what hold.
+`OBSERVOGRAM_ALLOW_LOCAL_MCP=0` protects the studio server's own network from
+its own requests; a browser-direct request is not one, so only the
+pass-through applies it.
+
+**The settings policy** (`OBSERVOGRAM_MCP_SETTINGS_POLICY`, docs/DOWNSTREAM.md
+§9 and §16) adds friction only: a rule whose pattern matches a field's value
+(a URL as its normalised form; a rule never reads a secret) shows its warning
+and, with `require.ack`, blocks the send until its acknowledgement is ticked;
+a rule whose field the form does not have cannot run, says so, and still
+requires its acknowledgement. Acknowledgements are never remembered. On the
+browser-direct path that block is advisory; the pass-through re-checks it
+against the description it reads itself. A deployment that needs the rule
+enforced enforces it in the MCP server. A pattern is checked for its shape
+when the file loads (anchored, at most 200 characters, no quantified group,
+at most one unbounded quantifier), not for its speed: the pass-through
+evaluates the policy in a worker with a 100 ms deadline, and a rule that
+does not finish counts as matched. The studio evaluates the policy in the
+page directly, so a slow pattern freezes only that admin's tab.
+
+### The pass-through: `OBSERVOGRAM_MCP_ADMIN_PROXY=1`
+
+Off by default (read per request, no restart). Use it when the browser cannot
+reach the MCP server — it sends no CORS headers, or it listens on a machine
+the reader's browser is not on. When `GET /api/mcp-settings` says it is on,
+the modal sends **every** request through the studio server —
+`POST /api/mcp-settings/describe` and `POST /api/mcp-settings/submit` (README
+"API Surface" has the shapes) — and never falls back from one path to the
+other. The routes are `admin`, take the CSRF header in every posture, answer
+without sign-in only a direct loopback request, and are closed when the
+server is exposed without sign-in. The studio server:
+
+- resolves the target as every MCP route does (a registered endpoint, or an
+  admin's typed URL), **never sending the endpoint's read token** and
+  refusing an `mcpAuth`; applies `OBSERVOGRAM_ALLOW_LOCAL_MCP`, https unless
+  loopback, never its own address, and to a submit (which carries a
+  credential) the origin allowlist;
+- sends only to the paths it read: the description at `<root>/admin/schema`;
+  a described submit reads the description again and sends to the endpoint
+  (or the action's endpoint) it declares, whatever the caller says; a generic
+  submit only to the settings policy's `generic.path`, else `/configure`;
+- re-checks the settings policy against what it read (a missing
+  acknowledgement is a 409), in a `node:worker_threads` worker with a 100 ms
+  deadline (`server/mcp-settings-eval.mjs`): past it the worker is
+  terminated, every rule that did not finish counts as matched — its warning
+  applies and its acknowledgement is required —, and one stderr line names
+  the rules and the deadline, never a value;
+- sends with the platform's `fetch`, **never through the transport hook**, so
+  a hook's own credential never rides to a settings path; no redirect
+  followed; exactly `Content-Type`, `Accept` and the description's own
+  `Authorization`; 10 s; the answer read with a cap;
+- passes back **the outcome shape only** — the description re-serialised from
+  its parse, or the outcome's `ok`, `message` and `checks` redacted; any other
+  body is named by its status, media type and size and never shown;
+- never logs, keeps or echoes the body (a malformed body is a 400 that quotes
+  none of it); logs one line per upstream request,
+  `[mcp-settings] <describe|submit|action:<name>> <status> <ms>ms`; writes one
+  `live.mcp-settings` audit row per submit with field names and acknowledged
+  rule indexes, never a value.
+
+An MCP server reachable only through the transport hook's gateway cannot be
+configured through the pass-through; configure it browser-direct, or have the
+gateway forward `/admin/schema` and the configure path.
+
+### A minimal server
+
+A loopback MCP server on port 9000 configured by a studio at
+`http://127.0.0.1:8090`, with its API key as the bearer:
+
+```js
+import { createServer } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
+
+const STUDIO = 'http://127.0.0.1:8090';                 // the studio origin(s) allowed to configure this server
+const HOSTS = new Set(['127.0.0.1:9000', 'localhost:9000']);
+const KEY = Buffer.from(process.env.MCP_ADMIN_KEY);     // required: the server's own API key
+const DESCRIPTION = JSON.stringify({
+  version: 1, endpoint: '/configure', auth: { field: 'apiKey', scheme: 'bearer' },
+  fields: [
+    { name: 'grafanaUrl', label: 'Backend base URL', type: 'url', required: true },
+    { name: 'user', label: 'User', type: 'text' },
+    { name: 'secret', label: 'Password / token', type: 'secret' },
+    { name: 'apiKey', label: 'Server API key', type: 'secret' },
+  ],
+  actions: [{ name: 'disable', label: 'Clear server credential' }],
+});
+const send = (res, status, body) => res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(body));
+const authorised = (req) => {
+  const given = Buffer.from(String(req.headers.authorization ?? '').replace(/^Bearer /, ''));
+  return given.length === KEY.length && timingSafeEqual(given, KEY);
+};
+
+createServer((req, res) => {
+  if (!HOSTS.has(req.headers.host)) return send(res, 421, { ok: false, message: 'unknown host' });   // DNS rebinding
+  res.setHeader('Vary', 'Origin');                                                       // CORS first, on every answer
+  if (req.headers.origin === STUDIO) res.setHeader('Access-Control-Allow-Origin', STUDIO);
+  if (req.method === 'OPTIONS') {
+    return res.writeHead(204, { 'Access-Control-Allow-Methods': 'GET, POST', 'Access-Control-Allow-Headers': 'content-type, authorization' }).end();
+  }
+  if (req.method === 'GET' && req.url === '/admin/schema') return send(res, 200, JSON.parse(DESCRIPTION));
+  if (req.method !== 'POST' || req.url !== '/configure') return send(res, 404, { ok: false, message: 'not found' });
+  if (req.headers.origin !== undefined && req.headers.origin !== STUDIO) return send(res, 403, { ok: false, message: 'origin not allowed' });
+  if (!authorised(req)) return send(res, 401, { ok: false, message: 'API key required' });
+  if (!/^application\/json\b/.test(req.headers['content-type'] ?? '')) return send(res, 415, { ok: false, message: 'JSON only' });
+  let raw = '';
+  req.setEncoding('utf8');
+  req.on('data', (c) => { raw += c; if (raw.length > 65536) req.destroy(); });
+  req.on('end', () => {
+    let body;
+    try { body = JSON.parse(raw); } catch { return send(res, 400, { ok: false, message: 'not JSON' }); }
+    if (body.action === 'disable') { /* forget the backend credential */ return send(res, 200, { ok: true, message: 'The server forgot the backend credential.' }); }
+    // Validate grafanaUrl against this server's own SSRF policy, store the settings,
+    // try the backend, and say what was checked — never echo body.secret.
+    return send(res, 200, { ok: true, message: 'Settings applied.', checks: [{ label: 'Identity', status: 'pass' }] });
+  });
+}).listen(9000, '127.0.0.1');
+```
+
+`server/fixtures/fake-mcp.mjs` (its `admin` option) is the same surface as
+the test suites drive it: a description, configure and disable, CORS for one
+origin, an API key in the header or the body, and every admin request
+recorded.
+
 ## Transport hook
 
 Every MCP request Observogram makes — `npm run fetch-live`, `npm run

@@ -48,8 +48,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/artefact-classify.mjs": {
-      "sha256": "7f9bdf084e40caaf191d01c745b8d95bb2f088f2fd6c5869e71cf8fa404df2c4",
-      "bytes": 24077,
+      "sha256": "70e5c2065c6b0da2cb97c194331a16c60b45b67e63270f38c468d11e57c3ba0f",
+      "bytes": 24945,
       "exports": [
         "DEFINES_RULES",
         "FAMILIES",
@@ -63,6 +63,7 @@
         "TAXONOMY_VERSION_LATEST",
         "activeTaxonomy",
         "classifyArtefact",
+        "compileBoundedPattern",
         "compileTaxonomy",
         "configureTaxonomy",
         "describeTaxonomy",
@@ -752,15 +753,47 @@
       "changedSinceRelease": true,
       "releasedExports": null
     },
+    "tools/lib/mcp-server-settings.mjs": {
+      "sha256": "44956e15c3675263d07156a67d840cec99b80f3ff5e2b69c4d8be32b208b8d6e",
+      "bytes": 40524,
+      "exports": [
+        "FIELD_TYPES",
+        "GENERIC_NAMES",
+        "SETTINGS_DESCRIPTOR_PATH",
+        "SETTINGS_DESCRIPTOR_VERSION",
+        "SETTINGS_LIMITS",
+        "compileSettingsPolicy",
+        "genericDescriptor",
+        "normaliseUrlValue",
+        "outcomeOf",
+        "parseSettingsDescriptor",
+        "policyFindings",
+        "redactEchoes",
+        "redactSecretKeys",
+        "resolveSettingsPath",
+        "settingsRequest",
+        "settingsRoot"
+      ],
+      "imports": [
+        "tools/lib/artefact-classify.mjs",
+        "tools/lib/mcp-url-safety.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
     "tools/lib/mcp-url-safety.mjs": {
-      "sha256": "7761ed815452e70864ffe8c895737ceb8485a6d244226a0052534cecf6cb6323",
-      "bytes": 8621,
+      "sha256": "0869a761a7856f7c851205f127b53c37874cc17741e36b0649bfd9cac7ff0d69",
+      "bytes": 11873,
       "exports": [
         "credentialParamName",
         "droppedNote",
         "isLocalOrPrivateHost",
+        "isLoopbackOrigin",
+        "mayBeThisMachine",
         "mcpUrlOrigin",
         "mcpUrlPolicy",
+        "parseOriginList",
         "redactCredentials",
         "safeMcpUrl",
         "stripMcpUrl"

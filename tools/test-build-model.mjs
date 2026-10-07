@@ -2875,7 +2875,8 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   // to EOF, so every zone is covered; each zone's own assertions read its own slice, to the next marker.
   // The live MCP connection block (rebadge batch 3, C2; the .mcpc-* rules) is the fourth, after Settings; the
   // Compare pairing block (C3; the .compare-identity-* rules and the stat bar's .c-mode cell) the fifth.
-  const ZONES = ['==== The axis', '==== Services', '==== Settings', '==== Live MCP connection', '==== Compare pairing'];
+  // The MCP server settings block (rebadge batch 4, D2; the .mss-* rules of the Server settings modal) the sixth.
+  const ZONES = ['==== The axis', '==== Services', '==== Settings', '==== Live MCP connection', '==== Compare pairing', '==== MCP server settings'];
   const starts = ZONES.map(z => { const i = CSS_TEXT.indexOf(z); assert.ok(i >= 0, `${z} marker`); return i; });
   assert.ok(starts.every((s, i) => i === 0 || s > starts[i - 1]), 'the zones are in order');
   const zoneSlice = (i) => CSS_TEXT.slice(starts[i], starts[i + 1] ?? CSS_TEXT.length);
@@ -3118,6 +3119,43 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
     }
   }
   assert.deepEqual(cmpOffenders, [], 'every Compare pairing text colour clears AA on the card and the page, in both themes and through the bridge');
+  // The MCP server settings zone (rebadge batch 4, D2): the modal's dialog is the card (.mss: --card, text --ink) over a
+  // scrim that draws no text; no other .mss- rule draws a surface (the tones are left borders), so every text colour —
+  // --ink / --ink-2 / --ink-3 only — is measured on --card in both themes and through the bridge. No .mss- rule sits
+  // outside the zone, and no other stylesheet restyles one.
+  const mssSlice = zoneSlice(5);
+  const rulesBeforeMss = [...CSS_TEXT.slice(0, starts[5]).matchAll(ruleRe)].map(m => m[1].trim());
+  assert.deepEqual(rulesBeforeMss.filter(sel => /(^|[\s,>+~(])\.mss\b/.test(sel)), [], 'no .mss- rule outside the MCP server settings zone');
+  for (const file of otherSheets) {
+    const text = readFileSync(resolve(ROOT, 'studio', file), 'utf8');
+    const sels = [...text.matchAll(/(?:^|\n)([^@{}\n][^{}]*?)\s*\{/g)].map(m => m[1].trim()).filter(sel => /(^|[\s,>+~(])\.mss\b/.test(sel));
+    assert.deepEqual(sels, [], `studio/${file} does not restyle the MCP server settings zone`);
+  }
+  const mssRules = [...mssSlice.matchAll(ruleRe)].map(m => ({ sel: m[1].replace(/^[\s\S]*\*\//, '').trim(), body: m[2] })).filter(r => /\.mss\b/.test(r.sel));
+  assert.ok(mssRules.length >= 30, `the MCP server settings block parsed (${mssRules.length} rules)`);
+  const MSS_SURFACES = { '.mss': 'card' };
+  const mssOffenders = [];
+  for (const r of mssRules) {
+    const bgDecl = r.body.match(/(?:^|[;{\s])background(?:-color)?:\s*([^;]+?)\s*(?:;|$)/)?.[1];
+    const colour = r.body.match(/(?:^|[;{\s])color:\s*([^;]+?)\s*(?:;|$)/)?.[1];
+    if (r.sel === '.mss-scrim') { if (colour) mssOffenders.push(`${r.sel}: draws no text, so it names no colour`); continue; }
+    if (bgDecl && !/^(transparent|none)$/.test(bgDecl)) {
+      if (!MSS_SURFACES[r.sel] || bgDecl !== `var(--${MSS_SURFACES[r.sel]})`) mssOffenders.push(`${r.sel}: draws a background (${bgDecl}) — only the dialog is a surface (the card)`);
+      if (!colour) mssOffenders.push(`${r.sel}: draws a background without naming its text colour`);
+    }
+    if (!colour) continue;
+    const tok = colour.match(/^var\(--([\w-]+)\)$/)?.[1];
+    if (!tok || !SET_TEXT.has(tok)) { mssOffenders.push(`${r.sel}: text is ${colour} — --ink / --ink-2 / --ink-3 only`); continue; }
+    const min = large(r.body) ? 3 : 4.5;
+    for (const name of ['light', 'dark']) {
+      const ratio = contrast(themes[name][tok], themes[name].card);
+      if (ratio < min) mssOffenders.push(`${r.sel}: --${tok} on --card ${ratio.toFixed(2)}:1 (${name}, needs ${min})`);
+      const bridgedRatio = contrast(og[name][bridge[tok]], og[name][bridge.card]);
+      if (bridgedRatio < min) mssOffenders.push(`${r.sel}: --${tok} (--${bridge[tok]}) on --card through the bridge ${bridgedRatio.toFixed(2)}:1 (${name}, needs ${min})`);
+    }
+  }
+  assert.deepEqual(mssOffenders, [], 'every .mss- text colour clears AA on the dialog\'s card, in both themes and through the bridge');
+  assert.match(cssRule('.mss') || '', /color:\s*var\(--ink\);\s*background:\s*var\(--card\)/, 'the dialog is --ink on the card');
   // The button those reason lines inherit from, as shipped: app.css's .mcp-refresh-btn (--paper on --ink, and through
   // the bridge --og-bg on --og-text) and the reskin's (--og-on-accent on --og-accent-solid, under body.chrome-observa,
   // which every boot adds). Each pair clears AA for the line's 12.5 px text, in both themes.

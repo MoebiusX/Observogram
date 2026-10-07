@@ -1047,6 +1047,7 @@ written the same way, after the answer is known.
 | `POST /api/journeys/:name/run` | `journey.run` | the journey name | `{ startedAt, outcome, alignmentPct, gradeScore, gradePass, breaches, tookMs }` — **one row per attempt past the 404** (and past a refused Pack B MCP target, which writes none): a run that fails from the studio leaves a row with `outcome: "error"`, or `"vantage-lost"` when a live source lost its vantage (the engine wrote a run record and may have notified), the four record fields `null`; never the error's message |
 | `POST /api/refresh-live` | `live.refresh` | the MCP origin | `{ mcpEndpoint, refreshedAt, servicesDiscovered, toolsFailed }` (counts) |
 | `POST /api/mcp/ping` | `live.ping` | the MCP origin | `{ verdict, typed: true }` — only when the caller typed the URL (an admin's privilege); a ping by `mcpEndpointId` writes no row |
+| `POST /api/mcp-settings/submit` | `live.mcp-settings` | the MCP origin | `{ op: configure \| action:<name>, path, endpointId, typed, status, fields: [names], acks: [rule indexes] }` — the opt-in pass-through only (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`), once a request left for the MCP server (`status` null when no answer came); never a value. A settings request the browser sends straight to the MCP server leaves no studio row: the MCP server audits its own |
 | `POST /api/mcp/jobs` (and its `…/cancel`) | `live.fetch` | the MCP origin | `{ kind, outcome: done \| failed \| cancelled, typed, mcpEndpoint, jobId, packId, stages: { done, skipped, failed }, gaps: [stage ids] }` — one row when the job ends, whether or not it registered a pack (whose own rows come first) |
 
 When one of the two writes fails: the operation stands. A row the store
@@ -1394,6 +1395,30 @@ whole; the draft and the refresh never read it):
 
 A variable that does not parse is a 400 naming it when a snapshot starts, and
 `GET /api/mcp/jobs` lists it under `scope.errors`.
+
+**Configuring the MCP server itself vs configuring the studio's connection
+to it.** The panel's URL, registered endpoint and token are the *studio's
+connection* to the MCP server — what the studio server uses to read from it.
+The panel's **Server settings…** button configures the *MCP server's own*
+runtime settings — the backend base URL, user and secret it reads its backend
+with, its API key — in a modal of this page (rebadge batch 4). By default
+your browser sends them straight to the MCP server, which must publish a
+settings description at `<MCP server root>/admin/schema` (or the modal offers
+a generic form), answer CORS for the studio's origin and authenticate the
+request; the studio keeps none of the values. After a verified configure the
+panel's connection test runs, and **Open the live panel** leads to a Snapshot
+with nothing but this page. The button is enabled for whoever may register an
+MCP endpoint (an admin or owner, or the open posture's caller on a direct
+loopback request). The contract for MCP server authors, and what the studio
+cannot enforce, is [docs/MCP_INTEGRATION.md](docs/MCP_INTEGRATION.md),
+"Server settings (admin configuration)"; a downstream's migration off a
+separate configuration page is docs/DOWNSTREAM.md §16.
+
+| Variable | Meaning |
+|---|---|
+| `OBSERVOGRAM_MCP_SETTINGS_POLICY` | a settings-policy file (JSON, strict) read once at start — rules that warn on a settings value and require an acknowledgement before the send, and the generic form's prefill; an unreadable or invalid file refuses the start; unset, inert |
+| `OBSERVOGRAM_MCP_ADMIN_PROXY` | `1` passes the modal's settings through the studio server (`POST /api/mcp-settings/describe`, `/submit`) for an MCP server the browser cannot reach; off by default, read per request |
+| `OBSERVOGRAM_MCP_ORIGINS`, `OBSERVOGRAM_ORG_<ORG>_MCP_ORIGINS` | also the remote MCP origins the modal may send settings to: settings carry a credential, so they go only to loopback or a listed https origin |
 
 ### Validate Or Upload A Pack
 
@@ -1855,7 +1880,20 @@ server bakes what that server shows; build unbranded there by unsetting or
 emptying the variable, since an empty value counts as unset:
 `env -u OBSERVOGRAM_BRAND_FILE …` or `OBSERVOGRAM_BRAND_FILE= …` in a POSIX
 shell, `set OBSERVOGRAM_BRAND_FILE=` in cmd, `$env:OBSERVOGRAM_BRAND_FILE=''`
-in PowerShell (there is no `--no-brand`). The summary line and `--json` always
+in PowerShell (there is no `--no-brand`). `--mcp-settings-policy <file.json>`
+bakes the MCP server-settings policy (the file a server reads from
+`OBSERVOGRAM_MCP_SETTINGS_POLICY`; a bad file fails the build with
+`--mcp-settings-policy: <path>: <reason>`, the server's texts) and
+`--mcp-origins <origin>,…` the MCP origins the bundle's Server settings modal
+may send settings to (`OBSERVOGRAM_MCP_ORIGINS`'s list rule, `*` any origin;
+an entry that is not an http(s) origin fails the build); the bundle's
+`GET /api/mcp-settings` serves both, and when a flag is absent
+`OBSERVOGRAM_MCP_SETTINGS_POLICY` and `OBSERVOGRAM_MCP_ORIGINS` are honoured
+(`--json`: `mcpSettingsPolicy: { source, file, rules } | null`, `mcpOrigins:
+{ source, origins } | null`). The bundle's Server settings modal sends to a
+loopback MCP server only from a page served on that machine — serve the
+bundle over `http://127.0.0.1` rather than opening it as `file://` (a
+`file://` page's origin is `null`, which no MCP server should allow). The summary line and `--json` always
 say what was baked (`taxonomy: { source, file, types, ids } | null`, `brand:
 { source, file, name } | null` — the paths, never the contents, and neither
 path lands in the bundle). Brand URLs must not be server paths: `favicon`,
@@ -1887,7 +1925,8 @@ live on a service record, which a bundled pack has none of), the Audit report
 Services (the records behind the home's cards and the service page — a bundle
 has no services table), Organisations (the active org's name and role),
 Settings (members, environments, MCP endpoints, the audit — a bundle has no org),
-sign-in — answers `501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
+Passing MCP server settings through the studio server (the Server settings
+modal sends from the browser in a bundle), sign-in — answers `501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
 this studio is a static bundle built without one.' }`, which the studio shows
 as the sentence, and a dismissable notice at the bottom of the window says so
 once ("Static studio — no Observogram server behind this page …"). Compare is
@@ -2622,7 +2661,10 @@ target, so without sign-in it answers only a request sent straight to a
 loopback address, it is closed on an exposed server without sign-in, and
 every request takes the `X-Observogram-CSRF: 1` header but the bearer
 token's; a live job's gate log is its starter's — `POST /api/draft-from-mcp`
-and `POST /api/refresh-live` take the same posture); every other `GET` is `viewer` and every other route `operator`.
+and `POST /api/refresh-live` take the same posture); every `/api/mcp-settings/…`
+route is `admin` (the MCP server-settings API, off unless `OBSERVOGRAM_MCP_ADMIN_PROXY=1`:
+a server-side request carrying an admin's settings to the MCP server, so the
+live MCP API's posture with the admin class); every other `GET` is `viewer` and every other route `operator`.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -2633,6 +2675,9 @@ and `POST /api/refresh-live` take the same posture); every other `GET` is `viewe
 | `GET` | `/api/packs` | In-memory and catalog pack registry |
 | `GET` | `/api/examples` | Bundled example packs |
 | `GET` | `/api/taxonomy` | The artefact taxonomy override the server was started with (`OBSERVOGRAM_TAXONOMY`): `{ ok, taxonomy, configured }` — the document or `null`, never its path; no-store |
+| `GET` | `/api/mcp-settings` | The MCP server-settings policy the server was started with (`OBSERVOGRAM_MCP_SETTINGS_POLICY`, rebadge batch 4) and whether the opt-in pass-through is on (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`): `{ ok, proxy, policy, configured }` — the document or `null`, never its path; no-store. The studio reads it when its Server settings modal opens |
+| `POST` | `/api/mcp-settings/describe` | The opt-in pass-through (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`, rebadge batch 4; `404 { denied: 'off' }` otherwise): `{ mcpEndpointId }` or an admin's typed `mcpUrl` → the studio server reads `<MCP server root>/admin/schema` (no token: the endpoint's read token never rides, `mcpAuth` is refused) and answers `{ ok, status, descriptor \| notDescriptor \| reason }` — the validated description re-serialised, never the upstream text. Under the origin allowlist, https unless loopback, no redirect followed, 10 s, 16 KiB, never through the transport hook |
+| `POST` | `/api/mcp-settings/submit` | The same pass-through's configure (or a declared action): `{ mcpEndpointId \| mcpUrl, mode: 'described' \| 'generic', generic?, action?, values, acks }`. The path is the server's — the endpoint of the description it reads again now, or the settings policy's `generic.path` (else `/configure`) —, the settings policy is re-checked (a missing acknowledgement is a 409), and the answer is `{ ok, status, contentType, bytes, outcome: { ok?, message?, checks? } \| null, redacted }` — the outcome shape redacted, never another body. A malformed body is a 400 that quotes none of it; the body is never logged or kept; one `live.mcp-settings` row (field names and acknowledged rule indexes, never a value) |
 | `GET` | `/api/references` | Curated catalogue reference packs |
 | `GET` | `/api/packs/:id` | Adapted layered pack |
 | `GET` | `/api/packs/:id/canonical` | Canonical pack with env overlay |

@@ -27,8 +27,8 @@ export const STRIP = [
   'PROXY_AUTH_OWNERS', 'PROXY_AUTH_SHARED_SECRET', 'PROXY_AUTH_SECRET_HEADER', 'PROXY_AUTH_LOGOUT_URL',
   // The brand (tools/lib/brand-env.mjs BRAND_ENV): the shell, the chrome and the auth pages read it.
   'BRAND_FILE', 'BRAND_NAME', 'BRAND_SHORT_NAME', 'BRAND_TAGLINE', 'BRAND_LOGO_URL', 'BRAND_DOCS_URL', 'BRAND_FOOTER', 'BRAND_ACCENT', 'BRAND_ACCENT_DARK',
-  // The browser suites' own knobs (tools/test-studio-bundle.mjs, server/test-brand-shell.mjs, server/test-glossary-shell.mjs, server/test-services-studio.mjs, server/test-settings-studio.mjs, server/test-live-studio.mjs): read by no boot, stripped so a child never sees a test knob.
-  'PLAYWRIGHT', 'BUNDLE_SMOKE', 'BRAND_SMOKE', 'GLOSSARY_SMOKE', 'SERVICES_SMOKE', 'SETTINGS_SMOKE', 'LIVE_SMOKE',
+  // The browser suites' own knobs (tools/test-studio-bundle.mjs, server/test-brand-shell.mjs, server/test-glossary-shell.mjs, server/test-services-studio.mjs, server/test-settings-studio.mjs, server/test-live-studio.mjs, server/test-mcp-settings-studio.mjs): read by no boot, stripped so a child never sees a test knob.
+  'PLAYWRIGHT', 'BUNDLE_SMOKE', 'BRAND_SMOKE', 'GLOSSARY_SMOKE', 'SERVICES_SMOKE', 'SETTINGS_SMOKE', 'LIVE_SMOKE', 'MCP_SETTINGS_SMOKE',
   // The live fetcher's knobs: server/index.mjs imports tools/fetch-live-pack.mjs at boot, which reads these at
   // import (brandEnv), and server/mcp-url.mjs reads ALLOW_LOCAL_MCP per call.
   'ALLOW_LOCAL_MCP', 'MCP_TIMEOUT_MS', 'GRAFANA_DASHBOARD_LIMIT', 'GRAFANA_PANEL_LIMIT', 'GRAFANA_INCLUDE_JSON', 'DEBUG',
@@ -38,6 +38,9 @@ export const STRIP = [
   // The configured snapshot scope (server/live-jobs.mjs snapshotScopeConfig), read per request; the per-org
   // OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_* go with every inherited OBSERVOGRAM_ORG_* below.
   'SNAPSHOT_METRIC_PREFIXES', 'SNAPSHOT_FOLDER_UIDS', 'SNAPSHOT_DATASOURCE_UID',
+  // The MCP server-settings policy (server/mcp-settings-policy.mjs), read once at start, and the opt-in
+  // pass-through's switch, read per request.
+  'MCP_SETTINGS_POLICY', 'MCP_ADMIN_PROXY',
 ];
 
 // The per-org variables (an MCP endpoint's read token, OBSERVOGRAM_ORG_<KEY>_<NAME>) are read at request time
@@ -90,10 +93,14 @@ export function boot(ws, { host = '127.0.0.1', env = {}, silent = true, port = 0
   return out;
 }
 
-// A server that keeps running: { base, stop() }.
-export async function serve(ws, { host = '127.0.0.1', env = {} } = {}) {
+// A server that keeps running: { base, stop(), logs() }. logs() is
+// { stdout, stderr }: everything the child printed so far, kept after it
+// stops — the server has no access log, so a suite proving a value never
+// reached the server's output scans this. `verbose: true` boots without
+// BOOT_SILENT, so the start lines are in it too.
+export async function serve(ws, { host = '127.0.0.1', env = {}, verbose = false } = {}) {
   const proc = spawn(process.execPath, ['--input-type=module', '-e', BOOT_CODE], {
-    env: childEnv(ws, { ...env, BOOT_HOST: host, BOOT_SILENT: '1', BOOT_KEEP: '1' }), stdio: ['ignore', 'pipe', 'pipe'],
+    env: childEnv(ws, { ...env, BOOT_HOST: host, BOOT_SILENT: verbose ? '0' : '1', BOOT_KEEP: '1' }), stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '';
   let stderr = '';
@@ -112,6 +119,8 @@ export async function serve(ws, { host = '127.0.0.1', env = {} } = {}) {
   });
   return {
     base: `http://127.0.0.1:${port}`,
+    // The stdout listener above keeps appending after LISTENING, and stderr's from the start.
+    logs: () => ({ stdout, stderr }),
     stop: async () => {
       proc.kill('SIGTERM');
       const t = setTimeout(() => proc.kill('SIGKILL'), 10_000);

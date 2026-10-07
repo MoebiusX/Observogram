@@ -193,11 +193,12 @@ a bump. The surface so far:
 |---|---|---|
 | Backend access (W2) | `OBSERVOGRAM_TRANSPORT_HOOK=<path.mjs \| file:URL>` — a module exporting `prepareRequest({ url, headers })` and/or `fetchImpl(url, init)`, applied to every MCP request of the CLI, the recorder, the probes, journeys and the studio server; `OBSERVOGRAM_ALLOW_LOCAL_MCP=0` still binds the URL it returns | [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md), "Transport hook" |
 | Reverse-proxy identity (W5) | `OBSERVOGRAM_TRUST_PROXY_AUTH=1` + `OBSERVOGRAM_TRUST_PROXY_AUTH_ACK=only-the-proxy-reaches-this-port`, the header names (`PROXY_AUTH_USER_HEADER`, `_EMAIL_HEADER`, `_NAME_HEADER`, `_GROUPS_HEADER`), `PROXY_AUTH_GROUP_ROLES` (`g=role,*=role`, authoritative in `PROXY_AUTH_ORG`), `PROXY_AUTH_JOIN_ROLE`, `PROXY_AUTH_OWNERS` (grant-only), `PROXY_AUTH_SHARED_SECRET` + `_SECRET_HEADER` (required beyond loopback), `PROXY_AUTH_LOGOUT_URL`, `PROXY_AUTH_REALM`; users are `proxy://<realm>#<user>` rows of kind `oidc`; refuses to start without the ACK, beside OIDC, exposed without the secret, or with a join role beside a groups header | README, "Behind a reverse proxy (trusted headers)" |
-| Studio bundle (W6) | `npm run build:studio -- [--pack <file> [--id] [--label] [--description]]… [--pack-url <url> [--id] [--label] [--description]]… [--taxonomy <file.json>] [--brand <file.json>] [--out dist/studio/index.html] [--no-remote-fonts]` — one static HTML file: every studio and `tools/lib` module in an import map of `data:` URLs, the stylesheets inlined, the packs and the schema as JSON, `studio/static-backend.mjs` answering the read-only pack routes in the browser and `501 denied: 'no-backend'` for the rest; no server configuration at all; the taxonomy and the brand baked (W3/W4 kept at the edge: `--taxonomy` / `--brand`, or the server's own variables when the flags are absent) | §10 below; README, "Serve The Studio Without The Server" |
+| Studio bundle (W6) | `npm run build:studio -- [--pack <file> [--id] [--label] [--description]]… [--pack-url <url> [--id] [--label] [--description]]… [--taxonomy <file.json>] [--brand <file.json>] [--mcp-settings-policy <file.json>] [--mcp-origins <origin>,…] [--out dist/studio/index.html] [--no-remote-fonts]` — one static HTML file: every studio and `tools/lib` module in an import map of `data:` URLs, the stylesheets inlined, the packs and the schema as JSON, `studio/static-backend.mjs` answering the read-only pack routes in the browser and `501 denied: 'no-backend'` for the rest; no server configuration at all; the taxonomy and the brand baked (W3/W4 kept at the edge: `--taxonomy` / `--brand`, or the server's own variables when the flags are absent) | §10 below; README, "Serve The Studio Without The Server" |
 | Branding (W4) | `OBSERVOGRAM_BRAND_FILE=<path.json>` — `{ name, shortName?, wordmark?: { lead, tail }, tagline?, titleSuffix?, description?, logo?: { url \| svg }, favicon?, docsUrl?, footer?: { text, links[] }, about?: { changelogUrl }, hero?: { src, alt }, tokens?: { light, dark } }`, and/or the scalars `OBSERVOGRAM_BRAND_NAME` / `_SHORT_NAME` / `_TAGLINE` / `_LOGO_URL` / `_DOCS_URL` / `_FOOTER` / `_ACCENT` / `_ACCENT_DARK`; one `name` derives every other string. Read once at start (a bad file refuses the start), rendered into the shell (`GET /`, `GET /index.html`, the SPA fallback: title, description, header, footer, `#brand-config`, `#brand-tokens`, favicon), the auth pages and, through `#brand-config`, the studio chrome; `node tools/gen-design-tokens.mjs --brand <file> --out <path>` for the tokens as JSON. The brand module (`tools/lib/brand.mjs`) is a listed module: a downstream studio can normalize and render the same object. Baked into the static bundle by `--brand` (§10) | README, "Rebadge The Studio (brand config)"; [`UI_CONVENTIONS.md`](UI_CONVENTIONS.md) §3 |
 | Waivers (sidecar) (B3.2) | `packc conformance --waivers <file>` — a JSON file `{ "version": 1, "waivers": [...] }` holding the waiver object `GET /api/services/:id/waivers` serves per row (`ruleId`, `reason`, `expiresAt`, `author`, optionally `artefactId`, `createdAt`, `id`), read before any pack by `tools/lib/waivers.mjs` `readWaiverFile` (unreadable or invalid → exit 2 naming the entry); the rubric waivers mark the rubric line and `--json`'s `rubric.waivers`, the `placeholder.<family>.<field>` waivers the placeholder rows' `waived` partition (`--strict` fails on unwaived rows alone); `author` is the audit actor — a login or the token label, never an email — and visible to anyone the file is shared with. No server configuration; the static bundle grades a pack bare (§14 `B3.2-bundle-waivers`) | §14 `waivers`; [`CONFORMANCE.md`](CONFORMANCE.md), "Waivers"; [`ADAPTER.md`](ADAPTER.md), "Waivers — a service record's suppression of a finding"; README, "Waive A Conformance Finding" |
 | Response path annotation (B3.3) | `metadata.annotations["observogram.remediates.remediation[<i>]"] = "<symbol>[, <symbol>…]"` in a pack — `alerting.rules[<j>]`, `policy.burn_rate_alerts[<j>]`, `slos.<id>` or `alert:<slug>` — names the alert(s) a remediation answers to when its `trigger` does not; read by `tools/lib/remediation-flow.mjs`, a symbol naming nothing is a warning, never a link. No server configuration | §14 `diagnose-remediate-flow`; [`ADAPTER.md`](ADAPTER.md), "Response path" |
 | Artefact taxonomy (W3) | `OBSERVOGRAM_TAXONOMY=<path.json>` — `{ version: 1 \| 2, types: { <TypeName>: <family> \| { family, label?, role? } }, ids: [{ pattern, family, flags?, label?, role? }], glossary?: [{ term, definition, family?, aliases?, link? }] }` (the glossary needs `version: 2`; a v1 file stays valid — §14 `glossary`), read once at start, installed process-wide for the diff and the graphs, served to the studio at `GET /api/taxonomy`; an unreadable or invalid file refuses the start. The classifier itself (`tools/lib/artefact-classify.mjs`) is a listed module. Baked into the static bundle by `--taxonomy` (§10) | README, "Classify Typed Packs"; [`ADAPTER.md`](ADAPTER.md), "Id families and the classifier" |
+| MCP server settings policy (B4.3) | `OBSERVOGRAM_MCP_SETTINGS_POLICY=<path.json>` — `{ version: 1, rules: [{ when: { field \| type, pattern, flags? }, warn, require?: { ack } }], generic?: { path, names, auth } }`, strict, read once at start (an unreadable or invalid file refuses the start), served at `GET /api/mcp-settings`. Adds friction only: advisory on the browser-direct path (a reader with devtools skips it), re-checked by the opt-in pass-through (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`) against the description the server reads; a downstream that needs enforcement enforces it in the MCP server. A rule whose field is absent requires its ack. Acks never persisted. Baked into the static bundle by `--mcp-settings-policy` (§10) | §16; [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md), "Server settings (admin configuration)" |
 
 A minimal plugin layer for the backend seam is one file the deployment
 points at:
@@ -244,7 +245,7 @@ entry names) against a running server:
 
 | Answered in the browser | Answered `501 { ok: false, denied: 'no-backend', error: '<Feature> needs the Observogram server; this studio is a static bundle built without one.' }` |
 |---|---|
-| `GET /api/packs`, `/api/packs/:id` (+ `?env=`), `/canonical` (JSON, `?format=yaml`), `/conformance`, `/compile-catalog`, `/compile-artifact`, `/compile/:target`, `/export.zip` (the Export button downloads it as a Blob); `/api/compile/targets`, `/api/maturity-rubric`, `/api/version`, `/healthz`, `/api/taxonomy` (unconfigured, or the document `--taxonomy` baked — a v2 file's `glossary` included, so the glossary marks draw as on a server), `/api/examples` and `/api/references` (empty), `/api/live-status` (`present: false`); `/api/packs/:id/verdicts` (the empty document — a bundled pack is never registered, so this is the server's own answer); `/api/packs/:id/placeholders` (the placeholder report, the zero-store engine in the browser); `/auth/me` → `404 { ok: false, error: 'identity not configured' }` (the open posture) | every other `/api` or `/auth` path and every non-GET: Scan a repo (`/api/crawl*`), Draft from MCP, Refresh from MCP, Testing an MCP connection (`/api/mcp/ping`), Building a pack from a live MCP server (`/api/mcp/jobs`), uploads (`/api/validate`, `/api/uploads`), Compare (`/api/diff`, retrofeed), Deploy, Journeys, Build (`/api/library*`), Verdicts (`PUT` / `DELETE …/verdicts/:artefact`), Waivers (`/api/waivers`, `/api/services/:id/waivers` — a bundled pack has no service record), Audit report (`/api/packs/:id/audit-report` — its goes-blind section needs the parser below; the Conformance view's download anchors are answered by the shim's click handler, which shows this sentence in the notice row), Services (`/api/services`, `/api/services/:id` — the records behind the home's cards and the service page; a bundle has no services table, so the home lists the services its packs name), Organisations (`/api/orgs` — the active org's name and effective role), Settings (`/api/org`, `/api/org/members`, `/api/environments/:id`, `/api/mcp-endpoints`, `/api/audit` — a bundle has no org, so Settings shows this sentence), sign-in (`/auth/*`) |
+| `GET /api/packs`, `/api/packs/:id` (+ `?env=`), `/canonical` (JSON, `?format=yaml`), `/conformance`, `/compile-catalog`, `/compile-artifact`, `/compile/:target`, `/export.zip` (the Export button downloads it as a Blob); `/api/compile/targets`, `/api/maturity-rubric`, `/api/version`, `/healthz`, `/api/taxonomy` (unconfigured, or the document `--taxonomy` baked — a v2 file's `glossary` included, so the glossary marks draw as on a server), `/api/mcp-settings` (`proxy: false`; the policy `--mcp-settings-policy` baked or `null`, and `mcpOrigins` when `--mcp-origins` baked a list), `/api/examples` and `/api/references` (empty), `/api/live-status` (`present: false`); `/api/packs/:id/verdicts` (the empty document — a bundled pack is never registered, so this is the server's own answer); `/api/packs/:id/placeholders` (the placeholder report, the zero-store engine in the browser); `/auth/me` → `404 { ok: false, error: 'identity not configured' }` (the open posture) | every other `/api` or `/auth` path and every non-GET: Scan a repo (`/api/crawl*`), Draft from MCP, Refresh from MCP, Testing an MCP connection (`/api/mcp/ping`), Building a pack from a live MCP server (`/api/mcp/jobs`), uploads (`/api/validate`, `/api/uploads`), Compare (`/api/diff`, retrofeed), Deploy, Journeys, Build (`/api/library*`), Verdicts (`PUT` / `DELETE …/verdicts/:artefact`), Waivers (`/api/waivers`, `/api/services/:id/waivers` — a bundled pack has no service record), Audit report (`/api/packs/:id/audit-report` — its goes-blind section needs the parser below; the Conformance view's download anchors are answered by the shim's click handler, which shows this sentence in the notice row), Services (`/api/services`, `/api/services/:id` — the records behind the home's cards and the service page; a bundle has no services table, so the home lists the services its packs name), Organisations (`/api/orgs` — the active org's name and effective role), Settings (`/api/org`, `/api/org/members`, `/api/environments/:id`, `/api/mcp-endpoints`, `/api/audit` — a bundle has no org, so Settings shows this sentence), Passing MCP server settings through the studio server (`/api/mcp-settings/describe`, `/submit` — the opt-in pass-through; the bundle's Server settings modal sends from the browser), sign-in (`/auth/*`) |
 
 Swapping packs is a rebuild: `--pack` inlines a file validated against the
 schema at build time; `--pack-url` names a URL the page fetches at its first
@@ -296,6 +297,30 @@ the `typed-canonical.mapped` golden of `tools/test-golden-board.mjs`), T8b a
 `--brand` bundle's shell fragments with a branded server's, T4b the
 unconfigured build with the same tree's build with the seams unset (byte for
 byte), T9 the baked bundle in headless Chromium.
+
+### Rebadge batch 4: baking the MCP settings policy and the MCP origin list
+
+`--mcp-settings-policy <file.json>` bakes the MCP server-settings policy (§9,
+the file a server reads from `OBSERVOGRAM_MCP_SETTINGS_POLICY`): read with one
+leading byte-order mark stripped, parsed and compiled by
+`compileSettingsPolicy` (`tools/lib/mcp-server-settings.mjs`) as
+`server/mcp-settings-policy.mjs` does — a bad file fails the build with
+`--mcp-settings-policy: <path>: <reason>`, the server's texts — and served by
+the shim's `GET /api/mcp-settings` as `{ ok, proxy: false, policy, configured:
+true }`. `--mcp-origins <origin>,…` bakes the origins the bundle's Server
+settings modal may send settings to from a page not served on the MCP
+server's machine (a bundle on a CDN configuring an https MCP server), read by
+the server's list rule (`parseOriginList`, `tools/lib/mcp-url-safety.mjs`; `*`
+any origin) — an entry that is not an http(s) origin fails the build, where a
+server ignores it — and served beside the policy as `mcpOrigins: { listed:
+true, origins }` (`origins` null for `*`). When a flag is absent
+`OBSERVOGRAM_MCP_SETTINGS_POLICY` and `OBSERVOGRAM_MCP_ORIGINS` are honoured
+(the legacy `TOMOGRAPH_` spelling too); a per-org list has no meaning in a
+bundle. Both config keys are appended after `taxonomy` and only when baked,
+so an unbaked build keeps its bytes (T4b). The summary line names the rule
+count and the origins; `--json` adds `mcpSettingsPolicy: { source, file,
+rules } | null` and `mcpOrigins: { source, origins } | null` — never the
+policy's contents.
 
 Compare stays excluded in this batch; the inlining itself is not the blocker. Measured at the pinned versions (node_modules, 2026-10-04): `@prometheus-io/lezer-promql@0.312.0-rc.0` `dist/index.es.js` 24,549 B (imports `@lezer/lr`, `@lezer/highlight`), `@lezer/lr@1.4.10` `dist/index.js` 71,678 B (imports `@lezer/common`; one guarded `typeof process != 'undefined' && process.env.LOG` read), `@lezer/highlight@1.2.3` `dist/index.js` 29,915 B, `@lezer/common@1.5.2` `dist/index.js` 83,319 B — 209,461 B, 279,284 B as base64 (+7 % on today's 3.9 MB), all ESM (`"type": "module"`, `exports.import`), no CommonJS, no `node:` import; every specifier between them is bare and equal to the package name, so the import map can carry them under their own names with no rewrite, and `import.meta.resolve(<package>)` (Node ≥ 22.16) gives each dist's path without a bundler. What blocks it: (1) `GET /api/diff` (server/index.mjs:556-580 — `diffPacks(aLayered, bLayered, { scopeMode, service })` plus `traceabilityGraph: comparePackBranches(aLayered, bLayered)`, `scopeMode` from the query or the `observogram.diff.scopeMode` annotation) has to be ported to `studio/static-backend.mjs` over two bundled packs and proven T5-style against a server body for body, and the Compare view's server-only limbs (uploads as pack B, live refresh, retrofeed) have to degrade visibly; (2) the bundle would redistribute third-party code under MIT (`@lezer/*`) and Apache-2.0 (`@prometheus-io/lezer-promql`), so the build must embed the license texts and copyright notices in the file and the docs must state it; (3) the build would depend on an installed `node_modules` (today it reads the repository tree only), which changes the snapshot recipe above; (4) `tools/lib/promql-lezer.mjs` is documented as not for browser-served modules and `tools/test-studio-bundle.mjs` T1 asserts no bare specifier in the graph — both become an allowlist of exactly these four names, with the vendor manifest's `npm` field as its source. Until then `/api/diff` answers `501 denied: 'no-backend'`, the notice names Compare among the server-only features, and a diff without the graph is never shown because it would grade differently from the server. The service audit report shares the blocker: its goes-blind section is the blast radius over the same graph, so `GET /api/packs/:id/audit-report` is a 501 in the bundle until the parser is inlined (`B3.5-bundle-audit-report`, §14).
 
@@ -1024,3 +1049,164 @@ the studio re-keys in the browser over the two packs on screen.
 - *`journey-notify-env-ownership`* (security, pre-existing, open) — a
   journey's `notify` may name any process variable as its auth; which
   variables a server-run journey may read needs its own design.
+
+## 16. In-page MCP server settings (rebadge batch 4)
+
+The MCP panel's **Server settings…** configures the MCP server behind it —
+the backend base URL, user and secret it reads its backend with, and its own
+API key — in a modal of the studio page. A downstream that ships a separate
+configuration page (and the process that serves it) only to POST that
+configuration can retire it. The contract an MCP server implements is in
+[`MCP_INTEGRATION.md`](MCP_INTEGRATION.md), "Server settings (admin
+configuration)"; the engine is `tools/lib/mcp-server-settings.mjs`, a listed
+module, so the MCP server's own tooling can vendor the parser and the path
+rule. Each change is its own CHANGELOG entry (`## Unreleased`, "Rebadge batch
+4, D1–D4").
+
+### 16.1 Retiring a sidecar configuration page
+
+1. **Publish the description** at `<MCP server root>/admin/schema` — the MCP
+   URL with its last segment dropped, so `http://127.0.0.1:9000/mcp` reads
+   `http://127.0.0.1:9000/admin/schema` — as `application/json`, without
+   credentials and without current values: `{ version: 1, endpoint, auth?,
+   fields, actions? }`. A server without one gets the generic form (`url`,
+   `user`, `secret`, `apiKey` to `/configure`, every field in the body),
+   whose names, path and API-key placement the settings policy's `generic`
+   block prefills (16.2).
+2. **Authenticate the configure endpoint and every action** (a bearer the
+   description names in `auth`, or a field the action sends). Without it,
+   every studio user, every script on the studio's origin and every local
+   process can repoint the MCP server at a backend of their choosing.
+3. **Answer CORS for the studio's origin on every response** — the
+   description, the configure and each action, errors and 401 included: an
+   exact `Access-Control-Allow-Origin` and `Vary: Origin`, never `*` or `null`,
+   never `Access-Control-Allow-Credentials`; the preflight allows `POST` and
+   `content-type, authorization`.
+4. **Check `Origin` and `Host`** on the configure POST (a present Origin must
+   be a listed studio origin; the Host one of the server's own bind
+   addresses — the DNS-rebinding guard for a loopback server), never redirect,
+   never echo a submitted secret, validate the backend URL against the
+   server's own SSRF policy, answer the outcome shape `{ ok, message, checks }`
+   and audit the call.
+5. **Let the studio reach it.** A loopback MCP server is configured from a
+   studio page on the same machine (`http://127.0.0.1:<port>`); a remote one
+   must be https and **listed**: `OBSERVOGRAM_MCP_ORIGINS` (or the org's
+   `OBSERVOGRAM_ORG_<KEY>_MCP_ORIGINS`) on a server, `--mcp-origins` baked into
+   a static bundle (§10). Settings carry a credential, so they go only to
+   loopback or a listed origin — never to the studio's own origin.
+6. **Or turn on the pass-through** (16.3) where the browser cannot reach the
+   MCP server.
+
+Who opens it: whoever may register an MCP endpoint (`GET /api/mcp-endpoints`
+`policy.register.allowed` — a session admin or owner, or the open posture's
+caller on a direct loopback request). Anyone else sees the button
+`aria-disabled` with the reason. On the browser-direct path the studio keeps
+nothing and records nothing: no value reaches storage, a cookie, the
+workspace, the store, a log, an audit row or a studio API body, and no studio
+row records the configure — the MCP server audits its own. The studio's gate,
+target checks and policy acknowledgements are affordances there; the MCP
+server's checks (steps 2–4) are what enforce.
+
+### 16.2 The settings policy
+
+`OBSERVOGRAM_MCP_SETTINGS_POLICY=<path.json>` (§9) — strict, read once at
+start, served at `GET /api/mcp-settings`, baked into a bundle by
+`--mcp-settings-policy`:
+
+```json
+{
+  "version": 1,
+  "rules": [
+    { "when": { "field": "grafanaUrl", "pattern": "^(?!https://approved\\.)" },
+      "warn": "Non-approved backend host.",
+      "require": { "ack": "I have operator approval for this target" } }
+  ],
+  "generic": { "path": "/configure", "names": { "url": "grafanaUrl" }, "auth": "body" }
+}
+```
+
+- **`when`** names a `field` or a `type` (`url`, `text`, `boolean` — a rule on
+  `type: "url"` covers a generic form's URL whatever its name). A rule never
+  names a secret. `pattern` is anchored (`^`), at most 200 characters, flags
+  `""` or `"i"`, with no quantified group and at most one unbounded
+  quantifier — checks of shape, made at start. No start-time probe can
+  prove a pattern fast on every value, so none refuses one: the
+  pass-through evaluates the policy in a worker with a 100 ms deadline, and
+  a rule that does not finish counts as matched (its warning shows, its
+  acknowledgement is required, the server log names the rule and never the
+  value). The studio evaluates the policy in the page, where a slow pattern
+  freezes only that admin's tab. Keep patterns simple: a slow one costs every
+  sender its acknowledgement.
+- **Matching.** A URL is matched as its normalised form (scheme and host
+  lower-cased; a URL with a user or password before `@` is refused, not
+  matched); a value is checked only when non-empty; a value over 512
+  characters is itself a finding. A rule whose field the form does not have
+  cannot run: it says so and still requires its acknowledgement.
+- **`warn`** is shown in the modal; **`require.ack`** blocks the send until
+  ticked. Acknowledgements are never remembered — closed and reopened, they
+  are unticked. An action that sends no field the rule matched (`disable`)
+  skips them; one that carries the matched field waits for the ack, as the
+  pass-through does.
+- **`generic`** prefills the generic form's path, field names and API-key
+  placement (`body` or `bearer`); the reader may change them per use and
+  nothing is kept.
+
+**How far it reaches.** The policy adds friction only: it can never enable a
+control, lift a refusal or change a target. On the browser-direct path the
+acknowledgement is advisory — a reader with the browser's developer tools or
+curl skips it. The pass-through re-checks it against the description the
+server reads itself. A downstream that needs the rule enforced enforces it in
+the MCP server.
+
+### 16.3 The pass-through
+
+`OBSERVOGRAM_MCP_ADMIN_PROXY=1` (off by default, read per request) moves
+every settings request of the modal to the studio server: `POST
+/api/mcp-settings/describe` and `POST /api/mcp-settings/submit` (README "API
+Surface"). Use it when the MCP server sends no CORS headers or listens where
+the reader's browser cannot reach it. The contract:
+
+- `admin` by class, the CSRF header in every posture, closed when exposed
+  without sign-in, without sign-in only a direct loopback request; off, both
+  answer `404 { denied: 'off' }`.
+- The target is a registered endpoint or an admin's typed URL, as on every
+  MCP route; the endpoint's read token is never sent and an `mcpAuth` is
+  refused; `OBSERVOGRAM_ALLOW_LOCAL_MCP`, https unless loopback, never the
+  studio's own address, and for a submit the origin allowlist.
+- The paths are the server's: `<root>/admin/schema`, the endpoint the
+  description declares (read again at submit), or the policy's
+  `generic.path` (else `/configure`). The policy is re-checked (a missing
+  acknowledgement is `409 { denied: 'policy-ack', rule }`).
+- One request with the platform's `fetch`, **never through the transport
+  hook**: no redirect followed, 10 s, a capped read, exactly `Content-Type`,
+  `Accept` and the description's own `Authorization`.
+- **The outcome shape only** comes back: the description re-serialised, or
+  the outcome's `ok`, `message` and `checks` redacted — never another body
+  (an HTML 500 is named by status, media type and size). The request body is
+  never logged, kept or echoed; a malformed one is a 400 that quotes none of
+  it. One stderr line per upstream request with status codes only, and one
+  `live.mcp-settings` audit row per submit (field names and acknowledged rule
+  indexes, never a value).
+
+A static bundle has no pass-through: both routes answer `501` naming
+"Passing MCP server settings through the studio server" (§10), and its modal
+sends from the browser.
+
+### 16.4 Follow-ups, by name
+
+- *`malformed-json-app-wide`* — the parse error answered as JSON on every
+  route, closing the existing quote of a malformed `POST /api/mcp/ping` body
+  (with its `mcpAuth`) in Express's error page and on stderr; this batch
+  fixed it on the two new routes only.
+- *`settings-current-values`* — an authenticated read of the server's current
+  non-secret values to prefill the form (version 1 reads no values).
+- *`settings-policy-target-rules`* — rules on the MCP origin itself
+  (`when: { target: … }`).
+- *`settings-policy-url-part`* — URL rules on the host or the origin only
+  (`when.part`).
+- *`settings-browser-audit-note`* — a values-free studio note of a
+  browser-direct configure, if wanted (the browser would assert it).
+- *`settings-endpoint-path-column`* — a generic path per registered
+  endpoint, if per-endpoint paths turn out to matter.
+- *`settings-descriptor-v2`* — a richer field model (a choice list,
+  validation patterns), as a new version.

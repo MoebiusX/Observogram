@@ -124,7 +124,16 @@ Compare's Pair by switch, its note and its could-not-load sentence, and
 `app.css` under its own `==== Compare pairing` marker after the live
 connection, no surface of their own (the cell is a `.compare-cell`), text in
 `--ink` / `--ink-2` / `--ink-3` measured on the card and the page by the AA
-scan, drawn by `studio/compare-identity.mjs` and restyled by no other sheet) — keep new classes
+scan, drawn by `studio/compare-identity.mjs` and restyled by no other sheet;
+`.mss-*` the MCP panel's Server settings modal (rebadge batch 4) — drawn by
+`studio/mcp-settings-view.mjs` into `#mss-host`, appended last to `<body>`
+over its scrim (`.mss-scrim`) in the `.set-editor` pattern, every node by
+`createElement` and every string by `textContent` (the view assigns no
+`innerHTML` but the host's emptying, pinned in `server/test-authz.mjs`); in
+`app.css` under its own `==== MCP server settings` marker after Compare
+pairing, the dialog the only surface (`--card`), a tone a left border and
+never the text colour, text in `--ink` / `--ink-2` / `--ink-3` measured on the
+card by the AA scan in both themes, restyled by no other sheet) — keep new classes
 inside their zone's prefix. The service audit report's `.ar-*` zone is not a studio stylesheet:
 it is `REPORT_CSS` in `tools/lib/audit-report.mjs`, inlined into one
 standalone document over `design-tokens.css` + `design-kit.css` (it qualifies

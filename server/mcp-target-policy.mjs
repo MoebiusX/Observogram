@@ -47,6 +47,7 @@
 // then redactCredentials masks any `//user:pass@` left in the text.
 
 import { brandEnvFrom } from '../tools/lib/brand-env.mjs';
+import { isLoopbackOrigin, parseOriginList } from '../tools/lib/mcp-url-safety.mjs';
 import { mcpTransportLoaded } from '../tools/mcp-transport.mjs';
 import { authDisabled } from './auth.mjs';
 import { directLoopbackRequest, noSignInWay, rankOf, rankOfRole, requestPosture } from './authz.mjs';
@@ -118,37 +119,15 @@ export function originOf(raw) {
   return url.origin;
 }
 
-const LOOPBACK_V4 = /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
-// [::ffff:127.x.y.z] normalises to [::ffff:7fxx:yyzz].
-const LOOPBACK_MAPPED = /^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/;
+// isLoopbackOrigin (this machine, after URL normalisation) lives in
+// tools/lib/mcp-url-safety.mjs so the browser can run it; re-exported here
+// unchanged.
+export { isLoopbackOrigin };
 
-// This machine, after URL normalisation: localhost, 127.0.0.0/8, [::1],
-// [::ffff:7f00:0]/104. Takes an origin or any http(s) URL.
-export function isLoopbackOrigin(origin) {
-  let host;
-  try { host = new URL(String(origin)).hostname; } catch { return false; }
-  return host === 'localhost' || LOOPBACK_V4.test(host) || host === '[::1]' || LOOPBACK_MAPPED.test(host);
-}
-
-// A list's value → { any, origins: Set<origin>, rejected: [entry] }. Entries
-// are comma-separated; a lone `*` is the any-origin switch. An entry is kept
-// only when it parses as http(s) with no userinfo, a path of `/` or none, no
-// query, no fragment and no `*` in the host; `localhost:8080` (no scheme),
-// `https://*.example.com` or one with a path is rejected, never kept.
-export function parseOriginList(value) {
-  const out = { any: false, origins: new Set(), rejected: [] };
-  for (const entry of String(value ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
-    if (entry === '*') { out.any = true; continue; }
-    let url = null;
-    try { url = new URL(entry); } catch { /* rejected below */ }
-    // An origin and nothing else: the parsed URL is its origin plus `/` (no
-    // userinfo, path, query or fragment — even an empty `?` or `#`).
-    const ok = url && (url.protocol === 'http:' || url.protocol === 'https:') && url.href === `${url.origin}/`
-      && !url.hostname.includes('*');
-    if (ok) out.origins.add(url.origin); else out.rejected.push(entry);
-  }
-  return out;
-}
+// parseOriginList (a list's value → { any, origins, rejected }) lives in
+// tools/lib/mcp-url-safety.mjs so the static-bundle builder applies the
+// same list rule to --mcp-origins; re-exported here unchanged.
+export { parseOriginList };
 
 const noted = new Set();
 function noteOnce(line) {
