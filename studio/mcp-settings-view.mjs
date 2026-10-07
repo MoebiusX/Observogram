@@ -233,7 +233,7 @@ function patch(container, model, host) {
     if (!row) continue;
     const b = row.querySelector('.mss-action');
     b.textContent = a.confirming ? `Confirm: ${a.label}` : a.label;
-    if (model.busy) b.setAttribute('aria-disabled', 'true'); else b.removeAttribute('aria-disabled');
+    if (model.busy || a.blocked) b.setAttribute('aria-disabled', 'true'); else b.removeAttribute('aria-disabled');
     row.querySelector('.mss-action-note').textContent = a.note ?? '';
     const confirm = row.querySelector('.mss-action-confirm');
     confirm.textContent = a.confirming && a.confirm ? a.confirm : '';

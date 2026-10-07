@@ -62,7 +62,7 @@ import {
 import { renderPingResult, renderGateLog, renderLiveResult } from './live-view.mjs';
 import { renderServerSettings } from './mcp-settings-view.mjs';
 import {
-  settingsGateModel, settingsTargetModel, descriptorReadModel, statusLine, ledeText, fieldInputSpec, actionNote, primaryBlock, policyView, verifiedLine,
+  settingsGateModel, settingsTargetModel, descriptorReadModel, statusLine, ledeText, fieldInputSpec, actionNote, primaryBlock, actionBlock, policyView, verifiedLine,
   proxyDescribeModel, proxyOutcomeModel,
 } from './mcp-settings-model.mjs';
 import { loadServerSettingsConfig, loadSettingsLibs, readDescriptorDirect, submitDirect, describeViaProxy, submitViaProxy } from './mcp-settings-api.mjs';
@@ -5268,12 +5268,14 @@ function buildMssModel(ctx) {
   const req = lib.settingsRequest(ctx.descriptor, values);
   // The findings of the last check (re-run on a new form, 150 ms after typing, and at send).
   if (ctx.findings === null || ctx.findingsFor !== ctx.descriptor) mssCheckPolicy(ctx, values);
-  const policy = policyView(ctx.findings, mssTicked());
+  const ticked = mssTicked();
+  const policy = policyView(ctx.findings, ticked);
   model.policy = policy.rules;
   model.primary = { label: 'Send to the server', blocked: primaryBlock({ policyState: ctx.policyState, requestReason: req.reason ?? null, genericReason: ctx.genericError, ackReason: policy.block }) };
   model.actions = ctx.descriptor.actions.map((a) => {
     const r = lib.settingsRequest(ctx.descriptor, values, { action: a.name });
-    return { name: a.name, label: a.label, confirm: a.confirm, confirming: ctx.confirming === a.name, note: r.reason ? r.reason : actionNote(r.carries) };
+    const blocked = r.reason ? null : actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: r.sent, ticked });
+    return { name: a.name, label: a.label, confirm: a.confirm, confirming: ctx.confirming === a.name, blocked, note: r.reason ? r.reason : actionNote(r.carries) };
   });
   return model;
 }
@@ -5453,10 +5455,18 @@ const mcpSettingsActions = {
     if (!ctx?.descriptor || ctx.busy) return;
     const a = ctx.descriptor.actions.find((x) => x.name === name);
     if (!a) return;
-    if (a.confirm && ctx.confirming !== name) { ctx.confirming = name; ctx.notice = null; paintMss(); return; }
-    ctx.confirming = null;
     const values = mssValues();
     const req = ctx.libs.lib.settingsRequest(ctx.descriptor, values, { action: name });
+    if (!req.reason) {
+      // An action that carries a field the policy checks waits on its ack, as the pass-through does.
+      clearTimeout(ctx.findingsTimer);
+      ctx.findingsTimer = null;
+      mssCheckPolicy(ctx, values);
+      const block = actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: req.sent, ticked: mssTicked() });
+      if (block) { ctx.notice = block; ctx.confirming = null; paintMss(); return; }
+    }
+    if (a.confirm && ctx.confirming !== name) { ctx.confirming = name; ctx.notice = null; paintMss(); return; }
+    ctx.confirming = null;
     if (req.reason) { ctx.notice = req.reason.charAt(0).toUpperCase() + req.reason.slice(1) + '.'; paintMss(); return; }
     sendMss(ctx, req, name, values);
   },

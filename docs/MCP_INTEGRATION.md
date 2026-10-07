@@ -259,7 +259,9 @@ referrer. An **action** sends `{ "action": "<name>" }` plus its declared
 `fields`; without them, the `auth` field when there is one, else every
 secret the reader typed — the note under the button says which, and that an
 empty one means a server that needs it will refuse. An action skips the
-required fields and the policy's acknowledgements.
+required fields, and the policy's acknowledgements unless it carries a field
+a rule matched: then it waits for that acknowledgement (and for a readable
+policy), as the pass-through does.
 
 The **target** is checked before any request (`studio/mcp-settings-model.mjs`
 `settingsTargetModel`): `mcpUrlPolicy`; never the studio's own origin (a

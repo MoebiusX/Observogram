@@ -1137,7 +1137,9 @@ start, served at `GET /api/mcp-settings`, baked into a bundle by
   cannot run: it says so and still requires its acknowledgement.
 - **`warn`** is shown in the modal; **`require.ack`** blocks the send until
   ticked. Acknowledgements are never remembered — closed and reopened, they
-  are unticked. An action (`disable`) skips them.
+  are unticked. An action that sends no field the rule matched (`disable`)
+  skips them; one that carries the matched field waits for the ack, as the
+  pass-through does.
 - **`generic`** prefills the generic form's path, field names and API-key
   placement (`body` or `bearer`); the reader may change them per use and
   nothing is kept.

@@ -22,7 +22,7 @@ import * as lib from './lib/mcp-server-settings.mjs';
 import * as safety from './lib/mcp-url-safety.mjs';
 import {
   pageIsLoopback, settingsGateModel, settingsTargetModel, descriptorReadModel, statusLine, ledeText,
-  fieldInputSpec, actionNote, primaryBlock, policyView, verifiedLine, proxyDescribeModel, proxyOutcomeModel,
+  fieldInputSpec, actionNote, primaryBlock, actionBlock, policyView, verifiedLine, proxyDescribeModel, proxyOutcomeModel,
 } from '../studio/mcp-settings-model.mjs';
 import { pingResultModel } from '../studio/live-model.mjs';
 
@@ -195,6 +195,15 @@ test('the settings policy in the modal: one entry per rule, its notes, and the f
   const two = lib.parseSettingsDescriptor(JSON.stringify({ version: 1, endpoint: '/configure', fields: [{ name: 'a', label: 'A', type: 'text' }, { name: 'b', label: 'B', type: 'text' }] })).descriptor;
   assert.deepEqual(policyView(lib.policyFindings(policy, two, { a: 'root', b: 'root' })).rules.map((r) => r.rule), [0, 1], 'rule 0 unevaluated, rule 1 once for two fields');
   assert.deepEqual(policyView(null), { rules: [], block: null });
+  // An action: the pass-through's rule — only a matched rule on a field it sends, and an unread policy only when it sends one.
+  const found = lib.policyFindings(policy, form, { grafanaUrl: 'https://elsewhere.example', user: 'root' });
+  assert.equal(actionBlock({ policyState: 'served', findings: found, sent: ['grafanaUrl'] }), bad.block, 'an action that carries the URL waits for its ack');
+  assert.equal(actionBlock({ policyState: 'served', findings: found, sent: ['grafanaUrl'], ticked: ['0'] }), null, 'ticked');
+  assert.equal(actionBlock({ policyState: 'served', findings: found, sent: ['user'] }), null, 'rule 1 has no ack');
+  assert.equal(actionBlock({ policyState: 'served', findings: found, sent: [] }), null, 'an action that carries nothing sets no value the policy checks');
+  assert.equal(actionBlock({ policyState: 'served', findings: lib.policyFindings(policy, generic, {}), sent: ['url'] }), null, 'an unevaluated rule concerns the form, not the action');
+  assert.equal(actionBlock({ policyState: 'failed', findings: [], sent: ['grafanaUrl'] }), primaryBlock({ policyState: 'failed' }));
+  assert.equal(actionBlock({ policyState: 'failed', findings: [], sent: [] }), null);
 });
 
 const ping = (verdict, read) => {

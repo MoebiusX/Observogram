@@ -28,7 +28,9 @@
  *      ack and the click names it; a URL with userinfo is refused, not
  *      matched; an upper-case approved URL is not warned; an ack whose rule
  *      stops matching goes, and comes back unticked; tick, send; an action
- *      skips the ack; close and reopen — the ack is unticked again.
+ *      that carries no checked field skips the ack, one that carries the
+ *      URL waits for it, as the pass-through does; close and reopen — the
+ *      ack is unticked again.
  *   6. Target refusals: a typed ftp:// URL, an unlisted remote origin, plain
  *      http, the studio's own origin — no request to anyone.
  *   7. The gate: oscar's button is aria-disabled with the reason and opens
@@ -523,7 +525,7 @@ test('BROWSER 4: the disable action, the SPEC descriptor as written — what it 
 
 // ---------- 5 ----------
 
-test('BROWSER 5: the settings policy — a non-approved URL warns and the send waits for its ack; userinfo is refused, not matched; an approved URL in capitals is not warned; an ack comes back unticked; an action skips it; nothing is remembered', async (t) => {
+test('BROWSER 5: the settings policy — a non-approved URL warns and the send waits for its ack; userinfo is refused, not matched; an approved URL in capitals is not warned; an ack comes back unticked; an action skips it unless it carries the URL; nothing is remembered', async (t) => {
   if (skipUnlessBrowser(t)) return;
   const studio = await policyStudio();
   const f = await fake({ descriptor: EXAMPLE_SETTINGS_DESCRIPTOR, cors: studio.child.base });
@@ -586,6 +588,29 @@ test('BROWSER 5: the settings policy — a non-approved URL warns and the send w
   await w.page.click('.mss-action');
   await w.page.waitForFunction(() => document.querySelector('#mss-host .mss-outcome:not([hidden])'), null, { timeout: T });
   assert.deepEqual(postsTo(f).map((r) => r.body).at(-1), { action: 'disable' }, 'the action went without the ack');
+  await closeSettings(w);
+
+  // An action that carries the checked URL waits for the ack, as the pass-through does; one that carries none still skips it.
+  const carrying = await fake({
+    descriptor: { ...EXAMPLE_SETTINGS_DESCRIPTOR, actions: [{ name: 'test', label: 'Test backend', fields: ['grafanaUrl', 'secret'] }, { name: 'disable', label: 'Clear server credential' }] },
+    cors: studio.child.base,
+  });
+  await aim(w, { url: carrying.url });
+  await openSettings(w);
+  await w.waitStatus(/describes its settings/);
+  const testAction = '#mss-host [data-action-row="test"] .mss-action';
+  await fill(w, 'grafanaUrl', 'https://elsewhere.example/');
+  await w.page.waitForSelector(tick);
+  assert.equal(await w.page.getAttribute(testAction, 'aria-disabled'), 'true', 'the carrying action waits for the ack');
+  assert.equal(await w.page.getAttribute('#mss-host [data-action-row="disable"] .mss-action', 'aria-disabled'), null, 'an action that carries nothing does not');
+  await w.page.click(testAction, { force: true });
+  assert.equal(await w.status(), TICK);
+  assert.equal(postsTo(carrying).length, 0, 'the carrying action did not go without the ack');
+  await w.page.check(tick);
+  assert.equal(await w.page.getAttribute(testAction, 'aria-disabled'), null, 'ticked: the action may go');
+  await w.page.click(testAction);
+  await w.page.waitForFunction(() => document.querySelector('#mss-host .mss-outcome:not([hidden])'), null, { timeout: T });
+  assert.deepEqual(postsTo(carrying).map((r) => r.body), [{ action: 'test', grafanaUrl: 'https://elsewhere.example/' }], 'sent once the ack is ticked');
   await closeSettings(w);
   await w.done();
 });

@@ -340,6 +340,23 @@ export function primaryBlock({ policyState = 'none', requestReason = null, gener
   return null;
 }
 
+/**
+ * Why a server action may not send yet, or null — the pass-through's rule
+ * (server/routes/mcp-settings.mjs) in the browser: an action that sends no
+ * field sets no value the policy checks and is never blocked; one that sends
+ * fields waits on a settings policy not read (or unreadable), then on the
+ * unticked ack of a rule that matched a field it sends (an unevaluated
+ * finding concerns the form, not the action).
+ *   sent  the field names settingsRequest's `sent` lists for the action
+ */
+export function actionBlock({ policyState = 'none', findings = [], sent = [], ticked = [] } = {}) {
+  const fields = Array.isArray(sent) ? sent : [];
+  if (!fields.length) return null;
+  if (policyState === 'failed' || policyState === 'loading') return primaryBlock({ policyState });
+  const applies = (Array.isArray(findings) ? findings : []).filter((f) => !f.unevaluated && fields.includes(f.field));
+  return policyView(applies, ticked).block;
+}
+
 // ---------- after the send (A.2.4) ----------
 
 /**
