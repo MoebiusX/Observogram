@@ -328,6 +328,54 @@ for (const [label, hook] of [
   } finally { await new Promise(r => bouncer.close(r)); await target.close(); }
 }
 
+// ---------- 5d. a caller's AbortSignal aborts requests in flight (C1) ----------
+{
+  // A fetchImpl that never answers but honours init.signal: the caller's
+  // abort ends the request promptly, long before the request timeout.
+  const inits = [];
+  const hanging = {
+    fetchImpl: (url, init) => new Promise((_, reject) => {
+      inits.push(init);
+      init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+    }),
+    hookPath: '/x/hang.mjs',
+  };
+  const controller = new AbortController();
+  const { rpc } = createMcpClient({ mcpUrl: 'http://127.0.0.1:9/mcp', mcpAuth: 'tok', timeoutMs: 60_000, transport: hanging, signal: controller.signal });
+  const started = Date.now();
+  const pending = expectFail(() => rpc('tools/list', {}));
+  await new Promise(r => setTimeout(r, 20));
+  controller.abort();
+  const e1 = await pending;
+  assert(e1?.name === 'AbortError' && !isTransportHookError(e1) && Date.now() - started < 5_000,
+    'aborting the caller\'s signal ends a request in flight with an AbortError, before its 60 s timeout', { name: e1?.name, ms: Date.now() - started });
+  assert(inits.length === 1 && inits[0].signal !== controller.signal && inits[0].signal.aborted,
+    'the request carried a signal of its own (the timeout combined with the caller\'s), now aborted');
+  const e2 = await expectFail(() => rpc('tools/list', {}));
+  assert(e2?.name === 'AbortError' && inits.length === 1, 'a request after the abort is refused at once, before the transport sees it', { name: e2?.name, sent: inits.length });
+
+  // Native fetch against a loopback server that never answers.
+  const sockets = new Set();
+  const silent = createServer((req) => { req.resume(); });
+  silent.on('connection', (sock) => { sockets.add(sock); sock.on('close', () => sockets.delete(sock)); });
+  await new Promise(r => silent.listen(0, '127.0.0.1', r));
+  try {
+    const native = new AbortController();
+    const { rpc: nativeRpc } = createMcpClient({ mcpUrl: `http://127.0.0.1:${silent.address().port}/mcp`, mcpAuth: 'tok', timeoutMs: 60_000, transport: null, signal: native.signal });
+    const t0 = Date.now();
+    const waiting = expectFail(() => nativeRpc('initialize', {}));
+    setTimeout(() => native.abort(), 50);
+    const e3 = await waiting;
+    assert(e3?.name === 'AbortError' && Date.now() - t0 < 5_000, 'native fetch: the caller\'s abort ends the request in flight promptly', { name: e3?.name, ms: Date.now() - t0 });
+  } finally { for (const sock of sockets) sock.destroy(); await new Promise(r => silent.close(r)); }
+
+  // Without a signal each request still carries its own timeout, as before.
+  const plain = [];
+  const recording = { fetchImpl: async (url, init) => { plain.push(init); return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }), { headers: { 'content-type': 'application/json' } }); } };
+  await createMcpClient({ mcpUrl: 'http://127.0.0.1:9/mcp', transport: recording }).rpc('tools/list', {});
+  assert(plain.length === 1 && plain[0].signal instanceof AbortSignal && !plain[0].signal.aborted, 'no caller signal: the request\'s timeout signal alone');
+}
+
 // ---------- 6. load failures ----------
 {
   const missing = join(TMP, 'does-not-exist.mjs');

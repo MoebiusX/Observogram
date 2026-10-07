@@ -1,6 +1,6 @@
 // tools/lib/mcp-client.mjs — the ONE place Observogram speaks MCP over HTTP.
 //
-// createMcpClient({ mcpUrl, mcpAuth, timeoutMs, transport }) returns the
+// createMcpClient({ mcpUrl, mcpAuth, timeoutMs, transport, signal }) returns the
 // { rpc, notify, callTool } trio the fetch-live CLI, the fixture recorder,
 // the live probes and the studio server all drive (tools/fetch-live-pack.mjs
 // re-exports it with the Node-side defaults filled in). Every request —
@@ -53,6 +53,13 @@
 // redirect would carry the request, its Authorization header included,
 // somewhere else. An MCP behind a redirect (http → https, a trailing slash)
 // is configured with the URL it points at.
+//
+// Cancel: a caller's AbortSignal (`signal`, optional) is combined per request
+// with the request's own timeout (AbortSignal.any), so aborting it — a live
+// job cancelled, a watchdog fired — aborts every request in flight, an SSE
+// stream being read included, and refuses every later one before the hook
+// or the wire sees it; the rejection is the signal's AbortError. Without it each request carries the timeout
+// alone, as before.
 //
 // Redaction, by value, always: every text an MCP answer or a fetcher puts
 // into an error goes through redact() — a non-OK body, a JSON-RPC or SSE
@@ -144,8 +151,10 @@ function redirectError(res, url, method) {
 // Build the client. Synchronous: the transport (possibly a promise) is
 // awaited inside send(), once per request, so every destructuring caller
 // (`const { rpc, callTool } = createMcpClient(…)`) keeps working.
-export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, transport = null } = {}) {
+export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, transport = null, signal = null } = {}) {
   if (!mcpUrl) throw new Error('createMcpClient: mcpUrl required');
+  // One request's signal: its timeout, and the caller's cancel when given.
+  const requestSignal = () => (signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs));
   let session = null;
   let nextId = 1;
   const transportReady = Promise.resolve(transport).then(normaliseTransport);
@@ -156,6 +165,7 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
   const redact = (text) => secrets.reduce((acc, s) => acc.split(s).join('<redacted>'), String(text));
 
   async function send(method, params, { notification = false } = {}) {
+    signal?.throwIfAborted();
     const t = await transportReady;
     const label = `transport hook ${t.hookPath ?? '(inline)'}`;
     const fault = (text, cause) => new TransportHookError(`${label}: ${text}`, { hookPath: t.hookPath, cause });
@@ -206,7 +216,7 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
     const fetcher = t.fetchImpl || globalThis.fetch;
     const body = JSON.stringify(notification ? { jsonrpc: '2.0', method, params } : { jsonrpc: '2.0', id: nextId++, method, params });
     let res;
-    try { res = await fetcher(url, { method: 'POST', headers: reqHeaders, body, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) }); }
+    try { res = await fetcher(url, { method: 'POST', headers: reqHeaders, body, redirect: 'manual', signal: requestSignal() }); }
     catch (e) {
       if (!t.fetchImpl && redact(e?.message ?? e) === String(e?.message ?? e)) throw e;
       const err = new Error(redact(e?.message ?? e), { cause: e });

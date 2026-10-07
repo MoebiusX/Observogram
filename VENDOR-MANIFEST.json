@@ -710,8 +710,8 @@
       "releasedExports": null
     },
     "tools/lib/mcp-client.mjs": {
-      "sha256": "c0544bf8eee8baaaa175db59316936f1bfa7e049548ae2b1e13336b6e42af9cd",
-      "bytes": 16043,
+      "sha256": "ab9a1bb43a36fed504d02c20c81efbe2bed27f14dbc0da5c0d5a14aaca3ddf15",
+      "bytes": 16735,
       "exports": [
         "INERT_TRANSPORT",
         "MCP_PROTOCOL_VERSION",
