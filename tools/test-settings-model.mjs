@@ -1396,6 +1396,8 @@ test('the user editors: New local user has no password field and the organisatio
   assert.match(confirm('disable').text, /^Disable ada\? Every session of ada ends/);
   const reset = buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, secret: { login: 'ada', value: PW, forced: true } }, step: 'secret' });
   assert.equal(reset.secret.text, 'Temporary password for ada — shown once. It is not stored in this browser and cannot be shown again; ada sets their own at their next sign-in. Reset it to get a new one.');
+  assert.ok(!reset.status || !reset.status.text.includes(PW), 'the reset password is in its secret block only, never in the status text (§7.6)');
+  assert.ok(!JSON.stringify({ ...reset, secret: null }).includes(PW), 'the reset password appears exactly once in the model');
   assert.equal(buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, signIn: true }, step: 'notice' }).signIn, true);
   // A non-owner (the access downgraded while open): Create unavailable with the owner reason.
   assert.deepEqual(buildSettingsEditorModel('user-create', null, { ctx: { ...OWNER_CTX, access: ADA } }).primary.enabled, false);
