@@ -95,6 +95,11 @@ export const state = {
   // GET /api/mcp-endpoints → the org's McpEndpointView[]; null = not read or
   // the read failed, [] = none registered. Never persisted.
   mcpEndpoints: null,
+  // The same read's `policy` (rebadge batch 3, R4): { typed, register },
+  // each { allowed, why, listed, origins } (register + listedOnly) — what
+  // this reader may do with an MCP target; null = not read yet, `failed`
+  // (closed) when the read failed. Never persisted.
+  mcpTargetPolicy: null,
   // The open posture's Settings probe (GET /api/org/members) as last
   // answered in this page — { orgId, ok } — so a picker's empty list knows
   // the reader may register endpoints (C-7). Never persisted.
@@ -209,6 +214,10 @@ export const state = {
   compareSlice: 'all',         // 'all' | 'onlyA' | 'onlyB' | 'both' | 'a-b' | 'a+b'
   compareSearch: '',           // text filter applied to card id/title
   compareDetail: 'cards',      // Compare's View: 'list' | 'tiles' | 'cards' | 'details' (compare-view.mjs COMPARE_VIEWS). Persisted.
+  compareIdentity: 'behaviour', // Compare's Pair by: 'behaviour' (the server's diff) | 'name' | 'id', re-keyed in the
+                               // browser (studio/compare-identity.mjs). Not persisted, not in diffSelection(): no refetch.
+  taxonomyBindError: '',       // why the taxonomy override did not bind as the server's ('' when it did): name and id
+                               // pairing classify in the browser, so they stay off when the two could disagree.
   compareLens: 'all',          // 'all' | <product-slug>. Filters Compare/Benchmark to
                                // only artefacts in a product's surface (e.g. 'grafana'
                                // keeps backends with product=grafana, dashboards whose

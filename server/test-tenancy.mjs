@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 import { createServer, request } from 'node:http';
 import { spawnSync } from 'node:child_process';
+import { endpointIdFor } from './fixtures/fake-mcp.mjs';
 
 // Hermetic (§0): a developer shell's store, identity, taxonomy, transport-hook
 // or brand variables never reach this process's imports — the children's STRIP
@@ -41,6 +42,13 @@ process.env.OBSERVOGRAM_WORKSPACE = WORKSPACE;
 process.env.OBSERVOGRAM_API_TOKEN = 'ci-token-tenancy-0123456789';
 process.env.OBSERVOGRAM_API_TOKEN_LABEL = 'ci-bot';
 process.env.OBSERVOGRAM_USERS_FILE = join(WORKSPACE, 'users.json');
+// The MCP origin allowlist per org (server/mcp-target-policy.mjs): each org
+// lists only its own sweep origin, where its endpoint sends a server-held token.
+for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
+process.env.OBSERVOGRAM_ORG_ACME_MCP_ORIGINS = 'https://acme.mcp.test';
+process.env.OBSERVOGRAM_ORG_DELTA_MCP_ORIGINS = 'https://delta.mcp.test';
+// acme's configured snapshot scope (server/live-jobs.mjs): never served to another org.
+process.env.OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_PREFIXES = 'acme_';
 
 import { createHarness } from '../tools/lib/harness.mjs';
 const { assert, report } = createHarness({ indent: '  ', truncate: 200 });
@@ -205,11 +213,13 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   j = await r.json();
   const packId = j.registered?.id;
   assert(!!packId && existsSync(join(dir, 'packs', `${packId}.pack.yaml`)), `alice registers a pack into ${org}`, j.registered);
+  // The fake MCP as this org's endpoint: the deploys go by its id.
+  const fakeEndpointId = await endpointIdFor(root, mcp.url, { name: `${org} fake mcp`, headers: h });
   let seq = auditSeq();
   r = await fetch(`${root}/api/packs/${packId}/deploy-bulk`, {
     method: 'POST', headers: { ...h, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      mcpUrl: mcp.url, targetProduct: 'grafana', targetVersion: '12', targetFolder: 'observability-pack',
+      mcpEndpointId: fakeEndpointId, targetProduct: 'grafana', targetVersion: '12', targetFolder: 'observability-pack',
       items: [
         { group: 'rules', flavor: 'prometheus', artifact: 'declared:0', scope: 'recording' },
         { group: 'dashboards', flavor: 'grafana', dashboardId: 'payment-overview' },
@@ -289,6 +299,20 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   j = await r.json();
   const mcpEndpointId = j.endpoint?.id;
   assert(r.status === 201 && Number.isInteger(mcpEndpointId) && j.endpoint.url === `https://${org}.mcp.test/mcp`, `alice (an admin) creates an MCP endpoint in ${org}`, [r.status, j]);
+  // The other org's listed origin is not this org's: its variable lists its own.
+  const other = org === 'acme' ? 'delta' : 'acme';
+  seq = auditSeq();
+  r = await fetch(`${root}/api/mcp-endpoints`, {
+    method: 'POST', headers: { ...h, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: `${org} other mcp`, url: `https://${other}.mcp.test/mcp`, readTokenEnv: `OBSERVOGRAM_ORG_${org.toUpperCase()}_MCP_TOKEN` }),
+  });
+  j = await r.json();
+  assert(r.status === 400 && j.error === `https://${other}.mcp.test is not in OBSERVOGRAM_ORG_${org.toUpperCase()}_MCP_ORIGINS — the server's operator adds it there (comma-separated origins, e.g. https://mcp.example.com), or register an endpoint at a listed origin`
+    && rowsAfter(seq).length === 0, `${other}'s listed MCP origin is not ${org}'s: registering it in ${org} is refused (400, no row)`, [r.status, j]);
+  r = await fetch(`${root}/api/mcp-endpoints`, { headers: h });
+  j = await r.json();
+  assert(JSON.stringify(j.policy?.typed?.origins) === JSON.stringify([`https://${org}.mcp.test`]) && JSON.stringify(j.policy?.register?.origins) === JSON.stringify([`https://${org}.mcp.test`]),
+    `GET /api/mcp-endpoints in ${org}: its policy shows ${org}'s origin list, never ${other}'s`, j.policy);
   // A waiver by alice on the service (GAP batch 2, B3.2): a row in the store, the author her login.
   const expiresAt = new Date(Date.now() + 30 * 86400000).toISOString();
   seq = auditSeq();
@@ -303,7 +327,29 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   assert(rows.length === 1 && listedFor('POST /api/services/:id/waivers', rows)
     && JSON.stringify(rows) === JSON.stringify([['waiver.create', 'alice', org, String(waiverId), { service: `${org}-sweep-service`, ruleId: 'L5.MUST.synthetic_probe', artefactId: null, expiresAt, reason: 'the probe ships next sprint' }]]),
     `alice's waiver in ${org}: exactly one waiver.create row by alice in ${org} (an action the table lists)`, rows);
-  return { packId, deployId, journey, serviceId, environmentId, mcpEndpointId, waiverId };
+  // One snapshot job by alice through the fake (rebadge batch 3, C1): it
+  // registers its pack in this org and writes one live.fetch row here.
+  seq = auditSeq();
+  r = await fetch(`${root}/api/mcp/jobs`, {
+    method: 'POST', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'snapshot', mcpEndpointId: fakeEndpointId }),
+  });
+  j = await r.json();
+  const jobId = j.job?.id;
+  assert(r.status === 202 && typeof jobId === 'string' && JSON.stringify(j.job.scope.metricPrefixes) === JSON.stringify(org === 'acme' ? ['acme_'] : []),
+    `alice starts a snapshot job in ${org} (the org's own configured scope)`, [r.status, j]);
+  let poll = null;
+  for (let i = 0; i < 400; i++) {
+    poll = await (await fetch(`${root}/api/mcp/jobs/${jobId}`, { headers: h })).json();
+    if (poll.job?.state !== 'running') break;
+    await new Promise(res => setTimeout(res, 25));
+  }
+  const jobPack = poll?.result?.registered?.id;
+  assert(poll?.job?.state === 'done' && !!jobPack && existsSync(join(dir, 'packs', `${jobPack}.pack.yaml`)), `alice's snapshot job in ${org} ends done, its pack under ${org}'s root`, [poll?.job?.state, poll?.error]);
+  rows = rowsAfter(seq);
+  const fetchRows = rows.filter(([action]) => action === 'live.fetch');
+  assert(listedFor('POST /api/mcp/jobs', rows) && fetchRows.length === 1 && fetchRows[0][1] === 'alice' && fetchRows[0][2] === org && fetchRows[0][4].jobId === jobId,
+    `alice's snapshot job in ${org}: its rows are actions the table lists, one live.fetch by alice in ${org}`, rows);
+  return { packId, deployId, journey, serviceId, environmentId, mcpEndpointId, fakeEndpointId, waiverId, jobId };
 }
 
 // The cross-org route sweep: `who` (a session in another org — `org` is its
@@ -326,7 +372,9 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     const parse = () => { try { return JSON.parse(text); } catch { return null; } };
     return { status: r.status, json: parse() };
   };
-  const { packId, deployId, journey, userId, serviceId, environmentId, mcpEndpointId, waiverId } = ids;
+  // The deploy rows send the other org's endpoint for the fake: the route
+  // refuses the pack or the deploy first, so the fake sees no call.
+  const { packId, deployId, journey, userId, serviceId, environmentId, mcpEndpointId, fakeEndpointId, waiverId, jobId } = ids;
   const p = encodeURIComponent(packId);
   const is404 = (label) => (r) => assert(r.status === 404, `${who}: ${label} → 404`, r.status, 404);
   const ORG_SCOPED = {
@@ -346,12 +394,12 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     'GET /api/packs/:id/export.zip': [`/api/packs/${p}/export.zip`, undefined, is404('GET /api/packs/:id/export.zip')],
     'GET /api/packs/:id/compile/:target': [`/api/packs/${p}/compile/prometheus-rules`, undefined, is404('GET /api/packs/:id/compile/:target')],
     'GET /api/diff': [`/api/diff?a=${p}&b=${p}`, undefined, is404('GET /api/diff')],
-    'POST /api/packs/:id/deploy-bulk': [`/api/packs/${p}/deploy-bulk`, { mcpUrl: mcp.url, items: [{ group: 'dashboards', flavor: 'grafana', dashboardId: 'payment-overview' }] }, is404('POST /api/packs/:id/deploy-bulk')],
-    'POST /api/packs/:id/deploy/:target': [`/api/packs/${p}/deploy/grafana-dashboard`, { mcpUrl: mcp.url }, is404('POST /api/packs/:id/deploy/:target')],
+    'POST /api/packs/:id/deploy-bulk': [`/api/packs/${p}/deploy-bulk`, { mcpEndpointId: fakeEndpointId, items: [{ group: 'dashboards', flavor: 'grafana', dashboardId: 'payment-overview' }] }, is404('POST /api/packs/:id/deploy-bulk')],
+    'POST /api/packs/:id/deploy/:target': [`/api/packs/${p}/deploy/grafana-dashboard`, { mcpEndpointId: fakeEndpointId }, is404('POST /api/packs/:id/deploy/:target')],
     'POST /api/packs/:id/retrofeed': [`/api/packs/${p}/retrofeed`, {}, is404('POST /api/packs/:id/retrofeed')],
     'GET /api/deploys': ['/api/deploys?limit=500', undefined, (r) => assert(r.status === 200 && !r.json.deploys.some(d => d.deployId === deployId), `${who}: GET /api/deploys lacks the other org's deployId`)],
     'GET /api/deploys/:deployId/rollback-plan': [`/api/deploys/${deployId}/rollback-plan`, undefined, (r) => assert(r.json?.canRollback === false && (r.json.plan || []).length === 0, `${who}: rollback-plan of the other org's deploy → no snapshot`, r.json)],
-    'POST /api/deploys/:deployId/rollback': [`/api/deploys/${deployId}/rollback`, { mcpUrl: mcp.url }, (r) => assert(r.status === 404 || r.status === 409, `${who}: rollback of the other org's deploy → 404/409`, r.status, '404|409')],
+    'POST /api/deploys/:deployId/rollback': [`/api/deploys/${deployId}/rollback`, { mcpEndpointId: fakeEndpointId }, (r) => assert(r.status === 404 || r.status === 409, `${who}: rollback of the other org's deploy → 404/409`, r.status, '404|409')],
     'POST /api/deploys/:deployId/verify': [`/api/deploys/${deployId}/verify`, { outcome: 'verified' }, is404('POST /api/deploys/:deployId/verify')],
     'GET /api/journeys': ['/api/journeys', undefined, (r) => assert(r.status === 200 && !r.json.journeys.some(x => x.name === journey), `${who}: GET /api/journeys lacks the other org's journey`)],
     'GET /api/journeys/:name/runs': [`/api/journeys/${journey}/runs`, undefined, (r) => assert(r.status === 404 || (r.status === 200 && (r.json.runs || []).length === 0), `${who}: runs of the other org's journey → empty`, r.json)],
@@ -368,6 +416,19 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     // refresh (here refused before any fetch) could only write the caller's.
     'GET /api/live-status': ['/api/live-status', undefined, (r) => assert(r.status === 200 && r.json.present === false, `${who}: GET /api/live-status does not read the other org's live pack`, r.json)],
     'POST /api/refresh-live': ['/api/refresh-live', {}, (r) => assert(r.status === 400, `${who}: POST /api/refresh-live {} → 400`, r.status, 400)],
+    // The ping (rebadge batch 3, C2): the other org's endpoint id is no
+    // endpoint here — 400 before any wire call (the sweep counts the fake's calls).
+    'POST /api/mcp/ping': ['/api/mcp/ping', { mcpEndpointId }, (r) => assert(r.status === 400 && r.json?.error === `no MCP endpoint ${mcpEndpointId} in this org — GET /api/mcp-endpoints lists them`,
+      `${who}: POST /api/mcp/ping by the other org's endpoint id → 400, no MCP endpoint in this org`, [r.status, r.json?.error])],
+    // The live jobs (rebadge batch 3, C1): the other org's job is the
+    // unknown-id 404 to read and to cancel; the list never shows it, nor the
+    // other org's configured scope; a start without a kind is a 400.
+    'GET /api/mcp/jobs': ['/api/mcp/jobs', undefined, (r) => assert(r.status === 200 && r.json.running === null
+      && JSON.stringify(r.json.scope.defaults.metricPrefixes) === JSON.stringify(org === 'acme' ? ['acme_'] : []) && r.json.scope.from === (org === 'acme' ? 'org' : null),
+    `${who}: GET /api/mcp/jobs holds no job and no configured scope of the other org's`, r.json)],
+    'POST /api/mcp/jobs': ['/api/mcp/jobs', {}, (r) => assert(r.status === 400, `${who}: POST /api/mcp/jobs {} → 400`, r.status, 400)],
+    'GET /api/mcp/jobs/:jobId': [`/api/mcp/jobs/${jobId}`, undefined, (r) => assert(r.status === 404 && r.json?.gone === true, `${who}: GET /api/mcp/jobs/:jobId of the other org's job → 404 gone`, [r.status, r.json])],
+    'POST /api/mcp/jobs/:jobId/cancel': [`/api/mcp/jobs/${jobId}/cancel`, {}, (r) => assert(r.status === 404 && r.json?.gone === true, `${who}: cancel of the other org's job → 404 gone`, [r.status, r.json])],
     'DELETE /api/uploads': ['/api/uploads', undefined, (r) => assert(r.status === 200, `${who}: DELETE /api/uploads clears only the caller's org`, r.status, 200)],
     // The request's org, its name and its members (STORE_PLAN slice 3b): the
     // list holds none of the other org's users, and a member route naming
@@ -816,10 +877,12 @@ try {
     const deltaLive = join(deltaDir, 'live', 'production-live.pack.yaml');
     const baseLive = join(WS4, 'live', 'production-live.pack.yaml');
     const liveUrl = `${mcp.url}?from=delta`;
+    const deltaH = { Cookie: alice, 'X-Observogram-CSRF': '1', 'X-Observogram-Org': 'delta' };
+    const liveEndpointId = await endpointIdFor(base4, liveUrl, { name: 'delta live mcp', headers: deltaH });
     r = await fetch(`${base4}/api/refresh-live`, {
       method: 'POST',
-      headers: { Cookie: alice, 'X-Observogram-CSRF': '1', 'X-Observogram-Org': 'delta', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mcpUrl: liveUrl }),
+      headers: { ...deltaH, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mcpEndpointId: liveEndpointId }),
     });
     j = await r.json();
     assert(r.status === 200 && j.ok === true && j.annotations?.['mcp.url'] === liveUrl, 'alice refreshes the live pack in delta', [r.status, j.error]);

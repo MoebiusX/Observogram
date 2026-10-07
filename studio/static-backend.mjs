@@ -41,7 +41,7 @@
 // next to a navigation sink.
 
 import { adapt, listEnvironments, applyEnvironmentOverlay } from '../tools/lib/adapter.mjs';
-import { serviceMetadata } from '../tools/lib/service-keys.mjs';
+import { serviceMetadata, livePackKind } from '../tools/lib/service-keys.mjs';
 import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from '../tools/lib/validator.mjs';
 import { evaluateConformance, RUBRIC } from '../tools/lib/conformance.mjs';
 import { packConformance } from '../tools/lib/pack-conformance.mjs';
@@ -66,6 +66,8 @@ export const FEATURES = [
   ['/api/refresh-live', 'Refresh from MCP'],
   ['/api/crawl', 'Scan a repo'],                      // and /api/crawl-github
   ['/api/draft-from-mcp', 'Draft from a live MCP server'],
+  ['/api/mcp/ping', 'Testing an MCP connection'],     // the live MCP API (rebadge batch 3); not a prefix of /api/mcp-endpoints
+  ['/api/mcp/jobs', 'Building a pack from a live MCP server'],   // the live jobs (rebadge batch 3, C1); not a prefix of /api/mcp-endpoints
   ['/api/validate', 'Uploading a pack'],
   ['/api/uploads', 'Uploading a pack'],
   ['/api/diff', 'Compare'],
@@ -186,6 +188,7 @@ function librarySummaryFor(canonical) {
 // server/index.mjs catalogEntry: the field set of GET /api/packs.
 function catalogEntry(meta, canonical) {
   const svc = serviceMetadata(canonical);
+  const live = livePackKind(canonical);
   return {
     id: meta.id,
     label: meta.label,
@@ -198,6 +201,7 @@ function catalogEntry(meta, canonical) {
     namespace: svc.namespace,
     services: svc.services,
     environments: listEnvironments(canonical),
+    ...(live ? { live } : {}),
     ok: true,
   };
 }

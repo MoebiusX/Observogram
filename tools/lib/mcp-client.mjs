@@ -1,6 +1,6 @@
 // tools/lib/mcp-client.mjs — the ONE place Observogram speaks MCP over HTTP.
 //
-// createMcpClient({ mcpUrl, mcpAuth, timeoutMs, transport }) returns the
+// createMcpClient({ mcpUrl, mcpAuth, timeoutMs, transport, signal, maxAnswerBytes }) returns the
 // { rpc, notify, callTool } trio the fetch-live CLI, the fixture recorder,
 // the live probes and the studio server all drive (tools/fetch-live-pack.mjs
 // re-exports it with the Node-side defaults filled in). Every request —
@@ -24,8 +24,9 @@
 //     hook sees the Authorization header (Bearer <mcpAuth>) and the raw
 //     caller URL and may replace both; it must never log them.
 //   - fetchImpl(url, init) → Promise<Response-like>: replaces globalThis.fetch.
-//     init carries { method: 'POST', headers, body, signal } — the
-//     AbortSignal is advisory, a custom fetcher may ignore it. The result
+//     init carries { method: 'POST', headers, body, redirect: 'manual',
+//     signal } — `redirect` and the AbortSignal are advice, a custom fetcher
+//     may ignore them; a 3xx it RETURNS is refused all the same. The result
 //     must offer ok, status, headers.get(name), text(), json(), and
 //     body.getReader() when it answers text/event-stream. `new Response()`
 //     satisfies all of it.
@@ -45,19 +46,66 @@
 //   probe-level retry/annotate semantics with a hook present.
 //   isTransportHookError() is name-based so it survives module duplication.
 //
-// Redaction: a hook's own error text goes through redact() before it is
-// rethrown — wrapped for prepareRequest, kept an ordinary error for a
-// fetchImpl rejection or for the text of a Response fetchImpl RETURNS (a
-// non-OK body, a JSON-RPC or SSE error message) — so the bearer, the URL's
-// userinfo and every credential-named query parameter value of mcpUrl
-// (stripMcpUrl's rule) become <redacted> in every log line, 502 body and
-// run record downstream. Native fetch's answers pass through untouched.
-// Nothing else the hook does is redacted for it; it runs with the
-// process's trust.
+// Redirects: never followed. Every request is sent with redirect: 'manual',
+// and an answer that is a redirect — a 3xx, or a browser's opaqueredirect —
+// is an error naming only the origin the Location header pointed at (never
+// its path or query): an allowlist judges the URL the caller chose, and a
+// redirect would carry the request, its Authorization header included,
+// somewhere else. An MCP behind a redirect (http → https, a trailing slash)
+// is configured with the URL it points at.
+//
+// Cancel: a caller's AbortSignal (`signal`, optional) is combined per request
+// with the request's own timeout (AbortSignal.any), so aborting it — a live
+// job cancelled, a watchdog fired — aborts every request in flight, an SSE
+// stream being read included, and refuses every later one before the hook
+// or the wire sees it; the rejection is the signal's AbortError. Without it each request carries the timeout
+// alone, as before.
+//
+// Bounded: one MCP answer is read up to `maxAnswerBytes` (default
+// MAX_MCP_ANSWER_BYTES, 32 MiB), counted while it is read — the SSE stream,
+// the JSON body and a non-OK body alike (through body.getReader(); a
+// Response-like without one is refused on its content-length, else counted
+// after text()). Past it the client stops reading, releases the stream and
+// throws `MCP <method>: the answer exceeded 32 MiB — Observogram stopped
+// reading it`; a non-OK answer's error says the same in place of its body.
+//
+// Redaction, by value, always: every text an MCP answer or a fetcher puts
+// into an error goes through redact() — a non-OK body, a JSON-RPC or SSE
+// error message, a tool's isError text, a fetcher's rejection, a hook's own
+// error text (wrapped for prepareRequest) — whether native fetch or a
+// hook's fetchImpl answered; for a body that is not JSON the parser's
+// message, which quotes a cut of the body, is replaced whole. An upstream
+// that repeats the request (a 401 page quoting the Authorization header)
+// cannot carry the credential back: the bearer, the URL's userinfo and
+// every credential-named query parameter value of mcpUrl (stripMcpUrl's
+// rule) become <redacted> in every log line, 502 body, annotation and run
+// record downstream. A successful answer is redacted the same way — every
+// string of the result rpc() and callTool() return, keys included, a tool's
+// JSON text once parsed — so a result that repeats it cannot carry it into
+// a ping, a pack or a fixture; a result that held none is returned as it
+// came. There the credential itself — the bearer (a server-held read token
+// or the caller's mcpAuth) and the URL's userinfo — is redacted at any
+// length; a value merely taken from a credential-named query parameter
+// counts only from ANSWER_SECRET_MIN characters: a short one (sortkey=title,
+// partitionkey=1) is ordinary data a real answer holds too. An error that
+// held none of them is rethrown as it was. Nothing else the hook does is redacted for
+// it; it runs with the process's trust.
 
 import { mcpUrlOrigin, safeMcpUrl, stripMcpUrl } from './mcp-url-safety.mjs';
 
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
+
+// The most one MCP answer may hold before the client stops reading it.
+export const MAX_MCP_ANSWER_BYTES = 32 * 1024 * 1024;
+
+// The shortest credential-named query value redacted from a successful
+// answer (the bearer and the userinfo are redacted from it at any length,
+// and an error's text for every secret, whatever its length).
+const ANSWER_SECRET_MIN = 12;
+
+// A byte count as the cap's sentence says it: MiB, KiB or bytes, whole.
+const sizeText = (n) => (n % 1048576 === 0 ? `${n / 1048576} MiB` : n % 1024 === 0 ? `${n / 1024} KiB` : `${n} bytes`);
+const utf8Bytes = (text) => new TextEncoder().encode(text).length;
 
 export class TransportHookError extends Error {
   constructor(message, { hookPath = null, cause } = {}) {
@@ -91,42 +139,109 @@ export function normaliseTransport(t) {
   return out;
 }
 
-// The secrets of one client: the bearer, the URL's userinfo and the values
-// of its credential-named query parameters (decoded and as they appear in
-// the href), longest first so a value that contains another is replaced
-// whole.
+// The secrets of one client, longest first so a value that contains another
+// is replaced whole: `credentials` — the bearer and the URL's userinfo (raw
+// and decoded) — and `named`, the values of its credential-named query
+// parameters (decoded and as they appear in the href).
 function secretsOf(mcpUrl, mcpAuth) {
-  const set = new Set();
-  const add = (v) => { if (typeof v === 'string' && v !== '') set.add(v); };
-  add(mcpAuth);
+  const credentials = new Set();
+  const named = new Set();
+  const add = (set, v) => { if (typeof v === 'string' && v !== '') set.add(v); };
+  add(credentials, mcpAuth);
   try {
     const url = new URL(String(mcpUrl));
     for (const part of [url.username, url.password]) {
-      add(part);
-      try { add(decodeURIComponent(part)); } catch { /* malformed escape: the raw form is in */ }
+      add(credentials, part);
+      try { add(credentials, decodeURIComponent(part)); } catch { /* malformed escape: the raw form is in */ }
     }
     for (const name of stripMcpUrl(mcpUrl).dropped) {
-      for (const value of url.searchParams.getAll(name)) { add(value); add(encodeURIComponent(value)); }
+      for (const value of url.searchParams.getAll(name)) { add(named, value); add(named, encodeURIComponent(value)); }
     }
   } catch { /* not a URL: the bearer alone */ }
-  return [...set].sort((a, b) => b.length - a.length);
+  const longestFirst = (set) => [...set].sort((a, b) => b.length - a.length);
+  return { credentials: longestFirst(credentials), named: longestFirst(named) };
+}
+
+// The error for an answer that is a redirect: the status, the method and
+// the origin of the Location header (resolved against the request URL), never
+// its path, query or userinfo. A browser's opaqueredirect hides the Location.
+function redirectError(res, url, method) {
+  let location = null;
+  try { location = res.headers.get('location'); } catch { /* no headers */ }
+  let where;
+  if (res.type === 'opaqueredirect' || location == null || location === '') where = 'a redirect whose target it did not show';
+  else {
+    let origin = null;
+    try { origin = mcpUrlOrigin(new URL(location, url).href); } catch { /* not a URL */ }
+    where = origin ? `a redirect to ${origin}` : 'a redirect to a location that is not an http(s) URL';
+  }
+  return `MCP HTTP ${res.status} on ${method}: the MCP answered with ${where} — Observogram does not follow redirects; register (or type) the URL it points at`;
 }
 
 // Build the client. Synchronous: the transport (possibly a promise) is
 // awaited inside send(), once per request, so every destructuring caller
 // (`const { rpc, callTool } = createMcpClient(…)`) keeps working.
-export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, transport = null } = {}) {
+export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, transport = null, signal = null, maxAnswerBytes = MAX_MCP_ANSWER_BYTES } = {}) {
   if (!mcpUrl) throw new Error('createMcpClient: mcpUrl required');
+  const cap = Number.isSafeInteger(maxAnswerBytes) && maxAnswerBytes > 0 ? maxAnswerBytes : MAX_MCP_ANSWER_BYTES;
+  const cappedText = `the answer exceeded ${sizeText(cap)} — Observogram stopped reading it`;
+  const capped = (method) => Object.assign(new Error(`MCP ${method}: ${cappedText}`), { capped: true });
+  // A whole answer body as text, counted while it is read (see the header).
+  async function readAnswer(res, method) {
+    if (typeof res.body?.getReader === 'function') {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let bytes = 0;
+      let text = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (value) {
+          bytes += value.byteLength;
+          if (bytes > cap) { try { await reader.cancel(); } catch { /* already released */ } throw capped(method); }
+          text += decoder.decode(value, { stream: true });
+        }
+        if (done) break;
+      }
+      return text + decoder.decode();
+    }
+    const declared = Number(res.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > cap) throw capped(method);
+    const text = await res.text();
+    if (text.length > cap || (text.length > cap / 4 && utf8Bytes(text) > cap)) throw capped(method);
+    return text;
+  }
+  // One request's signal: its timeout, and the caller's cancel when given.
+  const requestSignal = () => (signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs));
   let session = null;
   let nextId = 1;
   const transportReady = Promise.resolve(transport).then(normaliseTransport);
   // A client that is built and never used must not crash the process on a
   // transport that fails to normalise: the rejection reaches each send().
   transportReady.catch(() => {});
-  const secrets = secretsOf(mcpUrl, mcpAuth);
+  const { credentials, named } = secretsOf(mcpUrl, mcpAuth);
+  const secrets = [...new Set([...credentials, ...named])].sort((a, b) => b.length - a.length);
   const redact = (text) => secrets.reduce((acc, s) => acc.split(s).join('<redacted>'), String(text));
+  // A successful answer, redacted the same way: every string in it (keys
+  // included), so an MCP that repeats the request in a result (a version
+  // string, a description) cannot carry the credential into a ping, a pack
+  // or a fixture. The bearer and the userinfo count at any length (a short
+  // read token is still the credential); a credential-named query value
+  // counts only from ANSWER_SECRET_MIN characters: a short one ('1',
+  // 'title') also occurs in real data, and replacing it there would rename
+  // keys, cut ids and break the JSON a tool answers. With nothing to redact
+  // the answer is returned as it came.
+  const answerSecrets = [...new Set([...credentials, ...named.filter((s) => s.length >= ANSWER_SECRET_MIN)])].sort((a, b) => b.length - a.length);
+  const redactInAnswer = (text) => answerSecrets.reduce((acc, s) => acc.split(s).join('<redacted>'), text);
+  const redactAnswer = (v) => {
+    if (answerSecrets.length === 0) return v;
+    if (typeof v === 'string') return redactInAnswer(v);
+    if (Array.isArray(v)) return v.map(redactAnswer);
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [redactInAnswer(k), redactAnswer(x)]));
+    return v;
+  };
 
   async function send(method, params, { notification = false } = {}) {
+    signal?.throwIfAborted();
     const t = await transportReady;
     const label = `transport hook ${t.hookPath ?? '(inline)'}`;
     const fault = (text, cause) => new TransportHookError(`${label}: ${text}`, { hookPath: t.hookPath, cause });
@@ -171,15 +286,15 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
     }
 
     // (4) the wire. A rejection here is NOT a hook fault (see the header).
-    // A fetchImpl's own rejection is still hook text, so it is redacted —
-    // the error stays ordinary (same name and code, cause kept), only its
-    // message changes; native fetch's rejections pass through untouched.
+    // Its text is redacted like an answer's — the error stays ordinary (same
+    // name and code, cause kept), only its message changes; a native
+    // rejection that holds no secret is rethrown as it was.
     const fetcher = t.fetchImpl || globalThis.fetch;
     const body = JSON.stringify(notification ? { jsonrpc: '2.0', method, params } : { jsonrpc: '2.0', id: nextId++, method, params });
     let res;
-    try { res = await fetcher(url, { method: 'POST', headers: reqHeaders, body, signal: AbortSignal.timeout(timeoutMs) }); }
+    try { res = await fetcher(url, { method: 'POST', headers: reqHeaders, body, redirect: 'manual', signal: requestSignal() }); }
     catch (e) {
-      if (!t.fetchImpl) throw e;
+      if (!t.fetchImpl && redact(e?.message ?? e) === String(e?.message ?? e)) throw e;
       const err = new Error(redact(e?.message ?? e), { cause: e });
       if (e?.name && e.name !== 'Error') err.name = e.name;
       if (e?.code !== undefined) err.code = e.code;
@@ -190,11 +305,34 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
       throw fault(`fetchImpl returned ${describe(res)}, not a Response`);
     }
 
-    // (5) the answer, exactly as before — except that what a fetchImpl
-    // RETURNS is hook text too (a non-OK body, an error message), so it is
-    // redacted like its rejection; a native Response passes through as is.
-    const wireText = (text) => (t.fetchImpl ? redact(text) : String(text));
-    if (!res.ok) throw new Error(`MCP HTTP ${res.status} on ${method}: ${wireText(await res.text().catch(() => ''))}`);
+    // (5) a redirect is refused before anything of the answer is read: only
+    // the origin of its Location reaches the error text.
+    if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
+      try { await res.body?.cancel?.(); } catch { /* nothing to release */ }
+      throw new Error(redirectError(res, url, method));
+    }
+
+    // (6) the answer, exactly as before — except that every text it puts
+    // into an error, and every string of a result, is redacted, whoever
+    // answered (see the header).
+    const wireText = (text) => redact(text);
+    // A body that is not JSON: the parser's message quotes a cut of the
+    // answer, which by-value redaction cannot catch when the cut splits a
+    // secret, so it is replaced whole; any other failure (an abort while
+    // reading) is redacted like the rest. Neither keeps the original as its
+    // cause: it holds the unredacted text.
+    const parsed = async (read) => {
+      let failure;
+      try { return await read(); } catch (e) { failure = e; }
+      if (failure instanceof SyntaxError) throw new SyntaxError(`MCP ${method}: the answer is not valid JSON`);
+      const message = String(failure?.message ?? failure);
+      if (redact(message) === message) throw failure;
+      const err = new Error(redact(message));
+      if (failure?.name && failure.name !== 'Error') err.name = failure.name;
+      if (failure?.code !== undefined) err.code = failure.code;
+      throw err;
+    };
+    if (!res.ok) throw new Error(`MCP HTTP ${res.status} on ${method}: ${wireText(await readAnswer(res, method).catch((e) => (e?.capped ? cappedText : '')))}`);
     if (res.headers.get('mcp-session-id')) session = res.headers.get('mcp-session-id');
     if (notification) return undefined;
 
@@ -204,15 +342,20 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
+      let bytes = 0;
       while (true) {
         const { done, value } = await reader.read();
-        if (value) buf += decoder.decode(value, { stream: true });
+        if (value) {
+          bytes += value.byteLength;
+          if (bytes > cap) { try { await reader.cancel(); } catch { /* already released */ } throw capped(method); }
+          buf += decoder.decode(value, { stream: true });
+        }
         const frameEnd = buf.indexOf('\n\n');
         if (frameEnd !== -1) {
           const frame = buf.slice(0, frameEnd);
           const text = frame.split('\n').filter(l => l.startsWith('data:')).map(l => l.replace(/^data:\s?/, '')).join('\n');
           if (text) {
-            const obj = JSON.parse(text);
+            const obj = await parsed(() => JSON.parse(text));
             if (obj.error) throw new Error(`${method}: ${wireText(obj.error.message)}`);
             return obj.result;
           }
@@ -222,24 +365,29 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
       }
       throw new Error(`MCP ${method}: SSE stream ended with no complete frame`);
     }
-    const data = await res.json();
+    const data = await parsed(async () => JSON.parse(await readAnswer(res, method)));
     if (data.error) throw new Error(`${method}: ${wireText(data.error.message)}`);
     return data.result;
   }
 
-  const rpc = (method, params = {}) => send(method, params);
+  const rpc = async (method, params = {}) => redactAnswer(await send(method, params));
   const notify = (method, params = {}) => send(method, params, { notification: true });
 
   async function callTool(name, args = {}) {
-    const result = await rpc('tools/call', { name, arguments: args });
+    // The answer as it came: a tool's JSON text is parsed before it is
+    // redacted, so redaction touches only its strings (never a number, a
+    // quote or a brace) and a secret JSON escapes is caught as well.
+    const result = await send('tools/call', { name, arguments: args });
     if (result?.isError) {
       const txt = result?.content?.map(c => c.text).filter(Boolean).join(' ') || 'tool returned isError';
-      throw new Error(`${name}: ${txt}`);
+      throw new Error(`${name}: ${redact(txt)}`);
     }
     const text = result?.content?.[0]?.text;
-    if (typeof text !== 'string') return result;
-    try { return JSON.parse(text); }
-    catch { return text; }
+    if (typeof text !== 'string') return redactAnswer(result);
+    let parsedText;
+    try { parsedText = JSON.parse(text); }
+    catch { return redactAnswer(text); }
+    return redactAnswer(parsedText);
   }
 
   return { rpc, notify, callTool };

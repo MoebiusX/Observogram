@@ -91,11 +91,30 @@ export function serviceKeyForPack(entry) {
 // The regex is the studio's, kept verbatim and label-dependent on purpose
 // (a `?source=mcp-notes.yaml` hint or a service literally called
 // `mcp-gateway` makes its pack an aggregate; documented, not fixed).
+// A live snapshot (`entry.live === 'snapshot'`, livePackKind below) is an
+// aggregate whatever its label says — `Payments prod` never becomes one
+// service's pack; a draft keeps the label rule (its links do not move).
 export function isLiveAggregatePack(entry) {
+  if (entry?.live === 'snapshot') return true;
   const text = [
     entry?.id, entry?.label, entry?.name, entry?.description, entry?.source,
   ].filter(Boolean).join(' ').toLowerCase();
   return /\b(live|mcp|production-live|draft-from-mcp)\b/.test(text);
+}
+
+// Which kind of live pack a canonical is, from what it says of itself:
+// 'snapshot' when it carries `observogram.live.mode: snapshot` (written by
+// tools/fetch-live-pack.mjs buildSnapshotPack — an inventory of what is
+// deployed), else 'scaffold' when it carries `mcp.refreshedAt` (every pack
+// the fetcher drafts — schema-forced sections stamped mcp.scaffold.*),
+// else null. A provenance claim like any annotation: a hand-uploaded pack
+// can make it, and the pickers show what the pack says.
+export function livePackKind(canonical) {
+  const annotations = canonical?.metadata?.annotations;
+  if (!annotations || typeof annotations !== 'object') return null;
+  if (annotations['observogram.live.mode'] === 'snapshot') return 'snapshot';
+  if (annotations['mcp.refreshedAt'] != null && annotations['mcp.refreshedAt'] !== '') return 'scaffold';
+  return null;
 }
 
 // The longest key a `services.slug` column holds (server/store/rows.mjs
@@ -137,8 +156,12 @@ export function servicesForPack(entry) {
 // writes (`servicesForPack(entry)`) and the tiles the studio draws from the
 // same entry can never name different services. `environments` comes from
 // the caller (`listEnvironments(canonical)`) to keep this module import-free.
+//
+// `live` ('scaffold' | 'snapshot', livePackKind) is present only for a live
+// pack: every other entry is byte-identical to what it was.
 export function catalogEntryOf(id, { label = null, source = 'upload' } = {}, canonical, environments = []) {
   const svc = serviceMetadata(canonical);
+  const live = livePackKind(canonical);
   return {
     id,
     label: label || canonical?.metadata?.name || id,
@@ -151,6 +174,7 @@ export function catalogEntryOf(id, { label = null, source = 'upload' } = {}, can
     namespace: svc.namespace,
     services: svc.services,
     environments,
+    ...(live ? { live } : {}),
     source: 'uploaded',
     ok: true,
   };

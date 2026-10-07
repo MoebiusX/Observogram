@@ -492,6 +492,12 @@ export function packConformance(canonical, opts = {}) {
   const report = {
     name: typeof md.name === 'string' ? md.name : null,
     writers,
+    // A live SNAPSHOT says so (`observogram.live.mode: snapshot`, written by
+    // the fetcher's buildSnapshotPack); `writers.fetcher` is true for it and
+    // for a draft alike, and a fetcher-written report without `liveKind` is
+    // a scaffold draft. Absent for every other pack: their reports are
+    // byte-identical.
+    ...(md.annotations?.['observogram.live.mode'] === 'snapshot' ? { liveKind: 'snapshot' } : {}),
     markers: markers.length,
     rows: clean,
     counts: { rows: clean.length, symbols: new Set(clean.map(r => r.symbol)).size, byState, bySource, bySection },

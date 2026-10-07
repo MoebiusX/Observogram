@@ -1,0 +1,234 @@
+{
+  "case": "demo-skeleton.self",
+  "opts": null,
+  "taxonomy": null,
+  "sha256": "e6f93729fbce4ffda2f9340012a6f8a5816dcbdbbee68f4a174411d7db1519ef",
+  "bytes": 10868,
+  "keys": [
+    "a",
+    "b",
+    "scope",
+    "collisions",
+    "summary",
+    "layers"
+  ],
+  "a": {
+    "id": "demo-skeleton",
+    "name": "demo-skeleton",
+    "service": "demo-skeleton",
+    "criticality": "tier-3",
+    "environment": "prod",
+    "version": "0.1.0",
+    "binding": "otel-elastic-prometheus-grafana"
+  },
+  "b": {
+    "id": "demo-skeleton",
+    "name": "demo-skeleton",
+    "service": "demo-skeleton",
+    "criticality": "tier-3",
+    "environment": "prod",
+    "version": "0.1.0",
+    "binding": "otel-elastic-prometheus-grafana"
+  },
+  "scope": {
+    "mode": "service",
+    "service": "demo-skeleton",
+    "serviceTokens": [
+      "demoskeleton",
+      "skeleton"
+    ],
+    "declaredMetricCount": 0,
+    "metricPrefixes": []
+  },
+  "collisions": [],
+  "summary": {
+    "onlyInA": 0,
+    "onlyInB": 0,
+    "inBoth": 14,
+    "aligned": 14,
+    "drifted": 0,
+    "outOfScope": 0,
+    "scaffold": 0,
+    "notObserved": 0,
+    "union": 14,
+    "aTotal": 14,
+    "bTotal": 14,
+    "jaccard": 1,
+    "alignment": 1
+  },
+  "layers": {
+    "L1": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "sli::{\"id\":\"service_availability\"}",
+          "a": "SLI-01",
+          "b": "SLI-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"service_availability_99\"}",
+          "a": "SLO-01",
+          "b": "SLO-01",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 2,
+      "drifted": 0
+    },
+    "L2": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "otel::{}",
+          "a": "OTEL-01",
+          "b": "OTEL-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_exporter_logs::{\"signal\":\"logs\",\"target\":\"elasticsearch\"}",
+          "a": "PIP-EXP-LOG",
+          "b": "PIP-EXP-LOG",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_exporter_metrics::{\"signal\":\"metrics\",\"target\":\"prometheusremotewrite\"}",
+          "a": "PIP-EXP-MET",
+          "b": "PIP-EXP-MET",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_exporter_traces::{\"signal\":\"traces\",\"target\":\"jaeger\"}",
+          "a": "PIP-EXP-TRC",
+          "b": "PIP-EXP-TRC",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"batch\"}",
+          "a": "PIP-PRC-01",
+          "b": "PIP-PRC-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_receiver::{\"name\":\"otlp\"}",
+          "a": "PIP-RCV-01",
+          "b": "PIP-RCV-01",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 6,
+      "drifted": 0
+    },
+    "L2X": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    },
+    "L3": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "dashboard::{\"id\":\"service-overview\"}",
+          "a": "DASH-01",
+          "b": "DASH-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"demo:service_availability:ratio_5m\"}",
+          "a": "QRY-01",
+          "b": "QRY-01",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 2,
+      "drifted": 0
+    },
+    "L4": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "alert_route::{\"severity\":\"sev1\"}",
+          "a": "ALR-01",
+          "b": "ALR-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"service_availability_99\"}",
+          "a": "POL-01",
+          "b": "POL-01",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 2,
+      "drifted": 0
+    },
+    "L5": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "baselines::{}",
+          "a": "BASE-01",
+          "b": "BASE-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "synthetic::{\"id\":\"demo-health-canary\"}",
+          "a": "SYN-01",
+          "b": "SYN-01",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 2,
+      "drifted": 0
+    },
+    "GOV": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    }
+  }
+}

@@ -762,19 +762,28 @@ export function mcpPickerCanAdmin({ access = null, probe = null, orgId = null } 
 // endpoint while it is listed), which outranks every preselection.
 // Preselection: remembered endpoint > the endpoint whose url is the live
 // status's > the remembered typed URL > the first endpoint > typed.
-export function mcpTargetModel({ endpoints = null, remembered = null, liveUrl = null, typedUrl = '', purpose = 'read', orgName = null, canAdmin = false, chosen = null } = {}) {
+//
+// `typed` is what the server said this reader may do with a typed URL
+// (GET /api/mcp-endpoints `policy.typed`; R4 — an admin's, never without
+// sign-in): `{ allowed: false }` makes the picker list-only — no "Type a
+// URL…", never the typed value, no URL row — and the empty list's hint
+// names the way in for this reader (`posture` 'token': registering needs a
+// signed-in admin). `unreadable`: the list (and so the policy) could not
+// be read — said, since nothing else can be sent.
+export function mcpTargetModel({ endpoints = null, remembered = null, liveUrl = null, typedUrl = '', purpose = 'read', orgName = null, canAdmin = false, chosen = null, typed = { allowed: true }, posture = null, unreadable = false } = {}) {
+  const typedAllowed = typed?.allowed !== false;
   const list = isArr(endpoints) ? endpoints : [];
   const options = [
     ...list.map((ep) => ({ value: String(ep.id), label: endpointLabel(ep), name: ep.name, origin: ep.origin, tokenText: ep.readTokenEnv ?? null })),
-    { value: '', label: 'Type a URL…', name: null, origin: null, tokenText: null },
+    ...(typedAllowed ? [{ value: '', label: 'Type a URL…', name: null, origin: null, tokenText: null }] : []),
   ];
   const has = (id) => id !== null && id !== undefined && list.some((ep) => String(ep.id) === String(id));
   let value = '';
-  if (chosen === '' && list.length) value = '';
+  if (chosen === '' && list.length && typedAllowed) value = '';
   else if (has(chosen)) value = String(chosen);
   else if (has(remembered)) value = String(remembered);
   else if (liveUrl && list.some((ep) => ep.url && ep.url === liveUrl)) value = String(list.find((ep) => ep.url === liveUrl).id);
-  else if (typedUrl && String(typedUrl).trim()) value = '';
+  else if (typedAllowed && typedUrl && String(typedUrl).trim()) value = '';
   else if (list.length) value = String(list[0].id);
   const picked = list.find((ep) => String(ep.id) === value) || null;
   let authHelp = null;
@@ -785,10 +794,48 @@ export function mcpTargetModel({ endpoints = null, remembered = null, liveUrl = 
     else authHelp = 'Optional.';
   }
   const org = orgName || ORG_FALLBACK;
-  const hint = isArr(endpoints) && !endpoints.length
-    ? (canAdmin ? { text: `No MCP endpoint is registered in ${org} yet.`, button: 'Settings → MCP endpoints' } : { text: `No MCP endpoint is registered in ${org} yet — an admin registers them.`, button: null })
-    : null;
-  return { show: list.length > 0, options, value, showUrl: picked === null, authHelp, hint };
+  let hint = null;
+  if (isArr(endpoints) && !endpoints.length) {
+    if (canAdmin) hint = { text: `No MCP endpoint is registered in ${org} yet.`, button: 'Settings → MCP endpoints' };
+    else if (typedAllowed) hint = { text: `No MCP endpoint is registered in ${org} yet — an admin registers them.`, button: null };
+    else if (posture === 'token') hint = { text: `No MCP endpoint is registered in ${org} yet — registering one needs a signed-in admin (npm run users -- add <login>).`, button: null };
+    else hint = { text: `No MCP endpoint is registered in ${org} yet — an admin registers them in Settings → MCP endpoints.`, button: null };
+  } else if (!typedAllowed && unreadable) {
+    hint = { text: `${org}'s MCP endpoints could not be read just now — reopen this to try again.`, button: null };
+  }
+  return { show: list.length > 0, options, value, showUrl: typedAllowed && picked === null, authHelp, hint };
+}
+
+// The status line when a picker has nothing to send: the typed URL named
+// only for a reader who may type one (R4); with no endpoint, the way in for
+// this reader (`canRegister`: the server says it may register one).
+export function mcpTargetMissingText({ typedAllowed = true, orgName = null, empty = false, canRegister = false } = {}) {
+  if (typedAllowed) return 'choose an MCP endpoint or type a URL';
+  const org = orgName || ORG_FALLBACK;
+  if (empty) return `no MCP endpoint is registered in ${org} yet — ${canRegister ? 'register one in Settings → MCP endpoints' : 'an admin registers them in Settings → MCP endpoints'}`;
+  return `choose one of ${org}'s MCP endpoints`;
+}
+
+const LOOPBACK_V4 = /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+const LOOPBACK_MAPPED = /^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/;
+
+// Before the home card registers a typed URL as an endpoint (D4): would the
+// server accept its origin from this reader? `register` is the policy's
+// (`{ allowed, listed, origins, listedOnly }`). → { origin, name, error }:
+// `error` null when the registration may be sent, else the sentence (the
+// server's own rule: without sign-in, a loopback MCP or a listed origin);
+// `name` the endpoint's name (its host). The server judges again.
+export function mcpRegisterCheck(url, register = null) {
+  let u = null;
+  try { u = new URL(String(url ?? '').trim()); } catch { /* not a URL */ }
+  if (!u || (u.protocol !== 'http:' && u.protocol !== 'https:')) return { origin: null, name: null, error: 'type the MCP URL (http:// or https://)' };
+  const origin = u.origin;
+  const name = u.port ? `${u.hostname}:${u.port}` : u.hostname;
+  if (!register?.allowed) return { origin, name, error: register?.why || 'registering an MCP endpoint is not open to you here' };
+  const host = u.hostname;
+  const loopback = host === 'localhost' || LOOPBACK_V4.test(host) || host === '[::1]' || LOOPBACK_MAPPED.test(host);
+  if (loopback || !register.listedOnly || register.origins === null || (isArr(register.origins) && register.origins.includes(origin))) return { origin, name, error: null };
+  return { origin, name, error: `${origin} cannot be registered on a server without sign-in — only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS; the server's operator lists it there, or a first user arms sign-in (npm run users -- add <login>)` };
 }
 
 // The request's target: an endpoint → { mcpEndpointId, mcpAuth? }; a typed
@@ -805,25 +852,33 @@ export function mcpTargetBody(selection, typedUrl, auth) {
 
 // A deploy profile that names an endpoint records its org (A-12): select it
 // only in that org with the id still listed; otherwise typed mode and a note.
-export function profileEndpointNote(profile, { orgId = null, orgName = null, endpoints = null, profileName = null } = {}) {
+// `typedAllowed` (R4): for a reader who may not type a URL, a typed
+// profile is said, and no sentence offers typing one.
+export function profileEndpointNote(profile, { orgId = null, orgName = null, endpoints = null, profileName = null, typedAllowed = true } = {}) {
   const ep = profile?.mcpEndpoint;
-  if (!ep || ep.id === undefined || ep.id === null) return { select: null, note: null };
+  const name = profileName ?? profile?.name ?? 'this profile';
+  const org = orgName || orgId || ORG_FALLBACK;
+  if (!ep || ep.id === undefined || ep.id === null) {
+    if (!typedAllowed && typeof profile?.mcpUrl === 'string' && profile.mcpUrl.trim()) {
+      return { select: null, note: `Profile "${name}" sends a typed MCP URL, which only an admin may send — choose one of ${org}'s MCP endpoints.` };
+    }
+    return { select: null, note: null };
+  }
   const listed = isArr(endpoints) && endpoints.some((x) => String(x.id) === String(ep.id));
   if (ep.orgId === orgId && listed) return { select: ep.id, note: null };
-  const name = profileName ?? profile.name ?? 'this profile';
-  return { select: null, note: `Profile "${name}" names MCP endpoint "${ep.name}" of ${ep.orgId} — choose one of ${orgName || orgId || ORG_FALLBACK}'s, or type a URL.` };
+  return { select: null, note: `Profile "${name}" names MCP endpoint "${ep.name}" of ${ep.orgId} — choose one of ${org}'s${typedAllowed ? ', or type a URL.' : ' MCP endpoints.'}` };
 }
 
 // Before a write is sent (C-3): the chosen endpoint as the option showed it
 // ({ id, name, origin }) against the list just re-read. null = send; else
 // the sentence, and nothing is sent. A re-read that failed (not an array)
 // cannot vouch for the origin, so it does not send either.
-export function endpointDrift(chosen, endpoints, { orgName = null } = {}) {
+export function endpointDrift(chosen, endpoints, { orgName = null, typedAllowed = true } = {}) {
   if (!chosen) return null;
   const org = orgName || ORG_FALLBACK;
-  if (!isArr(endpoints)) return `${chosen.name} could not be checked against ${org}'s MCP endpoints just now — send again, or type a URL.`;
+  if (!isArr(endpoints)) return `${chosen.name} could not be checked against ${org}'s MCP endpoints just now — send again${typedAllowed ? ', or type a URL.' : '.'}`;
   const now = endpoints.find((ep) => String(ep.id) === String(chosen.id));
-  if (!now) return `${chosen.name} is no longer one of ${org}'s MCP endpoints — choose another or type a URL.`;
+  if (!now) return `${chosen.name} is no longer one of ${org}'s MCP endpoints — ${typedAllowed ? 'choose another or type a URL.' : `choose another of ${org}'s MCP endpoints.`}`;
   if (now.origin !== chosen.origin) return `${chosen.name} now points at ${now.origin} (it showed ${chosen.origin}) — check the target and send again.`;
   return null;
 }

@@ -29,7 +29,9 @@ const DRAWER_ELS = {
        meta: '#drawer-meta', panels: '#drawer-panels',   close: '#drawer-close' },
 };
 
-export function openDrawer(artefact, def, sublayerKey, side = 'b') {
+// `opts.pairing` (Compare in a name or id view, studio/compare-identity.mjs):
+// the sentence saying which key paired this artefact, or why it did not.
+export function openDrawer(artefact, def, sublayerKey, side = 'b', opts = {}) {
   const els = DRAWER_ELS[side];
   if (!els) return;
   const drawer = $(els.drawer);
@@ -67,6 +69,7 @@ export function openDrawer(artefact, def, sublayerKey, side = 'b') {
     dd.innerHTML = `${escapeHtml(kind.label)}${glossaryMarkFor(kind.label, { family: kind.family })}`;
     rows.push(['kind', dd]);
   }
+  if (opts.pairing)          rows.push(['paired by', opts.pairing]);
   if (artefact.tool)         rows.push(['tool', artefact.tool]);
   if (artefact.tags?.length) rows.push(['tags', artefact.tags.join(', ')]);
   if (artefact.source)       rows.push(['source', artefact.source]);

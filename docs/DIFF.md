@@ -42,6 +42,32 @@ Representative identities:
 The precise phrasing matters: Observogram matches on behaviour. For reliability
 contract artefacts, the declared id is the behavioural handle by design.
 
+### Identity modes
+
+Behaviour is the default and the only key the server's `GET /api/diff` uses.
+`diffPacks(a, b, { identity })` pairs by another key — rebadge batch 3, C3,
+`tools/lib/identity-modes.mjs` — while **behaviour still decides aligned vs
+drifted**, so a pair formed by name or id can drift:
+
+| `identity` | Pairs by | Answer |
+|---|---|---|
+| omitted, `'behaviour'`, or `identityKeyOf` itself | the behavioural identity above | byte-identical to today's; no `identity` key (the stored goldens `tools/fixtures/golden/diff/` run all three) |
+| `'name'` | `nameKeyOf`: the name or title, trimmed, white space collapsed, lower case | `identity: { mode: 'name' }` after `scope` |
+| `'id'` | `idKeyOf`: a stable id or uid (a dashboard's uid, a spec id); a family whose name is its id (metric, recording rule, alert rule, scrape job) uses the name | `identity: { mode: 'id' }` |
+| a function `(artefact, { side }) → '<kind>::…'` | the caller's key | `identity: { mode: 'custom' }` |
+
+Every key keeps the `<kind>::` prefix — scope, `notObserved` and collisions
+read it — and a function whose key drops it is a TypeError (`diffPacks: an
+identity function must return "<kind>::…" for each artefact (got "<x>" for a
+<kind>)`); an unknown mode id names the three. The engine calls the key with
+the **side** (`'a'` or `'b'`), which is how an artefact with no name (or no
+stable id) is keyed — `dashboard::{"unnamed":"a:DASH-01"}` — so two unnamed
+artefacts of a family never pair; each lands in `onlyInA` / `onlyInB`. The
+parked placeholders (`scaffold`) are keyed by the same function. Where each
+mode's material comes from, per family, is the table in docs/ADAPTER.md
+("Identity modes"). Verdict keys, the traceability graph, the remediation flow
+and chain history stay on behaviour.
+
 ## Collision Handling
 
 Multiple artefacts in one pack can share the same identity key: multiple SEV2
@@ -168,6 +194,21 @@ fetcher writes these keys (docs/MCP_INTEGRATION.md, *What the fetch could not
 look at*); a pack without them behaves exactly as before.
 `summary.notObserved` counts the entries; they are outside the union.
 
+A live **snapshot** read within a scope (rebadge batch 3, C1: metric
+prefixes, dashboard or rule folder uids) records it per family as
+`observogram.scope.<kind>` (`tools/lib/live-fetch.mjs` `scopeAnnotations`),
+and the diff reads those keys beside `observogram.unobserved.<kind>`. An
+unmatched artefact on the other side, in a scoped family, goes to
+`notObserved` with one of two reasons, each stating only what is known:
+**outside** the scope — `outside the snapshot's metric scope (prefixes
+payments_, checkout_)`, `outside the snapshot's dashboard folders (Payments)`
+— or **cannot tell**, when the artefact does not say what the scope needs (a
+crawled dashboard names no folder uid): `the snapshot read only the folders
+Payments; Pack A does not say which folder this dashboard is in, so it was
+not checked`. One artefact of a key inside the scope keeps the group compared
+as usual; an unobserved family keeps its own reason. Without the annotation
+the answer is byte-identical.
+
 ## Metric families
 
 Metrics are compared as **families**, not series. One declared metric is
@@ -272,6 +313,7 @@ keyOf(artefact);              // behavioural identity key
 projectOf(artefact);          // comparable contract projection
 deltasOf(a, b);               // top-level contract deltas
 diffPacks(aLayered, bLayered); // directional drift report
+diffPacks(aLayered, bLayered, { scopeMode, service, identity }); // scopeMode service | family | all; identity as above
 ```
 
 ## Regression Coverage
@@ -288,6 +330,15 @@ diffPacks(aLayered, bLayered); // directional drift report
 - metric families (each folding rule, and the lone `_count` that is not
   folded), `notObserved` in both directions and outside the union, and an
   address one side withholds.
+
+`tools/test-golden-diff.mjs` (`npm run test:golden:diff`) pins the whole
+default answer of 27 cases, written before rebadge batch 3 touched the engine,
+and runs each with `identity: 'behaviour'` and `identity: identityKeyOf` too.
+`tools/test-identity-modes.mjs` holds the identity modes: every family's
+material, the three count sets of `tools/fixtures/compare-modes/` (behaviour
+15 in both / 5 / 5, name 16 / 4 / 4, id 17 / 3 / 3), a custom function, the
+unnamed and placeholder keys, and the parity of `diffPacks` over the JSON
+`GET /api/packs/:id` answers with `GET /api/diff`.
 
 `tools/test-scan-live.mjs` is the end-to-end form: one system described as a
 repository and as the answers a live MCP gives for it, scanned, drafted and

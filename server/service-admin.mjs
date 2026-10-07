@@ -26,9 +26,10 @@
 // No SQL of its own: every read and write goes through server/store/*.
 
 import { normalizeServiceKey } from '../tools/lib/service-keys.mjs';
-import { mcpUrlOrigin } from '../tools/lib/mcp-url-safety.mjs';
-import { rankOfRole } from './authz.mjs';
+import { mcpUrlOrigin, safeMcpUrl } from '../tools/lib/mcp-url-safety.mjs';
+import { noSignInWay, rankOfRole } from './authz.mjs';
 import { AdminRefusal } from './identity-admin.mjs';
+import { credentialThatRides, mcpOriginDecision, originOf, typedMcpUrlDecision } from './mcp-target-policy.mjs';
 import { validateMcpUrl } from './mcp-url.mjs';
 import { currentOrg } from './org-context.mjs';
 import { atomic } from './store/db.mjs';
@@ -84,6 +85,7 @@ export const WAYS = Object.freeze({
   neitherTarget: 'mcpUrl or mcpEndpointId required in JSON body',
   mcpEndpointIdShape: 'mcpEndpointId must be a positive integer',
   anotherVariable: (id) => ` — PATCH /api/mcp-endpoints/${id} names another variable`,
+  typedUserinfo: 'a typed MCP URL may not carry user:password — send the token as mcpAuth',
   tokenUnset: (ep) => `MCP endpoint "${ep.name}" reads its token from ${ep.readTokenEnv}, which is not set in the server's environment — set it on the server (the k8s Deployment's env), or send mcpAuth with this request`,
 });
 
@@ -287,18 +289,42 @@ export function deleteEnvironmentFromApi(db, actor, id) {
 
 // ---------- MCP endpoints ----------
 
-export function createMcpEndpointFromApi(db, actor, { name, url, readTokenEnv } = {}) {
+// `caller` (mcpCallerOf(req)) is required, as for resolveMcpTarget: the
+// origin rule at registration reads who registers (D4: without sign-in only
+// a loopback MCP or a listed origin).
+export function createMcpEndpointFromApi(db, actor, { name, url, readTokenEnv } = {}, { caller } = {}) {
+  needCaller('createMcpEndpointFromApi', caller);
   name = parseName(name, WAYS.mcpEndpointName);
   return atomic(db, () => {
     const existing = listMcpEndpoints(db).find((ep) => ep.name === name);
     if (existing) refuse(WAYS.mcpEndpointExists(existing));
-    // The URL and env-var rules are the repository's (TypeError → 400).
-    return createMcpEndpoint(db, actor, { name, url, readTokenEnv: readTokenEnv === undefined ? null : readTokenEnv });
+    // The URL and env-var rules are the repository's (TypeError → 400); the
+    // origin rule then judges the record as written, and a refusal undoes
+    // the row and its audit row with it.
+    const endpoint = createMcpEndpoint(db, actor, { name, url, readTokenEnv: readTokenEnv === undefined ? null : readTokenEnv });
+    checkRegistration(db, endpoint, caller);
+    return endpoint;
   });
 }
 
-// → { endpoint, changed }; `readTokenEnv: null` clears it.
-export function updateMcpEndpointFromApi(db, actor, id, patch = {}) {
+function needCaller(fn, caller) {
+  if (!caller || typeof caller !== 'object') throw new TypeError(`${fn}: the caller (mcpCallerOf(req)) is required`);
+}
+
+// The origin rule at registration (mcp-target-policy.mjs): an endpoint that
+// names readTokenEnv carries the server's credential; the caller decides
+// whether an unlisted origin may be registered at all (D4).
+function checkRegistration(db, ep, caller) {
+  const refusal = mcpOriginDecision(db, ep.url, {
+    use: 'register', credential: credentialThatRides({ serverToken: !!ep.readTokenEnv, hook: false }), tokenVar: ep.readTokenEnv, caller,
+  });
+  if (refusal) invalid(refusal.error);
+}
+
+// → { endpoint, changed }; `readTokenEnv: null` clears it. `caller` as for
+// createMcpEndpointFromApi.
+export function updateMcpEndpointFromApi(db, actor, id, patch = {}, { caller } = {}) {
+  needCaller('updateMcpEndpointFromApi', caller);
   return atomic(db, () => {
     const current = getMcpEndpoint(db, id);
     if (!current) missing(WAYS.noMcpEndpoint(id));
@@ -313,6 +339,9 @@ export function updateMcpEndpointFromApi(db, actor, id, patch = {}) {
       if (clash) refuse(WAYS.mcpEndpointExists(clash));
     }
     const endpoint = updateMcpEndpoint(db, actor, id, Object.fromEntries(changed.map((k) => [k, next[k]])));
+    // A new URL or variable meets the origin rule against the state after
+    // the change; a rename alone does not.
+    if (changed.includes('url') || changed.includes('readTokenEnv')) checkRegistration(db, endpoint, caller);
     return { endpoint, changed };
   });
 }
@@ -430,16 +459,29 @@ export function serviceTierFor(db, packId, envName = null) {
 
 const MISSING = Symbol('missing');
 
+// Does a typed URL carry user:password? (native fetch cannot send it, and
+// would repeat it in its error.) An unparseable URL is validateMcpUrl's.
+function hasUserinfo(raw) {
+  try { const u = new URL(raw); return !!(u.username || u.password); } catch { return false; }
+}
+
 // How a route reads its MCP target from the body: `mcpUrl` as today, or
 // `mcpEndpointId` — the org's endpoint record, whose URL is fetched and
 // whose READ token (forWrite: false — refresh-live, draft-from-mcp) comes
 // from the named variable when the request sends no mcpAuth, after the
 // variable's ownership is checked again against the orgs that exist now.
 // With forWrite (deploy, rollback) the record's URL only: write tokens
-// stay per-request pass-through. The SSRF rule (validateMcpUrl) runs last,
-// where it does today. Returns { mcpUrl, safeMcpUrl, mcpAuth, endpoint }
-// or { status: 400, error }; the token's value is in mcpAuth alone.
-export function resolveMcpTarget(db, body = {}, { forWrite = false } = {}) {
+// stay per-request pass-through. `caller` (mcpCallerOf(req)) is required —
+// a call site that names none throws, fail closed. A typed URL with
+// userinfo is a 400; then the typed-URL rule (typedMcpUrlDecision: admin
+// and above; never the anonymous local caller) — at every call site, the
+// deploy routes included (decision D3). The SSRF rule (validateMcpUrl) runs next, then the origin allowlist
+// (server/mcp-target-policy.mjs: no credential leaves for an unlisted
+// origin but loopback). Returns { mcpUrl, safeMcpUrl, mcpAuth, endpoint },
+// or { status: 400, error } / { status: 403, denied, error }
+// (mcpRefusalBody answers it); the token's value is in mcpAuth alone.
+export function resolveMcpTarget(db, body = {}, { forWrite = false, caller } = {}) {
+  if (!caller || typeof caller !== 'object') throw new TypeError('resolveMcpTarget: the caller (mcpCallerOf(req)) is required');
   const bad = (error) => ({ status: 400, error });
   // The body's fields as the routes read them: a trimmed URL or null, a
   // non-empty token or null.
@@ -450,6 +492,7 @@ export function resolveMcpTarget(db, body = {}, { forWrite = false } = {}) {
   let mcpUrl;
   let mcpAuth;
   let endpoint = null;
+  let serverVar = null;   // the variable whose value rides, when one does
   if (byId) {
     const id = positiveId(body.mcpEndpointId);
     if (id === null) return bad(WAYS.mcpEndpointIdShape);
@@ -467,13 +510,72 @@ export function resolveMcpTarget(db, body = {}, { forWrite = false } = {}) {
     mcpUrl = ep.url;
     mcpAuth = sentAuth ?? (readsToken ? process.env[ep.readTokenEnv] ?? MISSING : null);
     if (mcpAuth === MISSING) return bad(WAYS.tokenUnset(ep));
+    if (readsToken && !sentAuth) serverVar = ep.readTokenEnv;
     endpoint = { id: ep.id, name: ep.name };
   } else {
     if (!sentUrl) return bad(WAYS.neitherTarget);
+    if (hasUserinfo(sentUrl)) return bad(WAYS.typedUserinfo);
+    const refusal = typedMcpUrlDecision(caller);
+    if (refusal) return refusal;
     mcpUrl = sentUrl;
     mcpAuth = sentAuth;
   }
   const { error, safeUrl } = validateMcpUrl(mcpUrl);
   if (error) return bad(error);
+  // The origin rule (server/mcp-target-policy.mjs, every caller): the
+  // strongest credential that rides — the endpoint's variable, the
+  // request's mcpAuth, one in a typed URL, a loaded transport hook.
+  const credential = credentialThatRides({ serverToken: !!serverVar, requestToken: !!sentAuth, url: endpoint ? null : mcpUrl });
+  const refusal = mcpOriginDecision(db, mcpUrl, { use: endpoint ? 'registered' : 'typed', credential, caller, tokenVar: serverVar });
+  if (refusal) return refusal;
   return { mcpUrl, safeMcpUrl: safeUrl, mcpAuth, endpoint };
+}
+
+// ---------- a journey's live Pack B (R4, decision D6) ----------
+//
+// A Pack B annotation is free text (any operator may register a pack), so
+// a journey's live source is a caller-supplied URL like any other. Capture
+// resolves it to one of the org's registered endpoints whose safe URL is
+// the annotation's; without one, an admin's capture keeps the URL (it
+// passes the typed-URL and origin rules then), anyone else's saves Pack B
+// as a file. A server-run journey fetches through resolveMcpTarget with the
+// runner's caller: endpointId by id, a raw url as a typed URL (an admin's).
+// The def's authEnv is never read on the server.
+
+// The source capture writes for a Pack B whose mcp.url is `url` →
+// { mcp: { url, endpointId } } | { mcp: { url } } (an admin's) | null (save
+// it as a file) | a refusal { status, error, denied? }.
+export function journeyPackBSource(db, url, { caller } = {}) {
+  if (!caller || typeof caller !== 'object') throw new TypeError('journeyPackBSource: the caller (mcpCallerOf(req)) is required');
+  const safe = safeMcpUrl(String(url));
+  const ep = safe ? listMcpEndpoints(db).find((e) => safeMcpUrl(e.url) === safe) : null;
+  if (ep) return { mcp: { url: String(url), endpointId: ep.id } };
+  if (typedMcpUrlDecision(caller)) return null;
+  const t = resolveMcpTarget(db, { mcpUrl: String(url) }, { caller });
+  return t.status ? t : { mcp: { url: String(url) } };
+}
+
+// A server-run journey's Pack B target: resolveMcpTarget's answer, or a
+// refusal naming the way out for the runner — a raw url below the typed-URL
+// role is refused before any wire call.
+export function resolveJourneyMcp(db, mcp = {}, { caller } = {}) {
+  if (!caller || typeof caller !== 'object') throw new TypeError('resolveJourneyMcp: the caller (mcpCallerOf(req)) is required');
+  if (mcp.endpointId !== undefined && mcp.endpointId !== null) return resolveMcpTarget(db, { mcpEndpointId: mcp.endpointId }, { caller });
+  if (typeof mcp.url !== 'string' || !mcp.url.trim()) return { status: 400, error: "this journey's Pack B names no MCP — give packB.mcp.url, or re-capture it" };
+  const refusal = typedMcpUrlDecision(caller);
+  if (refusal) {
+    const origin = originOf(mcp.url.trim()) ?? 'an MCP';
+    return { ...refusal, error: `this journey's Pack B fetches ${origin}, ${journeyTypedWay(caller, refusal)}` };
+  }
+  return resolveMcpTarget(db, { mcpUrl: mcp.url }, { caller });
+}
+
+function journeyTypedWay(caller, refusal) {
+  if (refusal.denied === 'posture') {
+    return caller.posture === 'open-exposed'
+      ? 'an MCP URL a server without sign-in never sends, and MCP endpoints cannot be registered while it is exposed — add the first user with npm run users -- add <login> (it arms sign-in; the first user is an owner), or bind the server to loopback'
+      : `an MCP URL a server without sign-in never sends — register the endpoint in Settings → MCP endpoints from http://127.0.0.1:${caller.port ?? '<port>'} (a loopback MCP, or an origin listed in OBSERVOGRAM_MCP_ORIGINS) and re-capture the journey (Pack B then names it)`;
+  }
+  const tail = caller.principal?.kind === 'bearer' && caller.posture === 'token' ? `; ${noSignInWay(caller)}` : '';
+  return `an MCP URL only an admin may send — an admin re-captures it (Pack B then names a registered endpoint), or registers the endpoint and re-captures${tail}`;
 }

@@ -1,0 +1,349 @@
+{
+  "case": "production-curated.self",
+  "opts": null,
+  "taxonomy": null,
+  "sha256": "49b570b9fde234ab679e13eed37c835af3d1975eb7a7852dbd1e6a417ea73c12",
+  "bytes": 24802,
+  "keys": [
+    "a",
+    "b",
+    "scope",
+    "collisions",
+    "summary",
+    "layers"
+  ],
+  "a": {
+    "id": "production-curated",
+    "name": "production-curated",
+    "service": "internal-orders",
+    "criticality": "tier-2",
+    "environment": "prod",
+    "version": "0.4.0",
+    "binding": "otel-elastic-prometheus-grafana"
+  },
+  "b": {
+    "id": "production-curated",
+    "name": "production-curated",
+    "service": "internal-orders",
+    "criticality": "tier-2",
+    "environment": "prod",
+    "version": "0.4.0",
+    "binding": "otel-elastic-prometheus-grafana"
+  },
+  "scope": {
+    "mode": "service",
+    "service": "internal-orders",
+    "serviceTokens": [
+      "curated",
+      "internal",
+      "internalorders",
+      "orders",
+      "productioncurated"
+    ],
+    "declaredMetricCount": 0,
+    "metricPrefixes": []
+  },
+  "collisions": [],
+  "summary": {
+    "onlyInA": 0,
+    "onlyInB": 0,
+    "inBoth": 30,
+    "aligned": 30,
+    "drifted": 0,
+    "outOfScope": 0,
+    "scaffold": 0,
+    "notObserved": 0,
+    "union": 30,
+    "aTotal": 30,
+    "bTotal": 30,
+    "jaccard": 1,
+    "alignment": 1
+  },
+  "layers": {
+    "L1": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "sli::{\"id\":\"order_settlement_freshness\"}",
+          "a": "SLI-03",
+          "b": "SLI-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"orders_availability\"}",
+          "a": "SLI-01",
+          "b": "SLI-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"orders_latency_p99\"}",
+          "a": "SLI-02",
+          "b": "SLI-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"order_settlement_freshness_99\"}",
+          "a": "SLO-03",
+          "b": "SLO-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"orders_availability_99_5\"}",
+          "a": "SLO-01",
+          "b": "SLO-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"orders_latency_99_p99_600ms\"}",
+          "a": "SLO-02",
+          "b": "SLO-02",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 6,
+      "drifted": 0
+    },
+    "L2": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "backend::{\"product\":\"elasticsearch\",\"signal\":\"logs\"}",
+          "a": "BAK-02",
+          "b": "BAK-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"elasticsearch\",\"signal\":\"traces\"}",
+          "a": "BAK-03",
+          "b": "BAK-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"prometheus\",\"signal\":\"metrics\"}",
+          "a": "BAK-01",
+          "b": "BAK-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "otel::{}",
+          "a": "OTEL-01",
+          "b": "OTEL-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_exporter_logs::{\"signal\":\"logs\",\"target\":\"elasticsearch\"}",
+          "a": "PIP-EXP-LOG",
+          "b": "PIP-EXP-LOG",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_exporter_metrics::{\"signal\":\"metrics\",\"target\":\"prometheusremotewrite\"}",
+          "a": "PIP-EXP-MET",
+          "b": "PIP-EXP-MET",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_exporter_traces::{\"signal\":\"traces\",\"target\":\"elasticsearch\"}",
+          "a": "PIP-EXP-TRC",
+          "b": "PIP-EXP-TRC",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"batch\"}",
+          "a": "PIP-PRC-02",
+          "b": "PIP-PRC-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"memory_limiter\"}",
+          "a": "PIP-PRC-01",
+          "b": "PIP-PRC-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_receiver::{\"name\":\"otlp\"}",
+          "a": "PIP-RCV-01",
+          "b": "PIP-RCV-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "storage_logs::{\"backend\":\"elasticsearch\",\"signal\":\"logs\"}",
+          "a": "STO-LOG-01",
+          "b": "STO-LOG-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "storage_metrics::{\"backend\":\"prometheus\",\"signal\":\"metrics\"}",
+          "a": "STO-MET-01",
+          "b": "STO-MET-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "storage_traces::{\"backend\":\"elasticsearch\",\"signal\":\"traces\"}",
+          "a": "STO-TRC-01",
+          "b": "STO-TRC-01",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 13,
+      "drifted": 0
+    },
+    "L2X": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    },
+    "L3": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "dashboard::{\"id\":\"orders-service-overview\"}",
+          "a": "DASH-01",
+          "b": "DASH-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "dashboard::{\"id\":\"orders-slo-burn\"}",
+          "a": "DASH-02",
+          "b": "DASH-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"orders:availability:ratio_5m\"}",
+          "a": "QRY-01",
+          "b": "QRY-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"orders:latency:p99_5m\"}",
+          "a": "QRY-02",
+          "b": "QRY-02",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 4,
+      "drifted": 0
+    },
+    "L4": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "alert_route::{\"severity\":\"sev2\"}",
+          "a": "ALR-01",
+          "b": "ALR-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "alert_route::{\"severity\":\"sev3\"}",
+          "a": "ALR-02",
+          "b": "ALR-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"order_settlement_freshness_99\"}",
+          "a": "POL-03",
+          "b": "POL-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"orders_availability_99_5\"}",
+          "a": "POL-01",
+          "b": "POL-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"orders_latency_99_p99_600ms\"}",
+          "a": "POL-02",
+          "b": "POL-02",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 5,
+      "drifted": 0
+    },
+    "L5": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "baselines::{}",
+          "a": "BASE-01",
+          "b": "BASE-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "synthetic::{\"id\":\"orders-canary\"}",
+          "a": "SYN-01",
+          "b": "SYN-01",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 2,
+      "drifted": 0
+    },
+    "GOV": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    }
+  }
+}

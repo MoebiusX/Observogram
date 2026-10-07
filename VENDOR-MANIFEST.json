@@ -339,9 +339,24 @@
       ]
     },
     "tools/lib/contracts/mcp-capabilities.mjs": {
-      "sha256": "8986224da15734c74d08799f990268b19b8beba2cd9ee54143cb474d44148c88",
-      "bytes": 16874,
+      "sha256": "f1d3065a32fb237b6a6602cebc0bd8c7e22c60a5921b24899e55c225e9890e4e",
+      "bytes": 17988,
       "exports": [
+        "BUILD_INFO_PROBES",
+        "CAPABILITIES",
+        "allKnownToolNames",
+        "candidateTool",
+        "capability",
+        "capabilityInventory",
+        "capabilityTool",
+        "deprecatedAliases",
+        "probeCandidates",
+        "productAttestedByTool"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": [
         "BUILD_INFO_PROBES",
         "CAPABILITIES",
         "allKnownToolNames",
@@ -351,14 +366,11 @@
         "deprecatedAliases",
         "probeCandidates",
         "productAttestedByTool"
-      ],
-      "imports": [],
-      "npm": [],
-      "changedSinceRelease": false
+      ]
     },
     "tools/lib/contracts/response-shapes.mjs": {
-      "sha256": "dd2e604c658de4b0619fbbac92e6056437a28ec7a661c0339086e48e8c4a3a9d",
-      "bytes": 9977,
+      "sha256": "ca83c7f917b48825355222fbfae82ac28a2c5fca7a064dd5b5834e6bae967a1c",
+      "bytes": 10305,
       "exports": [
         "RESPONSE_SHAPES",
         "locateObjectPayload",
@@ -389,14 +401,15 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "412ff5619f8bc1ae2cc5924c2fda244ab6226bcc992cdbea671beb1b38940f47",
-      "bytes": 109957,
+      "sha256": "3ffb1feadc6fced8500a142a6f367eba83e79d3e82700c969c18862b1b40a966",
+      "bytes": 110295,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
         "SCAN_MAX_FILE_BYTES",
         "crawlFiles",
         "crawlToYaml",
+        "dashboardSpecId",
         "detectArtefactKind",
         "scanReadsPath",
         "scanSkipsName",
@@ -412,7 +425,18 @@
         "tools/lib/slug.mjs"
       ],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "SCAN_EXT",
+        "SCAN_IGNORE_DIRS",
+        "SCAN_MAX_FILE_BYTES",
+        "crawlFiles",
+        "crawlToYaml",
+        "detectArtefactKind",
+        "scanReadsPath",
+        "scanSkipsName",
+        "walkScanFolder"
+      ]
     },
     "tools/lib/dashboards/generic.mjs": {
       "sha256": "f02f24c9f0d967afa4a0f9dfd0846cceb960b065c772f78eaf21c0cbf151a959",
@@ -504,8 +528,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/diff.mjs": {
-      "sha256": "3f2fedd39b0919c1f591ea79d8b2d8a703efba5bfc10179a2cc66cd0450f4404",
-      "bytes": 22492,
+      "sha256": "7cc5232f146720997dacc0fa06afd91afd6c807c642eecf9bbd2bcb8edf9de28",
+      "bytes": 26446,
       "exports": [
         "deltasOf",
         "diffPacks",
@@ -513,7 +537,9 @@
         "projectOf"
       ],
       "imports": [
-        "tools/lib/artefact-model.mjs"
+        "tools/lib/artefact-model.mjs",
+        "tools/lib/identity-modes.mjs",
+        "tools/lib/live-fetch.mjs"
       ],
       "npm": [],
       "changedSinceRelease": false
@@ -534,6 +560,28 @@
       "imports": [],
       "npm": [],
       "changedSinceRelease": false
+    },
+    "tools/lib/identity-modes.mjs": {
+      "sha256": "6b6bad523bf2c58c7438b0eecf32c14805255a6296c9e1619e471b519926b3d3",
+      "bytes": 10442,
+      "exports": [
+        "DEFAULT_IDENTITY_MODE",
+        "IDENTITY_MODES",
+        "idKeyOf",
+        "idOf",
+        "identityFamilies",
+        "identityMode",
+        "nameKeyOf",
+        "nameOf",
+        "pairingOf"
+      ],
+      "imports": [
+        "tools/lib/artefact-classify.mjs",
+        "tools/lib/artefact-model.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
     },
     "tools/lib/inventory-coverage.mjs": {
       "sha256": "075cf2a9c79e98432a043c94596179c52882926ebbf828a5ffb584d07054f476",
@@ -657,11 +705,40 @@
       "npm": [],
       "changedSinceRelease": false
     },
+    "tools/lib/live-fetch.mjs": {
+      "sha256": "c095215c05f2a8615460cca0c79f1c53ac758953dfe38933968754bcd3a7d72b",
+      "bytes": 16778,
+      "exports": [
+        "LIVE_KINDS",
+        "LIVE_SCOPE_ANNOTATION",
+        "LIVE_STAGES",
+        "SCOPE_ANNOTATION_PREFIX",
+        "SCOPE_FAMILIES",
+        "SCOPE_LIMITS",
+        "SNAPSHOT_LIMITS",
+        "STAGE_STATES",
+        "fetchPlan",
+        "folderUidOf",
+        "inScope",
+        "normalizeScope",
+        "scopeAnnotations",
+        "scopeIsEmpty",
+        "scopeOf",
+        "scopeReason",
+        "stageNoun",
+        "stagesFor"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
     "tools/lib/mcp-client.mjs": {
-      "sha256": "e3863645a48e61b040f95646245a9a3200fe240402627e71ecda8d02333b6046",
-      "bytes": 12991,
+      "sha256": "4d3b8c6a2004ea32fb0b8d80102d705641be5db89e844f496de797c57df57c61",
+      "bytes": 22136,
       "exports": [
         "INERT_TRANSPORT",
+        "MAX_MCP_ANSWER_BYTES",
         "MCP_PROTOCOL_VERSION",
         "TransportHookError",
         "createMcpClient",
@@ -751,8 +828,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/pack-conformance.mjs": {
-      "sha256": "0c52ba13ddc252daf2000cf8aaeee8299c4acbc4e067675ba13ff1792b320d45",
-      "bytes": 37134,
+      "sha256": "ff76220690d93c5a5147221581e6df8d82427ebda3f14c7424b410f3a94a6b72",
+      "bytes": 37561,
       "exports": [
         "PLACEHOLDER_FIELDS",
         "SCAFFOLD_PREFIXES",
@@ -911,11 +988,12 @@
       "changedSinceRelease": false
     },
     "tools/lib/service-keys.mjs": {
-      "sha256": "27c440a2be4e47fc98b57d983baf11f12fc6215ac27d404de93a54695c2121db",
-      "bytes": 7067,
+      "sha256": "cc968ae56c07016c30f4a45dc55612c651dce1f6f7714e8e2633420076aa6369",
+      "bytes": 8422,
       "exports": [
         "catalogEntryOf",
         "isLiveAggregatePack",
+        "livePackKind",
         "normalizeServiceKey",
         "primaryServiceName",
         "serviceKeyForPack",
@@ -925,7 +1003,17 @@
       ],
       "imports": [],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "catalogEntryOf",
+        "isLiveAggregatePack",
+        "normalizeServiceKey",
+        "primaryServiceName",
+        "serviceKeyForPack",
+        "serviceMetadata",
+        "serviceNamesForPack",
+        "servicesForPack"
+      ]
     },
     "tools/lib/site/derive.mjs": {
       "sha256": "afc9f35d08440637eca96c26ef21ed943e659c1daa3a0e0b4ef40f4b96cf4ab6",

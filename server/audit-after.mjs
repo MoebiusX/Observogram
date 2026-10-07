@@ -21,9 +21,16 @@ import { currentOrg } from './org-context.mjs';
 // Writes `row` ({ action, targetKind, targetId, detail }) for the request's
 // principal in the request's org. Returns null, or the error's message for
 // the response's `auditError`.
-export function auditAfter(req, row, { tag = 'audit' } = {}) {
+export function auditAfter(req, row, opts = {}) {
+  return auditAfterAs(req.observogramPrincipal?.actor, row, opts);
+}
+
+// The same for an actor captured earlier — a live job's row, written when
+// the job ends, long after its request (server/routes/live.mjs), in the org
+// the caller's runWithOrg names.
+export function auditAfterAs(actor, row, { tag = 'audit' } = {}) {
   try {
-    appendAudit(currentStore(), req.observogramPrincipal?.actor, { orgId: currentOrg(), ...row });
+    appendAudit(currentStore(), actor, { orgId: currentOrg(), ...row });
     return null;
   } catch (e) {
     process.stderr.write(`[${tag}]   audit row failed: ${e.message} (the operation stands; ${row.action} ${row.targetId ?? ''} is not on the record)\n`);

@@ -18,6 +18,7 @@ import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } fr
 import {
   api, loadCatalog, loadTaxonomy, validateUploaded, registeredOrValidated, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError, deployRefusal,
   setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls, signOutOthersText, recallMcpEndpoint, rememberMcpEndpoint,
+  rememberLiveJob, recallLiveJob, forgetLiveJob,
   loadDeployProfiles, storeDeployProfile, removeDeployProfile,
 } from './api.mjs';
 import {
@@ -53,6 +54,12 @@ import {
   buildServiceEditorModel, buildServicePatch, serviceSaveStatus,
 } from './services-model.mjs';
 import { loadOrgs, loadServices, loadService, patchService, verdictLoader, requestJson } from './services-api.mjs';
+import { pingMcp, readLiveJobs, startLiveJob, pollLiveJob, cancelLiveJob } from './live-api.mjs';
+import {
+  pingResultModel, rebuildNoteText, durationText, liveTargetKey, stepTwoVisible, preselectedKind, scopeFormModel, scopeFromForm,
+  planModel, gateLogModel, elapsedText, liveResultModel, LIVE_JOB_GONE_TEXT, liveKindSuffix,
+} from './live-model.mjs';
+import { renderPingResult, renderGateLog, renderLiveResult } from './live-view.mjs';
 import { renderNoOrgHome, renderServicesHome, renderServicePage, renderServiceEditor, markUnavailable } from './services-view.mjs';
 import {
   BUILT_SECTIONS, BUILT_EDITORS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsSectionHead, settingsAboveRank,
@@ -60,7 +67,7 @@ import {
   buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus,
   buildMemberAddBody, memberSaveStatus, orgRenameStatus, lastAdmin, leftOrgText,
   buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
-  mcpTargetModel, mcpTargetBody, mcpPickerCanAdmin, profileEndpointNote, endpointDrift,
+  mcpTargetModel, mcpTargetBody, mcpTargetMissingText, mcpRegisterCheck, profileEndpointNote, endpointDrift,
 } from './settings-model.mjs';
 import {
   loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
@@ -272,7 +279,7 @@ function packSelectLabel(p, { prefixUploaded = false } = {}) {
   const prefix = prefixUploaded && p.source === 'uploaded' ? '📂 ' : '';
   const version = p.version || '?';
   const source = uploadedSourceHint(p);
-  return `${prefix}${p.label} · v${version}${source ? ` · from ${source}` : ''}`;
+  return `${prefix}${p.label}${liveKindSuffix(p)} · v${version}${source ? ` · from ${source}` : ''}`;
 }
 
 // The service rules — the key every service goes by, the names a pack
@@ -1153,8 +1160,9 @@ function setupUpload() {
         setTimeout(() => {
           const panelUrl = document.getElementById('draft-mcp-url');
           if (panelUrl) panelUrl.value = 'https://www.krystaline.io/mcp/public';
-          const goBtn = document.getElementById('draft-mcp-go-btn');
-          if (goBtn) goBtn.click();
+          // Test the connection first; the person then chooses Draft or Snapshot (D8).
+          const testBtn = document.getElementById('live-test-btn');
+          if (testBtn) testBtn.click();
         }, 60);
         return;
       }
@@ -1482,7 +1490,7 @@ function installObservaChrome(chrome) {
             </button>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="mcp">
               <span class="observa-adv-item-label">Live MCP connection</span>
-              <span class="observa-adv-item-sub" id="observa-adv-mcp-sub">refresh production-live from an MCP server</span>
+              <span class="observa-adv-item-sub" id="observa-adv-mcp-sub">test it, rebuild production-live</span>
             </button>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="api">
               <span class="observa-adv-item-label">Pack catalogue API</span>
@@ -1725,6 +1733,8 @@ async function boot() {
   setupMcpPanel();
   setupCrawlPanel();
   setupDraftFromMcpPanel();
+  // A live job remembered for this login and org resumes its poll (never in the bundle or the token posture).
+  resumeLiveJob();
   setupDeployModal();
   installDialogFocusTrap();
   setupHomeAffordance();   // logo click returns home
@@ -4468,16 +4478,6 @@ function renderHomeView() {
             <input id="home-mcp-auth" type="password" placeholder="bearer" autocomplete="off">
           </label>
         </div>
-
-        <!-- Capabilities surface here once the MCP responds. -->
-        <div id="home-mcp-capabilities" class="home-mcp-capabilities" hidden></div>
-
-        <div id="home-mcp-adopt-bar" class="home-mcp-adopt-bar" hidden>
-          <button id="home-mcp-adopt" type="button" class="home-mcp-adopt-btn">
-            <span class="home-mcp-adopt-title">Render the manifest</span>
-            <span class="home-mcp-adopt-sub" id="home-mcp-adopt-hint">canonical v1.4 · ready to compile and deploy</span>
-          </button>
-        </div>
       </div>
 
       <div class="home-alt">
@@ -4498,6 +4498,7 @@ function renderHomeView() {
 
   $('#home-mcp-connect').onclick = () => doHomeMcpConnect();
   $('#home-mcp-url').onkeydown = (e) => { if (e.key === 'Enter') doHomeMcpConnect(); };
+  $('#home-mcp-url').oninput = () => paintHomeRegisterCheck();
   $('#home-mcp-advanced-toggle').onclick = () => {
     const adv = $('#home-mcp-advanced');
     const tog = $('#home-mcp-advanced-toggle');
@@ -4535,10 +4536,12 @@ function renderHomeView() {
 let homeMcpEndpointsRead = false;
 function paintHomeMcpTarget() {
   paintMcpTarget('home');
-  if (homeMcpEndpointsRead || state.mcpEndpoints !== null || !mcpPickersReadable() || state.access?.canWrite === false) return;
+  if (homeMcpEndpointsRead || (state.mcpEndpoints !== null && state.mcpTargetPolicy !== null) || !mcpPickersReadable() || state.access?.canWrite === false) return;
   homeMcpEndpointsRead = true;
-  readMcpEndpointsForPickers().then((list) => {
-    if (list?.length && document.getElementById('home-mcp-url')) paintMcpTarget('home');
+  // Repainted when the read settles: the list, and what the policy says
+  // this reader may do (a list-only card, or Register and connect).
+  readMcpEndpointsForPickers().then(() => {
+    if (document.getElementById('home-mcp-url')) paintMcpTarget('home');
   });
 }
 
@@ -4546,260 +4549,62 @@ async function doHomeMcpConnect() {
   const urlInput  = $('#home-mcp-url');
   const statusEl  = $('#home-mcp-status');
   const goBtn     = $('#home-mcp-connect');
-  const capEl     = $('#home-mcp-capabilities');
-  const adoptBar  = $('#home-mcp-adopt-bar');
   if (!urlInput || !statusEl) return;
 
-  const { body: target, chosen } = mcpTargetOf('home');
+  let { body: target, chosen } = mcpTargetOf('home');
+  if (!target && homeRegisterMode()) {
+    // D4: register the typed URL as the org's endpoint (the server judges
+    // its origin again), then connect by its id.
+    const check = mcpRegisterCheck(urlInput.value, state.mcpTargetPolicy.register);
+    if (check.error) {
+      statusEl.textContent = check.error;
+      statusEl.className = 'home-mcp-status is-error';
+      return;
+    }
+    goBtn.disabled = true;
+    statusEl.textContent = 'registering the MCP endpoint…';
+    statusEl.className = 'home-mcp-status is-pending';
+    let created;
+    try {
+      created = await createEndpoint({ name: check.name, url: urlInput.value.trim() });
+    } catch (e) {
+      statusEl.textContent = `error: ${e.message}`;
+      statusEl.className = 'home-mcp-status is-error';
+      goBtn.disabled = false;
+      return;
+    }
+    goBtn.disabled = false;
+    if (!created) return;
+    state.mcpEndpoints = [created];
+    paintMcpTarget('home', { chosen: String(created.id) });
+    ({ body: target, chosen } = mcpTargetOf('home'));
+  }
   if (!target) {
-    statusEl.textContent = 'choose an MCP endpoint or type a URL';
+    statusEl.textContent = mcpTargetMissing('home');
     statusEl.className = 'home-mcp-status is-error';
     return;
   }
-  if (target.mcpUrl) rememberMcpUrl(target.mcpUrl).catch(() => {});
-
+  // D8: the home's Connect tests the connection first, in the live panel,
+  // which then offers Draft or Snapshot — the same target (the endpoint, or
+  // the typed URL for a reader the server lets type one) and its key.
+  const panel = $('#draft-mcp-panel');
+  if (panel?.hidden) $('#draft-mcp-btn')?.click();
+  if (target.mcpUrl) $('#draft-mcp-url').value = target.mcpUrl;
+  $('#draft-mcp-auth').value = $('#home-mcp-auth')?.value ?? '';
+  paintMcpTarget('draft', { chosen: chosen ? String(chosen.id) : '' });
   goBtn.disabled = true;
-  statusEl.textContent = 'contacting MCP…';
+  statusEl.textContent = 'testing the connection in the live panel…';
   statusEl.className = 'home-mcp-status is-pending';
-  capEl.hidden = true;
-  adoptBar.hidden = true;
-
   try {
-    const r = await fetch('/api/draft-from-mcp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({
-        ...target,
-        // Forward the quick-start friendly label when the user came
-        // through the Upload popover. window._observogramQuickLabel is
-        // cleared after consumption so manual draft-from-mcp from the
-        // panel keeps the auto-generated label.
-        label: window._observogramQuickLabel || undefined,
-      }),
-    });
-    if (window._observogramQuickLabel) window._observogramQuickLabel = null;
-    const ct = r.headers.get('content-type') || '';
-    if (!ct.includes('application/json')) {
-      throw new Error(`server returned ${r.status} ${ct || 'no content-type'}`);
-    }
-    const out = await r.json();
-    if (!out.ok) throw new Error(out.error || 'MCP draft failed');
-    rememberMcpEndpoint(chosen ? chosen.id : null);
-    draftMcpState.lastResult = out;
-    followReplacedPack(out.registered?.id).catch(() => {});
-
-    statusEl.textContent = `connected · ${out.summary.discovered.backends} backend(s) · ${out.tookMs}ms`;
-    statusEl.className = 'home-mcp-status is-ok';
-
-    renderHomeMcpCapabilities(out, capEl);
-    capEl.hidden = false;
-    adoptBar.hidden = false;
-
-    const hint = $('#home-mcp-adopt-hint');
-    if (hint) hint.textContent = out.canonical?.metadata?.name
-      ? `pack name: ${out.canonical.metadata.name}` : '';
-
-    $('#home-mcp-adopt').onclick = () => adoptDraftFromMcpResult();
-  } catch (e) {
-    statusEl.textContent = `error: ${e.message}`;
-    statusEl.className = 'home-mcp-status is-error';
+    await testLiveConnection();
   } finally {
     goBtn.disabled = false;
   }
-}
-
-function renderHomeMcpCapabilities(out, host) {
-  const s = out.summary?.discovered || {};
-  const ann = out.annotations || {};
-  const tools = (ann['mcp.toolsCalled'] || '').split(',').filter(Boolean);
-  const failed = (ann['mcp.toolsFailed'] || '').split(',').filter(Boolean);
-  const services = (ann['mcp.servicesDiscovered'] || '').split(',').filter(Boolean);
-  const baselines = parseInt(ann['mcp.baselinesComputed'] || '0', 10);
-  const anomalies = parseInt(ann['mcp.activeAnomalies'] || '0', 10);
-  const backends = s.backends ?? 0;
-
-  // tools/list inventory: the full set of tools the MCP advertised, and the
-  // subset Observogram doesn't yet have a probe pattern for. These come from
-  // the post-rename fetcher that calls `tools/list` instead of guessing.
-  const toolsExposed   = (ann['mcp.toolsExposed']   || '').split(',').filter(Boolean);
-  const toolsUnmatched = (ann['mcp.toolsUnmatched'] || '').split(',').filter(Boolean);
-
-  // backend_capabilities inventory: the canonical skill → backend →
-  // product → version matrix the MCP exposes. When present, render the
-  // full version-gating story below the 4-card grid so the user sees
-  // EVERYTHING their MCP can speak to before drafting a pack.
-  const capabilities = out.summary?.capabilities || null;
-
-  // Live version captures — authoritative version strings pulled from
-  // grafana_health / metrics_query vm_app_version etc. Threaded into
-  // the capability chips so the demo audience sees ground truth, not
-  // just the policy band.
-  const liveVersions = {};
-  for (const [k, v] of Object.entries(ann)) {
-    const m = /^mcp\.versions\.([a-z0-9_-]+)$/.exec(k);
-    if (m) liveVersions[m[1]] = v;
-  }
-
-  // Recognised vs unrecognised tools (over what we CALLED, not what was
-  // advertised). Tracks the canonical otel-mcp-server tool catalog
-  // (metrics_*, grafana_*, alertmanager_*, pipeline_*) plus the generic
-  // system + zk-proof tools.
-  const knownTools = new Set([
-    // generic / system
-    'system_health', 'system_topology',
-    'anomalies_active', 'anomalies_baselines',
-    // zk-proofs skill
-    'zk_proof_get', 'zk_proof_verify', 'zk_solvency', 'zk_stats',
-    // metrics skill (Prometheus)
-    'metrics_query', 'metrics_query_range', 'metrics_targets',
-    'metrics_alerts', 'metrics_metadata', 'metrics_label_values',
-    // grafana skill
-    'grafana_health', 'grafana_datasources', 'grafana_datasource_health',
-    'grafana_datasource_query', 'grafana_dashboards_search',
-    'grafana_dashboard_get', 'grafana_folders', 'grafana_alert_rules',
-    'grafana_alerts', 'grafana_contact_points',
-    // alertmanager skill
-    'alertmanager_alerts', 'alertmanager_groups', 'alertmanager_silences',
-    'alertmanager_status',
-    // pipeline skill
-    'pipeline_alloy', 'pipeline_beats', 'pipeline_fluentbit', 'pipeline_vector',
-  ]);
-  const recognised   = tools.filter(t => knownTools.has(t));
-  const unrecognised = tools.filter(t => !knownTools.has(t));
-  const mcpHost = (() => {
-    try { return new URL(out.summary?.mcpUrl || '').host || 'mcp'; }
-    catch (_) { return 'mcp'; }
-  })();
-
-  // Four-card grid: each capability owns its own card with detail
-  // content inside. Connection status sits above as a pulse-dot line.
-  // Styling kept from the premium pass (subtle borders, serif numbers,
-  // ink-tone accents) but the per-card content is back so the user can
-  // SEE which tools were called, which services were discovered, etc.
-  host.innerHTML = `
-    <div class="home-mcp-report">
-      <div class="home-mcp-report-head">
-        <span class="home-mcp-report-dot" aria-hidden="true"></span>
-        Connected to <strong>${escapeHtml(mcpHost)}</strong>${out.tookMs ? ` <span class="home-mcp-report-meta">· ${out.tookMs}ms</span>` : ''}
-      </div>
-      <div class="home-mcp-cap-grid">
-        <div class="home-mcp-cap" data-cap="tools">
-          <div class="home-mcp-cap-num">${toolsExposed.length || tools.length}</div>
-          <div class="home-mcp-cap-key">${toolsExposed.length ? 'tools exposed' : 'tools called'}</div>
-          <div class="home-mcp-cap-detail">${recognised.length ? recognised.map(t => `<code>${escapeHtml(t)}</code>`).join(' ') : '<em>none recognised</em>'}</div>
-          ${toolsUnmatched.length ? `<div class="home-mcp-cap-detail home-mcp-cap-detail-unknown">+${toolsUnmatched.length} not yet probed: ${toolsUnmatched.slice(0, 8).map(t => `<code>${escapeHtml(t)}</code>`).join(' ')}${toolsUnmatched.length > 8 ? ` <em>+${toolsUnmatched.length - 8} more</em>` : ''}</div>` : ''}
-          ${unrecognised.length && !toolsUnmatched.length ? `<div class="home-mcp-cap-detail home-mcp-cap-detail-unknown">+${unrecognised.length} unrecognised: ${unrecognised.map(t => `<code>${escapeHtml(t)}</code>`).join(' ')}</div>` : ''}
-          ${failed.length ? `<div class="home-mcp-cap-detail home-mcp-cap-detail-fail">⚠ failed: ${failed.map(t => `<code>${escapeHtml(t)}</code>`).join(' ')}</div>` : ''}
-        </div>
-        <div class="home-mcp-cap" data-cap="services">
-          <div class="home-mcp-cap-num">${services.length}</div>
-          <div class="home-mcp-cap-key">services discovered</div>
-          <div class="home-mcp-cap-detail">${services.length ? services.slice(0, 6).map(s => `<code>${escapeHtml(s)}</code>`).join(' ') + (services.length > 6 ? `<div class="home-mcp-cap-more">+${services.length - 6} more</div>` : '') : '<em>none</em>'}</div>
-        </div>
-        <div class="home-mcp-cap" data-cap="backends">
-          <div class="home-mcp-cap-num">${backends}</div>
-          <div class="home-mcp-cap-key">backends inferred</div>
-          <div class="home-mcp-cap-detail">${backends ? 'metrics / logs / traces<div class="home-mcp-cap-meta">pipelines inferred from topology</div>' : '<em>none observed</em>'}</div>
-        </div>
-        <div class="home-mcp-cap" data-cap="anomalies">
-          <div class="home-mcp-cap-num">${anomalies}</div>
-          <div class="home-mcp-cap-key">active anomalies</div>
-          <div class="home-mcp-cap-detail">${baselines} baseline${baselines === 1 ? '' : 's'} computed<div class="home-mcp-cap-meta">from recent telemetry</div></div>
-        </div>
-      </div>
-      ${renderCapabilitiesPanel(capabilities, liveVersions)}
-      ${out.summary?.warnings?.length ? `
-        <div class="home-mcp-gaps">
-          <div class="home-mcp-gaps-head">⚠ Honest gaps</div>
-          <ul>${out.summary.warnings.slice(0, 5).map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul>
-        </div>` : ''}
-    </div>
-  `;
-}
-
-// Render the skill → backend → product → version matrix the MCP
-// exposes via `backend_capabilities`. The signal-class skills
-// (metrics/logs/traces/profiles + alerting/dashboards) lead because
-// they're what drive Observogram's L1–L4 projection; the rest follow
-// in a compact tail.
-//
-// When `liveVersions` carries an authoritative live version for a
-// product (e.g. {grafana: "12.4.0", victoriametrics: "v1.113.0"} from
-// grafana_health + metrics_query), the chip flips to "live mode": the
-// live version is shown in bold instead of the policy must[0], and a
-// "● LIVE" indicator hangs off the chip so the audience can see at a
-// glance which versions are attested vs which are inferred from
-// capabilities.
-function renderCapabilitiesPanel(capabilities, liveVersions = {}) {
-  if (!capabilities || !Array.isArray(capabilities.inventory) || !capabilities.inventory.length) return '';
-
-  // The spec's Signal enum order — used to group + sort entries.
-  const SIGNAL_SKILLS = ['metrics', 'logs', 'traces', 'pyroscope', 'alertmanager', 'grafana'];
-  const grouped = new Map();
-  for (const row of capabilities.inventory) {
-    if (!grouped.has(row.skill)) grouped.set(row.skill, []);
-    grouped.get(row.skill).push(row);
-  }
-  const orderedSkills = [
-    ...SIGNAL_SKILLS.filter(s => grouped.has(s)),
-    ...[...grouped.keys()].filter(s => !SIGNAL_SKILLS.includes(s)).sort(),
-  ];
-
-  const liveCount = Object.keys(liveVersions).length;
-
-  const rows = orderedSkills.map(skill => {
-    const backends = grouped.get(skill);
-    const chips = backends.map(b => {
-      const product = b.product || b.backend;
-      // `liveVersions[product]` carries either a real version string
-      // (e.g. "12.4.0") OR the sentinel "live" when the backend
-      // responded to a probe but doesn't expose a readable version
-      // (Jaeger via traces_services). Both flip the chip to live mode.
-      const live = liveVersions[product];
-      const policyVer = (b.versions?.must || [])[0] || '';
-      const isLive = !!live;
-      // When the capture has a real version, show it. When it's the
-      // "live" sentinel, keep showing the policy version (jaeger 2.x)
-      // because that's the only number we have — but still mark it
-      // ● LIVE so the user knows the backend itself is responding.
-      const isAliveSentinel = isLive && live === 'live';
-      const ver = isAliveSentinel ? policyVer : (isLive ? live : policyVer);
-      const liveTooltip = !isLive ? '' :
-        (isAliveSentinel
-          ? ` · live=responding (version not exposed)`
-          : ` · live=${live}`);
-      return `<span class="home-mcp-skill-chip${isLive ? ' is-live' : ''}" title="${escapeHtml(b.backend)} · must=${escapeHtml((b.versions?.must||[]).join(','))}${liveTooltip}">
-        <strong>${escapeHtml(product)}</strong>${ver ? ` <em>${escapeHtml(ver)}</em>` : ''}${isLive ? `<span class="home-mcp-skill-chip-live" aria-label="live version">●&nbsp;LIVE</span>` : ''}
-      </span>`;
-    }).join('');
-    return `
-      <div class="home-mcp-skill-row" data-skill="${escapeHtml(skill)}">
-        <div class="home-mcp-skill-name">${escapeHtml(skill)}</div>
-        <div class="home-mcp-skill-chips">${chips}</div>
-      </div>
-    `;
-  }).join('');
-
-  const liveSummary = liveCount
-    ? ` · <span class="home-mcp-skills-meta-live">${liveCount} live version${liveCount === 1 ? '' : 's'}</span>`
-    : '';
-
-  return `
-    <div class="home-mcp-skills">
-      <div class="home-mcp-skills-head">
-        <div class="home-mcp-skills-title">
-          Backend capabilities
-          <span class="home-mcp-skills-meta">
-            ${capabilities.skillCount} skill${capabilities.skillCount === 1 ? '' : 's'}
-            · ${capabilities.backendCount} backend${capabilities.backendCount === 1 ? '' : 's'}
-            · gating <code>${escapeHtml(capabilities.gatingMode)}</code>${liveSummary}
-          </span>
-        </div>
-        <div class="home-mcp-skills-sub">From <code>backend_capabilities</code> — every skill the MCP can speak to, the products it implements, and the version policy it enforces. <strong>LIVE</strong> chips carry an authoritative version captured from the backend itself.</div>
-      </div>
-      <div class="home-mcp-skills-body">${rows}</div>
-    </div>
-  `;
+  const ok = liveUi.ping?.ok === true;
+  statusEl.textContent = ok
+    ? 'connected — choose Draft or Snapshot in the live panel'
+    : 'the connection test failed — the live panel says why';
+  statusEl.className = `home-mcp-status ${ok ? 'is-ok' : 'is-error'}`;
 }
 
 async function loadAndCacheExamples() {
@@ -4871,7 +4676,7 @@ function renderMcpBadge(status) {
   if (!status?.present) {
     btn.dataset.mcpState = 'idle';
     ageEl.textContent = 'idle';
-    btn.title = 'No live pack yet — open to refresh from MCP';
+    btn.title = 'No live pack yet — open to test the MCP connection and rebuild production-live';
     return;
   }
   const stale = status.refreshedAt && (Date.now() - Date.parse(status.refreshedAt) > MCP_STALE_HOURS * 3600_000);
@@ -4901,7 +4706,7 @@ function renderMcpStatusBody(status) {
   const el = $('#mcp-status-body');
   if (!el) return;
   if (!status?.present) {
-    el.innerHTML = '<em>No live pack for this org yet — refresh from an MCP server.</em>';
+    el.innerHTML = '<em>No live pack for this org yet — rebuild production-live from an MCP server.</em>';
     return;
   }
   const rows = [
@@ -4929,12 +4734,18 @@ function renderMcpStatusBody(status) {
 // both); the read token stays on the server, named by the record. The list
 // (state.mcpEndpoints) is read in the identity and open postures only — the
 // bundle and the token posture never read it, and keep the typed URL.
+// Typing a URL is the server's to allow (R4): the list's read carries
+// `policy` (state.mcpTargetPolicy), and a reader it refuses a typed URL —
+// below admin, or without sign-in — gets the pickers list-only, with the
+// way in for that reader where the list is empty (rebadge batch 3, C0).
 const MCP_PICKERS = {
   refresh: { url: 'mcp-url', auth: 'mcp-auth', purpose: 'read', field: 'mcp-field', key: 'mcp-field-key', hint: true },
   draft: { url: 'draft-mcp-url', auth: 'draft-mcp-auth', purpose: 'read', field: 'mcp-field', key: 'mcp-field-key', hint: true },
   deploy: { url: 'deploy-target-mcp', auth: 'deploy-target-auth', purpose: 'write', field: 'deploy-field', key: 'deploy-field-key', hint: true },
   // D-J: the home reads the list for a rank that may connect, and says
-  // nothing when the org has none (today's card, the demo URL typed).
+  // nothing when the org has none (today's card, the demo URL typed) —
+  // unless the reader may not type a URL: then its hint names the way in,
+  // and without sign-in it offers Register and connect (D4).
   home: { url: 'home-mcp-url', auth: 'home-mcp-auth', purpose: 'read', field: 'home-mcp-url-row', key: 'home-mcp-url-label', hint: false, needsWrite: true },
 };
 
@@ -4943,24 +4754,53 @@ function mcpPickersReadable() {
   return posture === 'identity' || posture === 'open';
 }
 
-// The empty list's way to Settings → MCP endpoints, for a reader known to be
-// an admin of the org (C-7: never guessed — an open posture only once its
-// probe answered 200 in this page; leaving Settings keeps that answer).
+// The empty list's way to Settings → MCP endpoints: the server says whether
+// this reader may register one (GET /api/mcp-endpoints `policy.register` —
+// a session admin, or the open posture's caller on a direct loopback
+// request), never guessed (C-7).
 function mcpPickerCanAdminNow() {
-  return mcpPickerCanAdmin({ access: state.access, probe: state.openProbe, orgId: state.orgId });
+  return state.mcpTargetPolicy?.register?.allowed === true;
 }
 
-// GET /api/mcp-endpoints for the pickers. Silent: a refusal or a failure
-// leaves the typed URL alone (state.mcpEndpoints null), and Settings is
-// where a failed read is said. `keep` keeps the list already read when this
-// read fails (the pre-send check: its own sentence says it could not check).
+// May this picker send a typed URL (R4)? The server's answer in the
+// postures that read the list (unknown or failed: no — closed); where the
+// list is never read (the bundle, the token posture) or the rank cannot
+// send at all (the home's buttons say why), the URL row stays as it was
+// and the server decides.
+function mcpTypedAllowed(id) {
+  const p = MCP_PICKERS[id];
+  if (!mcpPickersReadable()) return true;
+  if (p?.needsWrite && state.access?.canWrite === false) return true;
+  return state.mcpTargetPolicy?.typed?.allowed === true;
+}
+
+// The status line when a picker has nothing to send.
+function mcpTargetMissing(id) {
+  return mcpTargetMissingText({
+    typedAllowed: mcpTypedAllowed(id), orgName: state.orgName,
+    empty: Array.isArray(state.mcpEndpoints) && state.mcpEndpoints.length === 0, canRegister: mcpPickerCanAdminNow(),
+  });
+}
+
+// GET /api/mcp-endpoints for the pickers, with the caller's policy. Silent:
+// a refusal or a failure leaves the list unread (state.mcpEndpoints null)
+// and the policy closed (state.mcpTargetPolicy `failed`), and Settings is
+// where a failed read is said. `keep` keeps the list and the policy already
+// read when this read fails (the pre-send check: its own sentence says it
+// could not check).
+const CLOSED_MCP_POLICY = Object.freeze({ typed: { allowed: false }, register: { allowed: false }, failed: true });
 async function readMcpEndpointsForPickers({ keep = false } = {}) {
   if (!mcpPickersReadable()) return null;
   try {
-    state.mcpEndpoints = await loadMcpEndpoints();
+    const { endpoints, policy } = await loadMcpEndpoints({ withPolicy: true });
+    state.mcpEndpoints = endpoints;
+    state.mcpTargetPolicy = policy ?? CLOSED_MCP_POLICY;
     return state.mcpEndpoints;
   } catch {
-    if (!keep) state.mcpEndpoints = null;
+    if (!keep) {
+      state.mcpEndpoints = null;
+      state.mcpTargetPolicy = CLOSED_MCP_POLICY;
+    }
     return null;
   }
 }
@@ -4993,8 +4833,39 @@ function mcpPickerModel(id, chosen = null) {
     // none), what its field holds (a profile's URL).
     typedUrl: id === 'deploy' ? (document.getElementById(p.url)?.value || '') : (recallMcpUrl() || ''),
     purpose: p.purpose, orgName: state.orgName, canAdmin: mcpPickerCanAdminNow(), chosen,
+    typed: { allowed: mcpTypedAllowed(id) }, posture: state.access?.posture ?? null,
+    unreadable: state.mcpTargetPolicy?.failed === true,
   });
-  return p.hint ? model : { ...model, hint: null };
+  return p.hint || !mcpTypedAllowed(id) ? model : { ...model, hint: null };
+}
+
+// The home card without sign-in and with no endpoint (D4): the URL row
+// stays, and Connect registers the typed URL as the org's endpoint first —
+// offered only while the server would accept it (policy.register).
+function homeRegisterMode() {
+  return !mcpTypedAllowed('home') && state.mcpTargetPolicy?.register?.allowed === true
+    && Array.isArray(state.mcpEndpoints) && state.mcpEndpoints.length === 0;
+}
+
+// Register and connect: the typed URL checked against the server's rule as
+// it is typed — a refusal is said beside the button, which then does
+// nothing (aria-disabled), never a request the server would refuse.
+function paintHomeRegisterCheck() {
+  const btn = document.getElementById('home-mcp-connect');
+  const statusEl = document.getElementById('home-mcp-status');
+  const label = btn?.querySelector('.home-mcp-connect-label');
+  const on = homeRegisterMode();
+  if (label) label.textContent = on ? 'Register and connect' : 'Connect';
+  if (!btn || btn.classList.contains('is-unavailable')) return;
+  const check = on ? mcpRegisterCheck(document.getElementById('home-mcp-url')?.value, state.mcpTargetPolicy.register) : null;
+  if (check?.error) {
+    btn.setAttribute('aria-disabled', 'true');
+    if (statusEl) { statusEl.textContent = check.error; statusEl.className = 'home-mcp-status is-error'; }
+  } else if (btn.dataset.registerBlocked) {
+    btn.removeAttribute('aria-disabled');
+    if (statusEl) { statusEl.textContent = ''; statusEl.className = 'home-mcp-status'; }
+  }
+  if (check?.error) btn.dataset.registerBlocked = '1'; else delete btn.dataset.registerBlocked;
 }
 
 // The URL row and the auth field's help follow the choice: an endpoint hides
@@ -5002,10 +4873,12 @@ function mcpPickerModel(id, chosen = null) {
 function applyMcpTargetChoice(id, model) {
   const p = MCP_PICKERS[id];
   const row = document.getElementById(p.url)?.closest('label');
-  if (row) row.hidden = !model.showUrl;
+  const registering = id === 'home' && homeRegisterMode();
+  if (row) row.hidden = !(model.showUrl || registering);
   if (id === 'home') {
     const urlKey = row?.querySelector('.home-mcp-url-label');
-    if (urlKey) urlKey.textContent = model.show ? 'MCP URL' : 'MCP endpoint';
+    if (urlKey) urlKey.textContent = registering ? 'MCP URL to register' : (model.show ? 'MCP URL' : 'MCP endpoint');
+    paintHomeRegisterCheck();
   }
   const key = document.getElementById(p.auth)?.closest('label')?.querySelector('span');
   if (!key) return;
@@ -5039,7 +4912,9 @@ function mcpTargetOf(id) {
   const value = sel?.value || '';
   const opt = value ? sel.selectedOptions?.[0] : null;
   const chosen = opt ? { id: Number(value), name: opt.dataset.name, origin: opt.dataset.origin } : null;
-  const url = document.getElementById(p.url)?.value ?? '';
+  // A hidden field's leftover is never sent: the typed URL only for a
+  // reader the server lets type one (R4).
+  const url = mcpTypedAllowed(id) ? (document.getElementById(p.url)?.value ?? '') : '';
   const auth = document.getElementById(p.auth)?.value ?? '';
   return { body: mcpTargetBody(value, url, auth), chosen, url: url.trim() };
 }
@@ -5058,9 +4933,9 @@ async function checkEndpointDrift(id) {
   const { chosen } = mcpTargetOf(id);
   if (!chosen) return null;
   const list = await readMcpEndpointsForPickers({ keep: true });
-  const drift = endpointDrift(chosen, list, { orgName: state.orgName });
+  const drift = endpointDrift(chosen, list, { orgName: state.orgName, typedAllowed: mcpTypedAllowed(id) });
   if (drift && Array.isArray(list)) {
-    paintMcpTarget(id, { chosen: list.some((ep) => ep.id === chosen.id) ? String(chosen.id) : '' });
+    paintMcpTarget(id, { chosen: list.some((ep) => ep.id === chosen.id) ? String(chosen.id) : (mcpTypedAllowed(id) ? '' : null) });
   }
   return drift;
 }
@@ -5069,7 +4944,7 @@ async function checkEndpointDrift(id) {
 // is unread, or `fresh` (the deploy modal: every open) — read and redrawn.
 function openMcpTarget(id, { fresh = false } = {}) {
   paintMcpTarget(id);
-  if (!mcpPickersReadable() || (!fresh && state.mcpEndpoints !== null)) return;
+  if (!mcpPickersReadable() || (!fresh && state.mcpEndpoints !== null && state.mcpTargetPolicy !== null)) return;
   readMcpEndpointsForPickers().then(() => paintMcpTarget(id));
 }
 
@@ -5087,6 +4962,8 @@ function pickMcpTarget(container, value) {
   if (!MCP_PICKERS[id]) return;
   applyMcpTargetChoice(id, mcpPickerModel(id, value));
   if (id === 'deploy') updateDeployTargetSummary();
+  if (id === 'refresh') clearPingResult();
+  if (id === 'draft') clearLivePing();
   if (value === '') document.getElementById(MCP_PICKERS[id].url)?.focus();
 }
 
@@ -5121,15 +4998,61 @@ function closeMcpPanel() {
   if (btn) btn.setAttribute('aria-expanded', 'false');
 }
 
+// ---------- the MCP panel: test the connection; rebuilding production-live is its own action ----------
+//
+// "test connection" (#mcp-refresh-btn — the id a habit or a script clicks as
+// a connectivity check) pings: POST /api/mcp/ping with the picker's target,
+// which writes no live pack and no pack (rebadge batch 3, C2). The result
+// block (studio/live-view.mjs over pingResultModel) says what was checked
+// and what was not; any change to the picker or the auth field clears it,
+// so a result never describes a target other than the one shown.
+// "rebuild production-live" (#mcp-rebuild-btn) is the explicit, separate
+// action that reads every family again and rewrites the live pack.
+
+function clearPingResult() {
+  renderPingResult($('#mcp-ping-result'), null);
+  setPingStatus('');
+}
+
+function setPingStatus(msg, kind = '') {
+  const el = $('#mcp-ping-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
+}
+
+async function pingFromPanel() {
+  const { body: target } = mcpTargetOf('refresh');
+  renderPingResult($('#mcp-ping-result'), null);
+  if (!target) {
+    setPingStatus(mcpTargetMissing('refresh'), 'error');
+    return;
+  }
+  const btn = $('#mcp-refresh-btn');
+  btn.disabled = true;
+  setPingStatus('testing the connection…');
+  try {
+    const model = pingResultModel(await pingMcp(target));
+    if (!model) { setPingStatus('error: the server sent no ping result', 'error'); return; }
+    setPingStatus(model.status, model.tone === 'ok' ? 'ok' : 'error');
+    renderPingResult($('#mcp-ping-result'), model);
+  } catch (e) {
+    // The server's refusal (400 / 403 / 502), or the bundle's 501 sentence.
+    setPingStatus(`error: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function refreshLive() {
   const { body: target, chosen } = mcpTargetOf('refresh');
   if (!target) {
-    setRefreshStatus('choose an MCP endpoint or type a URL', 'error');
+    setRefreshStatus(mcpTargetMissing('refresh'), 'error');
     return;
   }
   // A typed URL is remembered (its safe form); an endpoint's choice is, on success.
   const dropped = target.mcpUrl ? await rememberMcpUrl(target.mcpUrl).catch(() => []) : [];
-  const btn = $('#mcp-refresh-btn');
+  const btn = $('#mcp-rebuild-btn');
   btn.disabled = true;
   $('#mcp-btn').dataset.mcpState = 'active';
   setRefreshStatus('contacting mcp…');
@@ -5180,17 +5103,11 @@ async function refreshLive() {
     renderMcpBadge(state.mcpStatus);
     renderMcpStatusBody(state.mcpStatus);
     toast('Live pack refreshed');
-    // If the user is currently viewing production-live, reload it so the
-    // adapter projection updates.
-    if (state.selectedPackId === 'production-live') {
-      await refresh();
-    } else {
-      // Refresh the catalog so the production-live entry's ok-state updates.
-      await refreshCatalogue();
-      renderServiceSelect();
-      renderPackSelect();
-      renderPackBSelect();
-    }
+    // Refresh the catalog so the production-live entry's ok-state updates.
+    await refreshCatalogue();
+    renderServiceSelect();
+    renderPackSelect();
+    renderPackBSelect();
   } catch (e) {
     setRefreshStatus(`error: ${e.message}`, 'error');
     $('#mcp-btn').dataset.mcpState = 'error';
@@ -5200,7 +5117,7 @@ async function refreshLive() {
 }
 
 function setRefreshStatus(msg, kind = '') {
-  const el = $('#mcp-refresh-status');
+  const el = $('#mcp-rebuild-status');
   if (!el) return;
   el.textContent = msg;
   el.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
@@ -5994,7 +5911,7 @@ async function loadDeployHistory(packId) {
 // server's sentence (C-1); a result where every restore failed (a 502 with
 // its summary) still reads as a result.
 async function doRollback(deployId, packId, btn) {
-  if (!deployTargetBody()) { toast('Choose an MCP endpoint or type the MCP URL in the target form first', 'error'); return; }
+  if (!deployTargetBody()) { toast(`${mcpTargetMissing('deploy').replace(/^./, (c) => c.toUpperCase())} in the target form first`, 'error'); return; }
   const moved = await checkEndpointDrift('deploy');
   if (moved) { toast(moved, 'error'); return; }
   if (!confirm(`Roll back ${deployId}?\n\nRestorable artefacts are re-upserted from the pre-deploy snapshot. Anything this deploy created is listed for manual removal.`)) return;
@@ -6088,15 +6005,20 @@ async function loadDeployProfile(name) {
   // A profile that names an endpoint selects it in the org it belongs to,
   // while it is listed; anywhere else the typed mode, empty, and the note
   // says why (A-12: another org's id is never sent). A typed profile is typed.
+  // A typed profile opened by a reader who may not type a URL (R4) is
+  // said, and the list stays chosen: its URL is never sent. The policy is
+  // read first when the modal's own read has not settled yet.
+  if (mcpPickersReadable() && state.mcpTargetPolicy === null) await readMcpEndpointsForPickers({ keep: true });
+  const typedAllowed = mcpTypedAllowed('deploy');
   const { select, note } = profileEndpointNote(p, {
     orgId: state.orgId ?? getActiveOrg(), orgName: state.orgName,
-    endpoints: mcpPickersReadable() ? state.mcpEndpoints : null, profileName: name,
+    endpoints: mcpPickersReadable() ? state.mcpEndpoints : null, profileName: name, typedAllowed,
   });
   if (p.mcpEndpoint) {
     if (select === null) $('#deploy-target-mcp').value = '';
-    paintMcpTarget('deploy', { chosen: select === null ? '' : String(select) });
+    paintMcpTarget('deploy', { chosen: select === null ? (typedAllowed ? '' : null) : String(select) });
   } else if (p.mcpUrl) {
-    paintMcpTarget('deploy', { chosen: '' });
+    paintMcpTarget('deploy', { chosen: typedAllowed ? '' : null });
   }
   setDeployStatus(note || '', note ? 'error' : '');
   updateDeployTargetSummary();
@@ -6247,7 +6169,7 @@ async function doDeployBulk() {
   const product = $('#deploy-target-product').value;
   const version = $('#deploy-target-version').value;
   const setStatus = setDeployStatus;
-  if (!deployTargetBody()) { setStatus('choose an MCP endpoint or type a URL', 'error'); return; }
+  if (!deployTargetBody()) { setStatus(mcpTargetMissing('deploy'), 'error'); return; }
   // Deploy what the review shows: a selected row the type filter hides is
   // not counted, not reviewed — and so not deployed.
   const types = new Set([...document.querySelectorAll('#deploy-type-filters input:checked')].map(i => i.value));
@@ -6563,7 +6485,12 @@ function setupDraftFromMcpPanel() {
         urlInput.value = recallMcpUrl() || '';
       }
       openMcpTarget('draft');
-      focusMcpTarget('draft');
+      paintLiveSteps();
+      if (liveUi.job) document.getElementById('live-step-progress-title')?.scrollIntoView?.({ block: 'nearest' });
+      else focusMcpTarget('draft');
+      readLiveJobsForPanel().catch(() => {});
+      // A finished job's result is on screen now: its key goes.
+      if (liveUi.job && liveUi.job.view.state !== 'running') forgetLiveJob();
     }
   };
   closeBtn.onclick = () => { panel.hidden = true; };
@@ -6572,53 +6499,345 @@ function setupDraftFromMcpPanel() {
     $('#draft-mcp-url').value = '';
     $('#draft-mcp-auth').value = '';
     $('#draft-mcp-name').value = '';
+    $('#live-label').value = '';
     $('#draft-mcp-result').hidden = true;
-    $('#draft-mcp-status').textContent = '';
+    setLiveStatus('draft-mcp-status', '');
     draftMcpState.lastResult = null;
+    liveUi.kindChosen = null;
+    clearLivePing();
   };
-  goBtn.onclick = () => doDraftFromMcp();
+  // Any change to the target or its key: a ping never stands for another.
+  for (const id of ['draft-mcp-url', 'draft-mcp-auth']) $(`#${id}`)?.addEventListener('input', clearLivePing);
+  $('#live-test-btn').onclick = () => testLiveConnection();
+  for (const radio of document.querySelectorAll('input[name="live-kind"]')) {
+    radio.addEventListener('change', () => { liveUi.kindChosen = liveKind(); paintLiveChoice(); });
+  }
+  goBtn.onclick = () => startLiveFromPanel();
+  $('#live-cancel-btn').onclick = () => cancelLiveFromPanel();
   adoptBtn.onclick = () => adoptDraftFromMcpResult();
 }
 
-async function doDraftFromMcp() {
-  const { body: target, chosen } = mcpTargetOf('draft');
-  const name = $('#draft-mcp-name').value.trim();
-  const statusEl = $('#draft-mcp-status');
-  const setStatus = (msg, kind) => {
-    statusEl.textContent = msg;
-    statusEl.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
-  };
-  if (!target) { setStatus('choose an MCP endpoint or type a URL', 'error'); return; }
-  if (target.mcpUrl) rememberMcpUrl(target.mcpUrl).catch(() => {});
+// ---------- the live panel: test, choose Draft or Snapshot, follow the job ----------
+//
+// "New pack from a live MCP server" (#draft-mcp-panel, rebadge batch 3, C1):
+// three steps. (1) Test the connection — the draft picker, the auth field,
+// POST /api/mcp/ping. (2) Choose what to build — drawn only after a
+// connected ping for the target on screen (stepTwoVisible: a change of the
+// picker or the auth field hides it again): Draft (a scaffold) or Snapshot
+// (an inventory), Draft preselected unless the org configured a snapshot
+// scope; under Snapshot the plan (fetchPlan over the ping's mapped
+// inventory, /lib/live-fetch.mjs) and the scope fields prefilled from
+// GET /api/mcp/jobs; the duration from this org's last finished job.
+// (3) Progress and result — both kinds run as live jobs (POST
+// /api/mcp/jobs), polled every second while the panel is open, every five
+// while closed, ten after a lost connection; the gate log drawn from the
+// stages of the kind. The job's id is remembered per login and org
+// (rememberLiveJob: an id and an origin, never a credential), so a reload
+// resumes the poll; opening the panel also finds a job started in another
+// tab (GET /api/mcp/jobs `running`). The home's Connect opens this panel
+// and tests its target here (D8). POST /api/draft-from-mcp stays for the
+// API and the deploy verify.
 
-  const goBtn = $('#draft-mcp-go-btn');
-  goBtn.disabled = true;
-  setStatus('contacting mcp…');
-  $('#draft-mcp-result').hidden = true;
+const liveUi = {
+  ping: null,        // { key, ok, answer } — the last ping, for one target
+  jobs: null,        // GET /api/mcp/jobs's answer (scope, running, lastTook)
+  job: null,         // { id, kind, label, records, since, view, answer }
+  timer: null,
+  kindChosen: null,  // the person's own choice in this panel
+};
+let liveFetchLib = null;
+const loadLiveFetchLib = async () => (liveFetchLib ??= await import('/lib/live-fetch.mjs'));
 
+function liveJobsReadable() {
+  const posture = state.access?.posture;
+  return posture === 'identity' || posture === 'open';
+}
+
+function setLiveStatus(id, msg, kind = '') {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
+}
+
+// A change of the picker or the auth field: the ping no longer stands.
+function clearLivePing() {
+  liveUi.ping = null;
+  renderPingResult($('#live-ping-result'), null);
+  setLiveStatus('live-ping-status', '');
+  paintLiveSteps();
+}
+
+function liveKind() {
+  return document.querySelector('input[name="live-kind"]:checked')?.value === 'snapshot' ? 'snapshot' : 'draft';
+}
+
+function paintLiveSteps() {
+  const running = liveUi.job?.view?.state === 'running';
+  const two = stepTwoVisible(liveUi.ping, mcpTargetOf('draft').body);
+  const choose = $('#live-step-choose');
+  if (choose) choose.hidden = !two || running;
+  const progress = $('#live-step-progress');
+  if (progress) progress.hidden = !liveUi.job;
+  paintLiveBadge();
+}
+
+// The "new from live" button says a job is running (text, never colour alone).
+function paintLiveBadge() {
+  const btn = $('#draft-mcp-btn');
+  if (!btn) return;
+  const running = liveUi.job?.view?.state === 'running';
+  btn.dataset.liveJob = running ? 'running' : '';
+  btn.textContent = running ? 'new from live · live job running' : 'new from live';
+}
+
+async function paintLiveChoice() {
+  const kind = liveKind();
+  const answer = liveUi.ping?.answer;
+  const snapshot = kind === 'snapshot';
+  $('#live-snapshot-opts').hidden = !snapshot;
+  $('#draft-mcp-go-btn').textContent = snapshot ? 'start snapshot' : 'start draft';
+  const name = $('#draft-mcp-name');
+  name.placeholder = snapshot ? 'live-snapshot' : 'production-live';
+  $('#draft-mcp-name-hint').textContent = `(defaults to "${name.placeholder}")`;
+  $('#live-duration').textContent = durationText(kind, liveUi.jobs?.lastTook?.[kind] ?? null);
+  if (!snapshot) return;
   try {
-    const r = await fetch('/api/draft-from-mcp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ ...target, packName: name || undefined }),
-    });
-    const ct = r.headers.get('content-type') || '';
-    const raw = await r.text();
-    if (!ct.includes('application/json')) {
-      setStatus(`server returned ${r.status} ${ct || 'no content-type'} — restart \`npm run dev\` if you just changed server code`, 'error');
-      return;
-    }
-    const out = JSON.parse(raw);
-    if (!out.ok) { setStatus(`error: ${out.error || 'unknown'}`, 'error'); return; }
-    rememberMcpEndpoint(chosen ? chosen.id : null);
-    draftMcpState.lastResult = out;
-    renderDraftMcpResult(out);
-    followReplacedPack(out.registered?.id).catch(() => {});
-    setStatus(`drafted in ${out.tookMs}ms · ${out.summary.discovered.backends} backend(s) discovered`, 'ok');
+    const lib = await loadLiveFetchLib();
+    const plan = lib.fetchPlan(answer?.tools?.capabilities ?? null, { kind, complete: answer?.tools ? answer.tools.complete !== false : false });
+    const model = planModel(plan, lib.stagesFor(kind));
+    $('#live-plan').textContent = [model.gapText, model.unknownText].filter(Boolean).join('. ') || 'This MCP offers a tool for every inventory family.';
+  } catch {
+    $('#live-plan').textContent = '';
+  }
+}
+
+async function testLiveConnection() {
+  const { body: target } = mcpTargetOf('draft');
+  liveUi.ping = null;
+  renderPingResult($('#live-ping-result'), null);
+  paintLiveSteps();
+  if (!target) { setLiveStatus('live-ping-status', mcpTargetMissing('draft'), 'error'); return; }
+  const btn = $('#live-test-btn');
+  btn.disabled = true;
+  setLiveStatus('live-ping-status', 'testing the connection…');
+  try {
+    const answer = await pingMcp(target);
+    const model = pingResultModel(answer);
+    if (!model) { setLiveStatus('live-ping-status', 'error: the server sent no ping result', 'error'); return; }
+    renderPingResult($('#live-ping-result'), model);
+    if (target.mcpUrl) rememberMcpUrl(target.mcpUrl).catch(() => {});
+    if (!model.ok) { setLiveStatus('live-ping-status', model.status, 'error'); return; }
+    liveUi.ping = { key: liveTargetKey(target), ok: true, answer };
+    try { liveUi.jobs = await readLiveJobs(); } catch { liveUi.jobs = null; }
+    const form = scopeFormModel(liveUi.jobs?.scope);
+    $('#live-scope-prefixes').value = form.prefixes;
+    $('#live-scope-folders').value = form.folders;
+    $('#live-scope-note').textContent = form.errors.length ? `The configured scope does not parse: ${form.errors.join('; ')}` : form.note;
+    const kind = liveUi.kindChosen ?? preselectedKind(liveUi.jobs?.scope?.from);
+    document.querySelector(`input[name="live-kind"][value="${kind}"]`).checked = true;
+    paintLiveSteps();
+    await paintLiveChoice();
+    // Said once step 2 is drawn: the status names what the person can do next.
+    setLiveStatus('live-ping-status', model.status, model.tone === 'ok' ? 'ok' : 'error');
   } catch (e) {
-    setStatus(`error: ${e.message}`, 'error');
+    setLiveStatus('live-ping-status', `error: ${e.message}`, 'error');
   } finally {
-    goBtn.disabled = false;
+    btn.disabled = false;
+  }
+}
+
+async function startLiveFromPanel() {
+  const { body: target, chosen } = mcpTargetOf('draft');
+  if (!stepTwoVisible(liveUi.ping, target)) { clearLivePing(); return; }
+  const kind = liveKind();
+  const name = $('#draft-mcp-name').value.trim();
+  const label = $('#live-label').value.trim();
+  const body = {
+    kind, ...target,
+    ...(name ? { packName: name } : {}),
+    ...(label ? { label } : {}),
+    ...(kind === 'snapshot' ? { scope: scopeFromForm({ prefixes: $('#live-scope-prefixes').value, folders: $('#live-scope-folders').value }) } : {}),
+  };
+  const btn = $('#draft-mcp-go-btn');
+  btn.disabled = true;
+  setLiveStatus('draft-mcp-status', `starting the ${kind}…`);
+  try {
+    const out = await startLiveJob(body);
+    setLiveStatus('draft-mcp-status', '');
+    rememberMcpEndpoint(chosen ? chosen.id : null);
+    $('#draft-mcp-result').hidden = true;
+    followLiveJob(out.job);
+  } catch (e) {
+    setLiveStatus('draft-mcp-status', `error: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Follows a job: the gate log, the elapsed time, and its end.
+function followLiveJob(view, { records = [], since = 0 } = {}) {
+  clearTimeout(liveUi.timer);
+  liveUi.job = { id: view.id, kind: view.kind, label: view.label, records: [...records], since, view, answer: null };
+  rememberLiveJob({ id: view.id, kind: view.kind, startedAt: view.startedAt, origin: view.target?.origin ?? null, label: view.label });
+  renderLiveResult($('#live-result'), null);
+  paintLiveJob();
+  paintLiveSteps();
+  pollLiveOnce();
+}
+
+async function paintLiveJob() {
+  const job = liveUi.job;
+  if (!job) return;
+  const view = job.view;
+  const running = view.state === 'running';
+  setLiveStatus('live-job-status', running
+    ? `${view.kind === 'snapshot' ? 'snapshot' : 'draft'} running${view.cancelRequested ? ' — cancel requested' : ''}`
+    : `${view.kind} ${view.state}`, running ? '' : (view.state === 'done' ? 'ok' : 'error'));
+  $('#live-elapsed').textContent = `elapsed ${elapsedText(view.elapsedMs)}`;
+  $('#live-cancel-btn').hidden = !running;
+  try {
+    const lib = await loadLiveFetchLib();
+    renderGateLog($('#live-gatelog'), gateLogModel(job.records, lib.stagesFor(job.kind)));
+  } catch { /* the stage rows need /lib: a static bundle never runs a job */ }
+}
+
+function liveJobGone() {
+  forgetLiveJob();
+  clearTimeout(liveUi.timer);
+  if (liveUi.job) liveUi.job.view = { ...liveUi.job.view, state: 'gone' };
+  setLiveStatus('live-job-status', '');
+  $('#live-cancel-btn').hidden = true;
+  renderLiveResult($('#live-result'), { state: 'gone', sentence: LIVE_JOB_GONE_TEXT, registered: null });
+  paintLiveBadge();
+}
+
+async function pollLiveOnce() {
+  const job = liveUi.job;
+  if (!job || job.view.state !== 'running') return;
+  let answer;
+  try {
+    answer = await pollLiveJob(job.id, job.since);
+  } catch (e) {
+    if (liveUi.job !== job) return;
+    if (e.status === 404) { liveJobGone(); return; }
+    if (e.status) { setLiveStatus('live-job-status', `error: ${e.message}`, 'error'); return; }
+    setLiveStatus('live-job-status', 'connection lost — retrying', 'error');
+    liveUi.timer = setTimeout(pollLiveOnce, 10_000);
+    return;
+  }
+  if (liveUi.job !== job) return;
+  job.records.push(...(answer.stages ?? []));
+  job.since = answer.next ?? job.since;
+  job.view = answer.job;
+  job.label = answer.job.label ?? job.label;
+  job.answer = answer;
+  await paintLiveJob();
+  if (answer.job.state === 'running') {
+    liveUi.timer = setTimeout(pollLiveOnce, $('#draft-mcp-panel').hidden ? 5000 : 1000);
+    return;
+  }
+  await finishLiveJob(answer);
+}
+
+async function finishLiveJob(answer) {
+  const model = liveResultModel(answer);
+  // The result is shown here (the panel open), or the toast below says it: the key goes.
+  forgetLiveJob();
+  paintLiveSteps();
+  renderLiveResult($('#live-result'), model, {
+    onOpen: (id) => openLivePack(id),
+    onCompare: (id) => compareWithLivePack(id),
+    compareWith: state.selectedPackId && state.selectedPackId !== model?.registered?.id
+      ? (state.catalog.find((p) => p.id === state.selectedPackId)?.label ?? state.selectedPackId) : null,
+  });
+  if (model?.registered) {
+    // The catalogue gains the pack: the pickers name it (with its kind).
+    try { await refreshCatalogue(); renderPackSelect(); renderPackBSelect(); } catch { /* the next load lists it */ }
+    followReplacedPack(model.registered.id).catch(() => {});
+    if ($('#draft-mcp-panel').hidden) toast(`Registered: ${model.registered.label}`, 'ok');
+    if (answer.job.kind === 'draft' && answer.result?.draft) showLiveDraftResult(answer).catch(() => {});
+  }
+}
+
+// A draft job's result block: today's draft review, from the job's summary
+// and the registered pack (its canonical and YAML read by id).
+async function showLiveDraftResult(answer) {
+  const id = answer.result.registered.id;
+  const [canonical, yaml] = await Promise.all([
+    api(`/api/packs/${encodeURIComponent(id)}/canonical`),
+    fetch(`/api/packs/${encodeURIComponent(id)}/canonical?format=yaml`, { headers: authHeaders() }).then((r) => r.text()),
+  ]);
+  const out = {
+    ok: true, canonical, canonicalYaml: yaml, summary: answer.result.draft.summary, annotations: canonical?.metadata?.annotations ?? {},
+    validation: { ok: true, errors: [] }, conformance: answer.result.draft.conformance, registered: answer.result.registered,
+    mcpEndpoint: answer.result.draft.mcpEndpoint, tookMs: answer.result.tookMs,
+  };
+  draftMcpState.lastResult = out;
+  renderDraftMcpResult(out);
+}
+
+async function openLivePack(id) {
+  $('#draft-mcp-panel').hidden = true;
+  await refreshCatalogue();
+  state.view = 'layers';
+  enterAnalyzeMode(id, defaultEnvFor(id));
+}
+
+async function compareWithLivePack(id) {
+  const aId = state.selectedPackId;
+  if (!aId) return openLivePack(id);
+  $('#draft-mcp-panel').hidden = true;
+  await refreshCatalogue();
+  state.view = 'compare';
+  enterCompareMode(aId, state.selectedEnv ?? defaultEnvFor(aId), id, defaultEnvFor(id));
+}
+
+async function cancelLiveFromPanel() {
+  const job = liveUi.job;
+  if (!job) return;
+  try {
+    const out = await cancelLiveJob(job.id);
+    if (out?.job?.cancelRequested) job.view = { ...job.view, cancelRequested: true };
+    paintLiveJob();
+  } catch (e) {
+    if (e.status === 404) liveJobGone();
+    else setLiveStatus('live-job-status', `error: ${e.message}`, 'error');
+  }
+}
+
+// Opening the panel: a job started in another tab (or before a reload) is
+// followed; its step 3 shows.
+async function readLiveJobsForPanel() {
+  if (!liveJobsReadable()) return;
+  try { liveUi.jobs = await readLiveJobs(); } catch { return; }
+  const running = liveUi.jobs?.running;
+  if (running && liveUi.job?.id !== running.id) followLiveJob(running);
+}
+
+// At boot, once the org is known: one poll for a remembered job (identity
+// and open postures only — never the bundle, never the token posture).
+async function resumeLiveJob() {
+  if (!liveJobsReadable()) return;
+  const remembered = recallLiveJob();
+  if (!remembered) return;
+  try {
+    const answer = await pollLiveJob(remembered.id, 0);
+    liveUi.job = { id: remembered.id, kind: answer.job.kind, label: answer.job.label, records: [...(answer.stages ?? [])], since: answer.next ?? 0, view: answer.job, answer };
+    paintLiveSteps();
+    await paintLiveJob();
+    if (answer.job.state === 'running') liveUi.timer = setTimeout(pollLiveOnce, 5000);
+    else {
+      // Finished while the page was away: the result waits for the panel.
+      renderLiveResult($('#live-result'), liveResultModel(answer), {
+        onOpen: (id) => openLivePack(id), onCompare: (id) => compareWithLivePack(id), compareWith: null,
+      });
+      toast(answer.job.state === 'done' && answer.result?.registered ? `Registered: ${answer.result.registered.label}` : `The live ${answer.job.kind} ${answer.job.state}`, answer.job.state === 'done' ? 'ok' : 'error');
+      forgetLiveJob();
+    }
+  } catch (e) {
+    if (e.status === 404) { forgetLiveJob(); return; }
+    // The server unreachable at boot: the key stays for the next load.
   }
 }
 
@@ -6925,7 +7144,12 @@ function setupMcpPanel() {
     if (open) closeMcpPanel(); else openMcpPanel();
   };
   $('#mcp-panel-close').onclick = closeMcpPanel;
-  $('#mcp-refresh-btn').onclick = refreshLive;
+  $('#mcp-refresh-btn').onclick = pingFromPanel;
+  $('#mcp-rebuild-btn').onclick = refreshLive;
+  const note = $('#mcp-rebuild-note');
+  if (note) note.textContent = rebuildNoteText();
+  // A result never describes a target other than the one shown.
+  for (const id of ['#mcp-url', '#mcp-auth']) $(id)?.addEventListener('input', clearPingResult);
 
   // Close on outside click
   document.addEventListener('click', (e) => {
@@ -6957,11 +7181,16 @@ let serverBuild = null;     // buildLabelModel(/api/version)
 async function bindTaxonomyFromServer() {
   const mod = await import('/lib/artefact-classify.mjs');
   let json = null;
+  state.taxonomyBindError = '';
   try { json = await loadTaxonomy(); }
-  catch (e) { console.warn(`[taxonomy] GET /api/taxonomy failed — classifying with the default families: ${e.message}`); }
+  catch (e) {
+    console.warn(`[taxonomy] GET /api/taxonomy failed — classifying with the default families: ${e.message}`);
+    state.taxonomyBindError = 'GET /api/taxonomy failed';
+  }
   try { bindTaxonomy(mod, json); }
   catch (e) {
     console.warn(`[taxonomy] the server's override does not compile — classifying with the default families: ${e.message}`);
+    state.taxonomyBindError = 'the server\'s override does not compile here';
     bindTaxonomy(mod, null);
   }
 }

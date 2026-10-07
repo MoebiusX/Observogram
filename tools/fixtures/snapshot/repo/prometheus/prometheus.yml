@@ -1,0 +1,10 @@
+# Synthetic (2026-10-07, tools/test-live-snapshot.mjs): one scrape job the
+# recorded targets answer (tools/fixtures/mcp/metrics_targets.json) holds up.
+global:
+  scrape_interval: 15s
+rule_files:
+  - rules/*.yml
+scrape_configs:
+  - job_name: payment-processor
+    static_configs:
+      - targets: ['payment-processor:3001']

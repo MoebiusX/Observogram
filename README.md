@@ -226,6 +226,21 @@ The drift drill shows:
 - live-only shadow signals
 - out-of-scope live inventory that belongs to the wider platform
 
+**Compare** (Diagnose → Compare) puts the two packs side by side. Its stat
+bar counts what is only in A, in both and only in B, and its **paired by**
+cell says how the pairs were formed. Under it, the **Pair by** switch chooses
+the key: **Behaviour** (the default — what each artefact does: a series, a
+product and signal, a contract handle), **Name** (the name or title) or **Id**
+(a stable id or uid, such as a Grafana dashboard uid; a family whose name is
+its id uses the name). Name and Id are worked out in your browser over the two
+packs already on screen — no new request — with the same vendorable
+`tools/lib/identity-modes.mjs` and `diff.mjs` the server runs; behaviour still
+decides whether a pair matches field for field, so a dashboard renamed under
+the same uid pairs by id and shows its title change as drift. An in-both
+card's badge says which key paired it (`Paired by id: dashboard uid
+"ord-1"`), and so does its detail drawer. Chains, the Assessment and every
+action keep pairing by behaviour.
+
 Traceability shows requirement chains from SLO to SLI, metrics, recording
 rules, exporters, scrape evidence, dashboards, alerts, and runbooks.
 
@@ -312,7 +327,11 @@ lands — or change it any time from the account menu, top right on every
 screen, which also has **sign out my other sessions**). From
 there it's a signed-in app: your packs, deploy audit and run history
 belong to you. (`OBSERVOGRAM_AUTH=off` skips login entirely
-for a throwaway open sandbox.)
+for a throwaway open sandbox.) To draft from a live MCP there, the home's
+**Register and connect** registers a loopback MCP as the org's endpoint,
+tests the connection and offers Draft or Snapshot; a remote MCP needs its origin listed first —
+`OBSERVOGRAM_MCP_ORIGINS=https://mcp.example.com npm run dev` — or a signed-in
+admin ([Fetch Live From MCP](#fetch-live-from-mcp)).
 
 ### Security Posture
 
@@ -510,8 +529,8 @@ the server registers, and each route's first handler is its guard.
 | Role | May |
 |---|---|
 | `viewer` | every read (`GET`) in the org |
-| `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys, the live refresh, RESET, and the org's services and environments ([Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)) |
-| `admin` | the org's name, members and MCP endpoints as well ([the identity API](#the-identity-api), [Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)), and the org's audit (`GET /api/audit`, [The Audit](#the-audit)) |
+| `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys, the live refresh, testing an MCP connection and live jobs against a registered endpoint ([Test An MCP Connection And Build A Live Pack](#test-an-mcp-connection-and-build-a-live-pack)), RESET, and the org's services and environments ([Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)) |
+| `admin` | the org's name, members and MCP endpoints as well ([the identity API](#the-identity-api), [Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)), a typed MCP URL in a ping, a live job, a draft, a live refresh, a deploy, a rollback or a journey's Pack B ([Fetch Live From MCP](#fetch-live-from-mcp); below admin, and without sign-in, only a registered endpoint), cancelling another member's live job, and the org's audit (`GET /api/audit`, [The Audit](#the-audit)) |
 | owner | a deployment-level flag, not an org role: an owner acts as `admin` in every org, plus users, orgs and the join role ([the identity API](#the-identity-api)) and the deployment's audit (`GET /api/audit?scope=all`) |
 
 The role is the membership **of the request's org** (`X-Observogram-Org`,
@@ -529,7 +548,8 @@ anything else (`member`, empty) → `operator`. Per posture:
   beyond loopback): the caller is `local`, an owner — every route, as
   before, but the identity API: on a loopback server it answers only a
   request sent straight to it, and beyond loopback it is closed (see
-  [The Identity API](#the-identity-api)).
+  [The Identity API](#the-identity-api)); and `local` never sends a typed MCP
+  URL — it fetches from registered endpoints ([Fetch Live From MCP](#fetch-live-from-mcp)).
 
 Every authorization refusal carries `denied` — `auth` (401: sign in),
 `csrf`, `org` (not a member of that org), `role` or `posture` — and a
@@ -789,7 +809,7 @@ org is never found (404, or 400 for `mcpEndpointId`).
 | `GET` | `/api/environments/:id` | viewer | — | `environment` and its `service` (`id`, `slug`, `name`, `tier`); `effectiveTier` is the environment's tier, else the service's |
 | `PATCH` | `/api/environments/:id` | operator | any of `name`, `tier`, `bindings`, `endpoints`, `mcpEndpointId` | `changed`; `"mcpEndpointId": null` unbinds |
 | `DELETE` | `/api/environments/:id` | operator | — | `deleted` |
-| `GET` | `/api/mcp-endpoints` | viewer | — | `endpoints`, by name: `id`, `name`, `origin`, `environments` (how many are checked through it), `createdAt`; `url` and `readTokenEnv` to an operator and above, `null` to a viewer |
+| `GET` | `/api/mcp-endpoints` | viewer | — | `endpoints`, by name: `id`, `name`, `origin`, `environments` (how many are checked through it), `createdAt`; `url` and `readTokenEnv` to an operator and above, `null` to a viewer; `policy`: what this reader may do — `typed` (send a typed `mcpUrl`) and `register` (register an endpoint), each `{ allowed, why, listed, origins }`, `why` the refusal's sentence, `listed`/`origins` the reader's own org's origin allowlist (`origins` `null`: any); `register.listedOnly`: only a loopback MCP or a listed origin may be registered, even without `readTokenEnv` (a list applies, or the server has no sign-in) |
 | `POST` | `/api/mcp-endpoints` | admin | `{ name, url, readTokenEnv? }` | an MCP endpoint record (201), the admin's own view with `url` and `readTokenEnv`; a name in use is 409 |
 | `PATCH` | `/api/mcp-endpoints/:id` | admin | any of `name`, `url`, `readTokenEnv` | `changed`; `"readTokenEnv": null` clears it; 404 `no MCP endpoint <id>` |
 | `DELETE` | `/api/mcp-endpoints/:id` | admin | — | `deleted` and `unbound`: the ids of the environments that were checked through it (they stay, with no MCP endpoint) |
@@ -831,7 +851,14 @@ it in every posture, so a cross-site form cannot make them (the studio
 sends it; with curl add -H 'X-Observogram-CSRF: 1')`), only a request sent
 straight to a loopback server without sign-in, and closed on an exposed
 server without sign-in (403 `posture`, as [the identity
-API](#the-identity-api) is). The bearer (`OBSERVOGRAM_API_TOKEN`) is an
+API](#the-identity-api) is). Without sign-in only a loopback MCP or an
+origin in the [origin allowlist](#fetch-live-from-mcp) may be registered, with
+or without `readTokenEnv` (400: `on a server without sign-in, only a loopback
+MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS may be registered — list
+<origin> there, or sign in as an admin …`): the quick start against a
+loopback MCP stays one step, and a remote demo MCP takes
+`OBSERVOGRAM_MCP_ORIGINS=<its origin>` or a first user
+(`npm run users -- add <login>`). The bearer (`OBSERVOGRAM_API_TOKEN`) is an
 operator: it manages services and environments and reads the endpoints
 with their URLs, and never changes an endpoint.
 
@@ -849,11 +876,13 @@ with their URLs, and never changes an endpoint.
   (a catalogue or example pack, a service whose rows carry no tier) is
   graded at its own tier, `from: 'pack'`.
 - **An endpoint picked by id.** `POST /api/refresh-live` and
-  `POST /api/draft-from-mcp` take `mcpEndpointId` in place of `mcpUrl`;
+  `POST /api/draft-from-mcp` take `mcpEndpointId` in place of `mcpUrl` (a
+  typed `mcpUrl` there is an admin's — [Fetch Live From MCP](#fetch-live-from-mcp));
   the server uses the record's URL and, when the request sends no
   `mcpAuth`, reads the read token from the record's `readTokenEnv` at
   request time. The deploy and rollback routes take `mcpEndpointId` for the
-  URL only: a write token stays the request's `mcpAuth`, never a record's.
+  URL only (a typed `mcpUrl` there is an admin's too): a write token stays
+  the request's `mcpAuth`, never a record's.
   Sending both `mcpUrl` and `mcpEndpointId` is 400 (`send mcpUrl or
   mcpEndpointId, not both`); see [Fetch Live From MCP](#fetch-live-from-mcp).
 - **The read-token variable.** `readTokenEnv` must be
@@ -923,11 +952,23 @@ with their URLs, and never changes an endpoint.
   of a credential in the URL or of another org's variable is shown as served.
   A viewer sees an endpoint's name and origin only. The MCP
   pickers — the refresh panel, the home's source card, the draft panel and
-  the deploy modal — list the org's endpoints first and keep a typed URL; a
-  chosen endpoint is sent as `mcpEndpointId` (never with `mcpUrl`), rollback
-  and verify follow it, and a write re-reads the endpoint before it sends: an
+  the deploy modal — list the org's endpoints first, and keep a typed URL
+  for a reader the server lets type one (an admin; `policy.typed` of
+  `GET /api/mcp-endpoints`): for everyone else — an operator, and every
+  caller without sign-in — they are list-only, no sentence offers typing a
+  URL, a hidden field's leftover is never sent, and an empty list names the
+  way in for that reader (an admin registers one in Settings → MCP
+  endpoints; the button when the server says this reader may register).
+  Without sign-in and with no endpoint, the home's Connect is **Register and
+  connect**: the typed URL is registered as the org's endpoint (named by its
+  host) and tested by its id, offered only for a loopback MCP or a listed
+  origin — any other is refused beside the button, nothing sent. A chosen
+  endpoint is sent as `mcpEndpointId` (never with `mcpUrl`), rollback and
+  verify follow it, and a write re-reads the endpoint before it sends: an
   endpoint moved or deleted since the list was drawn sends nothing and says
-  so. A deploy profile remembers its endpoint per org.
+  so. A deploy profile remembers its endpoint per org; a profile with a
+  typed URL, opened by a reader who may not type one, says so and sends the
+  list's endpoint.
 
 ### The Audit
 
@@ -992,7 +1033,9 @@ and the live refresh change a file of the org's, not a table, so their row
 is written after the file ([`server/audit-after.mjs`](server/audit-after.mjs)),
 in a transaction of its own. `deploys.jsonl` stays the deploy file of
 record, keyed by the `deployId` the row names: the row carries counts and
-the MCP **origin**, never the URL, an item's error or a tool name.
+the MCP **origin**, never the URL, an item's error or a tool name. The
+ping changes nothing of the org's; its one row — for a typed URL only — is
+written the same way, after the answer is known.
 
 | Route | Action | `targetId` | `detail` |
 |---|---|---|---|
@@ -1001,8 +1044,10 @@ the MCP **origin**, never the URL, an item's error or a tool name.
 | `POST /api/deploys/:deployId/rollback` | `deploy.rollback` | the rollback's own `deployId` | `{ rollbackOf, pack, env, dryRun, origin, mcpEndpoint, items, ok, failed, manual, tookMs }` |
 | `POST /api/deploys/:deployId/verify` | `deploy.verify` | the verified `deployId` | `{ outcome, alignment, attempts }` (`outcome` cut to 100 characters; the summary and transitions stay in the line) |
 | `POST /api/journeys/capture` | `journey.capture` | the journey name | `{ packA, packB, live, env, service, scopeMode }` — the two pack ids and whether Pack B was saved as a live `mcp:` source, never the paths or the MCP URL the file holds |
-| `POST /api/journeys/:name/run` | `journey.run` | the journey name | `{ startedAt, outcome, alignmentPct, gradeScore, gradePass, breaches, tookMs }` — **one row per attempt past the 404**: a run that fails from the studio leaves a row with `outcome: "error"`, or `"vantage-lost"` when a live source lost its vantage (the engine wrote a run record and may have notified), the four record fields `null`; never the error's message |
+| `POST /api/journeys/:name/run` | `journey.run` | the journey name | `{ startedAt, outcome, alignmentPct, gradeScore, gradePass, breaches, tookMs }` — **one row per attempt past the 404** (and past a refused Pack B MCP target, which writes none): a run that fails from the studio leaves a row with `outcome: "error"`, or `"vantage-lost"` when a live source lost its vantage (the engine wrote a run record and may have notified), the four record fields `null`; never the error's message |
 | `POST /api/refresh-live` | `live.refresh` | the MCP origin | `{ mcpEndpoint, refreshedAt, servicesDiscovered, toolsFailed }` (counts) |
+| `POST /api/mcp/ping` | `live.ping` | the MCP origin | `{ verdict, typed: true }` — only when the caller typed the URL (an admin's privilege); a ping by `mcpEndpointId` writes no row |
+| `POST /api/mcp/jobs` (and its `…/cancel`) | `live.fetch` | the MCP origin | `{ kind, outcome: done \| failed \| cancelled, typed, mcpEndpoint, jobId, packId, stages: { done, skipped, failed }, gaps: [stage ids] }` — one row when the job ends, whether or not it registered a pack (whose own rows come first) |
 
 When one of the two writes fails: the operation stands. A row the store
 refused (a blocked insert, a `detail` over 8192 characters) puts
@@ -1224,8 +1269,23 @@ written; the server refuses to start on a load failure — while network
 failures through it stay ordinary probe failures. Unset, nothing changes
 (`docs/MCP_INTEGRATION.md`, "Transport hook").
 
+**A typed MCP URL is an admin's.** Supplying the URL the server fetches is
+the privilege, not which endpoint it uses: a typed `mcpUrl` in
+`POST /api/draft-from-mcp`, `POST /api/refresh-live` and the deploy routes
+(`POST /api/packs/:id/deploy/:target`, `…/deploy-bulk`,
+`POST /api/deploys/:deployId/rollback`, which send the caller's write token)
+needs the admin role in the org (an owner included). An operator, the bearer token and every caller
+without sign-in — the open postures' `local`, even on loopback — fetch from the
+org's registered endpoints only (`mcpEndpointId`), and are told the way that
+works for them (403 `role` or `posture`: an admin registers the endpoint in
+Settings → MCP endpoints; in the token posture, sign-in is armed first with
+`npm run users -- add <login>`). A typed URL may not carry `user:password` (400:
+send the token as `mcpAuth`). `GET /api/mcp-endpoints` says what the reader may
+do (`policy`). An operator's CI deploy (the bearer is an operator) registers
+its target once and sends `mcpEndpointId`.
+
 The studio's `POST /api/refresh-live` and `POST /api/draft-from-mcp` take
-either `mcpUrl` (with an optional `mcpAuth`, as before) or `mcpEndpointId`:
+either `mcpUrl` (an admin's, with an optional `mcpAuth`) or `mcpEndpointId`:
 one of the org's named MCP endpoints (`GET /api/mcp-endpoints`; an admin
 registers them with `POST /api/mcp-endpoints`). With an id the server uses the
 record's URL, and when the request sends no `mcpAuth` it reads the endpoint's
@@ -1240,6 +1300,31 @@ anything is fetched. The response says which record was used (`mcpEndpoint:
 { id, name }`, or `null` for a URL); the live pack and the draft keep the safe
 URL and never the token. The deploy and rollback routes take `mcpEndpointId`
 for the URL only — a write token stays the request's `mcpAuth`.
+
+**The MCP origin allowlist.** Every MCP target the server reaches — a typed
+`mcpUrl`, a registered endpoint at each use, and an endpoint when it is
+registered or its `url` or `readTokenEnv` changes — meets an origin rule,
+whatever the caller's role. `OBSERVOGRAM_MCP_ORIGINS` lists origins for every
+org and `OBSERVOGRAM_ORG_<ORG>_MCP_ORIGINS` for one org (read only by the org
+that owns the name, the same longest-prefix rule); an org's list is the union
+of the two, so a deployment that keeps tenants apart leaves the global list
+empty. Entries are comma-separated origins — `https://mcp.example.com`,
+`http://mcp.lab:3001`: no path, query, fragment, credentials or `*` in a host;
+a rejected entry is named once on stderr and ignored, and a list with no
+accepted entry allows nothing. A lone `*` allows every origin. Loopback
+(`localhost`, `127.0.0.0/8`, `[::1]`) always passes (`OBSERVOGRAM_ALLOW_LOCAL_MCP=0`
+still closes it). With a list set, every other origin must be in it. **With
+none set, no credential leaves for an origin other than loopback** — not an
+endpoint's server-held token, not the caller's `mcpAuth` (every deploy sends
+one), not a credential in a typed URL, and nothing at all while a transport
+hook is loaded, since the hook may attach its own; a typed URL without a
+credential reaches only an origin one of the org's endpoints uses, and an
+endpoint without `readTokenEnv` may be registered by a signed-in admin and used
+anywhere (without sign-in, only a loopback or listed origin may be registered
+at all). A refusal
+is 403 `origin` at a fetch (400 at registration) and names the origin only and
+the variable to add it to. An install that sends a credential to a remote MCP
+sets `OBSERVOGRAM_MCP_ORIGINS` before upgrading.
 When the MCP exposes `metrics_query`, the fetch also samples the observability
 stack's own self-metrics (scrape, ruler, notify, tsdb, collector, dashboards,
 synthetic, logs, traces) as point-in-time signals — never verdicts, stamps or
@@ -1251,6 +1336,64 @@ pinned versions in Docker (`docker/stack.compose.yaml`; skips without Docker).
 
 See [`docs/MCP_INTEGRATION.md`](docs/MCP_INTEGRATION.md) for the live fetch and
 write-back contract.
+
+### Test An MCP Connection And Build A Live Pack
+
+The studio's **Live MCP connection** panel and **new from live** panel do
+this in three steps — test the connection, choose **Draft** (a scaffold from
+MCP discovery) or **Snapshot** (an inventory of what is actually deployed),
+then follow the gate log — and the same routes serve a script (rebadge batch
+3; docs/DOWNSTREAM.md §15 has every shape). Without sign-in the live MCP API
+answers only a request sent straight to a loopback address, and every POST
+takes `X-Observogram-CSRF: 1` (the bearer is exempt). Below, `$H` is your
+auth (`-H "Authorization: Bearer $OBSERVOGRAM_API_TOKEN"` or a session
+cookie) and endpoint 3 is one of the org's registered MCP endpoints:
+
+```bash
+# 1. Test the connection — writes nothing
+curl -s -X POST http://127.0.0.1:8000/api/mcp/ping $H \
+  -H 'Content-Type: application/json' -H 'X-Observogram-CSRF: 1' \
+  -d '{"mcpEndpointId":3}'
+# → { "verdict": "connected", "tools": { "capabilities": { … } }, "read": { … }, "checked": [ … ], "notChecked": [ … ] }
+
+# 2. Start a snapshot (or "kind":"draft") — 202 at once
+curl -s -X POST http://127.0.0.1:8000/api/mcp/jobs $H \
+  -H 'Content-Type: application/json' -H 'X-Observogram-CSRF: 1' \
+  -d '{"kind":"snapshot","mcpEndpointId":3,"scope":{"metricPrefixes":["payments_"]},"label":"Payments prod"}'
+# → { "ok": true, "job": { "id": "<id>", "state": "running", … }, "poll": "/api/mcp/jobs/<id>" }
+
+# 3. Poll the gate log; send back "next" as since
+curl -s "http://127.0.0.1:8000/api/mcp/jobs/<id>?since=0" $H
+# → { "job": { "state": "running" }, "stages": [ { "seq": 1, "stage": "connect", "state": "done", … } ], "next": 1 }
+#   … until job.state is done (result.registered.id is the new pack), failed or cancelled
+
+# Stop it
+curl -s -X POST http://127.0.0.1:8000/api/mcp/jobs/<id>/cancel $H -H 'X-Observogram-CSRF: 1'
+```
+
+The ping runs `initialize`, the whole `tools/list` and one cheap read within
+10 s and says what it checked and what it did not. A job is its starter's
+(another member's or org's, an expired or a lost one is a 404 `{ gone: true }`);
+one runs per org, four per server; jobs live in the server's memory, so a
+restart loses them (a pack already registered stays). A snapshot is labelled
+`snapshot` in the pickers and the catalogue (`live: 'snapshot'`), a draft
+`scaffold`; Compare's pack header says which. A typed `mcpUrl` in place of
+`mcpEndpointId` is an admin's, under the origin allowlist ([Fetch Live From
+MCP](#fetch-live-from-mcp)).
+
+**The snapshot scope** (inert when unset; a request's `scope` replaces it
+whole; the draft and the refresh never read it):
+
+| Variable | Meaning |
+|---|---|
+| `OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES` | comma-separated metric-name prefixes a snapshot keeps (`payments_,checkout_`) |
+| `OBSERVOGRAM_SNAPSHOT_FOLDER_UIDS` | comma-separated Grafana folder uids for dashboards and, when every rule names one, alert rules |
+| `OBSERVOGRAM_SNAPSHOT_DATASOURCE_UID` | a datasource uid — named in the gate log as not applied while no advertised tool takes one |
+| `OBSERVOGRAM_ORG_<ORG>_SNAPSHOT_METRIC_PREFIXES`, `…_FOLDER_UIDS`, `…_DATASOURCE_UID` | the same for one org (read only by the org that owns the name); each field overrides the deployment's |
+| `OBSERVOGRAM_MCP_ORIGINS`, `OBSERVOGRAM_ORG_<ORG>_MCP_ORIGINS` | the MCP origin allowlist, unioned ([Fetch Live From MCP](#fetch-live-from-mcp)) |
+
+A variable that does not parse is a 400 naming it when a snapshot starts, and
+`GET /api/mcp/jobs` lists it under `scope.errors`.
 
 ### Validate Or Upload A Pack
 
@@ -1738,7 +1881,7 @@ manifest, Compile (the catalogue, every artefact, every target) and **Export**
 server; `GET /api/packs/:id/verdicts` answers the empty document — a
 bundled pack is never registered, so that IS the server's answer). Everything
 the server alone can do — Scan a repo, Draft from MCP, Refresh from MCP,
-uploads, Compare, Deploy, Journeys, Build, recording a Verdict, Waivers (they
+Testing an MCP connection, Building a pack from a live MCP server, uploads, Compare, Deploy, Journeys, Build, recording a Verdict, Waivers (they
 live on a service record, which a bundled pack has none of), the Audit report
 (its goes-blind section needs the PromQL parser the bundle cannot inline),
 Services (the records behind the home's cards and the service page — a bundle
@@ -1894,6 +2037,21 @@ all, the run still writes an `outcome: vantage-lost` record before exiting
 same construct as the studio (requirement-chain integrity rides on the
 diff), so both report one score for one comparison. Secrets never live in
 journey files — MCP auth is referenced by env-var name.
+
+**Through the server, a live Pack B is a registered endpoint's.** A journey's
+`packB.mcp.url` is a URL the server would fetch, so the server treats it as a
+typed MCP URL ([Fetch Live From MCP](#fetch-live-from-mcp)). `POST
+/api/journeys/capture` saves a drafted Pack B as `mcp: { url, endpointId }` —
+the org's registered endpoint whose URL the draft's `mcp.url` is; with no such
+endpoint an admin's capture keeps the URL (it meets the typed-URL and origin
+rules then) and anyone else's saves Pack B as a file. `POST
+/api/journeys/:name/run` fetches through `endpointId` (its token from the
+endpoint's `readTokenEnv`; a def's `authEnv` is never read by the server) and
+takes a raw `url` from an admin only: an operator running a journey captured
+with a raw URL is refused 403 before anything runs (`this journey's Pack B
+fetches <origin>, an MCP URL only an admin may send — an admin re-captures it
+…`). The CLI reads `url` and `authEnv` as before and refuses a def whose Pack B
+names only an `endpointId` (the server resolves it).
 
 Run history is bounded so a journey on a cron cadence never fills the disk:
 after every run the journey's `runs/` directory is pruned to the newest
@@ -2458,8 +2616,13 @@ record is where the server will send the org's read token: its changes take
 the identity API's defences — the `X-Observogram-CSRF: 1` header in every
 posture, closed on an exposed server without sign-in); `GET /api/audit` is
 `admin` (the org's rows; an owner reads the deployment's; closed in the
-open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
-`viewer` and every other route `operator`.
+open, exposed posture — see [The Audit](#the-audit)); every `/api/mcp/…`
+route is `operator` (the live MCP API: a server-side request to an MCP
+target, so without sign-in it answers only a request sent straight to a
+loopback address, it is closed on an exposed server without sign-in, and
+every request takes the `X-Observogram-CSRF: 1` header but the bearer
+token's; a live job's gate log is its starter's — `POST /api/draft-from-mcp`
+and `POST /api/refresh-live` take the same posture); every other `GET` is `viewer` and every other route `operator`.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -2489,19 +2652,24 @@ open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
 | `POST` | `/api/library/register` | `{ canonical, source? }` → the upload registry as `/api/validate` registers (`registered { id, source }`, `adapted`, `conformance`, `summary`; the source defaults to `library:<entries>@<tier>` for a library-built pack, `metadata.name` otherwise) — VERIFY's "Open pack in Discover" |
 | `POST` | `/api/crawl` | Draft a pack from uploaded repo files |
 | `POST` | `/api/crawl-github` | Draft a pack from a GitHub URL |
-| `POST` | `/api/draft-from-mcp` | Draft a live pack from an MCP endpoint: `mcpUrl` (and `mcpAuth`), or `mcpEndpointId` — one of the org's MCP endpoint records, its read token from the variable the record names when the request sends none; the answer's `mcpEndpoint` says which |
-| `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts (`mcpUrl` or `mcpEndpointId` for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.bulk` |
-| `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target (`mcpUrl` or `mcpEndpointId` for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.run` |
+| `POST` | `/api/draft-from-mcp` | Draft a live pack from an MCP endpoint: `mcpEndpointId` — one of the org's MCP endpoint records, its read token from the variable the record names when the request sends none — or a typed `mcpUrl` (and `mcpAuth`), which needs the admin role; the answer's `mcpEndpoint` says which. The live MCP API's posture: without sign-in only a direct loopback request, closed when exposed, the CSRF header in every posture |
+| `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts (`mcpEndpointId`, or a typed `mcpUrl`: the admin role, for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.bulk` |
+| `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target (`mcpEndpointId`, or a typed `mcpUrl`: the admin role, for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.run` |
 | `GET` | `/api/deploys?pack=&limit=` | The org's deploy records from `deploys.jsonl`, newest first, the latest verify merged in; `actor` is the deployer's login (an OIDC deployer as `<issuerKey>#<sub>`), the bearer's label or `local` |
 | `POST` | `/api/deploys/:deployId/verify` | Record a post-deploy verification (`outcome`, `alignment`, `attempts`, `summary`, …) against a deploy; an audit row: `deploy.verify` |
-| `POST` | `/api/deploys/:deployId/rollback` | Roll a deploy back from its snapshot (`mcpUrl` or `mcpEndpointId` for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.rollback` |
+| `POST` | `/api/deploys/:deployId/rollback` | Roll a deploy back from its snapshot (`mcpEndpointId`, or a typed `mcpUrl`: the admin role, for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.rollback` |
 | `DELETE` | `/api/uploads` | Clear uploaded/crawled/drafted packs |
 | `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`, `inventory` `{ status, reason, environment, kinds }`) |
 | `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series) |
 | `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule) |
-| `POST` | `/api/journeys/:name/run` | Run a saved journey now; an audit row: `journey.run`, on a failed run too |
-| `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file; an audit row: `journey.capture` |
-| `POST` | `/api/refresh-live` | Fetch the org's live pack from an MCP endpoint (`mcpUrl` or `mcpEndpointId`); an audit row: `live.refresh` |
+| `POST` | `/api/journeys/:name/run` | Run a saved journey now (a live Pack B through its `endpointId`, or a raw `url`: the admin role); an audit row: `journey.run`, on a failed run too |
+| `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file (a live Pack B as the org's registered endpoint, `mcp: { url, endpointId }`; an unregistered URL kept for an admin, else a file); an audit row: `journey.capture` |
+| `POST` | `/api/refresh-live` | Fetch the org's live pack from an MCP endpoint (`mcpEndpointId`, or a typed `mcpUrl`: the admin role); an audit row: `live.refresh`. The live MCP API's posture, as the draft's |
+| `POST` | `/api/mcp/ping` | Test an MCP connection without building a pack (rebadge batch 3): `{ mcpEndpointId }` (the endpoint's read token rides as a draft's would; `mcpAuth` overrides it) or a typed `mcpUrl` (the admin role). `initialize`, the whole `tools/list` and one cheap read, within 10 s; answers `{ ok, verdict, origin, mcpEndpoint, reachable, auth: { outcome, sent }, tools: { count, capabilities, unmatched, complete }, read, timings, sentence, checked, notChecked }` — `verdict` one of `connected`, `auth-refused`, `unreachable`, `timeout`, `not-mcp`; 200 whenever the ping ran, 400 / 403 for the target, 502 a transport hook fault. Writes no live file and no pack; an audit row `live.ping` only for a typed URL |
+| `GET` | `/api/mcp/jobs` | The live jobs' context in this org (rebadge batch 3): `{ ok, scope: { defaults: { metricPrefixes, folderUids, datasourceUid }, from: org \| deployment \| null, errors }, running, lastTook: { snapshot, draft } }` — the snapshot scope the server is configured with (`OBSERVOGRAM_SNAPSHOT_*`, or the org's `OBSERVOGRAM_ORG_<ORG>_SNAPSHOT_*`), your own running job here (`null` otherwise), how long the org's last finished snapshot and draft took (ms) |
+| `POST` | `/api/mcp/jobs` | Start a live job: `{ kind: snapshot \| draft, mcpEndpointId \| mcpUrl, mcpAuth?, scope?, packName?, label? }` — the target as for a draft (a typed `mcpUrl` is the admin role's); `scope` (`metricPrefixes`, `folderUids`, `datasourceUid`) is a snapshot's and replaces the configured one. Answers **202** `{ ok, job, poll }` with `Location` at once; the job registers the pack when it ends (`live: 'snapshot'` or `'scaffold'` in `GET /api/packs`). One running job per org, four in the server (409, naming who started it); a label held by a pack of the other live kind is a 409; in memory — a restart loses running and finished jobs. Audit rows: the pack's when it registers, and `live.fetch` at every end |
+| `GET` | `/api/mcp/jobs/:jobId?since=` | Your job's gate log: `{ ok, job, stages, next, result?, error? }` — the stage records after the cursor `since` (send `next` back), each `{ seq, stage, label, state, counts, startedAt, finishedAt, message, gap }`; at the end `result` (`registered`, `validation`, `counts`, `gaps`, `tookMs`, a draft's `draft` summary) or `error`. Another member's job, another org's, one that expired (15 minutes after it ended) or that a restart lost: 404 `{ gone: true }` |
+| `POST` | `/api/mcp/jobs/:jobId/cancel` | Stop a running job (its starter, or an admin of the org — who gets `{ id, state }` and never the gate log): it ends `cancelled`, nothing registered; 409 once it has ended |
 | `GET` | `/api/services` | The org's service records, by slug, each with its environments (their MCP endpoint as `{ id, name, origin }`) and the packs linked to it (`id`, `label`, `source`, `role`) |
 | `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack) |
 | `GET` | `/api/services/:id` | One service record with its environments and packs |
@@ -2517,7 +2685,7 @@ open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
 | `DELETE` | `/api/packs/:id/verdicts/:artefact` | Clears it (the artefact is unreviewed again) → `{ ok, cleared }`; an audit row: `verdict.clear` |
 | `POST` | `/api/services/:id/waivers` | Waives a conformance finding on the service (201): `{ ruleId, artefactId?, reason, expiresAt }` → `{ ok, waiver }` — `ruleId` a rubric clause (`GET /api/maturity-rubric`), `artefactId` a canonical symbol (`slos.<id>`, `slis.<id>`) of one of the four per-item clauses or omitted for the whole clause, `expiresAt` after now and at most 366 days ahead; the `author` is the caller; one active waiver per `(ruleId, artefactId)` (409 names it); an audit row: `waiver.create` |
 | `POST` | `/api/waivers/:id/revoke` | Revokes it (`{ reason? }` → `{ ok, waiver }`, state `revoked`; the row stays as history); a second revoke is 409; an audit row: `waiver.revoke` |
-| `GET` | `/api/mcp-endpoints` | The org's MCP endpoint records, by name: `id`, `name`, `origin`, how many environments are checked through each; `url` and `readTokenEnv` to operators and above, `null` to a viewer |
+| `GET` | `/api/mcp-endpoints` | The org's MCP endpoint records, by name: `id`, `name`, `origin`, how many environments are checked through each; `url` and `readTokenEnv` to operators and above, `null` to a viewer; `policy` says whether this reader may send a typed MCP URL or register an endpoint, and the org's origin allowlist |
 | `POST` | `/api/mcp-endpoints` | An MCP endpoint record (201): `{ name, url, readTokenEnv? }` — the URL carries no credential (a query parameter named like one is refused by name), `readTokenEnv` names a variable of this org, `OBSERVOGRAM_ORG_<ORG>_<NAME>` |
 | `PATCH` | `/api/mcp-endpoints/:id` | Changes `name`, `url`, `readTokenEnv` (`null` clears it; `changed` lists what differed) |
 | `DELETE` | `/api/mcp-endpoints/:id` | Removes an MCP endpoint record; the environments checked through it stay, unbound (`unbound` lists their ids) |
@@ -2550,9 +2718,11 @@ server/
   boot.mjs                 The boot order: opens the store, imports users.json / orgs.json once, the seed and the fail-closed checks
   identity-admin.mjs       The user and org rules behind npm run users / npm run orgs
   service-admin.mjs        The service, environment and MCP endpoint rules behind /api/services, /api/environments and /api/mcp-endpoints; the tier rule; an MCP target picked by id
+  mcp-target-policy.mjs    Who may type an MCP URL (TYPED_MCP_URL_ROLE), the MCP origin allowlist, the redaction of a resolved credential (rebadge batch 3)
+  live-jobs.mjs            The live MCP jobs in memory: start, the gate log, cancel, the bounds, the configured snapshot scope (rebadge batch 3)
   verdict-admin.mjs        The verdict rules behind /api/packs/:id/verdicts (GAP batch 2): the artefact index, the views, the carry on a label re-registration
   waiver-admin.mjs         The waiver rules behind /api/services/:id/waivers and /api/waivers/:id/revoke (GAP batch 2): the body, the views, the conformance report's overlay
-  routes/                  The identity API (identity.mjs), the services API (services.mjs), the verdicts API (verdicts.mjs), the waivers API (waivers.mjs), the audit report and placeholders (audit-report.mjs), the deploy routes, and the handler helpers they share (util.mjs)
+  routes/                  The identity API (identity.mjs), the services API (services.mjs), the verdicts API (verdicts.mjs), the waivers API (waivers.mjs), the audit report and placeholders (audit-report.mjs), the live MCP API — the ping and the live jobs (live.mjs), the deploy routes, and the handler helpers they share (util.mjs)
   store/                   The embedded store (docs/STORE_PLAN.md): db.mjs (the one node:sqlite door), migrations, repositories, the legacy import and import --replace, backup/restore, ops.mjs (export, the replace request, rekey-issuer, purge-org)
   fixtures/                What the suites share: serve-child.mjs (a hermetic child server, the STRIP list), platform.mjs (isWin32, the reasoned win32 skips), pre-store-build.mjs, route-inventory.mjs, store-050-guard.mjs
   test-smoke.mjs           End-to-end route smoke tests
@@ -2560,6 +2730,8 @@ server/
 studio/
   app.mjs                  Browser app shell and three-step workflow
   compare-view.mjs         Assessment (diagnostic grade), Compare, drift, traceability
+  compare-identity.mjs     Compare's Pair by switch: behaviour (the server's diff), name or id re-keyed in the browser with /lib/identity-modes.mjs and /lib/diff.mjs
+  live-model.mjs           The live MCP connection's pure models: the ping's result, the live panel's steps, plan, gate log and result (live-api.mjs loads, live-view.mjs draws)
   compile-view.mjs         Remediate, compile catalog, deploy surfaces
   remediation-flow-view.mjs  The response path (GAP batch 2): the engine loaded at call time, the view model, the panel Diagnose and Remediate share
   layers-view.mjs          Discover Observogram and artifact cards
@@ -2601,7 +2773,9 @@ tools/
     compile.mjs            packc compiler
     conformance.mjs        Maturity rubric
     remediation-flow.mjs   The response path: a remediation's trigger resolved to its alerts, states from the comparison, next steps (vendorable)
-    diff.mjs               Structural pack diff
+    diff.mjs               Structural pack diff (an identity mode or key function; a snapshot's scope parked as not checked)
+    identity-modes.mjs     Comparison identity modes: behaviour (identityKeyOf), name and id keys, pairingOf (vendorable)
+    live-fetch.mjs         The live fetch's contract: the stage ids, the plan, the snapshot scope and its annotations (zero-import, vendorable)
     journey.mjs            Journey definitions, runner, gate, run history (node-only)
     legacy.mjs             Layered-JSON upconvert and the merge-safe re-run (mergeUpconvert); imports pack-conformance.mjs
     library.mjs            The BUILD journey engine: entries, tier scaffold, instantiation, todos, provenance (browser-safe)
@@ -2659,6 +2833,7 @@ deploy/k8s/
 - [`docs/VENDORING.md`](docs/VENDORING.md) - vendoring the verdict/diff engines into a downstream studio, and how to stay current
 - [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) - vendoring the pure libraries by manifest (`VENDOR-MANIFEST.json`): snapshot → verify hashes → smoke → bump
 - [`docs/UI_CONVENTIONS.md`](docs/UI_CONVENTIONS.md) - studio view-module conventions: the host seam, loader/renderer split, render signatures, CSS zones
+- [`docs/DELIVERY-REBADGE-BATCH3.md`](docs/DELIVERY-REBADGE-BATCH3.md) - delivery report for rebadge batch 3 (live-fetch UX: a caller-supplied MCP URL is a privilege, the ping, the true snapshot and live jobs, comparison identity modes): what shipped per item, the measured test totals, what is deferred by name, what a plugin bridge still does
 - [`docs/DELIVERY-GAP-BATCH2.md`](docs/DELIVERY-GAP-BATCH2.md) - delivery report for rebadge batch 2, PR 2 (B3, GAP batch 2: verdicts, waivers, diagnose → remediate flow, glossary widgets, service audit report): what shipped per feature, the measured test totals, what is deferred by name and why
 - [`docs/DELIVERY-REBADGE-BATCH2.md`](docs/DELIVERY-REBADGE-BATCH2.md) - delivery report for rebadge batch 2, PR 1 (B1, B2, B4): what shipped per item, the measured test totals, what is deferred and why
 

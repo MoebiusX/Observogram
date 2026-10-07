@@ -46,6 +46,11 @@ for (const k of STRIP) {
   delete process.env[`TOMOGRAPH_${k}`];
 }
 for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
+// The remote origins this suite registers (several with readTokenEnv) are
+// listed for the origin rule (server/mcp-target-policy.mjs); its own cases
+// unset or change the list, each restoring it.
+const SUITE_ORIGINS = 'https://mcp.acme.test,https://mcp2.acme.test,http://mcp-staging.acme.test:8080,https://mcp.bravo.test';
+process.env.OBSERVOGRAM_MCP_ORIGINS = SUITE_ORIGINS;
 
 const { test, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
@@ -555,6 +560,26 @@ test('GET /api/mcp-endpoints by rank: the url and the variable to an operator an
     const { json } = await ok(K, who, '/api/mcp-endpoints');
     assert.deepEqual(json.endpoints.map((e) => [e.name, e.url, e.readTokenEnv]), [['prod-mcp', MCP_URL, ACME_TOKEN], ['staging-mcp', 'http://mcp-staging.acme.test:8080/mcp', null]], `${who}: the url and the variable`);
   }
+  // `policy`: what each reader may do with a target — a typed URL and a
+  // registration are an admin's (olive is an owner); the reader's own org's list.
+  const LISTED = { listed: true, origins: SUITE_ORIGINS.split(',').sort() };
+  const policyOf = async (who) => (await ok(K, who, '/api/mcp-endpoints')).json.policy;
+  for (const who of ['ada', 'olive']) {
+    assert.deepEqual(await policyOf(who), { typed: { allowed: true, why: null, ...LISTED }, register: { allowed: true, why: null, ...LISTED, listedOnly: true } }, `${who}: types and registers (a list applies: listed origins only)`);
+  }
+  assert.deepEqual(await policyOf('oscar'), {
+    typed: { allowed: false, why: "a typed MCP URL needs the admin role in org 'acme' (you are operator) — choose one of the org's registered MCP endpoints (mcpEndpointId; GET /api/mcp-endpoints lists them), or ask an admin of acme to register this one in Settings → MCP endpoints", ...LISTED },
+    register: { allowed: false, why: "registering an MCP endpoint needs the admin role in org 'acme' (you are operator) — ask an admin of acme", ...LISTED, listedOnly: true },
+  }, 'oscar: the list only');
+  const veraPolicy = await policyOf('vera');
+  assert.deepEqual([veraPolicy.typed.allowed, veraPolicy.register.allowed, veraPolicy.register.why], [false, false, "registering an MCP endpoint needs the admin role in org 'acme' (you are viewer) — ask an admin of acme"]);
+  process.env.OBSERVOGRAM_ORG_BRAVO_MCP_ORIGINS = 'https://bravo-only.test';
+  try {
+    assert.deepEqual((await policyOf('ada')).typed.origins, LISTED.origins, "acme's policy never shows bravo's list");
+    assert.ok((await policyOf('bob')).typed.origins.includes('https://bravo-only.test'), "bravo's shows its own");
+  } finally {
+    delete process.env.OBSERVOGRAM_ORG_BRAVO_MCP_ORIGINS;
+  }
   // bob, bravo's admin: his org's list; acme's ids are not his to change.
   assert.deepEqual((await ok(K, 'bob', '/api/mcp-endpoints')).json.endpoints, []);
   const bravo = await ok('POST /api/mcp-endpoints', 'bob', '/api/mcp-endpoints', { name: 'bravo-mcp', url: 'https://mcp.bravo.test/mcp', readTokenEnv: 'OBSERVOGRAM_ORG_BRAVO_TOKEN' }, 201);
@@ -596,6 +621,34 @@ test('PATCH /api/mcp-endpoints/:id: name, url, readTokenEnv (null clears) with `
   // The same name as its own is no clash.
   const own = await ok(K, 'ada', P, { name: 'prod-mcp' });
   assert.deepEqual([own.json.changed, own.rows], [[], []]);
+});
+
+test('the MCP origin rule at registration (server/mcp-target-policy.mjs): no list set, readTokenEnv names a credential that goes to loopback only — POST and a PATCH of url or readTokenEnv refused (400, no row); a listed origin and a loopback one are 201; without readTokenEnv anywhere', async () => {
+  const P = '/api/mcp-endpoints';
+  const text = (origin) => `${origin} is not a listed MCP origin, and the server sends a credential (the endpoint's variable ${ACME_TOKEN}) only to a listed origin or this machine — the server's operator adds ${origin} to OBSERVOGRAM_MCP_ORIGINS (or OBSERVOGRAM_ORG_ACME_MCP_ORIGINS), or register it without readTokenEnv`;
+  const made = [];
+  delete process.env.OBSERVOGRAM_MCP_ORIGINS;
+  try {
+    await refused('POST /api/mcp-endpoints', 'ada', P, { name: 'far', url: 'https://mcp.far.test/mcp/s/sk-path-secret?tier=x', readTokenEnv: ACME_TOKEN }, 400, text('https://mcp.far.test'));
+    const loop = await ok('POST /api/mcp-endpoints', 'ada', P, { name: 'loop', url: 'http://127.0.0.1:9/mcp', readTokenEnv: ACME_TOKEN }, 201);
+    made.push(loop.json.endpoint.id);
+    const plain = await ok('POST /api/mcp-endpoints', 'ada', P, { name: 'far-plain', url: 'https://mcp.far.test/mcp' }, 201);
+    made.push(plain.json.endpoint.id);
+    await refused('PATCH /api/mcp-endpoints/:id', 'ada', `${P}/${plain.json.endpoint.id}`, { readTokenEnv: ACME_TOKEN }, 400, text('https://mcp.far.test'));
+    await refused('PATCH /api/mcp-endpoints/:id', 'ada', `${P}/${loop.json.endpoint.id}`, { url: 'https://mcp.far.test/v2' }, 400, text('https://mcp.far.test'));
+    process.env.OBSERVOGRAM_ORG_ACME_MCP_ORIGINS = 'https://mcp.far.test';
+    try {
+      const listed = await ok('PATCH /api/mcp-endpoints/:id', 'ada', `${P}/${plain.json.endpoint.id}`, { readTokenEnv: ACME_TOKEN });
+      assert.deepEqual(listed.json.changed, ['readTokenEnv'], "listed in the org's own variable");
+      const far = await ok('POST /api/mcp-endpoints', 'ada', P, { name: 'far', url: 'https://mcp.far.test/mcp', readTokenEnv: ACME_TOKEN }, 201);
+      made.push(far.json.endpoint.id);
+    } finally {
+      delete process.env.OBSERVOGRAM_ORG_ACME_MCP_ORIGINS;
+    }
+  } finally {
+    process.env.OBSERVOGRAM_MCP_ORIGINS = SUITE_ORIGINS;
+    for (const id of made) await call('ada', 'DELETE', `${P}/${id}`);
+  }
 });
 
 test('an environment bound to an endpoint: PATCH /api/environments/:id { mcpEndpointId } with its row; the view says { id, name, origin } — a viewer reads no url; the endpoint counts it', async () => {
@@ -708,6 +761,46 @@ test('POST /api/refresh-live { mcpEndpointId }: both fields, neither, the id sha
   await ok('DELETE /api/mcp-endpoints/:id', 'ada', `/api/mcp-endpoints/${loopId}`);
   await ok('DELETE /api/mcp-endpoints/:id', 'ada', `/api/mcp-endpoints/${euId}`);
   assert.deepEqual((await ok('GET /api/mcp-endpoints', 'vera', '/api/mcp-endpoints')).json.endpoints.map((e) => e.name), ['prod-mcp', 'staging-mcp']);
+});
+
+// An MCP that repeats the request's Authorization header in its 401 body
+// (server/fixtures/fake-mcp.mjs, echo 'http'): the credential the route
+// resolved — the endpoint's variable or the caller's mcpAuth — must not
+// travel back. The 502 bodies, the server's stderr and the rows hold
+// <redacted>, never the value.
+test('an MCP echoing the Authorization header: the draft, refresh and deploy 502 bodies, stderr and the rows hold <redacted>, never the server-held variable\'s value or a sent mcpAuth', async () => {
+  const { startFakeMcp } = await import('./fixtures/fake-mcp.mjs');
+  const echo = await startFakeMcp([], null, { echo: 'http' });
+  const reg = await ok('POST /api/mcp-endpoints', 'ada', '/api/mcp-endpoints', { name: 'echo-mcp', url: echo.url, readTokenEnv: ACME_TOKEN }, 201);
+  const echoId = reg.json.endpoint.id;
+  const SECRETS = ['echo-env-secret-value', 'echo-sent-secret-value', 'echo-write-secret-value'];
+  const clean = (text) => !SECRETS.some((v) => text.includes(v));
+  process.env[ACME_TOKEN] = SECRETS[0];
+  try {
+    const cases = [
+      ['POST /api/draft-from-mcp', '/api/draft-from-mcp', { mcpEndpointId: echoId }, SECRETS[0]],
+      ['POST /api/refresh-live', '/api/refresh-live', { mcpEndpointId: echoId }, SECRETS[0]],
+      ['POST /api/draft-from-mcp', '/api/draft-from-mcp', { mcpEndpointId: echoId, mcpAuth: SECRETS[1] }, SECRETS[1]],
+      ['POST /api/refresh-live', '/api/refresh-live', { mcpEndpointId: echoId, mcpAuth: SECRETS[1] }, SECRETS[1]],
+      ['POST /api/packs/:id/deploy/:target', '/api/packs/payment-service/deploy/grafana-dashboard', { mcpEndpointId: echoId, mcpAuth: SECRETS[2], dryRun: true }, SECRETS[2]],
+    ];
+    for (const [key, path, body, sent] of cases) {
+      const before = echo.authHeaders.length;
+      const seq = seqNow();
+      const { result, output } = await logged(() => call('oscar', 'POST', path, body));
+      assert.equal(result.status, 502, `${key}: the MCP's 401 is a 502: ${result.text.slice(0, 200)}`);
+      assert.equal(echo.authHeaders[before], `Bearer ${sent}`, `${key}: the credential reached the MCP, which echoed it`);
+      assert.match(result.json.error, /MCP HTTP 401 on [a-z/]+: unauthorized — the request said Authorization: Bearer <redacted>/, `${key}: the 502 body says what came back, redacted`);
+      assert.ok(clean(result.text), `${key}: no credential in the 502 body: ${result.text.slice(0, 300)}`);
+      assert.ok(output.includes('Bearer <redacted>'), `${key}: the error line was logged: ${JSON.stringify(output)}`);
+      assert.ok(clean(output), `${key}: no credential in a log line: ${JSON.stringify(output)}`);
+      assert.ok(clean(JSON.stringify(rowsAfter(seq))), `${key}: no credential in a row`);
+    }
+  } finally {
+    delete process.env[ACME_TOKEN];
+    await echo.close();
+    await ok('DELETE /api/mcp-endpoints/:id', 'ada', `/api/mcp-endpoints/${echoId}`);
+  }
 });
 
 test('DELETE /api/mcp-endpoints/:id: the view as it was, the environments it unbinds, one row { origin, unbound }; the environment reads mcpEndpoint null; gone afterwards; the id rule; the guard', async () => {
@@ -1176,6 +1269,145 @@ test('another org reads none of it: bob (bravo) lists no service and every acme 
   await refused('GET /api/environments/:id', 'bob', `/api/environments/${ids.prod}`, 404, `no environment ${ids.prod}`);
   await refused('PATCH /api/services/:id', 'bob', `/api/services/${ids.checkout}`, { tier: 'tier-1' }, 404, `no service ${ids.checkout}`);
   await refused('DELETE /api/services/:id', 'bob', `/api/services/${ids.checkout}`, 404, `no service ${ids.checkout}`);
+});
+
+// A typed MCP URL is an admin's (R4, server/mcp-target-policy.mjs): oscar
+// is refused before any check of the URL itself; ada's typed URL meets the
+// rules the routes always applied — the scheme, the parse, ALLOW_LOCAL_MCP=0
+// and the credential hygiene (a ?token= is dropped from every persisted form
+// and said so) — moved here from server/test-smoke.mjs, whose caller (the
+// anonymous local one) may not type at all.
+test('a typed MCP URL needs the admin role: oscar (operator) is refused 403 role at the draft and the refresh, nothing sent; ada\'s typed URL meets the scheme, parse and ALLOW_LOCAL_MCP=0 rules (400) and the credential hygiene — the dropped ?token= named, the safe mcp.url in the draft, the refresh answer, its row and the live file', async () => {
+  const { startFakeMcp } = await import('./fixtures/fake-mcp.mjs');
+  const fake = await startFakeMcp(['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines'], (name) => {
+    if (name === 'system_health') return { services: [] };
+    if (name === 'system_topology') return { dependencies: [] };
+    return {};
+  });
+  try {
+    const withToken = `${fake.url}?token=abc&tier=x`;
+    const ROLE = "a typed MCP URL needs the admin role in org 'acme' (you are operator) — choose one of the org's registered MCP endpoints (mcpEndpointId; GET /api/mcp-endpoints lists them), or ask an admin of acme to register this one in Settings → MCP endpoints";
+    for (const key of ['POST /api/draft-from-mcp', 'POST /api/refresh-live']) {
+      const path = routeEntry(key).path;
+      await denied(key, 'oscar', path, { mcpUrl: withToken }, 'role', ROLE);
+      await denied(key, 'oscar', path, { mcpUrl: 'file:///etc/passwd' }, 'role', ROLE);
+    }
+    assert.equal(fake.authHeaders.length, 0, 'nothing reached the MCP');
+    // ada: the URL's own rules, each a 400 before any fetch
+    for (const [key, path, body] of [
+      ['POST /api/draft-from-mcp', '/api/draft-from-mcp', { mcpUrl: 'gopher://127.0.0.1:70/mcp' }],
+      ['POST /api/refresh-live', '/api/refresh-live', { mcpUrl: 'file://C:/secrets' }],
+    ]) await refused(key, 'ada', path, body, 400, `mcpUrl must be http or https; got scheme '${new URL(body.mcpUrl).protocol.slice(0, -1)}'`);
+    const unparseable = await call('ada', 'POST', '/api/refresh-live', { mcpUrl: 'http://user:hunter2@' });
+    assert.equal(unparseable.status, 400);
+    assert.ok(!unparseable.text.includes('hunter2'), `the unparseable URL's error redacts its credentials: ${unparseable.text}`);
+    await refused('POST /api/refresh-live', 'ada', '/api/refresh-live', { mcpUrl: 'https://alice:pw@mcp.acme.test/mcp' }, 400, 'a typed MCP URL may not carry user:password — send the token as mcpAuth');
+    process.env.OBSERVOGRAM_ALLOW_LOCAL_MCP = '0';
+    try {
+      for (const blocked of ['http://127.0.0.1:9999/mcp', 'http://localhost:9999/mcp', 'http://169.254.169.254/latest/meta-data/', 'http://[::1]:9999/mcp', 'http://0x7f000001:9999/mcp']) {
+        const r = await call('ada', 'POST', '/api/draft-from-mcp', { mcpUrl: blocked });
+        assert.equal(r.status, 400, `ALLOW_LOCAL_MCP=0 blocks ${blocked}: ${r.text.slice(0, 200)}`);
+        assert.match(r.json.error, /which OBSERVOGRAM_ALLOW_LOCAL_MCP=0 forbids$/);
+      }
+    } finally {
+      delete process.env.OBSERVOGRAM_ALLOW_LOCAL_MCP;
+    }
+    assert.equal(fake.authHeaders.length, 0, 'still nothing reached the MCP');
+    // the hygiene: a ?token= never persisted, and said so
+    const draft = await call('ada', 'POST', '/api/draft-from-mcp', { mcpUrl: withToken });
+    assert.equal(draft.status, 200, draft.text.slice(0, 300));
+    assert.equal(draft.json.summary.mcpUrl, `${fake.url}?tier=x`, 'draft-from-mcp: summary.mcpUrl is the safe form (no token parameter)');
+    assert.equal(draft.json.canonical.metadata.annotations['mcp.url'], `${fake.url}?tier=x`);
+    assert.ok(!draft.json.canonicalYaml.includes('token=abc'), "the drafted pack's YAML keeps no token");
+    assert.ok((draft.json.summary.warnings || []).some((w) => /^not kept in the draft: the "token" parameter of the MCP URL/.test(w)), 'a summary.warnings entry names the dropped parameter');
+    assert.equal(draft.json.mcpEndpoint, null, 'a typed URL names no record');
+    const seq = seqNow();
+    const refreshed = await call('ada', 'POST', '/api/refresh-live', { mcpUrl: withToken });
+    assert.equal(refreshed.status, 200, refreshed.text.slice(0, 300));
+    assert.match(refreshed.json.note || '', /^not kept in the live pack: the "token" parameter of the MCP URL, which looks like a credential — put a token in the auth field instead$/);
+    assert.deepEqual([refreshed.json.annotations['mcp.url'], refreshed.json.mcpEndpoint], [`${fake.url}?tier=x`, null]);
+    const live = readFileSync(join(WORKSPACE, 'orgs', 'acme', 'live', 'production-live.pack.yaml'), 'utf8');
+    assert.ok(/mcp\.url: "?[^\n]*\?tier=x"?\n/.test(live) && !live.includes('token=abc'), `the live file keeps the safe URL: ${live.slice(0, 300)}`);
+    const rows = rowsAfter(seq);
+    assert.deepEqual(rows.map(([action, actor, org, target, detail]) => [action, actor, org, target, detail.mcpEndpoint]), [['live.refresh', 'ada', 'acme', fake.origin, null]], 'one live.refresh row: the origin, no record');
+    assert.ok(!JSON.stringify(rows).includes('token=abc'));
+  } finally {
+    await fake.close();
+  }
+});
+
+test('the deploy routes take a typed MCP URL from an admin only (D3): oscar is refused 403 role at deploy and deploy-bulk, nothing sent; ada\'s typed URL meets the scheme rule (400) and deploys, the response naming the safe URL (no ?token=)', async () => {
+  const { startFakeMcp } = await import('./fixtures/fake-mcp.mjs');
+  const { GRAFANA_DASHBOARD_TOOL } = await import('./deploy-helpers.mjs');
+  const fake = await startFakeMcp([GRAFANA_DASHBOARD_TOOL], () => ({ ok: true }));
+  try {
+    const withToken = `${fake.url}?token=abc&tier=x`;
+    const ROLE = "a typed MCP URL needs the admin role in org 'acme' (you are operator) — choose one of the org's registered MCP endpoints (mcpEndpointId; GET /api/mcp-endpoints lists them), or ask an admin of acme to register this one in Settings → MCP endpoints";
+    const DEPLOY = '/api/packs/payment-service/deploy/grafana-dashboard';
+    const BULK = '/api/packs/payment-service/deploy-bulk';
+    await denied('POST /api/packs/:id/deploy/:target', 'oscar', DEPLOY, { mcpUrl: withToken, mcpAuth: 'w', dryRun: true }, 'role', ROLE);
+    await denied('POST /api/packs/:id/deploy-bulk', 'oscar', BULK, { mcpUrl: withToken, mcpAuth: 'w', items: [{ group: 'dashboards' }], dryRun: true }, 'role', ROLE);
+    await denied('POST /api/packs/:id/deploy-bulk', 'oscar', BULK, { mcpUrl: 'ftp://mcp.example/x', items: [{ group: 'rules' }] }, 'role', ROLE);
+    assert.equal(fake.authHeaders.length, 0, 'nothing reached the MCP');
+    // ada: the URL's own rules first (the pins test-smoke held while the
+    // deploy routes took a typed URL from every caller)
+    await refused('POST /api/packs/:id/deploy/:target', 'ada', '/api/packs/payment-service/deploy/prometheus-rules', { mcpUrl: 'file:///etc/passwd' }, 400, "mcpUrl must be http or https; got scheme 'file'");
+    await refused('POST /api/packs/:id/deploy-bulk', 'ada', BULK, { mcpUrl: 'ftp://mcp.example/x', items: [{ group: 'rules' }] }, 400, "mcpUrl must be http or https; got scheme 'ftp'");
+    const r = await call('ada', 'POST', DEPLOY, { mcpUrl: withToken, dryRun: true });
+    assert.equal(r.status, 200, r.text.slice(0, 300));
+    assert.equal(r.json.mcpUrl, `${fake.url}?tier=x`, 'the deploy answer names the safe URL');
+    assert.ok(!r.text.includes('token=abc'), 'no token parameter in the answer');
+    assert.ok(fake.calls.some((c) => c.name === GRAFANA_DASHBOARD_TOOL), 'the deploy reached the MCP');
+  } finally {
+    await fake.close();
+  }
+});
+
+test('a journey\'s live Pack B (D6): capture names the registered endpoint, keeps an unregistered URL for ada and saves a file for oscar; oscar\'s run of a raw-URL def is refused 403 role before any wire call, ada\'s takes the typed path', async () => {
+  const { startFakeMcp } = await import('./fixtures/fake-mcp.mjs');
+  const fake = await startFakeMcp(['system_health', 'system_topology'], (name) => (name === 'system_health' ? { services: [] } : { dependencies: [] }));
+  const journeys = join(WORKSPACE, 'orgs', 'acme', 'journeys');
+  try {
+    const base = (await call('vera', 'GET', '/api/packs/payment-service/canonical')).json;
+    delete base.__effectiveEnvironment;
+    delete base.__effective;
+    const upload = async (name, url) => {
+      const c = structuredClone(base);
+      c.metadata.name = name;
+      c.metadata.annotations = { ...(c.metadata.annotations || {}), 'mcp.url': url };
+      const r = await call('oscar', 'POST', '/api/validate', c);
+      assert.equal(r.status, 200, r.text.slice(0, 200));
+      return r.json.registered.id;
+    };
+    const epId = (await ok('POST /api/mcp-endpoints', 'ada', '/api/mcp-endpoints', { name: 'journey-mcp', url: `${fake.url}?tier=x` }, 201)).json.endpoint.id;
+    const registered = await upload('journey-registered-b', `${fake.url}?tier=x`);
+    const unregistered = await upload('journey-unregistered-b', fake.url);
+    const capture = (who, name, packBId) => ok('POST /api/journeys/capture', who, '/api/journeys/capture', { name, packAId: 'payment-service', packBId, gate: { minAlignmentPct: 1 } });
+    const defOf = (name) => parseYaml(readFileSync(join(journeys, `${name}.journey.yaml`), 'utf8'));
+    await capture('oscar', 'j-registered', registered);
+    assert.deepEqual(defOf('j-registered').packB, { mcp: { url: `${fake.url}?tier=x`, endpointId: epId } }, 'the registered endpoint whose safe URL is the annotation');
+    await capture('oscar', 'j-oscar', unregistered);
+    assert.ok(defOf('j-oscar').packB.file, 'oscar may not type a URL: Pack B is a file');
+    await capture('ada', 'j-ada', unregistered);
+    assert.deepEqual(defOf('j-ada').packB, { mcp: { url: fake.url } }, "ada's capture keeps the URL");
+    // the run
+    const ROLE = `this journey's Pack B fetches ${fake.origin}, an MCP URL only an admin may send — an admin re-captures it (Pack B then names a registered endpoint), or registers the endpoint and re-captures`;
+    const before = fake.authHeaders.length;
+    await denied('POST /api/journeys/:name/run', 'oscar', '/api/journeys/j-ada/run', {}, 'role', ROLE);
+    assert.equal(fake.authHeaders.length, before, 'nothing reached the MCP');
+    const byAda = await call('ada', 'POST', '/api/journeys/j-ada/run', {});
+    assert.equal(byAda.status, 200, byAda.text.slice(0, 300));
+    assert.equal(byAda.json.record.packB.source, `mcp:${fake.url}`);
+    const byOscar = await call('oscar', 'POST', '/api/journeys/j-registered/run', {});
+    assert.equal(byOscar.status, 200, byOscar.text.slice(0, 300));
+    assert.equal(byOscar.json.record.packB.source, `mcp:${fake.url}?tier=x`, 'by id: the endpoint\'s URL');
+    assert.ok(fake.authHeaders.length > before, 'both runs reached the MCP');
+    await ok('DELETE /api/mcp-endpoints/:id', 'ada', `/api/mcp-endpoints/${epId}`);
+    const gone = await call('oscar', 'POST', '/api/journeys/j-registered/run', {});
+    assert.deepEqual([gone.status, gone.json.ok], [400, false], `an endpoint deleted since the capture: 400 before any run — ${gone.text.slice(0, 200)}`);
+  } finally {
+    await fake.close();
+  }
 });
 
 test('DELETE /api/uploads drops the packs (one pack.clear row) and keeps the services, now without packs', async () => {

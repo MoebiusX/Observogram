@@ -165,6 +165,7 @@ export function loadJourneyDef(ref, { allowPath = true } = {}) {
   def.name = def.name || sanitizeName(ref).replace(/\.journey\.yaml$/, '');
   if (!def.packA || (!def.packA.file && !def.packA.crawl)) throw new Error(`journey ${def.name}: packA needs file: or crawl:`);
   if (!def.packB || (!def.packB.file && !def.packB.mcp)) throw new Error(`journey ${def.name}: packB needs file: or mcp:`);
+  validatePackBMcp(def.packB.mcp, def.name);
   if (def.gate && typeof def.gate === 'object' && def.gate.stack !== undefined) validateGateStack(def.gate.stack, def.name);
   // Inventory coverage: a malformed inventory: or gate.inventory block is a load-time error too.
   if (def.gate && typeof def.gate === 'object' && def.gate.inventory !== undefined) validateGateInventory(def.gate.inventory, def.name);
@@ -181,6 +182,16 @@ export function loadJourneyDef(ref, { allowPath = true } = {}) {
   if (def.notify !== undefined) validateNotify(def.notify, def.name);
   def.__source = source;
   return def;
+}
+
+// packB.mcp.endpointId — the org's registered MCP endpoint a server-run
+// journey fetches through (capture writes it beside the url) — is a
+// positive integer when present.
+export function validatePackBMcp(mcp, journeyName = '?') {
+  if (!mcp || typeof mcp !== 'object' || mcp.endpointId === undefined) return;
+  if (!Number.isInteger(mcp.endpointId) || mcp.endpointId < 1) {
+    throw new Error(`journey ${journeyName}: packB.mcp.endpointId must be a positive integer (got ${JSON.stringify(mcp.endpointId)})`);
+  }
 }
 
 // Step 5: the notify policy vocabulary, re-exported from the browser-safe
@@ -486,26 +497,46 @@ function packBSourceUrl(raw) {
   return safeMcpUrl(raw) ?? String(raw);
 }
 
-async function resolvePackB(def, crawlScope = null) {
-  if (def.packB.file) return loadPackFile(def.packB.file, def.__baseDir, crawlScope);
+// Where a live Pack B is fetched from: { mcpUrl, mcpAuth, safeUrl }.
+// `resolveMcp(packB.mcp)` — the server's: it resolves the block through the
+// org's registered endpoint (endpointId) or, for an admin, the typed url,
+// and answers that target; the def's authEnv is never read there (a
+// server-held token rides only through a registered endpoint). Without it
+// (the CLI) the def's url and authEnv are used; a def whose Pack B names
+// only an endpointId is the server's to run. `lenient` — the inventory
+// observation beside a file-sourced Pack B, as before: an unset authEnv
+// sends no token, a missing url fails the observation, not the run.
+async function liveTargetOf(def, resolveMcp, { lenient = false } = {}) {
   const m = def.packB.mcp;
-  if (!m?.url) throw new Error(`journey ${def.name}: packB.mcp.url required`);
+  if (resolveMcp) {
+    const t = await resolveMcp(m);
+    return { mcpUrl: t.mcpUrl, mcpAuth: t.mcpAuth ?? null, safeUrl: t.safeMcpUrl ?? packBSourceUrl(t.mcpUrl) };
+  }
+  if (lenient) return { mcpUrl: m.url, mcpAuth: m.authEnv ? (process.env[m.authEnv] || null) : null, safeUrl: packBSourceUrl(m.url) };
+  if (!m?.url) {
+    if (m?.endpointId !== undefined) throw new Error(`journey ${def.name}: packB.mcp.endpointId is resolved by the server; run this journey through the server, or give packB.mcp.url`);
+    throw new Error(`journey ${def.name}: packB.mcp.url required`);
+  }
   const mcpAuth = m.authEnv ? (process.env[m.authEnv] || null) : null;
   if (m.authEnv && !mcpAuth) {
     throw new Error(`journey ${def.name}: packB.mcp.authEnv names ${m.authEnv}, but that env var is not set`);
   }
+  // The record and the kept snapshot (its mcp.url annotation) persist the
+  // URL as it may be persisted — userinfo, fragment and credential
+  // parameters stripped — never the URL as the def spelled it.
+  return { mcpUrl: m.url, mcpAuth, safeUrl: packBSourceUrl(m.url) };
+}
+
+async function resolvePackB(def, crawlScope = null, live = null) {
+  if (def.packB.file) return loadPackFile(def.packB.file, def.__baseDir, crawlScope);
   // Imported lazily: fetch-live-pack is the heaviest module and only the
   // live path needs it. Composition mirrors the server's draft route.
   const { fetchMcp, buildCanonicalPack } = await import('../fetch-live-pack.mjs');
   try {
-    const fetched = await fetchMcp({ mcpUrl: m.url, mcpAuth });
+    const fetched = await fetchMcp({ mcpUrl: live.mcpUrl, mcpAuth: live.mcpAuth });
     const refreshedAt = new Date().toISOString();
-    // The record and the kept snapshot (its mcp.url annotation) persist the
-    // URL as it may be persisted — userinfo, fragment and credential
-    // parameters stripped — never the URL as the def spelled it.
-    const safeUrl = packBSourceUrl(m.url);
-    const canonical = buildCanonicalPack({ refreshedAt, mcpUrl: safeUrl, ...fetched });
-    return { canonical, source: `mcp:${safeUrl}` };
+    const canonical = buildCanonicalPack({ refreshedAt, mcpUrl: live.safeUrl, ...fetched });
+    return { canonical, source: `mcp:${live.safeUrl}` };
   } catch (e) {
     // A transport hook fault (OBSERVOGRAM_TRANSPORT_HOOK failing to load or
     // breaking its contract) is a configuration error like the ones above:
@@ -526,7 +557,7 @@ async function resolvePackB(def, crawlScope = null) {
 // has no live series (not-attempted, said so); a site that cannot be read or carries no
 // expected block is `failed` with the reason; an MCP without the metrics query tool is
 // not-attempted with the tier reason. Never touches the grade or the alignment.
-async function observeInventoryCoverage(def, checkedAt, crawlScope = null) {
+async function observeInventoryCoverage(def, checkedAt, crawlScope = null, live = null) {
   const site = def.inventory.site;
   const kinds = def.inventory.kinds || null;
   let manifest;
@@ -541,11 +572,9 @@ async function observeInventoryCoverage(def, checkedAt, crawlScope = null) {
   const unknown = unknownKinds(expected, kinds);
   if (unknown.length) return buildInventoryRecord({ site, expected, kinds, checkedAt });   // failed, naming the unknown kinds — no wire call
   if (!def.packB?.mcp) return buildInventoryRecord({ site, expected, kinds, status: 'not-attempted', reason: 'file-sourced Pack B: no live series to compare', checkedAt });
-  const m = def.packB.mcp;
-  const mcpAuth = m.authEnv ? (process.env[m.authEnv] || null) : null;
   const { observeInventory } = await import('../fetch-live-pack.mjs');
   let obs;
-  try { obs = await observeInventory({ mcpUrl: m.url, mcpAuth, expected, kinds }); }
+  try { obs = await observeInventory({ mcpUrl: live.mcpUrl, mcpAuth: live.mcpAuth, expected, kinds }); }
   catch (e) {
     // A misconfigured transport hook never produces an evidence record.
     if (isTransportHookError(e)) throw e;
@@ -937,7 +966,7 @@ export function pruneLiveSnapshots(recordFiles, liveFiles) {
 // crawlScope: { base, ownRoot } from the server (a crawl: walk, a file:
 // source and an inventory site read only the org's own part of the
 // workspace, or outside it); null for the CLI.
-export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null } = {}) {
+export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null } = {}) {
   def.__baseDir = baseDir || (def.__source ? dirname(def.__source) : '.');
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
@@ -948,13 +977,15 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
 
   const a = await resolvePackA(def, def.__baseDir, crawlScope);
   let b;
+  let liveTarget = null;   // a live Pack B's target (liveTargetOf), never persisted
   try {
-    b = await resolvePackB(def, crawlScope);
+    if (def.packB?.mcp && !def.packB.file) liveTarget = await liveTargetOf(def, resolveMcp);
+    b = await resolvePackB(def, crawlScope, liveTarget);
   } catch (e) {
     // Only a LIVE source that reached the wire can lose its vantage; a
     // missing pack file or an unset authEnv is a configuration error and
     // leaves no record.
-    if (def.packB?.mcp && e?.vantageLost) {
+    if (liveTarget && e?.vantageLost) {
       const previousRun = readJourneyRuns(def.name, { limit: 1 })[0] || null;
       const lost = {
         journey: def.name,
@@ -963,7 +994,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
         outcome: 'vantage-lost',
         error: String(e.message || e),
         packA: { source: a.source, name: a.canonical?.metadata?.name || null, version: a.canonical?.metadata?.version || null },
-        packB: { source: `mcp:${packBSourceUrl(def.packB.mcp.url)}` },
+        packB: { source: `mcp:${liveTarget.safeUrl}` },
         scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
         gate: { thresholds: def.gate || {}, breaches: [] },
       };
@@ -1001,7 +1032,8 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   const liveRefreshedAt = b.canonical?.metadata?.annotations?.['mcp.refreshedAt'] || null;
   const live = liveEvidenceFacts(b.canonical);
   // Inventory coverage (inventory-coverage.mjs): the site's expected sets against the live up series.
-  const inventory = def.inventory ? await observeInventoryCoverage(def, startedAt, crawlScope) : null;
+  const inventoryLive = def.inventory && def.packB?.mcp ? liveTarget ?? await liveTargetOf(def, resolveMcp, { lenient: true }) : null;
+  const inventory = def.inventory ? await observeInventoryCoverage(def, startedAt, crawlScope, inventoryLive) : null;
   // grade.overall.audit is the canonical PASS/FAIL contract (score > 85%).
   const audit = grade.overall?.audit || { scorePctExact: 0, passes: false };
   const facts = {

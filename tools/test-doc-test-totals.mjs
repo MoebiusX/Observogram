@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const journey = readFileSync(resolve(ROOT, 'docs/UPDATE_JOURNEY.md'), 'utf8');
 const changelog = readFileSync(resolve(ROOT, 'docs/CHANGELOG.md'), 'utf8');
-const DELIVERY_REPORTS = ['docs/DELIVERY-REBADGE-BATCH2.md', 'docs/DELIVERY-GAP-BATCH2.md'];
+const DELIVERY_REPORTS = ['docs/DELIVERY-REBADGE-BATCH2.md', 'docs/DELIVERY-GAP-BATCH2.md', 'docs/DELIVERY-REBADGE-BATCH3.md'];
 
 const PAIR = /Tests: (\d+) → (\d+)/g;
 
@@ -112,6 +112,12 @@ test('each batch delivery report exists and quotes the journey\'s measured total
       for (const m of line.matchAll(PAIR)) quoted.push({ line: i + 1, start: Number(m[1]), end: Number(m[2]) });
     });
     if (quoted.length === 0) problems.push(`${file}: quotes no \`Tests: a → b\` total`);
+    // The total a report states for the head of its branch is the last one
+    // its own pairs reach: a review fix's pair grows the chain, and the
+    // opening sentence must follow it.
+    const head = /\b(\d+) at the head of this branch\b/.exec(text.replace(/\s+/g, ' '));
+    const reached = Math.max(...quoted.map((q) => q.end));
+    if (head && quoted.length > 0 && Number(head[1]) !== reached) problems.push(`${file}: says ${head[1]} at the head of this branch; its last \`Tests:\` pair reaches ${reached}`);
     for (const q of quoted) {
       const stated = JOURNEY_BY_START.get(q.start);
       if (!stated) problems.push(`${file}:${q.line} says ${q.start} → ${q.end}; docs/UPDATE_JOURNEY.md has no entry starting at ${q.start}`);
@@ -121,7 +127,8 @@ test('each batch delivery report exists and quotes the journey\'s measured total
   assert.deepEqual(problems, [], 'the delivery report states the totals the journey measured');
 });
 
-// The suites this batch added, each a flat file of top-level `test(` calls
+// The suites batch 2 and rebadge batch 3 added (the two MCP ping suites, which
+// review fixes grew), each a flat file of top-level `test(` calls
 // (no subtests, no loops), so the number of tests it holds is the number of
 // lines that start with `test(`. The journey narrates how many tests each
 // `Tests: a → b` note put into such a suite — `` `file` 9 `` on its creation,
@@ -141,6 +148,8 @@ const LEDGER = [
   'server/test-glossary-shell.mjs',
   'tools/test-audit-report.mjs',
   'server/test-audit-report-api.mjs',
+  'tools/test-mcp-ping.mjs',
+  'server/test-mcp-ping.mjs',
 ];
 const WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
 const count = (w) => (/^\d+$/.test(w) ? Number(w) : WORDS[w.toLowerCase()]);

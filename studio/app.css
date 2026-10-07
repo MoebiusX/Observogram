@@ -3799,6 +3799,12 @@ a:hover { color: var(--ink); }
   color: var(--ink);
   word-break: break-word;
 }
+/* A live pack's chip (rebadge batch 3, C1): scaffold or snapshot, in words. */
+.cpc-live-chip {
+  margin: 0 0 6px;
+  font: 500 12px/1.4 var(--sans);
+  color: var(--ink-2);
+}
 .cpc-meta {
   display: flex; flex-wrap: wrap; gap: 6px;
 }
@@ -4653,275 +4659,6 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
 }
 .home-mcp-field input:focus { outline: none; border-color: var(--ink); box-shadow: 0 0 0 3px rgba(15,27,45,0.08); }
 
-/* Capabilities — executive-summary report, not widget grid. */
-.home-mcp-capabilities[hidden] { display: none; }
-.home-mcp-report {
-  margin-top: 24px;
-  padding-top: 22px;
-  border-top: 1px solid var(--line-2);
-}
-.home-mcp-report-head {
-  display: flex; align-items: center; gap: 10px;
-  font: 14px/1.4 var(--sans);
-  color: var(--ink-3);
-  margin-bottom: 22px;
-}
-.home-mcp-report-head strong { color: var(--ink); font-weight: 600; }
-.home-mcp-report-meta { color: var(--ink-4); font-size: 13.5px; }
-.home-mcp-report-dot {
-  width: 8px; height: 8px;
-  border-radius: 50%;
-  background: var(--BLD);
-  box-shadow: 0 0 0 4px rgba(4,120,87,0.15);
-}
-/* Four-card capability grid. Each card owns its content — tools card
-   shows recognised + unrecognised + failed chips, services shows the
-   actual service names, backends explains the signal classes,
-   anomalies pairs the count with baseline context. Subtle left-border
-   accents per category but the rest stays neutral. */
-.home-mcp-cap-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 14px;
-}
-.home-mcp-cap {
-  padding: 16px 16px 14px;
-  background: var(--paper);
-  border: 1px solid var(--line-2);
-  border-left: 3px solid var(--ink-4);
-  border-radius: 8px;
-  transition: border-color 120ms ease;
-}
-.home-mcp-cap[data-cap="tools"]     { border-left-color: var(--L2); }
-.home-mcp-cap[data-cap="services"]  { border-left-color: var(--BLD); }
-.home-mcp-cap[data-cap="backends"]  { border-left-color: var(--ATL); }
-.home-mcp-cap[data-cap="anomalies"] { border-left-color: var(--L4); }
-.home-mcp-cap-num {
-  font: 500 34px/1 var(--serif);
-  color: var(--ink);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.015em;
-  margin-bottom: 6px;
-}
-.home-mcp-cap-key {
-  font: 600 12.5px/1 var(--mono);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--ink-4);
-  margin-bottom: 12px;
-}
-.home-mcp-cap-detail {
-  font: 14px/1.6 var(--sans);
-  color: var(--ink-3);
-  word-break: break-word;
-}
-.home-mcp-cap-detail code {
-  display: inline-block;
-  font: 13px/1.3 var(--mono);
-  background: var(--card);
-  border: 1px solid var(--line-2);
-  border-radius: 4px;
-  padding: 2px 6px;
-  margin: 2px 2px 2px 0;
-  color: var(--ink-3);
-}
-.home-mcp-cap-detail em { font-style: italic; color: var(--ink-5); }
-.home-mcp-cap-detail-unknown {
-  color: var(--ink-4);
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--line-2);
-  font-size: 13px;
-}
-.home-mcp-cap-detail-fail {
-  color: var(--src-Missing, #DC2626);
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--line-2);
-  font-size: 13px;
-}
-.home-mcp-cap-more {
-  margin-top: 4px;
-  font: italic 13px/1.4 var(--serif);
-  color: var(--ink-4);
-}
-.home-mcp-cap-meta {
-  margin-top: 4px;
-  font: italic 13px/1.4 var(--serif);
-  color: var(--ink-4);
-}
-
-/* backend_capabilities inventory — the canonical version-gating story.
-   Rendered as a striped, scannable list of skill rows with chip pills
-   showing each backend's product + must-version. Sits between the
-   4-card capability grid and the gaps banner. */
-.home-mcp-skills {
-  margin-top: 22px;
-  padding: 16px 18px 18px;
-  background: var(--paper);
-  border: 1px solid var(--ink-line);
-  border-radius: 6px;
-}
-.home-mcp-skills-head { margin-bottom: 12px; }
-.home-mcp-skills-title {
-  font: 600 13.5px/1 var(--mono);
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--ink-1);
-  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
-}
-.home-mcp-skills-meta {
-  font: 400 13px/1 var(--mono);
-  letter-spacing: 0.04em;
-  text-transform: none;
-  color: var(--ink-4);
-}
-.home-mcp-skills-meta code {
-  font: inherit;
-  background: var(--ink-bg);
-  padding: 1px 4px;
-  border-radius: 3px;
-}
-.home-mcp-skills-sub {
-  margin-top: 6px;
-  font: 14px/1.5 var(--serif);
-  color: var(--ink-3);
-}
-.home-mcp-skills-sub code {
-  font: 13.5px/1 var(--mono);
-  background: var(--ink-bg);
-  padding: 1px 4px;
-  border-radius: 3px;
-}
-.home-mcp-skills-body {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 1px;
-  background: var(--ink-line);
-  border: 1px solid var(--ink-line);
-  border-radius: 4px;
-  overflow: hidden;
-}
-.home-mcp-skill-row {
-  display: grid;
-  grid-template-columns: 140px 1fr;
-  gap: 14px;
-  align-items: center;
-  padding: 10px 14px;
-  background: var(--paper);
-}
-.home-mcp-skill-row:hover { background: var(--ink-bg); }
-.home-mcp-skill-name {
-  font: 600 13px/1 var(--mono);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--ink-2);
-}
-.home-mcp-skill-chips {
-  display: flex; flex-wrap: wrap; gap: 6px;
-}
-.home-mcp-skill-chip {
-  display: inline-flex; align-items: baseline; gap: 4px;
-  padding: 3px 8px;
-  background: var(--ink-bg);
-  border: 1px solid var(--ink-line);
-  border-radius: 3px;
-  font: 13px/1.3 var(--mono);
-  color: var(--ink-2);
-  white-space: nowrap;
-}
-.home-mcp-skill-chip strong { font-weight: 600; color: var(--ink-1); }
-.home-mcp-skill-chip em {
-  font-style: normal;
-  color: var(--ink-4);
-  font-size: 12.5px;
-}
-/* Live-version chips: authoritative version pulled from the backend
-   itself (grafana_health, metrics_query vm_app_version, …). The
-   "● LIVE" pip + tinted accent border tells the demo audience this
-   number is ground truth, not capability policy. */
-.home-mcp-skill-chip.is-live {
-  background: rgba(56, 142, 60, 0.06);
-  border-color: rgba(56, 142, 60, 0.45);
-}
-.home-mcp-skill-chip.is-live em { color: rgb(46, 110, 50); font-weight: 500; }
-.home-mcp-skill-chip-live {
-  margin-left: 4px;
-  padding: 1px 5px;
-  background: rgb(46, 110, 50);
-  color: var(--paper, #fff);
-  border-radius: 2px;
-  font: 600 11.5px/1.2 var(--mono);
-  letter-spacing: 0.08em;
-  white-space: nowrap;
-}
-.home-mcp-skills-meta-live {
-  color: rgb(46, 110, 50);
-  font-weight: 600;
-}
-@media (max-width: 720px) {
-  .home-mcp-skill-row {
-    grid-template-columns: 1fr;
-    gap: 6px;
-  }
-}
-
-.home-mcp-gaps {
-  margin-top: 18px;
-  padding: 14px 18px;
-  background: var(--warn-bg);
-  border-left: 3px solid var(--CONF);
-  border-radius: 4px;
-}
-.home-mcp-gaps-head {
-  font: 600 13px/1 var(--mono);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--CONF-text);
-  margin-bottom: 8px;
-}
-.home-mcp-gaps ul {
-  margin: 0; padding-left: 18px;
-  font: 14px/1.55 var(--serif);
-  color: var(--ink-3);
-}
-
-/* Adopt CTA — visually distinguished from Connect by being green (BLD)
-   so the user understands these are two different actions. */
-.home-mcp-adopt-bar[hidden] { display: none; }
-.home-mcp-adopt-bar {
-  margin-top: 22px;
-}
-.home-mcp-adopt-btn {
-  display: flex; flex-direction: column; align-items: flex-start;
-  width: 100%;
-  padding: 18px 24px;
-  background: var(--BLD);
-  color: var(--paper);
-  border: 1px solid var(--BLD);
-  border-radius: 10px;
-  cursor: pointer;
-  text-align: left;
-  transition: filter 120ms ease, transform 80ms ease, box-shadow 120ms ease;
-  box-shadow: 0 2px 8px -2px rgba(4,120,87,0.30);
-}
-.home-mcp-adopt-btn:hover {
-  filter: brightness(1.08);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px -4px rgba(4,120,87,0.40);
-}
-.home-mcp-adopt-btn:active { transform: translateY(0); }
-.home-mcp-adopt-title {
-  font: 600 16px/1.2 var(--sans);
-  letter-spacing: 0.005em;
-  margin-bottom: 3px;
-}
-.home-mcp-adopt-sub {
-  font: 14px/1.3 var(--sans);
-  opacity: 0.85;
-  letter-spacing: 0.005em;
-}
-
 /* Manual alternatives — secondary to the MCP card above, but still
    visually substantial. Italic-serif rule-divided heading + two equal
    buttons with an icon, sans-label, and italic-serif subtitle. */
@@ -5192,16 +4929,11 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
 .hdr-brand h1 { transition: color 150ms ease; }
 .hdr-brand h1:hover { color: var(--CMP); }
 
-@media (max-width: 920px) {
-  .home-mcp-cap-grid { grid-template-columns: 1fr 1fr; }
-}
 @media (max-width: 720px) {
   .home-hero { margin-top: 36px; padding: 0 20px; }
   .home-hero-title { font-size: 30px; }
   .home-hero-lede { font-size: 14.5px; }
   .home-mcp-card { padding: 22px 20px 18px; }
-  .home-mcp-cap-grid { grid-template-columns: 1fr; }
-  .home-mcp-cap-num { font-size: 28px; }
   .home-mcp-actions { flex-direction: column; align-items: stretch; }
   .home-mcp-status { margin-left: 0; }
   .home-alt-buttons { grid-template-columns: 1fr; }
@@ -9709,3 +9441,55 @@ select.build-edit-input { appearance: auto; }
   .set-editor, .set-editor-scrim, .set-nav-item, .set-row { transition: none; animation: none; }
   .set-editor-close, .set-editor-seg-btn, .set-editor-field input, .set-editor-field textarea, .set-editor-field select { transition: none; }
 }
+
+/* ==== Live MCP connection (rebadge batch 3, C2): the MCP panel's "test connection" result and the rebuild beside
+   it — and (C1) the live panel's three steps, its choice, its plan and its gate log — drawn inside the panel's card — no surface of its own, hairlines only; text in --ink / --ink-2 / --ink-3
+   only; a state is a word (connected, refused, unreachable, timed out, not an MCP server), never colour alone.
+   ux.css and reskin.css restyle no .mcpc- rule (asserted with the AA scan in tools/test-build-model.mjs). ==== */
+.mcpc-result { margin-top: 10px; font: 13px/1.45 var(--mono); color: var(--ink-2); overflow-wrap: anywhere; }
+.mcpc-result[hidden] { display: none; }
+.mcpc-sentence { margin: 0 0 6px; font: 13.5px/1.45 var(--sans); color: var(--ink); }
+.mcpc-meta { margin: 0 0 4px; font: 12.5px/1.45 var(--mono); color: var(--ink-3); }
+.mcpc-reads { list-style: none; margin: 6px 0; padding: 0; display: grid; gap: 2px; }
+.mcpc-read { font: 12.5px/1.45 var(--mono); color: var(--ink-2); }
+.mcpc-read-label { color: var(--ink-3); }
+.mcpc-tool { font: 12.5px/1.45 var(--mono); color: var(--ink); }
+.mcpc-gaps { margin: 6px 0; font: 12.5px/1.45 var(--mono); color: var(--ink-2); }
+.mcpc-unchecked { margin-top: 6px; }
+.mcpc-unchecked-summary { cursor: pointer; font: 12.5px/1.45 var(--mono); color: var(--ink-2); }
+.mcpc-lines { margin: 4px 0 6px; padding-left: 18px; font: 12.5px/1.45 var(--mono); color: var(--ink-2); }
+.mcpc-rebuild { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.mcpc-note { margin: 6px 0 0; font: 12.5px/1.45 var(--mono); color: var(--ink-3); }
+/* The live panel (C1): three steps, a choice, a gate log whose state is a word and an icon. */
+.mcpc-step { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.mcpc-step[hidden] { display: none; }
+.mcpc-step-title { margin: 0 0 8px; font: 600 14px/1.3 var(--sans); color: var(--ink); }
+.mcpc-choice { margin: 0 0 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); display: grid; gap: 8px; }
+.mcpc-legend { padding: 0 4px; font: 600 12.5px/1.45 var(--sans); color: var(--ink-2); }
+.mcpc-option { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: baseline; cursor: pointer; }
+.mcpc-option-title { font: 600 13px/1.45 var(--sans); color: var(--ink); }
+.mcpc-option-desc { grid-column: 2; font: 12.5px/1.45 var(--sans); color: var(--ink-2); }
+.mcpc-gatelog { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 4px; }
+.mcpc-stage { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font: 12.5px/1.45 var(--mono); color: var(--ink-2); }
+.mcpc-stage-icon { width: 1.2em; text-align: center; color: var(--ink); }
+.mcpc-stage-label { min-width: 16em; color: var(--ink); }
+.mcpc-stage-word { color: var(--ink-2); }
+.mcpc-stage-message { flex-basis: 100%; padding-left: 1.6em; color: var(--ink-3); overflow-wrap: anywhere; }
+/* ==== Compare pairing (rebadge batch 3, C3): the Pair by switch under the stat bar, its note and its could-not-load
+   sentence, and the stat bar's "paired by" cell. The switch sits on the page with no surface of its own, hairlines only;
+   the cell is a .compare-cell (its card background). Text in --ink / --ink-2 / --ink-3 only, measured on --card by the
+   AA scan in tools/test-build-model.mjs; ux.css and reskin.css restyle no .compare-identity- rule (asserted). ==== */
+.compare-summary.has-mode { grid-template-columns: repeat(6, 1fr); }
+.compare-summary.has-mode.has-unchecked { grid-template-columns: repeat(7, 1fr); }
+.compare-cell.c-mode { border-top: 1px solid var(--line); }
+.compare-cell.c-mode .c-val { font: 600 16px/1.4 var(--sans); font-style: normal; color: var(--ink); }
+.compare-identity { margin: 10px 28px 0; padding: 6px 12px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); }
+.compare-identity-legend { padding: 0 4px; font: 600 12.5px/1.45 var(--sans); color: var(--ink-2); }
+.compare-identity-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 18px; }
+.compare-identity-option { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; align-items: baseline; cursor: pointer; }
+.compare-identity-label { font: 600 13px/1.45 var(--sans); color: var(--ink); }
+.compare-identity-hint { grid-column: 2; font: 12.5px/1.45 var(--sans); color: var(--ink-3); }
+.compare-identity-option input:disabled ~ .compare-identity-label { color: var(--ink-3); }
+.compare-identity-note { margin: 6px 0 0; font: 12.5px/1.45 var(--sans); color: var(--ink-2); }
+.compare-identity-unavailable { margin: 6px 0 0; font: 12.5px/1.45 var(--sans); color: var(--ink-2); }
+@media (max-width: 900px) { .compare-summary.has-mode, .compare-summary.has-mode.has-unchecked { grid-template-columns: 1fr 1fr; } .compare-identity-options { grid-template-columns: 1fr; } }

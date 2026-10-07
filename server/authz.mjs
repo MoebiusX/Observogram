@@ -283,12 +283,14 @@ export function effectiveRoleOf(principal, membershipRole = null) {
 // there is a restart without it.
 const NO_SIGN_IN_WAY = 'this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC';
 const NO_SIGN_IN_WAY_AUTH_OFF = 'this server has no sign-in (OBSERVOGRAM_AUTH=off): restart it without OBSERVOGRAM_AUTH=off once a user exists (npm run users -- add <login>), or configure OIDC';
-const noSignInWay = (ctx) => (ctx.authOff ? NO_SIGN_IN_WAY_AUTH_OFF : NO_SIGN_IN_WAY);
+export const noSignInWay = (ctx) => (ctx.authOff ? NO_SIGN_IN_WAY_AUTH_OFF : NO_SIGN_IN_WAY);
 // The csrf: 'always' refusal, by what the entry is closed as: 'identity
 // changes' for the identity API (and the self route that changes a
-// session), 'changes to the MCP endpoint API' for those rows.
+// session), 'changes to the MCP endpoint API' for those rows, 'requests to
+// the live MCP API' for the live MCP API (a ping changes nothing).
 export function csrfAlwaysText(entry) {
-  const what = entry.closedAs === 'the identity API' ? 'identity changes' : `changes to ${entry.closedAs}`;
+  const what = entry.closedAs === 'the identity API' ? 'identity changes'
+    : entry.closedAs === 'the live MCP API' ? 'requests to the live MCP API' : `changes to ${entry.closedAs}`;
   return `missing X-Observogram-CSRF: 1 — ${what} need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')`;
 }
 
@@ -310,12 +312,15 @@ export function authzDecision(entry, ctx) {
     return deny(403, 'posture', why);
   }
   // 2. Without sign-in, a `direct` entry (the identity API, the MCP endpoint
-  //    changes, the audit reader) answers a person at this machine only.
-  //    The CLI way out is the identity API's, or the audit's reader
-  //    (`packc store audit`, tools/store-admin.mjs): no CLI manages endpoints.
+  //    changes, the audit reader, the live MCP API) answers a person at this
+  //    machine only.
+  //    The CLI way out is the identity API's, the audit's reader
+  //    (`packc store audit`, tools/store-admin.mjs), or for the live MCP API
+  //    the fetcher itself, which needs no server: no CLI manages endpoints.
   if (open && entry.direct && !ctx.direct) {
     const cli = entry.identityApi ? ', or use the CLIs from this machine (npm run users -- add <login>, passwd <login>, owner <login>)'
-      : entry.closedAs === 'the audit API' ? ', or list it from this machine with packc store audit' : '';
+      : entry.closedAs === 'the audit API' ? ', or list it from this machine with packc store audit'
+        : entry.closedAs === 'the live MCP API' ? ', or fetch without the server from this machine with node tools/fetch-live-pack.mjs (MCP_URL, OUTPUT)' : '';
     return deny(403, 'posture', `on a server without sign-in ${entry.closedAs} answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${ctx.port ?? '<port>'}${cli}`);
   }
   // 3. An always-CSRF change carries the header from every principal but the bearer.

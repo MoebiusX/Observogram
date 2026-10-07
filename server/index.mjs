@@ -40,7 +40,7 @@ import { resolve, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
 import { adapt, listEnvironments, overlaidCanonical } from '../tools/lib/adapter.mjs';
-import { serviceMetadata, catalogEntryOf } from '../tools/lib/service-keys.mjs';
+import { serviceMetadata, catalogEntryOf, livePackKind } from '../tools/lib/service-keys.mjs';
 import { isLegacyLayeredPack, upconvertLegacyPack } from '../tools/lib/legacy.mjs';
 import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from '../tools/lib/validator.mjs';
 import { evaluateConformance, RUBRIC } from '../tools/lib/conformance.mjs';
@@ -65,7 +65,8 @@ import {
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
 import { describeProxyAuth } from './auth-proxy.mjs';
-import { redactCredentials, stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
+import { stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
+import { mcpCallerOf, mcpRefusalBody, redactTarget } from './mcp-target-policy.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
 import { auditAfter, actorForRecord, bounded, finite } from './audit-after.mjs';
@@ -75,8 +76,10 @@ import { auditRoutes } from './routes/audit.mjs';
 import { verdictsRoutes } from './routes/verdicts.mjs';
 import { waiversRoutes } from './routes/waivers.mjs';
 import { auditReportRoutes } from './routes/audit-report.mjs';
+import { liveRoutes, livePackCounts } from './routes/live.mjs';
+import { abortAllLiveJobs } from './live-jobs.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
-import { resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
+import { journeyPackBSource, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
 import { conformanceWaivers, listWaiverViews } from './waiver-admin.mjs';
 import { authGate, orgContext, authorize, effectiveRoleOf, rankOf, rankOfRole } from './authz.mjs';
 import { versionInfo } from './version.mjs';
@@ -246,6 +249,7 @@ function catalogEntry(meta) {
   try {
     const c = loadPackFile(meta.path);
     const svc = serviceMetadata(c);
+    const live = livePackKind(c);   // 'scaffold' | 'snapshot' for a live pack only
     return {
       id: meta.id,
       label: meta.label,
@@ -258,6 +262,7 @@ function catalogEntry(meta) {
       namespace: svc.namespace,
       services: svc.services,
       environments: listEnvironments(c),
+      ...(live ? { live } : {}),
       ok: true,
     };
   } catch (e) {
@@ -759,6 +764,13 @@ app.use(auditReportRoutes({
 // rule server/audit-admin.mjs's.
 app.use(auditRoutes({ authorize }));
 
+// The live MCP API (rebadge batch 3) lives in server/routes/live.mjs:
+// POST /api/mcp/ping — initialize, tools/list and one cheap read against
+// the request's MCP target (resolveMcpTarget's, as a draft's), writing no
+// live file and no pack; the live jobs — /api/mcp/jobs, a snapshot or a
+// draft (draftFromMcp, below) run in the server's memory, polled by id.
+app.use(liveRoutes({ authorize, draftFromMcp }));
+
 // ---------- saved journeys (VALUE_BACKLOG item 11, studio surface) ----------
 
 // GET /api/journeys — every saved journey with its definition summary and
@@ -937,7 +949,7 @@ app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/sched
 // 502 when a pack source can't be resolved (live MCP down etc.).
 //
 // The audit (STORE_PLAN slice 5): one journey.run row for every attempt
-// past the 404, written after the engine returned or threw — on the 200
+// past the 404 and the Pack B target refusal, written after the engine returned or threw — on the 200
 // path the record's seven scalars; on the 502 path the same keys from the
 // route's own clock, the outcome `vantage-lost` when a live source lost its
 // vantage (the engine wrote a run record and may have notified) else
@@ -949,13 +961,27 @@ app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), a
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
   try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+  // A live Pack B is a server-side request to an MCP target (R4, decision
+  // D6): resolved before anything runs — through the org's registered
+  // endpoint (packB.mcp.endpointId), or a raw url as a typed URL, which
+  // only an admin may send. A refusal sends nothing and writes no row; the
+  // def's authEnv is never read here.
+  const usesMcp = !!def.packB?.mcp && (!def.packB.file || def.inventory !== undefined);
+  const mcpTarget = usesMcp ? resolveJourneyMcp(currentStore(), def.packB.mcp, { caller: mcpCallerOf(req) }) : null;
+  if (mcpTarget?.status) return res.status(mcpTarget.status).json(mcpRefusalBody(mcpTarget));
   const t0 = new Date();
   const runRow = (detail) => ({ action: 'journey.run', targetKind: 'journey', targetId: bounded(def.name), detail });
   try {
     // A crawl: walk, a file: source and an inventory site read only this
     // org's own part of the workspace (STORE_PLAN slice 2, A-24); a path in
     // another org's part is refused.
-    const record = await runJourney(def, { crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() } });
+    const record = await runJourney(def, {
+      crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() },
+      resolveMcp: () => {
+        if (!mcpTarget) throw new Error(`journey ${def.name}: Pack B's MCP was not resolved`);
+        return mcpTarget;
+      },
+    });
     const auditError = auditAfter(req, runRow({
       startedAt: bounded(record.startedAt), outcome: bounded(record.outcome, 100),
       alignmentPct: finite(record.drift?.alignmentPct), gradeScore: finite(record.grade?.score),
@@ -969,7 +995,7 @@ app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), a
       startedAt: t0.toISOString(), outcome: def.packB?.mcp && e?.vantageLost ? 'vantage-lost' : 'error',
       alignmentPct: null, gradeScore: null, gradePass: null, breaches: null, tookMs: Date.now() - t0.getTime(),
     }), { tag: 'journey' });
-    res.status(502).json({ ok: false, error: redactCredentials(String(e.message)), ...(auditError ? { auditError } : {}) });
+    res.status(502).json({ ok: false, error: redactTarget(String(e.message), mcpTarget), ...(auditError ? { auditError } : {}) });
   }
 });
 
@@ -978,7 +1004,12 @@ app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), a
 // packs keep their path; uploaded/crawled/drafted packs point at their
 // persisted workspace copy (10A); a Pack B that came from a live MCP draft
 // is saved as a live mcp: source via its mcp.url annotation, so re-runs
-// re-draft instead of comparing against a frozen snapshot.
+// re-draft instead of comparing against a frozen copy (a live snapshot is
+// saved as a file: it is an inventory read at one time) — through the
+// org's registered endpoint whose safe URL is the annotation's
+// ({ url, endpointId }); without one, an admin's capture keeps the URL
+// (typed-URL and origin rules) and anyone else's saves Pack B as a file
+// (R4, decision D6).
 app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req, res) => {
   const b = req.body || {};
   const name = typeof b.name === 'string' ? b.name.trim() : '';
@@ -998,13 +1029,15 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
   };
   const packA = sourceFor(metaA);
   let packB;
-  let bAnn = {};
-  try { bAnn = loadPackCanonical(metaB)?.metadata?.annotations || {}; } catch (_) {}
-  if (bAnn['mcp.url']) {
-    packB = { mcp: { url: bAnn['mcp.url'] } };
-  } else {
-    packB = sourceFor(metaB);
-  }
+  let canonicalB = null;
+  try { canonicalB = loadPackCanonical(metaB); } catch (_) {}
+  const bAnn = canonicalB?.metadata?.annotations || {};
+  // A snapshot is an inventory read at one time (its mcp.url is an origin
+  // only): it is saved as the file it is, never re-fetched as a draft.
+  const live = bAnn['mcp.url'] && livePackKind(canonicalB) !== 'snapshot'
+    ? journeyPackBSource(currentStore(), bAnn['mcp.url'], { caller: mcpCallerOf(req) }) : null;
+  if (live?.status) return res.status(live.status).json(mcpRefusalBody(live));
+  packB = live ?? sourceFor(metaB);
 
   const def = {
     packA, packB,
@@ -1035,8 +1068,9 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
       banner: [
         `Captured from a studio session on ${new Date().toISOString()}.`,
         `Pack A: ${metaA.label || metaA.id} · Pack B: ${metaB.label || metaB.id}`,
-        `Edit freely — e.g. swap a frozen pack file for a crawl: source,`,
-        `or add authEnv under packB.mcp for authenticated MCPs.`,
+        `Edit freely — e.g. swap a frozen pack file for a crawl: source.`,
+        `The server fetches a live Pack B through packB.mcp.endpointId (its token`,
+        `from the endpoint's readTokenEnv); the CLI reads url and authEnv.`,
       ],
     });
   } catch (e) {
@@ -1263,11 +1297,35 @@ app.get('/api/live-status', authorize('GET /api/live-status'), (req, res) => {
 // ----------------------------------------------------------------
 app.post('/api/draft-from-mcp', authorize('POST /api/draft-from-mcp'), async (req, res) => {
   const body = req.body || {};
-  const packName = typeof body.packName === 'string' && body.packName.trim()
-    ? body.packName.trim()
+  const target = resolveMcpTarget(currentStore(), body, { forWrite: false, caller: mcpCallerOf(req) });
+  if (target.status) return res.status(target.status).json(mcpRefusalBody(target));
+  const t0 = Date.now();
+  try {
+    res.json(await draftFromMcp(target, {
+      packName: body.packName,
+      label: body.label,
+      register: (pack, label) => registerUploadedPack(req, pack, label, label),
+    }));
+  } catch (e) {
+    const error = redactTarget(e.message, target);
+    process.stderr.write(`[draft-from-mcp]   error in ${Date.now() - t0}ms: ${error}\n`);
+    res.status(502).json({ ok: false, error, tookMs: Date.now() - t0 });
+  }
+});
+
+// The draft itself, shared by POST /api/draft-from-mcp and a draft live job
+// (server/routes/live.mjs), so a job's canonical is the route's byte for
+// byte. `target` is resolveMcpTarget's answer. `onStage` and `signal` reach
+// fetchMcp (the draft's canonical is the same with or without them); the
+// `build` stage is reported here. `register(pack, label)` registers a valid
+// pack and returns its id (the route: the request's principal; a job: its
+// captured actor, after its authority re-check). Throws what the fetch
+// throws; answers { ok, canonical, canonicalYaml, summary, annotations,
+// validation, conformance, registered, mcpEndpoint, tookMs }.
+async function draftFromMcp(target, { packName: rawName = null, label = null, onStage = null, signal = null, register, tag = 'draft-from-mcp', verb = 'POST' } = {}) {
+  const packName = typeof rawName === 'string' && rawName.trim()
+    ? rawName.trim()
     : null;
-  const target = resolveMcpTarget(currentStore(), body, { forWrite: false });
-  if (target.status) return res.status(target.status).json({ ok: false, error: target.error });
   const { mcpUrl, safeMcpUrl, mcpAuth, endpoint: mcpEndpoint } = target;
   // The draft is a registered pack every viewer of the org reads: it keeps
   // the safe URL (a journey captured from it re-drafts from it; a header
@@ -1275,201 +1333,204 @@ app.post('/api/draft-from-mcp', authorize('POST /api/draft-from-mcp'), async (re
   const { dropped } = stripMcpUrl(mcpUrl);
 
   const t0 = Date.now();
-  try {
-    process.stderr.write(`[draft-from-mcp] POST -> ${safeMcpUrl}\n`);
-    const fetched = await fetchMcp({ mcpUrl, mcpAuth });
-    const refreshedAt = new Date().toISOString();
-    const pack = buildCanonicalPack({ refreshedAt, mcpUrl: safeMcpUrl, packName, ...fetched });
-    const errors = validateCanonical(pack, SCHEMA);
+  process.stderr.write(`[${tag}] ${verb} -> ${safeMcpUrl}\n`);
+  const fetched = await fetchMcp({ mcpUrl, mcpAuth, onStage, signal });
+  onStage?.({ stage: 'build', state: 'running', counts: null, message: null, gap: null });
+  const refreshedAt = new Date().toISOString();
+  const pack = buildCanonicalPack({ refreshedAt, mcpUrl: safeMcpUrl, packName, ...fetched });
+  const errors = validateCanonical(pack, SCHEMA);
 
-    // Build a discovery summary in the same shape the crawler returns,
-    // so the client can render BOTH path A and path B drafts with the
-    // same review component.
-    const ann = pack.metadata?.annotations || {};
-    const probesAttempted = (ann['mcp.probesAttempted'] || '').split(',').filter(Boolean);
-    const probesSucceeded = (ann['mcp.probesSucceeded'] || '').split(',').filter(Boolean);
-    const probesEmpty     = (ann['mcp.probesEmpty']     || '').split(',').filter(Boolean);
-    const probesFailed    = (ann['mcp.probesFailed']    || '').split(',').filter(Boolean);
-    const probesUnsupported = (ann['mcp.probesUnsupported'] || '').split(',').filter(Boolean);
-    // Why a family got no answer — the fetcher's last candidate error.
-    const probeErrors = {};
-    for (const [k, v] of Object.entries(ann)) {
-      if (k.startsWith('mcp.probeErrors.') && v) probeErrors[k.slice('mcp.probeErrors.'.length)] = String(v);
-    }
-
-    // Parse the capability inventory (skill → backend → product → versions)
-    // out of the flat annotation set the fetcher stamped. The studio's
-    // connect screen reads this directly to render the version-gating
-    // story up-front, before the user even commits to drafting a pack.
-    const inventoryRaw = ann['mcp.capabilities.inventory'] || '';
-    const inventory = inventoryRaw.split('|').filter(Boolean).map(row => {
-      const [skill, backend, product, mustCsv] = row.split(':');
-      return {
-        skill, backend,
-        product: product === '-' ? null : product,
-        versions: { must: (mustCsv || '').split(';').filter(Boolean) },
-      };
-    });
-    const capabilities = ann['mcp.capabilities.skillCount']
-      ? {
-          gatingMode:    ann['mcp.capabilities.gatingMode'] || 'warn',
-          protocolModel: ann['mcp.capabilities.protocolModel'] || null,
-          skillCount:    Number(ann['mcp.capabilities.skillCount'] || 0),
-          backendCount:  Number(ann['mcp.capabilities.backendCount'] || 0),
-          skills:        (ann['mcp.capabilities.skills'] || '').split(',').filter(Boolean),
-          inventory,
-        }
-      : null;
-
-    const summary = {
-      source: 'mcp',
-      mcpUrl: safeMcpUrl,
-      refreshedAt,
-      discovered: {
-        backends:        (pack.spec?.telemetry?.backends || []).length,
-        servicesDiscovered: (ann['mcp.servicesDiscovered'] || '').split(',').filter(Boolean),
-        toolsCalled:    (ann['mcp.toolsCalled']    || '').split(',').filter(Boolean),
-        toolsFailed:    (ann['mcp.toolsFailed']    || '').split(',').filter(Boolean),
-        activeAnomalies: Number(ann['mcp.activeAnomalies'] || 0),
-        // Probe-discovered facts — counts only, full data lives in the
-        // pack itself (spec.queries.recording_rules etc.)
-        recordingRules:  Number(ann['mcp.discovered.recording_rules'] || (pack.spec?.queries?.recording_rules || []).length),
-        alertRules:      Number(ann['mcp.discovered.alert_rules'] || 0),
-        dashboards:      Number(ann['mcp.discovered.dashboards'] || (pack.spec?.dashboards || []).length),
-        scrapeJobs:     (ann['mcp.discovered.scrape_jobs'] || '').split(',').filter(Boolean),
-        // Routes read from the running Alertmanager configuration.
-        alertingRoutes:  Number(ann['mcp.discovered.alerting_routes'] || 0),
-        // Alerting rules that guard a recorded SLO (read as burn-rate
-        // entries) and the operational ones that guard none.
-        alertRulesLinked:      Number(ann['mcp.discovered.alert_rules_linked'] || 0),
-        alertRulesOperational: Number(ann['mcp.discovered.alert_rules_operational'] || 0),
-        // Products the MCP can speak to that showed no sign of running:
-        // supported, not deployed — never listed as backends.
-        supportedOnly:  (ann['mcp.capabilities.unobserved'] || '').split(',').filter(Boolean),
-        // Artefact families this fetch had no way to look at, with why
-        // (observogram.unobserved.<family>) — a comparison reports them as
-        // "not checked", never as missing.
-        unobserved: Object.fromEntries(Object.entries(ann)
-          .filter(([k]) => k.startsWith('observogram.unobserved.'))
-          .map(([k, v]) => [k.slice('observogram.unobserved.'.length), String(v)])),
-        // On-wire liveness: jobs whose every target is down, and rules the
-        // ruler reports as failing to evaluate. Names, so the studio can
-        // say WHICH ones — the pack's mcp.observed.* annotations carry the
-        // per-target / per-rule detail.
-        scrapeJobsDown:         (ann['mcp.discovered.scrape_jobs_down'] || '').split(',').filter(Boolean),
-        recordingRulesUnhealthy: (ann['mcp.discovered.recording_rules_unhealthy'] || '').split(',').filter(Boolean),
-        alertRulesUnhealthy:    (ann['mcp.discovered.alert_rules_unhealthy'] || '').split(',').filter(Boolean),
-        metricNamesCount: Number(ann['mcp.discovered.metric_names_count'] || 0),
-        // tools/list inventory — what the MCP advertised vs what we matched
-        toolsExposed:    (ann['mcp.toolsExposed']    || '').split(',').filter(Boolean),
-        toolsUnmatched:  (ann['mcp.toolsUnmatched']  || '').split(',').filter(Boolean),
-        probesAttempted, probesSucceeded, probesEmpty, probesFailed,
-        probesUnsupported, probeErrors,
-      },
-      // Full backend_capabilities inventory — the version-gating contract.
-      // When null, the MCP didn't expose backend_capabilities (older
-      // server). When set, the studio renders the full skill → backend →
-      // product → version matrix on connect.
-      capabilities,
-      // Step 2: the stack's own self-metrics and the Alertmanager /
-      // Grafana status surfaces — point-in-time samples the studio shows
-      // under "signal, not verdict". null when the fetcher predates step 2
-      // (or the surface wasn't advertised); never a Verified stamp.
-      stack: stackSummaryFromAnnotations(ann),
-      alertmanager: alertmanagerSummaryFromAnnotations(ann),
-      grafana: grafanaSummaryFromAnnotations(ann),
-      warnings: [],
-      tier: pack.metadata?.bindings?.criticality || 'tier-3',
-    };
-
-    // The strip is never silent.
-    const strippedNote = droppedNote(dropped, { where: 'not kept in the draft' });
-    if (strippedNote) summary.warnings.push(strippedNote);
-    // Warnings — only flag a gap when we ASKED and got nothing, never
-    // when we never asked. The MCP probe table is the contract for
-    // "what we tried."
-    if ((summary.discovered.toolsFailed || []).length) {
-      summary.warnings.push(`MCP tools that failed: ${summary.discovered.toolsFailed.join(', ')}`);
-    }
-    // A family the MCP doesn't expose at all is a tier restriction, not an
-    // empty answer — one honest line, never the per-family "returned empty"
-    // narrative below.
-    if (probesUnsupported.length) {
-      summary.warnings.push(`Restricted MCP tier — families not exposed by this server: ${probesUnsupported.join(', ')}.`);
-    }
-    // The stack panel is gated on metrics_query alone; a restricted tier
-    // reads "not attempted", never "healthy" and never "absent".
-    if (summary.stack && summary.stack.status === 'not-attempted') {
-      summary.warnings.push(/not exposed/.test(summary.stack.reason || '')
-        ? 'Stack self-metrics not attempted — metrics_query not exposed by this MCP tier.'
-        : `Stack self-metrics not attempted — ${summary.stack.reason || 'no reason recorded'}.`);
-    }
-    if (summary.alertmanager?.error) {
-      summary.warnings.push(`Alertmanager status probe failed — ${summary.alertmanager.error}`);
-    }
-    if (summary.grafana?.error) {
-      summary.warnings.push(`Grafana status probe failed — ${summary.grafana.error}`);
-    }
-    const attemptedNothing = (k) => probesAttempted.includes(k) && !probesSucceeded.includes(k) && !probesUnsupported.includes(k);
-    if (attemptedNothing('recording_rules')) {
-      summary.warnings.push('Recording-rule probes returned empty. The SLI/SLO sections were synthesised from system_health — if your platform has Prometheus/Mimir rules, the MCP isn\'t exposing them yet.');
-    }
-    if (attemptedNothing('alert_rules')) {
-      summary.warnings.push('Alert-rule probes returned empty. Burn-rate alerts are synthesized from SLOs; existing fired alerts couldn\'t be surfaced.');
-    }
-    if (attemptedNothing('dashboards')) {
-      summary.warnings.push(probesFailed.includes('dashboards')
-        ? `The dashboards probe got no answer${probeErrors.dashboards ? ` (${probeErrors.dashboards})` : ''}. The dashboards section is a stub, and a comparison reports declared dashboards as not checked — not as missing.`
-        : 'Dashboard probes returned empty. The dashboards section is a stub — point the MCP at Grafana\'s /api/search to populate it.');
-    }
-    if (attemptedNothing('alerting_routes')) {
-      summary.warnings.push(`The running Alertmanager configuration could not be read${probeErrors.alerting_routes ? ` (${probeErrors.alerting_routes})` : ''}. The route in the draft is a placeholder, and a comparison reports declared routes as not checked.`);
-    }
-    if (attemptedNothing('scrape_configs')) {
-      summary.warnings.push('Scrape-config probes returned empty. spec.telemetry.scrape_evidence is unknown — declare scrape jobs in the pack by hand if you can.');
-    }
-    if (attemptedNothing('metric_names')) {
-      summary.warnings.push('Metric-inventory probes returned empty. The metrics actually exported by the platform couldn\'t be enumerated.');
-    }
-    // Hard guards regardless of probes (the live state has to satisfy SOMETHING).
-    if ((pack.spec?.slis || []).length === 0) {
-      summary.warnings.push('No SLIs at all — recording rules + system_health both came up empty.');
-    }
-
-    const conformance = evaluateConformance(pack);
-    const canonicalYaml = banner(pack) + emitYaml(pack);
-    // Register only if validation passes; bad packs aren't addressable.
-    // Prefer the caller-supplied label (the quick-start cases pass
-    // something friendlier than the auto-generated metadata name).
-    const friendlyLabel = (typeof body.label === 'string' && body.label.trim())
-      ? body.label.trim()
-      : `${pack.metadata?.name || 'mcp-draft'} (live MCP draft)`;
-    const registered = errors.length === 0
-      ? { id: registerUploadedPack(req, pack, friendlyLabel, friendlyLabel) }
-      : null;
-    process.stderr.write(`[draft-from-mcp]   ok in ${Date.now() - t0}ms; ` +
-      `valid=${errors.length === 0}; ` +
-      `services=${summary.discovered.backends}; ` +
-      `registered=${registered?.id || '-'}; ` +
-      `failed=${summary.discovered.toolsFailed.join(',') || 'none'}\n`);
-
-    res.json({
-      ok: true,
-      canonical: pack,
-      canonicalYaml,
-      summary,
-      annotations: ann,
-      validation: { ok: errors.length === 0, errors },
-      conformance,
-      registered,
-      mcpEndpoint,
-      tookMs: Date.now() - t0,
-    });
-  } catch (e) {
-    process.stderr.write(`[draft-from-mcp]   error in ${Date.now() - t0}ms: ${redactCredentials(e.message)}\n`);
-    res.status(502).json({ ok: false, error: e.message, tookMs: Date.now() - t0 });
+  // Build a discovery summary in the same shape the crawler returns,
+  // so the client can render BOTH path A and path B drafts with the
+  // same review component.
+  const ann = pack.metadata?.annotations || {};
+  const probesAttempted = (ann['mcp.probesAttempted'] || '').split(',').filter(Boolean);
+  const probesSucceeded = (ann['mcp.probesSucceeded'] || '').split(',').filter(Boolean);
+  const probesEmpty     = (ann['mcp.probesEmpty']     || '').split(',').filter(Boolean);
+  const probesFailed    = (ann['mcp.probesFailed']    || '').split(',').filter(Boolean);
+  const probesUnsupported = (ann['mcp.probesUnsupported'] || '').split(',').filter(Boolean);
+  // Why a family got no answer — the fetcher's last candidate error.
+  const probeErrors = {};
+  for (const [k, v] of Object.entries(ann)) {
+    if (k.startsWith('mcp.probeErrors.') && v) probeErrors[k.slice('mcp.probeErrors.'.length)] = String(v);
   }
-});
+
+  // Parse the capability inventory (skill → backend → product → versions)
+  // out of the flat annotation set the fetcher stamped. The studio's
+  // connect screen reads this directly to render the version-gating
+  // story up-front, before the user even commits to drafting a pack.
+  const inventoryRaw = ann['mcp.capabilities.inventory'] || '';
+  const inventory = inventoryRaw.split('|').filter(Boolean).map(row => {
+    const [skill, backend, product, mustCsv] = row.split(':');
+    return {
+      skill, backend,
+      product: product === '-' ? null : product,
+      versions: { must: (mustCsv || '').split(';').filter(Boolean) },
+    };
+  });
+  const capabilities = ann['mcp.capabilities.skillCount']
+    ? {
+        gatingMode:    ann['mcp.capabilities.gatingMode'] || 'warn',
+        protocolModel: ann['mcp.capabilities.protocolModel'] || null,
+        skillCount:    Number(ann['mcp.capabilities.skillCount'] || 0),
+        backendCount:  Number(ann['mcp.capabilities.backendCount'] || 0),
+        skills:        (ann['mcp.capabilities.skills'] || '').split(',').filter(Boolean),
+        inventory,
+      }
+    : null;
+
+  const summary = {
+    source: 'mcp',
+    mcpUrl: safeMcpUrl,
+    refreshedAt,
+    discovered: {
+      backends:        (pack.spec?.telemetry?.backends || []).length,
+      servicesDiscovered: (ann['mcp.servicesDiscovered'] || '').split(',').filter(Boolean),
+      toolsCalled:    (ann['mcp.toolsCalled']    || '').split(',').filter(Boolean),
+      toolsFailed:    (ann['mcp.toolsFailed']    || '').split(',').filter(Boolean),
+      activeAnomalies: Number(ann['mcp.activeAnomalies'] || 0),
+      // Probe-discovered facts — counts only, full data lives in the
+      // pack itself (spec.queries.recording_rules etc.)
+      recordingRules:  Number(ann['mcp.discovered.recording_rules'] || (pack.spec?.queries?.recording_rules || []).length),
+      alertRules:      Number(ann['mcp.discovered.alert_rules'] || 0),
+      dashboards:      Number(ann['mcp.discovered.dashboards'] || (pack.spec?.dashboards || []).length),
+      scrapeJobs:     (ann['mcp.discovered.scrape_jobs'] || '').split(',').filter(Boolean),
+      // Routes read from the running Alertmanager configuration.
+      alertingRoutes:  Number(ann['mcp.discovered.alerting_routes'] || 0),
+      // Alerting rules that guard a recorded SLO (read as burn-rate
+      // entries) and the operational ones that guard none.
+      alertRulesLinked:      Number(ann['mcp.discovered.alert_rules_linked'] || 0),
+      alertRulesOperational: Number(ann['mcp.discovered.alert_rules_operational'] || 0),
+      // Products the MCP can speak to that showed no sign of running:
+      // supported, not deployed — never listed as backends.
+      supportedOnly:  (ann['mcp.capabilities.unobserved'] || '').split(',').filter(Boolean),
+      // Artefact families this fetch had no way to look at, with why
+      // (observogram.unobserved.<family>) — a comparison reports them as
+      // "not checked", never as missing.
+      unobserved: Object.fromEntries(Object.entries(ann)
+        .filter(([k]) => k.startsWith('observogram.unobserved.'))
+        .map(([k, v]) => [k.slice('observogram.unobserved.'.length), String(v)])),
+      // On-wire liveness: jobs whose every target is down, and rules the
+      // ruler reports as failing to evaluate. Names, so the studio can
+      // say WHICH ones — the pack's mcp.observed.* annotations carry the
+      // per-target / per-rule detail.
+      scrapeJobsDown:         (ann['mcp.discovered.scrape_jobs_down'] || '').split(',').filter(Boolean),
+      recordingRulesUnhealthy: (ann['mcp.discovered.recording_rules_unhealthy'] || '').split(',').filter(Boolean),
+      alertRulesUnhealthy:    (ann['mcp.discovered.alert_rules_unhealthy'] || '').split(',').filter(Boolean),
+      metricNamesCount: Number(ann['mcp.discovered.metric_names_count'] || 0),
+      // tools/list inventory — what the MCP advertised vs what we matched
+      toolsExposed:    (ann['mcp.toolsExposed']    || '').split(',').filter(Boolean),
+      toolsUnmatched:  (ann['mcp.toolsUnmatched']  || '').split(',').filter(Boolean),
+      probesAttempted, probesSucceeded, probesEmpty, probesFailed,
+      probesUnsupported, probeErrors,
+    },
+    // Full backend_capabilities inventory — the version-gating contract.
+    // When null, the MCP didn't expose backend_capabilities (older
+    // server). When set, the studio renders the full skill → backend →
+    // product → version matrix on connect.
+    capabilities,
+    // Step 2: the stack's own self-metrics and the Alertmanager /
+    // Grafana status surfaces — point-in-time samples the studio shows
+    // under "signal, not verdict". null when the fetcher predates step 2
+    // (or the surface wasn't advertised); never a Verified stamp.
+    stack: stackSummaryFromAnnotations(ann),
+    alertmanager: alertmanagerSummaryFromAnnotations(ann),
+    grafana: grafanaSummaryFromAnnotations(ann),
+    warnings: [],
+    tier: pack.metadata?.bindings?.criticality || 'tier-3',
+  };
+
+  // The strip is never silent.
+  const strippedNote = droppedNote(dropped, { where: 'not kept in the draft' });
+  if (strippedNote) summary.warnings.push(strippedNote);
+  // Warnings — only flag a gap when we ASKED and got nothing, never
+  // when we never asked. The MCP probe table is the contract for
+  // "what we tried."
+  if ((summary.discovered.toolsFailed || []).length) {
+    summary.warnings.push(`MCP tools that failed: ${summary.discovered.toolsFailed.join(', ')}`);
+  }
+  // A family the MCP doesn't expose at all is a tier restriction, not an
+  // empty answer — one honest line, never the per-family "returned empty"
+  // narrative below.
+  if (probesUnsupported.length) {
+    summary.warnings.push(`Restricted MCP tier — families not exposed by this server: ${probesUnsupported.join(', ')}.`);
+  }
+  // The stack panel is gated on metrics_query alone; a restricted tier
+  // reads "not attempted", never "healthy" and never "absent".
+  if (summary.stack && summary.stack.status === 'not-attempted') {
+    summary.warnings.push(/not exposed/.test(summary.stack.reason || '')
+      ? 'Stack self-metrics not attempted — metrics_query not exposed by this MCP tier.'
+      : `Stack self-metrics not attempted — ${summary.stack.reason || 'no reason recorded'}.`);
+  }
+  if (summary.alertmanager?.error) {
+    summary.warnings.push(`Alertmanager status probe failed — ${summary.alertmanager.error}`);
+  }
+  if (summary.grafana?.error) {
+    summary.warnings.push(`Grafana status probe failed — ${summary.grafana.error}`);
+  }
+  const attemptedNothing = (k) => probesAttempted.includes(k) && !probesSucceeded.includes(k) && !probesUnsupported.includes(k);
+  if (attemptedNothing('recording_rules')) {
+    summary.warnings.push('Recording-rule probes returned empty. The SLI/SLO sections were synthesised from system_health — if your platform has Prometheus/Mimir rules, the MCP isn\'t exposing them yet.');
+  }
+  if (attemptedNothing('alert_rules')) {
+    summary.warnings.push('Alert-rule probes returned empty. Burn-rate alerts are synthesized from SLOs; existing fired alerts couldn\'t be surfaced.');
+  }
+  if (attemptedNothing('dashboards')) {
+    summary.warnings.push(probesFailed.includes('dashboards')
+      ? `The dashboards probe got no answer${probeErrors.dashboards ? ` (${probeErrors.dashboards})` : ''}. The dashboards section is a stub, and a comparison reports declared dashboards as not checked — not as missing.`
+      : 'Dashboard probes returned empty. The dashboards section is a stub — point the MCP at Grafana\'s /api/search to populate it.');
+  }
+  if (attemptedNothing('alerting_routes')) {
+    summary.warnings.push(`The running Alertmanager configuration could not be read${probeErrors.alerting_routes ? ` (${probeErrors.alerting_routes})` : ''}. The route in the draft is a placeholder, and a comparison reports declared routes as not checked.`);
+  }
+  if (attemptedNothing('scrape_configs')) {
+    summary.warnings.push('Scrape-config probes returned empty. spec.telemetry.scrape_evidence is unknown — declare scrape jobs in the pack by hand if you can.');
+  }
+  if (attemptedNothing('metric_names')) {
+    summary.warnings.push('Metric-inventory probes returned empty. The metrics actually exported by the platform couldn\'t be enumerated.');
+  }
+  // Hard guards regardless of probes (the live state has to satisfy SOMETHING).
+  if ((pack.spec?.slis || []).length === 0) {
+    summary.warnings.push('No SLIs at all — recording rules + system_health both came up empty.');
+  }
+
+  const conformance = evaluateConformance(pack);
+  const canonicalYaml = banner(pack) + emitYaml(pack);
+  onStage?.({
+    stage: 'build',
+    state: errors.length === 0 ? 'done' : 'failed',
+    counts: { ...livePackCounts(pack), errors: errors.length, bytes: Buffer.byteLength(canonicalYaml) },
+    message: errors.length === 0 ? null : `the draft failed schema validation (${errors.length} error${errors.length === 1 ? '' : 's'})`,
+    gap: null,
+  });
+  // Register only if validation passes; bad packs aren't addressable.
+  // Prefer the caller-supplied label (the quick-start cases pass
+  // something friendlier than the auto-generated metadata name).
+  const friendlyLabel = (typeof label === 'string' && label.trim())
+    ? label.trim()
+    : `${pack.metadata?.name || 'mcp-draft'} (live MCP draft)`;
+  const registered = errors.length === 0
+    ? { id: await register(pack, friendlyLabel) }
+    : null;
+  process.stderr.write(`[${tag}]   ok in ${Date.now() - t0}ms; ` +
+    `valid=${errors.length === 0}; ` +
+    `services=${summary.discovered.backends}; ` +
+    `registered=${registered?.id || '-'}; ` +
+    `failed=${summary.discovered.toolsFailed.join(',') || 'none'}\n`);
+
+  return {
+    ok: true,
+    canonical: pack,
+    canonicalYaml,
+    summary,
+    annotations: ann,
+    validation: { ok: errors.length === 0, errors },
+    conformance,
+    registered,
+    mcpEndpoint,
+    tookMs: Date.now() - t0,
+  };
+}
 
 function banner(pack) {
   return [
@@ -1496,8 +1557,8 @@ function banner(pack) {
 // the live pack keeps the safe URL, never a token.
 app.post('/api/refresh-live', authorize('POST /api/refresh-live'), async (req, res) => {
   const body = req.body || {};
-  const target = resolveMcpTarget(currentStore(), body, { forWrite: false });
-  if (target.status) return res.status(target.status).json({ ok: false, error: target.error });
+  const target = resolveMcpTarget(currentStore(), body, { forWrite: false, caller: mcpCallerOf(req) });
+  if (target.status) return res.status(target.status).json(mcpRefusalBody(target));
   const { mcpUrl, safeMcpUrl, mcpAuth, endpoint: mcpEndpoint } = target;
   const { dropped } = stripMcpUrl(mcpUrl);
   // The audit (STORE_PLAN slice 5): the principal is checked before any
@@ -1541,8 +1602,9 @@ app.post('/api/refresh-live', authorize('POST /api/refresh-live'), async (req, r
       ...(auditError ? { auditError } : {}),
     });
   } catch (e) {
-    process.stderr.write(`[refresh-live]   error in ${Date.now() - t0}ms: ${redactCredentials(e.message)}\n`);
-    res.status(502).json({ ok: false, error: e.message, details: e.details });
+    const error = redactTarget(e.message, target);
+    process.stderr.write(`[refresh-live]   error in ${Date.now() - t0}ms: ${error}\n`);
+    res.status(502).json({ ok: false, error, details: e.details });
   }
 });
 
@@ -2196,6 +2258,9 @@ export async function start({ port = PORT, host = HOST, silent = false, legacyLi
       resolveListen(srv);
     });
     srv.on('error', reject);
+    // The live jobs run in this process's memory: a server that stops
+    // aborts them (each fails, saying so; every timer is unref()'d).
+    srv.on('close', abortAllLiveJobs);
   });
 }
 

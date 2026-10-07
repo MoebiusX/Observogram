@@ -53,10 +53,10 @@ import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emit as emitYaml, parse as parseYaml } from './lib/mini-yaml.mjs';
-import { createMcpClient as createMcpClientCore, isTransportHookError } from './lib/mcp-client.mjs';
+import { createMcpClient as createMcpClientCore, isTransportHookError, MCP_PROTOCOL_VERSION } from './lib/mcp-client.mjs';
 import { mcpTransport, describeTransport } from './mcp-transport.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
-import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule, isSpecRecordingRuleName } from './lib/sli-inference.mjs';
+import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule, isSpecRecordingRuleName, alertRuleExpr } from './lib/sli-inference.mjs';
 import { materializeL2XFromBackends } from './lib/l2x.mjs';
 import { routesFromAlertmanagerConfig } from './lib/alert-routes.mjs';
 import { backendForScrapeJob, knownBackendProduct } from './lib/backend-products.mjs';
@@ -69,6 +69,8 @@ import {
 } from './lib/contracts/stack-self-metrics.mjs';
 import { brandEnv } from './lib/brand-env.mjs';
 import { stripMcpUrl } from './lib/mcp-url-safety.mjs';
+import { dashboardSpecId } from './lib/crawler.mjs';
+import { LIVE_KINDS, SNAPSHOT_LIMITS, stagesFor, stageNoun, normalizeScope, scopeAnnotations } from './lib/live-fetch.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = resolve(__dirname, '..', 'vendor', 'observability-pack-spec', `v${SPEC_VERSION}`, 'observability-pack.schema.json');
@@ -129,8 +131,10 @@ function annotationJson(value) {
 // fills in the Node-side defaults — the MCP_TIMEOUT_MS budget and the
 // transport (docs/MCP_INTEGRATION.md "Transport hook") — so the recorder
 // and the server's deploy routes keep importing it from here.
-export function createMcpClient({ mcpUrl, mcpAuth = null, transport = mcpTransport() } = {}) {
-  return createMcpClientCore({ mcpUrl, mcpAuth, timeoutMs: MCP_TIMEOUT_MS, transport });
+// `signal` (optional) is a caller's cancel: aborting it ends every request in
+// flight and refuses the next ones (tools/lib/mcp-client.mjs).
+export function createMcpClient({ mcpUrl, mcpAuth = null, transport = mcpTransport(), signal = null } = {}) {
+  return createMcpClientCore({ mcpUrl, mcpAuth, timeoutMs: MCP_TIMEOUT_MS, transport, ...(signal ? { signal } : {}) });
 }
 
 // A transport hook fault is never a probe failure: every catch below that
@@ -606,6 +610,18 @@ function dashboardIdFrom(item, fallback = 'dashboard') {
   return specSlug(source, 'dash');
 }
 
+// A snapshot's dashboard id: the obs-pack-id tag when present (the deploy
+// round trip, as in a draft), else the CRAWLER's rule over the uid, then the
+// title (tools/lib/crawler.mjs dashboardSpecId) — so the same Grafana uid
+// pairs by definedId with a crawled repository — else the draft's own rule.
+function snapshotDashboardId(item) {
+  const tags = item?.tags || item?.dashboard?.tags || [];
+  const idTag = (Array.isArray(tags) ? tags : []).find(t => String(t).startsWith('obs-pack-id:'));
+  if (idTag) return specSlug(String(idTag).slice('obs-pack-id:'.length), 'dash');
+  return dashboardSpecId({ uid: item?.dashboard?.uid || item?.uid, title: item?.dashboard?.title || item?.title })
+    ?? dashboardIdFrom(item);
+}
+
 function panelIdFrom(panel, fallback = 'panel') {
   return specSlug(panel?.title || panel?.id || panel?.refId || fallback, 'panel');
 }
@@ -618,8 +634,10 @@ function grafanaDashboardSearchItems(response) {
     : [];
 }
 
-function dashboardFromSearchItem(d) {
-  const id = dashboardIdFrom(d);
+// `idOf` is the dashboard id rule: the draft's dashboardIdFrom, or a
+// snapshot's snapshotDashboardId (the crawler's rule).
+function dashboardFromSearchItem(d, idOf = dashboardIdFrom) {
+  const id = idOf(d);
   const uid = d.uid || d.id || null;
   const params = {
     ...(uid ? { uid: String(uid) } : {}),
@@ -648,10 +666,10 @@ function flattenGrafanaPanels(panels, out = []) {
   return out;
 }
 
-function dashboardFromGrafanaDetail(detail, searchItem = {}) {
+function dashboardFromGrafanaDetail(detail, searchItem = {}, idOf = dashboardIdFrom) {
   const dash = detail?.dashboard || {};
   const raw = detail?.raw && typeof detail.raw === 'object' ? detail.raw : null;
-  const id = dashboardIdFrom({ ...searchItem, dashboard: dash });
+  const id = idOf({ ...searchItem, dashboard: dash });
   const schemaVersion = Number(dash.schemaVersion || raw?.schemaVersion);
   const panelSummaries = Array.isArray(dash.panels) ? dash.panels : [];
   const rawPanels = raw ? flattenGrafanaPanels(raw.panels || []) : [];
@@ -1868,13 +1886,15 @@ export function buildCanonicalPack({
   {
     const unlinked = new Set(linkedBurn.unlinked);
     const unhealthy = new Set(unhealthyRuleNames(discoveredAlerts));
-    const attested = productAttestedByTool(String(probeResults?.alert_rules?.tool || '').split('+')[0]);
-    const engine = attested === 'vmalert' ? 'victoriametrics'
-      : ['grafana', 'mimir', 'loki', 'thanos', 'alertmanager'].includes(attested) ? attested : undefined;
+    const engineOf = (attested) => (attested === 'vmalert' ? 'victoriametrics'
+      : ['grafana', 'mimir', 'loki', 'thanos', 'alertmanager'].includes(attested) ? attested : undefined);
+    const engine = engineOf(productAttestedByTool(String(probeResults?.alert_rules?.tool || '').split('+')[0]));
     for (const a of discoveredAlerts) {
       if (!a?.name || !unlinked.has(a.name) || a?.labels?.kind === 'forecast') continue;
       if (liveAlertRules.some(r => r.name === a.name)) continue;
-      const entry = operationalAlertRule(a, { engine });
+      // A snapshot unions every alert-rule engine: each rule names what its
+      // own tool attests (`observedBy`, null for a plain Prometheus API).
+      const entry = operationalAlertRule(a, { engine: 'observedBy' in a ? engineOf(a.observedBy) : engine });
       if (!entry) continue;   // a rule the ruler listed without its expression cannot be declared (expr is required)
       liveAlertRules.push(entry);
       if (!unhealthy.has(a.name)) markVerified(`alerting.rules[${liveAlertRules.length - 1}]`);
@@ -2135,6 +2155,39 @@ function normInterval(v) {
   return v; // already a duration string ("5m", "30s", ...)
 }
 
+// Grafana-managed alert rules through the PROVISIONING API
+// (GET /api/v1/provisioning/alert-rules: an array of { uid, title,
+// folderUID, ruleGroup, condition, data: [{ refId, datasourceUid, model }],
+// for, labels, annotations, record, … } — recorded from Grafana 12.4.4 on the
+// local Docker stack, tools/fixtures/mcp/grafana_alert_rules.json). The list
+// is the answer itself, or under `rules` / `data`; it is this shape when its
+// rules carry a `title` and a `data[]` (a flattened { name, expr } listing
+// is the rule-groups reader's).
+function provisionedRuleList(response) {
+  const list = [response, response?.rules, response?.data].find(Array.isArray);
+  return list && list.some(r => r && typeof r === 'object' && typeof r.title === 'string' && Array.isArray(r.data)) ? list : null;
+}
+
+// The provisioning shape read as alerting rules: `title` → name, the query of
+// the first data node that is not an expression → expr (the reading the
+// crawler gives a provisioning file, tools/lib/sli-inference.mjs
+// alertRuleExpr), `folderUID` → folderUid (what a snapshot's folder scope
+// reads). A Grafana-managed RECORDING rule (`record` set) is not an alert
+// rule and is left out. Empty for any other shape.
+export function adaptProvisionedAlertRules(response) {
+  const list = provisionedRuleList(response) || [];
+  return list
+    .filter(r => r && typeof r === 'object' && typeof r.title === 'string' && r.title.trim() && Array.isArray(r.data) && !r.record)
+    .map(r => ({
+      name: r.title,
+      expr: alertRuleExpr(r),
+      ...(typeof r.for === 'string' && r.for ? { for: r.for } : {}),
+      labels: r.labels && typeof r.labels === 'object' ? r.labels : {},
+      annotations: r.annotations && typeof r.annotations === 'object' ? r.annotations : {},
+      ...(typeof r.folderUID === 'string' && r.folderUID ? { folderUid: r.folderUID } : {}),
+    }));
+}
+
 export const PROBES = [
   {
     name: 'recording_rules',
@@ -2210,6 +2263,11 @@ export const PROBES = [
           };
         });
     },
+    // A snapshot also reads Grafana-managed rules in the provisioning shape
+    // (D9); the draft keeps `adapt` alone, byte for byte.
+    adaptSnapshot(response) {
+      return provisionedRuleList(response) ? adaptProvisionedAlertRules(response) : this.adapt(response);
+    },
   },
   {
     name: 'dashboards',
@@ -2222,7 +2280,7 @@ export const PROBES = [
       // otel-mcp-server's grafana_dashboards_search returns:
       //   { count: <n>, results: [{ id, uid, title, type:'dash-db'|'dash-folder', url, uri, tags, folderUid?, folderTitle? }] }
       // Generic shapes also supported: bare array, {dashboards}, {items}.
-      return grafanaDashboardSearchItems(response).map(dashboardFromSearchItem);
+      return grafanaDashboardSearchItems(response).map((d) => dashboardFromSearchItem(d));
     },
   },
   {
@@ -2308,11 +2366,77 @@ export const PROBES = [
   },
 ];
 
-export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, transport = mcpTransport() } = {}) {
+// The probe family → its live stage id (tools/lib/live-fetch.mjs).
+const STAGE_OF_PROBE = Object.freeze({
+  recording_rules: 'recording_rules', alert_rules: 'alert_rules', dashboards: 'dashboards',
+  scrape_configs: 'scrape_targets', alerting_routes: 'alerting_routes', metric_names: 'metric_names',
+});
+
+// fetchMcp({ mode, scope, onStage, signal }) — rebadge batch 3, C1.
+//
+// mode 'draft' (the default) is the fetch as it always was: its answer, and
+// the canonical built from it, are byte-identical with or without onStage
+// and signal. mode 'snapshot' inventories what is deployed:
+//   - tools/list is read whole (nextCursor, up to TOOLS_LIST_MAX_PAGES);
+//     an MCP that does not answer it fails the `connect` stage;
+//   - no core abort: without system_health / system_topology the
+//     `services` stage is skipped with its gap and the fetch goes on;
+//   - the stack signals (self-metrics, the Alertmanager and Grafana
+//     observers, the ALERTS query) are not read — they feed the badge and
+//     annotations, not inventory — but the recording-rule grep over the
+//     metric names runs, over the UNSCOPED list (it feeds the SLI/SLO
+//     inference, the symmetry with the crawler);
+//   - the scope (normalizeScope) is applied to the answers: metric names by
+//     prefix (then capped at SNAPSHOT_LIMITS.metricNames), dashboards by
+//     folder uid BEFORE the detail loop, rule groups by folder uid only when
+//     every rule names one; a datasource uid no advertised tool takes is
+//     named as a gap;
+//   - every advertised alert-rule engine is read and the rules unioned by
+//     name (the first engine wins a clash; each rule's `observedBy` names
+//     what its tool attests);
+//   - a dashboard's id is the crawler's rule (snapshotDashboardId);
+//   - the answer gains `snapshot: { scope, gaps, learned, counts }`, which
+//     buildSnapshotPack reads.
+// `onStage(record)` is called at every stage boundary with { stage, state,
+// counts, message, gap } (stage ids and states from tools/lib/live-fetch.mjs;
+// a message is at most SNAPSHOT_LIMITS.messageChars); a reporter that throws
+// changes nothing. `signal` aborts requests in flight and is checked at stage
+// boundaries and in the dashboard loop: an aborted fetch rejects with the
+// signal's reason (an AbortError).
+export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, transport = mcpTransport(),
+  mode = 'draft', scope = null, onStage = null, signal = null } = {}) {
   // The hook is resolved before anything touches the wire — a load failure
   // is a hard failure here, never inside a swallowing wrapper below.
   const t = await transport;
   if (!mcpUrl) throw new Error('fetchMcp: mcpUrl required');
+  if (!LIVE_KINDS.includes(mode)) throw new TypeError(`fetchMcp: unknown mode ${JSON.stringify(mode)} (snapshot or draft)`);
+  const snapshot = mode === 'snapshot';
+  let snapScope = null;
+  if (snapshot) {
+    const normalized = normalizeScope(scope);
+    if (normalized.errors.length) throw new TypeError(`fetchMcp: ${normalized.errors.join('; ')}`);
+    snapScope = normalized.scope;
+  }
+  const stageLabel = new Map(stagesFor(mode).map(st => [st.id, st]));
+  const report = (stage, state, { counts = null, message = null, gap = null } = {}) => {
+    if (typeof onStage !== 'function' || !stageLabel.has(stage)) return;
+    const cut = (text) => (text == null ? null : String(text).slice(0, SNAPSHOT_LIMITS.messageChars));
+    try {
+      onStage({ stage, state, counts, message: cut(message), gap: gap ? { capability: gap.capability, reason: cut(gap.reason) } : null });
+    } catch { /* a reporter's fault never changes the fetch */ }
+  };
+  // A stage none of whose tools is offered: the plan's own sentence.
+  const offersNo = (stage) => `this MCP offers no ${stageNoun(stageLabel.get(stage))} tool`;
+  const checkAbort = () => { if (signal?.aborted) throw signal.reason ?? new DOMException('This operation was aborted', 'AbortError'); };
+  // What the snapshot learned on the way, for buildSnapshotPack.
+  const gaps = [];
+  const applied = [];
+  const folderTitles = {};
+  const stageCounts = {};
+  const gapOf = (stage, capability, reason) => {
+    if (!gaps.some(g => g.stage === stage)) gaps.push({ stage, reason: String(reason).slice(0, SNAPSHOT_LIMITS.messageChars) });
+    return { capability, reason };
+  };
   // When THIS fetch began, and when each probe family answered — the
   // fetcher's own clock, independent of whatever `refreshedAt` the caller
   // stamps (server and journey stamp it AFTER the fetch returns, so a slow
@@ -2321,10 +2445,12 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   // observations, then mcp.fetchStartedAt, then mcp.refreshedAt.
   const fetchStartedAt = new Date().toISOString();
   const observedAt = {};
-  const { rpc, notify, callTool } = createMcpClient({ mcpUrl, mcpAuth, transport: t });
+  const { rpc, notify, callTool } = createMcpClient({ mcpUrl, mcpAuth, transport: t, signal });
+  // A hook fault, and a cancel, pass through every swallowing catch below.
+  const rethrow = (e) => { rethrowHook(e); if (signal?.aborted) throw signal.reason ?? e; };
   const errors = {};
   const safe = async (name, fn) => {
-    try { return await fn(); } catch (e) { rethrowHook(e); errors[name] = e.message; return null; }
+    try { return await fn(); } catch (e) { rethrow(e); errors[name] = e.message; return null; }
   };
   // Per-probe failures recorded so the user can see WHY a probe didn't
   // succeed (input validation, network, etc.) — distinct from the
@@ -2344,11 +2470,11 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     // for diagnostics, and retries once on transient 5xx.
     try { return await fn(); }
     catch (e) {
-      rethrowHook(e);
+      rethrow(e);
       if (isTransient(e.message)) {
         try { return await fn(); }
         catch (e2) {
-          rethrowHook(e2);
+          rethrow(e2);
           if (!probeFailures[name]) probeFailures[name] = e2.message;
           if (brandEnv('DEBUG')) {
             process.stderr.write(`[fetch-live-pack] probe ${name} failed twice: ${e2.message}\n`);
@@ -2364,12 +2490,14 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     }
   };
 
+  report('connect', 'running');
   const initialized = await rpc('initialize', {
     protocolVersion: '2025-06-18',
     capabilities: {},
     clientInfo: { name: 'observogram-fetcher', version: '0.4.0' },
-  }).then(() => true).catch((e) => { rethrowHook(e); return false; });
-  if (initialized) await notify('notifications/initialized').catch(rethrowHook);
+  }).then(() => true).catch((e) => { rethrow(e); return false; });
+  if (initialized) await notify('notifications/initialized').catch(rethrow);
+  checkAbort();
 
   // Discover what the MCP actually exposes via tools/list. This is the
   // foundation for honest probing — instead of guessing candidate tool
@@ -2377,31 +2505,89 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   // advertises. tools/list is part of the MCP spec since 2025-03-26;
   // we tolerate its absence (older servers) by falling back to the
   // candidate-guessing behaviour for compatibility.
-  const toolsList = await safe('tools/list', () => rpc('tools/list'));
+  // A snapshot reads every page (the draft one, as it always has); an MCP
+  // that does not answer tools/list at all fails a snapshot's `connect`.
+  let toolsListPages = 0;
+  let toolsListComplete = true;
+  const toolsList = !snapshot
+    ? await safe('tools/list', () => rpc('tools/list'))
+    : await (async () => {
+      const tools = [];
+      let cursor;
+      for (;;) {
+        let page;
+        try { page = await rpc('tools/list', cursor === undefined ? {} : { cursor }); }
+        catch (e) {
+          rethrow(e);
+          const message = `the MCP did not answer tools/list: ${e.message}`;
+          report('connect', 'failed', { message });
+          throw new Error(`connect: ${message}`, { cause: e });
+        }
+        if (!page || !Array.isArray(page.tools)) {
+          report('connect', 'failed', { message: 'the tools/list answer is not a tool list' });
+          throw new Error('connect: the tools/list answer is not a tool list');
+        }
+        toolsListPages += 1;
+        tools.push(...page.tools.filter(x => x && typeof x.name === 'string'));
+        const next = typeof page.nextCursor === 'string' && page.nextCursor !== '' ? page.nextCursor : null;
+        if (!next) break;
+        if (toolsListPages >= TOOLS_LIST_MAX_PAGES) { toolsListComplete = false; break; }
+        cursor = next;
+      }
+      return { tools: tools.filter((x, i) => tools.findIndex(y => y.name === x.name) === i) };
+    })();
   const discoveredTools = Array.isArray(toolsList?.tools)
     ? toolsList.tools.map(t => ({ name: t.name, description: t.description || '' }))
     : [];
   const discoveredToolNames = new Set(discoveredTools.map(t => t.name));
+  if (!snapshot) toolsListPages = toolsList ? 1 : 0;
+  stageCounts.connect = { tools: discoveredToolNames.size, pages: toolsListPages };
+  report('connect', 'done', {
+    counts: stageCounts.connect,
+    message: !toolsList ? 'tools/list did not answer; every candidate tool is tried'
+      : (!toolsListComplete ? `tools/list had more than ${TOOLS_LIST_MAX_PAGES} pages; the rest were not read` : null),
+  });
+  checkAbort();
+  // Whether a stage's capabilities are offered (always true without a
+  // listing: the draft then tries every candidate).
+  const advertisedAny = (...ids) => discoveredToolNames.size === 0
+    || ids.some(id => probeCandidates(id).some(c => discoveredToolNames.has(typeof c === 'string' ? c : c.name)));
 
   // otel-mcp-server 1.6+ exposes `backend_capabilities` — the canonical
   // skill → backend → product → version inventory the spec's
   // VersionSpec was designed around. Call it up-front; downstream
   // builders use it to (a) declare telemetry.backends[] with real
   // version blocks and (b) surface the full inventory to the studio.
+  report('backends', 'running');
   const capabilitiesRaw = discoveredToolNames.has(TOOL.backendCapabilities)
     ? await safe(TOOL.backendCapabilities, () => callTool(TOOL.backendCapabilities))
     : null;
   const capabilities = capabilitiesRaw ? parseBackendCapabilities(capabilitiesRaw) : null;
 
+  report('services', 'running');
   const [health, topology, anomaliesActive, baselinesData] = await Promise.all([
     safe(TOOL.systemHealth,       () => callTool(TOOL.systemHealth)),
     safe(TOOL.systemTopology,     () => callTool(TOOL.systemTopology)),
     safe(TOOL.anomaliesActive,    () => callTool(TOOL.anomaliesActive)),
     safe(TOOL.anomaliesBaselines, () => callTool(TOOL.anomaliesBaselines)),
   ]);
+  checkAbort();
 
   if (!health || !topology) {
-    throw new Error(`core MCP tools unavailable. errors: ${JSON.stringify(errors)}`);
+    if (!snapshot) {
+      report('services', 'failed', { message: 'core MCP tools unavailable' });
+      throw new Error(`core MCP tools unavailable. errors: ${JSON.stringify(errors)}`);
+    }
+    // A snapshot goes on: buildCanonicalPack holds an empty service list.
+    const missing = !health ? 'system_health' : 'system_topology';
+    const reason = !health
+      ? (advertisedAny('system_health') ? `the service-health tool got no answer: ${errors[TOOL.systemHealth]}` : 'this MCP offers no service-health tool; the snapshot holds no service list')
+      : (advertisedAny('system_topology') ? `the service-topology tool got no answer: ${errors[TOOL.systemTopology]}` : 'this MCP offers no service-topology tool; the snapshot holds no service dependencies');
+    stageCounts.services = { services: Array.isArray(health?.services) ? health.services.length : 0 };
+    report('services', 'skipped', { counts: stageCounts.services, gap: gapOf('services', missing, reason) });
+  } else {
+    stageCounts.services = { services: Array.isArray(health.services) ? health.services.length : 0 };
+    report('services', 'done', { counts: stageCounts.services });
   }
 
   // Run discovery probes in parallel. If we got a tools/list response,
@@ -2447,8 +2633,133 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     return false;
   };
 
+  // A snapshot's scope over the dashboard search answer: kept by folder uid
+  // (items without one are dropped under a folder scope and counted). The
+  // folder titles the answers carry name the scope in the pack.
+  const folders = snapScope?.folderUids || [];
+  const dashCounts = { listed: 0, kept: 0, unfoldered: 0, detailed: 0, detailFailed: 0 };
+  const scopedSearchItems = (response) => {
+    const items = grafanaDashboardSearchItems(response);
+    dashCounts.listed = items.length;
+    dashCounts.unfoldered = 0;
+    let kept = items;
+    if (folders.length) {
+      kept = items.filter((d) => {
+        const uid = typeof d?.folderUid === 'string' && d.folderUid !== '' ? d.folderUid : null;
+        if (uid === null) { dashCounts.unfoldered += 1; return false; }
+        if (folders.includes(uid) && typeof d.folderTitle === 'string' && d.folderTitle !== '' && !folderTitles[uid]) folderTitles[uid] = d.folderTitle;
+        return folders.includes(uid);
+      });
+    }
+    dashCounts.kept = kept.length;
+    return kept;
+  };
+  const adaptFor = (probe, response) => (snapshot && probe.name === 'dashboards'
+    ? scopedSearchItems(response).map((d) => dashboardFromSearchItem(d, snapshotDashboardId))
+    : probe.adapt(response));
+
+  // A probe family's end in the gate log: done with its counts, or skipped
+  // (not offered) / failed (offered, no answer) with its gap. Metric names,
+  // recording rules and dashboards report theirs after their own
+  // post-processing below.
+  const probeGap = (name) => {
+    const stage = STAGE_OF_PROBE[name];
+    const r = probeResults[name];
+    if (r?.outcome === 'unsupported') return { state: 'skipped', gap: gapOf(stage, name, offersNo(stage)) };
+    if (r?.outcome === 'failed') {
+      const attempted = Array.isArray(r.attempted) ? r.attempted : [];
+      const last = attempted.map(n => probeFailures[n]).filter(Boolean).pop();
+      return { state: 'failed', gap: gapOf(stage, name, `the ${stageNoun(stageLabel.get(stage))} tool got no answer${last ? `: ${last}` : ''}`) };
+    }
+    return null;
+  };
+  const endProbeStage = (name, counts, message = null) => {
+    const stage = STAGE_OF_PROBE[name];
+    stageCounts[stage] = counts;
+    const g = probeGap(name);
+    if (g) report(stage, g.state, { counts, message, gap: g.gap });
+    else report(stage, 'done', { counts, message });
+  };
+  const adaptedLength = (name) => (Array.isArray(probeResults[name]?.adapted) ? probeResults[name].adapted.length : 0);
+
+  // A snapshot reads EVERY advertised alert-rule engine and unions the rules
+  // by name: the first engine's rules as it lists them, then each later
+  // engine's rules whose name no earlier engine holds. Each rule names what
+  // its tool attests (`observedBy`; buildCanonicalPack reads the engine from
+  // it). An engine whose answer holds no rule contributes nothing.
+  const unionAlertRules = async (probe, candidates) => {
+    const attempted = [];
+    const rules = [];
+    const engines = [];
+    let firstEmpty = null;
+    let listed = 0;
+    for (const candidate of candidates) {
+      const name = candName(candidate);
+      attempted.push(name);
+      const response = await cachedCall(name, candArgs(candidate));
+      if (response == null) continue;
+      let adapted;
+      try { adapted = probe.adaptSnapshot ? probe.adaptSnapshot(response) : probe.adapt(response); }
+      catch { adapted = null; }
+      if (!Array.isArray(adapted)) continue;
+      if (adapted.length === 0) { if (!firstEmpty) firstEmpty = name; continue; }
+      listed += adapted.length;
+      const held = new Set(rules.map(r => r.name));
+      const observedBy = productAttestedByTool(name);
+      for (const r of adapted) if (r && !held.has(r.name)) rules.push({ ...r, observedBy });
+      engines.push(name);
+    }
+    if (engines.length) {
+      probeResults[probe.name] = { tool: engines.join('+'), attempted, adapted: rules, rawSize: JSON.stringify(rules).length, outcome: 'data' };
+      observedAt[probe.name] = new Date().toISOString();
+    } else if (firstEmpty) {
+      probeResults[probe.name] = { tool: firstEmpty, attempted, adapted: [], rawSize: 2, outcome: 'empty' };
+      observedAt[probe.name] = new Date().toISOString();
+    } else {
+      probeResults[probe.name] = { tool: null, attempted, adapted: null, outcome: 'failed' };
+    }
+    return { listed, engines: engines.length };
+  };
+  // A folder scope over rule groups: applied only when EVERY rule the
+  // answers carry names its folder uid (Grafana-managed rules do; vmalert
+  // and Prometheus groups do not) — otherwise not applied, and said.
+  const scopeRules = (name, family) => {
+    const r = probeResults[name];
+    const list = Array.isArray(r?.adapted) ? r.adapted : [];
+    if (!folders.length || !list.length) return null;
+    const every = list.every(x => typeof x?.folderUid === 'string' && x.folderUid !== '');
+    const noun = family === 'alert_rule' ? 'alert rules' : 'recording rules';
+    if (!every) return `the rule groups name no folder uid; the folder scope was not applied to ${noun} (all ${list.length} kept)`;
+    const kept = list.filter(x => folders.includes(x.folderUid));
+    probeResults[name] = { ...r, adapted: kept };
+    applied.push(family);
+    return null;
+  };
+
   const probeResults = {};
+  let unionResult = null;
   await Promise.all(PROBES.map(async (probe) => {
+    report(STAGE_OF_PROBE[probe.name], 'running');
+    await runProbe(probe);
+    if (probe.name === 'alert_rules' || probe.name === 'scrape_configs' || probe.name === 'alerting_routes') {
+      checkAbort();
+      if (probe.name === 'alert_rules') {
+        const union = unionResult;
+        const listed = union ? union.listed : adaptedLength('alert_rules');
+        const message = snapshot ? scopeRules('alert_rules', 'alert_rule') : null;
+        endProbeStage('alert_rules', { listed, kept: adaptedLength('alert_rules'), engines: union ? union.engines : (probeResults.alert_rules?.outcome === 'data' ? 1 : 0) }, message);
+      } else if (probe.name === 'scrape_configs') {
+        const jobs = Array.isArray(probeResults.scrape_configs?.adapted) ? probeResults.scrape_configs.adapted : [];
+        const down = jobs.filter(j => Array.isArray(j?.targets) && scrapeJobDown(j)).length;
+        endProbeStage('scrape_configs', { jobs: jobs.length, up: jobs.length - down, down });
+      } else {
+        endProbeStage('alerting_routes', { routes: adaptedLength('alerting_routes') });
+      }
+    }
+  }));
+  checkAbort();
+
+  async function runProbe(probe) {
     let candidates;
     if (discoveredToolNames.size > 0) {
       // Trust the server's advertisement: only try names it actually exposes.
@@ -2465,6 +2776,11 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       }
     } else {
       candidates = probe.candidates.slice();
+    }
+    if (snapshot && probe.name === 'alert_rules') {
+      // Per-call state rides on a local, never on the shared PROBES row.
+      unionResult = await unionAlertRules(probe, candidates);
+      return;
     }
     const attempted = [];
     // Remember the first candidate that responded with a non-null
@@ -2486,7 +2802,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
         continue;
       }
       let adapted;
-      try { adapted = probe.adapt(response); }
+      try { adapted = adaptFor(probe, response); }
       catch (_) { adapted = null; }
       if (!isEmptyAdapted(adapted)) {
         // Real data — cache this candidate as the winner and stop.
@@ -2522,7 +2838,33 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       tool: null, attempted, adapted: null,
       outcome: 'failed',
     };
-  }));
+  }
+
+  // The metric names as listed — the recording-rule grep below reads THIS
+  // list, before a snapshot's prefixes narrow it.
+  const unscopedMetricNames = probeResults?.metric_names?.adapted;
+  {
+    const listed = Array.isArray(unscopedMetricNames) ? unscopedMetricNames.length : 0;
+    let message = null;
+    if (snapshot && Array.isArray(unscopedMetricNames)) {
+      const prefixes = snapScope.metricPrefixes;
+      let kept = prefixes.length ? unscopedMetricNames.filter(n => prefixes.some(pre => n.startsWith(pre))) : unscopedMetricNames;
+      if (kept.length > SNAPSHOT_LIMITS.metricNames) {
+        message = `listed ${listed}, kept the first ${SNAPSHOT_LIMITS.metricNames} — set metric prefixes to narrow it`;
+        kept = kept.slice(0, SNAPSHOT_LIMITS.metricNames);
+      }
+      if (prefixes.length) applied.push('metric');
+      probeResults.metric_names = { ...probeResults.metric_names, adapted: kept };
+    }
+    // No capability row declares a datasource-uid argument slot today
+    // (tools/lib/contracts/mcp-capabilities.mjs runtimeArgs): the scope field
+    // is named in the gate log, never silently dropped.
+    if (snapshot && snapScope.datasourceUid) {
+      const ds = `datasource uid "${snapScope.datasourceUid}" not applied — no advertised tool takes a datasource uid`;
+      message = message ? `${ds}; ${message}` : ds;
+    }
+    endProbeStage('metric_names', { listed, kept: adaptedLength('metric_names') }, message);
+  }
 
   // Dashboard search only returns the catalogue row. For diagnostic-grade
   // drift we need the artifact body too: variables, panels, targets, and the
@@ -2536,13 +2878,17 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       type: 'dash-db',
       limit: GRAFANA_DASHBOARD_SEARCH_LIMIT,
     });
-    const searchItems = grafanaDashboardSearchItems(searchResponse);
+    // A snapshot narrows the list by folder BEFORE the serial detail reads.
+    const searchItems = snapshot ? scopedSearchItems(searchResponse) : grafanaDashboardSearchItems(searchResponse);
+    const idOf = snapshot ? snapshotDashboardId : dashboardIdFrom;
     const detailed = [];
     const detailErrors = [];
+    let lastReport = Date.now();
     for (const item of searchItems) {
+      checkAbort();
       const uid = item.uid || item.id;
       if (!uid) {
-        detailed.push(dashboardFromSearchItem(item));
+        detailed.push(dashboardFromSearchItem(item, idOf));
         continue;
       }
       const detail = await cachedCall(TOOL.dashboardDetail, {
@@ -2551,12 +2897,21 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
         panel_limit: GRAFANA_DASHBOARD_PANEL_LIMIT,
       });
       if (detail) {
-        detailed.push(dashboardFromGrafanaDetail(detail, item));
+        detailed.push(dashboardFromGrafanaDetail(detail, item, idOf));
+        dashCounts.detailed += 1;
       } else {
         detailErrors.push(String(uid));
-        detailed.push(dashboardFromSearchItem(item));
+        detailed.push(dashboardFromSearchItem(item, idOf));
+        dashCounts.detailFailed += 1;
+      }
+      // Progress, throttled: every 10 dashboards or once a second.
+      const done = dashCounts.detailed + dashCounts.detailFailed;
+      if (done % 10 === 0 || Date.now() - lastReport >= 1000) {
+        lastReport = Date.now();
+        report('dashboards', 'running', { counts: { ...dashCounts } });
       }
     }
+    checkAbort();
     if (detailed.length) {
       probeResults.dashboards = {
         ...probeResults.dashboards,
@@ -2574,6 +2929,23 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       observedAt.dashboards = new Date().toISOString();
     }
   }
+  {
+    if (!snapshot) {
+      dashCounts.listed = adaptedLength('dashboards');
+      dashCounts.kept = dashCounts.listed;
+    } else if (folders.length && ['data', 'empty'].includes(probeResults.dashboards?.outcome)) {
+      applied.push('dashboard');
+    }
+    const messages = [];
+    if (snapshot && dashCounts.listed === GRAFANA_DASHBOARD_SEARCH_LIMIT) {
+      messages.push(`listed ${GRAFANA_DASHBOARD_SEARCH_LIMIT} — the search limit; raise OBSERVOGRAM_GRAFANA_DASHBOARD_LIMIT (≤ 500) to see more`);
+    }
+    if (snapshot && dashCounts.unfoldered) {
+      messages.push(`${dashCounts.unfoldered} dashboard${dashCounts.unfoldered === 1 ? '' : 's'} named no folder and ${dashCounts.unfoldered === 1 ? 'was' : 'were'} left out by the folder scope`);
+    }
+    endProbeStage('dashboards', { ...dashCounts }, messages.join('; ') || null);
+  }
+  checkAbort();
 
   // ----------------------------------------------------------------
   // Version probes — authoritative live version capture.
@@ -2680,6 +3052,17 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     }
   }
 
+  checkAbort();
+  {
+    const products = Object.keys(liveVersions).length;
+    stageCounts.backends = { products };
+    if (!advertisedAny('backend_capabilities', 'grafana_version', 'build_info_versions', 'traces_alive')) {
+      report('backends', 'skipped', { counts: stageCounts.backends, gap: gapOf('backends', 'backend_capabilities', offersNo('backends')) });
+    } else {
+      report('backends', 'done', { counts: stageCounts.backends });
+    }
+  }
+
   // ----------------------------------------------------------------
   // Step 2 — sample the stack's own self-metrics and the Alertmanager /
   // Grafana status surfaces. Runs AFTER the version probes so the
@@ -2702,7 +3085,9 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   const stackInventory = metricNamesProbe?.outcome === 'data' && Array.isArray(metricNamesProbe.adapted)
     ? metricNamesProbe.adapted
     : null;
-  const stackSamples = await sampleStackSelfMetrics({
+  // A snapshot reads none of it: signals for the badge, not inventory.
+  report('signals', 'running');
+  const stackSamples = snapshot ? null : await sampleStackSelfMetrics({
     callTool, quiet,
     metricsQueryTool: TOOL.stackSelfMetrics,
     inventory: stackInventory,
@@ -2711,17 +3096,18 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     hasToolsList,
     refreshedAt: refreshedAt || new Date().toISOString(),
   });
-  const alertmanagerObserved = await observeAlertmanager({
+  const alertmanagerObserved = snapshot ? null : await observeAlertmanager({
     callTool, quiet, discoveredToolNames, hasToolsList,
     statusTool: TOOL.alertmanagerStatus,
     silencesTool: TOOL.alertmanagerSilences,
   });
-  const grafanaObserved = await observeGrafana({
+  const grafanaObserved = snapshot ? null : await observeGrafana({
     callTool, quiet, discoveredToolNames, hasToolsList,
     datasourcesTool: TOOL.grafanaDatasources,
     datasourceHealthTool: TOOL.grafanaDatasourceHealth,
     contactPointsTool: TOOL.grafanaContactPoints,
   });
+  checkAbort();
 
   // ----------------------------------------------------------------
   // Rule-evidence fallback (Phase 6) — capture rule existence even when
@@ -2756,7 +3142,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   const alertProbe = probeResults?.alert_rules;
   const alertPrimaryEmpty = alertProbe &&
     (alertProbe.outcome === 'empty' || (Array.isArray(alertProbe.adapted) && alertProbe.adapted.length === 0));
-  if (alertPrimaryEmpty && discoveredToolNames.has(TOOL.metricsQuery)) {
+  if (!snapshot && alertPrimaryEmpty && discoveredToolNames.has(TOOL.metricsQuery)) {
     const r = await quiet(`${TOOL.metricsQuery}.ALERTS`,
       () => callTool(TOOL.metricsQuery, { query: 'count by (alertname, severity, team, alertgroup) (ALERTS{alertstate="firing"})' }));
     const series = Array.isArray(r?.result) ? r.result : [];
@@ -2782,7 +3168,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   const recordingProbe = probeResults?.recording_rules;
   const recordingPrimaryEmpty = recordingProbe &&
     (recordingProbe.outcome === 'empty' || (Array.isArray(recordingProbe.adapted) && recordingProbe.adapted.length === 0));
-  const metricNames = probeResults?.metric_names?.adapted;
+  const metricNames = unscopedMetricNames;
   if (recordingPrimaryEmpty && Array.isArray(metricNames) && metricNames.length) {
     const RECORDING_PATTERN = /^[a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*){1,}$/i;
     const NOISE_PREFIXES = /^(ALERTS|UP|process_|go_|http_|prometheus_|alertmanager_|grafana_|loki_|vmalert_|jvm_)/i;
@@ -2791,6 +3177,16 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       .filter(n => RECORDING_PATTERN.test(n))
       .filter(n => !NOISE_PREFIXES.test(n))
       .slice(0, 200);
+  }
+
+  checkAbort();
+  report('signals', 'done', { counts: { stackRows: stackSamples?.rows?.length ?? 0, firingAlerts: ruleEvidence.firingAlerts.length } });
+  {
+    const message = snapshot ? scopeRules('recording_rules', 'recording_rule') : null;
+    endProbeStage('recording_rules', {
+      listed: adaptedLength('recording_rules'), kept: adaptedLength('recording_rules'),
+      fromInventory: ruleEvidence.recordingRuleNames.length,
+    }, message);
   }
 
   // Compute unmatched tool names — tools the MCP advertises that we
@@ -2820,7 +3216,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   // Step 2 surfaces are wired when they answered: the stack sampler when
   // at least one row came back with data or an honest empty; the status
   // observers for each tool that answered.
-  if (stackSamples.rows.some(r => r.outcome === 'data' || r.outcome === 'empty')) {
+  if (stackSamples?.rows.some(r => r.outcome === 'data' || r.outcome === 'empty')) {
     allMatchedNames.add(TOOL.stackSelfMetrics);
   }
   for (const t of (alertmanagerObserved?.toolsAnswered || [])) allMatchedNames.add(t);
@@ -2841,6 +3237,18 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     stackSamples,               // { status, reason, rows, callsMade } — stack self-metric samples (signals)
     alertmanagerObserved,       // { version, uptime, clusterStatus, silences, toolsAnswered } or null
     grafanaObserved,            // { datasources, contactPoints, toolsAnswered } or null
+    // A snapshot only: what buildSnapshotPack records — the scope applied,
+    // each gapped stage with its reason, the families the scope narrowed
+    // and the folder titles the answers named, the per-stage counts.
+    ...(snapshot ? {
+      snapshot: {
+        scope: snapScope,
+        gaps: [...gaps].sort((x, y) => [...stageLabel.keys()].indexOf(x.stage) - [...stageLabel.keys()].indexOf(y.stage)),
+        learned: { applied: [...new Set(applied)], folderTitles },
+        counts: stageCounts,
+        toolsListComplete,
+      },
+    } : {}),
   };
 }
 
@@ -2857,6 +3265,303 @@ export async function buildAndValidate({ mcpUrl, mcpAuth, packName, refreshedAt,
     throw err;
   }
   return { pack, refreshedAt: at };
+}
+
+// ============================================================
+// The snapshot pack (rebadge batch 3, C1)
+// ============================================================
+
+// The artefact families a gapped stage leaves unread. A snapshot parks each
+// as `observogram.unobserved.<kind>` with the stage's reason — `alert_rule`
+// included, which buildCanonicalPack (the draft) does not stamp. The
+// recording-rule families are parked only when the builder found no
+// recorded series either (the inventory grep may still have read them).
+const SNAPSHOT_GAP_FAMILIES = Object.freeze({
+  metric_names: Object.freeze(['metric']),
+  recording_rules: Object.freeze(['recording_rule', 'sli', 'slo']),
+  alert_rules: Object.freeze(['alert_rule', 'burn_rate']),
+  dashboards: Object.freeze(['dashboard', 'panel']),
+  scrape_targets: Object.freeze(['scrape_job']),
+  alerting_routes: Object.freeze(['alert_route']),
+});
+// Families parked whenever their stage is a gap, even where the builder
+// would not park them.
+const SNAPSHOT_ALWAYS_PARKED = new Set(['alert_rule']);
+
+// A live snapshot's canonical pack from fetchMcp({ mode: 'snapshot' })'s
+// answer. It wraps buildCanonicalPack (untouched for the draft): the
+// scaffold sections the schema forces are still stamped mcp.scaffold.* and
+// parked by the diff. On top of it:
+//   mcp.url                       the ORIGIN only (every viewer reads a pack)
+//   observogram.live.mode         snapshot (a draft never writes it)
+//   observogram.live.source       { origin, endpoint: { id, name } | null }
+//   observogram.live.scope        the scope, and the families it applies to
+//   observogram.live.gaps         [{ stage, reason }] — only when there are any
+//   observogram.unobserved.<kind> every family of every gapped stage, with
+//                                 the stage's reason
+//   observogram.scope.<kind>      each family the scope narrowed
+//                                 (tools/lib/live-fetch.mjs scopeAnnotations)
+// metadata.name is slug(packName || 'live-snapshot'). The caller validates
+// the pack (buildAndValidate's rule) and bounds its size before registering.
+export function buildSnapshotPack(fetched, { refreshedAt = null, origin, endpoint = null, packName = null, scope = null, gaps = null } = {}) {
+  if (typeof origin !== 'string' || origin === '') throw new TypeError('buildSnapshotPack: origin required (the MCP origin, never a URL with a path or a credential)');
+  const snap = fetched?.snapshot || {};
+  const at = refreshedAt || new Date().toISOString();
+  const name = slug(packName || 'live-snapshot', 'live-snapshot');
+  const pack = buildCanonicalPack({ ...fetched, refreshedAt: at, mcpUrl: origin, packName: name });
+  pack.metadata.name = name;
+  pack.metadata.bindings.service = name;
+  const annotations = pack.metadata.annotations;
+  const stageGaps = Array.isArray(gaps) ? gaps : (Array.isArray(snap.gaps) ? snap.gaps : []);
+  annotations['observogram.live.mode'] = 'snapshot';
+  annotations['observogram.live.source'] = JSON.stringify({
+    origin,
+    endpoint: endpoint && endpoint.id != null ? { id: endpoint.id, name: endpoint.name ?? null } : null,
+  });
+  Object.assign(annotations, scopeAnnotations(scope ?? snap.scope ?? null, snap.learned || {}));
+  if (stageGaps.length) {
+    annotations['observogram.live.gaps'] = JSON.stringify(stageGaps.map(g => ({ stage: g.stage, reason: g.reason })));
+  }
+  for (const g of stageGaps) {
+    for (const kind of SNAPSHOT_GAP_FAMILIES[g.stage] || []) {
+      const key = `observogram.unobserved.${kind}`;
+      if (key in annotations || SNAPSHOT_ALWAYS_PARKED.has(kind)) annotations[key] = g.reason;
+    }
+  }
+  return pack;
+}
+
+// ============================================================
+// The ping (rebadge batch 3, C2): "test the connection" without building a
+// pack. initialize (+ notifications/initialized), the whole tools/list
+// (nextCursor followed up to TOOLS_LIST_MAX_PAGES pages) and ONE cheap read
+// — nothing else — within PING_DEADLINE_MS, each request bounded by
+// timeoutMs. The read is the first PING_READS row the MCP advertises, called
+// through probeCandidates so a search asks for one item; it prefers an
+// AUTHENTICATED read: on a tier whose MCP has no credentials for its backend
+// the health read still answers (tools/fixtures/mcp/README.md), so a ping
+// that read only health would say "connected" exactly where a fetch's
+// dashboards stage fails — that row is marked credentialFree and the answer
+// says what it did not check.
+//
+// Returns { verdict, stage, httpStatus, error, limitMs, reachable,
+// initialized, authSent, tools: { names, pages, more } | null, read, timings }
+// (`limitMs`: the timeout or the deadline that passed, on a timeout) —
+// internal: POST /api/mcp/ping shapes the answer (server/routes/live.mjs)
+// and never returns the raw names. `verdict` is read from where a failure
+// surfaced:
+//   connected      initialize and tools/list answered (a read that failed
+//                  is the read's outcome; a tool whose isError text says
+//                  401/403/unauthorized/forbidden is read.backendAuthRefused
+//                  — the MCP's own credentials to its backend)
+//   auth-refused   HTTP 401/403 on initialize, tools/list or tools/call (the
+//                  gateway refused the token sent, or its absence)
+//   unreachable    no HTTP answer (ECONNREFUSED, ENOTFOUND, TLS) or a 5xx
+//   timeout        a request's timeout, or the deadline
+//   not-mcp        any other HTTP status (404), a body that is not a
+//                  JSON-RPC result, a JSON-RPC error, a redirect (refused)
+// Every error text has been redacted by value by the client
+// (tools/lib/mcp-client.mjs). A transport hook fault is thrown, never a
+// verdict: the route answers it 502.
+// ============================================================
+
+export const PING_TIMEOUT_MS = 5000;            // per request (min with MCP_TIMEOUT_MS)
+export const PING_DEADLINE_MS = 10_000;         // the whole ping
+export const TOOLS_LIST_MAX_PAGES = 10;         // shared with snapshot mode
+// The one cheap read: the first row whose capability (and candidate) is
+// advertised. Data only; no tool name. `credentialFree`: its backend answers
+// without credentials, so it proves the MCP, not the MCP's credentials.
+export const PING_READS = Object.freeze([
+  Object.freeze({ capability: 'dashboards', candidate: 'search', runtime: Object.freeze({ grafanaDashboardSearchLimit: 1 }) }),
+  Object.freeze({ capability: 'grafana_version', credentialFree: true }),
+  Object.freeze({ capability: 'system_health' }),
+]);
+export const PING_DETAIL_LENGTH = 100;
+const PING_ERROR_LENGTH = 300;
+const BACKEND_AUTH_TEXT = /\b(401|403)\b|unauthori[sz]ed|forbidden/i;
+
+class PingDeadline extends Error {
+  constructor() { super('the ping deadline passed'); this.name = 'PingDeadline'; }
+}
+
+// The verdict for an error that surfaced at `stage` ('initialize' |
+// 'tools/list' | 'tools/call').
+export function pingVerdictOf(e, stage) {
+  if (e?.name === 'PingDeadline' || e?.name === 'TimeoutError') return { verdict: 'timeout', httpStatus: null };
+  const message = String(e?.message ?? e ?? '');
+  const http = /^MCP HTTP (\d{3}) on /.exec(message);
+  if (http) {
+    const status = Number(http[1]);
+    if (status === 401 || status === 403) return { verdict: 'auth-refused', httpStatus: status };
+    if (status >= 500) return { verdict: 'unreachable', httpStatus: status };
+    return { verdict: 'not-mcp', httpStatus: status };
+  }
+  if (e?.name === 'AbortError') return { verdict: 'timeout', httpStatus: null };
+  if (e instanceof SyntaxError || message.startsWith(`${stage}: `) || message.startsWith('MCP ')) return { verdict: 'not-mcp', httpStatus: null };
+  return { verdict: 'unreachable', httpStatus: null };
+}
+
+// An error's text for the answer: redacted already; a native rejection's
+// "fetch failed" gains its cause's code; bounded.
+function pingErrorText(e) {
+  let text = String(e?.message ?? e ?? 'error');
+  const code = e?.code ?? e?.cause?.code;
+  if (code && !text.includes(String(code))) text += ` (${code})`;
+  return text.slice(0, PING_ERROR_LENGTH);
+}
+
+// The read's bounded outcome: a count or a version, never the payload.
+function pingReadDetail(capability, answer) {
+  const plural = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`;
+  let detail;
+  if (capability === 'dashboards') {
+    const list = Array.isArray(answer) ? answer : (answer?.results ?? answer?.dashboards ?? null);
+    detail = Array.isArray(list) ? `${plural(list.length, 'dashboard')} listed` : 'answered';
+  } else if (capability === 'grafana_version') {
+    const v = answer && typeof answer === 'object' ? answer.version : null;
+    detail = typeof v === 'string' && v ? `version ${v}` : 'answered';
+  } else {
+    const s = answer && typeof answer === 'object' ? (answer.status ?? answer.overall ?? null) : null;
+    detail = typeof s === 'string' && s ? `status ${s}` : 'answered';
+  }
+  return detail.replace(/[\r\n\t]+/g, ' ').slice(0, PING_DETAIL_LENGTH);
+}
+
+// The first PING_READS row the advertised names offer → { row, tool, args } | null.
+export function pingReadFor(advertised) {
+  for (const row of PING_READS) {
+    const tools = row.candidate
+      ? [candidateTool(row.capability, row.candidate)]
+      : probeCandidates(row.capability, row.runtime ?? {}).map((c) => (typeof c === 'string' ? c : c.name));
+    const tool = tools.find((n) => advertised.has(n));
+    if (!tool) continue;
+    const cand = probeCandidates(row.capability, row.runtime ?? {}).find((c) => (typeof c === 'string' ? c : c.name) === tool);
+    return { row, tool, args: typeof cand === 'string' || !cand ? {} : (cand.args ?? {}) };
+  }
+  return null;
+}
+
+export async function pingMcp({ mcpUrl, mcpAuth = null, transport = mcpTransport(),
+  timeoutMs = Math.min(MCP_TIMEOUT_MS, PING_TIMEOUT_MS), deadlineMs = PING_DEADLINE_MS,
+  clock = () => performance.now() } = {}) {
+  const t = await transport;
+  if (!mcpUrl) throw new Error('pingMcp: mcpUrl required');
+  // The deadline's signal goes to the client, so a request still in flight
+  // when the deadline passes is aborted, not left open to the MCP until its
+  // own timeout.
+  const passed = new AbortController();
+  const { rpc, notify, callTool } = createMcpClientCore({ mcpUrl, mcpAuth, timeoutMs, transport: t, signal: passed.signal });
+  const started = clock();
+  const ms = (from) => Math.max(0, Math.round(clock() - from));
+  let timer = null;
+  const deadline = new Promise((_, reject) => {
+    // Not unref'd: a request's own timeout (AbortSignal.timeout) is, so this
+    // timer is what keeps a lone ping's process alive until it ends; it is
+    // cleared the moment the ping returns. The deadline rejects before the
+    // abort, so the step's race settles on PingDeadline.
+    timer = setTimeout(() => { const e = new PingDeadline(); reject(e); passed.abort(e); }, deadlineMs);
+  });
+  deadline.catch(() => {});
+  // Every step races the deadline; a request still in flight when it
+  // passes is aborted and its rejection ignored.
+  const step = (p) => { p.catch(() => {}); return Promise.race([p, deadline]); };
+
+  const out = {
+    verdict: null, stage: null, httpStatus: null, error: null, limitMs: null,
+    reachable: false, initialized: false, authSent: !!mcpAuth,
+    tools: null, read: null,
+    timings: { initializeMs: null, toolsListMs: null, readMs: null, totalMs: null },
+  };
+  const fail = (e, stage) => {
+    if (isTransportHookError(e)) throw e;
+    const v = pingVerdictOf(e, stage);
+    out.verdict = v.verdict;
+    out.httpStatus = v.httpStatus;
+    out.stage = stage;
+    if (v.verdict === 'timeout') out.limitMs = e?.name === 'PingDeadline' ? deadlineMs : timeoutMs;
+    out.error = e?.name === 'PingDeadline' ? `no answer within the ${Math.round(deadlineMs / 100) / 10} s deadline` : pingErrorText(e);
+    if (v.httpStatus !== null || v.verdict === 'not-mcp') out.reachable = true;
+  };
+
+  try {
+    // (1) initialize
+    let at = clock();
+    try {
+      const result = await step(rpc('initialize', {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: 'observogram-ping', version: '0.4.0' },
+      }));
+      if (!result || typeof result !== 'object') throw new Error('MCP initialize: the answer is not a JSON-RPC result');
+      out.reachable = true;
+      out.initialized = true;
+      await step(notify('notifications/initialized'));
+    } catch (e) { fail(e, 'initialize'); return out; }
+    finally { out.timings.initializeMs = ms(at); }
+
+    // (2) the whole tools/list, page by page
+    at = clock();
+    try {
+      const names = [];
+      let cursor;
+      let pages = 0;
+      let more = false;
+      for (;;) {
+        const result = await step(rpc('tools/list', cursor === undefined ? {} : { cursor }));
+        if (!result || !Array.isArray(result.tools)) throw new Error('MCP tools/list: the answer is not a JSON-RPC result');
+        pages += 1;
+        for (const tool of result.tools) if (typeof tool?.name === 'string') names.push(tool.name);
+        const next = typeof result.nextCursor === 'string' && result.nextCursor !== '' ? result.nextCursor : null;
+        if (!next) break;
+        if (pages >= TOOLS_LIST_MAX_PAGES) { more = true; break; }
+        cursor = next;
+      }
+      out.tools = { names: [...new Set(names)], pages, more };
+    } catch (e) { fail(e, 'tools/list'); return out; }
+    finally { out.timings.toolsListMs = ms(at); }
+    out.verdict = 'connected';
+
+    // (3) one cheap read
+    const pick = pingReadFor(new Set(out.tools.names));
+    if (!pick) {
+      out.read = { capability: null, tool: null, outcome: 'not-advertised', detail: null, backendAuthRefused: false, credentialFree: false, error: null };
+      return out;
+    }
+    const read = { capability: pick.row.capability, tool: pick.tool, outcome: null, detail: null, backendAuthRefused: false, credentialFree: !!pick.row.credentialFree, error: null };
+    out.read = read;
+    at = clock();
+    try {
+      const answer = await step(callTool(pick.tool, pick.args));
+      read.outcome = 'ok';
+      read.detail = pingReadDetail(pick.row.capability, answer);
+    } catch (e) {
+      if (isTransportHookError(e)) throw e;
+      const message = String(e?.message ?? e ?? '');
+      const v = pingVerdictOf(e, 'tools/call');
+      read.error = pingErrorText(e);
+      if (v.verdict === 'auth-refused') {
+        // The gateway refused the call itself: the token sent (or none) is
+        // not accepted for tool calls.
+        read.outcome = 'refused';
+        out.verdict = 'auth-refused';
+        out.stage = 'tools/call';
+        out.httpStatus = v.httpStatus;
+        out.error = read.error;
+      } else if (v.verdict === 'timeout') {
+        read.outcome = 'timeout';
+        if (e?.name === 'PingDeadline') read.error = `no answer within the ${Math.round(deadlineMs / 100) / 10} s deadline`;
+      } else {
+        read.outcome = 'failed';
+        // The tool answered isError (the client's `<tool>: <text>`): its
+        // backend refused the MCP's own credentials when the text says so.
+        if (message.startsWith(`${pick.tool}: `) && BACKEND_AUTH_TEXT.test(message.slice(pick.tool.length + 2))) read.backendAuthRefused = true;
+      }
+    } finally { out.timings.readMs = ms(at); }
+    return out;
+  } finally {
+    clearTimeout(timer);
+    out.timings.totalMs = ms(started);
+  }
 }
 
 async function main() {

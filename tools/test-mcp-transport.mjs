@@ -19,7 +19,7 @@ import { join, resolve, dirname, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createHarness } from './lib/harness.mjs';
-import { createMcpClient, INERT_TRANSPORT, isTransportHookError, TransportHookError, normaliseTransport } from './lib/mcp-client.mjs';
+import { createMcpClient, MAX_MCP_ANSWER_BYTES, INERT_TRANSPORT, isTransportHookError, TransportHookError, normaliseTransport } from './lib/mcp-client.mjs';
 import { loadTransportHook, mcpTransport, mcpTransportLoaded, validateUrlFrom, hookImportUrl, describeTransport, TRANSPORT_HOOK_VAR } from './mcp-transport.mjs';
 import { mcpUrlPolicy, isLocalOrPrivateHost, redactCredentials } from './lib/mcp-url-safety.mjs';
 import { capabilityTool } from './lib/contracts/mcp-capabilities.mjs';
@@ -205,7 +205,7 @@ for (const [label, hook] of [
     assert(fake.requests.length === 0, 'the fake server saw no request');
     assert(inits.length === 2 && inits.every(i => i.url === fake.url && i.init.method === 'POST' && typeof i.init.body === 'string'
       && i.init.headers.Authorization === 'Bearer tok' && i.init.signal instanceof AbortSignal),
-      'fetchImpl receives (url, { method: POST, headers, body, signal: AbortSignal })', inits.map(i => Object.keys(i.init)));
+      'fetchImpl receives (url, { method: POST, headers, body, redirect, signal: AbortSignal })', inits.map(i => Object.keys(i.init)));
   } finally { await fake.close(); }
 
   // fetchImpl's own rejection is an ordinary error — NOT a hook fault.
@@ -252,15 +252,265 @@ for (const [label, hook] of [
       'an SSE error message a fetchImpl returns is redacted', e7?.message);
   } finally { await fake2.close(); }
 
-  // Inert: a native fetch answer is not hook text — the body of a real
-  // upstream's 502 reaches the caller byte-for-byte as before.
+  // A native fetch answer is redacted the same way (a declared change: it
+  // used to pass through untouched) — the body of a real upstream's 502
+  // that repeats the bearer.
   const fake3 = await startFakeMcp({ failWith: { tool: SYSTEM_HEALTH, status: 502, text: 'upstream says Bearer tok' } });
   try {
     const { callTool: nativeCall, rpc: nativeRpc } = createMcpClient({ mcpUrl: `${fake3.url}?token=URLTOKENSENTINEL9`, mcpAuth: 'tok', transport: null });
     await nativeRpc('initialize', {});
     const e8 = await expectFail(() => nativeCall(SYSTEM_HEALTH, {}));
-    assert(e8?.message === `MCP HTTP 502 on tools/call: upstream says Bearer tok`, 'without a fetchImpl the upstream body passes through untouched', e8?.message);
+    assert(e8?.message === `MCP HTTP 502 on tools/call: upstream says Bearer <redacted>`, 'without a fetchImpl the upstream body is redacted too', e8?.message);
   } finally { await fake3.close(); }
+}
+
+// ---------- 5c. an echoing MCP: every answer text redacted by value, native fetch included ----------
+{
+  // A loopback MCP that repeats the request's Authorization header and URL
+  // in each kind of error answer, reached with native fetch (no hook).
+  const echoServer = (mode) => createServer(async (req, res) => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    let msg = {};
+    try { msg = JSON.parse(raw || '{}'); } catch { /* not JSON */ }
+    const echoed = `you sent ${req.headers.authorization} to ${req.url}`;
+    if (mode === 'http') { res.writeHead(401, { 'Content-Type': 'text/plain' }); return res.end(echoed); }
+    if (mode === 'nonjson') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(echoed); }
+    const frame = (body) => JSON.stringify({ jsonrpc: '2.0', id: msg.id ?? 1, ...body });
+    if (mode === 'sse') { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); return res.end(`data: ${frame({ error: { code: -32001, message: echoed } })}\n\n`); }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    if (mode === 'rpc') return res.end(frame({ error: { code: -32001, message: echoed } }));
+    return res.end(frame({ result: { isError: true, content: [{ type: 'text', text: echoed }] } }));   // 'tool'
+  });
+  const echoes = {};
+  for (const mode of ['http', 'rpc', 'sse', 'tool', 'nonjson']) {
+    const srv = echoServer(mode);
+    await new Promise(r => srv.listen(0, '127.0.0.1', r));
+    try {
+      const base = `http://127.0.0.1:${srv.address().port}/mcp`;
+      const { callTool } = createMcpClient({ mcpUrl: `${base}?token=URLTOKENSENTINEL9&tier=x`, mcpAuth: 'BEARERSENTINEL7', transport: null });
+      echoes[mode] = (await expectFail(() => callTool(SYSTEM_HEALTH, {})))?.message ?? null;
+    } finally { await new Promise(r => srv.close(r)); }
+  }
+  const said = 'you sent Bearer <redacted> to /mcp?token=<redacted>&tier=x';
+  assert(echoes.http === `MCP HTTP 401 on tools/call: ${said}`, 'native fetch: a 401 body repeating the Authorization header is redacted', echoes.http);
+  assert(echoes.rpc === `tools/call: ${said}` && echoes.sse === `tools/call: ${said}`, 'native fetch: a JSON-RPC error and an SSE error frame repeating it are redacted', { rpc: echoes.rpc, sse: echoes.sse });
+  assert(echoes.tool === `${SYSTEM_HEALTH}: ${said}`, 'a tool\'s isError text repeating it is redacted', echoes.tool);
+  assert(echoes.nonjson === 'MCP tools/call: the answer is not valid JSON', 'a body that is not JSON: the parser\'s message, which quotes a cut of it, is replaced whole', echoes.nonjson);
+
+  // A successful answer that repeats the request — a tool's JSON text, a
+  // plain text, a tools/list description, over JSON and SSE — is redacted
+  // the same way; an answer that holds nothing to redact comes back as it was.
+  const okServer = (sse) => createServer(async (req, res) => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    const msg = JSON.parse(raw || '{}');
+    const echoed = `${req.headers.authorization} to ${req.url}`;
+    const result = msg.method === 'tools/list'
+      ? { tools: [{ name: SYSTEM_HEALTH, description: `sees ${echoed}` }] }
+      : msg.params?.arguments?.plain ? { content: [{ type: 'text', text: `plain ${echoed}` }] }
+        : { content: [{ type: 'text', text: JSON.stringify({ version: echoed, [echoed]: [echoed, 3], kept: 'v1' }) }] };
+    const frame = JSON.stringify({ jsonrpc: '2.0', id: msg.id ?? 1, result });
+    if (sse) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); return res.end(`data: ${frame}\n\n`); }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(frame);
+  });
+  for (const sse of [false, true]) {
+    const srv = okServer(sse);
+    await new Promise(r => srv.listen(0, '127.0.0.1', r));
+    try {
+      const base = `http://127.0.0.1:${srv.address().port}/mcp`;
+      const { rpc, callTool } = createMcpClient({ mcpUrl: `${base}?token=URLTOKENSENTINEL9&tier=x`, mcpAuth: 'BEARERSENTINEL7', transport: null });
+      const red = 'Bearer <redacted> to /mcp?token=<redacted>&tier=x';
+      const parsed = await callTool(SYSTEM_HEALTH, {});
+      assert(JSON.stringify(parsed) === JSON.stringify({ version: red, [red]: [red, 3], kept: 'v1' }),
+        `${sse ? 'SSE' : 'JSON'}: a tool's successful JSON answer repeating the Authorization header is redacted, keys included`, parsed);
+      const plain = await callTool(SYSTEM_HEALTH, { plain: true });
+      assert(plain === `plain ${red}`, `${sse ? 'SSE' : 'JSON'}: a tool's successful plain-text answer is redacted`, plain);
+      const listed = await rpc('tools/list', {});
+      assert(listed?.tools?.[0]?.description === `sees ${red}`, `${sse ? 'SSE' : 'JSON'}: a tools/list description repeating it is redacted`, listed);
+      const bare = createMcpClient({ mcpUrl: base, mcpAuth: null, transport: null });
+      const untouched = await bare.callTool(SYSTEM_HEALTH, {});
+      assert(untouched.kept === 'v1' && untouched.version === 'undefined to /mcp', 'with nothing to redact the answer comes back as it was', untouched);
+    } finally { await new Promise(r => srv.close(r)); }
+  }
+
+  // A short credential-named query value (the URL-safety rule counts sortkey
+  // and partitionkey as credentials) is ordinary data a real answer holds
+  // too: a successful answer is not redacted for it — no key renamed, no id
+  // cut, no JSON text left unparsed — while an error's text is redacted for
+  // every secret, a short bearer included.
+  const data = { count: 2, results: [{ uid: 'a1', title: 'Orders' }, { uid: 'b2', title: 'Payments' }] };
+  const dataServer = createServer(async (req, res) => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    const msg = JSON.parse(raw || '{}');
+    const result = msg.params?.arguments?.fail
+      ? { isError: true, content: [{ type: 'text', text: `refused ${req.headers.authorization}` }] }
+      : { content: [{ type: 'text', text: JSON.stringify(data) }] };
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id ?? 1, result }));
+  });
+  await new Promise(r => dataServer.listen(0, '127.0.0.1', r));
+  try {
+    const base = `http://127.0.0.1:${dataServer.address().port}/mcp`;
+    for (const query of ['?sortkey=title', '?partitionkey=1', '?apikey=Orders', '?partitionkey=2']) {
+      const c = createMcpClient({ mcpUrl: base + query, mcpAuth: null, transport: null });
+      const got = await c.callTool(SYSTEM_HEALTH, {});
+      assert(JSON.stringify(got) === JSON.stringify(data), `a short credential-named query value (${query}) leaves a successful answer intact`, got);
+    }
+    const dev = createMcpClient({ mcpUrl: base, mcpAuth: 'dev', transport: null });
+    const failed = await expectFail(() => dev.callTool(SYSTEM_HEALTH, { fail: true }));
+    assert(failed?.message === `${SYSTEM_HEALTH}: refused Bearer <redacted>`, 'an error\'s text is still redacted for a short secret', failed?.message);
+  } finally { await new Promise(r => dataServer.close(r)); }
+
+  // The credential itself is another class: the bearer (a server-held read
+  // token or the caller's mcpAuth) and the URL's userinfo are redacted from
+  // a successful answer at any length — a 7-character token repeated in a
+  // version string never comes back — while a short credential-named query
+  // value beside them still leaves the data intact.
+  const echoFetch = async (url, init) => new Response(JSON.stringify({ jsonrpc: '2.0', id: JSON.parse(init.body).id ?? 1,
+    result: { content: [{ type: 'text', text: JSON.stringify({ version: `${init.headers.Authorization} via ${url}`, title: 'Orders' }) }] } }),
+  { status: 200, headers: { 'Content-Type': 'application/json' } });
+  const shortCred = createMcpClient({ mcpUrl: 'http://usr:pw5@127.0.0.1:9/mcp?sortkey=title', mcpAuth: 'rdTok9x', transport: { fetchImpl: echoFetch } });
+  const shortGot = await shortCred.callTool(SYSTEM_HEALTH, {});
+  assert(JSON.stringify(shortGot) === JSON.stringify({ version: 'Bearer <redacted> via http://<redacted>:<redacted>@127.0.0.1:9/mcp?sortkey=title', title: 'Orders' }),
+    'a short bearer and short userinfo are redacted from a successful answer; a short credential-named query value is not', shortGot);
+}
+
+// ---------- 5b. redirects are never followed (D10) ----------
+{
+  // A fetchImpl that answers 307: refused, naming the Location's origin only
+  // (never its path or query), and every request asked for redirect: 'manual'.
+  const inits = [];
+  const redirecting = {
+    fetchImpl: async (url, init) => { inits.push(init); return new Response('', { status: 307, headers: { location: 'https://elsewhere.example:8443/mcp/v2?token=LOCSECRET5' } }); },
+    hookPath: '/x/gw.mjs',
+  };
+  const { rpc: rRedirect } = createMcpClient({ mcpUrl: 'http://127.0.0.1:9/mcp', mcpAuth: 'tok', transport: redirecting });
+  const e1 = await expectFail(() => rRedirect('initialize', {}));
+  assert(e1 && !isTransportHookError(e1) && e1.message === 'MCP HTTP 307 on initialize: the MCP answered with a redirect to https://elsewhere.example:8443 — Observogram does not follow redirects; register (or type) the URL it points at',
+    'a 307 a fetchImpl returns is refused, naming the origin it pointed at and nothing of its path or query', e1?.message);
+  assert(inits.length === 1 && inits[0].redirect === 'manual', 'every request asks the fetcher for redirect: manual', inits.map(i => i.redirect));
+
+  // Native fetch against a loopback server answering 302 to a second one:
+  // the error names the target's origin and the target sees no request.
+  const target = await startFakeMcp();
+  const bouncer = createServer((req, res) => { req.resume(); res.writeHead(302, { Location: `${target.url}?from=bounce` }); res.end(); });
+  await new Promise(r => bouncer.listen(0, '127.0.0.1', r));
+  try {
+    const { rpc: nativeRpc } = createMcpClient({ mcpUrl: `http://127.0.0.1:${bouncer.address().port}/mcp`, mcpAuth: 'tok', transport: null });
+    const e2 = await expectFail(() => nativeRpc('initialize', {}));
+    assert(e2?.message === `MCP HTTP 302 on initialize: the MCP answered with a redirect to ${target.origin} — Observogram does not follow redirects; register (or type) the URL it points at`
+      && target.requests.length === 0,
+    'native fetch: a 302 is refused with the same text and the redirect target receives no request', { message: e2?.message, reached: target.requests.length });
+  } finally { await new Promise(r => bouncer.close(r)); await target.close(); }
+}
+
+// ---------- 5d. a caller's AbortSignal aborts requests in flight (C1) ----------
+{
+  // A fetchImpl that never answers but honours init.signal: the caller's
+  // abort ends the request promptly, long before the request timeout.
+  const inits = [];
+  const hanging = {
+    fetchImpl: (url, init) => new Promise((_, reject) => {
+      inits.push(init);
+      init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+    }),
+    hookPath: '/x/hang.mjs',
+  };
+  const controller = new AbortController();
+  const { rpc } = createMcpClient({ mcpUrl: 'http://127.0.0.1:9/mcp', mcpAuth: 'tok', timeoutMs: 60_000, transport: hanging, signal: controller.signal });
+  const started = Date.now();
+  const pending = expectFail(() => rpc('tools/list', {}));
+  await new Promise(r => setTimeout(r, 20));
+  controller.abort();
+  const e1 = await pending;
+  assert(e1?.name === 'AbortError' && !isTransportHookError(e1) && Date.now() - started < 5_000,
+    'aborting the caller\'s signal ends a request in flight with an AbortError, before its 60 s timeout', { name: e1?.name, ms: Date.now() - started });
+  assert(inits.length === 1 && inits[0].signal !== controller.signal && inits[0].signal.aborted,
+    'the request carried a signal of its own (the timeout combined with the caller\'s), now aborted');
+  const e2 = await expectFail(() => rpc('tools/list', {}));
+  assert(e2?.name === 'AbortError' && inits.length === 1, 'a request after the abort is refused at once, before the transport sees it', { name: e2?.name, sent: inits.length });
+
+  // Native fetch against a loopback server that never answers.
+  const sockets = new Set();
+  const silent = createServer((req) => { req.resume(); });
+  silent.on('connection', (sock) => { sockets.add(sock); sock.on('close', () => sockets.delete(sock)); });
+  await new Promise(r => silent.listen(0, '127.0.0.1', r));
+  try {
+    const native = new AbortController();
+    const { rpc: nativeRpc } = createMcpClient({ mcpUrl: `http://127.0.0.1:${silent.address().port}/mcp`, mcpAuth: 'tok', timeoutMs: 60_000, transport: null, signal: native.signal });
+    const t0 = Date.now();
+    const waiting = expectFail(() => nativeRpc('initialize', {}));
+    setTimeout(() => native.abort(), 50);
+    const e3 = await waiting;
+    assert(e3?.name === 'AbortError' && Date.now() - t0 < 5_000, 'native fetch: the caller\'s abort ends the request in flight promptly', { name: e3?.name, ms: Date.now() - t0 });
+  } finally { for (const sock of sockets) sock.destroy(); await new Promise(r => silent.close(r)); }
+
+  // Without a signal each request still carries its own timeout, as before.
+  const plain = [];
+  const recording = { fetchImpl: async (url, init) => { plain.push(init); return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }), { headers: { 'content-type': 'application/json' } }); } };
+  await createMcpClient({ mcpUrl: 'http://127.0.0.1:9/mcp', transport: recording }).rpc('tools/list', {});
+  assert(plain.length === 1 && plain[0].signal instanceof AbortSignal && !plain[0].signal.aborted, 'no caller signal: the request\'s timeout signal alone');
+}
+
+// ---------- 5e. an MCP answer is capped (C1): counted while read, past it the client stops ----------
+{
+  const KIB = 1024;
+  const rpcBody = (result) => JSON.stringify({ jsonrpc: '2.0', id: 1, result });
+  // The text as a stream of `size`-byte chunks, recording how many were pulled and whether it was released.
+  const streamed = (text, { size = 512 } = {}) => {
+    const bytes = new TextEncoder().encode(text);
+    const pulled = { n: 0, cancelled: false };
+    const body = new ReadableStream({
+      pull(controller) {
+        const start = pulled.n * size;
+        if (start >= bytes.length) { controller.close(); return; }
+        pulled.n++;
+        controller.enqueue(bytes.slice(start, start + size));
+      },
+      cancel() { pulled.cancelled = true; },
+    });
+    return { body, pulled };
+  };
+  const client = (respond) => createMcpClient({ mcpUrl: 'http://127.0.0.1:9/mcp', mcpAuth: 'tok', maxAnswerBytes: 4 * KIB, transport: { fetchImpl: async () => respond() } });
+
+  assert(MAX_MCP_ANSWER_BYTES === 32 * 1024 * 1024, 'the default cap is 32 MiB');
+  // JSON past the cap: refused with the sentence, the stream released after the cap, not read to its end.
+  const big = streamed(rpcBody({ blob: 'x'.repeat(64 * KIB) }));
+  const e1 = await expectFail(() => client(() => new Response(big.body, { headers: { 'content-type': 'application/json' } })).rpc('tools/list', {}));
+  assert(e1?.message === 'MCP tools/list: the answer exceeded 4 KiB — Observogram stopped reading it' && !isTransportHookError(e1),
+    'a JSON body past the cap is cut with the cap\'s text', e1?.message);
+  assert(big.pulled.n <= 10 && big.pulled.cancelled, 'the client stopped reading at the cap and released the stream', big.pulled);
+  // An SSE stream past the cap before its first complete frame.
+  const sse = streamed(`data: ${rpcBody({ blob: 'y'.repeat(64 * KIB) })}\n\n`);
+  const e2 = await expectFail(() => client(() => new Response(sse.body, { headers: { 'content-type': 'text/event-stream' } })).rpc('tools/list', {}));
+  assert(e2?.message === 'MCP tools/list: the answer exceeded 4 KiB — Observogram stopped reading it' && sse.pulled.cancelled,
+    'an SSE stream past the cap is cut with the same text and released', { message: e2?.message, pulled: sse.pulled });
+  // Under the cap: answered as before, JSON and SSE.
+  const small = await client(() => new Response(rpcBody({ ok: 'é'.repeat(100) }), { headers: { 'content-type': 'application/json' } })).rpc('tools/list', {});
+  const smallSse = await client(() => new Response(`data: ${rpcBody({ ok: 1 })}\n\n`, { headers: { 'content-type': 'text/event-stream' } })).rpc('tools/list', {});
+  assert(small?.ok === 'é'.repeat(100) && smallSse?.ok === 1, 'an answer under the cap reads as before (multi-byte text decoded whole)', [small, smallSse]);
+  // A non-OK body past the cap: the error says so in place of the body.
+  const e3 = await expectFail(() => client(() => new Response(streamed('z'.repeat(64 * KIB)).body, { status: 502 })).rpc('tools/call', {}));
+  assert(e3?.message === 'MCP HTTP 502 on tools/call: the answer exceeded 4 KiB — Observogram stopped reading it', 'a non-OK body past the cap: the status, and the cap in place of the body', e3?.message);
+  // A Response-like without a readable body: its content-length refuses it unread; else counted after text().
+  let textRead = false;
+  const declared = { ok: true, status: 200, headers: new Headers({ 'content-type': 'application/json', 'content-length': String(64 * KIB) }), text: async () => { textRead = true; return rpcBody({}); }, json: async () => ({}) };
+  const e4 = await expectFail(() => client(() => declared).rpc('tools/list', {}));
+  assert(e4?.message === 'MCP tools/list: the answer exceeded 4 KiB — Observogram stopped reading it' && !textRead, 'a declared content-length past the cap is refused without reading', e4?.message);
+  const undeclared = { ok: true, status: 200, headers: new Headers({ 'content-type': 'application/json' }), text: async () => rpcBody({ blob: 'w'.repeat(64 * KIB) }), json: async () => ({}) };
+  const e5 = await expectFail(() => client(() => undeclared).rpc('tools/list', {}));
+  assert(e5?.message === 'MCP tools/list: the answer exceeded 4 KiB — Observogram stopped reading it', 'without a readable body or a length, text() is counted', e5?.message);
+  // Native fetch against loopback, a 1 MiB cap and a 2 MiB answer.
+  const huge = createServer((req, res) => { req.resume(); res.writeHead(200, { 'content-type': 'application/json' }); res.end(rpcBody({ blob: 'v'.repeat(2 * 1024 * 1024) })); });
+  await new Promise(r => huge.listen(0, '127.0.0.1', r));
+  try {
+    const { rpc: nativeRpc } = createMcpClient({ mcpUrl: `http://127.0.0.1:${huge.address().port}/mcp`, maxAnswerBytes: 1024 * 1024, transport: null });
+    const e6 = await expectFail(() => nativeRpc('tools/list', {}));
+    assert(e6?.message === 'MCP tools/list: the answer exceeded 1 MiB — Observogram stopped reading it', 'native fetch: a JSON body past the cap is cut', e6?.message);
+  } finally { await new Promise(r => huge.close(r)); }
 }
 
 // ---------- 6. load failures ----------

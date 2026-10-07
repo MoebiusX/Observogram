@@ -59,6 +59,7 @@ for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'I
 }
 
 import { createHarness } from './lib/harness.mjs';
+import { endpointIdFor } from '../server/fixtures/fake-mcp.mjs';
 const { assert, failures, report } = createHarness({ indent: '  ', truncate: 400 });
 
 function skip(reason) {
@@ -163,11 +164,14 @@ async function main() {
       { group: 'rules', artifact: 'all', scope: 'both' },
       ...dashboardIds.map(id => ({ group: 'dashboards', dashboardId: id })),
     ];
+    // The bridge is a loopback MCP: registered as the org's endpoint (the
+    // CSRF header, as the studio sends it), the deploys go by its id.
+    const bridgeId = await endpointIdFor(base, bridge.url, { name: 't4-bridge-12' });
     const deploy = await api(base, `/api/packs/${encodeURIComponent(packAId)}/deploy-bulk?env=prod`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Observogram-CSRF': '1' },
       body: JSON.stringify({
-        mcpUrl: bridge.url,
+        mcpEndpointId: bridgeId,
         targetProduct: 'grafana',
         targetVersion: '12',
         targetFolder: FOLDER,
@@ -292,9 +296,10 @@ async function main() {
       if (!target.deployed) {
         const b13 = await startGrafanaMcpBridge({ grafanaUrl: target.url, auth: GRAFANA_AUTH, datasourceUid: 'obs-pack-prom' });
         try {
+          const b13Id = await endpointIdFor(base, b13.url, { name: `t4-bridge-${target.name}` });
           const dep13 = await api(base, `/api/packs/${encodeURIComponent(packAId)}/deploy-bulk?env=prod`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mcpUrl: b13.url, targetProduct: 'grafana', targetVersion: '13', targetFolder: FOLDER, mode: 'upsert', items }),
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Observogram-CSRF': '1' },
+            body: JSON.stringify({ mcpEndpointId: b13Id, targetProduct: 'grafana', targetVersion: '13', targetFolder: FOLDER, mode: 'upsert', items }),
           });
           for (const r of dep13.results || []) {
             assert(r.ok === true, `${target.name}: deploy item ok · ${r.item?.group}${r.item?.dashboardId ? ':' + r.item.dashboardId : ''}`, r.error || r, 'ok: true');

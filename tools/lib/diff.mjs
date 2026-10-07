@@ -37,12 +37,32 @@
 //                  fetcher's login does not make seven dashboards missing.
 //                  Each entry carries the `side` that holds the artefact and
 //                  the other side's `reason`. Outside every ratio.
+//                  A live snapshot read with a SCOPE (metric prefixes, folder
+//                  uids — its `observogram.scope.<kind>` annotations,
+//                  tools/lib/live-fetch.mjs) did not look outside it either:
+//                  an unmatched artefact on the other side, in a scoped
+//                  family, lands here when it is outside the scope ("outside
+//                  the snapshot's metric scope (prefixes …)") or when it does
+//                  not say what the scope needs — a crawled dashboard names no
+//                  folder uid — with a reason that states only that. An
+//                  artefact inside the scope is compared as usual.
 //
 // METRIC FAMILIES
 //   Metrics are compared as families, not series: a declared histogram and
 //   the `_bucket` / `_count` / `_sum` series a store lists for it are one
 //   metric (artefact-model.mjs, foldMetricFamilies). A family's entry carries
 //   `series`, the names it stands for on that side.
+//
+// IDENTITY MODES
+//   `diffPacks(a, b, { identity })` pairs by another key: a mode id of
+//   tools/lib/identity-modes.mjs (`'behaviour'`, `'name'`, `'id'`) or a
+//   function `(artefact, { side }) → '<kind>::…'`. Behaviour still decides
+//   aligned vs drifted. Omitted, `'behaviour'` or `identityKeyOf` itself is
+//   the default path, byte-identical, with no `identity` key in the answer;
+//   any other adds `identity: { mode: 'name' | 'id' | 'custom' }`. The key
+//   must keep the `<kind>::` prefix (scope, notObserved and collisions read
+//   it): a function that drops it is a TypeError. The `side` lets a key that
+//   must never pair (an artefact with no name) differ between A and B.
 //
 //   The classic operations follow (over the concrete, non-scaffold artefacts):
 //     A ∪ B  = onlyInA ∪ inBoth ∪ onlyInB
@@ -57,6 +77,8 @@ import {
   deltasOf,
   foldMetricFamilies,
 } from './artefact-model.mjs';
+import { scopeOf, inScope, scopeReason } from './live-fetch.mjs';
+import { identityMode, DEFAULT_IDENTITY_MODE } from './identity-modes.mjs';
 
 const LAYER_ORDER = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
 
@@ -102,14 +124,43 @@ function packMeta(layered) {
   };
 }
 
+// The pairing key of `opts.identity`: null on the default path (behaviour),
+// else { mode, keyOf(artefact, { side }) }.
+function resolveIdentity(identity) {
+  if (identity == null || identity === DEFAULT_IDENTITY_MODE || identity === identityKeyOf) return null;
+  if (typeof identity === 'string') {
+    const row = identityMode(identity);
+    return { mode: row.id, keyOf: row.keyOf };
+  }
+  if (typeof identity === 'function') return { mode: 'custom', keyOf: prefixChecked(identity) };
+  throw new TypeError(`diffPacks: identity must be a mode id or a function (got ${typeof identity})`);
+}
+
+function prefixChecked(fn) {
+  return (artefact, ctx) => {
+    const key = fn(artefact, ctx);
+    const kind = classify(artefact);
+    if (typeof key !== 'string' || !key.startsWith(`${kind}::`)) {
+      throw new TypeError(`diffPacks: an identity function must return "${kind}::…" for each artefact (got ${JSON.stringify(key)} for a ${kind})`);
+    }
+    return key;
+  };
+}
+
 export function diffPacks(aLayered, bLayered, opts = {}) {
   if (!aLayered || !bLayered) throw new Error('diffPacks: both packs required');
+
+  const identity = resolveIdentity(opts.identity);
+  const pairKey = identity ? identity.keyOf : keyOf;
 
   const scopeMode = normalizeScopeMode(opts.scopeMode);
   const serviceScope = buildServiceScope(aLayered, opts.service);
   // The artefact families each pack says it could not observe, with why.
   const aBlind = unobservedKinds(aLayered);
   const bBlind = unobservedKinds(bLayered);
+  // The families each pack read only within a scope (a live snapshot's).
+  const aScoped = scopeOf(aLayered?.meta?.annotations);
+  const bScoped = scopeOf(bLayered?.meta?.annotations);
   const layers = {};
   const collisions = [];
   let onlyInA = 0, onlyInB = 0, inBoth = 0, aligned = 0, drifted = 0, outOfScope = 0, scaffold = 0, notObserved = 0;
@@ -133,8 +184,8 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
       ...bAll.filter(isScaffoldArtefact).map((artefact) => ({ side: 'b', artefact })),
     ];
 
-    const aByKey = groupByKey(aItems);
-    const bByKey = groupByKey(bItems);
+    const aByKey = groupByKey(aItems, pairKey, 'a');
+    const bByKey = groupByKey(bItems, pairKey, 'b');
     collectCollisions(collisions, layerId, aByKey, bByKey);
 
     // Kinds (artefact families) the declared side (A) actually participates in
@@ -154,18 +205,20 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
       const kind = k.slice(0, k.indexOf('::'));
       if (bByKey.has(k)) {
         matchGroups(k, aGroup, bByKey.get(k), bucket);
-      } else if (bBlind.has(kind)) {
-        // B never looked at this family: A's artefact is unchecked, not absent.
-        pushNotObserved(bucket.notObserved, k, aGroup, 'a', bBlind.get(kind));
       } else {
-        pushUnmatched(bucket.onlyInA, k, aGroup);
+        // B never looked at this family, or read it only within a scope this
+        // artefact is not in: A's artefact is unchecked, not absent.
+        const unchecked = bBlind.has(kind) ? bBlind.get(kind) : outsideScope(kind, aGroup, bScoped, 'a');
+        if (unchecked) pushNotObserved(bucket.notObserved, k, aGroup, 'a', unchecked);
+        else pushUnmatched(bucket.onlyInA, k, aGroup);
       }
     }
     for (const [k, bGroup] of bByKey) {
       if (aByKey.has(k)) continue;
       const kind = k.slice(0, k.indexOf('::'));
-      if (aBlind.has(kind)) {
-        pushNotObserved(bucket.notObserved, k, bGroup, 'b', aBlind.get(kind));
+      const unchecked = aBlind.has(kind) ? aBlind.get(kind) : outsideScope(kind, bGroup, aScoped, 'b');
+      if (unchecked) {
+        pushNotObserved(bucket.notObserved, k, bGroup, 'b', unchecked);
       } else if (scopeMode === 'service' && isOutsideServiceScope(bGroup, serviceScope)) {
         pushUnmatched(bucket.outOfScope, k, bGroup);
       } else if (aKinds.has(kind) || scopeMode === 'all') {
@@ -184,10 +237,12 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     bucket.notObserved.sort((x, y) => `${x.side}:${x.key}`.localeCompare(`${y.side}:${y.key}`));
     // Parked placeholders keep their behavioural key (with the side, so a
     // placeholder present on both sides stays two entries) for display.
+    const parkedKey = ({ side, artefact }) => pairKey(artefact, { side });
     parked
-      .sort((x, y) => `${x.side}:${keyOf(x.artefact)}`.localeCompare(`${y.side}:${keyOf(y.artefact)}`))
-      .forEach(({ side, artefact }, i) => {
-        bucket.scaffold.push({ key: `${keyOf(artefact)}@${side}#${String(i + 1).padStart(2, '0')}`, side, artefact });
+      .sort((x, y) => `${x.side}:${parkedKey(x)}`.localeCompare(`${y.side}:${parkedKey(y)}`))
+      .forEach((entry, i) => {
+        const { side, artefact } = entry;
+        bucket.scaffold.push({ key: `${parkedKey(entry)}@${side}#${String(i + 1).padStart(2, '0')}`, side, artefact });
       });
 
     // Per-layer aligned/drifted split of the matched pairs.
@@ -209,6 +264,8 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     a: packMeta(aLayered),
     b: packMeta(bLayered),
     scope: diffScopeMeta(scopeMode, serviceScope),
+    // Only off the default path: which key paired A with B.
+    ...(identity ? { identity: { mode: identity.mode } } : {}),
     // Identity keys held by more than one artefact on either side. The bucket
     // entries already preserve every instance via `#NN` occurrence suffixes;
     // this is the explicit fail-loud surface so callers (and downstream
@@ -476,6 +533,18 @@ function unobservedKinds(layered) {
   return out;
 }
 
+// The notObserved reason when the other pack read `kind` within a scope that
+// does not cover this group, else null. One artefact of the group inside the
+// scope makes the group's absence real (it is compared as usual); otherwise
+// "outside" when any is known to be outside, else the cannot-tell reason.
+function outsideScope(kind, group, otherScoped, holder) {
+  const entry = otherScoped.get(kind);
+  if (!entry) return null;
+  const verdicts = group.map((artefact) => inScope(kind, artefact, entry));
+  if (verdicts.includes(true)) return null;
+  return scopeReason(kind, verdicts.includes(false) ? false : null, entry, { holder });
+}
+
 function pushNotObserved(target, baseKey, group, side, reason) {
   const suffix = group.length > 1;
   group.forEach((artefact, i) => {
@@ -489,10 +558,10 @@ function isScaffoldArtefact(artefact) {
   return artefact?.source === 'Scaffold';
 }
 
-function groupByKey(items) {
+function groupByKey(items, pairKey, side) {
   const out = new Map();
   for (const item of items) {
-    const k = keyOf(item);
+    const k = pairKey(item, { side });
     if (!out.has(k)) out.set(k, []);
     out.get(k).push(item);
   }

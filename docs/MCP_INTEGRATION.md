@@ -55,6 +55,85 @@ MCP_AUTH=$MCP_CLIENT_KEY \
 npm run fetch-live
 ```
 
+### Who may name the target, and where a credential may go
+
+Rebadge batch 3, C0 (docs/DOWNSTREAM.md §15.1 has the migration). A typed
+`mcpUrl` — in the ping, the live jobs, the draft, the refresh, the deploy
+routes and a journey's raw Pack B URL — is an admin's (`TYPED_MCP_URL_ROLE`,
+`server/mcp-target-policy.mjs`); everyone else names a registered endpoint
+(`mcpEndpointId`). Every target, typed or registered, meets the **origin
+allowlist** on the server at registration and at each use:
+`OBSERVOGRAM_MCP_ORIGINS` ∪ `OBSERVOGRAM_ORG_<KEY>_MCP_ORIGINS`, loopback
+always allowed. With no list set, **no credential leaves for an origin other
+than loopback**: an endpoint's server-held token, the caller's `mcpAuth`, a
+credential in a typed URL, and a loaded **transport hook** — which counts as
+a credential, because it may attach its own headers or client certificate;
+the allowlist judges the target the caller chose, before the hook rewrites
+it. A server-held token rides only to its own endpoint's registered URL. The
+check does not resolve DNS: a hostname that resolves to a private address is
+judged by its name (as `server/mcp-url.mjs` documents).
+
+**Redirects are refused everywhere** (`tools/lib/mcp-client.mjs`, D10): every
+request is sent with `redirect: 'manual'`, and a 3xx (or a browser's
+`opaqueredirect`) is an error naming only the origin it pointed at — the
+server, `npm run fetch-live`, the scheduled refresh and journeys alike. An MCP
+behind a redirect is configured with its final URL. **Every answer text is
+redacted by value** — an error's and a successful result's alike — before
+it reaches an error, a 502 body, a log line, a gate-log message, a
+`mcp.probeErrors.*` annotation, a ping's answer or a pack: the bearer, the URL's
+userinfo and credential-named query values become `<redacted>` (in a
+successful result the bearer and the userinfo at any length, a
+credential-named query value only from 12 characters, and a tool's JSON
+text only once it is parsed, so a short credential-named value such as
+`sortkey=title` never renames a key or breaks the JSON), and the
+server's routes redact the credential they resolved once more. One answer is
+read up to 32 MiB (`MAX_MCP_ANSWER_BYTES`), and a caller's `AbortSignal` ends
+every request in flight.
+
+### Test the connection first: the ping
+
+`POST /api/mcp/ping` (C2; `pingMcp` in `tools/fetch-live-pack.mjs`) runs
+`initialize` and `notifications/initialized`, the whole `tools/list` (its
+`nextCursor` followed up to ten pages) and **one** cheap read — the dashboards
+search asked for one item, else the Grafana health read (credential-free: it
+answers without the MCP's backend credentials, and the answer says so), else
+`system_health` — within a 10 s deadline (5 s per request). The verdict is
+read from where a failure surfaced: HTTP 401/403 → `auth-refused`; no answer
+or a 5xx → `unreachable`; a timeout → `timeout`; any other status, a body that
+is not JSON-RPC, a JSON-RPC error or a redirect → `not-mcp`; else `connected`
+(a read whose tool answered an unauthorized text is kept as
+`backendAuthRefused`, the MCP's own credentials to its backend). Advertised
+tools are reported only through `capabilityInventory` (the capabilities a
+fetch reads; the rest a count). The answer lists what it `checked` and what it
+did `notChecked`; it writes no pack and no live file.
+
+### Snapshot mode and live jobs
+
+`fetchMcp({ mode: 'snapshot', scope, onStage, signal })` (C1) inventories what
+is deployed rather than drafting a scaffold: every stage reports to `onStage`
+with the stage ids of `tools/lib/live-fetch.mjs`; there is no core abort (a
+stage whose tools are missing is skipped with its gap and the fetch goes on);
+the stack self-metrics, the Alertmanager and Grafana observers and the ALERTS
+query are not read, while the recording-rule grep still runs over the whole
+metric-name list (it feeds the SLI and SLO inference); the scope narrows
+metric names (prefixes, then a 20 000-name cap), dashboards (folder uids,
+before the detail reads) and alert rules (folder uids, when every rule names
+its folder); every advertised alert-rule engine is read and the rules unioned
+by name, Grafana-managed rules read from the provisioning shape (`title`,
+`data[]`, `folderUID`); a dashboard's id is its obs-pack-id tag, else the
+crawler's `dashboardSpecId`, so a uid pairs with a crawled repository.
+`buildSnapshotPack` writes `mcp.url` as the origin and the
+`observogram.live.*`, `observogram.scope.<kind>` and
+`observogram.unobserved.<kind>` annotations (docs/ADAPTER.md, "Live packs").
+The draft (`mode: 'draft'`, the default) is the fetch as it was, byte for
+byte. On the server both run as **live jobs** — `POST /api/mcp/jobs` answers
+202 with an id, `GET /api/mcp/jobs/:jobId?since=<seq>` is the gate log —
+in memory, so a restart loses them (docs/DOWNSTREAM.md §15.2 has the shapes
+and the stage table). The configured scope is
+`OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES`, `_FOLDER_UIDS` and `_DATASOURCE_UID`
+(deployment) or `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` (one org); a datasource uid
+is named in the gate log as not applied, since no advertised tool takes one.
+
 ## Transport hook
 
 Every MCP request Observogram makes — `npm run fetch-live`, `npm run
@@ -88,8 +167,9 @@ export async function prepareRequest({ url, headers }) {
 }
 
 // Optional: replace the fetcher wholesale (a private CA, a corporate proxy,
-// mTLS). init is { method: 'POST', headers, body, signal } — the AbortSignal
-// carries OBSERVOGRAM_MCP_TIMEOUT_MS and may be honoured or ignored.
+// mTLS). init is { method: 'POST', headers, body, redirect: 'manual', signal } —
+// the AbortSignal carries OBSERVOGRAM_MCP_TIMEOUT_MS and may be honoured or
+// ignored; a redirect the fetcher returns is refused either way.
 const dispatcher = new Agent({ connect: { ca: process.env.PRIVATE_CA_PEM } });
 export const fetchImpl = (url, init) => fetch(url, { ...init, dispatcher });
 ```
@@ -138,7 +218,13 @@ still hook text, so it is redacted like a `prepareRequest` throw's (the
 error itself stays ordinary: same name and code, the original kept as
 `cause`); so is the text of a Response the `fetchImpl` *returns* — the body
 of a non-OK answer (`MCP HTTP <status> on <method>: …`) and a JSON-RPC or
-SSE `error.message` — while a native `fetch` answer passes through as is.
+SSE `error.message`. Native `fetch` is redacted the same way: every text an
+MCP answer puts into an error — a non-OK body, a JSON-RPC or SSE
+`error.message`, a tool's `isError` text — goes through the redaction
+whoever answered, so an upstream that repeats the request's Authorization
+header never carries the token back; a body that is not JSON is reported as
+`MCP <method>: the answer is not valid JSON` (the parser's message would
+quote it).
 
 The texts, exact: `OBSERVOGRAM_TRANSPORT_HOOK: cannot load <path>: <message>`
 · `OBSERVOGRAM_TRANSPORT_HOOK: <path> exports neither prepareRequest nor

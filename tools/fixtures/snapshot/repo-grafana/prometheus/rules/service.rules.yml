@@ -1,0 +1,18 @@
+# Synthetic (2026-10-07, tools/test-live-snapshot.mjs): a Prometheus-format
+# alerting rule (it names no Grafana folder) beside the Grafana-managed one,
+# and the recorded series of one SLO.
+groups:
+  - name: krystalinex.application
+    rules:
+      - alert: HighErrorRate
+        expr: sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+  - name: checkout:slo
+    interval: 30s
+    rules:
+      - record: checkout:requests:good_5m
+        expr: sum(rate(http_requests_total{job="checkout",status!~"5.."}[5m]))
+      - record: checkout:requests:total_5m
+        expr: sum(rate(http_requests_total{job="checkout"}[5m]))

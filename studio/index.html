@@ -107,9 +107,9 @@
     <input id="file-input" type="file" accept=".yaml,.yml,.json,application/json,text/yaml,application/x-yaml" hidden>
     <button id="crawl-btn" class="ctrl-btn" type="button" title="Scan a service repo — drag a folder, pick files, or paste a GitHub URL">scan a repo</button>
     <input id="crawl-file-input" type="file" multiple webkitdirectory hidden>
-    <button id="draft-mcp-btn" class="ctrl-btn" type="button" title="Draft a pack from a live MCP server — interrogate it for backends, baselines, anomalies">new from live</button>
+    <button id="draft-mcp-btn" class="ctrl-btn" type="button" title="New pack from a live MCP server — test the connection, then a draft scaffold or a snapshot of what is deployed">new from live</button>
     <button id="export-btn" class="ctrl-btn" type="button" title="Export this pack — the pack.yaml plus every compiled artefact (rules · dashboards · pipelines · routes) as a ZIP" hidden>export</button>
-    <button id="mcp-btn" class="ctrl-btn mcp-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Refresh production-live from an MCP server">
+    <button id="mcp-btn" class="ctrl-btn mcp-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Live MCP connection — test it, rebuild production-live">
       <span class="mcp-dot" aria-hidden="true"></span>
       <span class="mcp-btn-label">mcp</span>
       <span class="mcp-btn-age" id="mcp-btn-age"></span>
@@ -297,38 +297,94 @@
 
 <div class="crawl-panel" id="draft-mcp-panel" role="dialog" aria-labelledby="draft-mcp-panel-title" hidden>
   <div class="crawl-panel-head">
-    <div id="draft-mcp-panel-title" class="mcp-panel-title">Draft a pack from a live MCP server</div>
-    <button id="draft-mcp-panel-close" class="drawer-close" type="button" aria-label="Close draft panel">esc</button>
+    <div id="draft-mcp-panel-title" class="mcp-panel-title">New pack from a live MCP server</div>
+    <button id="draft-mcp-panel-close" class="drawer-close" type="button" aria-label="Close the live panel">esc</button>
   </div>
   <div class="crawl-panel-body">
     <p class="crawl-lede">
-      Path B of pack creation. Interrogate a live OpenTelemetry MCP for the
-      backends it manages, the topology it observes, the baselines and anomalies
-      it tracks, and produce a <em>draft canonical v1.4 pack</em> grounded in
-      observed reality — not declared intent. Merge with a repo-derived draft
-      (Path A) for a complete pack.
+      Path B of pack creation. Test the connection to a live OpenTelemetry MCP,
+      then build a pack from it: a <em>draft</em> — a starting pack for
+      authoring, scaffolded from what the MCP discovers — or a <em>snapshot</em>
+      — an inventory of what is actually deployed, whose artefacts pair with a
+      repository pack.
     </p>
 
-    <div class="crawl-controls">
-      <label class="mcp-field">
-        <span class="mcp-field-key">MCP URL</span>
-        <input id="draft-mcp-url" type="url" placeholder="https://your-mcp.example.com/observability" autocomplete="off">
-      </label>
-      <label class="mcp-field">
-        <span class="mcp-field-key">Auth token <em>(optional, not persisted)</em></span>
-        <input id="draft-mcp-auth" type="password" placeholder="bearer token" autocomplete="off">
-      </label>
-      <label class="mcp-field">
-        <span class="mcp-field-key">Pack name <em>(defaults to "live-draft")</em></span>
-        <input id="draft-mcp-name" type="text" placeholder="live-draft" autocomplete="off">
-      </label>
-    </div>
+    <section class="mcpc-step" id="live-step-test" aria-labelledby="live-step-test-title">
+      <h3 class="mcpc-step-title" id="live-step-test-title">1 · Test the connection</h3>
+      <div class="crawl-controls">
+        <label class="mcp-field">
+          <span class="mcp-field-key">MCP URL</span>
+          <input id="draft-mcp-url" type="url" placeholder="https://your-mcp.example.com/observability" autocomplete="off">
+        </label>
+        <label class="mcp-field">
+          <span class="mcp-field-key">Auth token <em>(optional, not persisted)</em></span>
+          <input id="draft-mcp-auth" type="password" placeholder="bearer token" autocomplete="off">
+        </label>
+      </div>
+      <div class="crawl-panel-actions">
+        <button id="live-test-btn" class="mcp-refresh-btn" type="button">test connection</button>
+        <span id="live-ping-status" class="mcp-refresh-status" role="status" aria-live="polite"></span>
+      </div>
+      <div class="mcpc-result" id="live-ping-result" hidden></div>
+    </section>
 
-    <div class="crawl-panel-actions">
-      <button id="draft-mcp-go-btn" class="mcp-refresh-btn" type="button">draft from mcp</button>
-      <button id="draft-mcp-reset-btn" class="ctrl-btn" type="button">reset</button>
-      <span id="draft-mcp-status" class="mcp-refresh-status"></span>
-    </div>
+    <section class="mcpc-step" id="live-step-choose" aria-labelledby="live-step-choose-title" hidden>
+      <h3 class="mcpc-step-title" id="live-step-choose-title">2 · Choose what to build</h3>
+      <fieldset class="mcpc-choice">
+        <legend class="mcpc-legend">What to build</legend>
+        <label class="mcpc-option">
+          <input type="radio" name="live-kind" value="draft" id="live-kind-draft">
+          <span class="mcpc-option-title">Draft — scaffold from MCP discovery.</span>
+          <span class="mcpc-option-desc">A starting pack for authoring: the families this MCP offers, plus synthesized sections marked as scaffold (which a comparison does not count).</span>
+        </label>
+        <label class="mcpc-option">
+          <input type="radio" name="live-kind" value="snapshot" id="live-kind-snapshot">
+          <span class="mcpc-option-title">Snapshot — inventory what is actually deployed.</span>
+          <span class="mcpc-option-desc">Reads metric names, recording and alert rules, dashboards, scrape targets and routes through this MCP; registers a pack whose artefacts pair with a repository pack.</span>
+        </label>
+      </fieldset>
+      <div id="live-snapshot-opts" hidden>
+        <p class="mcpc-gaps" id="live-plan"></p>
+        <div class="crawl-controls">
+          <label class="mcp-field">
+            <span class="mcp-field-key">Metric prefixes <em>(comma-separated; empty reads every metric name)</em></span>
+            <input id="live-scope-prefixes" type="text" placeholder="payments_, checkout_" autocomplete="off">
+          </label>
+          <label class="mcp-field">
+            <span class="mcp-field-key">Dashboard / rule folder uids <em>(comma-separated)</em></span>
+            <input id="live-scope-folders" type="text" placeholder="ab12cd" autocomplete="off">
+          </label>
+        </div>
+        <p class="mcpc-note" id="live-scope-note"></p>
+      </div>
+      <div class="crawl-controls">
+        <label class="mcp-field">
+          <span class="mcp-field-key">Pack name <em id="draft-mcp-name-hint">(defaults to "production-live")</em></span>
+          <input id="draft-mcp-name" type="text" placeholder="production-live" autocomplete="off">
+        </label>
+        <label class="mcp-field">
+          <span class="mcp-field-key">Label <em>(optional — what the pickers show)</em></span>
+          <input id="live-label" type="text" autocomplete="off">
+        </label>
+      </div>
+      <p class="mcpc-note" id="live-duration"></p>
+      <div class="crawl-panel-actions">
+        <button id="draft-mcp-go-btn" class="mcp-refresh-btn" type="button">start draft</button>
+        <button id="draft-mcp-reset-btn" class="ctrl-btn" type="button">reset</button>
+        <span id="draft-mcp-status" class="mcp-refresh-status" role="status" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <section class="mcpc-step" id="live-step-progress" aria-labelledby="live-step-progress-title" hidden>
+      <h3 class="mcpc-step-title" id="live-step-progress-title">3 · Progress and result</h3>
+      <div class="crawl-panel-actions">
+        <span id="live-job-status" class="mcp-refresh-status" role="status" aria-live="polite"></span>
+        <span id="live-elapsed" class="mcpc-meta"></span>
+        <button id="live-cancel-btn" class="ctrl-btn" type="button" hidden>cancel</button>
+      </div>
+      <ol class="mcpc-gatelog" id="live-gatelog" aria-label="Gate log"></ol>
+      <div class="mcpc-result" id="live-result" hidden></div>
+    </section>
 
     <div class="crawl-result" id="draft-mcp-result" hidden>
       <div class="crawl-result-head">
@@ -459,7 +515,7 @@
 
 <div class="mcp-panel" id="mcp-panel" role="dialog" aria-labelledby="mcp-panel-title" hidden>
   <div class="mcp-panel-head">
-    <div id="mcp-panel-title" class="mcp-panel-title">Refresh production-live from MCP</div>
+    <div id="mcp-panel-title" class="mcp-panel-title">Live MCP connection</div>
     <button id="mcp-panel-close" class="drawer-close" type="button" aria-label="Close MCP panel">esc</button>
   </div>
   <div class="mcp-panel-body">
@@ -472,8 +528,16 @@
       <input id="mcp-auth" type="password" placeholder="bearer token" autocomplete="off">
     </label>
     <div class="mcp-panel-actions">
-      <button id="mcp-refresh-btn" class="mcp-refresh-btn" type="button">refresh now</button>
-      <span id="mcp-refresh-status" class="mcp-refresh-status"></span>
+      <button id="mcp-refresh-btn" class="mcp-refresh-btn" type="button">test connection</button>
+      <span id="mcp-ping-status" class="mcp-refresh-status" role="status" aria-live="polite"></span>
+    </div>
+    <div id="mcp-ping-result" class="mcpc-result" hidden></div>
+    <div class="mcpc-rebuild">
+      <div class="mcp-panel-actions">
+        <button id="mcp-rebuild-btn" class="ux-secondary-btn" type="button">rebuild production-live</button>
+        <span id="mcp-rebuild-status" class="mcp-refresh-status" role="status" aria-live="polite"></span>
+      </div>
+      <p class="mcpc-note" id="mcp-rebuild-note"></p>
     </div>
     <div class="mcp-panel-status" id="mcp-status-body"></div>
   </div>

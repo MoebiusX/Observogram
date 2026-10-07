@@ -1,0 +1,633 @@
+{
+  "case": "kafka.self",
+  "opts": null,
+  "taxonomy": null,
+  "sha256": "fd6ed3dd91dd2d274b36c26cdbe29bdf53eeb69e6ba8213754956a29b468473b",
+  "bytes": 77368,
+  "keys": [
+    "a",
+    "b",
+    "scope",
+    "collisions",
+    "summary",
+    "layers"
+  ],
+  "a": {
+    "id": "kafka",
+    "name": "kafka",
+    "service": "kafka",
+    "criticality": "tier-2",
+    "environment": "prod",
+    "version": "1.0.0",
+    "binding": "otel-grafanalabs"
+  },
+  "b": {
+    "id": "kafka",
+    "name": "kafka",
+    "service": "kafka",
+    "criticality": "tier-2",
+    "environment": "prod",
+    "version": "1.0.0",
+    "binding": "otel-grafanalabs"
+  },
+  "scope": {
+    "mode": "service",
+    "service": "kafka",
+    "serviceTokens": [
+      "kafka"
+    ],
+    "declaredMetricCount": 0,
+    "metricPrefixes": []
+  },
+  "collisions": [],
+  "summary": {
+    "onlyInA": 0,
+    "onlyInB": 0,
+    "inBoth": 71,
+    "aligned": 71,
+    "drifted": 0,
+    "outOfScope": 0,
+    "scaffold": 0,
+    "notObserved": 0,
+    "union": 71,
+    "aTotal": 71,
+    "bTotal": 71,
+    "jaccard": 1,
+    "alignment": 1
+  },
+  "layers": {
+    "L1": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "sli::{\"id\":\"broker_availability\"}",
+          "a": "SLI-01",
+          "b": "SLI-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"consumer_group_lag_seconds\"}",
+          "a": "SLI-03",
+          "b": "SLI-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"controller_election_rate\"}",
+          "a": "SLI-06",
+          "b": "SLI-06",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"fetch_latency_p99\"}",
+          "a": "SLI-05",
+          "b": "SLI-05",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"partition_replica_health\"}",
+          "a": "SLI-02",
+          "b": "SLI-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"produce_latency_p99\"}",
+          "a": "SLI-04",
+          "b": "SLI-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"broker_availability_99_9\"}",
+          "a": "SLO-01",
+          "b": "SLO-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"consumer_lag_99_under_60s\"}",
+          "a": "SLO-03",
+          "b": "SLO-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"controller_stability_99_under_1ph\"}",
+          "a": "SLO-06",
+          "b": "SLO-06",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"fetch_latency_99_p99_50ms\"}",
+          "a": "SLO-05",
+          "b": "SLO-05",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"partition_health_99_95\"}",
+          "a": "SLO-02",
+          "b": "SLO-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"produce_latency_99_p99_100ms\"}",
+          "a": "SLO-04",
+          "b": "SLO-04",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 12,
+      "drifted": 0
+    },
+    "L2": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "backend::{\"product\":\"elasticsearch\",\"signal\":\"logs\"}",
+          "a": "BAK-03",
+          "b": "BAK-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"mimir\",\"signal\":\"metrics\"}",
+          "a": "BAK-02",
+          "b": "BAK-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"prometheus\",\"signal\":\"metrics\"}",
+          "a": "BAK-01",
+          "b": "BAK-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"tempo\",\"signal\":\"traces\"}",
+          "a": "BAK-04",
+          "b": "BAK-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "otel::{}",
+          "a": "OTEL-01",
+          "b": "OTEL-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_exporter_logs::{\"signal\":\"logs\",\"target\":\"elasticsearch\"}",
+          "a": "PIP-EXP-LOG",
+          "b": "PIP-EXP-LOG",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_exporter_metrics::{\"signal\":\"metrics\",\"target\":\"prometheusremotewrite\"}",
+          "a": "PIP-EXP-MET",
+          "b": "PIP-EXP-MET",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_exporter_traces::{\"signal\":\"traces\",\"target\":\"otlp\"}",
+          "a": "PIP-EXP-TRC",
+          "b": "PIP-EXP-TRC",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"batch\"}",
+          "a": "PIP-PRC-02",
+          "b": "PIP-PRC-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"memory_limiter\"}",
+          "a": "PIP-PRC-01",
+          "b": "PIP-PRC-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"resource\"}",
+          "a": "PIP-PRC-03",
+          "b": "PIP-PRC-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"transform\"}",
+          "a": "PIP-PRC-04",
+          "b": "PIP-PRC-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_receiver::{\"name\":\"kafka\"}",
+          "a": "PIP-RCV-03",
+          "b": "PIP-RCV-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_receiver::{\"name\":\"otlp\"}",
+          "a": "PIP-RCV-01",
+          "b": "PIP-RCV-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_receiver::{\"name\":\"prometheus\"}",
+          "a": "PIP-RCV-02",
+          "b": "PIP-RCV-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "storage_logs::{\"backend\":\"elasticsearch\",\"signal\":\"logs\"}",
+          "a": "STO-LOG-01",
+          "b": "STO-LOG-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "storage_metrics::{\"backend\":\"mimir\",\"signal\":\"metrics\"}",
+          "a": "STO-MET-01",
+          "b": "STO-MET-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "storage_traces::{\"backend\":\"tempo\",\"signal\":\"traces\"}",
+          "a": "STO-TRC-01",
+          "b": "STO-TRC-01",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 18,
+      "drifted": 0
+    },
+    "L2X": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    },
+    "L3": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "dashboard::{\"id\":\"kafka-cluster-overview\"}",
+          "a": "DASH-01",
+          "b": "DASH-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "dashboard::{\"id\":\"kafka-consumer-lag\"}",
+          "a": "DASH-02",
+          "b": "DASH-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "dashboard::{\"id\":\"kafka-slo-burn\"}",
+          "a": "DASH-04",
+          "b": "DASH-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "dashboard::{\"id\":\"kafka-throughput\"}",
+          "a": "DASH-03",
+          "b": "DASH-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "derived_view::{\"id\":\"golden_signals_kafka\"}",
+          "a": "VIEW-01",
+          "b": "VIEW-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "derived_view::{\"id\":\"per_consumergroup_lag\"}",
+          "a": "VIEW-03",
+          "b": "VIEW-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "derived_view::{\"id\":\"per_topic_throughput\"}",
+          "a": "VIEW-02",
+          "b": "VIEW-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"kafka:broker_availability:error_ratio_5m\"}",
+          "a": "QRY-02",
+          "b": "QRY-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"kafka:broker_availability:ratio_5m\"}",
+          "a": "QRY-01",
+          "b": "QRY-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"kafka:consumer_lag:seconds_max_5m\"}",
+          "a": "QRY-05",
+          "b": "QRY-05",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"kafka:controller_elections:rate_1h\"}",
+          "a": "QRY-08",
+          "b": "QRY-08",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"kafka:fetch_latency:p99_5m\"}",
+          "a": "QRY-07",
+          "b": "QRY-07",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"kafka:partition_health:error_ratio_5m\"}",
+          "a": "QRY-04",
+          "b": "QRY-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"kafka:partition_health:ratio_5m\"}",
+          "a": "QRY-03",
+          "b": "QRY-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"kafka:produce_latency:p99_5m\"}",
+          "a": "QRY-06",
+          "b": "QRY-06",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 15,
+      "drifted": 0
+    },
+    "L4": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "alert_route::{\"severity\":\"sev1\"}",
+          "a": "ALR-01",
+          "b": "ALR-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "alert_route::{\"severity\":\"sev2\"}",
+          "a": "ALR-02",
+          "b": "ALR-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "alert_route::{\"severity\":\"sev3\"}",
+          "a": "ALR-03",
+          "b": "ALR-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"broker_availability_99_9\"}",
+          "a": "POL-01",
+          "b": "POL-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"consumer_lag_99_under_60s\"}",
+          "a": "POL-05",
+          "b": "POL-05",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"controller_stability_99_under_1ph\"}",
+          "a": "POL-06",
+          "b": "POL-06",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"fetch_latency_99_p99_50ms\"}",
+          "a": "POL-04",
+          "b": "POL-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"partition_health_99_95\"}",
+          "a": "POL-02",
+          "b": "POL-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"produce_latency_99_p99_100ms\"}",
+          "a": "POL-03",
+          "b": "POL-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "forecast::{\"slo\":\"broker_availability_99_9\"}",
+          "a": "FCST-01",
+          "b": "FCST-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "forecast::{\"slo\":\"consumer_lag_99_under_60s\"}",
+          "a": "FCST-03",
+          "b": "FCST-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "forecast::{\"slo\":\"partition_health_99_95\"}",
+          "a": "FCST-02",
+          "b": "FCST-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "remediation::{\"trigger\":\"alert:kafka-broker-down\"}",
+          "a": "HEAL-01",
+          "b": "HEAL-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "remediation::{\"trigger\":\"alert:kafka-consumer-lag-burn\"}",
+          "a": "HEAL-03",
+          "b": "HEAL-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "remediation::{\"trigger\":\"alert:kafka-controller-churn\"}",
+          "a": "HEAL-04",
+          "b": "HEAL-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "remediation::{\"trigger\":\"alert:kafka-partition-under-replicated\"}",
+          "a": "HEAL-02",
+          "b": "HEAL-02",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 16,
+      "drifted": 0
+    },
+    "L5": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "baselines::{}",
+          "a": "BASE-01",
+          "b": "BASE-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "chaos::{\"id\":\"broker-network-partition\"}",
+          "a": "CHAOS-02",
+          "b": "CHAOS-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "chaos::{\"id\":\"broker-pod-kill\"}",
+          "a": "CHAOS-01",
+          "b": "CHAOS-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "chaos::{\"id\":\"consumer-group-overload\"}",
+          "a": "CHAOS-03",
+          "b": "CHAOS-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "chaos::{\"id\":\"produce-latency-spike\"}",
+          "a": "CHAOS-04",
+          "b": "CHAOS-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "synthetic::{\"id\":\"consumer-group-health\"}",
+          "a": "SYN-02",
+          "b": "SYN-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "synthetic::{\"id\":\"produce-consume-canary\"}",
+          "a": "SYN-01",
+          "b": "SYN-01",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 7,
+      "drifted": 0
+    },
+    "GOV": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "imports::{\"ref\":\"platform/golden-signals-base@1.4\"}",
+          "a": "IMP-01",
+          "b": "IMP-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "imports::{\"ref\":\"platform/std-alert-routes@3.0\"}",
+          "a": "IMP-02",
+          "b": "IMP-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "imports::{\"ref\":\"platform/std-budget-policy@2.1\"}",
+          "a": "IMP-03",
+          "b": "IMP-03",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 3,
+      "drifted": 0
+    }
+  }
+}

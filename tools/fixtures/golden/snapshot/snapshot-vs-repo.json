@@ -1,0 +1,65 @@
+{
+  "summary": {
+    "onlyInA": 6,
+    "onlyInB": 4,
+    "inBoth": 14,
+    "aligned": 14,
+    "drifted": 0,
+    "outOfScope": 79,
+    "scaffold": 17,
+    "notObserved": 11,
+    "union": 24,
+    "aTotal": 20,
+    "bTotal": 18,
+    "jaccard": 0.58,
+    "alignment": 0.58
+  },
+  "byKind": {
+    "alert_rule": {
+      "inBoth": 2,
+      "onlyInB": 2,
+      "outOfScope": 10
+    },
+    "backend": {
+      "outOfScope": 5
+    },
+    "burn_rate": {
+      "onlyInA": 2
+    },
+    "dashboard": {
+      "inBoth": 5
+    },
+    "metric": {
+      "inBoth": 3,
+      "notObserved": 10,
+      "outOfScope": 25
+    },
+    "otel": {
+      "notObserved": 1
+    },
+    "pipeline_exporter_metrics": {
+      "outOfScope": 1
+    },
+    "recording_rule": {
+      "inBoth": 1,
+      "onlyInA": 2,
+      "onlyInB": 1,
+      "outOfScope": 13
+    },
+    "scrape_job": {
+      "inBoth": 1,
+      "outOfScope": 4
+    },
+    "sli": {
+      "inBoth": 1,
+      "onlyInA": 1,
+      "onlyInB": 1,
+      "outOfScope": 10
+    },
+    "slo": {
+      "inBoth": 1,
+      "onlyInA": 1,
+      "outOfScope": 11
+    }
+  }
+}

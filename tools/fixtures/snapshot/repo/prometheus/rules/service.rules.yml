@@ -1,0 +1,40 @@
+# Synthetic (2026-10-07, tools/test-live-snapshot.mjs): two alerting rules
+# copied from the recorded vmalert answer (tools/fixtures/mcp/vmalert_rules.json:
+# HighErrorRate, ServiceDown) and three recording rules — one the recording
+# also holds, two recorded series an empty rules API leaves to the
+# metric-name inventory.
+groups:
+  - name: krystalinex.application
+    interval: 15s
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total[5m]))
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: High error rate detected
+      - alert: ServiceDown
+        expr: up{job=~"krystalinex-server|payment-processor"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Service {{ $labels.job }} is down
+  - name: finops:ingestion
+    interval: 1m
+    rules:
+      - record: finops:requests:rate_per_service_5m
+        expr: sum(rate(http_requests_total[5m])) by (job)
+  - name: checkout:slo
+    interval: 30s
+    rules:
+      - record: checkout:requests:good_5m
+        expr: sum(rate(http_requests_total{job="checkout",status!~"5.."}[5m]))
+      - record: checkout:requests:total_5m
+        expr: sum(rate(http_requests_total{job="checkout"}[5m]))

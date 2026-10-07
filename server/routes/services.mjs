@@ -43,6 +43,7 @@ import {
 import { getEnvironment, listEnvironments } from '../store/environments.mjs';
 import { listMcpEndpoints } from '../store/mcp-endpoints.mjs';
 import { getService } from '../store/services.mjs';
+import { mcpCallerOf, mcpTargetView } from '../mcp-target-policy.mjs';
 import { bodyOf, handler, pathId } from './util.mjs';
 
 // The service a path names — or null, the answer (400 / 404) sent.
@@ -154,12 +155,14 @@ export function servicesRoutes({ authorize }) {
   // operators and above, null to a viewer (the live-status precedent).
   const endpointView = (db, principal, ep) => mcpEndpointViewOf(db, ep, { rank: rankOf(principal) });
 
+  // `policy` says what this caller may do with a target (mcpTargetView): type
+  // a URL, register an endpoint, and the reader's own org's origin list.
   router.get('/api/mcp-endpoints', authorize('GET /api/mcp-endpoints'), handler((req, res, { db, principal }) => {
-    res.json({ ok: true, endpoints: listMcpEndpoints(db).map((ep) => endpointView(db, principal, ep)) });
+    res.json({ ok: true, endpoints: listMcpEndpoints(db).map((ep) => endpointView(db, principal, ep)), policy: mcpTargetView(db, mcpCallerOf(req)) });
   }));
 
   router.post('/api/mcp-endpoints', authorize('POST /api/mcp-endpoints'), handler((req, res, { db, principal, actor }) => {
-    const endpoint = createMcpEndpointFromApi(db, actor, bodyOf(req));
+    const endpoint = createMcpEndpointFromApi(db, actor, bodyOf(req), { caller: mcpCallerOf(req) });
     res.status(201).json({ ok: true, endpoint: endpointView(db, principal, endpoint) });
   }));
 
@@ -168,7 +171,7 @@ export function servicesRoutes({ authorize }) {
   router.patch('/api/mcp-endpoints/:id', authorize('PATCH /api/mcp-endpoints/:id'), handler((req, res, { db, principal, actor }) => {
     const id = pathId(req, res, 'id', 'MCP endpoint');
     if (id === null) return;
-    const { endpoint, changed } = updateMcpEndpointFromApi(db, actor, id, bodyOf(req));
+    const { endpoint, changed } = updateMcpEndpointFromApi(db, actor, id, bodyOf(req), { caller: mcpCallerOf(req) });
     res.json({ ok: true, endpoint: endpointView(db, principal, endpoint), changed });
   }));
 

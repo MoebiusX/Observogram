@@ -1,0 +1,33 @@
+{
+  "uid": "node_exporter_full",
+  "title": "Node Exporter Full",
+  "tags": [
+    "synthetic"
+  ],
+  "schemaVersion": 39,
+  "version": 3,
+  "panels": [
+    {
+      "id": 1,
+      "title": "CPU busy",
+      "type": "timeseries",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(node_cpu_seconds_total{mode!=\"idle\"}[5m]))"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Memory used",
+      "type": "timeseries",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes"
+        }
+      ]
+    }
+  ]
+}

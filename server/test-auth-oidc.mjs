@@ -134,8 +134,13 @@ const { getMeta } = await import('./store/meta.mjs');
 const { listAudit } = await import('./store/audit.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
 const { orgWorkspaceRoot, runWithOrg } = await import('./tenancy.mjs');
+const { createMcpEndpoint } = await import('./store/mcp-endpoints.mjs');
 const srv = await start({ port: 0, host: '127.0.0.1', silent: true });
 const base = `http://127.0.0.1:${srv.address().port}`;
+// The unreachable MCP as the default org's endpoint, planted through the
+// repository before any request: the OIDC operator below deploys by its id,
+// as every caller below the admin does.
+const NO_MCP_ID = runWithOrg('default', () => createMcpEndpoint(currentStore(), 'system', { name: 'unreachable', url: 'http://127.0.0.1:1/no-mcp' })).id;
 process.env.OBSERVOGRAM_OIDC_REDIRECT_URL = `${base}/auth/callback`;
 
 const cookieOf = (res, name) =>
@@ -213,11 +218,12 @@ try {
   // user-42 joined default as operator (the empty workspace's import); the ID
   // token carried email: ada@example.test. The MCP is unreachable, so the
   // deploy fails (502) — and the attempt is still recorded, with the
-  // principal's actor: the oidcLogin() form <issuerKey>#<sub>.
+  // principal's actor: the oidcLogin() form <issuerKey>#<sub>. The target is
+  // the org's endpoint by id.
   r = await fetch(`${base}/api/packs/payment-service/deploy/prometheus-rules`, {
     method: 'POST',
     headers: { Cookie: session, 'X-Observogram-CSRF': '1', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mcpUrl: 'http://127.0.0.1:1/no-mcp' }),
+    body: JSON.stringify({ mcpEndpointId: NO_MCP_ID }),
   });
   const deployBody = await r.json();
   assert(r.status === 502 && typeof deployBody.deployId === 'string', 'an OIDC operator deploys to an unreachable MCP → 502 with a deployId', [r.status, deployBody.deployId]);
@@ -225,6 +231,21 @@ try {
   const deployLine = deployLines.find(l => l.includes(`"deployId":"${deployBody.deployId}"`)) || '';
   assert(JSON.parse(deployLine || '{}').actor === loginOf('user-42') && !deployLine.includes('ada@example.test'),
     `the deploys.jsonl line says actor ${loginOf('user-42')}, never the email`, deployLine);
+
+  // ---- a typed MCP URL at the deploy routes is an admin's (R4, D3) ----
+  // The same OIDC operator typing the URL is refused before any request
+  // leaves, and nothing is recorded.
+  const linesBefore = readFileSync(join(runWithOrg('default', () => orgWorkspaceRoot()), 'deploys.jsonl'), 'utf8').trim().split('\n').length;
+  r = await fetch(`${base}/api/packs/payment-service/deploy/prometheus-rules`, {
+    method: 'POST',
+    headers: { Cookie: session, 'X-Observogram-CSRF': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mcpUrl: 'http://127.0.0.1:1/no-mcp' }),
+  });
+  const typedBody = await r.json();
+  assert(r.status === 403 && typedBody.denied === 'role' && /^a typed MCP URL needs the admin role in org 'default' \(you are operator\)/.test(typedBody.error || ''),
+    'an OIDC operator typing an MCP URL at deploy → 403 role', [r.status, typedBody]);
+  assert(readFileSync(join(runWithOrg('default', () => orgWorkspaceRoot()), 'deploys.jsonl'), 'utf8').trim().split('\n').length === linesBefore,
+    'the refused deploy writes no deploys.jsonl line');
 
   // ---- replaying the callback (stale flow) is rejected ----
   r = await fetch(cbUrl, { redirect: 'manual', headers: { Cookie: flowCookie } });
