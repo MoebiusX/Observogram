@@ -1855,7 +1855,17 @@ server bakes what that server shows; build unbranded there by unsetting or
 emptying the variable, since an empty value counts as unset:
 `env -u OBSERVOGRAM_BRAND_FILE …` or `OBSERVOGRAM_BRAND_FILE= …` in a POSIX
 shell, `set OBSERVOGRAM_BRAND_FILE=` in cmd, `$env:OBSERVOGRAM_BRAND_FILE=''`
-in PowerShell (there is no `--no-brand`). The summary line and `--json` always
+in PowerShell (there is no `--no-brand`). `--mcp-settings-policy <file.json>`
+bakes the MCP server-settings policy (the file a server reads from
+`OBSERVOGRAM_MCP_SETTINGS_POLICY`; a bad file fails the build with
+`--mcp-settings-policy: <path>: <reason>`, the server's texts) and
+`--mcp-origins <origin>,…` the MCP origins the bundle's Server settings modal
+may send settings to (`OBSERVOGRAM_MCP_ORIGINS`'s list rule, `*` any origin;
+an entry that is not an http(s) origin fails the build); the bundle's
+`GET /api/mcp-settings` serves both, and when a flag is absent
+`OBSERVOGRAM_MCP_SETTINGS_POLICY` and `OBSERVOGRAM_MCP_ORIGINS` are honoured
+(`--json`: `mcpSettingsPolicy: { source, file, rules } | null`, `mcpOrigins:
+{ source, origins } | null`). The summary line and `--json` always
 say what was baked (`taxonomy: { source, file, types, ids } | null`, `brand:
 { source, file, name } | null` — the paths, never the contents, and neither
 path lands in the bundle). Brand URLs must not be server paths: `favicon`,

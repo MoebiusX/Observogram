@@ -783,8 +783,8 @@
       "releasedExports": null
     },
     "tools/lib/mcp-url-safety.mjs": {
-      "sha256": "db6f3a237e4253b2bf5b34a18ff749622cb12f6d8ac6ad806579357834ecfc47",
-      "bytes": 10535,
+      "sha256": "0869a761a7856f7c851205f127b53c37874cc17741e36b0649bfd9cac7ff0d69",
+      "bytes": 11873,
       "exports": [
         "credentialParamName",
         "droppedNote",
@@ -793,6 +793,7 @@
         "mayBeThisMachine",
         "mcpUrlOrigin",
         "mcpUrlPolicy",
+        "parseOriginList",
         "redactCredentials",
         "safeMcpUrl",
         "stripMcpUrl"

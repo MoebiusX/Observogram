@@ -30,7 +30,13 @@
 // The baked taxonomy (`config.taxonomy`, written by --taxonomy) is served at
 // GET /api/taxonomy in the server's shape (server/taxonomy.mjs
 // taxonomyAnswer); the studio's boot() binds it exactly as it binds a
-// server's. The product name in the notices comes from the shell's
+// server's. The baked MCP server-settings policy (`config.mcpSettingsPolicy`,
+// --mcp-settings-policy) is served at GET /api/mcp-settings in the server's
+// shape (server/mcp-settings-policy.mjs settingsPolicyAnswer), `proxy`
+// always false (no studio server to pass settings through), plus the baked
+// MCP origin list (`config.mcpOrigins`, --mcp-origins) when there is one —
+// the origins the Server settings modal may send settings to from a page
+// that is not on the MCP server's machine. The product name in the notices comes from the shell's
 // #brand-config (written by --brand, the script studio/brand.mjs reads for
 // the header), the default being DEFAULT_BRAND.name — so this file spells
 // the product nowhere and the chrome and the notices agree by construction.
@@ -217,7 +223,7 @@ function parsePackText(text, url) {
 
 // ---------- the backend ----------
 
-// config: { version, schema, packs: [{ id, label, description?, canonical } | { id, label, description?, url }], taxonomy? }
+// config: { version, schema, packs: [{ id, label, description?, canonical } | { id, label, description?, url }], taxonomy?, mcpSettingsPolicy?, mcpOrigins? }
 // fetchImpl: the page's own fetch, for the pack URLs (never for the routes).
 // origin: the page's origin; an absolute request to another origin is not ours.
 // product: the name the denials spell (installStaticBackend reads it from #brand-config).
@@ -230,6 +236,15 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
   // /api/taxonomy exactly as against a server (studio/app.mjs
   // bindTaxonomyFromServer) — the import map gives both the one classifier.
   const taxonomy = config && typeof config.taxonomy === 'object' && config.taxonomy !== null && !Array.isArray(config.taxonomy) ? config.taxonomy : null;
+  // The MCP server-settings policy --mcp-settings-policy baked (a plain
+  // object), else none; the MCP origin list --mcp-origins baked ({ listed:
+  // true, origins: [origin] | null }, null for any origin), else none. Served
+  // as they are: the studio compiles the policy when its modal opens.
+  const mcpSettingsPolicy = config && typeof config.mcpSettingsPolicy === 'object' && config.mcpSettingsPolicy !== null && !Array.isArray(config.mcpSettingsPolicy) ? config.mcpSettingsPolicy : null;
+  const baked = config?.mcpOrigins;
+  const mcpOrigins = baked && typeof baked === 'object' && baked.listed === true
+    && (baked.origins === null || (Array.isArray(baked.origins) && baked.origins.every((o) => typeof o === 'string')))
+    ? { listed: true, origins: baked.origins === null ? null : [...baked.origins] } : null;
   const upstream = fetchImpl;
 
   // Every pack, resolved once: { meta, canonical } or { meta, error }. A URL
@@ -291,10 +306,13 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
     // document or none, `configured` saying which; no-store like the server.
     '/api/taxonomy': () => json(200, { ok: true, taxonomy, configured: taxonomy !== null }, { 'Cache-Control': 'no-store' }),
     // GET /api/mcp-settings — server/mcp-settings-policy.mjs
-    // settingsPolicyAnswer(): no settings policy and no pass-through (a
-    // bundle has no studio server to pass settings through); no-store like
-    // the server.
-    '/api/mcp-settings': () => json(200, { ok: true, proxy: false, policy: null, configured: false }, { 'Cache-Control': 'no-store' }),
+    // settingsPolicyAnswer(): the baked policy or none, `configured` saying
+    // which, never a pass-through (a bundle has no studio server to pass
+    // settings through), and the baked MCP origin list only when there is
+    // one; no-store like the server.
+    '/api/mcp-settings': () => json(200, {
+      ok: true, proxy: false, policy: mcpSettingsPolicy, configured: mcpSettingsPolicy !== null, ...(mcpOrigins ? { mcpOrigins } : {}),
+    }, { 'Cache-Control': 'no-store' }),
     '/api/compile/targets': () => json(200, { targets: listTargets() }),
     '/api/maturity-rubric': () => json(200, {
       specVersion: SPEC_VERSION,

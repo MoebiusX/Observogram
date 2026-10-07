@@ -159,6 +159,15 @@ assert(validateMcpUrl(creds).safeUrl === safeMcpUrl(creds) && validateMcpUrl(cre
   assert(yes.every((h) => mayBeThisMachine(h) === true) && no.every((h) => mayBeThisMachine(h) === false),
     'mayBeThisMachine: every loopback host plus *.localhost, 0.0.0.0, [::], [::ffff:0:0] and a trailing dot; never localhost.example or a private address');
 }
+// ---------- the MCP origin list: parseOriginList (moved here from the target policy for the bundle builder) ----------
+{
+  const libSafety = await import('../tools/lib/mcp-url-safety.mjs');
+  const policy = await import('./mcp-target-policy.mjs');
+  const p = libSafety.parseOriginList(' HTTPS://Mcp.Example.com:443 , *, https://x.example/path, localhost:8080');
+  assert(policy.parseOriginList === libSafety.parseOriginList
+    && p.any === true && [...p.origins].join() === 'https://mcp.example.com' && p.rejected.join('|') === 'https://x.example/path|localhost:8080',
+  'parseOriginList lives in tools/lib/mcp-url-safety.mjs; server/mcp-target-policy.mjs re-exports the same function, its rule unchanged');
+}
 
 const lib = readFileSync(new URL('../tools/lib/mcp-url-safety.mjs', import.meta.url), 'utf8');
 assert(!/^\s*import\b/m.test(lib) && !/\brequire\(/.test(lib) && !/node:/.test(lib), 'tools/lib/mcp-url-safety.mjs imports nothing (browser-safe: the studio loads it from /lib)');
