@@ -410,7 +410,8 @@ test('the mock-MCP golden: the snapshot pack is byte-identical to snapshot.pack.
   assert.ok(records.every((r) => r.stage !== 'signals'), 'a snapshot reads no stack signals');
 
   const repo = crawledRepo();
-  const d = diffPacks(adapt(repo), adapt(pack));
+  const vsRepo = (live, options) => diffPacks(adapt(repo), adapt(live), options);
+  const d = vsRepo(pack);
   const byKind = countsByKind(d);
   assert.equal(byKind.dashboard.inBoth, 5, 'dashboard inBoth equals the dashboard count');
   assert.ok(!byKind.dashboard.onlyInA && !byKind.dashboard.onlyInB);
@@ -423,6 +424,17 @@ test('the mock-MCP golden: the snapshot pack is byte-identical to snapshot.pack.
   assert.ok(!entries(d, 'onlyInA', 'metric').some((e) => JSON.stringify(e).includes('checkout_orders_total')), 'never "declared, not live"');
   assert.ok(d.summary.inBoth > 0);
   golden('snapshot-vs-repo.json', { summary: d.summary, byKind });
+  // Every fixture title equals its crawler id, so the counts above hold under
+  // name pairing too. A dashboard retitled in Grafana since the crawl tells
+  // the modes apart: it still pairs by its id, and only name pairing splits it.
+  const retitled = structuredClone(pack);
+  const moved = retitled.spec.dashboards.find((x) => x.id === 'orders-main');
+  moved.params.title = 'Orders (retitled live)';
+  const byId = countsByKind(vsRepo(retitled)).dashboard;
+  assert.equal(byId.inBoth, 5, 'the retitled dashboard pairs by its id');
+  assert.ok(!byId.onlyInA && !byId.onlyInB, 'nothing split by the new title');
+  const byName = countsByKind(vsRepo(retitled, { identity: 'name' })).dashboard;
+  assert.deepEqual([byName.inBoth, byName.onlyInA], [4, 1], 'name pairing splits it — the default is not name pairing');
 });
 
 test('the empty rules API: the recorded series in the metric names still feed recording rules, SLIs and SLOs — with a metric prefix set too', async () => {
