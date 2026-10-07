@@ -565,11 +565,11 @@ test('GET /api/mcp-endpoints by rank: the url and the variable to an operator an
   const LISTED = { listed: true, origins: SUITE_ORIGINS.split(',').sort() };
   const policyOf = async (who) => (await ok(K, who, '/api/mcp-endpoints')).json.policy;
   for (const who of ['ada', 'olive']) {
-    assert.deepEqual(await policyOf(who), { typed: { allowed: true, why: null, ...LISTED }, register: { allowed: true, why: null, ...LISTED } }, `${who}: types and registers`);
+    assert.deepEqual(await policyOf(who), { typed: { allowed: true, why: null, ...LISTED }, register: { allowed: true, why: null, ...LISTED, listedOnly: true } }, `${who}: types and registers (a list applies: listed origins only)`);
   }
   assert.deepEqual(await policyOf('oscar'), {
     typed: { allowed: false, why: "a typed MCP URL needs the admin role in org 'acme' (you are operator) — choose one of the org's registered MCP endpoints (mcpEndpointId; GET /api/mcp-endpoints lists them), or ask an admin of acme to register this one in Settings → MCP endpoints", ...LISTED },
-    register: { allowed: false, why: "registering an MCP endpoint needs the admin role in org 'acme' (you are operator) — ask an admin of acme", ...LISTED },
+    register: { allowed: false, why: "registering an MCP endpoint needs the admin role in org 'acme' (you are operator) — ask an admin of acme", ...LISTED, listedOnly: true },
   }, 'oscar: the list only');
   const veraPolicy = await policyOf('vera');
   assert.deepEqual([veraPolicy.typed.allowed, veraPolicy.register.allowed, veraPolicy.register.why], [false, false, "registering an MCP endpoint needs the admin role in org 'acme' (you are viewer) — ask an admin of acme"]);

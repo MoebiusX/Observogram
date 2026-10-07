@@ -30,7 +30,9 @@
 // attach its own credentials to every request). Without a credential a
 // typed URL reaches only the origin of one of this org's registered
 // endpoints, and a registered endpoint (registering it was the vetting) and
-// a token-less registration are allowed.
+// a session admin's token-less registration are allowed; without sign-in
+// (the anonymous local caller) only a loopback MCP or a listed origin may
+// be registered at all (decision D4).
 //
 // redactTarget(text, target) is the route-level backstop for every text an
 // MCP route sends back or logs after a fetch went wrong. The MCP client
@@ -256,6 +258,16 @@ export function mcpOriginDecision(db, url, { use, credential = 'none', caller = 
     const names = list.from.map((f) => (f === 'deployment' ? MCP_ORIGINS_VAR : orgMcpOriginsVar(org)));
     return refuse(`${origin} is not in ${names.join(', nor in ')} — the server's operator adds it there (comma-separated origins, e.g. https://mcp.example.com), ${listedTail(use)}`);
   }
+  // Without sign-in (the open postures' anonymous local caller) only a
+  // loopback MCP or a listed origin may be registered, token or not (D4):
+  // registering any other would let an anonymous caller aim the server at
+  // any host, which the typed-URL rule refuses it.
+  if (use === 'register' && caller?.principal?.kind === 'local') {
+    const signIn = caller.authOff
+      ? 'restart it without OBSERVOGRAM_AUTH=off once a user exists — npm run users -- add <login>'
+      : 'npm run users -- add <login> arms sign-in';
+    return refuse(`on a server without sign-in, only a loopback MCP or an origin listed in ${MCP_ORIGINS_VAR} may be registered — list ${origin} there, or sign in as an admin (${signIn})`);
+  }
   if (credential !== 'none') {
     return refuse(`${origin} is not a listed MCP origin, and the server sends a credential (${credentialText(credential, tokenVar)}) only to a listed origin or this machine — the server's operator adds ${origin} to ${ORIGINS_WAY(org)}${credentialWay(credential, use)}`);
   }
@@ -300,15 +312,19 @@ function registerRefusal(caller) {
 
 // What GET /api/mcp-endpoints tells the studio about this caller:
 // { typed: { allowed, why, listed, origins }, register: { allowed, why,
-// listed, origins } } — `why` the refusal's sentence (null when allowed),
-// `listed`/`origins` the reader's own org's allowlist (originsView).
+// listed, origins, listedOnly } } — `why` the refusal's sentence (null when
+// allowed), `listed`/`origins` the reader's own org's allowlist
+// (originsView); `listedOnly` — only a loopback MCP or a listed origin may
+// be registered, even without readTokenEnv: a list applies, or the caller
+// has no sign-in (D4).
 export function mcpTargetView(db, caller) {
   const typedRefusal = typedMcpUrlDecision(caller);
   const register = registerRefusal(caller);
   const origins = originsView(db, caller?.org ?? currentOrg());
+  const listedOnly = origins.listed || caller?.principal?.kind === 'local';
   return {
     typed: { allowed: typedRefusal === null, why: typedRefusal?.error ?? null, ...origins },
-    register: { allowed: register === null, why: register, ...origins },
+    register: { allowed: register === null, why: register, ...origins, listedOnly },
   };
 }
 

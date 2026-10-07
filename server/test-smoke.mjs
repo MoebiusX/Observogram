@@ -492,6 +492,18 @@ try {
   // OBSERVOGRAM_MCP_ORIGINS, a credential — the caller's mcpAuth here — never
   // leaves for an unlisted origin but loopback, refused before any wire call;
   // an endpoint registered while `*` was set meets the list as it is at use.
+  // Without sign-in only a loopback MCP or a listed origin may be
+  // registered (D4), token or not: with no list the remote origin is a 400
+  // and nothing is written; under `*` it registers.
+  {
+    const seqBefore = auditSeq();
+    const refused = await registerMcpEndpoint(base, { name: 'far', url: 'https://mcp.far.test/mcp' });
+    assert(refused.status === 400 && refused.json?.error === 'on a server without sign-in, only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS may be registered — list https://mcp.far.test there, or sign in as an admin (restart it without OBSERVOGRAM_AUTH=off once a user exists — npm run users -- add <login>)',
+      'local registering an unlisted remote origin, no list set → 400 (D4), the origin only; the way in under OBSERVOGRAM_AUTH=off is a restart', [refused.status, refused.json]);
+    const listed = await getJson(base, '/api/mcp-endpoints');
+    assert(!listed.endpoints.some(ep => ep.name === 'far') && auditSeq() === seqBefore, 'the refused endpoint is not registered and wrote no row', listed.endpoints);
+    assert(listed.policy?.register?.allowed === true && listed.policy.register.listedOnly === true, 'the policy says local registers only loopback or listed origins', listed.policy);
+  }
   process.env.OBSERVOGRAM_MCP_ORIGINS = '*';
   let farId;
   try {

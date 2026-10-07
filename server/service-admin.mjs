@@ -289,7 +289,11 @@ export function deleteEnvironmentFromApi(db, actor, id) {
 
 // ---------- MCP endpoints ----------
 
-export function createMcpEndpointFromApi(db, actor, { name, url, readTokenEnv } = {}) {
+// `caller` (mcpCallerOf(req)) is required, as for resolveMcpTarget: the
+// origin rule at registration reads who registers (D4: without sign-in only
+// a loopback MCP or a listed origin).
+export function createMcpEndpointFromApi(db, actor, { name, url, readTokenEnv } = {}, { caller } = {}) {
+  needCaller('createMcpEndpointFromApi', caller);
   name = parseName(name, WAYS.mcpEndpointName);
   return atomic(db, () => {
     const existing = listMcpEndpoints(db).find((ep) => ep.name === name);
@@ -298,22 +302,29 @@ export function createMcpEndpointFromApi(db, actor, { name, url, readTokenEnv } 
     // origin rule then judges the record as written, and a refusal undoes
     // the row and its audit row with it.
     const endpoint = createMcpEndpoint(db, actor, { name, url, readTokenEnv: readTokenEnv === undefined ? null : readTokenEnv });
-    checkRegistration(db, endpoint);
+    checkRegistration(db, endpoint, caller);
     return endpoint;
   });
 }
 
+function needCaller(fn, caller) {
+  if (!caller || typeof caller !== 'object') throw new TypeError(`${fn}: the caller (mcpCallerOf(req)) is required`);
+}
+
 // The origin rule at registration (mcp-target-policy.mjs): an endpoint that
-// names readTokenEnv carries the server's credential.
-function checkRegistration(db, ep) {
+// names readTokenEnv carries the server's credential; the caller decides
+// whether an unlisted origin may be registered at all (D4).
+function checkRegistration(db, ep, caller) {
   const refusal = mcpOriginDecision(db, ep.url, {
-    use: 'register', credential: credentialThatRides({ serverToken: !!ep.readTokenEnv, hook: false }), tokenVar: ep.readTokenEnv,
+    use: 'register', credential: credentialThatRides({ serverToken: !!ep.readTokenEnv, hook: false }), tokenVar: ep.readTokenEnv, caller,
   });
   if (refusal) invalid(refusal.error);
 }
 
-// → { endpoint, changed }; `readTokenEnv: null` clears it.
-export function updateMcpEndpointFromApi(db, actor, id, patch = {}) {
+// → { endpoint, changed }; `readTokenEnv: null` clears it. `caller` as for
+// createMcpEndpointFromApi.
+export function updateMcpEndpointFromApi(db, actor, id, patch = {}, { caller } = {}) {
+  needCaller('updateMcpEndpointFromApi', caller);
   return atomic(db, () => {
     const current = getMcpEndpoint(db, id);
     if (!current) missing(WAYS.noMcpEndpoint(id));
@@ -330,7 +341,7 @@ export function updateMcpEndpointFromApi(db, actor, id, patch = {}) {
     const endpoint = updateMcpEndpoint(db, actor, id, Object.fromEntries(changed.map((k) => [k, next[k]])));
     // A new URL or variable meets the origin rule against the state after
     // the change; a rename alone does not.
-    if (changed.includes('url') || changed.includes('readTokenEnv')) checkRegistration(db, endpoint);
+    if (changed.includes('url') || changed.includes('readTokenEnv')) checkRegistration(db, endpoint, caller);
     return { endpoint, changed };
   });
 }

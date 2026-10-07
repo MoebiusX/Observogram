@@ -202,6 +202,34 @@ test('mcpOriginDecision: every row — loopback passes; a list set admits its or
   }
 });
 
+test('mcpOriginDecision at registration without sign-in (D4): the anonymous local caller registers only a loopback MCP or a listed origin, token or not — the way out names the list and arming sign-in (a restart under OBSERVOGRAM_AUTH=off); a session admin\'s token-less registration stays allowed', async () => {
+  const { db, close } = await freshStore('acme');
+  try {
+    runWithOrg('acme', () => {
+      const local = { principal: { kind: 'local', actor: 'local', role: 'admin', owner: true }, org: 'acme', port: 8123, posture: 'open-loopback', direct: true, authOff: false };
+      const admin = { ...local, principal: { kind: 'session', actor: 'ada', role: 'admin', owner: false }, posture: 'identity', direct: false };
+      const d = (url, opts, env = {}) => mcpOriginDecision(db, url, { use: 'register', env, ...opts });
+      const D4 = 'on a server without sign-in, only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS may be registered — list https://demo.example there, or sign in as an admin (npm run users -- add <login> arms sign-in)';
+      for (const credential of ['none', 'server']) {
+        assert.deepEqual(d('https://demo.example/mcp?tier=1', { caller: local, credential }), { status: 403, denied: 'origin', error: D4 }, `local, ${credential}: the origin only`);
+        assert.equal(d('http://127.0.0.1:3001/mcp', { caller: local, credential }), null, `local, ${credential}: loopback`);
+        assert.equal(d('http://[::1]:3001/mcp', { caller: local, credential }), null, `local, ${credential}: [::1]`);
+        assert.equal(d('https://demo.example/mcp', { caller: local, credential }, { OBSERVOGRAM_MCP_ORIGINS: 'https://demo.example' }), null, `local, ${credential}: listed`);
+        assert.equal(d('https://demo.example/mcp', { caller: local, credential }, { OBSERVOGRAM_ORG_ACME_MCP_ORIGINS: 'https://demo.example' }), null, `local, ${credential}: listed for the org`);
+        assert.equal(d('https://demo.example/mcp', { caller: local, credential }, { OBSERVOGRAM_MCP_ORIGINS: '*' }), null, `local, ${credential}: any`);
+      }
+      assert.match(d('https://demo.example/', { caller: local }, { OBSERVOGRAM_MCP_ORIGINS: 'https://other.example' }).error, /^https:\/\/demo\.example is not in OBSERVOGRAM_MCP_ORIGINS — /, 'a list set: its own text');
+      assert.equal(d('https://demo.example/', { caller: { ...local, authOff: true } }).error,
+        'on a server without sign-in, only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS may be registered — list https://demo.example there, or sign in as an admin (restart it without OBSERVOGRAM_AUTH=off once a user exists — npm run users -- add <login>)');
+      assert.equal(d('https://demo.example/mcp', { caller: admin }), null, 'a session admin registers a token-less endpoint anywhere');
+      assert.equal(d('https://demo.example/mcp', {}), null, 'no caller: judged as before (the registration functions require one)');
+      for (const use of ['typed', 'registered']) assert.notEqual(d('https://demo.example/mcp', { use, caller: local })?.error, D4, `${use}: not a registration`);
+    });
+  } finally {
+    close();
+  }
+});
+
 // ---------- the typed-URL rule ----------
 
 const SESSION = (role, owner = false) => ({ kind: 'session', actor: role, role, owner });
@@ -272,7 +300,7 @@ test('mcpTargetView: what GET /api/mcp-endpoints says — typed and register, al
     const view = (p, extra) => mcpTargetView(db, callerOf(p, extra));
     assert.deepEqual(view(SESSION('admin')), {
       typed: { allowed: true, why: null, listed: false, origins: [] },
-      register: { allowed: true, why: null, listed: false, origins: [] },
+      register: { allowed: true, why: null, listed: false, origins: [], listedOnly: false },
     });
     const op = view(SESSION('operator'));
     assert.deepEqual([op.typed.allowed, op.register.allowed], [false, false]);
@@ -283,6 +311,7 @@ test('mcpTargetView: what GET /api/mcp-endpoints says — typed and register, al
     assert.match(bearer.register.why, /never registers an MCP endpoint — a signed-in admin of 'acme' registers it in Settings → MCP endpoints; this server has no sign-in: add the first user with npm run users -- add <login>/);
     const local = view(LOCAL, { posture: 'open-loopback', direct: true });
     assert.deepEqual([local.typed.allowed, local.register.allowed, local.register.why], [false, true, null], 'local registers from this machine, never types');
+    assert.deepEqual([local.register.listed, local.register.origins, local.register.listedOnly], [false, [], true], 'without sign-in, only a loopback MCP or a listed origin (D4): no list, so loopback only');
     assert.equal(view(LOCAL, { posture: 'open-loopback', direct: false }).register.why, 'on a server without sign-in MCP endpoints are registered only from this machine — open the studio at http://127.0.0.1:8123');
     assert.match(view(LOCAL, { posture: 'open-exposed' }).register.why, /^MCP endpoints cannot be registered on a server without sign-in while it is exposed/);
     assert.match(view({ kind: 'anonymous', actor: null, role: 'viewer', owner: false }, { posture: 'token' }).register.why, /^anonymous callers are viewers here/);
@@ -291,7 +320,7 @@ test('mcpTargetView: what GET /api/mcp-endpoints says — typed and register, al
     assert.deepEqual(view(SESSION('admin')).typed, { allowed: true, why: null, listed: true, origins: ['https://a.example', 'https://b.example'] }, "acme never sees bravo's list");
     assert.deepEqual(mcpTargetView(db, callerOf(SESSION('admin'), { org: 'bravo' })).register.origins, ['https://a.example', 'https://b.example', 'https://bravo-only.example']);
     process.env.OBSERVOGRAM_MCP_ORIGINS = '*';
-    assert.deepEqual(view(SESSION('viewer')).register, { allowed: false, why: "registering an MCP endpoint needs the admin role in org 'acme' (you are viewer) — ask an admin of acme", listed: true, origins: null });
+    assert.deepEqual(view(SESSION('viewer')).register, { allowed: false, why: "registering an MCP endpoint needs the admin role in org 'acme' (you are viewer) — ask an admin of acme", listed: true, origins: null, listedOnly: true });
   } finally {
     if (saved === undefined) delete process.env.OBSERVOGRAM_MCP_ORIGINS; else process.env.OBSERVOGRAM_MCP_ORIGINS = saved;
     delete process.env.OBSERVOGRAM_ORG_BRAVO_MCP_ORIGINS;

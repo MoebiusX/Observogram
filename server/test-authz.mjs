@@ -2014,7 +2014,7 @@ for (const posture of OPEN) {
               why: 'a typed MCP URL is refused on a server without sign-in, and MCP endpoints cannot be registered while it is exposed — add the first user with npm run users -- add <login> (it arms sign-in; the first user is an owner), or bind the server to loopback',
             },
             register: {
-              allowed: false, listed: false, origins: [],
+              allowed: false, listed: false, origins: [], listedOnly: true,
               why: 'MCP endpoints cannot be registered on a server without sign-in while it is exposed — add the first user with npm run users -- add <login> (it arms sign-in; the first user is an owner), or bind the server to loopback',
             },
           },

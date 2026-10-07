@@ -790,7 +790,7 @@ org is never found (404, or 400 for `mcpEndpointId`).
 | `GET` | `/api/environments/:id` | viewer | — | `environment` and its `service` (`id`, `slug`, `name`, `tier`); `effectiveTier` is the environment's tier, else the service's |
 | `PATCH` | `/api/environments/:id` | operator | any of `name`, `tier`, `bindings`, `endpoints`, `mcpEndpointId` | `changed`; `"mcpEndpointId": null` unbinds |
 | `DELETE` | `/api/environments/:id` | operator | — | `deleted` |
-| `GET` | `/api/mcp-endpoints` | viewer | — | `endpoints`, by name: `id`, `name`, `origin`, `environments` (how many are checked through it), `createdAt`; `url` and `readTokenEnv` to an operator and above, `null` to a viewer; `policy`: what this reader may do — `typed` (send a typed `mcpUrl`) and `register` (register an endpoint), each `{ allowed, why, listed, origins }`, `why` the refusal's sentence, `listed`/`origins` the reader's own org's origin allowlist (`origins` `null`: any) |
+| `GET` | `/api/mcp-endpoints` | viewer | — | `endpoints`, by name: `id`, `name`, `origin`, `environments` (how many are checked through it), `createdAt`; `url` and `readTokenEnv` to an operator and above, `null` to a viewer; `policy`: what this reader may do — `typed` (send a typed `mcpUrl`) and `register` (register an endpoint), each `{ allowed, why, listed, origins }`, `why` the refusal's sentence, `listed`/`origins` the reader's own org's origin allowlist (`origins` `null`: any); `register.listedOnly`: only a loopback MCP or a listed origin may be registered, even without `readTokenEnv` (a list applies, or the server has no sign-in) |
 | `POST` | `/api/mcp-endpoints` | admin | `{ name, url, readTokenEnv? }` | an MCP endpoint record (201), the admin's own view with `url` and `readTokenEnv`; a name in use is 409 |
 | `PATCH` | `/api/mcp-endpoints/:id` | admin | any of `name`, `url`, `readTokenEnv` | `changed`; `"readTokenEnv": null` clears it; 404 `no MCP endpoint <id>` |
 | `DELETE` | `/api/mcp-endpoints/:id` | admin | — | `deleted` and `unbound`: the ids of the environments that were checked through it (they stay, with no MCP endpoint) |
@@ -832,7 +832,14 @@ it in every posture, so a cross-site form cannot make them (the studio
 sends it; with curl add -H 'X-Observogram-CSRF: 1')`), only a request sent
 straight to a loopback server without sign-in, and closed on an exposed
 server without sign-in (403 `posture`, as [the identity
-API](#the-identity-api) is). The bearer (`OBSERVOGRAM_API_TOKEN`) is an
+API](#the-identity-api) is). Without sign-in only a loopback MCP or an
+origin in the [origin allowlist](#fetch-live-from-mcp) may be registered, with
+or without `readTokenEnv` (400: `on a server without sign-in, only a loopback
+MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS may be registered — list
+<origin> there, or sign in as an admin …`): the quick start against a
+loopback MCP stays one step, and a remote demo MCP takes
+`OBSERVOGRAM_MCP_ORIGINS=<its origin>` or a first user
+(`npm run users -- add <login>`). The bearer (`OBSERVOGRAM_API_TOKEN`) is an
 operator: it manages services and environments and reads the endpoints
 with their URLs, and never changes an endpoint.
 
@@ -1277,7 +1284,9 @@ endpoint's server-held token, not the caller's `mcpAuth` (every deploy sends
 one), not a credential in a typed URL, and nothing at all while a transport
 hook is loaded, since the hook may attach its own; a typed URL without a
 credential reaches only an origin one of the org's endpoints uses, and an
-endpoint without `readTokenEnv` may be registered and used anywhere. A refusal
+endpoint without `readTokenEnv` may be registered by a signed-in admin and used
+anywhere (without sign-in, only a loopback or listed origin may be registered
+at all). A refusal
 is 403 `origin` at a fetch (400 at registration) and names the origin only and
 the variable to add it to. An install that sends a credential to a remote MCP
 sets `OBSERVOGRAM_MCP_ORIGINS` before upgrading.

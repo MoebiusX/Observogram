@@ -162,7 +162,7 @@ export function servicesRoutes({ authorize }) {
   }));
 
   router.post('/api/mcp-endpoints', authorize('POST /api/mcp-endpoints'), handler((req, res, { db, principal, actor }) => {
-    const endpoint = createMcpEndpointFromApi(db, actor, bodyOf(req));
+    const endpoint = createMcpEndpointFromApi(db, actor, bodyOf(req), { caller: mcpCallerOf(req) });
     res.status(201).json({ ok: true, endpoint: endpointView(db, principal, endpoint) });
   }));
 
@@ -171,7 +171,7 @@ export function servicesRoutes({ authorize }) {
   router.patch('/api/mcp-endpoints/:id', authorize('PATCH /api/mcp-endpoints/:id'), handler((req, res, { db, principal, actor }) => {
     const id = pathId(req, res, 'id', 'MCP endpoint');
     if (id === null) return;
-    const { endpoint, changed } = updateMcpEndpointFromApi(db, actor, id, bodyOf(req));
+    const { endpoint, changed } = updateMcpEndpointFromApi(db, actor, id, bodyOf(req), { caller: mcpCallerOf(req) });
     res.json({ ok: true, endpoint: endpointView(db, principal, endpoint), changed });
   }));
 
