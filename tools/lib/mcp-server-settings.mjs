@@ -66,10 +66,12 @@ const SECRET_KEY_CLASS = /^(pass(word)?|secret|token|api[-_]?key|credential|auth
 const REDACTED = '<redacted>';
 const MIN_ECHO_LENGTH = 4;
 const PATTERN_BUDGET_MS = 50;
-// One character per class a URL value is made of — a letter, a digit, an
-// upper-case letter, white space, punctuation — so a slow part built on \d,
-// [A-Z] or \s is exercised too.
-const FILLERS = Object.freeze(['a', '0', 'A', ' ', '.', '/', '-']);
+// Every printable ASCII character, the space included — all a normalised
+// href is made of (a URL value percent-encodes the rest) — so a slow part
+// built on any class a URL can carry (\d, [A-Z], \s, %, _, =, &, ~, :, ?
+// …) is exercised, not only the classes someone thought of. fillersFor adds
+// every other character the pattern names, for a text value.
+const FILLERS = Object.freeze(Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i)));
 
 const encoder = new TextEncoder();
 const byteLength = (s) => encoder.encode(s).length;
@@ -652,17 +654,40 @@ function literalPrefix(pattern) {
   return out;
 }
 
+// The fillers for one pattern: FILLERS, then every character outside them
+// the pattern names — literally, or as a \xHH, \uHHHH, \cX or \t-style
+// escape (which covers a class's range ends) — so a slow part built on a
+// character a text value may hold (an "é") is exercised too.
+function fillersFor(pattern) {
+  const out = new Set(FILLERS);
+  const ESCAPES = { t: '\t', n: '\n', r: '\r', f: '\f', v: '\v', '0': '\0' };
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c !== '\\') { out.add(c); continue; }
+    const e = pattern[i + 1];
+    let m;
+    if (e === 'x' && (m = /^[0-9A-Fa-f]{2}/.exec(pattern.slice(i + 2)))) { out.add(String.fromCharCode(parseInt(m[0], 16))); i += 3; }
+    else if (e === 'u' && (m = /^[0-9A-Fa-f]{4}/.exec(pattern.slice(i + 2)))) { out.add(String.fromCharCode(parseInt(m[0], 16))); i += 5; }
+    else if (e === 'c' && /^[A-Za-z]$/.test(pattern[i + 2] ?? '')) { out.add(String.fromCharCode(pattern.charCodeAt(i + 2) % 32)); i += 2; }
+    else if (e !== undefined) { out.add(ESCAPES[e] ?? e); i += 1; }
+  }
+  return [...out];
+}
+
 // Each filler runs at growing lengths (×1.25 up to the full value), with the
 // clock read after every run: a pattern whose cost climbs steeply with length
 // is caught on a short value, so the check itself stays near the budget
-// rather than running the full-length value for seconds.
+// rather than running the full-length value for seconds. The budget is per
+// filler — what one value costs at match time —, so a linear pattern is not
+// refused for the number of fillers it was tried on.
 function slowOnUrls(re, pattern) {
   const prefix = literalPrefix(pattern);
   const room = Math.max(0, SETTINGS_LIMITS.policyValue - prefix.length - 1);
-  const t0 = Date.now();
+  const fillers = fillersFor(pattern);
   for (const head of new Set([prefix, ''])) {
     const full = head ? room : SETTINGS_LIMITS.policyValue - 1;
-    for (const f of FILLERS) {
+    for (const f of fillers) {
+      const t0 = Date.now();
       for (let n = Math.min(8, full); ; n = Math.min(full, Math.ceil(n * 1.25))) {
         re.test(`${head}${f.repeat(n)}!`);
         if (Date.now() - t0 > PATTERN_BUDGET_MS) return true;
@@ -687,7 +712,8 @@ const STRICT = (obj, keys, where, errors) => {
  * then the settings bounds: at most one unbounded quantifier outside a
  * class, and — unless `timed` is false — the 50 ms budget against values
  * shaped like a URL (the pattern's literal prefix, then up to 512 characters
- * of one filler — a letter, a digit, a capital, a space, `.`, `/` or `-`).
+ * of one filler — each printable ASCII character, the space included, and
+ * every other character the pattern names — 50 ms per filler).
  * `timed: false` (the browser, re-reading a file the server timed)
  * skips only the clocks.
  */

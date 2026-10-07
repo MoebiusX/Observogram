@@ -612,6 +612,24 @@ test('the settings bounds: the timing run covers digits, capitals and white spac
   assert.deepEqual(errs('^https://[A-Za-z0-9 ./-]{1,200}\\.corp\\.example/?$'), [], 'a linear pattern over the same classes passes');
 });
 
+test('the settings bounds: the timing run covers every printable URL character and every character the pattern names, not a short list of classes', () => {
+  const errs = (pattern) => compileSettingsPolicy({ version: 1, rules: [{ when: { type: 'text', pattern }, warn: 'w' }] }).errors;
+  const TOO_SLOW = ['rules[0].when: pattern too slow against a 512-character URL-shaped value'];
+  const slow = (c) => `^.*${c}{0,60}${c}{0,60}${c}{0,60}${c}{0,60}x$`;
+  for (const pattern of [
+    slow('_'), slow('%'), slow('[=&]'), slow('~'), slow(':'), slow('\\?'), slow('@'), slow(';'), slow('!'),
+    slow('é'), slow('\\u00e9'), slow('\\xe9'),
+  ]) {
+    assert.deepEqual(compileSettingsPolicy({ version: 1, rules: [{ when: { type: 'text', pattern }, warn: 'w' }] }, { timed: false }).errors, [], `${pattern}: the static checks admit it`);
+    const t0 = Date.now();
+    assert.deepEqual(errs(pattern), TOO_SLOW, pattern);
+    assert.ok(Date.now() - t0 < 2000, `${pattern}: refused without running the full-length value (${Date.now() - t0} ms)`);
+  }
+  for (const pattern of ['^.*[^a]{0,60}x$', '^https://[a-z0-9.-]{1,63}\\.example\\.com/[a-z0-9/_%=&~:?-]{0,200}$', '^http://.*$']) {
+    assert.deepEqual(errs(pattern), [], `${pattern}: a pattern linear in the value passes — the budget is per filler, not shared by all of them`);
+  }
+});
+
 test('the policy\'s generic block: path, names (any subset) and auth, each validated; secrets of the form refused as rule fields', () => {
   const p = policyOf({ ...SPEC_POLICY, generic: { path: 'admin/configure', names: { url: 'grafanaUrl', apiKey: 'serverKey' }, auth: 'bearer' } });
   assert.deepEqual(clone(p.generic), { path: 'admin/configure', names: { url: 'grafanaUrl', user: 'user', secret: 'secret', apiKey: 'serverKey' }, auth: 'bearer' });
