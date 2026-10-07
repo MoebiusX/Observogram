@@ -2217,17 +2217,23 @@ function mapExporterKind(name) {
 // (lowercase, runs outside [a-z0-9-] → '-', edges trimmed, cut at 60), the
 // first non-empty result wins (a uid of `--` yields nothing; the title does);
 // trailing separators trimmed AFTER the cut; `d-` in front when the first
-// character is not a letter.
-function dashboardId(dash, dashboards) {
+// character is not a letter. null when neither yields anything — the caller
+// numbers the dashboard. The ONE dashboard id rule a crawled pack and a live
+// snapshot share (tools/fetch-live-pack.mjs, snapshot mode), so the same
+// Grafana uid pairs by `definedId` whichever side read it.
+export function dashboardSpecId(dash) {
   let id = '';
-  for (const candidate of [dash.uid, dash.title]) {
+  for (const candidate of [dash?.uid, dash?.title]) {
     if (candidate === undefined || candidate === null || candidate === '') continue;
     id = String(candidate).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60).replace(/[^a-z0-9]+$/, '');
     if (id) break;
   }
-  if (!id) id = `dash-${dashboards.length + 1}`;
-  if (!/^[a-z]/.test(id)) id = `d-${id}`;
-  return id;
+  if (!id) return null;
+  return /^[a-z]/.test(id) ? id : `d-${id}`;
+}
+
+function dashboardId(dash, dashboards) {
+  return dashboardSpecId(dash) ?? `dash-${dashboards.length + 1}`;
 }
 
 function walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summary) {

@@ -8,7 +8,7 @@
 // works: crawler output is a valid pack.
 // ============================================================
 
-import { crawlFiles, detectArtefactKind, crawlToYaml, scanReadsPath, scanSkipsName, walkScanFolder, SCAN_EXT, SCAN_IGNORE_DIRS } from './lib/crawler.mjs';
+import { crawlFiles, dashboardSpecId, detectArtefactKind, crawlToYaml, scanReadsPath, scanSkipsName, walkScanFolder, SCAN_EXT, SCAN_IGNORE_DIRS } from './lib/crawler.mjs';
 import { inferSlisFromRecordingRules, canonicalRuleDuration, burnAlertsFromAlertRules } from './lib/sli-inference.mjs';
 import { compileAlertmanager } from './lib/compile.mjs';
 import { backendForScrapeJob, knownBackendProduct, BACKEND_PATTERNS } from './lib/backend-products.mjs';
@@ -1108,6 +1108,29 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
   // A clean file keeps no skip warning.
   const clean = crawlFiles({ 'prometheus/rules.yml': RULES }, { repoName: 'checkout', now: '2026-06-05T00:00:00.000Z' });
   assert(!clean.summary.warnings.some(w => /^Skipped .* alert rule/.test(w)), 'no skip warning when every rule reads');
+}
+
+// ---------- dashboardSpecId: the crawler's dashboard id rule as one export ----------
+// The one rule a crawled pack and a live snapshot share. The seven uid shapes
+// the fetcher's own slug mapped differently (`_` kept, `--` collapsed, 64 vs
+// 60 characters, `dash-` vs `d-`): the export gives exactly the ids a crawl
+// writes for them.
+{
+  const UIDS = [
+    ['node_exporter_full', 'Node Exporter Full'], ['9xyz_abc', 'Nine'], ['a--b', 'A B'],
+    ['3f1e9c0d2b8a4f6e9d7c5b3a1e0f2d4c', 'Hashed'], ['orders-main', 'Orders'], ['--', 'Fallback Title'],
+    ['Payments_API_Overview_With_A_Very_Long_Uid_That_Runs_Past_Sixty_Chars', 'Long'],
+  ];
+  const files = Object.fromEntries(UIDS.map(([uid, title], i) => [`grafana/dashboards/d${i}.json`,
+    JSON.stringify({ uid, title, schemaVersion: 39, panels: [{ type: 'timeseries', title: 'p', targets: [{ expr: 'up' }] }] })]));
+  const crawled = crawlFiles(files, { repoName: 'ids', now: '2026-06-05T00:00:00.000Z' }).canonical.spec.dashboards;
+  const byUid = Object.fromEntries(crawled.map(d => [d.params.uid, d.id]));
+  const exported = UIDS.map(([uid, title]) => dashboardSpecId({ uid, title }));
+  assert(JSON.stringify(exported) === JSON.stringify(UIDS.map(([uid]) => byUid[uid])),
+    'dashboardSpecId gives the id the crawl writes for each of the seven uid shapes', exported, UIDS.map(([uid]) => byUid[uid]));
+  assert(JSON.stringify(exported) === JSON.stringify(['node-exporter-full', 'd-9xyz-abc', 'a--b', 'd-3f1e9c0d2b8a4f6e9d7c5b3a1e0f2d4c', 'orders-main', 'fallback-title', 'payments-api-overview-with-a-very-long-uid-that-runs-past-si'])
+    && dashboardSpecId({ uid: '', title: '' }) === null && dashboardSpecId(null) === null && dashboardSpecId({ uid: '%%' }) === null,
+    'the rule pinned: `_` mapped, `--` kept, cut at 60, `d-` before a digit, the title when the uid yields nothing, null when neither does', exported);
 }
 
 report('crawler');

@@ -401,14 +401,15 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "412ff5619f8bc1ae2cc5924c2fda244ab6226bcc992cdbea671beb1b38940f47",
-      "bytes": 109957,
+      "sha256": "3ffb1feadc6fced8500a142a6f367eba83e79d3e82700c969c18862b1b40a966",
+      "bytes": 110295,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
         "SCAN_MAX_FILE_BYTES",
         "crawlFiles",
         "crawlToYaml",
+        "dashboardSpecId",
         "detectArtefactKind",
         "scanReadsPath",
         "scanSkipsName",
@@ -424,7 +425,18 @@
         "tools/lib/slug.mjs"
       ],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "SCAN_EXT",
+        "SCAN_IGNORE_DIRS",
+        "SCAN_MAX_FILE_BYTES",
+        "crawlFiles",
+        "crawlToYaml",
+        "detectArtefactKind",
+        "scanReadsPath",
+        "scanSkipsName",
+        "walkScanFolder"
+      ]
     },
     "tools/lib/dashboards/generic.mjs": {
       "sha256": "f02f24c9f0d967afa4a0f9dfd0846cceb960b065c772f78eaf21c0cbf151a959",
