@@ -66,7 +66,10 @@ const SECRET_KEY_CLASS = /^(pass(word)?|secret|token|api[-_]?key|credential|auth
 const REDACTED = '<redacted>';
 const MIN_ECHO_LENGTH = 4;
 const PATTERN_BUDGET_MS = 50;
-const FILLERS = Object.freeze(['a', '.', '/', '-']);
+// One character per class a URL value is made of — a letter, a digit, an
+// upper-case letter, white space, punctuation — so a slow part built on \d,
+// [A-Z] or \s is exercised too.
+const FILLERS = Object.freeze(['a', '0', 'A', ' ', '.', '/', '-']);
 
 const encoder = new TextEncoder();
 const byteLength = (s) => encoder.encode(s).length;
@@ -649,14 +652,22 @@ function literalPrefix(pattern) {
   return out;
 }
 
+// Each filler runs at growing lengths (×1.25 up to the full value), with the
+// clock read after every run: a pattern whose cost climbs steeply with length
+// is caught on a short value, so the check itself stays near the budget
+// rather than running the full-length value for seconds.
 function slowOnUrls(re, pattern) {
   const prefix = literalPrefix(pattern);
   const room = Math.max(0, SETTINGS_LIMITS.policyValue - prefix.length - 1);
   const t0 = Date.now();
   for (const head of new Set([prefix, ''])) {
+    const full = head ? room : SETTINGS_LIMITS.policyValue - 1;
     for (const f of FILLERS) {
-      re.test(`${head}${f.repeat(head ? room : SETTINGS_LIMITS.policyValue - 1)}!`);
-      if (Date.now() - t0 > PATTERN_BUDGET_MS) return true;
+      for (let n = Math.min(8, full); ; n = Math.min(full, Math.ceil(n * 1.25))) {
+        re.test(`${head}${f.repeat(n)}!`);
+        if (Date.now() - t0 > PATTERN_BUDGET_MS) return true;
+        if (n >= full) break;
+      }
     }
   }
   return false;
@@ -675,8 +686,9 @@ const STRICT = (obj, keys, where, errors) => {
  * characters, flags "" or "i", no quantified group, timed against ids) and
  * then the settings bounds: at most one unbounded quantifier outside a
  * class, and — unless `timed` is false — the 50 ms budget against values
- * shaped like a URL (the pattern's literal prefix, then 512 characters of
- * filler). `timed: false` (the browser, re-reading a file the server timed)
+ * shaped like a URL (the pattern's literal prefix, then up to 512 characters
+ * of one filler — a letter, a digit, a capital, a space, `.`, `/` or `-`).
+ * `timed: false` (the browser, re-reading a file the server timed)
  * skips only the clocks.
  */
 export function compileSettingsPolicy(json, { timed = true } = {}) {
