@@ -37,6 +37,15 @@
 //                  fetcher's login does not make seven dashboards missing.
 //                  Each entry carries the `side` that holds the artefact and
 //                  the other side's `reason`. Outside every ratio.
+//                  A live snapshot read with a SCOPE (metric prefixes, folder
+//                  uids — its `observogram.scope.<kind>` annotations,
+//                  tools/lib/live-fetch.mjs) did not look outside it either:
+//                  an unmatched artefact on the other side, in a scoped
+//                  family, lands here when it is outside the scope ("outside
+//                  the snapshot's metric scope (prefixes …)") or when it does
+//                  not say what the scope needs — a crawled dashboard names no
+//                  folder uid — with a reason that states only that. An
+//                  artefact inside the scope is compared as usual.
 //
 // METRIC FAMILIES
 //   Metrics are compared as families, not series: a declared histogram and
@@ -57,6 +66,7 @@ import {
   deltasOf,
   foldMetricFamilies,
 } from './artefact-model.mjs';
+import { scopeOf, inScope, scopeReason } from './live-fetch.mjs';
 
 const LAYER_ORDER = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
 
@@ -110,6 +120,9 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
   // The artefact families each pack says it could not observe, with why.
   const aBlind = unobservedKinds(aLayered);
   const bBlind = unobservedKinds(bLayered);
+  // The families each pack read only within a scope (a live snapshot's).
+  const aScoped = scopeOf(aLayered?.meta?.annotations);
+  const bScoped = scopeOf(bLayered?.meta?.annotations);
   const layers = {};
   const collisions = [];
   let onlyInA = 0, onlyInB = 0, inBoth = 0, aligned = 0, drifted = 0, outOfScope = 0, scaffold = 0, notObserved = 0;
@@ -154,18 +167,20 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
       const kind = k.slice(0, k.indexOf('::'));
       if (bByKey.has(k)) {
         matchGroups(k, aGroup, bByKey.get(k), bucket);
-      } else if (bBlind.has(kind)) {
-        // B never looked at this family: A's artefact is unchecked, not absent.
-        pushNotObserved(bucket.notObserved, k, aGroup, 'a', bBlind.get(kind));
       } else {
-        pushUnmatched(bucket.onlyInA, k, aGroup);
+        // B never looked at this family, or read it only within a scope this
+        // artefact is not in: A's artefact is unchecked, not absent.
+        const unchecked = bBlind.has(kind) ? bBlind.get(kind) : outsideScope(kind, aGroup, bScoped, 'a');
+        if (unchecked) pushNotObserved(bucket.notObserved, k, aGroup, 'a', unchecked);
+        else pushUnmatched(bucket.onlyInA, k, aGroup);
       }
     }
     for (const [k, bGroup] of bByKey) {
       if (aByKey.has(k)) continue;
       const kind = k.slice(0, k.indexOf('::'));
-      if (aBlind.has(kind)) {
-        pushNotObserved(bucket.notObserved, k, bGroup, 'b', aBlind.get(kind));
+      const unchecked = aBlind.has(kind) ? aBlind.get(kind) : outsideScope(kind, bGroup, aScoped, 'b');
+      if (unchecked) {
+        pushNotObserved(bucket.notObserved, k, bGroup, 'b', unchecked);
       } else if (scopeMode === 'service' && isOutsideServiceScope(bGroup, serviceScope)) {
         pushUnmatched(bucket.outOfScope, k, bGroup);
       } else if (aKinds.has(kind) || scopeMode === 'all') {
@@ -474,6 +489,18 @@ function unobservedKinds(layered) {
     }
   }
   return out;
+}
+
+// The notObserved reason when the other pack read `kind` within a scope that
+// does not cover this group, else null. One artefact of the group inside the
+// scope makes the group's absence real (it is compared as usual); otherwise
+// "outside" when any is known to be outside, else the cannot-tell reason.
+function outsideScope(kind, group, otherScoped, holder) {
+  const entry = otherScoped.get(kind);
+  if (!entry) return null;
+  const verdicts = group.map((artefact) => inScope(kind, artefact, entry));
+  if (verdicts.includes(true)) return null;
+  return scopeReason(kind, verdicts.includes(false) ? false : null, entry, { holder });
 }
 
 function pushNotObserved(target, baseKey, group, side, reason) {
