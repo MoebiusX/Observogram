@@ -753,6 +753,35 @@
       "changedSinceRelease": true,
       "releasedExports": null
     },
+    "tools/lib/mcp-server-settings.mjs": {
+      "sha256": "22e609010e6a83340f808ac033b4bda37a272de1ebac9357dc91d699f463b7ff",
+      "bytes": 41367,
+      "exports": [
+        "FIELD_TYPES",
+        "GENERIC_NAMES",
+        "SETTINGS_DESCRIPTOR_PATH",
+        "SETTINGS_DESCRIPTOR_VERSION",
+        "SETTINGS_LIMITS",
+        "compileSettingsPolicy",
+        "genericDescriptor",
+        "normaliseUrlValue",
+        "outcomeOf",
+        "parseSettingsDescriptor",
+        "policyFindings",
+        "redactEchoes",
+        "redactSecretKeys",
+        "resolveSettingsPath",
+        "settingsRequest",
+        "settingsRoot"
+      ],
+      "imports": [
+        "tools/lib/artefact-classify.mjs",
+        "tools/lib/mcp-url-safety.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
     "tools/lib/mcp-url-safety.mjs": {
       "sha256": "db6f3a237e4253b2bf5b34a18ff749622cb12f6d8ac6ad806579357834ecfc47",
       "bytes": 10535,
