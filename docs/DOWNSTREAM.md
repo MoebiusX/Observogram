@@ -906,7 +906,7 @@ meaning, and a new stage is a new id.
 | `dashboards` | Dashboards | snapshot, draft | `dashboards`, `dashboard_detail` |
 | `scrape_targets` | Scrape targets | snapshot, draft | `scrape_configs` |
 | `alerting_routes` | Alerting routes | snapshot, draft | `alerting_routes` |
-| `signals` | Stack signals | draft | — |
+| `signals` | Stack signals (self-metrics, Alertmanager, Grafana, rule evidence) | draft | — |
 | `build` | Build and validate the pack | snapshot, draft | — |
 | `register` | Register the pack | snapshot, draft | — |
 

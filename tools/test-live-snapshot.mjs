@@ -67,7 +67,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Every candidate tool name of some capabilities: an MCP that advertises them.
 const namesOf = (...ids) => ids.flatMap((id) => probeCandidates(id).map((c) => (typeof c === 'string' ? c : c.name)));
 
-test('the stages: ids in fetch order, the draft alone reads the stack signals, every capability a registry id, frozen; stagesFor refuses an unknown kind', () => {
+test('the stages: ids in fetch order, the draft alone reads the stack signals, every capability a registry id, frozen, the table in docs/DOWNSTREAM.md as the code says; stagesFor refuses an unknown kind', () => {
   assert.deepEqual(LIVE_STAGES.map((s) => s.id), ['connect', 'services', 'backends', 'metric_names', 'recording_rules', 'alert_rules', 'dashboards', 'scrape_targets', 'alerting_routes', 'signals', 'build', 'register']);
   assert.deepEqual([...LIVE_KINDS], ['snapshot', 'draft']);
   assert.deepEqual([...STAGE_STATES], ['pending', 'running', 'done', 'failed', 'skipped']);
@@ -78,6 +78,13 @@ test('the stages: ids in fetch order, the draft alone reads the stack signals, e
     assert.ok(Object.isFrozen(stage) && Object.isFrozen(stage.capabilities) && Object.isFrozen(stage.kinds));
   }
   assert.ok(Object.isFrozen(LIVE_STAGES));
+  // docs/DOWNSTREAM.md's stage table is the contract a downstream maps onto: every id, label, kind and capability as the code says.
+  const doc = readFileSync(resolve(__dirname, '..', 'docs', 'DOWNSTREAM.md'), 'utf8');
+  const rows = doc.split('\n').filter((l) => /^\| `[a-z_]+` \|/.test(l)).map((l) => l.split('|').slice(1, -1).map((c) => c.trim()))
+    .filter((c) => c.length === 4 && LIVE_STAGES.some((s) => `\`${s.id}\`` === c[0]));
+  const ticks = (c) => (c === '—' ? [] : c.split(',').map((x) => x.trim().replace(/^`|`$/g, '')));
+  assert.deepEqual(rows.map(([id, label, kinds, caps]) => ({ id: ticks(id)[0], label, kinds: kinds.split(',').map((x) => x.trim()), capabilities: ticks(caps) })),
+    LIVE_STAGES.map(({ id, label, kinds, capabilities }) => ({ id, label, kinds: [...kinds], capabilities: [...capabilities] })), 'docs/DOWNSTREAM.md: the stage table matches LIVE_STAGES');
   assert.throws(() => stagesFor('scaffold'), /unknown live fetch kind "scaffold" \(snapshot or draft\)/);
   assert.throws(() => stagesFor(undefined), TypeError);
   assert.equal(stageNoun(LIVE_STAGES[1]), 'services');
