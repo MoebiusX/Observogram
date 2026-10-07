@@ -122,8 +122,9 @@ function usersHtml(model) {
 
 // The deployment's organisations: the name and id, the default badge, the
 // members counted, where the files live, when it was created; a removed one
-// greyed with when, its id never used again. For an owner, Remove… on each
-// live one — the default org's unavailable with the server's sentence.
+// greyed with when, its id never used again. For an owner, Act in <id> on
+// each live one but the active one (D-M), and Remove… on each live one — the
+// default org's unavailable with the server's sentence.
 function orgsHtml(model) {
   if (!model.rows.length) return '';
   return `
@@ -135,8 +136,11 @@ function orgsHtml(model) {
             <span class="set-row-facts">
               <span class="set-row-meta">${escapeHtml(r.facts)}</span>${r.removedText ? `
               <span class="set-row-meta">${escapeHtml(r.removedText)}</span>` : ''}
-            </span>${r.remove ? `
-            <button type="button" class="ux-secondary-btn" data-org-remove="${escapeHtml(r.id)}" aria-label="${escapeHtml(`Remove ${r.name} (${r.id})`)}">Remove…</button>` : ''}
+            </span>${r.act || r.remove ? `
+            <span class="set-row-actions">${r.act ? `
+              <button type="button" class="ux-secondary-btn" data-org-act="${escapeHtml(r.id)}">${escapeHtml(r.act)}</button>` : ''}${r.remove ? `
+              <button type="button" class="ux-secondary-btn" data-org-remove="${escapeHtml(r.id)}" aria-label="${escapeHtml(`Remove ${r.name} (${r.id})`)}">Remove…</button>` : ''}
+            </span>` : ''}
           </li>`).join('')}
         </ul>`;
 }
@@ -336,6 +340,10 @@ export function renderSettings(container, frame, section, host = appHost) {
   if (section.id === 'members') wireMembers(container, section.model, host);
   container.querySelectorAll('[data-user-manage]').forEach((btn) => {
     btn.addEventListener('click', () => host.settings?.openEditor?.({ kind: 'user', id: Number(btn.dataset.userManage) }));
+  });
+  // Act in <id>: this browser reloads into that org's members (D-M).
+  container.querySelectorAll('[data-org-act]').forEach((btn) => {
+    btn.addEventListener('click', () => host.settings?.switchTo?.(btn.dataset.orgAct, 'members'));
   });
   // An organisation's Remove…: its dialog on the remove step, or why not.
   container.querySelectorAll('[data-org-remove]').forEach((btn) => {

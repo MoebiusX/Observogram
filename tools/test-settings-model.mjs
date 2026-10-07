@@ -21,6 +21,7 @@ import {
   mcpTargetMissingText, mcpRegisterCheck,
   noOwnerText, PASSWORD_ALPHABET, temporaryPassword, signInModeLine, buildUsersSectionModel, userActions, userActionStatus,
   buildUserCreateBody, userCreateStatus,
+  activeOrgChoice, isActingOrg, orgChipEntries, orgChipLabel, actingRecovery,
   buildOrgsSectionModel, buildOrgCreateBody, orgCreateStatus, orgRemoveStatus, joinRoleModeSentence, buildJoinRoleSectionModel, joinRoleBody, joinRoleStatus,
 } from '../studio/settings-model.mjs';
 import {
@@ -443,9 +444,9 @@ test('the member editors: add by login or email, a role change, the remove step;
   assert.ok(!/refused/.test(ownerLeave.confirm.text), ownerLeave.confirm.text);
   assert.equal(ownerLeave.confirm.text, "Remove olive from Acme? This is you: your membership changes, but as an owner you keep the admin role in Acme. olive is Acme's last admin: afterwards only an owner can manage its members, endpoints and audit.");
   assert.equal(leftOrgText('Acme'), 'You left Acme; this browser switches to your next organisation.');
-  assert.equal(leftOrgText('Acme', true), 'You left Acme; this browser reloads into your first organisation, or the default one.');
+  assert.equal(leftOrgText('Acme', true), 'You left Acme; as an owner you go on acting in it — this browser reloads.');
   // The flag the controller passes is the access model's owner bit (removeMemberEditor: settingsAccess().owner).
-  assert.equal(leftOrgText('Acme', OLIVE.owner), 'You left Acme; this browser reloads into your first organisation, or the default one.');
+  assert.equal(leftOrgText('Acme', OLIVE.owner), 'You left Acme; as an owner you go on acting in it — this browser reloads.');
   assert.equal(leftOrgText('Acme', ADA.owner), 'You left Acme; this browser switches to your next organisation.');
   const demote = buildSettingsEditorModel('member', MEMBERS[0], { ctx: { ...ctx, members: two }, step: 'confirm-action', draft: { role: 'operator' } });
   assert.equal(demote.confirm.text, "Change ada's role to operator? This is you: you lose the admin role at once.");
@@ -726,6 +727,7 @@ function settingsContainer() {
       if (sel === '[data-user-manage]') return [...html.matchAll(/data-user-manage="(\d+)"/g)].map((m) => get(`user:${m[1]}`, true, { userManage: m[1] }));
       if (sel === '[data-user-action]') return [...html.matchAll(/data-user-action="([\w-]+)"/g)].map((m) => get(`uact:${m[1]}`, true, { userAction: m[1] }));
       if (sel === '[data-org-remove]') return [...html.matchAll(/data-org-remove="([\w-]+)"/g)].map((m) => get(`org:${m[1]}`, true, { orgRemove: m[1] }));
+      if (sel === '[data-org-act]') return [...html.matchAll(/data-org-act="([\w-]+)"/g)].map((m) => get(`act:${m[1]}`, true, { orgAct: m[1] }));
       return [];
     },
   };
@@ -1524,20 +1526,61 @@ test('buildOrgsSectionModel: every org with its members, files and dates; remove
     ['gone', '0 members · files: orgs/gone · created 2026-10-01', 'removed 2026-10-04 — a slug is never reused', null, false],
   ]);
   assert.deepEqual(m.rows.map((r) => [r.isDefault, r.removed]), [[true, false], [false, false], [false, false], [false, true]]);
+  // Act in <id> (D-M): each live org but the active one, where the server signs in.
+  assert.deepEqual(m.rows.map((r) => r.act), ['Act in default', null, 'Act in charlie', null]);
   // Without sign-in, on the loopback: listed, removable, but no second organisation (the server's NEEDS_IDENTITY).
   const open = buildOrgsSectionModel({ orgs: ORGS_DOC.orgs, defaultOrg: 'default', access: OPEN });
   assert.deepEqual([open.primary.enabled, open.primary.reason], [false, OPEN.why.createOrg]);
   assert.match(open.primary.reason, /^a second organisation needs sign-in, and this server runs without it — /);
   assert.equal(open.rows[2].remove.enabled, true);
+  assert.deepEqual(open.rows.map((r) => r.act), [null, null, null, null], 'no Act in without sign-in: the server ignores the org a browser names');
   // A non-owner never reaches the list; its controls carry the owner reason.
   const ada = buildOrgsSectionModel({ orgs: ORGS_DOC.orgs, defaultOrg: 'default', access: ADA });
-  assert.deepEqual([ada.primary.reason, ada.rows[1].remove], [ADA.why.own, null]);
+  assert.deepEqual([ada.primary.reason, ada.rows[1].remove, ada.rows[2].act], [ADA.why.own, null, null]);
   assert.deepEqual(buildOrgsSectionModel({ orgs: null, access: OLIVE, error: '403: owner only' }), { rows: [], primary: { enabled: true, reason: null }, empty: null, error: '403: owner only' });
   assert.equal(settingsSectionHead('orgs').title, 'Organisations');
   assert.equal(settingsSectionHead('orgs').loading, 'Reading organisations…');
   assert.match(settingsSectionHead('orgs').scope, /its id is never used again\.$/);
   assert.equal(settingsSectionHead('join-role').loading, 'Reading join role…');
   assert.equal(settingsSectionHead('join-role').scope, null, 'the join role\'s scope sentence is the sign-in mode (the section model\'s)');
+});
+
+test('an owner acting in an org they are not a member of (D-M): the boot keeps it, the chip lists it, the head says it, a refusal recovers once (T25)', () => {
+  const owner = { ...me('olive', true), orgs: [{ id: 'acme', name: 'Acme', role: 'admin' }] };
+  const member = { ...me('ada'), orgs: [{ id: 'acme', name: 'Acme', role: 'admin' }, { id: 'bravo', name: 'Bravo', role: 'viewer' }] };
+  // activeOrgChoice: a membership kept for anyone; a non-membership kept for an owner only (6a A-17 unchanged otherwise).
+  assert.equal(activeOrgChoice({ identity: member, saved: 'bravo' }), 'bravo');
+  assert.equal(activeOrgChoice({ identity: member, saved: 'delta' }), 'acme', 'a member: the first membership');
+  assert.equal(activeOrgChoice({ identity: owner, saved: 'delta' }), 'delta', 'an owner keeps an org they are not a member of');
+  assert.equal(activeOrgChoice({ identity: owner, saved: null }), 'acme');
+  assert.equal(activeOrgChoice({ identity: { ...me('olive', true), orgs: [] }, saved: 'delta' }), 'delta', 'an owner in no org');
+  assert.equal(activeOrgChoice({ identity: { ...me('olive', true), orgs: [] }, saved: null }), null, 'none: the server lands the owner in the default org');
+  assert.equal(activeOrgChoice({ identity: { ...me('ada'), orgs: [] }, saved: 'delta' }), null);
+  assert.equal(activeOrgChoice({ identity: null, saved: 'delta' }), null, 'the open posture sends no org');
+  assert.equal(activeOrgChoice({ identity: { ok: true, authenticated: false, orgs: [] }, saved: 'delta' }), null);
+  // isActingOrg: a signed-in owner outside their memberships only.
+  assert.equal(isActingOrg({ identity: owner, orgId: 'delta' }), true);
+  assert.equal(isActingOrg({ identity: owner, orgId: 'acme' }), false);
+  assert.equal(isActingOrg({ identity: member, orgId: 'delta' }), false);
+  assert.equal(isActingOrg({ identity: owner, orgId: null }), false);
+  assert.equal(isActingOrg({ identity: null, orgId: 'default' }), false);
+  // The chip: the memberships plus the acting org, labelled; a member's list unchanged.
+  const entries = orgChipEntries({ identity: owner, orgId: 'delta', orgName: 'Delta' });
+  assert.deepEqual(entries.map((e) => [e.id, orgChipLabel(e)]), [['acme', 'Acme'], ['delta', 'Delta — acting as owner']]);
+  assert.deepEqual(orgChipEntries({ identity: owner, orgId: 'delta' }).map(orgChipLabel), ['Acme', 'delta — acting as owner'], 'the id before the name is read');
+  assert.equal(orgChipEntries({ identity: owner, orgId: 'acme', orgName: 'Acme' }), owner.orgs);
+  assert.equal(orgChipEntries({ identity: member, orgId: 'bravo', orgName: 'Bravo' }), member.orgs);
+  // The boot's recovery: once, for an owner's acting org refused with denied 'org'; then the no-org screen.
+  const unknown = Object.assign(new Error("403: unknown org 'delta'"), { status: 403, denied: 'org' });
+  assert.deepEqual(actingRecovery({ identity: owner, orgId: 'delta', error: unknown }), { to: 'acme' });
+  assert.deepEqual(actingRecovery({ identity: { ...me('olive', true), orgs: [] }, orgId: 'delta', error: unknown }), { to: null });
+  assert.equal(actingRecovery({ identity: owner, orgId: 'delta', error: unknown, tried: true }), null, 'never twice: no loop');
+  assert.equal(actingRecovery({ identity: owner, orgId: 'acme', error: unknown }), null, 'a membership refused is the no-org screen');
+  assert.equal(actingRecovery({ identity: member, orgId: 'delta', error: unknown }), null);
+  assert.equal(actingRecovery({ identity: owner, orgId: 'delta', error: new Error('500: boom') }), null);
+  // The head and the Members scope sentence.
+  assert.equal(buildSettingsFrameModel({ access: OLIVE, orgName: 'Delta', orgId: 'delta', acting: true }).scope, 'Settings · Delta (delta) · you are an owner acting in delta — not a member');
+  assert.equal(buildSettingsFrameModel({ access: OLIVE, orgName: 'Acme', orgId: 'acme' }).scope, 'Settings · Acme (acme) · you are admin, an owner');
 });
 
 test('the organisation editors: New organisation (id, name, take over a directory) → the created sentence and Switch to it; Remove… says what cannot be undone and asks for the id typed', () => {
@@ -1643,12 +1686,16 @@ test('renderSettings and the organisation and join-role editors: the rows escape
   assert.ok(h.includes('id="set-primary">New organisation</button>'));
   assert.ok(h.includes('<li class="set-row is-removed" data-org-id="gone">') && !h.includes('data-org-remove="gone"'), 'a removed org is listed greyed, with no Remove…');
   assert.ok(h.includes('<span class="set-row-meta">removed 2026-10-04T00:00:00.000Z — a slug is never reused</span>'));
+  assert.ok(h.includes('<button type="button" class="ux-secondary-btn" data-org-act="default">Act in default</button>'));
+  assert.ok(!h.includes('data-org-act="gone"'), 'a removed org has no Act in');
   for (const b of c.querySelectorAll('[data-org-remove]')) b.fire('click');
   c.querySelector('#set-primary').fire('click');
+  [...c.querySelectorAll('[data-org-act]')].find((b) => b.dataset.orgAct === 'charlie').fire('click');
   assert.deepEqual(calls, [
     ['explain', 'default is the default org and cannot be removed'],
     ['openEditor', { kind: 'org', id: 'charlie', step: 'confirm-delete' }],
     ['openEditor', { kind: 'org-create' }],
+    ['switchTo', 'charlie', 'members'],
   ]);
   assert.equal(c.querySelectorAll('[data-org-remove]')[0].getAttribute('aria-disabled'), 'true');
 

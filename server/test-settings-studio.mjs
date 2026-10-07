@@ -845,7 +845,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     }
   });
 
-  await t.test('olive (an owner) — leaving bravo: the status says the reload lands in her first organisation, or the default one — never that she switches to a next one', async () => {
+  await t.test('olive (an owner) — leaving bravo: the status says she goes on acting in it, and the reload lands in bravo\'s members, acted in from outside (D-M)', async () => {
     const ctx = await browser.newContext({ viewport: LAPTOP });
     await ctx.addCookies([{ name: 'observogram_session', value: (await cookieFor('olive')).split('=')[1], url: child.base }]);
     try {
@@ -869,7 +869,10 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await Promise.all([page.waitForEvent('load', { timeout: T }), page.click('#set-editor-confirm')]);
       await page.waitForFunction(() => document.body.dataset.mode, null, { timeout: 30_000 });
       assert.equal(await page.evaluate(() => sessionStorage.getItem('test.leftOrgText')),
-        'You left Bravo; this browser reloads into your first organisation, or the default one.');
+        'You left Bravo; as an owner you go on acting in it — this browser reloads.');
+      await page.waitForSelector('.set-scope', { timeout: T });
+      assert.equal(await text(page, '.set-scope'), 'Settings · Bravo (bravo) · you are an owner acting in bravo — not a member');
+      assert.equal(await page.evaluate(() => document.querySelector('.observa-org-select option:checked')?.textContent), 'Bravo — acting as owner');
     } finally { await ctx.close(); }
   });
 

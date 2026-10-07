@@ -69,6 +69,7 @@ import {
   buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
   mcpTargetModel, mcpTargetBody, mcpTargetMissingText, mcpRegisterCheck, profileEndpointNote, endpointDrift,
   buildUsersSectionModel, buildUserCreateBody, userCreateStatus, userActionStatus, temporaryPassword,
+  activeOrgChoice, isActingOrg, orgChipEntries, orgChipLabel, actingRecovery,
   buildOrgsSectionModel, buildOrgCreateBody, orgCreateStatus, orgRemoveStatus, buildJoinRoleSectionModel, joinRoleBody, joinRoleStatus,
 } from './settings-model.mjs';
 import {
@@ -1683,8 +1684,18 @@ async function boot() {
   // The account menu before the first catalogue read: a signed-in user the
   // org middleware refuses (no membership) still has a way to sign out.
   setupIdentityChip();
-  try { await loadCatalog(); }
+  try { await loadCatalog(); setActingRecoveryTried(false); }
   catch (e) {
+    // An owner's acting org refused (removed since): reload once into the
+    // first membership, or none (design §3.5, D-M; T25).
+    const recovery = actingRecovery({ identity: state.identity, orgId: getActiveOrg(), error: e, tried: actingRecoveryTried() });
+    if (recovery) {
+      setActingRecoveryTried(true);
+      persistence.suspend();
+      setActiveOrg(recovery.to);
+      window.location.reload();
+      return;
+    }
     if (e.denied === 'org') {
       // Signed in, in no organisation (STORE_PLAN §6, slice 6a): the server's
       // sentence as is, under the chrome — not the API-unreachable screen.
@@ -2658,7 +2669,7 @@ function settingsSectionView(id, access) {
   if (id === 'members') {
     const model = buildMembersSectionModel({
       members: settings.members, org: settings.org ?? { id: state.orgId, name: state.orgName }, access,
-      me: signedInLogin(), error: settings.membersError,
+      me: signedInLogin(), acting: settingsActing(), error: settings.membersError,
     });
     return { id, head, model, status };
   }
@@ -2675,12 +2686,18 @@ function settingsSectionView(id, access) {
   return { id, head, model, status };
 }
 
+// An owner acting in the org on screen without being a member of it (D-M):
+// the head and the Members scope sentence say so.
+function settingsActing() {
+  return isActingOrg({ identity: state.identity, orgId: state.orgId });
+}
+
 // renderMainView's branch for mode 'settings': the frame and the section
 // from the state, the focus on the h1 when just entered.
 function renderSettingsHost(view, auditDrafts = null) {
   const access = settingsAccess();
   const section = settingsSectionFor(access, state.settingsSection, BUILT_SECTIONS);
-  const frame = buildSettingsFrameModel({ access, section, orgName: state.orgName, orgId: state.orgId, builtSections: BUILT_SECTIONS });
+  const frame = buildSettingsFrameModel({ access, section, orgName: state.orgName, orgId: state.orgId, acting: settingsActing(), builtSections: BUILT_SECTIONS });
   const sectionView = section ? settingsSectionView(section, access) : null;
   if (sectionView?.id === 'audit') sectionView.drafts = auditDrafts;
   renderSettings(view, frame, sectionView, settingsHost);
@@ -3157,7 +3174,8 @@ async function patchMemberRole(ed, role) {
 // section's status line. The reader removing themselves from the org on
 // screen never stays on it: the next request would carry an org they are no
 // longer in (A3, C-2) — the status says so, and the page reloads into their
-// next organisation (or the no-org screen).
+// next organisation (or the no-org screen). An owner is never refused: the
+// page reloads into the same org's members, acted in from outside (D-M).
 async function removeMemberEditor(ed) {
   const login = ed.record.login;
   const orgName = settingsOrgRecord().name || state.orgName || state.orgId;
@@ -3166,10 +3184,12 @@ async function removeMemberEditor(ed) {
   try { await removeMember(ed.record.userId); }
   catch (e) { return memberWriteRefused(ed, e); }
   if (login === signedInLogin()) {
-    const text = leftOrgText(orgName, settingsAccess().owner);
+    const owner = settingsAccess().owner;
+    const text = leftOrgText(orgName, owner);
     if (settingsEditor === ed) { ed.status = { kind: 'saved', text }; syncSettingsEditor(); }
     announce(text);
-    leaveOrgAndReload();
+    if (owner) reloadIntoSettings(state.orgId, 'members');
+    else leaveOrgAndReload();
     return { ok: true, left: true };
   }
   const text = `Removed ${login}.`;
@@ -3627,14 +3647,16 @@ function renderServiceGate() { renderHomeView(); }
 // OBSERVA bar — a switcher for a user in a second org, a label for one org
 // that is not the default one, nothing otherwise (orgChipModel). The list is
 // the user's memberships (/auth/me `orgs`: an org the chip offers is one the
-// next boot can re-select); the role in the title is the EFFECTIVE one the
-// guard applies in the active org (GET /api/orgs → state.access — an owner
+// next boot can re-select) and, for an owner acting in an org they are not a
+// member of, that org labelled `<name> — acting as owner` (D-M: the boot
+// keeps it; choosing a membership leaves it); the role in the title is the
+// EFFECTIVE one the guard applies in the active org (GET /api/orgs → state.access — an owner
 // reads admin), the membership's as the fallback before that call answered.
 // Called wherever the chrome repaints (updateObservaServiceChip).
 function updateObservaOrgChip() {
   const chip = document.getElementById('observa-org');
   if (!chip) return;
-  const orgs = state.identity?.orgs || [];
+  const orgs = orgChipEntries({ identity: state.identity, orgId: getActiveOrg(), orgName: state.orgName });
   const { kind, active } = orgChipModel(orgs, getActiveOrg());
   if (kind === 'none') { chip.hidden = true; return; }
   const name = document.getElementById('observa-org-name');
@@ -3645,7 +3667,6 @@ function updateObservaOrgChip() {
     for (const o of orgs) {
       const opt = document.createElement('option');
       opt.value = o.id;
-      opt.textContent = o.name || o.id;
       sel.appendChild(opt);
     }
     sel.addEventListener('change', () => {
@@ -3660,8 +3681,11 @@ function updateObservaOrgChip() {
     name.replaceWith(sel);
   }
   const sel = chip.querySelector('select');
-  if (sel) sel.value = active.id;
-  else name.textContent = active.name || active.id;
+  // The labels on every repaint: the acting org's name is known once GET /api/orgs answered.
+  if (sel) {
+    for (const opt of sel.options) { const o = orgs.find((e) => e.id === opt.value); if (o) opt.textContent = orgChipLabel(o); }
+    sel.value = active.id;
+  } else name.textContent = orgChipLabel(active);
   const role = (state.access?.posture === 'identity' && state.access.role) || active.effectiveRole || active.role || 'member';
   chip.title = `organisation: ${active.id} (role: ${role})`;
   chip.hidden = false;
@@ -7620,14 +7644,29 @@ async function loadIdentity() {
 
 // Stage 2 tenancy: pick the active org from the session's memberships
 // (/auth/me carries them in every identity posture) — the persisted choice
-// when still valid, the first membership otherwise. Without memberships
-// (the open posture) no org header is sent: the server runs the request in
-// the default org. The header is sent whatever the ORG chip shows.
+// when still valid, the first membership otherwise; an owner keeps a
+// persisted org they are not a member of (acting in it, design §3.5 D-M —
+// the server is the check, and the boot recovers once when it refuses).
+// Without memberships (the open posture) no org header is sent: the server
+// runs the request in the default org. The header is sent whatever the ORG
+// chip shows.
 function resolveActiveOrg() {
-  const orgs = state.identity?.orgs || [];
-  if (!orgs.length) { setActiveOrg(null); return; }
-  const saved = savedOrg();
-  setActiveOrg((orgs.find(o => o.id === saved) || orgs[0]).id);
+  setActiveOrg(activeOrgChoice({ identity: state.identity, saved: savedOrg() }));
+}
+
+// The boot's one-time recovery from an acting org the server refuses (an
+// owner's, removed since — settings-model.mjs actingRecovery): a
+// sessionStorage flag, set before the reload and dropped once the catalogue
+// answers, so a second refusal draws the no-org screen instead of looping.
+const ACTING_RECOVERY_KEY = 'studioActingRecovery.v1';
+function actingRecoveryTried() {
+  try { return sessionStorage.getItem(ACTING_RECOVERY_KEY) === '1'; } catch { return false; }
+}
+function setActingRecoveryTried(on) {
+  try {
+    if (on) sessionStorage.setItem(ACTING_RECOVERY_KEY, '1');
+    else sessionStorage.removeItem(ACTING_RECOVERY_KEY);
+  } catch { /* storage unavailable */ }
 }
 
 // The header's `api` link (studio/index.html #api-link) names the active

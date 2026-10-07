@@ -154,11 +154,14 @@ export function settingsSectionFor(access, wanted = null, builtSections = BUILT_
 // ---------- the frame (design §3.2) ----------
 
 // `access` is settingsAccessModel(); `statusOf(id)` the section's status
-// line ({ kind, text }) or null. The nav lists only `builtSections`.
-export function buildSettingsFrameModel({ access, section = null, orgName = null, orgId = null, statusOf = null, builtSections = BUILT_SECTIONS } = {}) {
+// line ({ kind, text }) or null; `acting` an owner in an org they are not a
+// member of (isActingOrg). The nav lists only `builtSections`.
+export function buildSettingsFrameModel({ access, section = null, orgName = null, orgId = null, acting = false, statusOf = null, builtSections = BUILT_SECTIONS } = {}) {
   const current = settingsSectionFor(access, section, builtSections);
   const where = orgName && orgId ? `${orgName} (${orgId})` : (orgName || orgId || null);
-  const who = access.role ? `you are ${access.role}${access.owner ? ', an owner' : ''}` : null;
+  // An owner acting in an org they are not a member of says so (D-M).
+  const who = acting ? `you are an owner acting in ${orgId ?? orgName} — not a member`
+    : access.role ? `you are ${access.role}${access.owner ? ', an owner' : ''}` : null;
   const scope = ['Settings', where, who].filter(Boolean).join(' · ');
   let nav = access.posture === 'static' ? [] : SETTINGS_SECTIONS.filter((id) => builtSections.includes(id)).map((id) => {
     const enabled = sectionReadable(access, id);
@@ -341,14 +344,59 @@ function selfNotes(org, owner) {
   return { demote: 'This is you: you lose the admin role at once.', remove: `This is you: you lose access to ${org} at once.` };
 }
 
-// The status after removing oneself from the org on screen: the page
-// reloads with no active org — a member lands in their next organisation; an
-// owner, whose requests are never refused, in their first membership or the
-// default org (server/authz.mjs orgContext).
+// The status after removing oneself from the org on screen: a member's page
+// reloads with no active org and lands in their next organisation; an
+// owner's requests are never refused (server/authz.mjs orgContext), so the
+// page reloads into the same org, now acted in from outside (design §3.5, D-M).
 export function leftOrgText(orgName, owner = false) {
   return owner
-    ? `You left ${orgName}; this browser reloads into your first organisation, or the default one.`
+    ? `You left ${orgName}; as an owner you go on acting in it — this browser reloads.`
     : `You left ${orgName}; this browser switches to your next organisation.`;
+}
+
+// ---------- an owner acting in an org they are not a member of (design §3.5, D-M) ----------
+
+const membershipsOf = (identity) => (isArr(identity?.orgs) ? identity.orgs : []);
+const signedInOwner = (identity) => identity?.authenticated === true && identity?.user?.owner === true;
+
+// The org this browser sends at boot (`identity` the /auth/me body, `saved`
+// the persisted choice): the saved one when it is a membership — or, for a
+// signed-in owner, whatever it is (the server is the check: an org removed
+// since is refused, and the boot recovers once — actingRecovery); else the
+// first membership; else none (the open posture, or an owner in no org:
+// the server lands the request in the default org).
+export function activeOrgChoice({ identity = null, saved = null } = {}) {
+  const orgs = membershipsOf(identity);
+  if (saved && (orgs.some((o) => o.id === saved) || signedInOwner(identity))) return saved;
+  return orgs[0]?.id ?? null;
+}
+
+// Whether `orgId` (the org the server resolved) is one this signed-in owner
+// acts in without being a member of it.
+export function isActingOrg({ identity = null, orgId = null } = {}) {
+  return Boolean(orgId) && signedInOwner(identity) && !membershipsOf(identity).some((o) => o.id === orgId);
+}
+
+// The ORG chip's list: the memberships, plus — for an owner acting elsewhere —
+// that org, marked `acting` (studio/api.mjs orgChipModel takes the longer
+// list; choosing a membership leaves the acting org).
+export function orgChipEntries({ identity = null, orgId = null, orgName = null } = {}) {
+  const orgs = membershipsOf(identity);
+  return isActingOrg({ identity, orgId }) ? [...orgs, { id: orgId, name: orgName || orgId, acting: true }] : orgs;
+}
+export function orgChipLabel(entry) {
+  const name = entry?.name || entry?.id || '';
+  return entry?.acting ? `${name} — acting as owner` : name;
+}
+
+// The boot's one-time recovery (T25): the catalogue read refused with
+// `denied: 'org'` while an owner acts in an org that is not a membership (it
+// was removed since) → the org to reload into, the first membership or none
+// (`{ to }`); null otherwise, and null once tried — a second refusal draws the
+// no-org screen with the server's sentence instead of reloading again.
+export function actingRecovery({ identity = null, orgId = null, error = null, tried = false } = {}) {
+  if (tried || error?.denied !== 'org' || !isActingOrg({ identity, orgId })) return null;
+  return { to: membershipsOf(identity)[0]?.id ?? null };
 }
 
 // `members` already email-free; `org` the GET /api/org/members `org`; `me`
@@ -604,12 +652,16 @@ const membersCount = (n) => plural(Number.isInteger(n) ? n : 0, 'member');
 // read failed — `error` the thrown `<status>: <sentence>`); `activeOrg` the
 // org this browser is in. Each live row offers Remove… — the default org's
 // unavailable with the server's own sentence; a removed row is listed greyed,
-// its id never used again.
+// its id never used again. Where the server signs in, each live row but the
+// active one offers "Act in <id>" (D-M): this browser reloads into that org's
+// members — an owner manages an org they are not a member of (the server
+// ignores the org a browser names when it runs without sign-in).
 export function buildOrgsSectionModel({ orgs, defaultOrg = null, access, activeOrg = null, error = null, formatTime = (iso) => iso } = {}) {
   const own = access.can.own === true;
   // New organisation: an owner's, and only where the server signs in (without
   // sign-in a second organisation would make its next start refuse).
   const create = access.can.createOrg === true;
+  const act = own && access.posture === 'identity';
   const primary = { enabled: create, reason: create ? null : !own ? (readWhy(access, 'own') ?? access.why.own) : access.why.createOrg };
   if (!isArr(orgs)) return { rows: [], primary, empty: null, error: error || 'the organisations could not be read' };
   const rows = orgs.map((o) => {
@@ -621,6 +673,7 @@ export function buildOrgsSectionModel({ orgs, defaultOrg = null, access, activeO
       facts: [membersCount(o.members), `files: ${orgFiles(o.root)}`, o.createdAt ? `created ${formatTime(o.createdAt)}` : null].filter(Boolean).join(' · '),
       removedText: removed ? `removed ${formatTime(o.removedAt)} — a slug is never reused` : null,
       remove: removed || !own ? null : { enabled: reason === null, reason },
+      act: removed || !act || o.id === activeOrg ? null : `Act in ${o.id}`,
     };
   });
   return { rows, primary, empty: rows.length ? null : 'No organisations yet.', error: null };
