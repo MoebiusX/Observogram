@@ -26,10 +26,10 @@
 // No SQL of its own: every read and write goes through server/store/*.
 
 import { normalizeServiceKey } from '../tools/lib/service-keys.mjs';
-import { mcpUrlOrigin } from '../tools/lib/mcp-url-safety.mjs';
-import { rankOfRole } from './authz.mjs';
+import { mcpUrlOrigin, safeMcpUrl } from '../tools/lib/mcp-url-safety.mjs';
+import { noSignInWay, rankOfRole } from './authz.mjs';
 import { AdminRefusal } from './identity-admin.mjs';
-import { credentialThatRides, mcpOriginDecision, typedMcpUrlDecision } from './mcp-target-policy.mjs';
+import { credentialThatRides, mcpOriginDecision, originOf, typedMcpUrlDecision } from './mcp-target-policy.mjs';
 import { validateMcpUrl } from './mcp-url.mjs';
 import { currentOrg } from './org-context.mjs';
 import { atomic } from './store/db.mjs';
@@ -529,4 +529,53 @@ export function resolveMcpTarget(db, body = {}, { forWrite = false, caller } = {
   const refusal = mcpOriginDecision(db, mcpUrl, { use: endpoint ? 'registered' : 'typed', credential, caller, tokenVar: serverVar });
   if (refusal) return refusal;
   return { mcpUrl, safeMcpUrl: safeUrl, mcpAuth, endpoint };
+}
+
+// ---------- a journey's live Pack B (R4, decision D6) ----------
+//
+// A Pack B annotation is free text (any operator may register a pack), so
+// a journey's live source is a caller-supplied URL like any other. Capture
+// resolves it to one of the org's registered endpoints whose safe URL is
+// the annotation's; without one, an admin's capture keeps the URL (it
+// passes the typed-URL and origin rules then), anyone else's saves Pack B
+// as a file. A server-run journey fetches through resolveMcpTarget with the
+// runner's caller: endpointId by id, a raw url as a typed URL (an admin's).
+// The def's authEnv is never read on the server.
+
+// The source capture writes for a Pack B whose mcp.url is `url` →
+// { mcp: { url, endpointId } } | { mcp: { url } } (an admin's) | null (save
+// it as a file) | a refusal { status, error, denied? }.
+export function journeyPackBSource(db, url, { caller } = {}) {
+  if (!caller || typeof caller !== 'object') throw new TypeError('journeyPackBSource: the caller (mcpCallerOf(req)) is required');
+  const safe = safeMcpUrl(String(url));
+  const ep = safe ? listMcpEndpoints(db).find((e) => safeMcpUrl(e.url) === safe) : null;
+  if (ep) return { mcp: { url: String(url), endpointId: ep.id } };
+  if (typedMcpUrlDecision(caller)) return null;
+  const t = resolveMcpTarget(db, { mcpUrl: String(url) }, { caller });
+  return t.status ? t : { mcp: { url: String(url) } };
+}
+
+// A server-run journey's Pack B target: resolveMcpTarget's answer, or a
+// refusal naming the way out for the runner — a raw url below the typed-URL
+// role is refused before any wire call.
+export function resolveJourneyMcp(db, mcp = {}, { caller } = {}) {
+  if (!caller || typeof caller !== 'object') throw new TypeError('resolveJourneyMcp: the caller (mcpCallerOf(req)) is required');
+  if (mcp.endpointId !== undefined && mcp.endpointId !== null) return resolveMcpTarget(db, { mcpEndpointId: mcp.endpointId }, { caller });
+  if (typeof mcp.url !== 'string' || !mcp.url.trim()) return { status: 400, error: "this journey's Pack B names no MCP — give packB.mcp.url, or re-capture it" };
+  const refusal = typedMcpUrlDecision(caller);
+  if (refusal) {
+    const origin = originOf(mcp.url.trim()) ?? 'an MCP';
+    return { ...refusal, error: `this journey's Pack B fetches ${origin}, ${journeyTypedWay(caller, refusal)}` };
+  }
+  return resolveMcpTarget(db, { mcpUrl: mcp.url }, { caller });
+}
+
+function journeyTypedWay(caller, refusal) {
+  if (refusal.denied === 'posture') {
+    return caller.posture === 'open-exposed'
+      ? 'an MCP URL a server without sign-in never sends, and MCP endpoints cannot be registered while it is exposed — add the first user with npm run users -- add <login> (it arms sign-in; the first user is an owner), or bind the server to loopback'
+      : `an MCP URL a server without sign-in never sends — register the endpoint in Settings → MCP endpoints from http://127.0.0.1:${caller.port ?? '<port>'} (a loopback MCP, or an origin listed in OBSERVOGRAM_MCP_ORIGINS) and re-capture the journey (Pack B then names it)`;
+  }
+  const tail = caller.principal?.kind === 'bearer' && caller.posture === 'token' ? `; ${noSignInWay(caller)}` : '';
+  return `an MCP URL only an admin may send — an admin re-captures it (Pack B then names a registered endpoint), or registers the endpoint and re-captures${tail}`;
 }

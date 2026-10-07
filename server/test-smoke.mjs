@@ -906,17 +906,59 @@ try {
   assert(jRun404.status === 404, 'running an unknown journey → 404');
   assert(auditSeq() === seqBefore404, 'the 404 run writes no row');
 
+  // R4, decision D6: a journey's live Pack B is a caller-supplied URL like
+  // any other. Capture resolves a Pack B's mcp.url to the org's registered
+  // endpoint whose safe URL it is ({ url, endpointId }); with none, a
+  // caller who may not type a URL (local here) saves Pack B as a file. A
+  // raw url in a def is a typed URL at run time: refused 403 posture to
+  // local, before any wire call and without a row.
+  const livePackB = (name, url) => {
+    const c = structuredClone(authRaw);
+    c.metadata.name = name;
+    c.metadata.annotations = { ...(c.metadata.annotations || {}), 'mcp.url': url };
+    return c;
+  };
+  const upload = async (canonical) => (await fetch(`${base}/api/validate`, { method: 'POST', headers: JSON_CSRF, body: JSON.stringify(canonical) })).json();
+  const liveB = await upload(livePackB('smoke-live-b', NO_MCP));
+  const typedB = await upload(livePackB('smoke-typed-b', 'https://mcp.unregistered.test/mcp'));
+  assert(typeof liveB.registered?.id === 'string' && typeof typedB.registered?.id === 'string', 'two Pack Bs with an mcp.url annotation register', [liveB.registered, typedB.registered]);
+  const capLive = await (await postJson('/api/journeys/capture', { name: 'smoke-lost', packAId: 'payment-service', packBId: liveB.registered.id, gate: { minAlignmentPct: 1 } })).json();
+  assert(capLive.ok === true, 'a live Pack B is captured', capLive);
+  const lostDef = readFileSync(join(SMOKE_WORKSPACE, 'journeys', 'smoke-lost.journey.yaml'), 'utf8');
+  assert(lostDef.includes(`endpointId: ${noMcpId}`) && lostDef.includes(NO_MCP), 'capture names the registered endpoint whose URL the annotation is: { url, endpointId }', lostDef);
+  const capTyped = await (await postJson('/api/journeys/capture', { name: 'smoke-typed-file', packAId: 'payment-service', packBId: typedB.registered.id })).json();
+  const typedDef = readFileSync(join(SMOKE_WORKSPACE, 'journeys', 'smoke-typed-file.journey.yaml'), 'utf8');
+  assert(capTyped.ok === true && /packB:\s*\n\s*file: /.test(typedDef) && !typedDef.includes('mcp.unregistered.test'),
+    'an unregistered mcp.url captured by a caller who may not type a URL → Pack B saved as a file', typedDef);
+  {
+    const fakeJ = await startFakeMcp(['system_health', 'system_topology'], () => ({}));
+    try {
+      writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'smoke-raw.journey.yaml'), [
+        'name: smoke-raw',
+        `packA: { file: ${PAY.replaceAll('\\', '/')} }`,
+        `packB: { mcp: { url: ${fakeJ.url} } }`,
+        'gate: { minAlignmentPct: 1 }',
+      ].join('\n'));
+      const seqRaw = auditSeq();
+      const rawRes = await postJson('/api/journeys/smoke-raw/run', {});
+      const raw = await rawRes.json();
+      assert(rawRes.status === 403 && raw.denied === 'posture'
+        && raw.error === `this journey's Pack B fetches ${fakeJ.origin}, an MCP URL a server without sign-in never sends — register the endpoint in Settings → MCP endpoints from http://127.0.0.1:${new URL(base).port} (a loopback MCP, or an origin listed in OBSERVOGRAM_MCP_ORIGINS) and re-capture the journey (Pack B then names it)`,
+        'a raw-URL journey run by local → 403 posture, the way in named', [rawRes.status, raw]);
+      assert(fakeJ.authHeaders.length === 0 && auditSeq() === seqRaw, 'nothing reached the MCP, no row written', [fakeJ.authHeaders.length]);
+      const rawRuns = await getJson(base, '/api/journeys/smoke-raw/runs?limit=5');
+      assert(rawRuns.runs.length === 0, 'and no run record', rawRuns.runs);
+    } finally {
+      await fakeJ.close();
+    }
+  }
+
   // Slice 5: a live Pack B that cannot be reached loses its vantage — the
   // engine writes a run record (outcome vantage-lost) before it throws, the
   // route answers 502, and the attempt is on the audit: one journey.run row
   // with outcome vantage-lost, the four record scalars null, never the
-  // error's message (it names the URL).
-  writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'smoke-lost.journey.yaml'), [
-    'name: smoke-lost',
-    `packA: { file: ${PAY.replaceAll('\\', '/')} }`,
-    'packB: { mcp: { url: http://127.0.0.1:1/no-mcp } }',
-    'gate: { minAlignmentPct: 1 }',
-  ].join('\n'));
+  // error's message (it names the URL). The captured def fetches through
+  // the unreachable endpoint by id.
   const lostRes = await fetch(`${base}/api/journeys/smoke-lost/run`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
   });

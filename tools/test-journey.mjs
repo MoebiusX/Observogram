@@ -858,6 +858,32 @@ try {
     ].join('\n'));
     const tc = await runJourney(loadJourneyDef('fake-live-cred'));
     assert(tc.packB.source === `mcp:${fakeUrl}?keep=1` && tc.outcome === 'pass', 'a live run record persists packB.mcp.url stripped of its credential parameter', tc.packB.source);
+
+    // R4, decision D6: the server runs a journey with resolveMcp — Pack B's
+    // mcp block resolved through the org's registered endpoint — and the
+    // def's url and authEnv are not read; the CLI (no resolver) refuses a
+    // def whose Pack B names only an endpointId, before any wire call.
+    writeFileSync(join(TMP, 'journeys', 'fake-live-ep.journey.yaml'), [
+      'name: fake-live-ep',
+      `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`,
+      'packB: { mcp: { endpointId: 7, authEnv: OBSERVOGRAM_TEST_NO_SUCH_TOKEN } }',
+    ].join('\n'));
+    const epDef = loadJourneyDef('fake-live-ep');
+    const seen = [];
+    const te = await runJourney(epDef, { resolveMcp: (m) => { seen.push(m); return { mcpUrl: `${fakeUrl}?token=EPSECRET`, mcpAuth: null, safeMcpUrl: fakeUrl }; } });
+    assert(te.packB.source === `mcp:${fakeUrl}` && te.outcome === 'pass' && seen.length === 1 && seen[0].endpointId === 7,
+           'with resolveMcp the run fetches the resolved target, records its safe URL, and never reads the def\'s authEnv', { src: te.packB.source, seen });
+    let cliErr = null;
+    try { await runJourney(loadJourneyDef('fake-live-ep')); } catch (e) { cliErr = e.message; }
+    assert(cliErr === 'journey fake-live-ep: packB.mcp.endpointId is resolved by the server; run this journey through the server, or give packB.mcp.url',
+           'without a resolver (the CLI) an endpointId-only Pack B is refused, naming the way', cliErr);
+    assert(readJourneyRuns('fake-live-ep').length === 1, 'the refused CLI run left no record (the one record is the resolved run)');
+    for (const bad of ['0', '-1', 'x', '1.5']) {
+      writeFileSync(join(TMP, 'journeys', 'bad-ep.journey.yaml'), ['name: bad-ep', `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`, `packB: { mcp: { url: ${fakeUrl}, endpointId: ${bad} } }`].join('\n'));
+      let loadErr = null;
+      try { loadJourneyDef('bad-ep'); } catch (e) { loadErr = e.message; }
+      assert(/^journey bad-ep: packB\.mcp\.endpointId must be a positive integer/.test(loadErr || ''), `packB.mcp.endpointId ${bad} is refused at load`, loadErr);
+    }
     const tcRecordRaw = readFileSync(join(TMP, 'runs', 'fake-live-cred', stemOf(tc)), 'utf8');
     const tcSnapRaw = readFileSync(join(liveDirOf('fake-live-cred'), stemOf(tc)), 'utf8');
     assert(!tcRecordRaw.includes('FAKETOKSECRET') && !tcSnapRaw.includes('FAKETOKSECRET') && readLivePack('fake-live-cred', tc)?.metadata?.annotations?.['mcp.url'] === `${fakeUrl}?keep=1`,

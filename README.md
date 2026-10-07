@@ -1011,7 +1011,7 @@ the MCP **origin**, never the URL, an item's error or a tool name.
 | `POST /api/deploys/:deployId/rollback` | `deploy.rollback` | the rollback's own `deployId` | `{ rollbackOf, pack, env, dryRun, origin, mcpEndpoint, items, ok, failed, manual, tookMs }` |
 | `POST /api/deploys/:deployId/verify` | `deploy.verify` | the verified `deployId` | `{ outcome, alignment, attempts }` (`outcome` cut to 100 characters; the summary and transitions stay in the line) |
 | `POST /api/journeys/capture` | `journey.capture` | the journey name | `{ packA, packB, live, env, service, scopeMode }` — the two pack ids and whether Pack B was saved as a live `mcp:` source, never the paths or the MCP URL the file holds |
-| `POST /api/journeys/:name/run` | `journey.run` | the journey name | `{ startedAt, outcome, alignmentPct, gradeScore, gradePass, breaches, tookMs }` — **one row per attempt past the 404**: a run that fails from the studio leaves a row with `outcome: "error"`, or `"vantage-lost"` when a live source lost its vantage (the engine wrote a run record and may have notified), the four record fields `null`; never the error's message |
+| `POST /api/journeys/:name/run` | `journey.run` | the journey name | `{ startedAt, outcome, alignmentPct, gradeScore, gradePass, breaches, tookMs }` — **one row per attempt past the 404** (and past a refused Pack B MCP target, which writes none): a run that fails from the studio leaves a row with `outcome: "error"`, or `"vantage-lost"` when a live source lost its vantage (the engine wrote a run record and may have notified), the four record fields `null`; never the error's message |
 | `POST /api/refresh-live` | `live.refresh` | the MCP origin | `{ mcpEndpoint, refreshedAt, servicesDiscovered, toolsFailed }` (counts) |
 
 When one of the two writes fails: the operation stands. A row the store
@@ -1945,6 +1945,21 @@ same construct as the studio (requirement-chain integrity rides on the
 diff), so both report one score for one comparison. Secrets never live in
 journey files — MCP auth is referenced by env-var name.
 
+**Through the server, a live Pack B is a registered endpoint's.** A journey's
+`packB.mcp.url` is a URL the server would fetch, so the server treats it as a
+typed MCP URL ([Fetch Live From MCP](#fetch-live-from-mcp)). `POST
+/api/journeys/capture` saves a drafted Pack B as `mcp: { url, endpointId }` —
+the org's registered endpoint whose URL the draft's `mcp.url` is; with no such
+endpoint an admin's capture keeps the URL (it meets the typed-URL and origin
+rules then) and anyone else's saves Pack B as a file. `POST
+/api/journeys/:name/run` fetches through `endpointId` (its token from the
+endpoint's `readTokenEnv`; a def's `authEnv` is never read by the server) and
+takes a raw `url` from an admin only: an operator running a journey captured
+with a raw URL is refused 403 before anything runs (`this journey's Pack B
+fetches <origin>, an MCP URL only an admin may send — an admin re-captures it
+…`). The CLI reads `url` and `authEnv` as before and refuses a def whose Pack B
+names only an `endpointId` (the server resolves it).
+
 Run history is bounded so a journey on a cron cadence never fills the disk:
 after every run the journey's `runs/` directory is pruned to the newest
 `OBSERVOGRAM_JOURNEY_RUN_RETENTION` records (default `1000`; `0` = unlimited).
@@ -2549,8 +2564,8 @@ open, exposed posture — see [The Audit](#the-audit)); every other `GET` is
 | `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`, `inventory` `{ status, reason, environment, kinds }`) |
 | `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series) |
 | `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule) |
-| `POST` | `/api/journeys/:name/run` | Run a saved journey now; an audit row: `journey.run`, on a failed run too |
-| `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file; an audit row: `journey.capture` |
+| `POST` | `/api/journeys/:name/run` | Run a saved journey now (a live Pack B through its `endpointId`, or a raw `url`: the admin role); an audit row: `journey.run`, on a failed run too |
+| `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file (a live Pack B as the org's registered endpoint, `mcp: { url, endpointId }`; an unregistered URL kept for an admin, else a file); an audit row: `journey.capture` |
 | `POST` | `/api/refresh-live` | Fetch the org's live pack from an MCP endpoint (`mcpEndpointId`, or a typed `mcpUrl`: the admin role); an audit row: `live.refresh` |
 | `GET` | `/api/services` | The org's service records, by slug, each with its environments (their MCP endpoint as `{ id, name, origin }`) and the packs linked to it (`id`, `label`, `source`, `role`) |
 | `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack) |

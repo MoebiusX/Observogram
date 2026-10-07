@@ -1363,6 +1363,53 @@ test('the deploy routes take a typed MCP URL from an admin only (D3): oscar is r
   }
 });
 
+test('a journey\'s live Pack B (D6): capture names the registered endpoint, keeps an unregistered URL for ada and saves a file for oscar; oscar\'s run of a raw-URL def is refused 403 role before any wire call, ada\'s takes the typed path', async () => {
+  const { startFakeMcp } = await import('./fixtures/fake-mcp.mjs');
+  const fake = await startFakeMcp(['system_health', 'system_topology'], (name) => (name === 'system_health' ? { services: [] } : { dependencies: [] }));
+  const journeys = join(WORKSPACE, 'orgs', 'acme', 'journeys');
+  try {
+    const base = (await call('vera', 'GET', '/api/packs/payment-service/canonical')).json;
+    delete base.__effectiveEnvironment;
+    delete base.__effective;
+    const upload = async (name, url) => {
+      const c = structuredClone(base);
+      c.metadata.name = name;
+      c.metadata.annotations = { ...(c.metadata.annotations || {}), 'mcp.url': url };
+      const r = await call('oscar', 'POST', '/api/validate', c);
+      assert.equal(r.status, 200, r.text.slice(0, 200));
+      return r.json.registered.id;
+    };
+    const epId = (await ok('POST /api/mcp-endpoints', 'ada', '/api/mcp-endpoints', { name: 'journey-mcp', url: `${fake.url}?tier=x` }, 201)).json.endpoint.id;
+    const registered = await upload('journey-registered-b', `${fake.url}?tier=x`);
+    const unregistered = await upload('journey-unregistered-b', fake.url);
+    const capture = (who, name, packBId) => ok('POST /api/journeys/capture', who, '/api/journeys/capture', { name, packAId: 'payment-service', packBId, gate: { minAlignmentPct: 1 } });
+    const defOf = (name) => parseYaml(readFileSync(join(journeys, `${name}.journey.yaml`), 'utf8'));
+    await capture('oscar', 'j-registered', registered);
+    assert.deepEqual(defOf('j-registered').packB, { mcp: { url: `${fake.url}?tier=x`, endpointId: epId } }, 'the registered endpoint whose safe URL is the annotation');
+    await capture('oscar', 'j-oscar', unregistered);
+    assert.ok(defOf('j-oscar').packB.file, 'oscar may not type a URL: Pack B is a file');
+    await capture('ada', 'j-ada', unregistered);
+    assert.deepEqual(defOf('j-ada').packB, { mcp: { url: fake.url } }, "ada's capture keeps the URL");
+    // the run
+    const ROLE = `this journey's Pack B fetches ${fake.origin}, an MCP URL only an admin may send — an admin re-captures it (Pack B then names a registered endpoint), or registers the endpoint and re-captures`;
+    const before = fake.authHeaders.length;
+    await denied('POST /api/journeys/:name/run', 'oscar', '/api/journeys/j-ada/run', {}, 'role', ROLE);
+    assert.equal(fake.authHeaders.length, before, 'nothing reached the MCP');
+    const byAda = await call('ada', 'POST', '/api/journeys/j-ada/run', {});
+    assert.equal(byAda.status, 200, byAda.text.slice(0, 300));
+    assert.equal(byAda.json.record.packB.source, `mcp:${fake.url}`);
+    const byOscar = await call('oscar', 'POST', '/api/journeys/j-registered/run', {});
+    assert.equal(byOscar.status, 200, byOscar.text.slice(0, 300));
+    assert.equal(byOscar.json.record.packB.source, `mcp:${fake.url}?tier=x`, 'by id: the endpoint\'s URL');
+    assert.ok(fake.authHeaders.length > before, 'both runs reached the MCP');
+    await ok('DELETE /api/mcp-endpoints/:id', 'ada', `/api/mcp-endpoints/${epId}`);
+    const gone = await call('oscar', 'POST', '/api/journeys/j-registered/run', {});
+    assert.deepEqual([gone.status, gone.json.ok], [400, false], `an endpoint deleted since the capture: 400 before any run — ${gone.text.slice(0, 200)}`);
+  } finally {
+    await fake.close();
+  }
+});
+
 test('DELETE /api/uploads drops the packs (one pack.clear row) and keeps the services, now without packs', async () => {
   const before = (await call('vera', 'GET', '/api/services')).json.services;
   const uploaded = (await call('vera', 'GET', '/api/packs')).json.packs.filter((p) => p.source === 'uploaded').length;

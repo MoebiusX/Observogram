@@ -65,7 +65,7 @@ import {
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
 import { describeProxyAuth } from './auth-proxy.mjs';
-import { redactCredentials, stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
+import { stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
 import { mcpCallerOf, mcpRefusalBody, redactTarget } from './mcp-target-policy.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
@@ -77,7 +77,7 @@ import { verdictsRoutes } from './routes/verdicts.mjs';
 import { waiversRoutes } from './routes/waivers.mjs';
 import { auditReportRoutes } from './routes/audit-report.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
-import { resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
+import { journeyPackBSource, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
 import { conformanceWaivers, listWaiverViews } from './waiver-admin.mjs';
 import { authGate, orgContext, authorize, effectiveRoleOf, rankOf, rankOfRole } from './authz.mjs';
 import { versionInfo } from './version.mjs';
@@ -938,7 +938,7 @@ app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/sched
 // 502 when a pack source can't be resolved (live MCP down etc.).
 //
 // The audit (STORE_PLAN slice 5): one journey.run row for every attempt
-// past the 404, written after the engine returned or threw — on the 200
+// past the 404 and the Pack B target refusal, written after the engine returned or threw — on the 200
 // path the record's seven scalars; on the 502 path the same keys from the
 // route's own clock, the outcome `vantage-lost` when a live source lost its
 // vantage (the engine wrote a run record and may have notified) else
@@ -950,13 +950,27 @@ app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), a
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
   try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+  // A live Pack B is a server-side request to an MCP target (R4, decision
+  // D6): resolved before anything runs — through the org's registered
+  // endpoint (packB.mcp.endpointId), or a raw url as a typed URL, which
+  // only an admin may send. A refusal sends nothing and writes no row; the
+  // def's authEnv is never read here.
+  const usesMcp = !!def.packB?.mcp && (!def.packB.file || def.inventory !== undefined);
+  const mcpTarget = usesMcp ? resolveJourneyMcp(currentStore(), def.packB.mcp, { caller: mcpCallerOf(req) }) : null;
+  if (mcpTarget?.status) return res.status(mcpTarget.status).json(mcpRefusalBody(mcpTarget));
   const t0 = new Date();
   const runRow = (detail) => ({ action: 'journey.run', targetKind: 'journey', targetId: bounded(def.name), detail });
   try {
     // A crawl: walk, a file: source and an inventory site read only this
     // org's own part of the workspace (STORE_PLAN slice 2, A-24); a path in
     // another org's part is refused.
-    const record = await runJourney(def, { crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() } });
+    const record = await runJourney(def, {
+      crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() },
+      resolveMcp: () => {
+        if (!mcpTarget) throw new Error(`journey ${def.name}: Pack B's MCP was not resolved`);
+        return mcpTarget;
+      },
+    });
     const auditError = auditAfter(req, runRow({
       startedAt: bounded(record.startedAt), outcome: bounded(record.outcome, 100),
       alignmentPct: finite(record.drift?.alignmentPct), gradeScore: finite(record.grade?.score),
@@ -970,7 +984,7 @@ app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), a
       startedAt: t0.toISOString(), outcome: def.packB?.mcp && e?.vantageLost ? 'vantage-lost' : 'error',
       alignmentPct: null, gradeScore: null, gradePass: null, breaches: null, tookMs: Date.now() - t0.getTime(),
     }), { tag: 'journey' });
-    res.status(502).json({ ok: false, error: redactCredentials(String(e.message)), ...(auditError ? { auditError } : {}) });
+    res.status(502).json({ ok: false, error: redactTarget(String(e.message), mcpTarget), ...(auditError ? { auditError } : {}) });
   }
 });
 
@@ -979,7 +993,11 @@ app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), a
 // packs keep their path; uploaded/crawled/drafted packs point at their
 // persisted workspace copy (10A); a Pack B that came from a live MCP draft
 // is saved as a live mcp: source via its mcp.url annotation, so re-runs
-// re-draft instead of comparing against a frozen snapshot.
+// re-draft instead of comparing against a frozen snapshot — through the
+// org's registered endpoint whose safe URL is the annotation's
+// ({ url, endpointId }); without one, an admin's capture keeps the URL
+// (typed-URL and origin rules) and anyone else's saves Pack B as a file
+// (R4, decision D6).
 app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req, res) => {
   const b = req.body || {};
   const name = typeof b.name === 'string' ? b.name.trim() : '';
@@ -1001,11 +1019,9 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
   let packB;
   let bAnn = {};
   try { bAnn = loadPackCanonical(metaB)?.metadata?.annotations || {}; } catch (_) {}
-  if (bAnn['mcp.url']) {
-    packB = { mcp: { url: bAnn['mcp.url'] } };
-  } else {
-    packB = sourceFor(metaB);
-  }
+  const live = bAnn['mcp.url'] ? journeyPackBSource(currentStore(), bAnn['mcp.url'], { caller: mcpCallerOf(req) }) : null;
+  if (live?.status) return res.status(live.status).json(mcpRefusalBody(live));
+  packB = live ?? sourceFor(metaB);
 
   const def = {
     packA, packB,
@@ -1036,8 +1052,9 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
       banner: [
         `Captured from a studio session on ${new Date().toISOString()}.`,
         `Pack A: ${metaA.label || metaA.id} · Pack B: ${metaB.label || metaB.id}`,
-        `Edit freely — e.g. swap a frozen pack file for a crawl: source,`,
-        `or add authEnv under packB.mcp for authenticated MCPs.`,
+        `Edit freely — e.g. swap a frozen pack file for a crawl: source.`,
+        `The server fetches a live Pack B through packB.mcp.endpointId (its token`,
+        `from the endpoint's readTokenEnv); the CLI reads url and authEnv.`,
       ],
     });
   } catch (e) {
