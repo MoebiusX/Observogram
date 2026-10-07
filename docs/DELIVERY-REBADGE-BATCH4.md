@@ -15,7 +15,7 @@ the documents that carry the detail — `docs/CHANGELOG.md` (`## Unreleased`,
 those documents do not state. The totals below are the chain
 `tools/test-doc-test-totals.mjs` guards: `npm test` on Linux, measured at
 each commit, from 1250 at the head of rebadge batch 3 to 1353 at the end of
-D4, and 1355 at the head of this branch with the review fixes.
+D4, and 1357 at the head of this branch with the review fixes.
 
 ## What the scout and the critique found
 
@@ -35,7 +35,9 @@ D4, and 1355 at the head of this branch with the review fixes.
   the modal reports the read's outcome, never the verdict alone.
 - **The taxonomy's pattern guard bounds ids, not URLs**: a pattern it
   accepted took 1.27 s on a 2048-character URL. The settings policy adds a
-  one-unbounded-quantifier rule and a timing run against URL-shaped values.
+  one-unbounded-quantifier rule, and the pass-through evaluates the policy in
+  a worker under a 100 ms deadline (a rule that does not finish counts as
+  matched); the start-time timing run it first had is gone (Review fixes).
 - **A loopback target from a remote page is the reader's own machine.** The
   browser's same-machine rule refuses it, with a way out per posture.
 - **The fake MCP answered every path with a JSON-RPC 200.** Its admin
@@ -96,7 +98,8 @@ read's outcome, then offers **Open the live panel** on the same target.
 `OBSERVOGRAM_MCP_ADMIN_PROXY=1` (M5) moves every request to `POST
 /api/mcp-settings/describe` and `/submit`: admin, the read token never sent,
 `mcpAuth` refused, the origin allowlist for a submit, only the paths the
-server read, the policy re-checked, the platform's `fetch` and never the
+server read, the policy re-checked (in a worker under a 100 ms deadline,
+failing closed), the platform's `fetch` and never the
 transport hook (M10), no redirect, the body never logged or kept, the outcome
 shape only, one `live.mcp-settings` audit row of names and rule indexes (M7).
 The static bundle answers both `501`.
@@ -136,7 +139,23 @@ server versus the studio's connection to it, the UI_CONVENTIONS zone.
 - **It covers every printable ASCII character and every character the pattern
   names, on a budget per filler** (`tools/lib/mcp-server-settings.mjs`): a
   slow part built on `_`, `%`, `=`, `&`, `~`, `:`, `?` or `é` is refused too.
-  Tests: 1354 → 1355.
+  Tests: 1354 → 1355. Both are superseded by the next fix: the timing run no
+  longer refuses anything.
+- **The pass-through evaluates the settings policy in a worker with a 100 ms
+  deadline and fails closed; the start-time timing run no longer gates**
+  (`server/mcp-settings-eval.mjs`, new; `server/routes/mcp-settings.mjs`;
+  `tools/lib/mcp-server-settings.mjs`). A third bypass —
+  `^.*_{0,60}_{0,60}_{0,60}_{0,60}!$`, `\W$` or `[!-]$` after the slow part,
+  which every probe input fails fast — compiled clean and then held the
+  whole studio server for seconds to minutes on one submit. A rule that does
+  not finish within the deadline counts as matched: its warning applies, the
+  submit is a 409 until its acknowledgement is ticked, the worker is
+  terminated, and one stderr line names the rule and the deadline, never the
+  value. The start keeps the shape checks (nested quantifier, at most one
+  unbounded quantifier, 200 characters); the studio evaluates the policy in
+  the page, where a slow pattern freezes only the admin's own tab. Reverting
+  the route to synchronous evaluation fails the new server case (its
+  `GET /api/mcp-settings` times out behind the blocked submit). Tests: 1355 → 1357.
 - The other review fixes add assertions to existing tests or change docs;
   the count is unchanged.
 
@@ -162,6 +181,7 @@ Run during the build and the review; each change, made alone, failed the named t
 | The browser following redirects (`redirect: 'follow'`) | `server/test-authz.mjs`, the fetch-exemption guard; BROWSER 8 (the redirect's sink) |
 | The pass-through following redirects | `server/test-mcp-settings.mjs`, the redirect case (the sink receives nothing) |
 | The pass-through's acknowledgement check removed | `server/test-mcp-settings.mjs`, the settings-policy re-check case (the 409) |
+| The pass-through evaluating the policy on the request thread (`policyFindings` called directly instead of `evaluatePolicy`) | `server/test-mcp-settings.mjs`, the slow-pattern case (the `GET /api/mcp-settings` sent beside the submit times out after 5 s) |
 | The pass-through building a described submit from the caller's `generic` block instead of the description it read again | `server/test-mcp-settings.mjs`, the described-submit case (the description's endpoint, not the caller's path) |
 | The pass-through's upstream request sent through the transport hook (M10) | `server/test-mcp-settings.mjs`, the transport-hook case |
 | The line after the connection test mirroring the ping's `status` instead of its read's outcome | `tools/test-mcp-settings-model.mjs`, the after-the-connection-test case; BROWSER 1, 4 and 12 |

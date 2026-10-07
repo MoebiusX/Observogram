@@ -20,8 +20,11 @@
 //
 // The policy only adds friction: it never enables a control, lifts a
 // refusal or changes a target. The studio reads it when the modal opens and
-// compiles it again with `timed: false` (the server timed every pattern
-// here). Unset (the default): nothing is read, and the route answers
+// compiles it again with `timed: false` (the server ran the id clocks
+// here). The load checks each pattern's shape, not its speed: the
+// pass-through evaluates the policy in a worker under a 100 ms deadline
+// (server/mcp-settings-eval.mjs), a rule that does not finish counting as
+// matched. Unset (the default): nothing is read, and the route answers
 // { ok: true, proxy, policy: null, configured: false }.
 
 import { readFileSync } from 'node:fs';

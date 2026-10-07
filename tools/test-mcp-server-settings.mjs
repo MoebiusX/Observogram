@@ -589,10 +589,10 @@ test('the settings bounds: more than one unbounded quantifier is refused (the me
 
 const PREFIX_SLOW = '^https://[a./-]{0,36}[a./-]{0,36}[a./-]{0,36}[a./-]{0,36}[a./-]{0,36}!';
 
-test('the settings bounds: a pattern slow only on URL-shaped values is refused by the timing run; timed: false skips only the clocks', () => {
+test('the settings bounds: a pattern slow only on URL-shaped values compiles — the loader checks shape, it runs no timing probe; timed: false skips only the id clocks', () => {
   assert.ok(compileBoundedPattern(PREFIX_SLOW).re, 'the taxonomy\'s id timing admits it (its ids never get past "https://")');
-  assert.deepEqual(compileSettingsPolicy({ version: 1, rules: [{ when: { type: 'url', pattern: PREFIX_SLOW }, warn: 'w' }] }).errors,
-    ['rules[0].when: pattern too slow against a 512-character URL-shaped value']);
+  assert.deepEqual(compileSettingsPolicy({ version: 1, rules: [{ when: { type: 'url', pattern: PREFIX_SLOW }, warn: 'w' }] }).errors, [],
+    'no probe can prove a pattern fast on every value; the studio server bounds the evaluation instead (server/mcp-settings-eval.mjs)');
   const untimed = compileSettingsPolicy({ version: 1, rules: [{ when: { type: 'url', pattern: PREFIX_SLOW }, warn: 'w' }] }, { timed: false });
   assert.deepEqual(untimed.errors, []);
   // The static checks still run untimed.
@@ -600,39 +600,34 @@ test('the settings bounds: a pattern slow only on URL-shaped values is refused b
     ['rules[0].when: pattern has more than one unbounded quantifier (*, + or {n,}), which a URL-length value can make slow']);
 });
 
-test('the settings bounds: the timing run covers digits, capitals and white space, and stops early on a steep pattern', () => {
-  const errs = (pattern) => compileSettingsPolicy({ version: 1, rules: [{ when: { type: 'url', pattern }, warn: 'w' }] }).errors;
-  const TOO_SLOW = ['rules[0].when: pattern too slow against a 512-character URL-shaped value'];
+test('the settings bounds: every pattern the retired timing probe caught, and the ones that slipped past it, compile in milliseconds — speed is the evaluator\'s deadline, not the loader\'s', () => {
+  const errs = (pattern, type = 'url') => compileSettingsPolicy({ version: 1, rules: [{ when: { type, pattern }, warn: 'w' }] }).errors;
+  const slow = (c, end = 'x') => `^.*${c}{0,60}${c}{0,60}${c}{0,60}${c}{0,60}${end}$`;
   for (const pattern of [
-    '^.*\\d{0,60}\\d{0,60}\\d{0,60}\\d{0,60}x$',
-    '^https://.*\\d{0,60}\\d{0,60}\\d{0,60}\\.internal$',
-    '^.*[A-Z]{0,60}[A-Z]{0,60}[A-Z]{0,60}x$',
-    '^.*\\s{0,60}\\s{0,60}\\s{0,60}x$',
+    '^.*\\d{0,60}\\d{0,60}\\d{0,60}\\d{0,60}x$', '^https://.*\\d{0,60}\\d{0,60}\\d{0,60}\\.internal$', '^.*[A-Z]{0,60}[A-Z]{0,60}[A-Z]{0,60}x$',
+    slow('_'), slow('%'), slow('[=&]'), slow('é'),
+    // A slow part followed by what a probe's last character satisfies: no probe input is slow on it.
+    slow('_', '!'), slow('_', '\\W'), slow('\\d', '[!-]'),
   ]) {
-    assert.deepEqual(compileSettingsPolicy({ version: 1, rules: [{ when: { type: 'url', pattern }, warn: 'w' }] }, { timed: false }).errors, [], `${pattern}: the static checks admit it`);
     const t0 = Date.now();
-    assert.deepEqual(errs(pattern), TOO_SLOW, pattern);
-    assert.ok(Date.now() - t0 < 2000, `${pattern}: refused without running the full-length value (${Date.now() - t0} ms)`);
+    assert.deepEqual(errs(pattern, 'text'), [], pattern);
+    assert.ok(Date.now() - t0 < 1000, `${pattern}: compiled without running it on a long value (${Date.now() - t0} ms)`);
   }
-  assert.deepEqual(errs('^https://[A-Za-z0-9 ./-]{1,200}\\.corp\\.example/?$'), [], 'a linear pattern over the same classes passes');
+  // Every bound of shape still refuses.
+  assert.deepEqual(errs('^(a+)+$'), ['rules[0].when: nested quantifier']);
+  assert.deepEqual(errs('^https://.*.*'), ['rules[0].when: pattern has more than one unbounded quantifier (*, + or {n,}), which a URL-length value can make slow']);
+  assert.deepEqual(errs(`^${'x'.repeat(200)}`), ['rules[0].when: pattern longer than 200 characters']);
 });
 
-test('the settings bounds: the timing run covers every printable URL character and every character the pattern names, not a short list of classes', () => {
+test('the settings bounds: a pattern linear in the value compiles, and policyFindings runs it on the calling thread as written', () => {
   const errs = (pattern) => compileSettingsPolicy({ version: 1, rules: [{ when: { type: 'text', pattern }, warn: 'w' }] }).errors;
-  const TOO_SLOW = ['rules[0].when: pattern too slow against a 512-character URL-shaped value'];
-  const slow = (c) => `^.*${c}{0,60}${c}{0,60}${c}{0,60}${c}{0,60}x$`;
-  for (const pattern of [
-    slow('_'), slow('%'), slow('[=&]'), slow('~'), slow(':'), slow('\\?'), slow('@'), slow(';'), slow('!'),
-    slow('é'), slow('\\u00e9'), slow('\\xe9'),
-  ]) {
-    assert.deepEqual(compileSettingsPolicy({ version: 1, rules: [{ when: { type: 'text', pattern }, warn: 'w' }] }, { timed: false }).errors, [], `${pattern}: the static checks admit it`);
-    const t0 = Date.now();
-    assert.deepEqual(errs(pattern), TOO_SLOW, pattern);
-    assert.ok(Date.now() - t0 < 2000, `${pattern}: refused without running the full-length value (${Date.now() - t0} ms)`);
-  }
   for (const pattern of ['^.*[^a]{0,60}x$', '^https://[a-z0-9.-]{1,63}\\.example\\.com/[a-z0-9/_%=&~:?-]{0,200}$', '^http://.*$']) {
-    assert.deepEqual(errs(pattern), [], `${pattern}: a pattern linear in the value passes — the budget is per filler, not shared by all of them`);
+    assert.deepEqual(errs(pattern), [], pattern);
   }
+  const p = compileSettingsPolicy({ version: 1, rules: [{ when: { type: 'url', pattern: '^https://[a-z0-9.-]{1,63}\\.example\\.com/' }, warn: 'w', require: { ack: 'ok' } }] }).policy;
+  const d = genericDescriptor();
+  assert.deepEqual(policyFindings(p, d, { url: 'https://a.example.com/x' }).map((f) => [f.rule, f.field, f.ack]), [[0, 'url', 'ok']]);
+  assert.deepEqual(policyFindings(p, d, { url: 'https://a.example.org/x' }), []);
 });
 
 test('the policy\'s generic block: path, names (any subset) and auth, each validated; secrets of the form refused as rule fields', () => {

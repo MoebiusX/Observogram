@@ -27,7 +27,9 @@
  * the allowlist, https and the studio's own address; a redirect, a
  * timeout and an oversize description refused naming the origin only; the
  * endpoint's read token never sent, the transport hook never used, the
- * exact request headers; the policy re-checked (409, then forwarded); an
+ * exact request headers; the policy re-checked (409, then forwarded) in a
+ * worker under a 100 ms deadline (server/mcp-settings-eval.mjs: a slow
+ * pattern counts as matched and the server keeps answering); an
  * echoed secret redacted; one live.mcp-settings row without a value; the
  * secret in no log line, no store file and nothing under the workspace.
  */
@@ -52,6 +54,8 @@ for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) 
 const { readSettingsPolicyConfig, MCP_SETTINGS_POLICY_ENV, MCP_ADMIN_PROXY_ENV } = await import('./mcp-settings-policy.mjs');
 const { hashPassword } = await import('./auth.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
+const { evaluatePolicy, POLICY_EVAL_DEADLINE_MS } = await import('./mcp-settings-eval.mjs');
+const { compileSettingsPolicy, genericDescriptor } = await import('../tools/lib/mcp-server-settings.mjs');
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const FIXTURE = join(ROOT, 'tools', 'fixtures', 'mcp-settings', 'policy.json');
@@ -534,6 +538,62 @@ test('the settings policy is re-checked against the description the server read:
   const g2 = await s.post(SUBMIT, { mcpEndpointId: id, mode: 'generic', values: { url: 'https://approved.example/', secret: SECRET }, acks: [0] });
   assert.equal(g2.status, 200, g2.text);
   assertNowhere(s, [SECRET]);
+});
+
+// A slow part followed by what a probe's last character satisfies: compiles
+// in milliseconds, backtracks for minutes on a long underscore run.
+const BANG = '^.*_{0,60}_{0,60}_{0,60}_{0,60}!$';
+
+test('evaluatePolicy: a rule that does not finish within the deadline counts as matched, its warn and ack apply; a fast rule before it is evaluated as written; one line names the rule, never the value', async () => {
+  assert.equal(POLICY_EVAL_DEADLINE_MS, 100);
+  const { policy, errors } = compileSettingsPolicy({ version: 1, rules: [
+    { when: { field: 'url', pattern: '^https://slow\\.example/' }, warn: 'Fast match.', require: { ack: 'ack 0' } },
+    { when: { field: 'user', pattern: '^root$' }, warn: 'Fast miss.' },
+    { when: { type: 'url', pattern: BANG }, warn: 'Slow pattern.', require: { ack: 'ack 2' } },
+  ] });
+  assert.deepEqual(errors, [], 'the shape checks admit the slow pattern');
+  const d = genericDescriptor();
+  const value = `https://slow.example/${'_'.repeat(400)}`;
+  const lines = [];
+  const t0 = Date.now();
+  const out = await evaluatePolicy(policy, d, { url: value, user: 'bob' }, { log: (l) => lines.push(l) });
+  assert.ok(Date.now() - t0 < 2000, `answered within the deadline plus a worker start (${Date.now() - t0} ms)`);
+  assert.deepEqual(out.timedOut, [2]);
+  assert.deepEqual(out.findings.map((f) => [f.rule, f.field, f.ack, f.timedOut === true]), [[0, 'url', 'ack 0', false], [2, 'url', 'ack 2', true]]);
+  assert.equal(out.findings[1].note, 'Policy rule 3 did not finish within 100 ms, so it counts as matched');
+  assert.deepEqual(lines, ['[mcp-settings] policy rules[2] did not finish within 100 ms — counted as matched']);
+  // All fast: exactly policyFindings' answer, nothing logged.
+  const fast = await evaluatePolicy(policy, d, { url: 'https://slow.example/a', user: 'root' }, { log: (l) => lines.push(l) });
+  assert.deepEqual(fast.timedOut, []);
+  assert.deepEqual(fast.findings.map((f) => [f.rule, f.field, f.ack]), [[0, 'url', 'ack 0'], [1, 'user', null]]);
+  assert.equal(lines.length, 1);
+  assert.deepEqual(await evaluatePolicy(null, d, { url: value }), { findings: [], timedOut: [] });
+});
+
+test('a slow policy pattern costs its acknowledgement, never the server: the submit is a 409 within 2 s naming the rule, the server answers meanwhile, with the ack the configure goes; the log names the rule, never the value', { timeout: 30_000 }, async () => {
+  const f = await fakeMcp({ descriptor: null });
+  const policyFile = file('policy-slow.json', JSON.stringify({ version: 1, rules: [{ when: { type: 'url', pattern: BANG }, warn: 'Unreviewed backend.', require: { ack: 'I reviewed the backend' } }] }));
+  const s = await studio({ OBSERVOGRAM_MCP_SETTINGS_POLICY: policyFile });
+  const id = await s.register(f.url);
+  const value = `https://slow.example/${'_'.repeat(480)}`;
+  const body = (acks) => ({ mcpEndpointId: id, mode: 'generic', values: { url: value, secret: SECRET }, acks });
+  const t0 = Date.now();
+  const pending = s.post(SUBMIT, body([]));
+  const g0 = Date.now();
+  const r = await fetch(`${s.base}/api/mcp-settings`, { headers: s.headers('ada'), signal: AbortSignal.timeout(5000) });
+  assert.equal(r.status, 200);
+  assert.ok(Date.now() - g0 < 1500, `another request answers while the submit is checked (${Date.now() - g0} ms)`);
+  const r1 = await pending;
+  assert.ok(Date.now() - t0 < 2000, `the submit answers within 2 s (${Date.now() - t0} ms)`);
+  assert.deepEqual([r1.status, r1.json.denied, r1.json.rule, r1.json.error], [409, 'policy-ack', 0, 'Unreviewed backend. — tick "I reviewed the backend" in the server settings']);
+  assert.ok(!r1.text.includes('_'.repeat(20)), 'the answer never echoes the value');
+  assert.equal(f.adminRequests.filter((x) => x.method === 'POST').length, 0, 'nothing sent');
+  const r2 = await s.post(SUBMIT, body([0]));
+  assert.equal(r2.status, 200, r2.text);
+  assert.equal(f.adminRequests.filter((x) => x.method === 'POST').length, 1, 'acknowledged, the configure goes');
+  const lines = s.logs().stderr.split('\n').filter((l) => l.includes('did not finish'));
+  assert.deepEqual(lines, Array(2).fill('[mcp-settings] policy rules[0] did not finish within 100 ms — counted as matched'));
+  assertNowhere(s, [SECRET, value, '_'.repeat(60)]);
 });
 
 test('without sign-in (open loopback): the anonymous local caller describes and submits by id from this machine; a typed URL stays refused by kind', async () => {

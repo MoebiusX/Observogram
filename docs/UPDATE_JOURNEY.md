@@ -1258,8 +1258,22 @@ milliseconds rather than blocking the server for seconds. Tests: 1353 → 1354
 printable ASCII character and every character the pattern names, on a budget
 per filler, so a slow part built on `_`, `%`, `=`, `&`, `~`, `:`, `?` or `é`
 is refused too. Tests: 1354 → 1355 (one more in
-`tools/test-mcp-server-settings.mjs`). The other review fixes add assertions
-to existing tests or change docs; the count is unchanged.
+`tools/test-mcp-server-settings.mjs`). A third bypass ended the timing run: a
+pattern whose slow part is followed by something a probe's last character
+satisfies (`^.*_{0,60}_{0,60}_{0,60}_{0,60}!$`) failed fast on every probe and
+backtracked for minutes on a real value, blocking the whole studio server
+through the pass-through. The pass-through now evaluates the policy in a
+worker (`server/mcp-settings-eval.mjs`, new) with a 100 ms deadline and fails
+closed — a rule that does not finish counts as matched, so its warning
+applies and its acknowledgement is required, and one log line names the rule,
+never the value — and the start checks a pattern's shape only (the timing
+run is gone; the nested-quantifier, one-unbounded-quantifier and
+200-character rules stay). The studio still evaluates the policy in the page,
+where a slow pattern freezes only the admin's own tab. Tests: 1355 → 1357
+(two more in `server/test-mcp-settings.mjs`: the evaluator's deadline, and a
+child server that answers the slow submit with the 409 within 2 s and serves
+another request meanwhile). The other review fixes add assertions to existing
+tests or change docs; the count is unchanged.
 
 The batch's delivery report, `docs/DELIVERY-REBADGE-BATCH4.md`, is written
 per item and guarded by `tools/test-doc-test-totals.mjs` as the batch 3

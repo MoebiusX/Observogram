@@ -42,7 +42,10 @@
 // A rule only adds friction: a warning, and an acknowledgement that blocks
 // the send until it is ticked. A rule that cannot be evaluated (its field is
 // absent, or a secret) fails closed. Patterns follow the taxonomy's rule
-// (compileBoundedPattern) plus bounds for URL-length values.
+// (compileBoundedPattern) plus a bound for URL-length values — checks of
+// shape, not of speed: policyFindings runs the patterns on the caller's
+// thread, so the studio server runs it in a worker under a deadline
+// (server/mcp-settings-eval.mjs) and the page runs it in the admin's tab.
 
 import { compileBoundedPattern } from './artefact-classify.mjs';
 import { mcpUrlPolicy } from './mcp-url-safety.mjs';
@@ -65,13 +68,6 @@ const CHECK_STATUSES = Object.freeze(['pass', 'fail', 'skip']);
 const SECRET_KEY_CLASS = /^(pass(word)?|secret|token|api[-_]?key|credential|authorization)$/i;
 const REDACTED = '<redacted>';
 const MIN_ECHO_LENGTH = 4;
-const PATTERN_BUDGET_MS = 50;
-// Every printable ASCII character, the space included — all a normalised
-// href is made of (a URL value percent-encodes the rest) — so a slow part
-// built on any class a URL can carry (\d, [A-Z], \s, %, _, =, &, ~, :, ?
-// …) is exercised, not only the classes someone thought of. fillersFor adds
-// every other character the pattern names, for a text value.
-const FILLERS = Object.freeze(Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i)));
 
 const encoder = new TextEncoder();
 const byteLength = (s) => encoder.encode(s).length;
@@ -632,72 +628,6 @@ function unboundedQuantifiers(pattern) {
   return n;
 }
 
-// The literal text a pattern starts with after `^` (`^https://` → `https://`),
-// dropping a last character a quantifier makes optional.
-function literalPrefix(pattern) {
-  let out = '';
-  for (let i = 1; i < pattern.length; i++) {
-    const c = pattern[i];
-    let lit = null;
-    let len = 1;
-    if (c === '\\') {
-      const e = pattern[i + 1];
-      if (e !== undefined && /[^A-Za-z0-9]/.test(e)) { lit = e; len = 2; }
-    } else if (!/[.*+?()[\]{}|^$]/.test(c)) lit = c;
-    if (lit === null) {
-      if (/[*+?{]/.test(c)) out = out.slice(0, -1);
-      break;
-    }
-    out += lit;
-    i += len - 1;
-  }
-  return out;
-}
-
-// The fillers for one pattern: FILLERS, then every character outside them
-// the pattern names — literally, or as a \xHH, \uHHHH, \cX or \t-style
-// escape (which covers a class's range ends) — so a slow part built on a
-// character a text value may hold (an "é") is exercised too.
-function fillersFor(pattern) {
-  const out = new Set(FILLERS);
-  const ESCAPES = { t: '\t', n: '\n', r: '\r', f: '\f', v: '\v', '0': '\0' };
-  for (let i = 0; i < pattern.length; i++) {
-    const c = pattern[i];
-    if (c !== '\\') { out.add(c); continue; }
-    const e = pattern[i + 1];
-    let m;
-    if (e === 'x' && (m = /^[0-9A-Fa-f]{2}/.exec(pattern.slice(i + 2)))) { out.add(String.fromCharCode(parseInt(m[0], 16))); i += 3; }
-    else if (e === 'u' && (m = /^[0-9A-Fa-f]{4}/.exec(pattern.slice(i + 2)))) { out.add(String.fromCharCode(parseInt(m[0], 16))); i += 5; }
-    else if (e === 'c' && /^[A-Za-z]$/.test(pattern[i + 2] ?? '')) { out.add(String.fromCharCode(pattern.charCodeAt(i + 2) % 32)); i += 2; }
-    else if (e !== undefined) { out.add(ESCAPES[e] ?? e); i += 1; }
-  }
-  return [...out];
-}
-
-// Each filler runs at growing lengths (×1.25 up to the full value), with the
-// clock read after every run: a pattern whose cost climbs steeply with length
-// is caught on a short value, so the check itself stays near the budget
-// rather than running the full-length value for seconds. The budget is per
-// filler — what one value costs at match time —, so a linear pattern is not
-// refused for the number of fillers it was tried on.
-function slowOnUrls(re, pattern) {
-  const prefix = literalPrefix(pattern);
-  const room = Math.max(0, SETTINGS_LIMITS.policyValue - prefix.length - 1);
-  const fillers = fillersFor(pattern);
-  for (const head of new Set([prefix, ''])) {
-    const full = head ? room : SETTINGS_LIMITS.policyValue - 1;
-    for (const f of fillers) {
-      const t0 = Date.now();
-      for (let n = Math.min(8, full); ; n = Math.min(full, Math.ceil(n * 1.25))) {
-        re.test(`${head}${f.repeat(n)}!`);
-        if (Date.now() - t0 > PATTERN_BUDGET_MS) return true;
-        if (n >= full) break;
-      }
-    }
-  }
-  return false;
-}
-
 const STRICT = (obj, keys, where, errors) => {
   for (const k of Object.keys(obj)) if (!keys.includes(k)) { errors.push(`${where}: unknown key ${q(k)}`); return false; }
   return true;
@@ -709,13 +639,12 @@ const STRICT = (obj, keys, where, errors) => {
  * version other than 1, 0 or more than 32 rules, a rule naming a secret are
  * errors. A pattern passes compileBoundedPattern (anchored, ≤ 200
  * characters, flags "" or "i", no quantified group, timed against ids) and
- * then the settings bounds: at most one unbounded quantifier outside a
- * class, and — unless `timed` is false — the 50 ms budget against values
- * shaped like a URL (the pattern's literal prefix, then up to 512 characters
- * of one filler — each printable ASCII character, the space included, and
- * every other character the pattern names — 50 ms per filler).
- * `timed: false` (the browser, re-reading a file the server timed)
- * skips only the clocks.
+ * then the settings bound: at most one unbounded quantifier outside a
+ * class. These are checks of shape: no load-time probe can prove a pattern
+ * fast on every value, so none is run — a caller that must not block runs
+ * policyFindings under a deadline (the studio server: a worker, 100 ms,
+ * a rule that does not finish counting as matched). `timed: false` (the
+ * browser, re-reading a file the server checked) skips only the id clocks.
  */
 export function compileSettingsPolicy(json, { timed = true } = {}) {
   const errors = [];
@@ -767,7 +696,6 @@ export function compileSettingsPolicy(json, { timed = true } = {}) {
       const compiled = compileBoundedPattern(w.pattern, { flags, noun: 'pattern', timed });
       if (compiled.reason) { errors.push(`${where}.when: ${compiled.reason}`); return; }
       if (unboundedQuantifiers(w.pattern) > 1) { errors.push(`${where}.when: pattern has more than one unbounded quantifier (*, + or {n,}), which a URL-length value can make slow`); return; }
-      if (timed && slowOnUrls(compiled.re, w.pattern)) { errors.push(`${where}.when: pattern too slow against a ${SETTINGS_LIMITS.policyValue}-character URL-shaped value`); return; }
       if (!isLine(raw.warn, SETTINGS_LIMITS.warn)) { errors.push(`${where}.warn must be one line of 1–${SETTINGS_LIMITS.warn} characters`); return; }
       let ack = null;
       if (raw.require !== undefined) {
@@ -791,7 +719,9 @@ export function compileSettingsPolicy(json, { timed = true } = {}) {
  * refuses cannot be sent, so it is not checked); a boolean as "true" /
  * "false". A value longer than 512 characters is itself a finding. A rule
  * whose field the form lacks, or holds as a secret, cannot run: an
- * `unevaluated` finding, whose ack is required like a match's.
+ * `unevaluated` finding, whose ack is required like a match's. The patterns
+ * run on the calling thread, unbounded in time: a server runs this under a
+ * deadline (server/mcp-settings-eval.mjs).
  */
 export function policyFindings(policy, descriptor, values) {
   if (!policy) return [];

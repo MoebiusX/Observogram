@@ -47,7 +47,10 @@
 //      path rule (tools/lib/mcp-server-settings.mjs).
 //   5. submit re-checks the settings policy against the description it just
 //      read: an acknowledgement a matching (or unevaluable) rule requires and
-//      the caller did not tick is a 409.
+//      the caller did not tick is a 409. The patterns run in a worker with a
+//      100 ms deadline (server/mcp-settings-eval.mjs), never on this thread:
+//      a rule that does not finish counts as matched, so a slow pattern
+//      costs its acknowledgement, never the server.
 //   6. One request upstream with the platform's fetch — never the transport
 //      hook (M10): no redirect followed (a 3xx is refused, naming its origin
 //      only), 10 s, the answer read with a cap (16 KiB for a description,
@@ -69,11 +72,12 @@
 
 import express from 'express';
 import {
-  SETTINGS_DESCRIPTOR_PATH, SETTINGS_LIMITS, genericDescriptor, outcomeOf, parseSettingsDescriptor, policyFindings,
-  redactEchoes, resolveSettingsPath, settingsRequest, settingsRoot,
+  SETTINGS_DESCRIPTOR_PATH, SETTINGS_LIMITS, genericDescriptor, outcomeOf, parseSettingsDescriptor, redactEchoes,
+  resolveSettingsPath, settingsRequest, settingsRoot,
 } from '../../tools/lib/mcp-server-settings.mjs';
 import { isLoopbackOrigin } from '../../tools/lib/mcp-url-safety.mjs';
 import { auditAfter } from '../audit-after.mjs';
+import { evaluatePolicy } from '../mcp-settings-eval.mjs';
 import { mcpAdminProxyOn, settingsPolicy, settingsPolicyAnswer } from '../mcp-settings-policy.mjs';
 import { mcpCallerOf, mcpOriginDecision, mcpRefusalBody, redactTarget } from '../mcp-target-policy.mjs';
 import { resolveMcpTarget } from '../service-admin.mjs';
@@ -343,10 +347,11 @@ export function mcpSettingsRoutes({ authorize }) {
       const built = settingsRequest(descriptor, clean, { action });
       if (built.reason) return bad(scrub(built.reason));
 
-      // The policy, against the description just read. An action sets no
-      // value the modal checks, so only a rule that matches a field the
-      // action sends applies to it.
-      let findings = policyFindings(policy, descriptor, clean);
+      // The policy, against the description just read, in a worker under a
+      // deadline (server/mcp-settings-eval.mjs): a rule that does not finish
+      // counts as matched. An action sets no value the modal checks, so only
+      // a rule that matches a field the action sends applies to it.
+      let { findings } = await evaluatePolicy(policy, descriptor, clean);
       if (action !== null) findings = findings.filter((f) => !f.unevaluated && built.sent.includes(f.field));
       const ticked = new Set(acks);
       const missing = findings.find((f) => f.ack && !ticked.has(f.rule));

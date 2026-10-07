@@ -390,7 +390,12 @@ a rule whose field the form does not have cannot run, says so, and still
 requires its acknowledgement. Acknowledgements are never remembered. On the
 browser-direct path that block is advisory; the pass-through re-checks it
 against the description it reads itself. A deployment that needs the rule
-enforced enforces it in the MCP server.
+enforced enforces it in the MCP server. A pattern is checked for its shape
+when the file loads (anchored, at most 200 characters, no quantified group,
+at most one unbounded quantifier), not for its speed: the pass-through
+evaluates the policy in a worker with a 100 ms deadline, and a rule that
+does not finish counts as matched. The studio evaluates the policy in the
+page directly, so a slow pattern freezes only that admin's tab.
 
 ### The pass-through: `OBSERVOGRAM_MCP_ADMIN_PROXY=1`
 
@@ -414,7 +419,11 @@ server is exposed without sign-in. The studio server:
   (or the action's endpoint) it declares, whatever the caller says; a generic
   submit only to the settings policy's `generic.path`, else `/configure`;
 - re-checks the settings policy against what it read (a missing
-  acknowledgement is a 409);
+  acknowledgement is a 409), in a `node:worker_threads` worker with a 100 ms
+  deadline (`server/mcp-settings-eval.mjs`): past it the worker is
+  terminated, every rule that did not finish counts as matched — its warning
+  applies and its acknowledgement is required —, and one stderr line names
+  the rules and the deadline, never a value;
 - sends with the platform's `fetch`, **never through the transport hook**, so
   a hook's own credential never rides to a settings path; no redirect
   followed; exactly `Content-Type`, `Accept` and the description's own
