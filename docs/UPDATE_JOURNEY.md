@@ -1160,11 +1160,14 @@ redacts an error, so an MCP that repeats the endpoint's read token in a
 result (a version string) no longer carries it into an operator's ping or a
 pack every viewer of the org reads. Tests: 1246 → 1247 (one more in
 `server/test-mcp-ping.mjs`; six assertions in `tools/test-mcp-transport.mjs`).
-Only a secret of 12 characters or more is redacted from a successful result,
-and a tool's JSON text is parsed before it is redacted, so a short
-credential-named value (`sortkey=title`) or a placeholder bearer never
-renames a key, cuts an id or breaks the JSON of a pack or the deploy's
-rollback snapshot.
+A value merely taken from a credential-named query parameter is redacted
+from a successful result only from 12 characters, and a tool's JSON text is
+parsed before it is redacted, so a short credential-named value
+(`sortkey=title`) never renames a key, cuts an id or breaks the JSON of a
+pack or the deploy's rollback snapshot. The credential itself — the bearer
+(a server-held read token or the caller's `mcpAuth`) and the URL's userinfo
+— is redacted from it at any length: a 7-character read token the MCP
+repeats in its version no longer reaches an operator's ping.
 
 Two more review fixes. A ping nothing answered before `initialize`
 (unreachable, or silent until the deadline) says `null` for the token's outcome, never `sent`, which would
@@ -1172,7 +1175,10 @@ claim the MCP answered. Tests: 1247 → 1248 (one more in
 `server/test-mcp-ping.mjs`). The ping's deadline aborts the request still in
 flight — its signal reaches the client — so nothing stays open to the MCP
 after the route has answered `timeout`. Tests: 1248 → 1249 (one more in
-`tools/test-mcp-ping.mjs`).
+`tools/test-mcp-ping.mjs`). A short server-held read token is redacted from
+a successful answer like a long one — the minimum length applies only to
+credential-named query values. Tests: 1249 → 1250 (one more in
+`server/test-mcp-ping.mjs`).
 
 The batch's delivery report, `docs/DELIVERY-REBADGE-BATCH3.md`, is written
 per item — what shipped, the measured `Tests:` pair, what is deferred by name

@@ -335,11 +335,11 @@ for (const [label, hook] of [
     } finally { await new Promise(r => srv.close(r)); }
   }
 
-  // A short credential-named value (the URL-safety rule counts sortkey and
-  // partitionkey as credentials) or a placeholder bearer is ordinary data a
-  // real answer holds too: a successful answer is not redacted for it — no
-  // key renamed, no id cut, no JSON text left unparsed — while an error's
-  // text still is.
+  // A short credential-named query value (the URL-safety rule counts sortkey
+  // and partitionkey as credentials) is ordinary data a real answer holds
+  // too: a successful answer is not redacted for it — no key renamed, no id
+  // cut, no JSON text left unparsed — while an error's text is redacted for
+  // every secret, a short bearer included.
   const data = { count: 2, results: [{ uid: 'a1', title: 'Orders' }, { uid: 'b2', title: 'Payments' }] };
   const dataServer = createServer(async (req, res) => {
     let raw = '';
@@ -354,15 +354,28 @@ for (const [label, hook] of [
   await new Promise(r => dataServer.listen(0, '127.0.0.1', r));
   try {
     const base = `http://127.0.0.1:${dataServer.address().port}/mcp`;
-    for (const [query, auth] of [['?sortkey=title', null], ['?partitionkey=1', null], ['?apikey=Orders', null], ['?partitionkey=2', null], ['', 'dev'], ['', 'a']]) {
-      const c = createMcpClient({ mcpUrl: base + query, mcpAuth: auth, transport: null });
+    for (const query of ['?sortkey=title', '?partitionkey=1', '?apikey=Orders', '?partitionkey=2']) {
+      const c = createMcpClient({ mcpUrl: base + query, mcpAuth: null, transport: null });
       const got = await c.callTool(SYSTEM_HEALTH, {});
-      assert(JSON.stringify(got) === JSON.stringify(data), `a short secret (${query || `bearer ${auth}`}) leaves a successful answer intact`, got);
+      assert(JSON.stringify(got) === JSON.stringify(data), `a short credential-named query value (${query}) leaves a successful answer intact`, got);
     }
     const dev = createMcpClient({ mcpUrl: base, mcpAuth: 'dev', transport: null });
     const failed = await expectFail(() => dev.callTool(SYSTEM_HEALTH, { fail: true }));
     assert(failed?.message === `${SYSTEM_HEALTH}: refused Bearer <redacted>`, 'an error\'s text is still redacted for a short secret', failed?.message);
   } finally { await new Promise(r => dataServer.close(r)); }
+
+  // The credential itself is another class: the bearer (a server-held read
+  // token or the caller's mcpAuth) and the URL's userinfo are redacted from
+  // a successful answer at any length — a 7-character token repeated in a
+  // version string never comes back — while a short credential-named query
+  // value beside them still leaves the data intact.
+  const echoFetch = async (url, init) => new Response(JSON.stringify({ jsonrpc: '2.0', id: JSON.parse(init.body).id ?? 1,
+    result: { content: [{ type: 'text', text: JSON.stringify({ version: `${init.headers.Authorization} via ${url}`, title: 'Orders' }) }] } }),
+  { status: 200, headers: { 'Content-Type': 'application/json' } });
+  const shortCred = createMcpClient({ mcpUrl: 'http://usr:pw5@127.0.0.1:9/mcp?sortkey=title', mcpAuth: 'rdTok9x', transport: { fetchImpl: echoFetch } });
+  const shortGot = await shortCred.callTool(SYSTEM_HEALTH, {});
+  assert(JSON.stringify(shortGot) === JSON.stringify({ version: 'Bearer <redacted> via http://<redacted>:<redacted>@127.0.0.1:9/mcp?sortkey=title', title: 'Orders' }),
+    'a short bearer and short userinfo are redacted from a successful answer; a short credential-named query value is not', shortGot);
 }
 
 // ---------- 5b. redirects are never followed (D10) ----------

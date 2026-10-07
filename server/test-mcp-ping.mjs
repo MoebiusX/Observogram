@@ -227,6 +227,21 @@ test('an MCP that repeats the token in a successful answer: the read\'s detail s
   assert.ok(!r.text.includes(READ_TOKEN), 'the repeated token is not in the answer');
 });
 
+test('a 7-character server-held token the MCP repeats in a successful answer never reaches the operator — redacted whatever its length', async () => {
+  const SHORT = 'rdTok9x';
+  let echoing = null;
+  echoing = await fake([SYSTEM, HEALTH], (name) => (name === HEALTH ? { version: echoing.authHeaders.at(-1)?.replace(/^Bearer /, '') } : { ok: true }));
+  const id = (await registerMcpEndpoint(BASE, { name: 'acme-short', url: echoing.url, readTokenEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' }, { headers: headersOf('ada') })).id;
+  process.env.OBSERVOGRAM_ORG_ACME_MCP_TOKEN = SHORT;
+  let r;
+  try { r = await ping('oscar', { mcpEndpointId: id }); } finally { process.env.OBSERVOGRAM_ORG_ACME_MCP_TOKEN = READ_TOKEN; }
+  assert.equal(r.status, 200, r.text);
+  assert.equal(echoing.authHeaders.at(-1), `Bearer ${SHORT}`, 'the short token rode and the MCP repeated it');
+  assert.equal(r.json.read.outcome, 'ok');
+  assert.equal(r.json.read.detail, 'version <redacted>');
+  assert.ok(!r.text.includes(SHORT), 'the short token is nowhere in the operator\'s answer');
+});
+
 test('an endpoint nobody answers: 200, unreachable, the sentence names the origin — and the token\'s outcome is null, never sent', async () => {
   const closed = createServer();
   await new Promise((ok) => closed.listen(0, '127.0.0.1', ok));

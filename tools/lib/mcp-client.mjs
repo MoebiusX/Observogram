@@ -83,10 +83,12 @@
 // string of the result rpc() and callTool() return, keys included, a tool's
 // JSON text once parsed — so a result that repeats it cannot carry it into
 // a ping, a pack or a fixture; a result that held none is returned as it
-// came. There only secrets of ANSWER_SECRET_MIN characters or more count: a
-// short credential-named value (sortkey=title, partitionkey=1) or a
-// placeholder bearer is ordinary data a real answer holds too. An error that held none
-// of them is rethrown as it was. Nothing else the hook does is redacted for
+// came. There the credential itself — the bearer (a server-held read token
+// or the caller's mcpAuth) and the URL's userinfo — is redacted at any
+// length; a value merely taken from a credential-named query parameter
+// counts only from ANSWER_SECRET_MIN characters: a short one (sortkey=title,
+// partitionkey=1) is ordinary data a real answer holds too. An error that
+// held none of them is rethrown as it was. Nothing else the hook does is redacted for
 // it; it runs with the process's trust.
 
 import { mcpUrlOrigin, safeMcpUrl, stripMcpUrl } from './mcp-url-safety.mjs';
@@ -96,8 +98,9 @@ export const MCP_PROTOCOL_VERSION = '2025-06-18';
 // The most one MCP answer may hold before the client stops reading it.
 export const MAX_MCP_ANSWER_BYTES = 32 * 1024 * 1024;
 
-// The shortest secret redacted from a successful answer (an error's text is
-// redacted for every secret, whatever its length).
+// The shortest credential-named query value redacted from a successful
+// answer (the bearer and the userinfo are redacted from it at any length,
+// and an error's text for every secret, whatever its length).
 const ANSWER_SECRET_MIN = 12;
 
 // A byte count as the cap's sentence says it: MiB, KiB or bytes, whole.
@@ -136,25 +139,27 @@ export function normaliseTransport(t) {
   return out;
 }
 
-// The secrets of one client: the bearer, the URL's userinfo and the values
-// of its credential-named query parameters (decoded and as they appear in
-// the href), longest first so a value that contains another is replaced
-// whole.
+// The secrets of one client, longest first so a value that contains another
+// is replaced whole: `credentials` — the bearer and the URL's userinfo (raw
+// and decoded) — and `named`, the values of its credential-named query
+// parameters (decoded and as they appear in the href).
 function secretsOf(mcpUrl, mcpAuth) {
-  const set = new Set();
-  const add = (v) => { if (typeof v === 'string' && v !== '') set.add(v); };
-  add(mcpAuth);
+  const credentials = new Set();
+  const named = new Set();
+  const add = (set, v) => { if (typeof v === 'string' && v !== '') set.add(v); };
+  add(credentials, mcpAuth);
   try {
     const url = new URL(String(mcpUrl));
     for (const part of [url.username, url.password]) {
-      add(part);
-      try { add(decodeURIComponent(part)); } catch { /* malformed escape: the raw form is in */ }
+      add(credentials, part);
+      try { add(credentials, decodeURIComponent(part)); } catch { /* malformed escape: the raw form is in */ }
     }
     for (const name of stripMcpUrl(mcpUrl).dropped) {
-      for (const value of url.searchParams.getAll(name)) { add(value); add(encodeURIComponent(value)); }
+      for (const value of url.searchParams.getAll(name)) { add(named, value); add(named, encodeURIComponent(value)); }
     }
   } catch { /* not a URL: the bearer alone */ }
-  return [...set].sort((a, b) => b.length - a.length);
+  const longestFirst = (set) => [...set].sort((a, b) => b.length - a.length);
+  return { credentials: longestFirst(credentials), named: longestFirst(named) };
 }
 
 // The error for an answer that is a redirect: the status, the method and
@@ -213,17 +218,19 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
   // A client that is built and never used must not crash the process on a
   // transport that fails to normalise: the rejection reaches each send().
   transportReady.catch(() => {});
-  const secrets = secretsOf(mcpUrl, mcpAuth);
+  const { credentials, named } = secretsOf(mcpUrl, mcpAuth);
+  const secrets = [...new Set([...credentials, ...named])].sort((a, b) => b.length - a.length);
   const redact = (text) => secrets.reduce((acc, s) => acc.split(s).join('<redacted>'), String(text));
   // A successful answer, redacted the same way: every string in it (keys
   // included), so an MCP that repeats the request in a result (a version
   // string, a description) cannot carry the credential into a ping, a pack
-  // or a fixture — but only the secrets of ANSWER_SECRET_MIN characters or
-  // more: a short value ('1', 'title', a placeholder 'dev') also occurs in
-  // real data, and replacing it there would rename keys, cut ids and break
-  // the JSON a tool answers. With nothing to redact the answer is returned
-  // as it came.
-  const answerSecrets = secrets.filter((s) => s.length >= ANSWER_SECRET_MIN);
+  // or a fixture. The bearer and the userinfo count at any length (a short
+  // read token is still the credential); a credential-named query value
+  // counts only from ANSWER_SECRET_MIN characters: a short one ('1',
+  // 'title') also occurs in real data, and replacing it there would rename
+  // keys, cut ids and break the JSON a tool answers. With nothing to redact
+  // the answer is returned as it came.
+  const answerSecrets = [...new Set([...credentials, ...named.filter((s) => s.length >= ANSWER_SECRET_MIN)])].sort((a, b) => b.length - a.length);
   const redactInAnswer = (text) => answerSecrets.reduce((acc, s) => acc.split(s).join('<redacted>'), text);
   const redactAnswer = (v) => {
     if (answerSecrets.length === 0) return v;
