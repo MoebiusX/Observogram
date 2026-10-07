@@ -53,7 +53,7 @@ import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emit as emitYaml, parse as parseYaml } from './lib/mini-yaml.mjs';
-import { createMcpClient as createMcpClientCore, isTransportHookError } from './lib/mcp-client.mjs';
+import { createMcpClient as createMcpClientCore, isTransportHookError, MCP_PROTOCOL_VERSION } from './lib/mcp-client.mjs';
 import { mcpTransport, describeTransport } from './mcp-transport.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
 import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule, isSpecRecordingRuleName } from './lib/sli-inference.mjs';
@@ -2857,6 +2857,234 @@ export async function buildAndValidate({ mcpUrl, mcpAuth, packName, refreshedAt,
     throw err;
   }
   return { pack, refreshedAt: at };
+}
+
+// ============================================================
+// The ping (rebadge batch 3, C2): "test the connection" without building a
+// pack. initialize (+ notifications/initialized), the whole tools/list
+// (nextCursor followed up to TOOLS_LIST_MAX_PAGES pages) and ONE cheap read
+// — nothing else — within PING_DEADLINE_MS, each request bounded by
+// timeoutMs. The read is the first PING_READS row the MCP advertises, called
+// through probeCandidates so a search asks for one item; it prefers an
+// AUTHENTICATED read: on a tier whose MCP has no credentials for its backend
+// the health read still answers (tools/fixtures/mcp/README.md), so a ping
+// that read only health would say "connected" exactly where a fetch's
+// dashboards stage fails — that row is marked credentialFree and the answer
+// says what it did not check.
+//
+// Returns { verdict, stage, httpStatus, error, limitMs, reachable,
+// initialized, authSent, tools: { names, pages, more } | null, read, timings }
+// (`limitMs`: the timeout or the deadline that passed, on a timeout) —
+// internal: POST /api/mcp/ping shapes the answer (server/routes/live.mjs)
+// and never returns the raw names. `verdict` is read from where a failure
+// surfaced:
+//   connected      initialize and tools/list answered (a read that failed
+//                  is the read's outcome; a tool whose isError text says
+//                  401/403/unauthorized/forbidden is read.backendAuthRefused
+//                  — the MCP's own credentials to its backend)
+//   auth-refused   HTTP 401/403 on initialize, tools/list or tools/call (the
+//                  gateway refused the token sent, or its absence)
+//   unreachable    no HTTP answer (ECONNREFUSED, ENOTFOUND, TLS) or a 5xx
+//   timeout        a request's timeout, or the deadline
+//   not-mcp        any other HTTP status (404), a body that is not a
+//                  JSON-RPC result, a JSON-RPC error, a redirect (refused)
+// Every error text has been redacted by value by the client
+// (tools/lib/mcp-client.mjs). A transport hook fault is thrown, never a
+// verdict: the route answers it 502.
+// ============================================================
+
+export const PING_TIMEOUT_MS = 5000;            // per request (min with MCP_TIMEOUT_MS)
+export const PING_DEADLINE_MS = 10_000;         // the whole ping
+export const TOOLS_LIST_MAX_PAGES = 10;         // shared with snapshot mode
+// The one cheap read: the first row whose capability (and candidate) is
+// advertised. Data only; no tool name. `credentialFree`: its backend answers
+// without credentials, so it proves the MCP, not the MCP's credentials.
+export const PING_READS = Object.freeze([
+  Object.freeze({ capability: 'dashboards', candidate: 'search', runtime: Object.freeze({ grafanaDashboardSearchLimit: 1 }) }),
+  Object.freeze({ capability: 'grafana_version', credentialFree: true }),
+  Object.freeze({ capability: 'system_health' }),
+]);
+export const PING_DETAIL_LENGTH = 100;
+const PING_ERROR_LENGTH = 300;
+const BACKEND_AUTH_TEXT = /\b(401|403)\b|unauthori[sz]ed|forbidden/i;
+
+class PingDeadline extends Error {
+  constructor() { super('the ping deadline passed'); this.name = 'PingDeadline'; }
+}
+
+// The verdict for an error that surfaced at `stage` ('initialize' |
+// 'tools/list' | 'tools/call').
+export function pingVerdictOf(e, stage) {
+  if (e?.name === 'PingDeadline' || e?.name === 'TimeoutError') return { verdict: 'timeout', httpStatus: null };
+  const message = String(e?.message ?? e ?? '');
+  const http = /^MCP HTTP (\d{3}) on /.exec(message);
+  if (http) {
+    const status = Number(http[1]);
+    if (status === 401 || status === 403) return { verdict: 'auth-refused', httpStatus: status };
+    if (status >= 500) return { verdict: 'unreachable', httpStatus: status };
+    return { verdict: 'not-mcp', httpStatus: status };
+  }
+  if (e?.name === 'AbortError') return { verdict: 'timeout', httpStatus: null };
+  if (e instanceof SyntaxError || message.startsWith(`${stage}: `) || message.startsWith('MCP ')) return { verdict: 'not-mcp', httpStatus: null };
+  return { verdict: 'unreachable', httpStatus: null };
+}
+
+// An error's text for the answer: redacted already; a native rejection's
+// "fetch failed" gains its cause's code; bounded.
+function pingErrorText(e) {
+  let text = String(e?.message ?? e ?? 'error');
+  const code = e?.code ?? e?.cause?.code;
+  if (code && !text.includes(String(code))) text += ` (${code})`;
+  return text.slice(0, PING_ERROR_LENGTH);
+}
+
+// The read's bounded outcome: a count or a version, never the payload.
+function pingReadDetail(capability, answer) {
+  const plural = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`;
+  let detail;
+  if (capability === 'dashboards') {
+    const list = Array.isArray(answer) ? answer : (answer?.results ?? answer?.dashboards ?? null);
+    detail = Array.isArray(list) ? `${plural(list.length, 'dashboard')} listed` : 'answered';
+  } else if (capability === 'grafana_version') {
+    const v = answer && typeof answer === 'object' ? answer.version : null;
+    detail = typeof v === 'string' && v ? `version ${v}` : 'answered';
+  } else {
+    const s = answer && typeof answer === 'object' ? (answer.status ?? answer.overall ?? null) : null;
+    detail = typeof s === 'string' && s ? `status ${s}` : 'answered';
+  }
+  return detail.replace(/[\r\n\t]+/g, ' ').slice(0, PING_DETAIL_LENGTH);
+}
+
+// The first PING_READS row the advertised names offer → { row, tool, args } | null.
+export function pingReadFor(advertised) {
+  for (const row of PING_READS) {
+    const tools = row.candidate
+      ? [candidateTool(row.capability, row.candidate)]
+      : probeCandidates(row.capability, row.runtime ?? {}).map((c) => (typeof c === 'string' ? c : c.name));
+    const tool = tools.find((n) => advertised.has(n));
+    if (!tool) continue;
+    const cand = probeCandidates(row.capability, row.runtime ?? {}).find((c) => (typeof c === 'string' ? c : c.name) === tool);
+    return { row, tool, args: typeof cand === 'string' || !cand ? {} : (cand.args ?? {}) };
+  }
+  return null;
+}
+
+export async function pingMcp({ mcpUrl, mcpAuth = null, transport = mcpTransport(),
+  timeoutMs = Math.min(MCP_TIMEOUT_MS, PING_TIMEOUT_MS), deadlineMs = PING_DEADLINE_MS,
+  clock = () => performance.now() } = {}) {
+  const t = await transport;
+  if (!mcpUrl) throw new Error('pingMcp: mcpUrl required');
+  const { rpc, notify, callTool } = createMcpClientCore({ mcpUrl, mcpAuth, timeoutMs, transport: t });
+  const started = clock();
+  const ms = (from) => Math.max(0, Math.round(clock() - from));
+  let timer = null;
+  const deadline = new Promise((_, reject) => {
+    // Not unref'd: a request's own timeout (AbortSignal.timeout) is, so this
+    // timer is what keeps a lone ping's process alive until it ends; it is
+    // cleared the moment the ping returns.
+    timer = setTimeout(() => reject(new PingDeadline()), deadlineMs);
+  });
+  deadline.catch(() => {});
+  // Every step races the deadline; a request still in flight when it
+  // passes ends at its own timeout and is ignored.
+  const step = (p) => { p.catch(() => {}); return Promise.race([p, deadline]); };
+
+  const out = {
+    verdict: null, stage: null, httpStatus: null, error: null, limitMs: null,
+    reachable: false, initialized: false, authSent: !!mcpAuth,
+    tools: null, read: null,
+    timings: { initializeMs: null, toolsListMs: null, readMs: null, totalMs: null },
+  };
+  const fail = (e, stage) => {
+    if (isTransportHookError(e)) throw e;
+    const v = pingVerdictOf(e, stage);
+    out.verdict = v.verdict;
+    out.httpStatus = v.httpStatus;
+    out.stage = stage;
+    if (v.verdict === 'timeout') out.limitMs = e?.name === 'PingDeadline' ? deadlineMs : timeoutMs;
+    out.error = e?.name === 'PingDeadline' ? `no answer within the ${Math.round(deadlineMs / 100) / 10} s deadline` : pingErrorText(e);
+    if (v.httpStatus !== null || v.verdict === 'not-mcp') out.reachable = true;
+  };
+
+  try {
+    // (1) initialize
+    let at = clock();
+    try {
+      const result = await step(rpc('initialize', {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: 'observogram-ping', version: '0.4.0' },
+      }));
+      if (!result || typeof result !== 'object') throw new Error('MCP initialize: the answer is not a JSON-RPC result');
+      out.reachable = true;
+      out.initialized = true;
+      await step(notify('notifications/initialized'));
+    } catch (e) { fail(e, 'initialize'); return out; }
+    finally { out.timings.initializeMs = ms(at); }
+
+    // (2) the whole tools/list, page by page
+    at = clock();
+    try {
+      const names = [];
+      let cursor;
+      let pages = 0;
+      let more = false;
+      for (;;) {
+        const result = await step(rpc('tools/list', cursor === undefined ? {} : { cursor }));
+        if (!result || !Array.isArray(result.tools)) throw new Error('MCP tools/list: the answer is not a JSON-RPC result');
+        pages += 1;
+        for (const tool of result.tools) if (typeof tool?.name === 'string') names.push(tool.name);
+        const next = typeof result.nextCursor === 'string' && result.nextCursor !== '' ? result.nextCursor : null;
+        if (!next) break;
+        if (pages >= TOOLS_LIST_MAX_PAGES) { more = true; break; }
+        cursor = next;
+      }
+      out.tools = { names: [...new Set(names)], pages, more };
+    } catch (e) { fail(e, 'tools/list'); return out; }
+    finally { out.timings.toolsListMs = ms(at); }
+    out.verdict = 'connected';
+
+    // (3) one cheap read
+    const pick = pingReadFor(new Set(out.tools.names));
+    if (!pick) {
+      out.read = { capability: null, tool: null, outcome: 'not-advertised', detail: null, backendAuthRefused: false, credentialFree: false, error: null };
+      return out;
+    }
+    const read = { capability: pick.row.capability, tool: pick.tool, outcome: null, detail: null, backendAuthRefused: false, credentialFree: !!pick.row.credentialFree, error: null };
+    out.read = read;
+    at = clock();
+    try {
+      const answer = await step(callTool(pick.tool, pick.args));
+      read.outcome = 'ok';
+      read.detail = pingReadDetail(pick.row.capability, answer);
+    } catch (e) {
+      if (isTransportHookError(e)) throw e;
+      const message = String(e?.message ?? e ?? '');
+      const v = pingVerdictOf(e, 'tools/call');
+      read.error = pingErrorText(e);
+      if (v.verdict === 'auth-refused') {
+        // The gateway refused the call itself: the token sent (or none) is
+        // not accepted for tool calls.
+        read.outcome = 'refused';
+        out.verdict = 'auth-refused';
+        out.stage = 'tools/call';
+        out.httpStatus = v.httpStatus;
+        out.error = read.error;
+      } else if (v.verdict === 'timeout') {
+        read.outcome = 'timeout';
+        if (e?.name === 'PingDeadline') read.error = `no answer within the ${Math.round(deadlineMs / 100) / 10} s deadline`;
+      } else {
+        read.outcome = 'failed';
+        // The tool answered isError (the client's `<tool>: <text>`): its
+        // backend refused the MCP's own credentials when the text says so.
+        if (message.startsWith(`${pick.tool}: `) && BACKEND_AUTH_TEXT.test(message.slice(pick.tool.length + 2))) read.backendAuthRefused = true;
+      }
+    } finally { out.timings.readMs = ms(at); }
+    return out;
+  } finally {
+    clearTimeout(timer);
+    out.timings.totalMs = ms(started);
+  }
 }
 
 async function main() {
