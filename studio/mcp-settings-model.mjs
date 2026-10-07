@@ -6,7 +6,9 @@
 // read means (descriptorReadModel), the status line of each state, the
 // inputs' attributes, what an action sends, what the settings policy's
 // findings show and block (policyView), and what the modal says after the
-// connection test (verifiedLine). No DOM, no state, no fetch
+// connection test (verifiedLine); and, when the studio server passes the
+// settings through (OBSERVOGRAM_MCP_ADMIN_PROXY=1), what its describe and
+// submit answered (proxyDescribeModel, proxyOutcomeModel). No DOM, no state, no fetch
 // (docs/UI_CONVENTIONS.md §2): every input explicit — the URL rules of
 // tools/lib/mcp-url-safety.mjs and the contract of
 // tools/lib/mcp-server-settings.mjs are handed in (`safety`, `lib`), because
@@ -85,16 +87,24 @@ export function settingsGateModel({ access = null, mcpTargetPolicy = null, hasTa
  *               (null origins: any), or null for none
  *   pageOrigin  location.origin ("null" for a file:// page)
  *   proxyWayOut the same-machine refusal may name OBSERVOGRAM_MCP_ADMIN_PROXY
+ *   proxy       the studio server passes the settings through
+ *               (OBSERVOGRAM_MCP_ADMIN_PROXY=1): only rule 1 runs here — the
+ *               server applies its own origin, https and own-address rules
  *   safety      { mcpUrlPolicy, isLoopbackOrigin, mayBeThisMachine }
  *   lib         { resolveSettingsPath, SETTINGS_DESCRIPTOR_PATH }
  */
-export function settingsTargetModel({ url, posture = 'identity', origins = null, pageOrigin = '', proxyWayOut = false }, { safety, lib }) {
+export function settingsTargetModel({ url, posture = 'identity', origins = null, pageOrigin = '', proxyWayOut = false, proxy = false }, { safety, lib }) {
   const refuse = (reason) => ({ ok: false, reason });
   const policy = safety.mcpUrlPolicy(url);
   if (policy.error) return refuse(policy.error);
   let target;
   try { target = new URL(String(url).trim()); } catch { return refuse('the MCP URL is not a valid URL'); }
   const origin = target.origin;
+  const describeAt = () => {
+    const d = lib.resolveSettingsPath(lib.SETTINGS_DESCRIPTOR_PATH, target.href, { noun: "the server's settings description" });
+    return d.reason ? refuse(d.reason) : { ok: true, origin, descriptorUrl: d.url };
+  };
+  if (proxy) return describeAt();
   if (origin === pageOrigin) {
     return refuse(`the MCP server shares the studio's origin (${origin}), so its settings would go to the studio server — give the MCP server its own origin (another port or host)`);
   }
@@ -114,9 +124,7 @@ export function settingsTargetModel({ url, posture = 'identity', origins = null,
       ? `${origin} is not a listed MCP origin, and settings carry a credential, which goes only to a listed origin or this machine — rebuild the bundle with --mcp-origins ${origin}`
       : `${origin} is not a listed MCP origin, and settings carry a credential, which goes only to a listed origin or this machine — the server's operator adds ${origin} to OBSERVOGRAM_MCP_ORIGINS (or the org's OBSERVOGRAM_ORG_<KEY>_MCP_ORIGINS)`);
   }
-  const d = lib.resolveSettingsPath(lib.SETTINGS_DESCRIPTOR_PATH, target.href, { noun: "the server's settings description" });
-  if (d.reason) return refuse(d.reason);
-  return { ok: true, origin, descriptorUrl: d.url };
+  return describeAt();
 }
 
 // ---------- the descriptor read (A.1.2–A.1.4, A.2.2) ----------
@@ -147,19 +155,68 @@ export function descriptorReadModel(read, { mcpUrl, descriptorUrl }, { lib }) {
   return { state: 'refused', reason: parsed.reason };
 }
 
+/**
+ * What the pass-through's describe answered (POST /api/mcp-settings/describe,
+ * OBSERVOGRAM_MCP_ADMIN_PROXY=1): { ok, status, descriptor | notDescriptor |
+ * reason }, read by the same rules as the browser's own read — the
+ * description is parsed again here (the path rule runs in the page too).
+ * `error` is the studio server's refusal (an Error from requestJson: its
+ * message `<status>: <text>`). → descriptorReadModel's states but
+ * 'unreachable': a refusal is 'refused', in the studio server's words.
+ */
+export function proxyDescribeModel(answer, { mcpUrl, descriptorUrl, error = null }, { lib }) {
+  if (error || !answer || answer.ok !== true) {
+    return { state: 'refused', reason: `the studio server answered ${error?.message || 'nothing it could read'}` };
+  }
+  let path = '/admin/schema';
+  try { path = new URL(descriptorUrl).pathname; } catch { /* the default */ }
+  const s = Number(answer.status);
+  if (s === 404 || s === 405 || s === 501) return { state: 'generic', reason: `GET ${path} answered ${s}` };
+  if (s === 401 || s === 403) return { state: 'generic', reason: `it answered ${s} — a settings description must be readable without a key` };
+  if (s !== 200) return { state: 'refused', reason: `GET ${path} answered HTTP ${s}, so the server's settings description could not be read` };
+  if (answer.descriptor) {
+    // The studio server sends the normalised form (absent keys as null): read again as written.
+    const parsed = lib.parseSettingsDescriptor(JSON.stringify(answer.descriptor, (k, v) => (v === null ? undefined : v)), { mcpUrl, contentType: 'application/json' });
+    if (parsed.descriptor) return { state: 'described', descriptor: parsed.descriptor };
+    return { state: 'refused', reason: parsed.reason ?? `what it answered is not a settings description: ${parsed.notDescriptor}` };
+  }
+  if (answer.notDescriptor) return { state: 'generic', reason: `what it answered is not a settings description: ${answer.notDescriptor}` };
+  return { state: 'refused', reason: answer.reason || 'the server\'s settings description could not be read' };
+}
+
+/**
+ * The outcome of a configure the studio server passed through
+ * (POST /api/mcp-settings/submit: { ok, status, contentType, bytes, outcome:
+ * { ok?, message?, checks? } | null, redacted }) in outcomeOf's form: the
+ * headline by the same table (the shape's `ok` the only source of
+ * "verified"), the message and the checks; no body (`raw` null) — the
+ * studio server passes none back, and `note` says so when the answer was
+ * not in the outcome shape.
+ */
+export function proxyOutcomeModel(answer, { lib }) {
+  const shape = answer?.outcome ?? null;
+  const o = lib.outcomeOf({ status: answer?.status, contentType: shape ? 'application/json' : null, text: shape ? JSON.stringify(shape) : '' });
+  const bytes = Number.isFinite(answer?.bytes) ? answer.bytes : 0;
+  const note = shape ? null
+    : `The server's answer was not in the outcome shape (${bytes} byte${bytes === 1 ? '' : 's'} of ${answer?.contentType || 'no stated type'}); the studio server does not pass other bodies through.`;
+  return { ...o, raw: null, capped: null, redacted: Number.isFinite(answer?.redacted) ? answer.redacted : 0, note };
+}
+
 // ---------- the status line of each state (A.2.2) ----------
 
 const UNKNOWN = 'The request was sent, but its answer could not be read (no CORS header on the answer, a network error, or no answer within 15 s). The server may have applied the settings — test the connection, or check the server\'s log.';
+const UNKNOWN_PROXY = 'The studio server sent the settings, but no answer came back from the MCP server. The server may have applied the settings — test the connection, or check the server\'s log.';
 
 /**
  * The status line: { text, kind } (kind '' | 'ok' | 'warn' | 'error').
  * `m` holds the modal's state and what it needs to word it:
  *   { state, descriptorUrl, reason, genericReason, redirect, pageOrigin,
- *     proxyWayOut, sendingTo, outcome: { headline, tone }, verified: { text, kind } }
+ *     proxyWayOut, proxy, sendingTo, outcome: { headline, tone }, verified: { text, kind } }
+ * `proxy`: the studio server passes the requests through.
  */
 export function statusLine(m) {
   switch (m.state) {
-    case 'reading': return { text: m.descriptorUrl ? `Reading the server's settings description from ${m.descriptorUrl}…` : 'Reading the server\'s settings description…', kind: '' };
+    case 'reading': return { text: m.descriptorUrl ? `Reading the server's settings description from ${m.descriptorUrl}${m.proxy ? ' through the studio server' : ''}…` : 'Reading the server\'s settings description…', kind: '' };
     case 'described': return { text: 'The server describes its settings (version 1).', kind: '' };
     case 'generic': return { text: `This server publishes no settings description (${m.genericReason}). This is a generic form: check the field names and the path against the server's documentation.`, kind: 'warn' };
     case 'refused': return { text: sentence(m.reason), kind: 'error' };
@@ -170,9 +227,9 @@ export function statusLine(m) {
         kind: 'error',
       };
     case 'target-refused': return { text: sentence(m.reason), kind: 'error' };
-    case 'sending': return { text: `Sending to ${m.sendingTo}…`, kind: '' };
+    case 'sending': return { text: `Sending to ${m.sendingTo}${m.proxy ? ' through the studio server' : ''}…`, kind: '' };
     case 'outcome': return { text: m.outcome.headline, kind: toneKind(m.outcome.tone) };
-    case 'unknown': return { text: UNKNOWN, kind: 'warn' };
+    case 'unknown': return { text: m.proxy ? UNKNOWN_PROXY : UNKNOWN, kind: 'warn' };
     case 'verifying': return { text: `${m.outcome ? `${m.outcome.headline} ` : ''}Testing the connection through the studio…`, kind: '' };
     case 'verified': return m.verified;
     default: return { text: '', kind: '' };
@@ -187,9 +244,13 @@ function sentence(s) {
   return /[.…?!]$/.test(up) ? up : `${up}.`;
 }
 
-// The lede under the title: where the values go.
-export function ledeText(origin) {
-  return `These settings go to the MCP server itself — your browser sends them directly to ${origin}. The studio keeps none of them.`;
+// The lede under the title: where the values go — from the browser, or
+// through the studio server when it says the pass-through is on.
+export function ledeText(origin, { proxy = false } = {}) {
+  const how = proxy
+    ? `the studio server passes them through to ${origin} without keeping them (OBSERVOGRAM_MCP_ADMIN_PROXY)`
+    : `your browser sends them directly to ${origin}`;
+  return `These settings go to the MCP server itself — ${how}. The studio keeps none of them.`;
 }
 
 // ---------- the form ----------

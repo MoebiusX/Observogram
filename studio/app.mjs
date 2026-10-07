@@ -63,8 +63,9 @@ import { renderPingResult, renderGateLog, renderLiveResult } from './live-view.m
 import { renderServerSettings } from './mcp-settings-view.mjs';
 import {
   settingsGateModel, settingsTargetModel, descriptorReadModel, statusLine, ledeText, fieldInputSpec, actionNote, primaryBlock, policyView, verifiedLine,
+  proxyDescribeModel, proxyOutcomeModel,
 } from './mcp-settings-model.mjs';
-import { loadServerSettingsConfig, loadSettingsLibs, readDescriptorDirect, submitDirect } from './mcp-settings-api.mjs';
+import { loadServerSettingsConfig, loadSettingsLibs, readDescriptorDirect, submitDirect, describeViaProxy, submitViaProxy } from './mcp-settings-api.mjs';
 import { renderNoOrgHome, renderServicesHome, renderServicePage, renderServiceEditor, markUnavailable } from './services-view.mjs';
 import {
   BUILT_SECTIONS, BUILT_EDITORS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsSectionHead, settingsAboveRank,
@@ -5135,6 +5136,7 @@ async function openServerSettings() {
     state: 'reading', serial: ++mss.serial, origin: mssOriginOf(url), descriptorUrl: null, libs: null,
     policyState: 'loading', policy: null, prefill: null, findings: null, findingsFor: null, findingsTimer: null, descriptor: null, generic: null, genericReason: null, genericError: null,
     reason: null, redirect: false, outcome: null, verified: null, notice: null, confirming: null, busy: false, sendingTo: null, afterAction: false,
+    proxy: false,
   };
   mss.ctx = ctx;
   paintMss();
@@ -5151,13 +5153,15 @@ async function openServerSettings() {
   }
   if (mss.ctx !== ctx) return;
   ctx.libs = libs;
+  // The studio server passes every request through when it says so (never a fallback); the bundle's shim never does.
+  ctx.proxy = ctx.posture !== 'static' && config?.proxy === true;
   const compiled = config && config.policy !== null && config.policy !== undefined ? libs.lib.compileSettingsPolicy(config.policy, { timed: false }) : null;
   ctx.policyState = !config ? 'failed' : !compiled ? 'none' : compiled.policy ? 'served' : 'failed';
   ctx.policy = compiled?.policy ?? null;
   const g = ctx.policy?.generic ?? null;
   ctx.prefill = { names: g?.names ?? libs.lib.GENERIC_NAMES, path: g?.path ?? '/configure', auth: g?.auth ?? 'body' };
   const origins = ctx.posture === 'static' ? (config?.mcpOrigins ?? null) : (state.mcpTargetPolicy?.typed ?? null);
-  const t = settingsTargetModel({ url, posture: ctx.posture, origins, pageOrigin: location.origin, proxyWayOut: false }, libs);
+  const t = settingsTargetModel({ url, posture: ctx.posture, origins, pageOrigin: location.origin, proxyWayOut: mssProxyWayOut(ctx), proxy: ctx.proxy }, libs);
   if (!t.ok) {
     ctx.state = 'target-refused';
     ctx.reason = t.reason;
@@ -5172,15 +5176,29 @@ async function openServerSettings() {
 async function readMssDescriptor(ctx) {
   Object.assign(ctx, { state: 'reading', serial: ++mss.serial, descriptor: null, generic: null, outcome: null, verified: null, notice: null, confirming: null });
   paintMss();
-  const read = await readDescriptorDirect(ctx.descriptorUrl, { signal: ctx.abort.signal });
-  if (mss.ctx !== ctx || read.kind === 'aborted') return;
-  const r = descriptorReadModel(read, { mcpUrl: ctx.url, descriptorUrl: ctx.descriptorUrl }, ctx.libs);
+  let r;
+  if (ctx.proxy) {
+    let answer = null;
+    let error = null;
+    try { answer = await describeViaProxy(mssTargetBody(ctx), { signal: ctx.abort.signal }); } catch (e) { error = e; }
+    if (mss.ctx !== ctx || ctx.abort.signal.aborted) return;
+    r = proxyDescribeModel(answer, { mcpUrl: ctx.url, descriptorUrl: ctx.descriptorUrl, error }, ctx.libs);
+  } else {
+    const read = await readDescriptorDirect(ctx.descriptorUrl, { signal: ctx.abort.signal });
+    if (mss.ctx !== ctx || read.kind === 'aborted') return;
+    r = descriptorReadModel(read, { mcpUrl: ctx.url, descriptorUrl: ctx.descriptorUrl }, ctx.libs);
+  }
   ctx.serial = ++mss.serial;
   if (r.state === 'described') { ctx.state = 'described'; ctx.descriptor = r.descriptor; }
   else if (r.state === 'generic') useMssGeneric(ctx, r.reason);
   else { ctx.state = r.state; ctx.reason = r.reason ?? null; ctx.redirect = r.redirect === true; }
   paintMss();
 }
+
+// The studio server's pass-through names the target as the panel does: the endpoint by id, else the typed URL.
+const mssTargetBody = (ctx) => (ctx.chosen ? { mcpEndpointId: ctx.chosen.id } : { mcpUrl: ctx.url });
+// Naming OBSERVOGRAM_MCP_ADMIN_PROXY as a way out is true only where a studio server could turn it on and has not.
+const mssProxyWayOut = (ctx) => (ctx.posture === 'identity' || ctx.posture === 'open') && !ctx.proxy;
 
 // The generic form (A.1.5): the policy's prefill, else the defaults; editable under "What the server expects".
 function useMssGeneric(ctx, reason) {
@@ -5223,7 +5241,7 @@ function buildMssModel(ctx) {
   const values = showForm ? mssValues() : null;
   const status = ctx.notice ? { text: ctx.notice, kind: 'error' } : statusLine({
     state: ctx.state, descriptorUrl: ctx.descriptorUrl, reason: ctx.reason, genericReason: ctx.genericReason, redirect: ctx.redirect,
-    pageOrigin: location.origin, proxyWayOut: false, sendingTo: ctx.sendingTo, outcome: ctx.outcome, verified: ctx.verified,
+    pageOrigin: location.origin, proxyWayOut: mssProxyWayOut(ctx), proxy: ctx.proxy, sendingTo: ctx.sendingTo, outcome: ctx.outcome, verified: ctx.verified,
   });
   const buttons = [];
   if (ctx.state === 'refused' || ctx.state === 'unreachable') buttons.push('retry', 'generic');
@@ -5233,7 +5251,7 @@ function buildMssModel(ctx) {
   const model = {
     key: showForm ? `form:${ctx.serial}` : `${ctx.state}:${ctx.serial}`,
     eyebrow: ctx.origin ? `MCP server · ${ctx.origin}` : 'MCP server',
-    lede: ctx.descriptorUrl ? ledeText(ctx.origin) : null,
+    lede: ctx.descriptorUrl ? ledeText(ctx.origin, { proxy: ctx.proxy }) : null,
     status,
     busy: ctx.busy,
     buttons,
@@ -5267,7 +5285,7 @@ function paintMss() {
   renderServerSettings(host, buildMssModel(ctx), mcpSettingsHost);
 }
 
-async function sendMss(ctx, req, actionName) {
+async function sendMss(ctx, req, actionName, values) {
   const lib = ctx.libs.lib;
   const where = lib.resolveSettingsPath(req.path, ctx.url, ctx.generic
     ? { noun: 'the settings path', fix: 'correct it under What the server expects' }
@@ -5276,6 +5294,7 @@ async function sendMss(ctx, req, actionName) {
   const to = new URL(where.url);
   Object.assign(ctx, { busy: true, state: 'sending', sendingTo: `${to.origin}${to.pathname}`, outcome: null, verified: null, notice: null, afterAction: !!actionName });
   paintMss();
+  if (ctx.proxy) { await sendMssViaProxy(ctx, values, actionName); return; }
   const res = await submitDirect(where.url, { headers: req.headers, body: req.body }, { signal: ctx.abort.signal, onSent: clearMssSecrets });
   clearMssSecrets();
   if (mss.ctx !== ctx || res.kind === 'aborted') return;
@@ -5285,6 +5304,39 @@ async function sendMss(ctx, req, actionName) {
     ? { status: 0, type: 'opaqueredirect', contentType: null, text: '' }
     : { status: res.status, contentType: res.contentType, text: res.text, truncated: res.truncated };
   const o = lib.outcomeOf(answer, { secretValues: req.secretValues, secretNames: req.secretNames, user: req.user });
+  ctx.outcome = { ...o, serial: ++mss.outcomeSerial };
+  ctx.state = 'outcome';
+  paintMss();
+  if (!actionName && o.success) await verifyMss(ctx);
+}
+
+// Through the studio server (OBSERVOGRAM_MCP_ADMIN_PROXY=1): the values as
+// typed (it builds the request from the description it reads itself), the
+// ticked acknowledgements, and the outcome shape it passes back. The
+// secrets are emptied as soon as the request is issued.
+async function sendMssViaProxy(ctx, values, actionName) {
+  const payload = {
+    ...mssTargetBody(ctx), mode: ctx.generic ? 'generic' : 'described', values, acks: mssTicked().map(Number),
+    ...(ctx.generic ? { generic: { path: ctx.generic.path, names: { ...ctx.generic.names }, auth: ctx.generic.auth } } : {}),
+    ...(actionName ? { action: actionName } : {}),
+  };
+  const pending = submitViaProxy(payload, { signal: ctx.abort.signal });
+  clearMssSecrets();
+  let answer = null;
+  let error = null;
+  try { answer = await pending; } catch (e) { error = e; }
+  if (mss.ctx !== ctx || ctx.abort.signal.aborted) return;
+  ctx.busy = false;
+  if (error) {
+    // The studio server's own refusal, in its words: a 502 (no answer, a
+    // redirect, a timeout) may have reached the MCP server — the unknown
+    // state; anything else was refused before a request left.
+    ctx.state = error.status === 502 ? 'unknown' : (ctx.generic ? 'generic' : 'described');
+    ctx.notice = `The studio server answered ${error.message || 'nothing it could read'}`.replace(/([^.…?!])$/, '$1.');
+    paintMss();
+    return;
+  }
+  const o = proxyOutcomeModel(answer, ctx.libs);
   ctx.outcome = { ...o, serial: ++mss.outcomeSerial };
   ctx.state = 'outcome';
   paintMss();
@@ -5394,7 +5446,7 @@ const mcpSettingsActions = {
     const block = primaryBlock({ policyState: ctx.policyState, requestReason: req.reason ?? null, genericReason: ctx.genericError, ackReason: policyView(ctx.findings, mssTicked()).block });
     if (block) { ctx.notice = block; paintMss(); return; }
     ctx.confirming = null;
-    sendMss(ctx, req, null);
+    sendMss(ctx, req, null, values);
   },
   action: (name) => {
     const ctx = mss.ctx;
@@ -5403,9 +5455,10 @@ const mcpSettingsActions = {
     if (!a) return;
     if (a.confirm && ctx.confirming !== name) { ctx.confirming = name; ctx.notice = null; paintMss(); return; }
     ctx.confirming = null;
-    const req = ctx.libs.lib.settingsRequest(ctx.descriptor, mssValues(), { action: name });
+    const values = mssValues();
+    const req = ctx.libs.lib.settingsRequest(ctx.descriptor, values, { action: name });
     if (req.reason) { ctx.notice = req.reason.charAt(0).toUpperCase() + req.reason.slice(1) + '.'; paintMss(); return; }
-    sendMss(ctx, req, name);
+    sendMss(ctx, req, name, values);
   },
   retry: () => {
     const ctx = mss.ctx;

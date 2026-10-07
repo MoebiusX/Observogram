@@ -9,7 +9,9 @@
  * the inputs' attributes, what an action sends, what the settings policy
  * shows and when its acknowledgement blocks, why the primary waits, and
  * the line after the connection test — from the read's outcome, never from
- * the verdict alone. The URL rules and the contract are the real tools/lib
+ * the verdict alone; and, through the studio server's pass-through, the
+ * target rule's first step only, what its describe and submit answered and
+ * how the lede and the status lines say so. The URL rules and the contract are the real tools/lib
  * modules, handed in as the browser hands in its /lib imports.
  */
 import { test } from 'node:test';
@@ -20,7 +22,7 @@ import * as lib from './lib/mcp-server-settings.mjs';
 import * as safety from './lib/mcp-url-safety.mjs';
 import {
   pageIsLoopback, settingsGateModel, settingsTargetModel, descriptorReadModel, statusLine, ledeText,
-  fieldInputSpec, actionNote, primaryBlock, policyView, verifiedLine,
+  fieldInputSpec, actionNote, primaryBlock, policyView, verifiedLine, proxyDescribeModel, proxyOutcomeModel,
 } from '../studio/mcp-settings-model.mjs';
 import { pingResultModel } from '../studio/live-model.mjs';
 
@@ -213,6 +215,53 @@ test('after the connection test: "the read answered" only on a read outcome ok �
   assert.equal(verifiedLine(h, ping('unreachable', null)).kind, 'error');
   assert.equal(verifiedLine('', null, { error: '403: no' }).text, 'Connection test: could not run — 403: no.');
   assert.equal(verifiedLine(h, null, { isStatic: true }).text, `${h} The connection test needs the studio server; the static bundle has none.`);
+});
+
+test('through the studio server (the pass-through): only the URL policy runs in the page — the server applies the origin, https and own-address rules', () => {
+  const t = (url, o = {}) => settingsTargetModel({ url, posture: 'identity', origins: null, pageOrigin: 'https://studio.example', proxy: true, ...o }, libs);
+  assert.deepEqual(t('http://127.0.0.1:9000/mcp'), { ok: true, origin: 'http://127.0.0.1:9000', descriptorUrl: 'http://127.0.0.1:9000/admin/schema' }, 'a loopback MCP from a remote page: the studio server reaches it');
+  assert.deepEqual(t('http://mcp.example/team/mcp'), { ok: true, origin: 'http://mcp.example', descriptorUrl: 'http://mcp.example/team/admin/schema' }, 'plain http and unlisted: the server decides');
+  assert.equal(t('ftp://mcp.example/mcp').ok, false, 'the URL policy still runs');
+  assert.equal(settingsTargetModel({ url: 'http://mcp.example/mcp', posture: 'identity', pageOrigin: PAGE, proxy: false }, libs).ok, false, 'without it, the browser\'s rules');
+});
+
+test('what the pass-through answered: its describe read as the browser\'s own read (the description parsed again), a refusal in the studio server\'s words; its submit as an outcome with no body', () => {
+  const at = { mcpUrl: 'http://127.0.0.1:9000/mcp', descriptorUrl: 'http://127.0.0.1:9000/admin/schema' };
+  const desc = { version: 1, endpoint: '/configure', fields: [{ name: 'u', label: 'URL', type: 'url', required: true }] };
+  const d = proxyDescribeModel({ ok: true, status: 200, descriptor: desc }, at, libs);
+  assert.equal(d.state, 'described');
+  assert.deepEqual(d.descriptor.fields.map((f) => f.name), ['u']);
+  // As the studio server sends it: the normalised form, absent keys as null (an action's fields, a help).
+  const served = lib.parseSettingsDescriptor(JSON.stringify({ ...desc, actions: [{ name: 'disable', label: 'Clear' }] })).descriptor;
+  assert.equal(served.actions[0].fields, null);
+  assert.deepEqual(proxyDescribeModel({ ok: true, status: 200, descriptor: JSON.parse(JSON.stringify(served)) }, at, libs).descriptor?.actions.map((a) => a.name), ['disable']);
+  assert.deepEqual(proxyDescribeModel({ ok: true, status: 200, descriptor: { ...desc, endpoint: '//evil.example/x' } }, at, libs).state, 'refused', 'the path rule runs in the page too');
+  assert.deepEqual(proxyDescribeModel({ ok: true, status: 404 }, at, libs), { state: 'generic', reason: 'GET /admin/schema answered 404' });
+  assert.deepEqual(proxyDescribeModel({ ok: true, status: 401 }, at, libs), { state: 'generic', reason: 'it answered 401 — a settings description must be readable without a key' });
+  assert.deepEqual(proxyDescribeModel({ ok: true, status: 200, notDescriptor: 'a JSON-RPC message' }, at, libs), { state: 'generic', reason: 'what it answered is not a settings description: a JSON-RPC message' });
+  assert.deepEqual(proxyDescribeModel({ ok: true, status: 200, reason: 'duplicate field name "u"' }, at, libs), { state: 'refused', reason: 'duplicate field name "u"' });
+  assert.deepEqual(proxyDescribeModel({ ok: true, status: 500 }, at, libs).state, 'refused');
+  assert.deepEqual(proxyDescribeModel(null, { ...at, error: new Error('502: the MCP server at http://127.0.0.1:9000 answered with a redirect') }, libs),
+    { state: 'refused', reason: 'the studio server answered 502: the MCP server at http://127.0.0.1:9000 answered with a redirect' });
+  const ok = proxyOutcomeModel({ ok: true, status: 200, contentType: 'application/json', bytes: 80, outcome: { ok: true, message: 'Applied.', checks: [{ label: 'Identity', status: 'pass', detail: null }] }, redacted: 0 }, libs);
+  assert.deepEqual([ok.tone, ok.headline, ok.success, ok.message, ok.checks.length, ok.raw, ok.note], ['ok', 'The server reports the settings verified (HTTP 200).', true, 'Applied.', 1, null, null]);
+  const html = proxyOutcomeModel({ ok: true, status: 500, contentType: 'text/html', bytes: 2048, outcome: null, redacted: 1 }, libs);
+  assert.deepEqual([html.tone, html.headline, html.success, html.raw, html.redacted], ['error', 'The server refused the settings: HTTP 500.', false, null, 1]);
+  assert.equal(html.note, "The server's answer was not in the outcome shape (2048 bytes of text/html); the studio server does not pass other bodies through.");
+  const plain = proxyOutcomeModel({ ok: true, status: 204, contentType: null, bytes: 0, outcome: null, redacted: 0 }, libs);
+  assert.deepEqual([plain.headline, plain.success], ['The server accepted the settings (HTTP 204). It reported no verification.', true]);
+  assert.match(plain.note, /\(0 bytes of no stated type\)/);
+  assert.equal(proxyOutcomeModel({ ok: true, status: 200, bytes: 9, outcome: { ok: false }, redacted: 0 }, libs).success, false, 'ok: false is no success');
+});
+
+test('the words of the pass-through: the lede says the studio server passes the settings through; reading, sending and unknown say so; the way out names OBSERVOGRAM_MCP_ADMIN_PROXY only where it is off', () => {
+  assert.equal(ledeText('http://127.0.0.1:9000', { proxy: true }), 'These settings go to the MCP server itself — the studio server passes them through to http://127.0.0.1:9000 without keeping them (OBSERVOGRAM_MCP_ADMIN_PROXY). The studio keeps none of them.');
+  assert.equal(ledeText('http://127.0.0.1:9000'), 'These settings go to the MCP server itself — your browser sends them directly to http://127.0.0.1:9000. The studio keeps none of them.');
+  const m = { descriptorUrl: 'http://127.0.0.1:9000/admin/schema', pageOrigin: PAGE, proxy: true };
+  assert.equal(statusLine({ ...m, state: 'reading' }).text, "Reading the server's settings description from http://127.0.0.1:9000/admin/schema through the studio server…");
+  assert.equal(statusLine({ ...m, state: 'sending', sendingTo: 'http://127.0.0.1:9000/configure' }).text, 'Sending to http://127.0.0.1:9000/configure through the studio server…');
+  assert.equal(statusLine({ ...m, state: 'unknown' }).text, "The studio server sent the settings, but no answer came back from the MCP server. The server may have applied the settings — test the connection, or check the server's log.");
+  assert.ok(!/CORS/.test(statusLine({ ...m, state: 'unknown' }).text), 'no CORS on the studio server\'s path');
 });
 
 test('mcp-settings-model.mjs is a pure model and mcp-settings-api.mjs a loader: no DOM, no state, no app import; the brand stays out', () => {

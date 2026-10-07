@@ -312,7 +312,8 @@ const BUTTONS = Object.freeze({
   openLive: { label: 'Open the live panel', action: 'openLive' },
 });
 
-// The server's answer, as returned (redacted), as text.
+// The server's answer, as returned (redacted), as text — or, through the
+// studio server, its outcome shape and the note that no other body passes.
 function paintOutcome(section, o) {
   const key = o ? o.serial : '';
   if (section.getAttribute('data-outcome') === String(key)) return;
@@ -334,6 +335,7 @@ function paintOutcome(section, o) {
     }
     section.append(ul);
   }
+  if (o.note) section.append(el('p', 'mss-outcome-note', o.note));
   if (o.redacted > 0) section.append(el('p', 'mss-outcome-note', `${o.redacted} value${o.redacted === 1 ? '' : 's'} the server echoed back ${o.redacted === 1 ? 'was' : 'were'} hidden.`));
   if (o.raw) {
     const details = el('details', 'mss-raw');

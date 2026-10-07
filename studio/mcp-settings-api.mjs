@@ -17,6 +17,14 @@
 //                               Authorization when the descriptor says so,
 //                               no redirect followed, 15 s, read with a
 //                               64 KiB cap
+////   describeViaProxy(target)    POST /api/mcp-settings/describe on the studio
+//   submitViaProxy(payload)     server, and /submit — the opt-in pass-through
+//                               (OBSERVOGRAM_MCP_ADMIN_PROXY=1), used for every
+//                               request while GET /api/mcp-settings says
+//                               `proxy: true`, never as a fallback; through
+//                               requestJson (authHeaders: the CSRF header and
+//                               the org), so the studio server's admin gate,
+//                               allowlist and audit apply
 //
 // The two requests to the MCP server are the studio's only fetch() that
 // carries no authHeaders(): nothing of the studio's session goes to another
@@ -35,6 +43,20 @@ export const SUBMIT_TIMEOUT_MS = 15_000;
 // GET /api/mcp-settings → the policy, the proxy flag (and in the bundle the baked MCP origin list).
 export async function loadServerSettingsConfig({ fetchFn = requestJson } = {}) {
   return fetchFn('/api/mcp-settings');
+}
+
+// The pass-through's two calls; `target` is { mcpEndpointId } or { mcpUrl }.
+const postJson = (path, body, signal, fetchFn) => fetchFn(path, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...(signal ? { signal } : {}),
+});
+export function describeViaProxy(target, { signal, fetchFn = requestJson } = {}) {
+  return postJson('/api/mcp-settings/describe', target, signal, fetchFn);
+}
+// `payload`: { mcpEndpointId | mcpUrl, mode, generic?, action?, values, acks }.
+// The body is built here, at call time: the values are read from the modal
+// into the caller's local and go out of scope with it.
+export function submitViaProxy(payload, { signal, fetchFn = requestJson } = {}) {
+  return postJson('/api/mcp-settings/submit', payload, signal, fetchFn);
 }
 
 // The settings contract and the URL rules, from /lib (tools/lib), at call

@@ -44,6 +44,14 @@
  *  10. Markup is text: every descriptor slot, a refused endpoint, the
  *      outcome's message and checks and the raw body carry markup; no
  *      element is made and nothing runs.
+ *  11. Through the studio server (OBSERVOGRAM_MCP_ADMIN_PROXY=1, a fake that
+ *      sends no CORS headers, so only the pass-through works): the lede says
+ *      so, the page asks nothing of the MCP server, the describe and the
+ *      submit go to the studio, the outcome shape comes back and the
+ *      connection test runs; the secret travels only in the submit's body —
+ *      not in its answer, the DOM, the studio's log, the audit or the
+ *      workspace; an answer outside the outcome shape is named by status,
+ *      type and size, never shown.
  *
  * Every test asserts no page error, no console.error beyond a failed load
  * (and, where CORS is the point, the browser's CORS message), no popup, and
@@ -67,7 +75,7 @@ for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) 
 
 const { test, before, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
-const { mkdtempSync, rmSync, readFileSync, writeFileSync } = await import('node:fs');
+const { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
 const { join, resolve, dirname } = await import('node:path');
 const { fileURLToPath } = await import('node:url');
@@ -637,7 +645,7 @@ test('BROWSER 8: CORS and redirects — unreachable names this page\'s origin; a
   await aim(w, { url: noCors.url });
   await openSettings(w);
   await w.waitStatus(/^Your browser could not read/);
-  assert.equal(await w.status(), `Your browser could not read ${noCors.origin}/admin/schema. The server may be down, or it does not answer this page's origin (${studio.child.base}) with CORS headers — its operator adds that origin to the MCP server's allowed origins (MCP_INTEGRATION "Server settings").`);
+  assert.equal(await w.status(), `Your browser could not read ${noCors.origin}/admin/schema. The server may be down, or it does not answer this page's origin (${studio.child.base}) with CORS headers — its operator adds that origin to the MCP server's allowed origins (MCP_INTEGRATION "Server settings"), or the studio's operator turns on OBSERVOGRAM_MCP_ADMIN_PROXY=1.`);
   assert.deepEqual(await w.page.evaluate(() => [...document.querySelectorAll('.mss-more-btn')].map((b) => b.textContent)), ['Try again', 'Use the generic form']);
   await closeSettings(w);
 
@@ -779,5 +787,93 @@ test('BROWSER 10: markup is text — every descriptor slot, a refused endpoint, 
   assert.match(await w.status(), /^The server's settings endpoint "<img src=x onerror=window\.__pwn=1>" is not a plain path/);
   await noElements('a refused endpoint');
   await closeSettings(w);
+  await w.done();
+});
+
+// ---------- 11 ----------
+
+// The studio with the pass-through on (journey 11), started once when first asked.
+let proxyChild = null;
+function proxyStudio() {
+  proxyChild ??= startChild({ OBSERVOGRAM_MCP_ADMIN_PROXY: '1' });
+  return proxyChild;
+}
+after(async () => { if (proxyChild) await (await proxyChild).stop(); });
+
+function filesUnder(dir) {
+  const out = [];
+  const walk = (d) => { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) walk(p); else out.push([p, readFileSync(p)]); } };
+  walk(dir);
+  return out;
+}
+
+test('BROWSER 11: through the studio server — the page asks nothing of the MCP server, the outcome shape comes back and the test runs; the secret only in the submit\'s body; a body outside the shape is named, not shown', async (t) => {
+  if (skipUnlessBrowser(t)) return;
+  const studio = await proxyStudio();
+  const f = await fake({ descriptor: BEARER, cors: false, requireKey: { key: API_KEY, in: 'header' } });
+  const gwId = await endpointIdFor(studio.child.base, f.url, { name: 'gw-proxy', headers: { Cookie: studio.cookies.ada } });
+  const w = await openPage(studio, 'ada');
+  const answers = [];
+  w.page.on('response', async (r) => { if (/\/api\/mcp-settings\//.test(r.url())) answers.push({ url: r.url(), text: await r.text().catch(() => '') }); });
+  await aim(w, { id: gwId });
+  await openSettings(w);
+  await w.waitStatus(/^The server describes its settings \(version 1\)\.$/);
+  assert.equal(await w.text('.mss-lede'), `These settings go to the MCP server itself — the studio server passes them through to ${f.origin} without keeping them (OBSERVOGRAM_MCP_ADMIN_PROXY). The studio keeps none of them.`);
+  assert.deepEqual(await values(w), [], 'every input is empty at open');
+  await fill(w, 'grafanaUrl', 'https://backend.example/');
+  await fill(w, 'user', 'svc-observogram');
+  await fill(w, 'secret', SECRET);
+  await fill(w, 'apiKey', API_KEY);
+  await w.page.click('.mss-primary', { force: true });
+  await w.waitStatus(/Connection test:/);
+  assert.match(await w.status(), new RegExp(`^The server reports the settings verified \\(HTTP 200\\)\\. Connection test: connected, and the read ${READ_TOOL} answered: `));
+  assert.equal(await w.text('.mss-outcome-message'), 'Settings applied.');
+  assert.deepEqual(await w.page.evaluate(() => [...document.querySelectorAll('.mss-check')].map((li) => li.querySelector('.mss-check-status').textContent)), ['pass', 'pass']);
+  assert.equal(await w.page.isVisible('.mss-raw'), false, 'no body passes through');
+  assert.deepEqual(await w.page.evaluate(() => [...document.querySelectorAll('#mss-host input[type="password"]')].map((i) => i.value)), ['', '']);
+  const html = await hostHtml(w);
+  assert.ok(!html.includes(SECRET) && !html.includes(API_KEY), 'no secret in the modal\'s DOM');
+
+  // The page asked nothing of the MCP server; the studio server did, from no origin, with the description's Bearer.
+  assert.deepEqual(w.requests.filter((r) => r.url.startsWith(f.origin)), [], 'the browser never contacted the MCP server');
+  assert.deepEqual(f.adminRequests.map((r) => `${r.method} ${r.path} ${r.origin}`), ['GET /admin/schema null', 'GET /admin/schema null', 'POST /configure null']);
+  assert.equal(f.adminRequests[2].headers.authorization, `Bearer ${API_KEY}`);
+  assert.deepEqual(f.adminRequests[2].body, { grafanaUrl: 'https://backend.example/', user: 'svc-observogram', secret: SECRET });
+  const toStudio = w.requests.filter((r) => r.url.startsWith(studio.child.base) && /\/api\/(mcp-settings|mcp\/ping)/.test(r.url));
+  assert.deepEqual(toStudio.map((r) => `${r.method} ${r.url.slice(studio.child.base.length)}`), ['GET /api/mcp-settings', 'POST /api/mcp-settings/describe', 'POST /api/mcp-settings/submit', 'POST /api/mcp/ping']);
+  const carrying = w.requests.filter((r) => JSON.stringify(r).includes(SECRET) || JSON.stringify(r).includes(API_KEY));
+  assert.deepEqual(carrying.map((r) => `${r.method} ${r.url.slice(studio.child.base.length)}`), ['POST /api/mcp-settings/submit'], 'the values travel in exactly one request');
+  assert.equal(carrying[0].headers['x-observogram-csrf'], '1');
+  assert.deepEqual(JSON.parse(carrying[0].postData).acks, []);
+  assert.ok(answers.length === 2 && answers.every((a) => !a.text.includes(SECRET) && !a.text.includes(API_KEY)), 'neither answer carries a value');
+  await closeSettings(w);
+
+  // An answer outside the outcome shape: its status, type and size, nothing of it.
+  const html500 = await fake({ descriptor: null, cors: false, outcome: (body) => ({ status: 500, contentType: 'text/html', text: `<html><body>trace near ${body.apiKey}</body></html>` }) });
+  await aim(w, { url: html500.url });
+  await openSettings(w);
+  await w.waitStatus(/^This server publishes no settings description \(GET \/admin\/schema answered 404\)/);
+  await fill(w, 'url', 'https://backend.example/');
+  await fill(w, 'apiKey', API_KEY);
+  await w.page.click('.mss-primary', { force: true });
+  await w.waitStatus(/^The server refused the settings: HTTP 500\.$/);
+  const notes = await w.page.evaluate(() => [...document.querySelectorAll('.mss-outcome-note')].map((p) => p.textContent));
+  assert.ok(notes.some((n) => /^The server's answer was not in the outcome shape \(\d+ bytes of text\/html\); the studio server does not pass other bodies through\.$/.test(n)), JSON.stringify(notes));
+  assert.ok(!(await hostHtml(w)).includes('trace near'), 'nothing of the body is shown');
+  await closeSettings(w);
+
+  // Nothing kept: the page, the studio's log, the audit (names only) and the workspace.
+  const kept = await w.page.evaluate(() => JSON.stringify([Object.entries(localStorage), Object.entries(sessionStorage), document.cookie, document.documentElement.outerHTML]));
+  assert.ok(!kept.includes(SECRET) && !kept.includes(API_KEY));
+  const logs = studio.child.logs();
+  assert.ok(!`${logs.stdout}${logs.stderr}`.includes(SECRET) && !`${logs.stdout}${logs.stderr}`.includes(API_KEY), 'no value in the studio server\'s output');
+  assert.match(logs.stderr, /^\[mcp-settings\] submit 200 \d+ms$/m);
+  const audit = await (await fetch(`${studio.child.base}/api/audit?limit=100`, { headers: { Cookie: studio.cookies.ada } })).json();
+  const rows = audit.rows.filter((r) => r.action === 'live.mcp-settings');
+  assert.deepEqual(rows.map((r) => [r.targetId, r.detail.status, r.detail.fields]), [[html500.origin, 500, ['url', 'apiKey']], [f.origin, 200, ['grafanaUrl', 'user', 'secret', 'apiKey']]]);
+  assert.ok(!JSON.stringify(audit).includes(SECRET) && !JSON.stringify(audit).includes(API_KEY));
+  for (const [path, bytes] of filesUnder(studio.ws)) {
+    for (const v of [SECRET, API_KEY]) assert.ok(!bytes.includes(Buffer.from(v, 'utf8')) && !bytes.includes(Buffer.from(v, 'utf16le')), `no value in ${path}`);
+  }
   await w.done();
 });
