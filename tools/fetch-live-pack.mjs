@@ -3446,19 +3446,24 @@ export async function pingMcp({ mcpUrl, mcpAuth = null, transport = mcpTransport
   clock = () => performance.now() } = {}) {
   const t = await transport;
   if (!mcpUrl) throw new Error('pingMcp: mcpUrl required');
-  const { rpc, notify, callTool } = createMcpClientCore({ mcpUrl, mcpAuth, timeoutMs, transport: t });
+  // The deadline's signal goes to the client, so a request still in flight
+  // when the deadline passes is aborted, not left open to the MCP until its
+  // own timeout.
+  const passed = new AbortController();
+  const { rpc, notify, callTool } = createMcpClientCore({ mcpUrl, mcpAuth, timeoutMs, transport: t, signal: passed.signal });
   const started = clock();
   const ms = (from) => Math.max(0, Math.round(clock() - from));
   let timer = null;
   const deadline = new Promise((_, reject) => {
     // Not unref'd: a request's own timeout (AbortSignal.timeout) is, so this
     // timer is what keeps a lone ping's process alive until it ends; it is
-    // cleared the moment the ping returns.
-    timer = setTimeout(() => reject(new PingDeadline()), deadlineMs);
+    // cleared the moment the ping returns. The deadline rejects before the
+    // abort, so the step's race settles on PingDeadline.
+    timer = setTimeout(() => { const e = new PingDeadline(); reject(e); passed.abort(e); }, deadlineMs);
   });
   deadline.catch(() => {});
   // Every step races the deadline; a request still in flight when it
-  // passes ends at its own timeout and is ignored.
+  // passes is aborted and its rejection ignored.
   const step = (p) => { p.catch(() => {}); return Promise.race([p, deadline]); };
 
   const out = {

@@ -47,7 +47,7 @@ function fakeMcp({ tools = [], pages = 1, cursorAfterLast = false, status = {}, 
   const perPage = Math.max(1, Math.ceil(tools.length / pages));
   const fetchImpl = (url, init) => new Promise((resolveP, rejectP) => {
     const msg = JSON.parse(init.body);
-    calls.push({ method: msg.method, params: msg.params, auth: init.headers.Authorization ?? null, redirect: init.redirect });
+    calls.push({ method: msg.method, params: msg.params, auth: init.headers.Authorization ?? null, redirect: init.redirect, signal: init.signal ?? null });
     const onAbort = () => rejectP(init.signal.reason ?? new DOMException('aborted', 'AbortError'));
     if (init.signal?.aborted) return onAbort();
     init.signal?.addEventListener('abort', onAbort, { once: true });
@@ -206,6 +206,19 @@ test('the deadline bounds the whole ping', async () => {
   assert.match(r.error, /deadline/);
   assert.equal(r.limitMs, 200);
   assert.equal(PING_DEADLINE_MS, 10_000);
+});
+
+test('the deadline aborts the request still in flight — it does not stay open until its own timeout', async () => {
+  const fake = fakeMcp({ hang: true });
+  const r = await ping(fake, { timeoutMs: 5000, deadlineMs: 100 });
+  assert.equal(r.verdict, 'timeout');
+  assert.equal(r.stage, 'initialize');
+  assert.equal(r.limitMs, 100);
+  assert.match(r.error, /deadline/);
+  const open = fake.calls.at(-1);
+  assert.equal(open.method, 'initialize');
+  assert.equal(open.signal?.aborted, true, 'the deadline aborted the open request');
+  assert.equal(open.signal.reason?.name, 'PingDeadline');
 });
 
 test('HTTP 404 with an HTML page, a body that is not JSON-RPC and a redirect are not-mcp', async () => {
