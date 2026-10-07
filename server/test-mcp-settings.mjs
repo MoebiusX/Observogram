@@ -417,7 +417,8 @@ test('a described submit sends to the description\'s endpoint — not the caller
 test('the generic form goes only to the configured path (/configure here), every field in the body; any other path is a 400 naming the way, nothing sent; a description that no longer parses is a 409', async () => {
   const f = await fakeMcp({ descriptor: null });
   const s = await studio();
-  const id = await s.register(f.url);
+  // The endpoint holds a read token: a configure never carries it (forWrite), so the body-auth POST has no Authorization.
+  const id = await s.register(f.url, { readTokenEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' });
   const d = await s.post(DESCRIBE, { mcpEndpointId: id });
   assert.deepEqual(d.json, { ok: true, status: 404 });
   const wrong = await s.post(SUBMIT, { mcpEndpointId: id, mode: 'generic', generic: { path: '/admin/other', names: {}, auth: 'body' }, values: { url: 'https://b.example', secret: SECRET } });
@@ -427,6 +428,7 @@ test('the generic form goes only to the configured path (/configure here), every
   assert.equal(ok.status, 200, ok.text);
   const post = f.adminRequests.at(-1);
   assert.deepEqual([post.method, post.path, post.body, post.headers.authorization], ['POST', '/configure', { url: 'https://b.example/', secret: SECRET, apiKey: API_KEY }, undefined]);
+  assert.ok(!JSON.stringify(post.headers).includes(READ_TOKEN), 'the endpoint\'s read token never rides a configure');
   const described = await s.post(SUBMIT, { mcpEndpointId: id, mode: 'described', values: { url: 'https://b.example' } });
   assert.deepEqual([described.status, described.json.denied, described.json.error], [409, 'descriptor', 'the server\'s settings description does not read as one now (GET /admin/schema answered 404) — close and reopen the server settings']);
   assert.equal(f.adminRequests.filter((x) => x.method === 'POST').length, 1, 'nothing sent for the 409');
