@@ -1052,6 +1052,13 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await settled(page);
       assert.equal(await text(page, '.set-scope'), 'Settings · Delta (delta) · you are an owner acting in delta — not a member');
       assert.equal(await page.evaluate(() => document.querySelector('.observa-org-select option:checked')?.textContent), 'Delta — acting as owner');
+      // The acting entry is the chip's longest label: at the phone width the OBSERVA bar still scrolls nothing sideways.
+      await page.setViewportSize(PHONE);
+      assert.deepEqual(await page.evaluate(() => {
+        const cw = document.documentElement.clientWidth;
+        return { scroll: document.documentElement.scrollWidth, advanced: document.querySelector('.observa-adv-toggle').getBoundingClientRect().right <= cw };
+      }), { scroll: PHONE.width, advanced: true }, 'the acting entry at the phone width: no horizontal page scroll, Advanced inside the viewport');
+      await page.setViewportSize(LAPTOP);
       await page.click('#set-primary');
       await page.waitForSelector('.set-editor[data-kind="member-add"]', { timeout: T });
       await page.fill('#set-edit-value', 'oscar');

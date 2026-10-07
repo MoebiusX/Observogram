@@ -7718,9 +7718,10 @@ button.observa-service:focus-visible { outline: 2px solid var(--CMP); outline-of
 .observa-org-select option { color: var(--ink); background: var(--card); }
 [data-theme="dark"] .observa-org-select option { color: var(--ink); background: var(--card); }
 /* An owner's acting entry (`<name> — acting as owner`, D-M) is the longest label the chip draws: the select keeps the
-   name's cap, and a shorter one at phone width (the option list shows each label in full). */
+   name's cap, and a shorter one at phone width, where the chip, the tabs and the action cluster share one row of
+   390px with no horizontal scroll (the option list shows each label in full). */
 .observa-org-select { max-width: 24ch; text-overflow: ellipsis; }
-@media (max-width: 720px) { .observa-org-select { max-width: 14ch; } }
+@media (max-width: 720px) { .observa-org-select { max-width: 8ch; } }
 
 /* ============================================================
    Advanced → Neuron (.nrn-*) — the observability control neuron as one
