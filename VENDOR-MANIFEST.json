@@ -48,8 +48,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/artefact-classify.mjs": {
-      "sha256": "7f9bdf084e40caaf191d01c745b8d95bb2f088f2fd6c5869e71cf8fa404df2c4",
-      "bytes": 24077,
+      "sha256": "70e5c2065c6b0da2cb97c194331a16c60b45b67e63270f38c468d11e57c3ba0f",
+      "bytes": 24945,
       "exports": [
         "DEFINES_RULES",
         "FAMILIES",
@@ -63,6 +63,7 @@
         "TAXONOMY_VERSION_LATEST",
         "activeTaxonomy",
         "classifyArtefact",
+        "compileBoundedPattern",
         "compileTaxonomy",
         "configureTaxonomy",
         "describeTaxonomy",

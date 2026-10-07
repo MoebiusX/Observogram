@@ -204,20 +204,42 @@ function readTarget(value, where, errors) {
   return out;
 }
 
+/**
+ * The taxonomy's pattern rule as one function, for any file that carries a
+ * user-written regex: a non-empty string of at most PATTERN_MAX_LENGTH
+ * characters, anchored with `^`, flags `""` or `"i"`, no quantified group,
+ * and — unless `timed` is false — finishing the four adversarial
+ * ID_MATCH_LENGTH-character ids within the 50 ms budget. `noun` names the
+ * pattern in each reason (`pattern` for the taxonomy, so its texts are the
+ * ones it always had). `timed: false` skips only the wall-clock run (a
+ * browser re-reading a file the server already timed); every static check
+ * still runs. A caller matching longer or differently shaped values adds
+ * its own bounds on top.
+ * @returns {{ re: RegExp } | { reason: string }}
+ */
+export function compileBoundedPattern(pattern, { flags = '', noun = 'pattern', timed = true } = {}) {
+  if (typeof pattern !== 'string' || !pattern) return { reason: `${noun} must be a non-empty string` };
+  if (pattern.length > PATTERN_MAX_LENGTH) return { reason: `${noun} longer than ${PATTERN_MAX_LENGTH} characters` };
+  if (!pattern.startsWith('^')) return { reason: `${noun} must be anchored (start with ^)` };
+  if (flags !== '' && flags !== 'i') return { reason: 'flags must be "" or "i"' };
+  if (QUANTIFIED_GROUP.test(pattern)) return { reason: 'nested quantifier' };
+  let re;
+  try { re = new RegExp(pattern, flags); } catch (e) { return { reason: `invalid regex: ${e.message}` }; }
+  if (timed) {
+    const t0 = Date.now();
+    for (const id of ADVERSARIAL_IDS) re.test(id);
+    if (Date.now() - t0 > PATTERN_BUDGET_MS) return { reason: `${noun} too slow against a ${ID_MATCH_LENGTH}-character id` };
+  }
+  return { re };
+}
+
 function compileRule(rule, i, errors) {
   const where = `ids[${i}]`;
   if (!isPlainObject(rule)) { errors.push(`taxonomy: ${where}: expected { pattern, family, flags?, label?, role? }`); return null; }
   const { pattern, flags = '' } = rule;
-  if (typeof pattern !== 'string' || !pattern) { errors.push(`taxonomy: ${where}: pattern must be a non-empty string`); return null; }
-  if (pattern.length > PATTERN_MAX_LENGTH) { errors.push(`taxonomy: ${where}: pattern longer than ${PATTERN_MAX_LENGTH} characters`); return null; }
-  if (!pattern.startsWith('^')) { errors.push(`taxonomy: ${where}: pattern must be anchored (start with ^)`); return null; }
-  if (flags !== '' && flags !== 'i') { errors.push(`taxonomy: ${where}: flags must be "" or "i"`); return null; }
-  if (QUANTIFIED_GROUP.test(pattern)) { errors.push(`taxonomy: ${where}: nested quantifier`); return null; }
-  let re;
-  try { re = new RegExp(pattern, flags); } catch (e) { errors.push(`taxonomy: ${where}: invalid regex: ${e.message}`); return null; }
-  const t0 = Date.now();
-  for (const id of ADVERSARIAL_IDS) re.test(id);
-  if (Date.now() - t0 > PATTERN_BUDGET_MS) { errors.push(`taxonomy: ${where}: pattern too slow against a ${ID_MATCH_LENGTH}-character id`); return null; }
+  const compiled = compileBoundedPattern(pattern, { flags });
+  if (compiled.reason) { errors.push(`taxonomy: ${where}: ${compiled.reason}`); return null; }
+  const { re } = compiled;
   const target = readTarget({ family: rule.family, label: rule.label, role: rule.role }, where, errors);
   if (!target) return null;
   return Object.freeze({ re, pattern, flags, ...target });
