@@ -9434,6 +9434,19 @@ select.build-edit-input { appearance: auto; }
 .set-secret { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 14px 16px; color: var(--ink-2); background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
 .set-secret-text { flex: 1 0 100%; margin: 0; font-size: 14px; line-height: 1.5; color: var(--ink-2); }
 .set-secret-value { font: 600 16px/1.4 var(--mono); color: var(--ink); user-select: all; overflow-wrap: anywhere; }
+/* A field drawn only on a choice (the join role's admin box) is hidden by its attribute — the field's flex would
+   otherwise show it. */
+.set-editor-field[hidden] { display: none; }
+/* A box to tick: the box, then its sentence in the sans (not the field labels' capitals), the help under both. */
+.set-editor-check { flex-direction: row; flex-wrap: wrap; align-items: flex-start; gap: 6px 10px; }
+.set-editor-field.set-editor-check input { flex: 0 0 auto; width: 18px; height: 18px; margin: 2px 0 0; padding: 0; }
+.set-editor-check-text { flex: 1 1 0; min-width: 0; font: 14px/1.45 var(--sans); color: var(--ink); overflow-wrap: anywhere; }
+.set-editor-check .set-editor-help { flex: 1 0 100%; padding-left: 28px; }
+/* The id typed before a removal: the sentence in the sans, the id in the mono as it must be typed (no capitals). */
+.set-editor-typed-label { font: 14px/1.45 var(--sans); color: var(--ink); overflow-wrap: anywhere; }
+.set-editor-typed-label code { font: 600 14px/1.45 var(--mono); }
+/* A removed organisation: listed, greyed — its name in the secondary text, its id never used again. */
+.set-row.is-removed .set-row-name { color: var(--ink-3); }
 
 @media (max-width: 760px) {
   .set-page { padding: 16px 16px 64px; }

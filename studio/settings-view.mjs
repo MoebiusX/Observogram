@@ -120,6 +120,37 @@ function usersHtml(model) {
         </ul>`;
 }
 
+// The deployment's organisations: the name and id, the default badge, the
+// members counted, where the files live, when it was created; a removed one
+// greyed with when, its id never used again. For an owner, Remove… on each
+// live one — the default org's unavailable with the server's sentence.
+function orgsHtml(model) {
+  if (!model.rows.length) return '';
+  return `
+        <ul class="set-list" aria-label="Organisations of this deployment">${model.rows.map((r) => `
+          <li class="set-row${r.removed ? ' is-removed' : ''}" data-org-id="${escapeHtml(r.id)}">
+            <span class="set-row-name">${escapeHtml(r.name)}</span>
+            <span class="set-row-meta">(${escapeHtml(r.id)})</span>${r.isDefault ? `
+            <span class="set-badge">default</span>` : ''}
+            <span class="set-row-facts">
+              <span class="set-row-meta">${escapeHtml(r.facts)}</span>${r.removedText ? `
+              <span class="set-row-meta">${escapeHtml(r.removedText)}</span>` : ''}
+            </span>${r.remove ? `
+            <button type="button" class="ux-secondary-btn" data-org-remove="${escapeHtml(r.id)}" aria-label="${escapeHtml(`Remove ${r.name} (${r.id})`)}">Remove…</button>` : ''}
+          </li>`).join('')}
+        </ul>`;
+}
+
+// The join role: the role recorded (the scope sentence above says what it
+// does under the sign-in mode the server runs).
+function joinRoleHtml(model) {
+  if (!model.roleText) return '';
+  return `
+        <ul class="set-list" aria-label="The join role">
+          <li class="set-row"><span class="set-row-name" id="set-join-role">${escapeHtml(model.roleText)}</span></li>
+        </ul>`;
+}
+
 // The members section's head line: the org's name and id, and Rename… (an
 // admin's; unavailable with its reason otherwise).
 function membersOrgHtml(model) {
@@ -217,8 +248,8 @@ function statusHtml(section) {
 // The section's primary action (the editor that creates a record), drawn
 // once its editor is built — unavailable with its reason for a rank that
 // cannot use it.
-const PRIMARY_LABEL = { environments: 'Add environment', endpoints: 'New MCP endpoint', members: 'Add member', users: 'New local user' };
-const PRIMARY_KIND = { environments: 'environment', endpoints: 'endpoint', members: 'member-add', users: 'user-create' };
+const PRIMARY_LABEL = { environments: 'Add environment', endpoints: 'New MCP endpoint', members: 'Add member', users: 'New local user', orgs: 'New organisation', 'join-role': 'Change the join role…' };
+const PRIMARY_KIND = { environments: 'environment', endpoints: 'endpoint', members: 'member-add', users: 'user-create', orgs: 'org-create', 'join-role': 'join-role' };
 
 function sectionHtml(section) {
   if (!section?.id) return '';
@@ -228,7 +259,9 @@ function sectionHtml(section) {
     : section.id === 'endpoints' ? endpointsHtml(section.model)
       : section.id === 'members' ? membersHtml(section.model)
         : section.id === 'audit' ? auditHtml(section.model, section.filters)
-          : section.id === 'users' ? usersHtml(section.model) : '';
+          : section.id === 'users' ? usersHtml(section.model)
+            : section.id === 'orgs' ? orgsHtml(section.model)
+              : section.id === 'join-role' ? joinRoleHtml(section.model) : '';
   const loading = section.status?.kind === 'loading';
   // The scope sentence: the head's, or the section model's own (the members name the org's id).
   const scope = section.head.scope ?? section.model?.scopeSentence ?? null;
@@ -303,6 +336,16 @@ export function renderSettings(container, frame, section, host = appHost) {
   if (section.id === 'members') wireMembers(container, section.model, host);
   container.querySelectorAll('[data-user-manage]').forEach((btn) => {
     btn.addEventListener('click', () => host.settings?.openEditor?.({ kind: 'user', id: Number(btn.dataset.userManage) }));
+  });
+  // An organisation's Remove…: its dialog on the remove step, or why not.
+  container.querySelectorAll('[data-org-remove]').forEach((btn) => {
+    const row = (section.model?.rows || []).find((r) => r.id === btn.dataset.orgRemove);
+    const reason = row?.remove && !row.remove.enabled ? row.remove.reason : null;
+    if (reason) markUnavailable(btn, reason);
+    btn.addEventListener('click', () => {
+      if (reason) { host.settings?.explain?.(reason); return; }
+      host.settings?.openEditor?.({ kind: 'org', id: btn.dataset.orgRemove, step: 'confirm-delete' });
+    });
   });
   if (section.id === 'audit') {
     for (const [name, v] of section.drafts || []) { const el = container.querySelector(`#${auditFieldId(name)}`); if (el) el.value = v; }
@@ -426,6 +469,17 @@ function fieldHtml(f, limits) {
           ${help}
         </div>`;
   }
+  if (f.type === 'checkbox') {
+    // A box to tick (take over a directory; the join role's admin
+    // confirmation — drawn while its condition holds: f.showWhen).
+    const shown = !f.showWhen || f.showWhen.now === true;
+    return `
+        <label class="set-editor-field set-editor-check" id="${id}-field"${shown ? '' : ' hidden'}>
+          <input id="${id}" name="${escapeHtml(f.name)}" type="checkbox"${f.checked ? ' checked' : ''}${described}>
+          <span class="set-editor-check-text">${escapeHtml(f.label)}</span>
+          ${help}
+        </label>`;
+  }
   throw new Error(`no Settings editor field of type ${JSON.stringify(f.type)}`);
 }
 
@@ -437,12 +491,15 @@ function editorActionsHtml(model) {
   if (model.step === 'secret' || model.step === 'notice') {
     return `
           <button type="button" class="ctrl-btn set-editor-cancel" data-editor-close>Close</button>${model.signIn ? `
-          <button type="button" class="mcp-refresh-btn set-editor-save" id="set-editor-signin">Go to sign-in</button>` : ''}`;
+          <button type="button" class="mcp-refresh-btn set-editor-save" id="set-editor-signin">Go to sign-in</button>` : ''}${model.switchTo ? `
+          <button type="button" class="mcp-refresh-btn set-editor-save" id="set-editor-switch">${escapeHtml(model.switchTo.label)}</button>` : ''}`;
   }
   if ((model.step === 'confirm-delete' || model.step === 'confirm-action') && model.confirm) {
+    // A removal that asks for the id typed: unavailable until it matches.
+    const typed = model.confirm.typed ? ' aria-describedby="set-editor-typed-label"' : '';
     return `
           <button type="button" class="ctrl-btn set-editor-cancel" id="set-editor-back">Back</button>
-          <button type="button" class="set-danger" id="set-editor-confirm" aria-disabled="${model.saving ? 'true' : 'false'}">${escapeHtml(model.confirm.danger)}</button>`;
+          <button type="button" class="set-danger" id="set-editor-confirm" aria-disabled="${model.saving || model.confirm.typed ? 'true' : 'false'}"${typed}>${escapeHtml(model.confirm.danger)}</button>`;
   }
   return `
           <button type="button" class="ctrl-btn set-editor-cancel" data-editor-close>Close</button>${model.remove ? `
@@ -457,7 +514,11 @@ function editorActionsHtml(model) {
 function editorBodyHtml(model) {
   const confirming = (model.step === 'confirm-delete' || model.step === 'confirm-action') && model.confirm;
   if (confirming) return `
-        <p class="set-confirm" id="set-editor-confirm-text">${escapeHtml(model.confirm.text)}</p>`;
+        <p class="set-confirm" id="set-editor-confirm-text">${escapeHtml(model.confirm.text)}</p>${model.confirm.typed ? `
+        <label class="set-editor-field set-editor-typed">
+          <span class="set-editor-typed-label" id="set-editor-typed-label">Type <code>${escapeHtml(model.confirm.typed)}</code> to remove it</span>
+          <input id="set-editor-typed" type="text" autocomplete="off" spellcheck="false" autocapitalize="none">
+        </label>` : ''}`;
   if (model.step === 'secret' && model.secret) return `
         <div class="set-secret">
           <p class="set-secret-text">${escapeHtml(model.secret.text)}</p>
@@ -465,6 +526,8 @@ function editorBodyHtml(model) {
           <button type="button" class="ux-secondary-btn" id="set-secret-copy">Copy</button>
         </div>`;
   if (model.step === 'notice') return '';
+  if (model.kind === 'org') return (model.facts || []).map((f) => `
+        <p class="set-row-meta set-user-fact">${escapeHtml(f)}</p>`).join('');
   if (model.kind === 'user') return `${(model.facts || []).map((f) => `
         <p class="set-row-meta set-user-fact">${escapeHtml(f)}</p>`).join('')}
         <div class="set-row-actions set-user-actions" role="group" aria-label="${escapeHtml(`Actions on ${model.title}`)}">${(model.actions || []).map((a) => `
@@ -522,7 +585,9 @@ export function renderSettingsEditor(container, model, host = appHost) {
   const segs = wireSegmented(container, model.fields || [], {
     explain: (reason) => act().explain?.(reason),
     // Add member: "by login" / "by verified email" relabels the one input.
+    // A box drawn on a choice (the join role's admin) follows it.
     change: (name, value) => {
+      GATES.get(container)?.();
       if (model.kind !== 'member-add' || name !== 'by') return;
       const input = container.querySelector(`#${fieldId('value')}`);
       const label = input?.closest?.('.set-editor-field')?.querySelector?.('.set-editor-label');
@@ -536,8 +601,33 @@ export function renderSettingsEditor(container, model, host = appHost) {
   const readDraft = () => Object.fromEntries((model.fields || []).map((f) => {
     if (f.type === 'segmented' || f.type === 'radio') return [f.name, Object.hasOwn(segs, f.name) ? segs[f.name] : (f.value ?? null)];
     if (f.type === 'select' && f.disabled) return [f.name, undefined];
+    if (f.type === 'checkbox') return [f.name, (container.querySelector(`#${fieldId(f.name)}`)?.checked ?? f.checked) === true];
     return [f.name, container.querySelector(`#${fieldId(f.name)}`)?.value ?? f.value];
   }));
+  // A box drawn on a choice is shown while the choice holds; one that is
+  // required and unticked keeps Save unavailable with its reason (the
+  // join role's admin: "tick the box first"). Answers that reason, or null.
+  const gate = () => {
+    let reason = null;
+    for (const f of (model.fields || []).filter((x) => x.type === 'checkbox')) {
+      const shown = !f.showWhen || (Object.hasOwn(segs, f.showWhen.field) ? segs[f.showWhen.field] : f.showWhen.now ? f.showWhen.value : null) === f.showWhen.value;
+      const wrap = container.querySelector(`#${fieldId(f.name)}-field`);
+      if (wrap) wrap.hidden = !shown;
+      const ticked = (container.querySelector(`#${fieldId(f.name)}`)?.checked ?? f.checked) === true;
+      if (shown && f.required && !ticked && reason === null) reason = f.required;
+    }
+    const now = EDITOR_MODEL.get(container) || model;
+    const save = container.querySelector('#set-editor-save');
+    if (save && now.primary?.enabled && !now.saving) {
+      if (reason) markUnavailable(save, reason);
+      else markAvailable(save);
+    }
+    return reason;
+  };
+  GATES.set(container, gate);
+  for (const f of (model.fields || []).filter((x) => x.type === 'checkbox')) {
+    container.querySelector(`#${fieldId(f.name)}`)?.addEventListener('change', () => gate());
+  }
   // A select drawn aria-disabled cannot change: a change is undone and its reason said.
   for (const f of (model.fields || []).filter((x) => x.type === 'select' && x.disabled)) {
     const el = container.querySelector(`#${fieldId(f.name)}`);
@@ -551,6 +641,8 @@ export function renderSettingsEditor(container, model, host = appHost) {
       if (now.primary.reason && !now.saving) act().explain?.(now.primary.reason);
       return;
     }
+    const held = gate();
+    if (held) { act().explain?.(held); return; }
     act().save?.(readDraft());
   });
   container.querySelector('#set-editor-delete')?.addEventListener('click', () => {
@@ -570,11 +662,31 @@ export function renderSettingsEditor(container, model, host = appHost) {
   });
   container.querySelector('#set-secret-copy')?.addEventListener('click', () => host.settings?.copySecret?.());
   container.querySelector('#set-editor-signin')?.addEventListener('click', () => host.settings?.signIn?.());
+  container.querySelector('#set-editor-switch')?.addEventListener('click', () => {
+    if (model.switchTo) host.settings?.switchTo?.(model.switchTo.orgId, 'members');
+  });
+  // A removal asking for the id typed: the danger button follows the input.
+  const typedInput = container.querySelector('#set-editor-typed');
+  typedInput?.addEventListener('input', () => paintEditorButtons(container, EDITOR_MODEL.get(container) || model));
   container.querySelector('#set-editor-confirm')?.addEventListener('click', () => {
     const now = EDITOR_MODEL.get(container) || model;
     if (now.saving) return;
+    const typed = now.confirm?.typed ?? null;
+    if (typed) {
+      const value = String(container.querySelector('#set-editor-typed')?.value ?? '').trim();
+      if (value !== typed) { act().explain?.(`Type ${typed} to remove it`); return; }
+      act().confirm?.(value);
+      return;
+    }
     act().confirm?.();
   });
+}
+
+// Undo markUnavailable (a gate lifted: the box ticked).
+function markAvailable(control) {
+  control.setAttribute('aria-disabled', 'false');
+  control.classList?.remove?.('is-unavailable');
+  control.querySelector?.('.svc-why')?.remove?.();
 }
 
 // A short, stable digest of a string (an editor key's part; not a secret's).
@@ -624,8 +736,9 @@ function wireSegmented(container, fields, { explain = null, change = null } = {}
 }
 
 // The model the buttons were last painted from (a repaint in place keeps
-// the listeners, which read it).
+// the listeners, which read it), and the dialog's gate (a required box).
 const EDITOR_MODEL = new WeakMap();
+const GATES = new WeakMap();
 
 // The buttons' state: the primary aria-disabled while a call is pending,
 // and unavailable with its reason for a rank that cannot use it (never
@@ -639,7 +752,10 @@ function paintEditorButtons(container, model) {
   }
   const del = container.querySelector('#set-editor-delete');
   if (del && model.remove && !model.remove.enabled) markUnavailable(del, model.remove.reason);
-  container.querySelector('#set-editor-confirm')?.setAttribute('aria-disabled', model.saving ? 'true' : 'false');
+  const typed = model.confirm?.typed ?? null;
+  const mismatch = Boolean(typed) && String(container.querySelector('#set-editor-typed')?.value ?? '').trim() !== typed;
+  container.querySelector('#set-editor-confirm')?.setAttribute('aria-disabled', model.saving || mismatch ? 'true' : 'false');
+  GATES.get(container)?.();
 }
 
 // The editor's status line repainted in place (the live region stays the

@@ -261,7 +261,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       const nav = await page.evaluate(() => [...document.querySelectorAll('.set-nav-item')].map((b) => [b.dataset.section, b.getAttribute('aria-disabled')]));
       assert.deepEqual(nav, [['environments', null], ['endpoints', null], ['members', 'true'], ['audit', 'true']], 'the deployment\'s sections are not listed to a non-owner');
       assert.equal(await text(page, '#set-nav-deployment'), 'The deployment');
-      assert.equal(await text(page, '#set-nav-no-owner'), "Users are an owner's — ask one. (A deployment with no owner gets one from the server's shell: npm run users -- owner <login>.)", 'the no-owner line (D-H)');
+      assert.equal(await text(page, '#set-nav-no-owner'), "Users, organisations and the join role are an owner's — ask one. (A deployment with no owner gets one from the server's shell: npm run users -- owner <login>.)", 'the no-owner line (D-H)');
       for (const id of ['members', 'audit']) assert.equal(await text(page, `.set-nav-item[data-section="${id}"] .svc-why`), ADMIN_REASON('Acme', 'operator'));
       assert.equal(await page.evaluate(() => document.getElementById('observa-service').hidden), true, 'the SERVICE chip is hidden');
       assert.equal(await page.evaluate(() => { const h = document.querySelector('.hdr'); return !h || getComputedStyle(h).display === 'none' || h.getClientRects().length === 0; }), true, '.hdr is not visible');
@@ -709,7 +709,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     try {
       await page.waitForSelector('.svc-noorg', { timeout: T });
       await page.click('.observa-adv-toggle');
-      assert.equal(await text(page, '.observa-adv-item[data-action="settings"] .observa-adv-item-sub'), 'environments, MCP endpoints, members, the audit, users…', 'the menu names every built section');
+      assert.equal(await text(page, '.observa-adv-item[data-action="settings"] .observa-adv-item-sub'), 'environments, MCP endpoints, members, the audit, users, organisations, the join role…', 'the menu names every built section');
       await page.click('.observa-adv-item[data-action="settings"]');
       await page.waitForFunction(() => document.querySelector('#toast')?.hidden === false, null, { timeout: T });
       assert.equal(await text(page, '#toast'), NO_ORG);

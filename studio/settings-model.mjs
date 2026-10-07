@@ -25,10 +25,10 @@ import { TIERS, TIER_BY_PACK } from './services-model.mjs';
 export const SETTINGS_SECTIONS = ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role'];
 // The sections this build draws (the nav lists only these — never a
 // placeholder for one that is not built).
-export const BUILT_SECTIONS = ['environments', 'endpoints', 'members', 'audit', 'users'];
+export const BUILT_SECTIONS = ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role'];
 // The record editors this build draws: a section whose editor is not built
 // draws no primary and no row action, and no sentence names one.
-export const BUILT_EDITORS = ['endpoint', 'environment', 'org-name', 'member-add', 'member', 'user-create', 'user'];
+export const BUILT_EDITORS = ['endpoint', 'environment', 'org-name', 'member-add', 'member', 'user-create', 'user', 'org-create', 'org', 'join-role'];
 
 const SECTION_LABEL = {
   environments: 'Environments', endpoints: 'MCP endpoints', members: 'Members', audit: 'Audit',
@@ -190,6 +190,8 @@ export function settingsSectionHead(id, { orgName = null } = {}) {
     environments: `Every environment of ${org}'s services — its tier, the MCP endpoint it is checked through, its bindings and links. Build registers a service; each opens on its own page.`,
     endpoints: `The MCP gateways registered in ${org}, and the environments checked through each. A read token stays on the server: a gateway names the variable that holds it, never its value.`,
     users: 'Every user of this deployment: how they sign in, whether they are an owner, and the organisations they belong to. A new local user gets a temporary password, shown once.',
+    orgs: 'Every organisation of this deployment: its members, where its files live, when it was created. A removed one stays listed — its id is never used again.',
+    // The join role's scope sentence is the section model's (the sign-in mode the server runs).
     // The members' scope sentence is the section model's (it names the org's id, and an owner acting from outside).
   }[id] ?? null;
   return { title, scope, loading: `Reading ${title.replace(/^[A-Z](?=[a-z])/, (c) => c.toLowerCase())}…` };
@@ -593,6 +595,129 @@ function secretText(login, { forced = true, reason = 'create', localSignIn = tru
   return `${head}${own} Reset it to get a new one.`;
 }
 
+// ---------- the organisations (design §5.8 — an owner's) ----------
+
+const orgFiles = (root) => (root === '.' ? 'the workspace root' : root);
+const membersCount = (n) => plural(Number.isInteger(n) ? n : 0, 'member');
+
+// GET /api/admin/orgs (`orgs` its rows, removed ones included; null when the
+// read failed — `error` the thrown `<status>: <sentence>`); `activeOrg` the
+// org this browser is in. Each live row offers Remove… — the default org's
+// unavailable with the server's own sentence; a removed row is listed greyed,
+// its id never used again.
+export function buildOrgsSectionModel({ orgs, defaultOrg = null, access, activeOrg = null, error = null, formatTime = (iso) => iso } = {}) {
+  const own = access.can.own === true;
+  // New organisation: an owner's, and only where the server signs in (without
+  // sign-in a second organisation would make its next start refuse).
+  const create = access.can.createOrg === true;
+  const primary = { enabled: create, reason: create ? null : !own ? (readWhy(access, 'own') ?? access.why.own) : access.why.createOrg };
+  if (!isArr(orgs)) return { rows: [], primary, empty: null, error: error || 'the organisations could not be read' };
+  const rows = orgs.map((o) => {
+    const removed = Boolean(o.removedAt);
+    const isDefault = o.id === defaultOrg || o.default === true;
+    const reason = !own ? (access.why.own ?? null) : isDefault ? `${o.id} is the default org and cannot be removed` : null;
+    return {
+      id: o.id, name: o.name ?? o.id, isDefault, removed, active: o.id === activeOrg,
+      facts: [membersCount(o.members), `files: ${orgFiles(o.root)}`, o.createdAt ? `created ${formatTime(o.createdAt)}` : null].filter(Boolean).join(' · '),
+      removedText: removed ? `removed ${formatTime(o.removedAt)} — a slug is never reused` : null,
+      remove: removed || !own ? null : { enabled: reason === null, reason },
+    };
+  });
+  return { rows, primary, empty: rows.length ? null : 'No organisations yet.', error: null };
+}
+
+// POST /api/admin/orgs { id, name?, adopt } — the name only when one is
+// typed, adopt only when ticked (the server refuses an occupied directory
+// without it, naming the way).
+export function buildOrgCreateBody(draft = {}) {
+  const body = { id: String(draft.id ?? '').trim() };
+  const name = String(draft.name ?? '').trim();
+  if (name) body.name = name;
+  if (draft.adopt === true) body.adopt = true;
+  return body;
+}
+
+// The status after a create: the org, that the creator is its first admin,
+// where its files live — and when its directory was taken over.
+export function orgCreateStatus(answer = {}) {
+  const org = answer?.org || {};
+  const adopted = answer?.adopted === true ? " The directory's files were taken over." : '';
+  return { kind: 'saved', text: `Created ${org.name ?? org.id} (${org.id}) — you are its first admin; its files live in ${answer?.path ?? orgFiles(org.root)}.${adopted}` };
+}
+
+// The status after a removal: the server's note as served.
+export function orgRemoveStatus(record, answer = {}) {
+  const note = answer?.note ? ` — ${answer.note}` : '';
+  return { kind: 'saved', text: `Removed ${record.name ?? record.id} (${record.id})${note}.` };
+}
+
+// What a removal cannot undo (A2): no route restores an org and its id is
+// never used again; its members lose access and what it holds can no longer
+// be reached from the studio; its files stay. Removing the org this browser
+// is in says where the browser goes next.
+function orgRemoveConfirm(record, { active = false } = {}) {
+  const n = Number.isInteger(record.members) ? record.members : 0;
+  const who = n === 0 ? 'No member loses access' : n === 1 ? 'Its 1 member loses access' : `Its ${n} members lose access`;
+  const here = active ? ' This is the org you are in; afterwards this browser switches to your first other organisation.' : '';
+  return {
+    text: `Remove ${record.name ?? record.id} (${record.id})? This cannot be undone here: no route restores an organisation, and ${record.id} is never used again. ${who}, and its services, environments and MCP endpoints can no longer be reached from the studio. The files stay under ${orgFiles(record.root)}.${here}`,
+    danger: `Remove ${record.id}`,
+    typed: record.id,
+  };
+}
+
+// ---------- the join role (design §5.9 — an owner's) ----------
+
+const JOIN_ROLE_CHOICES = ['viewer', 'operator', 'admin', null];
+
+// The sign-in mode the server runs, first (GET /api/admin/join-role): what
+// the recorded join role does under it — and, behind a reverse proxy, that
+// it does nothing (the proxy's own setting rules).
+export function joinRoleModeSentence(doc, { defaultOrgName = null } = {}) {
+  const role = doc?.role ?? null;
+  const def = defaultOrgName || 'the default organisation';
+  if (doc?.mode === 'oidc') {
+    const head = `Sign-in: OIDC issuer ${doc.issuerKey ?? '(unrecorded)'}.`;
+    return role ? `${head} An IdP user joins ${def} as ${role} at their first sign-in.` : `${head} An IdP user gets no membership at first sign-in (an admin adds them).`;
+  }
+  if (doc?.mode === 'proxy') {
+    const groups = doc.proxy?.groupsConfigured ? ' — the groups header decides when it names a group' : '';
+    return `Sign-in: a reverse proxy. Its first-sight role is the proxy's (OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE: ${doc.proxy?.joinRole ?? 'none'})${groups}; the recorded join role below does not apply to proxy users.`;
+  }
+  return `Sign-in: local users. The join role applies to IdP users once OIDC is configured: ${role ?? 'none'}.`;
+}
+
+// `doc` GET /api/admin/join-role minus ok (null when the read failed —
+// `error` the thrown `<status>: <sentence>`); `defaultOrgName` the default
+// org's name (GET /api/admin/orgs).
+export function buildJoinRoleSectionModel({ doc, access, defaultOrgName = null, error = null } = {}) {
+  const own = access.can.own === true;
+  const primary = { enabled: own, reason: own ? null : (readWhy(access, 'own') ?? access.why.own) };
+  if (!doc || typeof doc !== 'object') return { scopeSentence: null, role: null, roleText: null, primary, empty: null, error: error || 'the join role could not be read' };
+  const role = doc.role ?? null;
+  return {
+    scopeSentence: joinRoleModeSentence(doc, { defaultOrgName }), role,
+    roleText: `Recorded join role: ${role ?? 'none — no automatic join'}`,
+    primary, empty: null, error: null,
+  };
+}
+
+// The PUT /api/admin/join-role body (B14): `{ role }` for viewer, operator
+// and null (no automatic join); `{ role: 'admin', confirm: true }` only when
+// the box is ticked; null — no call — for admin unticked. `confirm` never
+// rides a body that is not admin.
+export function joinRoleBody(role, ticked) {
+  if (role === 'admin') return ticked === true ? { role: 'admin', confirm: true } : null;
+  return { role: role ?? null };
+}
+
+// The status after a PUT: `Join role: <from|none> → <role|none>.`; the same
+// role → nothing changed (the server writes no row).
+export function joinRoleStatus({ role = null, from = null } = {}) {
+  if ((role ?? null) === (from ?? null)) return { kind: 'idle', text: 'Nothing changed.' };
+  return { kind: 'saved', text: `Join role: ${from ?? 'none'} → ${role ?? 'none'}.` };
+}
+
 // ---------- the editors (design §5) ----------
 
 // 'k=v' per line → { k: 'v' }; blank lines skipped; the first '=' splits; a
@@ -745,12 +870,15 @@ function mcpEndpointField(record, endpoints, value, { orgName, endpointsError })
   return field;
 }
 
-// The editor's model by kind (6b-i: environment, endpoint, org-name,
-// member-add, member). `record` is the row edited (null to create), `draft`
-// what was typed (keys of `fields`), `status` the footer line, `step`
-// 'edit' | 'confirm-delete' | 'confirm-action'. `ctx`: { access
+// The editor's model by kind (environment, endpoint, org-name, member-add,
+// member; an owner's user-create, user, org-create, org, join-role).
+// `record` is the row edited (null to create), `draft` what was typed (keys
+// of `fields`), `status` the footer line, `step` 'edit' | 'confirm-delete' |
+// 'confirm-action' | 'secret' | 'notice'. `ctx`: { access
 // (settingsAccessModel), orgName, orgId, services, endpoints,
-// endpointsError, serviceId, members, me }. The returned `draft` is the
+// endpointsError, serviceId, members, me, users, orgs, defaultOrg,
+// defaultOrgName, joinRole, action, secret, signIn, created, formatTime }.
+// The returned `draft` is the
 // effective one (record values under what was typed): its mcpEndpointId is
 // undefined when the endpoint list was not read.
 export function buildSettingsEditorModel(kind, record = null, { draft = null, status = null, step = 'edit', ctx = {} } = {}) {
@@ -954,6 +1082,73 @@ export function buildSettingsEditorModel(kind, record = null, { draft = null, st
     if (step === 'confirm-action') out.confirm = userConfirm(ctx.action, record.login, { self, defaultOrg: ctx.defaultOrg ?? null });
     if (step === 'secret' && ctx.secret) out.secret = { text: secretText(record.login, { forced: ctx.secret.forced !== false, reason: 'reset', localSignIn: signInModeLine(ctx.joinRole) === null }), value: ctx.secret.value };
     return out;
+  }
+
+  // A new organisation (an owner's, where the server signs in): its id, a
+  // name, and whether to take over a directory that already holds files.
+  // Created, the dialog says where its files live and offers Switch to it.
+  if (kind === 'org-create') {
+    const can = access?.can?.createOrg === true;
+    const why = access?.why?.createOrg ?? null;
+    const eff = { id: str('id', ''), name: str('name', ''), adopt: d.adopt === true };
+    const out = {
+      ...base, title: 'New organisation', eyebrow: 'Organisations', limits: { id: 64, name: 200 }, draft: eff, switchTo: null,
+      fields: [
+        { name: 'id', label: 'Id', type: 'text', value: eff.id, max: 64, help: 'a slug: lowercase letters, digits, - and _; never reused' },
+        { name: 'name', label: 'Name (optional)', type: 'text', value: eff.name, max: 200 },
+        { name: 'adopt', label: 'Take over an existing directory', type: 'checkbox', checked: eff.adopt, help: 'when orgs/<id>/ already holds files — adopt them instead of being refused' },
+      ],
+      status: st || idleStatus('You become its first admin; its files live in a directory of its own.'),
+      primary: primaryOf('Create', can, why),
+    };
+    if (step === 'notice' && ctx.created?.id) { out.primary = null; out.switchTo = { orgId: ctx.created.id, label: 'Switch to it' }; }
+    return out;
+  }
+
+  // One organisation (an owner's): its facts, and Remove… — a step that says
+  // what cannot be undone and asks for the id typed.
+  if (kind === 'org') {
+    const can = access?.can?.own === true;
+    const isDefault = record.id === ctx.defaultOrg || record.default === true;
+    const removed = Boolean(record.removedAt);
+    const reason = !can ? (access?.why?.own ?? null) : isDefault ? `${record.id} is the default org and cannot be removed` : removed ? `${record.id} is already removed` : null;
+    const fmt = typeof ctx.formatTime === 'function' ? ctx.formatTime : (iso) => iso;
+    const out = {
+      ...base, id: record.id, title: `${record.name ?? record.id} (${record.id})`, eyebrow: 'Organisation', fields: [], limits: {}, draft: {},
+      facts: [
+        [membersCount(record.members), isDefault ? 'the default organisation' : null].filter(Boolean).join(' · '),
+        `files: ${orgFiles(record.root)}`,
+        record.createdAt ? `created ${fmt(record.createdAt)}` : null,
+        removed ? `removed ${fmt(record.removedAt)} — a slug is never reused` : null,
+      ].filter(Boolean),
+      remove: { enabled: reason === null, reason, label: 'Remove…' },
+      status: st || idleStatus(record.id === ctx.orgId ? 'The organisation this browser is in.' : 'Removing one asks for its id first.'),
+      primary: null,
+    };
+    if (step === 'confirm-delete' && reason === null) out.confirm = orgRemoveConfirm(record, { active: record.id === ctx.orgId });
+    return out;
+  }
+
+  // The join role (an owner's): viewer, operator, admin or no automatic join.
+  // Admin asks for a box ticked first — the server refuses it unconfirmed —
+  // and only admin sends the confirmation (joinRoleBody).
+  if (kind === 'join-role') {
+    const can = access?.can?.own === true;
+    const current = record?.role ?? null;
+    const role = d.role !== undefined ? (JOIN_ROLE_CHOICES.includes(d.role) ? d.role : null) : current;
+    const def = ctx.defaultOrgName || 'the default organisation';
+    const eff = { role, confirm: d.confirm === true };
+    return {
+      ...base, id: null, title: 'Join role', eyebrow: 'The deployment', limits: {}, draft: eff,
+      fields: [
+        { name: 'role', label: 'Join role', type: 'segmented', value: role,
+          options: JOIN_ROLE_CHOICES.map((r) => ({ value: r, label: r ?? 'no automatic join', selected: r === role })) },
+        { name: 'confirm', type: 'checkbox', checked: eff.confirm, showWhen: { field: 'role', value: 'admin', now: role === 'admin' }, required: 'tick the box first',
+          label: `I understand: every user the IdP lets in becomes an admin of ${def} — its name, its members and its MCP endpoints. To add admins one by one, use Members.` },
+      ],
+      status: st || idleStatus(record ? joinRoleModeSentence(record, { defaultOrgName: ctx.defaultOrgName }) : 'The role an IdP user gets at their first sign-in.'),
+      primary: primaryOf('Save', can, access?.why?.own ?? null),
+    };
   }
 
   throw new Error(`no Settings editor of kind ${JSON.stringify(kind)}`);

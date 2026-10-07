@@ -21,11 +21,12 @@ import {
   mcpTargetMissingText, mcpRegisterCheck,
   noOwnerText, PASSWORD_ALPHABET, temporaryPassword, signInModeLine, buildUsersSectionModel, userActions, userActionStatus,
   buildUserCreateBody, userCreateStatus,
+  buildOrgsSectionModel, buildOrgCreateBody, orgCreateStatus, orgRemoveStatus, joinRoleModeSentence, buildJoinRoleSectionModel, joinRoleBody, joinRoleStatus,
 } from '../studio/settings-model.mjs';
 import {
   loadMcpEndpoints, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
   loadMembers, addMember, patchMember, removeMember, renameOrg, loadAudit,
-  loadUsers, createUser, userAction, setOwner, loadAdminOrgs, loadJoinRole,
+  loadUsers, createUser, userAction, setOwner, loadAdminOrgs, loadJoinRole, createOrg, removeOrg, putJoinRole,
 } from '../studio/settings-api.mjs';
 import { accessModel, TIER_BY_PACK } from '../studio/services-model.mjs';
 import { renderSettings, renderSettingsEditor, renderMcpTarget, readAuditDrafts } from '../studio/settings-view.mjs';
@@ -125,8 +126,8 @@ test('settingsAccessModel: each rank, each posture — the reasons name a way ou
 
 test('the frame: the scope line, the nav lists only the built sections, each unreadable one disabled with its reason', () => {
   assert.deepEqual(SETTINGS_SECTIONS, ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role']);
-  assert.deepEqual(BUILT_SECTIONS, ['environments', 'endpoints', 'members', 'audit', 'users'], 'the sections this build draws: the org\'s four and the deployment\'s users');
-  assert.deepEqual(BUILT_EDITORS, ['endpoint', 'environment', 'org-name', 'member-add', 'member', 'user-create', 'user'], 'the record editors this build draws: the MCP endpoint, the environment, the org name, the member editors and the user editors');
+  assert.deepEqual(BUILT_SECTIONS, SETTINGS_SECTIONS, 'the sections this build draws: the org\'s four and the deployment\'s three');
+  assert.deepEqual(BUILT_EDITORS, ['endpoint', 'environment', 'org-name', 'member-add', 'member', 'user-create', 'user', 'org-create', 'org', 'join-role'], 'the record editors this build draws: the MCP endpoint, the environment, the org name, the member editors, the user editors, the organisation editors and the join role');
   const FOUR = ['environments', 'endpoints', 'members', 'audit'];
   assert.deepEqual(buildSettingsFrameModel({ access: OLIVE }).nav.map((n) => n.id), BUILT_SECTIONS, 'the default nav is the built sections (an owner\'s)');
   assert.deepEqual(buildSettingsFrameModel({ access: ADA }).nav.map((n) => n.id), FOUR, 'a non-owner\'s nav: the org\'s sections — the deployment\'s collapse into one line');
@@ -176,7 +177,9 @@ test('the frame: the scope line, the nav lists only the built sections, each unr
   assert.deepEqual([stat.nav, stat.section, stat.banner.kind, stat.scope], [[], null, 'static', 'Settings']);
   assert.equal(settingsSectionFor(STATIC, 'environments'), null);
   assert.equal(settingsSectionFor(CLOSED, 'members', FOUR), 'environments', 'closed: members falls back');
-  assert.equal(settingsSectionFor(OLIVE, 'orgs'), 'environments', 'a section not built is never opened');
+  assert.equal(settingsSectionFor(OLIVE, 'orgs', FOUR), 'environments', 'a section not built is never opened');
+  assert.equal(settingsSectionFor(OLIVE, 'orgs'), 'orgs', 'Organisations is built, and an owner\'s');
+  assert.equal(settingsSectionFor(ADA, 'join-role'), 'environments', 'the join role is an owner\'s');
   assert.equal(settingsSectionFor(ADA, 'users'), 'environments', 'a section the rank cannot read is never opened');
   assert.equal(settingsSectionFor(OLIVE, 'users'), 'users', 'Users is built, and an owner\'s');
   assert.equal(settingsSectionFor(ADA, 'members'), 'members', 'Members is built');
@@ -195,9 +198,9 @@ test('the Advanced → Settings item\'s sub-line names every built section (§3.
   const item = src.match(/data-action="settings">[\s\S]*?<span class="observa-adv-item-sub">([^<]*)<\/span>/);
   assert.ok(item, 'the Settings menu item carries a sub-line');
   const sub = item[1];
-  const WORDS = { environments: /\benvironments\b/, endpoints: /\bMCP endpoints\b/, members: /\bmembers\b/, audit: /\baudit\b/, users: /\busers\b/ };
+  const WORDS = { environments: /\benvironments\b/, endpoints: /\bMCP endpoints\b/, members: /\bmembers\b/, audit: /\baudit\b/, users: /\busers\b/, orgs: /\borganisations\b/, 'join-role': /\bthe join role\b/ };
   for (const id of BUILT_SECTIONS) assert.match(sub, WORDS[id] ?? /(?!)/, `the sub-line names the built section ${id}`);
-  assert.doesNotMatch(sub, /slice|organisations|join/i, 'no roadmap wording, no section not built');
+  assert.doesNotMatch(sub, /slice/i, 'no roadmap wording');
 });
 
 test('settingsAboveRank: a downgrade forgets what the new rank may not read (C-6)', () => {
@@ -452,7 +455,7 @@ test('the member editors: add by login or email, a role change, the remove step;
   assert.equal(owner.remove.enabled, true);
   const rename = buildSettingsEditorModel('org-name', { id: 'acme', name: 'Acme' }, { ctx, draft: { name: 'Acme Corp' } });
   assert.deepEqual([rename.title, rename.draft, rename.fields[0].help], ['Rename Acme', { name: 'Acme Corp' }, 'The id acme stays; only the name changes.']);
-  assert.throws(() => buildSettingsEditorModel('org', null, { ctx }), /no Settings editor of kind "org"/);
+  assert.throws(() => buildSettingsEditorModel('org-member', null, { ctx }), /no Settings editor of kind "org-member"/);
 });
 
 test('the status sentences name what the server changed, by label', () => {
@@ -722,6 +725,7 @@ function settingsContainer() {
       if (sel === '[data-editor-close]') return [...html.matchAll(/data-editor-close/g)].map((_, i) => get(`close:${i}`, true));
       if (sel === '[data-user-manage]') return [...html.matchAll(/data-user-manage="(\d+)"/g)].map((m) => get(`user:${m[1]}`, true, { userManage: m[1] }));
       if (sel === '[data-user-action]') return [...html.matchAll(/data-user-action="([\w-]+)"/g)].map((m) => get(`uact:${m[1]}`, true, { userAction: m[1] }));
+      if (sel === '[data-org-remove]') return [...html.matchAll(/data-org-remove="([\w-]+)"/g)].map((m) => get(`org:${m[1]}`, true, { orgRemove: m[1] }));
       return [];
     },
   };
@@ -1275,15 +1279,16 @@ const OWNER_CTX = { access: OLIVE, orgName: 'Acme', orgId: 'acme', me: 'olive', 
 test('the deployment group: an owner\'s nav lists Users under its head; a signed-in non-owner reads one line saying who to ask (D-H); the token and closed postures draw it unavailable with their reasons', () => {
   const owner = buildSettingsFrameModel({ access: OLIVE, orgName: 'Acme', orgId: 'acme' });
   assert.deepEqual(owner.deployment, { head: 'The deployment', note: null });
-  assert.deepEqual(owner.nav.filter((n) => n.group === 'deployment').map((n) => [n.id, n.label, n.enabled]), [['users', 'Users', true]]);
+  assert.deepEqual(owner.nav.filter((n) => n.group === 'deployment').map((n) => [n.id, n.label, n.enabled]), [['users', 'Users', true], ['orgs', 'Organisations', true], ['join-role', 'Join role', true]]);
   for (const access of [ADA, OSCAR, VERA]) {
     const f = buildSettingsFrameModel({ access, orgName: 'Acme', orgId: 'acme' });
     assert.ok(!f.nav.some((n) => n.group === 'deployment'), 'no section a non-owner cannot open is listed');
-    assert.match(f.deployment.note, /^Users are an owner's — ask one\. /);
-    assert.equal(f.deployment.note, "Users are an owner's — ask one. (A deployment with no owner gets one from the server's shell: npm run users -- owner <login>.)");
+    assert.match(f.deployment.note, /^Users, organisations and the join role are an owner's — ask one\. /);
+    assert.equal(f.deployment.note, "Users, organisations and the join role are an owner's — ask one. (A deployment with no owner gets one from the server's shell: npm run users -- owner <login>.)");
   }
   // The line names only the deployment sections built (B3) — the full set once all three are.
-  assert.equal(noOwnerText(['users']), noOwnerText());
+  assert.equal(noOwnerText(['users']), "Users are an owner's — ask one. (A deployment with no owner gets one from the server's shell: npm run users -- owner <login>.)");
+  assert.equal(noOwnerText(['users', 'orgs', 'join-role']), noOwnerText());
   assert.equal(noOwnerText(['users', 'orgs', 'join-role']), "Users, organisations and the join role are an owner's — ask one. (A deployment with no owner gets one from the server's shell: npm run users -- owner <login>.)");
   assert.equal(noOwnerText(['environments']), null);
   assert.equal(buildSettingsFrameModel({ access: ADA, builtSections: ['environments', 'endpoints', 'members', 'audit'] }).deployment, null, 'no deployment section built: no group, no line');
@@ -1461,7 +1466,7 @@ test('renderSettings and the user editor: Users under the deployment head, no em
   // A non-owner: the head and the line, no Users item.
   const n = settingsContainer();
   renderSettings(n, buildSettingsFrameModel({ access: ADA, orgName: 'Acme', orgId: 'acme' }), null, host);
-  assert.ok(n.innerHTML.includes('<p class="set-nav-note" id="set-nav-no-owner">Users are an owner&#39;s — ask one. (A deployment with no owner gets one from the server&#39;s shell: npm run users -- owner &lt;login&gt;.)</p>'));
+  assert.ok(n.innerHTML.includes('<p class="set-nav-note" id="set-nav-no-owner">Users, organisations and the join role are an owner&#39;s — ask one. (A deployment with no owner gets one from the server&#39;s shell: npm run users -- owner &lt;login&gt;.)</p>'));
   assert.ok(!n.innerHTML.includes('data-section="users"'));
 
   // The secret step: the password exactly once, in the <code>; never in the status line (mutation check 8).
@@ -1495,3 +1500,212 @@ test('renderSettings and the user editor: Users under the deployment head, no em
   const unavailable = u.querySelectorAll('[data-user-action]').find((b) => b.dataset.userAction === 'reset');
   assert.equal(unavailable.getAttribute('aria-disabled'), 'true');
 });
+
+// ---------- the organisations and the join role (design §5.8–5.9, C12) ----------
+
+// GET /api/admin/orgs as the server sends it: the default org at the workspace root, two live ones, one removed.
+const ORGS_DOC = {
+  defaultOrg: 'default',
+  orgs: [
+    { id: 'default', name: 'Default', root: '.', default: true, removedAt: null, createdAt: '2026-10-01T00:00:00.000Z', members: 1 },
+    { id: 'acme', name: 'Acme', root: 'orgs/acme', default: false, removedAt: null, createdAt: '2026-10-02T00:00:00.000Z', members: 4 },
+    { id: 'charlie', name: 'Charlie', root: 'orgs/charlie', default: false, removedAt: null, createdAt: '2026-10-03T00:00:00.000Z', members: 1 },
+    { id: 'gone', name: 'Gone', root: 'orgs/gone', default: false, removedAt: '2026-10-04T00:00:00.000Z', createdAt: '2026-10-01T00:00:00.000Z', members: 0 },
+  ],
+};
+
+test('buildOrgsSectionModel: every org with its members, files and dates; removed ones greyed, never removable; the default org\'s Remove… unavailable with the server\'s sentence; New organisation needs sign-in', () => {
+  const m = buildOrgsSectionModel({ orgs: ORGS_DOC.orgs, defaultOrg: 'default', access: OLIVE, activeOrg: 'acme', formatTime: (iso) => iso.slice(0, 10) });
+  assert.deepEqual(m.primary, { enabled: true, reason: null });
+  assert.deepEqual(m.rows.map((r) => [r.id, r.facts, r.removedText, r.remove, r.active]), [
+    ['default', '1 member · files: the workspace root · created 2026-10-01', null, { enabled: false, reason: 'default is the default org and cannot be removed' }, false],
+    ['acme', '4 members · files: orgs/acme · created 2026-10-02', null, { enabled: true, reason: null }, true],
+    ['charlie', '1 member · files: orgs/charlie · created 2026-10-03', null, { enabled: true, reason: null }, false],
+    ['gone', '0 members · files: orgs/gone · created 2026-10-01', 'removed 2026-10-04 — a slug is never reused', null, false],
+  ]);
+  assert.deepEqual(m.rows.map((r) => [r.isDefault, r.removed]), [[true, false], [false, false], [false, false], [false, true]]);
+  // Without sign-in, on the loopback: listed, removable, but no second organisation (the server's NEEDS_IDENTITY).
+  const open = buildOrgsSectionModel({ orgs: ORGS_DOC.orgs, defaultOrg: 'default', access: OPEN });
+  assert.deepEqual([open.primary.enabled, open.primary.reason], [false, OPEN.why.createOrg]);
+  assert.match(open.primary.reason, /^a second organisation needs sign-in, and this server runs without it — /);
+  assert.equal(open.rows[2].remove.enabled, true);
+  // A non-owner never reaches the list; its controls carry the owner reason.
+  const ada = buildOrgsSectionModel({ orgs: ORGS_DOC.orgs, defaultOrg: 'default', access: ADA });
+  assert.deepEqual([ada.primary.reason, ada.rows[1].remove], [ADA.why.own, null]);
+  assert.deepEqual(buildOrgsSectionModel({ orgs: null, access: OLIVE, error: '403: owner only' }), { rows: [], primary: { enabled: true, reason: null }, empty: null, error: '403: owner only' });
+  assert.equal(settingsSectionHead('orgs').title, 'Organisations');
+  assert.equal(settingsSectionHead('orgs').loading, 'Reading organisations…');
+  assert.match(settingsSectionHead('orgs').scope, /its id is never used again\.$/);
+  assert.equal(settingsSectionHead('join-role').loading, 'Reading join role…');
+  assert.equal(settingsSectionHead('join-role').scope, null, 'the join role\'s scope sentence is the sign-in mode (the section model\'s)');
+});
+
+test('the organisation editors: New organisation (id, name, take over a directory) → the created sentence and Switch to it; Remove… says what cannot be undone and asks for the id typed', () => {
+  const ctx = { access: OLIVE, orgName: 'Acme', orgId: 'acme', defaultOrg: 'default', formatTime: (iso) => iso.slice(0, 10) };
+  const create = buildSettingsEditorModel('org-create', null, { ctx });
+  assert.deepEqual([create.title, create.primary.label, create.primary.enabled, create.switchTo], ['New organisation', 'Create', true, null]);
+  assert.deepEqual(create.fields.map((f) => [f.name, f.type]), [['id', 'text'], ['name', 'text'], ['adopt', 'checkbox']]);
+  assert.equal(create.fields[0].help, 'a slug: lowercase letters, digits, - and _; never reused');
+  assert.equal(create.fields[2].help, 'when orgs/<id>/ already holds files — adopt them instead of being refused');
+  assert.deepEqual(buildSettingsEditorModel('org-create', null, { ctx: { ...ctx, access: OPEN } }).primary, { label: 'Create', enabled: false, reason: OPEN.why.createOrg });
+  assert.deepEqual(buildOrgCreateBody({ id: ' charlie ', name: '', adopt: false }), { id: 'charlie' });
+  assert.deepEqual(buildOrgCreateBody({ id: 'charlie', name: ' Charlie ', adopt: true }), { id: 'charlie', name: 'Charlie', adopt: true });
+  const answer = { org: { id: 'charlie', name: 'Charlie', root: 'orgs/charlie' }, adopted: false, path: '/srv/ws/orgs/charlie' };
+  assert.deepEqual(orgCreateStatus(answer), { kind: 'saved', text: 'Created Charlie (charlie) — you are its first admin; its files live in /srv/ws/orgs/charlie.' });
+  assert.equal(orgCreateStatus({ ...answer, adopted: true }).text, "Created Charlie (charlie) — you are its first admin; its files live in /srv/ws/orgs/charlie. The directory's files were taken over.");
+  const created = buildSettingsEditorModel('org-create', null, { ctx: { ...ctx, created: { id: 'charlie' } }, step: 'notice', status: orgCreateStatus(answer) });
+  assert.deepEqual([created.primary, created.switchTo], [null, { orgId: 'charlie', label: 'Switch to it' }]);
+
+  const charlie = ORGS_DOC.orgs[2];
+  const facts = buildSettingsEditorModel('org', charlie, { ctx });
+  assert.deepEqual([facts.id, facts.title, facts.facts, facts.remove, facts.confirm], ['charlie', 'Charlie (charlie)', ['1 member', 'files: orgs/charlie', 'created 2026-10-03'], { enabled: true, reason: null, label: 'Remove…' }, null]);
+  const remove = buildSettingsEditorModel('org', charlie, { ctx, step: 'confirm-delete' });
+  assert.deepEqual(remove.confirm, {
+    text: 'Remove Charlie (charlie)? This cannot be undone here: no route restores an organisation, and charlie is never used again. Its 1 member loses access, and its services, environments and MCP endpoints can no longer be reached from the studio. The files stay under orgs/charlie.',
+    danger: 'Remove charlie', typed: 'charlie',
+  });
+  // The org this browser is in: the step says where the browser goes next.
+  const here = buildSettingsEditorModel('org', ORGS_DOC.orgs[1], { ctx, step: 'confirm-delete' });
+  assert.match(here.confirm.text, /^Remove Acme \(acme\)\? This cannot be undone here: .* Its 4 members lose access, .* This is the org you are in; afterwards this browser switches to your first other organisation\.$/);
+  // The default org: no step — Remove… unavailable with the server's sentence.
+  const def = buildSettingsEditorModel('org', ORGS_DOC.orgs[0], { ctx, step: 'confirm-delete' });
+  assert.deepEqual([def.confirm, def.remove.enabled, def.remove.reason], [null, false, 'default is the default org and cannot be removed']);
+  assert.deepEqual(orgRemoveStatus(charlie, { note: 'its files under /srv/ws/orgs/charlie stay; with the server stopped, packc store purge-org charlie deletes them' }),
+    { kind: 'saved', text: 'Removed Charlie (charlie) — its files under /srv/ws/orgs/charlie stay; with the server stopped, packc store purge-org charlie deletes them.' });
+  assert.equal(orgRemoveStatus(charlie, {}).text, 'Removed Charlie (charlie).');
+});
+
+test('the join role: the sign-in mode first, per mode; joinRoleBody sends confirm with admin only and nothing for admin unticked (B14); the status names from and to', () => {
+  assert.equal(joinRoleModeSentence({ mode: 'oidc', issuerKey: 'https://idp.test', role: 'viewer' }, { defaultOrgName: 'Default' }),
+    'Sign-in: OIDC issuer https://idp.test. An IdP user joins Default as viewer at their first sign-in.');
+  assert.equal(joinRoleModeSentence({ mode: 'oidc', issuerKey: 'https://idp.test', role: null }),
+    'Sign-in: OIDC issuer https://idp.test. An IdP user gets no membership at first sign-in (an admin adds them).');
+  assert.equal(joinRoleModeSentence({ mode: 'local', role: null }), 'Sign-in: local users. The join role applies to IdP users once OIDC is configured: none.');
+  assert.equal(joinRoleModeSentence({ mode: 'local', role: 'operator' }), 'Sign-in: local users. The join role applies to IdP users once OIDC is configured: operator.');
+  assert.equal(joinRoleModeSentence({ mode: 'proxy', role: 'viewer', proxy: { joinRole: 'operator', groupsConfigured: false } }),
+    "Sign-in: a reverse proxy. Its first-sight role is the proxy's (OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE: operator); the recorded join role below does not apply to proxy users.");
+  assert.equal(joinRoleModeSentence({ mode: 'proxy', role: null, proxy: { joinRole: 'viewer', groupsConfigured: true } }),
+    "Sign-in: a reverse proxy. Its first-sight role is the proxy's (OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE: viewer) — the groups header decides when it names a group; the recorded join role below does not apply to proxy users.");
+  const section = buildJoinRoleSectionModel({ doc: { mode: 'local', role: null, oidc: false, issuerKey: null }, access: OLIVE, defaultOrgName: 'Default' });
+  assert.deepEqual([section.scopeSentence, section.roleText, section.primary], ['Sign-in: local users. The join role applies to IdP users once OIDC is configured: none.', 'Recorded join role: none — no automatic join', { enabled: true, reason: null }]);
+  assert.equal(buildJoinRoleSectionModel({ doc: null, access: OLIVE, error: '403: x' }).error, '403: x');
+  assert.deepEqual(buildJoinRoleSectionModel({ doc: { mode: 'local' }, access: ADA }).primary, { enabled: false, reason: ADA.why.own });
+  // B14 (mutation check 5): confirm rides an admin body only, and admin unticked is no call at all.
+  assert.deepEqual(joinRoleBody('viewer', true), { role: 'viewer' });
+  assert.deepEqual(joinRoleBody('operator', false), { role: 'operator' });
+  assert.deepEqual(joinRoleBody(null, true), { role: null });
+  assert.deepEqual(joinRoleBody('admin', true), { role: 'admin', confirm: true });
+  assert.equal(joinRoleBody('admin', false), null);
+  for (const r of ['viewer', 'operator', null]) assert.ok(!('confirm' in joinRoleBody(r, true)), `no confirm with ${r}`);
+  assert.deepEqual(joinRoleStatus({ role: 'admin', from: null }), { kind: 'saved', text: 'Join role: none → admin.' });
+  assert.deepEqual(joinRoleStatus({ role: null, from: 'operator' }), { kind: 'saved', text: 'Join role: operator → none.' });
+  assert.deepEqual(joinRoleStatus({ role: 'viewer', from: 'viewer' }), { kind: 'idle', text: 'Nothing changed.' });
+  // The editor: the four choices, the box shown on admin only, required.
+  const ctx = { access: OLIVE, defaultOrgName: 'Default' };
+  const ed = buildSettingsEditorModel('join-role', { mode: 'local', role: null }, { ctx });
+  assert.deepEqual(ed.fields[0].options.map((o) => [o.value, o.label, o.selected]), [['viewer', 'viewer', false], ['operator', 'operator', false], ['admin', 'admin', false], [null, 'no automatic join', true]]);
+  assert.deepEqual([ed.fields[1].type, ed.fields[1].showWhen, ed.fields[1].required], ['checkbox', { field: 'role', value: 'admin', now: false }, 'tick the box first']);
+  assert.equal(ed.fields[1].label, 'I understand: every user the IdP lets in becomes an admin of Default — its name, its members and its MCP endpoints. To add admins one by one, use Members.');
+  assert.deepEqual(ed.primary, { label: 'Save', enabled: true, reason: null });
+  assert.equal(buildSettingsEditorModel('join-role', { mode: 'local', role: 'admin' }, { ctx }).fields[1].showWhen.now, true);
+  assert.deepEqual(buildSettingsEditorModel('join-role', { mode: 'local', role: null }, { ctx, draft: { role: 'admin', confirm: true } }).draft, { role: 'admin', confirm: true });
+});
+
+test('the organisation and join-role loaders: one requestJson call each, the id encoded, confirm only when asked', async () => {
+  const calls = [];
+  const answer = { ok: true, org: { id: 'a/b' }, adopted: true, path: '/p', note: 'n', role: 'admin', from: null };
+  const fetchFn = async (path, opts) => { calls.push([path, opts?.method ?? 'GET', opts?.body ?? null]); return answer; };
+  assert.deepEqual(await createOrg({ id: 'charlie', adopt: true }, { fetchFn }), { org: { id: 'a/b' }, adopted: true, path: '/p' });
+  assert.deepEqual(await removeOrg('a/b', { fetchFn }), { org: { id: 'a/b' }, note: 'n' });
+  assert.deepEqual(await putJoinRole('admin', true, { fetchFn }), { role: 'admin', from: null });
+  await putJoinRole('operator', false, { fetchFn });
+  await putJoinRole(null, undefined, { fetchFn });
+  assert.deepEqual(calls, [
+    ['/api/admin/orgs', 'POST', '{"id":"charlie","adopt":true}'],
+    ['/api/admin/orgs/a%2Fb', 'DELETE', null],
+    ['/api/admin/join-role', 'PUT', '{"role":"admin","confirm":true}'],
+    ['/api/admin/join-role', 'PUT', '{"role":"operator"}'],
+    ['/api/admin/join-role', 'PUT', '{"role":null}'],
+  ]);
+});
+
+test('renderSettings and the organisation and join-role editors: the rows escaped, Remove… by its rule; the id typed before the danger button works; Switch to it; the admin box gates Save', () => {
+  const calls = [];
+  const host = { settings: new Proxy({}, { get: (_, k) => (...a) => calls.push([k, ...a]) }) };
+  const xss = '<img src=x onerror="window.__x=1">';
+  const orgs = [ORGS_DOC.orgs[0], { ...ORGS_DOC.orgs[2], name: xss }, ORGS_DOC.orgs[3]];
+  const frame = buildSettingsFrameModel({ access: OLIVE, section: 'orgs', orgName: 'Acme', orgId: 'acme' });
+  const c = settingsContainer();
+  renderSettings(c, frame, { id: 'orgs', head: settingsSectionHead('orgs'), model: buildOrgsSectionModel({ orgs, defaultOrg: 'default', access: OLIVE, activeOrg: 'acme' }), status: { kind: 'ok', text: '' } }, host);
+  const h = c.innerHTML;
+  assert.ok(h.indexOf('id="set-nav-deployment"') < h.indexOf('data-section="orgs"') && h.indexOf('data-section="orgs"') < h.indexOf('data-section="join-role"'), 'Organisations and Join role under the deployment head');
+  assert.ok(!h.includes('<img') && h.includes('&lt;img src=x'), 'a name is escaped');
+  assert.ok(h.includes('id="set-primary">New organisation</button>'));
+  assert.ok(h.includes('<li class="set-row is-removed" data-org-id="gone">') && !h.includes('data-org-remove="gone"'), 'a removed org is listed greyed, with no Remove…');
+  assert.ok(h.includes('<span class="set-row-meta">removed 2026-10-04T00:00:00.000Z — a slug is never reused</span>'));
+  for (const b of c.querySelectorAll('[data-org-remove]')) b.fire('click');
+  c.querySelector('#set-primary').fire('click');
+  assert.deepEqual(calls, [
+    ['explain', 'default is the default org and cannot be removed'],
+    ['openEditor', { kind: 'org', id: 'charlie', step: 'confirm-delete' }],
+    ['openEditor', { kind: 'org-create' }],
+  ]);
+  assert.equal(c.querySelectorAll('[data-org-remove]')[0].getAttribute('aria-disabled'), 'true');
+
+  // The join role's section: the mode sentence as the scope, the recorded role, Change the join role….
+  const j = settingsContainer();
+  calls.length = 0;
+  renderSettings(j, buildSettingsFrameModel({ access: OLIVE, section: 'join-role' }), { id: 'join-role', head: settingsSectionHead('join-role'), model: buildJoinRoleSectionModel({ doc: { mode: 'local', role: null }, access: OLIVE }), status: null }, host);
+  assert.ok(j.innerHTML.includes('<p class="set-section-scope">Sign-in: local users. The join role applies to IdP users once OIDC is configured: none.</p>'));
+  assert.ok(j.innerHTML.includes('id="set-join-role">Recorded join role: none — no automatic join</span>'));
+  j.querySelector('#set-primary').fire('click');
+  assert.deepEqual(calls, [['openEditor', { kind: 'join-role' }]]);
+
+  // Remove…: the consequence, the id typed — the danger button aria-disabled until it matches.
+  const r = settingsContainer();
+  calls.length = 0;
+  renderSettingsEditor(r, buildSettingsEditorModel('org', ORGS_DOC.orgs[2], { ctx: { access: OLIVE, orgId: 'acme', defaultOrg: 'default' }, step: 'confirm-delete' }), host);
+  assert.ok(r.innerHTML.includes('<span class="set-editor-typed-label" id="set-editor-typed-label">Type <code>charlie</code> to remove it</span>'));
+  assert.ok(r.innerHTML.includes('id="set-editor-confirm" aria-disabled="true" aria-describedby="set-editor-typed-label">Remove charlie</button>'));
+  r.querySelector('#set-editor-confirm').fire('click');
+  r.querySelector('#set-editor-typed').value = 'charli';
+  r.querySelector('#set-editor-typed').fire('input');
+  assert.equal(r.querySelector('#set-editor-confirm').getAttribute('aria-disabled'), 'true');
+  r.querySelector('#set-editor-typed').value = 'charlie';
+  r.querySelector('#set-editor-typed').fire('input');
+  assert.equal(r.querySelector('#set-editor-confirm').getAttribute('aria-disabled'), 'false');
+  r.querySelector('#set-editor-confirm').fire('click');
+  assert.deepEqual(calls, [['explain', 'Type charlie to remove it'], ['confirm', 'charlie']]);
+
+  // Created: Close and Switch to it — the new org's Members.
+  const n = settingsContainer();
+  calls.length = 0;
+  renderSettingsEditor(n, buildSettingsEditorModel('org-create', null, { ctx: { access: OLIVE, created: { id: 'charlie' } }, step: 'notice', status: { kind: 'saved', text: 'Created Charlie (charlie) — …' } }), host);
+  assert.ok(n.innerHTML.includes('id="set-editor-switch">Switch to it</button>') && !n.innerHTML.includes('id="set-editor-save"'));
+  n.querySelector('#set-editor-switch').fire('click');
+  assert.deepEqual(calls, [['switchTo', 'charlie', 'members']]);
+
+  // The join role: the admin box hidden until admin is chosen; Save unavailable with "tick the box first" until ticked.
+  const e = settingsContainer();
+  calls.length = 0;
+  renderSettingsEditor(e, buildSettingsEditorModel('join-role', { mode: 'local', role: null }, { ctx: { access: OLIVE, defaultOrgName: 'Default' } }), host);
+  assert.ok(e.innerHTML.includes('<label class="set-editor-field set-editor-check" id="set-edit-confirm-field" hidden>'));
+  assert.ok(e.innerHTML.includes('<input id="set-edit-confirm" name="confirm" type="checkbox">'));
+  const admin = e.querySelectorAll('[data-seg="role"]').find((b) => b.dataset.value === 'admin');
+  admin.fire('click');
+  assert.equal(e.querySelector('#set-edit-confirm-field').hidden, false, 'the box shows on admin');
+  assert.equal(e.querySelector('#set-editor-save').getAttribute('aria-disabled'), 'true');
+  assert.equal(e.querySelector('#set-editor-save').why.textContent, 'tick the box first');
+  e.querySelector('#set-editor-save').fire('click');
+  e.querySelector('#set-edit-confirm').checked = true;
+  e.querySelector('#set-edit-confirm').fire('change');
+  assert.equal(e.querySelector('#set-editor-save').getAttribute('aria-disabled'), 'false');
+  e.querySelector('#set-editor-save').fire('click');
+  const operator = e.querySelectorAll('[data-seg="role"]').find((b) => b.dataset.value === 'operator');
+  operator.fire('click');
+  assert.equal(e.querySelector('#set-edit-confirm-field').hidden, true, 'the box hides again');
+  e.querySelector('#set-editor-save').fire('click');
+  assert.deepEqual(calls, [['explain', 'tick the box first'], ['save', { role: 'admin', confirm: true }], ['save', { role: 'operator', confirm: true }]],
+    'the draft carries the box; joinRoleBody leaves confirm off every body but admin');
+});
+

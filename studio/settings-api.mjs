@@ -2,8 +2,9 @@
 //
 // The loaders of Settings (docs/STORE_PLAN.md §6 item 3, slice 6b): the org's
 // environments (written through the services routes), its MCP endpoints, its
-// members and name, and its audit; and the deployment's users (an owner's). The controller (studio/app.mjs) owns WHEN
-// each is called; the models (studio/settings-model.mjs) own what is drawn.
+// members and name, and its audit; and the deployment's users, organisations
+// and join role (an owner's). The controller (studio/app.mjs) owns WHEN each
+// is called; the models (studio/settings-model.mjs) own what is drawn.
 //
 // Every call goes through requestJson() (studio/services-api.mjs): the CSRF
 // and org headers on every request, the 401 sign-in rule, and the server's
@@ -120,7 +121,7 @@ export async function loadAudit(query = '', { fetchFn = requestJson } = {}) {
   return fetchFn(`/api/audit${query}`);
 }
 
-// ---------- the deployment's users (an owner's) ----------
+// ---------- the deployment's users, organisations and join role (an owner's) ----------
 
 // GET /api/admin/users → the users, no email.
 export async function loadUsers({ fetchFn = requestJson } = {}) {
@@ -158,10 +159,32 @@ export async function loadAdminOrgs({ fetchFn = requestJson } = {}) {
   return { defaultOrg: doc?.defaultOrg ?? null, orgs: Array.isArray(doc?.orgs) ? doc.orgs : [] };
 }
 
+// POST /api/admin/orgs { id, name?, adopt? } → { org, adopted, path } (the
+// creator is its first admin; `path` the directory its files live in).
+export async function createOrg(body, { fetchFn = requestJson } = {}) {
+  const doc = await fetchFn('/api/admin/orgs', json('POST', body));
+  return { org: doc?.org ?? null, adopted: doc?.adopted === true, path: doc?.path ?? null };
+}
+
+// DELETE /api/admin/orgs/:id → { org, note } (a soft removal: the row and the
+// files stay; `note` says where, and how to delete them).
+export async function removeOrg(id, { fetchFn = requestJson } = {}) {
+  const doc = await fetchFn(`/api/admin/orgs/${enc(id)}`, { method: 'DELETE' });
+  return { org: doc?.org ?? null, note: doc?.note ?? null };
+}
+
 // GET /api/admin/join-role → { role, oidc, issuerKey, mode, proxy? } — the
 // sign-in mode the server runs.
 export async function loadJoinRole({ fetchFn = requestJson } = {}) {
   const doc = await fetchFn('/api/admin/join-role');
   const { ok: _ok, ...rest } = doc || {};
   return rest;
+}
+
+// PUT /api/admin/join-role { role } — or { role: 'admin', confirm: true }
+// (joinRoleBody: `confirm` rides an admin body only) → { role, from }.
+export async function putJoinRole(role, confirm = false, { fetchFn = requestJson } = {}) {
+  const body = confirm === true ? { role, confirm: true } : { role };
+  const doc = await fetchFn('/api/admin/join-role', json('PUT', body));
+  return { role: doc?.role ?? null, from: doc?.from ?? null };
 }

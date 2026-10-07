@@ -69,11 +69,12 @@ import {
   buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
   mcpTargetModel, mcpTargetBody, mcpTargetMissingText, mcpRegisterCheck, profileEndpointNote, endpointDrift,
   buildUsersSectionModel, buildUserCreateBody, userCreateStatus, userActionStatus, temporaryPassword,
+  buildOrgsSectionModel, buildOrgCreateBody, orgCreateStatus, orgRemoveStatus, buildJoinRoleSectionModel, joinRoleBody, joinRoleStatus,
 } from './settings-model.mjs';
 import {
   loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
   addMember, patchMember, removeMember, renameOrg, loadAudit,
-  loadUsers, createUser, userAction, setOwner, loadAdminOrgs, loadJoinRole,
+  loadUsers, createUser, userAction, setOwner, loadAdminOrgs, loadJoinRole, createOrg, removeOrg, putJoinRole,
 } from './settings-api.mjs';
 import { renderSettings, renderSettingsEditor, renderMcpTarget, readAuditDrafts } from './settings-view.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
@@ -1488,7 +1489,7 @@ function installObservaChrome(chrome) {
             <div class="observa-adv-menu-head">Administration</div>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="settings">
               <span class="observa-adv-item-label">Settings</span>
-              <span class="observa-adv-item-sub">environments, MCP endpoints, members, the audit, users…</span>
+              <span class="observa-adv-item-sub">environments, MCP endpoints, members, the audit, users, organisations, the join role…</span>
             </button>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="mcp">
               <span class="observa-adv-item-label">Live MCP connection</span>
@@ -2313,7 +2314,7 @@ let settingsFocusNext = false;
 function freshSettings() {
   return {
     probe: null, denied: null, deniedAdmin: null, deniedOwn: null, status: {}, members: null, org: null, membersError: null, endpointsError: null, audit: null,
-    users: null, usersError: null, orgs: null, joinRole: null,
+    users: null, usersError: null, orgs: null, orgsError: null, joinRole: null, joinRoleError: null,
   };
 }
 
@@ -2443,6 +2444,7 @@ async function loadSettingsSection(id, { notice = null } = {}) {
   if (id === 'members') return loadMembersSection(settings, gen, notice);
   if (id === 'audit') return loadAuditSection(settings, gen, notice);
   if (id === 'users') return loadUsersSection(settings, gen, notice);
+  if (id === 'orgs' || id === 'join-role') return loadDeploymentSection(id, settings, gen, notice);
   let endpointsRefusal = null;
   await Promise.all([
     refreshServices(),
@@ -2524,6 +2526,40 @@ async function loadUsersSection(settings, gen, notice) {
   settings.status.users = { kind: 'ok', text: notice ?? '' };
   if (gen !== settingsGeneration || state.settingsSection !== 'users') return;
   repaintSettings();
+}
+
+// The organisations (GET /api/admin/orgs) and the join role (GET
+// /api/admin/join-role, with the organisations for the default org's name):
+// an owner's reads. The section's own read's refusal is its status line; a
+// refusal by the gate downgrades the frame first.
+async function loadDeploymentSection(id, settings, gen, notice) {
+  const [orgs, joinRole] = await Promise.allSettled([loadAdminOrgs(), id === 'join-role' ? loadJoinRole() : Promise.resolve(settings.joinRole)]);
+  if (state.settings === settings) {
+    Object.assign(settings, {
+      orgs: orgs.status === 'fulfilled' ? orgs.value : null,
+      orgsError: orgs.status === 'fulfilled' ? null : (orgs.reason?.message || 'no answer'),
+    });
+    if (id === 'join-role') {
+      Object.assign(settings, {
+        joinRole: joinRole.status === 'fulfilled' ? joinRole.value : null,
+        joinRoleError: joinRole.status === 'fulfilled' ? null : (joinRole.reason?.message || 'no answer'),
+      });
+    }
+  }
+  if (state.mode !== 'settings' || state.settings !== settings) return;
+  const own = id === 'orgs' ? orgs : joinRole;
+  if (adminReadRefused(settings, own.status === 'rejected' ? own.reason : null, gen, id, { need: 'own' })) return;
+  settings.status[id] = { kind: 'ok', text: notice ?? '' };
+  if (gen !== settingsGeneration || state.settingsSection !== id) return;
+  repaintSettings();
+}
+
+// The default organisation's name, as GET /api/admin/orgs listed it (its id
+// when the list was not read).
+function settingsDefaultOrgName() {
+  const doc = state.settings?.orgs;
+  if (!doc?.defaultOrg) return null;
+  return (doc.orgs || []).find((o) => o.id === doc.defaultOrg)?.name ?? doc.defaultOrg;
 }
 
 // The audit (GET /api/audit, an admin's read; the deployment's rows an
@@ -2609,6 +2645,14 @@ function settingsSectionView(id, access) {
   }
   if (id === 'users') {
     const model = buildUsersSectionModel({ users: settings.users, access, me: signedInLogin(), error: settings.usersError, formatTime: auditTime });
+    return { id, head, model, status };
+  }
+  if (id === 'orgs') {
+    const model = buildOrgsSectionModel({ orgs: settings.orgs?.orgs ?? null, defaultOrg: settings.orgs?.defaultOrg ?? null, access, activeOrg: state.orgId, error: settings.orgsError, formatTime: auditTime });
+    return { id, head, model, status };
+  }
+  if (id === 'join-role') {
+    const model = buildJoinRoleSectionModel({ doc: settings.joinRole, access, defaultOrgName: settingsDefaultOrgName(), error: settings.joinRoleError });
     return { id, head, model, status };
   }
   if (id === 'members') {
@@ -2723,7 +2767,9 @@ function adoptEnvironment(env, { remove = false } = {}) {
 // The record the editor is over, as the section's list has it now.
 function settingsEditorRecord(ed) {
   if (ed.kind === 'org-name') return settingsOrgRecord();
+  if (ed.kind === 'join-role') return state.settings?.joinRole ?? ed.record;
   if (ed.id === null) return null;
+  if (ed.kind === 'org') return Array.isArray(state.settings?.orgs?.orgs) ? (state.settings.orgs.orgs.find((o) => o.id === ed.id) ?? undefined) : ed.record;
   if (ed.kind === 'member') return Array.isArray(state.settings?.members) ? (state.settings.members.find((m) => m.userId === ed.id) ?? undefined) : ed.record;
   if (ed.kind === 'user') return Array.isArray(state.settings?.users) ? (state.settings.users.find((u) => u.id === ed.id) ?? undefined) : ed.record;
   if (ed.kind === 'endpoint' && Array.isArray(state.mcpEndpoints)) return state.mcpEndpoints.find((ep) => ep.id === ed.id) ?? undefined;
@@ -2765,6 +2811,7 @@ function syncSettingsEditor() {
       members: state.settings?.members ?? null, me: signedInLogin(),
       users: state.settings?.users ?? null, orgs: state.settings?.orgs?.orgs ?? null, defaultOrg: state.settings?.orgs?.defaultOrg ?? null,
       joinRole: state.settings?.joinRole ?? null, action: ed.action ?? null, secret: ed.secret ?? null, signIn: ed.signIn === true, formatTime: auditTime,
+      defaultOrgName: settingsDefaultOrgName(), created: ed.created ?? null,
     },
   });
   renderSettingsEditor(settingsEditorHost(), model, settingsHost);
@@ -2780,6 +2827,7 @@ function settingsOpenerSelector(el) {
   if (el.dataset?.memberRole) return `[data-member-role="${CSS.escape(el.dataset.memberRole)}"]`;
   if (el.dataset?.memberRemove) return `[data-member-remove="${CSS.escape(el.dataset.memberRemove)}"]`;
   if (el.dataset?.userManage) return `[data-user-manage="${CSS.escape(el.dataset.userManage)}"]`;
+  if (el.dataset?.orgRemove) return `[data-org-remove="${CSS.escape(el.dataset.orgRemove)}"]`;
   return el.id ? `#${CSS.escape(el.id)}` : null;
 }
 
@@ -2796,7 +2844,8 @@ async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'e
   if (!BUILT_EDITORS.includes(kind)) return;
   if (kind === 'environment' ? !(state.mode === 'settings' || state.mode === 'service') : state.mode !== 'settings') return;
   const access = settingsAccess();
-  const need = kind === 'environment' ? 'operate' : (kind === 'user' || kind === 'user-create') ? 'own' : 'admin';
+  const need = kind === 'environment' ? 'operate' : kind === 'org-create' ? 'createOrg'
+    : ['user', 'user-create', 'org', 'join-role'].includes(kind) ? 'own' : 'admin';
   if (!access.can[need]) { explainUnavailable(access.why[need]); return; }
   const opening = ++settingsEditorOpening;
   const opener = settingsOpenerSelector(document.activeElement);
@@ -2805,6 +2854,7 @@ async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'e
     if (kind === 'endpoint') return Array.isArray(state.mcpEndpoints) ? state.mcpEndpoints.find((ep) => ep.id === id) : null;
     if (kind === 'member') return Array.isArray(state.settings?.members) ? state.settings.members.find((m) => m.userId === id) : null;
     if (kind === 'user') return Array.isArray(state.settings?.users) ? state.settings.users.find((u) => u.id === id) : null;
+    if (kind === 'org') return Array.isArray(state.settings?.orgs?.orgs) ? state.settings.orgs.orgs.find((o) => o.id === id) : null;
     if (kind === 'org-name') return settingsOrgRecord();
     return environmentRecord(id);
   };
@@ -2822,15 +2872,16 @@ async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'e
       if (opening !== settingsEditorOpening || state.mode !== mode || (page !== null && state.serviceId !== page)) return;
     }
   }
-  const record = id === null ? null : find();
-  if (id !== null && !record) return;
+  // The join role's dialog is over the role as read (none read: nothing to change).
+  const record = kind === 'join-role' ? (state.settings?.joinRole ?? null) : id === null ? null : find();
+  if ((id !== null || kind === 'join-role') && !record) return;
   closeMcpPanel();
   const draftPanel = document.getElementById('draft-mcp-panel');
   if (draftPanel) draftPanel.hidden = true;
   dropSettingsSecret(settingsEditor);
   settingsEditor = {
     kind, id, serviceId: record?.serviceId ?? serviceId ?? page, page: kind === 'environment' ? page : null,
-    record, draft: null, status: null, step: kind === 'member' && step === 'confirm-delete' ? 'confirm-delete' : 'edit', opener, endpointsError,
+    record, draft: null, status: null, step: (kind === 'member' || kind === 'org') && step === 'confirm-delete' ? 'confirm-delete' : 'edit', opener, endpointsError,
   };
   syncSettingsEditor();
   focusSettingsEditor();
@@ -2838,8 +2889,10 @@ async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'e
 
 function focusSettingsEditor() {
   const dialog = document.querySelector('#set-editor-host .set-editor');
-  const first = dialog?.querySelector('input, textarea, select') || dialog?.querySelector('#set-editor-confirm')
-    || dialog?.querySelector('#set-secret-copy, #set-editor-signin, [data-user-action]')
+  // The first field drawn (a box shown only on a choice may be hidden).
+  const first = [...(dialog?.querySelectorAll('input, textarea, select') || [])].find((el) => !el.closest('[hidden]'))
+    || dialog?.querySelector('#set-editor-confirm')
+    || dialog?.querySelector('#set-secret-copy, #set-editor-signin, #set-editor-switch, [data-user-action]')
     || dialog?.querySelector('[role="radio"][tabindex="0"]') || dialog;
   first?.focus({ preventScroll: true });
 }
@@ -2905,6 +2958,8 @@ async function saveSettingsEditor(draft) {
   if (ed.kind === 'member-add') return saveMemberAdd(ed, draft);
   if (ed.kind === 'member') return saveMemberRole(ed, draft);
   if (ed.kind === 'user-create') return createUserEditor(ed, draft);
+  if (ed.kind === 'org-create') return createOrgEditor(ed, draft);
+  if (ed.kind === 'join-role') return saveJoinRoleEditor(ed, draft);
   if (ed.kind !== 'endpoint') return null;
   ed.draft = draft;
   const record = ed.record;
@@ -2948,9 +3003,10 @@ async function saveSettingsEditor(draft) {
 // The danger button of the delete step: DELETE, then the sentence naming the
 // environments it unbound (resolved through the services table as read
 // before the delete) in the section's status line; the dialog closes.
-async function confirmSettingsEditor() {
+async function confirmSettingsEditor(typed = null) {
   const ed = settingsEditor;
   if (!ed || ed.status?.kind === 'pending' || !ed.record) return null;
+  if (ed.kind === 'org' && ed.step === 'confirm-delete') return removeOrgEditor(ed, typed);
   if (ed.kind === 'member' && ed.step === 'confirm-action') return patchMemberRole(ed, ed.draft?.role);
   if (ed.kind === 'user' && ed.step === 'confirm-action') return userActionEditor(ed);
   if (ed.step !== 'confirm-delete') return null;
@@ -3302,6 +3358,82 @@ async function afterOwnOwnerRevoke(notice) {
   return { ok: true };
 }
 
+// ---------- the organisations and the join role (design §5.8–5.9 — an owner's) ----------
+
+// New organisation (POST /api/admin/orgs): the creator becomes its first
+// admin. The dialog then says where its files live — and that a directory
+// was taken over — and offers Switch to it (this browser reloads into its
+// Settings, design §3.5); the list is read anew.
+async function createOrgEditor(ed, draft) {
+  ed.draft = draft;
+  ed.status = { kind: 'pending', text: 'Creating…' };
+  syncSettingsEditor();
+  let answer;
+  try { answer = await createOrg(buildOrgCreateBody(draft)); }
+  catch (e) { return memberWriteRefused(ed, e, { need: 'own' }); }
+  const status = orgCreateStatus(answer);
+  if (settingsEditor === ed) {
+    Object.assign(ed, { status, step: 'notice', created: { id: answer.org?.id ?? buildOrgCreateBody(draft).id }, draft: null });
+    syncSettingsEditor();
+    document.getElementById('set-editor-switch')?.focus({ preventScroll: true });
+  }
+  announce(status.text);
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
+// Remove (DELETE /api/admin/orgs/:id), once its id is typed: the server's
+// note in the section's status line, the dialog closed. Removing the org
+// this browser is in reloads it into the first other organisation.
+async function removeOrgEditor(ed, typed) {
+  const org = ed.record;
+  if (String(typed ?? '').trim() !== org.id) { explainUnavailable(`Type ${org.id} to remove it`); return null; }
+  ed.status = { kind: 'pending', text: 'Removing…' };
+  syncSettingsEditor();
+  let answer;
+  try { answer = await removeOrg(org.id); }
+  catch (e) { return memberWriteRefused(ed, e, { need: 'own' }); }
+  const status = orgRemoveStatus(org, answer);
+  announce(status.text);
+  if (org.id === state.orgId) {
+    if (settingsEditor === ed) { ed.status = status; syncSettingsEditor(); }
+    leaveOrgAndReload();
+    return { ok: true, left: true };
+  }
+  // The row's Remove… goes with the org: the focus goes to the section's primary.
+  if (settingsEditor === ed) { ed.opener = null; closeSettingsEditor(); }
+  await rereadAfterSettingsWrite(status.text);
+  return { ok: true };
+}
+
+// Save on the join role (PUT /api/admin/join-role): the same role →
+// "Nothing changed." without a call; admin unticked → no call, the box's
+// reason (joinRoleBody answers null); else the body joinRoleBody builds —
+// `confirm` on an admin body only.
+async function saveJoinRoleEditor(ed, draft) {
+  ed.draft = draft;
+  const role = draft?.role ?? null;
+  if (role === (ed.record?.role ?? null)) {
+    ed.status = joinRoleStatus({ role, from: role });
+    syncSettingsEditor();
+    return { ok: true, changed: [] };
+  }
+  const body = joinRoleBody(role, draft?.confirm === true);
+  if (!body) { explainUnavailable('tick the box first'); return null; }
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let answer;
+  try { answer = await putJoinRole(body.role, body.confirm === true); }
+  catch (e) { return memberWriteRefused(ed, e, { need: 'own' }); }
+  const status = joinRoleStatus(answer);
+  if (state.settings?.joinRole) state.settings.joinRole = { ...state.settings.joinRole, role: answer.role };
+  if (settingsEditor === ed) Object.assign(ed, { status, draft: null, record: state.settings?.joinRole ?? ed.record });
+  syncSettingsEditor();
+  announce(status.text);
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
 // ---------- the environment editor (design §5.1–5.2: one editor, two doors) ----------
 
 // An environment write refused: the server's sentence in the status line; a
@@ -3441,13 +3573,14 @@ const settingsActions = {
   closeEditor: () => closeSettingsEditor(),
   save: (draft) => saveSettingsEditor(draft),
   step: (step, draft = null) => setSettingsEditorStep(step, draft),
-  confirm: () => confirmSettingsEditor(),
+  confirm: (typed = null) => confirmSettingsEditor(typed),
   auditApply: (filters) => applyAuditFilters(filters),
   auditMore: () => loadOlderAuditRows(),
   pickMcpTarget: (container, value) => pickMcpTarget(container, value),
   openMcpEndpoints: () => openMcpEndpointsFromPicker(),
   copySecret: () => copySettingsSecret(),
   signIn: () => goToSignIn(),
+  switchTo: (orgId, section = null) => { closeSettingsEditor({ focus: false }); reloadIntoSettings(orgId, section); },
 };
 const settingsHost = { renderMainView, renderTabs, settings: settingsActions };
 
