@@ -53,6 +53,12 @@ const CASES = [
     breakCriticals: (f) => f.targets.forEach(t => { delete t.job; delete t.labels; }) },
   { capability: 'metric_names', fixture: 'metrics_label_values.json',
     breakCriticals: (f) => { delete f.values; delete f.data; delete f.metrics; delete f.names; } },
+  // Grafana-managed rules in the provisioning shape (a bare array of
+  // { title, folderUID, data[] }), recorded from Grafana 12.4.4 on the local
+  // Docker stack: a snapshot's reader (adaptSnapshot) — the draft's `adapt`
+  // reads none of it, as before.
+  { capability: 'alert_rules', fixture: 'grafana_alert_rules.json', adaptWith: 'adaptSnapshot', golden: 'alert_rules.grafana',
+    breakCriticals: (f) => f.forEach(r => { delete r.title; delete r.name; delete r.record; delete r.alert; }) },
 ];
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
@@ -92,8 +98,9 @@ for (const c of CASES) {
   assert(v.ok && v.items > 0, `${c.capability}: recorded ${c.fixture} satisfies shape ${shapeId} (${v.items} items)`, v);
 
   // 2. ADAPT — pinned canonical fragment.
-  const adapted = probe.adapt(clone(fixture));
-  const goldenFile = resolve(ADAPTED_DIR, `${c.capability}.json`);
+  const adaptOf = (x) => (c.adaptWith ? probe[c.adaptWith](x) : probe.adapt(x));
+  const adapted = adaptOf(clone(fixture));
+  const goldenFile = resolve(ADAPTED_DIR, `${c.golden ?? c.capability}.json`);
   const actual = JSON.stringify(adapted, null, 2) + '\n';
   if (UPDATE) {
     writeFileSync(goldenFile, actual);
@@ -112,7 +119,7 @@ for (const c of CASES) {
   const extended = injectExtras(clone(fixture));
   const vExt = validateResponseShape(shapeId, extended);
   assert(vExt.ok, `${c.capability}: shape check ignores unknown extra fields`, vExt);
-  assert(JSON.stringify(probe.adapt(extended)) === JSON.stringify(adapted),
+  assert(JSON.stringify(adaptOf(extended)) === JSON.stringify(adapted),
     `${c.capability}: adapt() output identical with vendor extras present`);
 
   // 4. CRITICAL — removing what adapt() consumes fails the gate.
@@ -325,6 +332,19 @@ const empty = JSON.parse(readFileSync(resolve(FIXTURE_DIR, 'metrics_alerts.empty
 const vEmpty = validateResponseShape('rule-groups', empty);
 assert(vEmpty.ok && vEmpty.items === 0,
   'metrics_alerts {groups: []}: empty payload PASSES the shape check (zero is an answer)', vEmpty);
+// The provisioning shape: a snapshot reads it, the draft's adapter does not
+// (byte-identical draft); a Grafana-managed recording rule is no alert rule.
+{
+  const provisioned = JSON.parse(readFileSync(resolve(FIXTURE_DIR, 'grafana_alert_rules.json'), 'utf8'));
+  const alertProbe = PROBES.find(p => p.name === 'alert_rules');
+  assert(alertProbe.adapt(clone(provisioned)).length === 0, 'grafana_alert_rules.json: the draft adapter reads no rule from the provisioning shape (unchanged)');
+  const read = alertProbe.adaptSnapshot(clone(provisioned));
+  assert(read.length === provisioned.filter(r => !r.record).length && read.every(r => r.folderUid && r.expr),
+    'grafana_alert_rules.json: every alerting rule read with its expr and folder uid; the recording rule left out', read.map(r => r.name));
+  assert(JSON.stringify(alertProbe.adaptSnapshot(clone(JSON.parse(readFileSync(resolve(FIXTURE_DIR, 'vmalert_rules.json'), 'utf8')))))
+    === JSON.stringify(alertProbe.adapt(clone(JSON.parse(readFileSync(resolve(FIXTURE_DIR, 'vmalert_rules.json'), 'utf8'))))),
+  'adaptSnapshot reads a rule-groups answer exactly as adapt does');
+}
 const recProbe = PROBES.find(p => p.name === 'recording_rules');
 assert(Array.isArray(recProbe.adapt(empty)) && recProbe.adapt(empty).length === 0,
   'metrics_alerts {groups: []}: adapts to [] so the cascade falls through to the next candidate');

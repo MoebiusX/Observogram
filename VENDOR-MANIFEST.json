@@ -369,8 +369,8 @@
       ]
     },
     "tools/lib/contracts/response-shapes.mjs": {
-      "sha256": "dd2e604c658de4b0619fbbac92e6056437a28ec7a661c0339086e48e8c4a3a9d",
-      "bytes": 9977,
+      "sha256": "ca83c7f917b48825355222fbfae82ac28a2c5fca7a064dd5b5834e6bae967a1c",
+      "bytes": 10305,
       "exports": [
         "RESPONSE_SHAPES",
         "locateObjectPayload",

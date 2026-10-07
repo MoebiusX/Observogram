@@ -23,8 +23,13 @@
  * named and parked, the repository's alert rules not checked), no core
  * abort (the draft still throws), the folder scope before the detail loop,
  * two alert-rule engines unioned, a two-page tools/list, the cancel, the
- * metric-name cap, the gate log's order and counts, and a token an MCP
- * echoes never reaching a stage message. Tool names come from the
+ * metric-name cap, the gate log's order and counts, a token an MCP echoes
+ * never reaching a stage message, and the Grafana-managed rules of the
+ * provisioning API (recorded from the local Docker stack's Grafana,
+ * tools/fixtures/mcp/grafana_alert_rules.json) unioned with vmalert's, read
+ * by title with their folder uid — the rule folder scope applied when every
+ * rule names one — and paired with a crawled provisioning file
+ * (tools/fixtures/snapshot/repo-grafana/). Tool names come from the
  * capability registry, never typed here.
  *
  *   node tools/test-live-snapshot.mjs            (npm run test:golden:snapshot)
@@ -252,6 +257,7 @@ const T = {
   search: candidateTool('dashboards', 'search'),
   detail: capabilityTool('dashboard_detail'),
   grafanaHealth: capabilityTool('grafana_version'),
+  grafanaRules: candidateAttesting('alert_rules', 'grafana'),
 };
 assert.equal(productAttestedByTool(T.promRules), null, 'the second alert-rule candidate is the plain Prometheus API');
 
@@ -338,8 +344,8 @@ function masked(pack) {
 }
 
 // The repository side: crawled, never hand-written.
-function crawledRepo() {
-  const root = resolve(SNAP_DIR, 'repo');
+function crawledRepo(dir = 'repo') {
+  const root = resolve(SNAP_DIR, dir);
   const files = new Map();
   const walk = (d) => {
     for (const f of readdirSync(d).sort()) {
@@ -593,4 +599,52 @@ test('the gate log: snapshot stage ids only, connect first, each reading stage r
   await assert.rejects(fetchMcp({ mcpUrl: URL_, transport: fakeMcp(fullTools()).transport, mode: 'snapshot', scope: { metricPrefixes: ['1bad'] } }), /scope\.metricPrefixes\[0\] "1bad" is not a metric-name prefix/);
   await assert.rejects(fetchMcp({ mcpUrl: URL_, transport: fakeMcp(fullTools()).transport, mode: 'nope' }), /unknown mode/);
   assert.throws(() => buildSnapshotPack({}, {}), /origin required/);
+});
+
+test('Grafana-managed rules (the recorded provisioning answer) join vmalert\'s: unioned by title, engine grafana, the recording rule left out; the folder scope is not applied while vmalert names no folder', async () => {
+  const PROVISIONED = recorded('grafana_alert_rules.json');
+  const scope = { folderUids: ['payments-alerts'] };
+  const tools = fullTools({ [T.grafanaRules]: () => PROVISIONED });
+  delete tools[T.search];
+  delete tools[T.detail];
+  const { pack, records } = await snapshotOf(tools, { scope });
+  const alerts = records.filter((r) => r.stage === 'alert_rules').pop();
+  const vmAlerting = recorded('vmalert_rules.json').groups.flatMap((g) => g.rules).filter((r) => r.type === 'alerting');
+  const grafanaAlerting = PROVISIONED.filter((r) => !r.record);
+  assert.equal(alerts.counts.engines, 2);
+  assert.equal(alerts.counts.listed, vmAlerting.length + grafanaAlerting.length);
+  assert.equal(alerts.message, `the rule groups name no folder uid; the folder scope was not applied to alert rules (all ${alerts.counts.kept} kept)`);
+  const rules = pack.spec.alerting.rules;
+  const payments = rules.find((r) => r.name === 'PaymentsErrorRatioHigh');
+  assert.equal(payments.engine, 'grafana');
+  assert.equal(payments.expr, PROVISIONED.find((r) => r.title === 'PaymentsErrorRatioHigh').data[0].model.expr, 'the query node, not an expression node');
+  assert.equal(payments.for, '5m');
+  assert.ok(rules.some((r) => r.name === 'StackValidationAlwaysFiring'));
+  assert.ok(!rules.some((r) => r.name === PROVISIONED.find((x) => x.record).title), 'a Grafana-managed recording rule is no alert rule');
+  assert.ok(rules.filter((r) => r.engine === 'victoriametrics').length > 0, 'vmalert\'s rules keep their engine');
+  assert.equal(pack.metadata.annotations['observogram.scope.alert_rule'], undefined);
+  assert.deepEqual(validateCanonical(pack, SCHEMA), []);
+});
+
+test('Grafana-managed rules alone: the rule folder scope is applied and recorded; the provisioned rule pairs with a crawled provisioning file, a Prometheus-format repository rule reads not checked (its folder unknown), never "declared, not live"', async () => {
+  const PROVISIONED = recorded('grafana_alert_rules.json');
+  const scope = { folderUids: ['payments-alerts'] };
+  const tools = fullTools({ [T.grafanaRules]: () => PROVISIONED });
+  for (const t of [T.vmalert, T.search, T.detail]) delete tools[t];
+  const { pack, records } = await snapshotOf(tools, { scope });
+  const alerts = records.filter((r) => r.stage === 'alert_rules').pop();
+  assert.equal(alerts.state, 'done');
+  assert.equal(alerts.message, null);
+  assert.deepEqual({ engines: alerts.counts.engines, listed: alerts.counts.listed, kept: alerts.counts.kept }, { engines: 1, listed: 2, kept: 1 });
+  assert.deepEqual(pack.spec.alerting.rules.map((r) => [r.name, r.engine]), [['PaymentsErrorRatioHigh', 'grafana']]);
+  const ann = pack.metadata.annotations;
+  assert.deepEqual(JSON.parse(ann['observogram.scope.alert_rule']), { by: 'folder', values: [{ uid: 'payments-alerts', title: null }] });
+  assert.deepEqual(JSON.parse(ann['observogram.live.scope']).appliesTo.folderUids, ['alert_rule']);
+  assert.deepEqual(validateCanonical(pack, SCHEMA), []);
+  const d = diffPacks(adapt(crawledRepo('repo-grafana')), adapt(pack));
+  assert.deepEqual(entries(d, 'inBoth', 'alert_rule').map((e) => e.key), ['alert_rule::{"name":"paymentserrorratiohigh"}']);
+  const parked = entries(d, 'notObserved', 'alert_rule');
+  assert.equal(parked.length, 1);
+  assert.equal(parked[0].reason, 'the snapshot read only the folders payments-alerts; Pack A does not say which folder this alert rule is in, so it was not checked');
+  assert.equal(entries(d, 'onlyInA', 'alert_rule').length, 0);
 });

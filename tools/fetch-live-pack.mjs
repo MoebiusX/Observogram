@@ -56,7 +56,7 @@ import { emit as emitYaml, parse as parseYaml } from './lib/mini-yaml.mjs';
 import { createMcpClient as createMcpClientCore, isTransportHookError, MCP_PROTOCOL_VERSION } from './lib/mcp-client.mjs';
 import { mcpTransport, describeTransport } from './mcp-transport.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
-import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule, isSpecRecordingRuleName } from './lib/sli-inference.mjs';
+import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule, isSpecRecordingRuleName, alertRuleExpr } from './lib/sli-inference.mjs';
 import { materializeL2XFromBackends } from './lib/l2x.mjs';
 import { routesFromAlertmanagerConfig } from './lib/alert-routes.mjs';
 import { backendForScrapeJob, knownBackendProduct } from './lib/backend-products.mjs';
@@ -2155,6 +2155,39 @@ function normInterval(v) {
   return v; // already a duration string ("5m", "30s", ...)
 }
 
+// Grafana-managed alert rules through the PROVISIONING API
+// (GET /api/v1/provisioning/alert-rules: an array of { uid, title,
+// folderUID, ruleGroup, condition, data: [{ refId, datasourceUid, model }],
+// for, labels, annotations, record, … } — recorded from Grafana 12.4.4 on the
+// local Docker stack, tools/fixtures/mcp/grafana_alert_rules.json). The list
+// is the answer itself, or under `rules` / `data`; it is this shape when its
+// rules carry a `title` and a `data[]` (a flattened { name, expr } listing
+// is the rule-groups reader's).
+function provisionedRuleList(response) {
+  const list = [response, response?.rules, response?.data].find(Array.isArray);
+  return list && list.some(r => r && typeof r === 'object' && typeof r.title === 'string' && Array.isArray(r.data)) ? list : null;
+}
+
+// The provisioning shape read as alerting rules: `title` → name, the query of
+// the first data node that is not an expression → expr (the reading the
+// crawler gives a provisioning file, tools/lib/sli-inference.mjs
+// alertRuleExpr), `folderUID` → folderUid (what a snapshot's folder scope
+// reads). A Grafana-managed RECORDING rule (`record` set) is not an alert
+// rule and is left out. Empty for any other shape.
+export function adaptProvisionedAlertRules(response) {
+  const list = provisionedRuleList(response) || [];
+  return list
+    .filter(r => r && typeof r === 'object' && typeof r.title === 'string' && r.title.trim() && Array.isArray(r.data) && !r.record)
+    .map(r => ({
+      name: r.title,
+      expr: alertRuleExpr(r),
+      ...(typeof r.for === 'string' && r.for ? { for: r.for } : {}),
+      labels: r.labels && typeof r.labels === 'object' ? r.labels : {},
+      annotations: r.annotations && typeof r.annotations === 'object' ? r.annotations : {},
+      ...(typeof r.folderUID === 'string' && r.folderUID ? { folderUid: r.folderUID } : {}),
+    }));
+}
+
 export const PROBES = [
   {
     name: 'recording_rules',
@@ -2229,6 +2262,11 @@ export const PROBES = [
             ...pickPresent({ ...r, activeAt: r.activeAt ?? r.alerts?.[0]?.activeAt }, ALERT_OBSERVATION_FIELDS),
           };
         });
+    },
+    // A snapshot also reads Grafana-managed rules in the provisioning shape
+    // (D9); the draft keeps `adapt` alone, byte for byte.
+    adaptSnapshot(response) {
+      return provisionedRuleList(response) ? adaptProvisionedAlertRules(response) : this.adapt(response);
     },
   },
   {
@@ -2661,7 +2699,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       const response = await cachedCall(name, candArgs(candidate));
       if (response == null) continue;
       let adapted;
-      try { adapted = probe.adapt(response); }
+      try { adapted = probe.adaptSnapshot ? probe.adaptSnapshot(response) : probe.adapt(response); }
       catch { adapted = null; }
       if (!Array.isArray(adapted)) continue;
       if (adapted.length === 0) { if (!firstEmpty) firstEmpty = name; continue; }
