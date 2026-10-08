@@ -1131,8 +1131,9 @@ start, served at `GET /api/mcp-settings`, baked into a bundle by
   `""` or `"i"`, with no quantified group and at most one unbounded
   quantifier — checks of shape, made at start. No start-time probe can
   prove a pattern fast on every value, so none refuses one: the
-  pass-through evaluates the policy in a worker with a 100 ms deadline, and
-  a rule that does not finish counts as matched (its warning shows, its
+  pass-through evaluates the policy in a worker with a 100 ms deadline per
+  rule, counted from the rule's own start, and a rule that does not finish
+  counts as matched, as do the rules after it (its warning shows, its
   acknowledgement is required, the server log names the rule and never the
   value). The studio evaluates the policy in the page, where a slow pattern
   freezes only that admin's tab. Keep patterns simple: a slow one costs every

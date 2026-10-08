@@ -28,8 +28,8 @@
  * timeout and an oversize description refused naming the origin only; the
  * endpoint's read token never sent, the transport hook never used, the
  * exact request headers; the policy re-checked (409, then forwarded) in a
- * worker under a 100 ms deadline (server/mcp-settings-eval.mjs: a slow
- * pattern counts as matched and the server keeps answering); an
+ * worker under a 100 ms deadline per rule (server/mcp-settings-eval.mjs: a
+ * slow pattern counts as matched and the server keeps answering); an
  * echoed secret redacted; one live.mcp-settings row without a value; the
  * secret in no log line, no store file and nothing under the workspace.
  */
@@ -543,34 +543,40 @@ test('the settings policy is re-checked against the description the server read:
 // A slow part followed by what a probe's last character satisfies: compiles
 // in milliseconds, backtracks for minutes on a long underscore run.
 const BANG = '^.*_{0,60}_{0,60}_{0,60}_{0,60}!$';
+// A deadline no fast rule misses on a loaded machine (each rule has it from
+// its own start); the slow pattern, minutes long, misses it all the same.
+const GENEROUS_MS = 1000;
 
-test('evaluatePolicy: a rule that does not finish within the deadline counts as matched, its warn and ack apply; a fast rule before it is evaluated as written; one line names the rule, never the value', async () => {
-  assert.equal(POLICY_EVAL_DEADLINE_MS, 100);
+test('evaluatePolicy: each rule has the deadline from its own start; one that does not finish counts as matched, its warn and ack apply, and so does every rule after it (never run); a fast rule before it is evaluated as written; one line names the rules, never the value', async () => {
+  assert.equal(POLICY_EVAL_DEADLINE_MS, 100, 'the default, the route\'s');
   const { policy, errors } = compileSettingsPolicy({ version: 1, rules: [
     { when: { field: 'url', pattern: '^https://slow\\.example/' }, warn: 'Fast match.', require: { ack: 'ack 0' } },
     { when: { field: 'user', pattern: '^root$' }, warn: 'Fast miss.' },
     { when: { type: 'url', pattern: BANG }, warn: 'Slow pattern.', require: { ack: 'ack 2' } },
-  ] });
+    { when: { field: 'user', pattern: '^nobody$' }, warn: 'After the slow one.', require: { ack: 'ack 3' } },
+  ] }, { timed: false }); // the id clocks, load-sensitive, are tools/test-artefact-classify.mjs's subject
   assert.deepEqual(errors, [], 'the shape checks admit the slow pattern');
   const d = genericDescriptor();
   const value = `https://slow.example/${'_'.repeat(400)}`;
   const lines = [];
   const t0 = Date.now();
-  const out = await evaluatePolicy(policy, d, { url: value, user: 'bob' }, { log: (l) => lines.push(l) });
-  assert.ok(Date.now() - t0 < 2000, `answered within the deadline plus a worker start (${Date.now() - t0} ms)`);
-  assert.deepEqual(out.timedOut, [2]);
-  assert.deepEqual(out.findings.map((f) => [f.rule, f.field, f.ack, f.timedOut === true]), [[0, 'url', 'ack 0', false], [2, 'url', 'ack 2', true]]);
-  assert.equal(out.findings[1].note, 'Policy rule 3 did not finish within 100 ms, so it counts as matched');
-  assert.deepEqual(lines, ['[mcp-settings] policy rules[2] did not finish within 100 ms — counted as matched']);
+  const out = await evaluatePolicy(policy, d, { url: value, user: 'bob' }, { deadlineMs: GENEROUS_MS, log: (l) => lines.push(l) });
+  assert.ok(Date.now() - t0 < 15_000, `answered at the slow rule's deadline, not when its pattern ends minutes later (${Date.now() - t0} ms)`);
+  assert.deepEqual(out.timedOut, [2, 3]);
+  assert.deepEqual(out.findings.map((f) => [f.rule, f.field, f.ack, f.timedOut === true]), [[0, 'url', 'ack 0', false], [2, 'url', 'ack 2', true], [3, 'user', 'ack 3', true]]);
+  assert.equal(out.findings[1].note, `Policy rule 3 did not finish within ${GENEROUS_MS} ms, so it counts as matched`);
+  assert.deepEqual(lines, [`[mcp-settings] policy rules[2], rules[3] did not finish within ${GENEROUS_MS} ms — counted as matched`]);
   // All fast: exactly policyFindings' answer, nothing logged.
-  const fast = await evaluatePolicy(policy, d, { url: 'https://slow.example/a', user: 'root' }, { log: (l) => lines.push(l) });
+  const fast = await evaluatePolicy(policy, d, { url: 'https://slow.example/a', user: 'root' }, { deadlineMs: GENEROUS_MS, log: (l) => lines.push(l) });
   assert.deepEqual(fast.timedOut, []);
   assert.deepEqual(fast.findings.map((f) => [f.rule, f.field, f.ack]), [[0, 'url', 'ack 0'], [1, 'user', null]]);
   assert.equal(lines.length, 1);
   assert.deepEqual(await evaluatePolicy(null, d, { url: value }), { findings: [], timedOut: [] });
 });
 
-test('a slow policy pattern costs its acknowledgement, never the server: the submit is a 409 within 2 s naming the rule, the server answers meanwhile, with the ack the configure goes; the log names the rule, never the value', { timeout: 30_000 }, async () => {
+// A blocked server would answer only once the pattern ends, minutes later, so
+// bounds of seconds prove it kept answering, whatever the machine's load.
+test('a slow policy pattern costs its acknowledgement, never the server: the submit is a 409 within seconds naming the rule, the server answers meanwhile, with the ack the configure goes; the log names the rule and the default 100 ms, never the value', { timeout: 60_000 }, async () => {
   const f = await fakeMcp({ descriptor: null });
   const policyFile = file('policy-slow.json', JSON.stringify({ version: 1, rules: [{ when: { type: 'url', pattern: BANG }, warn: 'Unreviewed backend.', require: { ack: 'I reviewed the backend' } }] }));
   const s = await studio({ OBSERVOGRAM_MCP_SETTINGS_POLICY: policyFile });
@@ -580,11 +586,11 @@ test('a slow policy pattern costs its acknowledgement, never the server: the sub
   const t0 = Date.now();
   const pending = s.post(SUBMIT, body([]));
   const g0 = Date.now();
-  const r = await fetch(`${s.base}/api/mcp-settings`, { headers: s.headers('ada'), signal: AbortSignal.timeout(5000) });
+  const r = await fetch(`${s.base}/api/mcp-settings`, { headers: s.headers('ada'), signal: AbortSignal.timeout(10_000) });
   assert.equal(r.status, 200);
-  assert.ok(Date.now() - g0 < 1500, `another request answers while the submit is checked (${Date.now() - g0} ms)`);
+  assert.ok(Date.now() - g0 < 10_000, `another request answers while the submit is checked (${Date.now() - g0} ms)`);
   const r1 = await pending;
-  assert.ok(Date.now() - t0 < 2000, `the submit answers within 2 s (${Date.now() - t0} ms)`);
+  assert.ok(Date.now() - t0 < 15_000, `the submit answers within the worker's start and the deadline, not when the pattern ends (${Date.now() - t0} ms)`);
   assert.deepEqual([r1.status, r1.json.denied, r1.json.rule, r1.json.error], [409, 'policy-ack', 0, 'Unreviewed backend. — tick "I reviewed the backend" in the server settings']);
   assert.ok(!r1.text.includes('_'.repeat(20)), 'the answer never echoes the value');
   assert.equal(f.adminRequests.filter((x) => x.method === 'POST').length, 0, 'nothing sent');

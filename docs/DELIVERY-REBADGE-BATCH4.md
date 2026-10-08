@@ -157,6 +157,12 @@ server versus the studio's connection to it, the UI_CONVENTIONS zone.
   the page, where a slow pattern freezes only the admin's own tab. Reverting
   the route to synchronous evaluation fails the new server case (its
   `GET /api/mcp-settings` times out behind the blocked submit). Tests: 1355 → 1357.
+  (**Since 2026-10-08, the follow-up `codex/policy-worker`:** the deadline
+  is per rule — each rule has 100 ms from its own start — because one
+  deadline for every rule, counted from the worker's start, could time out
+  fast rules on a loaded machine; both cases' wall-clock bounds, which
+  flaked under load, are now seconds, the server case's
+  `GET /api/mcp-settings` aborting after 10 s.)
 - The other review fixes add assertions to existing tests or change docs;
   the count is unchanged.
 
