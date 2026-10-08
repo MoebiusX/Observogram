@@ -59,7 +59,9 @@ function track(proc) {
 after(() => { for (const p of live) p.kill('SIGKILL'); });
 
 // A child ES module run with this very Node binary. `until` resolves once a
-// line matching it appears on stdout; `done` resolves with the exit. Both
+// line matching it appears on stdout; `done` resolves with the exit, once
+// the child's stdout and stderr are read to their end ('close', not 'exit':
+// on Windows a child's last write can arrive after its 'exit' event). Both
 // bounded waits SIGKILL a child still running at their deadline and reject,
 // so a child that never gets there fails its test instead of hanging it:
 // `until(re, ms)` for the line, `exited(ms, what)` for the exit. A test
@@ -77,7 +79,7 @@ function child(code, { env = {} } = {}) {
     for (const w of waiters.splice(0)) { if (w.re.test(stdout)) w.resolve(); else waiters.push(w); }
   });
   proc.stderr.on('data', (b) => { stderr += b; });
-  const done = new Promise((res) => proc.on('exit', (code, signal) => res({ code, signal, stdout, stderr })));
+  const done = new Promise((res) => proc.on('close', (code, signal) => res({ code, signal, stdout, stderr })));
   const deadline = (ms, onTimeout) => setTimeout(() => { proc.kill('SIGKILL'); onTimeout(); }, ms);
   const until = (re, ms = 10_000) => new Promise((res, rej) => {
     if (re.test(stdout)) return res();
@@ -1909,7 +1911,8 @@ function packc(args, env) {
     let stderr = '';
     proc.stdout.on('data', (b) => { stdout += b; });
     proc.stderr.on('data', (b) => { stderr += b; });
-    proc.on('exit', (code, signal) => res({ code, signal, stdout, stderr }));
+    // 'close': the output read to its end (see child()).
+    proc.on('close', (code, signal) => res({ code, signal, stdout, stderr }));
   });
 }
 
