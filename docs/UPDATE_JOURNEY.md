@@ -1348,3 +1348,9 @@ straight to a loopback address. Capture refuses any other name, the audit
 rows name the hook (never its URL), and records written before are served
 without the values undici quoted into them. Tests: 1399 → 1413 (14 more in
 `server/test-notify-target-policy.mjs`).
+
+The schedule snippets the studio hands out follow the same rule: a notify
+name the server refuses for a journey is never bound for the CronJob or any
+other scheduler — the snippet says, where the binding would have been, that
+the name must be renamed to one of the org's hooks first. Tests: 1413 → 1414
+(one more in `server/test-notify-target-policy.mjs`).

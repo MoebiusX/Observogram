@@ -542,6 +542,8 @@ const { validateNotify } = await import('../tools/lib/journey.mjs');
 const { parse: parseYaml } = await import('../tools/lib/mini-yaml.mjs');
 const { SPEC_DIR } = await import('../tools/lib/validator.mjs');
 const { startFakeMcp, registerMcpEndpoint } = await import('./fixtures/fake-mcp.mjs');
+const { scheduleSnippets } = await import('../tools/lib/schedule-snippets.mjs');
+const { brandEnv } = await import('../tools/lib/brand-env.mjs');
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PAY_FILE = resolve(REPO, SPEC_DIR, 'examples', 'payment-service.pack.yaml').replaceAll('\\', '/');
@@ -1036,6 +1038,43 @@ test('H13 a record written before the rule is served scrubbed: undici\'s echo of
   } finally {
     rmSync(dir, { recursive: true, force: true });   // the planted leak is not the server's (H17 scans the workspace)
   }
+});
+
+test('H16 the schedule route never binds a notify name the server refuses: a legacy journey\'s envNames hold neither of its names, refusedEnvNames both, and every snippet says so where the binding would have been; a stranger token beside the org\'s hook is the only name refused; a journey through its org\'s hook has the body it always had', { timeout: 120_000 }, async () => {
+  const A = await identityChild();
+  plant(A.ws, 'acme', 'h16-bare', { notify: '{ urlEnv: MY_HOOK_URL, authEnv: OBSERVOGRAM_API_TOKEN, on: always }' });
+  plant(A.ws, 'acme', 'h16-pair', { notify: `{ urlEnv: ${ONCALL.urlEnv}, authEnv: ${PAGER.tokenEnv} }` });
+  plant(A.ws, 'acme', 'h16-hook', { notify: `{ urlEnv: ${ONCALL.urlEnv}, authEnv: ${ONCALL.tokenEnv}, on: always }` });
+  const REFUSED = (e) => `${e} is not a notify hook of this org: the studio never reads it — rename it to OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  const schedule = async (name) => {
+    const r = await call(A.base, 'GET', `/api/journeys/${name}/schedule`, { headers: A.as.vera });
+    assert.equal(r.status, 200, r.text.slice(0, 200));
+    return r.json;
+  };
+  const refusedIn = (s, e) => {
+    assert.ok(s.cron.split('\n').includes(`# ${REFUSED(e)}`) && !s.cron.includes(`export ${e}=`), `cron: ${e}`);
+    assert.ok(s.schtasks.split('\n').includes(`REM ${REFUSED(e)}`) && !s.schtasks.includes(`setx ${e} `), `schtasks: ${e}`);
+    assert.ok(s.actions.split('\n').includes(`          # ${REFUSED(e)}`) && !s.actions.includes(`secrets.${e}`), `actions: ${e}`);
+    assert.ok(s.k8s.split('\n').includes(`                # ${REFUSED(e)}`) && !s.k8s.includes(`key: ${e}`), `k8s: ${e}`);
+  };
+  const bare = await schedule('h16-bare');
+  assert.deepEqual([bare.envNames, bare.refusedEnvNames], [[], ['MY_HOOK_URL', 'OBSERVOGRAM_API_TOKEN']]);
+  for (const e of bare.refusedEnvNames) refusedIn(bare.snippets, e);
+  assert.ok(!bare.snippets.k8s.includes('secretKeyRef') && !bare.snippets.actions.includes('secrets.'), 'nothing is bound from a Secret');
+  const pair = await schedule('h16-pair');
+  assert.deepEqual([pair.envNames, pair.refusedEnvNames], [[ONCALL.urlEnv], [PAGER.tokenEnv]], 'the org\'s hook stays bound; the stranger token is refused');
+  refusedIn(pair.snippets, PAGER.tokenEnv);
+  // A journey through its org's hook: no new key, the snippets scheduleSnippets makes from the route's inputs.
+  const hook = await schedule('h16-hook');
+  assert.deepEqual(Object.keys(hook), ['ok', 'name', 'schedule', 'placeholder', 'envNames', 'snippets']);
+  assert.deepEqual(hook.envNames, [ONCALL.urlEnv, ONCALL.tokenEnv]);
+  const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'));
+  assert.deepEqual(hook.snippets, scheduleSnippets({
+    name: 'h16-hook', cron: null, timezone: null, every: null, cadenceNote: null, envNames: [ONCALL.urlEnv, ONCALL.tokenEnv],
+    nodePath: process.execPath, cliPath: resolve(REPO, 'tools/cli.mjs'), cwd: process.cwd(),
+    workspace: orgRoot(A.ws, 'acme'), orgRoot: 'orgs/acme', image: `observogram:${pkg.version}`, namespace: 'observability',
+    retention: brandEnv('JOURNEY_RUN_RETENTION') || null, placeholder: true, source: join(orgRoot(A.ws, 'acme'), 'journeys', 'h16-hook.journey.yaml'),
+  }));
 });
 
 test('H17 the secret scan: no marker — a hook URL\'s host or path, a hook token, a server secret, another org\'s variable — in any response body, any child\'s output, any audit row, the stopped store or any workspace file; every webhook request went to its own hook with its own token, and the MCP never got an Authorization', { timeout: 120_000 }, async () => {

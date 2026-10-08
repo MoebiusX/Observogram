@@ -188,6 +188,30 @@ const S45 = withSched({ every: '45m' });
   assert(githubActionsWorkflow(acme) === githubActionsWorkflow(S15), 'actions: unchanged by orgRoot (a repo-committed .observogram)');
 }
 
+// --- a name the studio refuses for the journey's notify (journey-notify-env-ownership): never bound, said where it would have been ---
+{
+  const REFUSED = (e) => `${e} is not a notify hook of this org: the studio never reads it — rename it to OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  const r = { ...S15, envNames: ['MY_MCP_TOKEN'], refusedEnvNames: ['MY_HOOK_URL', 'OBSERVOGRAM_API_TOKEN', 'MY_HOOK_URL', 'MY_MCP_TOKEN', 'not a name'] };
+  assert(normaliseSnippetInput(r).refusedEnvNames.join() === 'MY_HOOK_URL,OBSERVOGRAM_API_TOKEN' && normaliseSnippetInput(S15).refusedEnvNames.length === 0,
+         'refusedEnvNames: de-duplicated, validated, minus the names bound; none by default');
+  const all = scheduleSnippets(r);
+  const lines = (f) => all[f].split('\n');
+  for (const e of ['MY_HOOK_URL', 'OBSERVOGRAM_API_TOKEN']) {
+    assert(lines('cron').includes(`# ${REFUSED(e)}`) && !all.cron.includes(`export ${e}=`), `cron: ${e} — one comment, no export`);
+    assert(lines('schtasks').includes(`REM ${REFUSED(e)}`) && !all.schtasks.includes(`setx ${e} `), `schtasks: ${e} — one REM, no setx`);
+    assert(lines('actions').includes(`          # ${REFUSED(e)}`) && !all.actions.includes(`secrets.${e}`), `actions: ${e} — a comment in the step's env, no secret`);
+    assert(lines('k8s').includes(`                # ${REFUSED(e)}`) && !all.k8s.includes(`key: ${e}`) && !all.k8s.includes(`name: ${e}`), `k8s: ${e} — a comment in the container's env, no secretKeyRef`);
+  }
+  assert(lines('cron').includes('# export MY_MCP_TOKEN=<set in your environment>') && all.actions.includes('MY_MCP_TOKEN: ${{ secrets.MY_MCP_TOKEN }}'), 'a name bound stays bound');
+  const env = parseYaml(all.k8s).spec.jobTemplate.spec.template.spec.containers[0].env.map(e => e.name);
+  assert(env.join() === 'OBSERVOGRAM_WORKSPACE,OBSERVOGRAM_JOURNEY_RUN_RETENTION,MY_MCP_TOKEN', 'k8s: the manifest parses, and binds only the names given as envNames', env);
+  for (const f of SNIPPET_FORMATS) {
+    assert(scheduleSnippets({ ...S15, refusedEnvNames: [] })[f] === scheduleSnippets(S15)[f] && scheduleSnippets({ ...S15, refusedEnvNames: ['MY_HOOK_URL'], envNames: [...S15.envNames] })[f] === scheduleSnippets(S15)[f],
+           `${f}: without a refused name (or with one already bound), byte-identical`);
+    assert(noSecret(all[f]), `${f}: no value with refused names`);
+  }
+}
+
 // --- secrets discipline across every form ---
 for (const [label, input] of Object.entries({ S15, S2H, SD, SW, SIRR, S45, base })) {
   const all = scheduleSnippets(input);

@@ -67,7 +67,7 @@ import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
 import { describeProxyAuth } from './auth-proxy.mjs';
 import { stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
 import { mcpCallerOf, mcpRefusalBody, redactTarget } from './mcp-target-policy.mjs';
-import { captureNotifyRefusal, notifyBootReport, notifyHooksOf, notifyPostureRefusal, resolveJourneyNotify } from './notify-target-policy.mjs';
+import { captureNotifyRefusal, notifyBootReport, notifyHooksOf, notifyNamesRefusal, notifyPostureRefusal, resolveJourneyNotify } from './notify-target-policy.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
 import { auditAfter, actorForRecord, bounded, finite } from './audit-after.mjs';
@@ -992,19 +992,29 @@ app.get('/api/journeys/:name/runs', authorize('GET /api/journeys/:name/runs'), (
 // --json`. Env var NAMES only — no snippet ever carries a value. Without
 // a schedule: every snippet uses the placeholder cadence and `placeholder`
 // says so (nothing fabricated is presented as the journey's cadence). 404
-// for an unknown or unloadable journey.
+// for an unknown or unloadable journey. A notify name the server refuses
+// for this journey (server/notify-target-policy.mjs notifyNamesRefusal,
+// which reads no environment: not one of the org's notify hooks, or not the
+// token of the hook its urlEnv names) is never bound — it leaves `envNames`
+// for `refusedEnvNames`, a key present only when non-empty, and each snippet
+// says so where the binding would have been: the studio does not tell a
+// deployer to bind a name it refuses itself.
 app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/schedule'), (req, res) => {
   let def;
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
   try {
     const parsed = parsedSchedule(def);
-    const envNames = [...new Set([def.packB?.mcp?.authEnv, def.notify?.urlEnv, def.notify?.authEnv].filter(Boolean))];
+    const refuses = (notify) => notifyNamesRefusal(currentStore(), notify, { org: currentOrg(), at: 'run', journey: def.name }) !== null;
+    const urlRefused = !!def.notify?.urlEnv && refuses({ urlEnv: def.notify.urlEnv });
+    const authRefused = !!def.notify?.authEnv && (urlRefused || refuses({ urlEnv: def.notify.urlEnv, authEnv: def.notify.authEnv }));
+    const envNames = [...new Set([def.packB?.mcp?.authEnv, urlRefused ? null : def.notify?.urlEnv, authRefused ? null : def.notify?.authEnv].filter(Boolean))];
+    const refusedEnvNames = [...new Set([urlRefused ? def.notify.urlEnv : null, authRefused ? def.notify.authEnv : null].filter((n) => n && !envNames.includes(n)))];
     const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
     const snippets = scheduleSnippets({
       name: def.name,
       cron: parsed?.cron ?? null, timezone: parsed?.timezone ?? null, every: parsed?.every ?? null, cadenceNote: parsed?.cadenceNote ?? null,
-      envNames,
+      envNames, refusedEnvNames,
       nodePath: process.execPath, cliPath: resolve(ROOT, 'tools/cli.mjs'), cwd: process.cwd(),
       workspace: orgWorkspaceRoot(), orgRoot: orgRootOf(currentOrg()),
       image: `observogram:${pkg.version}`, namespace: 'observability',
@@ -1012,7 +1022,7 @@ app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/sched
       placeholder: !parsed,
       source: def.__source || null,
     });
-    res.json({ ok: true, name: def.name, schedule: parsed, placeholder: !parsed, envNames, snippets });
+    res.json({ ok: true, name: def.name, schedule: parsed, placeholder: !parsed, envNames, ...(refusedEnvNames.length ? { refusedEnvNames } : {}), snippets });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 

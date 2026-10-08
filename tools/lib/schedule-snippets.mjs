@@ -16,6 +16,11 @@
 //
 // Secrets discipline: env var NAMES only, ever — `export NAME=<set in your
 // environment>`, `REM setx NAME …`, `${{ secrets.NAME }}`, `secretKeyRef`.
+// A name the studio refuses for the journey's notify (`refusedEnvNames`: not
+// one of its org's notify hooks — the follow-up journey-notify-env-ownership)
+// is never bound: each form carries one comment where its binding would have
+// been, saying so. `packc journey schedule` passes none (the CLI reads any
+// name from its invoker's environment).
 // Honesty rule: nothing is fabricated as the journey's cadence — a missing
 // schedule prints a marked placeholder, `every: 45m` (no exact cron) prints
 // its command as a comment, an irregular cron is passed through verbatim.
@@ -35,12 +40,15 @@ const ORG_ROOT_RE = /^orgs\/[a-z][a-z0-9_-]{0,62}[a-z0-9]$/;
 
 export function validOrgRoot(r) { return r === '.' || ORG_ROOT_RE.test(String(r)); }
 const DOW_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+// What each form says where a refused name's binding would have been.
+const refusedNote = (e) => `${e} is not a notify hook of this org: the studio never reads it — rename it to OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN before scheduling (docs/DOWNSTREAM.md §17.2)`;
 
 // Fill the defaults so every emitter reads one shape.
 export function normaliseSnippetInput(i = {}) {
   const src = i && typeof i === 'object' ? i : {};
   const placeholder = !!src.placeholder || (src.cron == null && src.every == null);
   const envNames = [...new Set((Array.isArray(src.envNames) ? src.envNames : []).filter(n => typeof n === 'string' && ENV_NAME_RE.test(n)))];
+  const refusedEnvNames = [...new Set((Array.isArray(src.refusedEnvNames) ? src.refusedEnvNames : []).filter(n => typeof n === 'string' && ENV_NAME_RE.test(n) && !envNames.includes(n)))];
   if (src.orgRoot != null && !validOrgRoot(src.orgRoot)) throw new TypeError(`orgRoot must be '.' or 'orgs/<id>' (got ${JSON.stringify(src.orgRoot)})`);
   return {
     name: String(src.name || 'journey'),
@@ -49,6 +57,7 @@ export function normaliseSnippetInput(i = {}) {
     every: typeof src.every === 'string' && src.every ? src.every : null,
     cadenceNote: typeof src.cadenceNote === 'string' && src.cadenceNote ? src.cadenceNote : null,
     envNames,
+    refusedEnvNames,
     nodePath: String(src.nodePath || 'node'),
     cliPath: String(src.cliPath || 'tools/cli.mjs'),
     cwd: String(src.cwd || '.'),
@@ -97,6 +106,7 @@ export function cronLine(i) {
   for (const note of headerNotes(n)) out.push(`# ${note}`);
   out.push('# The journey file lives under <workspace>/journeys/; exit 0 pass · 1 gate failed · 2 error (see the log).');
   for (const e of n.envNames) out.push(`# export ${e}=<set in your environment>`);
+  for (const e of n.refusedEnvNames) out.push(`# ${refusedNote(e)}`);
   if (n.timezone) out.push(`CRON_TZ=${n.timezone}`);
   const cmd = `cd ${sq(n.cwd)} && OBSERVOGRAM_WORKSPACE=${sq(n.workspace)} ${sq(n.nodePath)} ${sq(n.cliPath)} journey run ${n.name} >> ${sq(`${n.workspace}/journey-${n.name}.log`)} 2>&1`;
   if (n.cron) out.push(`${n.cron} ${cmd}`);
@@ -149,6 +159,7 @@ export function schtasksCommand(i) {
   if (n.timezone) out.push(`REM schtasks runs in the machine's local time; the journey declares timezone ${n.timezone} — adjust /ST if the machine is elsewhere`);
   out.push(`REM setx OBSERVOGRAM_WORKSPACE "${toWin(n.workspace)}"   (User environment; the task runs as the current user)`);
   for (const e of n.envNames) out.push(`REM setx ${e} <set in your environment>   (User environment; the task runs as the current user)`);
+  for (const e of n.refusedEnvNames) out.push(`REM ${refusedNote(e)}`);
   out.push(`schtasks /Create /TN "Observogram\\${n.name}" /TR "\\"${toWin(n.nodePath)}\\" \\"${toWin(n.cliPath)}\\" journey run ${n.name}" ${sched || '/SC DAILY /ST 00:00'} /F`);
   return out.join('\n') + '\n';
 }
@@ -182,6 +193,7 @@ export function githubActionsWorkflow(i) {
     '          OBSERVOGRAM_WORKSPACE: .observogram',
   );
   for (const e of n.envNames) out.push(`          ${e}: \${{ secrets.${e} }}`);
+  for (const e of n.refusedEnvNames) out.push(`          # ${refusedNote(e)}`);
   out.push(
     `        run: node tools/cli.mjs journey run ${n.name}`,
     '      - name: Upload run record', '        if: always()', '        uses: actions/upload-artifact@v7', '        with:',
@@ -256,6 +268,7 @@ export function k8sCronJobManifest(i) {
   for (const e of n.envNames) {
     out.push(`                - name: ${e}`, '                  valueFrom:', '                    secretKeyRef:', `                      name: ${secretName}`, `                      key: ${e}`);
   }
+  for (const e of n.refusedEnvNames) out.push(`                # ${refusedNote(e)}`);
   out.push(
     '              securityContext:', '                allowPrivilegeEscalation: false', '                capabilities:', '                  drop: ["ALL"]',
     '              resources:', '                requests: { cpu: 25m, memory: 96Mi }', '                limits: { cpu: 500m, memory: 384Mi }',
