@@ -3749,7 +3749,8 @@ function updateObservaServiceChip() {
     chip.setAttribute('aria-label', `Service ${m.label} — back to its page`);
     chip.onclick = () => enterServicePage(m.serviceId, state.serviceEnv);
   } else {
-    chip.removeAttribute('title');
+    // A label: its text is the whole name; the title shows it where the phone cap ellipsizes it (app.css).
+    chip.title = `service: ${m.label}`;
     chip.removeAttribute('aria-label');
     chip.onclick = null;
   }

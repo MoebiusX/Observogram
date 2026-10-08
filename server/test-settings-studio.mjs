@@ -38,10 +38,11 @@
  * A confirm step whose rank went while it was open (an environment's, an
  * endpoint's, a member's, a user's): the 403 keeps the focus inside the
  * dialog and is announced.
- * As vera (viewer): no Edit, no URL; her one org renamed long, its ORG
- * label keeps the OBSERVA bar inside the phone width in the modes that hide
- * the SERVICE chip (the home, a service page, Settings; Build as oscar). As
- * nora (no org): the boot's refusal.
+ * As vera (viewer): no Edit, no URL; her one org renamed long, the OBSERVA
+ * bar fits 320, 360, 390 and 720 px in both themes in every mode — the home,
+ * a service page, a pack's views with the SERVICE chip (its name capped,
+ * named in full by the button), Settings; Build as oscar. As nora (no org):
+ * the boot's refusal.
  * The token posture (with and without OBSERVOGRAM_AUTH=off, and with OIDC
  * configured under it) and an open server bound off the loopback: the
  * banner is the server's text, the writes carry their reasons, the pickers
@@ -731,14 +732,50 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('vera, a one-org member, her org renamed long: the ORG label (no select) carries the whole name and the OBSERVA bar scrolls nothing sideways at 390, 360 and 320 px — on the home, a service page, Settings and (oscar) Build, the modes that hide the SERVICE chip', async () => {
+  await t.test('vera, a one-org member, her org renamed long: the ORG label (no select) carries the whole name, and the OBSERVA bar fits 320, 360, 390 and 720 px in both themes in every mode — the home, a service page, a pack\'s views with the SERVICE chip (Discover, Diagnose, Remediate, every Advanced view), Settings and (oscar) Build', async () => {
     const LONG = 'Acme Corporation Holdings';
-    // The OBSERVA row as app.css's comment on the org chip's phone cap states it: the SERVICE chip hidden, no
-    // horizontal page scroll, Advanced inside the viewport.
-    const row = (page) => page.evaluate(() => {
+    const WIDTHS = [320, 360, PHONE.width, 720];
+    // The OBSERVA bar as app.css's comment on the chips' phone cap states it: the bar's own scroll width is the
+    // viewport's; every control in it (the brand, the ORG chip, the SERVICE chip where a pack's view shows it, each
+    // tab, Advanced, the account menu) inside the viewport, none on top of another, each tab 40 px wide or more; and,
+    // on the screens the studio lays out itself (the home, a service page, Settings, Build), no horizontal page
+    // scroll. A pack's view draws its own content (a table, a facts list), which the bar never adds to.
+    const bar = (page, whole) => page.evaluate((whole) => {
       const cw = document.documentElement.clientWidth;
-      return { serviceChip: document.getElementById('observa-service')?.hidden === false, scroll: document.documentElement.scrollWidth, advanced: document.querySelector('.observa-adv-toggle').getBoundingClientRect().right <= cw };
-    });
+      const shown = (e) => !!e && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
+      const controls = [...document.querySelectorAll('.observa-hdr :is(.observa-brand, #observa-org, #observa-service, .observa-tab, .observa-adv-toggle, .hdr-user-btn)')]
+        .filter(shown).map((e) => [e.classList.contains('observa-tab') ? `tab ${e.dataset.view}` : (e.id || e.classList[0]), e.getBoundingClientRect()]);
+      const misfits = [];
+      for (const [n, r] of controls) {
+        if (r.left < 0 || r.right > cw) misfits.push(`${n} outside the viewport: ${Math.round(r.left)}–${Math.round(r.right)}`);
+        if (n.startsWith('tab ') && r.width < 40) misfits.push(`${n} ${Math.round(r.width)} px wide`);
+      }
+      for (let i = 0; i < controls.length; i++) {
+        for (let j = i + 1; j < controls.length; j++) {
+          const [[na, a], [nb, b]] = [controls[i], controls[j]];
+          if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) misfits.push(`${na} on top of ${nb}`);
+        }
+      }
+      const out = { serviceChip: shown(document.getElementById('observa-service')), bar: document.querySelector('.observa-hdr').scrollWidth, misfits };
+      if (whole) out.scroll = document.documentElement.scrollWidth;
+      return out;
+    }, whole);
+    const sweep = async (page, label, { serviceChip, whole }) => {
+      const before = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+      for (const theme of ['light', 'dark']) {
+        await page.evaluate((th) => document.documentElement.setAttribute('data-theme', th), theme);
+        for (const width of WIDTHS) {
+          await page.setViewportSize({ width, height: PHONE.height });
+          assert.deepEqual(await bar(page, whole), { serviceChip, bar: width, misfits: [], ...(whole ? { scroll: width } : {}) }, `${label} at ${width} px, ${theme}`);
+        }
+      }
+      await page.evaluate((th) => { if (th === null) document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', th); }, before);
+      await page.setViewportSize(PHONE);
+    };
+    const toView = async (page, id, opener) => {
+      await opener();
+      await page.waitForFunction((v) => document.body.dataset.view === v && document.body.dataset.mode === 'single', id, { timeout: T });
+    };
     assert.equal((await call('olive', 'PATCH', '/api/org', { name: LONG })).status, 200);
     try {
       const { page, ctx } = await open(child.base, 'vera', { viewport: PHONE });
@@ -746,21 +783,34 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
         await page.waitForFunction(() => document.getElementById('observa-org')?.hidden === false, null, { timeout: T });
         assert.equal(await page.$('.observa-org-select'), null, 'a label, not a switcher');
         assert.equal(await text(page, '#observa-org-name'), LONG, 'the label carries the whole name (assistive technology reads it)');
-        for (const width of [PHONE.width, 360, 320]) {
-          await page.setViewportSize({ width, height: PHONE.height });
-          assert.deepEqual(await row(page), { serviceChip: false, scroll: width, advanced: true }, `a long one-org label at ${width} px: no horizontal page scroll, Advanced inside the viewport`);
-        }
-        await page.setViewportSize(PHONE);
+        await sweep(page, 'the home with a long one-org label', { serviceChip: false, whole: true });
         await openService(page, 'payment-service');
-        assert.deepEqual(await row(page), { serviceChip: false, scroll: PHONE.width, advanced: true }, 'a service page at the phone width');
+        await sweep(page, 'a service page', { serviceChip: false, whole: true });
+        // A pack's views: the SERVICE chip joins the bar, its name capped at the phone width — the button names the
+        // service in full, and the context bar's SERVICE select shows it.
+        await toView(page, 'layers', () => page.click('#svc-action-discover'));
+        await page.waitForFunction(() => document.getElementById('observa-service')?.hidden === false, null, { timeout: T });
+        assert.equal(await attr(page, '#observa-service', 'aria-label'), 'Service payment-service — back to its page');
+        assert.equal(await text(page, '#observa-service-name'), 'payment-service', 'the chip\'s text is the whole name');
+        assert.ok(await page.evaluate(() => { const n = document.getElementById('observa-service-name'); return n.scrollWidth > n.clientWidth; }), 'at the phone width the name is capped (ellipsized)');
+        assert.match(await page.evaluate(() => document.querySelector('#service-select option:checked')?.textContent || ''), /payment-service/, 'the context bar\'s SERVICE select shows it in full');
+        await sweep(page, 'Discover', { serviceChip: true, whole: false });
+        for (const id of ['compare', 'compile']) {
+          await toView(page, id, () => page.click(`.observa-tab[data-view="${id}"]`));
+          await sweep(page, `the ${id} tab`, { serviceChip: true, whole: false });
+        }
+        for (const id of ['neuron', 'references', 'conformance', 'schema', 'otlp', 'traceability', 'atlas']) {
+          await toView(page, id, async () => { await page.click('.observa-adv-toggle'); await page.click(`.observa-adv-item[data-view="${id}"]`); });
+          await sweep(page, `Advanced → ${id}`, { serviceChip: true, whole: false });
+        }
         await toSettings(page);
-        assert.deepEqual(await row(page), { serviceChip: false, scroll: PHONE.width, advanced: true }, 'Settings at the phone width');
+        await sweep(page, 'Settings', { serviceChip: false, whole: true });
       } finally { await ctx.close(); }
       const { page: build, ctx: buildCtx } = await open(child.base, 'oscar', { viewport: PHONE });
       try {
         await build.click('#home-choice-build');
         await build.waitForFunction(() => document.body.dataset.mode === 'build', null, { timeout: T });
-        assert.deepEqual(await row(build), { serviceChip: false, scroll: PHONE.width, advanced: true }, 'Build at the phone width');
+        await sweep(build, 'Build', { serviceChip: false, whole: true });
       } finally { await buildCtx.close(); }
     } finally {
       assert.equal((await call('olive', 'PATCH', '/api/org', { name: 'Acme Corp' })).status, 200);

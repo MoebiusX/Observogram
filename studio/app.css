@@ -7718,14 +7718,14 @@ button.observa-service:focus-visible { outline: 2px solid var(--CMP); outline-of
 .observa-org-select option { color: var(--ink); background: var(--card); }
 [data-theme="dark"] .observa-org-select option { color: var(--ink); background: var(--card); }
 /* An owner's acting entry (`<name> — acting as owner`, D-M) is the longest label the chip draws: the select keeps the
-   name's cap, and a shorter one at phone width, where the chip, the tabs and the action cluster share one row of
-   390px (the option list shows each label in full). A one-org member's label (no select) takes the same phone cap: a
-   long org name ellipsizes there, read in full by assistive technology. With these caps the row scrolls nothing
-   sideways at 390px in the modes that hide the SERVICE chip — home, Build, a service page, Settings. In a pack's
-   views with a service chosen, the SERVICE chip joins the row and the page still scrolls sideways at phone width:
-   narrower than before these caps, not gone (the SERVICE chip's own layout is not fixed here). */
+   name's cap, and a shorter one at phone width (the option list shows each label in full). A one-org member's label
+   (no select) takes the same phone cap: a long org name ellipsizes there, read in full by assistive technology. The
+   SERVICE chip's name takes it too — its button's aria-label and title, the label's title and the context bar's
+   SERVICE select name the service in full. At phone width the bar is two rows (ux.css): the brand, the ORG chip and
+   the action cluster; then the SERVICE chip and the tabs. With these caps it scrolls nothing sideways at 320, 360,
+   390 and 720px in every mode — home, Build, a service page, Settings, and a pack's views with the SERVICE chip. */
 .observa-org-select { max-width: 24ch; text-overflow: ellipsis; }
-@media (max-width: 720px) { .observa-org-select, .observa-org .observa-service-name { max-width: 8ch; } }
+@media (max-width: 720px) { .observa-org-select, .observa-service-name { max-width: 8ch; } }
 
 /* ============================================================
    Advanced → Neuron (.nrn-*) — the observability control neuron as one
