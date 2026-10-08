@@ -1792,3 +1792,40 @@ test('renderSettings and the organisation and join-role editors: the rows escape
     'the draft carries the box; joinRoleBody leaves confirm off every body but admin');
 });
 
+
+test('a confirm step the rank lost while it was open (a 403 by role): no danger button in the model nor on screen — Delete… or Remove… again, unavailable with the reason; every kind', () => {
+  const calls = [];
+  const host = { settings: new Proxy({}, { get: (_, k) => (...a) => calls.push([k, ...a]) }) };
+  const refused = { kind: 'error', text: "403: requires the admin role in org 'acme' (you are operator) — ask an admin of acme" };
+  const two = [...MEMBERS, { userId: 9, login: 'abe', role: 'admin', disabled: false }];
+  const cases = [
+    ['environment', PAYMENT.environments[0], 'confirm-delete', null, { access: OSCAR, orgName: 'Acme', orgId: 'acme', services: SERVICES, endpoints: EP_OP }, VERA, VERA.why.operate],
+    ['endpoint', EP_OP[0], 'confirm-delete', null, { access: ADA, orgName: 'Acme', orgId: 'acme', services: SERVICES }, OSCAR, OSCAR.why.admin],
+    ['member', MEMBERS[1], 'confirm-delete', null, { access: ADA, orgName: 'Acme', orgId: 'acme', members: MEMBERS, me: 'ada' }, OSCAR, OSCAR.why.admin],
+    ['member', MEMBERS[0], 'confirm-action', { role: 'operator' }, { access: ADA, orgName: 'Acme', orgId: 'acme', members: two, me: 'ada' }, OSCAR, OSCAR.why.admin],
+    ['org', ORGS_DOC.orgs[2], 'confirm-delete', null, { access: OLIVE, orgId: 'acme', defaultOrg: 'default' }, ADA, ADA.why.own],
+  ];
+  for (const [kind, record, step, draft, ctx, lost, reason] of cases) {
+    const tag = `${kind} ${step}`;
+    assert.ok(reason, `${tag}: the lost rank has a reason`);
+    const before = buildSettingsEditorModel(kind, record, { ctx, step, draft });
+    assert.ok(before.confirm?.danger, `${tag}: the rank that may write gets the danger button`);
+    const after = buildSettingsEditorModel(kind, record, { ctx: { ...ctx, access: lost }, step, draft, status: refused });
+    assert.equal(after.confirm, null, `${tag}: no danger button once the rank is refused`);
+    assert.deepEqual([after.remove.enabled, after.remove.reason], [false, reason], `${tag}: Delete… / Remove… unavailable with the reason`);
+    // On screen: the same container, the confirm step drawn, then the answer — the dialog drawn anew without it.
+    const c = settingsContainer();
+    renderSettingsEditor(c, before, host);
+    assert.ok(c.innerHTML.includes('id="set-editor-confirm"'), `${tag}: the confirm step drawn`);
+    calls.length = 0;
+    renderSettingsEditor(c, after, host);
+    assert.ok(!c.innerHTML.includes('id="set-editor-confirm"') && !c.innerHTML.includes('id="set-editor-back"'), `${tag}: no danger button left usable`);
+    assert.ok(c.innerHTML.includes(`data-editor-key="${kind}:${after.id}:edit"`), `${tag}: drawn as the record's dialog`);
+    assert.ok(c.innerHTML.includes(`>${refused.text.replace(/'/g, '&#39;')}</div>`), `${tag}: the server's refusal in the status line`);
+    const del = c.querySelector('#set-editor-delete');
+    assert.deepEqual([del.getAttribute('aria-disabled'), del.why?.textContent], ['true', reason], `${tag}: Delete… / Remove… says why`);
+    del.fire('click');
+    c.querySelector('#set-editor-confirm')?.fire('click');
+    assert.deepEqual(calls, [['explain', reason]], `${tag}: a click explains and sends nothing`);
+  }
+});

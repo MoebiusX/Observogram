@@ -557,8 +557,11 @@ function editorBodyHtml(model) {
 // draft); the danger button → host.settings.confirm().
 export function renderSettingsEditor(container, model, host = appHost) {
   // A user's dialog is drawn anew when its facts or its actions change (an
-  // action done: Disable… becomes Enable…); every other kind by record and step.
-  const key = `${model.kind}:${model.id ?? 'new'}:${model.step}${model.kind === 'user' ? `:${shortHash(JSON.stringify([model.facts, model.actions]))}` : ''}`;
+  // action done: Disable… becomes Enable…); every other kind by record and
+  // the step drawn — a confirm step the rank lost (no confirm) is the edit
+  // step's, so its danger button goes and Delete… comes back with the reason.
+  const drawn = (model.step === 'confirm-delete' || model.step === 'confirm-action') && !model.confirm ? 'edit' : model.step;
+  const key = `${model.kind}:${model.id ?? 'new'}:${drawn}${model.kind === 'user' ? `:${shortHash(JSON.stringify([model.facts, model.actions]))}` : ''}`;
   const mounted = container.querySelector('.set-editor');
   if (mounted && mounted.getAttribute('data-editor-key') === key) {
     paintSettingsEditorStatus(container, model.status);

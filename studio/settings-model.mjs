@@ -988,7 +988,9 @@ export function buildSettingsEditorModel(kind, record = null, { draft = null, st
       { name: 'bindings', label: 'Bindings', type: 'textarea', value: eff.bindings, help: 'One key=value per line, at most 32.' },
       { name: 'endpoints', label: 'Links', type: 'textarea', value: eff.endpoints, help: 'One name=https://… per line, at most 20 — http(s) only; a token never goes in a URL.' },
     );
-    const confirm = record && step === 'confirm-delete' ? {
+    // The rank refused (demoted while the dialog was open): no danger button —
+    // Delete… again, with the reason (as a user's actions and org remove).
+    const confirm = record && step === 'confirm-delete' && can ? {
       text: `Delete ${record.name} of ${serviceName}? Its tier, bindings, links and endpoint binding go; the packs stay registered, and a pack that declares ${record.name} brings the name back without them.`,
       danger: `Delete ${record.name}`,
     } : null;
@@ -1012,7 +1014,8 @@ export function buildSettingsEditorModel(kind, record = null, { draft = null, st
         help: `The NAME of an environment variable on the server, set aside for ${orgName}: ${prefix}<NAME> (for example ${prefix}MCP_TOKEN). Its value stays on the server — this page never sees it, and nothing here says whether it is set. Leave empty when requests send their own token.` },
     ];
     let confirm = null;
-    if (record && step === 'confirm-delete') {
+    // The rank refused (demoted while the dialog was open): no danger button.
+    if (record && step === 'confirm-delete' && can) {
       const n = Number.isInteger(record.environments) ? record.environments : 0;
       const names = boundNames(record.id, ctx.services);
       const which = names && names.length === n && n > 0 ? ` (${names.join(', ')})` : '';
@@ -1075,7 +1078,8 @@ export function buildSettingsEditorModel(kind, record = null, { draft = null, st
     let confirm = null;
     const notes = [];
     if (owner && lastAdmin(record, members, { owner: false })) notes.push(`${record.login} is ${orgName}'s last admin: afterwards only an owner can manage its members, endpoints and audit.`);
-    if (step === 'confirm-delete') {
+    // The rank refused (demoted while the dialog was open): no danger button.
+    if (step === 'confirm-delete' && can) {
       if (you) notes.unshift(selfNotes(orgName, owner).remove);
       // An owner may request any live org (server/authz.mjs orgContext): the
       // refusal is never theirs. The caller knows whether they are one;
@@ -1083,7 +1087,7 @@ export function buildSettingsEditorModel(kind, record = null, { draft = null, st
       const refused = `Remove ${record.login} from ${orgName}? Their sessions keep working elsewhere; here their next request is refused`;
       const lead = !you ? `${refused}, unless they are an owner.` : owner ? `Remove ${record.login} from ${orgName}?` : `${refused}.`;
       confirm = { text: [lead, ...notes].join(' '), danger: `Remove ${record.login}` };
-    } else if (step === 'confirm-action') {
+    } else if (step === 'confirm-action' && can) {
       if (you) notes.unshift(selfNotes(orgName, owner).demote);
       confirm = { text: [`Change ${record.login}'s role to ${role}?`, ...notes].join(' '), danger: `Make ${record.login} ${role}` };
     }
