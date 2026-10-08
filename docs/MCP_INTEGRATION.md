@@ -431,7 +431,8 @@ server is exposed without sign-in. The studio server:
   worker refuses (a V8 one: `node --max-old-space-size=… server/index.mjs`)
   starts the worker without its flags; a worker that cannot start counts
   every rule as matched the same way, and one that fails every rule it did
-  not finish, its line naming the error's class;
+  not finish, its line naming the error's class when the worker could not
+  be constructed or threw, else the deadline;
 - sends with the platform's `fetch`, **never through the transport hook**, so
   a hook's own credential never rides to a settings path; no redirect
   followed; exactly `Content-Type`, `Accept` and the description's own

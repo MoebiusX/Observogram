@@ -1138,9 +1138,9 @@ start, served at `GET /api/mcp-settings`, baked into a bundle by
   value); a worker that cannot start counts every rule as matched, and one
   that fails every rule it did not finish.
   A server started with V8 flags (`node --max-old-space-size=…`) starts the
-  worker without them. The studio evaluates the policy in the page, where a
-  slow pattern freezes only that admin's tab. Keep patterns simple: a slow
-  one costs every sender its acknowledgement.
+  worker without any flags. The studio evaluates the policy in the page,
+  where a slow pattern freezes only that admin's tab. Keep patterns simple:
+  a slow one costs every sender its acknowledgement.
 - **Matching.** A URL is matched as its normalised form (scheme and host
   lower-cased; a URL with a user or password before `@` is refused, not
   matched); a value is checked only when non-empty; a value over 512

@@ -682,6 +682,17 @@ test('a policy worker that cannot be constructed, or fails, fails closed: every 
   const part = await evaluatePolicy(startPolicy(), d, START_VALUES, { createWorker: partway, deadlineMs: GENEROUS_MS, log: (l) => partLines.push(l) });
   assert.deepEqual(startShape(part), { timedOut: [1, 2], findings: [[0, 'url', 'ack 0', false], [1, 'user', null, true], [2, 'url', 'ack 2', true]] });
   assert.deepEqual(partLines, ['[mcp-settings] the policy worker failed (TypeError) — rules[1], rules[2] counted as matched']);
+  // Exited before its start, with no error (as a start past its limit
+  // ends): every rule counts as matched, and the line names the deadline —
+  // there is no class to name.
+  const unstarted = () => {
+    const w = new FakeWorker();
+    setImmediate(() => w.emit('exit', 1));
+    return w;
+  };
+  const exitLines = [];
+  assert.deepEqual(startShape(await evaluatePolicy(startPolicy(), d, START_VALUES, { createWorker: unstarted, log: (l) => exitLines.push(l) })), everyRule);
+  assert.deepEqual(exitLines, ['[mcp-settings] policy rules[0], rules[1], rules[2] did not finish within 100 ms — counted as matched']);
   // A log that throws costs the line, never the answer.
   const loud = await evaluatePolicy(startPolicy(), d, START_VALUES, { createWorker: refuse, log: () => { throw new Error('stderr closed'); } });
   assert.deepEqual(startShape(loud), everyRule);
