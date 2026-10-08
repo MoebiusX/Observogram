@@ -162,7 +162,12 @@ server versus the studio's connection to it, the UI_CONVENTIONS zone.
   deadline for every rule, counted from the worker's start, could time out
   fast rules on a loaded machine; both cases' wall-clock bounds, which
   flaked under load, are now seconds, the server case's
-  `GET /api/mcp-settings` aborting after 10 s.)
+  `GET /api/mcp-settings` aborting after 10 s. A server started with a flag
+  a worker refuses — `node --max-old-space-size=… server/index.mjs` —
+  answered every pass-through submit
+  `502 the server-settings proxy failed (Error)`: the worker is now
+  constructed once more without the flags, and a worker that cannot be
+  constructed fails closed like one that fails.)
 - The other review fixes add assertions to existing tests or change docs;
   the count is unchanged.
 

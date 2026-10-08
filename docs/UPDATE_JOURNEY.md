@@ -1317,3 +1317,24 @@ local user cannot sign in, `userSignIn` (how each kind of user signs in under
 each sign-in mode), Enable… under every mode and Sign out everywhere… under
 every mode). The other review fixes add assertions to existing tests or
 change docs and comments; the count is unchanged by them.
+
+### Follow-up: the settings-policy worker
+
+Two defects in batch 4's policy check on the pass-through
+(`server/mcp-settings-eval.mjs`), neither a hole. One deadline counted from
+the worker's start covered every rule, so a machine too busy to run the
+worker promptly — a loaded CI runner, a busy server — counted fast rules as
+timed out and asked for acknowledgements they did not need (the suite's
+evaluator case flaked on it): each rule now has the 100 ms from its own
+start, so a check takes at most the worker's start plus 100 ms per rule. And
+a server started with a flag a worker refuses — a V8 one,
+`node --max-old-space-size=512 server/index.mjs` — could not construct the
+worker at all: every pass-through submit, acknowledged or not, was answered
+`502 the server-settings proxy failed (Error)`. The worker is now
+constructed once more without the flags, and a worker that cannot be
+constructed fails closed like one that fails — every rule counts as matched,
+and the log line names the error's class. No route, variable, default or
+text changes. Tests: 1390 → 1393 (three more in
+`server/test-mcp-settings.mjs`: the refused flag, in-process and in a child
+started with it; a worker that cannot be constructed or fails; and the
+per-rule deadline, pinned with a paced stand-in worker).

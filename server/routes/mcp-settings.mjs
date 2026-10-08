@@ -50,7 +50,8 @@
 //      the caller did not tick is a 409. The patterns run in a worker with a
 //      100 ms deadline per rule (server/mcp-settings-eval.mjs), never on this
 //      thread: a rule that does not finish counts as matched, so a slow
-//      pattern costs its acknowledgement, never the server.
+//      pattern costs its acknowledgement, never the server; when the worker
+//      cannot start or fails, every rule counts as matched.
 //   6. One request upstream with the platform's fetch — never the transport
 //      hook (M10): no redirect followed (a 3xx is refused, naming its origin
 //      only), 10 s, the answer read with a cap (16 KiB for a description,

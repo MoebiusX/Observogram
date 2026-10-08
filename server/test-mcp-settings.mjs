@@ -29,7 +29,8 @@
  * endpoint's read token never sent, the transport hook never used, the
  * exact request headers; the policy re-checked (409, then forwarded) in a
  * worker under a 100 ms deadline per rule (server/mcp-settings-eval.mjs: a
- * slow pattern counts as matched and the server keeps answering); an
+ * slow pattern counts as matched and the server keeps answering; a flag a
+ * worker refuses is dropped, and a worker that cannot start fails closed); an
  * echoed secret redacted; one live.mcp-settings row without a value; the
  * secret in no log line, no store file and nothing under the workspace.
  */
@@ -37,6 +38,9 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, rmSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { Worker } from 'node:worker_threads';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -572,6 +576,104 @@ test('evaluatePolicy: each rule has the deadline from its own start; one that do
   assert.deepEqual(fast.findings.map((f) => [f.rule, f.field, f.ack]), [[0, 'url', 'ack 0'], [1, 'user', null]]);
   assert.equal(lines.length, 1);
   assert.deepEqual(await evaluatePolicy(null, d, { url: value }), { findings: [], timedOut: [] });
+});
+
+// Three rules on the generic form — a fast match, a fast miss, the slow
+// pattern — and what policyFindings answers for the fast two.
+const START_RULES = { version: 1, rules: [
+  { when: { field: 'url', pattern: '^https://slow\\.example/' }, warn: 'Fast match.', require: { ack: 'ack 0' } },
+  { when: { field: 'user', pattern: '^root$' }, warn: 'Fast miss.' },
+  { when: { type: 'url', pattern: BANG }, warn: 'Slow pattern.', require: { ack: 'ack 2' } },
+] };
+const startPolicy = () => compileSettingsPolicy(START_RULES, { timed: false }).policy;
+const START_VALUES = { url: `https://slow.example/${'_'.repeat(400)}`, user: 'bob' };
+const START_FINDINGS = [[0, 'url', 'ack 0', false], [2, 'url', 'ack 2', true]];
+const startShape = (out) => ({ timedOut: out.timedOut, findings: out.findings.map((f) => [f.rule, f.field, f.ack, f.timedOut === true]) });
+
+test('a server started with a flag a worker refuses (node --max-old-space-size=…): the policy worker is constructed once more with no flags and answers as policyFindings does — in-process with the flag given, and in a child started with it', async () => {
+  const d = genericDescriptor();
+  const calls = [];
+  const lines = [];
+  const createWorker = (url, options) => { calls.push(options.execArgv); return new Worker(url, options); };
+  const out = await evaluatePolicy(startPolicy(), d, START_VALUES, { execArgv: ['--max-old-space-size=512', '--input-type=module'], createWorker, deadlineMs: GENEROUS_MS, log: (l) => lines.push(l) });
+  assert.deepEqual(calls, [['--max-old-space-size=512'], []], 'the server\'s flags but --input-type, refused; then none — never the inherited ones');
+  assert.deepEqual(startShape(out), { timedOut: [2], findings: START_FINDINGS });
+  assert.deepEqual(lines, [`[mcp-settings] policy rules[2] did not finish within ${GENEROUS_MS} ms — counted as matched`], 'the slow rule at its deadline: the worker ran');
+  // The default path: a process started with the flag, its own execArgv.
+  const code = `
+    const { evaluatePolicy } = await import(${JSON.stringify(new URL('./mcp-settings-eval.mjs', import.meta.url).href)});
+    const { compileSettingsPolicy, genericDescriptor } = await import(${JSON.stringify(new URL('../tools/lib/mcp-server-settings.mjs', import.meta.url).href)});
+    const { policy } = compileSettingsPolicy(${JSON.stringify(START_RULES)}, { timed: false });
+    const out = await evaluatePolicy(policy, genericDescriptor(), ${JSON.stringify(START_VALUES)}, { deadlineMs: ${GENEROUS_MS} });
+    process.stdout.write(JSON.stringify(out));
+    process.exit(0);`;
+  const child = spawnSync(process.execPath, ['--max-old-space-size=512', '--input-type=module', '-e', code], { env: childEnv(null), encoding: 'utf8', timeout: 60_000 });
+  assert.equal(child.status, 0, child.stderr);
+  assert.deepEqual(startShape(JSON.parse(child.stdout)), { timedOut: [2], findings: START_FINDINGS });
+  assert.deepEqual(child.stderr.split('\n').filter((l) => l.startsWith('[mcp-settings]')), [`[mcp-settings] policy rules[2] did not finish within ${GENEROUS_MS} ms — counted as matched`], 'the deadline\'s line, never "the policy worker failed"');
+});
+
+// A worker stand-in: what the factory hands back, posting on the port the evaluator gave it.
+class FakeWorker extends EventEmitter {
+  terminate() { this.terminated = true; return Promise.resolve(0); }
+}
+
+test('a policy worker that cannot be constructed, or fails, fails closed: every rule counts as matched, one line names the error class, never its message; a refused flag is tried once more, no more; evaluatePolicy never rejects', async () => {
+  const d = genericDescriptor();
+  const failedLine = (cls) => `[mcp-settings] the policy worker failed (${cls}) — rules[0], rules[1], rules[2] counted as matched`;
+  const everyRule = { timedOut: [0, 1, 2], findings: [[0, 'url', 'ack 0', true], [1, 'user', null, true], [2, 'url', 'ack 2', true]] };
+  const lines = [];
+  const log = (l) => lines.push(l);
+  let tries = 0;
+  const cannot = () => { tries += 1; throw new RangeError(`cannot start for ${START_VALUES.url}`); };
+  const throws = await evaluatePolicy(startPolicy(), d, START_VALUES, { createWorker: cannot, log });
+  assert.deepEqual(startShape(throws), everyRule);
+  assert.equal(tries, 1, 'only a refused flag is tried again');
+  assert.equal(throws.findings[0].note, 'Policy rule 1 did not finish within 100 ms, so it counts as matched');
+  let refusals = 0;
+  const refuse = () => {
+    refusals += 1;
+    throw Object.assign(new Error('Initiated Worker with invalid execArgv flags: --max-old-space-size=512'), { code: 'ERR_WORKER_INVALID_EXEC_ARGV' });
+  };
+  assert.deepEqual(startShape(await evaluatePolicy(startPolicy(), d, START_VALUES, { createWorker: refuse, log })), everyRule);
+  assert.equal(refusals, 2, 'once with the server\'s flags, once with none');
+  // Constructed, then failed (an uncaught error in the worker): the same answer and the same line.
+  let fake = null;
+  const failing = () => {
+    fake = new FakeWorker();
+    setImmediate(() => fake.emit('error', new SyntaxError(`a value: ${START_VALUES.url}`)));
+    return fake;
+  };
+  assert.deepEqual(startShape(await evaluatePolicy(startPolicy(), d, START_VALUES, { createWorker: failing, log })), everyRule);
+  assert.equal(fake.terminated, true, 'the failed worker is terminated');
+  assert.deepEqual(lines, [failedLine('RangeError'), failedLine('Error'), failedLine('SyntaxError')]);
+  assert.ok(!lines.join('\n').includes('slow.example') && !lines.join('\n').includes('max-old-space'), 'never the error\'s message');
+  // A log that throws costs the line, never the answer.
+  const loud = await evaluatePolicy(startPolicy(), d, START_VALUES, { createWorker: refuse, log: () => { throw new Error('stderr closed'); } });
+  assert.deepEqual(startShape(loud), everyRule);
+});
+
+test('each rule\'s deadline runs from its own start: two rules that each take 0.6 of it both finish — a deadline shared from the worker\'s start would count the second as matched', async () => {
+  const D = 200;
+  const policy = compileSettingsPolicy({ version: 1, rules: [
+    { when: { field: 'url', pattern: '^https://' }, warn: 'First.', require: { ack: 'ack 0' } },
+    { when: { field: 'user', pattern: '^root$' }, warn: 'Second.', require: { ack: 'ack 1' } },
+  ] }, { timed: false }).policy;
+  // The worker's protocol (the bottom of server/mcp-settings-eval.mjs): each
+  // rule's start, a rule's answer with the next rule's start, then done.
+  const paced = (url, options) => {
+    const { port } = options.workerData;
+    port.postMessage({ start: 0 });
+    setTimeout(() => {
+      port.postMessage({ rule: 0, findings: [], start: 1 });
+      setTimeout(() => port.postMessage({ rule: 1, findings: [], done: true }), D * 0.6);
+    }, D * 0.6);
+    return new FakeWorker();
+  };
+  const lines = [];
+  const out = await evaluatePolicy(policy, genericDescriptor(), { url: 'http://a.example', user: 'bob' }, { createWorker: paced, deadlineMs: D, log: (l) => lines.push(l) });
+  assert.deepEqual(out, { findings: [], timedOut: [] });
+  assert.deepEqual(lines, []);
 });
 
 // A blocked server would answer only once the pattern ends, minutes later, so

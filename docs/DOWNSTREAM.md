@@ -1135,9 +1135,11 @@ start, served at `GET /api/mcp-settings`, baked into a bundle by
   rule, counted from the rule's own start, and a rule that does not finish
   counts as matched, as do the rules after it (its warning shows, its
   acknowledgement is required, the server log names the rule and never the
-  value). The studio evaluates the policy in the page, where a slow pattern
-  freezes only that admin's tab. Keep patterns simple: a slow one costs every
-  sender its acknowledgement.
+  value); a worker that cannot start or fails counts every rule as matched.
+  A server started with V8 flags (`node --max-old-space-size=…`) starts the
+  worker without them. The studio evaluates the policy in the page, where a
+  slow pattern freezes only that admin's tab. Keep patterns simple: a slow
+  one costs every sender its acknowledgement.
 - **Matching.** A URL is matched as its normalised form (scheme and host
   lower-cased; a URL with a user or password before `@` is refused, not
   matched); a value is checked only when non-empty; a value over 512
