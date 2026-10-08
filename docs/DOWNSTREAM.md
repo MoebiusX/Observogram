@@ -1256,12 +1256,16 @@ A hook must be its org's **alone**: a name another org's id also maps onto —
 an org whose id extends this one's (`acme-notify-eu` owns
 `OBSERVOGRAM_ORG_ACME_NOTIFY_EU_*`; an `acme-notify` would own every
 `OBSERVOGRAM_ORG_ACME_NOTIFY_*`), or a KEY tie (`a-b` and `a_b`) — is
-refused for everyone, and the refusal names no other org. Org creation
-(`POST /api/admin/orgs`, `npm run orgs -- create`) refuses an id that would
-take another org's hooks, whose own hooks another org already takes, or that
-differs from another org's id only in `-` and `_` (409, naming the other
-org to the owner who creates it); the orgs-file import is not guarded, and
-the start's report names each set hook variable such a pair shadows.
+refused for everyone, and the refusal names no other org. An org whose every
+hook name another org's id takes (the tie, or an `acme-notify` beside
+`acme`) can have no hook at all, whatever is set: its listing and every
+refusal of its `notify` say so, and that the way out is to leave `notify`
+out. Org creation (`POST /api/admin/orgs`, `npm run orgs -- create`) refuses
+an id that would take another org's hooks, whose own hooks another org
+already takes, or that differs from another org's id only in `-` and `_`
+(409, naming the other org to the owner who creates it); the orgs-file
+import is not guarded, and the start's report names each set hook variable
+such a pair shadows.
 
 **What a server run reads.** At most those two variables — never another
 org's, never one of the server's own (`OBSERVOGRAM_API_TOKEN`,
@@ -1310,12 +1314,17 @@ delivery with its status and is never followed.
 variable the org owns alone, sorted by hook; `tokenEnv` the hook's token
 variable when that is set, else `null`; `usable`, or the `problem` capture
 would answer; `pattern` the org's exact prefix; `none`, when there is no
-hook, the sentence saying who sets one. Never a value, an origin, an
-origin-list entry or another org's name. No role types a webhook URL in the
-app — a literal `url:` stays refused for every role, admins included; a
-journey names one of the hooks the server's operator registered, as an
-`mcpEndpointId` names a registered MCP endpoint. The static bundle answers
-the route with its 501 "Journeys", as every `/api/journeys` path.
+hook, the sentence saying who sets one — or, for an org whose every hook
+name another org's id takes, `no notify hook can be set for org '<org>' —
+another org's id also maps onto every OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL
+by the longest-prefix rule, so the server posts no notification for this
+org's journeys: whoever holds the workspace leaves notify out of them`.
+Never a value, an origin, an origin-list entry or another org's name. No
+role types a webhook URL in the app — a literal `url:` stays refused for
+every role, admins included; a journey names one of the hooks the server's
+operator registered, as an `mcpEndpointId` names a registered MCP endpoint.
+The static bundle answers the route with its 501 "Journeys", as every
+`/api/journeys` path.
 
 **The start's report** (stderr, beside the store's warnings; nothing at all
 when no hook-shaped variable is set) — variables and org ids only:
@@ -1363,6 +1372,7 @@ Every run sentence starts `journey <name> is not run: `.
 |---|---|---|
 | a name that is not the org's hook | `notify.urlEnv "<name>" is not a notify hook of org '<org>' — the server posts a journey's notification only to <P>NOTIFY_<HOOK>_URL (<HOOK>: words of A–Z and 0–9 joined by single _), with its token, if any, from <P>NOTIFY_<HOOK>_TOKEN: name one that <L> lists` | `its notify.urlEnv "<name>" is not a notify hook of org '<org>' — the server posts only to <P>NOTIFY_<HOOK>_URL (<HOOK>: words of A–Z and 0–9 joined by single _), with its token, if any, from <P>NOTIFY_<HOOK>_TOKEN; whoever holds the workspace sets notify.urlEnv in <J> to one that <L> lists (packc journey run reads any name from its own environment)` |
 | shadowed | `notify.urlEnv "<name>" has the shape of a notify hook of org '<org>', but another org's id also maps onto it by the longest-prefix rule, so it is not this org's — name one that <L> lists` | `its notify.urlEnv "<name>" has the shape of a notify hook of org '<org>', but another org's id also maps onto it by the longest-prefix rule — whoever holds the workspace sets notify.urlEnv in <J> to one that <L> lists` |
+| any name, where another org's id takes every one of the org's hook names (a KEY tie; `<org>-notify` beside `<org>`) | `notify.urlEnv "<name>" cannot be a notify hook of org '<org>' — another org's id also maps onto every <P>NOTIFY_<HOOK>_URL by the longest-prefix rule, so the server posts no notification for this org's journeys: leave notify out` | `its notify.urlEnv "<name>" cannot be a notify hook of org '<org>' — another org's id also maps onto every <P>NOTIFY_<HOOK>_URL by the longest-prefix rule, so the server posts no notification for this org's journeys; whoever holds the workspace removes notify from <J> (packc journey run reads any name from its own environment)` |
 | another token | `notify.authEnv "<name>" is not the token of the hook notify.urlEnv names — a hook's token goes only to its own URL: name <T>, or leave authEnv out` | `its notify.authEnv "<name>" is not the token of the hook its urlEnv names — a hook's token goes only to its own URL: whoever holds the workspace sets notify.authEnv in <J> to <T>, or removes it` |
 | the URL unset | `notify.urlEnv <urlEnv> is not set in the server's environment — name one that <L> lists, or the server's operator sets it and restarts the server` | `its notify hook <urlEnv> is not set in the server's environment — the server's operator sets it and restarts the server, or whoever holds the workspace sets notify.urlEnv in <J> to one that <L> lists` |
 | the token unset | `notify.authEnv <authEnv> is not set in the server's environment — leave authEnv out, or the server's operator sets it and restarts the server` | `its notify.authEnv <authEnv> is not set in the server's environment — the server's operator sets it and restarts the server, or whoever holds the workspace removes notify.authEnv from <J>` |

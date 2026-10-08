@@ -81,6 +81,10 @@ const T = {
   runPair: (journey, authEnv, tokenEnv) => RUN(journey, `its notify.authEnv ${q(authEnv)} is not the token of the hook its urlEnv names — a hook's token goes only to its own URL: whoever holds the workspace sets notify.authEnv in ${J(journey)} to ${tokenEnv}, or removes it`),
   runUnsetUrl: (journey, urlEnv) => RUN(journey, `its notify hook ${urlEnv} is not set in the server's environment — the server's operator sets it and restarts the server, or whoever holds the workspace sets notify.urlEnv in ${J(journey)} to one that ${L} lists`),
   runUnsetToken: (journey, authEnv) => RUN(journey, `its notify.authEnv ${authEnv} is not set in the server's environment — the server's operator sets it and restarts the server, or whoever holds the workspace removes notify.authEnv from ${J(journey)}`),
+  // every hook name of the org taken by another org's id (a KEY tie, or an id whose prefix is <P>NOTIFY_)
+  taken: (urlEnv, org) => `notify.urlEnv ${q(urlEnv)} cannot be a notify hook of org '${org}' — another org's id also maps onto every ${P(org)}NOTIFY_<HOOK>_URL by the longest-prefix rule, so the server posts no notification for this org's journeys: leave notify out`,
+  runTaken: (journey, urlEnv, org) => RUN(journey, `its notify.urlEnv ${q(urlEnv)} cannot be a notify hook of org '${org}' — another org's id also maps onto every ${P(org)}NOTIFY_<HOOK>_URL by the longest-prefix rule, so the server posts no notification for this org's journeys; whoever holds the workspace removes notify from ${J(journey)} (packc journey run reads any name from its own environment)`),
+  noneTaken: (org) => `no notify hook can be set for org '${org}' — another org's id also maps onto every ${P(org)}NOTIFY_<HOOK>_URL by the longest-prefix rule, so the server posts no notification for this org's journeys: whoever holds the workspace leaves notify out of them`,
 };
 
 const ONCALL = hookVarsOf('acme', 'ONCALL');
@@ -100,7 +104,7 @@ const SHAPE = ['observogram_org_acme_notify_oncall_url', 'OBSERVOGRAM_ORG_ACME_N
 const BARE = ['MY_JOURNEY_WEBHOOK_URL', 'SMOKE_HOOK_URL'];
 const NAME_ROWS = [...SERVER_SECRETS, ...DEPLOYMENT, ...OTHER_ORG, ...LONGER_ORG, ...OWN_NOT_HOOK, ...SHAPE, ...BARE];
 
-test('U1 names: every deny-list row is refused for acme with its text (NAME, SHADOW for a shadowed name and a KEY tie, both orgs unnamed), before any env read; an acme hook passes; the shape is exact upper case; a removed org still shadows; a refused name\'s text does not depend on whether its variable is set', async () => {
+test('U1 names: every deny-list row is refused for acme with its text (NAME, SHADOW for a shadowed name, the other org unnamed; an org whose every hook name another org\'s id takes — a KEY tie, an id <org>-notify — one sentence for any name, whose way out is to leave notify out), before any env read; an acme hook passes; the shape is exact upper case; a removed org still shadows; a refused name\'s text does not depend on whether its variable is set', async () => {
   const { db, close } = await freshStore(['acme', 'acme-eu', 'acme-notify-eu', 'bravo', 'a-b', 'a_b'], { removed: ['bravo-notify-old'] });
   try {
     assert.equal(LONG_201.length, 201);
@@ -126,11 +130,9 @@ test('U1 names: every deny-list row is refused for acme with its text (NAME, SHA
     }
     // the mixed-case row passes ownership — only the shape refuses it (Windows reads process.env case-insensitively)
     assert.deepEqual(envNameOwnedBy(db, 'OBSERVOGRAM_ORG_ACME_NOTIFY_oncall_URL'), ['acme']);
-    // SHADOW: acme-notify-eu owns OBSERVOGRAM_ORG_ACME_NOTIFY_EU_*; a-b and a_b tie; a removed org still owns its names
+    // SHADOW: acme-notify-eu owns OBSERVOGRAM_ORG_ACME_NOTIFY_EU_*; a removed org still owns its names
     const shadows = [
       ['OBSERVOGRAM_ORG_ACME_NOTIFY_EU_X_URL', 'acme', 'acme-notify-eu'],
-      ['OBSERVOGRAM_ORG_A_B_NOTIFY_X_URL', 'a-b', 'a_b'],
-      ['OBSERVOGRAM_ORG_A_B_NOTIFY_X_URL', 'a_b', 'a-b'],
       ['OBSERVOGRAM_ORG_BRAVO_NOTIFY_OLD_X_URL', 'bravo', 'bravo-notify-old'],
     ];
     for (const [urlEnv, org, other] of shadows) {
@@ -141,6 +143,33 @@ test('U1 names: every deny-list row is refused for acme with its text (NAME, SHA
       assert.equal(run, T.runShadow('j2', urlEnv, org));
       assert.deepEqual(resolveJourneyNotify(db, { urlEnv }, { org, journey: 'j2', env: THROWING_ENV }), { refused: run }, 'no env read');
       for (const text of [capture, run]) assert.ok(!text.includes(`'${other}'`) && !text.includes(` ${other} `), `${text} names no other org`);
+    }
+    // Every hook name taken: a KEY tie (a-b, a_b), or an id whose prefix is the org's <P>NOTIFY_ (pay-notify
+    // beside pay; a removed rem_notify beside rem — ids are never reused). No name is ever the org's, whatever
+    // the operator sets, so no text sends anyone to the listing: any refused name — shadowed or not — gets the
+    // one sentence whose way out is to leave notify out, naming no other org, before any env read.
+    const taken = await freshStore(['pay', 'pay-notify', 'rem'], { removed: ['rem_notify'] });
+    try {
+      const takenOrgs = [[db, 'a-b', 'a_b'], [db, 'a_b', 'a-b'], [taken.db, 'pay', 'pay-notify'], [taken.db, 'rem', 'rem_notify']];
+      for (const [store, org, other] of takenOrgs) {
+        for (const hook of ['ONCALL', 'X', 'NOTIFY', 'ZZZ_1']) assert.deepEqual(notifyHookOf(store, `${P(org)}NOTIFY_${hook}_URL`, org), { kind: 'shadow' }, `${org} ${hook}`);
+        for (const urlEnv of [`${P(org)}NOTIFY_ONCALL_URL`, `${P(org)}NOTIFY_ZZZ_1_URL`, 'OBSERVOGRAM_API_TOKEN', 'MY_JOURNEY_WEBHOOK_URL', `${P(org)}MCP_TOKEN`]) {
+          const capture = notifyNamesRefusal(store, { urlEnv }, { org, at: 'capture' });
+          const run = notifyNamesRefusal(store, { urlEnv, authEnv: 'OBSERVOGRAM_API_TOKEN' }, { org, at: 'run', journey: 'j4' });
+          assert.equal(capture, T.taken(urlEnv, org), `${org}: ${urlEnv}`);
+          assert.equal(run, T.runTaken('j4', urlEnv, org), `${org}: ${urlEnv}`);
+          assert.equal(captureNotifyRefusal(store, { urlEnv }, { org, env: THROWING_ENV }), capture, `${org}: ${urlEnv}: no env read`);
+          assert.deepEqual(resolveJourneyNotify(store, { urlEnv }, { org, journey: 'j4', env: THROWING_ENV }), { refused: run }, `${org}: ${urlEnv}: no env read`);
+          for (const text of [capture, run]) {
+            assert.ok(!text.includes(L), `${text}: never the listing, which can never hold one`);
+            assert.ok(!text.includes(`'${other}'`) && !text.includes(` ${other} `), `${text} names no other org`);
+          }
+        }
+      }
+      // the org whose prefix takes them has hooks of its own
+      assert.equal(notifyNamesRefusal(taken.db, { urlEnv: 'OBSERVOGRAM_ORG_PAY_NOTIFY_NOTIFY_X_URL' }, { org: 'pay-notify', at: 'run', journey: 'j4' }), null);
+    } finally {
+      taken.close();
     }
     // a removed org's hook is no other org's
     assert.equal(notifyHookOf(db, 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_OLD_NOTIFY_X_URL', 'acme').kind, 'name');
@@ -325,7 +354,7 @@ test('U6 isOrgHookShaped: the URL or TOKEN shape of any org\'s hook, live or rem
   }
 });
 
-test('U7 notifyHooksOf and notifyBootReport: the org\'s set hooks sorted, tokenEnv null when its token is unset, usable or the capture problem, a shadowed name left out, `none` when there are none; the boot lines; never a value, an origin or a list entry', async () => {
+test('U7 notifyHooksOf and notifyBootReport: the org\'s set hooks sorted, tokenEnv null when its token is unset, usable or the capture problem, a shadowed name left out, `none` when there are none (that none can be set, for an org whose every hook name another org\'s id takes); the boot lines; never a value, an origin or a list entry', async () => {
   const { db, close } = await freshStore(['acme', 'acme-eu', 'acme-notify-eu', 'bravo']);
   try {
     const env = {
@@ -358,6 +387,8 @@ test('U7 notifyHooksOf and notifyBootReport: the org\'s set hooks sorted, tokenE
       org: 'bravo', pattern: 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_<HOOK>_URL', hooks: [],
       none: "no notify hook is set for org 'bravo' — the server's operator sets OBSERVOGRAM_ORG_BRAVO_NOTIFY_<HOOK>_URL (and OBSERVOGRAM_ORG_BRAVO_NOTIFY_<HOOK>_TOKEN when the webhook takes a bearer token) in the server's environment and restarts the server",
     });
+    // a name shadowed here and there (acme-notify-eu takes acme's EU_* only) leaves the org hooks to set: who sets one
+    assert.equal(notifyHooksOf(db, 'acme', {}).none, "no notify hook is set for org 'acme' — the server's operator sets OBSERVOGRAM_ORG_ACME_NOTIFY_<HOOK>_URL (and OBSERVOGRAM_ORG_ACME_NOTIFY_<HOOK>_TOKEN when the webhook takes a bearer token) in the server's environment and restarts the server");
     let lines;
     const said = await stderrOf(() => { lines = notifyBootReport(db, env); });
     assert.deepEqual(lines, [
@@ -373,8 +404,15 @@ test('U7 notifyHooksOf and notifyBootReport: the org\'s set hooks sorted, tokenE
     // nothing set, nothing said; a tie names both orgs to the server's operator
     assert.deepEqual(notifyBootReport(db, {}), []);
     assert.deepEqual(notifyBootReport(db, { [ONCALL.urlEnv]: 'http://127.0.0.1:9/h', OBSERVOGRAM_API_TOKEN: 'x' }), []);
-    const tie = await freshStore(['a-b', 'a_b'], { removed: ['gone'] });
+    const tie = await freshStore(['a-b', 'a_b', 'pay', 'pay-notify'], { removed: ['gone'] });
     try {
+      // an org whose every hook name another org's id takes (the tie; pay-notify beside pay) can have none, whatever
+      // the operator sets: its `none` says so and that its journeys leave notify out — never who sets one
+      const takenEnv = { OBSERVOGRAM_ORG_A_B_NOTIFY_X_URL: 'http://127.0.0.1:9/h', OBSERVOGRAM_ORG_PAY_NOTIFY_ONCALL_URL: 'http://127.0.0.1:9/h' };
+      for (const org of ['a-b', 'a_b', 'pay']) {
+        for (const e of [takenEnv, {}]) assert.deepEqual(notifyHooksOf(tie.db, org, e), { org, pattern: `${P(org)}NOTIFY_<HOOK>_URL`, hooks: [], none: T.noneTaken(org) }, org);
+      }
+      assert.match(notifyHooksOf(tie.db, 'pay-notify', {}).none, /^no notify hook is set for org 'pay-notify' — the server's operator sets OBSERVOGRAM_ORG_PAY_NOTIFY_NOTIFY_<HOOK>_URL /);
       assert.deepEqual(notifyBootReport(tie.db, { OBSERVOGRAM_ORG_A_B_NOTIFY_X_URL: 'http://127.0.0.1:9/h', OBSERVOGRAM_ORG_GONE_NOTIFY_X_URL: 'http://127.0.0.1:9/h' }), [
         "[notify-hooks] OBSERVOGRAM_ORG_A_B_NOTIFY_X_URL has the shape of org 'a-b''s notify hook, but org 'a_b' also maps onto it by the longest-prefix rule — no journey can use it",
         "[notify-hooks] OBSERVOGRAM_ORG_A_B_NOTIFY_X_URL has the shape of org 'a_b''s notify hook, but org 'a-b' also maps onto it by the longest-prefix rule — no journey can use it",

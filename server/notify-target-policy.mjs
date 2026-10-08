@@ -15,7 +15,11 @@
 // name another org's id also maps onto — a KEY tie (a-b, a_b), or an org
 // whose id extends this one's (acme-notify-eu owns
 // OBSERVOGRAM_ORG_ACME_NOTIFY_EU_*) — is refused for everyone (SHADOW), and
-// the text names neither org. The rule allows by shape and ownership and
+// the text names neither org. When another org's id takes EVERY name of the
+// org's hook shape (a KEY tie, or an id whose prefix is <P>NOTIFY_: pay-notify
+// beside pay), no hook can ever be the org's, so its refusals and its listing
+// say so and that notify is left out, never "name one that the listing
+// lists" (TAKEN). The rule allows by shape and ownership and
 // denies everything else: the server's own secrets, another org's variables,
 // anything outside OBSERVOGRAM_ORG_, the org's MCP token.
 //
@@ -75,6 +79,20 @@ const soleOwner = (db, name, org) => {
   return owners.length === 1 && owners[0] === org;
 };
 
+// Does another org's id, live or removed, take every one of `org`'s hook
+// names — share its prefix (a KEY tie: a-b, a_b), or have the prefix
+// <P>NOTIFY_ (pay-notify or pay_notify beside pay)? Only those two prefixes
+// start every <P>NOTIFY_<HOOK>_URL. Then no hook is ever the org's alone,
+// whatever the server's operator sets (ids are never reused), and no text
+// may send a member to the listing or the operator to set one. Reads orgs,
+// never the environment.
+function hooksAllTaken(db, org) {
+  const P = orgEnvPrefix(org);
+  return listOrgs(db, { includeRemoved: true })
+    .some((o) => o.id !== org && (orgEnvPrefix(o.id) === P || orgEnvPrefix(o.id) === `${P}NOTIFY_`));
+}
+const takenClause = (P) => `another org's id also maps onto every ${P}NOTIFY_<HOOK>_URL by the longest-prefix rule, so the server posts no notification for this org's journeys`;
+
 // ---------- names (no env read) ----------
 
 // What `name` is to `org` as a notify.urlEnv: { kind: 'hook', hook, urlEnv,
@@ -94,10 +112,13 @@ export function notifyHookOf(db, name, org) {
 const journeyFile = (journey) => `journeys/${journey}.journey.yaml`;
 const runPrefix = (journey) => `journey ${journey} is not run: `;
 
-// The NAME / SHADOW / PAIR refusal of a notify block's names for `org`, at
-// 'capture' or 'run' (the run text names the journey file) — null when the
-// names pass. Reads no environment (non-negotiable 2): a refused name gets
-// the same sentence whether its variable is set or not.
+// The NAME / SHADOW / TAKEN / PAIR refusal of a notify block's names for
+// `org`, at 'capture' or 'run' (the run text names the journey file) — null
+// when the names pass. Reads no environment (non-negotiable 2): a refused
+// name gets the same sentence whether its variable is set or not. TAKEN
+// replaces NAME and SHADOW for an org whose every hook name another org's id
+// takes (hooksAllTaken): the listing can never hold one, so its way out is
+// to leave notify out.
 export function notifyNamesRefusal(db, notify, { org, at, journey }) {
   if (at !== 'capture' && at !== 'run') throw new TypeError(`notifyNamesRefusal: at is capture or run, not ${q(at)}`);
   const urlEnv = notify?.urlEnv;
@@ -106,6 +127,11 @@ export function notifyNamesRefusal(db, notify, { org, at, journey }) {
   const L = NOTIFY_HOOKS_ROUTE;
   const J = journeyFile(journey);
   const h = notifyHookOf(db, urlEnv, org);
+  if (h.kind !== 'hook' && hooksAllTaken(db, org)) {
+    return at === 'capture'
+      ? `notify.urlEnv ${q(urlEnv)} cannot be a notify hook of org '${org}' — ${takenClause(P)}: leave notify out`
+      : `${runPrefix(journey)}its notify.urlEnv ${q(urlEnv)} cannot be a notify hook of org '${org}' — ${takenClause(P)}; whoever holds the workspace removes notify from ${J} (packc journey run reads any name from its own environment)`;
+  }
   if (h.kind === 'name') {
     return at === 'capture'
       ? `notify.urlEnv ${q(urlEnv)} is not a notify hook of org '${org}' — the server posts a journey's notification only to ${P}NOTIFY_<HOOK>_URL (<HOOK>: words of A–Z and 0–9 joined by single _), with its token, if any, from ${P}NOTIFY_<HOOK>_TOKEN: name one that ${L} lists`
@@ -265,8 +291,10 @@ const setValue = (env, name) => {
 // org's hook URL shape the org solely owns (a shadowed name is left out, so
 // no other org is revealed), sorted by hook; `tokenEnv` the hook's token
 // variable when it is set, else null; `usable`/`problem` capture's value and
-// origin checks. `none` says who sets one when there is none. Names only:
-// never a value, an origin or a list entry.
+// origin checks. `none` says who sets one when there is none — or, for an org
+// whose every hook name another org's id takes (hooksAllTaken), that none can
+// be set and its journeys leave notify out. Names only: never a value, an
+// origin or a list entry.
 export function notifyHooksOf(db, org, env = process.env) {
   const P = orgEnvPrefix(org);
   const hooks = [];
@@ -284,7 +312,9 @@ export function notifyHooksOf(db, org, env = process.env) {
     org,
     pattern: `${P}NOTIFY_<HOOK>_URL`,
     hooks,
-    none: hooks.length ? null : `no notify hook is set for org '${org}' — the server's operator sets ${P}NOTIFY_<HOOK>_URL (and ${P}NOTIFY_<HOOK>_TOKEN when the webhook takes a bearer token) in the server's environment and restarts the server`,
+    none: hooks.length ? null
+      : hooksAllTaken(db, org) ? `no notify hook can be set for org '${org}' — ${takenClause(P)}: whoever holds the workspace leaves notify out of them`
+        : `no notify hook is set for org '${org}' — the server's operator sets ${P}NOTIFY_<HOOK>_URL (and ${P}NOTIFY_<HOOK>_TOKEN when the webhook takes a bearer token) in the server's environment and restarts the server`,
   };
 }
 
