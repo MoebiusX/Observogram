@@ -840,9 +840,12 @@ function proxyStudio() {
 }
 after(async () => { if (proxyChild) await (await proxyChild).stop(); });
 
+// Every file under `dir` as bytes, but a database's -shm: the WAL index holds page numbers, salts and
+// checksums, never a row's bytes, and on Windows the live server's SQLite holds byte-range locks on it
+// that make a read across them fail (EBUSY).
 function filesUnder(dir) {
   const out = [];
-  const walk = (d) => { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) walk(p); else out.push([p, readFileSync(p)]); } };
+  const walk = (d) => { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) walk(p); else if (!n.endsWith('-shm')) out.push([p, readFileSync(p)]); } };
   walk(dir);
   return out;
 }

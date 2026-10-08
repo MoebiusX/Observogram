@@ -282,13 +282,15 @@ async function studio(env = {}) {
   return { ...s, ws, headers, post, register, audit };
 }
 
-// Every file under `dir` as bytes.
+// Every file under `dir` as bytes, but a database's -shm: the WAL index holds page numbers, salts and
+// checksums, never a row's bytes, and on Windows the live server's SQLite holds byte-range locks on it
+// that make a read across them fail (EBUSY).
 function filesUnder(dir) {
   const out = [];
   const walk = (d) => {
     for (const name of readdirSync(d)) {
       const p = join(d, name);
-      if (statSync(p).isDirectory()) walk(p); else out.push([p, readFileSync(p)]);
+      if (statSync(p).isDirectory()) walk(p); else if (!name.endsWith('-shm')) out.push([p, readFileSync(p)]);
     }
   };
   if (existsSync(dir)) walk(dir);
