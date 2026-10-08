@@ -13,9 +13,13 @@
 // realpathSync keeps whichever the caller wrote. There a path is compared as
 // the native realpath (long names, the case on disk) of its longest prefix
 // that exists, the rest appended as written, with \ separators and case
-// folded — the rule a studio-run journey's org scope compares by
-// (crawlScopeTest, tools/lib/journey.mjs). That form only compares: every
-// message, record and return value keeps the path as given. host =
+// folded — the form a studio-run journey's org scope compares in
+// (crawlScopeRefusal, tools/lib/journey.mjs). A path reached through a
+// network share keeps the share's name in that form (\\localhost\C$\ws is
+// not C:\ws here): the journey scope refuses such a path outside the
+// workspace; these checks do not, since an export or a backup on a share is
+// an ordinary target. That form only compares: every message, record and
+// return value keeps the path as given. host =
 // { windows, path, realpathSync } (the platform, node:path's and node:fs's
 // realpathSync with its .native) is injectable (server/test-store-paths.mjs);
 // the default is this host.

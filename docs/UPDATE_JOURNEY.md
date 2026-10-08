@@ -1328,14 +1328,19 @@ could name beta's pack file `C:/WS/orgs/beta/packs/b1.pack.yaml` and read it
 as a file outside the workspace. On Windows the scope now compares both sides
 as the native realpath of the longest prefix that exists, the rest as
 written, case folded; a refusal still names the path as written, and Linux
-and macOS compare exactly as before. Tests: 1390 → 1396
-(`tools/test-journey-scope.mjs` 6, new).
+and macOS compare exactly as before. That realpath keeps a network share's
+name — `\\localhost\C$\ws\orgs\beta\…` resolves to itself, not to
+`C:\ws\orgs\beta\…` — so on Windows a path outside the workspace is
+nobody's part only on a local drive; one reached through a share or a mapped
+drive is refused. Tests: 1390 → 1398 (`tools/test-journey-scope.mjs` 8, new).
 
 The store's offline operations compared paths the same way, so on Windows
 `packc store export C:\WS\exports` wrote a directory export into the
 workspace at `C:\ws`, `packc store purge-org` deleted a users file spelled
 under the purged org's root in another case, and a backup could be written
 over the database's own `-wal`. The export, in-place, purge-org, backup and
-restore checks now compare by the same rule on Windows; their messages and
-the Linux and macOS comparisons are unchanged. Tests: 1396 → 1403
+restore checks now compare the same way on Windows (a path named through a
+share still compares as the share names it: these checks do not refuse one,
+since an export or a backup on a share is an ordinary target); their messages
+and the Linux and macOS comparisons are unchanged. Tests: 1398 → 1405
 (`server/test-store-paths.mjs` 7, new).

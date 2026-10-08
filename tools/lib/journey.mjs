@@ -413,9 +413,11 @@ const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
 // The crawl scope of a studio-run journey (STORE_PLAN slice 2): a walk
 // never reads what is not the requesting org's own part of the workspace.
 // scope = { base, ownRoot } (both absolute); null is the CLI's walk,
-// unchanged. crawlScopeTest(scope) → null, or the test of one path as
-// written: true when the org may read it. Paths are compared as realpaths,
-// so a symlink cannot lead a walk into another org's part.
+// unchanged. crawlScopeRefusal(scope) → null, or the test of one path as
+// written: '' when the org may read it, else why not (the refusal's tail);
+// crawlScopeTest(scope) → null, or the same test as true when the org may
+// read it. Paths are compared as realpaths, so a symlink cannot lead a walk
+// into another org's part.
 //
 // On Windows a spelling does not name a path: NTFS names are
 // case-insensitive and a directory has a short (8.3) name beside its long
@@ -428,9 +430,21 @@ const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
 // spelling, as it always was. host = { windows, path, realpathSync } (the
 // platform, node:path's and node:fs's realpathSync with its .native) is
 // injectable (tools/test-journey-scope.mjs); the default is this host.
+//
+// A network share is one more name the native realpath keeps: a path reached
+// through one (\\host\share\…, \\?\UNC\…, a mapped drive) resolves to
+// \\host\share\…, never to the volume behind it, so \\localhost\C$\ws\orgs\beta
+// is C:\ws\orgs\beta, and \\nas01.corp.example\obs the workspace \\nas01\obs,
+// yet neither compares under the workspace. On Windows a path outside the
+// workspace is therefore nobody's part only on a local drive; any other (a
+// share, or a device path no realpath resolves) is refused.
 const NODE_PATH = Object.freeze({ resolve, join, dirname, basename, sep });
 const ON_WINDOWS = process.platform === 'win32';
-export function crawlScopeTest(scope, { windows = ON_WINDOWS, path = NODE_PATH, realpathSync: fsRealpath = realpathSync } = {}) {
+const LOCAL_DRIVE = /^[a-z]:\\/;   // a compared form on a local drive (folded)
+const IN_ANOTHER_ORGS_PART = 'belongs to another org\'s part of the workspace — refused';
+const NOT_ON_A_LOCAL_DRIVE = 'is not a path on a local drive, and a network share or a device path may lead into another org\'s part of the workspace — refused; '
+  + 'name it by its path on a local drive (copy it there if it has none)';
+export function crawlScopeRefusal(scope, { windows = ON_WINDOWS, path = NODE_PATH, realpathSync: fsRealpath = realpathSync } = {}) {
   if (!scope) return null;
   const realpath = windows ? fsRealpath.native : fsRealpath;
   const realOrResolved = (p) => {
@@ -445,28 +459,31 @@ export function crawlScopeTest(scope, { windows = ON_WINDOWS, path = NODE_PATH, 
   const base = compared(path.resolve(scope.base));
   const ownRoot = compared(path.resolve(scope.ownRoot));
   const orgsDir = path.join(base, 'orgs');
-  // Outside the workspace (a checkout elsewhere) is nobody's part; inside
-  // it only the org's own root is, and the default org at the base never
-  // enters <base>/orgs/, where the other orgs live.
+  // Outside the workspace (a checkout elsewhere) is nobody's part — on
+  // Windows only on a local drive; inside it only the org's own root is,
+  // and the default org at the base never enters <base>/orgs/, where the
+  // other orgs live.
   return (p) => {
     const real = compared(p);
-    return !within(real, base) || (within(real, ownRoot) && !(ownRoot === base && within(real, orgsDir)));
+    if (!within(real, base)) return windows && !LOCAL_DRIVE.test(real) ? NOT_ON_A_LOCAL_DRIVE : '';
+    return within(real, ownRoot) && !(ownRoot === base && within(real, orgsDir)) ? '' : IN_ANOTHER_ORGS_PART;
   };
+}
+export function crawlScopeTest(scope, host) {
+  const refusal = crawlScopeRefusal(scope, host);
+  return refusal && ((p) => refusal(p) === '');
 }
 
 // A single path (a file: source, an inventory site) read under the scope.
 function refuseOutOfScope(p, scope, what) {
-  const inScope = crawlScopeTest(scope);
-  if (inScope && !inScope(p)) {
-    throw new Error(`${what} ${p} belongs to another org's part of the workspace — refused`);
-  }
+  const why = crawlScopeRefusal(scope)?.(p);
+  if (why) throw new Error(`${what} ${p} ${why}`);
 }
 
 function walkRepo(root, { scope = null } = {}) {
-  const inScope = crawlScopeTest(scope);
-  if (inScope && !inScope(root)) {
-    throw new Error(`crawl source ${root} belongs to another org's part of the workspace — refused`);
-  }
+  const refusal = crawlScopeRefusal(scope);
+  const why = refusal?.(root);
+  if (why) throw new Error(`crawl source ${root} ${why}`);
   const files = {};
   let total = 0;
   const stack = [root];
@@ -478,14 +495,14 @@ function walkRepo(root, { scope = null } = {}) {
       if (e.isDirectory()) {
         if (!SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) {
           const sub = join(dir, e.name);
-          if (inScope && !inScope(sub)) continue;   // never descended into
+          if (refusal?.(sub)) continue;   // never descended into
           stack.push(sub);
         }
         continue;
       }
       if (!SCAN_EXT.test(e.name)) continue;
       const full = join(dir, e.name);
-      if (inScope && !inScope(full)) continue;      // a symlinked file included: skipped
+      if (refusal?.(full)) continue;      // a symlinked file included: skipped
       let size = 0;
       try { size = statSync(full).size; } catch (_) { continue; }
       if (size > MAX_FILE_BYTES || total + size > MAX_TOTAL_BYTES) continue;

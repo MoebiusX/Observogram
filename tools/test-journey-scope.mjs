@@ -1,17 +1,21 @@
 // tools/test-journey-scope.mjs — a studio-run journey's org scope (A-24,
-// crawlScopeTest in tools/lib/journey.mjs) holds on Windows. NTFS gives one
-// file many spellings — another case, another drive-letter case, / for \, a
-// short (8.3) name — and JS realpathSync keeps the caller's. Compared by
-// spelling, another org's file named in another spelling read as "outside the
-// workspace", nobody's part, and an acme journey loaded it. The host is
-// injected — Windows' path rules, an NTFS volume's realpath
-// (server/fixtures/ntfs.mjs) and the platform — so the proof runs on every
-// host. On Linux and macOS the comparison is unchanged: the A-24 cases in
-// tools/test-journey.mjs and server/test-tenancy.mjs hold it.
+// crawlScopeRefusal and crawlScopeTest in tools/lib/journey.mjs) holds on
+// Windows. NTFS gives one file many spellings — another case, another
+// drive-letter case, / for \, a short (8.3) name — and JS realpathSync keeps
+// the caller's. Compared by spelling, another org's file named in another
+// spelling read as "outside the workspace", nobody's part, and an acme
+// journey loaded it. The host is injected — Windows' path rules, an NTFS
+// volume's realpath (server/fixtures/ntfs.mjs) and the platform — so the
+// proof runs on every host. A network share is one more name: the native
+// realpath answers a path reached through one as the share names it, never as
+// the volume behind it, so on Windows a path outside the workspace is
+// nobody's part only on a local drive. On Linux and macOS the comparison is
+// unchanged: the A-24 cases in tools/test-journey.mjs and
+// server/test-tenancy.mjs hold it.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { win32 } from 'node:path';
-import { crawlScopeTest } from './lib/journey.mjs';
+import { crawlScopeRefusal, crawlScopeTest } from './lib/journey.mjs';
 import { ntfsVolume } from '../server/fixtures/ntfs.mjs';
 
 const VOLUME = ntfsVolume([
@@ -21,7 +25,12 @@ const VOLUME = ntfsVolume([
   'C:\\ws\\packs\\demo.pack.yaml',
   'C:\\ws2\\packs\\next-door.pack.yaml',
   'C:\\repo\\catalog.pack.yaml',
-], { short: { 'C:\\ws': 'WS~1' } });
+], {
+  short: { 'C:\\ws': 'WS~1' },
+  // The admin share by three names of this host, and a share of the workspace itself; Z: is mapped to it.
+  shares: { '\\\\localhost\\C$': 'C:\\', '\\\\127.0.0.1\\C$': 'C:\\', '\\\\myhost.corp.example\\C$': 'C:\\', '\\\\myhost\\ws': 'C:\\ws' },
+  mapped: { 'Z:': '\\\\localhost\\C$\\ws' },
+});
 const WINDOWS = { windows: true, path: win32, realpathSync: VOLUME.realpathSync };
 // The comparison this replaces on Windows: the spelling JS realpathSync keeps.
 const BY_SPELLING = { windows: false, path: win32, realpathSync: VOLUME.realpathSync };
@@ -96,4 +105,60 @@ test('an org whose directory is not created yet: its own paths in any case are r
   const inScope = crawlScopeTest({ base: 'C:\\ws', ownRoot: 'C:\\ws\\orgs\\gamma' }, WINDOWS);
   for (const p of ['C:\\WS\\ORGS\\GAMMA\\packs\\g.pack.yaml', 'c:/ws/orgs/Gamma/x.yaml', 'C:\\WS~1\\orgs\\gamma']) assert.equal(inScope(p), true, `read: ${p}`);
   for (const p of [...BETA_FILE, 'C:\\WS\\ORGS\\DELTA\\x.yaml', 'C:\\WS\\ORGS\\GAMMA2\\x.yaml']) assert.equal(inScope(p), false, `refused: ${p}`);
+});
+
+const IN_ANOTHER_ORGS_PART = 'belongs to another org\'s part of the workspace — refused';
+const NOT_ON_A_LOCAL_DRIVE = 'is not a path on a local drive, and a network share or a device path may lead into another org\'s part of the workspace — refused; '
+  + 'name it by its path on a local drive (copy it there if it has none)';
+
+test('for the workspace C:\\ws, a path reached through a network share is refused — beta\'s file by any name of the share, and acme\'s own; \\\\?\\C:\\ is C:\\', () => {
+  // The native realpath keeps the share's name: compared by it alone, beta's file lay outside C:\ws.
+  assert.equal(VOLUME.realpathSync.native('//127.0.0.1/c$/WS~1/orgs/beta'), '\\\\127.0.0.1\\C$\\ws\\orgs\\beta');
+  assert.equal(VOLUME.realpathSync.native('Z:\\orgs\\beta'), '\\\\localhost\\C$\\ws\\orgs\\beta');
+  const betaThroughAShare = [
+    '\\\\localhost\\C$\\ws\\orgs\\beta\\packs\\b1.pack.yaml',
+    '//127.0.0.1/c$/ws/orgs/beta/packs/b1.pack.yaml',
+    '\\\\?\\UNC\\localhost\\C$\\ws\\orgs\\beta',
+    '\\\\myhost.corp.example\\c$\\WS~1\\orgs\\beta',
+    '\\\\MYHOST\\WS\\orgs\\beta\\packs\\b1.pack.yaml',
+    'Z:\\orgs\\beta\\packs\\b1.pack.yaml',
+    'z:/ORGS/beta',
+    '\\\\elsewhere\\share\\orgs\\beta',   // a share no realpath reaches: its spelling is all there is
+  ];
+  for (const scope of [ACME, DEFAULT_ORG]) {
+    const refusal = crawlScopeRefusal(scope, WINDOWS);
+    const inScope = crawlScopeTest(scope, WINDOWS);
+    for (const p of [...betaThroughAShare, '\\\\localhost\\C$\\ws\\orgs\\acme\\packs\\own.pack.yaml', 'Z:\\orgs\\acme', '\\\\myhost\\ws\\packs\\demo.pack.yaml', '\\\\localhost\\C$\\repo\\catalog.pack.yaml']) {
+      assert.equal(refusal(p), NOT_ON_A_LOCAL_DRIVE, `${scope.ownRoot}: refused, reached through a share: ${p}`);
+      assert.equal(inScope(p), false, `${scope.ownRoot}: refused: ${p}`);
+    }
+  }
+  // A device path to a local drive is that drive's path.
+  const refusal = crawlScopeRefusal(ACME, WINDOWS);
+  for (const p of ['\\\\?\\C:\\ws\\orgs\\beta\\packs\\b1.pack.yaml', '\\\\.\\c:\\WS~1\\orgs\\beta']) assert.equal(refusal(p), IN_ANOTHER_ORGS_PART, `beta's: ${p}`);
+  for (const p of ['\\\\?\\C:\\ws\\orgs\\acme\\packs\\own.pack.yaml', '\\\\?\\c:\\repo\\catalog.pack.yaml', 'C:\\repo\\catalog.pack.yaml']) assert.equal(refusal(p), '', `read: ${p}`);
+});
+
+test('a workspace on a share: its own share name decides as a drive path does, another name of its server is refused, a local drive outside it is read', () => {
+  // The share's server keeps the workspace at N:\obs on its own disk (the model's volume stands in for it); this host
+  // reaches it as \\nas01\obs and by two more names of that server, and maps Y: to it.
+  const nas = ntfsVolume([
+    'N:\\obs\\orgs\\acme\\packs\\own.pack.yaml',
+    'N:\\obs\\orgs\\beta\\packs\\b1.pack.yaml',
+    'C:\\repo\\catalog.pack.yaml',
+  ], {
+    shares: { '\\\\nas01\\obs': 'N:\\obs', '\\\\nas01.corp.example\\obs': 'N:\\obs', '\\\\10.0.0.5\\obs': 'N:\\obs' },
+    mapped: { 'Y:': '\\\\nas01\\obs' },
+  });
+  const host = { windows: true, path: win32, realpathSync: nas.realpathSync };
+  const refusal = crawlScopeRefusal({ base: '\\\\nas01\\obs', ownRoot: '\\\\nas01\\obs\\orgs\\acme' }, host);
+  for (const p of ['\\\\nas01\\obs\\orgs\\beta\\packs\\b1.pack.yaml', '\\\\NAS01\\OBS\\ORGS\\BETA', '//nas01/obs/orgs/beta/', 'Y:\\orgs\\beta\\packs\\b1.pack.yaml']) {
+    assert.equal(refusal(p), IN_ANOTHER_ORGS_PART, `beta's: ${p}`);
+  }
+  for (const p of ['\\\\nas01.corp.example\\obs\\orgs\\beta\\packs\\b1.pack.yaml', '//10.0.0.5/obs/orgs/beta', '\\\\nas01.corp.example\\obs\\orgs\\acme\\packs\\own.pack.yaml']) {
+    assert.equal(refusal(p), NOT_ON_A_LOCAL_DRIVE, `refused, another name of the share: ${p}`);
+  }
+  for (const p of ['\\\\nas01\\obs\\orgs\\acme\\packs\\own.pack.yaml', '\\\\NAS01\\obs\\Orgs\\ACME', 'Y:\\orgs\\acme\\packs\\own.pack.yaml', 'C:\\repo\\catalog.pack.yaml']) {
+    assert.equal(refusal(p), '', `read: ${p}`);
+  }
 });
