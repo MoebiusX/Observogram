@@ -19,10 +19,15 @@ import {
   parseKeyValueLines, environmentSaveStatus, endpointSaveStatus, memberSaveStatus, orgRenameStatus, endpointDeleteStatus,
   lastAdmin, orgEnvPrefix, mcpTargetModel, mcpTargetBody, mcpPickerCanAdmin, profileEndpointNote, endpointDrift,
   mcpTargetMissingText, mcpRegisterCheck,
+  noOwnerText, PASSWORD_ALPHABET, temporaryPassword, signInModeLine, userSignIn, buildUsersSectionModel, userActions, userActionStatus,
+  buildUserCreateBody, userCreateStatus,
+  activeOrgChoice, isActingOrg, orgChipEntries, orgChipLabel, actingRecovery,
+  buildOrgsSectionModel, buildOrgCreateBody, orgCreateStatus, orgRemoveStatus, joinRoleModeSentence, buildJoinRoleSectionModel, joinRoleBody, joinRoleStatus,
 } from '../studio/settings-model.mjs';
 import {
   loadMcpEndpoints, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
   loadMembers, addMember, patchMember, removeMember, renameOrg, loadAudit,
+  loadUsers, createUser, userAction, setOwner, loadAdminOrgs, loadJoinRole, createOrg, removeOrg, putJoinRole,
 } from '../studio/settings-api.mjs';
 import { accessModel, TIER_BY_PACK } from '../studio/services-model.mjs';
 import { renderSettings, renderSettingsEditor, renderMcpTarget, readAuditDrafts } from '../studio/settings-view.mjs';
@@ -122,10 +127,11 @@ test('settingsAccessModel: each rank, each posture — the reasons name a way ou
 
 test('the frame: the scope line, the nav lists only the built sections, each unreadable one disabled with its reason', () => {
   assert.deepEqual(SETTINGS_SECTIONS, ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role']);
-  assert.deepEqual(BUILT_SECTIONS, ['environments', 'endpoints', 'members', 'audit'], 'the sections this build draws: the org\'s four — no deployment group yet');
-  assert.deepEqual(BUILT_EDITORS, ['endpoint', 'environment', 'org-name', 'member-add', 'member'], 'the record editors this build draws: the MCP endpoint, the environment, the org name and the member editors');
+  assert.deepEqual(BUILT_SECTIONS, SETTINGS_SECTIONS, 'the sections this build draws: the org\'s four and the deployment\'s three');
+  assert.deepEqual(BUILT_EDITORS, ['endpoint', 'environment', 'org-name', 'member-add', 'member', 'user-create', 'user', 'org-create', 'org', 'join-role'], 'the record editors this build draws: the MCP endpoint, the environment, the org name, the member editors, the user editors, the organisation editors and the join role');
   const FOUR = ['environments', 'endpoints', 'members', 'audit'];
-  assert.deepEqual(buildSettingsFrameModel({ access: ADA }).nav.map((n) => n.id), BUILT_SECTIONS, 'the default nav is the built sections');
+  assert.deepEqual(buildSettingsFrameModel({ access: OLIVE }).nav.map((n) => n.id), BUILT_SECTIONS, 'the default nav is the built sections (an owner\'s)');
+  assert.deepEqual(buildSettingsFrameModel({ access: ADA }).nav.map((n) => n.id), FOUR, 'a non-owner\'s nav: the org\'s sections — the deployment\'s collapse into one line');
   const ada = buildSettingsFrameModel({ access: ADA, orgName: 'Acme', orgId: 'acme', builtSections: FOUR });
   assert.equal(ada.scope, 'Settings · Acme (acme) · you are admin');
   assert.equal(ada.section, 'environments', 'the first readable section by default');
@@ -172,7 +178,11 @@ test('the frame: the scope line, the nav lists only the built sections, each unr
   assert.deepEqual([stat.nav, stat.section, stat.banner.kind, stat.scope], [[], null, 'static', 'Settings']);
   assert.equal(settingsSectionFor(STATIC, 'environments'), null);
   assert.equal(settingsSectionFor(CLOSED, 'members', FOUR), 'environments', 'closed: members falls back');
-  assert.equal(settingsSectionFor(ADA, 'users'), 'environments', 'a section not built is never opened');
+  assert.equal(settingsSectionFor(OLIVE, 'orgs', FOUR), 'environments', 'a section not built is never opened');
+  assert.equal(settingsSectionFor(OLIVE, 'orgs'), 'orgs', 'Organisations is built, and an owner\'s');
+  assert.equal(settingsSectionFor(ADA, 'join-role'), 'environments', 'the join role is an owner\'s');
+  assert.equal(settingsSectionFor(ADA, 'users'), 'environments', 'a section the rank cannot read is never opened');
+  assert.equal(settingsSectionFor(OLIVE, 'users'), 'users', 'Users is built, and an owner\'s');
   assert.equal(settingsSectionFor(ADA, 'members'), 'members', 'Members is built');
   assert.equal(settingsSectionFor(ADA, 'audit'), 'audit', 'the audit is built');
   // The heads: the title, the scope sentence naming the org, the reading line.
@@ -189,9 +199,9 @@ test('the Advanced → Settings item\'s sub-line names every built section (§3.
   const item = src.match(/data-action="settings">[\s\S]*?<span class="observa-adv-item-sub">([^<]*)<\/span>/);
   assert.ok(item, 'the Settings menu item carries a sub-line');
   const sub = item[1];
-  const WORDS = { environments: /\benvironments\b/, endpoints: /\bMCP endpoints\b/, members: /\bmembers\b/, audit: /\baudit\b/ };
+  const WORDS = { environments: /\benvironments\b/, endpoints: /\bMCP endpoints\b/, members: /\bmembers\b/, audit: /\baudit\b/, users: /\busers\b/, orgs: /\borganisations\b/, 'join-role': /\bthe join role\b/ };
   for (const id of BUILT_SECTIONS) assert.match(sub, WORDS[id] ?? /(?!)/, `the sub-line names the built section ${id}`);
-  assert.doesNotMatch(sub, /slice|users|organisations|join/i, 'no roadmap wording, no section not built');
+  assert.doesNotMatch(sub, /slice/i, 'no roadmap wording');
 });
 
 test('settingsAboveRank: a downgrade forgets what the new rank may not read (C-6)', () => {
@@ -434,9 +444,9 @@ test('the member editors: add by login or email, a role change, the remove step;
   assert.ok(!/refused/.test(ownerLeave.confirm.text), ownerLeave.confirm.text);
   assert.equal(ownerLeave.confirm.text, "Remove olive from Acme? This is you: your membership changes, but as an owner you keep the admin role in Acme. olive is Acme's last admin: afterwards only an owner can manage its members, endpoints and audit.");
   assert.equal(leftOrgText('Acme'), 'You left Acme; this browser switches to your next organisation.');
-  assert.equal(leftOrgText('Acme', true), 'You left Acme; this browser reloads into your first organisation, or the default one.');
+  assert.equal(leftOrgText('Acme', true), 'You left Acme; as an owner you go on acting in it — this browser reloads.');
   // The flag the controller passes is the access model's owner bit (removeMemberEditor: settingsAccess().owner).
-  assert.equal(leftOrgText('Acme', OLIVE.owner), 'You left Acme; this browser reloads into your first organisation, or the default one.');
+  assert.equal(leftOrgText('Acme', OLIVE.owner), 'You left Acme; as an owner you go on acting in it — this browser reloads.');
   assert.equal(leftOrgText('Acme', ADA.owner), 'You left Acme; this browser switches to your next organisation.');
   const demote = buildSettingsEditorModel('member', MEMBERS[0], { ctx: { ...ctx, members: two }, step: 'confirm-action', draft: { role: 'operator' } });
   assert.equal(demote.confirm.text, "Change ada's role to operator? This is you: you lose the admin role at once.");
@@ -446,7 +456,7 @@ test('the member editors: add by login or email, a role change, the remove step;
   assert.equal(owner.remove.enabled, true);
   const rename = buildSettingsEditorModel('org-name', { id: 'acme', name: 'Acme' }, { ctx, draft: { name: 'Acme Corp' } });
   assert.deepEqual([rename.title, rename.draft, rename.fields[0].help], ['Rename Acme', { name: 'Acme Corp' }, 'The id acme stays; only the name changes.']);
-  assert.throws(() => buildSettingsEditorModel('user', null, { ctx }), /no Settings editor of kind "user"/);
+  assert.throws(() => buildSettingsEditorModel('org-member', null, { ctx }), /no Settings editor of kind "org-member"/);
 });
 
 test('the status sentences name what the server changed, by label', () => {
@@ -714,6 +724,10 @@ function settingsContainer() {
       if (sel === '[data-member-role]') return [...html.matchAll(/data-member-role="(\d+)"/g)].map((m) => get(`role:${m[1]}`, true, { memberRole: m[1] }));
       if (sel === '[data-member-remove]') return [...html.matchAll(/data-member-remove="(\d+)"/g)].map((m) => get(`remove:${m[1]}`, true, { memberRemove: m[1] }));
       if (sel === '[data-editor-close]') return [...html.matchAll(/data-editor-close/g)].map((_, i) => get(`close:${i}`, true));
+      if (sel === '[data-user-manage]') return [...html.matchAll(/data-user-manage="(\d+)"/g)].map((m) => get(`user:${m[1]}`, true, { userManage: m[1] }));
+      if (sel === '[data-user-action]') return [...html.matchAll(/data-user-action="([\w-]+)"/g)].map((m) => get(`uact:${m[1]}`, true, { userAction: m[1] }));
+      if (sel === '[data-org-remove]') return [...html.matchAll(/data-org-remove="([\w-]+)"/g)].map((m) => get(`org:${m[1]}`, true, { orgRemove: m[1] }));
+      if (sel === '[data-org-act]') return [...html.matchAll(/data-org-act="([\w-]+)"/g)].map((m) => get(`act:${m[1]}`, true, { orgAct: m[1] }));
       return [];
     },
   };
@@ -1250,4 +1264,704 @@ test('loadMcpEndpoints({ withPolicy }): { endpoints, policy } — the policy as 
   assert.deepEqual(await loadMcpEndpoints({ fetchFn: async () => ({ ok: true, endpoints: EP_OP, policy }), withPolicy: true }), { endpoints: EP_OP, policy });
   assert.deepEqual(await loadMcpEndpoints({ fetchFn: async () => ({ ok: true, endpoints: [] }), withPolicy: true }), { endpoints: [], policy: null });
   assert.deepEqual(await loadMcpEndpoints({ fetchFn: async () => ({ ok: true, endpoints: EP_OP, policy }) }), EP_OP);
+});
+
+// ---------- the deployment's users (6b-ii: an owner's) ----------
+
+// GET /api/admin/users in the server's shape (emails included — the loader drops them).
+const USERS_RAW = [
+  { id: 1, login: 'olive', kind: 'local', name: 'Olive', email: 'olive@mail.test', emailVerified: true, owner: true, disabled: false, mustChange: false, seededDefault: false, createdAt: 't', lastLoginAt: '2026-10-06T09:00:00.000Z', memberships: [{ orgId: 'default', role: 'admin' }, { orgId: 'acme', role: 'operator' }] },
+  { id: 2, login: 'ada', kind: 'local', name: 'Ada', email: 'ada@mail.test', emailVerified: false, owner: false, disabled: false, mustChange: true, seededDefault: false, createdAt: 't', lastLoginAt: null, memberships: [{ orgId: 'acme', role: 'admin' }] },
+  { id: 3, login: 'https://idp.test#u1', kind: 'oidc', name: null, email: 'u1@mail.test', emailVerified: true, owner: false, disabled: true, mustChange: false, seededDefault: false, createdAt: 't', lastLoginAt: null, memberships: [] },
+];
+const USERS = USERS_RAW.map(({ email: _e, emailVerified: _v, ...u }) => u);
+const OWNER_CTX = { access: OLIVE, orgName: 'Acme', orgId: 'acme', me: 'olive', users: USERS, defaultOrg: 'default',
+  orgs: [{ id: 'default', name: 'Default', removedAt: null }, { id: 'acme', name: 'Acme', removedAt: null }, { id: 'gone', name: 'Gone', removedAt: 't' }] };
+
+test('the deployment group: an owner\'s nav lists Users under its head; a signed-in non-owner reads one line saying who to ask (D-H); the token and closed postures draw it unavailable with their reasons', () => {
+  const owner = buildSettingsFrameModel({ access: OLIVE, orgName: 'Acme', orgId: 'acme' });
+  assert.deepEqual(owner.deployment, { head: 'The deployment', note: null });
+  assert.deepEqual(owner.nav.filter((n) => n.group === 'deployment').map((n) => [n.id, n.label, n.enabled]), [['users', 'Users', true], ['orgs', 'Organisations', true], ['join-role', 'Join role', true]]);
+  for (const access of [ADA, OSCAR, VERA]) {
+    const f = buildSettingsFrameModel({ access, orgName: 'Acme', orgId: 'acme' });
+    assert.ok(!f.nav.some((n) => n.group === 'deployment'), 'no section a non-owner cannot open is listed');
+    assert.match(f.deployment.note, /^Users, organisations and the join role are an owner's — ask one\. /);
+    assert.equal(f.deployment.note, "Users, organisations and the join role are an owner's — ask one. (A deployment with no owner gets one from the server's shell: npm run users -- owner <login>.)");
+  }
+  // The line names only the deployment sections built (B3) — the full set once all three are.
+  assert.equal(noOwnerText(['users']), "Users are an owner's — ask one. (A deployment with no owner gets one from the server's shell: npm run users -- owner <login>.)");
+  assert.equal(noOwnerText(['users', 'orgs', 'join-role']), noOwnerText());
+  assert.equal(noOwnerText(['users', 'orgs', 'join-role']), "Users, organisations and the join role are an owner's — ask one. (A deployment with no owner gets one from the server's shell: npm run users -- owner <login>.)");
+  assert.equal(noOwnerText(['environments']), null);
+  assert.equal(buildSettingsFrameModel({ access: ADA, builtSections: ['environments', 'endpoints', 'members', 'audit'] }).deployment, null, 'no deployment section built: no group, no line');
+  const token = buildSettingsFrameModel({ access: TOKEN }).nav.find((n) => n.id === 'users');
+  assert.deepEqual([token.enabled, token.reason], [false, 'needs a signed-in owner — the banner above names the way in']);
+  const closed = buildSettingsFrameModel({ access: CLOSED }).nav.find((n) => n.id === 'users');
+  assert.deepEqual([closed.enabled, closed.reason], [false, 'closed on this server without sign-in — the banner above names the way in']);
+  assert.equal(buildSettingsFrameModel({ access: OPEN }).nav.find((n) => n.id === 'users').enabled, true, 'without sign-in, on the loopback: local is an owner (D-E)');
+  // The CHANGELOG's entry says the same: the token and closed postures, never the open one.
+  const entry = readFileSync(new URL('../docs/CHANGELOG.md', import.meta.url), 'utf8').split('\n').find((l) => l.startsWith("- **6b-ii — the nav's deployment group**"));
+  assert.ok(entry, "docs/CHANGELOG.md has the deployment group's entry");
+  assert.match(entry, /the token and closed postures draw the items unavailable with their reasons\.$/);
+  assert.deepEqual(buildSettingsFrameModel({ access: STATIC }).deployment, null);
+  assert.match(settingsSectionHead('users').scope, /temporary password, shown once\.$/);
+  assert.equal(settingsSectionHead('users').loading, 'Reading users…');
+});
+
+test('PASSWORD_ALPHABET and temporaryPassword (D-D, C-9): exactly 32 symbols, no look-alikes, 20 symbols of one byte each in groups of four', () => {
+  assert.equal(PASSWORD_ALPHABET.length, 32);
+  assert.equal(new Set(PASSWORD_ALPHABET).size, 32, 'no duplicate symbol');
+  assert.ok(!/[lo01A-Z]/.test(PASSWORD_ALPHABET), 'no l, o, 0, 1, no capitals');
+  const fixed = temporaryPassword(Uint8Array.from({ length: 20 }, (_, i) => i * 13));
+  assert.equal(fixed, 'ap4h-wbq5-ixcr-6jyd-s7kz');
+  assert.equal(fixed.length, 24);
+  assert.match(fixed, /^[a-km-np-z2-9]{4}(-[a-km-np-z2-9]{4}){4}$/);
+  for (let b = 0; b < 256; b++) {
+    const p = temporaryPassword(new Uint8Array(20).fill(b));
+    assert.ok(!p.includes('undefined') && p.length === 24, `byte ${b}`);
+    assert.equal(p[0], PASSWORD_ALPHABET[b & 31]);
+  }
+  assert.throws(() => temporaryPassword(new Uint8Array(19)), /20 random bytes/);
+});
+
+test('the users section: no email, the badges, the memberships, "you" by login; the last enabled owner; Manage… for an owner only', () => {
+  const m = buildUsersSectionModel({ users: USERS, access: OLIVE, me: 'olive' });
+  assert.equal(m.enabledOwners, 1);
+  assert.deepEqual(m.primary, { enabled: true, reason: null });
+  assert.deepEqual(m.rows.map((r) => [r.login, r.badges, r.memberships, r.lastSignIn, r.you, r.lastOwner, r.canManage]), [
+    ['olive', ['owner'], 'default:admin, acme:operator', 'last sign-in 2026-10-06T09:00:00.000Z', true, true, true],
+    ['ada', ['must change password'], 'acme:admin', 'never signed in', false, false, true],
+    ['https://idp.test#u1', ['disabled'], 'no organisation', 'never signed in', false, false, true],
+  ]);
+  assert.ok(!JSON.stringify(m).includes('@mail.test'), 'C-8: no email in the model');
+  const failed = buildUsersSectionModel({ users: null, access: OLIVE, error: '500: boom' });
+  assert.deepEqual([failed.rows, failed.error], [[], '500: boom']);
+  assert.equal(buildUsersSectionModel({ users: [], access: OLIVE }).empty, 'No users yet. New local user creates one.');
+  const ada = buildUsersSectionModel({ users: USERS, access: ADA });
+  assert.deepEqual(ada.primary, { enabled: false, reason: "users, organisations and the join role belong to the deployment's owners — ask an owner" });
+  assert.ok(ada.rows.every((r) => !r.canManage));
+});
+
+test('userActions: the server\'s rules drawn first — the last enabled owner, one\'s own password, an IdP user\'s, a disabled user made owner', () => {
+  const by = (rec, users = USERS, me = 'olive') => Object.fromEntries(userActions(rec, users, { me }).map((a) => [a.id, a.reason]));
+  assert.deepEqual(by(USERS[0]), {
+    reset: 'this is your own account — change your password at /auth/change-password',
+    disable: 'olive is the last enabled owner — make another user an owner first',
+    signout: null,
+    'owner-revoke': 'olive is the last enabled owner — make another user an owner first',
+  });
+  assert.deepEqual(by(USERS[1]), { reset: null, disable: null, signout: null, 'owner-grant': null });
+  assert.deepEqual(by(USERS[2]), {
+    reset: 'https://idp.test#u1 signs in through the IdP and has no password here — sign them out everywhere, or disable them',
+    enable: null, signout: null, 'owner-grant': 'https://idp.test#u1 is disabled — enable them first',
+  });
+  // A second enabled owner lifts the last-owner rule.
+  const two = USERS.map((u) => (u.login === 'ada' ? { ...u, owner: true } : u));
+  assert.deepEqual([by(two[0], two).disable, by(two[0], two)['owner-revoke']], [null, null]);
+  // A reader who may not act: every action carries their reason.
+  assert.ok(userActions(USERS[1], USERS, { can: false, reason: 'r' }).every((a) => !a.enabled && a.reason === 'r'));
+});
+
+test('the user editors: New local user has no password field and the organisation choice; the secret step shows the password once and the status never; a user\'s actions confirm first', () => {
+  const create = buildSettingsEditorModel('user-create', null, { ctx: OWNER_CTX });
+  assert.deepEqual(create.fields.map((f) => f.name), ['login', 'name', 'email', 'role', 'orgId'], 'no password field (D-D)');
+  assert.deepEqual(create.draft, { login: '', name: '', email: '', role: 'operator', orgId: 'acme' });
+  assert.deepEqual(create.fields.find((f) => f.name === 'orgId').options.map((o) => [o.value, o.selected]), [['default', false], ['acme', true]], 'live orgs only, the active one chosen');
+  assert.equal(create.primary.label, 'Create');
+  assert.equal(create.status.text, 'A local user who signs in with a password: a temporary one is drawn on Create and shown once.');
+  // The sign-in mode line (A13).
+  assert.equal(signInModeLine({ mode: 'local' }), null);
+  const oidcCtx = { ...OWNER_CTX, joinRole: { mode: 'oidc', issuerKey: 'https://idp.test' } };
+  assert.equal(buildSettingsEditorModel('user-create', null, { ctx: oidcCtx }).status.text, 'This server signs in through OIDC issuer https://idp.test: a local user cannot sign in here until it runs local sign-in.');
+  assert.equal(signInModeLine({ mode: 'proxy' }), 'This server signs in through its reverse proxy: a local user cannot sign in here until it runs local sign-in.');
+  assert.deepEqual(buildUserCreateBody({ login: ' nina ', name: '', email: ' n@x.test ', role: 'viewer', orgId: 'acme' }), { login: 'nina', email: 'n@x.test', role: 'viewer', orgId: 'acme' });
+  assert.deepEqual(buildUserCreateBody({ login: 'nina' }), { login: 'nina', role: 'operator' });
+  // The secret step.
+  const PW = 'abcd-efgh-ijkm-npqr-stuv';
+  const secret = buildSettingsEditorModel('user-create', null, { ctx: { ...OWNER_CTX, secret: { login: 'nina', value: PW, forced: true } }, step: 'secret', status: userCreateStatus({ user: { login: 'nina' }, owner: false, joined: [{ orgId: 'acme', role: 'viewer' }] }, { orgId: 'acme', orgName: 'Acme' }) });
+  assert.deepEqual(secret.secret, { text: 'Temporary password for nina — shown once. It is not stored in this browser and cannot be shown again; nina sets their own at first sign-in. Reset it to get a new one.', value: PW });
+  assert.equal(secret.primary, null);
+  assert.equal(secret.status.text, 'Created nina (viewer in Acme). Copy the temporary password before closing.');
+  assert.ok(!secret.status.text.includes(PW));
+  const oidcSecret = buildSettingsEditorModel('user-create', null, { ctx: { ...oidcCtx, secret: { login: 'nina', value: PW } }, step: 'secret' });
+  assert.ok(!/sets their own/.test(oidcSecret.secret.text), 'under OIDC the clause about setting their own goes (A13)');
+  // A user's dialog.
+  const ada = buildSettingsEditorModel('user', USERS[1], { ctx: OWNER_CTX });
+  assert.deepEqual([ada.title, ada.primary, ada.facts], ['ada', null, ['local · must change password', 'organisations: acme:admin', 'never signed in']]);
+  assert.deepEqual(ada.actions.map((a) => [a.id, a.label, a.enabled]), [['reset', 'Reset password…', true], ['disable', 'Disable…', true], ['signout', 'Sign out everywhere…', true], ['owner-grant', 'Make owner…', true]]);
+  const confirm = (action, rec = USERS[1]) => buildSettingsEditorModel('user', rec, { ctx: { ...OWNER_CTX, action }, step: 'confirm-action' }).confirm;
+  assert.deepEqual(confirm('reset'), { text: "Reset ada's password? Every session of ada ends; a new temporary password is shown once, and ada sets their own at their next sign-in.", danger: "Reset ada's password" });
+  assert.equal(confirm('owner-grant').text, "Make ada an owner? An owner manages this deployment's users and acts as an admin in every organisation; ada also becomes an admin of default.");
+  assert.match(confirm('signout', USERS[0]).text, / This is you: this browser is signed out too\.$/);
+  assert.match(confirm('disable').text, /^Disable ada\? Every session of ada ends/);
+  const reset = buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, secret: { login: 'ada', value: PW, forced: true } }, step: 'secret' });
+  assert.equal(reset.secret.text, 'Temporary password for ada — shown once. It is not stored in this browser and cannot be shown again; ada sets their own at their next sign-in. Reset it to get a new one.');
+  assert.ok(!reset.status || !reset.status.text.includes(PW), 'the reset password is in its secret block only, never in the status text (§7.6)');
+  assert.ok(!JSON.stringify({ ...reset, secret: null }).includes(PW), 'the reset password appears exactly once in the model');
+  // Without sign-in (OBSERVOGRAM_AUTH=off — local is an owner): the reset never says "at their next sign-in"; the
+  // secret step drops the clause (as under A13) and the confirm says when they sign in, as a create does.
+  const openCtx = { ...OWNER_CTX, access: OPEN, me: null, joinRole: { mode: 'local', role: null } };
+  assert.deepEqual(buildSettingsEditorModel('user', USERS[1], { ctx: { ...openCtx, action: 'reset' }, step: 'confirm-action' }).confirm, {
+    text: "Reset ada's password? Every session of ada ends; a new temporary password is shown once. This server runs without sign-in (OBSERVOGRAM_AUTH=off): ada signs in once it starts without it, and sets their own then.",
+    danger: "Reset ada's password" });
+  assert.equal(buildSettingsEditorModel('user', USERS[1], { ctx: { ...openCtx, secret: { login: 'ada', value: PW, forced: true } }, step: 'secret' }).secret.text,
+    'Temporary password for ada — shown once. It is not stored in this browser and cannot be shown again. Reset it to get a new one.');
+  assert.equal(buildSettingsEditorModel('user-create', null, { ctx: { ...openCtx, secret: { login: 'nina', value: PW, forced: true } }, step: 'secret' }).secret.text,
+    'Temporary password for nina — shown once. It is not stored in this browser and cannot be shown again. Reset it to get a new one.', 'a second user created without sign-in: no "at first sign-in" either');
+  assert.equal(buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, signIn: true }, step: 'notice' }).signIn, true);
+  // A non-owner (the access downgraded while open): Create unavailable with the owner reason.
+  assert.deepEqual(buildSettingsEditorModel('user-create', null, { ctx: { ...OWNER_CTX, access: ADA } }).primary.enabled, false);
+  // …and a user's confirm step after the owner role went: no danger button, the actions back with the reason.
+  const revoked = buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, access: ADA, action: 'disable' }, step: 'confirm-action' });
+  assert.equal(revoked.confirm, null);
+  assert.ok(revoked.actions.length > 0 && revoked.actions.every((a) => a.enabled === false && a.reason === ADA.why.own));
+});
+
+test('the user statuses: what the server did, by action; a create that armed sign-in says which way (D-E); a refused reset says the password is not forced', () => {
+  const s = (a, ans = {}) => userActionStatus(a, ans, { login: 'ada', defaultOrg: 'default' }).text;
+  assert.equal(s('reset'), 'Every session of ada ended; they set a new password at their next sign-in.');
+  assert.equal(userActionStatus('reset', {}, { login: 'ada', open: true }).text,
+    'Every session of ada ended. This server runs without sign-in (OBSERVOGRAM_AUTH=off): ada signs in once it starts without it, with the password below, and sets a new one then.');
+  assert.equal(s('disable'), 'ada disabled — every session ended.');
+  assert.equal(s('disable', { you: true }), 'You disabled your own account — this browser is signed out at its next request.');
+  assert.equal(s('enable'), 'ada enabled.');
+  assert.equal(s('signout'), 'Every session of ada ended.');
+  assert.equal(s('signout', { you: true }), 'You signed out everywhere — this browser is signed out at its next request.');
+  assert.equal(s('owner-grant', { changed: true, note: null }), 'ada is an owner (and an admin of default).');
+  assert.equal(s('owner-revoke', { changed: true, note: 'ada is still an admin of default: …' }), 'ada is no longer an owner. ada is still an admin of default: …');
+  assert.equal(s('owner-revoke', { changed: false }), 'ada is not an owner — nothing changed.');
+  const created = { user: { login: 'first' }, owner: true, joined: [{ orgId: 'default', role: 'admin' }], armed: false, note: null };
+  assert.equal(userCreateStatus(created, { orgId: null }).text, 'Created first (admin in default) — an owner: the first local user. Copy the temporary password before closing.');
+  const refused = userCreateStatus(created, { orgId: null, reset: '409: no' });
+  assert.equal(refused.kind, 'error');
+  assert.equal(refused.text, "Created first (admin in default) — an owner: the first local user, but making its password temporary was refused — 409: no. The password below is not forced to change: reset it from first's Manage….");
+  const armed = { ...created, armed: true };
+  assert.equal(userCreateStatus(armed, { signIn: true }).text, 'Sign-in is on now: first is an owner. Sign in as first with the password below.');
+  assert.equal(userCreateStatus(armed, { signIn: false }).text, 'first is created (an owner: the first local user). This server runs without sign-in (OBSERVOGRAM_AUTH=off): first signs in once it starts without it, with the password below. It is not forced to change — change it at /auth/change-password after signing in.');
+  assert.equal(userCreateStatus({ ...created, owner: false, joined: [{ orgId: 'acme', role: 'viewer' }], note: 'local users cannot sign in while …' }, { orgId: 'acme', orgName: 'Acme' }).text,
+    'Created first (viewer in Acme). Copy the temporary password before closing. local users cannot sign in while …');
+});
+
+test('a reset where a local user cannot sign in — OIDC, a reverse proxy, no sign-in: the confirm and the status say so and what the reset still does, never "at their next sign-in"; the secret step agrees', () => {
+  const PW = 'abcd-efgh-ijkm-npqr-stuv';
+  const modes = [
+    ['oidc', { mode: 'oidc', role: null, issuerKey: 'https://idp.test' }, 'This server signs in through OIDC issuer https://idp.test: a local user cannot sign in here until it runs local sign-in.'],
+    ['proxy', { mode: 'proxy', role: null, proxy: { joinRole: 'viewer' } }, 'This server signs in through its reverse proxy: a local user cannot sign in here until it runs local sign-in.'],
+  ];
+  for (const [mode, joinRole, line] of modes) {
+    const ctx = { ...OWNER_CTX, joinRole };
+    assert.deepEqual(buildSettingsEditorModel('user', USERS[1], { ctx: { ...ctx, action: 'reset' }, step: 'confirm-action' }).confirm, {
+      text: `Reset ada's password? ${line} The reset still ends every session of ada, and a new temporary password is shown once — ada signs in with it then, and sets their own.`,
+      danger: "Reset ada's password" }, mode);
+    assert.equal(userActionStatus('reset', { ok: true, mustChange: true }, { login: 'ada', joinRole }).text,
+      `Every session of ada ended. ${line} Then ada signs in with the password below, and sets a new one.`, mode);
+    const secret = buildSettingsEditorModel('user', USERS[1], { ctx: { ...ctx, secret: { login: 'ada', value: PW, forced: true } }, step: 'secret' }).secret.text;
+    assert.equal(secret, 'Temporary password for ada — shown once. It is not stored in this browser and cannot be shown again. Reset it to get a new one.', `${mode}: the secret step names no sign-in the status does not`);
+  }
+  // Under every mode where a local user cannot sign in, no reset sentence claims the next sign-in.
+  const where = [[{ joinRole: { mode: 'oidc', issuerKey: 'k' } }, OLIVE, 'olive'], [{ joinRole: { mode: 'proxy' } }, OLIVE, 'olive'], [{ open: true, joinRole: { mode: 'local' } }, OPEN, null]];
+  for (const [opts, access, me] of where) {
+    const confirm = buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, access, me, joinRole: opts.joinRole, action: 'reset' }, step: 'confirm-action' }).confirm.text;
+    const status = userActionStatus('reset', {}, { login: 'ada', ...opts }).text;
+    for (const s of [confirm, status]) assert.ok(!/next sign-in/.test(s), `${JSON.stringify(opts)}: ${s}`);
+  }
+  // Local sign-in (and a join role not read — the dialog narrows, as A13 says): the next sign-in, as before.
+  for (const joinRole of [{ mode: 'local', role: null }, null]) {
+    assert.equal(userActionStatus('reset', {}, { login: 'ada', joinRole }).text, 'Every session of ada ended; they set a new password at their next sign-in.');
+    assert.match(buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, joinRole, action: 'reset' }, step: 'confirm-action' }).confirm.text, /, and ada sets their own at their next sign-in\.$/);
+  }
+});
+
+// Every sign-in mode the server reports, and both kinds of user: a local one, and IdP ones (an OIDC issuer's, a reverse proxy's).
+const SIGN_IN_MODES = {
+  local: { joinRole: { mode: 'local', role: null }, access: OLIVE, me: 'olive' },
+  unread: { joinRole: null, access: OLIVE, me: 'olive' },
+  oidc: { joinRole: { mode: 'oidc', role: null, issuerKey: 'https://idp.test/' }, access: OLIVE, me: 'https://idp.test/#olive' },
+  proxy: { joinRole: { mode: 'proxy', role: null, proxy: { joinRole: 'viewer' } }, access: OLIVE, me: 'proxy://edge#olive' },
+  open: { joinRole: { mode: 'local', role: null }, access: OPEN, me: null, open: true },
+};
+const LOCAL_LOU = { id: 7, login: 'lou', kind: 'local', owner: false, disabled: true, memberships: [] };
+const OIDC_UMA = { id: 8, login: 'https://idp.test/#uma', kind: 'oidc', owner: false, disabled: true, memberships: [] };
+const PROXY_QUIN = { id: 9, login: 'proxy://edge#quin', kind: 'oidc', owner: false, disabled: true, memberships: [] };
+const OTHER_REALM = { id: 10, login: 'proxy://north#ned', kind: 'oidc', owner: false, disabled: true, memberships: [] };
+// The sentence a user action says about signing in, by mode and user: null where they sign in here (and how), else why not.
+const SIGN_IN_WHY = {
+  'local:lou': null, 'unread:lou': null,
+  'oidc:lou': 'This server signs in through OIDC issuer https://idp.test/: a local user cannot sign in here until it runs local sign-in. Then lou signs in with their password.',
+  'proxy:lou': 'This server signs in through its reverse proxy: a local user cannot sign in here until it runs local sign-in. Then lou signs in with their password.',
+  'open:lou': 'This server runs without sign-in (OBSERVOGRAM_AUTH=off): lou signs in once it starts without it, with their password.',
+  'local:uma': 'This server runs local sign-in: https://idp.test/#uma signs in through OIDC issuer https://idp.test/, and cannot sign in here until the server signs in through that.',
+  'unread:uma': 'This server runs local sign-in: https://idp.test/#uma signs in through OIDC issuer https://idp.test/, and cannot sign in here until the server signs in through that.',
+  'oidc:uma': null,
+  'proxy:uma': 'This server signs in through its reverse proxy: https://idp.test/#uma signs in through OIDC issuer https://idp.test/, and cannot sign in here until the server signs in through that.',
+  'open:uma': 'This server runs without sign-in (OBSERVOGRAM_AUTH=off): https://idp.test/#uma signs in through OIDC issuer https://idp.test/ once it restarts without it and signs in through that.',
+  'local:quin': 'This server runs local sign-in: proxy://edge#quin signs in through a reverse proxy (realm edge), and cannot sign in here until the server signs in through that.',
+  'unread:quin': 'This server runs local sign-in: proxy://edge#quin signs in through a reverse proxy (realm edge), and cannot sign in here until the server signs in through that.',
+  'oidc:quin': 'This server signs in through OIDC issuer https://idp.test/: proxy://edge#quin signs in through a reverse proxy (realm edge), and cannot sign in here until the server signs in through that.',
+  'proxy:quin': null,
+  'open:quin': 'This server runs without sign-in (OBSERVOGRAM_AUTH=off): proxy://edge#quin signs in through a reverse proxy (realm edge) once it restarts without it and signs in through that.',
+};
+const SIGN_IN_WAY = { 'local:lou': 'with their password', 'unread:lou': 'with their password', 'oidc:uma': 'through OIDC issuer https://idp.test/', 'proxy:quin': 'through the reverse proxy' };
+const SHORT = { lou: LOCAL_LOU, uma: OIDC_UMA, quin: PROXY_QUIN };
+
+test('userSignIn: a local user signs in with their password only where the server runs local sign-in; an IdP user only through their own provider, where the server signs in through it — never with a password', () => {
+  for (const [mode, m] of Object.entries(SIGN_IN_MODES)) {
+    for (const [who, record] of Object.entries(SHORT)) {
+      const si = userSignIn(record, { open: m.open === true, joinRole: m.joinRole, me: m.me });
+      const why = SIGN_IN_WHY[`${mode}:${who}`];
+      assert.deepEqual(si, why === null ? { here: true, way: SIGN_IN_WAY[`${mode}:${who}`] } : { here: false, why }, `${mode}:${who}`);
+      if (record.kind === 'oidc') assert.ok(!/password/.test(JSON.stringify(si)), `${mode}:${who}: an IdP user never signs in with a password`);
+    }
+  }
+  // Behind a proxy, the realm is the signed-in owner's: another realm's user cannot sign in here.
+  assert.equal(userSignIn(OTHER_REALM, { joinRole: SIGN_IN_MODES.proxy.joinRole, me: 'proxy://edge#olive' }).here, false);
+  // With the join role unread, the signed-in owner's own way stands for the server's (they signed in through it).
+  assert.deepEqual(userSignIn(OIDC_UMA, { joinRole: null, me: 'https://idp.test/#olive' }), { here: true, way: 'through OIDC issuer https://idp.test/' });
+  assert.deepEqual(userSignIn(PROXY_QUIN, { joinRole: null, me: 'proxy://edge#olive' }), { here: true, way: 'through the reverse proxy' });
+  // Another OIDC issuer's user (a store rekeyed, say) cannot sign in through this one.
+  assert.equal(userSignIn({ login: 'https://old.test/#ann', kind: 'oidc' }, { joinRole: SIGN_IN_MODES.oidc.joinRole, me: SIGN_IN_MODES.oidc.me }).here, false);
+});
+
+test('Enable… says how the user signs in here, for every sign-in mode and kind — a local user under OIDC, a reverse proxy or no sign-in cannot; an IdP user never "with their password"; the confirm and the status agree', () => {
+  for (const [mode, m] of Object.entries(SIGN_IN_MODES)) {
+    for (const [who, record] of Object.entries(SHORT)) {
+      const ctx = { ...OWNER_CTX, access: m.access, me: m.me, joinRole: m.joinRole, users: [...USERS, record], action: 'enable' };
+      const confirm = buildSettingsEditorModel('user', record, { ctx, step: 'confirm-action' }).confirm;
+      const status = userActionStatus('enable', { ok: true }, { login: record.login, kind: record.kind, open: m.open === true, joinRole: m.joinRole, me: m.me });
+      const why = SIGN_IN_WHY[`${mode}:${who}`];
+      if (why === null) {
+        assert.deepEqual(confirm, { text: `Enable ${record.login}? They can sign in again ${SIGN_IN_WAY[`${mode}:${who}`]}.`, danger: `Enable ${record.login}` }, `${mode}:${who}`);
+        assert.deepEqual(status, { kind: 'saved', text: `${record.login} enabled.` }, `${mode}:${who}`);
+      } else {
+        assert.deepEqual(confirm, { text: `Enable ${record.login}? ${why}`, danger: `Enable ${record.login}` }, `${mode}:${who}`);
+        assert.deepEqual(status, { kind: 'saved', text: `${record.login} enabled. ${why}` }, `${mode}:${who}`);
+      }
+      if (record.kind === 'oidc') assert.ok(!/password/.test(confirm.text + status.text), `${mode}:${who}: no password for an IdP user`);
+      if (mode === 'oidc' || mode === 'proxy' || mode === 'open') {
+        if (record.kind === 'local') assert.ok(!/can sign in again/.test(confirm.text), `${mode}:${who}: a local user cannot sign in here`);
+      }
+    }
+  }
+  // Local sign-in, a local user: as before.
+  assert.equal(buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, action: 'enable' }, step: 'confirm-action' }).confirm.text, 'Enable ada? They can sign in again with their password.');
+});
+
+test('Sign out everywhere… says whether the user can sign in again here, for every sign-in mode and kind — never "they can sign in again" where they cannot; the confirm and the status agree', () => {
+  for (const [mode, m] of Object.entries(SIGN_IN_MODES)) {
+    for (const [who, record] of Object.entries(SHORT)) {
+      const ctx = { ...OWNER_CTX, access: m.access, me: m.me, joinRole: m.joinRole, users: [...USERS, { ...record, disabled: false }], action: 'signout' };
+      const confirm = buildSettingsEditorModel('user', { ...record, disabled: false }, { ctx, step: 'confirm-action' }).confirm;
+      const status = userActionStatus('signout', { ok: true, you: false }, { login: record.login, kind: record.kind, open: m.open === true, joinRole: m.joinRole, me: m.me });
+      const why = SIGN_IN_WHY[`${mode}:${who}`];
+      const ends = `Every session of ${record.login} ends at its next request`;
+      if (why === null) {
+        assert.deepEqual(confirm, { text: `Sign ${record.login} out everywhere? ${ends}; they can sign in again.`, danger: `Sign ${record.login} out everywhere` }, `${mode}:${who}`);
+        assert.deepEqual(status, { kind: 'saved', text: `Every session of ${record.login} ended.` }, `${mode}:${who}`);
+      } else {
+        assert.deepEqual(confirm, { text: `Sign ${record.login} out everywhere? ${ends}. ${why}`, danger: `Sign ${record.login} out everywhere` }, `${mode}:${who}`);
+        assert.deepEqual(status, { kind: 'saved', text: `Every session of ${record.login} ended. ${why}` }, `${mode}:${who}`);
+        assert.ok(!/can sign in again/.test(confirm.text + status.text), `${mode}:${who}: never "they can sign in again" where they cannot`);
+      }
+      if (record.kind === 'oidc') assert.ok(!/password/.test(confirm.text + status.text), `${mode}:${who}: no password for an IdP user`);
+    }
+  }
+  // One's own sign-out (they are signed in here, so they can sign in again): as before.
+  assert.equal(buildSettingsEditorModel('user', USERS[0], { ctx: { ...OWNER_CTX, action: 'signout' }, step: 'confirm-action' }).confirm.text,
+    'Sign olive out everywhere? Every session of olive ends at its next request; they can sign in again. This is you: this browser is signed out too.');
+  assert.equal(userActionStatus('signout', { you: true }, { login: 'olive', joinRole: SIGN_IN_MODES.proxy.joinRole, me: 'proxy://edge#olive' }).text,
+    'You signed out everywhere — this browser is signed out at its next request.');
+});
+
+test('the users loaders: one requestJson call each, ids and actions encoded, the password in the body only — and no email kept', async () => {
+  const calls = [];
+  const answer = { ok: true, users: USERS_RAW, user: USERS_RAW[1], owner: false, joined: [{ orgId: 'acme', role: 'viewer' }], armed: false, note: null, you: true, mustChange: true, changed: true, defaultOrg: 'default', orgs: [{ id: 'acme' }], role: null, mode: 'local', oidc: false, issuerKey: null };
+  const fetchFn = async (path, opts) => { calls.push([path, opts?.method ?? 'GET', opts?.body ?? null]); return answer; };
+  const users = await loadUsers({ fetchFn });
+  assert.deepEqual(users, USERS);
+  assert.ok(!JSON.stringify(users).includes('@mail.test') && !JSON.stringify(users).includes('emailVerified'), 'C-8: loadUsers drops every email');
+  const made = await createUser({ login: 'nina', password: 'pw-pw-pw-pw', role: 'viewer' }, { fetchFn });
+  assert.deepEqual([made.user.login, 'email' in made.user, made.armed, made.joined], ['ada', false, false, [{ orgId: 'acme', role: 'viewer' }]]);
+  assert.ok(!JSON.stringify(made).includes('pw-pw'), 'nothing of the password comes back');
+  assert.deepEqual(await userAction(2, 'password', { password: 'x' }, { fetchFn }), { user: USERS[1], you: true, mustChange: true });
+  await userAction('2/x', 'disable', null, { fetchFn });
+  assert.deepEqual(await setOwner(2, true, { fetchFn }), { user: USERS[1], changed: true, note: null });
+  assert.deepEqual(await loadAdminOrgs({ fetchFn }), { defaultOrg: 'default', orgs: [{ id: 'acme' }] });
+  assert.equal((await loadJoinRole({ fetchFn })).mode, 'local');
+  assert.equal('ok' in (await loadJoinRole({ fetchFn })), false);
+  assert.deepEqual(calls.slice(0, 6), [
+    ['/api/admin/users', 'GET', null],
+    ['/api/admin/users', 'POST', '{"login":"nina","password":"pw-pw-pw-pw","role":"viewer"}'],
+    ['/api/admin/users/2/password', 'POST', '{"password":"x"}'],
+    ['/api/admin/users/2%2Fx/disable', 'POST', '{}'],
+    ['/api/admin/users/2/owner', 'PUT', '{"owner":true}'],
+    ['/api/admin/orgs', 'GET', null],
+  ]);
+  assert.deepEqual(await loadUsers({ fetchFn: async () => ({}) }), []);
+});
+
+test('renderSettings and the user editor: Users under the deployment head, no email, Manage…; the no-owner line; the secret drawn once, never in the status; Copy and Go to sign-in', () => {
+  const calls = [];
+  const host = { settings: new Proxy({}, { get: (_, k) => (...a) => calls.push([k, ...a]) }) };
+  const xss = '<img src=x onerror="window.__x=1">';
+  const rows = [{ ...USERS[1], login: xss }, USERS[0]];
+  const frame = buildSettingsFrameModel({ access: OLIVE, section: 'users', orgName: 'Acme', orgId: 'acme' });
+  const c = settingsContainer();
+  renderSettings(c, frame, { id: 'users', head: settingsSectionHead('users'), model: buildUsersSectionModel({ users: rows, access: OLIVE, me: 'olive' }), status: { kind: 'ok', text: '' } }, host);
+  const h = c.innerHTML;
+  assert.ok(h.includes('<p class="set-nav-group" id="set-nav-deployment">The deployment</p>'));
+  assert.ok(h.indexOf('id="set-nav-deployment"') < h.indexOf('data-section="users"'), 'Users under the deployment head');
+  assert.ok(!h.includes('<img') && h.includes('&lt;img src=x onerror=&quot;window.__x=1&quot;&gt;'), 'a login is escaped');
+  assert.ok(!h.includes('@mail.test'));
+  assert.ok(h.includes('<span class="set-badge is-owner">owner</span>') && h.includes('<span class="set-badge">must change password</span>'));
+  assert.ok(h.includes('id="set-primary">New local user</button>'));
+  c.querySelectorAll('[data-user-manage]').forEach((b) => b.fire('click'));
+  c.querySelector('#set-primary').fire('click');
+  assert.deepEqual(calls, [['openEditor', { kind: 'user', id: 2 }], ['openEditor', { kind: 'user', id: 1 }], ['openEditor', { kind: 'user-create' }]]);
+  // A non-owner: the head and the line, no Users item.
+  const n = settingsContainer();
+  renderSettings(n, buildSettingsFrameModel({ access: ADA, orgName: 'Acme', orgId: 'acme' }), null, host);
+  assert.ok(n.innerHTML.includes('<p class="set-nav-note" id="set-nav-no-owner">Users, organisations and the join role are an owner&#39;s — ask one. (A deployment with no owner gets one from the server&#39;s shell: npm run users -- owner &lt;login&gt;.)</p>'));
+  assert.ok(!n.innerHTML.includes('data-section="users"'));
+
+  // The secret step: the password exactly once, in the <code>; never in the status line (mutation check 8).
+  const PW = 'abcd-efgh-ijkm-npqr-stuv';
+  const e = settingsContainer();
+  calls.length = 0;
+  const status = userCreateStatus({ user: { login: 'nina' }, joined: [{ orgId: 'acme', role: 'viewer' }] }, { orgId: 'acme', orgName: 'Acme' });
+  renderSettingsEditor(e, buildSettingsEditorModel('user-create', null, { ctx: { ...OWNER_CTX, secret: { login: 'nina', value: PW, forced: true }, signIn: true }, step: 'secret', status }), host);
+  const eh = e.innerHTML;
+  assert.equal(eh.split(PW).length - 1, 1, 'the password appears exactly once');
+  assert.ok(eh.includes(`<code class="set-secret-value" id="set-secret-value">${PW}</code>`));
+  const statusLine = eh.slice(eh.indexOf('id="set-editor-status"'), eh.indexOf('</div>', eh.indexOf('id="set-editor-status"')));
+  assert.ok(!statusLine.includes(PW) && statusLine.includes('Copy the temporary password before closing.'));
+  assert.ok(!/\b(title|aria-label)="[^"]*abcd-/.test(eh), 'never in a title or a label');
+  assert.ok(!eh.includes('set-editor-save" id="set-editor-save"'), 'no Create on the secret step');
+  e.querySelector('#set-secret-copy').fire('click');
+  e.querySelector('#set-editor-signin').fire('click');
+  assert.deepEqual(calls, [['copySecret'], ['signIn']]);
+  // A user's dialog: the facts, the actions; an unavailable one explains; another opens its confirm step.
+  const u = settingsContainer();
+  calls.length = 0;
+  renderSettingsEditor(u, buildSettingsEditorModel('user', USERS[0], { ctx: OWNER_CTX }), host);
+  assert.ok(u.innerHTML.includes('data-user-action="reset">Reset password…</button>') && !u.innerHTML.includes('set-edit-'));
+  for (const b of u.querySelectorAll('[data-user-action]')) b.fire('click');
+  assert.deepEqual(calls, [
+    ['explain', 'this is your own account — change your password at /auth/change-password'],
+    ['explain', 'olive is the last enabled owner — make another user an owner first'],
+    ['step', 'confirm-action:signout'],
+    ['explain', 'olive is the last enabled owner — make another user an owner first'],
+  ]);
+  const unavailable = u.querySelectorAll('[data-user-action]').find((b) => b.dataset.userAction === 'reset');
+  assert.equal(unavailable.getAttribute('aria-disabled'), 'true');
+  // The confirm step after the owner role went elsewhere (a 403 by role): no danger button left usable; the actions, unavailable.
+  const r = settingsContainer();
+  renderSettingsEditor(r, buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, access: ADA, action: 'disable' }, step: 'confirm-action' }), host);
+  assert.equal(r.querySelector('#set-editor-confirm'), null);
+  assert.equal(r.querySelectorAll('[data-user-action]').find((b) => b.dataset.userAction === 'disable').getAttribute('aria-disabled'), 'true');
+});
+
+// ---------- the organisations and the join role (design §5.8–5.9, C12) ----------
+
+// GET /api/admin/orgs as the server sends it: the default org at the workspace root, two live ones, one removed.
+const ORGS_DOC = {
+  defaultOrg: 'default',
+  orgs: [
+    { id: 'default', name: 'Default', root: '.', default: true, removedAt: null, createdAt: '2026-10-01T00:00:00.000Z', members: 1 },
+    { id: 'acme', name: 'Acme', root: 'orgs/acme', default: false, removedAt: null, createdAt: '2026-10-02T00:00:00.000Z', members: 4 },
+    { id: 'charlie', name: 'Charlie', root: 'orgs/charlie', default: false, removedAt: null, createdAt: '2026-10-03T00:00:00.000Z', members: 1 },
+    { id: 'gone', name: 'Gone', root: 'orgs/gone', default: false, removedAt: '2026-10-04T00:00:00.000Z', createdAt: '2026-10-01T00:00:00.000Z', members: 0 },
+  ],
+};
+
+test('buildOrgsSectionModel: every org with its members, files and dates; removed ones greyed, never removable; the default org\'s Remove… unavailable with the server\'s sentence; New organisation needs sign-in', () => {
+  const m = buildOrgsSectionModel({ orgs: ORGS_DOC.orgs, defaultOrg: 'default', access: OLIVE, activeOrg: 'acme', formatTime: (iso) => iso.slice(0, 10) });
+  assert.deepEqual(m.primary, { enabled: true, reason: null });
+  assert.deepEqual(m.rows.map((r) => [r.id, r.facts, r.removedText, r.remove, r.active]), [
+    ['default', '1 member · files: the workspace root · created 2026-10-01', null, { enabled: false, reason: 'default is the default org and cannot be removed' }, false],
+    ['acme', '4 members · files: orgs/acme · created 2026-10-02', null, { enabled: true, reason: null }, true],
+    ['charlie', '1 member · files: orgs/charlie · created 2026-10-03', null, { enabled: true, reason: null }, false],
+    ['gone', '0 members · files: orgs/gone · created 2026-10-01', 'removed 2026-10-04 — a slug is never reused', null, false],
+  ]);
+  assert.deepEqual(m.rows.map((r) => [r.isDefault, r.removed]), [[true, false], [false, false], [false, false], [false, true]]);
+  // Act in <id> (D-M): each live org but the active one, where the server signs in.
+  assert.deepEqual(m.rows.map((r) => r.act), ['Act in default', null, 'Act in charlie', null]);
+  // Without sign-in, on the loopback: listed, removable, but no second organisation (the server's NEEDS_IDENTITY).
+  const open = buildOrgsSectionModel({ orgs: ORGS_DOC.orgs, defaultOrg: 'default', access: OPEN });
+  assert.deepEqual([open.primary.enabled, open.primary.reason], [false, OPEN.why.createOrg]);
+  assert.match(open.primary.reason, /^a second organisation needs sign-in, and this server runs without it — /);
+  assert.equal(open.rows[2].remove.enabled, true);
+  assert.deepEqual(open.rows.map((r) => r.act), [null, null, null, null], 'no Act in without sign-in: the server ignores the org a browser names');
+  // A non-owner never reaches the list; its controls carry the owner reason.
+  const ada = buildOrgsSectionModel({ orgs: ORGS_DOC.orgs, defaultOrg: 'default', access: ADA });
+  assert.deepEqual([ada.primary.reason, ada.rows[1].remove, ada.rows[2].act], [ADA.why.own, null, null]);
+  assert.deepEqual(buildOrgsSectionModel({ orgs: null, access: OLIVE, error: '403: owner only' }), { rows: [], primary: { enabled: true, reason: null }, empty: null, error: '403: owner only' });
+  assert.equal(settingsSectionHead('orgs').title, 'Organisations');
+  assert.equal(settingsSectionHead('orgs').loading, 'Reading organisations…');
+  assert.match(settingsSectionHead('orgs').scope, /its id is never used again\.$/);
+  assert.equal(settingsSectionHead('join-role').loading, 'Reading join role…');
+  assert.equal(settingsSectionHead('join-role').scope, null, 'the join role\'s scope sentence is the sign-in mode (the section model\'s)');
+});
+
+test('an owner acting in an org they are not a member of (D-M): the boot keeps it, the chip lists it, the head says it, a refusal recovers once (T25)', () => {
+  const owner = { ...me('olive', true), orgs: [{ id: 'acme', name: 'Acme', role: 'admin' }] };
+  const member = { ...me('ada'), orgs: [{ id: 'acme', name: 'Acme', role: 'admin' }, { id: 'bravo', name: 'Bravo', role: 'viewer' }] };
+  // activeOrgChoice: a membership kept for anyone; a non-membership kept for an owner only (6a A-17 unchanged otherwise).
+  assert.equal(activeOrgChoice({ identity: member, saved: 'bravo' }), 'bravo');
+  assert.equal(activeOrgChoice({ identity: member, saved: 'delta' }), 'acme', 'a member: the first membership');
+  assert.equal(activeOrgChoice({ identity: owner, saved: 'delta', savedBy: 'olive' }), 'delta', 'an owner keeps an org they are not a member of');
+  assert.equal(activeOrgChoice({ identity: owner, saved: null }), 'acme');
+  assert.equal(activeOrgChoice({ identity: { ...me('olive', true), orgs: [] }, saved: 'delta', savedBy: 'olive' }), 'delta', 'an owner in no org');
+  // A shared browser: an org another login chose is never inherited by an owner who is not its member.
+  assert.equal(activeOrgChoice({ identity: owner, saved: 'delta', savedBy: 'ada' }), 'acme', 'another login\'s choice: the first membership');
+  assert.equal(activeOrgChoice({ identity: owner, saved: 'delta' }), 'acme', 'a choice saved by no login: the first membership');
+  assert.equal(activeOrgChoice({ identity: { ...me('olive', true), orgs: [] }, saved: 'delta', savedBy: 'ada' }), null, 'an owner in no org: the server lands the request in the default org');
+  assert.equal(activeOrgChoice({ identity: member, saved: 'bravo', savedBy: 'olive' }), 'bravo', 'a membership is kept whoever saved it');
+  assert.equal(activeOrgChoice({ identity: { ...me('olive', true), orgs: [] }, saved: null }), null, 'none: the server lands the owner in the default org');
+  assert.equal(activeOrgChoice({ identity: { ...me('ada'), orgs: [] }, saved: 'delta' }), null);
+  assert.equal(activeOrgChoice({ identity: null, saved: 'delta' }), null, 'the open posture sends no org');
+  assert.equal(activeOrgChoice({ identity: { ok: true, authenticated: false, orgs: [] }, saved: 'delta' }), null);
+  // isActingOrg: a signed-in owner outside their memberships only.
+  assert.equal(isActingOrg({ identity: owner, orgId: 'delta' }), true);
+  assert.equal(isActingOrg({ identity: owner, orgId: 'acme' }), false);
+  assert.equal(isActingOrg({ identity: member, orgId: 'delta' }), false);
+  assert.equal(isActingOrg({ identity: owner, orgId: null }), false);
+  assert.equal(isActingOrg({ identity: null, orgId: 'default' }), false);
+  // The chip: the memberships plus the acting org, labelled; a member's list unchanged.
+  const entries = orgChipEntries({ identity: owner, orgId: 'delta', orgName: 'Delta' });
+  assert.deepEqual(entries.map((e) => [e.id, orgChipLabel(e)]), [['acme', 'Acme'], ['delta', 'Delta — acting as owner']]);
+  assert.deepEqual(orgChipEntries({ identity: owner, orgId: 'delta' }).map(orgChipLabel), ['Acme', 'delta — acting as owner'], 'the id before the name is read');
+  assert.equal(orgChipEntries({ identity: owner, orgId: 'acme', orgName: 'Acme' }), owner.orgs);
+  assert.equal(orgChipEntries({ identity: member, orgId: 'bravo', orgName: 'Bravo' }), member.orgs);
+  // The boot's recovery: once, for an owner's acting org refused with denied 'org'; then the no-org screen.
+  const unknown = Object.assign(new Error("403: unknown org 'delta'"), { status: 403, denied: 'org' });
+  assert.deepEqual(actingRecovery({ identity: owner, orgId: 'delta', error: unknown }), { to: 'acme' });
+  assert.deepEqual(actingRecovery({ identity: { ...me('olive', true), orgs: [] }, orgId: 'delta', error: unknown }), { to: null });
+  assert.equal(actingRecovery({ identity: owner, orgId: 'delta', error: unknown, tried: true }), null, 'never twice: no loop');
+  assert.equal(actingRecovery({ identity: owner, orgId: 'acme', error: unknown }), null, 'a membership refused is the no-org screen');
+  assert.equal(actingRecovery({ identity: member, orgId: 'delta', error: unknown }), null);
+  assert.equal(actingRecovery({ identity: owner, orgId: 'delta', error: new Error('500: boom') }), null);
+  // The head and the Members scope sentence.
+  assert.equal(buildSettingsFrameModel({ access: OLIVE, orgName: 'Delta', orgId: 'delta', acting: true }).scope, 'Settings · Delta (delta) · you are an owner acting in delta — not a member');
+  assert.equal(buildSettingsFrameModel({ access: OLIVE, orgName: 'Acme', orgId: 'acme' }).scope, 'Settings · Acme (acme) · you are admin, an owner');
+});
+
+test('the organisation editors: New organisation (id, name, take over a directory) → the created sentence and Switch to it; Remove… says what cannot be undone and asks for the id typed', () => {
+  const ctx = { access: OLIVE, orgName: 'Acme', orgId: 'acme', defaultOrg: 'default', formatTime: (iso) => iso.slice(0, 10) };
+  const create = buildSettingsEditorModel('org-create', null, { ctx });
+  assert.deepEqual([create.title, create.primary.label, create.primary.enabled, create.switchTo], ['New organisation', 'Create', true, null]);
+  assert.deepEqual(create.fields.map((f) => [f.name, f.type]), [['id', 'text'], ['name', 'text'], ['adopt', 'checkbox']]);
+  assert.equal(create.fields[0].help, 'a slug: lowercase letters, digits, - and _; never reused');
+  assert.equal(create.fields[2].help, 'when orgs/<id>/ already holds files — adopt them instead of being refused');
+  assert.deepEqual(buildSettingsEditorModel('org-create', null, { ctx: { ...ctx, access: OPEN } }).primary, { label: 'Create', enabled: false, reason: OPEN.why.createOrg });
+  assert.deepEqual(buildOrgCreateBody({ id: ' charlie ', name: '', adopt: false }), { id: 'charlie' });
+  assert.deepEqual(buildOrgCreateBody({ id: 'charlie', name: ' Charlie ', adopt: true }), { id: 'charlie', name: 'Charlie', adopt: true });
+  const answer = { org: { id: 'charlie', name: 'Charlie', root: 'orgs/charlie' }, adopted: false, path: '/srv/ws/orgs/charlie' };
+  assert.deepEqual(orgCreateStatus(answer), { kind: 'saved', text: 'Created Charlie (charlie) — you are its first admin; its files live in /srv/ws/orgs/charlie.' });
+  assert.equal(orgCreateStatus({ ...answer, adopted: true }).text, "Created Charlie (charlie) — you are its first admin; its files live in /srv/ws/orgs/charlie. The directory's files were taken over.");
+  const created = buildSettingsEditorModel('org-create', null, { ctx: { ...ctx, created: { id: 'charlie' } }, step: 'notice', status: orgCreateStatus(answer) });
+  assert.deepEqual([created.primary, created.switchTo], [null, { orgId: 'charlie', label: 'Switch to it' }]);
+
+  const charlie = ORGS_DOC.orgs[2];
+  const facts = buildSettingsEditorModel('org', charlie, { ctx });
+  assert.deepEqual([facts.id, facts.title, facts.facts, facts.remove, facts.confirm], ['charlie', 'Charlie (charlie)', ['1 member', 'files: orgs/charlie', 'created 2026-10-03'], { enabled: true, reason: null, label: 'Remove…' }, null]);
+  const remove = buildSettingsEditorModel('org', charlie, { ctx, step: 'confirm-delete' });
+  assert.deepEqual(remove.confirm, {
+    text: 'Remove Charlie (charlie)? This cannot be undone here: no route restores an organisation, and charlie is never used again. Its 1 member loses access, and its services, environments and MCP endpoints can no longer be reached from the studio. The files stay under orgs/charlie.',
+    danger: 'Remove charlie', typed: 'charlie',
+  });
+  // The org this browser is in: the step says where the browser goes next.
+  const here = buildSettingsEditorModel('org', ORGS_DOC.orgs[1], { ctx, step: 'confirm-delete' });
+  assert.match(here.confirm.text, /^Remove Acme \(acme\)\? This cannot be undone here: .* Its 4 members lose access, .* This is the org you are in; afterwards this browser switches to your first other organisation\.$/);
+  // The default org: no step — Remove… unavailable with the server's sentence.
+  const def = buildSettingsEditorModel('org', ORGS_DOC.orgs[0], { ctx, step: 'confirm-delete' });
+  assert.deepEqual([def.confirm, def.remove.enabled, def.remove.reason], [null, false, 'default is the default org and cannot be removed']);
+  assert.deepEqual(orgRemoveStatus(charlie, { note: 'its files under /srv/ws/orgs/charlie stay; with the server stopped, packc store purge-org charlie deletes them' }),
+    { kind: 'saved', text: 'Removed Charlie (charlie) — its files under /srv/ws/orgs/charlie stay; with the server stopped, packc store purge-org charlie deletes them.' });
+  assert.equal(orgRemoveStatus(charlie, {}).text, 'Removed Charlie (charlie).');
+});
+
+test('the join role: the sign-in mode first, per mode; joinRoleBody sends confirm with admin only and nothing for admin unticked (B14); the status names from and to', () => {
+  assert.equal(joinRoleModeSentence({ mode: 'oidc', issuerKey: 'https://idp.test', role: 'viewer' }, { defaultOrgName: 'Default' }),
+    'Sign-in: OIDC issuer https://idp.test. An IdP user joins Default as viewer at their first sign-in.');
+  assert.equal(joinRoleModeSentence({ mode: 'oidc', issuerKey: 'https://idp.test', role: null }),
+    'Sign-in: OIDC issuer https://idp.test. An IdP user gets no membership at first sign-in (an admin adds them).');
+  assert.equal(joinRoleModeSentence({ mode: 'local', role: null }), 'Sign-in: local users. The join role applies to IdP users once OIDC is configured: none.');
+  assert.equal(joinRoleModeSentence({ mode: 'local', role: 'operator' }), 'Sign-in: local users. The join role applies to IdP users once OIDC is configured: operator.');
+  // OBSERVOGRAM_AUTH=off answers mode 'local' too: the open posture says the server has no sign-in, never "local users" —
+  // and names the way the join role comes to apply: OBSERVOGRAM_AUTH=off beats an OIDC issuer, so "once OIDC is
+  // configured" alone is false there (with one configured, GET /api/admin/join-role answers oidc: false, mode: 'local').
+  const OPEN_JOIN = 'This server runs without sign-in (OBSERVOGRAM_AUTH=off). The join role applies to IdP users once it restarts without OBSERVOGRAM_AUTH=off, with OIDC configured: none.';
+  assert.equal(joinRoleModeSentence({ mode: 'local', role: null }, { open: true }), OPEN_JOIN);
+  assert.equal(joinRoleModeSentence({ ok: true, role: 'operator', oidc: false, issuerKey: 'https://idp.test', mode: 'local' }, { open: true }),
+    'This server runs without sign-in (OBSERVOGRAM_AUTH=off). The join role applies to IdP users once it restarts without OBSERVOGRAM_AUTH=off, with OIDC configured: operator.');
+  assert.equal(buildJoinRoleSectionModel({ doc: { mode: 'local', role: null }, access: OPEN }).scopeSentence, OPEN_JOIN);
+  assert.equal(buildSettingsEditorModel('join-role', { mode: 'local', role: null }, { ctx: { access: OPEN } }).status.text, OPEN_JOIN);
+  assert.ok(!/once OIDC is configured/.test(OPEN_JOIN));
+  assert.equal(joinRoleModeSentence({ mode: 'proxy', role: 'viewer', proxy: { joinRole: 'operator', groupsConfigured: false } }),
+    "Sign-in: a reverse proxy. Its first-sight role is the proxy's (OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE: operator); the recorded join role below does not apply to proxy users.");
+  assert.equal(joinRoleModeSentence({ mode: 'proxy', role: null, proxy: { joinRole: 'viewer', groupsConfigured: true } }),
+    "Sign-in: a reverse proxy. Its first-sight role is the proxy's (OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE: viewer) — the groups header decides when it names a group; the recorded join role below does not apply to proxy users.");
+  const section = buildJoinRoleSectionModel({ doc: { mode: 'local', role: null, oidc: false, issuerKey: null }, access: OLIVE, defaultOrgName: 'Default' });
+  assert.deepEqual([section.scopeSentence, section.roleText, section.primary], ['Sign-in: local users. The join role applies to IdP users once OIDC is configured: none.', 'Recorded join role: none — no automatic join', { enabled: true, reason: null }]);
+  assert.equal(buildJoinRoleSectionModel({ doc: null, access: OLIVE, error: '403: x' }).error, '403: x');
+  assert.deepEqual(buildJoinRoleSectionModel({ doc: { mode: 'local' }, access: ADA }).primary, { enabled: false, reason: ADA.why.own });
+  // B14 (mutation check 5): confirm rides an admin body only, and admin unticked is no call at all.
+  assert.deepEqual(joinRoleBody('viewer', true), { role: 'viewer' });
+  assert.deepEqual(joinRoleBody('operator', false), { role: 'operator' });
+  assert.deepEqual(joinRoleBody(null, true), { role: null });
+  assert.deepEqual(joinRoleBody('admin', true), { role: 'admin', confirm: true });
+  assert.equal(joinRoleBody('admin', false), null);
+  for (const r of ['viewer', 'operator', null]) assert.ok(!('confirm' in joinRoleBody(r, true)), `no confirm with ${r}`);
+  assert.deepEqual(joinRoleStatus({ role: 'admin', from: null }), { kind: 'saved', text: 'Join role: none → admin.' });
+  assert.deepEqual(joinRoleStatus({ role: null, from: 'operator' }), { kind: 'saved', text: 'Join role: operator → none.' });
+  assert.deepEqual(joinRoleStatus({ role: 'viewer', from: 'viewer' }), { kind: 'idle', text: 'Nothing changed.' });
+  // The editor: the four choices, the box shown on admin only, required.
+  const ctx = { access: OLIVE, defaultOrgName: 'Default' };
+  const ed = buildSettingsEditorModel('join-role', { mode: 'local', role: null }, { ctx });
+  assert.deepEqual(ed.fields[0].options.map((o) => [o.value, o.label, o.selected]), [['viewer', 'viewer', false], ['operator', 'operator', false], ['admin', 'admin', false], [null, 'no automatic join', true]]);
+  assert.deepEqual([ed.fields[1].type, ed.fields[1].showWhen, ed.fields[1].required], ['checkbox', { field: 'role', value: 'admin', now: false }, 'tick the box first']);
+  assert.equal(ed.fields[1].label, 'I understand: every user the IdP lets in becomes an admin of Default — its name, its members and its MCP endpoints. To add admins one by one, use Members.');
+  assert.deepEqual(ed.primary, { label: 'Save', enabled: true, reason: null });
+  assert.equal(buildSettingsEditorModel('join-role', { mode: 'local', role: 'admin' }, { ctx }).fields[1].showWhen.now, true);
+  assert.deepEqual(buildSettingsEditorModel('join-role', { mode: 'local', role: null }, { ctx, draft: { role: 'admin', confirm: true } }).draft, { role: 'admin', confirm: true });
+});
+
+test('the organisation and join-role loaders: one requestJson call each, the id encoded, confirm only when asked', async () => {
+  const calls = [];
+  const answer = { ok: true, org: { id: 'a/b' }, adopted: true, path: '/p', note: 'n', role: 'admin', from: null };
+  const fetchFn = async (path, opts) => { calls.push([path, opts?.method ?? 'GET', opts?.body ?? null]); return answer; };
+  assert.deepEqual(await createOrg({ id: 'charlie', adopt: true }, { fetchFn }), { org: { id: 'a/b' }, adopted: true, path: '/p' });
+  assert.deepEqual(await removeOrg('a/b', { fetchFn }), { org: { id: 'a/b' }, note: 'n' });
+  assert.deepEqual(await putJoinRole('admin', true, { fetchFn }), { role: 'admin', from: null });
+  await putJoinRole('operator', false, { fetchFn });
+  await putJoinRole(null, undefined, { fetchFn });
+  assert.deepEqual(calls, [
+    ['/api/admin/orgs', 'POST', '{"id":"charlie","adopt":true}'],
+    ['/api/admin/orgs/a%2Fb', 'DELETE', null],
+    ['/api/admin/join-role', 'PUT', '{"role":"admin","confirm":true}'],
+    ['/api/admin/join-role', 'PUT', '{"role":"operator"}'],
+    ['/api/admin/join-role', 'PUT', '{"role":null}'],
+  ]);
+});
+
+test('renderSettings and the organisation and join-role editors: the rows escaped, Remove… by its rule; the id typed before the danger button works; Switch to it; the admin box gates Save', () => {
+  const calls = [];
+  const host = { settings: new Proxy({}, { get: (_, k) => (...a) => calls.push([k, ...a]) }) };
+  const xss = '<img src=x onerror="window.__x=1">';
+  const orgs = [ORGS_DOC.orgs[0], { ...ORGS_DOC.orgs[2], name: xss }, ORGS_DOC.orgs[3]];
+  const frame = buildSettingsFrameModel({ access: OLIVE, section: 'orgs', orgName: 'Acme', orgId: 'acme' });
+  const c = settingsContainer();
+  renderSettings(c, frame, { id: 'orgs', head: settingsSectionHead('orgs'), model: buildOrgsSectionModel({ orgs, defaultOrg: 'default', access: OLIVE, activeOrg: 'acme' }), status: { kind: 'ok', text: '' } }, host);
+  const h = c.innerHTML;
+  assert.ok(h.indexOf('id="set-nav-deployment"') < h.indexOf('data-section="orgs"') && h.indexOf('data-section="orgs"') < h.indexOf('data-section="join-role"'), 'Organisations and Join role under the deployment head');
+  assert.ok(!h.includes('<img') && h.includes('&lt;img src=x'), 'a name is escaped');
+  assert.ok(h.includes('id="set-primary">New organisation</button>'));
+  assert.ok(h.includes('<li class="set-row is-removed" data-org-id="gone">') && !h.includes('data-org-remove="gone"'), 'a removed org is listed greyed, with no Remove…');
+  assert.ok(h.includes('<span class="set-row-meta">removed 2026-10-04T00:00:00.000Z — a slug is never reused</span>'));
+  assert.ok(h.includes('<button type="button" class="ux-secondary-btn" data-org-act="default">Act in default</button>'));
+  assert.ok(!h.includes('data-org-act="gone"'), 'a removed org has no Act in');
+  for (const b of c.querySelectorAll('[data-org-remove]')) b.fire('click');
+  c.querySelector('#set-primary').fire('click');
+  [...c.querySelectorAll('[data-org-act]')].find((b) => b.dataset.orgAct === 'charlie').fire('click');
+  assert.deepEqual(calls, [
+    ['explain', 'default is the default org and cannot be removed'],
+    ['openEditor', { kind: 'org', id: 'charlie', step: 'confirm-delete' }],
+    ['openEditor', { kind: 'org-create' }],
+    ['switchTo', 'charlie', 'members'],
+  ]);
+  assert.equal(c.querySelectorAll('[data-org-remove]')[0].getAttribute('aria-disabled'), 'true');
+
+  // The join role's section: the mode sentence as the scope, the recorded role, Change the join role….
+  const j = settingsContainer();
+  calls.length = 0;
+  renderSettings(j, buildSettingsFrameModel({ access: OLIVE, section: 'join-role' }), { id: 'join-role', head: settingsSectionHead('join-role'), model: buildJoinRoleSectionModel({ doc: { mode: 'local', role: null }, access: OLIVE }), status: null }, host);
+  assert.ok(j.innerHTML.includes('<p class="set-section-scope">Sign-in: local users. The join role applies to IdP users once OIDC is configured: none.</p>'));
+  assert.ok(j.innerHTML.includes('id="set-join-role">Recorded join role: none — no automatic join</span>'));
+  j.querySelector('#set-primary').fire('click');
+  assert.deepEqual(calls, [['openEditor', { kind: 'join-role' }]]);
+
+  // Remove…: the consequence, the id typed — the danger button aria-disabled until it matches.
+  const r = settingsContainer();
+  calls.length = 0;
+  renderSettingsEditor(r, buildSettingsEditorModel('org', ORGS_DOC.orgs[2], { ctx: { access: OLIVE, orgId: 'acme', defaultOrg: 'default' }, step: 'confirm-delete' }), host);
+  assert.ok(r.innerHTML.includes('<span class="set-editor-typed-label" id="set-editor-typed-label">Type <code>charlie</code> to remove it</span>'));
+  assert.ok(r.innerHTML.includes('id="set-editor-confirm" aria-disabled="true" aria-describedby="set-editor-typed-label">Remove charlie</button>'));
+  r.querySelector('#set-editor-confirm').fire('click');
+  r.querySelector('#set-editor-typed').value = 'charli';
+  r.querySelector('#set-editor-typed').fire('input');
+  assert.equal(r.querySelector('#set-editor-confirm').getAttribute('aria-disabled'), 'true');
+  r.querySelector('#set-editor-typed').value = 'charlie';
+  r.querySelector('#set-editor-typed').fire('input');
+  assert.equal(r.querySelector('#set-editor-confirm').getAttribute('aria-disabled'), 'false');
+  r.querySelector('#set-editor-confirm').fire('click');
+  assert.deepEqual(calls, [['explain', 'Type charlie to remove it'], ['confirm', 'charlie']]);
+
+  // Created: Close and Switch to it — the new org's Members.
+  const n = settingsContainer();
+  calls.length = 0;
+  renderSettingsEditor(n, buildSettingsEditorModel('org-create', null, { ctx: { access: OLIVE, created: { id: 'charlie' } }, step: 'notice', status: { kind: 'saved', text: 'Created Charlie (charlie) — …' } }), host);
+  assert.ok(n.innerHTML.includes('id="set-editor-switch">Switch to it</button>') && !n.innerHTML.includes('id="set-editor-save"'));
+  n.querySelector('#set-editor-switch').fire('click');
+  assert.deepEqual(calls, [['switchTo', 'charlie', 'members']]);
+
+  // The join role: the admin box hidden until admin is chosen; Save unavailable with "tick the box first" until ticked.
+  const e = settingsContainer();
+  calls.length = 0;
+  renderSettingsEditor(e, buildSettingsEditorModel('join-role', { mode: 'local', role: null }, { ctx: { access: OLIVE, defaultOrgName: 'Default' } }), host);
+  assert.ok(e.innerHTML.includes('<label class="set-editor-field set-editor-check" id="set-edit-confirm-field" hidden>'));
+  assert.ok(e.innerHTML.includes('<input id="set-edit-confirm" name="confirm" type="checkbox">'));
+  const admin = e.querySelectorAll('[data-seg="role"]').find((b) => b.dataset.value === 'admin');
+  admin.fire('click');
+  assert.equal(e.querySelector('#set-edit-confirm-field').hidden, false, 'the box shows on admin');
+  assert.equal(e.querySelector('#set-editor-save').getAttribute('aria-disabled'), 'true');
+  assert.equal(e.querySelector('#set-editor-save').why.textContent, 'tick the box first');
+  e.querySelector('#set-editor-save').fire('click');
+  e.querySelector('#set-edit-confirm').checked = true;
+  e.querySelector('#set-edit-confirm').fire('change');
+  assert.equal(e.querySelector('#set-editor-save').getAttribute('aria-disabled'), 'false');
+  e.querySelector('#set-editor-save').fire('click');
+  const operator = e.querySelectorAll('[data-seg="role"]').find((b) => b.dataset.value === 'operator');
+  operator.fire('click');
+  assert.equal(e.querySelector('#set-edit-confirm-field').hidden, true, 'the box hides again');
+  e.querySelector('#set-editor-save').fire('click');
+  assert.deepEqual(calls, [['explain', 'tick the box first'], ['save', { role: 'admin', confirm: true }], ['save', { role: 'operator', confirm: true }]],
+    'the draft carries the box; joinRoleBody leaves confirm off every body but admin');
+});
+
+
+test('a confirm step the rank lost while it was open (a 403 by role): no danger button in the model nor on screen — Delete… or Remove… again, unavailable with the reason; every kind', () => {
+  const calls = [];
+  const host = { settings: new Proxy({}, { get: (_, k) => (...a) => calls.push([k, ...a]) }) };
+  const refused = { kind: 'error', text: "403: requires the admin role in org 'acme' (you are operator) — ask an admin of acme" };
+  const two = [...MEMBERS, { userId: 9, login: 'abe', role: 'admin', disabled: false }];
+  const cases = [
+    ['environment', PAYMENT.environments[0], 'confirm-delete', null, { access: OSCAR, orgName: 'Acme', orgId: 'acme', services: SERVICES, endpoints: EP_OP }, VERA, VERA.why.operate],
+    ['endpoint', EP_OP[0], 'confirm-delete', null, { access: ADA, orgName: 'Acme', orgId: 'acme', services: SERVICES }, OSCAR, OSCAR.why.admin],
+    ['member', MEMBERS[1], 'confirm-delete', null, { access: ADA, orgName: 'Acme', orgId: 'acme', members: MEMBERS, me: 'ada' }, OSCAR, OSCAR.why.admin],
+    ['member', MEMBERS[0], 'confirm-action', { role: 'operator' }, { access: ADA, orgName: 'Acme', orgId: 'acme', members: two, me: 'ada' }, OSCAR, OSCAR.why.admin],
+    ['org', ORGS_DOC.orgs[2], 'confirm-delete', null, { access: OLIVE, orgId: 'acme', defaultOrg: 'default' }, ADA, ADA.why.own],
+  ];
+  for (const [kind, record, step, draft, ctx, lost, reason] of cases) {
+    const tag = `${kind} ${step}`;
+    assert.ok(reason, `${tag}: the lost rank has a reason`);
+    const before = buildSettingsEditorModel(kind, record, { ctx, step, draft });
+    assert.ok(before.confirm?.danger, `${tag}: the rank that may write gets the danger button`);
+    const after = buildSettingsEditorModel(kind, record, { ctx: { ...ctx, access: lost }, step, draft, status: refused });
+    assert.equal(after.confirm, null, `${tag}: no danger button once the rank is refused`);
+    assert.deepEqual([after.remove.enabled, after.remove.reason], [false, reason], `${tag}: Delete… / Remove… unavailable with the reason`);
+    // On screen: the same container, the confirm step drawn, then the answer — the dialog drawn anew without it.
+    const c = settingsContainer();
+    renderSettingsEditor(c, before, host);
+    assert.ok(c.innerHTML.includes('id="set-editor-confirm"'), `${tag}: the confirm step drawn`);
+    calls.length = 0;
+    renderSettingsEditor(c, after, host);
+    assert.ok(!c.innerHTML.includes('id="set-editor-confirm"') && !c.innerHTML.includes('id="set-editor-back"'), `${tag}: no danger button left usable`);
+    assert.ok(c.innerHTML.includes(`data-editor-key="${kind}:${after.id}:edit"`), `${tag}: drawn as the record's dialog`);
+    assert.ok(c.innerHTML.includes(`>${refused.text.replace(/'/g, '&#39;')}</div>`), `${tag}: the server's refusal in the status line`);
+    const del = c.querySelector('#set-editor-delete');
+    assert.deepEqual([del.getAttribute('aria-disabled'), del.why?.textContent], ['true', reason], `${tag}: Delete… / Remove… says why`);
+    del.fire('click');
+    c.querySelector('#set-editor-confirm')?.fire('click');
+    assert.deepEqual(calls, [['explain', reason]], `${tag}: a click explains and sends nothing`);
+  }
 });

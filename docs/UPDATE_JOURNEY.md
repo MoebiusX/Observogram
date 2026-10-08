@@ -1290,3 +1290,30 @@ parser's status (400 not JSON, 413 too large, 415 an unsupported charset or
 encoding), and nothing is logged. The parsers still run after the auth gate
 and before every route's `authorize()`, so who is refused, and in what order,
 does not move. Tests: 1357 → 1359 (`server/test-malformed-json.mjs` 2, new).
+
+### STORE_PLAN slice 6b-ii — Settings for owners
+
+**6b-ii** (`codex/settings-owner`) adds the deployment's sections to
+Settings for owners — users, organisations, the join role — and nothing to
+the journey's steps: Discover, Diagnose, Remediate and the Hand off read and
+send as in 6b-i. Two things reach the people who run it. A new local user
+gets a temporary password the browser draws, shown once and changed at
+first sign-in, so an owner can give a teammate a way in without a shell. And
+an owner can act in an org they are not a member of (D-M): the org's
+members, environments and MCP endpoints — the journey's live target — can be
+rescued when its last admin left; the ORG chip then reads `<name> — acting
+as owner`, and a member's chip is unchanged. Crawl, compile and board
+goldens are byte-identical.
+Tests: 1359 → 1390, from develop's total once batch 4 and the malformed-JSON
+follow-up had merged (twenty-one in `server/test-settings-studio.mjs`'s owner
+block and the owner models in `tools/test-settings-model.mjs`; ten more from
+the review fixes — in `server/test-settings-studio.mjs` the shared-browser
+case (an owner signing in after another login chose an org she is not in),
+the long one-org label case, the reverse-proxy reset case, the rank-lost
+focus case (a confirm step refused by a lost rank keeps the focus in its
+dialog) and the reverse-proxy Enable and Sign out case, and in
+`tools/test-settings-model.mjs` the rank-lost confirm test, the reset where a
+local user cannot sign in, `userSignIn` (how each kind of user signs in under
+each sign-in mode), Enable… under every mode and Sign out everywhere… under
+every mode). The other review fixes add assertions to existing tests or
+change docs and comments; the count is unchanged by them.

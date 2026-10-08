@@ -368,7 +368,10 @@ test('authzDecision: every refusal names a way out', () => {
     'anonymous callers are viewers here; the operator role needs a signed-in user; this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC');
   // Under OBSERVOGRAM_AUTH=off adding a user arms nothing: the way in is a restart without it.
   assert.equal(text(opWrite, ctxOf('token', P.anon, { authOff: true })),
-    'anonymous callers are viewers here; the operator role needs a signed-in user; this server has no sign-in (OBSERVOGRAM_AUTH=off): restart it without OBSERVOGRAM_AUTH=off once a user exists (npm run users -- add <login>), or configure OIDC');
+    'anonymous callers are viewers here; the operator role needs a signed-in user; this server has no sign-in (OBSERVOGRAM_AUTH=off): restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured');
+  // Configuring OIDC alone changes nothing while OBSERVOGRAM_AUTH=off is set (authDisabled() beats oidcEnabled()):
+  // the way in names the restart for both — never "or configure OIDC" on its own.
+  assert.doesNotMatch(text(opWrite, ctxOf('token', P.anon, { authOff: true })), /, or configure OIDC$/);
   assert.doesNotMatch(text(ownerApi, ctxOf('token', P.bearer, { authOff: true })), /no sign-in: add the first user/);
   const body = authzDecision(opWrite, ctxOf('identity', P.viewer)).body;
   assert.deepEqual({ ...body, error: undefined }, { ok: false, error: undefined, denied: 'role', need: 'operator', role: 'viewer', owner: false, org: 'acme' });
@@ -430,7 +433,7 @@ test('the typed MCP URL refusals name a way out per posture: a session below adm
   assert.match(text(ctxOf('identity', P.operator)), /choose one of the org's registered MCP endpoints \(mcpEndpointId; GET \/api\/mcp-endpoints lists them\), or ask an admin of acme to register this one in Settings → MCP endpoints$/);
   assert.match(text(ctxOf('identity', P.bearer)), /send mcpEndpointId \(GET \/api\/mcp-endpoints lists them\); an admin of 'acme' registers a new one in Settings → MCP endpoints$/);
   assert.match(text(ctxOf('token', P.bearer)), /registering one needs a signed-in admin — this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC$/);
-  assert.match(text(ctxOf('token', P.bearer, { authOff: true })), /registering one needs a signed-in admin — this server has no sign-in \(OBSERVOGRAM_AUTH=off\): restart it without OBSERVOGRAM_AUTH=off once a user exists/);
+  assert.match(text(ctxOf('token', P.bearer, { authOff: true })), /registering one needs a signed-in admin — this server has no sign-in \(OBSERVOGRAM_AUTH=off\): restart it without OBSERVOGRAM_AUTH=off, once a user exists \(npm run users -- add <login>\) or with OIDC configured$/);
   assert.match(text(ctxOf('open-loopback', P.local, { port: 8123 })), /register one in Settings → MCP endpoints from http:\/\/127\.0\.0\.1:8123 /);
   assert.match(text(ctxOf('open-exposed', P.local)), /add the first user with npm run users -- add <login> \(it arms sign-in; the first user is an owner\), or bind the server to loopback$/);
   for (const [ctx, denied] of [[ctxOf('identity', P.viewer), 'role'], [ctxOf('identity', P.bearer), 'role'], [ctxOf('open-loopback', P.local), 'posture'], [ctxOf('token', P.anon), 'role']]) {
@@ -887,8 +890,16 @@ test('deploy target profiles keep no credential: per user, stripped like the rem
     rememberMcpEndpoint(null);
     assert.ok(!store.has('mcpEndpoint.v1:ada:acme'), 'a typed URL used: the choice is forgotten');
     rememberMcpEndpoint(3);
+    assert.equal(store.get('studioOrgBy.v1'), 'ada', 'the saved org names who chose it');
     forgetMcpUrls('ada');
-    assert.deepEqual([...store.keys()].sort(), ['mcpEndpoint.v1:bob:acme', 'mcpUrl.v2:bob:acme', 'studioOrg.v1', 'studioTheme'], "ada's remembered URLs and endpoints go, in every org; bob's stay");
+    assert.deepEqual([...store.keys()].sort(), ['mcpEndpoint.v1:bob:acme', 'mcpUrl.v2:bob:acme', 'studioOrg.v1', 'studioTheme'],
+      "ada's remembered URLs and endpoints go, in every org, and so does her login beside the saved org (studioOrgBy.v1 — a shared browser keeps no trace of who signed out); the org stays, a browser's choice; bob's keys stay");
+    // The login beside the saved org is cleared only when it is this login's: another's stays, as bob's URLs do.
+    store.set('studioOrgBy.v1', 'bob');
+    forgetMcpUrls('ada');
+    assert.equal(store.get('studioOrgBy.v1'), 'bob');
+    forgetMcpUrls(null);
+    assert.equal(store.get('studioOrgBy.v1'), 'bob', 'the open posture names no login');
   } finally {
     setActiveOrg(null);
     setSignedInLogin(null);
@@ -1321,8 +1332,10 @@ test('the README Roles section lists every orgs.json role the import maps to adm
 
 // docs/STORE_PLAN.md's build status (the italic paragraphs before §0) and
 // docs/HANDOVER.md say which slice is next: one slice, the same in both,
-// and never one the build status already calls built.
-test('docs/STORE_PLAN.md\'s build status and docs/HANDOVER.md name one next slice, after every slice built', () => {
+// and never one the build status already calls built. The plan can end
+// (D-G): once the build status says every slice of §7 is built, neither doc
+// says a slice is next, and docs/HANDOVER.md says every slice is built.
+test('docs/STORE_PLAN.md\'s build status and docs/HANDOVER.md name one next slice, after every slice built — or none, once every slice of §7 is built', () => {
   const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
   const plan = readFileSync(join(REPO, 'docs', 'STORE_PLAN.md'), 'utf8');
   const start = plan.indexOf('*Build status');
@@ -1335,6 +1348,11 @@ test('docs/STORE_PLAN.md\'s build status and docs/HANDOVER.md name one next slic
     ...[...status.matchAll(NEXT)].map(([phrase, n]) => ({ doc: 'STORE_PLAN.md', phrase, n: Number(n) })),
     ...[...handover.matchAll(NEXT)].map(([phrase, n]) => ({ doc: 'HANDOVER.md', phrase, n: Number(n) })),
   ];
+  if (/\bevery slice of §7 is built\b/i.test(status)) {
+    assert.deepEqual(next.map((x) => `${x.doc}: "${x.phrase}"`), [], 'every slice of §7 is built: no doc says a slice is next');
+    assert.match(handover, /\bevery STORE_PLAN slice is built\b/i, 'docs/HANDOVER.md says every slice is built');
+    return;
+  }
   assert.ok(next.some((x) => x.doc === 'STORE_PLAN.md') && next.some((x) => x.doc === 'HANDOVER.md'), 'both docs say which slice is next');
   const slices = [...new Set(next.map((x) => x.n))];
   assert.equal(slices.length, 1, `one next slice, not ${next.map((x) => `${x.doc}: "${x.phrase}"`).join(', ')}`);
@@ -2206,7 +2224,7 @@ for (const posture of OPEN) {
         assert.deepEqual([r.status, r.json], [409, {
           ok: false,
           error: 'creating a second org needs identity: this server runs with OBSERVOGRAM_AUTH=off, and a second org would make its next start refuse '
-            + '— restart it without OBSERVOGRAM_AUTH=off and sign in as an owner (npm run users -- add <login> first when no user exists), or configure OIDC',
+            + '— restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured, and sign in as an owner',
         }]);
         r = await call(srv.base, ['GET', '/api/packs']);
         assert.equal(r.status, 200, 'still no sign-in: OBSERVOGRAM_AUTH=off');

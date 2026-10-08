@@ -7717,6 +7717,15 @@ button.observa-service:focus-visible { outline: 2px solid var(--CMP); outline-of
 }
 .observa-org-select option { color: var(--ink); background: var(--card); }
 [data-theme="dark"] .observa-org-select option { color: var(--ink); background: var(--card); }
+/* An owner's acting entry (`<name> — acting as owner`, D-M) is the longest label the chip draws: the select keeps the
+   name's cap, and a shorter one at phone width, where the chip, the tabs and the action cluster share one row of
+   390px (the option list shows each label in full). A one-org member's label (no select) takes the same phone cap: a
+   long org name ellipsizes there, read in full by assistive technology. With these caps the row scrolls nothing
+   sideways at 390px in the modes that hide the SERVICE chip — home, Build, a service page, Settings. In a pack's
+   views with a service chosen, the SERVICE chip joins the row and the page still scrolls sideways at phone width:
+   narrower than before these caps, not gone (the SERVICE chip's own layout is not fixed here). */
+.observa-org-select { max-width: 24ch; text-overflow: ellipsis; }
+@media (max-width: 720px) { .observa-org-select, .observa-org .observa-service-name { max-width: 8ch; } }
 
 /* ============================================================
    Advanced → Neuron (.nrn-*) — the observability control neuron as one
@@ -9424,11 +9433,36 @@ select.build-edit-input { appearance: auto; }
 .set-mcp-target-hint { display: block; margin: 2px 0 0; font: 12.5px/1.45 var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
 .set-mcp-target-hint .ux-secondary-btn { margin-left: 6px; }
 
+/* The deployment group's line for a reader who is not an owner: who to ask, plain secondary text in the nav. */
+.set-nav-note { margin: 0; padding: 4px 12px 0; font: 12.5px/1.45 var(--sans); color: var(--ink-3); overflow-wrap: anywhere; }
+/* A user's dialog: its facts as tight lines, its actions in one wrapping group under them. */
+.set-user-fact { margin: 0; }
+.set-user-actions { margin: 6px 0 0; justify-content: flex-start; }
+/* The temporary password, shown once: the sentence, the value in the mono (selectable as one), Copy. The card with
+   a hairline; text --ink / --ink-2 on it. */
+.set-secret { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 14px 16px; color: var(--ink-2); background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+.set-secret-text { flex: 1 0 100%; margin: 0; font-size: 14px; line-height: 1.5; color: var(--ink-2); }
+.set-secret-value { font: 600 16px/1.4 var(--mono); color: var(--ink); user-select: all; overflow-wrap: anywhere; }
+/* A field drawn only on a choice (the join role's admin box) is hidden by its attribute — the field's flex would
+   otherwise show it. */
+.set-editor-field[hidden] { display: none; }
+/* A box to tick: the box, then its sentence in the sans (not the field labels' capitals), the help under both. */
+.set-editor-check { flex-direction: row; flex-wrap: wrap; align-items: flex-start; gap: 6px 10px; }
+.set-editor-field.set-editor-check input { flex: 0 0 auto; width: 18px; height: 18px; margin: 2px 0 0; padding: 0; }
+.set-editor-check-text { flex: 1 1 0; min-width: 0; font: 14px/1.45 var(--sans); color: var(--ink); overflow-wrap: anywhere; }
+.set-editor-check .set-editor-help { flex: 1 0 100%; padding-left: 28px; }
+/* The id typed before a removal: the sentence in the sans, the id in the mono as it must be typed (no capitals). */
+.set-editor-typed-label { font: 14px/1.45 var(--sans); color: var(--ink); overflow-wrap: anywhere; }
+.set-editor-typed-label code { font: 600 14px/1.45 var(--mono); }
+/* A removed organisation: listed, greyed — its name in the secondary text, its id never used again. */
+.set-row.is-removed .set-row-name { color: var(--ink-3); }
+
 @media (max-width: 760px) {
   .set-page { padding: 16px 16px 64px; }
   .set-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .set-nav { flex-direction: row; overflow-x: auto; gap: 4px; padding-bottom: 4px; scrollbar-width: thin; }
   .set-nav-group { margin: 0; padding: 8px 6px; white-space: nowrap; }
+  .set-nav-note { flex: 0 0 260px; padding: 4px 6px; }
   .set-nav-item { flex: 0 0 auto; white-space: nowrap; border-left: 0; border-bottom: 2px solid transparent; }
   .set-nav-item[aria-current="page"] { border-left: 0; border-bottom: 2px solid var(--CMP); }
   .set-row .ux-secondary-btn { margin-left: 0; }

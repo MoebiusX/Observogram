@@ -506,7 +506,7 @@ test('PUT /api/admin/join-role: viewer, operator, admin (with confirm) or none; 
   assert.deepEqual([json, rows], [{ ok: true, role: 'viewer', from: 'viewer' }, []], 'unchanged: no row');
   assert.equal((await call('olive', 'GET', '/api/admin/join-role')).json.role, 'viewer');
 
-  const ADMIN = 'every user the IdP lets in would become an admin of default — its name, its members and, from slice 4, its MCP endpoints; '
+  const ADMIN = 'every user the IdP lets in would become an admin of default — its name, its members and its MCP endpoints; '
     + 'to add admins one by one use POST /api/org/members with {"role": "admin"}, or send {"role": "admin", "confirm": true}';
   await refused(K, 'olive', '/api/admin/join-role', { role: 'admin' }, 409, ADMIN);
   await refused(K, 'olive', '/api/admin/join-role', { role: 'admin', confirm: 'true' }, 409, ADMIN);

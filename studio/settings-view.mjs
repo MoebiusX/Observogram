@@ -19,10 +19,19 @@ import { escapeHtml, TRAPPED_DIALOGS } from './util.mjs';
 import { markUnavailable } from './services-view.mjs';
 
 // The nav: one button per built section — aria-current names the one on
-// screen (a section is a page, not a tab panel).
-function navHtml(nav) {
-  return nav.map((n) => `
-          <button type="button" class="set-nav-item" data-section="${escapeHtml(n.id)}" aria-current="${n.current ? 'page' : 'false'}">${escapeHtml(n.label)}</button>`).join('');
+// screen (a section is a page, not a tab panel). The deployment's sections
+// (an owner's) under their own head; for a reader who is not an owner, the
+// head and one line saying who to ask instead.
+function navHtml(nav, deployment = null) {
+  const item = (n) => `
+          <button type="button" class="set-nav-item" data-section="${escapeHtml(n.id)}" aria-current="${n.current ? 'page' : 'false'}">${escapeHtml(n.label)}</button>`;
+  const org = nav.filter((n) => n.group !== 'deployment').map(item).join('');
+  if (!deployment) return org;
+  const head = `
+          <p class="set-nav-group" id="set-nav-deployment">${escapeHtml(deployment.head)}</p>`;
+  const rest = deployment.note ? `
+          <p class="set-nav-note" id="set-nav-no-owner">${escapeHtml(deployment.note)}</p>` : nav.filter((n) => n.group === 'deployment').map(item).join('');
+  return org + head + rest;
 }
 
 // The environments, grouped by service: each service's name and slug, "Open
@@ -88,6 +97,61 @@ function membersHtml(model) {
               <button type="button" class="ux-secondary-btn" data-member-remove="${escapeHtml(String(r.userId))}" aria-label="${escapeHtml(`Remove ${r.login}`)}">Remove…</button>
             </span>` : ''}
           </li>`).join('')}
+        </ul>`;
+}
+
+// The deployment's users: the login, "you", the badges (owner, disabled,
+// must change password, seeded default), how they sign in, their
+// organisations and their last sign-in. No email (the loader dropped it).
+// For an owner, Manage… (the user's dialog).
+function usersHtml(model) {
+  if (!model.rows.length) return '';
+  return `
+        <ul class="set-list" aria-label="Users of this deployment">${model.rows.map((r) => `
+          <li class="set-row" data-user-id="${escapeHtml(String(r.id))}">
+            <span class="set-row-name">${escapeHtml(r.login)}</span>${r.you ? `
+            <span class="set-you">you</span>` : ''}${r.badges.map((b) => `
+            <span class="set-badge${b === 'owner' ? ' is-owner' : b === 'disabled' ? ' is-disabled' : ''}">${escapeHtml(b)}</span>`).join('')}
+            <span class="set-row-facts">
+              <span class="set-row-meta">${escapeHtml([r.name, r.kind, r.memberships, r.lastSignIn].filter(Boolean).join(' · '))}</span>
+            </span>${r.canManage ? `
+            <button type="button" class="ux-secondary-btn" data-user-manage="${escapeHtml(String(r.id))}" aria-label="${escapeHtml(`Manage ${r.login}`)}">Manage…</button>` : ''}
+          </li>`).join('')}
+        </ul>`;
+}
+
+// The deployment's organisations: the name and id, the default badge, the
+// members counted, where the files live, when it was created; a removed one
+// greyed with when, its id never used again. For an owner, Act in <id> on
+// each live one but the active one (D-M), and Remove… on each live one — the
+// default org's unavailable with the server's sentence.
+function orgsHtml(model) {
+  if (!model.rows.length) return '';
+  return `
+        <ul class="set-list" aria-label="Organisations of this deployment">${model.rows.map((r) => `
+          <li class="set-row${r.removed ? ' is-removed' : ''}" data-org-id="${escapeHtml(r.id)}">
+            <span class="set-row-name">${escapeHtml(r.name)}</span>
+            <span class="set-row-meta">(${escapeHtml(r.id)})</span>${r.isDefault ? `
+            <span class="set-badge">default</span>` : ''}
+            <span class="set-row-facts">
+              <span class="set-row-meta">${escapeHtml(r.facts)}</span>${r.removedText ? `
+              <span class="set-row-meta">${escapeHtml(r.removedText)}</span>` : ''}
+            </span>${r.act || r.remove ? `
+            <span class="set-row-actions">${r.act ? `
+              <button type="button" class="ux-secondary-btn" data-org-act="${escapeHtml(r.id)}">${escapeHtml(r.act)}</button>` : ''}${r.remove ? `
+              <button type="button" class="ux-secondary-btn" data-org-remove="${escapeHtml(r.id)}" aria-label="${escapeHtml(`Remove ${r.name} (${r.id})`)}">Remove…</button>` : ''}
+            </span>` : ''}
+          </li>`).join('')}
+        </ul>`;
+}
+
+// The join role: the role recorded (the scope sentence above says what it
+// does under the sign-in mode the server runs).
+function joinRoleHtml(model) {
+  if (!model.roleText) return '';
+  return `
+        <ul class="set-list" aria-label="The join role">
+          <li class="set-row"><span class="set-row-name" id="set-join-role">${escapeHtml(model.roleText)}</span></li>
         </ul>`;
 }
 
@@ -188,8 +252,8 @@ function statusHtml(section) {
 // The section's primary action (the editor that creates a record), drawn
 // once its editor is built — unavailable with its reason for a rank that
 // cannot use it.
-const PRIMARY_LABEL = { environments: 'Add environment', endpoints: 'New MCP endpoint', members: 'Add member' };
-const PRIMARY_KIND = { environments: 'environment', endpoints: 'endpoint', members: 'member-add' };
+const PRIMARY_LABEL = { environments: 'Add environment', endpoints: 'New MCP endpoint', members: 'Add member', users: 'New local user', orgs: 'New organisation', 'join-role': 'Change the join role…' };
+const PRIMARY_KIND = { environments: 'environment', endpoints: 'endpoint', members: 'member-add', users: 'user-create', orgs: 'org-create', 'join-role': 'join-role' };
 
 function sectionHtml(section) {
   if (!section?.id) return '';
@@ -198,7 +262,10 @@ function sectionHtml(section) {
   const body = section.id === 'environments' ? environmentsHtml(section.model)
     : section.id === 'endpoints' ? endpointsHtml(section.model)
       : section.id === 'members' ? membersHtml(section.model)
-        : section.id === 'audit' ? auditHtml(section.model, section.filters) : '';
+        : section.id === 'audit' ? auditHtml(section.model, section.filters)
+          : section.id === 'users' ? usersHtml(section.model)
+            : section.id === 'orgs' ? orgsHtml(section.model)
+              : section.id === 'join-role' ? joinRoleHtml(section.model) : '';
   const loading = section.status?.kind === 'loading';
   // The scope sentence: the head's, or the section model's own (the members name the org's id).
   const scope = section.head.scope ?? section.model?.scopeSentence ?? null;
@@ -232,7 +299,7 @@ export function renderSettings(container, frame, section, host = appHost) {
       ${banner ? `<div class="set-banner is-${escapeHtml(banner.kind)}" role="status">${escapeHtml(banner.text)}</div>` : ''}
       ${frame.nav.length ? `
       <div class="set-layout">
-        <nav class="set-nav" aria-label="Settings sections">${navHtml(frame.nav)}
+        <nav class="set-nav" aria-label="Settings sections">${navHtml(frame.nav, frame.deployment)}
         </nav>
         ${sectionHtml(section)}
       </div>` : ''}
@@ -271,6 +338,23 @@ export function renderSettings(container, frame, section, host = appHost) {
     btn.addEventListener('click', () => host.settings?.openEditor?.({ kind: 'environment', id: Number(btn.dataset.editEnv) }));
   });
   if (section.id === 'members') wireMembers(container, section.model, host);
+  container.querySelectorAll('[data-user-manage]').forEach((btn) => {
+    btn.addEventListener('click', () => host.settings?.openEditor?.({ kind: 'user', id: Number(btn.dataset.userManage) }));
+  });
+  // Act in <id>: this browser reloads into that org's members (D-M).
+  container.querySelectorAll('[data-org-act]').forEach((btn) => {
+    btn.addEventListener('click', () => host.settings?.switchTo?.(btn.dataset.orgAct, 'members'));
+  });
+  // An organisation's Remove…: its dialog on the remove step, or why not.
+  container.querySelectorAll('[data-org-remove]').forEach((btn) => {
+    const row = (section.model?.rows || []).find((r) => r.id === btn.dataset.orgRemove);
+    const reason = row?.remove && !row.remove.enabled ? row.remove.reason : null;
+    if (reason) markUnavailable(btn, reason);
+    btn.addEventListener('click', () => {
+      if (reason) { host.settings?.explain?.(reason); return; }
+      host.settings?.openEditor?.({ kind: 'org', id: btn.dataset.orgRemove, step: 'confirm-delete' });
+    });
+  });
   if (section.id === 'audit') {
     for (const [name, v] of section.drafts || []) { const el = container.querySelector(`#${auditFieldId(name)}`); if (el) el.value = v; }
     wireAudit(container, section.model, host);
@@ -393,21 +477,71 @@ function fieldHtml(f, limits) {
           ${help}
         </div>`;
   }
+  if (f.type === 'checkbox') {
+    // A box to tick (take over a directory; the join role's admin
+    // confirmation — drawn while its condition holds: f.showWhen).
+    const shown = !f.showWhen || f.showWhen.now === true;
+    return `
+        <label class="set-editor-field set-editor-check" id="${id}-field"${shown ? '' : ' hidden'}>
+          <input id="${id}" name="${escapeHtml(f.name)}" type="checkbox"${f.checked ? ' checked' : ''}${described}>
+          <span class="set-editor-check-text">${escapeHtml(f.label)}</span>
+          ${help}
+        </label>`;
+  }
   throw new Error(`no Settings editor field of type ${JSON.stringify(f.type)}`);
 }
 
 // The footer's buttons by step: editing — Close, Delete… (a record), the
 // primary; the delete step — Back and the danger button naming the record.
 function editorActionsHtml(model) {
+  // The secret step and the step after one's own sign-out: Close, and Go to
+  // sign-in when this browser's session has ended or sign-in just came on.
+  if (model.step === 'secret' || model.step === 'notice') {
+    return `
+          <button type="button" class="ctrl-btn set-editor-cancel" data-editor-close>Close</button>${model.signIn ? `
+          <button type="button" class="mcp-refresh-btn set-editor-save" id="set-editor-signin">Go to sign-in</button>` : ''}${model.switchTo ? `
+          <button type="button" class="mcp-refresh-btn set-editor-save" id="set-editor-switch">${escapeHtml(model.switchTo.label)}</button>` : ''}`;
+  }
   if ((model.step === 'confirm-delete' || model.step === 'confirm-action') && model.confirm) {
+    // A removal that asks for the id typed: unavailable until it matches.
+    const typed = model.confirm.typed ? ' aria-describedby="set-editor-typed-label"' : '';
     return `
           <button type="button" class="ctrl-btn set-editor-cancel" id="set-editor-back">Back</button>
-          <button type="button" class="set-danger" id="set-editor-confirm" aria-disabled="${model.saving ? 'true' : 'false'}">${escapeHtml(model.confirm.danger)}</button>`;
+          <button type="button" class="set-danger" id="set-editor-confirm" aria-disabled="${model.saving || model.confirm.typed ? 'true' : 'false'}"${typed}>${escapeHtml(model.confirm.danger)}</button>`;
   }
   return `
           <button type="button" class="ctrl-btn set-editor-cancel" data-editor-close>Close</button>${model.remove ? `
-          <button type="button" class="ctrl-btn set-editor-delete" id="set-editor-delete">${escapeHtml(model.remove.label || 'Delete…')}</button>` : ''}
-          <button type="button" class="mcp-refresh-btn set-editor-save" id="set-editor-save" aria-disabled="${model.primary.enabled ? 'false' : 'true'}">${escapeHtml(model.primary.label)}</button>`;
+          <button type="button" class="ctrl-btn set-editor-delete" id="set-editor-delete">${escapeHtml(model.remove.label || 'Delete…')}</button>` : ''}${model.primary ? `
+          <button type="button" class="mcp-refresh-btn set-editor-save" id="set-editor-save" aria-disabled="${model.primary.enabled ? 'false' : 'true'}">${escapeHtml(model.primary.label)}</button>` : ''}`;
+}
+
+// The editor's body by step: the consequence sentence (a confirm step); the
+// temporary password, once, beside its sentence and Copy (the secret step);
+// nothing but the status line (the step after one's own sign-out); a user's
+// facts and actions; else the kind's fields.
+function editorBodyHtml(model) {
+  const confirming = (model.step === 'confirm-delete' || model.step === 'confirm-action') && model.confirm;
+  if (confirming) return `
+        <p class="set-confirm" id="set-editor-confirm-text">${escapeHtml(model.confirm.text)}</p>${model.confirm.typed ? `
+        <label class="set-editor-field set-editor-typed">
+          <span class="set-editor-typed-label" id="set-editor-typed-label">Type <code>${escapeHtml(model.confirm.typed)}</code> to remove it</span>
+          <input id="set-editor-typed" type="text" autocomplete="off" spellcheck="false" autocapitalize="none">
+        </label>` : ''}`;
+  if (model.step === 'secret' && model.secret) return `
+        <div class="set-secret">
+          <p class="set-secret-text">${escapeHtml(model.secret.text)}</p>
+          <code class="set-secret-value" id="set-secret-value">${escapeHtml(model.secret.value)}</code>
+          <button type="button" class="ux-secondary-btn" id="set-secret-copy">Copy</button>
+        </div>`;
+  if (model.step === 'notice') return '';
+  if (model.kind === 'org') return (model.facts || []).map((f) => `
+        <p class="set-row-meta set-user-fact">${escapeHtml(f)}</p>`).join('');
+  if (model.kind === 'user') return `${(model.facts || []).map((f) => `
+        <p class="set-row-meta set-user-fact">${escapeHtml(f)}</p>`).join('')}
+        <div class="set-row-actions set-user-actions" role="group" aria-label="${escapeHtml(`Actions on ${model.title}`)}">${(model.actions || []).map((a) => `
+          <button type="button" class="ux-secondary-btn" data-user-action="${escapeHtml(a.id)}">${escapeHtml(a.label)}</button>`).join('')}
+        </div>`;
+  return (model.fields || []).map((f) => fieldHtml(f, model.limits)).join('');
 }
 
 // The editor (buildSettingsEditorModel): a scrim and a modal dialog drawn
@@ -422,14 +556,18 @@ function editorActionsHtml(model) {
 // host.settings.save(draft); Delete… / Back → host.settings.step(step,
 // draft); the danger button → host.settings.confirm().
 export function renderSettingsEditor(container, model, host = appHost) {
-  const key = `${model.kind}:${model.id ?? 'new'}:${model.step}`;
+  // A user's dialog is drawn anew when its facts or its actions change (an
+  // action done: Disable… becomes Enable…); every other kind by record and
+  // the step drawn — a confirm step the rank lost (no confirm) is the edit
+  // step's, so its danger button goes and Delete… comes back with the reason.
+  const drawn = (model.step === 'confirm-delete' || model.step === 'confirm-action') && !model.confirm ? 'edit' : model.step;
+  const key = `${model.kind}:${model.id ?? 'new'}:${drawn}${model.kind === 'user' ? `:${shortHash(JSON.stringify([model.facts, model.actions]))}` : ''}`;
   const mounted = container.querySelector('.set-editor');
   if (mounted && mounted.getAttribute('data-editor-key') === key) {
     paintSettingsEditorStatus(container, model.status);
     paintEditorButtons(container, model);
     return;
   }
-  const confirming = (model.step === 'confirm-delete' || model.step === 'confirm-action') && model.confirm;
   container.innerHTML = `
     <div class="set-editor-scrim" data-editor-close aria-hidden="true"></div>
     <div class="set-editor" role="dialog" aria-modal="true" aria-labelledby="set-editor-title" aria-describedby="set-editor-status" data-kind="${escapeHtml(model.kind)}" data-record-id="${escapeHtml(String(model.id ?? ''))}" data-editor-key="${escapeHtml(key)}" tabindex="-1">
@@ -438,8 +576,7 @@ export function renderSettingsEditor(container, model, host = appHost) {
         <h2 class="set-editor-title" id="set-editor-title">${escapeHtml(model.title)}</h2>
         <button type="button" class="set-editor-close" data-editor-close aria-label="Close the editor (Esc)"><span aria-hidden="true">esc</span></button>
       </header>
-      <div class="set-editor-body">${confirming ? `
-        <p class="set-confirm" id="set-editor-confirm-text">${escapeHtml(model.confirm.text)}</p>` : model.fields.map((f) => fieldHtml(f, model.limits)).join('')}
+      <div class="set-editor-body">${editorBodyHtml(model)}
       </div>
       <footer class="set-editor-foot">
         <div class="set-editor-status is-${escapeHtml(model.status.kind)}" id="set-editor-status" role="status" aria-live="polite">${escapeHtml(model.status.text)}</div>
@@ -459,7 +596,9 @@ export function renderSettingsEditor(container, model, host = appHost) {
   const segs = wireSegmented(container, model.fields || [], {
     explain: (reason) => act().explain?.(reason),
     // Add member: "by login" / "by verified email" relabels the one input.
+    // A box drawn on a choice (the join role's admin) follows it.
     change: (name, value) => {
+      GATES.get(container)?.();
       if (model.kind !== 'member-add' || name !== 'by') return;
       const input = container.querySelector(`#${fieldId('value')}`);
       const label = input?.closest?.('.set-editor-field')?.querySelector?.('.set-editor-label');
@@ -473,8 +612,33 @@ export function renderSettingsEditor(container, model, host = appHost) {
   const readDraft = () => Object.fromEntries((model.fields || []).map((f) => {
     if (f.type === 'segmented' || f.type === 'radio') return [f.name, Object.hasOwn(segs, f.name) ? segs[f.name] : (f.value ?? null)];
     if (f.type === 'select' && f.disabled) return [f.name, undefined];
+    if (f.type === 'checkbox') return [f.name, (container.querySelector(`#${fieldId(f.name)}`)?.checked ?? f.checked) === true];
     return [f.name, container.querySelector(`#${fieldId(f.name)}`)?.value ?? f.value];
   }));
+  // A box drawn on a choice is shown while the choice holds; one that is
+  // required and unticked keeps Save unavailable with its reason (the
+  // join role's admin: "tick the box first"). Answers that reason, or null.
+  const gate = () => {
+    let reason = null;
+    for (const f of (model.fields || []).filter((x) => x.type === 'checkbox')) {
+      const shown = !f.showWhen || (Object.hasOwn(segs, f.showWhen.field) ? segs[f.showWhen.field] : f.showWhen.now ? f.showWhen.value : null) === f.showWhen.value;
+      const wrap = container.querySelector(`#${fieldId(f.name)}-field`);
+      if (wrap) wrap.hidden = !shown;
+      const ticked = (container.querySelector(`#${fieldId(f.name)}`)?.checked ?? f.checked) === true;
+      if (shown && f.required && !ticked && reason === null) reason = f.required;
+    }
+    const now = EDITOR_MODEL.get(container) || model;
+    const save = container.querySelector('#set-editor-save');
+    if (save && now.primary?.enabled && !now.saving) {
+      if (reason) markUnavailable(save, reason);
+      else markAvailable(save);
+    }
+    return reason;
+  };
+  GATES.set(container, gate);
+  for (const f of (model.fields || []).filter((x) => x.type === 'checkbox')) {
+    container.querySelector(`#${fieldId(f.name)}`)?.addEventListener('change', () => gate());
+  }
   // A select drawn aria-disabled cannot change: a change is undone and its reason said.
   for (const f of (model.fields || []).filter((x) => x.type === 'select' && x.disabled)) {
     const el = container.querySelector(`#${fieldId(f.name)}`);
@@ -488,6 +652,8 @@ export function renderSettingsEditor(container, model, host = appHost) {
       if (now.primary.reason && !now.saving) act().explain?.(now.primary.reason);
       return;
     }
+    const held = gate();
+    if (held) { act().explain?.(held); return; }
     act().save?.(readDraft());
   });
   container.querySelector('#set-editor-delete')?.addEventListener('click', () => {
@@ -496,11 +662,49 @@ export function renderSettingsEditor(container, model, host = appHost) {
     act().step?.('confirm-delete', readDraft());
   });
   container.querySelector('#set-editor-back')?.addEventListener('click', () => act().step?.('edit'));
+  // A user's actions: each opens its confirm step, or says why it is unavailable.
+  container.querySelectorAll('[data-user-action]').forEach((btn) => {
+    const a = (model.actions || []).find((x) => x.id === btn.dataset.userAction);
+    if (a && !a.enabled) markUnavailable(btn, a.reason);
+    btn.addEventListener('click', () => {
+      if (!a || !a.enabled) { host.settings?.explain?.(a?.reason ?? null); return; }
+      host.settings?.step?.(`confirm-action:${a.id}`);
+    });
+  });
+  container.querySelector('#set-secret-copy')?.addEventListener('click', () => host.settings?.copySecret?.());
+  container.querySelector('#set-editor-signin')?.addEventListener('click', () => host.settings?.signIn?.());
+  container.querySelector('#set-editor-switch')?.addEventListener('click', () => {
+    if (model.switchTo) host.settings?.switchTo?.(model.switchTo.orgId, 'members');
+  });
+  // A removal asking for the id typed: the danger button follows the input.
+  const typedInput = container.querySelector('#set-editor-typed');
+  typedInput?.addEventListener('input', () => paintEditorButtons(container, EDITOR_MODEL.get(container) || model));
   container.querySelector('#set-editor-confirm')?.addEventListener('click', () => {
     const now = EDITOR_MODEL.get(container) || model;
     if (now.saving) return;
+    const typed = now.confirm?.typed ?? null;
+    if (typed) {
+      const value = String(container.querySelector('#set-editor-typed')?.value ?? '').trim();
+      if (value !== typed) { act().explain?.(`Type ${typed} to remove it`); return; }
+      act().confirm?.(value);
+      return;
+    }
     act().confirm?.();
   });
+}
+
+// Undo markUnavailable (a gate lifted: the box ticked).
+function markAvailable(control) {
+  control.setAttribute('aria-disabled', 'false');
+  control.classList?.remove?.('is-unavailable');
+  control.querySelector?.('.svc-why')?.remove?.();
+}
+
+// A short, stable digest of a string (an editor key's part; not a secret's).
+function shortHash(text) {
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+  return h.toString(36);
 }
 
 // The segmented groups: a click checks one; ArrowLeft / ArrowRight / Home /
@@ -543,22 +747,26 @@ function wireSegmented(container, fields, { explain = null, change = null } = {}
 }
 
 // The model the buttons were last painted from (a repaint in place keeps
-// the listeners, which read it).
+// the listeners, which read it), and the dialog's gate (a required box).
 const EDITOR_MODEL = new WeakMap();
+const GATES = new WeakMap();
 
 // The buttons' state: the primary aria-disabled while a call is pending,
 // and unavailable with its reason for a rank that cannot use it (never
 // `disabled`: the reason stays reachable); the same for Delete….
 function paintEditorButtons(container, model) {
   EDITOR_MODEL.set(container, model);
-  const save = container.querySelector('#set-editor-save');
+  const save = model.primary ? container.querySelector('#set-editor-save') : null;
   if (save) {
     if (!model.primary.enabled && !model.saving) markUnavailable(save, model.primary.reason);
     else save.setAttribute('aria-disabled', model.saving ? 'true' : 'false');
   }
   const del = container.querySelector('#set-editor-delete');
   if (del && model.remove && !model.remove.enabled) markUnavailable(del, model.remove.reason);
-  container.querySelector('#set-editor-confirm')?.setAttribute('aria-disabled', model.saving ? 'true' : 'false');
+  const typed = model.confirm?.typed ?? null;
+  const mismatch = Boolean(typed) && String(container.querySelector('#set-editor-typed')?.value ?? '').trim() !== typed;
+  container.querySelector('#set-editor-confirm')?.setAttribute('aria-disabled', model.saving || mismatch ? 'true' : 'false');
+  GATES.get(container)?.();
 }
 
 // The editor's status line repainted in place (the live region stays the

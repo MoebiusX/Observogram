@@ -16,7 +16,7 @@ import {
 } from './constants.mjs';
 import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } from './state.mjs';
 import {
-  api, loadCatalog, loadTaxonomy, validateUploaded, registeredOrValidated, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError, deployRefusal,
+  api, loadCatalog, loadTaxonomy, validateUploaded, registeredOrValidated, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, savedOrgBy, orgChipModel, deniedError, deployRefusal,
   setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls, signOutOthersText, recallMcpEndpoint, rememberMcpEndpoint,
   rememberLiveJob, recallLiveJob, forgetLiveJob,
   loadDeployProfiles, storeDeployProfile, removeDeployProfile,
@@ -74,10 +74,14 @@ import {
   buildMemberAddBody, memberSaveStatus, orgRenameStatus, lastAdmin, leftOrgText,
   buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
   mcpTargetModel, mcpTargetBody, mcpTargetMissingText, mcpRegisterCheck, profileEndpointNote, endpointDrift,
+  buildUsersSectionModel, buildUserCreateBody, userCreateStatus, userActionStatus, temporaryPassword,
+  activeOrgChoice, isActingOrg, orgChipEntries, orgChipLabel, actingRecovery,
+  buildOrgsSectionModel, buildOrgCreateBody, orgCreateStatus, orgRemoveStatus, buildJoinRoleSectionModel, joinRoleBody, joinRoleStatus,
 } from './settings-model.mjs';
 import {
   loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
   addMember, patchMember, removeMember, renameOrg, loadAudit,
+  loadUsers, createUser, userAction, setOwner, loadAdminOrgs, loadJoinRole, createOrg, removeOrg, putJoinRole,
 } from './settings-api.mjs';
 import { renderSettings, renderSettingsEditor, renderMcpTarget, readAuditDrafts } from './settings-view.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
@@ -1492,7 +1496,7 @@ function installObservaChrome(chrome) {
             <div class="observa-adv-menu-head">Administration</div>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="settings">
               <span class="observa-adv-item-label">Settings</span>
-              <span class="observa-adv-item-sub">environments, MCP endpoints, members, the audit…</span>
+              <span class="observa-adv-item-sub">environments, MCP endpoints, members, the audit, users, organisations, the join role…</span>
             </button>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="mcp">
               <span class="observa-adv-item-label">Live MCP connection</span>
@@ -1686,8 +1690,18 @@ async function boot() {
   // The account menu before the first catalogue read: a signed-in user the
   // org middleware refuses (no membership) still has a way to sign out.
   setupIdentityChip();
-  try { await loadCatalog(); }
+  try { await loadCatalog(); setActingRecoveryTried(false); }
   catch (e) {
+    // An owner's acting org refused (removed since): reload once into the
+    // first membership, or none (design §3.5, D-M; T25).
+    const recovery = actingRecovery({ identity: state.identity, orgId: getActiveOrg(), error: e, tried: actingRecoveryTried() });
+    if (recovery) {
+      setActingRecoveryTried(true);
+      persistence.suspend();
+      setActiveOrg(recovery.to);
+      window.location.reload();
+      return;
+    }
     if (e.denied === 'org') {
       // Signed in, in no organisation (STORE_PLAN §6, slice 6a): the server's
       // sentence as is, under the chrome — not the API-unreachable screen.
@@ -2315,7 +2329,10 @@ let settingsFocusNext = false;
 // a downgrade a read met, each section's status line, the endpoints read's
 // refusal. Never persisted; a new entry starts afresh.
 function freshSettings() {
-  return { probe: null, denied: null, deniedAdmin: null, status: {}, members: null, org: null, membersError: null, endpointsError: null, audit: null };
+  return {
+    probe: null, denied: null, deniedAdmin: null, deniedOwn: null, status: {}, members: null, org: null, membersError: null, endpointsError: null, audit: null,
+    users: null, usersError: null, orgs: null, orgsError: null, joinRole: null, joinRoleError: null,
+  };
 }
 
 // What this reader may do in Settings (settings-model.mjs settingsAccessModel)
@@ -2326,6 +2343,12 @@ function settingsAccess() {
   const access = settingsAccessModel({ access: state.access, identity: state.identity, probe: state.settings?.probe ?? null, chromeName: state.brand?.chrome?.name });
   const denied = state.settings?.denied;
   const deniedAdmin = state.settings?.deniedAdmin;
+  const deniedOwn = state.settings?.deniedOwn;
+  if (!denied && !deniedAdmin && deniedOwn) {
+    // An owner's read or write refused by the role (no longer an owner): the
+    // deployment's controls go, with the server's sentence; the org's stay.
+    return { ...access, owner: false, can: { ...access.can, own: false, createOrg: false }, why: { ...access.why, own: deniedOwn, createOrg: deniedOwn } };
+  }
   if (!denied && deniedAdmin) {
     // An admin write refused by the role (demoted meanwhile): the admin's
     // controls and the owner's go, with the server's sentence; the rest stays.
@@ -2437,6 +2460,8 @@ async function loadSettingsSection(id, { notice = null } = {}) {
   repaintSettings();
   if (id === 'members') return loadMembersSection(settings, gen, notice);
   if (id === 'audit') return loadAuditSection(settings, gen, notice);
+  if (id === 'users') return loadUsersSection(settings, gen, notice);
+  if (id === 'orgs' || id === 'join-role') return loadDeploymentSection(id, settings, gen, notice);
   let endpointsRefusal = null;
   await Promise.all([
     refreshServices(),
@@ -2484,16 +2509,74 @@ async function loadMembersSection(settings, gen, notice) {
 // sentence; the session or the membership every control. The frame moves to
 // a section the rank reads, read with the sentence in its status line.
 // Answers true when it moved.
-function adminReadRefused(settings, refusal, gen, id) {
+function adminReadRefused(settings, refusal, gen, id, { need = 'admin' } = {}) {
   if (!refusal || !['auth', 'role', 'posture', 'org'].includes(refusal.denied)) return false;
-  if (refusal.denied === 'role') settings.deniedAdmin = refusal.message || 'refused';
+  if (refusal.denied === 'role' && need === 'own') settings.deniedOwn = refusal.message || 'refused';
+  else if (refusal.denied === 'role') settings.deniedAdmin = refusal.message || 'refused';
   else settings.denied = refusal.message || 'refused';
   forgetSettingsAbove(settingsAccess());
   if (gen === settingsGeneration && state.settingsSection && state.settingsSection !== id) {
-    loadSettingsSection(state.settingsSection, { notice: settings.denied || settings.deniedAdmin });
+    loadSettingsSection(state.settingsSection, { notice: settings.denied || settings.deniedAdmin || settings.deniedOwn });
     return true;
   }
   return false;
+}
+
+// The deployment's users (GET /api/admin/users, an owner's read), with the
+// live organisations a new user may join (GET /api/admin/orgs) and the
+// sign-in mode the server runs (GET /api/admin/join-role — a dialog says when
+// a local user cannot sign in here, A13). The users' refusal is the
+// section's; the other two only narrow the dialog (no organisation select,
+// no mode line) when they fail.
+async function loadUsersSection(settings, gen, notice) {
+  const [users, orgs, joinRole] = await Promise.allSettled([loadUsers(), loadAdminOrgs(), loadJoinRole()]);
+  if (state.settings === settings) {
+    Object.assign(settings, {
+      users: users.status === 'fulfilled' ? users.value : null,
+      usersError: users.status === 'fulfilled' ? null : (users.reason?.message || 'no answer'),
+      orgs: orgs.status === 'fulfilled' ? orgs.value : null,
+      joinRole: joinRole.status === 'fulfilled' ? joinRole.value : null,
+    });
+  }
+  if (state.mode !== 'settings' || state.settings !== settings) return;
+  if (adminReadRefused(settings, users.status === 'rejected' ? users.reason : null, gen, 'users', { need: 'own' })) return;
+  settings.status.users = { kind: 'ok', text: notice ?? '' };
+  if (gen !== settingsGeneration || state.settingsSection !== 'users') return;
+  repaintSettings();
+}
+
+// The organisations (GET /api/admin/orgs) and the join role (GET
+// /api/admin/join-role, with the organisations for the default org's name):
+// an owner's reads. The section's own read's refusal is its status line; a
+// refusal by the gate downgrades the frame first.
+async function loadDeploymentSection(id, settings, gen, notice) {
+  const [orgs, joinRole] = await Promise.allSettled([loadAdminOrgs(), id === 'join-role' ? loadJoinRole() : Promise.resolve(settings.joinRole)]);
+  if (state.settings === settings) {
+    Object.assign(settings, {
+      orgs: orgs.status === 'fulfilled' ? orgs.value : null,
+      orgsError: orgs.status === 'fulfilled' ? null : (orgs.reason?.message || 'no answer'),
+    });
+    if (id === 'join-role') {
+      Object.assign(settings, {
+        joinRole: joinRole.status === 'fulfilled' ? joinRole.value : null,
+        joinRoleError: joinRole.status === 'fulfilled' ? null : (joinRole.reason?.message || 'no answer'),
+      });
+    }
+  }
+  if (state.mode !== 'settings' || state.settings !== settings) return;
+  const own = id === 'orgs' ? orgs : joinRole;
+  if (adminReadRefused(settings, own.status === 'rejected' ? own.reason : null, gen, id, { need: 'own' })) return;
+  settings.status[id] = { kind: 'ok', text: notice ?? '' };
+  if (gen !== settingsGeneration || state.settingsSection !== id) return;
+  repaintSettings();
+}
+
+// The default organisation's name, as GET /api/admin/orgs listed it (its id
+// when the list was not read).
+function settingsDefaultOrgName() {
+  const doc = state.settings?.orgs;
+  if (!doc?.defaultOrg) return null;
+  return (doc.orgs || []).find((o) => o.id === doc.defaultOrg)?.name ?? doc.defaultOrg;
 }
 
 // The audit (GET /api/audit, an admin's read; the deployment's rows an
@@ -2577,10 +2660,22 @@ function settingsSectionView(id, access) {
     const model = buildAuditSectionModel({ doc: audit.doc, rows: audit.rows, filters: audit.filters, access, orgId: state.orgId, formatTime: auditTime, error: audit.error });
     return { id, head, model, status, filters: audit.filters };
   }
+  if (id === 'users') {
+    const model = buildUsersSectionModel({ users: settings.users, access, me: signedInLogin(), error: settings.usersError, formatTime: auditTime });
+    return { id, head, model, status };
+  }
+  if (id === 'orgs') {
+    const model = buildOrgsSectionModel({ orgs: settings.orgs?.orgs ?? null, defaultOrg: settings.orgs?.defaultOrg ?? null, access, activeOrg: state.orgId, error: settings.orgsError, formatTime: auditTime });
+    return { id, head, model, status };
+  }
+  if (id === 'join-role') {
+    const model = buildJoinRoleSectionModel({ doc: settings.joinRole, access, defaultOrgName: settingsDefaultOrgName(), error: settings.joinRoleError });
+    return { id, head, model, status };
+  }
   if (id === 'members') {
     const model = buildMembersSectionModel({
       members: settings.members, org: settings.org ?? { id: state.orgId, name: state.orgName }, access,
-      me: signedInLogin(), error: settings.membersError,
+      me: signedInLogin(), acting: settingsActing(), error: settings.membersError,
     });
     return { id, head, model, status };
   }
@@ -2597,12 +2692,18 @@ function settingsSectionView(id, access) {
   return { id, head, model, status };
 }
 
+// An owner acting in the org on screen without being a member of it (D-M):
+// the head and the Members scope sentence say so.
+function settingsActing() {
+  return isActingOrg({ identity: state.identity, orgId: state.orgId });
+}
+
 // renderMainView's branch for mode 'settings': the frame and the section
 // from the state, the focus on the h1 when just entered.
 function renderSettingsHost(view, auditDrafts = null) {
   const access = settingsAccess();
   const section = settingsSectionFor(access, state.settingsSection, BUILT_SECTIONS);
-  const frame = buildSettingsFrameModel({ access, section, orgName: state.orgName, orgId: state.orgId, builtSections: BUILT_SECTIONS });
+  const frame = buildSettingsFrameModel({ access, section, orgName: state.orgName, orgId: state.orgId, acting: settingsActing(), builtSections: BUILT_SECTIONS });
   const sectionView = section ? settingsSectionView(section, access) : null;
   if (sectionView?.id === 'audit') sectionView.drafts = auditDrafts;
   renderSettings(view, frame, sectionView, settingsHost);
@@ -2637,7 +2738,11 @@ function reloadIntoSettings(orgId, section = null) {
 // the service whose page opened it (null from Settings) — leaving that page
 // closes it, as leaving Settings closes one opened there. `endpointsError`
 // is the refusal of the endpoint list read when the editor opened (A4).
-let settingsEditor = null;   // { kind, id, serviceId, page, record, draft, status, step, opener, endpointsError } | null
+let settingsEditor = null;   // { kind, id, serviceId, page, record, draft, status, step, action, opener, endpointsError, secret, signIn } | null
+// A temporary password (users, D-D) lives in `settingsEditor.secret` only —
+// never in `state`, the draft, a status, a toast, announce() or the console —
+// for as long as the dialog shows it; while it does, a pagehide listener
+// empties the dialog (the back-forward cache would restore it — C-4).
 // Bumped by every open: an open that awaited the endpoint list and was
 // overtaken meanwhile (another open, the page left) draws nothing.
 let settingsEditorOpening = 0;
@@ -2685,8 +2790,11 @@ function adoptEnvironment(env, { remove = false } = {}) {
 // The record the editor is over, as the section's list has it now.
 function settingsEditorRecord(ed) {
   if (ed.kind === 'org-name') return settingsOrgRecord();
+  if (ed.kind === 'join-role') return state.settings?.joinRole ?? ed.record;
   if (ed.id === null) return null;
+  if (ed.kind === 'org') return Array.isArray(state.settings?.orgs?.orgs) ? (state.settings.orgs.orgs.find((o) => o.id === ed.id) ?? undefined) : ed.record;
   if (ed.kind === 'member') return Array.isArray(state.settings?.members) ? (state.settings.members.find((m) => m.userId === ed.id) ?? undefined) : ed.record;
+  if (ed.kind === 'user') return Array.isArray(state.settings?.users) ? (state.settings.users.find((u) => u.id === ed.id) ?? undefined) : ed.record;
   if (ed.kind === 'endpoint' && Array.isArray(state.mcpEndpoints)) return state.mcpEndpoints.find((ep) => ep.id === ed.id) ?? undefined;
   if (ed.kind === 'environment' && (state.mode === 'service' || Array.isArray(state.services))) return environmentRecord(ed.id) ?? undefined;
   return ed.record;
@@ -2713,6 +2821,7 @@ function syncSettingsEditor() {
   const record = ed ? settingsEditorRecord(ed) : null;
   if (!ed || !settingsEditorHere(ed) || record === undefined) {
     settingsEditor = null;
+    dropSettingsSecret(ed);
     if (el && el.innerHTML) el.innerHTML = '';
     return;
   }
@@ -2723,6 +2832,9 @@ function syncSettingsEditor() {
       access: settingsAccess(), orgName: state.orgName, orgId: state.orgId, services: ed.kind === 'environment' ? settingsEditorServices() : state.services,
       endpoints: state.mcpEndpoints, endpointsError: ed.endpointsError ?? state.settings?.endpointsError ?? null, serviceId: ed.serviceId ?? null,
       members: state.settings?.members ?? null, me: signedInLogin(),
+      users: state.settings?.users ?? null, orgs: state.settings?.orgs?.orgs ?? null, defaultOrg: state.settings?.orgs?.defaultOrg ?? null,
+      joinRole: state.settings?.joinRole ?? null, action: ed.action ?? null, secret: ed.secret ?? null, signIn: ed.signIn === true, formatTime: auditTime,
+      defaultOrgName: settingsDefaultOrgName(), created: ed.created ?? null,
     },
   });
   renderSettingsEditor(settingsEditorHost(), model, settingsHost);
@@ -2737,6 +2849,8 @@ function settingsOpenerSelector(el) {
   if (el.dataset?.editEnv) return `[data-edit-env="${CSS.escape(el.dataset.editEnv)}"]`;
   if (el.dataset?.memberRole) return `[data-member-role="${CSS.escape(el.dataset.memberRole)}"]`;
   if (el.dataset?.memberRemove) return `[data-member-remove="${CSS.escape(el.dataset.memberRemove)}"]`;
+  if (el.dataset?.userManage) return `[data-user-manage="${CSS.escape(el.dataset.userManage)}"]`;
+  if (el.dataset?.orgRemove) return `[data-org-remove="${CSS.escape(el.dataset.orgRemove)}"]`;
   return el.id ? `#${CSS.escape(el.id)}` : null;
 }
 
@@ -2753,7 +2867,8 @@ async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'e
   if (!BUILT_EDITORS.includes(kind)) return;
   if (kind === 'environment' ? !(state.mode === 'settings' || state.mode === 'service') : state.mode !== 'settings') return;
   const access = settingsAccess();
-  const need = kind === 'environment' ? 'operate' : 'admin';
+  const need = kind === 'environment' ? 'operate' : kind === 'org-create' ? 'createOrg'
+    : ['user', 'user-create', 'org', 'join-role'].includes(kind) ? 'own' : 'admin';
   if (!access.can[need]) { explainUnavailable(access.why[need]); return; }
   const opening = ++settingsEditorOpening;
   const opener = settingsOpenerSelector(document.activeElement);
@@ -2761,6 +2876,8 @@ async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'e
   const find = () => {
     if (kind === 'endpoint') return Array.isArray(state.mcpEndpoints) ? state.mcpEndpoints.find((ep) => ep.id === id) : null;
     if (kind === 'member') return Array.isArray(state.settings?.members) ? state.settings.members.find((m) => m.userId === id) : null;
+    if (kind === 'user') return Array.isArray(state.settings?.users) ? state.settings.users.find((u) => u.id === id) : null;
+    if (kind === 'org') return Array.isArray(state.settings?.orgs?.orgs) ? state.settings.orgs.orgs.find((o) => o.id === id) : null;
     if (kind === 'org-name') return settingsOrgRecord();
     return environmentRecord(id);
   };
@@ -2778,14 +2895,16 @@ async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'e
       if (opening !== settingsEditorOpening || state.mode !== mode || (page !== null && state.serviceId !== page)) return;
     }
   }
-  const record = id === null ? null : find();
-  if (id !== null && !record) return;
+  // The join role's dialog is over the role as read (none read: nothing to change).
+  const record = kind === 'join-role' ? (state.settings?.joinRole ?? null) : id === null ? null : find();
+  if ((id !== null || kind === 'join-role') && !record) return;
   closeMcpPanel();
   const draftPanel = document.getElementById('draft-mcp-panel');
   if (draftPanel) draftPanel.hidden = true;
+  dropSettingsSecret(settingsEditor);
   settingsEditor = {
     kind, id, serviceId: record?.serviceId ?? serviceId ?? page, page: kind === 'environment' ? page : null,
-    record, draft: null, status: null, step: kind === 'member' && step === 'confirm-delete' ? 'confirm-delete' : 'edit', opener, endpointsError,
+    record, draft: null, status: null, step: (kind === 'member' || kind === 'org') && step === 'confirm-delete' ? 'confirm-delete' : 'edit', opener, endpointsError,
   };
   syncSettingsEditor();
   focusSettingsEditor();
@@ -2793,9 +2912,28 @@ async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'e
 
 function focusSettingsEditor() {
   const dialog = document.querySelector('#set-editor-host .set-editor');
-  const first = dialog?.querySelector('input, textarea, select') || dialog?.querySelector('#set-editor-confirm')
+  // The first field drawn (a box shown only on a choice may be hidden).
+  const first = [...(dialog?.querySelectorAll('input, textarea, select') || [])].find((el) => !el.closest('[hidden]'))
+    || dialog?.querySelector('#set-editor-confirm')
+    || dialog?.querySelector('#set-secret-copy, #set-editor-signin, #set-editor-switch, [data-user-action]')
     || dialog?.querySelector('[role="radio"][tabindex="0"]') || dialog;
   first?.focus({ preventScroll: true });
+}
+
+// A refusal that redrew the dialog — the gate's (the rank, the session or the
+// posture went): a confirm step the rank lost is drawn as the edit step, so
+// the danger button under the focus went with it, and the status region now
+// holding the refusal is a new node, whose sentence no reader hears. So the
+// refusal is announced and the focus goes back into the dialog, as after a
+// create's redraw. `drawn` the status region before the refusal: still the
+// same node, it spoke for itself and the focus never left.
+function refusalRedrawn(ed, drawn) {
+  if (settingsEditor !== ed) return;
+  const now = document.getElementById('set-editor-status');
+  if (!now || now === drawn) return;
+  announce(ed.status?.text ?? now.textContent);
+  const dialog = document.querySelector('#set-editor-host .set-editor');
+  if (dialog && !dialog.contains(document.activeElement)) focusSettingsEditor();
 }
 
 // Close (the scrim, esc, Close, Escape, a delete done, leaving Settings):
@@ -2803,6 +2941,7 @@ function focusSettingsEditor() {
 function closeSettingsEditor({ focus = true } = {}) {
   if (!settingsEditor) return;
   const opener = settingsEditor.opener;
+  dropSettingsSecret(settingsEditor);
   settingsEditor = null;
   const el = document.getElementById('set-editor-host');
   if (el) el.innerHTML = '';
@@ -2814,7 +2953,10 @@ function closeSettingsEditor({ focus = true } = {}) {
 function setSettingsEditorStep(step, draft = null) {
   if (!settingsEditor || settingsEditor.status?.kind === 'pending') return;
   if (draft) settingsEditor.draft = draft;
-  settingsEditor.step = ['confirm-delete', 'confirm-action'].includes(step) ? step : 'edit';
+  // 'confirm-action:<action>' — a user's action (reset, disable, …) to confirm.
+  const [base, action = null] = String(step).split(':');
+  settingsEditor.step = ['confirm-delete', 'confirm-action'].includes(base) ? base : 'edit';
+  settingsEditor.action = settingsEditor.step === 'confirm-action' ? (action ?? settingsEditor.action ?? null) : null;
   settingsEditor.status = null;
   syncSettingsEditor();
   focusSettingsEditor();
@@ -2824,9 +2966,10 @@ function setSettingsEditorStep(step, draft = null) {
 // server closed the API (every control goes, with the server's sentence), or
 // the role went (the admin's controls go). Then what the rank may no longer
 // read is forgotten and the page repaints (design §4).
-function settingsWriteRefused(e) {
+function settingsWriteRefused(e, { need = 'admin' } = {}) {
   if (!state.settings) return;
-  if (e?.denied === 'role') state.settings.deniedAdmin = e.message || 'refused';
+  if (e?.denied === 'role' && need === 'own') state.settings.deniedOwn = e.message || 'refused';
+  else if (e?.denied === 'role') state.settings.deniedAdmin = e.message || 'refused';
   else if (['auth', 'posture', 'org'].includes(e?.denied)) state.settings.denied = e.message || 'refused';
   else return;
   forgetSettingsAbove(settingsAccess());
@@ -2853,6 +2996,9 @@ async function saveSettingsEditor(draft) {
   if (ed.kind === 'org-name') return saveOrgName(ed, draft);
   if (ed.kind === 'member-add') return saveMemberAdd(ed, draft);
   if (ed.kind === 'member') return saveMemberRole(ed, draft);
+  if (ed.kind === 'user-create') return createUserEditor(ed, draft);
+  if (ed.kind === 'org-create') return createOrgEditor(ed, draft);
+  if (ed.kind === 'join-role') return saveJoinRoleEditor(ed, draft);
   if (ed.kind !== 'endpoint') return null;
   ed.draft = draft;
   const record = ed.record;
@@ -2879,9 +3025,11 @@ async function saveSettingsEditor(draft) {
     }
   } catch (e) {
     if (settingsEditor !== ed) return null;
+    const drawn = document.getElementById('set-editor-status');
     ed.status = { kind: 'error', text: e?.message || 'no answer' };
     syncSettingsEditor();
     settingsWriteRefused(e);
+    refusalRedrawn(ed, drawn);
     return null;
   }
   const opened = settingsEditor === ed;
@@ -2896,10 +3044,12 @@ async function saveSettingsEditor(draft) {
 // The danger button of the delete step: DELETE, then the sentence naming the
 // environments it unbound (resolved through the services table as read
 // before the delete) in the section's status line; the dialog closes.
-async function confirmSettingsEditor() {
+async function confirmSettingsEditor(typed = null) {
   const ed = settingsEditor;
   if (!ed || ed.status?.kind === 'pending' || !ed.record) return null;
+  if (ed.kind === 'org' && ed.step === 'confirm-delete') return removeOrgEditor(ed, typed);
   if (ed.kind === 'member' && ed.step === 'confirm-action') return patchMemberRole(ed, ed.draft?.role);
+  if (ed.kind === 'user' && ed.step === 'confirm-action') return userActionEditor(ed);
   if (ed.step !== 'confirm-delete') return null;
   if (ed.kind === 'member') return removeMemberEditor(ed);
   if (ed.kind === 'environment') return deleteEnvironmentEditor(ed);
@@ -2910,9 +3060,11 @@ async function confirmSettingsEditor() {
   try { res = await deleteEndpoint(ed.record.id); }
   catch (e) {
     if (settingsEditor !== ed) return null;
+    const drawn = document.getElementById('set-editor-status');
     ed.status = { kind: 'error', text: e?.message || 'no answer' };
     syncSettingsEditor();
     settingsWriteRefused(e);
+    refusalRedrawn(ed, drawn);
     return null;
   }
   const status = endpointDeleteStatus(ed.record.name, res.unbound, state.services);
@@ -2927,11 +3079,13 @@ async function confirmSettingsEditor() {
 
 // A members write refused: the server's sentence in the dialog's status line
 // (the last-admin 409 among them, as served); the gate's refusals downgrade.
-function memberWriteRefused(ed, e) {
+function memberWriteRefused(ed, e, { need = 'admin' } = {}) {
   if (settingsEditor !== ed) return null;
+  const drawn = document.getElementById('set-editor-status');
   ed.status = { kind: 'error', text: e?.message || 'no answer' };
   syncSettingsEditor();
-  settingsWriteRefused(e);
+  settingsWriteRefused(e, { need });
+  refusalRedrawn(ed, drawn);
   return null;
 }
 
@@ -3048,7 +3202,8 @@ async function patchMemberRole(ed, role) {
 // section's status line. The reader removing themselves from the org on
 // screen never stays on it: the next request would carry an org they are no
 // longer in (A3, C-2) — the status says so, and the page reloads into their
-// next organisation (or the no-org screen).
+// next organisation (or the no-org screen). An owner is never refused: the
+// page reloads into the same org's members, acted in from outside (D-M).
 async function removeMemberEditor(ed) {
   const login = ed.record.login;
   const orgName = settingsOrgRecord().name || state.orgName || state.orgId;
@@ -3057,10 +3212,12 @@ async function removeMemberEditor(ed) {
   try { await removeMember(ed.record.userId); }
   catch (e) { return memberWriteRefused(ed, e); }
   if (login === signedInLogin()) {
-    const text = leftOrgText(orgName, settingsAccess().owner);
+    const owner = settingsAccess().owner;
+    const text = leftOrgText(orgName, owner);
     if (settingsEditor === ed) { ed.status = { kind: 'saved', text }; syncSettingsEditor(); }
     announce(text);
-    leaveOrgAndReload();
+    if (owner) reloadIntoSettings(state.orgId, 'members');
+    else leaveOrgAndReload();
     return { ok: true, left: true };
   }
   const text = `Removed ${login}.`;
@@ -3081,6 +3238,250 @@ function leaveOrgAndReload() {
   window.location.reload();
 }
 
+// ---------- the deployment's users (design §5.7 — an owner's) ----------
+
+// The temporary password: 20 random bytes from Web Crypto (D-D).
+function drawTemporaryPassword() {
+  return temporaryPassword(crypto.getRandomValues(new Uint8Array(20)));
+}
+
+// The pagehide listener held while a dialog shows a password (C-4): the
+// dialog is emptied before the page can enter the back-forward cache.
+function onSettingsSecretPagehide() {
+  closeSettingsEditor({ focus: false });
+}
+
+// The dialog now holds a password: the step that shows it, and the pagehide
+// clearing while it does.
+function holdSettingsSecret(ed, secret) {
+  ed.secret = secret;
+  ed.step = 'secret';
+  window.addEventListener('pagehide', onSettingsSecretPagehide);
+}
+
+// The dialog lets go of its password (Close, leaving, pagehide, a sign-in).
+function dropSettingsSecret(ed) {
+  if (!ed?.secret) return;
+  ed.secret = null;
+  window.removeEventListener('pagehide', onSettingsSecretPagehide);
+}
+
+// Copy: the clipboard, else the password selected for the reader to copy.
+// Nothing about it is announced but that it happened.
+async function copySettingsSecret() {
+  const value = settingsEditor?.secret?.value;
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+    announce('Copied.');
+  } catch {
+    const code = document.getElementById('set-secret-value');
+    const range = document.createRange();
+    if (code) { range.selectNodeContents(code); const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range); }
+    announce('Selected — copy it with the keyboard.');
+  }
+}
+
+// Go to sign-in: the dialog (and any password it shows) is cleared first.
+function goToSignIn() {
+  closeSettingsEditor({ focus: false });
+  window.location.assign('/auth/login');
+}
+
+// This browser's traces of a user whose session ends from Settings (their
+// own disable or sign-out everywhere — C-5): the MCP URLs, endpoints and
+// deploy profiles, every snapshot in every org, the recent services — as the
+// account menu's sign-out clears them. Nothing is written after.
+function forgetBrowserTraces(login) {
+  persistence.suspend();
+  forgetMcpUrls(login);
+  persistence.forget(login);
+  forgetRecentServices();
+}
+
+// Create (POST /api/admin/users) with a temporary password drawn here, then
+// the reset with the same value (POST …/password) so the account must change
+// it at first sign-in (D-D: the create alone leaves it unforced). The dialog
+// then shows the password once. A create that armed sign-in (the first
+// local user on a store never armed — D-E) makes no second call: /auth/me
+// says whether sign-in is on now (any further call would then redirect) —
+// a JSON answer when it is; without sign-in (OBSERVOGRAM_AUTH=off) the route
+// is not mounted and the shell answers instead, as the boot's
+// loadIdentity() reads it.
+async function createUserEditor(ed, draft) {
+  ed.draft = draft;
+  const body = buildUserCreateBody(draft);
+  ed.status = { kind: 'pending', text: 'Creating…' };
+  syncSettingsEditor();
+  const password = drawTemporaryPassword();
+  let answer;
+  try { answer = await createUser({ ...body, password }); }
+  catch (e) { return memberWriteRefused(ed, e, { need: 'own' }); }
+  if (settingsEditor !== ed) return null;
+  const login = answer.user?.login ?? body.login;
+  const orgs = state.settings?.orgs?.orgs || [];
+  const orgName = orgs.find((o) => o.id === body.orgId)?.name ?? null;
+  let reset = null;
+  let signIn = false;
+  let forced = false;
+  if (answer.armed) {
+    try {
+      const r = await fetch('/auth/me');
+      const body = r.ok ? await r.json().catch(() => null) : null;
+      signIn = Boolean(body && typeof body === 'object' && 'authenticated' in body);
+    } catch { signIn = false; }
+  } else {
+    try { await userAction(answer.user.id, 'password', { password }); reset = 'ok'; forced = true; }
+    catch (e) { reset = e?.message || 'no answer'; }
+  }
+  const status = userCreateStatus(answer, { login, orgId: body.orgId ?? null, orgName, reset: answer.armed ? 'ok' : reset, signIn });
+  if (settingsEditor !== ed) return null;
+  holdSettingsSecret(ed, { login, value: password, forced });
+  Object.assign(ed, { status, signIn, draft: null });
+  syncSettingsEditor();
+  document.getElementById('set-secret-copy')?.focus({ preventScroll: true });
+  announce(status.text);
+  if (answer.armed && signIn) return { ok: true, armed: true };
+  if (state.mode === 'settings' && state.settingsSection) await loadSettingsSection(state.settingsSection);
+  return { ok: true };
+}
+
+// One user action, confirmed: reset (a new temporary password, shown once),
+// disable / enable, sign out everywhere, make or revoke owner. The status
+// says what the server did. One's own disable or sign-out ends this
+// browser's session: its traces go first, then the sentence and Go to
+// sign-in — and no further call (it would redirect mid-dialog, T8). One's
+// own owner revoke reads /auth/me again and re-gates the page.
+async function userActionEditor(ed) {
+  const action = ed.action;
+  const row = ed.record;
+  if (!action || !row) return null;
+  const login = row.login;
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let answer;
+  let password = null;
+  try {
+    if (action === 'reset') { password = drawTemporaryPassword(); answer = await userAction(row.id, 'password', { password }); }
+    else if (action === 'disable' || action === 'enable' || action === 'signout') answer = await userAction(row.id, action);
+    else if (action === 'owner-grant' || action === 'owner-revoke') answer = await setOwner(row.id, action === 'owner-grant');
+    else return null;
+  } catch (e) { return memberWriteRefused(ed, e, { need: 'own' }); }
+  const status = userActionStatus(action, answer, { login, defaultOrg: state.settings?.orgs?.defaultOrg ?? null, open: settingsAccess().posture === 'open', joinRole: state.settings?.joinRole ?? null, kind: row.kind, me: signedInLogin() });
+  if (answer.you && (action === 'disable' || action === 'signout')) {
+    forgetBrowserTraces(signedInLogin());
+    if (settingsEditor === ed) { Object.assign(ed, { step: 'notice', action: null, status, signIn: true }); syncSettingsEditor(); }
+    document.getElementById('set-editor-signin')?.focus({ preventScroll: true });
+    announce(status.text);
+    return { ok: true, signedOut: true };
+  }
+  if (settingsEditor === ed) {
+    if (action === 'reset') holdSettingsSecret(ed, { login, value: password, forced: true });
+    else ed.step = 'edit';
+    Object.assign(ed, { action: null, status });
+    syncSettingsEditor();
+    focusSettingsEditor();
+  }
+  announce(status.text);
+  if (action === 'owner-revoke' && login === signedInLogin()) return afterOwnOwnerRevoke(status.text);
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
+// One's own owner role revoked: /auth/me read again; in an org this user is
+// a member of, the page re-gates (the deployment's sections go, with what
+// they held) and lands on a section the rank reads; else this browser
+// reloads into their first organisation.
+async function afterOwnOwnerRevoke(notice) {
+  closeSettingsEditor({ focus: false });
+  await loadIdentity();
+  const member = (state.identity?.orgs || []).some((o) => o.id === state.orgId);
+  if (!member) { leaveOrgAndReload(); return { ok: true, left: true }; }
+  await refreshAccess();
+  if (state.settings) state.settings.deniedOwn = null;
+  forgetSettingsAbove(settingsAccess());
+  updateObservaOrgChip();
+  if (state.mode === 'settings' && state.settingsSection) await loadSettingsSection(state.settingsSection, { notice });
+  document.querySelector('.set-title')?.focus({ preventScroll: true });
+  return { ok: true };
+}
+
+// ---------- the organisations and the join role (design §5.8–5.9 — an owner's) ----------
+
+// New organisation (POST /api/admin/orgs): the creator becomes its first
+// admin. The dialog then says where its files live — and that a directory
+// was taken over — and offers Switch to it (this browser reloads into its
+// Settings, design §3.5); the list is read anew.
+async function createOrgEditor(ed, draft) {
+  ed.draft = draft;
+  ed.status = { kind: 'pending', text: 'Creating…' };
+  syncSettingsEditor();
+  let answer;
+  try { answer = await createOrg(buildOrgCreateBody(draft)); }
+  catch (e) { return memberWriteRefused(ed, e, { need: 'own' }); }
+  const status = orgCreateStatus(answer);
+  if (settingsEditor === ed) {
+    Object.assign(ed, { status, step: 'notice', created: { id: answer.org?.id ?? buildOrgCreateBody(draft).id }, draft: null });
+    syncSettingsEditor();
+    document.getElementById('set-editor-switch')?.focus({ preventScroll: true });
+  }
+  announce(status.text);
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
+// Remove (DELETE /api/admin/orgs/:id), once its id is typed: the server's
+// note in the section's status line, the dialog closed. Removing the org
+// this browser is in reloads it into the first other organisation.
+async function removeOrgEditor(ed, typed) {
+  const org = ed.record;
+  if (String(typed ?? '').trim() !== org.id) { explainUnavailable(`Type ${org.id} to remove it`); return null; }
+  ed.status = { kind: 'pending', text: 'Removing…' };
+  syncSettingsEditor();
+  let answer;
+  try { answer = await removeOrg(org.id); }
+  catch (e) { return memberWriteRefused(ed, e, { need: 'own' }); }
+  const status = orgRemoveStatus(org, answer);
+  announce(status.text);
+  if (org.id === state.orgId) {
+    if (settingsEditor === ed) { ed.status = status; syncSettingsEditor(); }
+    leaveOrgAndReload();
+    return { ok: true, left: true };
+  }
+  // The row's Remove… goes with the org: the focus goes to the section's primary.
+  if (settingsEditor === ed) { ed.opener = null; closeSettingsEditor(); }
+  await rereadAfterSettingsWrite(status.text);
+  return { ok: true };
+}
+
+// Save on the join role (PUT /api/admin/join-role): the same role →
+// "Nothing changed." without a call; admin unticked → no call, the box's
+// reason (joinRoleBody answers null); else the body joinRoleBody builds —
+// `confirm` on an admin body only.
+async function saveJoinRoleEditor(ed, draft) {
+  ed.draft = draft;
+  const role = draft?.role ?? null;
+  if (role === (ed.record?.role ?? null)) {
+    ed.status = joinRoleStatus({ role, from: role });
+    syncSettingsEditor();
+    return { ok: true, changed: [] };
+  }
+  const body = joinRoleBody(role, draft?.confirm === true);
+  if (!body) { explainUnavailable('tick the box first'); return null; }
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let answer;
+  try { answer = await putJoinRole(body.role, body.confirm === true); }
+  catch (e) { return memberWriteRefused(ed, e, { need: 'own' }); }
+  const status = joinRoleStatus(answer);
+  if (state.settings?.joinRole) state.settings.joinRole = { ...state.settings.joinRole, role: answer.role };
+  if (settingsEditor === ed) Object.assign(ed, { status, draft: null, record: state.settings?.joinRole ?? ed.record });
+  syncSettingsEditor();
+  announce(status.text);
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
 // ---------- the environment editor (design §5.1–5.2: one editor, two doors) ----------
 
 // An environment write refused: the server's sentence in the status line; a
@@ -3089,10 +3490,12 @@ function leaveOrgAndReload() {
 function environmentWriteRefused(ed, e) {
   if (e?.denied === 'auth' || e?.denied === 'role') state.access = { ...(state.access || {}), canWrite: false, reason: e.message };
   if (settingsEditor !== ed) return;
+  const drawn = document.getElementById('set-editor-status');
   ed.status = { kind: 'error', text: e?.message || 'no answer' };
   syncSettingsEditor();
   settingsWriteRefused(e);
   if (state.mode === 'service' && (e?.denied === 'auth' || e?.denied === 'role')) repaintServicePage();
+  refusalRedrawn(ed, drawn);
 }
 
 // After a write: the cached verdicts of the service's packs are dropped (the
@@ -3220,11 +3623,14 @@ const settingsActions = {
   closeEditor: () => closeSettingsEditor(),
   save: (draft) => saveSettingsEditor(draft),
   step: (step, draft = null) => setSettingsEditorStep(step, draft),
-  confirm: () => confirmSettingsEditor(),
+  confirm: (typed = null) => confirmSettingsEditor(typed),
   auditApply: (filters) => applyAuditFilters(filters),
   auditMore: () => loadOlderAuditRows(),
   pickMcpTarget: (container, value) => pickMcpTarget(container, value),
   openMcpEndpoints: () => openMcpEndpointsFromPicker(),
+  copySecret: () => copySettingsSecret(),
+  signIn: () => goToSignIn(),
+  switchTo: (orgId, section = null) => { closeSettingsEditor({ focus: false }); reloadIntoSettings(orgId, section); },
 };
 const settingsHost = { renderMainView, renderTabs, settings: settingsActions };
 
@@ -3271,14 +3677,16 @@ function renderServiceGate() { renderHomeView(); }
 // OBSERVA bar — a switcher for a user in a second org, a label for one org
 // that is not the default one, nothing otherwise (orgChipModel). The list is
 // the user's memberships (/auth/me `orgs`: an org the chip offers is one the
-// next boot can re-select); the role in the title is the EFFECTIVE one the
-// guard applies in the active org (GET /api/orgs → state.access — an owner
+// next boot can re-select) and, for an owner acting in an org they are not a
+// member of, that org labelled `<name> — acting as owner` (D-M: the boot
+// keeps it; choosing a membership leaves it); the role in the title is the
+// EFFECTIVE one the guard applies in the active org (GET /api/orgs → state.access — an owner
 // reads admin), the membership's as the fallback before that call answered.
 // Called wherever the chrome repaints (updateObservaServiceChip).
 function updateObservaOrgChip() {
   const chip = document.getElementById('observa-org');
   if (!chip) return;
-  const orgs = state.identity?.orgs || [];
+  const orgs = orgChipEntries({ identity: state.identity, orgId: getActiveOrg(), orgName: state.orgName });
   const { kind, active } = orgChipModel(orgs, getActiveOrg());
   if (kind === 'none') { chip.hidden = true; return; }
   const name = document.getElementById('observa-org-name');
@@ -3289,7 +3697,6 @@ function updateObservaOrgChip() {
     for (const o of orgs) {
       const opt = document.createElement('option');
       opt.value = o.id;
-      opt.textContent = o.name || o.id;
       sel.appendChild(opt);
     }
     sel.addEventListener('change', () => {
@@ -3304,8 +3711,11 @@ function updateObservaOrgChip() {
     name.replaceWith(sel);
   }
   const sel = chip.querySelector('select');
-  if (sel) sel.value = active.id;
-  else name.textContent = active.name || active.id;
+  // The labels on every repaint: the acting org's name is known once GET /api/orgs answered.
+  if (sel) {
+    for (const opt of sel.options) { const o = orgs.find((e) => e.id === opt.value); if (o) opt.textContent = orgChipLabel(o); }
+    sel.value = active.id;
+  } else name.textContent = orgChipLabel(active);
   const role = (state.access?.posture === 'identity' && state.access.role) || active.effectiveRole || active.role || 'member';
   chip.title = `organisation: ${active.id} (role: ${role})`;
   chip.hidden = false;
@@ -7705,14 +8115,30 @@ async function loadIdentity() {
 
 // Stage 2 tenancy: pick the active org from the session's memberships
 // (/auth/me carries them in every identity posture) — the persisted choice
-// when still valid, the first membership otherwise. Without memberships
-// (the open posture) no org header is sent: the server runs the request in
-// the default org. The header is sent whatever the ORG chip shows.
+// when still valid, the first membership otherwise; an owner keeps a
+// persisted org they are not a member of when they persisted it (acting in
+// it, design §3.5 D-M; never one another login chose on this browser). The
+// server is the check, and the boot recovers once when it refuses.
+// Without memberships (the open posture) no org header is sent: the server
+// runs the request in the default org. The header is sent whatever the ORG
+// chip shows.
 function resolveActiveOrg() {
-  const orgs = state.identity?.orgs || [];
-  if (!orgs.length) { setActiveOrg(null); return; }
-  const saved = savedOrg();
-  setActiveOrg((orgs.find(o => o.id === saved) || orgs[0]).id);
+  setActiveOrg(activeOrgChoice({ identity: state.identity, saved: savedOrg(), savedBy: savedOrgBy() }));
+}
+
+// The boot's one-time recovery from an acting org the server refuses (an
+// owner's, removed since — settings-model.mjs actingRecovery): a
+// sessionStorage flag, set before the reload and dropped once the catalogue
+// answers, so a second refusal draws the no-org screen instead of looping.
+const ACTING_RECOVERY_KEY = 'studioActingRecovery.v1';
+function actingRecoveryTried() {
+  try { return sessionStorage.getItem(ACTING_RECOVERY_KEY) === '1'; } catch { return false; }
+}
+function setActingRecoveryTried(on) {
+  try {
+    if (on) sessionStorage.setItem(ACTING_RECOVERY_KEY, '1');
+    else sessionStorage.removeItem(ACTING_RECOVERY_KEY);
+  } catch { /* storage unavailable */ }
 }
 
 // The header's `api` link (studio/index.html #api-link) names the active

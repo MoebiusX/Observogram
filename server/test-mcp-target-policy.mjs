@@ -252,7 +252,7 @@ test('typedMcpUrlDecision: TYPED_MCP_URL_ROLE is admin — an admin or an owner 
   });
   assert.equal(typedMcpUrlDecision(callerOf(BEARER, { posture: 'token' })).error,
     "the bearer token acts as an operator: it fetches from the org's registered MCP endpoints only — send mcpEndpointId (GET /api/mcp-endpoints lists them); registering one needs a signed-in admin — this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC");
-  assert.match(typedMcpUrlDecision(callerOf(BEARER, { posture: 'token', authOff: true })).error, /restart it without OBSERVOGRAM_AUTH=off once a user exists \(npm run users -- add <login>\)/);
+  assert.match(typedMcpUrlDecision(callerOf(BEARER, { posture: 'token', authOff: true })).error, /restart it without OBSERVOGRAM_AUTH=off, once a user exists \(npm run users -- add <login>\) or with OIDC configured$/);
   assert.deepEqual(typedMcpUrlDecision(callerOf(LOCAL, { posture: 'open-loopback', direct: true })), {
     status: 403, denied: 'posture',
     error: 'a typed MCP URL is refused on a server without sign-in, even from this machine — choose a registered MCP endpoint (mcpEndpointId), or register one in Settings → MCP endpoints from http://127.0.0.1:8123 (a loopback MCP, or an origin listed in OBSERVOGRAM_MCP_ORIGINS)',

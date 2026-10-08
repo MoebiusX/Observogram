@@ -21,8 +21,27 @@
  * a kind filter, a same-day range, a range refused, older pages; leaving the
  * org reloads this browser into the next, where nothing is writable. As
  * olive (owner), in one browser: a profile remembers its endpoint per org;
- * leaving bravo, the status says the reload lands in her first org.
- * As vera (viewer): no Edit, no URL. As nora (no org): the boot's refusal.
+ * leaving bravo, she goes on acting in it as an owner. The owner block (as
+ * olive): a new local user's temporary password shown once — not in either
+ * storage, a title, an aria-label, a live region or the console, gone at
+ * pagehide, after a navigation away and back and after Close — and changed
+ * at first sign-in, a reset ending the old flow; the last-owner rule drawn
+ * before the server says it, an owner granted; an org with no enabled admin
+ * rescued by Act in (D-M) and a removed acting org recovered once at boot;
+ * an org created, switched to, and removed with its id typed; the join role,
+ * confirm sent for admin only; signing herself out everywhere leaves none of
+ * her keys. An open server on the loopback: the first user is the owner the
+ * create armed, with no second call. A server behind a reverse proxy: a
+ * local user's reset says they cannot sign in here, and what it still does;
+ * Enable… and Sign out everywhere… say how each user signs in here (a local
+ * one cannot, the proxy's through it — never with a password).
+ * A confirm step whose rank went while it was open (an environment's, an
+ * endpoint's, a member's, a user's): the 403 keeps the focus inside the
+ * dialog and is announced.
+ * As vera (viewer): no Edit, no URL; her one org renamed long, its ORG
+ * label keeps the OBSERVA bar inside the phone width in the modes that hide
+ * the SERVICE chip (the home, a service page, Settings; Build as oscar). As
+ * nora (no org): the boot's refusal.
  * The token posture (with and without OBSERVOGRAM_AUTH=off) and an open
  * server bound off the loopback: the banner is the server's text, the
  * writes carry their reasons, the pickers offer no Settings button. An open
@@ -35,7 +54,7 @@
  * (OBSERVOGRAM_PLAYWRIGHT, else the bare 'playwright') and Chromium
  * launches; OBSERVOGRAM_SETTINGS_SMOKE=require fails instead.
  */
-/* global document, getComputedStyle, MutationObserver */
+/* global document, getComputedStyle, MutationObserver, PageTransitionEvent, window */
 
 // The two knobs are read before the strip (STRIP carries both so no child
 // sees them); the rest of the shell never reaches this process's imports.
@@ -98,7 +117,7 @@ const LAPTOP = { width: 1366, height: 800 };
 const PHONE = { width: 390, height: 844 };
 const T = 15_000;
 
-test('BROWSER: the Settings journey — environments, endpoints and the pickers, members, the audit, a viewer, a user with no org, the token and open-exposed postures', async (t) => {
+test('BROWSER: the Settings journey — environments, endpoints and the pickers, members, the audit, a viewer, a user with no org, the token and open-exposed postures; an owner\'s users, organisations and join role', async (t) => {
   const skip = (why) => { if (REQUIRED) assert.fail(`OBSERVOGRAM_SETTINGS_SMOKE=require: ${why}`); t.skip(why); };
   const { pw, error } = await loadPlaywright();
   if (!pw) return skip(error);
@@ -259,7 +278,9 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await toSettings(page);
       assert.equal(await text(page, '.set-scope'), 'Settings · Acme (acme) · you are operator');
       const nav = await page.evaluate(() => [...document.querySelectorAll('.set-nav-item')].map((b) => [b.dataset.section, b.getAttribute('aria-disabled')]));
-      assert.deepEqual(nav, [['environments', null], ['endpoints', null], ['members', 'true'], ['audit', 'true']], 'no deployment group');
+      assert.deepEqual(nav, [['environments', null], ['endpoints', null], ['members', 'true'], ['audit', 'true']], 'the deployment\'s sections are not listed to a non-owner');
+      assert.equal(await text(page, '#set-nav-deployment'), 'The deployment');
+      assert.equal(await text(page, '#set-nav-no-owner'), "Users, organisations and the join role are an owner's — ask one. (A deployment with no owner gets one from the server's shell: npm run users -- owner <login>.)", 'the no-owner line (D-H)');
       for (const id of ['members', 'audit']) assert.equal(await text(page, `.set-nav-item[data-section="${id}"] .svc-why`), ADMIN_REASON('Acme', 'operator'));
       assert.equal(await page.evaluate(() => document.getElementById('observa-service').hidden), true, 'the SERVICE chip is hidden');
       assert.equal(await page.evaluate(() => { const h = document.querySelector('.hdr'); return !h || getComputedStyle(h).display === 'none' || h.getClientRects().length === 0; }), true, '.hdr is not visible');
@@ -702,12 +723,48 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
+  await t.test('vera, a one-org member, her org renamed long: the ORG label (no select) carries the whole name and the OBSERVA bar scrolls nothing sideways at 390, 360 and 320 px — on the home, a service page, Settings and (oscar) Build, the modes that hide the SERVICE chip', async () => {
+    const LONG = 'Acme Corporation Holdings';
+    // The OBSERVA row as app.css's comment on the org chip's phone cap states it: the SERVICE chip hidden, no
+    // horizontal page scroll, Advanced inside the viewport.
+    const row = (page) => page.evaluate(() => {
+      const cw = document.documentElement.clientWidth;
+      return { serviceChip: document.getElementById('observa-service')?.hidden === false, scroll: document.documentElement.scrollWidth, advanced: document.querySelector('.observa-adv-toggle').getBoundingClientRect().right <= cw };
+    });
+    assert.equal((await call('olive', 'PATCH', '/api/org', { name: LONG })).status, 200);
+    try {
+      const { page, ctx } = await open(child.base, 'vera', { viewport: PHONE });
+      try {
+        await page.waitForFunction(() => document.getElementById('observa-org')?.hidden === false, null, { timeout: T });
+        assert.equal(await page.$('.observa-org-select'), null, 'a label, not a switcher');
+        assert.equal(await text(page, '#observa-org-name'), LONG, 'the label carries the whole name (assistive technology reads it)');
+        for (const width of [PHONE.width, 360, 320]) {
+          await page.setViewportSize({ width, height: PHONE.height });
+          assert.deepEqual(await row(page), { serviceChip: false, scroll: width, advanced: true }, `a long one-org label at ${width} px: no horizontal page scroll, Advanced inside the viewport`);
+        }
+        await page.setViewportSize(PHONE);
+        await openService(page, 'payment-service');
+        assert.deepEqual(await row(page), { serviceChip: false, scroll: PHONE.width, advanced: true }, 'a service page at the phone width');
+        await toSettings(page);
+        assert.deepEqual(await row(page), { serviceChip: false, scroll: PHONE.width, advanced: true }, 'Settings at the phone width');
+      } finally { await ctx.close(); }
+      const { page: build, ctx: buildCtx } = await open(child.base, 'oscar', { viewport: PHONE });
+      try {
+        await build.click('#home-choice-build');
+        await build.waitForFunction(() => document.body.dataset.mode === 'build', null, { timeout: T });
+        assert.deepEqual(await row(build), { serviceChip: false, scroll: PHONE.width, advanced: true }, 'Build at the phone width');
+      } finally { await buildCtx.close(); }
+    } finally {
+      assert.equal((await call('olive', 'PATCH', '/api/org', { name: 'Acme Corp' })).status, 200);
+    }
+  });
+
   await t.test('nora (no org): Advanced → Settings toasts the boot\'s refusal; no mode change', async () => {
     const { page, ctx } = await open(child.base, 'nora');
     try {
       await page.waitForSelector('.svc-noorg', { timeout: T });
       await page.click('.observa-adv-toggle');
-      assert.equal(await text(page, '.observa-adv-item[data-action="settings"] .observa-adv-item-sub'), 'environments, MCP endpoints, members, the audit…', 'the menu names every built section');
+      assert.equal(await text(page, '.observa-adv-item[data-action="settings"] .observa-adv-item-sub'), 'environments, MCP endpoints, members, the audit, users, organisations, the join role…', 'the menu names every built section');
       await page.click('.observa-adv-item[data-action="settings"]');
       await page.waitForFunction(() => document.querySelector('#toast')?.hidden === false, null, { timeout: T });
       assert.equal(await text(page, '#toast'), NO_ORG);
@@ -733,7 +790,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
         await page.waitForSelector('.set-banner.is-token', { timeout: T });
         await settled(page);
         assert.equal(await text(page, '.set-banner'), served(probe));
-        if (srv === tokenOffChild) assert.match(await text(page, '.set-banner'), /restart it without OBSERVOGRAM_AUTH=off/);
+        if (srv === tokenOffChild) assert.match(await text(page, '.set-banner'), /this server has no sign-in \(OBSERVOGRAM_AUTH=off\): restart it without OBSERVOGRAM_AUTH=off, once a user exists \(npm run users -- add <login>\) or with OIDC configured$/);
         else assert.match(await text(page, '.set-banner'), /^403: anonymous callers are viewers here; /);
         for (const id of ['members', 'audit']) assert.equal(await text(page, `.set-nav-item[data-section="${id}"] .svc-why`), TOKEN_READ_REASON, id);
         for (const section of ['environments', 'endpoints']) {
@@ -843,7 +900,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     }
   });
 
-  await t.test('olive (an owner) — leaving bravo: the status says the reload lands in her first organisation, or the default one — never that she switches to a next one', async () => {
+  await t.test('olive (an owner) — leaving bravo: the status says she goes on acting in it, and the reload lands in bravo\'s members, acted in from outside (D-M)', async () => {
     const ctx = await browser.newContext({ viewport: LAPTOP });
     await ctx.addCookies([{ name: 'observogram_session', value: (await cookieFor('olive')).split('=')[1], url: child.base }]);
     try {
@@ -867,8 +924,510 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await Promise.all([page.waitForEvent('load', { timeout: T }), page.click('#set-editor-confirm')]);
       await page.waitForFunction(() => document.body.dataset.mode, null, { timeout: 30_000 });
       assert.equal(await page.evaluate(() => sessionStorage.getItem('test.leftOrgText')),
-        'You left Bravo; this browser reloads into your first organisation, or the default one.');
+        'You left Bravo; as an owner you go on acting in it — this browser reloads.');
+      await page.waitForSelector('.set-scope', { timeout: T });
+      assert.equal(await text(page, '.set-scope'), 'Settings · Bravo (bravo) · you are an owner acting in bravo — not a member');
+      assert.equal(await page.evaluate(() => document.querySelector('.observa-org-select option:checked')?.textContent), 'Bravo — acting as owner');
     } finally { await ctx.close(); }
+  });
+
+  // ---------- 6b-ii: the owner (design §12.4, C13b) ----------
+  // olive is the deployment's only owner (the legacy import made default's
+  // admins its owners). Each case opens its own browser unless it says so.
+  const usersById = async () => (await call('olive', 'GET', '/api/admin/users')).json.users;
+  const userId = async (login) => (await usersById()).find((u) => u.login === login).id;
+  const manage = async (page, id) => {
+    await page.click(`[data-user-manage="${id}"]`);
+    await page.waitForSelector('.set-editor[data-kind="user"] [data-user-action]', { timeout: T });
+  };
+  const userAct = async (page, action, re) => {
+    await page.click(`[data-user-action="${action}"]`);
+    await page.waitForSelector('#set-editor-confirm', { timeout: T });
+    await page.click('#set-editor-confirm');
+    await editorStatus(page, re);
+  };
+  const closeButton = async (page) => {
+    await page.click('#set-editor-host .set-editor-cancel');
+    await page.waitForFunction(() => !document.querySelector('#set-editor-host .set-editor'), null, { timeout: T });
+  };
+  // Every place a password must never be: both storages, every title and
+  // aria-label, the toast and every live region, the status line — and the
+  // page itself holds it exactly `times` (the dialog's one code element).
+  const traces = (page, secret, times) => page.evaluate(([p, n]) => {
+    const out = [];
+    for (const [name, s] of [['localStorage', localStorage], ['sessionStorage', sessionStorage]]) {
+      for (let i = 0; i < s.length; i++) if (`${s.key(i)}=${s.getItem(s.key(i))}`.includes(p)) out.push(`${name} ${s.key(i)}`);
+    }
+    for (const el of document.querySelectorAll('[title], [aria-label]')) {
+      if ((el.getAttribute('title') || '').includes(p) || (el.getAttribute('aria-label') || '').includes(p)) out.push(`attribute on ${el.tagName}#${el.id}`);
+    }
+    for (const el of document.querySelectorAll('#toast, [aria-live], [role="status"], #set-editor-status, #set-section-status')) {
+      if (el.textContent.includes(p)) out.push(`text of ${el.tagName}#${el.id}.${el.className}`);
+    }
+    if (document.title.includes(p) || window.location.href.includes(p)) out.push('the title or the URL');
+    const count = document.documentElement.outerHTML.split(p).length - 1;
+    if (count !== n) out.push(`${count} copies in the page (want ${n})`);
+    return out;
+  }, [secret, times]);
+  const PASSWORD = /^[a-km-np-z2-9]{4}(-[a-km-np-z2-9]{4}){4}$/;
+  const LAST_OWNER = 'olive is the last enabled owner — make another user an owner first';
+
+  await t.test('olive (owner) — users: six without an email; New local user nina gets a temporary password shown once and nowhere else, gone after a navigation away and back and after Close; nina must change it; a reset ends her flow', async () => {
+    const { page, ctx } = await open(child.base, 'olive');
+    const ninaCtx = await browser.newContext({ viewport: LAPTOP });
+    try {
+      const said = [];   // every console line of this browser, whatever its level
+      page.on('console', (m) => said.push(m.text()));
+      const writes = [];
+      page.on('request', (r) => { if (/\/api\/admin\/users/.test(r.url()) && r.method() !== 'GET') writes.push(r.url().slice(child.base.length).replace(/\/\d+\//, '/:id/')); });
+      await toSettings(page);
+      await toSection(page, 'users');
+      assert.deepEqual((await page.evaluate(() => [...document.querySelectorAll('#set-section [data-user-id] .set-row-name')].map((n) => n.textContent))).sort(), [...LOGINS].sort());
+      await noEmail(page, 'olive (users)');
+      // New local user nina, viewer in acme.
+      await page.click('#set-primary');
+      await page.waitForSelector('.set-editor[data-kind="user-create"]', { timeout: T });
+      assert.equal(await page.$$eval('#set-editor-host input[type="password"]', (l) => l.length), 0, 'the owner types no password');
+      await page.fill('#set-edit-login', 'nina');
+      await page.click('[data-seg="role"][data-value="viewer"]');
+      await page.selectOption('#set-edit-orgId', 'acme');
+      await page.click('#set-editor-save');
+      await editorStatus(page, /Copy the temporary password before closing\.$/);
+      assert.equal(await text(page, '#set-editor-status'), 'Created nina (viewer in Acme Corp). Copy the temporary password before closing.');
+      const first = await text(page, '#set-secret-value');
+      assert.equal(first.length, 24);
+      assert.match(first, PASSWORD);
+      assert.deepEqual(writes, ['/api/admin/users', '/api/admin/users/:id/password'], 'the create, then the reset that makes it temporary');
+      assert.deepEqual(await traces(page, first, 1), [], 'shown once and nowhere else');
+      assert.deepEqual(said.filter((s) => s.includes(first)), [], 'nothing in the console');
+      // Over HTTP: nina must change it, and nothing answers with it.
+      const users = await call('olive', 'GET', '/api/admin/users');
+      const nina = users.json.users.find((u) => u.login === 'nina');
+      assert.equal(nina.mustChange, true);
+      assert.ok(!users.text.includes(first));
+      // nina signs in with it: the change-password page, forced (no current password asked).
+      const ninaPage = await ninaCtx.newPage();
+      await ninaPage.route('**/*', (route) => (route.request().url().startsWith(child.base) ? route.fallback() : route.abort()));
+      await ninaPage.goto(`${child.base}/auth/login`);
+      await ninaPage.fill('#u', 'nina');
+      await ninaPage.fill('#p', first);
+      await Promise.all([ninaPage.waitForURL(/\/auth\/change-password$/, { timeout: T }), ninaPage.click('button[type="submit"]')]);
+      assert.equal(await ninaPage.$$eval('#c', (l) => l.length), 0, 'a forced change: no current password asked');
+      // C-4: the pagehide a browser fires before it keeps a page in its
+      // back-forward cache empties the dialog. (Playwright's Chromium runs
+      // with that cache off, so the event is dispatched here as the browser
+      // would; the navigation away and back follows.)
+      await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+      assert.equal(await page.$$eval('#set-editor-host .set-editor', (l) => l.length), 0, 'pagehide closed the dialog');
+      assert.equal(await page.evaluate((p) => document.documentElement.outerHTML.includes(p), first), false, 'gone at pagehide');
+      await page.goto(`${child.base}/api/packs`);
+      await page.goBack();
+      await page.waitForFunction(() => document.body.dataset.mode, null, { timeout: 30_000 });
+      assert.equal(await page.evaluate((p) => document.documentElement.outerHTML.includes(p), first), false, 'gone after a navigation away and back');
+      assert.equal(await page.$$eval('#set-editor-host .set-editor', (l) => l.length), 0);
+      // Reset nina: a new password; Close lets go of it.
+      if (await page.evaluate(() => document.body.dataset.mode) !== 'settings') await toSettings(page);
+      if (await page.evaluate(() => document.querySelector('#set-section')?.dataset.section) !== 'users') await toSection(page, 'users');
+      await manage(page, nina.id);
+      await page.click('[data-user-action="reset"]');
+      await page.waitForSelector('#set-editor-confirm', { timeout: T });
+      assert.equal(await text(page, '#set-editor-confirm-text'), "Reset nina's password? Every session of nina ends; a new temporary password is shown once, and nina sets their own at their next sign-in.");
+      await page.click('#set-editor-confirm');
+      await editorStatus(page, /^Every session of nina ended; they set a new password at their next sign-in\.$/);
+      const second = await text(page, '#set-secret-value');
+      assert.match(second, PASSWORD);
+      assert.notEqual(second, first);
+      assert.deepEqual(await traces(page, second, 1), []);
+      await closeButton(page);
+      assert.equal(await page.evaluate((p) => document.documentElement.outerHTML.includes(p), second), false, 'gone after Close');
+      assert.deepEqual(said.filter((s) => s.includes(first) || s.includes(second)), [], 'nothing in the console');
+      // nina's flow cookie from the first password is refused now: back to the sign-in.
+      await Promise.all([ninaPage.waitForURL(/\/auth\/login/, { timeout: T }), ninaPage.goto(`${child.base}/auth/change-password`)]);
+      const again = await signIn(child.base, 'nina', second);
+      assert.deepEqual([again.status, again.json?.mustChange, again.session], [200, true, null], 'the new one is temporary too');
+      assert.equal((await signIn(child.base, 'nina', first)).status, 401, 'the first no longer signs in');
+    } finally { await ninaCtx.close(); await ctx.close(); }
+  });
+
+  await t.test('olive (owner) — the last-owner rule drawn first: her own Disable and Revoke owner aria-disabled with its sentence, her own Reset with its way; Make ada owner, then her Disable is usable', async () => {
+    const { page, ctx } = await open(child.base, 'olive', { viewport: PHONE });
+    try {
+      await toSettings(page);
+      await toSection(page, 'users');
+      const olive = await userId('olive');
+      await manage(page, olive);
+      assert.deepEqual(await overflow(page), [], 'the dialog fits the phone');
+      for (const a of ['disable', 'owner-revoke']) {
+        assert.equal(await attr(page, `[data-user-action="${a}"]`, 'aria-disabled'), 'true', a);
+        assert.equal(await text(page, `[data-user-action="${a}"] .svc-why`), LAST_OWNER, a);
+      }
+      assert.equal(await attr(page, '[data-user-action="reset"]', 'aria-disabled'), 'true');
+      assert.equal(await text(page, '[data-user-action="reset"] .svc-why'), 'this is your own account — change your password at /auth/change-password');
+      await page.click('[data-user-action="disable"]', { force: true });
+      await page.waitForTimeout(200);
+      assert.equal(await page.$$eval('#set-editor-confirm', (l) => l.length), 0, 'its click explains, confirms nothing');
+      await closeEditor(page);
+      await manage(page, await userId('ada'));
+      await userAct(page, 'owner-grant', /^ada is an owner/);
+      assert.equal(await text(page, '#set-editor-status'), 'ada is an owner (and an admin of default).');
+      await closeEditor(page);
+      await page.waitForFunction(() => document.querySelectorAll('#set-section .set-badge.is-owner').length === 2, null, { timeout: T });
+      await manage(page, olive);
+      assert.equal(await attr(page, '[data-user-action="disable"]', 'aria-disabled'), null, 'two owners: hers is usable');
+      await closeEditor(page);
+    } finally { await ctx.close(); }
+  });
+
+  await t.test('olive (owner) — the rescue (D-M): delta has no enabled admin and she is not a member; Act in delta reloads into its members, the head and the ORG chip say she acts as an owner, she adds an admin; the chip back to acme leaves it; a removed acting org recovers once', async () => {
+    // The set-up over HTTP: olive creates delta (its first admin), adds bob as
+    // admin, leaves it (an owner passes the last-admin rule), disables bob.
+    assert.equal((await call('olive', 'POST', '/api/admin/orgs', { id: 'delta', name: 'Delta' })).status, 201);
+    assert.equal((await call('olive', 'POST', '/api/org/members', { login: 'bob', role: 'admin' }, { org: 'delta' })).status, 201);
+    const deltaMembers = (await call('olive', 'GET', '/api/org/members', undefined, { org: 'delta' })).json.members;
+    const inDelta = (login) => deltaMembers.find((m) => m.login === login).userId;
+    assert.equal((await call('olive', 'DELETE', `/api/org/members/${inDelta('olive')}`, undefined, { org: 'delta' })).status, 200);
+    assert.equal((await call('olive', 'POST', `/api/admin/users/${inDelta('bob')}/disable`, {})).status, 200);
+    const { page, ctx } = await open(child.base, 'olive');
+    try {
+      await toSettings(page);
+      await toSection(page, 'orgs');
+      assert.equal(await text(page, '[data-org-act="delta"]'), 'Act in delta');
+      await Promise.all([page.waitForNavigation({ timeout: T }), page.click('[data-org-act="delta"]')]);
+      await page.waitForFunction(() => document.body.dataset.mode === 'settings' && document.querySelector('#set-section')?.dataset.section === 'members', null, { timeout: 30_000 });
+      await settled(page);
+      assert.equal(await text(page, '.set-scope'), 'Settings · Delta (delta) · you are an owner acting in delta — not a member');
+      assert.equal(await page.evaluate(() => document.querySelector('.observa-org-select option:checked')?.textContent), 'Delta — acting as owner');
+      // The acting entry is the chip's longest label: at the phone width the OBSERVA bar still scrolls nothing sideways.
+      await page.setViewportSize(PHONE);
+      assert.deepEqual(await page.evaluate(() => {
+        const cw = document.documentElement.clientWidth;
+        return { scroll: document.documentElement.scrollWidth, advanced: document.querySelector('.observa-adv-toggle').getBoundingClientRect().right <= cw };
+      }), { scroll: PHONE.width, advanced: true }, 'the acting entry at the phone width: no horizontal page scroll, Advanced inside the viewport');
+      await page.setViewportSize(LAPTOP);
+      await page.click('#set-primary');
+      await page.waitForSelector('.set-editor[data-kind="member-add"]', { timeout: T });
+      await page.fill('#set-edit-value', 'oscar');
+      await page.click('[data-seg="role"][data-value="admin"]');
+      await page.click('#set-editor-save');
+      await editorStatus(page, /^Added oscar as admin\.$/);
+      await closeEditor(page);
+      const delta = (await call('oscar', 'GET', '/api/org/members', undefined, { org: 'delta' })).json.members;
+      assert.equal(delta.find((m) => m.login === 'oscar')?.role, 'admin', 'delta has an enabled admin again');
+      // The chip back to acme leaves the acting org; a reload keeps acme.
+      await Promise.all([page.waitForNavigation({ timeout: T }), page.selectOption('.observa-org-select', 'acme')]);
+      await page.waitForFunction(() => document.body.dataset.mode === 'settings', null, { timeout: 30_000 });
+      await settled(page);
+      assert.match(await text(page, '.set-scope'), /^Settings · Acme Corp \(acme\) · /);
+      await page.reload();
+      await page.waitForFunction(() => document.body.dataset.mode, null, { timeout: 30_000 });
+      assert.equal(await page.evaluate(() => localStorage.getItem('studioOrg.v1')), 'acme');
+      assert.equal(await page.evaluate(() => document.querySelector('.observa-org-select')?.value), 'acme');
+      // Acting in delta again; then delta is removed elsewhere: the boot recovers once, into a membership.
+      await page.evaluate(() => { localStorage.setItem('studioOrg.v1', 'delta'); localStorage.setItem('studioOrgBy.v1', 'olive'); });
+      await page.reload();
+      await page.waitForFunction(() => document.querySelector('.observa-org-select')?.value === 'delta', null, { timeout: 30_000 });
+      assert.equal((await call('olive', 'DELETE', '/api/admin/orgs/delta')).status, 200);
+      await page.reload();
+      await page.waitForFunction(() => document.body.dataset.mode && localStorage.getItem('studioOrg.v1') && localStorage.getItem('studioOrg.v1') !== 'delta', null, { timeout: 30_000 });
+      await page.waitForFunction(() => sessionStorage.getItem('studioActingRecovery.v1') === null, null, { timeout: 30_000 });
+      assert.ok(['default', 'acme'].includes(await page.evaluate(() => localStorage.getItem('studioOrg.v1'))), 'one of her memberships');
+    } finally { await ctx.close(); }
+  });
+
+  await t.test('a shared browser: olive (an owner, not in bravo) signing in after ada (who chose bravo) lands in one of her own memberships, not acting in bravo; her sign-out leaves her login nowhere in the browser', async () => {
+    const { page, ctx } = await open(child.base, 'ada');
+    try {
+      await page.waitForFunction(() => localStorage.getItem('studioOrg.v1') === 'bravo', null, { timeout: T });
+      await ctx.clearCookies();
+      await ctx.addCookies([{ name: 'observogram_session', value: (await cookieFor('olive')).split('=')[1], url: child.base }]);
+      await page.reload();
+      await page.waitForFunction(() => document.body.dataset.mode && document.querySelector('.observa-org-select'), null, { timeout: 30_000 });
+      const org = await page.evaluate(() => localStorage.getItem('studioOrg.v1'));
+      assert.ok(['default', 'acme'].includes(org), `one of her memberships, not ada's bravo: ${org}`);
+      assert.equal(await page.evaluate(() => localStorage.getItem('studioOrgBy.v1')), 'olive');
+      assert.ok(!(await text(page, '.observa-org-select')).includes('acting as owner'), 'no acting org she never chose');
+      // The account menu's sign out: the login beside the saved org goes with her other keys; the org stays, a browser's choice.
+      await page.click('.hdr-user-btn');
+      await Promise.all([page.waitForURL(/\/auth\/login/, { timeout: T }), page.click('.hdr-user-out')]);
+      assert.deepEqual(await page.evaluate(() => [localStorage.getItem('studioOrg.v1'), localStorage.getItem('studioOrgBy.v1')]), [org, null],
+        'after sign-out the browser keeps no trace of who signed out (studioOrgBy.v1)');
+    } finally { await ctx.close(); }
+  });
+
+  await t.test('olive (owner) — organisations: New charlie, Switch to it reloads into its Settings; removed from acme with its id typed and what cannot be undone said, the server\'s note as served; the default org\'s Remove aria-disabled', async () => {
+    const { page, ctx } = await open(child.base, 'olive');
+    try {
+      await page.waitForSelector('.observa-org-select', { timeout: T });
+      if (await page.evaluate(() => document.querySelector('.observa-org-select').value) !== 'acme') {
+        await Promise.all([page.waitForNavigation({ timeout: T }), page.selectOption('.observa-org-select', 'acme')]);
+        await page.waitForFunction(() => document.body.dataset.mode, null, { timeout: 30_000 });
+      }
+      await toSettings(page);
+      await toSection(page, 'orgs');
+      assert.equal(await attr(page, '[data-org-remove="default"]', 'aria-disabled'), 'true');
+      assert.equal(await text(page, '[data-org-remove="default"] .svc-why'), 'default is the default org and cannot be removed');
+      await page.click('#set-primary');
+      await page.waitForSelector('.set-editor[data-kind="org-create"]', { timeout: T });
+      await page.fill('#set-edit-id', 'charlie');
+      await page.click('#set-editor-save');
+      await editorStatus(page, /^Created charlie \(charlie\) — you are its first admin; its files live in /);
+      // Switch to it (A10): this browser reloads into charlie's Settings.
+      await Promise.all([page.waitForNavigation({ timeout: T }), page.click('#set-editor-switch')]);
+      await page.waitForFunction(() => document.body.dataset.mode === 'settings' && document.querySelector('#set-section')?.dataset.section === 'members', null, { timeout: 30_000 });
+      await settled(page);
+      assert.equal(await text(page, '.set-scope'), 'Settings · charlie (charlie) · you are admin, an owner');
+      await Promise.all([page.waitForNavigation({ timeout: T }), page.selectOption('.observa-org-select', 'acme')]);
+      await page.waitForFunction(() => document.body.dataset.mode === 'settings', null, { timeout: 30_000 });
+      await settled(page);
+      await toSection(page, 'orgs');
+      // Remove charlie (A2): the step says what cannot be undone; the danger button waits for the id.
+      await page.click('[data-org-remove="charlie"]');
+      await page.waitForSelector('#set-editor-typed', { timeout: T });
+      assert.match(await text(page, '#set-editor-confirm-text'), /^Remove charlie \(charlie\)\? This cannot be undone here: no route restores an organisation, and charlie is never used again\. Its 1 member loses access, and its services, environments and MCP endpoints can no longer be reached from the studio\. The files stay under .+\.$/);
+      assert.equal(await attr(page, '#set-editor-confirm', 'aria-disabled'), 'true');
+      await page.fill('#set-editor-typed', 'charli');
+      assert.equal(await attr(page, '#set-editor-confirm', 'aria-disabled'), 'true');
+      await page.fill('#set-editor-typed', 'charlie');
+      assert.equal(await attr(page, '#set-editor-confirm', 'aria-disabled'), 'false');
+      const answer = page.waitForResponse((r) => /\/api\/admin\/orgs\/charlie$/.test(r.url()) && r.request().method() === 'DELETE', { timeout: T });
+      await page.click('#set-editor-confirm');
+      const note = (await (await answer).json()).note;
+      await page.waitForFunction(() => /^Removed charlie/.test(document.getElementById('set-section-status')?.textContent || ''), null, { timeout: T });
+      assert.equal(await text(page, '#set-section-status'), `Removed charlie (charlie)${note ? ` — ${note}` : ''}.`);
+      await page.waitForSelector('[data-org-id="charlie"].is-removed', { timeout: T });
+      assert.equal(await page.$$eval('[data-org-remove="charlie"]', (l) => l.length), 0);
+    } finally { await ctx.close(); }
+  });
+
+  await t.test('olive (owner) — the join role: the sign-in mode it applies to first; admin needs the box ticked; the PUT bodies carry confirm only for admin', async () => {
+    const { page, ctx } = await open(child.base, 'olive');
+    try {
+      const puts = [];
+      page.on('request', (r) => { if (/\/api\/admin\/join-role$/.test(r.url()) && r.method() === 'PUT') puts.push(JSON.parse(r.postData())); });
+      await toSettings(page);
+      await toSection(page, 'join-role');
+      assert.equal(await text(page, '.set-section-scope'), 'Sign-in: local users. The join role applies to IdP users once OIDC is configured: none.');
+      await page.click('#set-primary');
+      await page.waitForSelector('.set-editor[data-kind="join-role"]', { timeout: T });
+      await page.click('[data-seg="role"][data-value="admin"]');
+      assert.equal(await attr(page, '#set-editor-save', 'aria-disabled'), 'true');
+      assert.equal(await text(page, '#set-editor-save .svc-why'), 'tick the box first');
+      await page.click('#set-editor-save', { force: true });
+      await page.waitForTimeout(200);
+      assert.deepEqual(puts, [], 'nothing sent unticked');
+      await page.check('#set-edit-confirm');
+      await page.click('#set-editor-save');
+      await editorStatus(page, /^Join role: none → admin\.$/);
+      await page.click('[data-seg="role"][data-value="operator"]');
+      await page.click('#set-editor-save');
+      await editorStatus(page, /^Join role: admin → operator\.$/);
+      assert.deepEqual(puts, [{ role: 'admin', confirm: true }, { role: 'operator' }], 'confirm rides the admin body only (B14)');
+      await closeEditor(page);
+      await page.waitForFunction(() => document.getElementById('set-join-role')?.textContent === 'Recorded join role: operator', null, { timeout: T });
+    } finally { await ctx.close(); }
+  });
+
+  await t.test('olive (owner) — signing herself out everywhere from Users leaves none of her keys in this browser, then offers the sign-in', async () => {
+    const { page, ctx } = await open(child.base, 'olive');
+    try {
+      await toSettings(page);
+      await toSection(page, 'users');
+      // Her traces as the studio writes them, in two orgs.
+      await page.evaluate(() => {
+        for (const [k, v] of [['mcpUrl.v2:olive:acme', 'https://mcp.acme.test/obs'], ['mcpEndpoint.v1:olive:acme', '1'], ['deployProfiles.v2:olive', '{}'], ['studioState.v2:olive:acme', '{}'], ['studioState.v2:olive:default', '{}']]) localStorage.setItem(k, v);
+      });
+      assert.equal(await page.evaluate(() => localStorage.getItem('studioOrgBy.v1')), 'olive', 'the saved org names who chose it');
+      await manage(page, await userId('olive'));
+      await userAct(page, 'signout', /^You signed out everywhere/);
+      assert.equal(await text(page, '#set-editor-status'), 'You signed out everywhere — this browser is signed out at its next request.');
+      const left = await page.evaluate(() => Object.keys(localStorage).filter((k) => /^(mcpUrl\.v2:olive:|mcpEndpoint\.v1:olive:|deployProfiles\.v2:olive|studioState\.v2:olive:)/.test(k) || (k === 'studioOrgBy.v1' && localStorage.getItem(k) === 'olive')));
+      assert.deepEqual(left, []);
+      await Promise.all([page.waitForURL(/\/auth\/login/, { timeout: T }), page.click('#set-editor-signin')]);
+    } finally {
+      await ctx.close();
+      delete cookies.olive;   // every session of olive ended: the next call signs in again
+    }
+  });
+
+  await t.test('an open server on the loopback — the first user: New local user first is the owner the create armed, no second call, the AUTH=off sentence; New organisation aria-disabled with its reason', async () => {
+    const { page, ctx } = await open(loopChild.base, null);
+    try {
+      const writes = [];
+      page.on('request', (r) => { if (/\/api\/admin\/users/.test(r.url()) && r.method() !== 'GET') writes.push(r.url().slice(loopChild.base.length)); });
+      await toSettings(page);
+      await toSection(page, 'orgs');
+      assert.equal(await attr(page, '#set-primary', 'aria-disabled'), 'true');
+      assert.match(await text(page, '#set-primary .svc-why'), /^a second organisation needs sign-in, and this server runs without it — /);
+      await toSection(page, 'join-role');
+      assert.equal(await text(page, '.set-section-scope'), 'This server runs without sign-in (OBSERVOGRAM_AUTH=off). The join role applies to IdP users once it restarts without OBSERVOGRAM_AUTH=off, with OIDC configured: none.');
+      await toSection(page, 'users');
+      await page.click('#set-primary');
+      await page.waitForSelector('.set-editor[data-kind="user-create"]', { timeout: T });
+      await page.fill('#set-edit-login', 'first');
+      const created = page.waitForResponse((r) => /\/api\/admin\/users$/.test(r.url()) && r.request().method() === 'POST', { timeout: T });
+      await page.click('#set-editor-save');
+      const answer = await (await created).json();
+      assert.deepEqual([answer.owner, answer.armed], [true, true], 'the first local user is the owner, and the create armed sign-in');
+      await editorStatus(page, /^first is created/);
+      assert.equal(await text(page, '#set-editor-status'), `first is created (an owner: the first local user). This server runs without sign-in (OBSERVOGRAM_AUTH=off): first signs in once it starts without it, with the password below. It is not forced to change — change it at /auth/change-password after signing in.${answer.note ? ` ${answer.note}` : ''}`);
+      assert.deepEqual(writes, ['/api/admin/users'], 'no second call');
+      const secret = await text(page, '#set-secret-value');
+      assert.match(secret, PASSWORD);
+      assert.deepEqual(await traces(page, secret, 1), []);
+      await closeButton(page);
+      assert.equal(await page.evaluate((p) => document.documentElement.outerHTML.includes(p), secret), false);
+      // Reset first: nobody signs in here, so the dialog never says "at their next sign-in".
+      await page.waitForSelector(`[data-user-manage="${answer.user.id}"]`, { timeout: T });
+      await manage(page, answer.user.id);
+      await page.click('[data-user-action="reset"]');
+      await page.waitForSelector('#set-editor-confirm', { timeout: T });
+      assert.equal(await text(page, '#set-editor-confirm-text'), "Reset first's password? Every session of first ends; a new temporary password is shown once. This server runs without sign-in (OBSERVOGRAM_AUTH=off): first signs in once it starts without it, and sets their own then.");
+      await page.click('#set-editor-confirm');
+      await editorStatus(page, /^Every session of first ended\. /);
+      assert.equal(await text(page, '#set-editor-status'), 'Every session of first ended. This server runs without sign-in (OBSERVOGRAM_AUTH=off): first signs in once it starts without it, with the password below, and sets a new one then.');
+      assert.equal(await text(page, '.set-secret-text'), 'Temporary password for first — shown once. It is not stored in this browser and cannot be shown again. Reset it to get a new one.');
+      const reset = await text(page, '#set-secret-value');
+      assert.match(reset, PASSWORD);
+      assert.deepEqual(await traces(page, reset, 1), []);
+      assert.deepEqual(writes, ['/api/admin/users', `/api/admin/users/${answer.user.id}/password`]);
+      await closeButton(page);
+    } finally { await ctx.close(); }
+  });
+
+  await t.test('a server behind a reverse proxy — pat (an owner by the proxy) resets local lou\'s password: the confirm, the status and the secret say a local user cannot sign in here and what the reset still does, never "at their next sign-in"', async () => {
+    const proxyChild = await serve(workspace('proxy'), { env: { OBSERVOGRAM_TRUST_PROXY_AUTH: '1', OBSERVOGRAM_TRUST_PROXY_AUTH_ACK: 'only-the-proxy-reaches-this-port', OBSERVOGRAM_PROXY_AUTH_OWNERS: 'pat' } });
+    children.push(proxyChild);
+    const PROXY = { 'X-Forwarded-User': 'pat' };
+    const made = await fetch(`${proxyChild.base}/api/admin/users`, { method: 'POST', headers: { ...PROXY, Accept: 'application/json', 'X-Observogram-CSRF': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ login: 'lou', password: 'abcd-efgh-ijkm-npqr-stuv-wxyz', role: 'operator' }) });
+    assert.equal(made.status, 201);
+    const lou = (await made.json()).user.id;
+    const { page, ctx } = await open(proxyChild.base, 'pat', { ctx: await browser.newContext({ viewport: LAPTOP, extraHTTPHeaders: PROXY }) });
+    try {
+      const writes = [];
+      page.on('request', (r) => { if (/\/api\/admin\/users/.test(r.url()) && r.method() !== 'GET') writes.push(r.url().slice(proxyChild.base.length)); });
+      await toSettings(page);
+      await toSection(page, 'users');
+      await manage(page, lou);
+      await page.click('[data-user-action="reset"]');
+      await page.waitForSelector('#set-editor-confirm', { timeout: T });
+      const line = 'This server signs in through its reverse proxy: a local user cannot sign in here until it runs local sign-in.';
+      assert.equal(await text(page, '#set-editor-confirm-text'), `Reset lou's password? ${line} The reset still ends every session of lou, and a new temporary password is shown once — lou signs in with it then, and sets their own.`);
+      await page.click('#set-editor-confirm');
+      await editorStatus(page, /^Every session of lou ended\. /);
+      assert.equal(await text(page, '#set-editor-status'), `Every session of lou ended. ${line} Then lou signs in with the password below, and sets a new one.`);
+      assert.equal(await text(page, '.set-secret-text'), 'Temporary password for lou — shown once. It is not stored in this browser and cannot be shown again. Reset it to get a new one.');
+      const reset = await text(page, '#set-secret-value');
+      assert.match(reset, PASSWORD);
+      assert.deepEqual(await traces(page, reset, 1), []);
+      assert.deepEqual(writes, [`/api/admin/users/${lou}/password`]);
+      // What the sentence says: no local sign-in is served here.
+      assert.equal((await fetch(`${proxyChild.base}/auth/login`, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'u=lou&p=x' })).status, 404);
+      await closeButton(page);
+    } finally { await ctx.close(); }
+  });
+
+  await t.test('a server behind a reverse proxy — Enable… and Sign out everywhere… say how each user signs in here: local lou cannot (no local sign-in is served), quin through the reverse proxy, never with a password; the confirm and the status agree', async () => {
+    const pc = await serve(workspace('proxy-users'), { env: { OBSERVOGRAM_TRUST_PROXY_AUTH: '1', OBSERVOGRAM_TRUST_PROXY_AUTH_ACK: 'only-the-proxy-reaches-this-port', OBSERVOGRAM_PROXY_AUTH_OWNERS: 'pat' } });
+    children.push(pc);
+    const PAT = { 'X-Forwarded-User': 'pat' };
+    const api = async (method, path, body, who = PAT) => {
+      const r = await fetch(`${pc.base}${path}`, { method, headers: { ...who, Accept: 'application/json', 'X-Observogram-CSRF': '1', ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+      return { status: r.status, json: await r.json().catch(() => null) };
+    };
+    assert.equal((await api('GET', '/auth/me', undefined, { 'X-Forwarded-User': 'quin' })).json?.authenticated, true, "quin's row, made at first sight");
+    const lou = (await api('POST', '/api/admin/users', { login: 'lou', password: 'abcd-efgh-ijkm-npqr-stuv-wxyz', role: 'operator' })).json.user.id;
+    const quin = (await api('GET', '/api/admin/users')).json.users.find((u) => u.login === 'proxy://proxy#quin');
+    assert.equal(quin?.kind, 'oidc', "a reverse proxy's user is an IdP user");
+    for (const id of [lou, quin.id]) assert.equal((await api('POST', `/api/admin/users/${id}/disable`)).status, 200);
+    const { page, ctx } = await open(pc.base, 'pat', { ctx: await browser.newContext({ viewport: LAPTOP, extraHTTPHeaders: PAT }) });
+    try {
+      await toSettings(page);
+      await toSection(page, 'users');
+      const confirmed = async (id, action, re) => {
+        await manage(page, id);
+        await page.click(`[data-user-action="${action}"]`);
+        await page.waitForSelector('#set-editor-confirm', { timeout: T });
+        const confirm = await text(page, '#set-editor-confirm-text');
+        await page.click('#set-editor-confirm');
+        await editorStatus(page, re);
+        const status = await text(page, '#set-editor-status');
+        await closeButton(page);
+        return [confirm, status];
+      };
+      const louWhy = 'This server signs in through its reverse proxy: a local user cannot sign in here until it runs local sign-in. Then lou signs in with their password.';
+      assert.deepEqual(await confirmed(lou, 'enable', / enabled\./), [`Enable lou? ${louWhy}`, `lou enabled. ${louWhy}`]);
+      assert.deepEqual(await confirmed(quin.id, 'enable', / enabled\./), ['Enable proxy://proxy#quin? They can sign in again through the reverse proxy.', 'proxy://proxy#quin enabled.']);
+      // Sign out everywhere: "they can sign in again" only for quin, who can.
+      assert.deepEqual(await confirmed(lou, 'signout', /^Every session of lou ended/),
+        [`Sign lou out everywhere? Every session of lou ends at its next request. ${louWhy}`, `Every session of lou ended. ${louWhy}`]);
+      assert.deepEqual(await confirmed(quin.id, 'signout', /^Every session of proxy:\/\/proxy#quin ended/),
+        ['Sign proxy://proxy#quin out everywhere? Every session of proxy://proxy#quin ends at its next request; they can sign in again.', 'Every session of proxy://proxy#quin ended.']);
+      // What the sentences say: quin is let in by the proxy again; no local sign-in is served for lou.
+      assert.equal((await api('GET', '/auth/me', undefined, { 'X-Forwarded-User': 'quin' })).json?.authenticated, true);
+      assert.equal((await fetch(`${pc.base}/auth/login`, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'u=lou&p=x' })).status, 404);
+    } finally { await ctx.close(); }
+  });
+
+  await t.test('a confirm step whose rank went while it was open — an environment\'s Delete, an endpoint\'s Delete, a member\'s Remove, a user\'s Disable: the 403 redraws the dialog without its danger button, the focus stays inside the dialog and the refusal is announced', async () => {
+    // A server of its own: each case demotes the reader over HTTP while the confirm step is open, then restores them.
+    const rws = workspace('rank');
+    fixture(rws);
+    const rank = await serve(rws, { env: { OBSERVOGRAM_MCP_ORIGINS: 'https://mcp.acme.test' } });
+    children.push(rank);
+    const jar = {};
+    const as = async (login) => (jar[login] ||= (await signIn(rank.base, login, password(login))).session);
+    const api = async (who, method, path, body) => {
+      const headers = { Accept: 'application/json', 'X-Observogram-CSRF': '1', 'X-Observogram-Org': 'acme', Cookie: await as(who) };
+      if (body !== undefined) headers['Content-Type'] = 'application/json';
+      const r = await fetch(`${rank.base}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+      return { status: r.status, json: await r.json().catch(() => null) };
+    };
+    assert.equal((await api('oscar', 'POST', '/api/validate', PAYMENT)).status, 200);
+    const env = (await api('oscar', 'GET', '/api/services')).json.services.find((s) => s.slug === 'payment-service').environments.find((e) => e.name === 'prod').id;
+    const ep = (await api('ada', 'POST', '/api/mcp-endpoints', { name: 'gw', url: 'https://mcp.acme.test/obs' })).json.endpoint.id;
+    const user = Object.fromEntries((await api('olive', 'GET', '/api/admin/users')).json.users.map((u) => [u.login, u.id]));
+    const role = async (login, to) => assert.equal((await api('olive', 'PATCH', `/api/org/members/${user[login]}`, { role: to })).status, 200);
+    const owner = async (by, login, flag) => assert.equal((await api(by, 'PUT', `/api/admin/users/${user[login]}/owner`, { owner: flag })).status, 200);
+    const refused = async (login, section, opening, demote, restore) => {
+      const ctx = await browser.newContext({ viewport: LAPTOP });
+      await ctx.addCookies([{ name: 'observogram_session', value: (await as(login)).split('=')[1], url: rank.base }]);
+      const { page } = await open(rank.base, login, { ctx });
+      try {
+        await toSettings(page);
+        await toSection(page, section);
+        await opening(page);
+        await page.waitForSelector('#set-editor-confirm', { timeout: T });
+        await page.focus('#set-editor-confirm');
+        await page.evaluate(() => { document.getElementById('ux-status').textContent = ''; });
+        await demote();
+        await page.keyboard.press('Enter');
+        const refusal = await editorError(page);
+        assert.match(refusal, /^403: /, `${login} (${section})`);
+        const after = await page.evaluate(() => ({
+          confirm: Boolean(document.querySelector('#set-editor-confirm')),
+          body: document.activeElement === document.body,
+          inside: Boolean(document.activeElement?.closest('#set-editor-host .set-editor[role="dialog"][aria-modal="true"]')),
+        }));
+        assert.deepEqual(after, { confirm: false, body: false, inside: true }, `${login} (${section}): after the 403 the focus is inside the dialog, never on <body>`);
+        await page.waitForFunction((r) => document.getElementById('ux-status')?.textContent === r, refusal, { timeout: T });
+      } finally { await ctx.close(); await restore(); }
+    };
+    await refused('oscar', 'environments', async (page) => {
+      await page.click(`[data-edit-env="${env}"]`);
+      await page.waitForSelector('.set-editor[data-kind="environment"]', { timeout: T });
+      await page.click('#set-editor-delete');
+    }, () => role('oscar', 'viewer'), () => role('oscar', 'operator'));
+    await refused('ada', 'endpoints', async (page) => {
+      await page.click(`[data-edit-endpoint="${ep}"]`);
+      await page.waitForSelector('.set-editor[data-kind="endpoint"]', { timeout: T });
+      await page.click('#set-editor-delete');
+    }, () => role('ada', 'operator'), () => role('ada', 'admin'));
+    await refused('ada', 'members', (page) => page.click(`[data-member-remove="${user.vera}"]`), () => role('ada', 'operator'), () => role('ada', 'admin'));
+    await owner('olive', 'ada', true);
+    await refused('olive', 'users', async (page) => {
+      await manage(page, user.bob);
+      await page.click('[data-user-action="disable"]');
+    }, () => owner('ada', 'olive', false), () => owner('ada', 'olive', true));
   });
 
   assert.deepEqual(problems, [], 'no page error and no console.error anywhere in the journey');

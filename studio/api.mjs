@@ -18,16 +18,23 @@ export const CSRF_HEADER = { 'X-Observogram-CSRF': '1' };
 // request runs in that org's workspace. Resolved at boot from /auth/me
 // memberships + the persisted choice; null in the open posture (the
 // server runs it in the default org).
+// The choice is saved with the login that made it (studioOrgBy.v1): on a
+// shared browser an owner never boots into an org another login chose
+// (settings-model.mjs activeOrgChoice keeps a non-membership only when this
+// login saved it).
 let activeOrg = null;
 export function setActiveOrg(id) {
   activeOrg = id || null;
   try {
     if (activeOrg) localStorage.setItem('studioOrg.v1', activeOrg);
     else localStorage.removeItem('studioOrg.v1');
+    if (activeOrg && signedInLogin) localStorage.setItem('studioOrgBy.v1', signedInLogin);
+    else localStorage.removeItem('studioOrgBy.v1');
   } catch (_) {}
 }
 export function getActiveOrg() { return activeOrg; }
 export function savedOrg() { try { return localStorage.getItem('studioOrg.v1') || null; } catch (_) { return null; } }
+export function savedOrgBy() { try { return localStorage.getItem('studioOrgBy.v1') || null; } catch { return null; } }
 
 // The ORG chip, one pure rule for both header sites (studio/app.mjs):
 // a switcher for a user in more than one org, a static label for a user
@@ -309,7 +316,9 @@ export async function removeDeployProfile(name) {
 // At sign-out: every URL, MCP endpoint and live job this login remembered,
 // in every org, and the legacy key — and every deploy target profile in the browser (every
 // user's, and the pre-slice-3 key): a shared browser keeps neither past
-// a sign-out.
+// a sign-out. Nor the login itself: the saved org's `studioOrgBy.v1` names
+// who chose it, and goes when it names this login (the org stays, a
+// browser's choice; with no login beside it, no owner inherits it).
 export function forgetMcpUrls(login = signedInLogin) {
   try {
     const prefix = `${MCP_URL_KEY_PREFIX}${login || 'local'}:`;
@@ -321,6 +330,7 @@ export function forgetMcpUrls(login = signedInLogin) {
     }
     localStorage.removeItem(LEGACY_MCP_URL_KEY);
     localStorage.removeItem(LEGACY_DEPLOY_PROFILES_KEY);
+    if (login && localStorage.getItem('studioOrgBy.v1') === login) localStorage.removeItem('studioOrgBy.v1');
   } catch { /* storage unavailable */ }
 }
 

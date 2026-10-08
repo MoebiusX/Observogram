@@ -82,16 +82,17 @@ the service page, Check and Build wired to the table (Build writes tier and
 owners where the row has none), one org switcher, the no-org screen; the
 `.svc-*` zone under the AA scan.*
 
-*Slice 6b-i is built (`codex/settings`): Settings for operators and admins —
+*Slice 6b is built (`codex/settings`, `codex/settings-owner`): Settings —
 a mode entered from Advanced and the account menu, its sections by the
 server's rank, the banner naming the way in where the server names one;
-environments (one editor, from Settings and from the service page), the
-org's MCP endpoint records (the token a variable's name under the org's
-prefix), the MCP pickers listing the org's endpoints first and sending
-`mcpEndpointId`, members and the org's name, the audit; the `.set-*` zone
-under the AA scan. The token posture's refusal under `OBSERVOGRAM_AUTH=off`
-now says to restart without it. Slice 6 (6b, Settings) is next: its owner
-sections — users, organisations, the join role.*
+environments (one editor, from Settings and from the service page), MCP
+endpoints (the token a variable's name under the org's prefix) and the
+pickers on `mcpEndpointId`, members and the org's name, the audit, users (a
+temporary password shown once and changed at first sign-in), organisations
+(an owner acts in one they are not a member of), the join role; the `.set-*`
+zone under the AA scan. The token posture's refusal under
+`OBSERVOGRAM_AUTH=off` now says to restart without it. Every slice of §7 is
+built.*
 
 ## 0 · Status quo — what exists and what is missing
 
@@ -873,8 +874,11 @@ import the database is authoritative, and the legacy files are only hashed
 - **New local users** (`npm run users -- add`, or Settings):
   - The first local user created while no owner exists becomes owner plus
     `admin` of the default org, whatever `--role` says, as the seed would
-    have. The CLI prints this. It is safe because Settings cannot create a
-    user without an owner, so only shell access triggers it. Only while
+    have. The CLI prints this. It is safe because Settings creates a user
+    only for an owner, so with no owner only shell access triggers it — or
+    the studio opened at `127.0.0.1` on a server without sign-in, which
+    answers the identity API to a person at this machine only (the `direct`
+    rule). Only while
     the server's sign-in mode is local: a local user cannot sign in under
     OIDC, so there the user is created without owner and the CLI prints
     why, naming the mode it used.

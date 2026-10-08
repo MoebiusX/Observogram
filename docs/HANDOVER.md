@@ -34,7 +34,7 @@ latest 22, `node-floor` (`npm test` on exactly 22.16.0), `store-prestore` (from 
 the Export gate against a `v0.4.0` worktree). `refresh-live-pack` runs only on
 demand or when the fetcher changes.
 
-**The store (backlog 0) — slices 1 and 2 on `develop`; slice 3a (roles enforced) and 3b (the identity API) delivered; slice 4a (the pack registry on the store, PR #140) and 4b (services, environments, MCP endpoints) delivered; slice 5 (the audit) delivered; slice 6a (the Services home, the service page) delivered; slice 6b-i (Settings for operators and admins) delivered; slice 6 (6b, Settings) is next — its owner sections.**
+**The store (backlog 0) — slices 1 and 2 on `develop`; slice 3a (roles enforced) and 3b (the identity API) delivered; slice 4a (the pack registry on the store, PR #140) and 4b (services, environments, MCP endpoints) delivered; slice 5 (the audit) delivered; slice 6a (the Services home, the service page) delivered; slice 6b (Settings) delivered; every STORE_PLAN slice is built.**
 Slice 1 (the store foundation: `server/store/*`, `packc store backup` / `restore`, the k8s
 store volume) is PR #109. Slice 2a (PR #111, branch `codex/store-identity`, stacked on it)
 moves identity onto the store: `start()` runs `bootStore()` (`server/boot.mjs`: the boot
@@ -160,10 +160,11 @@ test-tenancy, test-authz, test-auth-oidc, test-chain-history, test-store-guards 
 one JSON row per line, the route's filters as flags, the same rule through `parseAuditQuery`'s
 `cli` surface, no row written. Settings → Audit reads it, paging by `next` (6b).
 Slice 6a delivered the Services home and the service page on the table
-(`codex/services-axis`). Slice 6b-i delivered Settings for operators and admins
-(`codex/settings`): environments, the org's MCP endpoint records and the pickers on
-`mcpEndpointId`, members and the org's name, the audit. Next is slice 6 (6b, Settings): its
-owner sections — users, organisations, the join role.
+(`codex/services-axis`). Slice 6b delivered Settings (`codex/settings`, then
+`codex/settings-owner`): environments, the org's MCP endpoint records and the pickers on
+`mcpEndpointId`, members and the org's name, the audit; for owners, users (a temporary
+password shown once and changed at first sign-in), organisations (an owner acts in one they
+are not a member of) and the join role. Every STORE_PLAN slice is built.
 
 ### otel-observability-pack (the spec) — `develop` at the merge of PR #8
 
@@ -211,10 +212,13 @@ These are the rules we learned the hard way; treat them as standing instructions
 - **Studio conventions** (`docs/UI_CONVENTIONS.md`): views import `studio/host.mjs`, never
   `app.mjs`; loaders, pure models and renderers are separate exports; models read no state
   and fetch nothing and are tested under `node:test`; a journey's actions ride
-  `host.<namespace>` (`host.build`, `host.services`), built by the controller and handed to
-  the renderer; the studio's persisted state is one login's in one org
-  (`studioState.v2:<login>:<org>`); the AA scan reads `app.css` zone by zone and a zone's
-  block comment records what `ux.css` / `reskin.css` override; `tools/lib` stays free of
+  `host.<namespace>` (`host.build`, `host.services`, `host.settings`), built by the
+  controller and handed to the renderer; the studio's persisted state is one login's in one
+  org (`studioState.v2:<login>:<org>`); the AA scan reads `app.css` zone by zone (a `.set-*`
+  rule under the `==== Settings` marker) and a zone's block comment records what `ux.css` /
+  `reskin.css` override; a secret is shown once and never stored (a temporary password in its
+  dialog only; an MCP read token is a server variable's name); the MCP pickers send
+  `mcpEndpointId`; `tools/lib` stays free of
   `node:*` (it is served to the browser at `/lib`, imported at call time, never statically);
   `tools/test-studio-graph.mjs` links the module graph on `npm test`.
 - **Reviews before he sees it.** The pattern that worked: implementer → two parallel
@@ -278,8 +282,7 @@ store, PR #111) and 2b (export, `import --replace`, `rekey-issuer`, `purge-org`)
 (roles enforced, the live pack per org; PR #119) and 3b (the identity API) are delivered; slice
 4a (the pack registry on the store, PR #140) and 4b (services, environments, MCP endpoints) are
 delivered; slice 5 (the audit) is delivered; slice 6a (the Services home, the service page) is
-delivered; slice 6b-i (Settings for operators and admins) is delivered; slice 6 (6b, Settings)
-is next — see §1.
+delivered; slice 6b (Settings) is delivered; every STORE_PLAN slice is built — see §1.
 
 **A. Decide: "the draft becomes the pack".** The root cause of every remaining Build gap is
 that the draft is a set of inputs re-instantiated from the seed on each change, with

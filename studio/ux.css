@@ -393,11 +393,12 @@ body.chrome-observa[data-mode="build"] .hdr { display: none !important; }
   }
 }
 /* Phone width: the account menu is its glyph (the name stays for assistive
-   technology), the action cluster gives way before the tabs do, and the
-   popover never runs past the viewport's edge. */
+   technology), the action cluster gives way before the tabs do — down to its
+   widest control (it wraps), never past the page's edge — and the popover
+   never runs past the viewport's edge. */
 @media (max-width: 720px) {
   .observa-actions .hdr-user-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  .observa-hdr-inner > .observa-actions { flex: 0 1 auto; min-width: 0; }
+  .observa-hdr-inner > .observa-actions { flex: 0 1 auto; min-width: min-content; }
   .observa-actions .hdr-user, .observa-actions .hdr-user-btn { min-width: 0; }
   .observa-actions .hdr-user-menu { max-width: calc(100vw - 32px); }
 }

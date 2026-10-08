@@ -574,9 +574,10 @@ In the studio, Settings (Advanced → Settings, or the account menu) draws
 what each role may do from the server's answer for the active org: every
 member reads the environments and the MCP endpoints (a viewer an
 endpoint's name and origin only), an operator edits the environments, an
-admin the MCP endpoints, the members, the org's name and the audit; a
-section or a control the reader's rank cannot use is listed `aria-disabled`
-with the sentence naming who can. The server still decides every write; a
+admin the MCP endpoints, the members, the org's name and the audit, an owner
+also the deployment's users, organisations and join role; a section or a
+control the reader's rank cannot use is listed `aria-disabled` with the
+sentence naming who can. The server still decides every write; a
 refusal is shown as served.
 
 **What a viewer can no longer do in the studio** (each answers with the
@@ -763,6 +764,30 @@ admin (`GET /api/audit`, `scope=org`) and the deployment's to an owner,
 filtered by actor, kind, action, target and whole UTC days (`From` and
 `Through`, sent as `since` and an `until` of the day after), older rows paged by `next`; a filter the
 server refuses is its sentence, as served.
+
+**In the studio: Settings → Users, Organisations and Join role** (an owner's;
+a signed-in member who is not one is told to ask one). New local user asks for no
+password: the browser draws a temporary one (24 characters), creates the user
+with it and sets it again at once (`POST /api/admin/users/:id/password`), so
+the user must change it at first sign-in. The dialog shows it once — never in
+the status line, a title, the browser's storage or the console — and Close,
+leaving Settings or the page lets go of it. Reset password does the same for
+a local user; disable, enable, sign out everywhere and make or revoke owner
+each confirm first, and the last enabled owner's Disable and Revoke owner are
+drawn `aria-disabled` with `<login> is the last enabled owner — make another
+user an owner first`. Disabling or signing out oneself clears this browser's
+traces of that login, then offers the sign-in. A user row carries no email.
+On a server without sign-in, at `127.0.0.1`, the first local user is created
+as the owner and arms sign-in for the next start without
+`OBSERVOGRAM_AUTH=off`: the dialog says so, its password not forced to
+change. New organisation makes the owner its first admin (Take over an
+existing directory adopts `orgs/<id>/`) and offers Switch to it; Remove asks
+for the id typed, says what cannot be undone, and shows the server's note.
+**Act in <id>** reloads this browser into an org the owner is not a member
+of — the way to rescue an org with no enabled admin left — with the ORG chip
+reading `<name> — acting as owner`. Join role states the sign-in mode it
+applies to first; admin needs a ticked box, the only body that carries
+`confirm`.
 
 ### Services, Environments And MCP Endpoints
 

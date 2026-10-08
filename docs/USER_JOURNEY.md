@@ -242,7 +242,12 @@ Belongs here:
 - members and the org's name for admins — add by login or verified email,
   change a role, remove; the last-admin rule drawn before the server says it;
 - the audit for admins: the org's rows, filtered by whole UTC days, paged
-  back;
+  back; for owners, the deployment's;
+- for owners, the deployment: users (a new local user's temporary password
+  shown once, changed at first sign-in; the last-owner rule drawn first),
+  organisations (create and switch to it, act in one they are not a member
+  of, remove with the id typed) and the join role beside the sign-in mode it
+  applies to;
 - one banner naming the way in where the server names one — a token-only
   server, a server without sign-in, the static bundle — in the server's
   words;
@@ -252,7 +257,8 @@ Belongs here:
 Does not belong here:
 
 - services themselves (Build and the service page write them);
-- a secret's value — a token, a password — anywhere on the page;
+- a secret's value — a token anywhere on the page, a password outside the
+  one dialog that shows a new temporary password once;
 - an email in a member row;
 - a journey tab.
 

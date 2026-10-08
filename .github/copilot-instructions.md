@@ -102,8 +102,9 @@ them; change them at the source and update the gate in the same commit.
   never a raw body in a status line); a `.svc-*` rule lives under the
   `==== Services` marker and a `.set-*` rule under the `==== Settings` marker
   in `studio/app.css`, which the AA scan in `tools/test-build-model.mjs`
-  reads; a secret (an MCP token, a password) is never rendered, logged,
-  stored or put in a title or link — the token is a server variable's name.
+  reads; a secret (an MCP token, a password) is never logged, stored or put
+  in a title or link — the token is a server variable's name, and a temporary
+  password is shown once, in its dialog, and nowhere else.
 
 ## Git hygiene
 

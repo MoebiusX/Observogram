@@ -502,8 +502,8 @@ function nonEmptyDir(path) {
 
 const NEEDS_IDENTITY = 'creating a second org needs identity: add the first user with npm run users -- add, or configure OIDC';
 const NEEDS_IDENTITY_AUTH_OFF = 'creating a second org needs identity: this server runs with OBSERVOGRAM_AUTH=off, '
-  + 'and a second org would make its next start refuse — restart it without OBSERVOGRAM_AUTH=off and sign in as an owner '
-  + '(npm run users -- add <login> first when no user exists), or configure OIDC';
+  + 'and a second org would make its next start refuse — restart it without OBSERVOGRAM_AUTH=off, once a user exists '
+  + '(npm run users -- add <login>) or with OIDC configured, and sign in as an owner';
 
 // `orgs -- create`: needs identity and an enabled owner (A-15); refuses a
 // non-empty orgs/<id>/ unless adopted; a slug is never reused. With
@@ -719,7 +719,7 @@ export function setJoinRole(db, actor, role, { confirm = false } = {}) {
   }
   return atomic(db, () => {
     if (value === 'admin' && confirm !== true) {
-      refuse(`every user the IdP lets in would become an admin of ${defaultOrgId(db)} — its name, its members and, from slice 4, `
+      refuse(`every user the IdP lets in would become an admin of ${defaultOrgId(db)} — its name, its members and `
         + 'its MCP endpoints; to add admins one by one use POST /api/org/members with {"role": "admin"}, '
         + 'or send {"role": "admin", "confirm": true}');
     }
