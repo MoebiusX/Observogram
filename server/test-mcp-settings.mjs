@@ -637,7 +637,7 @@ class FakeWorker extends EventEmitter {
   terminate() { this.terminated = true; return Promise.resolve(0); }
 }
 
-test('a policy worker that cannot be constructed, or fails, fails closed: every rule counts as matched, one line names the error class, never its message; a refused flag is tried once more, no more; evaluatePolicy never rejects', async () => {
+test('a policy worker that cannot be constructed, or fails, fails closed: every rule it did not finish counts as matched (every rule, when it never started), one line names the error class, never its message; a refused flag is tried once more, no more; evaluatePolicy never rejects', async () => {
   const d = genericDescriptor();
   const failedLine = (cls) => `[mcp-settings] the policy worker failed (${cls}) — rules[0], rules[1], rules[2] counted as matched`;
   const everyRule = { timedOut: [0, 1, 2], findings: [[0, 'url', 'ack 0', true], [1, 'user', null, true], [2, 'url', 'ack 2', true]] };
@@ -667,6 +667,21 @@ test('a policy worker that cannot be constructed, or fails, fails closed: every 
   assert.equal(fake.terminated, true, 'the failed worker is terminated');
   assert.deepEqual(lines, [failedLine('RangeError'), failedLine('Error'), failedLine('SyntaxError')]);
   assert.ok(!lines.join('\n').includes('slow.example') && !lines.join('\n').includes('max-old-space'), 'never the error\'s message');
+  // Failed after rules[0] finished (an error thrown in rules[1], say): the
+  // finished rule keeps its findings, and only the rules it did not finish
+  // count as matched — never every rule.
+  const partway = (url, options) => {
+    const w = new FakeWorker();
+    const { port } = options.workerData;
+    port.postMessage({ start: 0 });
+    port.postMessage({ rule: 0, findings: [{ rule: 0, field: 'url', warn: 'Fast match.', ack: 'ack 0', unevaluated: false }], start: 1 });
+    setImmediate(() => w.emit('error', new TypeError(`a value: ${START_VALUES.url}`)));
+    return w;
+  };
+  const partLines = [];
+  const part = await evaluatePolicy(startPolicy(), d, START_VALUES, { createWorker: partway, deadlineMs: GENEROUS_MS, log: (l) => partLines.push(l) });
+  assert.deepEqual(startShape(part), { timedOut: [1, 2], findings: [[0, 'url', 'ack 0', false], [1, 'user', null, true], [2, 'url', 'ack 2', true]] });
+  assert.deepEqual(partLines, ['[mcp-settings] the policy worker failed (TypeError) — rules[1], rules[2] counted as matched']);
   // A log that throws costs the line, never the answer.
   const loud = await evaluatePolicy(startPolicy(), d, START_VALUES, { createWorker: refuse, log: () => { throw new Error('stderr closed'); } });
   assert.deepEqual(startShape(loud), everyRule);

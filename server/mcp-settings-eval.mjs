@@ -174,9 +174,10 @@ async function runWorker(rules, descriptor, values, { deadlineMs, execArgv, crea
  * The policy's findings for a form and its values, as policyFindings returns
  * them, computed in a worker under a deadline per rule. → Promise<{
  * findings, timedOut }>: `timedOut` the indexes of the rules that did not
- * finish (the one past its deadline and the ones after it, never run; every
- * rule when the worker failed or could not be constructed), each of which is
- * in `findings` as a match (`timedOut: true`). `policy` is
+ * finish (the one past its deadline and the ones after it, never run; when
+ * the worker failed, every rule it had not finished — a rule it finished
+ * keeps its findings; every rule when it could not be constructed), each of
+ * which is in `findings` as a match (`timedOut: true`). `policy` is
  * compileSettingsPolicy's, or null. Never rejects. `execArgv` (the server's
  * flags) and `createWorker` (`new Worker(url, options)`) are the suites'
  * seams.

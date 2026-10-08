@@ -429,9 +429,9 @@ server is exposed without sign-in. The studio server:
   takes at most the worker's start (10 s at most) plus 100 ms per rule —
   3.2 s for the 32 rules a policy may hold. A server started with a flag a
   worker refuses (a V8 one: `node --max-old-space-size=… server/index.mjs`)
-  starts the worker without its flags, and a worker that cannot start or
-  fails counts every rule as matched the same way, its line naming the
-  error's class;
+  starts the worker without its flags; a worker that cannot start counts
+  every rule as matched the same way, and one that fails every rule it did
+  not finish, its line naming the error's class;
 - sends with the platform's `fetch`, **never through the transport hook**, so
   a hook's own credential never rides to a settings path; no redirect
   followed; exactly `Content-Type`, `Accept` and the description's own

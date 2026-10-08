@@ -1135,7 +1135,8 @@ start, served at `GET /api/mcp-settings`, baked into a bundle by
   rule, counted from the rule's own start, and a rule that does not finish
   counts as matched, as do the rules after it (its warning shows, its
   acknowledgement is required, the server log names the rule and never the
-  value); a worker that cannot start or fails counts every rule as matched.
+  value); a worker that cannot start counts every rule as matched, and one
+  that fails every rule it did not finish.
   A server started with V8 flags (`node --max-old-space-size=…`) starts the
   worker without them. The studio evaluates the policy in the page, where a
   slow pattern freezes only that admin's tab. Keep patterns simple: a slow

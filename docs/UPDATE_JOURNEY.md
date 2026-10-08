@@ -1343,8 +1343,9 @@ every pass-through submit, acknowledged or not, was answered
 `502 the server-settings proxy failed (Error)` (a server without one builds
 no worker and was unaffected). The worker is now constructed once more
 without the flags, and a worker that cannot be constructed fails closed
-like one that fails — every rule counts as matched, and the log line names
-the error's class. No route, variable, default or text changes.
+like one that fails — every rule counts as matched (for one that fails,
+every rule it did not finish), and the log line names the error's class.
+No route, variable, default or text changes.
 Tests: 1390 → 1393 (three more in `server/test-mcp-settings.mjs`: the
 refused flag, in-process and in a child started with it; a worker that
 cannot be constructed or fails; and the per-rule deadline, pinned with a
