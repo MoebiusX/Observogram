@@ -31,7 +31,8 @@
  * an org created, switched to, and removed with its id typed; the join role,
  * confirm sent for admin only; signing herself out everywhere leaves none of
  * her keys. An open server on the loopback: the first user is the owner the
- * create armed, with no second call.
+ * create armed, with no second call. A server behind a reverse proxy: a
+ * local user's reset says they cannot sign in here, and what it still does.
  * As vera (viewer): no Edit, no URL; her one org renamed long, its ORG
  * label keeps the OBSERVA bar inside the phone width. As nora (no org):
  * the boot's refusal.
@@ -1263,6 +1264,38 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       assert.match(reset, PASSWORD);
       assert.deepEqual(await traces(page, reset, 1), []);
       assert.deepEqual(writes, ['/api/admin/users', `/api/admin/users/${answer.user.id}/password`]);
+      await closeButton(page);
+    } finally { await ctx.close(); }
+  });
+
+  await t.test('a server behind a reverse proxy — pat (an owner by the proxy) resets local lou\'s password: the confirm, the status and the secret say a local user cannot sign in here and what the reset still does, never "at their next sign-in"', async () => {
+    const proxyChild = await serve(workspace('proxy'), { env: { OBSERVOGRAM_TRUST_PROXY_AUTH: '1', OBSERVOGRAM_TRUST_PROXY_AUTH_ACK: 'only-the-proxy-reaches-this-port', OBSERVOGRAM_PROXY_AUTH_OWNERS: 'pat' } });
+    children.push(proxyChild);
+    const PROXY = { 'X-Forwarded-User': 'pat' };
+    const made = await fetch(`${proxyChild.base}/api/admin/users`, { method: 'POST', headers: { ...PROXY, Accept: 'application/json', 'X-Observogram-CSRF': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ login: 'lou', password: 'abcd-efgh-ijkm-npqr-stuv-wxyz', role: 'operator' }) });
+    assert.equal(made.status, 201);
+    const lou = (await made.json()).user.id;
+    const { page, ctx } = await open(proxyChild.base, 'pat', { ctx: await browser.newContext({ viewport: LAPTOP, extraHTTPHeaders: PROXY }) });
+    try {
+      const writes = [];
+      page.on('request', (r) => { if (/\/api\/admin\/users/.test(r.url()) && r.method() !== 'GET') writes.push(r.url().slice(proxyChild.base.length)); });
+      await toSettings(page);
+      await toSection(page, 'users');
+      await manage(page, lou);
+      await page.click('[data-user-action="reset"]');
+      await page.waitForSelector('#set-editor-confirm', { timeout: T });
+      const line = 'This server signs in through its reverse proxy: a local user cannot sign in here until it runs local sign-in.';
+      assert.equal(await text(page, '#set-editor-confirm-text'), `Reset lou's password? ${line} The reset still ends every session of lou, and a new temporary password is shown once — lou signs in with it then, and sets their own.`);
+      await page.click('#set-editor-confirm');
+      await editorStatus(page, /^Every session of lou ended\. /);
+      assert.equal(await text(page, '#set-editor-status'), `Every session of lou ended. ${line} Then lou signs in with the password below, and sets a new one.`);
+      assert.equal(await text(page, '.set-secret-text'), 'Temporary password for lou — shown once. It is not stored in this browser and cannot be shown again. Reset it to get a new one.');
+      const reset = await text(page, '#set-secret-value');
+      assert.match(reset, PASSWORD);
+      assert.deepEqual(await traces(page, reset, 1), []);
+      assert.deepEqual(writes, [`/api/admin/users/${lou}/password`]);
+      // What the sentence says: no local sign-in is served here.
+      assert.equal((await fetch(`${proxyChild.base}/auth/login`, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'u=lou&p=x' })).status, 404);
       await closeButton(page);
     } finally { await ctx.close(); }
   });

@@ -573,19 +573,47 @@ export function userActions(record, users, { me = null, can = true, reason = nul
   ].map((a) => ({ ...a, enabled: a.reason === null }));
 }
 
-// Without sign-in (`open`, the open posture: a local user exists, so the
-// store is armed and the server runs OBSERVOGRAM_AUTH=off) nobody signs in
-// until the server starts without it — a reset says so, as a create does.
+// Whether a local user signs in here — the one rule the reset's confirm, its
+// status and the secret step read, so they never disagree. Not without
+// sign-in (`open`, the open posture: a local user exists, so the store is
+// armed and the server runs OBSERVOGRAM_AUTH=off — nobody signs in until it
+// starts without it), nor where the server signs in through OIDC or its
+// reverse proxy (`joinRole` GET /api/admin/join-role `mode`, A13 — a local
+// user signs in once it runs local sign-in).
+const localSignInHere = ({ open = false, joinRole = null } = {}) => !open && signInModeLine(joinRole) === null;
 const OPEN_SIGN_IN = (login) => `This server runs without sign-in (OBSERVOGRAM_AUTH=off): ${login} signs in once it starts without it`;
 
+// A reset's confirm and its status, by where a local user signs in: where
+// they cannot, each says so and what the reset still does — every session
+// ends, and the temporary password is the one they sign in with once they
+// can, then set their own.
+function resetTexts(login, { open = false, joinRole = null } = {}) {
+  if (open) {
+    return {
+      confirm: `Reset ${login}'s password? Every session of ${login} ends; a new temporary password is shown once. ${OPEN_SIGN_IN(login)}, and sets their own then.`,
+      status: `Every session of ${login} ended. ${OPEN_SIGN_IN(login)}, with the password below, and sets a new one then.`,
+    };
+  }
+  if (!localSignInHere({ joinRole })) {
+    const line = signInModeLine(joinRole);
+    return {
+      confirm: `Reset ${login}'s password? ${line} The reset still ends every session of ${login}, and a new temporary password is shown once — ${login} signs in with it then, and sets their own.`,
+      status: `Every session of ${login} ended. ${line} Then ${login} signs in with the password below, and sets a new one.`,
+    };
+  }
+  return {
+    confirm: `Reset ${login}'s password? Every session of ${login} ends; a new temporary password is shown once, and ${login} sets their own at their next sign-in.`,
+    status: `Every session of ${login} ended; they set a new password at their next sign-in.`,
+  };
+}
+
 // The confirm step of one user action: the consequence, then the danger
-// button naming it. `self` the row is the caller's; `open` see OPEN_SIGN_IN.
-function userConfirm(action, login, { self = false, defaultOrg = null, open = false } = {}) {
+// button naming it. `self` the row is the caller's; `open` and `joinRole`
+// see localSignInHere.
+function userConfirm(action, login, { self = false, defaultOrg = null, open = false, joinRole = null } = {}) {
   const def = defaultOrg || 'the default organisation';
   switch (action) {
-    case 'reset': return { text: open
-      ? `Reset ${login}'s password? Every session of ${login} ends; a new temporary password is shown once. ${OPEN_SIGN_IN(login)}, and sets their own then.`
-      : `Reset ${login}'s password? Every session of ${login} ends; a new temporary password is shown once, and ${login} sets their own at their next sign-in.`, danger: `Reset ${login}'s password` };
+    case 'reset': return { text: resetTexts(login, { open, joinRole }).confirm, danger: `Reset ${login}'s password` };
     case 'disable': return { text: `Disable ${login}? Every session of ${login} ends, and they cannot sign in until an owner enables them; their memberships stay.${self ? ' This is you: this browser is signed out at its next request.' : ''}`, danger: `Disable ${login}` };
     case 'enable': return { text: `Enable ${login}? They can sign in again with their password.`, danger: `Enable ${login}` };
     case 'signout': return { text: `Sign ${login} out everywhere? Every session of ${login} ends at its next request; they can sign in again.${self ? ' This is you: this browser is signed out too.' : ''}`, danger: `Sign ${login} out everywhere` };
@@ -597,15 +625,13 @@ function userConfirm(action, login, { self = false, defaultOrg = null, open = fa
 
 // The status after one user action, from the server's answer (`you`: the
 // caller acted on their own account — this browser is signed out next;
-// `open` see OPEN_SIGN_IN).
-export function userActionStatus(action, answer = {}, { login = 'the user', defaultOrg = null, open = false } = {}) {
+// `open` and `joinRole` see localSignInHere).
+export function userActionStatus(action, answer = {}, { login = 'the user', defaultOrg = null, open = false, joinRole = null } = {}) {
   const note = answer?.note ? ` ${answer.note}` : '';
   const def = defaultOrg || 'the default organisation';
   const saved = (text) => ({ kind: 'saved', text });
   switch (action) {
-    case 'reset': return saved(open
-      ? `Every session of ${login} ended. ${OPEN_SIGN_IN(login)}, with the password below, and sets a new one then.`
-      : `Every session of ${login} ended; they set a new password at their next sign-in.`);
+    case 'reset': return saved(resetTexts(login, { open, joinRole }).status);
     case 'disable': return saved(answer?.you ? 'You disabled your own account — this browser is signed out at its next request.' : `${login} disabled — every session ended.`);
     case 'enable': return saved(`${login} enabled.`);
     case 'signout': return saved(answer?.you ? 'You signed out everywhere — this browser is signed out at its next request.' : `Every session of ${login} ended.`);
@@ -649,9 +675,8 @@ export function userCreateStatus(answer = {}, { login = 'the user', orgId = null
 
 // The secret step's sentence (the password itself is drawn beside it, once).
 // `forced`: changed at the next sign-in; `reason` 'create' | 'reset';
-// `localSignIn`: the server signs in with local passwords (else the clause
-// about setting their own is dropped — A13; so it is without sign-in, where
-// nobody signs in until the server starts without OBSERVOGRAM_AUTH=off).
+// `localSignIn`: a local user signs in here (localSignInHere; else the clause
+// about setting their own is dropped — A13 — and the status says when).
 function secretText(login, { forced = true, reason = 'create', localSignIn = true } = {}) {
   const head = `${forced ? 'Temporary password' : 'Password'} for ${login} — shown once. It is not stored in this browser and cannot be shown again`;
   const own = forced && localSignIn ? `; ${login} sets their own at ${reason === 'reset' ? 'their next' : 'first'} sign-in.` : '.';
@@ -1129,7 +1154,7 @@ export function buildSettingsEditorModel(kind, record = null, { draft = null, st
       primary: primaryOf('Create', can, why),
     };
     if (step === 'secret' && ctx.secret) {
-      out.secret = { text: secretText(ctx.secret.login, { forced: ctx.secret.forced !== false, reason: 'create', localSignIn: modeLine === null && access?.posture !== 'open' }), value: ctx.secret.value };
+      out.secret = { text: secretText(ctx.secret.login, { forced: ctx.secret.forced !== false, reason: 'create', localSignIn: localSignInHere({ open: access?.posture === 'open', joinRole: ctx.joinRole }) }), value: ctx.secret.value };
       out.primary = null;
     }
     return out;
@@ -1157,8 +1182,8 @@ export function buildSettingsEditorModel(kind, record = null, { draft = null, st
     // The rank refused (an owner revoked while the dialog was open): no
     // danger button — the actions again, each with the reason (as org remove).
     const open = access?.posture === 'open';
-    if (step === 'confirm-action' && can) out.confirm = userConfirm(ctx.action, record.login, { self, defaultOrg: ctx.defaultOrg ?? null, open });
-    if (step === 'secret' && ctx.secret) out.secret = { text: secretText(record.login, { forced: ctx.secret.forced !== false, reason: 'reset', localSignIn: signInModeLine(ctx.joinRole) === null && !open }), value: ctx.secret.value };
+    if (step === 'confirm-action' && can) out.confirm = userConfirm(ctx.action, record.login, { self, defaultOrg: ctx.defaultOrg ?? null, open, joinRole: ctx.joinRole });
+    if (step === 'secret' && ctx.secret) out.secret = { text: secretText(record.login, { forced: ctx.secret.forced !== false, reason: 'reset', localSignIn: localSignInHere({ open, joinRole: ctx.joinRole }) }), value: ctx.secret.value };
     return out;
   }
 

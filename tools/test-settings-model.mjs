@@ -1442,6 +1442,36 @@ test('the user statuses: what the server did, by action; a create that armed sig
     'Created first (viewer in Acme). Copy the temporary password before closing. local users cannot sign in while …');
 });
 
+test('a reset where a local user cannot sign in — OIDC, a reverse proxy, no sign-in: the confirm and the status say so and what the reset still does, never "at their next sign-in"; the secret step agrees', () => {
+  const PW = 'abcd-efgh-ijkm-npqr-stuv';
+  const modes = [
+    ['oidc', { mode: 'oidc', role: null, issuerKey: 'https://idp.test' }, 'This server signs in through OIDC issuer https://idp.test: a local user cannot sign in here until it runs local sign-in.'],
+    ['proxy', { mode: 'proxy', role: null, proxy: { joinRole: 'viewer' } }, 'This server signs in through its reverse proxy: a local user cannot sign in here until it runs local sign-in.'],
+  ];
+  for (const [mode, joinRole, line] of modes) {
+    const ctx = { ...OWNER_CTX, joinRole };
+    assert.deepEqual(buildSettingsEditorModel('user', USERS[1], { ctx: { ...ctx, action: 'reset' }, step: 'confirm-action' }).confirm, {
+      text: `Reset ada's password? ${line} The reset still ends every session of ada, and a new temporary password is shown once — ada signs in with it then, and sets their own.`,
+      danger: "Reset ada's password" }, mode);
+    assert.equal(userActionStatus('reset', { ok: true, mustChange: true }, { login: 'ada', joinRole }).text,
+      `Every session of ada ended. ${line} Then ada signs in with the password below, and sets a new one.`, mode);
+    const secret = buildSettingsEditorModel('user', USERS[1], { ctx: { ...ctx, secret: { login: 'ada', value: PW, forced: true } }, step: 'secret' }).secret.text;
+    assert.equal(secret, 'Temporary password for ada — shown once. It is not stored in this browser and cannot be shown again. Reset it to get a new one.', `${mode}: the secret step names no sign-in the status does not`);
+  }
+  // Under every mode where a local user cannot sign in, no reset sentence claims the next sign-in.
+  const where = [[{ joinRole: { mode: 'oidc', issuerKey: 'k' } }, OLIVE, 'olive'], [{ joinRole: { mode: 'proxy' } }, OLIVE, 'olive'], [{ open: true, joinRole: { mode: 'local' } }, OPEN, null]];
+  for (const [opts, access, me] of where) {
+    const confirm = buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, access, me, joinRole: opts.joinRole, action: 'reset' }, step: 'confirm-action' }).confirm.text;
+    const status = userActionStatus('reset', {}, { login: 'ada', ...opts }).text;
+    for (const s of [confirm, status]) assert.ok(!/next sign-in/.test(s), `${JSON.stringify(opts)}: ${s}`);
+  }
+  // Local sign-in (and a join role not read — the dialog narrows, as A13 says): the next sign-in, as before.
+  for (const joinRole of [{ mode: 'local', role: null }, null]) {
+    assert.equal(userActionStatus('reset', {}, { login: 'ada', joinRole }).text, 'Every session of ada ended; they set a new password at their next sign-in.');
+    assert.match(buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, joinRole, action: 'reset' }, step: 'confirm-action' }).confirm.text, /, and ada sets their own at their next sign-in\.$/);
+  }
+});
+
 test('the users loaders: one requestJson call each, ids and actions encoded, the password in the body only — and no email kept', async () => {
   const calls = [];
   const answer = { ok: true, users: USERS_RAW, user: USERS_RAW[1], owner: false, joined: [{ orgId: 'acme', role: 'viewer' }], armed: false, note: null, you: true, mustChange: true, changed: true, defaultOrg: 'default', orgs: [{ id: 'acme' }], role: null, mode: 'local', oidc: false, issuerKey: null };
