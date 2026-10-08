@@ -46,18 +46,19 @@
 import { brandEnvFrom } from '../tools/lib/brand-env.mjs';
 import { isLoopbackOrigin, parseOriginList } from '../tools/lib/mcp-url-safety.mjs';
 import { authzDecision } from './authz.mjs';
-import { envNameOwnedBy, orgEnvPrefix } from './store/mcp-endpoints.mjs';
+import { envNameOwnedBy, HOOK_RE, hookOfShape, isOrgHookShaped, orgEnvPrefix } from './store/mcp-endpoints.mjs';
 import { listOrgs } from './store/orgs.mjs';
 
 export const NOTIFY_ORIGINS_VAR = 'OBSERVOGRAM_NOTIFY_ORIGINS';        // TOMOGRAPH_ honoured (brandEnvFrom)
 export const ORG_NOTIFY_ORIGINS_NAME = 'NOTIFY_ORIGINS';               // OBSERVOGRAM_ORG_<KEY>_NOTIFY_ORIGINS
-export const HOOK_RE = /^[A-Z0-9]+(?:_[A-Z0-9]+)*$/;
+// The hook's shape (HOOK_RE, hookOfShape, isOrgHookShaped) is the store's,
+// beside the per-org variable rule it narrows: an MCP endpoint's readTokenEnv
+// never names a variable with any org's hook shape (server/store/mcp-endpoints.mjs).
+export { HOOK_RE, isOrgHookShaped };
 export const NOTIFY_HOOKS_ROUTE = 'GET /api/journeys/notify-hooks';    // named by the texts
 export const orgNotifyOriginsVar = (org) => `${orgEnvPrefix(org)}${ORG_NOTIFY_ORIGINS_NAME}`;
 export const hookVarsOf = (org, hook) => ({ urlEnv: `${orgEnvPrefix(org)}NOTIFY_${hook}_URL`, tokenEnv: `${orgEnvPrefix(org)}NOTIFY_${hook}_TOKEN` });
 
-// The row text rule (server/store/rows.mjs): a hook variable's whole name.
-const NAME_MAX = 200;
 // The store's URL bound (requireUrl in server/store/mcp-endpoints.mjs).
 const URL_MAX = 2000;
 // A bearer token the server can send: printable ASCII without spaces.
@@ -66,18 +67,8 @@ const TOKEN_RE = /^[\x21-\x7E]{1,4096}$/;
 const ANY_HOOK_URL_RE = /^OBSERVOGRAM_ORG_[A-Z0-9_]+_NOTIFY_[A-Z0-9_]+_URL$/;
 
 const q = (v) => JSON.stringify(v);
-const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const HOOK_SRC = HOOK_RE.source.slice(1, -1);   // the words, unanchored
 // What undici trims from a header value before it sends it: space, tab, CR, LF.
 const trimHttp = (v) => String(v).replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '');
-
-// The hook <HOOK> of org's URL (suffix 'URL') or token (suffix 'TOKEN') name,
-// by shape only — exact case, at most NAME_MAX characters; null otherwise.
-function hookOfShape(name, org, suffix = 'URL') {
-  if (typeof name !== 'string' || name.length > NAME_MAX) return null;
-  const m = new RegExp(`^${escapeRe(orgEnvPrefix(org))}NOTIFY_(${HOOK_SRC})_${suffix}$`).exec(name);
-  return m ? m[1] : null;
-}
 
 const soleOwner = (db, name, org) => {
   const owners = envNameOwnedBy(db, name);
@@ -98,15 +89,6 @@ export function notifyHookOf(db, name, org) {
   if (!owners.length) return { kind: 'name' };
   if (owners.length !== 1 || owners[0] !== org) return { kind: 'shadow' };
   return { kind: 'hook', hook, ...hookVarsOf(org, hook) };
-}
-
-// Does `name` have the URL or TOKEN shape of SOME org's hook, live or
-// removed, whoever owns it by the general rule? (An MCP endpoint's
-// readTokenEnv never names one: a hook's variables go only to its webhook.)
-export function isOrgHookShaped(db, name) {
-  if (typeof name !== 'string') return false;
-  return listOrgs(db, { includeRemoved: true })
-    .some((o) => hookOfShape(name, o.id, 'URL') !== null || hookOfShape(name, o.id, 'TOKEN') !== null);
 }
 
 const journeyFile = (journey) => `journeys/${journey}.journey.yaml`;

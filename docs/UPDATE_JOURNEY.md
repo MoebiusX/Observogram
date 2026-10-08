@@ -1354,3 +1354,10 @@ name the server refuses for a journey is never bound for the CronJob or any
 other scheduler — the snippet says, where the binding would have been, that
 the name must be renamed to one of the org's hooks first. Tests: 1413 → 1414
 (one more in `server/test-notify-target-policy.mjs`).
+
+A hook's variables go to its webhook and nowhere else, so an MCP endpoint
+may no longer read its token from a variable with the shape of any org's
+hook: an admin registering one is told to name another variable of the org,
+and an endpoint that named one before is refused where the token would be
+read, with the PATCH that repairs it. Tests: 1414 → 1416 (one more in
+`server/test-store.mjs`, one in `server/test-services-api.mjs`).
