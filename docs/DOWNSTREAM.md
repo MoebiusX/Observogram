@@ -1360,7 +1360,8 @@ OBSERVOGRAM_AUTH=off and sign in as an owner, or bind it to loopback`). A
 journey without `notify` runs as before. `GET /api/journeys` carries the
 run's refusal as `notify.problem` for a journey a run would refuse, and the
 Neuron view prints it (`The server will not run this journey as it stands:
-…`) where it said "Set up".
+…`) where it said "Set up", and after the newest record's delivery for a
+journey that has run.
 
 **The sentences.** Each names what to fix and who fixes it — the server's
 operator for the environment, with the restart a running server needs;

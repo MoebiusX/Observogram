@@ -109,9 +109,10 @@ function notifyRemedy(org) {
   return `Add notify: { urlEnv: ${notifyHookExample(org)} } to the journey file to be warned when it changes — one of this org's notify hooks, which the server's operator sets (GET /api/journeys/notify-hooks lists them).${notifyKeyNote(org)}`;
 }
 
-// A declared notify block before any delivery (GET /api/journeys' `notify`):
-// what a server run would answer when it refuses the journey (`problem`, the
-// run's own text), else what is set up. Plain text; the caller escapes it.
+// A declared notify block (GET /api/journeys' `notify`): what a server run
+// would answer when it refuses the journey (`problem`, the run's own text —
+// the Neuron view says it after any delivery too), else, before any
+// delivery, what is set up. Plain text; the caller escapes it.
 export function notifySetupLine(notify) {
   if (notify?.problem) return `The server will not run this journey as it stands: ${notify.problem}`;
   return `Set up: posts ${notify?.on || 'transitions'} to the webhook in $${notify?.urlEnv}.`;

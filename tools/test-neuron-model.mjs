@@ -351,8 +351,9 @@ test('latestCheck and attentionList: the four outcomes kept apart, most urgent f
 
 // The Neuron and Journeys views' notify hints (studio/journeys-view.mjs; the
 // follow-up journey-notify-env-ownership): a journey notifies through one of
-// its org's notify hooks, and one the server would refuse is never "Set up".
-test('notify hints name the org\'s hook variables — <KEY>, said so, when the org is unknown (never guessed as DEFAULT) — and a journey the server would refuse is never "Set up"', async () => {
+// its org's notify hooks, and one the server would refuse is never "Set up"
+// — its Notification row says the refusal, after any delivery.
+test('notify hints name the org\'s hook variables — <KEY>, said so, when the org is unknown (never guessed as DEFAULT) — and a journey the server would refuse is never "Set up": the Neuron view says the refusal, whether it ran before or not', async () => {
   const jv = await import('../studio/journeys-view.mjs');
   const { setActiveOrg } = await import('../studio/api.mjs');
   const KEY_NOTE = ' <KEY> is this org\'s id in capitals, with - as _.';
@@ -382,4 +383,27 @@ test('notify hints name the org\'s hook variables — <KEY>, said so, when the o
   const refused = jv.notifySetupLine({ urlEnv: 'MY_HOOK_URL', authEnv: null, on: 'always', format: 'json', problem });
   assert.equal(refused, `The server will not run this journey as it stands: ${problem}`);
   assert.ok(!refused.includes('Set up'));
+  // The Neuron view's Notification row says the refusal whatever the newest
+  // record says: a journey that notified before the rule, or through the
+  // CronJob's CLI, is the one the migration must find (DOWNSTREAM §17.2 step 1).
+  const nv = await import('../studio/neuron-view.mjs');
+  const { escapeHtml } = await import('../studio/util.mjs');
+  const legacy = (runs) => entry('legacy', runs, { notify: { urlEnv: 'MY_HOOK_URL', authEnv: null, on: 'always', format: 'json', problem } });
+  const hooked = (runs) => entry('hooked', runs, { notify: { urlEnv: 'OBSERVOGRAM_ORG_PAY_EU_NOTIFY_ONCALL_URL', authEnv: null, on: 'always', format: 'json' } });
+  const notificationRow = (journey, runs) => { const d = buildJourneyDetail(journey(runs), runs); return nv.deliveryLine(d, latestCheck(d)); };
+  for (const [runs, delivery] of [
+    [[], null],
+    [[run(0)], 'Notification sent'],
+    [[run(0, { notify: { status: 'failed', error: 'HTTP 500', httpStatus: 500 } })], 'Notification failed'],
+    [[run(0, { notify: { status: 'skipped', reason: 'policy transitions: no transition' } })], 'Nothing to notify'],
+    [[run(0, { notify: null })], 'No notifications set up'],
+    [[run(0, { notify: {} })], 'Delivery unknown'],
+  ]) {
+    const label = delivery || 'no record';
+    const row = notificationRow(legacy, runs);
+    assert.ok(row.includes(escapeHtml(refused)), `${label}: the row says the server's refusal — ${row}`);
+    if (delivery) assert.ok(row.includes(`>${delivery}</span>`), `${label}: the newest record's delivery is still said — ${row}`);
+    assert.ok(!row.includes('Set up'), label);
+    assert.ok(!notificationRow(hooked, runs).includes('will not run'), `${label}: a journey through its org's hook is not flagged`);
+  }
 });
