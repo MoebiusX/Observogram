@@ -1024,7 +1024,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('an open server on the loopback: the server says local may register (GET /api/mcp-endpoints policy.register), so the picker hint offers Settings → MCP endpoints, and it lands there; the panel\'s next opening after a failed read of the list says it is checking until that read answers', async () => {
+  await t.test('an open server on the loopback: the server says local may register (GET /api/mcp-endpoints policy.register), so the picker hint offers Settings → MCP endpoints, and it lands there; the panel\'s next opening after a failed read of the list says it is checking until that read answers; after a failed read and the list read without its policy, the panel\'s opening and the home\'s next drawing read it again — never a refusal the server did not make', async () => {
     const probe = await call(null, 'GET', '/api/org/members', undefined, { base: loopChild.base });
     assert.equal(probe.status, 200, probe.text);
     const { page, ctx } = await open(loopChild.base, null);
@@ -1050,6 +1050,30 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await reopenAfterFailedRead(again.page, '#mcp-panel:not([hidden]) [data-mcp-target-settings]');
       assert.match(await text(again.page, '#mcp-panel .set-mcp-target-hint'), /^No MCP endpoint is registered in .+ yet\. Settings → MCP endpoints$/);
     } finally { await again.ctx.close(); }
+    // A failed read at load, then the list read without its policy
+    // (Settings → environments): the empty list is known, what the server
+    // lets this reader do is not. The panel's opening (from Settings) and
+    // the home's next drawing read it again, so each says the server's
+    // answer — local may register — never "registering one is not open to
+    // you here", a refusal the server never made; the hint is waited for
+    // as drawn (none while it reads again).
+    for (const via of ['panel', 'home']) {
+      const failed = await open(loopChild.base, null, { before: abortEndpointReads });
+      const hintOf = via === 'panel' ? '#mcp-panel .set-mcp-target-hint' : '[data-mcp-target="home"] .set-mcp-target-hint';
+      try {
+        await failed.page.waitForFunction(() => /^Default's MCP endpoints could not be read just now — reopen this to try again\.$/.test(document.querySelector('[data-mcp-target="home"] .set-mcp-target-hint')?.textContent || ''), null, { timeout: T });
+        await failed.page.unroute('**/api/mcp-endpoints');
+        await toSettings(failed.page);
+        assert.equal(await failed.page.evaluate(() => document.querySelector('#set-section')?.dataset.section), 'environments', 'the section that reads the list alone');
+        if (via === 'panel') await failed.page.evaluate(() => document.getElementById('mcp-btn').click());
+        else await failed.page.click('.observa-brand');
+        await failed.page.waitForFunction((s) => document.querySelector(s)?.textContent.trim(), hintOf, { timeout: T });
+        assert.equal(await text(failed.page, hintOf), 'No MCP endpoint is registered in Default yet. Settings → MCP endpoints', `${via}: the server's answer, read again`);
+        if (via === 'panel') {
+          assert.equal(await attr(failed.page, '#mcp-settings-btn', 'data-why'), 'No MCP endpoint is registered in Default yet — register one in Settings → MCP endpoints.', 'the Server settings button too: read again, never "close and reopen" after the panel did');
+        }
+      } finally { await failed.ctx.close(); }
+    }
   });
 
   // R4 + D4 (rebadge batch 3, C0): without sign-in the home never sends a

@@ -4950,14 +4950,24 @@ function renderHomeView() {
 // may connect, in the identity and open postures: read once, then only the
 // picker is repainted when the read settles; a re-render reuses the list. An
 // empty list, a refusal or a failure leaves today's card (the URL typed).
+// After a failed read, each drawing of the home reads again (its hint says
+// "reopen this"), the list and its policy unread meanwhile — as a picker's
+// opening (openMcpTarget).
 let homeMcpEndpointsRead = false;
+let homeMcpEndpointsReading = false;
 function paintHomeMcpTarget() {
+  const failed = state.mcpTargetPolicy?.failed === true;
+  const reads = mcpPickersReadable() && state.access?.canWrite !== false && !homeMcpEndpointsReading
+    && (failed || (!homeMcpEndpointsRead && (state.mcpEndpoints === null || state.mcpTargetPolicy === null)));
+  if (reads && failed) unreadMcpEndpoints();
   paintMcpTarget('home');
-  if (homeMcpEndpointsRead || (state.mcpEndpoints !== null && state.mcpTargetPolicy !== null) || !mcpPickersReadable() || state.access?.canWrite === false) return;
+  if (!reads) return;
   homeMcpEndpointsRead = true;
+  homeMcpEndpointsReading = true;
   // Repainted when the read settles: the list, and what the policy says
   // this reader may do (a list-only card, or Register and connect).
   readMcpEndpointsForPickers().then(() => {
+    homeMcpEndpointsReading = false;
     if (document.getElementById('home-mcp-url')) paintMcpTarget('home');
   });
 }
@@ -5208,6 +5218,7 @@ function mcpTargetMissing(id) {
     typedAllowed: mcpTypedAllowed(id), orgName: state.orgName,
     empty: Array.isArray(state.mcpEndpoints) && state.mcpEndpoints.length === 0, canRegister: mcpPickerCanAdminNow(),
     posture: state.access?.posture ?? null, registerWhy: state.mcpTargetPolicy?.register?.why ?? null,
+    unreadable: state.mcpTargetPolicy?.failed === true,
   });
 }
 
@@ -5218,6 +5229,11 @@ function mcpTargetMissing(id) {
 // read when this read fails (the pre-send check: its own sentence says it
 // could not check).
 const CLOSED_MCP_POLICY = Object.freeze({ typed: { allowed: false }, register: { allowed: false }, failed: true });
+// A failed read about to be read again: the list and its policy unread.
+function unreadMcpEndpoints() {
+  state.mcpEndpoints = null;
+  state.mcpTargetPolicy = null;
+}
 async function readMcpEndpointsForPickers({ keep = false } = {}) {
   if (!mcpPolicyReadable()) return null;
   try {
@@ -5370,14 +5386,18 @@ async function checkEndpointDrift(id) {
 }
 
 // A picker opening: drawn from the list already read, then — when the list
-// is unread, or `fresh` (the deploy modal: every open) — read and redrawn.
-// Returns the read's promise (resolved at once when nothing is read). A
-// failed read is unread again while it is read again, so neither the picker
-// nor the Server settings button says "reopen" while the opening does just
-// that (as readMcpGatePolicy in the token posture).
+// is unread, its policy unread or failed (a list read without it — Settings,
+// an environment's editor — leaves a failed one so), or `fresh` (the deploy
+// modal: every open) — read and redrawn. Returns the read's promise
+// (resolved at once when nothing is read). A failed read is unread again
+// while it is read again — the list with its policy, one read — so neither
+// the picker nor the Server settings button says "reopen" (nor, the list
+// empty, a refusal) while the opening does just that (as readMcpGatePolicy
+// in the token posture).
 function openMcpTarget(id, { fresh = false } = {}) {
-  const reads = mcpPickersReadable() && (fresh || state.mcpEndpoints === null || state.mcpTargetPolicy === null);
-  if (reads && state.mcpTargetPolicy?.failed) state.mcpTargetPolicy = null;
+  const failed = state.mcpTargetPolicy?.failed === true;
+  const reads = mcpPickersReadable() && (fresh || failed || state.mcpEndpoints === null || state.mcpTargetPolicy === null);
+  if (reads && failed) unreadMcpEndpoints();
   paintMcpTarget(id);
   if (!reads) return Promise.resolve();
   return readMcpEndpointsForPickers().then(() => paintMcpTarget(id));

@@ -1203,7 +1203,7 @@ test('the Settings actions: every host.settings call the view makes is one setti
 
 // ---------- the MCP target for a reader the server refuses a typed URL (rebadge batch 3, C0) ----------
 
-test('mcpTargetModel with typed { allowed: false } (R4): list-only — no "Type a URL…", the value never typed, no URL row; the empty list names the way in per posture and per register — without sign-in, the server\'s own sentence; an unreadable list is said', () => {
+test('mcpTargetModel with typed { allowed: false } (R4): list-only — no "Type a URL…", the value never typed, no URL row; the empty list names the way in per posture and per register — without sign-in, the server\'s own sentence; an unreadable list is said, and an unreadable policy beside an empty list, never as a refusal', () => {
   const closed = { allowed: false };
   const m = mcpTargetModel({ endpoints: EP_OP, orgName: 'Acme', typed: closed, typedUrl: 'https://x.test', chosen: '' });
   assert.deepEqual(m.options.map((o) => o.value), EP_OP.map((ep) => String(ep.id)), 'the endpoints only');
@@ -1238,11 +1238,19 @@ test('mcpTargetModel with typed { allowed: false } (R4): list-only — no "Type 
     { text: 'No MCP endpoint is registered in Acme yet.', button: 'Settings → MCP endpoints' }, 'a reader who may register: the button');
   assert.deepEqual(mcpTargetModel({ endpoints: null, orgName: 'Acme', typed: closed, unreadable: true }).hint,
     { text: "Acme's MCP endpoints could not be read just now — reopen this to try again.", button: null });
+  // The policy's read failed and the list was read without it (Settings, an
+  // environment's editor): what the server lets this reader do is unknown —
+  // said, never a refusal it did not make (an open loopback server lets
+  // local register); the picker's opening reads it again.
+  for (const posture of ['token', 'open', 'identity', null]) {
+    assert.deepEqual(mcpTargetModel({ endpoints: [], orgName: 'Acme', typed: closed, posture, unreadable: true }).hint,
+      { text: 'No MCP endpoint is registered in Acme yet, and whether you may register one could not be read just now — reopen this to try again.', button: null }, `${posture}: a failed policy read is said as one`);
+  }
   assert.equal(mcpTargetModel({ endpoints: null, orgName: 'Acme', typed: closed }).hint, null, 'not read yet: nothing said');
   assert.equal(mcpTargetModel({ endpoints: null, typed: closed }).showUrl, false, 'closed when unknown: no URL row');
 });
 
-test('mcpTargetMissingText: the typed URL named only for a reader who may type one; with no endpoint and no sign-in, the server\'s own sentence', () => {
+test('mcpTargetMissingText: the typed URL named only for a reader who may type one; with no endpoint and no sign-in, the server\'s own sentence; a failed policy read said as one', () => {
   assert.equal(mcpTargetMissingText(), 'choose an MCP endpoint or type a URL');
   assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme' }), "choose one of Acme's MCP endpoints");
   assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty: true }), 'no MCP endpoint is registered in Acme yet — an admin registers them in Settings → MCP endpoints');
@@ -1255,6 +1263,10 @@ test('mcpTargetMissingText: the typed URL named only for a reader who may type o
   assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty: true, posture: 'token' }), 'no MCP endpoint is registered in Acme yet — registering one needs a signed-in admin');
   assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty: true, posture: 'open', canRegister: true, registerWhy: WHY }), 'no MCP endpoint is registered in Acme yet — register one in Settings → MCP endpoints', 'a reader the server lets register');
   assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', posture: 'open', registerWhy: WHY }), "choose one of Acme's MCP endpoints", 'a list: choose');
+  for (const posture of ['token', 'open', 'identity', null]) {
+    assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty: true, posture, unreadable: true }),
+      'no MCP endpoint is registered in Acme yet, and whether you may register one could not be read just now — reopen this to try again', `${posture}: the policy's read failed — never a refusal`);
+  }
 });
 
 test('profileEndpointNote and endpointDrift with typedAllowed false: no sentence offers typing a URL; a typed profile is said', () => {
