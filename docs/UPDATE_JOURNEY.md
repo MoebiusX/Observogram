@@ -1317,3 +1317,16 @@ local user cannot sign in, `userSignIn` (how each kind of user signs in under
 each sign-in mode), Enable… under every mode and Sign out everywhere… under
 every mode). The other review fixes add assertions to existing tests or
 change docs and comments; the count is unchanged by them.
+
+### Follow-up: paths on Windows are compared by what they name
+
+On NTFS one file has many spellings — another case, another drive-letter
+case, `/` for `\`, a short (8.3) name — and Node's JavaScript `realpathSync`
+keeps the caller's. A studio-run journey's org scope (A-24) compared those
+spellings, so on Windows, with the workspace at `C:\ws`, an acme journey
+could name beta's pack file `C:/WS/orgs/beta/packs/b1.pack.yaml` and read it
+as a file outside the workspace. On Windows the scope now compares both sides
+as the native realpath of the longest prefix that exists, the rest as
+written, case folded; a refusal still names the path as written, and Linux
+and macOS compare exactly as before. Tests: 1390 → 1396
+(`tools/test-journey-scope.mjs` 6, new).
