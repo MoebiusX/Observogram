@@ -1438,7 +1438,10 @@ try {
       mode = 'hang'; hits.length = 0;
       await sleep(5);
       const n5 = await runJourney(loadJourneyDef('notified'));
-      console.log(`bound: a hung receiver times out per attempt (1000 ms × 2): ${n5.notify?.tookMs} ms < 3500 ms`);
+      // Its two 1000 ms timeouts are the run's own floor, so the bound printed is
+      // what the runner adds past them: tookMs < 3500 is that time < 1500 ms
+      // (Date.now() can read a timer a millisecond short, hence never below 0).
+      console.log(`bound: a hung receiver took ${n5.notify?.tookMs} ms, its time past two 1000 ms timeouts: ${Math.max(0, n5.notify?.tookMs - 2000)} ms < 1500 ms`);
       assert(n5.notify.status === 'failed' && n5.notify.attempts === 2 && n5.notify.error === 'timeout after 1000ms' && n5.notify.tookMs < 3500 && n5.notify.httpStatus === null,
              'a hung receiver times out per attempt (1000 ms × 2) and the run still lands', n5.notify);
       assert(readJourneyRuns('notified')[0].startedAt === n5.startedAt && readJourneyRuns('notified')[0].notify.status === 'failed', 'the hung delivery is on the record');
