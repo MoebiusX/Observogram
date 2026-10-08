@@ -35,6 +35,10 @@ export const STRIP = [
   // The MCP origin allowlist (server/mcp-target-policy.mjs), read per request; the per-org
   // OBSERVOGRAM_ORG_<KEY>_MCP_ORIGINS goes with every inherited OBSERVOGRAM_ORG_* below.
   'MCP_ORIGINS',
+  // The notify origin allowlist (server/notify-target-policy.mjs), read per call; the per-org
+  // OBSERVOGRAM_ORG_<KEY>_NOTIFY_ORIGINS and every org's notify hook OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL /
+  // _TOKEN go with every inherited OBSERVOGRAM_ORG_* below.
+  'NOTIFY_ORIGINS',
   // The configured snapshot scope (server/live-jobs.mjs snapshotScopeConfig), read per request; the per-org
   // OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_* go with every inherited OBSERVOGRAM_ORG_* below.
   'SNAPSHOT_METRIC_PREFIXES', 'SNAPSHOT_FOLDER_UIDS', 'SNAPSHOT_DATASOURCE_UID',

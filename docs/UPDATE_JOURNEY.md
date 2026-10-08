@@ -1317,3 +1317,17 @@ local user cannot sign in, `userSignIn` (how each kind of user signs in under
 each sign-in mode), Enable… under every mode and Sign out everywhere… under
 every mode). The other review fixes add assertions to existing tests or
 change docs and comments; the count is unchanged by them.
+
+### Follow-up: a journey's notify reads only its org's hooks
+
+A journey's `notify` names the variables that hold its webhook's URL and
+token, and a server run read whichever variables the definition named: any
+operator — or, without sign-in, anyone who could reach the studio — could
+have the server post another org's MCP token, or one of the server's own
+secrets, to a URL of their choosing. The server gets one rule for what a
+server-run journey's notification may read: its org's own notify hook,
+`OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL`, and that hook's own `_TOKEN`, the
+org the sole owner of the name, posted only to this machine or to an origin
+the server's operator lists. The rule comes first, in its own module, with
+nothing calling it yet. Tests: 1390 → 1397
+(`server/test-notify-target-policy.mjs` 7, new).
