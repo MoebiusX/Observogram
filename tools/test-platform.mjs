@@ -13,17 +13,22 @@
 //   P5  every platform branch of a suite goes through the fixture — no other
 //       suite or fixture reads process.platform or spells 'win32';
 //   P6  every win32 skip states its reason, isWin32 is a data read in the two
-//       allowed places only (never a silent branch), and README's count of
-//       the skip sites is the count in the sources.
+//       allowed places only (never a silent branch), README's count of the
+//       skip sites is the count in the sources, and README states the number
+//       of `SKIP win32:` lines a Windows run prints — the number
+//       `tools/tap-summary.mjs --win32-skips readme` holds a run to (loops
+//       unroll at run time, so the exact number is the Windows run's to check).
 //
-// A predicted-portable test that fails on a downstream's Windows run is fixed
-// by a new reasoned skip site AND a README count bump — P6 forces both.
+// A test that fails only on Windows is first made OS-neutral; only a fact
+// Windows cannot express becomes a reasoned skip site, with the README count
+// bumps P6 and the Windows leg force.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep, win32, posix } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tokenize } from './gen-vendor-manifest.mjs';
+import { README_WIN32_LINES_RE, readmeWin32Lines } from './tap-summary.mjs';
 import { WIN32, platformHelpers, isWin32, isLinux, PLATFORM } from '../server/fixtures/platform.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -245,6 +250,12 @@ test('P6 every win32 skip states its reason; README counts them', () => {
   assert.ok(m, 'README states "N win32-skip sites"');
   assert.equal(Number(m[1]), total, `README says ${m[1]} win32-skip sites, the sources hold ${total}: ${JSON.stringify(perFile)}`);
   for (const [f, n] of Object.entries(perFile)) assert.ok(platforms.includes(`\`${f}\` (${n})`), `README names ${f} (${n})`);
+
+  // The lines sentence: the number the Windows CI leg holds a run to.
+  const lines = readmeWin32Lines(readme);
+  assert.ok(Number.isInteger(lines), 'README "Platforms" states "<N> `SKIP win32:` lines" — the number the Windows CI leg holds a run to (tools/tap-summary.mjs --win32-skips readme)');
+  assert.ok(lines >= total, `README states ${lines} SKIP win32: lines for ${total} sites — every site prints at least one`);
+  assert.equal(String(lines), README_WIN32_LINES_RE.exec(platforms)?.[1], 'the summary reads the count from the section this check parses');
 
   // isWin32 is a data read in the two allowed places and never a silent branch.
   const isWin32Counts = {};
