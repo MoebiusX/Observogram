@@ -1414,7 +1414,12 @@ const LOOPBACK_MAPPED = /^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/;
 // (`{ allowed, listed, origins, listedOnly }`). → { origin, name, error }:
 // `error` null when the registration may be sent, else the sentence (the
 // server's own rule: without sign-in, a loopback MCP or a listed origin);
-// `name` the endpoint's name (its host). The server judges again.
+// `name` the endpoint's name (its host). The server judges again. The
+// refusal names the one way out that holds in every posture — the
+// operator's list — and no sign-in way: GET /api/mcp-endpoints names none
+// for this reader (register is allowed), and on the loopback a server
+// without sign-in runs OBSERVOGRAM_AUTH=off, where adding a user arms
+// nothing (the server's POST answer names its restart).
 export function mcpRegisterCheck(url, register = null) {
   let u = null;
   try { u = new URL(String(url ?? '').trim()); } catch { /* not a URL */ }
@@ -1425,7 +1430,7 @@ export function mcpRegisterCheck(url, register = null) {
   const host = u.hostname;
   const loopback = host === 'localhost' || LOOPBACK_V4.test(host) || host === '[::1]' || LOOPBACK_MAPPED.test(host);
   if (loopback || !register.listedOnly || register.origins === null || (isArr(register.origins) && register.origins.includes(origin))) return { origin, name, error: null };
-  return { origin, name, error: `${origin} cannot be registered on a server without sign-in — only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS; the server's operator lists it there, or a first user arms sign-in (npm run users -- add <login>)` };
+  return { origin, name, error: `${origin} cannot be registered on a server without sign-in — only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS; the server's operator lists it there` };
 }
 
 // The request's target: an endpoint → { mcpEndpointId, mcpAuth? }; a typed

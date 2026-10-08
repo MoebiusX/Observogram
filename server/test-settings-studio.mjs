@@ -1025,7 +1025,13 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       assert.equal(await text(page, 'label.home-mcp-url-row .home-mcp-url-label'), 'MCP URL to register');
       const demo = await page.evaluate(() => document.getElementById('home-mcp-url').value);
       const demoOrigin = new URL(demo).origin;
-      assert.equal(await text(page, '#home-mcp-status'), `${demoOrigin} cannot be registered on a server without sign-in — only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS; the server's operator lists it there, or a first user arms sign-in (npm run users -- add <login>)`);
+      // This server runs with OBSERVOGRAM_AUTH=off: adding a user arms
+      // nothing, so the refusal names the operator's list alone — a way
+      // out the server's own answer to the same URL names too.
+      assert.equal(await text(page, '#home-mcp-status'), `${demoOrigin} cannot be registered on a server without sign-in — only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS; the server's operator lists it there`);
+      const refused = await call(null, 'POST', '/api/mcp-endpoints', { name: 'demo', url: demo }, { base: loopChild.base });
+      assert.equal(refused.status, 400, refused.text);
+      assert.ok(refused.json.error.includes(`list ${demoOrigin} there, or sign in as an admin (restart it without OBSERVOGRAM_AUTH=off`), `the server names the list, and a restart to sign in: ${refused.json.error}`);
       assert.equal(await attr(page, '#home-mcp-connect', 'aria-disabled'), 'true');
       await page.evaluate(() => document.getElementById('home-mcp-connect').click());   // a click anyway (Playwright will not click aria-disabled)
       await page.waitForTimeout(300);

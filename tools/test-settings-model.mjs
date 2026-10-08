@@ -1275,8 +1275,14 @@ test('mcpRegisterCheck (D4): Register and connect is sent only for an origin the
   assert.deepEqual(mcpRegisterCheck('http://127.0.0.1:3001/mcp', local), { origin: 'http://127.0.0.1:3001', name: '127.0.0.1:3001', error: null });
   assert.equal(mcpRegisterCheck('http://localhost/mcp', local).error, null);
   assert.equal(mcpRegisterCheck('http://[::1]:9/mcp', local).error, null);
+  // The way out is the operator's list, which holds in every posture —
+  // never a sign-in way of the studio's own: on the loopback, no sign-in is
+  // OBSERVOGRAM_AUTH=off, where adding a user arms nothing.
   assert.equal(mcpRegisterCheck('https://demo.example/mcp?x=1', local).error,
-    'https://demo.example cannot be registered on a server without sign-in — only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS; the server\'s operator lists it there, or a first user arms sign-in (npm run users -- add <login>)');
+    'https://demo.example cannot be registered on a server without sign-in — only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS; the server\'s operator lists it there');
+  for (const reg of [local, { ...local, listed: true, origins: ['https://other.example'] }]) {
+    assert.doesNotMatch(mcpRegisterCheck('https://demo.example/mcp', reg).error, /arms sign-in|add the first user|users -- add|configure OIDC/, 'no way in OBSERVOGRAM_AUTH=off defeats');
+  }
   assert.equal(mcpRegisterCheck('https://demo.example/mcp', { ...local, listed: true, origins: ['https://demo.example'] }).error, null, 'listed');
   assert.equal(mcpRegisterCheck('https://demo.example/mcp', { ...local, listed: true, origins: null }).error, null, 'any (`*`)');
   assert.equal(mcpRegisterCheck('https://demo.example/mcp', { allowed: true, listed: false, origins: [], listedOnly: false }).error, null, 'a session admin, no list');
