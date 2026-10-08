@@ -1364,9 +1364,13 @@ Neuron view prints it (`The server will not run this journey as it stands:
 operator for the environment, with the restart a running server needs;
 whoever holds the workspace for the journey file — and never a value, an
 origin or another org. Below, `<P>` is the org's prefix
-`OBSERVOGRAM_ORG_<KEY>_`, `<T>` the hook's `_TOKEN` variable, `<J>`
-`journeys/<name>.journey.yaml` and `<L>` `GET /api/journeys/notify-hooks`.
-Every run sentence starts `journey <name> is not run: `.
+`OBSERVOGRAM_ORG_<KEY>_`, `<T>` the hook's `_TOKEN` variable, `<J>` the
+journey's file relative to the workspace, in the org's root:
+`journeys/<file>.journey.yaml` for an org whose root is `.`, and
+`orgs/<id>/journeys/<file>.journey.yaml` for any other — `<file>` the name
+the journey is listed and run by, which its `name:` need not match — and
+`<L>` `GET /api/journeys/notify-hooks`. Every run sentence starts
+`journey <name> is not run: `, `<name>` the journey's `name:`.
 
 | Case | At capture | On a run (after the prefix) |
 |---|---|---|

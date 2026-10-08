@@ -109,23 +109,31 @@ export function notifyHookOf(db, name, org) {
   return { kind: 'hook', hook, ...hookVarsOf(org, hook) };
 }
 
-const journeyFile = (journey) => `journeys/${journey}.journey.yaml`;
+// J, the journey's file a run text names: what the run loaded, relative to
+// the workspace, in the org's root (journeys/<file> for an org at the base,
+// orgs/<id>/journeys/<file> for any other) — the caller's, since only it knows
+// the root and the file, whose stem the definition's name: need not match.
+// A run without it is a caller's error, never a text that names another file.
+function runFile(file) {
+  if (typeof file !== 'string' || !file) throw new TypeError(`a run's notify text names the journey's file: file is a path relative to the workspace, not ${q(file)}`);
+  return file;
+}
 const runPrefix = (journey) => `journey ${journey} is not run: `;
 
 // The NAME / SHADOW / TAKEN / PAIR refusal of a notify block's names for
-// `org`, at 'capture' or 'run' (the run text names the journey file) — null
+// `org`, at 'capture' or 'run' (the run text names the journey `file`) — null
 // when the names pass. Reads no environment (non-negotiable 2): a refused
 // name gets the same sentence whether its variable is set or not. TAKEN
 // replaces NAME and SHADOW for an org whose every hook name another org's id
 // takes (hooksAllTaken): the listing can never hold one, so its way out is
 // to leave notify out.
-export function notifyNamesRefusal(db, notify, { org, at, journey }) {
+export function notifyNamesRefusal(db, notify, { org, at, journey, file }) {
   if (at !== 'capture' && at !== 'run') throw new TypeError(`notifyNamesRefusal: at is capture or run, not ${q(at)}`);
   const urlEnv = notify?.urlEnv;
   const authEnv = notify?.authEnv;
   const P = orgEnvPrefix(org);
   const L = NOTIFY_HOOKS_ROUTE;
-  const J = journeyFile(journey);
+  const J = at === 'run' ? runFile(file) : null;
   const h = notifyHookOf(db, urlEnv, org);
   if (h.kind !== 'hook' && hooksAllTaken(db, org)) {
     return at === 'capture'
@@ -206,14 +214,15 @@ export function notifyOriginList(db, org, env = process.env) {
 // Steps 2–5 for a hook whose names passed: the URL's value, the token's, and
 // the origin — null, or the capture text (UNSET-URL, UNSET-TOKEN, BAD-URL,
 // BAD-TOKEN, ORIGIN); at 'run' UNSET-URL and UNSET-TOKEN take the run's way
-// out and every text the run's prefix. Never a value and never an origin.
-// With `resolved`, the values that passed are written to it.
-export function notifyValueRefusal(hookVars, { org, at = 'capture', journey, env = process.env, db, resolved = null }) {
+// out (naming the journey `file`) and every text the run's prefix. Never a
+// value and never an origin. With `resolved`, the values that passed are
+// written to it.
+export function notifyValueRefusal(hookVars, { org, at = 'capture', journey, file, env = process.env, db, resolved = null }) {
   const { urlEnv, authEnv = null } = hookVars;
   const tokenEnv = `${urlEnv.slice(0, -'URL'.length)}TOKEN`;
   const L = NOTIFY_HOOKS_ROUTE;
-  const J = journeyFile(journey);
   const run = at === 'run';
+  const J = run ? runFile(file) : null;
   const said = (text) => (run ? `${runPrefix(journey)}${text}` : text);
   // 2. the URL's variable
   const rawUrl = env[urlEnv];
@@ -259,14 +268,15 @@ export function notifyValueRefusal(hookVars, { org, at = 'capture', journey, env
 }
 
 // The run's notification, resolved before anything runs: the names (no env
-// read), then the two hook variables' values and the origin. → { refused:
+// read), then the two hook variables' values and the origin. `journey` is
+// the definition's name, `file` the journey's file (J above). → { refused:
 // null, url, auth, urlEnv } (auth the trimmed token, or null) | { refused:
 // <the run text> }.
-export function resolveJourneyNotify(db, notify, { org, journey, env = process.env }) {
-  const names = notifyNamesRefusal(db, notify, { org, at: 'run', journey });
+export function resolveJourneyNotify(db, notify, { org, journey, file, env = process.env }) {
+  const names = notifyNamesRefusal(db, notify, { org, at: 'run', journey, file });
   if (names) return { refused: names };
   const resolved = {};
-  const value = notifyValueRefusal({ urlEnv: notify.urlEnv, authEnv: notify.authEnv ?? null }, { org, at: 'run', journey, env, db, resolved });
+  const value = notifyValueRefusal({ urlEnv: notify.urlEnv, authEnv: notify.authEnv ?? null }, { org, at: 'run', journey, file, env, db, resolved });
   if (value) return { refused: value };
   return { refused: null, url: resolved.url, auth: resolved.auth, urlEnv: notify.urlEnv };
 }

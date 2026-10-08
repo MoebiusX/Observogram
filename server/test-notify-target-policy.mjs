@@ -64,7 +64,9 @@ async function stderrOf(fn) {
 const q = (v) => JSON.stringify(v);
 const P = (org) => `OBSERVOGRAM_ORG_${org.toUpperCase().replaceAll('-', '_')}_`;
 const L = 'GET /api/journeys/notify-hooks';
-const J = (journey) => `journeys/${journey}.journey.yaml`;
+// J: the journey's file as a run text names it — relative to the workspace, in the org's root (the default
+// org's is the base, any other org's orgs/<id>): the file the run loaded, whose stem the definition's name: need not match.
+const J = (stem, org = 'acme') => `${org === 'default' ? '' : `orgs/${org}/`}journeys/${stem}.journey.yaml`;
 const RUN = (journey, text) => `journey ${journey} is not run: ${text}`;
 const T = {
   name: (urlEnv, org) => `notify.urlEnv ${q(urlEnv)} is not a notify hook of org '${org}' — the server posts a journey's notification only to ${P(org)}NOTIFY_<HOOK>_URL (<HOOK>: words of A–Z and 0–9 joined by single _), with its token, if any, from ${P(org)}NOTIFY_<HOOK>_TOKEN: name one that ${L} lists`,
@@ -76,14 +78,14 @@ const T = {
   badToken: (authEnv) => `${authEnv} holds a value the server cannot send as a bearer token (printable ASCII without spaces, once surrounding whitespace is trimmed) — the server's operator corrects it and restarts the server`,
   originNoList: (urlEnv, org) => `the webhook in ${urlEnv} is not on this machine, and no notify origin is listed, so the server posts only to this machine — the server's operator lists that URL's origin (scheme://host[:port]) in OBSERVOGRAM_NOTIFY_ORIGINS or ${P(org)}NOTIFY_ORIGINS, comma-separated, and restarts the server`,
   originListed: (urlEnv, names) => `the webhook in ${urlEnv} is at an origin that is not in ${names.join(', nor in ')} — the server's operator adds that URL's origin (scheme://host[:port]) there and restarts the server`,
-  runName: (journey, urlEnv, org) => RUN(journey, `its notify.urlEnv ${q(urlEnv)} is not a notify hook of org '${org}' — the server posts only to ${P(org)}NOTIFY_<HOOK>_URL (<HOOK>: words of A–Z and 0–9 joined by single _), with its token, if any, from ${P(org)}NOTIFY_<HOOK>_TOKEN; whoever holds the workspace sets notify.urlEnv in ${J(journey)} to one that ${L} lists (packc journey run reads any name from its own environment)`),
-  runShadow: (journey, urlEnv, org) => RUN(journey, `its notify.urlEnv ${q(urlEnv)} has the shape of a notify hook of org '${org}', but another org's id also maps onto it by the longest-prefix rule — whoever holds the workspace sets notify.urlEnv in ${J(journey)} to one that ${L} lists`),
-  runPair: (journey, authEnv, tokenEnv) => RUN(journey, `its notify.authEnv ${q(authEnv)} is not the token of the hook its urlEnv names — a hook's token goes only to its own URL: whoever holds the workspace sets notify.authEnv in ${J(journey)} to ${tokenEnv}, or removes it`),
-  runUnsetUrl: (journey, urlEnv) => RUN(journey, `its notify hook ${urlEnv} is not set in the server's environment — the server's operator sets it and restarts the server, or whoever holds the workspace sets notify.urlEnv in ${J(journey)} to one that ${L} lists`),
-  runUnsetToken: (journey, authEnv) => RUN(journey, `its notify.authEnv ${authEnv} is not set in the server's environment — the server's operator sets it and restarts the server, or whoever holds the workspace removes notify.authEnv from ${J(journey)}`),
+  runName: (journey, urlEnv, org, file = J(journey, org)) => RUN(journey, `its notify.urlEnv ${q(urlEnv)} is not a notify hook of org '${org}' — the server posts only to ${P(org)}NOTIFY_<HOOK>_URL (<HOOK>: words of A–Z and 0–9 joined by single _), with its token, if any, from ${P(org)}NOTIFY_<HOOK>_TOKEN; whoever holds the workspace sets notify.urlEnv in ${file} to one that ${L} lists (packc journey run reads any name from its own environment)`),
+  runShadow: (journey, urlEnv, org, file = J(journey, org)) => RUN(journey, `its notify.urlEnv ${q(urlEnv)} has the shape of a notify hook of org '${org}', but another org's id also maps onto it by the longest-prefix rule — whoever holds the workspace sets notify.urlEnv in ${file} to one that ${L} lists`),
+  runPair: (journey, authEnv, tokenEnv, file = J(journey)) => RUN(journey, `its notify.authEnv ${q(authEnv)} is not the token of the hook its urlEnv names — a hook's token goes only to its own URL: whoever holds the workspace sets notify.authEnv in ${file} to ${tokenEnv}, or removes it`),
+  runUnsetUrl: (journey, urlEnv, file = J(journey)) => RUN(journey, `its notify hook ${urlEnv} is not set in the server's environment — the server's operator sets it and restarts the server, or whoever holds the workspace sets notify.urlEnv in ${file} to one that ${L} lists`),
+  runUnsetToken: (journey, authEnv, file = J(journey)) => RUN(journey, `its notify.authEnv ${authEnv} is not set in the server's environment — the server's operator sets it and restarts the server, or whoever holds the workspace removes notify.authEnv from ${file}`),
   // every hook name of the org taken by another org's id (a KEY tie, or an id whose prefix is <P>NOTIFY_)
   taken: (urlEnv, org) => `notify.urlEnv ${q(urlEnv)} cannot be a notify hook of org '${org}' — another org's id also maps onto every ${P(org)}NOTIFY_<HOOK>_URL by the longest-prefix rule, so the server posts no notification for this org's journeys: leave notify out`,
-  runTaken: (journey, urlEnv, org) => RUN(journey, `its notify.urlEnv ${q(urlEnv)} cannot be a notify hook of org '${org}' — another org's id also maps onto every ${P(org)}NOTIFY_<HOOK>_URL by the longest-prefix rule, so the server posts no notification for this org's journeys; whoever holds the workspace removes notify from ${J(journey)} (packc journey run reads any name from its own environment)`),
+  runTaken: (journey, urlEnv, org, file = J(journey, org)) => RUN(journey, `its notify.urlEnv ${q(urlEnv)} cannot be a notify hook of org '${org}' — another org's id also maps onto every ${P(org)}NOTIFY_<HOOK>_URL by the longest-prefix rule, so the server posts no notification for this org's journeys; whoever holds the workspace removes notify from ${file} (packc journey run reads any name from its own environment)`),
   noneTaken: (org) => `no notify hook can be set for org '${org}' — another org's id also maps onto every ${P(org)}NOTIFY_<HOOK>_URL by the longest-prefix rule, so the server posts no notification for this org's journeys: whoever holds the workspace leaves notify out of them`,
 };
 
@@ -115,8 +117,8 @@ test('U1 names: every deny-list row is refused for acme with its text (NAME, SHA
     // the org's own hook
     assert.deepEqual(notifyHookOf(db, ONCALL.urlEnv, 'acme'), { kind: 'hook', hook: 'ONCALL', ...ONCALL });
     for (const at of ['capture', 'run']) {
-      assert.equal(notifyNamesRefusal(db, { urlEnv: ONCALL.urlEnv }, { org: 'acme', at, journey: 'j1' }), null, at);
-      assert.equal(notifyNamesRefusal(db, { urlEnv: ONCALL.urlEnv, authEnv: ONCALL.tokenEnv }, { org: 'acme', at, journey: 'j1' }), null, `${at} with its token`);
+      assert.equal(notifyNamesRefusal(db, { urlEnv: ONCALL.urlEnv }, { org: 'acme', at, journey: 'j1', file: J('j1') }), null, at);
+      assert.equal(notifyNamesRefusal(db, { urlEnv: ONCALL.urlEnv, authEnv: ONCALL.tokenEnv }, { org: 'acme', at, journey: 'j1', file: J('j1') }), null, `${at} with its token`);
     }
     const max = `OBSERVOGRAM_ORG_ACME_NOTIFY_${'X'.repeat(200 - 'OBSERVOGRAM_ORG_ACME_NOTIFY__URL'.length)}_URL`;
     assert.equal(notifyHookOf(db, max, 'acme').kind, 'hook', '200 characters is the bound');
@@ -124,9 +126,9 @@ test('U1 names: every deny-list row is refused for acme with its text (NAME, SHA
     for (const urlEnv of NAME_ROWS) {
       assert.equal(notifyHookOf(db, urlEnv, 'acme').kind, 'name', urlEnv);
       assert.equal(notifyNamesRefusal(db, { urlEnv }, { org: 'acme', at: 'capture' }), T.name(urlEnv, 'acme'), urlEnv);
-      assert.equal(notifyNamesRefusal(db, { urlEnv }, { org: 'acme', at: 'run', journey: 'legacy' }), T.runName('legacy', urlEnv, 'acme'), urlEnv);
+      assert.equal(notifyNamesRefusal(db, { urlEnv }, { org: 'acme', at: 'run', journey: 'legacy', file: J('legacy') }), T.runName('legacy', urlEnv, 'acme'), urlEnv);
       assert.equal(captureNotifyRefusal(db, { urlEnv, authEnv: ONCALL.tokenEnv }, { org: 'acme', env: THROWING_ENV }), T.name(urlEnv, 'acme'), `${urlEnv}: no env read`);
-      assert.deepEqual(resolveJourneyNotify(db, { urlEnv }, { org: 'acme', journey: 'legacy', env: THROWING_ENV }), { refused: T.runName('legacy', urlEnv, 'acme') }, `${urlEnv}: no env read`);
+      assert.deepEqual(resolveJourneyNotify(db, { urlEnv }, { org: 'acme', journey: 'legacy', file: J('legacy'), env: THROWING_ENV }), { refused: T.runName('legacy', urlEnv, 'acme') }, `${urlEnv}: no env read`);
     }
     // the mixed-case row passes ownership — only the shape refuses it (Windows reads process.env case-insensitively)
     assert.deepEqual(envNameOwnedBy(db, 'OBSERVOGRAM_ORG_ACME_NOTIFY_oncall_URL'), ['acme']);
@@ -138,10 +140,10 @@ test('U1 names: every deny-list row is refused for acme with its text (NAME, SHA
     for (const [urlEnv, org, other] of shadows) {
       assert.deepEqual(notifyHookOf(db, urlEnv, org), { kind: 'shadow' }, `${urlEnv} for ${org}`);
       const capture = notifyNamesRefusal(db, { urlEnv }, { org, at: 'capture' });
-      const run = notifyNamesRefusal(db, { urlEnv }, { org, at: 'run', journey: 'j2' });
+      const run = notifyNamesRefusal(db, { urlEnv }, { org, at: 'run', journey: 'j2', file: J('j2', org) });
       assert.equal(capture, T.shadow(urlEnv, org));
       assert.equal(run, T.runShadow('j2', urlEnv, org));
-      assert.deepEqual(resolveJourneyNotify(db, { urlEnv }, { org, journey: 'j2', env: THROWING_ENV }), { refused: run }, 'no env read');
+      assert.deepEqual(resolveJourneyNotify(db, { urlEnv }, { org, journey: 'j2', file: J('j2', org), env: THROWING_ENV }), { refused: run }, 'no env read');
       for (const text of [capture, run]) assert.ok(!text.includes(`'${other}'`) && !text.includes(` ${other} `), `${text} names no other org`);
     }
     // Every hook name taken: a KEY tie (a-b, a_b), or an id whose prefix is the org's <P>NOTIFY_ (pay-notify
@@ -155,11 +157,11 @@ test('U1 names: every deny-list row is refused for acme with its text (NAME, SHA
         for (const hook of ['ONCALL', 'X', 'NOTIFY', 'ZZZ_1']) assert.deepEqual(notifyHookOf(store, `${P(org)}NOTIFY_${hook}_URL`, org), { kind: 'shadow' }, `${org} ${hook}`);
         for (const urlEnv of [`${P(org)}NOTIFY_ONCALL_URL`, `${P(org)}NOTIFY_ZZZ_1_URL`, 'OBSERVOGRAM_API_TOKEN', 'MY_JOURNEY_WEBHOOK_URL', `${P(org)}MCP_TOKEN`]) {
           const capture = notifyNamesRefusal(store, { urlEnv }, { org, at: 'capture' });
-          const run = notifyNamesRefusal(store, { urlEnv, authEnv: 'OBSERVOGRAM_API_TOKEN' }, { org, at: 'run', journey: 'j4' });
+          const run = notifyNamesRefusal(store, { urlEnv, authEnv: 'OBSERVOGRAM_API_TOKEN' }, { org, at: 'run', journey: 'j4', file: J('j4', org) });
           assert.equal(capture, T.taken(urlEnv, org), `${org}: ${urlEnv}`);
           assert.equal(run, T.runTaken('j4', urlEnv, org), `${org}: ${urlEnv}`);
           assert.equal(captureNotifyRefusal(store, { urlEnv }, { org, env: THROWING_ENV }), capture, `${org}: ${urlEnv}: no env read`);
-          assert.deepEqual(resolveJourneyNotify(store, { urlEnv }, { org, journey: 'j4', env: THROWING_ENV }), { refused: run }, `${org}: ${urlEnv}: no env read`);
+          assert.deepEqual(resolveJourneyNotify(store, { urlEnv }, { org, journey: 'j4', file: J('j4', org), env: THROWING_ENV }), { refused: run }, `${org}: ${urlEnv}: no env read`);
           for (const text of [capture, run]) {
             assert.ok(!text.includes(L), `${text}: never the listing, which can never hold one`);
             assert.ok(!text.includes(`'${other}'`) && !text.includes(` ${other} `), `${text} names no other org`);
@@ -167,7 +169,7 @@ test('U1 names: every deny-list row is refused for acme with its text (NAME, SHA
         }
       }
       // the org whose prefix takes them has hooks of its own
-      assert.equal(notifyNamesRefusal(taken.db, { urlEnv: 'OBSERVOGRAM_ORG_PAY_NOTIFY_NOTIFY_X_URL' }, { org: 'pay-notify', at: 'run', journey: 'j4' }), null);
+      assert.equal(notifyNamesRefusal(taken.db, { urlEnv: 'OBSERVOGRAM_ORG_PAY_NOTIFY_NOTIFY_X_URL' }, { org: 'pay-notify', at: 'run', journey: 'j4', file: J('j4', 'pay-notify') }), null);
     } finally {
       taken.close();
     }
@@ -176,18 +178,21 @@ test('U1 names: every deny-list row is refused for acme with its text (NAME, SHA
     // as authEnv of acme's own hook, every name but the hook's own token is PAIR
     for (const authEnv of [...NAME_ROWS.filter((n) => n !== ONCALL.tokenEnv), PAGER.tokenEnv, 'OBSERVOGRAM_ORG_ACME_NOTIFY_EU_X_TOKEN']) {
       assert.equal(notifyNamesRefusal(db, { urlEnv: ONCALL.urlEnv, authEnv }, { org: 'acme', at: 'capture' }), T.pair(authEnv, ONCALL.tokenEnv), authEnv);
-      assert.deepEqual(resolveJourneyNotify(db, { urlEnv: ONCALL.urlEnv, authEnv }, { org: 'acme', journey: 'j3', env: THROWING_ENV }), { refused: T.runPair('j3', authEnv, ONCALL.tokenEnv) }, `${authEnv}: no env read`);
+      assert.deepEqual(resolveJourneyNotify(db, { urlEnv: ONCALL.urlEnv, authEnv }, { org: 'acme', journey: 'j3', file: J('j3'), env: THROWING_ENV }), { refused: T.runPair('j3', authEnv, ONCALL.tokenEnv) }, `${authEnv}: no env read`);
     }
     // the same text whether the refused variable is set or not: no existence oracle
     const bravoHook = 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_URL';
     const unset = captureNotifyRefusal(db, { urlEnv: bravoHook }, { org: 'acme', env: {} });
     assert.equal(unset, T.name(bravoHook, 'acme'));
     assert.equal(captureNotifyRefusal(db, { urlEnv: bravoHook }, { org: 'acme', env: { [bravoHook]: 'http://127.0.0.1:9/bravo' } }), unset);
-    assert.equal(resolveJourneyNotify(db, { urlEnv: 'OBSERVOGRAM_API_TOKEN' }, { org: 'acme', journey: 'j', env: { OBSERVOGRAM_API_TOKEN: 'marker' } }).refused,
-      resolveJourneyNotify(db, { urlEnv: 'OBSERVOGRAM_API_TOKEN' }, { org: 'acme', journey: 'j', env: {} }).refused);
+    assert.equal(resolveJourneyNotify(db, { urlEnv: 'OBSERVOGRAM_API_TOKEN' }, { org: 'acme', journey: 'j', file: J('j'), env: { OBSERVOGRAM_API_TOKEN: 'marker' } }).refused,
+      resolveJourneyNotify(db, { urlEnv: 'OBSERVOGRAM_API_TOKEN' }, { org: 'acme', journey: 'j', file: J('j'), env: {} }).refused);
     // bravo's own hook is bravo's
-    assert.equal(notifyNamesRefusal(db, { urlEnv: bravoHook, authEnv: 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_TOKEN' }, { org: 'bravo', at: 'run', journey: 'b' }), null);
+    assert.equal(notifyNamesRefusal(db, { urlEnv: bravoHook, authEnv: 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_TOKEN' }, { org: 'bravo', at: 'run', journey: 'b', file: J('b', 'bravo') }), null);
     assert.throws(() => notifyNamesRefusal(db, { urlEnv: ONCALL.urlEnv }, { org: 'acme', at: 'deploy' }), TypeError);
+    // a run text names the journey's file: a run without it is a caller's error, never a text that names another
+    assert.throws(() => notifyNamesRefusal(db, { urlEnv: 'MY_HOOK_URL' }, { org: 'acme', at: 'run', journey: 'j' }), TypeError);
+    assert.throws(() => resolveJourneyNotify(db, { urlEnv: ONCALL.urlEnv }, { org: 'acme', journey: 'j', env: {} }), TypeError);
   } finally {
     close();
   }
@@ -198,11 +203,11 @@ test('U2 pairing: a hook\'s token goes only to its own URL — PAGER\'s token wi
   try {
     const env = { [ONCALL.urlEnv]: 'http://127.0.0.1:9/oncall', [ONCALL.tokenEnv]: 'tok-oncall', [PAGER.urlEnv]: 'http://127.0.0.1:9/pager', [PAGER.tokenEnv]: 'tok-pager', OBSERVOGRAM_ORG_ACME_MCP_TOKEN: 'tok-mcp' };
     assert.equal(captureNotifyRefusal(db, { urlEnv: ONCALL.urlEnv, authEnv: PAGER.tokenEnv }, { org: 'acme', env }), T.pair(PAGER.tokenEnv, ONCALL.tokenEnv));
-    assert.deepEqual(resolveJourneyNotify(db, { urlEnv: ONCALL.urlEnv, authEnv: PAGER.tokenEnv }, { org: 'acme', journey: 'p', env }), { refused: T.runPair('p', PAGER.tokenEnv, ONCALL.tokenEnv) });
+    assert.deepEqual(resolveJourneyNotify(db, { urlEnv: ONCALL.urlEnv, authEnv: PAGER.tokenEnv }, { org: 'acme', journey: 'p', file: J('p'), env }), { refused: T.runPair('p', PAGER.tokenEnv, ONCALL.tokenEnv) });
     assert.equal(captureNotifyRefusal(db, { urlEnv: ONCALL.urlEnv, authEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' }, { org: 'acme', env }), T.pair('OBSERVOGRAM_ORG_ACME_MCP_TOKEN', ONCALL.tokenEnv));
     assert.equal(captureNotifyRefusal(db, { urlEnv: ONCALL.urlEnv }, { org: 'acme', env }), null, 'no authEnv');
-    assert.deepEqual(resolveJourneyNotify(db, { urlEnv: ONCALL.urlEnv }, { org: 'acme', journey: 'p', env }), { refused: null, url: 'http://127.0.0.1:9/oncall', auth: null, urlEnv: ONCALL.urlEnv }, 'no token is sent without authEnv, though one is set');
-    assert.deepEqual(resolveJourneyNotify(db, { urlEnv: PAGER.urlEnv, authEnv: PAGER.tokenEnv }, { org: 'acme', journey: 'p', env }), { refused: null, url: 'http://127.0.0.1:9/pager', auth: 'tok-pager', urlEnv: PAGER.urlEnv });
+    assert.deepEqual(resolveJourneyNotify(db, { urlEnv: ONCALL.urlEnv }, { org: 'acme', journey: 'p', file: J('p'), env }), { refused: null, url: 'http://127.0.0.1:9/oncall', auth: null, urlEnv: ONCALL.urlEnv }, 'no token is sent without authEnv, though one is set');
+    assert.deepEqual(resolveJourneyNotify(db, { urlEnv: PAGER.urlEnv, authEnv: PAGER.tokenEnv }, { org: 'acme', journey: 'p', file: J('p'), env }), { refused: null, url: 'http://127.0.0.1:9/pager', auth: 'tok-pager', urlEnv: PAGER.urlEnv });
   } finally {
     close();
   }
@@ -215,7 +220,7 @@ test('U3 values: the URL is http(s), without user:password, at most 2000 charact
       const env = {};
       if (url !== undefined) env[ONCALL.urlEnv] = url;
       if (token !== undefined) env[ONCALL.tokenEnv] = token;
-      return { capture: captureNotifyRefusal(db, notify, { org: 'acme', env }), run: resolveJourneyNotify(db, notify, { org: 'acme', journey: 'v', env }) };
+      return { capture: captureNotifyRefusal(db, notify, { org: 'acme', env }), run: resolveJourneyNotify(db, notify, { org: 'acme', journey: 'v', file: J('v'), env }) };
     };
     const base = 'http://127.0.0.1:9/';
     const long = (n) => `${base}${'a'.repeat(n - base.length)}`;
@@ -316,7 +321,7 @@ test('U5 resolveJourneyNotify and captureNotifyRefusal: the trimmed values on su
   const { db, close } = await freshStore(['acme']);
   try {
     const env = { [ONCALL.urlEnv]: ' http://127.0.0.1:9/oncall?k=v ', [ONCALL.tokenEnv]: '\ttok-oncall\r\n' };
-    assert.deepEqual(resolveJourneyNotify(db, { urlEnv: ONCALL.urlEnv, authEnv: ONCALL.tokenEnv, on: 'always' }, { org: 'acme', journey: 'ok', env }),
+    assert.deepEqual(resolveJourneyNotify(db, { urlEnv: ONCALL.urlEnv, authEnv: ONCALL.tokenEnv, on: 'always' }, { org: 'acme', journey: 'ok', file: J('ok'), env }),
       { refused: null, url: 'http://127.0.0.1:9/oncall?k=v', auth: 'tok-oncall', urlEnv: ONCALL.urlEnv });
     assert.equal(captureNotifyRefusal(db, { urlEnv: ONCALL.urlEnv, authEnv: ONCALL.tokenEnv }, { org: 'acme', env }), null);
     assert.equal(captureNotifyRefusal(db, { urlEnv: PAGER.urlEnv }, { org: 'acme', env }), T.unsetUrl(PAGER.urlEnv), 'an unset hook is refused at capture');
@@ -662,11 +667,11 @@ async function auditRowsAfter(ws, seq) {
 // An org's part of a child's workspace (the default org's is the base), and
 // a definition planted there as whoever holds the workspace would write it.
 const orgRoot = (ws, org) => (org === 'default' ? ws : join(ws, 'orgs', org));
-function plant(ws, org, name, { packA = `{ file: ${PAY_FILE} }`, packB = `{ file: ${CUR_FILE} }`, notify = null } = {}) {
+function plant(ws, org, name, { packA = `{ file: ${PAY_FILE} }`, packB = `{ file: ${CUR_FILE} }`, notify = null, defName = name } = {}) {
   const dir = join(orgRoot(ws, org), 'journeys');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, `${name}.journey.yaml`), [
-    `name: ${name}`, `packA: ${packA}`, `packB: ${packB}`, 'gate: { minAlignmentPct: 1 }', ...(notify ? [`notify: ${notify}`] : []),
+    `name: ${defName}`, `packA: ${packA}`, `packB: ${packB}`, 'gate: { minAlignmentPct: 1 }', ...(notify ? [`notify: ${notify}`] : []),
   ].join('\n') + '\n');
 }
 const hasRecord = (ws, org, name) => existsSync(join(orgRoot(ws, org), 'runs', name));
@@ -825,15 +830,20 @@ test('H2 capture accepts one of the org\'s set hooks: the file holds its two nam
   assert.deepEqual(await auditRowsAfter(A.ws, seq), []);
 });
 
-test('H3 a definition written before the rule — a bare name with the API token as its bearer, another org\'s hook — is refused before it runs: 400 with the run text, no record, no row, nothing posted; GET /api/journeys carries that text as notify.problem, and a journey through its org\'s hook has none', { timeout: 120_000 }, async () => {
+test('H3 a definition written before the rule — a bare name with the API token as its bearer, another org\'s hook — is refused before it runs: 400 with the run text, no record, no row, nothing posted; GET /api/journeys carries that text as notify.problem, and a journey through its org\'s hook has none; the text names the file the run loaded, relative to the workspace, in its org\'s root — whatever its name: says', { timeout: 120_000 }, async () => {
   const A = await identityChild();
   plant(A.ws, 'acme', 'h3-bare', { notify: '{ urlEnv: MY_HOOK_URL, authEnv: OBSERVOGRAM_API_TOKEN, on: always }' });
   plant(A.ws, 'acme', 'h3-bravo', { notify: '{ urlEnv: OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_URL, on: always }' });
   plant(A.ws, 'acme', 'h3-hook', { notify: `{ urlEnv: ${ONCALL.urlEnv}, on: breach }` });
+  plant(A.ws, 'acme', 'h3-renamed', { defName: 'h3-other', notify: '{ urlEnv: MY_HOOK_URL, on: always }' });
   const want = {
     'h3-bare': T.runName('h3-bare', 'MY_HOOK_URL', 'acme'),
     'h3-bravo': T.runName('h3-bravo', 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_URL', 'acme'),
+    'h3-renamed': T.runName('h3-other', 'MY_HOOK_URL', 'acme', J('h3-renamed')),
   };
+  // The way out, followed literally from the workspace, opens the journey's own file (never the default org's
+  // journeys/, never a file named after its name:).
+  for (const name of Object.keys(want)) assert.ok(existsSync(join(A.ws, J(name))), `${J(name)} is in the workspace`);
   const seq = await auditSeq(A.ws);
   for (const [name, error] of Object.entries(want)) {
     const r = await run(A, name, A.as.oscar);
@@ -845,6 +855,14 @@ test('H3 a definition written before the rule — a bare name with the API token
   const listed = Object.fromEntries((await call(A.base, 'GET', '/api/journeys', { headers: A.as.vera })).json.journeys.map((j) => [j.name, j]));
   for (const [name, error] of Object.entries(want)) assert.equal(listed[name].notify.problem, error, `${name}: the listing says why`);
   assert.deepEqual(listed['h3-hook'].notify, { urlEnv: ONCALL.urlEnv, authEnv: null, on: 'breach', format: 'json' }, 'no problem key');
+  // the default org's root is the base: its text names journeys/<file>, which is there
+  const B = await openChild();
+  plant(B.ws, 'default', 'h3-default', { notify: '{ urlEnv: MY_HOOK_URL, on: always }' });
+  assert.equal(J('h3-default', 'default'), 'journeys/h3-default.journey.yaml');
+  assert.ok(existsSync(join(B.ws, J('h3-default', 'default'))));
+  const r = await run(B, 'h3-default');
+  assert.deepEqual([r.status, r.json], [400, { ok: false, error: T.runName('h3-default', 'MY_HOOK_URL', 'default') }]);
+  assert.equal(hasRecord(B.ws, 'default', 'h3-default'), false);
 });
 
 test('H4 a run through the org\'s hook posts once, with that hook\'s own token, a payload without any variable\'s name or value; the 200 row adds notify { urlEnv, status, attempts }, the vantage-lost 502 row the delivery its record kept, and a 502 with no record { status: null, attempts: 0 }', { timeout: 120_000 }, async () => {

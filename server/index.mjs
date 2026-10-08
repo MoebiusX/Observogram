@@ -36,7 +36,7 @@
 import express from 'express';
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
-import { resolve, dirname, extname, join } from 'node:path';
+import { resolve, basename, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
 import { adapt, listEnvironments, overlaidCanonical } from '../tools/lib/adapter.mjs';
@@ -877,6 +877,16 @@ function parsedSchedule(def) {
   try { return parseSchedule(def.schedule); } catch { return null; }
 }
 
+// The journey's file as a run's notify refusal names it
+// (server/notify-target-policy.mjs J): the file the route loaded, relative to
+// the workspace, in the org's root — journeys/<file> for an org at the base,
+// orgs/<id>/journeys/<file> for any other; never rebuilt from its name:,
+// which need not match the file's.
+function journeyFileOf(def) {
+  const root = orgRootOf(currentOrg());
+  return `${root === '.' ? '' : `${root}/`}journeys/${basename(def.__source)}`;
+}
+
 app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
   try {
     const journeys = listJourneys().map(name => {
@@ -891,7 +901,7 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
       // the run's own text, which names who acts (the server's operator, or
       // whoever holds the workspace); never for a journey a run would
       // notify through its org's hook.
-      const problem = def?.notify ? resolveJourneyNotify(currentStore(), def.notify, { org: currentOrg(), journey: def.name }).refused : null;
+      const problem = def?.notify ? resolveJourneyNotify(currentStore(), def.notify, { org: currentOrg(), journey: def.name, file: journeyFileOf(def) }).refused : null;
       return {
         name,
         loadError,
@@ -1005,7 +1015,7 @@ app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/sched
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
   try {
     const parsed = parsedSchedule(def);
-    const refuses = (notify) => notifyNamesRefusal(currentStore(), notify, { org: currentOrg(), at: 'run', journey: def.name }) !== null;
+    const refuses = (notify) => notifyNamesRefusal(currentStore(), notify, { org: currentOrg(), at: 'run', journey: def.name, file: journeyFileOf(def) }) !== null;
     const urlRefused = !!def.notify?.urlEnv && refuses({ urlEnv: def.notify.urlEnv });
     const authRefused = !!def.notify?.authEnv && (urlRefused || refuses({ urlEnv: def.notify.urlEnv, authEnv: def.notify.authEnv }));
     const envNames = [...new Set([def.packB?.mcp?.authEnv, urlRefused ? null : def.notify?.urlEnv, authRefused ? null : def.notify?.authEnv].filter(Boolean))];
@@ -1071,7 +1081,7 @@ app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), a
   if (def.notify) {
     const posture = notifyPostureRefusal({ ...mcpCallerOf(req), host: listenOf(req).host });
     if (posture) return res.status(posture.status).json({ ok: false, error: posture.error, denied: posture.denied });
-    notifyHook = resolveJourneyNotify(currentStore(), def.notify, { org: currentOrg(), journey: def.name });
+    notifyHook = resolveJourneyNotify(currentStore(), def.notify, { org: currentOrg(), journey: def.name, file: journeyFileOf(def) });
     if (notifyHook.refused) return res.status(400).json({ ok: false, error: notifyHook.refused });
   }
   const t0 = new Date();
