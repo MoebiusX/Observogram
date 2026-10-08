@@ -274,10 +274,11 @@ export function resolveNotifyTarget(def) {
 // variables' values as read, when the caller trimmed them. `secrets` (in
 // this local target only, never on the record) is what a delivery error is
 // redacted by: the URL raw and trimmed and its href, origin, host, hostname
-// and path with query; the token raw, trimmed of HTTP whitespace, and each
-// of its lines — each of at least NOTIFY_SECRET_MIN characters (a shorter
-// one would mangle fixed texts such as `HTTP 500`; scrubNotifyError is the
-// backstop), longest first.
+// (an IPv6 literal's also bare, as Node's net errors quote it), host:port
+// with the scheme's port when the URL names none, and path with query; the
+// token raw, trimmed of HTTP whitespace, and each of its lines — each of at
+// least NOTIFY_SECRET_MIN characters (a shorter one would mangle fixed texts
+// such as `HTTP 500`; scrubNotifyError is the backstop), longest first.
 export function notifyTargetOf(n, { url, auth = null, rawUrl = url, rawAuth = auth } = {}) {
   const format = NOTIFY_FORMATS.includes(n.format) ? n.format : NOTIFY_DEFAULT_FORMAT;
   const raw = Number.isInteger(n.timeoutMs) ? n.timeoutMs : NOTIFY_TIMEOUT_DEFAULT_MS;
@@ -297,6 +298,7 @@ export function notifyTargetOf(n, { url, auth = null, rawUrl = url, rawAuth = au
 }
 
 const NOTIFY_SECRET_MIN = 4;
+const NOTIFY_SCHEME_PORTS = { 'http:': '80', 'https:': '443' };
 const trimHttpWhitespace = (v) => String(v).replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '');
 function notifySecretsOf({ urls, tokens }) {
   const set = new Set();
@@ -312,6 +314,12 @@ function notifySecretsOf({ urls, tokens }) {
     if (p.origin !== 'null') add(p.origin);
     add(p.host);
     add(p.hostname);
+    // `connect ECONNREFUSED fd00::1:443`: the address without its brackets,
+    // and the port even when the URL leaves it to the scheme.
+    const bare = p.hostname.replace(/^\[(.*)\]$/, '$1');
+    const port = p.port || NOTIFY_SCHEME_PORTS[p.protocol];
+    add(bare);
+    if (port) { add(`${p.hostname}:${port}`); add(`${bare}:${port}`); }
     add(p.pathname + p.search);
   }
   for (const t of tokens) {

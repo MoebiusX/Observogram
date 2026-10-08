@@ -1558,6 +1558,20 @@ try {
           });
           assert(thrown.notify.error === 'connect to <redacted> failed for <redacted> (<redacted>) with Bearer <redacted>' && !/hook-host|path-secret|query-secret|tok-e3-secret/.test(thrown.disk),
                  'E3 a thrown notifier naming the hook\'s host, path, URL and token is redacted by value', thrown.notify);
+          // an IPv6 literal's hostname is bracketed, but Node's net errors quote the address bare, with the port —
+          // the scheme's when the URL names none. Through the real fetch (`[::1]` at the receiver's port, where
+          // nothing listens: ECONNREFUSED, or EAFNOSUPPORT on a host without IPv6) and in Node's texts verbatim.
+          const rxPort = new URL(rxUrl).port;
+          const v6 = await errOf('e3-v6-loop', `http://[0:0:0:0:0:0:0:1]:${rxPort}/v6-path`);
+          assert(v6.notify.status === 'failed' && /^connect E[A-Z]+ <redacted>/.test(v6.notify.error) && !v6.notify.error.includes(rxPort) && !v6.disk.includes(`::1:${rxPort}`) && hits.length === 0,
+                 'E3 an IPv6-literal hook\'s address and port, as Node\'s connect error quotes them, are redacted on the record', v6.notify);
+          for (const [name, url, text] of [['e3-v6-far', 'http://[fd00::5ec:1]:4443/v6far-path', 'connect ECONNREFUSED fd00::5ec:1:4443'],
+            ['e3-v6-default', 'https://[fd00::beef]/p', 'connect ETIMEDOUT fd00::beef:443'],
+            ['e3-v6-mapped', 'http://[::ffff:127.0.0.1]:44203/x', 'connect EAFNOSUPPORT ::ffff:7f00:1:44203 - Local (undefined:undefined)']]) {
+            const { notify, disk } = await errOf(name, url, undefined, { notifier: async () => ({ sent: false, httpStatus: null, attempts: 2, tookMs: 1, error: text }) });
+            assert(notify.error === text.replace(/ \S+:\d+/, ' <redacted>') && !/fd00|beef|ffff|7f00|4443|44203/.test(JSON.stringify(JSON.parse(disk).notify)),
+                   `E3 Node's text for ${url} carries no part of its address or port`, notify);
+          }
           // the pattern backstop alone, and the texts that carry no value stay as they are
           assert(scrubNotifyError('Headers.append: "Bearer a"b" is an invalid header value.') === HEADER && scrubNotifyError('Request cannot be constructed from a URL that includes credentials: http://u:p@h/x y') === 'Request cannot be constructed from a URL that includes credentials: <redacted>'
                  && ['HTTP 500', 'timeout after 1000ms', 'boom at https://***@h/', 'fetch failed', ''].every(t => scrubNotifyError(t) === t) && scrubNotifyError(null) === '',
