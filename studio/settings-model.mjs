@@ -767,7 +767,13 @@ const JOIN_ROLE_CHOICES = ['viewer', 'operator', 'admin', null];
 // the recorded join role does under it — and, behind a reverse proxy, that
 // it does nothing (the proxy's own setting rules). `open` the open posture:
 // the server answers mode 'local' under OBSERVOGRAM_AUTH=off, but nobody signs
-// in there, so the head says the server runs without sign-in.
+// in there, so the head says the server runs without sign-in — and the way
+// the join role comes to apply is a restart without it, with OIDC
+// configured: OBSERVOGRAM_AUTH=off beats an OIDC issuer (server/auth.mjs
+// oidcEnabled), so configuring one alone changes nothing (D-F's way in, as
+// the token posture's). The section is read there only straight from this
+// machine, on the loopback, where a store without sign-in means
+// OBSERVOGRAM_AUTH=off (a first boot seeds a user that arms it otherwise).
 export function joinRoleModeSentence(doc, { defaultOrgName = null, open = false } = {}) {
   const role = doc?.role ?? null;
   const def = defaultOrgName || 'the default organisation';
@@ -779,8 +785,8 @@ export function joinRoleModeSentence(doc, { defaultOrgName = null, open = false 
     const groups = doc.proxy?.groupsConfigured ? ' — the groups header decides when it names a group' : '';
     return `Sign-in: a reverse proxy. Its first-sight role is the proxy's (OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE: ${doc.proxy?.joinRole ?? 'none'})${groups}; the recorded join role below does not apply to proxy users.`;
   }
-  const head = open ? 'This server runs without sign-in.' : 'Sign-in: local users.';
-  return `${head} The join role applies to IdP users once OIDC is configured: ${role ?? 'none'}.`;
+  if (open) return `This server runs without sign-in (OBSERVOGRAM_AUTH=off). The join role applies to IdP users once it restarts without OBSERVOGRAM_AUTH=off, with OIDC configured: ${role ?? 'none'}.`;
+  return `Sign-in: local users. The join role applies to IdP users once OIDC is configured: ${role ?? 'none'}.`;
 }
 
 // `doc` GET /api/admin/join-role minus ok (null when the read failed —
