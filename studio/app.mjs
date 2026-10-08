@@ -2914,6 +2914,22 @@ function focusSettingsEditor() {
   first?.focus({ preventScroll: true });
 }
 
+// A refusal that redrew the dialog — the gate's (the rank, the session or the
+// posture went): a confirm step the rank lost is drawn as the edit step, so
+// the danger button under the focus went with it, and the status region now
+// holding the refusal is a new node, whose sentence no reader hears. So the
+// refusal is announced and the focus goes back into the dialog, as after a
+// create's redraw. `drawn` the status region before the refusal: still the
+// same node, it spoke for itself and the focus never left.
+function refusalRedrawn(ed, drawn) {
+  if (settingsEditor !== ed) return;
+  const now = document.getElementById('set-editor-status');
+  if (!now || now === drawn) return;
+  announce(ed.status?.text ?? now.textContent);
+  const dialog = document.querySelector('#set-editor-host .set-editor');
+  if (dialog && !dialog.contains(document.activeElement)) focusSettingsEditor();
+}
+
 // Close (the scrim, esc, Close, Escape, a delete done, leaving Settings):
 // the focus returns to the opener when it is still on the page.
 function closeSettingsEditor({ focus = true } = {}) {
@@ -3003,9 +3019,11 @@ async function saveSettingsEditor(draft) {
     }
   } catch (e) {
     if (settingsEditor !== ed) return null;
+    const drawn = document.getElementById('set-editor-status');
     ed.status = { kind: 'error', text: e?.message || 'no answer' };
     syncSettingsEditor();
     settingsWriteRefused(e);
+    refusalRedrawn(ed, drawn);
     return null;
   }
   const opened = settingsEditor === ed;
@@ -3036,9 +3054,11 @@ async function confirmSettingsEditor(typed = null) {
   try { res = await deleteEndpoint(ed.record.id); }
   catch (e) {
     if (settingsEditor !== ed) return null;
+    const drawn = document.getElementById('set-editor-status');
     ed.status = { kind: 'error', text: e?.message || 'no answer' };
     syncSettingsEditor();
     settingsWriteRefused(e);
+    refusalRedrawn(ed, drawn);
     return null;
   }
   const status = endpointDeleteStatus(ed.record.name, res.unbound, state.services);
@@ -3055,9 +3075,11 @@ async function confirmSettingsEditor(typed = null) {
 // (the last-admin 409 among them, as served); the gate's refusals downgrade.
 function memberWriteRefused(ed, e, { need = 'admin' } = {}) {
   if (settingsEditor !== ed) return null;
+  const drawn = document.getElementById('set-editor-status');
   ed.status = { kind: 'error', text: e?.message || 'no answer' };
   syncSettingsEditor();
   settingsWriteRefused(e, { need });
+  refusalRedrawn(ed, drawn);
   return null;
 }
 
@@ -3462,10 +3484,12 @@ async function saveJoinRoleEditor(ed, draft) {
 function environmentWriteRefused(ed, e) {
   if (e?.denied === 'auth' || e?.denied === 'role') state.access = { ...(state.access || {}), canWrite: false, reason: e.message };
   if (settingsEditor !== ed) return;
+  const drawn = document.getElementById('set-editor-status');
   ed.status = { kind: 'error', text: e?.message || 'no answer' };
   syncSettingsEditor();
   settingsWriteRefused(e);
   if (state.mode === 'service' && (e?.denied === 'auth' || e?.denied === 'role')) repaintServicePage();
+  refusalRedrawn(ed, drawn);
 }
 
 // After a write: the cached verdicts of the service's packs are dropped (the

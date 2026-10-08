@@ -33,6 +33,9 @@
  * her keys. An open server on the loopback: the first user is the owner the
  * create armed, with no second call. A server behind a reverse proxy: a
  * local user's reset says they cannot sign in here, and what it still does.
+ * A confirm step whose rank went while it was open (an environment's, an
+ * endpoint's, a member's, a user's): the 403 keeps the focus inside the
+ * dialog and is announced.
  * As vera (viewer): no Edit, no URL; her one org renamed long, its ORG
  * label keeps the OBSERVA bar inside the phone width. As nora (no org):
  * the boot's refusal.
@@ -1298,6 +1301,68 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       assert.equal((await fetch(`${proxyChild.base}/auth/login`, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'u=lou&p=x' })).status, 404);
       await closeButton(page);
     } finally { await ctx.close(); }
+  });
+
+  await t.test('a confirm step whose rank went while it was open — an environment\'s Delete, an endpoint\'s Delete, a member\'s Remove, a user\'s Disable: the 403 redraws the dialog without its danger button, the focus stays inside the dialog and the refusal is announced', async () => {
+    // A server of its own: each case demotes the reader over HTTP while the confirm step is open, then restores them.
+    const rws = workspace('rank');
+    fixture(rws);
+    const rank = await serve(rws, { env: { OBSERVOGRAM_MCP_ORIGINS: 'https://mcp.acme.test' } });
+    children.push(rank);
+    const jar = {};
+    const as = async (login) => (jar[login] ||= (await signIn(rank.base, login, password(login))).session);
+    const api = async (who, method, path, body) => {
+      const headers = { Accept: 'application/json', 'X-Observogram-CSRF': '1', 'X-Observogram-Org': 'acme', Cookie: await as(who) };
+      if (body !== undefined) headers['Content-Type'] = 'application/json';
+      const r = await fetch(`${rank.base}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+      return { status: r.status, json: await r.json().catch(() => null) };
+    };
+    assert.equal((await api('oscar', 'POST', '/api/validate', PAYMENT)).status, 200);
+    const env = (await api('oscar', 'GET', '/api/services')).json.services.find((s) => s.slug === 'payment-service').environments.find((e) => e.name === 'prod').id;
+    const ep = (await api('ada', 'POST', '/api/mcp-endpoints', { name: 'gw', url: 'https://mcp.acme.test/obs' })).json.endpoint.id;
+    const user = Object.fromEntries((await api('olive', 'GET', '/api/admin/users')).json.users.map((u) => [u.login, u.id]));
+    const role = async (login, to) => assert.equal((await api('olive', 'PATCH', `/api/org/members/${user[login]}`, { role: to })).status, 200);
+    const owner = async (by, login, flag) => assert.equal((await api(by, 'PUT', `/api/admin/users/${user[login]}/owner`, { owner: flag })).status, 200);
+    const refused = async (login, section, opening, demote, restore) => {
+      const ctx = await browser.newContext({ viewport: LAPTOP });
+      await ctx.addCookies([{ name: 'observogram_session', value: (await as(login)).split('=')[1], url: rank.base }]);
+      const { page } = await open(rank.base, login, { ctx });
+      try {
+        await toSettings(page);
+        await toSection(page, section);
+        await opening(page);
+        await page.waitForSelector('#set-editor-confirm', { timeout: T });
+        await page.focus('#set-editor-confirm');
+        await page.evaluate(() => { document.getElementById('ux-status').textContent = ''; });
+        await demote();
+        await page.keyboard.press('Enter');
+        const refusal = await editorError(page);
+        assert.match(refusal, /^403: /, `${login} (${section})`);
+        const after = await page.evaluate(() => ({
+          confirm: Boolean(document.querySelector('#set-editor-confirm')),
+          body: document.activeElement === document.body,
+          inside: Boolean(document.activeElement?.closest('#set-editor-host .set-editor[role="dialog"][aria-modal="true"]')),
+        }));
+        assert.deepEqual(after, { confirm: false, body: false, inside: true }, `${login} (${section}): after the 403 the focus is inside the dialog, never on <body>`);
+        await page.waitForFunction((r) => document.getElementById('ux-status')?.textContent === r, refusal, { timeout: T });
+      } finally { await ctx.close(); await restore(); }
+    };
+    await refused('oscar', 'environments', async (page) => {
+      await page.click(`[data-edit-env="${env}"]`);
+      await page.waitForSelector('.set-editor[data-kind="environment"]', { timeout: T });
+      await page.click('#set-editor-delete');
+    }, () => role('oscar', 'viewer'), () => role('oscar', 'operator'));
+    await refused('ada', 'endpoints', async (page) => {
+      await page.click(`[data-edit-endpoint="${ep}"]`);
+      await page.waitForSelector('.set-editor[data-kind="endpoint"]', { timeout: T });
+      await page.click('#set-editor-delete');
+    }, () => role('ada', 'operator'), () => role('ada', 'admin'));
+    await refused('ada', 'members', (page) => page.click(`[data-member-remove="${user.vera}"]`), () => role('ada', 'operator'), () => role('ada', 'admin'));
+    await owner('olive', 'ada', true);
+    await refused('olive', 'users', async (page) => {
+      await manage(page, user.bob);
+      await page.click('[data-user-action="disable"]');
+    }, () => owner('ada', 'olive', false), () => owner('ada', 'olive', true));
   });
 
   assert.deepEqual(problems, [], 'no page error and no console.error anywhere in the journey');
