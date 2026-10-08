@@ -1546,6 +1546,32 @@ test('Enable… says how the user signs in here, for every sign-in mode and kind
   assert.equal(buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, action: 'enable' }, step: 'confirm-action' }).confirm.text, 'Enable ada? They can sign in again with their password.');
 });
 
+test('Sign out everywhere… says whether the user can sign in again here, for every sign-in mode and kind — never "they can sign in again" where they cannot; the confirm and the status agree', () => {
+  for (const [mode, m] of Object.entries(SIGN_IN_MODES)) {
+    for (const [who, record] of Object.entries(SHORT)) {
+      const ctx = { ...OWNER_CTX, access: m.access, me: m.me, joinRole: m.joinRole, users: [...USERS, { ...record, disabled: false }], action: 'signout' };
+      const confirm = buildSettingsEditorModel('user', { ...record, disabled: false }, { ctx, step: 'confirm-action' }).confirm;
+      const status = userActionStatus('signout', { ok: true, you: false }, { login: record.login, kind: record.kind, open: m.open === true, joinRole: m.joinRole, me: m.me });
+      const why = SIGN_IN_WHY[`${mode}:${who}`];
+      const ends = `Every session of ${record.login} ends at its next request`;
+      if (why === null) {
+        assert.deepEqual(confirm, { text: `Sign ${record.login} out everywhere? ${ends}; they can sign in again.`, danger: `Sign ${record.login} out everywhere` }, `${mode}:${who}`);
+        assert.deepEqual(status, { kind: 'saved', text: `Every session of ${record.login} ended.` }, `${mode}:${who}`);
+      } else {
+        assert.deepEqual(confirm, { text: `Sign ${record.login} out everywhere? ${ends}. ${why}`, danger: `Sign ${record.login} out everywhere` }, `${mode}:${who}`);
+        assert.deepEqual(status, { kind: 'saved', text: `Every session of ${record.login} ended. ${why}` }, `${mode}:${who}`);
+        assert.ok(!/can sign in again/.test(confirm.text + status.text), `${mode}:${who}: never "they can sign in again" where they cannot`);
+      }
+      if (record.kind === 'oidc') assert.ok(!/password/.test(confirm.text + status.text), `${mode}:${who}: no password for an IdP user`);
+    }
+  }
+  // One's own sign-out (they are signed in here, so they can sign in again): as before.
+  assert.equal(buildSettingsEditorModel('user', USERS[0], { ctx: { ...OWNER_CTX, action: 'signout' }, step: 'confirm-action' }).confirm.text,
+    'Sign olive out everywhere? Every session of olive ends at its next request; they can sign in again. This is you: this browser is signed out too.');
+  assert.equal(userActionStatus('signout', { you: true }, { login: 'olive', joinRole: SIGN_IN_MODES.proxy.joinRole, me: 'proxy://edge#olive' }).text,
+    'You signed out everywhere — this browser is signed out at its next request.');
+});
+
 test('the users loaders: one requestJson call each, ids and actions encoded, the password in the body only — and no email kept', async () => {
   const calls = [];
   const answer = { ok: true, users: USERS_RAW, user: USERS_RAW[1], owner: false, joined: [{ orgId: 'acme', role: 'viewer' }], armed: false, note: null, you: true, mustChange: true, changed: true, defaultOrg: 'default', orgs: [{ id: 'acme' }], role: null, mode: 'local', oidc: false, issuerKey: null };

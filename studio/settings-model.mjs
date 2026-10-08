@@ -658,7 +658,11 @@ function userConfirm(action, login, { self = false, defaultOrg = null, open = fa
     case 'reset': return { text: resetTexts(login, { open, joinRole }).confirm, danger: `Reset ${login}'s password` };
     case 'disable': return { text: `Disable ${login}? Every session of ${login} ends, and they cannot sign in until an owner enables them; their memberships stay.${self ? ' This is you: this browser is signed out at its next request.' : ''}`, danger: `Disable ${login}` };
     case 'enable': { const si = signIn(); return { text: si.here ? `Enable ${login}? They can sign in again ${si.way}.` : `Enable ${login}? ${si.why}`, danger: `Enable ${login}` }; }
-    case 'signout': return { text: `Sign ${login} out everywhere? Every session of ${login} ends at its next request; they can sign in again.${self ? ' This is you: this browser is signed out too.' : ''}`, danger: `Sign ${login} out everywhere` };
+    case 'signout': {
+      const si = signIn();
+      const after = si.here ? `Every session of ${login} ends at its next request; they can sign in again.` : `Every session of ${login} ends at its next request. ${si.why}`;
+      return { text: `Sign ${login} out everywhere? ${after}${self ? ' This is you: this browser is signed out too.' : ''}`, danger: `Sign ${login} out everywhere` };
+    }
     case 'owner-grant': return { text: `Make ${login} an owner? An owner manages this deployment's users and acts as an admin in every organisation; ${login} also becomes an admin of ${def}.`, danger: `Make ${login} an owner` };
     case 'owner-revoke': return { text: `Revoke ${login}'s owner role? Their memberships stay as they are.${self ? ' This is you: you lose the owner role at once.' : ''}`, danger: `Revoke ${login}'s owner role` };
     default: return null;
@@ -677,7 +681,11 @@ export function userActionStatus(action, answer = {}, { login = 'the user', defa
     case 'reset': return saved(resetTexts(login, { open, joinRole }).status);
     case 'disable': return saved(answer?.you ? 'You disabled your own account — this browser is signed out at its next request.' : `${login} disabled — every session ended.`);
     case 'enable': { const si = signIn(); return saved(si.here ? `${login} enabled.` : `${login} enabled. ${si.why}`); }
-    case 'signout': return saved(answer?.you ? 'You signed out everywhere — this browser is signed out at its next request.' : `Every session of ${login} ended.`);
+    case 'signout': {
+      if (answer?.you) return saved('You signed out everywhere — this browser is signed out at its next request.');
+      const si = signIn();
+      return saved(si.here ? `Every session of ${login} ended.` : `Every session of ${login} ended. ${si.why}`);
+    }
     case 'owner-grant': return answer?.changed === false ? { kind: 'idle', text: `${login} is already an owner — nothing changed.` } : saved(`${login} is an owner (and an admin of ${def}).${note}`);
     case 'owner-revoke': return answer?.changed === false ? { kind: 'idle', text: `${login} is not an owner — nothing changed.` } : saved(`${login} is no longer an owner.${note}`);
     default: return { kind: 'idle', text: 'Nothing changed.' };

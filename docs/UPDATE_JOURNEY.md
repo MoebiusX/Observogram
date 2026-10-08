@@ -1304,16 +1304,16 @@ members, environments and MCP endpoints — the journey's live target — can be
 rescued when its last admin left; the ORG chip then reads `<name> — acting
 as owner`, and a member's chip is unchanged. Crawl, compile and board
 goldens are byte-identical.
-Tests: 1359 → 1389, from develop's total once batch 4 and the malformed-JSON
+Tests: 1359 → 1390, from develop's total once batch 4 and the malformed-JSON
 follow-up had merged (twenty-one in `server/test-settings-studio.mjs`'s owner
-block and the owner models in `tools/test-settings-model.mjs`; nine more from
+block and the owner models in `tools/test-settings-model.mjs`; ten more from
 the review fixes — in `server/test-settings-studio.mjs` the shared-browser
 case (an owner signing in after another login chose an org she is not in),
 the long one-org label case, the reverse-proxy reset case, the rank-lost
 focus case (a confirm step refused by a lost rank keeps the focus in its
-dialog) and the reverse-proxy Enable case, and in
+dialog) and the reverse-proxy Enable and Sign out case, and in
 `tools/test-settings-model.mjs` the rank-lost confirm test, the reset where a
 local user cannot sign in, `userSignIn` (how each kind of user signs in under
-each sign-in mode) and Enable… under every mode). The other review fixes add
-assertions to existing tests or change docs and comments; the count is
-unchanged by them.
+each sign-in mode), Enable… under every mode and Sign out everywhere… under
+every mode). The other review fixes add assertions to existing tests or
+change docs and comments; the count is unchanged by them.

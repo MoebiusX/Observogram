@@ -33,8 +33,8 @@
  * her keys. An open server on the loopback: the first user is the owner the
  * create armed, with no second call. A server behind a reverse proxy: a
  * local user's reset says they cannot sign in here, and what it still does;
- * Enable… says how each user signs in here (a local one cannot, the proxy's
- * through it — never with a password).
+ * Enable… and Sign out everywhere… say how each user signs in here (a local
+ * one cannot, the proxy's through it — never with a password).
  * A confirm step whose rank went while it was open (an environment's, an
  * endpoint's, a member's, a user's): the 403 keeps the focus inside the
  * dialog and is announced.
@@ -1326,7 +1326,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('a server behind a reverse proxy — Enable… says how each user signs in here: local lou cannot (no local sign-in is served), quin through the reverse proxy, never with a password; the confirm and the status agree', async () => {
+  await t.test('a server behind a reverse proxy — Enable… and Sign out everywhere… say how each user signs in here: local lou cannot (no local sign-in is served), quin through the reverse proxy, never with a password; the confirm and the status agree', async () => {
     const pc = await serve(workspace('proxy-users'), { env: { OBSERVOGRAM_TRUST_PROXY_AUTH: '1', OBSERVOGRAM_TRUST_PROXY_AUTH_ACK: 'only-the-proxy-reaches-this-port', OBSERVOGRAM_PROXY_AUTH_OWNERS: 'pat' } });
     children.push(pc);
     const PAT = { 'X-Forwarded-User': 'pat' };
@@ -1357,6 +1357,11 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       const louWhy = 'This server signs in through its reverse proxy: a local user cannot sign in here until it runs local sign-in. Then lou signs in with their password.';
       assert.deepEqual(await confirmed(lou, 'enable', / enabled\./), [`Enable lou? ${louWhy}`, `lou enabled. ${louWhy}`]);
       assert.deepEqual(await confirmed(quin.id, 'enable', / enabled\./), ['Enable proxy://proxy#quin? They can sign in again through the reverse proxy.', 'proxy://proxy#quin enabled.']);
+      // Sign out everywhere: "they can sign in again" only for quin, who can.
+      assert.deepEqual(await confirmed(lou, 'signout', /^Every session of lou ended/),
+        [`Sign lou out everywhere? Every session of lou ends at its next request. ${louWhy}`, `Every session of lou ended. ${louWhy}`]);
+      assert.deepEqual(await confirmed(quin.id, 'signout', /^Every session of proxy:\/\/proxy#quin ended/),
+        ['Sign proxy://proxy#quin out everywhere? Every session of proxy://proxy#quin ends at its next request; they can sign in again.', 'Every session of proxy://proxy#quin ended.']);
       // What the sentences say: quin is let in by the proxy again; no local sign-in is served for lou.
       assert.equal((await api('GET', '/auth/me', undefined, { 'X-Forwarded-User': 'quin' })).json?.authenticated, true);
       assert.equal((await fetch(`${pc.base}/auth/login`, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'u=lou&p=x' })).status, 404);
