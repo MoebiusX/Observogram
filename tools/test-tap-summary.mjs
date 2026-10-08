@@ -11,7 +11,8 @@
 // path's backslashes, a harness suite is named `tools\\test-x.mjs`. This
 // suite spells the skip marker only inside longer strings.
 import test from 'node:test';
-import assert from 'node:assert/strict';
+import { tap } from 'node:test/reporters';
+import strictAssert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,6 +22,42 @@ import {
   KNOWN_SKIPS, README_WIN32_LINES_RE, annotation, compareShapes, decodeTap, isExpectedSkip, logLines, parseTap,
   readmeWin32Lines, reportCommand, runShape, skipGroup, summarize, unescapeTap, whereOf,
 } from './tap-summary.mjs';
+
+// A failing assertion's message, actual and expected are printed into the
+// TAP, and every suites step tees that TAP into its job's log, where the
+// runner executes a line that starts with `::` once its leading whitespace is
+// trimmed. The texts this suite asserts on end in such lines (a summary's
+// annotations and notice): raw, a failure here would annotate the job with a
+// fixture's errors and a second `npm test` notice. So every string a failing
+// assertion carries shows such a line behind `| `, and its stack starts at
+// the assertion, the frame the summary places a failure by.
+const COMMAND_LINE_RE = /^([\s\u0085]*)::/gm;   // C#'s TrimStart also trims U+0085
+const defuse = (v) => {
+  if (typeof v === 'string') return v.replace(COMMAND_LINE_RE, '$1| ::');
+  if (Array.isArray(v)) return v.map(defuse);
+  if (typeof v === 'object' && v !== null && Object.getPrototypeOf(v) === Object.prototype) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, defuse(x)]));
+  return v;
+};
+const assert = Object.fromEntries(['deepEqual', 'equal', 'match', 'ok'].map((k) => [k, function commandless(...args) {
+  try {
+    return strictAssert[k](...args);
+  } catch (e) {
+    if (!(e instanceof strictAssert.AssertionError)) throw e;
+    for (const key of ['message', 'actual', 'expected']) e[key] = defuse(e[key]);
+    Error.captureStackTrace(e, commandless);
+    throw e;
+  }
+}]));
+
+// The TAP node --test prints for a test that threw `error`: its own reporter,
+// fed the failure as the runner reports it (wrapped as a test-code failure).
+async function tapOf(error) {
+  const failure = Object.assign(new Error('test failed'), { code: 'ERR_TEST_FAILURE', failureType: 'testCodeFailure', cause: error });
+  async function* events() { yield { type: 'test:fail', data: { name: 'a failing assertion', nesting: 0, testNumber: 1, details: { duration_ms: 1, type: 'test', error: failure } } }; }
+  let text = '';
+  for await (const chunk of tap(events())) text += chunk;
+  return text;
+}
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = join(ROOT, 'tools', 'tap-summary.mjs');
@@ -386,7 +423,7 @@ not ok 1 - the tenancy line
   assert.deepEqual(whereOf({ yaml: {} }, { root: LROOT, pathApi: posix }), { file: null, line: null });
 });
 
-test('S5 annotations: escaping, the run-level errors first, failures up to the cap of 10, the notice naming the block\'s length and the tail to read', () => {
+test('S5 annotations: escaping, the run-level errors first, failures up to the cap of 10, the notice naming the block\'s length and the tail to read; in a failing assertion here, each behind `| `', async () => {
   assert.equal(annotation('error', { title: 'a:b,c' }, '100%\nnext\r'), '::error title=a%3Ab%2Cc::100%25%0Anext%0D');
   assert.equal(annotation('notice', {}, 'x'), '::notice::x');
   assert.equal(annotation('error', { file: 'server/test-a.mjs', line: 7, title: 't' }, 'm'), '::error file=server/test-a.mjs,line=7,title=t::m');
@@ -408,6 +445,18 @@ test('S5 annotations: escaping, the run-level errors first, failures up to the c
   assert.equal(out[out.length - 1], `::notice title=npm test::tests 12 pass 0 fail 12 skipped 0 (win32 0/19) — the summary block is ${r.lines} lines; read it with tail_lines ${r.lines + 150}`);
   assert.equal(out[0], HEAD);
   assert.equal(out.indexOf('=========================================================='), out.indexOf(`block: ${r.lines} lines`) + 1, 'the rule closes the block, the annotations follow it');
+
+  // This suite's own failure, as node --test prints it into a job's log: the
+  // text still shown, no line of it a workflow command.
+  for (const fail of [() => assert.ok(false, r.text), () => assert.ok(undefined, r.text), () => assert.equal(1, 2, r.text), () => assert.match(r.text, /never printed/), () => assert.equal(r.text, ''), () => assert.deepEqual([r.text], [])]) {
+    let error = null;
+    try { fail(); } catch (e) { error = e; }
+    assert.ok(error instanceof strictAssert.AssertionError, `${fail}`);
+    const printed = await tapOf(error);
+    assert.deepEqual(printed.split(/\r?\n|\r/).filter((l) => /^[\s\u0085]*::/.test(l)), [], `${fail}: a line the runner would execute`);
+    assert.ok(printed.includes('| ::notice title=npm test::tests 12 pass 0 fail 12'), `${fail}: the text is still shown`);
+    assert.ok(!error.stack.includes('commandless'), `${fail}: the stack starts at the assertion`);
+  }
 });
 
 test('S6 the verdict: ok only when complete, fail 0, cancelled 0, todo 0, no failing leaf, every skip reason known and the count equal; an unfinished run shows its last 40 lines; an unknown reason is named', () => {
