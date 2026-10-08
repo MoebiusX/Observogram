@@ -1,8 +1,8 @@
 // tools/test-tap-summary.mjs — the end of a CI log (tools/tap-summary.mjs):
 // the TAP parse and its escapes, the SKIP win32: count, the failures and
 // their places, the annotations, the verdict, README's count, the byte
-// decoding, the CLI, the skip grouping, the timing bounds, the run's shape
-// and the cross-leg comparison.
+// decoding, the CLI, the workflow that runs it, the skip grouping, the
+// timing bounds, the run's shape and the cross-leg comparison.
 //
 // The fixtures are TAP as Node 22 prints it (4 spaces per depth, the YAML
 // block at depth×4+2, a harness suite's output as `# ` diagnostics before
@@ -539,6 +539,89 @@ test('S9 the CLI: the block on stdout, exit 0 and 1; usage, a README without the
     assert.ok(!/::notice/.test(differs.stdout), 'no notice when a run differs');
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The workflow's jobs as their text, and a job's steps as theirs (the
+// shapes this file pins are written one key per line).
+function workflowJobs(text) {
+  const jobs = {};
+  let name = null;
+  for (const line of text.slice(text.indexOf('\njobs:\n') + 7).split('\n')) {
+    const m = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line);
+    if (m) { name = m[1]; jobs[name] = []; } else if (name) jobs[name].push(line);
+  }
+  return Object.fromEntries(Object.entries(jobs).map(([k, v]) => [k, v.join('\n')]));
+}
+const stepsOf = (job) => job.split(/\n(?= {6}- )/).slice(1);
+const stepNamed = (job, re) => stepsOf(job).filter((st) => re.test(st));
+const minutes = (text) => Number(/timeout-minutes: (\d+)/.exec(text)?.[1]);
+const jobMinutes = (job) => Number(/^ {4}timeout-minutes: (\d+)/m.exec(job)?.[1]);
+const SUMMARY_IF = "if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}";
+
+test('S10 the workflow wires it: a Windows matrix on the floor and the latest 22 that runs the documented report command, npm test through tee under pipefail with a step timeout, and the summary held to README; node-floor and validate end with the summary; windows-vs-linux compares the shapes', () => {
+  const text = readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const jobs = workflowJobs(text);
+  assert.ok(text.includes('# Validates every push to develop/main and every PR into develop or main.'));
+  assert.ok(!/continue-on-error/.test(text), 'no step or job is allowed to fail');
+
+  const w = jobs.windows;
+  assert.ok(w, 'a windows job');
+  assert.match(w, /^ {4}runs-on: windows-latest$/m);
+  assert.match(w, /^ {6}fail-fast: false$/m);
+  assert.match(w, /^ {8}node: \['22\.16\.0', '22'\]$/m, 'the floor and the latest 22, as on Linux');
+  assert.match(w, /^ {4}defaults:\n {6}run:\n {8}shell: bash$/m, 'every run step under bash -eo pipefail');
+  assert.match(jobs['node-floor'], /node-version: '22\.16\.0'/);
+  assert.match(jobs.validate, /node-version: '22'/);
+  const report = stepNamed(w, /The documented report command captures TAP/);
+  assert.equal(report.length, 1, 'the report-command step');
+  assert.match(report[0], /^ {8}shell: powershell$/m, 'run from Windows PowerShell, the hardest shell for it');
+  assert.ok(report[0].includes(reportCommand('test.tap', true).replace('npm test', 'npm run test:platform')), 'the documented command, on one suite');
+  assert.ok(report[0].includes('if ($LASTEXITCODE)') && report[0].includes('node tools/tap-summary.mjs test.tap --win32-skips 0') && report[0].includes('exit $code'), 'each native exit checked by hand');
+  const wTest = stepNamed(w, /id: test\n/);
+  assert.equal(wTest.length, 1);
+  assert.ok(wTest[0].includes('run: npm test 2>&1 | tee "$RUNNER_TEMP/test.tap"'));
+  assert.ok(stepsOf(w).indexOf(report[0]) < stepsOf(w).indexOf(wTest[0]), 'the report command runs first');
+  assert.ok(minutes(wTest[0]) < jobMinutes(w), `the step timeout (${minutes(wTest[0])}) under the job's (${jobMinutes(w)}), so the summary runs on a hang`);
+  const wSum = stepNamed(w, /id: summary\n/);
+  assert.equal(wSum.length, 1);
+  assert.ok(wSum[0].includes(SUMMARY_IF));
+  assert.ok(wSum[0].includes('run: node tools/tap-summary.mjs "$RUNNER_TEMP/test.tap" --win32-skips readme --shape "$RUNNER_TEMP/run-shape.json"'));
+  const wUp = stepNamed(w, /upload-artifact/);
+  assert.equal(wUp.length, 1);
+  assert.ok(wUp[0].includes('name: run-shape-windows-${{ matrix.node }}') && /overwrite: true/.test(wUp[0]) && wUp[0].includes("if: ${{ !cancelled() && steps.summary.outcome == 'success' }}"));
+
+  const f = jobs['node-floor'];
+  const fTest = stepNamed(f, /id: test\n/);
+  assert.equal(fTest.length, 1);
+  assert.match(fTest[0], /^ {8}shell: bash$/m, 'pipefail: GitHub\'s implicit Linux shell has none');
+  assert.ok(fTest[0].includes('run: npm test 2>&1 | tee "$RUNNER_TEMP/test.tap"'));
+  assert.ok(minutes(fTest[0]) < jobMinutes(f), 'the step timeout under the job\'s');
+  const fSum = stepNamed(f, /id: summary\n/);
+  assert.ok(fSum[0].includes(SUMMARY_IF) && fSum[0].includes('--win32-skips 0 --shape "$RUNNER_TEMP/run-shape.json"'));
+  assert.ok(stepNamed(f, /upload-artifact/)[0].includes('name: run-shape-node-floor') && /overwrite: true/.test(stepNamed(f, /upload-artifact/)[0]));
+
+  const v = jobs.validate;
+  const vTest = stepNamed(v, /id: test\n/);
+  assert.equal(vTest.length, 1);
+  assert.match(vTest[0], /^ {8}shell: bash$/m);
+  assert.ok(vTest[0].includes('run: npm run coverage 2>&1 | tee "$RUNNER_TEMP/test.tap"'));
+  assert.ok(minutes(vTest[0]) < jobMinutes(v), 'the step timeout under the job\'s');
+  const vSteps = stepsOf(v);
+  assert.ok(vSteps[vSteps.length - 1].includes(SUMMARY_IF) && vSteps[vSteps.length - 1].includes('run: node tools/tap-summary.mjs "$RUNNER_TEMP/test.tap" --win32-skips 0'), 'validate ends with the summary');
+
+  const c = jobs['windows-vs-linux'];
+  assert.match(c, /^ {4}needs: \[node-floor, windows\]$/m);
+  assert.ok(c.includes('uses: actions/download-artifact@v8') && c.includes('pattern: run-shape-*'));
+  assert.ok(c.includes('node tools/tap-summary.mjs --compare'));
+  for (const node of ['node-floor', 'windows-22.16.0', 'windows-22']) assert.ok(c.includes(`"$RUNNER_TEMP/shapes/run-shape-${node}/run-shape.json"`), node);
+
+  // Every piped run is under pipefail; no suites step names the reporter (Node 22 prints TAP into a pipe).
+  for (const [name, job] of Object.entries(jobs)) {
+    for (const st of stepsOf(job)) {
+      if (/\| tee /.test(st)) assert.ok(/shell: bash/.test(st) || /^ {4}defaults:\n {6}run:\n {8}shell: bash$/m.test(job), `${name}: a piped step runs under bash -eo pipefail`);
+      if (/NODE_OPTIONS/.test(st)) assert.ok(st === report[0], `${name}: NODE_OPTIONS only in the report-command step`);
+    }
   }
 });
 

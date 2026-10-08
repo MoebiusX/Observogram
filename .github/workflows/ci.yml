@@ -1,6 +1,6 @@
 name: ci
 
-# Validates every push to develop/main and every PR targeting main.
+# Validates every push to develop/main and every PR into develop or main.
 # Runtime deps are installed with `npm ci` (express is a dependency).
 
 on:
@@ -80,8 +80,14 @@ jobs:
       - name: Backend validation — strict (promtool / amtool / otelcol-contrib)
         run: npm run test:backend:strict
 
+      # bash -eo pipefail (named, so tee cannot hide the suites' exit), the
+      # TAP to a file for the summary at the end of this log, a step timeout
+      # under the job's so the summary still runs on a hang.
       - name: Regression suites + coverage (adapt / fetch / packs / compile / profiles / crawl / server)
-        run: npm run coverage
+        id: test
+        shell: bash
+        timeout-minutes: 6
+        run: npm run coverage 2>&1 | tee "$RUNNER_TEMP/test.tap"
 
       - name: Upload coverage (lcov)
         if: always()
@@ -95,11 +101,19 @@ jobs:
         run: |
           node -e "const fs=require('fs');const html=fs.readFileSync('studio/index.html','utf8');if(!html.includes('</html>'))process.exit(1);console.log('studio html ok ('+html.length+' bytes)')"
 
+      # The end of this log (tools/tap-summary.mjs): the totals, every
+      # failure with its place and error, annotations; no win32 skip here.
+      - name: Test summary (the end of this log)
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        run: node tools/tap-summary.mjs "$RUNNER_TEMP/test.tap" --win32-skips 0
+
   # The Node floor. package.json engines says >=22.16.0 (node:sqlite, the
   # embedded store — docs/STORE_PLAN.md §1), and `node-version: '22'`
   # above resolves to the latest 22.x, which would never exercise the
   # floor: code could lean on a later 22.x API or fix and still pass.
-  # This leg runs the suite on exactly the floor.
+  # This leg runs the suite on exactly the floor. It ends with the summary
+  # (tools/tap-summary.mjs), and its run's shape is the reference
+  # windows-vs-linux holds the Windows runs to.
   node-floor:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -115,7 +129,109 @@ jobs:
         run: npm ci
 
       - name: Test suites on the Node floor
-        run: npm test
+        id: test
+        shell: bash
+        timeout-minutes: 7
+        run: npm test 2>&1 | tee "$RUNNER_TEMP/test.tap"
+
+      - name: Test summary (the end of this log)
+        id: summary
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        run: node tools/tap-summary.mjs "$RUNNER_TEMP/test.tap" --win32-skips 0 --shape "$RUNNER_TEMP/run-shape.json"
+
+      - name: Keep the run's shape for windows-vs-linux
+        if: ${{ !cancelled() && steps.summary.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: run-shape-node-floor
+          path: ${{ runner.temp }}/run-shape.json
+          retention-days: 7
+          overwrite: true
+
+  # Windows (README "Platforms", docs/DOWNSTREAM.md §13): the suites on
+  # windows-latest, on the Node floor and the latest 22. No fetch-validators
+  # (test-backend-validate prints SKIPPED, as on node-floor), no docker, no
+  # Playwright (the browser tests skip, as on every leg). The TAP goes to
+  # the log and to a file; the summary step prints the block the log API's
+  # tail reaches, annotates each failure, and fails the job unless the run
+  # printed the SKIP win32: count README states. The run's shape goes to
+  # windows-vs-linux, which holds it to the Linux floor's.
+  windows:
+    name: windows (node ${{ matrix.node }})
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.16.0', '22']
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The report command docs/DOWNSTREAM.md §13 gives a Windows user, run
+      # as written from Windows PowerShell on one suite: it must capture TAP.
+      - name: The documented report command captures TAP
+        shell: powershell
+        run: |
+          cmd /c "set NODE_OPTIONS=--test-reporter=tap&& npm run test:platform > test.tap 2>&1"
+          if ($LASTEXITCODE) { Get-Content test.tap -Tail 40; exit $LASTEXITCODE }
+          node tools/tap-summary.mjs test.tap --win32-skips 0
+          $code = $LASTEXITCODE; Remove-Item test.tap; exit $code
+
+      - name: Test suites on Windows
+        id: test
+        timeout-minutes: 35
+        run: npm test 2>&1 | tee "$RUNNER_TEMP/test.tap"
+
+      - name: Test summary (the end of this log)
+        id: summary
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        run: node tools/tap-summary.mjs "$RUNNER_TEMP/test.tap" --win32-skips readme --shape "$RUNNER_TEMP/run-shape.json"
+
+      - name: Keep the run's shape for windows-vs-linux
+        if: ${{ !cancelled() && steps.summary.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: run-shape-windows-${{ matrix.node }}
+          path: ${{ runner.temp }}/run-shape.json
+          retention-days: 7
+          overwrite: true
+
+  # Windows ran what Linux ran: the same tests, the same harness assertions
+  # per file (fewer only under a counted win32 skip), the same skip reasons
+  # (tools/tap-summary.mjs --compare; README "Platforms").
+  windows-vs-linux:
+    needs: [node-floor, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.16.0'
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: run-shape-*
+          path: ${{ runner.temp }}/shapes
+
+      - name: The Windows runs against the Linux floor
+        run: >-
+          node tools/tap-summary.mjs --compare
+          "$RUNNER_TEMP/shapes/run-shape-node-floor/run-shape.json"
+          "$RUNNER_TEMP/shapes/run-shape-windows-22.16.0/run-shape.json"
+          "$RUNNER_TEMP/shapes/run-shape-windows-22/run-shape.json"
 
   # T4 — the product-story round trip against a REAL Grafana:
   # compile → deploy-bulk (real MCP path) → fetch-live → diff → aligned.

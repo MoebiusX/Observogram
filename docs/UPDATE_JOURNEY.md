@@ -1329,3 +1329,11 @@ against the run. It also writes the run's shape, so a Windows run can be held
 to the Linux floor's: the same tests, the same harness assertions, the same
 skip reasons.
 Tests: 1390 → 1403 (`tools/test-tap-summary.mjs` 13, new).
+
+CI runs it on every PR and every push to develop or main. Two Windows legs
+run `npm test` on `windows-latest`, on Node 22.16.0 and the latest 22, after
+the capture command a Windows report uses; each ends with the summary, held
+to README's `SKIP win32:` count, and `windows-vs-linux` holds each run to the
+Linux floor's shape. node-floor and validate end with the summary too.
+Tests: 1403 → 1404 (one more test in `tools/test-tap-summary.mjs`, the
+workflow's wiring).
