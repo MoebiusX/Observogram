@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, posix, resolve, sep, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  KNOWN_SKIPS, README_WIN32_LINES_RE, annotation, compareShapes, decodeTap, isExpectedSkip, parseTap,
+  KNOWN_SKIPS, README_WIN32_LINES_RE, annotation, compareShapes, decodeTap, isExpectedSkip, logLines, parseTap,
   readmeWin32Lines, reportCommand, runShape, skipGroup, summarize, unescapeTap, whereOf,
 } from './tap-summary.mjs';
 
@@ -391,8 +391,13 @@ test('S5 annotations: escaping, the run-level errors first, failures up to the c
   assert.equal(errors[0], '::error title=SKIP win32 count::the run printed 0 SKIP win32: lines, README "Platforms" states 19', 'the count error comes first');
   assert.deepEqual(errors.slice(1).map((l) => /title=([^:]*)::/.exec(l)[1]), Array.from({ length: 9 }, (_, i) => `failure ${i + 1}`), 'then 9 failures, in order');
   assert.equal(errors[1], '::error file=server/test-x.mjs,line=2,title=failure 1::line 1 of failure 1%0Aline 2 of failure 1');
-  assert.equal(out.length, r.lines);
-  assert.ok(out.includes(`block: ${r.lines} lines`), 'the block states every line it printed');
+  // The runner writes an annotation's %0A as a line break, and the log API's tail counts it:
+  // nine failure annotations of two lines each take nine log lines more than the text has.
+  assert.equal(r.lines, out.length + 9, 'the block counts the log lines its annotations take');
+  assert.equal(r.lines, out.reduce((n, l) => n + logLines(l), 0));
+  assert.equal(logLines('::error title=t::a%0Ab%0Ac'), 3);
+  assert.equal(logLines('    100%0A in a failure body is text'), 1, 'only a workflow command is rendered');
+  assert.ok(out.includes(`block: ${r.lines} lines`), 'the block states every log line it takes');
   assert.equal(out[out.length - 1], `::notice title=npm test::tests 12 pass 0 fail 12 skipped 0 (win32 0/19) — the summary block is ${r.lines} lines; read it with tail_lines ${r.lines + 150}`);
   assert.equal(out[0], HEAD);
   assert.equal(out.indexOf('=========================================================='), out.indexOf(`block: ${r.lines} lines`) + 1, 'the rule closes the block, the annotations follow it');

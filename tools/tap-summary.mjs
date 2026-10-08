@@ -342,6 +342,9 @@ export function annotation(kind, props, message) {
   return `::${kind}${p ? ` ${p}` : ''}::${data(message)}`;
 }
 
+/** The log lines a printed line takes: a workflow command's %0A is a line break in the log. */
+export const logLines = (line) => 1 + (line.startsWith('::') ? (line.match(/%0A/g) || []).length : 0);
+
 const fmtTotal = (v) => (v === undefined ? '?' : String(v));
 const cut = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
@@ -350,7 +353,8 @@ const cut = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
  * `SKIP win32:` lines the run must print (null: not held), `countSource`
  * names where it came from ('README' for README "Platforms"), `windows`
  * picks the capture command a warning names, `host` is the host line.
- * Returns { text, ok, failures, lines, parsed }.
+ * Returns { text, ok, failures, lines, parsed }; `lines` is the log lines
+ * the text takes once the runner renders its annotations (logLines).
  */
 export function summarize(text, { root = process.cwd(), expectWin32 = null, countSource = null, maxFailures = 40, pathApi = path, windows = false, host = null, file = 'test.tap' } = {}) {
   const parsed = parseTap(text);
@@ -426,9 +430,11 @@ export function summarize(text, { root = process.cwd(), expectWin32 = null, coun
     annotation('error', { file: f.file && !/^([A-Za-z]:)?\//.test(f.file) ? f.file : undefined, line: f.line, title: cut(f.name, 200) }, f.body.slice(0, MAX_ANNOTATION_LINES).join('\n')));
   const annotations = [...runLevel, ...failureNotes];
 
-  // The block states its own length — every line printed, the annotations and
-  // the notice included — so a reader of the log's tail asks for enough.
-  const count = out.length + 2 + annotations.length + 1;   // + "block:" + the rule, + the notice
+  // The block states its own length in log lines — every line printed, the
+  // annotations and the notice included — so a reader of the log's tail asks
+  // for enough. The runner writes an annotation's %0A as a line break inside
+  // its log line, and the log API's tail counts those breaks as lines.
+  const count = out.length + 2 + annotations.reduce((n, a) => n + logLines(a), 0) + 1;   // + "block:" + the rule, + the notice
   out.push(`block: ${count} lines`);
   out.push(RULE);
   out.push(...annotations);
@@ -436,7 +442,7 @@ export function summarize(text, { root = process.cwd(), expectWin32 = null, coun
   out.push(annotation('notice', { title: 'npm test' }, `tests ${fmtTotal(t.tests)} pass ${fmtTotal(t.pass)} fail ${fmtTotal(t.fail)} skipped ${fmtTotal(t.skipped)} (${win32Note}) — the summary block is ${count} lines; read it with tail_lines ${count + TAIL_SLACK}`));
 
   const ok = parsed.complete && t.fail === 0 && t.cancelled === 0 && t.todo === 0 && fails.length === 0 && unknown.length === 0 && countOk;
-  return { text: out.join('\n'), ok, failures, lines: out.length, parsed };
+  return { text: out.join('\n'), ok, failures, lines: count, parsed };
 }
 
 // ---------- the run's shape and the cross-leg check ----------
