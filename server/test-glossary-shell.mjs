@@ -25,8 +25,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse as parseYaml } from '../tools/lib/mini-yaml.mjs';
 import { SPEC_DIR } from '../tools/lib/validator.mjs';
 import { serve } from './fixtures/serve-child.mjs';
@@ -42,7 +42,8 @@ const workspace = () => mkdtempSync(join(tmpdir(), 'observogram-glossary-shell-'
 
 async function loadPlaywright() {
   const spec = process.env.OBSERVOGRAM_PLAYWRIGHT || 'playwright';
-  try { return { pw: await import(spec) }; }
+  // An absolute path, a Windows one too, is imported as its file URL (import() takes a URL or a package name).
+  try { return { pw: await import(isAbsolute(spec) ? pathToFileURL(spec).href : spec) }; }
   catch (e) { return { error: `cannot import ${spec}: ${e.message.split('\n')[0]}` }; }
 }
 

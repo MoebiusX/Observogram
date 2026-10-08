@@ -71,8 +71,8 @@ const { test } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const { mkdtempSync, readFileSync, rmSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
-const { dirname, join } = await import('node:path');
-const { fileURLToPath } = await import('node:url');
+const { dirname, isAbsolute, join } = await import('node:path');
+const { fileURLToPath, pathToFileURL } = await import('node:url');
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
@@ -109,7 +109,8 @@ function fixture(ws) {
 }
 
 async function loadPlaywright() {
-  try { return { pw: await import(PLAYWRIGHT) }; }
+  // An absolute path, a Windows one too, is imported as its file URL (import() takes a URL or a package name).
+  try { return { pw: await import(isAbsolute(PLAYWRIGHT) ? pathToFileURL(PLAYWRIGHT).href : PLAYWRIGHT) }; }
   catch (e) { return { error: `cannot import ${PLAYWRIGHT}: ${e.message.split('\n')[0]}` }; }
 }
 

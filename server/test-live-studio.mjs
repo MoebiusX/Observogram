@@ -69,8 +69,8 @@ const { hashPassword } = await import('./auth.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
 const { startFakeMcp, endpointIdFor } = await import('./fixtures/fake-mcp.mjs');
 const { readFileSync } = await import('node:fs');
-const { resolve, dirname } = await import('node:path');
-const { fileURLToPath } = await import('node:url');
+const { resolve, dirname, isAbsolute } = await import('node:path');
+const { fileURLToPath, pathToFileURL } = await import('node:url');
 const { capabilityTool, candidateTool, probeCandidates, productAttestedByTool } = await import('../tools/lib/contracts/mcp-capabilities.mjs');
 const { stagesFor } = await import('../tools/lib/live-fetch.mjs');
 
@@ -84,7 +84,8 @@ const HOSTILE_VERSION = '<img src=y onerror="window.__pwned=2">';
 const T = 20_000;
 
 async function loadPlaywright() {
-  try { return { pw: await import(PLAYWRIGHT) }; }
+  // An absolute path, a Windows one too, is imported as its file URL (import() takes a URL or a package name).
+  try { return { pw: await import(isAbsolute(PLAYWRIGHT) ? pathToFileURL(PLAYWRIGHT).href : PLAYWRIGHT) }; }
   catch (e) { return { error: `cannot import ${PLAYWRIGHT}: ${e.message.split('\n')[0]}` }; }
 }
 
