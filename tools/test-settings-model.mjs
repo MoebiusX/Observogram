@@ -19,7 +19,7 @@ import {
   parseKeyValueLines, environmentSaveStatus, endpointSaveStatus, memberSaveStatus, orgRenameStatus, endpointDeleteStatus,
   lastAdmin, orgEnvPrefix, mcpTargetModel, mcpTargetBody, mcpPickerCanAdmin, profileEndpointNote, endpointDrift,
   mcpTargetMissingText, mcpRegisterCheck,
-  noOwnerText, PASSWORD_ALPHABET, temporaryPassword, signInModeLine, buildUsersSectionModel, userActions, userActionStatus,
+  noOwnerText, PASSWORD_ALPHABET, temporaryPassword, signInModeLine, userSignIn, buildUsersSectionModel, userActions, userActionStatus,
   buildUserCreateBody, userCreateStatus,
   activeOrgChoice, isActingOrg, orgChipEntries, orgChipLabel, actingRecovery,
   buildOrgsSectionModel, buildOrgCreateBody, orgCreateStatus, orgRemoveStatus, joinRoleModeSentence, buildJoinRoleSectionModel, joinRoleBody, joinRoleStatus,
@@ -1470,6 +1470,80 @@ test('a reset where a local user cannot sign in — OIDC, a reverse proxy, no si
     assert.equal(userActionStatus('reset', {}, { login: 'ada', joinRole }).text, 'Every session of ada ended; they set a new password at their next sign-in.');
     assert.match(buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, joinRole, action: 'reset' }, step: 'confirm-action' }).confirm.text, /, and ada sets their own at their next sign-in\.$/);
   }
+});
+
+// Every sign-in mode the server reports, and both kinds of user: a local one, and IdP ones (an OIDC issuer's, a reverse proxy's).
+const SIGN_IN_MODES = {
+  local: { joinRole: { mode: 'local', role: null }, access: OLIVE, me: 'olive' },
+  unread: { joinRole: null, access: OLIVE, me: 'olive' },
+  oidc: { joinRole: { mode: 'oidc', role: null, issuerKey: 'https://idp.test/' }, access: OLIVE, me: 'https://idp.test/#olive' },
+  proxy: { joinRole: { mode: 'proxy', role: null, proxy: { joinRole: 'viewer' } }, access: OLIVE, me: 'proxy://edge#olive' },
+  open: { joinRole: { mode: 'local', role: null }, access: OPEN, me: null, open: true },
+};
+const LOCAL_LOU = { id: 7, login: 'lou', kind: 'local', owner: false, disabled: true, memberships: [] };
+const OIDC_UMA = { id: 8, login: 'https://idp.test/#uma', kind: 'oidc', owner: false, disabled: true, memberships: [] };
+const PROXY_QUIN = { id: 9, login: 'proxy://edge#quin', kind: 'oidc', owner: false, disabled: true, memberships: [] };
+const OTHER_REALM = { id: 10, login: 'proxy://north#ned', kind: 'oidc', owner: false, disabled: true, memberships: [] };
+// The sentence a user action says about signing in, by mode and user: null where they sign in here (and how), else why not.
+const SIGN_IN_WHY = {
+  'local:lou': null, 'unread:lou': null,
+  'oidc:lou': 'This server signs in through OIDC issuer https://idp.test/: a local user cannot sign in here until it runs local sign-in. Then lou signs in with their password.',
+  'proxy:lou': 'This server signs in through its reverse proxy: a local user cannot sign in here until it runs local sign-in. Then lou signs in with their password.',
+  'open:lou': 'This server runs without sign-in (OBSERVOGRAM_AUTH=off): lou signs in once it starts without it, with their password.',
+  'local:uma': 'This server runs local sign-in: https://idp.test/#uma signs in through OIDC issuer https://idp.test/, and cannot sign in here until the server signs in through that.',
+  'unread:uma': 'This server runs local sign-in: https://idp.test/#uma signs in through OIDC issuer https://idp.test/, and cannot sign in here until the server signs in through that.',
+  'oidc:uma': null,
+  'proxy:uma': 'This server signs in through its reverse proxy: https://idp.test/#uma signs in through OIDC issuer https://idp.test/, and cannot sign in here until the server signs in through that.',
+  'open:uma': 'This server runs without sign-in (OBSERVOGRAM_AUTH=off): https://idp.test/#uma signs in through OIDC issuer https://idp.test/ once it restarts without it and signs in through that.',
+  'local:quin': 'This server runs local sign-in: proxy://edge#quin signs in through a reverse proxy (realm edge), and cannot sign in here until the server signs in through that.',
+  'unread:quin': 'This server runs local sign-in: proxy://edge#quin signs in through a reverse proxy (realm edge), and cannot sign in here until the server signs in through that.',
+  'oidc:quin': 'This server signs in through OIDC issuer https://idp.test/: proxy://edge#quin signs in through a reverse proxy (realm edge), and cannot sign in here until the server signs in through that.',
+  'proxy:quin': null,
+  'open:quin': 'This server runs without sign-in (OBSERVOGRAM_AUTH=off): proxy://edge#quin signs in through a reverse proxy (realm edge) once it restarts without it and signs in through that.',
+};
+const SIGN_IN_WAY = { 'local:lou': 'with their password', 'unread:lou': 'with their password', 'oidc:uma': 'through OIDC issuer https://idp.test/', 'proxy:quin': 'through the reverse proxy' };
+const SHORT = { lou: LOCAL_LOU, uma: OIDC_UMA, quin: PROXY_QUIN };
+
+test('userSignIn: a local user signs in with their password only where the server runs local sign-in; an IdP user only through their own provider, where the server signs in through it — never with a password', () => {
+  for (const [mode, m] of Object.entries(SIGN_IN_MODES)) {
+    for (const [who, record] of Object.entries(SHORT)) {
+      const si = userSignIn(record, { open: m.open === true, joinRole: m.joinRole, me: m.me });
+      const why = SIGN_IN_WHY[`${mode}:${who}`];
+      assert.deepEqual(si, why === null ? { here: true, way: SIGN_IN_WAY[`${mode}:${who}`] } : { here: false, why }, `${mode}:${who}`);
+      if (record.kind === 'oidc') assert.ok(!/password/.test(JSON.stringify(si)), `${mode}:${who}: an IdP user never signs in with a password`);
+    }
+  }
+  // Behind a proxy, the realm is the signed-in owner's: another realm's user cannot sign in here.
+  assert.equal(userSignIn(OTHER_REALM, { joinRole: SIGN_IN_MODES.proxy.joinRole, me: 'proxy://edge#olive' }).here, false);
+  // With the join role unread, the signed-in owner's own way stands for the server's (they signed in through it).
+  assert.deepEqual(userSignIn(OIDC_UMA, { joinRole: null, me: 'https://idp.test/#olive' }), { here: true, way: 'through OIDC issuer https://idp.test/' });
+  assert.deepEqual(userSignIn(PROXY_QUIN, { joinRole: null, me: 'proxy://edge#olive' }), { here: true, way: 'through the reverse proxy' });
+  // Another OIDC issuer's user (a store rekeyed, say) cannot sign in through this one.
+  assert.equal(userSignIn({ login: 'https://old.test/#ann', kind: 'oidc' }, { joinRole: SIGN_IN_MODES.oidc.joinRole, me: SIGN_IN_MODES.oidc.me }).here, false);
+});
+
+test('Enable… says how the user signs in here, for every sign-in mode and kind — a local user under OIDC, a reverse proxy or no sign-in cannot; an IdP user never "with their password"; the confirm and the status agree', () => {
+  for (const [mode, m] of Object.entries(SIGN_IN_MODES)) {
+    for (const [who, record] of Object.entries(SHORT)) {
+      const ctx = { ...OWNER_CTX, access: m.access, me: m.me, joinRole: m.joinRole, users: [...USERS, record], action: 'enable' };
+      const confirm = buildSettingsEditorModel('user', record, { ctx, step: 'confirm-action' }).confirm;
+      const status = userActionStatus('enable', { ok: true }, { login: record.login, kind: record.kind, open: m.open === true, joinRole: m.joinRole, me: m.me });
+      const why = SIGN_IN_WHY[`${mode}:${who}`];
+      if (why === null) {
+        assert.deepEqual(confirm, { text: `Enable ${record.login}? They can sign in again ${SIGN_IN_WAY[`${mode}:${who}`]}.`, danger: `Enable ${record.login}` }, `${mode}:${who}`);
+        assert.deepEqual(status, { kind: 'saved', text: `${record.login} enabled.` }, `${mode}:${who}`);
+      } else {
+        assert.deepEqual(confirm, { text: `Enable ${record.login}? ${why}`, danger: `Enable ${record.login}` }, `${mode}:${who}`);
+        assert.deepEqual(status, { kind: 'saved', text: `${record.login} enabled. ${why}` }, `${mode}:${who}`);
+      }
+      if (record.kind === 'oidc') assert.ok(!/password/.test(confirm.text + status.text), `${mode}:${who}: no password for an IdP user`);
+      if (mode === 'oidc' || mode === 'proxy' || mode === 'open') {
+        if (record.kind === 'local') assert.ok(!/can sign in again/.test(confirm.text), `${mode}:${who}: a local user cannot sign in here`);
+      }
+    }
+  }
+  // Local sign-in, a local user: as before.
+  assert.equal(buildSettingsEditorModel('user', USERS[1], { ctx: { ...OWNER_CTX, action: 'enable' }, step: 'confirm-action' }).confirm.text, 'Enable ada? They can sign in again with their password.');
 });
 
 test('the users loaders: one requestJson call each, ids and actions encoded, the password in the body only — and no email kept', async () => {

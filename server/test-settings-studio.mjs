@@ -32,7 +32,9 @@
  * confirm sent for admin only; signing herself out everywhere leaves none of
  * her keys. An open server on the loopback: the first user is the owner the
  * create armed, with no second call. A server behind a reverse proxy: a
- * local user's reset says they cannot sign in here, and what it still does.
+ * local user's reset says they cannot sign in here, and what it still does;
+ * Enable… says how each user signs in here (a local one cannot, the proxy's
+ * through it — never with a password).
  * A confirm step whose rank went while it was open (an environment's, an
  * endpoint's, a member's, a user's): the 403 keeps the focus inside the
  * dialog and is announced.
@@ -1321,6 +1323,43 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       // What the sentence says: no local sign-in is served here.
       assert.equal((await fetch(`${proxyChild.base}/auth/login`, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'u=lou&p=x' })).status, 404);
       await closeButton(page);
+    } finally { await ctx.close(); }
+  });
+
+  await t.test('a server behind a reverse proxy — Enable… says how each user signs in here: local lou cannot (no local sign-in is served), quin through the reverse proxy, never with a password; the confirm and the status agree', async () => {
+    const pc = await serve(workspace('proxy-users'), { env: { OBSERVOGRAM_TRUST_PROXY_AUTH: '1', OBSERVOGRAM_TRUST_PROXY_AUTH_ACK: 'only-the-proxy-reaches-this-port', OBSERVOGRAM_PROXY_AUTH_OWNERS: 'pat' } });
+    children.push(pc);
+    const PAT = { 'X-Forwarded-User': 'pat' };
+    const api = async (method, path, body, who = PAT) => {
+      const r = await fetch(`${pc.base}${path}`, { method, headers: { ...who, Accept: 'application/json', 'X-Observogram-CSRF': '1', ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+      return { status: r.status, json: await r.json().catch(() => null) };
+    };
+    assert.equal((await api('GET', '/auth/me', undefined, { 'X-Forwarded-User': 'quin' })).json?.authenticated, true, "quin's row, made at first sight");
+    const lou = (await api('POST', '/api/admin/users', { login: 'lou', password: 'abcd-efgh-ijkm-npqr-stuv-wxyz', role: 'operator' })).json.user.id;
+    const quin = (await api('GET', '/api/admin/users')).json.users.find((u) => u.login === 'proxy://proxy#quin');
+    assert.equal(quin?.kind, 'oidc', "a reverse proxy's user is an IdP user");
+    for (const id of [lou, quin.id]) assert.equal((await api('POST', `/api/admin/users/${id}/disable`)).status, 200);
+    const { page, ctx } = await open(pc.base, 'pat', { ctx: await browser.newContext({ viewport: LAPTOP, extraHTTPHeaders: PAT }) });
+    try {
+      await toSettings(page);
+      await toSection(page, 'users');
+      const confirmed = async (id, action, re) => {
+        await manage(page, id);
+        await page.click(`[data-user-action="${action}"]`);
+        await page.waitForSelector('#set-editor-confirm', { timeout: T });
+        const confirm = await text(page, '#set-editor-confirm-text');
+        await page.click('#set-editor-confirm');
+        await editorStatus(page, re);
+        const status = await text(page, '#set-editor-status');
+        await closeButton(page);
+        return [confirm, status];
+      };
+      const louWhy = 'This server signs in through its reverse proxy: a local user cannot sign in here until it runs local sign-in. Then lou signs in with their password.';
+      assert.deepEqual(await confirmed(lou, 'enable', / enabled\./), [`Enable lou? ${louWhy}`, `lou enabled. ${louWhy}`]);
+      assert.deepEqual(await confirmed(quin.id, 'enable', / enabled\./), ['Enable proxy://proxy#quin? They can sign in again through the reverse proxy.', 'proxy://proxy#quin enabled.']);
+      // What the sentences say: quin is let in by the proxy again; no local sign-in is served for lou.
+      assert.equal((await api('GET', '/auth/me', undefined, { 'X-Forwarded-User': 'quin' })).json?.authenticated, true);
+      assert.equal((await fetch(`${pc.base}/auth/login`, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'u=lou&p=x' })).status, 404);
     } finally { await ctx.close(); }
   });
 

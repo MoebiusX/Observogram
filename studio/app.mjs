@@ -3367,7 +3367,7 @@ async function userActionEditor(ed) {
     else if (action === 'owner-grant' || action === 'owner-revoke') answer = await setOwner(row.id, action === 'owner-grant');
     else return null;
   } catch (e) { return memberWriteRefused(ed, e, { need: 'own' }); }
-  const status = userActionStatus(action, answer, { login, defaultOrg: state.settings?.orgs?.defaultOrg ?? null, open: settingsAccess().posture === 'open', joinRole: state.settings?.joinRole ?? null });
+  const status = userActionStatus(action, answer, { login, defaultOrg: state.settings?.orgs?.defaultOrg ?? null, open: settingsAccess().posture === 'open', joinRole: state.settings?.joinRole ?? null, kind: row.kind, me: signedInLogin() });
   if (answer.you && (action === 'disable' || action === 'signout')) {
     forgetBrowserTraces(signedInLogin());
     if (settingsEditor === ed) { Object.assign(ed, { step: 'notice', action: null, status, signIn: true }); syncSettingsEditor(); }

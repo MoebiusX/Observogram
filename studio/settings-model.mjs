@@ -607,15 +607,57 @@ function resetTexts(login, { open = false, joinRole = null } = {}) {
   };
 }
 
+// An IdP user's login is `<key>#<subject>`: the key is `proxy://<realm>` for
+// a reverse proxy's user, the OIDC issuer's key otherwise.
+const idpKeyOf = (login) => { const s = String(login ?? ''); const i = s.indexOf('#'); return i > 0 ? s.slice(0, i) : null; };
+const isProxyKey = (key) => typeof key === 'string' && key.startsWith('proxy://');
+const idpName = (key) => (isProxyKey(key) ? `a reverse proxy (realm ${key.slice('proxy://'.length)})` : `OIDC issuer ${key ?? '(unrecorded)'}`);
+
+// Whether this user signs in here, and how: the one rule a user action's
+// confirm and its status read about signing in (Enable…, Sign out
+// everywhere…), so they agree. A local user signs in with their password
+// only where the server signs in with local passwords (localSignInHere); an
+// IdP user (kind 'oidc': an OIDC issuer's or a reverse proxy's) never with a
+// password — only through their own identity provider, where the server
+// signs in through it (`joinRole` `mode` and `issuerKey`; behind a proxy, or
+// with the join role unread, the signed-in owner's own key `me` names the
+// way the server signs in, since they signed in through it).
+// → { here: true, way } | { here: false, why } (whole sentences).
+export function userSignIn(record, { open = false, joinRole = null, me = null } = {}) {
+  const login = record?.login ?? 'the user';
+  if (record?.kind !== 'oidc') {
+    if (open) return { here: false, why: `${OPEN_SIGN_IN(login)}, with their password.` };
+    if (localSignInHere({ joinRole })) return { here: true, way: 'with their password' };
+    return { here: false, why: `${signInModeLine(joinRole)} Then ${login} signs in with their password.` };
+  }
+  const key = idpKeyOf(login);
+  const theirs = idpName(key);
+  if (open) return { here: false, why: `This server runs without sign-in (OBSERVOGRAM_AUTH=off): ${login} signs in through ${theirs} once it restarts without it and signs in through that.` };
+  const mine = idpKeyOf(me);
+  const mode = joinRole?.mode ?? (mine ? (isProxyKey(mine) ? 'proxy' : 'oidc') : 'local');
+  if (mode === 'oidc') {
+    const server = joinRole?.issuerKey ?? (mine && !isProxyKey(mine) ? mine : null);
+    if (server ? key === server : !isProxyKey(key)) return { here: true, way: `through OIDC issuer ${key}` };
+    return { here: false, why: `This server signs in through OIDC issuer ${server ?? '(unrecorded)'}: ${login} signs in through ${theirs}, and cannot sign in here until the server signs in through that.` };
+  }
+  if (mode === 'proxy') {
+    const server = isProxyKey(mine) ? mine : null;
+    if (server ? key === server : isProxyKey(key)) return { here: true, way: 'through the reverse proxy' };
+    return { here: false, why: `This server signs in through its reverse proxy: ${login} signs in through ${theirs}, and cannot sign in here until the server signs in through that.` };
+  }
+  return { here: false, why: `This server runs local sign-in: ${login} signs in through ${theirs}, and cannot sign in here until the server signs in through that.` };
+}
+
 // The confirm step of one user action: the consequence, then the danger
-// button naming it. `self` the row is the caller's; `open` and `joinRole`
-// see localSignInHere.
-function userConfirm(action, login, { self = false, defaultOrg = null, open = false, joinRole = null } = {}) {
+// button naming it. `self` the row is the caller's; `kind` the user's (local
+// or oidc); `open`, `joinRole` and `me` see localSignInHere and userSignIn.
+function userConfirm(action, login, { self = false, defaultOrg = null, open = false, joinRole = null, kind = 'local', me = null } = {}) {
   const def = defaultOrg || 'the default organisation';
+  const signIn = () => userSignIn({ login, kind }, { open, joinRole, me });
   switch (action) {
     case 'reset': return { text: resetTexts(login, { open, joinRole }).confirm, danger: `Reset ${login}'s password` };
     case 'disable': return { text: `Disable ${login}? Every session of ${login} ends, and they cannot sign in until an owner enables them; their memberships stay.${self ? ' This is you: this browser is signed out at its next request.' : ''}`, danger: `Disable ${login}` };
-    case 'enable': return { text: `Enable ${login}? They can sign in again with their password.`, danger: `Enable ${login}` };
+    case 'enable': { const si = signIn(); return { text: si.here ? `Enable ${login}? They can sign in again ${si.way}.` : `Enable ${login}? ${si.why}`, danger: `Enable ${login}` }; }
     case 'signout': return { text: `Sign ${login} out everywhere? Every session of ${login} ends at its next request; they can sign in again.${self ? ' This is you: this browser is signed out too.' : ''}`, danger: `Sign ${login} out everywhere` };
     case 'owner-grant': return { text: `Make ${login} an owner? An owner manages this deployment's users and acts as an admin in every organisation; ${login} also becomes an admin of ${def}.`, danger: `Make ${login} an owner` };
     case 'owner-revoke': return { text: `Revoke ${login}'s owner role? Their memberships stay as they are.${self ? ' This is you: you lose the owner role at once.' : ''}`, danger: `Revoke ${login}'s owner role` };
@@ -625,15 +667,16 @@ function userConfirm(action, login, { self = false, defaultOrg = null, open = fa
 
 // The status after one user action, from the server's answer (`you`: the
 // caller acted on their own account — this browser is signed out next;
-// `open` and `joinRole` see localSignInHere).
-export function userActionStatus(action, answer = {}, { login = 'the user', defaultOrg = null, open = false, joinRole = null } = {}) {
+// `kind`, `open`, `joinRole` and `me` see userConfirm).
+export function userActionStatus(action, answer = {}, { login = 'the user', defaultOrg = null, open = false, joinRole = null, kind = 'local', me = null } = {}) {
   const note = answer?.note ? ` ${answer.note}` : '';
   const def = defaultOrg || 'the default organisation';
   const saved = (text) => ({ kind: 'saved', text });
+  const signIn = () => userSignIn({ login, kind }, { open, joinRole, me });
   switch (action) {
     case 'reset': return saved(resetTexts(login, { open, joinRole }).status);
     case 'disable': return saved(answer?.you ? 'You disabled your own account — this browser is signed out at its next request.' : `${login} disabled — every session ended.`);
-    case 'enable': return saved(`${login} enabled.`);
+    case 'enable': { const si = signIn(); return saved(si.here ? `${login} enabled.` : `${login} enabled. ${si.why}`); }
     case 'signout': return saved(answer?.you ? 'You signed out everywhere — this browser is signed out at its next request.' : `Every session of ${login} ended.`);
     case 'owner-grant': return answer?.changed === false ? { kind: 'idle', text: `${login} is already an owner — nothing changed.` } : saved(`${login} is an owner (and an admin of ${def}).${note}`);
     case 'owner-revoke': return answer?.changed === false ? { kind: 'idle', text: `${login} is not an owner — nothing changed.` } : saved(`${login} is no longer an owner.${note}`);
@@ -1188,7 +1231,7 @@ export function buildSettingsEditorModel(kind, record = null, { draft = null, st
     // The rank refused (an owner revoked while the dialog was open): no
     // danger button — the actions again, each with the reason (as org remove).
     const open = access?.posture === 'open';
-    if (step === 'confirm-action' && can) out.confirm = userConfirm(ctx.action, record.login, { self, defaultOrg: ctx.defaultOrg ?? null, open, joinRole: ctx.joinRole });
+    if (step === 'confirm-action' && can) out.confirm = userConfirm(ctx.action, record.login, { self, defaultOrg: ctx.defaultOrg ?? null, open, joinRole: ctx.joinRole, kind: record.kind, me: ctx.me ?? null });
     if (step === 'secret' && ctx.secret) out.secret = { text: secretText(record.login, { forced: ctx.secret.forced !== false, reason: 'reset', localSignIn: localSignInHere({ open, joinRole: ctx.joinRole }) }), value: ctx.secret.value };
     return out;
   }
