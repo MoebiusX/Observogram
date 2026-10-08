@@ -502,8 +502,8 @@ function nonEmptyDir(path) {
 
 const NEEDS_IDENTITY = 'creating a second org needs identity: add the first user with npm run users -- add, or configure OIDC';
 const NEEDS_IDENTITY_AUTH_OFF = 'creating a second org needs identity: this server runs with OBSERVOGRAM_AUTH=off, '
-  + 'and a second org would make its next start refuse — restart it without OBSERVOGRAM_AUTH=off and sign in as an owner '
-  + '(npm run users -- add <login> first when no user exists), or configure OIDC';
+  + 'and a second org would make its next start refuse — restart it without OBSERVOGRAM_AUTH=off, once a user exists '
+  + '(npm run users -- add <login>) or with OIDC configured, and sign in as an owner';
 
 // `orgs -- create`: needs identity and an enabled owner (A-15); refuses a
 // non-empty orgs/<id>/ unless adopted; a slug is never reused. With

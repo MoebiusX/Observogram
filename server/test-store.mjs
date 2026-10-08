@@ -3304,7 +3304,7 @@ test('identity-admin createOrgFromAdmin on the API: a server without identity is
     const alice = admin.addLocalUser(db, 'cli', { login: 'alice', password: 'pw123456' }).user;
     const n = trail(db).length;
     const offText = 'creating a second org needs identity: this server runs with OBSERVOGRAM_AUTH=off, and a second org would make its next start refuse — '
-      + 'restart it without OBSERVOGRAM_AUTH=off and sign in as an owner (npm run users -- add <login> first when no user exists), or configure OIDC';
+      + 'restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured, and sign in as an owner';
     const api = { base, serverIdentity: true, authOff: false, surface: 'api' };
     assert.throws(() => admin.createOrgFromAdmin(db, 'local', { ...api, id: 'Bad!', serverIdentity: false, authOff: true }), refusedAs(offText, 'conflict'),
       'before the id is checked');

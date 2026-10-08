@@ -790,7 +790,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
         await page.waitForSelector('.set-banner.is-token', { timeout: T });
         await settled(page);
         assert.equal(await text(page, '.set-banner'), served(probe));
-        if (srv === tokenOffChild) assert.match(await text(page, '.set-banner'), /restart it without OBSERVOGRAM_AUTH=off/);
+        if (srv === tokenOffChild) assert.match(await text(page, '.set-banner'), /this server has no sign-in \(OBSERVOGRAM_AUTH=off\): restart it without OBSERVOGRAM_AUTH=off, once a user exists \(npm run users -- add <login>\) or with OIDC configured$/);
         else assert.match(await text(page, '.set-banner'), /^403: anonymous callers are viewers here; /);
         for (const id of ['members', 'audit']) assert.equal(await text(page, `.set-nav-item[data-section="${id}"] .svc-why`), TOKEN_READ_REASON, id);
         for (const section of ['environments', 'endpoints']) {

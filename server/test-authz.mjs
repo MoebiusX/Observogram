@@ -368,7 +368,10 @@ test('authzDecision: every refusal names a way out', () => {
     'anonymous callers are viewers here; the operator role needs a signed-in user; this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC');
   // Under OBSERVOGRAM_AUTH=off adding a user arms nothing: the way in is a restart without it.
   assert.equal(text(opWrite, ctxOf('token', P.anon, { authOff: true })),
-    'anonymous callers are viewers here; the operator role needs a signed-in user; this server has no sign-in (OBSERVOGRAM_AUTH=off): restart it without OBSERVOGRAM_AUTH=off once a user exists (npm run users -- add <login>), or configure OIDC');
+    'anonymous callers are viewers here; the operator role needs a signed-in user; this server has no sign-in (OBSERVOGRAM_AUTH=off): restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured');
+  // Configuring OIDC alone changes nothing while OBSERVOGRAM_AUTH=off is set (authDisabled() beats oidcEnabled()):
+  // the way in names the restart for both — never "or configure OIDC" on its own.
+  assert.doesNotMatch(text(opWrite, ctxOf('token', P.anon, { authOff: true })), /, or configure OIDC$/);
   assert.doesNotMatch(text(ownerApi, ctxOf('token', P.bearer, { authOff: true })), /no sign-in: add the first user/);
   const body = authzDecision(opWrite, ctxOf('identity', P.viewer)).body;
   assert.deepEqual({ ...body, error: undefined }, { ok: false, error: undefined, denied: 'role', need: 'operator', role: 'viewer', owner: false, org: 'acme' });
@@ -430,7 +433,7 @@ test('the typed MCP URL refusals name a way out per posture: a session below adm
   assert.match(text(ctxOf('identity', P.operator)), /choose one of the org's registered MCP endpoints \(mcpEndpointId; GET \/api\/mcp-endpoints lists them\), or ask an admin of acme to register this one in Settings → MCP endpoints$/);
   assert.match(text(ctxOf('identity', P.bearer)), /send mcpEndpointId \(GET \/api\/mcp-endpoints lists them\); an admin of 'acme' registers a new one in Settings → MCP endpoints$/);
   assert.match(text(ctxOf('token', P.bearer)), /registering one needs a signed-in admin — this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC$/);
-  assert.match(text(ctxOf('token', P.bearer, { authOff: true })), /registering one needs a signed-in admin — this server has no sign-in \(OBSERVOGRAM_AUTH=off\): restart it without OBSERVOGRAM_AUTH=off once a user exists/);
+  assert.match(text(ctxOf('token', P.bearer, { authOff: true })), /registering one needs a signed-in admin — this server has no sign-in \(OBSERVOGRAM_AUTH=off\): restart it without OBSERVOGRAM_AUTH=off, once a user exists \(npm run users -- add <login>\) or with OIDC configured$/);
   assert.match(text(ctxOf('open-loopback', P.local, { port: 8123 })), /register one in Settings → MCP endpoints from http:\/\/127\.0\.0\.1:8123 /);
   assert.match(text(ctxOf('open-exposed', P.local)), /add the first user with npm run users -- add <login> \(it arms sign-in; the first user is an owner\), or bind the server to loopback$/);
   for (const [ctx, denied] of [[ctxOf('identity', P.viewer), 'role'], [ctxOf('identity', P.bearer), 'role'], [ctxOf('open-loopback', P.local), 'posture'], [ctxOf('token', P.anon), 'role']]) {
@@ -2221,7 +2224,7 @@ for (const posture of OPEN) {
         assert.deepEqual([r.status, r.json], [409, {
           ok: false,
           error: 'creating a second org needs identity: this server runs with OBSERVOGRAM_AUTH=off, and a second org would make its next start refuse '
-            + '— restart it without OBSERVOGRAM_AUTH=off and sign in as an owner (npm run users -- add <login> first when no user exists), or configure OIDC',
+            + '— restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured, and sign in as an owner',
         }]);
         r = await call(srv.base, ['GET', '/api/packs']);
         assert.equal(r.status, 200, 'still no sign-in: OBSERVOGRAM_AUTH=off');
