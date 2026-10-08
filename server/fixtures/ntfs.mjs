@@ -1,10 +1,11 @@
 // server/fixtures/ntfs.mjs — an NTFS volume as Windows' realpath sees it, so
 // the path-comparison suites prove the Windows rule on any host
-// (tools/test-journey-scope.mjs). On NTFS a name is case-insensitive and a
-// directory may also be named by its short (8.3) name. The native realpath
-// (realpathSync.native) answers the on-disk spelling — the long names, the
-// case they were created with, the drive letter upper case — while JS
-// realpathSync answers the caller's own spelling of a path that exists.
+// (tools/test-journey-scope.mjs, server/test-store-paths.mjs). On NTFS a name
+// is case-insensitive and a directory may also be named by its short (8.3)
+// name. The native realpath (realpathSync.native) answers the on-disk
+// spelling — the long names, the case they were created with, the drive
+// letter upper case — while JS realpathSync answers the caller's own spelling
+// of a path that exists.
 // \\?\C:\… and \\.\C:\… name C:\…. A network share is libuv's case: a path
 // reached through one (\\host\share\…, \\?\UNC\host\share\…, a mapped drive)
 // resolves to \\host\share\ and the on-disk rest, never to the volume's own
