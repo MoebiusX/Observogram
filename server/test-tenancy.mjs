@@ -47,6 +47,9 @@ process.env.OBSERVOGRAM_USERS_FILE = join(WORKSPACE, 'users.json');
 for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
 process.env.OBSERVOGRAM_ORG_ACME_MCP_ORIGINS = 'https://acme.mcp.test';
 process.env.OBSERVOGRAM_ORG_DELTA_MCP_ORIGINS = 'https://delta.mcp.test';
+// One notify hook per org (server/notify-target-policy.mjs): the hooks
+// listing serves each org its own, never another's.
+for (const org of ['ACME', 'BRAVO', 'DEFAULT', 'DELTA']) process.env[`OBSERVOGRAM_ORG_${org}_NOTIFY_TENANCY_URL`] = `http://127.0.0.1:9/${org.toLowerCase()}-hook`;
 // acme's configured snapshot scope (server/live-jobs.mjs): never served to another org.
 process.env.OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_PREFIXES = 'acme_';
 // The MCP server-settings pass-through on (rebadge batch 4; read per request),
@@ -406,6 +409,11 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     'POST /api/deploys/:deployId/rollback': [`/api/deploys/${deployId}/rollback`, { mcpEndpointId: fakeEndpointId }, (r) => assert(r.status === 404 || r.status === 409, `${who}: rollback of the other org's deploy → 404/409`, r.status, '404|409')],
     'POST /api/deploys/:deployId/verify': [`/api/deploys/${deployId}/verify`, { outcome: 'verified' }, is404('POST /api/deploys/:deployId/verify')],
     'GET /api/journeys': ['/api/journeys', undefined, (r) => assert(r.status === 200 && !r.json.journeys.some(x => x.name === journey), `${who}: GET /api/journeys lacks the other org's journey`)],
+    // The notify hooks listing (journey-notify-env-ownership): the caller's org's hook, never the other org's name.
+    'GET /api/journeys/notify-hooks': ['/api/journeys/notify-hooks', undefined, (r) => assert(r.status === 200 && r.json.org === org
+      && r.json.hooks.map(h => h.urlEnv).join() === `OBSERVOGRAM_ORG_${org.toUpperCase().replaceAll('-', '_')}_NOTIFY_TENANCY_URL`
+      && !JSON.stringify(r.json).includes(`OBSERVOGRAM_ORG_${otherOrg.toUpperCase().replaceAll('-', '_')}_`),
+    `${who}: GET /api/journeys/notify-hooks lists the caller's org's hook only`, r.json)],
     'GET /api/journeys/:name/runs': [`/api/journeys/${journey}/runs`, undefined, (r) => assert(r.status === 404 || (r.status === 200 && (r.json.runs || []).length === 0), `${who}: runs of the other org's journey → empty`, r.json)],
     'GET /api/journeys/:name/schedule': [`/api/journeys/${journey}/schedule`, undefined, is404('GET /api/journeys/:name/schedule')],
     'POST /api/journeys/:name/run': [`/api/journeys/${journey}/run`, {}, is404('POST /api/journeys/:name/run')],
@@ -640,6 +648,14 @@ try {
   r = await fetch(`${base}/api/journeys`, { headers: { Cookie: bob } });
   j = await r.json();
   assert(!j.journeys.some(x => x.name === 'acme-j'), "bob's GET /api/journeys lacks acme-j");
+  // The notify hooks listing (journey-notify-env-ownership): acme's hook to alice, bravo's to bob, never the other's.
+  for (const [who, cookie, org, other] of [['alice', alice, 'ACME', 'BRAVO'], ['bob', bob, 'BRAVO', 'ACME']]) {
+    r = await fetch(`${base}/api/journeys/notify-hooks`, { headers: { Cookie: cookie } });
+    j = await r.json();
+    assert(r.status === 200 && j.hooks.map(h => h.urlEnv).join() === `OBSERVOGRAM_ORG_${org}_NOTIFY_TENANCY_URL` && j.hooks[0].usable === true
+      && !JSON.stringify(j).includes(`OBSERVOGRAM_ORG_${other}_`) && !JSON.stringify(j).includes('-hook'),
+    `${who}'s GET /api/journeys/notify-hooks lists ${org.toLowerCase()}'s hook only, by name`, j);
+  }
   const runsBefore = [...tree(join(WORKSPACE, 'orgs', 'acme', 'runs')), ...tree(join(WORKSPACE, 'orgs', 'bravo', 'runs'))];
   for (const name of ['acme-j', '../../orgs/acme/journeys/acme-j.journey.yaml', acmeJourney]) {
     r = await fetch(`${base}/api/journeys/${encodeURIComponent(name)}/run`, {

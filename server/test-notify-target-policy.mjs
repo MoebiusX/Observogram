@@ -387,3 +387,128 @@ test('U7 notifyHooksOf and notifyBootReport: the org\'s set hooks sorted, tokenE
     close();
   }
 });
+
+// ---------- over HTTP: the hooks listing and the boot report (children) ----------
+//
+// Each server is a child (server/fixtures/serve-child.mjs: an explicit env,
+// this process's minus STRIP and every OBSERVOGRAM_ORG_*, plus the test's
+// own). The orgs are planted through the orgs file (the import N9's guard
+// does not cover): acme {ada admin, oscar operator, vera viewer}, acme-eu {},
+// acme-notify-eu {} — which owns OBSERVOGRAM_ORG_ACME_NOTIFY_EU_* by the
+// longest prefix —, bravo {bob admin}, default {olive admin, the owner}.
+
+const { serve, signIn } = await import('./fixtures/serve-child.mjs');
+const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
+const { hashPassword } = await import('./auth.mjs');
+
+const BEARER_TOKEN = 'notify-bearer-marker-0123456789';
+const LOGINS = ['ada', 'oscar', 'vera', 'bob', 'olive'];
+const pw = (login) => `${login}-passw0rd-notify`;
+function identityWorkspace() {
+  const ws = mkdtempSync(join(tmpdir(), 'observogram-notify-http-'));
+  tmpDirs.push(ws);
+  writeUsersFile({ users: Object.fromEntries(LOGINS.map((l) => [l, { name: l, createdAt: 'test', password: hashPassword(pw(l)) }])) }, join(ws, 'users.json'));
+  writeOrgsFile({
+    default: { name: 'Default', members: { olive: 'admin' } },
+    acme: { name: 'Acme', members: { ada: 'admin', oscar: 'operator', vera: 'viewer' } },
+    'acme-eu': { name: 'Acme EU', members: {} },
+    'acme-notify-eu': { name: 'Acme Notify EU', members: {} },
+    bravo: { name: 'Bravo', members: { bob: 'admin' } },
+  }, join(ws, 'orgs.json'));
+  return ws;
+}
+// The values the children hold: every marker below is a part of a value that
+// must never leave the server but toward its own webhook.
+const HOOK_ENV = {
+  [ONCALL.urlEnv]: 'http://127.0.0.1:9/acme-oncall-path-marker',
+  [ONCALL.tokenEnv]: 'tok-acme-oncall-marker',
+  [PAGER.urlEnv]: 'http://localhost:9/acme-pager-path-marker',
+  OBSERVOGRAM_ORG_ACME_NOTIFY_BAD_URL: 'http://dbuser-marker:dbpass-marker@127.0.0.1:9/bad-path-marker',
+  OBSERVOGRAM_ORG_ACME_NOTIFY_FAR_URL: 'https://far-host-marker.test/far-path-marker',
+  OBSERVOGRAM_ORG_ACME_NOTIFY_EU_X_URL: 'http://127.0.0.1:9/shadow-path-marker',
+  OBSERVOGRAM_ORG_NOBODY_NOTIFY_X_URL: 'http://nobody-host-marker.test/nobody-path-marker',
+  OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN: 'tok-bravo-mcp-marker',
+};
+const MARKERS = ['-marker', 'dbuser', 'far-host', 'nobody-host'];
+const ACME_LISTING = {
+  ok: true,
+  org: 'acme',
+  pattern: 'OBSERVOGRAM_ORG_ACME_NOTIFY_<HOOK>_URL',
+  hooks: [
+    { hook: 'BAD', urlEnv: 'OBSERVOGRAM_ORG_ACME_NOTIFY_BAD_URL', tokenEnv: null, usable: false, problem: T.badUrl('OBSERVOGRAM_ORG_ACME_NOTIFY_BAD_URL', 'OBSERVOGRAM_ORG_ACME_NOTIFY_BAD_TOKEN') },
+    { hook: 'FAR', urlEnv: 'OBSERVOGRAM_ORG_ACME_NOTIFY_FAR_URL', tokenEnv: null, usable: false, problem: T.originNoList('OBSERVOGRAM_ORG_ACME_NOTIFY_FAR_URL', 'acme') },
+    { hook: 'ONCALL', ...ONCALL, usable: true, problem: null },
+    { hook: 'PAGER', urlEnv: PAGER.urlEnv, tokenEnv: null, usable: true, problem: null },
+  ],
+  none: null,
+};
+const getJson = async (base, path, headers = {}) => {
+  const r = await fetch(`${base}${path}`, { headers });
+  const text = await r.text();
+  return { status: r.status, text, json: (() => { try { return JSON.parse(text); } catch { return null; } })() };
+};
+const noMarkerIn = (where, text) => { for (const m of MARKERS) assert.ok(!text.includes(m), `${where}: ${m} never appears`); };
+
+test('H14 GET /api/journeys/notify-hooks: a viewer, an operator, the bearer and the anonymous local caller read their org\'s hooks — names, usable or the problem, a shadowed name left out; bravo\'s listing says who sets one; no value, origin or other org in any body', { timeout: 120_000 }, async () => {
+  const children = [];
+  try {
+    const srv = await serve(identityWorkspace(), { env: { ...HOOK_ENV, OBSERVOGRAM_API_TOKEN: BEARER_TOKEN, OBSERVOGRAM_API_TOKEN_LABEL: 'ci-bot' } });
+    children.push(srv);
+    const cookie = async (login) => { const s = await signIn(srv.base, login, pw(login)); assert.equal(s.status, 200, `${login} signs in`); return s.session; };
+    const bodies = [];
+    for (const [who, headers] of [
+      ['vera (viewer)', { Cookie: await cookie('vera') }],
+      ['oscar (operator)', { Cookie: await cookie('oscar'), 'X-Observogram-Org': 'acme' }],
+      ['the bearer', { Authorization: `Bearer ${BEARER_TOKEN}`, 'X-Observogram-Org': 'acme' }],
+    ]) {
+      const r = await getJson(srv.base, '/api/journeys/notify-hooks', headers);
+      assert.equal(r.status, 200, `${who}: ${r.text}`);
+      assert.deepEqual(r.json, ACME_LISTING, who);
+      bodies.push(r.text);
+    }
+    const bravo = await getJson(srv.base, '/api/journeys/notify-hooks', { Cookie: await cookie('bob') });
+    assert.deepEqual(bravo.json, {
+      ok: true, org: 'bravo', pattern: 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_<HOOK>_URL', hooks: [],
+      none: "no notify hook is set for org 'bravo' — the server's operator sets OBSERVOGRAM_ORG_BRAVO_NOTIFY_<HOOK>_URL (and OBSERVOGRAM_ORG_BRAVO_NOTIFY_<HOOK>_TOKEN when the webhook takes a bearer token) in the server's environment and restarts the server",
+    });
+    bodies.push(bravo.text);
+    // the anonymous local caller without sign-in: the open posture acts in the default org
+    const openWs = mkdtempSync(join(tmpdir(), 'observogram-notify-open-'));
+    tmpDirs.push(openWs);
+    const open = await serve(openWs, { env: { OBSERVOGRAM_AUTH: 'off', OBSERVOGRAM_ORG_DEFAULT_NOTIFY_LOCAL_URL: 'http://127.0.0.1:9/local-path-marker', ...HOOK_ENV } });
+    children.push(open);
+    const local = await getJson(open.base, '/api/journeys/notify-hooks');
+    assert.equal(local.status, 200, local.text);
+    assert.deepEqual(local.json, {
+      ok: true, org: 'default', pattern: 'OBSERVOGRAM_ORG_DEFAULT_NOTIFY_<HOOK>_URL',
+      hooks: [{ hook: 'LOCAL', urlEnv: 'OBSERVOGRAM_ORG_DEFAULT_NOTIFY_LOCAL_URL', tokenEnv: null, usable: true, problem: null }], none: null,
+    });
+    bodies.push(local.text);
+    for (const [i, text] of bodies.entries()) {
+      noMarkerIn(`body ${i}`, text);
+      for (const other of ['acme-eu', 'acme-notify-eu', 'NOTIFY_EU_X', 'NOBODY', 'BRAVO_MCP', '127.0.0.1', 'localhost']) assert.ok(!text.includes(other), `body ${i}: ${other} never appears`);
+    }
+    for (const c of children) { const { stdout, stderr } = c.logs(); noMarkerIn('the children\'s output', stdout + stderr); }
+  } finally {
+    for (const c of children) await c.stop();
+  }
+});
+
+test('H15 the start reports each set hook a run would refuse, a name another org\'s id shadows and a name no org owns — one [notify-hooks] line each, never a value; nothing for a usable hook', { timeout: 120_000 }, async () => {
+  const srv = await serve(identityWorkspace(), { verbose: true, env: { ...HOOK_ENV, OBSERVOGRAM_API_TOKEN: BEARER_TOKEN } });
+  try {
+    // stderr and stdout are two pipes: the start's lines may land after LISTENING.
+    for (let i = 0; i < 100 && !srv.logs().stderr.includes("no org's id maps onto it"); i++) await new Promise((r) => setTimeout(r, 50));
+    const { stdout, stderr } = srv.logs();
+    assert.deepEqual(stderr.split('\n').filter((l) => l.startsWith('[notify-hooks]')), [
+      `[notify-hooks] org 'acme': OBSERVOGRAM_ORG_ACME_NOTIFY_BAD_URL — ${T.badUrl('OBSERVOGRAM_ORG_ACME_NOTIFY_BAD_URL', 'OBSERVOGRAM_ORG_ACME_NOTIFY_BAD_TOKEN')}`,
+      `[notify-hooks] org 'acme': OBSERVOGRAM_ORG_ACME_NOTIFY_FAR_URL — ${T.originNoList('OBSERVOGRAM_ORG_ACME_NOTIFY_FAR_URL', 'acme')}`,
+      "[notify-hooks] OBSERVOGRAM_ORG_ACME_NOTIFY_EU_X_URL has the shape of org 'acme''s notify hook, but org 'acme-notify-eu' also maps onto it by the longest-prefix rule — no journey can use it",
+      "[notify-hooks] OBSERVOGRAM_ORG_NOBODY_NOTIFY_X_URL is no org's notify hook (no org's id maps onto it)",
+    ]);
+    assert.match(stdout, /\[studio\] listening on /, 'a verbose start');
+    noMarkerIn('stdout and stderr', stdout + stderr);
+  } finally {
+    await srv.stop();
+  }
+});

@@ -1331,3 +1331,10 @@ org the sole owner of the name, posted only to this machine or to an origin
 the server's operator lists. The rule comes first, in its own module, with
 nothing calling it yet. Tests: 1390 → 1397
 (`server/test-notify-target-policy.mjs` 7, new).
+
+A hook is chosen from a list, never typed. `GET /api/journeys/notify-hooks`
+answers every member of the org with the org's hooks — names, and whether a
+run could post through each, never a value or an origin — and the server's
+start tells its operator about every set hook a run would refuse, every name
+another org's id shadows, and every name no org owns. Tests: 1397 → 1399
+(two more in `server/test-notify-target-policy.mjs`).

@@ -67,6 +67,7 @@ import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
 import { describeProxyAuth } from './auth-proxy.mjs';
 import { stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
 import { mcpCallerOf, mcpRefusalBody, redactTarget } from './mcp-target-policy.mjs';
+import { notifyBootReport, notifyHooksOf } from './notify-target-policy.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
 import { auditAfter, actorForRecord, bounded, finite } from './audit-after.mjs';
@@ -942,6 +943,20 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
     });
     res.json({ journeys });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/journeys/notify-hooks — the org's notify hooks (the follow-up
+// journey-notify-env-ownership; server/notify-target-policy.mjs
+// notifyHooksOf): every set OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL the org
+// solely owns, its token variable's name when that is set, and whether a run
+// could post through it (`usable`, else the capture's `problem`); `none`
+// says who sets one when there is none. The list a journey's notify chooses
+// from (R4: a registered target, chosen by name). Names only — never a
+// value, an origin or a list entry, and never another org's name. Declared
+// before the /api/journeys/:name/… routes for reading order only. A read:
+// no row.
+app.get('/api/journeys/notify-hooks', authorize('GET /api/journeys/notify-hooks'), (req, res) => {
+  res.json({ ok: true, ...notifyHooksOf(currentStore(), currentOrg()) });
 });
 
 // GET /api/journeys/:name/runs — run history newest first (the
@@ -2269,6 +2284,13 @@ export async function start({ port = PORT, host = HOST, silent = false, legacyLi
   brandedShell = brand.configured ? brandShellHtml(readFileSync(SHELL_FILE, 'utf8'), brand) : null;
   if (brand.configured) log(`[studio] brand: ${brand.name} (${brandSource() === 'env' ? 'OBSERVOGRAM_BRAND_* env' : brandSource()})`);
   const { db, ctx } = await bootStore({ host, log, warn });
+  // The notify hooks (server/notify-target-policy.mjs notifyBootReport): a
+  // hook is registered by setting its variables and starting the server, so
+  // the start checks every one that is set — a hook a run would refuse, a
+  // name another org's id shadows, a name no org owns — one line each,
+  // variables and org ids only, never a value or an origin. Nothing when no
+  // such variable is set.
+  for (const line of notifyBootReport(db, process.env)) warn(line);
   // The MCP transport hook (OBSERVOGRAM_TRANSPORT_HOOK, tools/mcp-transport.mjs)
   // loads once per process: a hook that cannot load refuses the start, and
   // every MCP call the routes make (refresh, draft, deploy) goes through it.

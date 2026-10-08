@@ -2735,6 +2735,7 @@ unsupported charset or content encoding. The body is not logged.
 | `POST` | `/api/deploys/:deployId/rollback` | Roll a deploy back from its snapshot (`mcpEndpointId`, or a typed `mcpUrl`: the admin role, for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.rollback` |
 | `DELETE` | `/api/uploads` | Clear uploaded/crawled/drafted packs |
 | `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`, `inventory` `{ status, reason, environment, kinds }`) |
+| `GET` | `/api/journeys/notify-hooks` | The org's notify hooks (`OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL`, with its `_TOKEN` when set): names and whether each is usable — never a value or origin |
 | `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series) |
 | `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule) |
 | `POST` | `/api/journeys/:name/run` | Run a saved journey now (a live Pack B through its `endpointId`, or a raw `url`: the admin role); an audit row: `journey.run`, on a failed run too |
