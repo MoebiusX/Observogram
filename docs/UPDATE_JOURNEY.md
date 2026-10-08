@@ -1375,3 +1375,12 @@ studio knows the org, `<KEY>` and what it stands for when it does not — and
 the Neuron view no longer calls a journey "Set up" when the server would
 refuse to run it: it shows the server's own sentence instead.
 Tests: 1417 → 1418 (one more in `tools/test-neuron-model.mjs`).
+
+The docs close the item. `docs/DOWNSTREAM.md` §17 states the rule with every
+sentence capture and a run answer, and the migration for a journey written
+before it: find every journey that notifies in every org's root, rotate
+each secret such a journey posted, scrub the records that kept a value, set
+the org's hook and list its origin, then rename the names in the file. The
+README, `docs/MCP_INTEGRATION.md`, `.env.example` and the k8s manifests name
+the hook variables where they named bare ones, and the batch 3 delivery
+report's open security item points at §17. The count is unchanged.

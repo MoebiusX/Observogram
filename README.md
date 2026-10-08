@@ -529,7 +529,7 @@ the server registers, and each route's first handler is its guard.
 | Role | May |
 |---|---|
 | `viewer` | every read (`GET`) in the org |
-| `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys, the live refresh, testing an MCP connection and live jobs against a registered endpoint ([Test An MCP Connection And Build A Live Pack](#test-an-mcp-connection-and-build-a-live-pack)), RESET, and the org's services and environments ([Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)) |
+| `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys (a journey's `notify` names one of the org's notify hooks — no role types a webhook URL), the live refresh, testing an MCP connection and live jobs against a registered endpoint ([Test An MCP Connection And Build A Live Pack](#test-an-mcp-connection-and-build-a-live-pack)), RESET, and the org's services and environments ([Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)) |
 | `admin` | the org's name, members and MCP endpoints as well ([the identity API](#the-identity-api), [Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)), a typed MCP URL in a ping, a live job, a draft, a live refresh, a deploy, a rollback or a journey's Pack B ([Fetch Live From MCP](#fetch-live-from-mcp); below admin, and without sign-in, only a registered endpoint), cancelling another member's live job, and the org's audit (`GET /api/audit`, [The Audit](#the-audit)) |
 | owner | a deployment-level flag, not an org role: an owner acts as `admin` in every org, plus users, orgs and the join role ([the identity API](#the-identity-api)) and the deployment's audit (`GET /api/audit?scope=all`) |
 
@@ -548,8 +548,11 @@ anything else (`member`, empty) → `operator`. Per posture:
   beyond loopback): the caller is `local`, an owner — every route, as
   before, but the identity API: on a loopback server it answers only a
   request sent straight to it, and beyond loopback it is closed (see
-  [The Identity API](#the-identity-api)); and `local` never sends a typed MCP
-  URL — it fetches from registered endpoints ([Fetch Live From MCP](#fetch-live-from-mcp)).
+  [The Identity API](#the-identity-api)); `local` never sends a typed MCP
+  URL — it fetches from registered endpoints ([Fetch Live From MCP](#fetch-live-from-mcp));
+  and a journey that notifies runs only from a request sent straight to a
+  loopback address, never on a server bound beyond loopback ([Saved
+  Journeys](#saved-journeys--repeatable-drift-checks)).
 
 Every authorization refusal carries `denied` — `auth` (401: sign in),
 `csrf`, `org` (not a member of that org), `role` or `posture` — and a
@@ -727,6 +730,15 @@ request writes none.
   and the bearer — are refused as a new local login, from the API and from
   `npm run users -- add`; the API also refuses the configured
   `OBSERVOGRAM_API_TOKEN_LABEL`.
+- **Org ids that would share variables.** An org's variables are
+  `OBSERVOGRAM_ORG_<KEY>_<NAME>`, each owned by the org whose prefix is the
+  longest match, removed orgs included, so `POST /api/admin/orgs` and
+  `npm run orgs -- create` refuse (409, nothing written; the same texts
+  from a shell) an id that would take another org's notify hooks
+  (`acme-notify` beside `acme`), one whose own hooks another org already
+  takes, and one that differs from another org's id only in `-` and `_`
+  (`a_b` beside `a-b`), naming the other org — an id that only starts alike
+  (`acme-notifications`, `acme-eu`) is created as before.
 - **Without sign-in** (the open postures, where the caller is `local`, an
   owner): on a loopback server the identity API answers only a request
   sent straight to it — `Host` `localhost`, `127.x.x.x` or `[::1]`, no
@@ -923,8 +935,14 @@ with their URLs, and never changes an endpoint.
   and again at each request that reads the variable (an org created later
   can become the owner of a stored name; the request is then refused naming
   `PATCH /api/mcp-endpoints/<id>`). Pick a `NAME` that is not another
-  org's id followed by `_`. The variable is set on the server — the k8s
-  studio Deployment's `env`, from a Secret; never on the journey CronJob
+  org's id followed by `_`. A name with the shape of any org's notify hook
+  (`OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` or `_TOKEN`, [Saved
+  Journeys](#saved-journeys--repeatable-drift-checks)) is refused too, since
+  a hook's variables go only to its own webhook: at the write (400, naming
+  another variable of the org to use), and for an endpoint registered before
+  that rule where the token would be read, before it is read (400, naming
+  `PATCH /api/mcp-endpoints/<id>`). The variable is set on the server — the
+  k8s studio Deployment's `env`, from a Secret; never on the journey CronJob
   ([`deploy/k8s/README.md`](deploy/k8s/README.md)) — and its value is never
   logged, returned or stored.
 - **The MCP URL carries no credential.** `url` is refused with userinfo, a
@@ -2072,8 +2090,8 @@ schedule: "*/15 * * * *"        # the cadence it is MEANT to run at — declared
                                 #   also { cron, timezone } or { every: 15m }
 stackBudget: { objective: 0.99, window: 30d }   # posture budget the Journeys view prints per gated stack row (signal, not verdict)
 notify:                         # early-warning delivery: one bounded POST per run
-  urlEnv: MY_JOURNEY_WEBHOOK_URL     # env var NAME holding the URL (a literal url: is refused)
-  authEnv: MY_JOURNEY_WEBHOOK_TOKEN  # optional → Authorization: Bearer <value>
+  urlEnv: OBSERVOGRAM_ORG_DEFAULT_NOTIFY_ONCALL_URL     # env var NAME holding the URL: the org's notify hook (a literal url: is refused)
+  authEnv: OBSERVOGRAM_ORG_DEFAULT_NOTIFY_ONCALL_TOKEN  # optional, that hook's own token → Authorization: Bearer <value>
   on: transitions                    # transitions (default) · breach · always
   format: json                       # json · text (one line + markdown body, ntfy-style)
 inventory:                      # is the right number of things being monitored? (gen-site partition)
@@ -2100,7 +2118,13 @@ all, the run still writes an `outcome: vantage-lost` record before exiting
 `2` — the loss is a point in the history, not a gap. The CLI grades on the
 same construct as the studio (requirement-chain integrity rides on the
 diff), so both report one score for one comparison. Secrets never live in
-journey files — MCP auth is referenced by env-var name.
+journey files — MCP auth is referenced by env-var name. The example's
+`notify` names the default org's notify hook `ONCALL`,
+`OBSERVOGRAM_ORG_DEFAULT_NOTIFY_ONCALL_URL` and its `_TOKEN`, for a
+deployment whose default org is `default` (`npm run orgs -- list`);
+otherwise `<KEY>` in `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` is the default
+org's id in capitals, with `-` as `_`. Those names work for the server and
+the CLI alike.
 
 **Through the server, a live Pack B is a registered endpoint's.** A journey's
 `packB.mcp.url` is a URL the server would fetch, so the server treats it as a
@@ -2116,6 +2140,41 @@ with a raw URL is refused 403 before anything runs (`this journey's Pack B
 fetches <origin>, an MCP URL only an admin may send — an admin re-captures it
 …`). The CLI reads `url` and `authEnv` as before and refuses a def whose Pack B
 names only an `endpointId` (the server resolves it).
+
+**Through the server, a journey notifies only through its org's notify
+hook.** A notify hook is a variable pair the server's operator sets in the
+server's environment — `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` and,
+optionally, `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_TOKEN` (`<KEY>` the org id in
+capitals with `-` as `_`, `<HOOK>` words of A–Z and 0–9 joined by single `_`)
+— and restarts the server; the start prints a `[notify-hooks]` line for each
+set hook a run would refuse. A journey names the hook by `notify.urlEnv`, and
+`notify.authEnv` is that hook's own `_TOKEN` or absent. Nobody types a
+webhook URL in the app: `GET /api/journeys/notify-hooks` lists the org's
+hooks to every member (names and whether each is usable — never a value or
+origin), `POST /api/journeys/capture` refuses a `notify` that is not one of
+them (400), and `POST /api/journeys/:name/run` of a journey that notifies is
+refused **before anything runs** (400, no record, no row, nothing sent)
+unless its hook is the org's alone, set, with an http(s) URL without
+`user:password`, a token the server can send, and an allowed origin — the sentence
+names what to fix and who fixes it, and `GET /api/journeys` carries it as
+`notify.problem`. So a server run reads no other variable: not another
+org's, not one of the server's own secrets, not the org's MCP token. A
+webhook off this machine needs its origin listed; with no list, only
+loopback is posted to. No redirect is followed, and a delivery error never
+carries any part of the hook's URL or token. Without sign-in, a journey that
+notifies runs only from a request sent straight to a loopback address, and
+never on a server bound beyond loopback. The CLI keeps reading any name from
+its own environment. A journey written before this rule names another
+variable: [docs/DOWNSTREAM.md](docs/DOWNSTREAM.md) §17.2 is the migration —
+rotate the secrets such a journey posted, scrub its records, set the hook,
+list its origin, rename the names in the file.
+
+| Variable | Meaning |
+|---|---|
+| `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` | org `<KEY>`'s notify hook `<HOOK>`: the webhook a server-run journey naming it as `notify.urlEnv` posts to; unset, it is not listed and capture and a run refuse it |
+| `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_TOKEN` | that hook's bearer token, sent only to that hook's URL, for a journey naming it as `notify.authEnv` |
+| `OBSERVOGRAM_NOTIFY_ORIGINS` | comma-separated webhook origins (`scheme://host[:port]`; `*` any) every org's hooks may post to; read at each check; unset, with the org's unset too, only loopback — a separate list from `OBSERVOGRAM_MCP_ORIGINS` |
+| `OBSERVOGRAM_ORG_<KEY>_NOTIFY_ORIGINS` | the same for org `<KEY>`'s hooks, unioned with the deployment's (read only when the org owns the name alone) |
 
 Run history is bounded so a journey on a cron cadence never fills the disk:
 after every run the journey's `runs/` directory is pruned to the newest
