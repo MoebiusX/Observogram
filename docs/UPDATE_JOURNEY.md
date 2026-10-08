@@ -1317,3 +1317,15 @@ local user cannot sign in, `userSignIn` (how each kind of user signs in under
 each sign-in mode), Enable… under every mode and Sign out everywhere… under
 every mode). The other review fixes add assertions to existing tests or
 change docs and comments; the count is unchanged by them.
+
+### Follow-up: the Windows CI leg
+
+A CI log is read from its tail, and a red run must say there what failed.
+`tools/tap-summary.mjs` reads the TAP a `node --test` run printed and ends
+the log with one bounded block: the host, the totals, the skips by reason,
+every failure with its place and error, the timing bounds the suites
+print, and the number of `SKIP win32:` lines README "Platforms" states, held
+against the run. It also writes the run's shape, so a Windows run can be held
+to the Linux floor's: the same tests, the same harness assertions, the same
+skip reasons.
+Tests: 1390 → 1403 (`tools/test-tap-summary.mjs` 13, new).
