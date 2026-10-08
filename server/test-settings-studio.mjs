@@ -41,8 +41,9 @@
  * As vera (viewer): no Edit, no URL; her one org renamed long, the OBSERVA
  * bar fits 320, 360, 390 and 720 px in both themes in every mode — the home,
  * a service page, a pack's views with the SERVICE chip (its name capped,
- * named in full by the button), Settings; Build as oscar. As nora (no org):
- * the boot's refusal.
+ * named in full by the button, or as a label by its title), Settings; Build
+ * as oscar; Discover as olive, with the ORG switcher. As nora (no org): the
+ * boot's refusal.
  * The token posture (with and without OBSERVOGRAM_AUTH=off, and with OIDC
  * configured under it) and an open server bound off the loopback: the
  * banner is the server's text, the writes carry their reasons, the pickers
@@ -732,7 +733,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('vera, a one-org member, her org renamed long: the ORG label (no select) carries the whole name, and the OBSERVA bar fits 320, 360, 390 and 720 px in both themes in every mode — the home, a service page, a pack\'s views with the SERVICE chip (Discover, Diagnose, Remediate, every Advanced view), Settings and (oscar) Build', async () => {
+  await t.test('vera, a one-org member, her org renamed long: the ORG label (no select) carries the whole name, and the OBSERVA bar fits 320, 360, 390 and 720 px in both themes in every mode — the home, a service page, a pack\'s views with the SERVICE chip (Discover, Diagnose, Remediate, every Advanced view; the chip a label, its title naming the service in full), Settings, (oscar) Build and (olive, the ORG switcher) Discover', async () => {
     const LONG = 'Acme Corporation Holdings';
     const WIDTHS = [320, 360, PHONE.width, 720];
     // The OBSERVA bar as app.css's comment on the chips' phone cap states it: the bar's own scroll width is the
@@ -811,6 +812,22 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
           await toView(page, id, async () => { await page.click('.observa-adv-toggle'); await page.click(`.observa-adv-item[data-view="${id}"]`); });
           await sweep(page, `Advanced → ${id}`, { serviceChip: true, whole: false });
         }
+        // The chip's other form, a label — a service no record covers (here the table unread: the home's derived
+        // tile): no button, its text the whole name, and its title names the service in full where the cap
+        // ellipsizes it.
+        const servicesTable = (u) => /\/api\/services(\?|$)/.test(String(u));   // a URL predicate: no .pathname (tools/test-platform.mjs P4)
+        await page.route(servicesTable, (route) => (route.request().method() === 'GET' ? route.fulfill({ status: 500, contentType: 'application/json', body: '{"ok":false,"error":"boom"}' }) : route.fallback()));
+        await page.reload();
+        await page.waitForFunction(() => document.body.dataset.mode, null, { timeout: 30_000 });
+        await page.evaluate(() => document.querySelector('.observa-brand').click());
+        await page.waitForSelector('#home-services-status', { timeout: T });
+        await toView(page, 'layers', () => page.click('.svc-gate-card[data-service="payment-service"]'));
+        await page.waitForFunction(() => document.getElementById('observa-service')?.hidden === false, null, { timeout: T });
+        assert.deepEqual(await page.evaluate(() => { const c = document.getElementById('observa-service'); return [c.tagName, c.title, c.getAttribute('aria-label')]; }), ['SPAN', 'service: payment-service', null], 'a label, its title naming the service in full');
+        assert.equal(await text(page, '#observa-service-name'), 'payment-service', 'the label\'s text is the whole name');
+        assert.ok(await page.evaluate(() => { const n = document.getElementById('observa-service-name'); return n.scrollWidth > n.clientWidth; }), 'at the phone width the label is capped (ellipsized)');
+        await sweep(page, 'Discover, the SERVICE chip a label', { serviceChip: true, whole: false });
+        await page.unroute(servicesTable);
         await toSettings(page);
         await sweep(page, 'Settings', { serviceChip: false, whole: true });
       } finally { await ctx.close(); }
@@ -820,6 +837,20 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
         await build.waitForFunction(() => document.body.dataset.mode === 'build', null, { timeout: T });
         await sweep(build, 'Build', { serviceChip: false, whole: true });
       } finally { await buildCtx.close(); }
+      // An owner in three orgs: the ORG switcher (a select, where vera has a label) beside the SERVICE chip on a
+      // pack's view.
+      const { page: owner, ctx: ownerCtx } = await open(child.base, 'olive', { viewport: PHONE });
+      try {
+        await owner.waitForSelector('.observa-org-select', { timeout: T });
+        if (await owner.evaluate(() => document.querySelector('.observa-org-select').value) !== 'acme') {
+          await Promise.all([owner.waitForNavigation(), owner.selectOption('.observa-org-select', 'acme')]);
+          await owner.waitForFunction(() => document.body.dataset.mode, null, { timeout: 30_000 });
+        }
+        await openService(owner, 'payment-service');
+        await toView(owner, 'layers', () => owner.click('#svc-action-discover'));
+        await owner.waitForFunction(() => document.getElementById('observa-service')?.hidden === false, null, { timeout: T });
+        await sweep(owner, 'Discover as olive, the ORG switcher', { serviceChip: true, whole: false });
+      } finally { await ownerCtx.close(); }
     } finally {
       assert.equal((await call('olive', 'PATCH', '/api/org', { name: 'Acme Corp' })).status, 200);
     }
