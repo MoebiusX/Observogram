@@ -257,9 +257,16 @@ ok 4 - tools\\test-h.mjs
   assert.deepEqual(p.points[5].diag, [String.raw`✓ C:\x # y`], 'a diagnostic is unescaped');
   assert.equal(unescapeTap(String.raw`a\\b \# c`), String.raw`a\b # c`);
 
+  assert.deepEqual(p.missingTotals, []);
   const cut = parseTap(tap.slice(0, tap.indexOf('1..4')));
   assert.equal(cut.complete, false, 'no totals, not complete');
   assert.deepEqual(cut.totals, {});
+  assert.deepEqual(cut.missingTotals, ['tests', 'pass', 'fail', 'cancelled', 'skipped', 'todo']);
+  const partial = parseTap(tap.slice(0, tap.indexOf('# cancelled')));
+  assert.equal(partial.complete, false, 'a cut inside the totals, not complete');
+  assert.deepEqual(partial.totals, {}, 'a partial block is not the run\'s totals');
+  assert.deepEqual(partial.missingTotals, ['cancelled', 'skipped', 'todo']);
+  assert.equal(parseTap(tap.slice(0, tap.indexOf('# duration_ms'))).complete, true, 'every total the verdict reads, only the duration missing');
   assert.equal(parseTap(`${tap}\n# ✓ tests 3\n`).complete, true, 'a later diagnostic does not undo the totals');
   assert.equal(parseTap(tap.replace('ok 4 - tools', '# tests 9\nok 4 - tools')).totals.tests, 6, 'a total-shaped line before the last point is not the totals');
 });
@@ -420,12 +427,40 @@ test('S6 the verdict: ok only when complete, fail 0, cancelled 0, todo 0, no fai
   assert.ok(truncated.split('\n').length > 40);
   const u = summarize(truncated);
   assert.equal(u.ok, false, 'no totals, never ok');
-  assert.ok(u.text.includes('the run did not finish (a step timeout, a crash or a cancel)'));
+  assert.ok(u.text.includes('The TAP ends without its totals: the run did not finish (a step timeout, a crash or a cancel).'));
   assert.ok(u.text.includes('the last test reported before the run stopped'));
-  assert.ok(u.text.includes('::error title=npm test did not finish::'));
+  assert.ok(u.text.includes('::error title=npm test did not finish::the TAP ends without its totals (a step timeout, a crash or a cancel)'));
   const shown = u.text.split('\n').filter((l) => l.startsWith('  | ')).map((l) => l.slice(4));
   assert.equal(shown.length, 40);
   assert.deepEqual(shown, truncated.split('\n').slice(-40), 'its last 40 lines');
+
+  // A cut inside the totals — node prints them in one burst at the end, and a
+  // step timeout or a kill can land in it, between lines or within one — is
+  // an unfinished run too, and says which totals it lacks; only a missing
+  // duration leaves every total the verdict reads.
+  const at = (k) => lines.findIndex((l) => l.startsWith(`# ${k} `));
+  for (const [kept, missing] of [
+    [lines.slice(0, at('tests') + 1), '# pass, # fail, # cancelled, # skipped, # todo'],
+    [lines.slice(0, at('suites') + 1), '# pass, # fail, # cancelled, # skipped, # todo'],
+    [lines.slice(0, at('pass') + 1), '# fail, # cancelled, # skipped, # todo'],
+    [lines.slice(0, at('fail') + 1), '# cancelled, # skipped, # todo'],
+    [lines.slice(0, at('cancelled') + 1), '# skipped, # todo'],
+    [lines.slice(0, at('skipped') + 1), '# todo'],
+    [[...lines.slice(0, at('skipped') + 1), '# tod'], '# todo'],
+  ]) {
+    const partial = kept.join('\n');
+    const pr = summarize(partial, { expectWin32: 3 });
+    const last = kept[kept.length - 1];
+    assert.equal(pr.ok, false, `cut after '${last}': never ok`);
+    assert.ok(pr.text.includes(`The TAP ends inside its totals, without ${missing}: the run did not finish (a step timeout, a crash or a cancel).`), pr.text);
+    assert.ok(pr.text.includes('the last test reported before the run stopped'), last);
+    assert.ok(pr.text.includes(`::error title=npm test did not finish::the TAP ends inside its totals, without ${missing} (a step timeout, a crash or a cancel)`), pr.text);
+    assert.ok(pr.text.includes('tests ? · pass ? · fail ? · skipped ? · todo ? · cancelled ? · ? s'), 'a partial block is not printed as the run\'s totals');
+    assert.deepEqual(pr.text.split('\n').filter((l) => l.startsWith('  | ')).map((l) => l.slice(4)), kept.slice(-40), 'its last 40 lines');
+  }
+  const noDuration = summarize(lines.slice(0, at('todo') + 1).join('\n'), { expectWin32: 3 });
+  assert.equal(noDuration.ok, true, 'a cut before # duration_ms alone: every total the verdict reads is there');
+  assert.ok(!noDuration.text.includes('did not finish'));
 
   const strange = GREEN.replace('# SKIP unshare --pid is unavailable here', '# SKIP flaky on this box');
   const s = summarize(strange);

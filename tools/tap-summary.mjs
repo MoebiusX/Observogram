@@ -18,8 +18,8 @@
 //   node tools/tap-summary.mjs <tap-file> [--win32-skips readme|<n>] [--max-failures <n>] [--shape <out.json>]
 //   node tools/tap-summary.mjs --compare <reference.json> <run.json>...
 //
-// Exit 0 when the totals are present, nothing failed, was cancelled or is a
-// todo, every skip reason is a `win32: …` one or on KNOWN_SKIPS, and the
+// Exit 0 when the totals are all present, nothing failed, was cancelled or is
+// a todo, every skip reason is a `win32: …` one or on KNOWN_SKIPS, and the
 // count is the expected one; exit 1 otherwise; exit 2 for a usage error or a
 // file that is not TAP. It reads the file and README.md and probes whether
 // this host can create a symlink; it runs nothing.
@@ -122,6 +122,10 @@ const WIN32_HARNESS_RE = /^ *# - SKIP win32: /;
 const BOUND_LINE_RE = /^\s*# bound: /;
 const BOUND_RE = /^\s*# bound: (.+): (\d+) ms (<|>=) (\d+) ms(?: of a (\d+) ms hold)?$/;
 const HARNESS_NAME_RE = /^\S+\.[cm]?js$/;
+// The totals the verdict reads. node prints the totals in one burst at the
+// end, so a run cut inside it (a step timeout, a kill) has only some of them:
+// unfinished too. `# suites` and `# duration_ms` are not read.
+const VERDICT_TOTALS = Object.freeze(['tests', 'pass', 'fail', 'cancelled', 'skipped', 'todo']);
 
 // A YAML scalar as Node's TAP reporter prints it: util.inspect's quoting for
 // a one-line string (so a Windows path arrives with doubled backslashes).
@@ -173,11 +177,14 @@ function parseBound(raw) {
 }
 
 /**
- * Parse a run's TAP. Returns { points, totals, win32, complete, bounds,
- * mangled, harnessSkips, lines }. Each point carries depth, ok, n, name,
- * directive and reason (all TAP-unescaped), its YAML block, and — at the top
- * level — `diag`, the diagnostics printed since the previous top-level point
- * (a harness suite's whole output, which precedes its point).
+ * Parse a run's TAP. Returns { points, totals, missingTotals, win32,
+ * complete, bounds, mangled, harnessSkips, lines }: `complete` when the last
+ * totals block has every total the verdict reads, `missingTotals` the ones
+ * it lacks (all of them with no block), `totals` {} unless complete. Each
+ * point carries depth, ok, n, name, directive and reason (all
+ * TAP-unescaped), its YAML block, and — at the top level — `diag`, the
+ * diagnostics printed since the previous top-level point (a harness suite's
+ * whole output, which precedes its point).
  */
 export function parseTap(text) {
   const lines = String(text).replace(/\r\n/g, '\n').split('\n');
@@ -243,8 +250,9 @@ export function parseTap(text) {
     points.push(p);
   }
   for (const r of pendingSkips) harnessSkips.push({ reason: r, test: '(after the last test)' });
-  const complete = 'tests' in totals;
-  return { points, totals: complete ? totals : {}, win32, complete, bounds, mangled: MANGLED_RE.test(text), harnessSkips, lines };
+  const missingTotals = VERDICT_TOTALS.filter((k) => !(k in totals));
+  const complete = missingTotals.length === 0;
+  return { points, totals: complete ? totals : {}, missingTotals, win32, complete, bounds, mangled: MANGLED_RE.test(text), harnessSkips, lines };
 }
 
 // ---------- places ----------
@@ -363,8 +371,12 @@ export function summarize(text, { root = process.cwd(), expectWin32 = null, coun
   if (host) out.push(host);
   if (parsed.mangled) out.push(`warning: ${file} went through a console code page (✗ arrives as Γ£ù) — the failure causes may be cut; capture it with: ${reportCommand(file, windows)}`);
   out.push(`tests ${fmtTotal(t.tests)} · pass ${fmtTotal(t.pass)} · fail ${fmtTotal(t.fail)} · skipped ${fmtTotal(t.skipped)} · todo ${fmtTotal(t.todo)} · cancelled ${fmtTotal(t.cancelled)} · ${t.duration_ms === undefined ? '?' : Math.round(t.duration_ms / 1000)} s`);
+  // How the TAP ends when it is unfinished: before its totals, or inside them.
+  const ends = parsed.missingTotals.length < VERDICT_TOTALS.length
+    ? `ends inside its totals, without ${parsed.missingTotals.map((k) => `# ${k}`).join(', ')}`
+    : 'ends without its totals';
   if (!parsed.complete) {
-    out.push('The TAP ends without its totals: the run did not finish (a step timeout, a crash or a cancel).');
+    out.push(`The TAP ${ends}: the run did not finish (a step timeout, a crash or a cancel).`);
     out.push(`Its last ${LAST_LINES} lines follow; the last test point in them is the last test reported before the run stopped`);
     out.push('(node --test reports a file\'s tests when the file ends, so the file still running may not be named).');
     let tail = parsed.lines;
@@ -423,7 +435,7 @@ export function summarize(text, { root = process.cwd(), expectWin32 = null, coun
   // Annotations: the run-level errors first, then failures up to the cap.
   const runLevel = [];
   if (!countOk) runLevel.push(annotation('error', { title: 'SKIP win32 count' }, `the run printed ${parsed.win32} SKIP win32: lines, ${countSource ? `${countSource === 'README' ? 'README "Platforms"' : countSource} states` : 'expected'} ${expectWin32}`));
-  if (!parsed.complete) runLevel.push(annotation('error', { title: 'npm test did not finish' }, `the TAP ends without its totals (a step timeout, a crash or a cancel) — the summary block shows its last ${LAST_LINES} lines`));
+  if (!parsed.complete) runLevel.push(annotation('error', { title: 'npm test did not finish' }, `the TAP ${ends} (a step timeout, a crash or a cancel) — the summary block shows its last ${LAST_LINES} lines`));
   if (unknown.length) runLevel.push(annotation('error', { title: 'unknown skip reason' }, `a skip reason no run expects: '${cut(unknown[0].reason, 300)}' (${cut(unknown[0].test, 200)})${unknown.length > 1 ? ` and ${unknown.length - 1} more` : ''} — add its pattern and probe to KNOWN_SKIPS in tools/tap-summary.mjs, or make the test run`));
   if (todo) runLevel.push(annotation('error', { title: 'todo' }, `${todo} todo test(s) — a todo is not a pass`));
   const failureNotes = failures.slice(0, Math.max(0, MAX_ANNOTATIONS - runLevel.length)).map((f) =>
