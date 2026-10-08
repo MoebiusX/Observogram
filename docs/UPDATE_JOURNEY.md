@@ -1338,12 +1338,14 @@ re-check case's approved-host submit can still find its rule timed out (a
 only while the child has logged that rule's line. And a server started with
 a flag a worker refuses — a V8 one,
 `node --max-old-space-size=512 server/index.mjs` — could not construct the
-worker at all: every pass-through submit, acknowledged or not, was answered
-`502 the server-settings proxy failed (Error)`. The worker is now
-constructed once more without the flags, and a worker that cannot be
-constructed fails closed like one that fails — every rule counts as matched,
-and the log line names the error's class. No route, variable, default or
-text changes. Tests: 1390 → 1393 (three more in
-`server/test-mcp-settings.mjs`: the refused flag, in-process and in a child
-started with it; a worker that cannot be constructed or fails; and the
-per-rule deadline, pinned with a paced stand-in worker).
+worker at all: with a settings policy (`OBSERVOGRAM_MCP_SETTINGS_POLICY`),
+every pass-through submit, acknowledged or not, was answered
+`502 the server-settings proxy failed (Error)` (a server without one builds
+no worker and was unaffected). The worker is now constructed once more
+without the flags, and a worker that cannot be constructed fails closed
+like one that fails — every rule counts as matched, and the log line names
+the error's class. No route, variable, default or text changes.
+Tests: 1390 → 1393 (three more in `server/test-mcp-settings.mjs`: the
+refused flag, in-process and in a child started with it; a worker that
+cannot be constructed or fails; and the per-rule deadline, pinned with a
+paced stand-in worker).
