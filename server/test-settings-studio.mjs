@@ -42,10 +42,13 @@
  * label keeps the OBSERVA bar inside the phone width in the modes that hide
  * the SERVICE chip (the home, a service page, Settings; Build as oscar). As
  * nora (no org): the boot's refusal.
- * The token posture (with and without OBSERVOGRAM_AUTH=off) and an open
- * server bound off the loopback: the banner is the server's text, the
- * writes carry their reasons, the pickers offer no Settings button. An open
- * server on the loopback: once its probe answers 200, the pickers do.
+ * The token posture (with and without OBSERVOGRAM_AUTH=off, and with OIDC
+ * configured under it) and an open server bound off the loopback: the
+ * banner is the server's text, the writes carry their reasons, the pickers
+ * offer no Settings button, and the MCP panel's Server settings button (and
+ * off the loopback the picker's hint and its nothing-to-send line) names
+ * the server's own way in. An open server on the loopback: once its probe
+ * answers 200, the pickers do.
  *
  * Its own fixture (design §12.4 B1): ada is acme's only enabled admin (olive
  * is an owner and an operator there), and ada is a viewer of bravo — she has
@@ -143,6 +146,11 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
   children.push(tokenChild);
   const tokenOffChild = await serve(workspace('token-off'), { env: { OBSERVOGRAM_API_TOKEN: TOKEN, OBSERVOGRAM_AUTH: 'off' } });
   children.push(tokenOffChild);
+  // OBSERVOGRAM_AUTH=off beats OIDC: the token posture still, its way in a restart.
+  const tokenOffOidcChild = await serve(workspace('token-off-oidc'), {
+    env: { OBSERVOGRAM_API_TOKEN: TOKEN, OBSERVOGRAM_AUTH: 'off', OBSERVOGRAM_OIDC_ISSUER: 'https://idp.example.test', OBSERVOGRAM_OIDC_CLIENT_ID: 'studio', OBSERVOGRAM_OIDC_CLIENT_SECRET: 'settings-studio-oidc-secret' },
+  });
+  children.push(tokenOffOidcChild);
   const openChild = await serve(workspace('open-exposed'), { host: '0.0.0.0', env: { OBSERVOGRAM_INSECURE_NO_AUTH: '1', OBSERVOGRAM_AUTH: 'off' } });
   children.push(openChild);
   const loopChild = await serve(workspace('open-loopback'), { env: { OBSERVOGRAM_AUTH: 'off' } });
@@ -772,8 +780,16 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('the token posture: the banner is the probe\'s text as served, every write aria-disabled with the token reason, no endpoint read from the home; under OBSERVOGRAM_AUTH=off the banner says to restart without it', async () => {
-    for (const srv of [tokenChild, tokenOffChild]) {
+  await t.test('the token posture: the banner is the probe\'s text as served, every write aria-disabled with the token reason, no endpoint read from the home; the MCP panel\'s Server settings button names the server\'s own way in, read when the panel opens (a failed read names none, and the next opening reads again); under OBSERVOGRAM_AUTH=off, OIDC configured or not, the banner and the button say to restart without it', async () => {
+    const AUTH_OFF_WAY = /this server has no sign-in \(OBSERVOGRAM_AUTH=off\): restart it without OBSERVOGRAM_AUTH=off, once a user exists \(npm run users -- add <login>\) or with OIDC configured$/;
+    const why = (page) => page.evaluate(() => document.getElementById('mcp-settings-btn')?.dataset.why ?? null);
+    const openPanel = async (page) => {
+      await page.evaluate(() => document.getElementById('mcp-btn').click());
+      await page.waitForSelector('#mcp-panel:not([hidden])', { timeout: T });
+      await page.waitForFunction(() => document.getElementById('mcp-settings-btn')?.dataset.why !== 'Checking whether you may configure the MCP server…', null, { timeout: T });
+    };
+    const closePanel = (page) => page.evaluate(() => document.getElementById('mcp-panel-close').click());
+    for (const srv of [tokenChild, tokenOffChild, tokenOffOidcChild]) {
       const r = await call(null, 'POST', '/api/validate', PAYMENT, { base: srv.base, bearer: TOKEN });
       assert.equal(r.status, 200, r.text);
       const probe = await call(null, 'GET', '/api/org/members', undefined, { base: srv.base });
@@ -785,12 +801,36 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
         await page.waitForSelector('.svc-card[data-service="payment-service"]', { timeout: T });
         await page.waitForTimeout(500);
         assert.equal(reads, 0, 'the home reads no endpoint list');
+        // The Server settings button: GET /api/mcp-endpoints' own sentence
+        // (policy.register.why), as the anonymous browser is told it.
+        const listed = await call(null, 'GET', '/api/mcp-endpoints', undefined, { base: srv.base });
+        assert.equal(listed.status, 200, listed.text);
+        const serverWhy = listed.json.policy.register.why;
+        if (srv === tokenChild) assert.match(serverWhy, /; this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC$/);
+        else assert.match(serverWhy, AUTH_OFF_WAY);
+        if (srv === tokenOffChild) {
+          // A failed read names no way in; the next opening reads again.
+          await page.route('**/api/mcp-endpoints', (route) => route.abort());
+          await openPanel(page);
+          assert.equal(await why(page), 'Could not check whether you may configure the MCP server — close and reopen the panel to try again.');
+          await closePanel(page);
+          await page.unroute('**/api/mcp-endpoints');
+        }
+        await openPanel(page);
+        assert.equal(await attr(page, '#mcp-settings-btn', 'aria-disabled'), 'true');
+        assert.equal(await text(page, '#mcp-settings-btn .svc-why'), `Configuring the MCP server is endpoint configuration: ${serverWhy}.`);
+        if (srv !== tokenChild) assert.doesNotMatch(await why(page), /add the first user|, or configure OIDC/, 'never a way OBSERVOGRAM_AUTH=off defeats');
+        assert.equal(await page.$('#mcp-panel .set-mcp-target-hint'), null, 'the token posture\'s pickers draw no list, so no hint');
+        await closePanel(page);
+        await openPanel(page);
+        assert.equal(reads, srv === tokenOffChild ? 2 : 1, 'the panel reads the policy once it has answered');
+        await closePanel(page);
         await page.click('.observa-adv-toggle');
         await page.click('.observa-adv-item[data-action="settings"]');
         await page.waitForSelector('.set-banner.is-token', { timeout: T });
         await settled(page);
         assert.equal(await text(page, '.set-banner'), served(probe));
-        if (srv === tokenOffChild) assert.match(await text(page, '.set-banner'), /this server has no sign-in \(OBSERVOGRAM_AUTH=off\): restart it without OBSERVOGRAM_AUTH=off, once a user exists \(npm run users -- add <login>\) or with OIDC configured$/);
+        if (srv !== tokenChild) assert.match(await text(page, '.set-banner'), AUTH_OFF_WAY);
         else assert.match(await text(page, '.set-banner'), /^403: anonymous callers are viewers here; /);
         for (const id of ['members', 'audit']) assert.equal(await text(page, `.set-nav-item[data-section="${id}"] .svc-why`), TOKEN_READ_REASON, id);
         for (const section of ['environments', 'endpoints']) {
@@ -802,7 +842,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     }
   });
 
-  await t.test('an open server bound off the loopback: the banner is the server\'s posture text; environments writable; New MCP endpoint closed with its reason; the picker hint has no Settings button', async () => {
+  await t.test('an open server bound off the loopback: the banner is the server\'s posture text; environments writable; New MCP endpoint closed with its reason; the picker hint has no Settings button — it, the Server settings button and the nothing-to-send line name the server\'s own way in', async () => {
     const r = await call(null, 'POST', '/api/validate', PAYMENT, { base: openChild.base });
     assert.equal(r.status, 200, r.text);
     const probe = await call(null, 'GET', '/api/org/members', undefined, { base: openChild.base });
@@ -826,6 +866,17 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await page.waitForSelector('#mcp-panel:not([hidden])', { timeout: T });
       await page.waitForTimeout(500);
       assert.equal(await page.$('#mcp-panel [data-mcp-target-settings]'), null, 'no Settings button in a closed posture');
+      // Nothing registers here while it is exposed: the hint, the button and
+      // the line say GET /api/mcp-endpoints' own sentence — never "an admin
+      // registers them in Settings → MCP endpoints", which is closed here.
+      const serverWhy = (await call(null, 'GET', '/api/mcp-endpoints', undefined, { base: openChild.base })).json.policy.register.why;
+      assert.match(serverWhy, /^MCP endpoints cannot be registered on a server without sign-in while it is exposed — /);
+      await page.waitForSelector('#mcp-panel .set-mcp-target-hint', { timeout: T });
+      assert.equal(await text(page, '#mcp-panel .set-mcp-target-hint'), `No MCP endpoint is registered in Default yet — ${serverWhy}.`);
+      assert.equal(await text(page, '#mcp-settings-btn .svc-why'), `Configuring the MCP server is endpoint configuration: ${serverWhy}.`);
+      await page.click('#mcp-refresh-btn');
+      await page.waitForFunction(() => /^no MCP endpoint/.test(document.getElementById('mcp-ping-status')?.textContent || ''), null, { timeout: T });
+      assert.equal(await text(page, '#mcp-ping-status'), `no MCP endpoint is registered in Default yet — ${serverWhy}`);
     } finally { await ctx.close(); }
   });
 

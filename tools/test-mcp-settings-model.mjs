@@ -46,8 +46,33 @@ test('the gate: register.allowed opens it; a session below admin, the local call
   assert.equal(settingsGateModel({ access: admin, mcpTargetPolicy: null, hasTarget: true }).reason, 'Checking whether you may configure the MCP server…');
   assert.equal(settingsGateModel({ access: admin, mcpTargetPolicy: { typed: { allowed: false }, register: { allowed: false }, failed: true }, hasTarget: true }).reason,
     'Could not check whether you may configure the MCP server — close and reopen the panel to try again.');
-  assert.match(settingsGateModel({ access: { posture: 'token', role: 'viewer' }, hasTarget: true }).reason, /^Configuring the MCP server needs a signed-in admin — this server has no sign-in: add the first user with npm run users -- add <login>/);
+  assert.equal(settingsGateModel({ access: { posture: 'token', role: 'viewer' }, hasTarget: true }).reason, 'Checking whether you may configure the MCP server…', 'the token posture waits for the server\'s sentence');
   assert.equal(settingsGateModel({ access: { posture: 'unknown' }, hasTarget: true }).enabled, false);
+});
+
+// The way in the button names without sign-in is the server's own sentence
+// (GET /api/mcp-endpoints `policy.register.why`, which ends in the server's
+// way in for its posture — OBSERVOGRAM_AUTH=off included); a sentinel here,
+// the real sentences per posture in server/test-mcp-target-policy.mjs.
+test('the gate in the token posture: the server\'s own sentence as served, never a way in of its own; unread, failed or silent, it names none; the module keeps no copy of the rule', () => {
+  const token = { posture: 'token', role: 'viewer', orgName: 'Default' };
+  const WHY = 'anonymous callers are viewers here; registering an MCP endpoint needs a signed-in admin; <the server\'s way in>';
+  const refused = { typed: { allowed: false, why: 'x' }, register: { allowed: false, why: WHY } };
+  for (const hasTarget of [true, false]) {
+    assert.deepEqual(settingsGateModel({ access: token, mcpTargetPolicy: refused, hasTarget, missing: 'choose an MCP endpoint or type a URL' }),
+      { enabled: false, reason: `Configuring the MCP server is endpoint configuration: ${WHY}.` }, `hasTarget ${hasTarget}: the server's sentence first`);
+  }
+  assert.equal(settingsGateModel({ access: token, mcpTargetPolicy: null, hasTarget: true }).reason, 'Checking whether you may configure the MCP server…');
+  assert.equal(settingsGateModel({ access: token, mcpTargetPolicy: { typed: { allowed: false }, register: { allowed: false }, failed: true }, hasTarget: true }).reason,
+    'Could not check whether you may configure the MCP server — close and reopen the panel to try again.', 'a failed read names no way in');
+  assert.equal(settingsGateModel({ access: token, mcpTargetPolicy: { typed: { allowed: false }, register: { allowed: false } }, hasTarget: true }).reason,
+    'Configuring the MCP server is endpoint configuration, which is not open to you here.', 'a policy without a sentence names no way in');
+  for (const [posture, policy] of [['token', null], ['token', refused], ['static', null], ['open', refused]]) {
+    const reason = settingsGateModel({ access: { posture, role: 'viewer' }, mcpTargetPolicy: policy, hasTarget: true, pageOrigin: 'https://cdn.example', bundleOrigins: null }).reason ?? '';
+    assert.doesNotMatch(reason.replace(WHY, ''), /npm run users|OIDC|OBSERVOGRAM_AUTH|sign-in/, `${posture}: no way in but the server's`);
+  }
+  const src = readFileSync(new URL('../studio/mcp-settings-model.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /npm run users|configure OIDC|has no sign-in/, 'the rule lives in the server (server/authz.mjs noSignInWay) only');
 });
 
 test('the gate: no target says the panel\'s own sentence; the static bundle needs a loopback page or a baked origin list', () => {

@@ -5150,8 +5150,10 @@ function renderMcpStatusBody(status) {
 // URL…" last. With an endpoint chosen the URL row is hidden (its value kept)
 // and the request names it by id (mcpTargetBody: an id or a URL, never
 // both); the read token stays on the server, named by the record. The list
-// (state.mcpEndpoints) is read in the identity and open postures only — the
-// bundle and the token posture never read it, and keep the typed URL.
+// (state.mcpEndpoints) is drawn in the identity and open postures only — the
+// bundle and the token posture never draw it, and keep the typed URL (the
+// token posture reads it for the Server settings button's way in alone:
+// readMcpGatePolicy).
 // Typing a URL is the server's to allow (R4): the list's read carries
 // `policy` (state.mcpTargetPolicy), and a reader it refuses a typed URL —
 // below admin, or without sign-in — gets the pickers list-only, with the
@@ -5170,6 +5172,13 @@ const MCP_PICKERS = {
 function mcpPickersReadable() {
   const posture = state.access?.posture;
   return posture === 'identity' || posture === 'open';
+}
+
+// Where GET /api/mcp-endpoints answers this reader with its policy: the
+// postures that draw the list, and the token posture, whose policy carries
+// the server's own way in (`register.why`) and nothing the pickers draw.
+function mcpPolicyReadable() {
+  return mcpPickersReadable() || state.access?.posture === 'token';
 }
 
 // The empty list's way to Settings → MCP endpoints: the server says whether
@@ -5197,6 +5206,7 @@ function mcpTargetMissing(id) {
   return mcpTargetMissingText({
     typedAllowed: mcpTypedAllowed(id), orgName: state.orgName,
     empty: Array.isArray(state.mcpEndpoints) && state.mcpEndpoints.length === 0, canRegister: mcpPickerCanAdminNow(),
+    posture: state.access?.posture ?? null, registerWhy: state.mcpTargetPolicy?.register?.why ?? null,
   });
 }
 
@@ -5208,7 +5218,7 @@ function mcpTargetMissing(id) {
 // could not check).
 const CLOSED_MCP_POLICY = Object.freeze({ typed: { allowed: false }, register: { allowed: false }, failed: true });
 async function readMcpEndpointsForPickers({ keep = false } = {}) {
-  if (!mcpPickersReadable()) return null;
+  if (!mcpPolicyReadable()) return null;
   try {
     const { endpoints, policy } = await loadMcpEndpoints({ withPolicy: true });
     state.mcpEndpoints = endpoints;
@@ -5252,7 +5262,7 @@ function mcpPickerModel(id, chosen = null) {
     typedUrl: id === 'deploy' ? (document.getElementById(p.url)?.value || '') : (recallMcpUrl() || ''),
     purpose: p.purpose, orgName: state.orgName, canAdmin: mcpPickerCanAdminNow(), chosen,
     typed: { allowed: mcpTypedAllowed(id) }, posture: state.access?.posture ?? null,
-    unreadable: state.mcpTargetPolicy?.failed === true,
+    registerWhy: state.mcpTargetPolicy?.register?.why ?? null, unreadable: state.mcpTargetPolicy?.failed === true,
   });
   return p.hint || !mcpTypedAllowed(id) ? model : { ...model, hint: null };
 }
@@ -5367,6 +5377,15 @@ function openMcpTarget(id, { fresh = false } = {}) {
   return readMcpEndpointsForPickers().then(() => paintMcpTarget(id));
 }
 
+// The token posture's Server settings button names the server's own way in
+// (settingsGateModel: `policy.register.why` — OBSERVOGRAM_AUTH=off
+// included), so the panel's opening reads the policy there until one read
+// answers; the pickers draw nothing from it. Resolved at once elsewhere.
+function readMcpGatePolicy() {
+  if (state.access?.posture !== 'token' || (state.mcpTargetPolicy !== null && !state.mcpTargetPolicy.failed)) return Promise.resolve();
+  return readMcpEndpointsForPickers();
+}
+
 // The focus a picker opens on: the URL field, or the select while it hides it.
 function focusMcpTarget(id) {
   const url = document.getElementById(MCP_PICKERS[id].url);
@@ -5408,7 +5427,7 @@ function openMcpPanel() {
     urlInput.value = saved || liveUrl || '';
   }
   paintMcpSettingsButton();
-  openMcpTarget('refresh').then(paintMcpSettingsButton);
+  Promise.all([openMcpTarget('refresh'), readMcpGatePolicy()]).then(paintMcpSettingsButton);
   if (state.access?.posture === 'static' && mcpSettingsBundle.origins === undefined) readBundleMcpOrigins();
   focusMcpTarget('refresh');
 }
@@ -5476,8 +5495,10 @@ async function pingFromPanel() {
 // "Server settings…" (#mcp-settings-btn) opens a modal in this page that
 // configures the MCP server behind the panel's target — not the studio's
 // connection to it. Only a reader who may change an MCP endpoint opens it
-// (settingsGateModel: GET /api/mcp-endpoints `policy.register.allowed`);
-// the button is never hidden, and says why when it cannot be used.
+// (settingsGateModel: GET /api/mcp-endpoints `policy.register.allowed`, the
+// pickers' read — in the token posture readMcpGatePolicy's); the button is
+// never hidden, and says why when it cannot be used — without sign-in, in
+// the server's own sentence (`policy.register.why`).
 //
 // Nothing runs at boot or when the panel opens. Opening the modal reads
 // GET /api/mcp-settings (the deployment's settings policy) and, once the
