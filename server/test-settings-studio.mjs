@@ -37,8 +37,9 @@
  * endpoint's, a member's, a user's): the 403 keeps the focus inside the
  * dialog and is announced.
  * As vera (viewer): no Edit, no URL; her one org renamed long, its ORG
- * label keeps the OBSERVA bar inside the phone width. As nora (no org):
- * the boot's refusal.
+ * label keeps the OBSERVA bar inside the phone width in the modes that hide
+ * the SERVICE chip (the home, a service page, Settings; Build as oscar). As
+ * nora (no org): the boot's refusal.
  * The token posture (with and without OBSERVOGRAM_AUTH=off) and an open
  * server bound off the loopback: the banner is the server's text, the
  * writes carry their reasons, the pickers offer no Settings button. An open
@@ -720,8 +721,14 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('vera, a one-org member, her org renamed long: the ORG label (no select) carries the whole name and the OBSERVA bar scrolls nothing sideways at 390, 360 and 320 px', async () => {
+  await t.test('vera, a one-org member, her org renamed long: the ORG label (no select) carries the whole name and the OBSERVA bar scrolls nothing sideways at 390, 360 and 320 px — on the home, a service page, Settings and (oscar) Build, the modes that hide the SERVICE chip', async () => {
     const LONG = 'Acme Corporation Holdings';
+    // The OBSERVA row as app.css's comment on the org chip's phone cap states it: the SERVICE chip hidden, no
+    // horizontal page scroll, Advanced inside the viewport.
+    const row = (page) => page.evaluate(() => {
+      const cw = document.documentElement.clientWidth;
+      return { serviceChip: document.getElementById('observa-service')?.hidden === false, scroll: document.documentElement.scrollWidth, advanced: document.querySelector('.observa-adv-toggle').getBoundingClientRect().right <= cw };
+    });
     assert.equal((await call('olive', 'PATCH', '/api/org', { name: LONG })).status, 200);
     try {
       const { page, ctx } = await open(child.base, 'vera', { viewport: PHONE });
@@ -731,12 +738,20 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
         assert.equal(await text(page, '#observa-org-name'), LONG, 'the label carries the whole name (assistive technology reads it)');
         for (const width of [PHONE.width, 360, 320]) {
           await page.setViewportSize({ width, height: PHONE.height });
-          assert.deepEqual(await page.evaluate(() => {
-            const cw = document.documentElement.clientWidth;
-            return { scroll: document.documentElement.scrollWidth, advanced: document.querySelector('.observa-adv-toggle').getBoundingClientRect().right <= cw };
-          }), { scroll: width, advanced: true }, `a long one-org label at ${width} px: no horizontal page scroll, Advanced inside the viewport`);
+          assert.deepEqual(await row(page), { serviceChip: false, scroll: width, advanced: true }, `a long one-org label at ${width} px: no horizontal page scroll, Advanced inside the viewport`);
         }
+        await page.setViewportSize(PHONE);
+        await openService(page, 'payment-service');
+        assert.deepEqual(await row(page), { serviceChip: false, scroll: PHONE.width, advanced: true }, 'a service page at the phone width');
+        await toSettings(page);
+        assert.deepEqual(await row(page), { serviceChip: false, scroll: PHONE.width, advanced: true }, 'Settings at the phone width');
       } finally { await ctx.close(); }
+      const { page: build, ctx: buildCtx } = await open(child.base, 'oscar', { viewport: PHONE });
+      try {
+        await build.click('#home-choice-build');
+        await build.waitForFunction(() => document.body.dataset.mode === 'build', null, { timeout: T });
+        assert.deepEqual(await row(build), { serviceChip: false, scroll: PHONE.width, advanced: true }, 'Build at the phone width');
+      } finally { await buildCtx.close(); }
     } finally {
       assert.equal((await call('olive', 'PATCH', '/api/org', { name: 'Acme Corp' })).status, 200);
     }
