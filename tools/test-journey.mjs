@@ -1558,7 +1558,7 @@ try {
       const sCron = packc(['journey', 'schedule', 'sched-env', '--format', 'cron'], TMP2, secretEnv);
       assert(sCron.status === 0 && /^CRON_TZ=Europe\/Madrid$/m.test(sCron.stdout) && /^0 \*\/2 \* \* \* cd /m.test(sCron.stdout) && /^# export MY_MCP_TOKEN=<set in your environment>$/m.test(sCron.stdout) && /^# export MY_HOOK_URL=<set in your environment>$/m.test(sCron.stdout) && /^# export MY_HOOK_TOKEN=<set in your environment>$/m.test(sCron.stdout) && !/^## /m.test(sCron.stdout),
              '--format cron prints the crontab line with CRON_TZ, the workspace and the env names from packB.mcp.authEnv + notify', sCron.stdout);
-      assert(/OBSERVOGRAM_WORKSPACE='?[^ ]*observogram-journey-all-/.test(sCron.stdout), 'the cron line sets the workspace the CLI was run with', sCron.stdout.split('\n').find(l => l.startsWith('0 ')));
+      assert(/OBSERVOGRAM_WORKSPACE=(?:'[^']*|[^ ]*)observogram-journey-all-/.test(sCron.stdout), 'the cron line sets the workspace the CLI was run with', sCron.stdout.split('\n').find(l => l.startsWith('0 ')));
       const sTask = packc(['journey', 'schedule', 'sched-env', '--format', 'schtasks'], TMP2, secretEnv);
       assert(sTask.status === 0 && /^schtasks \/Create \/TN "Observogram\\sched-env" \/TR "\\"[^"]*node(\.exe)?\\" \\"[^"]*cli\.mjs\\" journey run sched-env" \/SC HOURLY \/MO 2 \/ST 00:00 \/F$/m.test(sTask.stdout) && /^REM setx MY_HOOK_URL <set in your environment>/m.test(sTask.stdout),
              '--format schtasks prints the Task Scheduler command with the real node and cli paths', sTask.stdout);

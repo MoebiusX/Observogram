@@ -1674,7 +1674,7 @@ test('Stale import: `orgs create acme` on a pre-store build with no restart afte
   const { logs, warns } = await start(base);
   const moved = slashed(join(base, 'orgs', 'default', 'packs', 'p1.pack.yaml'));
   for (const f of ['packs', 'deploys.jsonl', 'journeys']) {
-    assert.ok(logs.some((l) => l.startsWith('[tenancy] moved ') && l.endsWith(` to ${join('orgs', 'default', f)}`)), `${f} moved\n${logs.join('\n')}`);
+    assert.ok(logs.some((l) => l.startsWith('[tenancy] moved ') && l.endsWith(` to orgs/default/${f}`)), `${f} moved\n${logs.join('\n')}`);
   }
   assert.ok(logs.includes(`[store]   the default org's root is now orgs/default — point its CronJobs at OBSERVOGRAM_WORKSPACE=${join(base, 'orgs', 'default')}`), logs.join('\n'));
   assert.ok(logs.includes('[store]   journey file: paths rewritten: nightly.journey.yaml'), logs.join('\n'));

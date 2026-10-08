@@ -29,7 +29,7 @@ const {
   chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, rmSync, symlinkSync, writeFileSync,
 } = await import('node:fs');
 const { tmpdir } = await import('node:os');
-const { dirname, join } = await import('node:path');
+const { dirname, join, resolve } = await import('node:path');
 const { fileURLToPath } = await import('node:url');
 const { win32Skip, WIN32 } = await import('./fixtures/platform.mjs');
 
@@ -155,7 +155,7 @@ test('paths: orgs.json under the base; the users file from OBSERVOGRAM_USERS_FIL
   const db = await openStore({ path });
   try {
     withEnv({ OBSERVOGRAM_USERS_FILE: '/elsewhere/u.json' }, () => {
-      assert.equal(legacy.legacyUsersPath(db, base), '/elsewhere/u.json', 'before the import: this environment\'s');
+      assert.equal(legacy.legacyUsersPath(db, base), resolve('/elsewhere/u.json'), 'before the import: this environment\'s');
       tx(db, () => meta.putMeta(db, 'import_done', '2026-01-01T00:00:00.000Z'));
       assert.equal(legacy.legacyUsersPath(db, base), join(base, 'users.json'), 'after an import without a recorded file: the base\'s');
       tx(db, () => meta.putMeta(db, 'users_file', '/recorded/users.json'));
