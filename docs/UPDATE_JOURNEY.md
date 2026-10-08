@@ -1323,11 +1323,20 @@ change docs and comments; the count is unchanged by them.
 Two defects in batch 4's policy check on the pass-through
 (`server/mcp-settings-eval.mjs`), neither a hole. One deadline counted from
 the worker's start covered every rule, so a machine too busy to run the
-worker promptly — a loaded CI runner, a busy server — counted fast rules as
-timed out and asked for acknowledgements they did not need (the suite's
-evaluator case flaked on it): each rule now has the 100 ms from its own
-start, so a check takes at most the worker's start plus 100 ms per rule. And
-a server started with a flag a worker refuses — a V8 one,
+worker promptly — a loaded CI runner, a busy server — could count fast rules
+as timed out and ask for acknowledgements they did not need: each rule now
+has the 100 ms from its own start, so a check takes at most the worker's
+start plus 100 ms per rule. The suite's flakes were not this: under load the
+evaluator's case failed on its 2 s wall-clock bound and on its compile
+step's 50 ms id clocks, and the server case's wall-clock bounds (2 s and
+1.5 s) flaked alike (CI's failing line was past its log's readable tail);
+both now bound in seconds, and the evaluator's gives its fast rules a 1 s
+deadline and compiles without the clocks. With one rule, a deadline per
+rule is still the one from the start, so on a loaded machine the policy
+re-check case's approved-host submit can still find its rule timed out (a
+409, fail closed); that submit is sent again — at most five times in all —
+only while the child has logged that rule's line. And a server started with
+a flag a worker refuses — a V8 one,
 `node --max-old-space-size=512 server/index.mjs` — could not construct the
 worker at all: every pass-through submit, acknowledged or not, was answered
 `502 the server-settings proxy failed (Error)`. The worker is now
