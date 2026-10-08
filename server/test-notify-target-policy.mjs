@@ -20,19 +20,21 @@ for (const k of STRIP) {
   delete process.env[`TOMOGRAPH_${k}`];
 }
 
-const { test } = await import('node:test');
+const { test, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
-const { mkdtempSync, rmSync } = await import('node:fs');
-const { tmpdir } = await import('node:os');
-const { join } = await import('node:path');
+const { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } = await import('node:fs');
+const { createServer } = await import('node:http');
+const { networkInterfaces, tmpdir } = await import('node:os');
+const { dirname, join, resolve } = await import('node:path');
+const { fileURLToPath } = await import('node:url');
 const policy = await import('./notify-target-policy.mjs');
 const {
   NOTIFY_ORIGINS_VAR, ORG_NOTIFY_ORIGINS_NAME, HOOK_RE, NOTIFY_HOOKS_ROUTE, orgNotifyOriginsVar, hookVarsOf,
   notifyHookOf, isOrgHookShaped, notifyNamesRefusal, notifyOriginList, resolveJourneyNotify, captureNotifyRefusal,
   notifyHooksOf, notifyBootReport, notifyPostureRefusal,
 } = policy;
-const { closeStore, openStore } = await import('./store/db.mjs');
+const { closeStore, openRaw, openStore, prepare } = await import('./store/db.mjs');
 const orgs = await import('./store/orgs.mjs');
 const { envNameOwnedBy } = await import('./store/mcp-endpoints.mjs');
 
@@ -442,9 +444,20 @@ const ACME_LISTING = {
   ],
   none: null,
 };
+// Everything the HTTP tests saw, for the secret scan (H17): every response
+// body, every child (its output is kept after it stops), every workspace a
+// child served, every receiver and every MCP request's Authorization.
+const SEEN = { bodies: [], children: [], workspaces: new Set(), receivers: [], mcpAuth: [] };
+async function serveSeen(ws, opts) {
+  const srv = await serve(ws, opts);
+  SEEN.children.push(srv);
+  SEEN.workspaces.add(ws);
+  return srv;
+}
 const getJson = async (base, path, headers = {}) => {
   const r = await fetch(`${base}${path}`, { headers });
   const text = await r.text();
+  SEEN.bodies.push(text);
   return { status: r.status, text, json: (() => { try { return JSON.parse(text); } catch { return null; } })() };
 };
 const noMarkerIn = (where, text) => { for (const m of MARKERS) assert.ok(!text.includes(m), `${where}: ${m} never appears`); };
@@ -452,7 +465,7 @@ const noMarkerIn = (where, text) => { for (const m of MARKERS) assert.ok(!text.i
 test('H14 GET /api/journeys/notify-hooks: a viewer, an operator, the bearer and the anonymous local caller read their org\'s hooks — names, usable or the problem, a shadowed name left out; bravo\'s listing says who sets one; no value, origin or other org in any body', { timeout: 120_000 }, async () => {
   const children = [];
   try {
-    const srv = await serve(identityWorkspace(), { env: { ...HOOK_ENV, OBSERVOGRAM_API_TOKEN: BEARER_TOKEN, OBSERVOGRAM_API_TOKEN_LABEL: 'ci-bot' } });
+    const srv = await serveSeen(identityWorkspace(), { env: { ...HOOK_ENV, OBSERVOGRAM_API_TOKEN: BEARER_TOKEN, OBSERVOGRAM_API_TOKEN_LABEL: 'ci-bot' } });
     children.push(srv);
     const cookie = async (login) => { const s = await signIn(srv.base, login, pw(login)); assert.equal(s.status, 200, `${login} signs in`); return s.session; };
     const bodies = [];
@@ -475,7 +488,7 @@ test('H14 GET /api/journeys/notify-hooks: a viewer, an operator, the bearer and 
     // the anonymous local caller without sign-in: the open posture acts in the default org
     const openWs = mkdtempSync(join(tmpdir(), 'observogram-notify-open-'));
     tmpDirs.push(openWs);
-    const open = await serve(openWs, { env: { OBSERVOGRAM_AUTH: 'off', OBSERVOGRAM_ORG_DEFAULT_NOTIFY_LOCAL_URL: 'http://127.0.0.1:9/local-path-marker', ...HOOK_ENV } });
+    const open = await serveSeen(openWs, { env: { OBSERVOGRAM_AUTH: 'off', OBSERVOGRAM_ORG_DEFAULT_NOTIFY_LOCAL_URL: 'http://127.0.0.1:9/local-path-marker', ...HOOK_ENV } });
     children.push(open);
     const local = await getJson(open.base, '/api/journeys/notify-hooks');
     assert.equal(local.status, 200, local.text);
@@ -495,7 +508,7 @@ test('H14 GET /api/journeys/notify-hooks: a viewer, an operator, the bearer and 
 });
 
 test('H15 the start reports each set hook a run would refuse, a name another org\'s id shadows and a name no org owns — one [notify-hooks] line each, never a value; nothing for a usable hook', { timeout: 120_000 }, async () => {
-  const srv = await serve(identityWorkspace(), { verbose: true, env: { ...HOOK_ENV, OBSERVOGRAM_API_TOKEN: BEARER_TOKEN } });
+  const srv = await serveSeen(identityWorkspace(), { verbose: true, env: { ...HOOK_ENV, OBSERVOGRAM_API_TOKEN: BEARER_TOKEN } });
   try {
     // stderr and stdout are two pipes: the start's lines may land after LISTENING.
     for (let i = 0; i < 100 && !srv.logs().stderr.includes("no org's id maps onto it"); i++) await new Promise((r) => setTimeout(r, 50));
@@ -511,4 +524,544 @@ test('H15 the start reports each set hook a run would refuse, a name another org
   } finally {
     await srv.stop();
   }
+});
+
+// ---------- over HTTP: capture, a run, the records and the rows (C4) ----------
+//
+// Three children share the cases below: the identity child (users file
+// armed; the API token's marker doubles as the bearer), the loopback
+// OBSERVOGRAM_AUTH=off child (the anonymous local caller, which acts in the
+// default org) and, for H11 alone, an OBSERVOGRAM_AUTH=off child bound to
+// 0.0.0.0. Every variable the deny-list names, the server's own secrets and
+// another org's included, holds a marker value in them (but the API tokens
+// in the open children, where they would make the posture `token`); the
+// webhooks are loopback receivers that record every request. H17, last,
+// scans everything the suite saw for the markers.
+
+const { validateNotify } = await import('../tools/lib/journey.mjs');
+const { parse: parseYaml } = await import('../tools/lib/mini-yaml.mjs');
+const { SPEC_DIR } = await import('../tools/lib/validator.mjs');
+const { startFakeMcp, registerMcpEndpoint } = await import('./fixtures/fake-mcp.mjs');
+
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
+const PAY_FILE = resolve(REPO, SPEC_DIR, 'examples', 'payment-service.pack.yaml').replaceAll('\\', '/');
+const CUR_FILE = join(REPO, 'examples', 'production-curated.pack.yaml').replaceAll('\\', '/');
+const CAPTURE = { packAId: 'payment-service', packBId: 'production-curated' };
+const REDIRECT = hookVarsOf('acme', 'REDIRECT');
+const FAR = 'OBSERVOGRAM_ORG_ACME_NOTIFY_FAR_URL';
+const BAD = hookVarsOf('acme', 'BAD');
+const SHADOWED = 'OBSERVOGRAM_ORG_ACME_NOTIFY_EU_X_URL';
+const D = { oncall: hookVarsOf('default', 'ONCALL'), far: hookVarsOf('default', 'FAR'), iface: hookVarsOf('default', 'IFACE') };
+
+// The server's own secrets and the platform's (T21), each a marker: the
+// session secret at least 32 characters, the proxy secret at its minimum,
+// the admin password with no seeded admin to rescue.
+const SERVER_SECRET_ENV = {
+  OBSERVOGRAM_SESSION_SECRET: 'session-secret-marker-0123456789abcdef',
+  OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET: 'proxy-secret-marker-0123456789ab',
+  OBSERVOGRAM_ADMIN_PASSWORD: 'admin-password-marker',
+  OBSERVOGRAM_OIDC_CLIENT_SECRET: 'oidc-client-secret-marker',
+  GITHUB_TOKEN: 'github-token-marker',
+  DATABASE_URL: 'postgres://db-user-marker:db-pass-marker@db-host-marker.test:5432/db-path-marker',
+  OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN: 'tok-bravo-mcp-marker',
+};
+
+// A webhook: a node:http server that records every request — method, path,
+// Authorization and body — and answers 200 (or `answer`). `path` and `token`
+// are what it may legitimately see (its own hook's path and token; none for a
+// trap), which H17 holds every recorded request to.
+async function receiver({ host = '127.0.0.1', address = '127.0.0.1', path = null, token = null, answer = null } = {}) {
+  const hits = [];
+  const srv = createServer((req, res) => {
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      hits.push({ method: req.method, path: req.url, authorization: req.headers.authorization ?? null, body });
+      if (answer) answer(req, res); else res.end('ok');
+    });
+  });
+  await new Promise((r) => srv.listen(0, host, r));
+  const rx = {
+    hits, path, token, url: `http://${address}:${srv.address().port}`,
+    close: () => new Promise((r) => srv.close(() => r())),
+  };
+  SEEN.receivers.push(rx);
+  return rx;
+}
+
+// One request: { status, json, text }, the body kept for the scan.
+async function call(base, method, path, { headers = {}, body } = {}) {
+  const h = { Accept: 'application/json', 'X-Observogram-CSRF': '1', ...headers };
+  if (body !== undefined) h['Content-Type'] = 'application/json';
+  const r = await fetch(`${base}${path}`, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body), redirect: 'manual' });
+  const text = await r.text();
+  SEEN.bodies.push(text);
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* not JSON */ }
+  return { status: r.status, json, text };
+}
+const run = (child, name, headers = {}) => call(child.base, 'POST', `/api/journeys/${name}/run`, { headers, body: {} });
+const capture = (child, body, headers = {}) => call(child.base, 'POST', '/api/journeys/capture', { headers, body: { ...CAPTURE, ...body } });
+
+// The child's audit rows, read from its store file: [action, actor, org, target, detail].
+async function auditSeq(ws) {
+  const db = await openRaw(join(ws, 'observogram.db'), { readOnly: true });
+  try { return prepare(db, 'SELECT coalesce(max(seq), 0) AS s FROM audit').get().s; } finally { db.close(); }
+}
+async function auditRowsAfter(ws, seq) {
+  const db = await openRaw(join(ws, 'observogram.db'), { readOnly: true });
+  try {
+    return prepare(db, 'SELECT org_id, actor, action, target_id, detail FROM audit WHERE seq > ? ORDER BY seq').all(seq)
+      .map((r) => [r.action, r.actor, r.org_id, r.target_id, r.detail === null ? null : JSON.parse(r.detail)]);
+  } finally {
+    db.close();
+  }
+}
+
+// An org's part of a child's workspace (the default org's is the base), and
+// a definition planted there as whoever holds the workspace would write it.
+const orgRoot = (ws, org) => (org === 'default' ? ws : join(ws, 'orgs', org));
+function plant(ws, org, name, { packA = `{ file: ${PAY_FILE} }`, packB = `{ file: ${CUR_FILE} }`, notify = null } = {}) {
+  const dir = join(orgRoot(ws, org), 'journeys');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${name}.journey.yaml`), [
+    `name: ${name}`, `packA: ${packA}`, `packB: ${packB}`, 'gate: { minAlignmentPct: 1 }', ...(notify ? [`notify: ${notify}`] : []),
+  ].join('\n') + '\n');
+}
+const hasRecord = (ws, org, name) => existsSync(join(orgRoot(ws, org), 'runs', name));
+// capture's own shape check first (journey-notify's validateNotify), then the hook rule.
+const validateText = (notify, name) => { try { validateNotify(notify, name); return null; } catch (e) { return e.message; } };
+
+let identityChildP = null;
+function identityChild() {
+  identityChildP ??= (async () => {
+    const rx = {
+      oncall: await receiver({ path: '/acme-oncall-path-marker', token: 'tok-acme-oncall-marker' }),
+      pager: await receiver({ path: '/acme-pager-path-marker', token: 'tok-acme-pager-marker' }),
+      trap: await receiver(),
+      legacy: await receiver(),
+    };
+    rx.redirect = await receiver({
+      path: '/acme-redirect-path-marker', token: 'tok-acme-redirect-marker',
+      answer: (req, res) => { res.writeHead(302, { Location: `${rx.trap.url}/followed` }); res.end(); },
+    });
+    const ws = identityWorkspace();
+    const srv = await serveSeen(ws, {
+      env: {
+        ...SERVER_SECRET_ENV,
+        OBSERVOGRAM_API_TOKEN: BEARER_TOKEN, OBSERVOGRAM_API_TOKEN_LABEL: 'ci-bot', TOMOGRAPH_API_TOKEN: 'tomograph-token-marker',
+        [ONCALL.urlEnv]: `${rx.oncall.url}/acme-oncall-path-marker`, [ONCALL.tokenEnv]: 'tok-acme-oncall-marker',
+        [PAGER.urlEnv]: `${rx.pager.url}/acme-pager-path-marker`, [PAGER.tokenEnv]: 'tok-acme-pager-marker',
+        [REDIRECT.urlEnv]: `${rx.redirect.url}/acme-redirect-path-marker`, [REDIRECT.tokenEnv]: 'tok-acme-redirect-marker',
+        [FAR]: 'https://far-host-marker.test/far-path-marker',
+        [BAD.urlEnv]: 'http://dbuser-marker:dbpass-marker@127.0.0.1:9/bad-path-marker',
+        [SHADOWED]: `${rx.trap.url}/shadow-path-marker`,
+        OBSERVOGRAM_ORG_ACME_EU_NOTIFY_X_URL: `${rx.trap.url}/acme-eu-path-marker`,
+        OBSERVOGRAM_ORG_ACME_MCP_TOKEN: 'tok-acme-mcp-marker',
+        observogram_org_acme_notify_oncall_url: `${rx.trap.url}/lower-case-path-marker`,
+        OBSERVOGRAM_ORG_ACME_NOTIFY_oncall_URL: `${rx.trap.url}/mixed-case-path-marker`,
+        MY_HOOK_URL: `${rx.legacy.url}/my-hook-path-marker`,
+        MY_JOURNEY_WEBHOOK_URL: `${rx.trap.url}/bare-path-marker`,
+        SMOKE_HOOK_URL: `${rx.trap.url}/smoke-path-marker`,
+        OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_URL: `${rx.legacy.url}/bravo-hook-path-marker`,
+        OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_TOKEN: 'tok-bravo-oncall-marker',
+      },
+    });
+    const as = {};
+    for (const login of LOGINS) {
+      const s = await signIn(srv.base, login, pw(login));
+      assert.equal(s.status, 200, `${login} signs in`);
+      as[login] = { Cookie: s.session };
+    }
+    as.oliveInAcme = { ...as.olive, 'X-Observogram-Org': 'acme' };
+    as.bearer = { Authorization: `Bearer ${BEARER_TOKEN}`, 'X-Observogram-Org': 'acme' };
+    // The posture (T21): sign-in is armed — an anonymous read is refused — and the bearer answers in acme.
+    assert.equal((await call(srv.base, 'GET', '/api/journeys/notify-hooks')).status, 401, 'identity: anonymous is refused');
+    assert.equal((await call(srv.base, 'GET', '/api/journeys/notify-hooks', { headers: as.bearer })).json?.org, 'acme', 'identity: the bearer acts in acme');
+    return { ...srv, ws, rx, as };
+  })();
+  return identityChildP;
+}
+
+const IFACE = Object.values(networkInterfaces()).flat().find((i) => i && i.family === 'IPv4' && !i.internal) ?? null;
+let openChildP = null;
+function openChild() {
+  openChildP ??= (async () => {
+    const rx = { oncall: await receiver({ path: '/default-oncall-path-marker', token: 'tok-default-oncall-marker' }) };
+    // A receiver on a non-loopback interface of this host (T12), bound to 0.0.0.0 — when the host has one.
+    if (IFACE) rx.iface = await receiver({ host: '0.0.0.0', address: IFACE.address, path: '/iface-path-marker', token: 'tok-iface-marker' });
+    const ws = mkdtempSync(join(tmpdir(), 'observogram-notify-open-'));
+    tmpDirs.push(ws);
+    const srv = await serveSeen(ws, {
+      env: {
+        OBSERVOGRAM_AUTH: 'off', ...SERVER_SECRET_ENV,
+        OBSERVOGRAM_NOTIFY_ORIGINS: ['https://other.test', ...(rx.iface ? [rx.iface.url] : [])].join(','),
+        [D.oncall.urlEnv]: `${rx.oncall.url}/default-oncall-path-marker`, [D.oncall.tokenEnv]: 'tok-default-oncall-marker',
+        [D.far.urlEnv]: 'https://far-host-marker.test/default-far-path-marker',
+        ...(rx.iface ? { [D.iface.urlEnv]: `${rx.iface.url}/iface-path-marker`, [D.iface.tokenEnv]: 'tok-iface-marker' } : {}),
+        MY_HOOK_URL: `${rx.oncall.url}/my-hook-path-marker`,
+      },
+    });
+    // The posture (T21): no sign-in, no token — the anonymous caller is answered as local, in the default org.
+    const hooks = await call(srv.base, 'GET', '/api/journeys/notify-hooks');
+    assert.deepEqual([hooks.status, hooks.json?.org], [200, 'default'], 'open: the anonymous local caller reads the default org');
+    return { ...srv, ws, rx, port: Number(new URL(srv.base).port) };
+  })();
+  return openChildP;
+}
+
+async function stopAll() {
+  for (const c of SEEN.children) await c.stop();
+  for (const rx of SEEN.receivers) await rx.close();
+}
+after(stopAll);
+
+test('H1 capture refuses a notify that is not one of the org\'s set hooks — for an operator, an admin, an owner acting in acme, the bearer and the anonymous local caller without sign-in: every deny-list row, another variable as the hook\'s token, an unset hook, and a literal url from an operator and from an admin; 400 with its exact text, no file, no row', { timeout: 300_000 }, async () => {
+  const A = await identityChild();
+  const B = await openChild();
+  for (const [who, child, headers, org] of [
+    ['oscar (operator)', A, A.as.oscar, 'acme'], ['ada (admin)', A, A.as.ada, 'acme'], ['olive (an owner acting in acme)', A, A.as.oliveInAcme, 'acme'],
+    ['the bearer', A, A.as.bearer, 'acme'], ['local (OBSERVOGRAM_AUTH=off)', B, {}, 'default'],
+  ]) {
+    const seq = await auditSeq(child.ws);
+    const hook = hookVarsOf(org, 'ONCALL');
+    const unset = hookVarsOf(org, 'UNSET').urlEnv;
+    const cases = [
+      ...[...NAME_ROWS, SHADOWED, ...(org === 'acme' ? [] : [ONCALL.urlEnv])].map((urlEnv) => [{ urlEnv },
+        validateText({ urlEnv }, 'h1-refused') ?? (org === 'acme' && urlEnv === SHADOWED ? T.shadow(urlEnv, org) : T.name(urlEnv, org))]),
+      ...['OBSERVOGRAM_API_TOKEN', 'OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN', `${P(org)}MCP_TOKEN`].map((authEnv) => [{ urlEnv: hook.urlEnv, authEnv }, T.pair(authEnv, hook.tokenEnv)]),
+      [{ urlEnv: unset }, T.unsetUrl(unset)],
+    ];
+    for (const [notify, error] of cases) {
+      const r = await capture(child, { name: 'h1-refused', notify: { ...notify, on: 'always' } }, headers);
+      assert.deepEqual([r.status, r.json], [400, { ok: false, error }], `${who}: ${JSON.stringify(notify)}`);
+      noMarkerIn(`${who}: ${notify.urlEnv}`, r.text);
+    }
+    assert.equal(existsSync(join(orgRoot(child.ws, org), 'journeys', 'h1-refused.journey.yaml')), false, `${who}: no file`);
+    assert.deepEqual(await auditRowsAfter(child.ws, seq), [], `${who}: no row`);
+  }
+  // No role supplies a webhook URL in the app — an admin included.
+  const seq = await auditSeq(A.ws);
+  for (const login of ['oscar', 'ada']) {
+    const notify = { url: 'https://hooks.example/x' };
+    const r = await capture(A, { name: 'h1-refused', notify }, A.as[login]);
+    assert.deepEqual([r.status, r.json], [400, { ok: false, error: validateText(notify, 'h1-refused') }], login);
+  }
+  assert.deepEqual(await auditRowsAfter(A.ws, seq), []);
+  assert.equal(A.rx.trap.hits.length + A.rx.legacy.hits.length, 0, 'nothing was posted');
+});
+
+test('H2 capture accepts one of the org\'s set hooks: the file holds its two names and reads back, the row names them (never a value); a set hook whose origin is not listed or whose URL carries user:password is refused, naming variables only', { timeout: 120_000 }, async () => {
+  const A = await identityChild();
+  const CAPTURE_ROW = { packA: 'payment-service', packB: 'production-curated', live: false, env: null, service: null, scopeMode: null };
+  const row = (name, notify) => ['journey.capture', 'oscar', 'acme', name, { ...CAPTURE_ROW, ...(notify === undefined ? {} : { notify }) }];
+  let seq = await auditSeq(A.ws);
+  let r = await capture(A, { name: 'h2-oncall', notify: { urlEnv: ONCALL.urlEnv, authEnv: ONCALL.tokenEnv, on: 'always' } }, A.as.oscar);
+  assert.deepEqual([r.status, r.json], [200, { ok: true, name: 'h2-oncall' }], r.text);
+  const file = readFileSync(join(orgRoot(A.ws, 'acme'), 'journeys', 'h2-oncall.journey.yaml'), 'utf8');
+  assert.deepEqual(parseYaml(file).notify, { urlEnv: ONCALL.urlEnv, authEnv: ONCALL.tokenEnv, on: 'always' }, 'the file holds the two names');
+  r = await capture(A, { name: 'h2-pager', notify: { urlEnv: PAGER.urlEnv } }, A.as.oscar);
+  assert.equal(r.status, 200, r.text);
+  r = await capture(A, { name: 'h2-plain' }, A.as.oscar);
+  assert.equal(r.status, 200, r.text);
+  assert.deepEqual(await auditRowsAfter(A.ws, seq), [
+    row('h2-oncall', { urlEnv: ONCALL.urlEnv, authEnv: ONCALL.tokenEnv }),
+    row('h2-pager', { urlEnv: PAGER.urlEnv, authEnv: null }),
+    row('h2-plain'),
+  ], 'the rows name the hook\'s variables; without notify, no notify key');
+  const listed = Object.fromEntries((await call(A.base, 'GET', '/api/journeys', { headers: A.as.vera })).json.journeys.map((j) => [j.name, j]));
+  assert.deepEqual([listed['h2-oncall'].loadError, listed['h2-oncall'].notify], [null, { urlEnv: ONCALL.urlEnv, authEnv: ONCALL.tokenEnv, on: 'always', format: 'json' }], 'it reads back; no problem');
+  seq = await auditSeq(A.ws);
+  for (const [notify, error] of [
+    [{ urlEnv: FAR }, T.originNoList(FAR, 'acme')],
+    [{ urlEnv: BAD.urlEnv }, T.badUrl(BAD.urlEnv, BAD.tokenEnv)],
+  ]) {
+    r = await capture(A, { name: 'h2-refused', notify }, A.as.oscar);
+    assert.deepEqual([r.status, r.json], [400, { ok: false, error }], notify.urlEnv);
+    noMarkerIn(notify.urlEnv, r.text);
+  }
+  assert.equal(existsSync(join(orgRoot(A.ws, 'acme'), 'journeys', 'h2-refused.journey.yaml')), false);
+  assert.deepEqual(await auditRowsAfter(A.ws, seq), []);
+});
+
+test('H3 a definition written before the rule — a bare name with the API token as its bearer, another org\'s hook — is refused before it runs: 400 with the run text, no record, no row, nothing posted; GET /api/journeys carries that text as notify.problem, and a journey through its org\'s hook has none', { timeout: 120_000 }, async () => {
+  const A = await identityChild();
+  plant(A.ws, 'acme', 'h3-bare', { notify: '{ urlEnv: MY_HOOK_URL, authEnv: OBSERVOGRAM_API_TOKEN, on: always }' });
+  plant(A.ws, 'acme', 'h3-bravo', { notify: '{ urlEnv: OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_URL, on: always }' });
+  plant(A.ws, 'acme', 'h3-hook', { notify: `{ urlEnv: ${ONCALL.urlEnv}, on: breach }` });
+  const want = {
+    'h3-bare': T.runName('h3-bare', 'MY_HOOK_URL', 'acme'),
+    'h3-bravo': T.runName('h3-bravo', 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_URL', 'acme'),
+  };
+  const seq = await auditSeq(A.ws);
+  for (const [name, error] of Object.entries(want)) {
+    const r = await run(A, name, A.as.oscar);
+    assert.deepEqual([r.status, r.json], [400, { ok: false, error }], name);
+    assert.equal(hasRecord(A.ws, 'acme', name), false, `${name}: no record`);
+  }
+  assert.deepEqual(await auditRowsAfter(A.ws, seq), [], 'no row');
+  assert.equal(A.rx.legacy.hits.length, 0, 'nothing was posted — not the API token, not bravo\'s hook');
+  const listed = Object.fromEntries((await call(A.base, 'GET', '/api/journeys', { headers: A.as.vera })).json.journeys.map((j) => [j.name, j]));
+  for (const [name, error] of Object.entries(want)) assert.equal(listed[name].notify.problem, error, `${name}: the listing says why`);
+  assert.deepEqual(listed['h3-hook'].notify, { urlEnv: ONCALL.urlEnv, authEnv: null, on: 'breach', format: 'json' }, 'no problem key');
+});
+
+test('H4 a run through the org\'s hook posts once, with that hook\'s own token, a payload without any variable\'s name or value; the 200 row adds notify { urlEnv, status, attempts }, the vantage-lost 502 row the delivery its record kept, and a 502 with no record { status: null, attempts: 0 }', { timeout: 120_000 }, async () => {
+  const A = await identityChild();
+  plant(A.ws, 'acme', 'h4-sent', { notify: `{ urlEnv: ${ONCALL.urlEnv}, authEnv: ${ONCALL.tokenEnv}, on: always }` });
+  const before = A.rx.oncall.hits.length;
+  let seq = await auditSeq(A.ws);
+  let r = await run(A, 'h4-sent', A.as.oscar);
+  assert.equal(r.status, 200, r.text);
+  const { status, httpStatus, attempts, urlEnv, error } = r.json.record.notify;
+  assert.deepEqual({ status, httpStatus, attempts, urlEnv, error }, { status: 'sent', httpStatus: 200, attempts: 1, urlEnv: ONCALL.urlEnv, error: null });
+  const hits = A.rx.oncall.hits.slice(before);
+  assert.deepEqual(hits.map((h) => [h.method, h.path, h.authorization]), [['POST', '/acme-oncall-path-marker', 'Bearer tok-acme-oncall-marker']], 'one POST, its own token');
+  for (const s of [...MARKERS, 'OBSERVOGRAM_', 'urlEnv', 'authEnv']) assert.ok(!hits[0].body.includes(s), `the payload carries no ${s}`);
+  assert.equal(JSON.parse(hits[0].body).journey, 'h4-sent');
+  let rows = await auditRowsAfter(A.ws, seq);
+  assert.deepEqual(rows.map((x) => x.slice(0, 4)), [['journey.run', 'oscar', 'acme', 'h4-sent']]);
+  assert.deepEqual(Object.keys(rows[0][4]), ['startedAt', 'outcome', 'alignmentPct', 'gradeScore', 'gradePass', 'breaches', 'tookMs', 'notify']);
+  assert.deepEqual(rows[0][4].notify, { urlEnv: ONCALL.urlEnv, status: 'sent', attempts: 1 });
+  // The vantage-lost path (T7): the record is kept and posted; the 502 row reads its delivery.
+  const ep = await registerMcpEndpoint(A.base, { name: 'h4-unreachable', url: 'http://127.0.0.1:1/mcp' }, { headers: A.as.ada });
+  assert.equal(ep.status, 201, ep.text);
+  plant(A.ws, 'acme', 'h4-lost', { packB: `{ mcp: { url: "http://127.0.0.1:1/mcp", endpointId: ${ep.id} } }`, notify: `{ urlEnv: ${ONCALL.urlEnv}, authEnv: ${ONCALL.tokenEnv}, on: always }` });
+  seq = await auditSeq(A.ws);
+  r = await run(A, 'h4-lost', A.as.oscar);
+  assert.equal(r.status, 502, r.text);
+  assert.equal(A.rx.oncall.hits.length, before + 2, 'the vantage-lost record was posted');
+  rows = await auditRowsAfter(A.ws, seq);
+  assert.deepEqual(rows.map((x) => [...x.slice(0, 4), x[4].outcome, x[4].notify]), [['journey.run', 'oscar', 'acme', 'h4-lost', 'vantage-lost', { urlEnv: ONCALL.urlEnv, status: 'sent', attempts: 1 }]]);
+  // A run that fails before any record: nothing left the server.
+  plant(A.ws, 'acme', 'h4-gone', { packA: `{ file: ${join(A.ws, 'no-such.pack.yaml').replaceAll('\\', '/')} }`, notify: `{ urlEnv: ${ONCALL.urlEnv}, on: always }` });
+  seq = await auditSeq(A.ws);
+  r = await run(A, 'h4-gone', A.as.oscar);
+  assert.equal(r.status, 502, r.text);
+  assert.equal(A.rx.oncall.hits.length, before + 2, 'nothing posted');
+  rows = await auditRowsAfter(A.ws, seq);
+  assert.deepEqual(rows.map((x) => [...x.slice(0, 4), x[4].outcome, x[4].notify]), [['journey.run', 'oscar', 'acme', 'h4-gone', 'error', { urlEnv: ONCALL.urlEnv, status: null, attempts: 0 }]]);
+});
+
+test('H5 a hook\'s token goes only to its own URL: ONCALL\'s URL with PAGER\'s token (both set) is refused before it runs — 400 PAIR, neither webhook hit, no record, no row', { timeout: 120_000 }, async () => {
+  const A = await identityChild();
+  plant(A.ws, 'acme', 'h5-pair', { notify: `{ urlEnv: ${ONCALL.urlEnv}, authEnv: ${PAGER.tokenEnv}, on: always }` });
+  const counts = [A.rx.oncall.hits.length, A.rx.pager.hits.length];
+  const seq = await auditSeq(A.ws);
+  const r = await run(A, 'h5-pair', A.as.oscar);
+  assert.deepEqual([r.status, r.json], [400, { ok: false, error: T.runPair('h5-pair', PAGER.tokenEnv, ONCALL.tokenEnv) }]);
+  assert.deepEqual([A.rx.oncall.hits.length, A.rx.pager.hits.length], counts, 'neither webhook was hit');
+  assert.equal(hasRecord(A.ws, 'acme', 'h5-pair'), false);
+  assert.deepEqual(await auditRowsAfter(A.ws, seq), []);
+});
+
+test('H6 the notify origin list: with none, a hook off this machine is refused without a lookup (ORIGIN, no list); with OBSERVOGRAM_NOTIFY_ORIGINS, an origin outside it is refused (ORIGIN, listed) and one inside it — a non-loopback address of this host — is posted to', { timeout: 120_000 }, async (t) => {
+  const A = await identityChild();
+  plant(A.ws, 'acme', 'h6-far', { notify: `{ urlEnv: ${FAR}, on: always }` });
+  let r = await run(A, 'h6-far', A.as.oscar);
+  assert.deepEqual([r.status, r.json], [400, { ok: false, error: RUN('h6-far', T.originNoList(FAR, 'acme')) }]);
+  assert.equal(hasRecord(A.ws, 'acme', 'h6-far'), false);
+  const B = await openChild();
+  plant(B.ws, 'default', 'h6-listed', { notify: `{ urlEnv: ${D.far.urlEnv}, on: always }` });
+  r = await run(B, 'h6-listed');
+  assert.deepEqual([r.status, r.json], [400, { ok: false, error: RUN('h6-listed', T.originListed(D.far.urlEnv, ['OBSERVOGRAM_NOTIFY_ORIGINS'])) }]);
+  if (!B.rx.iface) {
+    t.diagnostic('this host has no non-loopback IPv4 interface: the listed-origin delivery is not exercised (T12)');
+    process.stdout.write('# H6: skipped the listed-origin delivery — this host has no non-loopback IPv4 interface\n');
+  } else {
+    plant(B.ws, 'default', 'h6-iface', { notify: `{ urlEnv: ${D.iface.urlEnv}, authEnv: ${D.iface.tokenEnv}, on: always }` });
+    r = await run(B, 'h6-iface');
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.record.notify.status, 'sent', JSON.stringify(r.json.record.notify));
+    assert.deepEqual(B.rx.iface.hits.map((h) => [h.method, h.path, h.authorization]), [['POST', '/iface-path-marker', 'Bearer tok-iface-marker']]);
+  }
+  for (const text of [...SEEN.bodies, A.logs().stderr, B.logs().stderr]) assert.ok(!text.includes('ENOTFOUND') && !text.includes('getaddrinfo'), 'no lookup was made');
+});
+
+test('H7 a hook that answers 302 is a failed delivery, never followed: the run is 200, the record says HTTP 302 after one attempt, the redirect target receives nothing', { timeout: 120_000 }, async () => {
+  const A = await identityChild();
+  plant(A.ws, 'acme', 'h7-redirect', { notify: `{ urlEnv: ${REDIRECT.urlEnv}, authEnv: ${REDIRECT.tokenEnv}, on: always }` });
+  const r = await run(A, 'h7-redirect', A.as.oscar);
+  assert.equal(r.status, 200, r.text);
+  const { status, httpStatus, attempts, error } = r.json.record.notify;
+  assert.deepEqual({ status, httpStatus, attempts, error }, { status: 'failed', httpStatus: 302, attempts: 1, error: 'HTTP 302' });
+  assert.deepEqual(A.rx.redirect.hits.map((h) => h.authorization), ['Bearer tok-acme-redirect-marker'], 'the hook saw its token once');
+  assert.equal(A.rx.trap.hits.length, 0, 'the Location was never requested');
+});
+
+test('H8 across orgs and under a shadow: bravo\'s admin cannot capture acme\'s hook, a bravo journey naming it is refused before it runs, and a name another org\'s id shadows is refused for acme without naming that org', { timeout: 120_000 }, async () => {
+  const A = await identityChild();
+  const bodies = [];
+  let r = await capture(A, { name: 'h8-x', notify: { urlEnv: ONCALL.urlEnv } }, A.as.bob);
+  assert.deepEqual([r.status, r.json], [400, { ok: false, error: T.name(ONCALL.urlEnv, 'bravo') }]);
+  bodies.push(r.text);
+  plant(A.ws, 'bravo', 'h8-bravo', { notify: `{ urlEnv: ${ONCALL.urlEnv}, authEnv: ${ONCALL.tokenEnv}, on: always }` });
+  const before = A.rx.oncall.hits.length;
+  r = await run(A, 'h8-bravo', A.as.bob);
+  assert.deepEqual([r.status, r.json], [400, { ok: false, error: T.runName('h8-bravo', ONCALL.urlEnv, 'bravo') }]);
+  bodies.push(r.text);
+  assert.equal(A.rx.oncall.hits.length, before, 'acme\'s hook was not posted to');
+  assert.equal(hasRecord(A.ws, 'bravo', 'h8-bravo'), false);
+  r = await capture(A, { name: 'h8-y', notify: { urlEnv: SHADOWED } }, A.as.oscar);
+  assert.deepEqual([r.status, r.json], [400, { ok: false, error: T.shadow(SHADOWED, 'acme') }]);
+  bodies.push(r.text);
+  for (const text of bodies) assert.ok(!text.includes('acme-notify-eu'), 'no other org is named');
+});
+
+test('H9 the server never reads packB.mcp.authEnv: a journey whose Pack B names the API token (set) as its MCP token fetches through its endpoint, and the MCP receives no Authorization', { timeout: 120_000 }, async () => {
+  const A = await identityChild();
+  const fake = await startFakeMcp(['system_health', 'system_topology'], () => ({}));
+  try {
+    const ep = await registerMcpEndpoint(A.base, { name: 'h9-fake', url: fake.url }, { headers: A.as.ada });
+    assert.equal(ep.status, 201, ep.text);
+    plant(A.ws, 'acme', 'h9-mcp', { packB: `{ mcp: { url: "${fake.url}", endpointId: ${ep.id}, authEnv: OBSERVOGRAM_API_TOKEN } }` });
+    const r = await run(A, 'h9-mcp', A.as.oscar);
+    assert.ok([200, 502].includes(r.status), r.text);
+    assert.ok(fake.authHeaders.length > 0, 'the MCP was asked');
+    assert.deepEqual([...new Set(fake.authHeaders)], [null], 'never an Authorization');
+    SEEN.mcpAuth.push(...fake.authHeaders);
+  } finally {
+    await fake.close();
+  }
+});
+
+test('H10 an unset hook of the org is refused before the run (it was a 502): 400 naming the variable and who sets it, no record, no row', { timeout: 120_000 }, async () => {
+  const A = await identityChild();
+  const gone = hookVarsOf('acme', 'GONE').urlEnv;
+  plant(A.ws, 'acme', 'h10-unset', { notify: `{ urlEnv: ${gone}, on: always }` });
+  const seq = await auditSeq(A.ws);
+  const r = await run(A, 'h10-unset', A.as.oscar);
+  assert.deepEqual([r.status, r.json], [400, { ok: false, error: T.runUnsetUrl('h10-unset', gone) }]);
+  assert.equal(hasRecord(A.ws, 'acme', 'h10-unset'), false);
+  assert.deepEqual(await auditRowsAfter(A.ws, seq), []);
+});
+
+test('H11 without sign-in a journey that notifies runs only from a direct loopback request and never on an exposed bind — 403 posture, nothing posted, no record; a journey without notify still runs there', { timeout: 120_000 }, async () => {
+  const exposedRx = await receiver();
+  const ws = mkdtempSync(join(tmpdir(), 'observogram-notify-exposed-'));
+  tmpDirs.push(ws);
+  const C = await serveSeen(ws, {
+    host: '0.0.0.0',
+    env: { OBSERVOGRAM_AUTH: 'off', OBSERVOGRAM_INSECURE_NO_AUTH: '1', ...SERVER_SECRET_ENV, [D.oncall.urlEnv]: `${exposedRx.url}/exposed-path-marker`, [D.oncall.tokenEnv]: 'tok-exposed-marker' },
+  });
+  try {
+    plant(ws, 'default', 'h11-notify', { notify: `{ urlEnv: ${D.oncall.urlEnv}, authEnv: ${D.oncall.tokenEnv}, on: always }` });
+    plant(ws, 'default', 'h11-plain');
+    const seq = await auditSeq(ws);
+    let r = await run(C, 'h11-notify');
+    assert.deepEqual([r.status, r.json], [403, {
+      ok: false, denied: 'posture',
+      error: 'running a journey that notifies is closed on a server bound to 0.0.0.0 without sign-in (OBSERVOGRAM_INSECURE_NO_AUTH=1, OBSERVOGRAM_AUTH=off): restart it without OBSERVOGRAM_AUTH=off and sign in as an owner, or bind it to loopback',
+    }]);
+    assert.equal(hasRecord(ws, 'default', 'h11-notify'), false);
+    assert.deepEqual(await auditRowsAfter(ws, seq), []);
+    r = await run(C, 'h11-plain');
+    assert.equal(r.status, 200, r.text);
+    assert.equal(exposedRx.hits.length, 0, 'nothing was posted');
+  } finally {
+    await C.stop();
+  }
+  const B = await openChild();
+  plant(B.ws, 'default', 'h11-direct', { notify: `{ urlEnv: ${D.oncall.urlEnv}, authEnv: ${D.oncall.tokenEnv}, on: always }` });
+  let r = await run(B, 'h11-direct', { 'X-Forwarded-For': '203.0.113.9' });
+  assert.deepEqual([r.status, r.json], [403, {
+    ok: false, denied: 'posture',
+    error: `on a server without sign-in running a journey that notifies answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${B.port}`,
+  }]);
+  assert.equal(B.rx.oncall.hits.length, 0);
+  assert.equal(hasRecord(B.ws, 'default', 'h11-direct'), false);
+  r = await run(B, 'h11-direct');
+  assert.equal(r.status, 200, r.text);
+  assert.deepEqual(B.rx.oncall.hits.map((h) => [h.path, h.authorization]), [['/default-oncall-path-marker', 'Bearer tok-default-oncall-marker']], 'a direct request posts');
+  const rows = await auditRowsAfter(B.ws, 0);
+  assert.deepEqual(rows.filter((x) => x[3] === 'h11-direct').map((x) => [x[0], x[1], x[2], x[4].notify]), [['journey.run', 'local', 'default', { urlEnv: D.oncall.urlEnv, status: 'sent', attempts: 1 }]]);
+});
+
+test('H12 a file is exactly what capture validated: a pack label with line breaks stays one banner comment line (no notify block of its own), and a gate key or a scope scalar that would not read back is refused with nothing written — the earlier file of that name, and its schedule, intact', { timeout: 120_000 }, async () => {
+  const A = await identityChild();
+  const path = join(orgRoot(A.ws, 'acme'), 'journeys', 'h12-inj.journey.yaml');
+  let r = await capture(A, { name: 'h12-inj', schedule: { every: '2h' } }, A.as.oscar);
+  assert.equal(r.status, 200, r.text);
+  const earlier = readFileSync(path, 'utf8');
+  // The measured banner injection: a crawl labelled with a notify block of its own.
+  const files = {
+    'prometheus/rules.yml': 'groups:\n  - name: payments\n    rules:\n      - alert: HighErrorRate\n        expr: rate(http_requests_total{code=~"5.."}[5m]) > 0.1\n        labels:\n          severity: page\n',
+    'README.md': '# payments\nservice: payments\n',
+  };
+  const crawl = await call(A.base, 'POST', '/api/crawl', { headers: A.as.oscar, body: { files, repoName: 'payments', label: 'x\nnotify:\n  urlEnv: OBSERVOGRAM_API_TOKEN\n  on: always\n#' } });
+  assert.ok(crawl.json?.registered?.id, crawl.text.slice(0, 200));
+  r = await capture(A, { name: 'h12-banner', packAId: crawl.json.registered.id }, A.as.oscar);
+  assert.equal(r.status, 200, r.text);
+  const banner = readFileSync(join(orgRoot(A.ws, 'acme'), 'journeys', 'h12-banner.journey.yaml'), 'utf8');
+  assert.equal(parseYaml(banner).notify, undefined, 'no notify block');
+  assert.ok(banner.split('\n').some((l) => l.startsWith('# Pack A: x notify:   urlEnv: OBSERVOGRAM_API_TOKEN   on: always #')), 'the label is one comment line');
+  const listed = (await call(A.base, 'GET', '/api/journeys', { headers: A.as.vera })).json.journeys.find((j) => j.name === 'h12-banner');
+  assert.equal(listed.notify, null);
+  // A gate key and an env value with a line break do not read back: refused, nothing written.
+  const seq = await auditSeq(A.ws);
+  for (const [body, reason] of [
+    [{ gate: { 'k\nnotify': 1 } }, 'it does not parse as YAML'],
+    [{ env: 'prod\nnotify: { urlEnv: OBSERVOGRAM_API_TOKEN }' }, '"env" differs'],
+  ]) {
+    r = await capture(A, { name: 'h12-inj', ...body }, A.as.oscar);
+    assert.deepEqual([r.status, r.json], [400, { ok: false, error: `journey h12-inj: the definition does not read back as written (${reason}) — nothing was saved` }]);
+  }
+  assert.equal(readFileSync(path, 'utf8'), earlier, 'the earlier file is untouched');
+  assert.deepEqual(await auditRowsAfter(A.ws, seq), []);
+  const sched = await call(A.base, 'GET', '/api/journeys/h12-inj/schedule', { headers: A.as.vera });
+  assert.deepEqual([sched.status, sched.json.schedule?.every, sched.json.envNames], [200, '2h', []], 'the schedule is the earlier one\'s');
+});
+
+test('H13 a record written before the rule is served scrubbed: undici\'s echo of a bearer token and of a URL with credentials read <redacted> on GET /api/journeys/:name/runs', { timeout: 120_000 }, async () => {
+  const A = await identityChild();
+  const dir = join(orgRoot(A.ws, 'acme'), 'runs', 'h13-old');
+  mkdirSync(dir, { recursive: true });
+  const leaks = [
+    ['2026-01-01T00:00:00.000Z', 'Headers.append: "Bearer tok-h13-marker\n" is an invalid header value.', 'Headers.append: "<redacted>" is an invalid header value.'],
+    ['2026-01-02T00:00:00.000Z', 'Request cannot be constructed from a URL that includes credentials: http://***@h13-host-marker.test:5432/h13-path-marker', 'Request cannot be constructed from a URL that includes credentials: <redacted>'],
+  ];
+  for (const [startedAt, error] of leaks) {
+    writeFileSync(join(dir, `${startedAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({
+      journey: 'h13-old', startedAt, tookMs: 1, outcome: 'pass',
+      notify: { status: 'failed', reason: 'policy always', triggers: ['always'], httpStatus: null, attempts: 1, tookMs: 1, urlEnv: 'MY_HOOK_URL', error },
+    }));
+  }
+  try {
+    const r = await call(A.base, 'GET', '/api/journeys/h13-old/runs?limit=5', { headers: A.as.vera });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(r.json.runs.map((x) => x.notify.error), [leaks[1][2], leaks[0][2]]);
+    assert.deepEqual(Object.keys(r.json.runs[0].notify), ['status', 'reason', 'triggers', 'httpStatus', 'attempts', 'tookMs', 'urlEnv', 'error'], 'the record otherwise as written');
+    noMarkerIn('the served records', r.text);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });   // the planted leak is not the server's (H17 scans the workspace)
+  }
+});
+
+test('H17 the secret scan: no marker — a hook URL\'s host or path, a hook token, a server secret, another org\'s variable — in any response body, any child\'s output, any audit row, the stopped store or any workspace file; every webhook request went to its own hook with its own token, and the MCP never got an Authorization', { timeout: 120_000 }, async () => {
+  const A = await identityChild();
+  const audit = await call(A.base, 'GET', '/api/audit?limit=500', { headers: A.as.olive });
+  assert.equal(audit.status, 200, audit.text.slice(0, 200));
+  assert.ok(audit.json.rows.some((x) => x.action === 'journey.capture' && x.detail?.notify) && audit.json.rows.some((x) => x.action === 'journey.run' && x.detail?.notify),
+    'the notify rows are among them');
+  await stopAll();
+  for (const [i, text] of SEEN.bodies.entries()) noMarkerIn(`response body ${i}`, text);
+  for (const [i, c] of SEEN.children.entries()) { const { stdout, stderr } = c.logs(); noMarkerIn(`child ${i}'s output`, stdout + stderr); }
+  const files = (dir) => readdirSync(dir).flatMap((f) => { const p = join(dir, f); return statSync(p).isDirectory() ? files(p) : [p]; });
+  let scanned = 0;
+  for (const ws of SEEN.workspaces) {
+    for (const file of files(ws)) {
+      const bytes = readFileSync(file);
+      scanned++;
+      for (const m of MARKERS) assert.ok(!bytes.includes(m), `${file.slice(ws.length)}: ${m} never appears`);
+    }
+  }
+  assert.ok(scanned > 0 && [...SEEN.workspaces].every((ws) => existsSync(join(ws, 'observogram.db'))), 'every store was scanned');
+  for (const rx of SEEN.receivers) {
+    for (const h of rx.hits) {
+      assert.deepEqual([h.path, h.authorization], [rx.path, rx.token === null ? null : `Bearer ${rx.token}`], `${rx.url}: only its own hook, with its own token`);
+      noMarkerIn(`a request to ${rx.url}`, h.body);
+    }
+  }
+  assert.ok(SEEN.mcpAuth.length > 0 && SEEN.mcpAuth.every((a) => a === null), 'the MCP never got an Authorization');
 });

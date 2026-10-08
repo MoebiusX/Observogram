@@ -1338,3 +1338,13 @@ run could post through each, never a value or an origin — and the server's
 start tells its operator about every set hook a run would refuse, every name
 another org's id shadows, and every name no org owns. Tests: 1397 → 1399
 (two more in `server/test-notify-target-policy.mjs`).
+
+Then the rule takes effect. A server run of a journey that notifies resolves
+its hook before anything runs — the org's own hook, set, its values sound and
+its origin allowed — or answers 400 saying what to fix and who fixes it, with
+no record, no row and nothing sent, so a refused run never becomes the next
+run's baseline; without sign-in such a run is answered only to a request sent
+straight to a loopback address. Capture refuses any other name, the audit
+rows name the hook (never its URL), and records written before are served
+without the values undici quoted into them. Tests: 1399 → 1413 (14 more in
+`server/test-notify-target-policy.mjs`).

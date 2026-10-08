@@ -60,14 +60,14 @@ import { workspaceInfo, writeLivePack, readLivePack, LIVE_PACK_FILE } from './wo
 import { registerPack, uploadsMap, ensureOrgLoaded, touchPack, clearPacks, contentHash, slugify } from './pack-registry.mjs';
 import {
   listJourneys, loadJourneyDef, runJourney, readJourneyRuns, saveJourneyDef, validateGateStack,
-  validateSchedule, validateStackBudget, validateNotify,
+  validateSchedule, validateStackBudget, validateNotify, notifyTargetOf, scrubNotifyError,
 } from '../tools/lib/journey.mjs';
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
 import { describeProxyAuth } from './auth-proxy.mjs';
 import { stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
 import { mcpCallerOf, mcpRefusalBody, redactTarget } from './mcp-target-policy.mjs';
-import { notifyBootReport, notifyHooksOf } from './notify-target-policy.mjs';
+import { captureNotifyRefusal, notifyBootReport, notifyHooksOf, notifyPostureRefusal, resolveJourneyNotify } from './notify-target-policy.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
 import { auditAfter, actorForRecord, bounded, finite } from './audit-after.mjs';
@@ -83,7 +83,7 @@ import { abortAllLiveJobs } from './live-jobs.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
 import { journeyPackBSource, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
 import { conformanceWaivers, listWaiverViews } from './waiver-admin.mjs';
-import { authGate, orgContext, authorize, effectiveRoleOf, rankOf, rankOfRole } from './authz.mjs';
+import { authGate, orgContext, authorize, effectiveRoleOf, listenOf, rankOf, rankOfRole } from './authz.mjs';
 import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
 import { runWithOrg, currentOrg, orgWorkspaceRoot, baseWorkspaceRoot, orgRootOf } from './tenancy.mjs';
@@ -887,6 +887,11 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
       let loadError = null;
       try { def = loadJourneyDef(name, { allowPath: false }); } catch (e) { loadError = e.message; }
       const lastRun = readJourneyRuns(name, { limit: 1 })[0] || null;
+      // A journey whose notification a server run would refuse says so —
+      // the run's own text, which names who acts (the server's operator, or
+      // whoever holds the workspace); never for a journey a run would
+      // notify through its org's hook.
+      const problem = def?.notify ? resolveJourneyNotify(currentStore(), def.notify, { org: currentOrg(), journey: def.name }).refused : null;
       return {
         name,
         loadError,
@@ -896,12 +901,16 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
         scope: { env: def?.env || null, service: def?.service || null, scopeMode: def?.scopeMode || null },
         // Step 5: the declared cadence (parsed the way the CLI parses it —
         // cadenceMs null with a note for an irregular cron), the posture
-        // budget inputs and the notify block as env var NAMES only. No
-        // computation here: the journeys view derives the posture line
-        // from the run history with the same browser-safe helpers.
+        // budget inputs and the notify block as env var NAMES only (with
+        // `problem` when a run would refuse it). No computation here: the
+        // journeys view derives the posture line from the run history with
+        // the same browser-safe helpers.
         schedule: parsedSchedule(def),
         stackBudget: def?.stackBudget ?? null,
-        notify: def?.notify ? { urlEnv: def.notify.urlEnv, authEnv: def.notify.authEnv ?? null, on: def.notify.on ?? NOTIFY_DEFAULT_POLICY, format: def.notify.format ?? NOTIFY_DEFAULT_FORMAT } : null,
+        notify: def?.notify ? {
+          urlEnv: def.notify.urlEnv, authEnv: def.notify.authEnv ?? null, on: def.notify.on ?? NOTIFY_DEFAULT_POLICY, format: def.notify.format ?? NOTIFY_DEFAULT_FORMAT,
+          ...(problem ? { problem } : {}),
+        } : null,
         lastRun: lastRun && {
           startedAt: lastRun.startedAt,
           outcome: lastRun.outcome,
@@ -960,11 +969,19 @@ app.get('/api/journeys/notify-hooks', authorize('GET /api/journeys/notify-hooks'
 });
 
 // GET /api/journeys/:name/runs — run history newest first (the
-// drift-over-time series behind the panel's trend sparkline).
+// drift-over-time series behind the panel's trend sparkline). A record is
+// served as written but for its notify.error, which goes through
+// scrubNotifyError (tools/lib/journey.mjs): a record written before the
+// follow-up journey-notify-env-ownership — or by an older CLI on the shared
+// workspace — may hold undici's echo of the bearer token or of a hook URL
+// with credentials, and every member reads these records.
+const servedRun = (run) => (run?.notify && typeof run.notify === 'object' && typeof run.notify.error === 'string'
+  ? { ...run, notify: { ...run.notify, error: scrubNotifyError(run.notify.error) } }
+  : run);
 app.get('/api/journeys/:name/runs', authorize('GET /api/journeys/:name/runs'), (req, res) => {
   const limit = Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || 30));
   try {
-    res.json({ runs: readJourneyRuns(req.params.name, { limit }) });
+    res.json({ runs: readJourneyRuns(req.params.name, { limit }).map(servedRun) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1003,14 +1020,30 @@ app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/sched
 // fails: the run succeeded, the outcome is data. 404 for unknown names,
 // 502 when a pack source can't be resolved (live MCP down etc.).
 //
+// A journey with `notify` posts to its org's notify hook (the follow-up
+// journey-notify-env-ownership, server/notify-target-policy.mjs), resolved
+// before anything runs, after the Pack B target: without sign-in only a
+// request sent straight to a loopback address on a loopback bind runs it
+// (403 posture otherwise — the hook's token is a server-held credential);
+// then the hook — the org's own OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL,
+// solely owned, with that hook's own _TOKEN, its values sound and its
+// origin allowed — or 400 with the sentence that says what to fix and who
+// fixes it. A refusal runs nothing, writes no record and no row, and sends
+// nothing: a refused run can never become the next run's baseline. The
+// engine is handed the resolved target and reads no variable a definition
+// names.
+//
 // The audit (STORE_PLAN slice 5): one journey.run row for every attempt
-// past the 404 and the Pack B target refusal, written after the engine returned or threw — on the 200
+// past the 404, the Pack B target refusal and the notify refusals, written after the engine returned or threw — on the 200
 // path the record's seven scalars; on the 502 path the same keys from the
 // route's own clock, the outcome `vantage-lost` when a live source lost its
 // vantage (the engine wrote a run record and may have notified) else
 // `error` (no record exists). Never the error's message: it may carry a URL
-// or a credential. A failed insert never fails the run: `auditError` on
-// the response, one line on stderr.
+// or a credential. A journey with `notify` adds `notify: { urlEnv, status,
+// attempts }` — the hook's variable name, sent | skipped | failed (null when
+// no record exists) and how many requests left the server — never any part
+// of the URL. A failed insert never fails the run: `auditError` on the
+// response, one line on stderr.
 app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), async (req, res) => {
   let def;
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
@@ -1024,7 +1057,23 @@ app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), a
   const usesMcp = !!def.packB?.mcp && (!def.packB.file || def.inventory !== undefined);
   const mcpTarget = usesMcp ? resolveJourneyMcp(currentStore(), def.packB.mcp, { caller: mcpCallerOf(req) }) : null;
   if (mcpTarget?.status) return res.status(mcpTarget.status).json(mcpRefusalBody(mcpTarget));
+  let notifyHook = null;
+  if (def.notify) {
+    const posture = notifyPostureRefusal({ ...mcpCallerOf(req), host: listenOf(req).host });
+    if (posture) return res.status(posture.status).json({ ok: false, error: posture.error, denied: posture.denied });
+    notifyHook = resolveJourneyNotify(currentStore(), def.notify, { org: currentOrg(), journey: def.name });
+    if (notifyHook.refused) return res.status(400).json({ ok: false, error: notifyHook.refused });
+  }
   const t0 = new Date();
+  // The row's notify key (only for a journey with `notify`): from the
+  // record's delivery, or — no record — nothing left the server.
+  const notifyOf = (delivery) => (def.notify ? {
+    notify: {
+      urlEnv: bounded(def.notify.urlEnv),
+      status: ['sent', 'skipped', 'failed'].includes(delivery?.status) ? delivery.status : null,
+      attempts: Number.isInteger(delivery?.attempts) ? delivery.attempts : 0,
+    },
+  } : {});
   const runRow = (detail) => ({ action: 'journey.run', targetKind: 'journey', targetId: bounded(def.name), detail });
   try {
     // A crawl: walk, a file: source and an inventory site read only this
@@ -1036,6 +1085,7 @@ app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), a
         if (!mcpTarget) throw new Error(`journey ${def.name}: Pack B's MCP was not resolved`);
         return mcpTarget;
       },
+      resolveNotify: (n) => notifyTargetOf(n, { url: notifyHook.url, auth: notifyHook.auth }),
     });
     const auditError = auditAfter(req, runRow({
       startedAt: bounded(record.startedAt), outcome: bounded(record.outcome, 100),
@@ -1043,12 +1093,15 @@ app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), a
       gradePass: typeof record.grade?.pass === 'boolean' ? record.grade.pass : null,
       breaches: Array.isArray(record.gate?.breaches) ? record.gate.breaches.length : null,
       tookMs: finite(record.tookMs),
+      ...notifyOf(record.notify),
     }), { tag: 'journey' });
     res.json({ ok: true, record, ...(auditError ? { auditError } : {}) });
   } catch (e) {
     const auditError = auditAfter(req, runRow({
       startedAt: t0.toISOString(), outcome: def.packB?.mcp && e?.vantageLost ? 'vantage-lost' : 'error',
       alignmentPct: null, gradeScore: null, gradePass: null, breaches: null, tookMs: Date.now() - t0.getTime(),
+      // The vantage-lost path posted from the record it kept (runJourney sets e.notify).
+      ...notifyOf(e?.notify),
     }), { tag: 'journey' });
     res.status(502).json({ ok: false, error: redactTarget(String(e.message), mcpTarget), ...(auditError ? { auditError } : {}) });
   }
@@ -1064,7 +1117,8 @@ app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), a
 // org's registered endpoint whose safe URL is the annotation's
 // ({ url, endpointId }); without one, an admin's capture keeps the URL
 // (typed-URL and origin rules) and anyone else's saves Pack B as a file
-// (R4, decision D6).
+// (R4, decision D6). A `notify` names one of the org's notify hooks — no
+// role types a webhook URL (journey-notify-env-ownership).
 app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req, res) => {
   const b = req.body || {};
   const name = typeof b.name === 'string' ? b.name.trim() : '';
@@ -1118,7 +1172,14 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
     if (def.gate.stack !== undefined) validateGateStack(def.gate.stack, name);
     if (def.schedule !== undefined) validateSchedule(def.schedule, name);
     if (def.stackBudget !== undefined) validateStackBudget(def.stackBudget, name);
-    if (def.notify !== undefined) validateNotify(def.notify, name);
+    if (def.notify !== undefined) {
+      validateNotify(def.notify, name);
+      // A notify names one of the org's notify hooks — the listing's
+      // (GET /api/journeys/notify-hooks), set, its values sound and its
+      // origin allowed — or nothing is saved: a run checks the same again.
+      const refused = captureNotifyRefusal(currentStore(), def.notify, { org: currentOrg() });
+      if (refused) throw new Error(refused);
+    }
     saved = saveJourneyDef(name, def, {
       banner: [
         `Captured from a studio session on ${new Date().toISOString()}.`,
@@ -1133,12 +1194,15 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
   }
   // The row, after the file: the two pack ids and whether Pack B was saved
   // as a live mcp: source — never the paths or the mcp.url the file holds;
-  // the three scope scalars cut to the row's text rule.
+  // the three scope scalars cut to the row's text rule; with a notify, the
+  // hook's variable names (who pointed the journey at which hook), never a
+  // value.
   const auditError = auditAfter(req, {
     action: 'journey.capture', targetKind: 'journey', targetId: bounded(saved.name),
     detail: {
       packA: metaA.id, packB: metaB.id, live: Boolean(packB.mcp),
       env: bounded(def.env), service: bounded(def.service), scopeMode: bounded(def.scopeMode),
+      ...(def.notify !== undefined ? { notify: { urlEnv: bounded(def.notify.urlEnv), authEnv: bounded(def.notify.authEnv) } } : {}),
     },
   }, { tag: 'journeys' });
   res.json({ ok: true, name: saved.name, ...(auditError ? { auditError } : {}) });

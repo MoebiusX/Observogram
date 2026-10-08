@@ -1720,7 +1720,8 @@ test('the AuthZ matrix — identity posture: every /api route × every principal
     acme: { name: 'Acme', members: { ada: 'admin', oscar: 'operator', vera: 'viewer', dan: 'viewer', owen: 'viewer' } },
     bravo: { name: 'Bravo', members: { bob: 'admin', mia: 'admin' } },
   }, join(ws, 'orgs.json'));
-  const srv = await serve(ws, { env: { OBSERVOGRAM_API_TOKEN: TOKEN, OBSERVOGRAM_API_TOKEN_LABEL: 'ci-bot' } });
+  // acme's notify hook (journey-notify-env-ownership): the capture row below names it.
+  const srv = await serve(ws, { env: { OBSERVOGRAM_API_TOKEN: TOKEN, OBSERVOGRAM_API_TOKEN_LABEL: 'ci-bot', OBSERVOGRAM_ORG_ACME_NOTIFY_AUTHZ_URL: 'http://127.0.0.1:9/authz-hook' } });
   try {
     for (const [script, args] of [[ORG_ADMIN, ['remove-member', 'default', 'otto']], [ORG_ADMIN, ['add-member', 'acme', 'mia', '--role', 'viewer']]]) {
       const r = cli(script, args, ws);
@@ -1978,6 +1979,14 @@ test('the AuthZ matrix — identity posture: every /api route × every principal
     assert.deepEqual(await auditRowsAfter(ws, afterReg), [
       ['journey.capture', 'oscar', 'acme', 'authz-capture', { packA: id, packB: id, live: false, env: null, service: null, scopeMode: null }],
     ], 'the capture: one journey.capture row by oscar, in acme');
+    // A capture that notifies (journey-notify-env-ownership): the row adds the
+    // hook's variable names, never a value.
+    afterReg = await auditSeq(ws);
+    const capN = await call(srv.base, ['POST', '/api/journeys/capture'], { headers: oscar, body: JSON.stringify({ name: 'authz-notify', packAId: id, packBId: id, notify: { urlEnv: 'OBSERVOGRAM_ORG_ACME_NOTIFY_AUTHZ_URL' } }) });
+    assert.equal(capN.json?.ok, true, capN.text.slice(0, 200));
+    assert.deepEqual(await auditRowsAfter(ws, afterReg), [
+      ['journey.capture', 'oscar', 'acme', 'authz-notify', { packA: id, packB: id, live: false, env: null, service: null, scopeMode: null, notify: { urlEnv: 'OBSERVOGRAM_ORG_ACME_NOTIFY_AUTHZ_URL', authEnv: null } }],
+    ], 'a capture naming acme\'s notify hook: its row names the hook\'s variables');
     afterReg = await auditSeq(ws);
     const wipe = await call(srv.base, ['DELETE', '/api/uploads'], { headers: oscar });
     assert.equal(wipe.json?.dropped, 1, wipe.text);

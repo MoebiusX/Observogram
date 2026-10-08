@@ -50,6 +50,8 @@ process.env.OBSERVOGRAM_ORG_DELTA_MCP_ORIGINS = 'https://delta.mcp.test';
 // One notify hook per org (server/notify-target-policy.mjs): the hooks
 // listing serves each org its own, never another's.
 for (const org of ['ACME', 'BRAVO', 'DEFAULT', 'DELTA']) process.env[`OBSERVOGRAM_ORG_${org}_NOTIFY_TENANCY_URL`] = `http://127.0.0.1:9/${org.toLowerCase()}-hook`;
+// acme's own notify origin list: it never admits another org's hook.
+process.env.OBSERVOGRAM_ORG_ACME_NOTIFY_ORIGINS = 'https://hooks.tenancy.test';
 // acme's configured snapshot scope (server/live-jobs.mjs): never served to another org.
 process.env.OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_PREFIXES = 'acme_';
 // The MCP server-settings pass-through on (rebadge batch 4; read per request),
@@ -655,6 +657,58 @@ try {
     assert(r.status === 200 && j.hooks.map(h => h.urlEnv).join() === `OBSERVOGRAM_ORG_${org}_NOTIFY_TENANCY_URL` && j.hooks[0].usable === true
       && !JSON.stringify(j).includes(`OBSERVOGRAM_ORG_${other}_`) && !JSON.stringify(j).includes('-hook'),
     `${who}'s GET /api/journeys/notify-hooks lists ${org.toLowerCase()}'s hook only, by name`, j);
+  }
+  // A journey that notifies, in acme: its capture names acme's hook and its
+  // rows say so — the variable's name, never a value; the run posts to the
+  // hook (nothing listens there: a failed delivery, two attempts).
+  {
+    const JSON_ALICE = { Cookie: alice, 'Content-Type': 'application/json', 'X-Observogram-CSRF': '1' };
+    const JSON_BOB = { Cookie: bob, 'Content-Type': 'application/json', 'X-Observogram-CSRF': '1' };
+    const ACME_HOOK = 'OBSERVOGRAM_ORG_ACME_NOTIFY_TENANCY_URL';
+    let seq = auditSeq();
+    r = await fetch(`${base}/api/journeys/capture`, {
+      method: 'POST', headers: JSON_ALICE,
+      body: JSON.stringify({ name: 'acme-n', packAId: pay.registered?.id, packBId: 'production-curated', notify: { urlEnv: ACME_HOOK, on: 'always' } }),
+    });
+    j = await r.json();
+    let rows = rowsAfter(seq);
+    assert(j.ok === true && JSON.stringify(rows) === JSON.stringify([['journey.capture', 'alice', 'acme', 'acme-n', {
+      packA: pay.registered?.id, packB: 'production-curated', live: false, env: null, service: null, scopeMode: null, notify: { urlEnv: ACME_HOOK, authEnv: null },
+    }]]), "alice's capture naming acme's hook: one journey.capture row with notify { urlEnv, authEnv: null }", [j, rows]);
+    seq = auditSeq();
+    r = await fetch(`${base}/api/journeys/acme-n/run`, { method: 'POST', headers: JSON_ALICE, body: '{}' });
+    j = await r.json();
+    rows = rowsAfter(seq);
+    assert(r.status === 200 && j.record?.notify?.status === 'failed' && rows.length === 1
+      && JSON.stringify(Object.keys(rows[0][4])) === JSON.stringify(['startedAt', 'outcome', 'alignmentPct', 'gradeScore', 'gradePass', 'breaches', 'tookMs', 'notify'])
+      && JSON.stringify(rows[0][4].notify) === JSON.stringify({ urlEnv: ACME_HOOK, status: 'failed', attempts: 2 }) && !JSON.stringify(rows).includes('127.0.0.1'),
+    "alice's run of acme-n: its journey.run row adds notify { urlEnv, status: 'failed', attempts: 2 } — no URL", [r.status, j.record?.notify, rows]);
+    // Another org's hook is never acme's, and acme's origin list never admits
+    // one: bravo's hook at an origin acme lists is still unlisted for bravo.
+    process.env.OBSERVOGRAM_ORG_BRAVO_NOTIFY_FAR_URL = 'https://hooks.tenancy.test/bravo-far';
+    try {
+      seq = auditSeq();
+      r = await fetch(`${base}/api/journeys/capture`, {
+        method: 'POST', headers: JSON_ALICE,
+        body: JSON.stringify({ name: 'acme-x', packAId: pay.registered?.id, packBId: 'production-curated', notify: { urlEnv: 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_FAR_URL' } }),
+      });
+      j = await r.json();
+      assert(r.status === 400 && j.error.startsWith('notify.urlEnv "OBSERVOGRAM_ORG_BRAVO_NOTIFY_FAR_URL" is not a notify hook of org \'acme\''), "alice's capture naming bravo's hook → 400, not acme's", j);
+      r = await fetch(`${base}/api/journeys/capture`, {
+        method: 'POST', headers: JSON_BOB,
+        body: JSON.stringify({ name: 'bravo-x', packAId: 'production-curated', packBId: 'production-curated', notify: { urlEnv: 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_FAR_URL' } }),
+      });
+      j = await r.json();
+      assert(r.status === 400 && j.error === "the webhook in OBSERVOGRAM_ORG_BRAVO_NOTIFY_FAR_URL is not on this machine, and no notify origin is listed, so the server posts only to this machine — the server's operator lists that URL's origin (scheme://host[:port]) in OBSERVOGRAM_NOTIFY_ORIGINS or OBSERVOGRAM_ORG_BRAVO_NOTIFY_ORIGINS, comma-separated, and restarts the server",
+        "bob's capture of bravo's hook at an origin only acme lists → 400 ORIGIN, no list (acme's list is not bravo's)", j);
+      assert(JSON.stringify(rowsAfter(seq)) === '[]', 'the refused captures write no row');
+      r = await fetch(`${base}/api/journeys/notify-hooks`, { headers: { Cookie: bob } });
+      j = await r.json();
+      assert(JSON.stringify(j.hooks.map(h => [h.hook, h.usable])) === JSON.stringify([['FAR', false], ['TENANCY', true]]) && !JSON.stringify(j).includes('hooks.tenancy.test'),
+        "bob's listing: bravo's far hook is not usable — acme's origin list never admits it", j.hooks);
+    } finally {
+      delete process.env.OBSERVOGRAM_ORG_BRAVO_NOTIFY_FAR_URL;
+    }
   }
   const runsBefore = [...tree(join(WORKSPACE, 'orgs', 'acme', 'runs')), ...tree(join(WORKSPACE, 'orgs', 'bravo', 'runs'))];
   for (const name of ['acme-j', '../../orgs/acme/journeys/acme-j.journey.yaml', acmeJourney]) {
