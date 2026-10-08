@@ -94,8 +94,8 @@ const { test, before, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
-const { join, resolve, dirname } = await import('node:path');
-const { fileURLToPath } = await import('node:url');
+const { join, resolve, dirname, isAbsolute } = await import('node:path');
+const { fileURLToPath, pathToFileURL } = await import('node:url');
 
 const { hashPassword } = await import('./auth.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
@@ -113,7 +113,8 @@ const SECRET = `S3cr3t-${Math.random().toString(36).slice(2, 10)}${Math.random()
 const API_KEY = `k3y-${Math.random().toString(36).slice(2, 12)}`;
 
 async function loadPlaywright() {
-  try { return { pw: await import(PLAYWRIGHT) }; }
+  // An absolute path, a Windows one too, is imported as its file URL (import() takes a URL or a package name).
+  try { return { pw: await import(isAbsolute(PLAYWRIGHT) ? pathToFileURL(PLAYWRIGHT).href : PLAYWRIGHT) }; }
   catch (e) { return { error: `cannot import ${PLAYWRIGHT}: ${e.message.split('\n')[0]}` }; }
 }
 

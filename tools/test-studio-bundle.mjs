@@ -42,7 +42,8 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve, dirname, sep } from 'node:path';
+import { join, resolve, dirname, isAbsolute, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import {
   collectModuleGraph, rewriteSpecifiers, assertRewritten, inlineJson, styleBlock, buildStudioBundle,
@@ -893,7 +894,8 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
 
 async function loadPlaywright() {
   const spec = process.env.OBSERVOGRAM_PLAYWRIGHT || 'playwright';
-  try { return { pw: await import(spec) }; }
+  // An absolute path, a Windows one too, is imported as its file URL (import() takes a URL or a package name).
+  try { return { pw: await import(isAbsolute(spec) ? pathToFileURL(spec).href : spec) }; }
   catch (e) { return { error: `cannot import ${spec}: ${e.message.split('\n')[0]}` }; }
 }
 

@@ -27,8 +27,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { get as httpGet } from 'node:http';
 import { boot, serve, signIn } from './fixtures/serve-child.mjs';
 
@@ -217,7 +217,8 @@ test('REFUSED: a brand file that is not there refuses the start, naming the path
 
 async function loadPlaywright() {
   const spec = process.env.OBSERVOGRAM_PLAYWRIGHT || 'playwright';
-  try { return { pw: await import(spec) }; }
+  // An absolute path, a Windows one too, is imported as its file URL (import() takes a URL or a package name).
+  try { return { pw: await import(isAbsolute(spec) ? pathToFileURL(spec).href : spec) }; }
   catch (e) { return { error: `cannot import ${spec}: ${e.message.split('\n')[0]}` }; }
 }
 
