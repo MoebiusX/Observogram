@@ -60,6 +60,7 @@ const PATHNAME_ALLOWED = Object.freeze({
   'server/routes/mcp-settings.mjs': 2,  // an MCP server's settings URL path, for a refusal and the audit row
   'server/test-auth-oidc.mjs': 4,       // the fake IdP's HTTP request paths
   'tools/build-studio-bundle.mjs': 1,   // a --pack-url (http) path, for an id
+  'tools/lib/journey.mjs': 1,           // a notify hook URL's path and query, redacted from a delivery error
   'tools/record-mcp-fixtures.mjs': 1,   // an MCP URL, printed without its query
 });
 // P6: the fixture's two call forms and what a well-formed argument is.

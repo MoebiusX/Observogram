@@ -80,6 +80,7 @@
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync, openSync, readSync, closeSync, realpathSync } from 'node:fs';
 import { resolve, join, dirname, extname, basename, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import { parse as parseYaml, emit as emitYaml } from './mini-yaml.mjs';
 import { validateCanonical, SPEC_SCHEMA_PATH } from './validator.mjs';
 import { adapt } from './adapter.mjs';
@@ -133,15 +134,44 @@ export function listJourneys() {
 // Persist a journey definition into the workspace. Used by the studio's
 // "save this comparison as a journey" capture; the file is plain YAML the
 // user can edit (e.g. swap a frozen pack file for a crawl: source).
+//
+// The file is exactly what the caller validated, or nothing: every banner
+// line is one comment line (a CR, LF, U+2028 or U+2029 in it becomes a
+// space — a pack label with a line break could otherwise write a key of its
+// own, a `notify:` block capture never checked), and the text is parsed
+// before it is written and must read back deep-equal to { name, ...def }
+// (a key or a string mini-yaml cannot round-trip — a multi-line scope
+// scalar, a key with a line break — is refused). On a refusal nothing is
+// written and a previous file of that name is untouched; the message names
+// the first top-level key that differs, never a value.
 export function saveJourneyDef(name, def, { banner } = {}) {
   const safe = sanitizeName(name);
   if (!safe) throw new Error('journey name required');
   if (!def?.packA || !def?.packB) throw new Error('journey def needs packA and packB');
+  const head = (banner || []).map(l => `# ${String(l).replace(/[\r\n\u2028\u2029]/g, ' ')}`).join('\n');
+  const expected = { name: safe, ...def };
+  const text = (head ? head + '\n' : '') + emitYaml(expected);
+  const reason = readBackMismatch(text, expected);
+  if (reason) throw new Error(`journey ${safe}: the definition does not read back as written (${reason}) — nothing was saved`);
   mkdirSync(journeysDir(), { recursive: true });
   const path = join(journeysDir(), `${safe}.journey.yaml`);
-  const head = (banner || []).map(l => `# ${l}`).join('\n');
-  writeFileSync(path, (head ? head + '\n' : '') + emitYaml({ name: safe, ...def }));
+  writeFileSync(path, text);
   return { name: safe, path };
+}
+
+// Why `text` does not parse back to `expected`, naming a top-level key and
+// never a value; null when it does.
+function readBackMismatch(text, expected) {
+  let back;
+  try { back = parseYaml(text); } catch { return 'it does not parse as YAML'; }
+  if (isDeepStrictEqual(back, expected)) return null;
+  if (!back || typeof back !== 'object' || Array.isArray(back)) return 'it is not a mapping';
+  for (const k of [...new Set([...Object.keys(expected), ...Object.keys(back)])]) {
+    if (!Object.hasOwn(back, k)) return `${JSON.stringify(k)} is missing`;
+    if (!Object.hasOwn(expected, k)) return `${JSON.stringify(k)} appears`;
+    if (!isDeepStrictEqual(back[k], expected[k])) return `${JSON.stringify(k)} differs`;
+  }
+  return 'it differs';
 }
 
 // Resolve a journey by name (workspace journeys/) or by literal file path.
@@ -226,7 +256,9 @@ export function validateNotify(value, journeyName = '?') {
 // kept in a local by the caller, never on `def` or the record. An unset
 // urlEnv/authEnv is a configuration error of the same class as
 // packB.mcp.authEnv (exit 2, no record). null when the definition has no
-// notify block.
+// notify block. The CLI's: it reads whichever names the definition holds
+// from its invoker's environment. A server run never calls it — the server
+// resolves the org's hook itself and hands runJourney a resolveNotify.
 export function resolveNotifyTarget(def) {
   const n = def?.notify;
   if (!n) return null;
@@ -234,6 +266,19 @@ export function resolveNotifyTarget(def) {
   if (!url) throw new Error(`journey ${def.name}: notify.urlEnv names ${n.urlEnv}, but that env var is not set`);
   const auth = n.authEnv ? (process.env[n.authEnv] || null) : null;
   if (n.authEnv && !auth) throw new Error(`journey ${def.name}: notify.authEnv names ${n.authEnv}, but that env var is not set`);
+  return notifyTargetOf(n, { url, auth });
+}
+
+// The target of a notify block from values already resolved — the URL and
+// the bearer token (null for none) as they are sent; rawUrl/rawAuth the
+// variables' values as read, when the caller trimmed them. `secrets` (in
+// this local target only, never on the record) is what a delivery error is
+// redacted by: the URL raw and trimmed and its href, origin, host, hostname
+// and path with query; the token raw, trimmed of HTTP whitespace, and each
+// of its lines — each of at least NOTIFY_SECRET_MIN characters (a shorter
+// one would mangle fixed texts such as `HTTP 500`; scrubNotifyError is the
+// backstop), longest first.
+export function notifyTargetOf(n, { url, auth = null, rawUrl = url, rawAuth = auth } = {}) {
   const format = NOTIFY_FORMATS.includes(n.format) ? n.format : NOTIFY_DEFAULT_FORMAT;
   const raw = Number.isInteger(n.timeoutMs) ? n.timeoutMs : NOTIFY_TIMEOUT_DEFAULT_MS;
   return {
@@ -247,7 +292,55 @@ export function resolveNotifyTarget(def) {
     timeoutMs: Math.min(NOTIFY_TIMEOUT_MAX_MS, Math.max(NOTIFY_TIMEOUT_MIN_MS, raw)),
     urlEnv: n.urlEnv,
     studioUrl: typeof n.studioUrl === 'string' ? n.studioUrl.replace(/\/+$/, '') : null,
+    secrets: notifySecretsOf({ urls: [rawUrl, url], tokens: [rawAuth, auth] }),
   };
+}
+
+const NOTIFY_SECRET_MIN = 4;
+const trimHttpWhitespace = (v) => String(v).replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '');
+function notifySecretsOf({ urls, tokens }) {
+  const set = new Set();
+  const add = (v) => { if (typeof v === 'string' && v.length >= NOTIFY_SECRET_MIN) set.add(v); };
+  for (const u of urls) {
+    if (typeof u !== 'string') continue;
+    add(u);
+    add(u.trim());
+    let p = null;
+    try { p = new URL(u.trim()); } catch { /* not a URL: the strings above */ }
+    if (!p) continue;
+    add(p.href);
+    if (p.origin !== 'null') add(p.origin);
+    add(p.host);
+    add(p.hostname);
+    add(p.pathname + p.search);
+  }
+  for (const t of tokens) {
+    if (typeof t !== 'string') continue;
+    add(t);
+    const trimmed = trimHttpWhitespace(t);
+    add(trimmed);
+    for (const line of trimmed.split(/\r\n|\r|\n/)) { add(line); add(trimHttpWhitespace(line)); }
+  }
+  return [...set].sort((a, b) => b.length - a.length);
+}
+
+// The pattern backstop for undici's two texts that quote a value: the
+// header value it refused (the bearer token, trimmed) and the URL with
+// credentials it refused (raw, as the variable held it). It catches what a
+// value list cannot: a token shorter than NOTIFY_SECRET_MIN, a spelling the
+// list does not hold.
+export function scrubNotifyError(text) {
+  return String(text ?? '')
+    .replace(/(Headers\.(?:append|set): )"[\s\S]*"( is an invalid header value\.)/, '$1"<redacted>"$2')
+    .replace(/(Request cannot be constructed from a URL that includes credentials: )[\s\S]*$/, '$1<redacted>');
+}
+
+// A delivery error as it may land on the record: the target's secrets by
+// value, then the pattern backstop, then any //user:pass@ left.
+function notifyErrorText(text, target) {
+  let out = String(text ?? '');
+  for (const secret of target?.secrets ?? []) out = out.split(secret).join('<redacted>');
+  return redactUrlCredentials(scrubNotifyError(out));
 }
 
 // Step 5: the bounded POST. One AbortController per attempt; attempt 2
@@ -297,7 +390,9 @@ function notifyTextLine(record) {
 // Step 5: decide, build, post — and report on the record as `notify`:
 // { status: sent|skipped|failed, reason, triggers, httpStatus, attempts,
 //   tookMs, urlEnv, error }. The URL itself never lands on the record —
-// only the env var NAME. Never throws: a thrown notifier lands in `error`.
+// only the env var NAME — and no part of it or of the token does: every
+// `error` goes through notifyErrorText. Never throws: a thrown notifier
+// lands in `error`.
 export async function deliverNotification(def, target, record, previousRun, notifier = postNotification) {
   if (!target) return null;
   const decision = notifyDecision({ policy: target.on, record, previousRun });
@@ -316,10 +411,10 @@ export async function deliverNotification(def, target, record, previousRun, noti
       httpStatus: typeof r?.httpStatus === 'number' ? r.httpStatus : null,
       attempts: typeof r?.attempts === 'number' ? r.attempts : 0,
       tookMs: typeof r?.tookMs === 'number' ? r.tookMs : 0,
-      error: r?.sent ? null : redactUrlCredentials(r?.error ?? 'notifier returned no result'),
+      error: r?.sent ? null : notifyErrorText(r?.error ?? 'notifier returned no result', target),
     };
   } catch (e) {
-    return { ...base, status: 'failed', attempts: 1, error: redactUrlCredentials(String(e?.message || e)) };
+    return { ...base, status: 'failed', attempts: 1, error: notifyErrorText(String(e?.message || e), target) };
   }
 }
 
@@ -966,14 +1061,20 @@ export function pruneLiveSnapshots(recordFiles, liveFiles) {
 // crawlScope: { base, ownRoot } from the server (a crawl: walk, a file:
 // source and an inventory site read only the org's own part of the
 // workspace, or outside it); null for the CLI.
-export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null } = {}) {
+// resolveNotify: `(def.notify) → target` from the server, the twin of
+// resolveMcp — the server resolves the org's notify hook itself (its name
+// rule, its values and its origin list, before anything runs) and hands
+// the target over as notifyTargetOf builds it, so the engine reads no
+// variable a definition names. null for the CLI: resolveNotifyTarget reads
+// the names from the invoker's environment.
+export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null, resolveNotify = null } = {}) {
   def.__baseDir = baseDir || (def.__source ? dirname(def.__source) : '.');
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
   // Step 5: the notify target is resolved before anything else — an unset
   // urlEnv/authEnv is a configuration error (exit 2, no record), like an
   // unset packB.mcp.authEnv. Kept in this local only.
-  const notifyTarget = resolveNotifyTarget(def);
+  const notifyTarget = def.notify ? (resolveNotify ? await resolveNotify(def.notify) : resolveNotifyTarget(def)) : null;
 
   const a = await resolvePackA(def, def.__baseDir, crawlScope);
   let b;
@@ -1005,6 +1106,8 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
         lost.notify = await deliverNotification(def, notifyTarget, lost, previousRun, notifier);
         writeRunRecord(def.name, startedAt, lost);
       }
+      // The record's delivery, for a caller that rows it (the server's 502).
+      if (e && typeof e === 'object') e.notify = lost.notify;
     }
     throw e;
   }

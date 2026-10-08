@@ -59,7 +59,7 @@ publishes:
 
 | Module | Why it is out |
 | --- | --- |
-| `tools/lib/journey.mjs` | `node:fs/path/url`, an import-time schema read, imports of `studio/diagnostic-grade.mjs` and `studio/verify-deploy.mjs`, a dynamic import of `tools/fetch-live-pack.mjs` — the server-side journey runner, the documented browser-safety exception |
+| `tools/lib/journey.mjs` | `node:fs/path/url/util`, an import-time schema read, imports of `studio/diagnostic-grade.mjs` and `studio/verify-deploy.mjs`, a dynamic import of `tools/fetch-live-pack.mjs` — the server-side journey runner, the documented browser-safety exception |
 | `tools/lib/brand-env.mjs` | `node:fs/path` and `process.env` — server-side brand/env resolution |
 | `tools/lib/grafana-mcp-bridge.mjs` | a `node:http` server and network calls — a bridge process |
 | `tools/lib/harness.mjs` | `process.stdout` / `process.exit` — the repo's own test harness |

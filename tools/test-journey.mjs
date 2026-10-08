@@ -43,6 +43,7 @@ const {
   chainStatusLine, liveVersions, livePackDecision, pruneLiveSnapshots, readLivePack, KEEP_LIVE_PACK_POLICIES, LIVE_PACK_PATH_RE,
   causeLine, transitionGotWorse, resolveDeployArtifact,
   notifyStatusLine, postNotification, resolveNotifyTarget, validateNotify, NOTIFY_POLICIES, NOTIFY_TIMEOUT_DEFAULT_MS,
+  notifyTargetOf, scrubNotifyError,
 inventorySummary, inventoryStatusLine,
 } = await import('./lib/journey.mjs');
 const { chainGotWorse } = await import('./lib/journey-notify.mjs');
@@ -1494,6 +1495,82 @@ try {
         try { await runJourney(loadJourneyDef('lost-notify')); } catch { /* vantage lost again */ }
         const again = readJourneyRuns('lost-notify')[0];
         assert(again.startedAt !== lostRec.startedAt && again.notify.status === 'skipped' && again.notify.reason === `still vantage-lost since ${lostRec.startedAt}` && hits.length === 0, 'a repeated vantage loss under transitions is skipped, naming the first loss', again.notify);
+      }
+      // (k) the server's seam (journey-notify-env-ownership): with resolveNotify the engine reads no variable
+      // the definition names — the resolver's target is posted, the named variable (a trap receiver, set)
+      // never; the resolver is called once, with def.notify; the vantage-lost path posts through it too and
+      // leaves the record's delivery on the error (e.notify) for the server's 502 row.
+      {
+        const trapHits = [];
+        const trap = createHttpServer((req, res) => { trapHits.push(req.url); res.writeHead(202); res.end(); });
+        await new Promise(r => trap.listen(0, '127.0.0.1', r));
+        process.env.OBSERVOGRAM_TEST_TRAP_URL = `http://127.0.0.1:${trap.address().port}/trap`;
+        process.env.OBSERVOGRAM_TEST_TRAP_TOKEN = 'tok-trap-secret';
+        try {
+          writeFileSync(join(TMP, 'journeys', 'seam.journey.yaml'), [`name: seam`, `packA: { file: ${A} }`, FILE_B, 'notify: { urlEnv: OBSERVOGRAM_TEST_TRAP_URL, authEnv: OBSERVOGRAM_TEST_TRAP_TOKEN, on: always, timeoutMs: 1000 }'].join('\n'));
+          const def = loadJourneyDef('seam');
+          const seen = [];
+          const r = await runJourney(def, { resolveNotify: (n) => { seen.push(n); return notifyTargetOf(n, { url: rxUrl, auth: 'tok-resolved-1' }); } });
+          assert(r.notify.status === 'sent' && hits.length === 1 && hits[0].headers.authorization === 'Bearer tok-resolved-1' && trapHits.length === 0 && seen.length === 1 && seen[0] === def.notify && r.notify.urlEnv === 'OBSERVOGRAM_TEST_TRAP_URL',
+                 'E1 with resolveNotify the resolver\'s target is posted once, the variable the definition names is never read', { notify: r.notify, hits: hits.length, trap: trapHits.length, seen: seen.length });
+          assert(!JSON.stringify(r).includes('tok-resolved-1') && !JSON.stringify(r).includes(rxUrl), 'E1 the resolved URL and token never land on the record');
+          hits.length = 0;
+          const lostPort = await closedLoopbackPort();
+          writeFileSync(join(TMP, 'journeys', 'seam-lost.journey.yaml'), [`name: seam-lost`, `packA: { file: ${A} }`, `packB: { mcp: { url: http://127.0.0.1:${lostPort}/mcp } }`, 'notify: { urlEnv: OBSERVOGRAM_TEST_TRAP_URL, on: breach, timeoutMs: 1000 }'].join('\n'));
+          const seenLost = [];
+          let lostErr = null;
+          try { await runJourney(loadJourneyDef('seam-lost'), { resolveNotify: (n) => { seenLost.push(n); return notifyTargetOf(n, { url: rxUrl }); } }); } catch (e) { lostErr = e; }
+          const lostRec = readJourneyRuns('seam-lost')[0];
+          assert(lostErr?.vantageLost === true && lostRec?.outcome === 'vantage-lost' && hits.length === 1 && trapHits.length === 0 && seenLost.length === 1
+                 && lostErr.notify?.status === 'sent' && JSON.stringify(lostErr.notify) === JSON.stringify(lostRec.notify),
+                 'E2 the vantage-lost path posts through the resolver and leaves the delivery on the error', { err: lostErr?.notify, rec: lostRec?.notify, hits: hits.length, trap: trapHits.length });
+          hits.length = 0;
+        } finally {
+          delete process.env.OBSERVOGRAM_TEST_TRAP_URL;
+          delete process.env.OBSERVOGRAM_TEST_TRAP_TOKEN;
+          await new Promise(r => trap.close(r));
+        }
+      }
+      // (l) the redaction (journey-notify-env-ownership, the CLI's one change): a delivery error carries no part
+      // of the hook's URL — raw or normalised — nor of its token — raw, trimmed or per line. undici quotes a
+      // token it refuses trimmed (a replace by the raw value misses it) and a URL with credentials as written.
+      {
+        const errOf = async (name, url, token, opts = {}) => {
+          process.env.OBSERVOGRAM_TEST_E3_URL = url;
+          if (token === undefined) delete process.env.OBSERVOGRAM_TEST_E3_TOKEN; else process.env.OBSERVOGRAM_TEST_E3_TOKEN = token;
+          writeFileSync(join(TMP, 'journeys', `${name}.journey.yaml`), [`name: ${name}`, `packA: { file: ${A} }`, FILE_B,
+            `notify: { urlEnv: OBSERVOGRAM_TEST_E3_URL${token === undefined ? '' : ', authEnv: OBSERVOGRAM_TEST_E3_TOKEN'}, on: always, timeoutMs: 1000 }`].join('\n'));
+          const r = await runJourney(loadJourneyDef(name), opts);
+          return { notify: r.notify, disk: JSON.stringify(readJourneyRuns(name)[0]) };
+        };
+        try {
+          const HEADER = 'Headers.append: "<redacted>" is an invalid header value.';
+          for (const [name, token, sent] of [['e3-tab', '\tab\ncd  ', 'ab\ncd'], ['e3-lines', 'abc\ndef\n', 'abc\ndef'], ['e3-short', 'x\ny', 'x\ny']]) {
+            const { notify, disk } = await errOf(name, rxUrl, token);
+            assert(notify.status === 'failed' && notify.error === HEADER && hits.length === 0 && !disk.includes(JSON.stringify(sent).slice(1, -1)),
+                   `E3 a token undici refuses (${JSON.stringify(token)}) is redacted on the record`, notify);
+          }
+          const raw = await errOf('e3-raw', 'HTTP://u:p@db.internal.invalid:5432/prod db');
+          assert(raw.notify.error === 'Request cannot be constructed from a URL that includes credentials: <redacted>' && !/db\.internal|prod db|prod%20db|u:p@/.test(raw.disk),
+                 'E3 a URL with credentials undici echoes as written is redacted on the record', raw.notify);
+          const thrown = await errOf('e3-thrown', 'https://hook-host.invalid/T0/B0/path-secret?k=query-secret', 'tok-e3-secret', {
+            notifier: async ({ url, headers }) => { throw new Error(`connect to hook-host.invalid failed for /T0/B0/path-secret?k=query-secret (${url}) with ${headers.Authorization}`); },
+          });
+          assert(thrown.notify.error === 'connect to <redacted> failed for <redacted> (<redacted>) with Bearer <redacted>' && !/hook-host|path-secret|query-secret|tok-e3-secret/.test(thrown.disk),
+                 'E3 a thrown notifier naming the hook\'s host, path, URL and token is redacted by value', thrown.notify);
+          // the pattern backstop alone, and the texts that carry no value stay as they are
+          assert(scrubNotifyError('Headers.append: "Bearer a"b" is an invalid header value.') === HEADER && scrubNotifyError('Request cannot be constructed from a URL that includes credentials: http://u:p@h/x y') === 'Request cannot be constructed from a URL that includes credentials: <redacted>'
+                 && ['HTTP 500', 'timeout after 1000ms', 'boom at https://***@h/', 'fetch failed', ''].every(t => scrubNotifyError(t) === t) && scrubNotifyError(null) === '',
+                 'scrubNotifyError replaces only the two value-quoting texts');
+          const t = notifyTargetOf({ urlEnv: 'X' }, { url: 'http://h.example:8080/p/q?r=1', auth: 'tok\nab', rawUrl: ' http://h.example:8080/p/q?r=1 ', rawAuth: ' tok\nab\r\n' });
+          assert(t.url === 'http://h.example:8080/p/q?r=1' && t.headers.Authorization === 'Bearer tok\nab' && t.urlEnv === 'X' && t.on === 'transitions'
+                 && JSON.stringify(t.secrets) === JSON.stringify([' http://h.example:8080/p/q?r=1 ', 'http://h.example:8080/p/q?r=1', 'http://h.example:8080', 'h.example:8080', 'h.example', ' tok\nab\r\n', '/p/q?r=1', 'tok\nab']),
+                 'notifyTargetOf: the target from resolved values, its secrets longest first, none under 4 characters', t.secrets);
+        } finally {
+          delete process.env.OBSERVOGRAM_TEST_E3_URL;
+          delete process.env.OBSERVOGRAM_TEST_E3_TOKEN;
+          hits.length = 0;
+        }
       }
     } finally {
       if (typeof rx.closeAllConnections === 'function') rx.closeAllConnections();
