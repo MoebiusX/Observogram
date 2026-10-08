@@ -1572,10 +1572,32 @@ try {
             assert(notify.error === text.replace(/ \S+:\d+/, ' <redacted>') && !/fd00|beef|ffff|7f00|4443|44203/.test(JSON.stringify(JSON.parse(disk).notify)),
                    `E3 Node's text for ${url} carries no part of its address or port`, notify);
           }
-          // the pattern backstop alone, and the texts that carry no value stay as they are
+          // a host under NOTIFY_SECRET_MIN characters, and the address a name resolved to with the hook's port, are in
+          // no value list: the address texts' pattern redacts them. Through the real fetch (`localhost` at a port where
+          // nothing listens: Node quotes the address it resolved to, `127.0.0.1:<port>`) and in Node's and undici's
+          // texts verbatim (a lookup, a connect, undici's connect timeout, the certificate's names).
+          const lhPort = String(await closedLoopbackPort());
+          const lh = await errOf('e3-lh', `http://localhost:${lhPort}/lh-path`);
+          assert(lh.notify.status === 'failed' && !lh.notify.error.includes(lhPort) && !/127\.0\.0\.1|::1/.test(lh.notify.error) && hits.length === 0,
+                 'E3 a named hook\'s resolved address and its port, as Node\'s connect error quotes them, never reach the record', lh.notify);
+          for (const [name, url, text, want] of [
+            ['e3-short-lookup', 'http://zq/short-path', 'getaddrinfo ENOTFOUND zq', 'getaddrinfo ENOTFOUND <redacted>'],
+            ['e3-short-again', 'http://zq/short-path', 'getaddrinfo EAI_AGAIN zq', 'getaddrinfo EAI_AGAIN <redacted>'],
+            ['e3-short-timeout', 'http://zq/short-path', 'Connect Timeout Error (attempted address: zq:80, timeout: 10000ms)', 'Connect Timeout Error (attempted address: <redacted>, timeout: 10000ms)'],
+            ['e3-short-tls', 'https://zq/short-path', 'Hostname/IP does not match certificate\'s altnames: Host: zq. is not in the cert\'s altnames: DNS:other.example', 'Hostname/IP does not match certificate\'s altnames: <redacted>'],
+            ['e3-resolved', 'https://hooks.example.test/T0/p', 'connect ETIMEDOUT 203.0.113.7:443', 'connect ETIMEDOUT <redacted>'],
+            ['e3-resolved-all', 'https://hooks.example.test/T0/p', 'Connect Timeout Error (attempted addresses: 203.0.113.7:443, 2001:db8::7:443, timeout: 10000ms)', 'Connect Timeout Error (attempted addresses: <redacted>, timeout: 10000ms)'],
+          ]) {
+            const { notify, disk } = await errOf(name, url, undefined, { notifier: async () => ({ sent: false, httpStatus: null, attempts: 2, tookMs: 1, error: text }) });
+            assert(notify.error === want && !/zq|203\.0\.113|2001:db8|:443|other\.example/.test(JSON.stringify(JSON.parse(disk).notify)),
+                   `E3 ${JSON.stringify(text)} reaches the record with no host, address or port`, notify);
+          }
+          // the pattern backstop alone — what GET /api/journeys/:name/runs serves a record written before the redaction
+          // through — and the texts that carry no value stay as they are
           assert(scrubNotifyError('Headers.append: "Bearer a"b" is an invalid header value.') === HEADER && scrubNotifyError('Request cannot be constructed from a URL that includes credentials: http://u:p@h/x y') === 'Request cannot be constructed from a URL that includes credentials: <redacted>'
-                 && ['HTTP 500', 'timeout after 1000ms', 'boom at https://***@h/', 'fetch failed', ''].every(t => scrubNotifyError(t) === t) && scrubNotifyError(null) === '',
-                 'scrubNotifyError replaces only the two value-quoting texts');
+                 && scrubNotifyError('getaddrinfo ENOTFOUND hooks.secret-host.example') === 'getaddrinfo ENOTFOUND <redacted>' && scrubNotifyError('connect ECONNREFUSED 127.0.0.1:47998') === 'connect ECONNREFUSED <redacted>'
+                 && ['HTTP 500', 'timeout after 1000ms', 'boom at https://***@h/', 'fetch failed', 'read ECONNRESET', 'other side closed', 'Connect Timeout Error', 'self-signed certificate', ''].every(t => scrubNotifyError(t) === t) && scrubNotifyError(null) === '',
+                 'scrubNotifyError replaces only the texts that quote a value, a host or an address');
           const t = notifyTargetOf({ urlEnv: 'X' }, { url: 'http://h.example:8080/p/q?r=1', auth: 'tok\nab', rawUrl: ' http://h.example:8080/p/q?r=1 ', rawAuth: ' tok\nab\r\n' });
           assert(t.url === 'http://h.example:8080/p/q?r=1' && t.headers.Authorization === 'Bearer tok\nab' && t.urlEnv === 'X' && t.on === 'transitions'
                  && JSON.stringify(t.secrets) === JSON.stringify([' http://h.example:8080/p/q?r=1 ', 'http://h.example:8080/p/q?r=1', 'http://h.example:8080', 'h.example:8080', 'h.example', ' tok\nab\r\n', '/p/q?r=1', 'tok\nab']),

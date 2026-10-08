@@ -1386,15 +1386,20 @@ the journey is listed and run by, which its `name:` need not match — and
 | not on the list | `the webhook in <urlEnv> is at an origin that is not in <the list variables set, joined by ", nor in "> — the server's operator adds that URL's origin (scheme://host[:port]) there and restarts the server` | the same |
 
 **What records and rows keep.** A delivery error never carries any part of
-the hook's URL (as read, trimmed or normalised: its origin, host, path and
-query) or its token (as read, trimmed, per line): `<redacted>`, on the CLI
-too. `GET /api/journeys/:name/runs` serves an older record's `notify.error`
-with undici's two texts that quote a value scrubbed (`Headers.append:
-"<redacted>" is an invalid header value.`, `Request cannot be constructed
-from a URL that includes credentials: <redacted>`). The audit rows name the
-hook only for a journey with `notify` — `journey.capture` adds `notify: {
-urlEnv, authEnv }`, `journey.run` adds `notify: { urlEnv, status, attempts }`
-— never any part of the URL; a refused capture or run writes none.
+the hook's URL (as read, trimmed or normalised: its origin, host, port, path
+and query), the address its host resolved to, or its token (as read,
+trimmed, per line): `<redacted>`, on the CLI too. A failed lookup or
+connection reads `getaddrinfo ENOTFOUND <redacted>`, `connect ECONNREFUSED
+<redacted>`, `Connect Timeout Error (attempted address: <redacted>, timeout:
+10000ms)` or `Hostname/IP does not match certificate's altnames:
+<redacted>`. `GET /api/journeys/:name/runs` serves an older record's
+`notify.error` with those four texts scrubbed, and undici's two that quote a
+value (`Headers.append: "<redacted>" is an invalid header value.`, `Request
+cannot be constructed from a URL that includes credentials: <redacted>`).
+The audit rows name the hook only for a journey with `notify` —
+`journey.capture` adds `notify: { urlEnv, authEnv }`, `journey.run` adds
+`notify: { urlEnv, status, attempts }` — never any part of the URL; a
+refused capture or run writes none.
 
 **MCP read tokens.** An MCP endpoint's `readTokenEnv` may not name a
 variable with the shape of any org's notify hook (URL or token, of a live or
@@ -1441,9 +1446,13 @@ posted its value every time it notified.
    then delete those records or blank their `notify.error`. The studio
    serves them scrubbed already, but the files stay on the volume and in any
    repository the workspace is committed to. A record whose error is a
-   failed lookup (`getaddrinfo ENOTFOUND <host>`) names the webhook's host,
-   which the studio serves as recorded: treat it the same way where the host
-   is the webhook's credential.
+   failed lookup or connection (`getaddrinfo ENOTFOUND <host>`, `connect
+   ECONNREFUSED <address>:<port>`) names the webhook's host or the address it
+   resolved to, which the studio serves scrubbed too: `grep -lE
+   'getaddrinfo|connect E|Connect Timeout|Hostname/IP'
+   <root>/runs/*/*.json` lists them (and any record whose live source failed
+   the same way); treat their `notify.error` the same way where the host is
+   the webhook's credential.
 4. **Choose a hook name per webhook per org** (`ONCALL`, `PLATFORM_ALERTS`).
    An org id that equals `<another org's id>-notify` or starts with
    `<another org's id>-notify-` (with `-` or `_`, removed orgs included)

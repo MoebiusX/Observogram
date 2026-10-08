@@ -1071,13 +1071,15 @@ test('H12 a file is exactly what capture validated: a pack label with line break
   assert.deepEqual([sched.status, sched.json.schedule?.every, sched.json.envNames], [200, '2h', []], 'the schedule is the earlier one\'s');
 });
 
-test('H13 a record written before the rule is served scrubbed: undici\'s echo of a bearer token and of a URL with credentials read <redacted> on GET /api/journeys/:name/runs', { timeout: 120_000 }, async () => {
+test('H13 a record written before the rule is served scrubbed: undici\'s echo of a bearer token and of a URL with credentials, and the hook\'s host or address in a failed lookup or connect, read <redacted> on GET /api/journeys/:name/runs', { timeout: 120_000 }, async () => {
   const A = await identityChild();
   const dir = join(orgRoot(A.ws, 'acme'), 'runs', 'h13-old');
   mkdirSync(dir, { recursive: true });
   const leaks = [
     ['2026-01-01T00:00:00.000Z', 'Headers.append: "Bearer tok-h13-marker\n" is an invalid header value.', 'Headers.append: "<redacted>" is an invalid header value.'],
     ['2026-01-02T00:00:00.000Z', 'Request cannot be constructed from a URL that includes credentials: http://***@h13-host-marker.test:5432/h13-path-marker', 'Request cannot be constructed from a URL that includes credentials: <redacted>'],
+    ['2026-01-03T00:00:00.000Z', 'getaddrinfo ENOTFOUND h13-lookup-marker.test', 'getaddrinfo ENOTFOUND <redacted>'],
+    ['2026-01-04T00:00:00.000Z', 'connect ECONNREFUSED 203.0.113.13:47998', 'connect ECONNREFUSED <redacted>'],
   ];
   for (const [startedAt, error] of leaks) {
     writeFileSync(join(dir, `${startedAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({
@@ -1088,7 +1090,8 @@ test('H13 a record written before the rule is served scrubbed: undici\'s echo of
   try {
     const r = await call(A.base, 'GET', '/api/journeys/h13-old/runs?limit=5', { headers: A.as.vera });
     assert.equal(r.status, 200, r.text);
-    assert.deepEqual(r.json.runs.map((x) => x.notify.error), [leaks[1][2], leaks[0][2]]);
+    assert.deepEqual(r.json.runs.map((x) => x.notify.error), leaks.map((l) => l[2]).reverse());
+    assert.ok(!r.text.includes('203.0.113.13') && !r.text.includes('47998'), 'no resolved address or port is served');
     assert.deepEqual(Object.keys(r.json.runs[0].notify), ['status', 'reason', 'triggers', 'httpStatus', 'attempts', 'tookMs', 'urlEnv', 'error'], 'the record otherwise as written');
     noMarkerIn('the served records', r.text);
   } finally {

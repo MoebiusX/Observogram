@@ -984,7 +984,8 @@ app.get('/api/journeys/notify-hooks', authorize('GET /api/journeys/notify-hooks'
 // scrubNotifyError (tools/lib/journey.mjs): a record written before the
 // follow-up journey-notify-env-ownership — or by an older CLI on the shared
 // workspace — may hold undici's echo of the bearer token or of a hook URL
-// with credentials, and every member reads these records.
+// with credentials, or the hook's host or address in a failed lookup or
+// connect, and every member reads these records.
 const servedRun = (run) => (run?.notify && typeof run.notify === 'object' && typeof run.notify.error === 'string'
   ? { ...run, notify: { ...run.notify, error: scrubNotifyError(run.notify.error) } }
   : run);

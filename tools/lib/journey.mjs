@@ -332,15 +332,23 @@ function notifySecretsOf({ urls, tokens }) {
   return [...set].sort((a, b) => b.length - a.length);
 }
 
-// The pattern backstop for undici's two texts that quote a value: the
-// header value it refused (the bearer token, trimmed) and the URL with
-// credentials it refused (raw, as the variable held it). It catches what a
-// value list cannot: a token shorter than NOTIFY_SECRET_MIN, a spelling the
-// list does not hold.
+// The pattern backstop for the texts that quote a value: undici's two —
+// the header value it refused (the bearer token, trimmed) and the URL with
+// credentials it refused (raw, as the variable held it) — and the four that
+// quote the hook's host, or the address it resolved to with its port:
+// Node's `getaddrinfo E… <host>`, `connect E… <address>:<port>` and
+// `Hostname/IP does not match certificate's altnames: …`, and undici's
+// `Connect Timeout Error (attempted address(es): …, timeout: …)`. It
+// catches what a value list cannot: a value shorter than NOTIFY_SECRET_MIN,
+// a spelling the list does not hold, an address the host resolved to, a
+// record written before the list.
 export function scrubNotifyError(text) {
   return String(text ?? '')
     .replace(/(Headers\.(?:append|set): )"[\s\S]*"( is an invalid header value\.)/, '$1"<redacted>"$2')
-    .replace(/(Request cannot be constructed from a URL that includes credentials: )[\s\S]*$/, '$1<redacted>');
+    .replace(/(Request cannot be constructed from a URL that includes credentials: )[\s\S]*$/, '$1<redacted>')
+    .replace(/\b(getaddrinfo|connect) (E[A-Z0-9_]+) \S+/g, '$1 $2 <redacted>')
+    .replace(/(Connect Timeout Error \(attempted address(?:es)?: )[\s\S]*?(, timeout: \d+ms\))/g, '$1<redacted>$2')
+    .replace(/(Hostname\/IP does not match certificate's altnames: )[\s\S]*$/, '$1<redacted>');
 }
 
 // A delivery error as it may land on the record: the target's secrets by

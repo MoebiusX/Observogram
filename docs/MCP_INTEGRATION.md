@@ -1510,10 +1510,12 @@ origin carries the URL and the token in clear.
 the transport hook: `redirect: 'manual'`, so a 3xx is a failed delivery with
 its status (`{ status: 'failed', httpStatus: 302, attempts: 1 }`) and its
 `Location` receives nothing. A delivery error on the record never carries any
-part of the hook's URL or token, on the CLI and the server alike: values are
-replaced by `<redacted>`, and undici's two texts that quote a value read
-`Headers.append: "<redacted>" is an invalid header value.` and `Request
-cannot be constructed from a URL that includes credentials: <redacted>`.
+part of the hook's URL or token, nor the address its host resolved to, on the
+CLI and the server alike: values are replaced by `<redacted>`; undici's two
+texts that quote a value read `Headers.append: "<redacted>" is an invalid
+header value.` and `Request cannot be constructed from a URL that includes
+credentials: <redacted>`, and a failed lookup or connection reads
+`getaddrinfo ENOTFOUND <redacted>` or `connect ECONNREFUSED <redacted>`.
 docs/DOWNSTREAM.md §17 has the rule's every sentence and the migration of a
 journey that names another variable.
 
