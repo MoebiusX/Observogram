@@ -266,6 +266,40 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     const cw = document.documentElement.clientWidth;
     return [...document.querySelectorAll('.set-page, .set-page *, .set-editor, .set-editor *')].filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.right > cw + 1 && !el.closest('.set-nav'); }).slice(0, 8).map((el) => `${el.tagName}.${el.className}#${el.id}:${Math.round(el.getBoundingClientRect().right)}`);
   });
+  // A page whose every GET /api/mcp-endpoints fails from its load (opened
+  // with `before: abortEndpointReads`), then the MCP panel: the failed read
+  // is said; the next opening reads again and, until that read answers, the
+  // Server settings button says it is checking and the picker names no
+  // failure — never "close and reopen" or "reopen this" while the panel does
+  // just that (the token posture: its own subtest). The read is held at the
+  // route until both are seen, then released; `landed` is a selector for
+  // what its answer draws, waited for — never a stale text changing. The
+  // panel is left open on the answer.
+  const abortEndpointReads = (p) => p.route('**/api/mcp-endpoints', (route) => route.abort());
+  async function reopenAfterFailedRead(page, landed) {
+    const why = () => page.evaluate(() => document.getElementById('mcp-settings-btn')?.dataset.why ?? null);
+    const hint = () => text(page, '#mcp-panel .set-mcp-target-hint');
+    await page.evaluate(() => document.getElementById('mcp-btn').click());
+    await page.waitForFunction(() => /^Could not check /.test(document.getElementById('mcp-settings-btn')?.dataset.why || ''), null, { timeout: T });
+    assert.equal(await why(), 'Could not check whether you may configure the MCP server — close and reopen the panel to try again.');
+    assert.match(await hint(), /'s MCP endpoints could not be read just now — reopen this to try again\.$/);
+    await page.evaluate(() => document.getElementById('mcp-panel-close').click());
+    await page.unroute('**/api/mcp-endpoints');
+    let release;
+    let entered;
+    const held = new Promise((resolve) => { release = resolve; });
+    const reading = new Promise((resolve) => { entered = resolve; });
+    await page.route('**/api/mcp-endpoints', async (route) => { entered(); await held; await route.continue().catch(() => {}); });
+    try {
+      await page.evaluate(() => document.getElementById('mcp-btn').click());
+      await reading;
+      assert.equal(await why(), 'Checking whether you may configure the MCP server…', 'the reopening reads again, and says so while it does');
+      assert.equal(await hint(), null, 'the picker names no failure while it reads again');
+    } finally { release(); }
+    await page.waitForSelector(landed, { state: 'attached', timeout: T });
+    await page.unroute('**/api/mcp-endpoints');
+    assert.doesNotMatch(await why(), /^Could not check |^Checking /, 'the answer is said');
+  }
 
   // ---------- the records ----------
   const reg = await call('oscar', 'POST', '/api/validate', PAYMENT);
@@ -325,7 +359,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('ada (admin): New MCP endpoint gw — created; a credential in the URL and another org\'s variable are the server\'s sentences as served', async () => {
+  await t.test('ada (admin): New MCP endpoint gw — created; a credential in the URL and another org\'s variable are the server\'s sentences as served; the MCP panel\'s next opening after a failed read of the list says it is checking until that read answers', async () => {
     const { page, ctx } = await open(child.base, 'ada');
     try {
       await toSettings(page);
@@ -358,6 +392,12 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       const row = await text(page, `.set-row[data-endpoint-id="${gwId}"]`);
       assert.match(row, /token: OBSERVOGRAM_ORG_ACME_MCP_TOKEN/, 'the refused variable was not kept');
     } finally { await ctx.close(); }
+    // The identity posture: the panel's next opening after a failed read.
+    const again = await open(child.base, 'ada', { before: abortEndpointReads });
+    try {
+      await reopenAfterFailedRead(again.page, `#mcp-panel:not([hidden]) [data-mcp-target="refresh"] select.set-mcp-target option[value="${gwId}"]`);
+      assert.equal(await attr(again.page, '#mcp-settings-btn', 'aria-disabled'), null, 'an admin, gw chosen: Server settings usable');
+    } finally { await again.ctx.close(); }
   });
 
   await t.test('oscar (operator): add an environment, a tier, bind gw to prod; a tier-only save neither resends nor clears the binding; the service page follows', async () => {
@@ -984,7 +1024,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('an open server on the loopback: the server says local may register (GET /api/mcp-endpoints policy.register), so the picker hint offers Settings → MCP endpoints, and it lands there', async () => {
+  await t.test('an open server on the loopback: the server says local may register (GET /api/mcp-endpoints policy.register), so the picker hint offers Settings → MCP endpoints, and it lands there; the panel\'s next opening after a failed read of the list says it is checking until that read answers', async () => {
     const probe = await call(null, 'GET', '/api/org/members', undefined, { base: loopChild.base });
     assert.equal(probe.status, 200, probe.text);
     const { page, ctx } = await open(loopChild.base, null);
@@ -1004,6 +1044,12 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await settled(page);
       assert.equal(await attr(page, '#set-primary', 'aria-disabled'), null, 'New MCP endpoint usable');
     } finally { await ctx.close(); }
+    // The open posture: the panel's next opening after a failed read.
+    const again = await open(loopChild.base, null, { before: abortEndpointReads });
+    try {
+      await reopenAfterFailedRead(again.page, '#mcp-panel:not([hidden]) [data-mcp-target-settings]');
+      assert.match(await text(again.page, '#mcp-panel .set-mcp-target-hint'), /^No MCP endpoint is registered in .+ yet\. Settings → MCP endpoints$/);
+    } finally { await again.ctx.close(); }
   });
 
   // R4 + D4 (rebadge batch 3, C0): without sign-in the home never sends a

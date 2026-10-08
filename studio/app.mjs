@@ -5371,10 +5371,15 @@ async function checkEndpointDrift(id) {
 
 // A picker opening: drawn from the list already read, then — when the list
 // is unread, or `fresh` (the deploy modal: every open) — read and redrawn.
-// Returns the read's promise (resolved at once when nothing is read).
+// Returns the read's promise (resolved at once when nothing is read). A
+// failed read is unread again while it is read again, so neither the picker
+// nor the Server settings button says "reopen" while the opening does just
+// that (as readMcpGatePolicy in the token posture).
 function openMcpTarget(id, { fresh = false } = {}) {
+  const reads = mcpPickersReadable() && (fresh || state.mcpEndpoints === null || state.mcpTargetPolicy === null);
+  if (reads && state.mcpTargetPolicy?.failed) state.mcpTargetPolicy = null;
   paintMcpTarget(id);
-  if (!mcpPickersReadable() || (!fresh && state.mcpEndpoints !== null && state.mcpTargetPolicy !== null)) return Promise.resolve();
+  if (!reads) return Promise.resolve();
   return readMcpEndpointsForPickers().then(() => paintMcpTarget(id));
 }
 
