@@ -206,8 +206,13 @@ test('mcpOriginDecision: every row — loopback passes; a list set admits its or
   }
 });
 
-test('mcpOriginDecision at registration without sign-in (D4): the anonymous local caller registers only a loopback MCP or a listed origin, token or not — the way out names the list and arming sign-in (a restart under OBSERVOGRAM_AUTH=off); a session admin\'s token-less registration stays allowed', async () => {
-  const { db, close } = await freshStore('acme');
+test('mcpOriginDecision at registration without sign-in (D4): the anonymous local caller registers only a loopback MCP or a listed origin, token or not — the way out names the list and arming sign-in (under OBSERVOGRAM_AUTH=off noSignInWay\'s restart: with a user, or with OIDC configured), in each sign-in configuration as the route reads it; a session admin\'s token-less registration stays allowed', async () => {
+  const { db, path, close } = await freshStore('acme');
+  const OIDC = { OBSERVOGRAM_OIDC_ISSUER: 'https://idp.example.test', OBSERVOGRAM_OIDC_CLIENT_ID: 'studio', OBSERVOGRAM_OIDC_CLIENT_SECRET: 'oidc-secret' };
+  const ENV = ['OBSERVOGRAM_DB', 'OBSERVOGRAM_AUTH', ...Object.keys(OIDC)];
+  const saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
+  const { noSignInWay } = await import('./authz.mjs');
+  const { setMeta } = await import('./store/meta.mjs');
   try {
     runWithOrg('acme', () => {
       const local = { principal: { kind: 'local', actor: 'local', role: 'admin', owner: true }, org: 'acme', port: 8123, posture: 'open-loopback', direct: true, authOff: false };
@@ -223,13 +228,52 @@ test('mcpOriginDecision at registration without sign-in (D4): the anonymous loca
         assert.equal(d('https://demo.example/mcp', { caller: local, credential }, { OBSERVOGRAM_MCP_ORIGINS: '*' }), null, `local, ${credential}: any`);
       }
       assert.match(d('https://demo.example/', { caller: local }, { OBSERVOGRAM_MCP_ORIGINS: 'https://other.example' }).error, /^https:\/\/demo\.example is not in OBSERVOGRAM_MCP_ORIGINS — /, 'a list set: its own text');
-      assert.equal(d('https://demo.example/', { caller: { ...local, authOff: true } }).error,
-        'on a server without sign-in, only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS may be registered — list https://demo.example there, or sign in as an admin (restart it without OBSERVOGRAM_AUTH=off once a user exists — npm run users -- add <login>)');
+      // Under OBSERVOGRAM_AUTH=off the way in is noSignInWay's restart, word for word.
+      const RESTART = 'restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured';
+      assert.equal(noSignInWay({ authOff: true }), `this server has no sign-in (OBSERVOGRAM_AUTH=off): ${RESTART}`);
+      const D4_AUTH_OFF = `on a server without sign-in, only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS may be registered — list https://demo.example there, or sign in as an admin (${RESTART})`;
+      assert.equal(d('https://demo.example/', { caller: { ...local, authOff: true } }).error, D4_AUTH_OFF);
       assert.equal(d('https://demo.example/mcp', { caller: admin }), null, 'a session admin registers a token-less endpoint anywhere');
       assert.equal(d('https://demo.example/mcp', {}), null, 'no caller: judged as before (the registration functions require one)');
       for (const use of ['typed', 'registered']) assert.notEqual(d('https://demo.example/mcp', { use, caller: local })?.error, D4, `${use}: not a registration`);
+
+      // Each sign-in configuration, as the route reads it (mcpCallerOf over
+      // the env a server boots with; on the loopback, asked straight): the
+      // way in works when followed literally. Without OBSERVOGRAM_AUTH=off
+      // a first user arms sign-in (OIDC configured there is sign-in: no
+      // local caller reads this). Under it adding a user arms nothing, and
+      // with OIDC configured a local user never signs in (npm run users
+      // makes it no owner; /auth/login is the identity provider's) — so the
+      // way in names the restart with OIDC configured, never a user alone.
+      const booted = (env) => {
+        for (const k of ENV) delete process.env[k];
+        Object.assign(process.env, { OBSERVOGRAM_DB: path, ...env });
+        return mcpCallerOf({
+          observogramPrincipal: local.principal, observogramOrg: 'acme', observogramListen: { loopback: true, host: '127.0.0.1' },
+          socket: { localPort: 8123 }, headers: { host: '127.0.0.1:8123' },
+        });
+      };
+      const plain = booted({});
+      assert.deepEqual([plain.posture, plain.direct, plain.authOff], ['open-loopback', true, false]);
+      assert.equal(d('https://demo.example/', { caller: plain }).error, D4, 'no OBSERVOGRAM_AUTH=off, no user, no OIDC: a first user arms sign-in');
+      assert.equal(booted(OIDC).posture, 'identity', 'OIDC configured without OBSERVOGRAM_AUTH=off is sign-in');
+      for (const [label, env, arm] of [
+        ['OBSERVOGRAM_AUTH=off', { OBSERVOGRAM_AUTH: 'off' }, false],
+        ['OBSERVOGRAM_AUTH=off, OIDC configured', { OBSERVOGRAM_AUTH: 'off', ...OIDC }, false],
+        ['OBSERVOGRAM_AUTH=off, a user exists', { OBSERVOGRAM_AUTH: 'off' }, true],
+        ['OBSERVOGRAM_AUTH=off, a user exists, OIDC configured', { OBSERVOGRAM_AUTH: 'off', ...OIDC }, true],
+      ]) {
+        if (arm) setMeta(db, 'system', 'identity_armed', '1');
+        const caller = booted(env);
+        assert.deepEqual([caller.posture, caller.direct, caller.authOff], ['open-loopback', true, true], `${label}: OBSERVOGRAM_AUTH=off beats an armed store and OIDC`);
+        const { error } = d('https://demo.example/mcp', { caller });
+        assert.equal(error, D4_AUTH_OFF, label);
+        assert.match(error, /restart it without OBSERVOGRAM_AUTH=off, .* or with OIDC configured\)$/, `${label}: the restart names OIDC configured`);
+        assert.doesNotMatch(error, /arms sign-in|add the first user|once a user exists — /, `${label}: never a user alone`);
+      }
     });
   } finally {
+    for (const k of ENV) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
     close();
   }
 });

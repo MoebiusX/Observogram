@@ -50,7 +50,7 @@ import { brandEnvFrom } from '../tools/lib/brand-env.mjs';
 import { isLoopbackOrigin, parseOriginList } from '../tools/lib/mcp-url-safety.mjs';
 import { mcpTransportLoaded } from '../tools/mcp-transport.mjs';
 import { authDisabled } from './auth.mjs';
-import { directLoopbackRequest, noSignInWay, rankOf, rankOfRole, requestPosture } from './authz.mjs';
+import { AUTH_OFF_RESTART, directLoopbackRequest, noSignInWay, rankOf, rankOfRole, requestPosture } from './authz.mjs';
 import { redactCredentials, stripMcpUrl } from './mcp-url.mjs';
 import { currentOrg } from './org-context.mjs';
 import { envNameOwnedBy, listMcpEndpoints, orgEnvPrefix } from './store/mcp-endpoints.mjs';
@@ -87,7 +87,7 @@ const roleOf = (p) => (p.owner ? 'admin' : p.role);
 // without it, with a user or with OIDC configured (authz.mjs noSignInWay).
 // Binding to loopback works in both.
 const EXPOSED_WAY = 'add the first user with npm run users -- add <login> (it arms sign-in; the first user is an owner), or bind the server to loopback';
-const EXPOSED_WAY_AUTH_OFF = 'restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured, and sign in as an admin; or bind the server to loopback';
+const EXPOSED_WAY_AUTH_OFF = `${AUTH_OFF_RESTART}, and sign in as an admin; or bind the server to loopback`;
 export const exposedWay = (caller) => (caller?.authOff ? EXPOSED_WAY_AUTH_OFF : EXPOSED_WAY);
 
 // May this caller supply a target URL? `role` defaults to the constant.
@@ -250,11 +250,12 @@ export function mcpOriginDecision(db, url, { use, credential = 'none', caller = 
   // Without sign-in (the open postures' anonymous local caller) only a
   // loopback MCP or a listed origin may be registered, token or not (D4):
   // registering any other would let an anonymous caller aim the server at
-  // any host, which the typed-URL rule refuses it.
+  // any host, which the typed-URL rule refuses it. The way to sign in:
+  // adding a user arms it, but under OBSERVOGRAM_AUTH=off (which beats an
+  // armed store and OIDC) the restart noSignInWay names — with a user, or
+  // with OIDC configured, where a local user never signs in.
   if (use === 'register' && caller?.principal?.kind === 'local') {
-    const signIn = caller.authOff
-      ? 'restart it without OBSERVOGRAM_AUTH=off once a user exists — npm run users -- add <login>'
-      : 'npm run users -- add <login> arms sign-in';
+    const signIn = caller.authOff ? AUTH_OFF_RESTART : 'npm run users -- add <login> arms sign-in';
     return refuse(`on a server without sign-in, only a loopback MCP or an origin listed in ${MCP_ORIGINS_VAR} may be registered — list ${origin} there, or sign in as an admin (${signIn})`);
   }
   if (credential !== 'none') {
