@@ -29,7 +29,6 @@ dropInheritedOrgVars();
 const { test, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const { mkdtempSync, rmSync, existsSync } = await import('node:fs');
-const { createServer } = await import('node:http');
 const { tmpdir } = await import('node:os');
 const { join } = await import('node:path');
 
@@ -243,10 +242,10 @@ test('a 7-character server-held token the MCP repeats in a successful answer nev
 });
 
 test('an endpoint nobody answers: 200, unreachable, the sentence names the origin — and the token\'s outcome is null, never sent', async () => {
-  const closed = createServer();
-  await new Promise((ok) => closed.listen(0, '127.0.0.1', ok));
-  const url = `http://127.0.0.1:${closed.address().port}/mcp`;
-  await new Promise((ok) => closed.close(ok));
+  // 127.0.0.1:2: below every OS's ephemeral range, so nothing hands it out (a port bound and released
+  // can be reissued on Windows, where bind(0) and outbound connects share one range), and not a port fetch
+  // refuses to dial (1 is on the Fetch standard's bad-port list: "bad port", never ECONNREFUSED).
+  const url = 'http://127.0.0.1:2/mcp';
   const id = (await registerMcpEndpoint(BASE, { name: 'acme-gone', url, readTokenEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' }, { headers: headersOf('ada') })).id;
   const r = await ping('oscar', { mcpEndpointId: id });
   assert.equal(r.status, 200, r.text);

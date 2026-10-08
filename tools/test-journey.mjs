@@ -13,7 +13,6 @@
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync, readFileSync, symlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { spawnSync, spawn } from 'node:child_process';
 import { createHarness } from './lib/harness.mjs';
@@ -48,19 +47,13 @@ inventorySummary, inventoryStatusLine,
 const { chainGotWorse } = await import('./lib/journey-notify.mjs');
 const { STACK_SELF_METRIC_PROBES } = await import('./lib/contracts/stack-self-metrics.mjs');
 
-// A TCP port nobody listens on: bind an ephemeral one, read it, release
-// it. Connecting to it afterwards is refused immediately — the fastest,
-// fully offline way to make the live fetcher lose its vantage.
-async function closedLoopbackPort() {
-  return new Promise((res, rej) => {
-    const srv = createServer();
-    srv.once('error', rej);
-    srv.listen(0, '127.0.0.1', () => {
-      const { port } = srv.address();
-      srv.close(() => res(port));
-    });
-  });
-}
+// A TCP port nobody listens on: 127.0.0.1:2. Connecting to it is refused
+// immediately — the fastest, fully offline way to make the live fetcher lose
+// its vantage. It is below every OS's ephemeral range, so nothing hands it
+// out (a port bound and released can be live again on Windows, where bind(0)
+// and outbound connects share one range), and fetch dials it (port 1 is on
+// the Fetch standard's bad-port list: "bad port", never a refusal).
+const CLOSED_LOOPBACK_PORT = 2;
 
 const PACK_A = resolve(SPEC_DIR, 'examples/payment-service.pack.yaml');
 const PACK_B = resolve('examples/production-curated.pack.yaml');
@@ -668,7 +661,7 @@ try {
   // --- vantage lost: the live source does not answer ---
   // A closed loopback port makes the fetcher fail on its core tools at
   // once (connection refused) — no network, no timeout wait.
-  const port = await closedLoopbackPort();
+  const port = CLOSED_LOOPBACK_PORT;
   const lostUrl = `http://127.0.0.1:${port}/mcp?keep=1`;
   // The def's URL carries a credential parameter: the record must persist
   // the stripped form (stripMcpUrl's rule), never the secret.
@@ -1475,7 +1468,7 @@ try {
       }
       // (j) a vantage-lost run with notify: the loss is posted once (breach), the record carries notify after gate, the list pin holds.
       {
-        const lostPort = await closedLoopbackPort();
+        const lostPort = CLOSED_LOOPBACK_PORT;
         writeFileSync(join(TMP, 'journeys', 'lost-notify.journey.yaml'), [`name: lost-notify`, `packA: { file: ${A} }`, `packB: { mcp: { url: http://127.0.0.1:${lostPort}/mcp } }`, 'notify: { urlEnv: OBSERVOGRAM_TEST_WEBHOOK_URL, on: breach, timeoutMs: 1000 }'].join('\n'));
         let lostErr = null;
         try { await runJourney(loadJourneyDef('lost-notify')); } catch (e) { lostErr = e; }
