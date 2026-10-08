@@ -80,6 +80,16 @@ export function mcpCallerOf(req) {
 
 const roleOf = (p) => (p.owner ? 'admin' : p.role);
 
+// The open, exposed posture's way out for its anonymous local caller:
+// nothing registers (or types) while it is exposed. Adding the first user
+// arms sign-in without a restart — but not under OBSERVOGRAM_AUTH=off, which
+// beats an armed store and OIDC (auth.mjs), so there the way in is a restart
+// without it, with a user or with OIDC configured (authz.mjs noSignInWay).
+// Binding to loopback works in both.
+const EXPOSED_WAY = 'add the first user with npm run users -- add <login> (it arms sign-in; the first user is an owner), or bind the server to loopback';
+const EXPOSED_WAY_AUTH_OFF = 'restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured, and sign in as an admin; or bind the server to loopback';
+export const exposedWay = (caller) => (caller?.authOff ? EXPOSED_WAY_AUTH_OFF : EXPOSED_WAY);
+
 // May this caller supply a target URL? `role` defaults to the constant.
 // → null | { status: 403, denied: 'posture' | 'role', need?, error } — the
 // way out each text names works for the reader, in the posture they are in.
@@ -89,7 +99,7 @@ export function typedMcpUrlDecision(caller, { role = TYPED_MCP_URL_ROLE } = {}) 
   const deny = (denied, error, need) => ({ status: 403, denied, ...(need ? { need } : {}), error });
   if (p?.kind === 'local') {
     if (caller.posture === 'open-exposed') {
-      return deny('posture', 'a typed MCP URL is refused on a server without sign-in, and MCP endpoints cannot be registered while it is exposed — add the first user with npm run users -- add <login> (it arms sign-in; the first user is an owner), or bind the server to loopback');
+      return deny('posture', `a typed MCP URL is refused on a server without sign-in, and MCP endpoints cannot be registered while it is exposed — ${exposedWay(caller)}`);
     }
     return deny('posture', `a typed MCP URL is refused on a server without sign-in, even from this machine — choose a registered MCP endpoint (mcpEndpointId), or register one in Settings → MCP endpoints from http://127.0.0.1:${caller.port ?? '<port>'} (a loopback MCP, or an origin listed in ${MCP_ORIGINS_VAR})`);
   }
@@ -275,7 +285,7 @@ function registerRefusal(caller) {
   const p = caller?.principal ?? null;
   const org = caller?.org ?? null;
   if (p?.kind === 'local') {
-    if (caller.posture === 'open-exposed') return 'MCP endpoints cannot be registered on a server without sign-in while it is exposed — add the first user with npm run users -- add <login> (it arms sign-in; the first user is an owner), or bind the server to loopback';
+    if (caller.posture === 'open-exposed') return `MCP endpoints cannot be registered on a server without sign-in while it is exposed — ${exposedWay(caller)}`;
     if (!caller.direct) return `on a server without sign-in MCP endpoints are registered only from this machine — open the studio at http://127.0.0.1:${caller.port ?? '<port>'}`;
     return null;
   }

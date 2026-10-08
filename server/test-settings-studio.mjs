@@ -919,8 +919,10 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       // Nothing registers here while it is exposed: the hint, the button and
       // the line say GET /api/mcp-endpoints' own sentence — never "an admin
       // registers them in Settings → MCP endpoints", which is closed here.
+      // This server runs with OBSERVOGRAM_AUTH=off: adding a user arms
+      // nothing, so the way in is a restart without it, or loopback.
       const serverWhy = (await call(null, 'GET', '/api/mcp-endpoints', undefined, { base: openChild.base })).json.policy.register.why;
-      assert.match(serverWhy, /^MCP endpoints cannot be registered on a server without sign-in while it is exposed — /);
+      assert.equal(serverWhy, 'MCP endpoints cannot be registered on a server without sign-in while it is exposed — restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured, and sign in as an admin; or bind the server to loopback');
       await page.waitForSelector('#mcp-panel .set-mcp-target-hint', { timeout: T });
       assert.equal(await text(page, '#mcp-panel .set-mcp-target-hint'), `No MCP endpoint is registered in Default yet — ${serverWhy}.`);
       assert.equal(await text(page, '#mcp-settings-btn .svc-why'), `Configuring the MCP server is endpoint configuration: ${serverWhy}.`);

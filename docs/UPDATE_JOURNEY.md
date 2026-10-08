@@ -1327,6 +1327,8 @@ MCP endpoints` on an open server — which `OBSERVOGRAM_AUTH=off`, or a server
 bound off the loopback, defeats. They now say the server's own sentence
 (`GET /api/mcp-endpoints` `policy.register.why`), worded for the posture the
 server runs in, so the two cannot drift; in the token posture the panel reads
-it when it opens. The journey's steps do not move. Tests: 1390 → 1392 (one
+it when it opens. Open and exposed under `OBSERVOGRAM_AUTH=off`, that sentence
+itself named adding the first user, which arms nothing there; it now names a
+restart without it, or binding to loopback. The journey's steps do not move. Tests: 1390 → 1392 (one
 more in `tools/test-mcp-settings-model.mjs`, one more in
 `server/test-mcp-target-policy.mjs`).
