@@ -67,7 +67,7 @@ import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
 import { describeProxyAuth } from './auth-proxy.mjs';
 import { stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
 import { mcpCallerOf, mcpRefusalBody, redactTarget } from './mcp-target-policy.mjs';
-import { captureNotifyRefusal, notifyBootReport, notifyHooksOf, notifyNamesRefusal, notifyPostureRefusal, resolveJourneyNotify } from './notify-target-policy.mjs';
+import { captureNotifyRefusal, notifyBootReport, notifyHookOf, notifyHooksOf, notifyNamesRefusal, notifyPostureRefusal, resolveJourneyNotify } from './notify-target-policy.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
 import { auditAfter, actorForRecord, bounded, finite } from './audit-after.mjs';
@@ -1009,7 +1009,9 @@ app.get('/api/journeys/:name/runs', authorize('GET /api/journeys/:name/runs'), (
 // token of the hook its urlEnv names) is never bound — it leaves `envNames`
 // for `refusedEnvNames`, a key present only when non-empty, and each snippet
 // says so where the binding would have been: the studio does not tell a
-// deployer to bind a name it refuses itself.
+// deployer to bind a name it refuses itself. A token refused beside the org's
+// own hook (the PAIR refusal) is told that hook's own token, the way out the
+// run's refusal names (scheduleSnippets' refusedPairs).
 app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/schedule'), (req, res) => {
   let def;
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
@@ -1021,11 +1023,13 @@ app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/sched
     const authRefused = !!def.notify?.authEnv && (urlRefused || refuses({ urlEnv: def.notify.urlEnv, authEnv: def.notify.authEnv }));
     const envNames = [...new Set([def.packB?.mcp?.authEnv, urlRefused ? null : def.notify?.urlEnv, authRefused ? null : def.notify?.authEnv].filter(Boolean))];
     const refusedEnvNames = [...new Set([urlRefused ? def.notify.urlEnv : null, authRefused ? def.notify.authEnv : null].filter((n) => n && !envNames.includes(n)))];
+    const hook = authRefused && !urlRefused && def.notify.urlEnv ? notifyHookOf(currentStore(), def.notify.urlEnv, currentOrg()) : null;
+    const refusedPairs = hook?.kind === 'hook' ? [{ authEnv: def.notify.authEnv, urlEnv: hook.urlEnv, tokenEnv: hook.tokenEnv }] : [];
     const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
     const snippets = scheduleSnippets({
       name: def.name,
       cron: parsed?.cron ?? null, timezone: parsed?.timezone ?? null, every: parsed?.every ?? null, cadenceNote: parsed?.cadenceNote ?? null,
-      envNames, refusedEnvNames,
+      envNames, refusedEnvNames, refusedPairs,
       nodePath: process.execPath, cliPath: resolve(ROOT, 'tools/cli.mjs'), cwd: process.cwd(),
       workspace: orgWorkspaceRoot(), orgRoot: orgRootOf(currentOrg()),
       image: `observogram:${pkg.version}`, namespace: 'observability',

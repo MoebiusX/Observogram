@@ -1502,10 +1502,14 @@ schedule snippets never bind a name the server refuses: `GET
 carries, where its binding would have been, `# <NAME> is not a notify hook
 of this org: the studio never reads it — rename it to
 OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN before scheduling
-(docs/DOWNSTREAM.md §17.2)` (after `REM ` in the schtasks command). What
-remains is a file written before the upgrade or edited by hand, run by a
-CronJob whose Secret holds whatever the file named — 17.2 finds those files
-and the secrets to rotate. `packc journey schedule` passes no
+(docs/DOWNSTREAM.md §17.2)` (after `REM ` in the schtasks command) — or,
+for a `notify.authEnv` refused beside the org's own hook (any name but that
+hook's `_TOKEN`), `# <NAME> is not the token of the hook <urlEnv> names: a hook's
+token goes only to its own URL — set the journey's notify.authEnv to
+<the hook's _TOKEN>, or remove it, before scheduling (docs/DOWNSTREAM.md
+§17.2)`. What remains is a file written before the upgrade or edited by
+hand, run by a CronJob whose Secret holds whatever the file named — 17.2
+finds those files and the secrets to rotate. `packc journey schedule` passes no
 `refusedEnvNames` and binds every name the journey declares, as before.
 
 ### 17.4 Follow-ups, by name

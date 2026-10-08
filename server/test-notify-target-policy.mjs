@@ -1109,7 +1109,7 @@ test('H13 a record written before the rule is served scrubbed: undici\'s echo of
   }
 });
 
-test('H16 the schedule route never binds a notify name the server refuses: a legacy journey\'s envNames hold neither of its names, refusedEnvNames both, and every snippet says so where the binding would have been; a stranger token beside the org\'s hook is the only name refused; a journey through its org\'s hook has the body it always had', { timeout: 120_000 }, async () => {
+test('H16 the schedule route never binds a notify name the server refuses: a legacy journey\'s envNames hold neither of its names, refusedEnvNames both, and every snippet says so where the binding would have been; a stranger token beside the org\'s hook is the only name refused, its comment naming that hook\'s own token; a journey through its org\'s hook has the body it always had', { timeout: 120_000 }, async () => {
   const A = await identityChild();
   plant(A.ws, 'acme', 'h16-bare', { notify: '{ urlEnv: MY_HOOK_URL, authEnv: OBSERVOGRAM_API_TOKEN, on: always }' });
   plant(A.ws, 'acme', 'h16-pair', { notify: `{ urlEnv: ${ONCALL.urlEnv}, authEnv: ${PAGER.tokenEnv} }` });
@@ -1120,11 +1120,11 @@ test('H16 the schedule route never binds a notify name the server refuses: a leg
     assert.equal(r.status, 200, r.text.slice(0, 200));
     return r.json;
   };
-  const refusedIn = (s, e) => {
-    assert.ok(s.cron.split('\n').includes(`# ${REFUSED(e)}`) && !s.cron.includes(`export ${e}=`), `cron: ${e}`);
-    assert.ok(s.schtasks.split('\n').includes(`REM ${REFUSED(e)}`) && !s.schtasks.includes(`setx ${e} `), `schtasks: ${e}`);
-    assert.ok(s.actions.split('\n').includes(`          # ${REFUSED(e)}`) && !s.actions.includes(`secrets.${e}`), `actions: ${e}`);
-    assert.ok(s.k8s.split('\n').includes(`                # ${REFUSED(e)}`) && !s.k8s.includes(`key: ${e}`), `k8s: ${e}`);
+  const refusedIn = (s, e, note = REFUSED(e)) => {
+    assert.ok(s.cron.split('\n').includes(`# ${note}`) && !s.cron.includes(`export ${e}=`), `cron: ${e}`);
+    assert.ok(s.schtasks.split('\n').includes(`REM ${note}`) && !s.schtasks.includes(`setx ${e} `), `schtasks: ${e}`);
+    assert.ok(s.actions.split('\n').includes(`          # ${note}`) && !s.actions.includes(`secrets.${e}`), `actions: ${e}`);
+    assert.ok(s.k8s.split('\n').includes(`                # ${note}`) && !s.k8s.includes(`key: ${e}`), `k8s: ${e}`);
   };
   const bare = await schedule('h16-bare');
   assert.deepEqual([bare.envNames, bare.refusedEnvNames], [[], ['MY_HOOK_URL', 'OBSERVOGRAM_API_TOKEN']]);
@@ -1132,7 +1132,9 @@ test('H16 the schedule route never binds a notify name the server refuses: a leg
   assert.ok(!bare.snippets.k8s.includes('secretKeyRef') && !bare.snippets.actions.includes('secrets.'), 'nothing is bound from a Secret');
   const pair = await schedule('h16-pair');
   assert.deepEqual([pair.envNames, pair.refusedEnvNames], [[ONCALL.urlEnv], [PAGER.tokenEnv]], 'the org\'s hook stays bound; the stranger token is refused');
-  refusedIn(pair.snippets, PAGER.tokenEnv);
+  // PAGER's token is one of the org's hook names: its comment names ONCALL's own token (the PAIR way out), never a rename to the shape it has.
+  refusedIn(pair.snippets, PAGER.tokenEnv, `${PAGER.tokenEnv} is not the token of the hook ${ONCALL.urlEnv} names: a hook's token goes only to its own URL — set the journey's notify.authEnv to ${ONCALL.tokenEnv}, or remove it, before scheduling (docs/DOWNSTREAM.md §17.2)`);
+  for (const f of ['cron', 'schtasks', 'actions', 'k8s']) assert.ok(!pair.snippets[f].includes(REFUSED(PAGER.tokenEnv)), `${f}: the org's own hook token is never "not a notify hook of this org"`);
   // A journey through its org's hook: no new key, the snippets scheduleSnippets makes from the route's inputs.
   const hook = await schedule('h16-hook');
   assert.deepEqual(Object.keys(hook), ['ok', 'name', 'schedule', 'placeholder', 'envNames', 'snippets']);

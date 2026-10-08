@@ -210,6 +210,22 @@ const S45 = withSched({ every: '45m' });
            `${f}: without a refused name (or with one already bound), byte-identical`);
     assert(noSecret(all[f]), `${f}: no value with refused names`);
   }
+  // A token refused beside the org's own hook (the PAIR refusal) — here another
+  // of its hooks' — is told that hook's own token, never the rename.
+  const HOOK = 'OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_URL', OWN = 'OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_TOKEN', PAGER = 'OBSERVOGRAM_ORG_ACME_NOTIFY_PAGER_TOKEN';
+  const PAIRED = `${PAGER} is not the token of the hook ${HOOK} names: a hook's token goes only to its own URL — set the journey's notify.authEnv to ${OWN}, or remove it, before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  const pairs = [{ authEnv: PAGER, urlEnv: HOOK, tokenEnv: OWN }, { authEnv: PAGER, urlEnv: 'X_URL', tokenEnv: 'X_TOKEN' }, { authEnv: 'MY_MCP_TOKEN', urlEnv: HOOK, tokenEnv: OWN },
+    { authEnv: 'UNLISTED', urlEnv: HOOK, tokenEnv: OWN }, { authEnv: 'MY_HOOK_URL', urlEnv: 'not a name', tokenEnv: OWN }, null];
+  const p = { ...S15, envNames: ['MY_MCP_TOKEN', HOOK], refusedEnvNames: ['MY_HOOK_URL', PAGER], refusedPairs: pairs };
+  assert(JSON.stringify(normaliseSnippetInput(p).refusedPairs) === JSON.stringify([{ authEnv: PAGER, urlEnv: HOOK, tokenEnv: OWN }]) && normaliseSnippetInput(S15).refusedPairs.length === 0,
+         'refusedPairs: a refused name\'s first pair of valid names only; none by default');
+  const ps = scheduleSnippets(p);
+  for (const [f, pre] of [['cron', '# '], ['schtasks', 'REM '], ['actions', '          # '], ['k8s', '                # ']]) {
+    const ls = ps[f].split('\n');
+    assert(ls.includes(`${pre}${PAIRED}`) && !ps[f].includes(`${PAGER} is not a notify hook`), `${f}: the paired token's comment names the hook's own token, never a rename`, ls.filter(l => l.includes(PAGER)));
+    assert(ls.includes(`${pre}${REFUSED('MY_HOOK_URL')}`), `${f}: a refused name without a pair keeps its comment`);
+    assert(ps[f] === scheduleSnippets({ ...p, refusedPairs: undefined })[f].replace(REFUSED(PAGER), PAIRED), `${f}: only the paired token's comment differs`);
+  }
 }
 
 // --- secrets discipline across every form ---
