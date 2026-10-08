@@ -423,6 +423,16 @@ test('U7 notifyHooksOf and notifyBootReport: the org\'s set hooks sorted, tokenE
         "[notify-hooks] OBSERVOGRAM_ORG_A_B_NOTIFY_X_URL has the shape of org 'a_b''s notify hook, but org 'a-b' also maps onto it by the longest-prefix rule — no journey can use it",
         "[notify-hooks] OBSERVOGRAM_ORG_GONE_NOTIFY_X_URL is no org's notify hook (only a removed org's id maps onto it)",
       ]);
+      // pay-notify's own hook X has pay's shape too (HOOK NOTIFY_X): it is pay-notify's, usable, so the start says
+      // nothing of it — never that pay-notify "also maps onto" it or that no journey can use it; when a run would
+      // refuse it, only pay-notify's own line. A name of pay's shape that is no hook of pay-notify's stays a shadow.
+      const own = { OBSERVOGRAM_ORG_PAY_NOTIFY_NOTIFY_X_URL: 'http://127.0.0.1:9/h' };
+      assert.deepEqual(notifyHooksOf(tie.db, 'pay-notify', own).hooks, [{ hook: 'X', urlEnv: 'OBSERVOGRAM_ORG_PAY_NOTIFY_NOTIFY_X_URL', tokenEnv: null, usable: true, problem: null }]);
+      assert.deepEqual(notifyBootReport(tie.db, own), []);
+      assert.deepEqual(notifyBootReport(tie.db, { OBSERVOGRAM_ORG_PAY_NOTIFY_NOTIFY_X_URL: 'http://u:p@127.0.0.1:9/h', OBSERVOGRAM_ORG_PAY_NOTIFY_ONCALL_URL: 'http://127.0.0.1:9/h' }), [
+        `[notify-hooks] org 'pay-notify': OBSERVOGRAM_ORG_PAY_NOTIFY_NOTIFY_X_URL — ${T.badUrl('OBSERVOGRAM_ORG_PAY_NOTIFY_NOTIFY_X_URL', 'OBSERVOGRAM_ORG_PAY_NOTIFY_NOTIFY_X_TOKEN')}`,
+        "[notify-hooks] OBSERVOGRAM_ORG_PAY_NOTIFY_ONCALL_URL has the shape of org 'pay''s notify hook, but org 'pay-notify' also maps onto it by the longest-prefix rule — no journey can use it",
+      ]);
     } finally {
       tie.close();
     }

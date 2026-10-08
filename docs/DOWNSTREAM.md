@@ -1333,7 +1333,9 @@ when no hook-shaped variable is set) — variables and org ids only:
   would refuse (its value or origin);
 - `[notify-hooks] <name> has the shape of org '<org>''s notify hook, but org
   '<other>' also maps onto it by the longest-prefix rule — no journey can use
-  it`;
+  it` — never for a name that is another org's own hook
+  (`OBSERVOGRAM_ORG_PAY_NOTIFY_NOTIFY_X_URL` has `pay`'s shape too, but it is
+  `pay-notify`'s hook `X`);
 - `[notify-hooks] <name> is no org's notify hook (no org's id maps onto it)`
   — `(only a removed org's id maps onto it)` when that is so.
 

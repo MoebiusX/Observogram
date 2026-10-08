@@ -330,8 +330,11 @@ export function notifyHooksOf(db, org, env = process.env) {
 
 // The start's report to the server's operator (R4's "at registration" for a
 // hook registered by setting env): every set hook a run would refuse, every
-// set name of an org's hook shape another org's id also maps onto, and every
-// set name of the general hook shape no live org owns. [] when no such
+// set name of an org's hook shape another org's id also maps onto — unless
+// the name is a live org's own hook (its sole owner's shape: pay-notify's
+// OBSERVOGRAM_ORG_PAY_NOTIFY_NOTIFY_X_URL, pay's shape too, is pay-notify's
+// hook X, reported by the first loop only when a run would refuse it) — and
+// every set name of the general hook shape no live org owns. [] when no such
 // variable is set. Lines name variables and org ids, never a value, an origin
 // or a list entry.
 export function notifyBootReport(db, env = process.env) {
@@ -346,8 +349,8 @@ export function notifyBootReport(db, env = process.env) {
   for (const name of Object.keys(env).filter((n) => ANY_HOOK_URL_RE.test(n) && setValue(env, n)).sort()) {
     const owners = envNameOwnedBy(db, name);
     const shapedFor = live.filter((o) => hookOfShape(name, o.id) !== null).map((o) => o.id);
+    if (owners.length === 1 && shapedFor.includes(owners[0])) continue;   // a live org's own hook
     for (const org of shapedFor) {
-      if (owners.length === 1 && owners[0] === org) continue;
       const others = owners.filter((x) => x !== org);
       lines.push(`[notify-hooks] ${name} has the shape of org '${org}''s notify hook, but org '${others.join("', '")}' also maps onto it by the longest-prefix rule — no journey can use it`);
     }
