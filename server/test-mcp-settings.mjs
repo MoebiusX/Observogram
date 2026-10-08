@@ -40,6 +40,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, rmSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { Worker } from 'node:worker_threads';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -522,6 +523,24 @@ test('a loaded transport hook is never used: its record stays empty and the MCP 
   assert.equal(existsSync(record) ? readFileSync(record, 'utf8') : '', '', 'the hook saw nothing');
 });
 
+// A child's route gives each rule the default 100 ms from its start, and a
+// child has no seam for another: a machine loaded enough to hold the worker
+// past it counts the fixture's rule as matched — fail closed, a 409 and the
+// line below on the child's stderr. Only that answer is submitted again, at
+// most `tries` times in all; a 409 without the line is the rule matching.
+const RULE0_TIMED_OUT = '[mcp-settings] policy rules[0] did not finish within 100 ms — counted as matched';
+async function submitPastTimeouts(s, body, tries = 5) {
+  const count = () => s.logs().stderr.split('\n').filter((l) => l === RULE0_TIMED_OUT).length;
+  for (let i = 1; ; i += 1) {
+    const before = count();
+    const r = await s.post(SUBMIT, body);
+    if (i === tries || r.status !== 409 || r.json?.denied !== 'policy-ack' || r.json.rule !== 0) return r;
+    // The line comes on the child's stderr, maybe after the answer.
+    for (const by = Date.now() + 5_000; count() === before && Date.now() < by;) await sleep(20);
+    if (count() === before) return r;
+  }
+}
+
 test('the settings policy is re-checked against the description the server read: a missing acknowledgement is a 409 naming it, nothing sent; ticked, the configure goes and the row records the index; on the generic form a rule keyed to an absent field still wants its ack', async () => {
   const f = await fakeMcp({ descriptor: EXAMPLE_SETTINGS_DESCRIPTOR });
   const s = await studio({ OBSERVOGRAM_MCP_SETTINGS_POLICY: FIXTURE });
@@ -531,8 +550,8 @@ test('the settings policy is re-checked against the description the server read:
   const r1 = await s.post(SUBMIT, { mcpEndpointId: id, mode: 'described', values, acks: [] });
   assert.deepEqual([r1.status, r1.json.denied, r1.json.rule, r1.json.error], want);
   assert.equal(f.adminRequests.filter((x) => x.method === 'POST').length, 0);
-  const approved = await s.post(SUBMIT, { mcpEndpointId: id, mode: 'described', values: { grafanaUrl: 'HTTPS://Approved.example/', secret: SECRET } });
-  assert.equal(approved.status, 200, 'an approved host needs no ack');
+  const approved = await submitPastTimeouts(s, { mcpEndpointId: id, mode: 'described', values: { grafanaUrl: 'HTTPS://Approved.example/', secret: SECRET } });
+  assert.equal(approved.status, 200, `an approved host needs no ack: ${approved.text}`);
   const r2 = await s.post(SUBMIT, { mcpEndpointId: id, mode: 'described', values, acks: [0] });
   assert.equal(r2.status, 200, r2.text);
   const rows = (await s.audit()).filter((x) => x.action === 'live.mcp-settings');
