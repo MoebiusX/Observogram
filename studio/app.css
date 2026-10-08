@@ -7721,9 +7721,9 @@ button.observa-service:focus-visible { outline: 2px solid var(--CMP); outline-of
    name's cap, and a shorter one at phone width (the option list shows each label in full). A one-org member's label
    (no select) takes the same phone cap: a long org name ellipsizes there, read in full by assistive technology. The
    SERVICE chip's name takes it too — its button's aria-label and title, the label's title and the context bar's
-   SERVICE select name the service in full. At phone width the bar is two rows (ux.css): the brand, the ORG chip and
-   the action cluster; then the SERVICE chip and the tabs. With these caps it scrolls nothing sideways at 320, 360,
-   390 and 720px in every mode — home, Build, a service page, Settings, and a pack's views with the SERVICE chip. */
+   SERVICE select name the service in full. At phone width the bar is two rows in the markup's order (ux.css): the
+   brand and both chips; then the tabs and the action cluster. With these caps it scrolls nothing sideways at 320,
+   360, 390 and 720px in every mode — home, Build, a service page, Settings, and a pack's views with the SERVICE chip. */
 .observa-org-select { max-width: 24ch; text-overflow: ellipsis; }
 @media (max-width: 720px) { .observa-org-select, .observa-service-name { max-width: 8ch; } }
 

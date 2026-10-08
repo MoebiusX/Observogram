@@ -737,9 +737,11 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     const WIDTHS = [320, 360, PHONE.width, 720];
     // The OBSERVA bar as app.css's comment on the chips' phone cap states it: the bar's own scroll width is the
     // viewport's; every control in it (the brand, the ORG chip, the SERVICE chip where a pack's view shows it, each
-    // tab, Advanced, the account menu) inside the viewport, none on top of another, each tab 40 px wide or more; and,
-    // on the screens the studio lays out itself (the home, a service page, Settings, Build), no horizontal page
-    // scroll. A pack's view draws its own content (a table, a facts list), which the bar never adds to.
+    // tab, Advanced, the account menu) inside the viewport, none on top of another, each tab 40 px wide or more; read
+    // in the markup's order — the Tab key's, no control in the bar taking a positive tabindex — each control right of
+    // the one before on its row or on a row below it, the eye's order (WCAG 1.3.2, 2.4.3); and, on the screens the
+    // studio lays out itself (the home, a service page, Settings, Build), no horizontal page scroll. A pack's view
+    // draws its own content (a table, a facts list), which the bar never adds to.
     const bar = (page, whole) => page.evaluate((whole) => {
       const cw = document.documentElement.clientWidth;
       const shown = (e) => !!e && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
@@ -756,6 +758,12 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
           if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) misfits.push(`${na} on top of ${nb}`);
         }
       }
+      for (let i = 1; i < controls.length; i++) {
+        const [[na, a], [nb, b]] = [controls[i - 1], controls[i]];
+        const sameRow = a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+        if (sameRow ? b.left < a.right - 0.5 : b.top < a.bottom - 0.5) misfits.push(`${nb} tabbed to after ${na}, drawn before it`);
+      }
+      for (const e of document.querySelectorAll('.observa-hdr [tabindex]')) if (e.tabIndex > 0) misfits.push(`${e.id || e.classList[0]} tabindex ${e.tabIndex}`);
       const out = { serviceChip: shown(document.getElementById('observa-service')), bar: document.querySelector('.observa-hdr').scrollWidth, misfits };
       if (whole) out.scroll = document.documentElement.scrollWidth;
       return out;
