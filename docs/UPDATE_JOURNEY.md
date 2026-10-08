@@ -1361,3 +1361,10 @@ hook: an admin registering one is told to name another variable of the org,
 and an endpoint that named one before is refused where the token would be
 read, with the PATCH that repairs it. Tests: 1414 → 1416 (one more in
 `server/test-store.mjs`, one in `server/test-services-api.mjs`).
+
+A variable belongs to the org with the longest matching prefix, so an org
+named after another org's hooks would take them for good. Creating an org
+now refuses an id that would take another org's notify hooks, one whose own
+hooks another org already holds, and one that differs from another org's id
+only in `-` and `_`. Tests: 1416 → 1417 (one more in
+`server/test-identity-api.mjs`).
