@@ -77,6 +77,7 @@ import { verdictsRoutes } from './routes/verdicts.mjs';
 import { waiversRoutes } from './routes/waivers.mjs';
 import { auditReportRoutes } from './routes/audit-report.mjs';
 import { liveRoutes, livePackCounts } from './routes/live.mjs';
+import { mcpSettingsRoutes } from './routes/mcp-settings.mjs';
 import { abortAllLiveJobs } from './live-jobs.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
 import { journeyPackBSource, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
@@ -94,6 +95,7 @@ import { listMembershipsForUser } from './store/memberships.mjs';
 import { brandEnv, loadBrand, brandSource } from '../tools/lib/brand-env.mjs';
 import { brandShellHtml, DEFAULT_BRAND } from '../tools/lib/brand.mjs';
 import { loadTaxonomy, taxonomyAnswer } from './taxonomy.mjs';
+import { loadSettingsPolicy } from './mcp-settings-policy.mjs';
 import { mcpTransport, describeTransport } from '../tools/mcp-transport.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
 import { stackSummary } from '../tools/lib/stack-evidence.mjs';
@@ -339,6 +341,17 @@ app.get('/api/version', authorize('GET /api/version'), (req, res) => {
 app.use(authGate);
 app.use(orgContext);
 
+// The MCP server-settings API (rebadge batch 4) lives in
+// server/routes/mcp-settings.mjs: GET /api/mcp-settings — the settings
+// policy (OBSERVOGRAM_MCP_SETTINGS_POLICY) and whether the opt-in
+// pass-through is on, read by the studio when its Server settings modal
+// opens — and the pass-through itself (OBSERVOGRAM_MCP_ADMIN_PROXY=1), whose
+// two POSTs carry a secret in their body. Mounted BEFORE the body parsers:
+// those two read their own body (64 KiB) and answer a malformed one with a
+// fixed JSON text, where the app-wide parser's error page would quote it
+// (M6 (b) — every other route's answer is unchanged).
+app.use(mcpSettingsRoutes({ authorize }));
+
 app.use(express.json({ limit: '16mb' }));   // /api/crawl can carry a whole repo's worth of YAML
 app.use(express.text({ type: ['application/x-yaml', 'text/yaml', 'text/plain'], limit: '4mb' }));
 app.use(express.urlencoded({ extended: false, limit: '64kb' }));   // /auth/login form
@@ -347,12 +360,36 @@ app.use(express.urlencoded({ extended: false, limit: '64kb' }));   // /auth/logi
 // boot when OIDC is configured incompletely. See server/auth.mjs.
 initAuth(app, { authorize });
 
-// Express's PayloadTooLargeError is thrown by the body parsers BEFORE
-// any of our handlers run, and the default error path returns HTML.
-// /api/* always wants JSON so the client can show a clean error and
-// hint the user toward client-side filtering instead of dumping a stack
-// trace into the dropzone.
-app.use(function payloadTooLarge(err, req, res, next) {
+// The body parsers' errors — a malformed JSON body, a body over the cap,
+// a charset or content encoding the parser does not take — are thrown
+// BEFORE any of our handlers run (before a route's authorize() too: only
+// authGate and orgContext run ahead of the parsers), and Express's default
+// error path answers them as an HTML page carrying the error's stack, which
+// for a malformed JSON body quotes a fragment of the body (an `mcpAuth`, a
+// password), and prints that stack on stderr. So every one is answered
+// here, on every path, as JSON in the house shape — { ok: false, error }
+// with a fixed text, the parser's own status, no fragment of the body — and
+// nothing is logged (malformed-json-app-wide; the MCP server-settings
+// pass-through's two POSTs keep their own parser and answers,
+// server/routes/mcp-settings.mjs, M6 (b)).
+//
+// /api/*'s 413 keeps its text: the client shows it and hints the user
+// toward client-side filtering instead of dumping a stack trace into the
+// dropzone.
+const BODY_ERROR_TEXT = Object.freeze({
+  'entity.parse.failed': 'the request body is not valid JSON',
+  'entity.too.large': 'the request body is too large',
+  'parameters.too.many': 'the request body has too many parameters',
+  'charset.unsupported': 'the request body\'s charset is not supported',
+  'encoding.unsupported': 'the request body\'s content encoding is not supported',
+  'entity.verify.failed': 'the request body could not be read',
+  'request.aborted': 'the request body could not be read',
+  'request.size.invalid': 'the request body could not be read',
+  'stream.encoding.set': 'the request body could not be read',
+  'stream.not.readable': 'the request body could not be read',
+});
+app.use(function bodyParserError(err, req, res, next) {
+  if (res.headersSent) return next(err);
   if (err?.type === 'entity.too.large' || err?.status === 413) {
     if ((req.path || '').startsWith('/api/')) {
       const limit = err.limit ? Math.round(err.limit / 1024 / 1024) + 'MB' : '16MB';
@@ -362,7 +399,10 @@ app.use(function payloadTooLarge(err, req, res, next) {
       });
     }
   }
-  return next(err);
+  if (typeof err?.type !== 'string' || !Object.hasOwn(BODY_ERROR_TEXT, err.type)) return next(err);
+  const status = Number.isInteger(err.status) && err.status >= 400 && err.status < 600 ? err.status : 400;
+  res.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+  return res.status(status).json({ ok: false, error: BODY_ERROR_TEXT[err.type] });
 });
 
 app.get('/healthz', authorize('GET /healthz'), (req, res) => {
@@ -2216,6 +2256,11 @@ export async function start({ port = PORT, host = HOST, silent = false, legacyLi
   // the store is touched; a loaded one is installed process-wide for the
   // diff and the graphs and logged here once, path only.
   loadTaxonomy({ log });
+  // The MCP server-settings policy (OBSERVOGRAM_MCP_SETTINGS_POLICY,
+  // server/mcp-settings-policy.mjs), the taxonomy's twin: an unreadable or
+  // invalid file refuses the start before the store is touched; a loaded one
+  // is logged here once, path and rule count only.
+  loadSettingsPolicy({ log });
   // The brand (tools/lib/brand-env.mjs loadBrand, tools/lib/brand.mjs): read
   // here, not at import, so an in-process suite's env lands first; a bad
   // brand file refuses the start before the store is touched. Said once,

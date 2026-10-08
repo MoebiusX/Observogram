@@ -60,6 +60,12 @@ import {
   planModel, gateLogModel, elapsedText, liveResultModel, LIVE_JOB_GONE_TEXT, liveKindSuffix,
 } from './live-model.mjs';
 import { renderPingResult, renderGateLog, renderLiveResult } from './live-view.mjs';
+import { renderServerSettings } from './mcp-settings-view.mjs';
+import {
+  settingsGateModel, settingsTargetModel, descriptorReadModel, statusLine, ledeText, fieldInputSpec, actionNote, primaryBlock, actionBlock, policyView, verifiedLine,
+  proxyDescribeModel, proxyOutcomeModel,
+} from './mcp-settings-model.mjs';
+import { loadServerSettingsConfig, loadSettingsLibs, readDescriptorDirect, submitDirect, describeViaProxy, submitViaProxy } from './mcp-settings-api.mjs';
 import { renderNoOrgHome, renderServicesHome, renderServicePage, renderServiceEditor, markUnavailable } from './services-view.mjs';
 import {
   BUILT_SECTIONS, BUILT_EDITORS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsSectionHead, settingsAboveRank,
@@ -5068,7 +5074,9 @@ export async function loadAndCacheReferences() {
 
 $('#drawer-close').onclick   = () => closeDrawer('b');
 $('#drawer-a-close').onclick = () => closeDrawer('a');
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeDrawer(); closeMcpPanel(); } });
+// While the Server settings modal is open, its own Escape closes it alone:
+// the drawer and the MCP panel underneath stay as they were.
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (mssOpen()) return; closeDrawer(); closeMcpPanel(); } });
 
 // ---------- MCP refresh panel ----------
 
@@ -5352,10 +5360,11 @@ async function checkEndpointDrift(id) {
 
 // A picker opening: drawn from the list already read, then — when the list
 // is unread, or `fresh` (the deploy modal: every open) — read and redrawn.
+// Returns the read's promise (resolved at once when nothing is read).
 function openMcpTarget(id, { fresh = false } = {}) {
   paintMcpTarget(id);
-  if (!mcpPickersReadable() || (!fresh && state.mcpEndpoints !== null && state.mcpTargetPolicy !== null)) return;
-  readMcpEndpointsForPickers().then(() => paintMcpTarget(id));
+  if (!mcpPickersReadable() || (!fresh && state.mcpEndpoints !== null && state.mcpTargetPolicy !== null)) return Promise.resolve();
+  return readMcpEndpointsForPickers().then(() => paintMcpTarget(id));
 }
 
 // The focus a picker opens on: the URL field, or the select while it hides it.
@@ -5372,7 +5381,7 @@ function pickMcpTarget(container, value) {
   if (!MCP_PICKERS[id]) return;
   applyMcpTargetChoice(id, mcpPickerModel(id, value));
   if (id === 'deploy') updateDeployTargetSummary();
-  if (id === 'refresh') clearPingResult();
+  if (id === 'refresh') { clearPingResult(); paintMcpSettingsButton(); }
   if (id === 'draft') clearLivePing();
   if (value === '') document.getElementById(MCP_PICKERS[id].url)?.focus();
 }
@@ -5398,7 +5407,9 @@ function openMcpPanel() {
     const liveUrl = state.mcpStatus?.url || null; // served to operators only
     urlInput.value = saved || liveUrl || '';
   }
-  openMcpTarget('refresh');
+  paintMcpSettingsButton();
+  openMcpTarget('refresh').then(paintMcpSettingsButton);
+  if (state.access?.posture === 'static' && mcpSettingsBundle.origins === undefined) readBundleMcpOrigins();
   focusMcpTarget('refresh');
 }
 function closeMcpPanel() {
@@ -5431,28 +5442,460 @@ function setPingStatus(msg, kind = '') {
   el.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
 }
 
+// → { model, answer } as drawn, or { model: null, error } when there was
+// nothing to send, no result, or a refusal (the Server settings modal words
+// its connection-test line from it).
 async function pingFromPanel() {
   const { body: target } = mcpTargetOf('refresh');
   renderPingResult($('#mcp-ping-result'), null);
   if (!target) {
     setPingStatus(mcpTargetMissing('refresh'), 'error');
-    return;
+    return { model: null, error: mcpTargetMissing('refresh') };
   }
   const btn = $('#mcp-refresh-btn');
   btn.disabled = true;
   setPingStatus('testing the connection…');
   try {
-    const model = pingResultModel(await pingMcp(target));
-    if (!model) { setPingStatus('error: the server sent no ping result', 'error'); return; }
+    const answer = await pingMcp(target);
+    const model = pingResultModel(answer);
+    if (!model) { setPingStatus('error: the server sent no ping result', 'error'); return { model: null, error: 'the server sent no ping result' }; }
     setPingStatus(model.status, model.tone === 'ok' ? 'ok' : 'error');
     renderPingResult($('#mcp-ping-result'), model);
+    return { model, answer };
   } catch (e) {
     // The server's refusal (400 / 403 / 502), or the bundle's 501 sentence.
     setPingStatus(`error: ${e.message}`, 'error');
+    return { model: null, error: e.message };
   } finally {
     btn.disabled = false;
   }
 }
+
+// ---------- the MCP panel: Server settings (rebadge batch 4, D1/D2) ----------
+//
+// "Server settings…" (#mcp-settings-btn) opens a modal in this page that
+// configures the MCP server behind the panel's target — not the studio's
+// connection to it. Only a reader who may change an MCP endpoint opens it
+// (settingsGateModel: GET /api/mcp-endpoints `policy.register.allowed`);
+// the button is never hidden, and says why when it cannot be used.
+//
+// Nothing runs at boot or when the panel opens. Opening the modal reads
+// GET /api/mcp-settings (the deployment's settings policy) and, once the
+// target passes the browser's rule (settingsTargetModel: mcpUrlPolicy,
+// never the studio's own origin, a loopback MCP only from a loopback page,
+// https unless loopback, a loopback or listed origin), the server's
+// settings description from <MCP server root>/admin/schema — from the
+// browser, with no credential. The configure and the server's actions are
+// POSTed from the browser straight to the MCP server
+// (studio/mcp-settings-api.mjs): no value passes through, or stays in, the
+// studio. A secret input is emptied as soon as the request is sent, every
+// input on close, and nothing modal-related is put in `state`. The
+// deployment's settings policy runs on what is typed (150 ms after the last
+// keystroke, and again at send): a rule that matches, or cannot run on this
+// form, shows its warning, and its acknowledgement — a box in the dialog,
+// never kept — must be ticked before the send. The outcome
+// is shown as the server returned it (redacted, as text); after a
+// verified configure the panel's connection test runs, and the modal words
+// what it showed from the read's outcome.
+
+const mss = { ctx: null, serial: 0, outcomeSerial: 0 };
+// The static bundle's baked MCP origin list ({ listed, origins }), null when none; undefined until read.
+const mcpSettingsBundle = { origins: undefined };
+const MSS_FORM_STATES = new Set(['described', 'generic', 'sending', 'outcome', 'unknown', 'verifying', 'verified']);
+
+function mssHost() { return document.getElementById('mss-host'); }
+function mssOpen() { return !!mssHost()?.firstElementChild; }
+
+function paintMcpSettingsButton() {
+  const btn = $('#mcp-settings-btn');
+  if (!btn) return;
+  const gate = settingsGateModel({
+    access: state.access, mcpTargetPolicy: state.mcpTargetPolicy, hasTarget: !!mcpTargetOf('refresh').body,
+    missing: mcpTargetMissing('refresh'), pageOrigin: location.origin, bundleOrigins: mcpSettingsBundle.origins,
+  });
+  btn.dataset.why = gate.reason ?? '';
+  if (gate.enabled) {
+    btn.removeAttribute('aria-disabled');
+    btn.classList.remove('is-unavailable');
+    btn.querySelector('.svc-why')?.remove();
+  } else {
+    markUnavailable(btn, gate.reason);
+  }
+}
+
+// The bundle's shim answers GET /api/mcp-settings in the page (no request leaves it).
+function readBundleMcpOrigins() {
+  loadServerSettingsConfig()
+    .then((c) => { mcpSettingsBundle.origins = c?.mcpOrigins ?? null; }, () => { mcpSettingsBundle.origins = null; })
+    .then(paintMcpSettingsButton);
+}
+
+const mssOriginOf = (url) => { try { return new URL(url).origin; } catch { return null; } };
+
+async function openServerSettings() {
+  const btn = $('#mcp-settings-btn');
+  if (btn?.getAttribute('aria-disabled') === 'true') { explainUnavailable(btn.dataset.why); return; }
+  if (mssOpen()) return;
+  const target = mcpTargetOf('refresh');
+  const url = target.chosen ? (state.mcpEndpoints?.find((ep) => ep.id === target.chosen.id)?.url ?? '') : target.url;
+  let host = mssHost();
+  if (!host) { host = document.createElement('div'); host.id = 'mss-host'; }
+  document.body.appendChild(host);
+  const ctx = {
+    abort: new AbortController(), url, chosen: target.chosen, posture: state.access?.posture ?? 'unknown',
+    state: 'reading', serial: ++mss.serial, origin: mssOriginOf(url), descriptorUrl: null, libs: null,
+    policyState: 'loading', policy: null, prefill: null, findings: null, findingsFor: null, findingsTimer: null, descriptor: null, generic: null, genericReason: null, genericError: null,
+    reason: null, redirect: false, outcome: null, verified: null, notice: null, confirming: null, busy: false, sendingTo: null, afterAction: false,
+    proxy: false,
+  };
+  mss.ctx = ctx;
+  paintMss();
+  let libs;
+  let config;
+  try {
+    [libs, config] = await Promise.all([loadSettingsLibs(), loadServerSettingsConfig().catch(() => null)]);
+  } catch {
+    if (mss.ctx !== ctx) return;
+    ctx.state = 'refused';
+    ctx.reason = 'the studio could not load its settings rules — close and reopen to try again';
+    paintMss();
+    return;
+  }
+  if (mss.ctx !== ctx) return;
+  ctx.libs = libs;
+  // The studio server passes every request through when it says so (never a fallback); the bundle's shim never does.
+  ctx.proxy = ctx.posture !== 'static' && config?.proxy === true;
+  const compiled = config && config.policy !== null && config.policy !== undefined ? libs.lib.compileSettingsPolicy(config.policy, { timed: false }) : null;
+  ctx.policyState = !config ? 'failed' : !compiled ? 'none' : compiled.policy ? 'served' : 'failed';
+  ctx.policy = compiled?.policy ?? null;
+  const g = ctx.policy?.generic ?? null;
+  ctx.prefill = { names: g?.names ?? libs.lib.GENERIC_NAMES, path: g?.path ?? '/configure', auth: g?.auth ?? 'body' };
+  const origins = ctx.posture === 'static' ? (config?.mcpOrigins ?? null) : (state.mcpTargetPolicy?.typed ?? null);
+  const t = settingsTargetModel({ url, posture: ctx.posture, origins, pageOrigin: location.origin, proxyWayOut: mssProxyWayOut(ctx), proxy: ctx.proxy }, libs);
+  if (!t.ok) {
+    ctx.state = 'target-refused';
+    ctx.reason = t.reason;
+    paintMss();
+    return;
+  }
+  ctx.origin = t.origin;
+  ctx.descriptorUrl = t.descriptorUrl;
+  await readMssDescriptor(ctx);
+}
+
+async function readMssDescriptor(ctx) {
+  Object.assign(ctx, { state: 'reading', serial: ++mss.serial, descriptor: null, generic: null, outcome: null, verified: null, notice: null, confirming: null });
+  paintMss();
+  let r;
+  if (ctx.proxy) {
+    let answer = null;
+    let error = null;
+    try { answer = await describeViaProxy(mssTargetBody(ctx), { signal: ctx.abort.signal }); } catch (e) { error = e; }
+    if (mss.ctx !== ctx || ctx.abort.signal.aborted) return;
+    r = proxyDescribeModel(answer, { mcpUrl: ctx.url, descriptorUrl: ctx.descriptorUrl, error }, ctx.libs);
+  } else {
+    const read = await readDescriptorDirect(ctx.descriptorUrl, { signal: ctx.abort.signal });
+    if (mss.ctx !== ctx || read.kind === 'aborted') return;
+    r = descriptorReadModel(read, { mcpUrl: ctx.url, descriptorUrl: ctx.descriptorUrl }, ctx.libs);
+  }
+  ctx.serial = ++mss.serial;
+  if (r.state === 'described') { ctx.state = 'described'; ctx.descriptor = r.descriptor; }
+  else if (r.state === 'generic') useMssGeneric(ctx, r.reason);
+  else { ctx.state = r.state; ctx.reason = r.reason ?? null; ctx.redirect = r.redirect === true; }
+  paintMss();
+}
+
+// The studio server's pass-through names the target as the panel does: the endpoint by id, else the typed URL.
+const mssTargetBody = (ctx) => (ctx.chosen ? { mcpEndpointId: ctx.chosen.id } : { mcpUrl: ctx.url });
+// Naming OBSERVOGRAM_MCP_ADMIN_PROXY as a way out is true only where a studio server could turn it on and has not.
+const mssProxyWayOut = (ctx) => (ctx.posture === 'identity' || ctx.posture === 'open') && !ctx.proxy;
+
+// The generic form (A.1.5): the policy's prefill, else the defaults; editable under "What the server expects".
+function useMssGeneric(ctx, reason) {
+  const d = ctx.libs.lib.genericDescriptor(ctx.prefill);
+  ctx.serial = ++mss.serial;
+  ctx.state = 'generic';
+  ctx.genericReason = reason;
+  ctx.generic = { ...ctx.prefill, names: { ...ctx.prefill.names } };
+  ctx.genericError = d.reason ?? null;
+  ctx.descriptor = d.reason ? ctx.libs.lib.genericDescriptor() : d;
+}
+
+// What the reader typed, read from the inputs into a value that goes out of scope with its caller.
+function mssValues() {
+  const out = Object.create(null);
+  for (const input of mssHost()?.querySelectorAll('.mss-form input[data-field]') ?? []) {
+    out[input.getAttribute('data-field')] = input.type === 'checkbox' ? input.checked : input.value;
+  }
+  return out;
+}
+
+// The settings policy's findings for what is typed now (A.3.4): rule indexes, warnings and notes — no value.
+function mssCheckPolicy(ctx, values) {
+  ctx.findings = ctx.policy && ctx.descriptor ? ctx.libs.lib.policyFindings(ctx.policy, ctx.descriptor, values) : [];
+  ctx.findingsFor = ctx.descriptor;
+}
+
+// The acknowledgements ticked in the dialog (they are kept nowhere else).
+function mssTicked() {
+  return [...mssHost()?.querySelectorAll('.mss-policy input[data-ack]:checked') ?? []].map((i) => i.getAttribute('data-ack'));
+}
+
+function clearMssSecrets() {
+  for (const input of mssHost()?.querySelectorAll('input[type="password"]') ?? []) input.value = '';
+}
+
+function buildMssModel(ctx) {
+  const lib = ctx.libs?.lib;
+  const showForm = !!ctx.descriptor && MSS_FORM_STATES.has(ctx.state);
+  const values = showForm ? mssValues() : null;
+  const status = ctx.notice ? { text: ctx.notice, kind: 'error' } : statusLine({
+    state: ctx.state, descriptorUrl: ctx.descriptorUrl, reason: ctx.reason, genericReason: ctx.genericReason, redirect: ctx.redirect,
+    pageOrigin: location.origin, proxyWayOut: mssProxyWayOut(ctx), proxy: ctx.proxy, sendingTo: ctx.sendingTo, outcome: ctx.outcome, verified: ctx.verified,
+  });
+  const buttons = [];
+  if (ctx.state === 'refused' || ctx.state === 'unreachable') buttons.push('retry', 'generic');
+  if (ctx.state === 'unknown') buttons.push('test', 'retry');
+  if (ctx.state === 'outcome' && (ctx.afterAction || ctx.outcome?.tone === 'warn')) buttons.push('test');
+  if (ctx.state === 'verified' && ctx.posture !== 'static' && ctx.verified?.kind !== 'error') buttons.push('openLive');
+  const model = {
+    key: showForm ? `form:${ctx.serial}` : `${ctx.state}:${ctx.serial}`,
+    eyebrow: ctx.origin ? `MCP server · ${ctx.origin}` : 'MCP server',
+    lede: ctx.descriptorUrl ? ledeText(ctx.origin, { proxy: ctx.proxy }) : null,
+    status,
+    busy: ctx.busy,
+    buttons,
+    outcome: MSS_FORM_STATES.has(ctx.state) ? ctx.outcome : null,
+    fields: null,
+    generic: null,
+    policy: null,
+    primary: null,
+    actions: [],
+  };
+  if (!showForm) return model;
+  model.fields = ctx.descriptor.fields.map((f) => ({ ...f, spec: fieldInputSpec(f) }));
+  if (ctx.generic) model.generic = { ...ctx.generic, reason: ctx.genericError ? `Not valid: ${ctx.genericError}.` : '' };
+  const req = lib.settingsRequest(ctx.descriptor, values);
+  // The findings of the last check (re-run on a new form, 150 ms after typing, and at send).
+  if (ctx.findings === null || ctx.findingsFor !== ctx.descriptor) mssCheckPolicy(ctx, values);
+  const ticked = mssTicked();
+  const policy = policyView(ctx.findings, ticked);
+  model.policy = policy.rules;
+  model.primary = { label: 'Send to the server', blocked: primaryBlock({ policyState: ctx.policyState, requestReason: req.reason ?? null, genericReason: ctx.genericError, ackReason: policy.block }) };
+  model.actions = ctx.descriptor.actions.map((a) => {
+    const r = lib.settingsRequest(ctx.descriptor, values, { action: a.name });
+    const blocked = r.reason ? null : actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: r.sent, ticked });
+    return { name: a.name, label: a.label, confirm: a.confirm, confirming: ctx.confirming === a.name, blocked, note: r.reason ? r.reason : actionNote(r.carries) };
+  });
+  return model;
+}
+
+function paintMss() {
+  const ctx = mss.ctx;
+  const host = mssHost();
+  if (!ctx || !host) return;
+  renderServerSettings(host, buildMssModel(ctx), mcpSettingsHost);
+}
+
+async function sendMss(ctx, req, actionName, values) {
+  const lib = ctx.libs.lib;
+  const where = lib.resolveSettingsPath(req.path, ctx.url, ctx.generic
+    ? { noun: 'the settings path', fix: 'correct it under What the server expects' }
+    : (actionName ? { noun: `the server's endpoint for action "${actionName}"` } : {}));
+  if (where.reason) { ctx.notice = where.reason.charAt(0).toUpperCase() + where.reason.slice(1) + '.'; paintMss(); return; }
+  const to = new URL(where.url);
+  Object.assign(ctx, { busy: true, state: 'sending', sendingTo: `${to.origin}${to.pathname}`, outcome: null, verified: null, notice: null, afterAction: !!actionName });
+  paintMss();
+  if (ctx.proxy) { await sendMssViaProxy(ctx, values, actionName); return; }
+  const res = await submitDirect(where.url, { headers: req.headers, body: req.body }, { signal: ctx.abort.signal, onSent: clearMssSecrets });
+  clearMssSecrets();
+  if (mss.ctx !== ctx || res.kind === 'aborted') return;
+  ctx.busy = false;
+  if (res.kind === 'unknown') { ctx.state = 'unknown'; paintMss(); return; }
+  const answer = res.kind === 'redirect'
+    ? { status: 0, type: 'opaqueredirect', contentType: null, text: '' }
+    : { status: res.status, contentType: res.contentType, text: res.text, truncated: res.truncated };
+  const o = lib.outcomeOf(answer, { secretValues: req.secretValues, secretNames: req.secretNames, user: req.user });
+  ctx.outcome = { ...o, serial: ++mss.outcomeSerial };
+  ctx.state = 'outcome';
+  paintMss();
+  if (!actionName && o.success) await verifyMss(ctx);
+}
+
+// Through the studio server (OBSERVOGRAM_MCP_ADMIN_PROXY=1): the values as
+// typed (it builds the request from the description it reads itself), the
+// ticked acknowledgements, and the outcome shape it passes back. The
+// secrets are emptied as soon as the request is issued.
+async function sendMssViaProxy(ctx, values, actionName) {
+  const payload = {
+    ...mssTargetBody(ctx), mode: ctx.generic ? 'generic' : 'described', values, acks: mssTicked().map(Number),
+    ...(ctx.generic ? { generic: { path: ctx.generic.path, names: { ...ctx.generic.names }, auth: ctx.generic.auth } } : {}),
+    ...(actionName ? { action: actionName } : {}),
+  };
+  const pending = submitViaProxy(payload, { signal: ctx.abort.signal });
+  clearMssSecrets();
+  let answer = null;
+  let error = null;
+  try { answer = await pending; } catch (e) { error = e; }
+  if (mss.ctx !== ctx || ctx.abort.signal.aborted) return;
+  ctx.busy = false;
+  if (error) {
+    // The studio server's own refusal, in its words: a 502 (no answer, a
+    // redirect, a timeout) may have reached the MCP server — the unknown
+    // state; anything else was refused before a request left.
+    ctx.state = error.status === 502 ? 'unknown' : (ctx.generic ? 'generic' : 'described');
+    ctx.notice = `The studio server answered ${error.message || 'nothing it could read'}`.replace(/([^.…?!])$/, '$1.');
+    paintMss();
+    return;
+  }
+  const o = proxyOutcomeModel(answer, ctx.libs);
+  ctx.outcome = { ...o, serial: ++mss.outcomeSerial };
+  ctx.state = 'outcome';
+  paintMss();
+  if (!actionName && o.success) await verifyMss(ctx);
+}
+
+// The panel's connection test, after a verified configure or on request.
+async function verifyMss(ctx) {
+  const headline = ctx.outcome?.headline ?? '';
+  if (ctx.posture === 'static') {
+    ctx.verified = verifiedLine(headline, null, { isStatic: true });
+    ctx.state = 'verified';
+    paintMss();
+    return;
+  }
+  Object.assign(ctx, { state: 'verifying', busy: true, notice: null });
+  paintMss();
+  const ping = await pingFromPanel();
+  if (mss.ctx !== ctx) return;
+  ctx.busy = false;
+  ctx.verified = verifiedLine(headline, ping.model ? ping : null, { error: ping.error ?? null });
+  ctx.state = 'verified';
+  paintMss();
+}
+
+function closeServerSettings({ focus = true } = {}) {
+  const ctx = mss.ctx;
+  mss.ctx = null;
+  ctx?.abort.abort();
+  if (ctx?.findingsTimer) clearTimeout(ctx.findingsTimer);
+  const host = mssHost();
+  if (host) {
+    for (const input of host.querySelectorAll('input')) {
+      if (input.type === 'checkbox' || input.type === 'radio') input.checked = false;
+      else input.value = '';
+    }
+    host.innerHTML = '';
+  }
+  if (focus) $('#mcp-settings-btn')?.focus();
+}
+
+// "Open the live panel": the live panel on the same target, its connection test run (step 2 drawn when connected).
+function openLiveFromSettings() {
+  const ctx = mss.ctx;
+  if (!ctx) return;
+  const { chosen, url } = ctx;
+  closeServerSettings({ focus: false });
+  closeMcpPanel();
+  const panel = $('#draft-mcp-panel');
+  if (!panel) return;
+  if (panel.hidden) $('#draft-mcp-btn')?.onclick?.();
+  if (panel.hidden) panel.hidden = false;
+  if (chosen) paintMcpTarget('draft', { chosen: String(chosen.id) });
+  else {
+    paintMcpTarget('draft', { chosen: '' });
+    const input = $('#draft-mcp-url');
+    if (input) input.value = url;
+  }
+  clearLivePing();
+  testLiveConnection();
+}
+
+const mcpSettingsActions = {
+  close: () => closeServerSettings(),
+  input: () => {
+    const ctx = mss.ctx;
+    if (!ctx) return;
+    ctx.notice = null;
+    ctx.confirming = null;
+    paintMss();
+    if (!ctx.policy) return;
+    clearTimeout(ctx.findingsTimer);
+    ctx.findingsTimer = setTimeout(() => {
+      ctx.findingsTimer = null;
+      if (mss.ctx !== ctx) return;
+      ctx.findings = null;
+      paintMss();
+    }, 150);
+  },
+  ack: () => { const ctx = mss.ctx; if (!ctx) return; ctx.notice = null; paintMss(); },
+  generic: () => {
+    const ctx = mss.ctx;
+    if (!ctx?.generic) return;
+    const host = mssHost();
+    const read = (k) => host.querySelector(`input[data-generic="${k}"]`)?.value ?? '';
+    const auth = host.querySelector('input[data-generic="auth"]:checked')?.value ?? 'body';
+    const g = { path: read('path'), names: { url: read('url'), user: read('user'), secret: read('secret'), apiKey: read('apiKey') }, auth };
+    const d = ctx.libs.lib.genericDescriptor(g);
+    ctx.generic = g;
+    ctx.genericError = d.reason ?? null;
+    if (!d.reason) ctx.descriptor = d;
+    ctx.notice = null;
+    paintMss();
+    // The inputs carry the new names now: the policy checks the form under them.
+    ctx.findings = null;
+    paintMss();
+  },
+  send: () => {
+    const ctx = mss.ctx;
+    if (!ctx?.descriptor || ctx.busy) return;
+    const lib = ctx.libs.lib;
+    const values = mssValues();
+    const req = lib.settingsRequest(ctx.descriptor, values);
+    clearTimeout(ctx.findingsTimer);
+    ctx.findingsTimer = null;
+    mssCheckPolicy(ctx, values);
+    const block = primaryBlock({ policyState: ctx.policyState, requestReason: req.reason ?? null, genericReason: ctx.genericError, ackReason: policyView(ctx.findings, mssTicked()).block });
+    if (block) { ctx.notice = block; paintMss(); return; }
+    ctx.confirming = null;
+    sendMss(ctx, req, null, values);
+  },
+  action: (name) => {
+    const ctx = mss.ctx;
+    if (!ctx?.descriptor || ctx.busy) return;
+    const a = ctx.descriptor.actions.find((x) => x.name === name);
+    if (!a) return;
+    const values = mssValues();
+    const req = ctx.libs.lib.settingsRequest(ctx.descriptor, values, { action: name });
+    if (!req.reason) {
+      // An action that carries a field the policy checks waits on its ack, as the pass-through does.
+      clearTimeout(ctx.findingsTimer);
+      ctx.findingsTimer = null;
+      mssCheckPolicy(ctx, values);
+      const block = actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: req.sent, ticked: mssTicked() });
+      if (block) { ctx.notice = block; ctx.confirming = null; paintMss(); return; }
+    }
+    if (a.confirm && ctx.confirming !== name) { ctx.confirming = name; ctx.notice = null; paintMss(); return; }
+    ctx.confirming = null;
+    if (req.reason) { ctx.notice = req.reason.charAt(0).toUpperCase() + req.reason.slice(1) + '.'; paintMss(); return; }
+    sendMss(ctx, req, name, values);
+  },
+  retry: () => {
+    const ctx = mss.ctx;
+    if (!ctx) return;
+    if (ctx.state === 'unknown') { Object.assign(ctx, { state: ctx.generic ? 'generic' : 'described', notice: null }); paintMss(); return; }
+    readMssDescriptor(ctx);
+  },
+  useGeneric: () => {
+    const ctx = mss.ctx;
+    if (!ctx?.libs) return;
+    useMssGeneric(ctx, ctx.state === 'refused' ? `its settings description was refused: ${ctx.reason}` : 'your browser could not read one');
+    paintMss();
+  },
+  test: () => { const ctx = mss.ctx; if (ctx && !ctx.busy) verifyMss(ctx); },
+  openLive: () => openLiveFromSettings(),
+};
+const mcpSettingsHost = { mcpSettings: mcpSettingsActions };
 
 async function refreshLive() {
   const { body: target, chosen } = mcpTargetOf('refresh');
@@ -7560,11 +8003,15 @@ function setupMcpPanel() {
   if (note) note.textContent = rebuildNoteText();
   // A result never describes a target other than the one shown.
   for (const id of ['#mcp-url', '#mcp-auth']) $(id)?.addEventListener('input', clearPingResult);
+  $('#mcp-url')?.addEventListener('input', paintMcpSettingsButton);
+  $('#mcp-settings-btn')?.addEventListener('click', openServerSettings);
 
-  // Close on outside click
+  // Close on outside click — never while the Server settings modal is open,
+  // nor for a click whose node a repaint removed (it was inside the modal).
   document.addEventListener('click', (e) => {
     const panel = $('#mcp-panel');
     if (panel.hidden) return;
+    if (!e.target.isConnected || mssOpen()) return;
     if (e.target.closest('#mcp-panel') || e.target.closest('#mcp-btn')) return;
     closeMcpPanel();
   });

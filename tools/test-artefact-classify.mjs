@@ -19,6 +19,7 @@ import {
   FAMILIES, FAMILY_HOME, DEFINES_RULES, ID_RULES, ID_MATCH_LENGTH, PATTERN_MAX_LENGTH,
   TAXONOMY_VERSION, TAXONOMY_VERSIONS, TAXONOMY_VERSION_LATEST, GLOSSARY_LIMITS,
   classifyArtefact, familyOf, compileTaxonomy, validateTaxonomy, configureTaxonomy, activeTaxonomy, describeTaxonomy,
+  compileBoundedPattern,
   glossaryFor, glossaryByText, glossaryEntries,
 } from './lib/artefact-classify.mjs';
 
@@ -209,6 +210,58 @@ test('compileTaxonomy refuses with exact texts; validateTaxonomy lists every rea
   assert.deepEqual(validateTaxonomy({ version: 1, glossary: [] }), ['taxonomy: unknown key "glossary"'], 'the glossary needs version 2');
   // A plain group is fine — only a quantified one is refused.
   assert.equal(compileTaxonomy({ version: 1, ids: [{ pattern: '^(?:svc|app)-[a-z0-9-]+$', family: 'sli' }] }).ids.length, 1);
+});
+
+test('compileBoundedPattern is the taxonomy\'s pattern rule: each refusal names its reason, and a passing pattern comes back compiled', () => {
+  const ok = compileBoundedPattern('^svc-[a-z]+$', { flags: 'i' });
+  assert.deepEqual(Object.keys(ok), ['re']);
+  assert.ok(ok.re instanceof RegExp);
+  assert.equal(ok.re.flags, 'i');
+  assert.equal(ok.re.test('SVC-abc'), true);
+  assert.equal(compileBoundedPattern('^x').re.flags, '', 'flags default to ""');
+  const reason = (pattern, opts) => compileBoundedPattern(pattern, opts).reason;
+  assert.equal(reason(''), 'pattern must be a non-empty string');
+  assert.equal(reason(undefined), 'pattern must be a non-empty string');
+  assert.equal(reason(7), 'pattern must be a non-empty string');
+  assert.equal(reason(`^${'a'.repeat(PATTERN_MAX_LENGTH)}`), `pattern longer than ${PATTERN_MAX_LENGTH} characters`);
+  assert.equal(compileBoundedPattern(`^${'a'.repeat(PATTERN_MAX_LENGTH - 1)}`).reason, undefined, 'exactly the maximum is allowed');
+  assert.equal(reason('svc-'), 'pattern must be anchored (start with ^)');
+  assert.equal(reason('^svc-', { flags: 'g' }), 'flags must be "" or "i"');
+  assert.equal(reason('^(a+)+$'), 'nested quantifier');
+  assert.equal(reason('^(ab){2,}'), 'nested quantifier');
+  assert.equal(reason('^svc-('), 'invalid regex: Invalid regular expression: /^svc-(/: Unterminated group');
+});
+
+test('compileBoundedPattern names the pattern by `noun` and leaves the rule itself unchanged', () => {
+  const reason = (pattern, opts) => compileBoundedPattern(pattern, { noun: 'when.pattern', ...opts }).reason;
+  assert.equal(reason(''), 'when.pattern must be a non-empty string');
+  assert.equal(reason(`^${'a'.repeat(PATTERN_MAX_LENGTH)}`), `when.pattern longer than ${PATTERN_MAX_LENGTH} characters`);
+  assert.equal(reason('x'), 'when.pattern must be anchored (start with ^)');
+  assert.equal(reason('^x', { flags: 'm' }), 'flags must be "" or "i"');
+  assert.equal(reason('^(a|aa)*b'), 'nested quantifier');
+  // The taxonomy's own texts are the ones it always had (the noun defaults to `pattern`).
+  assert.deepEqual(validateTaxonomy({ version: 1, ids: [{ pattern: 'svc-', family: 'sli' }, { pattern: '^(a+)+$', family: 'sli' }] }),
+    ['taxonomy: ids[0]: pattern must be anchored (start with ^)', 'taxonomy: ids[1]: nested quantifier']);
+});
+
+test('compileBoundedPattern with timed: false skips only the wall-clock run', () => {
+  // The clock is stubbed: Date.now jumps past the 50 ms budget on every
+  // call, so any timed run reads as too slow.
+  const realNow = Date.now;
+  let t = 0;
+  Date.now = () => (t += 1000);
+  try {
+    assert.equal(compileBoundedPattern('^svc-[a-z]+$').reason, `pattern too slow against a ${ID_MATCH_LENGTH}-character id`);
+    assert.equal(compileBoundedPattern('^svc-[a-z]+$', { noun: 'when.pattern' }).reason, `when.pattern too slow against a ${ID_MATCH_LENGTH}-character id`);
+    const untimed = compileBoundedPattern('^svc-[a-z]+$', { timed: false });
+    assert.ok(untimed.re instanceof RegExp, 'timed: false never reads the clock');
+    // …and every static check still runs.
+    assert.equal(compileBoundedPattern('svc-', { timed: false }).reason, 'pattern must be anchored (start with ^)');
+    assert.equal(compileBoundedPattern('^(a+)+$', { timed: false }).reason, 'nested quantifier');
+    assert.equal(compileBoundedPattern('^x', { timed: false, flags: 'g' }).reason, 'flags must be "" or "i"');
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test('configureTaxonomy installs the override process-wide, null restores the defaults, and anything else is refused', () => {

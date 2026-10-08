@@ -173,3 +173,65 @@ export function mcpUrlPolicy(raw, { allowLocal = true } = {}) {
   }
   return { safeUrl, local };
 }
+
+// ---------- this machine ----------
+//
+// Moved from server/mcp-target-policy.mjs (which re-exports it), so the
+// studio can run the same test in the browser.
+
+const LOOPBACK_V4 = /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+// [::ffff:127.x.y.z] normalises to [::ffff:7fxx:yyzz].
+const LOOPBACK_MAPPED = /^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/;
+
+// This machine, after URL normalisation: localhost, 127.0.0.0/8, [::1],
+// [::ffff:7f00:0]/104. Takes an origin or any http(s) URL.
+export function isLoopbackOrigin(origin) {
+  let host;
+  try { host = new URL(String(origin)).hostname; } catch { return false; }
+  return host === 'localhost' || LOOPBACK_V4.test(host) || host === '[::1]' || LOOPBACK_MAPPED.test(host);
+}
+
+// A host that may name the reader's own machine: everything isLoopbackOrigin
+// accepts, plus `*.localhost` (browsers resolve it to loopback), the
+// unspecified addresses 0.0.0.0, [::] and [::ffff:0:0] (a connection to
+// them reaches this machine) and one trailing dot (`localhost.`). Takes a
+// hostname — bare or bracketed IPv6, any IPv4 spelling the URL parser
+// normalises. The wider reading is for a check that REFUSES more when a host
+// is local (the browser's same-machine rule), never for an exemption:
+// `*.localhost` need not resolve to loopback for Node, so the server's
+// allowlist keeps isLoopbackOrigin.
+export function mayBeThisMachine(hostname) {
+  let host = String(hostname ?? '').trim();
+  if (!host) return false;
+  if (!host.startsWith('[') && host.includes(':')) host = `[${host}]`;
+  try { host = new URL(`http://${host}/`).hostname; } catch { return false; }
+  if (host.endsWith('.')) host = host.slice(0, -1);
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (LOOPBACK_V4.test(host) || host === '[::1]' || LOOPBACK_MAPPED.test(host)) return true;
+  return host === '0.0.0.0' || host === '[::]' || host === '[::ffff:0:0]';
+}
+
+// ---------- the MCP origin list (OBSERVOGRAM_MCP_ORIGINS) ----------
+//
+// Moved here from server/mcp-target-policy.mjs (which re-exports it) so the
+// static-bundle builder's --mcp-origins reads a list by the server's rule.
+
+// A list's value → { any, origins: Set<origin>, rejected: [entry] }. Entries
+// are comma-separated; a lone `*` is the any-origin switch. An entry is kept
+// only when it parses as http(s) with no userinfo, a path of `/` or none, no
+// query, no fragment and no `*` in the host; `localhost:8080` (no scheme),
+// `https://*.example.com` or one with a path is rejected, never kept.
+export function parseOriginList(value) {
+  const out = { any: false, origins: new Set(), rejected: [] };
+  for (const entry of String(value ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
+    if (entry === '*') { out.any = true; continue; }
+    let url = null;
+    try { url = new URL(entry); } catch { /* rejected below */ }
+    // An origin and nothing else: the parsed URL is its origin plus `/` (no
+    // userinfo, path, query or fragment — even an empty `?` or `#`).
+    const ok = url && (url.protocol === 'http:' || url.protocol === 'https:') && url.href === `${url.origin}/`
+      && !url.hostname.includes('*');
+    if (ok) out.origins.add(url.origin); else out.rejected.push(entry);
+  }
+  return out;
+}

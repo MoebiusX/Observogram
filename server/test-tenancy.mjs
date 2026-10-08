@@ -49,6 +49,10 @@ process.env.OBSERVOGRAM_ORG_ACME_MCP_ORIGINS = 'https://acme.mcp.test';
 process.env.OBSERVOGRAM_ORG_DELTA_MCP_ORIGINS = 'https://delta.mcp.test';
 // acme's configured snapshot scope (server/live-jobs.mjs): never served to another org.
 process.env.OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_PREFIXES = 'acme_';
+// The MCP server-settings pass-through on (rebadge batch 4; read per request),
+// so its two rows below reach the target step: off, they would answer 404
+// before any org is consulted, which proves nothing.
+process.env.OBSERVOGRAM_MCP_ADMIN_PROXY = '1';
 
 import { createHarness } from '../tools/lib/harness.mjs';
 const { assert, report } = createHarness({ indent: '  ', truncate: 200 });
@@ -164,7 +168,7 @@ function apiRoutes() {
 // The catalogue and the stateless routes. (The live pack is per org since
 // STORE_PLAN slice 3: its two routes are org-scoped below.)
 const DEPLOYMENT_GLOBAL = new Set([
-  'GET /api/version', 'GET /api/orgs', 'GET /api/examples', 'GET /api/taxonomy', 'GET /api/references', 'GET /api/library',
+  'GET /api/version', 'GET /api/orgs', 'GET /api/examples', 'GET /api/taxonomy', 'GET /api/mcp-settings', 'GET /api/references', 'GET /api/library',
   'GET /api/library/:id', 'GET /api/library/requirements/:tier', 'POST /api/library/instantiate',
   'POST /api/library/compile', 'GET /api/maturity-rubric', 'GET /api/compile/targets', 'GET /api/deploy/matrix',
 ]);
@@ -420,6 +424,13 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     // endpoint here — 400 before any wire call (the sweep counts the fake's calls).
     'POST /api/mcp/ping': ['/api/mcp/ping', { mcpEndpointId }, (r) => assert(r.status === 400 && r.json?.error === `no MCP endpoint ${mcpEndpointId} in this org — GET /api/mcp-endpoints lists them`,
       `${who}: POST /api/mcp/ping by the other org's endpoint id → 400, no MCP endpoint in this org`, [r.status, r.json?.error])],
+    // The MCP server-settings pass-through (rebadge batch 4; on in this
+    // process): the other org's endpoint id is no endpoint here — 400 before
+    // any request leaves (the sweep counts the fake's calls).
+    'POST /api/mcp-settings/describe': ['/api/mcp-settings/describe', { mcpEndpointId }, (r) => assert(r.status === 400 && r.json?.error === `no MCP endpoint ${mcpEndpointId} in this org — GET /api/mcp-endpoints lists them`,
+      `${who}: POST /api/mcp-settings/describe by the other org's endpoint id → 400, no MCP endpoint in this org`, [r.status, r.json?.error])],
+    'POST /api/mcp-settings/submit': ['/api/mcp-settings/submit', { mcpEndpointId, mode: 'generic', values: { url: 'https://backend.example', apiKey: 'tenancy-key-0123' } }, (r) => assert(r.status === 400 && r.json?.error === `no MCP endpoint ${mcpEndpointId} in this org — GET /api/mcp-endpoints lists them`,
+      `${who}: POST /api/mcp-settings/submit by the other org's endpoint id → 400, no MCP endpoint in this org`, [r.status, r.json?.error])],
     // The live jobs (rebadge batch 3, C1): the other org's job is the
     // unknown-id 404 to read and to cancel; the list never shows it, nor the
     // other org's configured scope; a start without a kind is a 400.

@@ -48,6 +48,7 @@ import {
   collectModuleGraph, rewriteSpecifiers, assertRewritten, inlineJson, styleBlock, buildStudioBundle,
   checkPackUrl, parseArgs, defaultPackId, ENTRIES, CONFIG_ID, DEFAULT_ROOT,
   resolveTaxonomySource, loadTaxonomyFile, loadBundleBrand, checkBrandUrls,
+  resolveSettingsPolicySource, loadSettingsPolicyFile, resolveMcpOrigins, checkBakedOrigins,
 } from './build-studio-bundle.mjs';
 import { createStaticBackend, featureOf, denialText, noticeText, apiMenuSubText, DENIED, FEATURES } from '../studio/static-backend.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
@@ -73,6 +74,8 @@ const TAX_V2 = resolve(DEFAULT_ROOT, 'tools/fixtures/taxonomy/taxonomy.v2.json')
 const TYPED_CANONICAL = resolve(DEFAULT_ROOT, 'tools/fixtures/taxonomy/typed-canonical.pack.json');
 const ACME_STATIC = resolve(DEFAULT_ROOT, 'tools/fixtures/brand/acme-static.json');
 const ACME = resolve(DEFAULT_ROOT, 'tools/fixtures/brand/acme.json');
+// The MCP server-settings policy (the SPEC's example; server/test-mcp-settings.mjs reads it too).
+const MSP = resolve(DEFAULT_ROOT, 'tools/fixtures/mcp-settings/policy.json');
 const MAPPED_BOARD = 'tools/fixtures/golden/board/typed-canonical.mapped.board.html';
 const read = (rel) => readFileSync(resolve(ROOT, rel), 'utf8');
 const schema = JSON.parse(read(SPEC_SCHEMA_PATH));
@@ -94,7 +97,7 @@ const filesUnder = (dir) => {
   return out.sort();
 };
 const treeHashes = (dirs) => Object.fromEntries(dirs.flatMap(filesUnder).map((p) => [p, sha256(readFileSync(p))]));
-// Every CLI spawn gets the stripped env (serve-child STRIP: TAXONOMY and the BRAND_* names, both spellings) plus the test's own.
+// Every CLI spawn gets the stripped env (serve-child STRIP: TAXONOMY, the BRAND_* names, MCP_SETTINGS_POLICY and MCP_ORIGINS, both spellings) plus the test's own.
 const cli = (args, cwd = TMP, extraEnv = {}) => spawnSync(process.execPath, [TOOL, ...args], { cwd, encoding: 'utf8', env: childEnv(null, extraEnv) });
 // The body as JSON when it is (a compiled 'all' dashboards bundle carries
 // comments under a JSON content type on both sides), else as text.
@@ -349,9 +352,11 @@ test('T3 the CLI: writes, --check writes nothing, --json, --no-remote-fonts, a p
   assert.equal(j.stylesheets.length, 16);
   assert.equal(j.taxonomy, null, 'nothing baked: taxonomy null, the key present');
   assert.equal(j.brand, null, 'nothing baked: brand null, the key present');
-  assert.deepEqual(Object.keys(j), ['ok', 'out', 'check', 'bytes', 'modules', 'stylesheets', 'remoteFonts', 'packs', 'taxonomy', 'brand']);
-  // --taxonomy / --brand twice: usage, exit 2.
-  for (const flag of ['--taxonomy', '--brand']) {
+  assert.equal(j.mcpSettingsPolicy, null, 'nothing baked: mcpSettingsPolicy null, the key present');
+  assert.equal(j.mcpOrigins, null, 'nothing baked: mcpOrigins null, the key present');
+  assert.deepEqual(Object.keys(j), ['ok', 'out', 'check', 'bytes', 'modules', 'stylesheets', 'remoteFonts', 'packs', 'taxonomy', 'brand', 'mcpSettingsPolicy', 'mcpOrigins']);
+  // --taxonomy / --brand / --mcp-settings-policy / --mcp-origins twice: usage, exit 2.
+  for (const flag of ['--taxonomy', '--brand', '--mcp-settings-policy', '--mcp-origins']) {
     const twice = cli(['--check', flag, TAX, flag, TAX]);
     assert.equal(twice.status, 2, flag);
     assert.match(twice.stderr, new RegExp(`^${flag} given twice\\nusage: build-studio-bundle\\.mjs`));
@@ -402,7 +407,7 @@ test('T3 the CLI: writes, --check writes nothing, --json, --no-remote-fonts, a p
   assert.equal(twins.status, 1);
   assert.match(twins.stderr, /two packs share the id "payment-service"/);
   // Usage.
-  for (const args of [['--bogus'], ['--pack'], ['--id', 'x'], ['--out'], ['--taxonomy'], ['--brand']]) {
+  for (const args of [['--bogus'], ['--pack'], ['--id', 'x'], ['--out'], ['--taxonomy'], ['--brand'], ['--mcp-settings-policy'], ['--mcp-origins']]) {
     const u = cli(['--check', ...args]);
     assert.equal(u.status, 2, args.join(' '));
     assert.match(u.stderr, /usage: build-studio-bundle\.mjs/);
@@ -424,8 +429,8 @@ test('T3b every flag the CLI accepts is in its usage line, the README synopsis a
   const embedding = downstream.slice(downstream.indexOf('## 10. Embedding the studio'));
   assert.ok(readmeSection.length > 0 && row && embedding.length > 0, 'the three documented places exist');
   const packFlags = ['--pack', '--pack-url', '--id', '--label', '--description'];
-  const bakeFlags = ['--taxonomy', '--brand'];
-  assert.ok(bakeFlags.every((f) => flags.includes(f)), 'the two seams are flags');
+  const bakeFlags = ['--taxonomy', '--brand', '--mcp-settings-policy', '--mcp-origins'];
+  assert.ok(bakeFlags.every((f) => flags.includes(f)), 'the four seams are flags');
   for (const f of flags) {
     if (f === '--help') continue;
     for (const [name, text] of [['usage line', usageLine], ['README', readmeSection]]) assert.ok(text.includes(f), `${f} is documented in the ${name}`);
@@ -448,6 +453,7 @@ test('T3c every feature the shim denies is named in the README 501 list and the 
     'Refresh from MCP': /Refresh from MCP/, 'Scan a repo': /Scan a repo/, 'Draft from a live MCP server': /Draft from MCP/,
     'Testing an MCP connection': /Testing an MCP connection/,
     'Building a pack from a live MCP server': /Building a pack from a live MCP server/,
+    'Passing MCP server settings through the studio server': /Passing MCP server settings through the studio server/,
     'Uploading a pack': /upload/i, Compare: /Compare/, Deploy: /Deploy/, Journeys: /Journeys/, Build: /Build/,
     Waivers: /Waivers/, Services: /Services \(/, Organisations: /Organisations \(/, Settings: /Settings \(/, 'Sign-in': /sign-in/i,
   };
@@ -500,7 +506,7 @@ test('T4b inert by default: a build with nothing baked is the same tree\'s build
   assert.equal(a.taxonomy, null);
   assert.equal(a.brand, null);
   // (2) The seams unset in every spelling: the identity (brandShellHtml is the identity for an unconfigured brand; the config gains no key).
-  for (const [label, extra] of [['null/null', { taxonomy: null, brand: null }], ['DEFAULT_BRAND', { brand: DEFAULT_BRAND }], ['normalizeBrand({})', { brand: normalizeBrand({}) }], ['raw {}', { brand: {} }]]) {
+  for (const [label, extra] of [['null/null', { taxonomy: null, brand: null, mcpSettingsPolicy: null, mcpOrigins: null }], ['DEFAULT_BRAND', { brand: DEFAULT_BRAND }], ['normalizeBrand({})', { brand: normalizeBrand({}) }], ['raw {}', { brand: {} }]]) {
     const c = buildStudioBundle({ root: ROOT, packs: [payment], builtAt: 'x', ...extra });
     assert.equal(c.html, a.html, `${label}: byte-identical`);
     assert.equal(c.brand, null, `${label}: no brand`);
@@ -519,29 +525,37 @@ test('T4b inert by default: a build with nothing baked is the same tree\'s build
   return backend.handle('/api/taxonomy').then(async (res) => {
     assert.equal(res.headers.get('cache-control'), 'no-store');
     assert.deepEqual(await res.json(), { ok: true, taxonomy: null, configured: false });
+    const ms = await backend.handle('/api/mcp-settings');
+    assert.equal(ms.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await ms.json(), { ok: true, proxy: false, policy: null, configured: false }, 'no policy, no pass-through, no origin list');
     // (5) The parent env carries the seams; the child env is stripped (childEnv) — nothing bakes. This is
     // what keeps T7's exact texts true on a developer shell with OBSERVOGRAM_BRAND_NAME exported.
-    const saved = { OBSERVOGRAM_BRAND_NAME: process.env.OBSERVOGRAM_BRAND_NAME, OBSERVOGRAM_TAXONOMY: process.env.OBSERVOGRAM_TAXONOMY };
-    process.env.OBSERVOGRAM_BRAND_NAME = 'Zed';
-    process.env.OBSERVOGRAM_TAXONOMY = TAX;
+    const seams = { OBSERVOGRAM_BRAND_NAME: 'Zed', OBSERVOGRAM_TAXONOMY: TAX, OBSERVOGRAM_MCP_SETTINGS_POLICY: MSP, OBSERVOGRAM_MCP_ORIGINS: 'https://mcp.example.com' };
+    const saved = Object.fromEntries(Object.keys(seams).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, seams);
     try {
       const env = childEnv(null);
-      assert.ok(!('OBSERVOGRAM_BRAND_NAME' in env) && !('OBSERVOGRAM_TAXONOMY' in env), 'childEnv strips the seams');
+      assert.ok(Object.keys(seams).every((k) => !(k in env)), 'childEnv strips the seams');
       const out5 = join(TMP, 'inert-env', 'index.html');
       const r5 = cli(['--pack', resolve(ROOT, PAYMENT), '--out', out5, '--json']);
       assert.equal(r5.status, 0, r5.stderr);
       const j5 = JSON.parse(r5.stdout);
       assert.equal(j5.taxonomy, null);
       assert.equal(j5.brand, null);
+      assert.equal(j5.mcpSettingsPolicy, null);
+      assert.equal(j5.mcpOrigins, null);
       const html5 = readFileSync(out5, 'utf8');
       assert.ok(!html5.includes('id="brand-config"') && !('taxonomy' in configOf(html5)), 'nothing baked from the parent env');
+      assert.ok(!('mcpSettingsPolicy' in configOf(html5)) && !('mcpOrigins' in configOf(html5)), 'no MCP settings key baked from the parent env');
       assert.equal(normalizeBuiltAt(html5), normalizeBuiltAt(a.html));
       // The same build through main()'s env parameter with the seams set bakes — the env is what decides.
-      const r5b = cli(['--check', '--json', '--pack', resolve(ROOT, PAYMENT)], TMP, { OBSERVOGRAM_BRAND_NAME: 'Zed', OBSERVOGRAM_TAXONOMY: TAX });
+      const r5b = cli(['--check', '--json', '--pack', resolve(ROOT, PAYMENT)], TMP, seams);
       assert.equal(r5b.status, 0, r5b.stderr);
       const j5b = JSON.parse(r5b.stdout);
       assert.equal(j5b.brand?.name, 'Zed');
       assert.equal(j5b.taxonomy?.source, 'env');
+      assert.deepEqual(j5b.mcpSettingsPolicy, { source: 'env', file: MSP, rules: 1 });
+      assert.deepEqual(j5b.mcpOrigins, { source: 'env', origins: ['https://mcp.example.com'] });
     } finally {
       for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
     }
@@ -697,7 +711,7 @@ test('T5 parity: the shim answers every ported route as a running server does �
     assert.ok(namesB.length === Number(zb.headers.get('x-bundle-files')) && namesB[0].endsWith('.pack.yaml') && namesB.some((n) => n.startsWith('artefacts/')));
   }
   // The pack-independent routes.
-  for (const path of ['/api/compile/targets', '/api/maturity-rubric', '/api/taxonomy', '/api/examples', '/api/references', '/api/live-status']) {
+  for (const path of ['/api/compile/targets', '/api/maturity-rubric', '/api/taxonomy', '/api/mcp-settings', '/api/examples', '/api/references', '/api/live-status']) {
     const a = await server(path);
     const b = await shim(backend, path);
     assert.equal(b.status, a.status, path);
@@ -752,6 +766,9 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   await expectDenied('/api/mcp/ping', { method: 'POST' }, 'Testing an MCP connection');
   await expectDenied('/api/mcp/jobs', { method: 'POST' }, 'Building a pack from a live MCP server');
   await expectDenied('/api/mcp/jobs', {}, 'Building a pack from a live MCP server');
+  // The MCP server-settings pass-through (rebadge batch 4): both POSTs; the GET is the shim's (T5).
+  await expectDenied('/api/mcp-settings/describe', { method: 'POST' }, 'Passing MCP server settings through the studio server');
+  await expectDenied('/api/mcp-settings/submit', { method: 'POST' }, 'Passing MCP server settings through the studio server');
   await expectDenied('/api/validate', { method: 'POST' }, 'Uploading a pack');
   await expectDenied('/api/uploads', { method: 'DELETE' }, 'Uploading a pack');
   await expectDenied('/api/diff?a=p&b=p', undefined, 'Compare');
@@ -1164,6 +1181,80 @@ test('T8c baked glossary: a bundle built with a v2 taxonomy answers /api/taxonom
   const j = cli(['--check', '--json', '--taxonomy', TAX_V2]);
   assert.equal(j.status, 0, j.stderr);
   assert.deepEqual(JSON.parse(j.stdout).taxonomy, { source: 'flag', file: TAX_V2, types: 7, ids: 1 }, 'the report counts types and ids as before (no glossary contents)');
+});
+
+// ---------- T8d the baked MCP settings policy and MCP origin list ----------
+
+test('T8d baked MCP settings: a --mcp-settings-policy bundle answers /api/mcp-settings as a server started with that file does (proxy false); --mcp-origins bakes the list by the server\'s rule and the shim serves it; env fallback, refusals, the summary and --json name the bakes, never the policy\'s contents', async (t) => {
+  const ws = mkdtempSync(join(tmpdir(), 'observogram-bundle-mcp-settings-'));
+  const child = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off', OBSERVOGRAM_MCP_SETTINGS_POLICY: MSP } });
+  t.after(async () => { await child.stop(); rmSync(ws, { recursive: true, force: true }); });
+  const fixture = JSON.parse(readFileSync(MSP, 'utf8'));
+  const answer = async (res) => ({ status: res.status, type: res.headers.get('content-type'), cc: res.headers.get('cache-control'), body: await bodyOf(res) });
+  // The policy: the server's answer, status, type, cache-control and body.
+  const built = buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', mcpSettingsPolicy: fixture });
+  assert.deepEqual(built.config.mcpSettingsPolicy, fixture, 'baked verbatim');
+  assert.ok(!('mcpOrigins' in built.config), 'no origin list unless baked');
+  const server = await answer(await fetch(`${child.base}/api/mcp-settings`, { headers: { Accept: 'application/json' } }));
+  const shim = await answer(await createStaticBackend(built.config).handle('/api/mcp-settings'));
+  assert.deepEqual(shim, server, 'the server\'s answer');
+  assert.deepEqual(server.body, { ok: true, proxy: false, policy: fixture, configured: true });
+  // The origin list: { listed, origins } (null for `*`), after `mcpSettingsPolicy`, served beside the policy.
+  const both = buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', taxonomy: JSON.parse(readFileSync(TAX, 'utf8')), mcpSettingsPolicy: fixture, mcpOrigins: { listed: true, origins: ['https://mcp.example.com'] } });
+  assert.deepEqual(Object.keys(both.config), ['version', 'builtAt', 'schema', 'packs', 'taxonomy', 'mcpSettingsPolicy', 'mcpOrigins'], 'appended after taxonomy, in order');
+  const served = await (await createStaticBackend(both.config).handle('/api/mcp-settings')).json();
+  assert.deepEqual(served, { ok: true, proxy: false, policy: fixture, configured: true, mcpOrigins: { listed: true, origins: ['https://mcp.example.com'] } });
+  const anyOrigin = buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', mcpOrigins: { listed: true, origins: null } });
+  assert.deepEqual(await (await createStaticBackend(anyOrigin.config).handle('/api/mcp-settings')).json(), { ok: true, proxy: false, policy: null, configured: false, mcpOrigins: { listed: true, origins: null } });
+  // The list rule: the server's parseOriginList, normalised and sorted; `*` any; a bad entry refused, not dropped.
+  assert.deepEqual(resolveMcpOrigins({ mcpOrigins: ' HTTPS://Mcp.Example.com:443 , http://127.0.0.1:9000/' }), { origins: { listed: true, origins: ['http://127.0.0.1:9000', 'https://mcp.example.com'] }, origin: '--mcp-origins' });
+  assert.deepEqual(resolveMcpOrigins({ mcpOrigins: '*' }), { origins: { listed: true, origins: null }, origin: '--mcp-origins' });
+  assert.equal(resolveMcpOrigins({ mcpOrigins: null }, {}), null);
+  assert.deepEqual(resolveMcpOrigins({ mcpOrigins: null }, { TOMOGRAPH_MCP_ORIGINS: 'https://a.example' }).origin, 'OBSERVOGRAM_MCP_ORIGINS');
+  assert.equal(resolveMcpOrigins({ mcpOrigins: 'https://flag.example' }, { OBSERVOGRAM_MCP_ORIGINS: 'https://env.example' }).origins.origins[0], 'https://flag.example', 'the flag wins');
+  assert.throws(() => resolveMcpOrigins({ mcpOrigins: 'https://mcp.example.com, https://x.example/mcp, localhost:8080' }), { message: '--mcp-origins: "https://x.example/mcp", "localhost:8080" are not origins — list each as scheme://host[:port] (http or https, no path, user or wildcard), or * for any origin' });
+  assert.throws(() => resolveMcpOrigins({ mcpOrigins: null }, { OBSERVOGRAM_MCP_ORIGINS: 'https://u:p@x.example' }), { message: 'OBSERVOGRAM_MCP_ORIGINS: "https://u:p@x.example" is not an origin — list each as scheme://host[:port] (http or https, no path, user or wildcard), or * for any origin' });
+  assert.throws(() => resolveMcpOrigins({ mcpOrigins: ' , ' }), { message: '--mcp-origins: no origin listed — name at least one (scheme://host[:port]), or * for any origin' });
+  assert.throws(() => checkBakedOrigins({ listed: true, origins: ['https://X.example/'] }), /every entry must be an origin as the URL parser writes it/);
+  assert.throws(() => checkBakedOrigins(['https://x.example']), /mcpOrigins must be/);
+  assert.throws(() => buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', mcpOrigins: { listed: true, origins: ['*'] } }), /every entry must be an origin/);
+  // The policy file: the server's loader texts behind the origin; one BOM stripped.
+  assert.deepEqual(resolveSettingsPolicySource({ mcpSettingsPolicy: 'p.json' }, {}, '/w'), { file: resolve('/w', 'p.json'), origin: '--mcp-settings-policy' });
+  assert.deepEqual(resolveSettingsPolicySource({}, { TOMOGRAPH_MCP_SETTINGS_POLICY: 'q.json' }, '/w'), { file: resolve('/w', 'q.json'), origin: 'OBSERVOGRAM_MCP_SETTINGS_POLICY' });
+  assert.equal(resolveSettingsPolicySource({}, {}, '/w'), null);
+  const bom = join(TMP, 'msp-bom.json');
+  writeFileSync(bom, `\uFEFF${readFileSync(MSP, 'utf8')}`);
+  assert.deepEqual(loadSettingsPolicyFile(bom).policy, fixture);
+  const missing = join(TMP, 'msp-missing.json');
+  assert.throws(() => loadSettingsPolicyFile(missing), (e) => e.message.startsWith(`--mcp-settings-policy: ${missing}: ENOENT`));
+  const typo = join(TMP, 'msp-typo.json');
+  writeFileSync(typo, JSON.stringify({ version: 1, rules: [{ when: { field: 'grafanaUrl', pattren: '^x' }, warn: 'w' }] }));
+  assert.throws(() => loadSettingsPolicyFile(typo, 'OBSERVOGRAM_MCP_SETTINGS_POLICY'), { message: `OBSERVOGRAM_MCP_SETTINGS_POLICY: ${typo}: rules[0].when: unknown key "pattren"` });
+  assert.throws(() => buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', mcpSettingsPolicy: { version: 2, rules: [] } }), { message: 'MCP settings policy: version must be 1 (got 2)' });
+  // The CLI: the summary and --json name what was baked — the file and the rule count, never a rule's text.
+  const human = cli(['--check', '--mcp-settings-policy', MSP, '--mcp-origins', 'https://mcp.example.com,http://127.0.0.1:9000']);
+  assert.equal(human.status, 0, human.stderr);
+  assert.match(human.stdout, / · MCP settings policy: 1 rule · MCP origins: http:\/\/127\.0\.0\.1:9000, https:\/\/mcp\.example\.com\n$/);
+  const j = cli(['--check', '--json', '--mcp-settings-policy', MSP, '--mcp-origins', '*']);
+  assert.equal(j.status, 0, j.stderr);
+  const jj = JSON.parse(j.stdout);
+  assert.deepEqual(jj.mcpSettingsPolicy, { source: 'flag', file: MSP, rules: 1 });
+  assert.deepEqual(jj.mcpOrigins, { source: 'flag', origins: null });
+  assert.match(cli(['--check', '--mcp-origins', '*']).stdout, / · MCP origins: any \(\*\)\n$/);
+  for (const r of [human, j]) assert.ok(!r.stdout.includes('Non-approved') && !r.stdout.includes('operator approval'), 'the policy\'s contents are in no output');
+  const out = join(TMP, 'msp', 'index.html');
+  const w = cli(['--out', out, '--mcp-settings-policy', MSP, '--mcp-origins', 'https://mcp.example.com']);
+  assert.equal(w.status, 0, w.stderr);
+  const config = configOf(readFileSync(out, 'utf8'));
+  assert.deepEqual(config.mcpSettingsPolicy, fixture);
+  assert.deepEqual(config.mcpOrigins, { listed: true, origins: ['https://mcp.example.com'] });
+  assert.ok(!readFileSync(out, 'utf8').includes(MSP), 'no operator path lands in the bundle');
+  const bad = cli(['--check', '--mcp-settings-policy', typo]);
+  assert.equal(bad.status, 1);
+  assert.equal(bad.stderr, `--mcp-settings-policy: ${typo}: rules[0].when: unknown key "pattren"\n`);
+  const badOrigins = cli(['--check', '--mcp-origins', 'mcp.example.com']);
+  assert.equal(badOrigins.status, 1);
+  assert.match(badOrigins.stderr, /^--mcp-origins: "mcp\.example\.com" is not an origin/);
 });
 
 // ---------- T8b the baked brand ----------
