@@ -1072,7 +1072,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('an open server on the loopback: the server says local may register (GET /api/mcp-endpoints policy.register), so the picker hint offers Settings → MCP endpoints, and it lands there; the panel\'s next opening after a failed read of the list says it is checking until that read answers; after a failed read and the list read without its policy, the panel\'s opening and the home\'s next drawing read it again — never a refusal the server did not make', async () => {
+  await t.test('an open server on the loopback: the server says local may register (GET /api/mcp-endpoints policy.register), so the picker hint offers Settings → MCP endpoints, and it lands there; the panel\'s next opening after a failed read of the list says it is checking until that read answers; after a failed read and the list read without its policy, the panel\'s opening and the home\'s next drawing read it again — never a refusal the server did not make — and when the panel\'s read fails too, its hint and Test connection\'s nothing-to-send line say the policy could not be read', async () => {
     const probe = await call(null, 'GET', '/api/org/members', undefined, { base: loopChild.base });
     assert.equal(probe.status, 200, probe.text);
     const { page, ctx } = await open(loopChild.base, null);
@@ -1134,6 +1134,26 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
         }
       } finally { await failed.ctx.close(); }
     }
+    // The panel's read again fails too: the empty list read alone stays
+    // beside a failed policy, and the picker's hint and the line Test
+    // connection says with nothing to send (mcpTargetMissing) each name the
+    // failed read — never "registering one is not open to you here", a
+    // refusal the server never made.
+    const twice = await open(loopChild.base, null, { before: abortEndpointReads });
+    try {
+      await twice.page.waitForFunction(() => /^Default's MCP endpoints could not be read just now — reopen this to try again\.$/.test(document.querySelector('[data-mcp-target="home"] .set-mcp-target-hint')?.textContent || ''), null, { timeout: T });
+      await twice.page.unroute('**/api/mcp-endpoints');
+      await toSettings(twice.page);
+      assert.equal(await twice.page.evaluate(() => document.querySelector('#set-section')?.dataset.section), 'environments', 'the section that reads the list alone');
+      await abortEndpointReads(twice.page);
+      await twice.page.evaluate(() => document.getElementById('mcp-btn').click());
+      const UNREAD = 'No MCP endpoint is registered in Default yet, and whether you may register one could not be read just now — reopen this to try again';
+      await twice.page.waitForFunction((s) => document.querySelector('#mcp-panel .set-mcp-target-hint')?.textContent.trim() === s, `${UNREAD}.`, { timeout: T });
+      await twice.page.click('#mcp-refresh-btn');
+      await twice.page.waitForFunction(() => /^no MCP endpoint/.test(document.getElementById('mcp-ping-status')?.textContent || ''), null, { timeout: T });
+      assert.equal(await text(twice.page, '#mcp-ping-status'), UNREAD.replace(/^N/, 'n'), 'nothing to send: the failed read said, never a refusal');
+      await twice.page.unroute('**/api/mcp-endpoints');
+    } finally { await twice.ctx.close(); }
   });
 
   // R4 + D4 (rebadge batch 3, C0): without sign-in the home never sends a
