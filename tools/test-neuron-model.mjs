@@ -348,3 +348,38 @@ test('latestCheck and attentionList: the four outcomes kept apart, most urgent f
   assert.deepEqual(list.find(a => a.name === 'broken').reasons, ['load-error', 'never-run']);
   assert.ok(!list.some(a => a.name === 'pass-ok'), 'a passing, unscheduled journey needs nobody');
 });
+
+// The Neuron and Journeys views' notify hints (studio/journeys-view.mjs; the
+// follow-up journey-notify-env-ownership): a journey notifies through one of
+// its org's notify hooks, and one the server would refuse is never "Set up".
+test('notify hints name the org\'s hook variables — <KEY>, said so, when the org is unknown (never guessed as DEFAULT) — and a journey the server would refuse is never "Set up"', async () => {
+  const jv = await import('../studio/journeys-view.mjs');
+  const { setActiveOrg } = await import('../studio/api.mjs');
+  const KEY_NOTE = ' <KEY> is this org\'s id in capitals, with - as _.';
+  assert.equal(jv.notifyHookExample('pay-eu'), 'OBSERVOGRAM_ORG_PAY_EU_NOTIFY_<HOOK>_URL');
+  assert.equal(jv.notifyHookExample('default'), 'OBSERVOGRAM_ORG_DEFAULT_NOTIFY_<HOOK>_URL');
+  assert.equal(jv.notifyKeyNote('pay-eu'), '');
+  for (const org of [null, undefined, '']) {
+    assert.equal(jv.notifyHookExample(org), 'OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL', String(org));
+    assert.equal(jv.notifyKeyNote(org), KEY_NOTE, String(org));
+  }
+  // The not-configured remedy reads the studio's active org when it is read.
+  const remedy = (example) => `Add notify: { urlEnv: ${example} } to the journey file to be warned when it changes — one of this org's notify hooks, which the server's operator sets (GET /api/journeys/notify-hooks lists them).`;
+  setActiveOrg(null);
+  assert.equal(jv.DELIVERY_OUTCOMES['not-configured'].remedy, `${remedy('OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL')}${KEY_NOTE}`);
+  setActiveOrg('pay-eu');
+  try {
+    assert.equal(jv.DELIVERY_OUTCOMES['not-configured'].remedy, remedy('OBSERVOGRAM_ORG_PAY_EU_NOTIFY_<HOOK>_URL'));
+  } finally {
+    setActiveOrg(null);
+  }
+  assert.ok(!JSON.stringify(jv.DELIVERY_OUTCOMES).includes('MY_WEBHOOK_URL'), 'no bare name is suggested');
+  // Before any delivery: what is set up, or the server's refusal (GET /api/journeys' notify.problem).
+  assert.equal(jv.notifySetupLine({ urlEnv: 'OBSERVOGRAM_ORG_PAY_EU_NOTIFY_ONCALL_URL', authEnv: null, on: 'always', format: 'json' }),
+    'Set up: posts always to the webhook in $OBSERVOGRAM_ORG_PAY_EU_NOTIFY_ONCALL_URL.');
+  assert.equal(jv.notifySetupLine({ urlEnv: 'OBSERVOGRAM_ORG_PAY_EU_NOTIFY_ONCALL_URL' }), 'Set up: posts transitions to the webhook in $OBSERVOGRAM_ORG_PAY_EU_NOTIFY_ONCALL_URL.');
+  const problem = 'journey legacy is not run: its notify.urlEnv "MY_HOOK_URL" is not a notify hook of org \'pay-eu\' — the server posts only to OBSERVOGRAM_ORG_PAY_EU_NOTIFY_<HOOK>_URL';
+  const refused = jv.notifySetupLine({ urlEnv: 'MY_HOOK_URL', authEnv: null, on: 'always', format: 'json', problem });
+  assert.equal(refused, `The server will not run this journey as it stands: ${problem}`);
+  assert.ok(!refused.includes('Set up'));
+});

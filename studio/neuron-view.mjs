@@ -49,11 +49,12 @@
 // vantage is never worded as a failed check.
 
 import { state } from './state.mjs';
-import { api } from './api.mjs';
+import { api, getActiveOrg } from './api.mjs';
 import { escapeHtml, toast } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import {
   renderCaptureBar, renderJourneyCards, CHECK_OUTCOMES, checkOutcome, DELIVERY_OUTCOMES, runResultText, runErrorText, runAllText,
+  notifyHookExample, notifyKeyNote, notifySetupLine,
 } from './journeys-view.mjs';
 import {
   decisionHeaderHtml, wireUxActions, emptyStateHtml, disclosureHtml, termHtml, announce, plural, listSentence,
@@ -509,11 +510,17 @@ function evidenceLine(d, c) {
   return ['Evidence', facts || 'The record carries no drift or grade facts.'];
 }
 
+// The evidence block's hint for a record without notify: one of this org's
+// notify hooks (journeys-view.mjs notifyHookExample), never a bare name.
+function notifyHintHtml(org) {
+  return `Add <code>notify: { urlEnv: ${escapeHtml(notifyHookExample(org))} }</code> to the journey file to post transitions to a webhook — one of this org's notify hooks, set by the server's operator; the URL and token stay in the server's environment.${escapeHtml(notifyKeyNote(org))}`;
+}
+
 function deliveryLine(d, c) {
   const ds = c.delivery;
   if (!ds) {
     return d.notify
-      ? `Set up: posts ${escapeHtml(d.notify.on || 'transitions')} to the webhook in <code>$${escapeHtml(d.notify.urlEnv)}</code>.`
+      ? escapeHtml(notifySetupLine(d.notify))
       : `${deliveryChipHtml('not-configured')} <span class="nrn-rec-meaning">${escapeHtml(DELIVERY_OUTCOMES['not-configured'].meaning)}</span>`;
   }
   const x = DELIVERY_OUTCOMES[ds] || DELIVERY_OUTCOMES.unknown;
@@ -1045,7 +1052,7 @@ function renderLatestDetails(d) {
   parts.push(details(`Notification <span class="nrn-muted">${escapeHtml(nTitle)}</span>`, n ? kv([
     ['status', n.status], ['http', n.httpStatus], ['reason', n.reason], ['policy', d.notify?.on || n.policy], ['format', d.notify?.format || n.format],
     ['triggers', Array.isArray(n.triggers) ? n.triggers.join(', ') : n.triggers], ['attempts', n.attempts], ['took', n.tookMs !== undefined ? `${n.tookMs} ms` : undefined], ['url env', n.urlEnv || d.notify?.urlEnv], ['auth env', n.authEnv || d.notify?.authEnv], ['error', n.error],
-  ]) : `<p class="nrn-muted">${n === null ? 'Add <code>notify: { urlEnv: MY_WEBHOOK_URL }</code> to the journey file to post transitions to a webhook — the URL and token stay env var names.' : 'A crash between the record write and the delivery write leaves no notify key; the next run tells.'}</p>`, { open: n?.status === 'failed', key: 'delivery' }));
+  ]) : `<p class="nrn-muted">${n === null ? notifyHintHtml(getActiveOrg()) : 'A crash between the record write and the delivery write leaves no notify key; the next run tells.'}</p>`, { open: n?.status === 'failed', key: 'delivery' }));
 
   // Schedule + snippets (lazy).
   parts.push(scheduleDetails(d));

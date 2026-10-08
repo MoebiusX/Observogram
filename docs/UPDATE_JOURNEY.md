@@ -1368,3 +1368,10 @@ now refuses an id that would take another org's notify hooks, one whose own
 hooks another org already holds, and one that differs from another org's id
 only in `-` and `_`. Tests: 1416 → 1417 (one more in
 `server/test-identity-api.mjs`).
+
+The studio stops pointing at bare variable names. Where it suggests adding a
+notification it names the org's hook variable — the org's own prefix when the
+studio knows the org, `<KEY>` and what it stands for when it does not — and
+the Neuron view no longer calls a journey "Set up" when the server would
+refuse to run it: it shows the server's own sentence instead.
+Tests: 1417 → 1418 (one more in `tools/test-neuron-model.mjs`).
