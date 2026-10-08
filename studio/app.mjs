@@ -5382,8 +5382,11 @@ function openMcpTarget(id, { fresh = false } = {}) {
 // (settingsGateModel: `policy.register.why` — OBSERVOGRAM_AUTH=off
 // included), so the panel's opening reads the policy there until one read
 // answers; the pickers draw nothing from it. Resolved at once elsewhere.
+// A failed read is unread again while it is read again, so the button says
+// it is checking — never "close and reopen" while the panel does just that.
 function readMcpGatePolicy() {
   if (state.access?.posture !== 'token' || (state.mcpTargetPolicy !== null && !state.mcpTargetPolicy.failed)) return Promise.resolve();
+  state.mcpTargetPolicy = null;
   return readMcpEndpointsForPickers();
 }
 
@@ -5427,8 +5430,9 @@ function openMcpPanel() {
     const liveUrl = state.mcpStatus?.url || null; // served to operators only
     urlInput.value = saved || liveUrl || '';
   }
+  const reads = Promise.all([openMcpTarget('refresh'), readMcpGatePolicy()]);
   paintMcpSettingsButton();
-  Promise.all([openMcpTarget('refresh'), readMcpGatePolicy()]).then(paintMcpSettingsButton);
+  reads.then(paintMcpSettingsButton);
   if (state.access?.posture === 'static' && mcpSettingsBundle.origins === undefined) readBundleMcpOrigins();
   focusMcpTarget('refresh');
 }

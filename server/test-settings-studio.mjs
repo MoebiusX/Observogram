@@ -898,10 +898,23 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
         if (srv === tokenChild) assert.match(serverWhy, /; this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC$/);
         else assert.match(serverWhy, AUTH_OFF_WAY);
         if (srv === tokenOffChild) {
-          // A failed read names no way in; the next opening reads again.
+          // A failed read names no way in; the next opening reads again —
+          // and, until that read answers, says it is checking, never
+          // "close and reopen" (the read is held until the button is seen).
           await page.route('**/api/mcp-endpoints', (route) => route.abort());
           await openPanel(page);
           assert.equal(await why(page), 'Could not check whether you may configure the MCP server — close and reopen the panel to try again.');
+          await closePanel(page);
+          await page.unroute('**/api/mcp-endpoints');
+          let release;
+          const held = new Promise((resolve) => { release = resolve; });
+          await page.route('**/api/mcp-endpoints', async (route) => { await held; await route.continue(); });
+          await page.evaluate(() => document.getElementById('mcp-btn').click());
+          await page.waitForSelector('#mcp-panel:not([hidden])', { timeout: T });
+          assert.equal(await why(page), 'Checking whether you may configure the MCP server…', 'the reopening reads again, and says so while it does');
+          release();
+          await page.waitForFunction(() => document.getElementById('mcp-settings-btn')?.dataset.why !== 'Checking whether you may configure the MCP server…', null, { timeout: T });
+          assert.equal(await why(page), `Configuring the MCP server is endpoint configuration: ${serverWhy}.`);
           await closePanel(page);
           await page.unroute('**/api/mcp-endpoints');
         }
