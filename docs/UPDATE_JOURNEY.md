@@ -1332,7 +1332,7 @@ and macOS compare exactly as before. That realpath keeps a network share's
 name — `\\localhost\C$\ws\orgs\beta\…` resolves to itself, not to
 `C:\ws\orgs\beta\…` — so on Windows a path outside the workspace is
 nobody's part only on a local drive; one reached through a share or a mapped
-drive is refused. Tests: 1390 → 1398 (`tools/test-journey-scope.mjs` 8, new).
+drive is refused. Tests: 1390 → 1399 (`tools/test-journey-scope.mjs` 9, new).
 
 The store's offline operations compared paths the same way, so on Windows
 `packc store export C:\WS\exports` wrote a directory export into the
@@ -1342,5 +1342,7 @@ over the database's own `-wal`. The export, in-place, purge-org, backup and
 restore checks now compare the same way on Windows (a path named through a
 share still compares as the share names it: these checks do not refuse one,
 since an export or a backup on a share is an ordinary target); their messages
-and the Linux and macOS comparisons are unchanged. Tests: 1398 → 1405
-(`server/test-store-paths.mjs` 7, new).
+and the Linux and macOS comparisons are unchanged. Each of the two suites also
+runs its default host once on a real directory, so a Windows run fails if the
+platform's rule is not the one chosen. Tests: 1399 → 1407
+(`server/test-store-paths.mjs` 8, new).

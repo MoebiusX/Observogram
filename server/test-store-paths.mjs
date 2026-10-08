@@ -11,9 +11,12 @@
  * here as ops.mjs and backup.mjs run it, over comparedPath with an injected
  * host — Windows' path rules, an NTFS volume's realpath
  * (server/fixtures/ntfs.mjs) and the platform — so the proof runs on every
- * host; the last test pins that every check compares through it. On Linux
- * and macOS the form is the module's own, unchanged: server/test-store-ops.mjs
- * and server/test-store.mjs hold those checks.
+ * host. One test runs the default host on a real directory, so the
+ * platform's choice of rule is pinned too: the expected value reads isWin32
+ * (server/fixtures/platform.mjs), and a Windows run fails if its default host
+ * compared by spelling. The last test pins that every check compares through
+ * it. On Linux and macOS the form is the module's own, unchanged:
+ * server/test-store-ops.mjs and server/test-store.mjs hold those checks.
  *
  * Hermetic (§0): nothing here reads the environment; the strip loop is the
  * shape server/test-hermetic-suites.mjs pins for a suite importing server code.
@@ -27,11 +30,13 @@ for (const k of STRIP) {
 
 const { test } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
-const { readFileSync } = await import('node:fs');
-const { dirname, join, win32 } = await import('node:path');
+const { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } = await import('node:fs');
+const { tmpdir } = await import('node:os');
+const { dirname, join, resolve, win32 } = await import('node:path');
 const { fileURLToPath } = await import('node:url');
 const { tokenize } = await import('../tools/gen-vendor-manifest.mjs');
 const { ntfsVolume } = await import('./fixtures/ntfs.mjs');
+const { isWin32 } = await import('./fixtures/platform.mjs');
 const { comparedPath } = await import('./store/paths.mjs');
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -121,6 +126,19 @@ test('off Windows a check compares through the module\'s own form, unchanged', (
   const own = (p) => `own:${p}`;
   assert.equal(comparedPath(own, { windows: false }), own, 'the module\'s realpath form itself: Linux and macOS compare as before');
   assert.equal(comparedPath(own, { windows: false, path: win32, realpathSync: VOLUME.realpathSync }), own, 'whatever the path rules');
+});
+
+test('the default host is this platform\'s rule: a real directory spelled in another case is itself on Windows, and elsewhere another path', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'observogram-paths-'));
+  try {
+    mkdirSync(join(dir, 'ws'));
+    const realOr = (p) => { try { return realpathSync(p); } catch { return resolve(p); } };   // ops.mjs's own form
+    const compared = comparedPath(realOr);
+    // On NTFS C:\…\WS is the directory ws; off Windows the comparison is realOr's spelling, and WS is another path.
+    assert.equal(compared(join(dir, 'WS')) === compared(join(dir, 'ws')), isWin32, `the default host compares as this platform names paths: ${join(dir, 'WS')}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('every path comparison in ops.mjs and backup.mjs goes through compared; realOr only spells the journey rewrites\' base', () => {

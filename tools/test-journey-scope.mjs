@@ -11,12 +11,18 @@
 // the volume behind it, so on Windows a path outside the workspace is
 // nobody's part only on a local drive. On Linux and macOS the comparison is
 // unchanged: the A-24 cases in tools/test-journey.mjs and
-// server/test-tenancy.mjs hold it.
+// server/test-tenancy.mjs hold it. The last test runs the default host on a
+// real workspace, so the platform's choice of rule is pinned too: the
+// expected verdict reads isWin32 (server/fixtures/platform.mjs), and a
+// Windows run fails if its default host compared by spelling.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { win32 } from 'node:path';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, win32 } from 'node:path';
 import { crawlScopeRefusal, crawlScopeTest } from './lib/journey.mjs';
 import { ntfsVolume } from '../server/fixtures/ntfs.mjs';
+import { isWin32 } from '../server/fixtures/platform.mjs';
 
 const VOLUME = ntfsVolume([
   'C:\\ws\\orgs\\acme\\packs\\own.pack.yaml',
@@ -160,5 +166,23 @@ test('a workspace on a share: its own share name decides as a drive path does, a
   }
   for (const p of ['\\\\nas01\\obs\\orgs\\acme\\packs\\own.pack.yaml', '\\\\NAS01\\obs\\Orgs\\ACME', 'Y:\\orgs\\acme\\packs\\own.pack.yaml', 'C:\\repo\\catalog.pack.yaml']) {
     assert.equal(refusal(p), '', `read: ${p}`);
+  }
+});
+
+test('the default host is this platform\'s rule: under a real workspace, beta\'s file with the workspace spelled in another case is refused to acme on Windows, and elsewhere names another path, outside it', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'observogram-scope-'));
+  try {
+    const base = join(dir, 'ws');
+    const betaFile = join(base, 'orgs', 'beta', 'packs', 'b1.pack.yaml');
+    mkdirSync(dirname(betaFile), { recursive: true });
+    mkdirSync(join(base, 'orgs', 'acme'));
+    writeFileSync(betaFile, '');
+    const refusal = crawlScopeRefusal({ base, ownRoot: join(base, 'orgs', 'acme') });
+    assert.equal(refusal(betaFile), IN_ANOTHER_ORGS_PART, `beta's as written, on every platform: ${betaFile}`);
+    // On NTFS this is beta's file; off Windows the comparison is the realpath's spelling, and this one lies outside the workspace.
+    const otherCase = join(dir, 'WS', 'orgs', 'beta', 'packs', 'b1.pack.yaml');
+    assert.equal(refusal(otherCase), isWin32 ? IN_ANOTHER_ORGS_PART : '', `the default host compares as this platform names paths: ${otherCase}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
