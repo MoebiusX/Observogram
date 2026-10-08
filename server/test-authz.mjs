@@ -843,8 +843,16 @@ test('deploy target profiles keep no credential: per user, stripped like the rem
     rememberMcpEndpoint(null);
     assert.ok(!store.has('mcpEndpoint.v1:ada:acme'), 'a typed URL used: the choice is forgotten');
     rememberMcpEndpoint(3);
+    assert.equal(store.get('studioOrgBy.v1'), 'ada', 'the saved org names who chose it');
     forgetMcpUrls('ada');
-    assert.deepEqual([...store.keys()].sort(), ['mcpEndpoint.v1:bob:acme', 'mcpUrl.v2:bob:acme', 'studioOrg.v1', 'studioOrgBy.v1', 'studioTheme'], "ada's remembered URLs and endpoints go, in every org; bob's stay");
+    assert.deepEqual([...store.keys()].sort(), ['mcpEndpoint.v1:bob:acme', 'mcpUrl.v2:bob:acme', 'studioOrg.v1', 'studioTheme'],
+      "ada's remembered URLs and endpoints go, in every org, and so does her login beside the saved org (studioOrgBy.v1 — a shared browser keeps no trace of who signed out); the org stays, a browser's choice; bob's keys stay");
+    // The login beside the saved org is cleared only when it is this login's: another's stays, as bob's URLs do.
+    store.set('studioOrgBy.v1', 'bob');
+    forgetMcpUrls('ada');
+    assert.equal(store.get('studioOrgBy.v1'), 'bob');
+    forgetMcpUrls(null);
+    assert.equal(store.get('studioOrgBy.v1'), 'bob', 'the open posture names no login');
   } finally {
     setActiveOrg(null);
     setSignedInLogin(null);

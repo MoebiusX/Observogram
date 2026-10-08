@@ -1117,7 +1117,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('a shared browser: olive (an owner, not in bravo) signing in after ada (who chose bravo) lands in one of her own memberships, not acting in bravo', async () => {
+  await t.test('a shared browser: olive (an owner, not in bravo) signing in after ada (who chose bravo) lands in one of her own memberships, not acting in bravo; her sign-out leaves her login nowhere in the browser', async () => {
     const { page, ctx } = await open(child.base, 'ada');
     try {
       await page.waitForFunction(() => localStorage.getItem('studioOrg.v1') === 'bravo', null, { timeout: T });
@@ -1129,6 +1129,11 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       assert.ok(['default', 'acme'].includes(org), `one of her memberships, not ada's bravo: ${org}`);
       assert.equal(await page.evaluate(() => localStorage.getItem('studioOrgBy.v1')), 'olive');
       assert.ok(!(await text(page, '.observa-org-select')).includes('acting as owner'), 'no acting org she never chose');
+      // The account menu's sign out: the login beside the saved org goes with her other keys; the org stays, a browser's choice.
+      await page.click('.hdr-user-btn');
+      await Promise.all([page.waitForURL(/\/auth\/login/, { timeout: T }), page.click('.hdr-user-out')]);
+      assert.deepEqual(await page.evaluate(() => [localStorage.getItem('studioOrg.v1'), localStorage.getItem('studioOrgBy.v1')]), [org, null],
+        'after sign-out the browser keeps no trace of who signed out (studioOrgBy.v1)');
     } finally { await ctx.close(); }
   });
 
@@ -1214,10 +1219,11 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await page.evaluate(() => {
         for (const [k, v] of [['mcpUrl.v2:olive:acme', 'https://mcp.acme.test/obs'], ['mcpEndpoint.v1:olive:acme', '1'], ['deployProfiles.v2:olive', '{}'], ['studioState.v2:olive:acme', '{}'], ['studioState.v2:olive:default', '{}']]) localStorage.setItem(k, v);
       });
+      assert.equal(await page.evaluate(() => localStorage.getItem('studioOrgBy.v1')), 'olive', 'the saved org names who chose it');
       await manage(page, await userId('olive'));
       await userAct(page, 'signout', /^You signed out everywhere/);
       assert.equal(await text(page, '#set-editor-status'), 'You signed out everywhere — this browser is signed out at its next request.');
-      const left = await page.evaluate(() => Object.keys(localStorage).filter((k) => /^(mcpUrl\.v2:olive:|mcpEndpoint\.v1:olive:|deployProfiles\.v2:olive|studioState\.v2:olive:)/.test(k)));
+      const left = await page.evaluate(() => Object.keys(localStorage).filter((k) => /^(mcpUrl\.v2:olive:|mcpEndpoint\.v1:olive:|deployProfiles\.v2:olive|studioState\.v2:olive:)/.test(k) || (k === 'studioOrgBy.v1' && localStorage.getItem(k) === 'olive')));
       assert.deepEqual(left, []);
       await Promise.all([page.waitForURL(/\/auth\/login/, { timeout: T }), page.click('#set-editor-signin')]);
     } finally {

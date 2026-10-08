@@ -316,7 +316,9 @@ export async function removeDeployProfile(name) {
 // At sign-out: every URL, MCP endpoint and live job this login remembered,
 // in every org, and the legacy key — and every deploy target profile in the browser (every
 // user's, and the pre-slice-3 key): a shared browser keeps neither past
-// a sign-out.
+// a sign-out. Nor the login itself: the saved org's `studioOrgBy.v1` names
+// who chose it, and goes when it names this login (the org stays, a
+// browser's choice; with no login beside it, no owner inherits it).
 export function forgetMcpUrls(login = signedInLogin) {
   try {
     const prefix = `${MCP_URL_KEY_PREFIX}${login || 'local'}:`;
@@ -328,6 +330,7 @@ export function forgetMcpUrls(login = signedInLogin) {
     }
     localStorage.removeItem(LEGACY_MCP_URL_KEY);
     localStorage.removeItem(LEGACY_DEPLOY_PROFILES_KEY);
+    if (login && localStorage.getItem('studioOrgBy.v1') === login) localStorage.removeItem('studioOrgBy.v1');
   } catch { /* storage unavailable */ }
 }
 
