@@ -30,6 +30,7 @@ import { chmodSync, chownSync, closeSync, copyFileSync, constants as fsConstants
 import { basename, dirname, join, resolve } from 'node:path';
 import { openRaw, pragma, prepare, resolveDbPath } from './db.mjs';
 import { SCHEMA_VERSION, userVersion } from './migrations.mjs';
+import { comparedPath } from './paths.mjs';
 
 const MEMORY = ':memory:';
 const SIDECARS = ['', '-wal', '-shm'];
@@ -67,12 +68,15 @@ function canonical(path) {
   try { return realpathSync(path); } catch {}
   try { return join(realpathSync(dirname(path)), basename(path)); } catch { return path; }
 }
+// The form ownFile compares in (server/store/paths.mjs): canonical's off Windows, the on-disk spelling,
+// case folded, on Windows, where a backup named C:\WS\observogram.db-wal is the database's own -wal.
+const compared = comparedPath(canonical);
 
 // '' when path is the database file, its suffix when it is the database's
 // -wal/-shm/-journal (the next open deletes one it finds stale), else null.
 function ownFile(dbFile, path) {
-  const db = canonical(dbFile);
-  const p = canonical(path);
+  const db = compared(dbFile);
+  const p = compared(path);
   return ['', '-wal', '-shm', '-journal'].find((s) => p === `${db}${s}`) ?? null;
 }
 

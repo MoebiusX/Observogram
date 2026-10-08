@@ -1330,3 +1330,12 @@ as the native realpath of the longest prefix that exists, the rest as
 written, case folded; a refusal still names the path as written, and Linux
 and macOS compare exactly as before. Tests: 1390 → 1396
 (`tools/test-journey-scope.mjs` 6, new).
+
+The store's offline operations compared paths the same way, so on Windows
+`packc store export C:\WS\exports` wrote a directory export into the
+workspace at `C:\ws`, `packc store purge-org` deleted a users file spelled
+under the purged org's root in another case, and a backup could be written
+over the database's own `-wal`. The export, in-place, purge-org, backup and
+restore checks now compare by the same rule on Windows; their messages and
+the Linux and macOS comparisons are unchanged. Tests: 1396 → 1403
+(`server/test-store-paths.mjs` 7, new).

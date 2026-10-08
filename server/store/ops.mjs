@@ -96,6 +96,7 @@ import { baseWorkspacePath } from '../../tools/lib/brand-env.mjs';
 import { parse as parseYaml } from '../../tools/lib/mini-yaml.mjs';
 import { closeStore, nowIso, openStore, resolveDbPath, tx } from './db.mjs';
 import { assertNotInUse, identifyFile } from './backup.mjs';
+import { comparedPath } from './paths.mjs';
 import { listAudit, writeAudit } from './audit.mjs';
 import { getMeta, getMetaJson, isIdentityArmed, putMeta, setMeta, storeId } from './meta.mjs';
 import { getOrg, listOrgs, setOrgRoot } from './orgs.mjs';
@@ -151,6 +152,9 @@ function refuse(message) {
 function realOr(path) {
   try { return realpathSync(path); } catch { return resolve(path); }
 }
+// realOr spells a path (the journey rewrites' base, below); a check compares two through compared
+// (server/store/paths.mjs): realOr's form off Windows, the on-disk spelling, case folded, on Windows.
+const compared = comparedPath(realOr);
 
 const slashed = (p) => p.replaceAll('\\', '/');
 
@@ -409,8 +413,8 @@ function exportDirectory(target, base) {
     if (hops >= 40) throw refuse(`${target} is a symlink loop. Nothing was changed. Choose an empty or new directory`);
     into = resolve(dirname(into), readlinkSync(into));
   }
-  const t = realOr(into);
-  const b = realOr(base);
+  const t = compared(into);
+  const b = compared(base);
   const inside = t.startsWith(b + sep);
   if (t === b || inside || b.startsWith(t.endsWith(sep) ? t : t + sep)) {
     // The in-place way out is named only for a workspace that exists: the default <cwd>/.observogram may not.
@@ -434,13 +438,13 @@ function exportDirectory(target, base) {
 // The candidates are the *.db files directly in <base> and <base>/db (<base>/observogram.db, the default, among
 // them), each opened read-only without migrating; one that cannot be read is refused naming it.
 async function assertNoOtherStore(base, path, id) {
-  const own = realOr(path);
+  const own = compared(path);
   for (const dir of [base, join(base, 'db')]) {
     let names;
     try { names = readdirSync(dir); } catch (e) { if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR') continue; throw e; }
     for (const name of names.filter((n) => n.endsWith('.db')).sort()) {
       const file = join(dir, name);
-      if (realOr(file) === own) continue;
+      if (compared(file) === own) continue;
       try { if (!statSync(file).isFile()) continue; } catch { continue; }
       let other;
       try {
@@ -467,7 +471,7 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
   out.write(`store: ${path}\n`);
   if (!existsSync(path)) throw refuse(`no database at ${path} — nothing to export (this command never creates one; check OBSERVOGRAM_DB and OBSERVOGRAM_WORKSPACE)`);
   const target = resolve(dir);
-  const inPlace = realOr(target) === realOr(base);
+  const inPlace = compared(target) === compared(base);
   let into = target;   // where a directory export writes: the target, or the directory its symlink resolves to
   if (inPlace) {
     if (!existsSync(base)) throw refuse(`the workspace ${base} does not exist — an in-place export works on an existing workspace. Nothing was changed. Check OBSERVOGRAM_WORKSPACE, or choose an empty or new directory for a directory export`);
@@ -497,8 +501,8 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
         // A database elsewhere proves nothing about the directory — an empty or unrelated one would pass, and the
         // export would record that directory's files as this store's legacy files.
         await assertNoOtherStore(base, path, id);   // the more specific refusal first: it names the other store
-        const own = realOr(path);
-        const b = realOr(base);
+        const own = compared(path);
+        const b = compared(base);
         if (!own.startsWith(b + sep)) {
           throw refuse(`${mp} is missing and ${path} lives outside ${base}: the workspace ${base} is not known to be store ${id}'s. `
             + `Nothing was changed. If ${base} is this store's workspace, start the server once with OBSERVOGRAM_WORKSPACE=${base} `
@@ -778,16 +782,16 @@ export async function purgeOrg(id, { dbPath = resolveDbPath(), base = baseWorksp
     const rel = `orgs/${id}`;
     if (org.root !== rel) throw refuse(`org ${id}'s root is ${org.root}, not ${rel} — only an org's own directory is purged; nothing was deleted`);
     const root = join(base, 'orgs', id);
-    const parent = realOr(join(base, 'orgs'));
+    const parent = compared(join(base, 'orgs'));
     let present = false;
     if (lexists(root)) {
       const st = lstatSync(root);
       if (!st.isDirectory()) throw refuse(`${root} is not a directory (${st.isSymbolicLink() ? 'a symlink, never followed' : 'a file'}) — move it aside by hand; nothing was deleted`);
-      if (!realOr(root).startsWith(parent + sep)) throw refuse(`${root} resolves outside ${join(base, 'orgs')} — nothing was deleted`);
+      if (!compared(root).startsWith(parent + sep)) throw refuse(`${root} resolves outside ${join(base, 'orgs')} — nothing was deleted`);
       present = true;
     }
     const usersFile = getMeta(db, 'users_file');
-    if (usersFile && isAbsolute(usersFile) && present && realOr(usersFile).startsWith(realOr(root) + sep)) {
+    if (usersFile && isAbsolute(usersFile) && present && compared(usersFile).startsWith(compared(root) + sep)) {
       throw refuse(`the recorded users file ${usersFile} lies under ${root} — move it out first; nothing was deleted`);
     }
     const underRoot = (k) => !isAbsolute(k) && slashed(k).startsWith(`${rel}/`);
