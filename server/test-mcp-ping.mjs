@@ -19,12 +19,12 @@
 
 // Hermetic (§0): a developer shell's store, identity or per-org token
 // variables never reach this process's imports.
-const { STRIP, signIn } = await import('./fixtures/serve-child.mjs');
+const { STRIP, signIn, dropInheritedOrgVars } = await import('./fixtures/serve-child.mjs');
 for (const k of STRIP) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
 }
-for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
+dropInheritedOrgVars();
 
 const { test, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;

@@ -14,12 +14,12 @@
  * rule's own cases unset it, each restoring it in a finally.
  */
 
-const { STRIP } = await import('./fixtures/serve-child.mjs');
+const { STRIP, dropInheritedOrgVars } = await import('./fixtures/serve-child.mjs');
 for (const k of STRIP) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
 }
-for (const k of Object.keys(process.env)) if (/^OBSERVOGRAM_ORG_/.test(k)) delete process.env[k];
+dropInheritedOrgVars();
 const SUITE_ORIGINS = 'https://mcp.example,https://mcp.acme.example,https://mcp2.acme.example,http://mcp.lab.example:3001,https://mcp.lab.example,https://mcp.eu.example';
 process.env.OBSERVOGRAM_MCP_ORIGINS = SUITE_ORIGINS;
 

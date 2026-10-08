@@ -40,7 +40,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statS
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { boot, serve, childEnv, signIn, STRIP } from './fixtures/serve-child.mjs';
+import { boot, serve, childEnv, signIn, STRIP, dropInheritedOrgVars } from './fixtures/serve-child.mjs';
 import { startFakeMcp, registerMcpEndpoint, EXAMPLE_SETTINGS_DESCRIPTOR } from './fixtures/fake-mcp.mjs';
 
 // Hermetic (§0): this process strips the children's list too, both spellings,
@@ -50,7 +50,7 @@ for (const k of STRIP) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
 }
-for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
+dropInheritedOrgVars();
 const { readSettingsPolicyConfig, MCP_SETTINGS_POLICY_ENV, MCP_ADMIN_PROXY_ENV } = await import('./mcp-settings-policy.mjs');
 const { hashPassword } = await import('./auth.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');

@@ -83,12 +83,12 @@
 // The two knobs are read before the strip (STRIP carries both so no child sees them).
 const PLAYWRIGHT = process.env.OBSERVOGRAM_PLAYWRIGHT || 'playwright';
 const REQUIRED = process.env.OBSERVOGRAM_MCP_SETTINGS_SMOKE === 'require';
-const { STRIP, serve, signIn } = await import('./fixtures/serve-child.mjs');
+const { STRIP, serve, signIn, dropInheritedOrgVars } = await import('./fixtures/serve-child.mjs');
 for (const k of STRIP) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
 }
-for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
+dropInheritedOrgVars();
 
 const { test, before, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;

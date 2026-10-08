@@ -2062,7 +2062,9 @@ const healthFor = (uid) => (uid === HEALTH_ERR.datasource?.uid ? HEALTH_ERR : HE
     const run = await new Promise((resolveRun) => {
       const child = spawn(process.execPath, [resolve(__dirname, 'fetch-live-pack.mjs')], {
         cwd: dir,
-        env: { MCP_URL: `${fake.url}?token=s3cret-cli&tier=x`, OUTPUT: output },
+        // Every variable the CLI reads is set here or dropped; the rest of the
+        // parent's environment stays (a Windows child without SystemRoot cannot open a socket).
+        env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(?:MCP_|OUTPUT$|PACK_NAME$|OBSERVOGRAM_|TOMOGRAPH_)/i.test(k))), MCP_URL: `${fake.url}?token=s3cret-cli&tier=x`, OUTPUT: output },
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       });

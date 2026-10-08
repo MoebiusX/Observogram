@@ -48,13 +48,24 @@ export const STRIP = [
 // suite passes its own through `extra`.
 export const ORG_PREFIX = 'OBSERVOGRAM_ORG_';
 
+// Windows reads an environment name in any case (an inherited observogram_org_acme_mcp_token is a
+// child's OBSERVOGRAM_ORG_ACME_MCP_TOKEN there), while a copy of process.env keeps each name's
+// spelling. So a name is dropped by its upper-cased form.
+const isOrgVar = (k) => k.toUpperCase().startsWith(ORG_PREFIX);
+
 export function childEnv(ws, extra = {}) {
-  const env = { ...process.env };
-  for (const k of STRIP) { delete env[`OBSERVOGRAM_${k}`]; delete env[`TOMOGRAPH_${k}`]; }
-  for (const k of Object.keys(env)) if (k.startsWith(ORG_PREFIX)) delete env[k];
+  const strip = new Set(STRIP.flatMap((k) => [`OBSERVOGRAM_${k}`, `TOMOGRAPH_${k}`]));
+  const env = {};
+  for (const [k, v] of Object.entries(process.env)) if (!strip.has(k.toUpperCase()) && !isOrgVar(k)) env[k] = v;
   if (ws) env.OBSERVOGRAM_WORKSPACE = ws;
   for (const [k, v] of Object.entries(extra)) { if (v === undefined) delete env[k]; else env[k] = v; }
   return env;
+}
+
+// The suites' half: a suite that starts a server in this process deletes every inherited per-org
+// variable from its own environment, whatever the name's case, before it sets its own.
+export function dropInheritedOrgVars(env = process.env) {
+  for (const k of Object.keys(env)) if (isOrgVar(k)) delete env[k];
 }
 
 // ---------- the children ----------
