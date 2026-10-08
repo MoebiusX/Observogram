@@ -544,7 +544,7 @@ test('the settings policy is re-checked against the description the server read:
 // in milliseconds, backtracks for minutes on a long underscore run.
 const BANG = '^.*_{0,60}_{0,60}_{0,60}_{0,60}!$';
 
-test('evaluatePolicy: a rule that does not finish within the deadline counts as matched, its warn and ack apply; a fast rule before it is evaluated as written; one line names the rule, never the value', async () => {
+test('evaluatePolicy: a rule that does not finish within the deadline counts as matched, its warn and ack apply; a fast rule before it is evaluated as written; one line names the rule, never the value', async (t) => {
   assert.equal(POLICY_EVAL_DEADLINE_MS, 100);
   const { policy, errors } = compileSettingsPolicy({ version: 1, rules: [
     { when: { field: 'url', pattern: '^https://slow\\.example/' }, warn: 'Fast match.', require: { ack: 'ack 0' } },
@@ -557,7 +557,9 @@ test('evaluatePolicy: a rule that does not finish within the deadline counts as 
   const lines = [];
   const t0 = Date.now();
   const out = await evaluatePolicy(policy, d, { url: value, user: 'bob' }, { log: (l) => lines.push(l) });
-  assert.ok(Date.now() - t0 < 2000, `answered within the deadline plus a worker start (${Date.now() - t0} ms)`);
+  const tookMs = Date.now() - t0;
+  t.diagnostic(`bound: evaluatePolicy answers within the deadline plus a worker start: ${tookMs} ms < 2000 ms`);
+  assert.ok(tookMs < 2000, `answered within the deadline plus a worker start (${tookMs} ms)`);
   assert.deepEqual(out.timedOut, [2]);
   assert.deepEqual(out.findings.map((f) => [f.rule, f.field, f.ack, f.timedOut === true]), [[0, 'url', 'ack 0', false], [2, 'url', 'ack 2', true]]);
   assert.equal(out.findings[1].note, 'Policy rule 3 did not finish within 100 ms, so it counts as matched');
@@ -570,7 +572,7 @@ test('evaluatePolicy: a rule that does not finish within the deadline counts as 
   assert.deepEqual(await evaluatePolicy(null, d, { url: value }), { findings: [], timedOut: [] });
 });
 
-test('a slow policy pattern costs its acknowledgement, never the server: the submit is a 409 within 2 s naming the rule, the server answers meanwhile, with the ack the configure goes; the log names the rule, never the value', { timeout: 30_000 }, async () => {
+test('a slow policy pattern costs its acknowledgement, never the server: the submit is a 409 within 2 s naming the rule, the server answers meanwhile, with the ack the configure goes; the log names the rule, never the value', { timeout: 30_000 }, async (t) => {
   const f = await fakeMcp({ descriptor: null });
   const policyFile = file('policy-slow.json', JSON.stringify({ version: 1, rules: [{ when: { type: 'url', pattern: BANG }, warn: 'Unreviewed backend.', require: { ack: 'I reviewed the backend' } }] }));
   const s = await studio({ OBSERVOGRAM_MCP_SETTINGS_POLICY: policyFile });
@@ -582,9 +584,13 @@ test('a slow policy pattern costs its acknowledgement, never the server: the sub
   const g0 = Date.now();
   const r = await fetch(`${s.base}/api/mcp-settings`, { headers: s.headers('ada'), signal: AbortSignal.timeout(5000) });
   assert.equal(r.status, 200);
-  assert.ok(Date.now() - g0 < 1500, `another request answers while the submit is checked (${Date.now() - g0} ms)`);
+  const otherMs = Date.now() - g0;
+  t.diagnostic(`bound: another request answers while the submit is checked: ${otherMs} ms < 1500 ms`);
+  assert.ok(otherMs < 1500, `another request answers while the submit is checked (${otherMs} ms)`);
   const r1 = await pending;
-  assert.ok(Date.now() - t0 < 2000, `the submit answers within 2 s (${Date.now() - t0} ms)`);
+  const submitMs = Date.now() - t0;
+  t.diagnostic(`bound: the submit answers within 2 s: ${submitMs} ms < 2000 ms`);
+  assert.ok(submitMs < 2000, `the submit answers within 2 s (${submitMs} ms)`);
   assert.deepEqual([r1.status, r1.json.denied, r1.json.rule, r1.json.error], [409, 'policy-ack', 0, 'Unreviewed backend. — tick "I reviewed the backend" in the server settings']);
   assert.ok(!r1.text.includes('_'.repeat(20)), 'the answer never echoes the value');
   assert.equal(f.adminRequests.filter((x) => x.method === 'POST').length, 0, 'nothing sent');

@@ -1445,6 +1445,7 @@ try {
       mode = 'hang'; hits.length = 0;
       await sleep(5);
       const n5 = await runJourney(loadJourneyDef('notified'));
+      console.log(`bound: a hung receiver times out per attempt (1000 ms × 2): ${n5.notify?.tookMs} ms < 3500 ms`);
       assert(n5.notify.status === 'failed' && n5.notify.attempts === 2 && n5.notify.error === 'timeout after 1000ms' && n5.notify.tookMs < 3500 && n5.notify.httpStatus === null,
              'a hung receiver times out per attempt (1000 ms × 2) and the run still lands', n5.notify);
       assert(readJourneyRuns('notified')[0].startedAt === n5.startedAt && readJourneyRuns('notified')[0].notify.status === 'failed', 'the hung delivery is on the record');

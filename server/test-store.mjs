@@ -557,7 +557,7 @@ function lockHolder(path, holdMs) {
   `);
 }
 
-test('Concurrency: a write waits out a child holding BEGIN IMMEDIATE for less than busy_timeout, then succeeds', async () => {
+test('Concurrency: a write waits out a child holding BEGIN IMMEDIATE for less than busy_timeout, then succeeds', async (t) => {
   const path = join(tempDir(), 'conc.db');
   const db = await openStore({ path });
   try {
@@ -568,6 +568,7 @@ test('Concurrency: a write waits out a child holding BEGIN IMMEDIATE for less th
     const waited = Date.now() - t0;
     const r = await holder.exited(10_000, "the parent's write");
     assert.equal(r.code, 0, r.stderr);
+    t.diagnostic(`bound: the parent's write waited on the lock: ${waited} ms >= 300 ms of a 700 ms hold`);
     assert.ok(waited >= 300, `the parent waited on the lock (${waited} ms)`);
     assert.equal(prepare(db, "SELECT value FROM schema_meta WHERE key = 'parent'").get().value, 'wrote');
     assert.equal(prepare(db, "SELECT value FROM schema_meta WHERE key = 'held_by_child'").get().value, 'yes');
@@ -576,7 +577,7 @@ test('Concurrency: a write waits out a child holding BEGIN IMMEDIATE for less th
   }
 });
 
-test('Concurrency: a migration waits out a child holding BEGIN IMMEDIATE, then applies', async () => {
+test('Concurrency: a migration waits out a child holding BEGIN IMMEDIATE, then applies', async (t) => {
   const path = join(tempDir(), 'conc-mig.db');
   await openStore({ path });
   closeStore(path);
@@ -589,6 +590,7 @@ test('Concurrency: a migration waits out a child holding BEGIN IMMEDIATE, then a
     assert.deepEqual(runMigrations(db, [...STEPS, step]).applied, [NEXT]);
     const waited = Date.now() - t0;
     assert.equal((await holder.exited(10_000, 'the migration')).code, 0);
+    t.diagnostic(`bound: the migration waited on the lock: ${waited} ms >= 300 ms of a 700 ms hold`);
     assert.ok(waited >= 300, `the migration waited on the lock (${waited} ms)`);
     assert.ok(tables(db).includes('later'));
   } finally {
@@ -1875,7 +1877,7 @@ test('readTokenEnv names a variable of this org: OBSERVOGRAM_ORG_<KEY>_<NAME>, o
   }
 });
 
-test('Concurrency: a repository write waits out a child holding BEGIN IMMEDIATE, then succeeds with its audit row', async () => {
+test('Concurrency: a repository write waits out a child holding BEGIN IMMEDIATE, then succeeds with its audit row', async (t) => {
   const { path, db, close } = await freshStore('conc-repo');
   try {
     const holder = lockHolder(path, 700);
@@ -1884,6 +1886,7 @@ test('Concurrency: a repository write waits out a child holding BEGIN IMMEDIATE,
     users.createUser(db, 'system', { login: 'patient' });
     const waited = Date.now() - t0;
     assert.equal((await holder.exited(10_000, 'the repository write')).code, 0);
+    t.diagnostic(`bound: the repository write waited on the lock: ${waited} ms >= 300 ms of a 700 ms hold`);
     assert.ok(waited >= 300, `waited ${waited} ms`);
     assert.ok(users.getUserByLogin(db, 'patient'));
     assert.deepEqual(auditActions(db), ['user.create']);
