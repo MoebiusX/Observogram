@@ -282,8 +282,11 @@ export function effectiveRoleOf(principal, membershipRole = null) {
 // nothing (authDisabled() beats an armed store, auth.mjs), and neither does
 // configuring OIDC (authDisabled() beats oidcEnabled()), so the way in there
 // is a restart without it — with a user, or with OIDC configured.
+// AUTH_OFF_RESTART is that restart, the one copy every sentence naming it
+// under OBSERVOGRAM_AUTH=off composes (mcp-target-policy.mjs's too).
+export const AUTH_OFF_RESTART = 'restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured';
 const NO_SIGN_IN_WAY = 'this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC';
-const NO_SIGN_IN_WAY_AUTH_OFF = 'this server has no sign-in (OBSERVOGRAM_AUTH=off): restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured';
+const NO_SIGN_IN_WAY_AUTH_OFF = `this server has no sign-in (OBSERVOGRAM_AUTH=off): ${AUTH_OFF_RESTART}`;
 export const noSignInWay = (ctx) => (ctx.authOff ? NO_SIGN_IN_WAY_AUTH_OFF : NO_SIGN_IN_WAY);
 // The csrf: 'always' refusal, by what the entry is closed as: 'identity
 // changes' for the identity API (and the self route that changes a

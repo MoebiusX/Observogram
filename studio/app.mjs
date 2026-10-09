@@ -3749,7 +3749,8 @@ function updateObservaServiceChip() {
     chip.setAttribute('aria-label', `Service ${m.label} — back to its page`);
     chip.onclick = () => enterServicePage(m.serviceId, state.serviceEnv);
   } else {
-    chip.removeAttribute('title');
+    // A label: its text is the whole name; the title shows it where the phone cap ellipsizes it (app.css).
+    chip.title = `service: ${m.label}`;
     chip.removeAttribute('aria-label');
     chip.onclick = null;
   }
@@ -4949,14 +4950,24 @@ function renderHomeView() {
 // may connect, in the identity and open postures: read once, then only the
 // picker is repainted when the read settles; a re-render reuses the list. An
 // empty list, a refusal or a failure leaves today's card (the URL typed).
+// After a failed read, each drawing of the home reads again (its hint says
+// "reopen this"), its policy unread meanwhile and the list kept — as a
+// picker's opening (openMcpTarget).
 let homeMcpEndpointsRead = false;
+let homeMcpEndpointsReading = false;
 function paintHomeMcpTarget() {
+  const failed = state.mcpTargetPolicy?.failed === true;
+  const reads = mcpPickersReadable() && state.access?.canWrite !== false && !homeMcpEndpointsReading
+    && (failed || (!homeMcpEndpointsRead && (state.mcpEndpoints === null || state.mcpTargetPolicy === null)));
+  if (reads && failed) unreadMcpPolicy();
   paintMcpTarget('home');
-  if (homeMcpEndpointsRead || (state.mcpEndpoints !== null && state.mcpTargetPolicy !== null) || !mcpPickersReadable() || state.access?.canWrite === false) return;
+  if (!reads) return;
   homeMcpEndpointsRead = true;
+  homeMcpEndpointsReading = true;
   // Repainted when the read settles: the list, and what the policy says
   // this reader may do (a list-only card, or Register and connect).
-  readMcpEndpointsForPickers().then(() => {
+  readMcpEndpointsForPickers({ keepList: failed }).then(() => {
+    homeMcpEndpointsReading = false;
     if (document.getElementById('home-mcp-url')) paintMcpTarget('home');
   });
 }
@@ -5150,8 +5161,10 @@ function renderMcpStatusBody(status) {
 // URL…" last. With an endpoint chosen the URL row is hidden (its value kept)
 // and the request names it by id (mcpTargetBody: an id or a URL, never
 // both); the read token stays on the server, named by the record. The list
-// (state.mcpEndpoints) is read in the identity and open postures only — the
-// bundle and the token posture never read it, and keep the typed URL.
+// (state.mcpEndpoints) is drawn in the identity and open postures only — the
+// bundle and the token posture never draw it, and keep the typed URL (the
+// token posture reads it for the Server settings button's way in alone:
+// readMcpGatePolicy).
 // Typing a URL is the server's to allow (R4): the list's read carries
 // `policy` (state.mcpTargetPolicy), and a reader it refuses a typed URL —
 // below admin, or without sign-in — gets the pickers list-only, with the
@@ -5170,6 +5183,13 @@ const MCP_PICKERS = {
 function mcpPickersReadable() {
   const posture = state.access?.posture;
   return posture === 'identity' || posture === 'open';
+}
+
+// Where GET /api/mcp-endpoints answers this reader with its policy: the
+// postures that draw the list, and the token posture, whose policy carries
+// the server's own way in (`register.why`) and nothing the pickers draw.
+function mcpPolicyReadable() {
+  return mcpPickersReadable() || state.access?.posture === 'token';
 }
 
 // The empty list's way to Settings → MCP endpoints: the server says whether
@@ -5192,11 +5212,23 @@ function mcpTypedAllowed(id) {
   return state.mcpTargetPolicy?.typed?.allowed === true;
 }
 
+// The list as the pickers draw it: with its policy, so none while the policy
+// is unread (a read in flight answers both) — never an empty list's line
+// before the server says what this reader may do. A list read without the
+// policy (Settings, an environment's editor) stays in state.mcpEndpoints for
+// the view that drew it.
+function mcpPickerEndpoints() {
+  return state.mcpTargetPolicy === null ? null : state.mcpEndpoints;
+}
+
 // The status line when a picker has nothing to send.
 function mcpTargetMissing(id) {
+  const endpoints = mcpPickerEndpoints();
   return mcpTargetMissingText({
     typedAllowed: mcpTypedAllowed(id), orgName: state.orgName,
-    empty: Array.isArray(state.mcpEndpoints) && state.mcpEndpoints.length === 0, canRegister: mcpPickerCanAdminNow(),
+    empty: Array.isArray(endpoints) && endpoints.length === 0, canRegister: mcpPickerCanAdminNow(),
+    posture: state.access?.posture ?? null, registerWhy: state.mcpTargetPolicy?.register?.why ?? null,
+    unreadable: state.mcpTargetPolicy?.failed === true,
   });
 }
 
@@ -5205,10 +5237,18 @@ function mcpTargetMissing(id) {
 // and the policy closed (state.mcpTargetPolicy `failed`), and Settings is
 // where a failed read is said. `keep` keeps the list and the policy already
 // read when this read fails (the pre-send check: its own sentence says it
-// could not check).
+// could not check); `keepList` the list alone (a failed read read again).
 const CLOSED_MCP_POLICY = Object.freeze({ typed: { allowed: false }, register: { allowed: false }, failed: true });
-async function readMcpEndpointsForPickers({ keep = false } = {}) {
-  if (!mcpPickersReadable()) return null;
+// A failed read about to be read again: its policy unread, so the pickers
+// draw no list meanwhile (mcpPickerEndpoints). The list is kept — beside a
+// failed policy it was read without one, by a view that may be drawing it
+// still (Settings → MCP endpoints: Edit… finds its row there) — until the
+// read's answer replaces it; read with `keepList`, a failure leaves it so.
+function unreadMcpPolicy() {
+  state.mcpTargetPolicy = null;
+}
+async function readMcpEndpointsForPickers({ keep = false, keepList = false } = {}) {
+  if (!mcpPolicyReadable()) return null;
   try {
     const { endpoints, policy } = await loadMcpEndpoints({ withPolicy: true });
     state.mcpEndpoints = endpoints;
@@ -5216,7 +5256,7 @@ async function readMcpEndpointsForPickers({ keep = false } = {}) {
     return state.mcpEndpoints;
   } catch {
     if (!keep) {
-      state.mcpEndpoints = null;
+      if (!keepList) state.mcpEndpoints = null;
       state.mcpTargetPolicy = CLOSED_MCP_POLICY;
     }
     return null;
@@ -5244,7 +5284,7 @@ function mcpPickerModel(id, chosen = null) {
   const p = MCP_PICKERS[id];
   const readable = mcpPickersReadable() && (!p.needsWrite || state.access?.canWrite !== false);
   const model = mcpTargetModel({
-    endpoints: readable ? state.mcpEndpoints : null,
+    endpoints: readable ? mcpPickerEndpoints() : null,
     remembered: recallMcpEndpoint(),
     liveUrl: state.mcpStatus?.url || null,
     // The remembered typed URL — or, in the deploy modal (which remembers
@@ -5252,7 +5292,7 @@ function mcpPickerModel(id, chosen = null) {
     typedUrl: id === 'deploy' ? (document.getElementById(p.url)?.value || '') : (recallMcpUrl() || ''),
     purpose: p.purpose, orgName: state.orgName, canAdmin: mcpPickerCanAdminNow(), chosen,
     typed: { allowed: mcpTypedAllowed(id) }, posture: state.access?.posture ?? null,
-    unreadable: state.mcpTargetPolicy?.failed === true,
+    registerWhy: state.mcpTargetPolicy?.register?.why ?? null, unreadable: state.mcpTargetPolicy?.failed === true,
   });
   return p.hint || !mcpTypedAllowed(id) ? model : { ...model, hint: null };
 }
@@ -5359,12 +5399,34 @@ async function checkEndpointDrift(id) {
 }
 
 // A picker opening: drawn from the list already read, then — when the list
-// is unread, or `fresh` (the deploy modal: every open) — read and redrawn.
-// Returns the read's promise (resolved at once when nothing is read).
+// is unread, its policy unread or failed (a list read without it — Settings,
+// an environment's editor — leaves a failed one so), or `fresh` (the deploy
+// modal: every open) — read and redrawn. Returns the read's promise
+// (resolved at once when nothing is read). A failed read is unread again
+// while it is read again — its policy, so the picker draws no list — so
+// neither the picker nor the Server settings button says "reopen" (nor, the
+// list empty, a refusal) while the opening does just that (as
+// readMcpGatePolicy in the token posture); the list another view drew is
+// kept until the answer replaces it (unreadMcpPolicy).
 function openMcpTarget(id, { fresh = false } = {}) {
+  const failed = state.mcpTargetPolicy?.failed === true;
+  const reads = mcpPickersReadable() && (fresh || failed || state.mcpEndpoints === null || state.mcpTargetPolicy === null);
+  if (reads && failed) unreadMcpPolicy();
   paintMcpTarget(id);
-  if (!mcpPickersReadable() || (!fresh && state.mcpEndpoints !== null && state.mcpTargetPolicy !== null)) return Promise.resolve();
-  return readMcpEndpointsForPickers().then(() => paintMcpTarget(id));
+  if (!reads) return Promise.resolve();
+  return readMcpEndpointsForPickers({ keepList: failed }).then(() => paintMcpTarget(id));
+}
+
+// The token posture's Server settings button names the server's own way in
+// (settingsGateModel: `policy.register.why` — OBSERVOGRAM_AUTH=off
+// included), so the panel's opening reads the policy there until one read
+// answers; the pickers draw nothing from it. Resolved at once elsewhere.
+// A failed read is unread again while it is read again, so the button says
+// it is checking — never "close and reopen" while the panel does just that.
+function readMcpGatePolicy() {
+  if (state.access?.posture !== 'token' || (state.mcpTargetPolicy !== null && !state.mcpTargetPolicy.failed)) return Promise.resolve();
+  state.mcpTargetPolicy = null;
+  return readMcpEndpointsForPickers();
 }
 
 // The focus a picker opens on: the URL field, or the select while it hides it.
@@ -5407,8 +5469,9 @@ function openMcpPanel() {
     const liveUrl = state.mcpStatus?.url || null; // served to operators only
     urlInput.value = saved || liveUrl || '';
   }
+  const reads = Promise.all([openMcpTarget('refresh'), readMcpGatePolicy()]);
   paintMcpSettingsButton();
-  openMcpTarget('refresh').then(paintMcpSettingsButton);
+  reads.then(paintMcpSettingsButton);
   if (state.access?.posture === 'static' && mcpSettingsBundle.origins === undefined) readBundleMcpOrigins();
   focusMcpTarget('refresh');
 }
@@ -5476,8 +5539,10 @@ async function pingFromPanel() {
 // "Server settings…" (#mcp-settings-btn) opens a modal in this page that
 // configures the MCP server behind the panel's target — not the studio's
 // connection to it. Only a reader who may change an MCP endpoint opens it
-// (settingsGateModel: GET /api/mcp-endpoints `policy.register.allowed`);
-// the button is never hidden, and says why when it cannot be used.
+// (settingsGateModel: GET /api/mcp-endpoints `policy.register.allowed`, the
+// pickers' read — in the token posture readMcpGatePolicy's); the button is
+// never hidden, and says why when it cannot be used — without sign-in, in
+// the server's own sentence (`policy.register.why`).
 //
 // Nothing runs at boot or when the panel opens. Opening the modal reads
 // GET /api/mcp-settings (the deployment's settings policy) and, once the

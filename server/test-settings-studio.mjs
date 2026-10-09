@@ -38,14 +38,19 @@
  * A confirm step whose rank went while it was open (an environment's, an
  * endpoint's, a member's, a user's): the 403 keeps the focus inside the
  * dialog and is announced.
- * As vera (viewer): no Edit, no URL; her one org renamed long, its ORG
- * label keeps the OBSERVA bar inside the phone width in the modes that hide
- * the SERVICE chip (the home, a service page, Settings; Build as oscar). As
- * nora (no org): the boot's refusal.
- * The token posture (with and without OBSERVOGRAM_AUTH=off) and an open
- * server bound off the loopback: the banner is the server's text, the
- * writes carry their reasons, the pickers offer no Settings button. An open
- * server on the loopback: once its probe answers 200, the pickers do.
+ * As vera (viewer): no Edit, no URL; her one org renamed long, the OBSERVA
+ * bar fits 320, 360, 390 and 720 px in both themes in every mode — the home,
+ * a service page, a pack's views with the SERVICE chip (its name capped,
+ * named in full by the button, or as a label by its title), Settings; Build
+ * as oscar; Discover as olive, with the ORG switcher. As nora (no org): the
+ * boot's refusal.
+ * The token posture (with and without OBSERVOGRAM_AUTH=off, and with OIDC
+ * configured under it) and an open server bound off the loopback: the
+ * banner is the server's text, the writes carry their reasons, the pickers
+ * offer no Settings button, and the MCP panel's Server settings button (and
+ * off the loopback the picker's hint and its nothing-to-send line) names
+ * the server's own way in. An open server on the loopback: once its probe
+ * answers 200, the pickers do.
  *
  * Its own fixture (design §12.4 B1): ada is acme's only enabled admin (olive
  * is an owner and an operator there), and ada is a viewer of bravo — she has
@@ -143,6 +148,11 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
   children.push(tokenChild);
   const tokenOffChild = await serve(workspace('token-off'), { env: { OBSERVOGRAM_API_TOKEN: TOKEN, OBSERVOGRAM_AUTH: 'off' } });
   children.push(tokenOffChild);
+  // OBSERVOGRAM_AUTH=off beats OIDC: the token posture still, its way in a restart.
+  const tokenOffOidcChild = await serve(workspace('token-off-oidc'), {
+    env: { OBSERVOGRAM_API_TOKEN: TOKEN, OBSERVOGRAM_AUTH: 'off', OBSERVOGRAM_OIDC_ISSUER: 'https://idp.example.test', OBSERVOGRAM_OIDC_CLIENT_ID: 'studio', OBSERVOGRAM_OIDC_CLIENT_SECRET: 'settings-studio-oidc-secret' },
+  });
+  children.push(tokenOffOidcChild);
   const openChild = await serve(workspace('open-exposed'), { host: '0.0.0.0', env: { OBSERVOGRAM_INSECURE_NO_AUTH: '1', OBSERVOGRAM_AUTH: 'off' } });
   children.push(openChild);
   const loopChild = await serve(workspace('open-loopback'), { env: { OBSERVOGRAM_AUTH: 'off' } });
@@ -256,6 +266,40 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     const cw = document.documentElement.clientWidth;
     return [...document.querySelectorAll('.set-page, .set-page *, .set-editor, .set-editor *')].filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.right > cw + 1 && !el.closest('.set-nav'); }).slice(0, 8).map((el) => `${el.tagName}.${el.className}#${el.id}:${Math.round(el.getBoundingClientRect().right)}`);
   });
+  // A page whose every GET /api/mcp-endpoints fails from its load (opened
+  // with `before: abortEndpointReads`), then the MCP panel: the failed read
+  // is said; the next opening reads again and, until that read answers, the
+  // Server settings button says it is checking and the picker names no
+  // failure — never "close and reopen" or "reopen this" while the panel does
+  // just that (the token posture: its own subtest). The read is held at the
+  // route until both are seen, then released; `landed` is a selector for
+  // what its answer draws, waited for — never a stale text changing. The
+  // panel is left open on the answer.
+  const abortEndpointReads = (p) => p.route('**/api/mcp-endpoints', (route) => route.abort());
+  async function reopenAfterFailedRead(page, landed) {
+    const why = () => page.evaluate(() => document.getElementById('mcp-settings-btn')?.dataset.why ?? null);
+    const hint = () => text(page, '#mcp-panel .set-mcp-target-hint');
+    await page.evaluate(() => document.getElementById('mcp-btn').click());
+    await page.waitForFunction(() => /^Could not check /.test(document.getElementById('mcp-settings-btn')?.dataset.why || ''), null, { timeout: T });
+    assert.equal(await why(), 'Could not check whether you may configure the MCP server — close and reopen the panel to try again.');
+    assert.match(await hint(), /'s MCP endpoints could not be read just now — reopen this to try again\.$/);
+    await page.evaluate(() => document.getElementById('mcp-panel-close').click());
+    await page.unroute('**/api/mcp-endpoints');
+    let release;
+    let entered;
+    const held = new Promise((resolve) => { release = resolve; });
+    const reading = new Promise((resolve) => { entered = resolve; });
+    await page.route('**/api/mcp-endpoints', async (route) => { entered(); await held; await route.continue().catch(() => {}); });
+    try {
+      await page.evaluate(() => document.getElementById('mcp-btn').click());
+      await reading;
+      assert.equal(await why(), 'Checking whether you may configure the MCP server…', 'the reopening reads again, and says so while it does');
+      assert.equal(await hint(), null, 'the picker names no failure while it reads again');
+    } finally { release(); }
+    await page.waitForSelector(landed, { state: 'attached', timeout: T });
+    await page.unroute('**/api/mcp-endpoints');
+    assert.doesNotMatch(await why(), /^Could not check |^Checking /, 'the answer is said');
+  }
 
   // ---------- the records ----------
   const reg = await call('oscar', 'POST', '/api/validate', PAYMENT);
@@ -315,7 +359,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('ada (admin): New MCP endpoint gw — created; a credential in the URL and another org\'s variable are the server\'s sentences as served', async () => {
+  await t.test('ada (admin): New MCP endpoint gw — created; a credential in the URL and another org\'s variable are the server\'s sentences as served; the MCP panel\'s next opening after a failed read of the list says it is checking until that read answers, and leaves Settings\' list: Edit gw opens while it reads and after it fails', async () => {
     const { page, ctx } = await open(child.base, 'ada');
     try {
       await toSettings(page);
@@ -348,6 +392,60 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       const row = await text(page, `.set-row[data-endpoint-id="${gwId}"]`);
       assert.match(row, /token: OBSERVOGRAM_ORG_ACME_MCP_TOKEN/, 'the refused variable was not kept');
     } finally { await ctx.close(); }
+    // The identity posture: the panel's next opening after a failed read.
+    const again = await open(child.base, 'ada', { before: abortEndpointReads });
+    try {
+      await reopenAfterFailedRead(again.page, `#mcp-panel:not([hidden]) [data-mcp-target="refresh"] select.set-mcp-target option[value="${gwId}"]`);
+      assert.equal(await attr(again.page, '#mcp-settings-btn', 'aria-disabled'), null, 'an admin, gw chosen: Server settings usable');
+    } finally { await again.ctx.close(); }
+    // The list Settings draws stays Settings' while the panel reads again: a
+    // failed read at load, then Settings → MCP endpoints reads the list alone
+    // (gw's row) and the panel's opening, from the Advanced menu, reads the
+    // policy again — held at the route, then failed. Edit gw opens its
+    // editor meanwhile and after: neither read takes the list from under
+    // Settings. Each read's landing is waited for as drawn (the first
+    // opening paints the button's reason: no stale one to wait past).
+    for (const reread of ['held', 'failed']) {
+      const { page: sp, ctx: sctx } = await open(child.base, 'ada', { before: abortEndpointReads });
+      const editGw = async (what) => {
+        await sp.click(`[data-edit-endpoint="${gwId}"]`);
+        await sp.waitForSelector('#set-editor-host .set-editor', { timeout: T });
+        assert.equal(await text(sp, '#set-editor-title'), 'Edit gw', `${reread}: ${what}`);
+        await closeEditor(sp);
+      };
+      try {
+        await sp.waitForFunction(() => /^Acme's MCP endpoints could not be read just now — reopen this to try again\.$/.test(document.querySelector('[data-mcp-target="home"] .set-mcp-target-hint')?.textContent || ''), null, { timeout: T });
+        await sp.unroute('**/api/mcp-endpoints');
+        await toSettings(sp);
+        await toSection(sp, 'endpoints');
+        await sp.waitForSelector(`[data-edit-endpoint="${gwId}"]`, { timeout: T });
+        const openPanel = async () => { await sp.click('.observa-adv-toggle'); await sp.click('.observa-adv-item[data-action="mcp"]'); };
+        if (reread === 'held') {
+          let release;
+          let entered;
+          const held = new Promise((resolve) => { release = resolve; });
+          const reading = new Promise((resolve) => { entered = resolve; });
+          await sp.route('**/api/mcp-endpoints', async (route) => { entered(); await held; await route.continue().catch(() => {}); });
+          try {
+            await openPanel();
+            await reading;
+            assert.equal(await attr(sp, '#mcp-settings-btn', 'data-why'), 'Checking whether you may configure the MCP server…', 'the panel reads again, and says so');
+            assert.equal(await text(sp, '#mcp-panel .set-mcp-target-hint'), null, 'the picker names no failure while it reads again');
+            await sp.evaluate(() => document.getElementById('mcp-panel-close').click());
+            await editGw('Edit gw opens while the panel reads again');
+          } finally { release(); }
+          await sp.waitForSelector(`[data-mcp-target="refresh"] select.set-mcp-target option[value="${gwId}"]`, { state: 'attached', timeout: T });
+        } else {
+          await abortEndpointReads(sp);
+          await openPanel();
+          await sp.waitForFunction(() => /^Could not check /.test(document.getElementById('mcp-settings-btn')?.dataset.why || ''), null, { timeout: T });
+          await sp.evaluate(() => document.getElementById('mcp-panel-close').click());
+        }
+        await sp.unroute('**/api/mcp-endpoints');
+        assert.ok(await sp.$(`[data-edit-endpoint="${gwId}"]`), `${reread}: gw's row still drawn`);
+        await editGw('Edit gw opens after the panel\'s read landed');
+      } finally { await sctx.close(); }
+    }
   });
 
   await t.test('oscar (operator): add an environment, a tier, bind gw to prod; a tier-only save neither resends nor clears the binding; the service page follows', async () => {
@@ -723,14 +821,58 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('vera, a one-org member, her org renamed long: the ORG label (no select) carries the whole name and the OBSERVA bar scrolls nothing sideways at 390, 360 and 320 px — on the home, a service page, Settings and (oscar) Build, the modes that hide the SERVICE chip', async () => {
+  await t.test('vera, a one-org member, her org renamed long: the ORG label (no select) carries the whole name, and the OBSERVA bar fits 320, 360, 390 and 720 px in both themes in every mode — the home, a service page, a pack\'s views with the SERVICE chip (Discover, Diagnose, Remediate, every Advanced view; the chip a label, its title naming the service in full), Settings, (oscar) Build and (olive, the ORG switcher) Discover', async () => {
     const LONG = 'Acme Corporation Holdings';
-    // The OBSERVA row as app.css's comment on the org chip's phone cap states it: the SERVICE chip hidden, no
-    // horizontal page scroll, Advanced inside the viewport.
-    const row = (page) => page.evaluate(() => {
+    const WIDTHS = [320, 360, PHONE.width, 720];
+    // The OBSERVA bar as app.css's comment on the chips' phone cap states it: the bar's own scroll width is the
+    // viewport's; every control in it (the brand, the ORG chip, the SERVICE chip where a pack's view shows it, each
+    // tab, Advanced, the account menu) inside the viewport, none on top of another, each tab 40 px wide or more; read
+    // in the markup's order — the Tab key's, no control in the bar taking a positive tabindex — each control right of
+    // the one before on its row or on a row below it, the eye's order (WCAG 1.3.2, 2.4.3); and, on the screens the
+    // studio lays out itself (the home, a service page, Settings, Build), no horizontal page scroll. A pack's view
+    // draws its own content (a table, a facts list), which the bar never adds to.
+    const bar = (page, whole) => page.evaluate((whole) => {
       const cw = document.documentElement.clientWidth;
-      return { serviceChip: document.getElementById('observa-service')?.hidden === false, scroll: document.documentElement.scrollWidth, advanced: document.querySelector('.observa-adv-toggle').getBoundingClientRect().right <= cw };
-    });
+      const shown = (e) => !!e && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
+      const controls = [...document.querySelectorAll('.observa-hdr :is(.observa-brand, #observa-org, #observa-service, .observa-tab, .observa-adv-toggle, .hdr-user-btn)')]
+        .filter(shown).map((e) => [e.classList.contains('observa-tab') ? `tab ${e.dataset.view}` : (e.id || e.classList[0]), e.getBoundingClientRect()]);
+      const misfits = [];
+      for (const [n, r] of controls) {
+        if (r.left < 0 || r.right > cw) misfits.push(`${n} outside the viewport: ${Math.round(r.left)}–${Math.round(r.right)}`);
+        if (n.startsWith('tab ') && r.width < 40) misfits.push(`${n} ${Math.round(r.width)} px wide`);
+      }
+      for (let i = 0; i < controls.length; i++) {
+        for (let j = i + 1; j < controls.length; j++) {
+          const [[na, a], [nb, b]] = [controls[i], controls[j]];
+          if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) misfits.push(`${na} on top of ${nb}`);
+        }
+      }
+      for (let i = 1; i < controls.length; i++) {
+        const [[na, a], [nb, b]] = [controls[i - 1], controls[i]];
+        const sameRow = a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+        if (sameRow ? b.left < a.right - 0.5 : b.top < a.bottom - 0.5) misfits.push(`${nb} tabbed to after ${na}, drawn before it`);
+      }
+      for (const e of document.querySelectorAll('.observa-hdr [tabindex]')) if (e.tabIndex > 0) misfits.push(`${e.id || e.classList[0]} tabindex ${e.tabIndex}`);
+      const out = { serviceChip: shown(document.getElementById('observa-service')), bar: document.querySelector('.observa-hdr').scrollWidth, misfits };
+      if (whole) out.scroll = document.documentElement.scrollWidth;
+      return out;
+    }, whole);
+    const sweep = async (page, label, { serviceChip, whole }) => {
+      const before = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+      for (const theme of ['light', 'dark']) {
+        await page.evaluate((th) => document.documentElement.setAttribute('data-theme', th), theme);
+        for (const width of WIDTHS) {
+          await page.setViewportSize({ width, height: PHONE.height });
+          assert.deepEqual(await bar(page, whole), { serviceChip, bar: width, misfits: [], ...(whole ? { scroll: width } : {}) }, `${label} at ${width} px, ${theme}`);
+        }
+      }
+      await page.evaluate((th) => { if (th === null) document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', th); }, before);
+      await page.setViewportSize(PHONE);
+    };
+    const toView = async (page, id, opener) => {
+      await opener();
+      await page.waitForFunction((v) => document.body.dataset.view === v && document.body.dataset.mode === 'single', id, { timeout: T });
+    };
     assert.equal((await call('olive', 'PATCH', '/api/org', { name: LONG })).status, 200);
     try {
       const { page, ctx } = await open(child.base, 'vera', { viewport: PHONE });
@@ -738,22 +880,65 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
         await page.waitForFunction(() => document.getElementById('observa-org')?.hidden === false, null, { timeout: T });
         assert.equal(await page.$('.observa-org-select'), null, 'a label, not a switcher');
         assert.equal(await text(page, '#observa-org-name'), LONG, 'the label carries the whole name (assistive technology reads it)');
-        for (const width of [PHONE.width, 360, 320]) {
-          await page.setViewportSize({ width, height: PHONE.height });
-          assert.deepEqual(await row(page), { serviceChip: false, scroll: width, advanced: true }, `a long one-org label at ${width} px: no horizontal page scroll, Advanced inside the viewport`);
-        }
-        await page.setViewportSize(PHONE);
+        await sweep(page, 'the home with a long one-org label', { serviceChip: false, whole: true });
         await openService(page, 'payment-service');
-        assert.deepEqual(await row(page), { serviceChip: false, scroll: PHONE.width, advanced: true }, 'a service page at the phone width');
+        await sweep(page, 'a service page', { serviceChip: false, whole: true });
+        // A pack's views: the SERVICE chip joins the bar, its name capped at the phone width — the button names the
+        // service in full, and the context bar's SERVICE select shows it.
+        await toView(page, 'layers', () => page.click('#svc-action-discover'));
+        await page.waitForFunction(() => document.getElementById('observa-service')?.hidden === false, null, { timeout: T });
+        assert.equal(await attr(page, '#observa-service', 'aria-label'), 'Service payment-service — back to its page');
+        assert.equal(await text(page, '#observa-service-name'), 'payment-service', 'the chip\'s text is the whole name');
+        assert.ok(await page.evaluate(() => { const n = document.getElementById('observa-service-name'); return n.scrollWidth > n.clientWidth; }), 'at the phone width the name is capped (ellipsized)');
+        assert.match(await page.evaluate(() => document.querySelector('#service-select option:checked')?.textContent || ''), /payment-service/, 'the context bar\'s SERVICE select shows it in full');
+        await sweep(page, 'Discover', { serviceChip: true, whole: false });
+        for (const id of ['compare', 'compile']) {
+          await toView(page, id, () => page.click(`.observa-tab[data-view="${id}"]`));
+          await sweep(page, `the ${id} tab`, { serviceChip: true, whole: false });
+        }
+        for (const id of ['neuron', 'references', 'conformance', 'schema', 'otlp', 'traceability', 'atlas']) {
+          await toView(page, id, async () => { await page.click('.observa-adv-toggle'); await page.click(`.observa-adv-item[data-view="${id}"]`); });
+          await sweep(page, `Advanced → ${id}`, { serviceChip: true, whole: false });
+        }
+        // The chip's other form, a label — a service no record covers (here the table unread: the home's derived
+        // tile): no button, its text the whole name, and its title names the service in full where the cap
+        // ellipsizes it.
+        const servicesTable = (u) => /\/api\/services(\?|$)/.test(String(u));   // a URL predicate: no .pathname (tools/test-platform.mjs P4)
+        await page.route(servicesTable, (route) => (route.request().method() === 'GET' ? route.fulfill({ status: 500, contentType: 'application/json', body: '{"ok":false,"error":"boom"}' }) : route.fallback()));
+        await page.reload();
+        await page.waitForFunction(() => document.body.dataset.mode, null, { timeout: 30_000 });
+        await page.evaluate(() => document.querySelector('.observa-brand').click());
+        await page.waitForSelector('#home-services-status', { timeout: T });
+        await toView(page, 'layers', () => page.click('.svc-gate-card[data-service="payment-service"]'));
+        await page.waitForFunction(() => document.getElementById('observa-service')?.hidden === false, null, { timeout: T });
+        assert.deepEqual(await page.evaluate(() => { const c = document.getElementById('observa-service'); return [c.tagName, c.title, c.getAttribute('aria-label')]; }), ['SPAN', 'service: payment-service', null], 'a label, its title naming the service in full');
+        assert.equal(await text(page, '#observa-service-name'), 'payment-service', 'the label\'s text is the whole name');
+        assert.ok(await page.evaluate(() => { const n = document.getElementById('observa-service-name'); return n.scrollWidth > n.clientWidth; }), 'at the phone width the label is capped (ellipsized)');
+        await sweep(page, 'Discover, the SERVICE chip a label', { serviceChip: true, whole: false });
+        await page.unroute(servicesTable);
         await toSettings(page);
-        assert.deepEqual(await row(page), { serviceChip: false, scroll: PHONE.width, advanced: true }, 'Settings at the phone width');
+        await sweep(page, 'Settings', { serviceChip: false, whole: true });
       } finally { await ctx.close(); }
       const { page: build, ctx: buildCtx } = await open(child.base, 'oscar', { viewport: PHONE });
       try {
         await build.click('#home-choice-build');
         await build.waitForFunction(() => document.body.dataset.mode === 'build', null, { timeout: T });
-        assert.deepEqual(await row(build), { serviceChip: false, scroll: PHONE.width, advanced: true }, 'Build at the phone width');
+        await sweep(build, 'Build', { serviceChip: false, whole: true });
       } finally { await buildCtx.close(); }
+      // An owner in three orgs: the ORG switcher (a select, where vera has a label) beside the SERVICE chip on a
+      // pack's view.
+      const { page: owner, ctx: ownerCtx } = await open(child.base, 'olive', { viewport: PHONE });
+      try {
+        await owner.waitForSelector('.observa-org-select', { timeout: T });
+        if (await owner.evaluate(() => document.querySelector('.observa-org-select').value) !== 'acme') {
+          await Promise.all([owner.waitForNavigation(), owner.selectOption('.observa-org-select', 'acme')]);
+          await owner.waitForFunction(() => document.body.dataset.mode, null, { timeout: 30_000 });
+        }
+        await openService(owner, 'payment-service');
+        await toView(owner, 'layers', () => owner.click('#svc-action-discover'));
+        await owner.waitForFunction(() => document.getElementById('observa-service')?.hidden === false, null, { timeout: T });
+        await sweep(owner, 'Discover as olive, the ORG switcher', { serviceChip: true, whole: false });
+      } finally { await ownerCtx.close(); }
     } finally {
       assert.equal((await call('olive', 'PATCH', '/api/org', { name: 'Acme Corp' })).status, 200);
     }
@@ -772,8 +957,16 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('the token posture: the banner is the probe\'s text as served, every write aria-disabled with the token reason, no endpoint read from the home; under OBSERVOGRAM_AUTH=off the banner says to restart without it', async () => {
-    for (const srv of [tokenChild, tokenOffChild]) {
+  await t.test('the token posture: the banner is the probe\'s text as served, every write aria-disabled with the token reason, no endpoint read from the home; the MCP panel\'s Server settings button names the server\'s own way in, read when the panel opens (a failed read names none, and the next opening reads again); under OBSERVOGRAM_AUTH=off, OIDC configured or not, the banner and the button say to restart without it', async () => {
+    const AUTH_OFF_WAY = /this server has no sign-in \(OBSERVOGRAM_AUTH=off\): restart it without OBSERVOGRAM_AUTH=off, once a user exists \(npm run users -- add <login>\) or with OIDC configured$/;
+    const why = (page) => page.evaluate(() => document.getElementById('mcp-settings-btn')?.dataset.why ?? null);
+    const openPanel = async (page) => {
+      await page.evaluate(() => document.getElementById('mcp-btn').click());
+      await page.waitForSelector('#mcp-panel:not([hidden])', { timeout: T });
+      await page.waitForFunction(() => document.getElementById('mcp-settings-btn')?.dataset.why !== 'Checking whether you may configure the MCP server…', null, { timeout: T });
+    };
+    const closePanel = (page) => page.evaluate(() => document.getElementById('mcp-panel-close').click());
+    for (const srv of [tokenChild, tokenOffChild, tokenOffOidcChild]) {
       const r = await call(null, 'POST', '/api/validate', PAYMENT, { base: srv.base, bearer: TOKEN });
       assert.equal(r.status, 200, r.text);
       const probe = await call(null, 'GET', '/api/org/members', undefined, { base: srv.base });
@@ -785,12 +978,49 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
         await page.waitForSelector('.svc-card[data-service="payment-service"]', { timeout: T });
         await page.waitForTimeout(500);
         assert.equal(reads, 0, 'the home reads no endpoint list');
+        // The Server settings button: GET /api/mcp-endpoints' own sentence
+        // (policy.register.why), as the anonymous browser is told it.
+        const listed = await call(null, 'GET', '/api/mcp-endpoints', undefined, { base: srv.base });
+        assert.equal(listed.status, 200, listed.text);
+        const serverWhy = listed.json.policy.register.why;
+        if (srv === tokenChild) assert.match(serverWhy, /; this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC$/);
+        else assert.match(serverWhy, AUTH_OFF_WAY);
+        if (srv === tokenOffChild) {
+          // A failed read names no way in; the next opening reads again —
+          // and, until that read answers, says it is checking, never
+          // "close and reopen" (the read is held until the button is seen).
+          await page.route('**/api/mcp-endpoints', (route) => route.abort());
+          await openPanel(page);
+          assert.equal(await why(page), 'Could not check whether you may configure the MCP server — close and reopen the panel to try again.');
+          await closePanel(page);
+          await page.unroute('**/api/mcp-endpoints');
+          let release;
+          const held = new Promise((resolve) => { release = resolve; });
+          await page.route('**/api/mcp-endpoints', async (route) => { await held; await route.continue(); });
+          await page.evaluate(() => document.getElementById('mcp-btn').click());
+          await page.waitForSelector('#mcp-panel:not([hidden])', { timeout: T });
+          assert.equal(await why(page), 'Checking whether you may configure the MCP server…', 'the reopening reads again, and says so while it does');
+          release();
+          await page.waitForFunction(() => document.getElementById('mcp-settings-btn')?.dataset.why !== 'Checking whether you may configure the MCP server…', null, { timeout: T });
+          assert.equal(await why(page), `Configuring the MCP server is endpoint configuration: ${serverWhy}.`);
+          await closePanel(page);
+          await page.unroute('**/api/mcp-endpoints');
+        }
+        await openPanel(page);
+        assert.equal(await attr(page, '#mcp-settings-btn', 'aria-disabled'), 'true');
+        assert.equal(await text(page, '#mcp-settings-btn .svc-why'), `Configuring the MCP server is endpoint configuration: ${serverWhy}.`);
+        if (srv !== tokenChild) assert.doesNotMatch(await why(page), /add the first user|, or configure OIDC/, 'never a way OBSERVOGRAM_AUTH=off defeats');
+        assert.equal(await page.$('#mcp-panel .set-mcp-target-hint'), null, 'the token posture\'s pickers draw no list, so no hint');
+        await closePanel(page);
+        await openPanel(page);
+        assert.equal(reads, srv === tokenOffChild ? 2 : 1, 'the panel reads the policy once it has answered');
+        await closePanel(page);
         await page.click('.observa-adv-toggle');
         await page.click('.observa-adv-item[data-action="settings"]');
         await page.waitForSelector('.set-banner.is-token', { timeout: T });
         await settled(page);
         assert.equal(await text(page, '.set-banner'), served(probe));
-        if (srv === tokenOffChild) assert.match(await text(page, '.set-banner'), /this server has no sign-in \(OBSERVOGRAM_AUTH=off\): restart it without OBSERVOGRAM_AUTH=off, once a user exists \(npm run users -- add <login>\) or with OIDC configured$/);
+        if (srv !== tokenChild) assert.match(await text(page, '.set-banner'), AUTH_OFF_WAY);
         else assert.match(await text(page, '.set-banner'), /^403: anonymous callers are viewers here; /);
         for (const id of ['members', 'audit']) assert.equal(await text(page, `.set-nav-item[data-section="${id}"] .svc-why`), TOKEN_READ_REASON, id);
         for (const section of ['environments', 'endpoints']) {
@@ -802,7 +1032,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     }
   });
 
-  await t.test('an open server bound off the loopback: the banner is the server\'s posture text; environments writable; New MCP endpoint closed with its reason; the picker hint has no Settings button', async () => {
+  await t.test('an open server bound off the loopback: the banner is the server\'s posture text; environments writable; New MCP endpoint closed with its reason; the picker hint has no Settings button — it, the Server settings button and the nothing-to-send line name the server\'s own way in', async () => {
     const r = await call(null, 'POST', '/api/validate', PAYMENT, { base: openChild.base });
     assert.equal(r.status, 200, r.text);
     const probe = await call(null, 'GET', '/api/org/members', undefined, { base: openChild.base });
@@ -826,10 +1056,23 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await page.waitForSelector('#mcp-panel:not([hidden])', { timeout: T });
       await page.waitForTimeout(500);
       assert.equal(await page.$('#mcp-panel [data-mcp-target-settings]'), null, 'no Settings button in a closed posture');
+      // Nothing registers here while it is exposed: the hint, the button and
+      // the line say GET /api/mcp-endpoints' own sentence — never "an admin
+      // registers them in Settings → MCP endpoints", which is closed here.
+      // This server runs with OBSERVOGRAM_AUTH=off: adding a user arms
+      // nothing, so the way in is a restart without it, or loopback.
+      const serverWhy = (await call(null, 'GET', '/api/mcp-endpoints', undefined, { base: openChild.base })).json.policy.register.why;
+      assert.equal(serverWhy, 'MCP endpoints cannot be registered on a server without sign-in while it is exposed — restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured, and sign in as an admin; or bind the server to loopback');
+      await page.waitForSelector('#mcp-panel .set-mcp-target-hint', { timeout: T });
+      assert.equal(await text(page, '#mcp-panel .set-mcp-target-hint'), `No MCP endpoint is registered in Default yet — ${serverWhy}.`);
+      assert.equal(await text(page, '#mcp-settings-btn .svc-why'), `Configuring the MCP server is endpoint configuration: ${serverWhy}.`);
+      await page.click('#mcp-refresh-btn');
+      await page.waitForFunction(() => /^no MCP endpoint/.test(document.getElementById('mcp-ping-status')?.textContent || ''), null, { timeout: T });
+      assert.equal(await text(page, '#mcp-ping-status'), `no MCP endpoint is registered in Default yet — ${serverWhy}`);
     } finally { await ctx.close(); }
   });
 
-  await t.test('an open server on the loopback: the server says local may register (GET /api/mcp-endpoints policy.register), so the picker hint offers Settings → MCP endpoints, and it lands there', async () => {
+  await t.test('an open server on the loopback: the server says local may register (GET /api/mcp-endpoints policy.register), so the picker hint offers Settings → MCP endpoints, and it lands there; the panel\'s next opening after a failed read of the list says it is checking until that read answers; after a failed read and the list read without its policy, the panel\'s opening and the home\'s next drawing read it again — never a refusal the server did not make — and when the panel\'s read fails too, its hint and Test connection\'s nothing-to-send line say the policy could not be read', async () => {
     const probe = await call(null, 'GET', '/api/org/members', undefined, { base: loopChild.base });
     assert.equal(probe.status, 200, probe.text);
     const { page, ctx } = await open(loopChild.base, null);
@@ -849,6 +1092,68 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await settled(page);
       assert.equal(await attr(page, '#set-primary', 'aria-disabled'), null, 'New MCP endpoint usable');
     } finally { await ctx.close(); }
+    // The open posture: the panel's next opening after a failed read.
+    const again = await open(loopChild.base, null, { before: abortEndpointReads });
+    try {
+      await reopenAfterFailedRead(again.page, '#mcp-panel:not([hidden]) [data-mcp-target-settings]');
+      assert.match(await text(again.page, '#mcp-panel .set-mcp-target-hint'), /^No MCP endpoint is registered in .+ yet\. Settings → MCP endpoints$/);
+    } finally { await again.ctx.close(); }
+    // A failed read at load, then the list read without its policy
+    // (Settings → environments): the empty list is known, what the server
+    // lets this reader do is not. The panel's opening (from Settings) and
+    // the home's next drawing read it again, so each says the server's
+    // answer — local may register — never "registering one is not open to
+    // you here", a refusal the server never made — nor while it reads again
+    // (held at the route: no hint, though the empty list read alone is
+    // kept); the hint is waited for as drawn.
+    for (const via of ['panel', 'home']) {
+      const failed = await open(loopChild.base, null, { before: abortEndpointReads });
+      const hintOf = via === 'panel' ? '#mcp-panel .set-mcp-target-hint' : '[data-mcp-target="home"] .set-mcp-target-hint';
+      try {
+        await failed.page.waitForFunction(() => /^Default's MCP endpoints could not be read just now — reopen this to try again\.$/.test(document.querySelector('[data-mcp-target="home"] .set-mcp-target-hint')?.textContent || ''), null, { timeout: T });
+        await failed.page.unroute('**/api/mcp-endpoints');
+        await toSettings(failed.page);
+        assert.equal(await failed.page.evaluate(() => document.querySelector('#set-section')?.dataset.section), 'environments', 'the section that reads the list alone');
+        let release;
+        let entered;
+        const held = new Promise((resolve) => { release = resolve; });
+        const reading = new Promise((resolve) => { entered = resolve; });
+        await failed.page.route('**/api/mcp-endpoints', async (route) => { entered(); await held; await route.continue().catch(() => {}); });
+        try {
+          if (via === 'panel') await failed.page.evaluate(() => document.getElementById('mcp-btn').click());
+          else await failed.page.click('.observa-brand');
+          await reading;
+          assert.equal(await text(failed.page, hintOf), null, `${via}: no line while it reads again — never a refusal before the server answers`);
+          if (via === 'panel') assert.equal(await attr(failed.page, '#mcp-settings-btn', 'data-why'), 'Checking whether you may configure the MCP server…');
+        } finally { release(); }
+        await failed.page.waitForFunction((s) => document.querySelector(s)?.textContent.trim(), hintOf, { timeout: T });
+        await failed.page.unroute('**/api/mcp-endpoints');
+        assert.equal(await text(failed.page, hintOf), 'No MCP endpoint is registered in Default yet. Settings → MCP endpoints', `${via}: the server's answer, read again`);
+        if (via === 'panel') {
+          assert.equal(await attr(failed.page, '#mcp-settings-btn', 'data-why'), 'No MCP endpoint is registered in Default yet — register one in Settings → MCP endpoints.', 'the Server settings button too: read again, never "close and reopen" after the panel did');
+        }
+      } finally { await failed.ctx.close(); }
+    }
+    // The panel's read again fails too: the empty list read alone stays
+    // beside a failed policy, and the picker's hint and the line Test
+    // connection says with nothing to send (mcpTargetMissing) each name the
+    // failed read — never "registering one is not open to you here", a
+    // refusal the server never made.
+    const twice = await open(loopChild.base, null, { before: abortEndpointReads });
+    try {
+      await twice.page.waitForFunction(() => /^Default's MCP endpoints could not be read just now — reopen this to try again\.$/.test(document.querySelector('[data-mcp-target="home"] .set-mcp-target-hint')?.textContent || ''), null, { timeout: T });
+      await twice.page.unroute('**/api/mcp-endpoints');
+      await toSettings(twice.page);
+      assert.equal(await twice.page.evaluate(() => document.querySelector('#set-section')?.dataset.section), 'environments', 'the section that reads the list alone');
+      await abortEndpointReads(twice.page);
+      await twice.page.evaluate(() => document.getElementById('mcp-btn').click());
+      const UNREAD = 'No MCP endpoint is registered in Default yet, and whether you may register one could not be read just now — reopen this to try again';
+      await twice.page.waitForFunction((s) => document.querySelector('#mcp-panel .set-mcp-target-hint')?.textContent.trim() === s, `${UNREAD}.`, { timeout: T });
+      await twice.page.click('#mcp-refresh-btn');
+      await twice.page.waitForFunction(() => /^no MCP endpoint/.test(document.getElementById('mcp-ping-status')?.textContent || ''), null, { timeout: T });
+      assert.equal(await text(twice.page, '#mcp-ping-status'), UNREAD.replace(/^N/, 'n'), 'nothing to send: the failed read said, never a refusal');
+      await twice.page.unroute('**/api/mcp-endpoints');
+    } finally { await twice.ctx.close(); }
   });
 
   // R4 + D4 (rebadge batch 3, C0): without sign-in the home never sends a
@@ -870,7 +1175,13 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       assert.equal(await text(page, 'label.home-mcp-url-row .home-mcp-url-label'), 'MCP URL to register');
       const demo = await page.evaluate(() => document.getElementById('home-mcp-url').value);
       const demoOrigin = new URL(demo).origin;
-      assert.equal(await text(page, '#home-mcp-status'), `${demoOrigin} cannot be registered on a server without sign-in — only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS; the server's operator lists it there, or a first user arms sign-in (npm run users -- add <login>)`);
+      // This server runs with OBSERVOGRAM_AUTH=off: adding a user arms
+      // nothing, so the refusal names the operator's list alone — a way
+      // out the server's own answer to the same URL names too.
+      assert.equal(await text(page, '#home-mcp-status'), `${demoOrigin} cannot be registered on a server without sign-in — only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS; the server's operator lists it there`);
+      const refused = await call(null, 'POST', '/api/mcp-endpoints', { name: 'demo', url: demo }, { base: loopChild.base });
+      assert.equal(refused.status, 400, refused.text);
+      assert.ok(refused.json.error.endsWith(`list ${demoOrigin} there, or sign in as an admin (restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured)`), `the server names the list, and noSignInWay's restart to sign in: ${refused.json.error}`);
       assert.equal(await attr(page, '#home-mcp-connect', 'aria-disabled'), 'true');
       await page.evaluate(() => document.getElementById('home-mcp-connect').click());   // a click anyway (Playwright will not click aria-disabled)
       await page.waitForTimeout(300);

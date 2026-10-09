@@ -393,14 +393,41 @@ body.chrome-observa[data-mode="build"] .hdr { display: none !important; }
   }
 }
 /* Phone width: the account menu is its glyph (the name stays for assistive
-   technology), the action cluster gives way before the tabs do — down to its
+   technology), the action cluster gives way before the chips do — down to its
    widest control (it wraps), never past the page's edge — and the popover
-   never runs past the viewport's edge. */
+   never runs past the viewport's edge.
+   The bar is two rows here: one row of 320px cannot hold the brand, both
+   chips, three tabs a finger can hit and the action cluster (the tabs were
+   squeezed on top of each other and the SERVICE chip pushed the cluster off
+   the page). The rows keep the markup's order, so the Tab key reads the bar
+   as the eye does (WCAG 1.3.2, 2.4.3): the first row is the brand, the ORG
+   chip and the SERVICE chip (in a pack's views); a zero-height break
+   (::after, which takes no focus — `order` places it after the chips, and
+   no control before another) closes it; the second is the tabs, which share
+   what is left, and the action cluster at its end. Each chip's name is capped (app.css, the org chip's phone
+   cap). The home names no journey: it has no tabs, and the action cluster
+   ends the first row, before the break (nothing follows it). A tab too
+   narrow for its question shows its number alone, centred — its title and
+   aria-label name the step. */
 @media (max-width: 720px) {
   .observa-actions .hdr-user-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .observa-hdr-inner > .observa-actions { flex: 0 1 auto; min-width: min-content; }
   .observa-actions .hdr-user, .observa-actions .hdr-user-btn { min-width: 0; }
   .observa-actions .hdr-user-menu { max-width: calc(100vw - 32px); }
+  body.chrome-observa .observa-hdr-inner { flex-wrap: wrap; gap: 0 8px; padding: 10px 16px; }
+  body.chrome-observa .observa-hdr-inner::after { content: ''; order: 1; flex: 0 0 100%; height: 0; }
+  body.chrome-observa .observa-hdr-inner > .observa-tabs,
+  body.chrome-observa .observa-hdr-inner > .observa-actions { order: 2; margin-top: 8px; }
+  body.chrome-observa .observa-hdr-inner > .observa-actions { margin-left: auto; }
+  body.chrome-observa .observa-hdr-inner > .observa-tabs { flex: 1 1 0; gap: 4px; }
+  body.chrome-observa[data-mode="home"] .observa-tabs { display: none; }
+  body.chrome-observa[data-mode="home"] .observa-hdr-inner > .observa-actions { order: 0; margin-top: 0; }
+  body.chrome-observa .observa-tab { grid-template-columns: 26px minmax(0, 1fr); gap: 8px; padding: 6px 8px; container-type: inline-size; }
+  body.chrome-observa .observa-tab-title { font-size: 13px; }
+  @container (max-width: 99px) {
+    .observa-tab-text { display: none; }
+    .observa-tab-num { grid-column: 1 / -1; justify-self: center; }
+  }
 }
 /* The pickers show the pack name; the long provenance tail may ellipsize. */
 body.chrome-observa .hdr .ctrl select { max-width: min(380px, 42vw); text-overflow: ellipsis; }

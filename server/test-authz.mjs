@@ -436,6 +436,7 @@ test('the typed MCP URL refusals name a way out per posture: a session below adm
   assert.match(text(ctxOf('token', P.bearer, { authOff: true })), /registering one needs a signed-in admin — this server has no sign-in \(OBSERVOGRAM_AUTH=off\): restart it without OBSERVOGRAM_AUTH=off, once a user exists \(npm run users -- add <login>\) or with OIDC configured$/);
   assert.match(text(ctxOf('open-loopback', P.local, { port: 8123 })), /register one in Settings → MCP endpoints from http:\/\/127\.0\.0\.1:8123 /);
   assert.match(text(ctxOf('open-exposed', P.local)), /add the first user with npm run users -- add <login> \(it arms sign-in; the first user is an owner\), or bind the server to loopback$/);
+  assert.match(text(ctxOf('open-exposed', P.local, { authOff: true })), /cannot be registered while it is exposed — restart it without OBSERVOGRAM_AUTH=off, once a user exists \(npm run users -- add <login>\) or with OIDC configured, and sign in as an admin; or bind the server to loopback$/);
   for (const [ctx, denied] of [[ctxOf('identity', P.viewer), 'role'], [ctxOf('identity', P.bearer), 'role'], [ctxOf('open-loopback', P.local), 'posture'], [ctxOf('token', P.anon), 'role']]) {
     assert.equal(typedMcpUrlDecision(ctx).denied, denied, `${ctx.posture} ${ctx.principal.kind}`);
   }
@@ -2176,16 +2177,21 @@ for (const posture of OPEN) {
         const ep = await call(srv.base, PROBES['POST /api/mcp-endpoints'], { headers: CSRF_HEADER, body: JSON.stringify(MCP_BODY) });
         assert.deepEqual([ep.status, ep.json.denied], [403, 'posture']);
         assert.match(ep.json.error, /^the MCP endpoint API is closed on a server bound to 0\.0\.0\.0 without sign-in \(OBSERVOGRAM_INSECURE_NO_AUTH=1/);
+        // The way in: under OBSERVOGRAM_AUTH=off (open-exposed-a, a user
+        // already exists) adding one arms nothing — a restart without it.
+        const way = posture.env.OBSERVOGRAM_AUTH === 'off'
+          ? 'restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured, and sign in as an admin; or bind the server to loopback'
+          : 'add the first user with npm run users -- add <login> (it arms sign-in; the first user is an owner), or bind the server to loopback';
         assert.deepEqual((await call(srv.base, PROBES['GET /api/mcp-endpoints'])).json, {
           ok: true, endpoints: [],
           policy: {
             typed: {
               allowed: false, listed: false, origins: [],
-              why: 'a typed MCP URL is refused on a server without sign-in, and MCP endpoints cannot be registered while it is exposed — add the first user with npm run users -- add <login> (it arms sign-in; the first user is an owner), or bind the server to loopback',
+              why: `a typed MCP URL is refused on a server without sign-in, and MCP endpoints cannot be registered while it is exposed — ${way}`,
             },
             register: {
               allowed: false, listed: false, origins: [], listedOnly: true,
-              why: 'MCP endpoints cannot be registered on a server without sign-in while it is exposed — add the first user with npm run users -- add <login> (it arms sign-in; the first user is an owner), or bind the server to loopback',
+              why: `MCP endpoints cannot be registered on a server without sign-in while it is exposed — ${way}`,
             },
           },
         }, 'the list is a read: open; its policy says neither a typed URL nor a registration is possible here, and the way in');
