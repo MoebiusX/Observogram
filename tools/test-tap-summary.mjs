@@ -646,6 +646,17 @@ const stepsOf = (job) => job.split(/\n(?= {6}- )/).slice(1);
 const stepNamed = (job, re) => stepsOf(job).filter((st) => re.test(st));
 const minutes = (text) => Number(/timeout-minutes: (\d+)/.exec(text)?.[1]);
 const jobMinutes = (job) => Number(/^ {4}timeout-minutes: (\d+)/m.exec(job)?.[1]);
+// What the comment right above a step says it was sized from, in seconds:
+// "twice the slowest … measured on the runner (XmYs)" and "twice the slowest
+// steps before it (XmYs)" (NaN when it says none).
+function measured(job, st) {
+  const above = job.slice(0, job.indexOf(st)).replace(/\n$/, '').split('\n');
+  let i = above.length;
+  while (i > 0 && /^ {6}#/.test(above[i - 1])) i--;
+  const comment = above.slice(i).map((l) => l.replace(/^ {6}# ?/, '')).join(' ');
+  const secs = (re) => { const m = re.exec(comment); return m ? Number(m[1]) * 60 + Number(m[2]) : NaN; };
+  return { slowest: secs(/twice the slowest [^()]*measured on the runner \((\d+)m(\d+)s\)/), before: secs(/twice the slowest steps before it \((\d+)m(\d+)s\)/) };
+}
 const SUMMARY_IF = "if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}";
 // A step's keys after its name, as lines (a blank line or a comment is none:
 // the comment above the next step is split into this one). A step whose exit
@@ -710,6 +721,17 @@ test('S10 the workflow wires it: a Windows matrix on the floor and the latest 22
   assert.match(vTest[0], /^ {8}shell: bash$/m);
   assert.deepEqual(keysOf(vTest[0]), keys('id: test', 'shell: bash', `timeout-minutes: ${minutes(vTest[0])}`, 'run: npm run coverage 2>&1 | tee "$RUNNER_TEMP/test.tap"'));
   assert.ok(minutes(vTest[0]) < jobMinutes(v), 'the step timeout under the job\'s');
+  // A measured step timeout is at least twice the slowest run its comment
+  // names, so a slow runner's green run never reads red; validate's job adds
+  // twice the slowest steps before the suites, so the summary runs on a hang.
+  for (const [name, job, st] of [['windows', w, wTest[0]], ['validate', v, vTest[0]]]) {
+    const { slowest } = measured(job, st);
+    assert.ok(slowest > 0, `${name}: the comment above the suites step names the slowest run it is sized from ("twice the slowest … measured on the runner (XmYs)")`);
+    assert.ok(minutes(st) * 60 >= 2 * slowest, `${name}: the step timeout (${minutes(st)} min) is at least twice the slowest run measured on the runner (${slowest} s)`);
+  }
+  const { before } = measured(v, vTest[0]);
+  assert.ok(before > 0, 'validate: the comment above the suites step names the slowest steps before it ("twice the slowest steps before it (XmYs)")');
+  assert.ok(jobMinutes(v) * 60 >= minutes(vTest[0]) * 60 + 2 * before, `validate: the job's timeout (${jobMinutes(v)} min) is the step's (${minutes(vTest[0])}) plus at least twice the slowest steps before it (${before} s)`);
   const vSteps = stepsOf(v);
   assert.match(vSteps[vSteps.length - 1], /^ {6}- name: Test summary \(the end of this log\)$/m, 'validate ends with the summary');
   assert.deepEqual(keysOf(vSteps[vSteps.length - 1]), keys(SUMMARY_IF, 'run: node tools/tap-summary.mjs "$RUNNER_TEMP/test.tap" --win32-skips 0'));

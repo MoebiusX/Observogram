@@ -20,7 +20,7 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 13
     steps:
       - uses: actions/checkout@v7
 
@@ -82,11 +82,13 @@ jobs:
 
       # bash -eo pipefail (named, so tee cannot hide the suites' exit), the
       # TAP to a file for the summary at the end of this log, a step timeout
-      # under the job's so the summary still runs on a hang.
+      # under the job's so the summary still runs on a hang. The step timeout
+      # is twice the slowest c8 run measured on the runner (3m48s), rounded
+      # up; the job's adds twice the slowest steps before it (2m26s).
       - name: Regression suites + coverage (adapt / fetch / packs / compile / profiles / crawl / server)
         id: test
         shell: bash
-        timeout-minutes: 6
+        timeout-minutes: 8
         run: npm run coverage 2>&1 | tee "$RUNNER_TEMP/test.tap"
 
       - name: Upload coverage (lcov)

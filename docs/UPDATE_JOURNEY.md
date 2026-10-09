@@ -1370,10 +1370,12 @@ job at most 4m38s against a 15-minute ceiling, and `windows-vs-linux` 14 s.
 The PR's all-green time is the slower of validate and a Windows leg plus
 `windows-vs-linux`: 5m31s on the green run, where it was validate's ~4
 minutes. The Windows step timeout is 15 minutes (twice the slowest run,
-rounded up, at least 15) and the job's 25. The timing bounds the suites
-print were all at 10% of their limit or less on every leg, the lock holds at
-0% of their slack, except the hung receiver's: its 2001–2020 ms read 57–58%
-of 3500 ms on every leg, Linux included, because its two 1000 ms timeouts are
-the run's own floor; its line now prints the time past them, against 1500 ms,
-the same assertion. The count of tests is unchanged by the fixes and the
-docs.
+rounded up, at least 15) and the job's 25; validate's is 8 minutes (twice
+its slowest c8 run on the runner, 228 s on 7 October, rounded up) and its
+job's 13, which adds twice the slowest steps before it (146 s). The timing
+bounds the suites print were all at 10% of their limit or less on every
+leg, the lock holds at 0% of their slack, except the hung receiver's: its
+2001–2020 ms read 57–58% of 3500 ms on every leg, Linux included, because
+its two 1000 ms timeouts are the run's own floor; its line now prints the
+time past them, against 1500 ms, the same assertion. The count of tests is
+unchanged by the fixes and the docs.
