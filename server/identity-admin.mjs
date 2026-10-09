@@ -516,8 +516,9 @@ const NEEDS_IDENTITY_AUTH_OFF = 'creating a second org needs identity: this serv
 // org's prefix extends would never have hooks of its own; one sharing another
 // org's KEY (a-b, a_b) ties every variable, and a hook is refused for both.
 // Each is refused at creation; the orgs-file import is not (it reproduces
-// what exists), and the start's [notify-hooks] lines name such a pair. The
-// reader is an owner, who may know every org. → null | the refusal text.
+// what exists), and the start's [notify-hooks] lines name each set hook
+// variable such a pair shadows. The reader is an owner, who may know every
+// org. → null | the refusal text.
 function orgIdVariablesRefusal(db, id) {
   const P = orgEnvPrefix(id);
   const others = listOrgs(db, { includeRemoved: true }).filter((o) => o.id !== id).map((o) => ({ id: o.id, P: orgEnvPrefix(o.id) }));

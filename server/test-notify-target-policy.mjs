@@ -433,6 +433,23 @@ test('U7 notifyHooksOf and notifyBootReport: the org\'s set hooks sorted, tokenE
         `[notify-hooks] org 'pay-notify': OBSERVOGRAM_ORG_PAY_NOTIFY_NOTIFY_X_URL — ${T.badUrl('OBSERVOGRAM_ORG_PAY_NOTIFY_NOTIFY_X_URL', 'OBSERVOGRAM_ORG_PAY_NOTIFY_NOTIFY_X_TOKEN')}`,
         "[notify-hooks] OBSERVOGRAM_ORG_PAY_NOTIFY_ONCALL_URL has the shape of org 'pay''s notify hook, but org 'pay-notify' also maps onto it by the longest-prefix rule — no journey can use it",
       ]);
+      // A pair the orgs-file import brought in (the tie, pay beside pay-notify) is never named by itself: with no
+      // hook variable set the start says nothing. Every text that says what the start names of such a pair says
+      // what it does — each set hook variable the pair shadows — never that it names the pair.
+      assert.deepEqual(notifyBootReport(tie.db, {}), []);
+      const flatText = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8').replace(/^[ \t]*\/\/ ?/gm, '').replace(/\s+/g, ' ');
+      for (const rel of ['docs/DOWNSTREAM.md', 'docs/CHANGELOG.md', 'server/identity-admin.mjs']) {
+        const said = [...flatText(rel).matchAll(/orgs-file import is not\b[^.]*\./g)].map((m) => m[0]);
+        assert.ok(said.length > 0, `${rel} says the orgs-file import is not guarded`);
+        for (const s of said) assert.match(s, /the start's [^.]*? names? each set hook variable such a pair shadows\.$/, `${rel}: ${s}`);
+      }
+      // The CHANGELOG states the follow-up as it is at its head: the server imports this module and its run route
+      // passes runJourney a resolveNotify, so no entry says there is no caller yet or that a later commit passes one.
+      const index = flatText('server/index.mjs');
+      assert.match(index, /from '\.\/notify-target-policy\.mjs'/);
+      assert.match(index, /resolveNotify: \(n\) => notifyTargetOf\(/);
+      const followUp = flatText('docs/CHANGELOG.md').match(/### Follow-up `journey-notify-env-ownership`.*?(?= ### |$)/)[0];
+      assert.doesNotMatch(followUp, /no caller yet|in a later commit/);
     } finally {
       tie.close();
     }
