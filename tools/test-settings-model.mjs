@@ -1266,6 +1266,11 @@ test('mcpTargetMissingText: the typed URL named only for a reader who may type o
   for (const posture of ['token', 'open', 'identity', null]) {
     assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty: true, posture, unreadable: true }),
       'no MCP endpoint is registered in Acme yet, and whether you may register one could not be read just now — reopen this to try again', `${posture}: the policy's read failed — never a refusal`);
+    // The pickers draw no list beside a failed policy (studio/app.mjs
+    // mcpPickerEndpoints): nothing to choose from, so the list's failed
+    // read is said, as the picker's hint says it — never "choose one".
+    assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', posture, unreadable: true }),
+      "Acme's MCP endpoints could not be read just now — reopen this to try again", `${posture}: no list drawn — the failed read said`);
   }
 });
 

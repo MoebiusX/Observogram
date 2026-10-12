@@ -5214,12 +5214,16 @@ function mcpTypedAllowed(id) {
 }
 
 // The list as the pickers draw it: with its policy, so none while the policy
-// is unread (a read in flight answers both) — never an empty list's line
-// before the server says what this reader may do. A list read without the
-// policy (Settings, an environment's editor) stays in state.mcpEndpoints for
-// the view that drew it.
+// is unread (a read in flight answers both) or failed — never an empty
+// list's line before the server says what this reader may do, nor a list
+// beside a policy that could not be read, where with no typed URL allowed
+// its first endpoint would be preselected over the person's own choice (the
+// deploy modal's Type a URL…) and a write sent there. A list read without
+// the policy, or kept by a failed read (Settings, an environment's editor),
+// stays in state.mcpEndpoints for the view that drew it.
 function mcpPickerEndpoints() {
-  return state.mcpTargetPolicy === null ? null : state.mcpEndpoints;
+  const policy = state.mcpTargetPolicy;
+  return policy === null || policy.failed === true ? null : state.mcpEndpoints;
 }
 
 // The status line when a picker has nothing to send.
@@ -5238,9 +5242,11 @@ function mcpTargetMissing(id) {
 // `failed`) and the list as it was — unread (null), or the one another read
 // drew, which a view may be drawing still (Settings → MCP endpoints: Edit…
 // finds its row there) until a read's answer replaces it; however many of
-// these reads are in flight, none takes it — and Settings is where a failed
-// read is said. `keep` keeps the policy already read too (the pre-send
-// check: its own sentence says it could not check).
+// these reads are in flight, none takes it. The pickers draw none of it
+// beside the failed policy (mcpPickerEndpoints): each says the list could
+// not be read, and Settings is where a failed read is said. `keep` keeps
+// the policy already read too (the pre-send check: its own sentence says it
+// could not check).
 const CLOSED_MCP_POLICY = Object.freeze({ typed: { allowed: false }, register: { allowed: false }, failed: true });
 // A failed read about to be read again: its policy unread, so the pickers
 // draw no list meanwhile (mcpPickerEndpoints); the list stays.

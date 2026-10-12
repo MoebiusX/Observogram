@@ -398,7 +398,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('ada (admin): New MCP endpoint gw — created; a credential in the URL and another org\'s variable are the server\'s sentences as served; the MCP panel\'s next opening after a failed read of the list says it is checking until that read answers, and leaves Settings\' list — the panel opened once or twice meanwhile, or the home\'s first read held at load: Edit gw opens while it reads and after it fails', async () => {
+  await t.test('ada (admin): New MCP endpoint gw — created; a credential in the URL and another org\'s variable are the server\'s sentences as served; the MCP panel\'s next opening after a failed read of the list says it is checking until that read answers, and leaves Settings\' list — the panel opened once or twice meanwhile, or the home\'s first read held at load: Edit gw opens while it reads and after it fails; a failed read of the list in the deploy modal draws none — her Type a URL… is never replaced by gw, and Go sends nothing', async () => {
     const { page, ctx } = await open(child.base, 'ada');
     try {
       await toSettings(page);
@@ -522,6 +522,50 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
         await editGw('Edit gw opens after the reads landed');
       } finally { await sctx.close(); }
     }
+    // The list kept for Settings is never a picker's beside a failed read:
+    // ada chooses Type a URL… in the deploy modal and types one; its next
+    // opening's read fails — the picker draws no list (with no typed URL
+    // allowed, gw would be preselected over her choice) and Go sends
+    // nothing, saying the list could not be read; opened again with the
+    // read answering, her Type a URL… and her URL are back.
+    const flip = await open(child.base, 'ada');
+    try {
+      const fp = flip.page;
+      await fp.route('**/api/packs/*/deploy-bulk*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, deployId: 'dep_flip', dryRun: false, tookMs: 3, results: [], summary: { total: 0, ok: 0, failed: 0 } }) }));
+      const deploys = posts(fp, /\/api\/packs\/[^/]+\/deploy-bulk/);
+      const TYPED = 'https://mcp.acme.test/typed-by-ada';
+      await fp.waitForSelector('[data-mcp-target="home"] select.set-mcp-target', { state: 'attached', timeout: T });
+      const openModal = () => fp.evaluate(async (id) => { const { host } = await import('/host.mjs'); host.openDeployModal({ packId: id }); }, packId);
+      const closeModal = () => fp.evaluate(() => document.getElementById('deploy-modal-close').click());
+      const urlRowHidden = () => fp.evaluate(() => document.getElementById('deploy-target-mcp').closest('label').hidden);
+      const typedOptions = [[String(gwId), 'gw — https://mcp.acme.test', false], ['', 'Type a URL…', true]];
+      await openModal();
+      await fp.waitForFunction(() => [...document.querySelectorAll('#deploy-modal:not([hidden]) [data-mcp-target="deploy"] option')].some((o) => o.value === ''), null, { timeout: T });
+      await fp.selectOption('[data-mcp-target="deploy"] select.set-mcp-target', '');
+      await fp.fill('#deploy-target-mcp', TYPED);
+      assert.deepEqual(await pickerOptions(fp, 'deploy'), typedOptions, 'her choice: Type a URL…');
+      await closeModal();
+      await abortEndpointReads(fp);
+      await openModal();
+      await fp.waitForFunction(() => /could not be read just now/.test(document.querySelector('#deploy-modal:not([hidden]) [data-mcp-target="deploy"]')?.textContent || ''), null, { timeout: T });
+      assert.equal(await text(fp, '[data-mcp-target="deploy"] .set-mcp-target-hint'), "Acme's MCP endpoints could not be read just now — reopen this to try again.");
+      assert.deepEqual(await pickerOptions(fp, 'deploy'), [], 'no list drawn beside the failed read — gw never preselected');
+      assert.equal(await urlRowHidden(), true, 'no URL row while typing one is not known to be hers');
+      await fp.unroute('**/api/mcp-endpoints');
+      await fp.waitForSelector('#deploy-manifest-tbody tr[data-key]', { timeout: T });
+      await fp.click('#deploy-modal-go');
+      await fp.waitForFunction(() => /could not be read|deployed/.test(document.getElementById('deploy-modal-status')?.textContent || ''), null, { timeout: T });
+      assert.equal(deploys.length, 0, 'Go sent nothing: no deploy to an endpoint she did not choose');
+      assert.equal(await text(fp, '#deploy-modal-status'), "Acme's MCP endpoints could not be read just now — reopen this to try again");
+      await closeModal();
+      await openModal();
+      await fp.waitForFunction(() => [...document.querySelectorAll('#deploy-modal:not([hidden]) [data-mcp-target="deploy"] option')].some((o) => o.value === ''), null, { timeout: T });
+      assert.deepEqual(await pickerOptions(fp, 'deploy'), typedOptions, 'read again: her Type a URL… is back');
+      assert.equal(await urlRowHidden(), false);
+      assert.equal(await fp.evaluate(() => document.getElementById('deploy-target-mcp').value), TYPED, 'and her URL');
+      await closeModal();
+      assert.equal(deploys.length, 0);
+    } finally { await flip.ctx.close(); }
   });
 
   await t.test('oscar (operator): add an environment, a tier, bind gw to prod; a tier-only save neither resends nor clears the binding; the service page follows', async () => {
@@ -1148,7 +1192,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('an open server on the loopback: the server says local may register (GET /api/mcp-endpoints policy.register), so the picker hint offers Settings → MCP endpoints, and it lands there; the panel\'s next opening after a failed read of the list says it is checking until that read answers; after a failed read and the list read without its policy, the panel\'s opening and the home\'s next drawing read it again — never a refusal the server did not make — and when the panel\'s read fails too, its hint and Test connection\'s nothing-to-send line say the policy could not be read', async () => {
+  await t.test('an open server on the loopback: the server says local may register (GET /api/mcp-endpoints policy.register), so the picker hint offers Settings → MCP endpoints, and it lands there; the panel\'s next opening after a failed read of the list says it is checking until that read answers; after a failed read and the list read without its policy, the panel\'s opening and the home\'s next drawing read it again — never a refusal the server did not make — and when the panel\'s read fails too, it draws no list beside the failed policy, and its hint and Test connection\'s nothing-to-send line say the list could not be read', async () => {
     const probe = await call(null, 'GET', '/api/org/members', undefined, { base: loopChild.base });
     assert.equal(probe.status, 200, probe.text);
     const { page, ctx } = await open(loopChild.base, null);
@@ -1211,7 +1255,8 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       } finally { await failed.ctx.close(); }
     }
     // The panel's read again fails too: the empty list read alone stays
-    // beside a failed policy, and the picker's hint and the line Test
+    // Settings', the pickers draw no list beside a failed policy
+    // (mcpPickerEndpoints), and the picker's hint and the line Test
     // connection says with nothing to send (mcpTargetMissing) each name the
     // failed read — never "registering one is not open to you here", a
     // refusal the server never made.
@@ -1223,11 +1268,11 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       assert.equal(await twice.page.evaluate(() => document.querySelector('#set-section')?.dataset.section), 'environments', 'the section that reads the list alone');
       await abortEndpointReads(twice.page);
       await twice.page.evaluate(() => document.getElementById('mcp-btn').click());
-      const UNREAD = 'No MCP endpoint is registered in Default yet, and whether you may register one could not be read just now — reopen this to try again';
+      const UNREAD = "Default's MCP endpoints could not be read just now — reopen this to try again";
       await twice.page.waitForFunction((s) => document.querySelector('#mcp-panel .set-mcp-target-hint')?.textContent.trim() === s, `${UNREAD}.`, { timeout: T });
       await twice.page.click('#mcp-refresh-btn');
-      await twice.page.waitForFunction(() => /^no MCP endpoint/.test(document.getElementById('mcp-ping-status')?.textContent || ''), null, { timeout: T });
-      assert.equal(await text(twice.page, '#mcp-ping-status'), UNREAD.replace(/^N/, 'n'), 'nothing to send: the failed read said, never a refusal');
+      await twice.page.waitForFunction(() => /could not be read/.test(document.getElementById('mcp-ping-status')?.textContent || ''), null, { timeout: T });
+      assert.equal(await text(twice.page, '#mcp-ping-status'), UNREAD, 'nothing to send: the failed read said, never a refusal nor "choose one"');
       await twice.page.unroute('**/api/mcp-endpoints');
     } finally { await twice.ctx.close(); }
   });

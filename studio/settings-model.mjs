@@ -1405,11 +1405,13 @@ export function mcpTargetModel({ endpoints = null, remembered = null, liveUrl = 
 // this reader (`canRegister`: the server says it may register one) — without
 // sign-in (`posture` 'token' or 'open') the server's own sentence,
 // `registerWhy`, as the empty list's hint says it (mcpTargetModel); the
-// policy's read failed (`unreadable`), that it could not be read.
+// policy's read failed (`unreadable`), that it could not be read — with no
+// empty list known, that the list could not be read, as the picker's hint
+// says it: nothing is drawn to choose from.
 export function mcpTargetMissingText({ typedAllowed = true, orgName = null, empty = false, canRegister = false, posture = null, registerWhy = null, unreadable = false } = {}) {
   if (typedAllowed) return 'choose an MCP endpoint or type a URL';
   const org = orgName || ORG_FALLBACK;
-  if (!empty) return `choose one of ${org}'s MCP endpoints`;
+  if (!empty) return unreadable ? `${org}'s MCP endpoints could not be read just now — reopen this to try again` : `choose one of ${org}'s MCP endpoints`;
   if (canRegister) return `no MCP endpoint is registered in ${org} yet — register one in Settings → MCP endpoints`;
   if (unreadable) return `no MCP endpoint is registered in ${org} yet, ${POLICY_UNREAD}`;
   if (posture === 'token' || posture === 'open') return `no MCP endpoint is registered in ${org} yet — ${registerWhy || NO_REGISTER_WHY[posture]}`;
