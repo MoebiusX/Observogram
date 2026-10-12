@@ -14,7 +14,7 @@ import test from 'node:test';
 import { tap } from 'node:test/reporters';
 import strictAssert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, posix, resolve, sep, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -564,7 +564,7 @@ test('S8 the bytes: UTF-16LE with its mark, a UTF-8 mark and CRLF parse alike; a
   assert.ok(!summarize(GREEN_WIN).text.includes('warning:'), 'a clean capture is not warned about');
 });
 
-test('S9 the CLI: the block on stdout, exit 0 and 1; usage, a README without the sentence and non-TAP input exit 2 naming the way out; --shape and --compare', () => {
+test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README without the sentence and non-TAP input exit 2 naming the way out; --shape and --compare', () => {
   const dir = mkdtempSync(join(tmpdir(), 'tap-summary-'));
   try {
     const run = (args, cwd = ROOT) => spawnSync(process.execPath, [CLI, ...args], { cwd, encoding: 'utf8' });
@@ -601,6 +601,17 @@ test('S9 the CLI: the block on stdout, exit 0 and 1; usage, a README without the
     usage([green, '--shape'], '--shape needs a file');
     usage([green, '--bogus'], 'unknown flag: --bogus');
     usage([], 'name the TAP file');
+    // Run away from any README: the refusal names the missing file and the way out, not a sentence README lacks.
+    const away = join(dir, 'elsewhere');
+    mkdirSync(away);
+    const noReadme = run([green, '--win32-skips', 'readme'], away);
+    usage([green, '--win32-skips', 'readme'], ` — --win32-skips readme reads the README in the working directory: run it from the checkout's root, or pass the number README "Platforms" states (--win32-skips <n>)`, away);
+    assert.match(noReadme.stderr, /^tap-summary: no README\.md in .*elsewhere — /, noReadme.stderr);
+    assert.ok(!noReadme.stderr.includes('states no'), noReadme.stderr);
+    mkdirSync(join(away, 'README.md'));   // EISDIR: the read's own code, whatever the platform names it
+    const unreadable = run([green, '--win32-skips', 'readme'], away);
+    assert.equal(unreadable.status, 2, unreadable.stdout + unreadable.stderr);
+    assert.match(unreadable.stderr, /^tap-summary: cannot read .*elsewhere.README\.md: E[A-Z]+ — pass the number README "Platforms" states \(--win32-skips <n>\)$/m, unreadable.stderr);
     f('README.md', '# A fork\n\n### Platforms\n\nWindows is untested.\n');
     usage([green, '--win32-skips', 'readme'], 'README.md "Platforms" states no "<N> `SKIP win32:` lines" — the count this check holds the run to', dir);
     usage(['--compare', join(dir, 'shape.json')], '--compare needs the reference shape and at least one run');

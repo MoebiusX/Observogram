@@ -638,9 +638,18 @@ function main(argv, { out = (s) => process.stdout.write(`${s}\n`), err = (s) => 
   let expectWin32 = null;
   let countSource = null;
   if (expect === 'readme') {
-    let readme = null;
-    try { readme = readFileSync(resolve('README.md'), 'utf8'); } catch { /* reported below */ }
-    const n = readme === null ? null : readmeWin32Lines(readme);
+    // The README in the working directory: a missing or unreadable one is
+    // its own refusal, never "states no" about a file this run did not read.
+    let readme;
+    try {
+      readme = readFileSync(resolve('README.md'), 'utf8');
+    } catch (e) {
+      err(e.code === 'ENOENT'
+        ? `tap-summary: no README.md in ${process.cwd()} — --win32-skips readme reads the README in the working directory: run it from the checkout's root, or pass the number README "Platforms" states (--win32-skips <n>)`
+        : `tap-summary: cannot read ${resolve('README.md')}: ${e.code || e.message} — pass the number README "Platforms" states (--win32-skips <n>)`);
+      return 2;
+    }
+    const n = readmeWin32Lines(readme);
     if (n === null) { err('tap-summary: README.md "Platforms" states no "<N> `SKIP win32:` lines" — the count this check holds the run to'); return 2; }
     expectWin32 = n;
     countSource = 'README';
