@@ -637,7 +637,13 @@ test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README 
     const dots = f('dot.tap', '....\n..\n');
     usage([dots], 'is not TAP (no "TAP version" line) — capture the run with the reporter named: ');
     assert.ok(named(run([dots]), dots));
-    assert.ok(run([spec]).stderr.includes('NODE_OPTIONS=--test-reporter=tap') && run([spec]).stderr.includes(`npm test > ${spec} 2>&1`));
+    assert.ok(run([spec]).stderr.includes('NODE_OPTIONS=--test-reporter=tap'));
+    // A path with a space: the command never hands a shell the path cut at it.
+    mkdirSync(join(dir, 'jo doe'));
+    const spaced = f(join('jo doe', 'spec.tap'), '✔ a (1.2ms)\nℹ tests 1\n');
+    const spacedRun = run([spaced]);
+    assert.ok(named(spacedRun, spaced), spacedRun.stderr);
+    assert.ok(!spacedRun.stderr.includes(`> ${spaced} `), spacedRun.stderr);
 
     // A capture in which npm test never started — npm's, node's or a shell's
     // refusal, or nothing at all — has no reporter to name: a block of its own
@@ -687,6 +693,18 @@ test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README 
 
     assert.equal(reportCommand('test.tap', false), 'NODE_OPTIONS=--test-reporter=tap npm test > test.tap 2>&1');
     assert.equal(reportCommand('test.tap', true), 'cmd /c "set NODE_OPTIONS=--test-reporter=tap&& npm test > test.tap 2>&1"');
+    // The file is one word to the shell that runs the command: sh reads a
+    // path it would split or expand single-quoted. No one quoting carries such
+    // a path through both cmd and PowerShell (the quotes cmd needs inside its
+    // own split PowerShell's argument), so the Windows form captures into
+    // test.tap and says so; a drive, a short name and a dot pass as written.
+    assert.equal(reportCommand('/home/jo doe/obs/test.tap', false), "NODE_OPTIONS=--test-reporter=tap npm test > '/home/jo doe/obs/test.tap' 2>&1");
+    assert.equal(reportCommand("/tmp/it's $HOME;x/t.tap", false), "NODE_OPTIONS=--test-reporter=tap npm test > '/tmp/it'\\''s $HOME;x/t.tap' 2>&1");
+    assert.equal(reportCommand('/tmp/tap-summary-Ab1/v1.2_x@y+z=w,q:r/t.tap', false), 'NODE_OPTIONS=--test-reporter=tap npm test > /tmp/tap-summary-Ab1/v1.2_x@y+z=w,q:r/t.tap 2>&1');
+    assert.equal(reportCommand('C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\tap-summary-Ab1\\t.tap', true), 'cmd /c "set NODE_OPTIONS=--test-reporter=tap&& npm test > C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\tap-summary-Ab1\\t.tap 2>&1"');
+    for (const p of ['C:\\Users\\Jo Doe\\obs\\test.tap', 'C:\\obs\\a&b.tap', 'C:\\obs\\100%.tap', 'C:\\obs\\$x.tap', 'C:\\obs\\(1).tap']) {
+      assert.equal(reportCommand(p, true), `cmd /c "set NODE_OPTIONS=--test-reporter=tap&& npm test > test.tap 2>&1", then run tap-summary on test.tap: no one quoting of ${p} holds in both cmd and PowerShell`);
+    }
 
     const same = run(['--compare', join(dir, 'shape.json'), join(dir, 'shape.json')]);
     assert.equal(same.status, 0, same.stdout + same.stderr);

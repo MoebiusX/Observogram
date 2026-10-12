@@ -79,11 +79,23 @@ export function unescapeTap(s) {
   return String(s).replace(/\\([\\#])/g, '$1');
 }
 
-/** The capture command a report needs: the reporter named, so Node 23 and later print TAP too. */
+// A path each shell reads as one word, as written: sh, and on Windows both
+// cmd and PowerShell (which expands `$` and `` ` `` inside the outer quotes).
+const SH_WORD_RE = /^[\p{L}\p{N}_@%+=:,./-]+$/u;
+const CMD_WORD_RE = /^[\p{L}\p{N}_@#+.:\\/~-]+$/u;
+
+/**
+ * The capture command a report needs: the reporter named, so Node 23 and
+ * later print TAP too. The file is one word to the shell that runs it: sh
+ * gets any other path single-quoted. No one quoting carries such a path
+ * through both cmd and PowerShell (the quotes cmd needs inside its own split
+ * PowerShell's argument), so the Windows form captures into test.tap and
+ * says so.
+ */
 export function reportCommand(file, windows) {
-  return windows
-    ? `cmd /c "set NODE_OPTIONS=--test-reporter=tap&& npm test > ${file} 2>&1"`
-    : `NODE_OPTIONS=--test-reporter=tap npm test > ${file} 2>&1`;
+  if (!windows) return `NODE_OPTIONS=--test-reporter=tap npm test > ${SH_WORD_RE.test(file) ? file : `'${file.replace(/'/g, "'\\''")}'`} 2>&1`;
+  const cmd = (f) => `cmd /c "set NODE_OPTIONS=--test-reporter=tap&& npm test > ${f} 2>&1"`;
+  return CMD_WORD_RE.test(file) ? cmd(file) : `${cmd('test.tap')}, then run tap-summary on test.tap: no one quoting of ${file} holds in both cmd and PowerShell`;
 }
 
 // The mojibake a console code page makes of ✓, ✗ and — (CP437, then CP1252),
