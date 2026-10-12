@@ -4951,8 +4951,9 @@ function renderHomeView() {
 // picker is repainted when the read settles; a re-render reuses the list. An
 // empty list, a refusal or a failure leaves today's card (the URL typed).
 // After a failed read, each drawing of the home reads again (its hint says
-// "reopen this"), its policy unread meanwhile and the list kept — as a
-// picker's opening (openMcpTarget).
+// "reopen this"), its policy unread meanwhile — as a picker's opening
+// (openMcpTarget). No read of its, the first included, takes the list
+// another view drew when it fails (readMcpEndpointsForPickers).
 let homeMcpEndpointsRead = false;
 let homeMcpEndpointsReading = false;
 function paintHomeMcpTarget() {
@@ -4966,7 +4967,7 @@ function paintHomeMcpTarget() {
   homeMcpEndpointsReading = true;
   // Repainted when the read settles: the list, and what the policy says
   // this reader may do (a list-only card, or Register and connect).
-  readMcpEndpointsForPickers({ keepList: failed }).then(() => {
+  readMcpEndpointsForPickers().then(() => {
     homeMcpEndpointsReading = false;
     if (document.getElementById('home-mcp-url')) paintMcpTarget('home');
   });
@@ -5233,21 +5234,20 @@ function mcpTargetMissing(id) {
 }
 
 // GET /api/mcp-endpoints for the pickers, with the caller's policy. Silent:
-// a refusal or a failure leaves the list unread (state.mcpEndpoints null)
-// and the policy closed (state.mcpTargetPolicy `failed`), and Settings is
-// where a failed read is said. `keep` keeps the list and the policy already
-// read when this read fails (the pre-send check: its own sentence says it
-// could not check); `keepList` the list alone (a failed read read again).
+// a refusal or a failure leaves the policy closed (state.mcpTargetPolicy
+// `failed`) and the list as it was — unread (null), or the one another read
+// drew, which a view may be drawing still (Settings → MCP endpoints: Edit…
+// finds its row there) until a read's answer replaces it; however many of
+// these reads are in flight, none takes it — and Settings is where a failed
+// read is said. `keep` keeps the policy already read too (the pre-send
+// check: its own sentence says it could not check).
 const CLOSED_MCP_POLICY = Object.freeze({ typed: { allowed: false }, register: { allowed: false }, failed: true });
 // A failed read about to be read again: its policy unread, so the pickers
-// draw no list meanwhile (mcpPickerEndpoints). The list is kept — beside a
-// failed policy it was read without one, by a view that may be drawing it
-// still (Settings → MCP endpoints: Edit… finds its row there) — until the
-// read's answer replaces it; read with `keepList`, a failure leaves it so.
+// draw no list meanwhile (mcpPickerEndpoints); the list stays.
 function unreadMcpPolicy() {
   state.mcpTargetPolicy = null;
 }
-async function readMcpEndpointsForPickers({ keep = false, keepList = false } = {}) {
+async function readMcpEndpointsForPickers({ keep = false } = {}) {
   if (!mcpPolicyReadable()) return null;
   try {
     const { endpoints, policy } = await loadMcpEndpoints({ withPolicy: true });
@@ -5255,10 +5255,7 @@ async function readMcpEndpointsForPickers({ keep = false, keepList = false } = {
     state.mcpTargetPolicy = policy ?? CLOSED_MCP_POLICY;
     return state.mcpEndpoints;
   } catch {
-    if (!keep) {
-      if (!keepList) state.mcpEndpoints = null;
-      state.mcpTargetPolicy = CLOSED_MCP_POLICY;
-    }
+    if (!keep) state.mcpTargetPolicy = CLOSED_MCP_POLICY;
     return null;
   }
 }
@@ -5407,14 +5404,15 @@ async function checkEndpointDrift(id) {
 // neither the picker nor the Server settings button says "reopen" (nor, the
 // list empty, a refusal) while the opening does just that (as
 // readMcpGatePolicy in the token posture); the list another view drew is
-// kept until the answer replaces it (unreadMcpPolicy).
+// kept until an answer replaces it — a failed read, or another opening's
+// while this one reads, never takes it (readMcpEndpointsForPickers).
 function openMcpTarget(id, { fresh = false } = {}) {
   const failed = state.mcpTargetPolicy?.failed === true;
   const reads = mcpPickersReadable() && (fresh || failed || state.mcpEndpoints === null || state.mcpTargetPolicy === null);
   if (reads && failed) unreadMcpPolicy();
   paintMcpTarget(id);
   if (!reads) return Promise.resolve();
-  return readMcpEndpointsForPickers({ keepList: failed }).then(() => paintMcpTarget(id));
+  return readMcpEndpointsForPickers().then(() => paintMcpTarget(id));
 }
 
 // The token posture's Server settings button names the server's own way in

@@ -200,7 +200,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     page.on('console', (m) => { if (m.type() === 'error' && !/^Failed to load resource: /.test(m.text())) problems.push(`${tag} console.error: ${m.text()}`); });
     // fallback, not continue: a context's own routes (the deploy fakes) still answer.
     await page.route('**/*', (route) => (route.request().url().startsWith(base) ? route.fallback() : route.abort()));
-    before?.(page);
+    await before?.(page);
     await page.goto(`${base}/`);
     await page.waitForFunction(() => document.body.dataset.mode, null, { timeout: 30_000 });
     return { page, ctx: c };
@@ -276,6 +276,45 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
   // what its answer draws, waited for — never a stale text changing. The
   // panel is left open on the answer.
   const abortEndpointReads = (p) => p.route('**/api/mcp-endpoints', (route) => route.abort());
+  // The page's GET /api/mcp-endpoints, counted as sent and as settled (an
+  // init script over fetch): readsLanded(page, n) waits until n were sent
+  // and every one sent has settled — its answer, or its failure, taken in
+  // by the studio — never on a text a landing might leave as it was.
+  const countEndpointReads = (p) => p.addInitScript(() => {
+    const reads = { sent: 0, settled: 0 };
+    const fetch0 = window.fetch;
+    Object.defineProperty(window, '__endpointReads', { value: reads });
+    window.fetch = function (input, init) {
+      const pending = fetch0(input, init);
+      const url = String(typeof input === 'string' ? input : input?.url ?? '');
+      if (/\/api\/mcp-endpoints(?:[?#]|$)/.test(url) && String(init?.method ?? 'GET').toUpperCase() === 'GET') {
+        reads.sent += 1;
+        const settle = () => { reads.settled += 1; };
+        pending.then(settle, settle);
+      }
+      return pending;
+    };
+  });
+  const readsLanded = (page, n) => page.waitForFunction((k) => { const r = window.__endpointReads; return !!r && r.sent >= k && r.settled === r.sent; }, n, { timeout: T });
+  const endpointReads = (page) => page.evaluate(() => ({ ...window.__endpointReads }));
+  // Every GET /api/mcp-endpoints from here held at the route (`first`: the
+  // next one alone, every later one answered), then failed on release();
+  // reading(n) resolves once n are held.
+  async function holdEndpointReads(page, { first = false } = {}) {
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    let count = 0;
+    const waiters = [];
+    await page.route('**/api/mcp-endpoints', async (route) => {
+      if (first && count >= 1) return route.fallback();
+      count += 1;
+      for (const [n, resolve] of waiters) if (count >= n) resolve();
+      await held;
+      await route.abort().catch(() => {});
+    });
+    const reading = (n) => new Promise((resolve) => { if (count >= n) resolve(); else waiters.push([n, resolve]); });
+    return { release, reading };
+  }
   async function reopenAfterFailedRead(page, landed) {
     const why = () => page.evaluate(() => document.getElementById('mcp-settings-btn')?.dataset.why ?? null);
     const hint = () => text(page, '#mcp-panel .set-mcp-target-hint');
@@ -359,7 +398,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('ada (admin): New MCP endpoint gw — created; a credential in the URL and another org\'s variable are the server\'s sentences as served; the MCP panel\'s next opening after a failed read of the list says it is checking until that read answers, and leaves Settings\' list: Edit gw opens while it reads and after it fails', async () => {
+  await t.test('ada (admin): New MCP endpoint gw — created; a credential in the URL and another org\'s variable are the server\'s sentences as served; the MCP panel\'s next opening after a failed read of the list says it is checking until that read answers, and leaves Settings\' list — the panel opened once or twice meanwhile, or the home\'s first read held at load: Edit gw opens while it reads and after it fails', async () => {
     const { page, ctx } = await open(child.base, 'ada');
     try {
       await toSettings(page);
@@ -398,28 +437,43 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await reopenAfterFailedRead(again.page, `#mcp-panel:not([hidden]) [data-mcp-target="refresh"] select.set-mcp-target option[value="${gwId}"]`);
       assert.equal(await attr(again.page, '#mcp-settings-btn', 'aria-disabled'), null, 'an admin, gw chosen: Server settings usable');
     } finally { await again.ctx.close(); }
-    // The list Settings draws stays Settings' while the panel reads again: a
+    // The list Settings draws stays Settings' while a picker reads again: a
     // failed read at load, then Settings → MCP endpoints reads the list alone
     // (gw's row) and the panel's opening, from the Advanced menu, reads the
-    // policy again — held at the route, then failed. Edit gw opens its
-    // editor meanwhile and after: neither read takes the list from under
-    // Settings. Each read's landing is waited for as drawn (the first
-    // opening paints the button's reason: no stale one to wait past).
-    for (const reread of ['held', 'failed']) {
-      const { page: sp, ctx: sctx } = await open(child.base, 'ada', { before: abortEndpointReads });
+    // policy again — held at the route, then failed; or the panel opened
+    // twice while that read is held (the second opening reads too: the
+    // first unread the policy), both reads then failed. Or no failed read:
+    // the home's first read held at load, Settings → MCP endpoints drawn
+    // meanwhile, then that read failed. Edit gw opens its editor meanwhile
+    // and after: no read takes the list from under Settings. Each read's
+    // landing is waited for as drawn (the first opening paints the button's
+    // reason: no stale one to wait past) or, where it draws nothing new, as
+    // counted (readsLanded).
+    for (const reread of ['held', 'failed', 'double', 'boot']) {
+      let boot = null;
+      const setUp = reread === 'boot'
+        ? async (p) => { await countEndpointReads(p); boot = await holdEndpointReads(p, { first: true }); }
+        : async (p) => { await countEndpointReads(p); await abortEndpointReads(p); };
+      const { page: sp, ctx: sctx } = await open(child.base, 'ada', { before: setUp });
       const editGw = async (what) => {
         await sp.click(`[data-edit-endpoint="${gwId}"]`);
-        await sp.waitForSelector('#set-editor-host .set-editor', { timeout: T });
+        const drawn = await sp.waitForSelector('#set-editor-host .set-editor', { timeout: T }).then(() => true, () => false);
+        assert.ok(drawn, `${reread}: ${what} — no editor drawn`);
         assert.equal(await text(sp, '#set-editor-title'), 'Edit gw', `${reread}: ${what}`);
         await closeEditor(sp);
       };
+      const why = () => attr(sp, '#mcp-settings-btn', 'data-why');
       try {
-        await sp.waitForFunction(() => /^Acme's MCP endpoints could not be read just now — reopen this to try again\.$/.test(document.querySelector('[data-mcp-target="home"] .set-mcp-target-hint')?.textContent || ''), null, { timeout: T });
-        await sp.unroute('**/api/mcp-endpoints');
+        if (reread === 'boot') await boot.reading(1);
+        else {
+          await sp.waitForFunction(() => /^Acme's MCP endpoints could not be read just now — reopen this to try again\.$/.test(document.querySelector('[data-mcp-target="home"] .set-mcp-target-hint')?.textContent || ''), null, { timeout: T });
+          await sp.unroute('**/api/mcp-endpoints');
+        }
         await toSettings(sp);
         await toSection(sp, 'endpoints');
         await sp.waitForSelector(`[data-edit-endpoint="${gwId}"]`, { timeout: T });
         const openPanel = async () => { await sp.click('.observa-adv-toggle'); await sp.click('.observa-adv-item[data-action="mcp"]'); };
+        const closePanel = () => sp.evaluate(() => document.getElementById('mcp-panel-close').click());
         if (reread === 'held') {
           let release;
           let entered;
@@ -429,21 +483,43 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
           try {
             await openPanel();
             await reading;
-            assert.equal(await attr(sp, '#mcp-settings-btn', 'data-why'), 'Checking whether you may configure the MCP server…', 'the panel reads again, and says so');
+            assert.equal(await why(), 'Checking whether you may configure the MCP server…', 'the panel reads again, and says so');
             assert.equal(await text(sp, '#mcp-panel .set-mcp-target-hint'), null, 'the picker names no failure while it reads again');
-            await sp.evaluate(() => document.getElementById('mcp-panel-close').click());
+            await closePanel();
             await editGw('Edit gw opens while the panel reads again');
           } finally { release(); }
           await sp.waitForSelector(`[data-mcp-target="refresh"] select.set-mcp-target option[value="${gwId}"]`, { state: 'attached', timeout: T });
-        } else {
+        } else if (reread === 'failed') {
           await abortEndpointReads(sp);
           await openPanel();
           await sp.waitForFunction(() => /^Could not check /.test(document.getElementById('mcp-settings-btn')?.dataset.why || ''), null, { timeout: T });
-          await sp.evaluate(() => document.getElementById('mcp-panel-close').click());
+          await closePanel();
+        } else if (reread === 'double') {
+          const { sent } = await endpointReads(sp);
+          const { release, reading } = await holdEndpointReads(sp);
+          try {
+            await openPanel();
+            await reading(1);
+            assert.equal(await why(), 'Checking whether you may configure the MCP server…', 'the first opening reads again, and says so');
+            await closePanel();
+            await openPanel();
+            await reading(2);
+            assert.equal(await why(), 'Checking whether you may configure the MCP server…', 'the second opening reads again too, and says so');
+            await closePanel();
+            await editGw('Edit gw opens while both openings read again');
+          } finally { release(); }
+          await readsLanded(sp, sent + 2);
+          assert.equal((await endpointReads(sp)).sent, sent + 2, 'each opening read once');
+          assert.match(await why(), /^Could not check /, 'both reads failed');
+        } else {
+          await editGw('Edit gw opens while the home\'s first read is held');
+          const { sent } = await endpointReads(sp);
+          boot.release();
+          await readsLanded(sp, sent);
         }
         await sp.unroute('**/api/mcp-endpoints');
         assert.ok(await sp.$(`[data-edit-endpoint="${gwId}"]`), `${reread}: gw's row still drawn`);
-        await editGw('Edit gw opens after the panel\'s read landed');
+        await editGw('Edit gw opens after the reads landed');
       } finally { await sctx.close(); }
     }
   });
