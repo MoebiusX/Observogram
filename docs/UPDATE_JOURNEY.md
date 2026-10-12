@@ -1350,3 +1350,13 @@ Tests: 1390 → 1393 (three more in `server/test-mcp-settings.mjs`: the
 refused flag, in-process and in a child started with it; a worker that
 cannot be constructed or fails; and the per-rule deadline, pinned with a
 paced stand-in worker).
+A clock older than the worker failed the start and the suite alike: the
+load compiled the policy with the taxonomy's id clocks (four runs against
+256-character ids, refused past 50 ms of wall time), so a server — or a
+suite's child — that lost the CPU while loading refused a valid policy as
+`pattern too slow against a 256-character id`, a refusal that names no way
+out. The load now checks each pattern's shape, never its speed, as
+MCP_INTEGRATION and DOWNSTREAM always said, and the worker's deadline per
+rule is the guard; the taxonomy's own clocks are unchanged.
+Tests: 1393 → 1394 (one more in `server/test-mcp-settings.mjs`: under a
+clock that jumps a second per read, a valid policy loads).

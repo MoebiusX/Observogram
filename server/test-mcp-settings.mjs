@@ -5,7 +5,8 @@
  * The MCP server-settings API on the studio server (rebadge batch 4):
  * the settings policy (server/mcp-settings-policy.mjs) — OBSERVOGRAM_MCP_SETTINGS_POLICY
  * is read once at start(), an unreadable or invalid file refuses the boot
- * naming the variable, the path and the reason before the store is touched,
+ * naming the variable, the path and the reason before the store is touched
+ * (shape, never speed: a clock that jumps refuses no valid policy),
  * a BOM-led file loads, a loaded one is logged once (path and rule count)
  * and served by GET /api/mcp-settings without its path, the legacy
  * TOMOGRAPH_ spelling is honoured — and the opt-in pass-through's switch
@@ -121,6 +122,28 @@ test('readSettingsPolicyConfig refuses a missing file, invalid JSON, an unknown 
   assert.throws(() => readSettingsPolicyConfig({ OBSERVOGRAM_MCP_SETTINGS_POLICY: notObject }), { message: `OBSERVOGRAM_MCP_SETTINGS_POLICY: ${notObject}: the settings policy must be a JSON object` });
   // The legacy spelling is read, the modern name is the one every message spells.
   assert.throws(() => readSettingsPolicyConfig({ TOMOGRAPH_MCP_SETTINGS_POLICY: missing }), (e) => e.message.startsWith(`OBSERVOGRAM_MCP_SETTINGS_POLICY: ${missing}: ENOENT`));
+});
+
+test('readSettingsPolicyConfig checks each pattern\'s shape, never its speed: under a clock that jumps a second per read (a loaded machine), a valid policy loads and a bad one keeps its shape refusal', () => {
+  // compileBoundedPattern's id clocks (50 ms of wall time) read a thread a
+  // loaded machine descheduled as a slow pattern, and the start refused a
+  // valid policy (`rules[0].when: pattern too slow against a 256-character
+  // id`). The load runs no clock: the pass-through's worker deadline per
+  // rule is the guard (server/mcp-settings-eval.mjs).
+  const realNow = Date.now;
+  let t = 0;
+  Date.now = () => (t += 1000);
+  try {
+    assert.deepEqual(readSettingsPolicyConfig({ OBSERVOGRAM_MCP_SETTINGS_POLICY: FIXTURE }).policy, FIXTURE_JSON);
+    const generic = file('generic-jumping-clock.json', JSON.stringify(GENERIC));
+    assert.equal(readSettingsPolicyConfig({ OBSERVOGRAM_MCP_SETTINGS_POLICY: generic }).compiled.rules.length, 2);
+    const slow = file('slow-jumping-clock.json', JSON.stringify({ version: 1, rules: [{ when: { field: 'u', pattern: '^https://.*.*.*\\.internal$' }, warn: 'w' }] }));
+    assert.throws(() => readSettingsPolicyConfig({ OBSERVOGRAM_MCP_SETTINGS_POLICY: slow }), { message: `OBSERVOGRAM_MCP_SETTINGS_POLICY: ${slow}: rules[0].when: pattern has more than one unbounded quantifier (*, + or {n,}), which a URL-length value can make slow` });
+    const nested = file('nested-jumping-clock.json', JSON.stringify({ version: 1, rules: [{ when: { field: 'u', pattern: '^(a+)+$' }, warn: 'w' }] }));
+    assert.throws(() => readSettingsPolicyConfig({ OBSERVOGRAM_MCP_SETTINGS_POLICY: nested }), { message: `OBSERVOGRAM_MCP_SETTINGS_POLICY: ${nested}: rules[0].when: nested quantifier` });
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test('a file that starts with a byte-order mark (Windows PowerShell 5) loads as the same document — one BOM, no more', () => {

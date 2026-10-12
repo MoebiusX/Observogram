@@ -20,12 +20,13 @@
 //
 // The policy only adds friction: it never enables a control, lifts a
 // refusal or changes a target. The studio reads it when the modal opens and
-// compiles it again with `timed: false` (the server ran the id clocks
-// here). The load checks each pattern's shape, not its speed: the
-// pass-through evaluates the policy in a worker under a 100 ms deadline per
-// rule (server/mcp-settings-eval.mjs), a rule that does not finish counting
-// as matched. Unset (the default): nothing is read, and the route answers
-// { ok: true, proxy, policy: null, configured: false }.
+// compiles it again. Both compile with `timed: false`: the load checks each
+// pattern's shape, never its speed (compileBoundedPattern's 50 ms id clocks
+// would read a loaded machine as a slow pattern and refuse a valid policy at
+// start); the pass-through evaluates the policy in a worker under a 100 ms
+// deadline per rule (server/mcp-settings-eval.mjs), a rule that does not
+// finish counting as matched. Unset (the default): nothing is read, and the
+// route answers { ok: true, proxy, policy: null, configured: false }.
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -38,7 +39,8 @@ export const MCP_ADMIN_PROXY_ENV = 'OBSERVOGRAM_MCP_ADMIN_PROXY';
 /**
  * { policy: object | null, compiled: frozen policy | null, path: string | null }
  * — `policy` the parsed document as the file holds it (what the GET serves),
- * `compiled` compileSettingsPolicy's. Throws on an unreadable or invalid file.
+ * `compiled` compileSettingsPolicy's, without the id clocks (`timed: false`:
+ * shape, never speed). Throws on an unreadable or invalid file.
  */
 export function readSettingsPolicyConfig(env = process.env) {
   const raw = brandEnvFrom(env, 'MCP_SETTINGS_POLICY');
@@ -49,7 +51,7 @@ export function readSettingsPolicyConfig(env = process.env) {
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
   let json;
   try { json = JSON.parse(text); } catch (e) { throw new Error(`${MCP_SETTINGS_POLICY_ENV}: ${path}: invalid JSON: ${e.message}`, { cause: e }); }
-  const { policy, errors } = compileSettingsPolicy(json);
+  const { policy, errors } = compileSettingsPolicy(json, { timed: false });
   if (errors.length) throw new Error(`${MCP_SETTINGS_POLICY_ENV}: ${path}: ${errors[0]}${errors.length > 1 ? ` (+${errors.length - 1} more)` : ''}`);
   return { policy: json, compiled: policy, path };
 }

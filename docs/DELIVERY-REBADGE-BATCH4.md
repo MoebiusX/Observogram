@@ -168,7 +168,10 @@ server versus the studio's connection to it, the UI_CONVENTIONS zone.
   pass-through submit `502 the server-settings proxy failed (Error)` (a
   server without one builds no worker and was unaffected): the worker is
   now constructed once more without the flags, and a worker that cannot be
-  constructed fails closed like one that fails.)
+  constructed fails closed like one that fails. And the start no longer
+  runs the id clocks (four runs against 256-character ids, refused past
+  50 ms of wall time), which a loaded machine failed with a valid policy:
+  it checks shape only.)
 - The other review fixes add assertions to existing tests or change docs;
   the count is unchanged.
 
