@@ -1332,7 +1332,12 @@ and macOS compare exactly as before. That realpath keeps a network share's
 name — `\\localhost\C$\ws\orgs\beta\…` resolves to itself, not to
 `C:\ws\orgs\beta\…` — so on Windows a path outside the workspace is
 nobody's part only on a local drive; one reached through a share or a mapped
-drive is refused. Tests: 1390 → 1399 (`tools/test-journey-scope.mjs` 9, new).
+drive is refused. The mirror holds too: a workspace named through a share this
+host serves (`\\myhost\ws`) is stored on a local drive, where
+`C:\ws\orgs\beta\…` names beta's part of it; while the workspace is named
+through a share, a path on a local drive outside it is placed by its nearest
+directory with the workspace's own file id, and judged there.
+Tests: 1390 → 1400 (`tools/test-journey-scope.mjs` 10, new).
 
 The store's offline operations compared paths the same way, so on Windows
 `packc store export C:\WS\exports` wrote a directory export into the
@@ -1344,5 +1349,5 @@ share still compares as the share names it: these checks do not refuse one,
 since an export or a backup on a share is an ordinary target); their messages
 and the Linux and macOS comparisons are unchanged. Each of the two suites also
 runs its default host once on a real directory, so a Windows run fails if the
-platform's rule is not the one chosen. Tests: 1399 → 1407
+platform's rule is not the one chosen. Tests: 1400 → 1408
 (`server/test-store-paths.mjs` 8, new).

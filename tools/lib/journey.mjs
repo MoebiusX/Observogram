@@ -427,9 +427,10 @@ const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
 // disk) of the longest prefix that exists, the rest appended as written,
 // with \ separators and case folded. That form only compares: a refusal
 // names the path as written. Elsewhere the comparison is the realpath's
-// spelling, as it always was. host = { windows, path, realpathSync } (the
-// platform, node:path's and node:fs's realpathSync with its .native) is
-// injectable (tools/test-journey-scope.mjs); the default is this host.
+// spelling, as it always was. host = { windows, path, realpathSync,
+// statSync } (the platform, node:path's, node:fs's realpathSync with its
+// .native and node:fs's statSync) is injectable
+// (tools/test-journey-scope.mjs); the default is this host.
 //
 // A network share is one more name the native realpath keeps: a path reached
 // through one (\\host\share\…, \\?\UNC\…, a mapped drive) resolves to
@@ -437,14 +438,21 @@ const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
 // is C:\ws\orgs\beta, and \\nas01.corp.example\obs the workspace \\nas01\obs,
 // yet neither compares under the workspace. On Windows a path outside the
 // workspace is therefore nobody's part only on a local drive; any other (a
-// share, or a device path no realpath resolves) is refused.
+// share, or a device path no realpath resolves) is refused. The mirror: a
+// workspace named through a share this host serves (\\myhost\ws, a drive
+// mapped to \\localhost\C$\ws) is stored on a local drive, and its path
+// there (C:\ws\orgs\beta) is one more name for it, which no realpath maps
+// back. So while the workspace is named through a share, a path on a local
+// drive outside it is placed by its nearest directory that is the
+// workspace's own — the same file id on the same volume (statSync, with the
+// volume serial's low 32 bits: all a share reports) — and judged there.
 const NODE_PATH = Object.freeze({ resolve, join, dirname, basename, sep });
 const ON_WINDOWS = process.platform === 'win32';
 const LOCAL_DRIVE = /^[a-z]:\\/;   // a compared form on a local drive (folded)
 const IN_ANOTHER_ORGS_PART = 'belongs to another org\'s part of the workspace — refused';
 const NOT_ON_A_LOCAL_DRIVE = 'is not a path on a local drive, and a network share or a device path may lead into another org\'s part of the workspace — refused; '
   + 'name it by its path on a local drive (copy it there if it has none)';
-export function crawlScopeRefusal(scope, { windows = ON_WINDOWS, path = NODE_PATH, realpathSync: fsRealpath = realpathSync } = {}) {
+export function crawlScopeRefusal(scope, { windows = ON_WINDOWS, path = NODE_PATH, realpathSync: fsRealpath = realpathSync, statSync: fsStat = statSync } = {}) {
   if (!scope) return null;
   const realpath = windows ? fsRealpath.native : fsRealpath;
   const realOrResolved = (p) => {
@@ -453,18 +461,35 @@ export function crawlScopeRefusal(scope, { windows = ON_WINDOWS, path = NODE_PAT
       return parent === p ? p : path.join(realOrResolved(parent), path.basename(p));
     }
   };
-  const compared = windows ? (p) => realOrResolved(path.resolve(p)).replaceAll('/', '\\').toLowerCase() : realOrResolved;
+  const fold = (p) => p.replaceAll('/', '\\').toLowerCase();
+  const compared = windows ? (p) => fold(realOrResolved(path.resolve(p))) : realOrResolved;
   const s = windows ? '\\' : path.sep;
   const within = (p, dir) => p === dir || p.startsWith(dir.endsWith(s) ? dir : dir + s);
   const base = compared(path.resolve(scope.base));
   const ownRoot = compared(path.resolve(scope.ownRoot));
   const orgsDir = path.join(base, 'orgs');
+  // A workspace named through a share: a local path's place in it, by its
+  // nearest directory that is the workspace's own, or null (above).
+  const fileId = (p) => {
+    try { const st = fsStat(p, { bigint: true }); return `${st.dev & 0xffffffffn}:${st.ino}`; } catch { return null; }
+  };
+  const baseId = windows && !LOCAL_DRIVE.test(base) ? fileId(path.resolve(scope.base)) : null;
+  const isBase = new Map();   // a path or its ancestor (native realpath) → whether it is the workspace's own directory
+  const placed = (p) => {
+    const native = realOrResolved(path.resolve(p));
+    for (let dir = native; ; dir = path.dirname(dir)) {
+      if (!isBase.has(dir)) isBase.set(dir, fileId(dir) === baseId);
+      if (isBase.get(dir)) return path.join(base, fold(native.slice(dir.length)));
+      if (path.dirname(dir) === dir) return null;
+    }
+  };
   // Outside the workspace (a checkout elsewhere) is nobody's part — on
   // Windows only on a local drive; inside it only the org's own root is,
   // and the default org at the base never enters <base>/orgs/, where the
   // other orgs live.
   return (p) => {
-    const real = compared(p);
+    let real = compared(p);
+    if (baseId && LOCAL_DRIVE.test(real) && !within(real, base)) real = placed(p) ?? real;
     if (!within(real, base)) return windows && !LOCAL_DRIVE.test(real) ? NOT_ON_A_LOCAL_DRIVE : '';
     return within(real, ownRoot) && !(ownRoot === base && within(real, orgsDir)) ? '' : IN_ANOTHER_ORGS_PART;
   };

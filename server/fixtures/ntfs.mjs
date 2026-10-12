@@ -9,7 +9,11 @@
 // \\?\C:\… and \\.\C:\… name C:\…. A network share is libuv's case: a path
 // reached through one (\\host\share\…, \\?\UNC\host\share\…, a mapped drive)
 // resolves to \\host\share\ and the on-disk rest, never to the volume's own
-// path; a share the volume does not serve is ENOENT.
+// path; a share the volume does not serve is ENOENT. What statSync reports
+// names the file whatever path reached it: one file id per file, and the
+// volume's serial — of which a share reports only the low 32 bits
+// (FILE_FS_VOLUME_INFORMATION's), while a local stat may report all 64
+// (FILE_STAT_BASIC_INFORMATION's).
 //
 // Imports nothing but node:path's Windows rules: no platform is read, so
 // tools/test-platform.mjs's P5 holds.
@@ -19,7 +23,7 @@ import { win32 } from 'node:path';
 const enoent = (p) => Object.assign(new Error(`ENOENT: no such file or directory, realpath '${p}'`), { code: 'ENOENT' });
 
 /**
- * ntfsVolume(files, { short, shares, mapped }) → { realpathSync } — node:fs's realpathSync as Windows runs it on this volume:
+ * ntfsVolume(files, { short, shares, mapped }) → { realpathSync, statSync } — node:fs's realpathSync and statSync as Windows runs them on this volume:
  *   files   the on-disk spellings of the volume's files, e.g. 'C:\\ws\\orgs\\acme\\packs\\own.pack.yaml'
  *           (each one's directories exist too);
  *   short   { '<a directory, as on disk>': '<its short name>' }, e.g. { 'C:\\ws': 'WS~1' };
@@ -27,7 +31,9 @@ const enoent = (p) => Object.assign(new Error(`ENOENT: no such file or directory
  *           its server, e.g. { '\\\\localhost\\C$': 'C:\\' };
  *   mapped  { '<drive>:': '\\\\<host>\\<share>[\\…]' }, a mapped network drive, e.g. { 'Z:': '\\\\localhost\\C$\\ws' }.
  *   realpathSync(p)         the JS one: p resolved, in the caller's spelling, or ENOENT;
- *   realpathSync.native(p)  the on-disk spelling (\\host\share\… through a share), or ENOENT.
+ *   realpathSync.native(p)  the on-disk spelling (\\host\share\… through a share), or ENOENT;
+ *   statSync(p)             { dev, ino } as bigints — the volume's serial (its low 32 bits through a share) and the
+ *                           file's id, the same through every name of the file — or ENOENT.
  */
 export function ntfsVolume(files, { short = {}, shares = {}, mapped = {} } = {}) {
   const names = new Map();   // a directory's on-disk path, folded → Map(name folded → name on disk)
@@ -62,20 +68,32 @@ export function ntfsVolume(files, { short = {}, shares = {}, mapped = {} } = {})
     }
     return out;
   }
-  function native(p) {
+  // The file a path reaches: its on-disk path, and the share it was reached through, if any.
+  function reach(p) {
     let abs = win32.resolve(p);
     if (/^\\\\\?\\UNC\\/i.test(abs)) abs = `\\${abs.slice(7)}`;          // \\?\UNC\host\share\… is \\host\share\…
     else if (/^\\\\[?.]\\[a-z]:/i.test(abs)) abs = abs.slice(4);          // \\?\C:\…, \\.\C:\… are C:\…
     const drive = drives.get(abs.slice(0, 2).toLowerCase());
     if (drive) abs = win32.join(drive, abs.slice(2));
     const { root } = win32.parse(abs);
-    if (!root.startsWith('\\\\')) return onVolume(abs, p);
+    if (!root.startsWith('\\\\')) return { local: onVolume(abs, p), share: null };
     const share = served.get(root.toLowerCase());
     if (!share) throw enoent(p);
-    const local = onVolume(win32.join(share.dir, abs.slice(root.length)), p);
-    return win32.join(share.unc, local.slice(onVolume(share.dir, p).length));
+    return { local: onVolume(win32.join(share.dir, abs.slice(root.length)), p), share };
+  }
+  function native(p) {
+    const { local, share } = reach(p);
+    return share ? win32.join(share.unc, local.slice(onVolume(share.dir, p).length)) : local;
   }
   const realpathSync = (p) => { native(p); return win32.resolve(p); };
   realpathSync.native = native;
-  return { realpathSync };
+  const ids = new Map();   // an on-disk path, folded → its file id
+  const statSync = (p) => {
+    const { local, share } = reach(p);
+    const key = local.toLowerCase();
+    if (!ids.has(key)) ids.set(key, BigInt(ids.size + 1));
+    const serial = 0x5eed000000000000n | BigInt(local.charCodeAt(0));   // one per drive letter, above 32 bits too
+    return { dev: share ? serial & 0xffffffffn : serial, ino: ids.get(key) };
+  };
+  return { realpathSync, statSync };
 }
