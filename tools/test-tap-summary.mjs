@@ -633,10 +633,57 @@ test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README 
     const named = (r, file) => [reportCommand(file, false), reportCommand(file, true)].some((c) => r.stderr.trimEnd().endsWith(c));
     usage([spec], "holds the spec reporter's output, not TAP (Node 23 and later print spec even into a file) — capture it again with the reporter named: ");
     assert.ok(named(run([spec]), spec), 'the spec refusal ends with the capture command');
-    const npmLog = f('npm.log', 'npm error Missing script: "test"\n');
-    usage([npmLog], 'is not TAP (no "TAP version" line) — capture the run with the reporter named: ');
-    assert.ok(named(run([npmLog]), npmLog));
+    // Another reporter's output (dot) keeps the reporter advice: naming it is the way out.
+    const dots = f('dot.tap', '....\n..\n');
+    usage([dots], 'is not TAP (no "TAP version" line) — capture the run with the reporter named: ');
+    assert.ok(named(run([dots]), dots));
     assert.ok(run([spec]).stderr.includes('NODE_OPTIONS=--test-reporter=tap') && run([spec]).stderr.includes(`npm test > ${spec} 2>&1`));
+
+    // A capture in which npm test never started — npm's, node's or a shell's
+    // refusal, or nothing at all — has no reporter to name: a block of its own
+    // on stdout shows what it holds (the cause), an ::error says the tests
+    // never started, and the notice gives the block's length for a tail read.
+    const notStarted = (name, text, shown) => {
+      const p = f(name, text);
+      const r = run([p, '--win32-skips', '0']);
+      assert.equal(r.status, 2, `${name}: ${r.stdout}${r.stderr}`);
+      assert.equal(r.stderr, '', `${name}: the block is on stdout`);
+      const lines = r.stdout.trimEnd().split('\n');
+      assert.equal(lines[0], HEAD, name);
+      assert.match(lines[1], /^host: /, name);
+      assert.deepEqual(lines.filter((l) => l.startsWith('  | ')).map((l) => l.slice(4)), shown, `${name}: what it holds, the cause`);
+      const k = Number(/^block: (\d+) lines$/m.exec(r.stdout)?.[1]);
+      assert.equal(k, lines.reduce((n, l) => n + logLines(l), 0), `${name}: the block counts every log line it prints`);
+      assert.match(r.stdout, /^::error title=npm test printed no TAP::/m, name);
+      assert.ok(lines.at(-1).startsWith('::notice title=npm test::no TAP — '), name);
+      assert.ok(lines.at(-1).endsWith(`the summary block is ${k} lines; read it with tail_lines ${k + 150}`), name);
+      return r.stdout;
+    };
+    const header = (cmd) => ['', '> observogram@0.0.0 test', `> ${cmd}`, ''];
+    // node's own words, from this node: no test file it can find, an option it does not take.
+    const nodeSays = (env) => {
+      const c = spawnSync(process.execPath, ['--test', 'no-such-test-file.mjs'], { cwd: dir, encoding: 'utf8', env: { ...process.env, ...env } });
+      return `${c.stdout}${c.stderr}`.trimEnd().split(/\r?\n/);
+    };
+    for (const [name, held] of [
+      ['npm-error.tap', ['npm error Missing script: "test"', 'npm error', 'npm error To see a list of scripts, run:', 'npm error   npm run']],
+      ['node-missing.tap', [...header('node --test no-such-test-file.mjs'), ...nodeSays({ NODE_OPTIONS: '' })]],
+      ['node-option.tap', [...header('node --test no-such-test-file.mjs'), ...nodeSays({ NODE_OPTIONS: '--no-such-option' })]],
+      ['sh.tap', [...header('c8 node --test'), 'sh: 1: c8: not found']],
+      ['bash.tap', [...header('c8 node --test'), '/usr/bin/bash: line 1: c8: command not found']],
+      ['cmd.tap', [...header('c8 node --test'), "'c8' is not recognized as an internal or external command,", 'operable program or batch file.']],
+    ]) {
+      const block = notStarted(name, `${held.join('\n')}\n`, held);
+      assert.ok(block.includes(`${join(dir, name)} holds no TAP: npm test stopped before its tests ran — npm, node or a shell refused to start them.`), block);
+      assert.ok(block.includes(`What it holds (${held.length} lines) names the cause: fix it, then run npm test again.`), block);
+      assert.ok(!block.includes('--test-reporter'), `${name}: no reporter advice, naming one starts nothing`);
+    }
+    const one = notStarted('one.tap', 'npm error Missing script: "test"\n', ['npm error Missing script: "test"']);
+    assert.ok(one.includes('What it holds (1 line) names the cause: fix it, then run npm test again.') && !one.includes('--test-reporter'), one);
+    const empty = notStarted('empty.tap', '', []);
+    assert.ok(empty.includes(`${join(dir, 'empty.tap')} is empty: npm test printed nothing into it — capture the run again: `), empty);
+    const many = Array.from({ length: 45 }, (_, i) => `npm error line ${i + 1}`);
+    assert.ok(notStarted('long.tap', `${many.join('\n')}\n`, many.slice(-40)).includes('Its last 40 of 45 lines name the cause: fix it, then run npm test again.'), 'a long refusal: its last 40 lines');
 
     assert.equal(reportCommand('test.tap', false), 'NODE_OPTIONS=--test-reporter=tap npm test > test.tap 2>&1');
     assert.equal(reportCommand('test.tap', true), 'cmd /c "set NODE_OPTIONS=--test-reporter=tap&& npm test > test.tap 2>&1"');

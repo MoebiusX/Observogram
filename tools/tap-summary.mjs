@@ -21,8 +21,10 @@
 // Exit 0 when the totals are all present, nothing failed, was cancelled or is
 // a todo, every skip reason is a `win32: …` one or on KNOWN_SKIPS, and the
 // count is the expected one; exit 1 otherwise; exit 2 for a usage error or a
-// file that is not TAP. It reads the file and README.md and probes whether
-// this host can create a symlink; it runs nothing.
+// file that is not TAP — a capture in which npm test never started (empty,
+// or npm's, node's or a shell's refusal) with a block of its own: what it
+// holds, an ::error and the notice. It reads the file and README.md and
+// probes whether this host can create a symlink; it runs nothing.
 import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { arch, availableParallelism, release, tmpdir } from 'node:os';
 import path, { join, resolve } from 'node:path';
@@ -356,6 +358,48 @@ export const logLines = (line) => 1 + (line.startsWith('::') ? (line.match(/%0A/
 const fmtTotal = (v) => (v === undefined ? '?' : String(v));
 const cut = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
+// What npm, node or a shell prints when the tests never start: npm's own
+// refusal (a missing script, no package.json), node's (an option it does not
+// take, no test file it can find), a shell's or cmd's (no such command).
+const NOT_STARTED = Object.freeze([
+  /^npm (?:error|ERR!) /m,
+  /^(?:.*[\\/])?node(?:\.exe)?: /m,
+  /^Could not find '/m,
+  /^(?:.*[\\/])?(?:sh|bash)(?:: line \d+|: \d+)?: .+: (?:command )?not found$/m,
+  /^'.+' is not recognized as an internal or external command/m,
+]);
+
+/**
+ * The block for a capture without TAP in which npm test never started: an
+ * empty file, or npm's, node's or a shell's refusal to start the tests. No
+ * reporter is the cause, so none is named: the block shows what the capture
+ * holds (its last 40 lines, the cause), an ::error and the notice with the
+ * block's length. Returns { text, lines }, or null for any other capture.
+ */
+export function notStartedBlock(text, { file = 'test.tap', windows = false, host = null } = {}) {
+  const held = String(text).replace(/\r\n/g, '\n').split('\n');
+  while (held.length && held[held.length - 1].trim() === '') held.pop();
+  if (held.length && !NOT_STARTED.some((re) => re.test(text))) return null;
+  const out = [HEAD];
+  if (host) out.push(host);
+  let error;
+  if (!held.length) {
+    out.push(`${file} is empty: npm test printed nothing into it — capture the run again: ${reportCommand(file, windows)}`);
+    error = `${file} is empty: npm test printed nothing into it`;
+  } else {
+    const shown = held.slice(-LAST_LINES);
+    out.push(`${file} holds no TAP: npm test stopped before its tests ran — npm, node or a shell refused to start them.`);
+    out.push(`${shown.length < held.length ? `Its last ${shown.length} of ${held.length} lines name` : `What it holds (${held.length} line${held.length === 1 ? '' : 's'}) names`} the cause: fix it, then run npm test again.`);
+    for (const l of shown) out.push(`  | ${cut(l, 500)}`);
+    error = `${file} holds no "TAP version" line: npm test stopped before its tests ran — the summary block shows what it holds, which names the cause`;
+  }
+  const annotations = [annotation('error', { title: 'npm test printed no TAP' }, error)];
+  const count = out.length + 2 + annotations.reduce((n, a) => n + logLines(a), 0) + 1;   // + "block:" + the rule, + the notice
+  out.push(`block: ${count} lines`, RULE, ...annotations);
+  out.push(annotation('notice', { title: 'npm test' }, `no TAP — the summary block is ${count} lines; read it with tail_lines ${count + TAIL_SLACK}`));
+  return { text: out.join('\n'), lines: count };
+}
+
 /**
  * The block, the annotations and the verdict. `expectWin32` is the number of
  * `SKIP win32:` lines the run must print (null: not held), `countSource`
@@ -630,6 +674,8 @@ function main(argv, { out = (s) => process.stdout.write(`${s}\n`), err = (s) => 
   const { text } = decodeTap(input.bytes);
   if (!/^TAP version \d+$/m.test(text)) {
     const spec = /^\s*ℹ tests \d/m.test(text) || /^\s*[✔✖﹣] /m.test(text);
+    const notStarted = spec ? null : notStartedBlock(text, { file, windows, host: hostLine() });
+    if (notStarted) { out(notStarted.text); return 2; }
     err(spec
       ? `tap-summary: ${file} holds the spec reporter's output, not TAP (Node 23 and later print spec even into a file) — capture it again with the reporter named: ${reportCommand(file, windows)}`
       : `tap-summary: ${file} is not TAP (no "TAP version" line) — capture the run with the reporter named: ${reportCommand(file, windows)}`);
