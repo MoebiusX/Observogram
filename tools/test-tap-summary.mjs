@@ -803,8 +803,9 @@ function roundedUp(rounding, slowest) {
 const SUMMARY_IF = "if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}";
 // A step's keys after its name, as lines (a blank line or a comment is none:
 // the comment above the next step is split into this one). A step whose exit
-// is its job's verdict is held to all of them, so no shell of its own and
-// nothing after its command (`|| true`, `; exit 0`) can drop that exit.
+// is its job's verdict is held to all of them, so no shell but the one pinned
+// and nothing after its command (`|| true`, `; exit 0`) can drop that exit,
+// and no if: but the one pinned can skip the step.
 const keysOf = (st) => st.split('\n').filter((l) => l.trim() && !/^\s*#/.test(l)).slice(1);
 const keys = (...lines) => lines.map((l) => `        ${l}`);
 
@@ -828,14 +829,20 @@ test('S10 the workflow wires it: a Windows matrix on the floor and the latest 22
   const report = stepNamed(w, /The documented report command captures TAP/);
   assert.equal(report.length, 1, 'the report-command step');
   assert.match(report[0], /^ {8}shell: powershell$/m, 'run from Windows PowerShell, the hardest shell for it');
-  assert.ok(report[0].includes(reportCommand('test.tap', true).replace('npm test', 'npm run test:platform')), 'the documented command, on one suite');
+  // Whole, as the suites step: the documented command on one suite, each
+  // native exit checked by hand, the summary's exit the step's, and no if:
+  // of its own, so the report command is checked on every PR and push.
+  assert.deepEqual(keysOf(report[0]), keys('shell: powershell', 'run: |',
+    `  ${reportCommand('test.tap', true).replace('npm test', 'npm run test:platform')}`,
+    '  if ($LASTEXITCODE) { Get-Content test.tap -Tail 40; exit $LASTEXITCODE }',
+    '  node tools/tap-summary.mjs test.tap --win32-skips 0',
+    '  $code = $LASTEXITCODE; Remove-Item test.tap; exit $code'));
   // …documented as tap-summary names it: docs/DOWNSTREAM.md §13 from cmd or PowerShell, and from Git Bash.
   const downstream = readFileSync(join(ROOT, 'docs', 'DOWNSTREAM.md'), 'utf8');
   for (const [fence, onWindows] of [['```', true], ['```sh', false]]) {
     const block = `\n${fence}\n${reportCommand('test.tap', onWindows)}\nnode tools/tap-summary.mjs test.tap --win32-skips readme\n\`\`\`\n`;
     assert.ok(downstream.includes(block), `docs/DOWNSTREAM.md gives the report command tap-summary names:${block}`);
   }
-  assert.ok(report[0].includes('if ($LASTEXITCODE)') && report[0].includes('node tools/tap-summary.mjs test.tap --win32-skips 0') && report[0].includes('exit $code'), 'each native exit checked by hand');
   const wTest = stepNamed(w, /id: test\n/);
   assert.equal(wTest.length, 1);
   assert.deepEqual(keysOf(wTest[0]), keys('id: test', `timeout-minutes: ${minutes(wTest[0])}`, 'run: npm test 2>&1 | tee "$RUNNER_TEMP/test.tap"'));
