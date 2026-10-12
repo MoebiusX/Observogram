@@ -482,6 +482,18 @@ test('S6 the verdict: ok only when complete, fail 0, cancelled 0, todo 0, no fai
   const shown = u.text.split('\n').filter((l) => l.startsWith('  | ')).map((l) => l.slice(4));
   assert.equal(shown.length, 40);
   assert.deepEqual(shown, truncated.split('\n').slice(-40), 'its last 40 lines');
+  // A tail line is cut at 500 characters, as a failure's error lines are: a
+  // crash's last diagnostic can be one huge line (a JSON dump, a minified
+  // source line), and a reader fetches the block from the log's tail whole.
+  // (Lengths only: a failure here must not print the huge line itself.)
+  const huge = summarize(`${truncated}\n# ${'x'.repeat(5e6)}\n`);
+  const hugeShown = huge.text.split('\n').filter((l) => l.startsWith('  | ')).map((l) => l.slice(4));
+  assert.equal(hugeShown.length, 40);
+  assert.deepEqual(hugeShown.slice(0, -1), truncated.split('\n').slice(-39), 'the lines before it whole');
+  assert.equal(hugeShown[39].length, 500, 'the huge line cut at 500 characters');
+  assert.equal(hugeShown[39].slice(-3), 'xx…', 'and marked cut');
+  const longest = Math.max(...huge.text.split('\n').map((l) => l.length));
+  assert.ok(longest <= 504, `no line of the block past 500 characters and its '  | ': the longest is ${longest}`);
 
   // A cut inside the totals — node prints them in one burst at the end, and a
   // step timeout or a kill can land in it, between lines or within one — is

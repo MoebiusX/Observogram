@@ -381,7 +381,7 @@ export function summarize(text, { root = process.cwd(), expectWin32 = null, coun
     out.push('(node --test reports a file\'s tests when the file ends, so the file still running may not be named).');
     let tail = parsed.lines;
     while (tail.length && tail[tail.length - 1] === '') tail = tail.slice(0, -1);
-    for (const l of tail.slice(-LAST_LINES)) out.push(`  | ${l}`);
+    for (const l of tail.slice(-LAST_LINES)) out.push(`  | ${cut(l, 500)}`);   // a crash's last diagnostic can be one huge line
   }
 
   // Skips: grouped by reason, the count, the unknown reasons.
