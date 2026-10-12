@@ -99,10 +99,11 @@ const takenClause = (P) => `another org's id also maps onto every ${P}NOTIFY_<HO
 // What `name` is to `org` as a notify.urlEnv: { kind: 'hook', hook, urlEnv,
 // tokenEnv } when it has the org's hook URL shape and the org is its sole
 // owner; { kind: 'shadow' } when it has the shape but another org's id also
-// maps onto it (or only another's does); { kind: 'name' } otherwise. Reads no
-// environment.
-export function notifyHookOf(db, name, org) {
-  const hook = hookOfShape(name, org);
+// maps onto it (or only another's does); { kind: 'name' } otherwise. With
+// suffix 'TOKEN', the same of `name` as a hook's token (a hook's URL and token
+// names always have the same owners). Reads no environment.
+export function notifyHookOf(db, name, org, suffix = 'URL') {
+  const hook = hookOfShape(name, org, suffix);
   if (hook === null) return { kind: 'name' };
   const owners = envNameOwnedBy(db, name);
   if (!owners.length) return { kind: 'name' };

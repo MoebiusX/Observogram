@@ -982,8 +982,8 @@
       "releasedExports": null
     },
     "tools/lib/schedule-snippets.mjs": {
-      "sha256": "5d954ec6a2e726f51181e5dc966f48085a5ac00bda461d0a9d4c10ae3f72122e",
-      "bytes": 18665,
+      "sha256": "efc26f7045f7933dee0da03ef19d5b62649cf94ed027814f90bfe9de9135e680",
+      "bytes": 19682,
       "exports": [
         "K8S_WORKSPACE_MOUNT",
         "K8S_WORKSPACE_PVC",

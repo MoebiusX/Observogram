@@ -1016,9 +1016,11 @@ app.get('/api/journeys/:name/runs', authorize('GET /api/journeys/:name/runs'), (
 // says so where the binding would have been: the studio does not tell a
 // deployer to bind a name it refuses itself. A token refused beside the org's
 // own hook (the PAIR refusal) is told that hook's own token, the way out the
-// run's refusal names (scheduleSnippets' refusedPairs); a name of an org whose
-// every hook name another org's id takes (the TAKEN refusal), to leave notify
-// out, as the run says — never a rename no name can satisfy (refusedTaken).
+// run's refusal names (scheduleSnippets' refusedPairs); another of the org's
+// hook tokens beside a refused urlEnv, its own hook's URL (refusedHookTokens)
+// — never a rename to the shape it has; a name of an org whose every hook
+// name another org's id takes (the TAKEN refusal), to leave notify out, as
+// the run says — never a rename no name can satisfy (refusedTaken).
 app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/schedule'), (req, res) => {
   let def;
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
@@ -1032,12 +1034,14 @@ app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/sched
     const refusedEnvNames = [...new Set([urlRefused ? def.notify.urlEnv : null, authRefused ? def.notify.authEnv : null].filter((n) => n && !envNames.includes(n)))];
     const hook = authRefused && !urlRefused && def.notify.urlEnv ? notifyHookOf(currentStore(), def.notify.urlEnv, currentOrg()) : null;
     const refusedPairs = hook?.kind === 'hook' ? [{ authEnv: def.notify.authEnv, urlEnv: hook.urlEnv, tokenEnv: hook.tokenEnv }] : [];
+    const owned = authRefused && urlRefused ? notifyHookOf(currentStore(), def.notify.authEnv, currentOrg(), 'TOKEN') : null;
+    const refusedHookTokens = owned?.kind === 'hook' ? [{ authEnv: def.notify.authEnv, urlEnv: owned.urlEnv }] : [];
     const refusedTaken = refusedEnvNames.length > 0 && hooksAllTaken(currentStore(), currentOrg());
     const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
     const snippets = scheduleSnippets({
       name: def.name,
       cron: parsed?.cron ?? null, timezone: parsed?.timezone ?? null, every: parsed?.every ?? null, cadenceNote: parsed?.cadenceNote ?? null,
-      envNames, refusedEnvNames, refusedPairs, refusedTaken,
+      envNames, refusedEnvNames, refusedPairs, refusedHookTokens, refusedTaken,
       nodePath: process.execPath, cliPath: resolve(ROOT, 'tools/cli.mjs'), cwd: process.cwd(),
       workspace: orgWorkspaceRoot(), orgRoot: orgRootOf(currentOrg()),
       image: `observogram:${pkg.version}`, namespace: 'observability',

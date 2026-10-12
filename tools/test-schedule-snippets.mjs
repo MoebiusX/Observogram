@@ -226,6 +226,23 @@ const S45 = withSched({ every: '45m' });
     assert(ls.includes(`${pre}${REFUSED('MY_HOOK_URL')}`), `${f}: a refused name without a pair keeps its comment`);
     assert(ps[f] === scheduleSnippets({ ...p, refusedPairs: undefined })[f].replace(REFUSED(PAGER), PAIRED), `${f}: only the paired token's comment differs`);
   }
+  // Another of the org's hook tokens refused beside a refused urlEnv (refusedHookTokens) is the org's own: never
+  // "not a notify hook of this org", nor a rename to the shape it has — the urlEnv of its own hook, or no authEnv.
+  const PAGER_URL = 'OBSERVOGRAM_ORG_ACME_NOTIFY_PAGER_URL';
+  const OWNED = `${PAGER} is the token of the hook ${PAGER_URL} names, not of the journey's notify.urlEnv: a hook's token goes only to its own URL — set the journey's notify.urlEnv to ${PAGER_URL}, or remove notify.authEnv, before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  const tokens = [{ authEnv: PAGER, urlEnv: PAGER_URL }, { authEnv: PAGER, urlEnv: 'X_URL' }, { authEnv: 'MY_MCP_TOKEN', urlEnv: PAGER_URL },
+    { authEnv: 'UNLISTED', urlEnv: PAGER_URL }, { authEnv: 'MY_HOOK_URL', urlEnv: 'not a name' }, null];
+  const o = { ...S15, envNames: ['MY_MCP_TOKEN'], refusedEnvNames: ['MY_HOOK_URL', PAGER], refusedHookTokens: tokens };
+  assert(JSON.stringify(normaliseSnippetInput(o).refusedHookTokens) === JSON.stringify([{ authEnv: PAGER, urlEnv: PAGER_URL }]) && normaliseSnippetInput(S15).refusedHookTokens.length === 0,
+         'refusedHookTokens: a refused name\'s first entry of valid names only; none by default');
+  const os = scheduleSnippets(o);
+  for (const [f, pre] of [['cron', '# '], ['schtasks', 'REM '], ['actions', '          # '], ['k8s', '                # ']]) {
+    const ls = os[f].split('\n');
+    assert(ls.includes(`${pre}${OWNED}`) && !os[f].includes(`${PAGER} is not a notify hook`), `${f}: the org's hook token names its own hook's URL, never a rename`, ls.filter(l => l.includes(PAGER)));
+    assert(ls.includes(`${pre}${REFUSED('MY_HOOK_URL')}`), `${f}: the refused urlEnv keeps its comment`);
+    assert(os[f] === scheduleSnippets({ ...o, refusedHookTokens: undefined })[f].replace(REFUSED(PAGER), OWNED), `${f}: only the hook token's comment differs`);
+    assert(noSecret(os[f]), `${f}: no value with refusedHookTokens`);
+  }
   // An org whose every hook name another org's id takes (refusedTaken: pay beside pay-notify, a KEY tie) has no
   // name a rename could reach — its hook-shaped names already have the shape — so each refused name, hook-shaped or
   // bare, is told to leave notify out, as the run's TAKEN refusal says; never the rename.

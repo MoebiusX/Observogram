@@ -22,9 +22,12 @@
 // been, saying so — but a refused token `refusedPairs` names ({ authEnv,
 // urlEnv, tokenEnv }: the journey pairs authEnv with its org's hook urlEnv,
 // whose own token is tokenEnv) is told that token instead, since a rename to
-// some hook's shape would not do; and with `refusedTaken` (another org's id
-// takes every name of the org's hook shape, so no rename can make one the
-// org's) every other refused name is told to leave notify out instead.
+// some hook's shape would not do; one `refusedHookTokens` names ({ authEnv,
+// urlEnv }: authEnv is the token of its org's hook urlEnv, beside a refused
+// notify.urlEnv) is told that hook's URL, for the same reason; and with
+// `refusedTaken` (another org's id takes every name of the org's hook shape,
+// so no rename can make one the org's) every other refused name is told to
+// leave notify out instead.
 // `packc journey schedule` passes none of them (the CLI reads any name from
 // its invoker's environment).
 // Honesty rule: nothing is fabricated as the journey's cadence — a missing
@@ -47,12 +50,15 @@ const ORG_ROOT_RE = /^orgs\/[a-z][a-z0-9_-]{0,62}[a-z0-9]$/;
 export function validOrgRoot(r) { return r === '.' || ORG_ROOT_RE.test(String(r)); }
 const DOW_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 // What each form says where a refused name's binding would have been: a
-// token refused beside its org's hook URL is told that hook's own token; any
+// token refused beside its org's hook URL is told that hook's own token; one
+// of the org's hook tokens beside a refused URL name, its own hook's URL; any
 // name of an org whose every hook name another org's id takes, to leave
 // notify out (no name can be its hook).
 const refusedNote = (n, e) => {
   const p = n.refusedPairs.find((x) => x.authEnv === e);
   if (p) return `${e} is not the token of the hook ${p.urlEnv} names: a hook's token goes only to its own URL — set the journey's notify.authEnv to ${p.tokenEnv}, or remove it, before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  const t = n.refusedHookTokens.find((x) => x.authEnv === e);
+  if (t) return `${e} is the token of the hook ${t.urlEnv} names, not of the journey's notify.urlEnv: a hook's token goes only to its own URL — set the journey's notify.urlEnv to ${t.urlEnv}, or remove notify.authEnv, before scheduling (docs/DOWNSTREAM.md §17.2)`;
   return n.refusedTaken
     ? `${e} cannot be a notify hook of this org: another org's id also maps onto every name of its hook shape (OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN) by the longest-prefix rule, so the studio posts no notification for its journeys — remove the journey's notify before scheduling (docs/DOWNSTREAM.md §17.1)`
     : `${e} is not a notify hook of this org: the studio never reads it — rename it to OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN before scheduling (docs/DOWNSTREAM.md §17.2)`;
@@ -68,6 +74,10 @@ export function normaliseSnippetInput(i = {}) {
     .filter(p => p && typeof p === 'object' && [p.authEnv, p.urlEnv, p.tokenEnv].every(v => typeof v === 'string' && ENV_NAME_RE.test(v)) && refusedEnvNames.includes(p.authEnv))
     .map(p => ({ authEnv: p.authEnv, urlEnv: p.urlEnv, tokenEnv: p.tokenEnv }))
     .filter((p, i, all) => all.findIndex(x => x.authEnv === p.authEnv) === i);
+  const refusedHookTokens = (Array.isArray(src.refusedHookTokens) ? src.refusedHookTokens : [])
+    .filter(t => t && typeof t === 'object' && [t.authEnv, t.urlEnv].every(v => typeof v === 'string' && ENV_NAME_RE.test(v)) && refusedEnvNames.includes(t.authEnv))
+    .map(t => ({ authEnv: t.authEnv, urlEnv: t.urlEnv }))
+    .filter((t, i, all) => all.findIndex(x => x.authEnv === t.authEnv) === i);
   if (src.orgRoot != null && !validOrgRoot(src.orgRoot)) throw new TypeError(`orgRoot must be '.' or 'orgs/<id>' (got ${JSON.stringify(src.orgRoot)})`);
   return {
     name: String(src.name || 'journey'),
@@ -78,6 +88,7 @@ export function normaliseSnippetInput(i = {}) {
     envNames,
     refusedEnvNames,
     refusedPairs,
+    refusedHookTokens,
     refusedTaken: src.refusedTaken === true,
     nodePath: String(src.nodePath || 'node'),
     cliPath: String(src.cliPath || 'tools/cli.mjs'),
