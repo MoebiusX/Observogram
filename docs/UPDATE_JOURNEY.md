@@ -1344,10 +1344,16 @@ The store's offline operations compared paths the same way, so on Windows
 workspace at `C:\ws`, `packc store purge-org` deleted a users file spelled
 under the purged org's root in another case, and a backup could be written
 over the database's own `-wal`. The export, in-place, purge-org, backup and
-restore checks now compare the same way on Windows (a path named through a
-share still compares as the share names it: these checks do not refuse one,
-since an export or a backup on a share is an ordinary target); their messages
-and the Linux and macOS comparisons are unchanged. Each of the two suites also
-runs its default host once on a real directory, so a Windows run fails if the
-platform's rule is not the one chosen. Tests: 1400 → 1408
-(`server/test-store-paths.mjs` 8, new).
+restore checks now compare the same way on Windows; their messages and the
+Linux and macOS comparisons are unchanged. A share this host serves is one
+more name for the workspace and the database, either way round: with the
+workspace named `\\myhost\ws`, purge-org deleted beta's users file recorded as
+`C:\ws\orgs\beta\users.json`, and with it at `C:\ws`, an export to
+`\\localhost\C$\ws\exports` was written into it. When a path and the one it
+is checked against resolve under different roots, the path is now placed by
+its nearest directory with the file id of the other or of one of its
+ancestors, as the journey scope places one; a share of another directory or
+another host is still an ordinary target. Each of the two suites also runs
+its default host once on a real directory, so a Windows run fails if the
+platform's rule is not the one chosen. Tests: 1400 → 1410
+(`server/test-store-paths.mjs` 10, new).

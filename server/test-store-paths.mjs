@@ -7,9 +7,13 @@
  * comparison let a directory export write into the workspace, missed the
  * workspace itself (the in-place export) and the database under it, let
  * purge-org delete the users file under the root it purged, and let a backup
- * be written over the database's own -wal. Each check's predicate is run
+ * be written over the database's own -wal. A network share this host serves
+ * is one more name: with the workspace or the database named through one
+ * (\\myhost\ws, Z: mapped to it) their local path (C:\ws\…) compared as
+ * outside them, and so did a share name the admin gave for a local workspace
+ * or database (\\localhost\C$\ws\…). Each check's predicate is run
  * here as ops.mjs and backup.mjs run it, over comparedPath with an injected
- * host — Windows' path rules, an NTFS volume's realpath
+ * host — Windows' path rules, an NTFS volume's realpath and statSync
  * (server/fixtures/ntfs.mjs) and the platform — so the proof runs on every
  * host. One test runs the default host on a real directory, so the
  * platform's choice of rule is pinned too: the expected value reads isWin32
@@ -49,24 +53,44 @@ const VOLUME = ntfsVolume([
   'C:\\ws2\\observogram.db',
   'C:\\out\\x.txt',
 ], { short: { 'C:\\ws': 'WS~1' } });
-const key = comparedPath(null, { windows: true, path: win32, realpathSync: VOLUME.realpathSync });
+const key = comparedPath(null, { windows: true, path: win32, realpathSync: VOLUME.realpathSync, statSync: VOLUME.statSync });
 const SEP = '\\';
 // The comparison this replaces on Windows: ops.mjs's realOr, the spelling JS realpathSync keeps.
 const bySpelling = (p) => { try { return VOLUME.realpathSync(p); } catch { return win32.resolve(p); } };
 
-// The checks' predicates, as server/store/ops.mjs and backup.mjs write them over their compared form.
+// The same volume served as shares: the workspace itself (\\myhost\ws, and Z: mapped to it), the admin share by
+// two names of this host, and another directory (\\myhost\out). \\nas01\obs is a share this host does not serve.
+const SHARED = ntfsVolume([
+  'C:\\ws\\observogram.db',
+  'C:\\ws\\exports\\keep.txt',
+  'C:\\ws\\orgs\\beta\\users.json',
+  'C:\\ws\\orgs\\beta2\\users.json',
+  'C:\\ws2\\observogram.db',
+  'C:\\out\\x.txt',
+], {
+  short: { 'C:\\ws': 'WS~1' },
+  shares: { '\\\\myhost\\ws': 'C:\\ws', '\\\\localhost\\C$': 'C:\\', '\\\\127.0.0.1\\C$': 'C:\\', '\\\\myhost\\out': 'C:\\out' },
+  mapped: { 'Z:': '\\\\myhost\\ws' },
+});
+const shared = comparedPath(null, { windows: true, path: win32, realpathSync: SHARED.realpathSync, statSync: SHARED.statSync });
+// The native realpath alone, with no file ids: a share keeps its own name, and C:\ws is not \\myhost\ws.
+const byName = comparedPath(null, { windows: true, path: win32, realpathSync: SHARED.realpathSync, statSync: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); } });
+
+// The checks' predicates, as server/store/ops.mjs and backup.mjs write them over their compared form: a path
+// is compared placed beside the one it is checked against (the second argument).
 function exportRelation(into, base, k = key) {   // exportDirectory: 'is' | 'inside' | 'holds' | null (null: written)
-  const t = k(into);
+  const t = k(into, base);
   const b = k(base);
   const inside = t.startsWith(b + SEP);
   if (t === b || inside || b.startsWith(t.endsWith(SEP) ? t : t + SEP)) return t === b ? 'is' : inside ? 'inside' : 'holds';
   return null;
 }
-const inPlace = (target, base, k = key) => k(target) === k(base);                    // exportStore
-const dbUnderWorkspace = (path, base, k = key) => k(path).startsWith(k(base) + SEP);    // exportStore, no marker
+const inPlace = (target, base, k = key) => k(target, base) === k(base);                       // exportStore
+const sameFile = (file, path, k = key) => k(file, path) === k(path);                          // assertNoOtherStore
+const dbUnderWorkspace = (path, base, k = key) => k(path, base).startsWith(k(base) + SEP);     // exportStore, no marker
 const rootUnderOrgs = (root, base, k = key) => k(root).startsWith(k(win32.join(base, 'orgs')) + SEP);   // purgeOrg
-const usersUnderRoot = (usersFile, root, k = key) => k(usersFile).startsWith(k(root) + SEP);           // purgeOrg
-const ownFile = (dbFile, path, k = key) => ['', '-wal', '-shm', '-journal'].find((s) => k(path) === `${k(dbFile)}${s}`) ?? null;   // backup.mjs
+const usersUnderRoot = (usersFile, root, k = key) => k(usersFile, root).startsWith(k(root) + SEP);     // purgeOrg
+const ownFile = (dbFile, path, k = key) => ['', '-wal', '-shm', '-journal'].find((s) => k(path, dbFile) === `${k(dbFile)}${s}`) ?? null;   // backup.mjs
 
 test('on Windows every spelling of one path compares equal — case, drive letter, / for \\, a short name, a trailing separator, a part not created yet', () => {
   for (const group of [
@@ -122,6 +146,63 @@ test('backup and restore: the database and its -wal, -shm and -journal spelled a
   for (const p of ['C:\\ws\\observogram.db.bak', 'C:\\ws2\\observogram.db', 'C:\\ws\\observogram.db-wal2']) assert.equal(ownFile(db, p), null, `another file: ${p}`);
 });
 
+test('with the workspace and the database named through a share this host serves (\\\\myhost\\ws, Z:), their local path is them — every check holds for a target named on the drive', () => {
+  assert.equal(SHARED.realpathSync.native('Z:\\'), '\\\\myhost\\ws\\', 'Z: is the share, as the native realpath names it');
+  for (const base of ['\\\\myhost\\ws', 'Z:\\', '//MYHOST/ws/']) {
+    const root = win32.join(base, 'orgs', 'beta');
+    const dbFile = win32.join(base, 'observogram.db');
+    for (const users of ['C:\\ws\\orgs\\beta\\users.json', 'c:/WS/orgs/BETA/Users.json', 'C:\\WS~1\\orgs\\beta\\users.json']) {
+      assert.equal(usersUnderRoot(users, root, shared), true, `purge-org refuses: ${users} lies under ${root}`);
+    }
+    assert.equal(usersUnderRoot('C:\\ws\\orgs\\beta\\users.json', root, byName), false, `by name alone the purge deleted it (${base})`);
+    for (const users of ['C:\\ws\\orgs\\beta2\\users.json', 'C:\\ws\\users.json', 'C:\\out\\users.json']) assert.equal(usersUnderRoot(users, root, shared), false, `not under ${root}: ${users}`);
+    for (const into of ['C:\\ws\\exports', 'c:/WS/exports/new', 'C:\\WS~1\\orgs\\beta', `${base}${base.endsWith('\\') || base.endsWith('/') ? '' : '\\'}exports`]) {
+      assert.equal(exportRelation(into, base, shared), 'inside', `a directory export is refused: ${into} lies inside ${base}`);
+    }
+    assert.equal(exportRelation('C:\\ws\\exports', base, byName), null, `by name alone it was written into the workspace (${base})`);
+    for (const into of ['C:\\out', 'C:\\ws2', 'c:/out/new']) assert.equal(exportRelation(into, base, shared), null, `written: ${into}`);
+    for (const target of ['C:\\ws', 'c:/WS/', 'C:\\WS~1']) assert.equal(inPlace(target, base, shared), true, `the in-place export: ${target} is ${base}`);
+    assert.equal(inPlace('C:\\ws2', base, shared), false, `not in place: C:\\ws2 (${base})`);
+    for (const path of ['C:\\ws\\observogram.db', 'C:\\WS~1\\db\\other.db']) assert.equal(dbUnderWorkspace(path, base, shared), true, `in the workspace ${base}: ${path}`);
+    assert.equal(dbUnderWorkspace('C:\\ws2\\observogram.db', base, shared), false, `outside ${base}: C:\\ws2\\observogram.db`);
+    assert.equal(sameFile(dbFile, 'C:\\ws\\observogram.db', shared), true, `the scan for another store skips the database itself: ${dbFile}`);
+    assert.equal(sameFile(dbFile, 'C:\\ws2\\observogram.db', shared), false, `another store's database: ${dbFile} beside C:\\ws2\\observogram.db`);
+    for (const [p, s] of [['C:\\ws\\observogram.db-wal', '-wal'], ['c:/WS/Observogram.db', ''], ['C:\\WS~1\\OBSERVOGRAM.DB-SHM', '-shm'], ['C:\\ws\\observogram.db-journal', '-journal']]) {
+      assert.equal(ownFile(dbFile, p, shared), s, `the database ${dbFile}'s own${s ? ` ${s}` : ''}: ${p}`);
+    }
+    assert.equal(ownFile(dbFile, 'C:\\ws\\observogram.db-wal', byName), null, `by name alone a backup was written over the -wal (${dbFile})`);
+    for (const p of ['C:\\ws\\observogram.db.bak', 'C:\\ws2\\observogram.db', 'C:\\out\\observogram.db-wal']) assert.equal(ownFile(dbFile, p, shared), null, `another file: ${p}`);
+  }
+});
+
+test('with the workspace and the database on the drive (C:\\ws), a share name the admin gives for them is them; a share of another directory, or one this host does not serve, is an ordinary target', () => {
+  const [base, root, dbFile] = ['C:\\ws', 'C:\\ws\\orgs\\beta', 'C:\\ws\\observogram.db'];
+  for (const into of ['\\\\localhost\\C$\\ws\\exports', '\\\\127.0.0.1\\c$\\WS~1\\exports\\new', '\\\\myhost\\ws\\orgs\\beta', 'Z:\\exports', '//localhost/C$/ws/exports/']) {
+    assert.equal(exportRelation(into, base, shared), 'inside', `a directory export is refused: ${into} lies inside ${base}`);
+  }
+  assert.equal(exportRelation('\\\\localhost\\C$\\ws\\exports', base, byName), null, 'by name alone it was written into the workspace');
+  assert.equal(exportRelation('\\\\localhost\\C$', base, shared), 'holds', 'the admin share of the drive holds the workspace');
+  for (const into of ['\\\\localhost\\C$\\out\\new', '\\\\myhost\\out\\new', '\\\\localhost\\C$\\ws2', '\\\\nas01\\obs\\exports']) {
+    assert.equal(exportRelation(into, base, shared), null, `written, an ordinary target: ${into}`);
+  }
+  for (const target of ['\\\\localhost\\C$\\ws', '\\\\myhost\\ws', 'Z:\\', '\\\\127.0.0.1\\C$\\WS~1\\']) assert.equal(inPlace(target, base, shared), true, `the in-place export: ${target} is ${base}`);
+  for (const target of ['\\\\myhost\\out', '\\\\nas01\\obs']) assert.equal(inPlace(target, base, shared), false, `not in place: ${target}`);
+  for (const path of ['\\\\localhost\\C$\\ws\\observogram.db', 'Z:\\db\\other.db']) assert.equal(dbUnderWorkspace(path, base, shared), true, `in the workspace: ${path}`);
+  assert.equal(dbUnderWorkspace('\\\\localhost\\C$\\ws2\\observogram.db', base, shared), false, 'outside: \\\\localhost\\C$\\ws2\\observogram.db');
+  assert.equal(sameFile('C:\\ws\\observogram.db', '\\\\myhost\\ws\\observogram.db', shared), true, 'the scan for another store skips the database itself');
+  for (const users of ['\\\\localhost\\C$\\ws\\orgs\\beta\\users.json', 'Z:\\orgs\\beta\\users.json', '\\\\myhost\\ws\\ORGS\\Beta\\users.json']) {
+    assert.equal(usersUnderRoot(users, root, shared), true, `purge-org refuses: ${users} lies under ${root}`);
+  }
+  for (const users of ['\\\\myhost\\ws\\orgs\\beta2\\users.json', '\\\\myhost\\out\\users.json']) assert.equal(usersUnderRoot(users, root, shared), false, `not under ${root}: ${users}`);
+  for (const [p, s] of [['\\\\localhost\\C$\\ws\\observogram.db-wal', '-wal'], ['\\\\myhost\\ws\\OBSERVOGRAM.DB', ''], ['Z:\\observogram.db-shm', '-shm']]) {
+    assert.equal(ownFile(dbFile, p, shared), s, `the database's own${s ? ` ${s}` : ''}: ${p}`);
+  }
+  assert.equal(ownFile(dbFile, '\\\\localhost\\C$\\ws\\observogram.db-wal', byName), null, 'by name alone a backup was written over the -wal');
+  for (const p of ['\\\\myhost\\out\\observogram.db-wal', '\\\\localhost\\C$\\ws2\\observogram.db', '\\\\nas01\\obs\\observogram.db-wal']) {
+    assert.equal(ownFile(dbFile, p, shared), null, `another file, an ordinary target: ${p}`);
+  }
+});
+
 test('off Windows a check compares through the module\'s own form, unchanged', () => {
   const own = (p) => `own:${p}`;
   assert.equal(comparedPath(own, { windows: false }), own, 'the module\'s realpath form itself: Linux and macOS compare as before');
@@ -149,8 +230,14 @@ test('every path comparison in ops.mjs and backup.mjs goes through compared; rea
   assert.match(ops, /slashed\(realOr\(base\)\)/, 'the journey rewrites spell the base as realpath does (text, not a comparison)');
   assert.match(ops, /const compared = comparedPath\(realOr\);/);
   assert.equal(count(ops, /\bcompared\(/g), 12, 'ops.mjs: the export, in-place, no-marker, other-store and purge checks');
+  // Each path is placed beside the one it is checked against, as the predicates above place it.
+  assert.match(ops, /const t = compared\(into, base\);\s*const b = compared\(base\);/, 'exportDirectory');
+  assert.match(ops, /compared\(file, path\) === own/, 'assertNoOtherStore');
+  assert.match(ops, /const inPlace = compared\(target, base\) === compared\(base\);/, 'the in-place detection');
+  assert.match(ops, /const own = compared\(path, base\);\s*const b = compared\(base\);/, 'the no-marker database check');
+  assert.match(ops, /compared\(usersFile, root\)\.startsWith\(compared\(root\) \+ sep\)/, 'purge-org\'s users file');
   const backup = code('backup.mjs');
   assert.equal(count(backup, /\bcanonical\(/g), 1, 'backup.mjs: canonical is only defined, and passed to comparedPath');
   assert.match(backup, /const compared = comparedPath\(canonical\);/);
-  assert.match(backup, /const db = compared\(dbFile\);\s*const p = compared\(path\);/, 'ownFile compares through compared');
+  assert.match(backup, /const db = compared\(dbFile\);\s*const p = compared\(path, dbFile\);/, 'ownFile compares through compared');
 });

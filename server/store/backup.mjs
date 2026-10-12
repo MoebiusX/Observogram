@@ -69,14 +69,15 @@ function canonical(path) {
   try { return join(realpathSync(dirname(path)), basename(path)); } catch { return path; }
 }
 // The form ownFile compares in (server/store/paths.mjs): canonical's off Windows, the on-disk spelling,
-// case folded, on Windows, where a backup named C:\WS\observogram.db-wal is the database's own -wal.
+// case folded, on Windows, where a backup named C:\WS\observogram.db-wal — or, beside a database named
+// C:\ws\observogram.db, \\localhost\C$\ws\observogram.db-wal — is the database's own -wal.
 const compared = comparedPath(canonical);
 
 // '' when path is the database file, its suffix when it is the database's
 // -wal/-shm/-journal (the next open deletes one it finds stale), else null.
 function ownFile(dbFile, path) {
   const db = compared(dbFile);
-  const p = compared(path);
+  const p = compared(path, dbFile);
   return ['', '-wal', '-shm', '-journal'].find((s) => p === `${db}${s}`) ?? null;
 }
 
