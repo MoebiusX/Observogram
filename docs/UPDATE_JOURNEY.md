@@ -1352,8 +1352,16 @@ workspace named `\\myhost\ws`, purge-org deleted beta's users file recorded as
 `\\localhost\C$\ws\exports` was written into it. When a path and the one it
 is checked against resolve under different roots, the path is now placed by
 its nearest directory with the file id of the other or of one of its
-ancestors, as the journey scope places one; a share of another directory or
-another host is still an ordinary target. Each of the two suites also runs
-its default host once on a real directory, so a Windows run fails if the
-platform's rule is not the one chosen. Tests: 1400 → 1410
-(`server/test-store-paths.mjs` 10, new).
+ancestors, as the journey scope places one. A share of a directory inside the
+workspace or under the purged root (`\\myhost\exports` for `C:\ws\exports`)
+names none of their directories, so no file id places a path through it: an
+export to `\\myhost\exports\new` was written into the workspace, and
+purge-org deleted a users file recorded through `\\myhost\betasub`. On their
+volume such a path is now refused, naming the way out — its path on a local
+drive (for purge-org, deleting the root by hand once it is known not to hold
+the users file) — and so is a share of a directory outside them on that
+volume, which no file id tells apart (a declared false refusal); a share on
+another volume or another host is still an ordinary target. Each of the two
+suites also runs its default host once on a real directory, so a Windows run
+fails if the platform's rule is not the one chosen. Tests: 1400 → 1411
+(`server/test-store-paths.mjs` 11, new).

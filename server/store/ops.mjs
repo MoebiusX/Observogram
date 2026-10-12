@@ -415,6 +415,11 @@ function exportDirectory(target, base) {
     into = resolve(dirname(into), readlinkSync(into));
   }
   const t = compared(into, base);
+  if (t === null) {   // Windows: through a share on the workspace's volume that file ids cannot place (store/paths.mjs)
+    throw refuse(`${named(into)} is not a path on a local drive, and a network share on the volume that holds the workspace ${base} `
+      + 'may lead inside it — a directory export there could write files without the in-place steps. Nothing was changed. '
+      + 'Name the directory by its path on a local drive');
+  }
   const b = compared(base);
   const inside = t.startsWith(b + sep);
   if (t === b || inside || b.startsWith(t.endsWith(sep) ? t : t + sep)) {
@@ -503,6 +508,12 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
         // export would record that directory's files as this store's legacy files.
         await assertNoOtherStore(base, path, id);   // the more specific refusal first: it names the other store
         const own = compared(path, base);
+        if (own === null) {   // Windows: through a share on the workspace's volume that file ids cannot place (store/paths.mjs)
+          throw refuse(`${mp} is missing and ${path} is not a path on a local drive: through a network share on the volume that holds `
+            + `${base} it may or may not lie in the workspace, so ${base} is not known to be store ${id}'s. Nothing was changed. Set `
+            + 'OBSERVOGRAM_DB to the database\'s path on a local drive, then run the export again; otherwise choose an empty or new '
+            + 'directory for a directory export');
+        }
         const b = compared(base);
         if (!own.startsWith(b + sep)) {
           throw refuse(`${mp} is missing and ${path} lives outside ${base}: the workspace ${base} is not known to be store ${id}'s. `
@@ -792,7 +803,13 @@ export async function purgeOrg(id, { dbPath = resolveDbPath(), base = baseWorksp
       present = true;
     }
     const usersFile = getMeta(db, 'users_file');
-    if (usersFile && isAbsolute(usersFile) && present && compared(usersFile, root).startsWith(compared(root) + sep)) {
+    const users = usersFile && isAbsolute(usersFile) && present ? compared(usersFile, root) : undefined;
+    if (users === null) {   // Windows: through a share on the root's volume that file ids cannot place (store/paths.mjs)
+      throw refuse(`the recorded users file ${usersFile} is not a path on a local drive, and a network share on the volume that holds `
+        + `${root} may lead under it — nothing was deleted. If it does not lie under ${root}, delete ${root} by hand, then run `
+        + `purge-org again: it drops org ${id}'s records`);
+    }
+    if (users?.startsWith(compared(root) + sep)) {
       throw refuse(`the recorded users file ${usersFile} lies under ${root} — move it out first; nothing was deleted`);
     }
     const underRoot = (k) => !isAbsolute(k) && slashed(k).startsWith(`${rel}/`);

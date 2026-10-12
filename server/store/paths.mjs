@@ -7,8 +7,9 @@
 //
 // comparedPath(own) → compared(p, beside), the function a check compares
 // through: p's form, placed beside the path it is checked against when one
-// is given. Off Windows it is `own`, the calling module's realpath form (which
-// takes p alone), so Linux and macOS compare exactly as before. On Windows a
+// is given (on Windows, null instead when p, reached through a share, may lie
+// inside it: below). Off Windows it is `own`, the calling module's realpath
+// form (which takes p alone), so Linux and macOS compare exactly as before. On Windows a
 // spelling does not name a path: NTFS names are case-insensitive and a
 // directory has a short (8.3) name beside its long one, so C:\ws, c:/WS and
 // C:\WS~1 are one directory, and JS realpathSync keeps whichever the caller
@@ -25,8 +26,17 @@
 // differ), p is placed by the nearest of itself and its directories that is
 // that path or one of its directories — the same file id on the same volume
 // (statSync, with the volume serial's low 32 bits: all a share reports) —
-// and spelled from there. A share of another directory, or of another host, shares no
-// directory with it and stays an ordinary target. The twin of this rule is
+// and spelled from there. A path reached through a share that this cannot
+// place may still lie inside that path: a share of a directory below it
+// (\\myhost\exports, which is C:\ws\exports, beside C:\ws) names none of its
+// directories. So on that path's volume such a path answers null — it may lie
+// inside — and the export, purge-org and no-marker checks refuse it, naming
+// the way out (its path on a local drive), even when it lies outside (a share
+// of C:\out, which no file id tells apart); one through a share on another
+// volume or of another host (or one that cannot be reached) stays an ordinary
+// target. A check for equality takes null as unequal: a path it cannot place
+// is never the workspace (the in-place detection), the database (the scan for
+// another store) or one of its own files (backup.mjs). The twin of this rule is
 // crawlScopeRefusal's placement, which places only a local path while the
 // workspace is named through a share (it refuses any other path off a local
 // drive). That form only compares: every message, record and return value
@@ -53,13 +63,16 @@ export function comparedPath(own, { windows = ON_WINDOWS, path = nodePath, realp
     return folded.endsWith('\\') ? folded.slice(0, -1) : folded;   // a root too, so <form> + \ prefixes what lies under it
   };
   const root = (native) => form(path.parse(native).root);
-  const fileId = (p) => {
-    try { const st = fsStat(p, { bigint: true }); return `${st.dev & 0xffffffffn}:${st.ino}`; } catch { return null; }
-  };
+  const stat = (p) => { try { return fsStat(p, { bigint: true }); } catch { return null; } };
+  const fileId = (p) => { const st = stat(p); return st && `${st.dev & 0xffffffffn}:${st.ino}`; };
   const lineage = (native) => {   // native and its ancestors, nearest first
     const dirs = [native];
     while (path.dirname(dirs.at(-1)) !== dirs.at(-1)) dirs.push(path.dirname(dirs.at(-1)));
     return dirs;
+  };
+  const volume = (native) => {   // the volume serial's low 32 bits of native's nearest path that exists, or null
+    for (const dir of lineage(native)) { const st = stat(dir); if (st) return st.dev & 0xffffffffn; }
+    return null;
   };
   return (p, beside) => {
     const native = real(path.resolve(p));
@@ -75,6 +88,8 @@ export function comparedPath(own, { windows = ON_WINDOWS, path = nodePath, realp
       const same = theirs.get(fileId(dir));
       if (same) return form(path.join(same, native.slice(dir.length)));
     }
+    // Not placed: through a share on beside's volume, p may lie inside it (above).
+    if (root(native).startsWith('\\\\') && volume(native) !== null && volume(native) === volume(other)) return null;
     return form(native);
   };
 }
