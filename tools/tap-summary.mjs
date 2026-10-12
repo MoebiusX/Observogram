@@ -25,7 +25,7 @@
 // or npm's, node's or a shell's refusal) with a block of its own: what it
 // holds, an ::error and the notice. It reads the file and README.md and
 // probes whether this host can create a symlink; it runs nothing.
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { arch, availableParallelism, release, tmpdir } from 'node:os';
 import path, { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -620,6 +620,19 @@ function hostLine() {
   return `host: ${process.platform} ${release()} ${arch()} · node ${process.version} · ${availableParallelism()} cpus · cwd ${process.cwd()} · tmpdir ${tmpdir()} · symlink: ${symlinkProbe()}`;
 }
 
+/** The checkout this script is in: the README beside its tools/. */
+const CHECKOUT_README = fileURLToPath(new URL('../README.md', import.meta.url));
+
+/** One file under two spellings (a short name, a drive letter's case, a symlink). */
+function sameFile(a, b) {
+  try {
+    const [x, y] = [statSync(a, { bigint: true }), statSync(b, { bigint: true })];
+    return x.dev === y.dev && x.ino === y.ino;
+  } catch {
+    return false;
+  }
+}
+
 function readInput(file) {
   try {
     return { bytes: readFileSync(file) };
@@ -703,17 +716,26 @@ function main(argv, { out = (s) => process.stdout.write(`${s}\n`), err = (s) => 
   if (expect === 'readme') {
     // The README in the working directory: a missing or unreadable one is
     // its own refusal, never "states no" about a file this run did not read.
+    const readmePath = resolve('README.md');
     let readme;
     try {
-      readme = readFileSync(resolve('README.md'), 'utf8');
+      readme = readFileSync(readmePath, 'utf8');
     } catch (e) {
       err(e.code === 'ENOENT'
         ? `tap-summary: no README.md in ${process.cwd()} — --win32-skips readme reads the README in the working directory: run it from the checkout's root, or pass the number README "Platforms" states (--win32-skips <n>)`
-        : `tap-summary: cannot read ${resolve('README.md')}: ${e.code || e.message} — pass the number README "Platforms" states (--win32-skips <n>)`);
+        : `tap-summary: cannot read ${readmePath}: ${e.code || e.message} — pass the number README "Platforms" states (--win32-skips <n>)`);
       return 2;
     }
     const n = readmeWin32Lines(readme);
-    if (n === null) { err('tap-summary: README.md "Platforms" states no "<N> `SKIP win32:` lines" — the count this check holds the run to'); return 2; }
+    if (n === null) {
+      // It names the README it read. Any but the checkout's own (a
+      // subdirectory's README.md, a fork's) points to the checkout's root;
+      // the checkout's own lacks the sentence, so stating it is the way out.
+      err(sameFile(readmePath, CHECKOUT_README)
+        ? `tap-summary: ${readmePath} "Platforms" states no "<N> \`SKIP win32:\` lines" — the count this check holds the run to: state it in "Platforms" above its first code fence, or pass the number of \`SKIP win32:\` lines the run should print (--win32-skips <n>)`
+        : `tap-summary: ${readmePath} "Platforms" states no "<N> \`SKIP win32:\` lines" — --win32-skips readme reads the README in the working directory: run it from the checkout's root, or pass the number README "Platforms" states (--win32-skips <n>)`);
+      return 2;
+    }
     expectWin32 = n;
     countSource = 'README';
   } else if (expect !== null) {

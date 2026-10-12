@@ -14,9 +14,9 @@ import test from 'node:test';
 import { tap } from 'node:test/reporters';
 import strictAssert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, posix, resolve, sep, win32 } from 'node:path';
+import { basename, dirname, join, posix, resolve, sep, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   KNOWN_SKIPS, README_WIN32_LINES_RE, annotation, compareShapes, decodeTap, isExpectedSkip, logLines, parseTap,
@@ -653,8 +653,42 @@ test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README 
     const unreadable = run([green, '--win32-skips', 'readme'], away);
     assert.equal(unreadable.status, 2, unreadable.stdout + unreadable.stderr);
     assert.match(unreadable.stderr, /^tap-summary: cannot read .*elsewhere.README\.md: E[A-Z]+ — pass the number README "Platforms" states \(--win32-skips <n>\)$/m, unreadable.stderr);
+    // A README without the sentence: the refusal names the README it read and
+    // a way out that works when followed literally — away from the checkout's
+    // root, the root; from the root, the sentence its README lacks.
+    const toRoot = ` — --win32-skips readme reads the README in the working directory: run it from the checkout's root, or pass the number README "Platforms" states (--win32-skips <n>)`;
+    const statesNo = (readmePath) => `tap-summary: ${readmePath} "Platforms" states no "<N> \`SKIP win32:\` lines"`;
     f('README.md', '# A fork\n\n### Platforms\n\nWindows is untested.\n');
-    usage([green, '--win32-skips', 'readme'], 'README.md "Platforms" states no "<N> `SKIP win32:` lines" — the count this check holds the run to', dir);
+    usage([green, '--win32-skips', 'readme'], `${sep}${basename(dir)}${sep}README.md "Platforms" states no "<N> \`SKIP win32:\` lines"${toRoot}`, dir);
+    // A checkout of its own (this CLI in its tools/), whose subdirectory has a
+    // README.md of its own and whose root's README can lack the sentence; its
+    // paths are the real ones, as node names the script it runs.
+    const co = join(realpathSync.native(dir), 'co');
+    mkdirSync(join(co, 'tools'), { recursive: true });
+    mkdirSync(join(co, 'docs'));
+    writeFileSync(join(co, 'tools', 'tap-summary.mjs'), readFileSync(CLI));
+    writeFileSync(join(co, 'docs', 'README.md'), '# The docs\n\nAn index.\n');
+    const win = f('green-win.tap', GREEN_WIN);
+    const inCo = (cwd, count = 'readme') => spawnSync(process.execPath, [join(co, 'tools', 'tap-summary.mjs'), win, '--win32-skips', count], { cwd, encoding: 'utf8' });
+    const platforms = (above, below = '') => writeFileSync(join(co, 'README.md'), `# Observogram\n\n### Platforms\n\n${above}\n\n\`\`\`bash\nnpm test\n\`\`\`\n${below}`);
+    const lines3 = parseTap(GREEN_WIN).win32;
+    const sentence = `A run prints ${lines3} \`SKIP win32:\` lines.`;
+    platforms(sentence);
+    const fromSub = inCo(join(co, 'docs'));
+    assert.equal(fromSub.status, 2, fromSub.stdout + fromSub.stderr);
+    assert.equal(fromSub.stderr, `${statesNo(join(co, 'docs', 'README.md'))}${toRoot}\n`, 'a subdirectory\'s README.md, named, and the way to the root');
+    assert.equal(fromSub.stdout, '');
+    // Followed literally, either way out holds the run to the root's count.
+    for (const [r, held] of [[inCo(co), 'README states'], [inCo(join(co, 'docs'), String(lines3)), 'expected']]) {
+      assert.equal(r.status, 0, `${held}: ${r.stdout}${r.stderr}`);
+      assert.ok(r.stdout.includes(`\nSKIP win32: lines: ${lines3}, ${held} ${lines3} — as stated\n`), r.stdout);
+    }
+    platforms('Windows is untested.', `\n${sentence}\n`);   // after the fence: not the section
+    const fromRoot = inCo(co);
+    assert.equal(fromRoot.status, 2, fromRoot.stdout + fromRoot.stderr);
+    assert.equal(fromRoot.stderr, `${statesNo(join(co, 'README.md'))} — the count this check holds the run to: state it in "Platforms" above its first code fence, or pass the number of \`SKIP win32:\` lines the run should print (--win32-skips <n>)\n`, 'from the root, the root is no way out');
+    platforms(sentence);
+    assert.equal(inCo(co).status, 0, 'the sentence above the fence is the way out');
     usage(['--compare', join(dir, 'shape.json')], '--compare needs the reference shape and at least one run');
     usage(['--compare', join(dir, 'shape.json'), join(dir, 'nope.json')], `no such file: ${join(dir, 'nope.json')}`);
     const spec = f('spec.tap', '✔ a (1.2ms)\n﹣ b (0.1ms) # a reason\nℹ tests 2\nℹ pass 1\n');
