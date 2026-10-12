@@ -73,7 +73,7 @@ import {
   buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus,
   buildMemberAddBody, memberSaveStatus, orgRenameStatus, lastAdmin, leftOrgText,
   buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
-  mcpTargetModel, mcpTargetBody, mcpTargetMissingText, mcpRegisterCheck, profileEndpointNote, endpointDrift,
+  mcpTargetModel, mcpTargetBody, mcpTargetMissingText, rollbackTargetMissingText, mcpRegisterCheck, profileEndpointNote, endpointDrift,
   buildUsersSectionModel, buildUserCreateBody, userCreateStatus, userActionStatus, temporaryPassword,
   activeOrgChoice, isActingOrg, orgChipEntries, orgChipLabel, actingRecovery,
   buildOrgsSectionModel, buildOrgCreateBody, orgCreateStatus, orgRemoveStatus, buildJoinRoleSectionModel, joinRoleBody, joinRoleStatus,
@@ -6833,7 +6833,7 @@ async function loadDeployHistory(packId) {
 // server's sentence (C-1); a result where every restore failed (a 502 with
 // its summary) still reads as a result.
 async function doRollback(deployId, packId, btn) {
-  if (!deployTargetBody()) { toast(`${mcpTargetMissing('deploy').replace(/^./, (c) => c.toUpperCase())} in the target form first`, 'error'); return; }
+  if (!deployTargetBody()) { toast(rollbackTargetMissingText(mcpTargetMissing('deploy')), 'error'); return; }
   const moved = await checkEndpointDrift('deploy');
   if (moved) { toast(moved, 'error'); return; }
   if (!confirm(`Roll back ${deployId}?\n\nRestorable artefacts are re-upserted from the pre-deploy snapshot. Anything this deploy created is listed for manual removal.`)) return;

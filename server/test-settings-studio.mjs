@@ -398,7 +398,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     } finally { await ctx.close(); }
   });
 
-  await t.test('ada (admin): New MCP endpoint gw — created; a credential in the URL and another org\'s variable are the server\'s sentences as served; the MCP panel\'s next opening after a failed read of the list says it is checking until that read answers, and leaves Settings\' list — the panel opened once or twice meanwhile, or the home\'s first read held at load: Edit gw opens while it reads and after it fails; a failed read of the list in the deploy modal draws none — her Type a URL… is never replaced by gw, and Go sends nothing', async () => {
+  await t.test('ada (admin): New MCP endpoint gw — created; a credential in the URL and another org\'s variable are the server\'s sentences as served; the MCP panel\'s next opening after a failed read of the list says it is checking until that read answers, and leaves Settings\' list — the panel opened once or twice meanwhile, or the home\'s first read held at load: Edit gw opens while it reads and after it fails; a failed read of the list in the deploy modal draws none — her Type a URL… is never replaced by gw, Go sends nothing, and neither does roll back, its toast one sentence', async () => {
     const { page, ctx } = await open(child.base, 'ada');
     try {
       await toSettings(page);
@@ -526,13 +526,19 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     // ada chooses Type a URL… in the deploy modal and types one; its next
     // opening's read fails — the picker draws no list (with no typed URL
     // allowed, gw would be preselected over her choice) and Go sends
-    // nothing, saying the list could not be read; opened again with the
-    // read answering, her Type a URL… and her URL are back.
+    // nothing, saying the list could not be read; the history's roll back
+    // sends nothing either, its toast what roll back needs and that line,
+    // one sentence; opened again with the read answering, her Type a URL…
+    // and her URL are back.
     const flip = await open(child.base, 'ada');
     try {
       const fp = flip.page;
       await fp.route('**/api/packs/*/deploy-bulk*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, deployId: 'dep_flip', dryRun: false, tookMs: 3, results: [], summary: { total: 0, ok: 0, failed: 0 } }) }));
       const deploys = posts(fp, /\/api\/packs\/[^/]+\/deploy-bulk/);
+      await fp.route('**/api/deploys?pack=*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ deploys: [{ deployId: 'dep_flip_prev', at: '2026-10-06T10:00:00Z', target: { product: 'grafana', version: '12' }, summary: { total: 1, ok: 1, failed: 0 }, snapshot: { status: 'captured' } }] }) }));
+      await fp.route('**/api/deploys/*/rollback', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, summary: { total: 1, ok: 1, failed: 0 }, results: [], manual: [] }) }));
+      const rollbacks = posts(fp, /\/api\/deploys\/[^/]+\/rollback/);
+      fp.on('dialog', (d) => d.accept());   // a roll back that would send is confirmed, so it is counted
       const TYPED = 'https://mcp.acme.test/typed-by-ada';
       await fp.waitForSelector('[data-mcp-target="home"] select.set-mcp-target', { state: 'attached', timeout: T });
       const openModal = () => fp.evaluate(async (id) => { const { host } = await import('/host.mjs'); host.openDeployModal({ packId: id }); }, packId);
@@ -557,6 +563,11 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await fp.waitForFunction(() => /could not be read|deployed/.test(document.getElementById('deploy-modal-status')?.textContent || ''), null, { timeout: T });
       assert.equal(deploys.length, 0, 'Go sent nothing: no deploy to an endpoint she did not choose');
       assert.equal(await text(fp, '#deploy-modal-status'), "Acme's MCP endpoints could not be read just now — reopen this to try again");
+      await fp.evaluate(() => { const el = document.getElementById('toast'); el.hidden = true; el.textContent = ''; });
+      await fp.click('.deploy-hist-rollback');
+      await fp.waitForFunction(() => { const el = document.getElementById('toast'); return !el.hidden && el.textContent !== ''; }, null, { timeout: T });
+      assert.equal(await text(fp, '#toast'), "Roll back needs an MCP target in the form above: Acme's MCP endpoints could not be read just now — reopen this to try again.", 'one sentence, never "… try again in the target form first"');
+      assert.equal(rollbacks.length, 0, 'roll back sent nothing either');
       await closeModal();
       await openModal();
       await fp.waitForFunction(() => [...document.querySelectorAll('#deploy-modal:not([hidden]) [data-mcp-target="deploy"] option')].some((o) => o.value === ''), null, { timeout: T });
@@ -565,6 +576,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       assert.equal(await fp.evaluate(() => document.getElementById('deploy-target-mcp').value), TYPED, 'and her URL');
       await closeModal();
       assert.equal(deploys.length, 0);
+      assert.equal(rollbacks.length, 0);
     } finally { await flip.ctx.close(); }
   });
 

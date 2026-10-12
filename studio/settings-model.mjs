@@ -1418,6 +1418,14 @@ export function mcpTargetMissingText({ typedAllowed = true, orgName = null, empt
   return `no MCP endpoint is registered in ${org} yet — an admin registers them in Settings → MCP endpoints`;
 }
 
+// The deploy history's roll back toast when the deploy modal's picker has
+// nothing to send (studio/app.mjs doRollback): what roll back needs, then
+// the picker's own line (mcpTargetMissingText) as it reads — several end in
+// their own instruction, so nothing is appended after it.
+export function rollbackTargetMissingText(missing) {
+  return `Roll back needs an MCP target in the form above: ${missing}.`;
+}
+
 const LOOPBACK_V4 = /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
 const LOOPBACK_MAPPED = /^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/;
 

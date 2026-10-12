@@ -18,7 +18,7 @@ import {
   buildSettingsEditorModel, buildEnvironmentPatch, buildEnvironmentCreate, buildEndpointPatch, buildEndpointCreate, buildMemberAddBody, leftOrgText,
   parseKeyValueLines, environmentSaveStatus, endpointSaveStatus, memberSaveStatus, orgRenameStatus, endpointDeleteStatus,
   lastAdmin, orgEnvPrefix, mcpTargetModel, mcpTargetBody, mcpPickerCanAdmin, profileEndpointNote, endpointDrift,
-  mcpTargetMissingText, mcpRegisterCheck,
+  mcpTargetMissingText, rollbackTargetMissingText, mcpRegisterCheck,
   noOwnerText, PASSWORD_ALPHABET, temporaryPassword, signInModeLine, userSignIn, buildUsersSectionModel, userActions, userActionStatus,
   buildUserCreateBody, userCreateStatus,
   activeOrgChoice, isActingOrg, orgChipEntries, orgChipLabel, actingRecovery,
@@ -1250,7 +1250,7 @@ test('mcpTargetModel with typed { allowed: false } (R4): list-only — no "Type 
   assert.equal(mcpTargetModel({ endpoints: null, typed: closed }).showUrl, false, 'closed when unknown: no URL row');
 });
 
-test('mcpTargetMissingText: the typed URL named only for a reader who may type one; with no endpoint and no sign-in, the server\'s own sentence; a failed policy read said as one', () => {
+test('mcpTargetMissingText: the typed URL named only for a reader who may type one; with no endpoint and no sign-in, the server\'s own sentence; a failed policy read said as one; the roll back toast one sentence over each line', () => {
   assert.equal(mcpTargetMissingText(), 'choose an MCP endpoint or type a URL');
   assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme' }), "choose one of Acme's MCP endpoints");
   assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty: true }), 'no MCP endpoint is registered in Acme yet — an admin registers them in Settings → MCP endpoints');
@@ -1271,6 +1271,33 @@ test('mcpTargetMissingText: the typed URL named only for a reader who may type o
     // read is said, as the picker's hint says it — never "choose one".
     assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', posture, unreadable: true }),
       "Acme's MCP endpoints could not be read just now — reopen this to try again", `${posture}: no list drawn — the failed read said`);
+  }
+  // The deploy history's roll back toast (studio/app.mjs doRollback) over
+  // each line the picker's status says: what roll back needs, then that
+  // line as it reads, one sentence — never "… reopen this to try again in
+  // the target form first", nor "… register one in Settings → MCP
+  // endpoints in the target form first".
+  assert.equal(rollbackTargetMissingText(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', unreadable: true })),
+    "Roll back needs an MCP target in the form above: Acme's MCP endpoints could not be read just now — reopen this to try again.");
+  assert.equal(rollbackTargetMissingText(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme' })),
+    "Roll back needs an MCP target in the form above: choose one of Acme's MCP endpoints.");
+  assert.equal(rollbackTargetMissingText(mcpTargetMissingText()),
+    'Roll back needs an MCP target in the form above: choose an MCP endpoint or type a URL.');
+  assert.equal(rollbackTargetMissingText(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty: true, canRegister: true })),
+    'Roll back needs an MCP target in the form above: no MCP endpoint is registered in Acme yet — register one in Settings → MCP endpoints.');
+  const lines = [{}, { posture: 'static' }];
+  for (const posture of ['token', 'open', 'identity', null]) {
+    for (const base of [{ typedAllowed: false, orgName: 'Acme', posture }, { typedAllowed: false, posture }]) {
+      lines.push(base, { ...base, unreadable: true }, { ...base, empty: true }, { ...base, empty: true, unreadable: true },
+        { ...base, empty: true, canRegister: true }, { ...base, empty: true, registerWhy: WHY });
+    }
+  }
+  for (const input of lines) {
+    const line = mcpTargetMissingText(input);
+    const toast = rollbackTargetMissingText(line);
+    assert.equal(toast, `Roll back needs an MCP target in the form above: ${line}.`, JSON.stringify(input));
+    assert.match(toast, /^Roll back needs an MCP target in the form above: [^.]+\.$/, `${JSON.stringify(input)}: one sentence`);
+    assert.doesNotMatch(toast, /in the target form first/, `${JSON.stringify(input)}: nothing appended after the line's own instruction`);
   }
 });
 
