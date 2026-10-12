@@ -1333,11 +1333,6 @@ export function mcpPickerCanAdmin({ access = null, probe = null, orgId = null } 
 // The empty list's line without sign-in when the server named no way in:
 // none is named.
 const NO_REGISTER_WHY = { token: 'registering one needs a signed-in admin', open: 'registering one is not open to you here' };
-// The empty list's line when the policy's read failed (the list read without
-// it — Settings, an environment's editor): what the server would say is
-// unknown, so no refusal is said — the picker's opening (the home: its next
-// drawing) reads it again.
-const POLICY_UNREAD = 'and whether you may register one could not be read just now — reopen this to try again';
 
 // `endpoints` is state.mcpEndpoints (null: not read or failed → typed only;
 // [] → none registered); `remembered` the remembered endpoint id for this
@@ -1360,9 +1355,10 @@ const POLICY_UNREAD = 'and whether you may register one could not be read just n
 // runs in (bound off the loopback, a request not sent straight to it,
 // OBSERVOGRAM_AUTH=off) — and, when it named none, no way in at all; signed
 // in, an admin registers them. `unreadable`: the policy's read failed — the
-// list unread with it is said, since nothing else can be sent; an empty list
-// read without it says the policy could not be read, never a refusal the
-// server did not make.
+// pickers draw no list beside it (studio/app.mjs mcpPickerEndpoints), so a
+// reader refused a typed URL is told the list could not be read, since
+// nothing else can be sent: never an empty list's refusal the server did not
+// make.
 export function mcpTargetModel({ endpoints = null, remembered = null, liveUrl = null, typedUrl = '', purpose = 'read', orgName = null, canAdmin = false, chosen = null, typed = { allowed: true }, posture = null, registerWhy = null, unreadable = false } = {}) {
   const typedAllowed = typed?.allowed !== false;
   const list = isArr(endpoints) ? endpoints : [];
@@ -1388,14 +1384,13 @@ export function mcpTargetModel({ endpoints = null, remembered = null, liveUrl = 
   }
   const org = orgName || ORG_FALLBACK;
   let hint = null;
-  if (isArr(endpoints) && !endpoints.length) {
+  if (!typedAllowed && unreadable) {
+    hint = { text: `${org}'s MCP endpoints could not be read just now — reopen this to try again.`, button: null };
+  } else if (isArr(endpoints) && !endpoints.length) {
     if (canAdmin) hint = { text: `No MCP endpoint is registered in ${org} yet.`, button: 'Settings → MCP endpoints' };
     else if (typedAllowed) hint = { text: `No MCP endpoint is registered in ${org} yet — an admin registers them.`, button: null };
-    else if (unreadable) hint = { text: `No MCP endpoint is registered in ${org} yet, ${POLICY_UNREAD}.`, button: null };
     else if (posture === 'token' || posture === 'open') hint = { text: `No MCP endpoint is registered in ${org} yet — ${registerWhy || NO_REGISTER_WHY[posture]}.`, button: null };
     else hint = { text: `No MCP endpoint is registered in ${org} yet — an admin registers them in Settings → MCP endpoints.`, button: null };
-  } else if (!typedAllowed && unreadable) {
-    hint = { text: `${org}'s MCP endpoints could not be read just now — reopen this to try again.`, button: null };
   }
   return { show: list.length > 0, options, value, showUrl: typedAllowed && picked === null, authHelp, hint };
 }
@@ -1405,15 +1400,14 @@ export function mcpTargetModel({ endpoints = null, remembered = null, liveUrl = 
 // this reader (`canRegister`: the server says it may register one) — without
 // sign-in (`posture` 'token' or 'open') the server's own sentence,
 // `registerWhy`, as the empty list's hint says it (mcpTargetModel); the
-// policy's read failed (`unreadable`), that it could not be read — with no
-// empty list known, that the list could not be read, as the picker's hint
-// says it: nothing is drawn to choose from.
+// policy's read failed (`unreadable`), that the list could not be read, as
+// the picker's hint says it: no list is drawn beside it to choose from.
 export function mcpTargetMissingText({ typedAllowed = true, orgName = null, empty = false, canRegister = false, posture = null, registerWhy = null, unreadable = false } = {}) {
   if (typedAllowed) return 'choose an MCP endpoint or type a URL';
   const org = orgName || ORG_FALLBACK;
-  if (!empty) return unreadable ? `${org}'s MCP endpoints could not be read just now — reopen this to try again` : `choose one of ${org}'s MCP endpoints`;
+  if (unreadable) return `${org}'s MCP endpoints could not be read just now — reopen this to try again`;
+  if (!empty) return `choose one of ${org}'s MCP endpoints`;
   if (canRegister) return `no MCP endpoint is registered in ${org} yet — register one in Settings → MCP endpoints`;
-  if (unreadable) return `no MCP endpoint is registered in ${org} yet, ${POLICY_UNREAD}`;
   if (posture === 'token' || posture === 'open') return `no MCP endpoint is registered in ${org} yet — ${registerWhy || NO_REGISTER_WHY[posture]}`;
   return `no MCP endpoint is registered in ${org} yet — an admin registers them in Settings → MCP endpoints`;
 }
