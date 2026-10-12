@@ -1432,8 +1432,11 @@ posted its value every time it notified.
    the CronJob runs included:
    `grep -nE 'urlEnv|authEnv' <workspace>/journeys/*.journey.yaml <workspace>/orgs/*/journeys/*.journey.yaml`
    (`npm run orgs -- list` prints each org's root: `.` is `<workspace>`
-   itself, `orgs/<id>` is `<workspace>/orgs/<id>`). Any name other than that
-   org's `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` / `_TOKEN` needs steps 4–8; a
+   itself, `orgs/<id>` is `<workspace>/orgs/<id>`). It also lists an
+   `authEnv` under `packB:` — Pack B's MCP token (`packB.mcp.authEnv`),
+   which a server run never reads: that name is outside this rule. Any
+   `notify` name other than that org's
+   `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` / `_TOKEN` needs steps 4–8; a
    name of the server's own (`OBSERVOGRAM_API_TOKEN`,
    `OBSERVOGRAM_SESSION_SECRET`, …), another org's
    (`OBSERVOGRAM_ORG_<other>_*`) or the platform's (`GITHUB_TOKEN`, a cloud
@@ -1481,6 +1484,9 @@ posted its value every time it notified.
    /api/journeys/<name>/schedule`), then remove the old variables from the
    studio's environment and the CronJob's Secret.
 9. **Check:** "Run now". It answers the verdict, or 400 naming what to fix.
+   Without sign-in it answers 403 `posture` unless the request goes straight
+   to a loopback address of a server bound to loopback; that sentence names
+   what to change (17.1, "A run").
 
 ### 17.3 The CLI
 

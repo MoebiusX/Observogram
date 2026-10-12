@@ -702,6 +702,11 @@ function plant(ws, org, name, { packA = `{ file: ${PAY_FILE} }`, packB = `{ file
   ].join('\n') + '\n');
 }
 const hasRecord = (ws, org, name) => existsSync(join(orgRoot(ws, org), 'runs', name));
+// docs/DOWNSTREAM.md §17.2's step n, its lines joined: the migration a downstream follows literally.
+const migrationStep = (n) => {
+  const steps = readFileSync(new URL('../docs/DOWNSTREAM.md', import.meta.url), 'utf8').match(/^### 17\.2 [^\n]*\n([\s\S]*?)^### /m)[1];
+  return steps.match(new RegExp(`^${n}\\. ([\\s\\S]*?)(?=^\\d+\\. |(?![\\s\\S]))`, 'm'))[1].replace(/\s+/g, ' ').trim();
+};
 // capture's own shape check first (journey-notify's validateNotify), then the hook rule.
 const validateText = (notify, name) => { try { validateNotify(notify, name); return null; } catch (e) { return e.message; } };
 
@@ -1006,6 +1011,14 @@ test('H9 the server never reads packB.mcp.authEnv: a journey whose Pack B names 
     assert.ok(fake.authHeaders.length > 0, 'the MCP was asked');
     assert.deepEqual([...new Set(fake.authHeaders)], [null], 'never an Authorization');
     SEEN.mcpAuth.push(...fake.authHeaders);
+    // DOWNSTREAM §17.2 step 1's grep, run over this file, lists its packB line: the step says that name is Pack B's
+    // own, which a server run never reads — never that it needs a hook (steps 4–8) or a rotation (step 2).
+    const step1 = migrationStep(1);
+    const grep = new RegExp(step1.match(/`grep -nE '([^']+)'/)[1]);
+    const file = readFileSync(join(orgRoot(A.ws, 'acme'), 'journeys', 'h9-mcp.journey.yaml'), 'utf8');
+    assert.deepEqual(file.split('\n').filter((l) => grep.test(l)).map((l) => l.split(':')[0]), ['packB'], 'step 1 lists the Pack B line');
+    assert.match(step1, /`packB\.mcp\.authEnv`[^.]*a server run never reads[^.]*outside this rule/, step1);
+    assert.match(step1, /Any `notify` name other than/, step1);
   } finally {
     await fake.close();
   }
@@ -1056,6 +1069,8 @@ test('H11 without sign-in a journey that notifies runs only from a direct loopba
   }]);
   assert.equal(B.rx.oncall.hits.length, 0);
   assert.equal(hasRecord(B.ws, 'default', 'h11-direct'), false);
+  // DOWNSTREAM §17.2 step 9, the migration's check, names this answer too — not only the verdict or the 400.
+  assert.match(migrationStep(9), new RegExp(`\\b${r.status} \`${r.json.denied}\``), migrationStep(9));
   r = await run(B, 'h11-direct');
   assert.equal(r.status, 200, r.text);
   assert.deepEqual(B.rx.oncall.hits.map((h) => [h.path, h.authorization]), [['/default-oncall-path-marker', 'Bearer tok-default-oncall-marker']], 'a direct request posts');
