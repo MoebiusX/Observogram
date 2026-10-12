@@ -35,10 +35,11 @@ afterEach(() => { configureTaxonomy(null); });
 
 // ---------- purity ----------
 
-test('artefact-classify.mjs is zero-import, reads no node: module and no environment', () => {
+test('artefact-classify.mjs is zero-import, reads no node: module and no environment; its one runtime read is the id clocks\' guarded CPU time', () => {
   const src = read('./lib/artefact-classify.mjs');
   assert.ok(!/^\s*import\s/m.test(src), 'zero-import (vendored verbatim downstream)');
   assert.ok(!/from\s+'node:/.test(src) && !/\bprocess\./.test(src), 'no node: module, no process');
+  assert.deepEqual(src.match(/\bglobalThis\.process\b.*$/gm), ['globalThis.process?.cpuUsage?.();'], 'the CPU clock, read only where the runtime has one (a browser has no process)');
   assert.ok(!/\b(window|document|localStorage)\s*(?:\.\s*[A-Za-z_$]|\[)/.test(src), 'no DOM');
 });
 
@@ -244,23 +245,105 @@ test('compileBoundedPattern names the pattern by `noun` and leaves the rule itse
     ['taxonomy: ids[0]: pattern must be anchored (start with ^)', 'taxonomy: ids[1]: nested quantifier']);
 });
 
-test('compileBoundedPattern with timed: false skips only the wall-clock run', () => {
-  // The clock is stubbed: Date.now jumps past the 50 ms budget on every
-  // call, so any timed run reads as too slow.
-  const realNow = Date.now;
+// ---------- the id clocks ----------
+
+// A scripted id clock: each call answers the next { wall, cpu } reading (ms) and counts the reads.
+function scripted(...readings) {
+  const clock = () => { clock.reads++; return readings.shift(); };
+  clock.reads = 0;
+  return clock;
+}
+// A clock on which every pass reads a second, on both clocks.
+function alwaysSlow() {
   let t = 0;
-  Date.now = () => (t += 1000);
+  const clock = () => { clock.reads++; t += 1000; return { wall: t, cpu: t }; };
+  clock.reads = 0;
+  return clock;
+}
+const TOO_SLOW = `pattern too slow against a ${ID_MATCH_LENGTH}-character id`;
+
+test('compileBoundedPattern with timed: false skips only the id clocks', () => {
+  assert.equal(compileBoundedPattern('^svc-[a-z]+$', { clock: alwaysSlow() }).reason, TOO_SLOW);
+  assert.equal(compileBoundedPattern('^svc-[a-z]+$', { noun: 'when.pattern', clock: alwaysSlow() }).reason, `when.pattern too slow against a ${ID_MATCH_LENGTH}-character id`);
+  const clock = alwaysSlow();
+  const untimed = compileBoundedPattern('^svc-[a-z]+$', { timed: false, clock });
+  assert.ok(untimed.re instanceof RegExp);
+  assert.equal(clock.reads, 0, 'timed: false never reads the clock');
+  // …and every static check still runs.
+  assert.equal(compileBoundedPattern('svc-', { timed: false, clock }).reason, 'pattern must be anchored (start with ^)');
+  assert.equal(compileBoundedPattern('^(a+)+$', { timed: false, clock }).reason, 'nested quantifier');
+  assert.equal(compileBoundedPattern('^x', { timed: false, flags: 'g', clock }).reason, 'flags must be "" or "i"');
+});
+
+test('the id clocks hold the pattern\'s own work to the 50 ms budget: a stalled pass is not refused, a slow one is — the smaller of the wall clock and the CPU time, the wall clock alone without a CPU clock', () => {
+  const verdict = (t0, t1) => compileBoundedPattern('^svc-[a-z]+$', { clock: scripted(t0, t1) }).reason ?? 'compiled';
+  // The thread descheduled for a second mid-pass, the CPU time barely moving: not the pattern's work.
+  assert.equal(verdict({ wall: 0, cpu: 0 }, { wall: 1000, cpu: 0.2 }), 'compiled', 'a stalled first pass on a fast pattern is not refused');
+  // The process's other threads busy while the pass itself took a millisecond: not the pattern's work either.
+  assert.equal(verdict({ wall: 0, cpu: 0 }, { wall: 1, cpu: 900 }), 'compiled');
+  // Over the budget on both clocks: refused, with the text it always had. The budget is 50 ms, inclusive.
+  assert.equal(verdict({ wall: 0, cpu: 0 }, { wall: 51, cpu: 51 }), TOO_SLOW, 'a slow pattern is refused');
+  assert.equal(verdict({ wall: 0, cpu: 0 }, { wall: 50, cpu: 50 }), 'compiled');
+  assert.equal(verdict({ wall: 0, cpu: 0 }, { wall: 1000, cpu: 50.5 }), TOO_SLOW, 'stalled and slow: refused on its own work');
+  assert.equal(verdict({ wall: 100, cpu: 7 }, { wall: 1100, cpu: 57.5 }), TOO_SLOW, 'the readings are differenced');
+  // No CPU clock (a browser): the wall clock decides, as it always did.
+  assert.equal(verdict({ wall: 0, cpu: null }, { wall: 51, cpu: null }), TOO_SLOW);
+  assert.equal(verdict({ wall: 0, cpu: null }, { wall: 50, cpu: null }), 'compiled');
+  assert.equal(verdict({ wall: 0, cpu: 0 }, { wall: 51, cpu: null }), TOO_SLOW, 'a CPU time on one reading only is no CPU clock');
+  // One pass, timed once: a reading before it and one after.
+  const clock = scripted({ wall: 0, cpu: 0 }, { wall: 1000, cpu: 0.2 }, { wall: 0, cpu: 0 });
+  assert.ok(compileBoundedPattern('^svc-[a-z]+$', { clock }).re);
+  assert.equal(clock.reads, 2);
+});
+
+test('a catastrophic pattern runs one pass over the four adversarial ids and is refused on it — nothing re-runs it', () => {
+  // ~18 s on one 256-character 'a' id. Never executed here: RegExp.prototype.test answers for this one
+  // pattern and counts, while the clock says the pass took 18 s.
+  const CATASTROPHIC = '^.*a{0,60}a{0,60}a{0,60}a{0,60}b$';
+  const realTest = RegExp.prototype.test;
+  const runs = [];
+  RegExp.prototype.test = function test(s) {
+    if (this.source === CATASTROPHIC) { runs.push(s); return false; }
+    return realTest.call(this, s);
+  };
   try {
-    assert.equal(compileBoundedPattern('^svc-[a-z]+$').reason, `pattern too slow against a ${ID_MATCH_LENGTH}-character id`);
-    assert.equal(compileBoundedPattern('^svc-[a-z]+$', { noun: 'when.pattern' }).reason, `when.pattern too slow against a ${ID_MATCH_LENGTH}-character id`);
-    const untimed = compileBoundedPattern('^svc-[a-z]+$', { timed: false });
-    assert.ok(untimed.re instanceof RegExp, 'timed: false never reads the clock');
-    // …and every static check still runs.
-    assert.equal(compileBoundedPattern('svc-', { timed: false }).reason, 'pattern must be anchored (start with ^)');
-    assert.equal(compileBoundedPattern('^(a+)+$', { timed: false }).reason, 'nested quantifier');
-    assert.equal(compileBoundedPattern('^x', { timed: false, flags: 'g' }).reason, 'flags must be "" or "i"');
+    const clock = scripted({ wall: 0, cpu: 0 }, { wall: 18_000, cpu: 18_000 }, { wall: 18_000, cpu: 18_000 }, { wall: 36_000, cpu: 36_000 });
+    assert.equal(compileBoundedPattern(CATASTROPHIC, { clock }).reason, TOO_SLOW, 'the static checks admit it; the clocks refuse it');
+    assert.equal(clock.reads, 2, 'timed once');
+    assert.deepEqual(runs, ['a'.repeat(ID_MATCH_LENGTH), 'ab'.repeat(ID_MATCH_LENGTH / 2), '-'.repeat(ID_MATCH_LENGTH), `${'x'.repeat(ID_MATCH_LENGTH - 1)}!`],
+      'run once on each of the four adversarial ids, which are the ones they always were');
   } finally {
-    Date.now = realNow;
+    RegExp.prototype.test = realTest;
+  }
+});
+
+test('the default id clock reads performance.now() and the process\'s CPU time, never Date.now(): a stall alone never refuses, both over refuses, and without a CPU clock the wall clock decides', () => {
+  const ownNow = Object.getOwnPropertyDescriptor(performance, 'now');
+  const realCpuUsage = process.cpuUsage;
+  const realDateNow = Date.now;
+  let wall = 0;
+  let user = 0;
+  let system = 0;
+  performance.now = () => (wall += 1000);   // every reading a second later: the thread was descheduled
+  Date.now = () => { throw new Error('Date.now() is not an id clock'); };
+  try {
+    process.cpuUsage = () => ({ user, system });   // …and the CPU time stood still
+    assert.ok(compileBoundedPattern('^svc-[a-z]+$').re, 'stalled, not working: compiled');
+    assert.equal(compileTaxonomy(V1).ids.length, 1);
+    assert.deepEqual(validateTaxonomy(V1), []);
+    process.cpuUsage = () => ({ user: (user += 30_000), system });   // 30 ms of user CPU per reading (µs)
+    assert.ok(compileBoundedPattern('^svc-[a-z]+$').re, '30 ms of CPU: within the budget');
+    process.cpuUsage = () => ({ user: (user += 30_000), system: (system += 30_000) });   // 60 ms per reading, user + system
+    assert.equal(compileBoundedPattern('^svc-[a-z]+$').reason, TOO_SLOW, 'over on both clocks: refused (user + system)');
+    assert.throws(() => compileTaxonomy(V1), { message: `taxonomy: ids[0]: ${TOO_SLOW}` });
+    assert.deepEqual(validateTaxonomy(V1), [`taxonomy: ids[0]: ${TOO_SLOW}`]);
+    assert.equal(compileTaxonomy(V1, { timed: false }).ids.length, 1, 'compileTaxonomy(json, { timed: false }) reads no clock');
+    process.cpuUsage = undefined;   // a runtime without a CPU clock (a browser)
+    assert.equal(compileBoundedPattern('^svc-[a-z]+$').reason, TOO_SLOW, 'the wall clock decides alone');
+  } finally {
+    if (ownNow) Object.defineProperty(performance, 'now', ownNow); else delete performance.now;
+    process.cpuUsage = realCpuUsage;
+    Date.now = realDateNow;
   }
 });
 

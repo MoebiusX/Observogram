@@ -5,9 +5,10 @@
 // (the diff's identity keys, the traceability graph's node kinds, the
 // blast-radius weights) delegates here, and the studio binds this module at
 // boot (studio/taxonomy.mjs → discover-board, card-html, drawer). Pure and
-// browser-safe: imports nothing, reads no environment; the server mounts it
-// at /lib/artefact-classify.mjs and a downstream vendors it verbatim (it is
-// in the vendor manifest).
+// browser-safe: imports nothing, reads no environment (the id clocks read
+// the process's CPU time where the runtime has one — "The id clocks",
+// below); the server mounts it at /lib/artefact-classify.mjs and a
+// downstream vendors it verbatim (it is in the vendor manifest).
 //
 // The order of the rules (classifyArtefact):
 //   1. `type`    — an explicit family name, or a foreign type name the
@@ -179,6 +180,38 @@ const ADVERSARIAL_IDS = Object.freeze([
 ]);
 const PATTERN_BUDGET_MS = 50;
 
+// The id clocks: what one pass over ADVERSARIAL_IDS costs, held to the
+// budget. The budget is for the pattern's own work, and no single clock
+// measures only that. The wall clock also counts the time the thread was
+// descheduled: on a loaded machine a pass of microseconds can read 100 ms
+// and more. The process's CPU time (Node's cpuUsage(), user + system)
+// never counts a moment the process did not run, but it is process-wide:
+// V8's background compiler and GC helpers, the libuv pool and any worker
+// thread count too (threadCpuUsage() would count this thread alone; the
+// Node floor, 22.16, lacks it). The pattern's own work is under both
+// readings, so a pass costs the SMALLER of the two. A deschedule alone
+// never refuses a pattern — that takes the process's other threads burning
+// the budget in the same window as well — and a pattern whose own work is
+// over the budget is over on both clocks, so it is refused on its one
+// pass: nothing re-runs a pattern, and a catastrophic one (seconds on one
+// id) costs that one pass, as before. Where the process times tick
+// coarsely (Windows, 15.6 ms) the CPU reading is good to within a tick.
+// Without a CPU clock (a browser has no `process`) the wall clock decides
+// alone, as it always did; the studio does not time at all — it compiles
+// the document the server timed at start with `timed: false`
+// (studio/taxonomy.mjs), so a slow phone or a throttled tab never refuses
+// what the server accepted. The wall clock is the monotonic
+// `performance.now()`, in both runtimes.
+const readClock = () => {
+  const usage = globalThis.process?.cpuUsage?.();
+  return { wall: performance.now(), cpu: usage ? (usage.user + usage.system) / 1000 : null };
+};
+// Milliseconds between two readings: the smaller clock where both have a CPU time, else the wall clock.
+const spentMs = (t0, t1) => {
+  const wall = t1.wall - t0.wall;
+  return typeof t0.cpu === 'number' && typeof t1.cpu === 'number' ? Math.min(wall, t1.cpu - t0.cpu) : wall;
+};
+
 const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const isFamily = (f) => typeof f === 'string' && f !== 'unknown' && FAMILIES.includes(f);
 // One line of text within [1, max] characters: not blank, no control
@@ -209,15 +242,19 @@ function readTarget(value, where, errors) {
  * user-written regex: a non-empty string of at most PATTERN_MAX_LENGTH
  * characters, anchored with `^`, flags `""` or `"i"`, no quantified group,
  * and — unless `timed` is false — finishing the four adversarial
- * ID_MATCH_LENGTH-character ids within the 50 ms budget. `noun` names the
+ * ID_MATCH_LENGTH-character ids within the 50 ms budget, by the id clocks
+ * (above: the smaller of the wall clock and the process's CPU time, the
+ * wall clock alone where the runtime has no CPU clock). `noun` names the
  * pattern in each reason (`pattern` for the taxonomy, so its texts are the
- * ones it always had). `timed: false` skips only the wall-clock run (a
- * browser re-reading a file the server already timed); every static check
- * still runs. A caller matching longer or differently shaped values adds
- * its own bounds on top.
+ * ones it always had). `timed: false` skips only the timed run (a browser
+ * re-reading a file the server already timed); every static check still
+ * runs. `clock` is the suites' seam: `() => ({ wall, cpu })` in
+ * milliseconds, `cpu` null where there is none, read once before the pass
+ * and once after it. A caller matching longer or differently shaped values
+ * adds its own bounds on top.
  * @returns {{ re: RegExp } | { reason: string }}
  */
-export function compileBoundedPattern(pattern, { flags = '', noun = 'pattern', timed = true } = {}) {
+export function compileBoundedPattern(pattern, { flags = '', noun = 'pattern', timed = true, clock = readClock } = {}) {
   if (typeof pattern !== 'string' || !pattern) return { reason: `${noun} must be a non-empty string` };
   if (pattern.length > PATTERN_MAX_LENGTH) return { reason: `${noun} longer than ${PATTERN_MAX_LENGTH} characters` };
   if (!pattern.startsWith('^')) return { reason: `${noun} must be anchored (start with ^)` };
@@ -226,18 +263,18 @@ export function compileBoundedPattern(pattern, { flags = '', noun = 'pattern', t
   let re;
   try { re = new RegExp(pattern, flags); } catch (e) { return { reason: `invalid regex: ${e.message}` }; }
   if (timed) {
-    const t0 = Date.now();
+    const t0 = clock();
     for (const id of ADVERSARIAL_IDS) re.test(id);
-    if (Date.now() - t0 > PATTERN_BUDGET_MS) return { reason: `${noun} too slow against a ${ID_MATCH_LENGTH}-character id` };
+    if (spentMs(t0, clock()) > PATTERN_BUDGET_MS) return { reason: `${noun} too slow against a ${ID_MATCH_LENGTH}-character id` };
   }
   return { re };
 }
 
-function compileRule(rule, i, errors) {
+function compileRule(rule, i, errors, timed) {
   const where = `ids[${i}]`;
   if (!isPlainObject(rule)) { errors.push(`taxonomy: ${where}: expected { pattern, family, flags?, label?, role? }`); return null; }
   const { pattern, flags = '' } = rule;
-  const compiled = compileBoundedPattern(pattern, { flags });
+  const compiled = compileBoundedPattern(pattern, { flags, timed });
   if (compiled.reason) { errors.push(`taxonomy: ${where}: ${compiled.reason}`); return null; }
   const { re } = compiled;
   const target = readTarget({ family: rule.family, label: rule.label, role: rule.role }, where, errors);
@@ -306,7 +343,7 @@ function compileGlossary(raw, errors) {
 }
 
 // { compiled: { types: Map<name, {family,label?,role?}>, ids: [{ re, pattern, flags, family, label?, role? }], glossary: { entries, byFamily, byText } } | null, errors: string[] }
-function compileAll(json) {
+function compileAll(json, timed = true) {
   const errors = [];
   if (!isPlainObject(json)) return { compiled: null, errors: ['taxonomy: must be an object'] };
   if (!TAXONOMY_VERSIONS.includes(json.version)) errors.push(`taxonomy: version must be ${TAXONOMY_VERSIONS.join(' or ')}`);
@@ -326,7 +363,7 @@ function compileAll(json) {
   const ids = [];
   if (json.ids !== undefined) {
     if (!Array.isArray(json.ids)) errors.push('taxonomy: ids must be an array');
-    else json.ids.forEach((rule, i) => { const c = compileRule(rule, i, errors); if (c) ids.push(c); });
+    else json.ids.forEach((rule, i) => { const c = compileRule(rule, i, errors, timed); if (c) ids.push(c); });
   }
   let glossary = EMPTY_GLOSSARY;
   if (json.version === 2 && json.glossary !== undefined) glossary = compileGlossary(json.glossary, errors) || EMPTY_GLOSSARY;
@@ -334,9 +371,14 @@ function compileAll(json) {
   return { compiled: Object.freeze({ types, ids: Object.freeze(ids), glossary }), errors };
 }
 
-/** The compiled override, or an Error whose message starts `taxonomy: ` (the first reason). */
-export function compileTaxonomy(json) {
-  const { compiled, errors } = compileAll(json);
+/**
+ * The compiled override, or an Error whose message starts `taxonomy: ` (the
+ * first reason). `timed: false` skips only the id clocks (compileBoundedPattern)
+ * — the studio compiling the document the server timed at start; every
+ * static check still runs.
+ */
+export function compileTaxonomy(json, { timed = true } = {}) {
+  const { compiled, errors } = compileAll(json, timed);
   if (errors.length) throw new Error(errors[0]);
   return compiled;
 }
