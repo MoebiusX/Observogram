@@ -466,6 +466,13 @@ test('S6 the verdict: ok only when complete, fail 0, cancelled 0, todo 0, no fai
   assert.equal(summarize(RED).ok, false);
   assert.equal(summarize(GREEN.replace('# cancelled 0', '# cancelled 1')).ok, false, 'cancelled');
   assert.equal(summarize(GREEN.replace('# fail 0', '# fail 1')).ok, false, 'the totals say a test failed');
+  // A failing leaf decides on its own: totals that say fail 0 beside a
+  // `not ok` leaf (a TAP stitched from two runs, or mangled) are never ok.
+  const leaf = GREEN.replace(okPoint(4, 'tools/test-journey.mjs', { ms: 24012.3 }), harnessFailure(4, 'tools/test-journey.mjs'));
+  assert.ok(leaf !== GREEN && leaf.includes('\n# fail 0\n'), 'the fixture holds a failing leaf and keeps fail 0 in its totals');
+  const lf = summarize(leaf, { expectWin32: 0 });
+  assert.equal(lf.ok, false, 'a failing leaf the totals do not count');
+  assert.deepEqual(lf.failures.map((f) => f.name), ['tools/test-journey.mjs'], 'and the block lists it');
   const todo = GREEN.replace('ok 4 - tools/test-journey.mjs', 'ok 4 - tools/test-journey.mjs # TODO later').replace('# todo 0', '# todo 1');
   const t = summarize(todo);
   assert.equal(t.ok, false, 'a todo is not a pass');
