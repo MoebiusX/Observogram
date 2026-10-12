@@ -35,7 +35,9 @@
 // way — every rule it did not finish counts as matched, and the stderr line
 // names the error's class (`[mcp-settings] the policy worker failed (Error)
 // — rules[0] counted as matched`), never its message. evaluatePolicy never
-// rejects.
+// rejects, whatever it is given: the rules are read once into plain records
+// (an entry that is no rule with an index is none), and options that cannot
+// be read fail closed the same way.
 //
 // The studio evaluates policyFindings in the page directly: a slow pattern
 // there freezes only the admin's own tab, never the server.
@@ -54,15 +56,42 @@ const defaultLog = (line) => process.stderr.write(`${line}\n`);
 const newWorker = (url, options) => new Worker(url, options);
 // An error's class name, or 'Error' — never its message.
 function errorClass(e) {
-  const name = e?.constructor?.name ?? e?.name;
+  let name;
+  try { name = e?.constructor?.name ?? e?.name; } catch { /* a thrown value that cannot be read */ }
   return typeof name === 'string' && /^[A-Za-z][A-Za-z0-9]{0,40}$/.test(name) ? name : 'Error';
+}
+
+// The policy's rules as the check reads them, each read once into a plain
+// record: an entry that is not an object with an integer index (null, a
+// number, one whose properties cannot be read) is no rule. [] for a policy
+// without rules — none, no list of them, or a list that cannot be read.
+function rulesOf(policy) {
+  let list;
+  try { list = policy?.rules; } catch { return []; }
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (let i = 0; i < list.length; i += 1) {
+    try {
+      const r = list[i];
+      if (r === null || typeof r !== 'object' || !Number.isInteger(r.index)) continue;
+      out.push({ index: r.index, field: r.field ?? null, type: r.type ?? null, re: r.re, warn: r.warn ?? null, ack: r.ack ?? null });
+    } catch { /* an entry that cannot be read is no rule */ }
+  }
+  return out;
+}
+
+// The names of a description's fields of `type`, or [] when they cannot be read.
+function namesOfType(descriptor, type) {
+  try {
+    const all = Array.isArray(descriptor?.fields) ? descriptor.fields : [];
+    return all.filter((f) => f?.type === type).map((f) => f.name);
+  } catch { return []; }
 }
 
 // What a rule that did not finish counts as: a match on every field it checks.
 function timedOutFindings(rule, descriptor, deadlineMs) {
   const n = rule.index + 1;
-  const all = Array.isArray(descriptor?.fields) ? descriptor.fields : [];
-  const fields = rule.field !== null ? [rule.field] : all.filter((f) => f.type === rule.type).map((f) => f.name);
+  const fields = rule.field !== null ? [rule.field] : namesOfType(descriptor, rule.type);
   return (fields.length ? fields : [null]).map((field) => ({
     rule: rule.index, field, warn: rule.warn, ack: rule.ack, unevaluated: false, timedOut: true,
     note: `Policy rule ${n} did not finish within ${deadlineMs} ms, so it counts as matched`,
@@ -72,10 +101,11 @@ function timedOutFindings(rule, descriptor, deadlineMs) {
 // What the check answers: the findings of the rules the worker finished,
 // and every other rule's timedOutFindings, with one stderr line naming them —
 // and the worker's error class when it failed or could not be constructed.
-function answer(policy, descriptor, done, failure, deadlineMs, log) {
+// `rules` is rulesOf's.
+function answer(rules, descriptor, done, failure, deadlineMs, log) {
   const findings = [];
   const timedOut = [];
-  for (const r of policy.rules) {
+  for (const r of rules) {
     if (done.has(r.index)) findings.push(...done.get(r.index));
     else { timedOut.push(r.index); findings.push(...timedOutFindings(r, descriptor, deadlineMs)); }
   }
@@ -179,23 +209,34 @@ async function runWorker(rules, descriptor, values, { deadlineMs, execArgv, crea
  * keeps its findings; every rule when it could not be constructed), each of
  * which is in `findings` as a match (`timedOut: true`). `policy` is
  * compileSettingsPolicy's, or null; one without rules (none, or no list of
- * them) answers as null does: no findings. Never rejects. `execArgv` (the
- * server's flags) and `createWorker` (`new Worker(url, options)`) are the
- * suites' seams.
+ * them) answers as null does: no findings, and an entry of its list that is
+ * no rule with an index (null, say) is none. Never rejects, whatever it is
+ * given: options that cannot be read fail closed like a worker that cannot
+ * be constructed. `execArgv` (the server's flags) and `createWorker`
+ * (`new Worker(url, options)`) are the suites' seams.
  */
 export async function evaluatePolicy(policy, descriptor, values, options) {
-  const { deadlineMs = POLICY_EVAL_DEADLINE_MS, log = defaultLog, execArgv = process.execArgv, createWorker = newWorker } = options ?? {};
-  if (!Array.isArray(policy?.rules) || policy.rules.length === 0) return { findings: [], timedOut: [] };
+  const rules = rulesOf(policy);
+  if (rules.length === 0) return { findings: [], timedOut: [] };
+  let deadlineMs = POLICY_EVAL_DEADLINE_MS;
+  let log = defaultLog;
   const say = (line) => {
     try { log(line); } catch { /* a log that throws costs the line, never the answer */ }
   };
   try {
-    const { done, failure } = await runWorker(policy.rules, descriptor, values, { deadlineMs, execArgv, createWorker });
-    return answer(policy, descriptor, done, failure, deadlineMs, say);
+    const o = options ?? {};
+    log = o.log ?? defaultLog;
+    // A deadline is a number of milliseconds, or the default (a note quotes it).
+    const d = o.deadlineMs;
+    if (Number.isFinite(d) && d >= 0) deadlineMs = d;
+    const { execArgv = process.execArgv, createWorker = newWorker } = o;
+    const { done, failure } = await runWorker(rules, descriptor, values, { deadlineMs, execArgv, createWorker });
+    return answer(rules, descriptor, done, failure, deadlineMs, say);
   } catch (e) {
-    // A worker that cannot be constructed — or anything else the check
-    // threw — fails closed like a worker that failed: no rule finished.
-    return answer(policy, descriptor, new Map(), errorClass(e), deadlineMs, say);
+    // A worker that cannot be constructed, options that cannot be read — or
+    // anything else the check threw — fail closed like a worker that
+    // failed: no rule finished.
+    return answer(rules, descriptor, new Map(), errorClass(e), deadlineMs, say);
   }
 }
 

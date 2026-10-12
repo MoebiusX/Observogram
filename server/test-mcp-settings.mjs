@@ -719,16 +719,28 @@ test('a policy worker that cannot be constructed, or fails, fails closed: every 
   // A log that throws costs the line, never the answer.
   const loud = await evaluatePolicy(startPolicy(), d, START_VALUES, { createWorker: refuse, log: () => { throw new Error('stderr closed'); } });
   assert.deepEqual(startShape(loud), everyRule);
-  // A policy without rules — none, or no list of them — answers as null
-  // does: no findings, no worker, no line.
+  // A policy without rules — none, or no list of them, or only entries that
+  // are no rule with an index (null, undefined) — answers as null does: no
+  // findings, no worker, no line.
   let built = 0;
   const counted = () => { built += 1; throw new Error('never constructed'); };
   const ruleless = [];
-  for (const policy of [{}, { rules: null }, { rules: 'not a list' }, { rules: [] }]) {
+  for (const policy of [{}, { rules: null }, { rules: 'not a list' }, { rules: [] }, { rules: [null] }, { rules: [undefined] }, { rules: [null, undefined, 7] }]) {
     assert.deepEqual(await evaluatePolicy(policy, d, START_VALUES, { createWorker: counted, log: (l) => ruleless.push(l) }), { findings: [], timedOut: [] }, JSON.stringify(policy));
   }
   assert.equal(built, 0, 'no worker');
   assert.deepEqual(ruleless, []);
+  // Beside rules, such an entry is none and the rules fail closed as ever
+  // (it threw before: the fail-closed path read every entry's index).
+  const mixedLines = [];
+  const mixed = await evaluatePolicy({ rules: [null, ...startPolicy().rules, undefined] }, d, START_VALUES, { createWorker: refuse, log: (l) => mixedLines.push(l) });
+  assert.deepEqual(startShape(mixed), everyRule);
+  assert.deepEqual(mixedLines, [failedLine('Error')]);
+  // Options that cannot be read fail closed like a worker that cannot be constructed.
+  const optionLines = [];
+  const unreadable = await evaluatePolicy(startPolicy(), d, START_VALUES, { log: (l) => optionLines.push(l), get createWorker() { throw new RangeError(`a value: ${START_VALUES.url}`); } });
+  assert.deepEqual(startShape(unreadable), everyRule);
+  assert.deepEqual(optionLines, [failedLine('RangeError')]);
 });
 
 test('each rule\'s deadline runs from its own start: two rules that each take 0.6 of it both finish — a deadline shared from the worker\'s start would count the second as matched', async () => {
