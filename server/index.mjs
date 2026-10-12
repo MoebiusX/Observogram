@@ -960,7 +960,12 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
         },
       };
     });
-    res.json({ journeys });
+    // An org whose every notify hook name another org's id takes
+    // (hooksAllTaken) can notify through none, whatever a journey names: the
+    // listing's `none` sentence says so as `notifyUnavailable` (absent
+    // otherwise), and the studio's hints say it in place of a hook to add.
+    const notifyUnavailable = hooksAllTaken(currentStore(), currentOrg()) ? notifyHooksOf(currentStore(), currentOrg()).none : null;
+    res.json({ journeys, ...(notifyUnavailable ? { notifyUnavailable } : {}) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

@@ -54,7 +54,7 @@ import { escapeHtml, toast } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import {
   renderCaptureBar, renderJourneyCards, CHECK_OUTCOMES, checkOutcome, DELIVERY_OUTCOMES, runResultText, runErrorText, runAllText,
-  notifyHookExample, notifyKeyNote, notifySetupLine,
+  notifyHookExample, notifyKeyNote, notifySetupLine, notifyUnavailableOf, fetchJourneyListing,
 } from './journeys-view.mjs';
 import {
   decisionHeaderHtml, wireUxActions, emptyStateHtml, disclosureHtml, termHtml, announce, plural, listSentence,
@@ -98,9 +98,9 @@ async function neuronLibs() {
 
 // ---------- loader ----------
 
-export async function loadNeuronData({ fetchFn = api, window = 50 } = {}) {
-  const { model } = await neuronLibs();
-  const { journeys = [] } = await fetchFn('/api/journeys');
+export async function loadNeuronData({ fetchFn = api, window = 50, libs = neuronLibs } = {}) {
+  const { model } = await libs();
+  const { journeys = [] } = await fetchJourneyListing(fetchFn);
   const runsByName = {};
   await Promise.all(journeys.map(async (j) => {
     try { runsByName[j.name] = (await fetchFn(`/api/journeys/${enc(j.name)}/runs?limit=${window}`)).runs || []; }
@@ -511,8 +511,13 @@ function evidenceLine(d, c) {
 }
 
 // The evidence block's hint for a record without notify: one of this org's
-// notify hooks (journeys-view.mjs notifyHookExample), never a bare name.
-function notifyHintHtml(org) {
+// notify hooks (journeys-view.mjs notifyHookExample), never a bare name — or,
+// for an org whose every hook name another org's id takes, the server's
+// sentence that none can be set (journeys-view.mjs notifyUnavailableOf).
+// Exported for tools/test-neuron-model.mjs.
+export function notifyHintHtml(org) {
+  const none = notifyUnavailableOf(org);
+  if (none) return escapeHtml(none);
   return `Add <code>notify: { urlEnv: ${escapeHtml(notifyHookExample(org))} }</code> to the journey file to post transitions to a webhook — one of this org's notify hooks, set by the server's operator; the URL and token stay in the server's environment.${escapeHtml(notifyKeyNote(org))}`;
 }
 

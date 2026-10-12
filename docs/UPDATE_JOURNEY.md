@@ -1371,9 +1371,11 @@ only in `-` and `_`. Tests: 1416 → 1417 (one more in
 
 The studio stops pointing at bare variable names. Where it suggests adding a
 notification it names the org's hook variable — the org's own prefix when the
-studio knows the org, `<KEY>` and what it stands for when it does not — and
-the Neuron view no longer calls a journey "Set up" when the server would
-refuse to run it: it shows the server's own sentence instead.
+studio knows the org, `<KEY>` and what it stands for when it does not — or,
+for an org whose every hook name another org's id takes, says the server's
+sentence that none can be set; and the Neuron view no longer calls a journey
+"Set up" when the server would refuse to run it: it shows the server's own
+sentence instead.
 Tests: 1417 → 1418 (one more in `tools/test-neuron-model.mjs`). A hook's
 names are single words wider than a phone, so the Neuron view's focus header
 breaks them inside its row rather than scroll the page sideways at 390 px.

@@ -1141,7 +1141,7 @@ test('H13 a record written before the rule is served scrubbed: undici\'s echo of
   }
 });
 
-test('H16 the schedule route never binds a notify name the server refuses: a legacy journey\'s envNames hold neither of its names, refusedEnvNames both, and every snippet says so where the binding would have been; a stranger token beside the org\'s hook is the only name refused, its comment naming that hook\'s own token; a journey through its org\'s hook has the body it always had; an org whose every hook name another org\'s id takes is told, for each refused name, to leave notify out, as its run\'s refusal says — never to rename it', { timeout: 120_000 }, async () => {
+test('H16 the schedule route never binds a notify name the server refuses: a legacy journey\'s envNames hold neither of its names, refusedEnvNames both, and every snippet says so where the binding would have been; a stranger token beside the org\'s hook is the only name refused, its comment naming that hook\'s own token; a journey through its org\'s hook has the body it always had; an org whose every hook name another org\'s id takes is told, for each refused name, to leave notify out, as its run\'s refusal says — never to rename it — and GET /api/journeys carries the listing\'s none for it as notifyUnavailable (for no other org)', { timeout: 120_000 }, async () => {
   const A = await identityChild();
   plant(A.ws, 'acme', 'h16-bare', { notify: '{ urlEnv: MY_HOOK_URL, authEnv: OBSERVOGRAM_API_TOKEN, on: always }' });
   plant(A.ws, 'acme', 'h16-pair', { notify: `{ urlEnv: ${ONCALL.urlEnv}, authEnv: ${PAGER.tokenEnv} }` });
@@ -1194,7 +1194,14 @@ test('H16 the schedule route never binds a notify name the server refuses: a leg
     assert.equal(s.status, 200, 'vera signs in');
     const inPay = { Cookie: s.session, 'X-Observogram-Org': 'pay' };
     const TAKEN = (e) => `${e} cannot be a notify hook of this org: another org's id also maps onto every name of its hook shape (OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN) by the longest-prefix rule, so the studio posts no notification for its journeys — remove the journey's notify before scheduling (docs/DOWNSTREAM.md §17.1)`;
-    const listed = Object.fromEntries((await call(child.base, 'GET', '/api/journeys', { headers: inPay })).json.journeys.map((j) => [j.name, j]));
+    const listing = (await call(child.base, 'GET', '/api/journeys', { headers: inPay })).json;
+    // The studio's hints say, for such an org, that no notify hook can be set — never a hook to add: the listing's none.
+    assert.equal(listing.notifyUnavailable, T.noneTaken('pay'), 'GET /api/journeys says no notify hook can be set for pay');
+    assert.equal((await call(child.base, 'GET', '/api/journeys/notify-hooks', { headers: inPay })).json.none, listing.notifyUnavailable, 'the listing\'s own none');
+    const inDefault = await call(child.base, 'GET', '/api/journeys', { headers: { Cookie: s.session, 'X-Observogram-Org': 'default' } });
+    assert.equal(inDefault.status, 200, inDefault.text.slice(0, 200));
+    assert.ok(!('notifyUnavailable' in inDefault.json), 'an org whose hooks are its own: no notifyUnavailable');
+    const listed = Object.fromEntries(listing.journeys.map((j) => [j.name, j]));
     for (const [name, names] of [['h16-taken', [PAY.urlEnv, PAY.tokenEnv]], ['h16-taken-bare', ['MY_HOOK_URL']]]) {
       assert.match(listed[name].notify.problem, new RegExp(`cannot be a notify hook of org 'pay' .*; whoever holds the workspace removes notify from orgs/pay/journeys/${name}\\.journey\\.yaml `), `${name}: the run's way out`);
       const r = await call(child.base, 'GET', `/api/journeys/${name}/schedule`, { headers: inPay });

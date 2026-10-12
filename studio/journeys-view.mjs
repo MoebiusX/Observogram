@@ -105,8 +105,25 @@ export function notifyHookExample(org) {
 }
 // What <KEY> stands for, when the example has to write it.
 export const notifyKeyNote = (org) => (knownOrg(org) ? '' : ' <KEY> is this org\'s id in capitals, with - as _.');
+// GET /api/journeys' notifyUnavailable: the server's sentence when no notify
+// hook can be set for the org it answered for — another org's id takes every
+// name of its hook shape (server/notify-target-policy.mjs hooksAllTaken), so
+// the listing never holds one and a run refuses every name. The journey
+// listing loaders note it per org (fetchJourneyListing) and the hints say it,
+// as one sentence, in place of a hook to add, which no name could satisfy; for
+// an org no listing has answered for, the hook example as before.
+const unavailableByOrg = new Map();
+const orgKey = (org) => (knownOrg(org) ? org : null);
+export const notifyUnavailableOf = (org) => unavailableByOrg.get(orgKey(org)) ?? null;
+export async function fetchJourneyListing(fetchFn = api) {
+  const org = getActiveOrg();
+  const listing = await fetchFn('/api/journeys');
+  const none = listing?.notifyUnavailable;
+  unavailableByOrg.set(orgKey(org), typeof none === 'string' && none ? `${none[0].toUpperCase()}${none.slice(1)}.` : null);
+  return listing;
+}
 function notifyRemedy(org) {
-  return `Add notify: { urlEnv: ${notifyHookExample(org)} } to the journey file to be warned when it changes — one of this org's notify hooks, which the server's operator sets (GET /api/journeys/notify-hooks lists them).${notifyKeyNote(org)}`;
+  return notifyUnavailableOf(org) ?? `Add notify: { urlEnv: ${notifyHookExample(org)} } to the journey file to be warned when it changes — one of this org's notify hooks, which the server's operator sets (GET /api/journeys/notify-hooks lists them).${notifyKeyNote(org)}`;
 }
 
 // A declared notify block (GET /api/journeys' `notify`): what a server run
@@ -249,7 +266,7 @@ export function renderCaptureBar(host) {
 // load). Throws when the listing itself cannot be read. `fetchFn` is
 // injectable (docs/UI_CONVENTIONS.md §2).
 export async function loadJourneysData({ fetchFn = api, limit = 20 } = {}) {
-  const { journeys = [] } = await fetchFn('/api/journeys');
+  const { journeys = [] } = await fetchJourneyListing(fetchFn);
   const runsByName = {};
   let stackLib = null;
   let schedLib = null;

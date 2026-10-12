@@ -1362,7 +1362,9 @@ run's refusal as `notify.problem` for a journey a run would refuse, and the
 Neuron view prints it, the run's `journey <name> is not run: ` replaced by
 its own lead (`The server will not run this journey as it stands: …`) where
 it said "Set up", and after the newest record's delivery for a journey that
-has run.
+has run. For an org whose every hook name another org's id takes it carries
+`notifyUnavailable`, the listing's `none`, which the studio says where it
+would name a hook to add.
 
 **The sentences.** Each names what to fix and who fixes it — the server's
 operator for the environment, with the restart a running server needs;
