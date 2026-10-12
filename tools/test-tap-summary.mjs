@@ -446,6 +446,28 @@ test('S5 annotations: escaping, the run-level errors first, failures up to the c
   assert.equal(out[0], HEAD);
   assert.equal(out.indexOf('=========================================================='), out.indexOf(`block: ${r.lines} lines`) + 1, 'the rule closes the block, the annotations follow it');
 
+  // A failure's annotation carries its error lines cut at 500 characters, as
+  // the block does: a got: line can be one huge JSON dump, and the
+  // annotations are the last lines of the log a tail read fetches. A harness
+  // suite's ✗ line with a 5 MB got:, and a node:test error with a 5 MB line.
+  // (Lengths only: a failure here must not print the huge line itself.)
+  const big = 'r'.repeat(5e6);
+  const hugeRun = `TAP version 13\n# ✗ the pack matches\n#     got:  {"rows":"${big}"}\n#     want: {}\n# 1 assertion(s) failed.\n${harnessFailure(1, 'tools/test-big.mjs')}${nodeFailure(2, 'a huge error', [`payload: ${big}`, 'after it'])}${TOTALS({ points: 2, tests: 2, pass: 0, fail: 2 })}`;
+  const h = summarize(hugeRun, { root: LROOT, pathApi: posix });
+  const hugeNotes = h.text.split('\n').filter((l) => l.startsWith('::error'));
+  assert.equal(hugeNotes.length, 2, 'an annotation per failure');
+  const parts = hugeNotes.map((l) => l.slice(l.indexOf('::', 2) + 2).split('%0A'));
+  assert.deepEqual(parts.map((p) => p.length), [3, 2], 'each failure\'s lines, none dropped');
+  const longestPart = Math.max(...parts.flat().map((p) => p.length));
+  assert.ok(longestPart <= 500, `no annotation line past 500 characters: the longest is ${longestPart}`);
+  const blockGot = h.text.split('\n').find((l) => l.startsWith('        got:  '));
+  assert.equal(blockGot.length, 504, 'the block\'s got: line, cut at 500 and indented');
+  assert.equal(parts[0][1], blockGot.slice(4), 'the annotation\'s got: line is the block\'s, cut alike');
+  assert.equal(parts[0][1].slice(-3), 'rr…', 'and marked cut');
+  assert.equal(parts[1][0].length, 500, 'the node:test error line cut at 500');
+  assert.equal(parts[1][1], 'after it', 'the line after it whole');
+  assert.ok(h.text.length < 16_000, `the summary is the block and its annotations, not the dump: ${h.text.length} characters`);
+
   // This suite's own failure, as node --test prints it into a job's log: the
   // text still shown, no line of it a workflow command.
   for (const fail of [() => assert.ok(false, r.text), () => assert.ok(undefined, r.text), () => assert.equal(1, 2, r.text), () => assert.match(r.text, /never printed/), () => assert.equal(r.text, ''), () => assert.deepEqual([r.text], [])]) {

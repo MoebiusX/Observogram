@@ -494,8 +494,11 @@ export function summarize(text, { root = process.cwd(), expectWin32 = null, coun
   if (!parsed.complete) runLevel.push(annotation('error', { title: 'npm test did not finish' }, `the TAP ${ends} (a step timeout, a crash or a cancel) — the summary block shows its last ${LAST_LINES} lines`));
   if (unknown.length) runLevel.push(annotation('error', { title: 'unknown skip reason' }, `a skip reason no run expects: '${cut(unknown[0].reason, 300)}' (${cut(unknown[0].test, 200)})${unknown.length > 1 ? ` and ${unknown.length - 1} more` : ''} — add its pattern and probe to KNOWN_SKIPS in tools/tap-summary.mjs, or make the test run`));
   if (todo) runLevel.push(annotation('error', { title: 'todo' }, `${todo} todo test(s) — a todo is not a pass`));
+  // A failure's error lines are cut at 500 characters here as in the block:
+  // the annotations are the log's last lines, and a got: line can be one
+  // huge JSON dump.
   const failureNotes = failures.slice(0, Math.max(0, MAX_ANNOTATIONS - runLevel.length)).map((f) =>
-    annotation('error', { file: f.file && !/^([A-Za-z]:)?\//.test(f.file) ? f.file : undefined, line: f.line, title: cut(f.name, 200) }, f.body.slice(0, MAX_ANNOTATION_LINES).join('\n')));
+    annotation('error', { file: f.file && !/^([A-Za-z]:)?\//.test(f.file) ? f.file : undefined, line: f.line, title: cut(f.name, 200) }, f.body.slice(0, MAX_ANNOTATION_LINES).map((l) => cut(l, 500)).join('\n')));
   const annotations = [...runLevel, ...failureNotes];
 
   // The block states its own length in log lines — every line printed, the
