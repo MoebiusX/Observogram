@@ -431,11 +431,12 @@ server opens it at every start.
 - **Journeys run from the studio** load by name only, and a journey's
   `crawl:` roots, `file:` packs and inventory site are read only from the
   org's own part of the workspace (or outside it); a path inside another
-  org's part is refused. On Windows "outside it" means on a local drive: a
-  path outside the workspace reached through a network share or a mapped
-  drive is refused too — even with one org, and even when the workspace is
-  on that share — and the refusal says to name it by its path on a local
-  drive (copy it there if it has none).
+  org's part is refused. On Windows a path is read only by its name on a
+  local drive or, when the workspace is named through a network share, by
+  that share's name (or a drive mapped to it) inside the workspace; any
+  other name through a share or a mapped drive is refused — the org's own
+  part included, even with one org — and the refusal says to name it by its
+  path on a local drive (copy it there if it has none).
 
 #### Behind a reverse proxy (trusted headers)
 
