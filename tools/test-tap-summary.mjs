@@ -564,7 +564,7 @@ test('S8 the bytes: UTF-16LE with its mark, a UTF-8 mark and CRLF parse alike; a
   assert.ok(!summarize(GREEN_WIN).text.includes('warning:'), 'a clean capture is not warned about');
 });
 
-test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README without the sentence and non-TAP input exit 2 naming the way out; --shape and --compare', () => {
+test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README without the sentence and non-TAP input exit 2 naming the way out; --shape, and --compare holding every run to the reference', () => {
   const dir = mkdtempSync(join(tmpdir(), 'tap-summary-'));
   try {
     const run = (args, cwd = ROOT) => spawnSync(process.execPath, [CLI, ...args], { cwd, encoding: 'utf8' });
@@ -637,6 +637,22 @@ test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README 
     assert.equal(differs.status, 1);
     assert.match(differs.stdout, /^::error title=\S+ \(node [\d.]+\) vs \S+ \(node [\d.]+\)::tools\/test-journey\.mjs: 2 harness assertions on the run, 3 on the reference, and no SKIP win32: line in the file — an early exit$/m);
     assert.ok(!/::notice/.test(differs.stdout), 'no notice when a run differs');
+    // CI passes the floor's shape, then windows-22.16.0's, then windows-22's:
+    // each run is held to the reference under its own label, the last too.
+    // Here only the last lacks a harness suite the reference ran.
+    const both = '"harness":{"tools/test-a.mjs":{"asserts":5,"win32":0},"tools/test-b.mjs":{"asserts":3,"win32":0}}';
+    const floor = f('node-floor.json', `{"platform":"linux","node":"v22.16.0","tests":10,"todo":0,"skips":{},${both}}`);
+    const win16 = f('windows-22.16.0.json', `{"platform":"win32","node":"v22.16.0","tests":10,"todo":0,"skips":{},${both}}`);
+    const win22 = f('windows-22.json', '{"platform":"win32","node":"v22.23.3","tests":10,"todo":0,"skips":{},"harness":{"tools/test-a.mjs":{"asserts":5,"win32":0}}}');
+    const last = run(['--compare', floor, win16, win22]);
+    assert.equal(last.status, 1, last.stdout + last.stderr);
+    const vanished = 'tools/test-b.mjs: a harness suite the reference ran and the run did not report (a file argument that matched nothing, or a suite that never ran)';
+    assert.deepEqual(last.stdout.trimEnd().split('\n'), [
+      'windows (node 22.16.0) vs linux (node 22.16.0): tests 10 = 10 · harness assertions 8 vs 8 in 2 files · other skips equal (PID 1: 0 vs 0) — it ran what the reference ran',
+      'windows (node 22.23.3) vs linux (node 22.16.0): 1 difference — the run did not run what the reference ran',
+      `  ${vanished}`,
+      `::error title=windows (node 22.23.3) vs linux (node 22.16.0)::${vanished}`,
+    ], 'every run held, the last one\'s difference named under its label, and no notice');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
