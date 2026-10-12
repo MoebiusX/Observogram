@@ -643,8 +643,11 @@ const STRICT = (obj, keys, where, errors) => {
  * class. These are checks of shape: no load-time probe can prove a pattern
  * fast on every value, so none is run — a caller that must not block runs
  * policyFindings under a deadline (the studio server: a worker, 100 ms,
- * a rule that does not finish counting as matched). `timed: false` (the
- * browser, re-reading a file the server checked) skips only the id clocks.
+ * a rule that does not finish counting as matched). `timed: false` skips
+ * only the id clocks: the browser re-reading a file, and the server's
+ * start-time load, whose per-rule worker deadline is the guard (a loaded
+ * machine's clock would refuse a valid policy). The default keeps them
+ * (the static bundle's build).
  */
 export function compileSettingsPolicy(json, { timed = true } = {}) {
   const errors = [];

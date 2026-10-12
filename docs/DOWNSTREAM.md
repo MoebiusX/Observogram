@@ -304,8 +304,11 @@ byte), T9 the baked bundle in headless Chromium.
 the file a server reads from `OBSERVOGRAM_MCP_SETTINGS_POLICY`): read with one
 leading byte-order mark stripped, parsed and compiled by
 `compileSettingsPolicy` (`tools/lib/mcp-server-settings.mjs`) as
-`server/mcp-settings-policy.mjs` does — a bad file fails the build with
-`--mcp-settings-policy: <path>: <reason>`, the server's texts — and served by
+`server/mcp-settings-policy.mjs` does, plus the id clocks the server's
+start-time load skips — a bad file fails the build with
+`--mcp-settings-policy: <path>: <reason>`, the server's texts, and a pattern
+a server loads can fail it as `rules[<i>].when: pattern too slow against a
+256-character id` — and served by
 the shim's `GET /api/mcp-settings` as `{ ok, proxy: false, policy, configured:
 true }`. `--mcp-origins <origin>,…` bakes the origins the bundle's Server
 settings modal may send settings to from a page not served on the MCP
