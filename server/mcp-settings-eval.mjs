@@ -178,13 +178,14 @@ async function runWorker(rules, descriptor, values, { deadlineMs, execArgv, crea
  * the worker failed, every rule it had not finished — a rule it finished
  * keeps its findings; every rule when it could not be constructed), each of
  * which is in `findings` as a match (`timedOut: true`). `policy` is
- * compileSettingsPolicy's, or null. Never rejects. `execArgv` (the server's
- * flags) and `createWorker` (`new Worker(url, options)`) are the suites'
- * seams.
+ * compileSettingsPolicy's, or null; one without rules (none, or no list of
+ * them) answers as null does: no findings. Never rejects. `execArgv` (the
+ * server's flags) and `createWorker` (`new Worker(url, options)`) are the
+ * suites' seams.
  */
 export async function evaluatePolicy(policy, descriptor, values, options) {
   const { deadlineMs = POLICY_EVAL_DEADLINE_MS, log = defaultLog, execArgv = process.execArgv, createWorker = newWorker } = options ?? {};
-  if (!policy || policy.rules.length === 0) return { findings: [], timedOut: [] };
+  if (!Array.isArray(policy?.rules) || policy.rules.length === 0) return { findings: [], timedOut: [] };
   const say = (line) => {
     try { log(line); } catch { /* a log that throws costs the line, never the answer */ }
   };

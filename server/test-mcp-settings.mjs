@@ -719,6 +719,16 @@ test('a policy worker that cannot be constructed, or fails, fails closed: every 
   // A log that throws costs the line, never the answer.
   const loud = await evaluatePolicy(startPolicy(), d, START_VALUES, { createWorker: refuse, log: () => { throw new Error('stderr closed'); } });
   assert.deepEqual(startShape(loud), everyRule);
+  // A policy without rules — none, or no list of them — answers as null
+  // does: no findings, no worker, no line.
+  let built = 0;
+  const counted = () => { built += 1; throw new Error('never constructed'); };
+  const ruleless = [];
+  for (const policy of [{}, { rules: null }, { rules: 'not a list' }, { rules: [] }]) {
+    assert.deepEqual(await evaluatePolicy(policy, d, START_VALUES, { createWorker: counted, log: (l) => ruleless.push(l) }), { findings: [], timedOut: [] }, JSON.stringify(policy));
+  }
+  assert.equal(built, 0, 'no worker');
+  assert.deepEqual(ruleless, []);
 });
 
 test('each rule\'s deadline runs from its own start: two rules that each take 0.6 of it both finish — a deadline shared from the worker\'s start would count the second as matched', async () => {
