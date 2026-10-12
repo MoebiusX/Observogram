@@ -69,6 +69,15 @@
  *      fake without CORS): the values are expected in exactly one place, the
  *      body of POST /api/mcp-settings/submit, and the pass-through's audit
  *      row names fields only.
+ *  14. A rule the studio server could not check, through it: a child started
+ *      under the permission model without --allow-worker cannot build the
+ *      policy worker, so every rule counts as matched. The approved host —
+ *      which the page's check passes — is a 409 naming rule 0 with
+ *      `unevaluated: true`; the modal draws that rule's box with the line
+ *      that the server could not check it, the send waits for the tick and
+ *      sends nothing meanwhile; the emptied secret is typed again (the box
+ *      stays: no rule reads a secret), and ticked the submit carries acks [0]
+ *      and goes; an edit of a value the policy reads takes the box away.
  *
  * Every test asserts no page error, no console.error beyond a failed load
  * (and, where CORS is the point, the browser's CORS message), no popup, and
@@ -121,11 +130,11 @@ async function loadPlaywright() {
 
 const env = { browser: null, why: null, ws: null, child: null, cookies: {}, fakes: [] };
 
-async function startChild(extraEnv = {}) {
+async function startChild(extraEnv = {}, { execArgv = [] } = {}) {
   const ws = mkdtempSync(join(tmpdir(), 'observogram-mss-'));
   writeUsersFile({ users: Object.fromEntries(LOGINS.map((l) => [l, { name: l, createdAt: 'test', password: hashPassword(password(l)) }])) }, join(ws, 'users.json'));
   writeOrgsFile({ default: { name: 'Default', members: { ada: 'admin', oscar: 'operator' } } }, join(ws, 'orgs.json'));
-  const child = await serve(ws, { env: extraEnv });
+  const child = await serve(ws, { env: extraEnv, execArgv });
   const cookies = {};
   for (const l of LOGINS) {
     const s = await signIn(child.base, l, password(l));
@@ -1043,3 +1052,76 @@ async function acceptance(t, { proxy }) {
 test('BROWSER 12: the acceptance flow, browser-direct — configure → verify → snapshot with nothing but the studio page; then no value in storage, cookies, the DOM, any studio request or answer, the audit, the workspace, the store file or the server\'s log', (t) => acceptance(t, { proxy: false }));
 
 test('BROWSER 13: the acceptance flow through the studio server — the same, the values only in the submit\'s body', (t) => acceptance(t, { proxy: true }));
+
+// ---------- 14: a rule the server could not check ----------
+
+// The permission model without --allow-worker: the studio server runs, and
+// its policy worker cannot be constructed.
+const NO_WORKER = ['--permission', '--allow-fs-read=*', '--allow-fs-write=*', '--allow-child-process'];
+const SERVER_UNCHECKED = 'The studio server could not check these settings against this rule, so it counts as matched — tick the box to send them with your approval.';
+
+test('BROWSER 14: through the studio server, a rule it could not check — the approved host is a 409 naming rule 0, unevaluated; the modal draws its box with the reason, the send waits for the tick, and ticked the submit carries acks [0] and goes', async (t) => {
+  if (skipUnlessBrowser(t)) return;
+  const studio = await startChild({ OBSERVOGRAM_MCP_ADMIN_PROXY: '1', OBSERVOGRAM_MCP_SETTINGS_POLICY: POLICY_FILE }, { execArgv: NO_WORKER });
+  t.after(() => studio.stop());
+  const f = await fake({ descriptor: EXAMPLE_SETTINGS_DESCRIPTOR, cors: false });
+  const gwId = await endpointIdFor(studio.child.base, f.url, { name: 'gw-no-worker', headers: { Cookie: studio.cookies.ada } });
+  const w = await openPage(studio, 'ada');
+  // Each submit as its answer arrives (its body read later, so the count is never behind the page).
+  const submits = [];
+  w.page.on('response', (r) => {
+    if (!r.url().endsWith('/api/mcp-settings/submit')) return;
+    submits.push({ status: r.status(), acks: JSON.parse(r.request().postData()).acks, json: r.json().catch(() => null) });
+  });
+  await aim(w, { id: gwId });
+  await openSettings(w);
+  await w.waitStatus(/^The server describes its settings \(version 1\)\.$/);
+  await fill(w, 'grafanaUrl', 'HTTPS://Approved.example/');
+  await fill(w, 'secret', SECRET);
+  assert.equal(await w.page.evaluate(() => document.querySelectorAll('#mss-host .mss-rule').length), 0, 'the page\'s check passes the approved host');
+  assert.equal(await w.page.getAttribute('.mss-primary', 'aria-disabled'), null);
+
+  // The server could not check the rule: a 409, nothing sent, and the box the 409 names.
+  await w.page.click('.mss-primary', { force: true });
+  await w.waitStatus(/^The studio server answered 409: /);
+  assert.equal(await w.status(), `The studio server answered 409: Non-approved backend host. — tick "${ACK}" in the server settings. The secret you typed was emptied when the request left — type it again before you send.`);
+  assert.equal(await w.page.inputValue('#mss-host input[data-field="secret"]'), '', 'the secret was emptied once sent');
+  assert.deepEqual(await Promise.all(submits.map(async (x) => [x.status, x.acks, await x.json])), [[409, [], { ok: false, denied: 'policy-ack', rule: 0, unevaluated: true, error: `Non-approved backend host. — tick "${ACK}" in the server settings` }]]);
+  assert.equal(postsTo(f).length, 0, 'nothing reached the MCP server');
+  assert.match(studio.child.logs().stderr, /^\[mcp-settings\] the policy worker failed \(\w+\) — rules\[0\] counted as matched$/m);
+  const box = () => w.page.evaluate(() => [...document.querySelectorAll('#mss-host .mss-policy .mss-rule')].map((b) => ({
+    rule: b.getAttribute('data-rule'), warn: b.querySelector('.mss-warn-text')?.textContent, notes: [...b.querySelectorAll('.mss-warn-note')].map((p) => p.textContent),
+    ack: b.querySelector('.mss-ack-text')?.textContent, tick: b.querySelector('input[data-ack]') ? [b.querySelector('input[data-ack]').getAttribute('data-ack'), b.querySelector('input[data-ack]').checked] : null,
+  })));
+  assert.deepEqual(await box(), [{ rule: '0', warn: 'Non-approved backend host.', notes: [SERVER_UNCHECKED], ack: ACK, tick: ['0', false] }]);
+  assert.equal(await w.page.getAttribute('.mss-primary', 'aria-disabled'), 'true', 'the send waits for the tick');
+
+  // Without the tick: the send says so and nothing is sent.
+  await w.page.click('.mss-primary', { force: true });
+  assert.equal(await w.status(), TICK);
+  assert.equal(submits.length, 1, 'no second submit');
+  assert.equal(postsTo(f).length, 0);
+
+  // The secret typed again (no rule reads a secret: the box stays), then
+  // ticked: the submit carries acks [0] and goes; the box stays, ticked.
+  await fill(w, 'secret', SECRET);
+  assert.deepEqual((await box()).map((b) => b.tick), [['0', false]], 'a secret\'s edit keeps the box');
+  await w.page.check('#mss-host .mss-policy input[data-ack="0"]');
+  assert.equal(await w.page.getAttribute('.mss-primary', 'aria-disabled'), null);
+  await w.page.click('.mss-primary', { force: true });
+  await w.waitStatus(/Connection test:/);
+  assert.match(await w.status(), /^The server reports the settings verified \(HTTP 200\)\. Connection test: /);
+  assert.deepEqual(submits.map((x) => [x.status, x.acks]), [[409, []], [200, [0]]]);
+  assert.equal(postsTo(f).length, 1, 'acknowledged, the configure went');
+  assert.deepEqual(postsTo(f)[0].body, { grafanaUrl: 'https://approved.example/', secret: SECRET });
+  assert.deepEqual((await box()).map((b) => b.tick), [['0', true]]);
+  const audit = await (await fetch(`${studio.child.base}/api/audit?limit=100`, { headers: { Cookie: studio.cookies.ada } })).json();
+  assert.deepEqual(audit.rows.filter((r) => r.action === 'live.mcp-settings').map((r) => r.detail.acks), [[0]], 'the row records the acknowledged index');
+
+  // What is typed changes: the page's check decides again, and finds nothing.
+  await fill(w, 'user', 'svc-observogram');
+  await w.page.waitForFunction(() => document.querySelectorAll('#mss-host .mss-rule').length === 0, null, { timeout: T });
+  assert.ok(!(await hostHtml(w)).includes(SECRET), 'no secret in the modal\'s DOM');
+  await closeSettings(w);
+  await w.done();
+});

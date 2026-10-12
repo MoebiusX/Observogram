@@ -171,7 +171,11 @@ server versus the studio's connection to it, the UI_CONVENTIONS zone.
   constructed fails closed like one that fails. And the start no longer
   runs the id clocks (four runs against 256-character ids, refused past
   50 ms of wall time), which a loaded machine failed with a valid policy:
-  it checks shape only.)
+  it checks shape only. A 409 for a rule the server could not check says
+  `unevaluated: true`, and the modal draws the acknowledgement of a rule a
+  409 names that its own check did not flag, with a line saying why — it
+  showed the 409's sentence with nothing to tick, every submit on a server
+  whose worker cannot be built.)
 - The other review fixes add assertions to existing tests or change docs;
   the count is unchanged.
 

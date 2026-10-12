@@ -1153,7 +1153,13 @@ start, served at `GET /api/mcp-settings`, baked into a bundle by
   ticked. Acknowledgements are never remembered — closed and reopened, they
   are unticked. An action that sends no field the rule matched (`disable`)
   skips them; one that carries the matched field waits for the ack, as the
-  pass-through does.
+  pass-through does. Through the pass-through, a rule its re-check names
+  (the 409 below) that the page's check did not flag — one the server could
+  not check, or one it matched — gets its acknowledgement in the modal too,
+  with a line saying which; ticked, the next send carries it, exactly what
+  an API caller's `acks` attest, and an edit of a value the policy reads
+  takes it away (the page's check decides again; a secret, which no rule
+  reads, keeps it).
 - **`generic`** prefills the generic form's path, field names and API-key
   placement (`body` or `bearer`); the reader may change them per use and
   nothing is kept.
@@ -1186,7 +1192,7 @@ the reader's browser cannot reach it. The contract:
   acknowledgement is `409 { denied: 'policy-ack', rule }`, with
   `unevaluated: true` when the server could not check that rule — it did not
   finish, the worker could not start or failed, or it cannot run on the
-  form).
+  form); the modal draws the named rule's acknowledgement (§16.2).
 - One request with the platform's `fetch`, **never through the transport
   hook**: no redirect followed, 10 s, a capped read, exactly `Content-Type`,
   `Accept` and the description's own `Authorization`.

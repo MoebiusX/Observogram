@@ -424,7 +424,11 @@ server is exposed without sign-in. The studio server:
   the rule by index and its warning and acknowledgement, with
   `unevaluated: true` when the server could not check that rule (it did not
   finish, the worker could not start or failed, or the rule cannot run on
-  the form), never a value —, in a `node:worker_threads` worker that gives
+  the form), never a value; the modal then draws that rule's
+  acknowledgement if its own check did not, with a line saying the server
+  could not check the rule (or that its check matched where the page's did
+  not), and once it is ticked the next send carries it —, in a
+  `node:worker_threads` worker that gives
   each rule 100 ms from its own start (`server/mcp-settings-eval.mjs`), never
   the time the rules before it took: past a rule's deadline the worker is
   terminated, that rule and every rule after it count as matched — each

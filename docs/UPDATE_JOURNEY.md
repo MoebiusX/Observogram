@@ -1369,3 +1369,15 @@ could not start or failed, or the rule cannot run on the form), and never
 for a match, so a caller can say why the rule applies.
 Tests: 1394 → 1395 (one more in `server/test-mcp-settings.mjs`: the refusal
 flagged only for a rule the server could not check).
+The studio's modal drew a box only for a rule its own in-page check
+flagged, so that 409 showed the reader `tick "…" in the server settings`
+with nothing to tick. It now draws the box of the rule a 409 names, with a
+line saying the server could not check the rule (or that the server's
+check matched where the page's did not); the send waits for the tick, and
+ticked the next submit carries the rule's index, which attests what an API
+caller's acks do. An edit of a value the policy reads takes the box away,
+and the notice asks for the secret the refused send emptied.
+Tests: 1395 → 1397 (one more in `tools/test-mcp-settings-model.mjs`: the
+box and its two lines; and one more in
+`server/test-mcp-settings-studio.mjs`: a child that cannot build the
+worker, driven in Chromium).

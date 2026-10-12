@@ -8,7 +8,8 @@
 // findings show and block (policyView), and what the modal says after the
 // connection test (verifiedLine); and, when the studio server passes the
 // settings through (OBSERVOGRAM_MCP_ADMIN_PROXY=1), what its describe and
-// submit answered (proxyDescribeModel, proxyOutcomeModel). No DOM, no state, no fetch
+// submit answered (proxyDescribeModel, proxyOutcomeModel) and the rule its
+// policy refusal names (serverAckModel). No DOM, no state, no fetch
 // (docs/UI_CONVENTIONS.md §2): every input explicit — the URL rules of
 // tools/lib/mcp-url-safety.mjs and the contract of
 // tools/lib/mcp-server-settings.mjs are handed in (`safety`, `lib`), because
@@ -316,11 +317,14 @@ export function actionNote(carries) {
  * unevaluated, note }]), one entry per rule in rule order — a `type` rule
  * that matches two fields warns once — and whether an acknowledgement still
  * blocks the send. `ticked` lists the rule indexes whose ack box is ticked
- * (read from the DOM: acks live nowhere else).
+ * (read from the DOM: acks live nowhere else). `named` lists the rules the
+ * studio server's 409 named (serverAckModel's): each one the page's own
+ * check did not find is an entry too, its note saying why, and its ack
+ * blocks like any other.
  * → { rules: [{ rule, warn, ack, notes }], block }: `block` (null when
  * none) names the first unticked ack and its rule's warning.
  */
-export function policyView(findings, ticked = []) {
+export function policyView(findings, ticked = [], named = []) {
   const byRule = new Map();
   for (const f of Array.isArray(findings) ? findings : []) {
     let r = byRule.get(f.rule);
@@ -328,10 +332,58 @@ export function policyView(findings, ticked = []) {
     const note = f.note ? sentence(f.note) : '';
     if (note && !r.notes.includes(note)) r.notes.push(note);
   }
+  for (const n of Array.isArray(named) ? named : []) {
+    if (!n || byRule.has(n.rule)) continue;
+    byRule.set(n.rule, { rule: n.rule, warn: n.warn, ack: n.ack ?? null, notes: n.note ? [sentence(n.note)] : [] });
+  }
   const rules = [...byRule.values()].sort((a, b) => a.rule - b.rule);
   const done = new Set((ticked ?? []).map(Number));
   const open = rules.find((r) => r.ack && !done.has(r.rule));
   return { rules, block: open ? `Tick "${open.ack}" to send — ${open.warn}` : null };
+}
+
+// Why a box the studio server's 409 named appears (serverAckModel): its
+// check could not run the rule — it did not finish, or cannot run on the
+// form — or it matched where the page's did not.
+const SERVER_UNCHECKED = 'The studio server could not check these settings against this rule, so it counts as matched — tick the box to send them with your approval.';
+const SERVER_MATCHED = 'The studio server\'s check of these settings matched this rule, where the check in this page did not.';
+const ACK_REFUSAL = /^\d{3}: ([\s\S]+) — tick "([\s\S]+)" in the server settings$/;
+
+/**
+ * The rule a refused pass-through submit names, as the modal draws its
+ * acknowledgement. `error` is requestJson's Error for POST
+ * /api/mcp-settings/submit's `409 { denied: 'policy-ack', rule,
+ * unevaluated?, error }` (studio/services-api.mjs servicesRefusal: `.denied`,
+ * `.rule`, `.unevaluated`, the message `409: <warn> — tick "<ack>" in the
+ * server settings`); `policy` the settings policy the page holds
+ * (compileSettingsPolicy's), or null.
+ * → { rule, warn, ack, note } — the rule's warn and ack from the page's
+ * policy, else read from the refusal's sentence; `note` says the server
+ * could not check the rule (`unevaluated`), or that its check matched it —
+ * or null for any other refusal, or one whose ack cannot be read.
+ */
+export function serverAckModel(error, policy = null) {
+  if (error?.denied !== 'policy-ack' || !Number.isInteger(error.rule) || error.rule < 0) return null;
+  const own = Array.isArray(policy?.rules) ? policy.rules.find((r) => r?.index === error.rule && r.ack) : null;
+  let warn = own?.warn ?? null;
+  let ack = own?.ack ?? null;
+  if (!ack) {
+    const m = ACK_REFUSAL.exec(String(error.message ?? ''));
+    if (!m) return null;
+    [, warn, ack] = m;
+  }
+  return { rule: error.rule, warn, ack, note: error.unevaluated === true ? SERVER_UNCHECKED : SERVER_MATCHED };
+}
+
+/**
+ * What the notice adds after such a refusal when the send emptied `emptied`
+ * secret inputs that held a value (a secret is emptied as soon as the
+ * request leaves): they are typed again before the next send. '' for none.
+ */
+export function secretsEmptiedLine(emptied) {
+  if (!(emptied > 0)) return '';
+  return emptied === 1 ? 'The secret you typed was emptied when the request left — type it again before you send.'
+    : 'The secrets you typed were emptied when the request left — type them again before you send.';
 }
 
 /**
