@@ -20,7 +20,7 @@ import { dirname, join, posix, resolve, sep, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   KNOWN_SKIPS, README_WIN32_LINES_RE, annotation, compareShapes, decodeTap, isExpectedSkip, logLines, parseTap,
-  readmeWin32Lines, reportCommand, runShape, skipGroup, summarize, unescapeTap, whereOf,
+  notStartedBlock, readmeWin32Lines, reportCommand, runShape, skipGroup, summarize, unescapeTap, whereOf,
 } from './tap-summary.mjs';
 
 // A failing assertion's message, actual and expected are printed into the
@@ -675,9 +675,11 @@ test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README 
     assert.ok(!spacedRun.stderr.includes(`> ${spaced} `), spacedRun.stderr);
 
     // A capture in which npm test never started — npm's, node's or a shell's
-    // refusal, or nothing at all — has no reporter to name: a block of its own
-    // on stdout shows what it holds (the cause), an ::error says the tests
-    // never started, and the notice gives the block's length for a tail read.
+    // refusal, or nothing at all — prints a block of its own on stdout: an
+    // ::error says the tests never started, and the notice gives the block's
+    // length for a tail read. A refusal names no reporter (naming one starts
+    // nothing): the block shows what it holds, the cause. An empty capture
+    // holds no cause: its way out is the capture command, named whole.
     const notStarted = (name, text, shown) => {
       const p = f(name, text);
       const r = run([p, '--win32-skips', '0']);
@@ -716,7 +718,16 @@ test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README 
     const one = notStarted('one.tap', 'npm error Missing script: "test"\n', ['npm error Missing script: "test"']);
     assert.ok(one.includes('What it holds (1 line) names the cause: fix it, then run npm test again.') && !one.includes('--test-reporter'), one);
     const empty = notStarted('empty.tap', '', []);
-    assert.ok(empty.includes(`${join(dir, 'empty.tap')} is empty: npm test printed nothing into it — capture the run again: `), empty);
+    const emptyLine = (file, cmd) => `${file} is empty: npm test printed nothing into it — capture the run again: ${cmd}`;
+    assert.ok([false, true].some((w) => empty.split('\n').includes(emptyLine(join(dir, 'empty.tap'), reportCommand(join(dir, 'empty.tap'), w)))), empty);
+    // docs/CHANGELOG.md quotes that line as the block prints it, in either form.
+    const changelog = readFileSync(join(ROOT, 'docs', 'CHANGELOG.md'), 'utf8');
+    const quoted = /`(<file> is empty: [^`]*<cmd>)`/.exec(changelog)?.[1];
+    assert.ok(quoted, 'docs/CHANGELOG.md quotes the line an empty capture prints, `<file> is empty: … <cmd>`');
+    for (const [file, w] of [['/home/jo/obs/e.tap', false], ['C:\\obs\\e.tap', true]]) {
+      const said = quoted.replace('<file>', () => file).replace('<cmd>', () => reportCommand(file, w));
+      assert.ok(notStartedBlock('', { file, windows: w }).text.split('\n').includes(said), `docs/CHANGELOG.md quotes the empty capture's line as the block prints it: ${said}`);
+    }
     const many = Array.from({ length: 45 }, (_, i) => `npm error line ${i + 1}`);
     assert.ok(notStarted('long.tap', `${many.join('\n')}\n`, many.slice(-40)).includes('Its last 40 of 45 lines name the cause: fix it, then run npm test again.'), 'a long refusal: its last 40 lines');
 

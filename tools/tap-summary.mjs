@@ -383,10 +383,12 @@ const NOT_STARTED = Object.freeze([
 
 /**
  * The block for a capture without TAP in which npm test never started: an
- * empty file, or npm's, node's or a shell's refusal to start the tests. No
- * reporter is the cause, so none is named: the block shows what the capture
- * holds (its last 40 lines, the cause), an ::error and the notice with the
- * block's length. Returns { text, lines }, or null for any other capture.
+ * empty file, or npm's, node's or a shell's refusal to start the tests. A
+ * refusal names no reporter, which would start nothing: the block shows what
+ * the capture holds (its last 40 lines, the cause). An empty file holds no
+ * cause, so its way out is the capture command, named whole. Then an ::error
+ * and the notice with the block's length. Returns { text, lines }, or null
+ * for any other capture.
  */
 export function notStartedBlock(text, { file = 'test.tap', windows = false, host = null } = {}) {
   const held = String(text).replace(/\r\n/g, '\n').split('\n');
