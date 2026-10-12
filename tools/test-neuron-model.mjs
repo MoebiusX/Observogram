@@ -381,7 +381,11 @@ test('notify hints name the org\'s hook variables — <KEY>, said so, when the o
   assert.equal(jv.notifySetupLine({ urlEnv: 'OBSERVOGRAM_ORG_PAY_EU_NOTIFY_ONCALL_URL' }), 'Set up: posts transitions to the webhook in $OBSERVOGRAM_ORG_PAY_EU_NOTIFY_ONCALL_URL.');
   const problem = 'journey legacy is not run: its notify.urlEnv "MY_HOOK_URL" is not a notify hook of org \'pay-eu\' — the server posts only to OBSERVOGRAM_ORG_PAY_EU_NOTIFY_<HOOK>_URL';
   const refused = jv.notifySetupLine({ urlEnv: 'MY_HOOK_URL', authEnv: null, on: 'always', format: 'json', problem });
-  assert.equal(refused, `The server will not run this journey as it stands: ${problem}`);
+  // The run's text opens `journey <name> is not run: `; the line's lead says that once.
+  const reason = 'its notify.urlEnv "MY_HOOK_URL" is not a notify hook of org \'pay-eu\' — the server posts only to OBSERVOGRAM_ORG_PAY_EU_NOTIFY_<HOOK>_URL';
+  assert.equal(refused, `The server will not run this journey as it stands: ${reason}`);
+  assert.equal(jv.notifySetupLine({ urlEnv: 'MY_HOOK_URL', problem: `journey Pay EU legacy is not run: ${reason}` }),
+    `The server will not run this journey as it stands: ${reason}`, 'a name: with spaces');
   assert.ok(!refused.includes('Set up'));
   // The Neuron view's Notification row says the refusal whatever the newest
   // record says: a journey that notified before the rule, or through the

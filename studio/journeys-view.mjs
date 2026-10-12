@@ -112,9 +112,12 @@ function notifyRemedy(org) {
 // A declared notify block (GET /api/journeys' `notify`): what a server run
 // would answer when it refuses the journey (`problem`, the run's own text —
 // the Neuron view says it after any delivery too), else, before any
-// delivery, what is set up. Plain text; the caller escapes it.
+// delivery, what is set up. The run's text opens `journey <name> is not run: `
+// (server/notify-target-policy.mjs); this line's own lead says that, so the
+// run's is left out. Plain text; the caller escapes it.
+const RUN_LEAD = /^journey [\s\S]*? is not run: /;
 export function notifySetupLine(notify) {
-  if (notify?.problem) return `The server will not run this journey as it stands: ${notify.problem}`;
+  if (notify?.problem) return `The server will not run this journey as it stands: ${String(notify.problem).replace(RUN_LEAD, '')}`;
   return `Set up: posts ${notify?.on || 'transitions'} to the webhook in $${notify?.urlEnv}.`;
 }
 
