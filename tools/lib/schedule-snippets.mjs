@@ -22,8 +22,11 @@
 // been, saying so — but a refused token `refusedPairs` names ({ authEnv,
 // urlEnv, tokenEnv }: the journey pairs authEnv with its org's hook urlEnv,
 // whose own token is tokenEnv) is told that token instead, since a rename to
-// some hook's shape would not do. `packc journey schedule` passes neither
-// (the CLI reads any name from its invoker's environment).
+// some hook's shape would not do; and with `refusedTaken` (another org's id
+// takes every name of the org's hook shape, so no rename can make one the
+// org's) every other refused name is told to leave notify out instead.
+// `packc journey schedule` passes none of them (the CLI reads any name from
+// its invoker's environment).
 // Honesty rule: nothing is fabricated as the journey's cadence — a missing
 // schedule prints a marked placeholder, `every: 45m` (no exact cron) prints
 // its command as a comment, an irregular cron is passed through verbatim.
@@ -44,11 +47,14 @@ const ORG_ROOT_RE = /^orgs\/[a-z][a-z0-9_-]{0,62}[a-z0-9]$/;
 export function validOrgRoot(r) { return r === '.' || ORG_ROOT_RE.test(String(r)); }
 const DOW_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 // What each form says where a refused name's binding would have been: a
-// token refused beside its org's hook URL is told that hook's own token.
+// token refused beside its org's hook URL is told that hook's own token; any
+// name of an org whose every hook name another org's id takes, to leave
+// notify out (no name can be its hook).
 const refusedNote = (n, e) => {
   const p = n.refusedPairs.find((x) => x.authEnv === e);
-  return p
-    ? `${e} is not the token of the hook ${p.urlEnv} names: a hook's token goes only to its own URL — set the journey's notify.authEnv to ${p.tokenEnv}, or remove it, before scheduling (docs/DOWNSTREAM.md §17.2)`
+  if (p) return `${e} is not the token of the hook ${p.urlEnv} names: a hook's token goes only to its own URL — set the journey's notify.authEnv to ${p.tokenEnv}, or remove it, before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  return n.refusedTaken
+    ? `${e} cannot be a notify hook of this org: another org's id also maps onto every name of its hook shape (OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN) by the longest-prefix rule, so the studio posts no notification for its journeys — remove the journey's notify before scheduling (docs/DOWNSTREAM.md §17.1)`
     : `${e} is not a notify hook of this org: the studio never reads it — rename it to OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN before scheduling (docs/DOWNSTREAM.md §17.2)`;
 };
 
@@ -72,6 +78,7 @@ export function normaliseSnippetInput(i = {}) {
     envNames,
     refusedEnvNames,
     refusedPairs,
+    refusedTaken: src.refusedTaken === true,
     nodePath: String(src.nodePath || 'node'),
     cliPath: String(src.cliPath || 'tools/cli.mjs'),
     cwd: String(src.cwd || '.'),

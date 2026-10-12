@@ -1141,7 +1141,7 @@ test('H13 a record written before the rule is served scrubbed: undici\'s echo of
   }
 });
 
-test('H16 the schedule route never binds a notify name the server refuses: a legacy journey\'s envNames hold neither of its names, refusedEnvNames both, and every snippet says so where the binding would have been; a stranger token beside the org\'s hook is the only name refused, its comment naming that hook\'s own token; a journey through its org\'s hook has the body it always had', { timeout: 120_000 }, async () => {
+test('H16 the schedule route never binds a notify name the server refuses: a legacy journey\'s envNames hold neither of its names, refusedEnvNames both, and every snippet says so where the binding would have been; a stranger token beside the org\'s hook is the only name refused, its comment naming that hook\'s own token; a journey through its org\'s hook has the body it always had; an org whose every hook name another org\'s id takes is told, for each refused name, to leave notify out, as its run\'s refusal says — never to rename it', { timeout: 120_000 }, async () => {
   const A = await identityChild();
   plant(A.ws, 'acme', 'h16-bare', { notify: '{ urlEnv: MY_HOOK_URL, authEnv: OBSERVOGRAM_API_TOKEN, on: always }' });
   plant(A.ws, 'acme', 'h16-pair', { notify: `{ urlEnv: ${ONCALL.urlEnv}, authEnv: ${PAGER.tokenEnv} }` });
@@ -1178,6 +1178,34 @@ test('H16 the schedule route never binds a notify name the server refuses: a leg
     workspace: orgRoot(A.ws, 'acme'), orgRoot: 'orgs/acme', image: `observogram:${pkg.version}`, namespace: 'observability',
     retention: brandEnv('JOURNEY_RUN_RETENTION') || null, placeholder: true, source: join(orgRoot(A.ws, 'acme'), 'journeys', 'h16-hook.journey.yaml'),
   }));
+  // An org whose every hook name another org's id takes (pay beside pay-notify, an orgs-file import): no name can be
+  // its hook — its hook-shaped names already have the shape — so each refused name, hook-shaped or bare, is told to
+  // leave notify out, as the run's TAKEN refusal on the listing says; never to rename it to that shape.
+  const ws = mkdtempSync(join(tmpdir(), 'observogram-notify-taken-'));
+  tmpDirs.push(ws);
+  writeUsersFile({ users: { vera: { name: 'vera', createdAt: 'test', password: hashPassword(pw('vera')) } } }, join(ws, 'users.json'));
+  writeOrgsFile({ default: { name: 'Default', members: { vera: 'viewer' } }, pay: { name: 'Pay', members: { vera: 'viewer' } }, 'pay-notify': { name: 'Pay Notify', members: {} } }, join(ws, 'orgs.json'));
+  const PAY = hookVarsOf('pay', 'ONCALL');
+  plant(ws, 'pay', 'h16-taken', { notify: `{ urlEnv: ${PAY.urlEnv}, authEnv: ${PAY.tokenEnv} }` });
+  plant(ws, 'pay', 'h16-taken-bare', { notify: '{ urlEnv: MY_HOOK_URL }' });
+  const child = await serveSeen(ws, {});
+  try {
+    const s = await signIn(child.base, 'vera', pw('vera'));
+    assert.equal(s.status, 200, 'vera signs in');
+    const inPay = { Cookie: s.session, 'X-Observogram-Org': 'pay' };
+    const TAKEN = (e) => `${e} cannot be a notify hook of this org: another org's id also maps onto every name of its hook shape (OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN) by the longest-prefix rule, so the studio posts no notification for its journeys — remove the journey's notify before scheduling (docs/DOWNSTREAM.md §17.1)`;
+    const listed = Object.fromEntries((await call(child.base, 'GET', '/api/journeys', { headers: inPay })).json.journeys.map((j) => [j.name, j]));
+    for (const [name, names] of [['h16-taken', [PAY.urlEnv, PAY.tokenEnv]], ['h16-taken-bare', ['MY_HOOK_URL']]]) {
+      assert.match(listed[name].notify.problem, new RegExp(`cannot be a notify hook of org 'pay' .*; whoever holds the workspace removes notify from orgs/pay/journeys/${name}\\.journey\\.yaml `), `${name}: the run's way out`);
+      const r = await call(child.base, 'GET', `/api/journeys/${name}/schedule`, { headers: inPay });
+      assert.equal(r.status, 200, r.text.slice(0, 200));
+      assert.deepEqual([r.json.envNames, r.json.refusedEnvNames], [[], names], name);
+      for (const e of names) refusedIn(r.json.snippets, e, TAKEN(e));
+      for (const f of ['cron', 'schtasks', 'actions', 'k8s']) assert.ok(!r.json.snippets[f].includes('is not a notify hook') && !r.json.snippets[f].includes('rename it'), `${name} ${f}: never a rename`);
+    }
+  } finally {
+    await child.stop();
+  }
 });
 
 test('H17 the secret scan: no marker — a hook URL\'s host or path, a hook token, a server secret, another org\'s variable — in any response body, any child\'s output, any audit row, the stopped store or any workspace file; every webhook request went to its own hook with its own token, and the MCP never got an Authorization', { timeout: 120_000 }, async () => {

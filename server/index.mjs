@@ -67,7 +67,7 @@ import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
 import { describeProxyAuth } from './auth-proxy.mjs';
 import { stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
 import { mcpCallerOf, mcpRefusalBody, redactTarget } from './mcp-target-policy.mjs';
-import { captureNotifyRefusal, notifyBootReport, notifyHookOf, notifyHooksOf, notifyNamesRefusal, notifyPostureRefusal, resolveJourneyNotify } from './notify-target-policy.mjs';
+import { captureNotifyRefusal, hooksAllTaken, notifyBootReport, notifyHookOf, notifyHooksOf, notifyNamesRefusal, notifyPostureRefusal, resolveJourneyNotify } from './notify-target-policy.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
 import { auditAfter, actorForRecord, bounded, finite } from './audit-after.mjs';
@@ -1011,7 +1011,9 @@ app.get('/api/journeys/:name/runs', authorize('GET /api/journeys/:name/runs'), (
 // says so where the binding would have been: the studio does not tell a
 // deployer to bind a name it refuses itself. A token refused beside the org's
 // own hook (the PAIR refusal) is told that hook's own token, the way out the
-// run's refusal names (scheduleSnippets' refusedPairs).
+// run's refusal names (scheduleSnippets' refusedPairs); a name of an org whose
+// every hook name another org's id takes (the TAKEN refusal), to leave notify
+// out, as the run says — never a rename no name can satisfy (refusedTaken).
 app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/schedule'), (req, res) => {
   let def;
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
@@ -1025,11 +1027,12 @@ app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/sched
     const refusedEnvNames = [...new Set([urlRefused ? def.notify.urlEnv : null, authRefused ? def.notify.authEnv : null].filter((n) => n && !envNames.includes(n)))];
     const hook = authRefused && !urlRefused && def.notify.urlEnv ? notifyHookOf(currentStore(), def.notify.urlEnv, currentOrg()) : null;
     const refusedPairs = hook?.kind === 'hook' ? [{ authEnv: def.notify.authEnv, urlEnv: hook.urlEnv, tokenEnv: hook.tokenEnv }] : [];
+    const refusedTaken = refusedEnvNames.length > 0 && hooksAllTaken(currentStore(), currentOrg());
     const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
     const snippets = scheduleSnippets({
       name: def.name,
       cron: parsed?.cron ?? null, timezone: parsed?.timezone ?? null, every: parsed?.every ?? null, cadenceNote: parsed?.cadenceNote ?? null,
-      envNames, refusedEnvNames, refusedPairs,
+      envNames, refusedEnvNames, refusedPairs, refusedTaken,
       nodePath: process.execPath, cliPath: resolve(ROOT, 'tools/cli.mjs'), cwd: process.cwd(),
       workspace: orgWorkspaceRoot(), orgRoot: orgRootOf(currentOrg()),
       image: `observogram:${pkg.version}`, namespace: 'observability',

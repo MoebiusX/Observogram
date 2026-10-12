@@ -84,9 +84,10 @@ const soleOwner = (db, name, org) => {
 // <P>NOTIFY_ (pay-notify or pay_notify beside pay)? Only those two prefixes
 // start every <P>NOTIFY_<HOOK>_URL. Then no hook is ever the org's alone,
 // whatever the server's operator sets (ids are never reused), and no text
-// may send a member to the listing or the operator to set one. Reads orgs,
-// never the environment.
-function hooksAllTaken(db, org) {
+// may send a member to the listing or the operator to set one (nor the
+// schedule snippets a deployer to rename a name to the hook shape). Reads
+// orgs, never the environment.
+export function hooksAllTaken(db, org) {
   const P = orgEnvPrefix(org);
   return listOrgs(db, { includeRemoved: true })
     .some((o) => o.id !== org && (orgEnvPrefix(o.id) === P || orgEnvPrefix(o.id) === `${P}NOTIFY_`));

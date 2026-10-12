@@ -226,6 +226,22 @@ const S45 = withSched({ every: '45m' });
     assert(ls.includes(`${pre}${REFUSED('MY_HOOK_URL')}`), `${f}: a refused name without a pair keeps its comment`);
     assert(ps[f] === scheduleSnippets({ ...p, refusedPairs: undefined })[f].replace(REFUSED(PAGER), PAIRED), `${f}: only the paired token's comment differs`);
   }
+  // An org whose every hook name another org's id takes (refusedTaken: pay beside pay-notify, a KEY tie) has no
+  // name a rename could reach — its hook-shaped names already have the shape — so each refused name, hook-shaped or
+  // bare, is told to leave notify out, as the run's TAKEN refusal says; never the rename.
+  const TAKEN = (e) => `${e} cannot be a notify hook of this org: another org's id also maps onto every name of its hook shape (OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN) by the longest-prefix rule, so the studio posts no notification for its journeys — remove the journey's notify before scheduling (docs/DOWNSTREAM.md §17.1)`;
+  const PAY = ['OBSERVOGRAM_ORG_PAY_NOTIFY_ONCALL_URL', 'OBSERVOGRAM_ORG_PAY_NOTIFY_ONCALL_TOKEN', 'MY_HOOK_URL'];
+  const t = { ...S15, envNames: ['MY_MCP_TOKEN'], refusedEnvNames: PAY, refusedTaken: true };
+  assert(normaliseSnippetInput(t).refusedTaken === true && normaliseSnippetInput(S15).refusedTaken === false && normaliseSnippetInput({ ...t, refusedTaken: 'yes' }).refusedTaken === false,
+         'refusedTaken: true only when given as true; false by default');
+  const ts = scheduleSnippets(t);
+  for (const [f, pre] of [['cron', '# '], ['schtasks', 'REM '], ['actions', '          # '], ['k8s', '                # ']]) {
+    const ls = ts[f].split('\n');
+    for (const e of PAY) assert(ls.includes(`${pre}${TAKEN(e)}`) && !ts[f].includes(`${e} is not a notify hook`), `${f}: ${e} — leave notify out, never a rename`, ls.filter(l => l.includes(e)));
+    assert(ts[f] === PAY.reduce((s, e) => s.replace(REFUSED(e), TAKEN(e)), scheduleSnippets({ ...t, refusedTaken: false })[f]), `${f}: only the refused names' comments differ`);
+    assert(scheduleSnippets({ ...S15, refusedTaken: true })[f] === scheduleSnippets(S15)[f], `${f}: refusedTaken without a refused name, byte-identical`);
+    assert(noSecret(ts[f]), `${f}: no value with refusedTaken`);
+  }
 }
 
 // --- secrets discipline across every form ---

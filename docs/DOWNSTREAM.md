@@ -1258,14 +1258,14 @@ an org whose id extends this one's (`acme-notify-eu` owns
 `OBSERVOGRAM_ORG_ACME_NOTIFY_*`), or a KEY tie (`a-b` and `a_b`) — is
 refused for everyone, and the refusal names no other org. An org whose every
 hook name another org's id takes (the tie, or an `acme-notify` beside
-`acme`) can have no hook at all, whatever is set: its listing and every
-refusal of its `notify` say so, and that the way out is to leave `notify`
-out. Org creation (`POST /api/admin/orgs`, `npm run orgs -- create`) refuses
-an id that would take another org's hooks, whose own hooks another org
-already takes, or that differs from another org's id only in `-` and `_`
-(409, naming the other org to the owner who creates it); the orgs-file
-import is not guarded, and the start's report names each set hook variable
-such a pair shadows.
+`acme`) can have no hook at all, whatever is set: its listing, every refusal
+of its `notify` and its schedule snippets (17.3) say so, and that the way
+out is to leave `notify` out. Org creation (`POST /api/admin/orgs`, `npm run
+orgs -- create`) refuses an id that would take another org's hooks, whose
+own hooks another org already takes, or that differs from another org's id
+only in `-` and `_` (409, naming the other org to the owner who creates it);
+the orgs-file import is not guarded, and the start's report names each set
+hook variable such a pair shadows.
 
 **What a server run reads.** At most those two variables — never another
 org's, never one of the server's own (`OBSERVOGRAM_API_TOKEN`,
@@ -1514,10 +1514,16 @@ for a `notify.authEnv` refused beside the org's own hook (any name but that
 hook's `_TOKEN`), `# <NAME> is not the token of the hook <urlEnv> names: a hook's
 token goes only to its own URL — set the journey's notify.authEnv to
 <the hook's _TOKEN>, or remove it, before scheduling (docs/DOWNSTREAM.md
-§17.2)`. What remains is a file written before the upgrade or edited by
+§17.2)` — or, for any name of an org whose every hook name another org's id
+takes (17.1, "Whose it is"; no rename can reach a hook there), `# <NAME>
+cannot be a notify hook of this org: another org's id also maps onto every
+name of its hook shape (OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN) by
+the longest-prefix rule, so the studio posts no notification for its
+journeys — remove the journey's notify before scheduling (docs/DOWNSTREAM.md
+§17.1)`. What remains is a file written before the upgrade or edited by
 hand, run by a CronJob whose Secret holds whatever the file named — 17.2
-finds those files and the secrets to rotate. `packc journey schedule` passes no
-`refusedEnvNames` and binds every name the journey declares, as before.
+finds those files and the secrets to rotate. `packc journey schedule` passes
+no `refusedEnvNames` and binds every name the journey declares, as before.
 
 ### 17.4 Follow-ups, by name
 
