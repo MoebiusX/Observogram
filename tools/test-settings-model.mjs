@@ -1300,6 +1300,19 @@ test('mcpTargetMissingText: the typed URL named only for a reader who may type o
     assert.match(toast, /^Roll back needs an MCP target in the form above: [^.]+\.$/, `${JSON.stringify(input)}: one sentence`);
     assert.doesNotMatch(toast, /in the target form first/, `${JSON.stringify(input)}: nothing appended after the line's own instruction`);
   }
+  // The CHANGELOG's entry names develop's toast as the before — the line
+  // capitalized with " in the target form first" appended, over a line with
+  // no `unreadable` (develop had none): after a failed read "Choose one of
+  // <org>'s MCP endpoints…", beside an empty list the line's own instruction
+  // — never a toast over the could-not-be-read line, which develop never said.
+  const before = (line) => `\`${line.replace(/^./, (c) => c.toUpperCase())} in the target form first\``;
+  const entry = readFileSync(new URL('../docs/CHANGELOG.md', import.meta.url), 'utf8').split('\n')
+    .find((l) => l.startsWith("- **The MCP panel's Server settings button and the empty MCP picker's lines say the server's sentence**"));
+  assert.ok(entry, "docs/CHANGELOG.md has the entry for the server's sentence");
+  const rollback = entry.slice(entry.indexOf("the deploy history's roll back toast"), entry.indexOf('`Roll back needs an MCP target in the form above: <the line>.`'));
+  assert.ok(rollback.includes(before(mcpTargetMissingText({ typedAllowed: false, orgName: '<org>' }))), `the before after a failed read: ${rollback}`);
+  assert.ok(rollback.includes(before(mcpTargetMissingText({ typedAllowed: false, orgName: '<org>', empty: true, canRegister: true }))), `the before beside an empty list: ${rollback}`);
+  assert.ok(!rollback.includes(before(mcpTargetMissingText({ typedAllowed: false, orgName: '<org>', unreadable: true }))), `never a toast develop did not say: ${rollback}`);
 });
 
 test('profileEndpointNote and endpointDrift with typedAllowed false: no sentence offers typing a URL; a typed profile is said', () => {
