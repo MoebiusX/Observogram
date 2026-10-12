@@ -758,15 +758,25 @@ const stepNamed = (job, re) => stepsOf(job).filter((st) => re.test(st));
 const minutes = (text) => Number(/timeout-minutes: (\d+)/.exec(text)?.[1]);
 const jobMinutes = (job) => Number(/^ {4}timeout-minutes: (\d+)/m.exec(job)?.[1]);
 // What the comment right above a step says it was sized from, in seconds:
-// "twice the slowest … measured on the runner (XmYs)" and "twice the slowest
-// steps before it (XmYs)" (NaN when it says none).
+// "twice the slowest … measured on the runner (XmYs), <rounding>" and "twice
+// the slowest steps before it (XmYs)" (NaN when it says none).
 function measured(job, st) {
   const above = job.slice(0, job.indexOf(st)).replace(/\n$/, '').split('\n');
   let i = above.length;
   while (i > 0 && /^ {6}#/.test(above[i - 1])) i--;
   const comment = above.slice(i).map((l) => l.replace(/^ {6}# ?/, '')).join(' ');
   const secs = (re) => { const m = re.exec(comment); return m ? Number(m[1]) * 60 + Number(m[2]) : NaN; };
-  return { slowest: secs(/twice the slowest [^()]*measured on the runner \((\d+)m(\d+)s\)/), before: secs(/twice the slowest steps before it \((\d+)m(\d+)s\)/) };
+  const rounding = /twice the slowest [^()]*measured on the runner \(\d+m\d+s\), ([^;.]*)/.exec(comment)?.[1] ?? '';
+  return { slowest: secs(/twice the slowest [^()]*measured on the runner \((\d+)m(\d+)s\)/), before: secs(/twice the slowest steps before it \((\d+)m(\d+)s\)/), rounding };
+}
+// The minutes a stated rounding gives from twice the slowest run (seconds):
+// "rounded up" (to the minute), "rounded up to <k> minutes", either with
+// "and at least <m>" or ", at least <m>" (NaN for a rounding it does not read).
+function roundedUp(rounding, slowest) {
+  const m = /^rounded up(?: to (\d+) minutes)?(?: and at least (\d+)|, at least (\d+))?$/.exec(rounding.trim());
+  if (!m) return NaN;
+  const step = Number(m[1] ?? 1);
+  return Math.max(Number(m[2] ?? m[3] ?? 0), Math.ceil((2 * slowest) / (60 * step)) * step);
 }
 const SUMMARY_IF = "if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}";
 // A step's keys after its name, as lines (a blank line or a comment is none:
@@ -836,9 +846,20 @@ test('S10 the workflow wires it: a Windows matrix on the floor and the latest 22
   // names, so a slow runner's green run never reads red; validate's job adds
   // twice the slowest steps before the suites, so the summary runs on a hang.
   for (const [name, job, st] of [['windows', w, wTest[0]], ['validate', v, vTest[0]]]) {
-    const { slowest } = measured(job, st);
+    const { slowest, rounding } = measured(job, st);
     assert.ok(slowest > 0, `${name}: the comment above the suites step names the slowest run it is sized from ("twice the slowest … measured on the runner (XmYs)")`);
     assert.ok(minutes(st) * 60 >= 2 * slowest, `${name}: the step timeout (${minutes(st)} min) is at least twice the slowest run measured on the runner (${slowest} s)`);
+    assert.equal(roundedUp(rounding, slowest), minutes(st), `${name}: the step timeout (${minutes(st)} min) is what its comment's rounding ("${rounding}") gives from twice ${slowest} s`);
+  }
+  // …and a timeout docs/CHANGELOG.md derives from a measured run ("<N>
+  // minutes: twice … measured on the runner, XmYs, <rounding>") is the N its
+  // rounding gives: "rounded up" alone never turns twice 3m39s into 15.
+  const changelog = readFileSync(join(ROOT, 'docs', 'CHANGELOG.md'), 'utf8');
+  const derived = [...changelog.matchAll(/\((\d+) minutes: twice [^()]*?measured on the runner, (\d+)m(\d+)s, ([^;)]*)[;)]/g)];
+  assert.ok(derived.length > 0, 'docs/CHANGELOG.md derives a step timeout from a run measured on the runner');
+  for (const [said, n, mm, ss, rounding] of derived) {
+    const slowest = Number(mm) * 60 + Number(ss);
+    assert.equal(roundedUp(rounding, slowest), Number(n), `docs/CHANGELOG.md: "${said}" — twice ${mm}m${ss}s, ${rounding}, gives ${roundedUp(rounding, slowest)} minutes, not ${n}; state the rounding that gives ${n}`);
   }
   const { before } = measured(v, vTest[0]);
   assert.ok(before > 0, 'validate: the comment above the suites step names the slowest steps before it ("twice the slowest steps before it (XmYs)")');
