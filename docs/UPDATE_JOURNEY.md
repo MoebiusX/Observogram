@@ -1374,7 +1374,10 @@ notification it names the org's hook variable — the org's own prefix when the
 studio knows the org, `<KEY>` and what it stands for when it does not — and
 the Neuron view no longer calls a journey "Set up" when the server would
 refuse to run it: it shows the server's own sentence instead.
-Tests: 1417 → 1418 (one more in `tools/test-neuron-model.mjs`).
+Tests: 1417 → 1418 (one more in `tools/test-neuron-model.mjs`). A hook's
+names are single words wider than a phone, so the Neuron view's focus header
+breaks them inside its row rather than scroll the page sideways at 390 px.
+Tests: 1418 → 1419 (one more in `server/test-live-studio.mjs`).
 
 The docs close the item. `docs/DOWNSTREAM.md` §17 states the rule with every
 sentence capture and a run answer, and the migration for a journey written
