@@ -1360,3 +1360,12 @@ MCP_INTEGRATION and DOWNSTREAM always said, and the worker's deadline per
 rule is the guard; the taxonomy's own clocks are unchanged.
 Tests: 1393 → 1394 (one more in `server/test-mcp-settings.mjs`: under a
 clock that jumps a second per read, a valid policy loads).
+A server whose policy worker cannot be built — one started under the
+permission model without `--allow-worker` — counts every rule as matched,
+so even the approved host is a 409 naming rule 0, which an API caller
+acknowledges with `acks: [0]`. The 409 now says `unevaluated: true` when the
+server could not check the rule it names (it did not finish, the worker
+could not start or failed, or the rule cannot run on the form), and never
+for a match, so a caller can say why the rule applies.
+Tests: 1394 → 1395 (one more in `server/test-mcp-settings.mjs`: the refusal
+flagged only for a rule the server could not check).

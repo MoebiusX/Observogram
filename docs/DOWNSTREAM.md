@@ -1183,7 +1183,10 @@ the reader's browser cannot reach it. The contract:
 - The paths are the server's: `<root>/admin/schema`, the endpoint the
   description declares (read again at submit), or the policy's
   `generic.path` (else `/configure`). The policy is re-checked (a missing
-  acknowledgement is `409 { denied: 'policy-ack', rule }`).
+  acknowledgement is `409 { denied: 'policy-ack', rule }`, with
+  `unevaluated: true` when the server could not check that rule — it did not
+  finish, the worker could not start or failed, or it cannot run on the
+  form).
 - One request with the platform's `fetch`, **never through the transport
   hook**: no redirect followed, 10 s, a capped read, exactly `Content-Type`,
   `Accept` and the description's own `Authorization`.

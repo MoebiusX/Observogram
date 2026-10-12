@@ -47,12 +47,15 @@
 //      path rule (tools/lib/mcp-server-settings.mjs).
 //   5. submit re-checks the settings policy against the description it just
 //      read: an acknowledgement a matching (or unevaluable) rule requires and
-//      the caller did not tick is a 409. The patterns run in a worker with a
-//      100 ms deadline per rule (server/mcp-settings-eval.mjs), never on this
-//      thread: a rule that does not finish counts as matched, so a slow
-//      pattern costs its acknowledgement, never the server; when the worker
-//      cannot start, every rule counts as matched, and when it fails, every
-//      rule it did not finish.
+//      the caller did not tick is a 409 naming the rule (`rule`, its index),
+//      with `unevaluated: true` when the server could not check it — it did
+//      not finish, or cannot run on the form (policyAckRefusal). The patterns
+//      run in a worker with a 100 ms deadline per rule
+//      (server/mcp-settings-eval.mjs), never on this thread: a rule that does
+//      not finish counts as matched, so a slow pattern costs its
+//      acknowledgement, never the server; when the worker cannot start, every
+//      rule counts as matched, and when it fails, every rule it did not
+//      finish.
 //   6. One request upstream with the platform's fetch — never the transport
 //      hook (M10): no redirect followed (a 3xx is refused, naming its origin
 //      only), 10 s, the answer read with a cap (16 KiB for a description,
@@ -79,7 +82,7 @@ import {
 } from '../../tools/lib/mcp-server-settings.mjs';
 import { isLoopbackOrigin } from '../../tools/lib/mcp-url-safety.mjs';
 import { auditAfter } from '../audit-after.mjs';
-import { evaluatePolicy } from '../mcp-settings-eval.mjs';
+import { evaluatePolicy, policyAckRefusal } from '../mcp-settings-eval.mjs';
 import { mcpAdminProxyOn, settingsPolicy, settingsPolicyAnswer } from '../mcp-settings-policy.mjs';
 import { mcpCallerOf, mcpOriginDecision, mcpRefusalBody, redactTarget } from '../mcp-target-policy.mjs';
 import { resolveMcpTarget } from '../service-admin.mjs';
@@ -353,13 +356,12 @@ export function mcpSettingsRoutes({ authorize }) {
       // deadline (server/mcp-settings-eval.mjs): a rule that does not finish
       // counts as matched. An action sets no value the modal checks, so only
       // a rule that matches a field the action sends applies to it.
+      // The 409 names the first unticked rule, and says `unevaluated: true`
+      // when the server could not check it.
       let { findings } = await evaluatePolicy(policy, descriptor, clean);
       if (action !== null) findings = findings.filter((f) => !f.unevaluated && built.sent.includes(f.field));
-      const ticked = new Set(acks);
-      const missing = findings.find((f) => f.ack && !ticked.has(f.rule));
-      if (missing) {
-        return res.status(409).json({ ok: false, denied: 'policy-ack', rule: missing.rule, error: `${missing.warn} — tick "${missing.ack}" in the server settings` });
-      }
+      const refusal = policyAckRefusal(findings, acks);
+      if (refusal) return res.status(409).json(refusal);
       const acknowledged = [...new Set(findings.filter((f) => f.ack).map((f) => f.rule))].sort((a, b) => a - b);
 
       const where = resolveSettingsPath(built.path, target.mcpUrl, mode === 'generic' ? { noun: 'the settings path', fix: 'the settings policy\'s generic.path sets it' } : {});

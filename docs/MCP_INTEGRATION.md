@@ -419,8 +419,12 @@ server is exposed without sign-in. The studio server:
   a described submit reads the description again and sends to the endpoint
   (or the action's endpoint) it declares, whatever the caller says; a generic
   submit only to the settings policy's `generic.path`, else `/configure`;
-- re-checks the settings policy against what it read (a missing
-  acknowledgement is a 409), in a `node:worker_threads` worker that gives
+- re-checks the settings policy against what it read — a missing
+  acknowledgement is a 409, `{ denied: 'policy-ack', rule, error }`, naming
+  the rule by index and its warning and acknowledgement, with
+  `unevaluated: true` when the server could not check that rule (it did not
+  finish, the worker could not start or failed, or the rule cannot run on
+  the form), never a value —, in a `node:worker_threads` worker that gives
   each rule 100 ms from its own start (`server/mcp-settings-eval.mjs`), never
   the time the rules before it took: past a rule's deadline the worker is
   terminated, that rule and every rule after it count as matched — each

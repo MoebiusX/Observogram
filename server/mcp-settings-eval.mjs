@@ -240,6 +240,24 @@ export async function evaluatePolicy(policy, descriptor, values, options) {
   }
 }
 
+/**
+ * The pass-through's refusal for a submit whose acknowledgements (`acks`,
+ * rule indexes) miss one the findings require — the first such finding's
+ * rule —, or null: `409 { ok: false, denied: 'policy-ack', rule, error }`,
+ * the error the rule's warn and ack only. `unevaluated: true` when the
+ * server could not check that rule — it did not finish (`timedOut`: past its
+ * deadline, or the worker failed or never started), or it cannot run on the
+ * form (`unevaluated`) — and absent when its pattern matched, so the studio
+ * can say which; value-free, like the rest.
+ */
+export function policyAckRefusal(findings, acks) {
+  const ticked = new Set(acks);
+  const missing = findings.find((f) => f.ack && !ticked.has(f.rule));
+  if (!missing) return null;
+  const unchecked = missing.timedOut === true || missing.unevaluated === true;
+  return { ok: false, denied: 'policy-ack', rule: missing.rule, ...(unchecked ? { unevaluated: true } : {}), error: `${missing.warn} — tick "${missing.ack}" in the server settings` };
+}
+
 // ---------- the worker ----------
 
 if (!isMainThread && workerData?.[MARK] === true) {
