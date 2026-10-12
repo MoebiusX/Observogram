@@ -529,8 +529,11 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     // nothing, saying the list could not be read; the history's roll back
     // sends nothing either, its toast what roll back needs and that line,
     // one sentence; opened again with the read answering, her Type a URL…
-    // and her URL are back.
-    const flip = await open(child.base, 'ada');
+    // and her URL are back. The first opening's own read is waited for as
+    // counted (readsLanded) before she chooses: its list is drawn at once
+    // from the home's, and that read, answered after the failed one, would
+    // draw the list again — rightly, a read that answered.
+    const flip = await open(child.base, 'ada', { before: countEndpointReads });
     try {
       const fp = flip.page;
       await fp.route('**/api/packs/*/deploy-bulk*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, deployId: 'dep_flip', dryRun: false, tookMs: 3, results: [], summary: { total: 0, ok: 0, failed: 0 } }) }));
@@ -545,8 +548,10 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       const closeModal = () => fp.evaluate(() => document.getElementById('deploy-modal-close').click());
       const urlRowHidden = () => fp.evaluate(() => document.getElementById('deploy-target-mcp').closest('label').hidden);
       const typedOptions = [[String(gwId), 'gw — https://mcp.acme.test', false], ['', 'Type a URL…', true]];
+      const { sent } = await endpointReads(fp);
       await openModal();
       await fp.waitForFunction(() => [...document.querySelectorAll('#deploy-modal:not([hidden]) [data-mcp-target="deploy"] option')].some((o) => o.value === ''), null, { timeout: T });
+      await readsLanded(fp, sent + 1);
       await fp.selectOption('[data-mcp-target="deploy"] select.set-mcp-target', '');
       await fp.fill('#deploy-target-mcp', TYPED);
       assert.deepEqual(await pickerOptions(fp, 'deploy'), typedOptions, 'her choice: Type a URL…');
