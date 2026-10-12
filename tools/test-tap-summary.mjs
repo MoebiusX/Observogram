@@ -854,7 +854,7 @@ const SUMMARY_IF = "if: ${{ !cancelled() && (steps.test.outcome == 'success' || 
 const keysOf = (st) => st.split('\n').filter((l) => l.trim() && !/^\s*#/.test(l)).slice(1);
 const keys = (...lines) => lines.map((l) => `        ${l}`);
 
-test('S10 the workflow wires it: a Windows matrix on the floor and the latest 22 that runs the documented report command, npm test through tee under pipefail with a step timeout, and the summary held to README; node-floor and validate end with the summary; windows-vs-linux compares the shapes', () => {
+test('S10 the workflow wires it: a Windows matrix on the floor and the latest 22 that runs the documented report command, npm test through tee under pipefail with a step timeout, and the summary held to README; windows and node-floor end with the summary and the shape upload, validate with the summary; windows-vs-linux compares the shapes', () => {
   const text = readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
   const jobs = workflowJobs(text);
   assert.ok(text.includes('# Validates every push to develop/main and every PR into develop or main.'));
@@ -908,7 +908,15 @@ test('S10 the workflow wires it: a Windows matrix on the floor and the latest 22
   assert.ok(minutes(fTest[0]) < jobMinutes(f), 'the step timeout under the job\'s');
   const fSum = stepNamed(f, /id: summary\n/);
   assert.deepEqual(keysOf(fSum[0]), keys('id: summary', SUMMARY_IF, 'run: node tools/tap-summary.mjs "$RUNNER_TEMP/test.tap" --win32-skips 0 --shape "$RUNNER_TEMP/run-shape.json"'));
-  assert.ok(stepNamed(f, /upload-artifact/)[0].includes('name: run-shape-node-floor') && /overwrite: true/.test(stepNamed(f, /upload-artifact/)[0]));
+  const fUp = stepNamed(f, /upload-artifact/);
+  assert.equal(fUp.length, 1);
+  assert.ok(fUp[0].includes('name: run-shape-node-floor') && /overwrite: true/.test(fUp[0]));
+  // The summary, then the shape upload, end the job: a step after the
+  // summary that prints on a red run pushes the block past the log's tail.
+  for (const [name, job, sum, up] of [['windows', w, wSum[0], wUp[0]], ['node-floor', f, fSum[0], fUp[0]]]) {
+    const s = stepsOf(job);
+    assert.deepEqual([s.indexOf(sum), s.indexOf(up)], [s.length - 2, s.length - 1], `${name}: the summary, then the shape upload, are its last steps — nothing else prints after the summary`);
+  }
 
   const v = jobs.validate;
   const vTest = stepNamed(v, /id: test\n/);
