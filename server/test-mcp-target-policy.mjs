@@ -7,8 +7,11 @@
  * loopback, the per-org list and its owner, the rule per use and
  * credential) over a temp store, and
  * redactTarget, the route-level backstop every MCP route runs its 502
- * bodies, deploy-record errors and log lines through. The rule at the
- * routes' resolver is server/test-service-admin.mjs's.
+ * bodies, deploy-record errors and log lines through; and, through
+ * GET /api/mcp-endpoints' policy, the way in the studio names without
+ * sign-in in every posture (studio/mcp-settings-model.mjs,
+ * studio/settings-model.mjs). The rule at the routes' resolver is
+ * server/test-service-admin.mjs's.
  */
 
 // Hermetic (§0): the children's STRIP list, both spellings, before any server
@@ -29,6 +32,7 @@ const {
   redactTarget, parseOriginList, isLoopbackOrigin, originOf, mcpOriginList, mcpOriginDecision, credentialThatRides, mcpRefusalBody,
   MCP_ORIGINS_VAR, orgMcpOriginsVar, TYPED_MCP_URL_ROLE, typedMcpUrlDecision, mcpCallerOf, mcpTargetView,
 } = await import('./mcp-target-policy.mjs');
+const { resolveJourneyMcp } = await import('./service-admin.mjs');
 const { closeStore, openStore } = await import('./store/db.mjs');
 const { runWithOrg } = await import('./tenancy.mjs');
 const orgs = await import('./store/orgs.mjs');
@@ -202,8 +206,13 @@ test('mcpOriginDecision: every row — loopback passes; a list set admits its or
   }
 });
 
-test('mcpOriginDecision at registration without sign-in (D4): the anonymous local caller registers only a loopback MCP or a listed origin, token or not — the way out names the list and arming sign-in (a restart under OBSERVOGRAM_AUTH=off); a session admin\'s token-less registration stays allowed', async () => {
-  const { db, close } = await freshStore('acme');
+test('mcpOriginDecision at registration without sign-in (D4): the anonymous local caller registers only a loopback MCP or a listed origin, token or not — the way out names the list and arming sign-in (under OBSERVOGRAM_AUTH=off noSignInWay\'s restart: with a user, or with OIDC configured), in each sign-in configuration as the route reads it; a session admin\'s token-less registration stays allowed', async () => {
+  const { db, path, close } = await freshStore('acme');
+  const OIDC = { OBSERVOGRAM_OIDC_ISSUER: 'https://idp.example.test', OBSERVOGRAM_OIDC_CLIENT_ID: 'studio', OBSERVOGRAM_OIDC_CLIENT_SECRET: 'oidc-secret' };
+  const ENV = ['OBSERVOGRAM_DB', 'OBSERVOGRAM_AUTH', ...Object.keys(OIDC)];
+  const saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
+  const { noSignInWay } = await import('./authz.mjs');
+  const { setMeta } = await import('./store/meta.mjs');
   try {
     runWithOrg('acme', () => {
       const local = { principal: { kind: 'local', actor: 'local', role: 'admin', owner: true }, org: 'acme', port: 8123, posture: 'open-loopback', direct: true, authOff: false };
@@ -219,13 +228,52 @@ test('mcpOriginDecision at registration without sign-in (D4): the anonymous loca
         assert.equal(d('https://demo.example/mcp', { caller: local, credential }, { OBSERVOGRAM_MCP_ORIGINS: '*' }), null, `local, ${credential}: any`);
       }
       assert.match(d('https://demo.example/', { caller: local }, { OBSERVOGRAM_MCP_ORIGINS: 'https://other.example' }).error, /^https:\/\/demo\.example is not in OBSERVOGRAM_MCP_ORIGINS — /, 'a list set: its own text');
-      assert.equal(d('https://demo.example/', { caller: { ...local, authOff: true } }).error,
-        'on a server without sign-in, only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS may be registered — list https://demo.example there, or sign in as an admin (restart it without OBSERVOGRAM_AUTH=off once a user exists — npm run users -- add <login>)');
+      // Under OBSERVOGRAM_AUTH=off the way in is noSignInWay's restart, word for word.
+      const RESTART = 'restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured';
+      assert.equal(noSignInWay({ authOff: true }), `this server has no sign-in (OBSERVOGRAM_AUTH=off): ${RESTART}`);
+      const D4_AUTH_OFF = `on a server without sign-in, only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS may be registered — list https://demo.example there, or sign in as an admin (${RESTART})`;
+      assert.equal(d('https://demo.example/', { caller: { ...local, authOff: true } }).error, D4_AUTH_OFF);
       assert.equal(d('https://demo.example/mcp', { caller: admin }), null, 'a session admin registers a token-less endpoint anywhere');
       assert.equal(d('https://demo.example/mcp', {}), null, 'no caller: judged as before (the registration functions require one)');
       for (const use of ['typed', 'registered']) assert.notEqual(d('https://demo.example/mcp', { use, caller: local })?.error, D4, `${use}: not a registration`);
+
+      // Each sign-in configuration, as the route reads it (mcpCallerOf over
+      // the env a server boots with; on the loopback, asked straight): the
+      // way in works when followed literally. Without OBSERVOGRAM_AUTH=off
+      // a first user arms sign-in (OIDC configured there is sign-in: no
+      // local caller reads this). Under it adding a user arms nothing, and
+      // with OIDC configured a local user never signs in (npm run users
+      // makes it no owner; /auth/login is the identity provider's) — so the
+      // way in names the restart with OIDC configured, never a user alone.
+      const booted = (env) => {
+        for (const k of ENV) delete process.env[k];
+        Object.assign(process.env, { OBSERVOGRAM_DB: path, ...env });
+        return mcpCallerOf({
+          observogramPrincipal: local.principal, observogramOrg: 'acme', observogramListen: { loopback: true, host: '127.0.0.1' },
+          socket: { localPort: 8123 }, headers: { host: '127.0.0.1:8123' },
+        });
+      };
+      const plain = booted({});
+      assert.deepEqual([plain.posture, plain.direct, plain.authOff], ['open-loopback', true, false]);
+      assert.equal(d('https://demo.example/', { caller: plain }).error, D4, 'no OBSERVOGRAM_AUTH=off, no user, no OIDC: a first user arms sign-in');
+      assert.equal(booted(OIDC).posture, 'identity', 'OIDC configured without OBSERVOGRAM_AUTH=off is sign-in');
+      for (const [label, env, arm] of [
+        ['OBSERVOGRAM_AUTH=off', { OBSERVOGRAM_AUTH: 'off' }, false],
+        ['OBSERVOGRAM_AUTH=off, OIDC configured', { OBSERVOGRAM_AUTH: 'off', ...OIDC }, false],
+        ['OBSERVOGRAM_AUTH=off, a user exists', { OBSERVOGRAM_AUTH: 'off' }, true],
+        ['OBSERVOGRAM_AUTH=off, a user exists, OIDC configured', { OBSERVOGRAM_AUTH: 'off', ...OIDC }, true],
+      ]) {
+        if (arm) setMeta(db, 'system', 'identity_armed', '1');
+        const caller = booted(env);
+        assert.deepEqual([caller.posture, caller.direct, caller.authOff], ['open-loopback', true, true], `${label}: OBSERVOGRAM_AUTH=off beats an armed store and OIDC`);
+        const { error } = d('https://demo.example/mcp', { caller });
+        assert.equal(error, D4_AUTH_OFF, label);
+        assert.match(error, /restart it without OBSERVOGRAM_AUTH=off, .* or with OIDC configured\)$/, `${label}: the restart names OIDC configured`);
+        assert.doesNotMatch(error, /arms sign-in|add the first user|once a user exists — /, `${label}: never a user alone`);
+      }
     });
   } finally {
+    for (const k of ENV) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
     close();
   }
 });
@@ -261,6 +309,16 @@ test('typedMcpUrlDecision: TYPED_MCP_URL_ROLE is admin — an admin or an owner 
     status: 403, denied: 'posture',
     error: 'a typed MCP URL is refused on a server without sign-in, and MCP endpoints cannot be registered while it is exposed — add the first user with npm run users -- add <login> (it arms sign-in; the first user is an owner), or bind the server to loopback',
   });
+  // Under OBSERVOGRAM_AUTH=off adding a user arms nothing (and it beats
+  // OIDC): the way in is a restart without it — never "it arms sign-in".
+  assert.deepEqual(typedMcpUrlDecision(callerOf(LOCAL, { posture: 'open-exposed', authOff: true })), {
+    status: 403, denied: 'posture',
+    error: 'a typed MCP URL is refused on a server without sign-in, and MCP endpoints cannot be registered while it is exposed — restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured, and sign in as an admin; or bind the server to loopback',
+  });
+  // A server-run journey's typed Pack B URL says the same way out.
+  const journey = (extra) => resolveJourneyMcp(null, { url: 'https://mcp.example/mcp' }, { caller: callerOf(LOCAL, { posture: 'open-exposed', ...extra }) }).error;
+  assert.equal(journey({}), "this journey's Pack B fetches https://mcp.example, an MCP URL a server without sign-in never sends, and MCP endpoints cannot be registered while it is exposed — add the first user with npm run users -- add <login> (it arms sign-in; the first user is an owner), or bind the server to loopback");
+  assert.equal(journey({ authOff: true }), "this journey's Pack B fetches https://mcp.example, an MCP URL a server without sign-in never sends, and MCP endpoints cannot be registered while it is exposed — restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured, and sign in as an admin; or bind the server to loopback");
   for (const c of [callerOf({ kind: 'anonymous', actor: null, role: 'viewer', owner: false }, { posture: 'token' }), callerOf(null), null]) {
     assert.equal(typedMcpUrlDecision(c)?.denied, 'role', 'fail closed');
   }
@@ -314,6 +372,8 @@ test('mcpTargetView: what GET /api/mcp-endpoints says — typed and register, al
     assert.deepEqual([local.register.listed, local.register.origins, local.register.listedOnly], [false, [], true], 'without sign-in, only a loopback MCP or a listed origin (D4): no list, so loopback only');
     assert.equal(view(LOCAL, { posture: 'open-loopback', direct: false }).register.why, 'on a server without sign-in MCP endpoints are registered only from this machine — open the studio at http://127.0.0.1:8123');
     assert.match(view(LOCAL, { posture: 'open-exposed' }).register.why, /^MCP endpoints cannot be registered on a server without sign-in while it is exposed/);
+    assert.equal(view(LOCAL, { posture: 'open-exposed', authOff: true }).register.why,
+      'MCP endpoints cannot be registered on a server without sign-in while it is exposed — restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured, and sign in as an admin; or bind the server to loopback');
     assert.match(view({ kind: 'anonymous', actor: null, role: 'viewer', owner: false }, { posture: 'token' }).register.why, /^anonymous callers are viewers here/);
     process.env.OBSERVOGRAM_MCP_ORIGINS = 'https://b.example,https://a.example';
     process.env.OBSERVOGRAM_ORG_BRAVO_MCP_ORIGINS = 'https://bravo-only.example';
@@ -324,6 +384,115 @@ test('mcpTargetView: what GET /api/mcp-endpoints says — typed and register, al
   } finally {
     if (saved === undefined) delete process.env.OBSERVOGRAM_MCP_ORIGINS; else process.env.OBSERVOGRAM_MCP_ORIGINS = saved;
     delete process.env.OBSERVOGRAM_ORG_BRAVO_MCP_ORIGINS;
+    close();
+  }
+});
+
+// ---------- the studio's way in without sign-in ----------
+//
+// The MCP panel's Server settings button (settingsGateModel), the empty
+// picker's hint (mcpTargetModel) and its nothing-to-send line
+// (mcpTargetMissingText) take GET /api/mcp-endpoints' own sentence
+// (`policy.register.why`) wherever there is no sign-in, so the way in they
+// name is the server's for the posture it runs in — never a copy in the
+// studio. Each posture here is the env a server boots with, read through
+// mcpCallerOf as the route reads it (server/routes/services.mjs). In the
+// token posture the pickers never draw the list (they keep the typed URL),
+// so the hint and the line are the models' answer to the policy as served.
+const { settingsGateModel } = await import('../studio/mcp-settings-model.mjs');
+const { mcpTargetModel, mcpTargetMissingText } = await import('../studio/settings-model.mjs');
+const { setMeta } = await import('./store/meta.mjs');
+
+test('the studio\'s way in is the server\'s own sentence in every posture: the token posture with and without OBSERVOGRAM_AUTH=off (OIDC configured or not), the open postures on and off the loopback, identity, the static bundle', async () => {
+  const { db, path, close } = await freshStore('default');
+  const ENV = ['OBSERVOGRAM_DB', 'OBSERVOGRAM_API_TOKEN', 'OBSERVOGRAM_AUTH', 'OBSERVOGRAM_OIDC_ISSUER', 'OBSERVOGRAM_OIDC_CLIENT_ID', 'OBSERVOGRAM_OIDC_CLIENT_SECRET'];
+  const saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
+  const ANON = { kind: 'anonymous', actor: null, role: 'viewer', owner: false };
+  const OIDC = { OBSERVOGRAM_OIDC_ISSUER: 'https://idp.example.test', OBSERVOGRAM_OIDC_CLIENT_ID: 'studio', OBSERVOGRAM_OIDC_CLIENT_SECRET: 'oidc-secret' };
+  const NO_SIGN_IN_WAY = 'this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC';
+  const AUTH_OFF_WAY = 'this server has no sign-in (OBSERVOGRAM_AUTH=off): restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured';
+  // What the studio says to `principal` on a server booted with `env`, bound
+  // on (or off) the loopback, asked straight (or through a proxy).
+  const said = (env, principal, { loopback = true, proxied = false, role = 'viewer' } = {}) => {
+    for (const k of ENV) delete process.env[k];
+    Object.assign(process.env, { OBSERVOGRAM_DB: path, ...env });
+    const caller = mcpCallerOf({
+      observogramPrincipal: principal, observogramOrg: 'default', observogramListen: { loopback, host: loopback ? '127.0.0.1' : '0.0.0.0' },
+      socket: { localPort: 8123 }, headers: { host: '127.0.0.1:8123', ...(proxied ? { 'x-forwarded-for': '203.0.113.9' } : {}) },
+    });
+    const policy = mcpTargetView(db, caller);
+    const posture = caller.posture.startsWith('open-') ? 'open' : caller.posture;
+    const why = policy.register.why;
+    return {
+      caller, why,
+      gate: settingsGateModel({ access: { posture, role, orgName: 'Default' }, mcpTargetPolicy: policy, hasTarget: true }).reason,
+      hint: mcpTargetModel({ endpoints: [], orgName: 'Default', typed: policy.typed, canAdmin: policy.register.allowed, posture, registerWhy: why }).hint,
+      missing: mcpTargetMissingText({ typedAllowed: policy.typed.allowed, orgName: 'Default', empty: true, canRegister: policy.register.allowed, posture, registerWhy: why }),
+    };
+  };
+  const theServers = (s, label) => {
+    assert.equal(typeof s.why, 'string', `${label}: the server names the way in`);
+    assert.equal(s.gate, `Configuring the MCP server is endpoint configuration: ${s.why}.`, `${label}: the button`);
+    assert.deepEqual(s.hint, { text: `No MCP endpoint is registered in Default yet — ${s.why}.`, button: null }, `${label}: the hint`);
+    assert.equal(s.missing, `no MCP endpoint is registered in Default yet — ${s.why}`, `${label}: the line`);
+  };
+  try {
+    // The token posture: the anonymous browser; the way in, by OBSERVOGRAM_AUTH.
+    const token = said({ OBSERVOGRAM_API_TOKEN: 'tok' }, ANON);
+    assert.deepEqual([token.caller.posture, token.caller.authOff], ['token', false]);
+    theServers(token, 'token');
+    assert.ok(token.why.endsWith(`; ${NO_SIGN_IN_WAY}`), token.why);
+    for (const [label, env] of [['token, OBSERVOGRAM_AUTH=off', { OBSERVOGRAM_API_TOKEN: 'tok', OBSERVOGRAM_AUTH: 'off' }], ['token, OBSERVOGRAM_AUTH=off, OIDC configured', { OBSERVOGRAM_API_TOKEN: 'tok', OBSERVOGRAM_AUTH: 'off', ...OIDC }]]) {
+      const s = said(env, ANON);
+      assert.deepEqual([s.caller.posture, s.caller.authOff], ['token', true], `${label}: OBSERVOGRAM_AUTH=off beats OIDC`);
+      theServers(s, label);
+      assert.ok(s.why.endsWith(`; ${AUTH_OFF_WAY}`), `${label}: ${s.why}`);
+      for (const text of [s.gate, s.hint.text, s.missing]) assert.doesNotMatch(text, /add the first user|, or configure OIDC/, `${label}: never a way OBSERVOGRAM_AUTH=off defeats`);
+    }
+    // Open, on the loopback, asked straight: local registers — the button opens, the hint offers Settings.
+    const loop = said({ OBSERVOGRAM_AUTH: 'off' }, LOCAL, { role: 'admin' });
+    assert.deepEqual([loop.caller.posture, loop.why], ['open-loopback', null]);
+    assert.equal(loop.gate, null);
+    assert.deepEqual(loop.hint, { text: 'No MCP endpoint is registered in Default yet.', button: 'Settings → MCP endpoints' });
+    assert.equal(loop.missing, 'no MCP endpoint is registered in Default yet — register one in Settings → MCP endpoints');
+    // Open, on the loopback, through a proxy: only from this machine — never "an admin registers them".
+    const proxied = said({ OBSERVOGRAM_AUTH: 'off' }, LOCAL, { proxied: true, role: 'admin' });
+    theServers(proxied, 'open-loopback, proxied');
+    assert.equal(proxied.why, 'on a server without sign-in MCP endpoints are registered only from this machine — open the studio at http://127.0.0.1:8123');
+    // Open, off the loopback: nothing registers while it is exposed.
+    const exposed = said({}, LOCAL, { loopback: false, role: 'admin' });
+    assert.deepEqual([exposed.caller.posture, exposed.caller.authOff], ['open-exposed', false]);
+    theServers(exposed, 'open-exposed');
+    assert.match(exposed.why, /^MCP endpoints cannot be registered on a server without sign-in while it is exposed — add the first user with npm run users -- add <login> \(it arms sign-in; the first user is an owner\), or bind the server to loopback$/);
+    // ...and under OBSERVOGRAM_AUTH=off (OIDC configured or not) adding a
+    // user arms nothing: the way in is a restart without it, or loopback.
+    for (const [label, env] of [['open-exposed, OBSERVOGRAM_AUTH=off', { OBSERVOGRAM_AUTH: 'off' }], ['open-exposed, OBSERVOGRAM_AUTH=off, OIDC configured', { OBSERVOGRAM_AUTH: 'off', ...OIDC }]]) {
+      const s = said(env, LOCAL, { loopback: false, role: 'admin' });
+      assert.deepEqual([s.caller.posture, s.caller.authOff], ['open-exposed', true], label);
+      theServers(s, label);
+      assert.equal(s.why, 'MCP endpoints cannot be registered on a server without sign-in while it is exposed — restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured, and sign in as an admin; or bind the server to loopback', label);
+      for (const text of [s.gate, s.hint.text, s.missing]) assert.doesNotMatch(text, /add the first user|arms sign-in|, or configure OIDC/, `${label}: never a way OBSERVOGRAM_AUTH=off defeats`);
+    }
+    // Identity: the role names the way in — an admin of the org; no sign-in way named.
+    setMeta(db, 'system', 'identity_armed', '1');
+    for (const role of ['viewer', 'operator']) {
+      const s = said({}, SESSION(role), { role });
+      assert.equal(s.caller.posture, 'identity');
+      assert.equal(s.gate, `Configuring the MCP server is endpoint configuration: it needs the admin role in org 'Default' (you are ${role}) — ask an admin of Default.`);
+      assert.deepEqual(s.hint, { text: 'No MCP endpoint is registered in Default yet — an admin registers them in Settings → MCP endpoints.', button: null });
+      assert.equal(s.missing, 'no MCP endpoint is registered in Default yet — an admin registers them in Settings → MCP endpoints');
+      for (const text of [s.gate, s.hint.text, s.missing]) assert.doesNotMatch(text, /sign-in|npm run users|OIDC/, `identity ${role}`);
+    }
+    const admin = said({}, SESSION('admin'), { role: 'admin' });
+    assert.deepEqual([admin.gate, admin.hint.button], [null, 'Settings → MCP endpoints']);
+    // The static bundle: no server, so no way in is named — its own sentence about the bundle.
+    const bundle = settingsGateModel({ access: { posture: 'static' }, hasTarget: true, pageOrigin: 'https://cdn.example', bundleOrigins: null }).reason;
+    assert.match(bundle, /^This bundle was built without an MCP origin list/);
+    assert.doesNotMatch(bundle, /sign-in|npm run users|OIDC/);
+    assert.equal(mcpTargetModel({ endpoints: null, posture: 'static' }).hint, null, 'the bundle never lists endpoints: no hint');
+    assert.equal(mcpTargetMissingText({ posture: 'static' }), 'choose an MCP endpoint or type a URL');
+  } finally {
+    for (const k of ENV) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
     close();
   }
 });
