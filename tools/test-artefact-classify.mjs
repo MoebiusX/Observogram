@@ -35,11 +35,12 @@ afterEach(() => { configureTaxonomy(null); });
 
 // ---------- purity ----------
 
-test('artefact-classify.mjs is zero-import, reads no node: module and no environment; its one runtime read is the id clocks\' guarded CPU time', () => {
+test('artefact-classify.mjs is zero-import, reads no node: module and no environment; its runtime reads are the id clocks\' guarded CPU time and the platform its slack depends on', () => {
   const src = read('./lib/artefact-classify.mjs');
   assert.ok(!/^\s*import\s/m.test(src), 'zero-import (vendored verbatim downstream)');
   assert.ok(!/from\s+'node:/.test(src) && !/\bprocess\./.test(src), 'no node: module, no process');
-  assert.deepEqual(src.match(/\bglobalThis\.process\b.*$/gm), ['globalThis.process?.cpuUsage?.();'], 'the CPU clock, read only where the runtime has one (a browser has no process)');
+  assert.deepEqual(src.match(/\bglobalThis\.process\b.*$/gm), ['globalThis.process?.cpuUsage?.();', "globalThis.process?.platform === 'win32' ? 15.625 + 1 : 0,"],
+    'the CPU clock and its slack — a 15.625 ms tick and the truncated millisecond on Windows, else 0 — read only where the runtime has them (a browser has no process)');
   assert.ok(!/\b(window|document|localStorage)\s*(?:\.\s*[A-Za-z_$]|\[)/.test(src), 'no DOM');
 });
 
@@ -275,7 +276,7 @@ test('compileBoundedPattern with timed: false skips only the id clocks', () => {
   assert.equal(compileBoundedPattern('^x', { timed: false, flags: 'g', clock }).reason, 'flags must be "" or "i"');
 });
 
-test('the id clocks hold the pattern\'s own work to the 50 ms budget: a stalled pass is not refused, a slow one is — the smaller of the wall clock and the CPU time, the wall clock alone without a CPU clock', () => {
+test('the id clocks hold the pattern\'s own work to the 50 ms budget: a stalled pass is not refused, a slow one is — the smaller of the wall clock and the CPU time plus its slack, the wall clock alone without a CPU clock', () => {
   const verdict = (t0, t1) => compileBoundedPattern('^svc-[a-z]+$', { clock: scripted(t0, t1) }).reason ?? 'compiled';
   // The thread descheduled for a second mid-pass, the CPU time barely moving: not the pattern's work.
   assert.equal(verdict({ wall: 0, cpu: 0 }, { wall: 1000, cpu: 0.2 }), 'compiled', 'a stalled first pass on a fast pattern is not refused');
@@ -290,6 +291,19 @@ test('the id clocks hold the pattern\'s own work to the 50 ms budget: a stalled 
   assert.equal(verdict({ wall: 0, cpu: null }, { wall: 51, cpu: null }), TOO_SLOW);
   assert.equal(verdict({ wall: 0, cpu: null }, { wall: 50, cpu: null }), 'compiled');
   assert.equal(verdict({ wall: 0, cpu: 0 }, { wall: 51, cpu: null }), TOO_SLOW, 'a CPU time on one reading only is no CPU clock');
+  // A coarse CPU clock (Windows: whole 15.625 ms ticks, each reading truncated to the millisecond) reads a pass short by
+  // less than its slack, a tick and a millisecond: it overturns a wall-clock refusal only when under the budget by more.
+  const SLACK = 15.625 + 1;
+  const coarse = (wall, cpu) => verdict({ wall: 0, cpu: 0, slack: SLACK }, { wall, cpu, slack: SLACK });
+  assert.equal(coarse(55, 46.875), TOO_SLOW, 'three ticks — what a pass of up to 62.5 ms can read — refused, deterministically');
+  assert.equal(coarse(62, 46), TOO_SLOW, 'three ticks, read to the millisecond');
+  assert.equal(coarse(1000, 46.875), TOO_SLOW, 'stalled at three ticks: a pass over the budget can read that too — refused, as on the wall clock alone');
+  assert.equal(coarse(1000, 32), 'compiled', 'stalled at two ticks (31.25 ms, read 31 or 32): under the budget by more than the slack');
+  assert.equal(coarse(1000, 0), 'compiled', 'stalled, no tick charged');
+  assert.equal(coarse(1000, 50 - SLACK), 'compiled', 'inclusive, as the budget is');
+  assert.equal(coarse(1000, 50.5 - SLACK), TOO_SLOW);
+  assert.equal(coarse(50, 46.875), 'compiled', 'the wall clock within the budget decides');
+  assert.equal(verdict({ wall: 0, cpu: 0, slack: SLACK }, { wall: 55, cpu: 46.875 }), TOO_SLOW, 'the slack of either reading counts');
   // One pass, timed once: a reading before it and one after.
   const clock = scripted({ wall: 0, cpu: 0 }, { wall: 1000, cpu: 0.2 }, { wall: 0, cpu: 0 });
   assert.ok(compileBoundedPattern('^svc-[a-z]+$', { clock }).re);

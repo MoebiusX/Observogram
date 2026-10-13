@@ -6,9 +6,10 @@
 // blast-radius weights) delegates here, and the studio binds this module at
 // boot (studio/taxonomy.mjs → discover-board, card-html, drawer). Pure and
 // browser-safe: imports nothing, reads no environment (the id clocks read
-// the process's CPU time where the runtime has one — "The id clocks",
-// below); the server mounts it at /lib/artefact-classify.mjs and a
-// downstream vendors it verbatim (it is in the vendor manifest).
+// the process's CPU time, and the platform its slack depends on, where the
+// runtime has them — "The id clocks", below); the server mounts it at
+// /lib/artefact-classify.mjs and a downstream vendors it verbatim (it is in
+// the vendor manifest).
 //
 // The order of the rules (classifyArtefact):
 //   1. `type`    — an explicit family name, or a foreign type name the
@@ -188,28 +189,40 @@ const PATTERN_BUDGET_MS = 50;
 // never counts a moment the process did not run, but it is process-wide:
 // V8's background compiler and GC helpers, the libuv pool and any worker
 // thread count too (threadCpuUsage() would count this thread alone; the
-// Node floor, 22.16, lacks it). The pattern's own work is under both
-// readings, so a pass costs the SMALLER of the two. A deschedule alone
-// never refuses a pattern — that takes the process's other threads burning
-// the budget in the same window as well — and a pattern whose own work is
-// over the budget is over on both clocks, so it is refused on its one
-// pass: nothing re-runs a pattern, and a catastrophic one (seconds on one
-// id) costs that one pass, as before. Where the process times tick
-// coarsely (Windows, 15.6 ms) the CPU reading is good to within a tick.
-// Without a CPU clock (a browser has no `process`) the wall clock decides
-// alone, as it always did; the studio does not time at all — it compiles
-// the document the server timed at start with `timed: false`
+// Node floor, 22.16, lacks it). And it can read short of the CPU time
+// spent, by less than its SLACK: 0 where the process times are exact
+// (Linux, macOS), and on Windows one clock interrupt and a millisecond —
+// GetProcessTimes charges whole 15.625 ms ticks and libuv truncates each
+// reading to the millisecond, so a pass of 62 ms can read 46. The
+// pattern's own work is under the wall reading and under the CPU reading
+// plus its slack, so a pass costs the SMALLER of the two. A pattern whose
+// own work is over the budget is over on both, so it is refused on its one
+// pass, on every platform: nothing re-runs a pattern, and a catastrophic
+// one (seconds on one id) costs that one pass, as before. Away from
+// Windows a deschedule alone never refuses a pattern whose own work fits —
+// that takes the process's other threads burning the budget in the same
+// window as well. On Windows a stalled pass the coarse clock charges three
+// ticks (46.875 ms, which a pass over the budget can read too) is refused,
+// as the wall clock alone refused it; one charged two ticks or fewer never
+// is. Without a CPU clock (a browser has no `process`) the wall clock
+// decides alone, as it always did; the studio does not time at all — it
+// compiles the document the server timed at start with `timed: false`
 // (studio/taxonomy.mjs), so a slow phone or a throttled tab never refuses
 // what the server accepted. The wall clock is the monotonic
 // `performance.now()`, in both runtimes.
 const readClock = () => {
   const usage = globalThis.process?.cpuUsage?.();
-  return { wall: performance.now(), cpu: usage ? (usage.user + usage.system) / 1000 : null };
+  return {
+    wall: performance.now(),
+    cpu: usage ? (usage.user + usage.system) / 1000 : null,
+    slack: globalThis.process?.platform === 'win32' ? 15.625 + 1 : 0,
+  };
 };
-// Milliseconds between two readings: the smaller clock where both have a CPU time, else the wall clock.
+// The most a pass's own work can have cost, in milliseconds: the wall clock, or, where both readings have a CPU time, the CPU time plus its slack if smaller.
 const spentMs = (t0, t1) => {
   const wall = t1.wall - t0.wall;
-  return typeof t0.cpu === 'number' && typeof t1.cpu === 'number' ? Math.min(wall, t1.cpu - t0.cpu) : wall;
+  if (typeof t0.cpu !== 'number' || typeof t1.cpu !== 'number') return wall;
+  return Math.min(wall, t1.cpu - t0.cpu + Math.max(t0.slack ?? 0, t1.slack ?? 0));
 };
 
 const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -243,15 +256,16 @@ function readTarget(value, where, errors) {
  * characters, anchored with `^`, flags `""` or `"i"`, no quantified group,
  * and — unless `timed` is false — finishing the four adversarial
  * ID_MATCH_LENGTH-character ids within the 50 ms budget, by the id clocks
- * (above: the smaller of the wall clock and the process's CPU time, the
- * wall clock alone where the runtime has no CPU clock). `noun` names the
- * pattern in each reason (`pattern` for the taxonomy, so its texts are the
- * ones it always had). `timed: false` skips only the timed run (a browser
- * re-reading a file the server already timed); every static check still
- * runs. `clock` is the suites' seam: `() => ({ wall, cpu })` in
- * milliseconds, `cpu` null where there is none, read once before the pass
- * and once after it. A caller matching longer or differently shaped values
- * adds its own bounds on top.
+ * (above: the smaller of the wall clock and the process's CPU time plus
+ * its slack, the wall clock alone where the runtime has no CPU clock).
+ * `noun` names the pattern in each reason (`pattern` for the taxonomy, so
+ * its texts are the ones it always had). `timed: false` skips only the
+ * timed run (a browser re-reading a file the server already timed); every
+ * static check still runs. `clock` is the suites' seam:
+ * `() => ({ wall, cpu, slack })` in milliseconds, `cpu` null where there is
+ * none, `slack` (0 if absent) what a CPU reading can fall short of the time
+ * spent, read once before the pass and once after it. A caller matching
+ * longer or differently shaped values adds its own bounds on top.
  * @returns {{ re: RegExp } | { reason: string }}
  */
 export function compileBoundedPattern(pattern, { flags = '', noun = 'pattern', timed = true, clock = readClock } = {}) {

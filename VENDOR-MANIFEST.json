@@ -48,8 +48,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/artefact-classify.mjs": {
-      "sha256": "0ca6cd7a9655cc177e1d93c184ee3d3c9e39d4ce84a7ffc223da209eb623559a",
-      "bytes": 27614,
+      "sha256": "48e39d0250d38ea51f00fa4295ce797091c78243ec2ba3720a3ea264ad6107be",
+      "bytes": 28470,
       "exports": [
         "DEFINES_RULES",
         "FAMILIES",

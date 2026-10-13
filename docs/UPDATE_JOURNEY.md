@@ -1326,8 +1326,10 @@ clock was the wall clock, which also counts the time the thread waits for a
 core, so a loaded machine refused fast patterns: a server started with a
 valid taxonomy could refuse to start, and the suites that compile patterns
 failed intermittently. A pass now costs the smaller of the wall clock and
-the process's CPU time, which bounds the pattern's own work: a pattern over
-the budget is still refused, on its one pass, with the same text. The
-studio compiles the taxonomy the server served without timing it, so a slow
-phone binds what the server accepted. Tests: 1390 → 1394 (three in
+the process's CPU time plus that clock's slack (a 15.625 ms tick and a
+millisecond on Windows, whose process times tick coarsely; 0 elsewhere),
+which bounds the pattern's own work: a pattern over the budget is still
+refused, on its one pass, with the same text. The studio compiles the
+taxonomy the server served without timing it, so a slow phone binds what
+the server accepted. Tests: 1390 → 1394 (three in
 `tools/test-artefact-classify.mjs`, one in `tools/test-discover-rows.mjs`).
