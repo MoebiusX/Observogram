@@ -5,7 +5,8 @@
 // T1 the module graph (a bare npm package only from a tools/lib module whose
 // VENDOR-MANIFEST.json npm field lists it; the live studio's graph reaches
 // none) · T2 the specifier rewrite · T3 the build (a real
-// bundle in a tmpdir: every data: module parses, the stylesheets in order,
+// bundle in a tmpdir: every data: module parses, the four packages each at
+// its installed ES module entry, the stylesheets in order,
 // nothing left pointing at the server, the licence element and its pointer
 // comment, the guards and the CLI exits) · T4
 // inert by default (a build changes no source file; the live studio never
@@ -324,6 +325,11 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   assert.deepEqual(Object.keys(map.imports).sort(), [...graph.keys(), ...closure.keys()].sort(), 'one import-map entry per graph module and per bundled package');
   assert.equal(built.modules.length, graph.size);
   assert.deepEqual(built.thirdParty, [...closure.values()].map(({ name, version, license, entry, bytes }) => ({ name, version, license, entry, bytes })), 'thirdParty names each bundled package');
+  // The packages pinned here, not read back from collectBundledPackages: each under its own name, its module the
+  // installed ES module entry. node --check below cannot tell — a CommonJS entry's require() and exports.x = parse too.
+  const ESM_ENTRIES = [['@lezer/common', 'dist/index.js'], ['@lezer/highlight', 'dist/index.js'], ['@lezer/lr', 'dist/index.js'], ['@prometheus-io/lezer-promql', 'dist/index.es.js']];
+  assert.deepEqual(built.thirdParty.map(({ name, entry }) => [name, entry]), ESM_ENTRIES, 'the four packages, each at its ES module entry');
+  for (const [name, entry] of ESM_ENTRIES) assert.equal(decodeModule(map.imports[name]), read(`node_modules/${name}/${entry}`), `${name}: the import map's module is the installed ES module entry`);
   // A ceiling: an unexpected dependency entering the graph is caught where it lands (raising it is a reviewed change).
   assert.ok(built.bytes < 6_000_000, `the two-pack bundle is under 6,000,000 bytes (${built.bytes})`);
   // Every module decodes and parses.
@@ -830,6 +836,9 @@ test('T5 parity: the shim answers every ported route as a running server does �
 
 // ---------- T6 denial ----------
 
+// The notice of a one-pack unbranded bundle, as a literal (T6, T7): Compare among what the packs answer.
+const NOTICE_ONE_PACK = 'Static studio — no Observogram server behind this page. Discover, Diagnose, Compare, Compile and conformance read the 1 pack built in; Scan a repo, Draft from MCP, Deploy, Journeys, Build and sign-in need the server.';
+
 test('T6 denial: the server-only routes answer 501 Not Implemented, denied no-backend, naming the feature; Compare answered, retrofeed (the one non-GET) and the audit report; unknown pack 404 Not Found; other origins and non-API paths pass to the page', async () => {
   let upstreamCalls = [];
   const fetchImpl = async (input, init) => { upstreamCalls.push([String(input), init]); return new Response('ok', { status: 200 }); };
@@ -1009,7 +1018,7 @@ test('T6 denial: the server-only routes answer 501 Not Implemented, denied no-ba
   assert.equal(denialText('Deploy'), denialText('Deploy', DEFAULT_BRAND.name));
   assert.equal(noticeText(1), noticeText(1, DEFAULT_BRAND.name));
   assert.equal(apiMenuSubText(), 'needs the Observogram server · this studio is a static bundle');
-  assert.equal(noticeText(1), 'Static studio — no Observogram server behind this page. Discover, Diagnose, Compare, Compile and conformance read the 1 pack built in; Scan a repo, Draft from MCP, Deploy, Journeys, Build and sign-in need the server.');
+  assert.equal(noticeText(1), NOTICE_ONE_PACK);
   assert.match(noticeText(0), /read the 0 packs built in/);
 });
 
@@ -1068,7 +1077,7 @@ test('T7 the REAL bundle boots in headless Chromium against the fixture pack: th
   assert.equal(await page.isVisible('.no-backend-notice'), true, 'the notice is visible');
   assert.match(await page.textContent('.no-backend-notice'), /no Observogram server behind this page/);
   assert.match(await page.textContent('.no-backend-notice'), /read the 1 pack built in/);
-  assert.equal(await page.textContent('.no-backend-notice-text'), noticeText(1), 'the notice, exactly: Compare among what the packs answer');
+  assert.equal(await page.textContent('.no-backend-notice-text'), NOTICE_ONE_PACK, 'the notice, exactly: Compare among what the packs answer');
   assert.equal(await page.isHidden('#api-link'), true, 'the api link is hidden');
   // Open the pack the way a user does: Check → the service tile.
   await page.click('#home-choice-check');

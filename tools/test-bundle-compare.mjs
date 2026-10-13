@@ -8,7 +8,9 @@
 // and the shim's Compare route loads); its closure is the four packages, each
 // at the lockfile's version, each embedded byte for byte as installed (the
 // entry file, and the import-map address a build writes for it), each with
-// its normalised source repository; and the licence pin — THIRD_PARTY below,
+// its normalised source repository and its section in the licence block the
+// build writes (its heading, its File: line, its LICENSE as installed); and
+// the licence pin — THIRD_PARTY below,
 // each package's SPDX id, the sha256 of each licence file and its NOTICE
 // files — equals what is installed, so a licence change fails here until
 // someone reviews it (a synthetic root with one byte of one LICENSE changed
@@ -255,6 +257,16 @@ test('C1 the closure on the real tree: the graph\'s one package root, the four p
   assert.deepEqual(closure.get('@prometheus-io/lezer-promql').imports, ['@lezer/highlight', '@lezer/lr']);
   assert.deepEqual(closure.get('@lezer/lr').imports, ['@lezer/common']);
   assert.deepEqual(built.thirdParty.map((p) => p.name), FOUR);
+  // Each of the four has its section in the licence block the build wrote: its heading, its File: line and, within
+  // the section, its LICENSE as installed (the three @lezer files are one text, so the heading is what tells them apart).
+  const block = blockOf(built.html);
+  for (const name of FOUR) {
+    const heading = `==== ${name} ${lock[`node_modules/${name}`].version} — ${THIRD_PARTY[name].license} ====\nFile: ${PACKAGES[name].entry} (import-map entry "${name}"), as installed.\n`;
+    const at = block.indexOf(heading);
+    assert.ok(at >= 0, `${name}: its section in the licence block`);
+    const section = block.slice(at, block.indexOf('\n==== ', at + heading.length) + 1);
+    assert.ok(section.includes(`---- LICENSE ----\n${readFileSync(join(packageDir(ROOT, name), 'LICENSE'), 'utf8')}`), `${name}: its LICENSE as installed, in its own section`);
+  }
 
   // The licence pin.
   const changes = pinChanges(THIRD_PARTY, licencesOf(ROOT, closure));
@@ -1392,8 +1404,8 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     const answers = await fetchInPage(page, QUERIES.map(diffQuery));
     const differ = QUERIES.map((q, i) => difference(serverDiffs[i], answers[i]) && `${locale} ${diffQuery(q)}: ${difference(serverDiffs[i], answers[i])}`).filter(Boolean);
     assert.deepEqual(differ, [], `${locale}: the in-page diff is the server's`);
-    // (v) The notice, exactly: Compare among what the packs answer.
-    if (locale === 'en-US') assert.equal(await page.textContent('.no-backend-notice-text'), noticeText(BUNDLED.length));
+    // (v) The notice, exactly — a literal, not noticeText's own output: Compare among what the packs answer.
+    if (locale === 'en-US') assert.equal(await page.textContent('.no-backend-notice-text'), `Static studio — no Observogram server behind this page. Discover, Diagnose, Compare, Compile and conformance read the ${BUNDLED.length} packs built in; Scan a repo, Draft from MCP, Deploy, Journeys, Build and sign-in need the server.`);
     await ctx.close();
   }
 
