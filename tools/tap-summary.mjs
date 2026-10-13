@@ -87,15 +87,17 @@ const CMD_WORD_RE = /^[\p{L}\p{N}_@#+.:\\/~-]+$/u;
 /**
  * The capture command a report needs: the reporter named, so Node 23 and
  * later print TAP too. The file is one word to the shell that runs it: sh
- * gets any other path single-quoted. No one quoting carries such a path
- * through both cmd and PowerShell (the quotes cmd needs inside its own split
- * PowerShell's argument), so the Windows form captures into test.tap and
- * says so.
+ * gets any other path single-quoted, a `##[` in it as `#''#[` (the same
+ * path to sh, and no `##[` for the runner to execute). No one quoting
+ * carries such a path through both cmd and PowerShell (the quotes cmd needs
+ * inside its own split PowerShell's argument), so the Windows form captures
+ * into test.tap and says so (inert: a `##[` in the path it names shows as
+ * `#\#[`).
  */
 export function reportCommand(file, windows) {
-  if (!windows) return `NODE_OPTIONS=--test-reporter=tap npm test > ${SH_WORD_RE.test(file) ? file : `'${file.replace(/'/g, "'\\''")}'`} 2>&1`;
+  if (!windows) return `NODE_OPTIONS=--test-reporter=tap npm test > ${SH_WORD_RE.test(file) ? file : `'${file.replace(/'/g, "'\\''").replace(/##\[/g, "#''#[")}'`} 2>&1`;
   const cmd = (f) => `cmd /c "set NODE_OPTIONS=--test-reporter=tap&& npm test > ${f} 2>&1"`;
-  return CMD_WORD_RE.test(file) ? cmd(file) : `${cmd('test.tap')}, then run tap-summary on test.tap: no one quoting of ${file} holds in both cmd and PowerShell`;
+  return CMD_WORD_RE.test(file) ? cmd(file) : `${cmd('test.tap')}, then run tap-summary on test.tap: no one quoting of ${inert(file)} holds in both cmd and PowerShell`;
 }
 
 // The mojibake a console code page makes of ✓, ✗ and — (CP437, then CP1252),
@@ -371,8 +373,9 @@ const fmtTotal = (v) => (v === undefined ? '?' : String(v));
 // The runner also executes its older command form, `##[name]…`, anywhere in
 // a line, so the run's text the summary prints (names, reasons, errors, a
 // failure's place, the host line, --compare's lines, an annotation's file=,
-// title and message, and the working directory --win32-skips readme's
-// refusals name) shows each `##[` as `#\#[`, the second `#` as TAP
+// title and message, the working directory --win32-skips readme's refusals
+// name, and the path of the TAP file or a shape the block and the refusals
+// name) shows each `##[` as `#\#[`, the second `#` as TAP
 // escapes it; a line without one prints as it is. An annotation's file= too,
 // though it then names the path as the block shows it, not the file: the
 // runner reads a `::` line it cannot split for a `##[` in it, and it splits
@@ -430,14 +433,14 @@ export function notStartedBlock(text, { file = 'test.tap', windows = false, host
   if (host) out.push(inert(host));
   let error;
   if (!held.length) {
-    out.push(`${file} is empty: npm test printed nothing into it — capture the run again: ${reportCommand(file, windows)}`);
-    error = `${file} is empty: npm test printed nothing into it`;
+    out.push(`${inert(file)} is empty: npm test printed nothing into it — capture the run again: ${reportCommand(file, windows)}`);
+    error = `${inert(file)} is empty: npm test printed nothing into it`;
   } else {
     const shown = held.slice(-LAST_LINES);
-    out.push(`${file} holds no TAP: npm test stopped before its tests ran — npm, node or a shell refused to start them.`);
+    out.push(`${inert(file)} holds no TAP: npm test stopped before its tests ran — npm, node or a shell refused to start them.`);
     out.push(`${shown.length < held.length ? `Its last ${shown.length} of ${held.length} lines name` : `What it holds (${held.length} line${held.length === 1 ? '' : 's'}) names`} the cause: fix it, then run npm test again.`);
     for (const l of shown) out.push(`  ${quoted(l)}`);
-    error = `${file} holds no "TAP version" line: npm test stopped before its tests ran — the summary block shows what it holds, which names the cause`;
+    error = `${inert(file)} holds no "TAP version" line: npm test stopped before its tests ran — the summary block shows what it holds, which names the cause`;
   }
   const annotations = [annotation('error', { title: 'npm test printed no TAP' }, error)];
   const count = out.length + 2 + annotations.reduce((n, a) => n + logLines(a), 0) + 1;   // + "block:" + the rule, + the notice
@@ -459,7 +462,7 @@ export function summarize(text, { root = process.cwd(), expectWin32 = null, coun
   const t = parsed.totals;
   const out = [HEAD];
   if (host) out.push(inert(host));
-  if (parsed.mangled) out.push(`warning: ${file} went through a console code page (✗ arrives as Γ£ù) — the failure causes may be cut; capture it with: ${reportCommand(file, windows)}`);
+  if (parsed.mangled) out.push(`warning: ${inert(file)} went through a console code page (✗ arrives as Γ£ù) — the failure causes may be cut; capture it with: ${reportCommand(file, windows)}`);
   out.push(`tests ${fmtTotal(t.tests)} · pass ${fmtTotal(t.pass)} · fail ${fmtTotal(t.fail)} · skipped ${fmtTotal(t.skipped)} · todo ${fmtTotal(t.todo)} · cancelled ${fmtTotal(t.cancelled)} · ${t.duration_ms === undefined ? '?' : Math.round(t.duration_ms / 1000)} s`);
   // How the TAP ends when it is unfinished: before its totals, or inside them.
   const ends = parsed.missingTotals.length < VERDICT_TOTALS.length
@@ -675,7 +678,7 @@ function readInput(file) {
   try {
     return { bytes: readFileSync(file) };
   } catch (e) {
-    return { error: e.code === 'ENOENT' ? `no such file: ${file}` : `cannot read ${file}: ${e.code || e.message}` };
+    return { error: e.code === 'ENOENT' ? `no such file: ${inert(file)}` : `cannot read ${inert(file)}: ${e.code || e.message}` };
   }
 }
 
@@ -686,7 +689,7 @@ function compareMain(files, { out, err }) {
   for (const f of files) {
     const r = readInput(f);
     if (r.error) { err(`tap-summary: ${r.error}`); return 2; }
-    try { shapes.push(JSON.parse(r.bytes.toString('utf8'))); } catch (e) { err(`tap-summary: ${f} is not a run shape: ${e.message}`); return 2; }
+    try { shapes.push(JSON.parse(r.bytes.toString('utf8'))); } catch (e) { err(`tap-summary: ${inert(f)} is not a run shape: ${e.message}`); return 2; }
   }
   const [reference, ...runs] = shapes;
   const lines = [];
@@ -732,7 +735,7 @@ function main(argv, { out = (s) => process.stdout.write(`${s}\n`), err = (s) => 
     } else if (file === null) {
       file = a;
     } else {
-      return usage(`one TAP file at a time (${file}, then ${a})`);
+      return usage(`one TAP file at a time (${inert(file)}, then ${inert(a)})`);
     }
   }
   if (file === null) return usage('name the TAP file');
@@ -745,8 +748,8 @@ function main(argv, { out = (s) => process.stdout.write(`${s}\n`), err = (s) => 
     const notStarted = spec ? null : notStartedBlock(text, { file, windows, host: hostLine() });
     if (notStarted) { out(notStarted.text); return 2; }
     err(spec
-      ? `tap-summary: ${file} holds the spec reporter's output, not TAP (Node 23 and later print spec even into a file) — capture it again with the reporter named: ${reportCommand(file, windows)}`
-      : `tap-summary: ${file} is not TAP (no "TAP version" line) — capture the run with the reporter named: ${reportCommand(file, windows)}`);
+      ? `tap-summary: ${inert(file)} holds the spec reporter's output, not TAP (Node 23 and later print spec even into a file) — capture it again with the reporter named: ${reportCommand(file, windows)}`
+      : `tap-summary: ${inert(file)} is not TAP (no "TAP version" line) — capture the run with the reporter named: ${reportCommand(file, windows)}`);
     return 2;
   }
   let expectWin32 = null;

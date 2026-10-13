@@ -951,6 +951,63 @@ test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README 
     writeFileSync(join(forgedCo, 'tools', 'tap-summary.mjs'), readFileSync(CLI));
     writeFileSync(join(forgedCo, 'README.md'), '# Observogram\n\n### Platforms\n\nWindows is untested.\n');
     assert.match(refusedIn(forgedCo, join(forgedCo, 'tools', 'tap-summary.mjs')), /^tap-summary: .*#\\#\[stop-commands\]pause.co.README\.md "Platforms" states no "<N> `SKIP win32:` lines" — the count this check holds the run to: /);
+    // The TAP file's path holds the same `##[` when the work root does: CI
+    // captures into "$RUNNER_TEMP/test.tap", beside the checkout. Run from
+    // this checkout (a host line without one), every line naming a file in
+    // that directory — a not-started capture's block and its ::error, a
+    // mangled capture's warning, each refusal, --compare's — shows it as
+    // `#\#[`, and the capture command quotes it for sh as `#''#[`, the same
+    // path: no line but the block's own commands is read as one.
+    const shown = (s) => s.replace(/##\[/g, '#\\#[');
+    const forgedFile = (name, text) => { const p = join(forgedCwd, name); writeFileSync(p, text); return p; };
+    const readsOnly = (r, want, what) => {
+      const printed = `${r.stdout}${r.stderr}`;
+      assert.ok(!printed.includes('##['), `${what}: the path's \`##[\` shows as \`#\\#[\` in every line, the block's commands too: ${printed}`);
+      assert.deepEqual(printed.split(/\r?\n|\r/).filter((l) => RUNNER_READS_RE.test(l)).map((l) => /^::\w+ [^:]*::/.exec(l)?.[0] ?? l), want, `${what}: a capture's path holding \`##[\`, no line the runner would execute but these`);
+    };
+    const refusal = forgedFile('npmx.tap', 'sh: 1: npmx: not found\n');
+    const refused = run([refusal, '--win32-skips', '0']);
+    assert.equal(refused.status, 2, refused.stdout + refused.stderr);
+    assert.equal(refused.stdout.split('\n')[2], `${shown(refusal)} holds no TAP: npm test stopped before its tests ran — npm, node or a shell refused to start them.`);
+    assert.ok(refused.stdout.includes(`::error title=npm test printed no TAP::${shown(refusal)} holds no "TAP version" line: `), refused.stdout);
+    readsOnly(refused, ['::error title=npm test printed no TAP::', '::notice title=npm test::'], 'a not-started capture');
+    const emptyForged = forgedFile('empty.tap', '');
+    const emptied = run([emptyForged, '--win32-skips', '0']);
+    assert.equal(emptied.status, 2, emptied.stdout + emptied.stderr);
+    assert.ok([false, true].some((w) => emptied.stdout.split('\n').includes(emptyLine(shown(emptyForged), reportCommand(emptyForged, w)))), emptied.stdout);
+    readsOnly(emptied, ['::error title=npm test printed no TAP::', '::notice title=npm test::'], 'an empty capture');
+    const mangledForged = forgedFile('mangled.tap', GREEN.replace(/✓/g, 'Γ£ô'));
+    const mangledRun = run([mangledForged, '--win32-skips', '0']);
+    assert.equal(mangledRun.status, 0, mangledRun.stdout + mangledRun.stderr);
+    assert.ok([false, true].some((w) => mangledRun.stdout.split('\n')[2] === `warning: ${shown(mangledForged)} went through a console code page (✗ arrives as Γ£ù) — the failure causes may be cut; capture it with: ${reportCommand(mangledForged, w)}`), mangledRun.stdout);
+    readsOnly(mangledRun, ['::notice title=npm test::'], 'a mangled capture');
+    const refusesNaming = (args, text) => {
+      const r = run(args);
+      assert.equal(r.status, 2, `${args.join(' ')}: ${r.stdout}${r.stderr}`);
+      assert.equal(r.stdout, '', 'nothing on stdout');
+      assert.ok(r.stderr.startsWith(`tap-summary: ${text}`), r.stderr);
+      readsOnly(r, [], text);
+      return r;
+    };
+    const specForged = forgedFile('spec.tap', '✔ a (1.2ms)\nℹ tests 1\n');
+    assert.ok(named(refusesNaming([specForged], `${shown(specForged)} holds the spec reporter's output, not TAP`), specForged), 'the spec refusal ends with the capture command');
+    const dotForged = forgedFile('dot.tap', '....\n');
+    assert.ok(named(refusesNaming([dotForged], `${shown(dotForged)} is not TAP (no "TAP version" line)`), dotForged));
+    refusesNaming([join(forgedCwd, 'missing.tap')], `no such file: ${shown(join(forgedCwd, 'missing.tap'))}`);
+    mkdirSync(join(forgedCwd, 'dir.tap'));   // EISDIR, as above
+    refusesNaming([join(forgedCwd, 'dir.tap')], `cannot read ${shown(join(forgedCwd, 'dir.tap'))}: E`);
+    refusesNaming([refusal, emptyForged], `one TAP file at a time (${shown(refusal)}, then ${shown(emptyForged)})`);
+    refusesNaming(['--compare', join(forgedCwd, 'nope.json'), floor], `no such file: ${shown(join(forgedCwd, 'nope.json'))}`);
+    refusesNaming(['--compare', floor, forgedFile('shape.json', 'not json')], `${shown(join(forgedCwd, 'shape.json'))} is not a run shape: `);
+    // The quoted word is the path itself to sh: each quoted run its text, an
+    // escaped quote a quote.
+    const shWord = (cmd) => cmd.slice('NODE_OPTIONS=--test-reporter=tap npm test > '.length, -' 2>&1'.length).replace(/'([^']*)'|\\(.)/g, (_, q, e) => q ?? e);
+    for (const p of ['/home/runner/work/##[stop-commands]tok/_work/_temp/test.tap', "/home/jo's/###[x/##[y##[/t.tap", mangledForged]) {
+      assert.ok(!RUNNER_READS_RE.test(reportCommand(p, false)), reportCommand(p, false));
+      assert.equal(shWord(reportCommand(p, false)), p, `sh reads the quoted word as ${p}`);
+    }
+    assert.equal(reportCommand('/home/runner/work/##[stop-commands]tok/_work/_temp/test.tap', false), "NODE_OPTIONS=--test-reporter=tap npm test > '/home/runner/work/#''#[stop-commands]tok/_work/_temp/test.tap' 2>&1");
+    assert.equal(reportCommand('D:\\a\\##[stop-commands]tok\\_work\\_temp\\test.tap', true), 'cmd /c "set NODE_OPTIONS=--test-reporter=tap&& npm test > test.tap 2>&1", then run tap-summary on test.tap: no one quoting of D:\\a\\#\\#[stop-commands]tok\\_work\\_temp\\test.tap holds in both cmd and PowerShell');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
