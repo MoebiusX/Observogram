@@ -1332,9 +1332,12 @@ which bounds the pattern's own work: a pattern over the budget is still
 refused, with the same text. A first pass that reads over the budget but
 within twice it is timed again, up to twice, each time on a fresh
 compilation of the pattern (a regex runs faster once warm), so a pass the
-process's other threads or Windows' coarse clock overstated is not refused;
-a first pass over twice the budget is refused on it, so a catastrophic
-pattern still runs once. The studio compiles the taxonomy the server served
+process's other threads or Windows' coarse clock overstated is timed again
+rather than refused on it; a first pass over twice the budget is refused on
+it, so a catastrophic pattern still runs once. On a loaded Windows machine a
+pattern within about one tick (15.6 ms) of the budget can still be refused,
+as the wall clock alone refused it: three ticks read the same for its passes
+as for a pass over the budget. The studio compiles the taxonomy the server served
 without timing it, so a slow phone binds what the server accepted. Tests:
 1390 → 1394 (three in `tools/test-artefact-classify.mjs`, one in
 `tools/test-discover-rows.mjs`).
