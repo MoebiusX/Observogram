@@ -16,7 +16,10 @@
  * names none of their directories, so it compared as outside them; on their
  * volume it now answers null and is refused, and so does a share, or a drive
  * mapped to one, that cannot be reached when the check runs: with no volume
- * to read, nothing tells where it leads. Each check's predicate is run here
+ * to read, nothing tells where it leads. A share of another machine cloned
+ * from this host's image reports its volume's serial and is refused alike;
+ * the export's refusal names the way out that holds there too (a local
+ * directory, copied to the share). Each check's predicate is run here
  * as ops.mjs and backup.mjs run it, over comparedPath with an injected host —
  * Windows' path rules, an NTFS volume's realpath and statSync
  * (server/fixtures/ntfs.mjs) and the platform — so the proof runs on every
@@ -323,6 +326,32 @@ test('a path through a share that cannot be reached, or a drive mapped to one, m
   assert.equal(ownFile('C:\\ws\\observogram.db', '\\\\myhost\\exports\\observogram.db-wal', down), null, 'a backup target, not the database\'s own file');
 });
 
+// Another machine cloned from this host's image: its disks keep the serials they were formatted with, so its C: has
+// this host's C: serial (each fixture gives a drive letter one serial), and through a share both report the same low
+// 32 bits. \\fileserver\exports is a share of its C:, \\fileserver\dexports of its D:. Its file ids are its own.
+const LOCAL = ntfsVolume(['C:\\ws\\observogram.db', 'C:\\ws\\orgs\\beta\\users.json', 'C:\\out\\x.txt']);
+const FILESERVER = ntfsVolume(['C:\\exports\\keep.txt', 'D:\\exports\\keep.txt'], {
+  shares: { '\\\\fileserver\\exports': 'C:\\exports', '\\\\fileserver\\dexports': 'D:\\exports' },
+});
+const hostOf = (p) => (/^[\\/]{2}fileserver[\\/]/i.test(p) ? FILESERVER : LOCAL);
+const clonedRealpath = (p) => hostOf(p).realpathSync(p);
+clonedRealpath.native = (p) => hostOf(p).realpathSync.native(p);
+const clonedStat = (p) => { const st = hostOf(p).statSync(p); return hostOf(p) === FILESERVER ? { ...st, ino: st.ino + 1000n } : st; };
+const cloned = comparedPath(null, { windows: true, path: win32, realpathSync: clonedRealpath, statSync: clonedStat });
+
+test('a share of another machine whose volume has the workspace volume\'s serial (cloned from one image) is refused as one on that volume — the export\'s way out, a local directory copied there, is written; a share of its other volume is an ordinary target', () => {
+  const [base, root] = ['C:\\ws', 'C:\\ws\\orgs\\beta'];
+  assert.equal(clonedStat('\\\\fileserver\\exports').dev, clonedStat('C:\\ws').dev & 0xffffffffn, 'the clone\'s share reports the workspace volume\'s serial');
+  assert.equal(exportRelation('\\\\fileserver\\exports\\obs-2026', base, cloned), 'unplaced', 'a directory export is refused: no serial tells it from a share of C:\\ws\'s volume');
+  assert.equal(inPlace('\\\\fileserver\\exports\\obs-2026', base, cloned), false, 'not the in-place export');
+  // It has no path on this host's drives: the way out that holds is the export to a local directory, copied to the share by hand.
+  assert.equal(exportRelation('C:\\out\\obs-2026', base, cloned), null, 'the way out: C:\\out\\obs-2026, on a local drive outside the workspace, is written');
+  assert.equal(usersUnderRoot('\\\\fileserver\\exports\\users.json', root, cloned), 'unplaced', 'purge-org refuses a users file recorded through it (its way out: delete the root by hand)');
+  // Its D: has a serial C:\ws's volume does not: an ordinary target.
+  assert.equal(exportRelation('\\\\fileserver\\dexports\\obs-2026', base, cloned), null, 'written: \\\\fileserver\\dexports\\obs-2026');
+  assert.equal(usersUnderRoot('\\\\fileserver\\dexports\\users.json', root, cloned), false, 'purged: \\\\fileserver\\dexports\\users.json');
+});
+
 test('off Windows a check compares through the module\'s own form, unchanged', () => {
   const own = (p) => `own:${p}`;
   assert.equal(comparedPath(own, { windows: false }), own, 'the module\'s realpath form itself: Linux and macOS compare as before');
@@ -365,6 +394,7 @@ test('every path comparison in ops.mjs and backup.mjs goes through compared; rea
   };
   for (const [guard, way] of [
     ['t === null', 'Nothing was changed. Name the directory by its path on a local drive'],
+    ['t === null', 'if it has none on this host, export to an empty or new directory on a local drive outside the workspace, then copy that directory to ${target}'],
     ['own === null', 'Nothing was changed. Set OBSERVOGRAM_DB to the database\\\'s path on a local drive, then run the export again'],
     ['users === null', 'nothing was deleted. If it does not lie under'],
     ['users === null', 'by hand, then run purge-org again: it drops org'],

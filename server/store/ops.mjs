@@ -415,10 +415,12 @@ function exportDirectory(target, base) {
     into = resolve(dirname(into), readlinkSync(into));
   }
   const t = compared(into, base);
-  if (t === null) {   // Windows: through a share on the workspace's volume that file ids cannot place, or one not reached (store/paths.mjs)
-    throw refuse(`${named(into)} is not a path on a local drive, and a network share on the volume that holds the workspace ${base}, `
-      + 'or one that cannot be reached, may lead inside it — a directory export there could write files without the in-place steps. '
-      + 'Nothing was changed. Name the directory by its path on a local drive');
+  if (t === null) {   // Windows: through a share on the workspace's volume (or its serial) that file ids cannot place, or one not reached (store/paths.mjs)
+    throw refuse(`${named(into)} is not a path on a local drive, and a network share on the volume that holds the workspace ${base} `
+      + '(or on another machine\'s volume that has its serial, as a machine cloned from the same image does), or one that cannot be '
+      + 'reached, may lead inside it — a directory export there could write files without the in-place steps. Nothing was changed. '
+      + 'Name the directory by its path on a local drive; if it has none on this host, export to an empty or new directory on a local '
+      + `drive outside the workspace, then copy that directory to ${target}`);
   }
   const b = compared(base);
   const inside = t.startsWith(b + sep);

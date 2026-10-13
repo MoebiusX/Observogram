@@ -31,18 +31,22 @@
 // (\\myhost\exports, which is C:\ws\exports, beside C:\ws) names none of its
 // directories. So on that path's volume such a path answers null — it may lie
 // inside — and the export, purge-org and no-marker checks refuse it, naming
-// the way out (its path on a local drive), even when it lies outside (a share
-// of C:\out, which no file id tells apart). So does a path whose volume
-// cannot be read, on any root: a share, or a drive mapped to one, that cannot
-// be reached (its server stopped, its name not resolving) — or a drive that
-// does not exist — may lead anywhere, under a purged root among them
-// (\\myhost\betasub, which is C:\ws\orgs\beta\sub); purge-org refuses a users
-// file recorded through one, an export there is refused before it would fail
-// to write, and a database there is missing before it is compared. One
-// through a share on another volume or of another host stays an ordinary
-// target. A check for equality takes null as unequal: a path it cannot place
-// is never the workspace (the in-place detection), the database (the scan for
-// another store) or one of its own files (backup.mjs). The twin of this rule is
+// the way out (its path on a local drive; for an export with none, a local
+// directory copied there afterwards), even when it lies outside (a share of
+// C:\out, which no file id tells apart). A share of another machine whose
+// volume has that serial is refused alike: machines cloned from one image
+// keep their disks' serials, and the low 32 bits do not tell hosts apart. So
+// does a path whose volume cannot be read, on any root: a share, or a drive
+// mapped to one, that cannot be reached (its server stopped, its name not
+// resolving) — or a drive that does not exist — may lead anywhere, under a
+// purged root among them (\\myhost\betasub, which is C:\ws\orgs\beta\sub);
+// purge-org refuses a users file recorded through one, an export there is
+// refused before it would fail to write, and a database there is missing
+// before it is compared. One through a share on another volume (another
+// serial) stays an ordinary target. A check for equality takes null as
+// unequal: a path it cannot place is never the workspace (the in-place
+// detection), the database (the scan for another store) or one of its own
+// files (backup.mjs). The twin of this rule is
 // crawlScopeRefusal's placement, which places only a local path while the
 // workspace is named through a share (it refuses any other path off a local
 // drive). That form only compares: every message, record and return value
