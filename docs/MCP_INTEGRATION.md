@@ -393,9 +393,10 @@ against the description it reads itself. A deployment that needs the rule
 enforced enforces it in the MCP server. A pattern is checked for its shape
 when the file loads (anchored, at most 200 characters, no quantified group,
 at most one unbounded quantifier), not for its speed: the pass-through
-evaluates the policy in a worker with a 100 ms deadline, and a rule that
-does not finish counts as matched. The studio evaluates the policy in the
-page directly, so a slow pattern freezes only that admin's tab.
+evaluates the policy in a worker with a 100 ms deadline per rule, and a rule
+that does not finish counts as matched, as do the rules after it. The studio
+evaluates the policy in the page directly, so a slow pattern freezes only
+that admin's tab.
 
 ### The pass-through: `OBSERVOGRAM_MCP_ADMIN_PROXY=1`
 
@@ -418,12 +419,29 @@ server is exposed without sign-in. The studio server:
   a described submit reads the description again and sends to the endpoint
   (or the action's endpoint) it declares, whatever the caller says; a generic
   submit only to the settings policy's `generic.path`, else `/configure`;
-- re-checks the settings policy against what it read (a missing
-  acknowledgement is a 409), in a `node:worker_threads` worker with a 100 ms
-  deadline (`server/mcp-settings-eval.mjs`): past it the worker is
-  terminated, every rule that did not finish counts as matched — its warning
-  applies and its acknowledgement is required —, and one stderr line names
-  the rules and the deadline, never a value;
+- re-checks the settings policy against what it read — a missing
+  acknowledgement is a 409, `{ denied: 'policy-ack', rule, error }`, naming
+  the rule by index and its warning and acknowledgement, with
+  `unevaluated: true` when the server could not check that rule (it did not
+  finish, the worker could not start or failed, the rule cannot run on the
+  form, or a value it checks is over 512 characters), never a value; the
+  modal then draws that rule's
+  acknowledgement if its own check did not, with a line saying the server
+  could not check the rule (or that its check matched where the page's did
+  not), and once it is ticked the next send carries it —, in a
+  `node:worker_threads` worker that gives
+  each rule 100 ms from its own start (`server/mcp-settings-eval.mjs`), never
+  the time the rules before it took: past a rule's deadline the worker is
+  terminated, that rule and every rule after it count as matched — each
+  one's warning applies and its acknowledgement is required —, and one
+  stderr line names the rules and the deadline, never a value. The check
+  takes at most the worker's start (10 s at most) plus 100 ms per rule —
+  3.2 s for the 32 rules a policy may hold. A server started with a flag a
+  worker refuses (a V8 one: `node --max-old-space-size=… server/index.mjs`)
+  starts the worker without its flags; a worker that cannot start counts
+  every rule as matched the same way, and one that fails every rule it did
+  not finish, its line naming the error's class when the worker could not
+  be constructed or threw, else the deadline;
 - sends with the platform's `fetch`, **never through the transport hook**, so
   a hook's own credential never rides to a settings path; no redirect
   followed; exactly `Content-Type`, `Accept` and the description's own

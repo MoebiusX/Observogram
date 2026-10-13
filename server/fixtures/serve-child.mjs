@@ -101,9 +101,10 @@ export function boot(ws, { host = '127.0.0.1', env = {}, silent = true, port = 0
 // { stdout, stderr }: everything the child printed so far, kept after it
 // stops — the server has no access log, so a suite proving a value never
 // reached the server's output scans this. `verbose: true` boots without
-// BOOT_SILENT, so the start lines are in it too.
-export async function serve(ws, { host = '127.0.0.1', env = {}, verbose = false } = {}) {
-  const proc = spawn(process.execPath, ['--input-type=module', '-e', BOOT_CODE], {
+// BOOT_SILENT, so the start lines are in it too. `execArgv`: node flags
+// before the script (the permission model's, say).
+export async function serve(ws, { host = '127.0.0.1', env = {}, verbose = false, execArgv = [] } = {}) {
+  const proc = spawn(process.execPath, [...execArgv, '--input-type=module', '-e', BOOT_CODE], {
     env: childEnv(ws, { ...env, BOOT_HOST: host, BOOT_SILENT: verbose ? '0' : '1', BOOT_KEEP: '1' }), stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '';

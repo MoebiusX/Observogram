@@ -20,13 +20,20 @@ import { authHeaders, deniedError } from './api.mjs';
 
 // The Error a refused services call throws: the guard's denial as
 // deniedError() words it (`.denied`, `.status`), else `<status>: <error>`
-// from the handler's body; a body without a sentence reads 'no answer'.
+// from the handler's body; a body without a sentence reads 'no answer'. A
+// denial that names a settings-policy rule (the pass-through's 409
+// `policy-ack`) keeps its index as `.rule` and `unevaluated: true` as
+// `.unevaluated` — both value-free — for the Server settings modal.
 // `body` may be the parsed JSON, its text, or null.
 export function servicesRefusal(status, body) {
   let json = body;
   if (typeof body === 'string') { try { json = JSON.parse(body); } catch { json = null; } }
   const denial = deniedError(status, json);
-  if (denial) return denial;
+  if (denial) {
+    if (Number.isInteger(json.rule)) denial.rule = json.rule;
+    if (json.unevaluated === true) denial.unevaluated = true;
+    return denial;
+  }
   const text = typeof json?.error === 'string' && json.error ? json.error : 'no answer';
   const err = new Error(`${status}: ${text}`);
   err.status = status;

@@ -369,10 +369,14 @@ export function resolveSettingsPolicySource(opts, env = process.env, cwd = proce
 }
 
 // The settings-policy file read, one leading U+FEFF stripped, parsed and
-// compiled — server/mcp-settings-policy.mjs readSettingsPolicyConfig text for
-// text with the origin swapped. Returns { policy, compiled, file, origin };
-// throws `<origin>: <file>: <the ENOENT text | invalid JSON: … | the first
-// error (+N more)>`.
+// compiled — server/mcp-settings-policy.mjs readSettingsPolicyConfig's
+// checks, text for text with the origin swapped, plus compileBoundedPattern's
+// id clocks, which the server's start-time load no longer runs (`timed:
+// false`; its pass-through's worker deadline per rule is the guard): a
+// pattern a server loads can fail the build as `rules[<i>].when: pattern too
+// slow against a 256-character id`. Returns { policy, compiled, file,
+// origin }; throws `<origin>: <file>: <the ENOENT text | invalid JSON: … |
+// the first error (+N more)>`.
 export function loadSettingsPolicyFile(file, origin = '--mcp-settings-policy') {
   let text;
   try { text = readFileSync(file, 'utf8'); } catch (e) { throw new Error(`${origin}: ${file}: ${e.message}`, { cause: e }); }

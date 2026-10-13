@@ -18,7 +18,7 @@ import {
   buildSettingsEditorModel, buildEnvironmentPatch, buildEnvironmentCreate, buildEndpointPatch, buildEndpointCreate, buildMemberAddBody, leftOrgText,
   parseKeyValueLines, environmentSaveStatus, endpointSaveStatus, memberSaveStatus, orgRenameStatus, endpointDeleteStatus,
   lastAdmin, orgEnvPrefix, mcpTargetModel, mcpTargetBody, mcpPickerCanAdmin, profileEndpointNote, endpointDrift,
-  mcpTargetMissingText, mcpRegisterCheck,
+  mcpTargetMissingText, rollbackTargetMissingText, mcpRegisterCheck,
   noOwnerText, PASSWORD_ALPHABET, temporaryPassword, signInModeLine, userSignIn, buildUsersSectionModel, userActions, userActionStatus,
   buildUserCreateBody, userCreateStatus,
   activeOrgChoice, isActingOrg, orgChipEntries, orgChipLabel, actingRecovery,
@@ -1203,7 +1203,7 @@ test('the Settings actions: every host.settings call the view makes is one setti
 
 // ---------- the MCP target for a reader the server refuses a typed URL (rebadge batch 3, C0) ----------
 
-test('mcpTargetModel with typed { allowed: false } (R4): list-only — no "Type a URL…", the value never typed, no URL row; the empty list names the way in per posture and per register; an unreadable list is said', () => {
+test('mcpTargetModel with typed { allowed: false } (R4): list-only — no "Type a URL…", the value never typed, no URL row; the empty list names the way in per posture and per register — without sign-in, the server\'s own sentence; beside a failed read of the policy the list could not be read is said, whatever list is passed — never a refusal', () => {
   const closed = { allowed: false };
   const m = mcpTargetModel({ endpoints: EP_OP, orgName: 'Acme', typed: closed, typedUrl: 'https://x.test', chosen: '' });
   assert.deepEqual(m.options.map((o) => o.value), EP_OP.map((ep) => String(ep.id)), 'the endpoints only');
@@ -1214,21 +1214,105 @@ test('mcpTargetModel with typed { allowed: false } (R4): list-only — no "Type 
   const none = mcpTargetModel({ endpoints: [], orgName: 'Acme', typed: closed });
   assert.deepEqual([none.show, none.showUrl, none.options], [false, false, []]);
   assert.deepEqual(none.hint, { text: 'No MCP endpoint is registered in Acme yet — an admin registers them in Settings → MCP endpoints.', button: null });
+  // The token posture: the server's own sentence (GET /api/mcp-endpoints
+  // `policy.register.why`, its way in for its posture — OBSERVOGRAM_AUTH=off
+  // included); none named, none invented.
+  const WHY = 'anonymous callers are viewers here; registering an MCP endpoint needs a signed-in admin; <the server\'s way in>';
+  assert.deepEqual(mcpTargetModel({ endpoints: [], orgName: 'Acme', typed: closed, posture: 'token', registerWhy: WHY }).hint,
+    { text: `No MCP endpoint is registered in Acme yet — ${WHY}.`, button: null });
   assert.deepEqual(mcpTargetModel({ endpoints: [], orgName: 'Acme', typed: closed, posture: 'token' }).hint,
-    { text: 'No MCP endpoint is registered in Acme yet — registering one needs a signed-in admin (npm run users -- add <login>).', button: null });
+    { text: 'No MCP endpoint is registered in Acme yet — registering one needs a signed-in admin.', button: null }, 'the server named no way in: none is named');
+  // The open postures too: a server bound off the loopback, or a request not
+  // sent straight to it, registers nothing from here — the server says why.
+  const OPEN_WHY = 'on a server without sign-in MCP endpoints are registered only from this machine — open the studio at http://127.0.0.1:8090';
+  assert.deepEqual(mcpTargetModel({ endpoints: [], orgName: 'Acme', typed: closed, posture: 'open', registerWhy: OPEN_WHY }).hint,
+    { text: `No MCP endpoint is registered in Acme yet — ${OPEN_WHY}.`, button: null });
+  assert.deepEqual(mcpTargetModel({ endpoints: [], orgName: 'Acme', typed: closed, posture: 'open' }).hint,
+    { text: 'No MCP endpoint is registered in Acme yet — registering one is not open to you here.', button: null }, 'the server named no way in: none is named');
+  assert.deepEqual(mcpTargetModel({ endpoints: [], orgName: 'Acme', typed: closed, posture: 'identity', registerWhy: 'x' }).hint,
+    { text: 'No MCP endpoint is registered in Acme yet — an admin registers them in Settings → MCP endpoints.', button: null }, 'signed in: an admin registers them');
+  for (const fn of [mcpTargetModel, mcpTargetMissingText]) {
+    assert.doesNotMatch(String(fn), /npm run users|OIDC|OBSERVOGRAM_AUTH/, `${fn.name}: the way in is the server's (server/authz.mjs noSignInWay), never a copy here`);
+  }
   assert.deepEqual(mcpTargetModel({ endpoints: [], orgName: 'Acme', typed: closed, canAdmin: true }).hint,
     { text: 'No MCP endpoint is registered in Acme yet.', button: 'Settings → MCP endpoints' }, 'a reader who may register: the button');
   assert.deepEqual(mcpTargetModel({ endpoints: null, orgName: 'Acme', typed: closed, unreadable: true }).hint,
     { text: "Acme's MCP endpoints could not be read just now — reopen this to try again.", button: null });
+  // The policy's read failed: the pickers draw no list beside it (studio/
+  // app.mjs mcpPickerEndpoints) — an empty list passed beside it is said as
+  // that failed read too, never a refusal the server did not make (an open
+  // loopback server lets local register); the picker's opening reads it again.
+  for (const posture of ['token', 'open', 'identity', null]) {
+    assert.deepEqual(mcpTargetModel({ endpoints: [], orgName: 'Acme', typed: closed, posture, registerWhy: WHY, unreadable: true }).hint,
+      { text: "Acme's MCP endpoints could not be read just now — reopen this to try again.", button: null }, `${posture}: a failed policy read is said as the list's`);
+  }
   assert.equal(mcpTargetModel({ endpoints: null, orgName: 'Acme', typed: closed }).hint, null, 'not read yet: nothing said');
   assert.equal(mcpTargetModel({ endpoints: null, typed: closed }).showUrl, false, 'closed when unknown: no URL row');
 });
 
-test('mcpTargetMissingText: the typed URL named only for a reader who may type one', () => {
+test('mcpTargetMissingText: the typed URL named only for a reader who may type one; with no endpoint and no sign-in, the server\'s own sentence; a failed policy read said as the list\'s, never a refusal; the roll back toast one sentence over each line', () => {
   assert.equal(mcpTargetMissingText(), 'choose an MCP endpoint or type a URL');
   assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme' }), "choose one of Acme's MCP endpoints");
   assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty: true }), 'no MCP endpoint is registered in Acme yet — an admin registers them in Settings → MCP endpoints');
   assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty: true, canRegister: true }), 'no MCP endpoint is registered in Acme yet — register one in Settings → MCP endpoints', 'a reader the server lets register');
+  // Without sign-in, the server's own sentence, as the empty list's hint says it.
+  const WHY = 'MCP endpoints cannot be registered on a server without sign-in while it is exposed — <the server\'s way in>';
+  assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty: true, posture: 'open', registerWhy: WHY }), `no MCP endpoint is registered in Acme yet — ${WHY}`);
+  assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty: true, posture: 'open' }), 'no MCP endpoint is registered in Acme yet — registering one is not open to you here');
+  assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty: true, posture: 'token', registerWhy: WHY }), `no MCP endpoint is registered in Acme yet — ${WHY}`);
+  assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty: true, posture: 'token' }), 'no MCP endpoint is registered in Acme yet — registering one needs a signed-in admin');
+  assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty: true, posture: 'open', canRegister: true, registerWhy: WHY }), 'no MCP endpoint is registered in Acme yet — register one in Settings → MCP endpoints', 'a reader the server lets register');
+  assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', posture: 'open', registerWhy: WHY }), "choose one of Acme's MCP endpoints", 'a list: choose');
+  for (const posture of ['token', 'open', 'identity', null]) {
+    // The pickers draw no list beside a failed policy (studio/app.mjs
+    // mcpPickerEndpoints): nothing to choose from, so the list's failed
+    // read is said, as the picker's hint says it — never "choose one", and
+    // an empty list passed beside it never a refusal.
+    for (const empty of [false, true]) {
+      assert.equal(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty, posture, registerWhy: WHY, unreadable: true }),
+        "Acme's MCP endpoints could not be read just now — reopen this to try again", `${posture}${empty ? ', empty' : ''}: no list drawn — the failed read said`);
+    }
+  }
+  // The deploy history's roll back toast (studio/app.mjs doRollback) over
+  // each line the picker's status says: what roll back needs, then that
+  // line as it reads, one sentence — never "… reopen this to try again in
+  // the target form first", nor "… register one in Settings → MCP
+  // endpoints in the target form first".
+  assert.equal(rollbackTargetMissingText(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', unreadable: true })),
+    "Roll back needs an MCP target in the form above: Acme's MCP endpoints could not be read just now — reopen this to try again.");
+  assert.equal(rollbackTargetMissingText(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme' })),
+    "Roll back needs an MCP target in the form above: choose one of Acme's MCP endpoints.");
+  assert.equal(rollbackTargetMissingText(mcpTargetMissingText()),
+    'Roll back needs an MCP target in the form above: choose an MCP endpoint or type a URL.');
+  assert.equal(rollbackTargetMissingText(mcpTargetMissingText({ typedAllowed: false, orgName: 'Acme', empty: true, canRegister: true })),
+    'Roll back needs an MCP target in the form above: no MCP endpoint is registered in Acme yet — register one in Settings → MCP endpoints.');
+  const lines = [{}, { posture: 'static' }];
+  for (const posture of ['token', 'open', 'identity', null]) {
+    for (const base of [{ typedAllowed: false, orgName: 'Acme', posture }, { typedAllowed: false, posture }]) {
+      lines.push(base, { ...base, unreadable: true }, { ...base, empty: true }, { ...base, empty: true, unreadable: true },
+        { ...base, empty: true, canRegister: true }, { ...base, empty: true, registerWhy: WHY });
+    }
+  }
+  for (const input of lines) {
+    const line = mcpTargetMissingText(input);
+    const toast = rollbackTargetMissingText(line);
+    assert.equal(toast, `Roll back needs an MCP target in the form above: ${line}.`, JSON.stringify(input));
+    assert.match(toast, /^Roll back needs an MCP target in the form above: [^.]+\.$/, `${JSON.stringify(input)}: one sentence`);
+    assert.doesNotMatch(toast, /in the target form first/, `${JSON.stringify(input)}: nothing appended after the line's own instruction`);
+  }
+  // The CHANGELOG's entry names develop's toast as the before — the line
+  // capitalized with " in the target form first" appended, over a line with
+  // no `unreadable` (develop had none): after a failed read "Choose one of
+  // <org>'s MCP endpoints…", beside an empty list the line's own instruction
+  // — never a toast over the could-not-be-read line, which develop never said.
+  const before = (line) => `\`${line.replace(/^./, (c) => c.toUpperCase())} in the target form first\``;
+  const entry = readFileSync(new URL('../docs/CHANGELOG.md', import.meta.url), 'utf8').split('\n')
+    .find((l) => l.startsWith("- **The MCP panel's Server settings button and the empty MCP picker's lines say the server's sentence**"));
+  assert.ok(entry, "docs/CHANGELOG.md has the entry for the server's sentence");
+  const rollback = entry.slice(entry.indexOf("the deploy history's roll back toast"), entry.indexOf('`Roll back needs an MCP target in the form above: <the line>.`'));
+  assert.ok(rollback.includes(before(mcpTargetMissingText({ typedAllowed: false, orgName: '<org>' }))), `the before after a failed read: ${rollback}`);
+  assert.ok(rollback.includes(before(mcpTargetMissingText({ typedAllowed: false, orgName: '<org>', empty: true, canRegister: true }))), `the before beside an empty list: ${rollback}`);
+  assert.ok(!rollback.includes(before(mcpTargetMissingText({ typedAllowed: false, orgName: '<org>', unreadable: true }))), `never a toast develop did not say: ${rollback}`);
 });
 
 test('profileEndpointNote and endpointDrift with typedAllowed false: no sentence offers typing a URL; a typed profile is said', () => {
@@ -1249,8 +1333,14 @@ test('mcpRegisterCheck (D4): Register and connect is sent only for an origin the
   assert.deepEqual(mcpRegisterCheck('http://127.0.0.1:3001/mcp', local), { origin: 'http://127.0.0.1:3001', name: '127.0.0.1:3001', error: null });
   assert.equal(mcpRegisterCheck('http://localhost/mcp', local).error, null);
   assert.equal(mcpRegisterCheck('http://[::1]:9/mcp', local).error, null);
+  // The way out is the operator's list, which holds in every posture —
+  // never a sign-in way of the studio's own: on the loopback, no sign-in is
+  // OBSERVOGRAM_AUTH=off, where adding a user arms nothing.
   assert.equal(mcpRegisterCheck('https://demo.example/mcp?x=1', local).error,
-    'https://demo.example cannot be registered on a server without sign-in — only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS; the server\'s operator lists it there, or a first user arms sign-in (npm run users -- add <login>)');
+    'https://demo.example cannot be registered on a server without sign-in — only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS; the server\'s operator lists it there');
+  for (const reg of [local, { ...local, listed: true, origins: ['https://other.example'] }]) {
+    assert.doesNotMatch(mcpRegisterCheck('https://demo.example/mcp', reg).error, /arms sign-in|add the first user|users -- add|configure OIDC/, 'no way in OBSERVOGRAM_AUTH=off defeats');
+  }
   assert.equal(mcpRegisterCheck('https://demo.example/mcp', { ...local, listed: true, origins: ['https://demo.example'] }).error, null, 'listed');
   assert.equal(mcpRegisterCheck('https://demo.example/mcp', { ...local, listed: true, origins: null }).error, null, 'any (`*`)');
   assert.equal(mcpRegisterCheck('https://demo.example/mcp', { allowed: true, listed: false, origins: [], listedOnly: false }).error, null, 'a session admin, no list');
