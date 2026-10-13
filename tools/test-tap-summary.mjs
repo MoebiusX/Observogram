@@ -898,6 +898,21 @@ test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README 
     const differences = ["'::stop-commands::pause.mjs': a harness suite only the run reported", "'tools/#\\#[stop-commands]x.mjs': a harness suite only the run reported", "skip '#\\#[stop-commands]pause a reason': 1 on the run, 0 on the reference"];
     assert.deepEqual(forgedCmp.stdout.trimEnd().split('\n'), [`${label}: 3 differences — the run did not run what the reference ran`, ...differences.map((d) => `  ${d}`), ...differences.map((d) => `::error title=${label}::${d}`)]);
     assert.deepEqual(forgedCmp.stdout.split(/\r?\n|\r/).filter((l) => RUNNER_READS_RE.test(l)), differences.map((d) => `::error title=${label}::${d}`), '--compare: its ::error lines are the only ones the runner would execute');
+    // Each difference a harness file starts — the reference's only, the run's
+    // only, more, an early exit — shows the file in quotes, whichever leg
+    // names one `::stop-commands::…`.
+    const commandsRef = f('linux-commands.json', '{"platform":"linux","node":"v22.16.0","tests":10,"todo":0,"skips":{},"harness":{"::stop-commands::early.mjs":{"asserts":3,"win32":0},"::stop-commands::gone.mjs":{"asserts":1,"win32":0},"::stop-commands::more.mjs":{"asserts":3,"win32":0}}}');
+    const commandsRun = f('windows-commands.json', '{"platform":"win32","node":"v22.16.0","tests":10,"todo":0,"skips":{},"harness":{"::stop-commands::early.mjs":{"asserts":2,"win32":0},"::stop-commands::more.mjs":{"asserts":4,"win32":0},"::stop-commands::new.mjs":{"asserts":1,"win32":0}}}');
+    const commandsCmp = run(['--compare', commandsRef, commandsRun]);
+    assert.equal(commandsCmp.status, 1, commandsCmp.stdout + commandsCmp.stderr);
+    const each = [
+      "'::stop-commands::early.mjs': 2 harness assertions on the run, 3 on the reference, and no SKIP win32: line in the file — an early exit",
+      "'::stop-commands::gone.mjs': a harness suite the reference ran and the run did not report (a file argument that matched nothing, or a suite that never ran)",
+      "'::stop-commands::more.mjs': 4 harness assertions on the run, 3 on the reference — more",
+      "'::stop-commands::new.mjs': a harness suite only the run reported",
+    ];
+    assert.deepEqual(commandsCmp.stdout.trimEnd().split('\n'), [`${label}: 4 differences — the run did not run what the reference ran`, ...each.map((d) => `  ${d}`), ...each.map((d) => `::error title=${label}::${d}`)]);
+    assert.deepEqual(commandsCmp.stdout.split(/\r?\n|\r/).filter((l) => RUNNER_READS_RE.test(l)), each.map((d) => `::error title=${label}::${d}`), '--compare: whichever difference a harness file starts, its ::error lines are the only ones the runner would execute');
     const forgedCwd = join(dir, '##[stop-commands]pause');
     mkdirSync(forgedCwd);
     const fromForged = run([green, '--win32-skips', '0'], forgedCwd);
@@ -1175,7 +1190,7 @@ test('S14 the cross-leg check: the same tests, todo 0, the same harness suites a
   named(run({ harness: { 'tools/test-journey.mjs': { asserts: 900, win32: 0 } } }), /^'tools\/test-crawl\.mjs': a harness suite the reference ran and the run did not report/);
   named(run({ harness: { ...ref.harness, 'tools/test-new.mjs': { asserts: 1, win32: 0 } } }), /^'tools\/test-new\.mjs': a harness suite only the run reported/);
   named(run({ harness: { ...ref.harness, 'tools/test-crawl.mjs': { asserts: 40, win32: 0 } } }), /^'tools\/test-crawl\.mjs': 40 harness assertions on the run, 50 on the reference, and no SKIP win32: line in the file/);
-  named(run({ harness: { ...ref.harness, 'tools/test-crawl.mjs': { asserts: 51, win32: 1 } } }), /51 harness assertions on the run, 50 on the reference — more/);
+  named(run({ harness: { ...ref.harness, 'tools/test-crawl.mjs': { asserts: 51, win32: 1 } } }), /^'tools\/test-crawl\.mjs': 51 harness assertions on the run, 50 on the reference — more$/);
   named(run({ skips: { ...ref.skips, [pw]: 21 } }), /^skip 'cannot import <playwright>.*': 21 on the run, 22 on the reference/);
   named(run({ skips: { ...ref.skips, 'cannot run /usr/bin/node as an unprivileged user on this checkout: x': 1 } }), /^skip 'cannot run .*': 1 on the run, 0 on the reference/);
   named(run({ todo: 1 }), /^todo 1 on the run/);
