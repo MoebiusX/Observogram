@@ -230,16 +230,16 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
 
     // Stable order — alphabetical by key — so the UI doesn't reshuffle on
     // every load.
-    bucket.onlyInA.sort((x, y) => x.key.localeCompare(y.key));
-    bucket.onlyInB.sort((x, y) => x.key.localeCompare(y.key));
-    bucket.inBoth.sort ((x, y) => x.key.localeCompare(y.key));
-    bucket.outOfScope.sort((x, y) => x.key.localeCompare(y.key));
-    bucket.notObserved.sort((x, y) => `${x.side}:${x.key}`.localeCompare(`${y.side}:${y.key}`));
+    bucket.onlyInA.sort((x, y) => x.key.localeCompare(y.key, 'en'));
+    bucket.onlyInB.sort((x, y) => x.key.localeCompare(y.key, 'en'));
+    bucket.inBoth.sort ((x, y) => x.key.localeCompare(y.key, 'en'));
+    bucket.outOfScope.sort((x, y) => x.key.localeCompare(y.key, 'en'));
+    bucket.notObserved.sort((x, y) => `${x.side}:${x.key}`.localeCompare(`${y.side}:${y.key}`, 'en'));
     // Parked placeholders keep their behavioural key (with the side, so a
     // placeholder present on both sides stays two entries) for display.
     const parkedKey = ({ side, artefact }) => pairKey(artefact, { side });
     parked
-      .sort((x, y) => `${x.side}:${parkedKey(x)}`.localeCompare(`${y.side}:${parkedKey(y)}`))
+      .sort((x, y) => `${x.side}:${parkedKey(x)}`.localeCompare(`${y.side}:${parkedKey(y)}`, 'en'))
       .forEach((entry, i) => {
         const { side, artefact } = entry;
         bucket.scaffold.push({ key: `${parkedKey(entry)}@${side}#${String(i + 1).padStart(2, '0')}`, side, artefact });

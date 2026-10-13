@@ -30,6 +30,10 @@
  * alert) and a pack whose producer could not observe some families (the
  * notObserved bucket on either side, and scaffold parking).
  *
+ * The locale check: every tools/lib sort passes the 'en' collation, so the
+ * /api/diff body shape of three pairs (the diff and the traceability graph)
+ * hashes the same in a child under each of five process locales (LC_ALL).
+ *
  * To update after an INTENDED output change (never for rebadge batch 3):
  *   node tools/test-golden-diff.mjs --update
  * then review `git diff tools/fixtures/golden/diff/`. Exit 0 = pass.
@@ -37,7 +41,8 @@
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from 'node:fs';
 import { resolve, dirname, basename } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { SPEC_DIR } from './lib/validator.mjs';
@@ -47,6 +52,7 @@ import { identityKeyOf } from './lib/artefact-model.mjs';
 import * as artefactClassify from './lib/artefact-classify.mjs';
 import { bindTaxonomy } from '../studio/taxonomy.mjs';
 import { createHarness } from './lib/harness.mjs';
+import { childEnv } from '../server/fixtures/serve-child.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -226,6 +232,65 @@ for (const bucket of ['onlyInA', 'onlyInB', 'inBoth', 'outOfScope', 'scaffold', 
 assert(all.some(d => d.summary.notObserved > 0 && Object.values(d.layers).some(l => l.notObserved.some(e => e.side === 'a')))
   && all.some(d => Object.values(d.layers).some(l => l.notObserved.some(e => e.side === 'b'))), 'notObserved is pinned on side a and on side b');
 assert(all.some(d => d.collisions.length > 0), 'some case reports collisions');
+
+// ---------------------------------------------------------------------------
+// One collation: every tools/lib sort names 'en' (the CLDR root order), so the
+// /api/diff body shape — the diff and the traceability graph, which no golden
+// covers — hashes the same in a child under each of five process locales, four
+// of which tailor ASCII letters (Czech "ch", Danish "aa", Estonian "z",
+// Lithuanian "y"). Where Node ignores LC_ALL (Windows reads the OS locale) this
+// passes trivially; the static guard in tools/test-vendor-manifest.mjs holds
+// every call site regardless.
+// ---------------------------------------------------------------------------
+process.stdout.write('\nthe answer does not depend on the process locale\n');
+const LOCALES = ['C', 'cs_CZ.UTF-8', 'da_DK.UTF-8', 'et_EE.UTF-8', 'lt_LT.UTF-8'];
+const LOCALE_PAIRS = [
+  ['payment-service x production-curated', PAYMENT_PATH, CURATED_PATH],
+  ['payment-service x target-advanced', PAYMENT_PATH, 'examples/target-advanced.pack.yaml'],
+  ['grafana x prometheus', 'reference-packs/grafana.pack.yaml', 'reference-packs/prometheus.pack.yaml'],
+];
+const libUrl = (name) => JSON.stringify(pathToFileURL(resolve(__dirname, 'lib', name)).href);
+const LOCALE_CHILD = `
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+const { parse } = await import(${libUrl('mini-yaml.mjs')});
+const { adapt } = await import(${libUrl('adapter.mjs')});
+const { diffPacks } = await import(${libUrl('diff.mjs')});
+const { comparePackBranches } = await import(${libUrl('traceability-graph.mjs')});
+const pack = (file) => adapt(parse(readFileSync(file, 'utf8')));
+const sha = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const pairs = ${JSON.stringify(LOCALE_PAIRS.map(([label, a, b]) => [label, resolve(ROOT, a), resolve(ROOT, b)]))};
+const out = { collator: new Intl.Collator().resolvedOptions().locale };
+for (const [label, a, b] of pairs) {
+  const [pa, pb] = [pack(a), pack(b)];
+  out[label] = sha({ ...diffPacks(pa, pb, {}), traceabilityGraph: comparePackBranches(pa, pb) });
+  if (label === pairs[0][0]) out.diffPacks = sha(diffPacks(pa, pb));
+}
+process.stdout.write(JSON.stringify(out));
+`;
+const byLocale = {};
+for (const locale of LOCALES) {
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', LOCALE_CHILD], {
+    cwd: ROOT, encoding: 'utf8', timeout: 120_000, env: childEnv(null, { LC_ALL: locale, LANG: undefined, LANGUAGE: undefined }),
+  });
+  let parsed = null;
+  try { parsed = JSON.parse(child.stdout); } catch { /* reported below */ }
+  assert(child.status === 0 && parsed !== null, `LC_ALL=${locale}: the child computed the body shapes`, `${child.status} ${child.stderr}`.trim(), 0);
+  if (parsed) byLocale[locale] = parsed;
+}
+const reference = byLocale.C;
+if (reference) {
+  for (const locale of LOCALES.slice(1)) {
+    const seen = byLocale[locale];
+    if (!seen) continue;
+    for (const key of [...LOCALE_PAIRS.map(([label]) => label), 'diffPacks']) {
+      const what = key === 'diffPacks' ? 'diffPacks(payment-service, production-curated)' : `the /api/diff body of ${key}`;
+      assert(seen[key] === reference[key], `LC_ALL=${locale} (collator ${seen.collator}): ${what} hashes as under C`, seen[key], reference[key]);
+    }
+  }
+  const golden = JSON.parse(readFileSync(resolve(GOLDEN_DIR, 'payment-service.vs.production-curated.diff.json'), 'utf8'));
+  assert(reference.diffPacks === golden.sha256, 'the children compute the payment-service.vs.production-curated golden', reference.diffPacks, golden.sha256);
+}
 
 if (!UPDATE && existsSync(GOLDEN_DIR)) {
   const stray = readdirSync(GOLDEN_DIR).filter(f => !files.has(f));

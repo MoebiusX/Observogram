@@ -114,7 +114,7 @@ export function canonicalize(value, keyName) {
     const out = value
       .map((v) => canonicalize(v))
       .filter((v) => !isEmptyComparable(v))
-      .sort((x, y) => JSON.stringify(x).localeCompare(JSON.stringify(y)));
+      .sort((x, y) => JSON.stringify(x).localeCompare(JSON.stringify(y), 'en'));
     return out.length ? out : undefined;
   }
   if (value && typeof value === 'object') {
@@ -534,7 +534,7 @@ export function foldMetricFamilies(aItems, bItems) {
     }
     return out.map((slot) => {
       if (!slot.family || !groups.has(slot.family) || classify(slot) === 'metric') return slot;
-      const members = groups.get(slot.family).slice().sort((x, y) => nameOf(x).localeCompare(nameOf(y)));
+      const members = groups.get(slot.family).slice().sort((x, y) => nameOf(x).localeCompare(nameOf(y), 'en'));
       const head = members.find((x) => nameOf(x) === slot.family) || members[0];
       if (members.length === 1 && nameOf(head) === slot.family) return head;
       return {

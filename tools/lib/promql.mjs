@@ -349,5 +349,5 @@ function dedupeSelectors(selectors) {
     seen.add(key);
     out.push(selector);
   }
-  return out.sort((a, b) => `${a.metric}:${a.raw || ''}`.localeCompare(`${b.metric}:${b.raw || ''}`));
+  return out.sort((a, b) => `${a.metric}:${a.raw || ''}`.localeCompare(`${b.metric}:${b.raw || ''}`, 'en'));
 }

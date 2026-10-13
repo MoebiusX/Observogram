@@ -94,6 +94,56 @@ test('listed modules are pure; the excluded impure ones break at least one rule;
   assert.deepEqual(PURITY_RULES.map(r => r.kind).sort(), ['code', 'code', 'code', 'code', 'specifier']);
 });
 
+/**
+ * Every localeCompare( / Intl.Collator( call in `src` that does not name the 'en' collation, as { line, call }.
+ * Read from the tokenized code (comments, strings, templates and regex literals blanked), with a paren-depth scan from
+ * each match: a localeCompare( call needs a second argument at depth 0, and both forms need it to be the literal 'en'.
+ */
+function unpinnedCollations(src) {
+  const { code } = tokenize(src);
+  const found = [];
+  const re = /\b(localeCompare|Intl\s*\.\s*Collator)\s*\(/g;
+  let m;
+  while ((m = re.exec(code))) {
+    const args = [];
+    let depth = 1; let from = m.index + m[0].length;
+    for (let i = from; i < code.length && depth > 0; i++) {
+      const c = code[i];
+      if ('([{'.includes(c)) depth++;
+      else if (')]}'.includes(c)) { depth--; if (depth === 0) args.push(src.slice(from, i).trim()); }
+      else if (c === ',' && depth === 1) { args.push(src.slice(from, i).trim()); from = i + 1; }
+    }
+    const locale = m[1] === 'localeCompare' ? args[1] : args[0];
+    if (!/^(['"])en\1$/.test(locale ?? '')) found.push({ line: code.slice(0, m.index).split('\n').length, call: m[1].replace(/\s+/g, '') });
+  }
+  return found;
+}
+
+test("one collation: every tools/lib localeCompare and Intl.Collator names 'en', so no answer depends on the runtime's locale", () => {
+  // The scan itself: one argument, a variable, undefined or another locale is a hit; comments and strings are not code.
+  const probe = [
+    "a.localeCompare(b, 'en');", 'a.localeCompare(b);', 'x?.localeCompare(f(y, z));', 'a.localeCompare(b, undefined);',
+    'a.localeCompare(b, "en", { numeric: true });', 'a.localeCompare(b, locale);', "new Intl.Collator('en').compare;",
+    'new Intl.Collator().compare;', 'Intl.Collator(undefined, { numeric: true });', "Intl.Collator('cs');",
+    '// a.localeCompare(b) in a comment', "const s = 'a.localeCompare(b)';", 'const t = `${a.localeCompare(b)}`;',
+  ].join('\n');
+  assert.deepEqual(unpinnedCollations(probe), [
+    { line: 2, call: 'localeCompare' }, { line: 3, call: 'localeCompare' }, { line: 4, call: 'localeCompare' },
+    { line: 6, call: 'localeCompare' }, { line: 8, call: 'Intl.Collator' }, { line: 9, call: 'Intl.Collator' },
+    { line: 10, call: 'Intl.Collator' }, { line: 13, call: 'localeCompare' },
+  ]);
+  // The tree: every module under tools/lib, listed or excluded.
+  const hits = [];
+  let calls = 0;
+  for (const p of walkModules(ROOT).modules) {
+    const src = read(p);
+    calls += (tokenize(src).code.match(/\blocaleCompare\s*\(/g) || []).length;
+    for (const h of unpinnedCollations(src)) hits.push(`${p}:${h.line}: ${h.call}( without 'en'`);
+  }
+  assert.ok(calls >= 23, `the scan reached the tree's localeCompare calls (${calls})`);
+  assert.deepEqual(hits, [], `${hits.join('\n')}\npass 'en' — the answer must not depend on the process's or the browser's locale (docs/DOWNSTREAM.md §10)`);
+});
+
 test('the import closure stays inside the manifest; bare imports are declared dependencies', () => {
   const listed = new Set(Object.keys(committed.modules));
   for (const [p, entry] of Object.entries(committed.modules)) {
