@@ -1333,6 +1333,76 @@ restart without it, or binding to loopback. The journey's steps do not move. Tes
 more in `tools/test-mcp-settings-model.mjs`, one more in
 `server/test-mcp-target-policy.mjs`).
 
+### Follow-up: the settings-policy worker
+
+Two defects in batch 4's policy check on the pass-through
+(`server/mcp-settings-eval.mjs`), neither a hole. One deadline counted from
+the worker's start covered every rule, so a machine too busy to run the
+worker promptly — a loaded CI runner, a busy server — could count fast rules
+as timed out and ask for acknowledgements they did not need: each rule now
+has the 100 ms from its own start, so a check takes at most the worker's
+start plus 100 ms per rule. The suite's flakes were not this: under load the
+evaluator's case failed on its 2 s wall-clock bound and on its compile
+step's 50 ms id clocks, and the server case's wall-clock bounds (2 s and
+1.5 s) flaked alike (CI's failing line was past its log's readable tail);
+both now bound in seconds, and the evaluator's gives its fast rules a 1 s
+deadline and compiles without the clocks. With one rule, a deadline per
+rule is still the one from the start, so on a loaded machine the policy
+re-check case's approved-host submit can still find its rule timed out (a
+409, fail closed); that submit is sent again — at most five times in all —
+only while the child has logged that rule's line. And a server started with
+a flag a worker refuses — a V8 one,
+`node --max-old-space-size=512 server/index.mjs` — could not construct the
+worker at all: with a settings policy (`OBSERVOGRAM_MCP_SETTINGS_POLICY`),
+every pass-through submit, acknowledged or not, was answered
+`502 the server-settings proxy failed (Error)` (a server without one builds
+no worker and was unaffected). The worker is now constructed once more
+without the flags, and a worker that cannot be constructed fails closed
+like one that fails — every rule counts as matched (for one that fails,
+every rule it did not finish), and the log line names the error's class.
+No route, variable, default or text changes.
+Tests: 1392 → 1395 (three more in `server/test-mcp-settings.mjs`: the
+refused flag, in-process and in a child started with it; a worker that
+cannot be constructed or fails; and the per-rule deadline, pinned with a
+paced stand-in worker).
+A clock older than the worker failed the start and the suite alike: the
+load compiled the policy with the taxonomy's id clocks (four runs against
+256-character ids, refused past 50 ms of wall time), so a server — or a
+suite's child — that lost the CPU while loading refused a valid policy as
+`pattern too slow against a 256-character id`, a refusal that names no way
+out. The load now checks each pattern's shape, never its speed, as
+MCP_INTEGRATION and DOWNSTREAM always said, and the worker's deadline per
+rule is the guard; the taxonomy's own clocks are unchanged.
+Tests: 1395 → 1396 (one more in `server/test-mcp-settings.mjs`: under a
+clock that jumps a second per read, a valid policy loads).
+A server whose policy worker cannot be built — one started under the
+permission model without `--allow-worker` — counts every rule as matched,
+so even the approved host is a 409 naming rule 0, which an API caller
+acknowledges with `acks: [0]`. The 409 now says `unevaluated: true` when the
+server could not check the rule it names (it did not finish, the worker
+could not start or failed, the rule cannot run on the form, or a value it
+checks is over 512 characters), and never for a match, so a caller can say
+why the rule applies.
+Tests: 1396 → 1397 (one more in `server/test-mcp-settings.mjs`: the refusal
+flagged only for a rule the server could not check).
+The studio's modal drew a box only for a rule its own in-page check
+flagged, so that 409 showed the reader `tick "…" in the server settings`
+with nothing to tick. It now draws the box of the rule a 409 names, with a
+line saying the server could not check the rule (or that the server's
+check matched where the page's did not); the send waits for the tick, as
+does an action that carries a field the rule checks, and ticked the next
+submit carries the rule's index, which attests what an API caller's acks
+do. An edit of any value but a secret takes the box away,
+and the notice asks for the secret the refused send emptied until it is
+typed again (the tick does not take the line away).
+Tests: 1397 → 1401 (one more in `tools/test-mcp-settings-model.mjs`: the
+box and its two lines; and three more in
+`server/test-mcp-settings-studio.mjs`: a child that cannot build the
+worker, driven in Chromium, with one rule and with two, where a later 409
+adds its rule's box beside the one already ticked, and with a rule by type
+the page flagged on another URL field than the action carries, which then
+waits for that box).
+
 ### Follow-up: paths on Windows are compared by what they name
 
 On NTFS one file has many spellings — another case, another drive-letter
