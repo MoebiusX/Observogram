@@ -15,6 +15,7 @@ import { adapt } from './lib/adapter.mjs';
 import { SPEC_DIR } from './lib/validator.mjs';
 import { classify } from './lib/artefact-model.mjs';
 import { BOARD_LAYERS } from '../studio/discover-board.mjs';
+import { WIN32_PLATFORM } from '../server/fixtures/platform.mjs';
 import {
   FAMILIES, FAMILY_HOME, DEFINES_RULES, ID_RULES, ID_MATCH_LENGTH, PATTERN_MAX_LENGTH,
   TAXONOMY_VERSION, TAXONOMY_VERSIONS, TAXONOMY_VERSION_LATEST, GLOSSARY_LIMITS,
@@ -331,8 +332,9 @@ test('a catastrophic pattern runs one pass over the four adversarial ids and is 
   }
 });
 
-test('the default id clock reads performance.now() and the process\'s CPU time, never Date.now(): a stall alone never refuses, both over refuses, and without a CPU clock the wall clock decides', () => {
+test('the default id clock reads performance.now() and the process\'s CPU time, never Date.now(): a stall alone never refuses, both over refuses, without a CPU clock the wall clock decides, and the CPU time\'s slack is Windows\' alone, a 15.625 ms tick and a millisecond', () => {
   const ownNow = Object.getOwnPropertyDescriptor(performance, 'now');
+  const ownPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
   const realCpuUsage = process.cpuUsage;
   const realDateNow = Date.now;
   let wall = 0;
@@ -354,8 +356,23 @@ test('the default id clock reads performance.now() and the process\'s CPU time, 
     assert.equal(compileTaxonomy(V1, { timed: false }).ids.length, 1, 'compileTaxonomy(json, { timed: false }) reads no clock');
     process.cpuUsage = undefined;   // a runtime without a CPU clock (a browser)
     assert.equal(compileBoundedPattern('^svc-[a-z]+$').reason, TOO_SLOW, 'the wall clock decides alone');
+    // The slack the default clock reads with the CPU time, on whichever platform runs the suite: on win32 a 15.625 ms
+    // tick and a millisecond, elsewhere 0. Every pass stalled a second on the wall clock, `us` of user CPU per reading.
+    const onPlatform = (platform, us) => {
+      Object.defineProperty(process, 'platform', { ...ownPlatform, value: platform });
+      let cpu = 0;
+      process.cpuUsage = () => ({ user: (cpu += us), system: 0 });
+      return compileBoundedPattern('^svc-[a-z]+$').reason ?? 'compiled';
+    };
+    assert.equal(onPlatform(WIN32_PLATFORM, 46_875), TOO_SLOW, 'win32, stalled at three ticks: refused, as on the wall clock alone');
+    assert.equal(onPlatform('linux', 46_875), 'compiled', 'linux: no slack, 46.875 ms of CPU is within the budget');
+    assert.equal(onPlatform('darwin', 46_875), 'compiled', 'darwin: no slack');
+    assert.equal(onPlatform(WIN32_PLATFORM, 33_375), 'compiled', 'win32: 33.375 ms + 16.625 is the budget, inclusive');
+    assert.equal(onPlatform(WIN32_PLATFORM, 33_376), TOO_SLOW, 'win32: a microsecond more is over');
+    assert.equal(onPlatform(WIN32_PLATFORM, 0), 'compiled', 'win32, stalled, no tick charged');
   } finally {
     if (ownNow) Object.defineProperty(performance, 'now', ownNow); else delete performance.now;
+    Object.defineProperty(process, 'platform', ownPlatform);
     process.cpuUsage = realCpuUsage;
     Date.now = realDateNow;
   }

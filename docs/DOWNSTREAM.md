@@ -591,7 +591,8 @@ predicted from code reading (TerminateProcess semantics, `stat.mode` 0666, no
 `FILE_SHARE_DELETE` on the sqlite handle); no Windows run exists yet. Every
 suite names the platform only through `server/fixtures/platform.mjs`
 (`isWin32`, `isLinux`, `PLATFORM`, `win32Skip(reason)`, `skipOnWin32(t,
-reason)`); `tools/test-platform.mjs` keeps the count and the reasons honest
+reason)`, and `WIN32_PLATFORM` for a suite that fakes the platform as
+data); `tools/test-platform.mjs` keeps the count and the reasons honest
 and proves the module-relative resolvers (`fileURLToPath`, never
 `URL.pathname`, which is `/C:/…` on Windows and percent-encoded everywhere) on
 every platform. The checkout is LF everywhere (`.gitattributes`: `* text=auto
