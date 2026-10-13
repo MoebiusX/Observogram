@@ -81,6 +81,12 @@
  *      declared action that carries the URL waits for the box as the send
  *      does — its own 409 draws it, clicked unticked it sends nothing, ticked
  *      it carries acks [0] — and one that carries nothing never waits.
+ *  15. Two rules the studio server could not check (that child, a policy of
+ *      two acknowledgements written to a temp dir): each 409 names the first
+ *      unticked rule, and its box is added beside the boxes already drawn —
+ *      after rule 0's tick the 409 for rule 1 adds rule 1's box while rule
+ *      0's stays ticked —, so ticking what each 409 names reaches a submit
+ *      with acks [0, 1] that goes.
  *
  * Every test asserts no page error, no console.error beyond a failed load
  * (and, where CORS is the point, the browser's CORS message), no popup, and
@@ -1063,6 +1069,24 @@ test('BROWSER 13: the acceptance flow through the studio server — the same, th
 const NO_WORKER = ['--permission', '--allow-fs-read=*', '--allow-fs-write=*', '--allow-child-process'];
 const SERVER_UNCHECKED = 'The studio server could not check these settings against this rule, so it counts as matched — tick the box to send them with your approval.';
 const RETYPE = 'The secret you typed was emptied when the request left — type it again before you send.';
+const WARN = 'Non-approved backend host.';
+
+// Each submit as its answer arrives (its body read later, so the count is never behind the page).
+function watchSubmits(w) {
+  const submits = [];
+  w.page.on('response', (r) => {
+    if (!r.url().endsWith('/api/mcp-settings/submit')) return;
+    const sent = JSON.parse(r.request().postData());
+    submits.push({ status: r.status(), acks: sent.acks, action: sent.action ?? null, json: r.json().catch(() => null) });
+  });
+  return submits;
+}
+
+// The policy region's boxes, in order: the rule, its warning, its notes, its ack and whether it is ticked.
+const ackBoxes = (w) => w.page.evaluate(() => [...document.querySelectorAll('#mss-host .mss-policy .mss-rule')].map((b) => ({
+  rule: b.getAttribute('data-rule'), warn: b.querySelector('.mss-warn-text')?.textContent, notes: [...b.querySelectorAll('.mss-warn-note')].map((p) => p.textContent),
+  ack: b.querySelector('.mss-ack-text')?.textContent, tick: b.querySelector('input[data-ack]') ? [b.querySelector('input[data-ack]').getAttribute('data-ack'), b.querySelector('input[data-ack]').checked] : null,
+})));
 
 test('BROWSER 14: through the studio server, a rule it could not check — the approved host is a 409 naming rule 0, unevaluated; the modal draws its box with the reason, the send waits for the tick, and ticked the submit carries acks [0] and goes', async (t) => {
   if (skipUnlessBrowser(t)) return;
@@ -1074,13 +1098,7 @@ test('BROWSER 14: through the studio server, a rule it could not check — the a
   const repoint = '#mss-host [data-action-row="repoint"] .mss-action';
   const disable = '#mss-host [data-action-row="disable"] .mss-action';
   const w = await openPage(studio, 'ada');
-  // Each submit as its answer arrives (its body read later, so the count is never behind the page).
-  const submits = [];
-  w.page.on('response', (r) => {
-    if (!r.url().endsWith('/api/mcp-settings/submit')) return;
-    const sent = JSON.parse(r.request().postData());
-    submits.push({ status: r.status(), acks: sent.acks, action: sent.action ?? null, json: r.json().catch(() => null) });
-  });
+  const submits = watchSubmits(w);
   await aim(w, { id: gwId });
   await openSettings(w);
   await w.waitStatus(/^The server describes its settings \(version 1\)\.$/);
@@ -1098,10 +1116,7 @@ test('BROWSER 14: through the studio server, a rule it could not check — the a
   assert.deepEqual(await Promise.all(submits.map(async (x) => [x.status, x.acks, await x.json])), [[409, [], { ok: false, denied: 'policy-ack', rule: 0, unevaluated: true, error: `Non-approved backend host. — tick "${ACK}" in the server settings` }]]);
   assert.equal(postsTo(f).length, 0, 'nothing reached the MCP server');
   assert.match(studio.child.logs().stderr, /^\[mcp-settings\] the policy worker failed \(\w+\) — rules\[0\] counted as matched$/m);
-  const box = () => w.page.evaluate(() => [...document.querySelectorAll('#mss-host .mss-policy .mss-rule')].map((b) => ({
-    rule: b.getAttribute('data-rule'), warn: b.querySelector('.mss-warn-text')?.textContent, notes: [...b.querySelectorAll('.mss-warn-note')].map((p) => p.textContent),
-    ack: b.querySelector('.mss-ack-text')?.textContent, tick: b.querySelector('input[data-ack]') ? [b.querySelector('input[data-ack]').getAttribute('data-ack'), b.querySelector('input[data-ack]').checked] : null,
-  })));
+  const box = () => ackBoxes(w);
   assert.deepEqual(await box(), [{ rule: '0', warn: 'Non-approved backend host.', notes: [SERVER_UNCHECKED], ack: ACK, tick: ['0', false] }]);
   assert.equal(await w.page.getAttribute('.mss-primary', 'aria-disabled'), 'true', 'the send waits for the tick');
   assert.equal(await w.page.getAttribute(repoint, 'aria-disabled'), 'true', 'so does an action that carries the URL the rule checks');
@@ -1170,6 +1185,69 @@ test('BROWSER 14: through the studio server, a rule it could not check — the a
   await Promise.all([w.page.waitForResponse((r) => r.url().endsWith('/api/mcp-settings/submit')), w.page.click(repoint)]);
   assert.deepEqual(submits.map((x) => [x.status, x.acks, x.action]).at(-1), [200, [0], 'repoint']);
   assert.deepEqual(postsTo(f).map((r) => r.body), [{ grafanaUrl: 'https://approved.example/', secret: SECRET }, { action: 'disable' }, { action: 'repoint', grafanaUrl: 'https://approved.example/' }]);
+  await closeSettings(w);
+  await w.done();
+});
+
+// ---------- 15: two rules it could not check ----------
+
+const ROOT_WARN = 'A shared root login.';
+const ROOT_ACK = 'I accept a shared root login';
+
+test('BROWSER 15: through the studio server, two rules it could not check — each 409 names the first unticked rule and adds its box beside the ticked one, so ticking what each names reaches a submit with acks [0, 1] that goes', async (t) => {
+  if (skipUnlessBrowser(t)) return;
+  // The fixture's rule and a second acknowledgement, on the user field, in a policy of the test's own.
+  const dir = mkdtempSync(join(tmpdir(), 'observogram-mss-policy-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const policyFile = join(dir, 'policy.json');
+  const fixture = JSON.parse(readFileSync(POLICY_FILE, 'utf8'));
+  writeFileSync(policyFile, JSON.stringify({ ...fixture, rules: [...fixture.rules, { when: { field: 'user', pattern: '^root$' }, warn: ROOT_WARN, require: { ack: ROOT_ACK } }] }));
+  const studio = await startChild({ OBSERVOGRAM_MCP_ADMIN_PROXY: '1', OBSERVOGRAM_MCP_SETTINGS_POLICY: policyFile }, { execArgv: NO_WORKER });
+  t.after(() => studio.stop());
+  const f = await fake({ cors: false });
+  const gwId = await endpointIdFor(studio.child.base, f.url, { name: 'gw-two-rules', headers: { Cookie: studio.cookies.ada } });
+  const w = await openPage(studio, 'ada');
+  const submits = watchSubmits(w);
+  const answers = () => Promise.all(submits.map(async (x) => [x.status, x.acks, await x.json]));
+  await aim(w, { id: gwId });
+  await openSettings(w);
+  await w.waitStatus(/^The server describes its settings \(version 1\)\.$/);
+  await fill(w, 'grafanaUrl', 'HTTPS://Approved.example/');
+  await fill(w, 'user', 'svc-observogram');
+  assert.equal(await w.page.evaluate(() => document.querySelectorAll('#mss-host .mss-rule').length), 0, 'the page\'s check passes both values');
+
+  // The first 409 names rule 0: its box.
+  await w.page.click('.mss-primary', { force: true });
+  await w.waitStatus(/^The studio server answered 409: Non-approved backend host\./);
+  assert.equal(await w.status(), `The studio server answered 409: ${WARN} — tick "${ACK}" in the server settings.`);
+  assert.deepEqual(await answers(), [[409, [], { ok: false, denied: 'policy-ack', rule: 0, unevaluated: true, error: `${WARN} — tick "${ACK}" in the server settings` }]]);
+  assert.deepEqual(await ackBoxes(w), [{ rule: '0', warn: WARN, notes: [SERVER_UNCHECKED], ack: ACK, tick: ['0', false] }]);
+
+  // Ticked, the submit carries acks [0]; the 409 now names rule 1, and its
+  // box is added — rule 0's stays, ticked — so the send waits for the new tick.
+  await w.page.check('#mss-host .mss-policy input[data-ack="0"]');
+  assert.equal(await w.page.getAttribute('.mss-primary', 'aria-disabled'), null);
+  await w.page.click('.mss-primary', { force: true });
+  await w.waitStatus(/^The studio server answered 409: A shared root login\./);
+  assert.equal(await w.status(), `The studio server answered 409: ${ROOT_WARN} — tick "${ROOT_ACK}" in the server settings.`);
+  assert.deepEqual((await answers()).at(-1), [409, [0], { ok: false, denied: 'policy-ack', rule: 1, unevaluated: true, error: `${ROOT_WARN} — tick "${ROOT_ACK}" in the server settings` }]);
+  assert.deepEqual(await ackBoxes(w), [
+    { rule: '0', warn: WARN, notes: [SERVER_UNCHECKED], ack: ACK, tick: ['0', true] },
+    { rule: '1', warn: ROOT_WARN, notes: [SERVER_UNCHECKED], ack: ROOT_ACK, tick: ['1', false] },
+  ], 'the second 409 adds rule 1\'s box beside rule 0\'s, still ticked');
+  assert.equal(await w.page.getAttribute('.mss-primary', 'aria-disabled'), 'true', 'the send waits for the new box\'s tick');
+  assert.equal(postsTo(f).length, 0, 'nothing reached the MCP server');
+
+  // Both ticked: the submit carries acks [0, 1] and goes.
+  await w.page.check('#mss-host .mss-policy input[data-ack="1"]');
+  await w.page.click('.mss-primary', { force: true });
+  await w.waitStatus(/Connection test:/);
+  assert.match(await w.status(), /^The server reports the settings verified \(HTTP 200\)\. Connection test: /);
+  assert.deepEqual(submits.map((x) => [x.status, x.acks]), [[409, []], [409, [0]], [200, [0, 1]]]);
+  assert.deepEqual(postsTo(f).map((r) => r.body), [{ grafanaUrl: 'https://approved.example/', user: 'svc-observogram' }]);
+  assert.match(studio.child.logs().stderr, /^\[mcp-settings\] the policy worker failed \(\w+\) — rules\[0\], rules\[1\] counted as matched$/m);
+  const audit = await (await fetch(`${studio.child.base}/api/audit?limit=100`, { headers: { Cookie: studio.cookies.ada } })).json();
+  assert.deepEqual(audit.rows.filter((r) => r.action === 'live.mcp-settings').map((r) => r.detail.acks), [[0, 1]], 'the row records both acknowledged indexes');
   await closeSettings(w);
   await w.done();
 });

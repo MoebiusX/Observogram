@@ -1380,7 +1380,8 @@ submit carries the rule's index, which attests what an API caller's acks
 do. An edit of a value the policy reads takes the box away,
 and the notice asks for the secret the refused send emptied until it is
 typed again (the tick does not take the line away).
-Tests: 1395 → 1397 (one more in `tools/test-mcp-settings-model.mjs`: the
-box and its two lines; and one more in
+Tests: 1395 → 1398 (one more in `tools/test-mcp-settings-model.mjs`: the
+box and its two lines; and two more in
 `server/test-mcp-settings-studio.mjs`: a child that cannot build the
-worker, driven in Chromium).
+worker, driven in Chromium, with one rule and with two, where a later 409
+adds its rule's box beside the one already ticked).
