@@ -37,7 +37,7 @@ import {
   remediationDeployActionLabel, remediationDeployActionTitle, remediationSideOnlyMeasure,
 } from './verify-deploy.mjs';
 // The static posture — no server behind the page (a static bundle): the deploy controls drawn unavailable.
-import { serverNeeded, DEPLOY_CONTROLS } from './static-remedies.mjs';
+import { serverNeeded, DEPLOY_CONTROLS, staticRemedy, staticInputOf } from './static-remedies.mjs';
 import { markUnavailable } from './services-view.mjs';
 
 // ---------- COMPILE view ----------
@@ -483,7 +483,7 @@ function remediationHeaderHtml(m) {
   if (!haveB) {
     decision = 'No live pack is loaded, so there is no diagnosed gap to resolve yet.';
     tone = 'info';
-    note = 'Compare with a live pack to get a recommendation, or deploy the repository’s artefacts directly.';
+    note = isStatic() ? staticRemedy('remediate-no-b', staticInput()) : 'Compare with a live pack to get a recommendation, or deploy the repository’s artefacts directly.';
     primary = { label: 'Compare with live first', action: 'rm-diagnose' };
     if (m.sets.deploy?.total) secondary.push({ label: 'Deploy repository artefacts to live', action: 'rm-deploy-all' });
   } else {
@@ -1041,7 +1041,7 @@ function renderRemediateFlow(root) {
   const model = buildRemediationFlowViewModel(engine, {
     pack: state.pack, packB: state.packB, diff: state.diff, compareBId: state.compareBId, packId: state.selectedPackId,
   });
-  return renderRemediationFlow(root, model, appHost, { screen: 'remediate' });
+  return renderRemediationFlow(root, model, appHost, { screen: 'remediate', notComparedNote: isStatic() ? staticRemedy('flow-not-compared-remediate', staticInput()) : null });
 }
 
 export function renderCompileView(host) {
@@ -1069,6 +1069,10 @@ export function renderCompileView(host) {
 // rendered (an aria-disabled control is never a modal opener). Each keeps its
 // handler, which reaches openDeployModal (studio/app.mjs) and explains.
 const isStatic = () => state.access?.posture === 'static';
+// The remedies that name a server action say, in the static posture, how a
+// bundle gets a live pack (studio/static-remedies.mjs staticRemedy): what is
+// built in reads from the catalogue.
+const staticInput = () => staticInputOf(state.brand.chrome.name, state.catalog, state.selectedPackId);
 
 function drawDeployUnavailable(root) {
   if (!isStatic()) return;

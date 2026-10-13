@@ -49,7 +49,7 @@ import { decisionHeaderHtml, disclosureHtml, emptyStateHtml, LAYER_PURPOSE, laye
 import { LINK_STATES, readTraceability, traceIssue } from './trace-chain.mjs';
 import { metricReaders, readersDigest, readersSentence, readerLine, readerRank, readerCounts, alertNames } from './metric-readers.mjs';
 // The static posture — no server behind the page (a static bundle): the deploy controls drawn unavailable.
-import { serverNeeded, DEPLOY_CONTROLS, staticRemedy } from './static-remedies.mjs';
+import { serverNeeded, DEPLOY_CONTROLS, staticRemedy, staticInputOf, staticTraceActions } from './static-remedies.mjs';
 import { markUnavailable } from './services-view.mjs';
 
 // Re-exported: these two lived here before moving to compare-catalog.mjs
@@ -64,6 +64,12 @@ export { catalogEntryFor, LAYERS_FOR_DIFF };
 // aria-disabled control is never a modal opener). Each keeps its handler,
 // which reaches openDeployModal (studio/app.mjs) and explains.
 const isStatic = () => state.access?.posture === 'static';
+// Every remedy that names a server action says, in the static posture, how a
+// bundle gets a live pack (studio/static-remedies.mjs staticRemedy) — what is
+// built in reads from the catalogue; and Traceability words its live-evidence
+// texts the same way (staticTraceActions), the module's own otherwise.
+const staticInput = () => staticInputOf(state.brand.chrome.name, state.catalog, state.selectedPackId);
+const traceActions = () => (isStatic() ? { actions: staticTraceActions(state.brand.chrome.name) } : {});
 
 function drawDeployUnavailable(root) {
   if (!isStatic() || !root) return;
@@ -317,7 +323,7 @@ export function renderTraceabilityView(host) {
       section.innerHTML = emptyStateHtml({
         title: 'No SLI or SLO requirements in this pack.',
         checked: `the SLOs and SLIs declared by ${state.pack?.meta?.name || 'this pack'}`,
-        body: 'Traceability follows each objective to the metrics, rules, scrape jobs, dashboards and alerts that prove it. Declare an SLO, or pick a live pack as Pack B to compare the repository with live.',
+        body: isStatic() ? staticRemedy('trace-no-b', staticInput()) : 'Traceability follows each objective to the metrics, rules, scrape jobs, dashboards and alerts that prove it. Declare an SLO, or pick a live pack as Pack B to compare the repository with live.',
       });
     }
     host.appendChild(section);
@@ -569,7 +575,7 @@ const RT_FILTERS = [
 ];
 
 function renderRequirementTraceabilityBlock(pack) {
-  const model = readTraceability(pack);
+  const model = readTraceability(pack, traceActions());
   if (!model) return null;
   const block = document.createElement('div');
   block.className = 'rt-block';
@@ -758,7 +764,7 @@ function renderRequirementRow(row, i, groupSize, repaint) {
   const bodyId = `rt-req-body-${i}`;
   const expanded = state.rtExpanded === row.id;
   const focus = row.firstBroken || row.weakest;
-  const focusIssue = focus?.gap ? traceIssue(focus.gap) : null;
+  const focusIssue = focus?.gap ? traceIssue(focus.gap, traceActions()) : null;
   // The issue label already names its link ("Alert evidence missing").
   const breakText = row.firstBroken
     ? (focusIssue ? focusIssue.label : `${row.firstBroken.label}: ${LINK_STATES[row.firstBroken.state].label.toLowerCase()}`)
@@ -818,7 +824,7 @@ function renderRequirementChain(row, groupSize, repaint) {
     li.className = 'rt-link';
     li.dataset.state = l.state;
     if (l.broken) li.dataset.broken = 'true';
-    const issue = l.gap ? traceIssue(l.gap) : null;
+    const issue = l.gap ? traceIssue(l.gap, traceActions()) : null;
     const shared = issue ? groupSize.get(issue.code) || 0 : 0;
     li.innerHTML = `
       <div class="rt-link-head">
@@ -1110,7 +1116,7 @@ function renderDiagnose(view) {
   const posture = computePostureMatrix(state.pack, state.packB);
 
   // THE verdict — diagnostic grade from coverage (2A) + trust / drift (2B).
-  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe);
+  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe, isStatic() ? { noLiveHint: staticRemedy('no-live-hint', staticInput()) } : {});
 
   // The screen grammar (docs/UX_SCREEN_GRAMMAR.md): context · decision ·
   // next action · explanation first, then the report's sections behind a
@@ -1125,7 +1131,7 @@ function renderDiagnose(view) {
   const lensLabel = lens !== 'all' ? (LENS_PRODUCTS.find(lp => lp.slug === lens)?.label || lens) : '';
   const decision = buildAssessmentDecision({
     diagnostic, digest, roles: ctx.roles, liveEvidence, haveB, baselineName: ctx.b?.name || '', lensLabel,
-    remedy: isStatic() ? (key) => staticRemedy(key, { product: state.brand.chrome.name }) : null,
+    remedy: isStatic() ? (key) => staticRemedy(key, staticInput()) : null,
   });
   const parts = renderDiagnosticGradeVerdict(diagnostic);
   // The response path (GAP batch 2, B3.3): only for a pack that declares a
@@ -1203,7 +1209,7 @@ function renderDiagnose(view) {
   // Evidence (the scored checks + the evidence ledger), then requirement chains.
   report.insertAdjacentHTML('beforeend', parts.evidenceHtml);
   if (parts.requirementsHtml) report.insertAdjacentHTML('beforeend', parts.requirementsHtml);
-  if (flowModel) report.insertAdjacentHTML('beforeend', remediationFlowHtml(flowModel, { screen: 'diagnose' }));
+  if (flowModel) report.insertAdjacentHTML('beforeend', remediationFlowHtml(flowModel, { screen: 'diagnose', notComparedNote: isStatic() ? staticRemedy('flow-not-compared-diagnose', staticInput()) : null }));
 
   // Layer scores — per-layer × per-mechanism coverage. Pack-A-derived, so
   // it's the "why" behind the coverage checks whether or not a Pack B exists.
@@ -2005,7 +2011,7 @@ function renderDiagnosticGradeVerdict(diagnostic) {
         ${!trust.hasMcpSource ? `
           <div class="diag-banner" role="note">
             <span class="diag-banner-key">WARN</span>
-            Nothing live backs this pack. “Drift-free” and “Fresh” need a live draft (MCP) or a live refresh to verify.
+            ${isStatic() ? escapeHtml(staticRemedy('diagnose-banner', staticInput())) : 'Nothing live backs this pack. “Drift-free” and “Fresh” need a live draft (MCP) or a live refresh to verify.'}
           </div>
         ` : ''}
         ${critTable(trust.criteria)}
@@ -3897,7 +3903,7 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
     if (!hasLive) {
       b.title = 'Nothing live has been checked';
       b.why = 'Every claim rests on what the pack declares; nothing confirms the signals exist in production.';
-      b.fix = 'Connect MCP or scan live, then choose the live draft as the baseline (Pack B) to compare.';
+      b.fix = remedy ? remedy('drift-free-no-live') : 'Connect MCP or scan live, then choose the live draft as the baseline (Pack B) to compare.';
       b.actionLabel = haveB ? 'Review the comparison' : 'How to compare with live';
       b.actionId = 'diag-goto:diag-compare';
     } else if (haveB) {
@@ -3916,6 +3922,7 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
       b.fix = 'Choose the live draft as the baseline (Pack B) to see which artefacts differ.';
     }
   } else if (c.key === 'fresh') {
+    if (remedy) b.fix = remedy('fresh-fix');
     if (/never been verified|no mcp\.refreshedAt/i.test(c.detail || '')) b.title = 'Never verified against live';
     else if (/vantage lost/i.test(c.detail || '')) {
       b.title = 'The last live check saw nothing';
@@ -3963,7 +3970,7 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
         ? `no probe family answered${silent.length ? ` (${silent.join(', ')})` : ''}`
         : `${liveEvidence.failed.length} of ${liveEvidence.attempted.length} live probes failed (${liveEvidence.failed.join(', ')})`,
       why: 'Surfaces the live draft could not see look like drift, so differences may be overstated.',
-      fix: 'Draft the live pack again from MCP once the endpoint is healthy, then re-check.',
+      fix: remedy ? remedy('live-evidence-fix') : 'Draft the live pack again from MCP once the endpoint is healthy, then re-check.',
       cost: 'Does not change the grade by itself',
       actionLabel: haveB ? 'View the comparison' : 'View the evidence',
       actionId: haveB ? 'diag-goto:diag-compare' : 'diag-goto:diag-evidence',
@@ -4132,7 +4139,7 @@ function assessmentMeasuresHtml(diagnostic, d) {
   const nPartial = scored.filter(c => !c.pass && criterionScore(c) > 0).length;
   const nFail = scored.length - nPass - nPartial;
   const rollup = diagnostic.traceabilityGraph?.rollup;
-  const live = !d.hasLive ? { v: 'Not checked', note: 'connect MCP or scan live to verify', tone: 'warn' }
+  const live = !d.hasLive ? { v: 'Not checked', note: isStatic() ? staticRemedy('live-measure', staticInput()) : 'connect MCP or scan live to verify', tone: 'warn' }
     : d.vantage === 'lost' ? { v: 'Could not observe', note: 'a live check ran, but no probe family answered', tone: 'warn' }
       : d.vantage === 'partial' ? { v: 'Partial', note: 'some live probes failed', tone: 'warn' }
         : d.vantage === 'none' ? { v: 'Refreshed', note: 'no probe record, so what the live check observed is unknown', tone: 'warn' }

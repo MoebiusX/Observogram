@@ -67,7 +67,7 @@ import {
 } from './mcp-settings-model.mjs';
 import { loadServerSettingsConfig, loadSettingsLibs, readDescriptorDirect, submitDirect, describeViaProxy, submitViaProxy } from './mcp-settings-api.mjs';
 import { renderNoOrgHome, renderServicesHome, renderServicePage, renderServiceEditor, markUnavailable } from './services-view.mjs';
-import { serverNeeded } from './static-remedies.mjs';
+import { serverNeeded, staticRemedy, staticInputOf } from './static-remedies.mjs';
 import {
   BUILT_SECTIONS, BUILT_EDITORS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsSectionHead, settingsAboveRank,
   buildEnvironmentsSectionModel, buildEndpointsSectionModel, buildMembersSectionModel, buildAuditSectionModel, auditQuery,
@@ -4812,14 +4812,21 @@ function renderDiscoverEmpty(view) {
 
 // Diagnose / Remediate with no pack loaded — both need a pack from
 // Discover first. Point the user there rather than showing an empty grid.
+// The static posture (a bundle: no server behind the page). The prompt below
+// says where a pack comes from there — the packs built in, or whoever builds
+// the bundle (studio/static-remedies.mjs staticRemedy) — where a server's
+// names the crawl, the live MCP draft and the upload, each a 501 in a bundle.
+const isStatic = () => state.access?.posture === 'static';
+const staticInput = () => staticInputOf(state.brand.chrome.name, state.catalog, state.selectedPackId);
+
 function renderNeedPackPrompt(view) {
   const what = state.view === 'compile' ? 'compile and deploy' : 'diagnose';
   view.innerHTML = `
     <section class="need-pack">
       <h2 class="need-pack-title">Load a pack first</h2>
-      <p class="need-pack-lede">There's nothing to ${escapeHtml(what)} yet. Head to
+      <p class="need-pack-lede">There's nothing to ${escapeHtml(what)} yet. ${isStatic() ? escapeHtml(staticRemedy('need-pack', staticInput())) : `Head to
         <strong>Discover</strong> to crawl a repo, generate from a live MCP server, or
-        upload a manifest — then come back here.</p>
+        upload a manifest — then come back here.`}</p>
       <button type="button" class="need-pack-btn" id="need-pack-goto-discover">
         <span>Go to Discover</span><span aria-hidden="true">→</span>
       </button>

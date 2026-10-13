@@ -23,20 +23,50 @@
 // renders; its handler stays and reaches openDeployModal (studio/app.mjs),
 // which explains the reason instead of opening the modal.
 //
-// staticRemedy(key, { product }) is the text a view shows in the static
-// posture where its own names a server action the reader cannot take here.
-// Each is addressed to the reader, who did not build the file: what a
-// server does, and what whoever builds the bundle can add. Keys
-// (STATIC_REMEDY_KEYS), each shown by studio/compare-view.mjs:
-//   retrofeed-result — the note under a computed repository update
-//     (runRetrofeed), where a server's says to scan again.
-//   drift-partial — the drift drill's partial-live-evidence banner, where a
-//     server's says to draft the live pack once more.
-//   compare-one-pack — Compare with no second pack to compare with, where a
-//     server's says to load or scan one from Discover.
-//   drift-free-fix, live-missing-fix — the Assessment's drift-free and
-//     live-missing blockers' fixes, where a server's also offers deploying
-//     the missing artefacts.
+// staticRemedy(key, { product, liveBuiltIn, packsBuiltIn }) is the text a
+// view shows in the static posture where its own names a server action the
+// reader cannot take here. Each is addressed to the reader, who did not build
+// the file: what is built in, what the reader can do here, and what needs a
+// server or whoever builds the bundle. `liveBuiltIn` says whether a live pack
+// (a scaffold or a snapshot) other than Pack A is built in, `packsBuiltIn`
+// whether any pack loads (staticInputOf reads both from the catalogue). Keys
+// (STATIC_REMEDY_KEYS), the design's rows (A.8), each shown by the view
+// named:
+//   retrofeed-result (row 11) — the note under a computed repository update
+//     (studio/compare-view.mjs runRetrofeed), where a server's says to scan
+//     again.
+//   drift-partial (row 2) — the drift drill's partial-live-evidence banner,
+//     where a server's says to draft the live pack once more.
+//   compare-one-pack (row 4) — Compare with no second pack to compare with,
+//     where a server's says to load or scan one from Discover.
+//   drift-free-fix, live-missing-fix (row 12) — the Assessment's drift-free
+//     and live-missing blockers' fixes, where a server's also offers
+//     deploying the missing artefacts.
+//   trace-no-b (row 1) — Traceability with no requirement and no Pack B.
+//   diagnose-banner (row 3) — Diagnose's banner over a pack nothing live
+//     backs.
+//   fresh-fix (row 5), drift-free-no-live (row 6), live-evidence-fix (row
+//     7) — the Assessment's fresh, nothing-live and partial-evidence
+//     blockers' fixes (compare-view.mjs buildAssessmentDecision's `remedy`).
+//   live-measure (row 8) — the Live measure's note when nothing live is
+//     checked.
+//   no-live-hint (row 13) — the drift-free check's detail
+//     (studio/diagnostic-grade.mjs computeDiagnosticGrade's noLiveHint),
+//     where a server's names a live draft or a scan.
+//   flow-not-compared-diagnose, flow-not-compared-remediate (rows 16, 17) —
+//     the response path's note before a comparison
+//     (studio/remediation-flow-view.mjs's notComparedNote), on Diagnose and
+//     on Remediate (studio/compile-view.mjs).
+//   remediate-no-b (row 18) — Remediate's decision note with no Pack B
+//     (compile-view.mjs).
+//   need-pack (row 19) — Diagnose's and Remediate's prompt before a pack is
+//     chosen (studio/app.mjs renderNeedPackPrompt), where a server's names
+//     the ways to bring one in.
+//
+// staticTraceActions(product) is the set of Traceability's live-evidence
+// texts for the static posture (rows 14, 15): the same keys as
+// studio/trace-chain.mjs LIVE_ACTION_TEXT, which the views pass as
+// readTraceability's, readChain's and traceIssue's `actions`.
 
 export function serverNeeded(feature, product) {
   return `${feature} needs the ${product} server; this studio is a static bundle built without one.`;
@@ -54,6 +84,11 @@ export const DEPLOY_CONTROLS = [
 
 // "a Zed server", "an Observogram server": the article by the product name's first letter.
 const aServer = (product) => `${/^[aeiou]/i.test(product) ? 'an' : 'a'} ${product} server`;
+// What a reader of a bundle without a live pack is told (NOLIVE), and where a
+// new live draft comes from (NEWDRAFT): a server drafts it, whoever builds the
+// bundle builds it in.
+const noLive = (product) => `this bundle carries no live pack; whoever builds it can add one (a live draft made on ${aServer(product)}, built in with --pack)`;
+const newDraft = (product) => `a new live draft, made on ${aServer(product)} and built into the bundle by whoever builds it (--pack)`;
 
 const STATIC_REMEDIES = {
   'retrofeed-result': ({ product }) => `commit the updated pack to the service repo (it carries observogram.retrofeed.* provenance); whether the gap closed shows against a new live draft — on ${aServer(product)}, or in a bundle whoever builds it rebuilds with that draft and the updated pack`,
@@ -61,12 +96,55 @@ const STATIC_REMEDIES = {
   'compare-one-pack': () => 'This bundle carries no other pack that loads, so there is nothing to compare this one with; whoever builds the bundle can add another with --pack (a live draft, or a curated repository pack).',
   'drift-free-fix': ({ product }) => `Review the differences, then update the repository from live; deploying what is missing needs ${aServer(product)}.`,
   'live-missing-fix': ({ product }) => `Review them, then update the repository from live; deploying what is missing needs ${aServer(product)}.`,
+  'trace-no-b': ({ product, liveBuiltIn }) => `Traceability follows each objective to the metrics, rules, scrape jobs, dashboards and alerts that prove it. ${liveBuiltIn
+    ? 'Declare an SLO, or pick a live pack as Pack B to compare the repository with live.'
+    : `Declare an SLO. To compare the repository with live, pick a live pack as Pack B: ${noLive(product)}.`}`,
+  'diagnose-banner': ({ product, liveBuiltIn }) => `Nothing live backs this pack. “Drift-free” and “Fresh” need a live pack: ${liveBuiltIn ? 'choose the live pack built into this bundle as Pack B.' : `${noLive(product)}.`}`,
+  'fresh-fix': ({ product }) => `The live pack in this bundle is as fresh as when it was drafted; a fresh look needs ${newDraft(product)}.`,
+  'drift-free-no-live': ({ product, liveBuiltIn }) => (liveBuiltIn
+    ? 'Choose the live pack built into this bundle as the baseline (Pack B) to compare.'
+    : `Nothing live is built into this bundle; whoever builds it can add a live draft made on ${aServer(product)} (--pack), to choose as the baseline (Pack B).`),
+  'live-evidence-fix': ({ product }) => `A complete live pack needs ${newDraft(product)}, once the endpoint is healthy.`,
+  'live-measure': ({ liveBuiltIn }) => (liveBuiltIn ? 'compare with the live pack built in to verify' : 'no live pack is built in to verify against'),
+  'no-live-hint': ({ liveBuiltIn }) => (liveBuiltIn ? 'choose the live pack built into this bundle as Pack B' : 'no live pack is built into this bundle'),
+  'flow-not-compared-diagnose': ({ product, liveBuiltIn }) => `Not compared yet: every alert reads as declared. ${liveBuiltIn
+    ? 'Pick the live pack built into this bundle as Pack B to see which alerts are live.'
+    : `Seeing which alerts are live needs a live pack: ${noLive(product)}.`}`,
+  'flow-not-compared-remediate': ({ product }) => `Not compared with live: every alert reads as declared; deploying needs ${aServer(product)}.`,
+  'remediate-no-b': ({ product, liveBuiltIn }) => `${liveBuiltIn ? 'Compare with the live pack built into this bundle to get a recommendation' : `A recommendation needs a live pack: ${noLive(product)}`}; deploying needs ${aServer(product)}.`,
+  'need-pack': ({ product, packsBuiltIn }) => (packsBuiltIn
+    ? 'Head to Discover and open one of the packs built into this bundle — then come back here.'
+    : `This bundle carries no pack; whoever builds it can add one with --pack (a curated repository pack, or a live draft made on ${aServer(product)}).`),
 };
 
 export const STATIC_REMEDY_KEYS = Object.freeze(Object.keys(STATIC_REMEDIES));
 
-export function staticRemedy(key, { product } = {}) {
+export function staticRemedy(key, { product, liveBuiltIn = false, packsBuiltIn = false } = {}) {
   const text = STATIC_REMEDIES[key];
   if (!text) throw new Error(`staticRemedy: no static text for ${JSON.stringify(key)}`);
-  return text({ product });
+  return text({ product, liveBuiltIn: !!liveBuiltIn, packsBuiltIn: !!packsBuiltIn });
+}
+
+// The inputs staticRemedy reads, from what a view holds: the product's name,
+// the catalogue (GET /api/packs — the bundle's packs) and Pack A's id.
+// liveBuiltIn: a live pack (catalogue `live`: a scaffold or a snapshot) other
+// than Pack A loads; packsBuiltIn: any pack loads.
+export function staticInputOf(product, catalog, selectedPackId) {
+  const loaded = (Array.isArray(catalog) ? catalog : []).filter((p) => p && p.ok);
+  return { product, liveBuiltIn: loaded.some((p) => p.live && p.id !== selectedPackId), packsBuiltIn: loaded.length > 0 };
+}
+
+// Traceability's live-evidence texts in the static posture (rows 14, 15) —
+// studio/trace-chain.mjs LIVE_ACTION_TEXT's keys, each saying where a live
+// draft comes from instead of asking the reader to refresh one.
+export function staticTraceActions(product) {
+  return Object.freeze({
+    scrapeEvidenceFix: `Declare the scrape configuration, then check again; observing it live needs ${newDraft(product)}.`,
+    sliRulesHealthy: 'Check the rules behind the SLI are healthy (a new live draft confirms it)',
+    sliMeasured: `Confirm the SLI is measured with a live draft (made on ${aServer(product)})`,
+    metricConfirm: (metric) => `Confirm ${metric} with a live draft (made on ${aServer(product)})`,
+    scrapeEvidence: `Capture scrape evidence with a live draft (made on ${aServer(product)})`,
+    dashboardDeploy: `Deploy the dashboard on ${aServer(product)}; a new live draft confirms it`,
+    alertDeploy: `Deploy the burn-rate alert on ${aServer(product)}; a new live draft confirms it`,
+  });
 }
