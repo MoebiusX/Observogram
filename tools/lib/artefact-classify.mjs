@@ -280,8 +280,11 @@ function readTarget(value, where, errors) {
  * compilation, before it is refused).
  * `noun` names the pattern in each reason (`pattern` for the taxonomy, so
  * its texts are the ones it always had). `timed: false` skips only the
- * timed run (a browser re-reading a file the server already timed); every
- * static check still runs. `clock` is the suites' seam:
+ * timed run (for a caller a loaded machine's clock must not refuse: a
+ * browser re-reading a file the server already timed, and the settings
+ * policy's loaders in the browser and the server, whose pass-through runs
+ * each rule under a worker's deadline); every static check still runs.
+ * `clock` is the suites' seam:
  * `() => ({ wall, cpu, slack })` in milliseconds, `cpu` null where there is
  * none, `slack` (0 if absent) what a CPU reading can fall short of the time
  * spent, read once before each pass and once after it. A caller matching
