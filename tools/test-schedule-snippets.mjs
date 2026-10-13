@@ -243,6 +243,26 @@ const S45 = withSched({ every: '45m' });
     assert(os[f] === scheduleSnippets({ ...o, refusedHookTokens: undefined })[f].replace(REFUSED(PAGER), OWNED), `${f}: only the hook token's comment differs`);
     assert(noSecret(os[f]), `${f}: no value with refusedHookTokens`);
   }
+  // The org's hook token named as notify.urlEnv itself (refusedUrlTokens) — alone, or as the authEnv too, when the
+  // route's refusedEnvNames holds it once and its refusedHookTokens names it — is told it is refused as notify.urlEnv
+  // and its own hook's URL: never only to remove notify.authEnv, which leaves the urlEnv naming the token, refused.
+  const AS_URL = `${OWN} is the token of the hook ${HOOK} names, refused as the journey's notify.urlEnv: the studio posts only to a hook's URL — set the journey's notify.urlEnv to ${HOOK}, and its notify.authEnv to ${OWN} or leave it out, before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  const urlTokens = [{ tokenEnv: OWN, urlEnv: HOOK }, { tokenEnv: OWN, urlEnv: 'X_URL' }, { tokenEnv: 'MY_MCP_TOKEN', urlEnv: HOOK },
+    { tokenEnv: 'UNLISTED', urlEnv: HOOK }, { tokenEnv: 'MY_HOOK_URL', urlEnv: 'not a name' }, null];
+  const alone = { ...S15, envNames: ['MY_MCP_TOKEN'], refusedEnvNames: [OWN] };
+  const u = { ...alone, refusedUrlTokens: urlTokens };
+  assert(JSON.stringify(normaliseSnippetInput(u).refusedUrlTokens) === JSON.stringify([{ tokenEnv: OWN, urlEnv: HOOK }]) && normaliseSnippetInput(S15).refusedUrlTokens.length === 0,
+         'refusedUrlTokens: a refused name\'s first entry of valid names only; none by default');
+  for (const [label, input] of [['alone', u], ['as the authEnv too', { ...u, refusedHookTokens: [{ authEnv: OWN, urlEnv: HOOK }] }]]) {
+    const us = scheduleSnippets(input);
+    for (const [f, pre] of [['cron', '# '], ['schtasks', 'REM '], ['actions', '          # '], ['k8s', '                # ']]) {
+      const ls = us[f].split('\n');
+      assert(ls.filter(l => l.includes(OWN)).join('\n') === `${pre}${AS_URL}`, `${f} (${label}): one comment, refused as notify.urlEnv, naming its hook's URL`, ls.filter(l => l.includes(OWN)));
+      assert(!us[f].includes('remove notify.authEnv') && !us[f].includes(`${OWN} is not a notify hook`), `${f} (${label}): never only to remove notify.authEnv, nor a rename`);
+      assert(us[f] === scheduleSnippets(alone)[f].replace(REFUSED(OWN), AS_URL), `${f} (${label}): only the token's comment differs`);
+      assert(noSecret(us[f]), `${f} (${label}): no value with refusedUrlTokens`);
+    }
+  }
   // An org whose every hook name another org's id takes (refusedTaken: pay beside pay-notify, a KEY tie) has no
   // name a rename could reach — its hook-shaped names already have the shape — so each refused name, hook-shaped or
   // bare, is told to leave notify out, as the run's TAKEN refusal says; never the rename.

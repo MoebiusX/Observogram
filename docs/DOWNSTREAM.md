@@ -1521,8 +1521,14 @@ token goes only to its own URL — set the journey's notify.authEnv to
 not of the journey's notify.urlEnv: a hook's token goes only to its own URL —
 set the journey's notify.urlEnv to <its hook's _URL>, or remove
 notify.authEnv, before scheduling (docs/DOWNSTREAM.md §17.2)` — or, for
-any name of an org whose every hook name another org's id
-takes (17.1, "Whose it is"; no rename can reach a hook there), `# <NAME>
+one of the org's hook tokens named as `notify.urlEnv` itself (alone, or as
+`notify.authEnv` too), `# <NAME> is the token of the hook <its hook's _URL>
+names, refused as the journey's notify.urlEnv: the studio posts only to a
+hook's URL — set the journey's notify.urlEnv to <its hook's _URL>, and its
+notify.authEnv to <NAME> or leave it out, before scheduling
+(docs/DOWNSTREAM.md §17.2)` — or, for any name of an org whose every
+hook name another org's id takes (17.1, "Whose it is"; no rename can reach
+a hook there), `# <NAME>
 cannot be a notify hook of this org: another org's id also maps onto every
 name of its hook shape (OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN) by
 the longest-prefix rule, so the studio posts no notification for its

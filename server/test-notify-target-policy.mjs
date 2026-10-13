@@ -1141,13 +1141,16 @@ test('H13 a record written before the rule is served scrubbed: undici\'s echo of
   }
 });
 
-test('H16 the schedule route never binds a notify name the server refuses: a legacy journey\'s envNames hold neither of its names, refusedEnvNames both, and every snippet says so where the binding would have been; a stranger token beside the org\'s hook is the only name refused, its comment naming that hook\'s own token; another of the org\'s hook tokens beside a refused urlEnv is told its own hook\'s URL, never a rename; a journey through its org\'s hook has the body it always had; an org whose every hook name another org\'s id takes is told, for each refused name, to leave notify out, as its run\'s refusal says — never to rename it — and GET /api/journeys carries the listing\'s none for it as notifyUnavailable (for no other org)', { timeout: 120_000 }, async () => {
+test('H16 the schedule route never binds a notify name the server refuses: a legacy journey\'s envNames hold neither of its names, refusedEnvNames both, and every snippet says so where the binding would have been; a stranger token beside the org\'s hook is the only name refused, its comment naming that hook\'s own token; another of the org\'s hook tokens beside a refused urlEnv is told its own hook\'s URL, never a rename; the org\'s hook token named as the urlEnv itself, alone or as the authEnv too, is told it is refused as notify.urlEnv and its hook\'s URL, never only to remove notify.authEnv; a journey through its org\'s hook has the body it always had; an org whose every hook name another org\'s id takes is told, for each refused name, to leave notify out, as its run\'s refusal says — never to rename it — and GET /api/journeys carries the listing\'s none for it as notifyUnavailable (for no other org)', { timeout: 120_000 }, async () => {
   const A = await identityChild();
   plant(A.ws, 'acme', 'h16-bare', { notify: '{ urlEnv: MY_HOOK_URL, authEnv: OBSERVOGRAM_API_TOKEN, on: always }' });
   plant(A.ws, 'acme', 'h16-pair', { notify: `{ urlEnv: ${ONCALL.urlEnv}, authEnv: ${PAGER.tokenEnv} }` });
   plant(A.ws, 'acme', 'h16-hook', { notify: `{ urlEnv: ${ONCALL.urlEnv}, authEnv: ${ONCALL.tokenEnv}, on: always }` });
   plant(A.ws, 'acme', 'h16-both', { notify: `{ urlEnv: MY_HOOK_URL, authEnv: ${PAGER.tokenEnv} }` });
   plant(A.ws, 'acme', 'h16-both-followed', { notify: `{ urlEnv: ${PAGER.urlEnv}, authEnv: ${PAGER.tokenEnv} }` });
+  plant(A.ws, 'acme', 'h16-token-url', { notify: `{ urlEnv: ${ONCALL.tokenEnv} }` });
+  plant(A.ws, 'acme', 'h16-token-both', { notify: `{ urlEnv: ${ONCALL.tokenEnv}, authEnv: ${ONCALL.tokenEnv} }` });
+  plant(A.ws, 'acme', 'h16-token-followed', { notify: `{ urlEnv: ${ONCALL.urlEnv} }` });
   const REFUSED = (e) => `${e} is not a notify hook of this org: the studio never reads it — rename it to OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN before scheduling (docs/DOWNSTREAM.md §17.2)`;
   const schedule = async (name) => {
     const r = await call(A.base, 'GET', `/api/journeys/${name}/schedule`, { headers: A.as.vera });
@@ -1178,6 +1181,18 @@ test('H16 the schedule route never binds a notify name the server refuses: a leg
   for (const f of ['cron', 'schtasks', 'actions', 'k8s']) assert.ok(!both.snippets[f].includes(REFUSED(PAGER.tokenEnv)), `${f}: beside a refused urlEnv, the org's own hook token is never "not a notify hook of this org"`);
   const followed = await schedule('h16-both-followed');
   assert.deepEqual([followed.envNames, followed.refusedEnvNames], [[PAGER.urlEnv, PAGER.tokenEnv], undefined], 'the way out followed literally: both names bound, none refused');
+  // The org's hook token named as the urlEnv itself — alone, or as the authEnv too (one refused name) — is told it is
+  // refused as notify.urlEnv and its hook's URL: never only to remove notify.authEnv, which leaves the urlEnv refused
+  // (h16-token-url is that way out followed). Followed literally, either way: h16-hook's pair, or h16-token-followed.
+  const AS_URL = `${ONCALL.tokenEnv} is the token of the hook ${ONCALL.urlEnv} names, refused as the journey's notify.urlEnv: the studio posts only to a hook's URL — set the journey's notify.urlEnv to ${ONCALL.urlEnv}, and its notify.authEnv to ${ONCALL.tokenEnv} or leave it out, before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  for (const name of ['h16-token-url', 'h16-token-both']) {
+    const s = await schedule(name);
+    assert.deepEqual([s.envNames, s.refusedEnvNames], [[], [ONCALL.tokenEnv]], `${name}: the token refused once`);
+    refusedIn(s.snippets, ONCALL.tokenEnv, AS_URL);
+    for (const f of ['cron', 'schtasks', 'actions', 'k8s']) assert.ok(!s.snippets[f].includes('remove notify.authEnv') && !s.snippets[f].includes(REFUSED(ONCALL.tokenEnv)), `${name} ${f}: never only to remove notify.authEnv, nor a rename`);
+  }
+  const tokenFollowed = await schedule('h16-token-followed');
+  assert.deepEqual([tokenFollowed.envNames, tokenFollowed.refusedEnvNames], [[ONCALL.urlEnv], undefined], 'the way out followed literally, authEnv left out: bound, none refused');
   // A journey through its org's hook: no new key, the snippets scheduleSnippets makes from the route's inputs.
   const hook = await schedule('h16-hook');
   assert.deepEqual(Object.keys(hook), ['ok', 'name', 'schedule', 'placeholder', 'envNames', 'snippets']);
