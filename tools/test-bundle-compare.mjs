@@ -1601,6 +1601,22 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
       return { unavailable: el.classList.contains('is-unavailable'), note: el.querySelector('.ux-rm-output-note')?.textContent ?? null, button: !!document.querySelector('#deploy-compiled') };
     });
     assert.deepEqual(card, { unavailable: true, note: `Not deployable from the studio: ${DEPLOY}`, button: false }, 'the compiler\'s Deploy to live names the server it needs');
+    // The generated board the pack does not declare: the server first, which declaring it in the pack does not replace,
+    // then what it takes there — never declaring it as the way out on its own.
+    const generated = await page.evaluateHandle(() => [...document.querySelectorAll('button.compile-item-btn')].find((b) => /generated for every pack/.test(b.textContent)) ?? null);
+    assert.ok(await generated.evaluate((b) => !!b), 'payment-service\'s compiler lists the generated board');
+    await generated.evaluate((b) => b.click());
+    await page.waitForFunction(() => document.querySelector('button.compile-item-btn[aria-current="true"]')?.textContent.includes('generated for every pack')
+      && !!document.querySelector('.ux-rm-output.is-live .ux-rm-output-note'), null, { timeout: T });
+    const generatedCard = await page.evaluate(() => {
+      const el = document.querySelector('.ux-rm-output.is-live');
+      return { unavailable: el.classList.contains('is-unavailable'), note: el.querySelector('.ux-rm-output-note')?.textContent ?? null, button: !!document.querySelector('#deploy-compiled') };
+    });
+    assert.deepEqual(generatedCard, {
+      unavailable: true,
+      note: `Not deployable from the studio: ${DEPLOY} This generated board is not declared in the pack either: on that server it deploys once the pack declares it in spec.dashboards[].`,
+      button: false,
+    }, 'the generated board\'s Deploy to live names the server it needs before the declaration');
     await ctx.close();
   }
   // Row 18 with the live pack as Pack A and no Pack B: the bundle's one live pack is Pack A, so the decision's note says
