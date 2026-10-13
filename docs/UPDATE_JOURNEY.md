@@ -1477,3 +1477,31 @@ itself. Each of the two suites also runs its
 default host once on a real directory, so a Windows run fails if the
 platform's rule is not the one chosen. Tests: 1411 → 1425
 (`server/test-store-paths.mjs` 14, new).
+
+### Follow-up: a users file whose path Windows cannot resolve
+
+On Windows purge-org compares the recorded users file as the native realpath
+of its longest prefix that realpath can read, the rest as written. Realpath
+stops at a part that exists but that it cannot read through, and the rest
+was read as written beside that part, wherever the part leads. With the
+users file recorded as `C:\links\betasub\users.json`, where
+`C:\links\betasub` is a symlink to `\\myhost\betasub` (which is
+`C:\ws\orgs\beta\sub`), purge-org refused it while the share was served; while
+it was down, the path compared as outside the purged root `C:\ws\orgs\beta`,
+and purge-org deleted `C:\ws\orgs\beta\sub\users.json`. A file link, a chain
+of links, a link to a path that does not exist, and any other reparse point
+whose target cannot be opened — a cloud placeholder, a deduplicated file, a
+tag no filter on this host handles, which `lstatSync` answers as no link or
+cannot read either — are the same unknown. So is every path on a volume whose
+paths the native realpath cannot name at all (an ImDisk RAM disk), where a
+users file under the root named by a short name, or through a link, compared
+as outside it. Purge-org's users-file check now refuses a path when a part
+the realpath walk could not read exists — `lstatSync` answers it, or fails
+for another reason than that it does not exist — with the way out it now
+names for a share no file id places too: if the file does not lie under the
+root, delete the root by hand, then run purge-org again; if it does, move it
+out first. One outside the root through such a part, or anywhere on such a
+volume, is refused alike (a declared false refusal). A link whose target
+opens is followed as before, a path not created yet is judged as before, and
+the other checks compare as before. Tests: 1425 → 1428 (three more in
+`server/test-store-paths.mjs`).

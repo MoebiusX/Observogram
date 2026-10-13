@@ -7,8 +7,9 @@
 //
 // comparedPath(own) → compared(p, beside, { deleting }), the function a check
 // compares through: p's form, placed beside the path it is checked against
-// when one is given (on Windows, null instead when p, reached through a share,
-// may lie inside it: below). Off Windows it is `own`, the calling module's realpath
+// when one is given (on Windows, null instead when p, reached through a share —
+// or, deleting, a path the native realpath cannot fully resolve — may lie
+// inside it: below). Off Windows it is `own`, the calling module's realpath
 // form (which takes p alone), so Linux and macOS compare exactly as before. On Windows a
 // spelling does not name a path: NTFS names are case-insensitive and a
 // directory has a short (8.3) name beside its long one, so C:\ws, c:/WS and
@@ -51,7 +52,30 @@
 // it reports. A DFS link sits below a namespace root another server answers,
 // so while the link's target is down (\\corp\dfs\betasub, a link to
 // \\myhost\betasub) the nearest path that answers reports that server's
-// volume, not the one the link leads to.
+// volume, not the one the link leads to. A path the native realpath cannot
+// fully resolve is the same unknown: realpath stops at a part that exists but
+// that it cannot read through, and the rest is read as written beside it,
+// while the path may lead under the root as well as anywhere else — through a
+// link (a symlink or a junction) whose target cannot be opened
+// (C:\links\betasub\users.json, with C:\links\betasub a symlink to
+// \\myhost\betasub while that share is down, or C:\cfg\users.json, a file
+// symlink to \\myhost\betasub\users.json), a chain of them, any other reparse
+// point whose target cannot be opened (a cloud placeholder, a deduplicated
+// file, a tag no filter on this host handles), or on a volume whose paths
+// realpath cannot name at all (an ImDisk RAM disk, which bypasses the Volume
+// Mount Manager: its root among them, so a short name or a link there is read
+// as written). So with { deleting: true } a path answers null, on any root,
+// when a part the walk that spells it could not read exists: lstatSync
+// answers it, a link or not, or fails for another reason than that it does
+// not exist (ENOENT) — libuv's lstat opens through a reparse point it
+// does not take for a link, as stat does, and fails with that open's error.
+// Those parts are the ones that walk could not read, not a second walk's: one
+// that found a share back would read through the link while the path stays
+// spelled as written on the link's drive. A path that lies outside the root
+// is refused alike, through such a link or on such a volume (a declared false
+// refusal). A path whose realpath stops only at parts that do not exist yet is
+// judged as before, and one through a link whose target opens is followed to
+// it.
 // Placement only ever makes a check more conservative, since a file id names
 // a file on one volume, not on one host: a sector copy keeps the MFT, so a
 // machine cloned from this host's image, or this drive's disk image attached
@@ -71,22 +95,23 @@
 // crawlScopeRefusal's placement, which places only a local path while the
 // workspace is named through a share (it refuses any other path off a local
 // drive). That form only compares: every message, record and return value
-// keeps the path as given. host = { windows, path, realpathSync, statSync }
-// (the platform, node:path's, node:fs's realpathSync with its .native and
-// node:fs's statSync) is injectable (server/test-store-paths.mjs); the
-// default is this host.
+// keeps the path as given. host = { windows, path, realpathSync, statSync,
+// lstatSync } (the platform, node:path's, node:fs's realpathSync with its
+// .native, node:fs's statSync and lstatSync) is injectable
+// (server/test-store-paths.mjs); the default is this host.
 
-import { realpathSync, statSync } from 'node:fs';
+import { lstatSync, realpathSync, statSync } from 'node:fs';
 import * as nodePath from 'node:path';
 
 const ON_WINDOWS = process.platform === 'win32';
 
-export function comparedPath(own, { windows = ON_WINDOWS, path = nodePath, realpathSync: fsRealpath = realpathSync, statSync: fsStat = statSync } = {}) {
+export function comparedPath(own, { windows = ON_WINDOWS, path = nodePath, realpathSync: fsRealpath = realpathSync, statSync: fsStat = statSync, lstatSync: fsLstat = lstatSync } = {}) {
   if (!windows) return own;
-  const real = (p) => {
+  const real = (p, unread = []) => {   // the native realpath of p's longest prefix it can read, the rest as written; unread gets the parts it cannot
     try { return fsRealpath.native(p); } catch {
+      unread.push(p);
       const parent = path.dirname(p);
-      return parent === p ? p : path.join(real(parent), path.basename(p));
+      return parent === p ? p : path.join(real(parent, unread), path.basename(p));
     }
   };
   const form = (native) => {
@@ -105,9 +130,14 @@ export function comparedPath(own, { windows = ON_WINDOWS, path = nodePath, realp
     for (const dir of lineage(native)) { const st = stat(dir); if (st) return st.dev & 0xffffffffn; }
     return null;
   };
+  const exists = (part) => {   // lstatSync answers part, or cannot read it for another reason than that it does not exist
+    try { fsLstat(part); return true; } catch (e) { return e?.code !== 'ENOENT'; }
+  };
   return (p, beside, { deleting = false } = {}) => {
-    const native = real(path.resolve(p));
+    const unread = [];   // the parts of p the walk that spells native could not read, nearest first
+    const native = real(path.resolve(p), unread);
     if (beside === undefined) return form(native);
+    if (deleting && unread.some(exists)) return null;   // realpath cannot resolve p: it may lead anywhere (above)
     const other = real(path.resolve(beside));
     if (root(native) === root(other)) return form(native);
     const theirs = new Map();   // file id → the directory (or file) of beside's lineage it names
