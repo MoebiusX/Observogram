@@ -356,23 +356,29 @@ const ACK_REFUSAL = /^\d{3}: ([\s\S]+) — tick "([\s\S]+)" in the server settin
  * unevaluated?, error }` (studio/services-api.mjs servicesRefusal: `.denied`,
  * `.rule`, `.unevaluated`, the message `409: <warn> — tick "<ack>" in the
  * server settings`); `policy` the settings policy the page holds
- * (compileSettingsPolicy's), or null.
- * → { rule, warn, ack, note } — the rule's warn and ack from the page's
- * policy, else read from the refusal's sentence; `note` says the server
- * could not check the rule (`unevaluated`), or that its check matched it —
- * or null for any other refusal, or one whose ack cannot be read.
+ * (compileSettingsPolicy's), or null; `descriptor` the form it was sent from.
+ * → { rule, warn, ack, note, fields } — the rule's warn and ack from the
+ * page's policy, else read from the refusal's sentence; `note` says the
+ * server could not check the rule (`unevaluated`), or that its check matched
+ * it; `fields` the form's fields the page's rule checks (its field, or the
+ * form's fields of its type), or null when the page cannot tell (the rule is
+ * not the page's) — or null for any other refusal, or one whose ack cannot
+ * be read.
  */
-export function serverAckModel(error, policy = null) {
+export function serverAckModel(error, policy = null, descriptor = null) {
   if (error?.denied !== 'policy-ack' || !Number.isInteger(error.rule) || error.rule < 0) return null;
   const own = Array.isArray(policy?.rules) ? policy.rules.find((r) => r?.index === error.rule && r.ack) : null;
   let warn = own?.warn ?? null;
   let ack = own?.ack ?? null;
+  let fields = null;
+  if (own && typeof own.field === 'string') fields = [own.field];
+  else if (own && Array.isArray(descriptor?.fields)) fields = descriptor.fields.filter((f) => f?.type === own.type).map((f) => f.name);
   if (!ack) {
     const m = ACK_REFUSAL.exec(String(error.message ?? ''));
     if (!m) return null;
     [, warn, ack] = m;
   }
-  return { rule: error.rule, warn, ack, note: error.unevaluated === true ? SERVER_UNCHECKED : SERVER_MATCHED };
+  return { rule: error.rule, warn, ack, note: error.unevaluated === true ? SERVER_UNCHECKED : SERVER_MATCHED, fields };
 }
 
 /**
@@ -408,15 +414,22 @@ export function primaryBlock({ policyState = 'none', requestReason = null, gener
  * field sets no value the policy checks and is never blocked; one that sends
  * fields waits on a settings policy not read (or unreadable), then on the
  * unticked ack of a rule that matched a field it sends (an unevaluated
- * finding concerns the form, not the action).
+ * finding concerns the form, not the action), or of a rule the studio
+ * server's 409 named that the page's check did not find (policyView's
+ * `named`) whose `fields` hold one it sends — any field it sends when they
+ * are null.
  *   sent  the field names settingsRequest's `sent` lists for the action
  */
-export function actionBlock({ policyState = 'none', findings = [], sent = [], ticked = [] } = {}) {
+export function actionBlock({ policyState = 'none', findings = [], sent = [], ticked = [], named = [] } = {}) {
   const fields = Array.isArray(sent) ? sent : [];
   if (!fields.length) return null;
   if (policyState === 'failed' || policyState === 'loading') return primaryBlock({ policyState });
-  const applies = (Array.isArray(findings) ? findings : []).filter((f) => !f.unevaluated && fields.includes(f.field));
-  return policyView(applies, ticked).block;
+  const all = Array.isArray(findings) ? findings : [];
+  const applies = all.filter((f) => !f.unevaluated && fields.includes(f.field));
+  const found = new Set(all.map((f) => f.rule));
+  const server = (Array.isArray(named) ? named : []).filter((n) => n && !found.has(n.rule)
+    && (!Array.isArray(n.fields) || n.fields.some((name) => fields.includes(name))));
+  return policyView(applies, ticked, server).block;
 }
 
 // ---------- after the send (A.2.4) ----------

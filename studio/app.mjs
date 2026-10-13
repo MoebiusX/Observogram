@@ -5703,7 +5703,7 @@ function buildMssModel(ctx) {
   model.primary = { label: 'Send to the server', blocked: primaryBlock({ policyState: ctx.policyState, requestReason: req.reason ?? null, genericReason: ctx.genericError, ackReason: policy.block }) };
   model.actions = ctx.descriptor.actions.map((a) => {
     const r = lib.settingsRequest(ctx.descriptor, values, { action: a.name });
-    const blocked = r.reason ? null : actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: r.sent, ticked });
+    const blocked = r.reason ? null : actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: r.sent, ticked, named: ctx.serverAcks });
     return { name: a.name, label: a.label, confirm: a.confirm, confirming: ctx.confirming === a.name, blocked, note: r.reason ? r.reason : actionNote(r.carries) };
   });
   return model;
@@ -5766,9 +5766,10 @@ async function sendMssViaProxy(ctx, values, actionName) {
     ctx.notice = `The studio server answered ${error.message || 'nothing it could read'}`.replace(/([^.…?!])$/, '$1.');
     // A rule its policy check names gets its acknowledgement box, which the
     // page's own check may not have drawn: the server could not check it, or
-    // its check matched. Nothing is sent until it is ticked, and a secret
-    // emptied by this send is typed again.
-    const named = serverAckModel(error, ctx.policy);
+    // its check matched. Neither the send nor an action that carries a field
+    // the rule checks goes until it is ticked, and a secret emptied by this
+    // send is typed again.
+    const named = serverAckModel(error, ctx.policy, ctx.descriptor);
     if (named) {
       if (!ctx.serverAcks.some((r) => r.rule === named.rule)) ctx.serverAcks = [...ctx.serverAcks, named];
       ctx.retype = [...new Set([...ctx.retype, ...emptied])];
@@ -5907,7 +5908,7 @@ const mcpSettingsActions = {
       clearTimeout(ctx.findingsTimer);
       ctx.findingsTimer = null;
       mssCheckPolicy(ctx, values);
-      const block = actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: req.sent, ticked: mssTicked() });
+      const block = actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: req.sent, ticked: mssTicked(), named: ctx.serverAcks });
       if (block) { ctx.notice = block; ctx.confirming = null; paintMss(); return; }
     }
     if (a.confirm && ctx.confirming !== name) { ctx.confirming = name; ctx.notice = mssRetypeNotice(ctx); paintMss(); return; }

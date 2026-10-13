@@ -233,12 +233,12 @@ test('a rule the studio server\'s 409 names: its box from the page\'s policy, el
   assert.deepEqual([unchecked.message, unchecked.status, unchecked.denied, unchecked.rule, unchecked.unevaluated], [`409: ${WARN} — tick "${ACK}" in the server settings`, 409, 'policy-ack', 0, true]);
   const matched = servicesRefusal(409, body({}));
   assert.deepEqual([matched.rule, matched.unevaluated], [0, undefined]);
-  assert.deepEqual(serverAckModel(unchecked, policy), { rule: 0, warn: WARN, ack: ACK, note: UNCHECKED });
-  assert.deepEqual(serverAckModel(matched, policy), { rule: 0, warn: WARN, ack: ACK, note: MATCHED });
+  assert.deepEqual(serverAckModel(unchecked, policy), { rule: 0, warn: WARN, ack: ACK, note: UNCHECKED, fields: ['grafanaUrl'] });
+  assert.deepEqual(serverAckModel(matched, policy), { rule: 0, warn: WARN, ack: ACK, note: MATCHED, fields: ['grafanaUrl'] });
   // No policy in the page (or none with that rule's ack): the refusal's own sentence.
   const drifted = servicesRefusal(409, { ok: false, denied: 'policy-ack', rule: 3, unevaluated: true, error: 'Keys — "rotate" — first. — tick "I rotated the key" in the server settings' });
-  assert.deepEqual(serverAckModel(drifted, null), { rule: 3, warn: 'Keys — "rotate" — first.', ack: 'I rotated the key', note: UNCHECKED });
-  assert.deepEqual(serverAckModel(servicesRefusal(409, body({ rule: 1 })), policy), { rule: 1, warn: WARN, ack: ACK, note: MATCHED }, 'rule 1 has no ack in the page');
+  assert.deepEqual(serverAckModel(drifted, null), { rule: 3, warn: 'Keys — "rotate" — first.', ack: 'I rotated the key', note: UNCHECKED, fields: null });
+  assert.deepEqual(serverAckModel(servicesRefusal(409, body({ rule: 1 })), policy), { rule: 1, warn: WARN, ack: ACK, note: MATCHED, fields: null }, 'rule 1 has no ack in the page');
   // Any other refusal draws nothing.
   for (const e of [null, new Error('409: x'), servicesRefusal(403, { ok: false, denied: 'origin', error: 'not listed' }), servicesRefusal(409, { ok: false, denied: 'descriptor', error: 'reopen' }),
     Object.assign(new Error('409: w — tick "a" in the server settings'), { denied: 'policy-ack', rule: -1 }), Object.assign(new Error('409: no sentence'), { denied: 'policy-ack', rule: 2 })]) {
@@ -261,6 +261,22 @@ test('a rule the studio server\'s 409 names: its box from the page\'s policy, el
   assert.deepEqual(both.rules.map((r) => [r.rule, r.notes]), [[0, [UNCHECKED]], [1, []], [3, [UNCHECKED]]]);
   assert.equal(both.block, 'Tick "I rotated the key" to send — Keys — "rotate" — first.');
   assert.deepEqual(policyView(approved, [], []), { rules: [], block: null }, 'none named: the page\'s check alone');
+  // A declared action waits for a named box when it carries a field the
+  // page's rule checks — its field, or the form's fields of its type —, and
+  // for any field when the rule is not the page's.
+  assert.equal(actionBlock({ policyState: 'served', findings: approved, sent: ['grafanaUrl'], named }), view.block, 'an action that carries the rule\'s field waits for the box');
+  assert.equal(actionBlock({ policyState: 'served', findings: approved, sent: ['grafanaUrl'], ticked: ['0'], named }), null, 'ticked, it goes');
+  assert.equal(actionBlock({ policyState: 'served', findings: approved, sent: ['user'], named }), null, 'one that carries another field does not wait');
+  assert.equal(actionBlock({ policyState: 'served', findings: approved, sent: [], named }), null, 'nor one that carries nothing');
+  assert.equal(actionBlock({ policyState: 'served', findings: approved, sent: ['grafanaUrl'] }), null, 'none named: the page\'s check alone');
+  assert.equal(actionBlock({ policyState: 'served', findings: lib.policyFindings(policy, form, { grafanaUrl: 'https://elsewhere.example' }), sent: ['user'], named }), null, 'the page found the rule itself: its finding decides');
+  assert.equal(actionBlock({ policyState: 'served', findings: approved, sent: ['user'], named: [serverAckModel(drifted, null, form)] }), 'Tick "I rotated the key" to send — Keys — "rotate" — first.', 'a rule the page does not hold: any field it sends');
+  const { policy: typed } = lib.compileSettingsPolicy({ version: 1, rules: [{ when: { type: 'text', pattern: '^admin$' }, warn: 'An admin login.', require: { ack: 'I meant admin' } }] }, { timed: false });
+  const byType = servicesRefusal(409, { ok: false, denied: 'policy-ack', rule: 0, unevaluated: true, error: 'An admin login. — tick "I meant admin" in the server settings' });
+  assert.deepEqual(serverAckModel(byType, typed, form).fields, ['user'], 'a rule by type checks the form\'s fields of that type');
+  assert.equal(serverAckModel(byType, typed).fields, null, 'without the form the page cannot tell');
+  assert.equal(actionBlock({ policyState: 'served', findings: [], sent: ['user'], named: [serverAckModel(byType, typed, form)] }), 'Tick "I meant admin" to send — An admin login.');
+  assert.equal(actionBlock({ policyState: 'served', findings: [], sent: ['grafanaUrl'], named: [serverAckModel(byType, typed, form)] }), null);
   // The send emptied the secrets that held a value: the notice asks for them again.
   assert.equal(secretsEmptiedLine(1), 'The secret you typed was emptied when the request left — type it again before you send.');
   assert.equal(secretsEmptiedLine(2), 'The secrets you typed were emptied when the request left — type them again before you send.');

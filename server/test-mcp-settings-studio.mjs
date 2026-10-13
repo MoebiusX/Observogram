@@ -77,7 +77,10 @@
  *      that the server could not check it, the send waits for the tick and
  *      sends nothing meanwhile; the emptied secret is typed again (the box
  *      stays: no rule reads a secret), and ticked the submit carries acks [0]
- *      and goes; an edit of a value the policy reads takes the box away.
+ *      and goes; an edit of a value the policy reads takes the box away. A
+ *      declared action that carries the URL waits for the box as the send
+ *      does — its own 409 draws it, clicked unticked it sends nothing, ticked
+ *      it carries acks [0] — and one that carries nothing never waits.
  *
  * Every test asserts no page error, no console.error beyond a failed load
  * (and, where CORS is the point, the browser's CORS message), no popup, and
@@ -1065,14 +1068,18 @@ test('BROWSER 14: through the studio server, a rule it could not check — the a
   if (skipUnlessBrowser(t)) return;
   const studio = await startChild({ OBSERVOGRAM_MCP_ADMIN_PROXY: '1', OBSERVOGRAM_MCP_SETTINGS_POLICY: POLICY_FILE }, { execArgv: NO_WORKER });
   t.after(() => studio.stop());
-  const f = await fake({ descriptor: EXAMPLE_SETTINGS_DESCRIPTOR, cors: false });
+  // Beside the form, an action that carries the URL the rule checks, and one that carries nothing.
+  const f = await fake({ descriptor: { ...EXAMPLE_SETTINGS_DESCRIPTOR, actions: [{ name: 'repoint', label: 'Repoint the backend', fields: ['grafanaUrl'] }, ...EXAMPLE_SETTINGS_DESCRIPTOR.actions] }, cors: false });
   const gwId = await endpointIdFor(studio.child.base, f.url, { name: 'gw-no-worker', headers: { Cookie: studio.cookies.ada } });
+  const repoint = '#mss-host [data-action-row="repoint"] .mss-action';
+  const disable = '#mss-host [data-action-row="disable"] .mss-action';
   const w = await openPage(studio, 'ada');
   // Each submit as its answer arrives (its body read later, so the count is never behind the page).
   const submits = [];
   w.page.on('response', (r) => {
     if (!r.url().endsWith('/api/mcp-settings/submit')) return;
-    submits.push({ status: r.status(), acks: JSON.parse(r.request().postData()).acks, json: r.json().catch(() => null) });
+    const sent = JSON.parse(r.request().postData());
+    submits.push({ status: r.status(), acks: sent.acks, action: sent.action ?? null, json: r.json().catch(() => null) });
   });
   await aim(w, { id: gwId });
   await openSettings(w);
@@ -1081,6 +1088,7 @@ test('BROWSER 14: through the studio server, a rule it could not check — the a
   await fill(w, 'secret', SECRET);
   assert.equal(await w.page.evaluate(() => document.querySelectorAll('#mss-host .mss-rule').length), 0, 'the page\'s check passes the approved host');
   assert.equal(await w.page.getAttribute('.mss-primary', 'aria-disabled'), null);
+  assert.equal(await w.page.getAttribute(repoint, 'aria-disabled'), null);
 
   // The server could not check the rule: a 409, nothing sent, and the box the 409 names.
   await w.page.click('.mss-primary', { force: true });
@@ -1096,6 +1104,8 @@ test('BROWSER 14: through the studio server, a rule it could not check — the a
   })));
   assert.deepEqual(await box(), [{ rule: '0', warn: 'Non-approved backend host.', notes: [SERVER_UNCHECKED], ack: ACK, tick: ['0', false] }]);
   assert.equal(await w.page.getAttribute('.mss-primary', 'aria-disabled'), 'true', 'the send waits for the tick');
+  assert.equal(await w.page.getAttribute(repoint, 'aria-disabled'), 'true', 'so does an action that carries the URL the rule checks');
+  assert.equal(await w.page.getAttribute(disable, 'aria-disabled'), null, 'an action that carries nothing does not');
 
   // The 409's order — tick, then type the secret again: the tick keeps the
   // line that asks for the emptied secret, and so does unticking.
@@ -1106,8 +1116,10 @@ test('BROWSER 14: through the studio server, a rule it could not check — the a
   await w.page.uncheck(ackBox);
   assert.equal(await w.status(), RETYPE);
 
-  // Without the tick: the send says so and nothing is sent.
+  // Without the tick: the send says so and nothing is sent — nor by the action that carries the URL.
   await w.page.click('.mss-primary', { force: true });
+  assert.equal(await w.status(), TICK);
+  await w.page.click(repoint, { force: true });
   assert.equal(await w.status(), TICK);
   assert.equal(submits.length, 1, 'no second submit');
   assert.equal(postsTo(f).length, 0);
@@ -1135,6 +1147,24 @@ test('BROWSER 14: through the studio server, a rule it could not check — the a
   await fill(w, 'user', 'svc-observogram');
   await w.page.waitForFunction(() => document.querySelectorAll('#mss-host .mss-rule').length === 0, null, { timeout: T });
   assert.ok(!(await hostHtml(w)).includes(SECRET), 'no secret in the modal\'s DOM');
+
+  // The action that carries the URL: its own 409 draws the box, and it waits
+  // for the tick as the send does — the action that carries nothing never.
+  assert.equal(await w.page.getAttribute(repoint, 'aria-disabled'), null);
+  await w.page.click(repoint, { force: true });
+  await w.waitStatus(/^The studio server answered 409: /);
+  assert.equal(await w.status(), `The studio server answered 409: Non-approved backend host. — tick "${ACK}" in the server settings.`);
+  assert.deepEqual(await box(), [{ rule: '0', warn: 'Non-approved backend host.', notes: [SERVER_UNCHECKED], ack: ACK, tick: ['0', false] }]);
+  assert.equal(await w.page.getAttribute(repoint, 'aria-disabled'), 'true', 'the action waits for the box its 409 drew');
+  assert.equal(await w.page.getAttribute(disable, 'aria-disabled'), null);
+  await w.page.click(repoint, { force: true });
+  assert.equal(await w.status(), TICK, 'clicked again unticked, it says so');
+  assert.deepEqual(submits.map((x) => [x.status, x.acks, x.action]), [[409, [], null], [200, [0], null], [409, [], 'repoint']], 'and sends nothing');
+  await w.page.check(ackBox);
+  assert.equal(await w.page.getAttribute(repoint, 'aria-disabled'), null, 'ticked, it may go');
+  await Promise.all([w.page.waitForResponse((r) => r.url().endsWith('/api/mcp-settings/submit')), w.page.click(repoint)]);
+  assert.deepEqual(submits.map((x) => [x.status, x.acks, x.action]).at(-1), [200, [0], 'repoint']);
+  assert.deepEqual(postsTo(f).map((r) => r.body), [{ grafanaUrl: 'https://approved.example/', secret: SECRET }, { action: 'repoint', grafanaUrl: 'https://approved.example/' }]);
   await closeSettings(w);
   await w.done();
 });
