@@ -1993,7 +1993,8 @@ registry's (a patched install is embedded as patched, unmarked), NOTICE files
 outside a published package, and the licences of the packs or brand assets
 you build in. The diff is held to a running server's, body for body, in Node
 (from the source and from the built file) and in Chromium under three browser
-locales; not in Firefox or Safari. `docs/DOWNSTREAM.md` §10 has the details
+locales (only where Playwright and its browser are installed, which CI's jobs
+are not); not in Firefox or Safari. `docs/DOWNSTREAM.md` §10 has the details
 and the migration from an earlier snapshot.
 
 Notes: `--pack` is validated against the spec schema at build time (a failing

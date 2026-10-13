@@ -102,7 +102,12 @@
 //
 // C8 the bundle in Chromium (skips like tools/test-studio-bundle.mjs T7 when
 // Playwright or its browser is missing, unless OBSERVOGRAM_BUNDLE_SMOKE=require;
-// OBSERVOGRAM_PLAYWRIGHT names Playwright's index.mjs): a CLI-built bundle
+// OBSERVOGRAM_PLAYWRIGHT names Playwright's index.mjs). Before it looks for a
+// browser — so in CI's jobs too, which install none — it holds README,
+// docs/UPDATE_JOURNEY.md and docs/DOWNSTREAM.md §10 to that: where each
+// claims the diff's parity in Chromium, the sentence says the check runs only
+// where Playwright and its browser are installed, which CI's jobs are not;
+// and .github/workflows/ci.yml names no Playwright. Then: a CLI-built bundle
 // carrying payment-service, the live snapshot (payment-live), the
 // compare-modes pair, production-curated and payment-linked (payment-service
 // with a remediation linked to its burn-rate alert — no example pack links
@@ -1202,8 +1207,38 @@ async function loadPlaywright() {
 // S4's pattern (tools/test-static-remedies.mjs, which holds every studio line it matches to a disposition): a server
 // action a reader of a bundle cannot take, or the deploy review a bundle never opens. C8 holds the rendered views to it.
 const SERVER_ACTION = /\b(re-?scan|rescan|scan (?:live|a repo(?:sitory)?)|connect mcp|from (?:its |a live )?mcp|redraft|re-?upload|refresh(?:es|ing)? (?:the )?live|refresh live evidence|capture a live draft|live draft again|deploy what is missing|deploy the repository|deploy review|review (?:of |the )?destination|after a review|then deploy|confirmed separately)\b/i;
+// Where C8 runs, as the documents say it: each place that claims the diff's parity in Chromium (the claim's opening
+// words below) states, in the sentence that names Chromium, that the check runs only where Playwright and its browser
+// are installed, which CI's jobs are not. CI's workflow installs no Playwright, so that limit is true; a job that gains
+// it fails here until the documents say so. Each claim is read within its paragraph or list item.
+const CHROMIUM_LIMIT = 'only where Playwright and its browser are installed, which CI\'s jobs are not';
+const CHROMIUM_CLAIMS = [
+  ['README.md', 'The diff is held to a running server\'s, body for body,'],
+  ['docs/UPDATE_JOURNEY.md', 'Parity is body for body'],
+  ['docs/DOWNSTREAM.md', 'The diff is the server\'s answer body for body'],
+];
+function chromiumLimitProblems(readDoc = read) {
+  const problems = [];
+  for (const [doc, opening] of CHROMIUM_CLAIMS) {
+    const blocks = readDoc(doc).split(/\n(?:[ \t]*\n|(?=[ \t]*(?:[-*]|\d+\.) ))/).map((b) => b.replace(/\s+/g, ' ')).filter((b) => b.includes(opening));
+    if (blocks.length !== 1) { problems.push(`${doc}: the claim "${opening}" ${blocks.length} times`); continue; }
+    const claim = blocks[0].slice(blocks[0].indexOf(opening));
+    const at = claim.indexOf('Chromium');
+    if (at < 0) { problems.push(`${doc}: the claim names no Chromium`); continue; }
+    const end = claim.indexOf('. ', at);
+    const sentence = claim.slice(at, end < 0 ? undefined : end + 1);
+    if (!sentence.includes(CHROMIUM_LIMIT)) problems.push(`${doc}: "…${sentence}" does not say the check runs ${CHROMIUM_LIMIT}`);
+  }
+  if (/playwright/i.test(read('.github/workflows/ci.yml'))) problems.push('.github/workflows/ci.yml names Playwright: the documents say CI\'s jobs do not install it');
+  return problems;
+}
 
 test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s under en-US, cs-CZ and et-EE; Compare and Pair by on the compare-modes pair; the drift drill\'s deploy drawn unavailable and explained, its retrofeed downloading the server\'s updated pack; Remediate\'s deploy controls; the static texts and no server action rendered; the audit report downloaded and fetched as the server\'s; the notice; no page error, nothing off the loopback', async (t) => {
+  // The documents' limit first, so it holds where the rest skips — CI's jobs among them.
+  assert.deepEqual(chromiumLimitProblems(), [], 'the documents say where C8 runs');
+  const unstated = chromiumLimitProblems((doc) => (doc === 'README.md' ? read(doc).replace(/ \(only where Playwright[^)]*\)/, '') : read(doc)));
+  assert.equal(unstated.length, 1, unstated.join('\n'));
+  assert.ok(unstated[0].startsWith('README.md: "…Chromium under three browser locales; not in Firefox or Safari."'), unstated[0]);
   const required = process.env.OBSERVOGRAM_BUNDLE_SMOKE === 'require';
   const skip = (why) => { if (required) assert.fail(`OBSERVOGRAM_BUNDLE_SMOKE=require: ${why}`); t.skip(why); };
   const { pw, error } = await loadPlaywright();

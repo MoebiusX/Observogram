@@ -1334,8 +1334,9 @@ steps on a server; [`DOWNSTREAM.md`](DOWNSTREAM.md) §10 is the downstream view.
   them and the boot does not evaluate the parser; a failed import is not kept.
   Parity is body for body — status, reason phrase, headers, raw text — for the
   requests the studio sends, in Node from the source and from the built file,
-  and in Chromium. Pair by needed no change: it re-keys the received diff in
-  the browser, so `compare-modes-bundle` closes with it.
+  and in Chromium (only where Playwright and its browser are installed, which
+  CI's jobs are not). Pair by needed no change: it re-keys the received diff
+  in the browser, so `compare-modes-bundle` closes with it.
 - **The licences.** Every bundle carries Observogram's MIT licence, each
   embedded package's licence files, NOTICE files and copyright lines, its
   source repository and the spec's provenance, in a `text/plain` script element
