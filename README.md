@@ -2666,8 +2666,44 @@ refuses a root that is a symlink or resolves outside `<workspace>/orgs`,
 and a workspace whose marker names another store. The org row stays, so
 its id is never reused.
 
+Before it deletes anything it reads all of `orgs/<id>/`, never through a
+link, and it refuses, deleting nothing:
+
+- **while that would take the users file a pre-store build reads** — the
+  one `OBSERVOGRAM_USERS_FILE` named at the import, else
+  `<workspace>/users.json`. This is decided by what deleting the directory
+  takes, not by the users file's path: an entry under `orgs/<id>/` is the
+  users file when it is the same file (the path, or a mount or a link on it,
+  leads there, or it is a hard link of it) or when, on another filesystem, it
+  has the users file's size and modification time (the users file seen
+  through an NFS, SMB, overlay or FUSE mount, or a copy that kept them). The
+  refusal names each such entry: move them out of `orgs/<id>/`, then run the
+  purge again. The store still records the users file's old path, where the
+  in-place `packc store export` writes it and where a pre-store build started
+  with `OBSERVOGRAM_USERS_FILE` set to it reads it: if that path no longer
+  leads to the moved file, make it lead there again before you roll back.
+- **while a recorded users file does not exist and its path does not lead
+  under `orgs/<id>/`**, since a filesystem not mounted now may lead it there.
+  If it lies on a filesystem that is not mounted, mount it and run the purge
+  again; if it does not lie under `orgs/<id>/` (it was deleted, say), delete
+  `orgs/<id>/` by hand and run the purge again: with no directory left it
+  checks no users file and only drops the org's records. After the first
+  refusal's move, with any mount on the recorded path up, that path leads
+  under `orgs/<id>/`, where nothing of the users file is left, so the purge
+  goes on.
+- **while the users file, or a directory under `orgs/<id>/`, cannot be
+  read** — run the purge as a user who can read it (a FUSE mount whose
+  server stopped answering: unmount it), or, when the users file does not
+  lie under `orgs/<id>/`, delete the directory by hand as above.
+- **while a mount point is under `orgs/<id>/`, or the directory is one**:
+  on Node 22 the delete stops part-way at a mount point, and on Node 23 and
+  later it first deletes the files of the filesystem mounted there. Unmount
+  it, then run the purge again. A bind mount of another directory of the same
+  filesystem cannot be told from a directory, so unmount any such mount under
+  `orgs/<id>/` yourself before you purge.
+
 **The purge cannot be undone and asks for no confirmation.** It deletes
-everything under `orgs/<id>/` at once: the org's packs, its
+everything under `orgs/<id>/`: the org's packs, its
 `deploys.jsonl` (that org's deploy audit), its rollback `snapshots/`, its
 `runs/` and its `journeys/`. A `packc store backup` holds only the
 database, not these files, so copy `<workspace>/orgs/<id>/` first if any

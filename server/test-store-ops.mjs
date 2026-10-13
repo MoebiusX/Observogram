@@ -2342,7 +2342,7 @@ test('replace and export texts: the CLI confirmation, both usages and the README
   assert.ok(readme.includes(`\n# ${REPLACE_REQUESTED}\n`), 'the README quotes the confirmation line as the CLI prints it');
 });
 
-test('purge-org docs: the README and the k8s note say it cannot be undone, what it deletes, and that a store backup holds none of it', () => {
+test('purge-org docs: the README and the k8s note say it cannot be undone, what it deletes, that a store backup holds none of it, and what it refuses before deleting; the README names each users-file refusal\'s way out as purge-org does', () => {
   const section = (text, heading) => {
     const at = text.indexOf(heading);
     assert.notEqual(at, -1, heading);
@@ -2358,6 +2358,22 @@ test('purge-org docs: the README and the k8s note say it cannot be undone, what 
     for (const part of ['deploys.jsonl', 'snapshots/', 'runs/', 'journeys/']) assert.ok(text.includes(part), `${name}: names ${part}`);
     assert.match(text, /store backup` holds/, `${name}: a store backup does not cover the files`);
     assert.match(text, /copy `[^`]*orgs\/<id>\/?` .*first/, `${name}: copy the directory first`);
+    assert.match(text, /users file a pre-store build reads/, `${name}: the users-file refusal`);
+    assert.match(text, /mount point is under/, `${name}: the mount-point refusal`);
+  }
+  // The README names each users-file refusal's way out, as purge-org (server/store/users-file-place.mjs) names it.
+  for (const way of [
+    'move them out of `orgs/<id>/`, then run the purge again',
+    'make it lead there again before you roll back',
+    'mount it and run the purge again',
+    'delete `orgs/<id>/` by hand and run the purge again',
+    'run the purge as a user who can read it',
+    'Unmount it, then run the purge again',
+  ]) assert.ok(readme.includes(way), `README: ${way}`);
+  const place = readFileSync(join(HERE, 'store', 'users-file-place.mjs'), 'utf8').replace(/[`']\s*\+\s*[`']/g, '');
+  for (const way of ['out of ${root}, then run purge-org again', 'make it lead there again before a pre-store build', 'mount it, then run purge-org again',
+    'delete ${root} by hand, then run purge-org again', 'Run purge-org as a user who can read', 'Unmount it, then run purge-org again']) {
+    assert.ok(place.includes(way), `purge-org's refusal names the same way out: ${way}`);
   }
 });
 
