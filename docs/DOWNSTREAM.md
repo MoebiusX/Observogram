@@ -1159,8 +1159,8 @@ start, served at `GET /api/mcp-settings`, baked into a bundle by
   with a line saying which; an action that carries a field the rule checks
   waits for it as for the page's own (the page's own box, when its check
   flagged that rule on another field); ticked, the next send carries it,
-  exactly what an API caller's `acks` attest, and an edit of a value the
-  policy reads takes it away (the page's check decides again; a secret,
+  exactly what an API caller's `acks` attest, and an edit of any value
+  but a secret takes it away (the page's check decides again; a secret,
   which no rule reads, keeps it).
 - **`generic`** prefills the generic form's path, field names and API-key
   placement (`body` or `bearer`); the reader may change them per use and

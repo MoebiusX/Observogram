@@ -77,7 +77,7 @@
  *      that the server could not check it, the send waits for the tick and
  *      sends nothing meanwhile; the emptied secret is typed again (the box
  *      stays: no rule reads a secret), and ticked the submit carries acks [0]
- *      and goes; an edit of a value the policy reads takes the box away. A
+ *      and goes; an edit of any value but a secret takes the box away. A
  *      declared action that carries the URL waits for the box as the send
  *      does — its own 409 draws it, clicked unticked it sends nothing, ticked
  *      it carries acks [0] — and one that carries nothing never waits.
@@ -87,6 +87,10 @@
  *      after rule 0's tick the 409 for rule 1 adds rule 1's box while rule
  *      0's stays ticked —, so ticking what each 409 names reaches a submit
  *      with acks [0, 1] that goes.
+ *  16. A rule by type the page found on one URL field (that child): an
+ *      action that carries the other URL field is a 409 naming that rule,
+ *      then waits for its box's tick as the send does; ticked, it carries
+ *      acks [0] and goes.
  *
  * Every test asserts no page error, no console.error beyond a failed load
  * (and, where CORS is the point, the browser's CORS message), no popup, and

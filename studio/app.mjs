@@ -5850,8 +5850,8 @@ const mcpSettingsActions = {
     if (!ctx) return;
     ctx.notice = mssRetypeNotice(ctx);
     ctx.confirming = null;
-    // A value the policy reads was edited: the page's check decides again,
-    // alone. A secret, which no rule reads, keeps the server's boxes.
+    // A value other than a secret was edited: the page's check decides
+    // again, alone. A secret, which no rule reads, keeps the server's boxes.
     if (typed && !secret) ctx.serverAcks = [];
     paintMss();
     if (!ctx.policy) return;

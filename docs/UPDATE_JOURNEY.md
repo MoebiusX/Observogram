@@ -1377,7 +1377,7 @@ line saying the server could not check the rule (or that the server's
 check matched where the page's did not); the send waits for the tick, as
 does an action that carries a field the rule checks, and ticked the next
 submit carries the rule's index, which attests what an API caller's acks
-do. An edit of a value the policy reads takes the box away,
+do. An edit of any value but a secret takes the box away,
 and the notice asks for the secret the refused send emptied until it is
 typed again (the tick does not take the line away).
 Tests: 1395 → 1399 (one more in `tools/test-mcp-settings-model.mjs`: the
