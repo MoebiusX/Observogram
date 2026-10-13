@@ -2457,7 +2457,7 @@ const underRoot = (file, entries, root = ROOT_B) => `the recorded users file ${f
   + `Move ${entries} out of ${root}, then run purge-org again. If ${file} then no longer leads to the users file, make it lead there `
   + 'again before a pre-store build or the in-place `packc store export` uses it';
 
-test('purge-org users file: under the root through a bind mount that is up — by its path there, through a file link and a directory link to it, and as spelled — is refused naming its entry under the root; one outside the root is purged', () => {
+test('purge-org users file: under the root through a bind mount that is up — by its path there, through a file link and a directory link to it, and as spelled — is refused naming its entry under the root; one outside the root is purged, also when a link under the root leads to it, to its directory or to another filesystem (rmSync deletes the link alone)', () => {
   const vol = betaVolume().dir('/mnt/b').bind(`${ROOT_B}/sub`, '/mnt/b')
     .symlink('/cfg/users.json', '/mnt/b/users.json').symlink('/cfg/d', '/mnt/b');
   for (const file of ['/mnt/b/users.json', '/cfg/users.json', '/cfg/d/users.json', `${ROOT_B}/sub/users.json`]) {
@@ -2467,6 +2467,11 @@ test('purge-org users file: under the root through a bind mount that is up — b
   assert.deepEqual([vol.fs.statSync('/mnt/b/users.json').ino, vol.fs.statSync('/mnt/b/users.json').dev],
     [vol.fs.statSync(`${ROOT_B}/sub/users.json`).ino, vol.fs.statSync(`${ROOT_B}/sub/users.json`).dev]);
   assert.deepEqual(placeIn(vol, '/srv/users.json'), { exists: true, refusal: null }, 'outside the root: purged');
+  // A link under the root that leads out — to the users file, to its directory, to a directory on another filesystem — is
+  // what rmSync deletes, never what it leads to: the walk does not follow it, so it is neither the users file nor a mount point.
+  const links = betaVolume().dir('/srv7', { dev: 7n }).file('/srv7/x.json')
+    .symlink(`${ROOT_B}/link.json`, '/srv/users.json').symlink(`${ROOT_B}/near`, '/srv').symlink(`${ROOT_B}/sub/far`, '/srv7');
+  assert.deepEqual(placeIn(links, '/srv/users.json'), { exists: true, refusal: null }, 'links under the root that lead out: purged');
   // The users file a pre-store build reads when none was recorded: <base>/users.json, through a link into the root.
   vol.symlink('/ws/users.json', `${ROOT_B}/sub/users.json`);
   assert.equal(placeIn(vol, '/ws/users.json', { recorded: false }).refusal,
@@ -2485,7 +2490,7 @@ test('purge-org users file: every hard link under the root is named, so one move
   assert.deepEqual(placeIn(vol, '/srv/users.json'), { exists: true, refusal: null }, 'both moved out: purged, and /srv/users.json stays');
 });
 
-test('purge-org users file: a view through another filesystem — NFS (the inode kept), SMB (100 ns times), overlay (xino, and an upper directory under the root), FUSE without inode numbers (whole seconds) — is refused by its size and modification time; another size or time is not; a copy that kept both reads the same (declared)', () => {
+test('purge-org users file: a view through another filesystem — NFS (the inode kept), SMB (100 ns times), overlay (xino, and an upper directory under the root), FUSE without inode numbers (whole seconds) — is refused by its size and modification time; another size or time is not; a copy that kept both reads the same (declared); moved out as the refusal says, its path through the NFS or SMB view leads to the directory under the root where nothing of it is left, and the purge passes', () => {
   const T = 1_760_000_123_456_789_123n;
   const vol = betaVolume().file(`${ROOT_B}/sub/users.json`, { size: 117n, mtimeNs: T }).file(`${ROOT_B}/up/users.json`, { size: 90n })
     .file(`${ROOT_B}/packs/same-size.yaml`, { size: 117n, mtimeNs: T + 1_000_000_000n })
@@ -2514,6 +2519,11 @@ test('purge-org users file: a view through another filesystem — NFS (the inode
     'a copy that kept its size and time (cp -p) on another device is refused: a declared false refusal');
   vol.rename(`${ROOT_B}/sub/users.json`, '/keep-copy.json');
   assert.deepEqual(placeIn(vol, '/other/copy.json'), { exists: true, refusal: null }, 'its way out: moved out of the root, purged');
+  // The views' way out, followed: with the users file moved out of the root, its path through the NFS or SMB view leads to
+  // that view of <root>/sub — the same directory by its inode and modification time — where nothing of it is left.
+  for (const file of ['/mnt/nfs/users.json', '/mnt/smb/users.json']) {
+    assert.deepEqual(placeIn(vol, file), { exists: false, refusal: null }, `${file}: moved out, it leads under the root`);
+  }
 });
 
 test('purge-org users file: a mount point under the root — another filesystem, a file mounted there, one directory reached twice, a loop, the root itself — is refused before anything is deleted, and once unmounted the purge passes; a same-filesystem bind mount from outside is entered as rmSync enters it', () => {
@@ -2546,7 +2556,7 @@ test('purge-org users file: a mount point under the root — another filesystem,
   assert.equal(placeIn(vol, '/srv6/users.json').refusal, underRoot('/srv6/users.json', `${ROOT_B}/m6/users.json`));
 });
 
-test('purge-org users file: a directory under the root this user cannot read is refused, nothing deleted, and read by a user who can, the purge passes; one a stopped FUSE server cannot answer for is refused naming unmounting it', () => {
+test('purge-org users file: a directory under the root this user cannot read is refused, nothing deleted, and read by a user who can, the purge passes; one it may list but not search (r--) is refused naming the entry it cannot read; one a stopped FUSE server cannot answer for is refused naming unmounting it', () => {
   const vol = betaVolume().dir(`${ROOT_B}/runs/locked`).file(`${ROOT_B}/runs/locked/r.json`).deny(`${ROOT_B}/runs/locked`);
   assert.deepEqual(placeIn(vol, '/srv/users.json'), {
     exists: null,
@@ -2556,6 +2566,15 @@ test('purge-org users file: a directory under the root this user cannot read is 
   });
   const reader = betaVolume().dir(`${ROOT_B}/runs/locked`).file(`${ROOT_B}/runs/locked/r.json`);
   assert.deepEqual(placeIn(reader, '/srv/users.json'), { exists: true, refusal: null }, 'the way out: a user who can read it');
+  // A directory it may list but not search (r--): readdirSync names its entries but lstatSync of each fails (rmSync fails
+  // there too) — refused naming the entry it cannot read.
+  const listed = betaVolume().file(`${ROOT_B}/runs/listed/r.json`).deny(`${ROOT_B}/runs/listed`, 'EACCES', { list: true });
+  assert.deepEqual(placeIn(listed, '/srv/users.json'), {
+    exists: null,
+    refusal: `${ROOT_B}/runs/listed/r.json under ${ROOT_B} cannot be read (EACCES), so purge-org cannot tell what deleting ${ROOT_B} takes — `
+      + 'nothing was deleted. Run purge-org as a user who can read it; or, if the recorded users file /srv/users.json does not lie under '
+      + `${ROOT_B}, delete ${ROOT_B} by hand as such a user, then run purge-org again: it drops org beta's records`,
+  });
   // A FUSE mount under the root whose server stopped answering is no permission matter: its way out is to unmount it.
   const stale = betaVolume().dir(`${ROOT_B}/sshfs`).deny(`${ROOT_B}/sshfs`, 'ENOTCONN');
   assert.equal(placeIn(stale, '/srv/users.json').refusal, `${ROOT_B}/sshfs under ${ROOT_B} cannot be read (ENOTCONN), so purge-org cannot `
@@ -2619,7 +2638,7 @@ test('purge-org users file that does not exist: recorded under the root and move
   assert.deepEqual(placeIn(vol, '/ws/users.json', { recorded: false }), { exists: false, refusal: null }, 'the default nothing records, absent: nothing to keep');
 });
 
-test('purge-org users file that cannot be read: a directory on its path this user may not search is refused, and as a user who can the purge passes; a link loop is refused', () => {
+test('purge-org users file that cannot be read: a directory on its path this user may not search is refused, and as a user who can the purge passes; a link loop is refused; a part of its path that stops answering once statSync found nothing there is refused', () => {
   const vol = betaVolume().file('/priv/users.json').deny('/priv').symlink('/cfg/a', '/cfg/b').symlink('/cfg/b', '/cfg/a');
   assert.deepEqual(placeIn(vol, '/priv/users.json'), {
     exists: null,
@@ -2633,6 +2652,21 @@ test('purge-org users file that cannot be read: a directory on its path this use
     + `than 40 links), so nothing tells whether it lies under ${ROOT_B} — nothing was deleted. If it does not lie under ${ROOT_B}, delete `
     + `${ROOT_B} by hand, then run purge-org again: it drops org beta's records`);
   assert.match(placeIn(vol, '/priv/users.json', { recorded: false }).refusal, /^the users file \/priv\/users\.json \(the one a pre-store build reads: OBSERVOGRAM_USERS_FILE was not set at the import\) cannot be read on this host \(EACCES\)/);
+  // A part of its path that stops answering once statSync found nothing there (a FUSE server stopping between the two
+  // reads): where the path leads cannot be told — refused naming that part, failing closed.
+  const stopping = betaVolume().dir('/mnt/f');
+  const flaky = {
+    ...stopping.fs,
+    lstatSync: (p, o) => {
+      if (p === '/mnt/f') throw Object.assign(new Error('ENOTCONN: /mnt/f'), { code: 'ENOTCONN' });
+      return stopping.fs.lstatSync(p, o);
+    },
+  };
+  assert.deepEqual(placeIn(stopping, '/mnt/f/users.json', { fs: flaky }), {
+    exists: null,
+    refusal: `the recorded users file /mnt/f/users.json cannot be read on this host (ENOTCONN at /mnt/f), so nothing tells whether it lies under ${ROOT_B} — `
+      + `nothing was deleted. If it does not lie under ${ROOT_B}, delete ${ROOT_B} by hand, then run purge-org again: it drops org beta's records`,
+  });
 });
 
 test('purge-org users file that does not exist, on Windows paths: moved out from under the root, by any spelling or through a junction into it, the purge passes; through a share whose directory is gone, on a drive that does not exist, or deleted outside the root, refused', () => {

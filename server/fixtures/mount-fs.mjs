@@ -1,9 +1,9 @@
 // server/fixtures/mount-fs.mjs — a filesystem as node:fs's lstatSync, statSync, readdirSync and readlinkSync
 // answer it, with what a test runner cannot make for real (no root, no mount(8), maybe no symlink privilege):
 // several filesystems, bind mounts, a mount that is down (its mount point left empty), views of a directory
-// through another filesystem as an NFS, SMB, overlay or FUSE mount reports them, a directory nobody may read, and
-// link loops — on POSIX paths or, with node:path's Windows rules, on Windows ones (server/test-store-ops.mjs, the
-// users-file place suite over server/store/users-file-place.mjs).
+// through another filesystem as an NFS, SMB, overlay or FUSE mount reports them, a directory nobody may read or
+// search, and link loops — on POSIX paths or, with node:path's Windows rules, on Windows ones
+// (server/test-store-ops.mjs, the users-file place suite over server/store/users-file-place.mjs).
 //
 // Imports nothing: the caller passes node:path's posix or win32, so tools/test-platform.mjs's P5 holds.
 //
@@ -18,8 +18,10 @@
 //                              parent's volume), statSync and every lookup through it the volume mounted there;
 //   view(source, target, how)  mount it as another filesystem shows it: how = { dev, ino(i), mtimeNs(t) } maps what
 //                              stat reports through the view (each defaults to the source's own);
-//   unmount(target), rename(from, to), remove(p), deny(p, code) (readdirSync and every lookup through p fail with
-//                              code, EACCES by default; ENOTCONN is a FUSE mount whose server stopped answering);
+//   unmount(target), rename(from, to), remove(p), deny(p, code, { list }) (readdirSync and every lookup through p
+//                              fail with code, EACCES by default; ENOTCONN is a FUSE mount whose server stopped
+//                              answering; with list, readdirSync still names p's entries — a directory that may be
+//                              read but not searched, r--, where lstatSync of each entry fails);
 //   fs                         { lstatSync, statSync, readdirSync, readlinkSync }, stats as bigints:
 //                              { dev, ino, size, mtimeNs, isFile(), isDirectory(), isSymbolicLink() }.
 // fold: names compared case-insensitively (NTFS); devs: { '<a root>': its device } (default 1n each). Each inode gets
@@ -156,14 +158,14 @@ export function mountFs(path, { fold = false, devs = {} } = {}) {
       return vol;
     },
     remove(p) { const { dir, name } = parentOf(p); entries(dir).delete(key(name)); return vol; },
-    deny(p, code = 'EACCES') { locate(p, true).node.denied = code; return vol; },
+    deny(p, code = 'EACCES', { list = false } = {}) { Object.assign(locate(p, true).node, { denied: code, listed: list }); return vol; },
     fs: {
       lstatSync: (p) => stats(locate(p, false)),
       statSync: (p) => stats(locate(p, true)),
       readdirSync(p) {
         const pos = locate(p, true);
         if (pos.node.kind !== 'dir') throw fail('ENOTDIR', p);
-        if (pos.node.denied) throw fail(pos.node.denied, p);
+        if (pos.node.denied && !pos.node.listed) throw fail(pos.node.denied, p);
         return [...entries(pos.node).values()].map((e) => e.name).sort();
       },
       readlinkSync(p) {
