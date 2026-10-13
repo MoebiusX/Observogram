@@ -1403,6 +1403,81 @@ adds its rule's box beside the one already ticked, and with a rule by type
 the page flagged on another URL field than the action carries, which then
 waits for that box).
 
+### Follow-up: paths on Windows are compared by what they name
+
+On NTFS one file has many spellings — another case, another drive-letter
+case, `/` for `\`, a short (8.3) name — and Node's JavaScript `realpathSync`
+keeps the caller's. A studio-run journey's org scope (A-24) compared those
+spellings, so on Windows, with the workspace at `C:\ws`, an acme journey
+could name beta's pack file `C:/WS/orgs/beta/packs/b1.pack.yaml` and read it
+as a file outside the workspace. On Windows the scope now compares both sides
+as the native realpath of the longest prefix that exists, the rest as
+written, case folded; a refusal still names the path as written, and Linux
+and macOS compare exactly as before. That realpath keeps a network share's
+name — `\\localhost\C$\ws\orgs\beta\…` resolves to itself, not to
+`C:\ws\orgs\beta\…` — so on Windows a path outside the workspace is
+nobody's part only on a local drive; one reached through a share or a mapped
+drive is refused. The mirror holds too: a workspace named through a share this
+host serves (`\\myhost\ws`) is stored on a local drive, where
+`C:\ws\orgs\beta\…` names beta's part of it; while the workspace is named
+through a share, a path on a local drive outside it is placed by its nearest
+directory with the workspace's own file id, and judged there.
+Tests: 1401 → 1411 (`tools/test-journey-scope.mjs` 10, new).
+
+The store's offline operations compared paths the same way, so on Windows
+`packc store export C:\WS\exports` wrote a directory export into the
+workspace at `C:\ws`, `packc store purge-org` deleted a users file spelled
+under the purged org's root in another case, and a backup could be written
+over the database's own `-wal`. The export, in-place, purge-org, backup and
+restore checks now compare the same way on Windows; their messages and the
+Linux and macOS comparisons are unchanged. A share this host serves is one
+more name for the workspace and the database, either way round: with the
+workspace named `\\myhost\ws`, purge-org deleted beta's users file recorded as
+`C:\ws\orgs\beta\users.json`, and with it at `C:\ws`, an export to
+`\\localhost\C$\ws\exports` was written into it. When a path and the one it
+is checked against resolve under different roots, the path is now placed by
+its nearest directory with the file id of the other or of one of its
+ancestors, as the journey scope places one. A share of a directory inside the
+workspace or under the purged root (`\\myhost\exports` for `C:\ws\exports`)
+names none of their directories, so no file id places a path through it: an
+export to `\\myhost\exports\new` was written into the workspace, and
+purge-org deleted a users file recorded through `\\myhost\betasub`. On their
+volume such a path is now refused, naming the way out — its path on a local
+drive, or for an export with none, a directory on a local drive copied to the
+share afterwards (for purge-org, deleting the root by hand once it is known
+not to hold the users file) — and so is a share of a directory outside them
+on that volume, which no file id tells apart (a declared false refusal). So
+is a path through a share, or a drive mapped to one, that cannot be reached
+when the check runs (a users file recorded through `\\myhost\betasub` while
+it is down): with no volume to read, nothing tells where it leads. A share
+that can be reached on a volume with another serial — another volume of this
+host, or another host's — is still an ordinary export target; one whose
+volume serial equals the workspace volume's is refused alike with those ways
+out when no file id places it, whether that volume is this host's or one of
+another machine cloned from the same image (a cloned disk keeps its serial,
+and the low 32 bits a share reports do not tell hosts apart). To purge-org,
+whose "outside" answer deletes the root, no share is an ordinary target: it
+refuses a users file recorded through any share that no file id places,
+whatever volume it reports, with the same way out. A DFS link sits below a
+namespace root another server answers, so while the link's target is down
+(`\\corp\dfs\betasub`, a link to `\\myhost\betasub`) the volume read is the
+namespace root's, not the one the link leads to. A cloned disk
+keeps its files' ids too — a sector copy keeps the MFT, the root directory's
+record among them — and so does this drive's disk image attached as `E:`, so
+a file id may place another machine's path, or the image's, on this host's.
+Placement therefore decides only the containment refusals, where a false
+"inside" refuses; the in-place detection, the scan for another store, the
+no-marker check and the backup's and the restore's own-file check decide by
+path alone. The scan reads a database only its file id equates with this
+one; the others refuse such a path, naming the way out (the workspace or the
+database by its own path, a new path on the database's drive), so
+`packc store export \\machineb\C$\ws` is not exported in place over `C:\ws`,
+and a restore from `E:\ws\observogram.db` is not refused as the database
+itself. Each of the two suites also runs its
+default host once on a real directory, so a Windows run fails if the
+platform's rule is not the one chosen. Tests: 1411 → 1425
+(`server/test-store-paths.mjs` 14, new).
+
 ### Follow-up: a journey's notify reads only its org's hooks
 
 A journey's `notify` names the variables that hold its webhook's URL and

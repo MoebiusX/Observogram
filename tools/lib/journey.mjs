@@ -524,39 +524,102 @@ const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
 // The crawl scope of a studio-run journey (STORE_PLAN slice 2): a walk
 // never reads what is not the requesting org's own part of the workspace.
 // scope = { base, ownRoot } (both absolute); null is the CLI's walk,
-// unchanged. Paths are compared as realpaths, so a symlink cannot lead a
-// walk into another org's part.
-function realOrResolved(p) {
-  try { return realpathSync(p); } catch {
-    const parent = dirname(p);
-    return parent === p ? p : join(realOrResolved(parent), basename(p));
-  }
-}
-function within(p, dir) { return p === dir || p.startsWith(dir.endsWith(sep) ? dir : dir + sep); }
-function crawlScopeTest(scope) {
+// unchanged. crawlScopeRefusal(scope) → null, or the test of one path as
+// written: '' when the org may read it, else why not (the refusal's tail);
+// crawlScopeTest(scope) → null, or the same test as true when the org may
+// read it. Paths are compared as realpaths, so a symlink cannot lead a walk
+// into another org's part.
+//
+// On Windows a spelling does not name a path: NTFS names are
+// case-insensitive and a directory has a short (8.3) name beside its long
+// one, so C:\WS\orgs\beta, c:/ws/orgs/beta and C:\WS~1\orgs\beta are one
+// directory, and JS realpathSync keeps whichever the caller wrote. There
+// both sides are compared as the native realpath (long names, the case on
+// disk) of the longest prefix that exists, the rest appended as written,
+// with \ separators and case folded. That form only compares: a refusal
+// names the path as written. Elsewhere the comparison is the realpath's
+// spelling, as it always was. host = { windows, path, realpathSync,
+// statSync } (the platform, node:path's, node:fs's realpathSync with its
+// .native and node:fs's statSync) is injectable
+// (tools/test-journey-scope.mjs); the default is this host.
+//
+// A network share is one more name the native realpath keeps: a path reached
+// through one (\\host\share\…, \\?\UNC\…, a mapped drive) resolves to
+// \\host\share\…, never to the volume behind it, so \\localhost\C$\ws\orgs\beta
+// is C:\ws\orgs\beta, and \\nas01.corp.example\obs the workspace \\nas01\obs,
+// yet neither compares under the workspace. On Windows a path outside the
+// workspace is therefore nobody's part only on a local drive; any other (a
+// share, or a device path no realpath resolves) is refused. The mirror: a
+// workspace named through a share this host serves (\\myhost\ws, a drive
+// mapped to \\localhost\C$\ws) is stored on a local drive, and its path
+// there (C:\ws\orgs\beta) is one more name for it, which no realpath maps
+// back. So while the workspace is named through a share, a path on a local
+// drive outside it is placed by its nearest directory that is the
+// workspace's own — the same file id on the same volume (statSync, with the
+// volume serial's low 32 bits: all a share reports) — and judged there.
+const NODE_PATH = Object.freeze({ resolve, join, dirname, basename, sep });
+const ON_WINDOWS = process.platform === 'win32';
+const LOCAL_DRIVE = /^[a-z]:\\/;   // a compared form on a local drive (folded)
+const IN_ANOTHER_ORGS_PART = 'belongs to another org\'s part of the workspace — refused';
+const NOT_ON_A_LOCAL_DRIVE = 'is not a path on a local drive, and a network share or a device path may lead into another org\'s part of the workspace — refused; '
+  + 'name it by its path on a local drive (copy it there if it has none)';
+export function crawlScopeRefusal(scope, { windows = ON_WINDOWS, path = NODE_PATH, realpathSync: fsRealpath = realpathSync, statSync: fsStat = statSync } = {}) {
   if (!scope) return null;
-  const base = realOrResolved(resolve(scope.base));
-  const ownRoot = realOrResolved(resolve(scope.ownRoot));
-  const orgsDir = join(base, 'orgs');
-  // Outside the workspace (a checkout elsewhere) is nobody's part; inside
-  // it only the org's own root is, and the default org at the base never
-  // enters <base>/orgs/, where the other orgs live.
-  return (real) => !within(real, base) || (within(real, ownRoot) && !(ownRoot === base && within(real, orgsDir)));
+  const realpath = windows ? fsRealpath.native : fsRealpath;
+  const realOrResolved = (p) => {
+    try { return realpath(p); } catch {
+      const parent = path.dirname(p);
+      return parent === p ? p : path.join(realOrResolved(parent), path.basename(p));
+    }
+  };
+  const fold = (p) => p.replaceAll('/', '\\').toLowerCase();
+  const compared = windows ? (p) => fold(realOrResolved(path.resolve(p))) : realOrResolved;
+  const s = windows ? '\\' : path.sep;
+  const within = (p, dir) => p === dir || p.startsWith(dir.endsWith(s) ? dir : dir + s);
+  const base = compared(path.resolve(scope.base));
+  const ownRoot = compared(path.resolve(scope.ownRoot));
+  const orgsDir = path.join(base, 'orgs');
+  // A workspace named through a share: a local path's place in it, by its
+  // nearest directory that is the workspace's own, or null (above).
+  const fileId = (p) => {
+    try { const st = fsStat(p, { bigint: true }); return `${st.dev & 0xffffffffn}:${st.ino}`; } catch { return null; }
+  };
+  const baseId = windows && !LOCAL_DRIVE.test(base) ? fileId(path.resolve(scope.base)) : null;
+  const isBase = new Map();   // a path or its ancestor (native realpath) → whether it is the workspace's own directory
+  const placed = (p) => {
+    const native = realOrResolved(path.resolve(p));
+    for (let dir = native; ; dir = path.dirname(dir)) {
+      if (!isBase.has(dir)) isBase.set(dir, fileId(dir) === baseId);
+      if (isBase.get(dir)) return path.join(base, fold(native.slice(dir.length)));
+      if (path.dirname(dir) === dir) return null;
+    }
+  };
+  // Outside the workspace (a checkout elsewhere) is nobody's part — on
+  // Windows only on a local drive; inside it only the org's own root is,
+  // and the default org at the base never enters <base>/orgs/, where the
+  // other orgs live.
+  return (p) => {
+    let real = compared(p);
+    if (baseId && LOCAL_DRIVE.test(real) && !within(real, base)) real = placed(p) ?? real;
+    if (!within(real, base)) return windows && !LOCAL_DRIVE.test(real) ? NOT_ON_A_LOCAL_DRIVE : '';
+    return within(real, ownRoot) && !(ownRoot === base && within(real, orgsDir)) ? '' : IN_ANOTHER_ORGS_PART;
+  };
+}
+export function crawlScopeTest(scope, host) {
+  const refusal = crawlScopeRefusal(scope, host);
+  return refusal && ((p) => refusal(p) === '');
 }
 
 // A single path (a file: source, an inventory site) read under the scope.
 function refuseOutOfScope(p, scope, what) {
-  const inScope = crawlScopeTest(scope);
-  if (inScope && !inScope(realOrResolved(p))) {
-    throw new Error(`${what} ${p} belongs to another org's part of the workspace — refused`);
-  }
+  const why = crawlScopeRefusal(scope)?.(p);
+  if (why) throw new Error(`${what} ${p} ${why}`);
 }
 
 function walkRepo(root, { scope = null } = {}) {
-  const inScope = crawlScopeTest(scope);
-  if (inScope && !inScope(realOrResolved(root))) {
-    throw new Error(`crawl source ${root} belongs to another org's part of the workspace — refused`);
-  }
+  const refusal = crawlScopeRefusal(scope);
+  const why = refusal?.(root);
+  if (why) throw new Error(`crawl source ${root} ${why}`);
   const files = {};
   let total = 0;
   const stack = [root];
@@ -568,14 +631,14 @@ function walkRepo(root, { scope = null } = {}) {
       if (e.isDirectory()) {
         if (!SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) {
           const sub = join(dir, e.name);
-          if (inScope && !inScope(realOrResolved(sub))) continue;   // never descended into
+          if (refusal?.(sub)) continue;   // never descended into
           stack.push(sub);
         }
         continue;
       }
       if (!SCAN_EXT.test(e.name)) continue;
       const full = join(dir, e.name);
-      if (inScope && !inScope(realOrResolved(full))) continue;      // a symlinked file included: skipped
+      if (refusal?.(full)) continue;      // a symlinked file included: skipped
       let size = 0;
       try { size = statSync(full).size; } catch (_) { continue; }
       if (size > MAX_FILE_BYTES || total + size > MAX_TOTAL_BYTES) continue;
