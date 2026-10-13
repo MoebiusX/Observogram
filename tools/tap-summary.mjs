@@ -371,7 +371,8 @@ const fmtTotal = (v) => (v === undefined ? '?' : String(v));
 // The runner also executes its older command form, `##[name]…`, anywhere in
 // a line, so the run's text the summary prints (names, reasons, errors, a
 // failure's place, the host line, --compare's lines, an annotation's file=,
-// title and message) shows each `##[` as `#\#[`, the second `#` as TAP
+// title and message, and the working directory --win32-skips readme's
+// refusals name) shows each `##[` as `#\#[`, the second `#` as TAP
 // escapes it; a line without one prints as it is. An annotation's file= too,
 // though it then names the path as the block shows it, not the file: the
 // runner reads a `::` line it cannot split for a `##[` in it, and it splits
@@ -753,14 +754,16 @@ function main(argv, { out = (s) => process.stdout.write(`${s}\n`), err = (s) => 
   if (expect === 'readme') {
     // The README in the working directory: a missing or unreadable one is
     // its own refusal, never "states no" about a file this run did not read.
+    // Each refusal names the directory as the host line does (inert: a `##[`
+    // in it shows as `#\#[`).
     const readmePath = resolve('README.md');
     let readme;
     try {
       readme = readFileSync(readmePath, 'utf8');
     } catch (e) {
       err(e.code === 'ENOENT'
-        ? `tap-summary: no README.md in ${process.cwd()} — --win32-skips readme reads the README in the working directory: run it from the checkout's root, or pass the number README "Platforms" states (--win32-skips <n>)`
-        : `tap-summary: cannot read ${readmePath}: ${e.code || e.message} — pass the number README "Platforms" states (--win32-skips <n>)`);
+        ? `tap-summary: no README.md in ${inert(process.cwd())} — --win32-skips readme reads the README in the working directory: run it from the checkout's root, or pass the number README "Platforms" states (--win32-skips <n>)`
+        : `tap-summary: cannot read ${inert(readmePath)}: ${e.code || e.message} — pass the number README "Platforms" states (--win32-skips <n>)`);
       return 2;
     }
     const n = readmeWin32Lines(readme);
@@ -769,8 +772,8 @@ function main(argv, { out = (s) => process.stdout.write(`${s}\n`), err = (s) => 
       // subdirectory's README.md, a fork's) points to the checkout's root;
       // the checkout's own lacks the sentence, so stating it is the way out.
       err(sameFile(readmePath, CHECKOUT_README)
-        ? `tap-summary: ${readmePath} "Platforms" states no "<N> \`SKIP win32:\` lines" — the count this check holds the run to: state it in "Platforms" above its first code fence, or pass the number of \`SKIP win32:\` lines the run should print (--win32-skips <n>)`
-        : `tap-summary: ${readmePath} "Platforms" states no "<N> \`SKIP win32:\` lines" — --win32-skips readme reads the README in the working directory: run it from the checkout's root, or pass the number README "Platforms" states (--win32-skips <n>)`);
+        ? `tap-summary: ${inert(readmePath)} "Platforms" states no "<N> \`SKIP win32:\` lines" — the count this check holds the run to: state it in "Platforms" above its first code fence, or pass the number of \`SKIP win32:\` lines the run should print (--win32-skips <n>)`
+        : `tap-summary: ${inert(readmePath)} "Platforms" states no "<N> \`SKIP win32:\` lines" — --win32-skips readme reads the README in the working directory: run it from the checkout's root, or pass the number README "Platforms" states (--win32-skips <n>)`);
       return 2;
     }
     expectWin32 = n;

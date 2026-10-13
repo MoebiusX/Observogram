@@ -920,6 +920,27 @@ test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README 
     assert.match(fromForged.stdout, /^host: .* · cwd .*#\\#\[stop-commands\]pause · tmpdir .*$/m);
     const read = fromForged.stdout.split(/\r?\n|\r/).filter((l) => RUNNER_READS_RE.test(l));
     assert.ok(read.length === 1 && read[0].startsWith('::notice title=npm test::'), 'a cwd holding `##[`: the notice is the only line the runner would execute');
+    // --win32-skips readme's refusals name that directory as the host line
+    // does: no README.md in it, one it cannot read, one without the sentence
+    // (a fork's, and a checkout's own), and no line the runner would execute.
+    const refusedIn = (cwd, cli = CLI) => {
+      const r = spawnSync(process.execPath, [cli, green, '--win32-skips', 'readme'], { cwd, encoding: 'utf8' });
+      assert.equal(r.status, 2, r.stdout + r.stderr);
+      assert.equal(r.stdout, '', 'nothing on stdout');
+      assert.deepEqual(r.stderr.split(/\r?\n|\r/).filter((l) => RUNNER_READS_RE.test(l)), [], 'a refusal from a cwd holding `##[`: no line the runner would execute');
+      return r.stderr;
+    };
+    assert.match(refusedIn(forgedCwd), /^tap-summary: no README\.md in .*#\\#\[stop-commands\]pause — --win32-skips readme reads the README in the working directory: /);
+    mkdirSync(join(forgedCwd, 'README.md'));   // EISDIR, as above
+    assert.match(refusedIn(forgedCwd), /^tap-summary: cannot read .*#\\#\[stop-commands\]pause.README\.md: E[A-Z]+ — pass the number README "Platforms" states/);
+    rmSync(join(forgedCwd, 'README.md'), { recursive: true });
+    writeFileSync(join(forgedCwd, 'README.md'), '# A fork\n\n### Platforms\n\nWindows is untested.\n');
+    assert.match(refusedIn(forgedCwd), /^tap-summary: .*#\\#\[stop-commands\]pause.README\.md "Platforms" states no "<N> `SKIP win32:` lines" — --win32-skips readme reads the README in the working directory: /);
+    const forgedCo = join(forgedCwd, 'co');
+    mkdirSync(join(forgedCo, 'tools'), { recursive: true });
+    writeFileSync(join(forgedCo, 'tools', 'tap-summary.mjs'), readFileSync(CLI));
+    writeFileSync(join(forgedCo, 'README.md'), '# Observogram\n\n### Platforms\n\nWindows is untested.\n');
+    assert.match(refusedIn(forgedCo, join(forgedCo, 'tools', 'tap-summary.mjs')), /^tap-summary: .*#\\#\[stop-commands\]pause.co.README\.md "Platforms" states no "<N> `SKIP win32:` lines" — the count this check holds the run to: /);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
