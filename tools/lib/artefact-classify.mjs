@@ -233,11 +233,11 @@ export function compileBoundedPattern(pattern, { flags = '', noun = 'pattern', t
   return { re };
 }
 
-function compileRule(rule, i, errors) {
+function compileRule(rule, i, errors, timed) {
   const where = `ids[${i}]`;
   if (!isPlainObject(rule)) { errors.push(`taxonomy: ${where}: expected { pattern, family, flags?, label?, role? }`); return null; }
   const { pattern, flags = '' } = rule;
-  const compiled = compileBoundedPattern(pattern, { flags });
+  const compiled = compileBoundedPattern(pattern, { flags, timed });
   if (compiled.reason) { errors.push(`taxonomy: ${where}: ${compiled.reason}`); return null; }
   const { re } = compiled;
   const target = readTarget({ family: rule.family, label: rule.label, role: rule.role }, where, errors);
@@ -306,7 +306,7 @@ function compileGlossary(raw, errors) {
 }
 
 // { compiled: { types: Map<name, {family,label?,role?}>, ids: [{ re, pattern, flags, family, label?, role? }], glossary: { entries, byFamily, byText } } | null, errors: string[] }
-function compileAll(json) {
+function compileAll(json, timed = true) {
   const errors = [];
   if (!isPlainObject(json)) return { compiled: null, errors: ['taxonomy: must be an object'] };
   if (!TAXONOMY_VERSIONS.includes(json.version)) errors.push(`taxonomy: version must be ${TAXONOMY_VERSIONS.join(' or ')}`);
@@ -326,7 +326,7 @@ function compileAll(json) {
   const ids = [];
   if (json.ids !== undefined) {
     if (!Array.isArray(json.ids)) errors.push('taxonomy: ids must be an array');
-    else json.ids.forEach((rule, i) => { const c = compileRule(rule, i, errors); if (c) ids.push(c); });
+    else json.ids.forEach((rule, i) => { const c = compileRule(rule, i, errors, timed); if (c) ids.push(c); });
   }
   let glossary = EMPTY_GLOSSARY;
   if (json.version === 2 && json.glossary !== undefined) glossary = compileGlossary(json.glossary, errors) || EMPTY_GLOSSARY;
@@ -334,16 +334,25 @@ function compileAll(json) {
   return { compiled: Object.freeze({ types, ids: Object.freeze(ids), glossary }), errors };
 }
 
-/** The compiled override, or an Error whose message starts `taxonomy: ` (the first reason). */
-export function compileTaxonomy(json) {
-  const { compiled, errors } = compileAll(json);
+/**
+ * The compiled override, or an Error whose message starts `taxonomy: ` (the
+ * first reason). `timed: false` skips only the id clocks (compileBoundedPattern)
+ * — the studio compiling the document the server timed at start; every
+ * static check still runs.
+ */
+export function compileTaxonomy(json, { timed = true } = {}) {
+  const { compiled, errors } = compileAll(json, timed);
   if (errors.length) throw new Error(errors[0]);
   return compiled;
 }
 
-/** Every reason the override is refused ([] when it compiles). Never throws. */
-export function validateTaxonomy(json) {
-  return compileAll(json).errors;
+/**
+ * Every reason the override is refused ([] when it compiles). Never throws.
+ * `timed` as compileTaxonomy's: the server and the bundle builder validate
+ * with the default, so the document either one serves has been timed.
+ */
+export function validateTaxonomy(json, { timed = true } = {}) {
+  return compileAll(json, timed).errors;
 }
 
 /** `N types, M id rules[, G glossary terms]` — for the one log line an entrypoint prints (the glossary only when it has entries). */

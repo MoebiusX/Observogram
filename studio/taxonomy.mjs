@@ -22,12 +22,17 @@ export const UNBOUND = Object.freeze({ family: 'unknown', via: 'unbound', layer:
 /**
  * Bind the classifier module and install the override (`json` is the
  * server's taxonomy document or null for the defaults). Returns the module.
+ * Compiled with `timed: false`: the document is one the server timed at
+ * start (GET /api/taxonomy serves only what loadTaxonomy compiled; a static
+ * bundle's, what the builder compiled), and the id clocks on a slow phone or
+ * a throttled tab would refuse what the server accepted — every static
+ * check still runs, as for the settings policy (studio/app.mjs).
  */
 export function bindTaxonomy(mod, json = null) {
   if (!mod || typeof mod.classifyArtefact !== 'function' || typeof mod.configureTaxonomy !== 'function') {
     throw new Error('bindTaxonomy: expected the artefact-classify module');
   }
-  mod.configureTaxonomy(json ? mod.compileTaxonomy(json) : null);
+  mod.configureTaxonomy(json ? mod.compileTaxonomy(json, { timed: false }) : null);
   lib = mod;
   return lib;
 }
