@@ -120,7 +120,10 @@
 // draws the drift drill's deploy aria-disabled with the reason, and a click
 // explains it and opens no modal; its retrofeed downloads the updated pack a
 // server returns for the request the page sent; Remediate draws its decision
-// header's deploy and the response path's per-SLO button the same way; every
+// header's deploy and the response path's per-SLO button the same way, and in
+// a bundle of one pack, with no Pack B, the deploy controls it draws are the
+// ones docs/CHANGELOG.md's entry for Deploy in the static bundle counts and
+// names as what a bundle without a comparison reaches; every
 // deploy control those views draw, in the light and dark themes, at full
 // opacity with each text in it clearing AA (the house rule: no opacity on an
 // unavailable control, whose reason line is what marks it); rows
@@ -1232,6 +1235,32 @@ function chromiumLimitProblems(readDoc = read) {
   if (/playwright/i.test(read('.github/workflows/ci.yml'))) problems.push('.github/workflows/ci.yml names Playwright: the documents say CI\'s jobs do not install it');
   return problems;
 }
+// What docs/CHANGELOG.md's entry for Deploy in the static bundle says of the deploy controls Remediate draws with no
+// Pack B (`drawn`, each by its label, the reason aside), which are what a bundle without a comparison reaches: its count
+// of them is theirs and it names each one, and its list of Remediate's deploy controls has a label for each (`…` and
+// `<identity>` any text, N a count).
+const DEPLOY_ENTRY = '- **Deploy in the static bundle is explained';
+const COUNT_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+function reachProblems(drawn, readDoc = read) {
+  const entries = readDoc('docs/CHANGELOG.md').split('\n').filter((l) => l.startsWith(DEPLOY_ENTRY));
+  if (entries.length !== 1) return [`docs/CHANGELOG.md: the entry "${DEPLOY_ENTRY}" ${entries.length} times`];
+  const quoted = (text) => [...text.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+  const problems = [];
+  const reach = /a bundle reaches (\w+) of them, (.*?);/.exec(entries[0]);
+  if (!reach) problems.push('docs/CHANGELOG.md: no "a bundle reaches <n> of them, …;" in the entry');
+  else {
+    if (reach[1] !== COUNT_WORDS[drawn.length]) problems.push(`docs/CHANGELOG.md: a bundle reaches "${reach[1]}" of them; Remediate draws ${drawn.length}`);
+    const named = quoted(reach[2]).sort();
+    if (JSON.stringify(named) !== JSON.stringify([...drawn].sort())) problems.push(`docs/CHANGELOG.md: the controls a bundle reaches named ${JSON.stringify(named)}; Remediate draws ${JSON.stringify([...drawn].sort())}`);
+  }
+  const list = /\bin Remediate, (.*?)\. /.exec(entries[0]);
+  if (!list) problems.push('docs/CHANGELOG.md: no list "in Remediate, …." in the entry');
+  else {
+    const labels = quoted(list[1]).map((l) => new RegExp(`^${l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/…|<[^>]+>/g, '.+').replace(/\bN\b/g, '\\d+')}$`));
+    for (const label of drawn) if (!labels.some((re) => re.test(label))) problems.push(`docs/CHANGELOG.md: Remediate's deploy controls listed without "${label}"`);
+  }
+  return problems;
+}
 
 test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s under en-US, cs-CZ and et-EE; Compare and Pair by on the compare-modes pair; the drift drill\'s deploy drawn unavailable and explained, its retrofeed downloading the server\'s updated pack; Remediate\'s deploy controls; the static texts and no server action rendered; the audit report downloaded and fetched as the server\'s; the notice; no page error, nothing off the loopback', async (t) => {
   // The documents' limit first, so it holds where the rest skips — CI's jobs among them.
@@ -1539,13 +1568,21 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     await noServerAction(page, 'Remediate');
     await ctx.close();
   }
-  // Remediate in a bundle of one pack, no Pack B: the decision's Review and deploy repository artefacts — the deploy
-  // control a reader reaches without a live pack — drawn unavailable with the reason, without its fill, and explained.
+  // Remediate in a bundle of one pack, no Pack B: the active strategy's Review and deploy repository artefacts drawn
+  // unavailable with the reason, without its fill, and explained. It and the decision header's Deploy repository
+  // artefacts to live are the deploy controls a reader reaches without a comparison, and the CHANGELOG counts and
+  // names them so.
   {
     const { page, ctx } = await open(oneBase, { selectedPackId: 'production-curated', view: 'compile' });
     const sel = '.ux-rm-actions [data-ux-action="rm-deploy-all"]';
     await page.waitForSelector(sel, { state: 'attached', timeout: T });
     assert.deepEqual(await drawnUnavailable(page, sel), [{ aria: 'true', why: DEPLOY, title: null }], `${sel}: drawn unavailable with the reason`);
+    const reached = await page.evaluate((s) => [...document.querySelectorAll(s)].map((el) => {
+      const label = el.cloneNode(true);
+      label.querySelector('.svc-why')?.remove();
+      return label.textContent.replace(/\s+/g, ' ').trim();
+    }), DEPLOY_CONTROLS);
+    assert.deepEqual(reachProblems(reached), [], 'the CHANGELOG counts and names the deploy controls a bundle without a comparison reaches');
     await readsAA(page, 'Remediate (one pack)', ['[data-ux-action="rm-deploy-all"]']);
     await drawnUnfilled(page, sel);
     await clickExplains(page, sel);
