@@ -43,6 +43,7 @@ import { tokenize } from './gen-vendor-manifest.mjs';
 import { DEFAULT_BRAND } from './lib/brand.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { adapt } from './lib/adapter.mjs';
+import { compileCatalog } from './lib/compile.mjs';
 import { serverNeeded, DEPLOY_CONTROLS, staticRemedy, STATIC_REMEDY_KEYS, staticInputOf, staticTraceActions } from '../studio/static-remedies.mjs';
 import { LIVE_ACTION_TEXT, readTraceability, traceIssue } from '../studio/trace-chain.mjs';
 import { computeDiagnosticGrade } from '../studio/diagnostic-grade.mjs';
@@ -173,10 +174,11 @@ test('S2 — every deploy entry point outside prototype space is drawn unavailab
 });
 
 // A phrase that tells the reader to take a server action (design A.8, the phrase ledger's pattern; load a live pack —
-// a bundle loads only the packs built in — Remediate's disabled strategy cards, row 28), or describes the deploy review
-// the static posture never opens (deploy review, review the destination, after a review, then deploy, confirmed
-// separately — Remediate's deploy texts, rows 20–27).
-const SERVER_ACTION = /\b(re-?scan|rescan|scan (?:live|a repo(?:sitory)?)|connect mcp|from (?:its |a live )?mcp|redraft|re-?upload|refresh(?:es|ing)? (?:the )?live|refresh live evidence|capture a live draft|live draft again|load a live pack|deploy what is missing|deploy the repository|deploy review|review (?:of |the )?destination|after a review|then deploy|confirmed separately)\b/i;
+// a bundle loads only the packs built in — Remediate's disabled strategy cards, row 28; deploy and verify — a board
+// declared to deploy and verify it deploys nothing without a server, and a bundle reader declares nothing — the
+// compiler's generated board, row 29), or describes the deploy review the static posture never opens (deploy review,
+// review the destination, after a review, then deploy, confirmed separately — Remediate's deploy texts, rows 20–27).
+const SERVER_ACTION = /\b(re-?scan|rescan|scan (?:live|a repo(?:sitory)?)|connect mcp|from (?:its |a live )?mcp|redraft|re-?upload|refresh(?:es|ing)? (?:the )?live|refresh live evidence|capture a live draft|live draft again|load a live pack|deploy and verify|deploy what is missing|deploy the repository|deploy review|review (?:of |the )?destination|after a review|then deploy|confirmed separately)\b/i;
 
 
 // Each static text, exactly, for each product — the brand's name is free-form, and the server is "the <product>
@@ -221,6 +223,7 @@ const TEXTS = {
   'remediate-strategy-no-b': (server, { liveBuiltIn, packALive }) => (liveBuiltIn
     ? 'Choose the live pack built into this bundle as Pack B to enable'
     : `To enable, pick a live pack as Pack B: ${NOLIVE(server, packALive)}`),
+  'compiler-generated-board': (server) => `deploying it needs ${server}, and the pack declaring it in spec.dashboards[]`,
 };
 // Traceability's live-evidence texts in the static posture (rows 14, 15), exactly; metricConfirm takes the metric.
 const TRACE_TEXTS = (server) => ({
@@ -277,6 +280,13 @@ test('S3 — the static texts, exact for five products (no article picked by the
   assert.match('Redraft from MCP before acting on this drift.', SERVER_ACTION);
   assert.match('Review them, then deploy what is missing live or update the repository from live.', SERVER_ACTION);
   assert.match('Load a live pack (Pack B) to enable', SERVER_ACTION, 'a bundle with none built in loads no live pack');
+  // The compiler's generated board (row 29): the compile catalogue's subtitle for a board the pack does not declare
+  // ends by telling the reader to declare it to deploy and verify it — the clause the static posture replaces, its
+  // last; the clauses before it say what the board is, name no server action and stay.
+  const generated = compileCatalog(parseYaml(read('vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml'))).groups.flatMap((g) => g.items.filter((it) => it.generated));
+  assert.deepEqual(generated.map((it) => it.subtitle.split(' · ')), [['Unified Observability', 'generated for every pack', 'declare it in spec.dashboards[] to deploy and verify it']], 'one generated board, its way out the last clause');
+  assert.match(generated[0].subtitle.split(' · ').at(-1), SERVER_ACTION, 'a bundle reader declares nothing, and declaring deploys nothing without a server');
+  assert.doesNotMatch(generated[0].subtitle.split(' · ').slice(0, -1).join(' · '), SERVER_ACTION, 'what the board is');
   // Remediate's deploy texts, each a description of the deploy review the static posture never opens.
   for (const live of ['Opens the deploy review with every deployable artefact; nothing is written until you confirm there.', 'Opens a review of destination, environment and artefacts; nothing is written until you confirm there.',
     'Deploy, after a review', 'Generate patch, then deploy', 'only after you review the destination, environment and artefacts', 'the patch and the deploy are confirmed separately',
@@ -361,7 +371,9 @@ test('S3 — the static texts, exact for five products (no article picked by the
 // <why>` (a control that answers the 501 sentence on use), `comment`, or `description: <why>` (it says what something
 // is, not what to do). No line is deferred: every remedy a bundle reader can reach in Compare, Diagnose, Traceability
 // and Remediate has its static text. Rows 20–27 are Remediate's deploy texts, which describe the deploy review a
-// deploy control opens on a server and which the static posture never opens; row 28 its disabled strategy cards.
+// deploy control opens on a server and which the static posture never opens; row 28 its disabled strategy cards; row 29
+// the compiler's generated board the pack does not declare — its Deploy to live card's reason, beside a static one, and
+// the catalogue's subtitle in the list and over the preview (compiler-generated-board).
 const LEDGER = [
   ["studio/app.mjs", "<span class=\"discover-journey-label\">Scan a repo</span>", "control: Discover's Scan a repo — answers the 501 sentence on use since W6; drawing it unavailable is bundle-discover-controls"],
   ["studio/app.mjs", "<span class=\"discover-load-label\">① Scan a repository</span>", "control: Discover's Scan a repository — answers the 501 sentence on use since W6 (bundle-discover-controls)"],
@@ -398,6 +410,7 @@ const LEDGER = [
   ["studio/compile-view.mjs", "<span class=\"remediate-action-hint\"><span class=\"ux-rm-effect is-live\">Changes live systems</span> ${isStatic() ? escapeHtml(staticRemedy('remediate-deploy-hint', staticInput())) : 'Opens the deploy review with every deployable artefact; nothing is written until you confirm there.'}</span>", "row 20"],
   ["studio/compile-view.mjs", ": (isStatic() ? escapeHtml(staticRemedy('remediate-deploy-hint', staticInput())) : 'Opens a review of destination, environment and artefacts; nothing is written until you confirm there.')}</span>", "row 20"],
   ["studio/compile-view.mjs", "// The deploy review preselects the artefact being compiled (the manifest", "comment"],
+  ["studio/compile-view.mjs", ": 'This generated board is not declared in the pack; declare it in spec.dashboards[] to deploy and verify it.')", "row 29"],
   ["studio/compile-view.mjs", "<p class=\"ux-rm-output-note\">Writes to ${escapeHtml(activeFlavor?.platform || 'the live platform')}${envLabel ? ` for <strong>${escapeHtml(envLabel)}</strong>` : ''} through your MCP gateway. You review the destination, environment and artefacts before anything is written.</p>", "unreachable: the compiler draws its Deploy to live only where the server's deploy matrix says the target deploys, and a bundle has none (GET /api/deploy/matrix is a 501)"],
   ["studio/compile-view.mjs", "// The deploy modal's pre-deploy review.", "comment"],
   ["studio/diagnostic-grade.mjs", "//   errors      — { family: last error message } from mcp.probeErrors.<family>.", "comment"],
@@ -462,9 +475,11 @@ test('S4 — the phrase ledger: every studio line that names a server action is 
   assert.deepEqual(rowOf('studio/compile-view.mjs', 'so the deploy review lists every deployable artefact'), ['row 27']);
   // Remediate's disabled strategy cards: a bundle loads no live pack it does not carry.
   assert.deepEqual(rowOf('studio/compile-view.mjs', 'Load a live pack (Pack B) to enable'), ['row 28']);
+  // The compiler's generated board: a bundle reader declares nothing, and declaring deploys nothing without a server.
+  assert.deepEqual(rowOf('studio/compile-view.mjs', 'to deploy and verify it'), ['row 29']);
 });
 
-// Which view shows each static text (the design's A.8 rows, and rows 19–28, which this build adds).
+// Which view shows each static text (the design's A.8 rows, and rows 19–29, which this build adds).
 const WIRED_IN = {
   'retrofeed-result': 'studio/compare-view.mjs',
   'drift-partial': 'studio/compare-view.mjs',
@@ -491,6 +506,7 @@ const WIRED_IN = {
   'remediate-rows-hint': 'studio/compile-view.mjs',
   'remediate-not-compared-summary': 'studio/compile-view.mjs',
   'remediate-strategy-no-b': 'studio/compile-view.mjs',
+  'compiler-generated-board': 'studio/compile-view.mjs',
 };
 // The one way a pure function takes the static texts: an explicit `remedy` input, bound where the view asks isStatic().
 const REMEDY_BINDING = 'remedy: isStatic() ? (key) => staticRemedy(key, staticInput()) : null,';
@@ -569,7 +585,16 @@ test('S5 — the wiring: each static text is shown by the view its row names, be
     "'Opens the deploy review with every deployable artefact; nothing is written until you confirm there.'",
     "'Opens a review of destination, environment and artefacts; nothing is written until you confirm there.'",
     "'Load a live pack (Pack B) to enable'",
+    "'This generated board is not declared in the pack; declare it in spec.dashboards[] to deploy and verify it.'",
   ]) assert.ok(remediate.includes(live), `the live studio keeps ${live.slice(0, 60)}`);
+  // Row 29: the generated board's Deploy to live card names the server before the declaration, and every subtitle the
+  // compiler shows — the list's, its title, the preview's — goes through itemSubtitle, which in the static posture ends
+  // a generated board's with the server it needs and otherwise is the catalogue's.
+  assert.ok(remediate.includes("? `${serverNeeded('Deploy', state.brand.chrome.name)} This generated board is not declared in the pack either: on that server it deploys once the pack declares it in spec.dashboards[].`"), 'the card\'s static reason');
+  const ITEM_SUBTITLE = "const itemSubtitle = (it) => (it.generated && isStatic() ? [...(it.subtitle || '').split(' · ').slice(0, -1), staticRemedy('compiler-generated-board', staticInput())].join(' · ') : it.subtitle);";
+  assert.ok(remediate.includes(ITEM_SUBTITLE), 'itemSubtitle');
+  assert.deepEqual(tokenize(remediate.replace(ITEM_SUBTITLE, '')).code.match(/\.subtitle\b(?! \?)/g) ?? [], [], 'no subtitle shown but through itemSubtitle (a test of whether there is one aside)');
+  assert.equal(tokenize(remediate).code.match(/\bitemSubtitle\((?:it|activeItem)\)/g)?.length, 3, 'the list, its title and the preview');
   // The deployable rows' boxes choose what the deploy review takes; the static posture, where none opens, draws them
   // disabled (row 26's hint says why).
   assert.ok(remediate.includes("const boxDisabled = isStatic() ? ' disabled' : '';") && remediate.includes("<input type=\"checkbox\" ${checked ? 'checked' : ''}${boxDisabled}>"), 'the boxes are disabled in the static posture');

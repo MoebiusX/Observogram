@@ -1209,7 +1209,7 @@ async function loadPlaywright() {
 }
 // S4's pattern (tools/test-static-remedies.mjs, which holds every studio line it matches to a disposition): a server
 // action a reader of a bundle cannot take, or the deploy review a bundle never opens. C8 holds the rendered views to it.
-const SERVER_ACTION = /\b(re-?scan|rescan|scan (?:live|a repo(?:sitory)?)|connect mcp|from (?:its |a live )?mcp|redraft|re-?upload|refresh(?:es|ing)? (?:the )?live|refresh live evidence|capture a live draft|live draft again|load a live pack|deploy what is missing|deploy the repository|deploy review|review (?:of |the )?destination|after a review|then deploy|confirmed separately)\b/i;
+const SERVER_ACTION = /\b(re-?scan|rescan|scan (?:live|a repo(?:sitory)?)|connect mcp|from (?:its |a live )?mcp|redraft|re-?upload|refresh(?:es|ing)? (?:the )?live|refresh live evidence|capture a live draft|live draft again|load a live pack|deploy and verify|deploy what is missing|deploy the repository|deploy review|review (?:of |the )?destination|after a review|then deploy|confirmed separately)\b/i;
 // Where C8 runs, as the documents say it: each place that claims the diff's parity in Chromium (the claim's opening
 // words below) states, in the sentence that names Chromium, that the check runs only where Playwright and its browser
 // are installed, which CI's jobs are not. CI's workflow installs no Playwright, so that limit is true; a job that gains
@@ -1623,6 +1623,15 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
       note: `Not deployable from the studio: ${DEPLOY} This generated board is not declared in the pack either: on that server it deploys once the pack declares it in spec.dashboards[].`,
       button: false,
     }, 'the generated board\'s Deploy to live names the server it needs before the declaration');
+    // Row 29: what the list, its title and the preview say the generated board is — the server there too, before the
+    // declaration, never declaring it as the way to deploy and verify it — and the compiler names no server action.
+    const generatedSub = `Unified Observability · generated for every pack · ${staticRemedy('compiler-generated-board', { product })}`;
+    const shown = await page.evaluate(() => {
+      const b = document.querySelector('button.compile-item-btn[aria-current="true"]');
+      return { sub: b.querySelector('.compile-item-sub')?.textContent ?? null, title: b.getAttribute('title'), preview: document.querySelector('.compile-artifact-sub')?.textContent ?? null };
+    });
+    assert.deepEqual(shown, { sub: generatedSub, title: generatedSub, preview: generatedSub }, 'row 29: the generated board\'s subtitle names the server it needs before the declaration');
+    await noServerAction(page, 'Remediate → the compiler on the generated board');
     await ctx.close();
   }
   // Row 18 with the live pack as Pack A and no Pack B: the bundle's one live pack is Pack A, so the decision's note says

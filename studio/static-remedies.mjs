@@ -82,6 +82,11 @@
 //   remediate-strategy-no-b (row 28) — the strategy cards a comparison
 //     enables, drawn disabled with no Pack B, where a server's says to load
 //     a live pack.
+//   compiler-generated-board (row 29) — the last clause of the subtitle the
+//     compile catalogue gives a generated board the pack does not declare,
+//     in the compiler's list and over its preview (compile-view.mjs), where
+//     a server's says to declare it in spec.dashboards[] to deploy and
+//     verify it.
 //
 // staticTraceActions(product) is the set of Traceability's live-evidence
 // texts for the static posture (rows 14, 15): the same keys as
@@ -149,6 +154,7 @@ const STATIC_REMEDIES = {
   'remediate-strategy-no-b': ({ product, liveBuiltIn, packALive }) => (liveBuiltIn
     ? 'Choose the live pack built into this bundle as Pack B to enable'
     : `To enable, pick a live pack as Pack B: ${noLive(product, packALive)}`),
+  'compiler-generated-board': ({ product }) => `deploying it needs ${theServer(product)}, and the pack declaring it in spec.dashboards[]`,
 };
 
 export const STATIC_REMEDY_KEYS = Object.freeze(Object.keys(STATIC_REMEDIES));

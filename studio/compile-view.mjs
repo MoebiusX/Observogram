@@ -1143,6 +1143,12 @@ function presetForCompileItem(item) {
   return null;
 }
 
+// What the list, its title and the preview say an artefact is: the catalogue's subtitle. A generated board the pack
+// does not declare ends it by telling the reader to declare it in spec.dashboards[] — a step a bundle reader cannot
+// take, and one that deploys nothing without a server — so in the static posture that last clause names the server
+// first (row 29), as the board's Deploy to live card does.
+const itemSubtitle = (it) => (it.generated && isStatic() ? [...(it.subtitle || '').split(' · ').slice(0, -1), staticRemedy('compiler-generated-board', staticInput())].join(' · ') : it.subtitle);
+
 function renderCompiler(root) {
   const section = document.createElement('section');
   section.className = 'section compile-view ux-rm-compiler' + (compilerUi.open ? ' is-open' : '');
@@ -1248,11 +1254,11 @@ function renderCompiler(root) {
       const selected = (g.id === focusedCompileGroup()) && (it.id === focusedCompileArtifact());
       li.className = 'compile-item' + (selected ? ' is-active' : '');
       li.innerHTML = `
-        <button type="button" class="compile-item-btn" title="${escapeHtml(it.subtitle || '')}"${selected ? ' aria-current="true"' : ''}>
+        <button type="button" class="compile-item-btn" title="${escapeHtml(itemSubtitle(it) || '')}"${selected ? ' aria-current="true"' : ''}>
           <span class="compile-item-bullet" aria-hidden="true">${selected ? '●' : '○'}</span>
           <span class="compile-item-body">
             <span class="compile-item-label">${escapeHtml(it.label)}</span>
-            ${it.subtitle ? `<span class="compile-item-sub">${escapeHtml(it.subtitle)}</span>` : ''}
+            ${it.subtitle ? `<span class="compile-item-sub">${escapeHtml(itemSubtitle(it))}</span>` : ''}
           </span>
         </button>
       `;
@@ -1325,7 +1331,7 @@ function renderCompiler(root) {
     head2.className = 'compile-artifact-head';
     head2.innerHTML = `
       <span class="compile-artifact-label">${escapeHtml(activeItem.label)}</span>
-      ${activeItem.subtitle ? `<span class="compile-artifact-sub">${escapeHtml(activeItem.subtitle)}</span>` : ''}
+      ${activeItem.subtitle ? `<span class="compile-artifact-sub">${escapeHtml(itemSubtitle(activeItem))}</span>` : ''}
     `;
     previewStep.appendChild(head2);
   }
