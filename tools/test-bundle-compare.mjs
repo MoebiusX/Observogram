@@ -127,8 +127,11 @@
 // deploy control those views draw, in the light and dark themes, at full
 // opacity with each text in it clearing AA (the house rule: no opacity on an
 // unavailable control, whose reason line is what marks it); rows
-// 4 (a one-pack bundle), 6, 11, 12 and 18 (over the live pack as Pack A)
-// render as written, and the rendered Compare, Diagnose, Traceability and
+// 4 (a one-pack bundle — on Compare, and on the Assessment Remediate's
+// Compare with live first lands on, whose Pack B picker offers none), 6,
+// 11, 12 and 18 (over the live pack as Pack A) render as written — with
+// other packs built in the picker offers each and the Assessment points at
+// it —, and the rendered Compare, Diagnose, Traceability and
 // Remediate hold no phrase S4 holds the studio's source to; the Conformance
 // view's HTML anchor downloads the report
 // with its goes-blind section, and the in-page JSON and HTML are the
@@ -1683,7 +1686,13 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     await ctx.close();
   }
 
-  // Row 6: production-curated as A, nothing live compared — the Assessment points at the live pack built in.
+  // The Assessment's comparison with no Pack B: what it says, and what the header's Pack B picker offers.
+  const comparePrompt = (page) => page.evaluate(() => ({
+    body: document.querySelector('#diag-compare .diag-compare-prompt .ux-empty-body')?.textContent ?? null,
+    packB: [...document.querySelectorAll('#pack-b-select option')].map((o) => o.textContent),
+  }));
+  // Row 6: production-curated as A, nothing live compared — the Assessment points at the live pack built in; with the
+  // other packs built in, the header's Pack B picker offers each, and the comparison's prompt points at it.
   {
     const { page, ctx } = await open(base, { selectedPackId: 'production-curated', view: 'compare', diagnoseSub: 'grade' });
     await page.waitForSelector('.diag-subtab[data-sub="grade"]', { timeout: T });
@@ -1692,14 +1701,27 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     const row6 = staticRemedy('drift-free-no-live', { product, liveBuiltIn: true });
     await page.waitForFunction((want) => (document.querySelector('#layer-view')?.innerText || '').includes(want), row6, { timeout: 5_000 }).catch(() => {});
     assert.ok((await viewText(page)).includes(row6), `row 6: ${row6}`);
+    const prompt = await comparePrompt(page);
+    assert.deepEqual({ body: prompt.body, none: prompt.packB[0], others: prompt.packB.length - 1 }, {
+      body: 'Choose a baseline in the header’s Pack B picker to compare: a live draft shows drift (declared versus deployed); a curated or reference pack shows the gap to a target.',
+      none: '— none —',
+      others: BUNDLED.length - 1,
+    }, 'the picker offers every other pack built in, and the prompt points at it');
     await noServerAction(page, 'Diagnose (nothing live compared)');
     await ctx.close();
   }
 
-  // Row 4: a bundle of one pack — nothing to compare it with.
+  // Row 4: a bundle of one pack — nothing to compare it with. Remediate's primary, Compare with live first, lands on the
+  // Assessment, whose comparison with no baseline says so too: the header's Pack B picker offers none to choose.
   {
-    const { page, ctx } = await open(oneBase, { selectedPackId: 'production-curated', view: 'compare' });
-    await page.waitForSelector('.diag-subtab[data-sub="compare"]', { timeout: T });
+    const { page, ctx } = await open(oneBase, { selectedPackId: 'production-curated', view: 'compile' });
+    const primary = '#rm-decision [data-ux-action="rm-diagnose"]';
+    await page.waitForSelector(primary, { timeout: T });
+    assert.equal((await page.textContent(primary)).trim(), 'Compare with live first');
+    await page.click(primary);
+    await page.waitForSelector('#diag-compare .diag-compare-prompt .ux-empty-body', { timeout: T });
+    assert.deepEqual(await comparePrompt(page), { body: staticRemedy('compare-one-pack', { product }), packB: ['— none —'] }, 'row 4 on the Assessment: no baseline to choose');
+    await noServerAction(page, 'Diagnose (one pack)');
     await page.click('.diag-subtab[data-sub="compare"]');
     await page.waitForSelector('.compare-digest .ux-empty-body', { timeout: T });
     assert.equal(await page.textContent('.compare-digest .ux-empty-body'), staticRemedy('compare-one-pack', { product }), 'row 4');

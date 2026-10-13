@@ -41,7 +41,10 @@
 //   drift-partial (row 2) — the drift drill's partial-live-evidence banner,
 //     where a server's says to draft the live pack once more.
 //   compare-one-pack (row 4) — Compare with no second pack to compare with,
-//     where a server's says to load or scan one from Discover.
+//     where a server's says to load or scan one from Discover; and the
+//     Assessment's comparison with no baseline when no other pack loads,
+//     where a server's says to choose one in the header's Pack B picker,
+//     which in a bundle of one pack offers none.
 //   drift-free-fix, live-missing-fix (row 12) — the Assessment's drift-free
 //     and live-missing blockers' fixes, where a server's also offers
 //     deploying the missing artefacts.

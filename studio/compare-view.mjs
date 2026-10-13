@@ -1229,14 +1229,17 @@ function renderDiagnose(view) {
 // Affordance shown in Diagnose when only Pack A is loaded. Points the
 // user at the EXISTING header Pack B picker (no duplicate control) and
 // names the two comparison use cases. Selecting nothing here is fine —
-// the assessment above already stands on Pack A alone.
+// the assessment above already stands on Pack A alone. A bundle's picker
+// offers the other packs that load (its /api/examples is empty), so in a
+// bundle of one pack it offers none: the static posture then says what
+// Compare says there (row 4).
 function renderComparePrompt() {
   const el = document.createElement('div');
   el.className = 'diag-compare-prompt';
   el.innerHTML = diagUx.emptyStateHtml({
     title: 'No baseline selected: this assessment reads the pack on its own.',
     checked: 'What the pack itself declares — its coverage, its trust evidence and its requirement chains.',
-    body: 'Choose a baseline in the header’s Pack B picker to compare: a live draft shows drift (declared versus deployed); a curated or reference pack shows the gap to a target.',
+    body: !defaultCompareB() && isStatic() ? staticRemedy('compare-one-pack', { product: state.brand.chrome.name }) : 'Choose a baseline in the header’s Pack B picker to compare: a live draft shows drift (declared versus deployed); a curated or reference pack shows the gap to a target.',
   });
   return el;
 }

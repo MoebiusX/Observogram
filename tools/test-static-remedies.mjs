@@ -574,6 +574,12 @@ test('S5 — the wiring: each static text is shown by the view its row names, be
     "'Draft the live pack again from MCP once the endpoint is healthy, then re-check.'",
     "'connect MCP or scan live to verify'",
   ]) assert.ok(view.includes(live), `the live studio keeps ${live.slice(0, 60)}`);
+  // Row 4 on the Assessment too: its comparison with no baseline points at the header's Pack B picker, which in a
+  // bundle offers the other packs that load (the shim's examples are none) — so with no other pack to choose, the static
+  // posture says what Compare says there, and otherwise the picker's way out is the reader's to take.
+  assert.ok(functionBody(view, 'renderComparePrompt')?.includes("body: !defaultCompareB() && isStatic() ? staticRemedy('compare-one-pack', { product: state.brand.chrome.name }) : 'Choose a baseline in the header’s Pack B picker to compare: a live draft shows drift (declared versus deployed); a curated or reference pack shows the gap to a target.',"), 'the Assessment\'s prompt with no other pack to choose');
+  assert.equal(functionBody(view, 'defaultCompareB').trim().split('\n').at(-1).trim(), 'return state.catalog.find(p => p.ok && p.id !== state.selectedPackId)?.id || null;', 'defaultCompareB: the first other pack that loads');
+  assert.ok(read('studio/static-backend.mjs').includes("'/api/examples': () => json(200, { examples: [] }),"), 'a bundle\'s picker offers no example');
   const remediate = read('studio/compile-view.mjs');
   for (const live of [
     "'Compare with a live pack to get a recommendation, or deploy the repository’s artefacts directly.'",
