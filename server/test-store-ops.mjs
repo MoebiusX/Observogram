@@ -2610,17 +2610,25 @@ const unknownPlace = (file, nearest, { to = null, root = ROOT_B } = {}) => `the 
   + `mount it, then run purge-org again; if it does not lie under ${root}, delete ${root} by hand, then run purge-org again: it drops org `
   + 'beta\'s records';
 
-test('purge-org users file that does not exist: through a mount that is down it is refused, failing closed; mounted again, refused as lying under the root; moved out of the root as that refusal says, the purge passes', () => {
-  const vol = betaVolume().dir('/mnt/b').symlink('/cfg/users.json', '/mnt/b/users.json');
+test('purge-org users file that does not exist: through a mount that is down it is refused, failing closed — recorded, or, none recorded, <base>/users.json a link there; mounted again, refused as lying under the root; moved out of the root as that refusal says, the purge passes', () => {
+  const vol = betaVolume().dir('/mnt/b').symlink('/cfg/users.json', '/mnt/b/users.json').symlink('/ws/users.json', '/mnt/b/users.json');
+  const byDefault = (text) => text.replace('the recorded users file /ws/users.json',
+    'the users file /ws/users.json (the one a pre-store build reads: OBSERVOGRAM_USERS_FILE was not set at the import)');
   // The bytes are under the root; the mount that leads there is down, so its mount point is an empty directory.
   for (const [file, to] of [['/mnt/b/users.json', null], ['/cfg/users.json', '/mnt/b/users.json']]) {
     assert.deepEqual(placeIn(vol, file), { exists: null, refusal: unknownPlace(file, '/mnt/b', { to }) }, file);
   }
+  // None recorded, <base>/users.json a link through that mount is no absent default: taken for one, the purge deleted
+  // <root>/sub/users.json behind the mount that is down.
+  assert.deepEqual(placeIn(vol, '/ws/users.json', { recorded: false }),
+    { exists: null, refusal: byDefault(unknownPlace('/ws/users.json', '/mnt/b', { to: '/mnt/b/users.json' })) }, '/ws/users.json, none recorded');
   vol.bind(`${ROOT_B}/sub`, '/mnt/b');   // the way out: mount it, then run purge-org again
   assert.deepEqual(placeIn(vol, '/mnt/b/users.json'), { exists: true, refusal: underRoot('/mnt/b/users.json', `${ROOT_B}/sub/users.json`) });
+  assert.deepEqual(placeIn(vol, '/ws/users.json', { recorded: false }),
+    { exists: true, refusal: byDefault(underRoot('/ws/users.json', `${ROOT_B}/sub/users.json`)) }, '/ws/users.json, none recorded, mounted');
   vol.rename(`${ROOT_B}/sub/users.json`, '/keep/users.json');   // that refusal's way out: move it out, then run purge-org again
-  for (const file of ['/mnt/b/users.json', '/cfg/users.json']) {
-    assert.deepEqual(placeIn(vol, file), { exists: false, refusal: null }, `${file} leads under the root, where nothing of it is left`);
+  for (const [file, opts] of [['/mnt/b/users.json', {}], ['/cfg/users.json', {}], ['/ws/users.json', { recorded: false }]]) {
+    assert.deepEqual(placeIn(vol, file, opts), { exists: false, refusal: null }, `${file} leads under the root, where nothing of it is left`);
   }
 });
 

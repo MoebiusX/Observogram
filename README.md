@@ -2682,15 +2682,17 @@ link, and it refuses, deleting nothing:
   in-place `packc store export` writes it and where a pre-store build started
   with `OBSERVOGRAM_USERS_FILE` set to it reads it: if that path no longer
   leads to the moved file, make it lead there again before you roll back.
-- **while a recorded users file does not exist and its path does not lead
-  under `orgs/<id>/`**, since a filesystem not mounted now may lead it there.
-  If it lies on a filesystem that is not mounted, mount it and run the purge
-  again; if it does not lie under `orgs/<id>/` (it was deleted, say), delete
-  `orgs/<id>/` by hand and run the purge again: with no directory left it
-  checks no users file and only drops the org's records. After the first
-  refusal's move, with any mount on the recorded path up, that path leads
-  under `orgs/<id>/`, where nothing of the users file is left, so the purge
-  goes on.
+- **while a recorded users file — or, with none recorded,
+  `<workspace>/users.json` as a link — does not exist and its path does not
+  lead under `orgs/<id>/`**, since a filesystem not mounted now may lead it
+  there. If it lies on a filesystem that is not mounted, mount it and run the
+  purge again; if it does not lie under `orgs/<id>/` (it was deleted, say),
+  delete `orgs/<id>/` by hand and run the purge again: with no directory left
+  it checks no users file and only drops the org's records. After the first
+  refusal's move, with any mount on its path up, that path leads under
+  `orgs/<id>/`, where nothing of the users file is left, so the purge goes
+  on. With none recorded and nothing at `<workspace>/users.json`, there is no
+  users file to keep, and the purge goes on.
 - **while the users file, or a directory under `orgs/<id>/`, cannot be
   read** — run the purge as a user who can read it (a FUSE mount whose
   server stopped answering: unmount it), or, when the users file does not

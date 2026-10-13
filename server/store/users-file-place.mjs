@@ -33,8 +33,9 @@
 //     recorded there or reached through a mount of a directory under it or a link into it — and the purge goes on;
 //     any other is refused, failing closed: a mount that is down leaves its mount point an empty directory, which tells
 //     nothing. So a recorded users file deleted outside the root is refused too (declared), and deleting the root by
-//     hand is its way out. The default <base>/users.json, which nothing records, absent is nothing to keep (a store
-//     that keeps no local users may have none).
+//     hand is its way out. The default <base>/users.json, which nothing records, absent — nothing at its path, not even
+//     a link — is nothing to keep (a store that keeps no local users may have none); a link there that leads nowhere
+//     now is placed as a recorded path is, since through a mount that is down it may lead under the root.
 //   - a users file that cannot be read — statSync failing otherwise (EACCES on a directory of its path, a link loop),
 //     or a part of its path that cannot be read — is refused.
 //
@@ -201,8 +202,9 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     // exists is one the walk read — the purge goes on: a users file moved out of the root, recorded there or reached
     // through a mount of a directory under it or a link into it. Elsewhere nothing tells, so it is refused, failing
     // closed. <base>/users.json, the default nothing records, is absent on every store that keeps no local users:
-    // absent, it is nothing to keep.
-    if (!recorded) return { exists: false, refusal: null };
+    // absent — nothing at its path, not even a link — it is nothing to keep. A link there is placed as a recorded path is.
+    const nothingAt = () => { try { lstat(file); return false; } catch (e2) { return GONE.has(e2?.code); } };
+    if (!recorded && nothingAt()) return { exists: false, refusal: null };
     const led = lead(file);
     if (led.error) return cannot(led.at, led.error);
     if (led.nearestSt && entries.some((en) => en.st.isDirectory() && same(en.st, led.nearestSt))) return { exists: false, refusal: null };
