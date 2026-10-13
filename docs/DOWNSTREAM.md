@@ -41,8 +41,12 @@ byte-identical, so the diff between two snapshots is exactly what changed.
 
 A module is listed when, mechanically:
 
-1. it imports no `node:*` module, reads no `process`, touches no DOM or web
-   storage (`document`, `window`, `navigator`, `localStorage`,
+1. it imports no `node:*` module, reads no `process` (but for exactly the
+   two guarded forms `globalThis.process?.cpuUsage?.()` and
+   `globalThis.process?.platform` — `PROCESS_READS_ALLOWED`: the CPU time and
+   the platform `artefact-classify.mjs`'s id clocks read where the runtime has
+   them; a browser reads `undefined`, and the wall clock decides), touches no
+   DOM or web storage (`document`, `window`, `navigator`, `localStorage`,
    `sessionStorage`), reads no `import.meta` and calls no `require()` — judged
    on code, never on comments or string text;
 2. every relative import resolves to another listed module (the import graph
