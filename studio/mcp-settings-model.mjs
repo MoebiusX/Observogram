@@ -37,8 +37,6 @@ function effectivePort(u) {
   return url.port || (url.protocol === 'https:' ? '443' : url.protocol === 'http:' ? '80' : null);
 }
 
-const NO_SIGN_IN = 'this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC';
-
 // ---------- the gate (A.2.1) ----------
 
 /**
@@ -46,7 +44,11 @@ const NO_SIGN_IN = 'this server has no sign-in: add the first user with npm run 
  * (GET /api/mcp-endpoints `policy.register.allowed`: a session admin or
  * owner, or the open posture's caller on a direct loopback request) — and
  * whether the panel has a target. → { enabled, reason }: `reason` (null when
- * enabled) is the sentence the aria-disabled button carries.
+ * enabled) is the sentence the aria-disabled button carries. Without sign-in
+ * (the token and open postures) a refusal is the server's own sentence,
+ * `policy.register.why`: the way in it names is the server's for the posture
+ * it runs in (OBSERVOGRAM_AUTH=off included), never a copy kept here; while
+ * the policy is unread, or its read failed, no way in is named.
  *   access          state.access ({ posture, role, orgName })
  *   mcpTargetPolicy state.mcpTargetPolicy (null while unread)
  *   hasTarget       the panel's picker would send something
@@ -64,9 +66,7 @@ export function settingsGateModel({ access = null, mcpTargetPolicy = null, hasTa
     if (!pageIsLoopback(pageOrigin) && !bundleOrigins) {
       return deny(`This bundle was built without an MCP origin list, so from ${pageOrigin} it can send settings to no MCP server — rebuild it with --mcp-origins <origin>, or serve it from this machine (http://127.0.0.1) to configure a loopback MCP server.`);
     }
-  } else if (posture === 'token') {
-    return deny(`Configuring the MCP server needs a signed-in admin — ${NO_SIGN_IN}.`);
-  } else if (posture === 'identity' || posture === 'open') {
+  } else if (posture === 'identity' || posture === 'open' || posture === 'token') {
     if (mcpTargetPolicy === null) return deny('Checking whether you may configure the MCP server…');
     if (mcpTargetPolicy.failed) return deny('Could not check whether you may configure the MCP server — close and reopen the panel to try again.');
     if (mcpTargetPolicy.register?.allowed !== true) {

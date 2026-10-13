@@ -972,6 +972,10 @@ test('T7 the REAL bundle boots in headless Chromium against the fixture pack: th
   // block, nothing logged.
   await page.evaluate(() => document.getElementById('mcp-btn').click());
   await page.waitForSelector('#mcp-panel:not([hidden])', { timeout: 10_000 });
+  // The Server settings button: no server, so no sign-in way in is named —
+  // the bundle's own sentences only (the server's live in its policy).
+  await page.waitForFunction(() => !/^Checking /.test(document.getElementById('mcp-settings-btn')?.dataset.why ?? 'Checking '), null, { timeout: 10_000 });
+  assert.doesNotMatch(await page.evaluate(() => document.getElementById('mcp-settings-btn').dataset.why), /sign-in|npm run users|OIDC/);
   await page.fill('#mcp-url', 'http://127.0.0.1:9/mcp');
   await page.click('#mcp-refresh-btn');
   await page.waitForFunction(() => /^error: 501: /.test(document.getElementById('mcp-ping-status')?.textContent || ''), null, { timeout: 10_000 });

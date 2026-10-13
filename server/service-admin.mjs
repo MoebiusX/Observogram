@@ -29,7 +29,7 @@ import { normalizeServiceKey } from '../tools/lib/service-keys.mjs';
 import { mcpUrlOrigin, safeMcpUrl } from '../tools/lib/mcp-url-safety.mjs';
 import { noSignInWay, rankOfRole } from './authz.mjs';
 import { AdminRefusal } from './identity-admin.mjs';
-import { credentialThatRides, mcpOriginDecision, originOf, typedMcpUrlDecision } from './mcp-target-policy.mjs';
+import { credentialThatRides, exposedWay, mcpOriginDecision, originOf, typedMcpUrlDecision } from './mcp-target-policy.mjs';
 import { validateMcpUrl } from './mcp-url.mjs';
 import { currentOrg } from './org-context.mjs';
 import { atomic } from './store/db.mjs';
@@ -573,7 +573,7 @@ export function resolveJourneyMcp(db, mcp = {}, { caller } = {}) {
 function journeyTypedWay(caller, refusal) {
   if (refusal.denied === 'posture') {
     return caller.posture === 'open-exposed'
-      ? 'an MCP URL a server without sign-in never sends, and MCP endpoints cannot be registered while it is exposed — add the first user with npm run users -- add <login> (it arms sign-in; the first user is an owner), or bind the server to loopback'
+      ? `an MCP URL a server without sign-in never sends, and MCP endpoints cannot be registered while it is exposed — ${exposedWay(caller)}`
       : `an MCP URL a server without sign-in never sends — register the endpoint in Settings → MCP endpoints from http://127.0.0.1:${caller.port ?? '<port>'} (a loopback MCP, or an origin listed in OBSERVOGRAM_MCP_ORIGINS) and re-capture the journey (Pack B then names it)`;
   }
   const tail = caller.principal?.kind === 'bearer' && caller.posture === 'token' ? `; ${noSignInWay(caller)}` : '';

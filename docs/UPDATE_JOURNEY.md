@@ -1317,3 +1317,18 @@ local user cannot sign in, `userSignIn` (how each kind of user signs in under
 each sign-in mode), Enable… under every mode and Sign out everywhere… under
 every mode). The other review fixes add assertions to existing tests or
 change docs and comments; the count is unchanged by them.
+
+### Follow-up: the way in without sign-in, in the studio
+
+Without sign-in, the MCP panel's Server settings button and the empty MCP
+picker named a way in of the studio's own — `add the first user …, or
+configure OIDC` in the token posture, `an admin registers them in Settings →
+MCP endpoints` on an open server — which `OBSERVOGRAM_AUTH=off`, or a server
+bound off the loopback, defeats. They now say the server's own sentence
+(`GET /api/mcp-endpoints` `policy.register.why`), worded for the posture the
+server runs in, so the two cannot drift; in the token posture the panel reads
+it when it opens. Open and exposed under `OBSERVOGRAM_AUTH=off`, that sentence
+itself named adding the first user, which arms nothing there; it now names a
+restart without it, or binding to loopback. The journey's steps do not move. Tests: 1390 → 1392 (one
+more in `tools/test-mcp-settings-model.mjs`, one more in
+`server/test-mcp-target-policy.mjs`).
