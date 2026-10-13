@@ -97,6 +97,7 @@ import { parse as parseYaml } from '../../tools/lib/mini-yaml.mjs';
 import { closeStore, nowIso, openStore, resolveDbPath, tx } from './db.mjs';
 import { assertNotInUse, identifyFile } from './backup.mjs';
 import { comparedPath } from './paths.mjs';
+import { usersFilePlace } from './users-file-place.mjs';
 import { listAudit, writeAudit } from './audit.mjs';
 import { getMeta, getMetaJson, isIdentityArmed, putMeta, setMeta, storeId } from './meta.mjs';
 import { getOrg, listOrgs, setOrgRoot } from './orgs.mjs';
@@ -787,7 +788,10 @@ export function formatRekey(r) {
 // packs/index.json, slice 4), one org.purge row; then the marker rewritten
 // from legacy_hashes (by 'purge-org'; it carries no pack key). A workspace
 // whose marker names another store is refused: its orgs/ are not this
-// store's to delete.
+// store's to delete. Before rmSync, the root is read whole: deleting it must
+// not take the users file a pre-store build reads, decided by what it takes,
+// not by the path's spelling, and nothing under it may be a mount point
+// (store/users-file-place.mjs).
 export async function purgeOrg(id, { dbPath = resolveDbPath(), base = baseWorkspacePath(), out = process.stdout } = {}) {
   if (!id) throw refuse('name the org: packc store purge-org <id>');
   if (dbPath === MEMORY) throw refuse('OBSERVOGRAM_DB is :memory: — an in-memory store lives in one process; purge from the server\'s database file');
@@ -827,6 +831,10 @@ export async function purgeOrg(id, { dbPath = resolveDbPath(), base = baseWorksp
         + `${root} (one on any volume, a DFS link, one that cannot be reached) may lead under it — nothing was deleted. If it does not `
         + `lie under ${root}, delete ${root} by hand, then run purge-org again: it drops org ${id}'s records`);
     }
+    // By what deleting the root takes, not by the path's spelling (store/users-file-place.mjs): the users file a
+    // pre-store build reads, seen under the root through a mount, a link or a hard link, and a mount point under it.
+    const place = present ? usersFilePlace(usersFile || join(base, 'users.json'), root, { recorded: Boolean(usersFile), id }) : null;
+    if (place?.refusal) throw refuse(place.refusal);
     if (users?.startsWith(compared(root) + sep)) {
       throw refuse(`the recorded users file ${usersFile} lies under ${root} — move it out first; nothing was deleted`);
     }

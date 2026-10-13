@@ -1477,3 +1477,31 @@ itself. Each of the two suites also runs its
 default host once on a real directory, so a Windows run fails if the
 platform's rule is not the one chosen. Tests: 1411 → 1425
 (`server/test-store-paths.mjs` 14, new).
+
+### Follow-up: the users file by what deleting the root takes
+
+`packc store purge-org` deletes a removed org's root with `rmSync`, and it
+refused only a users file whose path lay under that root. The path is not
+where the bytes are: with the users file recorded as `/mnt/b/users.json`,
+`/mnt/b` a bind mount of the root's `sub` directory, realpath does not cross
+the mount back to its source, so the path compared as outside the root and
+purge-org deleted the file — named directly, through a file link or a
+directory link to the mount, through an NFS or SMB loopback mount, and with
+nothing recorded, a `<base>/users.json` that is a link into the root. purge-org
+now walks the root as `rmSync` takes it, never through a link, and follows the
+users file's path through every link: the users file lies under the root when
+an entry is the same file — the same device and inode (on Windows the volume
+serial's low 32 bits), or, on another device, the same size and modification
+time at the coarser clock's precision, a view of it through a network,
+overlay or FUSE mount. The refusal names every such entry, hard links
+included, and its way out is to move them out of the root. A hard link under
+the root to a users file outside it, and a copy under the root on another
+device that kept its size and time, are refused alike (declared false
+refusals). The walk also refuses a mount point under the root — on Node 22
+`rmSync` stops part-way at one, on Node 23 and later it first deletes the
+files of the filesystem mounted there — the root itself mounted, and a
+directory under the root it cannot read, where `rmSync` failed part-way; now
+nothing is deleted. A same-filesystem bind mount of a directory from outside
+the root cannot be told from a directory by `lstatSync`, and is entered as
+`rmSync` enters it. Tests: 1425 → 1434 (nine more in
+`server/test-store-ops.mjs`).
