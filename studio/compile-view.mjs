@@ -1388,10 +1388,13 @@ function renderCompiler(root) {
   // ---- Step 4: download (stays here) and deploy (goes live), kept apart ----
   const envLabel = focusedEnv() || '';
   const canDeploy = isDeployable(state.compileTarget) && activeFlavor?.deployable !== false && !activeItem?.generated;
+  // A bundle's deploy matrix is the empty one loadDeployMatrix keeps on the shim's 501 — no target deploys, none has a
+  // reason — so in the static posture the card names the missing server, not a deploy path its reader cannot configure.
   const noDeployReason = activeItem?.generated
     ? 'This generated board is not declared in the pack; declare it in spec.dashboards[] to deploy and verify it.'
     : (state.deployMatrix?.targets?.[state.compileTarget]?.reason
-      || (activeFlavor?.deployable === false ? 'This format is not deployable from the studio; hand the file to its platform.' : 'No deploy path is configured for this target.'));
+      || (activeFlavor?.deployable === false ? 'This format is not deployable from the studio; hand the file to its platform.'
+        : isStatic() ? serverNeeded('Deploy', state.brand.chrome.name) : 'No deploy path is configured for this target.'));
   const outStep = document.createElement('div');
   outStep.className = 'ux-rm-compiler-step';
   outStep.innerHTML = `

@@ -1458,6 +1458,21 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     await clickExplains(page, sel);
     await ctx.close();
   }
+  // Remediate's artefact compiler: a bundle's deploy matrix (the shim's 501) deploys no target, so the compiler draws no
+  // #deploy-compiled and its Deploy to live card, unavailable, gives the reason — the server it needs, not a deploy path
+  // its reader cannot configure.
+  {
+    const { page, ctx } = await open(base, { selectedPackId: 'payment-service', view: 'compile' });
+    await page.waitForSelector('[data-ux-action="rm-compiler-open"]', { timeout: T });
+    await page.click('[data-ux-action="rm-compiler-open"]');
+    await page.waitForSelector('.ux-rm-output.is-live', { timeout: T });
+    const card = await page.evaluate(() => {
+      const el = document.querySelector('.ux-rm-output.is-live');
+      return { unavailable: el.classList.contains('is-unavailable'), note: el.querySelector('.ux-rm-output-note')?.textContent ?? null, button: !!document.querySelector('#deploy-compiled') };
+    });
+    assert.deepEqual(card, { unavailable: true, note: `Not deployable from the studio: ${DEPLOY}`, button: false }, 'the compiler\'s Deploy to live names the server it needs');
+    await ctx.close();
+  }
   // Row 18 with the live pack as Pack A and no Pack B: the bundle's one live pack is Pack A, so the decision's note says
   // it carries no other — never that it carries none.
   {
