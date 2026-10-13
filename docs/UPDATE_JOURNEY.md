@@ -1424,5 +1424,5 @@ pattern within about one tick (15.6 ms) of the budget can still be refused,
 as the wall clock alone refused it: three ticks read the same for its passes
 as for a pass over the budget. The studio compiles the taxonomy the server served
 without timing it, so a slow phone binds what the server accepted. Tests:
-1390 → 1394 (three in `tools/test-artefact-classify.mjs`, one in
+1401 → 1405 (three in `tools/test-artefact-classify.mjs`, one in
 `tools/test-discover-rows.mjs`).
