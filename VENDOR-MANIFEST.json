@@ -124,8 +124,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/audit-report.mjs": {
-      "sha256": "095ab15152f19cccb7060da8445e5a3502710771acc8be76935b02ba87720f93",
-      "bytes": 39301,
+      "sha256": "efb18dbba671b95e8b8c866e593bb1e7574d883bafccc7d2306c0192c581bbdb",
+      "bytes": 39236,
       "exports": [
         "AUDIT_REPORT_VERSION",
         "CLAUSE_FAMILIES",

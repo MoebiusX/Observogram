@@ -14,8 +14,8 @@
 // pack) and a library-built pack registered through POST /api/validate, so
 // onPlaceholder is compared too; export.zip headers and entry names · T6 the
 // denial table · T7 the REAL bundle booted in headless Chromium against the
-// fixture pack, the Export download and the audit-report anchor's 501 sentence
-// asserted · T4b inert by default: a build
+// fixture pack, the Export download and the audit-report anchor's download
+// (the report built in the page) asserted · T4b inert by default: a build
 // with nothing baked is the build of the same tree with --taxonomy/--brand
 // unset, byte for byte (config-vs-no-config identity on the same tree — the
 // shim's source changed, so no cross-tree claim) · T8 a --taxonomy bundle
@@ -190,10 +190,10 @@ test('T1 collectModuleGraph: every module under studio/ or lib/, the dynamic /li
   // literal specifier each (a const would not be collected and the panel would stay off).
   assert.deepEqual(graph.get('studio/brand.mjs').imports.map((i) => i.spec).filter((sp) => sp.startsWith('/lib/')), ['/lib/brand.mjs'], 'studio/brand.mjs → /lib/brand.mjs');
   assert.deepEqual(graph.get('studio/remediation-flow-view.mjs').imports.map((i) => i.spec).filter((sp) => sp.startsWith('/lib/')), ['/lib/remediation-flow.mjs'], 'studio/remediation-flow-view.mjs → /lib/remediation-flow.mjs (B3.3: the response path renders in the bundle)');
-  // The shim's Compare and retrofeed engines: literal dynamic imports, so they are in its imports and in the graph —
+  // The shim's Compare, retrofeed and audit-report engines: literal dynamic imports, so they are in its imports and in the graph —
   // and through the traceability graph the PromQL parser's package is the graph's one package root.
   const shimImports = graph.get('studio/static-backend.mjs').imports.map((i) => i.key);
-  for (const k of ['lib/diff.mjs', 'lib/traceability-graph.mjs', 'lib/retrofeed.mjs']) assert.ok(shimImports.includes(k) && graph.has(k), `the shim imports ${k} (a literal import())`);
+  for (const k of ['lib/diff.mjs', 'lib/traceability-graph.mjs', 'lib/retrofeed.mjs', 'lib/audit-report.mjs']) assert.ok(shimImports.includes(k) && graph.has(k), `the shim imports ${k} (a literal import())`);
   assert.deepEqual([...graph.packages], ['@prometheus-io/lezer-promql'], 'the bundle\'s graph reaches one package, through tools/lib/promql-lezer.mjs');
   assert.deepEqual([...closure.keys()], ['@lezer/common', '@lezer/highlight', '@lezer/lr', '@prometheus-io/lezer-promql'], 'and its closure the four');
   for (const [k, mod] of graph) {
@@ -532,14 +532,18 @@ test('T3c every feature the shim denies is named in the README 501 list and the 
     assert.ok(re, `${name} (${prefix}) has a documented spelling`);
     for (const [doc, text] of [['README 501 list', list], ['DOWNSTREAM §10 denial cell', cell]]) assert.match(text, re, `${name} (${prefix}) is named in the ${doc}`);
   }
-  // What the shim answers is named as denied in neither list (follow-up compare-in-bundle): Compare and retrofeed are
-  // computed in the browser — retrofeed the one non-GET answered — and the DOWNSTREAM row's answered cell names both.
+  // What the shim answers is named as denied in neither list (follow-up compare-in-bundle): Compare, retrofeed and the
+  // audit report are computed in the browser — retrofeed the one non-GET answered — and the DOWNSTREAM row's answered
+  // cell names all three.
   assert.ok(!/retrofeed/i.test(list), 'the README 501 list does not name retrofeed');
   assert.ok(!/\bCompare\b/.test(list) && !list.includes('/api/diff'), 'the README 501 list does not name Compare');
   assert.ok(!/\bCompare\b/.test(cell) && !cell.includes('/api/diff'), 'the DOWNSTREAM denial cell does not name Compare');
   assert.ok(row.slice(0, row.indexOf('every other `/api` or `/auth` path')).includes('`GET /api/diff`'), 'the DOWNSTREAM answered cell names Compare\'s route');
   assert.ok(!/Compare \([^)]*retrofeed/.test(cell) && cell.startsWith('every other `/api` or `/auth` path and every non-GET but retrofeed:'), 'the DOWNSTREAM denial cell: every non-GET but retrofeed');
   assert.ok(row.slice(0, row.indexOf('every other `/api` or `/auth` path')).includes('`POST /api/packs/:id/retrofeed`'), 'the DOWNSTREAM answered cell names retrofeed');
+  assert.ok(!/audit report/i.test(list) && !list.includes('/audit-report'), 'the README 501 list does not name the audit report');
+  assert.ok(!/Audit report \(/.test(cell) && !cell.includes('/audit-report'), 'the DOWNSTREAM denial cell does not name the audit report');
+  assert.ok(row.slice(0, row.indexOf('every other `/api` or `/auth` path')).includes('`GET /api/packs/:id/audit-report`'), 'the DOWNSTREAM answered cell names the audit report\'s route');
   // The two slice 6a routes beside their names in DOWNSTREAM, as every other route there.
   assert.match(cell, /Services \(`\/api\/services`, `\/api\/services\/:id`/);
   assert.match(cell, /Organisations \(`\/api\/orgs`/);
@@ -826,7 +830,7 @@ test('T5 parity: the shim answers every ported route as a running server does �
 
 // ---------- T6 denial ----------
 
-test('T6 denial: the server-only routes answer 501 Not Implemented, denied no-backend, naming the feature; Compare answered, and retrofeed (the one non-GET); unknown pack 404 Not Found; other origins and non-API paths pass to the page', async () => {
+test('T6 denial: the server-only routes answer 501 Not Implemented, denied no-backend, naming the feature; Compare answered, retrofeed (the one non-GET) and the audit report; unknown pack 404 Not Found; other origins and non-API paths pass to the page', async () => {
   let upstreamCalls = [];
   const fetchImpl = async (input, init) => { upstreamCalls.push([String(input), init]); return new Response('ok', { status: 200 }); };
   const backend = createStaticBackend({ version: '1.2.3', schema, packs: [{ id: 'p', label: 'P', canonical: paymentCanonical }] }, { fetchImpl, origin: 'https://studio.example' });
@@ -881,8 +885,23 @@ test('T6 denial: the server-only routes answer 501 Not Implemented, denied no-ba
   await expectDenied('/api/packs/p/deploy-bulk', { method: 'POST' }, 'Deploy');
   await expectDenied('/api/packs/p/verdicts/SLI-01', { method: 'PUT' }, 'Verdicts');
   await expectDenied('/api/packs/p/verdicts/SLI-01', { method: 'DELETE' }, 'Verdicts');
-  await expectDenied('/api/packs/p/audit-report', undefined, 'Audit report');
-  await expectDenied('/api/packs/p/audit-report?format=html', undefined, 'Audit report');
+  // The audit report is answered (tools/test-bundle-compare.mjs C5 holds it to the server's answers, its declared
+  // fields aside): JSON by default, no-store on the report; a non-GET there is 'This action', as on the server.
+  const report = await backend.handle('/api/packs/p/audit-report?download=1');
+  assert.equal(report.status, 200);
+  assert.equal(report.statusText, 'OK');
+  assert.equal(report.headers.get('content-type'), 'application/json; charset=utf-8');
+  assert.equal(report.headers.get('cache-control'), 'no-store');
+  assert.equal(report.headers.get('content-disposition'), 'attachment; filename="p.audit-report.json"');
+  const reportBody = await report.json();
+  assert.deepEqual(reportBody.generator, { name: 'Observogram static bundle', version: '1.2.3' });
+  assert.deepEqual([reportBody.pack.source, reportBody.assessments.available, reportBody.waivers.available, reportBody.goesBlind.available], ['bundle', false, false, true], 'no store: not recorded by this build; the graph computed');
+  const badTop = await backend.handle('/api/packs/p/audit-report?top=0');
+  assert.equal(badTop.status, 400);
+  assert.equal(badTop.statusText, 'Bad Request');
+  assert.equal(badTop.headers.get('cache-control'), null, 'the refusals carry no Cache-Control, as on the server');
+  assert.deepEqual(await badTop.json(), { error: 'top must be an integer from 1 to 100' });
+  await expectDenied('/api/packs/p/audit-report', { method: 'POST' }, 'This action');
   await expectDenied('/api/services/1/waivers', undefined, 'Waivers');
   await expectDenied('/api/services/1/waivers', { method: 'POST' }, 'Waivers');
   await expectDenied('/api/waivers/7/revoke', { method: 'POST' }, 'Waivers');
@@ -921,7 +940,7 @@ test('T6 denial: the server-only routes answer 501 Not Implemented, denied no-ba
   assert.equal(featureOf('/api/diff'), 'This action', 'Compare is answered; no feature is denied there');
   assert.equal(featureOf('/api/packs/x/verdicts/SLI-01'), 'Verdicts');
   assert.equal(featureOf('/api/packs/x/verdicts'), 'Verdicts', 'the feature name; the GET itself is answered before the denial');
-  assert.equal(featureOf('/api/packs/x/audit-report?format=html'), 'Audit report');
+  assert.equal(featureOf('/api/packs/x/audit-report?format=html'), 'This action', 'the audit report is answered; no feature is denied there');
   assert.equal(featureOf('/api/services/x/waivers'), 'Waivers', 'the service record route, not a /api/services prefix');
   assert.equal(featureOf('/api/services/x'), 'Services');
   assert.equal(featureOf('/api/orgs'), 'Organisations');
@@ -1002,7 +1021,7 @@ async function loadPlaywright() {
   catch (e) { return { error: `cannot import ${spec}: ${e.message.split('\n')[0]}` }; }
 }
 
-test('T7 the REAL bundle boots in headless Chromium against the fixture pack: the notice, the open posture, the pack opened, 501 for a live feature, the Export download, the audit-report anchor answered with the 501 sentence, the Settings banner the same sentence, no page error, no request off the loopback', async (t) => {
+test('T7 the REAL bundle boots in headless Chromium against the fixture pack: the notice, the open posture, the pack opened, 501 for a live feature, the Export download, the audit-report anchor\'s download built in the page, the Settings banner the 501 sentence, no page error, no request off the loopback', async (t) => {
   const required = process.env.OBSERVOGRAM_BUNDLE_SMOKE === 'require';
   const skip = (why) => { if (required) assert.fail(`OBSERVOGRAM_BUNDLE_SMOKE=require: ${why}`); t.skip(why); };
   const { pw, error } = await loadPlaywright();
@@ -1099,16 +1118,20 @@ test('T7 the REAL bundle boots in headless Chromium against the fixture pack: th
   assert.ok(names.some((n) => n.startsWith('artefacts/')));
   // The Conformance view's audit-report anchors: an `<a download>` navigation
   // never reaches a fetch wrapper, so the shim's click handler answers it —
-  // the 501 sentence in the notice row, no navigation, no request to the
+  // the report built in the page and saved as a Blob under the server's file
+  // name, its goes-blind section computed, no navigation, no request to the
   // static host (which would 404 and cancel the download without a word).
+  // tools/test-bundle-compare.mjs C5 holds the report to a server's.
   await page.click('.observa-adv-toggle');
   await page.click('.observa-adv-item[data-view="conformance"]');
   await page.waitForSelector('.conf-exports a[download]', { timeout: 30_000 });
   assert.match(await page.getAttribute('.conf-exports a[download]', 'href'), /^\/api\/packs\/payment-service\/audit-report\?format=html/);
-  await page.click('.conf-exports a[download]');
-  await page.waitForFunction(() => /^Audit report needs the Observogram server/.test(document.querySelector('.no-backend-notice-text')?.textContent || ''), null, { timeout: 10_000 });
-  assert.equal(await page.textContent('.no-backend-notice-text'), 'Audit report needs the Observogram server; this studio is a static bundle built without one.');
-  assert.equal(await page.$('.no-backend-notice.is-error') !== null, true, 'the notice row carries the error');
+  const [report] = await Promise.all([page.waitForEvent('download', { timeout: 30_000 }), page.click('.conf-exports a[download]')]);
+  assert.equal(report.suggestedFilename(), 'payment-service.audit-report.html');
+  const reportHtml = readFileSync(await report.path(), 'utf8');
+  assert.ok(reportHtml.startsWith('<!doctype html>') && reportHtml.includes('<meta name="generator" content="Observogram static bundle '), 'the report, from this build');
+  assert.ok(reportHtml.includes('6. Goes-blind risks') && !reportHtml.includes('Not computed by this build'), 'the goes-blind section computed in the page');
+  assert.ok(reportHtml.includes('Not recorded by this build'), 'no store: verdicts and waivers say so');
   assert.equal(page.url(), `${base}/`, 'no navigation');
   assert.deepEqual(served.filter((u) => u.includes('/api/')), [], 'the anchor never reached the static host');
   // Dismiss the notice; it stays dismissed on reload (localStorage).

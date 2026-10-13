@@ -1939,15 +1939,20 @@ code), the packs' canonical manifests and the spec schema inlined as JSON, and
 the pack routes in the browser from the same `tools/lib` engines the
 server runs — the catalogue, Discover, Diagnose (conformance), the canonical
 manifest, Compile (the catalogue, every artefact, every target), **Export**
-(the ZIP, downloaded as a Blob) and **Compare** (`GET /api/diff` with its
-traceability graph, and the repository update from live) — so the verdicts are the server's
+(the ZIP, downloaded as a Blob), **Compare** (`GET /api/diff` with its
+traceability graph, and the repository update from live) and the **Audit
+report** (`GET /api/packs/:id/audit-report`, JSON or HTML with the bundle's
+brand, its goes-blind section computed; the Conformance view's anchors
+download it as a Blob; a bundle has no store, so its verdicts and waivers
+sections read "not recorded by this build") — so the verdicts are the server's
 (`tools/test-studio-bundle.mjs` compares every ported route against a running
-server, `tools/test-bundle-compare.mjs` the diff and retrofeed body for body;
+server, `tools/test-bundle-compare.mjs` the diff, retrofeed and the audit
+report body for body, the report's declared fields aside;
 `GET /api/packs/:id/verdicts` answers the empty document — a
 bundled pack is never registered, so that IS the server's answer). Everything
 the server alone can do — Scan a repo, Draft from MCP, Refresh from MCP,
 Testing an MCP connection, Building a pack from a live MCP server, uploads, Deploy, Journeys, Build, recording a Verdict, Waivers (they
-live on a service record, which a bundled pack has none of), the Audit report,
+live on a service record, which a bundled pack has none of),
 Services (the records behind the home's cards and the service page — a bundle
 has no services table), Organisations (the active org's name and role),
 Settings (members, environments, MCP endpoints, the audit — a bundle has no org),

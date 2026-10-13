@@ -460,8 +460,9 @@ export function renderConformanceView() {
   // Audit Report"): the server's GET /api/packs/:id/audit-report as a
   // download, HTML and JSON, for the focused pack and environment, org-scoped
   // like every navigation (orgQuery). In the static bundle the shim's click
-  // handler answers the anchors (a navigation never reaches a fetch wrapper)
-  // and shows its 501 sentence in the notice row; nothing is hidden.
+  // handler answers the anchors (a navigation never reaches a fetch wrapper):
+  // it builds the report in the browser and saves it as a Blob download under
+  // the server's file name; nothing is hidden.
   const packId = focusedPackId();
   const env = c.environment || focusedEnv() || '';
   const reportHref = (format) => `/api/packs/${encodeURIComponent(packId)}/audit-report?format=${format}&download=1${env ? `&env=${encodeURIComponent(env)}` : ''}${orgQuery('&')}`;

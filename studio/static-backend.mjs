@@ -6,16 +6,18 @@
 // Observogram server behind the page. This module answers the pack routes
 // the studio calls — the catalogue, the layered pack, the canonical
 // manifest, conformance, the compile catalogue and every compiled artefact,
-// the export ZIP — and the two computations Compare makes: the diff (GET
-// /api/diff, with its traceability graph) and retrofeed (POST
-// /api/packs/:id/retrofeed: the repository update from live, written
-// nowhere). Each is computed from the same tools/lib engines the server uses
-// (server/index.mjs is the reference: each port names the handler it
-// mirrors), over the packs the bundle carries. Everything else the server
-// alone can do (uploads, scans, live MCP drafts, Deploy, Journeys, Build,
-// sign-in) answers 501 with `denied: 'no-backend'` and a sentence that names
-// the feature — studio/api.mjs shows a `denied` body verbatim — and a fixed
-// notice at the bottom of the window says so once.
+// the export ZIP — and the three computations Compare, retrofeed and the
+// audit report make: the diff (GET /api/diff, with its traceability graph),
+// retrofeed (POST /api/packs/:id/retrofeed: the repository update from live,
+// written nowhere) and the service audit report (GET
+// /api/packs/:id/audit-report, JSON or HTML, with its goes-blind section).
+// Each is computed from the same tools/lib engines the server uses
+// (server/index.mjs and server/routes/ are the reference: each port names the
+// handler it mirrors), over the packs the bundle carries. Everything else the
+// server alone can do (uploads, scans, live MCP drafts, Deploy, Journeys,
+// Build, sign-in) answers 501 with `denied: 'no-backend'` and a sentence that
+// names the feature — studio/api.mjs shows a `denied` body verbatim — and a
+// fixed notice at the bottom of the window says so once.
 //
 // Compare's engines load at its first call, through literal dynamic imports
 // (so the builder's tokenizer puts them in the bundle's graph and the boot
@@ -44,10 +46,25 @@
 // The diff is the server's retrofeed diff — no traceability graph, no
 // annotation fallback for scopeMode — over engines loaded at the first call
 // as Compare's are; the clock that stamps observogram.retrofeed.adoptedAt is
-// the `clock` option. A computing route answers 500 when the bundle bakes a
-// taxonomy the classifier does not hold (the studio's bind failed in this
-// browser): an answer classified by the default families would not be the
-// server's.
+// the `clock` option.
+//
+// The audit report is server/routes/audit-report.mjs's, ported: its
+// conformance section is this module's /conformance body for the same
+// environment (one function answers both, so the two cannot grade one pack
+// differently), its goes-blind section the traceability graph's shape (the
+// engines loaded at the first call, as Compare's are), its HTML the brand
+// the shell was built with over the bundle's own design-tokens.css and
+// design-kit.css (bundleStyles, read from the page at the first HTML
+// request). A bundle has no store, so `assessments` and `waivers` are
+// `available: false` — "not recorded by this build" — where a server answers
+// its store's rows; the generator is '<product> static bundle', `pack.source`
+// the config's ('bundle' for a pack built in, 'url' for a --pack-url one),
+// and the clock is the `clock` option. Cache-Control: no-store on the report
+// only, as the server's code sets it (its refusals carry none).
+//
+// A computing route answers 500 when the bundle bakes a taxonomy the
+// classifier does not hold (the studio's bind failed in this browser): an
+// answer classified by the default families would not be the server's.
 //
 // Imported by NOTHING in the live studio: the bundle alone instantiates it,
 // before studio/app.mjs boots. The live Express server serves this file
@@ -67,10 +84,12 @@
 // always false (no studio server to pass settings through), plus the baked
 // MCP origin list (`config.mcpOrigins`, --mcp-origins) when there is one —
 // the origins the Server settings modal may send settings to from a page
-// that is not on the MCP server's machine. The product name in the notices comes from the shell's
+// that is not on the MCP server's machine. The brand comes from the shell's
 // #brand-config (written by --brand, the script studio/brand.mjs reads for
-// the header), the default being DEFAULT_BRAND.name — so this file spells
-// the product nowhere and the chrome and the notices agree by construction.
+// the header), the default being DEFAULT_BRAND — its name in the notices, the
+// denials and the audit report's generator, all of it on the report's HTML —
+// so this file spells the product nowhere and the chrome, the notices and the
+// report agree by construction.
 //
 // Guards this file is written against (server/test-authz.mjs scans every
 // studio module): it never spells a fetch call — the page's fetch is
@@ -127,13 +146,12 @@ export const FEATURES = [
 // — matched before the prefixes so it keeps its own name under the
 // '/api/services' prefix (follow-up `B3.2-bundle-waivers` for a baked sidecar).
 const SERVICE_WAIVERS = /^\/api\/services\/[^/]+\/waivers(?:[/?]|$)/;
-// The per-pack sub-routes the server alone answers — `verdicts` for its
-// writes (PUT / DELETE; the GET is answered below with the empty document)
-// and `audit-report` (GAP batch 2, B3.5: not ported to this shim;
-// `placeholders` IS answered below). A POST to `retrofeed` is answered
-// below; any other method there is 'This action' (the server has no other
-// route there either).
-const PACK_FEATURES = { 'deploy-bulk': 'Deploy', verdicts: 'Verdicts', 'audit-report': 'Audit report' };
+// The per-pack sub-routes the server alone answers — `deploy-bulk`, and
+// `verdicts` for its writes (PUT / DELETE; the GET is answered below with the
+// empty document). `placeholders` and `audit-report` (GAP batch 2, B3.5) are
+// answered below for a GET, and a POST to `retrofeed`; any other method
+// there is 'This action' (the server has no other route there either).
+const PACK_FEATURES = { 'deploy-bulk': 'Deploy', verdicts: 'Verdicts' };
 
 export function featureOf(pathname) {
   const sub = /^\/api\/packs\/[^/]+\/([^/?]+)/.exec(pathname)?.[1];
@@ -162,6 +180,22 @@ export function noticeText(n, product = DEFAULT_BRAND.name) {
 // The Advanced menu's API item sub text (disableApiMenuItem).
 export function apiMenuSubText(product = DEFAULT_BRAND.name) {
   return `needs the ${product} server · this studio is a static bundle`;
+}
+
+// The audit report's stylesheet, byte for byte the server's
+// (server/index.mjs: design-tokens.css, a newline, design-kit.css): each
+// sheet's text as the bundle inlined it — `textOf(name)`, the textContent of
+// its <style data-src="<name>"> — less the one leading and one trailing
+// newline tools/build-studio-bundle.mjs styleBlock wraps it in. A sheet the
+// page does not carry throws, so the route answers 500 rather than an
+// unstyled report.
+export const REPORT_STYLESHEETS = ['design-tokens.css', 'design-kit.css'];
+export function bundleStyles(textOf) {
+  return REPORT_STYLESHEETS.map((name) => {
+    const text = textOf(name);
+    if (typeof text !== 'string') throw new Error(`the bundle's design kit is missing (${name})`);
+    return text.replace(/^\n/, '').replace(/\n$/, '');
+  }).join('\n');
 }
 
 // ---------- ports of server/index.mjs ----------
@@ -360,20 +394,25 @@ function parsePackText(text, url) {
 
 // ---------- the backend ----------
 
-// config: { version, schema, packs: [{ id, label, description?, canonical } | { id, label, description?, url }], taxonomy?, mcpSettingsPolicy?, mcpOrigins? }
+// config: { version, schema, packs: [{ id, label, description?, source?, canonical } | { id, label, description?, url }], taxonomy?, mcpSettingsPolicy?, mcpOrigins? }
 // fetchImpl: the page's own fetch, for the pack URLs (never for the routes).
 // origin: the page's origin; an absolute request to another origin is not ours.
-// product: the name the denials spell (installStaticBackend reads it from #brand-config).
-// clock: the time retrofeed stamps (observogram.retrofeed.adoptedAt) — an option so a test can pin it.
-// importDiffEngines, importRetrofeedEngines: load the engines at Compare's and retrofeed's first call — literal
-// specifiers, in code (a comment or a const is not collected), so the builder's tokenizer puts them in the graph and
-// the parser's packages in the import map; each option is a test seam, as compareIdentityEngine({ importFn }) is
-// (studio/compare-identity.mjs).
+// brand: the normalised brand the audit report's HTML is branded with (installStaticBackend reads it from
+// #brand-config); product: the name the denials and the report's generator spell, the brand's by default.
+// styles: the audit report's stylesheet — a string, or a function read at the first HTML request (bundleStyles over
+// the page's inlined sheets, from installStaticBackend).
+// clock: the time retrofeed stamps (observogram.retrofeed.adoptedAt) and the audit report's generatedAt — an option
+// so a test can pin it.
+// importDiffEngines, importRetrofeedEngines, importAuditEngines: load the engines at Compare's, retrofeed's and the
+// audit report's first call — literal specifiers, in code (a comment or a const is not collected), so the builder's
+// tokenizer puts them in the graph and the parser's packages in the import map; each option is a test seam, as
+// compareIdentityEngine({ importFn }) is (studio/compare-identity.mjs).
 export function createStaticBackend(config, {
-  fetchImpl, origin = 'http://static-studio.invalid', product = DEFAULT_BRAND.name,
+  fetchImpl, origin = 'http://static-studio.invalid', brand = DEFAULT_BRAND, product = brand.name, styles = '',
   clock = () => new Date().toISOString(),
   importDiffEngines = () => Promise.all([import('../tools/lib/diff.mjs'), import('../tools/lib/traceability-graph.mjs')]),
   importRetrofeedEngines = () => Promise.all([import('../tools/lib/diff.mjs'), import('../tools/lib/retrofeed.mjs')]),
+  importAuditEngines = () => Promise.all([import('../tools/lib/audit-report.mjs'), import('../tools/lib/traceability-graph.mjs')]),
 } = {}) {
   const schema = config?.schema;
   const version = typeof config?.version === 'string' ? config.version : '0.0.0';
@@ -396,6 +435,11 @@ export function createStaticBackend(config, {
   // The engines, each set loaded once; a failed import is not kept, so the next call retries.
   let diffEngines = null;
   let retrofeedEngines = null;
+  let auditEngines = null;
+  // The audit report's stylesheet, read once at the first HTML request (server/routes/audit-report.mjs stylesOnce);
+  // a read that throws is not kept.
+  let stylesText = null;
+  const stylesOnce = () => (stylesText ??= (typeof styles === 'function' ? styles() : String(styles || '')));
 
   // The baked taxonomy must be the one the classifier holds, or the answer is
   // not the one a server with that taxonomy gives: a computing route answers
@@ -513,24 +557,31 @@ export function createStaticBackend(config, {
     }
   }
 
-  // GET /api/packs/:id/conformance — onPlaceholder only when the pack can say.
+  // server/index.mjs conformanceReportFor: the /conformance body — the one
+  // builder, read by GET /api/packs/:id/conformance and by the audit report,
+  // so the two cannot grade one pack differently. onPlaceholder only when the
+  // pack can say. A bundled pack has no service record (STORE_PLAN slice 4
+  // §9 grades an uploaded pack at its service row's tier) and no waivers, so
+  // the report is the engine's and the server's `tier` object is the pack's
+  // own: graded === declaredTier, from 'pack', no service or environment, no
+  // mismatch.
+  function conformanceReportFor(canonical, env) {
+    const { canonical: overlaid } = overlaidCanonical(canonical, env);
+    const report = evaluateConformance(overlaid);
+    const onPlaceholder = librarySummaryFor(overlaid)?.onPlaceholder;
+    const packTier = overlaid.metadata?.bindings?.criticality ?? 'tier-3';
+    return {
+      environment: env, ...report, ...(Array.isArray(onPlaceholder) ? { onPlaceholder } : {}),
+      tier: { graded: report.declaredTier, pack: packTier, from: 'pack', service: null, environment: null, mismatch: false },
+    };
+  }
+
+  // GET /api/packs/:id/conformance
   async function conformance(id, params) {
     const p = await packFor(id);
     if (p instanceof Response) return p;
     try {
-      const env = readEnv(params);
-      const { canonical: overlaid } = overlaidCanonical(p.canonical, env);
-      const report = evaluateConformance(overlaid);
-      const onPlaceholder = librarySummaryFor(overlaid)?.onPlaceholder;
-      // A bundled pack has no service record (STORE_PLAN slice 4 §9 grades
-      // an uploaded pack at its service row's tier), so the server's `tier`
-      // object is the pack's own: graded === declaredTier, from 'pack', no
-      // service or environment, no mismatch.
-      const packTier = overlaid.metadata?.bindings?.criticality ?? 'tier-3';
-      return json(200, {
-        environment: env, ...report, ...(Array.isArray(onPlaceholder) ? { onPlaceholder } : {}),
-        tier: { graded: report.declaredTier, pack: packTier, from: 'pack', service: null, environment: null, mismatch: false },
-      });
+      return json(200, conformanceReportFor(p.canonical, readEnv(params)));
     } catch (e) {
       return json(500, { error: e.message });
     }
@@ -664,6 +715,71 @@ export function createStaticBackend(config, {
     }
   }
 
+  // GET /api/packs/:id/audit-report — server/routes/audit-report.mjs's
+  // handler: the 404; `format` one of json, html (absent or repeated: json —
+  // the server reads a string only), else the 400; `top` absent → the
+  // default, else one value of digits from 1 to the maximum (a repeated key
+  // is the server's '' → the 400); the report over this module's /conformance
+  // body for the env, the graph's shape, no store (verdicts and waivers null:
+  // "not recorded by this build"); Cache-Control: no-store on the report only
+  // (the server's refusals carry none); download=1 → the server's
+  // Content-Disposition; html → the report rendered with the brand over the
+  // bundle's design kit. The engines load before the query is read (the
+  // constants are theirs), so an import that fails is a 500 with its message,
+  // retried at the next call.
+  async function auditReport(id, params) {
+    const p = await findPack(id);
+    if (!p) return unknownPack(id);
+    let engines;
+    try {
+      engines = await (auditEngines ??= importAuditEngines());
+    } catch (e) {
+      auditEngines = null;                              // a failed import is retried at the next call
+      return json(500, { error: e.message });
+    }
+    const [{ buildAuditReport, renderAuditReportHtml, auditReportFilename, DEFAULT_RISK_TOP, RISK_TOP_MAX }, { buildDependencyGraph, graphShape }] = engines;
+    const format = one(params, 'format') ?? 'json';
+    if (format !== 'json' && format !== 'html') return json(400, { error: 'format must be one of json, html' });
+    let top = DEFAULT_RISK_TOP;
+    if (params.has('top')) {
+      const raw = one(params, 'top') ?? '';
+      top = /^\d+$/.test(raw) ? Number(raw) : NaN;
+      if (!Number.isInteger(top) || top < 1 || top > RISK_TOP_MAX) return json(400, { error: `top must be an integer from 1 to ${RISK_TOP_MAX}` });
+    }
+    const refused = taxonomyRefusal();
+    if (refused) return refused;
+    try {
+      if (p.error) throw p.error;                       // a --pack-url that failed to load: 500, its message
+      const env = readEnv(params);
+      const now = clock();
+      const conformance = conformanceReportFor(p.canonical, env);
+      const { canonical: overlaid } = overlaidCanonical(p.canonical, env);
+      const adapted = adapt(overlaid);
+      const report = buildAuditReport({
+        pack: { id: p.meta.id, label: p.meta.label ?? null, source: p.meta.source ?? (p.meta.url ? 'url' : 'bundle') },
+        canonical: overlaid,
+        adapted,
+        conformance,
+        graph: graphShape(buildDependencyGraph(adapted)),
+        verdicts: null,
+        waivers: null,
+        environment: env,
+        generatedAt: now,
+        generator: { name: `${product} static bundle`, version },
+        top,
+      });
+      const headers = { 'Cache-Control': 'no-store' };
+      if (one(params, 'download') === '1') headers['Content-Disposition'] = `attachment; filename="${auditReportFilename(p.meta.id, format)}"`;
+      if (format === 'html') {
+        const html = renderAuditReportHtml(report, { brand, styles: stylesOnce() });
+        return new Response(html, { status: 200, statusText: STATUS_TEXT[200], headers: { 'Content-Type': 'text/html; charset=utf-8', ...headers } });
+      }
+      return json(200, report, headers);
+    } catch (e) {
+      return json(500, { error: e.message });
+    }
+  }
+
   // GET /api/diff — server/index.mjs's handler, line for line: `a` and `b`
   // each one non-empty value (a repeated key is absent: the 400); both packs
   // looked up, A's 404 answered before B's; aEnv / bEnv a non-empty value or
@@ -775,6 +891,7 @@ export function createStaticBackend(config, {
       if (rest === 'conformance') return conformance(id, url.searchParams);
       if (rest === 'verdicts') return verdicts(id);
       if (rest === 'placeholders') return placeholders(id, url.searchParams);
+      if (rest === 'audit-report') return auditReport(id, url.searchParams);
       if (rest === 'compile-catalog') return catalogOfCompile(id, url.searchParams);
       if (rest === 'compile-artifact') return artifact(id, url.searchParams);
       if (rest === 'export.zip') return exportZip(id, url.searchParams);
@@ -821,19 +938,23 @@ export function createStaticBackend(config, {
 // navigate to /api/packs, are disabled (a navigation never reaches a fetch
 // wrapper); the Export button downloads the ZIP this backend builds; a
 // download anchor on one of our routes (the Conformance view's audit-report
-// anchors) is answered by this backend too — a denial shows its sentence in
-// the notice row instead of a canceled download; the notice says what the
-// page is.
+// anchors) is answered by this backend too — the report downloads as a Blob,
+// and a denial or a refusal shows its sentence in the notice row instead of a
+// canceled download; the notice says what the page is.
 export function installStaticBackend(config, win = globalThis.window) {
   const upstream = win.fetch.bind(win);
   const origin = win.location.origin;
   const doc = win.document;
-  // The product: the #brand-config a --brand build wrote into the shell (the
+  // The brand: the #brand-config a --brand build wrote into the shell (the
   // same script studio/brand.mjs reads for the header); an unbranded shell
-  // has none, a malformed one is no brand — the default name either way.
-  let product = DEFAULT_BRAND.name;
-  try { product = normalizeBrand(readBrandConfig(doc)).name; } catch { /* a malformed #brand-config is no brand */ }
-  const backend = createStaticBackend(config, { fetchImpl: upstream, origin, product });
+  // has none, a malformed one is no brand — the default brand either way. Its
+  // name is the product the denials spell; the audit report's HTML wears it
+  // all, over the design kit this page inlined.
+  let brand = DEFAULT_BRAND;
+  try { brand = normalizeBrand(readBrandConfig(doc)); } catch { /* a malformed #brand-config is no brand */ }
+  const product = brand.name;
+  const styles = () => bundleStyles((name) => doc.querySelector(`style[data-src="${name}"]`)?.textContent);
+  const backend = createStaticBackend(config, { fetchImpl: upstream, origin, brand, product, styles });
   win.fetch = (input, init) => backend.handle(input, init) ?? upstream(input, init);
 
   const whenReady = (fn) => (doc.readyState === 'loading' ? doc.addEventListener('DOMContentLoaded', fn, { once: true }) : fn());
@@ -871,9 +992,10 @@ export function installStaticBackend(config, win = globalThis.window) {
 
 // An `<a download>` on one of our routes: the browser would fetch the href
 // itself — a static host answers 404 and the download is canceled with no
-// sentence — so the click is answered here. A denial (501 no-backend, 404)
-// shows the body's sentence in the notice row; an answer downloads as a Blob
-// named by the server's rule, as the Export button does.
+// sentence — so the click is answered here. A refusal (501 no-backend, 400,
+// 404, 500) shows the body's sentence in the notice row; an answer (the audit
+// report) downloads as a Blob named by the server's rule, as the Export
+// button does.
 async function downloadThroughBackend(backend, doc, win, href) {
   const r = await backend.handle(href);
   if (!r) throw new Error('no answer');

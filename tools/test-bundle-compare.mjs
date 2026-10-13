@@ -123,11 +123,13 @@ import {
   collectBundledPackages, collectModuleGraph, sourceUrlOf, packageNameOf, buildStudioBundle,
 } from './build-studio-bundle.mjs';
 import { childEnv, serve } from '../server/fixtures/serve-child.mjs';
-import { createStaticBackend } from '../studio/static-backend.mjs';
+import { createStaticBackend, bundleStyles } from '../studio/static-backend.mjs';
 import { viewDiffFor } from '../studio/compare-identity.mjs';
 import { bindTaxonomy } from '../studio/taxonomy.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { adapt } from './lib/adapter.mjs';
+import { renderAuditReportHtml } from './lib/audit-report.mjs';
+import { DEFAULT_BRAND, normalizeBrand } from './lib/brand.mjs';
 import * as artefactClassify from './lib/artefact-classify.mjs';
 import * as diffLib from './lib/diff.mjs';
 import * as identityLib from './lib/identity-modes.mjs';
@@ -542,8 +544,78 @@ const diffQuery = (q) => {
   const s = params.toString();
   return s ? `/api/diff?${s}` : '/api/diff';
 };
+// The audit report's declared differences (follow-up compare-in-bundle, docs/DOWNSTREAM.md §10): the server's
+// document with the fields a bundle answers otherwise replaced by the shim's — `generator` (`<product> static
+// bundle`), `pack.source` (`bundle`), `assessments` and `waivers` (no store: the server's section with `available:
+// false`) and, for a pack the server registered, `tier.service`/`tier.environment` (no registry: null). `problems`
+// names each declared field whose shim value is not the declared one; `masked` is what the shim's text must equal.
+const STATIC_GENERATOR = { name: 'Observogram static bundle', version: VERSION };
+function maskAudit(serverDoc, shimDoc, { registered = false, generator = STATIC_GENERATOR } = {}) {
+  const problems = [];
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  if (!same(shimDoc.generator, generator)) problems.push(`generator ${JSON.stringify(shimDoc.generator)} ≠ ${JSON.stringify(generator)}`);
+  if (shimDoc.pack?.source !== 'bundle') problems.push(`pack.source ${shimDoc.pack?.source} ≠ bundle`);
+  for (const k of ['assessments', 'waivers']) if (!same(shimDoc[k], { ...serverDoc[k], available: false })) problems.push(`${k} ${JSON.stringify(shimDoc[k])} is not the server's section, not recorded`);
+  if (registered && (shimDoc.tier?.service !== null || shimDoc.tier?.environment !== null)) problems.push(`tier ${JSON.stringify(shimDoc.tier)} names a service record`);
+  const masked = {
+    ...serverDoc,
+    generator: shimDoc.generator,
+    pack: { ...serverDoc.pack, source: shimDoc.pack?.source },
+    tier: registered ? { ...serverDoc.tier, service: null, environment: null } : serverDoc.tier,
+    assessments: shimDoc.assessments,
+    waivers: shimDoc.waivers,
+  };
+  return { masked, problems };
+}
+// The studio's design kit as the server reads it for the report's HTML (server/index.mjs: tokens, a newline, kit).
+const REPORT_STYLES = `${read('studio/design-tokens.css')}\n${read('studio/design-kit.css')}`;
+// The `Generated` line of a report's HTML.
+const generatedOf = (html) => /<li><b>Generated<\/b> ([^<]+)<\/li>/.exec(html)?.[1];
+// One audit report to both sides, as JSON and as HTML: `problems` gains a sentence for each difference — the status,
+// reason phrase and headers exactly (no-store on the report), the JSON text after maskAudit with the shim's clock
+// pinned to the server's generatedAt, the server's HTML the renderer's over its own JSON, the shim's the renderer's
+// over the masked JSON with the same brand and design kit.
+async function auditBothWays({ base, shim, setNow, path, problems, registered = false, brand = DEFAULT_BRAND, generator = STATIC_GENERATOR, html = true }) {
+  const label = path;
+  const server = await answerOf(await fetch(`${base}${path}`));
+  if (server.status !== 200) { problems.push(`${label}: the server answered ${server.status} ${server.text.slice(0, 200)}`); return null; }
+  const serverDoc = JSON.parse(server.text);
+  if (JSON.stringify(serverDoc) !== server.text) problems.push(`${label}: the server's text is not JSON.stringify's`);
+  setNow(serverDoc.generatedAt);
+  const shimJson = await answerOf(await shim.handle(path));
+  const headersOnly = (a) => ({ ...a, text: '' });
+  const jsonHeaders = difference(headersOnly(server), headersOnly(shimJson));
+  if (jsonHeaders) problems.push(`${label}: ${jsonHeaders}`);
+  if (shimJson.headers['cache-control'] !== 'no-store') problems.push(`${label}: no no-store on the report`);
+  if (shimJson.status !== 200) { problems.push(`${label}: the shim answered ${shimJson.status} ${shimJson.text.slice(0, 200)}`); return null; }
+  const shimDoc = JSON.parse(shimJson.text);
+  const { masked, problems: declared } = maskAudit(serverDoc, shimDoc, { registered, generator });
+  for (const d of declared) problems.push(`${label}: ${d}`);
+  const text = JSON.stringify(masked);
+  if (shimJson.text !== text) problems.push(`${label}: ${difference({ ...headersOnly(shimJson), text }, shimJson)}`);
+  if (!html) return { serverDoc, shimDoc };
+  const htmlPath = `${path}${path.includes('?') ? '&' : '?'}format=html`;
+  const serverHtml = await answerOf(await fetch(`${base}${htmlPath}`));
+  const at = generatedOf(serverHtml.text);
+  if (serverHtml.text !== renderAuditReportHtml({ ...serverDoc, generatedAt: at }, { brand, styles: REPORT_STYLES })) problems.push(`${htmlPath}: the server's HTML is not the renderer's over its JSON`);
+  setNow(serverDoc.generatedAt);
+  const shimHtml = await answerOf(await shim.handle(htmlPath));
+  const htmlHeaders = difference(headersOnly(serverHtml), headersOnly(shimHtml));
+  if (htmlHeaders) problems.push(`${htmlPath}: ${htmlHeaders}`);
+  const expected = renderAuditReportHtml(masked, { brand, styles: REPORT_STYLES });
+  if (shimHtml.text !== expected) problems.push(`${htmlPath}: ${difference({ ...headersOnly(shimHtml), text: expected }, shimHtml)}`);
+  return { serverDoc, shimDoc, html: shimHtml.text };
+}
 
-// One child server for C3, C4 and C9, with the uploads registered: { child, ids, packs, canonicalOf, backend, compare }.
+// The label a server gives each pack it serves (its catalogue, examples and references), so a shim over the same packs
+// labels them as the server does (the audit report prints it).
+async function serverLabels(base) {
+  const lists = await Promise.all([['/api/packs', 'packs'], ['/api/examples', 'examples'], ['/api/references', 'references']].map(async ([path, key]) => (await (await fetch(`${base}${path}`)).json())[key]));
+  return Object.fromEntries(lists.flat().map((p) => [p.id, p.label]));
+}
+
+// One child server for C3, C4, C5 and C9, with the uploads registered: { child, ids, labels, packs, canonicalOf, backend,
+// compare } — the shim's packs under the server's ids and labels.
 async function startParity() {
   const ws = mkdtempSync(join(tmpdir(), 'observogram-bundle-diff-'));
   const child = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off' } });
@@ -572,7 +644,9 @@ async function startParity() {
     canonicalOf[id] = u.canonical ?? parseYaml(u.text);
   }
   const schema = JSON.parse(read(SPEC_SCHEMA_PATH));
-  const packs = Object.entries(canonicalOf).map(([id, canonical]) => ({ id, label: id, canonical }));
+  const labels = await serverLabels(child.base);
+  const packs = Object.entries(canonicalOf).map(([id, canonical]) => ({ id, label: labels[id], canonical }));
+  assert.ok(packs.every((p) => typeof p.label === 'string'), 'the server labels every pack');
   const backend = createStaticBackend({ version: VERSION, schema, packs });
   // One path to both sides: { server, shim, problem } — problem '' when equal.
   const compare = async (path, init, shimBackend = backend) => {
@@ -580,7 +654,7 @@ async function startParity() {
     const shim = await answerOf(await shimBackend.handle(path, init));
     return { server, shim, problem: difference(server, shim) };
   };
-  return { child, ws, ids, packs, canonicalOf, schema, backend, compare, stop: async () => { await child.stop(); rmSync(ws, { recursive: true, force: true }); } };
+  return { child, ws, ids, labels, packs, canonicalOf, schema, backend, compare, stop: async () => { await child.stop(); rmSync(ws, { recursive: true, force: true }); } };
 }
 let parityStarted = null;
 const parity = () => (parityStarted ??= startParity());
@@ -688,7 +762,7 @@ test('C3 GET /api/diff from the source, body for body: every scopeMode spelling 
 
 // ---------- C3b the taxonomy ----------
 
-test('C3b the taxonomy: a server started with OBSERVOGRAM_TAXONOMY and a shim over the bound document answer the typed canonical both ways equally, and not as the default families do; a baked taxonomy the classifier does not hold refuses the diff and retrofeed', async (t) => {
+test('C3b the taxonomy: a server started with OBSERVOGRAM_TAXONOMY and a shim over the bound document answer the typed canonical both ways equally, and not as the default families do — the diff, and the audit report\'s coverage; a baked taxonomy the classifier does not hold refuses the diff, retrofeed and the audit report', async (t) => {
   const TAX = resolve(ROOT, 'tools/fixtures/taxonomy/taxonomy.json');
   const taxonomy = JSON.parse(read('tools/fixtures/taxonomy/taxonomy.json'));
   const ws = mkdtempSync(join(tmpdir(), 'observogram-bundle-taxonomy-'));
@@ -702,10 +776,13 @@ test('C3b the taxonomy: a server started with OBSERVOGRAM_TAXONOMY and a shim ov
   const schema = JSON.parse(read(SPEC_SCHEMA_PATH));
   const pairs = [[typedId, typedId], [typedId, 'payment-service'], ['payment-service', typedId]];
   const path = ([a, b]) => `/api/diff?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}&scopeMode=service`;
-  const config = { version: VERSION, schema, taxonomy, packs: [{ id: typedId, label: 'typed', canonical: typed }, { id: 'payment-service', label: 'payment', canonical: payment }] };
+  const labels = await serverLabels(child.base);
+  const config = { version: VERSION, schema, taxonomy, packs: [{ id: typedId, label: labels[typedId], canonical: typed }, { id: 'payment-service', label: labels['payment-service'], canonical: payment }] };
   // The default families' answers, before the bind (the classifier is this process's one instance).
   assert.equal(artefactClassify.activeTaxonomy(), null);
   const unbound = await Promise.all(pairs.map(async (p) => (await createStaticBackend({ ...config, taxonomy: undefined }).handle(path(p))).text()));
+  const auditPath = `/api/packs/${encodeURIComponent(typedId)}/audit-report`;
+  const unboundAudit = await (await createStaticBackend({ ...config, taxonomy: undefined }).handle(auditPath)).json();
   bindTaxonomy(artefactClassify, taxonomy);
   assert.ok(artefactClassify.activeTaxonomy(), 'the document is bound, as the studio binds what /api/taxonomy serves');
   const backend = createStaticBackend(config);
@@ -716,6 +793,13 @@ test('C3b the taxonomy: a server started with OBSERVOGRAM_TAXONOMY and a shim ov
     assert.equal(difference(server, shim), '', `${p.join(' × ')} equal`);
     assert.notEqual(server.text, unbound[i], `${p.join(' × ')}: the taxonomy changes the answer, so the bind is what parity rests on`);
   }
+  // The audit report under the bound document: the server's (registered, so its service record named there), its
+  // declared fields aside; the coverage section classifies by the taxonomy (POL-01 by its declared type).
+  let now = null;
+  const auditProblems = [];
+  const audit = await auditBothWays({ base: child.base, shim: createStaticBackend(config, { clock: () => now }), setNow: (v) => { now = v; }, path: auditPath, problems: auditProblems, registered: true, html: false });
+  assert.deepEqual(auditProblems, []);
+  assert.notDeepEqual(audit.shimDoc.coverage, unboundAudit.coverage, 'the taxonomy moves the coverage section');
 
   // The guard: a baked taxonomy the classifier does not hold (the studio's bind failed in this page) — 500 on both
   // computing routes, before any computation; with the reason when the document does not compile here.
@@ -728,6 +812,12 @@ test('C3b the taxonomy: a server started with OBSERVOGRAM_TAXONOMY and a shim ov
   const rf = await refused.handle(`/api/packs/${encodeURIComponent(typedId)}/retrofeed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ packBId: 'payment-service' }) });
   assert.equal(rf.status, 500);
   assert.deepEqual(await rf.json(), { ok: false, error: GUARD() });
+  for (const q of ['', '?format=html']) {
+    const ar = await refused.handle(`${auditPath}${q}`);
+    assert.equal(ar.status, 500, `the audit report${q}`);
+    assert.equal(ar.headers.get('cache-control'), null, 'a refusal, not a report');
+    assert.deepEqual(await ar.json(), { error: GUARD() });
+  }
   const broken = { ...taxonomy, version: 99 };
   let why = '';
   try { artefactClassify.compileTaxonomy(broken, { timed: false }); } catch (e) { why = e.message; }
@@ -763,6 +853,105 @@ test('C4 Pair by: the studio\'s re-key over the shim\'s /api/packs/:id and /api/
     assert.deepEqual(counts(shim), expected, `${mode}: only in A, in both, only in B`);
     assert.ok(shim.diff.traceabilityGraph, `${mode}: the received graph is kept`);
   }
+});
+
+// ---------- C5 the audit report ----------
+
+test('C5 the audit report: the server\'s JSON and HTML but for the declared fields — payment-service under no env, prod and staging, download=1, top, a registered pack, a branded server against the same brand — every refusal equal, headers included (no Cache-Control on them, no-store on every report); the design kit read from the page, a missing sheet a 500, an engine import retried, a failed --pack-url pack', async (t) => {
+  const { ids, child, packs, schema, compare } = await parity();
+  let now = null;
+  const setNow = (v) => { now = v; };
+  const backend = createStaticBackend({ version: VERSION, schema, packs }, { clock: () => now, styles: REPORT_STYLES });
+  const problems = [];
+  const docs = {};
+  for (const path of ['', '?env=prod', '?env=staging', '?download=1&env=prod', '?top=3']) {
+    docs[path] = await auditBothWays({ base: child.base, shim: backend, setNow, path: `/api/packs/payment-service/audit-report${path}`, problems });
+  }
+  // A pack the server registered (POST /api/validate): its service record named in `tier` there, null here.
+  const orders = await auditBothWays({ base: child.base, shim: backend, setNow, path: `/api/packs/${encodeURIComponent(ids.orders)}/audit-report`, problems, registered: true });
+  // A repeated format is the default, json (the server reads a string only).
+  await auditBothWays({ base: child.base, shim: backend, setNow, path: '/api/packs/payment-service/audit-report?format=json&format=html', problems, html: false });
+  assert.deepEqual(problems, []);
+  // The cases bite: the environments, the listing size and the registration each move the document.
+  const plain = docs[''].shimDoc;
+  assert.equal(plain.goesBlind.available, true, 'the goes-blind section is computed in the bundle');
+  assert.ok(plain.goesBlind.nodes > 0 && plain.goesBlind.top === 10 && plain.goesBlind.risks.length > 3, 'the graph\'s nodes, the default listing');
+  assert.equal(docs['?top=3'].shimDoc.goesBlind.top, 3);
+  assert.notDeepEqual(docs['?env=prod'].shimDoc.conformance, docs['?env=staging'].shimDoc.conformance, 'prod and staging grade differently');
+  assert.notEqual(orders.serverDoc.tier.service, null, 'the server names the registered pack\'s service record');
+  assert.equal(orders.serverDoc.pack.source, 'uploaded');
+  assert.equal(docs[''].serverDoc.assessments.available, true, 'a server has a store: none recorded');
+  assert.equal(plain.assessments.available, false);
+  assert.match(docs[''].html, /Not recorded by this build/);
+  assert.ok(!docs[''].html.includes('Not computed by this build'));
+  assert.match(docs[''].html, /<meta name="generator" content="Observogram static bundle /);
+
+  // The refusals, equal on both sides, headers included: neither sends Cache-Control on them.
+  for (const q of ['format=xml', 'format=', 'top=0', 'top=101', 'top=1.5', 'top=', 'top=5&top=6', 'format=html&top=x']) {
+    const r = await compare(`/api/packs/payment-service/audit-report?${q}`, undefined, backend);
+    assert.equal(r.server.status, 400, q);
+    assert.equal(r.problem, '', `${q}: ${r.problem}`);
+    assert.equal(r.shim.headers['cache-control'], null, `${q}: no Cache-Control`);
+  }
+  const unknown = await compare('/api/packs/nope/audit-report?format=html', undefined, backend);
+  assert.equal(unknown.server.status, 404);
+  assert.equal(unknown.problem, '');
+  assert.equal(unknown.server.text, '{"error":"unknown pack: nope"}');
+
+  // A branded server against a shim given the same normalised brand: the HTML wears it, equal after the masking.
+  const ws = mkdtempSync(join(tmpdir(), 'observogram-bundle-audit-brand-'));
+  const branded = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off', OBSERVOGRAM_BRAND_FILE: resolve(ROOT, 'tools/fixtures/brand/acme-static.json') } });
+  t.after(async () => { await branded.stop(); rmSync(ws, { recursive: true, force: true }); });
+  const acme = normalizeBrand(JSON.parse(read('tools/fixtures/brand/acme-static.json')));
+  const brandedShim = createStaticBackend({ version: VERSION, schema, packs }, { clock: () => now, brand: acme, styles: REPORT_STYLES });
+  const brandedProblems = [];
+  const acmeReport = await auditBothWays({ base: branded.base, shim: brandedShim, setNow, path: '/api/packs/payment-service/audit-report', problems: brandedProblems, brand: acme, generator: { name: 'Acme Watch static bundle', version: VERSION } });
+  assert.deepEqual(brandedProblems, []);
+  assert.equal(acmeReport.serverDoc.generator.name, 'Acme Watch server');
+  assert.ok(acmeReport.html.includes('Acme Watch · a product of Acme Corp') && acmeReport.html.includes('<style id="brand-tokens">'), 'the brand\'s chrome and tokens');
+  assert.ok(!acmeReport.html.replace(/<style[\s\S]*?<\/style>/g, '').includes('Observogram'), 'a branded report names its own product only');
+
+  // The design kit as the page carries it: bundleStyles strips exactly the newline styleBlock adds on each side, so the
+  // inlined sheets give the server's text; a sheet the page lacks is a 500 for the HTML (never an unstyled report),
+  // read again at the next request; the JSON needs no stylesheet.
+  const inlined = (name) => `\n${read(`studio/${name}`)}\n`;
+  assert.equal(bundleStyles(inlined), REPORT_STYLES);
+  assert.equal(bundleStyles((name) => `\n\n${name}\n\n`), '\ndesign-tokens.css\n\n\ndesign-kit.css\n', 'one newline each side, no more');
+  let sheets = {};
+  const kitless = createStaticBackend({ version: VERSION, schema, packs }, { styles: () => bundleStyles((name) => sheets[name]) });
+  const missing = await kitless.handle('/api/packs/payment-service/audit-report?format=html');
+  assert.equal(missing.status, 500);
+  assert.equal(missing.statusText, 'Internal Server Error');
+  assert.deepEqual(await missing.json(), { error: 'the bundle\'s design kit is missing (design-tokens.css)' });
+  assert.equal((await kitless.handle('/api/packs/payment-service/audit-report')).status, 200, 'the JSON reads no stylesheet');
+  sheets = { 'design-tokens.css': inlined('design-tokens.css'), 'design-kit.css': inlined('design-kit.css') };
+  const styled = await kitless.handle('/api/packs/payment-service/audit-report?format=html');
+  assert.equal(styled.status, 200, 'a failed read is not kept');
+  assert.ok((await styled.text()).includes(REPORT_STYLES));
+
+  // What only the shim meets: an engine import that fails once (500 with its message, then retried) and a --pack-url
+  // pack that failed to load (500 with its message, after the query is read).
+  let attempts = 0;
+  const flaky = createStaticBackend({ version: VERSION, schema, packs }, {
+    importAuditEngines: () => (++attempts === 1 ? Promise.reject(new Error('Failed to fetch dynamically imported module')) : Promise.all([import('./lib/audit-report.mjs'), import('./lib/traceability-graph.mjs')])),
+  });
+  const first = await flaky.handle('/api/packs/payment-service/audit-report');
+  assert.equal(first.status, 500);
+  assert.deepEqual(await first.json(), { error: 'Failed to fetch dynamically imported module' });
+  assert.equal((await flaky.handle('/api/packs/payment-service/audit-report')).status, 200, 'a failed import is not kept');
+  assert.equal(attempts, 2);
+  const remote = createStaticBackend({ version: VERSION, schema, packs: [{ id: 'down', label: 'D', url: 'https://packs.example/down.pack.yaml' }] }, {
+    origin: 'https://studio.example', fetchImpl: async () => new Response('nope', { status: 404, statusText: 'Not Found' }),
+  });
+  assert.equal((await remote.handle('/api/packs/down/audit-report?top=0')).status, 400, 'the query first, as the server reads it before the pack');
+  const down = await remote.handle('/api/packs/down/audit-report');
+  assert.equal(down.status, 500);
+  assert.deepEqual(await down.json(), { error: '404 Not Found fetching https://packs.example/down.pack.yaml' });
+  // A --pack-url pack's source is the config's word for it.
+  const urlPack = createStaticBackend({ version: VERSION, schema, packs: [{ id: 'u', label: 'U', url: 'https://packs.example/u.pack.json' }] }, {
+    origin: 'https://studio.example', fetchImpl: async () => new Response(JSON.stringify(packs.find((p) => p.id === 'payment-service').canonical), { status: 200 }),
+  });
+  assert.equal((await (await urlPack.handle('/api/packs/u/audit-report')).json()).pack.source, 'url');
 });
 
 // ---------- C6 retrofeed in the shim ----------
@@ -921,11 +1110,11 @@ export async function resolve(specifier, context, next) {
   return next(specifier, context);
 }`;
 
-test('C9 the built file, in Node: the shim imported from the CLI-built bundle\'s own data: address, through its import map, answers twelve /api/diff queries and a retrofeed as the server does — the map carries every package as installed, the dynamic imports are literal', async () => {
-  const { ids, canonicalOf, child } = await parity();
-  // The six server packs and the compare-modes pair, under the server's ids.
+test('C9 the built file, in Node: the shim imported from the CLI-built bundle\'s own data: address, through its import map, answers twelve /api/diff queries, a retrofeed and the audit report in JSON and HTML (its design kit read from the file\'s own stylesheets) as the server does — the map carries every package as installed, the dynamic imports are literal', async () => {
+  const { ids, labels, canonicalOf, child } = await parity();
+  // The six server packs and the compare-modes pair, under the server's ids and labels.
   const out = join(TMP, 'c9', 'index.html');
-  const packArgs = [...SERVER_PACKS.map(([id, rel]) => ['--pack', resolve(ROOT, rel), '--id', id]), ['--pack', resolve(ROOT, 'tools/fixtures/compare-modes/a.pack.yaml'), '--id', ids.modesA], ['--pack', resolve(ROOT, 'tools/fixtures/compare-modes/b.pack.yaml'), '--id', ids.modesB]].flat();
+  const packArgs = [...SERVER_PACKS, [ids.modesA, 'tools/fixtures/compare-modes/a.pack.yaml'], [ids.modesB, 'tools/fixtures/compare-modes/b.pack.yaml']].flatMap(([id, rel]) => ['--pack', resolve(ROOT, rel), '--id', id, '--label', labels[id]]);
   const built = cli([...packArgs, '--out', out, '--no-remote-fonts']);
   assert.equal(built.status, 0, built.stderr);
   const html = readFileSync(out, 'utf8');
@@ -939,10 +1128,17 @@ test('C9 the built file, in Node: the shim imported from the CLI-built bundle\'s
   register(`data:text/javascript,${encodeURIComponent(RESOLVE_HOOK)}`, { data: { imports } });
   const shimUrl = imports['studio/static-backend.mjs'];
   assert.ok(shimUrl.startsWith(DATA_JS));
-  const { createStaticBackend: fromFile } = await import(shimUrl);
+  const { createStaticBackend: fromFile, bundleStyles: stylesFromFile } = await import(shimUrl);
   assert.notEqual(fromFile, createStaticBackend, 'the file\'s shim, not the source\'s');
+  // The audit report's design kit, as the page reads it: each inlined sheet's text (a <style> is raw text, so its
+  // textContent is what the file holds between the tags), through the file's own bundleStyles.
+  const sheetOf = (name) => {
+    const open = `<style data-src="${name}">`;
+    const at = html.indexOf(open);
+    return at < 0 ? undefined : html.slice(at + open.length, html.indexOf('</style>', at));
+  };
   let now = '2026-01-01T00:00:00.000Z';
-  const backend = fromFile(config, { clock: () => now });
+  const backend = fromFile(config, { clock: () => now, styles: () => stylesFromFile(sheetOf) });
 
   const problems = [];
   const same = async (path, init) => {
@@ -970,5 +1166,10 @@ test('C9 the built file, in Node: the shim imported from the CLI-built bundle\'s
   const rf = await same(`/api/packs/${encodeURIComponent(ids.modesA)}/retrofeed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ packBId: ids.modesB, scopeMode: 'service' }) });
   assert.equal(rf.status, 200);
   assert.ok(JSON.parse(rf.text).summary.candidates > 0, 'a computed update');
+  // The audit report, JSON and HTML, its declared fields aside: the goes-blind section from the file's parser, the
+  // HTML over the file's own stylesheets.
+  const audit = await auditBothWays({ base: child.base, shim: backend, setNow: (v) => { now = v; }, path: '/api/packs/payment-service/audit-report?env=prod', problems });
   assert.deepEqual(problems, []);
+  assert.equal(audit.shimDoc.goesBlind.available, true, 'the graph\'s shape, from the file');
+  assert.ok(audit.html.includes(REPORT_STYLES), 'the design kit as the server reads it, extracted from the file');
 });
