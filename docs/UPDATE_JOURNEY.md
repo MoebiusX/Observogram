@@ -1503,5 +1503,20 @@ files of the filesystem mounted there — the root itself mounted, and a
 directory under the root it cannot read, where `rmSync` failed part-way; now
 nothing is deleted. A same-filesystem bind mount of a directory from outside
 the root cannot be told from a directory by `lstatSync`, and is entered as
-`rmSync` enters it. Tests: 1425 → 1434 (nine more in
+`rmSync` enters it.
+
+The refusal of a users file recorded under the root said "move it out
+first", and after the move it came back word for word: the record still named
+the path under the root, and the comparison fell back to it as written. The
+comparison by path now holds only while the users file exists. One that does
+not is followed to where its path leads — every link that exists followed, a
+dangling one by its target — and its nearest directory that exists: one under
+the root means nothing of the users file is left there to delete, and the
+purge goes on; any other is refused, since a mount that is down leaves only an
+empty mount point, and with the bind mount above down purge-org had deleted
+the users file behind it. A users file deleted on purpose outside the root is
+refused alike (a declared false refusal), and its way out is deleting the root
+by hand, after which purge-org drops the records. A users file purge-org
+cannot read (`EACCES` on its path, a link loop), which compared as written and
+was purged, is refused too. Tests: 1425 → 1440 (fifteen more in
 `server/test-store-ops.mjs`).

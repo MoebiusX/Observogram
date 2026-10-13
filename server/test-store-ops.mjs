@@ -2569,6 +2569,70 @@ test('purge-org users file on Windows paths: through a junction, through a share
   assert.match(placeW('C:\\out\\users.json').refusal, /^C:\\ws\\orgs\\beta holds a mount point, C:\\ws\\orgs\\beta\\mnt \(another volume mounted in it\): /);
 });
 
+const unknownPlace = (file, nearest, { to = null, root = ROOT_B } = {}) => `the recorded users file ${file} does not exist, and nothing on this host `
+  + `tells where its path leads${to ? ` (to ${to})` : ''}: ${nearest === null ? 'no part of it exists' : `the nearest part of it that exists, ${nearest}, is no directory under ${root}`}, `
+  + `and a filesystem not mounted now may lead it under ${root} — nothing was deleted. If it lies on a filesystem that is not mounted now, `
+  + `mount it, then run purge-org again; if it does not lie under ${root}, delete ${root} by hand, then run purge-org again: it drops org `
+  + 'beta\'s records';
+
+test('purge-org users file that does not exist: through a mount that is down it is refused, failing closed; mounted again, refused as lying under the root; moved out of the root as that refusal says, the purge passes', () => {
+  const vol = betaVolume().dir('/mnt/b').symlink('/cfg/users.json', '/mnt/b/users.json');
+  // The bytes are under the root; the mount that leads there is down, so its mount point is an empty directory.
+  for (const [file, to] of [['/mnt/b/users.json', null], ['/cfg/users.json', '/mnt/b/users.json']]) {
+    assert.deepEqual(placeIn(vol, file), { exists: null, refusal: unknownPlace(file, '/mnt/b', { to }) }, file);
+  }
+  vol.bind(`${ROOT_B}/sub`, '/mnt/b');   // the way out: mount it, then run purge-org again
+  assert.deepEqual(placeIn(vol, '/mnt/b/users.json'), { exists: true, refusal: underRoot('/mnt/b/users.json', `${ROOT_B}/sub/users.json`) });
+  vol.rename(`${ROOT_B}/sub/users.json`, '/keep/users.json');   // that refusal's way out: move it out, then run purge-org again
+  for (const file of ['/mnt/b/users.json', '/cfg/users.json']) {
+    assert.deepEqual(placeIn(vol, file), { exists: false, refusal: null }, `${file} leads under the root, where nothing of it is left`);
+  }
+});
+
+test('purge-org users file that does not exist: recorded under the root and moved out, or reached by a link whose target is gone from the root, the purge passes; one whose place lies elsewhere — a file deleted outside the root, a link to a mount that is down, a path no part of which exists — is refused, failing closed; none recorded and <base>/users.json absent, the purge passes', () => {
+  const vol = betaVolume().symlink('/cfg/users.json', `${ROOT_B}/sub/users.json`).symlink('/cfg/gone', `${ROOT_B}/gone`)
+    .symlink('/cfg/rel', '../ws/orgs/beta/sub/x/..').dir('/mnt/b').symlink('/cfg/m.json', '/mnt/b/users.json');
+  assert.equal(placeIn(vol, `${ROOT_B}/sub/users.json`).refusal, underRoot(`${ROOT_B}/sub/users.json`, `${ROOT_B}/sub/users.json`), 'recorded under the root: refused');
+  vol.rename(`${ROOT_B}/sub/users.json`, '/keep/users.json');
+  for (const file of [`${ROOT_B}/sub/users.json`, '/cfg/users.json', '/cfg/gone/users.json', `${ROOT_B}/sub/deeper/users.json`, '/cfg/rel/users.json']) {
+    assert.deepEqual(placeIn(vol, file), { exists: false, refusal: null }, `${file}: moved out, it leads under the root`);
+  }
+  assert.deepEqual(placeIn(vol, '/srv/gone.json'), { exists: null, refusal: unknownPlace('/srv/gone.json', '/srv') }, 'deleted outside the root (declared)');
+  assert.deepEqual(placeIn(vol, '/cfg/m.json'), { exists: null, refusal: unknownPlace('/cfg/m.json', '/mnt/b', { to: '/mnt/b/users.json' }) });
+  assert.deepEqual(placeIn(vol, '/ws/orgs/beta2/users.json'), { exists: null, refusal: unknownPlace('/ws/orgs/beta2/users.json', '/ws/orgs') });
+  assert.deepEqual(placeIn(vol, '/ws/users.json', { recorded: false }), { exists: false, refusal: null }, 'the default nothing records, absent: nothing to keep');
+});
+
+test('purge-org users file that cannot be read: a directory on its path this user may not search is refused, and as a user who can the purge passes; a link loop is refused', () => {
+  const vol = betaVolume().file('/priv/users.json').deny('/priv').symlink('/cfg/a', '/cfg/b').symlink('/cfg/b', '/cfg/a');
+  assert.deepEqual(placeIn(vol, '/priv/users.json'), {
+    exists: null,
+    refusal: `the recorded users file /priv/users.json cannot be read on this host (EACCES), so nothing tells whether it lies under ${ROOT_B} — `
+      + 'nothing was deleted. Run purge-org as a user who can read /priv/users.json; or, if it does not lie under '
+      + `${ROOT_B}, delete ${ROOT_B} by hand, then run purge-org again: it drops org beta's records`,
+  });
+  const reader = betaVolume().file('/priv/users.json');
+  assert.deepEqual(placeIn(reader, '/priv/users.json'), { exists: true, refusal: null }, 'the way out: a user who can read it');
+  assert.equal(placeIn(vol, '/cfg/a').refusal, `the recorded users file /cfg/a cannot be read on this host (ELOOP: a link loop, or a chain of more `
+    + `than 40 links), so nothing tells whether it lies under ${ROOT_B} — nothing was deleted. If it does not lie under ${ROOT_B}, delete `
+    + `${ROOT_B} by hand, then run purge-org again: it drops org beta's records`);
+  assert.match(placeIn(vol, '/priv/users.json', { recorded: false }).refusal, /^the users file \/priv\/users\.json \(the one a pre-store build reads: OBSERVOGRAM_USERS_FILE was not set at the import\) cannot be read on this host \(EACCES\)/);
+});
+
+test('purge-org users file that does not exist, on Windows paths: moved out from under the root, by any spelling or through a junction into it, the purge passes; through a share whose directory is gone, on a drive that does not exist, or deleted outside the root, refused', () => {
+  const RW = 'C:\\ws\\orgs\\beta';
+  const C = 0x1_0000_0007n;
+  const vol = mountFs(win32, { fold: true, devs: { 'C:\\': C } }).file(`${RW}\\sub\\users.json`).dir('C:\\out')
+    .symlink('C:\\cfg\\d', `${RW}\\sub`).view(`${RW}\\sub`, '\\\\myhost\\betasub\\', { dev: C & 0xffffffffn });
+  const placeW = (file) => usersFilePlace(file, RW, { fs: vol.fs, path: win32, windows: true, id: 'beta' });
+  vol.rename(`${RW}\\sub\\users.json`, 'C:\\keep\\users.json');
+  for (const file of [`${RW}\\sub\\users.json`, 'c:/WS/orgs/BETA/sub/users.json', 'C:\\cfg\\d\\users.json', '\\\\myhost\\betasub\\users.json']) {
+    assert.deepEqual(placeW(file), { exists: false, refusal: null }, `${file}: nothing of it under the root`);
+  }
+  assert.deepEqual(placeW('C:\\out\\users.json'), { exists: null, refusal: unknownPlace('C:\\out\\users.json', 'C:\\out', { root: RW }) });
+  assert.deepEqual(placeW('Q:\\users.json'), { exists: null, refusal: unknownPlace('Q:\\users.json', null, { root: RW }) }, 'a drive that does not exist');
+});
+
 test('purge-org: a users file recorded outside the root with a hard link under it is refused naming the link, nothing deleted; with the link moved out, the purge passes and the users file stays', async () => {
   const base = await removedOrgDeployment();
   const root = join(base, 'orgs', 'acme');
@@ -2587,7 +2651,7 @@ test('purge-org: a users file recorded outside the root with a hard link under i
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(usersFile, 'utf8')).users), ['alice'], 'the users file stays');
 });
 
-test('purge-org: the recorded users file reached through a directory link into the root is refused naming its entry under the root (by its path, realpath placed it under the root too), nothing deleted', async () => {
+test('purge-org: the recorded users file reached through a directory link into the root is refused naming its entry under the root (by its path, realpath placed it under the root too), nothing deleted; moved out as the refusal says, the purge passes', async () => {
   const base = await removedOrgDeployment();
   const root = join(base, 'orgs', 'acme');
   const cfg = tempDir('ops-cfg');
@@ -2597,6 +2661,12 @@ test('purge-org: the recorded users file reached through a directory link into t
   await change(base, (db) => tx(db, () => meta.putMeta(db, 'users_file', usersFile)));
   await assert.rejects(purge(base, 'acme'), refusedOp(new RegExp(`^the recorded users file ${esc(usersFile)} lies under ${esc(root)}: it is ${esc(join(root, 'sub', 'users.json'))} there — nothing was deleted`)));
   assert.ok(existsSync(join(root, 'sub', 'users.json')) && existsSync(join(root, 'packs', 'a1.pack.yaml')), 'nothing deleted');
+  // The way out, followed: moved out of the root, the record leads through the link to a directory under the root, where
+  // nothing of the users file is left.
+  const keep = join(tempDir('ops-keep'), 'users.json');
+  renameSync(join(root, 'sub', 'users.json'), keep);
+  assert.equal((await purge(base, 'acme')).deleted, true);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(keep, 'utf8')).users), ['alice'], 'the moved users file stays');
 });
 
 test('purge-org: with no users file recorded, <base>/users.json — the one a pre-store build reads — with a hard link under the root is refused; with the link moved out, the purge passes and <base>/users.json stays', async () => {
@@ -2610,6 +2680,41 @@ test('purge-org: with no users file recorded, <base>/users.json — the one a pr
   renameSync(entry, join(tempDir('ops-keep'), 'users.json'));
   assert.equal((await purge(base, 'acme')).deleted, true);
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(base, 'users.json'), 'utf8')).users), ['alice'], '<base>/users.json stays');
+});
+
+test('purge-org: the users file recorded under the root is refused naming it, nothing deleted; moved out of the root as the refusal says, the purge passes — it used to refuse again, and again — and the moved file stays', async () => {
+  const base = await removedOrgDeployment();
+  const root = join(base, 'orgs', 'acme');
+  const usersFile = join(root, 'sub', 'users.json');
+  usersJson(base, ['alice'], usersFile);
+  await change(base, (db) => tx(db, () => meta.putMeta(db, 'users_file', usersFile)));
+  await assert.rejects(purge(base, 'acme'), refusedOp(new RegExp(`^${esc(underRoot(usersFile, usersFile, root))}$`)));
+  assert.ok(existsSync(usersFile) && existsSync(join(root, 'packs', 'a1.pack.yaml')), 'nothing deleted');
+  const keep = join(tempDir('ops-keep'), 'users.json');
+  renameSync(usersFile, keep);
+  const r = await purge(base, 'acme');
+  assert.equal(r.deleted, true);
+  assert.equal(existsSync(root), false);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(keep, 'utf8')).users), ['alice'], 'the moved users file stays');
+});
+
+test('purge-org: a recorded users file outside the root that no longer exists is refused (declared), nothing deleted; with the root deleted by hand as the refusal says, the purge passes and drops the org\'s records; none recorded and <base>/users.json deleted, the purge passes', async () => {
+  const base = await removedOrgDeployment();
+  const root = join(base, 'orgs', 'acme');
+  const srv = tempDir('ops-users');
+  const usersFile = join(srv, 'users.json');
+  await change(base, (db) => tx(db, () => meta.putMeta(db, 'users_file', usersFile)));
+  await assert.rejects(purge(base, 'acme'), refusedOp(new RegExp(`^${esc(`the recorded users file ${usersFile} does not exist, and nothing on this host tells where its path leads: the nearest part of it that exists, ${srv}, is no directory under ${root}`)}.* If it lies on a filesystem that is not mounted now, mount it, then run purge-org again; if it does not lie under ${esc(root)}, delete ${esc(root)} by hand, then run purge-org again: it drops org acme's records$`)));
+  assert.ok(existsSync(join(root, 'packs', 'a1.pack.yaml')), 'nothing deleted');
+  const rows = await read(base, (db) => actions(db).length);
+  rmSync(root, { recursive: true });
+  const r = await purge(base, 'acme');
+  assert.deepEqual(formatPurge(r)[0], `purged org acme: nothing on disk at ${root}`);
+  await read(base, (db) => assert.deepEqual(actions(db).slice(rows), ['org.purge:cli:acme']));
+
+  const oidcOnly = await removedOrgDeployment();
+  rmSync(join(oidcOnly, 'users.json'));
+  assert.equal((await purge(oidcOnly, 'acme')).deleted, true, 'the default users file nothing records, absent: nothing to keep');
 });
 
 // ---------- audit: the CLI reader ----------

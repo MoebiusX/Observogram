@@ -26,16 +26,30 @@
 //     upper directory under the root, another inode too. A copy under the root that kept the users file's size and
 //     modification time on another device reads the same (a declared false refusal; moving it out is the way out).
 //     Every matching entry is named, so one move clears them all (hard links included).
+//   - a users file that does not exist: nothing of it is under the root to delete, unless its path leads there through
+//     what is not there now — a filesystem not mounted. So its place is found as the kernel would resolve the path,
+//     every link that exists followed (a dangling one by its target), to the nearest directory that exists there. One
+//     the walk read (by identity, as above) means it leads under the root — a users file moved out of the root,
+//     recorded there or reached through a mount of a directory under it or a link into it — and the purge goes on;
+//     any other is refused, failing closed: a mount that is down leaves its mount point an empty directory, which tells
+//     nothing. So a recorded users file deleted outside the root is refused too (declared), and deleting the root by
+//     hand is its way out. The default <base>/users.json, which nothing records, absent is nothing to keep (a store
+//     that keeps no local users may have none).
+//   - a users file that cannot be read — statSync failing otherwise (EACCES on a directory of its path, a link loop),
+//     or a part of its path that cannot be read — is refused.
 //
 // A same-filesystem bind mount under the root of a directory from outside it is a directory to lstatSync (the same
-// device; /proc/self/mountinfo is not read), so the walk enters it as rmSync does; and a view that reports neither
-// the inode nor the size and modification time (some FUSE filesystems) is not matched.
+// device; /proc/self/mountinfo is not read), so the walk enters it as rmSync does; a view that reports neither the
+// inode nor the size and modification time (some FUSE filesystems) is not matched; and a recorded path that passes
+// through a link under the root keeps the file the link leads to (rmSync deletes the link alone), but leads nowhere
+// once it is gone. The check runs before rmSync: a rename by another process between the two is not seen.
 //
 // usersFilePlace(file, root, { recorded, id, fs, path, windows }) → { exists, refusal }: exists is whether the users
-// file's path leads to a file now (true), or not (false), or null when the check stopped before it; refusal is
-// purge-org's message, or null when deleting the root takes nothing of the users file. recorded is false for
-// <base>/users.json when nothing was recorded; id is the org's. fs = { lstatSync, statSync, readdirSync } (node:fs's,
-// called with { bigint: true }), path (node:path's) and windows (the platform) are injectable
+// file's path leads to a file now (true), or not (false), or null when the check stopped before it could tell;
+// refusal is purge-org's message, or null when deleting the root takes nothing of the users file. recorded is false
+// for <base>/users.json when nothing was recorded; id is the org's. fs = { lstatSync, statSync, readdirSync,
+// readlinkSync } (node:fs's; the stats called with { bigint: true }), path (node:path's) and windows (the platform) are
+// injectable
 // (server/test-store-ops.mjs, over server/fixtures/mount-fs.mjs); the default is this host.
 
 import * as nodeFs from 'node:fs';
@@ -44,6 +58,7 @@ import * as nodePath from 'node:path';
 const ON_WINDOWS = process.platform === 'win32';
 const GONE = new Set(['ENOENT', 'ENOTDIR']);
 const SECOND = 1_000_000_000n;
+const MAX_LINKS = 40;   // Linux's MAXSYMLINKS
 
 // The precision of a timestamp in ns: the largest power of ten, up to a second, that divides it.
 function precision(ns) {
@@ -123,9 +138,81 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
       + 'run purge-org again');
   }
 
+  // Where a path that does not exist leads: each link that exists followed (a dangling one by its target), '..' taken
+  // from the directory reached, as the kernel resolves a path; { place, nearest, nearestSt } or { at, error }.
+  const split = (p) => p.split(windows ? /[\\/]+/ : /\/+/).filter(Boolean);
+  const lead = (p) => {
+    let todo;
+    let cur;
+    let curSt;
+    let hops = 0;
+    const from = (abs) => {
+      cur = path.parse(abs).root;
+      todo = split(abs.slice(cur.length));
+      try { curSt = lstat(cur); } catch { curSt = null; }
+    };
+    from(path.resolve(p));
+    while (todo.length && curSt) {
+      const [name, ...rest] = todo;
+      if (name === '.' || name === '..') {
+        todo = rest;
+        if (name === '..' && path.dirname(cur) !== cur) {
+          cur = path.dirname(cur);
+          try { curSt = lstat(cur); } catch (e) { return { at: cur, error: e }; }
+        }
+        continue;
+      }
+      const next = path.join(cur, name);
+      let st;
+      try { st = lstat(next); } catch (e) {
+        if (GONE.has(e?.code)) break;
+        return { at: next, error: e };
+      }
+      if (st.isSymbolicLink()) {
+        if (++hops > MAX_LINKS) return { at: next, error: { code: 'ELOOP' } };
+        let target;
+        try { target = fs.readlinkSync(next); } catch (e) { return { at: next, error: e }; }
+        if (path.isAbsolute(target)) {
+          from(target);
+          todo = [...todo, ...rest];
+        } else {
+          todo = [...split(target), ...rest];
+        }
+        continue;
+      }
+      if (!st.isDirectory()) break;
+      cur = next;
+      curSt = st;
+      todo = rest;
+    }
+    return { place: todo.length ? path.join(cur, ...todo) : cur, nearest: curSt ? cur : null, nearestSt: curSt };
+  };
+
   // The users file, its path followed through every link.
+  const cannot = (at, e) => stopped(`${who} cannot be read on this host (${code(e)}${at === file ? '' : ` at ${at}`}`
+    + `${e?.code === 'ELOOP' ? `: a link loop, or a chain of more than ${MAX_LINKS} links` : ''}), so nothing tells whether it lies `
+    + `under ${root} — nothing was deleted. ${denied(e) ? `Run purge-org as a user who can read ${at}; or, if it` : 'If it'} does not `
+    + `lie under ${root}, delete ${root} by hand, then run purge-org again: it drops org ${id}'s records`);
   let st;
-  try { st = stat(file); } catch { return { exists: null, refusal: null }; }
+  try { st = stat(file); } catch (e) {
+    if (!GONE.has(e?.code)) return cannot(file, e);
+    // It does not exist, so nothing of it is under the root to delete — unless its path leads there through what is not
+    // there now: a filesystem not mounted. Where it leads (lead, above): under the root — the nearest directory that
+    // exists is one the walk read — the purge goes on: a users file moved out of the root, recorded there or reached
+    // through a mount of a directory under it or a link into it. Elsewhere nothing tells, so it is refused, failing
+    // closed. <base>/users.json, the default nothing records, is absent on every store that keeps no local users:
+    // absent, it is nothing to keep.
+    if (!recorded) return { exists: false, refusal: null };
+    const led = lead(file);
+    if (led.error) return cannot(led.at, led.error);
+    if (led.nearestSt && entries.some((en) => en.st.isDirectory() && same(en.st, led.nearestSt))) return { exists: false, refusal: null };
+    return stopped(`${who} does not exist, and nothing on this host tells where its path leads`
+      + `${led.place === path.resolve(file) ? '' : ` (to ${led.place})`}: `
+      + (led.nearest === null ? 'no part of it exists' : `the nearest part of it that exists, ${led.nearest}, is no directory under ${root}`)
+      + `, and a filesystem not mounted now may lead it under ${root} — nothing was deleted. If it lies on a filesystem that is not `
+      + `mounted now, mount it, then run purge-org again; if it does not lie under ${root}, delete ${root} by hand, then run purge-org `
+      + `again: it drops org ${id}'s records`);
+  }
   const kin = entries.filter((e) => same(e.st, st));
   if (!kin.length) return { exists: true, refusal: null };
   const ids = kin.filter((e) => dev(e.st) === dev(st)).map((e) => e.path);

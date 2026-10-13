@@ -832,10 +832,12 @@ export async function purgeOrg(id, { dbPath = resolveDbPath(), base = baseWorksp
         + `lie under ${root}, delete ${root} by hand, then run purge-org again: it drops org ${id}'s records`);
     }
     // By what deleting the root takes, not by the path's spelling (store/users-file-place.mjs): the users file a
-    // pre-store build reads, seen under the root through a mount, a link or a hard link, and a mount point under it.
+    // pre-store build reads, seen under the root through a mount, a link or a hard link, a mount point under it, and
+    // a recorded users file that does not exist by where its path leads — so the path check below holds only while it
+    // exists, and "move it out first", followed, lets the purge through.
     const place = present ? usersFilePlace(usersFile || join(base, 'users.json'), root, { recorded: Boolean(usersFile), id }) : null;
     if (place?.refusal) throw refuse(place.refusal);
-    if (users?.startsWith(compared(root) + sep)) {
+    if (users?.startsWith(compared(root) + sep) && place.exists) {
       throw refuse(`the recorded users file ${usersFile} lies under ${root} — move it out first; nothing was deleted`);
     }
     const underRoot = (k) => !isAbsolute(k) && slashed(k).startsWith(`${rel}/`);
