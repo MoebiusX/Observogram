@@ -26,14 +26,19 @@ import {
 // A failing assertion's message, actual and expected are printed into the
 // TAP, and every suites step tees that TAP into its job's log, where the
 // runner executes a line that starts with `::` once its leading whitespace is
-// trimmed. The texts this suite asserts on end in such lines (a summary's
-// annotations and notice): raw, a failure here would annotate the job with a
-// fixture's errors and a second `npm test` notice. So every string a failing
-// assertion carries shows such a line behind `| `, and its stack starts at
-// the assertion, the frame the summary places a failure by.
+// trimmed, and its older form, `##[`, anywhere in a line. The texts this
+// suite asserts on end in such lines (a summary's annotations and notice) and
+// hold such forms (a fixture's `##[stop-commands]`): raw, a failure here
+// would annotate the job with a fixture's errors and a second `npm test`
+// notice. So every string a failing assertion carries shows such a line
+// behind `| ` and a `##[` as `#\#[`, as the summary does, and its stack
+// starts at the assertion, the frame the summary places a failure by.
 const COMMAND_LINE_RE = /^([\s\u0085]*)::/gm;   // C#'s TrimStart also trims U+0085
+// A line the runner reads as a workflow command, under either of its parses:
+// `::` at its start once its leading whitespace is trimmed, or `##[` anywhere.
+const RUNNER_READS_RE = /^[\s\u0085]*::|##\[/;
 const defuse = (v) => {
-  if (typeof v === 'string') return v.replace(COMMAND_LINE_RE, '$1| ::');
+  if (typeof v === 'string') return v.replace(COMMAND_LINE_RE, '$1| ::').replace(/##\[/g, '#\\#[');
   if (Array.isArray(v)) return v.map(defuse);
   if (typeof v === 'object' && v !== null && Object.getPrototypeOf(v) === Object.prototype) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, defuse(x)]));
   return v;
@@ -51,9 +56,9 @@ const assert = Object.fromEntries(['deepEqual', 'equal', 'match', 'ok'].map((k) 
 
 // The TAP node --test prints for a test that threw `error`: its own reporter,
 // fed the failure as the runner reports it (wrapped as a test-code failure).
-async function tapOf(error) {
+async function tapOf(error, name = 'a failing assertion') {
   const failure = Object.assign(new Error('test failed'), { code: 'ERR_TEST_FAILURE', failureType: 'testCodeFailure', cause: error });
-  async function* events() { yield { type: 'test:fail', data: { name: 'a failing assertion', nesting: 0, testNumber: 1, details: { duration_ms: 1, type: 'test', error: failure } } }; }
+  async function* events() { yield { type: 'test:fail', data: { name, nesting: 0, testNumber: 1, details: { duration_ms: 1, type: 'test', error: failure } } }; }
   let text = '';
   for await (const chunk of tap(events())) text += chunk;
   return text;
@@ -423,7 +428,7 @@ not ok 1 - the tenancy line
   assert.deepEqual(whereOf({ yaml: {} }, { root: LROOT, pathApi: posix }), { file: null, line: null });
 });
 
-test('S5 annotations: escaping, the run-level errors first, failures up to the cap of 10, the notice naming the block\'s length and the tail to read; the run\'s own text in the block never a workflow command; in a failing assertion here, each behind `| `', async () => {
+test('S5 annotations: escaping, the run-level errors first, failures up to the cap of 10, the notice naming the block\'s length and the tail to read; the run\'s own text in the block never a workflow command in either of the runner\'s forms, nor in a failing assertion here', async () => {
   assert.equal(annotation('error', { title: 'a:b,c' }, '100%\nnext\r'), '::error title=a%3Ab%2Cc::100%25%0Anext%0D');
   assert.equal(annotation('notice', {}, 'x'), '::notice::x');
   assert.equal(annotation('error', { file: 'server/test-a.mjs', line: 7, title: 't' }, 'm'), '::error file=server/test-a.mjs,line=7,title=t::m');
@@ -487,13 +492,44 @@ test('S5 annotations: escaping, the run-level errors first, failures up to the c
   const nr = notStartedBlock(`npm error ${forged.join('\n')}\nz\r::add-mask::tests\n`);
   assert.equal(fr.failures.length, 3, 'three failures');
   assert.equal(ur.parsed.complete, false, 'an unfinished run');
-  for (const [name, block] of [['failures', fr], ['an unfinished run', ur], ['a not-started capture', nr]]) {
+  // The runner also executes its older form, `##[name]…`, anywhere in a line
+  // (v1), which `| ` does not stop: the run's text shows each `##[` as `#\#[`
+  // — a failure's error lines and its name (in the list, the slowest list
+  // and its annotation's title), a skip reason, a harness suite's cause, a
+  // bound's label, a failure's place, an unfinished run's tail, a
+  // not-started capture's lines, the host line. Only an annotation's file=
+  // names the run's path as it is, the file it links to: a line read as a
+  // `::` command is never read as a `##[` one.
+  const v1 = '##[stop-commands]pause';
+  const host = `host: linux 6.8.0 x64 · node v22.16.0 · 4 cpus · cwd /home/jo/${v1} · tmpdir /tmp/${v1} · symlink: created`;
+  const v1first = await tapOf(new Error(`expected 1 row\n${v1}\nafter it`));
+  const v1second = (await tapOf(new Error('the second cause'), `${v1} named`)).replace('TAP version 13\n', '').replace('not ok 1 - ', 'not ok 2 - ');
+  const v1Run = `${v1first}${v1second}${okPoint(3, 'a skip', { directive: ' # SKIP \\#\\#[stop-commands]pause a reason' })}# bound: \\#\\#[stop-commands]pause: 5 ms < 10 ms\n# ✗ a check\n#     got:  "\\#\\#[stop-commands]pause"\n${harnessFailure(4, 'tools/test-forged.mjs')}${nodeFailure(5, 'a failure in a path', ['the cause'], `${v1}/test-x.mjs`)}${TOTALS({ points: 5, tests: 5, pass: 0, fail: 4, skipped: 1 })}`;
+  const vr = summarize(v1Run, { root: LROOT, pathApi: posix, host });
+  const vur = summarize(v1first, { root: LROOT, pathApi: posix, host });
+  const vnr = notStartedBlock(`npm error ${v1}\nnpm error after it\n`, { host });
+  assert.equal(vr.failures.length, 4, 'four failures');
+  assert.ok(v1second.includes('not ok 2 - \\#\\#[stop-commands]pause named\n') && v1Run.includes(`\n    ${v1}\n`), 'node\'s reporter escapes a name\'s `#`, not an error\'s');
+  for (const [name, block] of [['failures', fr], ['an unfinished run', ur], ['a not-started capture', nr], ['`##[` failures', vr], ['a `##[` unfinished run', vur], ['a `##[` not-started capture', vnr]]) {
     const own = block.text.split('\n');
     const commands = own.slice(own.indexOf(RULE) + 1);
     assert.ok(commands.length >= 2 && commands.every((l) => /^::(error|notice) /.test(l)), `${name}: the block's own annotations and notice follow its rule`);
-    assert.deepEqual(runnerLines(block.text).filter((l) => /^[\s\u0085]*::/.test(l)), commands, `${name}: they are its only lines the runner would execute`);
+    assert.deepEqual(runnerLines(block.text).filter((l) => RUNNER_READS_RE.test(l)), commands, `${name}: they are its only lines the runner would execute`);
+    assert.ok(!block.text.replace(/^(::error )file=[^,:]*/gm, '$1').includes('##['), `${name}: no line of it holds the v1 form but an annotation's file=`);
     assert.equal(runnerLines(block.text).reduce((n, l) => n + logLines(l), 0), block.lines, `${name}: the block counts the log lines the runner makes of it`);
   }
+  for (const shown of [`${HEAD}\nhost: linux 6.8.0 x64 · node v22.16.0 · 4 cpus · cwd /home/jo/#\\#[stop-commands]pause · tmpdir /tmp/#\\#[stop-commands]pause · symlink: created\n`,
+    '\n     1 × #\\#[stop-commands]pause a reason\n', "\na skip reason no run expects: '#\\#[stop-commands]pause a reason' (a skip) — ",
+    '\n--- not ok 1 - a failing assertion\n    at (no location)\n    | expected 1 row\n    | #\\#[stop-commands]pause\n    | after it\n',
+    '\n--- not ok 2 - #\\#[stop-commands]pause named\n', '\n    | ✗ a check\n    |     got:  "#\\#[stop-commands]pause"\n',
+    '\n--- not ok 5 - a failure in a path\n    at #\\#[stop-commands]pause/test-x.mjs:5\n', '%  #\\#[stop-commands]pause\n', ' s  #\\#[stop-commands]pause named\n',
+    "\n::error title=unknown skip reason::a skip reason no run expects: '#\\#[stop-commands]pause a reason' (a skip) — ",
+    '\n::error title=a failing assertion::expected 1 row%0A#\\#[stop-commands]pause%0Aafter it\n', '\n::error title=#\\#[stop-commands]pause named::the second cause\n',
+    '\n::error file=##[stop-commands]pause/test-x.mjs,line=5,title=a failure in a path::the cause\n']) {
+    assert.ok(vr.text.includes(shown), `the \`##[\` failures' block shows ${JSON.stringify(shown)}`);
+  }
+  assert.ok(vur.text.includes('\n  |     #\\#[stop-commands]pause\n  |     after it\n'), 'the `##[` unfinished run\'s tail shows it');
+  assert.ok(vnr.text.includes('\n  | npm error #\\#[stop-commands]pause\n  | npm error after it\n'), 'the `##[` not-started block shows it');
   for (const shown of ['\n    | ::stop-commands::pause\n    |   ::error title=forged::not a failure of this run\n    | x\\r::add-mask::tests\n    | \u0085::warning::y\n',
     '\n    | first\\r::stop-commands::x\n', '\n    | ✗ a check\n    |     ::stop-commands::pause\n', '\n  unreadable: bound: x\\r::stop-commands::y\n']) {
     assert.ok(fr.text.includes(shown), `the failures' block shows ${JSON.stringify(shown)}`);
@@ -502,14 +538,15 @@ test('S5 annotations: escaping, the run-level errors first, failures up to the c
   assert.ok(nr.text.includes('\n  | npm error ::stop-commands::pause\n  |   ::error title=forged::not a failure of this run\n  | x\\r::add-mask::tests\n'), 'the not-started block shows it');
 
   // This suite's own failure, as node --test prints it into a job's log: the
-  // text still shown, no line of it a workflow command.
-  for (const fail of [() => assert.ok(false, r.text), () => assert.ok(undefined, r.text), () => assert.equal(1, 2, r.text), () => assert.match(r.text, /never printed/), () => assert.equal(r.text, ''), () => assert.deepEqual([r.text], [])]) {
+  // text still shown, no line of it a workflow command in either form.
+  const said = `${r.text}\n${v1}`;
+  for (const fail of [() => assert.ok(false, said), () => assert.ok(undefined, said), () => assert.equal(1, 2, said), () => assert.match(said, /never printed/), () => assert.equal(said, ''), () => assert.deepEqual([said], [])]) {
     let error = null;
     try { fail(); } catch (e) { error = e; }
     assert.ok(error instanceof strictAssert.AssertionError, `${fail}`);
     const printed = await tapOf(error);
-    assert.deepEqual(printed.split(/\r?\n|\r/).filter((l) => /^[\s\u0085]*::/.test(l)), [], `${fail}: a line the runner would execute`);
-    assert.ok(printed.includes('| ::notice title=npm test::tests 12 pass 0 fail 12'), `${fail}: the text is still shown`);
+    assert.deepEqual(printed.split(/\r?\n|\r/).filter((l) => RUNNER_READS_RE.test(l)), [], `${fail}: a line the runner would execute`);
+    assert.ok(printed.includes('| ::notice title=npm test::tests 12 pass 0 fail 12') && printed.includes('#\\#[stop-commands]pause'), `${fail}: the text is still shown`);
     assert.ok(!error.stack.includes('commandless'), `${fail}: the stack starts at the assertion`);
   }
 });
@@ -848,6 +885,23 @@ test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README 
       `  ${vanished}`,
       `::error title=windows (node 22.23.3) vs linux (node 22.16.0)::${vanished}`,
     ], 'every run held, the last one\'s difference named under its label, and no notice');
+    // The runner executes `##[` anywhere in a line: --compare shows a run's
+    // harness file and skip reason with it as `#\#[`, and the host line a cwd
+    // with it; no line but the block's own commands is read as one.
+    const forgedShape = f('windows-forged.json', `{"platform":"win32","node":"v22.16.0","tests":10,"todo":0,"skips":{"##[stop-commands]pause a reason":1},"harness":{"tools/##[stop-commands]x.mjs":{"asserts":1,"win32":0},"tools/test-a.mjs":{"asserts":5,"win32":0},"tools/test-b.mjs":{"asserts":3,"win32":0}}}`);
+    const forgedCmp = run(['--compare', floor, forgedShape]);
+    assert.equal(forgedCmp.status, 1, forgedCmp.stdout + forgedCmp.stderr);
+    const label = 'windows (node 22.16.0) vs linux (node 22.16.0)';
+    const differences = ['tools/#\\#[stop-commands]x.mjs: a harness suite only the run reported', "skip '#\\#[stop-commands]pause a reason': 1 on the run, 0 on the reference"];
+    assert.deepEqual(forgedCmp.stdout.trimEnd().split('\n'), [`${label}: 2 differences — the run did not run what the reference ran`, ...differences.map((d) => `  ${d}`), ...differences.map((d) => `::error title=${label}::${d}`)]);
+    assert.deepEqual(forgedCmp.stdout.split(/\r?\n|\r/).filter((l) => RUNNER_READS_RE.test(l)), differences.map((d) => `::error title=${label}::${d}`), '--compare: its ::error lines are the only ones the runner would execute');
+    const forgedCwd = join(dir, '##[stop-commands]pause');
+    mkdirSync(forgedCwd);
+    const fromForged = run([green, '--win32-skips', '0'], forgedCwd);
+    assert.equal(fromForged.status, 0, fromForged.stdout + fromForged.stderr);
+    assert.match(fromForged.stdout, /^host: .* · cwd .*#\\#\[stop-commands\]pause · tmpdir .*$/m);
+    const read = fromForged.stdout.split(/\r?\n|\r/).filter((l) => RUNNER_READS_RE.test(l));
+    assert.ok(read.length === 1 && read[0].startsWith('::notice title=npm test::'), 'a cwd holding `##[`: the notice is the only line the runner would execute');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

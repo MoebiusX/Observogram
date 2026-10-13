@@ -368,18 +368,26 @@ export function annotation(kind, props, message) {
 export const logLines = (line) => 1 + (line.startsWith('::') ? (line.match(/%0A/g) || []).length : 0);
 
 const fmtTotal = (v) => (v === undefined ? '?' : String(v));
+// The runner also executes its older command form, `##[name]…`, anywhere in
+// a line, so the run's text the summary prints (names, reasons, errors, a
+// failure's place, the host line, --compare's lines, an annotation's title
+// and message) shows each `##[` as `#\#[`, the second `#` as TAP escapes it;
+// a line without one prints as it is. An annotation's file= names the file it
+// links to as it is: the runner reads that line as a `::` command, never for
+// a `##[` in it.
+const inert = (s) => String(s).replace(/##\[/g, '#\\#[');
 // cut prints a CR as `\r` (as TAP escapes one in a name) before it cuts: the
 // runner reads a lone CR as a line break, so a raw one in the run's text (a
 // failure's error, a diagnostic) would start a log line of its own.
 const cut = (s, n) => {
-  const t = String(s).replace(/\r/g, '\\r');
+  const t = inert(String(s).replace(/\r/g, '\\r'));
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 };
 // A line of the run's own text (a failure's error, an unfinished run's or a
 // not-started capture's lines) shows behind `| `: the runner executes a line
 // that starts with `::` once its leading whitespace is trimmed, and a
 // `::stop-commands::` in a failure would leave the block's own annotations
-// and notice unprocessed.
+// and notice unprocessed (cut shows a `##[` as `#\#[`).
 const quoted = (l) => `| ${cut(l, 500)}`;
 
 // What npm, node or a shell prints when the tests never start: npm's own
@@ -415,7 +423,7 @@ export function notStartedBlock(text, { file = 'test.tap', windows = false, host
   while (held.length && held[held.length - 1].trim() === '') held.pop();
   if (held.length && !NOT_STARTED.some((re) => re.test(text))) return null;
   const out = [HEAD];
-  if (host) out.push(host);
+  if (host) out.push(inert(host));
   let error;
   if (!held.length) {
     out.push(`${file} is empty: npm test printed nothing into it — capture the run again: ${reportCommand(file, windows)}`);
@@ -446,7 +454,7 @@ export function summarize(text, { root = process.cwd(), expectWin32 = null, coun
   const parsed = parseTap(text);
   const t = parsed.totals;
   const out = [HEAD];
-  if (host) out.push(host);
+  if (host) out.push(inert(host));
   if (parsed.mangled) out.push(`warning: ${file} went through a console code page (✗ arrives as Γ£ù) — the failure causes may be cut; capture it with: ${reportCommand(file, windows)}`);
   out.push(`tests ${fmtTotal(t.tests)} · pass ${fmtTotal(t.pass)} · fail ${fmtTotal(t.fail)} · skipped ${fmtTotal(t.skipped)} · todo ${fmtTotal(t.todo)} · cancelled ${fmtTotal(t.cancelled)} · ${t.duration_ms === undefined ? '?' : Math.round(t.duration_ms / 1000)} s`);
   // How the TAP ends when it is unfinished: before its totals, or inside them.
@@ -487,7 +495,7 @@ export function summarize(text, { root = process.cwd(), expectWin32 = null, coun
   for (const f of failures.slice(0, maxFailures)) {
     const p = fails[failures.indexOf(f)];
     out.push(`--- not ok ${p.n} - ${cut(f.name, 300)}`);
-    out.push(`    at ${f.file ?? '(no location)'}${f.line ? `:${f.line}` : ''}`);
+    out.push(`    at ${inert(f.file ?? '(no location)')}${f.line ? `:${f.line}` : ''}`);
     for (const l of f.body.slice(0, MAX_ERROR_LINES)) out.push(`    ${quoted(l)}`);
     if (f.body.length > MAX_ERROR_LINES) out.push(`    … ${f.body.length - MAX_ERROR_LINES} more line(s)`);
   }
@@ -612,7 +620,7 @@ export function compareShapes(reference, run) {
   const line = diffs.length
     ? `${label}: ${diffs.length} difference${diffs.length === 1 ? '' : 's'} — the run did not run what the reference ran`
     : `${label}: tests ${run.tests} = ${reference.tests} · harness assertions ${thousands(runAsserts)} vs ${thousands(refAsserts)} in ${files.length} files${fewer.length ? ` (${fewer.join('; ')})` : ''} · other skips equal (${pid1}) — it ran what the reference ran`;
-  return { ok: diffs.length === 0, differences: diffs, line };
+  return { ok: diffs.length === 0, differences: diffs.map(inert), line: inert(line) };
 }
 
 // ---------- the CLI ----------
