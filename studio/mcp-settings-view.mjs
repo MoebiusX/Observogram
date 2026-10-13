@@ -25,7 +25,8 @@
 // generic form's field names and the settings policy's findings are
 // patched: what was typed, a ticked acknowledgement and the focus stay. The
 // actions go to host.mcpSettings: close, send, action(name), retry,
-// useGeneric, input, generic, ack, test, openLive.
+// useGeneric, input({ typed, secret }) — an edit, and whether it was a
+// secret's —, generic, ack, test, openLive.
 
 import { host as appHost } from './host.mjs';
 
@@ -134,7 +135,8 @@ function formOf(model, host) {
     input.type = f.spec.type;
     for (const [k, v] of Object.entries(f.spec.attrs)) input.setAttribute(k, v);
     input.className = 'mss-input';
-    input.addEventListener('input', () => act(host).input?.());
+    // An edit says whether it was a secret's: no policy rule reads one.
+    input.addEventListener('input', () => act(host).input?.({ typed: true, secret: f.type === 'secret' }));
     input.addEventListener('change', () => act(host).input?.());
     if (f.type !== 'boolean') {
       input.addEventListener('keydown', (e) => {

@@ -157,6 +157,25 @@ server versus the studio's connection to it, the UI_CONVENTIONS zone.
   the page, where a slow pattern freezes only the admin's own tab. Reverting
   the route to synchronous evaluation fails the new server case (its
   `GET /api/mcp-settings` times out behind the blocked submit). Tests: 1355 → 1357.
+  (**Since 2026-10-08, the follow-up `codex/policy-worker`:** the deadline
+  is per rule — each rule has 100 ms from its own start — because one
+  deadline for every rule, counted from the worker's start, could time out
+  fast rules on a loaded machine; both cases' wall-clock bounds, which
+  flaked under load, are now seconds, the server case's
+  `GET /api/mcp-settings` aborting after 10 s. A server started with a flag
+  a worker refuses — `node --max-old-space-size=… server/index.mjs` — with
+  a settings policy (`OBSERVOGRAM_MCP_SETTINGS_POLICY`) answered every
+  pass-through submit `502 the server-settings proxy failed (Error)` (a
+  server without one builds no worker and was unaffected): the worker is
+  now constructed once more without the flags, and a worker that cannot be
+  constructed fails closed like one that fails. And the start no longer
+  runs the id clocks (four runs against 256-character ids, refused past
+  50 ms of wall time), which a loaded machine failed with a valid policy:
+  it checks shape only. A 409 for a rule the server could not check says
+  `unevaluated: true`, and the modal draws the acknowledgement of a rule a
+  409 names that its own check did not flag, with a line saying why — it
+  showed the 409's sentence with nothing to tick, every submit on a server
+  whose worker cannot be built.)
 - The other review fixes add assertions to existing tests or change docs;
   the count is unchanged.
 
