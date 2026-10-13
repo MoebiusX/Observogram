@@ -1160,11 +1160,16 @@ test('BROWSER 14: through the studio server, a rule it could not check — the a
   await w.page.click(repoint, { force: true });
   assert.equal(await w.status(), TICK, 'clicked again unticked, it says so');
   assert.deepEqual(submits.map((x) => [x.status, x.acks, x.action]), [[409, [], null], [200, [0], null], [409, [], 'repoint']], 'and sends nothing');
+  // The action that carries nothing goes with the box unticked, and its
+  // submit acknowledges nothing: no ack is sent for a box the reader did not tick.
+  await Promise.all([w.page.waitForResponse((r) => r.url().endsWith('/api/mcp-settings/submit')), w.page.click(disable)]);
+  assert.deepEqual(submits.map((x) => [x.status, x.acks, x.action]).at(-1), [200, [], 'disable'], 'unticked, the box adds no ack to a submit');
+  assert.deepEqual((await box()).map((b) => b.tick), [['0', false]], 'the box stays, unticked');
   await w.page.check(ackBox);
   assert.equal(await w.page.getAttribute(repoint, 'aria-disabled'), null, 'ticked, it may go');
   await Promise.all([w.page.waitForResponse((r) => r.url().endsWith('/api/mcp-settings/submit')), w.page.click(repoint)]);
   assert.deepEqual(submits.map((x) => [x.status, x.acks, x.action]).at(-1), [200, [0], 'repoint']);
-  assert.deepEqual(postsTo(f).map((r) => r.body), [{ grafanaUrl: 'https://approved.example/', secret: SECRET }, { action: 'repoint', grafanaUrl: 'https://approved.example/' }]);
+  assert.deepEqual(postsTo(f).map((r) => r.body), [{ grafanaUrl: 'https://approved.example/', secret: SECRET }, { action: 'disable' }, { action: 'repoint', grafanaUrl: 'https://approved.example/' }]);
   await closeSettings(w);
   await w.done();
 });
