@@ -1329,7 +1329,12 @@ failed intermittently. A pass now costs the smaller of the wall clock and
 the process's CPU time plus that clock's slack (a 15.625 ms tick and a
 millisecond on Windows, whose process times tick coarsely; 0 elsewhere),
 which bounds the pattern's own work: a pattern over the budget is still
-refused, on its one pass, with the same text. The studio compiles the
-taxonomy the server served without timing it, so a slow phone binds what
-the server accepted. Tests: 1390 → 1394 (three in
-`tools/test-artefact-classify.mjs`, one in `tools/test-discover-rows.mjs`).
+refused, with the same text. A first pass that reads over the budget but
+within twice it is timed again, up to twice, each time on a fresh
+compilation of the pattern (a regex runs faster once warm), so a pass the
+process's other threads or Windows' coarse clock overstated is not refused;
+a first pass over twice the budget is refused on it, so a catastrophic
+pattern still runs once. The studio compiles the taxonomy the server served
+without timing it, so a slow phone binds what the server accepted. Tests:
+1390 → 1394 (three in `tools/test-artefact-classify.mjs`, one in
+`tools/test-discover-rows.mjs`).

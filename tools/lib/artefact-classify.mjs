@@ -180,6 +180,10 @@ const ADVERSARIAL_IDS = Object.freeze([
   `${'x'.repeat(ID_MATCH_LENGTH - 1)}!`,
 ]);
 const PATTERN_BUDGET_MS = 50;
+// A first pass over the budget but within the cap is re-timed, up to
+// PATTERN_RETIMES more passes (the id clocks, below).
+const PATTERN_RETIME_CAP_MS = 2 * PATTERN_BUDGET_MS;
+const PATTERN_RETIMES = 2;
 
 // The id clocks: what one pass over ADVERSARIAL_IDS costs, held to the
 // budget. The budget is for the pattern's own work, and no single clock
@@ -196,17 +200,25 @@ const PATTERN_BUDGET_MS = 50;
 // reading to the millisecond, so a pass of 62 ms can read 46. The
 // pattern's own work is under the wall reading and under the CPU reading
 // plus its slack, so a pass costs the SMALLER of the two. A pattern whose
-// own work is over the budget is over on both, so it is refused on its one
-// pass, on every platform: nothing re-runs a pattern, and a catastrophic
-// one (seconds on one id) costs that one pass, as before. Away from
-// Windows a deschedule alone never refuses a pattern whose own work fits —
-// that takes the process's other threads burning the budget in the same
-// window as well. On Windows a stalled pass the coarse clock charges three
-// ticks (46.875 ms, which a pass over the budget can read too) is refused,
-// as the wall clock alone refused it; one charged two ticks or fewer never
-// is. Without a CPU clock (a browser has no `process`) the wall clock
-// decides alone, as it always did; the studio does not time at all — it
-// compiles the document the server timed at start with `timed: false`
+// own work is over the budget is over on both on every pass, so it is
+// refused, on every platform. A pass whose own work fits can still read
+// over: the process's other threads busy in the same window, or, on
+// Windows, a stall the coarse clock charges three ticks (46.875 ms, which
+// a pass over the budget can read too). So a first pass over the budget
+// but within the cap (PATTERN_RETIME_CAP_MS, twice the budget) is
+// re-timed — up to PATTERN_RETIMES more passes, two — and the pattern is
+// refused only when none fits. A first pass over the cap is refused on
+// it: a catastrophic pattern (seconds on one id) costs the one pass it
+// always did, and a re-time adds at most two passes of a pattern whose
+// own work is within the cap. Each re-time runs a fresh compilation: V8
+// keeps one per source and tiers it up to native code after its first
+// run, so the same source's second pass runs warm — a pattern of 55 ms
+// ran in 8 — and would admit what the first pass refused. Re-time k wraps
+// the source in k non-capturing groups, `(?:…)`, which match exactly what
+// it matches, so each pass pays what the first one paid. Without a CPU
+// clock (a browser has no `process`) the wall clock decides alone,
+// re-timed the same way; the studio does not time at all — it compiles
+// the document the server timed at start with `timed: false`
 // (studio/taxonomy.mjs), so a slow phone or a throttled tab never refuses
 // what the server accepted. The wall clock is the monotonic
 // `performance.now()`, in both runtimes.
@@ -223,6 +235,12 @@ const spentMs = (t0, t1) => {
   const wall = t1.wall - t0.wall;
   if (typeof t0.cpu !== 'number' || typeof t1.cpu !== 'number') return wall;
   return Math.min(wall, t1.cpu - t0.cpu + Math.max(t0.slack ?? 0, t1.slack ?? 0));
+};
+// One pass of `re` over ADVERSARIAL_IDS, timed: what it cost (spentMs).
+const timePass = (re, clock) => {
+  const t0 = clock();
+  for (const id of ADVERSARIAL_IDS) re.test(id);
+  return spentMs(t0, clock());
 };
 
 const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -257,14 +275,16 @@ function readTarget(value, where, errors) {
  * and — unless `timed` is false — finishing the four adversarial
  * ID_MATCH_LENGTH-character ids within the 50 ms budget, by the id clocks
  * (above: the smaller of the wall clock and the process's CPU time plus
- * its slack, the wall clock alone where the runtime has no CPU clock).
+ * its slack, the wall clock alone where the runtime has no CPU clock; a
+ * first pass within twice the budget re-timed up to twice, each on a fresh
+ * compilation, before it is refused).
  * `noun` names the pattern in each reason (`pattern` for the taxonomy, so
  * its texts are the ones it always had). `timed: false` skips only the
  * timed run (a browser re-reading a file the server already timed); every
  * static check still runs. `clock` is the suites' seam:
  * `() => ({ wall, cpu, slack })` in milliseconds, `cpu` null where there is
  * none, `slack` (0 if absent) what a CPU reading can fall short of the time
- * spent, read once before the pass and once after it. A caller matching
+ * spent, read once before each pass and once after it. A caller matching
  * longer or differently shaped values adds its own bounds on top.
  * @returns {{ re: RegExp } | { reason: string }}
  */
@@ -277,9 +297,11 @@ export function compileBoundedPattern(pattern, { flags = '', noun = 'pattern', t
   let re;
   try { re = new RegExp(pattern, flags); } catch (e) { return { reason: `invalid regex: ${e.message}` }; }
   if (timed) {
-    const t0 = clock();
-    for (const id of ADVERSARIAL_IDS) re.test(id);
-    if (spentMs(t0, clock()) > PATTERN_BUDGET_MS) return { reason: `${noun} too slow against a ${ID_MATCH_LENGTH}-character id` };
+    let spent = timePass(re, clock);
+    if (spent <= PATTERN_RETIME_CAP_MS) {
+      for (let k = 1; spent > PATTERN_BUDGET_MS && k <= PATTERN_RETIMES; k++) spent = timePass(new RegExp(`${'(?:'.repeat(k)}${pattern}${')'.repeat(k)}`, flags), clock);
+    }
+    if (spent > PATTERN_BUDGET_MS) return { reason: `${noun} too slow against a ${ID_MATCH_LENGTH}-character id` };
   }
   return { re };
 }
