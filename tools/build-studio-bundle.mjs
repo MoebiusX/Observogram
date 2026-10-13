@@ -65,10 +65,20 @@
 // traces name data: URLs. A page whose Content-Security-Policy forbids
 // `data:` in script-src needs a directory form (`--split`), a follow-up.
 //
+// The licences (docs/DOWNSTREAM.md §10): every bundle carries Observogram's
+// MIT licence, in full, in one `<script type="text/plain"
+// id="observogram-licenses">` element at the end of `<head>` — never executed
+// or rendered, kept by minifiers that strip comments, readable by
+// textContent — beside the spec's provenance (vendor/observability-pack-spec/
+// VERSIONS.json; that repository publishes no licence file, and the block
+// says so instead of claiming one). One comment line after the doctype points
+// a human opening the file at the element. verifyBundleNotices(html) checks a
+// finished file — the build's, or one a downstream pipeline rewrote.
+//
 // Zero dependencies beyond Node: fs, path, this repo's tools/lib and the
 // tokenizer of tools/gen-vendor-manifest.mjs. No bundler.
 // Exit 0 built · 1 a pack fails the schema, a specifier cannot be inlined, a
-// file is missing · 2 usage.
+// file is missing, a licence text cannot be embedded · 2 usage.
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { resolve, dirname, basename, posix, extname } from 'node:path';
@@ -207,6 +217,214 @@ export function styleBlock(name, css) {
   return `<style data-src="${name}">\n${css}\n</style>`;
 }
 
+// ---------- the licences ----------
+
+export const LICENCES_ID = 'observogram-licenses';
+const LICENCES_OPEN = `<script type="text/plain" id="${LICENCES_ID}">`;
+const SPEC_VERSIONS = 'vendor/observability-pack-spec/VERSIONS.json';
+// A licence file at a package's root (LICENSE, LICENCE.md, COPYING, …).
+export const LICENCE_FILE_RE = /^(?:licen[cs]e|copying)(?:[.-][\w.-]+)?$/i;
+const MIT_GRANT = 'Permission is hereby granted';
+const MIT_DISCLAIMER = 'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND';
+
+// The comment line after the doctype, worded for what the file holds — for a
+// human opening the file; the element is what carries the texts.
+export function pointerComment(withPackages) {
+  return withPackages
+    ? `<!-- Licences: this file contains Observogram (MIT) and third-party packages; their full texts are in the ${LICENCES_OPEN} element in the head. -->`
+    : `<!-- Licence: this file contains Observogram (MIT) and no third-party package; its full text is in the ${LICENCES_OPEN} element in the head. -->`;
+}
+
+// A text the block embeds must not end the element early ("</script") or
+// open a comment ("<!--", which changes how the parser reads "</script"
+// inside the element). Such a text refuses the build: a licence is
+// reproduced as written, never escaped.
+function assertEmbeddable(text, who, file) {
+  const m = /<\/script|<!--/i.exec(text);
+  if (m) throw new Error(`${who}: ${file} contains "${m[0] === '<!--' ? '<!--' : '</script'}" and cannot be embedded in the bundle's licence block`);
+}
+
+// Observogram's licence (LICENSE at the root, verbatim) and the spec's
+// provenance (the upstream repository and commit VERSIONS.json records),
+// read from the tree the bundle is built from. `root` appears in a refusal
+// only — stderr, never the file.
+export function readOwnNotices(root = DEFAULT_ROOT, version) {
+  const licencePath = resolve(root, 'LICENSE');
+  if (!existsSync(licencePath)) throw new Error(`LICENSE is missing from ${root} — every bundle carries Observogram's licence; copy LICENSE with the tree`);
+  const licence = readFileSync(licencePath, 'utf8');
+  assertEmbeddable(licence, `Observogram ${version}`, 'LICENSE');
+  let upstream = null;
+  try { upstream = JSON.parse(readFileSync(resolve(root, SPEC_VERSIONS), 'utf8')).upstream; } catch { /* refused below */ }
+  if (!upstream || typeof upstream.repo !== 'string' || !upstream.repo || typeof upstream.commit !== 'string' || !upstream.commit) {
+    throw new Error(`${SPEC_VERSIONS} is missing from ${root} or names no upstream repo and commit — copy vendor/observability-pack-spec/ with the tree: every bundle embeds the spec's schema and says where it comes from`);
+  }
+  assertEmbeddable(`${upstream.repo} ${upstream.commit}`, 'the spec', SPEC_VERSIONS);
+  return { licence, spec: { repo: upstream.repo, commit: upstream.commit } };
+}
+
+const codePointOrder = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const endLine = (t) => (t.endsWith('\n') ? t : `${t}\n`);
+
+// The block's text: the preamble, Observogram's section, one section per
+// package in code-point order of its name — { name, version, license, entry,
+// source?, copyright?, licenceFiles: [{ name, text }], notice: [{ name, text }]
+// | null } — and the spec's. Every text verbatim (a final newline added only
+// when it has none); a pure function of its input, so one tree builds one
+// block.
+export function licenceBlockText({ version, licence, packages = [], spec }) {
+  const preamble = [
+    `This file is a build of the Observogram studio, version ${version} (tools/build-studio-bundle.mjs).`,
+    ...(packages.length
+      ? [
+        "It contains Observogram's code and the third-party packages listed below, each with its",
+        "licence in full. Each package's file is one entry of this file's import map, embedded as",
+        'npm ci installed it from package-lock.json: this build changes nothing in it, and does not',
+        'compare it with the package the registry publishes. Licence and NOTICE files are the ones',
+        'the published package contains.',
+      ]
+      : ["It contains Observogram's code and no third-party package."]),
+  ];
+  const sections = [`==== Observogram ${version} — MIT ====\n${endLine(licence)}`];
+  for (const p of [...packages].sort((a, b) => codePointOrder(a.name, b.name))) {
+    const lines = [`==== ${p.name} ${p.version} — ${p.license} ====`, `File: ${p.entry} (import-map entry "${p.name}"), as installed.`];
+    if (p.source) lines.push(`Source: ${p.source}`);
+    if (p.copyright) lines.push(`Copyright lines in the file: ${p.copyright}`);
+    let s = `${lines.join('\n')}\n`;
+    for (const f of [...p.licenceFiles, ...(p.notice || [])]) s += `---- ${f.name} ----\n${endLine(f.text)}`;
+    sections.push(s);
+  }
+  sections.push([
+    '==== The ObservabilityPack spec ====',
+    "The spec schema embedded in this file (and any pack built in from the spec's examples) comes",
+    `from ${spec.repo} at commit ${spec.commit}; that`,
+    'repository publishes no licence file.',
+  ].join('\n') + '\n');
+  const text = `${preamble.join('\n')}\n\n${sections.join('\n')}`;
+  assertEmbeddable(text, 'the licence block', 'its text');
+  return text;
+}
+
+// The page with the licence element at the end of <head> and the pointer
+// comment right after the doctype.
+function withLicences(html, text, withPackages) {
+  const doctype = /^<!doctype html>\n/i.exec(html);
+  if (!doctype) throw new Error('studio/index.html: expected to start with <!doctype html> (the licence pointer goes right after it)');
+  if (html.indexOf('</head>') < 0 || html.indexOf('</head>') !== html.lastIndexOf('</head>')) throw new Error('studio/index.html: expected exactly one </head>');
+  const element = `${LICENCES_OPEN}\n${text}</script>`;
+  const out = `${doctype[0]}${pointerComment(withPackages)}\n${html.slice(doctype[0].length)}`;
+  return out.replace('</head>', `${element}\n</head>`);
+}
+
+// A page read the way an HTML parser reads its structure: every comment and
+// the text of every <script> and <style> element blanked (indices kept), so a
+// stylesheet, a script or a comment that spells a tag is not one; with the
+// page's script elements ({ index, attrs, content }) and its comments.
+function markupOf(html) {
+  const scripts = [];
+  const comments = [];
+  let blank = '';
+  let at = 0;
+  const open = /<!--|<(script|style)\b([^>]*)>/gi;
+  let m;
+  while ((m = open.exec(html))) {
+    let from;
+    let to;
+    if (m[0] === '<!--') {
+      const end = html.indexOf('-->', m.index + 4);
+      from = m.index;
+      to = end < 0 ? html.length : end + 3;
+      comments.push(html.slice(from, to));
+    } else {
+      from = m.index + m[0].length;
+      const close = new RegExp(`</${m[1]}`, 'gi');
+      close.lastIndex = from;
+      const c = close.exec(html);
+      to = c ? c.index : html.length;
+      if (m[1].toLowerCase() === 'script') {
+        const attrs = {};
+        for (const a of m[2].matchAll(/([^\s=/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g)) attrs[a[1].toLowerCase()] = a[2] ?? a[3] ?? a[4] ?? '';
+        scripts.push({ index: m.index, attrs, content: html.slice(from, to) });
+      }
+    }
+    blank += html.slice(at, from) + ' '.repeat(to - from);
+    at = to;
+    open.lastIndex = to;
+  }
+  blank += html.slice(at);
+  return { blank, scripts, comments };
+}
+
+// What a finished bundle must carry — the build's own file, or one a
+// pipeline rewrote after it (attributes reordered, comments stripped) — as
+// { ok, packages: [name], problems: [sentence] }. Checked: exactly one
+// #observogram-licenses element, text/plain, in <head>; Observogram's MIT
+// section with the grant and the warranty disclaimer; for every import-map
+// key that is neither studio/… nor lib/… (a bundled package), exactly one
+// section headed with its name, version and licence id, a File: line naming
+// that key and at least one licence text; no section for a package the map
+// does not carry; the pointer comment, when the file still has it, worded
+// for what the map carries. Not checked: whether the texts are the installed
+// packages' (tools/test-bundle-compare.mjs compares them with node_modules).
+export function verifyBundleNotices(html) {
+  const problems = [];
+  const { blank, scripts, comments } = markupOf(String(html));
+  const mapScript = scripts.find((s) => (s.attrs.type || '').toLowerCase() === 'importmap');
+  let keys = [];
+  if (!mapScript) problems.push('the file has no import map');
+  else {
+    try { keys = Object.keys(JSON.parse(mapScript.content).imports || {}); } catch (e) { problems.push(`the import map does not parse (${e.message})`); }
+  }
+  const packages = keys.filter((k) => !k.startsWith('studio/') && !k.startsWith('lib/')).sort(codePointOrder);
+  const blocks = scripts.filter((s) => s.attrs.id === LICENCES_ID);
+  if (blocks.length !== 1) {
+    problems.push(blocks.length ? `the file has ${blocks.length} #${LICENCES_ID} elements; it must have exactly one` : `the file has no ${LICENCES_OPEN} element — the licences are not embedded`);
+  } else {
+    const [block] = blocks;
+    if ((block.attrs.type || '').toLowerCase() !== 'text/plain') problems.push(`#${LICENCES_ID} is not type="text/plain"`);
+    const headEnd = blank.search(/<\/head\b|<body\b/i);
+    if (headEnd < 0 || block.index > headEnd) problems.push(`#${LICENCES_ID} is not in <head>`);
+    const sections = [];
+    for (const line of block.content.split('\n')) {
+      const h = /^==== (.+) ====$/.exec(line);
+      if (h) sections.push({ header: h[1], lines: [] });
+      else if (sections.length) sections[sections.length - 1].lines.push(line);
+    }
+    const own = sections.find((s) => /^Observogram \S+ — MIT$/.test(s.header));
+    if (!own) problems.push('no "Observogram <version> — MIT" section');
+    else {
+      const body = own.lines.join('\n');
+      if (!body.includes(MIT_GRANT)) problems.push(`the Observogram section does not hold the MIT licence's grant ("${MIT_GRANT}")`);
+      if (!body.includes(MIT_DISCLAIMER)) problems.push('the Observogram section does not hold the MIT licence\'s warranty disclaimer');
+    }
+    const packageSections = sections
+      .map((s) => ({ ...s, m: /^(\S+) (\S+) — (.+)$/.exec(s.header) }))
+      .filter((s) => s.m && s.m[1] !== 'Observogram');
+    for (const name of packages) {
+      const mine = packageSections.filter((s) => s.m[1] === name);
+      if (mine.length !== 1) { problems.push(mine.length ? `${name}: ${mine.length} licence sections; one per package` : `${name}: no licence section (==== ${name} <version> — <licence id> ====)`); continue; }
+      const { lines } = mine[0];
+      if (!lines.some((l) => l.startsWith('File: ') && l.includes(`(import-map entry "${name}")`))) problems.push(`${name}: its section has no File: line naming the import-map entry "${name}"`);
+      let licenceText = false;
+      for (let i = 0; i < lines.length; i++) {
+        const f = /^---- (.+) ----$/.exec(lines[i]);
+        if (!f || !LICENCE_FILE_RE.test(f[1])) continue;
+        const next = lines.slice(i + 1);
+        const end = next.findIndex((l) => /^---- .+ ----$/.test(l));
+        if ((end < 0 ? next : next.slice(0, end)).join('').trim()) licenceText = true;
+      }
+      if (!licenceText) problems.push(`${name}: its section holds no licence text (---- LICENSE ---- and the text)`);
+    }
+    for (const s of packageSections) if (!packages.includes(s.m[1])) problems.push(`${s.m[1]}: a licence section for a package the import map does not carry`);
+  }
+  const pointers = comments.filter((c) => /^<!-- Licences?: this file contains Observogram\b/.test(c));
+  if (pointers.length > 1) problems.push(`the file has ${pointers.length} licence pointer comments; it must have at most one`);
+  else if (pointers.length === 1 && pointers[0] !== pointerComment(packages.length > 0)) {
+    const worded = pointers[0] === pointerComment(true) ? 'third-party packages' : pointers[0] === pointerComment(false) ? 'no third-party package' : 'neither form';
+    problems.push(`the licence pointer comment is worded for ${worded}; the import map carries ${packages.length ? packages.join(', ') : 'none'}`);
+  }
+  return { ok: problems.length === 0, packages, problems };
+}
+
 const STYLESHEET_RE = /^([ \t]*)<link rel="stylesheet" href="\/([\w.-]+\.css)">[ \t]*$/gm;
 // The shell's modulepreload of /lib/brand.mjs (and any other /lib module): in
 // the bundle the module is a data: URL in the import map, so there is
@@ -235,6 +453,8 @@ export function buildStudioBundle({ root = DEFAULT_ROOT, packs = [], remoteFonts
   const readRel = (rel) => readFileSync(resolve(root, rel), 'utf8');
   const pkgVersion = version ?? JSON.parse(readRel('package.json')).version;
   const schema = JSON.parse(readRel(SPEC_SCHEMA_PATH));
+  // Observogram's licence and the spec's provenance: every bundle carries them.
+  const own = readOwnNotices(root, pkgVersion);
 
   // The seams, guarded here too: the CLI validated already, a programmatic
   // caller gets the same refusals (the classifier's `taxonomy: …` reason;
@@ -319,6 +539,9 @@ export function buildStudioBundle({ root = DEFAULT_ROOT, packs = [], remoteFonts
   ];
   html = html.replace(APP_SCRIPT, scripts.join('\n'));
   html = html.replace('<body>\n', '<body>\n<noscript><p class="no-backend-notice">This studio is a static bundle: it needs JavaScript and a browser with import maps (Chrome 89, Firefox 108, Safari 16.4 or newer).</p></noscript>\n');
+
+  // The licences, last: the element at the end of <head>, the pointer after the doctype.
+  html = withLicences(html, licenceBlockText({ version: pkgVersion, licence: own.licence, packages: [], spec: own.spec }), false);
 
   const leftover = /(?:href|src)="\/[^"]*"/.exec(html);
   if (leftover) throw new Error(`the bundle still references the server: ${leftover[0]}`);

@@ -4,7 +4,8 @@
 //
 // T1 the module graph · T2 the specifier rewrite · T3 the build (a real
 // bundle in a tmpdir: every data: module parses, the stylesheets in order,
-// nothing left pointing at the server, the guards and the CLI exits) · T4
+// nothing left pointing at the server, the licence element and its pointer
+// comment, the guards and the CLI exits) · T4
 // inert by default (a build changes no source file; the live studio never
 // imports the shim; the shim links headlessly) · T5 parity against a running
 // child server for every route the shim ports — payment-service (an example
@@ -46,7 +47,7 @@ import { join, resolve, dirname, sep } from 'node:path';
 
 import {
   collectModuleGraph, rewriteSpecifiers, assertRewritten, inlineJson, styleBlock, buildStudioBundle,
-  checkPackUrl, parseArgs, defaultPackId, ENTRIES, CONFIG_ID, DEFAULT_ROOT,
+  checkPackUrl, parseArgs, defaultPackId, ENTRIES, CONFIG_ID, DEFAULT_ROOT, LICENCES_ID, pointerComment, verifyBundleNotices,
   resolveTaxonomySource, loadTaxonomyFile, loadBundleBrand, checkBrandUrls,
   resolveSettingsPolicySource, loadSettingsPolicyFile, resolveMcpOrigins, checkBakedOrigins,
 } from './build-studio-bundle.mjs';
@@ -291,6 +292,13 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   assert.ok(!html.includes('<link rel="stylesheet"'), 'no stylesheet link left');
   assert.ok(!html.includes('src="/app.mjs"'), 'the app script is replaced');
   assert.ok(!/['"]\/lib\//.test(decodeModule(map.imports['studio/app.mjs'])), 'app.mjs no longer names /lib/');
+  // The licences (follow-up compare-in-bundle): one text/plain element, the last thing in <head>; the pointer comment
+  // the line after the doctype, worded for a file with no third-party package; the file verifies.
+  const licencesOpen = `<script type="text/plain" id="${LICENCES_ID}">\n`;
+  assert.equal(html.split(licencesOpen).length - 1, 1, 'one licence element');
+  assert.equal(html.indexOf('</script>\n</head>', html.indexOf(licencesOpen)), html.indexOf('</script>', html.indexOf(licencesOpen)), 'the element ends the head');
+  assert.ok(html.startsWith(`<!doctype html>\n${pointerComment(false)}\n`), 'the pointer comment after the doctype');
+  assert.deepEqual(verifyBundleNotices(html), { ok: true, packages: [], problems: [] });
   // The config.
   const config = configOf(html);
   assert.deepEqual(config, built.config);
@@ -503,6 +511,10 @@ test('T4b inert by default: a build with nothing baked is the same tree\'s build
   const a = buildStudioBundle({ root: ROOT, packs: [payment], builtAt: 'x' });
   const b = buildStudioBundle({ root: ROOT, packs: [payment], builtAt: 'x' });
   assert.equal(b.html, a.html, 'two builds, one builtAt: identical');
+  // The licence block is a pure function of the tree: no clock in it.
+  const licencesOf = (html) => html.slice(html.indexOf(`<script type="text/plain" id="${LICENCES_ID}">\n`), html.indexOf('</head>'));
+  assert.ok(licencesOf(a.html).includes('==== Observogram '), 'the build carries the licence block');
+  assert.equal(licencesOf(buildStudioBundle({ root: ROOT, packs: [payment], builtAt: 'y' }).html), licencesOf(a.html), 'another builtAt, the same block');
   assert.equal(a.taxonomy, null);
   assert.equal(a.brand, null);
   // (2) The seams unset in every spelling: the identity (brandShellHtml is the identity for an unconfigured brand; the config gains no key).
