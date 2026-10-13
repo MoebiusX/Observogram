@@ -1422,7 +1422,7 @@ host serves (`\\myhost\ws`) is stored on a local drive, where
 `C:\ws\orgs\beta\…` names beta's part of it; while the workspace is named
 through a share, a path on a local drive outside it is placed by its nearest
 directory with the workspace's own file id, and judged there.
-Tests: 1390 → 1400 (`tools/test-journey-scope.mjs` 10, new).
+Tests: 1401 → 1411 (`tools/test-journey-scope.mjs` 10, new).
 
 The store's offline operations compared paths the same way, so on Windows
 `packc store export C:\WS\exports` wrote a directory export into the
@@ -1475,5 +1475,5 @@ database by its own path, a new path on the database's drive), so
 and a restore from `E:\ws\observogram.db` is not refused as the database
 itself. Each of the two suites also runs its
 default host once on a real directory, so a Windows run fails if the
-platform's rule is not the one chosen. Tests: 1400 → 1414
+platform's rule is not the one chosen. Tests: 1411 → 1425
 (`server/test-store-paths.mjs` 14, new).
