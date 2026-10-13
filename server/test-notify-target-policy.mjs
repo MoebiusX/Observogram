@@ -1136,6 +1136,14 @@ test('H13 a record written before the rule is served scrubbed: undici\'s echo of
     assert.ok(!r.text.includes('203.0.113.13') && !r.text.includes('47998'), 'no resolved address or port is served');
     assert.deepEqual(Object.keys(r.json.runs[0].notify), ['status', 'reason', 'triggers', 'httpStatus', 'attempts', 'tookMs', 'urlEnv', 'error'], 'the record otherwise as written');
     noMarkerIn('the served records', r.text);
+    // README's API Surface row for this route says what it serves: Node's lookup and connect texts as served,
+    // beside undici's two and the hook's URL, resolved address and token a run writes as <redacted>.
+    const row = readFileSync(new URL('../README.md', import.meta.url), 'utf8').split('\n').find((l) => l.startsWith('| `GET` | `/api/journeys/:name/runs'));
+    for (const served of r.json.runs.map((x) => x.notify.error).filter((e) => /^(getaddrinfo|connect) /.test(e))) {
+      assert.ok(row.includes(`\`${served}\``), `README's runs row quotes ${served}: ${row}`);
+    }
+    assert.match(row, /any part of the hook's URL, the address its host resolved to and its token as `<redacted>`/, row);
+    assert.match(row, /a bearer token, a URL with credentials/, row);
   } finally {
     rmSync(dir, { recursive: true, force: true });   // the planted leak is not the server's (H17 scans the workspace)
   }
