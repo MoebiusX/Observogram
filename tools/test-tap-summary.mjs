@@ -497,14 +497,15 @@ test('S5 annotations: escaping, the run-level errors first, failures up to the c
   // — a failure's error lines and its name (in the list, the slowest list
   // and its annotation's title), a skip reason, a harness suite's cause, a
   // bound's label, a failure's place, an unfinished run's tail, a
-  // not-started capture's lines, the host line. Only an annotation's file=
-  // names the run's path as it is, the file it links to: a line read as a
-  // `::` command is never read as a `##[` one.
+  // not-started capture's lines, the host line, and an annotation's file=,
+  // as the block shows the failure's place: the runner reads a `::` line it
+  // cannot split for a `##[` in it, and its culture-sensitive IndexOf("::")
+  // finds no `::` before a combining mark (failure 5's error starts with one).
   const v1 = '##[stop-commands]pause';
   const host = `host: linux 6.8.0 x64 · node v22.16.0 · 4 cpus · cwd /home/jo/${v1} · tmpdir /tmp/${v1} · symlink: created`;
   const v1first = await tapOf(new Error(`expected 1 row\n${v1}\nafter it`));
   const v1second = (await tapOf(new Error('the second cause'), `${v1} named`)).replace('TAP version 13\n', '').replace('not ok 1 - ', 'not ok 2 - ');
-  const v1Run = `${v1first}${v1second}${okPoint(3, 'a skip', { directive: ' # SKIP \\#\\#[stop-commands]pause a reason' })}# bound: \\#\\#[stop-commands]pause: 5 ms < 10 ms\n# ✗ a check\n#     got:  "\\#\\#[stop-commands]pause"\n${harnessFailure(4, 'tools/test-forged.mjs')}${nodeFailure(5, 'a failure in a path', ['the cause'], `${v1}/test-x.mjs`)}${TOTALS({ points: 5, tests: 5, pass: 0, fail: 4, skipped: 1 })}`;
+  const v1Run = `${v1first}${v1second}${okPoint(3, 'a skip', { directive: ' # SKIP \\#\\#[stop-commands]pause a reason' })}# bound: \\#\\#[stop-commands]pause: 5 ms < 10 ms\n# ✗ a check\n#     got:  "\\#\\#[stop-commands]pause"\n${harnessFailure(4, 'tools/test-forged.mjs')}${nodeFailure(5, 'a failure in a path', ['\u0301 a cause that starts with a combining mark'], `${v1}/test-x.mjs`)}${TOTALS({ points: 5, tests: 5, pass: 0, fail: 4, skipped: 1 })}`;
   const vr = summarize(v1Run, { root: LROOT, pathApi: posix, host });
   const vur = summarize(v1first, { root: LROOT, pathApi: posix, host });
   const vnr = notStartedBlock(`npm error ${v1}\nnpm error after it\n`, { host });
@@ -515,17 +516,17 @@ test('S5 annotations: escaping, the run-level errors first, failures up to the c
     const commands = own.slice(own.indexOf(RULE) + 1);
     assert.ok(commands.length >= 2 && commands.every((l) => /^::(error|notice) /.test(l)), `${name}: the block's own annotations and notice follow its rule`);
     assert.deepEqual(runnerLines(block.text).filter((l) => RUNNER_READS_RE.test(l)), commands, `${name}: they are its only lines the runner would execute`);
-    assert.ok(!block.text.replace(/^(::error )file=[^,:]*/gm, '$1').includes('##['), `${name}: no line of it holds the v1 form but an annotation's file=`);
+    assert.ok(!block.text.includes('##['), `${name}: no line of it holds the v1 form, its own annotations included`);
     assert.equal(runnerLines(block.text).reduce((n, l) => n + logLines(l), 0), block.lines, `${name}: the block counts the log lines the runner makes of it`);
   }
   for (const shown of [`${HEAD}\nhost: linux 6.8.0 x64 · node v22.16.0 · 4 cpus · cwd /home/jo/#\\#[stop-commands]pause · tmpdir /tmp/#\\#[stop-commands]pause · symlink: created\n`,
     '\n     1 × #\\#[stop-commands]pause a reason\n', "\na skip reason no run expects: '#\\#[stop-commands]pause a reason' (a skip) — ",
     '\n--- not ok 1 - a failing assertion\n    at (no location)\n    | expected 1 row\n    | #\\#[stop-commands]pause\n    | after it\n',
     '\n--- not ok 2 - #\\#[stop-commands]pause named\n', '\n    | ✗ a check\n    |     got:  "#\\#[stop-commands]pause"\n',
-    '\n--- not ok 5 - a failure in a path\n    at #\\#[stop-commands]pause/test-x.mjs:5\n', '%  #\\#[stop-commands]pause\n', ' s  #\\#[stop-commands]pause named\n',
+    '\n--- not ok 5 - a failure in a path\n    at #\\#[stop-commands]pause/test-x.mjs:5\n    | \u0301 a cause that starts with a combining mark\n', '%  #\\#[stop-commands]pause\n', ' s  #\\#[stop-commands]pause named\n',
     "\n::error title=unknown skip reason::a skip reason no run expects: '#\\#[stop-commands]pause a reason' (a skip) — ",
     '\n::error title=a failing assertion::expected 1 row%0A#\\#[stop-commands]pause%0Aafter it\n', '\n::error title=#\\#[stop-commands]pause named::the second cause\n',
-    '\n::error file=##[stop-commands]pause/test-x.mjs,line=5,title=a failure in a path::the cause\n']) {
+    '\n::error file=#\\#[stop-commands]pause/test-x.mjs,line=5,title=a failure in a path::\u0301 a cause that starts with a combining mark\n']) {
     assert.ok(vr.text.includes(shown), `the \`##[\` failures' block shows ${JSON.stringify(shown)}`);
   }
   assert.ok(vur.text.includes('\n  |     #\\#[stop-commands]pause\n  |     after it\n'), 'the `##[` unfinished run\'s tail shows it');

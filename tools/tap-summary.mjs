@@ -370,11 +370,14 @@ export const logLines = (line) => 1 + (line.startsWith('::') ? (line.match(/%0A/
 const fmtTotal = (v) => (v === undefined ? '?' : String(v));
 // The runner also executes its older command form, `##[name]…`, anywhere in
 // a line, so the run's text the summary prints (names, reasons, errors, a
-// failure's place, the host line, --compare's lines, an annotation's title
-// and message) shows each `##[` as `#\#[`, the second `#` as TAP escapes it;
-// a line without one prints as it is. An annotation's file= names the file it
-// links to as it is: the runner reads that line as a `::` command, never for
-// a `##[` in it.
+// failure's place, the host line, --compare's lines, an annotation's file=,
+// title and message) shows each `##[` as `#\#[`, the second `#` as TAP
+// escapes it; a line without one prints as it is. An annotation's file= too,
+// though it then names the path as the block shows it, not the file: the
+// runner reads a `::` line it cannot split for a `##[` in it, and it splits
+// one with a culture-sensitive IndexOf("::"), which finds no `::` before a
+// combining mark (an error that starts with one) or after a prepended
+// character (a name that ends in U+0600).
 const inert = (s) => String(s).replace(/##\[/g, '#\\#[');
 // cut prints a CR as `\r` (as TAP escapes one in a name) before it cuts: the
 // runner reads a lone CR as a line break, so a raw one in the run's text (a
@@ -528,7 +531,7 @@ export function summarize(text, { root = process.cwd(), expectWin32 = null, coun
   // the annotations are the log's last lines, and a got: line can be one
   // huge JSON dump.
   const failureNotes = failures.slice(0, Math.max(0, MAX_ANNOTATIONS - runLevel.length)).map((f) =>
-    annotation('error', { file: f.file && !/^([A-Za-z]:)?\//.test(f.file) ? f.file : undefined, line: f.line, title: cut(f.name, 200) }, f.body.slice(0, MAX_ANNOTATION_LINES).map((l) => cut(l, 500)).join('\n')));
+    annotation('error', { file: f.file && !/^([A-Za-z]:)?\//.test(f.file) ? inert(f.file) : undefined, line: f.line, title: cut(f.name, 200) }, f.body.slice(0, MAX_ANNOTATION_LINES).map((l) => cut(l, 500)).join('\n')));
   const annotations = [...runLevel, ...failureNotes];
 
   // The block states its own length in log lines — every line printed, the
