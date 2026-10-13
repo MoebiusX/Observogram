@@ -867,7 +867,7 @@ test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README 
     assert.match(same.stdout, /^::notice title=windows-vs-linux::/m);
     const differs = run(['--compare', join(dir, 'shape.json'), join(dir, 'red-shape.json')]);
     assert.equal(differs.status, 1);
-    assert.match(differs.stdout, /^::error title=\S+ \(node [\d.]+\) vs \S+ \(node [\d.]+\)::tools\/test-journey\.mjs: 2 harness assertions on the run, 3 on the reference, and no SKIP win32: line in the file — an early exit$/m);
+    assert.match(differs.stdout, /^::error title=\S+ \(node [\d.]+\) vs \S+ \(node [\d.]+\)::'tools\/test-journey\.mjs': 2 harness assertions on the run, 3 on the reference, and no SKIP win32: line in the file — an early exit$/m);
     assert.ok(!/::notice/.test(differs.stdout), 'no notice when a run differs');
     // CI passes the floor's shape, then windows-22.16.0's, then windows-22's:
     // each run is held to the reference under its own label, the last too.
@@ -878,22 +878,24 @@ test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README 
     const win22 = f('windows-22.json', '{"platform":"win32","node":"v22.23.3","tests":10,"todo":0,"skips":{},"harness":{"tools/test-a.mjs":{"asserts":5,"win32":0}}}');
     const last = run(['--compare', floor, win16, win22]);
     assert.equal(last.status, 1, last.stdout + last.stderr);
-    const vanished = 'tools/test-b.mjs: a harness suite the reference ran and the run did not report (a file argument that matched nothing, or a suite that never ran)';
+    const vanished = "'tools/test-b.mjs': a harness suite the reference ran and the run did not report (a file argument that matched nothing, or a suite that never ran)";
     assert.deepEqual(last.stdout.trimEnd().split('\n'), [
       'windows (node 22.16.0) vs linux (node 22.16.0): tests 10 = 10 · harness assertions 8 vs 8 in 2 files · other skips equal (PID 1: 0 vs 0) — it ran what the reference ran',
       'windows (node 22.23.3) vs linux (node 22.16.0): 1 difference — the run did not run what the reference ran',
       `  ${vanished}`,
       `::error title=windows (node 22.23.3) vs linux (node 22.16.0)::${vanished}`,
     ], 'every run held, the last one\'s difference named under its label, and no notice');
-    // The runner executes `##[` anywhere in a line: --compare shows a run's
-    // harness file and skip reason with it as `#\#[`, and the host line a cwd
-    // with it; no line but the block's own commands is read as one.
-    const forgedShape = f('windows-forged.json', `{"platform":"win32","node":"v22.16.0","tests":10,"todo":0,"skips":{"##[stop-commands]pause a reason":1},"harness":{"tools/##[stop-commands]x.mjs":{"asserts":1,"win32":0},"tools/test-a.mjs":{"asserts":5,"win32":0},"tools/test-b.mjs":{"asserts":3,"win32":0}}}`);
+    // The runner executes `##[` anywhere in a line, and a line that starts
+    // with `::` once trimmed: --compare shows a run's harness file and skip
+    // reason with `##[` as `#\#[`, and a harness file (a top-level test named
+    // `::stop-commands::pause.mjs` is one) in quotes; the host line shows a
+    // cwd with `##[` alike; no line but the block's own commands is read as one.
+    const forgedShape = f('windows-forged.json', `{"platform":"win32","node":"v22.16.0","tests":10,"todo":0,"skips":{"##[stop-commands]pause a reason":1},"harness":{"::stop-commands::pause.mjs":{"asserts":0,"win32":0},"tools/##[stop-commands]x.mjs":{"asserts":1,"win32":0},"tools/test-a.mjs":{"asserts":5,"win32":0},"tools/test-b.mjs":{"asserts":3,"win32":0}}}`);
     const forgedCmp = run(['--compare', floor, forgedShape]);
     assert.equal(forgedCmp.status, 1, forgedCmp.stdout + forgedCmp.stderr);
     const label = 'windows (node 22.16.0) vs linux (node 22.16.0)';
-    const differences = ['tools/#\\#[stop-commands]x.mjs: a harness suite only the run reported', "skip '#\\#[stop-commands]pause a reason': 1 on the run, 0 on the reference"];
-    assert.deepEqual(forgedCmp.stdout.trimEnd().split('\n'), [`${label}: 2 differences — the run did not run what the reference ran`, ...differences.map((d) => `  ${d}`), ...differences.map((d) => `::error title=${label}::${d}`)]);
+    const differences = ["'::stop-commands::pause.mjs': a harness suite only the run reported", "'tools/#\\#[stop-commands]x.mjs': a harness suite only the run reported", "skip '#\\#[stop-commands]pause a reason': 1 on the run, 0 on the reference"];
+    assert.deepEqual(forgedCmp.stdout.trimEnd().split('\n'), [`${label}: 3 differences — the run did not run what the reference ran`, ...differences.map((d) => `  ${d}`), ...differences.map((d) => `::error title=${label}::${d}`)]);
     assert.deepEqual(forgedCmp.stdout.split(/\r?\n|\r/).filter((l) => RUNNER_READS_RE.test(l)), differences.map((d) => `::error title=${label}::${d}`), '--compare: its ::error lines are the only ones the runner would execute');
     const forgedCwd = join(dir, '##[stop-commands]pause');
     mkdirSync(forgedCwd);
@@ -1169,9 +1171,9 @@ test('S14 the cross-leg check: the same tests, todo 0, the same harness suites a
     assert.ok(c.differences.some((d) => re.test(d)), `${re}: ${c.differences.join(' | ')}`);
   };
   named(run({ tests: 1353 }), /^tests 1353 on the run, 1354 on the reference/);
-  named(run({ harness: { 'tools/test-journey.mjs': { asserts: 900, win32: 0 } } }), /^tools\/test-crawl\.mjs: a harness suite the reference ran and the run did not report/);
-  named(run({ harness: { ...ref.harness, 'tools/test-new.mjs': { asserts: 1, win32: 0 } } }), /^tools\/test-new\.mjs: a harness suite only the run reported/);
-  named(run({ harness: { ...ref.harness, 'tools/test-crawl.mjs': { asserts: 40, win32: 0 } } }), /^tools\/test-crawl\.mjs: 40 harness assertions on the run, 50 on the reference, and no SKIP win32: line in the file/);
+  named(run({ harness: { 'tools/test-journey.mjs': { asserts: 900, win32: 0 } } }), /^'tools\/test-crawl\.mjs': a harness suite the reference ran and the run did not report/);
+  named(run({ harness: { ...ref.harness, 'tools/test-new.mjs': { asserts: 1, win32: 0 } } }), /^'tools\/test-new\.mjs': a harness suite only the run reported/);
+  named(run({ harness: { ...ref.harness, 'tools/test-crawl.mjs': { asserts: 40, win32: 0 } } }), /^'tools\/test-crawl\.mjs': 40 harness assertions on the run, 50 on the reference, and no SKIP win32: line in the file/);
   named(run({ harness: { ...ref.harness, 'tools/test-crawl.mjs': { asserts: 51, win32: 1 } } }), /51 harness assertions on the run, 50 on the reference — more/);
   named(run({ skips: { ...ref.skips, [pw]: 21 } }), /^skip 'cannot import <playwright>.*': 21 on the run, 22 on the reference/);
   named(run({ skips: { ...ref.skips, 'cannot run /usr/bin/node as an unprivileged user on this checkout: x': 1 } }), /^skip 'cannot run .*': 1 on the run, 0 on the reference/);

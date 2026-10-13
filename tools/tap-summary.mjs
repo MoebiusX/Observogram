@@ -596,14 +596,20 @@ export function compareShapes(reference, run) {
   for (const f of files) {
     const r = rh[f];
     const w = wh[f];
-    if (!w) { diffs.push(`${f}: a harness suite the reference ran and the run did not report (a file argument that matched nothing, or a suite that never ran)`); continue; }
-    if (!r) { diffs.push(`${f}: a harness suite only the run reported`); continue; }
+    // A harness file is any top-level test named like one (a test named
+    // `::stop-commands::x.mjs` too), and its difference starts a line: the
+    // file shows in quotes, as a skip reason does, so no name a run gives
+    // starts a line the runner executes once its leading whitespace is
+    // trimmed (inert shows a `##[` in it as `#\#[`).
+    const q = `'${f}'`;
+    if (!w) { diffs.push(`${q}: a harness suite the reference ran and the run did not report (a file argument that matched nothing, or a suite that never ran)`); continue; }
+    if (!r) { diffs.push(`${q}: a harness suite only the run reported`); continue; }
     refAsserts += r.asserts;
     runAsserts += w.asserts;
-    if (w.asserts > r.asserts) diffs.push(`${f}: ${w.asserts} harness assertions on the run, ${r.asserts} on the reference — more`);
+    if (w.asserts > r.asserts) diffs.push(`${q}: ${w.asserts} harness assertions on the run, ${r.asserts} on the reference — more`);
     else if (w.asserts < r.asserts) {
       if (w.win32 > 0) fewer.push(`${f} −${r.asserts - w.asserts} under ${w.win32} win32 skip${w.win32 === 1 ? '' : 's'}`);
-      else diffs.push(`${f}: ${w.asserts} harness assertions on the run, ${r.asserts} on the reference, and no SKIP win32: line in the file — an early exit`);
+      else diffs.push(`${q}: ${w.asserts} harness assertions on the run, ${r.asserts} on the reference, and no SKIP win32: line in the file — an early exit`);
     }
   }
   const rs = reference.skips || {};
