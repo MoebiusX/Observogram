@@ -1245,6 +1245,18 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     const after = await page.evaluate(() => ({ toast: document.getElementById('toast').hidden ? null : document.getElementById('toast').textContent, modalOpen: !document.getElementById('deploy-modal').hidden }));
     assert.deepEqual(after, { toast: DEPLOY, modalOpen: false }, `${sel}: a click explains the reason and opens no modal`);
   };
+  // A filled button drawn unavailable is drawn without its fill — at rest and under the pointer, where the reskin's
+  // hover paints it again unless the zone's rule outranks it — so its reason reads on the card, not on the accent.
+  const fillOf = (page, sel) => page.evaluate((s) => [...document.querySelectorAll(s)].map((el) => { const cs = window.getComputedStyle(el); return { background: cs.backgroundColor, filter: cs.filter }; }), sel);
+  const drawnUnfilled = async (page, sel) => {
+    const rest = await fillOf(page, sel);
+    assert.ok(rest.length > 0, sel);
+    await page.hover(`${sel} >> nth=0`, { force: true });
+    const hovered = (await fillOf(page, sel))[0];
+    await page.mouse.move(0, 0);
+    const none = { background: 'rgba(0, 0, 0, 0)', filter: 'none' };
+    assert.deepEqual({ rest, hovered }, { rest: rest.map(() => none), hovered: none }, `${sel}: drawn without its fill, under the pointer too`);
+  };
 
   // (i) The in-page /api/diff text, byte for byte the server's, under three browser locales — two that tailor ASCII
   // (Czech sorts ch after h, Estonian z between s and t), so a sort that followed the reader's locale would show.
@@ -1345,11 +1357,12 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
   }
 
   // (iii) Remediate, payment-linked against the live pack: the decision header's deploy and the response path's per-SLO
-  // button, each drawn unavailable with the reason and explained on click.
+  // button, each drawn unavailable with the reason and explained on click; the decision's filled button without its fill.
   {
     const { page, ctx } = await open(base, { selectedPackId: 'payment-linked', compareBId: 'payment-live', view: 'compile' });
     await page.waitForSelector('[data-ux-action="rm-deploy"]', { state: 'attached', timeout: T });
     await page.waitForSelector('.rflow-deploy', { state: 'attached', timeout: T });
+    await drawnUnfilled(page, '.ux-rm-actions .remediate-deploy-btn');   // before a click's toast can cover it
     for (const sel of ['[data-ux-action="rm-deploy"]', '.rflow-deploy']) {
       const drawn = await drawnUnavailable(page, sel);
       assert.ok(drawn.length > 0, sel);
@@ -1364,6 +1377,17 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     }));
     assert.deepEqual({ ...rm, boxes: [...new Set(rm.boxes)] }, { hint: `Changes live systems ${staticRemedy('remediate-deploy-hint', { product })}`, rows: staticRemedy('remediate-rows-hint', { product }), boxes: [true] }, 'Remediate\'s deploy hints, and the boxes disabled');
     await noServerAction(page, 'Remediate');
+    await ctx.close();
+  }
+  // Remediate in a bundle of one pack, no Pack B: the decision's Review and deploy repository artefacts — the deploy
+  // control a reader reaches without a live pack — drawn unavailable with the reason, without its fill, and explained.
+  {
+    const { page, ctx } = await open(oneBase, { selectedPackId: 'production-curated', view: 'compile' });
+    const sel = '.ux-rm-actions [data-ux-action="rm-deploy-all"]';
+    await page.waitForSelector(sel, { state: 'attached', timeout: T });
+    assert.deepEqual(await drawnUnavailable(page, sel), [{ aria: 'true', why: DEPLOY, title: null }], `${sel}: drawn unavailable with the reason`);
+    await drawnUnfilled(page, sel);
+    await clickExplains(page, sel);
     await ctx.close();
   }
 
