@@ -14,9 +14,11 @@
  * or database (\\localhost\C$\ws\…). A share of a directory inside the
  * workspace or the purged root (\\myhost\exports, which is C:\ws\exports)
  * names none of their directories, so it compared as outside them; on their
- * volume it now answers null and is refused. Each check's predicate is run
- * here as ops.mjs and backup.mjs run it, over comparedPath with an injected
- * host — Windows' path rules, an NTFS volume's realpath and statSync
+ * volume it now answers null and is refused, and so does a share, or a drive
+ * mapped to one, that cannot be reached when the check runs: with no volume
+ * to read, nothing tells where it leads. Each check's predicate is run here
+ * as ops.mjs and backup.mjs run it, over comparedPath with an injected host —
+ * Windows' path rules, an NTFS volume's realpath and statSync
  * (server/fixtures/ntfs.mjs) and the platform — so the proof runs on every
  * host. One test runs the default host on a real directory, so the
  * platform's choice of rule is pinned too: the expected value reads isWin32
@@ -62,8 +64,8 @@ const SEP = '\\';
 const bySpelling = (p) => { try { return VOLUME.realpathSync(p); } catch { return win32.resolve(p); } };
 
 // The same volume served as shares: the workspace itself (\\myhost\ws, and Z: mapped to it), the admin share by
-// two names of this host, and a directory on another volume (\\myhost\out, D:\out). \\nas01\obs is a share this
-// host does not serve.
+// two names of this host, and a directory on another volume (\\myhost\out, D:\out). \\nas01\obs is another host's
+// share, reached: what it reports is its own volume's (here E:'s), not the workspace's.
 const SHARED = ntfsVolume([
   'C:\\ws\\observogram.db',
   'C:\\ws\\exports\\keep.txt',
@@ -72,14 +74,20 @@ const SHARED = ntfsVolume([
   'C:\\ws2\\observogram.db',
   'C:\\out\\x.txt',
   'D:\\out\\x.txt',
+  'E:\\obs\\keep.txt',
 ], {
   short: { 'C:\\ws': 'WS~1' },
-  shares: { '\\\\myhost\\ws': 'C:\\ws', '\\\\localhost\\C$': 'C:\\', '\\\\127.0.0.1\\C$': 'C:\\', '\\\\myhost\\out': 'D:\\out' },
+  shares: { '\\\\myhost\\ws': 'C:\\ws', '\\\\localhost\\C$': 'C:\\', '\\\\127.0.0.1\\C$': 'C:\\', '\\\\myhost\\out': 'D:\\out', '\\\\nas01\\obs': 'E:\\obs' },
   mapped: { 'Z:': '\\\\myhost\\ws' },
 });
 const shared = comparedPath(null, { windows: true, path: win32, realpathSync: SHARED.realpathSync, statSync: SHARED.statSync });
-// The native realpath alone, with no file ids: a share keeps its own name, and C:\ws is not \\myhost\ws.
-const byNameOf = (volume) => comparedPath(null, { windows: true, path: win32, realpathSync: volume.realpathSync, statSync: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); } });
+// The native realpath alone: a statSync that tells every path apart (no two share a file id or a volume), so nothing
+// is placed and nothing is taken to lie inside — a share keeps its own name, and C:\ws is not \\myhost\ws.
+const byNameOf = (volume) => {
+  const ids = new Map();
+  const apart = (p) => { if (!ids.has(p)) ids.set(p, BigInt(ids.size + 1)); return { dev: ids.get(p), ino: ids.get(p) }; };
+  return comparedPath(null, { windows: true, path: win32, realpathSync: volume.realpathSync, statSync: apart });
+};
 const byName = byNameOf(SHARED);
 
 // The checks' predicates, as server/store/ops.mjs and backup.mjs write them over their compared form: a path
@@ -189,7 +197,7 @@ test('with the workspace and the database named through a share this host serves
   }
 });
 
-test('with the workspace and the database on the drive (C:\\ws), a share name the admin gives for them is them; a share on another volume, or one this host does not serve, is an ordinary target', () => {
+test('with the workspace and the database on the drive (C:\\ws), a share name the admin gives for them is them; a share on another volume or of another host is an ordinary target', () => {
   const [base, root, dbFile] = ['C:\\ws', 'C:\\ws\\orgs\\beta', 'C:\\ws\\observogram.db'];
   for (const into of ['\\\\localhost\\C$\\ws\\exports', '\\\\127.0.0.1\\c$\\WS~1\\exports\\new', '\\\\myhost\\ws\\orgs\\beta', 'Z:\\exports', '//localhost/C$/ws/exports/']) {
     assert.equal(exportRelation(into, base, shared), 'inside', `a directory export is refused: ${into} lies inside ${base}`);
@@ -219,9 +227,9 @@ test('with the workspace and the database on the drive (C:\\ws), a share name th
 
 // Shares of directories inside the workspace (C:\ws): its exports (and Y: mapped to it), its orgs, a directory under
 // beta's root and its db directory; a share of a directory outside it on the same volume (\\myhost\cout, C:\out); one
-// on another volume (\\myhost\dout, D:\out). None names a directory of C:\ws's lineage, so no file id places a path
-// through one beside the workspace, beta's root or the database.
-const SUBSHARED = ntfsVolume([
+// on another volume (\\myhost\dout, D:\out); another host's (\\nas01\obs, as above). None names a directory of C:\ws's
+// lineage, so no file id places a path through one beside the workspace, beta's root or the database.
+const SUBSHARED_FILES = [
   'C:\\ws\\observogram.db',
   'C:\\ws\\exports\\keep.txt',
   'C:\\ws\\orgs\\beta\\users.json',
@@ -229,13 +237,13 @@ const SUBSHARED = ntfsVolume([
   'C:\\ws\\db\\observogram.db',
   'C:\\out\\users.json',
   'D:\\out\\users.json',
-], {
-  shares: {
-    '\\\\myhost\\ws': 'C:\\ws', '\\\\myhost\\exports': 'C:\\ws\\exports', '\\\\myhost\\orgs': 'C:\\ws\\orgs', '\\\\myhost\\betasub': 'C:\\ws\\orgs\\beta\\sub',
-    '\\\\myhost\\dbdir': 'C:\\ws\\db', '\\\\myhost\\cout': 'C:\\out', '\\\\myhost\\dout': 'D:\\out',
-  },
-  mapped: { 'Y:': '\\\\myhost\\exports' },
-});
+  'E:\\obs\\keep.txt',
+];
+const SUBSHARES = {
+  '\\\\myhost\\ws': 'C:\\ws', '\\\\myhost\\exports': 'C:\\ws\\exports', '\\\\myhost\\orgs': 'C:\\ws\\orgs', '\\\\myhost\\betasub': 'C:\\ws\\orgs\\beta\\sub',
+  '\\\\myhost\\dbdir': 'C:\\ws\\db', '\\\\myhost\\cout': 'C:\\out', '\\\\myhost\\dout': 'D:\\out', '\\\\nas01\\obs': 'E:\\obs',
+};
+const SUBSHARED = ntfsVolume(SUBSHARED_FILES, { shares: SUBSHARES, mapped: { 'Y:': '\\\\myhost\\exports' } });
 const subshared = comparedPath(null, { windows: true, path: win32, realpathSync: SUBSHARED.realpathSync, statSync: SUBSHARED.statSync });
 
 test('a path through a share no file id places, on the volume of the path it is checked against, may lie inside it — the export, purge-org and the no-marker check refuse it, and named on the drive it is judged; a share on another volume or host is an ordinary target', () => {
@@ -277,6 +285,42 @@ test('a path through a share no file id places, on the volume of the path it is 
   assert.equal(sameFile('\\\\myhost\\exports\\observogram.db', 'C:\\ws\\observogram.db', subshared), false, 'another file');
   assert.equal(ownFile('C:\\ws\\db\\observogram.db', '\\\\myhost\\dbdir\\observogram.db-wal', subshared), '-wal', 'the database\'s own -wal');
   assert.equal(ownFile('C:\\ws\\observogram.db', '\\\\myhost\\exports\\observogram.db-wal', subshared), null, 'a backup target, not its own file');
+});
+
+// The same shares when a check runs with \\myhost\betasub (a directory under beta's root) and \\myhost\exports down —
+// the server's sharing stopped, or its name not resolving: neither realpath nor statSync reads a path through them, by
+// their names or by the drives still mapped to them (X:, Y:), so no file id places one and its volume is unknown.
+// \\nas02\obs is a host that does not answer at all.
+const DOWN = ntfsVolume(SUBSHARED_FILES, {
+  shares: Object.fromEntries(Object.entries(SUBSHARES).filter(([unc]) => !['\\\\myhost\\betasub', '\\\\myhost\\exports'].includes(unc))),
+  mapped: { 'X:': '\\\\myhost\\betasub', 'Y:': '\\\\myhost\\exports' },
+});
+const down = comparedPath(null, { windows: true, path: win32, realpathSync: DOWN.realpathSync, statSync: DOWN.statSync });
+
+test('a path through a share that cannot be reached, or a drive mapped to one, may lie anywhere — purge-org refuses a users file recorded through it and the export refuses it, as a share on their volume; it is never the workspace, the database or one of its files', () => {
+  const [base, root] = ['C:\\ws', 'C:\\ws\\orgs\\beta'];
+  assert.throws(() => DOWN.statSync('\\\\myhost\\betasub\\users.json'), { code: 'ENOENT' }, 'the share cannot be reached');
+  assert.throws(() => DOWN.statSync('X:\\'), { code: 'ENOENT' }, 'nor the drive mapped to it');
+  // purge-org: C:\ws\orgs\beta\sub\users.json recorded through \\myhost\betasub — refused while it is served, and while it is down.
+  assert.equal(usersUnderRoot('\\\\myhost\\betasub\\users.json', root, subshared), 'unplaced', 'served, purge-org refuses it');
+  for (const users of ['\\\\myhost\\betasub\\users.json', '//MYHOST/betasub/Users.json', '\\\\?\\UNC\\myhost\\betasub\\users.json', 'X:\\users.json', 'x:/users.json', '\\\\nas02\\obs\\users.json']) {
+    assert.equal(usersUnderRoot(users, root, down), 'unplaced', `down, purge-org refuses it too: ${users} may lie under ${root}`);
+  }
+  assert.equal(usersUnderRoot('C:\\ws\\orgs\\beta\\sub\\users.json', root, down), true, 'the way out: named on the drive, it lies under the root');
+  for (const users of ['\\\\myhost\\dout\\users.json', '\\\\nas01\\obs\\users.json', 'C:\\out\\users.json']) {
+    assert.equal(usersUnderRoot(users, root, down), false, `reached on another volume or host, or on the drive outside the root: purged (${users})`);
+  }
+  // The export: a target through a share that is down is refused, naming its path on a local drive (it could not be written either).
+  for (const into of ['\\\\myhost\\exports\\new', 'Y:\\new', '\\\\nas02\\obs\\exports']) {
+    assert.equal(exportRelation(into, base, down), 'unplaced', `a directory export is refused: ${into} may lie inside ${base}`);
+    assert.equal(inPlace(into, base, down), false, `not the in-place export: ${into}`);
+  }
+  assert.equal(exportRelation('C:\\ws\\exports\\new', base, down), 'inside', 'the way out: named on the drive, it is refused as inside the workspace');
+  assert.equal(exportRelation('\\\\nas01\\obs\\exports', base, down), null, 'another host\'s share, reached: written');
+  // The no-marker check refuses such a database as it refuses any null (ops.mjs finds it missing first); an equality check takes null as unequal.
+  assert.equal(dbUnderWorkspace('\\\\myhost\\betasub\\x.db', base, down), 'unplaced', 'the no-marker check: it may or may not lie in the workspace');
+  assert.equal(sameFile('\\\\myhost\\exports\\observogram.db', 'C:\\ws\\observogram.db', down), false, 'not the database');
+  assert.equal(ownFile('C:\\ws\\observogram.db', '\\\\myhost\\exports\\observogram.db-wal', down), null, 'a backup target, not the database\'s own file');
 });
 
 test('off Windows a check compares through the module\'s own form, unchanged', () => {

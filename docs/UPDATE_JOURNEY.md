@@ -1360,8 +1360,11 @@ purge-org deleted a users file recorded through `\\myhost\betasub`. On their
 volume such a path is now refused, naming the way out — its path on a local
 drive (for purge-org, deleting the root by hand once it is known not to hold
 the users file) — and so is a share of a directory outside them on that
-volume, which no file id tells apart (a declared false refusal); a share on
-another volume or another host is still an ordinary target. Each of the two
-suites also runs its default host once on a real directory, so a Windows run
-fails if the platform's rule is not the one chosen. Tests: 1400 → 1411
-(`server/test-store-paths.mjs` 11, new).
+volume, which no file id tells apart (a declared false refusal). So is a path
+through a share, or a drive mapped to one, that cannot be reached when the
+check runs (a users file recorded through `\\myhost\betasub` while it is
+down): with no volume to read, nothing tells where it leads. A share on
+another volume or another host that can be reached is still an ordinary
+target. Each of the two suites also runs its default host once on a real
+directory, so a Windows run fails if the platform's rule is not the one
+chosen. Tests: 1400 → 1412 (`server/test-store-paths.mjs` 12, new).

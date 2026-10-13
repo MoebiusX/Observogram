@@ -415,10 +415,10 @@ function exportDirectory(target, base) {
     into = resolve(dirname(into), readlinkSync(into));
   }
   const t = compared(into, base);
-  if (t === null) {   // Windows: through a share on the workspace's volume that file ids cannot place (store/paths.mjs)
-    throw refuse(`${named(into)} is not a path on a local drive, and a network share on the volume that holds the workspace ${base} `
-      + 'may lead inside it — a directory export there could write files without the in-place steps. Nothing was changed. '
-      + 'Name the directory by its path on a local drive');
+  if (t === null) {   // Windows: through a share on the workspace's volume that file ids cannot place, or one not reached (store/paths.mjs)
+    throw refuse(`${named(into)} is not a path on a local drive, and a network share on the volume that holds the workspace ${base}, `
+      + 'or one that cannot be reached, may lead inside it — a directory export there could write files without the in-place steps. '
+      + 'Nothing was changed. Name the directory by its path on a local drive');
   }
   const b = compared(base);
   const inside = t.startsWith(b + sep);
@@ -804,10 +804,10 @@ export async function purgeOrg(id, { dbPath = resolveDbPath(), base = baseWorksp
     }
     const usersFile = getMeta(db, 'users_file');
     const users = usersFile && isAbsolute(usersFile) && present ? compared(usersFile, root) : undefined;
-    if (users === null) {   // Windows: through a share on the root's volume that file ids cannot place (store/paths.mjs)
+    if (users === null) {   // Windows: through a share on the root's volume that file ids cannot place, or one not reached (store/paths.mjs)
       throw refuse(`the recorded users file ${usersFile} is not a path on a local drive, and a network share on the volume that holds `
-        + `${root} may lead under it — nothing was deleted. If it does not lie under ${root}, delete ${root} by hand, then run `
-        + `purge-org again: it drops org ${id}'s records`);
+        + `${root}, or one that cannot be reached, may lead under it — nothing was deleted. If it does not lie under ${root}, delete `
+        + `${root} by hand, then run purge-org again: it drops org ${id}'s records`);
     }
     if (users?.startsWith(compared(root) + sep)) {
       throw refuse(`the recorded users file ${usersFile} lies under ${root} — move it out first; nothing was deleted`);

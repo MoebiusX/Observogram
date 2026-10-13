@@ -32,8 +32,14 @@
 // directories. So on that path's volume such a path answers null — it may lie
 // inside — and the export, purge-org and no-marker checks refuse it, naming
 // the way out (its path on a local drive), even when it lies outside (a share
-// of C:\out, which no file id tells apart); one through a share on another
-// volume or of another host (or one that cannot be reached) stays an ordinary
+// of C:\out, which no file id tells apart). So does a path whose volume
+// cannot be read, on any root: a share, or a drive mapped to one, that cannot
+// be reached (its server stopped, its name not resolving) — or a drive that
+// does not exist — may lead anywhere, under a purged root among them
+// (\\myhost\betasub, which is C:\ws\orgs\beta\sub); purge-org refuses a users
+// file recorded through one, an export there is refused before it would fail
+// to write, and a database there is missing before it is compared. One
+// through a share on another volume or of another host stays an ordinary
 // target. A check for equality takes null as unequal: a path it cannot place
 // is never the workspace (the in-place detection), the database (the scan for
 // another store) or one of its own files (backup.mjs). The twin of this rule is
@@ -88,8 +94,9 @@ export function comparedPath(own, { windows = ON_WINDOWS, path = nodePath, realp
       const same = theirs.get(fileId(dir));
       if (same) return form(path.join(same, native.slice(dir.length)));
     }
-    // Not placed: through a share on beside's volume, p may lie inside it (above).
-    if (root(native).startsWith('\\\\') && volume(native) !== null && volume(native) === volume(other)) return null;
+    // Not placed: through a share on beside's volume, or on a volume that cannot be read, p may lie inside it (above).
+    const vol = volume(native);
+    if (vol === null || (root(native).startsWith('\\\\') && vol === volume(other))) return null;
     return form(native);
   };
 }
