@@ -2450,7 +2450,7 @@ test('packc store purge-org: usage exits 2; the store line, the report; a refusa
 // the real-filesystem cases below run through purgeOrg itself.
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const ROOT_B = '/ws/orgs/beta';
-const betaVolume = () => mountFs(posix).dir(`${ROOT_B}/packs`).file(`${ROOT_B}/packs/b1.pack.yaml`).file(`${ROOT_B}/sub/users.json`)
+const betaVolume = (opts) => mountFs(posix, opts).dir(`${ROOT_B}/packs`).file(`${ROOT_B}/packs/b1.pack.yaml`).file(`${ROOT_B}/sub/users.json`)
   .file('/srv/users.json');
 const placeIn = (vol, file, opts = {}) => usersFilePlace(file, ROOT_B, { fs: vol.fs, path: posix, windows: false, id: 'beta', ...opts });
 const underRoot = (file, entries, root = ROOT_B) => `the recorded users file ${file} lies under ${root}: it is ${entries} there — nothing was deleted. `
@@ -2526,10 +2526,10 @@ test('purge-org users file: a view through another filesystem — NFS (the inode
   }
 });
 
-test('purge-org users file: a mount point under the root — another filesystem, a file mounted there, one directory reached twice, a loop, the root itself — is refused before anything is deleted, and once unmounted the purge passes; a same-filesystem bind mount from outside is entered as rmSync enters it', () => {
+test('purge-org users file: a mount point under the root — another filesystem, a file mounted there, one directory reached twice, a loop, the root itself, a mount of the same filesystem /proc/self/mountinfo lists — is refused before anything is deleted, and once unmounted the purge passes; with no /proc/self/mountinfo, a same-filesystem bind mount from outside is entered as a directory', () => {
   const vol = betaVolume().dir('/srv5', { dev: 7n }).file('/srv5/users.json').bind('/srv5', `${ROOT_B}/m`);
-  const mounted = (what) => `${ROOT_B} holds a mount point, ${what}: deleting ${ROOT_B} would take the files of the filesystem mounted there `
-    + `(Node 23 and later) or stop part-way at it (Node 22), and a directory mounted from outside ${ROOT_B} may hold the users file — `
+  const mounted = (what, root = ROOT_B) => `${root} holds a mount point, ${what}: deleting ${root} would take the files of the filesystem mounted there `
+    + `(Node 23 and later) or stop part-way at it (Node 22), and a directory mounted from outside ${root} may hold the users file — `
     + 'nothing was deleted. Unmount what is mounted there, then run purge-org again';
   // The reverse of a mount view: a directory from outside mounted under the root, holding the users file.
   assert.deepEqual(placeIn(vol, '/srv5/users.json'), { exists: null, refusal: mounted(`${ROOT_B}/m (another filesystem than ${ROOT_B})`) });
@@ -2550,10 +2550,38 @@ test('purge-org users file: a mount point under the root — another filesystem,
   }, 'the root itself mounted');
   vol.unmount(ROOT_B);
   assert.deepEqual(placeIn(vol, '/srv/users.json'), { exists: true, refusal: null });
-  // Known, not fixed: a bind mount from outside on the root's own filesystem is a directory to lstatSync; the walk enters it
-  // as rmSync does, and the users file seen through it is named as an entry under the root.
+  // A bind mount from outside on the root's own filesystem is a directory to lstatSync (the same device). With no
+  // /proc/self/mountinfo to list it (off Linux), the walk enters it, and the users file seen through it is named as an entry.
   vol.dir('/srv6').file('/srv6/users.json').bind('/srv6', `${ROOT_B}/m6`);
-  assert.equal(placeIn(vol, '/srv6/users.json').refusal, underRoot('/srv6/users.json', `${ROOT_B}/m6/users.json`));
+  assert.equal(placeIn(vol, '/srv6/users.json').refusal, underRoot('/srv6/users.json', `${ROOT_B}/m6/users.json`), 'no mountinfo: entered');
+  // Linux lists it in /proc/self/mountinfo (a space in its path as \040), and it is refused, holding the users file or not:
+  // rmSync deleted the files of the directory mounted there, outside the root (Node 23 and later), then failed on the mount
+  // point (Node 22 failed there), and once the users file was moved out of it as the "lies under" refusal said, the purge
+  // deleted the rest of it the same way. Unmounted, the purge passes. The root, reached through a link, is compared by its
+  // real path, as the kernel lists mount points; the root itself mounted from the same filesystem is refused as a mount point.
+  const linux = betaVolume({ proc: true }).dir('/srv6').file('/srv6/users.json').file('/srv6/other-data').dir('/srv7').file('/srv7/other-data')
+    .bind('/srv6', `${ROOT_B}/m 6`);
+  const same = (at, root = ROOT_B) => `${at} (the same filesystem as ${root}, listed in /proc/self/mountinfo)`;
+  assert.deepEqual(placeIn(linux, '/srv6/users.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m 6`)) }, 'holding the users file');
+  linux.unmount(`${ROOT_B}/m 6`).bind('/srv7', `${ROOT_B}/m7`);
+  assert.deepEqual(placeIn(linux, '/srv6/users.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m7`)) }, 'holding other files');
+  linux.symlink('/lnk', '/ws');
+  assert.equal(usersFilePlace('/srv6/users.json', '/lnk/orgs/beta', { fs: linux.fs, path: posix, windows: false, id: 'beta' }).refusal,
+    mounted(same('/lnk/orgs/beta/m7', '/lnk/orgs/beta'), '/lnk/orgs/beta'), 'the root through a link');
+  linux.unmount(`${ROOT_B}/m7`);
+  assert.deepEqual(placeIn(linux, '/srv6/users.json'), { exists: true, refusal: null }, 'unmounted: the users file is outside, purged');
+  linux.dir('/srv8').file('/srv8/packs/b2.pack.yaml').bind('/srv8', ROOT_B);
+  assert.equal(placeIn(linux, '/srv6/users.json').refusal, `${same(ROOT_B, '/ws/orgs')} is a mount point: deleting it would take the files of `
+    + 'the filesystem mounted there and then fail on the mount point itself (Node 23 and later; Node 22 fails at once) — nothing was deleted. '
+    + `Unmount it, then run purge-org again: it deletes what is left at ${ROOT_B} and drops org beta's records, and the unmounted filesystem's `
+    + 'files stay', 'the root itself, from the same filesystem');
+  linux.unmount(ROOT_B);
+  assert.deepEqual(placeIn(linux, '/srv6/users.json'), { exists: true, refusal: null });
+  // /proc/self/mountinfo there but unreadable: nothing tells which directory is a mount point, so it is refused.
+  const locked = { ...linux.fs, readFileSync: (p) => { throw Object.assign(new Error(`EACCES: ${p}`), { code: 'EACCES' }); } };
+  assert.equal(placeIn({ fs: locked }, '/srv6/users.json').refusal, `/proc/self/mountinfo cannot be read (EACCES), so purge-org cannot tell what `
+    + `deleting ${ROOT_B} takes — nothing was deleted. Run purge-org as a user who can read it; or, if the recorded users file /srv6/users.json `
+    + `does not lie under ${ROOT_B}, delete ${ROOT_B} by hand as such a user, then run purge-org again: it drops org beta's records`);
 });
 
 test('purge-org users file: a directory under the root this user cannot read is refused, nothing deleted, and read by a user who can, the purge passes; one it may list but not search (r--) is refused naming the entry it cannot read; one a stopped FUSE server cannot answer for is refused naming unmounting it', () => {

@@ -1,13 +1,13 @@
-// server/fixtures/mount-fs.mjs — a filesystem as node:fs's lstatSync, statSync, readdirSync and readlinkSync
-// answer it, with what a test runner cannot make for real (no root, no mount(8), maybe no symlink privilege):
-// several filesystems, bind mounts, a mount that is down (its mount point left empty), views of a directory
-// through another filesystem as an NFS, SMB, overlay or FUSE mount reports them, a directory nobody may read or
-// search, and link loops — on POSIX paths or, with node:path's Windows rules, on Windows ones
-// (server/test-store-ops.mjs, the users-file place suite over server/store/users-file-place.mjs).
+// server/fixtures/mount-fs.mjs — a filesystem as node:fs's lstatSync, statSync, readdirSync, readlinkSync and
+// realpathSync answer it, and Linux's /proc/self/mountinfo, with what a test runner cannot make for real (no root, no
+// mount(8), maybe no symlink privilege): several filesystems, bind mounts, a mount that is down (its mount point left
+// empty), views of a directory through another filesystem as an NFS, SMB, overlay or FUSE mount reports them, a
+// directory nobody may read or search, and link loops — on POSIX paths or, with node:path's Windows rules, on Windows
+// ones (server/test-store-ops.mjs, the users-file place suite over server/store/users-file-place.mjs).
 //
 // Imports nothing: the caller passes node:path's posix or win32, so tools/test-platform.mjs's P5 holds.
 //
-// mountFs(path, { fold }) → a volume set, built with:
+// mountFs(path, { fold, devs, proc }) → a volume set, built with:
 //   dir(p, { dev })            mkdir -p; a directory created takes its parent's device, the last one `dev` if given
 //                              (a directory on another device than its parent is what a mount point looks like);
 //   file(p, { size, mtimeNs }) a file (its directories made as dir does), on its directory's device;
@@ -22,14 +22,16 @@
 //                              fail with code, EACCES by default; ENOTCONN is a FUSE mount whose server stopped
 //                              answering; with list, readdirSync still names p's entries — a directory that may be
 //                              read but not searched, r--, where lstatSync of each entry fails);
-//   fs                         { lstatSync, statSync, readdirSync, readlinkSync }, stats as bigints:
-//                              { dev, ino, size, mtimeNs, isFile(), isDirectory(), isSymbolicLink() }.
-// fold: names compared case-insensitively (NTFS); devs: { '<a root>': its device } (default 1n each). Each inode gets
-// a distinct inode number and a modification time with nanoseconds, unless given.
+//   fs                         { lstatSync, statSync, readdirSync, readlinkSync, realpathSync, readFileSync }, stats as
+//                              bigints: { dev, ino, size, mtimeNs, isFile(), isDirectory(), isSymbolicLink() };
+//                              readFileSync answers /proc/self/mountinfo alone, and only with proc (else ENOENT).
+// fold: names compared case-insensitively (NTFS); devs: { '<a root>': its device } (default 1n each); proc: Linux's
+// /proc/self/mountinfo, listing / and every mount point now (its path with the kernel's octal escapes), on POSIX paths.
+// Each inode gets a distinct inode number and a modification time with nanoseconds, unless given.
 
 const MAX_LINKS = 40;
 
-export function mountFs(path, { fold = false, devs = {} } = {}) {
+export function mountFs(path, { fold = false, devs = {}, proc = false } = {}) {
   const key = (s) => (fold ? s.toLowerCase() : s);
   const split = (s) => s.split(/[\\/]+/).filter(Boolean);
   const fail = (code, p) => Object.assign(new Error(`${code}: ${p}`), { code });
@@ -39,7 +41,7 @@ export function mountFs(path, { fold = false, devs = {} } = {}) {
     return { kind, dev, ino: next, size: kind === 'dir' ? 4096n : 0n, mtimeNs: 1_760_000_000_000_000_000n + next * 1_234_567n, ...extra };
   };
   const tops = new Map();     // a root (C:\, /) folded → its directory
-  const mounts = new Map();   // a mount point's path folded → { node, how }
+  const mounts = new Map();   // a mount point's path folded → { node, how, folder, at }
   const entries = (dir) => dir.entries;
 
   // Where p leads: { node, how, at } — how is the view the node is seen through; the last name followed when follow.
@@ -142,7 +144,7 @@ export function mountFs(path, { fold = false, devs = {} } = {}) {
       const src = locate(source, true);
       const abs = path.resolve(target);
       if (path.parse(abs).root !== abs) vol.dir(abs);
-      mounts.set(key(abs), { node: src.node, how: how ? { ...src.how, ...how } : src.how, folder });
+      mounts.set(key(abs), { node: src.node, how: how ? { ...src.how, ...how } : src.how, folder, at: abs });
       return vol;
     },
     mountFolder(source, target) { return vol.view(source, target, null, { folder: true }); },
@@ -172,6 +174,13 @@ export function mountFs(path, { fold = false, devs = {} } = {}) {
         const pos = locate(p, false);
         if (pos.node.kind !== 'link') throw fail('EINVAL', p);
         return pos.node.target;
+      },
+      realpathSync: (p) => locate(p, true).at,
+      readFileSync(p) {
+        if (!proc || p !== '/proc/self/mountinfo') throw fail('ENOENT', p);
+        const octal = (s) => s.replace(/[ \t\n\\]/g, (c) => `\\${c.charCodeAt(0).toString(8).padStart(3, '0')}`);
+        return ['/', ...[...mounts.values()].map((m) => m.at)]
+          .map((at, i) => `${21 + i} ${i ? 21 : 1} 0:${21 + i} / ${octal(at)} rw,relatime - fixture fixture rw\n`).join('');
       },
     },
   };

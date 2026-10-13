@@ -10,12 +10,14 @@
 //
 //   - the walk: the root and everything under it, as rmSync takes it — lstat each entry, list each directory, never
 //     through a link (a symlink, or a junction on Windows). A mount point under the root is refused: an entry on
-//     another filesystem than the directory that holds it, a directory the walk reached already (one directory
-//     mounted at a second place under the root), or on Windows a folder another volume is mounted in (lstatSync
-//     answers the folder, statSync the volume). On Node 22 rmSync stops part-way at a mount point; on Node 23 and
-//     later it first deletes the files of the filesystem mounted there; and a directory mounted from outside the
-//     root may hold the users file. The root itself mounted (a volume per org) is refused alike. A directory the
-//     walk cannot read is refused: what lies in it cannot be told, and rmSync would fail part-way there.
+//     another filesystem than the directory that holds it, one /proc/self/mountinfo lists (Linux: a bind mount of a
+//     directory of the same filesystem, which lstatSync cannot tell from a directory; matched by the root's real
+//     path, as the kernel lists it), a directory the walk reached already (one directory mounted at a second place
+//     under the root), or on Windows a folder another volume is mounted in (lstatSync answers the folder, statSync
+//     the volume). On Node 22 rmSync stops part-way at a mount point; on Node 23 and later it first deletes the files
+//     of the filesystem mounted there; and a directory mounted from outside the root may hold the users file. The
+//     root itself mounted (a volume per org) is refused alike. A directory the walk cannot read is refused: what lies
+//     in it cannot be told, and rmSync would fail part-way there.
 //   - the users file, its path followed through every link (statSync): it lies under the root when an entry the
 //     walk found is the same file — the same device and inode (on Windows the volume serial's low 32 bits, all a
 //     share reports, as server/store/paths.mjs places a path) — or, on another device, the same kind with the same
@@ -39,18 +41,19 @@
 //   - a users file that cannot be read — statSync failing otherwise (EACCES on a directory of its path, a link loop),
 //     or a part of its path that cannot be read — is refused.
 //
-// A same-filesystem bind mount under the root of a directory from outside it is a directory to lstatSync (the same
-// device; /proc/self/mountinfo is not read), so the walk enters it as rmSync does; a view that reports neither the
-// inode nor the size and modification time (some FUSE filesystems) is not matched; and a recorded path that passes
-// through a link under the root keeps the file the link leads to (rmSync deletes the link alone), but leads nowhere
-// once it is gone. The check runs before rmSync: a rename by another process between the two is not seen.
+// Without /proc/self/mountinfo (off Linux, or /proc not mounted), a bind mount under the root of a directory from
+// outside it, on the same filesystem, is a directory to lstatSync (the same device), and the walk enters it. A view
+// that reports neither the inode nor the size and modification time (some FUSE filesystems) is not matched; and a
+// recorded path that passes through a link under the root keeps the file the link leads to (rmSync deletes the link
+// alone), but leads nowhere once it is gone. The check runs before rmSync: a rename by another process between the two
+// is not seen.
 //
 // usersFilePlace(file, root, { recorded, id, fs, path, windows }) → { exists, refusal }: exists is whether the users
 // file's path leads to a file now (true), or not (false), or null when the check stopped before it could tell;
 // refusal is purge-org's message, or null when deleting the root takes nothing of the users file. recorded is false
 // for <base>/users.json when nothing was recorded; id is the org's. fs = { lstatSync, statSync, readdirSync,
-// readlinkSync } (node:fs's; the stats called with { bigint: true }), path (node:path's) and windows (the platform) are
-// injectable
+// readlinkSync, realpathSync, readFileSync } (node:fs's; the stats called with { bigint: true }), path (node:path's) and
+// windows (the platform) are injectable
 // (server/test-store-ops.mjs, over server/fixtures/mount-fs.mjs); the default is this host.
 
 import * as nodeFs from 'node:fs';
@@ -60,6 +63,10 @@ const ON_WINDOWS = process.platform === 'win32';
 const GONE = new Set(['ENOENT', 'ENOTDIR']);
 const SECOND = 1_000_000_000n;
 const MAX_LINKS = 40;   // Linux's MAXSYMLINKS
+const MOUNTINFO = '/proc/self/mountinfo';
+// A mount point as /proc/self/mountinfo spells it (its fifth field): the kernel's octal escapes (\040 a space, \011,
+// \012, \134) undone.
+const unoctal = (s) => s.replace(/\\([0-7]{3})/g, (_, o) => String.fromCharCode(Number.parseInt(o, 8)));
 
 // The precision of a timestamp in ns: the largest power of ten, up to a second, that divides it.
 function precision(ns) {
@@ -105,6 +112,24 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
   const walked = new Map();   // a directory's device:inode → its path
   let above;
   try { above = dev(stat(path.dirname(root))); } catch (e) { return unreadable(path.dirname(root), e); }
+  // The mount points Linux lists at the root or under it, as paths relative to it ('' the root itself): a bind mount of a
+  // directory of the same filesystem among them, which lstatSync cannot tell from a directory. The kernel lists real
+  // paths, so the root's is compared. No such file (off Linux, /proc not mounted): only the walk tells.
+  const listed = new Set();
+  let info = null;
+  if (!windows) {
+    try { info = fs.readFileSync(MOUNTINFO, 'utf8'); } catch (e) { if (!GONE.has(e?.code)) return unreadable(MOUNTINFO, e); }
+  }
+  if (info !== null) {
+    let real;
+    try { real = fs.realpathSync(root); } catch (e) { return unreadable(root, e); }
+    for (const line of info.split('\n')) {
+      const field = line.split(' ')[4];
+      const at = field === undefined ? null : unoctal(field);
+      if (at === real) listed.add('');
+      else if (at?.startsWith(real + path.sep)) listed.add(at.slice(real.length));
+    }
+  }
   const stack = [{ at: root, parentDev: above }];
   while (stack.length) {
     const { at, parentDev } = stack.pop();
@@ -115,6 +140,7 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     }
     entries.push({ path: at, st });
     if (dev(st) !== parentDev) { mounts.push({ at, why: `another filesystem than ${path.dirname(at)}` }); continue; }
+    if (listed.has(at.slice(root.length))) { mounts.push({ at, why: `the same filesystem as ${path.dirname(at)}, listed in ${MOUNTINFO}` }); continue; }
     if (!st.isDirectory()) continue;
     let through;
     try { through = stat(at); } catch (e) { return unreadable(at, e); }

@@ -1501,9 +1501,14 @@ refusals). The walk also refuses a mount point under the root — on Node 22
 `rmSync` stops part-way at one, on Node 23 and later it first deletes the
 files of the filesystem mounted there — the root itself mounted, and a
 directory under the root it cannot read, where `rmSync` failed part-way; now
-nothing is deleted. A same-filesystem bind mount of a directory from outside
-the root cannot be told from a directory by `lstatSync`, and is entered as
-`rmSync` enters it.
+nothing is deleted. A bind mount of a directory from outside the root, on the
+root's own filesystem, cannot be told from a directory by `lstatSync`: on
+Node 23 and later `rmSync` deleted that directory's files, outside the root,
+and then failed on the mount point, and when it held the users file the
+refusal named the entry to move out, after which the purge went on the same
+way. On Linux `/proc/self/mountinfo` lists every mount point, and purge-org,
+reading the root by its real path there, refuses it as a mount point; once it
+is unmounted the purge passes. Where there is no such file, the walk enters it.
 
 The refusal of a users file recorded under the root said "move it out
 first", and after the move it came back word for word: the record still named

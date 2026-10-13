@@ -2700,9 +2700,10 @@ link, and it refuses, deleting nothing:
 - **while a mount point is under `orgs/<id>/`, or the directory is one**:
   on Node 22 the delete stops part-way at a mount point, and on Node 23 and
   later it first deletes the files of the filesystem mounted there. Unmount
-  it, then run the purge again. A bind mount of another directory of the same
-  filesystem cannot be told from a directory, so unmount any such mount under
-  `orgs/<id>/` yourself before you purge.
+  it, then run the purge again. On Linux this includes a bind mount of
+  another directory of the same filesystem, which `/proc/self/mountinfo`
+  lists; elsewhere such a mount cannot be told from a directory, so unmount
+  any under `orgs/<id>/` yourself before you purge.
 
 **The purge cannot be undone and asks for no confirmation.** It deletes
 everything under `orgs/<id>/`: the org's packs, its
