@@ -11,19 +11,22 @@
 // class or data-* attribute its source writes, the view that draws it marks
 // it unavailable after it renders under an isStatic() test, and
 // openDeployModal itself explains instead of opening in the static posture —
-// so a new deploy entry point fails here until it is classified. S3 holds
-// each static text to its exact words for every input (the product named
-// where a server is, what is built in, no server action told to the reader as
+// so a new deploy entry point fails here until it is classified (each is
+// drawn without the title that says what it would open). S3 holds each
+// static text to its exact words for every input (the product named where a
+// server is, what is built in, no server action told to the reader as
 // something to do in the bundle), Traceability's live-evidence texts to
 // theirs, the shared modules' options to their defaults (the live studio's
 // and the journey's words are unchanged), and the texts both postures now
 // share (the taxonomy and the stale-pair reasons Pair by gives, the bind
 // error) to theirs. S4 is the phrase ledger: every line of a studio module
 // that names a server action (re-scan, Connect MCP, redraft, deploy what is
-// missing, …) is listed below with its disposition — the row of the design's
-// table that gives it a static-posture text, why a bundle reader cannot reach
-// it, a control, a comment, or what it describes — so a new such phrase fails
-// npm test until it is given a static text or recorded. S5 is the wiring:
+// missing, …) or describes the deploy review the static posture never opens
+// (deploy review, after a review, …) is listed below with its disposition —
+// the row of the design's table that gives it a static-posture text, why a
+// bundle reader cannot reach it, a control, a comment, or what it describes —
+// so a new such phrase fails npm test until it is given a static text or
+// recorded. S5 is the wiring:
 // each static text is shown by the view its row names, every staticRemedy
 // call in the studio sits behind an isStatic() test, and every Traceability
 // reading takes the static posture's live-evidence texts — deleting a view's
@@ -151,8 +154,8 @@ test('S2 — every deploy entry point outside prototype space is drawn unavailab
     assert.match(src, /^const isStatic = \(\) => state\.access\?\.posture === 'static';$/m, `${view}: isStatic() reads the posture`);
     const draw = functionBody(src, 'drawDeployUnavailable');
     assert.ok(draw, `${view} defines drawDeployUnavailable`);
-    assert.match(draw, /^\s*if \(!isStatic\(\)[^)]*\) return;\s*const reason = serverNeeded\('Deploy', state\.brand\.chrome\.name\);\s*for \(const control of root\.querySelectorAll\(DEPLOY_CONTROLS\)\) markUnavailable\(control, reason\);\s*$/,
-      `${view}: every DEPLOY_CONTROLS match under the root, behind isStatic(), marked with the shim's Deploy sentence`);
+    assert.match(draw, /^\s*if \(!isStatic\(\)[^)]*\) return;\s*const reason = serverNeeded\('Deploy', state\.brand\.chrome\.name\);\s*for \(const control of root\.querySelectorAll\(DEPLOY_CONTROLS\)\) \{ markUnavailable\(control, reason\); control\.removeAttribute\('title'\); \}\s*$/,
+      `${view}: every DEPLOY_CONTROLS match under the root, behind isStatic(), marked with the shim's Deploy sentence and without the title that says what it would open`);
     const render = functionBody(src, RENDERERS[view]);
     assert.ok(render, `${view} defines ${RENDERERS[view]}`);
     assert.match(render, /\n\s*drawDeployUnavailable\((view|root)\);\s*$/, `${view}: ${RENDERERS[view]} draws the controls unavailable last, once the view has rendered`);
@@ -169,8 +172,10 @@ test('S2 — every deploy entry point outside prototype space is drawn unavailab
   assert.ok(open.indexOf(guard) < open.indexOf("$('#deploy-modal')"), 'before the modal is looked up');
 });
 
-// A phrase that tells the reader to take a server action (design A.8, the phrase ledger's pattern).
-const SERVER_ACTION = /\b(re-?scan|rescan|scan (?:live|a repo(?:sitory)?)|connect mcp|from (?:its |a live )?mcp|redraft|re-?upload|refresh(?:es|ing)? (?:the )?live|refresh live evidence|capture a live draft|live draft again|deploy what is missing|deploy the repository)\b/i;
+// A phrase that tells the reader to take a server action (design A.8, the phrase ledger's pattern), or describes the
+// deploy review the static posture never opens (deploy review, review the destination, after a review, then deploy,
+// confirmed separately — Remediate's deploy texts, rows 20–27).
+const SERVER_ACTION = /\b(re-?scan|rescan|scan (?:live|a repo(?:sitory)?)|connect mcp|from (?:its |a live )?mcp|redraft|re-?upload|refresh(?:es|ing)? (?:the )?live|refresh live evidence|capture a live draft|live draft again|deploy what is missing|deploy the repository|deploy review|review (?:of |the )?destination|after a review|then deploy|confirmed separately)\b/i;
 
 
 // Each static text, exactly, for a product whose name takes "an" and one whose name takes "a", for each input: whether
@@ -203,6 +208,14 @@ const TEXTS = {
   'need-pack': (server, { packsBuiltIn }) => (packsBuiltIn
     ? 'Head to Discover and open one of the packs built into this bundle — then come back here.'
     : `This bundle carries no pack; whoever builds it can add one with --pack (a curated repository pack, or a live draft made on ${server}).`),
+  'remediate-deploy-hint': (server) => `Deploying needs ${server}; nothing is written to live from this bundle.`,
+  'remediate-next-deploy': (server) => `Deploy, on ${server}`,
+  'remediate-next-both': (server) => `Generate patch; deploying needs ${server}`,
+  'remediate-effect-live': (server) => `only from ${server}; nothing is written to live from this bundle`,
+  'remediate-effect-both': (server) => `the patch is made here; the deploy needs ${server}`,
+  'remediate-deploy-meaning': (server) => `Deploying the ticked rows needs ${server}`,
+  'remediate-rows-hint': (server) => `Ticked rows can be deployed from ${server}; this bundle deploys nothing, so the boxes cannot be changed here. Rows without a box need a repository patch, a decision or a manual fix.`,
+  'remediate-not-compared-summary': (server) => `not compared with live; deploying them needs ${server}`,
 };
 // Traceability's live-evidence texts in the static posture (rows 14, 15), exactly; metricConfirm takes the metric.
 const TRACE_TEXTS = (server) => ({
@@ -254,6 +267,11 @@ test('S3 — the static texts, exact for three products (the article by the name
   assert.match('then re-scan to confirm the gap closed', SERVER_ACTION, 'the pattern finds what the live text says');
   assert.match('Redraft from MCP before acting on this drift.', SERVER_ACTION);
   assert.match('Review them, then deploy what is missing live or update the repository from live.', SERVER_ACTION);
+  // Remediate's deploy texts, each a description of the deploy review the static posture never opens.
+  for (const live of ['Opens the deploy review with every deployable artefact; nothing is written until you confirm there.', 'Opens a review of destination, environment and artefacts; nothing is written until you confirm there.',
+    'Deploy, after a review', 'Generate patch, then deploy', 'only after you review the destination, environment and artefacts', 'the patch and the deploy are confirmed separately',
+    'Ticked rows go to the deploy review; untick a row to leave it out.', 'not compared with live, so the deploy review lists every deployable artefact',
+    'You review the destination, environment and artefacts before anything is written.']) assert.match(live, SERVER_ACTION, live);
   assert.throws(() => staticRemedy('nope', { product: 'P' }), { message: 'staticRemedy: no static text for "nope"' });
 
   // What is built in, read from the catalogue: a live pack other than Pack A, and any pack, that loads.
@@ -325,7 +343,8 @@ test('S3 — the static texts, exact for three products (the article by the name
 // static-posture text replaces it, S5 holds the wiring), `unreachable: <why>` (no bundle reader gets there), `control:
 // <why>` (a control that answers the 501 sentence on use), `comment`, or `description: <why>` (it says what something
 // is, not what to do). No line is deferred: every remedy a bundle reader can reach in Compare, Diagnose, Traceability
-// and Remediate has its static text.
+// and Remediate has its static text. Rows 20–27 are Remediate's deploy texts, which describe the deploy review a
+// deploy control opens on a server and which the static posture never opens.
 const LEDGER = [
   ["studio/app.mjs", "<span class=\"discover-journey-label\">Scan a repo</span>", "control: Discover's Scan a repo — answers the 501 sentence on use since W6; drawing it unavailable is bundle-discover-controls"],
   ["studio/app.mjs", "<span class=\"discover-load-label\">① Scan a repository</span>", "control: Discover's Scan a repository — answers the 501 sentence on use since W6 (bundle-discover-controls)"],
@@ -334,6 +353,7 @@ const LEDGER = [
   ["studio/app.mjs", "//     (\"verified\") — so \"scan a repo, then scan the live deployment\"", "comment"],
   ["studio/app.mjs", "? `<p class=\"deploy-verify-note\">Still not visible after ${attempt} checks — rules may need an evaluation cycle. Re-open this modal later or refresh live from the MCP panel.</p>`", "unreachable: inside the deploy modal, which never opens in the static posture (openDeployModal explains instead)"],
   ["studio/app.mjs", "// \"New pack from a live MCP server\" (#draft-mcp-panel, rebadge batch 3, C1):", "comment"],
+  ["studio/app.mjs", "// The deploy review (compile-view.mjs readDeployReview) says which selected", "comment"],
   ["studio/compare-view.mjs", "notice.textContent = 'Traceability needs Pack A registered on the server — re-upload or rescan it, then retry.';", "unreachable: Pack A has no id only after an upload, and a bundle has none (handleFile → /api/validate is a 501)"],
   ["studio/compare-view.mjs", "body: 'Re-upload or rescan the pack, then open Diagnose again.',", "unreachable: Pack A has no id only after an upload, and a bundle has none (handleFile → /api/validate is a 501)"],
   ["studio/compare-view.mjs", "${isStatic() ? escapeHtml(staticRemedy('drift-partial', { product: state.brand.chrome.name })) : 'Redraft from MCP before acting on this drift.'}${(liveEvidence.unsupported || []).length ? ` restricted MCP tier — not exposed: ${escapeHtml(liveEvidence.unsupported.join(', '))}` : ''}", "row 2"],
@@ -346,6 +366,22 @@ const LEDGER = [
   ["studio/compare-view.mjs", "fix: remedy ? remedy('live-missing-fix') : 'Review them, then deploy what is missing live or update the repository from live.',", "row 12"],
   ["studio/compare-view.mjs", "const live = !d.hasLive ? { v: 'Not checked', note: isStatic() ? staticRemedy('live-measure', staticInput()) : 'connect MCP or scan live to verify', tone: 'warn' }", "row 8"],
   ["studio/compile-view.mjs", "note = isStatic() ? staticRemedy('remediate-no-b', staticInput()) : 'Compare with a live pack to get a recommendation, or deploy the repository’s artefacts directly.';", "row 18"],
+  ["studio/compile-view.mjs", "// and the deploy modal's pre-deploy review panel.", "comment"],
+  ["studio/compile-view.mjs", "//           live     changes live systems (after the deploy review)", "comment"],
+  ["studio/compile-view.mjs", "//           both     repository and live, each confirmed separately", "comment"],
+  ["studio/compile-view.mjs", "{ id: 'deploy',    term: 'deploy',        next: 'Deploy, after a review',      effect: 'live',    needsB: false },", "row 21"],
+  ["studio/compile-view.mjs", "{ id: 'all',       term: 'bidirectional', next: 'Generate patch, then deploy', effect: 'both',    needsB: true  },", "row 22"],
+  ["studio/compile-view.mjs", "live:    { label: 'Changes live systems',   note: 'only after you review the destination, environment and artefacts' },", "row 23"],
+  ["studio/compile-view.mjs", "both:    { label: 'Changes the repository and live systems', note: 'the patch and the deploy are confirmed separately' },", "row 24"],
+  ["studio/compile-view.mjs", ": `Artefacts the repository declares that ${other} does not have. ${isStatic() ? staticRemedy('remediate-deploy-meaning', staticInput()) : 'Ticked rows go to the deploy review'}; the rest need a manual fix in the pack, instrumentation or platform.`;", "row 25"],
+  ["studio/compile-view.mjs", "// No live pack to compare: the deploy review opens with every deployable", "comment"],
+  ["studio/compile-view.mjs", "] : [isStatic() ? staticRemedy('remediate-not-compared-summary', staticInput()) : 'not compared with live, so the deploy review lists every deployable artefact'];", "row 27"],
+  ["studio/compile-view.mjs", "${resolved.deployable ? `<p class=\"ux-rm-changes-hint\">${isStatic() ? escapeHtml(staticRemedy('remediate-rows-hint', staticInput())) : 'Ticked rows go to the deploy review; untick a row to leave it out. Rows without a box need a repository patch, a decision or a manual fix.'}</p>` : ''}", "row 26"],
+  ["studio/compile-view.mjs", "<span class=\"remediate-action-hint\"><span class=\"ux-rm-effect is-live\">Changes live systems</span> ${isStatic() ? escapeHtml(staticRemedy('remediate-deploy-hint', staticInput())) : 'Opens the deploy review with every deployable artefact; nothing is written until you confirm there.'}</span>", "row 20"],
+  ["studio/compile-view.mjs", ": (isStatic() ? escapeHtml(staticRemedy('remediate-deploy-hint', staticInput())) : 'Opens a review of destination, environment and artefacts; nothing is written until you confirm there.')}</span>", "row 20"],
+  ["studio/compile-view.mjs", "// The deploy review preselects the artefact being compiled (the manifest", "comment"],
+  ["studio/compile-view.mjs", "<p class=\"ux-rm-output-note\">Writes to ${escapeHtml(activeFlavor?.platform || 'the live platform')}${envLabel ? ` for <strong>${escapeHtml(envLabel)}</strong>` : ''} through your MCP gateway. You review the destination, environment and artefacts before anything is written.</p>", "unreachable: the compiler draws its Deploy to live only where the server's deploy matrix says the target deploys, and a bundle has none (GET /api/deploy/matrix is a 501)"],
+  ["studio/compile-view.mjs", "// The deploy modal's pre-deploy review.", "comment"],
   ["studio/diagnostic-grade.mjs", "//   errors      — { family: last error message } from mcp.probeErrors.<family>.", "comment"],
   ["studio/diagnostic-grade.mjs", "const NO_LIVE_HINT = 'connect MCP or scan live';", "row 13"],
   ["studio/live-model.mjs", "if (live === 'scaffold') return 'Scaffold — drafted from MCP discovery; sections marked scaffold are not compared';", "description: how a pack was made (drafted from MCP discovery), true in a bundle too — no action"],
@@ -357,6 +393,9 @@ const LEDGER = [
   ["studio/trace-chain.mjs", "scrapeEvidence: 'Capture scrape evidence: refresh the live draft',", "row 15"],
   ["studio/trace-chain.mjs", "dashboardDeploy: 'Deploy the dashboard, then refresh live evidence',", "row 15"],
   ["studio/trace-chain.mjs", "alertDeploy: 'Deploy the burn-rate alert, then refresh live evidence',", "row 15"],
+  ["studio/verify-deploy.mjs", "// ---------- pre-deploy review ----------", "comment"],
+  ["studio/verify-deploy.mjs", "// kept here beside the deploy review so tools/test-verify-deploy.mjs pins", "comment"],
+  ["studio/verify-deploy.mjs", "return `${countWords(selected, ['selected artefact', 'selected artefacts'])} · ${countWords(rows, ['deploy row', 'deploy rows'])} — an artefact can compile to more than one row. Opens the deploy review; nothing changes until you confirm there.`;", "control: the title of Remediate's Review and deploy button, which the static posture draws unavailable and without its title (drawDeployUnavailable, S2)"],
 ];
 const DISPOSITION = /^(?:row \d+|unreachable: .+|control: .+|description: .+|comment)$/;
 // The studio modules the ledger reads: every one but prototype space and the shim.
@@ -397,9 +436,15 @@ test('S4 — the phrase ledger: every studio line that names a server action is 
   assert.deepEqual(rowOf('studio/trace-chain.mjs', 'live'), ['row 14', 'row 15', 'row 15', 'row 15', 'row 15', 'row 15', 'row 15']);
   assert.deepEqual(rowOf('studio/compile-view.mjs', 'deploy the repository'), ['row 18']);
   assert.deepEqual(rowOf('studio/app.mjs', 'to crawl a repo, generate from a live MCP server'), ['row 19']);
+  // Remediate's deploy texts: none describes the deploy review in the static posture.
+  assert.deepEqual(rowOf('studio/compile-view.mjs', "staticRemedy('remediate-deploy-hint'"), ['row 20', 'row 20']);
+  assert.deepEqual(rowOf('studio/compile-view.mjs', "next: '"), ['row 21', 'row 22']);
+  assert.deepEqual(rowOf('studio/compile-view.mjs', "note: '"), ['row 23', 'row 24']);
+  assert.deepEqual(rowOf('studio/compile-view.mjs', 'Ticked rows go to the deploy review'), ['row 25', 'row 26']);
+  assert.deepEqual(rowOf('studio/compile-view.mjs', 'so the deploy review lists every deployable artefact'), ['row 27']);
 });
 
-// Which view shows each static text (the design's A.8 rows, and row 19).
+// Which view shows each static text (the design's A.8 rows, and rows 19–27, which this build adds).
 const WIRED_IN = {
   'retrofeed-result': 'studio/compare-view.mjs',
   'drift-partial': 'studio/compare-view.mjs',
@@ -417,6 +462,14 @@ const WIRED_IN = {
   'flow-not-compared-remediate': 'studio/compile-view.mjs',
   'remediate-no-b': 'studio/compile-view.mjs',
   'need-pack': 'studio/app.mjs',
+  'remediate-deploy-hint': 'studio/compile-view.mjs',
+  'remediate-next-deploy': 'studio/compile-view.mjs',
+  'remediate-next-both': 'studio/compile-view.mjs',
+  'remediate-effect-live': 'studio/compile-view.mjs',
+  'remediate-effect-both': 'studio/compile-view.mjs',
+  'remediate-deploy-meaning': 'studio/compile-view.mjs',
+  'remediate-rows-hint': 'studio/compile-view.mjs',
+  'remediate-not-compared-summary': 'studio/compile-view.mjs',
 };
 // The one way a pure function takes the static texts: an explicit `remedy` input, bound where the view asks isStatic().
 const REMEDY_BINDING = 'remedy: isStatic() ? (key) => staticRemedy(key, staticInput()) : null,';
@@ -484,7 +537,20 @@ test('S5 — the wiring: each static text is shown by the view its row names, be
     "'Draft the live pack again from MCP once the endpoint is healthy, then re-check.'",
     "'connect MCP or scan live to verify'",
   ]) assert.ok(view.includes(live), `the live studio keeps ${live.slice(0, 60)}`);
-  assert.ok(read('studio/compile-view.mjs').includes("'Compare with a live pack to get a recommendation, or deploy the repository’s artefacts directly.'"));
+  const remediate = read('studio/compile-view.mjs');
+  for (const live of [
+    "'Compare with a live pack to get a recommendation, or deploy the repository’s artefacts directly.'",
+    "next: 'Deploy, after a review',", "next: 'Generate patch, then deploy',",
+    "note: 'only after you review the destination, environment and artefacts' },", "note: 'the patch and the deploy are confirmed separately' },",
+    "'Ticked rows go to the deploy review'}; the rest need a manual fix in the pack, instrumentation or platform.`",
+    "'not compared with live, so the deploy review lists every deployable artefact'",
+    "'Ticked rows go to the deploy review; untick a row to leave it out. Rows without a box need a repository patch, a decision or a manual fix.'",
+    "'Opens the deploy review with every deployable artefact; nothing is written until you confirm there.'",
+    "'Opens a review of destination, environment and artefacts; nothing is written until you confirm there.'",
+  ]) assert.ok(remediate.includes(live), `the live studio keeps ${live.slice(0, 60)}`);
+  // The deployable rows' boxes choose what the deploy review takes; the static posture, where none opens, draws them
+  // disabled (row 26's hint says why).
+  assert.ok(remediate.includes("const boxDisabled = isStatic() ? ' disabled' : '';") && remediate.includes("<input type=\"checkbox\" ${checked ? 'checked' : ''}${boxDisabled}>"), 'the boxes are disabled in the static posture');
   assert.ok(read('studio/app.mjs').includes('<strong>Discover</strong> to crawl a repo, generate from a live MCP server, or\n        upload a manifest — then come back here.'));
   // The pure decision takes the texts as an input; criterionBlocker passes it through.
   assert.match(view, /export function buildAssessmentDecision\(\{[^}]*remedy = null \} = \{\}\)/);

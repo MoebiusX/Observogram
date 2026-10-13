@@ -20,8 +20,9 @@
 // ([data-ux-action="rm-deploy"], [data-ux-action="rm-deploy-all"]), the
 // response path's per-SLO buttons (.rflow-deploy) and the compiler's button
 // (#deploy-compiled). The view that draws one marks it unavailable after it
-// renders; its handler stays and reaches openDeployModal (studio/app.mjs),
-// which explains the reason instead of opening the modal.
+// renders and drops its title, which says what it would open; its handler
+// stays and reaches openDeployModal (studio/app.mjs), which explains the
+// reason instead of opening the modal.
 //
 // staticRemedy(key, { product, liveBuiltIn, packsBuiltIn }) is the text a
 // view shows in the static posture where its own names a server action the
@@ -62,6 +63,20 @@
 //   need-pack (row 19) — Diagnose's and Remediate's prompt before a pack is
 //     chosen (studio/app.mjs renderNeedPackPrompt), where a server's names
 //     the ways to bring one in.
+//   Remediate's deploy texts (rows 20–27, compile-view.mjs), where a
+//   server's describe the review a deploy control opens — which never opens
+//   in the static posture:
+//   remediate-deploy-hint (row 20) — the hint beside each of the decision's
+//     Review and deploy buttons.
+//   remediate-next-deploy, remediate-next-both (rows 21, 22) — the deploy
+//     and bidirectional strategy cards' next step.
+//   remediate-effect-live, remediate-effect-both (rows 23, 24) — the active
+//     strategy's effect note.
+//   remediate-deploy-meaning (row 25) — what the deploy strategy covers.
+//   remediate-rows-hint (row 26) — the proposed changes' hint over the
+//     deployable rows' boxes, which the static posture draws disabled.
+//   remediate-not-compared-summary (row 27) — the proposed changes' summary
+//     with no Pack B.
 //
 // staticTraceActions(product) is the set of Traceability's live-evidence
 // texts for the static posture (rows 14, 15): the same keys as
@@ -115,6 +130,14 @@ const STATIC_REMEDIES = {
   'need-pack': ({ product, packsBuiltIn }) => (packsBuiltIn
     ? 'Head to Discover and open one of the packs built into this bundle — then come back here.'
     : `This bundle carries no pack; whoever builds it can add one with --pack (a curated repository pack, or a live draft made on ${aServer(product)}).`),
+  'remediate-deploy-hint': ({ product }) => `Deploying needs ${aServer(product)}; nothing is written to live from this bundle.`,
+  'remediate-next-deploy': ({ product }) => `Deploy, on ${aServer(product)}`,
+  'remediate-next-both': ({ product }) => `Generate patch; deploying needs ${aServer(product)}`,
+  'remediate-effect-live': ({ product }) => `only from ${aServer(product)}; nothing is written to live from this bundle`,
+  'remediate-effect-both': ({ product }) => `the patch is made here; the deploy needs ${aServer(product)}`,
+  'remediate-deploy-meaning': ({ product }) => `Deploying the ticked rows needs ${aServer(product)}`,
+  'remediate-rows-hint': ({ product }) => `Ticked rows can be deployed from ${aServer(product)}; this bundle deploys nothing, so the boxes cannot be changed here. Rows without a box need a repository patch, a decision or a manual fix.`,
+  'remediate-not-compared-summary': ({ product }) => `not compared with live; deploying them needs ${aServer(product)}`,
 };
 
 export const STATIC_REMEDY_KEYS = Object.freeze(Object.keys(STATIC_REMEDIES));

@@ -1138,8 +1138,8 @@ async function loadPlaywright() {
   catch (e) { return { error: `cannot import ${spec}: ${e.message.split('\n')[0]}` }; }
 }
 // S4's pattern (tools/test-static-remedies.mjs, which holds every studio line it matches to a disposition): a server
-// action a reader of a bundle cannot take. C8 holds the rendered views to it.
-const SERVER_ACTION = /\b(re-?scan|rescan|scan (?:live|a repo(?:sitory)?)|connect mcp|from (?:its |a live )?mcp|redraft|re-?upload|refresh(?:es|ing)? (?:the )?live|refresh live evidence|capture a live draft|live draft again|deploy what is missing|deploy the repository)\b/i;
+// action a reader of a bundle cannot take, or the deploy review a bundle never opens. C8 holds the rendered views to it.
+const SERVER_ACTION = /\b(re-?scan|rescan|scan (?:live|a repo(?:sitory)?)|connect mcp|from (?:its |a live )?mcp|redraft|re-?upload|refresh(?:es|ing)? (?:the )?live|refresh live evidence|capture a live draft|live draft again|deploy what is missing|deploy the repository|deploy review|review (?:of |the )?destination|after a review|then deploy|confirmed separately)\b/i;
 
 test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s under en-US, cs-CZ and et-EE; Compare and Pair by on the compare-modes pair; the drift drill\'s deploy drawn unavailable and explained, its retrofeed downloading the server\'s updated pack; Remediate\'s deploy controls; the static texts and no server action rendered; the audit report downloaded and fetched as the server\'s; the notice; no page error, nothing off the loopback', async (t) => {
   const required = process.env.OBSERVOGRAM_BUNDLE_SMOKE === 'require';
@@ -1235,8 +1235,9 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     const hits = [...new Set([...(await viewText(page)).matchAll(new RegExp(SERVER_ACTION.source, 'gi'))].map((m) => m[0]))];
     assert.deepEqual(hits, [], `${where}: the static posture names no server action the reader cannot take`);
   };
-  // A control drawn unavailable: aria-disabled, the reason beside it; a click explains it (the toast) and opens nothing.
-  const drawnUnavailable = (page, sel) => page.evaluate((s) => [...document.querySelectorAll(s)].map((el) => ({ aria: el.getAttribute('aria-disabled'), why: el.querySelector('.svc-why')?.textContent ?? null })), sel);
+  // A control drawn unavailable: aria-disabled, the reason beside it, no title saying what it would open; a click
+  // explains it (the toast) and opens nothing.
+  const drawnUnavailable = (page, sel) => page.evaluate((s) => [...document.querySelectorAll(s)].map((el) => ({ aria: el.getAttribute('aria-disabled'), why: el.querySelector('.svc-why')?.textContent ?? null, title: el.getAttribute('title') })), sel);
   const clickExplains = async (page, sel) => {
     await page.evaluate(() => { const el = document.getElementById('toast'); el.hidden = true; el.textContent = ''; });
     await page.click(sel, { force: true });       // an aria-disabled control still takes a click; Playwright would wait for it to enable
@@ -1316,7 +1317,7 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     await page.waitForSelector('.diag-subtab[data-sub="grade"]', { timeout: T });
     await page.click('.diag-subtab[data-sub="grade"]');
     await page.waitForSelector('#diag-compare #drift-deploy-missing', { state: 'attached', timeout: T });
-    assert.deepEqual(await drawnUnavailable(page, '#drift-deploy-missing'), [{ aria: 'true', why: DEPLOY }], 'the drift drill\'s deploy is drawn unavailable with the reason');
+    assert.deepEqual(await drawnUnavailable(page, '#drift-deploy-missing'), [{ aria: 'true', why: DEPLOY, title: null }], 'the drift drill\'s deploy is drawn unavailable with the reason');
     await clickExplains(page, '#drift-deploy-missing');
     // Row 12: the drift-free blocker's fix keeps what the reader can do here.
     assert.ok((await viewText(page)).includes(staticRemedy('drift-free-fix', { product })), 'row 12');
@@ -1352,9 +1353,16 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     for (const sel of ['[data-ux-action="rm-deploy"]', '.rflow-deploy']) {
       const drawn = await drawnUnavailable(page, sel);
       assert.ok(drawn.length > 0, sel);
-      assert.deepEqual(drawn, drawn.map(() => ({ aria: 'true', why: DEPLOY })), `${sel}: every one drawn unavailable with the reason`);
+      assert.deepEqual(drawn, drawn.map(() => ({ aria: 'true', why: DEPLOY, title: null })), `${sel}: every one drawn unavailable with the reason`);
       await clickExplains(page, `${sel} >> nth=0`);
     }
+    // Rows 20 and 26: the deploy action's hint and the rows' hint say deploying needs a server, over boxes drawn disabled.
+    const rm = await page.evaluate(() => ({
+      hint: document.querySelector('.ux-rm-actions [data-ux-action="rm-deploy"]')?.closest('.ux-rm-action')?.querySelector('.remediate-action-hint')?.textContent ?? null,
+      rows: document.querySelector('.ux-rm-changes-hint')?.textContent ?? null,
+      boxes: [...document.querySelectorAll('.remediate-item input[type=checkbox]')].map((b) => b.disabled),
+    }));
+    assert.deepEqual({ ...rm, boxes: [...new Set(rm.boxes)] }, { hint: `Changes live systems ${staticRemedy('remediate-deploy-hint', { product })}`, rows: staticRemedy('remediate-rows-hint', { product }), boxes: [true] }, 'Remediate\'s deploy hints, and the boxes disabled');
     await noServerAction(page, 'Remediate');
     await ctx.close();
   }

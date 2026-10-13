@@ -61,8 +61,9 @@ export { catalogEntryFor, LAYERS_FOR_DIFF };
 // A static bundle answers no deploy: every deploy control Diagnose and its
 // Compare draw — the drift action, the chain cards, the pack picker cards — is
 // drawn unavailable with the reason once the view has rendered (an
-// aria-disabled control is never a modal opener). Each keeps its handler,
-// which reaches openDeployModal (studio/app.mjs) and explains.
+// aria-disabled control is never a modal opener), without the title that says
+// what it would open. Each keeps its handler, which reaches openDeployModal
+// (studio/app.mjs) and explains.
 const isStatic = () => state.access?.posture === 'static';
 // Every remedy that names a server action says, in the static posture, how a
 // bundle gets a live pack (studio/static-remedies.mjs staticRemedy) — what is
@@ -74,7 +75,7 @@ const traceActions = () => (isStatic() ? { actions: staticTraceActions(state.bra
 function drawDeployUnavailable(root) {
   if (!isStatic() || !root) return;
   const reason = serverNeeded('Deploy', state.brand.chrome.name);
-  for (const control of root.querySelectorAll(DEPLOY_CONTROLS)) markUnavailable(control, reason);
+  for (const control of root.querySelectorAll(DEPLOY_CONTROLS)) { markUnavailable(control, reason); control.removeAttribute('title'); }
 }
 
 // ---------- compare view ----------

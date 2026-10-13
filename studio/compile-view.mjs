@@ -334,6 +334,21 @@ const REMEDIATE_EFFECTS = {
   both:    { label: 'Changes the repository and live systems', note: 'the patch and the deploy are confirmed separately' },
 };
 
+// A strategy's next step and effect note. In the static posture the deploy
+// review never opens (openDeployModal explains instead), so where a server's
+// text describes it the static one says deploying needs a server
+// (studio/static-remedies.mjs, rows 21–24).
+function strategyNext(o) {
+  if (o.id === 'deploy') return isStatic() ? staticRemedy('remediate-next-deploy', staticInput()) : o.next;
+  if (o.id === 'all') return isStatic() ? staticRemedy('remediate-next-both', staticInput()) : o.next;
+  return o.next;
+}
+function effectNote(id) {
+  if (id === 'live') return isStatic() ? staticRemedy('remediate-effect-live', staticInput()) : REMEDIATE_EFFECTS.live.note;
+  if (id === 'both') return isStatic() ? staticRemedy('remediate-effect-both', staticInput()) : REMEDIATE_EFFECTS.both.note;
+  return REMEDIATE_EFFECTS[id].note;
+}
+
 const REMEDIATE_LAYER_NAMES = LAYER_NAMES;
 
 const SCOPE_WORDS = { service: 'service scope', family: 'family scope', all: 'all live artefacts' };
@@ -581,7 +596,7 @@ function strategyCardHtml(o, m) {
       <span class="ux-rm-strategy-term">${escapeHtml(g.term)}</span>
       <span class="ux-rm-strategy-flow">${disabled ? 'Load a live pack (Pack B) to enable' : flowHtml(strategyFlow(o.id, m))}</span>
       <span class="ux-rm-strategy-count"><strong>${escapeHtml(countText)}</strong>${count?.note ? ` <span>· ${escapeHtml(count.note)}</span>` : ''}</span>
-      <span class="ux-rm-strategy-next">Next: ${escapeHtml(o.next)}</span>
+      <span class="ux-rm-strategy-next">Next: ${escapeHtml(strategyNext(o))}</span>
     </button>`;
 }
 
@@ -592,7 +607,7 @@ function strategyMeaning(op, m) {
     if (!m.haveB) return 'Every artefact in the repository pack. Without a live pack to compare, the studio cannot tell which ones are already live.';
     return m.mode === 'gap'
       ? `Artefacts your pack declares beyond ${other}. The baseline is not a live pack, so deploying them is optional, not a gap.`
-      : `Artefacts the repository declares that ${other} does not have. Ticked rows go to the deploy review; the rest need a manual fix in the pack, instrumentation or platform.`;
+      : `Artefacts the repository declares that ${other} does not have. ${isStatic() ? staticRemedy('remediate-deploy-meaning', staticInput()) : 'Ticked rows go to the deploy review'}; the rest need a manual fix in the pack, instrumentation or platform.`;
   }
   if (op === 'retrofeed') return `Artefacts ${other} has that the repository lacks. Generating the patch gives you an additions fragment and the updated pack to commit.`;
   if (op === 'drift') return 'Shared artefacts whose decision-bearing fields differ. Decide per artefact whether the repository or live is right.';
@@ -805,7 +820,7 @@ function renderRemediationPlan(root) {
     <div class="ux-rm-active-head">
       <h3 class="ux-rm-active-title" id="rm-active-title">${escapeHtml(strategyLabel(op, m.mode))} <span class="ux-rm-strategy-term">${escapeHtml(term)}</span></h3>
       <p class="ux-rm-flowline">${flowHtml(strategyFlow(op, m))}</p>
-      <p class="ux-rm-effectline"><span class="ux-rm-effect is-${opDef.effect}">${escapeHtml(effect.label)}</span> <span>${escapeHtml(effect.note)}.</span></p>
+      <p class="ux-rm-effectline"><span class="ux-rm-effect is-${opDef.effect}">${escapeHtml(effect.label)}</span> <span>${escapeHtml(effectNote(opDef.effect))}.</span></p>
       <p class="ux-rm-meaning">${escapeHtml(strategyMeaning(op, m))}</p>
     </div>
   `;
@@ -825,7 +840,7 @@ function renderRemediationPlan(root) {
     remediationDeployPhrase({ selected: selectedDeployment.identities.size, deployable: resolved.deployable, rows: selectedDeployment.rows }),
     resolved.drift ? `${plural(resolved.drift, 'shared artefact')} to compare` : '',
     manual > 0 ? `${manual} need${manual === 1 ? 's' : ''} a manual fix` : '',
-  ] : ['not compared with live, so the deploy review lists every deployable artefact'];
+  ] : [isStatic() ? staticRemedy('remediate-not-compared-summary', staticInput()) : 'not compared with live, so the deploy review lists every deployable artefact'];
   active.insertAdjacentHTML('beforeend', `
     <p class="ux-rm-summary"><strong>${escapeHtml(haveB ? plural(resolved.total, 'proposed change') : plural(resolved.total, 'artefact'))}</strong>: ${escapeHtml(listSentence(summaryParts.filter(Boolean)))}.</p>`);
 
@@ -852,12 +867,15 @@ function renderRemediationPlan(root) {
   changes.innerHTML = `
     <summary>Proposed changes by layer (${resolved.total})</summary>
     <div class="ux-disclosure-body">
-      ${resolved.deployable ? '<p class="ux-rm-changes-hint">Ticked rows go to the deploy review; untick a row to leave it out. Rows without a box need a repository patch, a decision or a manual fix.</p>' : ''}
+      ${resolved.deployable ? `<p class="ux-rm-changes-hint">${isStatic() ? escapeHtml(staticRemedy('remediate-rows-hint', staticInput())) : 'Ticked rows go to the deploy review; untick a row to leave it out. Rows without a box need a repository patch, a decision or a manual fix.'}</p>` : ''}
     </div>
   `;
   const list = document.createElement('div');
   list.className = 'remediate-list';
   const deselected = state.remediateDeselected || (state.remediateDeselected = new Set());
+  // A box chooses what a deploy takes; in the static posture nothing deploys,
+  // so the boxes are drawn disabled (the hint above says why).
+  const boxDisabled = isStatic() ? ' disabled' : '';
   for (const L of LAYERS_FOR_DIFF) {
     const entries = resolved.byLayer[L];
     if (!entries || !entries.length) continue;
@@ -881,7 +899,7 @@ function renderRemediationPlan(root) {
       if (e.deployable) {
         li.innerHTML = `
           <label class="remediate-item-row">
-            <input type="checkbox" ${checked ? 'checked' : ''}>
+            <input type="checkbox" ${checked ? 'checked' : ''}${boxDisabled}>
             <span class="remediate-item-name">${escapeHtml(labelText)}</span>
             <span class="remediate-item-tag is-deploy">deploy · ${escapeHtml(e.deployLabel || (e.kind === 'dashboard' ? 'dashboard' : 'rules'))}</span>
           </label>
@@ -926,7 +944,7 @@ function renderRemediationPlan(root) {
     ${!haveB ? `
       <div class="ux-rm-action">
         <button type="button" class="remediate-deploy-btn" data-ux-action="rm-deploy-all">Review and deploy repository artefacts to live ↗</button>
-        <span class="remediate-action-hint"><span class="ux-rm-effect is-live">Changes live systems</span> Opens the deploy review with every deployable artefact; nothing is written until you confirm there.</span>
+        <span class="remediate-action-hint"><span class="ux-rm-effect is-live">Changes live systems</span> ${isStatic() ? escapeHtml(staticRemedy('remediate-deploy-hint', staticInput())) : 'Opens the deploy review with every deployable artefact; nothing is written until you confirm there.'}</span>
       </div>` : ''}
     ${offersPatch ? `
       <div class="ux-rm-action">
@@ -941,7 +959,7 @@ function renderRemediationPlan(root) {
         </button>
         <span class="remediate-action-hint"><span class="ux-rm-effect is-live">Changes live systems</span> ${n === 0
           ? 'Tick at least one deployable row, or handle the manual fixes in the pack.'
-          : 'Opens a review of destination, environment and artefacts; nothing is written until you confirm there.'}</span>
+          : (isStatic() ? escapeHtml(staticRemedy('remediate-deploy-hint', staticInput())) : 'Opens a review of destination, environment and artefacts; nothing is written until you confirm there.')}</span>
       </div>` : ''}
     ${op === 'drift' || (op === 'all' && resolved.drift) ? `
       <div class="ux-rm-action">
@@ -1066,8 +1084,9 @@ export function renderCompileView(host) {
 // A static bundle answers no deploy: every deploy control Remediate draws —
 // the decision header's Deploy actions, the response path's per-SLO buttons,
 // the compiler's — is drawn unavailable with the reason once the view has
-// rendered (an aria-disabled control is never a modal opener). Each keeps its
-// handler, which reaches openDeployModal (studio/app.mjs) and explains.
+// rendered (an aria-disabled control is never a modal opener), without the
+// title that says what it would open. Each keeps its handler, which reaches
+// openDeployModal (studio/app.mjs) and explains.
 const isStatic = () => state.access?.posture === 'static';
 // The remedies that name a server action say, in the static posture, how a
 // bundle gets a live pack (studio/static-remedies.mjs staticRemedy): what is
@@ -1077,7 +1096,7 @@ const staticInput = () => staticInputOf(state.brand.chrome.name, state.catalog, 
 function drawDeployUnavailable(root) {
   if (!isStatic()) return;
   const reason = serverNeeded('Deploy', state.brand.chrome.name);
-  for (const control of root.querySelectorAll(DEPLOY_CONTROLS)) markUnavailable(control, reason);
+  for (const control of root.querySelectorAll(DEPLOY_CONTROLS)) { markUnavailable(control, reason); control.removeAttribute('title'); }
 }
 
 // ---------- the artefact compiler: a focused subview ----------
