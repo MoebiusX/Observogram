@@ -49,7 +49,8 @@
 //      read: an acknowledgement a matching (or unevaluable) rule requires and
 //      the caller did not tick is a 409 naming the rule (`rule`, its index),
 //      with `unevaluated: true` when the server could not check it — it did
-//      not finish, or cannot run on the form (policyAckRefusal). The patterns
+//      not finish, cannot run on the form, or a value it checks is over 512
+//      characters (policyAckRefusal). The patterns
 //      run in a worker with a 100 ms deadline per rule
 //      (server/mcp-settings-eval.mjs), never on this thread: a rule that does
 //      not finish counts as matched, so a slow pattern costs its

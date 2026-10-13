@@ -574,6 +574,10 @@ test('the settings policy is re-checked against the description the server read:
   const r1 = await s.post(SUBMIT, { mcpEndpointId: id, mode: 'described', values, acks: [] });
   assert.deepEqual([r1.status, r1.json.denied, r1.json.rule, r1.json.error], want);
   assert.equal(f.adminRequests.filter((x) => x.method === 'POST').length, 0);
+  // The approved host past 512 characters is too long for the policy to check: a 409 that says so.
+  const long = await s.post(SUBMIT, { mcpEndpointId: id, mode: 'described', values: { grafanaUrl: `https://approved.example/${'a'.repeat(600)}`, secret: SECRET }, acks: [] });
+  assert.deepEqual([long.status, long.json.denied, long.json.rule, long.json.unevaluated], [409, 'policy-ack', 0, true], 'the server could not check it');
+  assert.equal(f.adminRequests.filter((x) => x.method === 'POST').length, 0);
   const approved = await submitPastTimeouts(s, { mcpEndpointId: id, mode: 'described', values: { grafanaUrl: 'HTTPS://Approved.example/', secret: SECRET } });
   assert.equal(approved.status, 200, `an approved host needs no ack: ${approved.text}`);
   const r2 = await s.post(SUBMIT, { mcpEndpointId: id, mode: 'described', values, acks: [0] });
@@ -744,7 +748,7 @@ test('a policy worker that cannot be constructed, or fails, fails closed: every 
   assert.deepEqual(optionLines, [failedLine('RangeError')]);
 });
 
-test('the 409 for a missing acknowledgement names the first unticked rule and says `unevaluated: true` only when the server could not check it — a rule past its deadline or a failed worker, a rule that cannot run on the form — never for a match; no value in it', async () => {
+test('the 409 for a missing acknowledgement names the first unticked rule and says `unevaluated: true` only when the server could not check it — a rule past its deadline or a failed worker, a rule that cannot run on the form, a value too long to check — never for a match; no value in it', async () => {
   const d = genericDescriptor();
   const { policy } = compileSettingsPolicy({ version: 1, rules: [
     { when: { field: 'url', pattern: '^https://evil\\.' }, warn: 'Non-approved backend host.', require: { ack: 'I have operator approval' } },
@@ -759,6 +763,11 @@ test('the 409 for a missing acknowledgement names the first unticked rule and sa
   assert.deepEqual(policyAckRefusal(found, [0]), { ok: false, denied: 'policy-ack', rule: 2, unevaluated: true, error: 'Needs grafanaUrl. — tick "I checked the URL" in the server settings' });
   assert.equal(policyAckRefusal(found, [0, 2]), null, 'every ack ticked');
   assert.equal(policyAckRefusal([], []), null);
+  // A value over 512 characters is never run through the pattern (it would not match here): unchecked.
+  const long = `https://ok.example/${'a'.repeat(600)}`;
+  const tooLong = policyFindings(policy, d, { ...values, url: long });
+  assert.deepEqual(policyAckRefusal(tooLong, []), { ok: false, denied: 'policy-ack', rule: 0, unevaluated: true, error: 'Non-approved backend host. — tick "I have operator approval" in the server settings' }, 'too long to check: flagged');
+  assert.ok(!JSON.stringify(policyAckRefusal(tooLong, [])).includes('ok.example'), 'no value');
   // Past the deadline, or a worker that cannot start: every rule counted as matched, each flagged.
   const failed = await evaluatePolicy(policy, d, values, { createWorker: () => { throw new Error('no worker'); }, log: () => {} });
   assert.deepEqual(policyAckRefusal(failed.findings, []), { ok: false, denied: 'policy-ack', rule: 0, unevaluated: true, error: 'Non-approved backend host. — tick "I have operator approval" in the server settings' });

@@ -343,8 +343,8 @@ export function policyView(findings, ticked = [], named = []) {
 }
 
 // Why a box the studio server's 409 named appears (serverAckModel): its
-// check could not run the rule — it did not finish, or cannot run on the
-// form — or it matched where the page's did not.
+// check could not run the rule — it did not finish, cannot run on the form,
+// or a value was too long to check — or it matched where the page's did not.
 const SERVER_UNCHECKED = 'The studio server could not check these settings against this rule, so it counts as matched — tick the box to send them with your approval.';
 const SERVER_MATCHED = 'The studio server\'s check of these settings matched this rule, where the check in this page did not.';
 const ACK_REFUSAL = /^\d{3}: ([\s\S]+) — tick "([\s\S]+)" in the server settings$/;

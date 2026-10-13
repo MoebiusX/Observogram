@@ -423,8 +423,9 @@ server is exposed without sign-in. The studio server:
   acknowledgement is a 409, `{ denied: 'policy-ack', rule, error }`, naming
   the rule by index and its warning and acknowledgement, with
   `unevaluated: true` when the server could not check that rule (it did not
-  finish, the worker could not start or failed, or the rule cannot run on
-  the form), never a value; the modal then draws that rule's
+  finish, the worker could not start or failed, the rule cannot run on the
+  form, or a value it checks is over 512 characters), never a value; the
+  modal then draws that rule's
   acknowledgement if its own check did not, with a line saying the server
   could not check the rule (or that its check matched where the page's did
   not), and once it is ticked the next send carries it —, in a

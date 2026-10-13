@@ -1192,8 +1192,9 @@ the reader's browser cannot reach it. The contract:
   `generic.path` (else `/configure`). The policy is re-checked (a missing
   acknowledgement is `409 { denied: 'policy-ack', rule }`, with
   `unevaluated: true` when the server could not check that rule — it did not
-  finish, the worker could not start or failed, or it cannot run on the
-  form); the modal draws the named rule's acknowledgement (§16.2).
+  finish, the worker could not start or failed, it cannot run on the form,
+  or a value it checks is over 512 characters); the modal draws the named
+  rule's acknowledgement (§16.2).
 - One request with the platform's `fetch`, **never through the transport
   hook**: no redirect followed, 10 s, a capped read, exactly `Content-Type`,
   `Accept` and the description's own `Authorization`.

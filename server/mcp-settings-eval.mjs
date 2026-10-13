@@ -246,15 +246,17 @@ export async function evaluatePolicy(policy, descriptor, values, options) {
  * rule —, or null: `409 { ok: false, denied: 'policy-ack', rule, error }`,
  * the error the rule's warn and ack only. `unevaluated: true` when the
  * server could not check that rule — it did not finish (`timedOut`: past its
- * deadline, or the worker failed or never started), or it cannot run on the
- * form (`unevaluated`) — and absent when its pattern matched, so the studio
- * can say which; value-free, like the rest.
+ * deadline, or the worker failed or never started), it cannot run on the
+ * form (`unevaluated`), or a value it checks is too long for the policy to
+ * read (over 512 characters: the pattern never runs on it) — and absent when
+ * its pattern matched, so the studio can say which; value-free, like the
+ * rest. Only a match carries no note (policyFindings, timedOutFindings).
  */
 export function policyAckRefusal(findings, acks) {
   const ticked = new Set(acks);
   const missing = findings.find((f) => f.ack && !ticked.has(f.rule));
   if (!missing) return null;
-  const unchecked = missing.timedOut === true || missing.unevaluated === true;
+  const unchecked = missing.timedOut === true || missing.unevaluated === true || missing.note !== null;
   return { ok: false, denied: 'policy-ack', rule: missing.rule, ...(unchecked ? { unevaluated: true } : {}), error: `${missing.warn} — tick "${missing.ack}" in the server settings` };
 }
 
