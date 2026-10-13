@@ -8052,8 +8052,8 @@ async function bindTaxonomyFromServer() {
   }
   try { bindTaxonomy(mod, json); }
   catch (e) {
-    console.warn(`[taxonomy] the server's override does not compile — classifying with the default families: ${e.message}`);
-    state.taxonomyBindError = 'the server\'s override does not compile here';
+    console.warn(`[taxonomy] the served override does not compile — classifying with the default families: ${e.message}`);
+    state.taxonomyBindError = 'the served taxonomy override does not compile here';
     bindTaxonomy(mod, null);
   }
 }

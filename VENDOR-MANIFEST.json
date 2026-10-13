@@ -664,8 +664,8 @@
       ]
     },
     "tools/lib/library.mjs": {
-      "sha256": "3356a2c16f59bf7cf8162f83cf51ffecb9bcbfd91f0462fa4a9650cf3568e4e1",
-      "bytes": 91609,
+      "sha256": "90ed9b24bdaba4f8d2174ebabcc07a944b69e6c1ea6b785d27fd279a90139c03",
+      "bytes": 91623,
       "exports": [
         "BURN_PROFILES",
         "CUSTOM_FIELDS",
@@ -913,8 +913,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/promql-lezer.mjs": {
-      "sha256": "bcd4cabff8bcd6535b2f5c8294c5b8f123b0d0b7f3e9eb9188d190bee29f91e9",
-      "bytes": 3024,
+      "sha256": "9f3f1519095ec795fb42f9469afb39c0a8168ce639611175a5deb231d73cdfee",
+      "bytes": 3255,
       "exports": [
         "extractPromqlMetricNames",
         "parsePromqlDependencies"

@@ -1936,17 +1936,18 @@ studio and `tools/lib` modules and whose addresses are `data:` URLs of each
 module (only the import-specifier strings are rewritten — no transform of the
 code), the packs' canonical manifests and the spec schema inlined as JSON, and
 `studio/static-backend.mjs` installed before the app boots. That module answers
-the read-only pack routes in the browser from the same `tools/lib` engines the
+the pack routes in the browser from the same `tools/lib` engines the
 server runs — the catalogue, Discover, Diagnose (conformance), the canonical
-manifest, Compile (the catalogue, every artefact, every target) and **Export**
-(the ZIP, downloaded as a Blob) — so the verdicts are the server's
+manifest, Compile (the catalogue, every artefact, every target), **Export**
+(the ZIP, downloaded as a Blob) and **Compare** (`GET /api/diff` with its
+traceability graph, and the repository update from live) — so the verdicts are the server's
 (`tools/test-studio-bundle.mjs` compares every ported route against a running
-server; `GET /api/packs/:id/verdicts` answers the empty document — a
+server, `tools/test-bundle-compare.mjs` the diff and retrofeed body for body;
+`GET /api/packs/:id/verdicts` answers the empty document — a
 bundled pack is never registered, so that IS the server's answer). Everything
 the server alone can do — Scan a repo, Draft from MCP, Refresh from MCP,
-Testing an MCP connection, Building a pack from a live MCP server, uploads, Compare, Deploy, Journeys, Build, recording a Verdict, Waivers (they
-live on a service record, which a bundled pack has none of), the Audit report
-(its goes-blind section needs the PromQL parser the bundle cannot inline),
+Testing an MCP connection, Building a pack from a live MCP server, uploads, Deploy, Journeys, Build, recording a Verdict, Waivers (they
+live on a service record, which a bundled pack has none of), the Audit report,
 Services (the records behind the home's cards and the service page — a bundle
 has no services table), Organisations (the active org's name and role),
 Settings (members, environments, MCP endpoints, the audit — a bundle has no org),
@@ -1954,10 +1955,13 @@ Passing MCP server settings through the studio server (the Server settings
 modal sends from the browser in a bundle), sign-in — answers `501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
 this studio is a static bundle built without one.' }`, which the studio shows
 as the sentence, and a dismissable notice at the bottom of the window says so
-once ("Static studio — no Observogram server behind this page …"). Compare is
-out by design: the server's diff carries the traceability graph, whose PromQL
-parser is a bare node dependency the bundle cannot inline, and a diff without
-it would grade differently from the server. The Services home and the service
+once ("Static studio — no Observogram server behind this page …"). Compare's
+traceability graph needs the PromQL parser, the npm package
+`@prometheus-io/lezer-promql`: the build inlines it and the three `@lezer`
+packages it imports from `package-lock.json`, as `npm ci` installed them, with
+their licences in the file's licence block — so the build needs that lockfile,
+`VENDOR-MANIFEST.json` and an `npm ci` in the tree it builds from
+(`docs/DOWNSTREAM.md` §10). The Services home and the service
 page need the server (the services table); a bundle lists the services its
 packs name, as before.
 

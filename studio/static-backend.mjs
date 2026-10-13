@@ -6,15 +6,28 @@
 // Observogram server behind the page. This module answers the pack routes
 // the studio calls — the catalogue, the layered pack, the canonical
 // manifest, conformance, the compile catalogue and every compiled artefact,
-// the export ZIP — and retrofeed (POST /api/packs/:id/retrofeed: Compare's
-// repository update from live, a computation over two packs already in the
-// page that writes nothing), from the same tools/lib engines the server uses
+// the export ZIP — and the two computations Compare makes: the diff (GET
+// /api/diff, with its traceability graph) and retrofeed (POST
+// /api/packs/:id/retrofeed: the repository update from live, written
+// nowhere). Each is computed from the same tools/lib engines the server uses
 // (server/index.mjs is the reference: each port names the handler it
 // mirrors), over the packs the bundle carries. Everything else the server
-// alone can do (uploads, scans, live MCP drafts, Compare, Deploy, Journeys,
-// Build, sign-in) answers 501 with `denied: 'no-backend'` and a sentence
-// that names the feature — studio/api.mjs shows a `denied` body verbatim —
-// and a fixed notice at the bottom of the window says so once.
+// alone can do (uploads, scans, live MCP drafts, Deploy, Journeys, Build,
+// sign-in) answers 501 with `denied: 'no-backend'` and a sentence that names
+// the feature — studio/api.mjs shows a `denied` body verbatim — and a fixed
+// notice at the bottom of the window says so once.
+//
+// Compare's engines load at its first call, through literal dynamic imports
+// (so the builder's tokenizer puts them in the bundle's graph and the boot
+// does not evaluate them; a failed import is not kept, so the next call
+// retries): tools/lib/diff.mjs, and tools/lib/traceability-graph.mjs, whose
+// PromQL parser is the npm package @prometheus-io/lezer-promql — the builder
+// inlines it, and the @lezer packages it imports, from the lockfile as npm
+// ci installed them, under their own names in the import map, with their
+// licences in the file's licence block. The diff is the server's answer body
+// for body: no schema validation (the server's route has none; a --pack was
+// validated at build), A's 404 before B's, a repeated query key read as
+// absent, an empty scopeMode falling back to Pack A's annotation.
 //
 // Retrofeed is the one non-GET answered. Its body is read as the server's
 // three parsers read it (body-parser 2.2.2 as server/index.mjs mounts it,
@@ -30,25 +43,20 @@
 // text body's charset (the server refuses one its decoder does not know).
 // The diff is the server's retrofeed diff — no traceability graph, no
 // annotation fallback for scopeMode — over engines loaded at the first call
-// through literal dynamic imports (so the builder's tokenizer puts them in
-// the bundle's graph and the boot does not evaluate them); the clock that
-// stamps observogram.retrofeed.adoptedAt is the `clock` option. A computing
-// route answers 500 when the bundle bakes a taxonomy the classifier does not
-// hold (the studio's bind failed in this browser): an answer classified by
-// the default families would not be the server's.
+// as Compare's are; the clock that stamps observogram.retrofeed.adoptedAt is
+// the `clock` option. A computing route answers 500 when the bundle bakes a
+// taxonomy the classifier does not hold (the studio's bind failed in this
+// browser): an answer classified by the default families would not be the
+// server's.
 //
 // Imported by NOTHING in the live studio: the bundle alone instantiates it,
 // before studio/app.mjs boots. The live Express server serves this file
 // publicly like every studio file (express.static), inert. The tools/lib
 // imports are static and relative so the module links headlessly under Node
-// (the parity suite, tools/test-studio-bundle.mjs) and resolves in the
-// bundle's import map; the live studio keeps its `import('/lib/…')` idiom.
-//
-// Compare (GET /api/diff) is deliberately NOT answered: the server's answer
-// carries comparePackBranches (tools/lib/traceability-graph.mjs), whose
-// PromQL parser is the bare node dependency @prometheus-io/lezer-promql; a
-// diff without the graph would grade differently from the server for the
-// same two packs, and a different verdict is worse than none.
+// (the parity suites, tools/test-studio-bundle.mjs and
+// tools/test-bundle-compare.mjs) and resolves in the bundle's import map; the
+// live studio keeps its `import('/lib/…')` idiom and never reaches the parser
+// (its /lib mount has no import map).
 //
 // The baked taxonomy (`config.taxonomy`, written by --taxonomy) is served at
 // GET /api/taxonomy in the server's shape (server/taxonomy.mjs
@@ -101,7 +109,6 @@ export const FEATURES = [
   ['/api/mcp-settings/', 'Passing MCP server settings through the studio server'],   // the opt-in pass-through (rebadge batch 4); GET /api/mcp-settings is the shim's
   ['/api/validate', 'Uploading a pack'],
   ['/api/uploads', 'Uploading a pack'],
-  ['/api/diff', 'Compare'],
   ['/api/deploy', 'Deploy'],                          // /api/deploy/* and /api/deploys*
   ['/api/journeys', 'Journeys'],
   ['/api/library', 'Build'],
@@ -122,11 +129,10 @@ export const FEATURES = [
 const SERVICE_WAIVERS = /^\/api\/services\/[^/]+\/waivers(?:[/?]|$)/;
 // The per-pack sub-routes the server alone answers — `verdicts` for its
 // writes (PUT / DELETE; the GET is answered below with the empty document)
-// and `audit-report` (GAP batch 2, B3.5: its goes-blind section is the blast
-// radius over the traceability graph, whose PromQL parser the bundle cannot
-// inline — the Compare blocker; `placeholders` IS answered below). A POST
-// to `retrofeed` is answered below; any other method there is 'This action'
-// (the server has no other route there either).
+// and `audit-report` (GAP batch 2, B3.5: not ported to this shim;
+// `placeholders` IS answered below). A POST to `retrofeed` is answered
+// below; any other method there is 'This action' (the server has no other
+// route there either).
 const PACK_FEATURES = { 'deploy-bulk': 'Deploy', verdicts: 'Verdicts', 'audit-report': 'Audit report' };
 
 export function featureOf(pathname) {
@@ -150,7 +156,7 @@ export function denialText(feature, product = DEFAULT_BRAND.name) {
 // The sentence the notice shows. `n` is the number of packs built in.
 export function noticeText(n, product = DEFAULT_BRAND.name) {
   const packs = n === 1 ? '1 pack' : `${n} packs`;
-  return `Static studio — no ${product} server behind this page. Discover, Diagnose, Compile and conformance read the ${packs} built in; Scan a repo, Draft from MCP, Compare, Deploy, Journeys, Build and sign-in need the server.`;
+  return `Static studio — no ${product} server behind this page. Discover, Diagnose, Compare, Compile and conformance read the ${packs} built in; Scan a repo, Draft from MCP, Deploy, Journeys, Build and sign-in need the server.`;
 }
 
 // The Advanced menu's API item sub text (disableApiMenuItem).
@@ -171,10 +177,17 @@ function slugify(s) {
     .slice(0, 40) || 'pack';
 }
 
+// The one value of a query key the server reads — Express's simple parser
+// makes a repeated key an array, which a handler's typeof check treats as
+// absent — so undefined when the key is absent or repeated.
+function one(params, key) {
+  const all = params.getAll(key);
+  return all.length === 1 ? all[0] : undefined;
+}
+
 // server/index.mjs readEnv: a string, non-empty; a repeated ?env= is none.
 function readEnv(params) {
-  const all = params.getAll('env');
-  return all.length === 1 && all[0] ? all[0] : null;
+  return one(params, 'env') || null;
 }
 
 // server/index.mjs overlaidCanonical.
@@ -352,12 +365,14 @@ function parsePackText(text, url) {
 // origin: the page's origin; an absolute request to another origin is not ours.
 // product: the name the denials spell (installStaticBackend reads it from #brand-config).
 // clock: the time retrofeed stamps (observogram.retrofeed.adoptedAt) — an option so a test can pin it.
-// importRetrofeedEngines: loads the engines at retrofeed's first call — literal specifiers, in code (a comment or a
-// const is not collected), so the builder's tokenizer puts them in the graph; the option is a test seam, as
-// compareIdentityEngine({ importFn }) is (studio/compare-identity.mjs).
+// importDiffEngines, importRetrofeedEngines: load the engines at Compare's and retrofeed's first call — literal
+// specifiers, in code (a comment or a const is not collected), so the builder's tokenizer puts them in the graph and
+// the parser's packages in the import map; each option is a test seam, as compareIdentityEngine({ importFn }) is
+// (studio/compare-identity.mjs).
 export function createStaticBackend(config, {
   fetchImpl, origin = 'http://static-studio.invalid', product = DEFAULT_BRAND.name,
   clock = () => new Date().toISOString(),
+  importDiffEngines = () => Promise.all([import('../tools/lib/diff.mjs'), import('../tools/lib/traceability-graph.mjs')]),
   importRetrofeedEngines = () => Promise.all([import('../tools/lib/diff.mjs'), import('../tools/lib/retrofeed.mjs')]),
 } = {}) {
   const schema = config?.schema;
@@ -378,7 +393,8 @@ export function createStaticBackend(config, {
     && (baked.origins === null || (Array.isArray(baked.origins) && baked.origins.every((o) => typeof o === 'string')))
     ? { listed: true, origins: baked.origins === null ? null : [...baked.origins] } : null;
   const upstream = fetchImpl;
-  // The retrofeed engines, loaded once; a failed import is not kept, so the next call retries.
+  // The engines, each set loaded once; a failed import is not kept, so the next call retries.
+  let diffEngines = null;
   let retrofeedEngines = null;
 
   // The baked taxonomy must be the one the classifier holds, or the answer is
@@ -648,6 +664,42 @@ export function createStaticBackend(config, {
     }
   }
 
+  // GET /api/diff — server/index.mjs's handler, line for line: `a` and `b`
+  // each one non-empty value (a repeated key is absent: the 400); both packs
+  // looked up, A's 404 answered before B's; aEnv / bEnv a non-empty value or
+  // none; scopeMode the query's when non-empty, else Pack A's annotation
+  // (observogram.diff.scopeMode, then the legacy tomograph.diff.scopeMode);
+  // service a non-empty value or none; no schema validation; the diff with
+  // the traceability graph, any throw a 500 with its message.
+  async function diff(params) {
+    const aId = one(params, 'a') || null;
+    const bId = one(params, 'b') || null;
+    if (!aId || !bId) return json(400, { error: 'query params `a` and `b` (pack ids) required' });
+    const a = await findPack(aId);
+    const b = await findPack(bId);
+    if (!a) return unknownPack(aId);
+    if (!b) return unknownPack(bId);
+    const aEnv = one(params, 'aEnv') || null;
+    const bEnv = one(params, 'bEnv') || null;
+    const requestedScopeMode = one(params, 'scopeMode');
+    const requestedService = one(params, 'service') || undefined;
+    const refused = taxonomyRefusal();
+    if (refused) return refused;
+    try {
+      if (a.error) throw a.error;                       // a --pack-url that failed to load: 500, its message
+      if (b.error) throw b.error;
+      const [{ diffPacks }, { comparePackBranches }] = await (diffEngines ??= importDiffEngines());
+      const ann = a.canonical.metadata?.annotations;
+      const scopeMode = requestedScopeMode || (ann?.['observogram.diff.scopeMode'] ?? ann?.['tomograph.diff.scopeMode']);
+      const aLayered = adapt(a.canonical, { environment: aEnv });
+      const bLayered = adapt(b.canonical, { environment: bEnv });
+      return json(200, { ...diffPacks(aLayered, bLayered, { scopeMode, service: requestedService }), traceabilityGraph: comparePackBranches(aLayered, bLayered) });
+    } catch (e) {
+      diffEngines = null;                               // a failed import is retried at the next call
+      return json(500, { error: e.message });
+    }
+  }
+
   // POST /api/packs/:id/retrofeed — server/index.mjs's handler: A's 404,
   // then the body as the parsers left it (`req.body || {}`: a string, an
   // array or no body reach it as on the server) and B's 404; the diff without
@@ -712,6 +764,7 @@ export function createStaticBackend(config, {
       return body.refusal ?? retrofeed(id, body.value);
     }
     if (routes[path]) return routes[path]();
+    if (path === '/api/diff') return diff(url.searchParams);
     const m = /^\/api\/packs\/([^/]+)(?:\/(.+))?$/.exec(path);
     if (m) {
       let id;

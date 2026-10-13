@@ -77,7 +77,8 @@ export function resetCompareIdentityEngine() { engine = undefined; engineError =
 
 // The pack metadata the diff engine stamps on its answer (diff.mjs packMeta),
 // computed from an adapted pack, to check that the packs on screen are the
-// packs the server compared.
+// packs the comparison was computed for (by a server, or by a static
+// bundle's backend in the page).
 function packMetaOf(layered) {
   return JSON.stringify({
     id: layered?.id, name: layered?.name, service: layered?.meta?.service, criticality: layered?.meta?.criticality,
@@ -104,8 +105,8 @@ export function viewDiffFor({ engine: eng, diff, pack, packB, mode, taxonomyErro
   let out;
   if (eng === undefined) out = { diff, mode: DEFAULT_PAIRING, unavailable: 'still loading' };
   else if (!eng) out = { diff, mode: DEFAULT_PAIRING, unavailable: engineError || 'the pairing modules did not load' };
-  else if (taxonomyError) out = { diff, mode: DEFAULT_PAIRING, unavailable: `the artefact taxonomy did not bind as the server's: ${taxonomyError}` };
-  else if (!packsMatchDiff(diff, pack, packB)) out = { diff, mode: DEFAULT_PAIRING, unavailable: 'the packs on screen are not the ones the server compared' };
+  else if (taxonomyError) out = { diff, mode: DEFAULT_PAIRING, unavailable: `the artefact taxonomy the comparison used did not bind in this page: ${taxonomyError}` };
+  else if (!packsMatchDiff(diff, pack, packB)) out = { diff, mode: DEFAULT_PAIRING, unavailable: 'the packs on screen are not the ones the comparison was computed for' };
   else {
     try {
       const keyed = eng.diff.diffPacks(pack, packB, { scopeMode: diff.__for?.scopeMode || diff.scope?.mode, service: diff.__for?.service || undefined, identity: wanted });

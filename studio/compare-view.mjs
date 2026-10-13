@@ -1123,7 +1123,10 @@ function renderDiagnose(view) {
   // computeDiagnosticGrade, so the sentence and the checks read one record.
   const liveEvidence = partialLiveEvidence(engineLivePack(state.pack, state.packB));
   const lensLabel = lens !== 'all' ? (LENS_PRODUCTS.find(lp => lp.slug === lens)?.label || lens) : '';
-  const decision = buildAssessmentDecision({ diagnostic, digest, roles: ctx.roles, liveEvidence, haveB, baselineName: ctx.b?.name || '', lensLabel });
+  const decision = buildAssessmentDecision({
+    diagnostic, digest, roles: ctx.roles, liveEvidence, haveB, baselineName: ctx.b?.name || '', lensLabel,
+    remedy: isStatic() ? (key) => staticRemedy(key, { product: state.brand.chrome.name }) : null,
+  });
   const parts = renderDiagnosticGradeVerdict(diagnostic);
   // The response path (GAP batch 2, B3.3): only for a pack that declares a
   // remediation; the engine loads at call time and repaints once when it
@@ -1461,7 +1464,7 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
       ${liveEvidence.failed.length} of ${liveEvidence.attempted.length} probe${liveEvidence.attempted.length === 1 ? '' : 's'} failed during the live draft
       (<code>${escapeHtml(liveEvidence.failed.join(', '))}</code>) — the live endpoint was likely mid-deploy or overloaded.
       The live pack may be missing whole surfaces, so <strong>"${escapeHtml(overstated)}" is probably overstated</strong>.
-      Redraft from MCP before acting on this drift.${(liveEvidence.unsupported || []).length ? ` restricted MCP tier — not exposed: ${escapeHtml(liveEvidence.unsupported.join(', '))}` : ''}
+      ${isStatic() ? escapeHtml(staticRemedy('drift-partial', { product: state.brand.chrome.name })) : 'Redraft from MCP before acting on this drift.'}${(liveEvidence.unsupported || []).length ? ` restricted MCP tier — not exposed: ${escapeHtml(liveEvidence.unsupported.join(', '))}` : ''}
     </div>` : '';
 
   const weightsBody = `
@@ -2338,7 +2341,7 @@ function renderCompareView(view) {
     empty.innerHTML = diagUx.emptyStateHtml({
       title: 'There is no baseline to compare with yet.',
       checked: 'The pack catalog — a comparison needs at least two packs.',
-      body: 'Load or scan another pack (for example a live draft, or a curated repository pack) from Discover, then come back to compare.',
+      body: isStatic() ? staticRemedy('compare-one-pack', { product: state.brand.chrome.name }) : 'Load or scan another pack (for example a live draft, or a curated repository pack) from Discover, then come back to compare.',
     });
     view.appendChild(empty);
     return;
@@ -3878,7 +3881,7 @@ const CRITERION_COPY = {
 // or mismatched live read undermines every other reading), then coverage.
 const CRITERION_PRIORITY = ['drift-free', 'fresh', 'multi-modal', 'correlated', 'calibrated', 'comprehensive', 'chaos-validated'];
 
-function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel = '' }) {
+function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel = '', remedy = null }) {
   const copy = CRITERION_COPY[c.key] || { title: `${c.label} is not met`, why: c.sub || '', fix: '' };
   const b = {
     key: c.key, scored: true,
@@ -3900,6 +3903,7 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
     } else if (haveB) {
       b.actionLabel = 'Review differences';
       b.actionId = 'diag-goto:diag-compare';
+      if (remedy) b.fix = remedy('drift-free-fix');
       if (digest && roles.mode === 'drift') {
         const t = digest.totals;
         // The engine's detail counts the whole diff; the digest may be
@@ -3929,8 +3933,10 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
 // explicit. Returns the one sentence, its tone, the inline explanation of
 // apparent contradictions, the next action, and the blockers in priority
 // order (what failed → why it matters → fix), the top three of which are
-// the header's causes.
-export function buildAssessmentDecision({ diagnostic, digest = null, roles = compareRoles('gap'), liveEvidence = null, haveB = false, baselineName = '', lensLabel = '' } = {}) {
+// the header's causes. `remedy` is the static posture's text for a fix that
+// names a server action (studio/static-remedies.mjs staticRemedy, bound to
+// the product), or null on a server.
+export function buildAssessmentDecision({ diagnostic, digest = null, roles = compareRoles('gap'), liveEvidence = null, haveB = false, baselineName = '', lensLabel = '', remedy = null } = {}) {
   const overall = diagnostic.overall;
   const audit = overall.audit || diagnosticAuditStatus(overall.passed, overall.total);
   const ig = overall.instrumentGrade || instrumentGradeFor(audit.scorePctExact);
@@ -3975,7 +3981,7 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
   const noLiveFresh = !hasLive && failing.some(f => f.c.key === 'drift-free') ? failing.find(f => f.c.key === 'fresh') : null;
   for (const { c, lost } of failing) {
     if (noLiveFresh && c.key === 'fresh') continue;
-    const b = criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel });
+    const b = criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel, remedy });
     if (noLiveFresh && c.key === 'drift-free') {
       const both = lost + noLiveFresh.lost;
       b.observed = `${c.detail || ''} · ${noLiveFresh.c.detail || ''}`.replace(/^ · | · $/g, '');
@@ -4024,7 +4030,7 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
         title: `${missing} declared ${missing === 1 ? 'artefact is' : 'artefacts are'} not seen live${inLens}`,
         observed: `the pack declares ${missing === 1 ? 'it' : 'them'}; the live draft has no counterpart`,
         why: 'The pack promises signals that production may not have.',
-        fix: 'Review them, then deploy what is missing live or update the repository from live.',
+        fix: remedy ? remedy('live-missing-fix') : 'Review them, then deploy what is missing live or update the repository from live.',
         cost,
         actionLabel: 'Review differences', actionId: 'diag-goto:diag-compare',
       });

@@ -26,10 +26,17 @@
 // staticRemedy(key, { product }) is the text a view shows in the static
 // posture where its own names a server action the reader cannot take here.
 // Each is addressed to the reader, who did not build the file: what a
-// server does, and what whoever builds the bundle can add. Keys:
+// server does, and what whoever builds the bundle can add. Keys
+// (STATIC_REMEDY_KEYS), each shown by studio/compare-view.mjs:
 //   retrofeed-result — the note under a computed repository update
-//     (studio/compare-view.mjs runRetrofeed), which on a server says to
-//     re-scan.
+//     (runRetrofeed), where a server's says to scan again.
+//   drift-partial — the drift drill's partial-live-evidence banner, where a
+//     server's says to draft the live pack once more.
+//   compare-one-pack — Compare with no second pack to compare with, where a
+//     server's says to load or scan one from Discover.
+//   drift-free-fix, live-missing-fix — the Assessment's drift-free and
+//     live-missing blockers' fixes, where a server's also offers deploying
+//     the missing artefacts.
 
 export function serverNeeded(feature, product) {
   return `${feature} needs the ${product} server; this studio is a static bundle built without one.`;
@@ -50,7 +57,13 @@ const aServer = (product) => `${/^[aeiou]/i.test(product) ? 'an' : 'a'} ${produc
 
 const STATIC_REMEDIES = {
   'retrofeed-result': ({ product }) => `commit the updated pack to the service repo (it carries observogram.retrofeed.* provenance); whether the gap closed shows against a new live draft — on ${aServer(product)}, or in a bundle whoever builds it rebuilds with that draft and the updated pack`,
+  'drift-partial': ({ product }) => `Before acting on this drift, get a complete live draft: drafting needs ${aServer(product)}, and whoever builds this bundle builds the new draft in (--pack).`,
+  'compare-one-pack': () => 'This bundle carries no other pack that loads, so there is nothing to compare this one with; whoever builds the bundle can add another with --pack (a live draft, or a curated repository pack).',
+  'drift-free-fix': ({ product }) => `Review the differences, then update the repository from live; deploying what is missing needs ${aServer(product)}.`,
+  'live-missing-fix': ({ product }) => `Review them, then update the repository from live; deploying what is missing needs ${aServer(product)}.`,
 };
+
+export const STATIC_REMEDY_KEYS = Object.freeze(Object.keys(STATIC_REMEDIES));
 
 export function staticRemedy(key, { product } = {}) {
   const text = STATIC_REMEDIES[key];

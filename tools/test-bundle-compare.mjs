@@ -2,20 +2,34 @@
 // tools/test-bundle-compare.mjs — Compare in the static bundle, and what the
 // bundle carries with it (follow-up compare-in-bundle; docs/DOWNSTREAM.md §10).
 //
+// C1 the closure on the real tree: the bundle's graph has one package root,
+// @prometheus-io/lezer-promql (VENDOR-MANIFEST.json's npm field for
+// tools/lib/promql-lezer.mjs, which tools/lib/traceability-graph.mjs imports
+// and the shim's Compare route loads); its closure is the four packages, each
+// at the lockfile's version, each embedded byte for byte as installed (the
+// entry file, and the import-map address a build writes for it), each with
+// its normalised source repository; and the licence pin — THIRD_PARTY below,
+// each package's SPDX id, the sha256 of each licence file and its NOTICE
+// files — equals what is installed, so a licence change fails here until
+// someone reviews it (a synthetic root with one byte of one LICENSE changed
+// shows the pin bites).
+//
 // C2 the licence block: a two-pack bundle built through the CLI carries one
 // `<script type="text/plain" id="observogram-licenses">` element at the end
-// of <head> — Observogram's LICENSE verbatim, the spec's provenance from
-// vendor/observability-pack-spec/VERSIONS.json — and one pointer comment
-// right after the doctype, worded for a file that carries no third-party
-// package; no path of the build machine; verifyBundleNotices accepts the file
-// and names each problem of a damaged one (the element removed, doubled or
-// moved to <body>, the MIT grant or disclaimer gone, a section for a package
-// the import map does not carry, a package without its section, File: line
-// or licence text, a pointer comment worded for the other case), and accepts
-// what a minifier does (comments stripped, attributes reordered). The
-// package-section format is rendered from a synthetic package. The tree's
-// refusals: no LICENSE, a licence text that cannot be embedded, no
-// VERSIONS.json provenance.
+// of <head> — the preamble, Observogram's LICENSE verbatim, one section per
+// bundled package (name, version, SPDX id, File:, Source:, the copyright line
+// lezer-promql's file carries, each licence file as installed), the spec's
+// provenance from vendor/observability-pack-spec/VERSIONS.json — and one
+// pointer comment right after the doctype, worded for a file that carries
+// third-party packages; no path of the build machine; verifyBundleNotices
+// accepts the file and names each problem of a damaged one (the element
+// removed, doubled or moved to <body>, the MIT grant or disclaimer gone, a
+// package's section removed, a section for a package the import map does
+// not carry, a package without its File: line or licence text, a pointer
+// comment worded for the other case), and accepts what a minifier does
+// (comments stripped, attributes reordered). The tree's refusals: no
+// LICENSE, a licence text that cannot be embedded, no VERSIONS.json
+// provenance.
 //
 // C1b the npm packages a bundle may carry, over synthetic roots (a
 // package-lock.json, a VENDOR-MANIFEST.json and a node_modules tree of small
@@ -28,6 +42,40 @@
 // licence, is C2's), R-a and R-b through collectModuleGraph's read and npmOf
 // seams, and the three this build adds where the design left a hole (no
 // licence id, an unparsable package.json, an entry file missing).
+//
+// C3 GET /api/diff from the source, body for body, against a child server
+// (serve(ws, { env: { OBSERVOGRAM_AUTH: 'off' } })) over the same packs under
+// the server's ids — its six, and nine registered through POST /api/validate
+// (the golden crawl, the two compare-modes packs, the library-built orders
+// pack, the live snapshot, krystaline, and two derived from payment-service
+// that annotate a scope mode: scoped-all in observogram.diff.scopeMode,
+// scoped-legacy in the legacy tomograph.diff.scopeMode). "Equal" is the same
+// status, reason phrase, content type, Cache-Control, Content-Disposition,
+// X-Content-Type-Options and raw body text. M2 every scopeMode spelling ×
+// four service values on four pairs (an empty scopeMode falls back to the
+// annotation, a repeated one is absent); M3 the environments; M4 every
+// refusal (the 400s, A's 404 before B's, an encoded id, a malformed escape);
+// M5 the largest answers (krystaline) and a live pack (the snapshot), both
+// ways. M1 — every ordered pair of ten packs in each scope mode the studio
+// sends — is tools/test-bundle-compare-pairs.mjs, so it runs beside this
+// file. Then what only the shim can meet: a --pack-url pack that failed to
+// load (500, its message), one that fails the schema but adapts (diffed: the
+// server's route validates nothing), an engine import that fails once (500,
+// then retried).
+//
+// C3b the taxonomy: a child started with OBSERVOGRAM_TAXONOMY and this
+// process bound to the same document through studio/taxonomy.mjs answer the
+// typed canonical against itself and against payment-service, both ways,
+// equally (and differently from the default families: the bind is what the
+// answers rest on); a shim whose baked taxonomy the classifier does not hold
+// refuses the diff and retrofeed with the guard's 500, naming why it did not
+// compile when it does not.
+//
+// C4 Pair by: over the compare-modes pair, the studio's re-key
+// (studio/compare-identity.mjs viewDiffFor, the same engines it loads) over
+// the shim's /api/packs/:id and /api/diff bodies equals the re-key over the
+// server's, by name and by id — 5/15/5, 4/16/4, 3/17/3 (only in A, in both,
+// only in B), the counts the live studio draws.
 //
 // C6 retrofeed, the one non-GET the shim answers, against a child server
 // (serve(ws, { env: { OBSERVOGRAM_AUTH: 'off' } })) over the same packs under
@@ -47,6 +95,15 @@
 // --pack-url pack that failed to load, an engine import that fails once and
 // is retried, a baked taxonomy the classifier does not hold.
 //
+// C9 the built file, in Node: a bundle built through the CLI (the six server
+// packs and the compare-modes pair); its import map read from the file and
+// applied by a module.register resolve hook (each key, asked for by a data:
+// module, → its data: address); studio/static-backend.mjs imported from its
+// data: address with the file's config. Against the child server: twelve
+// /api/diff queries and one retrofeed, equal — so the artifact links (the map
+// carries every package, each address decodes to the installed bytes, the
+// shim's dynamic imports are literal) and answers as the server does.
+//
 // A flat suite of top-level test( calls. Every CLI spawn gets serve-child's
 // stripped env (childEnv), so a developer shell bakes nothing.
 //
@@ -55,20 +112,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, cpSync } from 'node:fs';
+import { register } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
 import {
-  DEFAULT_ROOT, LICENCES_ID, inlineJson, licenceBlockText, pointerComment, readOwnNotices, verifyBundleNotices,
-  collectBundledPackages, collectModuleGraph, sourceUrlOf, packageNameOf,
+  DEFAULT_ROOT, ENTRIES, CONFIG_ID, LICENCES_ID, inlineJson, licenceBlockText, pointerComment, readOwnNotices, verifyBundleNotices,
+  collectBundledPackages, collectModuleGraph, sourceUrlOf, packageNameOf, buildStudioBundle,
 } from './build-studio-bundle.mjs';
 import { childEnv, serve } from '../server/fixtures/serve-child.mjs';
 import { createStaticBackend } from '../studio/static-backend.mjs';
+import { viewDiffFor } from '../studio/compare-identity.mjs';
+import { bindTaxonomy } from '../studio/taxonomy.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { adapt } from './lib/adapter.mjs';
-import { diffPacks } from './lib/diff.mjs';
+import * as artefactClassify from './lib/artefact-classify.mjs';
+import * as diffLib from './lib/diff.mjs';
+import * as identityLib from './lib/identity-modes.mjs';
+import { comparePackBranches } from './lib/traceability-graph.mjs';
 import { SPEC_SCHEMA_PATH } from './lib/validator.mjs';
+
+const { diffPacks } = diffLib;
 
 const ROOT = DEFAULT_ROOT;
 const TOOL = resolve(ROOT, 'tools/build-studio-bundle.mjs');
@@ -91,30 +157,129 @@ const blockOf = (html) => {
 };
 const problemsOf = (html) => verifyBundleNotices(html).problems;
 
-test('C2 the licence block: one text/plain element ending <head> with Observogram\'s LICENSE verbatim and the spec\'s provenance, the pointer comment after the doctype, no build-machine path; verifyBundleNotices accepts the file, names every damage and survives a minifier; the package section\'s format; the tree\'s refusals', () => {
+// ---------- C1 the closure, on the real tree ----------
+
+// The packages a bundle carries — the closure of the one root the bundle's graph imports — with the measured entry
+// file and the source repository each package.json publishes.
+const PACKAGES = {
+  '@lezer/common': { entry: 'dist/index.js', source: 'https://github.com/lezer-parser/common' },
+  '@lezer/highlight': { entry: 'dist/index.js', source: 'https://github.com/lezer-parser/highlight' },
+  '@lezer/lr': { entry: 'dist/index.js', source: 'https://code.haverbeke.berlin/lezer/lr' },
+  '@prometheus-io/lezer-promql': { entry: 'dist/index.es.js', source: 'https://github.com/prometheus/prometheus' },
+};
+const FOUR = Object.keys(PACKAGES);
+// The licence pin (decision Q7 (a)): each bundled package's SPDX id, the sha256 of each licence file at its root and of
+// each NOTICE file it ships (none does). A change of any of them fails C1 until someone reviews it and updates this
+// table; a version bump that changes no licence text passes (the lockfile's own review covers it).
+const MIT_LEZER = '568902fb66eaf1f11750e966b33fd7b5d7c618e65af09f35ef843635bcf5f1ba';
+const THIRD_PARTY = {
+  '@lezer/common': { license: 'MIT', files: { LICENSE: MIT_LEZER }, notice: null },
+  '@lezer/highlight': { license: 'MIT', files: { LICENSE: MIT_LEZER }, notice: null },
+  '@lezer/lr': { license: 'MIT', files: { LICENSE: MIT_LEZER }, notice: null },
+  '@prometheus-io/lezer-promql': { license: 'Apache-2.0', files: { LICENSE: 'c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4' }, notice: null },
+};
+const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const packageDir = (root, name) => join(root, 'node_modules', ...name.split('/'));
+// What `root` has installed for each package of a closure, in THIRD_PARTY's shape: the licence and NOTICE files'
+// bytes as they are on disk.
+const licencesOf = (root, closure) => Object.fromEntries([...closure.values()].map((p) => [p.name, {
+  license: p.license,
+  files: Object.fromEntries(p.licenceFiles.map((f) => [f.name, sha256(readFileSync(join(packageDir(root, p.name), f.name)))])),
+  notice: p.notice ? Object.fromEntries(p.notice.map((f) => [f.name, sha256(readFileSync(join(packageDir(root, p.name), f.name)))])) : null,
+}]));
+// The entries of two pins that differ, one sentence each.
+const pinChanges = (pinned, installed) => [...new Set([...Object.keys(pinned), ...Object.keys(installed)])].sort()
+  .filter((name) => JSON.stringify(pinned[name] ?? null) !== JSON.stringify(installed[name] ?? null))
+  .map((name) => `${name}: pinned ${JSON.stringify(pinned[name] ?? null)}, installed ${JSON.stringify(installed[name] ?? null)}`);
+const pinMessage = (changes) => `the bundled packages' licences changed (${changes.join('; ')}) — review the change, then update THIRD_PARTY in tools/test-bundle-compare.mjs`;
+const importMapOf = (html) => JSON.parse(/<script type="importmap">([\s\S]*?)<\/script>/.exec(html)[1]).imports;
+const DATA_JS = 'data:text/javascript;base64,';
+const decode = (address) => { assert.ok(address.startsWith(DATA_JS), address.slice(0, 40)); return Buffer.from(address.slice(DATA_JS.length), 'base64'); };
+
+test('C1 the closure on the real tree: the graph\'s one package root, the four packages at the lockfile\'s versions, each embedded byte for byte as installed, each source; the licence pin, which a changed LICENSE byte fails', () => {
+  const graph = collectModuleGraph(ROOT, ENTRIES);
+  assert.deepEqual([...graph.packages], ['@prometheus-io/lezer-promql'], 'one root: tools/lib/promql-lezer.mjs\'s npm field');
+  assert.deepEqual(graph.get('lib/promql-lezer.mjs').imports.filter((i) => i.package), [{ spec: '@prometheus-io/lezer-promql', key: '@prometheus-io/lezer-promql', package: '@prometheus-io/lezer-promql' }]);
+  const closure = collectBundledPackages(ROOT, graph.packages);
+  assert.deepEqual([...closure.keys()], FOUR, 'the root and what it imports, in code-point order');
+  const lock = JSON.parse(read('package-lock.json')).packages;
+  const built = buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x' });
+  const imports = importMapOf(built.html);
+  assert.deepEqual(Object.keys(imports).slice(-4), FOUR, 'the four, last in the import map, under their own names');
+  for (const [name, p] of closure) {
+    assert.equal(p.version, lock[`node_modules/${name}`].version, `${name}: the lockfile's version`);
+    assert.equal(p.entry, PACKAGES[name].entry, `${name}: its ES module entry`);
+    const installed = readFileSync(join(packageDir(ROOT, name), ...p.entry.split('/')));
+    assert.ok(p.src.equals(installed), `${name}: the entry file's bytes as installed`);
+    assert.ok(decode(imports[name]).equals(installed), `${name}: the import-map address decodes to the installed bytes — the build changes nothing`);
+    assert.equal(p.source, PACKAGES[name].source, `${name}: its source repository, normalised`);
+  }
+  assert.deepEqual(closure.get('@prometheus-io/lezer-promql').imports, ['@lezer/highlight', '@lezer/lr']);
+  assert.deepEqual(closure.get('@lezer/lr').imports, ['@lezer/common']);
+  assert.deepEqual(built.thirdParty.map((p) => p.name), FOUR);
+
+  // The licence pin.
+  const changes = pinChanges(THIRD_PARTY, licencesOf(ROOT, closure));
+  assert.deepEqual(changes, [], pinMessage(changes));
+  // It bites: the same four installed in a synthetic root, one byte of @lezer/lr's LICENSE changed.
+  const root = mkdtempSync(join(TMP, 'pin-'));
+  writeFileSync(join(root, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3, packages: Object.fromEntries(FOUR.map((n) => [`node_modules/${n}`, lock[`node_modules/${n}`]])) }));
+  for (const name of FOUR) cpSync(packageDir(ROOT, name), packageDir(root, name), { recursive: true, dereference: true });
+  const licence = join(packageDir(root, '@lezer/lr'), 'LICENSE');
+  writeFileSync(licence, readFileSync(licence, 'utf8').replace('Permission', 'permission'));
+  const changed = pinChanges(THIRD_PARTY, licencesOf(root, collectBundledPackages(root, ['@prometheus-io/lezer-promql'])));
+  assert.equal(changed.length, 1);
+  assert.match(changed[0], /^@lezer\/lr: pinned \{"license":"MIT","files":\{"LICENSE":"568902fb[0-9a-f]+"\},"notice":null\}, installed \{"license":"MIT","files":\{"LICENSE":"(?!568902fb)[0-9a-f]{64}"\},"notice":null\}$/);
+  assert.match(pinMessage(changed), /^the bundled packages' licences changed \(@lezer\/lr: .*\) — review the change, then update THIRD_PARTY in tools\/test-bundle-compare\.mjs$/);
+});
+
+// ---------- C2 the licence block ----------
+
+test('C2 the licence block: one text/plain element ending <head> — the preamble, Observogram\'s LICENSE verbatim, the four packages\' sections with their licence files as installed, the spec\'s provenance — the pointer comment after the doctype, no build-machine path; verifyBundleNotices accepts the file, names every damage and survives a minifier; the tree\'s refusals', () => {
   const out = join(TMP, 'c2', 'index.html');
   const built = cli(['--pack', resolve(ROOT, PAYMENT), '--pack', resolve(ROOT, GOLDEN), '--id', 'golden', '--out', out, '--no-remote-fonts']);
   assert.equal(built.status, 0, built.stderr);
   assert.match(built.stdout, /^wrote .* — \d+ modules · 16 stylesheets · \d+ bytes · 2 packs\n$/, 'the human line is unchanged');
   const html = readFileSync(out, 'utf8');
 
-  // Where: one element, the last thing in <head>; one pointer comment, right after the doctype.
+  // Where: one element, the last thing in <head>; one pointer comment, right after the doctype, worded for packages.
   assert.equal(html.split(`${OPEN}\n`).length - 1, 1, 'exactly one element');
   const at = html.indexOf(`${OPEN}\n`);
   assert.ok(at > html.indexOf('<head>') && html.indexOf('</script>\n</head>', at) === html.indexOf('</script>', at), 'the element closes right before </head>');
-  assert.ok(html.startsWith(`<!doctype html>\n${pointerComment(false)}\n<html`), 'the pointer comment is the line after the doctype');
+  assert.ok(html.startsWith(`<!doctype html>\n${pointerComment(true)}\n<html`), 'the pointer comment is the line after the doctype');
+  assert.equal(pointerComment(true), `<!-- Licences: this file contains Observogram (MIT) and third-party packages; their full texts are in the ${OPEN} element in the head. -->`);
   assert.equal(pointerComment(false), `<!-- Licence: this file contains Observogram (MIT) and no third-party package; its full text is in the ${OPEN} element in the head. -->`);
   assert.equal(html.split('<!-- Licence').length - 1, 1, 'one pointer comment');
 
-  // What: the preamble for a file with no package, Observogram's LICENSE verbatim, the spec's provenance — exactly.
+  // What: the preamble for a file with packages, Observogram's LICENSE verbatim, each package's section — its version
+  // the lockfile's, each licence file as installed, the copyright line lezer-promql's file carries (the @lezer files
+  // carry none) — and the spec's provenance; exactly.
   const block = blockOf(html);
+  const lock = JSON.parse(read('package-lock.json')).packages;
+  const installedText = (name, file) => readFileSync(join(packageDir(ROOT, name), file), 'utf8');
+  const withEnd = (t) => (t.endsWith('\n') ? t : `${t}\n`);
+  const section = (name, license, copyright) => [
+    `==== ${name} ${lock[`node_modules/${name}`].version} — ${license} ====`,
+    `File: ${PACKAGES[name].entry} (import-map entry "${name}"), as installed.`,
+    `Source: ${PACKAGES[name].source}`,
+    ...(copyright ? [`Copyright lines in the file: ${copyright}`] : []),
+    '---- LICENSE ----',
+    withEnd(installedText(name, 'LICENSE')),
+  ].join('\n');
   assert.equal(block, [
     `This file is a build of the Observogram studio, version ${VERSION} (tools/build-studio-bundle.mjs).`,
-    "It contains Observogram's code and no third-party package.",
+    "It contains Observogram's code and the third-party packages listed below, each with its",
+    "licence in full. Each package's file is one entry of this file's import map, embedded as",
+    'npm ci installed it from package-lock.json: this build changes nothing in it, and does not',
+    'compare it with the package the registry publishes. Licence and NOTICE files are the ones',
+    'the published package contains.',
     '',
     `==== Observogram ${VERSION} — MIT ====`,
-    `${LICENSE.endsWith('\n') ? LICENSE.slice(0, -1) : LICENSE}`,
-    '',
+    withEnd(LICENSE),
+    section('@lezer/common', 'MIT'),
+    section('@lezer/highlight', 'MIT'),
+    section('@lezer/lr', 'MIT'),
+    section('@prometheus-io/lezer-promql', 'Apache-2.0', 'Copyright The Prometheus Authors'),
     '==== The ObservabilityPack spec ====',
     "The spec schema embedded in this file (and any pack built in from the spec's examples) comes",
     `from ${UPSTREAM.repo} at commit ${UPSTREAM.commit}; that`,
@@ -122,13 +287,15 @@ test('C2 the licence block: one text/plain element ending <head> with Observogra
     '',
   ].join('\n'));
   assert.ok(block.includes(LICENSE), 'LICENSE verbatim');
+  for (const name of FOUR) assert.ok(block.includes(installedText(name, 'LICENSE')), `${name}'s LICENSE verbatim`);
+  assert.ok(block.includes('Apache License') && block.includes('Version 2.0, January 2004'), 'the Apache-2.0 terms, for lezer-promql');
+  assert.equal(block.split('Copyright lines in the file:').length - 1, 1, 'a copyright line for lezer-promql only');
   assert.equal(UPSTREAM.repo, 'MoebiusX/otel-observability-pack');
   assert.match(UPSTREAM.commit, /^[0-9a-f]{40}$/);
-  assert.ok(!block.includes('npm ci installed it'), 'no package, so no paragraph about how packages are embedded');
   assert.ok(!html.includes(ROOT) && !html.includes(TMP), 'no path of the build machine in the file');
 
   // The checker accepts the file as built.
-  assert.deepEqual(verifyBundleNotices(html), { ok: true, packages: [], problems: [] });
+  assert.deepEqual(verifyBundleNotices(html), { ok: true, packages: FOUR, problems: [] });
 
   // …and names each damage.
   const element = html.slice(at, html.indexOf('</script>', at) + '</script>'.length);
@@ -140,32 +307,30 @@ test('C2 the licence block: one text/plain element ending <head> with Observogra
   assert.deepEqual(problemsOf(html.replace('Permission is hereby granted', 'Permission is granted')), ['the Observogram section does not hold the MIT licence\'s grant ("Permission is hereby granted")']);
   assert.deepEqual(problemsOf(html.replace('THE SOFTWARE IS PROVIDED "AS IS"', 'THE SOFTWARE IS PROVIDED')), ['the Observogram section does not hold the MIT licence\'s warranty disclaimer']);
   assert.deepEqual(problemsOf(html.replace(`==== Observogram ${VERSION} — MIT ====`, '==== Observogram ====')), ['no "Observogram <version> — MIT" section']);
+  const highlight = section('@lezer/highlight', 'MIT');
+  assert.ok(html.includes(`${highlight}\n`));
+  assert.deepEqual(problemsOf(html.replace(`${highlight}\n`, '')), ['@lezer/highlight: no licence section (==== @lezer/highlight <version> — <licence id> ====)'], 'a package\'s section removed');
   const stray = html.replace('==== The ObservabilityPack spec ====', '==== left-pad 1.3.0 — WTFPL ====\nFile: index.js (import-map entry "left-pad"), as installed.\n---- LICENSE ----\ntext\n\n==== The ObservabilityPack spec ====');
   assert.deepEqual(problemsOf(stray), ['left-pad: a licence section for a package the import map does not carry']);
+  assert.deepEqual(problemsOf(html.replace(pointerComment(true), pointerComment(false))), [`the licence pointer comment is worded for no third-party package; the import map carries ${FOUR.join(', ')}`], 'the no-package comment on a file with packages');
   assert.equal(verifyBundleNotices(html.replace(/<script type="importmap">/, '<script type="importmap-x">')).problems[0], 'the file has no import map');
 
   // What a minifier does is not damage: the comment stripped, the attributes reordered and unquoted.
-  const minified = html.replace(`${pointerComment(false)}\n`, '').replace(OPEN, `<script id=${LICENCES_ID} type=text/plain>`);
-  assert.deepEqual(verifyBundleNotices(minified), { ok: true, packages: [], problems: [] });
+  const minified = html.replace(`${pointerComment(true)}\n`, '').replace(OPEN, `<script id=${LICENCES_ID} type=text/plain>`);
+  assert.deepEqual(verifyBundleNotices(minified), { ok: true, packages: FOUR, problems: [] });
 
-  // The package section, rendered from a synthetic package: the preamble for a file with packages, the header (name,
-  // version, SPDX id), File:, Source:, the copyright lines, each licence and NOTICE file under its own heading — in
-  // code-point order of the package name.
+  // The package section's parts, over a synthetic package pair on the same file stripped of its four: the header
+  // (name, version, SPDX id), File:, Source:, the copyright lines, each licence and NOTICE file under its own heading —
+  // in code-point order of the package name.
   const own = readOwnNotices(ROOT, VERSION);
   assert.equal(own.licence, LICENSE);
   assert.deepEqual(own.spec, { repo: UPSTREAM.repo, commit: UPSTREAM.commit });
+  const imports = importMapOf(html);
+  const withMap = (h, names) => h.replace(/<script type="importmap">[\s\S]*?<\/script>/, () => `<script type="importmap">${inlineJson({ imports: { ...Object.fromEntries(Object.entries(imports).filter(([k]) => k.startsWith('studio/') || k.startsWith('lib/'))), ...Object.fromEntries(names.map((n) => [n, DATA_JS])) } })}</script>`);
+  const bare = withMap(html.replace(block, licenceBlockText({ ...own, version: VERSION, packages: [] })), []).replace(pointerComment(true), pointerComment(false));
+  assert.deepEqual(verifyBundleNotices(bare), { ok: true, packages: [], problems: [] }, 'the file without its packages, as a no-package build writes it');
   const pkg = (name, extra = {}) => ({ name, version: '1.2.3', license: 'Apache-2.0', entry: 'dist/index.es.js', source: `https://example.com/${name}`, copyright: null, licenceFiles: [{ name: 'LICENSE', text: `${name} licence text\n` }], notice: null, ...extra });
   const withPackages = licenceBlockText({ ...own, version: VERSION, packages: [pkg('zz-last', { copyright: 'Copyright Z · Copyright Y', notice: [{ name: 'NOTICE', text: 'zz notice' }] }), pkg('@scope/first', { source: null, license: 'MIT', entry: 'dist/index.js' })] });
-  assert.ok(withPackages.startsWith([
-    `This file is a build of the Observogram studio, version ${VERSION} (tools/build-studio-bundle.mjs).`,
-    "It contains Observogram's code and the third-party packages listed below, each with its",
-    "licence in full. Each package's file is one entry of this file's import map, embedded as",
-    'npm ci installed it from package-lock.json: this build changes nothing in it, and does not',
-    'compare it with the package the registry publishes. Licence and NOTICE files are the ones',
-    'the published package contains.',
-    '',
-    `==== Observogram ${VERSION} — MIT ====`,
-  ].join('\n')), withPackages.slice(0, 700));
   assert.ok(withPackages.includes([
     '==== @scope/first 1.2.3 — MIT ====',
     'File: dist/index.js (import-map entry "@scope/first"), as installed.',
@@ -183,14 +348,10 @@ test('C2 the licence block: one text/plain element ending <head> with Observogra
     '',
     '==== The ObservabilityPack spec ====',
   ].join('\n')), withPackages);
-  // The same file carrying those two packages in its import map: accepted with the matching pointer comment, refused
-  // with the other one, and each missing part named.
-  const imports = JSON.parse(/<script type="importmap">([\s\S]*?)<\/script>/.exec(html)[1]).imports;
-  const withMap = (h, names) => h.replace(/<script type="importmap">[\s\S]*?<\/script>/, () => `<script type="importmap">${inlineJson({ imports: { ...imports, ...Object.fromEntries(names.map((n) => [n, 'data:text/javascript;base64,'])) } })}</script>`);
-  const carrying = withMap(html.replace(block, withPackages), ['zz-last', '@scope/first']).replace(pointerComment(false), pointerComment(true));
+  const bareBlock = blockOf(bare);
+  const carrying = withMap(bare.replace(bareBlock, withPackages), ['zz-last', '@scope/first']).replace(pointerComment(false), pointerComment(true));
   assert.deepEqual(verifyBundleNotices(carrying), { ok: true, packages: ['@scope/first', 'zz-last'], problems: [] });
-  assert.deepEqual(problemsOf(carrying.replace(pointerComment(true), pointerComment(false))), ['the licence pointer comment is worded for no third-party package; the import map carries @scope/first, zz-last']);
-  assert.deepEqual(problemsOf(withMap(html, ['zz-last'])), [
+  assert.deepEqual(problemsOf(withMap(bare, ['zz-last'])), [
     'zz-last: no licence section (==== zz-last <version> — <licence id> ====)',
     'the licence pointer comment is worded for no third-party package; the import map carries zz-last',
   ]);
@@ -205,8 +366,8 @@ test('C2 the licence block: one text/plain element ending <head> with Observogra
     return dir;
   };
   const versions = JSON.stringify({ upstream: { repo: 'acme/spec', commit: 'abc123' } });
-  const bare = tree({ 'vendor/observability-pack-spec/VERSIONS.json': versions });
-  assert.throws(() => readOwnNotices(bare, '9.9.9'), { message: `LICENSE is missing from ${bare} — every bundle carries Observogram's licence; copy LICENSE with the tree` });
+  const noLicence = tree({ 'vendor/observability-pack-spec/VERSIONS.json': versions });
+  assert.throws(() => readOwnNotices(noLicence, '9.9.9'), { message: `LICENSE is missing from ${noLicence} — every bundle carries Observogram's licence; copy LICENSE with the tree` });
   assert.throws(() => readOwnNotices(tree({ LICENSE: 'MIT\n</SCRIPT>\n', 'vendor/observability-pack-spec/VERSIONS.json': versions }), '9.9.9'), { message: 'Observogram 9.9.9: LICENSE contains "</script" and cannot be embedded in the bundle\'s licence block' });
   assert.throws(() => readOwnNotices(tree({ LICENSE: 'MIT <!-- x -->\n', 'vendor/observability-pack-spec/VERSIONS.json': versions }), '9.9.9'), { message: 'Observogram 9.9.9: LICENSE contains "<!--" and cannot be embedded in the bundle\'s licence block' });
   const noSpec = tree({ LICENSE: 'MIT\n' });
@@ -344,6 +505,264 @@ test('C1b the npm packages a bundle may carry, over synthetic roots: a closure t
   assert.throws(() => collectModuleGraph(root, ['studio/app.mjs'], { read, npmOf: () => [] }), { message: "tools/lib/uses.mjs:1: cannot inline the specifier '@acme/parser' — a package is bundled only when VENDOR-MANIFEST.json lists it in this module's npm field (a package.json dependency; npm run vendor-manifest)" });
   sources['tools/lib/uses.mjs'] = "import { parser } from '@acme/parser/dist/index.es.js';\nexport const p = parser;\n";
   assert.throws(() => collectModuleGraph(root, ['studio/app.mjs'], { read }), { message: "tools/lib/uses.mjs:1: cannot inline the specifier '@acme/parser/dist/index.es.js' — a package is bundled by its own name (@acme/parser), never a file inside it" });
+});
+
+// ---------- the packs on both sides, for C3, C4 and C9 ----------
+
+// The six packs a server serves by id, from the files it reads them from (server/index.mjs EXAMPLE_PACKS and
+// REFERENCE_PACKS).
+const SERVER_PACKS = [
+  ['payment-service', PAYMENT],
+  ['target-advanced', 'examples/target-advanced.pack.yaml'],
+  ['production-curated', 'examples/production-curated.pack.yaml'],
+  ['kafka-reference', 'reference-packs/kafka.pack.yaml'],
+  ['prometheus-reference', 'reference-packs/prometheus.pack.yaml'],
+  ['grafana-reference', 'reference-packs/grafana.pack.yaml'],
+];
+const packFile = (rel) => (rel.endsWith('.json') ? JSON.parse(read(rel)) : parseYaml(read(rel)));
+// What "equal" compares: the status, the reason phrase, the headers either side sets on the answer, the raw text.
+const HEADERS = ['content-type', 'cache-control', 'content-disposition', 'x-content-type-options'];
+const answerOf = async (r) => ({ status: r.status, statusText: r.statusText, headers: Object.fromEntries(HEADERS.map((h) => [h, r.headers.get(h)])), text: await r.text() });
+// '' when the two answers are equal, else what differs — in a sentence, since a body can be a megabyte.
+function difference(server, shim) {
+  const out = [];
+  for (const k of ['status', 'statusText']) if (server[k] !== shim[k]) out.push(`${k} ${server[k]} ≠ ${shim[k]}`);
+  for (const h of HEADERS) if (server.headers[h] !== shim.headers[h]) out.push(`${h} ${server.headers[h]} ≠ ${shim.headers[h]}`);
+  if (server.text !== shim.text) {
+    let i = 0;
+    while (i < server.text.length && server.text[i] === shim.text[i]) i++;
+    out.push(`the body differs at ${i} (${server.text.length} / ${shim.text.length} chars): …${server.text.slice(Math.max(0, i - 40), i + 40)}… ≠ …${shim.text.slice(Math.max(0, i - 40), i + 40)}…`);
+  }
+  return out.join('; ');
+}
+// A /api/diff query: each value a string (once), an array (repeated) or undefined (absent), in this key order.
+const diffQuery = (q) => {
+  const params = new URLSearchParams();
+  for (const key of ['a', 'b', 'aEnv', 'bEnv', 'scopeMode', 'service']) for (const v of [].concat(q[key] ?? [])) params.append(key, v);
+  const s = params.toString();
+  return s ? `/api/diff?${s}` : '/api/diff';
+};
+
+// One child server for C3, C4 and C9, with the uploads registered: { child, ids, packs, canonicalOf, backend, compare }.
+async function startParity() {
+  const ws = mkdtempSync(join(tmpdir(), 'observogram-bundle-diff-'));
+  const child = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off' } });
+  const register = async (body, contentType, source = '') => {
+    const r = await fetch(`${child.base}/api/validate${source ? `?source=${encodeURIComponent(source)}` : ''}`, { method: 'POST', headers: { 'Content-Type': contentType }, body }).then((x) => x.json());
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    return r.registered.id;
+  };
+  const payment = parseYaml(read(PAYMENT));
+  const annotated = (name, key, value) => ({ ...payment, metadata: { ...payment.metadata, name, annotations: { ...(payment.metadata.annotations || {}), [key]: value } } });
+  const uploads = {
+    golden: { canonical: JSON.parse(read(GOLDEN)) },
+    modesA: { text: read('tools/fixtures/compare-modes/a.pack.yaml'), source: 'compare-modes-a.pack.yaml' },
+    modesB: { text: read('tools/fixtures/compare-modes/b.pack.yaml'), source: 'compare-modes-b.pack.yaml' },
+    orders: { canonical: JSON.parse(read('tools/fixtures/build/orders-api.tier-2.instantiate.json')).canonical },
+    snapshot: { canonical: JSON.parse(read('tools/fixtures/golden/snapshot/snapshot.pack.json')) },
+    krystaline: { text: read('examples/krystaline-repo-carlos.pack.yaml'), source: 'krystaline-repo-carlos.pack.yaml' },
+    scopedAll: { canonical: annotated('scoped-all', 'observogram.diff.scopeMode', 'all') },
+    scopedLegacy: { canonical: annotated('scoped-legacy', 'tomograph.diff.scopeMode', 'family') },
+  };
+  const ids = Object.fromEntries(SERVER_PACKS.map(([id]) => [id, id]));
+  const canonicalOf = Object.fromEntries(SERVER_PACKS.map(([id, rel]) => [id, packFile(rel)]));
+  for (const [name, u] of Object.entries(uploads)) {
+    const id = u.text ? await register(u.text, 'text/yaml', u.source) : await register(JSON.stringify(u.canonical), 'application/json');
+    ids[name] = id;
+    canonicalOf[id] = u.canonical ?? parseYaml(u.text);
+  }
+  const schema = JSON.parse(read(SPEC_SCHEMA_PATH));
+  const packs = Object.entries(canonicalOf).map(([id, canonical]) => ({ id, label: id, canonical }));
+  const backend = createStaticBackend({ version: VERSION, schema, packs });
+  // One path to both sides: { server, shim, problem } — problem '' when equal.
+  const compare = async (path, init, shimBackend = backend) => {
+    const server = await answerOf(await fetch(`${child.base}${path}`, init));
+    const shim = await answerOf(await shimBackend.handle(path, init));
+    return { server, shim, problem: difference(server, shim) };
+  };
+  return { child, ws, ids, packs, canonicalOf, schema, backend, compare, stop: async () => { await child.stop(); rmSync(ws, { recursive: true, force: true }); } };
+}
+let parityStarted = null;
+const parity = () => (parityStarted ??= startParity());
+test.after(async () => { if (parityStarted) await (await parityStarted).stop(); });
+
+// ---------- C3 GET /api/diff from the source ----------
+
+test('C3 GET /api/diff from the source, body for body: every scopeMode spelling × service on four pairs (the annotation fallback, both namespaces), the environments, every refusal, the largest and the live answers; a failed --pack-url pack, one that fails the schema, an engine import retried', async () => {
+  const { ids, schema, canonicalOf, compare } = await parity();
+  const problems = [];
+  const texts = new Map();
+  let queries = 0;
+  const check = async (q) => {
+    const path = typeof q === 'string' ? q : diffQuery(q);
+    const r = await compare(path);
+    queries++;
+    if (r.problem) problems.push(`${path}: ${r.problem}`);
+    texts.set(path, r.server.text);
+    return r.server;
+  };
+
+  // M2: every scopeMode spelling (absent, empty, the three, their aliases, any case, padded, unknown, repeated) × four
+  // service values, on four pairs — two of them annotate a scope mode.
+  const SCOPES = [undefined, '', 'service', 'family', 'all', 'legacy', 'off', 'none', 'strict', 'ALL', ' all ', 'zzz', ['all', 'family']];
+  const SERVICES = [undefined, '', 'payment-service', 'nope'];
+  const M2 = [['payment-service', 'production-curated'], [ids.modesA, ids.modesB], [ids.scopedAll, 'production-curated'], [ids.scopedLegacy, 'payment-service']];
+  for (const [a, b] of M2) for (const scopeMode of SCOPES) for (const service of SERVICES) await check({ a, b, scopeMode, service });
+  assert.equal(queries, 4 * 13 * 4);
+  const m2 = (a, b, scopeMode) => texts.get(diffQuery({ a, b, scopeMode }));
+  // The fallbacks bite: an empty or repeated scopeMode reads Pack A's annotation — observogram.diff.scopeMode, then
+  // the legacy tomograph.diff.scopeMode — and an unannotated pack's default is service.
+  assert.equal(m2(ids.scopedAll, 'production-curated', ''), m2(ids.scopedAll, 'production-curated', 'all'), 'scopeMode= on scoped-all is its annotation, all');
+  assert.equal(m2(ids.scopedAll, 'production-curated', ['all', 'family']), m2(ids.scopedAll, 'production-curated', 'all'), 'a repeated scopeMode is absent');
+  assert.notEqual(m2(ids.scopedAll, 'production-curated', 'all'), m2(ids.scopedAll, 'production-curated', 'service'), 'all and service answer differently there');
+  assert.equal(m2(ids.scopedLegacy, 'payment-service', undefined), m2(ids.scopedLegacy, 'payment-service', 'family'), 'the legacy annotation, family');
+  assert.notEqual(m2(ids.scopedLegacy, 'payment-service', 'family'), m2(ids.scopedLegacy, 'payment-service', 'service'));
+  assert.equal(m2('payment-service', 'production-curated', ''), m2('payment-service', 'production-curated', 'service'), 'no annotation: service');
+
+  // M3: the environments — each side in prod, staging, an unknown one, empty, repeated; and across packs.
+  const ENVS = ['prod', 'staging', 'nope', '', ['prod', 'staging']];
+  for (const aEnv of ENVS) for (const bEnv of ENVS) await check({ a: 'payment-service', b: 'payment-service', aEnv, bEnv, scopeMode: 'service' });
+  await check({ a: 'payment-service', b: 'production-curated', aEnv: 'prod', scopeMode: 'service' });
+  await check({ a: 'production-curated', b: 'payment-service', bEnv: 'staging', scopeMode: 'service' });
+  await check({ a: 'payment-service', b: 'target-advanced', aEnv: 'prod', bEnv: 'prod', scopeMode: 'service' });
+
+  // M4: every refusal — the 400 (absent, empty or repeated a / b), A's 404 before B's, an encoded id, a malformed escape.
+  const M4 = {
+    '/api/diff': 400,
+    '/api/diff?a=payment-service': 400,
+    '/api/diff?b=payment-service': 400,
+    '/api/diff?a=&b=payment-service': 400,
+    '/api/diff?a=payment-service&a=production-curated&b=payment-service': 400,
+    '/api/diff?a=nope&b=nope2': 404,
+    '/api/diff?a=payment-service&b=nope': 404,
+    '/api/diff?a=nope&b=payment-service': 404,
+    '/api/diff?a=payment%20service&b=production-curated': 404,
+    '/api/diff?a=%E0%A4%A&b=payment-service': 404,
+  };
+  for (const [path, status] of Object.entries(M4)) assert.equal((await check(path)).status, status, path);
+  assert.equal(texts.get('/api/diff?a=nope&b=nope2'), '{"error":"unknown pack: nope"}', 'both unknown: A\'s 404');
+  assert.equal(texts.get('/api/diff?a=payment-service&a=production-curated&b=payment-service'), '{"error":"query params `a` and `b` (pack ids) required"}');
+
+  // M5: the largest answers (krystaline, both ways) and a live pack (the snapshot: the drift mode's diff), both ways.
+  for (const [a, b] of [[ids.krystaline, 'production-curated'], ['production-curated', ids.krystaline], ['payment-service', ids.snapshot], [ids.snapshot, 'payment-service']]) {
+    const r = await check({ a, b, scopeMode: 'service' });
+    assert.equal(r.status, 200, `${a} × ${b}`);
+    assert.ok(JSON.parse(r.text).traceabilityGraph, `${a} × ${b} carries the graph`);
+  }
+  assert.ok(texts.get(diffQuery({ a: ids.krystaline, b: 'production-curated', scopeMode: 'service' })).length > 300_000, 'krystaline is a large answer');
+  assert.deepEqual(problems, [], `${problems.length} of ${queries} answers differ from the server's`);
+
+  // What only the shim meets. A --pack-url pack that failed to load: 500 with its message, either side.
+  const payment = canonicalOf['payment-service'];
+  const invalid = { ...payment, spec: { ...payment.spec, bogus: 1 } };
+  const remote = createStaticBackend({ version: VERSION, schema, packs: [{ id: 'p', label: 'P', canonical: payment }, { id: 'down', label: 'D', url: 'https://packs.example/down.pack.yaml' }, { id: 'invalid', label: 'I', url: 'https://packs.example/invalid.pack.json' }] }, {
+    origin: 'https://studio.example',
+    fetchImpl: async (u) => (String(u).endsWith('invalid.pack.json') ? new Response(JSON.stringify(invalid), { status: 200 }) : new Response('nope', { status: 404, statusText: 'Not Found' })),
+  });
+  for (const path of ['/api/diff?a=p&b=down', '/api/diff?a=down&b=p']) {
+    const r = await remote.handle(path);
+    assert.equal(r.status, 500, path);
+    assert.equal(r.statusText, 'Internal Server Error');
+    assert.deepEqual(await r.json(), { error: '404 Not Found fetching https://packs.example/down.pack.yaml' }, path);
+  }
+  // One that fails the schema but adapts: diffed, as the server's route diffs what it holds (GET /api/packs/:id is
+  // where the schema speaks).
+  assert.equal((await remote.handle('/api/packs/invalid')).status, 500, 'the layered pack refuses it');
+  const diffed = await remote.handle('/api/diff?a=invalid&b=p&scopeMode=service');
+  assert.equal(diffed.status, 200);
+  const [aL, bL] = [adapt(invalid), adapt(payment)];
+  assert.equal(await diffed.text(), JSON.stringify({ ...diffPacks(aL, bL, { scopeMode: 'service' }), traceabilityGraph: comparePackBranches(aL, bL) }), 'the diff of what it holds, unvalidated');
+  // An engine import that fails once: 500 with its message, and the next call imports again and answers.
+  let attempts = 0;
+  const flaky = createStaticBackend({ version: VERSION, schema, packs: [{ id: 'p', label: 'P', canonical: payment }] }, {
+    importDiffEngines: () => (++attempts === 1 ? Promise.reject(new Error('Failed to fetch dynamically imported module')) : Promise.all([import('./lib/diff.mjs'), import('./lib/traceability-graph.mjs')])),
+  });
+  const first = await flaky.handle('/api/diff?a=p&b=p&scopeMode=service');
+  assert.equal(first.status, 500);
+  assert.deepEqual(await first.json(), { error: 'Failed to fetch dynamically imported module' });
+  const second = await flaky.handle('/api/diff?a=p&b=p&scopeMode=service');
+  assert.equal(second.status, 200, 'a failed import is not kept');
+  assert.ok((await second.json()).traceabilityGraph);
+  assert.equal(attempts, 2);
+});
+
+// ---------- C3b the taxonomy ----------
+
+test('C3b the taxonomy: a server started with OBSERVOGRAM_TAXONOMY and a shim over the bound document answer the typed canonical both ways equally, and not as the default families do; a baked taxonomy the classifier does not hold refuses the diff and retrofeed', async (t) => {
+  const TAX = resolve(ROOT, 'tools/fixtures/taxonomy/taxonomy.json');
+  const taxonomy = JSON.parse(read('tools/fixtures/taxonomy/taxonomy.json'));
+  const ws = mkdtempSync(join(tmpdir(), 'observogram-bundle-taxonomy-'));
+  const child = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off', OBSERVOGRAM_TAXONOMY: TAX } });
+  t.after(async () => { bindTaxonomy(artefactClassify, null); await child.stop(); rmSync(ws, { recursive: true, force: true }); });
+  const typed = JSON.parse(read('tools/fixtures/taxonomy/typed-canonical.pack.json'));
+  const registered = await fetch(`${child.base}/api/validate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(typed) }).then((r) => r.json());
+  assert.equal(registered.ok, true, JSON.stringify(registered.errors));
+  const typedId = registered.registered.id;
+  const payment = parseYaml(read(PAYMENT));
+  const schema = JSON.parse(read(SPEC_SCHEMA_PATH));
+  const pairs = [[typedId, typedId], [typedId, 'payment-service'], ['payment-service', typedId]];
+  const path = ([a, b]) => `/api/diff?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}&scopeMode=service`;
+  const config = { version: VERSION, schema, taxonomy, packs: [{ id: typedId, label: 'typed', canonical: typed }, { id: 'payment-service', label: 'payment', canonical: payment }] };
+  // The default families' answers, before the bind (the classifier is this process's one instance).
+  assert.equal(artefactClassify.activeTaxonomy(), null);
+  const unbound = await Promise.all(pairs.map(async (p) => (await createStaticBackend({ ...config, taxonomy: undefined }).handle(path(p))).text()));
+  bindTaxonomy(artefactClassify, taxonomy);
+  assert.ok(artefactClassify.activeTaxonomy(), 'the document is bound, as the studio binds what /api/taxonomy serves');
+  const backend = createStaticBackend(config);
+  for (const [i, p] of pairs.entries()) {
+    const server = await answerOf(await fetch(`${child.base}${path(p)}`));
+    const shim = await answerOf(await backend.handle(path(p)));
+    assert.equal(server.status, 200);
+    assert.equal(difference(server, shim), '', `${p.join(' × ')} equal`);
+    assert.notEqual(server.text, unbound[i], `${p.join(' × ')}: the taxonomy changes the answer, so the bind is what parity rests on`);
+  }
+
+  // The guard: a baked taxonomy the classifier does not hold (the studio's bind failed in this page) — 500 on both
+  // computing routes, before any computation; with the reason when the document does not compile here.
+  bindTaxonomy(artefactClassify, null);
+  const GUARD = (why = '') => `the artefact taxonomy built into this bundle did not bind in this page${why}, so this answer would not be the one a server with that taxonomy gives — open the file in a Chromium-based browser, where it is proven to bind, or ask whoever built it for a build whose taxonomy this browser compiles`;
+  const refused = createStaticBackend(config);
+  const d = await refused.handle(path(pairs[0]));
+  assert.equal(d.status, 500);
+  assert.deepEqual(await d.json(), { error: GUARD() });
+  const rf = await refused.handle(`/api/packs/${encodeURIComponent(typedId)}/retrofeed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ packBId: 'payment-service' }) });
+  assert.equal(rf.status, 500);
+  assert.deepEqual(await rf.json(), { ok: false, error: GUARD() });
+  const broken = { ...taxonomy, version: 99 };
+  let why = '';
+  try { artefactClassify.compileTaxonomy(broken, { timed: false }); } catch (e) { why = e.message; }
+  assert.ok(why, 'the broken document does not compile');
+  const named = await createStaticBackend({ ...config, taxonomy: broken }).handle(path(pairs[0]));
+  assert.deepEqual(await named.json(), { error: GUARD(` (${why})`) });
+  assert.equal((await createStaticBackend({ ...config, taxonomy: undefined }).handle(path(pairs[0]))).status, 200, 'no baked taxonomy: no guard');
+});
+
+// ---------- C4 Pair by ----------
+
+test('C4 Pair by: the studio\'s re-key over the shim\'s /api/packs/:id and /api/diff bodies equals the re-key over the server\'s, by name and by id — 5/15/5, 4/16/4, 3/17/3', async () => {
+  const { ids, child, backend } = await parity();
+  const engine = { identity: identityLib, diff: diffLib };
+  const sides = {
+    server: async (path) => (await fetch(`${child.base}${path}`)).json(),
+    shim: async (path) => (await backend.handle(path)).json(),
+  };
+  const views = {};
+  for (const [side, get] of Object.entries(sides)) {
+    const pack = await get(`/api/packs/${encodeURIComponent(ids.modesA)}`);
+    const packB = await get(`/api/packs/${encodeURIComponent(ids.modesB)}`);
+    // The answer as the studio holds it: stamped with the selection it was asked for (compare-view.mjs loadDiff).
+    const diff = { ...(await get(`/api/diff?a=${encodeURIComponent(ids.modesA)}&b=${encodeURIComponent(ids.modesB)}&scopeMode=service`)), __for: { a: ids.modesA, b: ids.modesB, aEnv: null, bEnv: null, scopeMode: 'service', service: null } };
+    views[side] = Object.fromEntries(['behaviour', 'name', 'id'].map((mode) => [mode, viewDiffFor({ engine, diff, pack, packB, mode })]));
+  }
+  const counts = (v) => [v.diff.summary.onlyInA, v.diff.summary.inBoth, v.diff.summary.onlyInB];
+  for (const [mode, expected] of [['behaviour', [5, 15, 5]], ['name', [4, 16, 4]], ['id', [3, 17, 3]]]) {
+    const { server, shim } = { server: views.server[mode], shim: views.shim[mode] };
+    assert.equal(shim.mode, mode, `${mode}: shown`);
+    assert.equal(shim.unavailable, '', `${mode}: available`);
+    assert.deepEqual(shim.diff, server.diff, `${mode}: the shim's re-key is the server's`);
+    assert.deepEqual(counts(shim), expected, `${mode}: only in A, in both, only in B`);
+    assert.ok(shim.diff.traceabilityGraph, `${mode}: the received graph is kept`);
+  }
 });
 
 // ---------- C6 retrofeed in the shim ----------
@@ -489,4 +908,67 @@ test('C6 retrofeed in the shim: the server\'s answer for computed pairs with and
   const guarded = await unbound.handle(rf('p'), post(JSON.stringify({ packBId: 'p' }), JSON_HEADERS));
   assert.equal(guarded.status, 500);
   assert.deepEqual(await guarded.json(), { ok: false, error: 'the artefact taxonomy built into this bundle did not bind in this page, so this answer would not be the one a server with that taxonomy gives — open the file in a Chromium-based browser, where it is proven to bind, or ask whoever built it for a build whose taxonomy this browser compiles' });
+});
+
+// ---------- C9 the built file, in Node ----------
+
+// The import map's resolution, for modules that came out of the file: a data: module asking for a key gets that
+// key's data: address; nothing else is touched (this suite's own imports are file: modules, and resolve as ever).
+const RESOLVE_HOOK = `let map = {};
+export async function initialize(data) { map = data.imports; }
+export async function resolve(specifier, context, next) {
+  if (context.parentURL && context.parentURL.startsWith('data:') && Object.hasOwn(map, specifier)) return { url: map[specifier], shortCircuit: true };
+  return next(specifier, context);
+}`;
+
+test('C9 the built file, in Node: the shim imported from the CLI-built bundle\'s own data: address, through its import map, answers twelve /api/diff queries and a retrofeed as the server does — the map carries every package as installed, the dynamic imports are literal', async () => {
+  const { ids, canonicalOf, child } = await parity();
+  // The six server packs and the compare-modes pair, under the server's ids.
+  const out = join(TMP, 'c9', 'index.html');
+  const packArgs = [...SERVER_PACKS.map(([id, rel]) => ['--pack', resolve(ROOT, rel), '--id', id]), ['--pack', resolve(ROOT, 'tools/fixtures/compare-modes/a.pack.yaml'), '--id', ids.modesA], ['--pack', resolve(ROOT, 'tools/fixtures/compare-modes/b.pack.yaml'), '--id', ids.modesB]].flat();
+  const built = cli([...packArgs, '--out', out, '--no-remote-fonts']);
+  assert.equal(built.status, 0, built.stderr);
+  const html = readFileSync(out, 'utf8');
+  const imports = importMapOf(html);
+  const config = JSON.parse(new RegExp(`<script type="application/json" id="${CONFIG_ID}">([\\s\\S]*?)</script>`).exec(html)[1]);
+  assert.deepEqual(config.packs.map((p) => p.id), [...SERVER_PACKS.map(([id]) => id), ids.modesA, ids.modesB]);
+  assert.deepEqual(config.packs.map((p) => p.canonical), config.packs.map((p) => canonicalOf[p.id]), 'the file carries the packs the server holds');
+  // The map carries every package, each address the installed entry file's bytes.
+  for (const name of FOUR) assert.ok(decode(imports[name]).equals(readFileSync(join(packageDir(ROOT, name), ...PACKAGES[name].entry.split('/')))), `${name} as installed`);
+
+  register(`data:text/javascript,${encodeURIComponent(RESOLVE_HOOK)}`, { data: { imports } });
+  const shimUrl = imports['studio/static-backend.mjs'];
+  assert.ok(shimUrl.startsWith(DATA_JS));
+  const { createStaticBackend: fromFile } = await import(shimUrl);
+  assert.notEqual(fromFile, createStaticBackend, 'the file\'s shim, not the source\'s');
+  let now = '2026-01-01T00:00:00.000Z';
+  const backend = fromFile(config, { clock: () => now });
+
+  const problems = [];
+  const same = async (path, init) => {
+    const server = await answerOf(await fetch(`${child.base}${path}`, init));
+    now = /observogram\.retrofeed\.adoptedAt: '?(\d{4}-\d\d-\d\dT[\d:.]+Z)/.exec(server.text)?.[1] ?? now;
+    const shim = await answerOf(await backend.handle(path, init));
+    const problem = difference(server, shim);
+    if (problem) problems.push(`${path}: ${problem}`);
+    return server;
+  };
+  // Three pairs × the three scope modes the studio sends, an environment pair, A's 404, the 400.
+  let graphs = 0;
+  for (const [a, b] of [['payment-service', 'production-curated'], [ids.modesA, ids.modesB], ['grafana-reference', 'prometheus-reference']]) {
+    for (const scopeMode of ['service', 'family', 'all']) {
+      const r = await same(diffQuery({ a, b, scopeMode }));
+      assert.equal(r.status, 200, `${a} × ${b} ${scopeMode}`);
+      if (JSON.parse(r.text).traceabilityGraph) graphs++;
+    }
+  }
+  assert.equal(graphs, 9, 'every answer carries the graph: the parser linked from the file');
+  assert.equal((await same(diffQuery({ a: 'payment-service', b: 'target-advanced', aEnv: 'prod', bEnv: 'staging', scopeMode: 'service' }))).status, 200);
+  assert.equal((await same(diffQuery({ a: 'nope', b: 'payment-service', scopeMode: 'service' }))).status, 404);
+  assert.equal((await same(diffQuery({ b: 'payment-service' }))).status, 400);
+  // Retrofeed, computed (compare-modes a → b adopts), the clock pinned to the server's stamp.
+  const rf = await same(`/api/packs/${encodeURIComponent(ids.modesA)}/retrofeed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ packBId: ids.modesB, scopeMode: 'service' }) });
+  assert.equal(rf.status, 200);
+  assert.ok(JSON.parse(rf.text).summary.candidates > 0, 'a computed update');
+  assert.deepEqual(problems, []);
 });

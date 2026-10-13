@@ -701,8 +701,8 @@ function checkSloIds(slis) {
 
 /**
  * Every SLI expression, with the params in, must still be PromQL. The parser is an input: packc
- * init passes the Lezer grammar (tools/lib/promql-lezer.mjs, an npm import and so not for the
- * browser); the browser-safe core in tools/lib/promql.mjs extracts dependencies and reports no
+ * init passes the Lezer grammar (tools/lib/promql-lezer.mjs, an npm import: Node, or the static
+ * bundle's import map); the browser-safe core in tools/lib/promql.mjs extracts dependencies and reports no
  * grammar error, so without a parser no `promql` warning can arise and the caller has to run the
  * check where Node is. A `promql` warning means the pack must not ship as it is.
  */

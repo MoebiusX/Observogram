@@ -1,7 +1,11 @@
 // tools/lib/promql-lezer.mjs
 //
-// Node-side PromQL dependency extraction backed by Prometheus' Lezer grammar.
-// Keep this out of browser-served modules: it imports bare npm packages.
+// PromQL dependency extraction backed by Prometheus' Lezer grammar.
+// Imports a bare npm package: served to a browser only through the static
+// bundle, whose builder inlines the package and what it imports
+// (tools/build-studio-bundle.mjs); the live studio never imports it — it has
+// no import map, and tools/test-studio-bundle.mjs T1 asserts its graph
+// reaches no package.
 
 import { parser } from '@prometheus-io/lezer-promql';
 import { parsePromqlDependencies as parseCoreDependencies } from './promql.mjs';

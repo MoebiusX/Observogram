@@ -190,9 +190,12 @@ test('T1 collectModuleGraph: every module under studio/ or lib/, the dynamic /li
   // literal specifier each (a const would not be collected and the panel would stay off).
   assert.deepEqual(graph.get('studio/brand.mjs').imports.map((i) => i.spec).filter((sp) => sp.startsWith('/lib/')), ['/lib/brand.mjs'], 'studio/brand.mjs → /lib/brand.mjs');
   assert.deepEqual(graph.get('studio/remediation-flow-view.mjs').imports.map((i) => i.spec).filter((sp) => sp.startsWith('/lib/')), ['/lib/remediation-flow.mjs'], 'studio/remediation-flow-view.mjs → /lib/remediation-flow.mjs (B3.3: the response path renders in the bundle)');
-  // The shim's retrofeed engines: literal dynamic imports, so they are in its imports and in the graph.
+  // The shim's Compare and retrofeed engines: literal dynamic imports, so they are in its imports and in the graph —
+  // and through the traceability graph the PromQL parser's package is the graph's one package root.
   const shimImports = graph.get('studio/static-backend.mjs').imports.map((i) => i.key);
-  for (const k of ['lib/diff.mjs', 'lib/retrofeed.mjs']) assert.ok(shimImports.includes(k) && graph.has(k), `the shim imports ${k} (a literal import())`);
+  for (const k of ['lib/diff.mjs', 'lib/traceability-graph.mjs', 'lib/retrofeed.mjs']) assert.ok(shimImports.includes(k) && graph.has(k), `the shim imports ${k} (a literal import())`);
+  assert.deepEqual([...graph.packages], ['@prometheus-io/lezer-promql'], 'the bundle\'s graph reaches one package, through tools/lib/promql-lezer.mjs');
+  assert.deepEqual([...closure.keys()], ['@lezer/common', '@lezer/highlight', '@lezer/lr', '@prometheus-io/lezer-promql'], 'and its closure the four');
   for (const [k, mod] of graph) {
     assert.ok(!/from\s+['"]node:/.test(mod.src), `${k} imports no node:* module`);
     assert.equal(mod.path, k.startsWith('lib/') ? `tools/lib/${k.slice(4)}` : k);
@@ -349,12 +352,12 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   assert.ok(!html.includes('src="/app.mjs"'), 'the app script is replaced');
   assert.ok(!/['"]\/lib\//.test(decodeModule(map.imports['studio/app.mjs'])), 'app.mjs no longer names /lib/');
   // The licences (follow-up compare-in-bundle): one text/plain element, the last thing in <head>; the pointer comment
-  // the line after the doctype, worded for a file with no third-party package; the file verifies.
+  // the line after the doctype, worded for a file with third-party packages; the file verifies, naming the four.
   const licencesOpen = `<script type="text/plain" id="${LICENCES_ID}">\n`;
   assert.equal(html.split(licencesOpen).length - 1, 1, 'one licence element');
   assert.equal(html.indexOf('</script>\n</head>', html.indexOf(licencesOpen)), html.indexOf('</script>', html.indexOf(licencesOpen)), 'the element ends the head');
-  assert.ok(html.startsWith(`<!doctype html>\n${pointerComment(false)}\n`), 'the pointer comment after the doctype');
-  assert.deepEqual(verifyBundleNotices(html), { ok: true, packages: [], problems: [] });
+  assert.ok(html.startsWith(`<!doctype html>\n${pointerComment(true)}\n`), 'the pointer comment after the doctype');
+  assert.deepEqual(verifyBundleNotices(html), { ok: true, packages: [...closure.keys()], problems: [] });
   // The config.
   const config = configOf(html);
   assert.deepEqual(config, built.config);
@@ -519,7 +522,7 @@ test('T3c every feature the shim denies is named in the README 501 list and the 
     'Testing an MCP connection': /Testing an MCP connection/,
     'Building a pack from a live MCP server': /Building a pack from a live MCP server/,
     'Passing MCP server settings through the studio server': /Passing MCP server settings through the studio server/,
-    'Uploading a pack': /upload/i, Compare: /Compare/, Deploy: /Deploy/, Journeys: /Journeys/, Build: /Build/,
+    'Uploading a pack': /upload/i, Deploy: /Deploy/, Journeys: /Journeys/, Build: /Build/,
     Waivers: /Waivers/, Services: /Services \(/, Organisations: /Organisations \(/, Settings: /Settings \(/, 'Sign-in': /sign-in/i,
   };
   for (const [prefix, name] of FEATURES) {
@@ -529,9 +532,12 @@ test('T3c every feature the shim denies is named in the README 501 list and the 
     assert.ok(re, `${name} (${prefix}) has a documented spelling`);
     for (const [doc, text] of [['README 501 list', list], ['DOWNSTREAM §10 denial cell', cell]]) assert.match(text, re, `${name} (${prefix}) is named in the ${doc}`);
   }
-  // What the shim answers is named as denied in neither list (follow-up compare-in-bundle): retrofeed is computed in
-  // the browser — the one non-GET answered — and the DOWNSTREAM row's answered cell names it.
+  // What the shim answers is named as denied in neither list (follow-up compare-in-bundle): Compare and retrofeed are
+  // computed in the browser — retrofeed the one non-GET answered — and the DOWNSTREAM row's answered cell names both.
   assert.ok(!/retrofeed/i.test(list), 'the README 501 list does not name retrofeed');
+  assert.ok(!/\bCompare\b/.test(list) && !list.includes('/api/diff'), 'the README 501 list does not name Compare');
+  assert.ok(!/\bCompare\b/.test(cell) && !cell.includes('/api/diff'), 'the DOWNSTREAM denial cell does not name Compare');
+  assert.ok(row.slice(0, row.indexOf('every other `/api` or `/auth` path')).includes('`GET /api/diff`'), 'the DOWNSTREAM answered cell names Compare\'s route');
   assert.ok(!/Compare \([^)]*retrofeed/.test(cell) && cell.startsWith('every other `/api` or `/auth` path and every non-GET but retrofeed:'), 'the DOWNSTREAM denial cell: every non-GET but retrofeed');
   assert.ok(row.slice(0, row.indexOf('every other `/api` or `/auth` path')).includes('`POST /api/packs/:id/retrofeed`'), 'the DOWNSTREAM answered cell names retrofeed');
   // The two slice 6a routes beside their names in DOWNSTREAM, as every other route there.
@@ -820,7 +826,7 @@ test('T5 parity: the shim answers every ported route as a running server does �
 
 // ---------- T6 denial ----------
 
-test('T6 denial: the server-only routes answer 501 Not Implemented, denied no-backend, naming the feature; retrofeed answered (the one non-GET); unknown pack 404 Not Found; other origins and non-API paths pass to the page', async () => {
+test('T6 denial: the server-only routes answer 501 Not Implemented, denied no-backend, naming the feature; Compare answered, and retrofeed (the one non-GET); unknown pack 404 Not Found; other origins and non-API paths pass to the page', async () => {
   let upstreamCalls = [];
   const fetchImpl = async (input, init) => { upstreamCalls.push([String(input), init]); return new Response('ok', { status: 200 }); };
   const backend = createStaticBackend({ version: '1.2.3', schema, packs: [{ id: 'p', label: 'P', canonical: paymentCanonical }] }, { fetchImpl, origin: 'https://studio.example' });
@@ -846,7 +852,20 @@ test('T6 denial: the server-only routes answer 501 Not Implemented, denied no-ba
   await expectDenied('/api/mcp-settings/submit', { method: 'POST' }, 'Passing MCP server settings through the studio server');
   await expectDenied('/api/validate', { method: 'POST' }, 'Uploading a pack');
   await expectDenied('/api/uploads', { method: 'DELETE' }, 'Uploading a pack');
-  await expectDenied('/api/diff?a=p&b=p', undefined, 'Compare');
+  // Compare is answered (tools/test-bundle-compare.mjs C3 holds it to the server's answers): the diff and its graph; a
+  // non-GET there is 'This action', as on the server, which has no other route there.
+  const cmp = await backend.handle('/api/diff?a=p&b=p&scopeMode=service');
+  assert.equal(cmp.status, 200);
+  assert.equal(cmp.statusText, 'OK');
+  assert.equal(cmp.headers.get('content-type'), 'application/json; charset=utf-8');
+  const cmpBody = await cmp.json();
+  assert.equal(cmpBody.summary.onlyInA + cmpBody.summary.onlyInB, 0, 'a pack against itself');
+  assert.ok(cmpBody.traceabilityGraph?.rollup, 'with the traceability graph');
+  const missing = await backend.handle('/api/diff?a=p');
+  assert.equal(missing.status, 400);
+  assert.equal(missing.statusText, 'Bad Request');
+  assert.deepEqual(await missing.json(), { error: 'query params `a` and `b` (pack ids) required' });
+  await expectDenied('/api/diff?a=p&b=p', { method: 'POST' }, 'This action');
   // Retrofeed is answered (the one non-GET; tools/test-bundle-compare.mjs C6 holds it to the server's answers); any
   // other method there is 'This action', as on the server, which has no other route there.
   const rf = await backend.handle('/api/packs/p/retrofeed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ packBId: 'p' }) });
@@ -899,6 +918,7 @@ test('T6 denial: the server-only routes answer 501 Not Implemented, denied no-ba
   assert.equal(featureOf('/api/mcp/jobs/abc/cancel'), 'Building a pack from a live MCP server');
   assert.equal(featureOf('/api/mcp-endpoints/3'), 'Settings', "'/api/mcp/ping' is no prefix of the endpoints");
   assert.equal(featureOf('/api/packs/x/retrofeed?y'), 'This action', 'retrofeed is answered; no feature is denied there');
+  assert.equal(featureOf('/api/diff'), 'This action', 'Compare is answered; no feature is denied there');
   assert.equal(featureOf('/api/packs/x/verdicts/SLI-01'), 'Verdicts');
   assert.equal(featureOf('/api/packs/x/verdicts'), 'Verdicts', 'the feature name; the GET itself is answered before the denial');
   assert.equal(featureOf('/api/packs/x/audit-report?format=html'), 'Audit report');
@@ -967,10 +987,10 @@ test('T6 denial: the server-only routes answer 501 Not Implemented, denied no-ba
   const twice = await (await backend.handle('/api/packs/p/conformance?env=prod&env=staging')).json();
   assert.equal(twice.environment, null);
   // The notice text — and the default product is today's text character for character.
-  assert.equal(denialText('Compare'), denialText('Compare', DEFAULT_BRAND.name));
+  assert.equal(denialText('Deploy'), denialText('Deploy', DEFAULT_BRAND.name));
   assert.equal(noticeText(1), noticeText(1, DEFAULT_BRAND.name));
   assert.equal(apiMenuSubText(), 'needs the Observogram server · this studio is a static bundle');
-  assert.equal(noticeText(1), 'Static studio — no Observogram server behind this page. Discover, Diagnose, Compile and conformance read the 1 pack built in; Scan a repo, Draft from MCP, Compare, Deploy, Journeys, Build and sign-in need the server.');
+  assert.equal(noticeText(1), 'Static studio — no Observogram server behind this page. Discover, Diagnose, Compare, Compile and conformance read the 1 pack built in; Scan a repo, Draft from MCP, Deploy, Journeys, Build and sign-in need the server.');
   assert.match(noticeText(0), /read the 0 packs built in/);
 });
 
@@ -1029,6 +1049,7 @@ test('T7 the REAL bundle boots in headless Chromium against the fixture pack: th
   assert.equal(await page.isVisible('.no-backend-notice'), true, 'the notice is visible');
   assert.match(await page.textContent('.no-backend-notice'), /no Observogram server behind this page/);
   assert.match(await page.textContent('.no-backend-notice'), /read the 1 pack built in/);
+  assert.equal(await page.textContent('.no-backend-notice-text'), noticeText(1), 'the notice, exactly: Compare among what the packs answer');
   assert.equal(await page.isHidden('#api-link'), true, 'the api link is hidden');
   // Open the pack the way a user does: Check → the service tile.
   await page.click('#home-choice-check');
@@ -1462,9 +1483,9 @@ test('T8b baked brand: a --brand bundle carries the branded server\'s shell frag
   // The shim names the product.
   const backend = createStaticBackend({ version: '1', schema, packs: [] }, { product: 'Acme Watch' });
   assert.equal(backend.product, 'Acme Watch');
-  const diff = await backend.handle('/api/diff?a=p&b=p');
-  assert.equal(diff.status, 501);
-  assert.equal((await diff.json()).error, 'Compare needs the Acme Watch server; this studio is a static bundle built without one.');
+  const journeys = await backend.handle('/api/journeys');
+  assert.equal(journeys.status, 501);
+  assert.equal((await journeys.json()).error, 'Journeys needs the Acme Watch server; this studio is a static bundle built without one.');
   assert.match(noticeText(1, 'Acme Watch'), /^Static studio — no Acme Watch server behind this page\./);
   assert.equal(apiMenuSubText('Acme Watch'), 'needs the Acme Watch server · this studio is a static bundle');
 });

@@ -50,8 +50,9 @@
 //
 // A downstream that serves the studio behind its own static host gets the
 // whole studio — every module, every stylesheet, the packs it names — in one
-// file that assumes no server: studio/static-backend.mjs answers the
-// read-only pack routes in the browser and says "no backend" for the rest.
+// file that assumes no server: studio/static-backend.mjs answers the pack
+// routes and Compare's computations in the browser and says "no backend" for
+// the rest.
 //
 // How the modules are inlined: an inline `<script type="importmap">` whose
 // keys are bare specifiers (`studio/<file>.mjs`, `lib/<path>.mjs` for
