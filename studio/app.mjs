@@ -62,7 +62,7 @@ import {
 import { renderPingResult, renderGateLog, renderLiveResult } from './live-view.mjs';
 import { renderServerSettings } from './mcp-settings-view.mjs';
 import {
-  settingsGateModel, settingsTargetModel, descriptorReadModel, statusLine, ledeText, fieldInputSpec, actionNote, primaryBlock, actionBlock, policyView, verifiedLine,
+  settingsGateModel, settingsTargetModel, descriptorReadModel, statusLine, ledeText, fieldInputSpec, actionNote, primaryBlock, actionBlock, policyView, serverAckModel, secretsEmptiedLine, verifiedLine,
   proxyDescribeModel, proxyOutcomeModel,
 } from './mcp-settings-model.mjs';
 import { loadServerSettingsConfig, loadSettingsLibs, readDescriptorDirect, submitDirect, describeViaProxy, submitViaProxy } from './mcp-settings-api.mjs';
@@ -5562,8 +5562,12 @@ async function pingFromPanel() {
 // deployment's settings policy runs on what is typed (150 ms after the last
 // keystroke, and again at send): a rule that matches, or cannot run on this
 // form, shows its warning, and its acknowledgement — a box in the dialog,
-// never kept — must be ticked before the send. The outcome
-// is shown as the server returned it (redacted, as text); after a
+// never kept — must be ticked before the send. Through the studio server, a
+// rule its 409 names that the page's check did not find gets its box too,
+// with a line saying why (the server could not check it, or its check
+// matched), until what is typed changes; a secret the refused send emptied
+// is asked for until it is typed again, whatever is ticked meanwhile. The
+// outcome is shown as the server returned it (redacted, as text); after a
 // verified configure the panel's connection test runs, and the modal words
 // what it showed from the read's outcome.
 
@@ -5613,7 +5617,7 @@ async function openServerSettings() {
   const ctx = {
     abort: new AbortController(), url, chosen: target.chosen, posture: state.access?.posture ?? 'unknown',
     state: 'reading', serial: ++mss.serial, origin: mssOriginOf(url), descriptorUrl: null, libs: null,
-    policyState: 'loading', policy: null, prefill: null, findings: null, findingsFor: null, findingsTimer: null, descriptor: null, generic: null, genericReason: null, genericError: null,
+    policyState: 'loading', policy: null, prefill: null, findings: null, findingsFor: null, findingsTimer: null, serverAcks: [], retype: [], descriptor: null, generic: null, genericReason: null, genericError: null,
     reason: null, redirect: false, outcome: null, verified: null, notice: null, confirming: null, busy: false, sendingTo: null, afterAction: false,
     proxy: false,
   };
@@ -5653,7 +5657,7 @@ async function openServerSettings() {
 }
 
 async function readMssDescriptor(ctx) {
-  Object.assign(ctx, { state: 'reading', serial: ++mss.serial, descriptor: null, generic: null, outcome: null, verified: null, notice: null, confirming: null });
+  Object.assign(ctx, { state: 'reading', serial: ++mss.serial, descriptor: null, generic: null, outcome: null, verified: null, notice: null, confirming: null, serverAcks: [], retype: [] });
   paintMss();
   let r;
   if (ctx.proxy) {
@@ -5688,6 +5692,7 @@ function useMssGeneric(ctx, reason) {
   ctx.generic = { ...ctx.prefill, names: { ...ctx.prefill.names } };
   ctx.genericError = d.reason ?? null;
   ctx.descriptor = d.reason ? ctx.libs.lib.genericDescriptor() : d;
+  ctx.serverAcks = [];
 }
 
 // What the reader typed, read from the inputs into a value that goes out of scope with its caller.
@@ -5710,8 +5715,22 @@ function mssTicked() {
   return [...mssHost()?.querySelectorAll('.mss-policy input[data-ack]:checked') ?? []].map((i) => i.getAttribute('data-ack'));
 }
 
+// → the inputs that held a value.
 function clearMssSecrets() {
-  for (const input of mssHost()?.querySelectorAll('input[type="password"]') ?? []) input.value = '';
+  const emptied = [];
+  for (const input of mssHost()?.querySelectorAll('input[type="password"]') ?? []) {
+    if (input.value) emptied.push(input);
+    input.value = '';
+  }
+  return emptied;
+}
+
+// The line asking for the secrets a refused send emptied (ctx.retype, their
+// inputs), while one is still empty: an edit or a tick that clears the
+// notice leaves this one, until each is typed again or the form is new.
+function mssRetypeNotice(ctx) {
+  ctx.retype = ctx.retype.filter((input) => input.isConnected && !input.value);
+  return secretsEmptiedLine(ctx.retype.length) || null;
 }
 
 function buildMssModel(ctx) {
@@ -5748,12 +5767,12 @@ function buildMssModel(ctx) {
   // The findings of the last check (re-run on a new form, 150 ms after typing, and at send).
   if (ctx.findings === null || ctx.findingsFor !== ctx.descriptor) mssCheckPolicy(ctx, values);
   const ticked = mssTicked();
-  const policy = policyView(ctx.findings, ticked);
+  const policy = policyView(ctx.findings, ticked, ctx.serverAcks);
   model.policy = policy.rules;
   model.primary = { label: 'Send to the server', blocked: primaryBlock({ policyState: ctx.policyState, requestReason: req.reason ?? null, genericReason: ctx.genericError, ackReason: policy.block }) };
   model.actions = ctx.descriptor.actions.map((a) => {
     const r = lib.settingsRequest(ctx.descriptor, values, { action: a.name });
-    const blocked = r.reason ? null : actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: r.sent, ticked });
+    const blocked = r.reason ? null : actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: r.sent, ticked, named: ctx.serverAcks });
     return { name: a.name, label: a.label, confirm: a.confirm, confirming: ctx.confirming === a.name, blocked, note: r.reason ? r.reason : actionNote(r.carries) };
   });
   return model;
@@ -5802,7 +5821,7 @@ async function sendMssViaProxy(ctx, values, actionName) {
     ...(actionName ? { action: actionName } : {}),
   };
   const pending = submitViaProxy(payload, { signal: ctx.abort.signal });
-  clearMssSecrets();
+  const emptied = clearMssSecrets();
   let answer = null;
   let error = null;
   try { answer = await pending; } catch (e) { error = e; }
@@ -5814,10 +5833,23 @@ async function sendMssViaProxy(ctx, values, actionName) {
     // state; anything else was refused before a request left.
     ctx.state = error.status === 502 ? 'unknown' : (ctx.generic ? 'generic' : 'described');
     ctx.notice = `The studio server answered ${error.message || 'nothing it could read'}`.replace(/([^.…?!])$/, '$1.');
+    // A rule its policy check names gets its acknowledgement box, which the
+    // page's own check may not have drawn: the server could not check it, or
+    // its check matched. Neither the send nor an action that carries a field
+    // the rule checks goes until it is ticked, and a secret emptied by this
+    // send is typed again.
+    const named = serverAckModel(error, ctx.policy, ctx.descriptor);
+    if (named) {
+      if (!ctx.serverAcks.some((r) => r.rule === named.rule)) ctx.serverAcks = [...ctx.serverAcks, named];
+      ctx.retype = [...new Set([...ctx.retype, ...emptied])];
+      const retype = mssRetypeNotice(ctx);
+      if (retype) ctx.notice += ` ${retype}`;
+    }
     paintMss();
     return;
   }
   const o = proxyOutcomeModel(answer, ctx.libs);
+  ctx.retype = [];
   ctx.outcome = { ...o, serial: ++mss.outcomeSerial };
   ctx.state = 'outcome';
   paintMss();
@@ -5882,11 +5914,14 @@ function openLiveFromSettings() {
 
 const mcpSettingsActions = {
   close: () => closeServerSettings(),
-  input: () => {
+  input: ({ typed = false, secret = false } = {}) => {
     const ctx = mss.ctx;
     if (!ctx) return;
-    ctx.notice = null;
+    ctx.notice = mssRetypeNotice(ctx);
     ctx.confirming = null;
+    // A value other than a secret was edited: the page's check decides
+    // again, alone. A secret, which no rule reads, keeps the server's boxes.
+    if (typed && !secret) ctx.serverAcks = [];
     paintMss();
     if (!ctx.policy) return;
     clearTimeout(ctx.findingsTimer);
@@ -5897,7 +5932,7 @@ const mcpSettingsActions = {
       paintMss();
     }, 150);
   },
-  ack: () => { const ctx = mss.ctx; if (!ctx) return; ctx.notice = null; paintMss(); },
+  ack: () => { const ctx = mss.ctx; if (!ctx) return; ctx.notice = mssRetypeNotice(ctx); paintMss(); },
   generic: () => {
     const ctx = mss.ctx;
     if (!ctx?.generic) return;
@@ -5909,7 +5944,8 @@ const mcpSettingsActions = {
     ctx.generic = g;
     ctx.genericError = d.reason ?? null;
     if (!d.reason) ctx.descriptor = d;
-    ctx.notice = null;
+    ctx.notice = mssRetypeNotice(ctx);
+    ctx.serverAcks = [];
     paintMss();
     // The inputs carry the new names now: the policy checks the form under them.
     ctx.findings = null;
@@ -5924,7 +5960,7 @@ const mcpSettingsActions = {
     clearTimeout(ctx.findingsTimer);
     ctx.findingsTimer = null;
     mssCheckPolicy(ctx, values);
-    const block = primaryBlock({ policyState: ctx.policyState, requestReason: req.reason ?? null, genericReason: ctx.genericError, ackReason: policyView(ctx.findings, mssTicked()).block });
+    const block = primaryBlock({ policyState: ctx.policyState, requestReason: req.reason ?? null, genericReason: ctx.genericError, ackReason: policyView(ctx.findings, mssTicked(), ctx.serverAcks).block });
     if (block) { ctx.notice = block; paintMss(); return; }
     ctx.confirming = null;
     sendMss(ctx, req, null, values);
@@ -5941,10 +5977,10 @@ const mcpSettingsActions = {
       clearTimeout(ctx.findingsTimer);
       ctx.findingsTimer = null;
       mssCheckPolicy(ctx, values);
-      const block = actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: req.sent, ticked: mssTicked() });
+      const block = actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: req.sent, ticked: mssTicked(), named: ctx.serverAcks });
       if (block) { ctx.notice = block; ctx.confirming = null; paintMss(); return; }
     }
-    if (a.confirm && ctx.confirming !== name) { ctx.confirming = name; ctx.notice = null; paintMss(); return; }
+    if (a.confirm && ctx.confirming !== name) { ctx.confirming = name; ctx.notice = mssRetypeNotice(ctx); paintMss(); return; }
     ctx.confirming = null;
     if (req.reason) { ctx.notice = req.reason.charAt(0).toUpperCase() + req.reason.slice(1) + '.'; paintMss(); return; }
     sendMss(ctx, req, name, values);
@@ -5952,7 +5988,7 @@ const mcpSettingsActions = {
   retry: () => {
     const ctx = mss.ctx;
     if (!ctx) return;
-    if (ctx.state === 'unknown') { Object.assign(ctx, { state: ctx.generic ? 'generic' : 'described', notice: null }); paintMss(); return; }
+    if (ctx.state === 'unknown') { Object.assign(ctx, { state: ctx.generic ? 'generic' : 'described', notice: mssRetypeNotice(ctx) }); paintMss(); return; }
     readMssDescriptor(ctx);
   },
   useGeneric: () => {
