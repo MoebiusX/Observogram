@@ -657,7 +657,17 @@ test('every path comparison in ops.mjs and backup.mjs goes through compared; rea
     ['placed === null || placed.startsWith(b + sep)', 'Nothing was changed. Set OBSERVOGRAM_DB to the database\'s path under ${base}, then run the export again'],
     ['users === null', 'nothing was deleted. If it does not lie under'],
     ['users === null', 'by hand, then run purge-org again: it drops org'],
+    ['users === null', 'records. If it does, move it out of ${root} first, then do the same'],
   ]) assert.ok(refusal(raw, guard).includes(way), `the refusal of ${guard} names its way out: ${way}`);
+  // And purge-org's says why the users file may lie under the root, true of every path compared answers null for: a share
+  // no file id places, on any volume, or a path this host cannot fully resolve — through a link or another reparse point
+  // whose target cannot be opened, a part it cannot read, or on a volume whose paths do not resolve. The earlier text,
+  // naming a share alone, read beside the same way out.
+  const why = 'the recorded users file ${usersFile} is not a path on a local drive, or its path cannot be resolved on this host (a link '
+    + 'or another reparse point on it whose target cannot be opened, a part of it this host cannot read, or a volume whose paths do not '
+    + 'resolve), and such a path, like a network share no file id places beside ${root} (one on any volume, a DFS link, one that cannot '
+    + 'be reached), may lead under it — nothing was deleted.';
+  assert.ok(refusal(raw, 'users === null').includes(why), `purge-org's refusal says why the users file may lie under the root: ${why}`);
   const backup = code('backup.mjs');
   assert.equal(count(backup, /\bcanonical\(/g), 1, 'backup.mjs: canonical is only defined, and passed to comparedPath');
   assert.match(backup, /const compared = comparedPath\(canonical\);/);
