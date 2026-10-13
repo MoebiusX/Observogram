@@ -1023,7 +1023,11 @@ app.get('/api/journeys/:name/runs', authorize('GET /api/journeys/:name/runs'), (
 // and its hook's URL (refusedUrlTokens) — never only to remove the authEnv,
 // which leaves the urlEnv refused; a name of an org whose every hook name
 // another org's id takes (the TAKEN refusal), to leave notify out, as the
-// run says — never a rename no name can satisfy (refusedTaken).
+// run says — never a rename no name can satisfy (refusedTaken); else a name
+// of the org's hook shape, URL or token, that another org's id also maps
+// onto (the SHADOW refusal), that it is not the org's and to name a hook
+// the listing lists, as the run says — never a rename to the shape it has
+// (refusedShadows).
 app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/schedule'), (req, res) => {
   let def;
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
@@ -1042,11 +1046,12 @@ app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/sched
     const asUrl = urlRefused ? notifyHookOf(currentStore(), def.notify.urlEnv, currentOrg(), 'TOKEN') : null;
     const refusedUrlTokens = asUrl?.kind === 'hook' ? [{ tokenEnv: def.notify.urlEnv, urlEnv: asUrl.urlEnv }] : [];
     const refusedTaken = refusedEnvNames.length > 0 && hooksAllTaken(currentStore(), currentOrg());
+    const refusedShadows = refusedEnvNames.filter((n) => ['URL', 'TOKEN'].some((suffix) => notifyHookOf(currentStore(), n, currentOrg(), suffix).kind === 'shadow'));
     const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
     const snippets = scheduleSnippets({
       name: def.name,
       cron: parsed?.cron ?? null, timezone: parsed?.timezone ?? null, every: parsed?.every ?? null, cadenceNote: parsed?.cadenceNote ?? null,
-      envNames, refusedEnvNames, refusedPairs, refusedHookTokens, refusedUrlTokens, refusedTaken,
+      envNames, refusedEnvNames, refusedPairs, refusedHookTokens, refusedUrlTokens, refusedTaken, refusedShadows,
       nodePath: process.execPath, cliPath: resolve(ROOT, 'tools/cli.mjs'), cwd: process.cwd(),
       workspace: orgWorkspaceRoot(), orgRoot: orgRootOf(currentOrg()),
       image: `observogram:${pkg.version}`, namespace: 'observability',

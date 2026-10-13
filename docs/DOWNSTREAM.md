@@ -1533,7 +1533,14 @@ cannot be a notify hook of this org: another org's id also maps onto every
 name of its hook shape (OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN) by
 the longest-prefix rule, so the studio posts no notification for its
 journeys — remove the journey's notify before scheduling (docs/DOWNSTREAM.md
-§17.1)`. What remains is a file written before the upgrade or edited by
+§17.1)` — or, for a name of the org's hook shape, URL or token, that another
+org's id also maps onto (17.1, "Whose it is"; it already has the shape a
+rename would give), `# <NAME> has the shape of a notify hook of this org,
+but another org's id also maps onto it by the longest-prefix rule, so the
+studio never reads it — set the journey's notify.urlEnv to one that GET
+/api/journeys/notify-hooks lists, and its notify.authEnv to that hook's
+_TOKEN or leave it out, before scheduling (docs/DOWNSTREAM.md §17.2)`.
+What remains is a file written before the upgrade or edited by
 hand, run by a CronJob whose Secret holds whatever the file named — 17.2
 finds those files and the secrets to rotate. `packc journey schedule` passes
 no `refusedEnvNames` and binds every name the journey declares, as before.

@@ -28,9 +28,12 @@
 // `refusedUrlTokens` names ({ tokenEnv, urlEnv }: the journey's notify.urlEnv
 // is tokenEnv, the token of its org's hook urlEnv — alone, or as its authEnv
 // too) is told it is refused as notify.urlEnv and that hook's URL, never
-// only to remove notify.authEnv; and with `refusedTaken` (another org's id
+// only to remove notify.authEnv; with `refusedTaken` (another org's id
 // takes every name of the org's hook shape, so no rename can make one the
-// org's) every other refused name is told to leave notify out instead.
+// org's) every other refused name is told to leave notify out instead; and
+// else one `refusedShadows` names (a name of the org's hook shape that
+// another org's id also maps onto: it has the shape a rename would give) is
+// told so, as the run's refusal says, and to name a hook the listing lists.
 // `packc journey schedule` passes none of them (the CLI reads any name from
 // its invoker's environment).
 // Honesty rule: nothing is fabricated as the journey's cadence — a missing
@@ -59,7 +62,9 @@ const DOW_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 // refused beside its org's hook URL is told that hook's own token; one of the
 // org's hook tokens beside a refused URL name, its own hook's URL; any name
 // of an org whose every hook name another org's id takes, to leave notify out
-// (no name can be its hook).
+// (no name can be its hook); else a name of the org's hook shape another
+// org's id also maps onto, that it is not the org's and to name a hook the
+// listing lists — never a rename to the shape it already has.
 const refusedNote = (n, e) => {
   const u = n.refusedUrlTokens.find((x) => x.tokenEnv === e);
   if (u) return `${e} is the token of the hook ${u.urlEnv} names, refused as the journey's notify.urlEnv: the studio posts only to a hook's URL — set the journey's notify.urlEnv to ${u.urlEnv}, and its notify.authEnv to ${e} or leave it out, before scheduling (docs/DOWNSTREAM.md §17.2)`;
@@ -67,9 +72,9 @@ const refusedNote = (n, e) => {
   if (p) return `${e} is not the token of the hook ${p.urlEnv} names: a hook's token goes only to its own URL — set the journey's notify.authEnv to ${p.tokenEnv}, or remove it, before scheduling (docs/DOWNSTREAM.md §17.2)`;
   const t = n.refusedHookTokens.find((x) => x.authEnv === e);
   if (t) return `${e} is the token of the hook ${t.urlEnv} names, not of the journey's notify.urlEnv: a hook's token goes only to its own URL — set the journey's notify.urlEnv to ${t.urlEnv}, or remove notify.authEnv, before scheduling (docs/DOWNSTREAM.md §17.2)`;
-  return n.refusedTaken
-    ? `${e} cannot be a notify hook of this org: another org's id also maps onto every name of its hook shape (OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN) by the longest-prefix rule, so the studio posts no notification for its journeys — remove the journey's notify before scheduling (docs/DOWNSTREAM.md §17.1)`
-    : `${e} is not a notify hook of this org: the studio never reads it — rename it to OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  if (n.refusedTaken) return `${e} cannot be a notify hook of this org: another org's id also maps onto every name of its hook shape (OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN) by the longest-prefix rule, so the studio posts no notification for its journeys — remove the journey's notify before scheduling (docs/DOWNSTREAM.md §17.1)`;
+  if (n.refusedShadows.includes(e)) return `${e} has the shape of a notify hook of this org, but another org's id also maps onto it by the longest-prefix rule, so the studio never reads it — set the journey's notify.urlEnv to one that GET /api/journeys/notify-hooks lists, and its notify.authEnv to that hook's _TOKEN or leave it out, before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  return `${e} is not a notify hook of this org: the studio never reads it — rename it to OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN before scheduling (docs/DOWNSTREAM.md §17.2)`;
 };
 
 // Fill the defaults so every emitter reads one shape.
@@ -90,6 +95,7 @@ export function normaliseSnippetInput(i = {}) {
     .filter(t => t && typeof t === 'object' && [t.tokenEnv, t.urlEnv].every(v => typeof v === 'string' && ENV_NAME_RE.test(v)) && refusedEnvNames.includes(t.tokenEnv))
     .map(t => ({ tokenEnv: t.tokenEnv, urlEnv: t.urlEnv }))
     .filter((t, i, all) => all.findIndex(x => x.tokenEnv === t.tokenEnv) === i);
+  const refusedShadows = [...new Set((Array.isArray(src.refusedShadows) ? src.refusedShadows : []).filter(n => typeof n === 'string' && ENV_NAME_RE.test(n) && refusedEnvNames.includes(n)))];
   if (src.orgRoot != null && !validOrgRoot(src.orgRoot)) throw new TypeError(`orgRoot must be '.' or 'orgs/<id>' (got ${JSON.stringify(src.orgRoot)})`);
   return {
     name: String(src.name || 'journey'),
@@ -103,6 +109,7 @@ export function normaliseSnippetInput(i = {}) {
     refusedHookTokens,
     refusedUrlTokens,
     refusedTaken: src.refusedTaken === true,
+    refusedShadows,
     nodePath: String(src.nodePath || 'node'),
     cliPath: String(src.cliPath || 'tools/cli.mjs'),
     cwd: String(src.cwd || '.'),

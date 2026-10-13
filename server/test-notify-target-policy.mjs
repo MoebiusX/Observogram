@@ -1151,6 +1151,9 @@ test('H16 the schedule route never binds a notify name the server refuses: a leg
   plant(A.ws, 'acme', 'h16-token-url', { notify: `{ urlEnv: ${ONCALL.tokenEnv} }` });
   plant(A.ws, 'acme', 'h16-token-both', { notify: `{ urlEnv: ${ONCALL.tokenEnv}, authEnv: ${ONCALL.tokenEnv} }` });
   plant(A.ws, 'acme', 'h16-token-followed', { notify: `{ urlEnv: ${ONCALL.urlEnv} }` });
+  const SHADOWED_TOKEN = 'OBSERVOGRAM_ORG_ACME_NOTIFY_EU_X_TOKEN';
+  plant(A.ws, 'acme', 'h16-shadow-url', { notify: `{ urlEnv: ${SHADOWED} }` });
+  plant(A.ws, 'acme', 'h16-shadow-token', { notify: `{ urlEnv: MY_HOOK_URL, authEnv: ${SHADOWED_TOKEN} }` });
   const REFUSED = (e) => `${e} is not a notify hook of this org: the studio never reads it — rename it to OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN before scheduling (docs/DOWNSTREAM.md §17.2)`;
   const schedule = async (name) => {
     const r = await call(A.base, 'GET', `/api/journeys/${name}/schedule`, { headers: A.as.vera });
@@ -1193,6 +1196,25 @@ test('H16 the schedule route never binds a notify name the server refuses: a leg
   }
   const tokenFollowed = await schedule('h16-token-followed');
   assert.deepEqual([tokenFollowed.envNames, tokenFollowed.refusedEnvNames], [[ONCALL.urlEnv], undefined], 'the way out followed literally, authEnv left out: bound, none refused');
+  // A name of acme's hook shape that acme-notify-eu's id also maps onto (SHADOW) — the urlEnv, or the authEnv beside a
+  // refused urlEnv — already has the shape the rename names: it is told what the run's refusal says, another org's id
+  // also maps onto it, and to name a hook the listing lists (ONCALL is listed; h16-token-followed is that way out
+  // followed, authEnv left out) — never the rename, which followed literally changes nothing.
+  const SHADOW = (e) => `${e} has the shape of a notify hook of this org, but another org's id also maps onto it by the longest-prefix rule, so the studio never reads it — set the journey's notify.urlEnv to one that GET /api/journeys/notify-hooks lists, and its notify.authEnv to that hook's _TOKEN or leave it out, before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  const shadowUrl = await schedule('h16-shadow-url');
+  assert.deepEqual([shadowUrl.envNames, shadowUrl.refusedEnvNames], [[], [SHADOWED]]);
+  refusedIn(shadowUrl.snippets, SHADOWED, SHADOW(SHADOWED));
+  const shadowToken = await schedule('h16-shadow-token');
+  assert.deepEqual([shadowToken.envNames, shadowToken.refusedEnvNames], [[], ['MY_HOOK_URL', SHADOWED_TOKEN]]);
+  refusedIn(shadowToken.snippets, 'MY_HOOK_URL');
+  refusedIn(shadowToken.snippets, SHADOWED_TOKEN, SHADOW(SHADOWED_TOKEN));
+  for (const [s, e] of [[shadowUrl, SHADOWED], [shadowToken, SHADOWED_TOKEN]]) {
+    for (const f of ['cron', 'schtasks', 'actions', 'k8s']) assert.ok(!s.snippets[f].includes(REFUSED(e)), `${e} ${f}: never a rename to the shape it has`);
+  }
+  const journeysListed = Object.fromEntries((await call(A.base, 'GET', '/api/journeys', { headers: A.as.vera })).json.journeys.map((j) => [j.name, j]));
+  assert.match(journeysListed['h16-shadow-url'].notify.problem, /has the shape of a notify hook of org 'acme', but another org's id also maps onto it by the longest-prefix rule — whoever holds the workspace sets notify\.urlEnv in orgs\/acme\/journeys\/h16-shadow-url\.journey\.yaml to one that GET \/api\/journeys\/notify-hooks lists$/, 'the run says the same');
+  const hooksListed = (await call(A.base, 'GET', '/api/journeys/notify-hooks', { headers: A.as.vera })).json.hooks.map((h) => h.urlEnv);
+  assert.ok(hooksListed.includes(ONCALL.urlEnv) && !hooksListed.includes(SHADOWED), 'the listing lists a hook to name, and never the shadowed name');
   // A journey through its org's hook: no new key, the snippets scheduleSnippets makes from the route's inputs.
   const hook = await schedule('h16-hook');
   assert.deepEqual(Object.keys(hook), ['ok', 'name', 'schedule', 'placeholder', 'envNames', 'snippets']);

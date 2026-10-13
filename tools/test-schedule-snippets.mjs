@@ -263,6 +263,28 @@ const S45 = withSched({ every: '45m' });
       assert(noSecret(us[f]), `${f} (${label}): no value with refusedUrlTokens`);
     }
   }
+  // A name of the org's hook shape another org's id also maps onto (refusedShadows: acme-notify-eu beside acme owns
+  // OBSERVOGRAM_ORG_ACME_NOTIFY_EU_*) — as the urlEnv, or as the authEnv beside a refused urlEnv — already has the
+  // shape the rename names: it is told what the run's SHADOW refusal says, that another org's id also maps onto it,
+  // and to name a hook the listing lists — never the rename, which followed literally changes nothing.
+  const EU = 'OBSERVOGRAM_ORG_ACME_NOTIFY_EU_X_URL', EU_TOKEN = 'OBSERVOGRAM_ORG_ACME_NOTIFY_EU_X_TOKEN';
+  const SHADOW = (e) => `${e} has the shape of a notify hook of this org, but another org's id also maps onto it by the longest-prefix rule, so the studio never reads it — set the journey's notify.urlEnv to one that GET /api/journeys/notify-hooks lists, and its notify.authEnv to that hook's _TOKEN or leave it out, before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  const sh = { ...S15, envNames: ['MY_MCP_TOKEN'], refusedEnvNames: ['MY_HOOK_URL', EU, EU_TOKEN], refusedShadows: [EU, EU_TOKEN, EU, 'MY_MCP_TOKEN', 'UNLISTED', 'not a name', null] };
+  assert(normaliseSnippetInput(sh).refusedShadows.join() === `${EU},${EU_TOKEN}` && normaliseSnippetInput(S15).refusedShadows.length === 0,
+         'refusedShadows: refused names only, validated, de-duplicated; none by default');
+  const shs = scheduleSnippets(sh);
+  for (const [f, pre] of [['cron', '# '], ['schtasks', 'REM '], ['actions', '          # '], ['k8s', '                # ']]) {
+    const ls = shs[f].split('\n');
+    for (const e of [EU, EU_TOKEN]) {
+      assert(ls.filter(l => l.includes(e)).join('\n') === `${pre}${SHADOW(e)}` && !shs[f].includes(`${e} is not a notify hook`), `${f}: ${e} — another org's id also maps onto it, a hook the listing lists, never a rename`, ls.filter(l => l.includes(e)));
+    }
+    assert(ls.includes(`${pre}${REFUSED('MY_HOOK_URL')}`), `${f}: a refused name of no hook's shape keeps its comment`);
+    assert(shs[f] === [EU, EU_TOKEN].reduce((s, e) => s.replace(REFUSED(e), SHADOW(e)), scheduleSnippets({ ...sh, refusedShadows: undefined })[f]), `${f}: only the shadowed names' comments differ`);
+    assert(scheduleSnippets({ ...sh, refusedTaken: true })[f] === scheduleSnippets({ ...sh, refusedShadows: undefined, refusedTaken: true })[f], `${f}: refusedTaken wins — no name can be the org's hook there`);
+    const paired = { ...S15, envNames: [HOOK], refusedEnvNames: [EU_TOKEN], refusedPairs: [{ authEnv: EU_TOKEN, urlEnv: HOOK, tokenEnv: OWN }] };
+    assert(scheduleSnippets({ ...paired, refusedShadows: [EU_TOKEN] })[f] === scheduleSnippets(paired)[f], `${f}: beside the org's own hook, the PAIR comment wins`);
+    assert(noSecret(shs[f]), `${f}: no value with refusedShadows`);
+  }
   // An org whose every hook name another org's id takes (refusedTaken: pay beside pay-notify, a KEY tie) has no
   // name a rename could reach — its hook-shaped names already have the shape — so each refused name, hook-shaped or
   // bare, is told to leave notify out, as the run's TAKEN refusal says; never the rename.
