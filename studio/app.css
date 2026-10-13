@@ -6177,8 +6177,9 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
 /* "Deploy" action button on compare pack header — keep the green ink */
 .cpc-action-btn.cpc-action-deploy { border-color: var(--BLD); color: var(--BLD); }
 .cpc-action-btn.cpc-action-deploy:hover { background: var(--BLD-tint); }
-/* Drawn unavailable (a static bundle deploys nothing): aria-disabled, the reason inside the control, as written. */
-.cpc-action-btn.cpc-action-deploy.is-unavailable { opacity: .6; cursor: not-allowed; }
+/* Drawn unavailable (a static bundle deploys nothing): aria-disabled, the reason inside the control, as written; no
+   opacity — the reason line is what marks it, and faded it fails AA (the house rule, the Settings zone below). */
+.cpc-action-btn.cpc-action-deploy.is-unavailable { cursor: not-allowed; }
 .cpc-action-btn.cpc-action-deploy.is-unavailable:hover { background: none; }
 .cpc-action-btn.is-unavailable > span:not(.cpc-action-icon) { text-transform: none; }
 

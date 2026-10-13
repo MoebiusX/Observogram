@@ -165,11 +165,12 @@
   border: 1px solid var(--BLD, var(--ux-accent)); background: var(--BLD, var(--ux-accent)); color: #fff;
 }
 .ux-rm-deploy-btn:hover { filter: brightness(1.1); }
-/* Drawn unavailable (a static bundle deploys nothing): aria-disabled, the reason inside the control; a filled
-   button drops its fill, so the reason reads on the card and the control no longer looks like the next step.
+/* Drawn unavailable (a static bundle deploys nothing): aria-disabled, the reason inside the control, no opacity —
+   the reason line is what marks it, and faded it fails AA; a filled button drops its fill, so the reason reads on
+   the card and the control no longer looks like the next step.
    The decision's buttons (.remediate-deploy-btn) take their fill from app.css and the reskin, whose hover
    (body.chrome-observa .remediate-deploy-btn:hover:not(:disabled)) paints it again: these selectors outrank both. */
-.ux-rm-view .is-unavailable[data-ux-action], .ux-rm-deploy-btn.is-unavailable { opacity: .6; cursor: not-allowed; }
+.ux-rm-view .is-unavailable[data-ux-action], .ux-rm-deploy-btn.is-unavailable { cursor: not-allowed; }
 .ux-rm-view .ux-primary-btn.is-unavailable, .ux-rm-deploy-btn.is-unavailable,
 .ux-rm-view .remediate-deploy-btn.is-unavailable, .ux-rm-view .remediate-deploy-btn.is-unavailable:hover:not(:disabled) { background: transparent; color: var(--ux-ink); border-color: var(--ux-line); }
 .ux-rm-view .ux-primary-btn.is-unavailable:hover, .ux-rm-deploy-btn.is-unavailable:hover, .ux-rm-view .remediate-deploy-btn.is-unavailable:hover:not(:disabled) { filter: none; }

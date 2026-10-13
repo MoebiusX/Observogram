@@ -110,7 +110,10 @@
 // draws the drift drill's deploy aria-disabled with the reason, and a click
 // explains it and opens no modal; its retrofeed downloads the updated pack a
 // server returns for the request the page sent; Remediate draws its decision
-// header's deploy and the response path's per-SLO button the same way; rows
+// header's deploy and the response path's per-SLO button the same way; every
+// deploy control those views draw, in the light and dark themes, at full
+// opacity with each text in it clearing AA (the house rule: no opacity on an
+// unavailable control, whose reason line is what marks it); rows
 // 4 (a one-pack bundle), 6, 11 and 12 render as written, and the rendered
 // Compare, Diagnose, Traceability and Remediate hold no phrase S4 holds the
 // studio's source to; the Conformance view's HTML anchor downloads the report
@@ -152,7 +155,7 @@ import {
 } from './build-studio-bundle.mjs';
 import { childEnv, serve } from '../server/fixtures/serve-child.mjs';
 import { createStaticBackend, bundleStyles, noticeText } from '../studio/static-backend.mjs';
-import { serverNeeded, staticRemedy } from '../studio/static-remedies.mjs';
+import { serverNeeded, staticRemedy, DEPLOY_CONTROLS } from '../studio/static-remedies.mjs';
 import { viewDiffFor } from '../studio/compare-identity.mjs';
 import { bindTaxonomy } from '../studio/taxonomy.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
@@ -1257,6 +1260,65 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     const none = { background: 'rgba(0, 0, 0, 0)', filter: 'none' };
     assert.deepEqual({ rest, hovered }, { rest: rest.map(() => none), hovered: none }, `${sel}: drawn without its fill, under the pointer too`);
   };
+  // No opacity on a control drawn unavailable — its reason line is what marks it, and faded it fails AA (the house
+  // rule, studio/app.css's Settings zone). Every deploy control drawn on the page, in both themes: at full opacity
+  // through its ancestors, and each text inside it (the label, a sub line, the reason) clearing AA on what it is drawn
+  // on — colours composited through every ancestor's background and opacity; a glyph alone (an icon) 3:1.
+  const readsAA = async (page, where, controls) => {
+    const { measured, offenders } = await page.evaluate(async (sel) => {
+      const parse = (c) => { const m = /rgba?\(([^)]+)\)/.exec(c); if (!m) return [0, 0, 0, 0]; const p = m[1].split(/[\s,/]+/).filter(Boolean).map(Number); return [p[0], p[1], p[2], p[3] ?? 1]; };
+      const over = (top, below) => [0, 1, 2].map((i) => top[i] * top[3] + below[i] * (1 - top[3])).concat(1);
+      // An element's text (fg) or its backdrop (no fg): each ancestor's background over the canvas's white, the text
+      // over its own element's, each opacity applied to its subtree.
+      const drawn = (el, fg) => {
+        const chain = [];
+        for (let n = el; n; n = n.parentElement) chain.unshift(n);
+        const go = (i, below) => {
+          const cs = window.getComputedStyle(chain[i]);
+          const own = over(parse(cs.backgroundColor), below);
+          const inner = i + 1 < chain.length ? go(i + 1, own) : (fg ? over(fg, own) : own);
+          const op = Number(cs.opacity);
+          return [0, 1, 2].map((k) => inner[k] * op + below[k] * (1 - op)).concat(1);
+        };
+        return go(0, [255, 255, 255, 1]);
+      };
+      const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); };
+      const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+      const settled = () => Promise.all(document.getAnimations().filter((a) => a.effect?.getComputedTiming().endTime !== Infinity).map((a) => a.finished.catch(() => {})));
+      const root = document.documentElement;
+      const was = root.getAttribute('data-theme');
+      const measured = new Set();
+      const offenders = [];
+      for (const theme of ['light', 'dark']) {
+        root.setAttribute('data-theme', theme);
+        window.getComputedStyle(root).color;   // the theme applied, so its transitions start and are waited for
+        await settled();
+        for (const c of document.querySelectorAll(sel)) {
+          if (!c.getClientRects().length) continue;
+          const name = sel.split(', ').filter((s) => c.matches(s)).join(' ');
+          measured.add(name);
+          let op = 1;
+          for (let n = c; n; n = n.parentElement) op *= Number(window.getComputedStyle(n).opacity);
+          if (op !== 1) offenders.push(`${theme} ${name}: opacity ${op}`);
+          for (const t of [c, ...c.querySelectorAll('*')]) {
+            const text = [...t.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim();
+            if (!text) continue;
+            const cs = window.getComputedStyle(t);
+            const size = parseFloat(cs.fontSize);
+            const need = !/[\p{L}\p{N}]/u.test(text) || size >= 24 || (size >= 18.66 && Number(cs.fontWeight) >= 700) ? 3 : 4.5;
+            const r = ratio(drawn(t, parse(cs.color)), drawn(t, null));
+            if (r < need) offenders.push(`${theme} ${name} "${text.slice(0, 40)}": ${r.toFixed(2)}:1 (needs ${need})`);
+          }
+        }
+      }
+      if (was === null) root.removeAttribute('data-theme');
+      else root.setAttribute('data-theme', was);
+      await settled();
+      return { measured: [...measured].sort(), offenders };
+    }, DEPLOY_CONTROLS);
+    assert.deepEqual(measured, [...controls].sort(), `${where}: the deploy controls measured`);
+    assert.deepEqual(offenders, [], `${where}: every unavailable deploy control at full opacity, each text in it clearing AA, in both themes`);
+  };
 
   // (i) The in-page /api/diff text, byte for byte the server's, under three browser locales — two that tailor ASCII
   // (Czech sorts ch after h, Estonian z between s and t), so a sort that followed the reader's locale would show.
@@ -1314,6 +1376,7 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     await page.click('.diag-subtab[data-sub="compare"]');
     await page.waitForSelector('.compare-summary .c-mode', { timeout: T });
     await expectMode('behaviour', [5, 15, 5]);
+    await readsAA(page, 'Compare', ['[data-action="deploy"]']);
     await page.waitForSelector('.compare-identity input[value="name"]:not([disabled])', { timeout: T });
     await page.click('.compare-identity input[value="name"]');
     await expectMode('name', [4, 16, 4]);
@@ -1329,7 +1392,9 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     await page.waitForSelector('.diag-subtab[data-sub="grade"]', { timeout: T });
     await page.click('.diag-subtab[data-sub="grade"]');
     await page.waitForSelector('#diag-compare #drift-deploy-missing', { state: 'attached', timeout: T });
+    await page.waitForSelector('.diag-chain-deploy', { state: 'attached', timeout: T });
     assert.deepEqual(await drawnUnavailable(page, '#drift-deploy-missing'), [{ aria: 'true', why: DEPLOY, title: null }], 'the drift drill\'s deploy is drawn unavailable with the reason');
+    await readsAA(page, 'Diagnose → Assessment', ['#drift-deploy-missing', '.diag-chain-deploy']);
     await clickExplains(page, '#drift-deploy-missing');
     // Row 12: the drift-free blocker's fix keeps what the reader can do here.
     assert.ok((await viewText(page)).includes(staticRemedy('drift-free-fix', { product })), 'row 12');
@@ -1362,6 +1427,7 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     const { page, ctx } = await open(base, { selectedPackId: 'payment-linked', compareBId: 'payment-live', view: 'compile' });
     await page.waitForSelector('[data-ux-action="rm-deploy"]', { state: 'attached', timeout: T });
     await page.waitForSelector('.rflow-deploy', { state: 'attached', timeout: T });
+    await readsAA(page, 'Remediate', ['[data-ux-action="rm-deploy"]', '.rflow-deploy']);
     await drawnUnfilled(page, '.ux-rm-actions .remediate-deploy-btn');   // before a click's toast can cover it
     for (const sel of ['[data-ux-action="rm-deploy"]', '.rflow-deploy']) {
       const drawn = await drawnUnavailable(page, sel);
@@ -1386,6 +1452,7 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     const sel = '.ux-rm-actions [data-ux-action="rm-deploy-all"]';
     await page.waitForSelector(sel, { state: 'attached', timeout: T });
     assert.deepEqual(await drawnUnavailable(page, sel), [{ aria: 'true', why: DEPLOY, title: null }], `${sel}: drawn unavailable with the reason`);
+    await readsAA(page, 'Remediate (one pack)', ['[data-ux-action="rm-deploy-all"]']);
     await drawnUnfilled(page, sel);
     await clickExplains(page, sel);
     await ctx.close();
