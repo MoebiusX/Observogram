@@ -1330,6 +1330,10 @@ export function mcpPickerCanAdmin({ access = null, probe = null, orgId = null } 
   return false;
 }
 
+// The empty list's line without sign-in when the server named no way in:
+// none is named.
+const NO_REGISTER_WHY = { token: 'registering one needs a signed-in admin', open: 'registering one is not open to you here' };
+
 // `endpoints` is state.mcpEndpoints (null: not read or failed → typed only;
 // [] → none registered); `remembered` the remembered endpoint id for this
 // org; `liveUrl` the live status's URL; `typedUrl` the remembered typed URL
@@ -1345,10 +1349,17 @@ export function mcpPickerCanAdmin({ access = null, probe = null, orgId = null } 
 // (GET /api/mcp-endpoints `policy.typed`; R4 — an admin's, never without
 // sign-in): `{ allowed: false }` makes the picker list-only — no "Type a
 // URL…", never the typed value, no URL row — and the empty list's hint
-// names the way in for this reader (`posture` 'token': registering needs a
-// signed-in admin). `unreadable`: the list (and so the policy) could not
-// be read — said, since nothing else can be sent.
-export function mcpTargetModel({ endpoints = null, remembered = null, liveUrl = null, typedUrl = '', purpose = 'read', orgName = null, canAdmin = false, chosen = null, typed = { allowed: true }, posture = null, unreadable = false } = {}) {
+// names the way in for this reader: without sign-in (`posture` 'token' or
+// 'open'), the server's own sentence — `registerWhy`, GET /api/mcp-endpoints
+// `policy.register.why`, whose way in is the server's for the posture it
+// runs in (bound off the loopback, a request not sent straight to it,
+// OBSERVOGRAM_AUTH=off) — and, when it named none, no way in at all; signed
+// in, an admin registers them. `unreadable`: the policy's read failed — the
+// pickers draw no list beside it (studio/app.mjs mcpPickerEndpoints), so a
+// reader refused a typed URL is told the list could not be read, since
+// nothing else can be sent: never an empty list's refusal the server did not
+// make.
+export function mcpTargetModel({ endpoints = null, remembered = null, liveUrl = null, typedUrl = '', purpose = 'read', orgName = null, canAdmin = false, chosen = null, typed = { allowed: true }, posture = null, registerWhy = null, unreadable = false } = {}) {
   const typedAllowed = typed?.allowed !== false;
   const list = isArr(endpoints) ? endpoints : [];
   const options = [
@@ -1373,25 +1384,40 @@ export function mcpTargetModel({ endpoints = null, remembered = null, liveUrl = 
   }
   const org = orgName || ORG_FALLBACK;
   let hint = null;
-  if (isArr(endpoints) && !endpoints.length) {
+  if (!typedAllowed && unreadable) {
+    hint = { text: `${org}'s MCP endpoints could not be read just now — reopen this to try again.`, button: null };
+  } else if (isArr(endpoints) && !endpoints.length) {
     if (canAdmin) hint = { text: `No MCP endpoint is registered in ${org} yet.`, button: 'Settings → MCP endpoints' };
     else if (typedAllowed) hint = { text: `No MCP endpoint is registered in ${org} yet — an admin registers them.`, button: null };
-    else if (posture === 'token') hint = { text: `No MCP endpoint is registered in ${org} yet — registering one needs a signed-in admin (npm run users -- add <login>).`, button: null };
+    else if (posture === 'token' || posture === 'open') hint = { text: `No MCP endpoint is registered in ${org} yet — ${registerWhy || NO_REGISTER_WHY[posture]}.`, button: null };
     else hint = { text: `No MCP endpoint is registered in ${org} yet — an admin registers them in Settings → MCP endpoints.`, button: null };
-  } else if (!typedAllowed && unreadable) {
-    hint = { text: `${org}'s MCP endpoints could not be read just now — reopen this to try again.`, button: null };
   }
   return { show: list.length > 0, options, value, showUrl: typedAllowed && picked === null, authHelp, hint };
 }
 
 // The status line when a picker has nothing to send: the typed URL named
 // only for a reader who may type one (R4); with no endpoint, the way in for
-// this reader (`canRegister`: the server says it may register one).
-export function mcpTargetMissingText({ typedAllowed = true, orgName = null, empty = false, canRegister = false } = {}) {
+// this reader (`canRegister`: the server says it may register one) — without
+// sign-in (`posture` 'token' or 'open') the server's own sentence,
+// `registerWhy`, as the empty list's hint says it (mcpTargetModel); the
+// policy's read failed (`unreadable`), that the list could not be read, as
+// the picker's hint says it: no list is drawn beside it to choose from.
+export function mcpTargetMissingText({ typedAllowed = true, orgName = null, empty = false, canRegister = false, posture = null, registerWhy = null, unreadable = false } = {}) {
   if (typedAllowed) return 'choose an MCP endpoint or type a URL';
   const org = orgName || ORG_FALLBACK;
-  if (empty) return `no MCP endpoint is registered in ${org} yet — ${canRegister ? 'register one in Settings → MCP endpoints' : 'an admin registers them in Settings → MCP endpoints'}`;
-  return `choose one of ${org}'s MCP endpoints`;
+  if (unreadable) return `${org}'s MCP endpoints could not be read just now — reopen this to try again`;
+  if (!empty) return `choose one of ${org}'s MCP endpoints`;
+  if (canRegister) return `no MCP endpoint is registered in ${org} yet — register one in Settings → MCP endpoints`;
+  if (posture === 'token' || posture === 'open') return `no MCP endpoint is registered in ${org} yet — ${registerWhy || NO_REGISTER_WHY[posture]}`;
+  return `no MCP endpoint is registered in ${org} yet — an admin registers them in Settings → MCP endpoints`;
+}
+
+// The deploy history's roll back toast when the deploy modal's picker has
+// nothing to send (studio/app.mjs doRollback): what roll back needs, then
+// the picker's own line (mcpTargetMissingText) as it reads — several end in
+// their own instruction, so nothing is appended after it.
+export function rollbackTargetMissingText(missing) {
+  return `Roll back needs an MCP target in the form above: ${missing}.`;
 }
 
 const LOOPBACK_V4 = /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
@@ -1402,7 +1428,12 @@ const LOOPBACK_MAPPED = /^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/;
 // (`{ allowed, listed, origins, listedOnly }`). → { origin, name, error }:
 // `error` null when the registration may be sent, else the sentence (the
 // server's own rule: without sign-in, a loopback MCP or a listed origin);
-// `name` the endpoint's name (its host). The server judges again.
+// `name` the endpoint's name (its host). The server judges again. The
+// refusal names the one way out that holds in every posture — the
+// operator's list — and no sign-in way: GET /api/mcp-endpoints names none
+// for this reader (register is allowed), and on the loopback a server
+// without sign-in runs OBSERVOGRAM_AUTH=off, where adding a user arms
+// nothing (the server's POST answer names its restart).
 export function mcpRegisterCheck(url, register = null) {
   let u = null;
   try { u = new URL(String(url ?? '').trim()); } catch { /* not a URL */ }
@@ -1413,7 +1444,7 @@ export function mcpRegisterCheck(url, register = null) {
   const host = u.hostname;
   const loopback = host === 'localhost' || LOOPBACK_V4.test(host) || host === '[::1]' || LOOPBACK_MAPPED.test(host);
   if (loopback || !register.listedOnly || register.origins === null || (isArr(register.origins) && register.origins.includes(origin))) return { origin, name, error: null };
-  return { origin, name, error: `${origin} cannot be registered on a server without sign-in — only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS; the server's operator lists it there, or a first user arms sign-in (npm run users -- add <login>)` };
+  return { origin, name, error: `${origin} cannot be registered on a server without sign-in — only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS; the server's operator lists it there` };
 }
 
 // The request's target: an endpoint → { mcpEndpointId, mcpAuth? }; a typed

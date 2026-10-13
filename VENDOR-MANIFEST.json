@@ -48,8 +48,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/artefact-classify.mjs": {
-      "sha256": "70e5c2065c6b0da2cb97c194331a16c60b45b67e63270f38c468d11e57c3ba0f",
-      "bytes": 24945,
+      "sha256": "bf5fcd8c0f457b4deacf39c52e2f5ddf5a4f5a3c2023cba41d6698053c1702a2",
+      "bytes": 25071,
       "exports": [
         "DEFINES_RULES",
         "FAMILIES",
@@ -754,8 +754,8 @@
       "releasedExports": null
     },
     "tools/lib/mcp-server-settings.mjs": {
-      "sha256": "44956e15c3675263d07156a67d840cec99b80f3ff5e2b69c4d8be32b208b8d6e",
-      "bytes": 40524,
+      "sha256": "6cb14e564b41c247a2b7479498e0e1a068f94b0421fd8b3af4f896d0d6fe4934",
+      "bytes": 40698,
       "exports": [
         "FIELD_TYPES",
         "GENERIC_NAMES",

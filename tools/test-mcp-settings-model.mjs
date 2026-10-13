@@ -11,7 +11,8 @@
  * the line after the connection test — from the read's outcome, never from
  * the verdict alone; and, through the studio server's pass-through, the
  * target rule's first step only, what its describe and submit answered and
- * how the lede and the status lines say so. The URL rules and the contract are the real tools/lib
+ * how the lede and the status lines say so, and the box its policy refusal
+ * names, with the line that says why. The URL rules and the contract are the real tools/lib
  * modules, handed in as the browser hands in its /lib imports.
  */
 import { test } from 'node:test';
@@ -22,9 +23,10 @@ import * as lib from './lib/mcp-server-settings.mjs';
 import * as safety from './lib/mcp-url-safety.mjs';
 import {
   pageIsLoopback, settingsGateModel, settingsTargetModel, descriptorReadModel, statusLine, ledeText,
-  fieldInputSpec, actionNote, primaryBlock, actionBlock, policyView, verifiedLine, proxyDescribeModel, proxyOutcomeModel,
+  fieldInputSpec, actionNote, primaryBlock, actionBlock, policyView, serverAckModel, secretsEmptiedLine, verifiedLine, proxyDescribeModel, proxyOutcomeModel,
 } from '../studio/mcp-settings-model.mjs';
 import { pingResultModel } from '../studio/live-model.mjs';
+import { servicesRefusal } from '../studio/services-api.mjs';
 
 const libs = { lib, safety };
 const PAGE = 'http://127.0.0.1:8090';
@@ -46,8 +48,33 @@ test('the gate: register.allowed opens it; a session below admin, the local call
   assert.equal(settingsGateModel({ access: admin, mcpTargetPolicy: null, hasTarget: true }).reason, 'Checking whether you may configure the MCP server…');
   assert.equal(settingsGateModel({ access: admin, mcpTargetPolicy: { typed: { allowed: false }, register: { allowed: false }, failed: true }, hasTarget: true }).reason,
     'Could not check whether you may configure the MCP server — close and reopen the panel to try again.');
-  assert.match(settingsGateModel({ access: { posture: 'token', role: 'viewer' }, hasTarget: true }).reason, /^Configuring the MCP server needs a signed-in admin — this server has no sign-in: add the first user with npm run users -- add <login>/);
+  assert.equal(settingsGateModel({ access: { posture: 'token', role: 'viewer' }, hasTarget: true }).reason, 'Checking whether you may configure the MCP server…', 'the token posture waits for the server\'s sentence');
   assert.equal(settingsGateModel({ access: { posture: 'unknown' }, hasTarget: true }).enabled, false);
+});
+
+// The way in the button names without sign-in is the server's own sentence
+// (GET /api/mcp-endpoints `policy.register.why`, which ends in the server's
+// way in for its posture — OBSERVOGRAM_AUTH=off included); a sentinel here,
+// the real sentences per posture in server/test-mcp-target-policy.mjs.
+test('the gate in the token posture: the server\'s own sentence as served, never a way in of its own; unread, failed or silent, it names none; the module keeps no copy of the rule', () => {
+  const token = { posture: 'token', role: 'viewer', orgName: 'Default' };
+  const WHY = 'anonymous callers are viewers here; registering an MCP endpoint needs a signed-in admin; <the server\'s way in>';
+  const refused = { typed: { allowed: false, why: 'x' }, register: { allowed: false, why: WHY } };
+  for (const hasTarget of [true, false]) {
+    assert.deepEqual(settingsGateModel({ access: token, mcpTargetPolicy: refused, hasTarget, missing: 'choose an MCP endpoint or type a URL' }),
+      { enabled: false, reason: `Configuring the MCP server is endpoint configuration: ${WHY}.` }, `hasTarget ${hasTarget}: the server's sentence first`);
+  }
+  assert.equal(settingsGateModel({ access: token, mcpTargetPolicy: null, hasTarget: true }).reason, 'Checking whether you may configure the MCP server…');
+  assert.equal(settingsGateModel({ access: token, mcpTargetPolicy: { typed: { allowed: false }, register: { allowed: false }, failed: true }, hasTarget: true }).reason,
+    'Could not check whether you may configure the MCP server — close and reopen the panel to try again.', 'a failed read names no way in');
+  assert.equal(settingsGateModel({ access: token, mcpTargetPolicy: { typed: { allowed: false }, register: { allowed: false } }, hasTarget: true }).reason,
+    'Configuring the MCP server is endpoint configuration, which is not open to you here.', 'a policy without a sentence names no way in');
+  for (const [posture, policy] of [['token', null], ['token', refused], ['static', null], ['open', refused]]) {
+    const reason = settingsGateModel({ access: { posture, role: 'viewer' }, mcpTargetPolicy: policy, hasTarget: true, pageOrigin: 'https://cdn.example', bundleOrigins: null }).reason ?? '';
+    assert.doesNotMatch(reason.replace(WHY, ''), /npm run users|OIDC|OBSERVOGRAM_AUTH|sign-in/, `${posture}: no way in but the server's`);
+  }
+  const src = readFileSync(new URL('../studio/mcp-settings-model.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /npm run users|configure OIDC|has no sign-in/, 'the rule lives in the server (server/authz.mjs noSignInWay) only');
 });
 
 test('the gate: no target says the panel\'s own sentence; the static bundle needs a loopback page or a baked origin list', () => {
@@ -211,6 +238,85 @@ test('the settings policy in the modal: one entry per rule, its notes, and the f
   assert.equal(actionBlock({ policyState: 'served', findings: lib.policyFindings(policy, generic, {}), sent: ['url'] }), null, 'an unevaluated rule concerns the form, not the action');
   assert.equal(actionBlock({ policyState: 'failed', findings: [], sent: ['grafanaUrl'] }), primaryBlock({ policyState: 'failed' }));
   assert.equal(actionBlock({ policyState: 'failed', findings: [], sent: [] }), null);
+});
+
+test('a rule the studio server\'s 409 names: its box from the page\'s policy, else the refusal\'s sentence; a line for a rule the server could not check, another for its match; drawn only where the page\'s check found none, its ack blocking until ticked; an emptied secret is asked for again', () => {
+  const ACK = 'I have operator approval for this target';
+  const WARN = 'Non-approved backend host.';
+  const { policy } = lib.compileSettingsPolicy({
+    version: 1,
+    rules: [
+      { when: { field: 'grafanaUrl', pattern: '^(?!https://approved\\.)' }, warn: WARN, require: { ack: ACK } },
+      { when: { type: 'text', pattern: '^root$' }, warn: 'A shared login.' },
+    ],
+  }, { timed: false });
+  const UNCHECKED = 'The studio server could not check these settings against this rule, so it counts as matched — tick the box to send them with your approval.';
+  const MATCHED = 'The studio server\'s check of these settings matched this rule, where the check in this page did not.';
+  // The refusal as requestJson throws it: the body read by servicesRefusal, the rule and the flag kept, value-free.
+  const body = (extra) => ({ ok: false, denied: 'policy-ack', rule: 0, ...extra, error: `${WARN} — tick "${ACK}" in the server settings` });
+  const unchecked = servicesRefusal(409, JSON.stringify(body({ unevaluated: true })));
+  assert.deepEqual([unchecked.message, unchecked.status, unchecked.denied, unchecked.rule, unchecked.unevaluated], [`409: ${WARN} — tick "${ACK}" in the server settings`, 409, 'policy-ack', 0, true]);
+  const matched = servicesRefusal(409, body({}));
+  assert.deepEqual([matched.rule, matched.unevaluated], [0, undefined]);
+  assert.deepEqual(serverAckModel(unchecked, policy), { rule: 0, warn: WARN, ack: ACK, note: UNCHECKED, fields: ['grafanaUrl'] });
+  assert.deepEqual(serverAckModel(matched, policy), { rule: 0, warn: WARN, ack: ACK, note: MATCHED, fields: ['grafanaUrl'] });
+  // No policy in the page (or none with that rule's ack): the refusal's own sentence.
+  const drifted = servicesRefusal(409, { ok: false, denied: 'policy-ack', rule: 3, unevaluated: true, error: 'Keys — "rotate" — first. — tick "I rotated the key" in the server settings' });
+  assert.deepEqual(serverAckModel(drifted, null), { rule: 3, warn: 'Keys — "rotate" — first.', ack: 'I rotated the key', note: UNCHECKED, fields: null });
+  assert.deepEqual(serverAckModel(servicesRefusal(409, body({ rule: 1 })), policy), { rule: 1, warn: WARN, ack: ACK, note: MATCHED, fields: null }, 'rule 1 has no ack in the page');
+  // Any other refusal draws nothing.
+  for (const e of [null, new Error('409: x'), servicesRefusal(403, { ok: false, denied: 'origin', error: 'not listed' }), servicesRefusal(409, { ok: false, denied: 'descriptor', error: 'reopen' }),
+    Object.assign(new Error('409: w — tick "a" in the server settings'), { denied: 'policy-ack', rule: -1 }), Object.assign(new Error('409: no sentence'), { denied: 'policy-ack', rule: 2 })]) {
+    assert.equal(serverAckModel(e, null), null, String(e?.message));
+  }
+  // The modal: the named rule is an entry where the page found nothing, its line its note; it blocks until ticked.
+  const form = lib.parseSettingsDescriptor(JSON.stringify({ version: 1, endpoint: '/configure', fields: [{ name: 'grafanaUrl', label: 'Backend base URL', type: 'url', required: true }, { name: 'user', label: 'User', type: 'text' }] })).descriptor;
+  const approved = lib.policyFindings(policy, form, { grafanaUrl: 'HTTPS://Approved.example/' });
+  assert.deepEqual(approved, [], 'the page\'s check finds nothing for the approved host');
+  const named = [serverAckModel(unchecked, policy)];
+  const view = policyView(approved, [], named);
+  assert.deepEqual(view, { rules: [{ rule: 0, warn: WARN, ack: ACK, notes: [UNCHECKED] }], block: `Tick "${ACK}" to send — ${WARN}` });
+  assert.equal(policyView(approved, ['0'], named).block, null, 'ticked, the send goes — with the ack');
+  assert.equal(primaryBlock({ policyState: 'served', ackReason: view.block }), view.block);
+  // The page found the rule itself: its own entry, once, without the server's line.
+  const own = policyView(lib.policyFindings(policy, form, { grafanaUrl: 'https://elsewhere.example' }), [], named);
+  assert.deepEqual(own.rules, [{ rule: 0, warn: WARN, ack: ACK, notes: [] }]);
+  // A later 409 naming another rule adds its box, in rule order.
+  const both = policyView(lib.policyFindings(policy, form, { user: 'root' }), ['0'], [...named, serverAckModel(drifted, null)]);
+  assert.deepEqual(both.rules.map((r) => [r.rule, r.notes]), [[0, [UNCHECKED]], [1, []], [3, [UNCHECKED]]]);
+  assert.equal(both.block, 'Tick "I rotated the key" to send — Keys — "rotate" — first.');
+  assert.deepEqual(policyView(approved, [], []), { rules: [], block: null }, 'none named: the page\'s check alone');
+  // A declared action waits for a named box when it carries a field the
+  // page's rule checks — its field, or the form's fields of its type —, and
+  // for any field when the rule is not the page's.
+  assert.equal(actionBlock({ policyState: 'served', findings: approved, sent: ['grafanaUrl'], named }), view.block, 'an action that carries the rule\'s field waits for the box');
+  assert.equal(actionBlock({ policyState: 'served', findings: approved, sent: ['grafanaUrl'], ticked: ['0'], named }), null, 'ticked, it goes');
+  assert.equal(actionBlock({ policyState: 'served', findings: approved, sent: ['user'], named }), null, 'one that carries another field does not wait');
+  assert.equal(actionBlock({ policyState: 'served', findings: approved, sent: [], named }), null, 'nor one that carries nothing');
+  assert.equal(actionBlock({ policyState: 'served', findings: approved, sent: ['grafanaUrl'] }), null, 'none named: the page\'s check alone');
+  assert.equal(actionBlock({ policyState: 'served', findings: lib.policyFindings(policy, form, { grafanaUrl: 'https://elsewhere.example' }), sent: ['user'], named }), null, 'the page found the rule itself, and the action carries no field it checks');
+  assert.equal(actionBlock({ policyState: 'served', findings: approved, sent: ['user'], named: [serverAckModel(drifted, null, form)] }), 'Tick "I rotated the key" to send — Keys — "rotate" — first.', 'a rule the page does not hold: any field it sends');
+  const { policy: typed } = lib.compileSettingsPolicy({ version: 1, rules: [{ when: { type: 'text', pattern: '^admin$' }, warn: 'An admin login.', require: { ack: 'I meant admin' } }] }, { timed: false });
+  const byType = servicesRefusal(409, { ok: false, denied: 'policy-ack', rule: 0, unevaluated: true, error: 'An admin login. — tick "I meant admin" in the server settings' });
+  assert.deepEqual(serverAckModel(byType, typed, form).fields, ['user'], 'a rule by type checks the form\'s fields of that type');
+  assert.equal(serverAckModel(byType, typed).fields, null, 'without the form the page cannot tell');
+  assert.equal(actionBlock({ policyState: 'served', findings: [], sent: ['user'], named: [serverAckModel(byType, typed, form)] }), 'Tick "I meant admin" to send — An admin login.');
+  assert.equal(actionBlock({ policyState: 'served', findings: [], sent: ['grafanaUrl'], named: [serverAckModel(byType, typed, form)] }), null);
+  // A rule by type the page found on one field and the 409 named for another
+  // the action carries: the action waits for the box (the page's) as the send does.
+  const { policy: urls } = lib.compileSettingsPolicy({ version: 1, rules: [{ when: { type: 'url', pattern: '^(?!https://approved\\.)' }, warn: WARN, require: { ack: ACK } }] }, { timed: false });
+  const twoUrls = lib.parseSettingsDescriptor(JSON.stringify({ version: 1, endpoint: '/configure', fields: [{ name: 'grafanaUrl', label: 'Backend base URL', type: 'url' }, { name: 'lokiUrl', label: 'Logs base URL', type: 'url' }], actions: [{ name: 'repointLogs', label: 'Repoint the logs backend', fields: ['lokiUrl'] }] })).descriptor;
+  const onFirst = lib.policyFindings(urls, twoUrls, { grafanaUrl: 'https://other.example/', lokiUrl: 'https://approved.example/' });
+  assert.deepEqual(onFirst.map((x) => [x.rule, x.field]), [[0, 'grafanaUrl']], 'the page finds the rule on the first URL only');
+  const forSecond = [serverAckModel(unchecked, urls, twoUrls)];
+  assert.equal(actionBlock({ policyState: 'served', findings: onFirst, sent: ['lokiUrl'] }), null, 'none named: the page\'s finding is on a field the action does not carry');
+  assert.equal(actionBlock({ policyState: 'served', findings: onFirst, sent: ['lokiUrl'], named: forSecond }), `Tick "${ACK}" to send — ${WARN}`, 'named, the action that carries the other URL waits for the box');
+  assert.equal(actionBlock({ policyState: 'served', findings: onFirst, sent: ['lokiUrl'], ticked: ['0'], named: forSecond }), null, 'ticked, it goes');
+  assert.deepEqual(policyView(onFirst, [], forSecond).rules, [{ rule: 0, warn: WARN, ack: ACK, notes: [] }], 'one box, the page\'s');
+  // The send emptied the secrets that held a value: the notice asks for them again.
+  assert.equal(secretsEmptiedLine(1), 'The secret you typed was emptied when the request left — type it again before you send.');
+  assert.equal(secretsEmptiedLine(2), 'The secrets you typed were emptied when the request left — type them again before you send.');
+  assert.equal(secretsEmptiedLine(0), '');
 });
 
 const ping = (verdict, read) => {
