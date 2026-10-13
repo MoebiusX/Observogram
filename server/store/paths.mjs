@@ -80,7 +80,17 @@
 // root). A path that lies outside the root is refused alike, through such a
 // link or on such a volume (a declared false refusal). A path whose realpath
 // stops only at parts that do not exist yet, below a root it reads, is judged
-// as before, and one through a link whose target opens is followed to it.
+// as before, and one through a link whose target opens is followed to it —
+// except that a share's server follows a junction on its volume itself, and
+// SMB before Windows 10/Server 1709 (at either end) has no normalized-name
+// query, so there the native realpath names a path through a share as the
+// client opened it, the junction by its own name: placed by the share's
+// directory, \\myhost\ws\links\j\users.json, with C:\ws\links\j a junction to
+// C:\ws\orgs\beta\sub, was spelled C:\ws\links\j\users.json, outside the
+// root. So with { deleting: true } a path answers null too when a part that
+// walk read is a link to lstatSync — realpath named it without following
+// it — or one lstatSync cannot read now; through a junction outside the root
+// it is refused alike (a declared false refusal).
 // Placement only ever makes a check more conservative, since a file id names
 // a file on one volume, not on one host: a sector copy keeps the MFT, so a
 // machine cloned from this host's image, or this drive's disk image attached
@@ -138,12 +148,16 @@ export function comparedPath(own, { windows = ON_WINDOWS, path = nodePath, realp
   const exists = (part) => {   // lstatSync answers part, or cannot read it for another reason than that it does not exist
     try { fsLstat(part); return true; } catch (e) { return e?.code !== 'ENOENT'; }
   };
+  const linked = (part) => {   // lstatSync answers part as a link, or (a part the walk read) cannot read it now
+    try { return fsLstat(part).isSymbolicLink(); } catch { return true; }
+  };
   return (p, beside, { deleting = false } = {}) => {
     const unread = [];   // the parts of p the walk that spells native could not read, nearest first
     const native = real(path.resolve(p), unread);
     if (beside === undefined) return form(native);
-    // realpath cannot resolve p — not even its root, or at a part that exists: it may lead anywhere (above)
-    if (deleting && (unread.some((part) => path.dirname(part) === part) || unread.some(exists))) return null;
+    // realpath cannot resolve p — not even its root, or at a part that exists — or named a link it read as a part (a
+    // junction a share's server followed): it may lead anywhere (above)
+    if (deleting && (unread.some((part) => path.dirname(part) === part) || unread.some(exists) || lineage(native).slice(unread.length).some(linked))) return null;
     const other = real(path.resolve(beside));
     if (root(native) === root(other)) return form(native);
     const theirs = new Map();   // file id → the directory (or file) of beside's lineage it names

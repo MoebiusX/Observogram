@@ -28,7 +28,11 @@
  * link is read as written): realpath stops at a part that exists, the rest
  * read as written compared as outside the root, and the purge deleted a users
  * file recorded through it; one through a link whose target opens, or whose
- * realpath stops only at a part not created yet, is judged as before. A
+ * realpath stops only at a part not created yet, is judged as before. So may
+ * one through a junction on a share's volume, which the share's server follows:
+ * before Windows 10/Server 1709 the native realpath names it as the client
+ * opened it, and placed by the share's directory it compared as outside the
+ * root, and the purge deleted it. A
  * machine cloned from this host's image, or this drive's disk image attached
  * as E:, keeps its volume's serial
  * and its files' ids, the root directory's among them, so a file id places
@@ -495,6 +499,59 @@ test('purge-org refuses a users file recorded through a link on the drive whose 
   }
   // Only purge-org passes deleting: the export compares a path through such a link as before.
   assert.equal(exportRelation('C:\\links\\betasub\\new', 'C:\\ws', linksDown), null, 'the export\'s comparison is unchanged');
+});
+
+// Junctions on the drive below the share \\myhost\ws (C:\ws): C:\ws\links\j to C:\ws\orgs\beta\sub, under beta's root,
+// and C:\ws\links\o to C:\out, outside it. A share's server follows a junction on its volume itself, and SMB before
+// Windows 10/Server 1709 (at either end — Windows Server 2016 among them) has no normalized-name query, so the native
+// realpath names \\myhost\ws\links\j\users.json as the client opened it, a path with no link to follow, while statSync
+// reads C:\ws\orgs\beta\sub\users.json's file id: placed by the share's directory (C:\ws), it was spelled
+// C:\ws\links\j\users.json, outside the root. From 1709 on, at both ends, the server answers the normalized path, and the
+// junction is followed to its target (SINCE_1709).
+const JUNCTIONED = { shares: { ...SUBSHARES, '\\\\localhost\\C$': 'C:\\' }, mapped: { 'Z:': '\\\\myhost\\ws' }, links: { 'C:\\ws\\links\\j': 'C:\\ws\\orgs\\beta\\sub', 'C:\\ws\\links\\o': 'C:\\out' } };
+const BEFORE_1709 = ntfsVolume(SUBSHARED_FILES, { ...JUNCTIONED, unnormalized: true });
+const before1709 = comparedPath(null, { windows: true, path: win32, realpathSync: BEFORE_1709.realpathSync, statSync: BEFORE_1709.statSync, lstatSync: BEFORE_1709.lstatSync });
+const SINCE_1709 = ntfsVolume(SUBSHARED_FILES, JUNCTIONED);
+const since1709 = comparedPath(null, { windows: true, path: win32, realpathSync: SINCE_1709.realpathSync, statSync: SINCE_1709.statSync, lstatSync: SINCE_1709.lstatSync });
+
+test('purge-org refuses a users file recorded through a junction on a share\'s volume that the native realpath names as the client opened it (SMB before Windows 10/Server 1709) — placed by the share\'s directory, it compared as outside the root — and judges a path through the share that passes no link as before', () => {
+  const root = 'C:\\ws\\orgs\\beta';
+  const through = '\\\\myhost\\ws\\links\\j\\users.json';
+  assert.equal(BEFORE_1709.realpathSync.native(through), through, 'before 1709, the native realpath names it as the client opened it');
+  assert.equal(BEFORE_1709.statSync(through).ino, BEFORE_1709.statSync('C:\\ws\\orgs\\beta\\sub\\users.json').ino, 'while statSync reads the users file under the root');
+  assert.equal(BEFORE_1709.lstatSync('\\\\myhost\\ws\\links\\j').isSymbolicLink(), true, 'and lstatSync answers the junction as a link');
+  assert.equal(SINCE_1709.realpathSync.native(through), 'C:\\ws\\orgs\\beta\\sub\\users.json', 'from 1709 on, the native realpath follows it');
+  // C:\ws\orgs\beta\sub\users.json through the junction, by any name of the share — beside the root on the drive, or named
+  // through the share too (the workspace at \\myhost\ws), where it compared by its name alone.
+  for (const users of [through, '\\\\myhost\\ws\\LINKS\\J\\Users.json', '//myhost/ws/links/j/users.json', '\\\\?\\UNC\\myhost\\ws\\links\\j\\users.json', '\\\\localhost\\C$\\ws\\links\\j\\users.json', 'Z:\\links\\j\\users.json']) {
+    for (const r of [root, '\\\\myhost\\ws\\orgs\\beta']) {
+      assert.equal(usersUnderRoot(users, r, before1709), 'unplaced', `before 1709, purge-org refuses: ${users} may lie under ${r}`);
+      assert.equal(usersUnderRoot(users, r, before1709, {}), false, `before, compared as outside ${r}, the purge deleted C:\\ws\\orgs\\beta\\sub\\users.json: ${users}`);
+      assert.equal(usersUnderRoot(users, r, since1709), true, `from 1709 on, it lies under ${r}: refused as lying there (${users})`);
+    }
+  }
+  // Through the junction to C:\out, outside the root: refused alike before 1709 (a declared false refusal, whose way out
+  // holds), purged from 1709 on. Named on the drive, either junction is followed as before.
+  assert.equal(usersUnderRoot('\\\\myhost\\ws\\links\\o\\users.json', root, before1709), 'unplaced', 'before 1709, through the junction to C:\\out: refused alike');
+  assert.equal(usersUnderRoot('\\\\myhost\\ws\\links\\o\\users.json', root, since1709), false, 'from 1709 on: purged');
+  for (const volume of [before1709, since1709]) {
+    assert.equal(usersUnderRoot('C:\\ws\\links\\j\\users.json', root, volume), true, 'on the drive, through the junction under the root: refused as lying there');
+    assert.equal(usersUnderRoot('C:\\ws\\links\\o\\users.json', root, volume), false, 'on the drive, through the junction to C:\\out: purged');
+  }
+  // A path through the share that passes no link is placed and judged as before: under the root, refused as lying
+  // there; outside it — a users file there, or one not created yet — purged.
+  assert.equal(usersUnderRoot('\\\\myhost\\ws\\orgs\\beta\\sub\\users.json', root, before1709), true, 'through the share under the root: refused as lying there');
+  for (const users of ['\\\\localhost\\C$\\out\\users.json', '\\\\myhost\\ws\\db\\users.json']) assert.equal(usersUnderRoot(users, root, before1709), false, `purged: ${users}`);
+  // Whether a part is a link is read after the walk that spelled the path: a part that walk read and lstatSync then
+  // cannot (the share gone down after the walk, back for the placement's reads) is not known to be no link — refused.
+  const lstatDown = (p) => {
+    if (win32.resolve(p).startsWith('\\\\')) throw Object.assign(new Error(`ENOENT: no such file or directory, lstat '${p}'`), { code: 'ENOENT' });
+    return BEFORE_1709.lstatSync(p);
+  };
+  const blinked = comparedPath(null, { windows: true, path: win32, realpathSync: BEFORE_1709.realpathSync, statSync: BEFORE_1709.statSync, lstatSync: lstatDown });
+  assert.equal(usersUnderRoot(through, root, blinked), 'unplaced', `lstatSync cannot read the parts the walk read: refused (${through})`);
+  // Only purge-org passes deleting: the export compares a path through the junction as before.
+  assert.equal(exportRelation('\\\\myhost\\ws\\links\\j\\new', 'C:\\ws', before1709), 'inside', 'the export\'s comparison is unchanged');
 });
 
 // Reparse points on the drive that are no link, whose target cannot be opened — a cloud placeholder whose provider is not

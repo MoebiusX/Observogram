@@ -1505,7 +1505,16 @@ let the purge through. It refuses with the way out it now names for a share
 no file id places too: if the file does not lie under the root, delete the
 root by hand, then run purge-org again; if it does, move it out first. One
 outside the root through such a part, or anywhere on such a volume, is
-refused alike (a declared false refusal). A link whose target opens is
-followed as before, a path not created yet on a drive the walk reads is
-judged as before, and the other checks compare as before.
-Tests: 1425 → 1428 (three more in `server/test-store-paths.mjs`).
+refused alike (a declared false refusal). A share's server follows a
+junction on its volume itself, and SMB before Windows 10/Server 1709 has no
+normalized-name query, so there the native realpath names a path through a
+share as the client opened it: `\\myhost\ws\links\j\users.json`, with
+`C:\ws\links\j` a junction to `C:\ws\orgs\beta\sub`, was placed by the
+share's directory as `C:\ws\links\j\users.json`, outside the root, and
+purge-org deleted it. The check now also refuses a path when a part the walk
+read is a link to `lstatSync`, or one `lstatSync` cannot read now (through a
+junction outside the root, a declared false refusal too). A link whose target
+opens is followed as before, on the drive and through a share whose realpath
+follows it, a path not created yet on a drive the walk reads is judged as
+before, and the other checks compare as before.
+Tests: 1425 → 1429 (four more in `server/test-store-paths.mjs`).
