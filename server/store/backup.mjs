@@ -27,9 +27,10 @@
 // left beside the restored file would be replayed onto it.
 
 import { chmodSync, chownSync, closeSync, copyFileSync, constants as fsConstants, existsSync, mkdirSync, openSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, parse, resolve } from 'node:path';
 import { openRaw, pragma, prepare, resolveDbPath } from './db.mjs';
 import { SCHEMA_VERSION, userVersion } from './migrations.mjs';
+import { comparedPath } from './paths.mjs';
 
 const MEMORY = ':memory:';
 const SIDECARS = ['', '-wal', '-shm'];
@@ -67,19 +68,37 @@ function canonical(path) {
   try { return realpathSync(path); } catch {}
   try { return join(realpathSync(dirname(path)), basename(path)); } catch { return path; }
 }
+// The form ownFile compares in (server/store/paths.mjs): canonical's off Windows, the on-disk spelling,
+// case folded, on Windows, where a backup named C:\WS\observogram.db-wal is the database's own -wal.
+const compared = comparedPath(canonical);
 
 // '' when path is the database file, its suffix when it is the database's
-// -wal/-shm/-journal (the next open deletes one it finds stale), else null.
-function ownFile(dbFile, path) {
-  const db = canonical(dbFile);
-  const p = canonical(path);
+// -wal/-shm/-journal (the next open deletes one it finds stale), else null:
+// by its path alone. With placed, the same for path placed beside the
+// database by its file id (on Windows, across a share's name: paths.mjs).
+function ownFile(dbFile, path, { placed = false } = {}) {
+  const db = compared(dbFile);
+  const p = placed ? compared(path, dbFile) : compared(path);
   return ['', '-wal', '-shm', '-journal'].find((s) => p === `${db}${s}`) ?? null;
 }
 
-function refuseOwnFile(dbFile, path) {
+function refuseOwnFile(dbFile, path, way) {
   const s = ownFile(dbFile, path);
   if (s === '') throw refuse(`${path} is the database itself`);
   if (s !== null) throw refuse(`${path} is the database's own ${s} file — the next open would delete it; choose another path`);
+  refusePlacedOwnFile(dbFile, path, way);
+}
+
+// On Windows a path only its file id makes one of the database's files — that file named through a share or a
+// mapped drive (\\localhost\C$\ws\observogram.db-wal beside C:\ws\observogram.db), or a copy that keeps its file
+// ids (another machine cloned from this host's image, an attached disk image) — is neither taken for it nor for
+// another file: it is refused naming `way`, which holds on the database's own drive, where paths compare by name.
+function refusePlacedOwnFile(dbFile, path, way) {
+  const s = ownFile(dbFile, path, { placed: true });
+  if (s === null) return;
+  throw refuse(`${path} matches ${s ? `the database's own ${s} file` : 'the database'} ${dbFile}${s} only by its file id, not by its `
+    + 'path: it may be that file named through a network share or a mapped drive, or a copy that keeps its file id (another '
+    + `machine cloned from this host's image, an attached disk image). Nothing was changed. ${way}`);
 }
 
 const isOurs = ({ version, storeId }) => version >= 1 && typeof storeId === 'string' && storeId.length > 0;
@@ -127,10 +146,12 @@ export async function backupStore(dest, { dbPath = resolveDbPath() } = {}) {
   if (!existsSync(source)) throw refuse(`no database at ${source} — nothing to back up (this command never creates one; check OBSERVOGRAM_DB and OBSERVOGRAM_WORKSPACE)`);
   if (!dest) throw refuse('name the backup file: packc store backup <path>');
   const target = resolve(dest);
-  refuseOwnFile(source, target);
+  const way = `Back up to a new path under ${parse(source).root}`;
+  refuseOwnFile(source, target, way);
   if (existsSync(target)) throw refuse(`${target} exists — a backup never overwrites; choose a new path`);
   const tmp = `${target}.tmp`;
   if (ownFile(source, tmp) !== null) throw refuse(`${tmp}, the backup's temporary file, would be the database's own file — choose another path`);
+  refusePlacedOwnFile(source, tmp, way);
   if (existsSync(tmp)) throw refuse(`${tmp} exists (an interrupted backup?) — remove it and run again`);
   mkdirSync(dirname(target), { recursive: true });
   // A backup holds the password records: VACUUM INTO would create the file
@@ -166,7 +187,7 @@ export async function restoreStore(backup, { dbPath = resolveDbPath(), now = new
   const target = resolve(dbPath);
   const source = resolve(backup);
   if (!existsSync(source)) throw refuse(`no backup at ${source}`);
-  refuseOwnFile(target, source);
+  refuseOwnFile(target, source, `If it is a backup, copy it to a new path under ${parse(target).root}, then restore from the copy`);
   const ts = stamp(now);
   mkdirSync(dirname(target), { recursive: true });
 

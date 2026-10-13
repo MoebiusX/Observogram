@@ -96,6 +96,7 @@ import { baseWorkspacePath } from '../../tools/lib/brand-env.mjs';
 import { parse as parseYaml } from '../../tools/lib/mini-yaml.mjs';
 import { closeStore, nowIso, openStore, resolveDbPath, tx } from './db.mjs';
 import { assertNotInUse, identifyFile } from './backup.mjs';
+import { comparedPath } from './paths.mjs';
 import { listAudit, writeAudit } from './audit.mjs';
 import { getMeta, getMetaJson, isIdentityArmed, putMeta, setMeta, storeId } from './meta.mjs';
 import { getOrg, listOrgs, setOrgRoot } from './orgs.mjs';
@@ -151,6 +152,14 @@ function refuse(message) {
 function realOr(path) {
   try { return realpathSync(path); } catch { return resolve(path); }
 }
+// realOr spells a path (the journey rewrites' base, below); a check compares two through compared
+// (server/store/paths.mjs): realOr's form off Windows, the on-disk spelling, case folded, on Windows —
+// where compared(p, beside) places p beside the path it is checked against across a share's name. A
+// containment refusal compares placed (purge-org's users file with { deleting: true }: a share nothing places
+// may lie under the root it deletes, on any volume); a check whose answer writes or skips (the in-place
+// detection, the scan for another store, the no-marker check) compares by path alone and refuses what only
+// placement equates.
+const compared = comparedPath(realOr);
 
 const slashed = (p) => p.replaceAll('\\', '/');
 
@@ -409,8 +418,15 @@ function exportDirectory(target, base) {
     if (hops >= 40) throw refuse(`${target} is a symlink loop. Nothing was changed. Choose an empty or new directory`);
     into = resolve(dirname(into), readlinkSync(into));
   }
-  const t = realOr(into);
-  const b = realOr(base);
+  const t = compared(into, base);
+  if (t === null) {   // Windows: through a share on the workspace's volume (or its serial) that file ids cannot place, or one not reached (store/paths.mjs)
+    throw refuse(`${named(into)} is not a path on a local drive, and a network share on the volume that holds the workspace ${base} `
+      + '(or on another machine\'s volume that has its serial, as a machine cloned from the same image does), or one that cannot be '
+      + 'reached, may lead inside it — a directory export there could write files without the in-place steps. Nothing was changed. '
+      + 'Name the directory by its path on a local drive; if it has none on this host, export to an empty or new directory on a local '
+      + `drive outside the workspace, then copy that directory to ${target}`);
+  }
+  const b = compared(base);
   const inside = t.startsWith(b + sep);
   if (t === b || inside || b.startsWith(t.endsWith(sep) ? t : t + sep)) {
     // The in-place way out is named only for a workspace that exists: the default <cwd>/.observogram may not.
@@ -434,13 +450,13 @@ function exportDirectory(target, base) {
 // The candidates are the *.db files directly in <base> and <base>/db (<base>/observogram.db, the default, among
 // them), each opened read-only without migrating; one that cannot be read is refused naming it.
 async function assertNoOtherStore(base, path, id) {
-  const own = realOr(path);
+  const own = compared(path);   // the database itself by its path alone: a file id never skips another (store/paths.mjs)
   for (const dir of [base, join(base, 'db')]) {
     let names;
     try { names = readdirSync(dir); } catch (e) { if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR') continue; throw e; }
     for (const name of names.filter((n) => n.endsWith('.db')).sort()) {
       const file = join(dir, name);
-      if (realOr(file) === own) continue;
+      if (compared(file) === own) continue;
       try { if (!statSync(file).isFile()) continue; } catch { continue; }
       let other;
       try {
@@ -467,7 +483,16 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
   out.write(`store: ${path}\n`);
   if (!existsSync(path)) throw refuse(`no database at ${path} — nothing to export (this command never creates one; check OBSERVOGRAM_DB and OBSERVOGRAM_WORKSPACE)`);
   const target = resolve(dir);
-  const inPlace = realOr(target) === realOr(base);
+  // The workspace by its path alone. On Windows a target only its file id places on it (store/paths.mjs) may be the
+  // workspace named another way, or a copy that keeps its file ids: the export takes it for neither.
+  const inPlace = compared(target) === compared(base);
+  if (!inPlace && compared(target, base) === compared(base)) {
+    const inPlaceWay = existsSync(base) ? `To export the workspace in place, stop the server and run packc store export ${base}; otherwise choose` : 'Choose';
+    throw refuse(`${target} matches the workspace ${base} only by its file id, not by its path: it may be the workspace named through `
+      + 'a network share or a mapped drive, or a copy that keeps its file ids (another machine cloned from this host\'s image, an '
+      + 'attached disk image) — an in-place export could work on a directory other than the one named, and a directory export '
+      + `could write files without the in-place steps. Nothing was changed. ${inPlaceWay} an empty or new directory`);
+  }
   let into = target;   // where a directory export writes: the target, or the directory its symlink resolves to
   if (inPlace) {
     if (!existsSync(base)) throw refuse(`the workspace ${base} does not exist — an in-place export works on an existing workspace. Nothing was changed. Check OBSERVOGRAM_WORKSPACE, or choose an empty or new directory for a directory export`);
@@ -497,9 +522,18 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
         // A database elsewhere proves nothing about the directory — an empty or unrelated one would pass, and the
         // export would record that directory's files as this store's legacy files.
         await assertNoOtherStore(base, path, id);   // the more specific refusal first: it names the other store
-        const own = realOr(path);
-        const b = realOr(base);
-        if (!own.startsWith(b + sep)) {
+        const b = compared(base);
+        if (!compared(path).startsWith(b + sep)) {   // in the workspace by its path alone (store/paths.mjs)
+          // Windows: through a share on the workspace's volume that file ids cannot place, or one not reached — or placed in
+          // the workspace by its file id alone: the workspace named another way, or a copy that keeps its file ids.
+          const placed = compared(path, base);
+          if (placed === null || placed.startsWith(b + sep)) {
+            throw refuse(`${mp} is missing and ${path} is not named under ${base}: through a network share or a mapped drive, or as `
+              + 'a copy that keeps its file ids (another machine cloned from this host\'s image, an attached disk image), it may or '
+              + `may not lie in the workspace, so ${base} is not known to be store ${id}'s. Nothing was changed. Set OBSERVOGRAM_DB to `
+              + `the database's path under ${base}, then run the export again; otherwise choose an empty or new directory for a `
+              + 'directory export');
+          }
           throw refuse(`${mp} is missing and ${path} lives outside ${base}: the workspace ${base} is not known to be store ${id}'s. `
             + `Nothing was changed. If ${base} is this store's workspace, start the server once with OBSERVOGRAM_WORKSPACE=${base} `
             + `and OBSERVOGRAM_DB=${path} (the start rewrites the marker), stop it, then run the export again; otherwise choose an `
@@ -778,16 +812,22 @@ export async function purgeOrg(id, { dbPath = resolveDbPath(), base = baseWorksp
     const rel = `orgs/${id}`;
     if (org.root !== rel) throw refuse(`org ${id}'s root is ${org.root}, not ${rel} — only an org's own directory is purged; nothing was deleted`);
     const root = join(base, 'orgs', id);
-    const parent = realOr(join(base, 'orgs'));
+    const parent = compared(join(base, 'orgs'));
     let present = false;
     if (lexists(root)) {
       const st = lstatSync(root);
       if (!st.isDirectory()) throw refuse(`${root} is not a directory (${st.isSymbolicLink() ? 'a symlink, never followed' : 'a file'}) — move it aside by hand; nothing was deleted`);
-      if (!realOr(root).startsWith(parent + sep)) throw refuse(`${root} resolves outside ${join(base, 'orgs')} — nothing was deleted`);
+      if (!compared(root).startsWith(parent + sep)) throw refuse(`${root} resolves outside ${join(base, 'orgs')} — nothing was deleted`);
       present = true;
     }
     const usersFile = getMeta(db, 'users_file');
-    if (usersFile && isAbsolute(usersFile) && present && realOr(usersFile).startsWith(realOr(root) + sep)) {
+    const users = usersFile && isAbsolute(usersFile) && present ? compared(usersFile, root, { deleting: true }) : undefined;
+    if (users === null) {   // Windows: through a share that file ids cannot place, on any volume, or one not reached (store/paths.mjs)
+      throw refuse(`the recorded users file ${usersFile} is not a path on a local drive, and a network share no file id places beside `
+        + `${root} (one on any volume, a DFS link, one that cannot be reached) may lead under it — nothing was deleted. If it does not `
+        + `lie under ${root}, delete ${root} by hand, then run purge-org again: it drops org ${id}'s records`);
+    }
+    if (users?.startsWith(compared(root) + sep)) {
       throw refuse(`the recorded users file ${usersFile} lies under ${root} — move it out first; nothing was deleted`);
     }
     const underRoot = (k) => !isAbsolute(k) && slashed(k).startsWith(`${rel}/`);
