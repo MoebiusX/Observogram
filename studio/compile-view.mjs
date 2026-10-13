@@ -574,9 +574,12 @@ function remediationHeaderHtml(m) {
 
 // One strategy card: effect, name, technical term, source → destination,
 // proposed changes and the next action. Disabled strategies say why — in the
-// static posture, how a bundle gets the live pack they need (row 28).
+// static posture, how a bundle gets the live pack they need (row 28), on a
+// card drawn without opacity (is-static-no-b, ux-remediate.css): that reason
+// line is what marks it, and faded it fails AA.
 function strategyCardHtml(o, m) {
   const disabled = o.needsB && !m.haveB;
+  const staticNoB = disabled && isStatic();
   const active = o.id === m.op;
   const recommended = m.rec?.op === o.id;
   const effect = REMEDIATE_EFFECTS[o.effect];
@@ -586,7 +589,7 @@ function strategyCardHtml(o, m) {
     ? 'Needs a live pack to compare with'
     : (count.n ? plural(count.n, m.haveB ? 'proposed change' : 'artefact') : 'No changes proposed');
   return `
-    <button type="button" class="ux-rm-strategy${active ? ' is-active' : ''}${recommended ? ' is-recommended' : ''}"
+    <button type="button" class="ux-rm-strategy${active ? ' is-active' : ''}${recommended ? ' is-recommended' : ''}${staticNoB ? ' is-static-no-b' : ''}"
       data-op="${o.id}" data-ux-action="rm-op-${o.id}" aria-pressed="${active ? 'true' : 'false'}"${disabled ? ' disabled' : ''}
       title="${escapeHtml(`${g.term}: ${g.def}`)}">
       <span class="ux-rm-strategy-top">

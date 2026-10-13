@@ -60,6 +60,10 @@
   background: color-mix(in srgb, var(--ux-accent) 8%, var(--ux-bg-2));
 }
 .ux-rm-strategy:disabled { opacity: 0.65; cursor: not-allowed; }
+/* Drawn disabled in the static posture (no Pack B to enable it): no opacity — its reason line, how a bundle gets a
+   live pack, is what marks it, and faded it fails AA (the house rule, app.css's Settings zone). The reskin's
+   body.chrome-observa button:disabled fades every disabled button; this selector outranks it. */
+.ux-rm-view .ux-rm-strategy.is-static-no-b:disabled { opacity: 1; }
 .ux-rm-strategy-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .ux-rm-strategy-title { font: 600 15px/1.3 var(--sans); color: var(--ux-ink); }
 .ux-rm-strategy-term { font: 500 13px/1.3 var(--mono); color: var(--ux-ink-3); }

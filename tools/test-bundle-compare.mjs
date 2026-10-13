@@ -124,7 +124,8 @@
 // a bundle of one pack, with no Pack B, the deploy controls it draws are the
 // ones docs/CHANGELOG.md's entry for Deploy in the static bundle counts and
 // names as what a bundle without a comparison reaches; every
-// deploy control those views draw, in the light and dark themes, at full
+// deploy control those views draw, and Remediate's strategy cards drawn
+// disabled with no Pack B (row 28), in the light and dark themes, at full
 // opacity with each text in it clearing AA (the house rule: no opacity on an
 // unavailable control, whose reason line is what marks it); rows
 // 4 (a one-pack bundle — on Compare, and on the Assessment Remediate's
@@ -1390,10 +1391,11 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     assert.deepEqual({ rest, hovered }, { rest: rest.map(() => none), hovered: none }, `${sel}: drawn without its fill, under the pointer too`);
   };
   // No opacity on a control drawn unavailable — its reason line is what marks it, and faded it fails AA (the house
-  // rule, studio/app.css's Settings zone). Every deploy control drawn on the page, in both themes: at full opacity
+  // rule, studio/app.css's Settings zone). Every deploy control drawn on the page (or every control `selector` names:
+  // Remediate's strategy cards drawn disabled, whose reason line is row 28), in both themes: at full opacity
   // through its ancestors, and each text inside it (the label, a sub line, the reason) clearing AA on what it is drawn
   // on — colours composited through every ancestor's background and opacity; a glyph alone (an icon) 3:1.
-  const readsAA = async (page, where, controls) => {
+  const readsAA = async (page, where, controls, selector = DEPLOY_CONTROLS) => {
     const { measured, offenders } = await page.evaluate(async (sel) => {
       const parse = (c) => { const m = /rgba?\(([^)]+)\)/.exec(c); if (!m) return [0, 0, 0, 0]; const p = m[1].split(/[\s,/]+/).filter(Boolean).map(Number); return [p[0], p[1], p[2], p[3] ?? 1]; };
       const over = (top, below) => [0, 1, 2].map((i) => top[i] * top[3] + below[i] * (1 - top[3])).concat(1);
@@ -1444,10 +1446,11 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
       else root.setAttribute('data-theme', was);
       await settled();
       return { measured: [...measured].sort(), offenders };
-    }, DEPLOY_CONTROLS);
-    assert.deepEqual(measured, [...controls].sort(), `${where}: the deploy controls measured`);
-    assert.deepEqual(offenders, [], `${where}: every unavailable deploy control at full opacity, each text in it clearing AA, in both themes`);
+    }, selector);
+    assert.deepEqual(measured, [...controls].sort(), `${where}: the controls measured`);
+    assert.deepEqual(offenders, [], `${where}: every unavailable control measured at full opacity, each text in it clearing AA, in both themes`);
   };
+  const DISABLED_STRATEGY = '.ux-rm-strategy:disabled';
 
   // (i) The in-page /api/diff text, byte for byte the server's, under three browser locales — two that tailor ASCII
   // (Czech sorts ch after h, Estonian z between s and t), so a sort that followed the reader's locale would show.
@@ -1590,6 +1593,7 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     }), DEPLOY_CONTROLS);
     assert.deepEqual(reachProblems(reached), [], 'the CHANGELOG counts and names the deploy controls a bundle without a comparison reaches');
     assert.deepEqual(await disabledStrategies(page), NEED_B.map((op) => [op, staticRemedy('remediate-strategy-no-b', { product })]), 'row 28: no live pack is built in to load');
+    await readsAA(page, 'Remediate (one pack): row 28', [DISABLED_STRATEGY], DISABLED_STRATEGY);
     await noServerAction(page, 'Remediate (one pack)');
     await readsAA(page, 'Remediate (one pack)', ['[data-ux-action="rm-deploy-all"]']);
     await drawnUnfilled(page, sel);
@@ -1603,6 +1607,7 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     const { page, ctx } = await open(base, { selectedPackId: 'payment-service', view: 'compile' });
     await page.waitForSelector('[data-ux-action="rm-compiler-open"]', { timeout: T });
     assert.deepEqual(await disabledStrategies(page), NEED_B.map((op) => [op, staticRemedy('remediate-strategy-no-b', { product, liveBuiltIn: true })]), 'row 28: the live pack built in');
+    await readsAA(page, 'Remediate (the live pack built in): row 28', [DISABLED_STRATEGY], DISABLED_STRATEGY);
     await page.click('[data-ux-action="rm-compiler-open"]');
     await page.waitForSelector('.ux-rm-output.is-live', { timeout: T });
     const card = await page.evaluate(() => {
@@ -1646,6 +1651,7 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     assert.equal(note, staticRemedy('remediate-no-b', { product, packALive: true }), 'row 18 over a live Pack A');
     assert.ok(note.includes('this bundle carries no live pack besides Pack A;'), note);
     assert.deepEqual(await disabledStrategies(page), NEED_B.map((op) => [op, staticRemedy('remediate-strategy-no-b', { product, packALive: true })]), 'row 28 over a live Pack A');
+    await readsAA(page, 'Remediate (a live Pack A): row 28', [DISABLED_STRATEGY], DISABLED_STRATEGY);
     await noServerAction(page, 'Remediate (a live Pack A)');
     await ctx.close();
   }
