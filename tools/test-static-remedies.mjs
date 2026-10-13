@@ -21,7 +21,7 @@
 // share (the taxonomy and the stale-pair reasons Pair by gives, the bind
 // error) to theirs. S4 is the phrase ledger: every line of a studio module
 // that names a server action (re-scan, Connect MCP, redraft, deploy what is
-// missing, …) or describes the deploy review the static posture never opens
+// missing, load a live pack, …) or describes the deploy review the static posture never opens
 // (deploy review, after a review, …) is listed below with its disposition —
 // the row of the design's table that gives it a static-posture text, why a
 // bundle reader cannot reach it, a control, a comment, or what it describes —
@@ -172,10 +172,11 @@ test('S2 — every deploy entry point outside prototype space is drawn unavailab
   assert.ok(open.indexOf(guard) < open.indexOf("$('#deploy-modal')"), 'before the modal is looked up');
 });
 
-// A phrase that tells the reader to take a server action (design A.8, the phrase ledger's pattern), or describes the
-// deploy review the static posture never opens (deploy review, review the destination, after a review, then deploy,
-// confirmed separately — Remediate's deploy texts, rows 20–27).
-const SERVER_ACTION = /\b(re-?scan|rescan|scan (?:live|a repo(?:sitory)?)|connect mcp|from (?:its |a live )?mcp|redraft|re-?upload|refresh(?:es|ing)? (?:the )?live|refresh live evidence|capture a live draft|live draft again|deploy what is missing|deploy the repository|deploy review|review (?:of |the )?destination|after a review|then deploy|confirmed separately)\b/i;
+// A phrase that tells the reader to take a server action (design A.8, the phrase ledger's pattern; load a live pack —
+// a bundle loads only the packs built in — Remediate's disabled strategy cards, row 28), or describes the deploy review
+// the static posture never opens (deploy review, review the destination, after a review, then deploy, confirmed
+// separately — Remediate's deploy texts, rows 20–27).
+const SERVER_ACTION = /\b(re-?scan|rescan|scan (?:live|a repo(?:sitory)?)|connect mcp|from (?:its |a live )?mcp|redraft|re-?upload|refresh(?:es|ing)? (?:the )?live|refresh live evidence|capture a live draft|live draft again|load a live pack|deploy what is missing|deploy the repository|deploy review|review (?:of |the )?destination|after a review|then deploy|confirmed separately)\b/i;
 
 
 // Each static text, exactly, for each product — the brand's name is free-form, and the server is "the <product>
@@ -217,6 +218,9 @@ const TEXTS = {
   'remediate-deploy-meaning': (server) => `Deploying the ticked rows needs ${server}`,
   'remediate-rows-hint': (server) => `Ticked rows can be deployed from ${server}; this bundle deploys nothing, so the boxes cannot be changed here. Rows without a box need a repository patch, a decision or a manual fix.`,
   'remediate-not-compared-summary': (server) => `not compared with live; deploying them needs ${server}`,
+  'remediate-strategy-no-b': (server, { liveBuiltIn, packALive }) => (liveBuiltIn
+    ? 'Choose the live pack built into this bundle as Pack B to enable'
+    : `To enable, pick a live pack as Pack B: ${NOLIVE(server, packALive)}`),
 };
 // Traceability's live-evidence texts in the static posture (rows 14, 15), exactly; metricConfirm takes the metric.
 const TRACE_TEXTS = (server) => ({
@@ -261,17 +265,18 @@ test('S3 — the static texts, exact for five products (no article picked by the
     assert.deepEqual(textsOf(trace), TRACE_TEXTS(server), `the static live-evidence texts / ${product}`);
     for (const [k, text] of Object.entries(textsOf(trace))) assert.doesNotMatch(text, SERVER_ACTION, `${k}: no server action the reader cannot take here`);
   }
-  // Which input each text reads: liveBuiltIn for seven, packALive for the four of them that say the bundle carries no
+  // Which input each text reads: liveBuiltIn for eight, packALive for the five of them that say the bundle carries no
   // live pack (a live Pack A is one: they say none besides it), packsBuiltIn for one, none for the rest.
   const reads = (field) => STATIC_REMEDY_KEYS.filter((key) => staticRemedy(key, { product: 'P', [field]: true }) !== staticRemedy(key, { product: 'P' }));
-  assert.deepEqual(reads('liveBuiltIn'), ['trace-no-b', 'diagnose-banner', 'drift-free-no-live', 'live-measure', 'no-live-hint', 'flow-not-compared-diagnose', 'remediate-no-b']);
-  assert.deepEqual(reads('packALive'), ['trace-no-b', 'diagnose-banner', 'flow-not-compared-diagnose', 'remediate-no-b']);
+  assert.deepEqual(reads('liveBuiltIn'), ['trace-no-b', 'diagnose-banner', 'drift-free-no-live', 'live-measure', 'no-live-hint', 'flow-not-compared-diagnose', 'remediate-no-b', 'remediate-strategy-no-b']);
+  assert.deepEqual(reads('packALive'), ['trace-no-b', 'diagnose-banner', 'flow-not-compared-diagnose', 'remediate-no-b', 'remediate-strategy-no-b']);
   assert.deepEqual(reads('packsBuiltIn'), ['need-pack']);
   // Row 1 with a live pack built in is the view's own text: nothing in it names a server action.
   assert.ok(read('studio/compare-view.mjs').includes(`: '${TEXTS['trace-no-b']('', { liveBuiltIn: true })}',`), 'trace-no-b with a live pack built in is the live studio\'s words');
   assert.match('then re-scan to confirm the gap closed', SERVER_ACTION, 'the pattern finds what the live text says');
   assert.match('Redraft from MCP before acting on this drift.', SERVER_ACTION);
   assert.match('Review them, then deploy what is missing live or update the repository from live.', SERVER_ACTION);
+  assert.match('Load a live pack (Pack B) to enable', SERVER_ACTION, 'a bundle with none built in loads no live pack');
   // Remediate's deploy texts, each a description of the deploy review the static posture never opens.
   for (const live of ['Opens the deploy review with every deployable artefact; nothing is written until you confirm there.', 'Opens a review of destination, environment and artefacts; nothing is written until you confirm there.',
     'Deploy, after a review', 'Generate patch, then deploy', 'only after you review the destination, environment and artefacts', 'the patch and the deploy are confirmed separately',
@@ -356,7 +361,7 @@ test('S3 — the static texts, exact for five products (no article picked by the
 // <why>` (a control that answers the 501 sentence on use), `comment`, or `description: <why>` (it says what something
 // is, not what to do). No line is deferred: every remedy a bundle reader can reach in Compare, Diagnose, Traceability
 // and Remediate has its static text. Rows 20–27 are Remediate's deploy texts, which describe the deploy review a
-// deploy control opens on a server and which the static posture never opens.
+// deploy control opens on a server and which the static posture never opens; row 28 its disabled strategy cards.
 const LEDGER = [
   ["studio/app.mjs", "<span class=\"discover-journey-label\">Scan a repo</span>", "control: Discover's Scan a repo — answers the 501 sentence on use since W6; drawing it unavailable is bundle-discover-controls"],
   ["studio/app.mjs", "<span class=\"discover-load-label\">① Scan a repository</span>", "control: Discover's Scan a repository — answers the 501 sentence on use since W6 (bundle-discover-controls)"],
@@ -386,6 +391,7 @@ const LEDGER = [
   ["studio/compile-view.mjs", "live:    { label: 'Changes live systems',   note: 'only after you review the destination, environment and artefacts' },", "row 23"],
   ["studio/compile-view.mjs", "both:    { label: 'Changes the repository and live systems', note: 'the patch and the deploy are confirmed separately' },", "row 24"],
   ["studio/compile-view.mjs", ": `Artefacts the repository declares that ${other} does not have. ${isStatic() ? staticRemedy('remediate-deploy-meaning', staticInput()) : 'Ticked rows go to the deploy review'}; the rest need a manual fix in the pack, instrumentation or platform.`;", "row 25"],
+  ["studio/compile-view.mjs", "<span class=\"ux-rm-strategy-flow\">${disabled ? escapeHtml(isStatic() ? staticRemedy('remediate-strategy-no-b', staticInput()) : 'Load a live pack (Pack B) to enable') : flowHtml(strategyFlow(o.id, m))}</span>", "row 28"],
   ["studio/compile-view.mjs", "// No live pack to compare: the deploy review opens with every deployable", "comment"],
   ["studio/compile-view.mjs", "] : [isStatic() ? staticRemedy('remediate-not-compared-summary', staticInput()) : 'not compared with live, so the deploy review lists every deployable artefact'];", "row 27"],
   ["studio/compile-view.mjs", "${resolved.deployable ? `<p class=\"ux-rm-changes-hint\">${isStatic() ? escapeHtml(staticRemedy('remediate-rows-hint', staticInput())) : 'Ticked rows go to the deploy review; untick a row to leave it out. Rows without a box need a repository patch, a decision or a manual fix.'}</p>` : ''}", "row 26"],
@@ -454,9 +460,11 @@ test('S4 — the phrase ledger: every studio line that names a server action is 
   assert.deepEqual(rowOf('studio/compile-view.mjs', "note: '"), ['row 23', 'row 24']);
   assert.deepEqual(rowOf('studio/compile-view.mjs', 'Ticked rows go to the deploy review'), ['row 25', 'row 26']);
   assert.deepEqual(rowOf('studio/compile-view.mjs', 'so the deploy review lists every deployable artefact'), ['row 27']);
+  // Remediate's disabled strategy cards: a bundle loads no live pack it does not carry.
+  assert.deepEqual(rowOf('studio/compile-view.mjs', 'Load a live pack (Pack B) to enable'), ['row 28']);
 });
 
-// Which view shows each static text (the design's A.8 rows, and rows 19–27, which this build adds).
+// Which view shows each static text (the design's A.8 rows, and rows 19–28, which this build adds).
 const WIRED_IN = {
   'retrofeed-result': 'studio/compare-view.mjs',
   'drift-partial': 'studio/compare-view.mjs',
@@ -482,6 +490,7 @@ const WIRED_IN = {
   'remediate-deploy-meaning': 'studio/compile-view.mjs',
   'remediate-rows-hint': 'studio/compile-view.mjs',
   'remediate-not-compared-summary': 'studio/compile-view.mjs',
+  'remediate-strategy-no-b': 'studio/compile-view.mjs',
 };
 // The one way a pure function takes the static texts: an explicit `remedy` input, bound where the view asks isStatic().
 const REMEDY_BINDING = 'remedy: isStatic() ? (key) => staticRemedy(key, staticInput()) : null,';
@@ -559,6 +568,7 @@ test('S5 — the wiring: each static text is shown by the view its row names, be
     "'Ticked rows go to the deploy review; untick a row to leave it out. Rows without a box need a repository patch, a decision or a manual fix.'",
     "'Opens the deploy review with every deployable artefact; nothing is written until you confirm there.'",
     "'Opens a review of destination, environment and artefacts; nothing is written until you confirm there.'",
+    "'Load a live pack (Pack B) to enable'",
   ]) assert.ok(remediate.includes(live), `the live studio keeps ${live.slice(0, 60)}`);
   // The deployable rows' boxes choose what the deploy review takes; the static posture, where none opens, draws them
   // disabled (row 26's hint says why).

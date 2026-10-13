@@ -1209,7 +1209,7 @@ async function loadPlaywright() {
 }
 // S4's pattern (tools/test-static-remedies.mjs, which holds every studio line it matches to a disposition): a server
 // action a reader of a bundle cannot take, or the deploy review a bundle never opens. C8 holds the rendered views to it.
-const SERVER_ACTION = /\b(re-?scan|rescan|scan (?:live|a repo(?:sitory)?)|connect mcp|from (?:its |a live )?mcp|redraft|re-?upload|refresh(?:es|ing)? (?:the )?live|refresh live evidence|capture a live draft|live draft again|deploy what is missing|deploy the repository|deploy review|review (?:of |the )?destination|after a review|then deploy|confirmed separately)\b/i;
+const SERVER_ACTION = /\b(re-?scan|rescan|scan (?:live|a repo(?:sitory)?)|connect mcp|from (?:its |a live )?mcp|redraft|re-?upload|refresh(?:es|ing)? (?:the )?live|refresh live evidence|capture a live draft|live draft again|load a live pack|deploy what is missing|deploy the repository|deploy review|review (?:of |the )?destination|after a review|then deploy|confirmed separately)\b/i;
 // Where C8 runs, as the documents say it: each place that claims the diff's parity in Chromium (the claim's opening
 // words below) states, in the sentence that names Chromium, that the check runs only where Playwright and its browser
 // are installed, which CI's jobs are not. CI's workflow installs no Playwright, so that limit is true; a job that gains
@@ -1357,6 +1357,9 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     return out;
   }, { paths, headers: HEADERS });
   const viewText = (page) => page.evaluate(() => document.querySelector('#layer-view')?.innerText || '');
+  // Remediate's strategy cards drawn disabled with no Pack B (row 28): each one's next step to enable it.
+  const disabledStrategies = (page) => page.evaluate(() => [...document.querySelectorAll('.ux-rm-strategy:disabled')].map((b) => [b.dataset.op, b.querySelector('.ux-rm-strategy-flow').textContent]));
+  const NEED_B = ['retrofeed', 'drift', 'all'];
   const noServerAction = async (page, where) => {
     const hits = [...new Set([...(await viewText(page)).matchAll(new RegExp(SERVER_ACTION.source, 'gi'))].map((m) => m[0]))];
     assert.deepEqual(hits, [], `${where}: the static posture names no server action the reader cannot take`);
@@ -1583,6 +1586,8 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
       return label.textContent.replace(/\s+/g, ' ').trim();
     }), DEPLOY_CONTROLS);
     assert.deepEqual(reachProblems(reached), [], 'the CHANGELOG counts and names the deploy controls a bundle without a comparison reaches');
+    assert.deepEqual(await disabledStrategies(page), NEED_B.map((op) => [op, staticRemedy('remediate-strategy-no-b', { product })]), 'row 28: no live pack is built in to load');
+    await noServerAction(page, 'Remediate (one pack)');
     await readsAA(page, 'Remediate (one pack)', ['[data-ux-action="rm-deploy-all"]']);
     await drawnUnfilled(page, sel);
     await clickExplains(page, sel);
@@ -1594,6 +1599,7 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
   {
     const { page, ctx } = await open(base, { selectedPackId: 'payment-service', view: 'compile' });
     await page.waitForSelector('[data-ux-action="rm-compiler-open"]', { timeout: T });
+    assert.deepEqual(await disabledStrategies(page), NEED_B.map((op) => [op, staticRemedy('remediate-strategy-no-b', { product, liveBuiltIn: true })]), 'row 28: the live pack built in');
     await page.click('[data-ux-action="rm-compiler-open"]');
     await page.waitForSelector('.ux-rm-output.is-live', { timeout: T });
     const card = await page.evaluate(() => {
@@ -1627,6 +1633,7 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     const note = await page.textContent('#rm-decision .ux-decision-note');
     assert.equal(note, staticRemedy('remediate-no-b', { product, packALive: true }), 'row 18 over a live Pack A');
     assert.ok(note.includes('this bundle carries no live pack besides Pack A;'), note);
+    assert.deepEqual(await disabledStrategies(page), NEED_B.map((op) => [op, staticRemedy('remediate-strategy-no-b', { product, packALive: true })]), 'row 28 over a live Pack A');
     await noServerAction(page, 'Remediate (a live Pack A)');
     await ctx.close();
   }

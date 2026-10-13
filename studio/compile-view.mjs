@@ -573,7 +573,8 @@ function remediationHeaderHtml(m) {
 }
 
 // One strategy card: effect, name, technical term, source → destination,
-// proposed changes and the next action. Disabled strategies say why.
+// proposed changes and the next action. Disabled strategies say why — in the
+// static posture, how a bundle gets the live pack they need (row 28).
 function strategyCardHtml(o, m) {
   const disabled = o.needsB && !m.haveB;
   const active = o.id === m.op;
@@ -594,7 +595,7 @@ function strategyCardHtml(o, m) {
       </span>
       <span class="ux-rm-strategy-title">${escapeHtml(strategyLabel(o.id, m.mode))}</span>
       <span class="ux-rm-strategy-term">${escapeHtml(g.term)}</span>
-      <span class="ux-rm-strategy-flow">${disabled ? 'Load a live pack (Pack B) to enable' : flowHtml(strategyFlow(o.id, m))}</span>
+      <span class="ux-rm-strategy-flow">${disabled ? escapeHtml(isStatic() ? staticRemedy('remediate-strategy-no-b', staticInput()) : 'Load a live pack (Pack B) to enable') : flowHtml(strategyFlow(o.id, m))}</span>
       <span class="ux-rm-strategy-count"><strong>${escapeHtml(countText)}</strong>${count?.note ? ` <span>· ${escapeHtml(count.note)}</span>` : ''}</span>
       <span class="ux-rm-strategy-next">Next: ${escapeHtml(strategyNext(o))}</span>
     </button>`;

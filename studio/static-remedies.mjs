@@ -79,6 +79,9 @@
 //     deployable rows' boxes, which the static posture draws disabled.
 //   remediate-not-compared-summary (row 27) — the proposed changes' summary
 //     with no Pack B.
+//   remediate-strategy-no-b (row 28) — the strategy cards a comparison
+//     enables, drawn disabled with no Pack B, where a server's says to load
+//     a live pack.
 //
 // staticTraceActions(product) is the set of Traceability's live-evidence
 // texts for the static posture (rows 14, 15): the same keys as
@@ -143,6 +146,9 @@ const STATIC_REMEDIES = {
   'remediate-deploy-meaning': ({ product }) => `Deploying the ticked rows needs ${theServer(product)}`,
   'remediate-rows-hint': ({ product }) => `Ticked rows can be deployed from ${theServer(product)}; this bundle deploys nothing, so the boxes cannot be changed here. Rows without a box need a repository patch, a decision or a manual fix.`,
   'remediate-not-compared-summary': ({ product }) => `not compared with live; deploying them needs ${theServer(product)}`,
+  'remediate-strategy-no-b': ({ product, liveBuiltIn, packALive }) => (liveBuiltIn
+    ? 'Choose the live pack built into this bundle as Pack B to enable'
+    : `To enable, pick a live pack as Pack B: ${noLive(product, packALive)}`),
 };
 
 export const STATIC_REMEDY_KEYS = Object.freeze(Object.keys(STATIC_REMEDIES));
