@@ -125,15 +125,20 @@ test('readSettingsPolicyConfig refuses a missing file, invalid JSON, an unknown 
   assert.throws(() => readSettingsPolicyConfig({ TOMOGRAPH_MCP_SETTINGS_POLICY: missing }), (e) => e.message.startsWith(`OBSERVOGRAM_MCP_SETTINGS_POLICY: ${missing}: ENOENT`));
 });
 
-test('readSettingsPolicyConfig checks each pattern\'s shape, never its speed: under a clock that jumps a second per read (a loaded machine), a valid policy loads and a bad one keeps its shape refusal', () => {
-  // compileBoundedPattern's id clocks (50 ms of wall time) read a thread a
-  // loaded machine descheduled as a slow pattern, and the start refused a
-  // valid policy (`rules[0].when: pattern too slow against a 256-character
-  // id`). The load runs no clock: the pass-through's worker deadline per
-  // rule is the guard (server/mcp-settings-eval.mjs).
-  const realNow = Date.now;
+test('readSettingsPolicyConfig checks each pattern\'s shape, never its speed: under a clock that jumps a second per read (the wall clock and the CPU time alike), a valid policy loads and a bad one keeps its shape refusal', () => {
+  // compileBoundedPattern's id clocks (50 ms, of wall time alone when the
+  // load dropped them) read a thread a loaded machine descheduled as a slow
+  // pattern, and the start refused a valid policy (`rules[0].when: pattern
+  // too slow against a 256-character id`). The load runs no clock: the
+  // pass-through's worker deadline per rule is the guard
+  // (server/mcp-settings-eval.mjs). The id clocks read performance.now()
+  // and process.cpuUsage(), so both jump: timed, every pass is refused.
+  const ownNow = Object.getOwnPropertyDescriptor(performance, 'now');
+  const realCpuUsage = process.cpuUsage;
   let t = 0;
-  Date.now = () => (t += 1000);
+  let cpu = 0;
+  performance.now = () => (t += 1000);
+  process.cpuUsage = () => ({ user: (cpu += 1_000_000), system: 0 });
   try {
     assert.deepEqual(readSettingsPolicyConfig({ OBSERVOGRAM_MCP_SETTINGS_POLICY: FIXTURE }).policy, FIXTURE_JSON);
     const generic = file('generic-jumping-clock.json', JSON.stringify(GENERIC));
@@ -143,7 +148,8 @@ test('readSettingsPolicyConfig checks each pattern\'s shape, never its speed: un
     const nested = file('nested-jumping-clock.json', JSON.stringify({ version: 1, rules: [{ when: { field: 'u', pattern: '^(a+)+$' }, warn: 'w' }] }));
     assert.throws(() => readSettingsPolicyConfig({ OBSERVOGRAM_MCP_SETTINGS_POLICY: nested }), { message: `OBSERVOGRAM_MCP_SETTINGS_POLICY: ${nested}: rules[0].when: nested quantifier` });
   } finally {
-    Date.now = realNow;
+    if (ownNow) Object.defineProperty(performance, 'now', ownNow); else delete performance.now;
+    process.cpuUsage = realCpuUsage;
   }
 });
 
