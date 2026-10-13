@@ -179,8 +179,8 @@ const SERVER_ACTION = /\b(re-?scan|rescan|scan (?:live|a repo(?:sitory)?)|connec
 
 
 // Each static text, exactly, for a product whose name takes "an" and one whose name takes "a", for each input: whether
-// a live pack other than Pack A is built in, whether any pack is.
-const NOLIVE = (server) => `this bundle carries no live pack; whoever builds it can add one (a live draft made on ${server}, built in with --pack)`;
+// a live pack other than Pack A is built in, whether Pack A is itself one, whether any pack is.
+const NOLIVE = (server, packALive) => `this bundle carries no live pack${packALive ? ' besides Pack A' : ''}; whoever builds it can add one (a live draft made on ${server}, built in with --pack)`;
 const NEWDRAFT = (server) => `a new live draft, made on ${server} and built into the bundle by whoever builds it (--pack)`;
 const TRACE_LEDE = 'Traceability follows each objective to the metrics, rules, scrape jobs, dashboards and alerts that prove it.';
 const TEXTS = {
@@ -189,10 +189,10 @@ const TEXTS = {
   'compare-one-pack': () => 'This bundle carries no other pack that loads, so there is nothing to compare this one with; whoever builds the bundle can add another with --pack (a live draft, or a curated repository pack).',
   'drift-free-fix': (server) => `Review the differences, then update the repository from live; deploying what is missing needs ${server}.`,
   'live-missing-fix': (server) => `Review them, then update the repository from live; deploying what is missing needs ${server}.`,
-  'trace-no-b': (server, { liveBuiltIn }) => (liveBuiltIn
+  'trace-no-b': (server, { liveBuiltIn, packALive }) => (liveBuiltIn
     ? `${TRACE_LEDE} Declare an SLO, or pick a live pack as Pack B to compare the repository with live.`
-    : `${TRACE_LEDE} Declare an SLO. To compare the repository with live, pick a live pack as Pack B: ${NOLIVE(server)}.`),
-  'diagnose-banner': (server, { liveBuiltIn }) => `Nothing live backs this pack. “Drift-free” and “Fresh” need a live pack: ${liveBuiltIn ? 'choose the live pack built into this bundle as Pack B.' : `${NOLIVE(server)}.`}`,
+    : `${TRACE_LEDE} Declare an SLO. To compare the repository with live, pick a live pack as Pack B: ${NOLIVE(server, packALive)}.`),
+  'diagnose-banner': (server, { liveBuiltIn, packALive }) => `Nothing live backs this pack. “Drift-free” and “Fresh” need a live pack: ${liveBuiltIn ? 'choose the live pack built into this bundle as Pack B.' : `${NOLIVE(server, packALive)}.`}`,
   'fresh-fix': (server) => `The live pack in this bundle is as fresh as when it was drafted; a fresh look needs ${NEWDRAFT(server)}.`,
   'drift-free-no-live': (server, { liveBuiltIn }) => (liveBuiltIn
     ? 'Choose the live pack built into this bundle as the baseline (Pack B) to compare.'
@@ -200,11 +200,11 @@ const TEXTS = {
   'live-evidence-fix': (server) => `A complete live pack needs ${NEWDRAFT(server)}, once the endpoint is healthy.`,
   'live-measure': (server, { liveBuiltIn }) => (liveBuiltIn ? 'compare with the live pack built in to verify' : 'no live pack is built in to verify against'),
   'no-live-hint': (server, { liveBuiltIn }) => (liveBuiltIn ? 'choose the live pack built into this bundle as Pack B' : 'no live pack is built into this bundle'),
-  'flow-not-compared-diagnose': (server, { liveBuiltIn }) => `Not compared yet: every alert reads as declared. ${liveBuiltIn
+  'flow-not-compared-diagnose': (server, { liveBuiltIn, packALive }) => `Not compared yet: every alert reads as declared. ${liveBuiltIn
     ? 'Pick the live pack built into this bundle as Pack B to see which alerts are live.'
-    : `Seeing which alerts are live needs a live pack: ${NOLIVE(server)}.`}`,
+    : `Seeing which alerts are live needs a live pack: ${NOLIVE(server, packALive)}.`}`,
   'flow-not-compared-remediate': (server) => `Not compared with live: every alert reads as declared; deploying needs ${server}.`,
-  'remediate-no-b': (server, { liveBuiltIn }) => `${liveBuiltIn ? 'Compare with the live pack built into this bundle to get a recommendation' : `A recommendation needs a live pack: ${NOLIVE(server)}`}; deploying needs ${server}.`,
+  'remediate-no-b': (server, { liveBuiltIn, packALive }) => `${liveBuiltIn ? 'Compare with the live pack built into this bundle to get a recommendation' : `A recommendation needs a live pack: ${NOLIVE(server, packALive)}`}; deploying needs ${server}.`,
   'need-pack': (server, { packsBuiltIn }) => (packsBuiltIn
     ? 'Head to Discover and open one of the packs built into this bundle — then come back here.'
     : `This bundle carries no pack; whoever builds it can add one with --pack (a curated repository pack, or a live draft made on ${server}).`),
@@ -242,7 +242,8 @@ const packOf = (rel) => { const t = read(rel); return adapt(rel.endsWith('.json'
 
 test('S3 — the static texts, exact for three products (the article by the name) and every input, naming the product where they name a server and no server action as the reader\'s to take here; Traceability\'s live-evidence texts; the shared modules\' options, defaults unchanged; the reasons both postures now share', () => {
   assert.deepEqual([...STATIC_REMEDY_KEYS], Object.keys(TEXTS), 'every key has its exact text here');
-  const inputs = [{ liveBuiltIn: false, packsBuiltIn: false }, { liveBuiltIn: true, packsBuiltIn: true }, { liveBuiltIn: false, packsBuiltIn: true }];
+  const inputs = [{ liveBuiltIn: false, packALive: false, packsBuiltIn: false }, { liveBuiltIn: true, packALive: false, packsBuiltIn: true }, { liveBuiltIn: false, packALive: false, packsBuiltIn: true },
+    { liveBuiltIn: false, packALive: true, packsBuiltIn: true }, { liveBuiltIn: true, packALive: true, packsBuiltIn: true }];
   for (const [product, server] of [[DEFAULT_BRAND.name, 'an Observogram server'], ['Acme Watch', 'an Acme Watch server'], ['Zed Console', 'a Zed Console server']]) {
     for (const key of STATIC_REMEDY_KEYS) {
       for (const input of inputs) {
@@ -258,9 +259,11 @@ test('S3 — the static texts, exact for three products (the article by the name
     assert.deepEqual(textsOf(trace), TRACE_TEXTS(server), `the static live-evidence texts / ${product}`);
     for (const [k, text] of Object.entries(textsOf(trace))) assert.doesNotMatch(text, SERVER_ACTION, `${k}: no server action the reader cannot take here`);
   }
-  // Which input each text reads: liveBuiltIn for seven, packsBuiltIn for one, neither for the rest.
+  // Which input each text reads: liveBuiltIn for seven, packALive for the four of them that say the bundle carries no
+  // live pack (a live Pack A is one: they say none besides it), packsBuiltIn for one, none for the rest.
   const reads = (field) => STATIC_REMEDY_KEYS.filter((key) => staticRemedy(key, { product: 'P', [field]: true }) !== staticRemedy(key, { product: 'P' }));
   assert.deepEqual(reads('liveBuiltIn'), ['trace-no-b', 'diagnose-banner', 'drift-free-no-live', 'live-measure', 'no-live-hint', 'flow-not-compared-diagnose', 'remediate-no-b']);
+  assert.deepEqual(reads('packALive'), ['trace-no-b', 'diagnose-banner', 'flow-not-compared-diagnose', 'remediate-no-b']);
   assert.deepEqual(reads('packsBuiltIn'), ['need-pack']);
   // Row 1 with a live pack built in is the view's own text: nothing in it names a server action.
   assert.ok(read('studio/compare-view.mjs').includes(`: '${TEXTS['trace-no-b']('', { liveBuiltIn: true })}',`), 'trace-no-b with a live pack built in is the live studio\'s words');
@@ -274,13 +277,20 @@ test('S3 — the static texts, exact for three products (the article by the name
     'You review the destination, environment and artefacts before anything is written.']) assert.match(live, SERVER_ACTION, live);
   assert.throws(() => staticRemedy('nope', { product: 'P' }), { message: 'staticRemedy: no static text for "nope"' });
 
-  // What is built in, read from the catalogue: a live pack other than Pack A, and any pack, that loads.
+  // What is built in, read from the catalogue: a live pack other than Pack A, whether Pack A is itself one, and any
+  // pack, that loads.
   const cat = [{ id: 'a', ok: true }, { id: 'live', ok: true, live: 'snapshot' }, { id: 'broken', ok: false, live: 'scaffold' }];
-  assert.deepEqual(staticInputOf('P', cat, 'a'), { product: 'P', liveBuiltIn: true, packsBuiltIn: true });
-  assert.deepEqual(staticInputOf('P', cat, 'live'), { product: 'P', liveBuiltIn: false, packsBuiltIn: true }, 'Pack A itself is not another live pack');
-  assert.deepEqual(staticInputOf('P', [cat[0], cat[2]], 'a'), { product: 'P', liveBuiltIn: false, packsBuiltIn: true }, 'a live pack that did not load is not built in');
-  assert.deepEqual(staticInputOf('P', [], null), { product: 'P', liveBuiltIn: false, packsBuiltIn: false });
-  assert.deepEqual(staticInputOf('P', undefined, null), { product: 'P', liveBuiltIn: false, packsBuiltIn: false });
+  assert.deepEqual(staticInputOf('P', cat, 'a'), { product: 'P', liveBuiltIn: true, packALive: false, packsBuiltIn: true });
+  assert.deepEqual(staticInputOf('P', cat, 'live'), { product: 'P', liveBuiltIn: false, packALive: true, packsBuiltIn: true }, 'Pack A itself is not another live pack, and it is built in');
+  assert.deepEqual(staticInputOf('P', [...cat, { id: 'draft', ok: true, live: 'scaffold' }], 'live'), { product: 'P', liveBuiltIn: true, packALive: true, packsBuiltIn: true }, 'a live Pack A and another');
+  assert.deepEqual(staticInputOf('P', [cat[0], cat[2]], 'a'), { product: 'P', liveBuiltIn: false, packALive: false, packsBuiltIn: true }, 'a live pack that did not load is not built in');
+  assert.deepEqual(staticInputOf('P', cat, 'broken'), { product: 'P', liveBuiltIn: true, packALive: false, packsBuiltIn: true }, 'nor is a Pack A that did not load');
+  assert.deepEqual(staticInputOf('P', [], null), { product: 'P', liveBuiltIn: false, packALive: false, packsBuiltIn: false });
+  assert.deepEqual(staticInputOf('P', undefined, null), { product: 'P', liveBuiltIn: false, packALive: false, packsBuiltIn: false });
+  // A live Pack A, and no other: the bundle does carry a live pack, so no text says it carries none. (Rows 6, 8 and 13
+  // are shown only when nothing live backs the packs on screen — diagnostic-grade.mjs's hasMcpSource — which a live
+  // Pack A, stamped mcp.refreshedAt by every draft, never is.)
+  for (const key of STATIC_REMEDY_KEYS) assert.doesNotMatch(staticRemedy(key, staticInputOf('P', cat, 'live')), /carries no live pack;/, `${key} with a live Pack A`);
 
   // The shared modules take the static texts as options; their defaults are today's words, so the live studio, every
   // server reader and the journey (tools/lib/journey.mjs grades through computeDiagnosticGrade) are unchanged.

@@ -114,9 +114,10 @@
 // deploy control those views draw, in the light and dark themes, at full
 // opacity with each text in it clearing AA (the house rule: no opacity on an
 // unavailable control, whose reason line is what marks it); rows
-// 4 (a one-pack bundle), 6, 11 and 12 render as written, and the rendered
-// Compare, Diagnose, Traceability and Remediate hold no phrase S4 holds the
-// studio's source to; the Conformance view's HTML anchor downloads the report
+// 4 (a one-pack bundle), 6, 11, 12 and 18 (over the live pack as Pack A)
+// render as written, and the rendered Compare, Diagnose, Traceability and
+// Remediate hold no phrase S4 holds the studio's source to; the Conformance
+// view's HTML anchor downloads the report
 // with its goes-blind section, and the in-page JSON and HTML are the
 // server's but for C5's declared fields; the notice, exactly; no page error
 // or console.error, no request off the loopback, each static host asked for
@@ -1455,6 +1456,17 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     await readsAA(page, 'Remediate (one pack)', ['[data-ux-action="rm-deploy-all"]']);
     await drawnUnfilled(page, sel);
     await clickExplains(page, sel);
+    await ctx.close();
+  }
+  // Row 18 with the live pack as Pack A and no Pack B: the bundle's one live pack is Pack A, so the decision's note says
+  // it carries no other — never that it carries none.
+  {
+    const { page, ctx } = await open(base, { selectedPackId: 'payment-live', view: 'compile' });
+    await page.waitForSelector('#rm-decision .ux-decision-note', { state: 'attached', timeout: T });
+    const note = await page.textContent('#rm-decision .ux-decision-note');
+    assert.equal(note, staticRemedy('remediate-no-b', { product, packALive: true }), 'row 18 over a live Pack A');
+    assert.ok(note.includes('this bundle carries no live pack besides Pack A;'), note);
+    await noServerAction(page, 'Remediate (a live Pack A)');
     await ctx.close();
   }
 
