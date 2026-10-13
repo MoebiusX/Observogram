@@ -178,8 +178,9 @@ test('S2 — every deploy entry point outside prototype space is drawn unavailab
 const SERVER_ACTION = /\b(re-?scan|rescan|scan (?:live|a repo(?:sitory)?)|connect mcp|from (?:its |a live )?mcp|redraft|re-?upload|refresh(?:es|ing)? (?:the )?live|refresh live evidence|capture a live draft|live draft again|deploy what is missing|deploy the repository|deploy review|review (?:of |the )?destination|after a review|then deploy|confirmed separately)\b/i;
 
 
-// Each static text, exactly, for a product whose name takes "an" and one whose name takes "a", for each input: whether
-// a live pack other than Pack A is built in, whether Pack A is itself one, whether any pack is.
+// Each static text, exactly, for each product — the brand's name is free-form, and the server is "the <product>
+// server" whatever its spelling (a rule by the first letter read "an Unity Watch server", "a Hour Watch server") —
+// and each input: whether a live pack other than Pack A is built in, whether Pack A is itself one, whether any pack is.
 const NOLIVE = (server, packALive) => `this bundle carries no live pack${packALive ? ' besides Pack A' : ''}; whoever builds it can add one (a live draft made on ${server}, built in with --pack)`;
 const NEWDRAFT = (server) => `a new live draft, made on ${server} and built into the bundle by whoever builds it (--pack)`;
 const TRACE_LEDE = 'Traceability follows each objective to the metrics, rules, scrape jobs, dashboards and alerts that prove it.';
@@ -240,11 +241,12 @@ const LIVE_TRACE_TEXTS = {
 const textsOf = (actions) => Object.fromEntries(Object.entries(actions).map(([k, v]) => [k, typeof v === 'function' ? v('http_requests_total') : v]));
 const packOf = (rel) => { const t = read(rel); return adapt(rel.endsWith('.json') ? JSON.parse(t) : parseYaml(t)); };
 
-test('S3 — the static texts, exact for three products (the article by the name) and every input, naming the product where they name a server and no server action as the reader\'s to take here; Traceability\'s live-evidence texts; the shared modules\' options, defaults unchanged; the reasons both postures now share', () => {
+test('S3 — the static texts, exact for five products (no article picked by the name\'s spelling) and every input, naming the product where they name a server and no server action as the reader\'s to take here; Traceability\'s live-evidence texts; the shared modules\' options, defaults unchanged; the reasons both postures now share', () => {
   assert.deepEqual([...STATIC_REMEDY_KEYS], Object.keys(TEXTS), 'every key has its exact text here');
   const inputs = [{ liveBuiltIn: false, packALive: false, packsBuiltIn: false }, { liveBuiltIn: true, packALive: false, packsBuiltIn: true }, { liveBuiltIn: false, packALive: false, packsBuiltIn: true },
     { liveBuiltIn: false, packALive: true, packsBuiltIn: true }, { liveBuiltIn: true, packALive: true, packsBuiltIn: true }];
-  for (const [product, server] of [[DEFAULT_BRAND.name, 'an Observogram server'], ['Acme Watch', 'an Acme Watch server'], ['Zed Console', 'a Zed Console server']]) {
+  for (const product of [DEFAULT_BRAND.name, 'Acme Watch', 'Zed Console', 'Unity Watch', 'Hour Watch']) {
+    const server = `the ${product} server`;
     for (const key of STATIC_REMEDY_KEYS) {
       for (const input of inputs) {
         const text = staticRemedy(key, { product, ...input });
@@ -320,7 +322,7 @@ test('S3 — the static texts, exact for three products (the article by the name
   }
   for (const text of Object.values(LIVE_TRACE_TEXTS).filter((t) => !t.includes('http_requests_total'))) assert.equal(traceSrc.split(text).length - 1, 1, `"${text}" is written once, in LIVE_ACTION_TEXT`);
   assert.equal(traceIssue('missing_scrape_evidence').fix, LIVE_TRACE_TEXTS.scrapeEvidenceFix);
-  assert.equal(traceIssue('missing_scrape_evidence', { actions: staticTraceActions('Acme Watch') }).fix, TRACE_TEXTS('an Acme Watch server').scrapeEvidenceFix);
+  assert.equal(traceIssue('missing_scrape_evidence', { actions: staticTraceActions('Acme Watch') }).fix, TRACE_TEXTS('the Acme Watch server').scrapeEvidenceFix);
   assert.deepEqual(traceIssue('missing_sli', { actions: staticTraceActions('Acme Watch') }), traceIssue('missing_sli'), 'an issue whose fix is no live-evidence text is the same');
   // computeDiagnosticGrade's noLiveHint: the drift-free check's detail when nothing live backs the pack.
   const payment = packOf('vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml');

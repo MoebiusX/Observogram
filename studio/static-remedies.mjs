@@ -99,21 +99,23 @@ export const DEPLOY_CONTROLS = [
   '#deploy-compiled',
 ].join(', ');
 
-// "a Zed server", "an Observogram server": the article by the product name's first letter.
-const aServer = (product) => `${/^[aeiou]/i.test(product) ? 'an' : 'a'} ${product} server`;
+// "the Observogram server", as serverNeeded names it: no article before the
+// product's name, which is the brand's and free-form — a rule by its spelling
+// reads "an Unity Watch server" or "a Hour Watch server".
+const theServer = (product) => `the ${product} server`;
 // What a reader of a bundle without a live pack other than Pack A is told
 // (NOLIVE; with a live Pack A, none besides it), and where a new live draft
 // comes from (NEWDRAFT): a server drafts it, whoever builds the bundle builds
 // it in.
-const noLive = (product, packALive) => `this bundle carries no live pack${packALive ? ' besides Pack A' : ''}; whoever builds it can add one (a live draft made on ${aServer(product)}, built in with --pack)`;
-const newDraft = (product) => `a new live draft, made on ${aServer(product)} and built into the bundle by whoever builds it (--pack)`;
+const noLive = (product, packALive) => `this bundle carries no live pack${packALive ? ' besides Pack A' : ''}; whoever builds it can add one (a live draft made on ${theServer(product)}, built in with --pack)`;
+const newDraft = (product) => `a new live draft, made on ${theServer(product)} and built into the bundle by whoever builds it (--pack)`;
 
 const STATIC_REMEDIES = {
-  'retrofeed-result': ({ product }) => `commit the updated pack to the service repo (it carries observogram.retrofeed.* provenance); whether the gap closed shows against a new live draft — on ${aServer(product)}, or in a bundle whoever builds it rebuilds with that draft and the updated pack`,
-  'drift-partial': ({ product }) => `Before acting on this drift, get a complete live draft: drafting needs ${aServer(product)}, and whoever builds this bundle builds the new draft in (--pack).`,
+  'retrofeed-result': ({ product }) => `commit the updated pack to the service repo (it carries observogram.retrofeed.* provenance); whether the gap closed shows against a new live draft — on ${theServer(product)}, or in a bundle whoever builds it rebuilds with that draft and the updated pack`,
+  'drift-partial': ({ product }) => `Before acting on this drift, get a complete live draft: drafting needs ${theServer(product)}, and whoever builds this bundle builds the new draft in (--pack).`,
   'compare-one-pack': () => 'This bundle carries no other pack that loads, so there is nothing to compare this one with; whoever builds the bundle can add another with --pack (a live draft, or a curated repository pack).',
-  'drift-free-fix': ({ product }) => `Review the differences, then update the repository from live; deploying what is missing needs ${aServer(product)}.`,
-  'live-missing-fix': ({ product }) => `Review them, then update the repository from live; deploying what is missing needs ${aServer(product)}.`,
+  'drift-free-fix': ({ product }) => `Review the differences, then update the repository from live; deploying what is missing needs ${theServer(product)}.`,
+  'live-missing-fix': ({ product }) => `Review them, then update the repository from live; deploying what is missing needs ${theServer(product)}.`,
   'trace-no-b': ({ product, liveBuiltIn, packALive }) => `Traceability follows each objective to the metrics, rules, scrape jobs, dashboards and alerts that prove it. ${liveBuiltIn
     ? 'Declare an SLO, or pick a live pack as Pack B to compare the repository with live.'
     : `Declare an SLO. To compare the repository with live, pick a live pack as Pack B: ${noLive(product, packALive)}.`}`,
@@ -121,26 +123,26 @@ const STATIC_REMEDIES = {
   'fresh-fix': ({ product }) => `The live pack in this bundle is as fresh as when it was drafted; a fresh look needs ${newDraft(product)}.`,
   'drift-free-no-live': ({ product, liveBuiltIn }) => (liveBuiltIn
     ? 'Choose the live pack built into this bundle as the baseline (Pack B) to compare.'
-    : `Nothing live is built into this bundle; whoever builds it can add a live draft made on ${aServer(product)} (--pack), to choose as the baseline (Pack B).`),
+    : `Nothing live is built into this bundle; whoever builds it can add a live draft made on ${theServer(product)} (--pack), to choose as the baseline (Pack B).`),
   'live-evidence-fix': ({ product }) => `A complete live pack needs ${newDraft(product)}, once the endpoint is healthy.`,
   'live-measure': ({ liveBuiltIn }) => (liveBuiltIn ? 'compare with the live pack built in to verify' : 'no live pack is built in to verify against'),
   'no-live-hint': ({ liveBuiltIn }) => (liveBuiltIn ? 'choose the live pack built into this bundle as Pack B' : 'no live pack is built into this bundle'),
   'flow-not-compared-diagnose': ({ product, liveBuiltIn, packALive }) => `Not compared yet: every alert reads as declared. ${liveBuiltIn
     ? 'Pick the live pack built into this bundle as Pack B to see which alerts are live.'
     : `Seeing which alerts are live needs a live pack: ${noLive(product, packALive)}.`}`,
-  'flow-not-compared-remediate': ({ product }) => `Not compared with live: every alert reads as declared; deploying needs ${aServer(product)}.`,
-  'remediate-no-b': ({ product, liveBuiltIn, packALive }) => `${liveBuiltIn ? 'Compare with the live pack built into this bundle to get a recommendation' : `A recommendation needs a live pack: ${noLive(product, packALive)}`}; deploying needs ${aServer(product)}.`,
+  'flow-not-compared-remediate': ({ product }) => `Not compared with live: every alert reads as declared; deploying needs ${theServer(product)}.`,
+  'remediate-no-b': ({ product, liveBuiltIn, packALive }) => `${liveBuiltIn ? 'Compare with the live pack built into this bundle to get a recommendation' : `A recommendation needs a live pack: ${noLive(product, packALive)}`}; deploying needs ${theServer(product)}.`,
   'need-pack': ({ product, packsBuiltIn }) => (packsBuiltIn
     ? 'Head to Discover and open one of the packs built into this bundle — then come back here.'
-    : `This bundle carries no pack; whoever builds it can add one with --pack (a curated repository pack, or a live draft made on ${aServer(product)}).`),
-  'remediate-deploy-hint': ({ product }) => `Deploying needs ${aServer(product)}; nothing is written to live from this bundle.`,
-  'remediate-next-deploy': ({ product }) => `Deploy, on ${aServer(product)}`,
-  'remediate-next-both': ({ product }) => `Generate patch; deploying needs ${aServer(product)}`,
-  'remediate-effect-live': ({ product }) => `only from ${aServer(product)}; nothing is written to live from this bundle`,
-  'remediate-effect-both': ({ product }) => `the patch is made here; the deploy needs ${aServer(product)}`,
-  'remediate-deploy-meaning': ({ product }) => `Deploying the ticked rows needs ${aServer(product)}`,
-  'remediate-rows-hint': ({ product }) => `Ticked rows can be deployed from ${aServer(product)}; this bundle deploys nothing, so the boxes cannot be changed here. Rows without a box need a repository patch, a decision or a manual fix.`,
-  'remediate-not-compared-summary': ({ product }) => `not compared with live; deploying them needs ${aServer(product)}`,
+    : `This bundle carries no pack; whoever builds it can add one with --pack (a curated repository pack, or a live draft made on ${theServer(product)}).`),
+  'remediate-deploy-hint': ({ product }) => `Deploying needs ${theServer(product)}; nothing is written to live from this bundle.`,
+  'remediate-next-deploy': ({ product }) => `Deploy, on ${theServer(product)}`,
+  'remediate-next-both': ({ product }) => `Generate patch; deploying needs ${theServer(product)}`,
+  'remediate-effect-live': ({ product }) => `only from ${theServer(product)}; nothing is written to live from this bundle`,
+  'remediate-effect-both': ({ product }) => `the patch is made here; the deploy needs ${theServer(product)}`,
+  'remediate-deploy-meaning': ({ product }) => `Deploying the ticked rows needs ${theServer(product)}`,
+  'remediate-rows-hint': ({ product }) => `Ticked rows can be deployed from ${theServer(product)}; this bundle deploys nothing, so the boxes cannot be changed here. Rows without a box need a repository patch, a decision or a manual fix.`,
+  'remediate-not-compared-summary': ({ product }) => `not compared with live; deploying them needs ${theServer(product)}`,
 };
 
 export const STATIC_REMEDY_KEYS = Object.freeze(Object.keys(STATIC_REMEDIES));
@@ -173,10 +175,10 @@ export function staticTraceActions(product) {
   return Object.freeze({
     scrapeEvidenceFix: `Declare the scrape configuration, then check again; observing it live needs ${newDraft(product)}.`,
     sliRulesHealthy: 'Check the rules behind the SLI are healthy (a new live draft confirms it)',
-    sliMeasured: `Confirm the SLI is measured with a live draft (made on ${aServer(product)})`,
-    metricConfirm: (metric) => `Confirm ${metric} with a live draft (made on ${aServer(product)})`,
-    scrapeEvidence: `Capture scrape evidence with a live draft (made on ${aServer(product)})`,
-    dashboardDeploy: `Deploy the dashboard on ${aServer(product)}; a new live draft confirms it`,
-    alertDeploy: `Deploy the burn-rate alert on ${aServer(product)}; a new live draft confirms it`,
+    sliMeasured: `Confirm the SLI is measured with a live draft (made on ${theServer(product)})`,
+    metricConfirm: (metric) => `Confirm ${metric} with a live draft (made on ${theServer(product)})`,
+    scrapeEvidence: `Capture scrape evidence with a live draft (made on ${theServer(product)})`,
+    dashboardDeploy: `Deploy the dashboard on ${theServer(product)}; a new live draft confirms it`,
+    alertDeploy: `Deploy the burn-rate alert on ${theServer(product)}; a new live draft confirms it`,
   });
 }
