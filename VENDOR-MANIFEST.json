@@ -754,8 +754,8 @@
       "releasedExports": null
     },
     "tools/lib/mcp-server-settings.mjs": {
-      "sha256": "6cb14e564b41c247a2b7479498e0e1a068f94b0421fd8b3af4f896d0d6fe4934",
-      "bytes": 40698,
+      "sha256": "02b49b86fdb2baad64d346c298d5bc86f2cc1f03d748537f3c7c0ec54cbe8d27",
+      "bytes": 40841,
       "exports": [
         "FIELD_TYPES",
         "GENERIC_NAMES",

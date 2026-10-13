@@ -1372,7 +1372,8 @@ suite's child — that lost the CPU while loading refused a valid policy as
 `pattern too slow against a 256-character id`, a refusal that names no way
 out. The load now checks each pattern's shape, never its speed, as
 MCP_INTEGRATION and DOWNSTREAM always said, and the worker's deadline per
-rule is the guard; the taxonomy's own clocks are unchanged.
+rule is the guard; the taxonomy's own clocks are unchanged here (the id
+clocks' follow-up, below, changes what they charge).
 Tests: 1395 → 1396 (one more in `server/test-mcp-settings.mjs`: under a
 clock that jumps a second per read, a valid policy loads).
 A server whose policy worker cannot be built — one started under the
@@ -1405,8 +1406,10 @@ waits for that box).
 
 ### Follow-up: the id clocks on a loaded machine
 
-A taxonomy override and a settings policy are held to the id clocks: one pass
-of each pattern over four adversarial 256-character ids within 50 ms. The
+A taxonomy override, and a settings policy a static bundle bakes (a server
+loads one untimed since the settings-policy worker's follow-up, above), are
+held to the id clocks: one pass of each pattern over four adversarial
+256-character ids within 50 ms. The
 clock was the wall clock, which also counts the time the thread waits for a
 core, so a loaded machine refused fast patterns: a server started with a
 valid taxonomy could refuse to start, and the suites that compile patterns

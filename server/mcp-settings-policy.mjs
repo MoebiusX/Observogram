@@ -21,12 +21,14 @@
 // The policy only adds friction: it never enables a control, lifts a
 // refusal or changes a target. The studio reads it when the modal opens and
 // compiles it again. Both compile with `timed: false`: the load checks each
-// pattern's shape, never its speed (compileBoundedPattern's 50 ms id clocks
-// would read a loaded machine as a slow pattern and refuse a valid policy at
-// start); the pass-through evaluates the policy in a worker under a 100 ms
-// deadline per rule (server/mcp-settings-eval.mjs), a rule that does not
-// finish counting as matched. Unset (the default): nothing is read, and the
-// route answers { ok: true, proxy, policy: null, configured: false }.
+// pattern's shape, never its speed (compileBoundedPattern's 50 ms id clocks,
+// the wall clock alone then, read a loaded machine as a slow pattern and
+// refused a valid policy at start; they charge a pattern's own work now, and
+// a loaded Windows machine can still refuse one near the budget); the
+// pass-through evaluates the policy in a worker under a 100 ms deadline per
+// rule (server/mcp-settings-eval.mjs), a rule that does not finish counting
+// as matched. Unset (the default): nothing is read, and the route answers
+// { ok: true, proxy, policy: null, configured: false }.
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
