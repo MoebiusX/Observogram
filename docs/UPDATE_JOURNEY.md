@@ -1497,11 +1497,15 @@ paths the native realpath cannot name at all (an ImDisk RAM disk), where a
 users file under the root named by a short name, or through a link, compared
 as outside it. Purge-org's users-file check now refuses a path when a part
 the realpath walk could not read exists — `lstatSync` answers it, or fails
-for another reason than that it does not exist — with the way out it now
-names for a share no file id places too: if the file does not lie under the
-root, delete the root by hand, then run purge-org again; if it does, move it
-out first. One outside the root through such a part, or anywhere on such a
-volume, is refused alike (a declared false refusal). A link whose target
-opens is followed as before, a path not created yet is judged as before, and
-the other checks compare as before. Tests: 1425 → 1428 (three more in
-`server/test-store-paths.mjs`).
+for another reason than that it does not exist — or when that walk could not
+read even its root: with `Z:` mapped to `\\myhost\betasub` while the share
+was down, or `Z:` not mapped yet, `Z:\users.json` stayed spelled as on a
+local drive, and a later read that found the share back, or `Z:` mapped,
+let the purge through. It refuses with the way out it now names for a share
+no file id places too: if the file does not lie under the root, delete the
+root by hand, then run purge-org again; if it does, move it out first. One
+outside the root through such a part, or anywhere on such a volume, is
+refused alike (a declared false refusal). A link whose target opens is
+followed as before, a path not created yet on a drive the walk reads is
+judged as before, and the other checks compare as before.
+Tests: 1425 → 1428 (three more in `server/test-store-paths.mjs`).

@@ -345,6 +345,27 @@ const DOWN = ntfsVolume(SUBSHARED_FILES, {
   mapped: { 'X:': '\\\\myhost\\betasub', 'Y:': '\\\\myhost\\exports' },
 });
 const down = comparedPath(null, { windows: true, path: win32, realpathSync: DOWN.realpathSync, statSync: DOWN.statSync, lstatSync: DOWN.lstatSync });
+// A share may come back or go down, and a drive letter be mapped or unmapped, while a check runs: flipping(from, to, n)
+// answers the check's first n host calls from one volume and every later one from the other. X: mapped to
+// \\myhost\betasub with that share served, down, and X: not mapped: each numbers SUBSHARED_FILES and their directories
+// in one order first, so a file has one id in every state.
+const flipping = (from, to, n) => {
+  let calls = 0;
+  const now = () => (calls++ < n ? from : to);
+  const realpathSync = (p) => now().realpathSync(p);
+  realpathSync.native = (p) => now().realpathSync.native(p);
+  const k = comparedPath(null, { windows: true, path: win32, realpathSync, statSync: (p, o) => now().statSync(p, o), lstatSync: (p) => now().lstatSync(p) });
+  return Object.assign(k, { calls: () => calls });
+};
+const numbered = (volume) => {
+  for (const file of SUBSHARED_FILES) for (let p = file; ; p = win32.dirname(p)) { volume.statSync(p); if (win32.dirname(p) === p) break; }
+  return volume;
+};
+const X_SERVED = numbered(ntfsVolume(SUBSHARED_FILES, { shares: SUBSHARES, mapped: { 'X:': '\\\\myhost\\betasub' } }));
+const X_DOWN = numbered(ntfsVolume(SUBSHARED_FILES, {
+  shares: Object.fromEntries(Object.entries(SUBSHARES).filter(([unc]) => unc !== '\\\\myhost\\betasub')), mapped: { 'X:': '\\\\myhost\\betasub' },
+}));
+const X_UNMAPPED = numbered(ntfsVolume(SUBSHARED_FILES, { shares: SUBSHARES }));
 
 test('a path through a share that cannot be reached, or a drive mapped to one, may lie anywhere — purge-org refuses a users file recorded through it and the export refuses it, as a share on their volume; it is never the workspace, the database or one of its files', () => {
   const [base, root] = ['C:\\ws', 'C:\\ws\\orgs\\beta'];
@@ -356,6 +377,18 @@ test('a path through a share that cannot be reached, or a drive mapped to one, m
     assert.equal(usersUnderRoot(users, root, down), 'unplaced', `down, purge-org refuses it too: ${users} may lie under ${root}`);
   }
   assert.equal(usersUnderRoot('C:\\ws\\orgs\\beta\\sub\\users.json', root, down), true, 'the way out: named on the drive, it lies under the root');
+  // Through X: the walk that spells the path may read neither the share nor even X:\ — the path stays spelled as written
+  // on X:, as on a local drive — while a later read of its volume finds the share back, or X: mapped: with every host
+  // call from the (n+1)th on answered in the other state, for each n up to an unflipped check's count, purge-org refuses.
+  for (const [from, to, how] of [[X_DOWN, X_SERVED, 'the share comes back'], [X_SERVED, X_DOWN, 'the share goes down'], [X_UNMAPPED, X_SERVED, 'X: is mapped'], [X_SERVED, X_UNMAPPED, 'X: is unmapped']]) {
+    for (const users of ['X:\\users.json', 'x:/Users.json']) {
+      const unflipped = flipping(from, from, 0);
+      usersUnderRoot(users, root, unflipped);
+      for (let n = 0; n <= unflipped.calls(); n += 1) {
+        assert.equal(usersUnderRoot(users, root, flipping(from, to, n)), 'unplaced', `${how} after host call ${n}: purge-org refuses ${users}`);
+      }
+    }
+  }
   for (const users of ['\\\\myhost\\dout\\users.json', '\\\\nas01\\obs\\users.json']) {
     assert.equal(usersUnderRoot(users, root, down), 'unplaced', `reached on another volume or host, nothing places it: refused (${users})`);
   }
@@ -451,14 +484,6 @@ test('purge-org refuses a users file recorded through a link on the drive whose 
   // The share may come back, or go down, while the check runs. Whether the path is resolved is read of the parts the
   // walk that spelled it could not read, not of a second walk that may find the share in another state: with every host
   // call from the (n+1)th on answered in the other state, for each n up to an unflipped check's count, purge-org refuses.
-  const flipping = (from, to, n) => {
-    let calls = 0;
-    const now = () => (calls++ < n ? from : to);
-    const realpathSync = (p) => now().realpathSync(p);
-    realpathSync.native = (p) => now().realpathSync.native(p);
-    const k = comparedPath(null, { windows: true, path: win32, realpathSync, statSync: (p, o) => now().statSync(p, o), lstatSync: (p) => now().lstatSync(p) });
-    return Object.assign(k, { calls: () => calls });
-  };
   for (const [from, to, how] of [[LINKS_DOWN, LINKS_SERVED, 'comes back'], [LINKS_SERVED, LINKS_DOWN, 'goes down']]) {
     for (const users of through) {
       const unflipped = flipping(from, from, 0);

@@ -68,14 +68,19 @@
 // when a part the walk that spells it could not read exists: lstatSync
 // answers it, a link or not, or fails for another reason than that it does
 // not exist (ENOENT) — libuv's lstat opens through a reparse point it
-// does not take for a link, as stat does, and fails with that open's error.
+// does not take for a link, as stat does, and fails with that open's error —
+// or when that walk could not read even its root: a drive letter not mapped
+// when it runs, or one mapped to a share that cannot be reached, where the
+// path stays spelled as written on that letter, as on a local drive.
 // Those parts are the ones that walk could not read, not a second walk's: one
 // that found a share back would read through the link while the path stays
-// spelled as written on the link's drive. A path that lies outside the root
-// is refused alike, through such a link or on such a volume (a declared false
-// refusal). A path whose realpath stops only at parts that do not exist yet is
-// judged as before, and one through a link whose target opens is followed to
-// it.
+// spelled as written on the link's drive, and a later read that found the
+// letter mapped, or its share back, would give that spelling a volume
+// (Z:\users.json, with Z: mapped to \\myhost\betasub, compared as outside the
+// root). A path that lies outside the root is refused alike, through such a
+// link or on such a volume (a declared false refusal). A path whose realpath
+// stops only at parts that do not exist yet, below a root it reads, is judged
+// as before, and one through a link whose target opens is followed to it.
 // Placement only ever makes a check more conservative, since a file id names
 // a file on one volume, not on one host: a sector copy keeps the MFT, so a
 // machine cloned from this host's image, or this drive's disk image attached
@@ -137,7 +142,8 @@ export function comparedPath(own, { windows = ON_WINDOWS, path = nodePath, realp
     const unread = [];   // the parts of p the walk that spells native could not read, nearest first
     const native = real(path.resolve(p), unread);
     if (beside === undefined) return form(native);
-    if (deleting && unread.some(exists)) return null;   // realpath cannot resolve p: it may lead anywhere (above)
+    // realpath cannot resolve p — not even its root, or at a part that exists: it may lead anywhere (above)
+    if (deleting && (unread.some((part) => path.dirname(part) === part) || unread.some(exists))) return null;
     const other = real(path.resolve(beside));
     if (root(native) === root(other)) return form(native);
     const theirs = new Map();   // file id → the directory (or file) of beside's lineage it names
