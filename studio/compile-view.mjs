@@ -36,6 +36,9 @@ import {
   deployReviewModel, hiddenSelectionNote, recommendRemediation, remediationDeployPhrase,
   remediationDeployActionLabel, remediationDeployActionTitle, remediationSideOnlyMeasure,
 } from './verify-deploy.mjs';
+// The static posture — no server behind the page (a static bundle): the deploy controls drawn unavailable.
+import { serverNeeded, DEPLOY_CONTROLS } from './static-remedies.mjs';
+import { markUnavailable } from './services-view.mjs';
 
 // ---------- COMPILE view ----------
 //
@@ -1057,6 +1060,20 @@ export function renderCompileView(host) {
     'rm-compiler-open': () => { compilerUi.open = true; appHost.renderMainView(); focusCompiler(); },
     'rm-compiler-close': () => { compilerUi.open = false; appHost.renderMainView(); focusCompiler(); },
   });
+  drawDeployUnavailable(root);
+}
+
+// A static bundle answers no deploy: every deploy control Remediate draws —
+// the decision header's Deploy actions, the response path's per-SLO buttons,
+// the compiler's — is drawn unavailable with the reason once the view has
+// rendered (an aria-disabled control is never a modal opener). Each keeps its
+// handler, which reaches openDeployModal (studio/app.mjs) and explains.
+const isStatic = () => state.access?.posture === 'static';
+
+function drawDeployUnavailable(root) {
+  if (!isStatic()) return;
+  const reason = serverNeeded('Deploy', state.brand.chrome.name);
+  for (const control of root.querySelectorAll(DEPLOY_CONTROLS)) markUnavailable(control, reason);
 }
 
 // ---------- the artefact compiler: a focused subview ----------

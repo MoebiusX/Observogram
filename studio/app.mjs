@@ -67,6 +67,7 @@ import {
 } from './mcp-settings-model.mjs';
 import { loadServerSettingsConfig, loadSettingsLibs, readDescriptorDirect, submitDirect, describeViaProxy, submitViaProxy } from './mcp-settings-api.mjs';
 import { renderNoOrgHome, renderServicesHome, renderServicePage, renderServiceEditor, markUnavailable } from './services-view.mjs';
+import { serverNeeded } from './static-remedies.mjs';
 import {
   BUILT_SECTIONS, BUILT_EDITORS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsSectionHead, settingsAboveRank,
   buildEnvironmentsSectionModel, buildEndpointsSectionModel, buildMembersSectionModel, buildAuditSectionModel, auditQuery,
@@ -6686,6 +6687,11 @@ function setupDeployModal() {
 }
 
 export function openDeployModal({ packId, packLabel, presetIdentities } = {}) {
+  // A static bundle has no server to deploy through: every entry point —
+  // prototype space included — explains instead of opening a modal whose
+  // every read is a 501. The views draw their deploy controls unavailable
+  // too (DEPLOY_CONTROLS, studio/static-remedies.mjs); their clicks land here.
+  if (state.access?.posture === 'static') { explainUnavailable(serverNeeded('Deploy', state.brand.chrome.name)); return; }
   const modal = $('#deploy-modal');
   if (!modal) return;
   // Optional preset: when the Remediate plan hands off a curated set, pre-

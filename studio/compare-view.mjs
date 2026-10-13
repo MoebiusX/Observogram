@@ -48,10 +48,28 @@ import { buildRemediationFlowViewModel, packDeclaresRemediation, remediationFlow
 import { decisionHeaderHtml, disclosureHtml, emptyStateHtml, LAYER_PURPOSE, layerTitle, plural, wireUxActions } from './ux-kit.mjs';
 import { LINK_STATES, readTraceability, traceIssue } from './trace-chain.mjs';
 import { metricReaders, readersDigest, readersSentence, readerLine, readerRank, readerCounts, alertNames } from './metric-readers.mjs';
+// The static posture — no server behind the page (a static bundle): the deploy controls drawn unavailable.
+import { serverNeeded, DEPLOY_CONTROLS } from './static-remedies.mjs';
+import { markUnavailable } from './services-view.mjs';
 
 // Re-exported: these two lived here before moving to compare-catalog.mjs
 // (kept importable from the view for compile-view.mjs and proto-shared.mjs).
 export { catalogEntryFor, LAYERS_FOR_DIFF };
+
+// ---------- the static posture ----------
+
+// A static bundle answers no deploy: every deploy control Diagnose and its
+// Compare draw — the drift action, the chain cards, the pack picker cards — is
+// drawn unavailable with the reason once the view has rendered (an
+// aria-disabled control is never a modal opener). Each keeps its handler,
+// which reaches openDeployModal (studio/app.mjs) and explains.
+const isStatic = () => state.access?.posture === 'static';
+
+function drawDeployUnavailable(root) {
+  if (!isStatic() || !root) return;
+  const reason = serverNeeded('Deploy', state.brand.chrome.name);
+  for (const control of root.querySelectorAll(DEPLOY_CONTROLS)) markUnavailable(control, reason);
+}
 
 // ---------- compare view ----------
 
@@ -997,6 +1015,11 @@ function renderDiagnoseSubnav(active) {
 }
 
 export function renderBenchmarkView(view) {
+  renderDiagnose(view);
+  drawDeployUnavailable(view);
+}
+
+function renderDiagnose(view) {
   // Sub-tabs under DIAGNOSE: Assessment (the diagnostic-grade report) and
   // Compare (the artefact-level live-pack-vs-baseline side-by-side).
   const sub = state.diagnoseSub === 'compare' ? 'compare' : 'grade';

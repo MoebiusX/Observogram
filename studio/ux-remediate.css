@@ -165,6 +165,11 @@
   border: 1px solid var(--BLD, var(--ux-accent)); background: var(--BLD, var(--ux-accent)); color: #fff;
 }
 .ux-rm-deploy-btn:hover { filter: brightness(1.1); }
+/* Drawn unavailable (a static bundle deploys nothing): aria-disabled, the reason inside the control; a filled
+   button drops its fill, so the reason reads on the card and the control no longer looks like the next step. */
+.ux-rm-view .is-unavailable[data-ux-action], .ux-rm-deploy-btn.is-unavailable { opacity: .6; cursor: not-allowed; }
+.ux-rm-view .ux-primary-btn.is-unavailable, .ux-rm-deploy-btn.is-unavailable { background: transparent; color: var(--ux-ink); border-color: var(--ux-line); }
+.ux-rm-view .ux-primary-btn.is-unavailable:hover, .ux-rm-deploy-btn.is-unavailable:hover { filter: none; }
 
 /* ---------- the deploy modal: plain lede, and the review beside Deploy ---------- */
 .deploy-modal .deploy-modal-lede { font: 14px/1.5 var(--sans); font-style: normal; color: var(--ux-ink-2); }
