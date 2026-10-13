@@ -1251,3 +1251,59 @@ test('BROWSER 15: through the studio server, two rules it could not check — ea
   await closeSettings(w);
   await w.done();
 });
+
+// ---------- 16: a rule by type the page found on another field ----------
+
+test('BROWSER 16: through the studio server, a rule by type the page found on one URL field — an action that carries the other is a 409 naming that rule, and then waits for its box\'s tick as the send does; ticked, it carries acks [0] and goes', async (t) => {
+  if (skipUnlessBrowser(t)) return;
+  const dir = mkdtempSync(join(tmpdir(), 'observogram-mss-policy-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const policyFile = join(dir, 'policy.json');
+  writeFileSync(policyFile, JSON.stringify({ version: 1, rules: [{ when: { type: 'url', pattern: '^(?!https://approved\\.)' }, warn: WARN, require: { ack: ACK } }] }));
+  const studio = await startChild({ OBSERVOGRAM_MCP_ADMIN_PROXY: '1', OBSERVOGRAM_MCP_SETTINGS_POLICY: policyFile }, { execArgv: NO_WORKER });
+  t.after(() => studio.stop());
+  // Two URL fields, and an action that carries only the second.
+  const [first, ...rest] = EXAMPLE_SETTINGS_DESCRIPTOR.fields;
+  const descriptor = {
+    ...EXAMPLE_SETTINGS_DESCRIPTOR,
+    fields: [first, { name: 'lokiUrl', label: 'Logs base URL', type: 'url' }, ...rest],
+    actions: [{ name: 'repointLogs', label: 'Repoint the logs backend', fields: ['lokiUrl'] }, ...EXAMPLE_SETTINGS_DESCRIPTOR.actions],
+  };
+  const f = await fake({ descriptor, cors: false });
+  const gwId = await endpointIdFor(studio.child.base, f.url, { name: 'gw-by-type', headers: { Cookie: studio.cookies.ada } });
+  const repointLogs = '#mss-host [data-action-row="repointLogs"] .mss-action';
+  const w = await openPage(studio, 'ada');
+  const submits = watchSubmits(w);
+  await aim(w, { id: gwId });
+  await openSettings(w);
+  await w.waitStatus(/^The server describes its settings \(version 1\)\.$/);
+  await fill(w, 'grafanaUrl', 'https://other.example/');
+  await fill(w, 'lokiUrl', 'https://approved.example/');
+  await w.page.waitForFunction(() => document.querySelectorAll('#mss-host .mss-rule').length === 1, null, { timeout: T });
+  // The page's check finds the rule on the first URL only: its box, which the send waits for and the action does not.
+  assert.deepEqual(await ackBoxes(w), [{ rule: '0', warn: WARN, notes: [], ack: ACK, tick: ['0', false] }]);
+  assert.equal(await w.page.getAttribute('.mss-primary', 'aria-disabled'), 'true');
+  assert.equal(await w.page.getAttribute(repointLogs, 'aria-disabled'), null, 'the page\'s check passes the URL the action carries');
+
+  // The server could not check the URL the action carries: a 409 naming the same rule.
+  await w.page.click(repointLogs, { force: true });
+  await w.waitStatus(/^The studio server answered 409: /);
+  assert.equal(await w.status(), `The studio server answered 409: ${WARN} — tick "${ACK}" in the server settings.`);
+  assert.deepEqual(await Promise.all(submits.map(async (x) => [x.status, x.acks, x.action, await x.json])),
+    [[409, [], 'repointLogs', { ok: false, denied: 'policy-ack', rule: 0, unevaluated: true, error: `${WARN} — tick "${ACK}" in the server settings` }]]);
+  assert.deepEqual(await ackBoxes(w), [{ rule: '0', warn: WARN, notes: [], ack: ACK, tick: ['0', false] }], 'the page\'s box is the one the 409 names');
+  assert.equal(await w.page.getAttribute(repointLogs, 'aria-disabled'), 'true', 'the action now waits for that box');
+  await w.page.click(repointLogs, { force: true });
+  assert.equal(await w.status(), TICK, 'clicked again unticked, it says so');
+  assert.equal(submits.length, 1, 'and sends nothing');
+  assert.equal(postsTo(f).length, 0, 'nothing reached the MCP server');
+
+  // Ticked, the action carries acks [0] and goes.
+  await w.page.check('#mss-host .mss-policy input[data-ack="0"]');
+  assert.equal(await w.page.getAttribute(repointLogs, 'aria-disabled'), null, 'ticked, it may go');
+  await Promise.all([w.page.waitForResponse((r) => r.url().endsWith('/api/mcp-settings/submit')), w.page.click(repointLogs)]);
+  assert.deepEqual(submits.map((x) => [x.status, x.acks, x.action]), [[409, [], 'repointLogs'], [200, [0], 'repointLogs']]);
+  assert.deepEqual(postsTo(f).map((r) => r.body), [{ action: 'repointLogs', lokiUrl: 'https://approved.example/' }]);
+  await closeSettings(w);
+  await w.done();
+});

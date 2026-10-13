@@ -1157,7 +1157,8 @@ start, served at `GET /api/mcp-settings`, baked into a bundle by
   (the 409 below) that the page's check did not flag — one the server could
   not check, or one it matched — gets its acknowledgement in the modal too,
   with a line saying which; an action that carries a field the rule checks
-  waits for it as for the page's own; ticked, the next send carries it,
+  waits for it as for the page's own (the page's own box, when its check
+  flagged that rule on another field); ticked, the next send carries it,
   exactly what an API caller's `acks` attest, and an edit of a value the
   policy reads takes it away (the page's check decides again; a secret,
   which no rule reads, keeps it).

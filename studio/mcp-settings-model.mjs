@@ -415,19 +415,17 @@ export function primaryBlock({ policyState = 'none', requestReason = null, gener
  * fields waits on a settings policy not read (or unreadable), then on the
  * unticked ack of a rule that matched a field it sends (an unevaluated
  * finding concerns the form, not the action), or of a rule the studio
- * server's 409 named that the page's check did not find (policyView's
- * `named`) whose `fields` hold one it sends — any field it sends when they
- * are null.
+ * server's 409 named (policyView's `named`) whose `fields` hold one it sends
+ * — any field it sends when they are null —, whether or not the page's check
+ * found that rule on another field: its box is the one the 409 asks for.
  *   sent  the field names settingsRequest's `sent` lists for the action
  */
 export function actionBlock({ policyState = 'none', findings = [], sent = [], ticked = [], named = [] } = {}) {
   const fields = Array.isArray(sent) ? sent : [];
   if (!fields.length) return null;
   if (policyState === 'failed' || policyState === 'loading') return primaryBlock({ policyState });
-  const all = Array.isArray(findings) ? findings : [];
-  const applies = all.filter((f) => !f.unevaluated && fields.includes(f.field));
-  const found = new Set(all.map((f) => f.rule));
-  const server = (Array.isArray(named) ? named : []).filter((n) => n && !found.has(n.rule)
+  const applies = (Array.isArray(findings) ? findings : []).filter((f) => !f.unevaluated && fields.includes(f.field));
+  const server = (Array.isArray(named) ? named : []).filter((n) => n
     && (!Array.isArray(n.fields) || n.fields.some((name) => fields.includes(name))));
   return policyView(applies, ticked, server).block;
 }

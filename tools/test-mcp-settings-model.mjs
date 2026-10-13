@@ -269,7 +269,7 @@ test('a rule the studio server\'s 409 names: its box from the page\'s policy, el
   assert.equal(actionBlock({ policyState: 'served', findings: approved, sent: ['user'], named }), null, 'one that carries another field does not wait');
   assert.equal(actionBlock({ policyState: 'served', findings: approved, sent: [], named }), null, 'nor one that carries nothing');
   assert.equal(actionBlock({ policyState: 'served', findings: approved, sent: ['grafanaUrl'] }), null, 'none named: the page\'s check alone');
-  assert.equal(actionBlock({ policyState: 'served', findings: lib.policyFindings(policy, form, { grafanaUrl: 'https://elsewhere.example' }), sent: ['user'], named }), null, 'the page found the rule itself: its finding decides');
+  assert.equal(actionBlock({ policyState: 'served', findings: lib.policyFindings(policy, form, { grafanaUrl: 'https://elsewhere.example' }), sent: ['user'], named }), null, 'the page found the rule itself, and the action carries no field it checks');
   assert.equal(actionBlock({ policyState: 'served', findings: approved, sent: ['user'], named: [serverAckModel(drifted, null, form)] }), 'Tick "I rotated the key" to send — Keys — "rotate" — first.', 'a rule the page does not hold: any field it sends');
   const { policy: typed } = lib.compileSettingsPolicy({ version: 1, rules: [{ when: { type: 'text', pattern: '^admin$' }, warn: 'An admin login.', require: { ack: 'I meant admin' } }] }, { timed: false });
   const byType = servicesRefusal(409, { ok: false, denied: 'policy-ack', rule: 0, unevaluated: true, error: 'An admin login. — tick "I meant admin" in the server settings' });
@@ -277,6 +277,17 @@ test('a rule the studio server\'s 409 names: its box from the page\'s policy, el
   assert.equal(serverAckModel(byType, typed).fields, null, 'without the form the page cannot tell');
   assert.equal(actionBlock({ policyState: 'served', findings: [], sent: ['user'], named: [serverAckModel(byType, typed, form)] }), 'Tick "I meant admin" to send — An admin login.');
   assert.equal(actionBlock({ policyState: 'served', findings: [], sent: ['grafanaUrl'], named: [serverAckModel(byType, typed, form)] }), null);
+  // A rule by type the page found on one field and the 409 named for another
+  // the action carries: the action waits for the box (the page's) as the send does.
+  const { policy: urls } = lib.compileSettingsPolicy({ version: 1, rules: [{ when: { type: 'url', pattern: '^(?!https://approved\\.)' }, warn: WARN, require: { ack: ACK } }] }, { timed: false });
+  const twoUrls = lib.parseSettingsDescriptor(JSON.stringify({ version: 1, endpoint: '/configure', fields: [{ name: 'grafanaUrl', label: 'Backend base URL', type: 'url' }, { name: 'lokiUrl', label: 'Logs base URL', type: 'url' }], actions: [{ name: 'repointLogs', label: 'Repoint the logs backend', fields: ['lokiUrl'] }] })).descriptor;
+  const onFirst = lib.policyFindings(urls, twoUrls, { grafanaUrl: 'https://other.example/', lokiUrl: 'https://approved.example/' });
+  assert.deepEqual(onFirst.map((x) => [x.rule, x.field]), [[0, 'grafanaUrl']], 'the page finds the rule on the first URL only');
+  const forSecond = [serverAckModel(unchecked, urls, twoUrls)];
+  assert.equal(actionBlock({ policyState: 'served', findings: onFirst, sent: ['lokiUrl'] }), null, 'none named: the page\'s finding is on a field the action does not carry');
+  assert.equal(actionBlock({ policyState: 'served', findings: onFirst, sent: ['lokiUrl'], named: forSecond }), `Tick "${ACK}" to send — ${WARN}`, 'named, the action that carries the other URL waits for the box');
+  assert.equal(actionBlock({ policyState: 'served', findings: onFirst, sent: ['lokiUrl'], ticked: ['0'], named: forSecond }), null, 'ticked, it goes');
+  assert.deepEqual(policyView(onFirst, [], forSecond).rules, [{ rule: 0, warn: WARN, ack: ACK, notes: [] }], 'one box, the page\'s');
   // The send emptied the secrets that held a value: the notice asks for them again.
   assert.equal(secretsEmptiedLine(1), 'The secret you typed was emptied when the request left — type it again before you send.');
   assert.equal(secretsEmptiedLine(2), 'The secrets you typed were emptied when the request left — type them again before you send.');
