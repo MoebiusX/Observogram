@@ -5,7 +5,8 @@
  * The MCP server-settings API on the studio server (rebadge batch 4):
  * the settings policy (server/mcp-settings-policy.mjs) — OBSERVOGRAM_MCP_SETTINGS_POLICY
  * is read once at start(), an unreadable or invalid file refuses the boot
- * naming the variable, the path and the reason before the store is touched,
+ * naming the variable, the path and the reason before the store is touched
+ * (shape, never speed: a clock that jumps refuses no valid policy),
  * a BOM-led file loads, a loaded one is logged once (path and rule count)
  * and served by GET /api/mcp-settings without its path, the legacy
  * TOMOGRAPH_ spelling is honoured — and the opt-in pass-through's switch
@@ -27,9 +28,11 @@
  * the allowlist, https and the studio's own address; a redirect, a
  * timeout and an oversize description refused naming the origin only; the
  * endpoint's read token never sent, the transport hook never used, the
- * exact request headers; the policy re-checked (409, then forwarded) in a
- * worker under a 100 ms deadline (server/mcp-settings-eval.mjs: a slow
- * pattern counts as matched and the server keeps answering); an
+ * exact request headers; the policy re-checked (409, then forwarded; the 409
+ * says `unevaluated: true` only for a rule the server could not check) in a
+ * worker under a 100 ms deadline per rule (server/mcp-settings-eval.mjs: a
+ * slow pattern counts as matched and the server keeps answering; a flag a
+ * worker refuses is dropped, and a worker that cannot start fails closed); an
  * echoed secret redacted; one live.mcp-settings row without a value; the
  * secret in no log line, no store file and nothing under the workspace.
  */
@@ -37,6 +40,10 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, rmSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { Worker } from 'node:worker_threads';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,8 +61,8 @@ dropInheritedOrgVars();
 const { readSettingsPolicyConfig, MCP_SETTINGS_POLICY_ENV, MCP_ADMIN_PROXY_ENV } = await import('./mcp-settings-policy.mjs');
 const { hashPassword } = await import('./auth.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
-const { evaluatePolicy, POLICY_EVAL_DEADLINE_MS } = await import('./mcp-settings-eval.mjs');
-const { compileSettingsPolicy, genericDescriptor } = await import('../tools/lib/mcp-server-settings.mjs');
+const { evaluatePolicy, policyAckRefusal, POLICY_EVAL_DEADLINE_MS } = await import('./mcp-settings-eval.mjs');
+const { compileSettingsPolicy, genericDescriptor, policyFindings } = await import('../tools/lib/mcp-server-settings.mjs');
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const FIXTURE = join(ROOT, 'tools', 'fixtures', 'mcp-settings', 'policy.json');
@@ -116,6 +123,28 @@ test('readSettingsPolicyConfig refuses a missing file, invalid JSON, an unknown 
   assert.throws(() => readSettingsPolicyConfig({ OBSERVOGRAM_MCP_SETTINGS_POLICY: notObject }), { message: `OBSERVOGRAM_MCP_SETTINGS_POLICY: ${notObject}: the settings policy must be a JSON object` });
   // The legacy spelling is read, the modern name is the one every message spells.
   assert.throws(() => readSettingsPolicyConfig({ TOMOGRAPH_MCP_SETTINGS_POLICY: missing }), (e) => e.message.startsWith(`OBSERVOGRAM_MCP_SETTINGS_POLICY: ${missing}: ENOENT`));
+});
+
+test('readSettingsPolicyConfig checks each pattern\'s shape, never its speed: under a clock that jumps a second per read (a loaded machine), a valid policy loads and a bad one keeps its shape refusal', () => {
+  // compileBoundedPattern's id clocks (50 ms of wall time) read a thread a
+  // loaded machine descheduled as a slow pattern, and the start refused a
+  // valid policy (`rules[0].when: pattern too slow against a 256-character
+  // id`). The load runs no clock: the pass-through's worker deadline per
+  // rule is the guard (server/mcp-settings-eval.mjs).
+  const realNow = Date.now;
+  let t = 0;
+  Date.now = () => (t += 1000);
+  try {
+    assert.deepEqual(readSettingsPolicyConfig({ OBSERVOGRAM_MCP_SETTINGS_POLICY: FIXTURE }).policy, FIXTURE_JSON);
+    const generic = file('generic-jumping-clock.json', JSON.stringify(GENERIC));
+    assert.equal(readSettingsPolicyConfig({ OBSERVOGRAM_MCP_SETTINGS_POLICY: generic }).compiled.rules.length, 2);
+    const slow = file('slow-jumping-clock.json', JSON.stringify({ version: 1, rules: [{ when: { field: 'u', pattern: '^https://.*.*.*\\.internal$' }, warn: 'w' }] }));
+    assert.throws(() => readSettingsPolicyConfig({ OBSERVOGRAM_MCP_SETTINGS_POLICY: slow }), { message: `OBSERVOGRAM_MCP_SETTINGS_POLICY: ${slow}: rules[0].when: pattern has more than one unbounded quantifier (*, + or {n,}), which a URL-length value can make slow` });
+    const nested = file('nested-jumping-clock.json', JSON.stringify({ version: 1, rules: [{ when: { field: 'u', pattern: '^(a+)+$' }, warn: 'w' }] }));
+    assert.throws(() => readSettingsPolicyConfig({ OBSERVOGRAM_MCP_SETTINGS_POLICY: nested }), { message: `OBSERVOGRAM_MCP_SETTINGS_POLICY: ${nested}: rules[0].when: nested quantifier` });
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test('a file that starts with a byte-order mark (Windows PowerShell 5) loads as the same document — one BOM, no more', () => {
@@ -520,23 +549,51 @@ test('a loaded transport hook is never used: its record stays empty and the MCP 
   assert.equal(existsSync(record) ? readFileSync(record, 'utf8') : '', '', 'the hook saw nothing');
 });
 
+// A child's route gives each rule the default 100 ms from its start, and a
+// child has no seam for another: a machine loaded enough to hold the worker
+// past it counts the fixture's rule as matched — fail closed, a 409 and the
+// line below on the child's stderr. Only that answer is submitted again, at
+// most `tries` times in all; a 409 without the line is the rule matching.
+const RULE0_TIMED_OUT = '[mcp-settings] policy rules[0] did not finish within 100 ms — counted as matched';
+const rule0TimedOut = (s) => s.logs().stderr.split('\n').filter((l) => l === RULE0_TIMED_OUT).length;
+async function submitPastTimeouts(s, body, tries = 5) {
+  const count = () => rule0TimedOut(s);
+  for (let i = 1; ; i += 1) {
+    const before = count();
+    const r = await s.post(SUBMIT, body);
+    if (i === tries || r.status !== 409 || r.json?.denied !== 'policy-ack' || r.json.rule !== 0) return r;
+    // The line comes on the child's stderr, maybe after the answer.
+    for (const by = Date.now() + 5_000; count() === before && Date.now() < by;) await sleep(20);
+    if (count() === before) return r;
+  }
+}
+
 test('the settings policy is re-checked against the description the server read: a missing acknowledgement is a 409 naming it, nothing sent; ticked, the configure goes and the row records the index; on the generic form a rule keyed to an absent field still wants its ack', async () => {
   const f = await fakeMcp({ descriptor: EXAMPLE_SETTINGS_DESCRIPTOR });
   const s = await studio({ OBSERVOGRAM_MCP_SETTINGS_POLICY: FIXTURE });
   const id = await s.register(f.url);
   const values = { grafanaUrl: 'https://evil.example/', secret: SECRET };
   const want = [409, 'policy-ack', 0, 'Non-approved backend host. — tick "I have operator approval for this target" in the server settings'];
+  const timedOut = rule0TimedOut(s);
   const r1 = await s.post(SUBMIT, { mcpEndpointId: id, mode: 'described', values, acks: [] });
   assert.deepEqual([r1.status, r1.json.denied, r1.json.rule, r1.json.error], want);
+  // A match: the 409 has no `unevaluated` — unless the child logged rule 0
+  // past its deadline for it (the line may come after the answer).
+  if (r1.json.unevaluated !== undefined) for (const by = Date.now() + 5_000; rule0TimedOut(s) === timedOut && Date.now() < by;) await sleep(20);
+  assert.equal(r1.json.unevaluated, rule0TimedOut(s) > timedOut ? true : undefined, 'a match: the 409 says nothing of an unchecked rule');
   assert.equal(f.adminRequests.filter((x) => x.method === 'POST').length, 0);
-  const approved = await s.post(SUBMIT, { mcpEndpointId: id, mode: 'described', values: { grafanaUrl: 'HTTPS://Approved.example/', secret: SECRET } });
-  assert.equal(approved.status, 200, 'an approved host needs no ack');
+  // The approved host past 512 characters is too long for the policy to check: a 409 that says so.
+  const long = await s.post(SUBMIT, { mcpEndpointId: id, mode: 'described', values: { grafanaUrl: `https://approved.example/${'a'.repeat(600)}`, secret: SECRET }, acks: [] });
+  assert.deepEqual([long.status, long.json.denied, long.json.rule, long.json.unevaluated], [409, 'policy-ack', 0, true], 'the server could not check it');
+  assert.equal(f.adminRequests.filter((x) => x.method === 'POST').length, 0);
+  const approved = await submitPastTimeouts(s, { mcpEndpointId: id, mode: 'described', values: { grafanaUrl: 'HTTPS://Approved.example/', secret: SECRET } });
+  assert.equal(approved.status, 200, `an approved host needs no ack: ${approved.text}`);
   const r2 = await s.post(SUBMIT, { mcpEndpointId: id, mode: 'described', values, acks: [0] });
   assert.equal(r2.status, 200, r2.text);
   const rows = (await s.audit()).filter((x) => x.action === 'live.mcp-settings');
   assert.deepEqual(rows.map((x) => x.detail.acks), [[0], []], 'newest first: the acknowledged index, then none');
   const g1 = await s.post(SUBMIT, { mcpEndpointId: id, mode: 'generic', values: { url: 'https://approved.example/', secret: SECRET } });
-  assert.deepEqual([g1.status, g1.json.denied, g1.json.rule], [409, 'policy-ack', 0], 'unevaluated: its field is absent, so its ack is required');
+  assert.deepEqual([g1.status, g1.json.denied, g1.json.rule, g1.json.unevaluated], [409, 'policy-ack', 0, true], 'unevaluated: its field is absent, so its ack is required, and the 409 says the server could not check it');
   const g2 = await s.post(SUBMIT, { mcpEndpointId: id, mode: 'generic', values: { url: 'https://approved.example/', secret: SECRET }, acks: [0] });
   assert.equal(g2.status, 200, g2.text);
   assertNowhere(s, [SECRET]);
@@ -545,36 +602,231 @@ test('the settings policy is re-checked against the description the server read:
 // A slow part followed by what a probe's last character satisfies: compiles
 // in milliseconds, backtracks for minutes on a long underscore run.
 const BANG = '^.*_{0,60}_{0,60}_{0,60}_{0,60}!$';
+// A deadline no fast rule misses on a loaded machine (each rule has it from
+// its own start); the slow pattern, minutes long, misses it all the same.
+const GENEROUS_MS = 1000;
 
-test('evaluatePolicy: a rule that does not finish within the deadline counts as matched, its warn and ack apply; a fast rule before it is evaluated as written; one line names the rule, never the value', async (t) => {
-  assert.equal(POLICY_EVAL_DEADLINE_MS, 100);
+test('evaluatePolicy: each rule has the deadline from its own start; one that does not finish counts as matched, its warn and ack apply, and so does every rule after it (never run); a fast rule before it is evaluated as written; one line names the rules, never the value', async (t) => {
+  assert.equal(POLICY_EVAL_DEADLINE_MS, 100, 'the default, the route\'s');
   const { policy, errors } = compileSettingsPolicy({ version: 1, rules: [
     { when: { field: 'url', pattern: '^https://slow\\.example/' }, warn: 'Fast match.', require: { ack: 'ack 0' } },
     { when: { field: 'user', pattern: '^root$' }, warn: 'Fast miss.' },
     { when: { type: 'url', pattern: BANG }, warn: 'Slow pattern.', require: { ack: 'ack 2' } },
-  ] });
+    { when: { field: 'user', pattern: '^nobody$' }, warn: 'After the slow one.', require: { ack: 'ack 3' } },
+  ] }, { timed: false }); // the id clocks, load-sensitive, are tools/test-artefact-classify.mjs's subject
   assert.deepEqual(errors, [], 'the shape checks admit the slow pattern');
   const d = genericDescriptor();
   const value = `https://slow.example/${'_'.repeat(400)}`;
   const lines = [];
   const t0 = Date.now();
-  const out = await evaluatePolicy(policy, d, { url: value, user: 'bob' }, { log: (l) => lines.push(l) });
+  const out = await evaluatePolicy(policy, d, { url: value, user: 'bob' }, { deadlineMs: GENEROUS_MS, log: (l) => lines.push(l) });
   const tookMs = Date.now() - t0;
-  t.diagnostic(`bound: evaluatePolicy answers within the deadline plus a worker start: ${tookMs} ms < 2000 ms`);
-  assert.ok(tookMs < 2000, `answered within the deadline plus a worker start (${tookMs} ms)`);
-  assert.deepEqual(out.timedOut, [2]);
-  assert.deepEqual(out.findings.map((f) => [f.rule, f.field, f.ack, f.timedOut === true]), [[0, 'url', 'ack 0', false], [2, 'url', 'ack 2', true]]);
-  assert.equal(out.findings[1].note, 'Policy rule 3 did not finish within 100 ms, so it counts as matched');
-  assert.deepEqual(lines, ['[mcp-settings] policy rules[2] did not finish within 100 ms — counted as matched']);
+  t.diagnostic(`bound: evaluatePolicy answers at the slow rule's deadline, not when its pattern ends: ${tookMs} ms < 15000 ms`);
+  assert.ok(tookMs < 15_000, `answered at the slow rule's deadline, not when its pattern ends minutes later (${tookMs} ms)`);
+  assert.deepEqual(out.timedOut, [2, 3]);
+  assert.deepEqual(out.findings.map((f) => [f.rule, f.field, f.ack, f.timedOut === true]), [[0, 'url', 'ack 0', false], [2, 'url', 'ack 2', true], [3, 'user', 'ack 3', true]]);
+  assert.equal(out.findings[1].note, `Policy rule 3 did not finish within ${GENEROUS_MS} ms, so it counts as matched`);
+  assert.deepEqual(lines, [`[mcp-settings] policy rules[2], rules[3] did not finish within ${GENEROUS_MS} ms — counted as matched`]);
   // All fast: exactly policyFindings' answer, nothing logged.
-  const fast = await evaluatePolicy(policy, d, { url: 'https://slow.example/a', user: 'root' }, { log: (l) => lines.push(l) });
+  const fast = await evaluatePolicy(policy, d, { url: 'https://slow.example/a', user: 'root' }, { deadlineMs: GENEROUS_MS, log: (l) => lines.push(l) });
   assert.deepEqual(fast.timedOut, []);
   assert.deepEqual(fast.findings.map((f) => [f.rule, f.field, f.ack]), [[0, 'url', 'ack 0'], [1, 'user', null]]);
   assert.equal(lines.length, 1);
   assert.deepEqual(await evaluatePolicy(null, d, { url: value }), { findings: [], timedOut: [] });
 });
 
-test('a slow policy pattern costs its acknowledgement, never the server: the submit is a 409 within 2 s naming the rule, the server answers meanwhile, with the ack the configure goes; the log names the rule, never the value', { timeout: 30_000 }, async (t) => {
+// Three rules on the generic form — a fast match, a fast miss, the slow
+// pattern — and what policyFindings answers for the fast two.
+const START_RULES = { version: 1, rules: [
+  { when: { field: 'url', pattern: '^https://slow\\.example/' }, warn: 'Fast match.', require: { ack: 'ack 0' } },
+  { when: { field: 'user', pattern: '^root$' }, warn: 'Fast miss.' },
+  { when: { type: 'url', pattern: BANG }, warn: 'Slow pattern.', require: { ack: 'ack 2' } },
+] };
+const startPolicy = () => compileSettingsPolicy(START_RULES, { timed: false }).policy;
+const START_VALUES = { url: `https://slow.example/${'_'.repeat(400)}`, user: 'bob' };
+const START_FINDINGS = [[0, 'url', 'ack 0', false], [2, 'url', 'ack 2', true]];
+const startShape = (out) => ({ timedOut: out.timedOut, findings: out.findings.map((f) => [f.rule, f.field, f.ack, f.timedOut === true]) });
+
+test('a server started with a flag a worker refuses (node --max-old-space-size=…): the policy worker is constructed once more with no flags and answers as policyFindings does — in-process with the flag given, and in a child started with it', async () => {
+  const d = genericDescriptor();
+  const calls = [];
+  const lines = [];
+  const createWorker = (url, options) => { calls.push(options.execArgv); return new Worker(url, options); };
+  const out = await evaluatePolicy(startPolicy(), d, START_VALUES, { execArgv: ['--max-old-space-size=512', '--input-type=module'], createWorker, deadlineMs: GENEROUS_MS, log: (l) => lines.push(l) });
+  assert.deepEqual(calls, [['--max-old-space-size=512'], []], 'the server\'s flags but --input-type, refused; then none — never the inherited ones');
+  assert.deepEqual(startShape(out), { timedOut: [2], findings: START_FINDINGS });
+  assert.deepEqual(lines, [`[mcp-settings] policy rules[2] did not finish within ${GENEROUS_MS} ms — counted as matched`], 'the slow rule at its deadline: the worker ran');
+  // The default path: a process started with the flag, its own execArgv.
+  const code = `
+    const { evaluatePolicy } = await import(${JSON.stringify(new URL('./mcp-settings-eval.mjs', import.meta.url).href)});
+    const { compileSettingsPolicy, genericDescriptor } = await import(${JSON.stringify(new URL('../tools/lib/mcp-server-settings.mjs', import.meta.url).href)});
+    const { policy } = compileSettingsPolicy(${JSON.stringify(START_RULES)}, { timed: false });
+    const out = await evaluatePolicy(policy, genericDescriptor(), ${JSON.stringify(START_VALUES)}, { deadlineMs: ${GENEROUS_MS} });
+    process.stdout.write(JSON.stringify(out));
+    process.exit(0);`;
+  const child = spawnSync(process.execPath, ['--max-old-space-size=512', '--input-type=module', '-e', code], { env: childEnv(null), encoding: 'utf8', timeout: 60_000 });
+  assert.equal(child.status, 0, child.stderr);
+  assert.deepEqual(startShape(JSON.parse(child.stdout)), { timedOut: [2], findings: START_FINDINGS });
+  assert.deepEqual(child.stderr.split('\n').filter((l) => l.startsWith('[mcp-settings]')), [`[mcp-settings] policy rules[2] did not finish within ${GENEROUS_MS} ms — counted as matched`], 'the deadline\'s line, never "the policy worker failed"');
+});
+
+// A worker stand-in: what the factory hands back, posting on the port the evaluator gave it.
+class FakeWorker extends EventEmitter {
+  terminate() { this.terminated = true; return Promise.resolve(0); }
+}
+
+test('a policy worker that cannot be constructed, or fails, fails closed: every rule it did not finish counts as matched (every rule, when it never started), one line names the error class, never its message; a refused flag is tried once more, no more; evaluatePolicy never rejects', async () => {
+  const d = genericDescriptor();
+  const failedLine = (cls) => `[mcp-settings] the policy worker failed (${cls}) — rules[0], rules[1], rules[2] counted as matched`;
+  const everyRule = { timedOut: [0, 1, 2], findings: [[0, 'url', 'ack 0', true], [1, 'user', null, true], [2, 'url', 'ack 2', true]] };
+  const lines = [];
+  const log = (l) => lines.push(l);
+  let tries = 0;
+  const cannot = () => { tries += 1; throw new RangeError(`cannot start for ${START_VALUES.url}`); };
+  const throws = await evaluatePolicy(startPolicy(), d, START_VALUES, { createWorker: cannot, log });
+  assert.deepEqual(startShape(throws), everyRule);
+  assert.equal(tries, 1, 'only a refused flag is tried again');
+  assert.equal(throws.findings[0].note, 'Policy rule 1 did not finish within 100 ms, so it counts as matched');
+  let refusals = 0;
+  const refuse = () => {
+    refusals += 1;
+    throw Object.assign(new Error('Initiated Worker with invalid execArgv flags: --max-old-space-size=512'), { code: 'ERR_WORKER_INVALID_EXEC_ARGV' });
+  };
+  assert.deepEqual(startShape(await evaluatePolicy(startPolicy(), d, START_VALUES, { createWorker: refuse, log })), everyRule);
+  assert.equal(refusals, 2, 'once with the server\'s flags, once with none');
+  // Constructed, then failed (an uncaught error in the worker): the same answer and the same line.
+  let fake = null;
+  const failing = () => {
+    fake = new FakeWorker();
+    setImmediate(() => fake.emit('error', new SyntaxError(`a value: ${START_VALUES.url}`)));
+    return fake;
+  };
+  assert.deepEqual(startShape(await evaluatePolicy(startPolicy(), d, START_VALUES, { createWorker: failing, log })), everyRule);
+  assert.equal(fake.terminated, true, 'the failed worker is terminated');
+  assert.deepEqual(lines, [failedLine('RangeError'), failedLine('Error'), failedLine('SyntaxError')]);
+  assert.ok(!lines.join('\n').includes('slow.example') && !lines.join('\n').includes('max-old-space'), 'never the error\'s message');
+  // Failed after rules[0] finished (an error thrown in rules[1], say): the
+  // finished rule keeps its findings, and only the rules it did not finish
+  // count as matched — never every rule.
+  const partway = (url, options) => {
+    const w = new FakeWorker();
+    const { port } = options.workerData;
+    port.postMessage({ start: 0 });
+    port.postMessage({ rule: 0, findings: [{ rule: 0, field: 'url', warn: 'Fast match.', ack: 'ack 0', unevaluated: false }], start: 1 });
+    setImmediate(() => w.emit('error', new TypeError(`a value: ${START_VALUES.url}`)));
+    return w;
+  };
+  const partLines = [];
+  const part = await evaluatePolicy(startPolicy(), d, START_VALUES, { createWorker: partway, deadlineMs: GENEROUS_MS, log: (l) => partLines.push(l) });
+  assert.deepEqual(startShape(part), { timedOut: [1, 2], findings: [[0, 'url', 'ack 0', false], [1, 'user', null, true], [2, 'url', 'ack 2', true]] });
+  assert.deepEqual(partLines, ['[mcp-settings] the policy worker failed (TypeError) — rules[1], rules[2] counted as matched']);
+  // Exited before its start, with no error (as a start past its limit
+  // ends): every rule counts as matched, and the line names the deadline —
+  // there is no class to name.
+  const unstarted = () => {
+    const w = new FakeWorker();
+    setImmediate(() => w.emit('exit', 1));
+    return w;
+  };
+  const exitLines = [];
+  assert.deepEqual(startShape(await evaluatePolicy(startPolicy(), d, START_VALUES, { createWorker: unstarted, log: (l) => exitLines.push(l) })), everyRule);
+  assert.deepEqual(exitLines, ['[mcp-settings] policy rules[0], rules[1], rules[2] did not finish within 100 ms — counted as matched']);
+  // A log that throws costs the line, never the answer.
+  const loud = await evaluatePolicy(startPolicy(), d, START_VALUES, { createWorker: refuse, log: () => { throw new Error('stderr closed'); } });
+  assert.deepEqual(startShape(loud), everyRule);
+  // A policy without rules — none, or no list of them, or only entries that
+  // are no rule with an index (null, undefined) — answers as null does: no
+  // findings, no worker, no line.
+  let built = 0;
+  const counted = () => { built += 1; throw new Error('never constructed'); };
+  const ruleless = [];
+  for (const policy of [{}, { rules: null }, { rules: 'not a list' }, { rules: [] }, { rules: [null] }, { rules: [undefined] }, { rules: [null, undefined, 7] }]) {
+    assert.deepEqual(await evaluatePolicy(policy, d, START_VALUES, { createWorker: counted, log: (l) => ruleless.push(l) }), { findings: [], timedOut: [] }, JSON.stringify(policy));
+  }
+  // So does a list that cannot be read — its length throws, or it is a
+  // revoked Proxy (it rejected before: the list check and its length were
+  // read outside any guard).
+  const revocable = Proxy.revocable([], {});
+  revocable.revoke();
+  const unreadableLists = {
+    lengthThrows: new Proxy([], { get(t, k) { if (k === 'length') throw new Error('len'); return t[k]; } }),
+    revoked: revocable.proxy,
+  };
+  for (const [name, rules] of Object.entries(unreadableLists)) {
+    assert.deepEqual(await evaluatePolicy({ rules }, d, START_VALUES, { createWorker: counted, log: (l) => ruleless.push(l) }), { findings: [], timedOut: [] }, name);
+  }
+  assert.equal(built, 0, 'no worker');
+  assert.deepEqual(ruleless, []);
+  // Beside rules, such an entry is none and the rules fail closed as ever
+  // (it threw before: the fail-closed path read every entry's index).
+  const mixedLines = [];
+  const mixed = await evaluatePolicy({ rules: [null, ...startPolicy().rules, undefined] }, d, START_VALUES, { createWorker: refuse, log: (l) => mixedLines.push(l) });
+  assert.deepEqual(startShape(mixed), everyRule);
+  assert.deepEqual(mixedLines, [failedLine('Error')]);
+  // Options that cannot be read fail closed like a worker that cannot be constructed.
+  const optionLines = [];
+  const unreadable = await evaluatePolicy(startPolicy(), d, START_VALUES, { log: (l) => optionLines.push(l), get createWorker() { throw new RangeError(`a value: ${START_VALUES.url}`); } });
+  assert.deepEqual(startShape(unreadable), everyRule);
+  assert.deepEqual(optionLines, [failedLine('RangeError')]);
+});
+
+test('the 409 for a missing acknowledgement names the first unticked rule and says `unevaluated: true` only when the server could not check it — a rule past its deadline or a failed worker, a rule that cannot run on the form, a value too long to check — never for a match; no value in it', async () => {
+  const d = genericDescriptor();
+  const { policy } = compileSettingsPolicy({ version: 1, rules: [
+    { when: { field: 'url', pattern: '^https://evil\\.' }, warn: 'Non-approved backend host.', require: { ack: 'I have operator approval' } },
+    { when: { field: 'user', pattern: '^root$' }, warn: 'A root user.' },
+    { when: { field: 'grafanaUrl', pattern: '^' }, warn: 'Needs grafanaUrl.', require: { ack: 'I checked the URL' } },
+  ] }, { timed: false });
+  const values = { url: 'https://evil.example/', user: 'root', secret: SECRET };
+  // Matched: policyFindings' own answer (as a worker that finishes returns it).
+  const found = policyFindings(policy, d, values);
+  assert.deepEqual(policyAckRefusal(found, []), { ok: false, denied: 'policy-ack', rule: 0, error: 'Non-approved backend host. — tick "I have operator approval" in the server settings' }, 'a match: no flag');
+  // Rule 2's field is not on the generic form: it cannot run, so the server could not check it.
+  assert.deepEqual(policyAckRefusal(found, [0]), { ok: false, denied: 'policy-ack', rule: 2, unevaluated: true, error: 'Needs grafanaUrl. — tick "I checked the URL" in the server settings' });
+  assert.equal(policyAckRefusal(found, [0, 2]), null, 'every ack ticked');
+  assert.equal(policyAckRefusal([], []), null);
+  // A value over 512 characters is never run through the pattern (it would not match here): unchecked.
+  const long = `https://ok.example/${'a'.repeat(600)}`;
+  const tooLong = policyFindings(policy, d, { ...values, url: long });
+  assert.deepEqual(policyAckRefusal(tooLong, []), { ok: false, denied: 'policy-ack', rule: 0, unevaluated: true, error: 'Non-approved backend host. — tick "I have operator approval" in the server settings' }, 'too long to check: flagged');
+  assert.ok(!JSON.stringify(policyAckRefusal(tooLong, [])).includes('ok.example'), 'no value');
+  // Past the deadline, or a worker that cannot start: every rule counted as matched, each flagged.
+  const failed = await evaluatePolicy(policy, d, values, { createWorker: () => { throw new Error('no worker'); }, log: () => {} });
+  assert.deepEqual(policyAckRefusal(failed.findings, []), { ok: false, denied: 'policy-ack', rule: 0, unevaluated: true, error: 'Non-approved backend host. — tick "I have operator approval" in the server settings' });
+  assert.equal(policyAckRefusal(failed.findings, [0]).rule, 2);
+  const late = { rule: 0, field: 'url', warn: 'w', ack: 'a', unevaluated: false, timedOut: true, note: 'n' };
+  assert.equal(policyAckRefusal([late], []).unevaluated, true);
+  for (const r of [policyAckRefusal(found, []), policyAckRefusal(failed.findings, [0])]) {
+    assert.ok(!JSON.stringify(r).includes('evil.example') && !JSON.stringify(r).includes(SECRET) && !JSON.stringify(r).includes('^'), 'no value and no pattern');
+  }
+});
+
+test('each rule\'s deadline runs from its own start: two rules that each take 0.6 of it both finish — a deadline shared from the worker\'s start would count the second as matched', async () => {
+  const D = 200;
+  const policy = compileSettingsPolicy({ version: 1, rules: [
+    { when: { field: 'url', pattern: '^https://' }, warn: 'First.', require: { ack: 'ack 0' } },
+    { when: { field: 'user', pattern: '^root$' }, warn: 'Second.', require: { ack: 'ack 1' } },
+  ] }, { timed: false }).policy;
+  // The worker's protocol (the bottom of server/mcp-settings-eval.mjs): each
+  // rule's start, a rule's answer with the next rule's start, then done.
+  const paced = (url, options) => {
+    const { port } = options.workerData;
+    port.postMessage({ start: 0 });
+    setTimeout(() => {
+      port.postMessage({ rule: 0, findings: [], start: 1 });
+      setTimeout(() => port.postMessage({ rule: 1, findings: [], done: true }), D * 0.6);
+    }, D * 0.6);
+    return new FakeWorker();
+  };
+  const lines = [];
+  const out = await evaluatePolicy(policy, genericDescriptor(), { url: 'http://a.example', user: 'bob' }, { createWorker: paced, deadlineMs: D, log: (l) => lines.push(l) });
+  assert.deepEqual(out, { findings: [], timedOut: [] });
+  assert.deepEqual(lines, []);
+});
+
+// A blocked server would answer only once the pattern ends, minutes later, so
+// bounds of seconds prove it kept answering, whatever the machine's load.
+test('a slow policy pattern costs its acknowledgement, never the server: the submit is a 409 within seconds naming the rule, the server answers meanwhile, with the ack the configure goes; the log names the rule and the default 100 ms, never the value', { timeout: 60_000 }, async (t) => {
   const f = await fakeMcp({ descriptor: null });
   const policyFile = file('policy-slow.json', JSON.stringify({ version: 1, rules: [{ when: { type: 'url', pattern: BANG }, warn: 'Unreviewed backend.', require: { ack: 'I reviewed the backend' } }] }));
   const s = await studio({ OBSERVOGRAM_MCP_SETTINGS_POLICY: policyFile });
@@ -584,16 +836,17 @@ test('a slow policy pattern costs its acknowledgement, never the server: the sub
   const t0 = Date.now();
   const pending = s.post(SUBMIT, body([]));
   const g0 = Date.now();
-  const r = await fetch(`${s.base}/api/mcp-settings`, { headers: s.headers('ada'), signal: AbortSignal.timeout(5000) });
+  const r = await fetch(`${s.base}/api/mcp-settings`, { headers: s.headers('ada'), signal: AbortSignal.timeout(10_000) });
   assert.equal(r.status, 200);
   const otherMs = Date.now() - g0;
-  t.diagnostic(`bound: another request answers while the submit is checked: ${otherMs} ms < 1500 ms`);
-  assert.ok(otherMs < 1500, `another request answers while the submit is checked (${otherMs} ms)`);
+  t.diagnostic(`bound: another request answers while the submit is checked: ${otherMs} ms < 10000 ms`);
+  assert.ok(otherMs < 10_000, `another request answers while the submit is checked (${otherMs} ms)`);
   const r1 = await pending;
   const submitMs = Date.now() - t0;
-  t.diagnostic(`bound: the submit answers within 2 s: ${submitMs} ms < 2000 ms`);
-  assert.ok(submitMs < 2000, `the submit answers within 2 s (${submitMs} ms)`);
+  t.diagnostic(`bound: the submit answers within the worker's start and the deadline: ${submitMs} ms < 15000 ms`);
+  assert.ok(submitMs < 15_000, `the submit answers within the worker's start and the deadline, not when the pattern ends (${submitMs} ms)`);
   assert.deepEqual([r1.status, r1.json.denied, r1.json.rule, r1.json.error], [409, 'policy-ack', 0, 'Unreviewed backend. — tick "I reviewed the backend" in the server settings']);
+  assert.equal(r1.json.unevaluated, true, 'the server says it could not check the rule');
   assert.ok(!r1.text.includes('_'.repeat(20)), 'the answer never echoes the value');
   assert.equal(f.adminRequests.filter((x) => x.method === 'POST').length, 0, 'nothing sent');
   const r2 = await s.post(SUBMIT, body([0]));
