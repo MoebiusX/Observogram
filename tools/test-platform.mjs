@@ -12,7 +12,7 @@
 //       paths — none is a filesystem path;
 //   P5  every platform branch of a suite goes through the fixture — no other
 //       suite or fixture reads process.platform or spells 'win32';
-//   P6  every win32 skip states its reason, isWin32 is a data read in the two
+//   P6  every win32 skip states its reason, isWin32 is a data read in the
 //       allowed places only (never a silent branch), and README's count of
 //       the skip sites is the count in the sources.
 //
@@ -69,8 +69,13 @@ const WIN32_SKIP_ARG_RE = new RegExp(`^\\s*${REASON}\\s*$`);
 const SKIP_ON_WIN32_ARG_RE = new RegExp(`^\\s*(?:t|null)\\s*,\\s*${REASON}\\s*$`);
 const README_COUNT_RE = /(\d+) win32-skip sites/;
 // isWin32 is a data read (a ternary over an expected value), never a branch
-// that silently skips: the two places, and the two shapes refused everywhere.
-const ISWIN32_ALLOWED = Object.freeze({ 'server/test-store-ops.mjs': 1, 'tools/test-backend-validate.mjs': 2 });
+// that silently skips: the allowed places, and the two shapes refused everywhere.
+const ISWIN32_ALLOWED = Object.freeze({
+  'server/test-store-ops.mjs': 1,       // the flat-export index.json mode: 0666 on Windows
+  'server/test-store-paths.mjs': 1,     // the default host's rule: a directory spelled in another case is itself on Windows
+  'tools/test-backend-validate.mjs': 2, // the .exe suffix and the mimirtool notice
+  'tools/test-journey-scope.mjs': 1,    // the default host's rule: beta's file spelled in another case is refused on Windows
+});
 const ISWIN32_IF_RE = /\bif\s*\([^)]*\bisWin32\b/;
 const ISWIN32_SKIP_RE = /\bskip:\s*[^,}]*\bisWin32\b/;
 const PROCESS_PLATFORM_RE = /\bprocess\s*\.\s*platform\b/;
@@ -246,7 +251,7 @@ test('P6 every win32 skip states its reason; README counts them', () => {
   assert.equal(Number(m[1]), total, `README says ${m[1]} win32-skip sites, the sources hold ${total}: ${JSON.stringify(perFile)}`);
   for (const [f, n] of Object.entries(perFile)) assert.ok(platforms.includes(`\`${f}\` (${n})`), `README names ${f} (${n})`);
 
-  // isWin32 is a data read in the two allowed places and never a silent branch.
+  // isWin32 is a data read in the allowed places and never a silent branch.
   const isWin32Counts = {};
   const silent = [];
   for (const f of SUITES) {
@@ -256,7 +261,7 @@ test('P6 every win32 skip states its reason; README counts them', () => {
     for (const l of bad) silent.push(`${f}:${l}`);
   }
   assert.deepEqual(silent, [], `isWin32 inside an if(…) or a skip: option is a silent skip — use win32Skip(reason) / skipOnWin32(t, reason):\n${silent.join('\n')}`);
-  assert.deepEqual(isWin32Counts, { ...ISWIN32_ALLOWED }, 'isWin32 is read as data in the allowed places only (the 0666 expectation, the .exe suffix and the mimirtool notice); a new read is a reviewed addition to ISWIN32_ALLOWED');
+  assert.deepEqual(isWin32Counts, { ...ISWIN32_ALLOWED }, 'isWin32 is read as data in the allowed places only (the 0666 expectation, the .exe suffix and the mimirtool notice, the default host\'s rule in the two path-comparison suites); a new read is a reviewed addition to ISWIN32_ALLOWED');
   for (const src of ['if (isWin32) return;', '{ skip: isWin32 }', "{ skip: isWin32 && 'x' }", "test('x', { skip: isWin32 }, () => {})"]) {
     assert.deepEqual(isWin32Uses(src).silent, [1], `reported: ${src}`);
   }
