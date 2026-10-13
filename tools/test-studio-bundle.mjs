@@ -2,7 +2,9 @@
 //
 //   node --test tools/test-studio-bundle.mjs
 //
-// T1 the module graph · T2 the specifier rewrite · T3 the build (a real
+// T1 the module graph (a bare npm package only from a tools/lib module whose
+// VENDOR-MANIFEST.json npm field lists it; the live studio's graph reaches
+// none) · T2 the specifier rewrite · T3 the build (a real
 // bundle in a tmpdir: every data: module parses, the stylesheets in order,
 // nothing left pointing at the server, the licence element and its pointer
 // comment, the guards and the CLI exits) · T4
@@ -48,6 +50,7 @@ import { join, resolve, dirname, sep } from 'node:path';
 import {
   collectModuleGraph, rewriteSpecifiers, assertRewritten, inlineJson, styleBlock, buildStudioBundle,
   checkPackUrl, parseArgs, defaultPackId, ENTRIES, CONFIG_ID, DEFAULT_ROOT, LICENCES_ID, pointerComment, verifyBundleNotices,
+  collectBundledPackages,
   resolveTaxonomySource, loadTaxonomyFile, loadBundleBrand, checkBrandUrls,
   resolveSettingsPolicySource, loadSettingsPolicyFile, resolveMcpOrigins, checkBakedOrigins,
 } from './build-studio-bundle.mjs';
@@ -155,8 +158,28 @@ function zipEntryNames(bytes) {
 
 // ---------- T1 the graph ----------
 
-test('T1 collectModuleGraph: every module under studio/ or lib/, the dynamic /lib imports reached, no node:* or bare specifier, a bare one throws naming the file', () => {
+// The import chain from the graph's first entry to the module that imports `pkg` (for a failure sentence).
+function chainTo(graph, pkg) {
+  const first = graph.keys().next().value;
+  const parent = new Map([[first, null]]);
+  const queue = [first];
+  while (queue.length) {
+    const k = queue.shift();
+    const mod = graph.get(k);
+    if (mod.imports.some((i) => i.package === pkg)) {
+      const chain = [];
+      for (let x = k; x; x = parent.get(x)) chain.unshift(graph.get(x).path);
+      return chain.join(' → ');
+    }
+    for (const i of mod.imports) if (!i.package && !parent.has(i.key)) { parent.set(i.key, k); queue.push(i.key); }
+  }
+  return '(not reached)';
+}
+const liveGraphProblems = (graph) => [...graph.packages].map((pkg) => `the live studio's module graph reaches ${pkg} (through ${chainTo(graph, pkg)}) — the server's /lib mount has no import map, so it cannot load there; import it only from the static shim's routes (studio/static-backend.mjs)`);
+
+test('T1 collectModuleGraph: every module under studio/ or lib/, the dynamic /lib imports reached, no node:* specifier, a bare one throws naming the file unless a tools/lib module\'s manifest npm field lists it; the live studio\'s graph reaches no package', () => {
   const graph = collectModuleGraph(ROOT, ENTRIES);
+  const closure = collectBundledPackages(ROOT, graph.packages);
   const keys = [...graph.keys()];
   assert.ok(keys.length > 60, `a real graph (${keys.length} modules)`);
   assert.ok(keys.every((k) => k.startsWith('studio/') || k.startsWith('lib/')), 'every key is studio/… or lib/…');
@@ -170,8 +193,18 @@ test('T1 collectModuleGraph: every module under studio/ or lib/, the dynamic /li
   for (const [k, mod] of graph) {
     assert.ok(!/from\s+['"]node:/.test(mod.src), `${k} imports no node:* module`);
     assert.equal(mod.path, k.startsWith('lib/') ? `tools/lib/${k.slice(4)}` : k);
-    for (const imp of mod.imports) assert.ok(graph.has(imp.key), `${k} → ${imp.spec} resolves to a graph module (${imp.key})`);
+    for (const imp of mod.imports) {
+      if (imp.package) assert.ok(closure.has(imp.package) && k.startsWith('lib/'), `${k} → ${imp.spec} is a bundled package, imported by a tools/lib module`);
+      else assert.ok(graph.has(imp.key), `${k} → ${imp.spec} resolves to a graph module (${imp.key})`);
+    }
   }
+  // The live studio (studio/app.mjs through the server's /lib mount, which has no import map) reaches no npm package:
+  // packages enter the bundle only through the static shim. Proven to bite: a view importing the traceability graph
+  // would reach the PromQL parser's package.
+  assert.deepEqual(liveGraphProblems(collectModuleGraph(ROOT, ['studio/app.mjs'])), []);
+  const realApp = readFileSync(join(ROOT, 'studio/app.mjs'), 'utf8');
+  const probe = collectModuleGraph(ROOT, ['studio/app.mjs'], { read: (p) => (p === 'studio/app.mjs' ? `${realApp}\nexport const probeGraph = () => import('/lib/traceability-graph.mjs');\n` : readFileSync(join(ROOT, ...p.split('/')), 'utf8')) });
+  assert.deepEqual(liveGraphProblems(probe), ["the live studio's module graph reaches @prometheus-io/lezer-promql (through studio/app.mjs → tools/lib/traceability-graph.mjs → tools/lib/promql-lezer.mjs) — the server's /lib mount has no import map, so it cannot load there; import it only from the static shim's routes (studio/static-backend.mjs)"]);
   // The regex that collects is not the one that would be fooled: a string ending in "import" is not a side-effect import.
   const files = {
     'studio/app.mjs': "import { a } from './a.mjs';\nconst t = { note: 'nothing to import', tone: 'x' };\n",
@@ -186,6 +219,22 @@ test('T1 collectModuleGraph: every module under studio/ or lib/, the dynamic /li
   assert.throws(() => collectModuleGraph(ROOT, ENTRIES, { read: (p) => files[p] }), /studio\/a\.mjs:2: cannot inline the specifier '@x\/y'/);
   files['studio/a.mjs'] = "import { readFileSync } from 'node:fs';\nexport const a = 1;\n";
   assert.throws(() => collectModuleGraph(ROOT, ENTRIES, { read: (p) => files[p] }), /studio\/a\.mjs:1: cannot inline the specifier 'node:fs'/);
+  // A bare package in a tools/lib module: accepted when the module's npm field lists it (recorded as a package import,
+  // collected into graph.packages); refused when it does not (R-a), or when it names a file inside the package (R-b).
+  files['studio/a.mjs'] = 'export const a = 1;\n';
+  files['tools/lib/side.mjs'] = "import { parser } from '@acme/parser';\nexport const side = parser;\n";
+  const listing = (names) => ({ read: (p) => { if (!(p in files)) throw new Error(`module file missing: ${p}`); return files[p]; }, npmOf: (p) => (p === 'tools/lib/side.mjs' ? names : []) });
+  const withPackage = collectModuleGraph(ROOT, ENTRIES, listing(['@acme/parser']));
+  assert.deepEqual(withPackage.get('lib/side.mjs').imports, [{ spec: '@acme/parser', key: '@acme/parser', package: '@acme/parser' }]);
+  assert.deepEqual([...withPackage.packages], ['@acme/parser']);
+  assert.ok(!withPackage.has('@acme/parser'), 'a package is no graph module');
+  assert.throws(() => collectModuleGraph(ROOT, ENTRIES, listing([])), { message: "tools/lib/side.mjs:1: cannot inline the specifier '@acme/parser' — a package is bundled only when VENDOR-MANIFEST.json lists it in this module's npm field (a package.json dependency; npm run vendor-manifest)" });
+  files['tools/lib/side.mjs'] = "import { parser } from '@acme/parser/dist/index.js';\nexport const side = parser;\n";
+  assert.throws(() => collectModuleGraph(ROOT, ENTRIES, listing(['@acme/parser'])), { message: "tools/lib/side.mjs:1: cannot inline the specifier '@acme/parser/dist/index.js' — a package is bundled by its own name (@acme/parser), never a file inside it" });
+  // The same bare import in a studio module keeps today's refusal: the live studio cannot load a package.
+  files['studio/a.mjs'] = "import x from '@acme/parser';\nexport const a = x;\n";
+  assert.throws(() => collectModuleGraph(ROOT, ENTRIES, listing(['@acme/parser'])), /^Error: studio\/a\.mjs:1: cannot inline the specifier '@acme\/parser' — only \.\/, \.\.\/ and \/lib\/ paths/);
+  files['tools/lib/side.mjs'] = 'export const side = 1;\n';
   // A module outside the two trees.
   files['studio/a.mjs'] = "export * from '../tools/fetch-live-pack.mjs';\n";
   assert.throws(() => collectModuleGraph(ROOT, ENTRIES, { read: (p) => files[p] ?? '' }), /tools\/fetch-live-pack\.mjs is outside studio\/ and tools\/lib\//);
@@ -265,8 +314,12 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   const { html } = built;
   const map = importMapOf(html);
   const graph = collectModuleGraph(ROOT, ENTRIES);
-  assert.deepEqual(Object.keys(map.imports).sort(), [...graph.keys()].sort(), 'one import-map entry per graph module');
+  const closure = collectBundledPackages(ROOT, graph.packages);
+  assert.deepEqual(Object.keys(map.imports).sort(), [...graph.keys(), ...closure.keys()].sort(), 'one import-map entry per graph module and per bundled package');
   assert.equal(built.modules.length, graph.size);
+  assert.deepEqual(built.thirdParty, [...closure.values()].map(({ name, version, license, entry, bytes }) => ({ name, version, license, entry, bytes })), 'thirdParty names each bundled package');
+  // A ceiling: an unexpected dependency entering the graph is caught where it lands (raising it is a reviewed change).
+  assert.ok(built.bytes < 6_000_000, `the two-pack bundle is under 6,000,000 bytes (${built.bytes})`);
   // Every module decodes and parses.
   const dir = join(TMP, 'modules');
   for (const [key, address] of Object.entries(map.imports)) {
@@ -362,7 +415,8 @@ test('T3 the CLI: writes, --check writes nothing, --json, --no-remote-fonts, a p
   assert.equal(j.brand, null, 'nothing baked: brand null, the key present');
   assert.equal(j.mcpSettingsPolicy, null, 'nothing baked: mcpSettingsPolicy null, the key present');
   assert.equal(j.mcpOrigins, null, 'nothing baked: mcpOrigins null, the key present');
-  assert.deepEqual(Object.keys(j), ['ok', 'out', 'check', 'bytes', 'modules', 'stylesheets', 'remoteFonts', 'packs', 'taxonomy', 'brand', 'mcpSettingsPolicy', 'mcpOrigins']);
+  assert.deepEqual(Object.keys(j), ['ok', 'out', 'check', 'bytes', 'modules', 'stylesheets', 'remoteFonts', 'packs', 'taxonomy', 'brand', 'mcpSettingsPolicy', 'mcpOrigins', 'thirdParty']);
+  assert.deepEqual(j.thirdParty, buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x' }).thirdParty, 'thirdParty, the last key: the packages embedded (names, versions, SPDX ids, entry files, bytes)');
   // --taxonomy / --brand / --mcp-settings-policy / --mcp-origins twice: usage, exit 2.
   for (const flag of ['--taxonomy', '--brand', '--mcp-settings-policy', '--mcp-origins']) {
     const twice = cli(['--check', flag, TAX, flag, TAX]);

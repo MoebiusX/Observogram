@@ -75,12 +75,32 @@
 // a human opening the file at the element. verifyBundleNotices(html) checks a
 // finished file — the build's, or one a downstream pipeline rewrote.
 //
+// npm packages (docs/DOWNSTREAM.md §10): a tools/lib module may import a
+// package by its bare name when VENDOR-MANIFEST.json lists that name in the
+// module's npm field. The bundle then inlines the package and every package
+// it imports, each as one import-map entry under its own name — its ES module
+// entry file's bytes as npm ci installed them from package-lock.json, nothing
+// rewritten — and the licence block names each with its version, licence id,
+// source repository, licence files, NOTICE files and the copyright lines its
+// file carries. collectBundledPackages reads the lockfile's entries and the
+// files they name, never resolves a module and never compares a file with
+// the registry's; it refuses a package it cannot account for (not in the
+// lockfile, installed at another version, a second copy an importer would
+// load, an import its package.json does not declare, no licence file) with a
+// sentence that names a fix. A studio module never imports a package: the
+// live studio loads tools/lib through the server's /lib mount, which has no
+// import map (tools/test-studio-bundle.mjs T1 holds the live graph to none).
+//
 // Zero dependencies beyond Node: fs, path, this repo's tools/lib and the
-// tokenizer of tools/gen-vendor-manifest.mjs. No bundler.
+// tokenizer of tools/gen-vendor-manifest.mjs — and, for the packages the
+// bundled tools/lib modules import (VENDOR-MANIFEST.json's npm field and what
+// those packages import), the files package-lock.json installs under
+// node_modules: read, never resolved, never compared with the registry. No
+// bundler.
 // Exit 0 built · 1 a pack fails the schema, a specifier cannot be inlined, a
 // file is missing, a licence text cannot be embedded · 2 usage.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname, basename, posix, extname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
@@ -144,15 +164,46 @@ function lineOf(src, index) {
   return src.slice(0, index).split('\n').length;
 }
 
-// Every module reachable from the entries: Map<key, { path, src, imports }>.
-// Throws naming file:line for a specifier that cannot be inlined, a module
-// outside studio/ and tools/lib, or a file that is not there.
-export function collectModuleGraph(root = DEFAULT_ROOT, entries = ENTRIES, { read } = {}) {
+// A bare specifier: neither a path (./, ../, /) nor a URL (node:, https:, …).
+const isBare = (spec) => !/^(?:\.{0,2}\/|[a-z][a-z\d+.-]*:)/i.test(spec);
+// The package a bare specifier names: its first segment, or its first two
+// when scoped (@scope/name).
+export function packageNameOf(spec) {
+  const parts = spec.split('/');
+  return spec.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
+}
+
+// The npm packages each tools/lib module may import: VENDOR-MANIFEST.json's
+// `modules[path].npm` (gen-vendor-manifest.mjs records each module's bare
+// imports there), read once from `root`. Returns path → [name].
+export function manifestNpm(root = DEFAULT_ROOT) {
+  const file = resolve(root, 'VENDOR-MANIFEST.json');
+  if (!existsSync(file)) throw new Error(`VENDOR-MANIFEST.json is missing from ${root} — copy it with the tree: it names the npm packages each tools/lib module may import, which the bundle inlines`);
+  let manifest;
+  try { manifest = JSON.parse(readFileSync(file, 'utf8')); } catch (e) {
+    throw new Error(`VENDOR-MANIFEST.json in ${root} does not parse (${e.message}) — restore it from the same upstream commit as the tree, or regenerate it there (npm run vendor-manifest)`, { cause: e });
+  }
+  const modules = manifest && typeof manifest.modules === 'object' && manifest.modules !== null ? manifest.modules : {};
+  return (path) => (Array.isArray(modules[path]?.npm) ? modules[path].npm : []);
+}
+
+// Every module reachable from the entries: Map<key, { path, src, imports }>,
+// with `graph.packages`, the Set of npm packages the modules import by name.
+// A bare specifier is accepted in a tools/lib module only, and only when it
+// is a name `npmOf(path)` lists (by default VENDOR-MANIFEST.json's npm field,
+// read at the first bare import met); it is recorded as { spec, key: spec,
+// package: spec }. Throws naming file:line for any other specifier that
+// cannot be inlined, a module outside studio/ and tools/lib, or a file that
+// is not there.
+export function collectModuleGraph(root = DEFAULT_ROOT, entries = ENTRIES, { read, npmOf } = {}) {
   const readFile = read || ((rel) => {
     const abs = resolve(root, rel);
     if (!existsSync(abs)) throw new Error(`module file missing: ${rel}`);
     return readFileSync(abs, 'utf8');
   });
+  let manifest = null;
+  const npmFor = npmOf || ((path) => (manifest ??= manifestNpm(root))(path));
+  const packages = new Set();
   const graph = new Map();
   const queue = [];
   const enqueue = (rel, from) => {
@@ -170,13 +221,143 @@ export function collectModuleGraph(root = DEFAULT_ROOT, entries = ENTRIES, { rea
     for (const { spec, index } of importSpecifiers(src)) {
       const target = resolveSpecifier(spec, path);
       if (!target) {
-        throw new Error(`${path}:${lineOf(src, index)}: cannot inline the specifier '${spec}' — only ./, ../ and /lib/ paths into studio/ and tools/lib/ are bundled (a bare package or node:* module cannot be)`);
+        const at = `${path}:${lineOf(src, index)}`;
+        if (path.startsWith('tools/lib/') && isBare(spec)) {
+          const name = packageNameOf(spec);
+          if (spec !== name) throw new Error(`${at}: cannot inline the specifier '${spec}' — a package is bundled by its own name (${name}), never a file inside it`);
+          if (!npmFor(path).includes(name)) throw new Error(`${at}: cannot inline the specifier '${spec}' — a package is bundled only when VENDOR-MANIFEST.json lists it in this module's npm field (a package.json dependency; npm run vendor-manifest)`);
+          imports.push({ spec, key: spec, package: spec });
+          packages.add(spec);
+          continue;
+        }
+        throw new Error(`${at}: cannot inline the specifier '${spec}' — only ./, ../ and /lib/ paths into studio/ and tools/lib/ are bundled (a bare package or node:* module cannot be)`);
       }
       imports.push({ spec, key: enqueue(target, `${path}:${lineOf(src, index)}`) });
     }
     graph.set(key, { path, src, imports });
   }
+  graph.packages = packages;
   return graph;
+}
+
+// ---------- the npm packages a bundle carries ----------
+
+const NOTICE_FILE_RE = /^notice(?:\.md|\.txt)?$/i;
+const COPYRIGHT_LINE_RE = /^\s*(?:\/\/|\/?\*+)\s*(copyright\b.*?)\s*(?:\*\/)?\s*$/gim;
+const BUILD_MACHINE_FIX = '(npm ci --omit=dev on a build machine that needs no dev tools)';
+
+// Where a package says its source lives (package.json `repository`, a string
+// or its `url`): `git+` and `.git` dropped, `git://` read as https; null
+// unless that is an https URL without userinfo. It is how a reader finds
+// what the package does not ship (an upstream NOTICE, its history).
+export function sourceUrlOf(repository) {
+  const raw = typeof repository === 'string' ? repository : repository && typeof repository.url === 'string' ? repository.url : null;
+  if (!raw) return null;
+  let url;
+  try { url = new URL(raw.trim().replace(/^git\+/, '').replace(/\.git$/, '').replace(/^git:\/\//, 'https://')); } catch { return null; }
+  return url.protocol === 'https:' && !url.username && !url.password ? url.href : null;
+}
+
+// The ES module entry package.json names: `exports.import` when `exports` is
+// a conditions object, else `exports["."].import` — a string, or an object's
+// `default` — with the leading ./ dropped; never `main` or `module`. null
+// when there is none inside the package.
+function esmEntryOf(pkg) {
+  const ex = pkg.exports;
+  const pick = (v) => (typeof v === 'string' ? v : v && typeof v === 'object' && typeof v.default === 'string' ? v.default : null);
+  let rel = null;
+  if (ex && typeof ex === 'object' && !Array.isArray(ex)) {
+    if (Object.hasOwn(ex, 'import')) rel = pick(ex.import);
+    else if (ex['.'] && typeof ex['.'] === 'object') rel = pick(ex['.'].import);
+  }
+  if (rel === null) return null;
+  rel = rel.replace(/^\.\//, '');
+  return rel && !rel.split('/').includes('..') && !rel.startsWith('/') ? rel : null;
+}
+
+// The packages a bundle carries: `roots` — the names graph.packages holds,
+// as a Map name → the module that imports it, or an iterable of names — and
+// every package they import, breadth-first. Each is read from its
+// package-lock.json entry and the files npm ci installed under node_modules:
+// never resolved, never compared with the registry's package. Returns
+// Map<name, { name, version, license, entry, bytes, src: Buffer, imports:
+// [name], licenceFiles: [{ name, text }], notice: [{ name, text }] | null,
+// copyright: string | null, source: string | null }> in code-point order of
+// the name — empty, reading nothing, when there is no root. Each refusal
+// names a fix that works for whoever runs the build; `root` appears in
+// stderr only, never in the file.
+export function collectBundledPackages(root = DEFAULT_ROOT, roots = []) {
+  const rootPairs = roots instanceof Map ? [...roots] : [...roots].map((name) => [name, 'a bundled tools/lib module']);
+  if (!rootPairs.length) return new Map();
+  rootPairs.sort((a, b) => codePointOrder(a[0], b[0]));
+  const lockPath = resolve(root, 'package-lock.json');
+  if (!existsSync(lockPath)) {
+    throw new Error(`package-lock.json is missing from ${root} — the bundle inlines ${rootPairs.map(([n]) => n).join(', ')} and the packages they need at the versions the committed lockfile pins: copy package-lock.json with the tree, then run npm ci there`);
+  }
+  let lock;
+  try { lock = JSON.parse(readFileSync(lockPath, 'utf8')); } catch (e) {
+    throw new Error(`package-lock.json in ${root} does not parse (${e.message}) — restore it from the same commit as the tree`, { cause: e });
+  }
+  if (!(Number(lock.lockfileVersion) >= 2)) throw new Error(`package-lock.json is lockfileVersion ${lock.lockfileVersion ?? 'unknown'}; the bundle reads version 2 or 3 (npm 7 or newer)`);
+  const entries = lock.packages && typeof lock.packages === 'object' ? lock.packages : {};
+  const found = new Map();
+  const queue = rootPairs;
+  while (queue.length) {
+    const [name, importer] = queue.shift();
+    if (found.has(name)) continue;
+    if (name === 'lib' || name === 'studio' || name.startsWith('lib/') || name.startsWith('studio/')) {
+      throw new Error(`${name}: a package named lib or studio collides with the bundle's own import-map keys`);
+    }
+    const locked = entries[`node_modules/${name}`];
+    if (!locked) throw new Error(`${name}: package-lock.json has no node_modules/${name} entry — ${importer} needs it; install it (npm install) and commit the lockfile`);
+    const dir = resolve(root, 'node_modules', ...name.split('/'));
+    const pkgFile = resolve(dir, 'package.json');
+    if (!existsSync(pkgFile)) throw new Error(`${name}: not installed (node_modules/${name}/package.json is missing in ${root}) — run npm ci there ${BUILD_MACHINE_FIX}`);
+    let pkg;
+    try { pkg = JSON.parse(readFileSync(pkgFile, 'utf8')); } catch (e) {
+      throw new Error(`${name}: node_modules/${name}/package.json does not parse (${e.message}) — run npm ci there ${BUILD_MACHINE_FIX}`, { cause: e });
+    }
+    if (pkg.version !== locked.version) throw new Error(`${name}: installed ${pkg.version}, package-lock.json pins ${locked.version} — run npm ci there, so the bundle is built from the committed lockfile ${BUILD_MACHINE_FIX}`);
+    const v = pkg.version;
+    if (pkg.license !== locked.license) throw new Error(`${name} ${v}: package.json declares the licence ${pkg.license ?? 'none'}, package-lock.json ${locked.license ?? 'none'} — run npm ci there ${BUILD_MACHINE_FIX}`);
+    if (typeof pkg.license !== 'string' || !pkg.license.trim()) throw new Error(`${name} ${v} declares no licence (a "license" SPDX id in its package.json) — the bundle redistributes it and must name its licence; review the dependency before bundling it`);
+    const entry = esmEntryOf(pkg);
+    if (!entry) throw new Error(`${name} ${v}: package.json exports no ES module entry (exports.import or exports["."].import) — the bundle inlines ES modules only`);
+    const entryFile = resolve(dir, ...entry.split('/'));
+    if (!existsSync(entryFile)) throw new Error(`${name} ${v}: its entry ${entry} is not installed (node_modules/${name}/${entry} is missing in ${root}) — run npm ci there ${BUILD_MACHINE_FIX}`);
+    const src = readFileSync(entryFile);
+    const text = src.toString('utf8');
+    const declared = new Set([...Object.keys(pkg.dependencies || {}), ...Object.keys(pkg.peerDependencies || {})]);
+    const deps = [];
+    for (const { spec, index } of importSpecifiers(text)) {
+      const at = `${name}/${entry}:${lineOf(text, index)}`;
+      if (spec.startsWith('node:')) throw new Error(`${at}: imports '${spec}' — a node:* module cannot run in a browser`);
+      if (!isBare(spec) || packageNameOf(spec) !== spec) throw new Error(`${at}: imports '${spec}' — the bundle inlines one file per package, so a package that imports a file (its own or another package's) cannot be bundled`);
+      if (!declared.has(spec)) throw new Error(`${at}: imports '${spec}', which ${name} does not declare in dependencies or peerDependencies`);
+      if (entries[`node_modules/${name}/node_modules/${spec}`]) {
+        throw new Error(`${spec}: package-lock.json installs a second copy at node_modules/${name}/node_modules/${spec}, which ${name} loads instead of node_modules/${spec} — the bundle carries one copy of each package under its own name. Make one version serve every importer: add "overrides": { "${spec}": "${entries[`node_modules/${spec}`]?.version ?? '<the hoisted version>'}" } to package.json (npm 8.3 or newer), run npm install, and commit the lockfile`);
+      }
+      if (!deps.includes(spec)) deps.push(spec);
+    }
+    const files = readdirSync(dir, { withFileTypes: true }).filter((d) => d.isFile()).map((d) => d.name).sort(codePointOrder);
+    const readText = (file) => {
+      const t = readFileSync(resolve(dir, file), 'utf8');
+      assertEmbeddable(t, `${name} ${v}`, file);
+      return { name: file, text: t };
+    };
+    const licenceFiles = files.filter((f) => LICENCE_FILE_RE.test(f)).map(readText);
+    if (!licenceFiles.length) throw new Error(`${name} ${v} ships no licence file (LICENSE, LICENCE or COPYING at its root) — the bundle redistributes it and must carry its licence; review the dependency before bundling it`);
+    const notices = files.filter((f) => NOTICE_FILE_RE.test(f)).map(readText);
+    const lines = [...new Set([...text.matchAll(COPYRIGHT_LINE_RE)].map((m) => m[1]))];
+    const copyright = lines.length ? lines.join(' · ') : null;
+    if (copyright) assertEmbeddable(copyright, `${name} ${v}`, entry);
+    found.set(name, {
+      name, version: v, license: pkg.license, entry, bytes: src.length, src, imports: [...deps].sort(codePointOrder),
+      licenceFiles, notice: notices.length ? notices : null, copyright, source: sourceUrlOf(pkg.repository),
+    });
+    for (const dep of [...deps].sort(codePointOrder)) queue.push([dep, name]);
+  }
+  return new Map([...found.keys()].sort(codePointOrder).map((n) => [n, found.get(n)]));
 }
 
 // The source with every inlinable specifier replaced by its key — nothing
@@ -440,7 +621,7 @@ function toBase64(text) {
   return Buffer.from(text, 'utf8').toString('base64');
 }
 
-// { html, modules: [{ key, bytes }], stylesheets: [names], config, bytes, taxonomy, brand }
+// { html, modules: [{ key, bytes }], thirdParty: [{ name, version, license, entry, bytes }], stylesheets: [names], config, bytes, taxonomy, brand }
 // taxonomy: the override document (a plain object) to bake, or null. brand:
 // the brand to render into the shell — normalizeBrand's output (used as is)
 // or a raw object (normalized here) — or null. Both are inert when
@@ -486,6 +667,18 @@ export function buildStudioBundle({ root = DEFAULT_ROOT, packs = [], remoteFonts
     assertRewritten(rewritten, key);
     imports[key] = `data:text/javascript;base64,${toBase64(rewritten)}`;
     modules.push({ key, bytes: Buffer.byteLength(rewritten, 'utf8') });
+  }
+  // The npm packages the modules import, and what those import: each entry
+  // file's bytes as installed, under the package's own name, after the
+  // repository modules (a module's bare specifier is left as written, and
+  // the map resolves it — from a data: module too).
+  const rootsOf = new Map();
+  for (const mod of graph.values()) for (const imp of mod.imports) if (imp.package && !rootsOf.has(imp.package)) rootsOf.set(imp.package, mod.path);
+  const bundled = collectBundledPackages(root, rootsOf);
+  const thirdParty = [];
+  for (const p of bundled.values()) {
+    imports[p.name] = `data:text/javascript;base64,${p.src.toString('base64')}`;
+    thirdParty.push({ name: p.name, version: p.version, license: p.license, entry: p.entry, bytes: p.bytes });
   }
 
   // The config the page reads: the packs with their canonical, the schema,
@@ -541,12 +734,12 @@ export function buildStudioBundle({ root = DEFAULT_ROOT, packs = [], remoteFonts
   html = html.replace('<body>\n', '<body>\n<noscript><p class="no-backend-notice">This studio is a static bundle: it needs JavaScript and a browser with import maps (Chrome 89, Firefox 108, Safari 16.4 or newer).</p></noscript>\n');
 
   // The licences, last: the element at the end of <head>, the pointer after the doctype.
-  html = withLicences(html, licenceBlockText({ version: pkgVersion, licence: own.licence, packages: [], spec: own.spec }), false);
+  html = withLicences(html, licenceBlockText({ version: pkgVersion, licence: own.licence, packages: [...bundled.values()], spec: own.spec }), bundled.size > 0);
 
   const leftover = /(?:href|src)="\/[^"]*"/.exec(html);
   if (leftover) throw new Error(`the bundle still references the server: ${leftover[0]}`);
 
-  return { html, modules, stylesheets, config, bytes: Buffer.byteLength(html, 'utf8'), taxonomy, brand: branded, mcpSettingsPolicy, mcpOrigins };
+  return { html, modules, thirdParty, stylesheets, config, bytes: Buffer.byteLength(html, 'utf8'), taxonomy, brand: branded, mcpSettingsPolicy, mcpOrigins };
 }
 
 // ---------- the seams: the taxonomy and the brand ----------
@@ -831,6 +1024,8 @@ export async function main(argv = process.argv.slice(2), { stdout = process.stdo
         brand: br.brand ? { source: br.source, file: br.file, name: br.brand.name } : null,
         mcpSettingsPolicy: polLoaded ? { source: pol.origin === '--mcp-settings-policy' ? 'flag' : 'env', file: pol.file, rules: polRules } : null,
         mcpOrigins: origins ? { source: origins.origin === '--mcp-origins' ? 'flag' : 'env', origins: origins.origins.origins } : null,
+        // The npm packages embedded: names, versions, SPDX ids, entry files, bytes — no path.
+        thirdParty: built.thirdParty,
       }, null, 2)}\n`);
     } else {
       stdout.write(opts.check ? `ok (not written): ${summary}\n` : `wrote ${out} — ${summary}\n`);
