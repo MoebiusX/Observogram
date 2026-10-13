@@ -553,8 +553,9 @@ test('a loaded transport hook is never used: its record stays empty and the MCP 
 // line below on the child's stderr. Only that answer is submitted again, at
 // most `tries` times in all; a 409 without the line is the rule matching.
 const RULE0_TIMED_OUT = '[mcp-settings] policy rules[0] did not finish within 100 ms — counted as matched';
+const rule0TimedOut = (s) => s.logs().stderr.split('\n').filter((l) => l === RULE0_TIMED_OUT).length;
 async function submitPastTimeouts(s, body, tries = 5) {
-  const count = () => s.logs().stderr.split('\n').filter((l) => l === RULE0_TIMED_OUT).length;
+  const count = () => rule0TimedOut(s);
   for (let i = 1; ; i += 1) {
     const before = count();
     const r = await s.post(SUBMIT, body);
@@ -571,8 +572,13 @@ test('the settings policy is re-checked against the description the server read:
   const id = await s.register(f.url);
   const values = { grafanaUrl: 'https://evil.example/', secret: SECRET };
   const want = [409, 'policy-ack', 0, 'Non-approved backend host. — tick "I have operator approval for this target" in the server settings'];
+  const timedOut = rule0TimedOut(s);
   const r1 = await s.post(SUBMIT, { mcpEndpointId: id, mode: 'described', values, acks: [] });
   assert.deepEqual([r1.status, r1.json.denied, r1.json.rule, r1.json.error], want);
+  // A match: the 409 has no `unevaluated` — unless the child logged rule 0
+  // past its deadline for it (the line may come after the answer).
+  if (r1.json.unevaluated !== undefined) for (const by = Date.now() + 5_000; rule0TimedOut(s) === timedOut && Date.now() < by;) await sleep(20);
+  assert.equal(r1.json.unevaluated, rule0TimedOut(s) > timedOut ? true : undefined, 'a match: the 409 says nothing of an unchecked rule');
   assert.equal(f.adminRequests.filter((x) => x.method === 'POST').length, 0);
   // The approved host past 512 characters is too long for the policy to check: a 409 that says so.
   const long = await s.post(SUBMIT, { mcpEndpointId: id, mode: 'described', values: { grafanaUrl: `https://approved.example/${'a'.repeat(600)}`, secret: SECRET }, acks: [] });
