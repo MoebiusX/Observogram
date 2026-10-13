@@ -16,10 +16,18 @@
  * names none of their directories, so it compared as outside them; on their
  * volume it now answers null and is refused, and so does a share, or a drive
  * mapped to one, that cannot be reached when the check runs: with no volume
- * to read, nothing tells where it leads. A share of another machine cloned
- * from this host's image reports its volume's serial and is refused alike;
- * the export's refusal names the way out that holds there too (a local
- * directory, copied to the share). Each check's predicate is run here
+ * to read, nothing tells where it leads. A machine cloned from this host's
+ * image, or this drive's disk image attached as E:, keeps its volume's serial
+ * and its files' ids, the root directory's among them, so a file id places
+ * its paths on this host's: a share of a directory it made later is refused
+ * alike (the export's way out, a local directory copied to the share, holds
+ * there too), a containment refusal holds for the rest, and the checks whose
+ * "same" or "inside" answer writes, skips a file or takes it for the
+ * database's own — the in-place detection, the scan for another store, the
+ * no-marker check, the own-file check — decide by path alone: one only
+ * placement equates is refused naming the way out (the scan reads it), never
+ * exported in place over the workspace or called the database itself. Each
+ * check's predicate is run here
  * as ops.mjs and backup.mjs run it, over comparedPath with an injected host —
  * Windows' path rules, an NTFS volume's realpath and statSync
  * (server/fixtures/ntfs.mjs) and the platform — so the proof runs on every
@@ -93,9 +101,11 @@ const byNameOf = (volume) => {
 };
 const byName = byNameOf(SHARED);
 
-// The checks' predicates, as server/store/ops.mjs and backup.mjs write them over their compared form: a path
-// is compared placed beside the one it is checked against (the second argument). 'unplaced' is the refusal of a
-// null answer — through a share on that path's volume, it may lie inside it.
+// The checks' predicates, as server/store/ops.mjs and backup.mjs write them over their compared form. A containment
+// refusal compares a path placed beside the one it is checked against (the second argument); 'unplaced' is the
+// refusal of a null answer — through a share on that path's volume, it may lie inside it. A check whose "same" or
+// "inside" answer writes, skips a file or takes it for the database's own compares by path alone (no second
+// argument); 'placed' is the refusal of a path that only placement makes the same (or inside).
 function exportRelation(into, base, k = key) {   // exportDirectory: 'is' | 'inside' | 'holds' | 'unplaced' | null (null: written)
   const t = k(into, base);
   if (t === null) return 'unplaced';
@@ -104,18 +114,29 @@ function exportRelation(into, base, k = key) {   // exportDirectory: 'is' | 'ins
   if (t === b || inside || b.startsWith(t.endsWith(SEP) ? t : t + SEP)) return t === b ? 'is' : inside ? 'inside' : 'holds';
   return null;
 }
-const inPlace = (target, base, k = key) => k(target, base) === k(base);                       // exportStore
-const sameFile = (file, path, k = key) => k(file, path) === k(path);                          // assertNoOtherStore
-function dbUnderWorkspace(path, base, k = key) {   // exportStore, no marker: true | false (refused: outside) | 'unplaced'
-  const own = k(path, base);
-  return own === null ? 'unplaced' : own.startsWith(k(base) + SEP);
+function inPlace(target, base, k = key) {   // exportStore: true (in place) | 'placed' (refused) | false (a directory export)
+  if (k(target) === k(base)) return true;
+  return k(target, base) === k(base) ? 'placed' : false;
+}
+const sameFile = (file, path, k = key) => k(file) === k(path);   // assertNoOtherStore: true skips file as the database itself
+function dbUnderWorkspace(path, base, k = key) {   // exportStore, no marker: true | false (refused: outside) | 'unplaced' | 'placed' (refused alike)
+  const b = k(base);
+  if (k(path).startsWith(b + SEP)) return true;
+  const placed = k(path, base);
+  return placed === null ? 'unplaced' : placed.startsWith(b + SEP) ? 'placed' : false;
 }
 const rootUnderOrgs = (root, base, k = key) => k(root).startsWith(k(win32.join(base, 'orgs')) + SEP);   // purgeOrg
 function usersUnderRoot(usersFile, root, k = key) {   // purgeOrg: true (refused) | false (purged) | 'unplaced'
   const users = k(usersFile, root);
   return users === null ? 'unplaced' : users.startsWith(k(root) + SEP);
 }
-const ownFile = (dbFile, path, k = key) => ['', '-wal', '-shm', '-journal'].find((s) => k(path, dbFile) === `${k(dbFile)}${s}`) ?? null;   // backup.mjs
+function ownFile(dbFile, path, k = key) {   // backup.mjs: '' | '-wal' | '-shm' | '-journal' (its own: refused) | 'placed' + one (refused) | null
+  const own = (p) => ['', '-wal', '-shm', '-journal'].find((s) => p === `${k(dbFile)}${s}`) ?? null;
+  const s = own(k(path));
+  if (s !== null) return s;
+  const placed = own(k(path, dbFile));
+  return placed === null ? null : `placed${placed}`;
+}
 
 test('on Windows every spelling of one path compares equal — case, drive letter, / for \\, a short name, a trailing separator, a part not created yet', () => {
   for (const group of [
@@ -171,7 +192,7 @@ test('backup and restore: the database and its -wal, -shm and -journal spelled a
   for (const p of ['C:\\ws\\observogram.db.bak', 'C:\\ws2\\observogram.db', 'C:\\ws\\observogram.db-wal2']) assert.equal(ownFile(db, p), null, `another file: ${p}`);
 });
 
-test('with the workspace and the database named through a share this host serves (\\\\myhost\\ws, Z:), their local path is them — every check holds for a target named on the drive', () => {
+test('with the workspace and the database named through a share this host serves (\\\\myhost\\ws, Z:), their local path lies in them for a containment refusal, and a check whose "same" answer writes or skips refuses it naming them by their own path', () => {
   assert.equal(SHARED.realpathSync.native('Z:\\'), '\\\\myhost\\ws\\', 'Z: is the share, as the native realpath names it');
   for (const base of ['\\\\myhost\\ws', 'Z:\\', '//MYHOST/ws/']) {
     const root = win32.join(base, 'orgs', 'beta');
@@ -186,21 +207,28 @@ test('with the workspace and the database named through a share this host serves
     }
     assert.equal(exportRelation('C:\\ws\\exports', base, byName), null, `by name alone it was written into the workspace (${base})`);
     for (const into of ['C:\\out', 'C:\\ws2', 'c:/out/new']) assert.equal(exportRelation(into, base, shared), null, `written: ${into}`);
-    for (const target of ['C:\\ws', 'c:/WS/', 'C:\\WS~1']) assert.equal(inPlace(target, base, shared), true, `the in-place export: ${target} is ${base}`);
+    // Only its file id makes the local path the workspace or the database (a copy that keeps the ids would match as well):
+    // refused, and named by their own path — any name of the share — they are judged.
+    for (const target of ['C:\\ws', 'c:/WS/', 'C:\\WS~1']) assert.equal(inPlace(target, base, shared), 'placed', `refused, not the in-place export: ${target} is ${base} only by its file id`);
+    for (const target of ['\\\\myhost\\ws', 'Z:\\', '//MYHOST/WS/']) assert.equal(inPlace(target, base, shared), true, `the way out: the in-place export of ${target} (${base})`);
     assert.equal(inPlace('C:\\ws2', base, shared), false, `not in place: C:\\ws2 (${base})`);
-    for (const path of ['C:\\ws\\observogram.db', 'C:\\WS~1\\db\\other.db']) assert.equal(dbUnderWorkspace(path, base, shared), true, `in the workspace ${base}: ${path}`);
+    for (const path of ['C:\\ws\\observogram.db', 'C:\\WS~1\\db\\other.db']) assert.equal(dbUnderWorkspace(path, base, shared), 'placed', `the no-marker check refuses ${path}: only its file id puts it in ${base}`);
+    for (const path of [dbFile, win32.join(base, 'DB', 'other.db')]) assert.equal(dbUnderWorkspace(path, base, shared), true, `the way out: OBSERVOGRAM_DB=${path} lies in ${base}`);
     assert.equal(dbUnderWorkspace('C:\\ws2\\observogram.db', base, shared), false, `outside ${base}: C:\\ws2\\observogram.db`);
-    assert.equal(sameFile(dbFile, 'C:\\ws\\observogram.db', shared), true, `the scan for another store skips the database itself: ${dbFile}`);
+    assert.equal(sameFile(dbFile, 'C:\\ws\\observogram.db', shared), false, `the scan for another store reads ${dbFile} (its store id is this one's): a file id never skips it`);
+    assert.equal(sameFile('\\\\MYHOST\\ws\\Observogram.db', dbFile, shared), true, `the database by another name of the share is skipped: ${dbFile}`);
     assert.equal(sameFile(dbFile, 'C:\\ws2\\observogram.db', shared), false, `another store's database: ${dbFile} beside C:\\ws2\\observogram.db`);
     for (const [p, s] of [['C:\\ws\\observogram.db-wal', '-wal'], ['c:/WS/Observogram.db', ''], ['C:\\WS~1\\OBSERVOGRAM.DB-SHM', '-shm'], ['C:\\ws\\observogram.db-journal', '-journal']]) {
-      assert.equal(ownFile(dbFile, p, shared), s, `the database ${dbFile}'s own${s ? ` ${s}` : ''}: ${p}`);
+      assert.equal(ownFile(dbFile, p, shared), `placed${s}`, `refused: ${p} matches the database ${dbFile}${s} only by its file id`);
     }
+    assert.equal(ownFile(dbFile, '\\\\myhost\\WS\\OBSERVOGRAM.DB-wal', shared), '-wal', `named through the share, the database ${dbFile}'s own -wal`);
+    assert.equal(ownFile(dbFile, win32.join(win32.parse(dbFile).root, 'backups', 'obs.db'), shared), null, `the way out: a new path under ${win32.parse(dbFile).root}`);
     assert.equal(ownFile(dbFile, 'C:\\ws\\observogram.db-wal', byName), null, `by name alone a backup was written over the -wal (${dbFile})`);
     for (const p of ['C:\\ws\\observogram.db.bak', 'C:\\ws2\\observogram.db', 'C:\\out\\observogram.db-wal']) assert.equal(ownFile(dbFile, p, shared), null, `another file: ${p}`);
   }
 });
 
-test('with the workspace and the database on the drive (C:\\ws), a share name the admin gives for them is them; a share on another volume or of another host is an ordinary target', () => {
+test('with the workspace and the database on the drive (C:\\ws), a share name the admin gives for them lies in them for a containment refusal, and a check whose "same" answer writes or skips refuses it; a share on another volume or of another host is an ordinary target', () => {
   const [base, root, dbFile] = ['C:\\ws', 'C:\\ws\\orgs\\beta', 'C:\\ws\\observogram.db'];
   for (const into of ['\\\\localhost\\C$\\ws\\exports', '\\\\127.0.0.1\\c$\\WS~1\\exports\\new', '\\\\myhost\\ws\\orgs\\beta', 'Z:\\exports', '//localhost/C$/ws/exports/']) {
     assert.equal(exportRelation(into, base, shared), 'inside', `a directory export is refused: ${into} lies inside ${base}`);
@@ -210,18 +238,21 @@ test('with the workspace and the database on the drive (C:\\ws), a share name th
   for (const into of ['\\\\localhost\\C$\\out\\new', '\\\\myhost\\out\\new', '\\\\localhost\\C$\\ws2', '\\\\nas01\\obs\\exports']) {
     assert.equal(exportRelation(into, base, shared), null, `written, an ordinary target: ${into}`);
   }
-  for (const target of ['\\\\localhost\\C$\\ws', '\\\\myhost\\ws', 'Z:\\', '\\\\127.0.0.1\\C$\\WS~1\\']) assert.equal(inPlace(target, base, shared), true, `the in-place export: ${target} is ${base}`);
+  for (const target of ['\\\\localhost\\C$\\ws', '\\\\myhost\\ws', 'Z:\\', '\\\\127.0.0.1\\C$\\WS~1\\']) assert.equal(inPlace(target, base, shared), 'placed', `refused, not the in-place export: ${target} is ${base} only by its file id`);
+  assert.equal(inPlace('c:/WS~1/', base, shared), true, 'the way out: the workspace by its own path is the in-place export');
   for (const target of ['\\\\myhost\\out', '\\\\nas01\\obs']) assert.equal(inPlace(target, base, shared), false, `not in place: ${target}`);
-  for (const path of ['\\\\localhost\\C$\\ws\\observogram.db', 'Z:\\db\\other.db']) assert.equal(dbUnderWorkspace(path, base, shared), true, `in the workspace: ${path}`);
+  for (const path of ['\\\\localhost\\C$\\ws\\observogram.db', 'Z:\\db\\other.db']) assert.equal(dbUnderWorkspace(path, base, shared), 'placed', `the no-marker check refuses ${path}: only its file id puts it in the workspace`);
+  assert.equal(dbUnderWorkspace('C:\\WS\\db\\other.db', base, shared), true, 'the way out: OBSERVOGRAM_DB under C:\\ws');
   assert.equal(dbUnderWorkspace('\\\\localhost\\C$\\ws2\\observogram.db', base, shared), false, 'outside: \\\\localhost\\C$\\ws2\\observogram.db');
-  assert.equal(sameFile('C:\\ws\\observogram.db', '\\\\myhost\\ws\\observogram.db', shared), true, 'the scan for another store skips the database itself');
+  assert.equal(sameFile('C:\\ws\\observogram.db', '\\\\myhost\\ws\\observogram.db', shared), false, 'the scan for another store reads it (its store id is this one\'s): a file id never skips it');
   for (const users of ['\\\\localhost\\C$\\ws\\orgs\\beta\\users.json', 'Z:\\orgs\\beta\\users.json', '\\\\myhost\\ws\\ORGS\\Beta\\users.json']) {
     assert.equal(usersUnderRoot(users, root, shared), true, `purge-org refuses: ${users} lies under ${root}`);
   }
   for (const users of ['\\\\myhost\\ws\\orgs\\beta2\\users.json', '\\\\myhost\\out\\users.json']) assert.equal(usersUnderRoot(users, root, shared), false, `not under ${root}: ${users}`);
   for (const [p, s] of [['\\\\localhost\\C$\\ws\\observogram.db-wal', '-wal'], ['\\\\myhost\\ws\\OBSERVOGRAM.DB', ''], ['Z:\\observogram.db-shm', '-shm']]) {
-    assert.equal(ownFile(dbFile, p, shared), s, `the database's own${s ? ` ${s}` : ''}: ${p}`);
+    assert.equal(ownFile(dbFile, p, shared), `placed${s}`, `refused: ${p} matches the database${s ? `'s own ${s}` : ''} only by its file id`);
   }
+  assert.equal(ownFile(dbFile, 'C:\\backups\\obs.db', shared), null, 'the way out: a new path under C:\\');
   assert.equal(ownFile(dbFile, '\\\\localhost\\C$\\ws\\observogram.db-wal', byName), null, 'by name alone a backup was written over the -wal');
   for (const p of ['\\\\myhost\\out\\observogram.db-wal', '\\\\localhost\\C$\\ws2\\observogram.db', '\\\\nas01\\obs\\observogram.db-wal']) {
     assert.equal(ownFile(dbFile, p, shared), null, `another file, an ordinary target: ${p}`);
@@ -283,10 +314,11 @@ test('a path through a share no file id places, on the volume of the path it is 
   for (const into of ['\\\\myhost\\dout\\new', '\\\\nas01\\obs\\exports']) assert.equal(exportRelation(into, base, subshared), null, `written: ${into}`);
   for (const users of ['\\\\myhost\\dout\\users.json', '\\\\nas01\\obs\\users.json']) assert.equal(usersUnderRoot(users, root, subshared), false, `purged: ${users}`);
   assert.equal(dbUnderWorkspace('\\\\myhost\\dout\\observogram.db', base, subshared), false, 'outside the workspace: \\\\myhost\\dout\\observogram.db');
-  // An equality check takes null as unequal, as each such answer is: a sub-share it cannot place is never the database or its own file.
-  assert.equal(sameFile('\\\\myhost\\dbdir\\observogram.db', 'C:\\ws\\db\\observogram.db', subshared), true, 'a share of the database\'s directory places it');
+  // An equality check compares by path alone: a share of the database's directory places it, and the scan reads it; the
+  // own-file check refuses it by its file id alone; a sub-share nothing places is never the database or its own file.
+  assert.equal(sameFile('\\\\myhost\\dbdir\\observogram.db', 'C:\\ws\\db\\observogram.db', subshared), false, 'read by the scan, not skipped');
   assert.equal(sameFile('\\\\myhost\\exports\\observogram.db', 'C:\\ws\\observogram.db', subshared), false, 'another file');
-  assert.equal(ownFile('C:\\ws\\db\\observogram.db', '\\\\myhost\\dbdir\\observogram.db-wal', subshared), '-wal', 'the database\'s own -wal');
+  assert.equal(ownFile('C:\\ws\\db\\observogram.db', '\\\\myhost\\dbdir\\observogram.db-wal', subshared), 'placed-wal', 'refused: the database\'s -wal only by its file id');
   assert.equal(ownFile('C:\\ws\\observogram.db', '\\\\myhost\\exports\\observogram.db-wal', subshared), null, 'a backup target, not its own file');
 });
 
@@ -326,30 +358,71 @@ test('a path through a share that cannot be reached, or a drive mapped to one, m
   assert.equal(ownFile('C:\\ws\\observogram.db', '\\\\myhost\\exports\\observogram.db-wal', down), null, 'a backup target, not the database\'s own file');
 });
 
-// Another machine cloned from this host's image: its disks keep the serials they were formatted with, so its C: has
-// this host's C: serial (each fixture gives a drive letter one serial), and through a share both report the same low
-// 32 bits. \\fileserver\exports is a share of its C:, \\fileserver\dexports of its D:. Its file ids are its own.
-const LOCAL = ntfsVolume(['C:\\ws\\observogram.db', 'C:\\ws\\orgs\\beta\\users.json', 'C:\\out\\x.txt']);
-const FILESERVER = ntfsVolume(['C:\\exports\\keep.txt', 'D:\\exports\\keep.txt'], {
-  shares: { '\\\\fileserver\\exports': 'C:\\exports', '\\\\fileserver\\dexports': 'D:\\exports' },
+// Another machine cloned from this host's image (machineb), and this drive's disk image attached here as E: (a VHDX of
+// C:, mounted to restore from). A sector copy keeps the disk's serial and its MFT, so every file present at the copy
+// keeps its file id there — the root directory's among them, MFT record 5 on every NTFS volume — and through a share
+// both report the same low 32 bits. Each copy is this volume as it was (the image's paths statted in one order on
+// all three: the same ids), then diverges: machineb's C:\exports (shared as \\machineb\exports) and its D:
+// (\\machineb\dexports) were made after cloning, and C:\out here.
+const IMAGE = ['C:\\ws\\observogram.db', 'C:\\ws\\orgs\\beta\\users.json', 'C:\\ws\\exports\\keep.txt'];
+const HOST = ntfsVolume([...IMAGE, 'C:\\out\\x.txt']);
+const MACHINEB = ntfsVolume([...IMAGE, 'C:\\exports\\keep.txt', 'D:\\exports\\keep.txt'], {
+  shares: { '\\\\machineb\\C$': 'C:\\', '\\\\machineb\\exports': 'C:\\exports', '\\\\machineb\\dexports': 'D:\\exports' },
 });
-const hostOf = (p) => (/^[\\/]{2}fileserver[\\/]/i.test(p) ? FILESERVER : LOCAL);
-const clonedRealpath = (p) => hostOf(p).realpathSync(p);
-clonedRealpath.native = (p) => hostOf(p).realpathSync.native(p);
-const clonedStat = (p) => { const st = hostOf(p).statSync(p); return hostOf(p) === FILESERVER ? { ...st, ino: st.ino + 1000n } : st; };
+const DISK = ntfsVolume(IMAGE);
+const lineageOf = (p) => (win32.dirname(p) === p ? [p] : [...lineageOf(win32.dirname(p)), p]);   // the root first
+for (const p of IMAGE.flatMap(lineageOf)) for (const volume of [HOST, MACHINEB, DISK]) volume.statSync(p);
+const onMachineB = (p) => /^[\\/]{2}machineb[\\/]/i.test(p);
+const onDisk = (p) => /^e:/i.test(p);   // E:\… is the image's C:\…, reached on a local drive (its full serial)
+const asDrive = (letter, p) => `${letter}:${p.slice(2)}`;
+const clonedRealpath = (p) => { clonedRealpath.native(p); return win32.resolve(p); };
+clonedRealpath.native = (p) => (onMachineB(p) ? MACHINEB.realpathSync.native(p)
+  : onDisk(p) ? asDrive('E', DISK.realpathSync.native(asDrive('C', p))) : HOST.realpathSync.native(p));
+const clonedStat = (p) => (onMachineB(p) ? MACHINEB.statSync(p) : onDisk(p) ? DISK.statSync(asDrive('C', p)) : HOST.statSync(p));
 const cloned = comparedPath(null, { windows: true, path: win32, realpathSync: clonedRealpath, statSync: clonedStat });
 
-test('a share of another machine whose volume has the workspace volume\'s serial (cloned from one image) is refused as one on that volume — the export\'s way out, a local directory copied there, is written; a share of its other volume is an ordinary target', () => {
-  const [base, root] = ['C:\\ws', 'C:\\ws\\orgs\\beta'];
-  assert.equal(clonedStat('\\\\fileserver\\exports').dev, clonedStat('C:\\ws').dev & 0xffffffffn, 'the clone\'s share reports the workspace volume\'s serial');
-  assert.equal(exportRelation('\\\\fileserver\\exports\\obs-2026', base, cloned), 'unplaced', 'a directory export is refused: no serial tells it from a share of C:\\ws\'s volume');
-  assert.equal(inPlace('\\\\fileserver\\exports\\obs-2026', base, cloned), false, 'not the in-place export');
-  // It has no path on this host's drives: the way out that holds is the export to a local directory, copied to the share by hand.
+test('a machine cloned from this host\'s image, or this drive\'s disk image attached as E:, keeps its serial and its files\' ids — a containment refusal holds for its paths, and no check takes one for the workspace, the database or one of its files: each is refused naming the way out, and the scan reads it', () => {
+  const [base, root, dbFile] = ['C:\\ws', 'C:\\ws\\orgs\\beta', 'C:\\ws\\observogram.db'];
+  for (const [p, here] of [['\\\\machineb\\C$\\ws', base], ['\\\\machineb\\C$\\', 'C:\\'], ['E:\\ws\\observogram.db', dbFile], ['E:\\', 'C:\\']]) {
+    assert.equal(clonedStat(p).ino, clonedStat(here).ino, `the copy keeps the file id: ${p} has ${here}'s`);
+    assert.equal(clonedStat(p).dev & 0xffffffffn, clonedStat(here).dev & 0xffffffffn, `and the serial: ${p} reports ${here}'s volume's`);
+  }
+  assert.notEqual(clonedRealpath.native('E:\\ws\\observogram.db'), clonedRealpath.native(dbFile), 'another file');
+  // The in-place export is never taken on a copy: only its file id makes it the workspace. Before, it ran on C:\ws.
+  for (const target of ['\\\\machineb\\C$\\ws', '\\\\machineb\\c$\\WS\\', 'E:\\ws', 'e:/WS']) {
+    assert.equal(inPlace(target, base, cloned), 'placed', `refused, not the in-place export: ${target}`);
+    assert.equal(cloned(target, base), cloned(base), `by its file id alone it was the workspace: ${target}`);
+  }
+  assert.equal(inPlace('c:/WS', base, cloned), true, 'the way out: the workspace by its own path is the in-place export');
+  // With OBSERVOGRAM_DB on a copy and no marker, the scan reads the workspace's own database (store A's, whose store id
+  // refuses the export) — before, it skipped it as the database itself — and the no-marker check refuses a database
+  // only its file id puts in the workspace.
+  for (const path of ['\\\\machineb\\C$\\ws\\observogram.db', 'E:\\ws\\observogram.db']) {
+    assert.equal(sameFile(dbFile, path, cloned), false, `read by the scan, not skipped: ${dbFile} beside OBSERVOGRAM_DB=${path}`);
+    assert.equal(cloned(dbFile, path), cloned(path), `by its file id alone it was the database: ${dbFile} beside ${path}`);
+    assert.equal(dbUnderWorkspace(path, base, cloned), 'placed', `the no-marker check refuses OBSERVOGRAM_DB=${path}`);
+  }
+  // The backup's and the restore's own-file check: a copy is refused by its file id alone, never called the database
+  // itself (before, a restore from last week's E:\ws\observogram.db was, with no way out); a new path under C:\ is the way out.
+  for (const [p, s] of [['E:\\ws\\observogram.db', ''], ['\\\\machineb\\C$\\ws\\observogram.db', ''], ['\\\\machineb\\C$\\ws\\observogram.db-wal', '-wal'], ['E:\\ws\\observogram.db-shm', '-shm']]) {
+    assert.equal(ownFile(dbFile, p, cloned), `placed${s}`, `refused by its file id alone, not as the database's own: ${p}`);
+  }
+  assert.equal(cloned('E:\\ws\\observogram.db', dbFile), cloned(dbFile), 'by its file id alone it was the database itself');
+  for (const p of ['C:\\restore\\observogram.db', 'C:\\backups\\obs-2026.db']) assert.equal(ownFile(dbFile, p, cloned), null, `the way out, a new path under C:\\: ${p}`);
+  // A containment refusal keeps placement — a false refusal is the safe direction, with the ways out it names.
+  assert.equal(exportRelation('\\\\machineb\\C$\\ws\\exports\\obs-2026', base, cloned), 'inside', 'a directory export into the copy\'s workspace is refused');
+  assert.equal(exportRelation('E:\\ws\\exports\\obs-2026', base, cloned), 'inside', 'on the disk image too');
+  assert.equal(usersUnderRoot('\\\\machineb\\C$\\ws\\orgs\\beta\\users.json', root, cloned), true, 'purge-org refuses a users file recorded on the copy');
+  assert.equal(exportRelation('\\\\machineb\\C$\\out\\obs-2026', base, cloned), null, 'placed outside the workspace: written');
+  // A share of a directory made after cloning: nothing places it, and its serial is the workspace volume's — refused
+  // alike. It has no path on this host's drives: the way out that holds is a local directory, copied there by hand.
+  assert.equal(exportRelation('\\\\machineb\\exports\\obs-2026', base, cloned), 'unplaced', 'a directory export is refused: no serial tells it from a share of C:\\ws\'s volume');
+  assert.equal(inPlace('\\\\machineb\\exports\\obs-2026', base, cloned), false, 'not the in-place export');
   assert.equal(exportRelation('C:\\out\\obs-2026', base, cloned), null, 'the way out: C:\\out\\obs-2026, on a local drive outside the workspace, is written');
-  assert.equal(usersUnderRoot('\\\\fileserver\\exports\\users.json', root, cloned), 'unplaced', 'purge-org refuses a users file recorded through it (its way out: delete the root by hand)');
+  assert.equal(usersUnderRoot('\\\\machineb\\exports\\users.json', root, cloned), 'unplaced', 'purge-org refuses a users file recorded through it (its way out: delete the root by hand)');
   // Its D: has a serial C:\ws's volume does not: an ordinary target.
-  assert.equal(exportRelation('\\\\fileserver\\dexports\\obs-2026', base, cloned), null, 'written: \\\\fileserver\\dexports\\obs-2026');
-  assert.equal(usersUnderRoot('\\\\fileserver\\dexports\\users.json', root, cloned), false, 'purged: \\\\fileserver\\dexports\\users.json');
+  assert.equal(exportRelation('\\\\machineb\\dexports\\obs-2026', base, cloned), null, 'written: \\\\machineb\\dexports\\obs-2026');
+  assert.equal(usersUnderRoot('\\\\machineb\\dexports\\users.json', root, cloned), false, 'purged: \\\\machineb\\dexports\\users.json');
 });
 
 test('off Windows a check compares through the module\'s own form, unchanged', () => {
@@ -378,29 +451,47 @@ test('every path comparison in ops.mjs and backup.mjs goes through compared; rea
   assert.equal(count(ops, /\brealOr\(/g), 2, 'ops.mjs: realOr\'s definition and planJourneyRewrites\' spelling of the base, nothing else');
   assert.match(ops, /slashed\(realOr\(base\)\)/, 'the journey rewrites spell the base as realpath does (text, not a comparison)');
   assert.match(ops, /const compared = comparedPath\(realOr\);/);
-  assert.equal(count(ops, /\bcompared\(/g), 12, 'ops.mjs: the export, in-place, no-marker, other-store and purge checks');
-  // Each path is placed beside the one it is checked against, as the predicates above place it, and a null answer
-  // is refused before it is compared (an equality check takes it as unequal).
+  assert.equal(count(ops, /\bcompared\(/g), 15, 'ops.mjs: the export, in-place, no-marker, other-store and purge checks');
+  // A containment refusal places a path beside the one it is checked against, as the predicates above place it, and
+  // refuses a null answer before it is compared. A check whose "same" or "inside" answer writes or skips compares by
+  // path alone, and refuses a path only placement makes the same (the no-marker check: inside, or null); the scan
+  // for another store reads it.
   assert.match(ops, /const t = compared\(into, base\);\s*if \(t === null\) \{[^}]*\}\s*const b = compared\(base\);/, 'exportDirectory');
-  assert.match(ops, /compared\(file, path\) === own/, 'assertNoOtherStore');
-  assert.match(ops, /const inPlace = compared\(target, base\) === compared\(base\);/, 'the in-place detection');
-  assert.match(ops, /const own = compared\(path, base\);\s*if \(own === null\) \{[^}]*\}\s*const b = compared\(base\);/, 'the no-marker database check');
+  assert.match(ops, /const own = compared\(path\);[^]*?if \(compared\(file\) === own\) continue;/, 'assertNoOtherStore');
+  assert.match(ops, /const inPlace = compared\(target\) === compared\(base\);\s*if \(!inPlace && compared\(target, base\) === compared\(base\)\) \{/, 'the in-place detection');
+  assert.match(ops, /const b = compared\(base\);\s*if \(!compared\(path\)\.startsWith\(b \+ sep\)\) \{\s*const placed = compared\(path, base\);\s*if \(placed === null \|\| placed\.startsWith\(b \+ sep\)\) \{/, 'the no-marker database check');
   assert.match(ops, /const users = [^;]*\? compared\(usersFile, root\) : undefined;\s*if \(users === null\) \{[^}]*\}\s*if \(users\?\.startsWith\(compared\(root\) \+ sep\)\)/, 'purge-org\'s users file');
-  // Each refusal of a null answer names its way out (its message from the guard to the throw's end, the parts joined).
-  const raw = readFileSync(join(HERE, 'store', 'ops.mjs'), 'utf8');
-  const refusal = (guard) => {
+  // Each such refusal names its way out (its message from the guard to the throw's end, the parts joined).
+  const joined = (file) => readFileSync(join(HERE, 'store', file), 'utf8');
+  const refusal = (raw, guard) => {
     const at = raw.indexOf(`if (${guard}) {`);
     return at < 0 ? '' : raw.slice(at, raw.indexOf(');\n', at)).replace(/[`']\s*\+\s*[`']/g, '');
   };
+  const raw = joined('ops.mjs');
   for (const [guard, way] of [
     ['t === null', 'Nothing was changed. Name the directory by its path on a local drive'],
     ['t === null', 'if it has none on this host, export to an empty or new directory on a local drive outside the workspace, then copy that directory to ${target}'],
-    ['own === null', 'Nothing was changed. Set OBSERVOGRAM_DB to the database\\\'s path on a local drive, then run the export again'],
+    ['!inPlace && compared(target, base) === compared(base)', 'only by its file id, not by its path'],
+    ['!inPlace && compared(target, base) === compared(base)', 'To export the workspace in place, stop the server and run packc store export ${base}; otherwise choose'],
+    ['!inPlace && compared(target, base) === compared(base)', 'Nothing was changed. ${inPlaceWay} an empty or new directory'],
+    ['placed === null || placed.startsWith(b + sep)', 'Nothing was changed. Set OBSERVOGRAM_DB to the database\'s path under ${base}, then run the export again'],
     ['users === null', 'nothing was deleted. If it does not lie under'],
     ['users === null', 'by hand, then run purge-org again: it drops org'],
-  ]) assert.ok(refusal(guard).includes(way), `the refusal of ${guard} names its way out: ${way}`);
+  ]) assert.ok(refusal(raw, guard).includes(way), `the refusal of ${guard} names its way out: ${way}`);
   const backup = code('backup.mjs');
   assert.equal(count(backup, /\bcanonical\(/g), 1, 'backup.mjs: canonical is only defined, and passed to comparedPath');
   assert.match(backup, /const compared = comparedPath\(canonical\);/);
-  assert.match(backup, /const db = compared\(dbFile\);\s*const p = compared\(path, dbFile\);/, 'ownFile compares through compared');
+  assert.match(backup, /function ownFile\(dbFile, path, \{ placed = false \} = \{\}\) \{\s*const db = compared\(dbFile\);\s*const p = placed \? compared\(path, dbFile\) : compared\(path\);/, 'ownFile compares by path alone unless it is asked to place');
+  assert.match(backup, /const s = ownFile\(dbFile, path\);\s*if \(s === ''\) throw refuse\([^;]*\);\s*if \(s !== null\) throw refuse\([^;]*\);\s*refusePlacedOwnFile\(dbFile, path, way\);/, 'refuseOwnFile: "the database itself" by its path alone, then what only placement makes one of its files');
+  assert.match(backup, /const s = ownFile\(dbFile, path, \{ placed: true \}\);\s*if \(s === null\) return;\s*throw refuse\(/, 'refusePlacedOwnFile');
+  assert.match(backup, /refuseOwnFile\(source, target, way\);/, 'the backup\'s target');
+  assert.match(backup, /if \(ownFile\(source, tmp\) !== null\) throw refuse\([^;]*\);\s*refusePlacedOwnFile\(source, tmp, way\);/, 'the backup\'s temporary file');
+  assert.match(backup, /refuseOwnFile\(target, source, `/, 'the restore\'s source');
+  const rawBackup = joined('backup.mjs');
+  for (const way of [
+    'only by its file id, not by its path: it may be that file named through a network share or a mapped drive, or a copy that keeps its file id',
+    'Nothing was changed. ${way}',
+    'const way = `Back up to a new path under ${parse(source).root}`;',
+    'refuseOwnFile(target, source, `If it is a backup, copy it to a new path under ${parse(target).root}, then restore from the copy`);',
+  ]) assert.ok(rawBackup.replace(/[`']\s*\+\s*[`']/g, '').includes(way), `backup.mjs names the way out: ${way}`);
 });

@@ -31,22 +31,36 @@
 // (\\myhost\exports, which is C:\ws\exports, beside C:\ws) names none of its
 // directories. So on that path's volume such a path answers null — it may lie
 // inside — and the export, purge-org and no-marker checks refuse it, naming
-// the way out (its path on a local drive; for an export with none, a local
-// directory copied there afterwards), even when it lies outside (a share of
+// the way out (its path on a local drive, or for the database its path under
+// the workspace as that is named; for an export with none, a local directory
+// copied there afterwards), even when it lies outside (a share of
 // C:\out, which no file id tells apart). A share of another machine whose
-// volume has that serial is refused alike: machines cloned from one image
-// keep their disks' serials, and the low 32 bits do not tell hosts apart. So
-// does a path whose volume cannot be read, on any root: a share, or a drive
-// mapped to one, that cannot be reached (its server stopped, its name not
-// resolving) — or a drive that does not exist — may lead anywhere, under a
-// purged root among them (\\myhost\betasub, which is C:\ws\orgs\beta\sub);
-// purge-org refuses a users file recorded through one, an export there is
-// refused before it would fail to write, and a database there is missing
-// before it is compared. One through a share on another volume (another
-// serial) stays an ordinary target. A check for equality takes null as
-// unequal: a path it cannot place is never the workspace (the in-place
-// detection), the database (the scan for another store) or one of its own
-// files (backup.mjs). The twin of this rule is
+// volume has that serial is refused alike when nothing places it: machines
+// cloned from one image keep their disks' serials, and the low 32 bits do not
+// tell hosts apart. So does a path whose volume cannot be read, on any root:
+// a share, or a drive mapped to one, that cannot be reached (its server
+// stopped, its name not resolving) — or a drive that does not exist — may
+// lead anywhere, under a purged root among them (\\myhost\betasub, which is
+// C:\ws\orgs\beta\sub); purge-org refuses a users file recorded through one,
+// an export there is refused before it would fail to write, and a database
+// there is missing before it is compared. One through a share on another
+// volume (another serial) stays an ordinary target.
+// Placement only ever makes a check more conservative, since a file id names
+// a file on one volume, not on one host: a sector copy keeps the MFT, so a
+// machine cloned from this host's image, or this drive's disk image attached
+// as E:, keeps the serial and the file id of every file it was copied with —
+// the root directory's among them, MFT record 5 on every NTFS volume — and
+// placement spells \\machineb\C$\ws or E:\ws as C:\ws. So a containment
+// refusal (a directory export inside the workspace, purge-org's users file
+// under the root) compares placed, where a false "inside" only refuses, with
+// the ways out it names; a check whose "same" or "inside" answer writes,
+// skips a file or takes it for the store's own — the in-place detection, the
+// scan for another store, the no-marker check, backup.mjs's own-file check —
+// compares p alone (no beside). The scan then reads a database only
+// placement makes this one; the others refuse a path only placement makes
+// the same (the no-marker check: inside, or null), naming the way out — the
+// workspace or the database by its own path, a path on the database's drive,
+// an empty or new directory. The twin of this rule is
 // crawlScopeRefusal's placement, which places only a local path while the
 // workspace is named through a share (it refuses any other path off a local
 // drive). That form only compares: every message, record and return value

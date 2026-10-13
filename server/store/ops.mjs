@@ -154,7 +154,9 @@ function realOr(path) {
 }
 // realOr spells a path (the journey rewrites' base, below); a check compares two through compared
 // (server/store/paths.mjs): realOr's form off Windows, the on-disk spelling, case folded, on Windows —
-// where compared(p, beside) places p beside the path it is checked against across a share's name.
+// where compared(p, beside) places p beside the path it is checked against across a share's name. A
+// containment refusal compares placed; a check whose answer writes or skips (the in-place detection, the
+// scan for another store, the no-marker check) compares by path alone and refuses what only placement equates.
 const compared = comparedPath(realOr);
 
 const slashed = (p) => p.replaceAll('\\', '/');
@@ -446,13 +448,13 @@ function exportDirectory(target, base) {
 // The candidates are the *.db files directly in <base> and <base>/db (<base>/observogram.db, the default, among
 // them), each opened read-only without migrating; one that cannot be read is refused naming it.
 async function assertNoOtherStore(base, path, id) {
-  const own = compared(path);
+  const own = compared(path);   // the database itself by its path alone: a file id never skips another (store/paths.mjs)
   for (const dir of [base, join(base, 'db')]) {
     let names;
     try { names = readdirSync(dir); } catch (e) { if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR') continue; throw e; }
     for (const name of names.filter((n) => n.endsWith('.db')).sort()) {
       const file = join(dir, name);
-      if (compared(file, path) === own) continue;
+      if (compared(file) === own) continue;
       try { if (!statSync(file).isFile()) continue; } catch { continue; }
       let other;
       try {
@@ -479,7 +481,16 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
   out.write(`store: ${path}\n`);
   if (!existsSync(path)) throw refuse(`no database at ${path} — nothing to export (this command never creates one; check OBSERVOGRAM_DB and OBSERVOGRAM_WORKSPACE)`);
   const target = resolve(dir);
-  const inPlace = compared(target, base) === compared(base);
+  // The workspace by its path alone. On Windows a target only its file id places on it (store/paths.mjs) may be the
+  // workspace named another way, or a copy that keeps its file ids: the export takes it for neither.
+  const inPlace = compared(target) === compared(base);
+  if (!inPlace && compared(target, base) === compared(base)) {
+    const inPlaceWay = existsSync(base) ? `To export the workspace in place, stop the server and run packc store export ${base}; otherwise choose` : 'Choose';
+    throw refuse(`${target} matches the workspace ${base} only by its file id, not by its path: it may be the workspace named through `
+      + 'a network share or a mapped drive, or a copy that keeps its file ids (another machine cloned from this host\'s image, an '
+      + 'attached disk image) — an in-place export could work on a directory other than the one named, and a directory export '
+      + `could write files without the in-place steps. Nothing was changed. ${inPlaceWay} an empty or new directory`);
+  }
   let into = target;   // where a directory export writes: the target, or the directory its symlink resolves to
   if (inPlace) {
     if (!existsSync(base)) throw refuse(`the workspace ${base} does not exist — an in-place export works on an existing workspace. Nothing was changed. Check OBSERVOGRAM_WORKSPACE, or choose an empty or new directory for a directory export`);
@@ -509,15 +520,18 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
         // A database elsewhere proves nothing about the directory — an empty or unrelated one would pass, and the
         // export would record that directory's files as this store's legacy files.
         await assertNoOtherStore(base, path, id);   // the more specific refusal first: it names the other store
-        const own = compared(path, base);
-        if (own === null) {   // Windows: through a share on the workspace's volume that file ids cannot place (store/paths.mjs)
-          throw refuse(`${mp} is missing and ${path} is not a path on a local drive: through a network share on the volume that holds `
-            + `${base} it may or may not lie in the workspace, so ${base} is not known to be store ${id}'s. Nothing was changed. Set `
-            + 'OBSERVOGRAM_DB to the database\'s path on a local drive, then run the export again; otherwise choose an empty or new '
-            + 'directory for a directory export');
-        }
         const b = compared(base);
-        if (!own.startsWith(b + sep)) {
+        if (!compared(path).startsWith(b + sep)) {   // in the workspace by its path alone (store/paths.mjs)
+          // Windows: through a share on the workspace's volume that file ids cannot place, or one not reached — or placed in
+          // the workspace by its file id alone: the workspace named another way, or a copy that keeps its file ids.
+          const placed = compared(path, base);
+          if (placed === null || placed.startsWith(b + sep)) {
+            throw refuse(`${mp} is missing and ${path} is not named under ${base}: through a network share or a mapped drive, or as `
+              + 'a copy that keeps its file ids (another machine cloned from this host\'s image, an attached disk image), it may or '
+              + `may not lie in the workspace, so ${base} is not known to be store ${id}'s. Nothing was changed. Set OBSERVOGRAM_DB to `
+              + `the database's path under ${base}, then run the export again; otherwise choose an empty or new directory for a `
+              + 'directory export');
+          }
           throw refuse(`${mp} is missing and ${path} lives outside ${base}: the workspace ${base} is not known to be store ${id}'s. `
             + `Nothing was changed. If ${base} is this store's workspace, start the server once with OBSERVOGRAM_WORKSPACE=${base} `
             + `and OBSERVOGRAM_DB=${path} (the start rewrites the marker), stop it, then run the export again; otherwise choose an `
