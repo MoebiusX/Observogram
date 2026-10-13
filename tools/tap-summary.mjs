@@ -368,7 +368,19 @@ export function annotation(kind, props, message) {
 export const logLines = (line) => 1 + (line.startsWith('::') ? (line.match(/%0A/g) || []).length : 0);
 
 const fmtTotal = (v) => (v === undefined ? '?' : String(v));
-const cut = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+// cut prints a CR as `\r` (as TAP escapes one in a name) before it cuts: the
+// runner reads a lone CR as a line break, so a raw one in the run's text (a
+// failure's error, a diagnostic) would start a log line of its own.
+const cut = (s, n) => {
+  const t = String(s).replace(/\r/g, '\\r');
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+};
+// A line of the run's own text (a failure's error, an unfinished run's or a
+// not-started capture's lines) shows behind `| `: the runner executes a line
+// that starts with `::` once its leading whitespace is trimmed, and a
+// `::stop-commands::` in a failure would leave the block's own annotations
+// and notice unprocessed.
+const quoted = (l) => `| ${cut(l, 500)}`;
 
 // What npm, node or a shell prints when the tests never start: npm's own
 // refusal (a missing script, no package.json), node's (an option it does not
@@ -404,7 +416,7 @@ export function notStartedBlock(text, { file = 'test.tap', windows = false, host
     const shown = held.slice(-LAST_LINES);
     out.push(`${file} holds no TAP: npm test stopped before its tests ran — npm, node or a shell refused to start them.`);
     out.push(`${shown.length < held.length ? `Its last ${shown.length} of ${held.length} lines name` : `What it holds (${held.length} line${held.length === 1 ? '' : 's'}) names`} the cause: fix it, then run npm test again.`);
-    for (const l of shown) out.push(`  | ${cut(l, 500)}`);
+    for (const l of shown) out.push(`  ${quoted(l)}`);
     error = `${file} holds no "TAP version" line: npm test stopped before its tests ran — the summary block shows what it holds, which names the cause`;
   }
   const annotations = [annotation('error', { title: 'npm test printed no TAP' }, error)];
@@ -439,7 +451,7 @@ export function summarize(text, { root = process.cwd(), expectWin32 = null, coun
     out.push('(node --test reports a file\'s tests when the file ends, so the file still running may not be named).');
     let tail = parsed.lines;
     while (tail.length && tail[tail.length - 1] === '') tail = tail.slice(0, -1);
-    for (const l of tail.slice(-LAST_LINES)) out.push(`  | ${cut(l, 500)}`);   // a crash's last diagnostic can be one huge line
+    for (const l of tail.slice(-LAST_LINES)) out.push(`  ${quoted(l)}`);   // a crash's last diagnostic can be one huge line
   }
 
   // Skips: grouped by reason, the count, the unknown reasons.
@@ -468,7 +480,7 @@ export function summarize(text, { root = process.cwd(), expectWin32 = null, coun
     const p = fails[failures.indexOf(f)];
     out.push(`--- not ok ${p.n} - ${cut(f.name, 300)}`);
     out.push(`    at ${f.file ?? '(no location)'}${f.line ? `:${f.line}` : ''}`);
-    for (const l of f.body.slice(0, MAX_ERROR_LINES)) out.push(`    ${cut(l, 500)}`);
+    for (const l of f.body.slice(0, MAX_ERROR_LINES)) out.push(`    ${quoted(l)}`);
     if (f.body.length > MAX_ERROR_LINES) out.push(`    … ${f.body.length - MAX_ERROR_LINES} more line(s)`);
   }
 
