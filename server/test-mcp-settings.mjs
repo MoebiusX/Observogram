@@ -733,6 +733,18 @@ test('a policy worker that cannot be constructed, or fails, fails closed: every 
   for (const policy of [{}, { rules: null }, { rules: 'not a list' }, { rules: [] }, { rules: [null] }, { rules: [undefined] }, { rules: [null, undefined, 7] }]) {
     assert.deepEqual(await evaluatePolicy(policy, d, START_VALUES, { createWorker: counted, log: (l) => ruleless.push(l) }), { findings: [], timedOut: [] }, JSON.stringify(policy));
   }
+  // So does a list that cannot be read — its length throws, or it is a
+  // revoked Proxy (it rejected before: the list check and its length were
+  // read outside any guard).
+  const revocable = Proxy.revocable([], {});
+  revocable.revoke();
+  const unreadableLists = {
+    lengthThrows: new Proxy([], { get(t, k) { if (k === 'length') throw new Error('len'); return t[k]; } }),
+    revoked: revocable.proxy,
+  };
+  for (const [name, rules] of Object.entries(unreadableLists)) {
+    assert.deepEqual(await evaluatePolicy({ rules }, d, START_VALUES, { createWorker: counted, log: (l) => ruleless.push(l) }), { findings: [], timedOut: [] }, name);
+  }
   assert.equal(built, 0, 'no worker');
   assert.deepEqual(ruleless, []);
   // Beside rules, such an entry is none and the rules fail closed as ever

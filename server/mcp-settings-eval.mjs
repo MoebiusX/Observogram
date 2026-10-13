@@ -66,17 +66,20 @@ function errorClass(e) {
 // number, one whose properties cannot be read) is no rule. [] for a policy
 // without rules — none, no list of them, or a list that cannot be read.
 function rulesOf(policy) {
-  let list;
-  try { list = policy?.rules; } catch { return []; }
-  if (!Array.isArray(list)) return [];
   const out = [];
-  for (let i = 0; i < list.length; i += 1) {
-    try {
-      const r = list[i];
-      if (r === null || typeof r !== 'object' || !Number.isInteger(r.index)) continue;
-      out.push({ index: r.index, field: r.field ?? null, type: r.type ?? null, re: r.re, warn: r.warn ?? null, ack: r.ack ?? null });
-    } catch { /* an entry that cannot be read is no rule */ }
-  }
+  try {
+    // The list, the check that it is one and its length are read here: a
+    // list that throws on any of them (a revoked Proxy) is none.
+    const list = policy?.rules;
+    if (!Array.isArray(list)) return [];
+    for (let i = 0; i < list.length; i += 1) {
+      try {
+        const r = list[i];
+        if (r === null || typeof r !== 'object' || !Number.isInteger(r.index)) continue;
+        out.push({ index: r.index, field: r.field ?? null, type: r.type ?? null, re: r.re, warn: r.warn ?? null, ack: r.ack ?? null });
+      } catch { /* an entry that cannot be read is no rule */ }
+    }
+  } catch { return []; }
   return out;
 }
 
@@ -208,11 +211,11 @@ async function runWorker(rules, descriptor, values, { deadlineMs, execArgv, crea
  * the worker failed, every rule it had not finished — a rule it finished
  * keeps its findings; every rule when it could not be constructed), each of
  * which is in `findings` as a match (`timedOut: true`). `policy` is
- * compileSettingsPolicy's, or null; one without rules (none, or no list of
- * them) answers as null does: no findings, and an entry of its list that is
- * no rule with an index (null, say) is none. Never rejects, whatever it is
- * given: options that cannot be read fail closed like a worker that cannot
- * be constructed. `execArgv` (the server's flags) and `createWorker`
+ * compileSettingsPolicy's, or null; one without rules (none, no list of
+ * them, or a list that cannot be read) answers as null does: no findings,
+ * and an entry of its list that is no rule with an index (null, say) is
+ * none. Never rejects, whatever it is given: options that cannot be read
+ * fail closed like a worker that cannot be constructed. `execArgv` (the server's flags) and `createWorker`
  * (`new Worker(url, options)`) are the suites' seams.
  */
 export async function evaluatePolicy(policy, descriptor, values, options) {
