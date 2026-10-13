@@ -913,6 +913,16 @@ test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README 
     ];
     assert.deepEqual(commandsCmp.stdout.trimEnd().split('\n'), [`${label}: 4 differences — the run did not run what the reference ran`, ...each.map((d) => `  ${d}`), ...each.map((d) => `::error title=${label}::${d}`)]);
     assert.deepEqual(commandsCmp.stdout.split(/\r?\n|\r/).filter((l) => RUNNER_READS_RE.test(l)), each.map((d) => `::error title=${label}::${d}`), '--compare: whichever difference a harness file starts, its ::error lines are the only ones the runner would execute');
+    // A run that ran what the reference ran: its line, the one path to
+    // windows-vs-linux's ::notice, names a harness file with fewer assertions
+    // under a win32 skip, a `##[` in it as `#\#[`.
+    const fewerRef = f('linux-fewer.json', '{"platform":"linux","node":"v22.16.0","tests":10,"todo":0,"skips":{},"harness":{"tools/##[stop-commands]x.mjs":{"asserts":5,"win32":0}}}');
+    const fewerRun = f('windows-fewer.json', '{"platform":"win32","node":"v22.16.0","tests":10,"todo":0,"skips":{"win32: a reason":1},"harness":{"tools/##[stop-commands]x.mjs":{"asserts":3,"win32":1}}}');
+    const greenCmp = run(['--compare', fewerRef, fewerRun]);
+    assert.equal(greenCmp.status, 0, greenCmp.stdout + greenCmp.stderr);
+    const greenLine = `${label}: tests 10 = 10 · harness assertions 3 vs 5 in 1 files (tools/#\\#[stop-commands]x.mjs −2 under 1 win32 skip) · other skips equal (PID 1: 0 vs 0) — it ran what the reference ran`;
+    assert.deepEqual(greenCmp.stdout.trimEnd().split('\n'), [greenLine, `::notice title=windows-vs-linux::${greenLine}`]);
+    assert.deepEqual(greenCmp.stdout.split(/\r?\n|\r/).filter((l) => RUNNER_READS_RE.test(l)), [`::notice title=windows-vs-linux::${greenLine}`], '--compare: a green line naming a harness file with `##[`, its ::notice the only line the runner would execute');
     const forgedCwd = join(dir, '##[stop-commands]pause');
     mkdirSync(forgedCwd);
     const fromForged = run([green, '--win32-skips', '0'], forgedCwd);
