@@ -5,10 +5,10 @@
 // that root, a backup or restore path with the database and its
 // -wal/-shm/-journal.
 //
-// comparedPath(own) → compared(p, beside), the function a check compares
-// through: p's form, placed beside the path it is checked against when one
-// is given (on Windows, null instead when p, reached through a share, may lie
-// inside it: below). Off Windows it is `own`, the calling module's realpath
+// comparedPath(own) → compared(p, beside, { deleting }), the function a check
+// compares through: p's form, placed beside the path it is checked against
+// when one is given (on Windows, null instead when p, reached through a share,
+// may lie inside it: below). Off Windows it is `own`, the calling module's realpath
 // form (which takes p alone), so Linux and macOS compare exactly as before. On Windows a
 // spelling does not name a path: NTFS names are case-insensitive and a
 // directory has a short (8.3) name beside its long one, so C:\ws, c:/WS and
@@ -44,7 +44,14 @@
 // C:\ws\orgs\beta\sub); purge-org refuses a users file recorded through one,
 // an export there is refused before it would fail to write, and a database
 // there is missing before it is compared. One through a share on another
-// volume (another serial) stays an ordinary target.
+// volume (another serial) stays an ordinary target — except to purge-org's
+// users-file check, whose "outside" answer deletes the root beside it: it
+// passes { deleting: true }, and there any path through a share (by its name
+// or a drive mapped to one) that nothing places answers null, whatever volume
+// it reports. A DFS link sits below a namespace root another server answers,
+// so while the link's target is down (\\corp\dfs\betasub, a link to
+// \\myhost\betasub) the nearest path that answers reports that server's
+// volume, not the one the link leads to.
 // Placement only ever makes a check more conservative, since a file id names
 // a file on one volume, not on one host: a sector copy keeps the MFT, so a
 // machine cloned from this host's image, or this drive's disk image attached
@@ -98,7 +105,7 @@ export function comparedPath(own, { windows = ON_WINDOWS, path = nodePath, realp
     for (const dir of lineage(native)) { const st = stat(dir); if (st) return st.dev & 0xffffffffn; }
     return null;
   };
-  return (p, beside) => {
+  return (p, beside, { deleting = false } = {}) => {
     const native = real(path.resolve(p));
     if (beside === undefined) return form(native);
     const other = real(path.resolve(beside));
@@ -112,9 +119,10 @@ export function comparedPath(own, { windows = ON_WINDOWS, path = nodePath, realp
       const same = theirs.get(fileId(dir));
       if (same) return form(path.join(same, native.slice(dir.length)));
     }
-    // Not placed: through a share on beside's volume, or on a volume that cannot be read, p may lie inside it (above).
+    // Not placed: through a share on beside's volume (on any volume, when deleting), or on a volume that cannot be
+    // read, p may lie inside it (above).
     const vol = volume(native);
-    if (vol === null || (root(native).startsWith('\\\\') && vol === volume(other))) return null;
+    if (vol === null || (root(native).startsWith('\\\\') && (deleting || vol === volume(other)))) return null;
     return form(native);
   };
 }

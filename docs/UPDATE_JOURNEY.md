@@ -1366,11 +1366,17 @@ is a path through a share, or a drive mapped to one, that cannot be reached
 when the check runs (a users file recorded through `\\myhost\betasub` while
 it is down): with no volume to read, nothing tells where it leads. A share
 that can be reached on a volume with another serial — another volume of this
-host, or another host's — is still an ordinary target; one whose volume
-serial equals the workspace volume's is refused alike with those ways out
-when no file id places it, whether that volume is this host's or one of
+host, or another host's — is still an ordinary export target; one whose
+volume serial equals the workspace volume's is refused alike with those ways
+out when no file id places it, whether that volume is this host's or one of
 another machine cloned from the same image (a cloned disk keeps its serial,
-and the low 32 bits a share reports do not tell hosts apart). A cloned disk
+and the low 32 bits a share reports do not tell hosts apart). To purge-org,
+whose "outside" answer deletes the root, no share is an ordinary target: it
+refuses a users file recorded through any share that no file id places,
+whatever volume it reports, with the same way out. A DFS link sits below a
+namespace root another server answers, so while the link's target is down
+(`\\corp\dfs\betasub`, a link to `\\myhost\betasub`) the volume read is the
+namespace root's, not the one the link leads to. A cloned disk
 keeps its files' ids too — a sector copy keeps the MFT, the root directory's
 record among them — and so does this drive's disk image attached as `E:`, so
 a file id may place another machine's path, or the image's, on this host's.
@@ -1384,5 +1390,5 @@ database by its own path, a new path on the database's drive), so
 and a restore from `E:\ws\observogram.db` is not refused as the database
 itself. Each of the two suites also runs its
 default host once on a real directory, so a Windows run fails if the
-platform's rule is not the one chosen. Tests: 1400 → 1413
-(`server/test-store-paths.mjs` 13, new).
+platform's rule is not the one chosen. Tests: 1400 → 1414
+(`server/test-store-paths.mjs` 14, new).
