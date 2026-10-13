@@ -384,12 +384,20 @@ const quoted = (l) => `| ${cut(l, 500)}`;
 
 // What npm, node or a shell prints when the tests never start: npm's own
 // refusal (a missing script, no package.json), node's (an option it does not
-// take, no test file it can find), a shell's or cmd's (no such command).
+// take, no test file it can find), a shell's or cmd's (no such command). A
+// shell running a command names itself (`sh: 1: c8: not found`); one running
+// a script names the script's path, whatever it is — a CI run step's
+// `/…/_temp/x.sh: line 1: npmx: command not found`, Git Bash's `D:\…\x.sh: line 1: …`,
+// dash's `/…/x.sh: 1: npmx: not found`. Those two forms read the line's end
+// first (the lookahead), so a long line that ends otherwise costs one pass,
+// not one per `: 1: ` in it.
 const NOT_STARTED = Object.freeze([
   /^npm (?:error|ERR!) /m,
   /^(?:.*[\\/])?node(?:\.exe)?: /m,
   /^Could not find '/m,
   /^(?:.*[\\/])?(?:sh|bash)(?:: line \d+|: \d+)?: .+: (?:command )?not found$/m,
+  /^(?=.*: command not found$)\S.*?: line \d+: .+: command not found$/m,
+  /^(?=.*: not found$)\S.*?: \d+: .+: not found$/m,
   /^'.+' is not recognized as an internal or external command/m,
 ]);
 

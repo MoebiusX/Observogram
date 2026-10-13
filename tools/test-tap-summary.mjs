@@ -784,6 +784,17 @@ test('S9 the CLI: the block on stdout, exit 0 and 1; usage, no README, a README 
     }
     const one = notStarted('one.tap', 'npm error Missing script: "test"\n', ['npm error Missing script: "test"']);
     assert.ok(one.includes('What it holds (1 line) names the cause: fix it, then run npm test again.') && !one.includes('--test-reporter'), one);
+    // A CI run step whose script cannot start npm: the shell names the
+    // script's path, not itself — bash's on a Linux runner, Git Bash's on a
+    // Windows one, dash's.
+    for (const [name, line] of [
+      ['step-bash.tap', '/home/runner/work/_temp/4f2a9c.sh: line 1: npmx: command not found'],
+      ['step-git-bash.tap', 'D:\\a\\_temp\\4f2a9c.sh: line 1: npmx: command not found'],
+      ['step-dash.tap', '/home/runner/work/_temp/4f2a9c.sh: 1: npmx: not found'],
+    ]) {
+      const step = notStarted(name, `${line}\n`, [line]);
+      assert.ok(step.includes('What it holds (1 line) names the cause: fix it, then run npm test again.') && !step.includes('--test-reporter'), step);
+    }
     const empty = notStarted('empty.tap', '', []);
     const emptyLine = (file, cmd) => `${file} is empty: npm test printed nothing into it — capture the run again: ${cmd}`;
     assert.ok([false, true].some((w) => empty.split('\n').includes(emptyLine(join(dir, 'empty.tap'), reportCommand(join(dir, 'empty.tap'), w)))), empty);
