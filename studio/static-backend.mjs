@@ -3,16 +3,39 @@
 // studio").
 //
 // A downstream that serves the studio from its own static host has no
-// Observogram server behind the page. This module answers the READ-ONLY pack
-// routes the studio calls — the catalogue, the layered pack, the canonical
+// Observogram server behind the page. This module answers the pack routes
+// the studio calls — the catalogue, the layered pack, the canonical
 // manifest, conformance, the compile catalogue and every compiled artefact,
-// the export ZIP — from the same tools/lib engines the server uses
+// the export ZIP — and retrofeed (POST /api/packs/:id/retrofeed: Compare's
+// repository update from live, a computation over two packs already in the
+// page that writes nothing), from the same tools/lib engines the server uses
 // (server/index.mjs is the reference: each port names the handler it
-// mirrors), over the packs the bundle carries. Everything the server alone
-// can do (uploads, scans, live MCP drafts, Compare, Deploy, Journeys, Build,
-// sign-in) answers 501 with `denied: 'no-backend'` and a sentence that names
-// the feature — studio/api.mjs shows a `denied` body verbatim — and a
-// fixed notice at the bottom of the window says so once.
+// mirrors), over the packs the bundle carries. Everything else the server
+// alone can do (uploads, scans, live MCP drafts, Compare, Deploy, Journeys,
+// Build, sign-in) answers 501 with `denied: 'no-backend'` and a sentence
+// that names the feature — studio/api.mjs shows a `denied` body verbatim —
+// and a fixed notice at the bottom of the window says so once.
+//
+// Retrofeed is the one non-GET answered. Its body is read as the server's
+// three parsers read it (body-parser 2.2.2 as server/index.mjs mounts it,
+// and that file's bodyParserError answers): application/json strictly — an
+// empty body is {}, a charset not starting utf- 415, over 16 MiB 413 —;
+// text/plain, text/yaml and application/x-yaml as text (over 4 MiB 413); a
+// form (application/x-www-form-urlencoded, charset utf-8 or iso-8859-1, else
+// 415) by qs's depth-0 rules (over 64 KiB, or over 1000 parameters, 413); any
+// other type, or none, as no body. Not ported, and none of it is what the
+// studio sends (application/json, UTF-8): a Content-Encoding (the server
+// inflates gzip, deflate and br; here the bytes are read as they are), a
+// JSON body in a UTF charset other than UTF-8 (read here as UTF-8), and a
+// text body's charset (the server refuses one its decoder does not know).
+// The diff is the server's retrofeed diff — no traceability graph, no
+// annotation fallback for scopeMode — over engines loaded at the first call
+// through literal dynamic imports (so the builder's tokenizer puts them in
+// the bundle's graph and the boot does not evaluate them); the clock that
+// stamps observogram.retrofeed.adoptedAt is the `clock` option. A computing
+// route answers 500 when the bundle bakes a taxonomy the classifier does not
+// hold (the studio's bind failed in this browser): an answer classified by
+// the default families would not be the server's.
 //
 // Imported by NOTHING in the live studio: the bundle alone instantiates it,
 // before studio/app.mjs boots. The live Express server serves this file
@@ -57,6 +80,7 @@ import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs
 import { hasLibraryTodos, todosFromAnnotations, validationSummary } from '../tools/lib/library.mjs';
 import { focusedPackId, focusedEnv } from './focus.mjs';
 import { normalizeBrand, DEFAULT_BRAND } from '../tools/lib/brand.mjs';
+import { activeTaxonomy, compileTaxonomy } from '../tools/lib/artefact-classify.mjs';
 import { readBrandConfig } from './brand.mjs';
 
 export const DENIED = 'no-backend';
@@ -100,8 +124,10 @@ const SERVICE_WAIVERS = /^\/api\/services\/[^/]+\/waivers(?:[/?]|$)/;
 // writes (PUT / DELETE; the GET is answered below with the empty document)
 // and `audit-report` (GAP batch 2, B3.5: its goes-blind section is the blast
 // radius over the traceability graph, whose PromQL parser the bundle cannot
-// inline — the Compare blocker; `placeholders` IS answered below).
-const PACK_FEATURES = { retrofeed: 'Compare', 'deploy-bulk': 'Deploy', verdicts: 'Verdicts', 'audit-report': 'Audit report' };
+// inline — the Compare blocker; `placeholders` IS answered below). A POST
+// to `retrofeed` is answered below; any other method there is 'This action'
+// (the server has no other route there either).
+const PACK_FEATURES = { 'deploy-bulk': 'Deploy', verdicts: 'Verdicts', 'audit-report': 'Audit report' };
 
 export function featureOf(pathname) {
   const sub = /^\/api\/packs\/[^/]+\/([^/?]+)/.exec(pathname)?.[1];
@@ -213,8 +239,105 @@ function catalogEntry(meta, canonical) {
   };
 }
 
-const json = (status, body, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': JSON_CT, ...headers } });
+// The reason phrase a server sends with each status the shim answers, so
+// studio/api.mjs reads a shim error as it reads the server's ("404 Not Found
+// on …").
+const STATUS_TEXT = { 200: 'OK', 400: 'Bad Request', 404: 'Not Found', 413: 'Payload Too Large', 415: 'Unsupported Media Type', 500: 'Internal Server Error', 501: 'Not Implemented' };
+const json = (status, body, headers = {}) => new Response(JSON.stringify(body), { status, statusText: STATUS_TEXT[status] ?? '', headers: { 'Content-Type': JSON_CT, ...headers } });
 const unknownPack = (id, shape = {}) => json(404, { ...shape, error: `unknown pack: ${id}` });
+
+// ---------- a request body, as the server's parsers read it ----------
+
+// server/index.mjs: express.json({ limit: '16mb' }), express.text({ type:
+// ['application/x-yaml', 'text/yaml', 'text/plain'], limit: '4mb' }),
+// express.urlencoded({ extended: false, limit: '64kb' }) — body-parser 2.2.2
+// — and bodyParserError, whose refusals are JSON with a fixed text, the
+// parser's status and Cache-Control: no-store with nosniff, but for a 413 on
+// /api/, which keeps its own text (the crawler hint) and sets neither.
+const MIB = 1024 * 1024;
+const BODY_LIMITS = { json: 16 * MIB, text: 4 * MIB, form: 64 * 1024 };
+const FORM_PARAMETER_LIMIT = 1000;
+const TEXT_TYPES = ['application/x-yaml', 'text/yaml', 'text/plain'];
+const bodyRefusal = (status, error) => ({ refusal: json(status, { ok: false, error }, { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }) });
+// The /api/ 413: `cap <limit in MB, rounded>` — 16MB, 4MB, 0MB for the form's
+// 64 KiB, and 16MB when the error carries no limit (too many parameters).
+const tooLarge = (limit) => ({
+  refusal: json(413, { ok: false, error: `Request body too large (cap ${limit ? `${Math.round(limit / MIB)}MB` : '16MB'}). The crawler should filter to observability artefacts only — drop a large repo and the client will pre-classify; if you're hitting this you may have an in-flight build.` }),
+});
+
+// qs's value decoder (utils.decode): `+` is a space, then UTF-8 percent-
+// decoding, the raw text kept when an escape is malformed; under iso-8859-1
+// each %XX is one code unit.
+function formDecode(text, charset) {
+  const plus = text.replace(/\+/g, ' ');
+  if (charset === 'iso-8859-1') return plus.replace(/%[0-9a-f]{2}/gi, (m) => String.fromCharCode(parseInt(m.slice(1), 16)));
+  try { return decodeURIComponent(plus); } catch { return plus; }
+}
+
+// qs.parse at depth 0, as body-parser's non-extended form parser calls it:
+// %5B and %5D read as brackets, each `&` part split at its first `=` (or at
+// `]=`), a repeated name collected into an array in order; then each name's
+// one root — `[name]` is `name`, `[]` spreads its values over 0, 1, … — with
+// an empty name and __proto__ dropped, a name met twice merged as qs merges.
+function parseForm(text, charset) {
+  if (!text.length) return {};
+  const parts = text.replace(/%5B/gi, '[').replace(/%5D/gi, ']').split('&');
+  const values = Object.create(null);
+  for (const part of parts) {
+    const bracketEquals = part.indexOf(']=');
+    const at = bracketEquals === -1 ? part.indexOf('=') : bracketEquals + 1;
+    const name = formDecode(at === -1 ? part : part.slice(0, at), charset);
+    const value = at === -1 ? '' : formDecode(part.slice(at + 1), charset);
+    values[name] = Object.hasOwn(values, name) ? [].concat(values[name], value) : value;
+  }
+  // qs utils.merge for two values under one name: a falsy source keeps the target, else the two are concatenated.
+  const merge = (target, source) => (!source ? target : [].concat(target, source));
+  const out = {};
+  const put = (key, value) => { out[key] = Object.hasOwn(out, key) ? merge(out[key], value) : value; };
+  for (const name of Object.keys(values)) {
+    if (!name) continue;
+    if (name === '[]') { [].concat(values[name]).forEach((v, i) => put(String(i), v)); continue; }
+    const key = name.startsWith('[') && name.endsWith(']') ? name.slice(1, -1) : name;
+    if (key !== '__proto__') put(key, values[name]);
+  }
+  return out;
+}
+
+// The bytes of a body as text in `charset`: UTF-8 (a leading BOM dropped, as
+// the server's decoder drops it), or iso-8859-1 byte for byte.
+function decodeBody(bytes, charset) {
+  if (charset !== 'iso-8859-1') return new TextDecoder('utf-8').decode(bytes);
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 8192) out += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  return out;
+}
+
+// A Request's body as the server's parsers hand it to a handler: { value }
+// (an object, an array, a string, or undefined for no body) or { refusal }
+// (the Response the server sends instead).
+export async function readRequestBody(request) {
+  const header = request.headers.get('content-type') || '';
+  const type = header.split(';')[0].trim().toLowerCase();
+  const charset = (/;\s*charset\s*=\s*"?([^";\s]*)/i.exec(header)?.[1] || '').toLowerCase() || 'utf-8';
+  const kind = type === 'application/json' ? 'json' : TEXT_TYPES.includes(type) ? 'text' : type === 'application/x-www-form-urlencoded' ? 'form' : null;
+  if (!kind) return { value: undefined };
+  if (kind === 'json' && !charset.startsWith('utf-')) return bodyRefusal(415, 'the request body\'s charset is not supported');
+  if (kind === 'form' && charset !== 'utf-8' && charset !== 'iso-8859-1') return bodyRefusal(415, 'the request body\'s charset is not supported');
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.length > BODY_LIMITS[kind]) return tooLarge(BODY_LIMITS[kind]);
+  const text = decodeBody(bytes, kind === 'form' ? charset : 'utf-8');
+  if (kind === 'text') return { value: text };
+  if (kind === 'form') {
+    let count = 1;
+    for (let i = text.indexOf('&'); i !== -1; i = text.indexOf('&', i + 1)) if (++count > FORM_PARAMETER_LIMIT) return tooLarge(null);
+    return { value: parseForm(text, charset) };
+  }
+  if (text.length === 0) return { value: {} };
+  // strict: the first character that is not a space, tab, LF or CR opens an object or an array.
+  const first = /^[ \t\n\r]*([^ \t\n\r])/.exec(text)?.[1];
+  if (first !== '{' && first !== '[') return bodyRefusal(400, 'the request body is not valid JSON');
+  try { return { value: JSON.parse(text) }; } catch { return bodyRefusal(400, 'the request body is not valid JSON'); }
+}
 
 // The pack text a --pack-url answers, read as server/index.mjs loadPackFile
 // reads a file: .json is JSON, anything else YAML.
@@ -228,7 +351,15 @@ function parsePackText(text, url) {
 // fetchImpl: the page's own fetch, for the pack URLs (never for the routes).
 // origin: the page's origin; an absolute request to another origin is not ours.
 // product: the name the denials spell (installStaticBackend reads it from #brand-config).
-export function createStaticBackend(config, { fetchImpl, origin = 'http://static-studio.invalid', product = DEFAULT_BRAND.name } = {}) {
+// clock: the time retrofeed stamps (observogram.retrofeed.adoptedAt) — an option so a test can pin it.
+// importRetrofeedEngines: loads the engines at retrofeed's first call — literal specifiers, in code (a comment or a
+// const is not collected), so the builder's tokenizer puts them in the graph; the option is a test seam, as
+// compareIdentityEngine({ importFn }) is (studio/compare-identity.mjs).
+export function createStaticBackend(config, {
+  fetchImpl, origin = 'http://static-studio.invalid', product = DEFAULT_BRAND.name,
+  clock = () => new Date().toISOString(),
+  importRetrofeedEngines = () => Promise.all([import('../tools/lib/diff.mjs'), import('../tools/lib/retrofeed.mjs')]),
+} = {}) {
   const schema = config?.schema;
   const version = typeof config?.version === 'string' ? config.version : '0.0.0';
   const declared = Array.isArray(config?.packs) ? config.packs : [];
@@ -247,6 +378,19 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
     && (baked.origins === null || (Array.isArray(baked.origins) && baked.origins.every((o) => typeof o === 'string')))
     ? { listed: true, origins: baked.origins === null ? null : [...baked.origins] } : null;
   const upstream = fetchImpl;
+  // The retrofeed engines, loaded once; a failed import is not kept, so the next call retries.
+  let retrofeedEngines = null;
+
+  // The baked taxonomy must be the one the classifier holds, or the answer is
+  // not the one a server with that taxonomy gives: a computing route answers
+  // 500 naming that (the studio still binds the default families on a failed
+  // bind, so Discover renders; only the computations refuse).
+  function taxonomyRefusal(shape = {}) {
+    if (!taxonomy || activeTaxonomy()) return null;
+    let why = '';
+    try { compileTaxonomy(taxonomy, { timed: false }); } catch (e) { why = ` (${e.message})`; }
+    return json(500, { ...shape, error: `the artefact taxonomy built into this bundle did not bind in this page${why}, so this answer would not be the one a server with that taxonomy gives — open the file in a Chromium-based browser, where it is proven to bind, or ask whoever built it for a build whose taxonomy this browser compiles` });
+  }
 
   // Every pack, resolved once: { meta, canonical } or { meta, error }. A URL
   // pack is read through the page's fetch on the first catalogue call; one
@@ -504,11 +648,69 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
     }
   }
 
-  const deny = (pathname) => json(501, { ok: false, denied: DENIED, error: denialText(featureOf(pathname), product) });
+  // POST /api/packs/:id/retrofeed — server/index.mjs's handler: A's 404,
+  // then the body as the parsers left it (`req.body || {}`: a string, an
+  // array or no body reach it as on the server) and B's 404; the diff without
+  // the graph and without the scopeMode annotation fallback; the `keys`
+  // filter by base identity; retrofeedShadowSignals; the schema tripwire.
+  async function retrofeed(id, body) {
+    const a = await findPack(id);
+    if (!a) return unknownPack(id, { ok: false });
+    const b = body || {};
+    const bPack = await findPack(String(b.packBId || ''));
+    if (!bPack) return json(404, { ok: false, error: `unknown pack B: ${b.packBId}` });
+    const refused = taxonomyRefusal({ ok: false });
+    if (refused) return refused;
+    try {
+      if (a.error) throw a.error;                       // a --pack-url that failed to load: 500, its message
+      if (bPack.error) throw bPack.error;
+      const [{ diffPacks }, { retrofeedShadowSignals }] = await (retrofeedEngines ??= importRetrofeedEngines());
+      const aEnv = typeof b.aEnv === 'string' && b.aEnv ? b.aEnv : null;
+      const bEnv = typeof b.bEnv === 'string' && b.bEnv ? b.bEnv : null;
+      const diff = diffPacks(
+        adapt(a.canonical, { environment: aEnv }),
+        adapt(bPack.canonical, { environment: bEnv }),
+        { scopeMode: typeof b.scopeMode === 'string' ? b.scopeMode : undefined, service: typeof b.service === 'string' ? b.service : undefined },
+      );
+      let entries = Object.values(diff.layers || {}).flatMap((l) => l.onlyInB || []);
+      if (Array.isArray(b.keys) && b.keys.length) {
+        const baseOf = (k) => String(k).replace(/#\d+$/, '');
+        const want = new Set(b.keys.map(baseOf));
+        entries = entries.filter((e) => want.has(baseOf(e.key)));
+      }
+      const { adopted, skipped, updatedCanonical, fragment } = retrofeedShadowSignals(a.canonical, entries, { now: clock() });
+      const errs = validateCanonical(updatedCanonical, schema);
+      if (errs.length) return json(500, { ok: false, error: 'retrofeed produced a pack that fails the schema — this is a bug, please report it', details: errs.slice(0, 5) });
+      return json(200, {
+        ok: true,
+        summary: { candidates: entries.length, adopted: adopted.length, skipped: skipped.length },
+        adopted, skipped,
+        fragmentYaml: fragment ? emitYaml(fragment) : null,
+        updatedPackYaml: emitYaml(updatedCanonical),
+      });
+    } catch (e) {
+      retrofeedEngines = null;                          // a failed import is retried at the next call
+      return json(500, { ok: false, error: e.message });
+    }
+  }
 
-  async function route(url, method) {
+  const deny = (pathname) => json(501, { ok: false, denied: DENIED, error: denialText(featureOf(pathname), product) });
+  const RETROFEED = /^\/api\/packs\/([^/]+)\/retrofeed$/;
+
+  async function route(url, method, input, init) {
     const path = url.pathname;
-    if (method !== 'GET' && method !== 'HEAD') return deny(path);
+    if (method !== 'GET' && method !== 'HEAD') {
+      // Retrofeed is the one non-GET answered; every other is denied first.
+      const rf = method === 'POST' ? RETROFEED.exec(path) : null;
+      if (!rf) return deny(path);
+      let id;
+      try { id = decodeURIComponent(rf[1]); } catch { return unknownPack(rf[1], { ok: false }); }
+      // The request as the network would carry it — the Content-Type fetch implies for a string, URLSearchParams,
+      // Blob or FormData body included — then its body as the server's parsers read it.
+      const request = input instanceof Request ? new Request(input, init) : new Request(url, { ...init, method });
+      const body = await readRequestBody(request);
+      return body.refusal ?? retrofeed(id, body.value);
+    }
     if (routes[path]) return routes[path]();
     const m = /^\/api\/packs\/([^/]+)(?:\/(.+))?$/.exec(path);
     if (m) {
@@ -553,7 +755,7 @@ export function createStaticBackend(config, { fetchImpl, origin = 'http://static
   function handle(input, init) {
     const req = requestOf(input, init);
     if (!req) return null;
-    return route(req.url, req.method).catch((e) => json(500, { error: e.message }));
+    return route(req.url, req.method, input, init).catch((e) => json(500, { error: e.message }));
   }
 
   return { handle, catalog, isOurs: (input, init) => requestOf(input, init) !== null, packCount: declared.length, product, taxonomyConfigured: taxonomy !== null };

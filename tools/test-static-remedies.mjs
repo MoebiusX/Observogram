@@ -11,7 +11,10 @@
 // class or data-* attribute its source writes, the view that draws it marks
 // it unavailable after it renders under an isStatic() test, and
 // openDeployModal itself explains instead of opening in the static posture —
-// so a new deploy entry point fails here until it is classified.
+// so a new deploy entry point fails here until it is classified. S3 holds
+// each static text to its exact words (the product named where a server is,
+// no server action told to the reader as something to do in the bundle) and
+// to the view that shows it under an isStatic() test.
 //
 // Run: node --test tools/test-static-remedies.mjs
 
@@ -22,7 +25,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tokenize } from './gen-vendor-manifest.mjs';
 import { DEFAULT_BRAND } from './lib/brand.mjs';
-import { serverNeeded, DEPLOY_CONTROLS } from '../studio/static-remedies.mjs';
+import { serverNeeded, DEPLOY_CONTROLS, staticRemedy } from '../studio/static-remedies.mjs';
 import { FEATURES, denialText } from '../studio/static-backend.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -125,7 +128,7 @@ test('S2 — every deploy entry point outside prototype space is drawn unavailab
   // (3) Each drawing view marks DEPLOY_CONTROLS unavailable under an isStatic() test, after its render.
   for (const view of [...new Set(ENTRY_POINTS.map((e) => e.drawnBy))]) {
     const src = read(view);
-    assert.match(src, /^import \{ serverNeeded, DEPLOY_CONTROLS \} from '\.\/static-remedies\.mjs';$/m, `${view} takes the sentence and the selector from the model`);
+    assert.match(src, /^import \{ serverNeeded, DEPLOY_CONTROLS(?:, \w+)* \} from '\.\/static-remedies\.mjs';$/m, `${view} takes the sentence and the selector from the model`);
     assert.match(src, /^import \{ markUnavailable \} from '\.\/services-view\.mjs';$/m, `${view} draws with the honesty rule's atom`);
     assert.match(src, /^const isStatic = \(\) => state\.access\?\.posture === 'static';$/m, `${view}: isStatic() reads the posture`);
     const draw = functionBody(src, 'drawDeployUnavailable');
@@ -146,4 +149,23 @@ test('S2 — every deploy entry point outside prototype space is drawn unavailab
   const firstStatement = open.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('//'))[0];
   assert.equal(firstStatement, guard, 'the static posture explains first');
   assert.ok(open.indexOf(guard) < open.indexOf("$('#deploy-modal')"), 'before the modal is looked up');
+});
+
+// A phrase that tells the reader to take a server action (design A.8, the phrase ledger's pattern).
+const SERVER_ACTION = /\b(re-?scan|rescan|scan (?:live|a repo(?:sitory)?)|connect mcp|from (?:its |a live )?mcp|redraft|re-?upload|refresh(?:es|ing)? (?:the )?live|refresh live evidence|capture a live draft|live draft again|deploy what is missing|deploy the repository)\b/i;
+
+test('S3 — the static texts: the retrofeed result\'s note, exact for three products (the article by the name), naming the product where it names a server and no server action as the reader\'s to take here; runRetrofeed shows it under isStatic() and today\'s note otherwise', () => {
+  for (const [product, server] of [[DEFAULT_BRAND.name, 'an Observogram server'], ['Acme Watch', 'an Acme Watch server'], ['Zed Console', 'a Zed Console server']]) {
+    const text = staticRemedy('retrofeed-result', { product });
+    assert.equal(text, `commit the updated pack to the service repo (it carries observogram.retrofeed.* provenance); whether the gap closed shows against a new live draft — on ${server}, or in a bundle whoever builds it rebuilds with that draft and the updated pack`);
+    assert.ok(text.includes(`${product} server`), 'the server it names is the product\'s');
+    assert.doesNotMatch(text, SERVER_ACTION, 'no server action the reader cannot take here');
+  }
+  assert.match('then re-scan to confirm the gap closed', SERVER_ACTION, 'the pattern finds what the live text says');
+  assert.throws(() => staticRemedy('nope', { product: 'P' }), { message: 'staticRemedy: no static text for "nope"' });
+  const view = read('studio/compare-view.mjs');
+  const runRetrofeed = functionBody(view, 'runRetrofeed');
+  assert.ok(runRetrofeed, 'studio/compare-view.mjs defines runRetrofeed');
+  assert.ok(runRetrofeed.includes("<span class=\"drift-retrofeed-note\">${isStatic() ? escapeHtml(staticRemedy('retrofeed-result', { product: state.brand.chrome.name })) : 'commit the updated pack to the service repo (it carries observogram.retrofeed.* provenance), then re-scan to confirm the gap closed'}</span>"),
+    'the note: the static text in the static posture (the brand\'s product), today\'s on a server');
 });

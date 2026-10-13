@@ -49,7 +49,7 @@ import { decisionHeaderHtml, disclosureHtml, emptyStateHtml, LAYER_PURPOSE, laye
 import { LINK_STATES, readTraceability, traceIssue } from './trace-chain.mjs';
 import { metricReaders, readersDigest, readersSentence, readerLine, readerRank, readerCounts, alertNames } from './metric-readers.mjs';
 // The static posture — no server behind the page (a static bundle): the deploy controls drawn unavailable.
-import { serverNeeded, DEPLOY_CONTROLS } from './static-remedies.mjs';
+import { serverNeeded, DEPLOY_CONTROLS, staticRemedy } from './static-remedies.mjs';
 import { markUnavailable } from './services-view.mjs';
 
 // Re-exported: these two lived here before moving to compare-catalog.mjs
@@ -1599,7 +1599,7 @@ export async function runRetrofeed(btn, host, { keys, scopeMode } = {}) {
       ${r.adopted.length ? `<p class="drift-retrofeed-dl">
           ${dl('⬇ additions fragment', r.fragmentYaml, `${slug}.retrofeed-fragment.yaml`)}
           ${dl('⬇ updated pack', r.updatedPackYaml, `${slug}.pack.yaml`)}
-          <span class="drift-retrofeed-note">commit the updated pack to the service repo (it carries observogram.retrofeed.* provenance), then re-scan to confirm the gap closed</span>
+          <span class="drift-retrofeed-note">${isStatic() ? escapeHtml(staticRemedy('retrofeed-result', { product: state.brand.chrome.name })) : 'commit the updated pack to the service repo (it carries observogram.retrofeed.* provenance), then re-scan to confirm the gap closed'}</span>
         </p>` : ''}
     `;
     host.hidden = false;

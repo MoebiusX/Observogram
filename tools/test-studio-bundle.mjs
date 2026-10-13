@@ -190,6 +190,9 @@ test('T1 collectModuleGraph: every module under studio/ or lib/, the dynamic /li
   // literal specifier each (a const would not be collected and the panel would stay off).
   assert.deepEqual(graph.get('studio/brand.mjs').imports.map((i) => i.spec).filter((sp) => sp.startsWith('/lib/')), ['/lib/brand.mjs'], 'studio/brand.mjs → /lib/brand.mjs');
   assert.deepEqual(graph.get('studio/remediation-flow-view.mjs').imports.map((i) => i.spec).filter((sp) => sp.startsWith('/lib/')), ['/lib/remediation-flow.mjs'], 'studio/remediation-flow-view.mjs → /lib/remediation-flow.mjs (B3.3: the response path renders in the bundle)');
+  // The shim's retrofeed engines: literal dynamic imports, so they are in its imports and in the graph.
+  const shimImports = graph.get('studio/static-backend.mjs').imports.map((i) => i.key);
+  for (const k of ['lib/diff.mjs', 'lib/retrofeed.mjs']) assert.ok(shimImports.includes(k) && graph.has(k), `the shim imports ${k} (a literal import())`);
   for (const [k, mod] of graph) {
     assert.ok(!/from\s+['"]node:/.test(mod.src), `${k} imports no node:* module`);
     assert.equal(mod.path, k.startsWith('lib/') ? `tools/lib/${k.slice(4)}` : k);
@@ -526,6 +529,11 @@ test('T3c every feature the shim denies is named in the README 501 list and the 
     assert.ok(re, `${name} (${prefix}) has a documented spelling`);
     for (const [doc, text] of [['README 501 list', list], ['DOWNSTREAM §10 denial cell', cell]]) assert.match(text, re, `${name} (${prefix}) is named in the ${doc}`);
   }
+  // What the shim answers is named as denied in neither list (follow-up compare-in-bundle): retrofeed is computed in
+  // the browser — the one non-GET answered — and the DOWNSTREAM row's answered cell names it.
+  assert.ok(!/retrofeed/i.test(list), 'the README 501 list does not name retrofeed');
+  assert.ok(!/Compare \([^)]*retrofeed/.test(cell) && cell.startsWith('every other `/api` or `/auth` path and every non-GET but retrofeed:'), 'the DOWNSTREAM denial cell: every non-GET but retrofeed');
+  assert.ok(row.slice(0, row.indexOf('every other `/api` or `/auth` path')).includes('`POST /api/packs/:id/retrofeed`'), 'the DOWNSTREAM answered cell names retrofeed');
   // The two slice 6a routes beside their names in DOWNSTREAM, as every other route there.
   assert.match(cell, /Services \(`\/api\/services`, `\/api\/services\/:id`/);
   assert.match(cell, /Organisations \(`\/api\/orgs`/);
@@ -812,7 +820,7 @@ test('T5 parity: the shim answers every ported route as a running server does �
 
 // ---------- T6 denial ----------
 
-test('T6 denial: the server-only routes answer 501 denied no-backend naming the feature; unknown pack 404; other origins and non-API paths pass to the page', async () => {
+test('T6 denial: the server-only routes answer 501 Not Implemented, denied no-backend, naming the feature; retrofeed answered (the one non-GET); unknown pack 404 Not Found; other origins and non-API paths pass to the page', async () => {
   let upstreamCalls = [];
   const fetchImpl = async (input, init) => { upstreamCalls.push([String(input), init]); return new Response('ok', { status: 200 }); };
   const backend = createStaticBackend({ version: '1.2.3', schema, packs: [{ id: 'p', label: 'P', canonical: paymentCanonical }] }, { fetchImpl, origin: 'https://studio.example' });
@@ -820,6 +828,7 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
     const r = await backend.handle(input, init);
     assert.ok(r, `${String(input)} answered`);
     assert.equal(r.status, 501, String(input));
+    assert.equal(r.statusText, 'Not Implemented', String(input));
     assert.equal(r.headers.get('content-type'), 'application/json; charset=utf-8');
     const body = await r.json();
     assert.deepEqual(body, { ok: false, denied: DENIED, error: denialText(feature) });
@@ -838,7 +847,16 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   await expectDenied('/api/validate', { method: 'POST' }, 'Uploading a pack');
   await expectDenied('/api/uploads', { method: 'DELETE' }, 'Uploading a pack');
   await expectDenied('/api/diff?a=p&b=p', undefined, 'Compare');
-  await expectDenied('/api/packs/p/retrofeed', { method: 'POST' }, 'Compare');
+  // Retrofeed is answered (the one non-GET; tools/test-bundle-compare.mjs C6 holds it to the server's answers); any
+  // other method there is 'This action', as on the server, which has no other route there.
+  const rf = await backend.handle('/api/packs/p/retrofeed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ packBId: 'p' }) });
+  assert.equal(rf.status, 200);
+  assert.equal(rf.statusText, 'OK');
+  const rfBody = await rf.json();
+  assert.equal(rfBody.ok, true);
+  assert.deepEqual(rfBody.summary, { candidates: 0, adopted: 0, skipped: 0 }, 'a pack against itself adopts nothing');
+  await expectDenied('/api/packs/p/retrofeed', undefined, 'This action');
+  await expectDenied('/api/packs/p/retrofeed', { method: 'PUT' }, 'This action');
   await expectDenied('/api/deploy/matrix', undefined, 'Deploy');
   await expectDenied('/api/deploys?pack=p', undefined, 'Deploy');
   await expectDenied('/api/packs/p/deploy-bulk', { method: 'POST' }, 'Deploy');
@@ -880,7 +898,7 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   assert.equal(featureOf('/api/mcp/ping'), 'Testing an MCP connection');
   assert.equal(featureOf('/api/mcp/jobs/abc/cancel'), 'Building a pack from a live MCP server');
   assert.equal(featureOf('/api/mcp-endpoints/3'), 'Settings', "'/api/mcp/ping' is no prefix of the endpoints");
-  assert.equal(featureOf('/api/packs/x/retrofeed?y'), 'Compare');
+  assert.equal(featureOf('/api/packs/x/retrofeed?y'), 'This action', 'retrofeed is answered; no feature is denied there');
   assert.equal(featureOf('/api/packs/x/verdicts/SLI-01'), 'Verdicts');
   assert.equal(featureOf('/api/packs/x/verdicts'), 'Verdicts', 'the feature name; the GET itself is answered before the denial');
   assert.equal(featureOf('/api/packs/x/audit-report?format=html'), 'Audit report');
@@ -899,6 +917,7 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   assert.deepEqual(await me.json(), { ok: false, error: 'identity not configured' });
   const nope = await backend.handle('/api/packs/x');
   assert.equal(nope.status, 404);
+  assert.equal(nope.statusText, 'Not Found', 'the reason phrase a server sends (studio/api.mjs reads "404 Not Found on …")');
   assert.deepEqual(await nope.json(), { error: 'unknown pack: x' });
   const encoded = await backend.handle(`/api/packs/${encodeURIComponent('a b/c')}`);
   assert.deepEqual(await encoded.json(), { error: 'unknown pack: a b/c' });

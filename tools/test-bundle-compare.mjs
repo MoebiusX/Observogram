@@ -29,6 +29,24 @@
 // seams, and the three this build adds where the design left a hole (no
 // licence id, an unparsable package.json, an entry file missing).
 //
+// C6 retrofeed, the one non-GET the shim answers, against a child server
+// (serve(ws, { env: { OBSERVOGRAM_AUTH: 'off' } })) over the same packs under
+// the server's ids: "equal" is the same status, reason phrase, content type,
+// Cache-Control, X-Content-Type-Options and raw body text — the computed
+// answers once the shim's clock is pinned to the adoptedAt the server
+// stamped (payment-service → the live snapshot, the golden crawl →
+// production-curated, compare-modes a → b, each with and without `keys`;
+// scoped-all, whose pack annotates scopeMode, as A: retrofeed has no
+// annotation fallback), the two 404s, and each body rule of the server's
+// parsers (JSON empty, blank, null, a number, a string, an array, after
+// whitespace, malformed, a refused charset, any case; text/json and
+// application/vnd.api+json not parsed; text and no Content-Type; a form —
+// computed, keys once and repeated, __proto__ and an empty name, a bracketed
+// name, an iso-8859-1 escape, a refused charset; over 1000 parameters, over
+// 64 KiB, JSON over 16 MiB; multipart). Then what only the shim can meet: a
+// --pack-url pack that failed to load, an engine import that fails once and
+// is retried, a baked taxonomy the classifier does not hold.
+//
 // A flat suite of top-level test( calls. Every CLI spawn gets serve-child's
 // stripped env (childEnv), so a developer shell bakes nothing.
 //
@@ -45,7 +63,12 @@ import {
   DEFAULT_ROOT, LICENCES_ID, inlineJson, licenceBlockText, pointerComment, readOwnNotices, verifyBundleNotices,
   collectBundledPackages, collectModuleGraph, sourceUrlOf, packageNameOf,
 } from './build-studio-bundle.mjs';
-import { childEnv } from '../server/fixtures/serve-child.mjs';
+import { childEnv, serve } from '../server/fixtures/serve-child.mjs';
+import { createStaticBackend } from '../studio/static-backend.mjs';
+import { parse as parseYaml } from './lib/mini-yaml.mjs';
+import { adapt } from './lib/adapter.mjs';
+import { diffPacks } from './lib/diff.mjs';
+import { SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 
 const ROOT = DEFAULT_ROOT;
 const TOOL = resolve(ROOT, 'tools/build-studio-bundle.mjs');
@@ -321,4 +344,149 @@ test('C1b the npm packages a bundle may carry, over synthetic roots: a closure t
   assert.throws(() => collectModuleGraph(root, ['studio/app.mjs'], { read, npmOf: () => [] }), { message: "tools/lib/uses.mjs:1: cannot inline the specifier '@acme/parser' — a package is bundled only when VENDOR-MANIFEST.json lists it in this module's npm field (a package.json dependency; npm run vendor-manifest)" });
   sources['tools/lib/uses.mjs'] = "import { parser } from '@acme/parser/dist/index.es.js';\nexport const p = parser;\n";
   assert.throws(() => collectModuleGraph(root, ['studio/app.mjs'], { read }), { message: "tools/lib/uses.mjs:1: cannot inline the specifier '@acme/parser/dist/index.es.js' — a package is bundled by its own name (@acme/parser), never a file inside it" });
+});
+
+// ---------- C6 retrofeed in the shim ----------
+
+test('C6 retrofeed in the shim: the server\'s answer for computed pairs with and without keys (the clock pinned), the two 404s and every body rule of its parsers — status, reason phrase, content type, Cache-Control, nosniff and raw text; a failed --pack-url pack, an engine import retried, a baked taxonomy not bound', async (t) => {
+  const ws = mkdtempSync(join(tmpdir(), 'observogram-bundle-retrofeed-'));
+  const child = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off' } });
+  t.after(async () => { await child.stop(); rmSync(ws, { recursive: true, force: true }); });
+  const schema = JSON.parse(read(SPEC_SCHEMA_PATH));
+  const register = async (body, contentType, source = '') => {
+    const r = await fetch(`${child.base}/api/validate${source ? `?source=${encodeURIComponent(source)}` : ''}`, { method: 'POST', headers: { 'Content-Type': contentType }, body }).then((x) => x.json());
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    return r.registered.id;
+  };
+  const payment = parseYaml(read(PAYMENT));
+  const snapshot = JSON.parse(read('tools/fixtures/golden/snapshot/snapshot.pack.json'));
+  const golden = JSON.parse(read(GOLDEN));
+  const modesA = read('tools/fixtures/compare-modes/a.pack.yaml');
+  const modesB = read('tools/fixtures/compare-modes/b.pack.yaml');
+  const scopedAll = { ...payment, metadata: { ...payment.metadata, name: 'scoped-all', annotations: { ...(payment.metadata.annotations || {}), 'observogram.diff.scopeMode': 'all' } } };
+  const ids = {
+    payment: 'payment-service',
+    curated: 'production-curated',
+    snapshot: await register(JSON.stringify(snapshot), 'application/json'),
+    golden: await register(JSON.stringify(golden), 'application/json'),
+    modesA: await register(modesA, 'text/yaml', 'compare-modes-a.pack.yaml'),
+    modesB: await register(modesB, 'text/yaml', 'compare-modes-b.pack.yaml'),
+    scopedAll: await register(JSON.stringify(scopedAll), 'application/json'),
+  };
+  let now = '2026-01-01T00:00:00.000Z';
+  const backend = createStaticBackend({
+    version: VERSION, schema,
+    packs: [
+      { id: ids.payment, label: 'payment', canonical: payment },
+      { id: ids.curated, label: 'curated', canonical: parseYaml(read('examples/production-curated.pack.yaml')) },
+      { id: ids.snapshot, label: 'snapshot', canonical: snapshot },
+      { id: ids.golden, label: 'golden', canonical: golden },
+      { id: ids.modesA, label: 'a', canonical: parseYaml(modesA) },
+      { id: ids.modesB, label: 'b', canonical: parseYaml(modesB) },
+      { id: ids.scopedAll, label: 'scoped-all', canonical: scopedAll },
+    ],
+  }, { clock: () => now });
+  const answer = async (r) => ({ status: r.status, statusText: r.statusText, type: r.headers.get('content-type'), cacheControl: r.headers.get('cache-control'), nosniff: r.headers.get('x-content-type-options'), text: await r.text() });
+  // The timestamp the server stamped, read from its raw JSON text (an ISO instant: no quote, no escaped newline).
+  const ADOPTED_AT = /observogram\.retrofeed\.adoptedAt: '?(\d{4}-\d\d-\d\dT[\d:.]+Z)/;
+  // One request to both sides: the server's answer first, whose adoptedAt (if it stamped one) the shim's clock takes.
+  const same = async (label, path, init) => {
+    const server = await answer(await fetch(`${child.base}${path}`, init));
+    now = ADOPTED_AT.exec(server.text)?.[1] ?? now;
+    const shim = await answer(await backend.handle(path, init));
+    assert.deepEqual(shim, server, label);
+    return server;
+  };
+  const post = (body, headers = {}) => ({ method: 'POST', headers, body });
+  const JSON_HEADERS = { 'Content-Type': 'application/json' };
+  const rf = (id) => `/api/packs/${encodeURIComponent(id)}/retrofeed`;
+
+  // Computed: three pairs, with and without keys (the base identity matches a suffixed key).
+  for (const [a, b] of [[ids.payment, ids.snapshot], [ids.golden, ids.curated], [ids.modesA, ids.modesB]]) {
+    const full = await same(`${a} → ${b}`, rf(a), post(JSON.stringify({ packBId: b }), JSON_HEADERS));
+    const summary = JSON.parse(full.text).summary;
+    assert.equal(full.status, 200);
+    const byId = Object.fromEntries(Object.entries(ids).map(([k, v]) => [v, k]));
+    const canonicalOf = { payment, snapshot, golden, curated: parseYaml(read('examples/production-curated.pack.yaml')), modesA: parseYaml(modesA), modesB: parseYaml(modesB) };
+    const onlyInB = Object.values(diffPacks(adapt(canonicalOf[byId[a]]), adapt(canonicalOf[byId[b]]), {}).layers || {}).flatMap((l) => l.onlyInB || []);
+    assert.equal(summary.candidates, onlyInB.length, `${a} → ${b}: the server's candidates are the diff's onlyInB`);
+    if (!onlyInB.length) continue;
+    const keyed = await same(`${a} → ${b} keys`, rf(a), post(JSON.stringify({ packBId: b, keys: [onlyInB[0].key, `${onlyInB[0].key.replace(/#\d+$/, '')}#7`] }), JSON_HEADERS));
+    assert.ok(JSON.parse(keyed.text).summary.candidates >= 1 && JSON.parse(keyed.text).summary.candidates < summary.candidates || onlyInB.length === 1, `${a} → ${b}: keys narrow the candidates`);
+  }
+  assert.ok(ADOPTED_AT.test((await answer(await backend.handle(rf(ids.payment), post(JSON.stringify({ packBId: ids.snapshot }), JSON_HEADERS)))).text), 'payment-service → the snapshot adopts, so the pinned clock is what made the texts equal');
+  // No annotation fallback: scoped-all annotates scopeMode all, and without a scopeMode in the body the diff is the
+  // default scope's (fewer candidates than with scopeMode: 'all' — the case bites).
+  const unscoped = JSON.parse((await same('scoped-all → snapshot, no scopeMode', rf(ids.scopedAll), post(JSON.stringify({ packBId: ids.snapshot }), JSON_HEADERS))).text);
+  const scopedAllAnswer = JSON.parse((await same('scoped-all → snapshot, scopeMode all', rf(ids.scopedAll), post(JSON.stringify({ packBId: ids.snapshot, scopeMode: 'all' }), JSON_HEADERS))).text);
+  assert.ok(unscoped.summary.candidates < scopedAllAnswer.summary.candidates, `no fallback to the annotation (${unscoped.summary.candidates} < ${scopedAllAnswer.summary.candidates})`);
+  await same('environments and a service', rf(ids.payment), post(JSON.stringify({ packBId: ids.snapshot, aEnv: 'prod', bEnv: '', scopeMode: 'family', service: 'payment-service' }), JSON_HEADERS));
+
+  // The two 404s, and the body read before the pack is looked up (the parsers run before any route).
+  await same('unknown A', rf('nope'), post(JSON.stringify({ packBId: ids.snapshot }), JSON_HEADERS));
+  await same('unknown B', rf(ids.payment), post(JSON.stringify({ packBId: 'nope' }), JSON_HEADERS));
+  await same('unknown B, an object id', rf(ids.payment), post(JSON.stringify({ packBId: { x: 1 } }), JSON_HEADERS));
+  await same('unknown A, a malformed body', rf('nope'), post('null', JSON_HEADERS));
+
+  // The body rules, case by case.
+  const B = JSON.stringify({ packBId: ids.snapshot });
+  for (const [label, body, headers] of [
+    ['JSON empty → {}', '', JSON_HEADERS],
+    ['JSON blank → 400', '   ', JSON_HEADERS],
+    ['JSON null → 400 (strict)', 'null', JSON_HEADERS],
+    ['JSON 5 → 400 (strict)', '5', JSON_HEADERS],
+    ['JSON "x" → 400 (strict)', '"x"', JSON_HEADERS],
+    ['JSON [1] → an array reaches the handler', '[1]', JSON_HEADERS],
+    ['JSON after whitespace', ` \t\r\n${B}`, JSON_HEADERS],
+    ['JSON malformed → 400', '{"packBId":', JSON_HEADERS],
+    ['JSON latin1 → 415', B, { 'Content-Type': 'application/json; charset=latin1' }],
+    ['JSON any case', B, { 'Content-Type': 'APPLICATION/JSON; charset=utf-8' }],
+    ['text/json is not parsed', B, { 'Content-Type': 'text/json' }],
+    ['application/vnd.api+json is not parsed', B, { 'Content-Type': 'application/vnd.api+json' }],
+    ['text/plain is a string', B, { 'Content-Type': 'text/plain' }],
+    ['no Content-Type: fetch says text/plain', B, {}],
+    ['a form computes', `packBId=${encodeURIComponent(ids.snapshot)}&scopeMode=all`, { 'Content-Type': 'application/x-www-form-urlencoded' }],
+    ['a form, keys once (a string: no filter)', `packBId=${encodeURIComponent(ids.snapshot)}&keys=x`, { 'Content-Type': 'application/x-www-form-urlencoded' }],
+    ['a form, keys repeated (an array)', `packBId=${encodeURIComponent(ids.snapshot)}&keys=x&keys=y`, { 'Content-Type': 'application/x-www-form-urlencoded' }],
+    ['a form, __proto__ and an empty name dropped', `__proto__=x&=y&packBId=${encodeURIComponent(ids.snapshot)}`, { 'Content-Type': 'application/x-www-form-urlencoded' }],
+    ['a form, a bracketed name', `%5BpackBId%5D=${encodeURIComponent(ids.snapshot)}`, { 'Content-Type': 'application/x-www-form-urlencoded' }],
+    ['a form, packBId repeated', 'packBId=a&packBId=b', { 'Content-Type': 'application/x-www-form-urlencoded' }],
+    ['a form, a malformed escape kept', 'packBId=%E0%A4%A+x', { 'Content-Type': 'application/x-www-form-urlencoded' }],
+    ['a form in iso-8859-1', 'packBId=pay%E9', { 'Content-Type': 'application/x-www-form-urlencoded; charset=iso-8859-1' }],
+    ['a form in koi8-r → 415', 'packBId=x', { 'Content-Type': 'application/x-www-form-urlencoded; charset=koi8-r' }],
+    ['a form over 1000 parameters → 413', Array.from({ length: 1001 }, (_, i) => `k${i}=1`).join('&'), { 'Content-Type': 'application/x-www-form-urlencoded' }],
+    ['a form over 64 KiB → 413', `packBId=${'x'.repeat(64 * 1024)}`, { 'Content-Type': 'application/x-www-form-urlencoded' }],
+    ['text over 4 MiB → 413', 'x'.repeat(4 * 1024 * 1024 + 1), { 'Content-Type': 'text/yaml' }],
+    ['JSON over 16 MiB → 413', ' '.repeat(16 * 1024 * 1024 + 1), JSON_HEADERS],
+  ]) await same(label, rf(ids.payment), post(body, headers));
+  const form = new FormData();
+  form.set('packBId', ids.snapshot);
+  await same('multipart/form-data is not parsed', rf(ids.payment), { method: 'POST', body: form });
+
+  // What only the shim meets. A --pack-url pack that failed to load: 500 with its message.
+  const failing = createStaticBackend({ version: VERSION, schema, packs: [{ id: 'p', label: 'P', canonical: payment }, { id: 'remote', label: 'R', url: 'https://packs.example/r.pack.yaml' }] }, {
+    origin: 'https://studio.example', fetchImpl: async () => new Response('nope', { status: 404, statusText: 'Not Found' }),
+  });
+  await failing.handle('/api/packs');
+  const failed = await failing.handle(rf('p'), post(JSON.stringify({ packBId: 'remote' }), JSON_HEADERS));
+  assert.equal(failed.status, 500);
+  assert.deepEqual(await failed.json(), { ok: false, error: '404 Not Found fetching https://packs.example/r.pack.yaml' });
+  // An engine import that fails once: 500 with its message, and the next call imports again and answers.
+  let attempts = 0;
+  const flaky = createStaticBackend({ version: VERSION, schema, packs: [{ id: 'p', label: 'P', canonical: payment }] }, {
+    importRetrofeedEngines: () => (++attempts === 1 ? Promise.reject(new Error('Failed to fetch dynamically imported module')) : Promise.all([import('./lib/diff.mjs'), import('./lib/retrofeed.mjs')])),
+  });
+  const first = await flaky.handle(rf('p'), post(JSON.stringify({ packBId: 'p' }), JSON_HEADERS));
+  assert.equal(first.status, 500);
+  assert.deepEqual(await first.json(), { ok: false, error: 'Failed to fetch dynamically imported module' });
+  const second = await flaky.handle(rf('p'), post(JSON.stringify({ packBId: 'p' }), JSON_HEADERS));
+  assert.equal(second.status, 200, 'a failed import is not kept');
+  assert.equal(attempts, 2);
+  // A baked taxonomy the classifier does not hold (the studio's bind failed in this page): 500 naming it, before any
+  // computation — an answer classified by the default families would not be the server's.
+  const taxonomy = JSON.parse(read('tools/fixtures/taxonomy/taxonomy.json'));
+  const unbound = createStaticBackend({ version: VERSION, schema, taxonomy, packs: [{ id: 'p', label: 'P', canonical: payment }] });
+  const guarded = await unbound.handle(rf('p'), post(JSON.stringify({ packBId: 'p' }), JSON_HEADERS));
+  assert.equal(guarded.status, 500);
+  assert.deepEqual(await guarded.json(), { ok: false, error: 'the artefact taxonomy built into this bundle did not bind in this page, so this answer would not be the one a server with that taxonomy gives — open the file in a Chromium-based browser, where it is proven to bind, or ask whoever built it for a build whose taxonomy this browser compiles' });
 });
