@@ -1059,6 +1059,7 @@ test('BROWSER 13: the acceptance flow through the studio server — the same, th
 // its policy worker cannot be constructed.
 const NO_WORKER = ['--permission', '--allow-fs-read=*', '--allow-fs-write=*', '--allow-child-process'];
 const SERVER_UNCHECKED = 'The studio server could not check these settings against this rule, so it counts as matched — tick the box to send them with your approval.';
+const RETYPE = 'The secret you typed was emptied when the request left — type it again before you send.';
 
 test('BROWSER 14: through the studio server, a rule it could not check — the approved host is a 409 naming rule 0, unevaluated; the modal draws its box with the reason, the send waits for the tick, and ticked the submit carries acks [0] and goes', async (t) => {
   if (skipUnlessBrowser(t)) return;
@@ -1096,17 +1097,29 @@ test('BROWSER 14: through the studio server, a rule it could not check — the a
   assert.deepEqual(await box(), [{ rule: '0', warn: 'Non-approved backend host.', notes: [SERVER_UNCHECKED], ack: ACK, tick: ['0', false] }]);
   assert.equal(await w.page.getAttribute('.mss-primary', 'aria-disabled'), 'true', 'the send waits for the tick');
 
+  // The 409's order — tick, then type the secret again: the tick keeps the
+  // line that asks for the emptied secret, and so does unticking.
+  const ackBox = '#mss-host .mss-policy input[data-ack="0"]';
+  await w.page.check(ackBox);
+  assert.equal(await w.status(), RETYPE, 'the tick keeps the line asking for the emptied secret');
+  assert.equal(await w.page.inputValue('#mss-host input[data-field="secret"]'), '');
+  await w.page.uncheck(ackBox);
+  assert.equal(await w.status(), RETYPE);
+
   // Without the tick: the send says so and nothing is sent.
   await w.page.click('.mss-primary', { force: true });
   assert.equal(await w.status(), TICK);
   assert.equal(submits.length, 1, 'no second submit');
   assert.equal(postsTo(f).length, 0);
 
-  // The secret typed again (no rule reads a secret: the box stays), then
-  // ticked: the submit carries acks [0] and goes; the box stays, ticked.
+  // Ticked, the line is back; the secret typed again (no rule reads a
+  // secret: the box stays, ticked), it goes. The submit carries acks [0]
+  // and the secret, and goes; the box stays, ticked.
+  await w.page.check(ackBox);
+  assert.equal(await w.status(), RETYPE);
   await fill(w, 'secret', SECRET);
-  assert.deepEqual((await box()).map((b) => b.tick), [['0', false]], 'a secret\'s edit keeps the box');
-  await w.page.check('#mss-host .mss-policy input[data-ack="0"]');
+  assert.equal(await w.status(), 'The server describes its settings (version 1).', 'typed again, the line goes');
+  assert.deepEqual((await box()).map((b) => b.tick), [['0', true]], 'a secret\'s edit keeps the box, ticked');
   assert.equal(await w.page.getAttribute('.mss-primary', 'aria-disabled'), null);
   await w.page.click('.mss-primary', { force: true });
   await w.waitStatus(/Connection test:/);
