@@ -61,7 +61,10 @@
 // file. Then what only the shim can meet: a --pack-url pack that failed to
 // load (500, its message), one that fails the schema but adapts (diffed: the
 // server's route validates nothing), an engine import that fails once (500,
-// then retried).
+// then retried). Every request to a child server, in this file and M1's,
+// goes out on a connection of its own (serverFetch): a stand-in server that
+// closes a kept-alive socket when a request arrives on it fails plain fetches,
+// as C3 failed under load, and no request serverFetch sends.
 //
 // C3b the taxonomy: a child started with OBSERVOGRAM_TAXONOMY and this
 // process bound to the same document through studio/taxonomy.mjs answer the
@@ -558,6 +561,15 @@ const packFile = (rel) => (rel.endsWith('.json') ? JSON.parse(read(rel)) : parse
 // What "equal" compares: the status, the reason phrase, the headers either side sets on the answer, the raw text.
 const HEADERS = ['content-type', 'cache-control', 'content-disposition', 'x-content-type-options'];
 const answerOf = async (r) => ({ status: r.status, statusText: r.statusText, headers: Object.fromEntries(HEADERS.map((h) => [h, r.headers.get(h)])), text: await r.text() });
+// Every request to a child server goes out on a connection of its own. Between two of them this process computes the
+// shim's answer synchronously (seconds for krystaline under load), and fetch's idle timer advances only while the event
+// loop turns: it sends the next request on a socket the server, in its own process, closed at its 5 s keep-alive —
+// `fetch failed` (UND_ERR_SOCKET, other side closed), red for no parity reason. C3 pins it, here and in M1's file.
+const serverFetch = (url, init = {}) => {
+  const headers = new Headers(init.headers);
+  headers.set('connection', 'close');
+  return fetch(url, { ...init, headers });
+};
 // '' when the two answers are equal, else what differs — in a sentence, since a body can be a megabyte.
 function difference(server, shim) {
   const out = [];
@@ -610,7 +622,7 @@ const generatedOf = (html) => /<li><b>Generated<\/b> ([^<]+)<\/li>/.exec(html)?.
 // over the masked JSON with the same brand and design kit.
 async function auditBothWays({ base, shim, setNow, path, problems, registered = false, brand = DEFAULT_BRAND, generator = STATIC_GENERATOR, html = true }) {
   const label = path;
-  const server = await answerOf(await fetch(`${base}${path}`));
+  const server = await answerOf(await serverFetch(`${base}${path}`));
   if (server.status !== 200) { problems.push(`${label}: the server answered ${server.status} ${server.text.slice(0, 200)}`); return null; }
   const serverDoc = JSON.parse(server.text);
   if (JSON.stringify(serverDoc) !== server.text) problems.push(`${label}: the server's text is not JSON.stringify's`);
@@ -628,7 +640,7 @@ async function auditBothWays({ base, shim, setNow, path, problems, registered = 
   if (shimJson.text !== text) problems.push(`${label}: ${difference({ ...headersOnly(shimJson), text }, shimJson)}`);
   if (!html) return { serverDoc, shimDoc };
   const htmlPath = `${path}${path.includes('?') ? '&' : '?'}format=html`;
-  const serverHtml = await answerOf(await fetch(`${base}${htmlPath}`));
+  const serverHtml = await answerOf(await serverFetch(`${base}${htmlPath}`));
   const at = generatedOf(serverHtml.text);
   if (serverHtml.text !== renderAuditReportHtml({ ...serverDoc, generatedAt: at }, { brand, styles: REPORT_STYLES })) problems.push(`${htmlPath}: the server's HTML is not the renderer's over its JSON`);
   setNow(serverDoc.generatedAt);
@@ -643,7 +655,7 @@ async function auditBothWays({ base, shim, setNow, path, problems, registered = 
 // The label a server gives each pack it serves (its catalogue, examples and references), so a shim over the same packs
 // labels them as the server does (the audit report prints it).
 async function serverLabels(base) {
-  const lists = await Promise.all([['/api/packs', 'packs'], ['/api/examples', 'examples'], ['/api/references', 'references']].map(async ([path, key]) => (await (await fetch(`${base}${path}`)).json())[key]));
+  const lists = await Promise.all([['/api/packs', 'packs'], ['/api/examples', 'examples'], ['/api/references', 'references']].map(async ([path, key]) => (await (await serverFetch(`${base}${path}`)).json())[key]));
   return Object.fromEntries(lists.flat().map((p) => [p.id, p.label]));
 }
 
@@ -653,7 +665,7 @@ async function startParity() {
   const ws = mkdtempSync(join(tmpdir(), 'observogram-bundle-diff-'));
   const child = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off' } });
   const register = async (body, contentType, source = '') => {
-    const r = await fetch(`${child.base}/api/validate${source ? `?source=${encodeURIComponent(source)}` : ''}`, { method: 'POST', headers: { 'Content-Type': contentType }, body }).then((x) => x.json());
+    const r = await serverFetch(`${child.base}/api/validate${source ? `?source=${encodeURIComponent(source)}` : ''}`, { method: 'POST', headers: { 'Content-Type': contentType }, body }).then((x) => x.json());
     assert.equal(r.ok, true, JSON.stringify(r.errors));
     return r.registered.id;
   };
@@ -683,7 +695,7 @@ async function startParity() {
   const backend = createStaticBackend({ version: VERSION, schema, packs });
   // One path to both sides: { server, shim, problem } — problem '' when equal.
   const compare = async (path, init, shimBackend = backend) => {
-    const server = await answerOf(await fetch(`${child.base}${path}`, init));
+    const server = await answerOf(await serverFetch(`${child.base}${path}`, init));
     const shim = await answerOf(await shimBackend.handle(path, init));
     return { server, shim, problem: difference(server, shim) };
   };
@@ -695,7 +707,41 @@ test.after(async () => { if (parityStarted) await (await parityStarted).stop(); 
 
 // ---------- C3 GET /api/diff from the source ----------
 
-test('C3 GET /api/diff from the source, body for body: every scopeMode spelling × service on four pairs (the annotation fallback, both namespaces), the environments, every refusal, the largest and the live answers; a failed --pack-url pack, one that fails the schema, an engine import retried', async () => {
+test('C3 GET /api/diff from the source, body for body: every scopeMode spelling × service on four pairs (the annotation fallback, both namespaces), the environments, every refusal, the largest and the live answers; a failed --pack-url pack, one that fails the schema, an engine import retried; every request to a child server on a connection of its own', async () => {
+  // serverFetch. A stand-in server that closes a kept-alive socket when a request arrives on it — what a child
+  // server's keep-alive does to a socket fetch still holds while this process computes — fails plain fetches sent back
+  // to back as C3 failed under load (fetch alternates two sockets, so the third reuses the first), and no request
+  // serverFetch sends: each goes out on a connection of its own, and leaves none behind. A socket a plain fetch left
+  // open would carry the next request whatever it says, so every fetch to a child server, here and in M1's file, is
+  // serverFetch, the same text in both.
+  const fourTo = async (send) => {
+    const requestsOn = new WeakMap();
+    const standIn = createServer((req, res) => {
+      const n = (requestsOn.get(req.socket) ?? 0) + 1;
+      requestsOn.set(req.socket, n);
+      if (n > 1) req.socket.destroy();
+      else res.end('ok');
+    });
+    await new Promise((done) => standIn.listen(0, '127.0.0.1', done));
+    try {
+      const out = [];
+      for (let i = 0; i < 4; i++) out.push(await send(`http://127.0.0.1:${standIn.address().port}/`).then((r) => r.text(), (e) => `${e.message}: ${e.cause?.code}`));
+      return out;
+    } finally {
+      standIn.closeAllConnections();
+      await new Promise((done) => standIn.close(done));
+    }
+  };
+  const plain = await fourTo(fetch);
+  assert.ok(plain.includes('fetch failed: UND_ERR_SOCKET'), `plain fetch sends a request on a kept-alive socket the server closes, and fails: ${plain.join(', ')}`);
+  assert.deepEqual(await fourTo(serverFetch), ['ok', 'ok', 'ok', 'ok'], 'serverFetch: one connection per request');
+  const PARITY_FILES = ['tools/test-bundle-compare.mjs', 'tools/test-bundle-compare-pairs.mjs'];
+  const [here, inM1] = PARITY_FILES.map((file) => /^const serverFetch = [\s\S]*?^};$/m.exec(read(file))?.[0]);
+  assert.ok(here, 'this file defines serverFetch at the top level');
+  assert.equal(inM1, here, 'M1\'s file defines serverFetch as this file does');
+  const bare = PARITY_FILES.flatMap((file) => read(file).split('\n').flatMap((line, i) => (/\bfetch\(`\$\{[\w.]*base\}/.test(line) ? [`${file}:${i + 1}`] : [])));
+  assert.deepEqual(bare, [], 'every fetch to a child server is serverFetch');
+
   const { ids, schema, canonicalOf, compare } = await parity();
   const problems = [];
   const texts = new Map();
@@ -802,7 +848,7 @@ test('C3b the taxonomy: a server started with OBSERVOGRAM_TAXONOMY and a shim ov
   const child = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off', OBSERVOGRAM_TAXONOMY: TAX } });
   t.after(async () => { bindTaxonomy(artefactClassify, null); await child.stop(); rmSync(ws, { recursive: true, force: true }); });
   const typed = JSON.parse(read('tools/fixtures/taxonomy/typed-canonical.pack.json'));
-  const registered = await fetch(`${child.base}/api/validate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(typed) }).then((r) => r.json());
+  const registered = await serverFetch(`${child.base}/api/validate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(typed) }).then((r) => r.json());
   assert.equal(registered.ok, true, JSON.stringify(registered.errors));
   const typedId = registered.registered.id;
   const payment = parseYaml(read(PAYMENT));
@@ -820,7 +866,7 @@ test('C3b the taxonomy: a server started with OBSERVOGRAM_TAXONOMY and a shim ov
   assert.ok(artefactClassify.activeTaxonomy(), 'the document is bound, as the studio binds what /api/taxonomy serves');
   const backend = createStaticBackend(config);
   for (const [i, p] of pairs.entries()) {
-    const server = await answerOf(await fetch(`${child.base}${path(p)}`));
+    const server = await answerOf(await serverFetch(`${child.base}${path(p)}`));
     const shim = await answerOf(await backend.handle(path(p)));
     assert.equal(server.status, 200);
     assert.equal(difference(server, shim), '', `${p.join(' × ')} equal`);
@@ -866,7 +912,7 @@ test('C4 Pair by: the studio\'s re-key over the shim\'s /api/packs/:id and /api/
   const { ids, child, backend } = await parity();
   const engine = { identity: identityLib, diff: diffLib };
   const sides = {
-    server: async (path) => (await fetch(`${child.base}${path}`)).json(),
+    server: async (path) => (await serverFetch(`${child.base}${path}`)).json(),
     shim: async (path) => (await backend.handle(path)).json(),
   };
   const views = {};
@@ -995,7 +1041,7 @@ test('C6 retrofeed in the shim: the server\'s answer for computed pairs with and
   t.after(async () => { await child.stop(); rmSync(ws, { recursive: true, force: true }); });
   const schema = JSON.parse(read(SPEC_SCHEMA_PATH));
   const register = async (body, contentType, source = '') => {
-    const r = await fetch(`${child.base}/api/validate${source ? `?source=${encodeURIComponent(source)}` : ''}`, { method: 'POST', headers: { 'Content-Type': contentType }, body }).then((x) => x.json());
+    const r = await serverFetch(`${child.base}/api/validate${source ? `?source=${encodeURIComponent(source)}` : ''}`, { method: 'POST', headers: { 'Content-Type': contentType }, body }).then((x) => x.json());
     assert.equal(r.ok, true, JSON.stringify(r.errors));
     return r.registered.id;
   };
@@ -1032,7 +1078,7 @@ test('C6 retrofeed in the shim: the server\'s answer for computed pairs with and
   const ADOPTED_AT = /observogram\.retrofeed\.adoptedAt: '?(\d{4}-\d\d-\d\dT[\d:.]+Z)/;
   // One request to both sides: the server's answer first, whose adoptedAt (if it stamped one) the shim's clock takes.
   const same = async (label, path, init) => {
-    const server = await answer(await fetch(`${child.base}${path}`, init));
+    const server = await answer(await serverFetch(`${child.base}${path}`, init));
     now = ADOPTED_AT.exec(server.text)?.[1] ?? now;
     const shim = await answer(await backend.handle(path, init));
     assert.deepEqual(shim, server, label);
@@ -1333,7 +1379,7 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
   ];
   const onServer = (q) => ({ ...q, a: serverId[q.a] ?? q.a, b: serverId[q.b] ?? q.b });
   const serverDiffs = [];
-  for (const q of QUERIES) serverDiffs.push(await answerOf(await fetch(`${child.base}${diffQuery(onServer(q))}`)));
+  for (const q of QUERIES) serverDiffs.push(await answerOf(await serverFetch(`${child.base}${diffQuery(onServer(q))}`)));
   assert.deepEqual(serverDiffs.map((a) => a.status), [200, 200, 200, 200, 200, 404]);
   const SAMPLE = ['ch', 'h', 'i', 's', 't', 'z'];
   const enOrder = [...SAMPLE].sort(new Intl.Collator('en').compare).join(' ');
@@ -1415,7 +1461,7 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     const updated = readFileSync(await saved.path(), 'utf8');
     const sent = JSON.parse((await page.evaluate(() => window.retrofeedSent))[0]);
     assert.equal(sent.packBId, 'payment-live');
-    const server = await (await fetch(`${child.base}/api/packs/payment-service/retrofeed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...sent, packBId: serverId[sent.packBId] }) })).json();
+    const server = await (await serverFetch(`${child.base}/api/packs/payment-service/retrofeed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...sent, packBId: serverId[sent.packBId] }) })).json();
     const STAMP = /observogram\.retrofeed\.adoptedAt: '?(\d{4}-\d\d-\d\dT[\d:.]+Z)/;
     assert.ok(server.summary.adopted > 0 && STAMP.test(updated), 'an updated pack with its provenance');
     assert.equal(updated, server.updatedPackYaml.replaceAll(STAMP.exec(server.updatedPackYaml)[1], STAMP.exec(updated)[1]), 'the download is the server\'s updated pack');
@@ -1506,8 +1552,8 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     const reportHtml = readFileSync(await report.path(), 'utf8');
     assert.ok(reportHtml.includes('6. Goes-blind risks') && !reportHtml.includes('Not computed by this build'), 'the goes-blind section, computed in the page');
     const [pageJson, pageHtml] = await fetchInPage(page, [jsonPath, htmlPath]);
-    const serverJson = await answerOf(await fetch(`${child.base}${jsonPath}`));
-    const serverHtml = await answerOf(await fetch(`${child.base}${htmlPath}`));
+    const serverJson = await answerOf(await serverFetch(`${child.base}${jsonPath}`));
+    const serverHtml = await answerOf(await serverFetch(`${child.base}${htmlPath}`));
     const headersOnly = (x) => ({ ...x, text: '' });
     assert.equal(difference(headersOnly(serverJson), headersOnly(pageJson)), '', 'the JSON report\'s status and headers');
     assert.equal(difference(headersOnly(serverHtml), headersOnly(pageHtml)), '', 'the HTML report\'s status and headers');
@@ -1595,7 +1641,7 @@ test('C9 the built file, in Node: the shim imported from the CLI-built bundle\'s
 
   const problems = [];
   const same = async (path, init) => {
-    const server = await answerOf(await fetch(`${child.base}${path}`, init));
+    const server = await answerOf(await serverFetch(`${child.base}${path}`, init));
     now = /observogram\.retrofeed\.adoptedAt: '?(\d{4}-\d\d-\d\dT[\d:.]+Z)/.exec(server.text)?.[1] ?? now;
     const shim = await answerOf(await backend.handle(path, init));
     const problem = difference(server, shim);

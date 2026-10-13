@@ -44,13 +44,21 @@ const SERVER_PACKS = [
 ];
 const HEADERS = ['content-type', 'cache-control', 'content-disposition', 'x-content-type-options'];
 const answerOf = async (r) => ({ status: r.status, statusText: r.statusText, headers: Object.fromEntries(HEADERS.map((h) => [h, r.headers.get(h)])), text: await r.text() });
+// Every request to the child server goes out on a connection of its own: a kept-alive socket the server closes at 5 s
+// idle while this process computes the shim's answer fails the next request sent on it. tools/test-bundle-compare.mjs
+// C3 pins this helper, the same text there and here.
+const serverFetch = (url, init = {}) => {
+  const headers = new Headers(init.headers);
+  headers.set('connection', 'close');
+  return fetch(url, { ...init, headers });
+};
 
 test('M1 every ordered pair of ten packs, in each scope mode the studio sends: the shim\'s GET /api/diff is the server\'s, status, reason phrase, headers and raw text', async (t) => {
   const ws = mkdtempSync(join(tmpdir(), 'observogram-bundle-pairs-'));
   const child = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off' } });
   t.after(async () => { await child.stop(); rmSync(ws, { recursive: true, force: true }); });
   const register = async (body, contentType, source = '') => {
-    const r = await fetch(`${child.base}/api/validate${source ? `?source=${encodeURIComponent(source)}` : ''}`, { method: 'POST', headers: { 'Content-Type': contentType }, body }).then((x) => x.json());
+    const r = await serverFetch(`${child.base}/api/validate${source ? `?source=${encodeURIComponent(source)}` : ''}`, { method: 'POST', headers: { 'Content-Type': contentType }, body }).then((x) => x.json());
     assert.equal(r.ok, true, JSON.stringify(r.errors));
     return r.registered.id;
   };
@@ -73,7 +81,7 @@ test('M1 every ordered pair of ten packs, in each scope mode the studio sends: t
     for (const a of packs) {
       for (const b of packs) {
         const path = `/api/diff?${new URLSearchParams({ a: a.id, b: b.id, scopeMode })}`;
-        const server = await answerOf(await fetch(`${child.base}${path}`));
+        const server = await answerOf(await serverFetch(`${child.base}${path}`));
         const shim = await answerOf(await backend.handle(path));
         queries++;
         if (server.status !== 200) problems.push(`${path}: the server answered ${server.status}`);
