@@ -1179,7 +1179,9 @@ The image binds `0.0.0.0`, so it needs a seeded sign-in (or
 `OBSERVOGRAM_API_TOKEN`) to start — see Security Posture above. Its workspace
 is `/app/.observogram` (owned by the `node` user the container runs as);
 mount a volume there, or point `OBSERVOGRAM_WORKSPACE` at one, to keep users
-and packs across containers.
+and packs across containers. The image carries Observogram's `LICENSE` beside
+`package.json`, and its `node_modules` each installed package's own licence
+file.
 
 Kubernetes manifests (Deployment + Service + Ingress + the `store` PVC,
 applied with Kustomize) live in [`deploy/k8s/`](deploy/k8s/README.md). The
@@ -1859,6 +1861,10 @@ A downstream that serves the studio behind its own static host — a CDN, an
 S3 bucket, a reverse proxy's `root` — builds it as one HTML file:
 
 ```bash
+# Once, in the tree you build from: the packages package-lock.json pins (the
+# bundle embeds Compare's PromQL parser and the packages it imports).
+npm ci
+
 # One file: every module, every stylesheet, the packs it names.
 npm run build:studio -- \
   --pack vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml --label "Payment service" \
@@ -1960,15 +1966,35 @@ Passing MCP server settings through the studio server (the Server settings
 modal sends from the browser in a bundle), sign-in — answers `501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
 this studio is a static bundle built without one.' }`, which the studio shows
 as the sentence, and a dismissable notice at the bottom of the window says so
-once ("Static studio — no Observogram server behind this page …"). Compare's
-traceability graph needs the PromQL parser, the npm package
-`@prometheus-io/lezer-promql`: the build inlines it and the three `@lezer`
-packages it imports from `package-lock.json`, as `npm ci` installed them, with
-their licences in the file's licence block — so the build needs that lockfile,
-`VENDOR-MANIFEST.json` and an `npm ci` in the tree it builds from
-(`docs/DOWNSTREAM.md` §10). The Services home and the service
-page need the server (the services table); a bundle lists the services its
-packs name, as before.
+once ("Static studio — no Observogram server behind this page …"). The
+Services home and the service page need the server (the services table); a
+bundle lists the services its packs name, as before.
+
+**Compare and the licences.** Compare's traceability graph needs a PromQL
+parser, the npm package `@prometheus-io/lezer-promql` (Apache-2.0): the build
+inlines it and the three packages it imports — `@lezer/lr`,
+`@lezer/highlight` and `@lezer/common` (MIT) — byte for byte as `npm ci`
+installed them from `package-lock.json`, so the build needs that lockfile,
+`VENDOR-MANIFEST.json` and an `npm ci` in the tree it builds from, and refuses
+a package it cannot account for (a version other than the lockfile's, no
+licence file, a second copy its importer would load, an import it does not
+declare). Every bundle carries a licence block — a `<script type="text/plain"
+id="observogram-licenses">` element at the end of `<head>`, pointed to by a
+comment after the doctype — with Observogram's MIT licence, each embedded
+package's licence files, NOTICE files (none ships one today), copyright lines
+and source repository, and the provenance of the vendored spec, whose
+repository publishes no licence. What the build checks: the packages are the
+ones the manifest's `npm` field names and the packages those import, each at
+the lockfile's version with a licence file, embedded unchanged;
+`verifyBundleNotices` (exported by `tools/build-studio-bundle.mjs`) checks a
+finished file's block. What it does not check: whether those licences suit
+your distribution, the packages' code, that the installed files are the
+registry's (a patched install is embedded as patched, unmarked), NOTICE files
+outside a published package, and the licences of the packs or brand assets
+you build in. The diff is held to a running server's, body for body, in Node
+(from the source and from the built file) and in Chromium under three browser
+locales; not in Firefox or Safari. `docs/DOWNSTREAM.md` §10 has the details
+and the migration from an earlier snapshot.
 
 Notes: `--pack` is validated against the spec schema at build time (a failing
 pack fails the build with the validator's text); `--pack-url` refuses a URL
@@ -2822,7 +2848,8 @@ studio/
   brand.mjs                The studio's brand: reads the shell's #brand-config, loads /lib/brand.mjs the house way, hands state.brand its chrome strings
   neuron-view.mjs          Advanced → Neuron: fleet tiles, trend / heatmap / bar panels, the journey in focus, the newest record opened up
   journeys-view.mjs        Saved journeys: capture, run-now, history, stack chips, chains + cause lines (the cards Neuron composes)
-  static-backend.mjs       The static bundle's backend in the browser: the read-only pack routes from tools/lib, 501 no-backend for the rest, the Export download, the notice (bundle-only; the live studio never imports it)
+  static-backend.mjs       The static bundle's backend in the browser: the pack routes and Compare's diff, retrofeed and the audit report from tools/lib (the PromQL parser loaded at the first call), 501 no-backend for the rest, the Export and audit-report downloads, the notice (bundle-only; the live studio never imports it)
+  static-remedies.mjs      The static posture's texts and controls: serverNeeded, DEPLOY_CONTROLS, staticRemedy, staticInputOf, staticTraceActions (a pure model the views read when no server is behind the page)
   build-model.mjs          The BUILD journey's pure models (define / compile / verify, the stack, the definition column, the layer sheet, the clause checklist's three states, step reachability)
   build-api.mjs            The BUILD journey's loaders over /api/library/* (fetchFn injectable)
   build-definition-view.mjs  BUILD — the definition column on every step (service, the tier as a segmented control, the entries as chips, the conformance summary)
