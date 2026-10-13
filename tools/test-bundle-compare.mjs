@@ -95,6 +95,30 @@
 // --pack-url pack that failed to load, an engine import that fails once and
 // is retried, a baked taxonomy the classifier does not hold.
 //
+// C8 the bundle in Chromium (skips like tools/test-studio-bundle.mjs T7 when
+// Playwright or its browser is missing, unless OBSERVOGRAM_BUNDLE_SMOKE=require;
+// OBSERVOGRAM_PLAYWRIGHT names Playwright's index.mjs): a CLI-built bundle
+// carrying payment-service, the live snapshot (payment-live), the
+// compare-modes pair, production-curated and payment-linked (payment-service
+// with a remediation linked to its burn-rate alert — no example pack links
+// one, and without a link the response path draws no deploy button), served
+// from a loopback host. The in-page fetch('/api/diff?…') text equals the
+// child server's for six queries under the browser locales en-US, cs-CZ and
+// et-EE, each page shown to collate by its locale; Compare on the
+// compare-modes pair draws 5/15/5, Pair by name 4/16/4 and id 3/17/3;
+// Diagnose → Assessment → Comparison over payment-service and the live pack
+// draws the drift drill's deploy aria-disabled with the reason, and a click
+// explains it and opens no modal; its retrofeed downloads the updated pack a
+// server returns for the request the page sent; Remediate draws its decision
+// header's deploy and the response path's per-SLO button the same way; rows
+// 4 (a one-pack bundle), 6, 11 and 12 render as written, and the rendered
+// Compare, Diagnose, Traceability and Remediate hold no phrase S4 holds the
+// studio's source to; the Conformance view's HTML anchor downloads the report
+// with its goes-blind section, and the in-page JSON and HTML are the
+// server's but for C5's declared fields; the notice, exactly; no page error
+// or console.error, no request off the loopback, each static host asked for
+// / only.
+//
 // C9 the built file, in Node: a bundle built through the CLI (the six server
 // packs and the compare-modes pair); its import map read from the file and
 // applied by a module.register resolve hook (each key, asked for by a data:
@@ -108,10 +132,14 @@
 // stripped env (childEnv), so a developer shell bakes nothing.
 //
 // Run: node --test tools/test-bundle-compare.mjs
+//
+// `document` and `window` are named only inside page.evaluate callbacks, which run in the browser.
+/* global document, window */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, cpSync } from 'node:fs';
 import { register } from 'node:module';
@@ -123,7 +151,8 @@ import {
   collectBundledPackages, collectModuleGraph, sourceUrlOf, packageNameOf, buildStudioBundle,
 } from './build-studio-bundle.mjs';
 import { childEnv, serve } from '../server/fixtures/serve-child.mjs';
-import { createStaticBackend, bundleStyles } from '../studio/static-backend.mjs';
+import { createStaticBackend, bundleStyles, noticeText } from '../studio/static-backend.mjs';
+import { serverNeeded, staticRemedy } from '../studio/static-remedies.mjs';
 import { viewDiffFor } from '../studio/compare-identity.mjs';
 import { bindTaxonomy } from '../studio/taxonomy.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
@@ -1097,6 +1126,304 @@ test('C6 retrofeed in the shim: the server\'s answer for computed pairs with and
   const guarded = await unbound.handle(rf('p'), post(JSON.stringify({ packBId: 'p' }), JSON_HEADERS));
   assert.equal(guarded.status, 500);
   assert.deepEqual(await guarded.json(), { ok: false, error: 'the artefact taxonomy built into this bundle did not bind in this page, so this answer would not be the one a server with that taxonomy gives — open the file in a Chromium-based browser, where it is proven to bind, or ask whoever built it for a build whose taxonomy this browser compiles' });
+});
+
+// ---------- C8 the bundle in Chromium ----------
+
+// Playwright as tools/test-studio-bundle.mjs T7 loads it: OBSERVOGRAM_PLAYWRIGHT names its index.mjs, else the bare
+// 'playwright'.
+async function loadPlaywright() {
+  const spec = process.env.OBSERVOGRAM_PLAYWRIGHT || 'playwright';
+  try { return { pw: await import(spec) }; }
+  catch (e) { return { error: `cannot import ${spec}: ${e.message.split('\n')[0]}` }; }
+}
+// S4's pattern (tools/test-static-remedies.mjs, which holds every studio line it matches to a disposition): a server
+// action a reader of a bundle cannot take. C8 holds the rendered views to it.
+const SERVER_ACTION = /\b(re-?scan|rescan|scan (?:live|a repo(?:sitory)?)|connect mcp|from (?:its |a live )?mcp|redraft|re-?upload|refresh(?:es|ing)? (?:the )?live|refresh live evidence|capture a live draft|live draft again|deploy what is missing|deploy the repository)\b/i;
+
+test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s under en-US, cs-CZ and et-EE; Compare and Pair by on the compare-modes pair; the drift drill\'s deploy drawn unavailable and explained, its retrofeed downloading the server\'s updated pack; Remediate\'s deploy controls; the static texts and no server action rendered; the audit report downloaded and fetched as the server\'s; the notice; no page error, nothing off the loopback', async (t) => {
+  const required = process.env.OBSERVOGRAM_BUNDLE_SMOKE === 'require';
+  const skip = (why) => { if (required) assert.fail(`OBSERVOGRAM_BUNDLE_SMOKE=require: ${why}`); t.skip(why); };
+  const { pw, error } = await loadPlaywright();
+  if (!pw) return skip(error);
+  let browser;
+  try { browser = await pw.chromium.launch(); }
+  catch (e) { return skip(`chromium.launch failed: ${e.message.split('\n')[0]}`); }
+  t.after(() => browser.close());
+  assert.ok(read('tools/test-static-remedies.mjs').includes(`const SERVER_ACTION = ${SERVER_ACTION};`), 'the pattern S4 holds the studio\'s source to');
+
+  const { child, ids, labels } = await parity();
+  const product = DEFAULT_BRAND.name;
+  const DEPLOY = serverNeeded('Deploy', product);
+  const T = 30_000;
+  // The bundle's packs under the ids its reader sees, each with its id on the server (an upload's is the server's
+  // own) and the server's label, so the audit report names each pack as the server does. payment-linked is
+  // payment-service with its first remediation's trigger naming its own burn-rate alert (as
+  // tools/test-remediation-flow-view.mjs packA's does): no example pack's response path links a remediation to an
+  // alert, and this one, compared with the live pack (which lacks that alert), draws a per-SLO deploy button.
+  const linkedFile = join(TMP, 'c8-linked.pack.json');
+  const linked = parseYaml(read(PAYMENT));
+  linked.spec.remediation[0].trigger = 'alert:api_availability_99_9_burn_14x_5m_1h';
+  writeFileSync(linkedFile, JSON.stringify(linked));
+  const BUNDLED = [
+    { id: 'payment-service', file: PAYMENT, onServer: 'payment-service' },
+    { id: 'payment-live', file: 'tools/fixtures/golden/snapshot/snapshot.pack.json', onServer: ids.snapshot },
+    { id: 'modes-a', file: 'tools/fixtures/compare-modes/a.pack.yaml', onServer: ids.modesA },
+    { id: 'modes-b', file: 'tools/fixtures/compare-modes/b.pack.yaml', onServer: ids.modesB },
+    { id: 'production-curated', file: 'examples/production-curated.pack.yaml', onServer: 'production-curated' },
+    { id: 'payment-linked', file: linkedFile, label: 'Payment service (remediation triggers linked)' },
+  ];
+  const serverId = Object.fromEntries(BUNDLED.filter((p) => p.onServer).map((p) => [p.id, p.onServer]));
+  const bundleOf = (dir, packs) => {
+    const out = join(TMP, dir, 'index.html');
+    const built = cli([...packs.flatMap((p) => ['--pack', resolve(ROOT, p.file), '--id', p.id, '--label', p.label ?? labels[p.onServer]]), '--out', out, '--no-remote-fonts']);
+    assert.equal(built.status, 0, built.stderr);
+    return readFileSync(out);
+  };
+  // Each bundle from its own loopback host, which records every path a browser asks of it.
+  const asked = [];
+  const host = async (html) => {
+    const srv = createServer((req, res) => {
+      asked.push(req.url);
+      if (req.url === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(html); return; }
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('not found');
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    t.after(() => new Promise((r) => srv.close(r)));
+    return `http://127.0.0.1:${srv.address().port}`;
+  };
+  const base = await host(bundleOf('c8', BUNDLED));
+  // Row 4 is what Compare says when no other pack loads: a bundle of one pack.
+  const oneBase = await host(bundleOf('c8-one', BUNDLED.filter((p) => p.id === 'production-curated')));
+
+  const problems = [];
+  const offLoopback = [];
+  // A fresh context per scenario, its browser locale set and the studio's state seeded once (a reload keeps what the
+  // page itself stored); every request that is not the bundle's host is refused and recorded.
+  const open = async (at, seed, { locale = 'en-US' } = {}) => {
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale, acceptDownloads: true });
+    await ctx.addInitScript((s) => {
+      if (sessionStorage.getItem('seeded')) return;
+      sessionStorage.setItem('seeded', '1');
+      if (s) localStorage.setItem('studioState.v1', JSON.stringify(s));
+    }, seed);
+    const page = await ctx.newPage();
+    page.on('pageerror', (e) => problems.push(`${locale} pageerror: ${e.message}`));
+    page.on('console', (m) => { if (m.type() === 'error') problems.push(`${locale} console.error: ${m.text()}`); });
+    await page.route('**/*', (route) => {
+      const u = route.request().url();
+      if (u.startsWith(at)) return route.continue();
+      offLoopback.push(u);
+      return route.abort();
+    });
+    await page.goto(`${at}/`);
+    return { page, ctx };
+  };
+  const booted = (page) => page.waitForSelector('.svc-gate-card', { state: 'attached', timeout: T });
+  // Paths fetched from the page, in order: what "equal" compares (answerOf's fields).
+  const fetchInPage = (page, paths) => page.evaluate(async ({ paths, headers }) => {
+    const out = [];
+    for (const path of paths) {
+      const r = await fetch(path);
+      out.push({ status: r.status, statusText: r.statusText, headers: Object.fromEntries(headers.map((h) => [h, r.headers.get(h)])), text: await r.text() });
+    }
+    return out;
+  }, { paths, headers: HEADERS });
+  const viewText = (page) => page.evaluate(() => document.querySelector('#layer-view')?.innerText || '');
+  const noServerAction = async (page, where) => {
+    const hits = [...new Set([...(await viewText(page)).matchAll(new RegExp(SERVER_ACTION.source, 'gi'))].map((m) => m[0]))];
+    assert.deepEqual(hits, [], `${where}: the static posture names no server action the reader cannot take`);
+  };
+  // A control drawn unavailable: aria-disabled, the reason beside it; a click explains it (the toast) and opens nothing.
+  const drawnUnavailable = (page, sel) => page.evaluate((s) => [...document.querySelectorAll(s)].map((el) => ({ aria: el.getAttribute('aria-disabled'), why: el.querySelector('.svc-why')?.textContent ?? null })), sel);
+  const clickExplains = async (page, sel) => {
+    await page.evaluate(() => { const el = document.getElementById('toast'); el.hidden = true; el.textContent = ''; });
+    await page.click(sel, { force: true });       // an aria-disabled control still takes a click; Playwright would wait for it to enable
+    await page.waitForFunction(() => !document.getElementById('toast').hidden || !document.getElementById('deploy-modal').hidden, null, { timeout: T }).catch(() => {});
+    const after = await page.evaluate(() => ({ toast: document.getElementById('toast').hidden ? null : document.getElementById('toast').textContent, modalOpen: !document.getElementById('deploy-modal').hidden }));
+    assert.deepEqual(after, { toast: DEPLOY, modalOpen: false }, `${sel}: a click explains the reason and opens no modal`);
+  };
+
+  // (i) The in-page /api/diff text, byte for byte the server's, under three browser locales — two that tailor ASCII
+  // (Czech sorts ch after h, Estonian z between s and t), so a sort that followed the reader's locale would show.
+  const QUERIES = [
+    { a: 'payment-service', b: 'production-curated', scopeMode: 'service' },
+    { a: 'production-curated', b: 'payment-service', bEnv: 'staging', scopeMode: 'family' },
+    { a: 'modes-a', b: 'modes-b', scopeMode: 'all' },
+    { a: 'payment-service', b: 'payment-live', scopeMode: 'service' },
+    { a: 'payment-live', b: 'production-curated', scopeMode: 'all' },
+    { a: 'nope', b: 'payment-service', scopeMode: 'service' },
+  ];
+  const onServer = (q) => ({ ...q, a: serverId[q.a] ?? q.a, b: serverId[q.b] ?? q.b });
+  const serverDiffs = [];
+  for (const q of QUERIES) serverDiffs.push(await answerOf(await fetch(`${child.base}${diffQuery(onServer(q))}`)));
+  assert.deepEqual(serverDiffs.map((a) => a.status), [200, 200, 200, 200, 200, 404]);
+  const SAMPLE = ['ch', 'h', 'i', 's', 't', 'z'];
+  const enOrder = [...SAMPLE].sort(new Intl.Collator('en').compare).join(' ');
+  for (const locale of ['en-US', 'cs-CZ', 'et-EE']) {
+    const { page, ctx } = await open(base, null, { locale });
+    await booted(page);
+    const order = await page.evaluate((s) => [navigator.language, [...s].sort((x, y) => x.localeCompare(y)).join(' ')], SAMPLE);
+    assert.deepEqual(order, [locale, [...SAMPLE].sort(new Intl.Collator(locale).compare).join(' ')], `${locale}: the page collates by its locale`);
+    if (locale !== 'en-US') assert.notEqual(order[1], enOrder, `${locale} tailors the sample`);
+    const answers = await fetchInPage(page, QUERIES.map(diffQuery));
+    const differ = QUERIES.map((q, i) => difference(serverDiffs[i], answers[i]) && `${locale} ${diffQuery(q)}: ${difference(serverDiffs[i], answers[i])}`).filter(Boolean);
+    assert.deepEqual(differ, [], `${locale}: the in-page diff is the server's`);
+    // (v) The notice, exactly: Compare among what the packs answer.
+    if (locale === 'en-US') assert.equal(await page.textContent('.no-backend-notice-text'), noticeText(BUNDLED.length));
+    await ctx.close();
+  }
+
+  // (ii) Compare on the compare-modes pair, then Pair by name and by id: the counts the live studio draws
+  // (server/test-live-studio.mjs), the stat bar and the cards' per-column counts.
+  {
+    const { page, ctx } = await open(base, { selectedPackId: 'modes-a', selectedEnv: 'prod', compareBId: 'modes-b', compareBEnv: 'prod', view: 'compare' });
+    const counts = () => page.evaluate(() => {
+      const cell = (c) => Number(document.querySelector(`.compare-summary .compare-cell.${c} .c-val`)?.textContent);
+      const sum = (sel) => [...document.querySelectorAll(sel)].reduce((n, el) => n + Number(el.textContent), 0);
+      return {
+        bar: { onlyInA: cell('c-a'), inBoth: cell('c-both'), onlyInB: cell('c-b') },
+        cards: {
+          onlyInA: sum('.compare-layer-col-a .compare-col-group.is-only .compare-col-group-n'),
+          inBothA: sum('.compare-layer-col-a .compare-col-group.is-both .compare-col-group-n'),
+          inBothB: sum('.compare-layer-col-b .compare-col-group.is-both .compare-col-group-n'),
+          onlyInB: sum('.compare-layer-col-b .compare-col-group.is-only .compare-col-group-n'),
+        },
+        checked: document.querySelector('.compare-identity input:checked')?.value,
+      };
+    });
+    const expectMode = async (mode, [onlyInA, inBoth, onlyInB]) => {
+      await page.waitForFunction((m) => document.querySelector('.compare-summary .c-mode .c-val')?.textContent === m, mode, { timeout: T });
+      assert.deepEqual(await counts(), { bar: { onlyInA, inBoth, onlyInB }, cards: { onlyInA, inBothA: inBoth, inBothB: inBoth, onlyInB }, checked: mode }, `Pair by ${mode}`);
+    };
+    await page.waitForSelector('.diag-subtab[data-sub="compare"]', { timeout: T });
+    await page.click('.diag-subtab[data-sub="compare"]');
+    await page.waitForSelector('.compare-summary .c-mode', { timeout: T });
+    await expectMode('behaviour', [5, 15, 5]);
+    await page.waitForSelector('.compare-identity input[value="name"]:not([disabled])', { timeout: T });
+    await page.click('.compare-identity input[value="name"]');
+    await expectMode('name', [4, 16, 4]);
+    await page.click('.compare-identity input[value="id"]');
+    await expectMode('id', [3, 17, 3]);
+    await noServerAction(page, 'Compare');
+    await ctx.close();
+  }
+
+  // (iii) payment-service against the live pack built in: Diagnose → Assessment → Comparison.
+  {
+    const { page, ctx } = await open(base, { selectedPackId: 'payment-service', compareBId: 'payment-live', view: 'compare', diagnoseSub: 'grade' });
+    await page.waitForSelector('.diag-subtab[data-sub="grade"]', { timeout: T });
+    await page.click('.diag-subtab[data-sub="grade"]');
+    await page.waitForSelector('#diag-compare #drift-deploy-missing', { state: 'attached', timeout: T });
+    assert.deepEqual(await drawnUnavailable(page, '#drift-deploy-missing'), [{ aria: 'true', why: DEPLOY }], 'the drift drill\'s deploy is drawn unavailable with the reason');
+    await clickExplains(page, '#drift-deploy-missing');
+    // Row 12: the drift-free blocker's fix keeps what the reader can do here.
+    assert.ok((await viewText(page)).includes(staticRemedy('drift-free-fix', { product })), 'row 12');
+    await noServerAction(page, 'Diagnose (with the live pack)');
+    // Update repository from live: the request the page sends, answered in the page — the download is the updated
+    // pack a server returns for the same request, its adoptedAt stamp aside.
+    await page.evaluate(() => {
+      const upstream = window.fetch;
+      window.retrofeedSent = [];
+      window.fetch = (input, init) => { if (String(input?.url ?? input).includes('/retrofeed')) window.retrofeedSent.push(init?.body); return upstream(input, init); };
+    });
+    await page.click('#drift-retrofeed');
+    await page.waitForSelector('.drift-retrofeed-dl a[download$=".pack.yaml"]', { timeout: T });
+    assert.equal(await page.textContent('.drift-retrofeed-note'), staticRemedy('retrofeed-result', { product }), 'row 11');
+    const [saved] = await Promise.all([page.waitForEvent('download', { timeout: T }), page.click('.drift-retrofeed-dl a[download$=".pack.yaml"]')]);
+    assert.equal(saved.suggestedFilename(), 'payment-service.pack.yaml');
+    const updated = readFileSync(await saved.path(), 'utf8');
+    const sent = JSON.parse((await page.evaluate(() => window.retrofeedSent))[0]);
+    assert.equal(sent.packBId, 'payment-live');
+    const server = await (await fetch(`${child.base}/api/packs/payment-service/retrofeed`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...sent, packBId: serverId[sent.packBId] }) })).json();
+    const STAMP = /observogram\.retrofeed\.adoptedAt: '?(\d{4}-\d\d-\d\dT[\d:.]+Z)/;
+    assert.ok(server.summary.adopted > 0 && STAMP.test(updated), 'an updated pack with its provenance');
+    assert.equal(updated, server.updatedPackYaml.replaceAll(STAMP.exec(server.updatedPackYaml)[1], STAMP.exec(updated)[1]), 'the download is the server\'s updated pack');
+    await ctx.close();
+  }
+
+  // (iii) Remediate, payment-linked against the live pack: the decision header's deploy and the response path's per-SLO
+  // button, each drawn unavailable with the reason and explained on click.
+  {
+    const { page, ctx } = await open(base, { selectedPackId: 'payment-linked', compareBId: 'payment-live', view: 'compile' });
+    await page.waitForSelector('[data-ux-action="rm-deploy"]', { state: 'attached', timeout: T });
+    await page.waitForSelector('.rflow-deploy', { state: 'attached', timeout: T });
+    for (const sel of ['[data-ux-action="rm-deploy"]', '.rflow-deploy']) {
+      const drawn = await drawnUnavailable(page, sel);
+      assert.ok(drawn.length > 0, sel);
+      assert.deepEqual(drawn, drawn.map(() => ({ aria: 'true', why: DEPLOY })), `${sel}: every one drawn unavailable with the reason`);
+      await clickExplains(page, `${sel} >> nth=0`);
+    }
+    await noServerAction(page, 'Remediate');
+    await ctx.close();
+  }
+
+  // Traceability over payment-service and the live pack; then (iv) the Conformance view's audit report: the HTML
+  // anchor downloads the report built in the page, its goes-blind section computed from the graph, and the in-page
+  // JSON and HTML are the server's but for the declared fields (C5's masking), with the design kit the page extracts
+  // from its own stylesheets.
+  {
+    const { page, ctx } = await open(base, { selectedPackId: 'payment-service', compareBId: 'payment-live', view: 'traceability' });
+    await page.waitForSelector('.trace-view', { timeout: T });
+    await noServerAction(page, 'Traceability');
+    await page.click('.observa-adv-toggle');
+    await page.click('.observa-adv-item[data-view="conformance"]');
+    await page.waitForSelector('.conf-exports a[download]', { timeout: T });
+    const href = await page.getAttribute('.conf-exports a[download]', 'href');
+    assert.match(href, /^\/api\/packs\/payment-service\/audit-report\?format=html&download=1/);
+    const env = new URL(href, base).searchParams.get('env');
+    const jsonPath = `/api/packs/payment-service/audit-report${env ? `?env=${encodeURIComponent(env)}` : ''}`;
+    const htmlPath = `${jsonPath}${env ? '&' : '?'}format=html`;
+    const [report] = await Promise.all([page.waitForEvent('download', { timeout: T }), page.click('.conf-exports a[download]')]);
+    assert.equal(report.suggestedFilename(), 'payment-service.audit-report.html');
+    const reportHtml = readFileSync(await report.path(), 'utf8');
+    assert.ok(reportHtml.includes('6. Goes-blind risks') && !reportHtml.includes('Not computed by this build'), 'the goes-blind section, computed in the page');
+    const [pageJson, pageHtml] = await fetchInPage(page, [jsonPath, htmlPath]);
+    const serverJson = await answerOf(await fetch(`${child.base}${jsonPath}`));
+    const serverHtml = await answerOf(await fetch(`${child.base}${htmlPath}`));
+    const headersOnly = (x) => ({ ...x, text: '' });
+    assert.equal(difference(headersOnly(serverJson), headersOnly(pageJson)), '', 'the JSON report\'s status and headers');
+    assert.equal(difference(headersOnly(serverHtml), headersOnly(pageHtml)), '', 'the HTML report\'s status and headers');
+    const shimDoc = JSON.parse(pageJson.text);
+    const { masked, problems: declared } = maskAudit(JSON.parse(serverJson.text), shimDoc);
+    assert.deepEqual(declared, [], 'the declared fields read as declared');
+    assert.equal(pageJson.text, JSON.stringify({ ...masked, generatedAt: shimDoc.generatedAt }), 'the in-page JSON, the page\'s clock aside');
+    const rendered = (text) => renderAuditReportHtml({ ...masked, generatedAt: generatedOf(text) }, { brand: DEFAULT_BRAND, styles: REPORT_STYLES });
+    assert.equal(pageHtml.text, rendered(pageHtml.text), 'the in-page HTML');
+    assert.equal(reportHtml, rendered(reportHtml), 'the download: the server\'s numbers, the graph\'s included');
+    await ctx.close();
+  }
+
+  // Row 6: production-curated as A, nothing live compared — the Assessment points at the live pack built in.
+  {
+    const { page, ctx } = await open(base, { selectedPackId: 'production-curated', view: 'compare', diagnoseSub: 'grade' });
+    await page.waitForSelector('.diag-subtab[data-sub="grade"]', { timeout: T });
+    await page.click('.diag-subtab[data-sub="grade"]');
+    await page.waitForSelector('#diag-summary', { timeout: T });
+    const row6 = staticRemedy('drift-free-no-live', { product, liveBuiltIn: true });
+    await page.waitForFunction((want) => (document.querySelector('#layer-view')?.innerText || '').includes(want), row6, { timeout: 5_000 }).catch(() => {});
+    assert.ok((await viewText(page)).includes(row6), `row 6: ${row6}`);
+    await noServerAction(page, 'Diagnose (nothing live compared)');
+    await ctx.close();
+  }
+
+  // Row 4: a bundle of one pack — nothing to compare it with.
+  {
+    const { page, ctx } = await open(oneBase, { selectedPackId: 'production-curated', view: 'compare' });
+    await page.waitForSelector('.diag-subtab[data-sub="compare"]', { timeout: T });
+    await page.click('.diag-subtab[data-sub="compare"]');
+    await page.waitForSelector('.compare-digest .ux-empty-body', { timeout: T });
+    assert.equal(await page.textContent('.compare-digest .ux-empty-body'), staticRemedy('compare-one-pack', { product }), 'row 4');
+    assert.equal(await page.textContent('.no-backend-notice-text'), noticeText(1));
+    await noServerAction(page, 'Compare (one pack)');
+    await ctx.close();
+  }
+
+  // (vi) No page error, no console.error, nothing off the loopback; each host served the page and nothing else.
+  assert.deepEqual(problems, [], 'no page error and no console.error');
+  assert.deepEqual(offLoopback, [], 'no request left the loopback');
+  assert.deepEqual([...new Set(asked)], ['/'], 'the static hosts were asked for the page only');
 });
 
 // ---------- C9 the built file, in Node ----------
