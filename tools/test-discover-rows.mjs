@@ -46,6 +46,28 @@ test('unbound, the row kinds degrade to the adapter table and the board throws t
   assert.equal(artefactClassify.activeTaxonomy(), null, 'bound with no override: the default families');
 });
 
+test('bindTaxonomy compiles the server\'s document untimed: id clocks that read every pass as too slow (a slow phone, a throttled tab) never refuse it; the static checks still do', () => {
+  const doc = JSON.parse(fs.readFileSync(new URL('./fixtures/taxonomy/taxonomy.json', import.meta.url), 'utf8'));
+  const ownNow = Object.getOwnPropertyDescriptor(performance, 'now');
+  const realCpuUsage = process.cpuUsage;
+  let wall = 0;
+  performance.now = () => (wall += 1000);   // every pass reads a second…
+  process.cpuUsage = undefined;             // …on the wall clock alone, as in a browser
+  try {
+    assert.throws(() => artefactClassify.compileTaxonomy(doc), { message: 'taxonomy: ids[0]: pattern too slow against a 256-character id' }, 'timed, these clocks refuse it');
+    assert.equal(bindTaxonomy(artefactClassify, doc), artefactClassify);
+    assert.equal(artefactClassify.activeTaxonomy()?.ids.length, 1, 'bound: the server\'s override');
+    assert.equal(classifyArtefact({ type: 'PackSLI', id: 'svc-checkout' }).family, 'sli');
+    assert.equal(classifyArtefact({ id: 'promrule-HighErrorRate' }).via, 'override');
+    assert.throws(() => bindTaxonomy(artefactClassify, { ...doc, ids: [{ pattern: 'promrule-', family: 'alert_rule' }] }), { message: 'taxonomy: ids[0]: pattern must be anchored (start with ^)' }, 'the static checks still run');
+  } finally {
+    if (ownNow) Object.defineProperty(performance, 'now', ownNow); else delete performance.now;
+    process.cpuUsage = realCpuUsage;
+    bindTaxonomy(artefactClassify, null);
+  }
+  assert.equal(artefactClassify.activeTaxonomy(), null, 'the default families again for every test below');
+});
+
 test('the adapter source word splits onto evidence and completion; attention is what a person must act on', () => {
   assert.equal(artefactStatus({ source: 'Verified' }).evidence, 'live');
   assert.equal(artefactStatus({ source: 'Declared' }).evidence, 'declared');

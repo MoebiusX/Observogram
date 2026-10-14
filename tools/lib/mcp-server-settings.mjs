@@ -645,8 +645,10 @@ const STRICT = (obj, keys, where, errors) => {
  * policyFindings under a deadline (the studio server: a worker, 100 ms,
  * a rule that does not finish counting as matched). `timed: false` skips
  * only the id clocks: the browser re-reading a file, and the server's
- * start-time load, whose per-rule worker deadline is the guard (a loaded
- * machine's clock would refuse a valid policy). The default keeps them
+ * start-time load, whose per-rule worker deadline is the guard (the id
+ * clocks, the wall clock alone then, refused a valid policy on a loaded
+ * machine; they charge a pattern's own work now, and a loaded Windows
+ * machine can still refuse one near the budget). The default keeps them
  * (the static bundle's build).
  */
 export function compileSettingsPolicy(json, { timed = true } = {}) {

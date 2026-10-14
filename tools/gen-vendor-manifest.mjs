@@ -188,18 +188,33 @@ export function staticExports(src, file = '<source>') {
 
 // ---------------------------------------------------------------------------
 // Purity. A vendorable module runs anywhere a browser or a bare Node would
-// run it: no node:* module, no process, no DOM, no import.meta, no require.
-// Rules of kind `specifier` see import specifiers; rules of kind `code` see
-// the tokenized code (never a comment or a string body).
+// run it: no node:* module, no process (beyond PROCESS_READS_ALLOWED), no
+// DOM, no import.meta, no require. Rules of kind `specifier` see import
+// specifiers; rules of kind `code` see the tokenized code (never a comment or
+// a string body), less the exact forms a rule's `allow` lists.
 // ---------------------------------------------------------------------------
+
+// The one read of `process` a listed module may make, in exactly these code
+// forms: the id clocks' CPU time and the platform its slack depends on
+// (tools/lib/artefact-classify.mjs), each guarded with `?.` — a runtime
+// without `process` (a browser) reads undefined, and the module falls back to
+// the wall clock. Any other read — `process.env`, `process?.env`,
+// `globalThis.process?.argv` — breaks the rule. docs/DOWNSTREAM.md §2 names
+// the same forms.
+export const PROCESS_READS_ALLOWED = Object.freeze(['globalThis.process?.cpuUsage?.()', 'globalThis.process?.platform']);
 
 export const PURITY_RULES = Object.freeze([
   { rule: 'import a node:* module', kind: 'specifier', re: /^node:/ },
-  { rule: 'read `process`', kind: 'code', re: /\bprocess\s*(?:\.\s*[A-Za-z_$]|\[\s*['"])/ },
+  { rule: 'read `process`', kind: 'code', re: /\bprocess\s*(?:\??\.\s*[A-Za-z_$]|(?:\?\.\s*)?\[\s*['"])/, allow: PROCESS_READS_ALLOWED },
   { rule: 'touch the DOM or web storage (document, window, navigator, localStorage, sessionStorage)', kind: 'code', re: /\b(?:document|window|navigator|localStorage|sessionStorage)\s*(?:\.\s*[A-Za-z_$]|\[\s*['"])/ },
   { rule: 'read `import.meta`', kind: 'code', re: /\bimport\s*\.\s*meta\b/ },
   { rule: 'call `require()`', kind: 'code', re: /\brequire\s*\(/ },
 ]);
+
+const escapeRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// The code with every allowed form blanked to spaces (positions and line numbers hold); a form inside a longer name is not one.
+const blankAllowed = (code, allow = []) => allow.reduce(
+  (c, form) => c.replace(new RegExp(`(?<![\\w$.])${escapeRe(form)}(?![\\w$])`, 'g'), (m) => ' '.repeat(m.length)), code);
 
 /** [{ line, rule }] — every purity rule the source breaks. */
 export function purityViolations(src) {
@@ -209,7 +224,7 @@ export function purityViolations(src) {
     if (r.kind === 'specifier') {
       for (const s of importSpecifiers(src)) if (r.re.test(s.spec)) out.push({ line: lineOf(src, s.index), rule: r.rule });
     } else {
-      const m = r.re.exec(code);
+      const m = r.re.exec(blankAllowed(code, r.allow));
       if (m) out.push({ line: lineOf(code, m.index), rule: r.rule });
     }
   }

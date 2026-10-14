@@ -44,3 +44,5 @@ export function platformHelpers(platform = process.platform, out = (s) => proces
 export const { isWin32, isLinux, win32Skip, skipOnWin32 } = platformHelpers();
 // For a printout only (a notice naming the host); a branch reads isWin32 / isLinux.
 export const PLATFORM = process.platform;
+// The name process.platform has on Windows, for a suite that fakes the platform a module under test reads — data, never a branch.
+export const WIN32_PLATFORM = 'win32';

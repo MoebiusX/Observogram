@@ -224,9 +224,9 @@ test('P5 every platform branch of a suite goes through server/fixtures/platform.
     if (f === FIXTURE || f === SELF) continue;
     for (const line of platformReads(read(f))) offenders.push(`${f}:${line}`);
   }
-  assert.deepEqual(offenders, [], `a suite reads process.platform or spells 'win32': import isWin32 / isLinux / PLATFORM / win32Skip / skipOnWin32 from ${FIXTURE} instead:\n${offenders.join('\n')}`);
+  assert.deepEqual(offenders, [], `a suite reads process.platform or spells 'win32': import isWin32 / isLinux / PLATFORM / win32Skip / skipOnWin32 (or WIN32_PLATFORM, to fake the platform as data) from ${FIXTURE} instead:\n${offenders.join('\n')}`);
   const fixture = read(FIXTURE);
-  assert.deepEqual(platformReads(fixture), [31, 32, 46], 'the fixture is the one place: the default parameter, the isWin32 fact, PLATFORM');
+  assert.deepEqual(platformReads(fixture), [31, 32, 46, 48], 'the fixture is the one place: the default parameter, the isWin32 fact, PLATFORM, WIN32_PLATFORM');
 
   assert.deepEqual(platformReads("if (process.platform === 'win32') return;"), [1], 'reported');
   assert.deepEqual(platformReads('if (process.platform === "win32") return;'), [1], 'reported (double quotes)');
