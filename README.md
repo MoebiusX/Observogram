@@ -2714,9 +2714,9 @@ and it refuses, deleting nothing:
 - **while a recorded users file — or, with none recorded,
   `<workspace>/users.json` as a link — does not exist and its path does not
   lead under `orgs/<id>/`** (but for one only through directories
-  `orgs/<id>/` lies in, below), since a filesystem not mounted now may lead
-  it there. If it lies on a filesystem that is not mounted, mount it and run
-  the purge again; if it does not lie under `orgs/<id>/` (it was deleted,
+  `orgs/<id>/`, or its path, lies in, below), since a filesystem not mounted
+  now may lead it there. If it lies on a filesystem that is not mounted,
+  mount it and run the purge again; if it does not lie under `orgs/<id>/` (it was deleted,
   say), delete `orgs/<id>/` by hand and run the purge again: with no
   directory left it checks no users file and only drops the org's records.
   After the first refusal's move, with any mount on its path up, that path
@@ -2728,11 +2728,15 @@ and it refuses, deleting nothing:
   here, the second step its first refusal names. Once that org is purged its directory is gone, and the recorded path
   leads into a directory that does not exist: purging another org goes on
   when the path is looked up only in directories its `orgs/<id>/` lies in
-  (`<workspace>/orgs` and those above it, by their real paths) and no entry
-  under `orgs/<id>/` has the users file's name, since a filesystem mounted
-  again on one of those directories would cover `orgs/<id>/` too, and a
-  directory under `orgs/<id>/` mounted there would show the users file by
-  its name. So does a users file deleted in one of those directories. With
+  (`<workspace>/orgs` and those above it, by their real paths) or that the
+  path `<workspace>/orgs/<id>` is looked up in (with the workspace, or its
+  `orgs`, reached through a link, the directory that link is in and those
+  above it), and no entry under `orgs/<id>/` has the users file's name,
+  since a filesystem mounted again on one of those directories would cover
+  `orgs/<id>/` too, or the link `<workspace>/orgs/<id>` is reached through,
+  and a directory under `orgs/<id>/` mounted there would show the users file
+  by its name (purge-org does not see a link there to the real path of
+  `orgs/<id>/`). So does a users file deleted in one of those directories. With
   none recorded and nothing at `<workspace>/users.json`, there is no users
   file to keep, and the purge goes on.
 - **while the users file, or a directory under `orgs/<id>/`, cannot be

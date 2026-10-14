@@ -54,16 +54,19 @@
 //     mounted again the path leads to the file of that name in the directory mounted there (<root>/other bind-mounted on
 //     <root>/sub/m, the users file at <root>/other/users.json recorded through it: unmounted, as the refusal of that
 //     mount point says, the purge deleted it). The purge goes on, too, when the path is looked up only in directories
-//     the root lies in (its parent and theirs, on the root's real path: each by its path, case folded on Windows, and its
-//     device and inode) and no entry under the root has the name the path ends in — the directory of an org purged
-//     before, which the users file was moved out of as its refusal said, or a file deleted in one of them: a filesystem
-//     mounted again on one of them covers the root too, so through it the path leads under the root only by a directory
-//     under the root mounted above it, which shows the users file by its name. Any other is refused, failing closed: a
-//     mount that is down leaves its mount point an empty directory, which tells nothing. So a recorded users file
-//     deleted elsewhere outside the root is refused too (declared), and deleting the root by hand is its way out. The
-//     default <base>/users.json, which nothing records, absent — nothing at its path, not even a link — is nothing to
-//     keep (a store that keeps no local users may have none); a link there that leads nowhere now is placed as a
-//     recorded path is, since through a mount that is down it may lead under the root.
+//     the root lies in (its parent and theirs, on the root's real path) or that the root's own path, as purge-org names
+//     it, is looked up in (every link on it followed: a workspace, or its orgs/, reached through a link in a directory
+//     the root does not lie in, that directory and those above it) — each by its path, case folded on Windows, and its
+//     device and inode — and no entry under the root has the name the path ends in: the directory of an org purged
+//     before, which the users file was moved out of as its refusal said, or a file deleted in one of them. A filesystem
+//     mounted again on one of them covers the root too, or hides the link the root's own path is reached through, so
+//     through it the path leads under the root by a directory under the root mounted in it, which shows the users file
+//     by its name, or by a link that is not seen (below). Any other is refused, failing closed: a mount that is down
+//     leaves its mount point an empty directory, which tells nothing. So a recorded users file deleted elsewhere outside
+//     the root is refused too (declared), and deleting the root by hand is its way out. The default <base>/users.json,
+//     which nothing records, absent — nothing at its path, not even a link — is nothing to keep (a store that keeps no
+//     local users may have none); a link there that leads nowhere now is placed as a recorded path is, since through a
+//     mount that is down it may lead under the root.
 //   - a users file that cannot be read — statSync failing otherwise (EACCES on a directory of its path, a link loop),
 //     or a part of its path that cannot be read — is refused.
 //   - a users file that exists and that no entry is: before the purge goes on, each directory the walk read is read
@@ -97,7 +100,8 @@
 // name does not tell — a file mounted on a file of another name, its mount point a file of its own, or what a link of
 // that name under the root leads to back through the mount that is down; and a filesystem that is down now, mounted on a
 // directory the root lies in, whose link leads a users file that does not exist into the root another way than by its
-// name there (through a second mount of the root's filesystem).
+// name there (through a second mount of the root's filesystem), or mounted on one only the root's path as named is
+// looked up in (the directory holding the link to the workspace, say), by a link to the root's real path.
 //
 // usersFilePlace(file, root, { recorded, id, fs, path, windows }) → { exists, refusal }: exists is whether the users
 // file's path leads to a file now (true), or not (false), or null when the check stopped before it could tell;
@@ -385,13 +389,16 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     return { place: todo.length ? path.join(cur, ...todo) : cur, nearest: curSt ? cur : null, nearestSt: curSt, dirs };
   };
 
-  // The directories the root lies in — its parent and theirs, as its real path passes through them: each by its path
-  // (case folded on Windows) → its device and inode.
+  // The directories the root lies in — its parent and theirs, as its real path passes through them — and those a name is
+  // looked up in on its path as purge-org names it, every link on it followed (lead, above: with a workspace, or its
+  // orgs/, reached through a link in a directory the root does not lie in, that directory and those above it): each by
+  // its path (case folded on Windows) → its device and inode.
   const pathKey = (p) => (windows ? p.toLowerCase() : p);
   const holding = () => {
     const dirs = new Map();
     try {
       for (let d = path.dirname(fs.realpathSync(root)); !dirs.has(pathKey(d)); d = path.dirname(d)) dirs.set(pathKey(d), idOf(stat(d)));
+      for (const { at, st: was } of lead(root).dirs ?? []) if (!dirs.has(pathKey(at))) dirs.set(pathKey(at), idOf(was));
     } catch { dirs.clear(); }
     return dirs;
   };
@@ -470,10 +477,12 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
           'a directory on its path may be the mount point of a mount that is down'),
       };
     }
-    // A path looked up only in directories the root lies in, to one where the rest of it does not exist — the directory
-    // of an org purged before, which the users file was moved out of as its refusal said: a filesystem mounted again on
-    // one of them covers the root too, so the path leads under the root then only by a directory under the root mounted
-    // above it, where the users file keeps its name. With no entry under the root of that name, the purge goes on.
+    // A path looked up only in directories the root lies in, or its own path is looked up in, to one where the rest of it
+    // does not exist — the directory of an org purged before, which the users file was moved out of as its refusal said:
+    // a filesystem mounted again on one of them covers the root too, or hides the link the root's own path is reached
+    // through, so the path leads under the root then by a directory under the root mounted in it, where the users file
+    // keeps its name, or by a link that is not seen (the header). With no entry under the root of that name, the purge
+    // goes on.
     if (led.nearestSt && led.dirs.length) {
       const holders = holding();
       if (led.dirs.every(({ at, st: was }) => holders.get(pathKey(at)) === idOf(was)) && !namesakes.length) return { exists: false, refusal: null };

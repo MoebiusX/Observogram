@@ -1581,10 +1581,14 @@ the path lead to the moved file again meant re-creating directories in the
 purged org's root, and neither the refusal nor README said so. A users file
 that does not exist is now nothing to keep, too, when its path is looked up
 only in directories the root lies in — its parent and theirs, on its real
-path — and no entry under the root has its name: a filesystem mounted again
-on one of them covers the root as well, so through it the path leads under
-the root only by a directory under the root mounted above it, which shows
-the users file by its name. Through any other directory, or with an entry of
+path — or that the root's own path is looked up in, as purge-org names it
+(with the workspace, or its `orgs`, reached through a link in a directory
+the root does not lie in, that directory and those above it), and no entry
+under the root has its name: a filesystem mounted again on one of them
+covers the root as well, or hides the link the root's own path is reached
+through, so through it the path leads under the root by a directory under
+the root mounted there, which shows the users file by its name, or by a link
+purge-org does not see. Through any other directory, or with an entry of
 that name under the root, it is refused as before. Tests: 1443 → 1444 (one
 more in `server/test-store-ops.mjs`).
 
