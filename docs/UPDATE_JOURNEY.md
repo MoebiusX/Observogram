@@ -1638,3 +1638,44 @@ as for a pass over the budget. The studio compiles the taxonomy the server serve
 without timing it, so a slow phone binds what the server accepted.
 Tests: 1468 → 1472 (three in `tools/test-artefact-classify.mjs`, one in
 `tools/test-discover-rows.mjs`).
+
+### Follow-up: a users file whose path Windows cannot resolve
+
+On Windows purge-org compares the recorded users file as the native realpath
+of its longest prefix that realpath can read, the rest as written. Realpath
+stops at a part that exists but that it cannot read through, and the rest
+was read as written beside that part, wherever the part leads. With the
+users file recorded as `C:\links\betasub\users.json`, where
+`C:\links\betasub` is a symlink to `\\myhost\betasub` (which is
+`C:\ws\orgs\beta\sub`), purge-org refused it while the share was served; while
+it was down, the path compared as outside the purged root `C:\ws\orgs\beta`,
+and purge-org deleted `C:\ws\orgs\beta\sub\users.json`. A file link, a chain
+of links, a link to a path that does not exist, and any other reparse point
+whose target cannot be opened — a cloud placeholder, a deduplicated file, a
+tag no filter on this host handles, which `lstatSync` answers as no link or
+cannot read either — are the same unknown. So is every path on a volume whose
+paths the native realpath cannot name at all (an ImDisk RAM disk), where a
+users file under the root named by a short name, or through a link, compared
+as outside it. Purge-org's users-file check now refuses a path when a part
+the realpath walk could not read exists — `lstatSync` answers it, or fails
+for another reason than that it does not exist — or when that walk could not
+read even its root: with `Z:` mapped to `\\myhost\betasub` while the share
+was down, or `Z:` not mapped yet, `Z:\users.json` stayed spelled as on a
+local drive, and a later read that found the share back, or `Z:` mapped,
+let the purge through. It refuses with the way out it now names for a share
+no file id places too: if the file does not lie under the root, delete the
+root by hand, then run purge-org again; if it does, move it out first. One
+outside the root through such a part, or anywhere on such a volume, is
+refused alike (a declared false refusal). A share's server follows a
+junction on its volume itself, and SMB before Windows 10/Server 1709 has no
+normalized-name query, so there the native realpath names a path through a
+share as the client opened it: `\\myhost\ws\links\j\users.json`, with
+`C:\ws\links\j` a junction to `C:\ws\orgs\beta\sub`, was placed by the
+share's directory as `C:\ws\links\j\users.json`, outside the root, and
+purge-org deleted it. The check now also refuses a path when a part the walk
+read is a link to `lstatSync`, or one `lstatSync` cannot read now (through a
+junction outside the root, a declared false refusal too). A link whose target
+opens is followed as before, on the drive and through a share whose realpath
+follows it, a path not created yet on a drive the walk reads is judged as
+before, and the other checks compare as before.
+Tests: 1472 → 1476 (four more in `server/test-store-paths.mjs`).
