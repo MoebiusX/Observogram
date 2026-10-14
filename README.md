@@ -333,7 +333,8 @@ the reasons honest, requires this section to state the lines count, and
 proves the module-relative path resolvers (`fileURLToPath`, never
 `URL.pathname`) on every platform. Every suite names the platform only
 through `server/fixtures/platform.mjs` (`isWin32`, `isLinux`, `PLATFORM`,
-`win32Skip(reason)`, `skipOnWin32(t, reason)`). The checkout is LF everywhere
+`win32Skip(reason)`, `skipOnWin32(t, reason)`, and `WIN32_PLATFORM` for a
+suite that fakes the platform as data). The checkout is LF everywhere
 (`.gitattributes`), so goldens and `VENDOR-MANIFEST.json`'s hashes verify
 under any `core.autocrlf`. macOS is not in CI; the POSIX suites run there.
 

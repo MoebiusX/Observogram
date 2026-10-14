@@ -3,10 +3,10 @@
 //
 // docs/DOWNSTREAM.md: a downstream copies the listed tools/lib modules verbatim and upgrades by diffing the
 // manifest. These tests hold the committed manifest to the tree (stale → regenerate), the listed modules to the
-// purity rule (no node:*, no process, no DOM, import graph inside the set), the static export extraction to the
-// real module namespaces, and every export change since the last release to a `## Unreleased` CHANGELOG entry
-// that names the module — the breaking-change notice downstreams read. The last test proves the manifest is
-// inert: nothing under server/, studio/ or tools/lib reads it.
+// purity rule (no node:*, no process but its two allowed guarded forms, no DOM, import graph inside the set), the
+// static export extraction to the real module namespaces, and every export change since the last release to a
+// `## Unreleased` CHANGELOG entry that names the module — the breaking-change notice downstreams read. The last
+// test proves the manifest is inert: nothing under server/, studio/ or tools/lib reads it.
 //
 // Run: node --test tools/test-vendor-manifest.mjs
 
@@ -17,7 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  EXCLUDED, PURITY_RULES, MANIFEST_FILE, staticExports, tokenize, importSpecifiers, relativeImports, bareImports, purityViolations,
+  EXCLUDED, PURITY_RULES, PROCESS_READS_ALLOWED, MANIFEST_FILE, staticExports, tokenize, importSpecifiers, relativeImports, bareImports, purityViolations,
   walkModules, buildVendorManifest, renderManifest, diffManifests, changelogUnreleasedSection, mentionsModule,
   validManifestPath, verifyVendoredTree, smokeVendoredTree, STALE_MESSAGE,
 } from './gen-vendor-manifest.mjs';
@@ -92,6 +92,18 @@ test('listed modules are pure; the excluded impure ones break at least one rule;
   }
   assert.equal(PURITY_RULES.length, 5);
   assert.deepEqual(PURITY_RULES.map(r => r.kind).sort(), ['code', 'code', 'code', 'code', 'specifier']);
+  // The one allowed read of `process` is declared where a downstream reads the rule — DOWNSTREAM.md §2 and the
+  // VENDORING.md row of the one listed module that makes it — and only that module makes it.
+  assert.deepEqual(PROCESS_READS_ALLOWED, ['globalThis.process?.cpuUsage?.()', 'globalThis.process?.platform']);
+  assert.deepEqual(PURITY_RULES[1].allow, PROCESS_READS_ALLOWED);
+  const inclusionRule = read('docs/DOWNSTREAM.md').split('\n## 2. The inclusion rule\n')[1].split('\n## ')[0].replace(/\s+/g, ' ');
+  const classifyRow = read('docs/VENDORING.md').split('\n').find(l => l.startsWith('| [`tools/lib/artefact-classify.mjs`]'));
+  for (const form of PROCESS_READS_ALLOWED) {
+    assert.ok(inclusionRule.includes(`\`${form}\``), `docs/DOWNSTREAM.md §2 names the allowed read ${form}`);
+    assert.ok(classifyRow.includes(`\`${form}\``), `docs/VENDORING.md's artefact-classify row names ${form}`);
+  }
+  assert.ok(!/no Node APIs \|/.test(classifyRow), 'the row does not say "no Node APIs" bare');
+  assert.deepEqual(Object.keys(committed.modules).filter(p => PROCESS_READS_ALLOWED.some(f => read(p).includes(f))), ['tools/lib/artefact-classify.mjs']);
 });
 
 /**
@@ -215,6 +227,12 @@ test('the tokenizer: comments, strings, templates with nested ${} and regex lite
   assert.deepEqual(purityViolations('const w = window.innerWidth;'), [{ line: 1, rule: PURITY_RULES[2].rule }]);
   assert.deepEqual(purityViolations("const w = localStorage['k'];"), [{ line: 1, rule: PURITY_RULES[2].rule }]);
   assert.deepEqual(purityViolations('const t = `${process.env.X}`;'), [{ line: 1, rule: PURITY_RULES[1].rule }]);
+  // Optional chaining reads `process` too; only the two guarded forms of PROCESS_READS_ALLOWED pass, exactly.
+  assert.deepEqual(purityViolations("const u = globalThis.process?.cpuUsage?.();\nconst w = globalThis.process?.platform === 'win32';"), []);
+  for (const src of ['const e = globalThis.process?.env?.SECRET;', 'const e = process?.env;', "const e = process?.['env'];", 'const e = process ?. env;',
+    'const a = globalThis.process?.argv;', 'const p = globalThis.process?.platformName;', 'const p = globalThis.process.platform;', 'const u = process.cpuUsage();']) {
+    assert.deepEqual(purityViolations(`const ok = globalThis.process?.platform;\n${src}`), [{ line: 2, rule: PURITY_RULES[1].rule }], src);
+  }
   assert.deepEqual(purityViolations("// process.env is fine in a comment\nconst s = 'process.env too';"), []);
   assert.deepEqual(purityViolations("import fs from 'node:fs';\nconst m = import.meta.url;"), [{ line: 1, rule: PURITY_RULES[0].rule }, { line: 2, rule: PURITY_RULES[3].rule }]);
   assert.deepEqual(purityViolations("const x = require('x');"), [{ line: 1, rule: PURITY_RULES[4].rule }]);

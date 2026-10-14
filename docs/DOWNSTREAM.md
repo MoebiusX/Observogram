@@ -41,8 +41,12 @@ byte-identical, so the diff between two snapshots is exactly what changed.
 
 A module is listed when, mechanically:
 
-1. it imports no `node:*` module, reads no `process`, touches no DOM or web
-   storage (`document`, `window`, `navigator`, `localStorage`,
+1. it imports no `node:*` module, reads no `process` (but for exactly the
+   two guarded forms `globalThis.process?.cpuUsage?.()` and
+   `globalThis.process?.platform` — `PROCESS_READS_ALLOWED`: the CPU time and
+   the platform `artefact-classify.mjs`'s id clocks read where the runtime has
+   them; a browser reads `undefined`, and the wall clock decides), touches no
+   DOM or web storage (`document`, `window`, `navigator`, `localStorage`,
    `sessionStorage`), reads no `import.meta` and calls no `require()` — judged
    on code, never on comments or string text;
 2. every relative import resolves to another listed module (the import graph
@@ -799,7 +803,8 @@ its summary printed Windows 10.0.26100 on 4 CPUs, Node v22.16.0 and v22.23.3
 (`C:\Users\RUNNER~1\AppData\Local\Temp`), a symlink created, and the tests the
 Linux floor ran; `npm test` takes 138–219 s there. Every suite names the
 platform only through `server/fixtures/platform.mjs` (`isWin32`, `isLinux`,
-`PLATFORM`, `win32Skip(reason)`, `skipOnWin32(t, reason)`);
+`PLATFORM`, `win32Skip(reason)`, `skipOnWin32(t, reason)`, and
+`WIN32_PLATFORM` for a suite that fakes the platform as data);
 `tools/test-platform.mjs` keeps the count and the reasons honest and proves
 the module-relative resolvers (`fileURLToPath`, never `URL.pathname`, which is
 `/C:/…` on Windows and percent-encoded everywhere) on every platform. The
