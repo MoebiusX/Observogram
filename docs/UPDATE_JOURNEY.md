@@ -1651,4 +1651,4 @@ junction outside the root, a declared false refusal too). A link whose target
 opens is followed as before, on the drive and through a share whose realpath
 follows it, a path not created yet on a drive the walk reads is judged as
 before, and the other checks compare as before.
-Tests: 1439 → 1443 (four more in `server/test-store-paths.mjs`).
+Tests: 1468 → 1472 (four more in `server/test-store-paths.mjs`).
