@@ -68,7 +68,7 @@ const answered = (s) => bytesOf(s).toString('utf8');
 
 export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = false } = {}) {
   const key = (s) => (fold ? s.toLowerCase() : s);
-  const split = (s) => s.split(/[\\/]+/).filter(Boolean);
+  const split = (s) => s.split(path.sep === '\\' ? /[\\/]+/ : /\/+/).filter(Boolean);   // on POSIX paths a backslash is part of a name
   const fail = (code, p) => Object.assign(new Error(`${code}: ${p}`), { code });
   let next = 1000n;
   let clock = 1_770_000_000_000_000_000n;

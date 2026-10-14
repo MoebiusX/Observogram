@@ -2586,7 +2586,7 @@ test('purge-org users file: a view through another filesystem — NFS (the inode
   }
 });
 
-test('purge-org users file: a mount point under the root — another filesystem, a file mounted there, one directory reached twice, a loop, the root itself, a mount of the same filesystem /proc/self/mountinfo lists — is refused before anything is deleted, and once unmounted the purge passes; with no /proc/self/mountinfo, a same-filesystem bind mount from outside is entered as a directory; a file on another device than its directory that /proc/self/mountinfo does not list (an overlay mount\'s lower layer on another filesystem) is none, nor is a mount it lists that a later mount over a directory above it covers', () => {
+test('purge-org users file: a mount point under the root — another filesystem, a file mounted there, one directory reached twice, a loop, the root itself, a mount of the same filesystem /proc/self/mountinfo lists (of a directory or a file) — is refused before anything is deleted, and once unmounted the purge passes; with no /proc/self/mountinfo, a same-filesystem bind mount from outside is entered as a directory; a file on another device than its directory that /proc/self/mountinfo does not list (an overlay mount\'s lower layer on another filesystem) is none, nor is a mount it lists that a later mount over a directory above it covers', () => {
   const vol = betaVolume().dir('/srv5', { dev: 7n }).file('/srv5/accounts.json').bind('/srv5', `${ROOT_B}/m`);
   // The reverse of a mount view: a directory from outside mounted under the root, holding the users file.
   assert.deepEqual(placeIn(vol, '/srv5/accounts.json'), { exists: null, refusal: mounted(`${ROOT_B}/m (another filesystem than ${ROOT_B})`) });
@@ -2673,6 +2673,16 @@ test('purge-org users file: a mount point under the root — another filesystem,
     'a file from another filesystem mounted on a file, listed');
   linux.unmount(`${ROOT_B}/packs/m.json`);
   assert.deepEqual(placeIn(linux, '/srv6/accounts.json'), { exists: true, refusal: null });
+  // A file of the root's own filesystem mounted on a file under it is a file to lstatSync (the same device), and listed:
+  // refused, holding the users file or not. Passed, rmSync failed there with EBUSY, and the users file mounted there was
+  // refused as an entry under the root to move out, which fails on a mount point (mv: Device or resource busy). Unmounted
+  // as its refusal says, the purge passes.
+  linux.file('/srv6/src.json').file(`${ROOT_B}/m.json`).bind('/srv6/src.json', `${ROOT_B}/m.json`);
+  for (const file of ['/srv6/accounts.json', '/srv6/src.json']) {
+    assert.deepEqual(placeIn(linux, file), { exists: null, refusal: mounted(same(`${ROOT_B}/m.json`)) }, `a file of the same filesystem mounted on a file: ${file}`);
+  }
+  linux.unmount(`${ROOT_B}/m.json`);
+  assert.deepEqual(placeIn(linux, '/srv6/src.json'), { exists: true, refusal: null }, 'unmounted as its refusal says: purged');
   // /proc/self/mountinfo there but unreadable: nothing tells which directory is a mount point, so it is refused.
   const locked = { ...linux.fs, readFileSync: (p) => { throw Object.assign(new Error(`EACCES: ${p}`), { code: 'EACCES' }); } };
   assert.equal(placeIn({ fs: locked }, '/srv6/accounts.json').refusal, `/proc/self/mountinfo cannot be read (EACCES), so purge-org cannot tell what `
@@ -2863,7 +2873,7 @@ test('purge-org users file: the walk keeps nothing of a file it passes, and of a
   }
 });
 
-test('purge-org users file: a name under the root that is not valid UTF-8 is read as the bytes the filesystem holds — the users file in such a directory, reached through a link, is refused naming it as a POSIX shell\'s $\'…\' spells it, and moved out as that says, the purge passes; below such a name a mount point and a directory it cannot read are refused; with the users file outside, a tree of such names passes', () => {
+test('purge-org users file: a name under the root that is not valid UTF-8 is read as the bytes the filesystem holds — the users file in such a directory, reached through a link, is refused naming it as a POSIX shell\'s $\'…\' spells it (a quote and a backslash escaped), and moved out as that says, the purge passes; below such a name an entry of the users file\'s name, a mount point (also under a root whose path is not ASCII) and a directory it cannot read are refused; with the users file outside, a tree of such names passes', () => {
   // node:fs lists a name that is not valid UTF-8 as a string with U+FFFD in place of each such byte (c\xffd as 'c\ufffdd'), a
   // name no lookup finds: lstatSync of it fails with ENOENT, the walk took that for an entry gone while it ran, and so read
   // nothing of that directory, while rmSync, which lists names as bytes, deleted the users file in it. The fixture spells
@@ -2880,6 +2890,23 @@ test('purge-org users file: a name under the root that is not valid UTF-8 is rea
   vol.rename(`${C}/users.json`, '/keep/users.json');
   assert.deepEqual(placeIn(vol, '/cfg/users.json'), { exists: false, refusal: null });
   assert.deepEqual(placeIn(vol, '/keep/users.json'), { exists: true, refusal: null }, 'outside, the tree read again unchanged: purged');
+  // A quote or a backslash in such a path is escaped as $'…' takes it (\' and \\), so the path named can be typed as it
+  // stands: mv $'/ws/orgs/beta/it\'s\\c\xffd/users.json' /keep/ moves the users file. Unescaped, the quote ended the $'…'.
+  const Q = `${ROOT_B}/it's\\c\udcffd`;
+  vol.file(`${Q}/users.json`).symlink('/cfg/q.json', `${Q}/users.json`);
+  assert.deepEqual(placeIn(vol, '/cfg/q.json'), { exists: true, refusal: underRoot('/cfg/q.json', `$'${ROOT_B}/it\\'s\\\\c\\xffd/users.json'`) },
+    'a quote and a backslash escaped');
+  vol.rename(`${Q}/users.json`, '/keep/q.json');
+  assert.deepEqual(placeIn(vol, '/cfg/q.json'), { exists: false, refusal: null }, 'moved out as that says: purged');
+  // Below such a name, an entry of the users file's name: a mount that is down keeps what was written in its mount point
+  // meanwhile (the users file recorded as /mnt/b/users.json, /mnt/b a bind mount of <root>/c\xffd that is down, a users.json
+  // written there), and mounted again the path leads to that entry. Refused by its name; moved out as that says, the purge
+  // passes. Passed, the purge deleted it.
+  vol.file('/mnt/b/users.json').file(`${C}/users.json`);
+  assert.deepEqual(placeIn(vol, '/mnt/b/users.json'), { exists: true, refusal: namesake('/mnt/b/users.json', [shown('/users.json')]) },
+    'an entry of its name below such a name');
+  vol.rename(`${C}/users.json`, '/keep/b.json');
+  assert.deepEqual(placeIn(vol, '/mnt/b/users.json'), { exists: true, refusal: null }, 'moved out as that says: purged');
   // Below such a name: a directory from another filesystem mounted there, a bind mount of one of the same filesystem that
   // /proc/self/mountinfo lists (the kernel writes the name's bytes, read as UTF-8 as the walk's own path is), a directory it
   // cannot read. Unmounted, the purge passes.
@@ -2891,6 +2918,19 @@ test('purge-org users file: a name under the root that is not valid UTF-8 is rea
     { exists: null, refusal: mounted(`${shown('/m6')} (the same filesystem as ${shown()}, listed in /proc/self/mountinfo)`) });
   mnt.unmount(`${C}/m6`);
   assert.deepEqual(placeIn(mnt, '/srv5/accounts.json'), { exists: true, refusal: null }, 'unmounted: purged');
+  // Under a root whose path is not ASCII (a workspace at /srv/données): a path held as bytes is longer than the root's
+  // characters, and the bind mount below such a name that /proc/self/mountinfo lists is refused all the same. Missed, the
+  // walk entered it as a directory and the purge went on to rmSync, which failed there with EBUSY (Node 22).
+  const RU = '/srv/données/orgs/beta';
+  const accented = mountFs(posix, { proc: true }).dir(`${RU}/packs`).file('/srv/accounts.json').dir('/srv6').file('/srv6/data.json')
+    .dir(`${RU}/c\udcffd/m6`).bind('/srv6', `${RU}/c\udcffd/m6`);
+  const placeU = () => usersFilePlace('/srv/accounts.json', RU, { fs: accented.fs, path: posix, windows: false, id: 'beta' });
+  assert.deepEqual(placeU(), {
+    exists: null,
+    refusal: mounted(`$'${RU}/c\\xffd/m6' (the same filesystem as $'${RU}/c\\xffd', listed in /proc/self/mountinfo)`, RU),
+  }, 'under a root whose path is not ASCII');
+  accented.unmount(`${RU}/c\udcffd/m6`);
+  assert.deepEqual(placeU(), { exists: true, refusal: null }, 'unmounted as its refusal says: purged');
   mnt.dir(`${C}/locked`).deny(`${C}/locked`);
   assert.equal(placeIn(mnt, '/srv5/accounts.json').refusal, `${shown('/locked')} under ${ROOT_B} cannot be read (EACCES), so purge-org cannot `
     + `tell what deleting ${ROOT_B} takes — nothing was deleted. Run purge-org as a user who can read it; or, if the recorded users file `
