@@ -191,3 +191,5 @@ has no uid field, so a rule's id is its name).
   a deployment secret could be sent as a bearer to a webhook. It is not an MCP
   target, so outside R4; the fix (which variable names a server-run journey
   may read, and the migration of bare names) needs its own design.
+  Closed by the follow-up `journey-notify-env-ownership` (docs/DOWNSTREAM.md
+  §17).

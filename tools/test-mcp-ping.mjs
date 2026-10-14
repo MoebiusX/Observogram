@@ -13,7 +13,6 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -180,11 +179,10 @@ test('a refused connection is unreachable — a fetcher rejection and native fet
   assert.equal(r.reachable, false);
   assert.equal(r.stage, 'initialize');
   assert.match(r.error, /ECONNREFUSED/);
-  const server = createServer();
-  await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
-  const { port } = server.address();
-  await new Promise((ok) => server.close(ok));
-  const native = await pingMcp({ mcpUrl: `http://127.0.0.1:${port}/mcp`, transport: null });
+  // 127.0.0.1:2: below every OS's ephemeral range, so nothing hands it out (a port bound and released
+  // can be reissued on Windows, where bind(0) and outbound connects share one range), and not a port fetch
+  // refuses to dial (1 is on the Fetch standard's bad-port list: "bad port", never ECONNREFUSED).
+  const native = await pingMcp({ mcpUrl: 'http://127.0.0.1:2/mcp', transport: null });
   assert.equal(native.verdict, 'unreachable');
   assert.match(native.error, /ECONNREFUSED/);
 });

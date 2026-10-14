@@ -6098,6 +6098,9 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
   margin-top: 6px;
   font: 13px/1.4 var(--mono);
   color: var(--ink-4);
+  /* A notify hook's names (OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL, its _TOKEN) are single words wider than a
+     phone: they break inside the row rather than scroll the page sideways. */
+  overflow-wrap: anywhere;
 }
 /* A definition that fails to load (GET /api/journeys loadError): a config
    fault, not a verdict — warn colour so it never reads as a healthy

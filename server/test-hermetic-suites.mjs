@@ -122,23 +122,38 @@ test('the children\'s STRIP list carries every variable the series added, both s
 });
 
 test('a child never sees the fetcher knobs a boot imports, nor an inherited per-org variable; a suite passes its own through extra', async () => {
-  const { STRIP, childEnv, ORG_PREFIX } = await import(SERVE_CHILD);
+  const { STRIP, childEnv, ORG_PREFIX, dropInheritedOrgVars } = await import(SERVE_CHILD);
   for (const k of ['ALLOW_LOCAL_MCP', 'MCP_TIMEOUT_MS', 'GRAFANA_DASHBOARD_LIMIT', 'GRAFANA_PANEL_LIMIT', 'GRAFANA_INCLUDE_JSON', 'DEBUG']) assert.ok(STRIP.includes(k), `STRIP names ${k}`);
   assert.equal(ORG_PREFIX, 'OBSERVOGRAM_ORG_');
-  const planted = { OBSERVOGRAM_ORG_ACME_MCP_TOKEN: 'from-the-shell', OBSERVOGRAM_ORG_DEFAULT_X: 'y', OBSERVOGRAM_MCP_TIMEOUT_MS: '1', TOMOGRAPH_DEBUG: '1' };
+  // Windows reads an environment name in any case, so a lower- or mixed-case name a shell exported is the
+  // upper-case variable to a child there: both kinds are planted.
+  const planted = {
+    OBSERVOGRAM_ORG_ACME_MCP_TOKEN: 'from-the-shell', OBSERVOGRAM_ORG_DEFAULT_X: 'y', OBSERVOGRAM_MCP_TIMEOUT_MS: '1', TOMOGRAPH_DEBUG: '1',
+    observogram_org_beta_mcp_token: 'lower-case', Observogram_Auth: 'off',
+  };
   const saved = Object.fromEntries(Object.keys(planted).map((k) => [k, process.env[k]]));
   Object.assign(process.env, planted);
+  const upper = (env) => Object.keys(env).map((k) => k.toUpperCase());
   try {
     const env = childEnv(null);
-    assert.deepEqual(Object.keys(env).filter((k) => k.startsWith(ORG_PREFIX)), [], 'every inherited OBSERVOGRAM_ORG_* is deleted');
+    assert.deepEqual(upper(env).filter((k) => k.startsWith(ORG_PREFIX)), [], 'every inherited OBSERVOGRAM_ORG_* is deleted, whatever its case');
     assert.equal(env.OBSERVOGRAM_MCP_TIMEOUT_MS, undefined);
     assert.equal(env.TOMOGRAPH_DEBUG, undefined);
+    assert.equal(upper(env).includes('OBSERVOGRAM_AUTH'), false, 'a STRIP name is deleted whatever its case');
     const own = childEnv(null, { OBSERVOGRAM_ORG_ACME_MCP_TOKEN: 'the-suite-s-own' });
-    assert.deepEqual(Object.keys(own).filter((k) => k.startsWith(ORG_PREFIX)), ['OBSERVOGRAM_ORG_ACME_MCP_TOKEN']);
+    assert.deepEqual(upper(own).filter((k) => k.startsWith(ORG_PREFIX)), ['OBSERVOGRAM_ORG_ACME_MCP_TOKEN']);
     assert.equal(own.OBSERVOGRAM_ORG_ACME_MCP_TOKEN, 'the-suite-s-own', 'extra is applied after the strip');
   } finally {
     for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
+  // The suites' half, over an environment of their own: a per-org name in any case goes, nothing else does.
+  const suiteEnv = { observogram_org_beta_mcp_token: 'a', OBSERVOGRAM_ORG_ACME_MCP_TOKEN: 'b', Observogram_Org_X: 'c', OBSERVOGRAM_WORKSPACE: 'w', PATH: 'p' };
+  dropInheritedOrgVars(suiteEnv);
+  assert.deepEqual(suiteEnv, { OBSERVOGRAM_WORKSPACE: 'w', PATH: 'p' });
+  // No suite drops them with a loop of its own: a hand loop compares the name's spelling.
+  const HAND_LOOP_RE = /for \(const k of Object\.keys\(process\.env\)\)[^\n]*delete process\.env\[k\]/;
+  const hand = suites.filter((f) => HAND_LOOP_RE.test(readFileSync(join(HERE, f), 'utf8')));
+  assert.deepEqual(hand, [], `a suite drops the inherited per-org variables with dropInheritedOrgVars() from ${SERVE_CHILD}, never a loop of its own: ${hand.join(', ')}`);
 });
 
 const GOOD = `import { readFileSync } from 'node:fs';

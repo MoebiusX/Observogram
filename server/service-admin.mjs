@@ -39,8 +39,8 @@ import {
   listEnvironmentsForOrg, updateEnvironment,
 } from './store/environments.mjs';
 import {
-  assertNoCredential, countBound, createMcpEndpoint, deleteMcpEndpoint, envNameOwnedBy, envNameOwnerText, envNameShapeText,
-  getMcpEndpoint, listMcpEndpoints, updateMcpEndpoint,
+  assertNoCredential, countBound, createMcpEndpoint, deleteMcpEndpoint, envNameHookText, envNameOwnedBy, envNameOwnerText, envNameShapeText,
+  getMcpEndpoint, isOrgHookShaped, listMcpEndpoints, updateMcpEndpoint,
 } from './store/mcp-endpoints.mjs';
 import { getPack } from './store/packs.mjs';
 import { listLinksForOrg, listPacksForService, listServicesForPack } from './store/pack-services.mjs';
@@ -469,7 +469,9 @@ function hasUserinfo(raw) {
 // `mcpEndpointId` — the org's endpoint record, whose URL is fetched and
 // whose READ token (forWrite: false — refresh-live, draft-from-mcp) comes
 // from the named variable when the request sends no mcpAuth, after the
-// variable's ownership is checked again against the orgs that exist now.
+// variable's ownership is checked again against the orgs that exist now,
+// and that it is no org's notify hook variable (a name registered before
+// that rule; a hook's variables go only to its webhook).
 // With forWrite (deploy, rollback) the record's URL only: write tokens
 // stay per-request pass-through. `caller` (mcpCallerOf(req)) is required —
 // a call site that names none throws, fail closed. A typed URL with
@@ -506,6 +508,7 @@ export function resolveMcpTarget(db, body = {}, { forWrite = false, caller } = {
         const text = owners.length ? envNameOwnerText(ep.readTokenEnv, owners) : envNameShapeText(ep.readTokenEnv, org);
         return bad(`${text}${WAYS.anotherVariable(ep.id)}`);
       }
+      if (isOrgHookShaped(db, ep.readTokenEnv)) return bad(`${envNameHookText(db, ep.readTokenEnv, org)}${WAYS.anotherVariable(ep.id)}`);
     }
     mcpUrl = ep.url;
     mcpAuth = sentAuth ?? (readsToken ? process.env[ep.readTokenEnv] ?? MISSING : null);

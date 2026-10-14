@@ -15,7 +15,7 @@
 // reads the same in both places.
 
 import { state } from './state.mjs';
-import { api } from './api.mjs';
+import { api, getActiveOrg } from './api.mjs';
 import { escapeHtml, toast } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { announce, emptyStateHtml, listSentence, plural } from './ux-kit.mjs';
@@ -91,6 +91,53 @@ export const CHECK_OUTCOMES = {
 };
 export const checkOutcome = (key) => CHECK_OUTCOMES[key] || CHECK_OUTCOMES.unknown;
 
+// A journey notifies through one of its org's notify hooks, a variable pair
+// the server's operator sets: OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL and its
+// _TOKEN (server/notify-target-policy.mjs; GET /api/journeys/notify-hooks
+// lists them). KEY is the org id in capitals with - as _ — it mirrors
+// orgEnvPrefix in server/store/mcp-endpoints.mjs, which the browser does not
+// load. The org is the studio's active one, null without memberships
+// (OBSERVOGRAM_AUTH=off, the bearer), and the default org's id is not always
+// `default`: an unknown org is written <KEY> and said so, never guessed.
+const knownOrg = (org) => typeof org === 'string' && org !== '';
+export function notifyHookExample(org) {
+  return `OBSERVOGRAM_ORG_${knownOrg(org) ? org.toUpperCase().replaceAll('-', '_') : '<KEY>'}_NOTIFY_<HOOK>_URL`;
+}
+// What <KEY> stands for, when the example has to write it.
+export const notifyKeyNote = (org) => (knownOrg(org) ? '' : ' <KEY> is this org\'s id in capitals, with - as _.');
+// GET /api/journeys' notifyUnavailable: the server's sentence when no notify
+// hook can be set for the org it answered for — another org's id takes every
+// name of its hook shape (server/notify-target-policy.mjs hooksAllTaken), so
+// the listing never holds one and a run refuses every name. The journey
+// listing loaders note it per org (fetchJourneyListing) and the hints say it,
+// as one sentence, in place of a hook to add, which no name could satisfy; for
+// an org no listing has answered for, the hook example as before.
+const unavailableByOrg = new Map();
+const orgKey = (org) => (knownOrg(org) ? org : null);
+export const notifyUnavailableOf = (org) => unavailableByOrg.get(orgKey(org)) ?? null;
+export async function fetchJourneyListing(fetchFn = api) {
+  const org = getActiveOrg();
+  const listing = await fetchFn('/api/journeys');
+  const none = listing?.notifyUnavailable;
+  unavailableByOrg.set(orgKey(org), typeof none === 'string' && none ? `${none[0].toUpperCase()}${none.slice(1)}.` : null);
+  return listing;
+}
+function notifyRemedy(org) {
+  return notifyUnavailableOf(org) ?? `Add notify: { urlEnv: ${notifyHookExample(org)} } to the journey file to be warned when it changes — one of this org's notify hooks, which the server's operator sets (GET /api/journeys/notify-hooks lists them).${notifyKeyNote(org)}`;
+}
+
+// A declared notify block (GET /api/journeys' `notify`): what a server run
+// would answer when it refuses the journey (`problem`, the run's own text —
+// the Neuron view says it after any delivery too), else, before any
+// delivery, what is set up. The run's text opens `journey <name> is not run: `
+// (server/notify-target-policy.mjs); this line's own lead says that, so the
+// run's is left out. Plain text; the caller escapes it.
+const RUN_LEAD = /^journey [\s\S]*? is not run: /;
+export function notifySetupLine(notify) {
+  if (notify?.problem) return `The server will not run this journey as it stands: ${String(notify.problem).replace(RUN_LEAD, '')}`;
+  return `Set up: posts ${notify?.on || 'transitions'} to the webhook in $${notify?.urlEnv}.`;
+}
+
 // Delivery of the newest record (neuron-model.mjs deliveryState). A failed
 // delivery is its own outcome: the check ran, but nobody was warned.
 export const DELIVERY_OUTCOMES = {
@@ -99,7 +146,7 @@ export const DELIVERY_OUTCOMES = {
   failed:           { label: 'Notification failed', chip: 'fail', meaning: 'The check ran, but its notification could not be delivered: nobody was warned.',
     remedy: 'Check the webhook env var and the endpoint behind it; the result is kept here either way.' },
   'not-configured': { label: 'No notifications set up', chip: 'muted', meaning: 'This journey has no notify: block, so its results show only in the studio.',
-    remedy: 'Add notify: { urlEnv: MY_WEBHOOK_URL } to the journey file to be warned when it changes.' },
+    get remedy() { return notifyRemedy(getActiveOrg()); } },
   unknown:          { label: 'Delivery unknown', chip: 'muted', meaning: 'The record was written before delivery finished; the next run will tell.' },
 };
 
@@ -219,7 +266,7 @@ export function renderCaptureBar(host) {
 // load). Throws when the listing itself cannot be read. `fetchFn` is
 // injectable (docs/UI_CONVENTIONS.md §2).
 export async function loadJourneysData({ fetchFn = api, limit = 20 } = {}) {
-  const { journeys = [] } = await fetchFn('/api/journeys');
+  const { journeys = [] } = await fetchJourneyListing(fetchFn);
   const runsByName = {};
   let stackLib = null;
   let schedLib = null;

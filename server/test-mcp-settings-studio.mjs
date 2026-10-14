@@ -105,19 +105,19 @@
 // The two knobs are read before the strip (STRIP carries both so no child sees them).
 const PLAYWRIGHT = process.env.OBSERVOGRAM_PLAYWRIGHT || 'playwright';
 const REQUIRED = process.env.OBSERVOGRAM_MCP_SETTINGS_SMOKE === 'require';
-const { STRIP, serve, signIn } = await import('./fixtures/serve-child.mjs');
+const { STRIP, serve, signIn, dropInheritedOrgVars } = await import('./fixtures/serve-child.mjs');
 for (const k of STRIP) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
 }
-for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
+dropInheritedOrgVars();
 
 const { test, before, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
-const { join, resolve, dirname } = await import('node:path');
-const { fileURLToPath } = await import('node:url');
+const { join, resolve, dirname, isAbsolute } = await import('node:path');
+const { fileURLToPath, pathToFileURL } = await import('node:url');
 
 const { hashPassword } = await import('./auth.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
@@ -135,7 +135,8 @@ const SECRET = `S3cr3t-${Math.random().toString(36).slice(2, 10)}${Math.random()
 const API_KEY = `k3y-${Math.random().toString(36).slice(2, 12)}`;
 
 async function loadPlaywright() {
-  try { return { pw: await import(PLAYWRIGHT) }; }
+  // An absolute path, a Windows one too, is imported as its file URL (import() takes a URL or a package name).
+  try { return { pw: await import(isAbsolute(PLAYWRIGHT) ? pathToFileURL(PLAYWRIGHT).href : PLAYWRIGHT) }; }
   catch (e) { return { error: `cannot import ${PLAYWRIGHT}: ${e.message.split('\n')[0]}` }; }
 }
 
@@ -862,9 +863,12 @@ function proxyStudio() {
 }
 after(async () => { if (proxyChild) await (await proxyChild).stop(); });
 
+// Every file under `dir` as bytes, but a database's -shm: the WAL index holds page numbers, salts and
+// checksums, never a row's bytes, and on Windows the live server's SQLite holds byte-range locks on it
+// that make a read across them fail (EBUSY).
 function filesUnder(dir) {
   const out = [];
-  const walk = (d) => { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) walk(p); else out.push([p, readFileSync(p)]); } };
+  const walk = (d) => { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) walk(p); else if (!n.endsWith('-shm')) out.push([p, readFileSync(p)]); } };
   walk(dir);
   return out;
 }

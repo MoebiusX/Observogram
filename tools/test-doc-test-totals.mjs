@@ -127,10 +127,11 @@ test('each batch delivery report exists and quotes the journey\'s measured total
   assert.deepEqual(problems, [], 'the delivery report states the totals the journey measured');
 });
 
-// The suites batch 2 and rebadge batches 3 and 4 added (the two MCP ping
-// suites and the four MCP server-settings suites, which review fixes grew),
-// and the three of the follow-up compare-in-bundle, which its commits grew
-// one by one, each a flat file of top-level `test(` calls (no subtests, no loops), so the
+// The suites batch 2, rebadge batches 3 and 4 and the follow-ups
+// journey-notify-env-ownership and compare-in-bundle added (the two MCP ping
+// suites, the four MCP server-settings suites, which review fixes grew, the
+// notify-hook suite, and the three of compare-in-bundle, which its commits grew
+// one by one), each a flat file of top-level `test(` calls (no subtests, no loops), so the
 // number of tests it holds is the number of lines that start with `test(`. The journey narrates how many tests each
 // `Tests: a → b` note put into such a suite — `` `file` 9 `` on its creation,
 // `two in `file``, `one more test in `file`` as it grows — and those
@@ -155,6 +156,7 @@ const LEDGER = [
   'server/test-mcp-settings.mjs',
   'tools/test-mcp-settings-model.mjs',
   'server/test-mcp-settings-studio.mjs',
+  'server/test-notify-target-policy.mjs',
   'tools/test-static-remedies.mjs',
   'tools/test-bundle-compare.mjs',
   'tools/test-bundle-compare-pairs.mjs',

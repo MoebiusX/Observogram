@@ -47,7 +47,7 @@ import { Worker } from 'node:worker_threads';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { boot, serve, childEnv, signIn, STRIP } from './fixtures/serve-child.mjs';
+import { boot, serve, childEnv, signIn, STRIP, dropInheritedOrgVars } from './fixtures/serve-child.mjs';
 import { startFakeMcp, registerMcpEndpoint, EXAMPLE_SETTINGS_DESCRIPTOR } from './fixtures/fake-mcp.mjs';
 
 // Hermetic (§0): this process strips the children's list too, both spellings,
@@ -57,7 +57,7 @@ for (const k of STRIP) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
 }
-for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
+dropInheritedOrgVars();
 const { readSettingsPolicyConfig, MCP_SETTINGS_POLICY_ENV, MCP_ADMIN_PROXY_ENV } = await import('./mcp-settings-policy.mjs');
 const { hashPassword } = await import('./auth.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
@@ -311,13 +311,15 @@ async function studio(env = {}) {
   return { ...s, ws, headers, post, register, audit };
 }
 
-// Every file under `dir` as bytes.
+// Every file under `dir` as bytes, but a database's -shm: the WAL index holds page numbers, salts and
+// checksums, never a row's bytes, and on Windows the live server's SQLite holds byte-range locks on it
+// that make a read across them fail (EBUSY).
 function filesUnder(dir) {
   const out = [];
   const walk = (d) => {
     for (const name of readdirSync(d)) {
       const p = join(d, name);
-      if (statSync(p).isDirectory()) walk(p); else out.push([p, readFileSync(p)]);
+      if (statSync(p).isDirectory()) walk(p); else if (!name.endsWith('-shm')) out.push([p, readFileSync(p)]);
     }
   };
   if (existsSync(dir)) walk(dir);
@@ -604,7 +606,7 @@ const BANG = '^.*_{0,60}_{0,60}_{0,60}_{0,60}!$';
 // its own start); the slow pattern, minutes long, misses it all the same.
 const GENEROUS_MS = 1000;
 
-test('evaluatePolicy: each rule has the deadline from its own start; one that does not finish counts as matched, its warn and ack apply, and so does every rule after it (never run); a fast rule before it is evaluated as written; one line names the rules, never the value', async () => {
+test('evaluatePolicy: each rule has the deadline from its own start; one that does not finish counts as matched, its warn and ack apply, and so does every rule after it (never run); a fast rule before it is evaluated as written; one line names the rules, never the value', async (t) => {
   assert.equal(POLICY_EVAL_DEADLINE_MS, 100, 'the default, the route\'s');
   const { policy, errors } = compileSettingsPolicy({ version: 1, rules: [
     { when: { field: 'url', pattern: '^https://slow\\.example/' }, warn: 'Fast match.', require: { ack: 'ack 0' } },
@@ -618,7 +620,9 @@ test('evaluatePolicy: each rule has the deadline from its own start; one that do
   const lines = [];
   const t0 = Date.now();
   const out = await evaluatePolicy(policy, d, { url: value, user: 'bob' }, { deadlineMs: GENEROUS_MS, log: (l) => lines.push(l) });
-  assert.ok(Date.now() - t0 < 15_000, `answered at the slow rule's deadline, not when its pattern ends minutes later (${Date.now() - t0} ms)`);
+  const tookMs = Date.now() - t0;
+  t.diagnostic(`bound: evaluatePolicy answers at the slow rule's deadline, not when its pattern ends: ${tookMs} ms < 15000 ms`);
+  assert.ok(tookMs < 15_000, `answered at the slow rule's deadline, not when its pattern ends minutes later (${tookMs} ms)`);
   assert.deepEqual(out.timedOut, [2, 3]);
   assert.deepEqual(out.findings.map((f) => [f.rule, f.field, f.ack, f.timedOut === true]), [[0, 'url', 'ack 0', false], [2, 'url', 'ack 2', true], [3, 'user', 'ack 3', true]]);
   assert.equal(out.findings[1].note, `Policy rule 3 did not finish within ${GENEROUS_MS} ms, so it counts as matched`);
@@ -822,7 +826,7 @@ test('each rule\'s deadline runs from its own start: two rules that each take 0.
 
 // A blocked server would answer only once the pattern ends, minutes later, so
 // bounds of seconds prove it kept answering, whatever the machine's load.
-test('a slow policy pattern costs its acknowledgement, never the server: the submit is a 409 within seconds naming the rule, the server answers meanwhile, with the ack the configure goes; the log names the rule and the default 100 ms, never the value', { timeout: 60_000 }, async () => {
+test('a slow policy pattern costs its acknowledgement, never the server: the submit is a 409 within seconds naming the rule, the server answers meanwhile, with the ack the configure goes; the log names the rule and the default 100 ms, never the value', { timeout: 60_000 }, async (t) => {
   const f = await fakeMcp({ descriptor: null });
   const policyFile = file('policy-slow.json', JSON.stringify({ version: 1, rules: [{ when: { type: 'url', pattern: BANG }, warn: 'Unreviewed backend.', require: { ack: 'I reviewed the backend' } }] }));
   const s = await studio({ OBSERVOGRAM_MCP_SETTINGS_POLICY: policyFile });
@@ -834,9 +838,13 @@ test('a slow policy pattern costs its acknowledgement, never the server: the sub
   const g0 = Date.now();
   const r = await fetch(`${s.base}/api/mcp-settings`, { headers: s.headers('ada'), signal: AbortSignal.timeout(10_000) });
   assert.equal(r.status, 200);
-  assert.ok(Date.now() - g0 < 10_000, `another request answers while the submit is checked (${Date.now() - g0} ms)`);
+  const otherMs = Date.now() - g0;
+  t.diagnostic(`bound: another request answers while the submit is checked: ${otherMs} ms < 10000 ms`);
+  assert.ok(otherMs < 10_000, `another request answers while the submit is checked (${otherMs} ms)`);
   const r1 = await pending;
-  assert.ok(Date.now() - t0 < 15_000, `the submit answers within the worker's start and the deadline, not when the pattern ends (${Date.now() - t0} ms)`);
+  const submitMs = Date.now() - t0;
+  t.diagnostic(`bound: the submit answers within the worker's start and the deadline: ${submitMs} ms < 15000 ms`);
+  assert.ok(submitMs < 15_000, `the submit answers within the worker's start and the deadline, not when the pattern ends (${submitMs} ms)`);
   assert.deepEqual([r1.status, r1.json.denied, r1.json.rule, r1.json.error], [409, 'policy-ack', 0, 'Unreviewed backend. — tick "I reviewed the backend" in the server settings']);
   assert.equal(r1.json.unevaluated, true, 'the server says it could not check the rule');
   assert.ok(!r1.text.includes('_'.repeat(20)), 'the answer never echoes the value');

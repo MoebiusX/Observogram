@@ -123,6 +123,10 @@ export const ROUTES = Object.freeze({
   'GET /api/deploys': { class: 'viewer' },
   'GET /api/deploys/:deployId/rollback-plan': { class: 'viewer' },
   'GET /api/journeys': { class: 'viewer' },
+  // The org's notify hooks (server/notify-target-policy.mjs): names and
+  // whether each is usable — never a value or origin; the list a journey's
+  // notify chooses from.
+  'GET /api/journeys/notify-hooks': { class: 'viewer' },
   'GET /api/journeys/:name/runs': { class: 'viewer' },
   'GET /api/journeys/:name/schedule': { class: 'viewer' },
   'GET /api/packs/:id/compile/:target': { class: 'viewer' },

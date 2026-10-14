@@ -17,7 +17,7 @@ import { mkdtempSync, rmSync, writeFileSync, cpSync, mkdirSync, readFileSync, ex
 import { execFileSync } from 'node:child_process';
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildInfo, buildLabel, buildShortLabel, readBuildInfo, BUILD_FILE } from '../server/build-info.mjs';
 import { loadBuildInfo, loadHealth, buildLabelModel, renderBuildLabel, renderVersionChrome } from '../studio/build-label.mjs';
 import { DEFAULT_BRAND, normalizeBrand, brandChrome } from './lib/brand.mjs';
@@ -227,7 +227,7 @@ try {
     // build unknown, commit and branch known — and stamp-build refuses to
     // bake the clone depth in as a build number
     const shallow = join(SCRATCH, 'shallow');
-    git(SCRATCH, 'clone', '-q', '--depth', '1', `file://${repo.replace(/\\/g, '/')}`, shallow);
+    git(SCRATCH, 'clone', '-q', '--depth', '1', pathToFileURL(repo).href, shallow);
     const shallowInfo = readBuildInfo(shallow);
     assert(shallowInfo.source === 'git' && shallowInfo.shallow === true, 'a shallow clone reads source git, shallow true', shallowInfo);
     assert(shallowInfo.build === null && shallowInfo.commit === sha && shallowInfo.branch === branch && shallowInfo.dirty === false,

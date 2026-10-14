@@ -49,11 +49,12 @@
 // vantage is never worded as a failed check.
 
 import { state } from './state.mjs';
-import { api } from './api.mjs';
+import { api, getActiveOrg } from './api.mjs';
 import { escapeHtml, toast } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import {
   renderCaptureBar, renderJourneyCards, CHECK_OUTCOMES, checkOutcome, DELIVERY_OUTCOMES, runResultText, runErrorText, runAllText,
+  notifyHookExample, notifyKeyNote, notifySetupLine, notifyUnavailableOf, fetchJourneyListing,
 } from './journeys-view.mjs';
 import {
   decisionHeaderHtml, wireUxActions, emptyStateHtml, disclosureHtml, termHtml, announce, plural, listSentence,
@@ -97,9 +98,9 @@ async function neuronLibs() {
 
 // ---------- loader ----------
 
-export async function loadNeuronData({ fetchFn = api, window = 50 } = {}) {
-  const { model } = await neuronLibs();
-  const { journeys = [] } = await fetchFn('/api/journeys');
+export async function loadNeuronData({ fetchFn = api, window = 50, libs = neuronLibs } = {}) {
+  const { model } = await libs();
+  const { journeys = [] } = await fetchJourneyListing(fetchFn);
   const runsByName = {};
   await Promise.all(journeys.map(async (j) => {
     try { runsByName[j.name] = (await fetchFn(`/api/journeys/${enc(j.name)}/runs?limit=${window}`)).runs || []; }
@@ -509,11 +510,28 @@ function evidenceLine(d, c) {
   return ['Evidence', facts || 'The record carries no drift or grade facts.'];
 }
 
-function deliveryLine(d, c) {
+// The evidence block's hint for a record without notify: one of this org's
+// notify hooks (journeys-view.mjs notifyHookExample), never a bare name — or,
+// for an org whose every hook name another org's id takes, the server's
+// sentence that none can be set (journeys-view.mjs notifyUnavailableOf).
+// Exported for tools/test-neuron-model.mjs.
+export function notifyHintHtml(org) {
+  const none = notifyUnavailableOf(org);
+  if (none) return escapeHtml(none);
+  return `Add <code>notify: { urlEnv: ${escapeHtml(notifyHookExample(org))} }</code> to the journey file to post transitions to a webhook — one of this org's notify hooks, set by the server's operator; the URL and token stay in the server's environment.${escapeHtml(notifyKeyNote(org))}`;
+}
+
+// The Notification row: the newest record's delivery, or what is set up
+// before any — and, whatever the newest record says, the server's refusal
+// when a server run would refuse the journey as it stands (GET
+// /api/journeys' notify.problem): a journey that notified before the rule,
+// or through the CronJob's CLI, is flagged too (DOWNSTREAM §17.2 step 1).
+// Exported for tools/test-neuron-model.mjs.
+export function deliveryLine(d, c) {
   const ds = c.delivery;
   if (!ds) {
     return d.notify
-      ? `Set up: posts ${escapeHtml(d.notify.on || 'transitions')} to the webhook in <code>$${escapeHtml(d.notify.urlEnv)}</code>.`
+      ? escapeHtml(notifySetupLine(d.notify))
       : `${deliveryChipHtml('not-configured')} <span class="nrn-rec-meaning">${escapeHtml(DELIVERY_OUTCOMES['not-configured'].meaning)}</span>`;
   }
   const x = DELIVERY_OUTCOMES[ds] || DELIVERY_OUTCOMES.unknown;
@@ -522,7 +540,8 @@ function deliveryLine(d, c) {
     : ds === 'skipped' ? (n.reason || x.meaning)
       : ds === 'failed' ? `${x.meaning}${n.error ? ` ${n.error}` : ''}${n.httpStatus != null ? ` (HTTP ${n.httpStatus})` : ''}`
         : x.meaning;
-  return `${deliveryChipHtml(ds)}${detail ? ` <span class="nrn-rec-meaning">${escapeHtml(detail)}</span>` : ''}`;
+  const refused = d.notify?.problem ? `<br>${escapeHtml(notifySetupLine(d.notify))}` : '';
+  return `${deliveryChipHtml(ds)}${detail ? ` <span class="nrn-rec-meaning">${escapeHtml(detail)}</span>` : ''}${refused}`;
 }
 
 function scheduleLine(d, c) {
@@ -1045,7 +1064,7 @@ function renderLatestDetails(d) {
   parts.push(details(`Notification <span class="nrn-muted">${escapeHtml(nTitle)}</span>`, n ? kv([
     ['status', n.status], ['http', n.httpStatus], ['reason', n.reason], ['policy', d.notify?.on || n.policy], ['format', d.notify?.format || n.format],
     ['triggers', Array.isArray(n.triggers) ? n.triggers.join(', ') : n.triggers], ['attempts', n.attempts], ['took', n.tookMs !== undefined ? `${n.tookMs} ms` : undefined], ['url env', n.urlEnv || d.notify?.urlEnv], ['auth env', n.authEnv || d.notify?.authEnv], ['error', n.error],
-  ]) : `<p class="nrn-muted">${n === null ? 'Add <code>notify: { urlEnv: MY_WEBHOOK_URL }</code> to the journey file to post transitions to a webhook — the URL and token stay env var names.' : 'A crash between the record write and the delivery write leaves no notify key; the next run tells.'}</p>`, { open: n?.status === 'failed', key: 'delivery' }));
+  ]) : `<p class="nrn-muted">${n === null ? notifyHintHtml(getActiveOrg()) : 'A crash between the record write and the delivery write leaves no notify key; the next run tells.'}</p>`, { open: n?.status === 'failed', key: 'delivery' }));
 
   // Schedule + snippets (lazy).
   parts.push(scheduleDetails(d));

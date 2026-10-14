@@ -501,7 +501,9 @@ Safe options:
    `<path>`, refusing an existing `<path>`. It captures committed rows
    while writers are active, as one rollback-journal file. The backup is
    `0600`, like the database, which `openStore` creates `0600` (its
-   `-wal` and `-shm` follow): both hold the password records.
+   `-wal` and `-shm` follow): both hold the password records. (`0600` is
+   not enforced on Windows, where the directory's ACL protects them; README
+   "Platforms".)
 
 The workspace files (packs, snapshots, journeys, runs, `deploys.jsonl`,
 `session-secret`) can be copied live as before. A workspace copy alone is
@@ -514,10 +516,11 @@ memberships or audit. This supersedes PRODUCTIZATION_PLAN Stage 4's
 refuses while the database is in use. It moves `observogram.db`, `-wal` and
 `-shm` aside together, then copies the backup in. The copy takes the
 replaced database's mode (owner read-write always) and, run as root, its
-owner; 0600 when there was none. A read-only backup must not become a
-read-only store the next open cannot switch to WAL. Copying a backup over the
-`.db` alone is never safe: a `-wal` left by an unclean stop is replayed onto
-it.
+owner; 0600 when there was none (not enforced on Windows, where the
+directory's ACL protects it; README "Platforms"). A read-only backup must
+not become a read-only store the next open cannot switch to WAL. Copying a
+backup over the `.db` alone is never safe: a `-wal` left by an unclean stop
+is replayed onto it.
 
 **Upgrade and rollback** (README and `deploy/k8s/README.md`, slices 1–2):
 - Set `OBSERVOGRAM_DB` before the first boot of a store build. To move an
