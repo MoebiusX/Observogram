@@ -2691,6 +2691,18 @@ and it refuses, deleting nothing:
   writes it and where a pre-store build started with
   `OBSERVOGRAM_USERS_FILE` set to it reads it: if that path no longer leads
   to the moved file, make it lead there again before you roll back.
+- **while the users file exists, no entry under `orgs/<id>/` is it, and an
+  entry there has its name** — the name its path ends in, as written or
+  through a link on it, ignoring case: a mount that is down keeps what was
+  written in its mount point meanwhile, so the path leads to such a file
+  now, and once the mount is back to the file of that name under
+  `orgs/<id>/`. The refusal names each such entry (and, for a link, what it
+  leads to under `orgs/<id>/`): move them out of `orgs/<id>/`, then run the
+  purge again; if the purge then refuses because the users file does not
+  exist, delete `orgs/<id>/` by hand and run the purge again. If one of
+  them is the users file, make the users file's path lead to it again
+  before you roll back. An entry of that name that is not the users file
+  is refused alike.
 - **while a recorded users file — or, with none recorded,
   `<workspace>/users.json` as a link — does not exist and its path does not
   lead under `orgs/<id>/`**, since a filesystem not mounted now may lead it

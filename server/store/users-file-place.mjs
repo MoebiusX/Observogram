@@ -55,18 +55,28 @@
 //     renamed while it ran, from a directory not read yet into one read already (the users file, or a directory holding
 //     it), was in neither listing. A directory that changed is refused; stopping what changes it and running purge-org
 //     again is its way out.
+//   - and then an entry under the root with its name — the name its path ends in, as written or at each link it leads
+//     through, compared ignoring case and Unicode normalization: a mount that is down keeps what was written in its mount
+//     point meanwhile, so the path leads to such a file now, and mounted again to the file of that name in the directory
+//     mounted there, under the root. It is refused, naming each such entry and, for one that is a link, what it leads to
+//     under the root (rmSync deletes that once the link is moved); moving them out of the root is its way out. An entry of
+//     that name that is not the users file is refused too (a declared false refusal). A view of a directory under the root
+//     shows its names, so the users file seen through one that reports neither the inode nor the size and modification
+//     time is refused by its name.
 //
 // Without /proc/self/mountinfo (off Linux, or /proc not mounted), a bind mount under the root of a directory from
 // outside it, on the same filesystem, is a directory to lstatSync (the same device), and the walk enters it; and any
 // entry on another device than its directory is refused as a mount point, a lower layer's file of an overlay mount whose
 // layers lie on different filesystems too (on Linux with /proc not mounted: a false refusal, whose way out is to mount
 // proc at /proc, `mount -t proc proc /proc`, then run purge-org again). A view that reports neither the inode nor the
-// size and modification time (some FUSE filesystems) is not matched; and a recorded path that passes through a link
-// under the root keeps the file the link leads to (rmSync deletes the link alone), but leads nowhere once it is gone.
-// Not seen either: what another process moves, links or mounts under the root after the check, before rmSync takes it;
-// a directory changed and changed back within one tick of a coarse filesystem clock, its change time and names as they
-// were; and a same-filesystem bind mount made on a directory under the root after /proc/self/mountinfo was read, before
-// the walk reaches it.
+// size and modification time (some FUSE filesystems) is not matched as the users file (through a view of a directory, by
+// its name, above); and a recorded path that passes through a link under the root keeps the file the link leads to
+// (rmSync deletes the link alone), but leads nowhere once it is gone. Not seen either: what another process moves, links
+// or mounts under the root after the check, before rmSync takes it; a directory changed and changed back within one tick
+// of a coarse filesystem clock, its change time and names as they were; a same-filesystem bind mount made on a directory
+// under the root after /proc/self/mountinfo was read, before the walk reaches it; and, through a mount that is down,
+// what the name does not tell — a file mounted on a file of another name, its mount point a file of its own, or what a
+// link of that name under the root leads to back through the mount that is down.
 //
 // usersFilePlace(file, root, { recorded, id, fs, path, windows }) → { exists, refusal }: exists is whether the users
 // file's path leads to a file now (true), or not (false), or null when the check stopped before it could tell;
@@ -320,11 +330,49 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     const changed = read.find(({ at, was, names }) => {
       try { return state(lstat(at)) !== was || namesOf(listing(at)) !== names; } catch { return true; }
     });
-    if (!changed) return { exists: true, refusal: null };
-    const { at } = changed;
-    return stopped(`${at === root ? root : `${named(at)} under ${root}`} changed while purge-org read ${at === root ? 'it' : root} (an entry added, `
-      + `removed or renamed in it, or a mount over it), so purge-org cannot tell what deleting ${root} takes — nothing was deleted. `
-      + `Stop what changes files under ${root}, then run purge-org again`);
+    if (changed) {
+      const { at } = changed;
+      return stopped(`${at === root ? root : `${named(at)} under ${root}`} changed while purge-org read ${at === root ? 'it' : root} (an entry added, `
+        + `removed or renamed in it, or a mount over it), so purge-org cannot tell what deleting ${root} takes — nothing was deleted. `
+        + `Stop what changes files under ${root}, then run purge-org again`);
+    }
+    // A mount that is down keeps what was written in its mount point meanwhile: a file of the users file's name there is
+    // what its path leads to now, and mounted again the path leads to the file of that name in the directory mounted
+    // there — under the root. So an entry under the root with the name the path ends in, as written or at a link it leads
+    // through (compared ignoring case and Unicode normalization, as a case-insensitive filesystem may look a name up), is
+    // refused; one that is a link names what it leads to under the root too, which rmSync deletes while the link moves.
+    const fold = (s) => s.normalize('NFC').toLowerCase();
+    const ends = new Set();
+    for (let at = file, hops = 0; hops <= MAX_LINKS; hops += 1) {
+      ends.add(fold(path.basename(at)));
+      try {
+        if (!lstat(at).isSymbolicLink()) break;
+        at = path.resolve(fs.realpathSync(path.dirname(at)), fs.readlinkSync(at));
+      } catch { break; }
+    }
+    const nameOf = (p) => (typeof p === 'string' ? path.basename(p) : p.subarray(p.lastIndexOf(path.sep.charCodeAt(0)) + 1).toString('utf8'));
+    const namesakes = entries.slice(1).filter((e) => ends.has(fold(nameOf(e.path))));
+    const links = namesakes.filter((e) => e.st.isSymbolicLink());
+    const targets = [];
+    for (const link of links) {
+      let to;
+      try { to = stat(link.path); } catch { continue; }
+      for (const e of entries.slice(1)) if (same(e.st, to) && !namesakes.includes(e) && !targets.includes(e)) targets.push(e);
+    }
+    if (!namesakes.length) return { exists: true, refusal: null };
+    const pathsOf = (es) => list(es.map((e) => named(e.path)).sort());
+    const them = pathsOf([...namesakes, ...targets]);
+    return {
+      exists: true,
+      refusal: `${who} is no file under ${root}, but ${pathsOf(namesakes)} under it ${namesakes.length === 1 ? 'has' : 'have'} its name`
+        + (targets.length ? `, and ${pathsOf(targets)} ${targets.length === 1 ? 'is' : 'are'} what `
+          + `${links.length === 1 ? 'a link of that name leads' : 'links of that name lead'} to` : '')
+        + ': a mount that is down keeps what was written in its mount point meanwhile, and mounted again it may lead the path there — '
+        + `nothing was deleted. Move ${them} out of ${root}, then run purge-org again; if it then refuses because ${file} does not exist `
+        + `(the users file seen there through a mount that cannot be traced back), delete ${root} by hand, then run purge-org again: it `
+        + `drops org ${id}'s records. If the users file is among them, make ${file} lead to it again before a pre-store build or the `
+        + 'in-place `packc store export` uses it',
+    };
   }
   const ids = kin.filter((e) => dev(e.st) === dev(st)).map((e) => named(e.path));
   const views = kin.filter((e) => dev(e.st) !== dev(st)).map((e) => named(e.path));

@@ -1,9 +1,10 @@
 // server/fixtures/mount-fs.mjs — a filesystem as node:fs's lstatSync, statSync, readdirSync, readlinkSync and
 // realpathSync answer it, and Linux's /proc/self/mountinfo, with what a test runner cannot make for real (no root, no
 // mount(8), maybe no symlink privilege): several filesystems, bind mounts, a mount that is down (its mount point left
-// empty), views of a directory through another filesystem as an NFS, SMB, overlay or FUSE mount reports them, a
-// directory nobody may read or search, and link loops — on POSIX paths or, with node:path's Windows rules, on Windows
-// ones (server/test-store-ops.mjs, the users-file place suite over server/store/users-file-place.mjs).
+// empty, or holding what was written in it meanwhile), views of a directory through another filesystem as an NFS, SMB,
+// overlay or FUSE mount reports them, a directory nobody may read or search, and link loops — on POSIX paths or, with
+// node:path's Windows rules, on Windows ones (server/test-store-ops.mjs, the users-file place suite over
+// server/store/users-file-place.mjs).
 //
 // Imports nothing: the caller passes node:path's posix or win32, so tools/test-platform.mjs's P5 holds.
 //

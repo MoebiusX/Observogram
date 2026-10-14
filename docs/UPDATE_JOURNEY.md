@@ -1550,3 +1550,18 @@ such a name as bytes, so the users file, a mount point or a directory it
 cannot read below it is refused; a refusal names that path as a POSIX
 shell's `$'…'` spells it, so moving the users file out, as the refusal says,
 can be typed. Tests: 1441 → 1442 (one more in `server/test-store-ops.mjs`).
+
+Failing closed through a mount that is down held only while the users file
+did not exist, and a mount that is down keeps what was written in its mount
+point meanwhile: with a `users.json` written in `/mnt/b` while the bind
+mount above was down, the recorded path led to that file, outside the root,
+and purge-org deleted `<root>/sub/users.json`, the users file the path leads
+to once the mount is back. When the users file exists and no entry is it, an
+entry under the root with its name — the name its path ends in, as written
+or at a link it leads through, ignoring case — is now refused, naming each
+such entry and what one that is a link leads to under the root; moving them
+out of the root is its way out. An entry of that name that is not the users
+file is refused alike (a declared false refusal), and the users file seen
+through a view of a directory under the root that reports neither its inode
+nor its size and time is refused by its name. Tests: 1442 → 1443 (one more
+in `server/test-store-ops.mjs`).
