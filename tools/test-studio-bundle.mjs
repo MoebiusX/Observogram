@@ -64,6 +64,7 @@ import { normalizeBrand, DEFAULT_BRAND, SHELL_ANCHORS } from './lib/brand.mjs';
 import * as artefactClassify from './lib/artefact-classify.mjs';
 import { bindTaxonomy } from '../studio/taxonomy.mjs';
 import { serve, childEnv } from '../server/fixtures/serve-child.mjs';
+import { readSettingsPolicyConfig } from '../server/mcp-settings-policy.mjs';
 // The board renderer the goldens are made with (its top level binds no override and reads the catalogue; isMain is false here).
 import { renderBoard, familiesOf, boardGroupCounts } from './test-golden-board.mjs';
 
@@ -1106,6 +1107,10 @@ test('T7 the REAL bundle boots in headless Chromium against the fixture pack: th
   // block, nothing logged.
   await page.evaluate(() => document.getElementById('mcp-btn').click());
   await page.waitForSelector('#mcp-panel:not([hidden])', { timeout: 10_000 });
+  // The Server settings button: no server, so no sign-in way in is named —
+  // the bundle's own sentences only (the server's live in its policy).
+  await page.waitForFunction(() => !/^Checking /.test(document.getElementById('mcp-settings-btn')?.dataset.why ?? 'Checking '), null, { timeout: 10_000 });
+  assert.doesNotMatch(await page.evaluate(() => document.getElementById('mcp-settings-btn').dataset.why), /sign-in|npm run users|OIDC/);
   await page.fill('#mcp-url', 'http://127.0.0.1:9/mcp');
   await page.click('#mcp-refresh-btn');
   await page.waitForFunction(() => /^error: 501: /.test(document.getElementById('mcp-ping-status')?.textContent || ''), null, { timeout: 10_000 });
@@ -1368,6 +1373,18 @@ test('T8d baked MCP settings: a --mcp-settings-policy bundle answers /api/mcp-se
   const typo = join(TMP, 'msp-typo.json');
   writeFileSync(typo, JSON.stringify({ version: 1, rules: [{ when: { field: 'grafanaUrl', pattren: '^x' }, warn: 'w' }] }));
   assert.throws(() => loadSettingsPolicyFile(typo, 'OBSERVOGRAM_MCP_SETTINGS_POLICY'), { message: `OBSERVOGRAM_MCP_SETTINGS_POLICY: ${typo}: rules[0].when: unknown key "pattren"` });
+  // The build keeps the id clocks the server's start-time load skips
+  // (`timed: false`): under a clock that jumps a second per read (a loaded
+  // build machine) the build refuses as too slow a policy the server loads.
+  const realNow = Date.now;
+  let tick = 0;
+  Date.now = () => (tick += 1000);
+  try {
+    assert.throws(() => loadSettingsPolicyFile(MSP), { message: `--mcp-settings-policy: ${MSP}: rules[0].when: pattern too slow against a ${artefactClassify.ID_MATCH_LENGTH}-character id` });
+    assert.deepEqual(readSettingsPolicyConfig({ OBSERVOGRAM_MCP_SETTINGS_POLICY: MSP }).policy, fixture);
+  } finally {
+    Date.now = realNow;
+  }
   assert.throws(() => buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', mcpSettingsPolicy: { version: 2, rules: [] } }), { message: 'MCP settings policy: version must be 1 (got 2)' });
   // The CLI: the summary and --json name what was baked — the file and the rule count, never a rule's text.
   const human = cli(['--check', '--mcp-settings-policy', MSP, '--mcp-origins', 'https://mcp.example.com,http://127.0.0.1:9000']);

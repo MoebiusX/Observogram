@@ -311,8 +311,11 @@ byte), T9 the baked bundle in headless Chromium.
 the file a server reads from `OBSERVOGRAM_MCP_SETTINGS_POLICY`): read with one
 leading byte-order mark stripped, parsed and compiled by
 `compileSettingsPolicy` (`tools/lib/mcp-server-settings.mjs`) as
-`server/mcp-settings-policy.mjs` does — a bad file fails the build with
-`--mcp-settings-policy: <path>: <reason>`, the server's texts — and served by
+`server/mcp-settings-policy.mjs` does, plus the id clocks the server's
+start-time load skips — a bad file fails the build with
+`--mcp-settings-policy: <path>: <reason>`, the server's texts, and a pattern
+a server loads can fail it as `rules[<i>].when: pattern too slow against a
+256-character id` — and served by
 the shim's `GET /api/mcp-settings` as `{ ok, proxy: false, policy, configured:
 true }`. `--mcp-origins <origin>,…` bakes the origins the bundle's Server
 settings modal may send settings to from a page not served on the MCP
@@ -1322,12 +1325,16 @@ start, served at `GET /api/mcp-settings`, baked into a bundle by
   `""` or `"i"`, with no quantified group and at most one unbounded
   quantifier — checks of shape, made at start. No start-time probe can
   prove a pattern fast on every value, so none refuses one: the
-  pass-through evaluates the policy in a worker with a 100 ms deadline, and
-  a rule that does not finish counts as matched (its warning shows, its
+  pass-through evaluates the policy in a worker with a 100 ms deadline per
+  rule, counted from the rule's own start, and a rule that does not finish
+  counts as matched, as do the rules after it (its warning shows, its
   acknowledgement is required, the server log names the rule and never the
-  value). The studio evaluates the policy in the page, where a slow pattern
-  freezes only that admin's tab. Keep patterns simple: a slow one costs every
-  sender its acknowledgement.
+  value); a worker that cannot start counts every rule as matched, and one
+  that fails every rule it did not finish.
+  A server started with V8 flags (`node --max-old-space-size=…`) starts the
+  worker without any flags. The studio evaluates the policy in the page,
+  where a slow pattern freezes only that admin's tab. Keep patterns simple:
+  a slow one costs every sender its acknowledgement.
 - **Matching.** A URL is matched as its normalised form (scheme and host
   lower-cased; a URL with a user or password before `@` is refused, not
   matched); a value is checked only when non-empty; a value over 512
@@ -1337,7 +1344,15 @@ start, served at `GET /api/mcp-settings`, baked into a bundle by
   ticked. Acknowledgements are never remembered — closed and reopened, they
   are unticked. An action that sends no field the rule matched (`disable`)
   skips them; one that carries the matched field waits for the ack, as the
-  pass-through does.
+  pass-through does. Through the pass-through, a rule its re-check names
+  (the 409 below) that the page's check did not flag — one the server could
+  not check, or one it matched — gets its acknowledgement in the modal too,
+  with a line saying which; an action that carries a field the rule checks
+  waits for it as for the page's own (the page's own box, when its check
+  flagged that rule on another field); ticked, the next send carries it,
+  exactly what an API caller's `acks` attest, and an edit of any value
+  but a secret takes it away (the page's check decides again; a secret,
+  which no rule reads, keeps it).
 - **`generic`** prefills the generic form's path, field names and API-key
   placement (`body` or `bearer`); the reader may change them per use and
   nothing is kept.
@@ -1367,7 +1382,11 @@ the reader's browser cannot reach it. The contract:
 - The paths are the server's: `<root>/admin/schema`, the endpoint the
   description declares (read again at submit), or the policy's
   `generic.path` (else `/configure`). The policy is re-checked (a missing
-  acknowledgement is `409 { denied: 'policy-ack', rule }`).
+  acknowledgement is `409 { denied: 'policy-ack', rule }`, with
+  `unevaluated: true` when the server could not check that rule — it did not
+  finish, the worker could not start or failed, it cannot run on the form,
+  or a value it checks is over 512 characters); the modal draws the named
+  rule's acknowledgement (§16.2).
 - One request with the platform's `fetch`, **never through the transport
   hook**: no redirect followed, 10 s, a capped read, exactly `Content-Type`,
   `Accept` and the description's own `Authorization`.

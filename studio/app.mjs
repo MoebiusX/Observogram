@@ -62,7 +62,7 @@ import {
 import { renderPingResult, renderGateLog, renderLiveResult } from './live-view.mjs';
 import { renderServerSettings } from './mcp-settings-view.mjs';
 import {
-  settingsGateModel, settingsTargetModel, descriptorReadModel, statusLine, ledeText, fieldInputSpec, actionNote, primaryBlock, actionBlock, policyView, verifiedLine,
+  settingsGateModel, settingsTargetModel, descriptorReadModel, statusLine, ledeText, fieldInputSpec, actionNote, primaryBlock, actionBlock, policyView, serverAckModel, secretsEmptiedLine, verifiedLine,
   proxyDescribeModel, proxyOutcomeModel,
 } from './mcp-settings-model.mjs';
 import { loadServerSettingsConfig, loadSettingsLibs, readDescriptorDirect, submitDirect, describeViaProxy, submitViaProxy } from './mcp-settings-api.mjs';
@@ -74,7 +74,7 @@ import {
   buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus,
   buildMemberAddBody, memberSaveStatus, orgRenameStatus, lastAdmin, leftOrgText,
   buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
-  mcpTargetModel, mcpTargetBody, mcpTargetMissingText, mcpRegisterCheck, profileEndpointNote, endpointDrift,
+  mcpTargetModel, mcpTargetBody, mcpTargetMissingText, rollbackTargetMissingText, mcpRegisterCheck, profileEndpointNote, endpointDrift,
   buildUsersSectionModel, buildUserCreateBody, userCreateStatus, userActionStatus, temporaryPassword,
   activeOrgChoice, isActingOrg, orgChipEntries, orgChipLabel, actingRecovery,
   buildOrgsSectionModel, buildOrgCreateBody, orgCreateStatus, orgRemoveStatus, buildJoinRoleSectionModel, joinRoleBody, joinRoleStatus,
@@ -3750,7 +3750,8 @@ function updateObservaServiceChip() {
     chip.setAttribute('aria-label', `Service ${m.label} — back to its page`);
     chip.onclick = () => enterServicePage(m.serviceId, state.serviceEnv);
   } else {
-    chip.removeAttribute('title');
+    // A label: its text is the whole name; the title shows it where the phone cap ellipsizes it (app.css).
+    chip.title = `service: ${m.label}`;
     chip.removeAttribute('aria-label');
     chip.onclick = null;
   }
@@ -4957,14 +4958,25 @@ function renderHomeView() {
 // may connect, in the identity and open postures: read once, then only the
 // picker is repainted when the read settles; a re-render reuses the list. An
 // empty list, a refusal or a failure leaves today's card (the URL typed).
+// After a failed read, each drawing of the home reads again (its hint says
+// "reopen this"), its policy unread meanwhile — as a picker's opening
+// (openMcpTarget). No read of its, the first included, takes the list
+// another view drew when it fails (readMcpEndpointsForPickers).
 let homeMcpEndpointsRead = false;
+let homeMcpEndpointsReading = false;
 function paintHomeMcpTarget() {
+  const failed = state.mcpTargetPolicy?.failed === true;
+  const reads = mcpPickersReadable() && state.access?.canWrite !== false && !homeMcpEndpointsReading
+    && (failed || (!homeMcpEndpointsRead && (state.mcpEndpoints === null || state.mcpTargetPolicy === null)));
+  if (reads && failed) unreadMcpPolicy();
   paintMcpTarget('home');
-  if (homeMcpEndpointsRead || (state.mcpEndpoints !== null && state.mcpTargetPolicy !== null) || !mcpPickersReadable() || state.access?.canWrite === false) return;
+  if (!reads) return;
   homeMcpEndpointsRead = true;
+  homeMcpEndpointsReading = true;
   // Repainted when the read settles: the list, and what the policy says
   // this reader may do (a list-only card, or Register and connect).
   readMcpEndpointsForPickers().then(() => {
+    homeMcpEndpointsReading = false;
     if (document.getElementById('home-mcp-url')) paintMcpTarget('home');
   });
 }
@@ -5158,8 +5170,10 @@ function renderMcpStatusBody(status) {
 // URL…" last. With an endpoint chosen the URL row is hidden (its value kept)
 // and the request names it by id (mcpTargetBody: an id or a URL, never
 // both); the read token stays on the server, named by the record. The list
-// (state.mcpEndpoints) is read in the identity and open postures only — the
-// bundle and the token posture never read it, and keep the typed URL.
+// (state.mcpEndpoints) is drawn in the identity and open postures only — the
+// bundle and the token posture never draw it, and keep the typed URL (the
+// token posture reads it for the Server settings button's way in alone:
+// readMcpGatePolicy).
 // Typing a URL is the server's to allow (R4): the list's read carries
 // `policy` (state.mcpTargetPolicy), and a reader it refuses a typed URL —
 // below admin, or without sign-in — gets the pickers list-only, with the
@@ -5178,6 +5192,13 @@ const MCP_PICKERS = {
 function mcpPickersReadable() {
   const posture = state.access?.posture;
   return posture === 'identity' || posture === 'open';
+}
+
+// Where GET /api/mcp-endpoints answers this reader with its policy: the
+// postures that draw the list, and the token posture, whose policy carries
+// the server's own way in (`register.why`) and nothing the pickers draw.
+function mcpPolicyReadable() {
+  return mcpPickersReadable() || state.access?.posture === 'token';
 }
 
 // The empty list's way to Settings → MCP endpoints: the server says whether
@@ -5200,33 +5221,55 @@ function mcpTypedAllowed(id) {
   return state.mcpTargetPolicy?.typed?.allowed === true;
 }
 
+// The list as the pickers draw it: with its policy, so none while the policy
+// is unread (a read in flight answers both) or failed — never an empty
+// list's line before the server says what this reader may do, nor a list
+// beside a policy that could not be read, where with no typed URL allowed
+// its first endpoint would be preselected over the person's own choice (the
+// deploy modal's Type a URL…) and a write sent there. A list read without
+// the policy, or kept by a failed read (Settings, an environment's editor),
+// stays in state.mcpEndpoints for the view that drew it.
+function mcpPickerEndpoints() {
+  const policy = state.mcpTargetPolicy;
+  return policy === null || policy.failed === true ? null : state.mcpEndpoints;
+}
+
 // The status line when a picker has nothing to send.
 function mcpTargetMissing(id) {
+  const endpoints = mcpPickerEndpoints();
   return mcpTargetMissingText({
     typedAllowed: mcpTypedAllowed(id), orgName: state.orgName,
-    empty: Array.isArray(state.mcpEndpoints) && state.mcpEndpoints.length === 0, canRegister: mcpPickerCanAdminNow(),
+    empty: Array.isArray(endpoints) && endpoints.length === 0, canRegister: mcpPickerCanAdminNow(),
+    posture: state.access?.posture ?? null, registerWhy: state.mcpTargetPolicy?.register?.why ?? null,
+    unreadable: state.mcpTargetPolicy?.failed === true,
   });
 }
 
 // GET /api/mcp-endpoints for the pickers, with the caller's policy. Silent:
-// a refusal or a failure leaves the list unread (state.mcpEndpoints null)
-// and the policy closed (state.mcpTargetPolicy `failed`), and Settings is
-// where a failed read is said. `keep` keeps the list and the policy already
-// read when this read fails (the pre-send check: its own sentence says it
+// a refusal or a failure leaves the policy closed (state.mcpTargetPolicy
+// `failed`) and the list as it was — unread (null), or the one another read
+// drew, which a view may be drawing still (Settings → MCP endpoints: Edit…
+// finds its row there) until a read's answer replaces it; however many of
+// these reads are in flight, none takes it. The pickers draw none of it
+// beside the failed policy (mcpPickerEndpoints): each says the list could
+// not be read, and Settings is where a failed read is said. `keep` keeps
+// the policy already read too (the pre-send check: its own sentence says it
 // could not check).
 const CLOSED_MCP_POLICY = Object.freeze({ typed: { allowed: false }, register: { allowed: false }, failed: true });
+// A failed read about to be read again: its policy unread, so the pickers
+// draw no list meanwhile (mcpPickerEndpoints); the list stays.
+function unreadMcpPolicy() {
+  state.mcpTargetPolicy = null;
+}
 async function readMcpEndpointsForPickers({ keep = false } = {}) {
-  if (!mcpPickersReadable()) return null;
+  if (!mcpPolicyReadable()) return null;
   try {
     const { endpoints, policy } = await loadMcpEndpoints({ withPolicy: true });
     state.mcpEndpoints = endpoints;
     state.mcpTargetPolicy = policy ?? CLOSED_MCP_POLICY;
     return state.mcpEndpoints;
   } catch {
-    if (!keep) {
-      state.mcpEndpoints = null;
-      state.mcpTargetPolicy = CLOSED_MCP_POLICY;
-    }
+    if (!keep) state.mcpTargetPolicy = CLOSED_MCP_POLICY;
     return null;
   }
 }
@@ -5252,7 +5295,7 @@ function mcpPickerModel(id, chosen = null) {
   const p = MCP_PICKERS[id];
   const readable = mcpPickersReadable() && (!p.needsWrite || state.access?.canWrite !== false);
   const model = mcpTargetModel({
-    endpoints: readable ? state.mcpEndpoints : null,
+    endpoints: readable ? mcpPickerEndpoints() : null,
     remembered: recallMcpEndpoint(),
     liveUrl: state.mcpStatus?.url || null,
     // The remembered typed URL — or, in the deploy modal (which remembers
@@ -5260,7 +5303,7 @@ function mcpPickerModel(id, chosen = null) {
     typedUrl: id === 'deploy' ? (document.getElementById(p.url)?.value || '') : (recallMcpUrl() || ''),
     purpose: p.purpose, orgName: state.orgName, canAdmin: mcpPickerCanAdminNow(), chosen,
     typed: { allowed: mcpTypedAllowed(id) }, posture: state.access?.posture ?? null,
-    unreadable: state.mcpTargetPolicy?.failed === true,
+    registerWhy: state.mcpTargetPolicy?.register?.why ?? null, unreadable: state.mcpTargetPolicy?.failed === true,
   });
   return p.hint || !mcpTypedAllowed(id) ? model : { ...model, hint: null };
 }
@@ -5367,12 +5410,35 @@ async function checkEndpointDrift(id) {
 }
 
 // A picker opening: drawn from the list already read, then — when the list
-// is unread, or `fresh` (the deploy modal: every open) — read and redrawn.
-// Returns the read's promise (resolved at once when nothing is read).
+// is unread, its policy unread or failed (a list read without it — Settings,
+// an environment's editor — leaves a failed one so), or `fresh` (the deploy
+// modal: every open) — read and redrawn. Returns the read's promise
+// (resolved at once when nothing is read). A failed read is unread again
+// while it is read again — its policy, so the picker draws no list — so
+// neither the picker nor the Server settings button says "reopen" (nor, the
+// list empty, a refusal) while the opening does just that (as
+// readMcpGatePolicy in the token posture); the list another view drew is
+// kept until an answer replaces it — a failed read, or another opening's
+// while this one reads, never takes it (readMcpEndpointsForPickers).
 function openMcpTarget(id, { fresh = false } = {}) {
+  const failed = state.mcpTargetPolicy?.failed === true;
+  const reads = mcpPickersReadable() && (fresh || failed || state.mcpEndpoints === null || state.mcpTargetPolicy === null);
+  if (reads && failed) unreadMcpPolicy();
   paintMcpTarget(id);
-  if (!mcpPickersReadable() || (!fresh && state.mcpEndpoints !== null && state.mcpTargetPolicy !== null)) return Promise.resolve();
+  if (!reads) return Promise.resolve();
   return readMcpEndpointsForPickers().then(() => paintMcpTarget(id));
+}
+
+// The token posture's Server settings button names the server's own way in
+// (settingsGateModel: `policy.register.why` — OBSERVOGRAM_AUTH=off
+// included), so the panel's opening reads the policy there until one read
+// answers; the pickers draw nothing from it. Resolved at once elsewhere.
+// A failed read is unread again while it is read again, so the button says
+// it is checking — never "close and reopen" while the panel does just that.
+function readMcpGatePolicy() {
+  if (state.access?.posture !== 'token' || (state.mcpTargetPolicy !== null && !state.mcpTargetPolicy.failed)) return Promise.resolve();
+  state.mcpTargetPolicy = null;
+  return readMcpEndpointsForPickers();
 }
 
 // The focus a picker opens on: the URL field, or the select while it hides it.
@@ -5415,8 +5481,9 @@ function openMcpPanel() {
     const liveUrl = state.mcpStatus?.url || null; // served to operators only
     urlInput.value = saved || liveUrl || '';
   }
+  const reads = Promise.all([openMcpTarget('refresh'), readMcpGatePolicy()]);
   paintMcpSettingsButton();
-  openMcpTarget('refresh').then(paintMcpSettingsButton);
+  reads.then(paintMcpSettingsButton);
   if (state.access?.posture === 'static' && mcpSettingsBundle.origins === undefined) readBundleMcpOrigins();
   focusMcpTarget('refresh');
 }
@@ -5484,8 +5551,10 @@ async function pingFromPanel() {
 // "Server settings…" (#mcp-settings-btn) opens a modal in this page that
 // configures the MCP server behind the panel's target — not the studio's
 // connection to it. Only a reader who may change an MCP endpoint opens it
-// (settingsGateModel: GET /api/mcp-endpoints `policy.register.allowed`);
-// the button is never hidden, and says why when it cannot be used.
+// (settingsGateModel: GET /api/mcp-endpoints `policy.register.allowed`, the
+// pickers' read — in the token posture readMcpGatePolicy's); the button is
+// never hidden, and says why when it cannot be used — without sign-in, in
+// the server's own sentence (`policy.register.why`).
 //
 // Nothing runs at boot or when the panel opens. Opening the modal reads
 // GET /api/mcp-settings (the deployment's settings policy) and, once the
@@ -5501,8 +5570,12 @@ async function pingFromPanel() {
 // deployment's settings policy runs on what is typed (150 ms after the last
 // keystroke, and again at send): a rule that matches, or cannot run on this
 // form, shows its warning, and its acknowledgement — a box in the dialog,
-// never kept — must be ticked before the send. The outcome
-// is shown as the server returned it (redacted, as text); after a
+// never kept — must be ticked before the send. Through the studio server, a
+// rule its 409 names that the page's check did not find gets its box too,
+// with a line saying why (the server could not check it, or its check
+// matched), until what is typed changes; a secret the refused send emptied
+// is asked for until it is typed again, whatever is ticked meanwhile. The
+// outcome is shown as the server returned it (redacted, as text); after a
 // verified configure the panel's connection test runs, and the modal words
 // what it showed from the read's outcome.
 
@@ -5552,7 +5625,7 @@ async function openServerSettings() {
   const ctx = {
     abort: new AbortController(), url, chosen: target.chosen, posture: state.access?.posture ?? 'unknown',
     state: 'reading', serial: ++mss.serial, origin: mssOriginOf(url), descriptorUrl: null, libs: null,
-    policyState: 'loading', policy: null, prefill: null, findings: null, findingsFor: null, findingsTimer: null, descriptor: null, generic: null, genericReason: null, genericError: null,
+    policyState: 'loading', policy: null, prefill: null, findings: null, findingsFor: null, findingsTimer: null, serverAcks: [], retype: [], descriptor: null, generic: null, genericReason: null, genericError: null,
     reason: null, redirect: false, outcome: null, verified: null, notice: null, confirming: null, busy: false, sendingTo: null, afterAction: false,
     proxy: false,
   };
@@ -5592,7 +5665,7 @@ async function openServerSettings() {
 }
 
 async function readMssDescriptor(ctx) {
-  Object.assign(ctx, { state: 'reading', serial: ++mss.serial, descriptor: null, generic: null, outcome: null, verified: null, notice: null, confirming: null });
+  Object.assign(ctx, { state: 'reading', serial: ++mss.serial, descriptor: null, generic: null, outcome: null, verified: null, notice: null, confirming: null, serverAcks: [], retype: [] });
   paintMss();
   let r;
   if (ctx.proxy) {
@@ -5627,6 +5700,7 @@ function useMssGeneric(ctx, reason) {
   ctx.generic = { ...ctx.prefill, names: { ...ctx.prefill.names } };
   ctx.genericError = d.reason ?? null;
   ctx.descriptor = d.reason ? ctx.libs.lib.genericDescriptor() : d;
+  ctx.serverAcks = [];
 }
 
 // What the reader typed, read from the inputs into a value that goes out of scope with its caller.
@@ -5649,8 +5723,22 @@ function mssTicked() {
   return [...mssHost()?.querySelectorAll('.mss-policy input[data-ack]:checked') ?? []].map((i) => i.getAttribute('data-ack'));
 }
 
+// → the inputs that held a value.
 function clearMssSecrets() {
-  for (const input of mssHost()?.querySelectorAll('input[type="password"]') ?? []) input.value = '';
+  const emptied = [];
+  for (const input of mssHost()?.querySelectorAll('input[type="password"]') ?? []) {
+    if (input.value) emptied.push(input);
+    input.value = '';
+  }
+  return emptied;
+}
+
+// The line asking for the secrets a refused send emptied (ctx.retype, their
+// inputs), while one is still empty: an edit or a tick that clears the
+// notice leaves this one, until each is typed again or the form is new.
+function mssRetypeNotice(ctx) {
+  ctx.retype = ctx.retype.filter((input) => input.isConnected && !input.value);
+  return secretsEmptiedLine(ctx.retype.length) || null;
 }
 
 function buildMssModel(ctx) {
@@ -5687,12 +5775,12 @@ function buildMssModel(ctx) {
   // The findings of the last check (re-run on a new form, 150 ms after typing, and at send).
   if (ctx.findings === null || ctx.findingsFor !== ctx.descriptor) mssCheckPolicy(ctx, values);
   const ticked = mssTicked();
-  const policy = policyView(ctx.findings, ticked);
+  const policy = policyView(ctx.findings, ticked, ctx.serverAcks);
   model.policy = policy.rules;
   model.primary = { label: 'Send to the server', blocked: primaryBlock({ policyState: ctx.policyState, requestReason: req.reason ?? null, genericReason: ctx.genericError, ackReason: policy.block }) };
   model.actions = ctx.descriptor.actions.map((a) => {
     const r = lib.settingsRequest(ctx.descriptor, values, { action: a.name });
-    const blocked = r.reason ? null : actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: r.sent, ticked });
+    const blocked = r.reason ? null : actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: r.sent, ticked, named: ctx.serverAcks });
     return { name: a.name, label: a.label, confirm: a.confirm, confirming: ctx.confirming === a.name, blocked, note: r.reason ? r.reason : actionNote(r.carries) };
   });
   return model;
@@ -5741,7 +5829,7 @@ async function sendMssViaProxy(ctx, values, actionName) {
     ...(actionName ? { action: actionName } : {}),
   };
   const pending = submitViaProxy(payload, { signal: ctx.abort.signal });
-  clearMssSecrets();
+  const emptied = clearMssSecrets();
   let answer = null;
   let error = null;
   try { answer = await pending; } catch (e) { error = e; }
@@ -5753,10 +5841,23 @@ async function sendMssViaProxy(ctx, values, actionName) {
     // state; anything else was refused before a request left.
     ctx.state = error.status === 502 ? 'unknown' : (ctx.generic ? 'generic' : 'described');
     ctx.notice = `The studio server answered ${error.message || 'nothing it could read'}`.replace(/([^.…?!])$/, '$1.');
+    // A rule its policy check names gets its acknowledgement box, which the
+    // page's own check may not have drawn: the server could not check it, or
+    // its check matched. Neither the send nor an action that carries a field
+    // the rule checks goes until it is ticked, and a secret emptied by this
+    // send is typed again.
+    const named = serverAckModel(error, ctx.policy, ctx.descriptor);
+    if (named) {
+      if (!ctx.serverAcks.some((r) => r.rule === named.rule)) ctx.serverAcks = [...ctx.serverAcks, named];
+      ctx.retype = [...new Set([...ctx.retype, ...emptied])];
+      const retype = mssRetypeNotice(ctx);
+      if (retype) ctx.notice += ` ${retype}`;
+    }
     paintMss();
     return;
   }
   const o = proxyOutcomeModel(answer, ctx.libs);
+  ctx.retype = [];
   ctx.outcome = { ...o, serial: ++mss.outcomeSerial };
   ctx.state = 'outcome';
   paintMss();
@@ -5821,11 +5922,14 @@ function openLiveFromSettings() {
 
 const mcpSettingsActions = {
   close: () => closeServerSettings(),
-  input: () => {
+  input: ({ typed = false, secret = false } = {}) => {
     const ctx = mss.ctx;
     if (!ctx) return;
-    ctx.notice = null;
+    ctx.notice = mssRetypeNotice(ctx);
     ctx.confirming = null;
+    // A value other than a secret was edited: the page's check decides
+    // again, alone. A secret, which no rule reads, keeps the server's boxes.
+    if (typed && !secret) ctx.serverAcks = [];
     paintMss();
     if (!ctx.policy) return;
     clearTimeout(ctx.findingsTimer);
@@ -5836,7 +5940,7 @@ const mcpSettingsActions = {
       paintMss();
     }, 150);
   },
-  ack: () => { const ctx = mss.ctx; if (!ctx) return; ctx.notice = null; paintMss(); },
+  ack: () => { const ctx = mss.ctx; if (!ctx) return; ctx.notice = mssRetypeNotice(ctx); paintMss(); },
   generic: () => {
     const ctx = mss.ctx;
     if (!ctx?.generic) return;
@@ -5848,7 +5952,8 @@ const mcpSettingsActions = {
     ctx.generic = g;
     ctx.genericError = d.reason ?? null;
     if (!d.reason) ctx.descriptor = d;
-    ctx.notice = null;
+    ctx.notice = mssRetypeNotice(ctx);
+    ctx.serverAcks = [];
     paintMss();
     // The inputs carry the new names now: the policy checks the form under them.
     ctx.findings = null;
@@ -5863,7 +5968,7 @@ const mcpSettingsActions = {
     clearTimeout(ctx.findingsTimer);
     ctx.findingsTimer = null;
     mssCheckPolicy(ctx, values);
-    const block = primaryBlock({ policyState: ctx.policyState, requestReason: req.reason ?? null, genericReason: ctx.genericError, ackReason: policyView(ctx.findings, mssTicked()).block });
+    const block = primaryBlock({ policyState: ctx.policyState, requestReason: req.reason ?? null, genericReason: ctx.genericError, ackReason: policyView(ctx.findings, mssTicked(), ctx.serverAcks).block });
     if (block) { ctx.notice = block; paintMss(); return; }
     ctx.confirming = null;
     sendMss(ctx, req, null, values);
@@ -5880,10 +5985,10 @@ const mcpSettingsActions = {
       clearTimeout(ctx.findingsTimer);
       ctx.findingsTimer = null;
       mssCheckPolicy(ctx, values);
-      const block = actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: req.sent, ticked: mssTicked() });
+      const block = actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: req.sent, ticked: mssTicked(), named: ctx.serverAcks });
       if (block) { ctx.notice = block; ctx.confirming = null; paintMss(); return; }
     }
-    if (a.confirm && ctx.confirming !== name) { ctx.confirming = name; ctx.notice = null; paintMss(); return; }
+    if (a.confirm && ctx.confirming !== name) { ctx.confirming = name; ctx.notice = mssRetypeNotice(ctx); paintMss(); return; }
     ctx.confirming = null;
     if (req.reason) { ctx.notice = req.reason.charAt(0).toUpperCase() + req.reason.slice(1) + '.'; paintMss(); return; }
     sendMss(ctx, req, name, values);
@@ -5891,7 +5996,7 @@ const mcpSettingsActions = {
   retry: () => {
     const ctx = mss.ctx;
     if (!ctx) return;
-    if (ctx.state === 'unknown') { Object.assign(ctx, { state: ctx.generic ? 'generic' : 'described', notice: null }); paintMss(); return; }
+    if (ctx.state === 'unknown') { Object.assign(ctx, { state: ctx.generic ? 'generic' : 'described', notice: mssRetypeNotice(ctx) }); paintMss(); return; }
     readMssDescriptor(ctx);
   },
   useGeneric: () => {
@@ -6777,7 +6882,7 @@ async function loadDeployHistory(packId) {
 // server's sentence (C-1); a result where every restore failed (a 502 with
 // its summary) still reads as a result.
 async function doRollback(deployId, packId, btn) {
-  if (!deployTargetBody()) { toast(`${mcpTargetMissing('deploy').replace(/^./, (c) => c.toUpperCase())} in the target form first`, 'error'); return; }
+  if (!deployTargetBody()) { toast(rollbackTargetMissingText(mcpTargetMissing('deploy')), 'error'); return; }
   const moved = await checkEndpointDrift('deploy');
   if (moved) { toast(moved, 'error'); return; }
   if (!confirm(`Roll back ${deployId}?\n\nRestorable artefacts are re-upserted from the pre-deploy snapshot. Anything this deploy created is listed for manual removal.`)) return;

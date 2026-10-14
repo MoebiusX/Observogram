@@ -211,10 +211,12 @@ function readTarget(value, where, errors) {
  * and — unless `timed` is false — finishing the four adversarial
  * ID_MATCH_LENGTH-character ids within the 50 ms budget. `noun` names the
  * pattern in each reason (`pattern` for the taxonomy, so its texts are the
- * ones it always had). `timed: false` skips only the wall-clock run (a
- * browser re-reading a file the server already timed); every static check
- * still runs. A caller matching longer or differently shaped values adds
- * its own bounds on top.
+ * ones it always had). `timed: false` skips only the wall-clock run (for a
+ * caller a loaded machine's clock must not refuse: a browser re-reading a
+ * file the server already timed, and the settings policy's loaders in the
+ * browser and the server, whose pass-through runs each rule under a
+ * worker's deadline); every static check still runs. A caller matching
+ * longer or differently shaped values adds its own bounds on top.
  * @returns {{ re: RegExp } | { reason: string }}
  */
 export function compileBoundedPattern(pattern, { flags = '', noun = 'pattern', timed = true } = {}) {

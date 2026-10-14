@@ -431,7 +431,12 @@ server opens it at every start.
 - **Journeys run from the studio** load by name only, and a journey's
   `crawl:` roots, `file:` packs and inventory site are read only from the
   org's own part of the workspace (or outside it); a path inside another
-  org's part is refused.
+  org's part is refused. On Windows a path is read only by its name on a
+  local drive or, when the workspace is named through a network share, by
+  that share's name (or a drive mapped to it) inside the workspace; any
+  other name through a share or a mapped drive is refused — the org's own
+  part included, even with one org — and the refusal says to name it by its
+  path on a local drive (copy it there if it has none).
 
 #### Behind a reverse proxy (trusted headers)
 
@@ -2743,7 +2748,7 @@ unsupported charset or content encoding. The body is not logged.
 | `GET` | `/api/taxonomy` | The artefact taxonomy override the server was started with (`OBSERVOGRAM_TAXONOMY`): `{ ok, taxonomy, configured }` — the document or `null`, never its path; no-store |
 | `GET` | `/api/mcp-settings` | The MCP server-settings policy the server was started with (`OBSERVOGRAM_MCP_SETTINGS_POLICY`, rebadge batch 4) and whether the opt-in pass-through is on (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`): `{ ok, proxy, policy, configured }` — the document or `null`, never its path; no-store. The studio reads it when its Server settings modal opens |
 | `POST` | `/api/mcp-settings/describe` | The opt-in pass-through (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`, rebadge batch 4; `404 { denied: 'off' }` otherwise): `{ mcpEndpointId }` or an admin's typed `mcpUrl` → the studio server reads `<MCP server root>/admin/schema` (no token: the endpoint's read token never rides, `mcpAuth` is refused) and answers `{ ok, status, descriptor \| notDescriptor \| reason }` — the validated description re-serialised, never the upstream text. Under the origin allowlist, https unless loopback, no redirect followed, 10 s, 16 KiB, never through the transport hook |
-| `POST` | `/api/mcp-settings/submit` | The same pass-through's configure (or a declared action): `{ mcpEndpointId \| mcpUrl, mode: 'described' \| 'generic', generic?, action?, values, acks }`. The path is the server's — the endpoint of the description it reads again now, or the settings policy's `generic.path` (else `/configure`) —, the settings policy is re-checked (a missing acknowledgement is a 409), and the answer is `{ ok, status, contentType, bytes, outcome: { ok?, message?, checks? } \| null, redacted }` — the outcome shape redacted, never another body. A malformed body is a 400 that quotes none of it; the body is never logged or kept; one `live.mcp-settings` row (field names and acknowledged rule indexes, never a value) |
+| `POST` | `/api/mcp-settings/submit` | The same pass-through's configure (or a declared action): `{ mcpEndpointId \| mcpUrl, mode: 'described' \| 'generic', generic?, action?, values, acks }`. The path is the server's — the endpoint of the description it reads again now, or the settings policy's `generic.path` (else `/configure`) —, the settings policy is re-checked (a missing acknowledgement is a 409 `{ ok: false, denied: 'policy-ack', rule, unevaluated?, error }` naming the rule by index, `unevaluated: true` when the server could not check that rule), and the answer is `{ ok, status, contentType, bytes, outcome: { ok?, message?, checks? } \| null, redacted }` — the outcome shape redacted, never another body. A malformed body is a 400 that quotes none of it; the body is never logged or kept; one `live.mcp-settings` row (field names and acknowledged rule indexes, never a value) |
 | `GET` | `/api/references` | Curated catalogue reference packs |
 | `GET` | `/api/packs/:id` | Adapted layered pack |
 | `GET` | `/api/packs/:id/canonical` | Canonical pack with env overlay |
