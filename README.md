@@ -2753,7 +2753,12 @@ and it refuses, deleting nothing:
   filesystem, such as `mount --bind /srv /srv` over it or a recursive bind
   whose copy of it was unmounted, where it may show the very directory the
   covered mount is mounted on, which the delete cannot remove: the refusal
-  then names the mounts to unmount first, in order, before you unmount it;
+  then names the mounts to unmount first, in order, before you unmount it —
+  and where one of them showed another directory there than the one it is
+  mounted on, the workspace's (the deployment bind-mounted over the directory
+  that holds the covered mount, which purge-org cannot tell apart: a declared
+  false refusal), unmounting it takes the workspace away, so mount it there
+  again once the covered mount is unmounted, then run the purge again;
   and a mount on `/` itself covers nothing, since a path is looked up from
   the root and never crosses a mount stacked on it);
   elsewhere such a mount cannot be told from a directory, so unmount

@@ -24,7 +24,10 @@
 //     covered mount's path now): `mount --bind /srv /srv` over it, a recursive bind whose copy of it was unmounted, or a
 //     bind mount, on the filesystem above, of a directory it lies in — its path may then show the very directory it is
 //     mounted on, which rmdir refuses (EBUSY) while that is a mount point anywhere, so it is refused, naming what to
-//     unmount first, in order (a declared false refusal where that mount shows another directory there); a mount on /
+//     unmount first, in order (a declared false refusal where that mount shows another directory there — the workspace's,
+//     with the deployment bind-mounted over the directory that holds the covered mount: unmounting it takes the workspace
+//     away, and followed without more, the way out ended at "no database", so the refusal says to mount it there again
+//     once the covered mount is unmounted, before purge-org runs again); a mount on /
 //     itself covers nothing, since a path is looked up from the process's root and a lookup never crosses a mount stacked
 //     on it, so with a tmpfs mounted on / in a chroot, or `mount --bind / /`, a mount under the root is refused still), a
 //     directory the walk reached already
@@ -365,8 +368,13 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     // it lists is refused.
     const mountedHere = listed.has(relative(at));
     const first = listed.get(relative(at));
+    // What covers it may show another directory there than the one it is mounted on — the workspace's, with the deployment
+    // bind-mounted over the directory that holds the covered mount — and unmounting that takes the workspace away (followed
+    // without the step, purge-org found no database): so the hint says to mount it there again once the covered mount is off.
     const hint = first?.length ? `, covered by a later mount through which its path may show what it is mounted on: first unmount `
-      + first.join(', then ') : '';
+      + `${first.join(', then ')}; if the workspace goes with ${first.length === 1 ? 'it' : 'one of them'} (a mount that showed another `
+      + `directory there than the one it is mounted on — the workspace's), mount it there again once ${named(at)} is unmounted, before `
+      + 'you run purge-org again' : '';
     if (dev(st) !== parentDev && (st.isDirectory() || mountedHere || info === null)) {
       mounts.push({ at, why: `another filesystem than ${named(from)}${hint}` });
       return null;

@@ -2370,6 +2370,7 @@ test('purge-org docs: the README and the k8s note say it cannot be undone, what 
     'run the purge as a user who can read it',
     'Unmount it, then run the purge again',
     'names the mounts to unmount first, in order, before you unmount it',
+    'mount it there again once the covered mount is unmounted, then run the purge again',
     'move it out of `orgs/<id>/` and unmount, then run the purge again',
     'Stop what changes files there, then run the purge again',
   ]) assert.ok(readme.includes(way), `README: ${way}`);
@@ -2377,7 +2378,7 @@ test('purge-org docs: the README and the k8s note say it cannot be undone, what 
   for (const way of ['out of ${root}, then run purge-org again', 'if it then refuses because ${file} does not exist',
     'make it lead there again before a pre-store build', 'mount it, then run purge-org again',
     'delete ${root} by hand, then run purge-org again', 'Run purge-org as a user who can read', 'Unmount it, then run purge-org again',
-    ': first unmount ',
+    ': first unmount ', 'mount it there again once ${named(at)} is unmounted, before you run purge-org again',
     'out of ${root} and unmount what is mounted there, then run purge-org again', 'Stop what changes files under ${root}, then run purge-org again']) {
     assert.ok(place.includes(way), `purge-org's refusal names the same way out: ${way}`);
   }
@@ -2689,7 +2690,9 @@ test('purge-org users file: a mount point under the root — another filesystem,
   // unmounting it at its path fails (not mounted). It is refused, naming what to unmount first; followed literally, the
   // purge passes. The root itself likewise.
   const coveredSame = (at, first, root = ROOT_B) => `${at} (the same filesystem as ${root}, listed in /proc/self/mountinfo, covered by a later `
-    + `mount through which its path may show what it is mounted on: first unmount ${first})`;
+    + `mount through which its path may show what it is mounted on: first unmount ${first}; if the workspace goes with `
+    + `${first.includes(', then ') ? 'one of them' : 'it'} (a mount that showed another directory there than the one it is mounted on — the `
+    + `workspace's), mount it there again once ${at} is unmounted, before you run purge-org again)`;
   const selfBound = betaVolume({ proc: true }).dir('/srv6').file('/srv6/other-data').dir(`${ROOT_B}/m`);
   const point = selfBound.fs.lstatSync(`${ROOT_B}/m`).ino;
   selfBound.bind('/srv6', `${ROOT_B}/m`).bind('/ws', '/ws');
@@ -2698,7 +2701,24 @@ test('purge-org users file: a mount point under the root — another filesystem,
   assert.deepEqual(placeIn(selfBound, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws')) }, '/ws bound on itself');
   selfBound.unmount('/ws').unmount(`${ROOT_B}/m`);
   assert.deepEqual(placeIn(selfBound, '/srv/accounts.json'), { exists: true, refusal: null }, '/ws bound on itself: unmounted as its refusal says, purged');
-  const rbound = betaVolume({ proc: true }).dir('/srv6').file('/srv6/other-data').bind('/srv6', `${ROOT_B}/m`).bind('/ws', '/ws')
+  // The declared false refusal: the deployment at /data/ws, holding <root>/m as a plain directory, bind-mounted on /ws over
+  // the original directory, where a bind at <root>/m lies covered — a mount of the same filesystem that shows another
+  // directory there than the one it is mounted on, so nothing at <root>/m is a mount point, yet it is refused naming /ws
+  // first. Followed literally, `umount /ws` took the workspace away with it, and purge-org, run again, found no database
+  // at /ws/observogram.db (the refusal said nothing of mounting it again). It now says to mount it there again once <root>/m
+  // is unmounted; followed so, the purge passes, and the mounted directory's files stay.
+  const declared = mountFs(posix, { proc: true }).dir(`${ROOT_B}/m`).dir('/srv6').file('/srv6/other-data').bind('/srv6', `${ROOT_B}/m`)
+    .file('/srv/accounts.json').file('/data/ws/observogram.db').file(`/data${ROOT_B}/packs/b1.pack.yaml`).dir(`/data${ROOT_B}/m`).bind('/data/ws', '/ws');
+  assert.equal(declared.fs.lstatSync(`${ROOT_B}/m`).ino, declared.fs.lstatSync(`/data${ROOT_B}/m`).ino, 'the deployment over the original: <root>/m shows the deployment\'s own directory');
+  assert.throws(() => declared.unmount(`${ROOT_B}/m`), { code: 'EINVAL' }, 'the deployment over the original: <root>/m not mounted');
+  assert.deepEqual(placeIn(declared, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws')) },
+    'the deployment over the original: refused, naming /ws first and the workspace to mount again');
+  declared.unmount('/ws').unmount(`${ROOT_B}/m`);
+  assert.throws(() => declared.fs.lstatSync('/ws/observogram.db'), { code: 'ENOENT' }, 'unmounted as its refusal says: the workspace went with /ws');
+  declared.bind('/data/ws', '/ws');
+  assert.deepEqual(placeIn(declared, '/srv/accounts.json'), { exists: true, refusal: null }, 'the workspace mounted there again, as its refusal says: purged');
+  assert.deepEqual(declared.fs.readdirSync('/srv6'), ['other-data'], 'the mounted directory\'s files stay');
+  const rbound =betaVolume({ proc: true }).dir('/srv6').file('/srv6/other-data').bind('/srv6', `${ROOT_B}/m`).bind('/ws', '/ws')
     .bind('/srv6', `${ROOT_B}/m`);
   assert.deepEqual(placeIn(rbound, '/srv/accounts.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m`)) }, 'a recursive bind: its copy');
   assert.throws(() => rbound.unmount('/ws'), { code: 'EBUSY' }, 'a recursive bind: busy while its copy is mounted');
@@ -2816,7 +2836,8 @@ test('purge-org users file: a mount point under the root — another filesystem,
 test('purge-org users file: in a chroot into a directory that is no mount point, /proc/self/mountinfo lists neither / nor the mount the root lies in, and the mounts in it name a parent it does not list — a mount under the root that a later mount of another filesystem covers is passed over there too (it was refused, and its way out, unmounting the covering mount, unmounted the filesystem holding the workspace), one a mount of the root\'s own filesystem covers is refused naming what to unmount first, and a mount stacked on / covers none', () => {
   const same = (at, root = ROOT_B) => `${at} (the same filesystem as ${root}, listed in /proc/self/mountinfo)`;
   const coveredSame = (at, first) => `${at} (the same filesystem as ${ROOT_B}, listed in /proc/self/mountinfo, covered by a later mount through which `
-    + `its path may show what it is mounted on: first unmount ${first})`;
+    + `its path may show what it is mounted on: first unmount ${first}; if the workspace goes with it (a mount that showed another directory `
+    + `there than the one it is mounted on — the workspace's), mount it there again once ${at} is unmounted, before you run purge-org again)`;
   const chrooted = () => betaVolume({ proc: true, chroot: true }).dir('/srv6').file('/srv6/other-data').bind('/srv6', `${ROOT_B}/m`);
   // A tmpfs mounted on the workspace over the bind mount at <root>/m (c86f545's case), in the chroot: <root>/m is a plain
   // directory of the tmpfs, and the purge passes. Refused, its way out named the tmpfs, the whole deployment's filesystem.

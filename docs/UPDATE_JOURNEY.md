@@ -1518,7 +1518,14 @@ filesystem — `mount --bind /srv /srv` over it, or a recursive bind whose
 copy of it was unmounted — where it may show the very directory the covered
 mount is mounted on, which `rmdir` refuses while it is a mount point:
 `rmSync` deleted part of the root there, then failed with `EBUSY`. Such a
-mount is refused, naming the mounts to unmount first, in order. A
+mount is refused, naming the mounts to unmount first, in order. Where the
+covering mount shows another directory there than the one it is mounted on —
+the deployment bind-mounted over the directory that holds the covered mount —
+the refusal is false (declared), and unmounting that mount takes the
+workspace away: followed literally, the way out ended with purge-org finding
+no database. So the refusal says to mount it there again once the covered
+mount is unmounted, before purge-org runs again; followed so, the purge
+passes. A
 mount on `/` itself covers nothing: a path is looked up from the process's
 root and never crosses a mount stacked on it (a tmpfs mounted on `/` in a
 chroot, or `mount --bind / /`), so a mount under the root is refused still.
