@@ -41,12 +41,18 @@
 //     what is not there now — a filesystem not mounted. So its place is found as the kernel would resolve the path,
 //     every link that exists followed (a dangling one by its target), to the nearest directory that exists there. One
 //     the walk read (by identity, as above) means it leads under the root — a users file moved out of the root,
-//     recorded there or reached through a mount of a directory under it or a link into it — and the purge goes on;
-//     any other is refused, failing closed: a mount that is down leaves its mount point an empty directory, which tells
-//     nothing. So a recorded users file deleted outside the root is refused too (declared), and deleting the root by
-//     hand is its way out. The default <base>/users.json, which nothing records, absent — nothing at its path, not even
-//     a link — is nothing to keep (a store that keeps no local users may have none); a link there that leads nowhere
-//     now is placed as a recorded path is, since through a mount that is down it may lead under the root.
+//     recorded there or reached through a mount of a directory under it or a link into it — and the purge goes on.
+//     So it does when the path is looked up only in directories the root lies in (its parent and theirs, on the root's
+//     real path: each by its path, case folded on Windows, and its device and inode) and no entry under the root has
+//     the name the path ends in — the directory of an org purged before, which the users file was moved out of as its
+//     refusal said, or a file deleted in one of them: a filesystem mounted again on one of them covers the root too, so
+//     through it the path leads under the root only by a directory under the root mounted above it, which shows the
+//     users file by its name. Any other is refused, failing closed: a mount that is down leaves its mount point an empty
+//     directory, which tells nothing. So a recorded users file deleted elsewhere outside the root is refused too
+//     (declared), and deleting the root by hand is its way out. The default <base>/users.json, which nothing records,
+//     absent — nothing at its path, not even a link — is nothing to keep (a store that keeps no local users may have
+//     none); a link there that leads nowhere now is placed as a recorded path is, since through a mount that is down it
+//     may lead under the root.
 //   - a users file that cannot be read — statSync failing otherwise (EACCES on a directory of its path, a link loop),
 //     or a part of its path that cannot be read — is refused.
 //   - a users file that exists and that no entry is: before the purge goes on, each directory the walk read is read
@@ -74,9 +80,11 @@
 // (rmSync deletes the link alone), but leads nowhere once it is gone. Not seen either: what another process moves, links
 // or mounts under the root after the check, before rmSync takes it; a directory changed and changed back within one tick
 // of a coarse filesystem clock, its change time and names as they were; a same-filesystem bind mount made on a directory
-// under the root after /proc/self/mountinfo was read, before the walk reaches it; and, through a mount that is down,
-// what the name does not tell — a file mounted on a file of another name, its mount point a file of its own, or what a
-// link of that name under the root leads to back through the mount that is down.
+// under the root after /proc/self/mountinfo was read, before the walk reaches it; through a mount that is down, what the
+// name does not tell — a file mounted on a file of another name, its mount point a file of its own, or what a link of
+// that name under the root leads to back through the mount that is down; and a filesystem that is down now, mounted on a
+// directory the root lies in, whose link leads a users file that does not exist into the root another way than by its
+// name there (through a second mount of the root's filesystem).
 //
 // usersFilePlace(file, root, { recorded, id, fs, path, windows }) → { exists, refusal }: exists is whether the users
 // file's path leads to a file now (true), or not (false), or null when the check stopped before it could tell;
@@ -244,13 +252,16 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
   }
 
   // Where a path that does not exist leads: each link that exists followed (a dangling one by its target), '..' taken
-  // from the directory reached, as the kernel resolves a path; { place, nearest, nearestSt } or { at, error }.
+  // from the directory reached, as the kernel resolves a path; { place, nearest, nearestSt, dirs } — dirs each directory
+  // a name was looked up in on the way, { at, st } ('..' is not: from a mount it leads to its mount point's directory,
+  // as from the directory there now) — or { at, error }.
   const split = (p) => p.split(windows ? /[\\/]+/ : /\/+/).filter(Boolean);
   const lead = (p) => {
     let todo;
     let cur;
     let curSt;
     let hops = 0;
+    const dirs = [];
     const from = (abs) => {
       cur = path.parse(abs).root;
       todo = split(abs.slice(cur.length));
@@ -268,6 +279,7 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
         continue;
       }
       const next = path.join(cur, name);
+      dirs.push({ at: cur, st: curSt });
       let st;
       try { st = lstat(next); } catch (e) {
         if (GONE.has(e?.code)) break;
@@ -290,7 +302,35 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
       curSt = st;
       todo = rest;
     }
-    return { place: todo.length ? path.join(cur, ...todo) : cur, nearest: curSt ? cur : null, nearestSt: curSt };
+    return { place: todo.length ? path.join(cur, ...todo) : cur, nearest: curSt ? cur : null, nearestSt: curSt, dirs };
+  };
+
+  // The entries under the root with a name the users file's path ends in — as written or at each link it leads through,
+  // compared ignoring case and Unicode normalization, as a case-insensitive filesystem may look a name up: a mount
+  // shows a directory's entries by their names, so through one that is down now the path may lead to such an entry.
+  const fold = (s) => s.normalize('NFC').toLowerCase();
+  const nameOf = (p) => (typeof p === 'string' ? path.basename(p) : p.subarray(p.lastIndexOf(path.sep.charCodeAt(0)) + 1).toString('utf8'));
+  const namesakesOf = () => {
+    const ends = new Set();
+    for (let at = file, hops = 0; hops <= MAX_LINKS; hops += 1) {
+      ends.add(fold(path.basename(at)));
+      try {
+        if (!lstat(at).isSymbolicLink()) break;
+        at = path.resolve(fs.realpathSync(path.dirname(at)), fs.readlinkSync(at));
+      } catch { break; }
+    }
+    return entries.slice(1).filter((e) => ends.has(fold(nameOf(e.path))));
+  };
+  // The directories the root lies in — its parent and theirs, as its real path passes through them: each by its path
+  // (case folded on Windows) → its device and inode.
+  const pathKey = (p) => (windows ? p.toLowerCase() : p);
+  const idOf = (st) => `${dev(st)}:${st.ino}`;
+  const holding = () => {
+    const dirs = new Map();
+    try {
+      for (let d = path.dirname(fs.realpathSync(root)); !dirs.has(pathKey(d)); d = path.dirname(d)) dirs.set(pathKey(d), idOf(stat(d)));
+    } catch { dirs.clear(); }
+    return dirs;
   };
 
   // The users file, its path followed through every link.
@@ -312,6 +352,14 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     const led = lead(file);
     if (led.error) return cannot(led.at, led.error);
     if (led.nearestSt && entries.some((en) => en.st.isDirectory() && same(en.st, led.nearestSt))) return { exists: false, refusal: null };
+    // A path looked up only in directories the root lies in, to one where the rest of it does not exist — the directory
+    // of an org purged before, which the users file was moved out of as its refusal said: a filesystem mounted again on
+    // one of them covers the root too, so the path leads under the root then only by a directory under the root mounted
+    // above it, where the users file keeps its name. With no entry under the root of that name, the purge goes on.
+    if (led.nearestSt && led.dirs.length) {
+      const holders = holding();
+      if (led.dirs.every(({ at, st: was }) => holders.get(pathKey(at)) === idOf(was)) && !namesakesOf().length) return { exists: false, refusal: null };
+    }
     return stopped(`${who} does not exist, and nothing on this host tells where its path leads`
       + `${led.place === path.resolve(file) ? '' : ` (to ${led.place})`}: `
       + (led.nearest === null ? 'no part of it exists' : `the nearest part of it that exists, ${led.nearest}, is no directory under ${root}`)
@@ -341,17 +389,7 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     // there — under the root. So an entry under the root with the name the path ends in, as written or at a link it leads
     // through (compared ignoring case and Unicode normalization, as a case-insensitive filesystem may look a name up), is
     // refused; one that is a link names what it leads to under the root too, which rmSync deletes while the link moves.
-    const fold = (s) => s.normalize('NFC').toLowerCase();
-    const ends = new Set();
-    for (let at = file, hops = 0; hops <= MAX_LINKS; hops += 1) {
-      ends.add(fold(path.basename(at)));
-      try {
-        if (!lstat(at).isSymbolicLink()) break;
-        at = path.resolve(fs.realpathSync(path.dirname(at)), fs.readlinkSync(at));
-      } catch { break; }
-    }
-    const nameOf = (p) => (typeof p === 'string' ? path.basename(p) : p.subarray(p.lastIndexOf(path.sep.charCodeAt(0)) + 1).toString('utf8'));
-    const namesakes = entries.slice(1).filter((e) => ends.has(fold(nameOf(e.path))));
+    const namesakes = namesakesOf();
     const links = namesakes.filter((e) => e.st.isSymbolicLink());
     const targets = [];
     for (const link of links) {

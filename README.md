@@ -2705,19 +2705,27 @@ and it refuses, deleting nothing:
   is refused alike.
 - **while a recorded users file — or, with none recorded,
   `<workspace>/users.json` as a link — does not exist and its path does not
-  lead under `orgs/<id>/`**, since a filesystem not mounted now may lead it
-  there. If it lies on a filesystem that is not mounted, mount it and run the
-  purge again; if it does not lie under `orgs/<id>/` (it was deleted, say),
-  delete `orgs/<id>/` by hand and run the purge again: with no directory left
-  it checks no users file and only drops the org's records. After the first
-  refusal's move, with any mount on its path up, that path leads under
-  `orgs/<id>/`, where nothing of the users file is left; the purge goes on
-  when purge-org can trace it there — through a bind mount, a link, or an
-  NFS, SMB, overlay or FUSE mount that shows that directory's own inode and
-  modification time — and through any other such mount it is refused here,
-  the second step its first refusal names. With none recorded and nothing at
-  `<workspace>/users.json`, there is no users file to keep, and the purge
-  goes on.
+  lead under `orgs/<id>/`** (but for one only through directories
+  `orgs/<id>/` lies in, below), since a filesystem not mounted now may lead
+  it there. If it lies on a filesystem that is not mounted, mount it and run
+  the purge again; if it does not lie under `orgs/<id>/` (it was deleted,
+  say), delete `orgs/<id>/` by hand and run the purge again: with no
+  directory left it checks no users file and only drops the org's records.
+  After the first refusal's move, with any mount on its path up, that path
+  leads under `orgs/<id>/`, where nothing of the users file is left; the
+  purge goes on when purge-org can trace it there — through a bind mount, a
+  link, or an NFS, SMB, overlay or FUSE mount that shows that directory's own
+  inode and modification time — and through any other such mount it is
+  refused here, the second step its first refusal names. Once that org is purged its directory is gone, and the recorded path
+  leads into a directory that does not exist: purging another org goes on
+  when the path is looked up only in directories its `orgs/<id>/` lies in
+  (`<workspace>/orgs` and those above it, by their real paths) and no entry
+  under `orgs/<id>/` has the users file's name, since a filesystem mounted
+  again on one of those directories would cover `orgs/<id>/` too, and a
+  directory under `orgs/<id>/` mounted there would show the users file by
+  its name. So does a users file deleted in one of those directories. With
+  none recorded and nothing at `<workspace>/users.json`, there is no users
+  file to keep, and the purge goes on.
 - **while the users file, or a directory under `orgs/<id>/`, cannot be
   read** — run the purge as a user who can read it (a FUSE mount whose
   server stopped answering: unmount it), or, when the users file does not

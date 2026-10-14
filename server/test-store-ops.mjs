@@ -2831,9 +2831,11 @@ test('purge-org users file that exists outside the root: through a mount that is
   assert.deepEqual(placeIn(linked, '/mnt/b/users.json'), { exists: true, refusal: null }, 'the link and what it names moved out');
 });
 
-test('purge-org users file that does not exist: recorded under the root and moved out, or reached by a link whose target is gone from the root, the purge passes; one whose place lies elsewhere — a file deleted outside the root, a link to a mount that is down, a path no part of which exists — is refused, failing closed; none recorded and <base>/users.json absent, the purge passes', () => {
+test('purge-org users file that does not exist: recorded under the root and moved out, or reached by a link whose target is gone from the root, the purge passes; so does one whose path leads only through directories the root lies in, by its real path, to one where the rest does not exist (a sibling org\'s directory purged before), while no entry under the root has its name; one whose place lies elsewhere — a file deleted outside the root, a link to a mount that is down, a path no part of which exists, a path through a directory the root does not lie in, or one whose name an entry under the root has — is refused, failing closed; none recorded and <base>/users.json absent, the purge passes', () => {
   const vol = betaVolume().symlink('/cfg/users.json', `${ROOT_B}/sub/users.json`).symlink('/cfg/gone', `${ROOT_B}/gone`)
-    .symlink('/cfg/rel', '../ws/orgs/beta/sub/x/..').dir('/mnt/b').symlink('/cfg/m.json', '/mnt/b/users.json');
+    .symlink('/cfg/rel', '../ws/orgs/beta/sub/x/..').dir('/mnt/b').symlink('/cfg/m.json', '/mnt/b/users.json')
+    .symlink('/ws/s.json', 'orgs/beta2/users.json').symlink('/cfg/s.json', '/ws/orgs/beta2/users.json').symlink('/cfg/d', '/ws/orgs')
+    .symlink('/lnk', '/ws');
   assert.equal(placeIn(vol, `${ROOT_B}/sub/users.json`).refusal, underRoot(`${ROOT_B}/sub/users.json`, `${ROOT_B}/sub/users.json`), 'recorded under the root: refused');
   vol.rename(`${ROOT_B}/sub/users.json`, '/keep/users.json');
   for (const file of [`${ROOT_B}/sub/users.json`, '/cfg/users.json', '/cfg/gone/users.json', `${ROOT_B}/sub/deeper/users.json`, '/cfg/rel/users.json']) {
@@ -2841,7 +2843,26 @@ test('purge-org users file that does not exist: recorded under the root and move
   }
   assert.deepEqual(placeIn(vol, '/srv/gone.json'), { exists: null, refusal: unknownPlace('/srv/gone.json', '/srv') }, 'deleted outside the root (declared)');
   assert.deepEqual(placeIn(vol, '/cfg/m.json'), { exists: null, refusal: unknownPlace('/cfg/m.json', '/mnt/b', { to: '/mnt/b/users.json' }) });
+  // Only through directories the root lies in (/, /ws, /ws/orgs), into a sibling org's directory purged before — where the
+  // users file was moved out of, as its refusal said — or a file deleted there: a filesystem mounted again on any of them
+  // covers the root too. Named through a link to one of them, and with the root named through a link (by its real path).
+  for (const file of ['/ws/orgs/beta2/users.json', '/ws/orgs/beta2/sub/users.json', '/ws/gone.json', '/ws/s.json', '/lnk/orgs/beta2/users.json']) {
+    assert.deepEqual(placeIn(vol, file), { exists: false, refusal: null }, `${file}: through directories the root lies in`);
+    assert.deepEqual(usersFilePlace(file, '/lnk/orgs/beta', { fs: vol.fs, path: posix, windows: false, id: 'beta' }), { exists: false, refusal: null },
+      `${file}, the root named through a link`);
+  }
+  // Through a directory the root does not lie in — a link there, to a file or a directory — a filesystem mounted on it now
+  // down may lead the path anywhere.
+  assert.deepEqual(placeIn(vol, '/cfg/s.json'), { exists: null, refusal: unknownPlace('/cfg/s.json', '/ws/orgs', { to: '/ws/orgs/beta2/users.json' }) });
+  assert.deepEqual(placeIn(vol, '/cfg/d/beta2/users.json'),
+    { exists: null, refusal: unknownPlace('/cfg/d/beta2/users.json', '/ws/orgs', { to: '/ws/orgs/beta2/users.json' }) });
+  // /ws/orgs a bind mount of <root>/x, down now: the users file written through it is <root>/x/beta2/users.json, and an
+  // entry under the root with its name is refused (a directory under the root mounted above it keeps its names).
+  vol.file(`${ROOT_B}/x/beta2/users.json`);
   assert.deepEqual(placeIn(vol, '/ws/orgs/beta2/users.json'), { exists: null, refusal: unknownPlace('/ws/orgs/beta2/users.json', '/ws/orgs') });
+  assert.deepEqual(placeIn(vol, '/ws/s.json'), { exists: null, refusal: unknownPlace('/ws/s.json', '/ws/orgs', { to: '/ws/orgs/beta2/users.json' }) });
+  vol.rename(`${ROOT_B}/x/beta2/users.json`, '/keep/x/users.json');
+  assert.deepEqual(placeIn(vol, '/ws/orgs/beta2/users.json'), { exists: false, refusal: null }, 'moved out, no entry of its name');
   assert.deepEqual(placeIn(vol, '/ws/users.json', { recorded: false }), { exists: false, refusal: null }, 'the default nothing records, absent: nothing to keep');
 });
 
@@ -2876,18 +2897,23 @@ test('purge-org users file that cannot be read: a directory on its path this use
   });
 });
 
-test('purge-org users file that does not exist, on Windows paths: moved out from under the root, by any spelling or through a junction into it, the purge passes; through a share whose directory is gone, on a drive that does not exist, or deleted outside the root, refused', () => {
+test('purge-org users file that does not exist, on Windows paths: moved out from under the root, by any spelling or through a junction into it, or in a sibling org\'s directory purged before, by any spelling, the purge passes; through a share whose directory is gone, on a drive that does not exist, deleted outside the root, or through a directory whose name differs from one the root lies in by case alone (case-sensitive), refused', () => {
   const RW = 'C:\\ws\\orgs\\beta';
   const C = 0x1_0000_0007n;
   const vol = mountFs(win32, { fold: true, devs: { 'C:\\': C } }).file(`${RW}\\sub\\users.json`).dir('C:\\out')
     .symlink('C:\\cfg\\d', `${RW}\\sub`).view(`${RW}\\sub`, '\\\\myhost\\betasub\\', { dev: C & 0xffffffffn });
   const placeW = (file) => usersFilePlace(file, RW, { fs: vol.fs, path: win32, windows: true, id: 'beta' });
   vol.rename(`${RW}\\sub\\users.json`, 'C:\\keep\\users.json');
-  for (const file of [`${RW}\\sub\\users.json`, 'c:/WS/orgs/BETA/sub/users.json', 'C:\\cfg\\d\\users.json', '\\\\myhost\\betasub\\users.json']) {
+  for (const file of [`${RW}\\sub\\users.json`, 'c:/WS/orgs/BETA/sub/users.json', 'C:\\cfg\\d\\users.json', '\\\\myhost\\betasub\\users.json',
+    'C:\\ws\\orgs\\acme\\sub\\users.json', 'c:/WS/orgs/ACME/sub/users.json']) {
     assert.deepEqual(placeW(file), { exists: false, refusal: null }, `${file}: nothing of it under the root`);
   }
   assert.deepEqual(placeW('C:\\out\\users.json'), { exists: null, refusal: unknownPlace('C:\\out\\users.json', 'C:\\out', { root: RW }) });
   assert.deepEqual(placeW('Q:\\users.json'), { exists: null, refusal: unknownPlace('Q:\\users.json', null, { root: RW }) }, 'a drive that does not exist');
+  // A directory NTFS keeps case-sensitive (per directory): C:\WS beside C:\ws is another directory, which the root does not lie in.
+  const cased = mountFs(win32, { devs: { 'C:\\': C } }).dir(`${RW}\\packs`).dir('C:\\WS\\orgs');
+  assert.deepEqual(usersFilePlace('C:\\WS\\orgs\\acme\\users.json', RW, { fs: cased.fs, path: win32, windows: true, id: 'beta' }),
+    { exists: null, refusal: unknownPlace('C:\\WS\\orgs\\acme\\users.json', 'C:\\WS\\orgs', { root: RW }) }, 'another directory by case');
 });
 
 test('purge-org: a users file recorded outside the root with a hard link under it is refused naming the link, nothing deleted; with the link moved out, the purge passes and the users file stays', async () => {
@@ -2952,6 +2978,24 @@ test('purge-org: the users file recorded under the root is refused naming it, no
   const r = await purge(base, 'acme');
   assert.equal(r.deleted, true);
   assert.equal(existsSync(root), false);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(keep, 'utf8')).users), ['alice'], 'the moved users file stays');
+});
+
+test('purge-org: the users file recorded under one org\'s root and moved out as the refusal says, that org purged, a later purge of another org passes — the record leads into the purged root, which no longer exists, through directories the other root lies in, where a filesystem mounted again covers that root too; it used to be refused as a users file that does not exist, for every org purged afterwards — and the moved file stays', async () => {
+  const base = await removedOrgDeployment();
+  const acme = join(base, 'orgs', 'acme');
+  const beta = join(base, 'orgs', 'beta');
+  const usersFile = join(acme, 'sub', 'users.json');
+  usersJson(base, ['alice'], usersFile);
+  await change(base, (db) => tx(db, () => meta.putMeta(db, 'users_file', usersFile)));
+  await assert.rejects(purge(base, 'acme'), refusedOp(new RegExp(`^${esc(underRoot(usersFile, usersFile, acme))}$`)));
+  const keep = join(tempDir('ops-keep'), 'users.json');
+  renameSync(usersFile, keep);
+  assert.equal((await purge(base, 'acme')).deleted, true);
+  await change(base, (db) => admin.removeOrgSoft(db, 'cli', 'beta'));
+  const r = await purge(base, 'beta');
+  assert.equal(r.deleted, true);
+  assert.equal(existsSync(beta), false);
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(keep, 'utf8')).users), ['alice'], 'the moved users file stays');
 });
 

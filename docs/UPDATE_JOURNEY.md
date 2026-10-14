@@ -1565,3 +1565,19 @@ file is refused alike (a declared false refusal), and the users file seen
 through a view of a directory under the root that reports neither its inode
 nor its size and time is refused by its name. Tests: 1442 → 1443 (one more
 in `server/test-store-ops.mjs`).
+
+Following the refusal of a users file recorded under the root — moving it
+out, then purging that org — left the record naming a path in a directory
+that no longer exists, and every later purge of another org was refused as a
+recorded users file that does not exist: the nearest part of its path that
+exists, `<workspace>/orgs`, was no directory under the other root. Making
+the path lead to the moved file again meant re-creating directories in the
+purged org's root, and neither the refusal nor README said so. A users file
+that does not exist is now nothing to keep, too, when its path is looked up
+only in directories the root lies in — its parent and theirs, on its real
+path — and no entry under the root has its name: a filesystem mounted again
+on one of them covers the root as well, so through it the path leads under
+the root only by a directory under the root mounted above it, which shows
+the users file by its name. Through any other directory, or with an entry of
+that name under the root, it is refused as before. Tests: 1443 → 1444 (one
+more in `server/test-store-ops.mjs`).
