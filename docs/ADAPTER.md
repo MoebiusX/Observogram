@@ -529,7 +529,7 @@ keys in this order:
 `available: false` means the source was not given ("not recorded by this
 build": the CLI without `--verdicts` / `--waivers`, a bundle); an empty list
 with `available: true` means none recorded. `goesBlind.available` is false
-when no graph shape was given (the bundle has no PromQL parser). `required`
+when no graph shape was given. `required`
 on a family is "named by a rubric clause that applies at the graded tier"
 (`CLAUSE_FAMILIES`); the referential L2X clause names none. The `by` fields
 are the audit actor — a login or the token label, never an email.

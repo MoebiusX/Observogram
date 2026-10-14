@@ -2399,7 +2399,7 @@ function bestPanelBinding(panel, candidates) {
   const scored = candidates
     .map(candidate => scorePanelBinding(hay, panelMetrics, candidate))
     .filter(candidate => candidate.score >= 5)
-    .sort((a, b) => b.score - a.score || a.ref.localeCompare(b.ref));
+    .sort((a, b) => b.score - a.score || a.ref.localeCompare(b.ref, 'en'));
   if (!scored.length) return null;
   if (scored.length > 1 && scored[0].score === scored[1].score) return null;
   const top = scored[0];

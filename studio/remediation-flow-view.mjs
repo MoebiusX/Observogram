@@ -112,7 +112,7 @@ export function buildRemediationFlowViewModel(eng, { pack = null, packB = null, 
 const stateLabel = (model, state) => STATE_LABELS[model.otherSide]?.[state] || state;
 const code = (s) => `<code>${escapeHtml(s)}</code>`;
 
-function summaryHtml(model, screen) {
+function summaryHtml(model, screen, notComparedNote = null) {
   const c = model.counts;
   const parts = [
     `<strong>${escapeHtml(plural(c.remediations, 'remediation'))}</strong>`,
@@ -125,6 +125,7 @@ function summaryHtml(model, screen) {
   const other = model.otherSide === 'baseline' ? 'the baseline' : 'live';
   const note = model.compared
     ? `Compared with ${escapeHtml(model.otherName || other)}: each alert's state is ${other === 'live' ? 'what is deployed' : 'what the baseline declares'}.`
+    : typeof notComparedNote === 'string' && notComparedNote ? escapeHtml(notComparedNote)
     : screen === 'diagnose'
       ? 'Not compared yet: every alert reads as declared. Pick a baseline or a live pack to see which alerts are live.'
       : 'Not compared with live: every alert reads as declared, so nothing here can be deployed yet.';
@@ -187,12 +188,14 @@ function unresolvedHtml(item, model, screen) {
  * gets a `.diag-block` section with the report's heading markup (and the
  * sticky index's `#diag-flow` target); Remediate a `.ux-rm-flow` section after
  * the plan. The deploy button renders on Remediate only, only when compared,
- * only for a deployable SLO.
+ * only for a deployable SLO. `notComparedNote` replaces the note shown before
+ * a comparison (the caller's text — the static posture's, from
+ * studio/static-remedies.mjs; this module imports nothing to know it).
  */
-export function remediationFlowHtml(model, { screen = 'diagnose' } = {}) {
+export function remediationFlowHtml(model, { screen = 'diagnose', notComparedNote = null } = {}) {
   if (!model || !model.configured) return '';
   const body = `
-    ${summaryHtml(model, screen)}
+    ${summaryHtml(model, screen, notComparedNote)}
     ${model.links.length ? `<ol class="rflow-paths" aria-label="Response paths">${model.links.map((l) => pathHtml(l, model, screen)).join('')}</ol>` : ''}
     ${model.unresolved.length ? `<ol class="rflow-paths rflow-unresolved" aria-label="Triggers naming no alert">${model.unresolved.map((u) => unresolvedHtml(u, model, screen)).join('')}</ol>` : ''}
     ${model.uncovered.length ? `
@@ -227,10 +230,10 @@ export function remediationFlowHtml(model, { screen = 'diagnose' } = {}) {
  * Appends the panel to `container` and returns the `[data-ux-action]` handlers
  * the caller spreads into its wireUxActions: `rflow-deploy` opens the deploy
  * modal preselected with the button's identity. Draws nothing and returns {}
- * for a model that is null.
+ * for a model that is null. `notComparedNote` as remediationFlowHtml's.
  */
-export function renderRemediationFlow(container, model, host = appHost, { screen = 'remediate' } = {}) {
-  const html = remediationFlowHtml(model, { screen });
+export function renderRemediationFlow(container, model, host = appHost, { screen = 'remediate', notComparedNote = null } = {}) {
+  const html = remediationFlowHtml(model, { screen, notComparedNote });
   if (!html || !container) return {};
   const wrap = document.createElement('div');
   wrap.innerHTML = html;

@@ -50,7 +50,7 @@ const HARNESS_FALLBACK = 12;   // a harness failure without ✗ lines: its last 
  * run: a skip nobody expects is a test that silently stopped running.
  */
 export const KNOWN_SKIPS = Object.freeze([
-  Object.freeze({ pattern: /^cannot import .+?: /, probe: 'the seven browser suites without Playwright (server/test-brand-shell.mjs and six more; OBSERVOGRAM_PLAYWRIGHT unset, no playwright package)' }),
+  Object.freeze({ pattern: /^cannot import .+?: /, probe: 'the eight browser suites without Playwright (server/test-brand-shell.mjs and seven more; OBSERVOGRAM_PLAYWRIGHT unset, no playwright package)' }),
   Object.freeze({ pattern: /^chromium\.launch failed: /, probe: 'the same browser suites with Playwright but no browser' }),
   Object.freeze({ pattern: 'unshare --pid is unavailable here', probe: 'server/test-store.mjs, the PID 1 test: off Linux, or where user namespaces are refused' }),
   Object.freeze({ pattern: /^cannot run .+ as an unprivileged user on this checkout: /, probe: 'server/test-store-import.mjs, the unreadable-file case: Linux as root only' }),

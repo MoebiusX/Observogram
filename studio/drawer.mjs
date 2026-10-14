@@ -13,9 +13,16 @@ import { host as appHost } from './host.mjs';
 import { cardKey } from './layers-view.mjs';
 import { boundText, goodWhen, hasDirection } from './sli-direction.mjs';
 import { readChain, traceIndex } from './trace-chain.mjs';
+import { staticTraceActions } from './static-remedies.mjs';
 import { classifyArtefact } from './taxonomy.mjs';
 import { verdictPanel } from './verdicts.mjs';
 import { glossaryEntryFor, glossaryLabelHtml, glossaryMarkFor, wireGlossary } from './glossary.mjs';
+
+// The requirement trace's live-evidence texts: the static posture's (a bundle,
+// where no server drafts or deploys; studio/static-remedies.mjs), the trace
+// module's own otherwise — as the Traceability screen words them.
+const isStatic = () => state.access?.posture === 'static';
+const traceActions = () => (isStatic() ? { actions: staticTraceActions(state.brand.chrome.name) } : {});
 
 // ---------- drawer ----------
 
@@ -279,7 +286,7 @@ function renderRequirementTracePanel(artefact, side = 'b') {
   const index = traceIndex(pack);
   const p = panel('Requirement trace', 'p-requirement-trace');
   for (const chain of hits.slice(0, 3)) {
-    const read = readChain(chain, index);
+    const read = readChain(chain, index, traceActions());
     const scrape = chain.scrapeJobs || {};
     const sec = subpanel(chain.slo?.id || chain.sli?.id || 'requirement');
     sec.appendChild(dl([

@@ -280,7 +280,7 @@ spliced into a 9 MB pack); the unknown-key error echoes at most ten of the unkno
 (200,000 bogus keys once made a 1.7 MB error). A value error reads `param <key>: …`, so a
 caller can point at the field. Every
 resolved SLI expression is then parsed with the parser given as `promql`: `packc init`
-passes the Lezer grammar (`tools/lib/promql-lezer.mjs`, an npm import, Node-only) and a
+passes the Lezer grammar (`tools/lib/promql-lezer.mjs`, an npm import: Node, or the static bundle's import map) and a
 failure is a `warnings` entry of kind `promql`, which makes the CLI exit 1. The
 browser-safe core (`tools/lib/promql.mjs`) extracts dependencies and reports no grammar
 error, so a caller with no parser gets no `promql` warning: the studio (slice 2) runs the

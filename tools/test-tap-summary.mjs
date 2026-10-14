@@ -72,7 +72,7 @@ const HEAD = '==================== npm test summary ====================';
 const SIGNALS = 'signal semantics: process.kill(pid, "SIGTERM"|"SIGINT") ends a Windows process outright — no handler runs, the store cannot close itself';
 const SYMLINKS = 'symlinks: creating one needs a privilege (Developer Mode or an elevated shell) on Windows';
 const MODES = 'POSIX mode bits: Windows reports 0666/0444 and chmod cannot make a file unreadable';
-const BROWSER_SUITES = ['server/test-brand-shell.mjs', 'server/test-glossary-shell.mjs', 'server/test-settings-studio.mjs', 'server/test-live-studio.mjs', 'server/test-services-studio.mjs', 'server/test-mcp-settings-studio.mjs', 'tools/test-studio-bundle.mjs'];
+const BROWSER_SUITES = ['server/test-brand-shell.mjs', 'server/test-glossary-shell.mjs', 'server/test-settings-studio.mjs', 'server/test-live-studio.mjs', 'server/test-services-studio.mjs', 'server/test-mcp-settings-studio.mjs', 'tools/test-studio-bundle.mjs', 'tools/test-bundle-compare.mjs'];
 const pwReason = (importer) => `cannot import playwright: Cannot find package 'playwright' imported from ${importer}`;
 const TOTALS = (t) => `1..${t.points ?? 1}\n# tests ${t.tests}\n# suites 0\n# pass ${t.pass}\n# fail ${t.fail ?? 0}\n# cancelled ${t.cancelled ?? 0}\n# skipped ${t.skipped ?? 0}\n# todo ${t.todo ?? 0}\n# duration_ms ${t.ms ?? 26000.1}\n`;
 const okPoint = (n, name, { depth = 0, directive = '', ms = 1.5 } = {}) => {
@@ -1172,7 +1172,7 @@ test('S10 the workflow wires it: a Windows matrix on the floor and the latest 22
   }
 });
 
-test('S11 grouping: the seven browser suites\' importer-specific reasons, POSIX and Windows, are one line; the PID 1 reason and a win32 reason stay apart', () => {
+test('S11 grouping: the eight browser suites\' importer-specific reasons, POSIX and Windows, are one line; the PID 1 reason and a win32 reason stay apart', () => {
   const reasons = [
     ...BROWSER_SUITES.map((s) => pwReason(`${LROOT}/${s}`)),
     ...BROWSER_SUITES.map((s) => pwReason(`${WROOT}\\${s.replace(/\//g, '\\')}`)),
@@ -1180,9 +1180,9 @@ test('S11 grouping: the seven browser suites\' importer-specific reasons, POSIX 
   assert.equal(new Set(reasons.map(skipGroup)).size, 1);
   assert.equal(skipGroup(reasons[0]), "cannot import <playwright>: Cannot find package 'playwright' imported from <a suite>");
   assert.equal(skipGroup('cannot import /opt/pw/index.mjs: Cannot find module \'/opt/pw/index.mjs\' imported from /r/server/test-a.mjs'), "cannot import <playwright>: Cannot find module '/opt/pw/index.mjs' imported from <a suite>", 'a knob set to a path');
-  const tap = `TAP version 13\n${reasons.map((r, i) => okPoint(i + 1, `BROWSER ${i}`, { directive: ` # SKIP ${r.replace(/\\/g, '\\\\')}` })).join('')}${okPoint(15, 'PID 1', { directive: ' # SKIP unshare --pid is unavailable here' })}${okPoint(16, 'modes', { directive: ` # SKIP win32: ${MODES}` })}${TOTALS({ tests: 16, pass: 0, skipped: 16 })}`;
+  const tap = `TAP version 13\n${reasons.map((r, i) => okPoint(i + 1, `BROWSER ${i}`, { directive: ` # SKIP ${r.replace(/\\/g, '\\\\')}` })).join('')}${okPoint(17, 'PID 1', { directive: ' # SKIP unshare --pid is unavailable here' })}${okPoint(18, 'modes', { directive: ` # SKIP win32: ${MODES}` })}${TOTALS({ tests: 18, pass: 0, skipped: 18 })}`;
   const text = summarize(tap).text;
-  assert.ok(text.includes("skip lines by reason (16):\n    14 × cannot import <playwright>: Cannot find package 'playwright' imported from <a suite>\n     1 × unshare --pid is unavailable here\n     1 × win32: POSIX mode bits"), text);
+  assert.ok(text.includes("skip lines by reason (18):\n    16 × cannot import <playwright>: Cannot find package 'playwright' imported from <a suite>\n     1 × unshare --pid is unavailable here\n     1 × win32: POSIX mode bits"), text);
 });
 
 test('S12 timing bounds: node:test diagnostics at depth 0 and 1 and a harness line; upper and lower grammar; nearest its limit first; past half flagged per form; an unparsable line listed', () => {

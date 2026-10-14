@@ -299,7 +299,8 @@ test('the views reach the panel through the view module and the host seam: compi
   const compare = read('studio/compare-view.mjs');
   assert.match(compare, /from '\.\/remediation-flow-view\.mjs'/);
   assert.match(compare, /id: 'diag-flow', label: 'Response path'/);
-  assert.match(compare, /remediationFlowHtml\(flowModel, \{ screen: 'diagnose' \}\)/);
+  // The static posture's note comes in as an option (follow-up compare-in-bundle), never as an import of this module.
+  assert.match(compare, /remediationFlowHtml\(flowModel, \{ screen: 'diagnose'(?:, notComparedNote: isStatic\(\) \? [^}]+ : null)? \}\)/);
   assert.match(read('docs/UI_CONVENTIONS.md'), /`\.rflow-\*`/, 'the zone is listed');
 });
 

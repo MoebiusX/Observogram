@@ -370,7 +370,7 @@ test('studio: behaviour is shown, with a sentence, when the packs are not the co
   const stale = studio.viewDiffFor({ engine, diff: server, pack: other, packB: b, mode: 'name' });
   assert.equal(stale.diff, server);
   assert.equal(stale.mode, 'behaviour');
-  assert.match(stale.unavailable, /not the ones the server compared/);
+  assert.equal(stale.unavailable, 'the packs on screen are not the ones the comparison was computed for');
   assert.match(studio.viewDiffFor({ engine: null, diff: server, pack: a, packB: b, mode: 'id' }).unavailable, /did not load/);
   assert.match(studio.viewDiffFor({ engine, diff: server, pack: a, packB: b, mode: 'id', taxonomyError: 'GET /api/taxonomy failed' }).unavailable, /taxonomy/);
   assert.equal(studio.viewDiffFor({ engine: undefined, diff: server, pack: a, packB: b, mode: 'id' }).unavailable, 'still loading');

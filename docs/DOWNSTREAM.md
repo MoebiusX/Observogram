@@ -28,7 +28,7 @@ manifest fails the build with the one command that fixes it.
 | `modules[path].sha256`, `.bytes` | the raw bytes of the file as committed (`.gitattributes` forces LF for `*.mjs`) |
 | `modules[path].exports` | the exported names, code-point sorted, read statically from the source and cross-checked against the real module namespace by the guard |
 | `modules[path].imports` | the other listed modules it imports (relative specifiers resolved) — copy them together |
-| `modules[path].npm` | the npm packages it needs (`@prometheus-io/lezer-promql` for `promql-lezer.mjs`; nothing else) |
+| `modules[path].npm` | the npm packages it needs (`@prometheus-io/lezer-promql` for `promql-lezer.mjs`; nothing else) — the static bundle's builder reads it too: a bundle inlines the packages this field names for the modules it carries, and the packages those import (§10) |
 | `modules[path].changedSinceRelease` | `true` when the module's exports differ from the ones released as `version`; then `releasedExports` carries the released list (`null` for a module new since the release) |
 | `data[path]` | non-code files under the root (`tools/lib/site/inventory.schema.json`), sha256 and bytes |
 | `excluded[path]` | the modules under `tools/lib` that are **not** vendorable, each with the reason |
@@ -85,7 +85,7 @@ publishes:
    imports resolve. Copy the bytes verbatim: a tool that converts line
    endings produces files whose hashes differ (`--verify` says so).
 4. Install the npm packages the `npm` fields name, at the versions upstream's
-   `package.json` pins.
+   `package-lock.json` pins (a static bundle build refuses any other, §10).
 
 ## 4. Verify hashes
 
@@ -179,6 +179,11 @@ The golden suites read `tools/fixtures/` — copy that directory with them.
   `artifact-model`, `constants`, `verify-deploy`, `metric-readers`): still the
   prose table, still CI-asserted zero-import; folding them into the manifest
   (which would also let `retrofeed.mjs` enter the set) is a follow-up.
+- The npm packages a static bundle carries beyond the `npm` fields' roots
+  (`@lezer/lr`, `@lezer/highlight` and `@lezer/common`, which
+  `@prometheus-io/lezer-promql` imports): the manifest names the roots; every
+  package a build embeds is listed by the bundle itself — its licence block
+  and the builder's `--json` `thirdParty` (§10).
 - The other downstream seams are configuration the snapshot reads (§9: the
   transport hook, the taxonomy, the reverse-proxy identity, the brand; §10:
   the embeddable studio bundle); the *Decisions — downstream seams* section
@@ -197,7 +202,7 @@ a bump. The surface so far:
 |---|---|---|
 | Backend access (W2) | `OBSERVOGRAM_TRANSPORT_HOOK=<path.mjs \| file:URL>` — a module exporting `prepareRequest({ url, headers })` and/or `fetchImpl(url, init)`, applied to every MCP request of the CLI, the recorder, the probes, journeys and the studio server; `OBSERVOGRAM_ALLOW_LOCAL_MCP=0` still binds the URL it returns | [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md), "Transport hook" |
 | Reverse-proxy identity (W5) | `OBSERVOGRAM_TRUST_PROXY_AUTH=1` + `OBSERVOGRAM_TRUST_PROXY_AUTH_ACK=only-the-proxy-reaches-this-port`, the header names (`PROXY_AUTH_USER_HEADER`, `_EMAIL_HEADER`, `_NAME_HEADER`, `_GROUPS_HEADER`), `PROXY_AUTH_GROUP_ROLES` (`g=role,*=role`, authoritative in `PROXY_AUTH_ORG`), `PROXY_AUTH_JOIN_ROLE`, `PROXY_AUTH_OWNERS` (grant-only), `PROXY_AUTH_SHARED_SECRET` + `_SECRET_HEADER` (required beyond loopback), `PROXY_AUTH_LOGOUT_URL`, `PROXY_AUTH_REALM`; users are `proxy://<realm>#<user>` rows of kind `oidc`; refuses to start without the ACK, beside OIDC, exposed without the secret, or with a join role beside a groups header | README, "Behind a reverse proxy (trusted headers)" |
-| Studio bundle (W6) | `npm run build:studio -- [--pack <file> [--id] [--label] [--description]]… [--pack-url <url> [--id] [--label] [--description]]… [--taxonomy <file.json>] [--brand <file.json>] [--mcp-settings-policy <file.json>] [--mcp-origins <origin>,…] [--out dist/studio/index.html] [--no-remote-fonts]` — one static HTML file: every studio and `tools/lib` module in an import map of `data:` URLs, the stylesheets inlined, the packs and the schema as JSON, `studio/static-backend.mjs` answering the read-only pack routes in the browser and `501 denied: 'no-backend'` for the rest; no server configuration at all; the taxonomy and the brand baked (W3/W4 kept at the edge: `--taxonomy` / `--brand`, or the server's own variables when the flags are absent) | §10 below; README, "Serve The Studio Without The Server" |
+| Studio bundle (W6) | `npm run build:studio -- [--pack <file> [--id] [--label] [--description]]… [--pack-url <url> [--id] [--label] [--description]]… [--taxonomy <file.json>] [--brand <file.json>] [--mcp-settings-policy <file.json>] [--mcp-origins <origin>,…] [--out dist/studio/index.html] [--remote-fonts]` — one static HTML file with its licences: every studio and `tools/lib` module in an import map of `data:` URLs (and the npm packages the PromQL parser needs, as installed from the lockfile), the stylesheets inlined, the packs and the schema as JSON, `studio/static-backend.mjs` answering the pack routes and Compare, retrofeed and the audit report in the browser and `501 denied: 'no-backend'` for the rest; no server configuration at all; no font from the network unless `--remote-fonts` keeps the shell's Google Fonts links; the taxonomy and the brand baked (W3/W4 kept at the edge: `--taxonomy` / `--brand`, or the server's own variables when the flags are absent) | §10 below; README, "Serve The Studio Without The Server" |
 | Branding (W4) | `OBSERVOGRAM_BRAND_FILE=<path.json>` — `{ name, shortName?, wordmark?: { lead, tail }, tagline?, titleSuffix?, description?, logo?: { url \| svg }, favicon?, docsUrl?, footer?: { text, links[] }, about?: { changelogUrl }, hero?: { src, alt }, tokens?: { light, dark } }`, and/or the scalars `OBSERVOGRAM_BRAND_NAME` / `_SHORT_NAME` / `_TAGLINE` / `_LOGO_URL` / `_DOCS_URL` / `_FOOTER` / `_ACCENT` / `_ACCENT_DARK`; one `name` derives every other string. Read once at start (a bad file refuses the start), rendered into the shell (`GET /`, `GET /index.html`, the SPA fallback: title, description, header, footer, `#brand-config`, `#brand-tokens`, favicon), the auth pages and, through `#brand-config`, the studio chrome; `node tools/gen-design-tokens.mjs --brand <file> --out <path>` for the tokens as JSON. The brand module (`tools/lib/brand.mjs`) is a listed module: a downstream studio can normalize and render the same object. Baked into the static bundle by `--brand` (§10) | README, "Rebadge The Studio (brand config)"; [`UI_CONVENTIONS.md`](UI_CONVENTIONS.md) §3 |
 | Waivers (sidecar) (B3.2) | `packc conformance --waivers <file>` — a JSON file `{ "version": 1, "waivers": [...] }` holding the waiver object `GET /api/services/:id/waivers` serves per row (`ruleId`, `reason`, `expiresAt`, `author`, optionally `artefactId`, `createdAt`, `id`), read before any pack by `tools/lib/waivers.mjs` `readWaiverFile` (unreadable or invalid → exit 2 naming the entry); the rubric waivers mark the rubric line and `--json`'s `rubric.waivers`, the `placeholder.<family>.<field>` waivers the placeholder rows' `waived` partition (`--strict` fails on unwaived rows alone); `author` is the audit actor — a login or the token label, never an email — and visible to anyone the file is shared with. No server configuration; the static bundle grades a pack bare (§14 `B3.2-bundle-waivers`) | §14 `waivers`; [`CONFORMANCE.md`](CONFORMANCE.md), "Waivers"; [`ADAPTER.md`](ADAPTER.md), "Waivers — a service record's suppression of a finding"; README, "Waive A Conformance Finding" |
 | Response path annotation (B3.3) | `metadata.annotations["observogram.remediates.remediation[<i>]"] = "<symbol>[, <symbol>…]"` in a pack — `alerting.rules[<j>]`, `policy.burn_rate_alerts[<j>]`, `slos.<id>` or `alert:<slug>` — names the alert(s) a remediation answers to when its `trigger` does not; read by `tools/lib/remediation-flow.mjs`, a symbol naming nothing is a warning, never a link. No server configuration | §14 `diagnose-remediate-flow`; [`ADAPTER.md`](ADAPTER.md), "Response path" |
@@ -225,16 +230,23 @@ Express server in front of it; it builds the studio from the vendored snapshot
 as one file and serves that:
 
 ```bash
-# From the snapshot (the whole tree, not only tools/lib — the bundle inlines studio/ too):
+# From the snapshot (the whole tree, not only tools/lib — the bundle inlines studio/ too),
+# with its package-lock.json, VENDOR-MANIFEST.json and LICENSE, installed from the lockfile:
+npm ci
 node tools/build-studio-bundle.mjs \
   --pack packs/orders.pack.yaml --id orders --label "Orders" --description "Order intake and fulfilment" \
   --pack-url https://packs.example.internal/payments.pack.yaml --label "Payments" \
   --taxonomy taxonomy.json --brand brand.json \
-  --out dist/studio/index.html --no-remote-fonts
+  --out dist/studio/index.html
 ```
 
 Each pack takes its own `--id`, `--label` and `--description` — the catalogue
-row the bundled studio shows.
+row the bundled studio shows. The file loads no font over the network: the
+shell's three Google Fonts lines (two preconnects and the stylesheet) are
+dropped, and the stylesheets' font stacks apply. `--remote-fonts` keeps them,
+for readers who are online, and the page then asks `fonts.googleapis.com` and
+`fonts.gstatic.com` for the fonts; `--no-remote-fonts`, the default, is still
+accepted, and the two together are a usage error.
 
 What is in the file: `studio/index.html` with every stylesheet inlined in
 place, an inline import map whose keys are `studio/<file>.mjs` and
@@ -249,15 +261,15 @@ entry names) against a running server:
 
 | Answered in the browser | Answered `501 { ok: false, denied: 'no-backend', error: '<Feature> needs the Observogram server; this studio is a static bundle built without one.' }` |
 |---|---|
-| `GET /api/packs`, `/api/packs/:id` (+ `?env=`), `/canonical` (JSON, `?format=yaml`), `/conformance`, `/compile-catalog`, `/compile-artifact`, `/compile/:target`, `/export.zip` (the Export button downloads it as a Blob); `/api/compile/targets`, `/api/maturity-rubric`, `/api/version`, `/healthz`, `/api/taxonomy` (unconfigured, or the document `--taxonomy` baked — a v2 file's `glossary` included, so the glossary marks draw as on a server), `/api/mcp-settings` (`proxy: false`; the policy `--mcp-settings-policy` baked or `null`, and `mcpOrigins` when `--mcp-origins` baked a list), `/api/examples` and `/api/references` (empty), `/api/live-status` (`present: false`); `/api/packs/:id/verdicts` (the empty document — a bundled pack is never registered, so this is the server's own answer); `/api/packs/:id/placeholders` (the placeholder report, the zero-store engine in the browser); `/auth/me` → `404 { ok: false, error: 'identity not configured' }` (the open posture) | every other `/api` or `/auth` path and every non-GET: Scan a repo (`/api/crawl*`), Draft from MCP, Refresh from MCP, Testing an MCP connection (`/api/mcp/ping`), Building a pack from a live MCP server (`/api/mcp/jobs`), uploads (`/api/validate`, `/api/uploads`), Compare (`/api/diff`, retrofeed), Deploy, Journeys, Build (`/api/library*`), Verdicts (`PUT` / `DELETE …/verdicts/:artefact`), Waivers (`/api/waivers`, `/api/services/:id/waivers` — a bundled pack has no service record), Audit report (`/api/packs/:id/audit-report` — its goes-blind section needs the parser below; the Conformance view's download anchors are answered by the shim's click handler, which shows this sentence in the notice row), Services (`/api/services`, `/api/services/:id` — the records behind the home's cards and the service page; a bundle has no services table, so the home lists the services its packs name), Organisations (`/api/orgs` — the active org's name and effective role), Settings (`/api/org`, `/api/org/members`, `/api/environments/:id`, `/api/mcp-endpoints`, `/api/audit` — a bundle has no org, so Settings shows this sentence), Passing MCP server settings through the studio server (`/api/mcp-settings/describe`, `/submit` — the opt-in pass-through; the bundle's Server settings modal sends from the browser), sign-in (`/auth/*`) |
+| `GET /api/packs`, `/api/packs/:id` (+ `?env=`), `/canonical` (JSON, `?format=yaml`), `/conformance`, `/compile-catalog`, `/compile-artifact`, `/compile/:target`, `/export.zip` (the Export button downloads it as a Blob); `/api/compile/targets`, `/api/maturity-rubric`, `/api/version`, `/healthz`, `/api/taxonomy` (unconfigured, or the document `--taxonomy` baked — a v2 file's `glossary` included, so the glossary marks draw as on a server), `/api/mcp-settings` (`proxy: false`; the policy `--mcp-settings-policy` baked or `null`, and `mcpOrigins` when `--mcp-origins` baked a list), `/api/examples` and `/api/references` (empty), `/api/live-status` (`present: false`); `/api/packs/:id/verdicts` (the empty document — a bundled pack is never registered, so this is the server's own answer); `/api/packs/:id/placeholders` (the placeholder report, the zero-store engine in the browser); `/auth/me` → `404 { ok: false, error: 'identity not configured' }` (the open posture); `GET /api/diff` (Compare: the diff and its traceability graph, computed in the browser over two packs the bundle carries — the PromQL parser and the packages it imports inlined from the lockfile); `POST /api/packs/:id/retrofeed` (retrofeed, the one non-GET answered: computed in the browser over two packs the bundle carries, written nowhere, with the server's body parsing and refusals — a `Content-Encoding`, a JSON body in a UTF charset other than UTF-8 and a text body's charset are not ported); `GET /api/packs/:id/audit-report` (the service audit report, JSON or HTML with the bundle's brand over its own design kit, its goes-blind section computed in the browser; a bundle has no store, so `assessments` and `waivers` are `available: false`, "not recorded by this build"; the generator is `<product> static bundle`, `pack.source` `bundle` or `url`; the Conformance view's download anchors are answered by the shim's click handler as a Blob download) | every other `/api` or `/auth` path and every non-GET but retrofeed: Scan a repo (`/api/crawl*`), Draft from MCP, Refresh from MCP, Testing an MCP connection (`/api/mcp/ping`), Building a pack from a live MCP server (`/api/mcp/jobs`), uploads (`/api/validate`, `/api/uploads`), Deploy, Journeys, Build (`/api/library*`), Verdicts (`PUT` / `DELETE …/verdicts/:artefact`), Waivers (`/api/waivers`, `/api/services/:id/waivers` — a bundled pack has no service record), Services (`/api/services`, `/api/services/:id` — the records behind the home's cards and the service page; a bundle has no services table, so the home lists the services its packs name), Organisations (`/api/orgs` — the active org's name and effective role), Settings (`/api/org`, `/api/org/members`, `/api/environments/:id`, `/api/mcp-endpoints`, `/api/audit` — a bundle has no org, so Settings shows this sentence), Passing MCP server settings through the studio server (`/api/mcp-settings/describe`, `/submit` — the opt-in pass-through; the bundle's Server settings modal sends from the browser), sign-in (`/auth/*`) |
 
 Swapping packs is a rebuild: `--pack` inlines a file validated against the
 schema at build time; `--pack-url` names a URL the page fetches at its first
 catalogue read (the host must answer CORS; a URL that fails is a catalogue
 entry with `ok: false`, never a failed boot; a URL carrying userinfo or a
 credential query parameter is refused, because the file is distributed).
-Upgrading is a snapshot bump and a rebuild — the bundle has no configuration
-of its own to migrate.
+Upgrading is a snapshot bump, an `npm ci` and a rebuild — the bundle has no
+configuration of its own to migrate.
 
 ### Rebadge batch 2, B1: baking the taxonomy and the brand
 
@@ -329,10 +341,200 @@ count and the origins; `--json` adds `mcpSettingsPolicy: { source, file,
 rules } | null` and `mcpOrigins: { source, origins } | null` — never the
 policy's contents.
 
-Compare stays excluded in this batch; the inlining itself is not the blocker. Measured at the pinned versions (node_modules, 2026-10-04): `@prometheus-io/lezer-promql@0.312.0-rc.0` `dist/index.es.js` 24,549 B (imports `@lezer/lr`, `@lezer/highlight`), `@lezer/lr@1.4.10` `dist/index.js` 71,678 B (imports `@lezer/common`; one guarded `typeof process != 'undefined' && process.env.LOG` read), `@lezer/highlight@1.2.3` `dist/index.js` 29,915 B, `@lezer/common@1.5.2` `dist/index.js` 83,319 B — 209,461 B, 279,284 B as base64 (+7 % on today's 3.9 MB), all ESM (`"type": "module"`, `exports.import`), no CommonJS, no `node:` import; every specifier between them is bare and equal to the package name, so the import map can carry them under their own names with no rewrite, and `import.meta.resolve(<package>)` (Node ≥ 22.16) gives each dist's path without a bundler. What blocks it: (1) `GET /api/diff` (server/index.mjs:556-580 — `diffPacks(aLayered, bLayered, { scopeMode, service })` plus `traceabilityGraph: comparePackBranches(aLayered, bLayered)`, `scopeMode` from the query or the `observogram.diff.scopeMode` annotation) has to be ported to `studio/static-backend.mjs` over two bundled packs and proven T5-style against a server body for body, and the Compare view's server-only limbs (uploads as pack B, live refresh, retrofeed) have to degrade visibly; (2) the bundle would redistribute third-party code under MIT (`@lezer/*`) and Apache-2.0 (`@prometheus-io/lezer-promql`), so the build must embed the license texts and copyright notices in the file and the docs must state it; (3) the build would depend on an installed `node_modules` (today it reads the repository tree only), which changes the snapshot recipe above; (4) `tools/lib/promql-lezer.mjs` is documented as not for browser-served modules and `tools/test-studio-bundle.mjs` T1 asserts no bare specifier in the graph — both become an allowlist of exactly these four names, with the vendor manifest's `npm` field as its source. Until then `/api/diff` answers `501 denied: 'no-backend'`, the notice names Compare among the server-only features, and a diff without the graph is never shown because it would grade differently from the server. The service audit report shares the blocker: its goes-blind section is the blast radius over the same graph, so `GET /api/packs/:id/audit-report` is a 501 in the bundle until the parser is inlined (`B3.5-bundle-audit-report`, §14).
+### Compare, the PromQL parser and the licences (follow-up compare-in-bundle)
 
-The other follow-up is `--split`, a directory form without `data:` URLs for a
-host whose Content-Security-Policy forbids them in `script-src`.
+**What the bundle answers.** Three computations a server makes are answered
+in the browser by `studio/static-backend.mjs`, over the same `tools/lib`
+engines, loaded at a route's first call (the boot does not evaluate them):
+`GET /api/diff` (Compare: the diff and its traceability graph), `POST
+/api/packs/:id/retrofeed` (the repository update from live — the one non-GET
+the shim answers, computed and written nowhere) and `GET
+/api/packs/:id/audit-report` (closing `B3.5-bundle-audit-report`, §14). Pair
+by name and by id needs no change: it re-keys the received diff in the
+browser over the two packs, as on a server (closing `compare-modes-bundle`,
+§15.5). What is proven, and where it stops:
+
+- The diff is the server's answer body for body — status, reason phrase,
+  content type, the headers the server sets and the raw text — for the
+  requests the studio sends. `tools/test-bundle-compare.mjs` and
+  `tools/test-bundle-compare-pairs.mjs` compare it with a running server in
+  Node, from the source (every ordered pair of ten packs in each scope mode
+  the studio sends; every `scopeMode` spelling on four pairs; the
+  environments; every refusal) and from a CLI-built file (its import map
+  applied by a resolve hook, the shim imported from its own `data:` address),
+  in every `npm test`, CI's included. Its C8 compares the in-page answer in
+  headless Chromium under the browser locales `en-US`, `cs-CZ` and `et-EE`;
+  it runs only where Playwright and its browser are installed, which CI's
+  jobs are not. Nothing is proven in Firefox or Safari.
+- Only with the baked taxonomy bound: a page where the studio could not
+  compile the taxonomy built in answers the three routes 500 naming that,
+  never an answer classified by the default families. The studio binds the
+  taxonomy it is served without re-running the 50 ms timing check, which the
+  builder (or a server) ran on the same document.
+- Retrofeed's body is read as the server's parsers read it, case by case,
+  but for three cases the studio never sends: a `Content-Encoding`, a JSON
+  body in a UTF charset other than UTF-8, and a text body's charset.
+- The audit report differs from a server's in declared fields only:
+  `generator` (`<product> static bundle`), `pack.source` (`bundle`, or `url`
+  for a `--pack-url` pack), `assessments` and `waivers` (`available: false`,
+  "not recorded by this build": a bundle has no store — its `GET …/verdicts`
+  still answers the empty document a server gives a never-registered pack,
+  which is what a server would say of the pack, where the report says what
+  this build can record), the clock's `generatedAt`, and for a pack a server
+  has registered `tier.service`/`tier.environment` (`null`: a bundle has no
+  registry).
+- The diff runs on the page's main thread: the largest example pair
+  (krystaline × production-curated) took 0.6–0.8 s in Chromium where it was
+  measured.
+- In the static posture Deploy explains instead of opening, every deploy
+  control Compare, Diagnose and Remediate draw is drawn unavailable with the
+  reason, and each remedy that would name a server action says how a bundle
+  gets a live pack — addressed to the reader, who did not build the file
+  (`studio/static-remedies.mjs`; `tools/test-static-remedies.mjs` holds every
+  such phrase in the studio to a disposition).
+
+**What the build needs.** The snapshot's whole tree, with `package.json`,
+`package-lock.json`, `LICENSE` and `VENDOR-MANIFEST.json` from the same
+upstream commit, and an `npm ci` at its root before the build. Coming from an
+earlier snapshot:
+
+1. Snapshot the whole tree as before; keep those four files from the same
+   upstream commit as the rest.
+2. Run `npm ci` at the tree's root (Node 22.16 or newer) before
+   `node tools/build-studio-bundle.mjs`; on a build machine that needs no dev
+   tools, `npm ci --omit=dev`. Either installs the server's production
+   dependencies too (74 packages: express, openid-client, …), of which a
+   bundle embeds four; an offline build machine needs all of them in npm's
+   cache or a registry mirror (prime it once with `npm ci` online, then run
+   `npm ci --offline`).
+3. Build. The human summary line is unchanged; `--json` gains a last key,
+   `thirdParty` — each embedded package's `name`, `version`, `license`,
+   `entry` (its file inside the package) and `bytes`; no build-machine path.
+4. If you patch an installed package (patch-package, a hand edit), the bundle
+   embeds your patched file and the licence block does not mark it as
+   modified; marking it where its licence asks is yours to do.
+5. A pipeline that rewrites the HTML after the build (a minifier, a CDN
+   optimiser) must keep the `#observogram-licenses` element; a step that only
+   strips comments keeps it, since it is a script element.
+   `verifyBundleNotices(html)`, exported by `tools/build-studio-bundle.mjs`,
+   checks a finished file.
+6. Fonts: a build now drops the shell's Google Fonts lines unless
+   `--remote-fonts` (it kept them unless `--no-remote-fonts`). A build that
+   wants them for online readers adds `--remote-fonts`; one that passed
+   `--no-remote-fonts` needs no change.
+7. Nothing else: no other flag, config key, Content-Security-Policy or host
+   change (`data:` in `script-src` was already needed).
+
+The build refuses a tree it cannot account for, with a sentence naming the
+package and a fix that whoever runs the build can follow: no `package-lock.json`, one that
+does not parse or is older than lockfile version 2; a package the lockfile
+does not list or that is not installed; an installed version or licence id
+that differs from the lockfile's; a package with no licence id or no licence
+file; a second copy that a bundled package would load instead of the hoisted
+one (the fix is an `overrides` entry in your `package.json`); an import a
+package does not declare, a file inside a package, a `node:*` import; a
+licence text that cannot be embedded (one holding `</script` or `<!--`); no
+`LICENSE`; a missing or unparsable `VENDOR-MANIFEST.json`; no spec provenance
+in `vendor/observability-pack-spec/VERSIONS.json`.
+
+**What the build checks.** The packages a bundle embeds are the ones
+`VENDOR-MANIFEST.json`'s `npm` field names for a bundled `tools/lib` module
+(today `@prometheus-io/lezer-promql`, for `tools/lib/promql-lezer.mjs`) and
+the packages those import (`@lezer/lr`, `@lezer/highlight`, `@lezer/common`);
+nothing else under `node_modules` is read. Each is installed at the version
+`package-lock.json` pins, declares the licence id the lockfile records, ships
+a licence file, and is the copy its importers load. Each entry file is
+embedded byte for byte as installed, as a `data:` module under the package's
+own name — the build changes nothing in it — with the package's licence
+files, any NOTICE file at its root and the copyright lines its file carries.
+Observogram's MIT licence is embedded in every bundle, with or without
+packages. Upstream's tests pin the licences it reviewed (each package's SPDX
+id and the sha256 of its licence and NOTICE files: `THIRD_PARTY` in
+`tools/test-bundle-compare.mjs`), so a licence change fails upstream's CI
+until someone reviews it; your own build embeds whatever your lockfile
+installs.
+
+**What it does not check.** Whether those licences suit your distribution.
+The packages' code. That the installed files are the ones the registry
+publishes: the lockfile's `integrity` is the hash of a package's tarball, and
+nothing npm leaves under `node_modules` records a file's, so a post-install
+patch is embedded as installed, unmarked. NOTICE files outside the published
+package: the build does not consult a package's source repository
+(`@prometheus-io/lezer-promql` publishes no NOTICE file; the block prints each
+package's source repository, so a reader can look there). The licences of the
+packs, brand assets or fonts you build in. The vendored spec, whose schema
+every bundle embeds, comes from a repository that publishes no licence file;
+the block states its provenance and claims no licence for it.
+
+**The licence block.** One `<script type="text/plain"
+id="observogram-licenses">` element at the end of `<head>` — never executed or
+rendered, read by `textContent` — and one comment right after the doctype that
+points to it, for a person opening the file. Its text: a preamble naming the
+build and the version, which says each package is embedded as `npm ci`
+installed it from `package-lock.json` and is not compared with the package the
+registry publishes; `==== Observogram <version> — MIT ====` and the `LICENSE`
+text; for each package, in code-point order of its name, `==== <name>
+<version> — <SPDX id> ====`, a `File:` line (the entry file and its import-map
+key), a `Source:` line (the repository its `package.json` names, when that is
+an `https:` URL), a `Copyright lines in the file:` line (when the file carries
+any) and each licence file, then each NOTICE file, under `---- <file name>
+----`; then `==== The ObservabilityPack spec ====` with the
+upstream commit `vendor/observability-pack-spec/VERSIONS.json` records. No
+path of the build machine enters the file, and two builds of one tree with one
+`builtAt` are byte-identical. `verifyBundleNotices(html)` → `{ ok, packages,
+problems }` checks that the file has one such element, in `<head>`; an
+Observogram MIT section with the licence's grant and its disclaimer; one
+section per package the import map carries — with its `File:` line and a
+licence text — and none for a package it does not carry; and the pointer
+comment's wording. It does not compare the texts with an installed tree.
+
+**Size.** An empty bundle is 5,454,277 bytes (115 repository modules and the
+four packages; `--remote-fonts` adds 372), up from 4,901,598 bytes (109
+modules) before this follow-up, both without the font links (+11.3 %): the
+parser and its packages, the traceability graph and the blast radius, the
+audit report, retrofeed and the static posture's texts.
+`tools/test-studio-bundle.mjs` holds a two-pack build under 6,000,000 bytes,
+so a dependency that enters the graph unexpectedly is caught where it lands.
+
+**On a server too: one collation.** Every `tools/lib` sort passes `'en'` to
+`localeCompare` — the CLDR root order, which English does not tailor — so the
+diff, the graph, canonical PromQL and the identity keys and behaviour hashes
+built from it order text the same under every process and browser locale
+(without it, a bundle read in a Czech browser ordered its diff differently
+from the server that built its packs). A server whose process runs under a
+locale that tailors Latin letters (Czech, Danish, Estonian, Lithuanian,
+Hungarian, Slovak and the like) orders differently from before; `C`,
+`C.UTF-8` and `en_*` do not move. On such a server, an artefact whose
+identity key holds canonical PromQL, or a sorted list that now sorts
+differently, gets a new key, so a verdict recorded on it before the upgrade
+does not carry at the pack's next re-registration. Check the collation where
+the server runs (`node -p "new Intl.Collator().resolvedOptions().locale"` in
+its environment): `en`, `en-US` or `und` — nothing moves; otherwise, after
+each pack's first re-registration on the new version, read its
+`verdict.carry` audit row (`dropped`, `droppedCount`) and record those
+verdicts again. `tools/test-vendor-manifest.mjs` refuses a `localeCompare(`
+or `Intl.Collator(` under `tools/lib` that does not pass `'en'`.
+
+**The image.** The Docker image carries `LICENSE` beside `package.json`; its
+`node_modules` carries each installed package's own licence file.
+
+**Follow-ups, by name.**
+
+- *`bundle-diff-worker`* — the diff off the page's main thread (a Worker needs
+  its own module resolution: import maps do not apply in workers).
+- *`bundle-browser-matrix`* — parity proven in Firefox and Safari.
+- *`ci-browser-suites`* — Playwright in CI, so C8 and T7 run there.
+- *`spec-licence`* — once the spec's repository publishes a licence,
+  `tools/sync-spec.mjs` vendors it and the block embeds it.
+- *`bundle-licences-view`* — the licences readable from the studio's About
+  entry.
+- *`bundle-discover-controls`* — Discover's `Scan a repo` and `Generate live
+  from MCP` drawn unavailable in the static posture (they answer the `501`
+  sentence on use).
+- *`server-third-party-notices`* — one notices file for the server's own npm
+  closure in the image.
+- *`--split`* — a directory form without `data:` URLs, for a host whose
+  Content-Security-Policy forbids them in `script-src`.
 
 ## 11. From validates to conformant
 
@@ -663,7 +865,7 @@ blocker, so a wave can be scheduled against them.
 | `diagnose-remediate-flow` | shipped — full build | `tools/lib/remediation-flow.mjs` (listed): `buildRemediationFlowModel`, the linking rule and the `observogram.remediates.remediation[<i>]` annotation (`docs/ADAPTER.md` "Response path"); the panel `studio/remediation-flow-view.mjs` on Diagnose (`#diag-flow`) and Remediate (`#rm-flow`), the `.rflow-*` zone | its alert → runbook / automation "what next" page and its trigger-to-alert matching | `remediation-trigger-ref`, `remediation-flow-graph-unify`, `remediation-flow-live-state`, `alert-rule-deploy`, `catalogue-triggers` |
 | `glossary` | shipped — full build | the taxonomy file's schema version 2 `glossary` (`OBSERVOGRAM_TAXONOMY` / `--taxonomy`; README "Classify Typed Packs"), `tools/lib/artefact-classify.mjs` `glossaryFor` / `glossaryByText` / `glossaryEntries` (listed), the mark `studio/glossary.mjs` (`.ux-gloss-*`) on Discover rows, board titles, head facts and the drawer | its hover/inline definitions for artefact families and domain terms, and the file that held them | `glossary-light-views`, `glossary-termhtml-override`, `glossary-seed-from-spec` |
 | `verdicts` | shipped — full build | `GET/PUT/DELETE /api/packs/:id/verdicts[/:artefact]` (`docs/ADAPTER.md` "Verdicts"), the `verdicts.json` entry of `/export.zip`, the `verdict.set` / `verdict.clear` / `verdict.carry` audit rows, the `verdict` status property (`studio/ux-kit.mjs`) and `studio/verdict-html.mjs` | its per-artefact review / trust record and its badge, filter and record form | `verdicts-service-scope`, `verdicts-bundle-bake`, `verdicts-cli`, `verdicts-on-adapter-upgrade` |
-| `service-audit-report` | shipped — full build | `GET /api/packs/:id/audit-report?format=json\|html` and `GET /api/packs/:id/placeholders` (`docs/ADAPTER.md` "The service audit report"), `packc audit-report` (`--verdicts`, `--waivers`, `--brand`, `--taxonomy`, `--no-timestamp`), `tools/lib/audit-report.mjs` (listed: `buildAuditReport`, `renderAuditReportHtml`), the Conformance view's two download anchors | its per-service audit page and export (conformance, exceptions, review state, coverage, single points of failure, runbook linkage) | `B3.5-bundle-audit-report`, `B3.5-export-zip`, `B3.5-dark-print` |
+| `service-audit-report` | shipped — full build | `GET /api/packs/:id/audit-report?format=json\|html` and `GET /api/packs/:id/placeholders` (`docs/ADAPTER.md` "The service audit report"), `packc audit-report` (`--verdicts`, `--waivers`, `--brand`, `--taxonomy`, `--no-timestamp`), `tools/lib/audit-report.mjs` (listed: `buildAuditReport`, `renderAuditReportHtml`), the Conformance view's two download anchors; in the static bundle too (follow-up `compare-in-bundle`, §10) | its per-service audit page and export (conformance, exceptions, review state, coverage, single points of failure, runbook linkage) | `B3.5-export-zip`, `B3.5-dark-print` |
 
 ### waivers
 
@@ -847,12 +1049,10 @@ the contract (`reportVersion: 1`).
 
 Follow-ups, by name:
 
-- *`B3.5-bundle-audit-report`* — the bundle answers `/audit-report` 501: the
-  goes-blind section needs the traceability graph's PromQL parser (§10, the
-  Compare blocker). When the parser is inlined, the shim builds the report in
-  the browser with `goesBlind.available: true`; until then a bundle build
-  could ship the report with `goesBlind.available: false` ("not computed by
-  this build") — a product call, deferred with the Compare decision.
+- *`B3.5-bundle-audit-report`* — closed by follow-up `compare-in-bundle`
+  (§10): the bundle inlines the PromQL parser, and the shim builds the report
+  in the browser with `goesBlind.available: true`, its verdicts and waivers
+  sections "not recorded by this build".
 - *`B3.5-export-zip`* — `GET /api/packs/:id/export.zip` could carry
   `audit-report.json` / `.html` beside `verdicts.json`; held back because the
   ZIP's entry list is pinned by the bundle parity suite and the report is
@@ -1079,8 +1279,9 @@ the studio re-keys in the browser over the two packs on screen.
 - *`artefact-uid-annotation`* — id mode for Grafana-managed rules (spec 1.4's
   `AlertRule` has no uid field, so a rule's id is its name).
 - *`diff-identity-query`* (`/api/diff?identity=`), *`compare-modes-chains`*
-  (the traceability graph re-keyed by mode), *`compare-modes-bundle`*
-  (blocked with Compare in the static bundle).
+  (the traceability graph re-keyed by mode). *`compare-modes-bundle`* is
+  closed by the follow-up `compare-in-bundle` (§10): with Compare answered in
+  the static bundle, Pair by re-keys its diff in the browser as on a server.
 - *`live-jobs-durable`* — jobs in the store, so they survive a restart.
 - *`journey-snapshot-source`* — re-snapshot on a journey run, with the
   captured scope.
