@@ -2767,14 +2767,18 @@ test('purge-org users file: a directory under the root that changes while the wa
     changed(`${ROOT_B}/a`), 'a mount over a directory read already, by its inode');
 });
 
-// A root too large to keep in memory entry by entry: 150 directories of 1,000 files and one of 100,000, made up as each
-// is asked for by an injected filesystem that keeps none of it, the users file outside. Each entry's stats as node:fs gives
-// them with { bigint: true }, eighteen bigints. The child prints the place and how many lstatSync calls it answered.
+// A root too large to keep in memory entry by entry, made up as each entry is asked for by an injected filesystem that keeps
+// none of it, the users file outside: 'files', 150 directories of 1,000 files and one of 100,000, at /ws/orgs/beta; or
+// 'directories', one directory of 100,000 empty directories, the root's path 40 characters long. Each entry's stats as
+// node:fs gives them with { bigint: true }, eighteen bigints. The child prints the place and how many lstatSync calls it
+// answered.
 const HUGE_ROOT = `
 const { posix } = await import('node:path');
 const { usersFilePlace } = await import(${JSON.stringify(pathToFileURL(join(HERE, 'store', 'users-file-place.mjs')).href)});
-const ROOT = '/ws/orgs/beta';
-const [DIRS, FILES, WIDE] = [150, 1000, 100_000];
+const DIRECTORIES = process.argv[1] === 'directories';
+const ROOT = DIRECTORIES ? '/var/lib/observogram/workspace/orgs/beta' : '/ws/orgs/beta';
+const USERS = posix.join(ROOT, '..', '..', 'users.json');
+const [DIRS, FILES, WIDE] = DIRECTORIES ? [0, 0, 100_000] : [150, 1000, 100_000];
 const [IFMT, IFDIR, IFREG, IFLNK] = [0o170000n, 0o040000n, 0o100000n, 0o120000n];
 class BigIntStats {
   constructor(dir, ino) {
@@ -2789,18 +2793,23 @@ class BigIntStats {
   isSymbolicLink() { return (this.mode & IFMT) === IFLNK; }
 }
 const fail = (code, p) => Object.assign(new Error(code + ': ' + p), { code });
-const dirs = new Map([['/', 1n], ['/ws', 2n], ['/ws/orgs', 3n], [ROOT, 4n], [ROOT + '/wide', 5n]]);
+// The root and the directories it lies in ('/', '/ws', '/ws/orgs', '/ws/orgs/beta'), then <root>/wide.
+const above = ROOT.split('/').map((_, i, parts) => parts.slice(0, i + 1).join('/') || '/');
+const dirs = new Map([...above.map((p, i) => [p, BigInt(i + 1)]), [ROOT + '/wide', BigInt(above.length + 1)]]);
+const R = new RegExp('^' + ROOT + '/r([0-9]+)(?:/f([0-9]+)[.]json)?$');
+const W = new RegExp('^' + ROOT + '/wide/w([0-9]+)' + (DIRECTORIES ? '' : '[.]json') + '$');
+const RD = new RegExp('^' + ROOT + '/r[0-9]+$');
 let lstats = 0;
 const lstatSync = (p) => {
   lstats += 1;
   if (dirs.has(p)) return new BigIntStats(true, dirs.get(p));
-  if (p === '/ws/users.json') return new BigIntStats(false, 6n);
-  const r = /^\\/ws\\/orgs\\/beta\\/r(\\d+)(?:\\/f(\\d+)\\.json)?$/.exec(p);
+  if (p === USERS) return new BigIntStats(false, BigInt(above.length + 2));
+  const r = R.exec(p);
   if (r && Number(r[1]) < DIRS && Number(r[2] ?? 0) < FILES) {
     return new BigIntStats(r[2] === undefined, r[2] === undefined ? BigInt(100 + Number(r[1])) : BigInt(1_000_000 + Number(r[1]) * FILES + Number(r[2])));
   }
-  const w = /^\\/ws\\/orgs\\/beta\\/wide\\/w(\\d+)\\.json$/.exec(p);
-  if (w && Number(w[1]) < WIDE) return new BigIntStats(false, BigInt(500_000_000 + Number(w[1])));
+  const w = W.exec(p);
+  if (w && Number(w[1]) < WIDE) return new BigIntStats(DIRECTORIES, BigInt(500_000_000 + Number(w[1])));
   throw fail('ENOENT', p);
 };
 const names = (n, name) => Array.from({ length: n }, (_, i) => Buffer.from(name(i)));
@@ -2809,29 +2818,35 @@ const fs = {
   statSync: lstatSync,
   readdirSync(p) {
     if (p === ROOT) return [...names(DIRS, (i) => 'r' + i), Buffer.from('wide')];
-    if (p === ROOT + '/wide') return names(WIDE, (i) => 'w' + i + '.json');
-    if (/^\\/ws\\/orgs\\/beta\\/r\\d+$/.test(p)) return names(FILES, (i) => 'f' + i + '.json');
+    if (p === ROOT + '/wide') return names(WIDE, (i) => 'w' + i + (DIRECTORIES ? '' : '.json'));
+    if (RD.test(p)) return names(FILES, (i) => 'f' + i + '.json');
+    if (DIRECTORIES && W.test(p)) return [];
     throw fail('ENOTDIR', p);
   },
   readlinkSync: (p) => { throw fail('EINVAL', p); },
   realpathSync: (p) => p,
   readFileSync: (p) => { throw fail('ENOENT', p); },
 };
-const place = usersFilePlace('/ws/users.json', ROOT, { fs, path: posix, windows: false, id: 'beta' });
+const place = usersFilePlace(USERS, ROOT, { fs, path: posix, windows: false, id: 'beta' });
 console.log(JSON.stringify({ place, lstats }));
 `;
 
-test('purge-org users file: the walk keeps nothing of a file it passes, and of a directory\'s entries only the listings of the directories it is in — a root of 250,000 files, 150 directories of 1,000 and one of 100,000, is read in a 32 MB heap, where keeping each entry\'s stats ran out of memory; so a users file created, replaced or written while the walk runs is compared with each entry again: refused as lying under the root, as when nothing changes it', () => {
+test('purge-org users file: the walk keeps nothing of a file it passes, and of a directory\'s entries only the listings of the directories it is in — a root of 250,000 files, 150 directories of 1,000 and one of 100,000, is read in a 32 MB heap, where keeping each entry\'s stats ran out of memory, and one directory of 100,000 empty directories, the root\'s path 40 characters long, in 64 MB; so a users file created, replaced or written while the walk runs is compared with each entry again: refused as lying under the root, as when nothing changes it', () => {
   // Kept, the stats of 250,000 entries take some 175 MB: purge-org died, out of memory, where rmSync of the same tree
   // completed. Each entry is compared with the users file as the walk reaches it, and a directory's entries are taken from
   // its listing one by one as the walk goes, not pushed ahead of it.
+  // Of a directory the walk keeps its path, device and inode, times and a digest of its names, and it holds the listing of
+  // each directory it is in: one directory of 100,000 empty directories, the root's path 40 characters long, needs more heap
+  // than the 250,000 files — 48 MB is too little.
   const env = { ...process.env };
   delete env.NODE_OPTIONS;   // the heap limit is this child's alone
-  const r = spawnSync(process.execPath, ['--max-old-space-size=32', '--input-type=module', '-e', HUGE_ROOT], { env, encoding: 'utf8', timeout: 120_000 });
-  assert.equal(r.status, 0, `the child ended ${r.signal ?? r.status}: ${r.stderr.split('\n').find((l) => /heap|Error/.test(l)) ?? r.stderr.slice(0, 400)}`);
-  const { place, lstats } = JSON.parse(r.stdout);
-  assert.deepEqual(place, { exists: true, refusal: null }, 'the users file outside the root: purged');
-  assert.ok(lstats > 250_000, `every entry read (${lstats} lstatSync calls)`);
+  for (const [shape, heap, entries] of [['files', 32, 250_000], ['directories', 64, 100_000]]) {
+    const r = spawnSync(process.execPath, [`--max-old-space-size=${heap}`, '--input-type=module', '-e', HUGE_ROOT, shape], { env, encoding: 'utf8', timeout: 120_000 });
+    assert.equal(r.status, 0, `${shape}: the child ended ${r.signal ?? r.status}: ${r.stderr.split('\n').find((l) => /heap|Error/.test(l)) ?? r.stderr.slice(0, 400)}`);
+    const { place, lstats } = JSON.parse(r.stdout);
+    assert.deepEqual(place, { exists: true, refusal: null }, `${shape}: the users file outside the root: purged`);
+    assert.ok(lstats > entries, `${shape}: every entry read (${lstats} lstatSync calls)`);
+  }
   // So the users file is placed before the walk and again after it: one created, replaced or written meanwhile — once the
   // walk has read <root>/packs, before <root>/sub — is compared with each entry again. Written in place, through an NFS view
   // of <root>/sub, within one tick of a coarse clock (its size alone moves) or to the same size (its time alone moves).

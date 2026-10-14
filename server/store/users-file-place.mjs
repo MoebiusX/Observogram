@@ -27,9 +27,9 @@
 //     the users file. The root itself mounted (a volume per org) is refused alike. A directory the walk cannot read is
 //     refused: what lies in it cannot be told, and rmSync would fail part-way there. The walk keeps nothing of a file it
 //     passes — each entry is compared with the users file, and with its name, as the walk reaches it (below) — and of a
-//     directory its device, inode, change and modification time and a digest of its names, holding besides only the
-//     listing of each directory it is in, as Node 22's rmSync does: kept entry by entry, the stats of a root of millions
-//     of files took more memory than the heap had, and purge-org died where rmSync completed.
+//     directory its path, device, inode, change and modification time and a digest of its names, holding besides only
+//     the listing of each directory it is in, as Node 22's rmSync does: kept entry by entry, the stats of a root of
+//     millions of files took more memory than the heap had, and purge-org died where rmSync completed.
 //   - the users file, its path followed through every link (statSync), before the walk and again after it — one that
 //     changed meanwhile (another device, inode, size or modification time) is compared with each entry read again: it
 //     lies under the root when an entry the walk found is the same file — the same device and inode (on Windows the volume serial's low 32 bits, all a
@@ -193,8 +193,8 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
   // idOf) with the same change time and names (a digest of them): an entry added, removed or renamed in it, or a mount over
   // it, changes one of them — and its modification time, which with its device and inode places a users file that does
   // not exist (below). Of the other entries the walk keeps only those that are the users file or have its name (below):
-  // with the listings of the directories it is in (frames), its memory is a few hundred bytes for each directory under
-  // the root and nothing for a file.
+  // with the listings of the directories it is in (frames), its memory is a few hundred bytes and the path for each
+  // directory under the root, and nothing for a file.
   const read = [];
   const DIRECTORY = { isFile: () => false, isDirectory: () => true };
   // Each name as the bytes the filesystem holds: listed as a string, a name that is not valid UTF-8 comes back with U+FFFD
