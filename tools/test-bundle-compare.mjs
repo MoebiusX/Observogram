@@ -168,7 +168,8 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, cpSync } from 'node:fs';
 import { register } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import {
   DEFAULT_ROOT, ENTRIES, CONFIG_ID, LICENCES_ID, inlineJson, licenceBlockText, pointerComment, readOwnNotices, verifyBundleNotices,
@@ -1211,7 +1212,8 @@ test('C6 retrofeed in the shim: the server\'s answer for computed pairs with and
 // 'playwright'.
 async function loadPlaywright() {
   const spec = process.env.OBSERVOGRAM_PLAYWRIGHT || 'playwright';
-  try { return { pw: await import(spec) }; }
+  // An absolute path, a Windows one too, is imported as its file URL (import() takes a URL or a package name).
+  try { return { pw: await import(isAbsolute(spec) ? pathToFileURL(spec).href : spec) }; }
   catch (e) { return { error: `cannot import ${spec}: ${e.message.split('\n')[0]}` }; }
 }
 // S4's pattern (tools/test-static-remedies.mjs, which holds every studio line it matches to a disposition): a server
