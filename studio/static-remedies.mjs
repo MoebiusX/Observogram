@@ -90,6 +90,11 @@
 //     in the compiler's list and over its preview (compile-view.mjs), where
 //     a server's says to declare it in spec.dashboards[] to deploy and
 //     verify it.
+//   remediate-no-b-primary (row 30) — Remediate's primary action with no
+//     Pack B (compile-view.mjs), which opens the Assessment, where a
+//     server's says to compare with live first: with no live pack built in
+//     besides Pack A there is none to compare with, and it names the
+//     Assessment it opens.
 //
 // staticTraceActions(product) is the set of Traceability's live-evidence
 // texts for the static posture (rows 14, 15): the same keys as
@@ -158,6 +163,7 @@ const STATIC_REMEDIES = {
     ? 'Choose the live pack built into this bundle as Pack B to enable'
     : `To enable, pick a live pack as Pack B: ${noLive(product, packALive)}`),
   'compiler-generated-board': ({ product }) => `deploying it needs ${theServer(product)}, and the pack declaring it in spec.dashboards[]`,
+  'remediate-no-b-primary': ({ liveBuiltIn }) => (liveBuiltIn ? 'Compare with live first' : 'Review the assessment'),
 };
 
 export const STATIC_REMEDY_KEYS = Object.freeze(Object.keys(STATIC_REMEDIES));

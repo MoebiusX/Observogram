@@ -224,6 +224,7 @@ const TEXTS = {
     ? 'Choose the live pack built into this bundle as Pack B to enable'
     : `To enable, pick a live pack as Pack B: ${NOLIVE(server, packALive)}`),
   'compiler-generated-board': (server) => `deploying it needs ${server}, and the pack declaring it in spec.dashboards[]`,
+  'remediate-no-b-primary': (server, { liveBuiltIn }) => (liveBuiltIn ? 'Compare with live first' : 'Review the assessment'),
 };
 // Traceability's live-evidence texts in the static posture (rows 14, 15), exactly; metricConfirm takes the metric.
 const TRACE_TEXTS = (server) => ({
@@ -268,14 +269,19 @@ test('S3 — the static texts, exact for five products (no article picked by the
     assert.deepEqual(textsOf(trace), TRACE_TEXTS(server), `the static live-evidence texts / ${product}`);
     for (const [k, text] of Object.entries(textsOf(trace))) assert.doesNotMatch(text, SERVER_ACTION, `${k}: no server action the reader cannot take here`);
   }
-  // Which input each text reads: liveBuiltIn for eight, packALive for the five of them that say the bundle carries no
+  // Which input each text reads: liveBuiltIn for nine, packALive for the five of them that say the bundle carries no
   // live pack (a live Pack A is one: they say none besides it), packsBuiltIn for one, none for the rest.
   const reads = (field) => STATIC_REMEDY_KEYS.filter((key) => staticRemedy(key, { product: 'P', [field]: true }) !== staticRemedy(key, { product: 'P' }));
-  assert.deepEqual(reads('liveBuiltIn'), ['trace-no-b', 'diagnose-banner', 'drift-free-no-live', 'live-measure', 'no-live-hint', 'flow-not-compared-diagnose', 'remediate-no-b', 'remediate-strategy-no-b']);
+  assert.deepEqual(reads('liveBuiltIn'), ['trace-no-b', 'diagnose-banner', 'drift-free-no-live', 'live-measure', 'no-live-hint', 'flow-not-compared-diagnose', 'remediate-no-b', 'remediate-strategy-no-b', 'remediate-no-b-primary']);
   assert.deepEqual(reads('packALive'), ['trace-no-b', 'diagnose-banner', 'flow-not-compared-diagnose', 'remediate-no-b', 'remediate-strategy-no-b']);
   assert.deepEqual(reads('packsBuiltIn'), ['need-pack']);
   // Row 1 with a live pack built in is the view's own text: nothing in it names a server action.
   assert.ok(read('studio/compare-view.mjs').includes(`: '${TEXTS['trace-no-b']('', { liveBuiltIn: true })}',`), 'trace-no-b with a live pack built in is the live studio\'s words');
+  // Row 30, Remediate's primary with no Pack B, likewise: with a live pack built in besides Pack A, the Assessment it
+  // opens offers it as Pack B; with none, it asks for no comparison with live — there is nothing live to compare with —
+  // and names the Assessment it opens.
+  assert.ok(read('studio/compile-view.mjs').includes(`: '${TEXTS['remediate-no-b-primary']('', { liveBuiltIn: true })}', action: 'rm-diagnose' };`), 'remediate-no-b-primary with a live pack built in is the live studio\'s words');
+  for (const input of [{}, { packALive: true }, { packsBuiltIn: true }]) assert.doesNotMatch(staticRemedy('remediate-no-b-primary', { product: 'P', ...input }), /\blive\b/i, `remediate-no-b-primary / ${JSON.stringify(input)}: no live pack to compare with`);
   assert.match('then re-scan to confirm the gap closed', SERVER_ACTION, 'the pattern finds what the live text says');
   assert.match('Redraft from MCP before acting on this drift.', SERVER_ACTION);
   assert.match('Review them, then deploy what is missing live or update the repository from live.', SERVER_ACTION);
@@ -479,7 +485,7 @@ test('S4 — the phrase ledger: every studio line that names a server action is 
   assert.deepEqual(rowOf('studio/compile-view.mjs', 'to deploy and verify it'), ['row 29']);
 });
 
-// Which view shows each static text (the design's A.8 rows, and rows 19–29, which this build adds).
+// Which view shows each static text (the design's A.8 rows, and rows 19–30, which this build adds).
 const WIRED_IN = {
   'retrofeed-result': 'studio/compare-view.mjs',
   'drift-partial': 'studio/compare-view.mjs',
@@ -507,6 +513,7 @@ const WIRED_IN = {
   'remediate-not-compared-summary': 'studio/compile-view.mjs',
   'remediate-strategy-no-b': 'studio/compile-view.mjs',
   'compiler-generated-board': 'studio/compile-view.mjs',
+  'remediate-no-b-primary': 'studio/compile-view.mjs',
 };
 // The one way a pure function takes the static texts: an explicit `remedy` input, bound where the view asks isStatic().
 const REMEDY_BINDING = 'remedy: isStatic() ? (key) => staticRemedy(key, staticInput()) : null,';
@@ -592,7 +599,10 @@ test('S5 — the wiring: each static text is shown by the view its row names, be
     "'Opens a review of destination, environment and artefacts; nothing is written until you confirm there.'",
     "'Load a live pack (Pack B) to enable'",
     "'This generated board is not declared in the pack; declare it in spec.dashboards[] to deploy and verify it.'",
+    "'Compare with live first'",
   ]) assert.ok(remediate.includes(live), `the live studio keeps ${live.slice(0, 60)}`);
+  // Row 30: the primary with no Pack B opens the Assessment, which its static text names.
+  assert.ok(remediate.includes("'rm-diagnose': () => goToDiagnose('grade'),"), 'rm-diagnose opens Diagnose on the Assessment');
   // Row 29: the generated board's Deploy to live card names the server before the declaration, and every subtitle the
   // compiler shows — the list's, its title, the preview's — goes through itemSubtitle, which in the static posture ends
   // a generated board's with the server it needs and otherwise is the catalogue's.

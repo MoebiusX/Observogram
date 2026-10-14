@@ -499,7 +499,10 @@ function remediationHeaderHtml(m) {
     decision = 'No live pack is loaded, so there is no diagnosed gap to resolve yet.';
     tone = 'info';
     note = isStatic() ? staticRemedy('remediate-no-b', staticInput()) : 'Compare with a live pack to get a recommendation, or deploy the repository’s artefacts directly.';
-    primary = { label: 'Compare with live first', action: 'rm-diagnose' };
+    // It opens the Assessment; in the static posture with no live pack built
+    // in besides Pack A, there is none to compare with, so it names where it
+    // goes (row 30).
+    primary = { label: isStatic() ? staticRemedy('remediate-no-b-primary', staticInput()) : 'Compare with live first', action: 'rm-diagnose' };
     if (m.sets.deploy?.total) secondary.push({ label: 'Deploy repository artefacts to live', action: 'rm-deploy-all' });
   } else {
     // Gap mode: baseline artefacts the scoped diff parked (families your pack

@@ -129,10 +129,13 @@
 // opacity with each text in it clearing AA (the house rule: no opacity on an
 // unavailable control, whose reason line is what marks it); rows
 // 4 (a one-pack bundle — on Compare, and on the Assessment Remediate's
-// Compare with live first lands on, whose Pack B picker offers none), 6,
-// 11, 12 and 18 (over the live pack as Pack A) render as written — with
-// other packs built in the picker offers each and the Assessment points at
-// it —, and the rendered Compare, Diagnose, Traceability and
+// primary lands on, whose Pack B picker offers none), 6, 11, 12, 18 (over
+// the live pack as Pack A) and 30 (Remediate's primary with no Pack B:
+// Compare with live first with the live pack built in, Review the
+// assessment over a live Pack A and in a bundle of one pack, each landing
+// on the Assessment) render as written — with other packs built in the
+// picker offers each and the Assessment points at it —, and the rendered
+// Compare, Diagnose, Traceability and
 // Remediate hold no phrase S4 holds the studio's source to; the Conformance
 // view's HTML anchor downloads the report
 // with its goes-blind section, and the in-page JSON and HTML are the
@@ -1364,6 +1367,9 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
   // Remediate's strategy cards drawn disabled with no Pack B (row 28): each one's next step to enable it.
   const disabledStrategies = (page) => page.evaluate(() => [...document.querySelectorAll('.ux-rm-strategy:disabled')].map((b) => [b.dataset.op, b.querySelector('.ux-rm-strategy-flow').textContent]));
   const NEED_B = ['retrofeed', 'drift', 'all'];
+  // Remediate's primary with no Pack B (row 30), and the Diagnose subtab a click on it opens.
+  const RM_PRIMARY = '#rm-decision .ux-primary-btn[data-ux-action="rm-diagnose"]';
+  const activeSub = (page) => page.evaluate(() => { const t = document.querySelector('.diag-subtab.is-active'); return t ? [t.dataset.sub, t.querySelector('.diag-subtab-label')?.textContent ?? null] : null; });
   const noServerAction = async (page, where) => {
     const hits = [...new Set([...(await viewText(page)).matchAll(new RegExp(SERVER_ACTION.source, 'gi'))].map((m) => m[0]))];
     assert.deepEqual(hits, [], `${where}: the static posture names no server action the reader cannot take`);
@@ -1607,6 +1613,8 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     const { page, ctx } = await open(base, { selectedPackId: 'payment-service', view: 'compile' });
     await page.waitForSelector('[data-ux-action="rm-compiler-open"]', { timeout: T });
     assert.deepEqual(await disabledStrategies(page), NEED_B.map((op) => [op, staticRemedy('remediate-strategy-no-b', { product, liveBuiltIn: true })]), 'row 28: the live pack built in');
+    assert.equal((await page.textContent(RM_PRIMARY)).trim(), staticRemedy('remediate-no-b-primary', { product, liveBuiltIn: true }), 'row 30: the live pack built in, which the Assessment\'s Pack B picker offers (row 6)');
+    assert.equal(staticRemedy('remediate-no-b-primary', { product, liveBuiltIn: true }), 'Compare with live first');
     await readsAA(page, 'Remediate (the live pack built in): row 28', [DISABLED_STRATEGY], DISABLED_STRATEGY);
     await page.click('[data-ux-action="rm-compiler-open"]');
     await page.waitForSelector('.ux-rm-output.is-live', { timeout: T });
@@ -1653,6 +1661,12 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     assert.deepEqual(await disabledStrategies(page), NEED_B.map((op) => [op, staticRemedy('remediate-strategy-no-b', { product, packALive: true })]), 'row 28 over a live Pack A');
     await readsAA(page, 'Remediate (a live Pack A): row 28', [DISABLED_STRATEGY], DISABLED_STRATEGY);
     await noServerAction(page, 'Remediate (a live Pack A)');
+    // Row 30: no live pack besides Pack A, so the primary asks for no comparison with live — the Pack B picker offers
+    // only the curated packs — and names the Assessment it opens.
+    assert.equal((await page.textContent(RM_PRIMARY)).trim(), staticRemedy('remediate-no-b-primary', { product, packALive: true }), 'row 30 over a live Pack A');
+    await page.click(RM_PRIMARY);
+    await page.waitForSelector('#diag-summary', { timeout: T });
+    assert.deepEqual(await activeSub(page), ['grade', 'Assessment'], 'row 30 over a live Pack A: the Assessment it names');
     await ctx.close();
   }
 
@@ -1717,15 +1731,17 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     await ctx.close();
   }
 
-  // Row 4: a bundle of one pack — nothing to compare it with. Remediate's primary, Compare with live first, lands on the
-  // Assessment, whose comparison with no baseline says so too: the header's Pack B picker offers none to choose.
+  // Row 4: a bundle of one pack — nothing to compare it with. Remediate's primary, Review the assessment (row 30: no
+  // live pack is built in to compare with), lands on the Assessment, whose comparison with no baseline says so too: the
+  // header's Pack B picker offers none to choose.
   {
     const { page, ctx } = await open(oneBase, { selectedPackId: 'production-curated', view: 'compile' });
-    const primary = '#rm-decision [data-ux-action="rm-diagnose"]';
-    await page.waitForSelector(primary, { timeout: T });
-    assert.equal((await page.textContent(primary)).trim(), 'Compare with live first');
-    await page.click(primary);
+    await page.waitForSelector(RM_PRIMARY, { timeout: T });
+    assert.equal((await page.textContent(RM_PRIMARY)).trim(), staticRemedy('remediate-no-b-primary', { product }), 'row 30 in a bundle of one pack');
+    assert.equal(staticRemedy('remediate-no-b-primary', { product }), 'Review the assessment');
+    await page.click(RM_PRIMARY);
     await page.waitForSelector('#diag-compare .diag-compare-prompt .ux-empty-body', { timeout: T });
+    assert.deepEqual(await activeSub(page), ['grade', 'Assessment'], 'row 30: the Assessment it names');
     assert.deepEqual(await comparePrompt(page), { body: staticRemedy('compare-one-pack', { product }), packB: ['— none —'] }, 'row 4 on the Assessment: no baseline to choose');
     await noServerAction(page, 'Diagnose (one pack)');
     await page.click('.diag-subtab[data-sub="compare"]');
