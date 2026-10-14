@@ -1551,14 +1551,14 @@ server-run journey's notification may read: its org's own notify hook,
 `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL`, and that hook's own `_TOKEN`, the
 org the sole owner of the name, posted only to this machine or to an origin
 the server's operator lists. The rule comes first, in its own module, with
-nothing calling it yet. Tests: 1425 → 1432
+nothing calling it yet. Tests: 1439 → 1446
 (`server/test-notify-target-policy.mjs` 7, new).
 
 A hook is chosen from a list, never typed. `GET /api/journeys/notify-hooks`
 answers every member of the org with the org's hooks — names, and whether a
 run could post through each, never a value or an origin — and the server's
 start tells its operator about every set hook a run would refuse, every name
-another org's id shadows, and every name no org owns. Tests: 1432 → 1434
+another org's id shadows, and every name no org owns. Tests: 1446 → 1448
 (two more in `server/test-notify-target-policy.mjs`).
 
 Then the rule takes effect. A server run of a journey that notifies resolves
@@ -1568,27 +1568,27 @@ no record, no row and nothing sent, so a refused run never becomes the next
 run's baseline; without sign-in such a run is answered only to a request sent
 straight to a loopback address. Capture refuses any other name, the audit
 rows name the hook (never its URL), and records written before are served
-without the values undici quoted into them. Tests: 1434 → 1448 (14 more in
+without the values undici quoted into them. Tests: 1448 → 1462 (14 more in
 `server/test-notify-target-policy.mjs`).
 
 The schedule snippets the studio hands out follow the same rule: a notify
 name the server refuses for a journey is never bound for the CronJob or any
 other scheduler — the snippet says, where the binding would have been, that
-the name must be renamed to one of the org's hooks first. Tests: 1448 → 1449
+the name must be renamed to one of the org's hooks first. Tests: 1462 → 1463
 (one more in `server/test-notify-target-policy.mjs`).
 
 A hook's variables go to its webhook and nowhere else, so an MCP endpoint
 may no longer read its token from a variable with the shape of any org's
 hook: an admin registering one is told to name another variable of the org,
 and an endpoint that named one before is refused where the token would be
-read, with the PATCH that repairs it. Tests: 1449 → 1451 (one more in
+read, with the PATCH that repairs it. Tests: 1463 → 1465 (one more in
 `server/test-store.mjs`, one in `server/test-services-api.mjs`).
 
 A variable belongs to the org with the longest matching prefix, so an org
 named after another org's hooks would take them for good. Creating an org
 now refuses an id that would take another org's notify hooks, one whose own
 hooks another org already holds, and one that differs from another org's id
-only in `-` and `_`. Tests: 1451 → 1452 (one more in
+only in `-` and `_`. Tests: 1465 → 1466 (one more in
 `server/test-identity-api.mjs`).
 
 The studio stops pointing at bare variable names. Where it suggests adding a
@@ -1598,10 +1598,10 @@ for an org whose every hook name another org's id takes, says the server's
 sentence that none can be set; and the Neuron view no longer calls a journey
 "Set up" when the server would refuse to run it: it shows the server's own
 sentence instead.
-Tests: 1452 → 1453 (one more in `tools/test-neuron-model.mjs`). A hook's
+Tests: 1466 → 1467 (one more in `tools/test-neuron-model.mjs`). A hook's
 names are single words wider than a phone, so the Neuron view's focus header
 breaks them inside its row rather than scroll the page sideways at 390 px.
-Tests: 1453 → 1454 (one more in `server/test-live-studio.mjs`).
+Tests: 1467 → 1468 (one more in `server/test-live-studio.mjs`).
 
 The docs close the item. `docs/DOWNSTREAM.md` §17 states the rule with every
 sentence capture and a run answer, and the migration for a journey written
