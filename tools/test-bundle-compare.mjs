@@ -1309,7 +1309,8 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
   const serverId = Object.fromEntries(BUNDLED.filter((p) => p.onServer).map((p) => [p.id, p.onServer]));
   const bundleOf = (dir, packs) => {
     const out = join(TMP, dir, 'index.html');
-    const built = cli([...packs.flatMap((p) => ['--pack', resolve(ROOT, p.file), '--id', p.id, '--label', p.label ?? labels[p.onServer]]), '--out', out, '--no-remote-fonts']);
+    // No font flag: by default a bundle links no remote font, and nothing off the loopback below holds that in the browser.
+    const built = cli([...packs.flatMap((p) => ['--pack', resolve(ROOT, p.file), '--id', p.id, '--label', p.label ?? labels[p.onServer]]), '--out', out]);
     assert.equal(built.status, 0, built.stderr);
     return readFileSync(out);
   };

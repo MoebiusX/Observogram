@@ -1568,6 +1568,12 @@ Each commit's suite total, in order:
     is not installed).
 11. The Docker image carries `LICENSE` (an assertion in
     `tools/test-deploy-manifests.mjs`, a harness; the total is unchanged).
+12. The bundle loads no font over the network unless `--remote-fonts` (the
+    ruling's "no CDN"; `--no-remote-fonts`, the earlier way, is the default).
+    Tests: 1443 → 1444 (one more test in `tools/test-studio-bundle.mjs`: the
+    default, `--remote-fonts`, `--no-remote-fonts`, both refused, `--json`;
+    T7 and C8 now build with no font flag, so their check in Chromium that no
+    request leaves the loopback covers the default).
 
 #### Found on the way: the collation and the taxonomy's clock
 

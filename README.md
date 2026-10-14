@@ -1891,8 +1891,13 @@ npm run build:studio -- --check --pack my-service.pack.yaml
 Each `--pack` / `--pack-url` takes its own `--id` (default: the file name),
 `--label` (default: the pack's `metadata.name`, else the id) and
 `--description` — the catalogue row the bundled studio shows, field for field
-what a server-side pack row carries. `--no-remote-fonts` drops the Google Fonts
-links for an offline host.
+what a server-side pack row carries. The file loads no font over the network:
+the shell's three Google Fonts lines (the preconnects and the stylesheet) are
+dropped unless `--remote-fonts` keeps them, for a host whose readers are online
+and should get the studio's fonts from Google's CDN (the page then asks
+`fonts.googleapis.com` for the stylesheet and `fonts.gstatic.com` for the
+fonts). `--no-remote-fonts`, the default, is still accepted; the two together
+are a usage error.
 
 **Bake the seams.** `--taxonomy <file.json>` bakes the artefact-taxonomy
 override (the file a server reads from `OBSERVOGRAM_TAXONOMY`, "Classify
@@ -2005,8 +2010,10 @@ and the migration from an earlier snapshot.
 Notes: `--pack` is validated against the spec schema at build time (a failing
 pack fails the build with the validator's text); `--pack-url` refuses a URL
 with userinfo or a credential query parameter — the URL is baked into a file
-you distribute — and `--json` prints URLs stripped; the Google Fonts links stay
-unless `--no-remote-fonts` (offline, the fallback stacks apply); a
+you distribute — and `--json` prints URLs stripped; the Google Fonts links are
+dropped unless `--remote-fonts` (offline by default: the stylesheets' font
+stacks apply, a family the reader's system has, else the system fonts after
+it; `--json`'s `remoteFonts` says which); a
 Content-Security-Policy that forbids `data:` in `script-src` cannot run the
 single-file form (a `--split` directory mode is the follow-up); import maps
 need Chrome 89, Firefox 108 or Safari 16.4. Without `--pack` the studio boots

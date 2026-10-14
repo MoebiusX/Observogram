@@ -8,14 +8,17 @@
 // bundle in a tmpdir: every data: module parses, the four packages each at
 // its installed ES module entry, the stylesheets in order,
 // nothing left pointing at the server, the licence element and its pointer
-// comment, the guards and the CLI exits) · T4
+// comment, the guards and the CLI exits) · T3d offline by default: no Google
+// Fonts line unless --remote-fonts, which keeps the shell's three byte for
+// byte · T4
 // inert by default (a build changes no source file; the live studio never
 // imports the shim; the shim links headlessly) · T5 parity against a running
 // child server for every route the shim ports — payment-service (an example
 // pack) and a library-built pack registered through POST /api/validate, so
 // onPlaceholder is compared too; export.zip headers and entry names · T6 the
-// denial table · T7 the REAL bundle booted in headless Chromium against the
-// fixture pack, the Export download and the audit-report anchor's download
+// denial table · T7 the REAL bundle, built with no font flag, booted in
+// headless Chromium against the fixture pack (no request off the loopback),
+// the Export download and the audit-report anchor's download
 // (the report built in the page) asserted · T4b inert by default: a build
 // with nothing baked is the build of the same tree with --taxonomy/--brand
 // unset, byte for byte (config-vs-no-config identity on the same tree — the
@@ -316,7 +319,6 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
       { id: 'payment-service', label: 'Payment', description: 'd', canonical: paymentCanonical },
       { id: 'golden', label: 'Golden crawl', canonical: JSON.parse(read(GOLDEN)) },
     ],
-    remoteFonts: true,
     builtAt: '2026-10-04T00:00:00.000Z',
   });
   const { html } = built;
@@ -385,11 +387,11 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   const order = ['<script type="application/json" id="observogram-static-config">', '<script type="importmap">', "import { installStaticBackend } from 'studio/static-backend.mjs'", "import 'studio/app.mjs';"].map((s) => html.indexOf(s));
   assert.ok(order.every((i, n) => i > 0 && (n === 0 || i > order[n - 1])), `the scripts in order: ${order}`);
   assert.ok(html.includes('<noscript>'), 'a noscript fallback');
-  // Fonts: kept by default, dropped with remoteFonts: false.
-  assert.ok(html.includes('fonts.googleapis.com'));
-  const noFonts = buildStudioBundle({ root: ROOT, packs: [], remoteFonts: false, builtAt: 'x' }).html;
-  assert.ok(!noFonts.includes('fonts.googleapis.com') && !noFonts.includes('fonts.gstatic.com'), 'no remote fonts');
-  assert.deepEqual(configOf(noFonts).packs, [], 'an empty catalogue builds');
+  // Fonts: none by default, kept with remoteFonts: true (T3d: the three lines, byte for byte).
+  assert.ok(!html.includes('fonts.googleapis.com') && !html.includes('fonts.gstatic.com'), 'no remote font by default');
+  const withFonts = buildStudioBundle({ root: ROOT, packs: [], remoteFonts: true, builtAt: 'x' }).html;
+  assert.ok(withFonts.includes('fonts.googleapis.com') && withFonts.includes('fonts.gstatic.com'), 'remoteFonts: true keeps the Google Fonts links');
+  assert.deepEqual(configOf(withFonts).packs, [], 'an empty catalogue builds');
   // Escaping: a pack string that tries to close the script or open a comment cannot.
   const hostile = inlineJson({ a: '</script><!--', b: 'x y' });
   assert.ok(!hostile.includes('</') && !hostile.includes('<!--') && !hostile.includes(' '), hostile);
@@ -492,6 +494,52 @@ test('T3 the CLI: writes, --check writes nothing, --json, --no-remote-fonts, a p
     [{ file: 'a.yaml', id: 'a', label: 'A', description: 'D' }, { url: 'https://x/y.yaml', description: 'E' }]);
 });
 
+test('T3d offline by default: no Google Fonts line unless --remote-fonts (remoteFonts: true), which keeps the shell\'s three byte for byte and moves nothing else; --no-remote-fonts, the default, still accepted and the default\'s bytes; both together a usage error; --json says which', () => {
+  // The shell's three lines — the two preconnects and the css2 stylesheet — as studio/index.html holds them.
+  const fontLinesOf = (text) => text.split('\n').filter((l) => /fonts\.g(?:oogleapis|static)\.com/.test(l));
+  const SHELL_FONTS = fontLinesOf(read('studio/index.html'));
+  assert.equal(SHELL_FONTS.length, 3, 'the live shell links Google Fonts in three lines');
+  assert.match(SHELL_FONTS[0], /^<link rel="preconnect" href="https:\/\/fonts\.googleapis\.com">$/);
+  assert.match(SHELL_FONTS[1], /^<link rel="preconnect" href="https:\/\/fonts\.gstatic\.com" crossorigin>$/);
+  assert.match(SHELL_FONTS[2], /^<link href="https:\/\/fonts\.googleapis\.com\/css2\?[^"]+" rel="stylesheet">$/);
+  const block = `${SHELL_FONTS.join('\n')}\n`;
+  // The API: the default carries none of them, anywhere; remoteFonts: false is the default byte for byte; remoteFonts:
+  // true is the default with the shell's three lines back where the shell has them, after the theme script.
+  const payment = { id: 'payment-service', label: 'payment-service', canonical: paymentCanonical };
+  const def = buildStudioBundle({ root: ROOT, packs: [payment], builtAt: 'x' }).html;
+  assert.ok(!def.includes('fonts.googleapis.com') && !def.includes('fonts.gstatic.com'), 'the default names neither Google Fonts host');
+  assert.equal(buildStudioBundle({ root: ROOT, packs: [payment], builtAt: 'x', remoteFonts: false }).html, def, 'remoteFonts: false is the default, byte for byte');
+  const kept = buildStudioBundle({ root: ROOT, packs: [payment], builtAt: 'x', remoteFonts: true }).html;
+  assert.deepEqual(fontLinesOf(kept), SHELL_FONTS, 'remoteFonts: true keeps the three lines, byte for byte, in order');
+  const at = kept.indexOf(block);
+  assert.ok(at > 0 && kept.slice(0, at).endsWith('</script>\n'), 'together, right after the theme script, as in the shell');
+  assert.equal(kept.slice(0, at) + kept.slice(at + block.length), def, 'and nothing else differs from the default');
+  // The CLI: no flag is the API's default; --no-remote-fonts the same bytes; --remote-fonts the API's remoteFonts:
+  // true; --json's remoteFonts the effective value.
+  const built = {};
+  for (const [name, flags] of [['none', []], ['no', ['--no-remote-fonts']], ['yes', ['--remote-fonts']]]) {
+    const out = join(TMP, 'fonts', name, 'index.html');
+    const r = cli(['--pack', resolve(ROOT, PAYMENT), ...flags, '--out', out, '--json']);
+    assert.equal(r.status, 0, r.stderr);
+    built[name] = { remoteFonts: JSON.parse(r.stdout).remoteFonts, html: normalizeBuiltAt(readFileSync(out, 'utf8')) };
+  }
+  assert.deepEqual([built.none.remoteFonts, built.no.remoteFonts, built.yes.remoteFonts], [false, false, true], '--json: false unless --remote-fonts');
+  assert.equal(built.none.html, normalizeBuiltAt(def), 'no flag: the API default');
+  assert.equal(built.no.html, built.none.html, '--no-remote-fonts: the default, byte for byte');
+  assert.equal(built.yes.html, normalizeBuiltAt(kept), '--remote-fonts: the three lines kept');
+  assert.equal(JSON.parse(cli(['--check', '--json', '--remote-fonts']).stdout).remoteFonts, true, '--check --json says so too');
+  // Both together: the usage, exit 2, in either order; one repeated is that one.
+  for (const pair of [['--remote-fonts', '--no-remote-fonts'], ['--no-remote-fonts', '--remote-fonts']]) {
+    const both = cli(['--check', '--json', ...pair]);
+    assert.equal(both.status, 2, pair.join(' '));
+    assert.match(both.stderr, /^--remote-fonts and --no-remote-fonts given together\nusage: build-studio-bundle\.mjs .*\[--remote-fonts \| --no-remote-fonts\]/);
+    assert.equal(both.stdout, '', 'nothing built, nothing printed');
+  }
+  assert.equal(parseArgs([]).remoteFonts, false);
+  assert.equal(parseArgs(['--remote-fonts', '--remote-fonts']).remoteFonts, true);
+  assert.equal(parseArgs(['--no-remote-fonts', '--no-remote-fonts']).remoteFonts, false);
+});
+
 test('T3b every flag the CLI accepts is in its usage line, the README synopsis and DOWNSTREAM §9/§10', () => {
   const src = readFileSync(join(DEFAULT_ROOT, 'tools', 'build-studio-bundle.mjs'), 'utf8');
   const flags = [...new Set([...src.matchAll(/a === '(--[a-z-]+)'/g)].map(m => m[1]))];
@@ -509,7 +557,7 @@ test('T3b every flag the CLI accepts is in its usage line, the README synopsis a
   for (const f of flags) {
     if (f === '--help') continue;
     for (const [name, text] of [['usage line', usageLine], ['README', readmeSection]]) assert.ok(text.includes(f), `${f} is documented in the ${name}`);
-    if (!packFlags.includes(f) && !bakeFlags.includes(f)) continue; // --check/--json/--out/--no-remote-fonts are the CLI's, not the pack catalogue's or the seams'
+    if (!packFlags.includes(f) && !bakeFlags.includes(f)) continue; // --check/--json/--out/--remote-fonts/--no-remote-fonts are the CLI's, not the pack catalogue's or the seams'
     for (const [name, text] of [['DOWNSTREAM §9 row', row], ['DOWNSTREAM §10', embedding]]) assert.ok(text.includes(f), `${f} is documented in the ${name}`);
   }
   // --description is a per-pack option of both --pack and --pack-url.
@@ -1041,11 +1089,12 @@ test('T7 the REAL bundle boots in headless Chromium against the fixture pack: th
   catch (e) { return skip(`chromium.launch failed: ${e.message.split('\n')[0]}`); }
   t.after(() => browser.close());
 
-  // The bundle, built as a downstream would build it, served from a loopback server.
+  // The bundle, built as a downstream would build it — no font flag, so no remote font — served from a loopback server.
   const out = join(TMP, 'smoke', 'index.html');
-  const built = cli(['--pack', resolve(ROOT, PAYMENT), '--label', 'Payment service (canonical example)', '--out', out, '--no-remote-fonts']);
+  const built = cli(['--pack', resolve(ROOT, PAYMENT), '--label', 'Payment service (canonical example)', '--out', out]);
   assert.equal(built.status, 0, built.stderr);
   const html = readFileSync(out);
+  assert.ok(!html.includes('fonts.googleapis.com') && !html.includes('fonts.gstatic.com'), 'the default build links no remote font');
   assert.ok(html.length > 3_000_000, `the real bundle (${html.length} bytes)`);
   const srv = createServer((req, res) => {
     if (req.url === '/' || req.url.startsWith('/?') || req.url.startsWith('/index.html')) {

@@ -198,7 +198,7 @@ a bump. The surface so far:
 |---|---|---|
 | Backend access (W2) | `OBSERVOGRAM_TRANSPORT_HOOK=<path.mjs \| file:URL>` — a module exporting `prepareRequest({ url, headers })` and/or `fetchImpl(url, init)`, applied to every MCP request of the CLI, the recorder, the probes, journeys and the studio server; `OBSERVOGRAM_ALLOW_LOCAL_MCP=0` still binds the URL it returns | [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md), "Transport hook" |
 | Reverse-proxy identity (W5) | `OBSERVOGRAM_TRUST_PROXY_AUTH=1` + `OBSERVOGRAM_TRUST_PROXY_AUTH_ACK=only-the-proxy-reaches-this-port`, the header names (`PROXY_AUTH_USER_HEADER`, `_EMAIL_HEADER`, `_NAME_HEADER`, `_GROUPS_HEADER`), `PROXY_AUTH_GROUP_ROLES` (`g=role,*=role`, authoritative in `PROXY_AUTH_ORG`), `PROXY_AUTH_JOIN_ROLE`, `PROXY_AUTH_OWNERS` (grant-only), `PROXY_AUTH_SHARED_SECRET` + `_SECRET_HEADER` (required beyond loopback), `PROXY_AUTH_LOGOUT_URL`, `PROXY_AUTH_REALM`; users are `proxy://<realm>#<user>` rows of kind `oidc`; refuses to start without the ACK, beside OIDC, exposed without the secret, or with a join role beside a groups header | README, "Behind a reverse proxy (trusted headers)" |
-| Studio bundle (W6) | `npm run build:studio -- [--pack <file> [--id] [--label] [--description]]… [--pack-url <url> [--id] [--label] [--description]]… [--taxonomy <file.json>] [--brand <file.json>] [--mcp-settings-policy <file.json>] [--mcp-origins <origin>,…] [--out dist/studio/index.html] [--no-remote-fonts]` — one static HTML file with its licences: every studio and `tools/lib` module in an import map of `data:` URLs (and the npm packages the PromQL parser needs, as installed from the lockfile), the stylesheets inlined, the packs and the schema as JSON, `studio/static-backend.mjs` answering the pack routes and Compare, retrofeed and the audit report in the browser and `501 denied: 'no-backend'` for the rest; no server configuration at all; the taxonomy and the brand baked (W3/W4 kept at the edge: `--taxonomy` / `--brand`, or the server's own variables when the flags are absent) | §10 below; README, "Serve The Studio Without The Server" |
+| Studio bundle (W6) | `npm run build:studio -- [--pack <file> [--id] [--label] [--description]]… [--pack-url <url> [--id] [--label] [--description]]… [--taxonomy <file.json>] [--brand <file.json>] [--mcp-settings-policy <file.json>] [--mcp-origins <origin>,…] [--out dist/studio/index.html] [--remote-fonts]` — one static HTML file with its licences: every studio and `tools/lib` module in an import map of `data:` URLs (and the npm packages the PromQL parser needs, as installed from the lockfile), the stylesheets inlined, the packs and the schema as JSON, `studio/static-backend.mjs` answering the pack routes and Compare, retrofeed and the audit report in the browser and `501 denied: 'no-backend'` for the rest; no server configuration at all; no font from the network unless `--remote-fonts` keeps the shell's Google Fonts links; the taxonomy and the brand baked (W3/W4 kept at the edge: `--taxonomy` / `--brand`, or the server's own variables when the flags are absent) | §10 below; README, "Serve The Studio Without The Server" |
 | Branding (W4) | `OBSERVOGRAM_BRAND_FILE=<path.json>` — `{ name, shortName?, wordmark?: { lead, tail }, tagline?, titleSuffix?, description?, logo?: { url \| svg }, favicon?, docsUrl?, footer?: { text, links[] }, about?: { changelogUrl }, hero?: { src, alt }, tokens?: { light, dark } }`, and/or the scalars `OBSERVOGRAM_BRAND_NAME` / `_SHORT_NAME` / `_TAGLINE` / `_LOGO_URL` / `_DOCS_URL` / `_FOOTER` / `_ACCENT` / `_ACCENT_DARK`; one `name` derives every other string. Read once at start (a bad file refuses the start), rendered into the shell (`GET /`, `GET /index.html`, the SPA fallback: title, description, header, footer, `#brand-config`, `#brand-tokens`, favicon), the auth pages and, through `#brand-config`, the studio chrome; `node tools/gen-design-tokens.mjs --brand <file> --out <path>` for the tokens as JSON. The brand module (`tools/lib/brand.mjs`) is a listed module: a downstream studio can normalize and render the same object. Baked into the static bundle by `--brand` (§10) | README, "Rebadge The Studio (brand config)"; [`UI_CONVENTIONS.md`](UI_CONVENTIONS.md) §3 |
 | Waivers (sidecar) (B3.2) | `packc conformance --waivers <file>` — a JSON file `{ "version": 1, "waivers": [...] }` holding the waiver object `GET /api/services/:id/waivers` serves per row (`ruleId`, `reason`, `expiresAt`, `author`, optionally `artefactId`, `createdAt`, `id`), read before any pack by `tools/lib/waivers.mjs` `readWaiverFile` (unreadable or invalid → exit 2 naming the entry); the rubric waivers mark the rubric line and `--json`'s `rubric.waivers`, the `placeholder.<family>.<field>` waivers the placeholder rows' `waived` partition (`--strict` fails on unwaived rows alone); `author` is the audit actor — a login or the token label, never an email — and visible to anyone the file is shared with. No server configuration; the static bundle grades a pack bare (§14 `B3.2-bundle-waivers`) | §14 `waivers`; [`CONFORMANCE.md`](CONFORMANCE.md), "Waivers"; [`ADAPTER.md`](ADAPTER.md), "Waivers — a service record's suppression of a finding"; README, "Waive A Conformance Finding" |
 | Response path annotation (B3.3) | `metadata.annotations["observogram.remediates.remediation[<i>]"] = "<symbol>[, <symbol>…]"` in a pack — `alerting.rules[<j>]`, `policy.burn_rate_alerts[<j>]`, `slos.<id>` or `alert:<slug>` — names the alert(s) a remediation answers to when its `trigger` does not; read by `tools/lib/remediation-flow.mjs`, a symbol naming nothing is a warning, never a link. No server configuration | §14 `diagnose-remediate-flow`; [`ADAPTER.md`](ADAPTER.md), "Response path" |
@@ -233,11 +233,16 @@ node tools/build-studio-bundle.mjs \
   --pack packs/orders.pack.yaml --id orders --label "Orders" --description "Order intake and fulfilment" \
   --pack-url https://packs.example.internal/payments.pack.yaml --label "Payments" \
   --taxonomy taxonomy.json --brand brand.json \
-  --out dist/studio/index.html --no-remote-fonts
+  --out dist/studio/index.html
 ```
 
 Each pack takes its own `--id`, `--label` and `--description` — the catalogue
-row the bundled studio shows.
+row the bundled studio shows. The file loads no font over the network: the
+shell's three Google Fonts lines (two preconnects and the stylesheet) are
+dropped, and the stylesheets' font stacks apply. `--remote-fonts` keeps them,
+for readers who are online, and the page then asks `fonts.googleapis.com` and
+`fonts.gstatic.com` for the fonts; `--no-remote-fonts`, the default, is still
+accepted, and the two together are a usage error.
 
 What is in the file: `studio/index.html` with every stylesheet inlined in
 place, an inline import map whose keys are `studio/<file>.mjs` and
@@ -409,8 +414,12 @@ earlier snapshot:
    strips comments keeps it, since it is a script element.
    `verifyBundleNotices(html)`, exported by `tools/build-studio-bundle.mjs`,
    checks a finished file.
-6. Nothing else: no flag, config key, Content-Security-Policy or host change
-   (`data:` in `script-src` was already needed).
+6. Fonts: a build now drops the shell's Google Fonts lines unless
+   `--remote-fonts` (it kept them unless `--no-remote-fonts`). A build that
+   wants them for online readers adds `--remote-fonts`; one that passed
+   `--no-remote-fonts` needs no change.
+7. Nothing else: no other flag, config key, Content-Security-Policy or host
+   change (`data:` in `script-src` was already needed).
 
 The build refuses a tree it cannot account for, with a sentence naming the
 package and a fix that whoever runs the build can follow: no `package-lock.json`, one that

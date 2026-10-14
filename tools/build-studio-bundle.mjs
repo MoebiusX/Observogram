@@ -6,16 +6,27 @@
 //   node tools/build-studio-bundle.mjs [--pack <file> [--id <id>] [--label <text>] [--description <text>]]…
 //        [--pack-url <url> [--id <id>] [--label <text>] [--description <text>]]… [--taxonomy <file.json>]
 //        [--brand <file.json>] [--mcp-settings-policy <file.json>] [--mcp-origins <origin>,…]
-//        [--out dist/studio/index.html] [--no-remote-fonts] [--check] [--json]
+//        [--out dist/studio/index.html] [--remote-fonts | --no-remote-fonts] [--check] [--json]
 //
 // --pack is parsed (YAML or .json) and validated against the spec schema at
 // build time; its canonical is inlined. --pack-url is fetched by the page at
 // its first catalogue read (the host must answer CORS); a URL carrying
 // userinfo or a credential query parameter is refused — the file is
 // distributed, and --json prints URLs in their stripped form only.
-// --check builds in memory and writes nothing. --no-remote-fonts drops the
-// Google Fonts links (the fallback stacks apply). Without --pack the bundle
+// --check builds in memory and writes nothing. Without --pack the bundle
 // boots with an empty catalogue and the notice.
+//
+// Fonts: by default the bundle loads no font over the network —
+// studio/index.html's three Google Fonts lines (the preconnects to
+// fonts.googleapis.com and fonts.gstatic.com, the css2 stylesheet) are
+// dropped, so a page opened online asks Google's CDN for nothing, and the
+// stylesheets' font stacks apply (a family the reader's system has, else the
+// system fonts after it). --remote-fonts (buildStudioBundle's remoteFonts:
+// true) keeps the three lines as the shell has them; --no-remote-fonts is the
+// default, still accepted (a script that passes it builds the default's
+// bytes); both together are a usage error, as a seam given twice is. The live
+// studio the server serves is studio/index.html as it is, fonts and all:
+// nothing here changes it.
 //
 // --taxonomy bakes the artefact-taxonomy override (the file OBSERVOGRAM_TAXONOMY
 // names on a server; honoured here too when the flag is absent), validated
@@ -120,7 +131,7 @@ export const ENTRIES = ['studio/app.mjs', 'studio/static-backend.mjs'];
 export const CONFIG_ID = 'observogram-static-config';
 export const DEFAULT_OUT = 'dist/studio/index.html';
 const NOTICE_CSS = 'static-backend.css';
-const usage = `usage: build-studio-bundle.mjs [--pack <file> [--id <id>] [--label <text>] [--description <text>]]… [--pack-url <url> [--id <id>] [--label <text>] [--description <text>]]… [--taxonomy <file.json>] [--brand <file.json>] [--mcp-settings-policy <file.json>] [--mcp-origins <origin>,…] [--out ${DEFAULT_OUT}] [--no-remote-fonts] [--check] [--json]`;
+const usage = `usage: build-studio-bundle.mjs [--pack <file> [--id <id>] [--label <text>] [--description <text>]]… [--pack-url <url> [--id <id>] [--label <text>] [--description <text>]]… [--taxonomy <file.json>] [--brand <file.json>] [--mcp-settings-policy <file.json>] [--mcp-origins <origin>,…] [--out ${DEFAULT_OUT}] [--remote-fonts | --no-remote-fonts] [--check] [--json]`;
 
 // ---------- the module graph ----------
 
@@ -630,8 +641,9 @@ function toBase64(text) {
 // `taxonomy` key, so the bytes are those of a build without them.
 // mcpSettingsPolicy: the settings-policy document to bake, or null.
 // mcpOrigins: { listed: true, origins: [origin] | null } (null: any
-// origin), or null. Each is a config key only when given.
-export function buildStudioBundle({ root = DEFAULT_ROOT, packs = [], remoteFonts = true, version, builtAt = new Date().toISOString(), taxonomy = null, brand = null, mcpSettingsPolicy = null, mcpOrigins = null } = {}) {
+// origin), or null. Each is a config key only when given. remoteFonts: keep
+// the shell's Google Fonts lines (default false: the bundle asks no CDN).
+export function buildStudioBundle({ root = DEFAULT_ROOT, packs = [], remoteFonts = false, version, builtAt = new Date().toISOString(), taxonomy = null, brand = null, mcpSettingsPolicy = null, mcpOrigins = null } = {}) {
   const readRel = (rel) => readFileSync(resolve(root, rel), 'utf8');
   const pkgVersion = version ?? JSON.parse(readRel('package.json')).version;
   const schema = JSON.parse(readRel(SPEC_SCHEMA_PATH));
@@ -923,18 +935,25 @@ export function checkPackUrl(raw) {
 // ---------- the CLI ----------
 
 export function parseArgs(argv) {
-  const opts = { packs: [], out: DEFAULT_OUT, remoteFonts: true, check: false, json: false, help: false, taxonomy: null, brand: null, mcpSettingsPolicy: null, mcpOrigins: null };
+  const opts = { packs: [], out: DEFAULT_OUT, remoteFonts: false, check: false, json: false, help: false, taxonomy: null, brand: null, mcpSettingsPolicy: null, mcpOrigins: null };
   const need = (i, a) => {
     const v = argv[i];
     if (v === undefined || v.startsWith('--')) throw new Error(`${a} needs a value\n${usage}`);
     return v;
   };
+  let fontsFlag = null;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') { opts.help = true; continue; }
     if (a === '--check') { opts.check = true; continue; }
     if (a === '--json') { opts.json = true; continue; }
-    if (a === '--no-remote-fonts') { opts.remoteFonts = false; continue; }
+    if (a === '--remote-fonts' || a === '--no-remote-fonts') {
+      // Offline unless --remote-fonts; repeating one is harmless, giving both is ambiguous.
+      if (fontsFlag !== null && fontsFlag !== a) throw new Error(`--remote-fonts and --no-remote-fonts given together\n${usage}`);
+      fontsFlag = a;
+      opts.remoteFonts = a === '--remote-fonts';
+      continue;
+    }
     if (a === '--out') { opts.out = need(++i, a); continue; }
     if (a === '--taxonomy' || a === '--brand') {
       const key = a.slice(2);
