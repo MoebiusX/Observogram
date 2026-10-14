@@ -2706,11 +2706,10 @@ and it refuses, deleting nothing:
   leads into a directory under `orgs/<id>/` while an entry there has its
   name: a directory on its path may be the mount point of a mount that is
   down — `orgs/<id>/other` bind-mounted on `orgs/<id>/sub/m`, the users
-  file in `other` recorded through it, and unmounted as the mount-point
-  refusal below says — and once the mount is back the path leads to that
-  entry. Move the entries it names out of `orgs/<id>/`, then run the purge
-  again; if the users file is among them, make its path lead to it again
-  before you roll back.
+  file in `other` recorded through it, and unmounted — and once the mount
+  is back the path leads to that entry. Move the entries it names out of
+  `orgs/<id>/`, then run the purge again; if the users file is among them,
+  make its path lead to it again before you roll back.
 - **while a recorded users file — or, with none recorded,
   `<workspace>/users.json` as a link — does not exist and its path does not
   lead under `orgs/<id>/`** (but for one only through directories
@@ -2759,7 +2758,13 @@ and it refuses, deleting nothing:
   different filesystems shows its lower layers' files so, with nothing
   mounted there. Where there is no `/proc/self/mountinfo`, it takes every
   such file for one; on Linux, mount proc at `/proc`
-  (`mount -t proc proc /proc`) and run the purge again.
+  (`mount -t proc proc /proc`) and run the purge again. When the users file
+  lies under `orgs/<id>/` as well, the refusal names it too: move it out of
+  `orgs/<id>/` and unmount, then run the purge again — unmounted alone, its
+  path may no longer lead there (a link of its name in a directory mounted
+  there from outside `orgs/<id>/`, to a file under it), and nothing would
+  keep the purge from deleting it. A mount that was down already when
+  purge-org first ran tells nothing of such a link.
 - **while a directory under `orgs/<id>/` changed as it read it**: when the
   users file exists, it reads each directory again before it goes on, and
   one that changed — an entry another process added, removed or renamed in

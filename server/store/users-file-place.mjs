@@ -27,12 +27,16 @@
 //     shows its directories on its own device and a lower layer's files on that layer's, with nothing mounted there
 //     (without /proc/self/mountinfo, see below). On Node 22 rmSync stops part-way at a mount point; on Node 23 and later it
 //     first deletes the files of the filesystem mounted there; and a directory mounted from outside the root may hold
-//     the users file. The root itself mounted (a volume per org) is refused alike. A directory the walk cannot read is
-//     refused: what lies in it cannot be told, and rmSync would fail part-way there. The walk keeps nothing of a file it
-//     passes — each entry is compared with the users file, and with its name, as the walk reaches it (below) — and of a
-//     directory its path, device, inode, change and modification time and a digest of its names, holding besides only
-//     the listing of each directory it is in, as Node 22's rmSync does: kept entry by entry, the stats of a root of
-//     millions of files took more memory than the heap had, and purge-org died where rmSync completed.
+//     the users file. The users file found under the root besides (none of it at a mount point, as placed below) is named
+//     in that refusal, to move out with the unmounting: unmounted, its path may lead there no more — a link of its name in
+//     a directory mounted there from outside the root, to a file under it — and run again as the refusal said, the purge
+//     went on into the empty mount point and deleted it. The root itself mounted (a volume per org) is refused alike. A
+//     directory the walk cannot read is refused: what lies in it cannot be told, and rmSync would fail part-way there. The
+//     walk keeps nothing of a file it passes — each entry is compared with the users file, and with its name, as the walk
+//     reaches it (below) — and of a directory its path, device, inode, change and modification time and a digest of its
+//     names, holding besides only the listing of each directory it is in, as Node 22's rmSync does: kept entry by entry,
+//     the stats of a root of millions of files took more memory than the heap had, and purge-org died where rmSync
+//     completed.
 //   - the users file, its path followed through every link (statSync), before the walk and again after it — one that
 //     changed meanwhile (another device, inode, size or modification time) is compared with each entry read again: it
 //     lies under the root when an entry the walk found is the same file — the same device and inode (on Windows the volume serial's low 32 bits, all a
@@ -56,7 +60,7 @@
 //     directory on its path may be the mount point of a mount that is down, an empty directory under the root, and
 //     mounted again the path leads to the file of that name in the directory mounted there (<root>/other bind-mounted on
 //     <root>/sub/m, the users file at <root>/other/users.json recorded through it: unmounted, as the refusal of that
-//     mount point says, the purge deleted it). The purge goes on, too, when the path is looked up only in directories
+//     mount point said, the purge deleted it). The purge goes on, too, when the path is looked up only in directories
 //     the root lies in (its parent and theirs, on the root's real path) or that the root's own path, as purge-org names
 //     it, is looked up in (every link on it followed: a workspace, or its orgs/, reached through a link in a directory
 //     the root does not lie in, that directory and those above it) — each by its path, case folded on Windows, and its
@@ -100,11 +104,13 @@
 // of a coarse filesystem clock, its change time and names as they were; a same-filesystem bind mount made on a directory
 // under the root after /proc/self/mountinfo was read, before the walk reaches it, or uncovered there then (a bind mount
 // from the same filesystem over a directory above the root, unmounted); through a mount that is down, what the
-// name does not tell — a file mounted on a file of another name, its mount point a file of its own, or what a link of
-// that name under the root leads to back through the mount that is down; and a filesystem that is down now, mounted on a
-// directory the root lies in, whose link leads a users file that does not exist into the root another way than by its
-// name there (through a second mount of the root's filesystem), or mounted on one only the root's path as named is
-// looked up in (the directory holding the link to the workspace, say), by a link to the root's real path.
+// name does not tell — a file mounted on a file of another name, its mount point a file of its own, what a link of
+// that name under the root leads to back through the mount that is down, or what a link of that name in a directory
+// mounted under the root from outside it leads to under the root, once that mount is down before purge-org saw it up
+// (up, its refusal names the users file there); and a filesystem that is down now, mounted on a directory the root lies in,
+// whose link leads a users file that does not exist into the root another way than by its name there (through a second
+// mount of the root's filesystem), or mounted on one only the root's path as named is looked up in (the directory
+// holding the link to the workspace, say), by a link to the root's real path.
 //
 // usersFilePlace(file, root, { recorded, id, fs, path, windows }) → { exists, refusal }: exists is whether the users
 // file's path leads to a file now (true), or not (false), or null when the check stopped before it could tell;
@@ -327,6 +333,53 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     else walk = visit(child(frame.at, frame.names[frame.i++]), frame.at, frame.dev);
   }
   if (walk) return walk;
+  // Each entry the walk read that test holds for, read again in the walk's order, entering each directory it read — the
+  // walk keeps none: { path, st }. A mount point is passed over, as the walk passed it.
+  const atMount = new Set(mounts.map((m) => named(m.at)));
+  const again = (test) => {
+    const hits = [];
+    const down = [];
+    const look = (at) => {
+      if (atMount.size && atMount.has(named(at))) return;
+      let s;
+      try { s = lstat(at); } catch { return; }
+      if (test(s)) hits.push({ path: at, st: s });
+      if (s.isDirectory() && walked.has(idOf(s))) { try { down.push({ at, names: listing(at), i: 0 }); } catch { /* gone since */ } }
+    };
+    look(root);
+    while (down.length) {
+      const frame = down.at(-1);
+      if (frame.i === frame.names.length) down.pop();
+      else look(child(frame.at, frame.names[frame.i++]));
+    }
+    return hits;
+  };
+  // The entries under the root that are the users file st, placed after the walk: as the walk found them, unless it changed
+  // while the walk ran (created, replaced, written: another device, inode, size or modification time than before it), when
+  // each entry is read again — none at a mount point.
+  const entriesOf = (st) => {
+    const kept = before && dev(before) === dev(st) && before.ino === st.ino && before.size === st.size && before.mtimeNs === st.mtimeNs;
+    return (kept ? found : again((s) => same(s, st))).filter((e) => !atMount.has(named(e.path)));
+  };
+  // Where under the root the users file st lies (kin, its entries): the same file, or a view of it on another filesystem;
+  // then, for a view, the step after the move its way out may take.
+  const liesUnder = (kin, st) => {
+    const ids = kin.filter((e) => dev(e.st) === dev(st)).map((e) => named(e.path));
+    const views = kin.filter((e) => dev(e.st) !== dev(st)).map((e) => named(e.path));
+    return {
+      where: (ids.length ? `it is ${list(ids)} there` : '')
+        + (views.length ? `${ids.length ? ', and ' : ''}${list(views)} under it ${views.length === 1 ? 'has' : 'have'} its `
+          + `${st.isFile() ? 'size and ' : ''}modification time on another filesystem (the users file seen through a network or `
+          + 'overlay mount, or a copy that kept them)' : ''),
+      // Seen through a view, the path may then lead where nothing traces it back to the root, and a users file that does
+      // not exist there is refused (below): an overlay mount's merged directory shows its upper directory's inode and time.
+      then: views.length ? `; if it then refuses because ${file} does not exist (a mount whose directories show another inode or `
+        + `modification time than theirs under ${root}, as an overlay mount with an upper directory does, cannot be traced back `
+        + `there), delete ${root} by hand, then run purge-org again: it drops org ${id}'s records` : '',
+      after: `. If ${file} then no longer leads to the users file, make it lead there again before a pre-store build or the in-place `
+        + '`packc store export` uses it',
+    };
+  };
   if (mounts[0]?.at === root) {
     return stopped(`${root} (${mounts[0].why}) is a mount point: deleting it would take the files of the filesystem mounted there and then fail `
       + 'on the mount point itself (Node 23 and later; Node 22 fails at once) — nothing was deleted. Unmount it, then run purge-org '
@@ -334,10 +387,23 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
   }
   if (mounts.length) {
     const points = mounts.map((m) => `${named(m.at)} (${m.why})`).sort();
-    return stopped(`${root} holds ${mounts.length === 1 ? 'a mount point' : 'mount points'}, ${list(points)}: deleting `
+    const held = `${root} holds ${mounts.length === 1 ? 'a mount point' : 'mount points'}, ${list(points)}: deleting `
       + `${root} would take the files of the filesystem mounted there (Node 23 and later) or stop part-way at it (Node 22), and a `
-      + `directory mounted from outside ${root} may hold the users file — nothing was deleted. Unmount what is mounted there, then `
-      + 'run purge-org again');
+      + `directory mounted from outside ${root} may hold the users file`;
+    // The users file under the root besides, found by the walk: unmounted, its path may lead there no more — a link of its
+    // name in a directory mounted there from outside the root, to a file under it — so that the purge, run again as this
+    // refusal said, went on into the empty mount point and deleted it. It is named here, to move out with the unmounting.
+    let now = null;
+    try { now = stat(file); } catch { /* nothing of it found under the root to name */ }
+    const kin = now ? entriesOf(now) : [];
+    if (!kin.length) return stopped(`${held} — nothing was deleted. Unmount what is mounted there, then run purge-org again`);
+    const { where, then, after } = liesUnder(kin, now);
+    return {
+      exists: true,
+      refusal: `${held}; and ${who} lies under ${root}: ${where} — nothing was deleted. Move ${list(kin.map((e) => named(e.path)))} out `
+        + `of ${root} and unmount what is mounted there, then run purge-org again (unmounted, its path may no longer lead there, and `
+        + `nothing would keep the purge from deleting it)${then}${after}`,
+    };
   }
 
   // Where a path that does not exist leads: each link that exists followed (a dangling one by its target), '..' taken
@@ -406,26 +472,6 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
       for (const { at, st: was } of lead(root).dirs ?? []) if (!dirs.has(pathKey(at))) dirs.set(pathKey(at), idOf(was));
     } catch { dirs.clear(); }
     return dirs;
-  };
-
-  // Each entry the walk read that test holds for, read again in the walk's order, entering each directory it read — the
-  // walk keeps none: { path, st }.
-  const again = (test) => {
-    const hits = [];
-    const down = [];
-    const look = (at) => {
-      let s;
-      try { s = lstat(at); } catch { return; }
-      if (test(s)) hits.push({ path: at, st: s });
-      if (s.isDirectory() && walked.has(idOf(s))) { try { down.push({ at, names: listing(at), i: 0 }); } catch { /* gone since */ } }
-    };
-    look(root);
-    while (down.length) {
-      const frame = down.at(-1);
-      if (frame.i === frame.names.length) down.pop();
-      else look(child(frame.at, frame.names[frame.i++]));
-    }
-    return hits;
   };
 
   // The users file, its path followed through every link, placed again now that the walk is done.
@@ -499,10 +545,8 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
       + `mounted now, mount it, then run purge-org again; if it does not lie under ${root}, delete ${root} by hand, then run purge-org `
       + `again: it drops org ${id}'s records`);
   }
-  // The entries that are the users file: as the walk found them, unless it changed while the walk ran (created, replaced,
-  // written: another device, inode, size or modification time than before it), when each entry is read again.
-  const kept = before && dev(before) === dev(st) && before.ino === st.ino && before.size === st.size && before.mtimeNs === st.mtimeNs;
-  const kin = kept ? found : again((s) => same(s, st));
+  // The entries that are the users file (entriesOf, above).
+  const kin = entriesOf(st);
   if (!kin.length) {
     // The walk read each directory at its own moment: an entry another process renamed, while it ran, from a directory
     // not read yet into one read already (the users file, or a directory holding it) was in neither listing, and rmSync
@@ -535,22 +579,10 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
         + `delete ${root} by hand, then run purge-org again: it drops org ${id}'s records`),
     };
   }
-  const ids = kin.filter((e) => dev(e.st) === dev(st)).map((e) => named(e.path));
-  const views = kin.filter((e) => dev(e.st) !== dev(st)).map((e) => named(e.path));
+  const { where, then, after } = liesUnder(kin, st);
   return {
     exists: true,
-    refusal: `${who} lies under ${root}: `
-      + (ids.length ? `it is ${list(ids)} there` : '')
-      + (views.length ? `${ids.length ? ', and ' : ''}${list(views)} under it ${views.length === 1 ? 'has' : 'have'} its `
-        + `${st.isFile() ? 'size and ' : ''}modification time on another filesystem (the users file seen through a network or `
-        + 'overlay mount, or a copy that kept them)' : '')
-      + ` — nothing was deleted. Move ${list(kin.map((e) => named(e.path)))} out of ${root}, then run purge-org again`
-      // Seen through a view, the path may then lead where nothing traces it back to the root, and a users file that does
-      // not exist there is refused (above): an overlay mount's merged directory shows its upper directory's inode and time.
-      + (views.length ? `; if it then refuses because ${file} does not exist (a mount whose directories show another inode or `
-        + `modification time than theirs under ${root}, as an overlay mount with an upper directory does, cannot be traced back `
-        + `there), delete ${root} by hand, then run purge-org again: it drops org ${id}'s records` : '')
-      + `. If ${file} then no longer leads to the users file, make it lead there again before a pre-store build or the in-place `
-      + '`packc store export` uses it',
+    refusal: `${who} lies under ${root}: ${where} — nothing was deleted. Move ${list(kin.map((e) => named(e.path)))} out of ${root}, then run `
+      + `purge-org again${then}${after}`,
   };
 }

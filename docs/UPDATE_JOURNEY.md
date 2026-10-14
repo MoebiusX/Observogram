@@ -1615,10 +1615,21 @@ root passed without the name check a users file that exists has, and a
 directory on that path may be the mount point of a mount that is down: with
 `<root>/other` bind-mounted on `<root>/sub/m` and the users file in `other`
 recorded through it, purge-org refused the mount point, and once it was
-unmounted, as that refusal says, the purge deleted the users file. Such a
+unmounted, as that refusal said, the purge deleted the users file. Such a
 path is now refused by the name too when an entry under the root has it,
 naming each such entry; moving them out of the root is its way out, and the
 purge then passes. A users file moved out of the root as the refusal of one
 under it says passes as before unless another entry under the root has its
 name, which is refused alike (a declared false refusal) until it is moved out
 too. Tests: 1445 → 1446 (one more in `server/test-store-ops.mjs`).
+
+The refusal of a mount point under the root said only to unmount it, and
+unmounting may take away the path to the users file: with a directory from
+outside the root mounted under it, holding a link of the users file's name
+to a file under the root, the path led into the empty mount point once it
+was unmounted, no entry under the root had the users file's name, and the
+purge deleted the file. That refusal now names the users file the walk finds
+under the root as well, to move out with the unmounting; followed, the purge
+passes and the moved file stays. A mount that was down already when
+purge-org first ran tells nothing of such a link (declared). One test in
+`server/test-store-ops.mjs` is extended; the total stays 1446.

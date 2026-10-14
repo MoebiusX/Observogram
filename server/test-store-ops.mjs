@@ -2369,13 +2369,14 @@ test('purge-org docs: the README and the k8s note say it cannot be undone, what 
     'delete `orgs/<id>/` by hand and run the purge again',
     'run the purge as a user who can read it',
     'Unmount it, then run the purge again',
+    'move it out of `orgs/<id>/` and unmount, then run the purge again',
     'Stop what changes files there, then run the purge again',
   ]) assert.ok(readme.includes(way), `README: ${way}`);
   const place = readFileSync(join(HERE, 'store', 'users-file-place.mjs'), 'utf8').replace(/[`']\s*\+\s*[`']/g, '');
   for (const way of ['out of ${root}, then run purge-org again', 'if it then refuses because ${file} does not exist',
     'make it lead there again before a pre-store build', 'mount it, then run purge-org again',
     'delete ${root} by hand, then run purge-org again', 'Run purge-org as a user who can read', 'Unmount it, then run purge-org again',
-    'Stop what changes files under ${root}, then run purge-org again']) {
+    'out of ${root} and unmount what is mounted there, then run purge-org again', 'Stop what changes files under ${root}, then run purge-org again']) {
     assert.ok(place.includes(way), `purge-org's refusal names the same way out: ${way}`);
   }
 });
@@ -2492,6 +2493,14 @@ const unknownPlace =(file, nearest, { to = null, root = ROOT_B } = {}) => `the r
 const mounted = (what, root = ROOT_B) => `${root} holds a mount point, ${what}: deleting ${root} would take the files of the filesystem mounted there `
   + `(Node 23 and later) or stop part-way at it (Node 22), and a directory mounted from outside ${root} may hold the users file — `
   + 'nothing was deleted. Unmount what is mounted there, then run purge-org again';
+// A mount point under the root while the users file lies under it besides: unmounted, its path may lead there no more, so
+// the refusal names the entries to move out with the unmounting.
+const mountedHolding = (what, file, entries, root = ROOT_B) => `${root} holds a mount point, ${what}: deleting ${root} would take the files of the `
+  + `filesystem mounted there (Node 23 and later) or stop part-way at it (Node 22), and a directory mounted from outside ${root} may hold the users `
+  + `file; and the recorded users file ${file} lies under ${root}: it is ${entries} there — nothing was deleted. Move ${entries} out of ${root} and `
+  + 'unmount what is mounted there, then run purge-org again (unmounted, its path may no longer lead there, and nothing would keep the purge '
+  + `from deleting it). If ${file} then no longer leads to the users file, make it lead there again before a pre-store build or the in-place `
+  + '`packc store export` uses it';
 
 test('purge-org users file: under the root through a bind mount that is up — by its path there, through a file link and a directory link to it, and as spelled — is refused naming its entry under the root; one outside the root is purged, also when a link under the root leads to it, to its directory or to another filesystem (rmSync deletes the link alone)', () => {
   const vol = betaVolume().dir('/mnt/b').bind(`${ROOT_B}/sub`, '/mnt/b')
@@ -3050,19 +3059,40 @@ test('purge-org users file that exists outside the root: through a mount that is
   assert.deepEqual(placeIn(linked, '/mnt/b/users.json'), { exists: true, refusal: null }, 'the link and what it names moved out');
 });
 
-test('purge-org users file that does not exist: its path leads into a directory under the root while an entry under the root has its name — the mount point of a bind mount of another directory under the root, holding the users file, that is down — and it is refused naming that entry (for a link of that name, what it leads to too), recorded through a file link, directly or through a directory link; with the mount up it is refused as a mount point, and unmounted as that refusal says it was purged, the users file deleted; moved out as the refusal says, the purge passes, and on the real filesystem through purgeOrg the moved file stays', async () => {
+test('purge-org users file that does not exist: its path leads into a directory under the root while an entry under the root has its name — the mount point of a bind mount of another directory under the root, holding the users file, that is down — and it is refused naming that entry (for a link of that name, what it leads to too), recorded through a file link, directly or through a directory link; with the mount up it is refused as a mount point, naming the users file under the root to move out with the unmounting, and so it is with a directory from outside the root mounted there whose link of the users file\'s name leads to a file under the root (unmounted as the mount point\'s refusal said, it was purged, the file deleted); moved out as either refusal says, the purge passes, and on the real filesystem through purgeOrg the moved file stays', async () => {
   // <root>/other bind-mounted on <root>/sub/m, and the users file, <root>/other/users.json, recorded through the mount. Up,
-  // the mount is refused as a mount point; unmounted, as that refusal says, <root>/sub/m is an empty directory the walk read,
-  // and the purge went on and deleted the users file behind it: the path leads into a directory under the root, which
-  // passed without the name check.
+  // the mount is refused as a mount point, naming the users file under the root too; unmounted, as that refusal said,
+  // <root>/sub/m is an empty directory the walk read, and the purge went on and deleted the users file behind it: the path
+  // leads into a directory under the root, which passed without the name check.
   const sub = `${ROOT_B}/sub/m`;
   const behind = `${ROOT_B}/other/users.json`;
-  const vol = mountFs(posix, { proc: true }).dir(`${ROOT_B}/packs`).file(`${ROOT_B}/packs/b1.pack.yaml`).dir(sub).file(behind)
+  const point = `${sub} (the same filesystem as ${ROOT_B}/sub, listed in /proc/self/mountinfo)`;
+  const bound = () => mountFs(posix, { proc: true }).dir(`${ROOT_B}/packs`).file(`${ROOT_B}/packs/b1.pack.yaml`).dir(sub).file(behind)
     .symlink('/cfg/users.json', `${sub}/users.json`).symlink('/cfg/d', sub).bind(`${ROOT_B}/other`, sub);
+  const vol = bound();
   const files = ['/cfg/users.json', `${sub}/users.json`, '/cfg/d/users.json'];
   for (const file of files) {
-    assert.deepEqual(placeIn(vol, file), { exists: null, refusal: mounted(`${sub} (the same filesystem as ${ROOT_B}/sub, listed in /proc/self/mountinfo)`) },
-      `${file}, mounted`);
+    assert.deepEqual(placeIn(vol, file), { exists: true, refusal: mountedHolding(point, file, behind) }, `${file}, mounted`);
+    // Followed literally: moved out and unmounted, the purge passes.
+    const followed = bound().rename(behind, '/keep/users.json').unmount(sub);
+    assert.deepEqual(placeIn(followed, file), { exists: false, refusal: null }, `${file}: moved out and unmounted as the refusal says`);
+  }
+  // A directory from outside the root mounted there instead, its users.json a link to a file under the root that holds the
+  // users file's bytes (/src bind-mounted on <root>/sub/m, /src/users.json → <root>/x/data.json): no entry under the root has
+  // the users file's name, so unmounted as the mount point's refusal said, the path led into the empty mount point and the
+  // purge deleted <root>/x/data.json. Up, the refusal names it to move out with the unmounting; followed, the purge passes
+  // and the moved file stays. Unmounted before purge-org ever saw the mount up, nothing under the root tells (declared).
+  const data = `${ROOT_B}/x/data.json`;
+  const outside = () => mountFs(posix, { proc: true }).dir(`${ROOT_B}/packs`).file(`${ROOT_B}/packs/b1.pack.yaml`).dir(sub).file(data)
+    .symlink('/src/users.json', data).symlink('/cfg/users.json', `${sub}/users.json`).bind('/src', sub);
+  for (const file of [`${sub}/users.json`, '/cfg/users.json']) {
+    const up = outside();
+    assert.equal(up.fs.statSync(file).ino, up.fs.statSync(data).ino, `${file}: mounted, the record leads to ${data}`);
+    assert.deepEqual(placeIn(up, file), { exists: true, refusal: mountedHolding(point, file, data) }, `${file}, mounted from outside`);
+    up.rename(data, '/keep/data.json').unmount(sub);
+    assert.deepEqual(placeIn(up, file), { exists: false, refusal: null }, `${file}: moved out and unmounted as the refusal says`);
+    assert.ok(up.fs.statSync('/keep/data.json').isFile(), `${file}: the moved file stays`);
+    assert.deepEqual(placeIn(outside().unmount(sub), file), { exists: false, refusal: null }, `${file}: unmounted first, nothing tells (declared)`);
   }
   vol.unmount(sub);
   for (const file of files) {
