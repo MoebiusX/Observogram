@@ -17,7 +17,12 @@
 //     filesystem, which lstatSync cannot tell from a directory, or a file mounted on a file;
 //     matched by the root's real path, as the kernel lists it; not one a later mount covers — mounted in the same
 //     parent mount on a directory above it, or covering that parent so — which the kernel lists too, while its path
-//     shows a directory of the filesystem mounted above, where nothing is mounted; a mount on / itself covers nothing,
+//     shows a directory of the filesystem mounted above, where nothing is mounted, unless that path leads through a
+//     mount of the filesystem the covered one lies in (its device, as /proc/self/mountinfo lists it):
+//     `mount --bind /srv /srv` over it, a recursive bind whose copy of it was unmounted, or a bind mount, on the
+//     filesystem above, of a directory it lies in — its path may then show the very directory it is mounted on, which
+//     rmdir refuses (EBUSY) while that is a mount point anywhere, so it is refused, naming what to unmount first, in
+//     order (a declared false refusal where that mount shows another directory there); a mount on / itself covers nothing,
 //     since a path is looked up from the process's root and a lookup never crosses a mount stacked on it, so with a
 //     tmpfs mounted on / in a chroot, or `mount --bind / /`, a mount under the root is refused still), a directory the
 //     walk reached already
@@ -234,8 +239,9 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
   try { above = dev(stat(path.dirname(root))); } catch (e) { return unreadable(path.dirname(root), e); }
   // The mount points Linux lists at the root or under it, as paths relative to it ('' the root itself): a bind mount of a
   // directory of the same filesystem among them, which lstatSync cannot tell from a directory. The kernel lists real
-  // paths, so the root's is compared. No such file (off Linux, /proc not mounted): only the walk tells.
-  const listed = new Set();
+  // paths, so the root's is compared. Each maps to null, or for a covered mount whose path may show what it is mounted on
+  // (below), to the mount points to unmount first, in order. No such file (off Linux, /proc not mounted): only the walk tells.
+  const listed = new Map();
   let info = null;
   if (!windows) {
     try { info = fs.readFileSync(MOUNTINFO, 'utf8'); } catch (e) { if (!GONE.has(e?.code)) return unreadable(MOUNTINFO, e); }
@@ -243,16 +249,20 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
   if (info !== null) {
     let real;
     try { real = fs.realpathSync(root); } catch (e) { return unreadable(root, e); }
-    // Each line's mount ID, its parent mount's and its mount point. The kernel lists a mount that a later one covers too —
-    // one mounted in the same parent mount on a directory above it, or covering that parent so — on the filesystem now
-    // hidden, while its path shows a directory of the filesystem mounted above: nothing is mounted there, and unmounting
-    // it fails (not mounted). So a covered mount is passed over.
+    // Each line's mount ID, its parent mount's, its filesystem's device (major:minor) and its mount point. The kernel lists
+    // a mount that a later one covers too — one mounted in the same parent mount on a directory above it, or covering that
+    // parent so — while its path shows what the mount above holds there. Of another filesystem, that is a directory where
+    // nothing is mounted, and unmounting it fails (not mounted): such a covered mount is passed over. Through a mount of the
+    // filesystem the covered mount lies in — a bind mount of a directory above it (`mount --bind /srv /srv`, a recursive one
+    // whose copy of the covered mount was unmounted, or one made on the filesystem mounted above) — it may be the very
+    // directory the covered mount is mounted on, which rmdir and unlink refuse (EBUSY) while it is a mount point anywhere:
+    // such a covered mount is refused, naming what to unmount first.
     const lines = [];
     const inParent = new Map();   // a parent mount's ID → the mounts in it
     for (const line of info.split('\n')) {
-      const [mount, parent, , , field] = line.split(' ');
+      const [mount, parent, device, , field] = line.split(' ');
       if (field === undefined) continue;
-      const m = { id: mount, parent, at: unoctal(field) };
+      const m = { id: mount, parent, device, at: unoctal(field) };
       lines.push(m);
       if (!inParent.has(parent)) inParent.set(parent, []);
       inParent.get(parent).push(m);
@@ -270,8 +280,47 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
       }
       return hidden.get(m);
     };
+    // The mount a lookup of at ends in: the deepest of those it crosses (not covered, mounted on a directory above it or on
+    // at), the topmost of a stack there — on /, the lowest, the process's root.
+    const endsIn = (at) => {
+      const crossed = lines.filter((y) => (y.at === path.sep || y.at === at || at.startsWith(y.at + path.sep)) && !covered(y));
+      const depth = Math.max(...crossed.map((y) => y.at.length));
+      const stack = crossed.filter((y) => y.at.length === depth);
+      return stack.find((y) => (y.at === path.sep ? !stack.some((z) => z.id === y.parent) : !stack.some((z) => z.parent === y.id)));
+    };
+    // Whether the path of the covered mount m may show what it is mounted on: it leads through a mount of the filesystem m
+    // lies in (or either is not listed).
+    const shows = (m) => {
+      const [x, parent] = [endsIn(m.at), byId.get(m.parent)];
+      return x === undefined || parent === undefined || x.device === parent.device;
+    };
+    // What to unmount, in order, before the covered mount m can be unmounted at its path: what covers its parent, then each
+    // mount in its parent over a directory above it (the outermost first), and the mounts in m — each after the mounts in
+    // it, which keep it busy.
+    const outermost = (a, b) => a.at.length - b.at.length || (a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
+    const firstOff = (m) => {
+      const seen = new Set([m]);
+      const within = (c) => {
+        if (seen.has(c)) return [];
+        seen.add(c);
+        return [...[...(inParent.get(c.id) ?? [])].sort(outermost).flatMap(within), c];
+      };
+      const uncover = (n) => {
+        const parent = byId.get(n.parent);
+        const outer = [];
+        if (parent !== undefined && !seen.has(parent) && covered(parent)) {
+          seen.add(parent);
+          outer.push(...uncover(parent));
+        }
+        return [...outer, ...inParent.get(n.parent).filter((c) => above(c.at, n.at)).sort(outermost).flatMap(within)];
+      };
+      return [...uncover(m), ...[...(inParent.get(m.id) ?? [])].sort(outermost).flatMap(within)].map((c) => c.at);
+    };
     for (const m of lines) {
-      if ((m.at === real || m.at.startsWith(real + path.sep)) && !covered(m)) listed.add(m.at.slice(real.length));
+      if (m.at !== real && !m.at.startsWith(real + path.sep)) continue;
+      const at = m.at.slice(real.length);
+      if (!covered(m)) listed.set(at, null);
+      else if (!listed.has(at) && shows(m)) listed.set(at, firstOff(m));
     }
   }
   // The users file, its path followed through every link, placed before the walk (and again after it, below), and the names
@@ -308,11 +357,14 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     // layer's files on that layer's device and its directories on its own. So where /proc/self/mountinfo tells, only one
     // it lists is refused.
     const mountedHere = listed.has(relative(at));
+    const first = listed.get(relative(at));
+    const hint = first?.length ? `, covered by a later mount through which its path may show what it is mounted on: first unmount `
+      + first.join(', then ') : '';
     if (dev(st) !== parentDev && (st.isDirectory() || mountedHere || info === null)) {
-      mounts.push({ at, why: `another filesystem than ${named(from)}` });
+      mounts.push({ at, why: `another filesystem than ${named(from)}${hint}` });
       return null;
     }
-    if (mountedHere) { mounts.push({ at, why: `the same filesystem as ${named(from)}, listed in ${MOUNTINFO}` }); return null; }
+    if (mountedHere) { mounts.push({ at, why: `the same filesystem as ${named(from)}, listed in ${MOUNTINFO}${hint}` }); return null; }
     if (!st.isDirectory()) return null;
     let through;
     try { through = stat(at); } catch (e) { return unreadable(at, e); }

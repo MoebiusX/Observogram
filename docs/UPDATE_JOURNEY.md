@@ -1512,7 +1512,13 @@ is unmounted the purge passes. The kernel lists a mount that a later one
 covers too — a filesystem mounted over a directory above it, as fstab entries
 mounted out of order leave it, or an autofs mount over a directory that holds
 mounts — while its path shows a directory of the filesystem mounted above,
-where nothing is mounted to unmount; purge-org passes over such a mount. A
+where nothing is mounted to unmount; purge-org passes over such a mount,
+unless that path leads through a mount of the covered mount's own
+filesystem — `mount --bind /srv /srv` over it, or a recursive bind whose
+copy of it was unmounted — where it may show the very directory the covered
+mount is mounted on, which `rmdir` refuses while it is a mount point:
+`rmSync` deleted part of the root there, then failed with `EBUSY`. Such a
+mount is refused, naming the mounts to unmount first, in order. A
 mount on `/` itself covers nothing: a path is looked up from the process's
 root and never crosses a mount stacked on it (a tmpfs mounted on `/` in a
 chroot, or `mount --bind / /`), so a mount under the root is refused still.

@@ -2749,7 +2749,12 @@ and it refuses, deleting nothing:
   another directory of the same filesystem, which `/proc/self/mountinfo`
   lists (not one a later mount over a directory above it covers, which it
   lists too: nothing is mounted at its path then, and the purge goes on —
-  but a mount on `/` itself covers nothing, since a path is looked up from
+  unless that path leads through a mount of the covered mount's own
+  filesystem, such as `mount --bind /srv /srv` over it or a recursive bind
+  whose copy of it was unmounted, where it may show the very directory the
+  covered mount is mounted on, which the delete cannot remove: the refusal
+  then names the mounts to unmount first, in order, before you unmount it;
+  and a mount on `/` itself covers nothing, since a path is looked up from
   the root and never crosses a mount stacked on it);
   elsewhere such a mount cannot be told from a directory, so unmount
   any under `orgs/<id>/` yourself before you purge. It takes a file on

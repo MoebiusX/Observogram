@@ -2369,6 +2369,7 @@ test('purge-org docs: the README and the k8s note say it cannot be undone, what 
     'delete `orgs/<id>/` by hand and run the purge again',
     'run the purge as a user who can read it',
     'Unmount it, then run the purge again',
+    'names the mounts to unmount first, in order, before you unmount it',
     'move it out of `orgs/<id>/` and unmount, then run the purge again',
     'Stop what changes files there, then run the purge again',
   ]) assert.ok(readme.includes(way), `README: ${way}`);
@@ -2376,6 +2377,7 @@ test('purge-org docs: the README and the k8s note say it cannot be undone, what 
   for (const way of ['out of ${root}, then run purge-org again', 'if it then refuses because ${file} does not exist',
     'make it lead there again before a pre-store build', 'mount it, then run purge-org again',
     'delete ${root} by hand, then run purge-org again', 'Run purge-org as a user who can read', 'Unmount it, then run purge-org again',
+    ': first unmount ',
     'out of ${root} and unmount what is mounted there, then run purge-org again', 'Stop what changes files under ${root}, then run purge-org again']) {
     assert.ok(place.includes(way), `purge-org's refusal names the same way out: ${way}`);
   }
@@ -2595,7 +2597,7 @@ test('purge-org users file: a view through another filesystem — NFS (the inode
   }
 });
 
-test('purge-org users file: a mount point under the root — another filesystem, a file mounted there, one directory reached twice, a loop, the root itself, a mount of the same filesystem /proc/self/mountinfo lists (of a directory or a file) — is refused before anything is deleted, and once unmounted the purge passes; with no /proc/self/mountinfo, a same-filesystem bind mount from outside is entered as a directory; a file on another device than its directory that /proc/self/mountinfo does not list (an overlay mount\'s lower layer on another filesystem) is none, nor is a mount it lists that a later mount over a directory above it covers, though a mount stacked on / covers none', () => {
+test('purge-org users file: a mount point under the root — another filesystem, a file mounted there, one directory reached twice, a loop, the root itself, a mount of the same filesystem /proc/self/mountinfo lists (of a directory or a file) — is refused before anything is deleted, and once unmounted the purge passes; with no /proc/self/mountinfo, a same-filesystem bind mount from outside is entered as a directory; a file on another device than its directory that /proc/self/mountinfo does not list (an overlay mount\'s lower layer on another filesystem) is none, nor is a mount it lists that a later mount of another filesystem over a directory above it covers (one of its own filesystem may show the directory it is mounted on: refused, naming what to unmount first), though a mount stacked on / covers none', () => {
   const vol = betaVolume().dir('/srv5', { dev: 7n }).file('/srv5/accounts.json').bind('/srv5', `${ROOT_B}/m`);
   // The reverse of a mount view: a directory from outside mounted under the root, holding the users file.
   assert.deepEqual(placeIn(vol, '/srv5/accounts.json'), { exists: null, refusal: mounted(`${ROOT_B}/m (another filesystem than ${ROOT_B})`) });
@@ -2669,6 +2671,42 @@ test('purge-org users file: a mount point under the root — another filesystem,
   assert.ok(placeIn(coveredRoot, '/srv/accounts.json').refusal.startsWith(`${same(ROOT_B, '/ws/orgs')} is a mount point: `), 'the root mounted on the filesystem above');
   coveredRoot.unmount(ROOT_B);
   assert.deepEqual(placeIn(coveredRoot, '/srv/accounts.json'), { exists: true, refusal: null }, 'the root unmounted as its refusal says: purged');
+  // Covered by a mount of the filesystem it lies in — /ws bound on itself (an fstab line mounted out of order), a recursive
+  // bind of /ws whose copy of the mount at <root>/m was unmounted as its refusal said, or a filesystem mounted on /ws that
+  // holds a bind mount of the directory it lies in — the covered mount's path shows the very directory it is mounted on,
+  // which rmdir refuses while it is a mount point (rmSync deleted part of the root, then failed there with EBUSY), and
+  // unmounting it at its path fails (not mounted). It is refused, naming what to unmount first; followed literally, the
+  // purge passes. The root itself likewise.
+  const coveredSame = (at, first, root = ROOT_B) => `${at} (the same filesystem as ${root}, listed in /proc/self/mountinfo, covered by a later `
+    + `mount through which its path may show what it is mounted on: first unmount ${first})`;
+  const selfBound = betaVolume({ proc: true }).dir('/srv6').file('/srv6/other-data').dir(`${ROOT_B}/m`);
+  const point = selfBound.fs.lstatSync(`${ROOT_B}/m`).ino;
+  selfBound.bind('/srv6', `${ROOT_B}/m`).bind('/ws', '/ws');
+  assert.equal(selfBound.fs.lstatSync(`${ROOT_B}/m`).ino, point, '/ws bound on itself: <root>/m shows the directory mounted on');
+  assert.throws(() => selfBound.unmount(`${ROOT_B}/m`), { code: 'EINVAL' }, '/ws bound on itself: <root>/m not mounted');
+  assert.deepEqual(placeIn(selfBound, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws')) }, '/ws bound on itself');
+  selfBound.unmount('/ws').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(selfBound, '/srv/accounts.json'), { exists: true, refusal: null }, '/ws bound on itself: unmounted as its refusal says, purged');
+  const rbound = betaVolume({ proc: true }).dir('/srv6').file('/srv6/other-data').bind('/srv6', `${ROOT_B}/m`).bind('/ws', '/ws')
+    .bind('/srv6', `${ROOT_B}/m`);
+  assert.deepEqual(placeIn(rbound, '/srv/accounts.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m`)) }, 'a recursive bind: its copy');
+  assert.throws(() => rbound.unmount('/ws'), { code: 'EBUSY' }, 'a recursive bind: busy while its copy is mounted');
+  rbound.unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(rbound, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws')) },
+    'a recursive bind, its copy unmounted as its refusal says');
+  rbound.unmount('/ws').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(rbound, '/srv/accounts.json'), { exists: true, refusal: null }, 'a recursive bind: unmounted as its refusal says, purged');
+  const inAbove = betaVolume({ proc: true }).dir('/srv6').bind('/srv6', `${ROOT_B}/m`).bind('/ws', '/keep').dir('/fresh', { dev: 70n })
+    .bind('/fresh', '/ws').bind('/keep/orgs', '/ws/orgs').unmount('/keep');
+  assert.deepEqual(placeIn(inAbove, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws/orgs, then /ws')) },
+    'a bind mount of the directory it lies in, on the filesystem above');
+  inAbove.unmount('/ws/orgs').unmount('/ws').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(inAbove, '/srv/accounts.json'), { exists: true, refusal: null }, 'on the filesystem above: unmounted as its refusal says, purged');
+  const rootBound = betaVolume({ proc: true }).bind(ROOT_B, ROOT_B).bind('/ws', '/ws');
+  assert.ok(placeIn(rootBound, '/srv/accounts.json').refusal.startsWith(`${coveredSame(ROOT_B, '/ws', '/ws/orgs')} is a mount point: `),
+    'the root bound on itself, /ws bound on itself');
+  rootBound.unmount('/ws').unmount(ROOT_B);
+  assert.deepEqual(placeIn(rootBound, '/srv/accounts.json'), { exists: true, refusal: null }, 'the root: unmounted as its refusal says, purged');
   // A mount stacked on / itself — a tmpfs mounted on / in a chroot, or `mount --bind / /` — covers nothing: a path is looked
   // up from the process's root, and a lookup never crosses a mount stacked on it, so <root>/m is reached at its path still.
   // It is refused, holding other files or the users file (it was passed over as covered: rmSync failed there with EBUSY, and

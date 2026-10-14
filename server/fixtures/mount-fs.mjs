@@ -45,8 +45,9 @@
 // answers as node:fs does: readdirSync lists names as strings, each such byte U+FFFD (a name no lookup finds), or with
 // { encoding: 'buffer' } as their bytes; readlinkSync, realpathSync and /proc/self/mountinfo (read as UTF-8) likewise.
 // fold: names compared case-insensitively (NTFS); devs: { '<a root>': its device } (default 1n each); proc: Linux's
-// /proc/self/mountinfo, listing / and every mount now, each with its mount ID and its parent's, one covered too (its
-// path with the kernel's octal escapes), on POSIX paths;
+// /proc/self/mountinfo, listing / and every mount now, each with its mount ID, its parent's and its filesystem's device
+// (as 0:<device>: a bind mount the device of what it shows, a view the view's), one covered too (its path with the
+// kernel's octal escapes), on POSIX paths;
 // coarse: a clock coarser than every change made, so every change time reads the same and none moves.
 // Each inode gets a distinct inode number and a modification time with nanoseconds, unless given, and a change time
 // that moves, as the kernel moves a directory's, with every entry added, removed or renamed in it (unless coarse).
@@ -258,8 +259,8 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = 
       readFileSync(p) {
         if (!proc || p !== '/proc/self/mountinfo') throw fail('ENOENT', p);
         const octal = (s) => s.replace(/[ \t\n\\]/g, (c) => `\\${c.charCodeAt(0).toString(8).padStart(3, '0')}`);
-        return answered([{ id: TOP, parent: 1, at: '/' }, ...mounts.values()]
-          .map((m) => `${m.id} ${m.parent} 0:${m.id} / ${octal(m.at)} rw,relatime - fixture fixture rw\n`).join(''));
+        return answered([{ id: TOP, parent: 1, at: '/', node: tops.get(key('/')) }, ...mounts.values()]
+          .map((m) => `${m.id} ${m.parent} 0:${m.how?.dev ?? m.node?.dev ?? 0n} / ${octal(m.at)} rw,relatime - fixture fixture rw\n`).join(''));
       },
     },
   };
