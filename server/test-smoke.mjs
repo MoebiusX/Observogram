@@ -51,6 +51,14 @@ dropInheritedOrgVars();
 const SMOKE_TOKEN_VAR = 'OBSERVOGRAM_ORG_DEFAULT_SMOKE_TOKEN';
 const SMOKE_TOKEN_VALUE = 'smoke-read-token-value';
 process.env[SMOKE_TOKEN_VAR] = SMOKE_TOKEN_VALUE;
+// The default org's notify hook SMOKE (server/notify-target-policy.mjs, the
+// follow-up journey-notify-env-ownership): a journey's notify names it — a
+// bare name is refused by capture and by a run — and the server posts only
+// to its loopback URL, with its own token. Nothing here runs a journey that
+// notifies.
+const SMOKE_HOOK = { urlEnv: 'OBSERVOGRAM_ORG_DEFAULT_NOTIFY_SMOKE_URL', tokenEnv: 'OBSERVOGRAM_ORG_DEFAULT_NOTIFY_SMOKE_TOKEN' };
+process.env[SMOKE_HOOK.urlEnv] = 'http://127.0.0.1:9/smoke-hook';
+process.env[SMOKE_HOOK.tokenEnv] = 'smoke-hook-token';
 
 const { start } = await import('./index.mjs');
 const { currentStore, closeStore } = await import('./store/db.mjs');
@@ -789,7 +797,7 @@ try {
     'gate: { minAlignmentPct: 1, stack: { rows: { scrape_targets_down: { max: 0 } } } }',
     'schedule: "*/15 * * * *"',
     'stackBudget: { objective: 0.99, window: 30d }',
-    'notify: { urlEnv: SMOKE_HOOK_URL, authEnv: SMOKE_HOOK_TOKEN, on: breach, format: text }',
+    `notify: { urlEnv: ${SMOKE_HOOK.urlEnv}, authEnv: ${SMOKE_HOOK.tokenEnv}, on: breach, format: text }`,
   ].join('\n'));
   const deliveredAt = '2026-09-20T10:15:00.000Z';
   mkdirSync(join(SMOKE_WORKSPACE, 'runs', 'delivery-seeded'), { recursive: true });
@@ -797,22 +805,22 @@ try {
     journey: 'delivery-seeded', startedAt: deliveredAt, tookMs: 5, outcome: 'gate-failed',
     grade: { score: 70, pass: true }, drift: { alignmentPct: 90 }, gate: { thresholds: {}, breaches: [{ criterion: 'stack.scrape_targets_down', detail: 'scrape_targets_down = 2 count outside [-∞ … 0] — point-in-time sample, not an SLO verdict' }] },
     stackEvidence: { status: 'sampled', reason: null, rows: [{ id: 'scrape_targets_down', family: 'scrape', product: 'generic', value: 2, unit: 'count', direction: 'lower', outcome: 'data', hint: 'nonzero', at: deliveredAt, referenceSli: null }], alertmanager: null, grafana: null },
-    notify: { status: 'sent', reason: 'gate failed: stack.scrape_targets_down', triggers: ['gate-failed:stack.scrape_targets_down'], httpStatus: 202, attempts: 1, tookMs: 12, urlEnv: 'SMOKE_HOOK_URL', error: null },
+    notify: { status: 'sent', reason: 'gate failed: stack.scrape_targets_down', triggers: ['gate-failed:stack.scrape_targets_down'], httpStatus: 202, attempts: 1, tookMs: 12, urlEnv: SMOKE_HOOK.urlEnv, error: null },
   }, null, 2));
   const delivered = (await getJson(base, '/api/journeys')).journeys.find(j => j.name === 'delivery-seeded');
   assert(delivered && delivered.loadError === null && JSON.stringify(delivered.schedule) === JSON.stringify({ cron: '*/15 * * * *', timezone: null, every: null, cadenceMs: 900000, cadenceNote: null }),
          'GET /api/journeys carries the parsed schedule with cadenceMs 900000', delivered && { e: delivered.loadError, s: delivered.schedule });
   assert(JSON.stringify(delivered.stackBudget) === JSON.stringify({ objective: 0.99, window: '30d' }), 'GET /api/journeys carries stackBudget as declared', delivered.stackBudget);
-  assert(JSON.stringify(delivered.notify) === JSON.stringify({ urlEnv: 'SMOKE_HOOK_URL', authEnv: 'SMOKE_HOOK_TOKEN', on: 'breach', format: 'text' }) && !/http/.test(JSON.stringify(delivered.notify)),
-         'GET /api/journeys carries the notify block as env var NAMES + policy knobs — no URL, no value', delivered.notify);
+  assert(JSON.stringify(delivered.notify) === JSON.stringify({ urlEnv: SMOKE_HOOK.urlEnv, authEnv: SMOKE_HOOK.tokenEnv, on: 'breach', format: 'text' }) && !/http/.test(JSON.stringify(delivered.notify)),
+         'GET /api/journeys carries the notify block as env var NAMES + policy knobs — no URL, no value, no problem for the org\'s set hook', delivered.notify);
   assert(JSON.stringify(delivered.lastRun.notify) === JSON.stringify({ status: 'sent', httpStatus: 202, reason: 'gate failed: stack.scrape_targets_down' }), 'lastRun.notify is { status, httpStatus, reason }', delivered.lastRun.notify);
-  assert(!JSON.stringify(delivered.lastRun.notify).includes('SMOKE_HOOK') && !JSON.stringify(delivered).includes('triggers'), 'lastRun.notify is the trimmed summary (no env name, no triggers)');
+  assert(!JSON.stringify(delivered.lastRun.notify).includes('NOTIFY_SMOKE') && !JSON.stringify(delivered).includes('triggers'), 'lastRun.notify is the trimmed summary (no env name, no triggers)');
   // The Neuron view's schedule route mirrors `packc journey schedule --json`.
   const sched = await getJson(base, '/api/journeys/delivery-seeded/schedule');
   assert(sched.ok === true && sched.schedule?.cron === '*/15 * * * *' && sched.placeholder === false, 'GET /api/journeys/:name/schedule carries the parsed schedule', sched.schedule);
   assert(JSON.stringify(Object.keys(sched.snippets || {}).sort()) === JSON.stringify(['actions', 'cron', 'k8s', 'schtasks']), 'the schedule route emits the four snippet formats', Object.keys(sched.snippets || {}));
   assert(/\*\/15 \* \* \* \*/.test(sched.snippets.cron) && /delivery-seeded/.test(sched.snippets.cron), 'the cron snippet carries the journey cadence and name', sched.snippets.cron);
-  assert(JSON.stringify(sched.envNames) === JSON.stringify(['SMOKE_HOOK_URL', 'SMOKE_HOOK_TOKEN']) && /SMOKE_HOOK_URL/.test(JSON.stringify(sched.snippets)), 'env var NAMES ride along and the snippets bind them by name', sched.envNames);
+  assert(JSON.stringify(sched.envNames) === JSON.stringify([SMOKE_HOOK.urlEnv, SMOKE_HOOK.tokenEnv]) && JSON.stringify(sched.snippets).includes(SMOKE_HOOK.urlEnv), 'env var NAMES ride along and the snippets bind them by name', sched.envNames);
   const schedPlain = await getJson(base, '/api/journeys/smoke-journey/schedule');
   assert(schedPlain.placeholder === true && schedPlain.schedule === null && /\*\/15 \* \* \* \*/.test(schedPlain.snippets.cron), 'without schedule: the route says placeholder and uses the placeholder cadence', { p: schedPlain.placeholder, s: schedPlain.schedule });
   const schedMissing = await fetch(`${base}/api/journeys/no-such-journey/schedule`);
@@ -823,13 +831,23 @@ try {
   });
   const capNotifyBadBody = await capNotifyBad.json();
   assert(capNotifyBad.status === 400 && /notify\.url is not allowed — reference an env var name with urlEnv/.test(capNotifyBadBody.error || ''), 'capture with a literal notify.url → 400 with the env-var alternative', capNotifyBadBody);
+  // A bare name is no notify hook of the org: capture refuses it, naming the
+  // org's hook pattern and the listing that names the set ones; no file.
+  const capNotifyBare = await fetch(`${base}/api/journeys/capture`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'captured-notify-bare', packAId: 'payment-service', packBId: 'production-curated', notify: { urlEnv: 'SMOKE_HOOK_URL', on: 'always' } }),
+  });
+  const capNotifyBareBody = await capNotifyBare.json();
+  assert(capNotifyBare.status === 400 && capNotifyBareBody.error === "notify.urlEnv \"SMOKE_HOOK_URL\" is not a notify hook of org 'default' — the server posts a journey's notification only to OBSERVOGRAM_ORG_DEFAULT_NOTIFY_<HOOK>_URL (<HOOK>: words of A–Z and 0–9 joined by single _), with its token, if any, from OBSERVOGRAM_ORG_DEFAULT_NOTIFY_<HOOK>_TOKEN: name one that GET /api/journeys/notify-hooks lists"
+         && !existsSync(join(SMOKE_WORKSPACE, 'journeys', 'captured-notify-bare.journey.yaml')),
+         'capture with a bare notify.urlEnv → 400 naming the org\'s hook pattern and the listing; no file', capNotifyBareBody);
   const capNotifyOk = await fetch(`${base}/api/journeys/capture`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'captured-notify', packAId: 'payment-service', packBId: 'production-curated', notify: { urlEnv: 'SMOKE_HOOK_URL', on: 'always' }, schedule: { every: '2h' } }),
+    body: JSON.stringify({ name: 'captured-notify', packAId: 'payment-service', packBId: 'production-curated', notify: { urlEnv: SMOKE_HOOK.urlEnv, on: 'always' }, schedule: { every: '2h' } }),
   }).then(r => r.json());
   const capturedNotify = (await getJson(base, '/api/journeys')).journeys.find(j => j.name === 'captured-notify');
-  assert(capNotifyOk.ok === true && capturedNotify?.notify?.urlEnv === 'SMOKE_HOOK_URL' && capturedNotify.notify.on === 'always' && capturedNotify.notify.format === 'json' && capturedNotify.schedule?.every === '2h' && capturedNotify.schedule.cadenceMs === 7200000,
-         'capture persists notify (names) and an every: schedule; the listing reads them back', capturedNotify && { n: capturedNotify.notify, s: capturedNotify.schedule });
+  assert(capNotifyOk.ok === true && capturedNotify?.notify?.urlEnv === SMOKE_HOOK.urlEnv && capturedNotify.notify.on === 'always' && capturedNotify.notify.format === 'json' && capturedNotify.schedule?.every === '2h' && capturedNotify.schedule.cadenceMs === 7200000,
+         'capture persists notify (the org\'s hook, by name) and an every: schedule; the listing reads them back', capturedNotify && { n: capturedNotify.notify, s: capturedNotify.schedule });
 
   // Step 4: a run record carrying requirement chains (seeded the way the
   // runner writes them) surfaces lastRun.chains + lastRun.transition.

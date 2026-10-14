@@ -91,6 +91,22 @@ spec:
             # org's own list is OBSERVOGRAM_ORG_<KEY>_MCP_ORIGINS.
             # - name: OBSERVOGRAM_MCP_ORIGINS
             #   value: https://mcp.example.com
+            # A journey the studio runs notifies only through its org's
+            # notify hook, OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL and that
+            # hook's _TOKEN (KEY the org id in capitals, - as _), bound here
+            # from a Secret; GET /api/journeys/notify-hooks lists them. The
+            # webhook origins it may post to: unset, only loopback; an org's
+            # own list is OBSERVOGRAM_ORG_<KEY>_NOTIFY_ORIGINS. The list
+            # compares names, not addresses: refusing link-local or metadata
+            # addresses belongs to the pod's egress NetworkPolicy.
+            # - name: OBSERVOGRAM_NOTIFY_ORIGINS
+            #   value: https://hooks.slack.com
+            # - name: OBSERVOGRAM_ORG_DEFAULT_NOTIFY_ONCALL_URL
+            #   valueFrom:
+            #     secretKeyRef: { name: studio-notify-hooks, key: ONCALL_URL }
+            # - name: OBSERVOGRAM_ORG_DEFAULT_NOTIFY_ONCALL_TOKEN
+            #   valueFrom:
+            #     secretKeyRef: { name: studio-notify-hooks, key: ONCALL_TOKEN }
             # Optional: raises GitHub API rate limits and enables private
             # repos for POST /api/crawl-github.
             # - name: GITHUB_TOKEN

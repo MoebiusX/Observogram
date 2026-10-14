@@ -42,6 +42,12 @@
  * says chains, Diagnose and every action pair by behaviour; the change is
  * announced; back to Behaviour shows the server's numbers again.
  *
+ * The Neuron view at a 390 px phone width, with sign-in off (the follow-up
+ * journey-notify-env-ownership): a journey that notifies through the default
+ * org's hook PLATFORM_ALERTS (one of docs/DOWNSTREAM.md §17's examples),
+ * with that hook's token, prints both variables whole in the focus header,
+ * and the page does not scroll sideways.
+ *
  * Skipped unless Playwright imports (OBSERVOGRAM_PLAYWRIGHT, else the bare
  * 'playwright') and Chromium launches; OBSERVOGRAM_LIVE_SMOKE=require fails
  * instead.
@@ -68,11 +74,12 @@ const { join } = await import('node:path');
 const { hashPassword } = await import('./auth.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
 const { startFakeMcp, endpointIdFor } = await import('./fixtures/fake-mcp.mjs');
-const { readFileSync } = await import('node:fs');
+const { mkdirSync, readFileSync, writeFileSync } = await import('node:fs');
 const { resolve, dirname, isAbsolute } = await import('node:path');
 const { fileURLToPath, pathToFileURL } = await import('node:url');
 const { capabilityTool, candidateTool, probeCandidates, productAttestedByTool } = await import('../tools/lib/contracts/mcp-capabilities.mjs');
 const { stagesFor } = await import('../tools/lib/live-fetch.mjs');
+const { SPEC_DIR } = await import('../tools/lib/validator.mjs');
 
 const password = (login) => `${login}-passw0rd-live`;
 const LOGINS = ['ada', 'oscar'];
@@ -448,6 +455,58 @@ test('BROWSER: Compare pairs by behaviour, name or id — re-keyed in the browse
   assert.equal(diffRequests.length, 1, 'the Assessment reads the diff already held');
   await page.click('.diag-subtab[data-sub="compare"]');
   await expectMode('id', [3, 17, 3]);
+
+  await ctx.close();
+  assert.deepEqual(offLoopback.filter((u) => !/fonts\.(googleapis|gstatic)\.com/.test(u)), [], 'nothing but fonts was asked of another origin, and those were aborted');
+  assert.deepEqual(problems, [], 'no page error and no console.error');
+});
+
+test('BROWSER: the Neuron view at a 390 px phone width — a journey through the org\'s notify hook prints both its variables whole, and the page does not scroll sideways', async (t) => {
+  const skip = (why) => { if (REQUIRED) assert.fail(`OBSERVOGRAM_LIVE_SMOKE=require: ${why}`); t.skip(why); };
+  const { pw, error } = await loadPlaywright();
+  if (!pw) return skip(error);
+  let browser;
+  try { browser = await pw.chromium.launch(); }
+  catch (e) { return skip(`chromium.launch failed: ${e.message.split('\n')[0]}`); }
+  t.after(() => browser.close());
+
+  // The default org's hook PLATFORM_ALERTS, one of docs/DOWNSTREAM.md §17's examples: on this machine, so no origin list.
+  const URL_ENV = 'OBSERVOGRAM_ORG_DEFAULT_NOTIFY_PLATFORM_ALERTS_URL';
+  const TOKEN_ENV = 'OBSERVOGRAM_ORG_DEFAULT_NOTIFY_PLATFORM_ALERTS_TOKEN';
+  const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const file = (p) => resolve(ROOT, p).replaceAll('\\', '/');
+  const ws = mkdtempSync(join(tmpdir(), 'observogram-neuron-phone-'));
+  mkdirSync(join(ws, 'journeys'));
+  writeFileSync(join(ws, 'journeys', 'hooked.journey.yaml'), [
+    'name: hooked', `packA: { file: ${file(`${SPEC_DIR}/examples/payment-service.pack.yaml`)} }`, `packB: { file: ${file('examples/production-curated.pack.yaml')} }`,
+    'gate: { minAlignmentPct: 1 }', `notify: { urlEnv: ${URL_ENV}, authEnv: ${TOKEN_ENV}, on: always }`,
+  ].join('\n') + '\n');
+  const child = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off', [URL_ENV]: 'http://127.0.0.1:9/hook', [TOKEN_ENV]: 'tok-neuron-phone' } });
+  t.after(async () => { await child.stop(); rmSync(ws, { recursive: true, force: true }); });
+  const listed = (await (await fetch(`${child.base}/api/journeys`)).json()).journeys.find((j) => j.name === 'hooked');
+  assert.deepEqual({ urlEnv: listed?.notify?.urlEnv, authEnv: listed?.notify?.authEnv, problem: listed?.notify?.problem }, { urlEnv: URL_ENV, authEnv: TOKEN_ENV, problem: undefined }, 'a journey the server would run');
+
+  const problems = [];
+  const offLoopback = [];
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  await ctx.addInitScript(() => { localStorage.setItem('studioState.v1', JSON.stringify({ selectedPackId: 'payment-service', selectedEnv: 'prod', view: 'neuron' })); });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
+  page.on('console', (m) => { if (m.type() === 'error' && !/^Failed to load resource: /.test(m.text())) problems.push(`console.error: ${m.text()}`); });
+  await page.route('**/*', (route) => {
+    if (route.request().url().startsWith(child.base)) return route.fallback();
+    offLoopback.push(route.request().url());
+    return route.abort();
+  });
+
+  await page.goto(`${child.base}/`);
+  await page.waitForFunction(() => [...document.querySelectorAll('.nrn-focus .journey-card-meta span')].some((s) => s.textContent.startsWith('notify:')), null, { timeout: 30_000 });
+  const fit = await page.evaluate(() => {
+    const de = document.documentElement;
+    const span = [...document.querySelectorAll('.nrn-focus .journey-card-meta span')].find((s) => s.textContent.startsWith('notify:'));
+    return { text: span.textContent, inside: span.getBoundingClientRect().right <= de.clientWidth, scroll: de.scrollWidth - de.clientWidth };
+  });
+  assert.deepEqual(fit, { text: `notify: always → $${URL_ENV} (bearer $${TOKEN_ENV}) · json`, inside: true, scroll: 0 }, 'the hook\'s names break inside the focus header: no horizontal page scroll');
 
   await ctx.close();
   assert.deepEqual(offLoopback.filter((u) => !/fonts\.(googleapis|gstatic)\.com/.test(u)), [], 'nothing but fonts was asked of another origin, and those were aborted');

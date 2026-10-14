@@ -1478,8 +1478,8 @@ history with `stackPostureBudget` (see *History helpers*). Nothing enters
 
 ```yaml
 notify:
-  urlEnv: MY_JOURNEY_WEBHOOK_URL     # env var NAME holding the POST URL (required)
-  authEnv: MY_JOURNEY_WEBHOOK_TOKEN  # optional → Authorization: Bearer <value>
+  urlEnv: OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_URL     # env var NAME holding the POST URL (required): org acme's hook ONCALL
+  authEnv: OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_TOKEN  # optional, that hook's own token → Authorization: Bearer <value>
   on: transitions                    # transitions (default) · breach · always
   format: json                       # json · text (one line + markdown body)
   timeoutMs: 5000                    # per attempt, clamped to [1000, 60000]; one retry
@@ -1489,8 +1489,53 @@ notify:
 Secrets never live in a journey file: a literal `url:` / `token:` /
 `headers:` is refused at load (`notify.url is not allowed — reference an env
 var name with urlEnv (secrets never live in a journey file)`); the env vars
-are resolved at RUN time only, and an unset one refuses to run exactly like
-an unset `packB.mcp.authEnv` (exit 2, no record).
+are resolved at RUN time only, and an unset one refuses to run: on the CLI
+exactly like an unset `packB.mcp.authEnv` (exit 2, no record), on the server
+with a 400 before anything runs (no record, no audit row, nothing sent).
+
+**Which names a run may read.** `packc journey run` reads any name the
+journey declares from its own environment — a shell, a CI job's
+`secrets.*`, a CronJob's `secretKeyRef` bindings. The studio server reads
+only the journey's org's own **notify hook**: `notify.urlEnv` must be
+`OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` — `<KEY>` the org id in capitals
+with `-` as `_`, `<HOOK>` words of A–Z and 0–9 joined by single `_`, upper
+case exactly, a name the org owns alone by the longest-prefix rule — and
+`notify.authEnv` that same hook's `…_TOKEN`, or absent. The server's
+operator sets the pair in the server's environment and restarts the server
+(the start prints a `[notify-hooks]` line for each set hook a run would
+refuse); `GET /api/journeys/notify-hooks` lists the org's hooks to every
+member, by name and whether each is usable, never a value or an origin.
+Capture refuses any other `notify` (400). A run is refused before anything
+runs, with a sentence naming what to fix and who fixes it (`journey <name>
+is not run: …`), unless its hook is the org's, set, with an http(s) URL
+without `user:password`, a token the server can send and an allowed origin.
+Without sign-in such a run is answered only to a request sent straight to a
+loopback address, and never on a server bound beyond loopback. Write
+journeys the studio also runs with the hook's names; the CLI reads them the
+same way.
+
+**The notify origin allowlist** (the server's runs and captures):
+`OBSERVOGRAM_NOTIFY_ORIGINS` (every org) ∪
+`OBSERVOGRAM_ORG_<KEY>_NOTIFY_ORIGINS` (one org, read only when the org owns
+the name alone), comma-separated origins (`scheme://host[:port]`; `*` any),
+read at each check. Loopback always passes; with no list, nothing else does.
+It is a separate list from `OBSERVOGRAM_MCP_ORIGINS`: listing a webhook
+origin never lets an MCP read token go there, nor the reverse. A rejected
+entry is noted on stderr by its position only, never echoed. An `http:`
+origin carries the URL and the token in clear.
+
+**The request.** One bounded POST with the platform's `fetch`, never through
+the transport hook: `redirect: 'manual'`, so a 3xx is a failed delivery with
+its status (`{ status: 'failed', httpStatus: 302, attempts: 1 }`) and its
+`Location` receives nothing. A delivery error on the record never carries any
+part of the hook's URL or token, nor the address its host resolved to, on the
+CLI and the server alike: values are replaced by `<redacted>`; undici's two
+texts that quote a value read `Headers.append: "<redacted>" is an invalid
+header value.` and `Request cannot be constructed from a URL that includes
+credentials: <redacted>`, and a failed lookup or connection reads
+`getaddrinfo ENOTFOUND <redacted>` or `connect ECONNREFUSED <redacted>`.
+docs/DOWNSTREAM.md §17 has the rule's every sentence and the migration of a
+journey that names another variable.
 
 The decision is pure (`tools/lib/journey-notify.mjs`, browser-safe):
 `always` posts every run; `breach` posts a gate-failed or vantage-lost run
@@ -1518,9 +1563,14 @@ The outcome never changes the exit code (a failed delivery on a passing run
 still exits 0). `renderJourneyMarkdown` ends with `notify: sent (202) —
 <reason>` / `notify: skipped — …` / `notify: failed after N attempts —
 <error>`; `journey list` appends ` · notify <status>`; `GET /api/journeys`
-carries `notify` as names (`{ urlEnv, authEnv, on, format }`) and
+carries `notify` as names (`{ urlEnv, authEnv, on, format }`, plus
+`problem`, the run's refusal, for a journey a server run would refuse) and
 `lastRun.notify` as `{ status, httpStatus, reason }`; the Journeys view
-prints `notify: sent (202) · <reason>`.
+prints `notify: sent (202) · <reason>`. The studio's schedule snippets
+(`GET /api/journeys/:name/schedule`) never bind a notify name the server
+refuses: it is listed in `refusedEnvNames`, and each snippet says so where
+its binding would have been (`packc journey schedule` binds every name, as
+before).
 
 ### Stack self-metrics (registry)
 
