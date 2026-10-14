@@ -1239,7 +1239,10 @@ function chromiumLimitProblems(readDoc = read) {
     const sentence = claim.slice(at, end < 0 ? undefined : end + 1);
     if (!sentence.includes(CHROMIUM_LIMIT)) problems.push(`${doc}: "…${sentence}" does not say the check runs ${CHROMIUM_LIMIT}`);
   }
-  if (/playwright/i.test(read('.github/workflows/ci.yml'))) problems.push('.github/workflows/ci.yml names Playwright: the documents say CI\'s jobs do not install it');
+  // The workflow's steps, not its comments: the Windows leg's comment says the browser tests skip there as on every
+  // leg, which is the documents' claim; a step that installs Playwright or sets OBSERVOGRAM_PLAYWRIGHT is what they rule out.
+  const workflow = read('.github/workflows/ci.yml').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  if (/playwright/i.test(workflow)) problems.push('.github/workflows/ci.yml names Playwright outside a comment: the documents say CI\'s jobs do not install it');
   return problems;
 }
 // What docs/CHANGELOG.md's entry for Deploy in the static bundle says of the deploy controls Remediate draws with no
