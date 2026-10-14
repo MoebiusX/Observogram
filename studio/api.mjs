@@ -402,9 +402,9 @@ export async function validateUploaded(body, contentType, env) {
 // The pack an adopt selects. A scan or a live draft is registered by the
 // route that answers it (`out.registered.id` — POST /api/crawl,
 // /api/crawl-github, /api/draft-from-mcp), so adopting it selects that
-// catalogue entry. POST /api/validate registers what it validates under
-// another id (the YAML is not the registered object byte for byte, so its
-// content hash differs): it is the path only when the route registered
+// catalogue entry. POST /api/validate registers what it validates again,
+// under the YAML's content id (not necessarily another id than the
+// route's): it is the path only when the route registered
 // nothing (the pack failed validation) or the entry has left the catalogue
 // since (a reset). Answers as validateUploaded does; an entry already
 // registered carries no `adapted` / `conformance` — the caller loads it by id.

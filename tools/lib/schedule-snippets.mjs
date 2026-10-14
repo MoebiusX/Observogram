@@ -16,6 +16,26 @@
 //
 // Secrets discipline: env var NAMES only, ever — `export NAME=<set in your
 // environment>`, `REM setx NAME …`, `${{ secrets.NAME }}`, `secretKeyRef`.
+// A name the studio refuses for the journey's notify (`refusedEnvNames`: not
+// one of its org's notify hooks — the follow-up journey-notify-env-ownership)
+// is never bound: each form carries one comment where its binding would have
+// been, saying so — but a refused token `refusedPairs` names ({ authEnv,
+// urlEnv, tokenEnv }: the journey pairs authEnv with its org's hook urlEnv,
+// whose own token is tokenEnv) is told that token instead, since a rename to
+// some hook's shape would not do; one `refusedHookTokens` names ({ authEnv,
+// urlEnv }: authEnv is the token of its org's hook urlEnv, beside a refused
+// notify.urlEnv) is told that hook's URL, for the same reason; one
+// `refusedUrlTokens` names ({ tokenEnv, urlEnv }: the journey's notify.urlEnv
+// is tokenEnv, the token of its org's hook urlEnv — alone, or as its authEnv
+// too) is told it is refused as notify.urlEnv and that hook's URL, never
+// only to remove notify.authEnv; with `refusedTaken` (another org's id
+// takes every name of the org's hook shape, so no rename can make one the
+// org's) every other refused name is told to leave notify out instead; and
+// else one `refusedShadows` names (a name of the org's hook shape that
+// another org's id also maps onto: it has the shape a rename would give) is
+// told so, as the run's refusal says, and to name a hook the listing lists.
+// `packc journey schedule` passes none of them (the CLI reads any name from
+// its invoker's environment).
 // Honesty rule: nothing is fabricated as the journey's cadence — a missing
 // schedule prints a marked placeholder, `every: 45m` (no exact cron) prints
 // its command as a comment, an irregular cron is passed through verbatim.
@@ -35,12 +55,47 @@ const ORG_ROOT_RE = /^orgs\/[a-z][a-z0-9_-]{0,62}[a-z0-9]$/;
 
 export function validOrgRoot(r) { return r === '.' || ORG_ROOT_RE.test(String(r)); }
 const DOW_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+// What each form says where a refused name's binding would have been: one
+// of the org's hook tokens named as the journey's notify.urlEnv (refused
+// once, whether or not its authEnv names it too), its own hook's URL — never
+// only to remove notify.authEnv, which leaves the urlEnv refused; a token
+// refused beside its org's hook URL is told that hook's own token; one of the
+// org's hook tokens beside a refused URL name, its own hook's URL; any name
+// of an org whose every hook name another org's id takes, to leave notify out
+// (no name can be its hook); else a name of the org's hook shape another
+// org's id also maps onto, that it is not the org's and to name a hook the
+// listing lists — never a rename to the shape it already has.
+const refusedNote = (n, e) => {
+  const u = n.refusedUrlTokens.find((x) => x.tokenEnv === e);
+  if (u) return `${e} is the token of the hook ${u.urlEnv} names, refused as the journey's notify.urlEnv: the studio posts only to a hook's URL — set the journey's notify.urlEnv to ${u.urlEnv}, and its notify.authEnv to ${e} or leave it out, before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  const p = n.refusedPairs.find((x) => x.authEnv === e);
+  if (p) return `${e} is not the token of the hook ${p.urlEnv} names: a hook's token goes only to its own URL — set the journey's notify.authEnv to ${p.tokenEnv}, or remove it, before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  const t = n.refusedHookTokens.find((x) => x.authEnv === e);
+  if (t) return `${e} is the token of the hook ${t.urlEnv} names, not of the journey's notify.urlEnv: a hook's token goes only to its own URL — set the journey's notify.urlEnv to ${t.urlEnv}, or remove notify.authEnv, before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  if (n.refusedTaken) return `${e} cannot be a notify hook of this org: another org's id also maps onto every name of its hook shape (OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN) by the longest-prefix rule, so the studio posts no notification for its journeys — remove the journey's notify before scheduling (docs/DOWNSTREAM.md §17.1)`;
+  if (n.refusedShadows.includes(e)) return `${e} has the shape of a notify hook of this org, but another org's id also maps onto it by the longest-prefix rule, so the studio never reads it — set the journey's notify.urlEnv to one that GET /api/journeys/notify-hooks lists, and its notify.authEnv to that hook's _TOKEN or leave it out, before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  return `${e} is not a notify hook of this org: the studio never reads it — rename it to OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN before scheduling (docs/DOWNSTREAM.md §17.2)`;
+};
 
 // Fill the defaults so every emitter reads one shape.
 export function normaliseSnippetInput(i = {}) {
   const src = i && typeof i === 'object' ? i : {};
   const placeholder = !!src.placeholder || (src.cron == null && src.every == null);
   const envNames = [...new Set((Array.isArray(src.envNames) ? src.envNames : []).filter(n => typeof n === 'string' && ENV_NAME_RE.test(n)))];
+  const refusedEnvNames = [...new Set((Array.isArray(src.refusedEnvNames) ? src.refusedEnvNames : []).filter(n => typeof n === 'string' && ENV_NAME_RE.test(n) && !envNames.includes(n)))];
+  const refusedPairs = (Array.isArray(src.refusedPairs) ? src.refusedPairs : [])
+    .filter(p => p && typeof p === 'object' && [p.authEnv, p.urlEnv, p.tokenEnv].every(v => typeof v === 'string' && ENV_NAME_RE.test(v)) && refusedEnvNames.includes(p.authEnv))
+    .map(p => ({ authEnv: p.authEnv, urlEnv: p.urlEnv, tokenEnv: p.tokenEnv }))
+    .filter((p, i, all) => all.findIndex(x => x.authEnv === p.authEnv) === i);
+  const refusedHookTokens = (Array.isArray(src.refusedHookTokens) ? src.refusedHookTokens : [])
+    .filter(t => t && typeof t === 'object' && [t.authEnv, t.urlEnv].every(v => typeof v === 'string' && ENV_NAME_RE.test(v)) && refusedEnvNames.includes(t.authEnv))
+    .map(t => ({ authEnv: t.authEnv, urlEnv: t.urlEnv }))
+    .filter((t, i, all) => all.findIndex(x => x.authEnv === t.authEnv) === i);
+  const refusedUrlTokens = (Array.isArray(src.refusedUrlTokens) ? src.refusedUrlTokens : [])
+    .filter(t => t && typeof t === 'object' && [t.tokenEnv, t.urlEnv].every(v => typeof v === 'string' && ENV_NAME_RE.test(v)) && refusedEnvNames.includes(t.tokenEnv))
+    .map(t => ({ tokenEnv: t.tokenEnv, urlEnv: t.urlEnv }))
+    .filter((t, i, all) => all.findIndex(x => x.tokenEnv === t.tokenEnv) === i);
+  const refusedShadows = [...new Set((Array.isArray(src.refusedShadows) ? src.refusedShadows : []).filter(n => typeof n === 'string' && ENV_NAME_RE.test(n) && refusedEnvNames.includes(n)))];
   if (src.orgRoot != null && !validOrgRoot(src.orgRoot)) throw new TypeError(`orgRoot must be '.' or 'orgs/<id>' (got ${JSON.stringify(src.orgRoot)})`);
   return {
     name: String(src.name || 'journey'),
@@ -49,6 +104,12 @@ export function normaliseSnippetInput(i = {}) {
     every: typeof src.every === 'string' && src.every ? src.every : null,
     cadenceNote: typeof src.cadenceNote === 'string' && src.cadenceNote ? src.cadenceNote : null,
     envNames,
+    refusedEnvNames,
+    refusedPairs,
+    refusedHookTokens,
+    refusedUrlTokens,
+    refusedTaken: src.refusedTaken === true,
+    refusedShadows,
     nodePath: String(src.nodePath || 'node'),
     cliPath: String(src.cliPath || 'tools/cli.mjs'),
     cwd: String(src.cwd || '.'),
@@ -97,6 +158,7 @@ export function cronLine(i) {
   for (const note of headerNotes(n)) out.push(`# ${note}`);
   out.push('# The journey file lives under <workspace>/journeys/; exit 0 pass · 1 gate failed · 2 error (see the log).');
   for (const e of n.envNames) out.push(`# export ${e}=<set in your environment>`);
+  for (const e of n.refusedEnvNames) out.push(`# ${refusedNote(n, e)}`);
   if (n.timezone) out.push(`CRON_TZ=${n.timezone}`);
   const cmd = `cd ${sq(n.cwd)} && OBSERVOGRAM_WORKSPACE=${sq(n.workspace)} ${sq(n.nodePath)} ${sq(n.cliPath)} journey run ${n.name} >> ${sq(`${n.workspace}/journey-${n.name}.log`)} 2>&1`;
   if (n.cron) out.push(`${n.cron} ${cmd}`);
@@ -149,6 +211,7 @@ export function schtasksCommand(i) {
   if (n.timezone) out.push(`REM schtasks runs in the machine's local time; the journey declares timezone ${n.timezone} — adjust /ST if the machine is elsewhere`);
   out.push(`REM setx OBSERVOGRAM_WORKSPACE "${toWin(n.workspace)}"   (User environment; the task runs as the current user)`);
   for (const e of n.envNames) out.push(`REM setx ${e} <set in your environment>   (User environment; the task runs as the current user)`);
+  for (const e of n.refusedEnvNames) out.push(`REM ${refusedNote(n, e)}`);
   out.push(`schtasks /Create /TN "Observogram\\${n.name}" /TR "\\"${toWin(n.nodePath)}\\" \\"${toWin(n.cliPath)}\\" journey run ${n.name}" ${sched || '/SC DAILY /ST 00:00'} /F`);
   return out.join('\n') + '\n';
 }
@@ -182,6 +245,7 @@ export function githubActionsWorkflow(i) {
     '          OBSERVOGRAM_WORKSPACE: .observogram',
   );
   for (const e of n.envNames) out.push(`          ${e}: \${{ secrets.${e} }}`);
+  for (const e of n.refusedEnvNames) out.push(`          # ${refusedNote(n, e)}`);
   out.push(
     `        run: node tools/cli.mjs journey run ${n.name}`,
     '      - name: Upload run record', '        if: always()', '        uses: actions/upload-artifact@v7', '        with:',
@@ -256,6 +320,7 @@ export function k8sCronJobManifest(i) {
   for (const e of n.envNames) {
     out.push(`                - name: ${e}`, '                  valueFrom:', '                    secretKeyRef:', `                      name: ${secretName}`, `                      key: ${e}`);
   }
+  for (const e of n.refusedEnvNames) out.push(`                # ${refusedNote(n, e)}`);
   out.push(
     '              securityContext:', '                allowPrivilegeEscalation: false', '                capabilities:', '                  drop: ["ALL"]',
     '              resources:', '                requests: { cpu: 25m, memory: 96Mi }', '                limits: { cpu: 500m, memory: 384Mi }',

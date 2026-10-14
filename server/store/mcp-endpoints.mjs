@@ -25,6 +25,14 @@
 //     their variables are nobody else's to claim. The same ownership is
 //     re-checked at request time by resolveMcpTarget (envNameOwnedBy): an
 //     org created later can change a stored name's owner.
+//   - and never a notify hook's variable (isOrgHookShaped): a name with the
+//     shape of ANY org's hook, OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL or
+//     _TOKEN (server/notify-target-policy.mjs), live or removed, whoever owns
+//     it by the rule above — the server sends a hook's variables only to that
+//     hook's webhook. acme's admin cannot name acme's hook token, and an org
+//     whose id extends acme's (acme-notify owns OBSERVOGRAM_ORG_ACME_NOTIFY_*
+//     by the longest prefix) cannot read it as its MCP token. Re-checked at
+//     request time too, for a name registered before the rule.
 //
 // Write tokens stay per-request pass-through. The SSRF / local-address
 // policy (validateMcpUrl) is applied where the URL is fetched, not here.
@@ -117,15 +125,54 @@ export function envNameOwnerText(name, owners) {
   return `observogram store: ${name} belongs to org ${owners.join(', ')} (the longest org prefix wins) — an admin may only name variables set aside for their org`;
 }
 
+// ---------- a notify hook's variables ----------
+
+// A notify hook of org <org> (server/notify-target-policy.mjs, which imports
+// these): OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL and that hook's token
+// …_NOTIFY_<HOOK>_TOKEN — <HOOK> words of A–Z and 0–9 joined by single _, the
+// whole name upper case exactly (process.env reads case-insensitively on
+// Windows) and at most HOOK_NAME_MAX characters (the row text rule).
+export const HOOK_RE = /^[A-Z0-9]+(?:_[A-Z0-9]+)*$/;
+export const HOOK_NAME_MAX = 200;
+const HOOK_WORDS = HOOK_RE.source.slice(1, -1);   // the words, unanchored
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// The hook <HOOK> of org's URL (suffix 'URL') or token (suffix 'TOKEN') name,
+// by shape only — no owner is consulted; null otherwise.
+export function hookOfShape(name, org, suffix = 'URL') {
+  if (typeof name !== 'string' || name.length > HOOK_NAME_MAX) return null;
+  const m = name.match(new RegExp(`^${escapeRe(orgEnvPrefix(org))}NOTIFY_(${HOOK_WORDS})_${suffix}$`));
+  return m ? m[1] : null;
+}
+
+// Does `name` have the URL or TOKEN shape of SOME org's hook, live or
+// removed, whoever owns it by the general rule? An MCP endpoint's
+// readTokenEnv never names one: a hook's variables go only to its webhook.
+export function isOrgHookShaped(db, name) {
+  if (typeof name !== 'string') return false;
+  return listOrgs(db, { includeRemoved: true })
+    .some((o) => hookOfShape(name, o.id, 'URL') !== null || hookOfShape(name, o.id, 'TOKEN') !== null);
+}
+
+// The refusal of a hook-shaped readTokenEnv. Its example is a name of `org`
+// that is not itself hook-shaped: <P>MCP_TOKEN, or <P>MCP_READ_KEY when an
+// org's id makes that one a hook's token (pay-notify beside pay).
+export function envNameHookText(db, name, org) {
+  const P = orgEnvPrefix(org);
+  const example = isOrgHookShaped(db, `${P}MCP_TOKEN`) ? `${P}MCP_READ_KEY` : `${P}MCP_TOKEN`;
+  return `observogram store: ${name} has the shape of a notify hook's variable (OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL or _TOKEN), which the server sends only to its own webhook — name another variable of this org (for example ${example})`;
+}
+
 // null stays null; a name must have the shape and be owned by `org`
-// (envNameOwnedBy includes it). A name no org owns is refused with the
-// shape text: it is nobody's.
+// (envNameOwnedBy includes it), and must not be a notify hook's variable. A
+// name no org owns is refused with the shape text: it is nobody's.
 export function requireEnvName(db, name, org) {
   if (name === null || name === undefined) return null;
   if (typeof name !== 'string' || !ENV_NAME_RE.test(name)) throw new TypeError(envNameShapeText(name, org));
   const owners = envNameOwnedBy(db, name);
   if (!owners.length) throw new TypeError(envNameShapeText(name, org));
   if (!owners.includes(org)) throw new TypeError(envNameOwnerText(name, owners));
+  if (isOrgHookShaped(db, name)) throw new TypeError(envNameHookText(db, name, org));
   return name;
 }
 

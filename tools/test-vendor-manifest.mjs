@@ -109,7 +109,7 @@ test('the import closure stays inside the manifest; bare imports are declared de
   const journey = relativeImports(read('tools/lib/journey.mjs'));
   assert.ok(journey.includes('../fetch-live-pack.mjs'), 'dynamic import() specifiers are extracted');
   assert.ok(journey.includes('../../studio/diagnostic-grade.mjs'));
-  assert.deepEqual(bareImports(read('tools/lib/journey.mjs')), ['node:fs', 'node:path', 'node:url']);
+  assert.deepEqual(bareImports(read('tools/lib/journey.mjs')), ['node:fs', 'node:path', 'node:url', 'node:util']);
 });
 
 test('static exports equal the real module namespace for every listed module', async () => {

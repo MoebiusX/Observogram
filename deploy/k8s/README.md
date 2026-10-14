@@ -414,7 +414,12 @@ What the component adds ([components/journeys](components/journeys)):
   `kubectl get jobs` shows a gate failure as a failed Job, which is the
   intended signal. The env var names your journeys reference
   (`packB.mcp.authEnv`, `notify.urlEnv`, `notify.authEnv`) are bound there
-  from Secrets (`secretKeyRef`, commented stanzas) — never as literals. It
+  from Secrets (`secretKeyRef`, commented stanzas) — never as literals. A
+  journey the studio also runs names its org's notify hook,
+  `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` and its `_TOKEN`, bound on the
+  studio Deployment as well (its commented stanza, with
+  `OBSERVOGRAM_NOTIFY_ORIGINS`): the studio reads no other notify name
+  ([`docs/DOWNSTREAM.md`](../../docs/DOWNSTREAM.md) §17). It
   never mounts the store claim and sets no `OBSERVOGRAM_DB`: the journey
   runner opens no database. The read tokens an org's MCP endpoint records
   name (`readTokenEnv`, `OBSERVOGRAM_ORG_<ORG>_<NAME>` — `ORG` the org id
