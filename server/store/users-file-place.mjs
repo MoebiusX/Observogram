@@ -18,14 +18,16 @@
 //     matched by the root's real path, as the kernel lists it; not one a later mount covers — mounted in the same
 //     parent mount on a directory above it, or covering that parent so — which the kernel lists too, while its path
 //     shows a directory of the filesystem mounted above, where nothing is mounted, unless that path leads through a
-//     mount of the filesystem the covered one lies in (its device, as /proc/self/mountinfo lists it):
-//     `mount --bind /srv /srv` over it, a recursive bind whose copy of it was unmounted, or a bind mount, on the
-//     filesystem above, of a directory it lies in — its path may then show the very directory it is mounted on, which
-//     rmdir refuses (EBUSY) while that is a mount point anywhere, so it is refused, naming what to unmount first, in
-//     order (a declared false refusal where that mount shows another directory there); a mount on / itself covers nothing,
-//     since a path is looked up from the process's root and a lookup never crosses a mount stacked on it, so with a
-//     tmpfs mounted on / in a chroot, or `mount --bind / /`, a mount under the root is refused still), a directory the
-//     walk reached already
+//     mount of the filesystem the covered one lies in (its parent mount's device, as /proc/self/mountinfo lists it, or,
+//     where it does not list the parent — a chroot into a directory that is no mount point, whose mount the kernel lists
+//     nowhere while the mounts in it name it as their parent — the filesystem / shows, against the directory at the
+//     covered mount's path now): `mount --bind /srv /srv` over it, a recursive bind whose copy of it was unmounted, or a
+//     bind mount, on the filesystem above, of a directory it lies in — its path may then show the very directory it is
+//     mounted on, which rmdir refuses (EBUSY) while that is a mount point anywhere, so it is refused, naming what to
+//     unmount first, in order (a declared false refusal where that mount shows another directory there); a mount on /
+//     itself covers nothing, since a path is looked up from the process's root and a lookup never crosses a mount stacked
+//     on it, so with a tmpfs mounted on / in a chroot, or `mount --bind / /`, a mount under the root is refused still), a
+//     directory the walk reached already
 //     (one directory mounted at a second place under the root), or on Windows a folder another volume is mounted in
 //     (lstatSync answers the folder, statSync the volume). Any other entry on another filesystem than its directory is
 //     one only as /proc/self/mountinfo lists it: an overlay mount whose layers lie on different filesystems (xino=off)
@@ -289,10 +291,15 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
       return stack.find((y) => (y.at === path.sep ? !stack.some((z) => z.id === y.parent) : !stack.some((z) => z.parent === y.id)));
     };
     // Whether the path of the covered mount m may show what it is mounted on: it leads through a mount of the filesystem m
-    // lies in (or either is not listed).
+    // lies in — its parent mount's. A parent the kernel does not list has its mount point above the process's root, so it
+    // is the mount the root lies in (a chroot into a directory that is no mount point): its filesystem is the one / shows,
+    // since a lookup of / never crosses a mount stacked on it, and the filesystem the lookup of m's path ends in is the one
+    // the directory there shows now. Nothing at m's path now (or nothing listed on it) reads as showing it.
     const shows = (m) => {
       const [x, parent] = [endsIn(m.at), byId.get(m.parent)];
-      return x === undefined || parent === undefined || x.device === parent.device;
+      if (x === undefined) return true;
+      if (parent !== undefined) return x.device === parent.device;
+      try { return dev(lstat(m.at)) === dev(stat(path.sep)); } catch { return true; }
     };
     // What to unmount, in order, before the covered mount m can be unmounted at its path: what covers its parent, then each
     // mount in its parent over a directory above it (the outermost first), and the mounts in m — each after the mounts in

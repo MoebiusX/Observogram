@@ -2763,6 +2763,44 @@ test('purge-org users file: a mount point under the root — another filesystem,
     + `does not lie under ${ROOT_B}, delete ${ROOT_B} by hand as such a user, then run purge-org again: it drops org beta's records`);
 });
 
+test('purge-org users file: in a chroot into a directory that is no mount point, /proc/self/mountinfo lists neither / nor the mount the root lies in, and the mounts in it name a parent it does not list — a mount under the root that a later mount of another filesystem covers is passed over there too (it was refused, and its way out, unmounting the covering mount, unmounted the filesystem holding the workspace), one a mount of the root\'s own filesystem covers is refused naming what to unmount first, and a mount stacked on / covers none', () => {
+  const same = (at, root = ROOT_B) => `${at} (the same filesystem as ${root}, listed in /proc/self/mountinfo)`;
+  const coveredSame = (at, first) => `${at} (the same filesystem as ${ROOT_B}, listed in /proc/self/mountinfo, covered by a later mount through which `
+    + `its path may show what it is mounted on: first unmount ${first})`;
+  const chrooted = () => betaVolume({ proc: true, chroot: true }).dir('/srv6').file('/srv6/other-data').bind('/srv6', `${ROOT_B}/m`);
+  // A tmpfs mounted on the workspace over the bind mount at <root>/m (c86f545's case), in the chroot: <root>/m is a plain
+  // directory of the tmpfs, and the purge passes. Refused, its way out named the tmpfs, the whole deployment's filesystem.
+  const covered = chrooted().dir('/fresh', { dev: 70n }).dir('/fresh/x').bind('/fresh', '/ws').file(`${ROOT_B}/packs/b1.pack.yaml`).dir(`${ROOT_B}/m`);
+  const info = covered.fs.readFileSync('/proc/self/mountinfo');
+  assert.doesNotMatch(info, /^\d+ \d+ \S+ \/ \/ /m, 'the chroot: nothing listed at /');
+  const [, parent] = info.match(new RegExp(`^\\d+ (\\d+) \\S+ / ${ROOT_B}/m `, 'm'));
+  assert.doesNotMatch(info, new RegExp(`^${parent} `, 'm'), '<root>/m names a parent mount that is not listed');
+  assert.equal(covered.fs.lstatSync(`${ROOT_B}/m`).dev, 70n, '<root>/m: a directory of the filesystem above');
+  assert.throws(() => covered.unmount(`${ROOT_B}/m`), { code: 'EINVAL' }, '<root>/m: not mounted');
+  assert.deepEqual(placeIn(covered, '/srv/accounts.json'), { exists: true, refusal: null }, 'in the chroot, the covered mount is passed over: purged');
+  // The root itself so covered, and <root>/m mounted again on the filesystem above, read as outside a chroot.
+  const coveredRoot = betaVolume({ proc: true, chroot: true }).dir('/srv8').bind('/srv8', ROOT_B).dir('/fresh', { dev: 70n }).bind('/fresh', '/ws')
+    .file(`${ROOT_B}/packs/b1.pack.yaml`);
+  assert.deepEqual(placeIn(coveredRoot, '/srv/accounts.json'), { exists: true, refusal: null }, 'the root, covered, in the chroot: purged');
+  covered.dir('/fresh/y').bind('/fresh/y', `${ROOT_B}/m`);
+  assert.deepEqual(placeIn(covered, '/srv/accounts.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m`)) }, 'mounted there on the filesystem above');
+  covered.unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(covered, '/srv/accounts.json'), { exists: true, refusal: null }, 'unmounted as its refusal says: purged');
+  // Covered by a mount of the root's own filesystem — /ws bound on itself in the chroot — <root>/m shows the very directory
+  // it is mounted on, and is refused naming what to unmount first; followed literally, the purge passes.
+  const selfBound = chrooted().bind('/ws', '/ws');
+  assert.throws(() => selfBound.unmount(`${ROOT_B}/m`), { code: 'EINVAL' }, '/ws bound on itself: <root>/m not mounted');
+  assert.deepEqual(placeIn(selfBound, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws')) }, '/ws bound on itself, in the chroot');
+  selfBound.unmount('/ws').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(selfBound, '/srv/accounts.json'), { exists: true, refusal: null }, '/ws bound on itself: unmounted as its refusal says, purged');
+  // A tmpfs mounted on / in the chroot, listed at / with the unlisted parent, covers nothing: <root>/m is refused as a mount point.
+  const stacked = chrooted().dir('/fresh', { dev: 70n }).bind('/fresh', '/');
+  assert.match(stacked.fs.readFileSync('/proc/self/mountinfo'), new RegExp(`^\\d+ ${parent} \\S+ / / `, 'm'), 'listed at /, in the unlisted mount');
+  assert.deepEqual(placeIn(stacked, '/srv/accounts.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m`)) }, 'a tmpfs on / in the chroot: /srv6 mounted there');
+  stacked.unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(stacked, '/srv/accounts.json'), { exists: true, refusal: null }, 'unmounted as its refusal says: purged');
+});
+
 test('purge-org users file: a directory under the root this user cannot read is refused, nothing deleted, and read by a user who can, the purge passes; one it may list but not search (r--) is refused naming the entry it cannot read; one a stopped FUSE server cannot answer for is refused naming unmounting it', () => {
   const vol = betaVolume().dir(`${ROOT_B}/runs/locked`).file(`${ROOT_B}/runs/locked/r.json`).deny(`${ROOT_B}/runs/locked`);
   assert.deepEqual(placeIn(vol, '/srv/accounts.json'), {

@@ -47,7 +47,9 @@
 // fold: names compared case-insensitively (NTFS); devs: { '<a root>': its device } (default 1n each); proc: Linux's
 // /proc/self/mountinfo, listing / and every mount now, each with its mount ID, its parent's and its filesystem's device
 // (as 0:<device>: a bind mount the device of what it shows, a view the view's), one covered too (its path with the
-// kernel's octal escapes), on POSIX paths;
+// kernel's octal escapes), on POSIX paths; chroot: the process's root is a directory of a mount whose mount point lies
+// above it (a chroot into a directory that is no mount point), so /proc/self/mountinfo lists neither / nor that mount,
+// while the mounts in it name its ID as their parent, as the kernel lists them;
 // coarse: a clock coarser than every change made, so every change time reads the same and none moves.
 // Each inode gets a distinct inode number and a modification time with nanoseconds, unless given, and a change time
 // that moves, as the kernel moves a directory's, with every entry added, removed or renamed in it (unless coarse).
@@ -71,7 +73,7 @@ function fromBytes(b) {
 const str = (p) => (typeof p === 'string' ? p : fromBytes(p));
 const answered = (s) => bytesOf(s).toString('utf8');
 
-export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = false } = {}) {
+export function mountFs(path, { fold = false, devs = {}, proc = false, chroot = false, coarse = false } = {}) {
   const key = (s) => (fold ? s.toLowerCase() : s);
   const split = (s) => s.split(path.sep === '\\' ? /[\\/]+/ : /\/+/).filter(Boolean);   // on POSIX paths a backslash is part of a name
   const fail = (code, p) => Object.assign(new Error(`${code}: ${p}`), { code });
@@ -259,7 +261,7 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = 
       readFileSync(p) {
         if (!proc || p !== '/proc/self/mountinfo') throw fail('ENOENT', p);
         const octal = (s) => s.replace(/[ \t\n\\]/g, (c) => `\\${c.charCodeAt(0).toString(8).padStart(3, '0')}`);
-        return answered([{ id: TOP, parent: 1, at: '/', node: tops.get(key('/')) }, ...mounts.values()]
+        return answered([...(chroot ? [] : [{ id: TOP, parent: 1, at: '/', node: tops.get(key('/')) }]), ...mounts.values()]
           .map((m) => `${m.id} ${m.parent} 0:${m.how?.dev ?? m.node?.dev ?? 0n} / ${octal(m.at)} rw,relatime - fixture fixture rw\n`).join(''));
       },
     },

@@ -1639,3 +1639,15 @@ under the root as well, to move out with the unmounting; followed, the purge
 passes and the moved file stays. A mount that was down already when
 purge-org first ran tells nothing of such a link (declared). One test in
 `server/test-store-ops.mjs` is extended; the total stays 1446.
+
+In a chroot into a directory that is no mount point, `/proc/self/mountinfo`
+lists neither `/` nor the mount the root lies in, and the mounts in it name a
+parent it does not list; a covered mount with such a parent was taken for one
+whose path may show what it is mounted on, so a tmpfs mounted on the workspace
+over a bind mount at `<root>/m` — which passes outside a chroot — was
+refused there, and its way out, unmounting the tmpfs first, unmounted the
+filesystem holding the whole deployment. The parent not listed is the mount
+the root lies in, whose filesystem `/` shows: a covered mount whose path shows
+a directory of another filesystem is passed over, one of the same filesystem
+refused naming what to unmount first, as before, and followed literally the
+purge passes. Tests: 1446 → 1447 (one more in `server/test-store-ops.mjs`).
