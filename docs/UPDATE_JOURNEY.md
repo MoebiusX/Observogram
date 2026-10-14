@@ -1508,7 +1508,12 @@ and then failed on the mount point, and when it held the users file the
 refusal named the entry to move out, after which the purge went on the same
 way. On Linux `/proc/self/mountinfo` lists every mount point, and purge-org,
 reading the root by its real path there, refuses it as a mount point; once it
-is unmounted the purge passes. Where there is no such file, the walk enters it.
+is unmounted the purge passes. The kernel lists a mount that a later one
+covers too — a filesystem mounted over a directory above it, as fstab entries
+mounted out of order leave it, or an autofs mount over a directory that holds
+mounts — while its path shows a directory of the filesystem mounted above,
+where nothing is mounted to unmount; purge-org passes over such a mount. Where
+there is no such file, the walk enters it.
 
 The refusal of a users file recorded under the root said "move it out
 first", and after the move it came back word for word: the record still named

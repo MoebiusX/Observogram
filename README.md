@@ -2735,7 +2735,9 @@ and it refuses, deleting nothing:
   later it first deletes the files of the filesystem mounted there. Unmount
   it, then run the purge again. On Linux this includes a bind mount of
   another directory of the same filesystem, which `/proc/self/mountinfo`
-  lists; elsewhere such a mount cannot be told from a directory, so unmount
+  lists (not one a later mount over a directory above it covers, which it
+  lists too: nothing is mounted at its path then, and the purge goes on);
+  elsewhere such a mount cannot be told from a directory, so unmount
   any under `orgs/<id>/` yourself before you purge. It takes a file on
   another filesystem than its directory for a mount point only when
   `/proc/self/mountinfo` lists it: an overlay mount whose layers lie on

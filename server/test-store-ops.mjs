@@ -2569,7 +2569,7 @@ test('purge-org users file: a view through another filesystem — NFS (the inode
   }
 });
 
-test('purge-org users file: a mount point under the root — another filesystem, a file mounted there, one directory reached twice, a loop, the root itself, a mount of the same filesystem /proc/self/mountinfo lists — is refused before anything is deleted, and once unmounted the purge passes; with no /proc/self/mountinfo, a same-filesystem bind mount from outside is entered as a directory; a file on another device than its directory that /proc/self/mountinfo does not list (an overlay mount\'s lower layer on another filesystem) is none', () => {
+test('purge-org users file: a mount point under the root — another filesystem, a file mounted there, one directory reached twice, a loop, the root itself, a mount of the same filesystem /proc/self/mountinfo lists — is refused before anything is deleted, and once unmounted the purge passes; with no /proc/self/mountinfo, a same-filesystem bind mount from outside is entered as a directory; a file on another device than its directory that /proc/self/mountinfo does not list (an overlay mount\'s lower layer on another filesystem) is none, nor is a mount it lists that a later mount over a directory above it covers', () => {
   const vol = betaVolume().dir('/srv5', { dev: 7n }).file('/srv5/accounts.json').bind('/srv5', `${ROOT_B}/m`);
   // The reverse of a mount view: a directory from outside mounted under the root, holding the users file.
   assert.deepEqual(placeIn(vol, '/srv5/accounts.json'), { exists: null, refusal: mounted(`${ROOT_B}/m (another filesystem than ${ROOT_B})`) });
@@ -2617,6 +2617,32 @@ test('purge-org users file: a mount point under the root — another filesystem,
     + 'files stay', 'the root itself, from the same filesystem');
   linux.unmount(ROOT_B);
   assert.deepEqual(placeIn(linux, '/srv6/accounts.json'), { exists: true, refusal: null });
+  // A mount that a later one covers — a filesystem mounted on /ws over a tree that held mounts already (fstab entries
+  // mounted out of order, an autofs mount over a directory that holds mounts) — is listed in /proc/self/mountinfo still,
+  // on the filesystem now hidden, while its path shows a plain directory of the filesystem mounted above: nothing is
+  // mounted there, and the purge passes (it was refused as a mount point, and unmounting, its way out, failed: not
+  // mounted). A mount in a covered mount is covered too. One made there on the filesystem above is refused, and once
+  // unmounted the purge passes, the covered one listed still; the root itself likewise.
+  const covering = (vol) => vol.dir('/fresh', { dev: 70n }).dir('/fresh/x').bind('/fresh', '/ws').file(`${ROOT_B}/packs/b1.pack.yaml`);
+  const covered = covering(betaVolume({ proc: true }).dir('/srv6').dir('/srv7').bind('/srv6', `${ROOT_B}/m`).bind('/srv7', `${ROOT_B}/m/n`))
+    .dir(`${ROOT_B}/m/n`);
+  for (const at of ['m', 'm/n']) {
+    assert.ok(covered.fs.readFileSync('/proc/self/mountinfo').includes(` ${ROOT_B}/${at} rw`), `${at}: listed still`);
+    assert.equal(covered.fs.lstatSync(`${ROOT_B}/${at}`).dev, 70n, `${at}: a directory of the filesystem above`);
+    assert.throws(() => covered.unmount(`${ROOT_B}/${at}`), { code: 'EINVAL' }, `${at}: not mounted`);
+  }
+  assert.deepEqual(placeIn(covered, '/srv/accounts.json'), { exists: true, refusal: null }, 'covered mounts: none is a mount point, purged');
+  covered.bind('/fresh/x', `${ROOT_B}/m`);
+  assert.deepEqual(placeIn(covered, '/srv/accounts.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m`)) }, 'mounted there on the filesystem above');
+  covered.unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(covered, '/srv/accounts.json'), { exists: true, refusal: null }, 'unmounted as its refusal says: purged');
+  const coveredRoot = covering(betaVolume({ proc: true }).dir('/srv8').bind('/srv8', ROOT_B));
+  assert.throws(() => coveredRoot.unmount(ROOT_B), { code: 'EINVAL' }, 'the root: not mounted');
+  assert.deepEqual(placeIn(coveredRoot, '/srv/accounts.json'), { exists: true, refusal: null }, 'the root, covered: purged');
+  coveredRoot.bind('/fresh/x', ROOT_B);
+  assert.ok(placeIn(coveredRoot, '/srv/accounts.json').refusal.startsWith(`${same(ROOT_B, '/ws/orgs')} is a mount point: `), 'the root mounted on the filesystem above');
+  coveredRoot.unmount(ROOT_B);
+  assert.deepEqual(placeIn(coveredRoot, '/srv/accounts.json'), { exists: true, refusal: null }, 'the root unmounted as its refusal says: purged');
   // A file on another device than its directory is a mount point only as /proc/self/mountinfo lists it (a file mounted on a
   // file, which Linux alone makes): an overlay mount whose layers lie on different filesystems (xino=off) shows its
   // directories on its own device and a lower layer's files on that layer's, with nothing mounted there, and the purge

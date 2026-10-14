@@ -15,12 +15,14 @@
 //     spells it, each such byte \xNN. A mount point under the root is refused: a directory on another filesystem than
 //     the directory that holds it, an entry /proc/self/mountinfo lists (Linux: a bind mount of a directory of the same
 //     filesystem, which lstatSync cannot tell from a directory, or a file mounted on a file;
-//     matched by the root's real path, as the kernel lists it), a directory the walk reached already (one directory
-//     mounted at a second place under the root), or on Windows a folder another volume is mounted in (lstatSync answers
-//     the folder, statSync the volume). Any other entry on another filesystem than its directory is one only as
-//     /proc/self/mountinfo lists it: an overlay mount whose layers lie on different filesystems (xino=off) shows its
-//     directories on its own device and a lower layer's files on that layer's, with nothing mounted there (without
-//     /proc/self/mountinfo, see below). On Node 22 rmSync stops part-way at a mount point; on Node 23 and later it
+//     matched by the root's real path, as the kernel lists it; not one a later mount covers — mounted in the same
+//     parent mount on a directory above it, or covering that parent so — which the kernel lists too, while its path
+//     shows a directory of the filesystem mounted above, where nothing is mounted), a directory the walk reached already
+//     (one directory mounted at a second place under the root), or on Windows a folder another volume is mounted in
+//     (lstatSync answers the folder, statSync the volume). Any other entry on another filesystem than its directory is
+//     one only as /proc/self/mountinfo lists it: an overlay mount whose layers lie on different filesystems (xino=off)
+//     shows its directories on its own device and a lower layer's files on that layer's, with nothing mounted there
+//     (without /proc/self/mountinfo, see below). On Node 22 rmSync stops part-way at a mount point; on Node 23 and later it
 //     first deletes the files of the filesystem mounted there; and a directory mounted from outside the root may hold
 //     the users file. The root itself mounted (a volume per org) is refused alike. A directory the walk cannot read is
 //     refused: what lies in it cannot be told, and rmSync would fail part-way there. The walk keeps nothing of a file it
@@ -85,7 +87,8 @@
 // (rmSync deletes the link alone), but leads nowhere once it is gone. Not seen either: what another process moves, links
 // or mounts under the root after the check, before rmSync takes it; a directory changed and changed back within one tick
 // of a coarse filesystem clock, its change time and names as they were; a same-filesystem bind mount made on a directory
-// under the root after /proc/self/mountinfo was read, before the walk reaches it; through a mount that is down, what the
+// under the root after /proc/self/mountinfo was read, before the walk reaches it, or uncovered there then (a bind mount
+// from the same filesystem over a directory above the root, unmounted); through a mount that is down, what the
 // name does not tell — a file mounted on a file of another name, its mount point a file of its own, or what a link of
 // that name under the root leads to back through the mount that is down; and a filesystem that is down now, mounted on a
 // directory the root lies in, whose link leads a users file that does not exist into the root another way than by its
@@ -222,11 +225,33 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
   if (info !== null) {
     let real;
     try { real = fs.realpathSync(root); } catch (e) { return unreadable(root, e); }
+    // Each line's mount ID, its parent mount's and its mount point. The kernel lists a mount that a later one covers too —
+    // one mounted in the same parent mount on a directory above it, or covering that parent so — on the filesystem now
+    // hidden, while its path shows a directory of the filesystem mounted above: nothing is mounted there, and unmounting
+    // it fails (not mounted). So a covered mount is passed over.
+    const lines = [];
+    const inParent = new Map();   // a parent mount's ID → the mounts in it
     for (const line of info.split('\n')) {
-      const field = line.split(' ')[4];
-      const at = field === undefined ? null : unoctal(field);
-      if (at === real) listed.add('');
-      else if (at?.startsWith(real + path.sep)) listed.add(at.slice(real.length));
+      const [mount, parent, , , field] = line.split(' ');
+      if (field === undefined) continue;
+      const m = { id: mount, parent, at: unoctal(field) };
+      lines.push(m);
+      if (!inParent.has(parent)) inParent.set(parent, []);
+      inParent.get(parent).push(m);
+    }
+    const byId = new Map(lines.map((m) => [m.id, m]));
+    const above = (a, b) => b !== a && b.startsWith(a === path.sep ? a : a + path.sep);
+    const hidden = new Map();
+    const covered = (m) => {
+      if (!hidden.has(m)) {
+        hidden.set(m, false);   // a loop of parents, which no kernel lists, reads as not covered
+        const parent = byId.get(m.parent);
+        hidden.set(m, inParent.get(m.parent).some((c) => above(c.at, m.at)) || (parent !== undefined && covered(parent)));
+      }
+      return hidden.get(m);
+    };
+    for (const m of lines) {
+      if ((m.at === real || m.at.startsWith(real + path.sep)) && !covered(m)) listed.add(m.at.slice(real.length));
     }
   }
   // The users file, its path followed through every link, placed before the walk (and again after it, below), and the names

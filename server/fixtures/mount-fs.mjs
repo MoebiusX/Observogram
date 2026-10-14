@@ -18,12 +18,18 @@
 //                              filesystems, xino=off, shows a lower layer's files so);
 //   hardlink(existing, p)      the same file at a second name;
 //   symlink(p, target)         a symbolic link (a junction on Windows reads the same to lstatSync);
-//   bind(source, target)       mount the directory at source on target: the same files, devices and inodes;
+//   bind(source, target)       mount the directory at source on target: the same files, devices and inodes. A mount
+//                              lies in the mount its target was in (its parent), as Linux's do: one on a path mounted
+//                              already stacks on that mount, and a later one on a directory above it in its parent
+//                              covers it — its path then shows what the mount above holds, and unmounting it fails
+//                              with EINVAL (umount(8): not mounted), while /proc/self/mountinfo lists it still;
 //   mountFolder(source, target) Windows' volume mounted in a folder: lstatSync answers the folder itself (on its
 //                              parent's volume), statSync and every lookup through it the volume mounted there;
 //   view(source, target, how)  mount it as another filesystem shows it: how = { dev, ino(i), mtimeNs(t) } maps what
 //                              stat reports through the view (each defaults to the source's own);
-//   unmount(target), rename(from, to), remove(p), deny(p, code, { list }) (readdirSync and every lookup through p
+//   unmount(target)            unmount what target shows mounted there: EINVAL when nothing is, EBUSY when a mount
+//                              lies in it;
+//   rename(from, to), remove(p), deny(p, code, { list }) (readdirSync and every lookup through p
 //                              fail with code, EACCES by default; ENOTCONN is a FUSE mount whose server stopped
 //                              answering; with list, readdirSync still names p's entries — a directory that may be
 //                              read but not searched, r--, where lstatSync of each entry fails);
@@ -35,7 +41,8 @@
 // answers as node:fs does: readdirSync lists names as strings, each such byte U+FFFD (a name no lookup finds), or with
 // { encoding: 'buffer' } as their bytes; readlinkSync, realpathSync and /proc/self/mountinfo (read as UTF-8) likewise.
 // fold: names compared case-insensitively (NTFS); devs: { '<a root>': its device } (default 1n each); proc: Linux's
-// /proc/self/mountinfo, listing / and every mount point now (its path with the kernel's octal escapes), on POSIX paths;
+// /proc/self/mountinfo, listing / and every mount now, each with its mount ID and its parent's, one covered too (its
+// path with the kernel's octal escapes), on POSIX paths;
 // coarse: a clock coarser than every change made, so every change time reads the same and none moves.
 // Each inode gets a distinct inode number and a modification time with nanoseconds, unless given, and a change time
 // that moves, as the kernel moves a directory's, with every entry added, removed or renamed in it (unless coarse).
@@ -72,20 +79,29 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = 
   };
   const changed = (dir) => { dir.ctimeNs = now(); };   // an entry added, removed or renamed in dir
   const tops = new Map();     // a root (C:\, /) folded → its directory
-  const mounts = new Map();   // a mount point's path folded → { node, how, folder, at }
+  const TOP = 21;             // the mount ID of / (each root), as /proc/self/mountinfo lists it
+  let mountId = TOP;
+  const mounts = new Map();   // its parent mount's ID and its mount point's path folded → { id, parent, node, how, folder, at }
   const entries = (dir) => dir.entries;
+  // What is mounted on top at `at` in the mount `mnt`: the mount there, then each stacked on it.
+  const mountedAt = (mnt, at) => {
+    let top = null;
+    for (let m = mounts.get(`${mnt}|${key(at)}`); m; m = mounts.get(`${m.id}|${key(at)}`)) top = m;
+    return top;
+  };
 
-  // Where p leads: { node, how, at } — how is the view the node is seen through; the last name followed when follow.
+  // Where p leads: { node, how, at, mnt } — how is the view the node is seen through, mnt the ID of the mount it lies in;
+  // the last name followed when follow.
   function locate(p, follow) {
     let hops = 0;
     let stack;
     let todo;
     const start = (abs) => {
       const top = path.parse(abs).root;
-      const m = mounts.get(key(top));
+      const m = mountedAt(TOP, top);
       const node = m ? m.node : tops.get(key(top));
       if (!node) throw fail('ENOENT', p);
-      stack = [{ node, how: m?.how ?? null, at: top }];
+      stack = [{ node, how: m?.how ?? null, at: top, mnt: m?.id ?? TOP }];
       todo = split(abs.slice(top.length));
     };
     start(path.resolve(str(p)));
@@ -100,9 +116,9 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = 
       const child = entries(cur.node).get(key(name));
       if (!child) throw fail('ENOENT', p);
       const at = path.join(cur.at, name);
-      const m = mounts.get(key(at));
+      const m = mountedAt(cur.mnt, at);
       const folder = m?.folder && !todo.length && !follow;   // lstatSync of a folder a volume is mounted in: the folder
-      const pos = m && !folder ? { node: m.node, how: m.how, at } : { node: child.node, how: cur.how, at };
+      const pos = m && !folder ? { node: m.node, how: m.how, at, mnt: m.id } : { node: child.node, how: cur.how, at, mnt: cur.mnt };
       if (pos.node.kind === 'link' && (todo.length || follow)) {
         if (++hops > MAX_LINKS) throw fail('ELOOP', p);
         const target = pos.node.target;
@@ -182,11 +198,23 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = 
       const src = locate(source, true);
       const abs = path.resolve(target);
       if (path.parse(abs).root !== abs) vol.dir(abs);
-      mounts.set(key(abs), { node: src.node, how: how ? { ...src.how, ...how } : src.how, folder, at: abs });
+      let parent = TOP;
+      try { parent = locate(abs, true).mnt; } catch { /* a drive no volume answers for yet */ }
+      mountId += 1;
+      mounts.set(`${parent}|${key(abs)}`, { id: mountId, parent, node: src.node, how: how ? { ...src.how, ...how } : src.how, folder, at: abs });
       return vol;
     },
     mountFolder(source, target) { return vol.view(source, target, null, { folder: true }); },
-    unmount(target) { mounts.delete(key(path.resolve(target))); return vol; },
+    unmount(target) {
+      const abs = path.resolve(target);
+      let mnt = null;
+      try { mnt = locate(abs, true).mnt; } catch { /* nothing there */ }
+      const m = [...mounts.values()].find((x) => x.id === mnt && key(x.at) === key(abs));
+      if (!m) throw fail('EINVAL', target);   // umount(8): not mounted
+      if ([...mounts.values()].some((x) => x.parent === m.id)) throw fail('EBUSY', target);
+      mounts.delete(`${m.parent}|${key(m.at)}`);
+      return vol;
+    },
     rename(from, to) {
       const a = parentOf(from);
       const entry = entries(a.dir).get(key(a.name));
@@ -220,8 +248,8 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = 
       readFileSync(p) {
         if (!proc || p !== '/proc/self/mountinfo') throw fail('ENOENT', p);
         const octal = (s) => s.replace(/[ \t\n\\]/g, (c) => `\\${c.charCodeAt(0).toString(8).padStart(3, '0')}`);
-        return answered(['/', ...[...mounts.values()].map((m) => m.at)]
-          .map((at, i) => `${21 + i} ${i ? 21 : 1} 0:${21 + i} / ${octal(at)} rw,relatime - fixture fixture rw\n`).join(''));
+        return answered([{ id: TOP, parent: 1, at: '/' }, ...mounts.values()]
+          .map((m) => `${m.id} ${m.parent} 0:${m.id} / ${octal(m.at)} rw,relatime - fixture fixture rw\n`).join(''));
       },
     },
   };
