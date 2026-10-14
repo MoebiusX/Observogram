@@ -51,7 +51,7 @@ const { test } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const { spawnSync } = await import('node:child_process');
 const { createHmac } = await import('node:crypto');
-const { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } = await import('node:fs');
+const { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
 const { dirname, join, posix, win32 } = await import('node:path');
 const { fileURLToPath, pathToFileURL } = await import('node:url');
@@ -2864,14 +2864,22 @@ test('purge-org: the users file recorded under the root is refused naming it, no
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(keep, 'utf8')).users), ['alice'], 'the moved users file stays');
 });
 
-test('purge-org: a recorded users file outside the root that no longer exists is refused (declared), nothing deleted; with the root deleted by hand as the refusal says, the purge passes and drops the org\'s records; none recorded and <base>/users.json deleted, the purge passes', async () => {
+test('purge-org: a recorded users file outside the root that no longer exists is refused (declared), naming where its path leads as this host resolves it — through a directory link, as a temporary directory on macOS is (/var → /private/var), not where it is spelled — nothing deleted; with the root deleted by hand as the refusal says, the purge passes and drops the org\'s records; none recorded and <base>/users.json deleted, the purge passes', async () => {
   const base = await removedOrgDeployment();
   const root = join(base, 'orgs', 'acme');
   const srv = tempDir('ops-users');
-  const usersFile = join(srv, 'users.json');
-  await change(base, (db) => tx(db, () => meta.putMeta(db, 'users_file', usersFile)));
-  await assert.rejects(purge(base, 'acme'), refusedOp(new RegExp(`^${esc(`the recorded users file ${usersFile} does not exist, and nothing on this host tells where its path leads: the nearest part of it that exists, ${srv}, is no directory under ${root}`)}.* If it lies on a filesystem that is not mounted now, mount it, then run purge-org again; if it does not lie under ${esc(root)}, delete ${esc(root)} by hand, then run purge-org again: it drops org acme's records$`)));
-  assert.ok(existsSync(join(root, 'packs', 'a1.pack.yaml')), 'nothing deleted');
+  const linked = join(tempDir('ops-link'), 'srv');
+  symlinkSync(srv, linked, 'junction');   // a junction needs no privilege on Windows; a symlink elsewhere
+  // Where the path leads and its nearest part that exists are named as this host resolves them, every link followed: the
+  // real path of the users file's directory. Through a link — on macOS the temporary directory is reached through one —
+  // that is not how the path is spelled, and the refusal names the place it leads to.
+  for (const usersFile of [join(srv, 'users.json'), join(linked, 'users.json')]) {
+    const near = realpathSync(dirname(usersFile));
+    const place = join(near, 'users.json');
+    await change(base, (db) => tx(db, () => meta.putMeta(db, 'users_file', usersFile)));
+    await assert.rejects(purge(base, 'acme'), refusedOp(new RegExp(`^${esc(`the recorded users file ${usersFile} does not exist, and nothing on this host tells where its path leads${place === usersFile ? '' : ` (to ${place})`}: the nearest part of it that exists, ${near}, is no directory under ${root}`)}.* If it lies on a filesystem that is not mounted now, mount it, then run purge-org again; if it does not lie under ${esc(root)}, delete ${esc(root)} by hand, then run purge-org again: it drops org acme's records$`)));
+    assert.ok(existsSync(join(root, 'packs', 'a1.pack.yaml')), 'nothing deleted');
+  }
   const rows = await read(base, (db) => actions(db).length);
   rmSync(root, { recursive: true });
   const r = await purge(base, 'acme');
