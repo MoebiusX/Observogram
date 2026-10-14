@@ -22,7 +22,11 @@
 //                              lies in the mount its target was in (its parent), as Linux's do: one on a path mounted
 //                              already stacks on that mount, and a later one on a directory above it in its parent
 //                              covers it — its path then shows what the mount above holds, and unmounting it fails
-//                              with EINVAL (umount(8): not mounted), while /proc/self/mountinfo lists it still;
+//                              with EINVAL (umount(8): not mounted), while /proc/self/mountinfo lists it still. On
+//                              POSIX paths a mount on / stacks on the root and covers nothing: a lookup starts at the
+//                              process's root and never crosses a mount stacked on it (mount(8) and umount(8) there
+//                              take the topmost); on Windows paths a root (a drive, a UNC share) is the volume
+//                              mounted there;
 //   mountFolder(source, target) Windows' volume mounted in a folder: lstatSync answers the folder itself (on its
 //                              parent's volume), statSync and every lookup through it the volume mounted there;
 //   view(source, target, how)  mount it as another filesystem shows it: how = { dev, ino(i), mtimeNs(t) } maps what
@@ -89,6 +93,10 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = 
     for (let m = mounts.get(`${mnt}|${key(at)}`); m; m = mounts.get(`${m.id}|${key(at)}`)) top = m;
     return top;
   };
+  // / on POSIX paths, the process's root: a lookup starts there and never crosses a mount stacked on it (`mount --bind / /`,
+  // or a tmpfs mounted on / in a chroot, which /proc/self/mountinfo lists at /), while mount(8) and umount(8) take the
+  // topmost mount there. A Windows root (a drive, a UNC share) names the volume mounted there, which every lookup reaches.
+  const processRoot = (abs) => path.sep === '/' && abs === '/';
 
   // Where p leads: { node, how, at, mnt } — how is the view the node is seen through, mnt the ID of the mount it lies in;
   // the last name followed when follow.
@@ -98,7 +106,7 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = 
     let todo;
     const start = (abs) => {
       const top = path.parse(abs).root;
-      const m = mountedAt(TOP, top);
+      const m = processRoot(top) ? null : mountedAt(TOP, top);
       const node = m ? m.node : tops.get(key(top));
       if (!node) throw fail('ENOENT', p);
       stack = [{ node, how: m?.how ?? null, at: top, mnt: m?.id ?? TOP }];
@@ -199,7 +207,8 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = 
       const abs = path.resolve(target);
       if (path.parse(abs).root !== abs) vol.dir(abs);
       let parent = TOP;
-      try { parent = locate(abs, true).mnt; } catch { /* a drive no volume answers for yet */ }
+      if (processRoot(abs)) parent = mountedAt(TOP, abs)?.id ?? TOP;
+      else try { parent = locate(abs, true).mnt; } catch { /* a drive no volume answers for yet */ }
       mountId += 1;
       mounts.set(`${parent}|${key(abs)}`, { id: mountId, parent, node: src.node, how: how ? { ...src.how, ...how } : src.how, folder, at: abs });
       return vol;
@@ -208,7 +217,8 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = 
     unmount(target) {
       const abs = path.resolve(target);
       let mnt = null;
-      try { mnt = locate(abs, true).mnt; } catch { /* nothing there */ }
+      if (processRoot(abs)) mnt = mountedAt(TOP, abs)?.id ?? null;
+      else try { mnt = locate(abs, true).mnt; } catch { /* nothing there */ }
       const m = [...mounts.values()].find((x) => x.id === mnt && key(x.at) === key(abs));
       if (!m) throw fail('EINVAL', target);   // umount(8): not mounted
       if ([...mounts.values()].some((x) => x.parent === m.id)) throw fail('EBUSY', target);

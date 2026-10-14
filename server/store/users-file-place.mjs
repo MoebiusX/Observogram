@@ -17,7 +17,10 @@
 //     filesystem, which lstatSync cannot tell from a directory, or a file mounted on a file;
 //     matched by the root's real path, as the kernel lists it; not one a later mount covers — mounted in the same
 //     parent mount on a directory above it, or covering that parent so — which the kernel lists too, while its path
-//     shows a directory of the filesystem mounted above, where nothing is mounted), a directory the walk reached already
+//     shows a directory of the filesystem mounted above, where nothing is mounted; a mount on / itself covers nothing,
+//     since a path is looked up from the process's root and a lookup never crosses a mount stacked on it, so with a
+//     tmpfs mounted on / in a chroot, or `mount --bind / /`, a mount under the root is refused still), a directory the
+//     walk reached already
 //     (one directory mounted at a second place under the root), or on Windows a folder another volume is mounted in
 //     (lstatSync answers the folder, statSync the volume). Any other entry on another filesystem than its directory is
 //     one only as /proc/self/mountinfo lists it: an overlay mount whose layers lie on different filesystems (xino=off)
@@ -249,7 +252,9 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
       inParent.get(parent).push(m);
     }
     const byId = new Map(lines.map((m) => [m.id, m]));
-    const above = (a, b) => b !== a && b.startsWith(a === path.sep ? a : a + path.sep);
+    // A mount on / itself covers nothing: a path is looked up from the process's root, and a lookup never crosses a mount
+    // stacked on it (`mount --bind / /`, or a tmpfs mounted on / in a chroot), which the kernel lists at / all the same.
+    const above = (a, b) => a !== path.sep && b !== a && b.startsWith(a + path.sep);
     const hidden = new Map();
     const covered = (m) => {
       if (!hidden.has(m)) {

@@ -2586,7 +2586,7 @@ test('purge-org users file: a view through another filesystem — NFS (the inode
   }
 });
 
-test('purge-org users file: a mount point under the root — another filesystem, a file mounted there, one directory reached twice, a loop, the root itself, a mount of the same filesystem /proc/self/mountinfo lists (of a directory or a file) — is refused before anything is deleted, and once unmounted the purge passes; with no /proc/self/mountinfo, a same-filesystem bind mount from outside is entered as a directory; a file on another device than its directory that /proc/self/mountinfo does not list (an overlay mount\'s lower layer on another filesystem) is none, nor is a mount it lists that a later mount over a directory above it covers', () => {
+test('purge-org users file: a mount point under the root — another filesystem, a file mounted there, one directory reached twice, a loop, the root itself, a mount of the same filesystem /proc/self/mountinfo lists (of a directory or a file) — is refused before anything is deleted, and once unmounted the purge passes; with no /proc/self/mountinfo, a same-filesystem bind mount from outside is entered as a directory; a file on another device than its directory that /proc/self/mountinfo does not list (an overlay mount\'s lower layer on another filesystem) is none, nor is a mount it lists that a later mount over a directory above it covers, though a mount stacked on / covers none', () => {
   const vol = betaVolume().dir('/srv5', { dev: 7n }).file('/srv5/accounts.json').bind('/srv5', `${ROOT_B}/m`);
   // The reverse of a mount view: a directory from outside mounted under the root, holding the users file.
   assert.deepEqual(placeIn(vol, '/srv5/accounts.json'), { exists: null, refusal: mounted(`${ROOT_B}/m (another filesystem than ${ROOT_B})`) });
@@ -2660,6 +2660,21 @@ test('purge-org users file: a mount point under the root — another filesystem,
   assert.ok(placeIn(coveredRoot, '/srv/accounts.json').refusal.startsWith(`${same(ROOT_B, '/ws/orgs')} is a mount point: `), 'the root mounted on the filesystem above');
   coveredRoot.unmount(ROOT_B);
   assert.deepEqual(placeIn(coveredRoot, '/srv/accounts.json'), { exists: true, refusal: null }, 'the root unmounted as its refusal says: purged');
+  // A mount stacked on / itself — a tmpfs mounted on / in a chroot, or `mount --bind / /` — covers nothing: a path is looked
+  // up from the process's root, and a lookup never crosses a mount stacked on it, so <root>/m is reached at its path still.
+  // It is refused, holding other files or the users file (it was passed over as covered: rmSync failed there with EBUSY, and
+  // holding the users file, the "lies under" refusal named <root>/m/accounts.json, in the directory mounted there, to move
+  // out), and once unmounted as its refusal says, the purge passes.
+  for (const [how, onRoot] of [['a tmpfs mounted on /', (v) => v.dir('/fresh', { dev: 70n }).bind('/fresh', '/')], ['mount --bind / /', (v) => v.bind('/', '/')]]) {
+    for (const [source, file] of [['/srv7', '/srv/accounts.json'], ['/srv6', '/srv6/accounts.json']]) {
+      const stacked = onRoot(betaVolume({ proc: true }).file('/srv6/accounts.json').file('/srv7/other-data').bind(source, `${ROOT_B}/m`));
+      assert.match(stacked.fs.readFileSync('/proc/self/mountinfo'), /^\d+ 21 \S+ \/ \/ /m, `${how}: listed at /, in the root's mount`);
+      assert.deepEqual(stacked.fs.readdirSync(`${ROOT_B}/m`), stacked.fs.readdirSync(source), `${how}: <root>/m reached at its path`);
+      assert.deepEqual(placeIn(stacked, file), { exists: null, refusal: mounted(same(`${ROOT_B}/m`)) }, `${how}: ${source} mounted there`);
+      stacked.unmount(`${ROOT_B}/m`);
+      assert.deepEqual(placeIn(stacked, file), { exists: true, refusal: null }, `${how}: ${source} unmounted as its refusal says, purged`);
+    }
+  }
   // A file on another device than its directory is a mount point only as /proc/self/mountinfo lists it (a file mounted on a
   // file, which Linux alone makes): an overlay mount whose layers lie on different filesystems (xino=off) shows its
   // directories on its own device and a lower layer's files on that layer's, with nothing mounted there, and the purge

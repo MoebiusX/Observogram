@@ -2749,7 +2749,9 @@ and it refuses, deleting nothing:
   it, then run the purge again. On Linux this includes a bind mount of
   another directory of the same filesystem, which `/proc/self/mountinfo`
   lists (not one a later mount over a directory above it covers, which it
-  lists too: nothing is mounted at its path then, and the purge goes on);
+  lists too: nothing is mounted at its path then, and the purge goes on —
+  but a mount on `/` itself covers nothing, since a path is looked up from
+  the root and never crosses a mount stacked on it);
   elsewhere such a mount cannot be told from a directory, so unmount
   any under `orgs/<id>/` yourself before you purge. It takes a file on
   another filesystem than its directory for a mount point only when

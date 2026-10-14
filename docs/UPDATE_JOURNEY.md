@@ -1512,8 +1512,11 @@ is unmounted the purge passes. The kernel lists a mount that a later one
 covers too — a filesystem mounted over a directory above it, as fstab entries
 mounted out of order leave it, or an autofs mount over a directory that holds
 mounts — while its path shows a directory of the filesystem mounted above,
-where nothing is mounted to unmount; purge-org passes over such a mount. Where
-there is no such file, the walk enters it.
+where nothing is mounted to unmount; purge-org passes over such a mount. A
+mount on `/` itself covers nothing: a path is looked up from the process's
+root and never crosses a mount stacked on it (a tmpfs mounted on `/` in a
+chroot, or `mount --bind / /`), so a mount under the root is refused still.
+Where there is no such file, the walk enters it.
 
 The refusal of a users file recorded under the root said "move it out
 first", and after the move it came back word for word: the record still named
