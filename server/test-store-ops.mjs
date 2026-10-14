@@ -2909,6 +2909,25 @@ test('purge-org users file: a mount point under the root holding mounts is refus
   assert.deepEqual(placeIn(coveredIn, '/srv/accounts.json'), { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/n, then ${ROOT_B}/m/n/o`)) }, 'a covered mount in it');
   coveredIn.unmount(`${ROOT_B}/m/n`).unmount(`${ROOT_B}/m/n/o`).unmount(`${ROOT_B}/m`);
   assert.deepEqual(placeIn(coveredIn, '/srv/accounts.json'), { exists: true, refusal: null }, 'a covered mount in it: unmounted as its refusal says, purged');
+  // In a mount in it, two at different depths, one covering the other: a bind at <root>/m/n/x/y, in the one at <root>/m/n, then one
+  // at <root>/m/n/x, in <root>/m/n too, which covers it and holds one at <root>/m/n/x/z. The mounts in <root>/m/n are named the
+  // one that covers first (the outermost), each after the mounts in it, then <root>/m/n — the cases above order the mounts in
+  // <root>/m alone, and give a mount in them one mount at most, so the order of the mounts in a mount in it went untested, and
+  // named the covered one first, on real mounts `umount <root>/m/n/x/y` said no mount point specified, <root>/m/n and
+  // <root>/m stayed busy, and the same refusal came back.
+  const deepIn = betaVolume({ proc: true }).dir('/srv6').dir('/srv7').dir('/srv8').file('/srv8/h').dir('/srv9').dir('/srv10').bind('/srv6', `${ROOT_B}/m`)
+    .bind('/srv7', `${ROOT_B}/m/n`).bind('/srv8', `${ROOT_B}/m/n/x/y`).bind('/srv9', `${ROOT_B}/m/n/x`).bind('/srv10', `${ROOT_B}/m/n/x/z`);
+  assert.throws(() => deepIn.unmount(`${ROOT_B}/m/n/x/y`), { code: 'EINVAL' }, 'covered by <root>/m/n/x: not mounted');
+  assert.throws(() => deepIn.unmount(`${ROOT_B}/m/n`), { code: 'EBUSY' }, 'the mounts in <root>/m/n keep it busy');
+  assert.deepEqual(placeIn(deepIn, '/srv/accounts.json'),
+    { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/n/x/z, then ${ROOT_B}/m/n/x, then ${ROOT_B}/m/n/x/y, then ${ROOT_B}/m/n`)) },
+    'in a mount in it, the one that covers first, after the mount in it, then the covered one, then the mount they are in');
+  deepIn.unmount(`${ROOT_B}/m/n/x/z`).unmount(`${ROOT_B}/m/n/x`);
+  assert.deepEqual(placeIn(deepIn, '/srv/accounts.json'), { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/n/x/y, then ${ROOT_B}/m/n`)) },
+    'part-way: the covered one, mounted now, then the mount it is in');
+  deepIn.unmount(`${ROOT_B}/m/n/x/y`).unmount(`${ROOT_B}/m/n`).unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(deepIn, '/srv/accounts.json'), { exists: true, refusal: null }, 'in a mount in it: unmounted as its refusal says, purged');
+  assert.deepEqual(deepIn.fs.readdirSync('/srv8'), ['h'], 'the covered mount\'s directory\'s files stay');
   const onTmpfs = betaVolume({ proc: true }).dir('/tfs', { dev: 47n }).bind('/tfs', `${ROOT_B}/m`).dir('/srv7').bind('/srv7', `${ROOT_B}/m/n`);
   assert.deepEqual(placeIn(onTmpfs, '/srv/accounts.json'), { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/n`, `another filesystem than ${ROOT_B}`)) },
     'a tmpfs on <root>/m holding a mount');
