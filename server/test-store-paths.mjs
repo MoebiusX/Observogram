@@ -43,10 +43,14 @@
  * database's own — the in-place detection, the scan for another store, the
  * no-marker check, the own-file check — decide by path alone: one only
  * placement equates is refused naming the way out (the scan reads it), never
- * exported in place over the workspace or called the database itself. Each
- * check's predicate is run here
+ * exported in place over the workspace or called the database itself. On
+ * Node 22.16.0 (libuv 1.49.2) a stat by name reports no volume, so a local
+ * path and a share of it had no file id in common: nothing placed a path
+ * through the share, and a directory export through a share of the workspace
+ * was written into it. File ids and volumes are read through a handle, and
+ * that test runs on both libuvs. Each check's predicate is run here
  * as ops.mjs and backup.mjs run it, over comparedPath with an injected host —
- * Windows' path rules, an NTFS volume's realpath and statSync
+ * Windows' path rules, an NTFS volume's realpath, stats and handles
  * (server/fixtures/ntfs.mjs) and the platform — so the proof runs on every
  * host. One test runs the default host on a real directory, so the
  * platform's choice of rule is pinned too: the expected value reads isWin32
@@ -78,6 +82,24 @@ const { comparedPath } = await import('./store/paths.mjs');
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
+// The injected Windows host over a volume (server/fixtures/ntfs.mjs): its realpath, lstatSync and handles, which
+// comparedPath reads file ids and volumes through, and its statSync — the stat by name it read them from before, so at
+// the parent commit this suite runs over the same libuv.
+const hostOf = (volume, over = {}) => ({
+  windows: true, path: win32, realpathSync: volume.realpathSync, statSync: volume.statSync, lstatSync: volume.lstatSync,
+  openSync: volume.openSync, fstatSync: volume.fstatSync, closeSync: volume.closeSync, ...over,
+});
+// openSync, fstatSync and closeSync over statOf(p): a handle answers what statOf answers for the path it was opened on.
+const handlesOf = (statOf) => {
+  const fds = new Map();
+  let fd = 2;
+  return {
+    openSync: (p) => { const st = statOf(p); fds.set(++fd, st); return fd; },
+    fstatSync: (n) => fds.get(n),
+    closeSync: (n) => { fds.delete(n); },
+  };
+};
+
 const VOLUME = ntfsVolume([
   'C:\\ws\\observogram.db',
   'C:\\ws\\exports\\keep.txt',
@@ -86,7 +108,7 @@ const VOLUME = ntfsVolume([
   'C:\\ws2\\observogram.db',
   'C:\\out\\x.txt',
 ], { short: { 'C:\\ws': 'WS~1' } });
-const key = comparedPath(null, { windows: true, path: win32, realpathSync: VOLUME.realpathSync, statSync: VOLUME.statSync, lstatSync: VOLUME.lstatSync });
+const key = comparedPath(null, hostOf(VOLUME));
 const SEP = '\\';
 // The comparison this replaces on Windows: ops.mjs's realOr, the spelling JS realpathSync keeps.
 const bySpelling = (p) => { try { return VOLUME.realpathSync(p); } catch { return win32.resolve(p); } };
@@ -108,13 +130,13 @@ const SHARED = ntfsVolume([
   shares: { '\\\\myhost\\ws': 'C:\\ws', '\\\\localhost\\C$': 'C:\\', '\\\\127.0.0.1\\C$': 'C:\\', '\\\\myhost\\out': 'D:\\out', '\\\\nas01\\obs': 'E:\\obs' },
   mapped: { 'Z:': '\\\\myhost\\ws' },
 });
-const shared = comparedPath(null, { windows: true, path: win32, realpathSync: SHARED.realpathSync, statSync: SHARED.statSync, lstatSync: SHARED.lstatSync });
-// The native realpath alone: a statSync that tells every path apart (no two share a file id or a volume), so nothing
+const shared = comparedPath(null, hostOf(SHARED));
+// The native realpath alone: a stat that tells every path apart (no two share a file id or a volume), so nothing
 // is placed and nothing is taken to lie inside — a share keeps its own name, and C:\ws is not \\myhost\ws.
 const byNameOf = (volume) => {
   const ids = new Map();
   const apart = (p) => { if (!ids.has(p)) ids.set(p, BigInt(ids.size + 1)); return { dev: ids.get(p), ino: ids.get(p) }; };
-  return comparedPath(null, { windows: true, path: win32, realpathSync: volume.realpathSync, statSync: apart, lstatSync: volume.lstatSync });
+  return comparedPath(null, hostOf(volume, { statSync: apart, ...handlesOf(apart) }));
 };
 const byName = byNameOf(SHARED);
 
@@ -296,7 +318,7 @@ const SUBSHARES = {
   '\\\\myhost\\dbdir': 'C:\\ws\\db', '\\\\myhost\\cout': 'C:\\out', '\\\\myhost\\dout': 'D:\\out', '\\\\nas01\\obs': 'E:\\obs',
 };
 const SUBSHARED = ntfsVolume(SUBSHARED_FILES, { shares: SUBSHARES, mapped: { 'Y:': '\\\\myhost\\exports' } });
-const subshared = comparedPath(null, { windows: true, path: win32, realpathSync: SUBSHARED.realpathSync, statSync: SUBSHARED.statSync, lstatSync: SUBSHARED.lstatSync });
+const subshared = comparedPath(null, hostOf(SUBSHARED));
 
 test('a path through a share no file id places, on the volume of the path it is checked against, may lie inside it — the export, purge-org and the no-marker check refuse it, and named on the drive it is judged; a share on another volume or host is an ordinary export target', () => {
   const [base, root] = ['C:\\ws', 'C:\\ws\\orgs\\beta'];
@@ -340,6 +362,36 @@ test('a path through a share no file id places, on the volume of the path it is 
   assert.equal(ownFile('C:\\ws\\observogram.db', '\\\\myhost\\exports\\observogram.db-wal', subshared), null, 'a backup target, not its own file');
 });
 
+// libuv answers a stat by the path's name (GetFileInformationByName, Windows 11 24H2 and Server 2025) unless the path is
+// reached through a share or its last name is a reparse point, which it opens: 1.51.0 and later read all 64 bits of the
+// volume's serial by name, 1.49.0 to 1.50.x (Node 22.16.0's 1.49.2) the upper half of the file's 128-bit id — 0 on
+// NTFS — while a handle reports the serial's low 32 bits on every one (server/fixtures/ntfs.mjs, fastDev).
+const LIBUVS = [['1.51.0', null], ['1.49.2', 0n]];
+
+test('on every libuv a path through a share is placed by its file id and judged by its volume, both read through a handle — on 1.49.2 a stat by name reports no volume, and a directory export through a share of the workspace was written into it', () => {
+  const [base, root] = ['C:\\ws', 'C:\\ws\\orgs\\beta'];
+  for (const [libuv, fastDev] of LIBUVS) {
+    const volume = ntfsVolume(SUBSHARED_FILES, { shares: SUBSHARES, fastDev });
+    const k = comparedPath(null, hostOf(volume));
+    const serial = (p) => { const fd = volume.openSync(p); try { return volume.fstatSync(fd).dev; } finally { volume.closeSync(fd); } };
+    assert.equal(serial('C:\\ws'), serial('\\\\myhost\\ws'), `libuv ${libuv}: through a handle C:\\ws and \\\\myhost\\ws report one serial`);
+    assert.equal(volume.statSync('C:\\ws').dev === 0n, fastDev === 0n, `libuv ${libuv}: by name C:\\ws reports ${fastDev === 0n ? 'no volume' : 'its volume'}`);
+    // A share of the workspace (\\myhost\ws, which is C:\ws) places a path through it, and the workspace named through it
+    // places a local path: inside, refused.
+    assert.equal(exportRelation('\\\\myhost\\ws\\exports\\new', base, k), 'inside', `libuv ${libuv}: a directory export through \\\\myhost\\ws into ${base} is refused`);
+    assert.equal(exportRelation('C:\\ws\\exports\\new', '\\\\myhost\\ws', k), 'inside', `libuv ${libuv}: and one on the drive into the workspace named through it`);
+    assert.equal(inPlace('\\\\myhost\\ws', base, k), 'placed', `libuv ${libuv}: the workspace through its share is refused, not the in-place export`);
+    assert.equal(ownFile('C:\\ws\\db\\observogram.db', '\\\\myhost\\dbdir\\observogram.db-wal', k), 'placed-wal', `libuv ${libuv}: a backup over the database's -wal through a share is refused`);
+    assert.equal(usersUnderRoot('\\\\myhost\\orgs\\beta\\users.json', root, k), true, `libuv ${libuv}: purge-org refuses a users file placed under the root`);
+    assert.equal(usersUnderRoot('\\\\myhost\\orgs\\users.json', root, k), false, `libuv ${libuv}: and purges with one placed beside it`);
+    // A share nothing places, on the workspace's volume, may lie inside it: refused. One on another volume is written.
+    assert.equal(exportRelation('\\\\myhost\\exports\\new', base, k), 'unplaced', `libuv ${libuv}: a directory export through \\\\myhost\\exports is refused`);
+    assert.equal(dbUnderWorkspace('\\\\myhost\\dbdir\\observogram.db', base, k), 'unplaced', `libuv ${libuv}: the no-marker check refuses the database through \\\\myhost\\dbdir`);
+    assert.equal(exportRelation('\\\\myhost\\dout\\new', base, k), null, `libuv ${libuv}: a share on another volume is written`);
+    assert.equal(volume.opened(), 0, `libuv ${libuv}: every handle opened is closed`);
+  }
+});
+
 // The same shares when a check runs with \\myhost\betasub (a directory under beta's root) and \\myhost\exports down —
 // the server's sharing stopped, or its name not resolving: neither realpath nor statSync reads a path through them, by
 // their names or by the drives still mapped to them (X:, Y:), so no file id places one and its volume is unknown.
@@ -348,7 +400,7 @@ const DOWN = ntfsVolume(SUBSHARED_FILES, {
   shares: Object.fromEntries(Object.entries(SUBSHARES).filter(([unc]) => !['\\\\myhost\\betasub', '\\\\myhost\\exports'].includes(unc))),
   mapped: { 'X:': '\\\\myhost\\betasub', 'Y:': '\\\\myhost\\exports' },
 });
-const down = comparedPath(null, { windows: true, path: win32, realpathSync: DOWN.realpathSync, statSync: DOWN.statSync, lstatSync: DOWN.lstatSync });
+const down = comparedPath(null, hostOf(DOWN));
 // A share may come back or go down, and a drive letter be mapped or unmapped, while a check runs: flipping(from, to, n)
 // answers the check's first n host calls from one volume and every later one from the other. X: mapped to
 // \\myhost\betasub with that share served, down, and X: not mapped: each numbers SUBSHARED_FILES and their directories
@@ -358,7 +410,15 @@ const flipping = (from, to, n) => {
   const now = () => (calls++ < n ? from : to);
   const realpathSync = (p) => now().realpathSync(p);
   realpathSync.native = (p) => now().realpathSync.native(p);
-  const k = comparedPath(null, { windows: true, path: win32, realpathSync, statSync: (p, o) => now().statSync(p, o), lstatSync: (p) => now().lstatSync(p) });
+  // A handle is answered by the volume it was opened on: it reads the file it opened, whatever came back or went down since.
+  const fds = new Map();
+  let fd = 2;
+  const openSync = (p, flags) => { const volume = now(); fds.set(++fd, { volume, fd: volume.openSync(p, flags) }); return fd; };
+  const fstatSync = (h, o) => { calls += 1; return fds.get(h).volume.fstatSync(fds.get(h).fd, o); };
+  const closeSync = (h) => { calls += 1; fds.get(h).volume.closeSync(fds.get(h).fd); fds.delete(h); };
+  const k = comparedPath(null, {
+    windows: true, path: win32, realpathSync, statSync: (p, o) => now().statSync(p, o), lstatSync: (p) => now().lstatSync(p), openSync, fstatSync, closeSync,
+  });
   return Object.assign(k, { calls: () => calls });
 };
 const numbered = (volume) => {
@@ -418,7 +478,7 @@ const DFS = ntfsVolume([...SUBSHARED_FILES, 'F:\\dfsroot\\readme.txt'], {
   shares: { ...Object.fromEntries(Object.entries(SUBSHARES).filter(([unc]) => unc !== '\\\\myhost\\betasub')), '\\\\corp\\dfs': 'F:\\dfsroot' },
   mapped: { 'Z:': '\\\\corp\\dfs' },
 });
-const dfs = comparedPath(null, { windows: true, path: win32, realpathSync: DFS.realpathSync, statSync: DFS.statSync, lstatSync: DFS.lstatSync });
+const dfs = comparedPath(null, hostOf(DFS));
 
 test('purge-org refuses a users file recorded through any network share no file id places, whatever volume it reports — a DFS link whose target is down reads the namespace root\'s — and purges with one on a local drive outside the root, or placed outside it', () => {
   const root = 'C:\\ws\\orgs\\beta';
@@ -455,11 +515,11 @@ const LINKS = {
   'C:\\links\\out': 'C:\\out', 'C:\\links\\betadir': 'C:\\ws\\orgs\\beta\\sub', 'C:\\links\\gone': 'C:\\gone', 'C:\\cfg\\old.json': 'C:\\gone\\users.json',
 };
 const LINKS_SERVED = ntfsVolume(SUBSHARED_FILES, { shares: SUBSHARES, links: LINKS });
-const linksServed = comparedPath(null, { windows: true, path: win32, realpathSync: LINKS_SERVED.realpathSync, statSync: LINKS_SERVED.statSync, lstatSync: LINKS_SERVED.lstatSync });
+const linksServed = comparedPath(null, hostOf(LINKS_SERVED));
 const LINKS_DOWN = ntfsVolume(SUBSHARED_FILES, {
   shares: Object.fromEntries(Object.entries(SUBSHARES).filter(([unc]) => unc !== '\\\\myhost\\betasub')), links: LINKS,
 });
-const linksDown = comparedPath(null, { windows: true, path: win32, realpathSync: LINKS_DOWN.realpathSync, statSync: LINKS_DOWN.statSync, lstatSync: LINKS_DOWN.lstatSync });
+const linksDown = comparedPath(null, hostOf(LINKS_DOWN));
 
 test('purge-org refuses a users file recorded through a link on the drive whose target cannot be opened — a directory or file symlink to a share that is down, a chain ending at one, a link to a path that does not exist — and judges one through a link whose target opens where it leads', () => {
   const root = 'C:\\ws\\orgs\\beta';
@@ -510,9 +570,9 @@ test('purge-org refuses a users file recorded through a link on the drive whose 
 // junction is followed to its target (SINCE_1709).
 const JUNCTIONED = { shares: { ...SUBSHARES, '\\\\localhost\\C$': 'C:\\' }, mapped: { 'Z:': '\\\\myhost\\ws' }, links: { 'C:\\ws\\links\\j': 'C:\\ws\\orgs\\beta\\sub', 'C:\\ws\\links\\o': 'C:\\out' } };
 const BEFORE_1709 = ntfsVolume(SUBSHARED_FILES, { ...JUNCTIONED, unnormalized: true });
-const before1709 = comparedPath(null, { windows: true, path: win32, realpathSync: BEFORE_1709.realpathSync, statSync: BEFORE_1709.statSync, lstatSync: BEFORE_1709.lstatSync });
+const before1709 = comparedPath(null, hostOf(BEFORE_1709));
 const SINCE_1709 = ntfsVolume(SUBSHARED_FILES, JUNCTIONED);
-const since1709 = comparedPath(null, { windows: true, path: win32, realpathSync: SINCE_1709.realpathSync, statSync: SINCE_1709.statSync, lstatSync: SINCE_1709.lstatSync });
+const since1709 = comparedPath(null, hostOf(SINCE_1709));
 
 test('purge-org refuses a users file recorded through a junction on a share\'s volume that the native realpath names as the client opened it (SMB before Windows 10/Server 1709) — placed by the share\'s directory, it compared as outside the root — and judges a path through the share that passes no link as before', () => {
   const root = 'C:\\ws\\orgs\\beta';
@@ -548,7 +608,7 @@ test('purge-org refuses a users file recorded through a junction on a share\'s v
     if (win32.resolve(p).startsWith('\\\\')) throw Object.assign(new Error(`ENOENT: no such file or directory, lstat '${p}'`), { code: 'ENOENT' });
     return BEFORE_1709.lstatSync(p);
   };
-  const blinked = comparedPath(null, { windows: true, path: win32, realpathSync: BEFORE_1709.realpathSync, statSync: BEFORE_1709.statSync, lstatSync: lstatDown });
+  const blinked = comparedPath(null, hostOf(BEFORE_1709, { lstatSync: lstatDown }));
   assert.equal(usersUnderRoot(through, root, blinked), 'unplaced', `lstatSync cannot read the parts the walk read: refused (${through})`);
   // Only purge-org passes deleting: the export compares a path through the junction as before.
   assert.equal(exportRelation('\\\\myhost\\ws\\links\\j\\new', 'C:\\ws', before1709), 'inside', 'the export\'s comparison is unchanged');
@@ -566,7 +626,7 @@ const REPARSE = ntfsVolume(SUBSHARED_FILES, {
     'C:\\tagged\\betasub': { code: 'EACCES', lstat: false },
   },
 });
-const reparse = comparedPath(null, { windows: true, path: win32, realpathSync: REPARSE.realpathSync, statSync: REPARSE.statSync, lstatSync: REPARSE.lstatSync });
+const reparse = comparedPath(null, hostOf(REPARSE));
 
 test('purge-org refuses a users file recorded through any other reparse point whose target cannot be opened — one lstatSync answers as no link, or cannot read either — and judges a path not created yet as before', () => {
   const root = 'C:\\ws\\orgs\\beta';
@@ -595,7 +655,7 @@ const RAMDISK = ntfsVolume([...SUBSHARED_FILES, 'R:\\ws\\observogram.db', 'R:\\w
   links: { 'R:\\links\\betasub': 'R:\\ws\\orgs\\beta\\sub', 'C:\\links\\ramsub': 'R:\\ws\\orgs\\beta\\sub' },
   unmanaged: ['R:'],
 });
-const ramdisk = comparedPath(null, { windows: true, path: win32, realpathSync: RAMDISK.realpathSync, statSync: RAMDISK.statSync, lstatSync: RAMDISK.lstatSync });
+const ramdisk = comparedPath(null, hostOf(RAMDISK));
 
 test('on a volume whose paths the native realpath cannot name (a RAM disk that bypasses the Volume Mount Manager), purge-org refuses a users file — a short name or a link there is read as written — as through a link to it; one outside the root is a declared false refusal', () => {
   const root = 'R:\\ws\\orgs\\beta';
@@ -641,7 +701,12 @@ clonedRealpath.native = (p) => (onMachineB(p) ? MACHINEB.realpathSync.native(p)
   : onDisk(p) ? asDrive('E', DISK.realpathSync.native(asDrive('C', p))) : HOST.realpathSync.native(p));
 const clonedStat = (p) => (onMachineB(p) ? MACHINEB.statSync(p) : onDisk(p) ? DISK.statSync(asDrive('C', p)) : HOST.statSync(p));
 const clonedLstat = (p) => (onMachineB(p) ? MACHINEB.lstatSync(p) : onDisk(p) ? DISK.lstatSync(asDrive('C', p)) : HOST.lstatSync(p));
-const cloned = comparedPath(null, { windows: true, path: win32, realpathSync: clonedRealpath, statSync: clonedStat, lstatSync: clonedLstat });
+const clonedFstat = (p) => {   // what a handle opened on p reports, on the machine or the disk p is on
+  const [volume, at] = onMachineB(p) ? [MACHINEB, p] : onDisk(p) ? [DISK, asDrive('C', p)] : [HOST, p];
+  const fd = volume.openSync(at);
+  try { return volume.fstatSync(fd); } finally { volume.closeSync(fd); }
+};
+const cloned = comparedPath(null, { windows: true, path: win32, realpathSync: clonedRealpath, statSync: clonedStat, lstatSync: clonedLstat, ...handlesOf(clonedFstat) });
 
 test('a machine cloned from this host\'s image, or this drive\'s disk image attached as E:, keeps its serial and its files\' ids — a containment refusal holds for its paths, and no check takes one for the workspace, the database or one of its files: each is refused naming the way out, and the scan reads it', () => {
   const [base, root, dbFile] = ['C:\\ws', 'C:\\ws\\orgs\\beta', 'C:\\ws\\observogram.db'];
