@@ -2714,7 +2714,13 @@ link, and it refuses, deleting nothing:
   it, then run the purge again. On Linux this includes a bind mount of
   another directory of the same filesystem, which `/proc/self/mountinfo`
   lists; elsewhere such a mount cannot be told from a directory, so unmount
-  any under `orgs/<id>/` yourself before you purge.
+  any under `orgs/<id>/` yourself before you purge. It takes a file on
+  another filesystem than its directory for a mount point only when
+  `/proc/self/mountinfo` lists it: an overlay mount whose layers lie on
+  different filesystems shows its lower layers' files so, with nothing
+  mounted there. Where there is no `/proc/self/mountinfo`, it takes every
+  such file for one; on Linux, mount proc at `/proc`
+  (`mount -t proc proc /proc`) and run the purge again.
 - **while a directory under `orgs/<id>/` changed as it read it**: when the
   users file exists, it reads each directory again before it goes on, and
   one that changed — an entry another process added, removed or renamed in

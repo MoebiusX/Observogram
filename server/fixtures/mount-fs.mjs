@@ -10,7 +10,9 @@
 // mountFs(path, { fold, devs, proc }) → a volume set, built with:
 //   dir(p, { dev })            mkdir -p; a directory created takes its parent's device, the last one `dev` if given
 //                              (a directory on another device than its parent is what a mount point looks like);
-//   file(p, { size, mtimeNs }) a file (its directories made as dir does), on its directory's device;
+//   file(p, { size, mtimeNs, dev }) a file (its directories made as dir does), on its directory's device, or on `dev`
+//                              if given with no mount there (an overlay mount whose layers lie on different
+//                              filesystems, xino=off, shows a lower layer's files so);
 //   hardlink(existing, p)      the same file at a second name;
 //   symlink(p, target)         a symbolic link (a junction on Windows reads the same to lstatSync);
 //   bind(source, target)       mount the directory at source on target: the same files, devices and inodes;
@@ -127,10 +129,10 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = 
       });
       return vol;
     },
-    file(p, { size = 23n, mtimeNs } = {}) {
+    file(p, { size = 23n, mtimeNs, dev = null } = {}) {
       vol.dir(path.dirname(path.resolve(p)));
       const { dir, name } = parentOf(p);
-      entries(dir).set(key(name), { name, node: inode('file', dir.dev, { size, ...(mtimeNs === undefined ? {} : { mtimeNs }) }) });
+      entries(dir).set(key(name), { name, node: inode('file', dev ?? dir.dev, { size, ...(mtimeNs === undefined ? {} : { mtimeNs }) }) });
       changed(dir);
       return vol;
     },

@@ -2550,7 +2550,7 @@ test('purge-org users file: a view through another filesystem — NFS (the inode
   }
 });
 
-test('purge-org users file: a mount point under the root — another filesystem, a file mounted there, one directory reached twice, a loop, the root itself, a mount of the same filesystem /proc/self/mountinfo lists — is refused before anything is deleted, and once unmounted the purge passes; with no /proc/self/mountinfo, a same-filesystem bind mount from outside is entered as a directory', () => {
+test('purge-org users file: a mount point under the root — another filesystem, a file mounted there, one directory reached twice, a loop, the root itself, a mount of the same filesystem /proc/self/mountinfo lists — is refused before anything is deleted, and once unmounted the purge passes; with no /proc/self/mountinfo, a same-filesystem bind mount from outside is entered as a directory; a file on another device than its directory that /proc/self/mountinfo does not list (an overlay mount\'s lower layer on another filesystem) is none', () => {
   const vol = betaVolume().dir('/srv5', { dev: 7n }).file('/srv5/users.json').bind('/srv5', `${ROOT_B}/m`);
   const mounted = (what, root = ROOT_B) => `${root} holds a mount point, ${what}: deleting ${root} would take the files of the filesystem mounted there `
     + `(Node 23 and later) or stop part-way at it (Node 22), and a directory mounted from outside ${root} may hold the users file — `
@@ -2600,6 +2600,19 @@ test('purge-org users file: a mount point under the root — another filesystem,
     + `Unmount it, then run purge-org again: it deletes what is left at ${ROOT_B} and drops org beta's records, and the unmounted filesystem's `
     + 'files stay', 'the root itself, from the same filesystem');
   linux.unmount(ROOT_B);
+  assert.deepEqual(placeIn(linux, '/srv6/users.json'), { exists: true, refusal: null });
+  // A file on another device than its directory is a mount point only as /proc/self/mountinfo lists it (a file mounted on a
+  // file, which Linux alone makes): an overlay mount whose layers lie on different filesystems (xino=off) shows its
+  // directories on its own device and a lower layer's files on that layer's, with nothing mounted there, and the purge
+  // passes (it was refused as a mount point, and unmounting, its way out, could not be followed). A file from another
+  // filesystem mounted on a file under the root is listed, and refused. With no /proc/self/mountinfo to tell, a file on
+  // another device is refused as one mounted there (above).
+  linux.file(`${ROOT_B}/packs/lower.pack.yaml`, { dev: 60n }).file(`${ROOT_B}/sub/lower.json`, { dev: 60n });
+  assert.deepEqual(placeIn(linux, '/srv6/users.json'), { exists: true, refusal: null }, 'an overlay\'s lower-layer files: no mount point');
+  linux.dir('/srv9', { dev: 9n }).file('/srv9/x.json').bind('/srv9/x.json', `${ROOT_B}/packs/m.json`);
+  assert.equal(placeIn(linux, '/srv6/users.json').refusal, mounted(`${ROOT_B}/packs/m.json (another filesystem than ${ROOT_B}/packs)`),
+    'a file from another filesystem mounted on a file, listed');
+  linux.unmount(`${ROOT_B}/packs/m.json`);
   assert.deepEqual(placeIn(linux, '/srv6/users.json'), { exists: true, refusal: null });
   // /proc/self/mountinfo there but unreadable: nothing tells which directory is a mount point, so it is refused.
   const locked = { ...linux.fs, readFileSync: (p) => { throw Object.assign(new Error(`EACCES: ${p}`), { code: 'EACCES' }); } };

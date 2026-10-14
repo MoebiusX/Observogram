@@ -9,15 +9,18 @@
 // or as a hard link. Comparing the path alone, purge-org deleted it. So the check reads what rmSync would delete:
 //
 //   - the walk: the root and everything under it, as rmSync takes it — lstat each entry, list each directory, never
-//     through a link (a symlink, or a junction on Windows). A mount point under the root is refused: an entry on
-//     another filesystem than the directory that holds it, one /proc/self/mountinfo lists (Linux: a bind mount of a
-//     directory of the same filesystem, which lstatSync cannot tell from a directory; matched by the root's real
-//     path, as the kernel lists it), a directory the walk reached already (one directory mounted at a second place
-//     under the root), or on Windows a folder another volume is mounted in (lstatSync answers the folder, statSync
-//     the volume). On Node 22 rmSync stops part-way at a mount point; on Node 23 and later it first deletes the files
-//     of the filesystem mounted there; and a directory mounted from outside the root may hold the users file. The
-//     root itself mounted (a volume per org) is refused alike. A directory the walk cannot read is refused: what lies
-//     in it cannot be told, and rmSync would fail part-way there.
+//     through a link (a symlink, or a junction on Windows). A mount point under the root is refused: a directory on
+//     another filesystem than the directory that holds it, an entry /proc/self/mountinfo lists (Linux: a bind mount of a
+//     directory of the same filesystem, which lstatSync cannot tell from a directory, or a file mounted on a file;
+//     matched by the root's real path, as the kernel lists it), a directory the walk reached already (one directory
+//     mounted at a second place under the root), or on Windows a folder another volume is mounted in (lstatSync answers
+//     the folder, statSync the volume). Any other entry on another filesystem than its directory is one only as
+//     /proc/self/mountinfo lists it: an overlay mount whose layers lie on different filesystems (xino=off) shows its
+//     directories on its own device and a lower layer's files on that layer's, with nothing mounted there (without
+//     /proc/self/mountinfo, see below). On Node 22 rmSync stops part-way at a mount point; on Node 23 and later it
+//     first deletes the files of the filesystem mounted there; and a directory mounted from outside the root may hold
+//     the users file. The root itself mounted (a volume per org) is refused alike. A directory the walk cannot read is
+//     refused: what lies in it cannot be told, and rmSync would fail part-way there.
 //   - the users file, its path followed through every link (statSync): it lies under the root when an entry the
 //     walk found is the same file — the same device and inode (on Windows the volume serial's low 32 bits, all a
 //     share reports, as server/store/paths.mjs places a path) — or, on another device, the same kind with the same
@@ -51,13 +54,16 @@
 //     again is its way out.
 //
 // Without /proc/self/mountinfo (off Linux, or /proc not mounted), a bind mount under the root of a directory from
-// outside it, on the same filesystem, is a directory to lstatSync (the same device), and the walk enters it. A view
-// that reports neither the inode nor the size and modification time (some FUSE filesystems) is not matched; and a
-// recorded path that passes through a link under the root keeps the file the link leads to (rmSync deletes the link
-// alone), but leads nowhere once it is gone. Not seen either: what another process moves, links or mounts under the
-// root after the check, before rmSync takes it; a directory changed and changed back within one tick of a coarse
-// filesystem clock, its change time and names as they were; and a same-filesystem bind mount made on a directory under
-// the root after /proc/self/mountinfo was read, before the walk reaches it.
+// outside it, on the same filesystem, is a directory to lstatSync (the same device), and the walk enters it; and any
+// entry on another device than its directory is refused as a mount point, a lower layer's file of an overlay mount whose
+// layers lie on different filesystems too (on Linux with /proc not mounted: a false refusal, whose way out is to mount
+// proc at /proc, `mount -t proc proc /proc`, then run purge-org again). A view that reports neither the inode nor the
+// size and modification time (some FUSE filesystems) is not matched; and a recorded path that passes through a link
+// under the root keeps the file the link leads to (rmSync deletes the link alone), but leads nowhere once it is gone.
+// Not seen either: what another process moves, links or mounts under the root after the check, before rmSync takes it;
+// a directory changed and changed back within one tick of a coarse filesystem clock, its change time and names as they
+// were; and a same-filesystem bind mount made on a directory under the root after /proc/self/mountinfo was read, before
+// the walk reaches it.
 //
 // usersFilePlace(file, root, { recorded, id, fs, path, windows }) → { exists, refusal }: exists is whether the users
 // file's path leads to a file now (true), or not (false), or null when the check stopped before it could tell;
@@ -154,8 +160,16 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
       return unreadable(at, e);
     }
     entries.push({ path: at, st });
-    if (dev(st) !== parentDev) { mounts.push({ at, why: `another filesystem than ${path.dirname(at)}` }); continue; }
-    if (listed.has(at.slice(root.length))) { mounts.push({ at, why: `the same filesystem as ${path.dirname(at)}, listed in ${MOUNTINFO}` }); continue; }
+    // A non-directory is a mount point only as a file mounted on a file, which Linux lists: on another device than its
+    // directory it may be none, as an overlay mount whose layers lie on different filesystems (xino=off) shows a lower
+    // layer's files on that layer's device and its directories on its own. So where /proc/self/mountinfo tells, only one
+    // it lists is refused.
+    const mountedHere = listed.has(at.slice(root.length));
+    if (dev(st) !== parentDev && (st.isDirectory() || mountedHere || info === null)) {
+      mounts.push({ at, why: `another filesystem than ${path.dirname(at)}` });
+      continue;
+    }
+    if (mountedHere) { mounts.push({ at, why: `the same filesystem as ${path.dirname(at)}, listed in ${MOUNTINFO}` }); continue; }
     if (!st.isDirectory()) continue;
     let through;
     try { through = stat(at); } catch (e) { return unreadable(at, e); }
