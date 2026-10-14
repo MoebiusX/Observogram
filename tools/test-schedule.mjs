@@ -8,7 +8,7 @@
  * through saveJourneyDef). No MCP, no network. Exit 0 = pass.
  */
 
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHarness } from './lib/harness.mjs';
@@ -157,6 +157,26 @@ try {
   assert(/^stackBudget:\n {2}objective: 0\.99\n {2}window: 30d$/m.test(text), 'saveJourneyDef emits stackBudget as a mapping', text);
   const back = loadJourneyDef('captured-sched');
   assert(back.schedule === '*/15 * * * *' && back.stackBudget.window === '30d' && parseSchedule(back.schedule).cadenceMs === 900000, 'the saved definition loads back with the same schedule and budget');
+
+  // The read-back (journey-notify-env-ownership): every banner line is one comment line (a CR, LF, U+2028
+  // or U+2029 becomes a space — a pack label could otherwise write a top-level notify: of its own), and a
+  // definition that does not read back deep-equal is refused before anything is written, naming a key only;
+  // the previous file of that name is untouched.
+  const flat = saveJourneyDef('banner-flat', { packA: { file: PACK_A }, packB: { file: PACK_B }, gate: { minAlignmentPct: 1 } },
+    { banner: ['Pack A: x\nnotify:\n  urlEnv: OBSERVOGRAM_API_TOKEN\n  on: always\n#', 'one\r\ntwo\u2028three\u2029four'] });
+  const flatText = readFileSync(flat.path, 'utf8').split('\n');
+  assert(flatText[0] === '# Pack A: x notify:   urlEnv: OBSERVOGRAM_API_TOKEN   on: always #' && flatText[1] === '# one  two three four' && flatText[2] === 'name: banner-flat',
+    'E4 a banner line with line breaks is flattened into one comment line', flatText.slice(0, 3));
+  assert(loadJourneyDef('banner-flat').notify === undefined, 'E4 the banner writes no notify: key');
+  const before = readFileSync(saved.path, 'utf8');
+  const refusal = (name, def) => { try { saveJourneyDef(name, { packA: { file: PACK_A }, packB: { file: PACK_B }, ...def }); return null; } catch (e) { return e.message; } };
+  assert(refusal('captured-sched', { gate: { 'k\nnotify': 1 } }) === 'journey captured-sched: the definition does not read back as written (it does not parse as YAML) — nothing was saved',
+    'E4 a gate key with a line break (a file that would never load) is refused', refusal('captured-sched', { gate: { 'k\nnotify': 1 } }));
+  assert(refusal('captured-sched', { env: 'prod\nnotify: x', gate: { minAlignmentPct: 1 } }) === 'journey captured-sched: the definition does not read back as written ("env" differs) — nothing was saved',
+    'E4 a scope scalar with a line break is refused, naming the key and never the value', refusal('captured-sched', { env: 'prod\nnotify: x', gate: {} }));
+  assert(readFileSync(saved.path, 'utf8') === before, 'E4 the previous file of that name is untouched by a refusal');
+  assert(refusal('never-written', { service: 'a\nb' }) !== null && !existsSync(join(TMP, 'journeys', 'never-written.journey.yaml')), 'E4 a refused new journey writes no file');
+  assert(refusal('quoted-ok', { env: 'true', service: '0x10', scopeMode: 'a: b', gate: { minAlignmentPct: 85, requireGradePass: true } }) === null, 'E4 quoted strings, numbers and booleans read back');
 } finally {
   rmSync(TMP, { recursive: true, force: true });
 }

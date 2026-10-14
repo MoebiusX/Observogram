@@ -32,7 +32,7 @@ export const DEFAULT_ROOT = 'tools/lib';
 
 /** Modules under tools/lib that are not vendorable, path → why. Authoritative: every .mjs under the root is listed XOR here. */
 export const EXCLUDED = Object.freeze({
-  'tools/lib/journey.mjs': 'node:fs/path/url imports, import-time schema read, imports ../../studio/diagnostic-grade.mjs and ../../studio/verify-deploy.mjs, dynamic import of ../fetch-live-pack.mjs; the server-side journey runner, the documented browser-safety exception',
+  'tools/lib/journey.mjs': 'node:fs/path/url/util imports, import-time schema read, imports ../../studio/diagnostic-grade.mjs and ../../studio/verify-deploy.mjs, dynamic import of ../fetch-live-pack.mjs; the server-side journey runner, the documented browser-safety exception',
   'tools/lib/brand-env.mjs': 'node:fs/path imports and process.env reads; server-side brand/env resolution, not a library',
   'tools/lib/grafana-mcp-bridge.mjs': 'node:http server and network fetch at call time; a bridge process, not a library',
   'tools/lib/harness.mjs': 'process.stdout/process.exit; the repo\'s own test harness, not product code',
