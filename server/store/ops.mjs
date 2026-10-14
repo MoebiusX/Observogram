@@ -156,10 +156,10 @@ function realOr(path) {
 // realOr spells a path (the journey rewrites' base, below); a check compares two through compared
 // (server/store/paths.mjs): realOr's form off Windows, the on-disk spelling, case folded, on Windows —
 // where compared(p, beside) places p beside the path it is checked against across a share's name. A
-// containment refusal compares placed (purge-org's users file with { deleting: true }: a share nothing places
-// may lie under the root it deletes, on any volume); a check whose answer writes or skips (the in-place
-// detection, the scan for another store, the no-marker check) compares by path alone and refuses what only
-// placement equates.
+// containment refusal compares placed (purge-org's users file with { deleting: true }: a share nothing places,
+// on any volume, or a path the native realpath cannot fully resolve may lie under the root it deletes); a check
+// whose answer writes or skips (the in-place detection, the scan for another store, the no-marker check)
+// compares by path alone and refuses what only placement equates.
 const compared = comparedPath(realOr);
 
 const slashed = (p) => p.replaceAll('\\', '/');
@@ -826,10 +826,12 @@ export async function purgeOrg(id, { dbPath = resolveDbPath(), base = baseWorksp
     }
     const usersFile = getMeta(db, 'users_file');
     const users = usersFile && isAbsolute(usersFile) && present ? compared(usersFile, root, { deleting: true }) : undefined;
-    if (users === null) {   // Windows: through a share that file ids cannot place, on any volume, or one not reached (store/paths.mjs)
-      throw refuse(`the recorded users file ${usersFile} is not a path on a local drive, and a network share no file id places beside `
-        + `${root} (one on any volume, a DFS link, one that cannot be reached) may lead under it — nothing was deleted. If it does not `
-        + `lie under ${root}, delete ${root} by hand, then run purge-org again: it drops org ${id}'s records`);
+    if (users === null) {   // Windows: through a share no file id places (any volume), one not reached, or a path realpath cannot resolve (store/paths.mjs)
+      throw refuse(`the recorded users file ${usersFile} is not a path on a local drive, or its path cannot be resolved on this host (a link `
+        + 'or another reparse point on it whose target cannot be opened, a part of it this host cannot read, or a volume whose paths do not '
+        + `resolve), and such a path, like a network share no file id places beside ${root} (one on any volume, a DFS link, one that cannot `
+        + `be reached), may lead under it — nothing was deleted. If it does not lie under ${root}, delete ${root} by hand, then run `
+        + `purge-org again: it drops org ${id}'s records. If it does, move it out of ${root} first, then do the same`);
     }
     // By what deleting the root takes, not by the path's spelling (store/users-file-place.mjs): the users file a
     // pre-store build reads, seen under the root through a mount, a link or a hard link, a mount point under it, and
