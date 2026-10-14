@@ -2649,12 +2649,13 @@ test('purge-org users file: a mount point under the root — another filesystem,
   // mounted out of order, an autofs mount over a directory that holds mounts) — is listed in /proc/self/mountinfo still,
   // on the filesystem now hidden, while its path shows a plain directory of the filesystem mounted above: nothing is
   // mounted there, and the purge passes (it was refused as a mount point, and unmounting, its way out, failed: not
-  // mounted). A mount in a covered mount is covered too. One made there on the filesystem above is refused, and once
-  // unmounted the purge passes, the covered one listed still; the root itself likewise.
+  // mounted). A mount in a covered mount is covered too, and one in that (with the parents followed one level up only,
+  // <root>/m/n/o was refused, and unmounting it failed: not mounted). One made there on the filesystem above is refused,
+  // and once unmounted the purge passes, the covered one listed still; the root itself likewise.
   const covering = (vol) => vol.dir('/fresh', { dev: 70n }).dir('/fresh/x').bind('/fresh', '/ws').file(`${ROOT_B}/packs/b1.pack.yaml`);
-  const covered = covering(betaVolume({ proc: true }).dir('/srv6').dir('/srv7').bind('/srv6', `${ROOT_B}/m`).bind('/srv7', `${ROOT_B}/m/n`))
-    .dir(`${ROOT_B}/m/n`);
-  for (const at of ['m', 'm/n']) {
+  const covered = covering(betaVolume({ proc: true }).dir('/srv6').dir('/srv7').dir('/srv8').bind('/srv6', `${ROOT_B}/m`)
+    .bind('/srv7', `${ROOT_B}/m/n`).bind('/srv8', `${ROOT_B}/m/n/o`)).dir(`${ROOT_B}/m/n/o`);
+  for (const at of ['m', 'm/n', 'm/n/o']) {
     assert.ok(covered.fs.readFileSync('/proc/self/mountinfo').includes(` ${ROOT_B}/${at} rw`), `${at}: listed still`);
     assert.equal(covered.fs.lstatSync(`${ROOT_B}/${at}`).dev, 70n, `${at}: a directory of the filesystem above`);
     assert.throws(() => covered.unmount(`${ROOT_B}/${at}`), { code: 'EINVAL' }, `${at}: not mounted`);
@@ -2671,6 +2672,16 @@ test('purge-org users file: a mount point under the root — another filesystem,
   assert.ok(placeIn(coveredRoot, '/srv/accounts.json').refusal.startsWith(`${same(ROOT_B, '/ws/orgs')} is a mount point: `), 'the root mounted on the filesystem above');
   coveredRoot.unmount(ROOT_B);
   assert.deepEqual(placeIn(coveredRoot, '/srv/accounts.json'), { exists: true, refusal: null }, 'the root unmounted as its refusal says: purged');
+  // A mount covers what lies under the directory it is mounted on, not every path that begins with its own: with the
+  // workspace on a filesystem mounted on /ws and another mounted on /w, a bind mount at <root>/m of a directory of the
+  // workspace's filesystem is reached at its path, and refused (/w taken for a directory above /ws, it was passed over as
+  // covered, and rmSync failed there with EBUSY); once unmounted as its refusal says, the purge passes.
+  const beside = covering(betaVolume({ proc: true })).file('/ws/src/other-data').bind('/ws/src', `${ROOT_B}/m`).dir('/wfs', { dev: 72n })
+    .bind('/wfs', '/w');
+  assert.deepEqual(beside.fs.readdirSync(`${ROOT_B}/m`), ['other-data'], '/w beside /ws: <root>/m reached at its path');
+  assert.deepEqual(placeIn(beside, '/srv/accounts.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m`)) }, '/w beside /ws');
+  beside.unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(beside, '/srv/accounts.json'), { exists: true, refusal: null }, '/w beside /ws: unmounted as its refusal says, purged');
   // Covered by a mount of the filesystem it lies in — /ws bound on itself (an fstab line mounted out of order), a recursive
   // bind of /ws whose copy of the mount at <root>/m was unmounted as its refusal said, or a filesystem mounted on /ws that
   // holds a bind mount of the directory it lies in — the covered mount's path shows the very directory it is mounted on,
