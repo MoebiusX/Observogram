@@ -56,6 +56,7 @@ dropInheritedOrgVars();
 const { test, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, unlinkSync } = await import('node:fs');
+const { createServer } = await import('node:http');
 const fs = (await import('node:fs')).default;
 const { syncBuiltinESMExports } = await import('node:module');
 const { tmpdir } = await import('node:os');
@@ -72,6 +73,8 @@ const { hashPassword } = await import('./auth.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
 
 const pw = (login) => `${login}-passw0rd-audit`;
+// acme's notify hook (server/notify-target-policy.mjs), set to a loopback webhook by the slice's test.
+const AUDIT_HOOK = 'OBSERVOGRAM_ORG_ACME_NOTIFY_AUDIT_URL';
 const LOGINS = ['olive', 'ada', 'oscar', 'vera', 'bob', 'mia'];
 writeUsersFile({ users: Object.fromEntries(LOGINS.map((l) => [l, { name: l, createdAt: 'test', password: hashPassword(pw(l)) }])) }, join(WORKSPACE, 'users.json'));
 writeOrgsFile({
@@ -539,6 +542,26 @@ test('the slice\'s rows by oscar (an operator with an email): the register, the 
   assert.deepEqual(r.json.rows.map((x) => x.action), ['deploy.run']);
   r = await list('vera', '?kind=deploy');
   assert.deepEqual([r.status, r.json.denied], [403, 'role']);
+
+  // A journey that notifies (the follow-up journey-notify-env-ownership):
+  // acme's notify hook, a loopback webhook here. The capture row names the
+  // hook's variables, the run row its delivery — sent, one request — and
+  // neither any part of the URL.
+  const hits = [];
+  const hook = createServer((req, res) => { hits.push(req.url); req.resume(); req.on('end', () => res.end('ok')); });
+  await new Promise((resolve) => hook.listen(0, '127.0.0.1', resolve));
+  try {
+    process.env[AUDIT_HOOK] = `http://127.0.0.1:${hook.address().port}/audit-hook`;
+    const capN = await ok('POST /api/journeys/capture', 'oscar', '/api/journeys/capture', { name: 'audit-n', packAId: ids.pack, packBId: ids.pack, notify: { urlEnv: AUDIT_HOOK, on: 'always' } });
+    assert.deepEqual(capN.rows, [['journey.capture', 'oscar', 'acme', 'audit-n', { packA: ids.pack, packB: ids.pack, live: false, env: null, service: null, scopeMode: null, notify: { urlEnv: AUDIT_HOOK, authEnv: null } }]]);
+    const runN = await ok('POST /api/journeys/:name/run', 'oscar', '/api/journeys/audit-n/run', {});
+    assert.equal(runN.rows.length, 1, 'one journey.run row');
+    assert.deepEqual(Object.keys(runN.rows[0][4]), ['startedAt', 'outcome', 'alignmentPct', 'gradeScore', 'gradePass', 'breaches', 'tookMs', 'notify']);
+    assert.deepEqual(runN.rows[0][4].notify, { urlEnv: AUDIT_HOOK, status: 'sent', attempts: 1 });
+    assert.deepEqual(hits, ['/audit-hook'], 'one request reached the hook');
+  } finally {
+    await new Promise((resolve) => hook.close(resolve));
+  }
 });
 
 // ---------- 9. auditError: the insert fails, the file write stands ----------
@@ -679,6 +702,11 @@ test('a journey whose pack file is gone: 502, and one journey.run row with outco
   assert.ok(!JSON.stringify(detail).includes(packFile) && !JSON.stringify(detail).includes(ids.pack), 'the error message (the path) stays out of the row');
   const listed = await list('ada', '?kind=journey&limit=1');
   assert.deepEqual([listed.json.rows[0].action, listed.json.rows[0].detail.outcome], ['journey.run', 'error'], 'ada reads the failed run');
+  // A journey that notifies, failing before any record: nothing left the server.
+  const seqN = seqNow();
+  const n = await call('oscar', 'POST', '/api/journeys/audit-n/run', {});
+  assert.equal(n.status, 502, n.text.slice(0, 200));
+  assert.deepEqual(rowsAfter(seqN).map(([a, , , t, dd]) => [a, t, dd.outcome, dd.notify]), [['journey.run', 'audit-n', 'error', { urlEnv: AUDIT_HOOK, status: null, attempts: 0 }]]);
 });
 
 // ---------- 12. a non-member owner's actor is shown to the org's admin ----------

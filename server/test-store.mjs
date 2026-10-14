@@ -1879,6 +1879,64 @@ test('readTokenEnv names a variable of this org: OBSERVOGRAM_ORG_<KEY>_<NAME>, o
   }
 });
 
+// A notify hook's variables go only to that hook's webhook
+// (server/notify-target-policy.mjs, the follow-up journey-notify-env-ownership,
+// N6): readTokenEnv never names a variable with the shape of ANY org's hook.
+test('readTokenEnv never names a notify hook\'s variable: the URL or TOKEN shape of any org\'s hook, live or removed, whoever owns the name, is refused on create and update with an example that is not itself one, no row; acme-notify cannot read acme\'s hook token; an origin list or a key is no hook', async () => {
+  const { db, close } = await freshStore('mcp-env-hook');
+  try {
+    for (const id of ['acme', 'acme-notify', 'bravo', 'old', 'old-notify']) orgs.createOrg(db, 'system', { id, name: id });
+    orgs.removeOrg(db, 'system', 'old');
+    const hook = (name, example) => `observogram store: ${name} has the shape of a notify hook's variable (OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL or _TOKEN), which the server sends only to its own webhook — name another variable of this org (for example ${example})`;
+    const owner = (name, orgList) => `observogram store: ${name} belongs to org ${orgList} (the longest org prefix wins) — an admin may only name variables set aside for their org`;
+    const create = (name, readTokenEnv) => mcpEndpoints.createMcpEndpoint(db, 'alice', { name, url: 'https://mcp.example/mcp', readTokenEnv });
+    const refusedWith = (text) => (e) => e instanceof TypeError && e.message === text;
+    const endpointRows = () => auditRepo.listAudit(db, { limit: 1000 }).filter((r) => r.action.startsWith('mcp_endpoint.')).length;
+    runWithOrg('bravo', () => {
+      for (const name of ['OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_URL', 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_TOKEN', 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_PLATFORM_ALERTS_TOKEN']) {
+        assert.throws(() => create('h', name), refusedWith(hook(name, 'OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN')), name);
+      }
+      assert.equal(mcpEndpoints.envNameHookText(db, 'X', 'bravo'), hook('X', 'OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN'));
+      assert.equal(endpointRows(), 0, 'a refused create writes no row');
+      const ep = create('ok', 'OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN');
+      assert.equal(ep.readTokenEnv, 'OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN', 'the example is accepted');
+      // By shape only: the org's notify origin list, a NOTIFY_ name with no hook word, a hook word not ending _URL or _TOKEN.
+      for (const name of ['OBSERVOGRAM_ORG_BRAVO_NOTIFY_ORIGINS', 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_URL', 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_KEY']) {
+        assert.equal(mcpEndpoints.isOrgHookShaped(db, name), false, name);
+        assert.equal(create(name.toLowerCase(), name).readTokenEnv, name, name);
+      }
+      assert.throws(() => mcpEndpoints.updateMcpEndpoint(db, 'alice', ep.id, { readTokenEnv: 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_TOKEN' }),
+        refusedWith(hook('OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_TOKEN', 'OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN')), 'on update too');
+      assert.equal(mcpEndpoints.getMcpEndpoint(db, ep.id).readTokenEnv, 'OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN', 'a refused update changes nothing');
+      assert.equal(endpointRows(), 4, 'four creates, no row for a refusal');
+    });
+    // acme-notify owns every OBSERVOGRAM_ORG_ACME_NOTIFY_* name by the longest
+    // prefix — acme's hook token included, which it could otherwise read as
+    // its MCP token (C-F7). Its own <P>MCP_TOKEN is acme's hook MCP's token,
+    // so the example it is given is <P>MCP_READ_KEY.
+    runWithOrg('acme-notify', () => {
+      const ONCALL_TOKEN = 'OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_TOKEN';
+      assert.deepEqual(mcpEndpoints.envNameOwnedBy(db, ONCALL_TOKEN), ['acme-notify']);
+      for (const name of [ONCALL_TOKEN, 'OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_URL', 'OBSERVOGRAM_ORG_ACME_NOTIFY_MCP_TOKEN']) {
+        assert.throws(() => create('h', name), refusedWith(hook(name, 'OBSERVOGRAM_ORG_ACME_NOTIFY_MCP_READ_KEY')), name);
+      }
+      assert.equal(create('ok', 'OBSERVOGRAM_ORG_ACME_NOTIFY_MCP_READ_KEY').readTokenEnv, 'OBSERVOGRAM_ORG_ACME_NOTIFY_MCP_READ_KEY', 'the example is accepted');
+    });
+    // acme itself: its hook names are acme-notify's by the general rule, refused as such.
+    runWithOrg('acme', () => {
+      assert.throws(() => create('h', 'OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_TOKEN'), refusedWith(owner('OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_TOKEN', 'acme-notify')));
+      assert.equal(create('ok', 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN').readTokenEnv, 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN');
+    });
+    // A removed org's hook shape still counts: old's hooks are nobody's MCP token.
+    runWithOrg('old-notify', () => {
+      assert.throws(() => create('h', 'OBSERVOGRAM_ORG_OLD_NOTIFY_ONCALL_TOKEN'), refusedWith(hook('OBSERVOGRAM_ORG_OLD_NOTIFY_ONCALL_TOKEN', 'OBSERVOGRAM_ORG_OLD_NOTIFY_MCP_READ_KEY')));
+    });
+    assert.equal(endpointRows(), 6, 'only the accepted creates wrote a row');
+  } finally {
+    close();
+  }
+});
+
 test('Concurrency: a repository write waits out a child holding BEGIN IMMEDIATE, then succeeds with its audit row', async (t) => {
   const { path, db, close } = await freshStore('conc-repo');
   try {

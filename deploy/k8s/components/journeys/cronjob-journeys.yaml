@@ -94,6 +94,10 @@ spec:
                 # - name: MY_MCP_TOKEN
                 #   valueFrom:
                 #     secretKeyRef: { name: journey-secrets, key: MY_MCP_TOKEN }
+                # A journey the studio also runs names its org's notify hook
+                # instead, OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL (and _TOKEN),
+                # bound on the studio Deployment too: the studio reads no other
+                # notify name (docs/DOWNSTREAM.md §17).
                 # - name: MY_JOURNEY_WEBHOOK_URL
                 #   valueFrom:
                 #     secretKeyRef: { name: journey-secrets, key: MY_JOURNEY_WEBHOOK_URL }

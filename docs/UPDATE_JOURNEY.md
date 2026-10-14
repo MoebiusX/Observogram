@@ -1540,6 +1540,78 @@ its two 1000 ms timeouts are the run's own floor; its line now prints the
 time past them, against 1500 ms, the same assertion. The count of tests is
 unchanged by the fixes and the docs.
 
+### Follow-up: a journey's notify reads only its org's hooks
+
+A journey's `notify` names the variables that hold its webhook's URL and
+token, and a server run read whichever variables the definition named: any
+operator — or, without sign-in, anyone who could reach the studio — could
+have the server post another org's MCP token, or one of the server's own
+secrets, to a URL of their choosing. The server gets one rule for what a
+server-run journey's notification may read: its org's own notify hook,
+`OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL`, and that hook's own `_TOKEN`, the
+org the sole owner of the name, posted only to this machine or to an origin
+the server's operator lists. The rule comes first, in its own module, with
+nothing calling it yet. Tests: 1439 → 1446
+(`server/test-notify-target-policy.mjs` 7, new).
+
+A hook is chosen from a list, never typed. `GET /api/journeys/notify-hooks`
+answers every member of the org with the org's hooks — names, and whether a
+run could post through each, never a value or an origin — and the server's
+start tells its operator about every set hook a run would refuse, every name
+another org's id shadows, and every name no org owns. Tests: 1446 → 1448
+(two more in `server/test-notify-target-policy.mjs`).
+
+Then the rule takes effect. A server run of a journey that notifies resolves
+its hook before anything runs — the org's own hook, set, its values sound and
+its origin allowed — or answers 400 saying what to fix and who fixes it, with
+no record, no row and nothing sent, so a refused run never becomes the next
+run's baseline; without sign-in such a run is answered only to a request sent
+straight to a loopback address. Capture refuses any other name, the audit
+rows name the hook (never its URL), and records written before are served
+without the values undici quoted into them. Tests: 1448 → 1462 (14 more in
+`server/test-notify-target-policy.mjs`).
+
+The schedule snippets the studio hands out follow the same rule: a notify
+name the server refuses for a journey is never bound for the CronJob or any
+other scheduler — the snippet says, where the binding would have been, that
+the name must be renamed to one of the org's hooks first. Tests: 1462 → 1463
+(one more in `server/test-notify-target-policy.mjs`).
+
+A hook's variables go to its webhook and nowhere else, so an MCP endpoint
+may no longer read its token from a variable with the shape of any org's
+hook: an admin registering one is told to name another variable of the org,
+and an endpoint that named one before is refused where the token would be
+read, with the PATCH that repairs it. Tests: 1463 → 1465 (one more in
+`server/test-store.mjs`, one in `server/test-services-api.mjs`).
+
+A variable belongs to the org with the longest matching prefix, so an org
+named after another org's hooks would take them for good. Creating an org
+now refuses an id that would take another org's notify hooks, one whose own
+hooks another org already holds, and one that differs from another org's id
+only in `-` and `_`. Tests: 1465 → 1466 (one more in
+`server/test-identity-api.mjs`).
+
+The studio stops pointing at bare variable names. Where it suggests adding a
+notification it names the org's hook variable — the org's own prefix when the
+studio knows the org, `<KEY>` and what it stands for when it does not — or,
+for an org whose every hook name another org's id takes, says the server's
+sentence that none can be set; and the Neuron view no longer calls a journey
+"Set up" when the server would refuse to run it: it shows the server's own
+sentence instead.
+Tests: 1466 → 1467 (one more in `tools/test-neuron-model.mjs`). A hook's
+names are single words wider than a phone, so the Neuron view's focus header
+breaks them inside its row rather than scroll the page sideways at 390 px.
+Tests: 1467 → 1468 (one more in `server/test-live-studio.mjs`).
+
+The docs close the item. `docs/DOWNSTREAM.md` §17 states the rule with every
+sentence capture and a run answer, and the migration for a journey written
+before it: find every journey that notifies in every org's root, rotate
+each secret such a journey posted, scrub the records that kept a value, set
+the org's hook and list its origin, then rename the names in the file. The
+README, `docs/MCP_INTEGRATION.md`, `.env.example` and the k8s manifests name
+the hook variables where they named bare ones, and the batch 3 delivery
+report's open security item points at §17. The count is unchanged.
+
 ### Follow-up: a users file whose path Windows cannot resolve
 
 On Windows purge-org compares the recorded users file as the native realpath
