@@ -13,7 +13,6 @@
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync, readFileSync, symlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { spawnSync, spawn } from 'node:child_process';
 import { createHarness } from './lib/harness.mjs';
@@ -48,19 +47,13 @@ inventorySummary, inventoryStatusLine,
 const { chainGotWorse } = await import('./lib/journey-notify.mjs');
 const { STACK_SELF_METRIC_PROBES } = await import('./lib/contracts/stack-self-metrics.mjs');
 
-// A TCP port nobody listens on: bind an ephemeral one, read it, release
-// it. Connecting to it afterwards is refused immediately — the fastest,
-// fully offline way to make the live fetcher lose its vantage.
-async function closedLoopbackPort() {
-  return new Promise((res, rej) => {
-    const srv = createServer();
-    srv.once('error', rej);
-    srv.listen(0, '127.0.0.1', () => {
-      const { port } = srv.address();
-      srv.close(() => res(port));
-    });
-  });
-}
+// A TCP port nobody listens on: 127.0.0.1:2. Connecting to it is refused
+// immediately — the fastest, fully offline way to make the live fetcher lose
+// its vantage. It is below every OS's ephemeral range, so nothing hands it
+// out (a port bound and released can be live again on Windows, where bind(0)
+// and outbound connects share one range), and fetch dials it (port 1 is on
+// the Fetch standard's bad-port list: "bad port", never a refusal).
+const CLOSED_LOOPBACK_PORT = 2;
 
 const PACK_A = resolve(SPEC_DIR, 'examples/payment-service.pack.yaml');
 const PACK_B = resolve('examples/production-curated.pack.yaml');
@@ -668,7 +661,7 @@ try {
   // --- vantage lost: the live source does not answer ---
   // A closed loopback port makes the fetcher fail on its core tools at
   // once (connection refused) — no network, no timeout wait.
-  const port = await closedLoopbackPort();
+  const port = CLOSED_LOOPBACK_PORT;
   const lostUrl = `http://127.0.0.1:${port}/mcp?keep=1`;
   // The def's URL carries a credential parameter: the record must persist
   // the stripped form (stripMcpUrl's rule), never the secret.
@@ -1445,6 +1438,10 @@ try {
       mode = 'hang'; hits.length = 0;
       await sleep(5);
       const n5 = await runJourney(loadJourneyDef('notified'));
+      // Its two 1000 ms timeouts are the run's own floor, so the bound printed is
+      // what the runner adds past them: tookMs < 3500 is that time < 1500 ms
+      // (Date.now() can read a timer a millisecond short, hence never below 0).
+      console.log(`bound: a hung receiver took ${n5.notify?.tookMs} ms, its time past two 1000 ms timeouts: ${Math.max(0, n5.notify?.tookMs - 2000)} ms < 1500 ms`);
       assert(n5.notify.status === 'failed' && n5.notify.attempts === 2 && n5.notify.error === 'timeout after 1000ms' && n5.notify.tookMs < 3500 && n5.notify.httpStatus === null,
              'a hung receiver times out per attempt (1000 ms × 2) and the run still lands', n5.notify);
       assert(readJourneyRuns('notified')[0].startedAt === n5.startedAt && readJourneyRuns('notified')[0].notify.status === 'failed', 'the hung delivery is on the record');
@@ -1474,7 +1471,7 @@ try {
       }
       // (j) a vantage-lost run with notify: the loss is posted once (breach), the record carries notify after gate, the list pin holds.
       {
-        const lostPort = await closedLoopbackPort();
+        const lostPort = CLOSED_LOOPBACK_PORT;
         writeFileSync(join(TMP, 'journeys', 'lost-notify.journey.yaml'), [`name: lost-notify`, `packA: { file: ${A} }`, `packB: { mcp: { url: http://127.0.0.1:${lostPort}/mcp } }`, 'notify: { urlEnv: OBSERVOGRAM_TEST_WEBHOOK_URL, on: breach, timeoutMs: 1000 }'].join('\n'));
         let lostErr = null;
         try { await runJourney(loadJourneyDef('lost-notify')); } catch (e) { lostErr = e; }
@@ -1557,7 +1554,7 @@ try {
       const sCron = packc(['journey', 'schedule', 'sched-env', '--format', 'cron'], TMP2, secretEnv);
       assert(sCron.status === 0 && /^CRON_TZ=Europe\/Madrid$/m.test(sCron.stdout) && /^0 \*\/2 \* \* \* cd /m.test(sCron.stdout) && /^# export MY_MCP_TOKEN=<set in your environment>$/m.test(sCron.stdout) && /^# export MY_HOOK_URL=<set in your environment>$/m.test(sCron.stdout) && /^# export MY_HOOK_TOKEN=<set in your environment>$/m.test(sCron.stdout) && !/^## /m.test(sCron.stdout),
              '--format cron prints the crontab line with CRON_TZ, the workspace and the env names from packB.mcp.authEnv + notify', sCron.stdout);
-      assert(/OBSERVOGRAM_WORKSPACE='?[^ ]*observogram-journey-all-/.test(sCron.stdout), 'the cron line sets the workspace the CLI was run with', sCron.stdout.split('\n').find(l => l.startsWith('0 ')));
+      assert(/OBSERVOGRAM_WORKSPACE=(?:'[^']*|[^ ]*)observogram-journey-all-/.test(sCron.stdout), 'the cron line sets the workspace the CLI was run with', sCron.stdout.split('\n').find(l => l.startsWith('0 ')));
       const sTask = packc(['journey', 'schedule', 'sched-env', '--format', 'schtasks'], TMP2, secretEnv);
       assert(sTask.status === 0 && /^schtasks \/Create \/TN "Observogram\\sched-env" \/TR "\\"[^"]*node(\.exe)?\\" \\"[^"]*cli\.mjs\\" journey run sched-env" \/SC HOURLY \/MO 2 \/ST 00:00 \/F$/m.test(sTask.stdout) && /^REM setx MY_HOOK_URL <set in your environment>/m.test(sTask.stdout),
              '--format schtasks prints the Task Scheduler command with the real node and cli paths', sTask.stdout);

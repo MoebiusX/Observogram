@@ -279,39 +279,63 @@ Requires **Node 22.16 or later** (`engines` in `package.json`). The studio
 keeps users and orgs in an embedded store on Node's built-in `node:sqlite`
 (services and environments follow), which is unflagged from 22.13; 22.16 is
 the floor because it fixes a `StatementSync` use-after-free and the `run()`
-statement reset that a store hits. CI runs the suites on 22.16.0 and on the
-latest 22. See [docs/STORE_PLAN.md](docs/STORE_PLAN.md).
+statement reset that a store hits. CI runs the suites on Ubuntu and on
+Windows, each on 22.16.0 and on the latest 22. See
+[docs/STORE_PLAN.md](docs/STORE_PLAN.md).
 
 ### Platforms
 
-Linux is the reference platform: CI runs `npm test` on Ubuntu on Node 22.16.0
-(the floor) and the latest 22. Windows (Node ≥ 22.16, PowerShell or cmd) is
-intended to run the CLI, the server, the studio and the static bundle, and
-`npm test` is expected to be green there except the explicit skips — every
-one printed by `node --test` as `# SKIP win32: <reason>` (or `- SKIP win32:
-<reason>` in a harness suite), never a silent pass — for facts Windows cannot
-express: POSIX mode bits (`0600`/`0644`, `chmod 0000`), signal delivery
-(`process.kill` ends a Windows process outright, so the store's SIGTERM/SIGINT
-self-close cannot be exercised) and symlink creation (a privilege). *Expected,
-not verified*: the skip set is predicted from code reading, no Windows run
-exists yet, and the downstream's first `npm test` on Windows is the
-acceptance. There are 15 win32-skip sites — `server/test-store.mjs` (8),
+Linux and Windows are tested in CI: `npm test` runs on Ubuntu and on
+`windows-latest` (GitHub-hosted, an elevated runner, Defender as the image
+ships it), each on Node 22.16.0 (the floor) and the latest 22, on every PR
+into develop or main and every push to them; the latest-22 Ubuntu run is under
+c8. The browser suites (Playwright) run on neither: they skip, as on any
+checkout without `OBSERVOGRAM_PLAYWRIGHT`. Windows (Node ≥ 22.16, PowerShell
+or cmd) runs the CLI, the server, the studio and the static bundle, and
+`npm test` is green there except the explicit skips — every one printed by
+`node --test` as `# SKIP win32: <reason>` (or `- SKIP win32: <reason>` in a
+harness suite), never a silent pass — for facts Windows cannot express: POSIX
+mode bits (`0600`/`0644`, `chmod 0000`), signal delivery (`process.kill` ends
+a Windows process outright, so the store's SIGTERM/SIGINT self-close cannot be
+exercised) and symlink creation (a privilege; skipped on every Windows host,
+elevated or not, so the count is one number everywhere). There are
+15 win32-skip sites — `server/test-store.mjs` (8),
 `server/test-store-ops.mjs` (4), `server/test-store-import.mjs` (2),
-`tools/test-journey.mjs` (1) — 19 skipped tests once the loops unroll, so a
-Windows run prints 19 `SKIP win32:` lines (18 `# SKIP win32:` from node:test,
-one `- SKIP win32:` from `tools/test-journey.mjs`), plus the PID 1 namespace
-test's `# SKIP unshare --pid is unavailable here` and the browser suites'
-Playwright skips when `OBSERVOGRAM_PLAYWRIGHT` is unset. An elevated runner
-(GitHub's `windows-latest`) can create symlinks, so it sees the 4 symlink
-skips as tests it could run — fewer `SKIP win32:` lines there is the next
-step, not a bug. `tools/test-platform.mjs` (`npm run test:platform`) keeps
-this count and the reasons honest and proves the module-relative path
-resolvers (`fileURLToPath`, never `URL.pathname`) on every platform. Every
-suite names the platform only through `server/fixtures/platform.mjs`
-(`isWin32`, `isLinux`, `PLATFORM`, `win32Skip(reason)`, `skipOnWin32(t,
-reason)`). The checkout is LF everywhere (`.gitattributes`), so goldens and
-`VENDOR-MANIFEST.json`'s hashes verify under any `core.autocrlf`. macOS is
-not in CI; the POSIX suites run there.
+`tools/test-journey.mjs` (1) — and 19 `SKIP win32:` lines once the loops
+unroll, plus the PID 1 namespace test's
+`# SKIP unshare --pid is unavailable here` and the Playwright skips. The
+Windows leg fails unless a run prints exactly that number, and unless it ran
+the tests and the harness assertions the Ubuntu floor ran:
+`tools/tap-summary.mjs` holds it and prints the totals and every failure at
+the end of the log. When the leg first went green its summary printed Windows
+10.0.26100 on 4 CPUs, Node v22.16.0 and v22.23.3 (the latest 22), the checkout
+on `D:` and `TEMP` an 8.3 short name on `C:`
+(`C:\Users\RUNNER~1\AppData\Local\Temp`), a symlink created, and the tests the
+Ubuntu floor ran; `npm test` takes 138–219 s there. A Windows box of your own
+reports with the command in [docs/DOWNSTREAM.md](docs/DOWNSTREAM.md) §13.
+
+On Windows, today:
+
+- The database, its backups and `users.json` are protected by their
+  directories' ACLs: Windows does not enforce `0600`. Limit the workspace
+  directory (and the database's, where `OBSERVOGRAM_DB` puts it elsewhere)
+  to the account the server runs as, e.g. from cmd:
+  `icacls C:\observogram /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F"`.
+- The store refuses a network filesystem on Linux only. On Windows, keep the
+  database on a local disk, not a share or a mapped drive.
+- Journey names that differ only in case share one definition file and one
+  runs folder.
+- `packc journey list`, `GET /api/journeys` and `packc journey run --all`
+  follow the directory's order, which on NTFS is case-insensitive.
+
+`tools/test-platform.mjs` (`npm run test:platform`) keeps the sites count and
+the reasons honest, requires this section to state the lines count, and
+proves the module-relative path resolvers (`fileURLToPath`, never
+`URL.pathname`) on every platform. Every suite names the platform only
+through `server/fixtures/platform.mjs` (`isWin32`, `isLinux`, `PLATFORM`,
+`win32Skip(reason)`, `skipOnWin32(t, reason)`). The checkout is LF everywhere
+(`.gitattributes`), so goldens and `VENDOR-MANIFEST.json`'s hashes verify
+under any `core.autocrlf`. macOS is not in CI; the POSIX suites run there.
 
 ```bash
 git clone https://github.com/MoebiusX/Observogram.git
@@ -2273,7 +2297,8 @@ It runs `VACUUM INTO` outside any transaction into `<path>.tmp` and renames
 that into place: every committed row, as one rollback-journal file, while
 writers stay active. It refuses an existing `<path>`, `:memory:`, and a
 path with no database (it never creates one). The backup, like the
-database itself, is created `0600`: both hold the users' password records.
+database itself, is created `0600` (on Windows, the directory's ACL; see
+Platforms): both hold the users' password records.
 
 The other workspace files (packs, snapshots, journeys, runs,
 `deploys.jsonl`, `session-secret`) can be copied live as before. Where the
@@ -2294,7 +2319,8 @@ needs exclusive access, so even an idle server is caught), checks the
 backup is an Observogram store, moves `observogram.db`, `-wal` and `-shm`
 aside together under one timestamp, and copies the backup in with the
 replaced database's mode and owner, never the backup's (a read-only backup
-restores writable; with no previous database it is 0600), switched to
+restores writable; with no previous database it is 0600 — on Windows, the
+directory's ACL; see Platforms), switched to
 WAL first, so it goes in like a cleanly stopped store and the check also
 sees whatever opens it before the next start. The in-use check also
 folds a `-wal` left by an unclean stop into the old database and removes
@@ -2835,7 +2861,9 @@ tools/
   build-studio-bundle.mjs  The studio as one static HTML file: an import map of data: modules, inlined stylesheets, the packs (npm run build:studio)
   pack-init.mjs            packc init: build a pack from the library (list / show / instantiate)
   test-build-model.mjs     The BUILD journey's studio models over captured API responses (tools/fixtures/build/)
-  test-platform.mjs        The Windows support statement's Linux-runnable proofs: fileURLToPath over URL.pathname, the T1 separator idiom, the platform fixture, and the guards (no URL.pathname as a path, 'win32' only in the fixture, every skip reasoned and counted in README "Platforms")
+  test-platform.mjs        The Windows support statement's Linux-runnable proofs: fileURLToPath over URL.pathname, the T1 separator idiom, the platform fixture, and the guards (no URL.pathname as a path, 'win32' only in the fixture, every skip reasoned and counted in README "Platforms", which also states the SKIP win32: lines a Windows run prints)
+  tap-summary.mjs          The end of a CI log for a node --test TAP run: the host, the totals, skips by reason, every failure with its place and error (a harness suite's ✗ lines), the timing bounds (bound: lines, nearest the limit first), the slowest tests, annotations; the SKIP win32: count held to README "Platforms" (--win32-skips readme); the run's shape and the cross-leg comparison (--shape, --compare)
+  test-tap-summary.mjs     tap-summary: the TAP parse and its escapes, the SKIP win32: count, failures and their places (POSIX and Windows), annotations and their order, the verdict, README's count, UTF-16 and code-page captures, the CLI and its refusals, the skip grouping, the timing bounds, the shape and the comparison
   test-remediation-flow.mjs  The response-path engine: the linking rule, the catalogue pin, states from a diff, the steps
   test-remediation-flow-view.mjs  The response-path panel: loader, gate, view model, HTML on both screens, escaping, the .rflow-* zone's tokens and AA
   test-doc-test-totals.mjs The `Tests: a → b` totals in docs/UPDATE_JOURNEY.md chain within a section and agree with docs/CHANGELOG.md's Unreleased pairs and with the batch delivery report (docs/DELIVERY-*.md)
