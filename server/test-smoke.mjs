@@ -22,7 +22,7 @@ import { startFakeMcp, registerMcpEndpoint, endpointIdFor } from './fixtures/fak
 // mode's contract is asserted there), so the server imports below are
 // dynamic: a static one is hoisted above this line and would read the shell.
 // server/test-hermetic-suites.mjs guards the shape.
-const { STRIP, boot } = await import('./fixtures/serve-child.mjs');
+const { STRIP, boot, dropInheritedOrgVars } = await import('./fixtures/serve-child.mjs');
 for (const k of STRIP) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
@@ -47,7 +47,7 @@ delete process.env.TOMOGRAPH_BUILD;
 // slice 4 §7.6): a value of this process alone, set before start() and
 // read at request time; a shell's real OBSERVOGRAM_ORG_* variables never
 // reach the server.
-for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
+dropInheritedOrgVars();
 const SMOKE_TOKEN_VAR = 'OBSERVOGRAM_ORG_DEFAULT_SMOKE_TOKEN';
 const SMOKE_TOKEN_VALUE = 'smoke-read-token-value';
 process.env[SMOKE_TOKEN_VAR] = SMOKE_TOKEN_VALUE;

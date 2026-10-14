@@ -576,13 +576,15 @@ test('a two-page tools/list is read whole; an MCP that does not answer tools/lis
   assert.equal(seen.pop().state, 'failed');
 });
 
-test('cancel: a fetch whose MCP never answers a tool call ends promptly with an AbortError when its signal aborts', async () => {
+test('cancel: a fetch whose MCP never answers a tool call ends promptly with an AbortError when its signal aborts', async (t) => {
   const ac = new AbortController();
   const started = Date.now();
   const pending = snapshotOf(fullTools(), { fakeOpts: { hang: true }, signal: ac.signal });
   setTimeout(() => ac.abort(), 50);
   await assert.rejects(pending, (e) => e.name === 'AbortError');
-  assert.ok(Date.now() - started < 5000, 'promptly');
+  const tookMs = Date.now() - started;
+  t.diagnostic(`bound: a fetch whose MCP never answers ends when its signal aborts: ${tookMs} ms < 5000 ms`);
+  assert.ok(tookMs < 5000, 'promptly');
   // Aborted before it starts: nothing is called.
   const fake = fakeMcp(fullTools());
   const done = new AbortController();

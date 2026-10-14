@@ -30,7 +30,7 @@ import { endpointIdFor } from './fixtures/fake-mcp.mjs';
 // spellings, BEFORE the suite sets its own posture and before any server
 // module loads (every server import below is dynamic: a static one is
 // hoisted above this line). server/test-hermetic-suites.mjs guards the shape.
-const { STRIP } = await import('./fixtures/serve-child.mjs');
+const { STRIP, dropInheritedOrgVars } = await import('./fixtures/serve-child.mjs');
 for (const k of STRIP) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
@@ -44,7 +44,7 @@ process.env.OBSERVOGRAM_API_TOKEN_LABEL = 'ci-bot';
 process.env.OBSERVOGRAM_USERS_FILE = join(WORKSPACE, 'users.json');
 // The MCP origin allowlist per org (server/mcp-target-policy.mjs): each org
 // lists only its own sweep origin, where its endpoint sends a server-held token.
-for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
+dropInheritedOrgVars();
 process.env.OBSERVOGRAM_ORG_ACME_MCP_ORIGINS = 'https://acme.mcp.test';
 process.env.OBSERVOGRAM_ORG_DELTA_MCP_ORIGINS = 'https://delta.mcp.test';
 // acme's configured snapshot scope (server/live-jobs.mjs): never served to another org.

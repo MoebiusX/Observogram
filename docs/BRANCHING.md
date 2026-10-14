@@ -55,6 +55,10 @@ Every commit must:
    (render the affected view, exercise the interaction, check the console);
 4. carry a `Co-Authored-By` trailer when an agent wrote it.
 
+A red CI leg on develop, Linux or Windows, is fixed forward or reverted
+within a working day; the summary at the end of the job's log names the
+failure.
+
 ## The end-of-turn bar (handover contract)
 
 The maintainer tests immediately after every agent cycle. A turn is not
