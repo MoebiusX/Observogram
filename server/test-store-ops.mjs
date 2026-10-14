@@ -2718,6 +2718,56 @@ test('purge-org users file: a mount point under the root — another filesystem,
     'the root bound on itself, /ws bound on itself');
   rootBound.unmount('/ws').unmount(ROOT_B);
   assert.deepEqual(placeIn(rootBound, '/srv/accounts.json'), { exists: true, refusal: null }, 'the root: unmounted as its refusal says, purged');
+  // Whether the covered mount's path leads through a mount of the filesystem it lies in is decided by its parent mount's
+  // filesystem and the topmost mount of a stack, and the hint names what `umount` takes, in that order, when followed
+  // literally. Each of these read otherwise under a change to users-file-place.mjs the suite stayed green under, and on real
+  // mounts the purge then passed the covered mount over (rmSync deleted part of the root and failed there with EBUSY), or the
+  // hint's first step failed (not mounted; target is busy) and the same refusal came back. A tmpfs on <root>/m under /ws bound
+  // on itself: compared by its own filesystem it was passed over.
+  const onTmpfs = betaVolume({ proc: true }).dir('/tfs', { dev: 47n }).file('/tfs/t').bind('/tfs', `${ROOT_B}/m`).bind('/ws', '/ws');
+  assert.match(onTmpfs.fs.readFileSync('/proc/self/mountinfo'), new RegExp(`^\\d+ 21 0:47 / ${ROOT_B}/m `, 'm'), 'a tmpfs on <root>/m: listed on its own device');
+  assert.deepEqual(placeIn(onTmpfs, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws')) }, 'a tmpfs on <root>/m, /ws bound on itself');
+  onTmpfs.unmount('/ws').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(onTmpfs, '/srv/accounts.json'), { exists: true, refusal: null }, 'a tmpfs on <root>/m: unmounted as its refusal says, purged');
+  // A stack on /ws — /ws bound on /alt, a tmpfs mounted on /ws, then /alt bound on /ws over it — leads the path through
+  // its topmost mount, of the root's filesystem (by the lowest, the tmpfs, it was passed over); both come off first.
+  const stackedWs = betaVolume({ proc: true }).dir('/srv6').file('/srv6/other-data').bind('/srv6', `${ROOT_B}/m`).dir('/alt').bind('/ws', '/alt')
+    .dir('/fresh', { dev: 70n }).bind('/fresh', '/ws').bind('/alt', '/ws');
+  assert.equal(stackedWs.fs.lstatSync(`${ROOT_B}/m`).dev, 1n, 'a stack on /ws: <root>/m shows the directory mounted on');
+  assert.deepEqual(placeIn(stackedWs, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws, then /ws')) },
+    'a stack on /ws, the root\'s filesystem on top');
+  stackedWs.unmount('/ws').unmount('/ws').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(stackedWs, '/srv/accounts.json'), { exists: true, refusal: null }, 'a stack on /ws: unmounted as its refusal says, purged');
+  // The covered mount's parent mount covered itself, nothing in it above the covered mount — /ws/orgs bound on itself, the
+  // bind at <root>/m made in it, then /ws bound on itself: the hint names what covers the parent (it named nothing, and
+  // `umount <root>/m`, the way out then, said not mounted).
+  const inCovered = betaVolume({ proc: true }).bind('/ws/orgs', '/ws/orgs').dir('/srv6').file('/srv6/other-data').bind('/srv6', `${ROOT_B}/m`).bind('/ws', '/ws');
+  assert.deepEqual(placeIn(inCovered, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws')) }, 'in a covered /ws/orgs');
+  inCovered.unmount('/ws').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(inCovered, '/srv/accounts.json'), { exists: true, refusal: null }, 'in a covered /ws/orgs: unmounted as its refusal says, purged');
+  // Two coverers in one parent — /ws/orgs, then /ws, each bound on itself over the bind at <root>/m — come off outermost
+  // first: /ws/orgs is reached only once /ws is unmounted (named first, `umount /ws/orgs` said not mounted).
+  const twoAbove = betaVolume({ proc: true }).dir('/srv6').file('/srv6/other-data').bind('/srv6', `${ROOT_B}/m`).bind('/ws/orgs', '/ws/orgs').bind('/ws', '/ws');
+  assert.throws(() => twoAbove.unmount('/ws/orgs'), { code: 'EINVAL' }, 'two coverers: /ws/orgs not mounted while /ws is');
+  assert.deepEqual(placeIn(twoAbove, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws, then /ws/orgs')) }, 'two coverers in one parent');
+  twoAbove.unmount('/ws').unmount('/ws/orgs').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(twoAbove, '/srv/accounts.json'), { exists: true, refusal: null }, 'two coverers: unmounted as its refusal says, purged');
+  // What covers the parent comes before what is above the covered mount in the parent: /ws/orgs bound on itself, the bind at
+  // <root>/m in it, a tmpfs stacked on /ws/orgs in it, then /ws bound on itself (named after, `umount /ws/orgs` said not mounted).
+  const parentCovered = betaVolume({ proc: true }).bind('/ws/orgs', '/ws/orgs').dir('/srv6').file('/srv6/other-data').bind('/srv6', `${ROOT_B}/m`)
+    .dir('/fresh', { dev: 70n }).bind('/fresh', '/ws/orgs').bind('/ws', '/ws');
+  assert.deepEqual(placeIn(parentCovered, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws, then /ws/orgs')) },
+    'the parent covered, and a mount above in it');
+  parentCovered.unmount('/ws').unmount('/ws/orgs').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(parentCovered, '/srv/accounts.json'), { exists: true, refusal: null }, 'the parent covered, and a mount above in it: unmounted as its refusal says, purged');
+  // The mounts in the covered mount keep it busy, and come after it is uncovered: a bind at <root>/m/n in the one at <root>/m
+  // (left out, `umount <root>/m` said target is busy).
+  const inner = betaVolume({ proc: true }).dir('/srv6').dir('/srv7').file('/srv7/other-data').bind('/srv6', `${ROOT_B}/m`).bind('/srv7', `${ROOT_B}/m/n`).bind('/ws', '/ws');
+  assert.deepEqual(placeIn(inner, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, `/ws, then ${ROOT_B}/m/n`)) }, 'a mount in the covered mount');
+  inner.unmount('/ws');
+  assert.throws(() => inner.unmount(`${ROOT_B}/m`), { code: 'EBUSY' }, 'a mount in the covered mount: busy until that is unmounted');
+  inner.unmount(`${ROOT_B}/m/n`).unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(inner, '/srv/accounts.json'), { exists: true, refusal: null }, 'a mount in the covered mount: unmounted as its refusal says, purged');
   // A mount stacked on / itself — a tmpfs mounted on / in a chroot, or `mount --bind / /` — covers nothing: a path is looked
   // up from the process's root, and a lookup never crosses a mount stacked on it, so <root>/m is reached at its path still.
   // It is refused, holding other files or the users file (it was passed over as covered: rmSync failed there with EBUSY, and
