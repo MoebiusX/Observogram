@@ -20,8 +20,9 @@
 //     shows a directory of the filesystem mounted above, where nothing is mounted, unless that path leads through a
 //     mount of the filesystem the covered one lies in (its parent mount's device, as /proc/self/mountinfo lists it, or,
 //     where it does not list the parent — a chroot into a directory that is no mount point, whose mount the kernel lists
-//     nowhere while the mounts in it name it as their parent — the filesystem / shows, against the directory at the
-//     covered mount's path now): `mount --bind /srv /srv` over it, a recursive bind whose copy of it was unmounted, or a
+//     nowhere while the mounts in it name it as their parent — the filesystem / shows, against what is at the covered
+//     mount's path now as rmSync takes it: a link there is a link of the filesystem above, deleted without being
+//     followed, not what it leads to): `mount --bind /srv /srv` over it, a recursive bind whose copy of it was unmounted, or a
 //     bind mount, on the filesystem above, of a directory it lies in — its path may then show the very directory it is
 //     mounted on, which rmdir refuses (EBUSY) while that is a mount point anywhere, so it is refused, naming what to
 //     unmount first, in order (a declared false refusal where that mount shows another directory there — the workspace's,
@@ -302,7 +303,10 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     // lies in — its parent mount's. A parent the kernel does not list has its mount point above the process's root, so it
     // is the mount the root lies in (a chroot into a directory that is no mount point): its filesystem is the one / shows,
     // since a lookup of / never crosses a mount stacked on it, and the filesystem the lookup of m's path ends in is the one
-    // the directory there shows now. Nothing at m's path now (or nothing listed on it) reads as showing it.
+    // the entry there shows now, as rmSync takes it (lstat): a link there is a link of the filesystem above, which rmSync
+    // deletes without following it — compared through it (stat), a link in the tmpfs to a directory of the root's filesystem
+    // read as showing the mount, and the refusal named the tmpfs holding the whole deployment to unmount first. Nothing at
+    // m's path now (or nothing listed on it) reads as showing it.
     const shows = (m) => {
       const [x, parent] = [endsIn(m.at), byId.get(m.parent)];
       if (x === undefined) return true;

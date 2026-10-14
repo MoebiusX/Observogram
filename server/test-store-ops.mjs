@@ -2850,6 +2850,17 @@ test('purge-org users file: in a chroot into a directory that is no mount point,
   assert.equal(covered.fs.lstatSync(`${ROOT_B}/m`).dev, 70n, '<root>/m: a directory of the filesystem above');
   assert.throws(() => covered.unmount(`${ROOT_B}/m`), { code: 'EINVAL' }, '<root>/m: not mounted');
   assert.deepEqual(placeIn(covered, '/srv/accounts.json'), { exists: true, refusal: null }, 'in the chroot, the covered mount is passed over: purged');
+  // <root>/m in the tmpfs a link to a directory of the root's own filesystem (/srv7, holding a file): what is at the covered
+  // mount's path is the link, of the tmpfs, which rmSync deletes without following it, so the covered mount is passed over
+  // and the purge goes on, the link's target kept. Compared through the link (statSync), the target's filesystem is the one
+  // / shows, and it was refused naming the tmpfs, the whole deployment's filesystem, to unmount first.
+  const linked = chrooted().dir('/fresh', { dev: 70n }).bind('/fresh', '/ws').file(`${ROOT_B}/packs/b1.pack.yaml`).dir('/srv7').file('/srv7/g')
+    .symlink(`${ROOT_B}/m`, '/srv7');
+  assert.ok(linked.fs.lstatSync(`${ROOT_B}/m`).isSymbolicLink(), '<root>/m: a link');
+  assert.equal(linked.fs.lstatSync(`${ROOT_B}/m`).dev, 70n, '<root>/m: a link of the filesystem above');
+  assert.equal(linked.fs.statSync(`${ROOT_B}/m`).dev, linked.fs.statSync('/').dev, '<root>/m leads to a directory of the filesystem / shows');
+  assert.throws(() => linked.unmount(`${ROOT_B}/m`), { code: 'EINVAL' }, '<root>/m a link: not mounted');
+  assert.deepEqual(placeIn(linked, '/srv/accounts.json'), { exists: true, refusal: null }, 'in the chroot, the covered mount under a link of the filesystem above is passed over: purged');
   // The root itself so covered, and <root>/m mounted again on the filesystem above, read as outside a chroot.
   const coveredRoot = betaVolume({ proc: true, chroot: true }).dir('/srv8').bind('/srv8', ROOT_B).dir('/fresh', { dev: 70n }).bind('/fresh', '/ws')
     .file(`${ROOT_B}/packs/b1.pack.yaml`);
