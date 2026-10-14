@@ -40,12 +40,12 @@
 // Hermetic (§0): a developer shell's store, identity or per-org token
 // variables never reach this process's imports. serve-child.mjs imports no
 // server code.
-const { STRIP, serve, signIn } = await import('./fixtures/serve-child.mjs');
+const { STRIP, serve, signIn, dropInheritedOrgVars } = await import('./fixtures/serve-child.mjs');
 for (const k of STRIP) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
 }
-for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
+dropInheritedOrgVars();
 // The remote origins this suite registers (several with readTokenEnv) are
 // listed for the origin rule (server/mcp-target-policy.mjs); its own cases
 // unset or change the list, each restoring it.
@@ -83,7 +83,8 @@ const { registerPack, resetPackRegistry } = await import('./pack-registry.mjs');
 const { listServicesForPack, linkPackService } = await import('./store/pack-services.mjs');
 const { addPack, removePack } = await import('./store/packs.mjs');
 const { WAYS, serviceTierFor } = await import('./service-admin.mjs');
-const { envNameOwnerText, envNameShapeText } = await import('./store/mcp-endpoints.mjs');
+const { envNameHookText, envNameOwnerText, envNameShapeText } = await import('./store/mcp-endpoints.mjs');
+const orgsRepo = await import('./store/orgs.mjs');
 const { routeEntry } = await import('./route-table.mjs');
 const { evaluateConformance } = await import('../tools/lib/conformance.mjs');
 const { instantiatePack, validationSummary, todosFromAnnotations } = await import('../tools/lib/library.mjs');
@@ -761,6 +762,71 @@ test('POST /api/refresh-live { mcpEndpointId }: both fields, neither, the id sha
   await ok('DELETE /api/mcp-endpoints/:id', 'ada', `/api/mcp-endpoints/${loopId}`);
   await ok('DELETE /api/mcp-endpoints/:id', 'ada', `/api/mcp-endpoints/${euId}`);
   assert.deepEqual((await ok('GET /api/mcp-endpoints', 'vera', '/api/mcp-endpoints')).json.endpoints.map((e) => e.name), ['prod-mcp', 'staging-mcp']);
+});
+
+// A notify hook's variables go only to that hook's webhook (the follow-up
+// journey-notify-env-ownership, N6): an endpoint's readTokenEnv never names
+// a variable with the shape of any org's hook — at registration, and at use
+// for a name registered before the rule.
+test('readTokenEnv never names a notify hook\'s variable: POST and PATCH naming acme\'s hook URL or token are 400 with the way out, no row; an endpoint that named one before the rule is refused at use before the variable is read — 400 naming the PATCH, nothing sent, the value in no response or log line, and the PATCH works; acme-notify (planted as an orgs-file import would) cannot register acme\'s hook token, and the example it is given works', async () => {
+  const P = '/api/mcp-endpoints';
+  const HOOK_URL = 'OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_URL';
+  const HOOK_TOKEN = 'OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_TOKEN';
+  const hookText = (name, example) => `observogram store: ${name} has the shape of a notify hook's variable (OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL or _TOKEN), which the server sends only to its own webhook — name another variable of this org (for example ${example})`;
+  assert.equal(envNameHookText(db, HOOK_TOKEN, 'acme'), hookText(HOOK_TOKEN, ACME_TOKEN));
+  for (const readTokenEnv of [HOOK_URL, HOOK_TOKEN]) {
+    await refused('POST /api/mcp-endpoints', 'ada', P, { name: 'hook-mcp', url: MCP_URL, readTokenEnv }, 400, hookText(readTokenEnv, ACME_TOKEN));
+    await refused('PATCH /api/mcp-endpoints/:id', 'ada', `${P}/${ids.mcp}`, { readTokenEnv }, 400, hookText(readTokenEnv, ACME_TOKEN));
+  }
+  assert.equal((await ok('GET /api/mcp-endpoints', 'ada', P)).json.endpoints.find((e) => e.id === ids.mcp).readTokenEnv, ACME_TOKEN, 'a refused PATCH changes nothing');
+  // At use: an endpoint registered before the rule names the hook's token
+  // (its row written as that build wrote it). Refused before the variable
+  // is read, with or without a sent mcpAuth; the MCP receives nothing.
+  const { startFakeMcp } = await import('./fixtures/fake-mcp.mjs');
+  const fake = await startFakeMcp([]);
+  const reg = await ok('POST /api/mcp-endpoints', 'ada', P, { name: 'legacy-mcp', url: `${fake.url}/mcp`, readTokenEnv: ACME_TOKEN }, 201);
+  const id = reg.json.endpoint.id;
+  prepare(db, 'UPDATE mcp_endpoints SET read_token_env = ? WHERE id = ?').run(HOOK_TOKEN, id);
+  const VALUE = 'hook-token-value-n6';
+  process.env[HOOK_TOKEN] = VALUE;
+  try {
+    const AT_USE = `${hookText(HOOK_TOKEN, ACME_TOKEN)} — PATCH /api/mcp-endpoints/${id} names another variable`;
+    for (const [key, path, body] of [
+      ['POST /api/refresh-live', '/api/refresh-live', { mcpEndpointId: id }],
+      ['POST /api/refresh-live', '/api/refresh-live', { mcpEndpointId: id, mcpAuth: 'sent' }],
+      ['POST /api/draft-from-mcp', '/api/draft-from-mcp', { mcpEndpointId: id }],
+    ]) {
+      const { output } = await logged(() => refused(key, 'oscar', path, body, 400, AT_USE));
+      assert.ok(!output.includes(VALUE), `${key}: the variable's value is never logged: ${JSON.stringify(output)}`);
+    }
+    assert.deepEqual(fake.authHeaders, [], 'nothing reached the MCP');
+    // The way out the text names.
+    const patched = await ok('PATCH /api/mcp-endpoints/:id', 'ada', `${P}/${id}`, { readTokenEnv: ACME_TOKEN });
+    assert.deepEqual(patched.json.changed, ['readTokenEnv']);
+  } finally {
+    delete process.env[HOOK_TOKEN];
+    await fake.close();
+    await ok('DELETE /api/mcp-endpoints/:id', 'ada', `${P}/${id}`);
+  }
+  // acme-notify owns every OBSERVOGRAM_ORG_ACME_NOTIFY_* name by the longest
+  // prefix, acme's hook token included (C-F7). Planted in the store as an
+  // orgs-file import plants it; olive (an owner) acts in it.
+  orgsRepo.createOrg(db, 'system', { id: 'acme-notify', name: 'Acme Notify' });
+  try {
+    const AN = { 'X-Observogram-Org': 'acme-notify' };
+    const READ_KEY = 'OBSERVOGRAM_ORG_ACME_NOTIFY_MCP_READ_KEY';
+    let seq = seqNow();
+    const r = await call('olive', 'POST', P, { name: 'an-mcp', url: MCP_URL, readTokenEnv: HOOK_TOKEN }, AN);
+    assert.deepEqual([r.status, r.json], [400, { ok: false, error: hookText(HOOK_TOKEN, READ_KEY) }], 'its own <P>MCP_TOKEN is acme\'s hook MCP\'s token, so the example is <P>MCP_READ_KEY');
+    assert.deepEqual(rowsAfter(seq), [], 'a refusal writes no row');
+    seq = seqNow();
+    const way = await call('olive', 'POST', P, { name: 'an-mcp', url: MCP_URL, readTokenEnv: READ_KEY }, AN);
+    assert.equal(way.status, 201, way.text.slice(0, 300));
+    assert.deepEqual(rowsAfter(seq).map(([action, actor, org]) => [action, actor, org]), [['mcp_endpoint.create', 'olive', 'acme-notify']]);
+    assert.equal((await call('olive', 'DELETE', `${P}/${way.json.endpoint.id}`, undefined, AN)).status, 200);
+  } finally {
+    orgsRepo.removeOrg(db, 'system', 'acme-notify');
+  }
 });
 
 // An MCP that repeats the request's Authorization header in its 401 body

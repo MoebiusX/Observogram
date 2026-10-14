@@ -13,7 +13,6 @@
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync, readFileSync, symlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { spawnSync, spawn } from 'node:child_process';
 import { createHarness } from './lib/harness.mjs';
@@ -43,24 +42,19 @@ const {
   chainStatusLine, liveVersions, livePackDecision, pruneLiveSnapshots, readLivePack, KEEP_LIVE_PACK_POLICIES, LIVE_PACK_PATH_RE,
   causeLine, transitionGotWorse, resolveDeployArtifact,
   notifyStatusLine, postNotification, resolveNotifyTarget, validateNotify, NOTIFY_POLICIES, NOTIFY_TIMEOUT_DEFAULT_MS,
+  notifyTargetOf, scrubNotifyError,
 inventorySummary, inventoryStatusLine,
 } = await import('./lib/journey.mjs');
 const { chainGotWorse } = await import('./lib/journey-notify.mjs');
 const { STACK_SELF_METRIC_PROBES } = await import('./lib/contracts/stack-self-metrics.mjs');
 
-// A TCP port nobody listens on: bind an ephemeral one, read it, release
-// it. Connecting to it afterwards is refused immediately — the fastest,
-// fully offline way to make the live fetcher lose its vantage.
-async function closedLoopbackPort() {
-  return new Promise((res, rej) => {
-    const srv = createServer();
-    srv.once('error', rej);
-    srv.listen(0, '127.0.0.1', () => {
-      const { port } = srv.address();
-      srv.close(() => res(port));
-    });
-  });
-}
+// A TCP port nobody listens on: 127.0.0.1:2. Connecting to it is refused
+// immediately — the fastest, fully offline way to make the live fetcher lose
+// its vantage. It is below every OS's ephemeral range, so nothing hands it
+// out (a port bound and released can be live again on Windows, where bind(0)
+// and outbound connects share one range), and fetch dials it (port 1 is on
+// the Fetch standard's bad-port list: "bad port", never a refusal).
+const CLOSED_LOOPBACK_PORT = 2;
 
 const PACK_A = resolve(SPEC_DIR, 'examples/payment-service.pack.yaml');
 const PACK_B = resolve('examples/production-curated.pack.yaml');
@@ -668,7 +662,7 @@ try {
   // --- vantage lost: the live source does not answer ---
   // A closed loopback port makes the fetcher fail on its core tools at
   // once (connection refused) — no network, no timeout wait.
-  const port = await closedLoopbackPort();
+  const port = CLOSED_LOOPBACK_PORT;
   const lostUrl = `http://127.0.0.1:${port}/mcp?keep=1`;
   // The def's URL carries a credential parameter: the record must persist
   // the stripped form (stripMcpUrl's rule), never the secret.
@@ -1445,6 +1439,10 @@ try {
       mode = 'hang'; hits.length = 0;
       await sleep(5);
       const n5 = await runJourney(loadJourneyDef('notified'));
+      // Its two 1000 ms timeouts are the run's own floor, so the bound printed is
+      // what the runner adds past them: tookMs < 3500 is that time < 1500 ms
+      // (Date.now() can read a timer a millisecond short, hence never below 0).
+      console.log(`bound: a hung receiver took ${n5.notify?.tookMs} ms, its time past two 1000 ms timeouts: ${Math.max(0, n5.notify?.tookMs - 2000)} ms < 1500 ms`);
       assert(n5.notify.status === 'failed' && n5.notify.attempts === 2 && n5.notify.error === 'timeout after 1000ms' && n5.notify.tookMs < 3500 && n5.notify.httpStatus === null,
              'a hung receiver times out per attempt (1000 ms × 2) and the run still lands', n5.notify);
       assert(readJourneyRuns('notified')[0].startedAt === n5.startedAt && readJourneyRuns('notified')[0].notify.status === 'failed', 'the hung delivery is on the record');
@@ -1474,7 +1472,7 @@ try {
       }
       // (j) a vantage-lost run with notify: the loss is posted once (breach), the record carries notify after gate, the list pin holds.
       {
-        const lostPort = await closedLoopbackPort();
+        const lostPort = CLOSED_LOOPBACK_PORT;
         writeFileSync(join(TMP, 'journeys', 'lost-notify.journey.yaml'), [`name: lost-notify`, `packA: { file: ${A} }`, `packB: { mcp: { url: http://127.0.0.1:${lostPort}/mcp } }`, 'notify: { urlEnv: OBSERVOGRAM_TEST_WEBHOOK_URL, on: breach, timeoutMs: 1000 }'].join('\n'));
         let lostErr = null;
         try { await runJourney(loadJourneyDef('lost-notify')); } catch (e) { lostErr = e; }
@@ -1494,6 +1492,122 @@ try {
         try { await runJourney(loadJourneyDef('lost-notify')); } catch { /* vantage lost again */ }
         const again = readJourneyRuns('lost-notify')[0];
         assert(again.startedAt !== lostRec.startedAt && again.notify.status === 'skipped' && again.notify.reason === `still vantage-lost since ${lostRec.startedAt}` && hits.length === 0, 'a repeated vantage loss under transitions is skipped, naming the first loss', again.notify);
+      }
+      // (k) the server's seam (journey-notify-env-ownership): with resolveNotify the engine reads no variable
+      // the definition names — the resolver's target is posted, the named variable (a trap receiver, set)
+      // never; the resolver is called once, with def.notify; the vantage-lost path posts through it too and
+      // leaves the record's delivery on the error (e.notify) for the server's 502 row.
+      {
+        const trapHits = [];
+        const trap = createHttpServer((req, res) => { trapHits.push(req.url); res.writeHead(202); res.end(); });
+        await new Promise(r => trap.listen(0, '127.0.0.1', r));
+        process.env.OBSERVOGRAM_TEST_TRAP_URL = `http://127.0.0.1:${trap.address().port}/trap`;
+        process.env.OBSERVOGRAM_TEST_TRAP_TOKEN = 'tok-trap-secret';
+        try {
+          writeFileSync(join(TMP, 'journeys', 'seam.journey.yaml'), [`name: seam`, `packA: { file: ${A} }`, FILE_B, 'notify: { urlEnv: OBSERVOGRAM_TEST_TRAP_URL, authEnv: OBSERVOGRAM_TEST_TRAP_TOKEN, on: always, timeoutMs: 1000 }'].join('\n'));
+          const def = loadJourneyDef('seam');
+          const seen = [];
+          const r = await runJourney(def, { resolveNotify: (n) => { seen.push(n); return notifyTargetOf(n, { url: rxUrl, auth: 'tok-resolved-1' }); } });
+          assert(r.notify.status === 'sent' && hits.length === 1 && hits[0].headers.authorization === 'Bearer tok-resolved-1' && trapHits.length === 0 && seen.length === 1 && seen[0] === def.notify && r.notify.urlEnv === 'OBSERVOGRAM_TEST_TRAP_URL',
+                 'E1 with resolveNotify the resolver\'s target is posted once, the variable the definition names is never read', { notify: r.notify, hits: hits.length, trap: trapHits.length, seen: seen.length });
+          assert(!JSON.stringify(r).includes('tok-resolved-1') && !JSON.stringify(r).includes(rxUrl), 'E1 the resolved URL and token never land on the record');
+          hits.length = 0;
+          const lostPort = CLOSED_LOOPBACK_PORT;
+          writeFileSync(join(TMP, 'journeys', 'seam-lost.journey.yaml'), [`name: seam-lost`, `packA: { file: ${A} }`, `packB: { mcp: { url: http://127.0.0.1:${lostPort}/mcp } }`, 'notify: { urlEnv: OBSERVOGRAM_TEST_TRAP_URL, on: breach, timeoutMs: 1000 }'].join('\n'));
+          const seenLost = [];
+          let lostErr = null;
+          try { await runJourney(loadJourneyDef('seam-lost'), { resolveNotify: (n) => { seenLost.push(n); return notifyTargetOf(n, { url: rxUrl }); } }); } catch (e) { lostErr = e; }
+          const lostRec = readJourneyRuns('seam-lost')[0];
+          assert(lostErr?.vantageLost === true && lostRec?.outcome === 'vantage-lost' && hits.length === 1 && trapHits.length === 0 && seenLost.length === 1
+                 && lostErr.notify?.status === 'sent' && JSON.stringify(lostErr.notify) === JSON.stringify(lostRec.notify),
+                 'E2 the vantage-lost path posts through the resolver and leaves the delivery on the error', { err: lostErr?.notify, rec: lostRec?.notify, hits: hits.length, trap: trapHits.length });
+          hits.length = 0;
+        } finally {
+          delete process.env.OBSERVOGRAM_TEST_TRAP_URL;
+          delete process.env.OBSERVOGRAM_TEST_TRAP_TOKEN;
+          await new Promise(r => trap.close(r));
+        }
+      }
+      // (l) the redaction (journey-notify-env-ownership, the CLI's one change): a delivery error carries no part
+      // of the hook's URL — raw or normalised — nor of its token — raw, trimmed or per line. undici quotes a
+      // token it refuses trimmed (a replace by the raw value misses it) and a URL with credentials as written.
+      {
+        const errOf = async (name, url, token, { timeoutMs = 1000, ...opts } = {}) => {
+          process.env.OBSERVOGRAM_TEST_E3_URL = url;
+          if (token === undefined) delete process.env.OBSERVOGRAM_TEST_E3_TOKEN; else process.env.OBSERVOGRAM_TEST_E3_TOKEN = token;
+          writeFileSync(join(TMP, 'journeys', `${name}.journey.yaml`), [`name: ${name}`, `packA: { file: ${A} }`, FILE_B,
+            `notify: { urlEnv: OBSERVOGRAM_TEST_E3_URL${token === undefined ? '' : ', authEnv: OBSERVOGRAM_TEST_E3_TOKEN'}, on: always, timeoutMs: ${timeoutMs} }`].join('\n'));
+          const r = await runJourney(loadJourneyDef(name), opts);
+          return { notify: r.notify, disk: JSON.stringify(readJourneyRuns(name)[0]) };
+        };
+        try {
+          const HEADER = 'Headers.append: "<redacted>" is an invalid header value.';
+          for (const [name, token, sent] of [['e3-tab', '\tab\ncd  ', 'ab\ncd'], ['e3-lines', 'abc\ndef\n', 'abc\ndef'], ['e3-short', 'x\ny', 'x\ny']]) {
+            const { notify, disk } = await errOf(name, rxUrl, token);
+            assert(notify.status === 'failed' && notify.error === HEADER && hits.length === 0 && !disk.includes(JSON.stringify(sent).slice(1, -1)),
+                   `E3 a token undici refuses (${JSON.stringify(token)}) is redacted on the record`, notify);
+          }
+          const raw = await errOf('e3-raw', 'HTTP://u:p@db.internal.invalid:5432/prod db');
+          assert(raw.notify.error === 'Request cannot be constructed from a URL that includes credentials: <redacted>' && !/db\.internal|prod db|prod%20db|u:p@/.test(raw.disk),
+                 'E3 a URL with credentials undici echoes as written is redacted on the record', raw.notify);
+          const thrown = await errOf('e3-thrown', 'https://hook-host.invalid/T0/B0/path-secret?k=query-secret', 'tok-e3-secret', {
+            notifier: async ({ url, headers }) => { throw new Error(`connect to hook-host.invalid failed for /T0/B0/path-secret?k=query-secret (${url}) with ${headers.Authorization}`); },
+          });
+          assert(thrown.notify.error === 'connect to <redacted> failed for <redacted> (<redacted>) with Bearer <redacted>' && !/hook-host|path-secret|query-secret|tok-e3-secret/.test(thrown.disk),
+                 'E3 a thrown notifier naming the hook\'s host, path, URL and token is redacted by value', thrown.notify);
+          // an IPv6 literal's hostname is bracketed, but Node's net errors quote the address bare, with the port —
+          // the scheme's when the URL names none. Through the real fetch (`[::1]` at the receiver's port, where
+          // nothing listens: ECONNREFUSED, or EAFNOSUPPORT on a host without IPv6) and in Node's texts verbatim.
+          // A connect to a closed loopback port is refused at once on Linux, but Windows retries a SYN its peer
+          // refused before it reports the refusal (about 2 s on loopback), so a 1000 ms attempt would end there as
+          // a timeout before Node's connect error arrives: the two refusals through the real fetch allow 5000 ms.
+          const REFUSED_MS = 5000;
+          const rxPort = new URL(rxUrl).port;
+          const v6 = await errOf('e3-v6-loop', `http://[0:0:0:0:0:0:0:1]:${rxPort}/v6-path`, undefined, { timeoutMs: REFUSED_MS });
+          assert(v6.notify.status === 'failed' && /^connect E[A-Z]+ <redacted>/.test(v6.notify.error) && !v6.notify.error.includes(rxPort) && !v6.disk.includes(`::1:${rxPort}`) && hits.length === 0,
+                 'E3 an IPv6-literal hook\'s address and port, as Node\'s connect error quotes them, are redacted on the record', v6.notify);
+          for (const [name, url, text] of [['e3-v6-far', 'http://[fd00::5ec:1]:4443/v6far-path', 'connect ECONNREFUSED fd00::5ec:1:4443'],
+            ['e3-v6-default', 'https://[fd00::beef]/p', 'connect ETIMEDOUT fd00::beef:443'],
+            ['e3-v6-mapped', 'http://[::ffff:127.0.0.1]:44203/x', 'connect EAFNOSUPPORT ::ffff:7f00:1:44203 - Local (undefined:undefined)']]) {
+            const { notify, disk } = await errOf(name, url, undefined, { notifier: async () => ({ sent: false, httpStatus: null, attempts: 2, tookMs: 1, error: text }) });
+            assert(notify.error === text.replace(/ \S+:\d+/, ' <redacted>') && !/fd00|beef|ffff|7f00|4443|44203/.test(JSON.stringify(JSON.parse(disk).notify)),
+                   `E3 Node's text for ${url} carries no part of its address or port`, notify);
+          }
+          // a host under NOTIFY_SECRET_MIN characters, and the address a name resolved to with the hook's port, are in
+          // no value list: the address texts' pattern redacts them. Through the real fetch (`localhost` at a port where
+          // nothing listens: Node quotes the address it resolved to, `127.0.0.1:<port>`) and in Node's and undici's
+          // texts verbatim (a lookup, a connect, undici's connect timeout, the certificate's names).
+          const lhPort = String(CLOSED_LOOPBACK_PORT);
+          const lh = await errOf('e3-lh', `http://localhost:${lhPort}/lh-path`, undefined, { timeoutMs: REFUSED_MS });
+          assert(lh.notify.status === 'failed' && !lh.notify.error.includes(lhPort) && !/127\.0\.0\.1|::1/.test(lh.notify.error) && hits.length === 0,
+                 'E3 a named hook\'s resolved address and its port, as Node\'s connect error quotes them, never reach the record', lh.notify);
+          for (const [name, url, text, want] of [
+            ['e3-short-lookup', 'http://zq/short-path', 'getaddrinfo ENOTFOUND zq', 'getaddrinfo ENOTFOUND <redacted>'],
+            ['e3-short-again', 'http://zq/short-path', 'getaddrinfo EAI_AGAIN zq', 'getaddrinfo EAI_AGAIN <redacted>'],
+            ['e3-short-timeout', 'http://zq/short-path', 'Connect Timeout Error (attempted address: zq:80, timeout: 10000ms)', 'Connect Timeout Error (attempted address: <redacted>, timeout: 10000ms)'],
+            ['e3-short-tls', 'https://zq/short-path', 'Hostname/IP does not match certificate\'s altnames: Host: zq. is not in the cert\'s altnames: DNS:other.example', 'Hostname/IP does not match certificate\'s altnames: <redacted>'],
+            ['e3-resolved', 'https://hooks.example.test/T0/p', 'connect ETIMEDOUT 203.0.113.7:443', 'connect ETIMEDOUT <redacted>'],
+            ['e3-resolved-all', 'https://hooks.example.test/T0/p', 'Connect Timeout Error (attempted addresses: 203.0.113.7:443, 2001:db8::7:443, timeout: 10000ms)', 'Connect Timeout Error (attempted addresses: <redacted>, timeout: 10000ms)'],
+          ]) {
+            const { notify, disk } = await errOf(name, url, undefined, { notifier: async () => ({ sent: false, httpStatus: null, attempts: 2, tookMs: 1, error: text }) });
+            assert(notify.error === want && !/zq|203\.0\.113|2001:db8|:443|other\.example/.test(JSON.stringify(JSON.parse(disk).notify)),
+                   `E3 ${JSON.stringify(text)} reaches the record with no host, address or port`, notify);
+          }
+          // the pattern backstop alone — what GET /api/journeys/:name/runs serves a record written before the redaction
+          // through — and the texts that carry no value stay as they are
+          assert(scrubNotifyError('Headers.append: "Bearer a"b" is an invalid header value.') === HEADER && scrubNotifyError('Request cannot be constructed from a URL that includes credentials: http://u:p@h/x y') === 'Request cannot be constructed from a URL that includes credentials: <redacted>'
+                 && scrubNotifyError('getaddrinfo ENOTFOUND hooks.secret-host.example') === 'getaddrinfo ENOTFOUND <redacted>' && scrubNotifyError('connect ECONNREFUSED 127.0.0.1:47998') === 'connect ECONNREFUSED <redacted>'
+                 && ['HTTP 500', 'timeout after 1000ms', 'boom at https://***@h/', 'fetch failed', 'read ECONNRESET', 'other side closed', 'Connect Timeout Error', 'self-signed certificate', ''].every(t => scrubNotifyError(t) === t) && scrubNotifyError(null) === '',
+                 'scrubNotifyError replaces only the texts that quote a value, a host or an address');
+          const t = notifyTargetOf({ urlEnv: 'X' }, { url: 'http://h.example:8080/p/q?r=1', auth: 'tok\nab', rawUrl: ' http://h.example:8080/p/q?r=1 ', rawAuth: ' tok\nab\r\n' });
+          assert(t.url === 'http://h.example:8080/p/q?r=1' && t.headers.Authorization === 'Bearer tok\nab' && t.urlEnv === 'X' && t.on === 'transitions'
+                 && JSON.stringify(t.secrets) === JSON.stringify([' http://h.example:8080/p/q?r=1 ', 'http://h.example:8080/p/q?r=1', 'http://h.example:8080', 'h.example:8080', 'h.example', ' tok\nab\r\n', '/p/q?r=1', 'tok\nab']),
+                 'notifyTargetOf: the target from resolved values, its secrets longest first, none under 4 characters', t.secrets);
+        } finally {
+          delete process.env.OBSERVOGRAM_TEST_E3_URL;
+          delete process.env.OBSERVOGRAM_TEST_E3_TOKEN;
+          hits.length = 0;
+        }
       }
     } finally {
       if (typeof rx.closeAllConnections === 'function') rx.closeAllConnections();
@@ -1557,7 +1671,7 @@ try {
       const sCron = packc(['journey', 'schedule', 'sched-env', '--format', 'cron'], TMP2, secretEnv);
       assert(sCron.status === 0 && /^CRON_TZ=Europe\/Madrid$/m.test(sCron.stdout) && /^0 \*\/2 \* \* \* cd /m.test(sCron.stdout) && /^# export MY_MCP_TOKEN=<set in your environment>$/m.test(sCron.stdout) && /^# export MY_HOOK_URL=<set in your environment>$/m.test(sCron.stdout) && /^# export MY_HOOK_TOKEN=<set in your environment>$/m.test(sCron.stdout) && !/^## /m.test(sCron.stdout),
              '--format cron prints the crontab line with CRON_TZ, the workspace and the env names from packB.mcp.authEnv + notify', sCron.stdout);
-      assert(/OBSERVOGRAM_WORKSPACE='?[^ ]*observogram-journey-all-/.test(sCron.stdout), 'the cron line sets the workspace the CLI was run with', sCron.stdout.split('\n').find(l => l.startsWith('0 ')));
+      assert(/OBSERVOGRAM_WORKSPACE=(?:'[^']*|[^ ]*)observogram-journey-all-/.test(sCron.stdout), 'the cron line sets the workspace the CLI was run with', sCron.stdout.split('\n').find(l => l.startsWith('0 ')));
       const sTask = packc(['journey', 'schedule', 'sched-env', '--format', 'schtasks'], TMP2, secretEnv);
       assert(sTask.status === 0 && /^schtasks \/Create \/TN "Observogram\\sched-env" \/TR "\\"[^"]*node(\.exe)?\\" \\"[^"]*cli\.mjs\\" journey run sched-env" \/SC HOURLY \/MO 2 \/ST 00:00 \/F$/m.test(sTask.stdout) && /^REM setx MY_HOOK_URL <set in your environment>/m.test(sTask.stdout),
              '--format schtasks prints the Task Scheduler command with the real node and cli paths', sTask.stdout);

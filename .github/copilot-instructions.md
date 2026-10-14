@@ -24,6 +24,9 @@ is the condensed, agent-facing version — when in doubt, those docs win.
   render the affected view, check the console) before the work is called done.
 - Conventional commit messages (`feat(server): …`, `fix(studio): …`,
   `docs: …`) whose body says *why*, not just what.
+- A red CI leg on develop, Linux or Windows, is fixed forward or reverted
+  within a working day; the summary at the end of the job's log names the
+  failure.
 
 ## Pinned sources of truth — edit the source, run its gate
 

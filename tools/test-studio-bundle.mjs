@@ -42,7 +42,8 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve, dirname, sep } from 'node:path';
+import { join, resolve, dirname, isAbsolute, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import {
   collectModuleGraph, rewriteSpecifiers, assertRewritten, inlineJson, styleBlock, buildStudioBundle,
@@ -894,7 +895,8 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
 
 async function loadPlaywright() {
   const spec = process.env.OBSERVOGRAM_PLAYWRIGHT || 'playwright';
-  try { return { pw: await import(spec) }; }
+  // An absolute path, a Windows one too, is imported as its file URL (import() takes a URL or a package name).
+  try { return { pw: await import(isAbsolute(spec) ? pathToFileURL(spec).href : spec) }; }
   catch (e) { return { error: `cannot import ${spec}: ${e.message.split('\n')[0]}` }; }
 }
 
@@ -1236,16 +1238,21 @@ test('T8d baked MCP settings: a --mcp-settings-policy bundle answers /api/mcp-se
   writeFileSync(typo, JSON.stringify({ version: 1, rules: [{ when: { field: 'grafanaUrl', pattren: '^x' }, warn: 'w' }] }));
   assert.throws(() => loadSettingsPolicyFile(typo, 'OBSERVOGRAM_MCP_SETTINGS_POLICY'), { message: `OBSERVOGRAM_MCP_SETTINGS_POLICY: ${typo}: rules[0].when: unknown key "pattren"` });
   // The build keeps the id clocks the server's start-time load skips
-  // (`timed: false`): under a clock that jumps a second per read (a loaded
-  // build machine) the build refuses as too slow a policy the server loads.
-  const realNow = Date.now;
+  // (`timed: false`): under a clock that jumps a second per read — the wall
+  // clock and the CPU time alike, the two the id clocks read — the build
+  // refuses as too slow a policy the server loads.
+  const ownNow = Object.getOwnPropertyDescriptor(performance, 'now');
+  const realCpuUsage = process.cpuUsage;
   let tick = 0;
-  Date.now = () => (tick += 1000);
+  let cpu = 0;
+  performance.now = () => (tick += 1000);
+  process.cpuUsage = () => ({ user: (cpu += 1_000_000), system: 0 });
   try {
     assert.throws(() => loadSettingsPolicyFile(MSP), { message: `--mcp-settings-policy: ${MSP}: rules[0].when: pattern too slow against a ${artefactClassify.ID_MATCH_LENGTH}-character id` });
     assert.deepEqual(readSettingsPolicyConfig({ OBSERVOGRAM_MCP_SETTINGS_POLICY: MSP }).policy, fixture);
   } finally {
-    Date.now = realNow;
+    if (ownNow) Object.defineProperty(performance, 'now', ownNow); else delete performance.now;
+    process.cpuUsage = realCpuUsage;
   }
   assert.throws(() => buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x', mcpSettingsPolicy: { version: 2, rules: [] } }), { message: 'MCP settings policy: version must be 1 (got 2)' });
   // The CLI: the summary and --json name what was baked — the file and the rule count, never a rule's text.

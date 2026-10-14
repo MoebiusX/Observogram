@@ -279,39 +279,64 @@ Requires **Node 22.16 or later** (`engines` in `package.json`). The studio
 keeps users and orgs in an embedded store on Node's built-in `node:sqlite`
 (services and environments follow), which is unflagged from 22.13; 22.16 is
 the floor because it fixes a `StatementSync` use-after-free and the `run()`
-statement reset that a store hits. CI runs the suites on 22.16.0 and on the
-latest 22. See [docs/STORE_PLAN.md](docs/STORE_PLAN.md).
+statement reset that a store hits. CI runs the suites on Ubuntu and on
+Windows, each on 22.16.0 and on the latest 22. See
+[docs/STORE_PLAN.md](docs/STORE_PLAN.md).
 
 ### Platforms
 
-Linux is the reference platform: CI runs `npm test` on Ubuntu on Node 22.16.0
-(the floor) and the latest 22. Windows (Node ≥ 22.16, PowerShell or cmd) is
-intended to run the CLI, the server, the studio and the static bundle, and
-`npm test` is expected to be green there except the explicit skips — every
-one printed by `node --test` as `# SKIP win32: <reason>` (or `- SKIP win32:
-<reason>` in a harness suite), never a silent pass — for facts Windows cannot
-express: POSIX mode bits (`0600`/`0644`, `chmod 0000`), signal delivery
-(`process.kill` ends a Windows process outright, so the store's SIGTERM/SIGINT
-self-close cannot be exercised) and symlink creation (a privilege). *Expected,
-not verified*: the skip set is predicted from code reading, no Windows run
-exists yet, and the downstream's first `npm test` on Windows is the
-acceptance. There are 15 win32-skip sites — `server/test-store.mjs` (8),
+Linux and Windows are tested in CI: `npm test` runs on Ubuntu and on
+`windows-latest` (GitHub-hosted, an elevated runner, Defender as the image
+ships it), each on Node 22.16.0 (the floor) and the latest 22, on every PR
+into develop or main and every push to them; the latest-22 Ubuntu run is under
+c8. The browser suites (Playwright) run on neither: they skip, as on any
+checkout without `OBSERVOGRAM_PLAYWRIGHT`. Windows (Node ≥ 22.16, PowerShell
+or cmd) runs the CLI, the server, the studio and the static bundle, and
+`npm test` is green there except the explicit skips — every one printed by
+`node --test` as `# SKIP win32: <reason>` (or `- SKIP win32: <reason>` in a
+harness suite), never a silent pass — for facts Windows cannot express: POSIX
+mode bits (`0600`/`0644`, `chmod 0000`), signal delivery (`process.kill` ends
+a Windows process outright, so the store's SIGTERM/SIGINT self-close cannot be
+exercised) and symlink creation (a privilege; skipped on every Windows host,
+elevated or not, so the count is one number everywhere). There are
+15 win32-skip sites — `server/test-store.mjs` (8),
 `server/test-store-ops.mjs` (4), `server/test-store-import.mjs` (2),
-`tools/test-journey.mjs` (1) — 19 skipped tests once the loops unroll, so a
-Windows run prints 19 `SKIP win32:` lines (18 `# SKIP win32:` from node:test,
-one `- SKIP win32:` from `tools/test-journey.mjs`), plus the PID 1 namespace
-test's `# SKIP unshare --pid is unavailable here` and the browser suites'
-Playwright skips when `OBSERVOGRAM_PLAYWRIGHT` is unset. An elevated runner
-(GitHub's `windows-latest`) can create symlinks, so it sees the 4 symlink
-skips as tests it could run — fewer `SKIP win32:` lines there is the next
-step, not a bug. `tools/test-platform.mjs` (`npm run test:platform`) keeps
-this count and the reasons honest and proves the module-relative path
-resolvers (`fileURLToPath`, never `URL.pathname`) on every platform. Every
-suite names the platform only through `server/fixtures/platform.mjs`
-(`isWin32`, `isLinux`, `PLATFORM`, `win32Skip(reason)`, `skipOnWin32(t,
-reason)`). The checkout is LF everywhere (`.gitattributes`), so goldens and
-`VENDOR-MANIFEST.json`'s hashes verify under any `core.autocrlf`. macOS is
-not in CI; the POSIX suites run there.
+`tools/test-journey.mjs` (1) — and 19 `SKIP win32:` lines once the loops
+unroll, plus the PID 1 namespace test's
+`# SKIP unshare --pid is unavailable here` and the Playwright skips. The
+Windows leg fails unless a run prints exactly that number, and unless it ran
+the tests and the harness assertions the Ubuntu floor ran:
+`tools/tap-summary.mjs` holds it and prints the totals and every failure at
+the end of the log. When the leg first went green its summary printed Windows
+10.0.26100 on 4 CPUs, Node v22.16.0 and v22.23.3 (the latest 22), the checkout
+on `D:` and `TEMP` an 8.3 short name on `C:`
+(`C:\Users\RUNNER~1\AppData\Local\Temp`), a symlink created, and the tests the
+Ubuntu floor ran; `npm test` takes 138–219 s there. A Windows box of your own
+reports with the command in [docs/DOWNSTREAM.md](docs/DOWNSTREAM.md) §13.
+
+On Windows, today:
+
+- The database, its backups and `users.json` are protected by their
+  directories' ACLs: Windows does not enforce `0600`. Limit the workspace
+  directory (and the database's, where `OBSERVOGRAM_DB` puts it elsewhere)
+  to the account the server runs as, e.g. from cmd:
+  `icacls C:\observogram /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F"`.
+- The store refuses a network filesystem on Linux only. On Windows, keep the
+  database on a local disk, not a share or a mapped drive.
+- Journey names that differ only in case share one definition file and one
+  runs folder.
+- `packc journey list`, `GET /api/journeys` and `packc journey run --all`
+  follow the directory's order, which on NTFS is case-insensitive.
+
+`tools/test-platform.mjs` (`npm run test:platform`) keeps the sites count and
+the reasons honest, requires this section to state the lines count, and
+proves the module-relative path resolvers (`fileURLToPath`, never
+`URL.pathname`) on every platform. Every suite names the platform only
+through `server/fixtures/platform.mjs` (`isWin32`, `isLinux`, `PLATFORM`,
+`win32Skip(reason)`, `skipOnWin32(t, reason)`, and `WIN32_PLATFORM` for a
+suite that fakes the platform as data). The checkout is LF everywhere
+(`.gitattributes`), so goldens and `VENDOR-MANIFEST.json`'s hashes verify
+under any `core.autocrlf`. macOS is not in CI; the POSIX suites run there.
 
 ```bash
 git clone https://github.com/MoebiusX/Observogram.git
@@ -534,7 +559,7 @@ the server registers, and each route's first handler is its guard.
 | Role | May |
 |---|---|
 | `viewer` | every read (`GET`) in the org |
-| `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys, the live refresh, testing an MCP connection and live jobs against a registered endpoint ([Test An MCP Connection And Build A Live Pack](#test-an-mcp-connection-and-build-a-live-pack)), RESET, and the org's services and environments ([Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)) |
+| `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys (a journey's `notify` names one of the org's notify hooks — no role types a webhook URL), the live refresh, testing an MCP connection and live jobs against a registered endpoint ([Test An MCP Connection And Build A Live Pack](#test-an-mcp-connection-and-build-a-live-pack)), RESET, and the org's services and environments ([Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)) |
 | `admin` | the org's name, members and MCP endpoints as well ([the identity API](#the-identity-api), [Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)), a typed MCP URL in a ping, a live job, a draft, a live refresh, a deploy, a rollback or a journey's Pack B ([Fetch Live From MCP](#fetch-live-from-mcp); below admin, and without sign-in, only a registered endpoint), cancelling another member's live job, and the org's audit (`GET /api/audit`, [The Audit](#the-audit)) |
 | owner | a deployment-level flag, not an org role: an owner acts as `admin` in every org, plus users, orgs and the join role ([the identity API](#the-identity-api)) and the deployment's audit (`GET /api/audit?scope=all`) |
 
@@ -553,8 +578,11 @@ anything else (`member`, empty) → `operator`. Per posture:
   beyond loopback): the caller is `local`, an owner — every route, as
   before, but the identity API: on a loopback server it answers only a
   request sent straight to it, and beyond loopback it is closed (see
-  [The Identity API](#the-identity-api)); and `local` never sends a typed MCP
-  URL — it fetches from registered endpoints ([Fetch Live From MCP](#fetch-live-from-mcp)).
+  [The Identity API](#the-identity-api)); `local` never sends a typed MCP
+  URL — it fetches from registered endpoints ([Fetch Live From MCP](#fetch-live-from-mcp));
+  and a journey that notifies runs only from a request sent straight to a
+  loopback address, never on a server bound beyond loopback ([Saved
+  Journeys](#saved-journeys--repeatable-drift-checks)).
 
 Every authorization refusal carries `denied` — `auth` (401: sign in),
 `csrf`, `org` (not a member of that org), `role` or `posture` — and a
@@ -732,6 +760,15 @@ request writes none.
   and the bearer — are refused as a new local login, from the API and from
   `npm run users -- add`; the API also refuses the configured
   `OBSERVOGRAM_API_TOKEN_LABEL`.
+- **Org ids that would share variables.** An org's variables are
+  `OBSERVOGRAM_ORG_<KEY>_<NAME>`, each owned by the org whose prefix is the
+  longest match, removed orgs included, so `POST /api/admin/orgs` and
+  `npm run orgs -- create` refuse (409, nothing written; the same texts
+  from a shell) an id that would take another org's notify hooks
+  (`acme-notify` beside `acme`), one whose own hooks another org already
+  takes, and one that differs from another org's id only in `-` and `_`
+  (`a_b` beside `a-b`), naming the other org — an id that only starts alike
+  (`acme-notifications`, `acme-eu`) is created as before.
 - **Without sign-in** (the open postures, where the caller is `local`, an
   owner): on a loopback server the identity API answers only a request
   sent straight to it — `Host` `localhost`, `127.x.x.x` or `[::1]`, no
@@ -928,8 +965,14 @@ with their URLs, and never changes an endpoint.
   and again at each request that reads the variable (an org created later
   can become the owner of a stored name; the request is then refused naming
   `PATCH /api/mcp-endpoints/<id>`). Pick a `NAME` that is not another
-  org's id followed by `_`. The variable is set on the server — the k8s
-  studio Deployment's `env`, from a Secret; never on the journey CronJob
+  org's id followed by `_`. A name with the shape of any org's notify hook
+  (`OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` or `_TOKEN`, [Saved
+  Journeys](#saved-journeys--repeatable-drift-checks)) is refused too, since
+  a hook's variables go only to its own webhook: at the write (400, naming
+  another variable of the org to use), and for an endpoint registered before
+  that rule where the token would be read, before it is read (400, naming
+  `PATCH /api/mcp-endpoints/<id>`). The variable is set on the server — the
+  k8s studio Deployment's `env`, from a Secret; never on the journey CronJob
   ([`deploy/k8s/README.md`](deploy/k8s/README.md)) — and its value is never
   logged, returned or stored.
 - **The MCP URL carries no credential.** `url` is refused with userinfo, a
@@ -1073,8 +1116,8 @@ written the same way, after the answer is known.
 | `POST /api/packs/:id/deploy-bulk` | `deploy.bulk` | the `deployId` | the same, plus `snapshot` (the pre-deploy snapshot's status) |
 | `POST /api/deploys/:deployId/rollback` | `deploy.rollback` | the rollback's own `deployId` | `{ rollbackOf, pack, env, dryRun, origin, mcpEndpoint, items, ok, failed, manual, tookMs }` |
 | `POST /api/deploys/:deployId/verify` | `deploy.verify` | the verified `deployId` | `{ outcome, alignment, attempts }` (`outcome` cut to 100 characters; the summary and transitions stay in the line) |
-| `POST /api/journeys/capture` | `journey.capture` | the journey name | `{ packA, packB, live, env, service, scopeMode }` — the two pack ids and whether Pack B was saved as a live `mcp:` source, never the paths or the MCP URL the file holds |
-| `POST /api/journeys/:name/run` | `journey.run` | the journey name | `{ startedAt, outcome, alignmentPct, gradeScore, gradePass, breaches, tookMs }` — **one row per attempt past the 404** (and past a refused Pack B MCP target, which writes none): a run that fails from the studio leaves a row with `outcome: "error"`, or `"vantage-lost"` when a live source lost its vantage (the engine wrote a run record and may have notified), the four record fields `null`; never the error's message |
+| `POST /api/journeys/capture` | `journey.capture` | the journey name | `{ packA, packB, live, env, service, scopeMode }` — the two pack ids and whether Pack B was saved as a live `mcp:` source, never the paths or the MCP URL the file holds; with a `notify`, also `notify: { urlEnv, authEnv }` — the names of the org's notify hook variables it chose (`authEnv` `null` without a token), never a value |
+| `POST /api/journeys/:name/run` | `journey.run` | the journey name | `{ startedAt, outcome, alignmentPct, gradeScore, gradePass, breaches, tookMs }` — **one row per attempt past the 404** (and past a refused Pack B MCP target, which writes none): a run that fails from the studio leaves a row with `outcome: "error"`, or `"vantage-lost"` when a live source lost its vantage (the engine wrote a run record and may have notified), the four record fields `null`; never the error's message. A journey with `notify` adds `notify: { urlEnv, status, attempts }` — the hook's variable name, `sent` \| `skipped` \| `failed` (`null` when no record exists) and how many requests left the server (0 when none) — never any part of the hook's URL. A notify refused before the run (400) or by the posture (403) writes no row |
 | `POST /api/refresh-live` | `live.refresh` | the MCP origin | `{ mcpEndpoint, refreshedAt, servicesDiscovered, toolsFailed }` (counts) |
 | `POST /api/mcp/ping` | `live.ping` | the MCP origin | `{ verdict, typed: true }` — only when the caller typed the URL (an admin's privilege); a ping by `mcpEndpointId` writes no row |
 | `POST /api/mcp-settings/submit` | `live.mcp-settings` | the MCP origin | `{ op: configure \| action:<name>, path, endpointId, typed, status, fields: [names], acks: [rule indexes] }` — the opt-in pass-through only (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`), once a request left for the MCP server (`status` null when no answer came); never a value. A settings request the browser sends straight to the MCP server leaves no studio row: the MCP server audits its own |
@@ -2077,8 +2120,8 @@ schedule: "*/15 * * * *"        # the cadence it is MEANT to run at — declared
                                 #   also { cron, timezone } or { every: 15m }
 stackBudget: { objective: 0.99, window: 30d }   # posture budget the Journeys view prints per gated stack row (signal, not verdict)
 notify:                         # early-warning delivery: one bounded POST per run
-  urlEnv: MY_JOURNEY_WEBHOOK_URL     # env var NAME holding the URL (a literal url: is refused)
-  authEnv: MY_JOURNEY_WEBHOOK_TOKEN  # optional → Authorization: Bearer <value>
+  urlEnv: OBSERVOGRAM_ORG_DEFAULT_NOTIFY_ONCALL_URL     # env var NAME holding the URL: the org's notify hook (a literal url: is refused)
+  authEnv: OBSERVOGRAM_ORG_DEFAULT_NOTIFY_ONCALL_TOKEN  # optional, that hook's own token → Authorization: Bearer <value>
   on: transitions                    # transitions (default) · breach · always
   format: json                       # json · text (one line + markdown body, ntfy-style)
 inventory:                      # is the right number of things being monitored? (gen-site partition)
@@ -2105,7 +2148,13 @@ all, the run still writes an `outcome: vantage-lost` record before exiting
 `2` — the loss is a point in the history, not a gap. The CLI grades on the
 same construct as the studio (requirement-chain integrity rides on the
 diff), so both report one score for one comparison. Secrets never live in
-journey files — MCP auth is referenced by env-var name.
+journey files — MCP auth is referenced by env-var name. The example's
+`notify` names the default org's notify hook `ONCALL`,
+`OBSERVOGRAM_ORG_DEFAULT_NOTIFY_ONCALL_URL` and its `_TOKEN`, for a
+deployment whose default org is `default` (`npm run orgs -- list`);
+otherwise `<KEY>` in `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` is the default
+org's id in capitals, with `-` as `_`. Those names work for the server and
+the CLI alike.
 
 **Through the server, a live Pack B is a registered endpoint's.** A journey's
 `packB.mcp.url` is a URL the server would fetch, so the server treats it as a
@@ -2121,6 +2170,41 @@ with a raw URL is refused 403 before anything runs (`this journey's Pack B
 fetches <origin>, an MCP URL only an admin may send — an admin re-captures it
 …`). The CLI reads `url` and `authEnv` as before and refuses a def whose Pack B
 names only an `endpointId` (the server resolves it).
+
+**Through the server, a journey notifies only through its org's notify
+hook.** A notify hook is a variable pair the server's operator sets in the
+server's environment — `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` and,
+optionally, `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_TOKEN` (`<KEY>` the org id in
+capitals with `-` as `_`, `<HOOK>` words of A–Z and 0–9 joined by single `_`)
+— and restarts the server; the start prints a `[notify-hooks]` line for each
+set hook a run would refuse. A journey names the hook by `notify.urlEnv`, and
+`notify.authEnv` is that hook's own `_TOKEN` or absent. Nobody types a
+webhook URL in the app: `GET /api/journeys/notify-hooks` lists the org's
+hooks to every member (names and whether each is usable — never a value or
+origin), `POST /api/journeys/capture` refuses a `notify` that is not one of
+them (400), and `POST /api/journeys/:name/run` of a journey that notifies is
+refused **before anything runs** (400, no record, no row, nothing sent)
+unless its hook is the org's alone, set, with an http(s) URL without
+`user:password`, a token the server can send, and an allowed origin — the sentence
+names what to fix and who fixes it, and `GET /api/journeys` carries it as
+`notify.problem`. So a server run reads no other variable: not another
+org's, not one of the server's own secrets, not the org's MCP token. A
+webhook off this machine needs its origin listed; with no list, only
+loopback is posted to. No redirect is followed, and a delivery error never
+carries any part of the hook's URL or token. Without sign-in, a journey that
+notifies runs only from a request sent straight to a loopback address, and
+never on a server bound beyond loopback. The CLI keeps reading any name from
+its own environment. A journey written before this rule names another
+variable: [docs/DOWNSTREAM.md](docs/DOWNSTREAM.md) §17.2 is the migration —
+rotate the secrets such a journey posted, scrub its records, set the hook,
+list its origin, rename the names in the file.
+
+| Variable | Meaning |
+|---|---|
+| `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` | org `<KEY>`'s notify hook `<HOOK>`: the webhook a server-run journey naming it as `notify.urlEnv` posts to; unset, it is not listed and capture and a run refuse it |
+| `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_TOKEN` | that hook's bearer token, sent only to that hook's URL, for a journey naming it as `notify.authEnv` |
+| `OBSERVOGRAM_NOTIFY_ORIGINS` | comma-separated webhook origins (`scheme://host[:port]`; `*` any) every org's hooks may post to; read at each check; unset, with the org's unset too, only loopback — a separate list from `OBSERVOGRAM_MCP_ORIGINS` |
+| `OBSERVOGRAM_ORG_<KEY>_NOTIFY_ORIGINS` | the same for org `<KEY>`'s hooks, unioned with the deployment's (read only when the org owns the name alone) |
 
 Run history is bounded so a journey on a cron cadence never fills the disk:
 after every run the journey's `runs/` directory is pruned to the newest
@@ -2273,7 +2357,8 @@ It runs `VACUUM INTO` outside any transaction into `<path>.tmp` and renames
 that into place: every committed row, as one rollback-journal file, while
 writers stay active. It refuses an existing `<path>`, `:memory:`, and a
 path with no database (it never creates one). The backup, like the
-database itself, is created `0600`: both hold the users' password records.
+database itself, is created `0600` (on Windows, the directory's ACL; see
+Platforms): both hold the users' password records.
 
 The other workspace files (packs, snapshots, journeys, runs,
 `deploys.jsonl`, `session-secret`) can be copied live as before. Where the
@@ -2294,7 +2379,8 @@ needs exclusive access, so even an idle server is caught), checks the
 backup is an Observogram store, moves `observogram.db`, `-wal` and `-shm`
 aside together under one timestamp, and copies the backup in with the
 replaced database's mode and owner, never the backup's (a read-only backup
-restores writable; with no previous database it is 0600), switched to
+restores writable; with no previous database it is 0600 — on Windows, the
+directory's ACL; see Platforms), switched to
 WAL first, so it goes in like a cleanly stopped store and the check also
 sees whatever opens it before the next start. The in-use check also
 folds a `-wal` left by an unclean stop into the old database and removes
@@ -2856,11 +2942,12 @@ unsupported charset or content encoding. The body is not logged.
 | `POST` | `/api/deploys/:deployId/verify` | Record a post-deploy verification (`outcome`, `alignment`, `attempts`, `summary`, …) against a deploy; an audit row: `deploy.verify` |
 | `POST` | `/api/deploys/:deployId/rollback` | Roll a deploy back from its snapshot (`mcpEndpointId`, or a typed `mcpUrl`: the admin role, for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.rollback` |
 | `DELETE` | `/api/uploads` | Clear uploaded/crawled/drafted packs |
-| `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`, `inventory` `{ status, reason, environment, kinds }`) |
-| `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series) |
-| `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule) |
-| `POST` | `/api/journeys/:name/run` | Run a saved journey now (a live Pack B through its `endpointId`, or a raw `url`: the admin role); an audit row: `journey.run`, on a failed run too |
-| `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file (a live Pack B as the org's registered endpoint, `mcp: { url, endpointId }`; an unregistered URL kept for an admin, else a file); an audit row: `journey.capture` |
+| `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL; `problem`, the run's refusal, when a server run would refuse it), `notifyUnavailable` (only for an org whose every notify hook name another org's id takes: the `GET /api/journeys/notify-hooks` `none`) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`, `inventory` `{ status, reason, environment, kinds }`) |
+| `GET` | `/api/journeys/notify-hooks` | The org's notify hooks (`OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL`, with its `_TOKEN` when set): names and whether each is usable — never a value or origin |
+| `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series); a run writes its `notify.error` with any part of the hook's URL, the address its host resolved to and its token as `<redacted>`, and every record's — an older one's too — is served with the host or address Node's failed lookup or connection quoted (`getaddrinfo ENOTFOUND <redacted>`, `connect ECONNREFUSED <redacted>`), the address undici's connect timeout quoted, the certificate check's altnames, and any value undici quoted (a bearer token, a URL with credentials) as `<redacted>` |
+| `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule); a notify name the server refuses is never bound — it is listed in `refusedEnvNames`, and each snippet says so where its binding would have been |
+| `POST` | `/api/journeys/:name/run` | Run a saved journey now (a live Pack B through its `endpointId`, or a raw `url`: the admin role); a journey that notifies is refused before it runs unless its hook is the org's, set and allowed; without sign-in it runs only from this machine; an audit row: `journey.run`, on a failed run too |
+| `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file (a live Pack B as the org's registered endpoint, `mcp: { url, endpointId }`; an unregistered URL kept for an admin, else a file); a `notify` names one of the org's notify hooks (`GET /api/journeys/notify-hooks`); an audit row: `journey.capture` |
 | `POST` | `/api/refresh-live` | Fetch the org's live pack from an MCP endpoint (`mcpEndpointId`, or a typed `mcpUrl`: the admin role); an audit row: `live.refresh`. The live MCP API's posture, as the draft's |
 | `POST` | `/api/mcp/ping` | Test an MCP connection without building a pack (rebadge batch 3): `{ mcpEndpointId }` (the endpoint's read token rides as a draft's would; `mcpAuth` overrides it) or a typed `mcpUrl` (the admin role). `initialize`, the whole `tools/list` and one cheap read, within 10 s; answers `{ ok, verdict, origin, mcpEndpoint, reachable, auth: { outcome, sent }, tools: { count, capabilities, unmatched, complete }, read, timings, sentence, checked, notChecked }` — `verdict` one of `connected`, `auth-refused`, `unreachable`, `timeout`, `not-mcp`; 200 whenever the ping ran, 400 / 403 for the target, 502 a transport hook fault. Writes no live file and no pack; an audit row `live.ping` only for a typed URL |
 | `GET` | `/api/mcp/jobs` | The live jobs' context in this org (rebadge batch 3): `{ ok, scope: { defaults: { metricPrefixes, folderUids, datasourceUid }, from: org \| deployment \| null, errors }, running, lastTook: { snapshot, draft } }` — the snapshot scope the server is configured with (`OBSERVOGRAM_SNAPSHOT_*`, or the org's `OBSERVOGRAM_ORG_<ORG>_SNAPSHOT_*`), your own running job here (`null` otherwise), how long the org's last finished snapshot and draft took (ms) |
@@ -2952,7 +3039,9 @@ tools/
   build-studio-bundle.mjs  The studio as one static HTML file: an import map of data: modules, inlined stylesheets, the packs (npm run build:studio)
   pack-init.mjs            packc init: build a pack from the library (list / show / instantiate)
   test-build-model.mjs     The BUILD journey's studio models over captured API responses (tools/fixtures/build/)
-  test-platform.mjs        The Windows support statement's Linux-runnable proofs: fileURLToPath over URL.pathname, the T1 separator idiom, the platform fixture, and the guards (no URL.pathname as a path, 'win32' only in the fixture, every skip reasoned and counted in README "Platforms")
+  test-platform.mjs        The Windows support statement's Linux-runnable proofs: fileURLToPath over URL.pathname, the T1 separator idiom, the platform fixture, and the guards (no URL.pathname as a path, 'win32' only in the fixture, every skip reasoned and counted in README "Platforms", which also states the SKIP win32: lines a Windows run prints)
+  tap-summary.mjs          The end of a CI log for a node --test TAP run: the host, the totals, skips by reason, every failure with its place and error (a harness suite's ✗ lines), the timing bounds (bound: lines, nearest the limit first), the slowest tests, annotations; the SKIP win32: count held to README "Platforms" (--win32-skips readme); the run's shape and the cross-leg comparison (--shape, --compare)
+  test-tap-summary.mjs     tap-summary: the TAP parse and its escapes, the SKIP win32: count, failures and their places (POSIX and Windows), annotations and their order, the verdict, README's count, UTF-16 and code-page captures, the CLI and its refusals, the skip grouping, the timing bounds, the shape and the comparison
   test-remediation-flow.mjs  The response-path engine: the linking rule, the catalogue pin, states from a diff, the steps
   test-remediation-flow-view.mjs  The response-path panel: loader, gate, view model, HTML on both screens, escaping, the .rflow-* zone's tokens and AA
   test-doc-test-totals.mjs The `Tests: a → b` totals in docs/UPDATE_JOURNEY.md chain within a section and agree with docs/CHANGELOG.md's Unreleased pairs and with the batch delivery report (docs/DELIVERY-*.md)
