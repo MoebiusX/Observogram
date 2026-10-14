@@ -60,6 +60,10 @@
   background: color-mix(in srgb, var(--ux-accent) 8%, var(--ux-bg-2));
 }
 .ux-rm-strategy:disabled { opacity: 0.65; cursor: not-allowed; }
+/* Drawn disabled in the static posture (no Pack B to enable it): no opacity — its reason line, how a bundle gets a
+   live pack, is what marks it, and faded it fails AA (the house rule, app.css's Settings zone). The reskin's
+   body.chrome-observa button:disabled fades every disabled button; this selector outranks it. */
+.ux-rm-view .ux-rm-strategy.is-static-no-b:disabled { opacity: 1; }
 .ux-rm-strategy-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .ux-rm-strategy-title { font: 600 15px/1.3 var(--sans); color: var(--ux-ink); }
 .ux-rm-strategy-term { font: 500 13px/1.3 var(--mono); color: var(--ux-ink-3); }
@@ -165,6 +169,15 @@
   border: 1px solid var(--BLD, var(--ux-accent)); background: var(--BLD, var(--ux-accent)); color: #fff;
 }
 .ux-rm-deploy-btn:hover { filter: brightness(1.1); }
+/* Drawn unavailable (a static bundle deploys nothing): aria-disabled, the reason inside the control, no opacity —
+   the reason line is what marks it, and faded it fails AA; a filled button drops its fill, so the reason reads on
+   the card and the control no longer looks like the next step.
+   The decision's buttons (.remediate-deploy-btn) take their fill from app.css and the reskin, whose hover
+   (body.chrome-observa .remediate-deploy-btn:hover:not(:disabled)) paints it again: these selectors outrank both. */
+.ux-rm-view .is-unavailable[data-ux-action], .ux-rm-deploy-btn.is-unavailable { cursor: not-allowed; }
+.ux-rm-view .ux-primary-btn.is-unavailable, .ux-rm-deploy-btn.is-unavailable,
+.ux-rm-view .remediate-deploy-btn.is-unavailable, .ux-rm-view .remediate-deploy-btn.is-unavailable:hover:not(:disabled) { background: transparent; color: var(--ux-ink); border-color: var(--ux-line); }
+.ux-rm-view .ux-primary-btn.is-unavailable:hover, .ux-rm-deploy-btn.is-unavailable:hover, .ux-rm-view .remediate-deploy-btn.is-unavailable:hover:not(:disabled) { filter: none; }
 
 /* ---------- the deploy modal: plain lede, and the review beside Deploy ---------- */
 .deploy-modal .deploy-modal-lede { font: 14px/1.5 var(--sans); font-style: normal; color: var(--ux-ink-2); }

@@ -10,6 +10,7 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { parse } from './lib/mini-yaml.mjs';
 import { adapt } from './lib/adapter.mjs';
 import { SPEC_DIR } from './lib/validator.mjs';
@@ -23,6 +24,9 @@ import {
   compileBoundedPattern,
   glossaryFor, glossaryByText, glossaryEntries,
 } from './lib/artefact-classify.mjs';
+import * as artefactClassify from './lib/artefact-classify.mjs';
+import { bindTaxonomy } from '../studio/taxonomy.mjs';
+import { loadTaxonomyFile } from './build-studio-bundle.mjs';
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 const allArtefacts = (pack) => Object.values(pack.layers).flatMap(v => (Array.isArray(v) ? v : Object.values(v).flat()));
@@ -428,6 +432,44 @@ test('the default id clock reads performance.now() and the process\'s CPU time, 
     Object.defineProperty(process, 'platform', ownPlatform);
     process.cpuUsage = realCpuUsage;
     Date.now = realDateNow;
+  }
+});
+
+test('the taxonomy binds as it is served: compileTaxonomy and validateTaxonomy take { timed }, the studio binds untimed, and the builder that bakes a bundle\'s document still times it', () => {
+  // Every clock a runtime offers steps past the 50 ms budget on each read — Date.now, performance.now and the process's
+  // CPU time — so a timed run reads as too slow whichever one the id check reads (a slow phone, a throttled tab).
+  const realNow = Date.now;
+  const ownPerfNow = Object.getOwnPropertyDescriptor(performance, 'now');
+  const realCpuUsage = process.cpuUsage;
+  let t = 0;
+  let cpu = 0;
+  Date.now = () => (t += 100);
+  performance.now = () => (t += 100);
+  process.cpuUsage = () => ({ user: (cpu += 100_000), system: 0 });
+  const TOO_SLOW = `taxonomy: ids[0]: pattern too slow against a ${ID_MATCH_LENGTH}-character id`;
+  try {
+    for (const doc of [V1, V2]) {
+      assert.throws(() => compileTaxonomy(doc), { message: TOO_SLOW }, 'timed by default, as the server compiles at start');
+      assert.deepEqual(validateTaxonomy(doc), [TOO_SLOW], 'timed by default, as the server and the builder validate');
+      assert.equal(compileTaxonomy(doc, { timed: false }).ids.length, 1, 'timed: false reads no clock');
+      assert.deepEqual(validateTaxonomy(doc, { timed: false }), []);
+    }
+    // …and every static check still runs untimed.
+    const unanchored = { ...V1, ids: [{ pattern: 'promrule-', family: 'alert_rule' }] };
+    assert.throws(() => compileTaxonomy(unanchored, { timed: false }), { message: 'taxonomy: ids[0]: pattern must be anchored (start with ^)' });
+    assert.deepEqual(validateTaxonomy(unanchored, { timed: false }), ['taxonomy: ids[0]: pattern must be anchored (start with ^)']);
+    // The studio binds the document it is served without the clocks: the server timed it at start, the builder at bake.
+    assert.equal(bindTaxonomy(artefactClassify, V1), artefactClassify);
+    assert.equal(activeTaxonomy()?.ids.length, 1, 'bound: the served override, not the default families');
+    assert.equal(classifyArtefact({ id: 'promrule-HighErrorRate' }).via, 'override');
+    assert.throws(() => bindTaxonomy(artefactClassify, unanchored), { message: 'taxonomy: ids[0]: pattern must be anchored (start with ^)' });
+    // The builder's side: --taxonomy (or OBSERVOGRAM_TAXONOMY at build) is read through the timed validator.
+    assert.throws(() => loadTaxonomyFile(fileURLToPath(new URL('./fixtures/taxonomy/taxonomy.json', import.meta.url))), { message: /: taxonomy: ids\[0\]: pattern too slow against a 256-character id$/ });
+  } finally {
+    Date.now = realNow;
+    if (ownPerfNow) Object.defineProperty(performance, 'now', ownPerfNow); else delete performance.now;
+    process.cpuUsage = realCpuUsage;
+    bindTaxonomy(artefactClassify, null);
   }
 });
 

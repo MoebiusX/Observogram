@@ -1680,6 +1680,134 @@ follows it, a path not created yet on a drive the walk reads is judged as
 before, and the other checks compare as before.
 Tests: 1472 → 1476 (four more in `server/test-store-paths.mjs`).
 
+### Follow-up: Compare in the static bundle
+
+Rebadge batch 2 (B1) left Compare out of the static bundle with four blockers
+written down: the port of `/api/diff`, the licence embedding, the
+`node_modules` dependence at build, and the bare-specifier allowlist. The
+follow-up `compare-in-bundle` (`codex/bundle-compare`) closes each, adds
+retrofeed and the service audit report, and changes nothing in the journey's
+steps on a server; [`DOWNSTREAM.md`](DOWNSTREAM.md) §10 is the downstream view.
+
+- **The port.** `studio/static-backend.mjs` answers `GET /api/diff` with a
+  line-for-line port of the server's handler over the same engines
+  (`tools/lib/diff.mjs`, `tools/lib/traceability-graph.mjs`), loaded at the
+  first call through literal dynamic imports so the builder's tokenizer finds
+  them and the boot does not evaluate the parser; a failed import is not kept.
+  Parity is body for body — status, reason phrase, headers, raw text — for the
+  requests the studio sends, in Node from the source and from the built file,
+  and in Chromium (only where Playwright and its browser are installed, which
+  CI's jobs are not). Pair by needed no change: it re-keys the received diff
+  in the browser, so `compare-modes-bundle` closes with it.
+- **The licences.** Every bundle carries Observogram's MIT licence, each
+  embedded package's licence files, NOTICE files and copyright lines, its
+  source repository and the spec's provenance, in a `text/plain` script element
+  at the end of `<head>` with a pointer comment after the doctype — a script
+  element, so a step that strips comments keeps it — and `verifyBundleNotices`
+  checks a finished file. The maintainer's licensing ruling (2026-10-08) set
+  what it carries; the published packages ship no NOTICE file, and the build
+  embeds what a package publishes, never its source repository's (the block
+  names the repository instead).
+- **`node_modules` at build.** The builder reads `package-lock.json` and the
+  installed files its entries name — nothing it resolves, nothing else under
+  `node_modules` — and refuses a tree it cannot account for with a fix whoever
+  runs the build can follow. A build now needs the lockfile,
+  `VENDOR-MANIFEST.json` and an `npm ci`; the file it writes needs nothing.
+- **The allowlist.** A bare import is accepted only in a `tools/lib` module
+  whose `VENDOR-MANIFEST.json` `npm` field lists it; the closure is what each
+  installed package declares and imports, checked against the lockfile. The old
+  blanket refusal also kept the parser out of the live studio, whose `/lib`
+  mount has no import map, so a test now asserts the live studio's graph
+  reaches no package.
+
+The retrofeed port reads the body as the server's three parsers do, case by
+case, so that the one non-GET the shim answers is the server's answer too;
+three cases the studio never sends are not ported and are stated. The audit
+report differs from a server's in five declared fields, because a bundle has
+no store and no registry. In the static posture Deploy explains instead of
+opening a modal whose every read was a `501`, every deploy control is drawn
+unavailable with the reason before any commit lets Compare reach it, and every
+remedy a bundle reader can reach says how a bundle gets a live pack —
+addressed to the reader, who did not build the file; a phrase ledger in CI
+holds each server action the studio names to a disposition.
+
+Each commit's suite total, in order:
+
+1. One collation for every `tools/lib` sort (the finding is below).
+   Tests: 1476 → 1477 (one more test in `tools/test-vendor-manifest.mjs`, the
+   guard; the locale check in `tools/test-golden-diff.mjs` is a harness check
+   and adds none).
+2. The taxonomy binds as it is served (below).
+   Tests: 1477 → 1478 (one more test in `tools/test-artefact-classify.mjs`).
+3. Deploy in the static bundle, explained and drawn unavailable.
+   Tests: 1478 → 1480 (`tools/test-static-remedies.mjs` 2, new: the shim's
+   sentence and the deploy entry points).
+4. Every bundle carries Observogram's licence.
+   Tests: 1480 → 1481 (`tools/test-bundle-compare.mjs` 1, new: the licence
+   block).
+5. npm packages from the lockfile.
+   Tests: 1481 → 1482 (one more test in `tools/test-bundle-compare.mjs`: the
+   closure and every refusal over synthetic roots).
+6. Retrofeed in the bundle.
+   Tests: 1482 → 1484 (one more test in `tools/test-bundle-compare.mjs`,
+   retrofeed against a server, and one more in `tools/test-static-remedies.mjs`,
+   the static texts).
+7. Compare in the bundle.
+   Tests: 1484 → 1492 (five more tests in `tools/test-bundle-compare.mjs` — the
+   real closure and its licence pin, the diff from the source, the taxonomy,
+   Pair by, the built file —, `tools/test-bundle-compare-pairs.mjs` 1, new —
+   every ordered pair of ten packs in each scope mode the studio sends —, and
+   two more in `tools/test-static-remedies.mjs`, the phrase ledger and the
+   wiring).
+8. The service audit report in the bundle.
+   Tests: 1492 → 1493 (one more test in `tools/test-bundle-compare.mjs`: the
+   report against a server).
+9. The static posture's remedies add no test (the suite total is unchanged).
+10. Compare in Chromium.
+    Tests: 1493 → 1494 (one more test in `tools/test-bundle-compare.mjs`: the
+    in-page diff under three browser locales, Pair by, the drift actions,
+    Remediate's deploy controls, the two downloads; it skips where Playwright
+    is not installed).
+11. The Docker image carries `LICENSE` (an assertion in
+    `tools/test-deploy-manifests.mjs`, a harness; the total is unchanged).
+12. The bundle loads no font over the network unless `--remote-fonts` (the
+    ruling's "no CDN"; `--no-remote-fonts`, the earlier way, is the default).
+    Tests: 1494 → 1495 (one more test in `tools/test-studio-bundle.mjs`: the
+    default, `--remote-fonts`, `--no-remote-fonts`, both refused, `--json`;
+    T7 and C8 now build with no font flag, so their check in Chromium that no
+    request leaves the loopback covers the default).
+
+#### Found on the way: the collation and the taxonomy's clock
+
+**The collation.** Every answer that sorted text sorted by the runtime's
+locale: nine `tools/lib` modules called a one-argument `localeCompare`
+(23 calls), and Node's default collation follows `LC_ALL` (a browser's, its
+language). ASCII sorts differently under Czech (`ch` after `h`), Danish
+(`aa` last), Estonian (`z` between `s` and `t`) and Lithuanian (`y` after
+`i`): under `LC_ALL=cs_CZ.UTF-8` eight diff goldens failed and the
+traceability graph moved, which no golden covered, and canonical PromQL moved
+with it — part of a panel's identity key, which a server stores with a
+verdict and matches when it carries verdicts to a re-registered pack. A
+bundle read in a Czech browser would have answered in a different order from
+the server that built its packs. Every call now passes `'en'`, the CLDR root
+order: every golden is byte-identical under `C` and the sort is faster. A
+guard refuses a call without the locale, and a locale check runs the diff and
+the graph under five locales, so the declared change is on a server too: one
+whose process runs under a tailoring locale orders differently after the
+upgrade, and a verdict on an artefact whose key moved does not carry
+(DOWNSTREAM §10 gives the check and the re-record).
+
+**The taxonomy's clock.** The studio compiled the taxonomy it was served
+with the server's 50 ms wall-clock budget for the id patterns, and a busy tab
+that missed it bound the default families. That only cost Pair by while the
+server computed the diff; once the page computes it, a missed budget would
+have classified the diff, retrofeed and the audit report by the default
+families and still answered `200`. `compileTaxonomy` and `validateTaxonomy`
+take `{ timed }`; the studio binds what it is served untimed — the server or
+the builder timed the same document — and the shim's three computing routes
+answer `500` naming the reason when the taxonomy a bundle bakes is not the one
+the classifier holds.
+
 ### Follow-up: the users file by what deleting the root takes
 
 `packc store purge-org` deletes a removed org's root with `rmSync`, and it

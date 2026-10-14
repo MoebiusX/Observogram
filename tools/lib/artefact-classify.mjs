@@ -422,9 +422,13 @@ export function compileTaxonomy(json, { timed = true } = {}) {
   return compiled;
 }
 
-/** Every reason the override is refused ([] when it compiles). Never throws. */
-export function validateTaxonomy(json) {
-  return compileAll(json).errors;
+/**
+ * Every reason the override is refused ([] when it compiles). Never throws.
+ * `timed` as compileTaxonomy's: the server and the bundle builder validate
+ * with the default, so the document either one serves has been timed.
+ */
+export function validateTaxonomy(json, { timed = true } = {}) {
+  return compileAll(json, timed).errors;
 }
 
 /** `N types, M id rules[, G glossary terms]` — for the one log line an entrypoint prints (the glossary only when it has entries). */

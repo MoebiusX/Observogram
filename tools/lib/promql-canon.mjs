@@ -80,7 +80,7 @@ function sortSelectorMatchers(expr) {
     if (j >= expr.length) return null;   // unbalanced — bail out
     const body = expr.slice(i + 1, j);
     const matchers = splitMatchers(body).map(m => m.trim()).filter(Boolean);
-    matchers.sort((a, b) => a.localeCompare(b));
+    matchers.sort((a, b) => a.localeCompare(b, 'en'));
     out += '{' + matchers.join(',') + '}';
     i = j + 1;
   }
@@ -173,7 +173,7 @@ function tightenOperatorWhitespace(expr) {
 function sortGroupingLabels(expr) {
   return expr.replace(/\b(by|without)\s*\(([^()]*)\)/gi, (_, kw, body) => {
     const labels = body.split(',').map(s => s.trim()).filter(Boolean);
-    labels.sort((a, b) => a.localeCompare(b));
+    labels.sort((a, b) => a.localeCompare(b, 'en'));
     return `${kw} (${labels.join(', ')})`;
   });
 }

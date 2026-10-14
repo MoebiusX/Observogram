@@ -123,7 +123,7 @@ export function matchesFinding(waiver, finding) {
 const stripIndex = ({ index: _index, ...w }) => w;
 
 // Artefact-scoped beats pack-level; then the newest (createdAt, then the later entry) wins.
-const rank = (a, b) => (b.artefactId === null ? 0 : 1) - (a.artefactId === null ? 0 : 1) || String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')) || b.index - a.index;
+const rank = (a, b) => (b.artefactId === null ? 0 : 1) - (a.artefactId === null ? 0 : 1) || String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? ''), 'en') || b.index - a.index;
 
 /**
  * The findings with their waiver status: { findings: [{ …finding, status: failing | waived | expired, waiver }],

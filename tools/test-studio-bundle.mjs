@@ -2,17 +2,24 @@
 //
 //   node --test tools/test-studio-bundle.mjs
 //
-// T1 the module graph · T2 the specifier rewrite · T3 the build (a real
-// bundle in a tmpdir: every data: module parses, the stylesheets in order,
-// nothing left pointing at the server, the guards and the CLI exits) · T4
+// T1 the module graph (a bare npm package only from a tools/lib module whose
+// VENDOR-MANIFEST.json npm field lists it; the live studio's graph reaches
+// none) · T2 the specifier rewrite · T3 the build (a real
+// bundle in a tmpdir: every data: module parses, the four packages each at
+// its installed ES module entry, the stylesheets in order,
+// nothing left pointing at the server, the licence element and its pointer
+// comment, the guards and the CLI exits) · T3d offline by default: no Google
+// Fonts line unless --remote-fonts, which keeps the shell's three byte for
+// byte · T4
 // inert by default (a build changes no source file; the live studio never
 // imports the shim; the shim links headlessly) · T5 parity against a running
 // child server for every route the shim ports — payment-service (an example
 // pack) and a library-built pack registered through POST /api/validate, so
 // onPlaceholder is compared too; export.zip headers and entry names · T6 the
-// denial table · T7 the REAL bundle booted in headless Chromium against the
-// fixture pack, the Export download and the audit-report anchor's 501 sentence
-// asserted · T4b inert by default: a build
+// denial table · T7 the REAL bundle, built with no font flag, booted in
+// headless Chromium against the fixture pack (no request off the loopback),
+// the Export download and the audit-report anchor's download
+// (the report built in the page) asserted · T4b inert by default: a build
 // with nothing baked is the build of the same tree with --taxonomy/--brand
 // unset, byte for byte (config-vs-no-config identity on the same tree — the
 // shim's source changed, so no cross-tree claim) · T8 a --taxonomy bundle
@@ -47,7 +54,8 @@ import { pathToFileURL } from 'node:url';
 
 import {
   collectModuleGraph, rewriteSpecifiers, assertRewritten, inlineJson, styleBlock, buildStudioBundle,
-  checkPackUrl, parseArgs, defaultPackId, ENTRIES, CONFIG_ID, DEFAULT_ROOT,
+  checkPackUrl, parseArgs, defaultPackId, ENTRIES, CONFIG_ID, DEFAULT_ROOT, LICENCES_ID, pointerComment, verifyBundleNotices,
+  collectBundledPackages,
   resolveTaxonomySource, loadTaxonomyFile, loadBundleBrand, checkBrandUrls,
   resolveSettingsPolicySource, loadSettingsPolicyFile, resolveMcpOrigins, checkBakedOrigins,
 } from './build-studio-bundle.mjs';
@@ -156,8 +164,28 @@ function zipEntryNames(bytes) {
 
 // ---------- T1 the graph ----------
 
-test('T1 collectModuleGraph: every module under studio/ or lib/, the dynamic /lib imports reached, no node:* or bare specifier, a bare one throws naming the file', () => {
+// The import chain from the graph's first entry to the module that imports `pkg` (for a failure sentence).
+function chainTo(graph, pkg) {
+  const first = graph.keys().next().value;
+  const parent = new Map([[first, null]]);
+  const queue = [first];
+  while (queue.length) {
+    const k = queue.shift();
+    const mod = graph.get(k);
+    if (mod.imports.some((i) => i.package === pkg)) {
+      const chain = [];
+      for (let x = k; x; x = parent.get(x)) chain.unshift(graph.get(x).path);
+      return chain.join(' → ');
+    }
+    for (const i of mod.imports) if (!i.package && !parent.has(i.key)) { parent.set(i.key, k); queue.push(i.key); }
+  }
+  return '(not reached)';
+}
+const liveGraphProblems = (graph) => [...graph.packages].map((pkg) => `the live studio's module graph reaches ${pkg} (through ${chainTo(graph, pkg)}) — the server's /lib mount has no import map, so it cannot load there; import it only from the static shim's routes (studio/static-backend.mjs)`);
+
+test('T1 collectModuleGraph: every module under studio/ or lib/, the dynamic /lib imports reached, no node:* specifier, a bare one throws naming the file unless a tools/lib module\'s manifest npm field lists it; the live studio\'s graph reaches no package', () => {
   const graph = collectModuleGraph(ROOT, ENTRIES);
+  const closure = collectBundledPackages(ROOT, graph.packages);
   const keys = [...graph.keys()];
   assert.ok(keys.length > 60, `a real graph (${keys.length} modules)`);
   assert.ok(keys.every((k) => k.startsWith('studio/') || k.startsWith('lib/')), 'every key is studio/… or lib/…');
@@ -168,11 +196,27 @@ test('T1 collectModuleGraph: every module under studio/ or lib/, the dynamic /li
   // literal specifier each (a const would not be collected and the panel would stay off).
   assert.deepEqual(graph.get('studio/brand.mjs').imports.map((i) => i.spec).filter((sp) => sp.startsWith('/lib/')), ['/lib/brand.mjs'], 'studio/brand.mjs → /lib/brand.mjs');
   assert.deepEqual(graph.get('studio/remediation-flow-view.mjs').imports.map((i) => i.spec).filter((sp) => sp.startsWith('/lib/')), ['/lib/remediation-flow.mjs'], 'studio/remediation-flow-view.mjs → /lib/remediation-flow.mjs (B3.3: the response path renders in the bundle)');
+  // The shim's Compare, retrofeed and audit-report engines: literal dynamic imports, so they are in its imports and in the graph —
+  // and through the traceability graph the PromQL parser's package is the graph's one package root.
+  const shimImports = graph.get('studio/static-backend.mjs').imports.map((i) => i.key);
+  for (const k of ['lib/diff.mjs', 'lib/traceability-graph.mjs', 'lib/retrofeed.mjs', 'lib/audit-report.mjs']) assert.ok(shimImports.includes(k) && graph.has(k), `the shim imports ${k} (a literal import())`);
+  assert.deepEqual([...graph.packages], ['@prometheus-io/lezer-promql'], 'the bundle\'s graph reaches one package, through tools/lib/promql-lezer.mjs');
+  assert.deepEqual([...closure.keys()], ['@lezer/common', '@lezer/highlight', '@lezer/lr', '@prometheus-io/lezer-promql'], 'and its closure the four');
   for (const [k, mod] of graph) {
     assert.ok(!/from\s+['"]node:/.test(mod.src), `${k} imports no node:* module`);
     assert.equal(mod.path, k.startsWith('lib/') ? `tools/lib/${k.slice(4)}` : k);
-    for (const imp of mod.imports) assert.ok(graph.has(imp.key), `${k} → ${imp.spec} resolves to a graph module (${imp.key})`);
+    for (const imp of mod.imports) {
+      if (imp.package) assert.ok(closure.has(imp.package) && k.startsWith('lib/'), `${k} → ${imp.spec} is a bundled package, imported by a tools/lib module`);
+      else assert.ok(graph.has(imp.key), `${k} → ${imp.spec} resolves to a graph module (${imp.key})`);
+    }
   }
+  // The live studio (studio/app.mjs through the server's /lib mount, which has no import map) reaches no npm package:
+  // packages enter the bundle only through the static shim. Proven to bite: a view importing the traceability graph
+  // would reach the PromQL parser's package.
+  assert.deepEqual(liveGraphProblems(collectModuleGraph(ROOT, ['studio/app.mjs'])), []);
+  const realApp = readFileSync(join(ROOT, 'studio/app.mjs'), 'utf8');
+  const probe = collectModuleGraph(ROOT, ['studio/app.mjs'], { read: (p) => (p === 'studio/app.mjs' ? `${realApp}\nexport const probeGraph = () => import('/lib/traceability-graph.mjs');\n` : readFileSync(join(ROOT, ...p.split('/')), 'utf8')) });
+  assert.deepEqual(liveGraphProblems(probe), ["the live studio's module graph reaches @prometheus-io/lezer-promql (through studio/app.mjs → tools/lib/traceability-graph.mjs → tools/lib/promql-lezer.mjs) — the server's /lib mount has no import map, so it cannot load there; import it only from the static shim's routes (studio/static-backend.mjs)"]);
   // The regex that collects is not the one that would be fooled: a string ending in "import" is not a side-effect import.
   const files = {
     'studio/app.mjs': "import { a } from './a.mjs';\nconst t = { note: 'nothing to import', tone: 'x' };\n",
@@ -187,6 +231,22 @@ test('T1 collectModuleGraph: every module under studio/ or lib/, the dynamic /li
   assert.throws(() => collectModuleGraph(ROOT, ENTRIES, { read: (p) => files[p] }), /studio\/a\.mjs:2: cannot inline the specifier '@x\/y'/);
   files['studio/a.mjs'] = "import { readFileSync } from 'node:fs';\nexport const a = 1;\n";
   assert.throws(() => collectModuleGraph(ROOT, ENTRIES, { read: (p) => files[p] }), /studio\/a\.mjs:1: cannot inline the specifier 'node:fs'/);
+  // A bare package in a tools/lib module: accepted when the module's npm field lists it (recorded as a package import,
+  // collected into graph.packages); refused when it does not (R-a), or when it names a file inside the package (R-b).
+  files['studio/a.mjs'] = 'export const a = 1;\n';
+  files['tools/lib/side.mjs'] = "import { parser } from '@acme/parser';\nexport const side = parser;\n";
+  const listing = (names) => ({ read: (p) => { if (!(p in files)) throw new Error(`module file missing: ${p}`); return files[p]; }, npmOf: (p) => (p === 'tools/lib/side.mjs' ? names : []) });
+  const withPackage = collectModuleGraph(ROOT, ENTRIES, listing(['@acme/parser']));
+  assert.deepEqual(withPackage.get('lib/side.mjs').imports, [{ spec: '@acme/parser', key: '@acme/parser', package: '@acme/parser' }]);
+  assert.deepEqual([...withPackage.packages], ['@acme/parser']);
+  assert.ok(!withPackage.has('@acme/parser'), 'a package is no graph module');
+  assert.throws(() => collectModuleGraph(ROOT, ENTRIES, listing([])), { message: "tools/lib/side.mjs:1: cannot inline the specifier '@acme/parser' — a package is bundled only when VENDOR-MANIFEST.json lists it in this module's npm field (a package.json dependency; npm run vendor-manifest)" });
+  files['tools/lib/side.mjs'] = "import { parser } from '@acme/parser/dist/index.js';\nexport const side = parser;\n";
+  assert.throws(() => collectModuleGraph(ROOT, ENTRIES, listing(['@acme/parser'])), { message: "tools/lib/side.mjs:1: cannot inline the specifier '@acme/parser/dist/index.js' — a package is bundled by its own name (@acme/parser), never a file inside it" });
+  // The same bare import in a studio module keeps today's refusal: the live studio cannot load a package.
+  files['studio/a.mjs'] = "import x from '@acme/parser';\nexport const a = x;\n";
+  assert.throws(() => collectModuleGraph(ROOT, ENTRIES, listing(['@acme/parser'])), /^Error: studio\/a\.mjs:1: cannot inline the specifier '@acme\/parser' — only \.\/, \.\.\/ and \/lib\/ paths/);
+  files['tools/lib/side.mjs'] = 'export const side = 1;\n';
   // A module outside the two trees.
   files['studio/a.mjs'] = "export * from '../tools/fetch-live-pack.mjs';\n";
   assert.throws(() => collectModuleGraph(ROOT, ENTRIES, { read: (p) => files[p] ?? '' }), /tools\/fetch-live-pack\.mjs is outside studio\/ and tools\/lib\//);
@@ -260,14 +320,22 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
       { id: 'payment-service', label: 'Payment', description: 'd', canonical: paymentCanonical },
       { id: 'golden', label: 'Golden crawl', canonical: JSON.parse(read(GOLDEN)) },
     ],
-    remoteFonts: true,
     builtAt: '2026-10-04T00:00:00.000Z',
   });
   const { html } = built;
   const map = importMapOf(html);
   const graph = collectModuleGraph(ROOT, ENTRIES);
-  assert.deepEqual(Object.keys(map.imports).sort(), [...graph.keys()].sort(), 'one import-map entry per graph module');
+  const closure = collectBundledPackages(ROOT, graph.packages);
+  assert.deepEqual(Object.keys(map.imports).sort(), [...graph.keys(), ...closure.keys()].sort(), 'one import-map entry per graph module and per bundled package');
   assert.equal(built.modules.length, graph.size);
+  assert.deepEqual(built.thirdParty, [...closure.values()].map(({ name, version, license, entry, bytes }) => ({ name, version, license, entry, bytes })), 'thirdParty names each bundled package');
+  // The packages pinned here, not read back from collectBundledPackages: each under its own name, its module the
+  // installed ES module entry. node --check below cannot tell — a CommonJS entry's require() and exports.x = parse too.
+  const ESM_ENTRIES = [['@lezer/common', 'dist/index.js'], ['@lezer/highlight', 'dist/index.js'], ['@lezer/lr', 'dist/index.js'], ['@prometheus-io/lezer-promql', 'dist/index.es.js']];
+  assert.deepEqual(built.thirdParty.map(({ name, entry }) => [name, entry]), ESM_ENTRIES, 'the four packages, each at its ES module entry');
+  for (const [name, entry] of ESM_ENTRIES) assert.equal(decodeModule(map.imports[name]), read(`node_modules/${name}/${entry}`), `${name}: the import map's module is the installed ES module entry`);
+  // A ceiling: an unexpected dependency entering the graph is caught where it lands (raising it is a reviewed change).
+  assert.ok(built.bytes < 6_000_000, `the two-pack bundle is under 6,000,000 bytes (${built.bytes})`);
   // Every module decodes and parses.
   const dir = join(TMP, 'modules');
   for (const [key, address] of Object.entries(map.imports)) {
@@ -293,6 +361,13 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   assert.ok(!html.includes('<link rel="stylesheet"'), 'no stylesheet link left');
   assert.ok(!html.includes('src="/app.mjs"'), 'the app script is replaced');
   assert.ok(!/['"]\/lib\//.test(decodeModule(map.imports['studio/app.mjs'])), 'app.mjs no longer names /lib/');
+  // The licences (follow-up compare-in-bundle): one text/plain element, the last thing in <head>; the pointer comment
+  // the line after the doctype, worded for a file with third-party packages; the file verifies, naming the four.
+  const licencesOpen = `<script type="text/plain" id="${LICENCES_ID}">\n`;
+  assert.equal(html.split(licencesOpen).length - 1, 1, 'one licence element');
+  assert.equal(html.indexOf('</script>\n</head>', html.indexOf(licencesOpen)), html.indexOf('</script>', html.indexOf(licencesOpen)), 'the element ends the head');
+  assert.ok(html.startsWith(`<!doctype html>\n${pointerComment(true)}\n`), 'the pointer comment after the doctype');
+  assert.deepEqual(verifyBundleNotices(html), { ok: true, packages: [...closure.keys()], problems: [] });
   // The config.
   const config = configOf(html);
   assert.deepEqual(config, built.config);
@@ -313,11 +388,11 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   const order = ['<script type="application/json" id="observogram-static-config">', '<script type="importmap">', "import { installStaticBackend } from 'studio/static-backend.mjs'", "import 'studio/app.mjs';"].map((s) => html.indexOf(s));
   assert.ok(order.every((i, n) => i > 0 && (n === 0 || i > order[n - 1])), `the scripts in order: ${order}`);
   assert.ok(html.includes('<noscript>'), 'a noscript fallback');
-  // Fonts: kept by default, dropped with remoteFonts: false.
-  assert.ok(html.includes('fonts.googleapis.com'));
-  const noFonts = buildStudioBundle({ root: ROOT, packs: [], remoteFonts: false, builtAt: 'x' }).html;
-  assert.ok(!noFonts.includes('fonts.googleapis.com') && !noFonts.includes('fonts.gstatic.com'), 'no remote fonts');
-  assert.deepEqual(configOf(noFonts).packs, [], 'an empty catalogue builds');
+  // Fonts: none by default, kept with remoteFonts: true (T3d: the three lines, byte for byte).
+  assert.ok(!html.includes('fonts.googleapis.com') && !html.includes('fonts.gstatic.com'), 'no remote font by default');
+  const withFonts = buildStudioBundle({ root: ROOT, packs: [], remoteFonts: true, builtAt: 'x' }).html;
+  assert.ok(withFonts.includes('fonts.googleapis.com') && withFonts.includes('fonts.gstatic.com'), 'remoteFonts: true keeps the Google Fonts links');
+  assert.deepEqual(configOf(withFonts).packs, [], 'an empty catalogue builds');
   // Escaping: a pack string that tries to close the script or open a comment cannot.
   const hostile = inlineJson({ a: '</script><!--', b: 'x y' });
   assert.ok(!hostile.includes('</') && !hostile.includes('<!--') && !hostile.includes(' '), hostile);
@@ -356,7 +431,8 @@ test('T3 the CLI: writes, --check writes nothing, --json, --no-remote-fonts, a p
   assert.equal(j.brand, null, 'nothing baked: brand null, the key present');
   assert.equal(j.mcpSettingsPolicy, null, 'nothing baked: mcpSettingsPolicy null, the key present');
   assert.equal(j.mcpOrigins, null, 'nothing baked: mcpOrigins null, the key present');
-  assert.deepEqual(Object.keys(j), ['ok', 'out', 'check', 'bytes', 'modules', 'stylesheets', 'remoteFonts', 'packs', 'taxonomy', 'brand', 'mcpSettingsPolicy', 'mcpOrigins']);
+  assert.deepEqual(Object.keys(j), ['ok', 'out', 'check', 'bytes', 'modules', 'stylesheets', 'remoteFonts', 'packs', 'taxonomy', 'brand', 'mcpSettingsPolicy', 'mcpOrigins', 'thirdParty']);
+  assert.deepEqual(j.thirdParty, buildStudioBundle({ root: ROOT, packs: [], builtAt: 'x' }).thirdParty, 'thirdParty, the last key: the packages embedded (names, versions, SPDX ids, entry files, bytes)');
   // --taxonomy / --brand / --mcp-settings-policy / --mcp-origins twice: usage, exit 2.
   for (const flag of ['--taxonomy', '--brand', '--mcp-settings-policy', '--mcp-origins']) {
     const twice = cli(['--check', flag, TAX, flag, TAX]);
@@ -419,6 +495,52 @@ test('T3 the CLI: writes, --check writes nothing, --json, --no-remote-fonts, a p
     [{ file: 'a.yaml', id: 'a', label: 'A', description: 'D' }, { url: 'https://x/y.yaml', description: 'E' }]);
 });
 
+test('T3d offline by default: no Google Fonts line unless --remote-fonts (remoteFonts: true), which keeps the shell\'s three byte for byte and moves nothing else; --no-remote-fonts, the default, still accepted and the default\'s bytes; both together a usage error; --json says which', () => {
+  // The shell's three lines — the two preconnects and the css2 stylesheet — as studio/index.html holds them.
+  const fontLinesOf = (text) => text.split('\n').filter((l) => /fonts\.g(?:oogleapis|static)\.com/.test(l));
+  const SHELL_FONTS = fontLinesOf(read('studio/index.html'));
+  assert.equal(SHELL_FONTS.length, 3, 'the live shell links Google Fonts in three lines');
+  assert.match(SHELL_FONTS[0], /^<link rel="preconnect" href="https:\/\/fonts\.googleapis\.com">$/);
+  assert.match(SHELL_FONTS[1], /^<link rel="preconnect" href="https:\/\/fonts\.gstatic\.com" crossorigin>$/);
+  assert.match(SHELL_FONTS[2], /^<link href="https:\/\/fonts\.googleapis\.com\/css2\?[^"]+" rel="stylesheet">$/);
+  const block = `${SHELL_FONTS.join('\n')}\n`;
+  // The API: the default carries none of them, anywhere; remoteFonts: false is the default byte for byte; remoteFonts:
+  // true is the default with the shell's three lines back where the shell has them, after the theme script.
+  const payment = { id: 'payment-service', label: 'payment-service', canonical: paymentCanonical };
+  const def = buildStudioBundle({ root: ROOT, packs: [payment], builtAt: 'x' }).html;
+  assert.ok(!def.includes('fonts.googleapis.com') && !def.includes('fonts.gstatic.com'), 'the default names neither Google Fonts host');
+  assert.equal(buildStudioBundle({ root: ROOT, packs: [payment], builtAt: 'x', remoteFonts: false }).html, def, 'remoteFonts: false is the default, byte for byte');
+  const kept = buildStudioBundle({ root: ROOT, packs: [payment], builtAt: 'x', remoteFonts: true }).html;
+  assert.deepEqual(fontLinesOf(kept), SHELL_FONTS, 'remoteFonts: true keeps the three lines, byte for byte, in order');
+  const at = kept.indexOf(block);
+  assert.ok(at > 0 && kept.slice(0, at).endsWith('</script>\n'), 'together, right after the theme script, as in the shell');
+  assert.equal(kept.slice(0, at) + kept.slice(at + block.length), def, 'and nothing else differs from the default');
+  // The CLI: no flag is the API's default; --no-remote-fonts the same bytes; --remote-fonts the API's remoteFonts:
+  // true; --json's remoteFonts the effective value.
+  const built = {};
+  for (const [name, flags] of [['none', []], ['no', ['--no-remote-fonts']], ['yes', ['--remote-fonts']]]) {
+    const out = join(TMP, 'fonts', name, 'index.html');
+    const r = cli(['--pack', resolve(ROOT, PAYMENT), ...flags, '--out', out, '--json']);
+    assert.equal(r.status, 0, r.stderr);
+    built[name] = { remoteFonts: JSON.parse(r.stdout).remoteFonts, html: normalizeBuiltAt(readFileSync(out, 'utf8')) };
+  }
+  assert.deepEqual([built.none.remoteFonts, built.no.remoteFonts, built.yes.remoteFonts], [false, false, true], '--json: false unless --remote-fonts');
+  assert.equal(built.none.html, normalizeBuiltAt(def), 'no flag: the API default');
+  assert.equal(built.no.html, built.none.html, '--no-remote-fonts: the default, byte for byte');
+  assert.equal(built.yes.html, normalizeBuiltAt(kept), '--remote-fonts: the three lines kept');
+  assert.equal(JSON.parse(cli(['--check', '--json', '--remote-fonts']).stdout).remoteFonts, true, '--check --json says so too');
+  // Both together: the usage, exit 2, in either order; one repeated is that one.
+  for (const pair of [['--remote-fonts', '--no-remote-fonts'], ['--no-remote-fonts', '--remote-fonts']]) {
+    const both = cli(['--check', '--json', ...pair]);
+    assert.equal(both.status, 2, pair.join(' '));
+    assert.match(both.stderr, /^--remote-fonts and --no-remote-fonts given together\nusage: build-studio-bundle\.mjs .*\[--remote-fonts \| --no-remote-fonts\]/);
+    assert.equal(both.stdout, '', 'nothing built, nothing printed');
+  }
+  assert.equal(parseArgs([]).remoteFonts, false);
+  assert.equal(parseArgs(['--remote-fonts', '--remote-fonts']).remoteFonts, true);
+  assert.equal(parseArgs(['--no-remote-fonts', '--no-remote-fonts']).remoteFonts, false);
+});
+
 test('T3b every flag the CLI accepts is in its usage line, the README synopsis and DOWNSTREAM §9/§10', () => {
   const src = readFileSync(join(DEFAULT_ROOT, 'tools', 'build-studio-bundle.mjs'), 'utf8');
   const flags = [...new Set([...src.matchAll(/a === '(--[a-z-]+)'/g)].map(m => m[1]))];
@@ -436,7 +558,7 @@ test('T3b every flag the CLI accepts is in its usage line, the README synopsis a
   for (const f of flags) {
     if (f === '--help') continue;
     for (const [name, text] of [['usage line', usageLine], ['README', readmeSection]]) assert.ok(text.includes(f), `${f} is documented in the ${name}`);
-    if (!packFlags.includes(f) && !bakeFlags.includes(f)) continue; // --check/--json/--out/--no-remote-fonts are the CLI's, not the pack catalogue's or the seams'
+    if (!packFlags.includes(f) && !bakeFlags.includes(f)) continue; // --check/--json/--out/--remote-fonts/--no-remote-fonts are the CLI's, not the pack catalogue's or the seams'
     for (const [name, text] of [['DOWNSTREAM §9 row', row], ['DOWNSTREAM §10', embedding]]) assert.ok(text.includes(f), `${f} is documented in the ${name}`);
   }
   // --description is a per-pack option of both --pack and --pack-url.
@@ -456,7 +578,7 @@ test('T3c every feature the shim denies is named in the README 501 list and the 
     'Testing an MCP connection': /Testing an MCP connection/,
     'Building a pack from a live MCP server': /Building a pack from a live MCP server/,
     'Passing MCP server settings through the studio server': /Passing MCP server settings through the studio server/,
-    'Uploading a pack': /upload/i, Compare: /Compare/, Deploy: /Deploy/, Journeys: /Journeys/, Build: /Build/,
+    'Uploading a pack': /upload/i, Deploy: /Deploy/, Journeys: /Journeys/, Build: /Build/,
     Waivers: /Waivers/, Services: /Services \(/, Organisations: /Organisations \(/, Settings: /Settings \(/, 'Sign-in': /sign-in/i,
   };
   for (const [prefix, name] of FEATURES) {
@@ -466,6 +588,18 @@ test('T3c every feature the shim denies is named in the README 501 list and the 
     assert.ok(re, `${name} (${prefix}) has a documented spelling`);
     for (const [doc, text] of [['README 501 list', list], ['DOWNSTREAM §10 denial cell', cell]]) assert.match(text, re, `${name} (${prefix}) is named in the ${doc}`);
   }
+  // What the shim answers is named as denied in neither list (follow-up compare-in-bundle): Compare, retrofeed and the
+  // audit report are computed in the browser — retrofeed the one non-GET answered — and the DOWNSTREAM row's answered
+  // cell names all three.
+  assert.ok(!/retrofeed/i.test(list), 'the README 501 list does not name retrofeed');
+  assert.ok(!/\bCompare\b/.test(list) && !list.includes('/api/diff'), 'the README 501 list does not name Compare');
+  assert.ok(!/\bCompare\b/.test(cell) && !cell.includes('/api/diff'), 'the DOWNSTREAM denial cell does not name Compare');
+  assert.ok(row.slice(0, row.indexOf('every other `/api` or `/auth` path')).includes('`GET /api/diff`'), 'the DOWNSTREAM answered cell names Compare\'s route');
+  assert.ok(!/Compare \([^)]*retrofeed/.test(cell) && cell.startsWith('every other `/api` or `/auth` path and every non-GET but retrofeed:'), 'the DOWNSTREAM denial cell: every non-GET but retrofeed');
+  assert.ok(row.slice(0, row.indexOf('every other `/api` or `/auth` path')).includes('`POST /api/packs/:id/retrofeed`'), 'the DOWNSTREAM answered cell names retrofeed');
+  assert.ok(!/audit report/i.test(list) && !list.includes('/audit-report'), 'the README 501 list does not name the audit report');
+  assert.ok(!/Audit report \(/.test(cell) && !cell.includes('/audit-report'), 'the DOWNSTREAM denial cell does not name the audit report');
+  assert.ok(row.slice(0, row.indexOf('every other `/api` or `/auth` path')).includes('`GET /api/packs/:id/audit-report`'), 'the DOWNSTREAM answered cell names the audit report\'s route');
   // The two slice 6a routes beside their names in DOWNSTREAM, as every other route there.
   assert.match(cell, /Services \(`\/api\/services`, `\/api\/services\/:id`/);
   assert.match(cell, /Organisations \(`\/api\/orgs`/);
@@ -505,6 +639,10 @@ test('T4b inert by default: a build with nothing baked is the same tree\'s build
   const a = buildStudioBundle({ root: ROOT, packs: [payment], builtAt: 'x' });
   const b = buildStudioBundle({ root: ROOT, packs: [payment], builtAt: 'x' });
   assert.equal(b.html, a.html, 'two builds, one builtAt: identical');
+  // The licence block is a pure function of the tree: no clock in it.
+  const licencesOf = (html) => html.slice(html.indexOf(`<script type="text/plain" id="${LICENCES_ID}">\n`), html.indexOf('</head>'));
+  assert.ok(licencesOf(a.html).includes('==== Observogram '), 'the build carries the licence block');
+  assert.equal(licencesOf(buildStudioBundle({ root: ROOT, packs: [payment], builtAt: 'y' }).html), licencesOf(a.html), 'another builtAt, the same block');
   assert.equal(a.taxonomy, null);
   assert.equal(a.brand, null);
   // (2) The seams unset in every spelling: the identity (brandShellHtml is the identity for an unconfigured brand; the config gains no key).
@@ -748,7 +886,10 @@ test('T5 parity: the shim answers every ported route as a running server does �
 
 // ---------- T6 denial ----------
 
-test('T6 denial: the server-only routes answer 501 denied no-backend naming the feature; unknown pack 404; other origins and non-API paths pass to the page', async () => {
+// The notice of a one-pack unbranded bundle, as a literal (T6, T7): Compare among what the packs answer.
+const NOTICE_ONE_PACK = 'Static studio — no Observogram server behind this page. Discover, Diagnose, Compare, Compile and conformance read the 1 pack built in; Scan a repo, Draft from MCP, Deploy, Journeys, Build and sign-in need the server.';
+
+test('T6 denial: the server-only routes answer 501 Not Implemented, denied no-backend, naming the feature; Compare answered, retrofeed (the one non-GET) and the audit report; unknown pack 404 Not Found; other origins and non-API paths pass to the page', async () => {
   let upstreamCalls = [];
   const fetchImpl = async (input, init) => { upstreamCalls.push([String(input), init]); return new Response('ok', { status: 200 }); };
   const backend = createStaticBackend({ version: '1.2.3', schema, packs: [{ id: 'p', label: 'P', canonical: paymentCanonical }] }, { fetchImpl, origin: 'https://studio.example' });
@@ -756,6 +897,7 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
     const r = await backend.handle(input, init);
     assert.ok(r, `${String(input)} answered`);
     assert.equal(r.status, 501, String(input));
+    assert.equal(r.statusText, 'Not Implemented', String(input));
     assert.equal(r.headers.get('content-type'), 'application/json; charset=utf-8');
     const body = await r.json();
     assert.deepEqual(body, { ok: false, denied: DENIED, error: denialText(feature) });
@@ -773,15 +915,52 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   await expectDenied('/api/mcp-settings/submit', { method: 'POST' }, 'Passing MCP server settings through the studio server');
   await expectDenied('/api/validate', { method: 'POST' }, 'Uploading a pack');
   await expectDenied('/api/uploads', { method: 'DELETE' }, 'Uploading a pack');
-  await expectDenied('/api/diff?a=p&b=p', undefined, 'Compare');
-  await expectDenied('/api/packs/p/retrofeed', { method: 'POST' }, 'Compare');
+  // Compare is answered (tools/test-bundle-compare.mjs C3 holds it to the server's answers): the diff and its graph; a
+  // non-GET there is 'This action', as on the server, which has no other route there.
+  const cmp = await backend.handle('/api/diff?a=p&b=p&scopeMode=service');
+  assert.equal(cmp.status, 200);
+  assert.equal(cmp.statusText, 'OK');
+  assert.equal(cmp.headers.get('content-type'), 'application/json; charset=utf-8');
+  const cmpBody = await cmp.json();
+  assert.equal(cmpBody.summary.onlyInA + cmpBody.summary.onlyInB, 0, 'a pack against itself');
+  assert.ok(cmpBody.traceabilityGraph?.rollup, 'with the traceability graph');
+  const missing = await backend.handle('/api/diff?a=p');
+  assert.equal(missing.status, 400);
+  assert.equal(missing.statusText, 'Bad Request');
+  assert.deepEqual(await missing.json(), { error: 'query params `a` and `b` (pack ids) required' });
+  await expectDenied('/api/diff?a=p&b=p', { method: 'POST' }, 'This action');
+  // Retrofeed is answered (the one non-GET; tools/test-bundle-compare.mjs C6 holds it to the server's answers); any
+  // other method there is 'This action', as on the server, which has no other route there.
+  const rf = await backend.handle('/api/packs/p/retrofeed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ packBId: 'p' }) });
+  assert.equal(rf.status, 200);
+  assert.equal(rf.statusText, 'OK');
+  const rfBody = await rf.json();
+  assert.equal(rfBody.ok, true);
+  assert.deepEqual(rfBody.summary, { candidates: 0, adopted: 0, skipped: 0 }, 'a pack against itself adopts nothing');
+  await expectDenied('/api/packs/p/retrofeed', undefined, 'This action');
+  await expectDenied('/api/packs/p/retrofeed', { method: 'PUT' }, 'This action');
   await expectDenied('/api/deploy/matrix', undefined, 'Deploy');
   await expectDenied('/api/deploys?pack=p', undefined, 'Deploy');
   await expectDenied('/api/packs/p/deploy-bulk', { method: 'POST' }, 'Deploy');
   await expectDenied('/api/packs/p/verdicts/SLI-01', { method: 'PUT' }, 'Verdicts');
   await expectDenied('/api/packs/p/verdicts/SLI-01', { method: 'DELETE' }, 'Verdicts');
-  await expectDenied('/api/packs/p/audit-report', undefined, 'Audit report');
-  await expectDenied('/api/packs/p/audit-report?format=html', undefined, 'Audit report');
+  // The audit report is answered (tools/test-bundle-compare.mjs C5 holds it to the server's answers, its declared
+  // fields aside): JSON by default, no-store on the report; a non-GET there is 'This action', as on the server.
+  const report = await backend.handle('/api/packs/p/audit-report?download=1');
+  assert.equal(report.status, 200);
+  assert.equal(report.statusText, 'OK');
+  assert.equal(report.headers.get('content-type'), 'application/json; charset=utf-8');
+  assert.equal(report.headers.get('cache-control'), 'no-store');
+  assert.equal(report.headers.get('content-disposition'), 'attachment; filename="p.audit-report.json"');
+  const reportBody = await report.json();
+  assert.deepEqual(reportBody.generator, { name: 'Observogram static bundle', version: '1.2.3' });
+  assert.deepEqual([reportBody.pack.source, reportBody.assessments.available, reportBody.waivers.available, reportBody.goesBlind.available], ['bundle', false, false, true], 'no store: not recorded by this build; the graph computed');
+  const badTop = await backend.handle('/api/packs/p/audit-report?top=0');
+  assert.equal(badTop.status, 400);
+  assert.equal(badTop.statusText, 'Bad Request');
+  assert.equal(badTop.headers.get('cache-control'), null, 'the refusals carry no Cache-Control, as on the server');
+  assert.deepEqual(await badTop.json(), { error: 'top must be an integer from 1 to 100' });
+  await expectDenied('/api/packs/p/audit-report', { method: 'POST' }, 'This action');
   await expectDenied('/api/services/1/waivers', undefined, 'Waivers');
   await expectDenied('/api/services/1/waivers', { method: 'POST' }, 'Waivers');
   await expectDenied('/api/waivers/7/revoke', { method: 'POST' }, 'Waivers');
@@ -816,10 +995,11 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   assert.equal(featureOf('/api/mcp/ping'), 'Testing an MCP connection');
   assert.equal(featureOf('/api/mcp/jobs/abc/cancel'), 'Building a pack from a live MCP server');
   assert.equal(featureOf('/api/mcp-endpoints/3'), 'Settings', "'/api/mcp/ping' is no prefix of the endpoints");
-  assert.equal(featureOf('/api/packs/x/retrofeed?y'), 'Compare');
+  assert.equal(featureOf('/api/packs/x/retrofeed?y'), 'This action', 'retrofeed is answered; no feature is denied there');
+  assert.equal(featureOf('/api/diff'), 'This action', 'Compare is answered; no feature is denied there');
   assert.equal(featureOf('/api/packs/x/verdicts/SLI-01'), 'Verdicts');
   assert.equal(featureOf('/api/packs/x/verdicts'), 'Verdicts', 'the feature name; the GET itself is answered before the denial');
-  assert.equal(featureOf('/api/packs/x/audit-report?format=html'), 'Audit report');
+  assert.equal(featureOf('/api/packs/x/audit-report?format=html'), 'This action', 'the audit report is answered; no feature is denied there');
   assert.equal(featureOf('/api/services/x/waivers'), 'Waivers', 'the service record route, not a /api/services prefix');
   assert.equal(featureOf('/api/services/x'), 'Services');
   assert.equal(featureOf('/api/orgs'), 'Organisations');
@@ -835,6 +1015,7 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   assert.deepEqual(await me.json(), { ok: false, error: 'identity not configured' });
   const nope = await backend.handle('/api/packs/x');
   assert.equal(nope.status, 404);
+  assert.equal(nope.statusText, 'Not Found', 'the reason phrase a server sends (studio/api.mjs reads "404 Not Found on …")');
   assert.deepEqual(await nope.json(), { error: 'unknown pack: x' });
   const encoded = await backend.handle(`/api/packs/${encodeURIComponent('a b/c')}`);
   assert.deepEqual(await encoded.json(), { error: 'unknown pack: a b/c' });
@@ -884,10 +1065,10 @@ test('T6 denial: the server-only routes answer 501 denied no-backend naming the 
   const twice = await (await backend.handle('/api/packs/p/conformance?env=prod&env=staging')).json();
   assert.equal(twice.environment, null);
   // The notice text — and the default product is today's text character for character.
-  assert.equal(denialText('Compare'), denialText('Compare', DEFAULT_BRAND.name));
+  assert.equal(denialText('Deploy'), denialText('Deploy', DEFAULT_BRAND.name));
   assert.equal(noticeText(1), noticeText(1, DEFAULT_BRAND.name));
   assert.equal(apiMenuSubText(), 'needs the Observogram server · this studio is a static bundle');
-  assert.equal(noticeText(1), 'Static studio — no Observogram server behind this page. Discover, Diagnose, Compile and conformance read the 1 pack built in; Scan a repo, Draft from MCP, Compare, Deploy, Journeys, Build and sign-in need the server.');
+  assert.equal(noticeText(1), NOTICE_ONE_PACK);
   assert.match(noticeText(0), /read the 0 packs built in/);
 });
 
@@ -900,7 +1081,7 @@ async function loadPlaywright() {
   catch (e) { return { error: `cannot import ${spec}: ${e.message.split('\n')[0]}` }; }
 }
 
-test('T7 the REAL bundle boots in headless Chromium against the fixture pack: the notice, the open posture, the pack opened, 501 for a live feature, the Export download, the audit-report anchor answered with the 501 sentence, the Settings banner the same sentence, no page error, no request off the loopback', async (t) => {
+test('T7 the REAL bundle boots in headless Chromium against the fixture pack: the notice, the open posture, the pack opened, 501 for a live feature, the Export download, the audit-report anchor\'s download built in the page, the Settings banner the 501 sentence, no page error, no request off the loopback', async (t) => {
   const required = process.env.OBSERVOGRAM_BUNDLE_SMOKE === 'require';
   const skip = (why) => { if (required) assert.fail(`OBSERVOGRAM_BUNDLE_SMOKE=require: ${why}`); t.skip(why); };
   const { pw, error } = await loadPlaywright();
@@ -910,11 +1091,12 @@ test('T7 the REAL bundle boots in headless Chromium against the fixture pack: th
   catch (e) { return skip(`chromium.launch failed: ${e.message.split('\n')[0]}`); }
   t.after(() => browser.close());
 
-  // The bundle, built as a downstream would build it, served from a loopback server.
+  // The bundle, built as a downstream would build it — no font flag, so no remote font — served from a loopback server.
   const out = join(TMP, 'smoke', 'index.html');
-  const built = cli(['--pack', resolve(ROOT, PAYMENT), '--label', 'Payment service (canonical example)', '--out', out, '--no-remote-fonts']);
+  const built = cli(['--pack', resolve(ROOT, PAYMENT), '--label', 'Payment service (canonical example)', '--out', out]);
   assert.equal(built.status, 0, built.stderr);
   const html = readFileSync(out);
+  assert.ok(!html.includes('fonts.googleapis.com') && !html.includes('fonts.gstatic.com'), 'the default build links no remote font');
   assert.ok(html.length > 3_000_000, `the real bundle (${html.length} bytes)`);
   const srv = createServer((req, res) => {
     if (req.url === '/' || req.url.startsWith('/?') || req.url.startsWith('/index.html')) {
@@ -947,6 +1129,7 @@ test('T7 the REAL bundle boots in headless Chromium against the fixture pack: th
   assert.equal(await page.isVisible('.no-backend-notice'), true, 'the notice is visible');
   assert.match(await page.textContent('.no-backend-notice'), /no Observogram server behind this page/);
   assert.match(await page.textContent('.no-backend-notice'), /read the 1 pack built in/);
+  assert.equal(await page.textContent('.no-backend-notice-text'), NOTICE_ONE_PACK, 'the notice, exactly: Compare among what the packs answer');
   assert.equal(await page.isHidden('#api-link'), true, 'the api link is hidden');
   // Open the pack the way a user does: Check → the service tile.
   await page.click('#home-choice-check');
@@ -1000,16 +1183,20 @@ test('T7 the REAL bundle boots in headless Chromium against the fixture pack: th
   assert.ok(names.some((n) => n.startsWith('artefacts/')));
   // The Conformance view's audit-report anchors: an `<a download>` navigation
   // never reaches a fetch wrapper, so the shim's click handler answers it —
-  // the 501 sentence in the notice row, no navigation, no request to the
+  // the report built in the page and saved as a Blob under the server's file
+  // name, its goes-blind section computed, no navigation, no request to the
   // static host (which would 404 and cancel the download without a word).
+  // tools/test-bundle-compare.mjs C5 holds the report to a server's.
   await page.click('.observa-adv-toggle');
   await page.click('.observa-adv-item[data-view="conformance"]');
   await page.waitForSelector('.conf-exports a[download]', { timeout: 30_000 });
   assert.match(await page.getAttribute('.conf-exports a[download]', 'href'), /^\/api\/packs\/payment-service\/audit-report\?format=html/);
-  await page.click('.conf-exports a[download]');
-  await page.waitForFunction(() => /^Audit report needs the Observogram server/.test(document.querySelector('.no-backend-notice-text')?.textContent || ''), null, { timeout: 10_000 });
-  assert.equal(await page.textContent('.no-backend-notice-text'), 'Audit report needs the Observogram server; this studio is a static bundle built without one.');
-  assert.equal(await page.$('.no-backend-notice.is-error') !== null, true, 'the notice row carries the error');
+  const [report] = await Promise.all([page.waitForEvent('download', { timeout: 30_000 }), page.click('.conf-exports a[download]')]);
+  assert.equal(report.suggestedFilename(), 'payment-service.audit-report.html');
+  const reportHtml = readFileSync(await report.path(), 'utf8');
+  assert.ok(reportHtml.startsWith('<!doctype html>') && reportHtml.includes('<meta name="generator" content="Observogram static bundle '), 'the report, from this build');
+  assert.ok(reportHtml.includes('6. Goes-blind risks') && !reportHtml.includes('Not computed by this build'), 'the goes-blind section computed in the page');
+  assert.ok(reportHtml.includes('Not recorded by this build'), 'no store: verdicts and waivers say so');
   assert.equal(page.url(), `${base}/`, 'no navigation');
   assert.deepEqual(served.filter((u) => u.includes('/api/')), [], 'the anchor never reached the static host');
   // Dismiss the notice; it stays dismissed on reload (localStorage).
@@ -1401,9 +1588,9 @@ test('T8b baked brand: a --brand bundle carries the branded server\'s shell frag
   // The shim names the product.
   const backend = createStaticBackend({ version: '1', schema, packs: [] }, { product: 'Acme Watch' });
   assert.equal(backend.product, 'Acme Watch');
-  const diff = await backend.handle('/api/diff?a=p&b=p');
-  assert.equal(diff.status, 501);
-  assert.equal((await diff.json()).error, 'Compare needs the Acme Watch server; this studio is a static bundle built without one.');
+  const journeys = await backend.handle('/api/journeys');
+  assert.equal(journeys.status, 501);
+  assert.equal((await journeys.json()).error, 'Journeys needs the Acme Watch server; this studio is a static bundle built without one.');
   assert.match(noticeText(1, 'Acme Watch'), /^Static studio — no Acme Watch server behind this page\./);
   assert.equal(apiMenuSubText('Acme Watch'), 'needs the Acme Watch server · this studio is a static bundle');
 });

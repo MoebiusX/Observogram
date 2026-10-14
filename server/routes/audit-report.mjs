@@ -22,9 +22,9 @@
 // sibling pack reads' shape (server/index.mjs), not the services API's; a bad
 // `format` or `top` is 400 naming the values; a canonical the schema refuses
 // makes adapt() throw, a 500 like every pack read's. `Cache-Control:
-// no-store` on every answer (verdicts and waivers move). `/placeholders`
-// answers packConformance(overlaid) bare — the rows the CLI prints, for the
-// environment asked.
+// no-store` on the report (verdicts and waivers move; the refusals carry
+// none). `/placeholders` answers packConformance(overlaid) bare — the rows
+// the CLI prints, for the environment asked.
 
 import express from 'express';
 import { adapt } from '../../tools/lib/adapter.mjs';

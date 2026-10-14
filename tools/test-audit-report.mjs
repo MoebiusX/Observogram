@@ -269,7 +269,7 @@ test('the HTML: one document, no script, light theme, the kit and the report zon
   assert.ok(!empty.includes('Not recorded by this build'));
   assert.ok(empty.includes('The pack declares no remediation.') === false && plain.includes('7. Response path'));
   assert.ok(renderAuditReportHtml(build(HOSTILE), { styles: STYLES }).includes('The pack declares no remediation.'));
-  assert.ok(renderAuditReportHtml({ ...build(PAYMENT), goesBlind: goesBlindRisks(null) }).includes('Not computed by this build'));
+  assert.ok(renderAuditReportHtml({ ...build(PAYMENT), goesBlind: goesBlindRisks(null) }).includes('<p class="ar-none">Not computed by this build: no traceability graph was given to it.</p>'), 'a report given no graph says so, of any caller');
   // Branded: the acme footer strings, escaped, and the tokens element.
   const branded = renderAuditReportHtml(build(PAYMENT), { brand: ACME, styles: STYLES });
   assert.ok(branded.includes('<style id="brand-tokens">') && branded.includes('--og-accent:#b3261e;'));

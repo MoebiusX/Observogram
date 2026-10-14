@@ -592,7 +592,7 @@ function goesBlindHtml(g) {
 <section class="ar-section" id="goes-blind">
   <h2 class="og-h2">6. Goes-blind risks</h2>
   <p class="ar-lede">Structural exposure from the declared edges: what WOULD go blind if a node died — never that something is blind. The top ${g.top} by what goes blind.</p>
-  ${!g.available ? none('Not computed by this build: the traceability graph needs the PromQL parser the server and the CLI have; the static bundle does not.') : `
+  ${!g.available ? none('Not computed by this build: no traceability graph was given to it.') : `
   <div class="ar-stats">
     ${stat('Graph', `${g.nodes} / ${g.edges}`, 'nodes / edges')}
     ${stat('Nodes whose loss would blind an SLO', g.sloBlindingNodes, '', g.sloBlindingNodes ? 'warn' : '')}

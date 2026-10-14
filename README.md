@@ -1227,7 +1227,9 @@ The image binds `0.0.0.0`, so it needs a seeded sign-in (or
 `OBSERVOGRAM_API_TOKEN`) to start — see Security Posture above. Its workspace
 is `/app/.observogram` (owned by the `node` user the container runs as);
 mount a volume there, or point `OBSERVOGRAM_WORKSPACE` at one, to keep users
-and packs across containers.
+and packs across containers. The image carries Observogram's `LICENSE` beside
+`package.json`, and its `node_modules` each installed package's own licence
+file.
 
 Kubernetes manifests (Deployment + Service + Ingress + the `store` PVC,
 applied with Kustomize) live in [`deploy/k8s/`](deploy/k8s/README.md). The
@@ -1907,6 +1909,10 @@ A downstream that serves the studio behind its own static host — a CDN, an
 S3 bucket, a reverse proxy's `root` — builds it as one HTML file:
 
 ```bash
+# Once, in the tree you build from: the packages package-lock.json pins (the
+# bundle embeds Compare's PromQL parser and the packages it imports).
+npm ci
+
 # One file: every module, every stylesheet, the packs it names.
 npm run build:studio -- \
   --pack vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml --label "Payment service" \
@@ -1928,8 +1934,13 @@ npm run build:studio -- --check --pack my-service.pack.yaml
 Each `--pack` / `--pack-url` takes its own `--id` (default: the file name),
 `--label` (default: the pack's `metadata.name`, else the id) and
 `--description` — the catalogue row the bundled studio shows, field for field
-what a server-side pack row carries. `--no-remote-fonts` drops the Google Fonts
-links for an offline host.
+what a server-side pack row carries. The file loads no font over the network:
+the shell's three Google Fonts lines (the preconnects and the stylesheet) are
+dropped unless `--remote-fonts` keeps them, for a host whose readers are online
+and should get the studio's fonts from Google's CDN (the page then asks
+`fonts.googleapis.com` for the stylesheet and `fonts.gstatic.com` for the
+fonts). `--no-remote-fonts`, the default, is still accepted; the two together
+are a usage error.
 
 **Bake the seams.** `--taxonomy <file.json>` bakes the artefact-taxonomy
 override (the file a server reads from `OBSERVOGRAM_TAXONOMY`, "Classify
@@ -1984,17 +1995,23 @@ studio and `tools/lib` modules and whose addresses are `data:` URLs of each
 module (only the import-specifier strings are rewritten — no transform of the
 code), the packs' canonical manifests and the spec schema inlined as JSON, and
 `studio/static-backend.mjs` installed before the app boots. That module answers
-the read-only pack routes in the browser from the same `tools/lib` engines the
+the pack routes in the browser from the same `tools/lib` engines the
 server runs — the catalogue, Discover, Diagnose (conformance), the canonical
-manifest, Compile (the catalogue, every artefact, every target) and **Export**
-(the ZIP, downloaded as a Blob) — so the verdicts are the server's
+manifest, Compile (the catalogue, every artefact, every target), **Export**
+(the ZIP, downloaded as a Blob), **Compare** (`GET /api/diff` with its
+traceability graph, and the repository update from live) and the **Audit
+report** (`GET /api/packs/:id/audit-report`, JSON or HTML with the bundle's
+brand, its goes-blind section computed; the Conformance view's anchors
+download it as a Blob; a bundle has no store, so its verdicts and waivers
+sections read "not recorded by this build") — so the verdicts are the server's
 (`tools/test-studio-bundle.mjs` compares every ported route against a running
-server; `GET /api/packs/:id/verdicts` answers the empty document — a
+server, `tools/test-bundle-compare.mjs` the diff, retrofeed and the audit
+report body for body, the report's declared fields aside;
+`GET /api/packs/:id/verdicts` answers the empty document — a
 bundled pack is never registered, so that IS the server's answer). Everything
 the server alone can do — Scan a repo, Draft from MCP, Refresh from MCP,
-Testing an MCP connection, Building a pack from a live MCP server, uploads, Compare, Deploy, Journeys, Build, recording a Verdict, Waivers (they
-live on a service record, which a bundled pack has none of), the Audit report
-(its goes-blind section needs the PromQL parser the bundle cannot inline),
+Testing an MCP connection, Building a pack from a live MCP server, uploads, Deploy, Journeys, Build, recording a Verdict, Waivers (they
+live on a service record, which a bundled pack has none of),
 Services (the records behind the home's cards and the service page — a bundle
 has no services table), Organisations (the active org's name and role),
 Settings (members, environments, MCP endpoints, the audit — a bundle has no org),
@@ -2002,18 +2019,44 @@ Passing MCP server settings through the studio server (the Server settings
 modal sends from the browser in a bundle), sign-in — answers `501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
 this studio is a static bundle built without one.' }`, which the studio shows
 as the sentence, and a dismissable notice at the bottom of the window says so
-once ("Static studio — no Observogram server behind this page …"). Compare is
-out by design: the server's diff carries the traceability graph, whose PromQL
-parser is a bare node dependency the bundle cannot inline, and a diff without
-it would grade differently from the server. The Services home and the service
-page need the server (the services table); a bundle lists the services its
-packs name, as before.
+once ("Static studio — no Observogram server behind this page …"). The
+Services home and the service page need the server (the services table); a
+bundle lists the services its packs name, as before.
+
+**Compare and the licences.** Compare's traceability graph needs a PromQL
+parser, the npm package `@prometheus-io/lezer-promql` (Apache-2.0): the build
+inlines it and the three packages it imports — `@lezer/lr`,
+`@lezer/highlight` and `@lezer/common` (MIT) — byte for byte as `npm ci`
+installed them from `package-lock.json`, so the build needs that lockfile,
+`VENDOR-MANIFEST.json` and an `npm ci` in the tree it builds from, and refuses
+a package it cannot account for (a version other than the lockfile's, no
+licence file, a second copy its importer would load, an import it does not
+declare). Every bundle carries a licence block — a `<script type="text/plain"
+id="observogram-licenses">` element at the end of `<head>`, pointed to by a
+comment after the doctype — with Observogram's MIT licence, each embedded
+package's licence files, NOTICE files (none ships one today), copyright lines
+and source repository, and the provenance of the vendored spec, whose
+repository publishes no licence. What the build checks: the packages are the
+ones the manifest's `npm` field names and the packages those import, each at
+the lockfile's version with a licence file, embedded unchanged;
+`verifyBundleNotices` (exported by `tools/build-studio-bundle.mjs`) checks a
+finished file's block. What it does not check: whether those licences suit
+your distribution, the packages' code, that the installed files are the
+registry's (a patched install is embedded as patched, unmarked), NOTICE files
+outside a published package, and the licences of the packs or brand assets
+you build in. The diff is held to a running server's, body for body, in Node
+(from the source and from the built file) and in Chromium under three browser
+locales (only where Playwright and its browser are installed, which CI's jobs
+are not); not in Firefox or Safari. `docs/DOWNSTREAM.md` §10 has the details
+and the migration from an earlier snapshot.
 
 Notes: `--pack` is validated against the spec schema at build time (a failing
 pack fails the build with the validator's text); `--pack-url` refuses a URL
 with userinfo or a credential query parameter — the URL is baked into a file
-you distribute — and `--json` prints URLs stripped; the Google Fonts links stay
-unless `--no-remote-fonts` (offline, the fallback stacks apply); a
+you distribute — and `--json` prints URLs stripped; the Google Fonts links are
+dropped unless `--remote-fonts` (offline by default: the stylesheets' font
+stacks apply, a family the reader's system has, else the system fonts after
+it; `--json`'s `remoteFonts` says which); a
 Content-Security-Policy that forbids `data:` in `script-src` cannot run the
 single-file form (a `--split` directory mode is the follow-up); import maps
 need Chrome 89, Firefox 108 or Safari 16.4. Without `--pack` the studio boots
@@ -3036,7 +3079,8 @@ studio/
   brand.mjs                The studio's brand: reads the shell's #brand-config, loads /lib/brand.mjs the house way, hands state.brand its chrome strings
   neuron-view.mjs          Advanced → Neuron: fleet tiles, trend / heatmap / bar panels, the journey in focus, the newest record opened up
   journeys-view.mjs        Saved journeys: capture, run-now, history, stack chips, chains + cause lines (the cards Neuron composes)
-  static-backend.mjs       The static bundle's backend in the browser: the read-only pack routes from tools/lib, 501 no-backend for the rest, the Export download, the notice (bundle-only; the live studio never imports it)
+  static-backend.mjs       The static bundle's backend in the browser: the pack routes and Compare's diff, retrofeed and the audit report from tools/lib (the PromQL parser loaded at the first call), 501 no-backend for the rest, the Export and audit-report downloads, the notice (bundle-only; the live studio never imports it)
+  static-remedies.mjs      The static posture's texts and controls: serverNeeded, DEPLOY_CONTROLS, staticRemedy, staticInputOf, staticTraceActions (a pure model the views read when no server is behind the page)
   build-model.mjs          The BUILD journey's pure models (define / compile / verify, the stack, the definition column, the layer sheet, the clause checklist's three states, step reachability)
   build-api.mjs            The BUILD journey's loaders over /api/library/* (fetchFn injectable)
   build-definition-view.mjs  BUILD — the definition column on every step (service, the tier as a segmented control, the entries as chips, the conformance summary)

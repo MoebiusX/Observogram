@@ -30,7 +30,9 @@ WORKDIR /app
 
 # Dependency layer first so source edits don't bust the npm cache.
 # build.json* — the stamp above when it exists, nothing otherwise.
-COPY package.json package-lock.json build.json* ./
+# LICENSE — Observogram's MIT licence, which travels with the code the image
+# runs (each npm package's own licence file is in its node_modules directory).
+COPY package.json package-lock.json LICENSE build.json* ./
 RUN npm ci --omit=dev
 
 # Everything the server reads at runtime (see server/index.mjs):

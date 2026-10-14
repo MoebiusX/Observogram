@@ -14,7 +14,9 @@
  * carries a literal value anywhere; and the CLI's per-journey CronJob
  * (schedule-snippets.mjs) agrees with the component on the PVC name and the
  * mount; and the README's one-off restore/export pods see the studio's
- * database and workspace at the studio's paths. CI runs no kustomize/kubeconform — this is the gate; `kubectl
+ * database and workspace at the studio's paths; and the Dockerfile copies
+ * LICENSE into the image beside package.json (follow-up compare-in-bundle:
+ * Observogram's MIT licence travels with the code the image runs). CI runs no kustomize/kubeconform — this is the gate; `kubectl
  * kustomize deploy/k8s-journeys` (the sibling overlay — kustomize refuses one
  * nested under the base it references) is run by hand.
  * Exit 0 = pass.
@@ -356,6 +358,16 @@ for (const [rel, doc] of Object.entries(docs)) {
   assert(envs(one).filter(e => /(TOKEN|URL)$/.test(e.name) && 'value' in e).length === 0, 'and binds env names by secretKeyRef only');
   assert(!one.spec.jobTemplate.spec.template.spec.volumes.some(v => v.persistentVolumeClaim?.claimName === STORE_PVC) && !c1.env.some(e => e.name === 'OBSERVOGRAM_DB'),
          'and never mounts the store claim nor sets OBSERVOGRAM_DB');
+}
+
+// --- the image carries Observogram's licence (follow-up compare-in-bundle) ---
+// The image's node_modules carries each installed package's own licence file
+// (npm installs them); the MIT licence of the code the image runs must travel
+// with it too. `npm pack` includes LICENSE by itself.
+{
+  const dockerfile = readFileSync(join(ROOT, 'Dockerfile'), 'utf8');
+  const copied = dockerfile.split(/\r?\n/).filter((l) => /^COPY\s/.test(l)).flatMap((l) => l.trim().split(/\s+/).slice(1, -1));
+  assert(copied.includes('LICENSE'), 'the Dockerfile copies LICENSE into the image (Observogram\'s MIT licence travels with the code it runs)', copied);
 }
 
 report('deploy-manifests', 'all deploy-manifest assertions pass.');

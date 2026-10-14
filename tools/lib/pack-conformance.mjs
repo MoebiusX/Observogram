@@ -477,7 +477,7 @@ export function packConformance(canonical, opts = {}) {
     if (channelValues(route?.channels).some(v => /^\+0-000-/.test(String(v)))) unmarked('alerting.routes', i, `alerting.routes[${i}]`, `$.spec.alerting.routes[${i}]`, PLACEHOLDER_FIELDS['alerting.routes'][0], 'legacy');
   });
 
-  rows.sort((a, b) => a._order[0] - b._order[0] || a._order[1] - b._order[1] || a._order[2] - b._order[2] || a.symbol.localeCompare(b.symbol) || String(a.field).localeCompare(String(b.field)));
+  rows.sort((a, b) => a._order[0] - b._order[0] || a._order[1] - b._order[1] || a._order[2] - b._order[2] || a.symbol.localeCompare(b.symbol, 'en') || String(a.field).localeCompare(String(b.field), 'en'));
   const clean = rows.map(({ _order, ...row }) => row);
 
   const byState = Object.fromEntries(STATES.map(s => [s, 0]));

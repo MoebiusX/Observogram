@@ -48,10 +48,35 @@ import { buildRemediationFlowViewModel, packDeclaresRemediation, remediationFlow
 import { decisionHeaderHtml, disclosureHtml, emptyStateHtml, LAYER_PURPOSE, layerTitle, plural, wireUxActions } from './ux-kit.mjs';
 import { LINK_STATES, readTraceability, traceIssue } from './trace-chain.mjs';
 import { metricReaders, readersDigest, readersSentence, readerLine, readerRank, readerCounts, alertNames } from './metric-readers.mjs';
+// The static posture — no server behind the page (a static bundle): the deploy controls drawn unavailable.
+import { serverNeeded, DEPLOY_CONTROLS, staticRemedy, staticInputOf, staticTraceActions } from './static-remedies.mjs';
+import { markUnavailable } from './services-view.mjs';
 
 // Re-exported: these two lived here before moving to compare-catalog.mjs
 // (kept importable from the view for compile-view.mjs and proto-shared.mjs).
 export { catalogEntryFor, LAYERS_FOR_DIFF };
+
+// ---------- the static posture ----------
+
+// A static bundle answers no deploy: every deploy control Diagnose and its
+// Compare draw — the drift action, the chain cards, the pack picker cards — is
+// drawn unavailable with the reason once the view has rendered (an
+// aria-disabled control is never a modal opener), without the title that says
+// what it would open. Each keeps its handler, which reaches openDeployModal
+// (studio/app.mjs) and explains.
+const isStatic = () => state.access?.posture === 'static';
+// Every remedy that names a server action says, in the static posture, how a
+// bundle gets a live pack (studio/static-remedies.mjs staticRemedy) — what is
+// built in reads from the catalogue; and Traceability words its live-evidence
+// texts the same way (staticTraceActions), the module's own otherwise.
+const staticInput = () => staticInputOf(state.brand.chrome.name, state.catalog, state.selectedPackId);
+const traceActions = () => (isStatic() ? { actions: staticTraceActions(state.brand.chrome.name) } : {});
+
+function drawDeployUnavailable(root) {
+  if (!isStatic() || !root) return;
+  const reason = serverNeeded('Deploy', state.brand.chrome.name);
+  for (const control of root.querySelectorAll(DEPLOY_CONTROLS)) { markUnavailable(control, reason); control.removeAttribute('title'); }
+}
 
 // ---------- compare view ----------
 
@@ -299,7 +324,7 @@ export function renderTraceabilityView(host) {
       section.innerHTML = emptyStateHtml({
         title: 'No SLI or SLO requirements in this pack.',
         checked: `the SLOs and SLIs declared by ${state.pack?.meta?.name || 'this pack'}`,
-        body: 'Traceability follows each objective to the metrics, rules, scrape jobs, dashboards and alerts that prove it. Declare an SLO, or pick a live pack as Pack B to compare the repository with live.',
+        body: isStatic() ? staticRemedy('trace-no-b', staticInput()) : 'Traceability follows each objective to the metrics, rules, scrape jobs, dashboards and alerts that prove it. Declare an SLO, or pick a live pack as Pack B to compare the repository with live.',
       });
     }
     host.appendChild(section);
@@ -551,7 +576,7 @@ const RT_FILTERS = [
 ];
 
 function renderRequirementTraceabilityBlock(pack) {
-  const model = readTraceability(pack);
+  const model = readTraceability(pack, traceActions());
   if (!model) return null;
   const block = document.createElement('div');
   block.className = 'rt-block';
@@ -740,7 +765,7 @@ function renderRequirementRow(row, i, groupSize, repaint) {
   const bodyId = `rt-req-body-${i}`;
   const expanded = state.rtExpanded === row.id;
   const focus = row.firstBroken || row.weakest;
-  const focusIssue = focus?.gap ? traceIssue(focus.gap) : null;
+  const focusIssue = focus?.gap ? traceIssue(focus.gap, traceActions()) : null;
   // The issue label already names its link ("Alert evidence missing").
   const breakText = row.firstBroken
     ? (focusIssue ? focusIssue.label : `${row.firstBroken.label}: ${LINK_STATES[row.firstBroken.state].label.toLowerCase()}`)
@@ -800,7 +825,7 @@ function renderRequirementChain(row, groupSize, repaint) {
     li.className = 'rt-link';
     li.dataset.state = l.state;
     if (l.broken) li.dataset.broken = 'true';
-    const issue = l.gap ? traceIssue(l.gap) : null;
+    const issue = l.gap ? traceIssue(l.gap, traceActions()) : null;
     const shared = issue ? groupSize.get(issue.code) || 0 : 0;
     li.innerHTML = `
       <div class="rt-link-head">
@@ -997,6 +1022,11 @@ function renderDiagnoseSubnav(active) {
 }
 
 export function renderBenchmarkView(view) {
+  renderDiagnose(view);
+  drawDeployUnavailable(view);
+}
+
+function renderDiagnose(view) {
   // Sub-tabs under DIAGNOSE: Assessment (the diagnostic-grade report) and
   // Compare (the artefact-level live-pack-vs-baseline side-by-side).
   const sub = state.diagnoseSub === 'compare' ? 'compare' : 'grade';
@@ -1087,7 +1117,7 @@ export function renderBenchmarkView(view) {
   const posture = computePostureMatrix(state.pack, state.packB);
 
   // THE verdict — diagnostic grade from coverage (2A) + trust / drift (2B).
-  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe);
+  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe, isStatic() ? { noLiveHint: staticRemedy('no-live-hint', staticInput()) } : {});
 
   // The screen grammar (docs/UX_SCREEN_GRAMMAR.md): context · decision ·
   // next action · explanation first, then the report's sections behind a
@@ -1100,7 +1130,10 @@ export function renderBenchmarkView(view) {
   // computeDiagnosticGrade, so the sentence and the checks read one record.
   const liveEvidence = partialLiveEvidence(engineLivePack(state.pack, state.packB));
   const lensLabel = lens !== 'all' ? (LENS_PRODUCTS.find(lp => lp.slug === lens)?.label || lens) : '';
-  const decision = buildAssessmentDecision({ diagnostic, digest, roles: ctx.roles, liveEvidence, haveB, baselineName: ctx.b?.name || '', lensLabel });
+  const decision = buildAssessmentDecision({
+    diagnostic, digest, roles: ctx.roles, liveEvidence, haveB, baselineName: ctx.b?.name || '', lensLabel,
+    remedy: isStatic() ? (key) => staticRemedy(key, staticInput()) : null,
+  });
   const parts = renderDiagnosticGradeVerdict(diagnostic);
   // The response path (GAP batch 2, B3.3): only for a pack that declares a
   // remediation; the engine loads at call time and repaints once when it
@@ -1177,7 +1210,7 @@ export function renderBenchmarkView(view) {
   // Evidence (the scored checks + the evidence ledger), then requirement chains.
   report.insertAdjacentHTML('beforeend', parts.evidenceHtml);
   if (parts.requirementsHtml) report.insertAdjacentHTML('beforeend', parts.requirementsHtml);
-  if (flowModel) report.insertAdjacentHTML('beforeend', remediationFlowHtml(flowModel, { screen: 'diagnose' }));
+  if (flowModel) report.insertAdjacentHTML('beforeend', remediationFlowHtml(flowModel, { screen: 'diagnose', notComparedNote: isStatic() ? staticRemedy('flow-not-compared-diagnose', staticInput()) : null }));
 
   // Layer scores — per-layer × per-mechanism coverage. Pack-A-derived, so
   // it's the "why" behind the coverage checks whether or not a Pack B exists.
@@ -1196,14 +1229,17 @@ export function renderBenchmarkView(view) {
 // Affordance shown in Diagnose when only Pack A is loaded. Points the
 // user at the EXISTING header Pack B picker (no duplicate control) and
 // names the two comparison use cases. Selecting nothing here is fine —
-// the assessment above already stands on Pack A alone.
+// the assessment above already stands on Pack A alone. A bundle's picker
+// offers the other packs that load (its /api/examples is empty), so in a
+// bundle of one pack it offers none: the static posture then says what
+// Compare says there (row 4).
 function renderComparePrompt() {
   const el = document.createElement('div');
   el.className = 'diag-compare-prompt';
   el.innerHTML = diagUx.emptyStateHtml({
     title: 'No baseline selected: this assessment reads the pack on its own.',
     checked: 'What the pack itself declares — its coverage, its trust evidence and its requirement chains.',
-    body: 'Choose a baseline in the header’s Pack B picker to compare: a live draft shows drift (declared versus deployed); a curated or reference pack shows the gap to a target.',
+    body: !defaultCompareB() && isStatic() ? staticRemedy('compare-one-pack', { product: state.brand.chrome.name }) : 'Choose a baseline in the header’s Pack B picker to compare: a live draft shows drift (declared versus deployed); a curated or reference pack shows the gap to a target.',
   });
   return el;
 }
@@ -1438,7 +1474,7 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
       ${liveEvidence.failed.length} of ${liveEvidence.attempted.length} probe${liveEvidence.attempted.length === 1 ? '' : 's'} failed during the live draft
       (<code>${escapeHtml(liveEvidence.failed.join(', '))}</code>) — the live endpoint was likely mid-deploy or overloaded.
       The live pack may be missing whole surfaces, so <strong>"${escapeHtml(overstated)}" is probably overstated</strong>.
-      Redraft from MCP before acting on this drift.${(liveEvidence.unsupported || []).length ? ` restricted MCP tier — not exposed: ${escapeHtml(liveEvidence.unsupported.join(', '))}` : ''}
+      ${isStatic() ? escapeHtml(staticRemedy('drift-partial', { product: state.brand.chrome.name })) : 'Redraft from MCP before acting on this drift.'}${(liveEvidence.unsupported || []).length ? ` restricted MCP tier — not exposed: ${escapeHtml(liveEvidence.unsupported.join(', '))}` : ''}
     </div>` : '';
 
   const weightsBody = `
@@ -1576,7 +1612,7 @@ export async function runRetrofeed(btn, host, { keys, scopeMode } = {}) {
       ${r.adopted.length ? `<p class="drift-retrofeed-dl">
           ${dl('⬇ additions fragment', r.fragmentYaml, `${slug}.retrofeed-fragment.yaml`)}
           ${dl('⬇ updated pack', r.updatedPackYaml, `${slug}.pack.yaml`)}
-          <span class="drift-retrofeed-note">commit the updated pack to the service repo (it carries observogram.retrofeed.* provenance), then re-scan to confirm the gap closed</span>
+          <span class="drift-retrofeed-note">${isStatic() ? escapeHtml(staticRemedy('retrofeed-result', { product: state.brand.chrome.name })) : 'commit the updated pack to the service repo (it carries observogram.retrofeed.* provenance), then re-scan to confirm the gap closed'}</span>
         </p>` : ''}
     `;
     host.hidden = false;
@@ -1979,7 +2015,7 @@ function renderDiagnosticGradeVerdict(diagnostic) {
         ${!trust.hasMcpSource ? `
           <div class="diag-banner" role="note">
             <span class="diag-banner-key">WARN</span>
-            Nothing live backs this pack. “Drift-free” and “Fresh” need a live draft (MCP) or a live refresh to verify.
+            ${isStatic() ? escapeHtml(staticRemedy('diagnose-banner', staticInput())) : 'Nothing live backs this pack. “Drift-free” and “Fresh” need a live draft (MCP) or a live refresh to verify.'}
           </div>
         ` : ''}
         ${critTable(trust.criteria)}
@@ -2315,7 +2351,7 @@ function renderCompareView(view) {
     empty.innerHTML = diagUx.emptyStateHtml({
       title: 'There is no baseline to compare with yet.',
       checked: 'The pack catalog — a comparison needs at least two packs.',
-      body: 'Load or scan another pack (for example a live draft, or a curated repository pack) from Discover, then come back to compare.',
+      body: isStatic() ? staticRemedy('compare-one-pack', { product: state.brand.chrome.name }) : 'Load or scan another pack (for example a live draft, or a curated repository pack) from Discover, then come back to compare.',
     });
     view.appendChild(empty);
     return;
@@ -3855,7 +3891,7 @@ const CRITERION_COPY = {
 // or mismatched live read undermines every other reading), then coverage.
 const CRITERION_PRIORITY = ['drift-free', 'fresh', 'multi-modal', 'correlated', 'calibrated', 'comprehensive', 'chaos-validated'];
 
-function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel = '' }) {
+function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel = '', remedy = null }) {
   const copy = CRITERION_COPY[c.key] || { title: `${c.label} is not met`, why: c.sub || '', fix: '' };
   const b = {
     key: c.key, scored: true,
@@ -3871,12 +3907,13 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
     if (!hasLive) {
       b.title = 'Nothing live has been checked';
       b.why = 'Every claim rests on what the pack declares; nothing confirms the signals exist in production.';
-      b.fix = 'Connect MCP or scan live, then choose the live draft as the baseline (Pack B) to compare.';
+      b.fix = remedy ? remedy('drift-free-no-live') : 'Connect MCP or scan live, then choose the live draft as the baseline (Pack B) to compare.';
       b.actionLabel = haveB ? 'Review the comparison' : 'How to compare with live';
       b.actionId = 'diag-goto:diag-compare';
     } else if (haveB) {
       b.actionLabel = 'Review differences';
       b.actionId = 'diag-goto:diag-compare';
+      if (remedy) b.fix = remedy('drift-free-fix');
       if (digest && roles.mode === 'drift') {
         const t = digest.totals;
         // The engine's detail counts the whole diff; the digest may be
@@ -3889,6 +3926,7 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
       b.fix = 'Choose the live draft as the baseline (Pack B) to see which artefacts differ.';
     }
   } else if (c.key === 'fresh') {
+    if (remedy) b.fix = remedy('fresh-fix');
     if (/never been verified|no mcp\.refreshedAt/i.test(c.detail || '')) b.title = 'Never verified against live';
     else if (/vantage lost/i.test(c.detail || '')) {
       b.title = 'The last live check saw nothing';
@@ -3906,8 +3944,10 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
 // explicit. Returns the one sentence, its tone, the inline explanation of
 // apparent contradictions, the next action, and the blockers in priority
 // order (what failed → why it matters → fix), the top three of which are
-// the header's causes.
-export function buildAssessmentDecision({ diagnostic, digest = null, roles = compareRoles('gap'), liveEvidence = null, haveB = false, baselineName = '', lensLabel = '' } = {}) {
+// the header's causes. `remedy` is the static posture's text for a fix that
+// names a server action (studio/static-remedies.mjs staticRemedy, bound to
+// the product), or null on a server.
+export function buildAssessmentDecision({ diagnostic, digest = null, roles = compareRoles('gap'), liveEvidence = null, haveB = false, baselineName = '', lensLabel = '', remedy = null } = {}) {
   const overall = diagnostic.overall;
   const audit = overall.audit || diagnosticAuditStatus(overall.passed, overall.total);
   const ig = overall.instrumentGrade || instrumentGradeFor(audit.scorePctExact);
@@ -3934,7 +3974,7 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
         ? `no probe family answered${silent.length ? ` (${silent.join(', ')})` : ''}`
         : `${liveEvidence.failed.length} of ${liveEvidence.attempted.length} live probes failed (${liveEvidence.failed.join(', ')})`,
       why: 'Surfaces the live draft could not see look like drift, so differences may be overstated.',
-      fix: 'Draft the live pack again from MCP once the endpoint is healthy, then re-check.',
+      fix: remedy ? remedy('live-evidence-fix') : 'Draft the live pack again from MCP once the endpoint is healthy, then re-check.',
       cost: 'Does not change the grade by itself',
       actionLabel: haveB ? 'View the comparison' : 'View the evidence',
       actionId: haveB ? 'diag-goto:diag-compare' : 'diag-goto:diag-evidence',
@@ -3952,7 +3992,7 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
   const noLiveFresh = !hasLive && failing.some(f => f.c.key === 'drift-free') ? failing.find(f => f.c.key === 'fresh') : null;
   for (const { c, lost } of failing) {
     if (noLiveFresh && c.key === 'fresh') continue;
-    const b = criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel });
+    const b = criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel, remedy });
     if (noLiveFresh && c.key === 'drift-free') {
       const both = lost + noLiveFresh.lost;
       b.observed = `${c.detail || ''} · ${noLiveFresh.c.detail || ''}`.replace(/^ · | · $/g, '');
@@ -4001,7 +4041,7 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
         title: `${missing} declared ${missing === 1 ? 'artefact is' : 'artefacts are'} not seen live${inLens}`,
         observed: `the pack declares ${missing === 1 ? 'it' : 'them'}; the live draft has no counterpart`,
         why: 'The pack promises signals that production may not have.',
-        fix: 'Review them, then deploy what is missing live or update the repository from live.',
+        fix: remedy ? remedy('live-missing-fix') : 'Review them, then deploy what is missing live or update the repository from live.',
         cost,
         actionLabel: 'Review differences', actionId: 'diag-goto:diag-compare',
       });
@@ -4103,7 +4143,7 @@ function assessmentMeasuresHtml(diagnostic, d) {
   const nPartial = scored.filter(c => !c.pass && criterionScore(c) > 0).length;
   const nFail = scored.length - nPass - nPartial;
   const rollup = diagnostic.traceabilityGraph?.rollup;
-  const live = !d.hasLive ? { v: 'Not checked', note: 'connect MCP or scan live to verify', tone: 'warn' }
+  const live = !d.hasLive ? { v: 'Not checked', note: isStatic() ? staticRemedy('live-measure', staticInput()) : 'connect MCP or scan live to verify', tone: 'warn' }
     : d.vantage === 'lost' ? { v: 'Could not observe', note: 'a live check ran, but no probe family answered', tone: 'warn' }
       : d.vantage === 'partial' ? { v: 'Partial', note: 'some live probes failed', tone: 'warn' }
         : d.vantage === 'none' ? { v: 'Refreshed', note: 'no probe record, so what the live check observed is unknown', tone: 'warn' }
