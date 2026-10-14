@@ -1883,7 +1883,7 @@ A users file deleted on purpose outside the root is refused alike (a declared
 false refusal), and its way out is deleting the root by hand, after which
 purge-org drops the records. A users file purge-org cannot read (`EACCES` on
 its path, a link loop), which compared as written and was purged, is refused
-too. Tests: 1476 → 1491 (fifteen more in `server/test-store-ops.mjs`).
+too. Tests: 1495 → 1510 (fifteen more in `server/test-store-ops.mjs`).
 
 The walk read each directory once, at its own moment, so another process
 renaming a directory, while it ran, from one the walk had not read yet into
@@ -1894,7 +1894,7 @@ reads each directory again before it goes on: the same directory, the same
 change time, which moves with every entry added, removed or renamed in it,
 and the same names. One that changed is refused, deleting nothing; stop what
 changes files there and run the purge again, and the walk finds the users
-file. Tests: 1491 → 1492 (one more in `server/test-store-ops.mjs`).
+file. Tests: 1510 → 1511 (one more in `server/test-store-ops.mjs`).
 
 The walk listed names as strings, and `node:fs` gives a name that is not
 valid UTF-8 with U+FFFD in place of each such byte: a name no lookup finds,
@@ -1904,7 +1904,7 @@ The walk now lists each name as the bytes the filesystem holds and follows
 such a name as bytes, so the users file, a mount point or a directory it
 cannot read below it is refused; a refusal names that path as a POSIX
 shell's `$'…'` spells it, so moving the users file out, as the refusal says,
-can be typed. Tests: 1492 → 1493 (one more in `server/test-store-ops.mjs`).
+can be typed. Tests: 1511 → 1512 (one more in `server/test-store-ops.mjs`).
 
 Failing closed through a mount that is down held only while the users file
 did not exist, and a mount that is down keeps what was written in its mount
@@ -1918,7 +1918,7 @@ such entry and what one that is a link leads to under the root; moving them
 out of the root is its way out. An entry of that name that is not the users
 file is refused alike (a declared false refusal), and the users file seen
 through a view of a directory under the root that reports neither its inode
-nor its size and time is refused by its name. Tests: 1493 → 1494 (one more
+nor its size and time is refused by its name. Tests: 1512 → 1513 (one more
 in `server/test-store-ops.mjs`).
 
 Following the refusal of a users file recorded under the root — moving it
@@ -1938,7 +1938,7 @@ covers the root as well, or hides the link the root's own path is reached
 through, so through it the path leads under the root by a directory under
 the root mounted there, which shows the users file by its name, or by a link
 purge-org does not see. Through any other directory, or with an entry of
-that name under the root, it is refused as before. Tests: 1494 → 1495 (one
+that name under the root, it is refused as before. Tests: 1513 → 1514 (one
 more in `server/test-store-ops.mjs`).
 
 The walk kept every entry's stats until it ended, since the users file was
@@ -1953,7 +1953,7 @@ walk keeps its path, its identity, its times and a digest of its names, and it
 takes a directory's entries from its listing as it goes, holding only the
 listings of the directories it is in, as Node 22's `rmSync` does: its memory
 grows with the directories under the root and the longest listing, not with
-the files, and that root passes in 16 MB. Tests: 1495 → 1496 (one more in
+the files, and that root passes in 16 MB. Tests: 1514 → 1515 (one more in
 `server/test-store-ops.mjs`).
 
 A users file that does not exist whose path leads into a directory under the
@@ -1967,7 +1967,7 @@ naming each such entry; moving them out of the root is its way out, and the
 purge then passes. A users file moved out of the root as the refusal of one
 under it says passes as before unless another entry under the root has its
 name, which is refused alike (a declared false refusal) until it is moved out
-too. Tests: 1496 → 1497 (one more in `server/test-store-ops.mjs`).
+too. Tests: 1515 → 1516 (one more in `server/test-store-ops.mjs`).
 
 The refusal of a mount point under the root said only to unmount it, and
 unmounting may take away the path to the users file: with a directory from
@@ -1978,7 +1978,7 @@ purge deleted the file. That refusal now names the users file the walk finds
 under the root as well, to move out with the unmounting; followed, the purge
 passes and the moved file stays. A mount that was down already when
 purge-org first ran tells nothing of such a link (declared). One test in
-`server/test-store-ops.mjs` is extended; the total stays 1497.
+`server/test-store-ops.mjs` is extended; the total stays 1516.
 
 In a chroot into a directory that is no mount point, `/proc/self/mountinfo`
 lists neither `/` nor the mount the root lies in, and the mounts in it name a
@@ -1990,7 +1990,7 @@ filesystem holding the whole deployment. The parent not listed is the mount
 the root lies in, whose filesystem `/` shows: a covered mount whose path shows
 a directory of another filesystem is passed over, one of the same filesystem
 refused naming what to unmount first, as before, and followed literally the
-purge passes. Tests: 1497 → 1498 (one more in `server/test-store-ops.mjs`).
+purge passes. Tests: 1516 → 1517 (one more in `server/test-store-ops.mjs`).
 
 A mount point under the root holding mounts was refused naming it alone: the
 walk never enters a mount point, so the mounts in it went unnamed, though
@@ -1999,7 +1999,7 @@ walk never enters a mount point, so the mounts in it went unnamed, though
 refusal. The refusal now names the mounts in it to unmount first, in order,
 each after the mounts in it, as a covered mount's does (a mount stacked on it
 names the mounts in the topmost alone, which `umount` takes); followed so,
-the purge passes. Tests: 1498 → 1499 (one more in `server/test-store-ops.mjs`).
+the purge passes. Tests: 1517 → 1518 (one more in `server/test-store-ops.mjs`).
 
 On the Windows leg on Node 22.16.0, with a workspace whose `orgs` is a
 junction to a directory on its own volume, purge-org refused the root as a
@@ -2012,5 +2012,5 @@ On Windows a volume is mounted only in a folder, so only directories are
 compared there, each read through a handle opened on it, which reports the
 serial on every libuv; a file or a link under the root lies on its
 directory's volume. A volume mounted in a folder under the root, or on the
-root, is refused as before. Tests: 1499 → 1500 (one more in
+root, is refused as before. Tests: 1518 → 1519 (one more in
 `server/test-store-ops.mjs`).
