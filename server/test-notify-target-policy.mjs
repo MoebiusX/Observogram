@@ -14,7 +14,7 @@
 
 // Hermetic (§0): the children's STRIP list, both spellings, before any server
 // module loads (serve-child.mjs imports no server code).
-const { STRIP } = await import('./fixtures/serve-child.mjs');
+const { STRIP, dropInheritedOrgVars } = await import('./fixtures/serve-child.mjs');
 for (const k of STRIP) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
@@ -22,7 +22,7 @@ for (const k of STRIP) {
 
 const { test, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
-for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
+dropInheritedOrgVars();
 const { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } = await import('node:fs');
 const { createServer } = await import('node:http');
 const { networkInterfaces, tmpdir } = await import('node:os');
