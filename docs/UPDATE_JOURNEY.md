@@ -1372,7 +1372,8 @@ suite's child — that lost the CPU while loading refused a valid policy as
 `pattern too slow against a 256-character id`, a refusal that names no way
 out. The load now checks each pattern's shape, never its speed, as
 MCP_INTEGRATION and DOWNSTREAM always said, and the worker's deadline per
-rule is the guard; the taxonomy's own clocks are unchanged.
+rule is the guard; the taxonomy's own clocks are unchanged here (the id
+clocks' follow-up, below, changes what they charge).
 Tests: 1395 → 1396 (one more in `server/test-mcp-settings.mjs`: under a
 clock that jumps a second per read, a valid policy loads).
 A server whose policy worker cannot be built — one started under the
@@ -1611,3 +1612,29 @@ the org's hook and list its origin, then rename the names in the file. The
 README, `docs/MCP_INTEGRATION.md`, `.env.example` and the k8s manifests name
 the hook variables where they named bare ones, and the batch 3 delivery
 report's open security item points at §17. The count is unchanged.
+
+### Follow-up: the id clocks on a loaded machine
+
+A taxonomy override, and a settings policy a static bundle bakes (a server
+loads one untimed since the settings-policy worker's follow-up, above), are
+held to the id clocks: one pass of each pattern over four adversarial
+256-character ids within 50 ms. The
+clock was the wall clock, which also counts the time the thread waits for a
+core, so a loaded machine refused fast patterns: a server started with a
+valid taxonomy could refuse to start, and the suites that compile patterns
+failed intermittently. A pass now costs the smaller of the wall clock and
+the process's CPU time plus that clock's slack (a 15.625 ms tick and a
+millisecond on Windows, whose process times tick coarsely; 0 elsewhere),
+which bounds the pattern's own work: a pattern over the budget is still
+refused, with the same text. A first pass that reads over the budget but
+within twice it is timed again, up to twice, each time on a fresh
+compilation of the pattern (a regex runs faster once warm), so a pass the
+process's other threads or Windows' coarse clock overstated is timed again
+rather than refused on it; a first pass over twice the budget is refused on
+it, so a catastrophic pattern still runs once. On a loaded Windows machine a
+pattern within about one tick (15.6 ms) of the budget can still be refused,
+as the wall clock alone refused it: three ticks read the same for its passes
+as for a pass over the budget. The studio compiles the taxonomy the server served
+without timing it, so a slow phone binds what the server accepted.
+Tests: 1468 → 1472 (three in `tools/test-artefact-classify.mjs`, one in
+`tools/test-discover-rows.mjs`).
