@@ -1708,8 +1708,8 @@ try {
   // One scan, then "Load": the catalogue holds one entry. The scan route
   // registers the pack (registered.id); the studio's adopt selects that
   // entry (studio/api.mjs registeredOrValidated) and goes through POST
-  // /api/validate — which registers what it validates, under another id —
-  // only when the scan registered nothing or its entry is gone.
+  // /api/validate — which registers what it validates, under its content
+  // id — only when the scan registered nothing or its entry is gone.
   {
     const { registeredOrValidated } = await import('../studio/api.mjs');
     const scanEntry = `${crawlOut.registered?.id} | smoke-crawl (scanned)`;
@@ -1741,8 +1741,14 @@ try {
 
     // The first scan's entry is gone now: adopting that stale result falls
     // back to /api/validate, which registers it and answers the adapted pack.
+    // It registers the YAML's own content id — which may be the scan's id:
+    // the YAML parses back to the scan's pack but for crawler.discoveredAt,
+    // and the route's two crawls (crawlToYaml, then crawlFiles) stamp the
+    // same millisecond on a fast enough machine.
     const stale = await asStudio(base, () => registeredOrValidated(crawlOut));
-    assert(stale.ok === true && typeof stale.registered?.id === 'string' && stale.registered.id !== crawlOut.registered.id && !!stale.adapted,
+    const { packIdOf } = await import('./pack-registry.mjs');
+    const { parse: parseYaml } = await import('../tools/lib/mini-yaml.mjs');
+    assert(stale.ok === true && stale.registered?.id === packIdOf(parseYaml(crawlOut.canonicalYaml)) && !!stale.adapted,
            'adopting a scan whose entry is gone registers it through /api/validate', stale.registered);
 
     // No studio path hands a scan's or a draft's YAML straight to /api/validate.
