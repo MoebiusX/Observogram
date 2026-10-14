@@ -2474,7 +2474,18 @@ const namesake = (file, entries, { targets = [], root = ROOT_B } = {}) => {
     + `records. If the users file is among them, make ${file} lead to it again before a pre-store build or the in-place \`packc store `
     + 'export` uses it';
 };
-const unknownPlace = (file, nearest, { to = null, root = ROOT_B } = {}) => `the recorded users file ${file} does not exist, and nothing on this host `
+// The users file does not exist, its path leads into a directory under the root (into), and an entry under the root has its
+// name: a directory on its path may be the mount point of a mount that is down, and mounted again the path leads there.
+const namesakeMissing = (file, into, entries, { targets = [], root = ROOT_B } = {}) => {
+  const listed = (xs) => (xs.length < 3 ? xs.join(' and ') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
+  return `the recorded users file ${file} does not exist, and its path leads into ${into}${into === root ? '' : `, under ${root}`}, but `
+    + `${listed(entries)} under it ${entries.length === 1 ? 'has' : 'have'} its name`
+    + (targets.length ? `, and ${listed(targets)} ${targets.length === 1 ? 'is' : 'are'} what a link of that name leads to` : '')
+    + ': a directory on its path may be the mount point of a mount that is down, and mounted again it may lead the path there — nothing '
+    + `was deleted. Move ${listed([...entries, ...targets].sort())} out of ${root}, then run purge-org again. If the users file is among `
+    + `them, make ${file} lead to it again before a pre-store build or the in-place \`packc store export\` uses it`;
+};
+const unknownPlace =(file, nearest, { to = null, root = ROOT_B } = {}) => `the recorded users file ${file} does not exist, and nothing on this host `
   + `tells where its path leads${to ? ` (to ${to})` : ''}: ${nearest === null ? 'no part of it exists' : `the nearest part of it that exists, ${nearest}, is no directory under ${root}`}, `
   + `and a filesystem not mounted now may lead it under ${root} — nothing was deleted. If it lies on a filesystem that is not mounted now, `
   + `mount it, then run purge-org again; if it does not lie under ${root}, delete ${root} by hand, then run purge-org again: it drops org `
@@ -2516,7 +2527,7 @@ test('purge-org users file: every hard link under the root is named, so one move
   assert.deepEqual(placeIn(vol, '/srv/accounts.json'), { exists: true, refusal: null }, 'both moved out: purged, and /srv/accounts.json stays');
 });
 
-test('purge-org users file: a view through another filesystem — NFS (the inode kept), SMB (100 ns times), overlay (xino, an upper directory under the root, and one outside it), FUSE without inode numbers (whole seconds) — is refused by its size and modification time; another size or time is not; a copy that kept both reads the same (declared); moved out as the refusal says, its path through the NFS or SMB view leads to the directory under the root where nothing of it is left, and the purge passes, and through a view whose directories show another inode or time it is refused as a users file that does not exist — the second step the first refusal names, deleting the root by hand', () => {
+test('purge-org users file: a view through another filesystem — NFS (the inode kept), SMB (100 ns times), overlay (xino, an upper directory under the root, and one outside it), FUSE without inode numbers (whole seconds) — is refused by its size and modification time; another size or time is not; a copy that kept both reads the same (declared); moved out as the refusal says, its path through the NFS or SMB view leads to the directory under the root where nothing of it is left, and the purge passes once no entry under the root has its name, and through a view whose directories show another inode or time it is refused as a users file that does not exist — the second step the first refusal names, deleting the root by hand', () => {
   const T = 1_760_000_123_456_789_123n;
   const vol = betaVolume().file(`${ROOT_B}/sub/users.json`, { size: 117n, mtimeNs: T }).file(`${ROOT_B}/up/users.json`, { size: 90n })
     .file(`${ROOT_B}/packs/same-size.yaml`, { size: 117n, mtimeNs: T + 1_000_000_000n })
@@ -2556,7 +2567,14 @@ test('purge-org users file: a view through another filesystem — NFS (the inode
   vol.rename(`${ROOT_B}/sub/users.json`, '/keep-copy.json');
   assert.deepEqual(placeIn(vol, '/other/copy.json'), { exists: true, refusal: null }, 'its way out: moved out of the root, purged');
   // The views' way out, followed: with the users file moved out of the root, its path through the NFS or SMB view leads to
-  // that view of <root>/sub — the same directory by its inode and modification time — where nothing of it is left.
+  // that view of <root>/sub — the same directory by its inode and modification time — where nothing of it is left. While
+  // another entry under the root has its name (<root>/up/users.json, which the upper view above shows), a mount that is down
+  // on its path may lead it there, and it is refused by that name; moved out too, the purge passes.
+  for (const file of ['/mnt/nfs/users.json', '/mnt/smb/users.json']) {
+    assert.deepEqual(placeIn(vol, file), { exists: false, refusal: namesakeMissing(file, `${ROOT_B}/sub`, [`${ROOT_B}/up/users.json`]) },
+      `${file}: moved out, an entry of its name left`);
+  }
+  vol.rename(`${ROOT_B}/up/users.json`, '/keep-up.json');
   for (const file of ['/mnt/nfs/users.json', '/mnt/smb/users.json']) {
     assert.deepEqual(placeIn(vol, file), { exists: false, refusal: null }, `${file}: moved out, it leads under the root`);
   }
@@ -2961,6 +2979,57 @@ test('purge-org users file that exists outside the root: through a mount that is
   }
   linked.rename(`${ROOT_B}/sub/users.json`, '/keep/users.json').rename(`${ROOT_B}/data/real.json`, '/keep/real.json');
   assert.deepEqual(placeIn(linked, '/mnt/b/users.json'), { exists: true, refusal: null }, 'the link and what it names moved out');
+});
+
+test('purge-org users file that does not exist: its path leads into a directory under the root while an entry under the root has its name — the mount point of a bind mount of another directory under the root, holding the users file, that is down — and it is refused naming that entry (for a link of that name, what it leads to too), recorded through a file link, directly or through a directory link; with the mount up it is refused as a mount point, and unmounted as that refusal says it was purged, the users file deleted; moved out as the refusal says, the purge passes, and on the real filesystem through purgeOrg the moved file stays', async () => {
+  // <root>/other bind-mounted on <root>/sub/m, and the users file, <root>/other/users.json, recorded through the mount. Up,
+  // the mount is refused as a mount point; unmounted, as that refusal says, <root>/sub/m is an empty directory the walk read,
+  // and the purge went on and deleted the users file behind it: the path leads into a directory under the root, which
+  // passed without the name check.
+  const sub = `${ROOT_B}/sub/m`;
+  const behind = `${ROOT_B}/other/users.json`;
+  const vol = mountFs(posix, { proc: true }).dir(`${ROOT_B}/packs`).file(`${ROOT_B}/packs/b1.pack.yaml`).dir(sub).file(behind)
+    .symlink('/cfg/users.json', `${sub}/users.json`).symlink('/cfg/d', sub).bind(`${ROOT_B}/other`, sub);
+  const files = ['/cfg/users.json', `${sub}/users.json`, '/cfg/d/users.json'];
+  for (const file of files) {
+    assert.deepEqual(placeIn(vol, file), { exists: null, refusal: mounted(`${sub} (the same filesystem as ${ROOT_B}/sub, listed in /proc/self/mountinfo)`) },
+      `${file}, mounted`);
+  }
+  vol.unmount(sub);
+  for (const file of files) {
+    assert.deepEqual(placeIn(vol, file), { exists: false, refusal: namesakeMissing(file, sub, [behind]) }, `${file}, unmounted`);
+  }
+  // A link of that name under the root names what it leads to there too, which rmSync deletes once the link is moved out.
+  const linked = mountFs(posix).dir(`${ROOT_B}/packs`).dir(sub).file(`${ROOT_B}/data/real.json`).symlink(behind, '../data/real.json');
+  assert.deepEqual(placeIn(linked, `${sub}/users.json`),
+    { exists: false, refusal: namesakeMissing(`${sub}/users.json`, sub, [behind], { targets: [`${ROOT_B}/data/real.json`] }) });
+  // Moved out as the refusal says: the path leads into a directory under the root where nothing of it is, and no entry has its name.
+  vol.rename(behind, '/keep/users.json');
+  for (const file of files) assert.deepEqual(placeIn(vol, file), { exists: false, refusal: null }, `${file}, moved out`);
+  linked.rename(behind, '/keep/users.json').rename(`${ROOT_B}/data/real.json`, '/keep/real.json');
+  assert.deepEqual(placeIn(linked, `${sub}/users.json`), { exists: false, refusal: null }, 'the link and what it names moved out');
+
+  // On the real filesystem, through purgeOrg — no mount needed: what that mount leaves once it is down, <root>/sub/m an empty
+  // directory and the users file at <root>/other/users.json, recorded as <root>/sub/m/users.json and through a directory link.
+  const base = await removedOrgDeployment();
+  const root = join(base, 'orgs', 'acme');
+  const m = join(root, 'sub', 'm');
+  const usersAt = join(root, 'other', 'users.json');
+  mkdirSync(m, { recursive: true });
+  usersJson(base, ['alice'], usersAt);
+  const cfg = tempDir('ops-cfg');
+  symlinkSync(m, join(cfg, 'd'), 'junction');   // a junction needs no privilege on Windows; a symlink elsewhere
+  const filesBefore = readdirSync(root, { recursive: true }).sort();
+  for (const usersFile of [join(m, 'users.json'), join(cfg, 'd', 'users.json')]) {
+    await change(base, (db) => tx(db, () => meta.putMeta(db, 'users_file', usersFile)));
+    await assert.rejects(purge(base, 'acme'), refusedOp(new RegExp(`^${esc(namesakeMissing(usersFile, m, [usersAt], { root }))}$`)), usersFile);
+    assert.deepEqual(readdirSync(root, { recursive: true }).sort(), filesBefore, 'nothing deleted');
+  }
+  const keep = join(tempDir('ops-keep'), 'users.json');
+  renameSync(usersAt, keep);
+  assert.equal((await purge(base, 'acme')).deleted, true);
+  assert.equal(existsSync(root), false);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(keep, 'utf8')).users), ['alice'], 'the moved users file stays');
 });
 
 test('purge-org users file that does not exist: recorded under the root and moved out, or reached by a link whose target is gone from the root, or by a chain of 40 links (Linux\'s limit), the purge passes; so does one whose path leads only through directories the root lies in, by its real path, to one where the rest does not exist (a sibling org\'s directory purged before), while no entry under the root has its name; one whose place lies elsewhere — a file deleted outside the root, a link to a mount that is down (also by a link into the root and on by a link under it, the rest of the path kept after each), a mount point that is down on another filesystem whose directory has the inode number of one under the root but another modification time, a path no part of which exists, a path through a directory the root does not lie in, or one whose name an entry under the root has — is refused, failing closed; none recorded and <base>/users.json absent, the purge passes', () => {

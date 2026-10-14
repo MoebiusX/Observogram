@@ -2702,7 +2702,15 @@ and it refuses, deleting nothing:
   exist, delete `orgs/<id>/` by hand and run the purge again. If one of
   them is the users file, make the users file's path lead to it again
   before you roll back. An entry of that name that is not the users file
-  is refused alike.
+  is refused alike. So is a users file that does not exist whose path
+  leads into a directory under `orgs/<id>/` while an entry there has its
+  name: a directory on its path may be the mount point of a mount that is
+  down — `orgs/<id>/other` bind-mounted on `orgs/<id>/sub/m`, the users
+  file in `other` recorded through it, and unmounted as the mount-point
+  refusal below says — and once the mount is back the path leads to that
+  entry. Move the entries it names out of `orgs/<id>/`, then run the purge
+  again; if the users file is among them, make its path lead to it again
+  before you roll back.
 - **while a recorded users file — or, with none recorded,
   `<workspace>/users.json` as a link — does not exist and its path does not
   lead under `orgs/<id>/`** (but for one only through directories
@@ -2715,8 +2723,9 @@ and it refuses, deleting nothing:
   leads under `orgs/<id>/`, where nothing of the users file is left; the
   purge goes on when purge-org can trace it there — through a bind mount, a
   link, or an NFS, SMB, overlay or FUSE mount that shows that directory's own
-  inode and modification time — and through any other such mount it is
-  refused here, the second step its first refusal names. Once that org is purged its directory is gone, and the recorded path
+  inode and modification time — while no entry under `orgs/<id>/` has the
+  users file's name (above); through any other such mount it is refused
+  here, the second step its first refusal names. Once that org is purged its directory is gone, and the recorded path
   leads into a directory that does not exist: purging another org goes on
   when the path is looked up only in directories its `orgs/<id>/` lies in
   (`<workspace>/orgs` and those above it, by their real paths) and no entry

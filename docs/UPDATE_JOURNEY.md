@@ -1521,11 +1521,12 @@ the path under the root, and the comparison fell back to it as written. The
 comparison by path now holds only while the users file exists. One that does
 not is followed to where its path leads — every link that exists followed, a
 dangling one by its target — and its nearest directory that exists: one under
-the root means nothing of the users file is left there to delete, and the
-purge goes on; any other is refused, since a mount that is down leaves only an
-empty mount point, and with the bind mount above down purge-org had deleted
-the users file behind it. Through a view whose directories show another inode
-or modification time than theirs under the root — an overlay mount's merged
+the root, with no entry there of the users file's name (below), means nothing
+of the users file is left there to delete, and the purge goes on; any other is
+refused, since a mount that is down leaves only an empty mount point, and
+with the bind mount above down purge-org had deleted the users file behind it.
+Through a view whose directories show another inode or modification time than
+theirs under the root — an overlay mount's merged
 directory shows its upper directory's — the path of a users file moved out
 leads to no directory purge-org can tell is under the root, so it is refused
 too, and the view's refusal names that second step: delete the root by hand.
@@ -1601,3 +1602,16 @@ the directories it is in, as Node 22's `rmSync` does: its memory grows with
 the directories under the root and the longest listing, not with the files,
 and that root passes in 16 MB. Tests: 1444 → 1445 (one more in
 `server/test-store-ops.mjs`).
+
+A users file that does not exist whose path leads into a directory under the
+root passed without the name check a users file that exists has, and a
+directory on that path may be the mount point of a mount that is down: with
+`<root>/other` bind-mounted on `<root>/sub/m` and the users file in `other`
+recorded through it, purge-org refused the mount point, and once it was
+unmounted, as that refusal says, the purge deleted the users file. Such a
+path is now refused by the name too when an entry under the root has it,
+naming each such entry; moving them out of the root is its way out, and the
+purge then passes. A users file moved out of the root as the refusal of one
+under it says passes as before unless another entry under the root has its
+name, which is refused alike (a declared false refusal) until it is moved out
+too. Tests: 1445 → 1446 (one more in `server/test-store-ops.mjs`).
