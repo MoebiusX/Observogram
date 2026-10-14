@@ -1658,3 +1658,12 @@ the root lies in, whose filesystem `/` shows: a covered mount whose path shows
 a directory of another filesystem is passed over, one of the same filesystem
 refused naming what to unmount first, as before, and followed literally the
 purge passes. Tests: 1446 → 1447 (one more in `server/test-store-ops.mjs`).
+
+A mount point under the root holding mounts was refused naming it alone: the
+walk never enters a mount point, so the mounts in it went unnamed, though
+`/proc/self/mountinfo` lists them, and followed literally — `umount <root>/m`
+— the way out said target is busy, and every later run repeated the
+refusal. The refusal now names the mounts in it to unmount first, in order,
+each after the mounts in it, as a covered mount's does (a mount stacked on it
+names the mounts in the topmost alone, which `umount` takes); followed so,
+the purge passes. Tests: 1447 → 1448 (one more in `server/test-store-ops.mjs`).

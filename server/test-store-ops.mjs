@@ -2370,6 +2370,7 @@ test('purge-org docs: the README and the k8s note say it cannot be undone, what 
     'run the purge as a user who can read it',
     'Unmount it, then run the purge again',
     'names the mounts to unmount first, in order, before you unmount it',
+    'names them to unmount first, in order, each after the mounts in it',
     'mount it there again once the covered mount is unmounted, then run the purge again',
     'move it out of `orgs/<id>/` and unmount, then run the purge again',
     'Stop what changes files there, then run the purge again',
@@ -2870,6 +2871,49 @@ test('purge-org users file: in a chroot into a directory that is no mount point,
   assert.deepEqual(placeIn(stacked, '/srv/accounts.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m`)) }, 'a tmpfs on / in the chroot: /srv6 mounted there');
   stacked.unmount(`${ROOT_B}/m`);
   assert.deepEqual(placeIn(stacked, '/srv/accounts.json'), { exists: true, refusal: null }, 'unmounted as its refusal says: purged');
+});
+
+test('purge-org users file: a mount point under the root holding mounts is refused naming them to unmount first, in order, each after the mounts in it — named alone, `umount <root>/m` said target is busy and the same refusal came back; a mount stacked on it names the mounts in the topmost alone', () => {
+  const same = (at, root = ROOT_B) => `${at} (the same filesystem as ${root}, listed in /proc/self/mountinfo)`;
+  const busy = (at, first, why = `the same filesystem as ${ROOT_B}, listed in /proc/self/mountinfo`) => `${at} (${why}, holding `
+    + `${first.includes(', then ') ? 'mounts, which keep' : 'a mount, which keeps'} it busy: first unmount ${first})`;
+  // A bind at <root>/m holding one at <root>/m/n, in that one at <root>/m/n/o, and beside it one at <root>/m/p: the walk never
+  // enters <root>/m, so they went unnamed, though /proc/self/mountinfo lists them. Each comes after the mounts in it.
+  const nested = betaVolume({ proc: true }).dir('/srv6').dir('/srv7').dir('/srv8').dir('/srv9').file('/srv9/other-data').bind('/srv6', `${ROOT_B}/m`)
+    .bind('/srv7', `${ROOT_B}/m/n`).bind('/srv8', `${ROOT_B}/m/n/o`).bind('/srv9', `${ROOT_B}/m/p`);
+  assert.throws(() => nested.unmount(`${ROOT_B}/m`), { code: 'EBUSY' }, 'the mounts in <root>/m keep it busy');
+  assert.deepEqual(placeIn(nested, '/srv/accounts.json'), { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/n/o, then ${ROOT_B}/m/n, then ${ROOT_B}/m/p`)) },
+    'refused naming the mounts in it, each after the mounts in it');
+  // Followed literally — the named order, then <root>/m, as the refusal says — the purge passes, and the mounted directories' files stay.
+  nested.unmount(`${ROOT_B}/m/n/o`).unmount(`${ROOT_B}/m/n`);
+  assert.deepEqual(placeIn(nested, '/srv/accounts.json'), { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/p`)) }, 'part-way: the mount left in it');
+  nested.unmount(`${ROOT_B}/m/p`).unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(nested, '/srv/accounts.json'), { exists: true, refusal: null }, 'unmounted as its refusal says: purged');
+  assert.deepEqual(nested.fs.readdirSync('/srv9'), ['other-data'], 'the mounted directory\'s files stay');
+  // A mount in it that a later one over a directory above it covers comes after the one that covers it (unmounted first, it
+  // is not mounted). A mount of another filesystem holding one is named alike.
+  const coveredIn = betaVolume({ proc: true }).dir('/srv6').dir('/srv7').dir('/srv8').bind('/srv6', `${ROOT_B}/m`).bind('/srv8', `${ROOT_B}/m/n/o`)
+    .bind('/srv7', `${ROOT_B}/m/n`);
+  assert.throws(() => coveredIn.unmount(`${ROOT_B}/m/n/o`), { code: 'EINVAL' }, 'covered in <root>/m: not mounted');
+  assert.deepEqual(placeIn(coveredIn, '/srv/accounts.json'), { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/n, then ${ROOT_B}/m/n/o`)) }, 'a covered mount in it');
+  coveredIn.unmount(`${ROOT_B}/m/n`).unmount(`${ROOT_B}/m/n/o`).unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(coveredIn, '/srv/accounts.json'), { exists: true, refusal: null }, 'a covered mount in it: unmounted as its refusal says, purged');
+  const onTmpfs = betaVolume({ proc: true }).dir('/tfs', { dev: 47n }).bind('/tfs', `${ROOT_B}/m`).dir('/srv7').bind('/srv7', `${ROOT_B}/m/n`);
+  assert.deepEqual(placeIn(onTmpfs, '/srv/accounts.json'), { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/n`, `another filesystem than ${ROOT_B}`)) },
+    'a tmpfs on <root>/m holding a mount');
+  onTmpfs.unmount(`${ROOT_B}/m/n`).unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(onTmpfs, '/srv/accounts.json'), { exists: true, refusal: null }, 'a tmpfs on <root>/m: unmounted as its refusal says, purged');
+  // A mount stacked on <root>/m: `umount <root>/m` takes the topmost, so the mounts in that alone are named (the lower mount's
+  // are covered by it), and once it is off, the lower mount's.
+  const stack = betaVolume({ proc: true }).dir('/srv6').dir('/srv7').dir('/srv8').dir('/srv9').bind('/srv6', `${ROOT_B}/m`).bind('/srv7', `${ROOT_B}/m/n`)
+    .bind('/srv8', `${ROOT_B}/m`);
+  assert.deepEqual(placeIn(stack, '/srv/accounts.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m`)) }, 'a stack on <root>/m, nothing in its topmost');
+  stack.bind('/srv9', `${ROOT_B}/m/q`);
+  assert.deepEqual(placeIn(stack, '/srv/accounts.json'), { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/q`)) }, 'a stack on <root>/m: the mount in its topmost');
+  stack.unmount(`${ROOT_B}/m/q`).unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(stack, '/srv/accounts.json'), { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/n`)) }, 'the topmost off: the lower mount\'s');
+  stack.unmount(`${ROOT_B}/m/n`).unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(stack, '/srv/accounts.json'), { exists: true, refusal: null }, 'a stack on <root>/m: unmounted as its refusal says, purged');
 });
 
 test('purge-org users file: a directory under the root this user cannot read is refused, nothing deleted, and read by a user who can, the purge passes; one it may list but not search (r--) is refused naming the entry it cannot read; one a stopped FUSE server cannot answer for is refused naming unmounting it', () => {

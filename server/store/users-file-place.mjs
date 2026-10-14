@@ -32,8 +32,11 @@
 //     on it, so with a tmpfs mounted on / in a chroot, or `mount --bind / /`, a mount under the root is refused still), a
 //     directory the walk reached already
 //     (one directory mounted at a second place under the root), or on Windows a folder another volume is mounted in
-//     (lstatSync answers the folder, statSync the volume). Any other entry on another filesystem than its directory is
-//     one only as /proc/self/mountinfo lists it: an overlay mount whose layers lie on different filesystems (xino=off)
+//     (lstatSync answers the folder, statSync the volume). One holding mounts (a bind at <root>/m/n in the one at <root>/m),
+//     which keep it busy — `umount <root>/m` fails (target is busy), and the walk never enters it to name them — is refused
+//     naming them to unmount first, in order, each after the mounts in it, as a covered mount's refusal names them (for a
+//     stack, the mounts in its topmost mount, which umount takes). Any other entry on another filesystem than its directory
+//     is one only as /proc/self/mountinfo lists it: an overlay mount whose layers lie on different filesystems (xino=off)
 //     shows its directories on its own device and a lower layer's files on that layer's, with nothing mounted there
 //     (without /proc/self/mountinfo, see below). On Node 22 rmSync stops part-way at a mount point; on Node 23 and later it
 //     first deletes the files of the filesystem mounted there; and a directory mounted from outside the root may hold
@@ -244,8 +247,10 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
   try { above = dev(stat(path.dirname(root))); } catch (e) { return unreadable(path.dirname(root), e); }
   // The mount points Linux lists at the root or under it, as paths relative to it ('' the root itself): a bind mount of a
   // directory of the same filesystem among them, which lstatSync cannot tell from a directory. The kernel lists real
-  // paths, so the root's is compared. Each maps to null, or for a covered mount whose path may show what it is mounted on
-  // (below), to the mount points to unmount first, in order. No such file (off Linux, /proc not mounted): only the walk tells.
+  // paths, so the root's is compared. Each maps to { covered, first }: whether it is a covered mount whose path may show
+  // what it is mounted on (below), and the mount points to unmount first, in order — the mounts in it, which keep it busy,
+  // after what covers it (a lower mount of a stack maps to null: umount takes the topmost). No such file (off Linux, /proc
+  // not mounted): only the walk tells.
   const listed = new Map();
   let info = null;
   if (!windows) {
@@ -304,17 +309,22 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
       if (parent !== undefined) return x.device === parent.device;
       try { return dev(lstat(m.at)) === dev(stat(path.sep)); } catch { return true; }
     };
-    // What to unmount, in order, before the covered mount m can be unmounted at its path: what covers its parent, then each
-    // mount in its parent over a directory above it (the outermost first), and the mounts in m — each after the mounts in
-    // it, which keep it busy.
+    // The mounts in a mount keep it busy (umount: target is busy), so they come off first, each after the mounts in it: the
+    // mounts in c (the outermost first), then c — once for each (seen).
     const outermost = (a, b) => a.at.length - b.at.length || (a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
-    const firstOff = (m) => {
-      const seen = new Set([m]);
-      const within = (c) => {
+    const within = (seen) => {
+      const inner = (c) => {
         if (seen.has(c)) return [];
         seen.add(c);
-        return [...[...(inParent.get(c.id) ?? [])].sort(outermost).flatMap(within), c];
+        return [...[...(inParent.get(c.id) ?? [])].sort(outermost).flatMap(inner), c];
       };
+      return inner;
+    };
+    const inside = (m, seen = new Set([m])) => [...(inParent.get(m.id) ?? [])].sort(outermost).flatMap(within(seen)).map((c) => c.at);
+    // What to unmount, in order, before the covered mount m can be unmounted at its path: what covers its parent, then each
+    // mount in its parent over a directory above it (the outermost first), and the mounts in m.
+    const firstOff = (m) => {
+      const seen = new Set([m]);
       const uncover = (n) => {
         const parent = byId.get(n.parent);
         const outer = [];
@@ -322,15 +332,18 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
           seen.add(parent);
           outer.push(...uncover(parent));
         }
-        return [...outer, ...inParent.get(n.parent).filter((c) => above(c.at, n.at)).sort(outermost).flatMap(within)];
+        return [...outer, ...inParent.get(n.parent).filter((c) => above(c.at, n.at)).sort(outermost).flatMap(within(seen))];
       };
-      return [...uncover(m), ...[...(inParent.get(m.id) ?? [])].sort(outermost).flatMap(within)].map((c) => c.at);
+      return [...uncover(m).map((c) => c.at), ...inside(m, seen)];
     };
+    // A mount stacked on m (mounted on m's own mount point, in m): umount at that path takes the topmost of the stack.
+    const stacked = (m) => lines.some((c) => c.parent === m.id && c.at === m.at);
     for (const m of lines) {
       if (m.at !== real && !m.at.startsWith(real + path.sep)) continue;
       const at = m.at.slice(real.length);
-      if (!covered(m)) listed.set(at, null);
-      else if (!listed.has(at) && shows(m)) listed.set(at, firstOff(m));
+      if (covered(m)) { if (!listed.has(at) && shows(m)) listed.set(at, { covered: true, first: firstOff(m) }); }
+      else if (!stacked(m)) listed.set(at, { covered: false, first: inside(m) });
+      else if (!listed.has(at)) listed.set(at, null);
     }
   }
   // The users file, its path followed through every link, placed before the walk (and again after it, below), and the names
@@ -367,14 +380,17 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     // layer's files on that layer's device and its directories on its own. So where /proc/self/mountinfo tells, only one
     // it lists is refused.
     const mountedHere = listed.has(relative(at));
-    const first = listed.get(relative(at));
+    const { covered = false, first = [] } = listed.get(relative(at)) ?? {};
+    // The mounts in it keep it busy (`umount <at>`: target is busy, and the same refusal came back), so they are named first.
     // What covers it may show another directory there than the one it is mounted on — the workspace's, with the deployment
     // bind-mounted over the directory that holds the covered mount — and unmounting that takes the workspace away (followed
     // without the step, purge-org found no database): so the hint says to mount it there again once the covered mount is off.
-    const hint = first?.length ? `, covered by a later mount through which its path may show what it is mounted on: first unmount `
-      + `${first.join(', then ')}; if the workspace goes with ${first.length === 1 ? 'it' : 'one of them'} (a mount that showed another `
-      + `directory there than the one it is mounted on — the workspace's), mount it there again once ${named(at)} is unmounted, before `
-      + 'you run purge-org again' : '';
+    const hint = !first.length ? ''
+      : covered ? `, covered by a later mount through which its path may show what it is mounted on: first unmount `
+        + `${first.join(', then ')}; if the workspace goes with ${first.length === 1 ? 'it' : 'one of them'} (a mount that showed another `
+        + `directory there than the one it is mounted on — the workspace's), mount it there again once ${named(at)} is unmounted, before `
+        + 'you run purge-org again'
+        : `, holding ${first.length === 1 ? 'a mount, which keeps' : 'mounts, which keep'} it busy: first unmount ${first.join(', then ')}`;
     if (dev(st) !== parentDev && (st.isDirectory() || mountedHere || info === null)) {
       mounts.push({ at, why: `another filesystem than ${named(from)}${hint}` });
       return null;

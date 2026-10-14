@@ -2745,7 +2745,9 @@ and it refuses, deleting nothing:
 - **while a mount point is under `orgs/<id>/`, or the directory is one**:
   on Node 22 the delete stops part-way at a mount point, and on Node 23 and
   later it first deletes the files of the filesystem mounted there. Unmount
-  it, then run the purge again. On Linux this includes a bind mount of
+  it, then run the purge again; where it holds mounts, which keep it busy
+  (`umount`: target is busy), the refusal names them to unmount first, in
+  order, each after the mounts in it. On Linux this includes a bind mount of
   another directory of the same filesystem, which `/proc/self/mountinfo`
   lists (not one a later mount over a directory above it covers, which it
   lists too: nothing is mounted at its path then, and the purge goes on —
