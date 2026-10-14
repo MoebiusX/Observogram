@@ -484,10 +484,11 @@ section per package the import map carries — with its `File:` line and a
 licence text — and none for a package it does not carry; and the pointer
 comment's wording. It does not compare the texts with an installed tree.
 
-**Size.** An empty bundle is 5,423,375 bytes (115 repository modules and the
-four packages), up from 4,901,947 bytes (109 modules) before this follow-up
-(+10.6 %): the parser and its packages, the traceability graph and the blast
-radius, the audit report, retrofeed and the static posture's texts.
+**Size.** An empty bundle is 5,454,277 bytes (115 repository modules and the
+four packages; `--remote-fonts` adds 372), up from 4,901,598 bytes (109
+modules) before this follow-up, both without the font links (+11.3 %): the
+parser and its packages, the traceability graph and the blast radius, the
+audit report, retrofeed and the static posture's texts.
 `tools/test-studio-bundle.mjs` holds a two-pack build under 6,000,000 bytes,
 so a dependency that enters the graph unexpectedly is caught where it lands.
 
