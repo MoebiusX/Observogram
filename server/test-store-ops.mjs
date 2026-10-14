@@ -2465,6 +2465,9 @@ const unknownPlace = (file, nearest, { to = null, root = ROOT_B } = {}) => `the 
   + `and a filesystem not mounted now may lead it under ${root} — nothing was deleted. If it lies on a filesystem that is not mounted now, `
   + `mount it, then run purge-org again; if it does not lie under ${root}, delete ${root} by hand, then run purge-org again: it drops org `
   + 'beta\'s records';
+const mounted = (what, root = ROOT_B) => `${root} holds a mount point, ${what}: deleting ${root} would take the files of the filesystem mounted there `
+  + `(Node 23 and later) or stop part-way at it (Node 22), and a directory mounted from outside ${root} may hold the users file — `
+  + 'nothing was deleted. Unmount what is mounted there, then run purge-org again';
 
 test('purge-org users file: under the root through a bind mount that is up — by its path there, through a file link and a directory link to it, and as spelled — is refused naming its entry under the root; one outside the root is purged, also when a link under the root leads to it, to its directory or to another filesystem (rmSync deletes the link alone)', () => {
   const vol = betaVolume().dir('/mnt/b').bind(`${ROOT_B}/sub`, '/mnt/b')
@@ -2552,9 +2555,6 @@ test('purge-org users file: a view through another filesystem — NFS (the inode
 
 test('purge-org users file: a mount point under the root — another filesystem, a file mounted there, one directory reached twice, a loop, the root itself, a mount of the same filesystem /proc/self/mountinfo lists — is refused before anything is deleted, and once unmounted the purge passes; with no /proc/self/mountinfo, a same-filesystem bind mount from outside is entered as a directory; a file on another device than its directory that /proc/self/mountinfo does not list (an overlay mount\'s lower layer on another filesystem) is none', () => {
   const vol = betaVolume().dir('/srv5', { dev: 7n }).file('/srv5/users.json').bind('/srv5', `${ROOT_B}/m`);
-  const mounted = (what, root = ROOT_B) => `${root} holds a mount point, ${what}: deleting ${root} would take the files of the filesystem mounted there `
-    + `(Node 23 and later) or stop part-way at it (Node 22), and a directory mounted from outside ${root} may hold the users file — `
-    + 'nothing was deleted. Unmount what is mounted there, then run purge-org again';
   // The reverse of a mount view: a directory from outside mounted under the root, holding the users file.
   assert.deepEqual(placeIn(vol, '/srv5/users.json'), { exists: null, refusal: mounted(`${ROOT_B}/m (another filesystem than ${ROOT_B})`) });
   vol.unmount(`${ROOT_B}/m`);
@@ -2695,6 +2695,40 @@ test('purge-org users file: a directory under the root that changes while the wa
   assert.deepEqual(placeIn(over, '/srv5/users.json'), { exists: true, refusal: null }, 'nothing mounted: outside the root, purged');
   assert.deepEqual(during(over, '/srv5/users.json', { [`${ROOT_B}/packs#1`]: () => over.bind('/srv5', `${ROOT_B}/a`) }),
     changed(`${ROOT_B}/a`), 'a mount over a directory read already, by its inode');
+});
+
+test('purge-org users file: a name under the root that is not valid UTF-8 is read as the bytes the filesystem holds — the users file in such a directory, reached through a link, is refused naming it as a POSIX shell\'s $\'…\' spells it, and moved out as that says, the purge passes; below such a name a mount point and a directory it cannot read are refused; with the users file outside, a tree of such names passes', () => {
+  // node:fs lists a name that is not valid UTF-8 as a string with U+FFFD in place of each such byte (c\xffd as 'c\ufffdd'), a
+  // name no lookup finds: lstatSync of it fails with ENOENT, the walk took that for an entry gone while it ran, and so read
+  // nothing of that directory, while rmSync, which lists names as bytes, deleted the users file in it. The fixture spells
+  // such a byte 0xNN as U+DCNN.
+  const C = `${ROOT_B}/c\udcffd`;
+  const shown = (rest = '') => `$'${ROOT_B}/c\\xffd${rest}'`;
+  const vol = betaVolume().file(`${C}/users.json`).file(`${ROOT_B}/run\udce9/inner/data.json`).symlink('/cfg/users.json', `${C}/users.json`)
+    .dir('/keep');
+  assert.deepEqual(vol.fs.readdirSync(ROOT_B), ['c\ufffdd', 'packs', 'run\ufffd', 'sub'], 'listed as a string, as node:fs lists it');
+  assert.throws(() => vol.fs.lstatSync(`${ROOT_B}/c\ufffdd`), { code: 'ENOENT' }, 'a name no lookup finds');
+  assert.deepEqual(placeIn(vol, '/cfg/users.json'), { exists: true, refusal: underRoot('/cfg/users.json', shown('/users.json')) });
+  // The way out, followed (mv $'/ws/orgs/beta/c\xffd/users.json' /keep/ in a shell): the link then leads under the root, where
+  // nothing of the users file is left, and the users file outside a tree of such names is purged.
+  vol.rename(`${C}/users.json`, '/keep/users.json');
+  assert.deepEqual(placeIn(vol, '/cfg/users.json'), { exists: false, refusal: null });
+  assert.deepEqual(placeIn(vol, '/keep/users.json'), { exists: true, refusal: null }, 'outside, the tree read again unchanged: purged');
+  // Below such a name: a directory from another filesystem mounted there, a bind mount of one of the same filesystem that
+  // /proc/self/mountinfo lists (the kernel writes the name's bytes, read as UTF-8 as the walk's own path is), a directory it
+  // cannot read. Unmounted, the purge passes.
+  const mnt = betaVolume({ proc: true }).dir('/srv5', { dev: 7n }).file('/srv5/users.json').dir('/srv6').file('/srv6/data.json')
+    .dir(`${C}/m`).bind('/srv5', `${C}/m`);
+  assert.deepEqual(placeIn(mnt, '/srv5/users.json'), { exists: null, refusal: mounted(`${shown('/m')} (another filesystem than ${shown()})`) });
+  mnt.unmount(`${C}/m`).bind('/srv6', `${C}/m6`);
+  assert.deepEqual(placeIn(mnt, '/srv5/users.json'),
+    { exists: null, refusal: mounted(`${shown('/m6')} (the same filesystem as ${shown()}, listed in /proc/self/mountinfo)`) });
+  mnt.unmount(`${C}/m6`);
+  assert.deepEqual(placeIn(mnt, '/srv5/users.json'), { exists: true, refusal: null }, 'unmounted: purged');
+  mnt.dir(`${C}/locked`).deny(`${C}/locked`);
+  assert.equal(placeIn(mnt, '/srv5/users.json').refusal, `${shown('/locked')} under ${ROOT_B} cannot be read (EACCES), so purge-org cannot `
+    + `tell what deleting ${ROOT_B} takes — nothing was deleted. Run purge-org as a user who can read it; or, if the recorded users file `
+    + `/srv5/users.json does not lie under ${ROOT_B}, delete ${ROOT_B} by hand as such a user, then run purge-org again: it drops org beta's records`);
 });
 
 test('purge-org users file on Windows paths: through a junction, through a share of a directory under the root (the volume serial\'s low 32 bits, all a share reports), and a volume mounted in a folder under the root', () => {

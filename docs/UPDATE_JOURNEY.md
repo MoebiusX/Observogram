@@ -1540,3 +1540,13 @@ change time, which moves with every entry added, removed or renamed in it,
 and the same names. One that changed is refused, deleting nothing; stop what
 changes files there and run the purge again, and the walk finds the users
 file. Tests: 1440 → 1441 (one more in `server/test-store-ops.mjs`).
+
+The walk listed names as strings, and `node:fs` gives a name that is not
+valid UTF-8 with U+FFFD in place of each such byte: a name no lookup finds,
+which the walk took for an entry gone while it ran, so it read nothing under
+it, while `rmSync`, which lists names as bytes, deleted the users file there.
+The walk now lists each name as the bytes the filesystem holds and follows
+such a name as bytes, so the users file, a mount point or a directory it
+cannot read below it is refused; a refusal names that path as a POSIX
+shell's `$'…'` spells it, so moving the users file out, as the refusal says,
+can be typed. Tests: 1441 → 1442 (one more in `server/test-store-ops.mjs`).

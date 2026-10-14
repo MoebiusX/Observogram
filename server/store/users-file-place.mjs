@@ -8,10 +8,13 @@
 // mount of <root>/sub), reached directly or through a link — realpath never crosses a mount back to its source —
 // or as a hard link. Comparing the path alone, purge-org deleted it. So the check reads what rmSync would delete:
 //
-//   - the walk: the root and everything under it, as rmSync takes it — lstat each entry, list each directory, never
-//     through a link (a symlink, or a junction on Windows). A mount point under the root is refused: a directory on
-//     another filesystem than the directory that holds it, an entry /proc/self/mountinfo lists (Linux: a bind mount of a
-//     directory of the same filesystem, which lstatSync cannot tell from a directory, or a file mounted on a file;
+//   - the walk: the root and everything under it, as rmSync takes it — lstat each entry, list each directory, each name
+//     as the bytes the filesystem holds, as rmSync lists them (as a string, node:fs gives a name that is not valid UTF-8
+//     with U+FFFD in place of each such byte, a name no lookup finds, and the walk read nothing under it), never through
+//     a link (a symlink, or a junction on Windows). A refusal names a path holding such a name as a POSIX shell's $'…'
+//     spells it, each such byte \xNN. A mount point under the root is refused: a directory on another filesystem than
+//     the directory that holds it, an entry /proc/self/mountinfo lists (Linux: a bind mount of a directory of the same
+//     filesystem, which lstatSync cannot tell from a directory, or a file mounted on a file;
 //     matched by the root's real path, as the kernel lists it), a directory the walk reached already (one directory
 //     mounted at a second place under the root), or on Windows a folder another volume is mounted in (lstatSync answers
 //     the folder, statSync the volume). Any other entry on another filesystem than its directory is one only as
@@ -69,9 +72,9 @@
 // file's path leads to a file now (true), or not (false), or null when the check stopped before it could tell;
 // refusal is purge-org's message, or null when deleting the root takes nothing of the users file. recorded is false
 // for <base>/users.json when nothing was recorded; id is the org's. fs = { lstatSync, statSync, readdirSync,
-// readlinkSync, realpathSync, readFileSync } (node:fs's; the stats called with { bigint: true }), path (node:path's) and
-// windows (the platform) are injectable
-// (server/test-store-ops.mjs, over server/fixtures/mount-fs.mjs); the default is this host.
+// readlinkSync, realpathSync, readFileSync } (node:fs's; the stats called with { bigint: true }, readdirSync with
+// { encoding: 'buffer' }), path (node:path's) and windows (the platform) are injectable (server/test-store-ops.mjs, over
+// server/fixtures/mount-fs.mjs); the default is this host.
 
 import * as nodeFs from 'node:fs';
 import * as nodePath from 'node:path';
@@ -99,6 +102,26 @@ function sameTime(a, b) {
 
 const list = (items) => (items.length < 3 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`);
 
+// A path the walk holds as bytes — a name in it is not valid UTF-8 — spelled as a POSIX shell's $'…' takes it: each byte
+// that is not part of a UTF-8 character as \xNN, a backslash or a quote escaped, so a refusal names a path one can type.
+function spelled(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length;) {
+    const b = bytes[i];
+    const n = b < 0x80 ? 1 : b >= 0xc2 && b < 0xe0 ? 2 : b >= 0xe0 && b < 0xf0 ? 3 : b >= 0xf0 && b < 0xf5 ? 4 : 0;
+    const seq = bytes.subarray(i, i + n);
+    const ch = n && seq.length === n ? seq.toString('utf8') : '';
+    if (ch && Buffer.from(ch, 'utf8').equals(seq)) {
+      s += ch === '\\' || ch === "'" ? `\\${ch}` : ch;
+      i += n;
+    } else {
+      s += `\\x${b.toString(16).padStart(2, '0')}`;
+      i += 1;
+    }
+  }
+  return `$'${s}'`;
+}
+
 export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = nodeFs, path = nodePath, windows = ON_WINDOWS } = {}) {
   const lstat = (p) => fs.lstatSync(p, { bigint: true });
   const stat = (p) => fs.statSync(p, { bigint: true });
@@ -109,7 +132,9 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     if (a.isDirectory() && b.isDirectory()) return a.ino === b.ino && sameTime(a.mtimeNs, b.mtimeNs);
     return false;
   };
-  const under = (p) => p.startsWith(root + path.sep);
+  // A path under the root is a string, or the bytes the filesystem holds once a name on it is not valid UTF-8 (below).
+  const named = (p) => (typeof p === 'string' ? p : spelled(p));
+  const under = (p) => typeof p !== 'string' || p.startsWith(root + path.sep);
   const who = recorded ? `the recorded users file ${file}`
     : `the users file ${file} (the one a pre-store build reads: OBSERVOGRAM_USERS_FILE was not set at the import)`;
   const code = (e) => e?.code || e?.message || 'error';
@@ -117,7 +142,7 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
 
   // The walk: what rmSync(root, { recursive: true }) would delete.
   const denied = (e) => e?.code === 'EACCES' || e?.code === 'EPERM';
-  const unreadable = (at, e) => stopped(`${at}${under(at) ? ` under ${root}` : ''} cannot be read (${code(e)}), so purge-org cannot `
+  const unreadable = (at, e) => stopped(`${named(at)}${under(at) ? ` under ${root}` : ''} cannot be read (${code(e)}), so purge-org cannot `
     + `tell what deleting ${root} takes — nothing was deleted. `
     + (denied(e) ? `Run purge-org as a user who can read it; or, if ${who} does not lie under ${root}, delete ${root} by hand as such `
       + 'a user'
@@ -131,6 +156,18 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
   // A directory as the walk found it: the same directory (device and inode) with the same change time — an entry
   // added, removed or renamed in it, or a mount over it, changes one of them.
   const state = (st) => `${dev(st)}:${st.ino}:${st.ctimeNs}`;
+  // Each name as the bytes the filesystem holds: listed as a string, a name that is not valid UTF-8 comes back with U+FFFD
+  // in place of each such byte, a name no lookup finds, and what lies under it would go unread. A name that is valid UTF-8
+  // joins its directory's path as a string, as before; any other, and every path under it, is joined as bytes.
+  const listing = (at) => [...fs.readdirSync(at, { encoding: 'buffer' })];
+  const namesOf = (bytes) => bytes.map((b) => b.toString('latin1')).sort().join('\0');
+  const child = (at, b) => {
+    const s = b.toString('utf8');
+    if (typeof at === 'string' && Buffer.from(s, 'utf8').equals(b)) return path.join(at, s);
+    return Buffer.concat([Buffer.from(at), Buffer.from(path.sep), b]);
+  };
+  const rootBytes = Buffer.byteLength(root);
+  const relative = (at) => (typeof at === 'string' ? at.slice(root.length) : at.subarray(rootBytes).toString('utf8'));
   let above;
   try { above = dev(stat(path.dirname(root))); } catch (e) { return unreadable(path.dirname(root), e); }
   // The mount points Linux lists at the root or under it, as paths relative to it ('' the root itself): a bind mount of a
@@ -151,9 +188,9 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
       else if (at?.startsWith(real + path.sep)) listed.add(at.slice(real.length));
     }
   }
-  const stack = [{ at: root, parentDev: above }];
+  const stack = [{ at: root, from: path.dirname(root), parentDev: above }];
   while (stack.length) {
-    const { at, parentDev } = stack.pop();
+    const { at, from, parentDev } = stack.pop();
     let st;
     try { st = lstat(at); } catch (e) {
       if (GONE.has(e?.code) && at !== root) continue;   // gone while the walk ran: nothing of it to delete
@@ -164,24 +201,24 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     // directory it may be none, as an overlay mount whose layers lie on different filesystems (xino=off) shows a lower
     // layer's files on that layer's device and its directories on its own. So where /proc/self/mountinfo tells, only one
     // it lists is refused.
-    const mountedHere = listed.has(at.slice(root.length));
+    const mountedHere = listed.has(relative(at));
     if (dev(st) !== parentDev && (st.isDirectory() || mountedHere || info === null)) {
-      mounts.push({ at, why: `another filesystem than ${path.dirname(at)}` });
+      mounts.push({ at, why: `another filesystem than ${named(from)}` });
       continue;
     }
-    if (mountedHere) { mounts.push({ at, why: `the same filesystem as ${path.dirname(at)}, listed in ${MOUNTINFO}` }); continue; }
+    if (mountedHere) { mounts.push({ at, why: `the same filesystem as ${named(from)}, listed in ${MOUNTINFO}` }); continue; }
     if (!st.isDirectory()) continue;
     let through;
     try { through = stat(at); } catch (e) { return unreadable(at, e); }
     if (dev(through) !== dev(st)) { mounts.push({ at, why: 'another volume mounted in it' }); continue; }
     const key = `${dev(st)}:${st.ino}`;
-    if (walked.has(key)) { mounts.push({ at, why: `the directory ${walked.get(key)} again` }); continue; }
+    if (walked.has(key)) { mounts.push({ at, why: `the directory ${named(walked.get(key))} again` }); continue; }
     walked.set(key, at);
     let names;
-    try { names = fs.readdirSync(at); } catch (e) { return unreadable(at, e); }
-    names = [...names].sort();
-    read.push({ at, was: state(st), names: names.join('\0') });
-    for (const name of [...names].reverse()) stack.push({ at: path.join(at, name), parentDev: dev(st) });
+    try { names = listing(at); } catch (e) { return unreadable(at, e); }
+    read.push({ at, was: state(st), names: namesOf(names) });
+    const order = names.map((b) => ({ b, s: b.toString('utf8') })).sort((x, y) => (x.s < y.s ? -1 : x.s > y.s ? 1 : Buffer.compare(x.b, y.b)));
+    for (const { b } of order.reverse()) stack.push({ at: child(at, b), from: at, parentDev: dev(st) });
   }
   if (mounts[0]?.at === root) {
     return stopped(`${root} (${mounts[0].why}) is a mount point: deleting it would take the files of the filesystem mounted there and then fail `
@@ -189,8 +226,8 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
       + `again: it deletes what is left at ${root} and drops org ${id}'s records, and the unmounted filesystem's files stay`);
   }
   if (mounts.length) {
-    const named = mounts.map((m) => `${m.at} (${m.why})`).sort();
-    return stopped(`${root} holds ${mounts.length === 1 ? 'a mount point' : 'mount points'}, ${list(named)}: deleting `
+    const points = mounts.map((m) => `${named(m.at)} (${m.why})`).sort();
+    return stopped(`${root} holds ${mounts.length === 1 ? 'a mount point' : 'mount points'}, ${list(points)}: deleting `
       + `${root} would take the files of the filesystem mounted there (Node 23 and later) or stop part-way at it (Node 22), and a `
       + `directory mounted from outside ${root} may hold the users file — nothing was deleted. Unmount what is mounted there, then `
       + 'run purge-org again');
@@ -281,16 +318,16 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     // or renamed in it — and the same names. Then none changed from its listing to now, and the walk is what lay under
     // the root at one moment, the users file placed in it. A directory that changed is refused.
     const changed = read.find(({ at, was, names }) => {
-      try { return state(lstat(at)) !== was || [...fs.readdirSync(at)].sort().join('\0') !== names; } catch { return true; }
+      try { return state(lstat(at)) !== was || namesOf(listing(at)) !== names; } catch { return true; }
     });
     if (!changed) return { exists: true, refusal: null };
     const { at } = changed;
-    return stopped(`${at === root ? root : `${at} under ${root}`} changed while purge-org read ${at === root ? 'it' : root} (an entry added, `
+    return stopped(`${at === root ? root : `${named(at)} under ${root}`} changed while purge-org read ${at === root ? 'it' : root} (an entry added, `
       + `removed or renamed in it, or a mount over it), so purge-org cannot tell what deleting ${root} takes — nothing was deleted. `
       + `Stop what changes files under ${root}, then run purge-org again`);
   }
-  const ids = kin.filter((e) => dev(e.st) === dev(st)).map((e) => e.path);
-  const views = kin.filter((e) => dev(e.st) !== dev(st)).map((e) => e.path);
+  const ids = kin.filter((e) => dev(e.st) === dev(st)).map((e) => named(e.path));
+  const views = kin.filter((e) => dev(e.st) !== dev(st)).map((e) => named(e.path));
   return {
     exists: true,
     refusal: `${who} lies under ${root}: `
@@ -298,7 +335,7 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
       + (views.length ? `${ids.length ? ', and ' : ''}${list(views)} under it ${views.length === 1 ? 'has' : 'have'} its `
         + `${st.isFile() ? 'size and ' : ''}modification time on another filesystem (the users file seen through a network or `
         + 'overlay mount, or a copy that kept them)' : '')
-      + ` — nothing was deleted. Move ${list(kin.map((e) => e.path))} out of ${root}, then run purge-org again`
+      + ` — nothing was deleted. Move ${list(kin.map((e) => named(e.path)))} out of ${root}, then run purge-org again`
       // Seen through a view, the path may then lead where nothing traces it back to the root, and a users file that does
       // not exist there is refused (above): an overlay mount's merged directory shows its upper directory's inode and time.
       + (views.length ? `; if it then refuses because ${file} does not exist (a mount whose directories show another inode or `

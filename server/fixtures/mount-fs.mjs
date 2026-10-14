@@ -27,6 +27,10 @@
 //   fs                         { lstatSync, statSync, readdirSync, readlinkSync, realpathSync, readFileSync }, stats as
 //                              bigints: { dev, ino, size, mtimeNs, ctimeNs, isFile(), isDirectory(), isSymbolicLink() };
 //                              readFileSync answers /proc/self/mountinfo alone, and only with proc (else ENOENT).
+// A name that is not valid UTF-8 is spelled with each byte 0xNN that is not part of a UTF-8 character as the lone
+// surrogate U+DCNN (Python's surrogateescape); the fs takes a path as such a string or as a Buffer of its bytes, and
+// answers as node:fs does: readdirSync lists names as strings, each such byte U+FFFD (a name no lookup finds), or with
+// { encoding: 'buffer' } as their bytes; readlinkSync, realpathSync and /proc/self/mountinfo (read as UTF-8) likewise.
 // fold: names compared case-insensitively (NTFS); devs: { '<a root>': its device } (default 1n each); proc: Linux's
 // /proc/self/mountinfo, listing / and every mount point now (its path with the kernel's octal escapes), on POSIX paths;
 // coarse: a clock coarser than every change made, so every change time reads the same and none moves.
@@ -34,6 +38,23 @@
 // that moves, as the kernel moves a directory's, with every entry added, removed or renamed in it (unless coarse).
 
 const MAX_LINKS = 40;
+// A path's bytes (U+DCNN the byte 0xNN), a Buffer as such a string, and a string as node:fs answers one (UTF-8 decoded).
+const bytesOf = (s) => Buffer.concat([...s].map((ch) => {
+  const c = ch.charCodeAt(0);
+  return ch.length === 1 && c >= 0xdc80 && c <= 0xdcff ? Buffer.from([c - 0xdc00]) : Buffer.from(ch, 'utf8');
+}));
+function fromBytes(b) {
+  let s = '';
+  for (let i = 0; i < b.length;) {
+    const n = b[i] < 0x80 ? 1 : b[i] >= 0xc2 && b[i] < 0xe0 ? 2 : b[i] >= 0xe0 && b[i] < 0xf0 ? 3 : b[i] >= 0xf0 && b[i] < 0xf5 ? 4 : 0;
+    const seq = b.subarray(i, i + n);
+    const ch = n && seq.length === n ? seq.toString('utf8') : '';
+    if (ch && Buffer.from(ch, 'utf8').equals(seq)) { s += ch; i += n; } else { s += String.fromCharCode(0xdc00 + b[i]); i += 1; }
+  }
+  return s;
+}
+const str = (p) => (typeof p === 'string' ? p : fromBytes(p));
+const answered = (s) => bytesOf(s).toString('utf8');
 
 export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = false } = {}) {
   const key = (s) => (fold ? s.toLowerCase() : s);
@@ -64,7 +85,7 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = 
       stack = [{ node, how: m?.how ?? null, at: top }];
       todo = split(abs.slice(top.length));
     };
-    start(path.resolve(p));
+    start(path.resolve(str(p)));
     while (todo.length) {
       const [name, ...rest] = todo;
       todo = rest;
@@ -178,23 +199,24 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = 
     fs: {
       lstatSync: (p) => stats(locate(p, false)),
       statSync: (p) => stats(locate(p, true)),
-      readdirSync(p) {
+      readdirSync(p, options) {
         const pos = locate(p, true);
         if (pos.node.kind !== 'dir') throw fail('ENOTDIR', p);
         if (pos.node.denied && !pos.node.listed) throw fail(pos.node.denied, p);
-        return [...entries(pos.node).values()].map((e) => e.name).sort();
+        const names = [...entries(pos.node).values()].map((e) => e.name).sort();
+        return (options?.encoding ?? options) === 'buffer' ? names.map(bytesOf) : names.map(answered);
       },
       readlinkSync(p) {
         const pos = locate(p, false);
         if (pos.node.kind !== 'link') throw fail('EINVAL', p);
-        return pos.node.target;
+        return answered(pos.node.target);
       },
-      realpathSync: (p) => locate(p, true).at,
+      realpathSync: (p) => answered(locate(p, true).at),
       readFileSync(p) {
         if (!proc || p !== '/proc/self/mountinfo') throw fail('ENOENT', p);
         const octal = (s) => s.replace(/[ \t\n\\]/g, (c) => `\\${c.charCodeAt(0).toString(8).padStart(3, '0')}`);
-        return ['/', ...[...mounts.values()].map((m) => m.at)]
-          .map((at, i) => `${21 + i} ${i ? 21 : 1} 0:${21 + i} / ${octal(at)} rw,relatime - fixture fixture rw\n`).join('');
+        return answered(['/', ...[...mounts.values()].map((m) => m.at)]
+          .map((at, i) => `${21 + i} ${i ? 21 : 1} 0:${21 + i} / ${octal(at)} rw,relatime - fixture fixture rw\n`).join(''));
       },
     },
   };

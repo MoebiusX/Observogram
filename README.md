@@ -2666,8 +2666,10 @@ refuses a root that is a symlink or resolves outside `<workspace>/orgs`,
 and a workspace whose marker names another store. The org row stays, so
 its id is never reused.
 
-Before it deletes anything it reads all of `orgs/<id>/`, never through a
-link, and it refuses, deleting nothing:
+Before it deletes anything it reads all of `orgs/<id>/`, every name as the
+bytes on disk, never through a link (it names a path holding a name that is
+not valid UTF-8 as a POSIX shell's `$'…'` spells it, each such byte `\xNN`),
+and it refuses, deleting nothing:
 
 - **while that would take the users file a pre-store build reads** — the
   one `OBSERVOGRAM_USERS_FILE` named at the import, else
