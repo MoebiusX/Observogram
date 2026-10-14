@@ -23,9 +23,14 @@
 //     /proc/self/mountinfo, see below). On Node 22 rmSync stops part-way at a mount point; on Node 23 and later it
 //     first deletes the files of the filesystem mounted there; and a directory mounted from outside the root may hold
 //     the users file. The root itself mounted (a volume per org) is refused alike. A directory the walk cannot read is
-//     refused: what lies in it cannot be told, and rmSync would fail part-way there.
-//   - the users file, its path followed through every link (statSync): it lies under the root when an entry the
-//     walk found is the same file — the same device and inode (on Windows the volume serial's low 32 bits, all a
+//     refused: what lies in it cannot be told, and rmSync would fail part-way there. The walk keeps nothing of a file it
+//     passes — each entry is compared with the users file, and with its name, as the walk reaches it (below) — and of a
+//     directory its device, inode, change and modification time and a digest of its names, holding besides only the
+//     listing of each directory it is in, as Node 22's rmSync does: kept entry by entry, the stats of a root of millions
+//     of files took more memory than the heap had, and purge-org died where rmSync completed.
+//   - the users file, its path followed through every link (statSync), before the walk and again after it — one that
+//     changed meanwhile (another device, inode, size or modification time) is compared with each entry read again: it
+//     lies under the root when an entry the walk found is the same file — the same device and inode (on Windows the volume serial's low 32 bits, all a
 //     share reports, as server/store/paths.mjs places a path) — or, on another device, the same kind with the same
 //     modification time, compared at the coarser of the two clocks' precision (an SMB view keeps 100 ns, an sshfs
 //     one seconds), and for a file the same size, for a directory the same inode. That is a view of it through
@@ -94,6 +99,7 @@
 // { encoding: 'buffer' }), path (node:path's) and windows (the platform) are injectable (server/test-store-ops.mjs, over
 // server/fixtures/mount-fs.mjs); the default is this host.
 
+import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
 import * as nodePath from 'node:path';
 
@@ -167,23 +173,40 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
       : `If it is a filesystem mounted there that stopped answering, unmount it, then run purge-org again; or, if ${who} does not `
       + `lie under ${root}, delete ${root} by hand`)
     + `, then run purge-org again: it drops org ${id}'s records`);
-  const entries = [];   // { path, st }
   const mounts = [];    // { at, why }
-  const walked = new Map();   // a directory's device:inode → its path
-  const read = [];            // { at, was, names }: each directory the walk listed, as it found it
-  // A directory as the walk found it: the same directory (device and inode) with the same change time — an entry
-  // added, removed or renamed in it, or a mount over it, changes one of them.
-  const state = (st) => `${dev(st)}:${st.ino}:${st.ctimeNs}`;
+  // A file's device and inode, as one string (joined, so one flat string and not a rope of its parts).
+  const idOf = (st) => [dev(st), st.ino].join(':');
+  const walked = new Map();   // a directory's idOf → its path
+  // { at, key, ctimeNs, names, mtimeNs }: each directory the walk listed, as it found it — the same directory (key, its
+  // idOf) with the same change time and names (a digest of them): an entry added, removed or renamed in it, or a mount over
+  // it, changes one of them — and its modification time, which with its device and inode places a users file that does
+  // not exist (below). Of the other entries the walk keeps only those that are the users file or have its name (below):
+  // with the listings of the directories it is in (frames), its memory is a few hundred bytes for each directory under
+  // the root and nothing for a file.
+  const read = [];
+  const DIRECTORY = { isFile: () => false, isDirectory: () => true };
   // Each name as the bytes the filesystem holds: listed as a string, a name that is not valid UTF-8 comes back with U+FFFD
   // in place of each such byte, a name no lookup finds, and what lies under it would go unread. A name that is valid UTF-8
-  // joins its directory's path as a string, as before; any other, and every path under it, is joined as bytes.
-  const listing = (at) => [...fs.readdirSync(at, { encoding: 'buffer' })];
-  const namesOf = (bytes) => bytes.map((b) => b.toString('latin1')).sort().join('\0');
-  const child = (at, b) => {
+  // is kept as a string and joins its directory's path as one, as before; any other is kept as its bytes, and it and every
+  // path under it are joined as bytes. A directory's names, in the walk's order: as strings, then by their bytes.
+  const nameIn = (b) => {
     const s = b.toString('utf8');
-    if (typeof at === 'string' && Buffer.from(s, 'utf8').equals(b)) return path.join(at, s);
-    return Buffer.concat([Buffer.from(at), Buffer.from(path.sep), b]);
+    return Buffer.from(s, 'utf8').equals(b) ? s : b;
   };
+  const bytesOf = (n) => (typeof n === 'string' ? Buffer.from(n, 'utf8') : n);
+  const keyOf = (n) => (typeof n === 'string' ? n : n.toString('utf8'));
+  const order = (x, y) => {
+    const [a, b] = [keyOf(x), keyOf(y)];
+    return a < b ? -1 : a > b ? 1 : Buffer.compare(bytesOf(x), bytesOf(y));
+  };
+  const listing = (at) => Array.from(fs.readdirSync(at, { encoding: 'buffer' }), nameIn).sort(order);
+  const namesOf = (names) => {
+    const digest = createHash('sha256');
+    for (const n of names) digest.update(typeof n === 'string' ? `${n}\0` : Buffer.concat([n, Buffer.from([0])]));
+    return digest.digest('base64');
+  };
+  const child = (at, n) => (typeof at === 'string' && typeof n === 'string' ? path.join(at, n)
+    : Buffer.concat([Buffer.from(at), Buffer.from(path.sep), bytesOf(n)]));
   const rootBytes = Buffer.byteLength(root);
   const relative = (at) => (typeof at === 'string' ? at.slice(root.length) : at.subarray(rootBytes).toString('utf8'));
   let above;
@@ -206,15 +229,35 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
       else if (at?.startsWith(real + path.sep)) listed.add(at.slice(real.length));
     }
   }
-  const stack = [{ at: root, from: path.dirname(root), parentDev: above }];
-  while (stack.length) {
-    const { at, from, parentDev } = stack.pop();
+  // The users file, its path followed through every link, placed before the walk (and again after it, below), and the names
+  // its path ends in — as written or at each link it leads through, compared ignoring case and Unicode normalization, as a
+  // case-insensitive filesystem may look a name up: a mount shows a directory's entries by their names, so through one
+  // that is down now the path may lead to such an entry. The walk compares each entry with both as it reaches it.
+  let before = null;
+  try { before = stat(file); } catch { /* placed after the walk, below */ }
+  const fold = (s) => s.normalize('NFC').toLowerCase();
+  const nameOf = (p) => (typeof p === 'string' ? path.basename(p) : p.subarray(p.lastIndexOf(path.sep.charCodeAt(0)) + 1).toString('utf8'));
+  const ends = new Set();
+  for (let at = file, hops = 0; hops <= MAX_LINKS; hops += 1) {
+    ends.add(fold(path.basename(at)));
+    try {
+      if (!lstat(at).isSymbolicLink()) break;
+      at = path.resolve(fs.realpathSync(path.dirname(at)), fs.readlinkSync(at));
+    } catch { break; }
+  }
+  const found = [];       // { path, st }: the entries that are the users file as placed before the walk
+  const namesakes = [];   // { path, st }: the entries under the root with a name its path ends in
+  // The walk, depth first, each directory's entries in order: a frame per directory it is in, { at, dev, names, i } — its
+  // listing, as rmSync holds the listing of each directory it is in, and the next entry's index.
+  const frames = [];
+  const visit = (at, from, parentDev) => {
     let st;
     try { st = lstat(at); } catch (e) {
-      if (GONE.has(e?.code) && at !== root) continue;   // gone while the walk ran: nothing of it to delete
+      if (GONE.has(e?.code) && at !== root) return null;   // gone while the walk ran: nothing of it to delete
       return unreadable(at, e);
     }
-    entries.push({ path: at, st });
+    if (before && same(st, before)) found.push({ path: at, st });
+    if (at !== root && ends.has(fold(nameOf(at)))) namesakes.push({ path: at, st });
     // A non-directory is a mount point only as a file mounted on a file, which Linux lists: on another device than its
     // directory it may be none, as an overlay mount whose layers lie on different filesystems (xino=off) shows a lower
     // layer's files on that layer's device and its directories on its own. So where /proc/self/mountinfo tells, only one
@@ -222,22 +265,29 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     const mountedHere = listed.has(relative(at));
     if (dev(st) !== parentDev && (st.isDirectory() || mountedHere || info === null)) {
       mounts.push({ at, why: `another filesystem than ${named(from)}` });
-      continue;
+      return null;
     }
-    if (mountedHere) { mounts.push({ at, why: `the same filesystem as ${named(from)}, listed in ${MOUNTINFO}` }); continue; }
-    if (!st.isDirectory()) continue;
+    if (mountedHere) { mounts.push({ at, why: `the same filesystem as ${named(from)}, listed in ${MOUNTINFO}` }); return null; }
+    if (!st.isDirectory()) return null;
     let through;
     try { through = stat(at); } catch (e) { return unreadable(at, e); }
-    if (dev(through) !== dev(st)) { mounts.push({ at, why: 'another volume mounted in it' }); continue; }
-    const key = `${dev(st)}:${st.ino}`;
-    if (walked.has(key)) { mounts.push({ at, why: `the directory ${named(walked.get(key))} again` }); continue; }
+    if (dev(through) !== dev(st)) { mounts.push({ at, why: 'another volume mounted in it' }); return null; }
+    const key = idOf(st);
+    if (walked.has(key)) { mounts.push({ at, why: `the directory ${named(walked.get(key))} again` }); return null; }
     walked.set(key, at);
     let names;
     try { names = listing(at); } catch (e) { return unreadable(at, e); }
-    read.push({ at, was: state(st), names: namesOf(names) });
-    const order = names.map((b) => ({ b, s: b.toString('utf8') })).sort((x, y) => (x.s < y.s ? -1 : x.s > y.s ? 1 : Buffer.compare(x.b, y.b)));
-    for (const { b } of order.reverse()) stack.push({ at: child(at, b), from: at, parentDev: dev(st) });
+    read.push({ at, key, ctimeNs: st.ctimeNs, names: namesOf(names), mtimeNs: st.mtimeNs });
+    frames.push({ at, dev: dev(st), names, i: 0 });
+    return null;
+  };
+  let walk = visit(root, path.dirname(root), above);
+  while (!walk && frames.length) {
+    const frame = frames.at(-1);
+    if (frame.i === frame.names.length) frames.pop();
+    else walk = visit(child(frame.at, frame.names[frame.i++]), frame.at, frame.dev);
   }
+  if (walk) return walk;
   if (mounts[0]?.at === root) {
     return stopped(`${root} (${mounts[0].why}) is a mount point: deleting it would take the files of the filesystem mounted there and then fail `
       + 'on the mount point itself (Node 23 and later; Node 22 fails at once) — nothing was deleted. Unmount it, then run purge-org '
@@ -305,26 +355,9 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     return { place: todo.length ? path.join(cur, ...todo) : cur, nearest: curSt ? cur : null, nearestSt: curSt, dirs };
   };
 
-  // The entries under the root with a name the users file's path ends in — as written or at each link it leads through,
-  // compared ignoring case and Unicode normalization, as a case-insensitive filesystem may look a name up: a mount
-  // shows a directory's entries by their names, so through one that is down now the path may lead to such an entry.
-  const fold = (s) => s.normalize('NFC').toLowerCase();
-  const nameOf = (p) => (typeof p === 'string' ? path.basename(p) : p.subarray(p.lastIndexOf(path.sep.charCodeAt(0)) + 1).toString('utf8'));
-  const namesakesOf = () => {
-    const ends = new Set();
-    for (let at = file, hops = 0; hops <= MAX_LINKS; hops += 1) {
-      ends.add(fold(path.basename(at)));
-      try {
-        if (!lstat(at).isSymbolicLink()) break;
-        at = path.resolve(fs.realpathSync(path.dirname(at)), fs.readlinkSync(at));
-      } catch { break; }
-    }
-    return entries.slice(1).filter((e) => ends.has(fold(nameOf(e.path))));
-  };
   // The directories the root lies in — its parent and theirs, as its real path passes through them: each by its path
   // (case folded on Windows) → its device and inode.
   const pathKey = (p) => (windows ? p.toLowerCase() : p);
-  const idOf = (st) => `${dev(st)}:${st.ino}`;
   const holding = () => {
     const dirs = new Map();
     try {
@@ -333,7 +366,27 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     return dirs;
   };
 
-  // The users file, its path followed through every link.
+  // Each entry the walk read that test holds for, read again in the walk's order, entering each directory it read — the
+  // walk keeps none: { path, st }.
+  const again = (test) => {
+    const hits = [];
+    const down = [];
+    const look = (at) => {
+      let s;
+      try { s = lstat(at); } catch { return; }
+      if (test(s)) hits.push({ path: at, st: s });
+      if (s.isDirectory() && walked.has(idOf(s))) { try { down.push({ at, names: listing(at), i: 0 }); } catch { /* gone since */ } }
+    };
+    look(root);
+    while (down.length) {
+      const frame = down.at(-1);
+      if (frame.i === frame.names.length) down.pop();
+      else look(child(frame.at, frame.names[frame.i++]));
+    }
+    return hits;
+  };
+
+  // The users file, its path followed through every link, placed again now that the walk is done.
   const cannot = (at, e) => stopped(`${who} cannot be read on this host (${code(e)}${at === file ? '' : ` at ${at}`}`
     + `${e?.code === 'ELOOP' ? `: a link loop, or a chain of more than ${MAX_LINKS} links` : ''}), so nothing tells whether it lies `
     + `under ${root} — nothing was deleted. ${denied(e) ? `Run purge-org as a user who can read ${at}; or, if it` : 'If it'} does not `
@@ -351,14 +404,18 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     if (!recorded && nothingAt()) return { exists: false, refusal: null };
     const led = lead(file);
     if (led.error) return cannot(led.at, led.error);
-    if (led.nearestSt && entries.some((en) => en.st.isDirectory() && same(en.st, led.nearestSt))) return { exists: false, refusal: null };
+    const walkedDir = ({ key, mtimeNs }) => {
+      const [d, i] = key.split(':').map(BigInt);
+      return same({ ...DIRECTORY, dev: d, ino: i, mtimeNs }, led.nearestSt);
+    };
+    if (led.nearestSt && read.some(walkedDir)) return { exists: false, refusal: null };
     // A path looked up only in directories the root lies in, to one where the rest of it does not exist — the directory
     // of an org purged before, which the users file was moved out of as its refusal said: a filesystem mounted again on
     // one of them covers the root too, so the path leads under the root then only by a directory under the root mounted
     // above it, where the users file keeps its name. With no entry under the root of that name, the purge goes on.
     if (led.nearestSt && led.dirs.length) {
       const holders = holding();
-      if (led.dirs.every(({ at, st: was }) => holders.get(pathKey(at)) === idOf(was)) && !namesakesOf().length) return { exists: false, refusal: null };
+      if (led.dirs.every(({ at, st: was }) => holders.get(pathKey(at)) === idOf(was)) && !namesakes.length) return { exists: false, refusal: null };
     }
     return stopped(`${who} does not exist, and nothing on this host tells where its path leads`
       + `${led.place === path.resolve(file) ? '' : ` (to ${led.place})`}: `
@@ -367,7 +424,10 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
       + `mounted now, mount it, then run purge-org again; if it does not lie under ${root}, delete ${root} by hand, then run purge-org `
       + `again: it drops org ${id}'s records`);
   }
-  const kin = entries.filter((e) => same(e.st, st));
+  // The entries that are the users file: as the walk found them, unless it changed while the walk ran (created, replaced,
+  // written: another device, inode, size or modification time than before it), when each entry is read again.
+  const kept = before && dev(before) === dev(st) && before.ino === st.ino && before.size === st.size && before.mtimeNs === st.mtimeNs;
+  const kin = kept ? found : again((s) => same(s, st));
   if (!kin.length) {
     // The walk read each directory at its own moment: an entry another process renamed, while it ran, from a directory
     // not read yet into one read already (the users file, or a directory holding it) was in neither listing, and rmSync
@@ -375,8 +435,11 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     // placed: the same directory (device and inode), the same change time — which moves with every entry added, removed
     // or renamed in it — and the same names. Then none changed from its listing to now, and the walk is what lay under
     // the root at one moment, the users file placed in it. A directory that changed is refused.
-    const changed = read.find(({ at, was, names }) => {
-      try { return state(lstat(at)) !== was || namesOf(listing(at)) !== names; } catch { return true; }
+    const changed = read.find(({ at, key, ctimeNs, names }) => {
+      try {
+        const now = lstat(at);
+        return idOf(now) !== key || now.ctimeNs !== ctimeNs || namesOf(listing(at)) !== names;
+      } catch { return true; }
     });
     if (changed) {
       const { at } = changed;
@@ -389,14 +452,11 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     // there — under the root. So an entry under the root with the name the path ends in, as written or at a link it leads
     // through (compared ignoring case and Unicode normalization, as a case-insensitive filesystem may look a name up), is
     // refused; one that is a link names what it leads to under the root too, which rmSync deletes while the link moves.
-    const namesakes = namesakesOf();
     const links = namesakes.filter((e) => e.st.isSymbolicLink());
-    const targets = [];
-    for (const link of links) {
-      let to;
-      try { to = stat(link.path); } catch { continue; }
-      for (const e of entries.slice(1)) if (same(e.st, to) && !namesakes.includes(e) && !targets.includes(e)) targets.push(e);
-    }
+    const tos = [];
+    for (const link of links) { try { tos.push(stat(link.path)); } catch { /* leads nowhere */ } }
+    const besides = new Set(namesakes.map((e) => named(e.path)));
+    const targets = tos.length ? again((s) => tos.some((to) => same(s, to))).filter((e) => e.path !== root && !besides.has(named(e.path))) : [];
     if (!namesakes.length) return { exists: true, refusal: null };
     const pathsOf = (es) => list(es.map((e) => named(e.path)).sort());
     const them = pathsOf([...namesakes, ...targets]);

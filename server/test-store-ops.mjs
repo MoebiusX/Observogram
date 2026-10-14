@@ -2714,6 +2714,112 @@ test('purge-org users file: a directory under the root that changes while the wa
     changed(`${ROOT_B}/a`), 'a mount over a directory read already, by its inode');
 });
 
+// A root too large to keep in memory entry by entry: 150 directories of 1,000 files and one of 100,000, made up as each
+// is asked for by an injected filesystem that keeps none of it, the users file outside. Each entry's stats as node:fs gives
+// them with { bigint: true }, eighteen bigints. The child prints the place and how many lstatSync calls it answered.
+const HUGE_ROOT = `
+const { posix } = await import('node:path');
+const { usersFilePlace } = await import(${JSON.stringify(pathToFileURL(join(HERE, 'store', 'users-file-place.mjs')).href)});
+const ROOT = '/ws/orgs/beta';
+const [DIRS, FILES, WIDE] = [150, 1000, 100_000];
+const [IFMT, IFDIR, IFREG, IFLNK] = [0o170000n, 0o040000n, 0o100000n, 0o120000n];
+class BigIntStats {
+  constructor(dir, ino) {
+    const ns = 1_760_000_000_000_000_000n + ino * 1_000_003n;
+    const ms = ns / 1_000_000n;
+    Object.assign(this, { dev: 2049n, mode: (dir ? IFDIR : IFREG) | 0o644n, nlink: ino - ino + 1n, uid: ino - ino, gid: ino - ino,
+      rdev: ino - ino, blksize: ino - ino + 4096n, ino, size: dir ? ino - ino + 4096n : ino - ino, blocks: ino - ino,
+      atimeMs: ms, mtimeMs: ms + 0n, ctimeMs: ms + 1n, birthtimeMs: ms - 1n, atimeNs: ns, mtimeNs: ns + 0n, ctimeNs: ns + 1n, birthtimeNs: ns - 1n });
+  }
+  isFile() { return (this.mode & IFMT) === IFREG; }
+  isDirectory() { return (this.mode & IFMT) === IFDIR; }
+  isSymbolicLink() { return (this.mode & IFMT) === IFLNK; }
+}
+const fail = (code, p) => Object.assign(new Error(code + ': ' + p), { code });
+const dirs = new Map([['/', 1n], ['/ws', 2n], ['/ws/orgs', 3n], [ROOT, 4n], [ROOT + '/wide', 5n]]);
+let lstats = 0;
+const lstatSync = (p) => {
+  lstats += 1;
+  if (dirs.has(p)) return new BigIntStats(true, dirs.get(p));
+  if (p === '/ws/users.json') return new BigIntStats(false, 6n);
+  const r = /^\\/ws\\/orgs\\/beta\\/r(\\d+)(?:\\/f(\\d+)\\.json)?$/.exec(p);
+  if (r && Number(r[1]) < DIRS && Number(r[2] ?? 0) < FILES) {
+    return new BigIntStats(r[2] === undefined, r[2] === undefined ? BigInt(100 + Number(r[1])) : BigInt(1_000_000 + Number(r[1]) * FILES + Number(r[2])));
+  }
+  const w = /^\\/ws\\/orgs\\/beta\\/wide\\/w(\\d+)\\.json$/.exec(p);
+  if (w && Number(w[1]) < WIDE) return new BigIntStats(false, BigInt(500_000_000 + Number(w[1])));
+  throw fail('ENOENT', p);
+};
+const names = (n, name) => Array.from({ length: n }, (_, i) => Buffer.from(name(i)));
+const fs = {
+  lstatSync,
+  statSync: lstatSync,
+  readdirSync(p) {
+    if (p === ROOT) return [...names(DIRS, (i) => 'r' + i), Buffer.from('wide')];
+    if (p === ROOT + '/wide') return names(WIDE, (i) => 'w' + i + '.json');
+    if (/^\\/ws\\/orgs\\/beta\\/r\\d+$/.test(p)) return names(FILES, (i) => 'f' + i + '.json');
+    throw fail('ENOTDIR', p);
+  },
+  readlinkSync: (p) => { throw fail('EINVAL', p); },
+  realpathSync: (p) => p,
+  readFileSync: (p) => { throw fail('ENOENT', p); },
+};
+const place = usersFilePlace('/ws/users.json', ROOT, { fs, path: posix, windows: false, id: 'beta' });
+console.log(JSON.stringify({ place, lstats }));
+`;
+
+test('purge-org users file: the walk keeps nothing of a file it passes, and of a directory\'s entries only the listings of the directories it is in — a root of 250,000 files, 150 directories of 1,000 and one of 100,000, is read in a 32 MB heap, where keeping each entry\'s stats ran out of memory; so a users file created, replaced or written while the walk runs is compared with each entry again: refused as lying under the root, as when nothing changes it', () => {
+  // Kept, the stats of 250,000 entries take some 175 MB: purge-org died, out of memory, where rmSync of the same tree
+  // completed. Each entry is compared with the users file as the walk reaches it, and a directory's entries are taken from
+  // its listing one by one as the walk goes, not pushed ahead of it.
+  const env = { ...process.env };
+  delete env.NODE_OPTIONS;   // the heap limit is this child's alone
+  const r = spawnSync(process.execPath, ['--max-old-space-size=32', '--input-type=module', '-e', HUGE_ROOT], { env, encoding: 'utf8', timeout: 120_000 });
+  assert.equal(r.status, 0, `the child ended ${r.signal ?? r.status}: ${r.stderr.split('\n').find((l) => /heap|Error/.test(l)) ?? r.stderr.slice(0, 400)}`);
+  const { place, lstats } = JSON.parse(r.stdout);
+  assert.deepEqual(place, { exists: true, refusal: null }, 'the users file outside the root: purged');
+  assert.ok(lstats > 250_000, `every entry read (${lstats} lstatSync calls)`);
+  // So the users file is placed before the walk and again after it: one created, replaced or written meanwhile — once the
+  // walk has read <root>/packs, before <root>/sub — is compared with each entry again. Written in place, through an NFS view
+  // of <root>/sub, within one tick of a coarse clock (its size alone moves) or to the same size (its time alone moves).
+  const racing = (vol, file, act, write = null) => {
+    const ino = vol.fs.statSync(`${ROOT_B}/sub/users.json`).ino;
+    let acted = false;
+    const as = (s) => (acted && write && s.ino === ino ? { ...s, ...write(s) } : s);
+    const lstatSync = (p, o) => {
+      if (!acted && p === `${ROOT_B}/packs`) { acted = true; act(); }
+      return as(vol.fs.lstatSync(p, o));
+    };
+    return placeIn(vol, file, { fs: { ...vol.fs, lstatSync, statSync: (p, o) => as(vol.fs.statSync(p, o)) } });
+  };
+  const viewed = (file) => new RegExp(`^the recorded users file ${esc(file)} lies under ${esc(ROOT_B)}: ${esc(`${ROOT_B}/sub/users.json`)} under it has `
+    + 'its size and modification time on another filesystem');
+  // Replaced by a hard link to a file under the root that kept its size and time (cp -p): another inode alone. Its two
+  // names under the root are named in the walk's order, as when nothing changes it.
+  const replaced = betaVolume();
+  const was = replaced.fs.statSync('/srv/accounts.json');
+  replaced.file(`${ROOT_B}/sub/users.json`, { mtimeNs: was.mtimeNs }).hardlink(`${ROOT_B}/sub/users.json`, `${ROOT_B}/z.json`);
+  const twoNames = { exists: true, refusal: underRoot('/srv/accounts.json', `${ROOT_B}/sub/users.json and ${ROOT_B}/z.json`) };
+  assert.deepEqual(racing(replaced, '/srv/accounts.json', () => replaced.remove('/srv/accounts.json').hardlink(`${ROOT_B}/sub/users.json`, '/srv/accounts.json')),
+    twoNames, 'replaced by a hard link to a file under the root');
+  assert.deepEqual(placeIn(replaced, '/srv/accounts.json'), twoNames, 'nothing changing it');
+  // Replaced by a link to a file of another filesystem with the same inode number (one per filesystem), size and time, while
+  // a copy under the root kept that size and time: another device alone, and the copy reads as the users file.
+  const other = betaVolume();
+  const its = other.fs.statSync('/srv/accounts.json');
+  other.file(`${ROOT_B}/sub/users.json`, { mtimeNs: its.mtimeNs }).file('/srv9/accounts.json', { mtimeNs: its.mtimeNs })
+    .view('/srv9', '/mnt/srv9', { dev: 9n, ino: () => its.ino });
+  assert.match(racing(other, '/srv/accounts.json', () => other.remove('/srv/accounts.json').symlink('/srv/accounts.json', '/mnt/srv9/accounts.json')).refusal ?? '',
+    viewed('/srv/accounts.json'), 'replaced by a file of another filesystem with the same inode number');
+  const created = betaVolume();
+  assert.deepEqual(racing(created, '/srv/new.json', () => created.hardlink(`${ROOT_B}/sub/users.json`, '/srv/new.json')),
+    { exists: true, refusal: underRoot('/srv/new.json', `${ROOT_B}/sub/users.json`) }, 'created as a hard link to a file under the root');
+  for (const [how, write] of [['its size', (s) => ({ size: s.size + 1n })], ['its time', (s) => ({ mtimeNs: s.mtimeNs + 1_000_000_000n })]]) {
+    const nfs = betaVolume().view(`${ROOT_B}/sub`, '/mnt/nfs', { dev: 41n });
+    assert.match(racing(nfs, '/mnt/nfs/users.json', () => {}, write).refusal ?? '', viewed('/mnt/nfs/users.json'), `written in place, ${how} moved`);
+  }
+});
+
 test('purge-org users file: a name under the root that is not valid UTF-8 is read as the bytes the filesystem holds — the users file in such a directory, reached through a link, is refused naming it as a POSIX shell\'s $\'…\' spells it, and moved out as that says, the purge passes; below such a name a mount point and a directory it cannot read are refused; with the users file outside, a tree of such names passes', () => {
   // node:fs lists a name that is not valid UTF-8 as a string with U+FFFD in place of each such byte (c\xffd as 'c\ufffdd'), a
   // name no lookup finds: lstatSync of it fails with ENOENT, the walk took that for an entry gone while it ran, and so read

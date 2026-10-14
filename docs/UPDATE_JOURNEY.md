@@ -1581,3 +1581,18 @@ the root only by a directory under the root mounted above it, which shows
 the users file by its name. Through any other directory, or with an entry of
 that name under the root, it is refused as before. Tests: 1443 → 1444 (one
 more in `server/test-store-ops.mjs`).
+
+The walk kept every entry's stats until it ended, since the users file was
+placed only after it: some 770 bytes an entry, so a root of 100 directories
+of 1,000 empty files ran purge-org out of memory in a 40 MB heap, deleting
+nothing, where `rmSync` of the same tree completed — at a 1 GB heap about
+1.3 million entries, wherever the host set the limit. The users file is now
+placed before the walk, and each entry compared with it and with its name as
+the walk reaches it; placed again after the walk, one created, replaced or
+written meanwhile is compared with each entry read again. Of a directory the
+walk keeps its identity, its times and a digest of its names, and it takes a
+directory's entries from its listing as it goes, holding only the listings of
+the directories it is in, as Node 22's `rmSync` does: its memory grows with
+the directories under the root and the longest listing, not with the files,
+and that root passes in 16 MB. Tests: 1444 → 1445 (one more in
+`server/test-store-ops.mjs`).
