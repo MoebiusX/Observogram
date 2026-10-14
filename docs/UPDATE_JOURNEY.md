@@ -1532,37 +1532,37 @@ holds each server action the studio names to a disposition.
 Each commit's suite total, in order:
 
 1. One collation for every `tools/lib` sort (the finding is below).
-   Tests: 1390 → 1391 (one more test in `tools/test-vendor-manifest.mjs`, the
+   Tests: 1425 → 1426 (one more test in `tools/test-vendor-manifest.mjs`, the
    guard; the locale check in `tools/test-golden-diff.mjs` is a harness check
    and adds none).
 2. The taxonomy binds as it is served (below).
-   Tests: 1391 → 1392 (one more test in `tools/test-artefact-classify.mjs`).
+   Tests: 1426 → 1427 (one more test in `tools/test-artefact-classify.mjs`).
 3. Deploy in the static bundle, explained and drawn unavailable.
-   Tests: 1392 → 1394 (`tools/test-static-remedies.mjs` 2, new: the shim's
+   Tests: 1427 → 1429 (`tools/test-static-remedies.mjs` 2, new: the shim's
    sentence and the deploy entry points).
 4. Every bundle carries Observogram's licence.
-   Tests: 1394 → 1395 (`tools/test-bundle-compare.mjs` 1, new: the licence
+   Tests: 1429 → 1430 (`tools/test-bundle-compare.mjs` 1, new: the licence
    block).
 5. npm packages from the lockfile.
-   Tests: 1395 → 1396 (one more test in `tools/test-bundle-compare.mjs`: the
+   Tests: 1430 → 1431 (one more test in `tools/test-bundle-compare.mjs`: the
    closure and every refusal over synthetic roots).
 6. Retrofeed in the bundle.
-   Tests: 1396 → 1398 (one more test in `tools/test-bundle-compare.mjs`,
+   Tests: 1431 → 1433 (one more test in `tools/test-bundle-compare.mjs`,
    retrofeed against a server, and one more in `tools/test-static-remedies.mjs`,
    the static texts).
 7. Compare in the bundle.
-   Tests: 1398 → 1406 (five more tests in `tools/test-bundle-compare.mjs` — the
+   Tests: 1433 → 1441 (five more tests in `tools/test-bundle-compare.mjs` — the
    real closure and its licence pin, the diff from the source, the taxonomy,
    Pair by, the built file —, `tools/test-bundle-compare-pairs.mjs` 1, new —
    every ordered pair of ten packs in each scope mode the studio sends —, and
    two more in `tools/test-static-remedies.mjs`, the phrase ledger and the
    wiring).
 8. The service audit report in the bundle.
-   Tests: 1406 → 1407 (one more test in `tools/test-bundle-compare.mjs`: the
+   Tests: 1441 → 1442 (one more test in `tools/test-bundle-compare.mjs`: the
    report against a server).
 9. The static posture's remedies add no test (the suite total is unchanged).
 10. Compare in Chromium.
-    Tests: 1407 → 1408 (one more test in `tools/test-bundle-compare.mjs`: the
+    Tests: 1442 → 1443 (one more test in `tools/test-bundle-compare.mjs`: the
     in-page diff under three browser locales, Pair by, the drift actions,
     Remediate's deploy controls, the two downloads; it skips where Playwright
     is not installed).
