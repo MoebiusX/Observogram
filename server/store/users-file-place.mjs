@@ -27,7 +27,10 @@
 //     another device; an overlay mount reports another device and, with xino or once the file is copied up into an
 //     upper directory under the root, another inode too. A copy under the root that kept the users file's size and
 //     modification time on another device reads the same (a declared false refusal; moving it out is the way out).
-//     Every matching entry is named, so one move clears them all (hard links included).
+//     Every matching entry is named, so one move clears them all (hard links included). Through a view whose
+//     directories show another inode or modification time than theirs under the root (an overlay mount with an upper
+//     directory shows that directory's), the path then leads where nothing traces it back, and it is refused as a users
+//     file that does not exist (below): a view's refusal names that second step, deleting the root by hand.
 //   - a users file that does not exist: nothing of it is under the root to delete, unless its path leads there through
 //     what is not there now — a filesystem not mounted. So its place is found as the kernel would resolve the path,
 //     every link that exists followed (a dangling one by its target), to the nearest directory that exists there. One
@@ -281,8 +284,13 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
       + (views.length ? `${ids.length ? ', and ' : ''}${list(views)} under it ${views.length === 1 ? 'has' : 'have'} its `
         + `${st.isFile() ? 'size and ' : ''}modification time on another filesystem (the users file seen through a network or `
         + 'overlay mount, or a copy that kept them)' : '')
-      + ` — nothing was deleted. Move ${list(kin.map((e) => e.path))} out of ${root}, then run purge-org again. If ${file} then `
-      + 'no longer leads to the users file, make it lead there again before a pre-store build or the in-place '
+      + ` — nothing was deleted. Move ${list(kin.map((e) => e.path))} out of ${root}, then run purge-org again`
+      // Seen through a view, the path may then lead where nothing traces it back to the root, and a users file that does
+      // not exist there is refused (above): an overlay mount's merged directory shows its upper directory's inode and time.
+      + (views.length ? `; if it then refuses because ${file} does not exist (a mount whose directories show another inode or `
+        + `modification time than theirs under ${root}, as an overlay mount with an upper directory does, cannot be traced back `
+        + `there), delete ${root} by hand, then run purge-org again: it drops org ${id}'s records` : '')
+      + `. If ${file} then no longer leads to the users file, make it lead there again before a pre-store build or the in-place `
       + '`packc store export` uses it',
   };
 }

@@ -1519,12 +1519,16 @@ dangling one by its target — and its nearest directory that exists: one under
 the root means nothing of the users file is left there to delete, and the
 purge goes on; any other is refused, since a mount that is down leaves only an
 empty mount point, and with the bind mount above down purge-org had deleted
-the users file behind it. A users file deleted on purpose outside the root is
-refused alike (a declared false refusal), and its way out is deleting the root
-by hand, after which purge-org drops the records. A users file purge-org
-cannot read (`EACCES` on its path, a link loop), which compared as written and
-was purged, is refused too. Tests: 1425 → 1440 (fifteen more in
-`server/test-store-ops.mjs`).
+the users file behind it. Through a view whose directories show another inode
+or modification time than theirs under the root — an overlay mount's merged
+directory shows its upper directory's — the path of a users file moved out
+leads to no directory purge-org can tell is under the root, so it is refused
+too, and the view's refusal names that second step: delete the root by hand.
+A users file deleted on purpose outside the root is refused alike (a declared
+false refusal), and its way out is deleting the root by hand, after which
+purge-org drops the records. A users file purge-org cannot read (`EACCES` on
+its path, a link loop), which compared as written and was purged, is refused
+too. Tests: 1425 → 1440 (fifteen more in `server/test-store-ops.mjs`).
 
 The walk read each directory once, at its own moment, so another process
 renaming a directory, while it ran, from one the walk had not read yet into

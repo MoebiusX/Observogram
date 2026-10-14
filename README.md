@@ -2678,10 +2678,17 @@ link, and it refuses, deleting nothing:
   has the users file's size and modification time (the users file seen
   through an NFS, SMB, overlay or FUSE mount, or a copy that kept them). The
   refusal names each such entry: move them out of `orgs/<id>/`, then run the
-  purge again. The store still records the users file's old path, where the
-  in-place `packc store export` writes it and where a pre-store build started
-  with `OBSERVOGRAM_USERS_FILE` set to it reads it: if that path no longer
-  leads to the moved file, make it lead there again before you roll back.
+  purge again. Through such a mount whose directories show another inode or
+  modification time than theirs under `orgs/<id>/` (an overlay mount with an
+  upper directory shows that directory's), purge-org then cannot trace the
+  users file's path back and refuses it as one that does not exist (below);
+  a refusal naming an entry by its size and modification time names that
+  second step: if the purge then refuses because the users file does not
+  exist, delete `orgs/<id>/` by hand and run the purge again. The store still
+  records the users file's old path, where the in-place `packc store export`
+  writes it and where a pre-store build started with
+  `OBSERVOGRAM_USERS_FILE` set to it reads it: if that path no longer leads
+  to the moved file, make it lead there again before you roll back.
 - **while a recorded users file — or, with none recorded,
   `<workspace>/users.json` as a link — does not exist and its path does not
   lead under `orgs/<id>/`**, since a filesystem not mounted now may lead it
@@ -2690,9 +2697,13 @@ link, and it refuses, deleting nothing:
   delete `orgs/<id>/` by hand and run the purge again: with no directory left
   it checks no users file and only drops the org's records. After the first
   refusal's move, with any mount on its path up, that path leads under
-  `orgs/<id>/`, where nothing of the users file is left, so the purge goes
-  on. With none recorded and nothing at `<workspace>/users.json`, there is no
-  users file to keep, and the purge goes on.
+  `orgs/<id>/`, where nothing of the users file is left; the purge goes on
+  when purge-org can trace it there — through a bind mount, a link, or an
+  NFS, SMB, overlay or FUSE mount that shows that directory's own inode and
+  modification time — and through any other such mount it is refused here,
+  the second step its first refusal names. With none recorded and nothing at
+  `<workspace>/users.json`, there is no users file to keep, and the purge
+  goes on.
 - **while the users file, or a directory under `orgs/<id>/`, cannot be
   read** — run the purge as a user who can read it (a FUSE mount whose
   server stopped answering: unmount it), or, when the users file does not

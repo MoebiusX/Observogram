@@ -2364,6 +2364,7 @@ test('purge-org docs: the README and the k8s note say it cannot be undone, what 
   // The README names each users-file refusal's way out, as purge-org (server/store/users-file-place.mjs) names it.
   for (const way of [
     'move them out of `orgs/<id>/`, then run the purge again',
+    'if the purge then refuses because the users file does not exist, delete `orgs/<id>/` by hand and run the purge again',
     'make it lead there again before you roll back',
     'mount it and run the purge again',
     'delete `orgs/<id>/` by hand and run the purge again',
@@ -2372,7 +2373,8 @@ test('purge-org docs: the README and the k8s note say it cannot be undone, what 
     'Stop what changes files there, then run the purge again',
   ]) assert.ok(readme.includes(way), `README: ${way}`);
   const place = readFileSync(join(HERE, 'store', 'users-file-place.mjs'), 'utf8').replace(/[`']\s*\+\s*[`']/g, '');
-  for (const way of ['out of ${root}, then run purge-org again', 'make it lead there again before a pre-store build', 'mount it, then run purge-org again',
+  for (const way of ['out of ${root}, then run purge-org again', 'if it then refuses because ${file} does not exist',
+    'make it lead there again before a pre-store build', 'mount it, then run purge-org again',
     'delete ${root} by hand, then run purge-org again', 'Run purge-org as a user who can read', 'Unmount it, then run purge-org again',
     'Stop what changes files under ${root}, then run purge-org again']) {
     assert.ok(place.includes(way), `purge-org's refusal names the same way out: ${way}`);
@@ -2458,6 +2460,11 @@ const placeIn = (vol, file, opts = {}) => usersFilePlace(file, ROOT_B, { fs: vol
 const underRoot = (file, entries, root = ROOT_B) => `the recorded users file ${file} lies under ${root}: it is ${entries} there — nothing was deleted. `
   + `Move ${entries} out of ${root}, then run purge-org again. If ${file} then no longer leads to the users file, make it lead there `
   + 'again before a pre-store build or the in-place `packc store export` uses it';
+const unknownPlace = (file, nearest, { to = null, root = ROOT_B } = {}) => `the recorded users file ${file} does not exist, and nothing on this host `
+  + `tells where its path leads${to ? ` (to ${to})` : ''}: ${nearest === null ? 'no part of it exists' : `the nearest part of it that exists, ${nearest}, is no directory under ${root}`}, `
+  + `and a filesystem not mounted now may lead it under ${root} — nothing was deleted. If it lies on a filesystem that is not mounted now, `
+  + `mount it, then run purge-org again; if it does not lie under ${root}, delete ${root} by hand, then run purge-org again: it drops org `
+  + 'beta\'s records';
 
 test('purge-org users file: under the root through a bind mount that is up — by its path there, through a file link and a directory link to it, and as spelled — is refused naming its entry under the root; one outside the root is purged, also when a link under the root leads to it, to its directory or to another filesystem (rmSync deletes the link alone)', () => {
   const vol = betaVolume().dir('/mnt/b').bind(`${ROOT_B}/sub`, '/mnt/b')
@@ -2492,23 +2499,31 @@ test('purge-org users file: every hard link under the root is named, so one move
   assert.deepEqual(placeIn(vol, '/srv/users.json'), { exists: true, refusal: null }, 'both moved out: purged, and /srv/users.json stays');
 });
 
-test('purge-org users file: a view through another filesystem — NFS (the inode kept), SMB (100 ns times), overlay (xino, and an upper directory under the root), FUSE without inode numbers (whole seconds) — is refused by its size and modification time; another size or time is not; a copy that kept both reads the same (declared); moved out as the refusal says, its path through the NFS or SMB view leads to the directory under the root where nothing of it is left, and the purge passes', () => {
+test('purge-org users file: a view through another filesystem — NFS (the inode kept), SMB (100 ns times), overlay (xino, an upper directory under the root, and one outside it), FUSE without inode numbers (whole seconds) — is refused by its size and modification time; another size or time is not; a copy that kept both reads the same (declared); moved out as the refusal says, its path through the NFS or SMB view leads to the directory under the root where nothing of it is left, and the purge passes, and through a view whose directories show another inode or time it is refused as a users file that does not exist — the second step the first refusal names, deleting the root by hand', () => {
   const T = 1_760_000_123_456_789_123n;
   const vol = betaVolume().file(`${ROOT_B}/sub/users.json`, { size: 117n, mtimeNs: T }).file(`${ROOT_B}/up/users.json`, { size: 90n })
     .file(`${ROOT_B}/packs/same-size.yaml`, { size: 117n, mtimeNs: T + 1_000_000_000n })
-    .file(`${ROOT_B}/packs/same-time.yaml`, { size: 118n, mtimeNs: T });
+    .file(`${ROOT_B}/packs/same-time.yaml`, { size: 118n, mtimeNs: T }).dir('/srv/upper');
   const ino = vol.fs.statSync(`${ROOT_B}/sub/users.json`).ino;
+  // An overlay mount with lowerdir=<root>/sub and an upper directory outside the root: its merged directory shows the
+  // upper directory's inode and modification time, a file only in the lower its own, on the overlay's device.
+  const [sub, upper] = [vol.fs.statSync(`${ROOT_B}/sub`), vol.fs.statSync('/srv/upper')];
   vol.view(`${ROOT_B}/sub`, '/mnt/nfs', { dev: 41n })
     .view(`${ROOT_B}/sub`, '/mnt/smb', { dev: 42n, mtimeNs: (t) => t - (t % 100n) })
     .view(`${ROOT_B}/sub`, '/mnt/ovl', { dev: 43n, ino: (i) => i | (1n << 62n) })
     .view(`${ROOT_B}/up`, '/mnt/upper', { dev: 44n, ino: () => ino + 7n })
-    .view(`${ROOT_B}/sub`, '/mnt/sshfs', { dev: 45n, ino: () => 2n, mtimeNs: (t) => t - (t % 1_000_000_000n) });
-  for (const [file, entry] of [['/mnt/nfs/users.json', 'sub'], ['/mnt/smb/users.json', 'sub'], ['/mnt/ovl/users.json', 'sub'], ['/mnt/upper/users.json', 'up'], ['/mnt/sshfs/users.json', 'sub']]) {
+    .view(`${ROOT_B}/sub`, '/mnt/sshfs', { dev: 45n, ino: () => 2n, mtimeNs: (t) => t - (t % 1_000_000_000n) })
+    .view(`${ROOT_B}/sub`, '/mnt/merged', { dev: 48n, ino: (i) => (i === sub.ino ? upper.ino : i), mtimeNs: (t) => (t === sub.mtimeNs ? upper.mtimeNs : t) });
+  for (const [file, entry] of [['/mnt/nfs/users.json', 'sub'], ['/mnt/smb/users.json', 'sub'], ['/mnt/ovl/users.json', 'sub'], ['/mnt/upper/users.json', 'up'],
+    ['/mnt/sshfs/users.json', 'sub'], ['/mnt/merged/users.json', 'sub']]) {
     assert.equal(vol.fs.statSync(file).dev === vol.fs.statSync(`${ROOT_B}/${entry}/users.json`).dev, false, `${file} is another device`);
     assert.equal(placeIn(vol, file).refusal, `the recorded users file ${file} lies under ${ROOT_B}: ${ROOT_B}/${entry}/users.json under it has its size `
       + 'and modification time on another filesystem (the users file seen through a network or overlay mount, or a copy that kept '
-      + `them) — nothing was deleted. Move ${ROOT_B}/${entry}/users.json out of ${ROOT_B}, then run purge-org again. If ${file} then `
-      + 'no longer leads to the users file, make it lead there again before a pre-store build or the in-place `packc store export` uses it', file);
+      + `them) — nothing was deleted. Move ${ROOT_B}/${entry}/users.json out of ${ROOT_B}, then run purge-org again; if it then refuses `
+      + `because ${file} does not exist (a mount whose directories show another inode or modification time than theirs under ${ROOT_B}, `
+      + `as an overlay mount with an upper directory does, cannot be traced back there), delete ${ROOT_B} by hand, then run purge-org `
+      + `again: it drops org beta's records. If ${file} then no longer leads to the users file, make it lead there again before a `
+      + 'pre-store build or the in-place `packc store export` uses it', file);
   }
   // A FUSE view that keeps neither the size nor the time is not matched (README: known, not fixed).
   vol.view(`${ROOT_B}/sub`, '/mnt/fuse', { dev: 46n, ino: () => 3n, mtimeNs: () => 0n });
@@ -2525,6 +2540,13 @@ test('purge-org users file: a view through another filesystem — NFS (the inode
   // that view of <root>/sub — the same directory by its inode and modification time — where nothing of it is left.
   for (const file of ['/mnt/nfs/users.json', '/mnt/smb/users.json']) {
     assert.deepEqual(placeIn(vol, file), { exists: false, refusal: null }, `${file}: moved out, it leads under the root`);
+  }
+  // Through a view whose directories show another inode or time — the overlay's merged directory (its upper directory's),
+  // an xino overlay's, an sshfs one's — nothing traces the path back to <root>/sub: refused as a users file that does not
+  // exist, the second step its first refusal names, whose way out is deleting the root by hand (the real-filesystem
+  // case below: then purge-org drops the records).
+  for (const at of ['/mnt/merged', '/mnt/ovl', '/mnt/sshfs']) {
+    assert.deepEqual(placeIn(vol, `${at}/users.json`), { exists: null, refusal: unknownPlace(`${at}/users.json`, at) }, `${at}: moved out`);
   }
 });
 
@@ -2682,12 +2704,6 @@ test('purge-org users file on Windows paths: through a junction, through a share
   vol.file('D:\\v\\x.txt').mountFolder('D:\\v', `${RW}\\mnt`);
   assert.match(placeW('C:\\out\\users.json').refusal, /^C:\\ws\\orgs\\beta holds a mount point, C:\\ws\\orgs\\beta\\mnt \(another volume mounted in it\): /);
 });
-
-const unknownPlace = (file, nearest, { to = null, root = ROOT_B } = {}) => `the recorded users file ${file} does not exist, and nothing on this host `
-  + `tells where its path leads${to ? ` (to ${to})` : ''}: ${nearest === null ? 'no part of it exists' : `the nearest part of it that exists, ${nearest}, is no directory under ${root}`}, `
-  + `and a filesystem not mounted now may lead it under ${root} — nothing was deleted. If it lies on a filesystem that is not mounted now, `
-  + `mount it, then run purge-org again; if it does not lie under ${root}, delete ${root} by hand, then run purge-org again: it drops org `
-  + 'beta\'s records';
 
 test('purge-org users file that does not exist: through a mount that is down it is refused, failing closed — recorded, or, none recorded, <base>/users.json a link there; mounted again, refused as lying under the root; moved out of the root as that refusal says, the purge passes', () => {
   const vol = betaVolume().dir('/mnt/b').symlink('/cfg/users.json', '/mnt/b/users.json').symlink('/ws/users.json', '/mnt/b/users.json');
