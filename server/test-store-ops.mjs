@@ -2369,10 +2369,12 @@ test('purge-org docs: the README and the k8s note say it cannot be undone, what 
     'delete `orgs/<id>/` by hand and run the purge again',
     'run the purge as a user who can read it',
     'Unmount it, then run the purge again',
+    'Stop what changes files there, then run the purge again',
   ]) assert.ok(readme.includes(way), `README: ${way}`);
   const place = readFileSync(join(HERE, 'store', 'users-file-place.mjs'), 'utf8').replace(/[`']\s*\+\s*[`']/g, '');
   for (const way of ['out of ${root}, then run purge-org again', 'make it lead there again before a pre-store build', 'mount it, then run purge-org again',
-    'delete ${root} by hand, then run purge-org again', 'Run purge-org as a user who can read', 'Unmount it, then run purge-org again']) {
+    'delete ${root} by hand, then run purge-org again', 'Run purge-org as a user who can read', 'Unmount it, then run purge-org again',
+    'Stop what changes files under ${root}, then run purge-org again']) {
     assert.ok(place.includes(way), `purge-org's refusal names the same way out: ${way}`);
   }
 });
@@ -2609,6 +2611,55 @@ test('purge-org users file: a directory under the root this user cannot read is 
     + `tell what deleting ${ROOT_B} takes — nothing was deleted. If it is a filesystem mounted there that stopped answering, unmount it, then `
     + `run purge-org again; or, if the recorded users file /srv/users.json does not lie under ${ROOT_B}, delete ${ROOT_B} by hand, then run `
     + 'purge-org again: it drops org beta\'s records');
+});
+
+test('purge-org users file: a directory under the root that changes while the walk reads it — the directory holding the users file renamed from one not read yet into one read already, or into the root — is refused, nothing deleted, and run again with nothing changing it, the walk finds the users file; so is a change that leaves the names as they were (by its change time), and, on a coarse clock, a change that leaves the change time (by the names) and a mount over a directory read already (by its inode)', () => {
+  // The users file recorded as /mnt/b/users.json, /mnt/b a bind mount of <root>/z/sub: its bytes lie under the root alone.
+  // The walk reads <root>, <root>/a, <root>/packs, <root>/sub, <root>/z; another process acts at the nth lstatSync of a path
+  // (the walk's is the first, the second reading's the second).
+  const tree = (opts) => betaVolume(opts).dir(`${ROOT_B}/a`).file(`${ROOT_B}/z/sub/users.json`).dir('/mnt/b').bind(`${ROOT_B}/z/sub`, '/mnt/b');
+  const during = (vol, file, acts) => {
+    const seen = new Map();
+    const lstatSync = (p, o) => {
+      seen.set(p, (seen.get(p) ?? 0) + 1);
+      acts[`${p}#${seen.get(p)}`]?.();
+      return vol.fs.lstatSync(p, o);
+    };
+    return placeIn(vol, file, { fs: { ...vol.fs, lstatSync } });
+  };
+  const changed = (at) => ({
+    exists: null,
+    refusal: `${at === ROOT_B ? ROOT_B : `${at} under ${ROOT_B}`} changed while purge-org read ${at === ROOT_B ? 'it' : ROOT_B} (an entry added, `
+      + `removed or renamed in it, or a mount over it), so purge-org cannot tell what deleting ${ROOT_B} takes — nothing was deleted. Stop `
+      + `what changes files under ${ROOT_B}, then run purge-org again`,
+  });
+  assert.deepEqual(placeIn(tree(), '/mnt/b/users.json'), { exists: true, refusal: underRoot('/mnt/b/users.json', `${ROOT_B}/z/sub/users.json`) },
+    'nothing changing it: refused');
+  for (const coarse of [false, true]) {
+    // Renamed into <root>/a, read already, before <root>/z is read: in neither listing. Unseen, the purge deleted the users file.
+    const vol = tree({ coarse });
+    assert.deepEqual(during(vol, '/mnt/b/users.json', { [`${ROOT_B}/packs#1`]: () => vol.rename(`${ROOT_B}/z/sub`, `${ROOT_B}/a/sub`) }),
+      changed(`${ROOT_B}/a`), coarse ? 'a coarse clock: by the names' : 'by the change time and the names');
+    assert.deepEqual(placeIn(vol, '/mnt/b/users.json'), { exists: true, refusal: underRoot('/mnt/b/users.json', `${ROOT_B}/a/sub/users.json`) },
+      'the way out: run again with nothing changing it, the walk finds it');
+    const into = tree({ coarse });
+    assert.deepEqual(during(into, '/mnt/b/users.json', { [`${ROOT_B}/z#1`]: () => into.rename(`${ROOT_B}/z/sub`, `${ROOT_B}/moved`) }),
+      changed(ROOT_B), 'into the root, read already');
+  }
+  // Renamed into <root>/a while the walk runs, then on into the root, read again already, before <root>/a is read again: <root>/a
+  // has the names the walk found, and its change time moved.
+  const twice = tree();
+  assert.deepEqual(during(twice, '/mnt/b/users.json', {
+    [`${ROOT_B}/z#1`]: () => twice.rename(`${ROOT_B}/z/sub`, `${ROOT_B}/a/sub`),
+    [`${ROOT_B}/a#2`]: () => twice.rename(`${ROOT_B}/a/sub`, `${ROOT_B}/moved`),
+  }), changed(`${ROOT_B}/a`), 'the same names, by the change time');
+  // On a coarse clock, a directory from outside the root mounted over <root>/a once it is read, with the same names: another
+  // inode. Unseen, it is a mount point under the root the walk did not refuse, and on Node 23 and later rmSync deletes the
+  // files of /srv5 through it, the users file among them.
+  const over = betaVolume({ coarse: true }).file(`${ROOT_B}/a/users.json`).file('/srv5/users.json');
+  assert.deepEqual(placeIn(over, '/srv5/users.json'), { exists: true, refusal: null }, 'nothing mounted: outside the root, purged');
+  assert.deepEqual(during(over, '/srv5/users.json', { [`${ROOT_B}/packs#1`]: () => over.bind('/srv5', `${ROOT_B}/a`) }),
+    changed(`${ROOT_B}/a`), 'a mount over a directory read already, by its inode');
 });
 
 test('purge-org users file on Windows paths: through a junction, through a share of a directory under the root (the volume serial\'s low 32 bits, all a share reports), and a volume mounted in a folder under the root', () => {

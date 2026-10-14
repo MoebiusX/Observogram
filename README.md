@@ -2704,6 +2704,11 @@ link, and it refuses, deleting nothing:
   another directory of the same filesystem, which `/proc/self/mountinfo`
   lists; elsewhere such a mount cannot be told from a directory, so unmount
   any under `orgs/<id>/` yourself before you purge.
+- **while a directory under `orgs/<id>/` changed as it read it**: when the
+  users file exists, it reads each directory again before it goes on, and
+  one that changed — an entry another process added, removed or renamed in
+  it — may have hidden the users file from it. Stop what changes files
+  there, then run the purge again.
 
 **The purge cannot be undone and asks for no confirmation.** It deletes
 everything under `orgs/<id>/`: the org's packs, its

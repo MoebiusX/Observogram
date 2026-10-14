@@ -23,23 +23,28 @@
 //                              answering; with list, readdirSync still names p's entries — a directory that may be
 //                              read but not searched, r--, where lstatSync of each entry fails);
 //   fs                         { lstatSync, statSync, readdirSync, readlinkSync, realpathSync, readFileSync }, stats as
-//                              bigints: { dev, ino, size, mtimeNs, isFile(), isDirectory(), isSymbolicLink() };
+//                              bigints: { dev, ino, size, mtimeNs, ctimeNs, isFile(), isDirectory(), isSymbolicLink() };
 //                              readFileSync answers /proc/self/mountinfo alone, and only with proc (else ENOENT).
 // fold: names compared case-insensitively (NTFS); devs: { '<a root>': its device } (default 1n each); proc: Linux's
-// /proc/self/mountinfo, listing / and every mount point now (its path with the kernel's octal escapes), on POSIX paths.
-// Each inode gets a distinct inode number and a modification time with nanoseconds, unless given.
+// /proc/self/mountinfo, listing / and every mount point now (its path with the kernel's octal escapes), on POSIX paths;
+// coarse: a clock coarser than every change made, so every change time reads the same and none moves.
+// Each inode gets a distinct inode number and a modification time with nanoseconds, unless given, and a change time
+// that moves, as the kernel moves a directory's, with every entry added, removed or renamed in it (unless coarse).
 
 const MAX_LINKS = 40;
 
-export function mountFs(path, { fold = false, devs = {}, proc = false } = {}) {
+export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = false } = {}) {
   const key = (s) => (fold ? s.toLowerCase() : s);
   const split = (s) => s.split(/[\\/]+/).filter(Boolean);
   const fail = (code, p) => Object.assign(new Error(`${code}: ${p}`), { code });
   let next = 1000n;
+  let clock = 1_770_000_000_000_000_000n;
+  const now = () => (coarse ? clock : (clock += 1_000_003n));
   const inode = (kind, dev, extra = {}) => {
     next += 1n;
-    return { kind, dev, ino: next, size: kind === 'dir' ? 4096n : 0n, mtimeNs: 1_760_000_000_000_000_000n + next * 1_234_567n, ...extra };
+    return { kind, dev, ino: next, size: kind === 'dir' ? 4096n : 0n, mtimeNs: 1_760_000_000_000_000_000n + next * 1_234_567n, ctimeNs: now(), ...extra };
   };
+  const changed = (dir) => { dir.ctimeNs = now(); };   // an entry added, removed or renamed in dir
   const tops = new Map();     // a root (C:\, /) folded → its directory
   const mounts = new Map();   // a mount point's path folded → { node, how, folder, at }
   const entries = (dir) => dir.entries;
@@ -93,6 +98,7 @@ export function mountFs(path, { fold = false, devs = {}, proc = false } = {}) {
     ino: how?.ino ? how.ino(node.ino) : node.ino,
     size: node.size,
     mtimeNs: how?.mtimeNs ? how.mtimeNs(node.mtimeNs) : node.mtimeNs,
+    ctimeNs: node.ctimeNs,
     isFile: () => node.kind === 'file',
     isDirectory: () => node.kind === 'dir',
     isSymbolicLink: () => node.kind === 'link',
@@ -116,6 +122,7 @@ export function mountFs(path, { fold = false, devs = {}, proc = false } = {}) {
         at = path.join(at, name);
         if (!entries(parent).has(key(name))) {
           entries(parent).set(key(name), { name, node: { ...inode('dir', i === names.length - 1 && dev !== null ? dev : parent.dev), entries: new Map() } });
+          changed(parent);
         }
       });
       return vol;
@@ -124,6 +131,7 @@ export function mountFs(path, { fold = false, devs = {}, proc = false } = {}) {
       vol.dir(path.dirname(path.resolve(p)));
       const { dir, name } = parentOf(p);
       entries(dir).set(key(name), { name, node: inode('file', dir.dev, { size, ...(mtimeNs === undefined ? {} : { mtimeNs }) }) });
+      changed(dir);
       return vol;
     },
     hardlink(existing, p) {
@@ -131,12 +139,14 @@ export function mountFs(path, { fold = false, devs = {}, proc = false } = {}) {
       vol.dir(path.dirname(path.resolve(p)));
       const { dir, name } = parentOf(p);
       entries(dir).set(key(name), { name, node });
+      changed(dir);
       return vol;
     },
     symlink(p, target) {
       vol.dir(path.dirname(path.resolve(p)));
       const { dir, name } = parentOf(p);
       entries(dir).set(key(name), { name, node: inode('link', dir.dev, { target }) });
+      changed(dir);
       return vol;
     },
     bind(source, target) { return vol.view(source, target, null); },
@@ -157,9 +167,11 @@ export function mountFs(path, { fold = false, devs = {}, proc = false } = {}) {
       const b = parentOf(to);
       entries(a.dir).delete(key(a.name));
       entries(b.dir).set(key(b.name), { name: b.name, node: entry.node });
+      changed(a.dir);
+      changed(b.dir);
       return vol;
     },
-    remove(p) { const { dir, name } = parentOf(p); entries(dir).delete(key(name)); return vol; },
+    remove(p) { const { dir, name } = parentOf(p); entries(dir).delete(key(name)); changed(dir); return vol; },
     deny(p, code = 'EACCES', { list = false } = {}) { Object.assign(locate(p, true).node, { denied: code, listed: list }); return vol; },
     fs: {
       lstatSync: (p) => stats(locate(p, false)),

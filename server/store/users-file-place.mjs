@@ -40,13 +40,21 @@
 //     now is placed as a recorded path is, since through a mount that is down it may lead under the root.
 //   - a users file that cannot be read — statSync failing otherwise (EACCES on a directory of its path, a link loop),
 //     or a part of its path that cannot be read — is refused.
+//   - a users file that exists and that no entry is: before the purge goes on, each directory the walk read is read
+//     again — the same directory (device and inode), the same change time, which moves with every entry added, removed
+//     or renamed in it, and the same names. The walk read each directory at its own moment, so an entry another process
+//     renamed while it ran, from a directory not read yet into one read already (the users file, or a directory holding
+//     it), was in neither listing. A directory that changed is refused; stopping what changes it and running purge-org
+//     again is its way out.
 //
 // Without /proc/self/mountinfo (off Linux, or /proc not mounted), a bind mount under the root of a directory from
 // outside it, on the same filesystem, is a directory to lstatSync (the same device), and the walk enters it. A view
 // that reports neither the inode nor the size and modification time (some FUSE filesystems) is not matched; and a
 // recorded path that passes through a link under the root keeps the file the link leads to (rmSync deletes the link
-// alone), but leads nowhere once it is gone. The check runs before rmSync: a rename by another process between the two
-// is not seen.
+// alone), but leads nowhere once it is gone. Not seen either: what another process moves, links or mounts under the
+// root after the check, before rmSync takes it; a directory changed and changed back within one tick of a coarse
+// filesystem clock, its change time and names as they were; and a same-filesystem bind mount made on a directory under
+// the root after /proc/self/mountinfo was read, before the walk reaches it.
 //
 // usersFilePlace(file, root, { recorded, id, fs, path, windows }) → { exists, refusal }: exists is whether the users
 // file's path leads to a file now (true), or not (false), or null when the check stopped before it could tell;
@@ -110,6 +118,10 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
   const entries = [];   // { path, st }
   const mounts = [];    // { at, why }
   const walked = new Map();   // a directory's device:inode → its path
+  const read = [];            // { at, was, names }: each directory the walk listed, as it found it
+  // A directory as the walk found it: the same directory (device and inode) with the same change time — an entry
+  // added, removed or renamed in it, or a mount over it, changes one of them.
+  const state = (st) => `${dev(st)}:${st.ino}:${st.ctimeNs}`;
   let above;
   try { above = dev(stat(path.dirname(root))); } catch (e) { return unreadable(path.dirname(root), e); }
   // The mount points Linux lists at the root or under it, as paths relative to it ('' the root itself): a bind mount of a
@@ -150,7 +162,9 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     walked.set(key, at);
     let names;
     try { names = fs.readdirSync(at); } catch (e) { return unreadable(at, e); }
-    for (const name of [...names].sort().reverse()) stack.push({ at: path.join(at, name), parentDev: dev(st) });
+    names = [...names].sort();
+    read.push({ at, was: state(st), names: names.join('\0') });
+    for (const name of [...names].reverse()) stack.push({ at: path.join(at, name), parentDev: dev(st) });
   }
   if (mounts[0]?.at === root) {
     return stopped(`${root} (${mounts[0].why}) is a mount point: deleting it would take the files of the filesystem mounted there and then fail `
@@ -242,7 +256,22 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
       + `again: it drops org ${id}'s records`);
   }
   const kin = entries.filter((e) => same(e.st, st));
-  if (!kin.length) return { exists: true, refusal: null };
+  if (!kin.length) {
+    // The walk read each directory at its own moment: an entry another process renamed, while it ran, from a directory
+    // not read yet into one read already (the users file, or a directory holding it) was in neither listing, and rmSync
+    // deleted it. So before the purge goes on, each directory the walk read is read again, now that the users file is
+    // placed: the same directory (device and inode), the same change time — which moves with every entry added, removed
+    // or renamed in it — and the same names. Then none changed from its listing to now, and the walk is what lay under
+    // the root at one moment, the users file placed in it. A directory that changed is refused.
+    const changed = read.find(({ at, was, names }) => {
+      try { return state(lstat(at)) !== was || [...fs.readdirSync(at)].sort().join('\0') !== names; } catch { return true; }
+    });
+    if (!changed) return { exists: true, refusal: null };
+    const { at } = changed;
+    return stopped(`${at === root ? root : `${at} under ${root}`} changed while purge-org read ${at === root ? 'it' : root} (an entry added, `
+      + `removed or renamed in it, or a mount over it), so purge-org cannot tell what deleting ${root} takes — nothing was deleted. `
+      + `Stop what changes files under ${root}, then run purge-org again`);
+  }
   const ids = kin.filter((e) => dev(e.st) === dev(st)).map((e) => e.path);
   const views = kin.filter((e) => dev(e.st) !== dev(st)).map((e) => e.path);
   return {

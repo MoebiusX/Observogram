@@ -1525,3 +1525,14 @@ by hand, after which purge-org drops the records. A users file purge-org
 cannot read (`EACCES` on its path, a link loop), which compared as written and
 was purged, is refused too. Tests: 1425 → 1440 (fifteen more in
 `server/test-store-ops.mjs`).
+
+The walk read each directory once, at its own moment, so another process
+renaming a directory, while it ran, from one the walk had not read yet into
+one it had read already — the directory holding the users file, which the
+bind mount above leads to — hid it from both listings, and the purge deleted
+the users file. When the users file exists and no entry is it, purge-org now
+reads each directory again before it goes on: the same directory, the same
+change time, which moves with every entry added, removed or renamed in it,
+and the same names. One that changed is refused, deleting nothing; stop what
+changes files there and run the purge again, and the walk finds the users
+file. Tests: 1440 → 1441 (one more in `server/test-store-ops.mjs`).
