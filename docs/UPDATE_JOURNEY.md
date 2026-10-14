@@ -1743,6 +1743,9 @@ the root, with no entry there of the users file's name (below), means nothing
 of the users file is left there to delete, and the purge goes on; any other is
 refused, since a mount that is down leaves only an empty mount point, and
 with the bind mount above down purge-org had deleted the users file behind it.
+On Windows a path through a dangling link is refused before this, as a
+path the native realpath cannot fully resolve (the section above), and
+deleting the root by hand lets purge-org drop the records.
 Through a view whose directories show another inode or modification time than
 theirs under the root — an overlay mount's merged
 directory shows its upper directory's — the path of a users file moved out

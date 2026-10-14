@@ -2757,6 +2757,17 @@ bytes on disk, never through a link (it names a path holding a name that is
 not valid UTF-8 as a POSIX shell's `$'…'` spells it, each such byte `\xNN`),
 and it refuses, deleting nothing:
 
+- **on Windows, while the recorded users file's path cannot be fully
+  resolved on this host, or runs through a network share nothing places
+  beside `orgs/<id>/`** — checked before the others: a link or another
+  reparse point on its path whose target cannot be opened (a dangling link
+  too, so a users file recorded as a file link into `orgs/<id>/` and moved
+  out as a refusal below says is refused here, though nothing of it is left
+  there), a part of it this host cannot read, a volume whose paths do not
+  resolve, or a share on any volume, a DFS link or one that cannot be
+  reached: such a path may lead under `orgs/<id>/`. If the users file does
+  not lie under `orgs/<id>/`, delete `orgs/<id>/` by hand and run the purge
+  again; if it does, move it out of `orgs/<id>/` first, then do the same.
 - **while that would take the users file a pre-store build reads** — the
   one `OBSERVOGRAM_USERS_FILE` named at the import, else
   `<workspace>/users.json`. This is decided by what deleting the directory

@@ -2379,6 +2379,8 @@ test('purge-org docs: the README and the k8s note say it cannot be undone, what 
     'mount it there again once the covered mount is unmounted, then run the purge again',
     'move it out of `orgs/<id>/` and unmount, then run the purge again',
     'Stop what changes files there, then run the purge again',
+    // On Windows, first: a path that cannot be fully resolved (server/store/paths.mjs, ops.mjs's refusal).
+    'if it does, move it out of `orgs/<id>/` first, then do the same',
   ]) assert.ok(readme.includes(way), `README: ${way}`);
   const place = readFileSync(join(HERE, 'store', 'users-file-place.mjs'), 'utf8').replace(/[`']\s*\+\s*[`']/g, '');
   for (const way of ['out of ${root}, then run purge-org again', 'if it then refuses because ${file} does not exist',
