@@ -19,8 +19,22 @@
  * to read, nothing tells where it leads. To purge-org, whose "outside" answer
  * deletes the root, any share nothing places may lie under it, whatever volume
  * it reports: a DFS link whose target is down reads its namespace root's,
- * served from another volume. A machine cloned from this host's
- * image, or this drive's disk image attached as E:, keeps its volume's serial
+ * served from another volume. So may a path the native realpath cannot fully
+ * resolve — through a link on the drive whose target cannot be opened (a
+ * symlink to such a share, a chain of them, a link to a path that does not
+ * exist), through any other reparse point whose target cannot be opened
+ * (lstatSync answers it as no link, or cannot read it either), or on a volume
+ * whose paths realpath cannot name at all (a RAM disk, where a short name or a
+ * link is read as written): realpath stops at a part that exists, the rest
+ * read as written compared as outside the root, and the purge deleted a users
+ * file recorded through it; one through a link whose target opens, or whose
+ * realpath stops only at a part not created yet, is judged as before. So may
+ * one through a junction on a share's volume, which the share's server follows:
+ * before Windows 10/Server 1709 the native realpath names it as the client
+ * opened it, and placed by the share's directory it compared as outside the
+ * root, and the purge deleted it. A
+ * machine cloned from this host's image, or this drive's disk image attached
+ * as E:, keeps its volume's serial
  * and its files' ids, the root directory's among them, so a file id places
  * its paths on this host's: a share of a directory it made later is refused
  * alike (the export's way out, a local directory copied to the share, holds
@@ -72,7 +86,7 @@ const VOLUME = ntfsVolume([
   'C:\\ws2\\observogram.db',
   'C:\\out\\x.txt',
 ], { short: { 'C:\\ws': 'WS~1' } });
-const key = comparedPath(null, { windows: true, path: win32, realpathSync: VOLUME.realpathSync, statSync: VOLUME.statSync });
+const key = comparedPath(null, { windows: true, path: win32, realpathSync: VOLUME.realpathSync, statSync: VOLUME.statSync, lstatSync: VOLUME.lstatSync });
 const SEP = '\\';
 // The comparison this replaces on Windows: ops.mjs's realOr, the spelling JS realpathSync keeps.
 const bySpelling = (p) => { try { return VOLUME.realpathSync(p); } catch { return win32.resolve(p); } };
@@ -94,13 +108,13 @@ const SHARED = ntfsVolume([
   shares: { '\\\\myhost\\ws': 'C:\\ws', '\\\\localhost\\C$': 'C:\\', '\\\\127.0.0.1\\C$': 'C:\\', '\\\\myhost\\out': 'D:\\out', '\\\\nas01\\obs': 'E:\\obs' },
   mapped: { 'Z:': '\\\\myhost\\ws' },
 });
-const shared = comparedPath(null, { windows: true, path: win32, realpathSync: SHARED.realpathSync, statSync: SHARED.statSync });
+const shared = comparedPath(null, { windows: true, path: win32, realpathSync: SHARED.realpathSync, statSync: SHARED.statSync, lstatSync: SHARED.lstatSync });
 // The native realpath alone: a statSync that tells every path apart (no two share a file id or a volume), so nothing
 // is placed and nothing is taken to lie inside — a share keeps its own name, and C:\ws is not \\myhost\ws.
 const byNameOf = (volume) => {
   const ids = new Map();
   const apart = (p) => { if (!ids.has(p)) ids.set(p, BigInt(ids.size + 1)); return { dev: ids.get(p), ino: ids.get(p) }; };
-  return comparedPath(null, { windows: true, path: win32, realpathSync: volume.realpathSync, statSync: apart });
+  return comparedPath(null, { windows: true, path: win32, realpathSync: volume.realpathSync, statSync: apart, lstatSync: volume.lstatSync });
 };
 const byName = byNameOf(SHARED);
 
@@ -282,7 +296,7 @@ const SUBSHARES = {
   '\\\\myhost\\dbdir': 'C:\\ws\\db', '\\\\myhost\\cout': 'C:\\out', '\\\\myhost\\dout': 'D:\\out', '\\\\nas01\\obs': 'E:\\obs',
 };
 const SUBSHARED = ntfsVolume(SUBSHARED_FILES, { shares: SUBSHARES, mapped: { 'Y:': '\\\\myhost\\exports' } });
-const subshared = comparedPath(null, { windows: true, path: win32, realpathSync: SUBSHARED.realpathSync, statSync: SUBSHARED.statSync });
+const subshared = comparedPath(null, { windows: true, path: win32, realpathSync: SUBSHARED.realpathSync, statSync: SUBSHARED.statSync, lstatSync: SUBSHARED.lstatSync });
 
 test('a path through a share no file id places, on the volume of the path it is checked against, may lie inside it — the export, purge-org and the no-marker check refuse it, and named on the drive it is judged; a share on another volume or host is an ordinary export target', () => {
   const [base, root] = ['C:\\ws', 'C:\\ws\\orgs\\beta'];
@@ -334,7 +348,28 @@ const DOWN = ntfsVolume(SUBSHARED_FILES, {
   shares: Object.fromEntries(Object.entries(SUBSHARES).filter(([unc]) => !['\\\\myhost\\betasub', '\\\\myhost\\exports'].includes(unc))),
   mapped: { 'X:': '\\\\myhost\\betasub', 'Y:': '\\\\myhost\\exports' },
 });
-const down = comparedPath(null, { windows: true, path: win32, realpathSync: DOWN.realpathSync, statSync: DOWN.statSync });
+const down = comparedPath(null, { windows: true, path: win32, realpathSync: DOWN.realpathSync, statSync: DOWN.statSync, lstatSync: DOWN.lstatSync });
+// A share may come back or go down, and a drive letter be mapped or unmapped, while a check runs: flipping(from, to, n)
+// answers the check's first n host calls from one volume and every later one from the other. X: mapped to
+// \\myhost\betasub with that share served, down, and X: not mapped: each numbers SUBSHARED_FILES and their directories
+// in one order first, so a file has one id in every state.
+const flipping = (from, to, n) => {
+  let calls = 0;
+  const now = () => (calls++ < n ? from : to);
+  const realpathSync = (p) => now().realpathSync(p);
+  realpathSync.native = (p) => now().realpathSync.native(p);
+  const k = comparedPath(null, { windows: true, path: win32, realpathSync, statSync: (p, o) => now().statSync(p, o), lstatSync: (p) => now().lstatSync(p) });
+  return Object.assign(k, { calls: () => calls });
+};
+const numbered = (volume) => {
+  for (const file of SUBSHARED_FILES) for (let p = file; ; p = win32.dirname(p)) { volume.statSync(p); if (win32.dirname(p) === p) break; }
+  return volume;
+};
+const X_SERVED = numbered(ntfsVolume(SUBSHARED_FILES, { shares: SUBSHARES, mapped: { 'X:': '\\\\myhost\\betasub' } }));
+const X_DOWN = numbered(ntfsVolume(SUBSHARED_FILES, {
+  shares: Object.fromEntries(Object.entries(SUBSHARES).filter(([unc]) => unc !== '\\\\myhost\\betasub')), mapped: { 'X:': '\\\\myhost\\betasub' },
+}));
+const X_UNMAPPED = numbered(ntfsVolume(SUBSHARED_FILES, { shares: SUBSHARES }));
 
 test('a path through a share that cannot be reached, or a drive mapped to one, may lie anywhere — purge-org refuses a users file recorded through it and the export refuses it, as a share on their volume; it is never the workspace, the database or one of its files', () => {
   const [base, root] = ['C:\\ws', 'C:\\ws\\orgs\\beta'];
@@ -346,6 +381,18 @@ test('a path through a share that cannot be reached, or a drive mapped to one, m
     assert.equal(usersUnderRoot(users, root, down), 'unplaced', `down, purge-org refuses it too: ${users} may lie under ${root}`);
   }
   assert.equal(usersUnderRoot('C:\\ws\\orgs\\beta\\sub\\users.json', root, down), true, 'the way out: named on the drive, it lies under the root');
+  // Through X: the walk that spells the path may read neither the share nor even X:\ — the path stays spelled as written
+  // on X:, as on a local drive — while a later read of its volume finds the share back, or X: mapped: with every host
+  // call from the (n+1)th on answered in the other state, for each n up to an unflipped check's count, purge-org refuses.
+  for (const [from, to, how] of [[X_DOWN, X_SERVED, 'the share comes back'], [X_SERVED, X_DOWN, 'the share goes down'], [X_UNMAPPED, X_SERVED, 'X: is mapped'], [X_SERVED, X_UNMAPPED, 'X: is unmapped']]) {
+    for (const users of ['X:\\users.json', 'x:/Users.json']) {
+      const unflipped = flipping(from, from, 0);
+      usersUnderRoot(users, root, unflipped);
+      for (let n = 0; n <= unflipped.calls(); n += 1) {
+        assert.equal(usersUnderRoot(users, root, flipping(from, to, n)), 'unplaced', `${how} after host call ${n}: purge-org refuses ${users}`);
+      }
+    }
+  }
   for (const users of ['\\\\myhost\\dout\\users.json', '\\\\nas01\\obs\\users.json']) {
     assert.equal(usersUnderRoot(users, root, down), 'unplaced', `reached on another volume or host, nothing places it: refused (${users})`);
   }
@@ -371,7 +418,7 @@ const DFS = ntfsVolume([...SUBSHARED_FILES, 'F:\\dfsroot\\readme.txt'], {
   shares: { ...Object.fromEntries(Object.entries(SUBSHARES).filter(([unc]) => unc !== '\\\\myhost\\betasub')), '\\\\corp\\dfs': 'F:\\dfsroot' },
   mapped: { 'Z:': '\\\\corp\\dfs' },
 });
-const dfs = comparedPath(null, { windows: true, path: win32, realpathSync: DFS.realpathSync, statSync: DFS.statSync });
+const dfs = comparedPath(null, { windows: true, path: win32, realpathSync: DFS.realpathSync, statSync: DFS.statSync, lstatSync: DFS.lstatSync });
 
 test('purge-org refuses a users file recorded through any network share no file id places, whatever volume it reports — a DFS link whose target is down reads the namespace root\'s — and purges with one on a local drive outside the root, or placed outside it', () => {
   const root = 'C:\\ws\\orgs\\beta';
@@ -397,6 +444,181 @@ test('purge-org refuses a users file recorded through any network share no file 
   for (const into of ['\\\\corp\\dfs\\exports', 'Z:\\exports', '\\\\nas01\\obs\\exports']) assert.equal(exportRelation(into, 'C:\\ws', dfs), null, `written: ${into}`);
 });
 
+// Links on the drive to \\myhost\betasub, which is C:\ws\orgs\beta\sub (mklink /D and mklink: a link on a local drive
+// may lead to a share): a directory link C:\links\betasub, a file link C:\cfg\users.json to its users.json, and a chain
+// C:\links\chain → C:\links\betasub. Beside them, links whose target is on the drive: C:\links\out (C:\out, outside
+// beta's root), C:\links\betadir (C:\ws\orgs\beta\sub, under it), and C:\links\gone and the file link C:\cfg\old.json
+// (C:\gone and C:\gone\users.json, which do not exist). While \\myhost\betasub is down, the native realpath stops at a
+// link to it — the link exists (lstatSync answers it), its target cannot be opened — and reads the rest as written, on C:.
+const LINKS = {
+  'C:\\links\\betasub': '\\\\myhost\\betasub', 'C:\\cfg\\users.json': '\\\\myhost\\betasub\\users.json', 'C:\\links\\chain': 'C:\\links\\betasub',
+  'C:\\links\\out': 'C:\\out', 'C:\\links\\betadir': 'C:\\ws\\orgs\\beta\\sub', 'C:\\links\\gone': 'C:\\gone', 'C:\\cfg\\old.json': 'C:\\gone\\users.json',
+};
+const LINKS_SERVED = ntfsVolume(SUBSHARED_FILES, { shares: SUBSHARES, links: LINKS });
+const linksServed = comparedPath(null, { windows: true, path: win32, realpathSync: LINKS_SERVED.realpathSync, statSync: LINKS_SERVED.statSync, lstatSync: LINKS_SERVED.lstatSync });
+const LINKS_DOWN = ntfsVolume(SUBSHARED_FILES, {
+  shares: Object.fromEntries(Object.entries(SUBSHARES).filter(([unc]) => unc !== '\\\\myhost\\betasub')), links: LINKS,
+});
+const linksDown = comparedPath(null, { windows: true, path: win32, realpathSync: LINKS_DOWN.realpathSync, statSync: LINKS_DOWN.statSync, lstatSync: LINKS_DOWN.lstatSync });
+
+test('purge-org refuses a users file recorded through a link on the drive whose target cannot be opened — a directory or file symlink to a share that is down, a chain ending at one, a link to a path that does not exist — and judges one through a link whose target opens where it leads', () => {
+  const root = 'C:\\ws\\orgs\\beta';
+  assert.equal(LINKS_SERVED.realpathSync.native('C:\\links\\betasub\\users.json'), '\\\\myhost\\betasub\\users.json', 'served, the native realpath follows the link to the share');
+  assert.throws(() => LINKS_DOWN.realpathSync.native('C:\\links\\betasub'), { code: 'ENOENT' }, 'down, it stops at the link');
+  assert.equal(LINKS_DOWN.realpathSync.native('C:\\links'), 'C:\\links', 'the directory that holds the link answers');
+  assert.equal(LINKS_DOWN.lstatSync('C:\\links\\betasub').isSymbolicLink(), true, 'and lstatSync answers the link itself');
+  assert.throws(() => LINKS_DOWN.lstatSync('C:\\links\\betasub\\users.json'), { code: 'ENOENT' }, 'but nothing through it');
+  // C:\ws\orgs\beta\sub\users.json recorded through a link to \\myhost\betasub — refused while the share is served, as before, and while it is down.
+  const through = ['C:\\links\\betasub\\users.json', 'c:/LINKS/BetaSub/Users.json', '\\\\?\\C:\\links\\betasub\\users.json', 'C:\\cfg\\users.json', 'C:\\links\\chain\\users.json'];
+  for (const users of through) {
+    assert.equal(usersUnderRoot(users, root, linksServed), 'unplaced', `served, purge-org refuses: ${users} leads to a share nothing places`);
+    assert.equal(usersUnderRoot(users, root, linksDown), 'unplaced', `down, purge-org refuses it too: ${users} may lie under ${root}`);
+    assert.equal(usersUnderRoot(users, root, linksDown, {}), false, `before, compared by its name on C:, the purge deleted C:\\ws\\orgs\\beta\\sub\\users.json: ${users}`);
+  }
+  for (const users of ['C:\\links\\gone\\users.json', 'C:\\cfg\\old.json']) {
+    assert.equal(usersUnderRoot(users, root, linksDown), 'unplaced', `a link whose target does not exist leads nowhere known: refused (${users})`);
+  }
+  assert.equal(usersUnderRoot('C:\\ws\\orgs\\beta\\sub\\users.json', root, linksDown), true, 'named on the drive, it lies under the root');
+  // A link whose target opens is followed: on the drive outside the root, purged — a users file there, or one not created
+  // yet (the native realpath stops at a part that does not exist) — and under it, refused as lying there.
+  for (const volume of [linksServed, linksDown]) {
+    for (const users of ['C:\\links\\out\\users.json', 'C:\\links\\out\\new.json', 'C:\\out\\new.json']) assert.equal(usersUnderRoot(users, root, volume), false, `purged: ${users}`);
+    assert.equal(usersUnderRoot('C:\\links\\betadir\\users.json', root, volume), true, 'through a link to C:\\ws\\orgs\\beta\\sub: under the root, refused');
+  }
+  // The share may come back, or go down, while the check runs. Whether the path is resolved is read of the parts the
+  // walk that spelled it could not read, not of a second walk that may find the share in another state: with every host
+  // call from the (n+1)th on answered in the other state, for each n up to an unflipped check's count, purge-org refuses.
+  for (const [from, to, how] of [[LINKS_DOWN, LINKS_SERVED, 'comes back'], [LINKS_SERVED, LINKS_DOWN, 'goes down']]) {
+    for (const users of through) {
+      const unflipped = flipping(from, from, 0);
+      usersUnderRoot(users, root, unflipped);
+      for (let n = 0; n <= unflipped.calls(); n += 1) {
+        assert.equal(usersUnderRoot(users, root, flipping(from, to, n)), 'unplaced', `the share ${how} after host call ${n}: purge-org refuses ${users}`);
+      }
+    }
+  }
+  // Only purge-org passes deleting: the export compares a path through such a link as before.
+  assert.equal(exportRelation('C:\\links\\betasub\\new', 'C:\\ws', linksDown), null, 'the export\'s comparison is unchanged');
+});
+
+// Junctions on the drive below the share \\myhost\ws (C:\ws): C:\ws\links\j to C:\ws\orgs\beta\sub, under beta's root,
+// and C:\ws\links\o to C:\out, outside it. A share's server follows a junction on its volume itself, and SMB before
+// Windows 10/Server 1709 (at either end — Windows Server 2016 among them) has no normalized-name query, so the native
+// realpath names \\myhost\ws\links\j\users.json as the client opened it, a path with no link to follow, while statSync
+// reads C:\ws\orgs\beta\sub\users.json's file id: placed by the share's directory (C:\ws), it was spelled
+// C:\ws\links\j\users.json, outside the root. From 1709 on, at both ends, the server answers the normalized path, and the
+// junction is followed to its target (SINCE_1709).
+const JUNCTIONED = { shares: { ...SUBSHARES, '\\\\localhost\\C$': 'C:\\' }, mapped: { 'Z:': '\\\\myhost\\ws' }, links: { 'C:\\ws\\links\\j': 'C:\\ws\\orgs\\beta\\sub', 'C:\\ws\\links\\o': 'C:\\out' } };
+const BEFORE_1709 = ntfsVolume(SUBSHARED_FILES, { ...JUNCTIONED, unnormalized: true });
+const before1709 = comparedPath(null, { windows: true, path: win32, realpathSync: BEFORE_1709.realpathSync, statSync: BEFORE_1709.statSync, lstatSync: BEFORE_1709.lstatSync });
+const SINCE_1709 = ntfsVolume(SUBSHARED_FILES, JUNCTIONED);
+const since1709 = comparedPath(null, { windows: true, path: win32, realpathSync: SINCE_1709.realpathSync, statSync: SINCE_1709.statSync, lstatSync: SINCE_1709.lstatSync });
+
+test('purge-org refuses a users file recorded through a junction on a share\'s volume that the native realpath names as the client opened it (SMB before Windows 10/Server 1709) — placed by the share\'s directory, it compared as outside the root — and judges a path through the share that passes no link as before', () => {
+  const root = 'C:\\ws\\orgs\\beta';
+  const through = '\\\\myhost\\ws\\links\\j\\users.json';
+  assert.equal(BEFORE_1709.realpathSync.native(through), through, 'before 1709, the native realpath names it as the client opened it');
+  assert.equal(BEFORE_1709.statSync(through).ino, BEFORE_1709.statSync('C:\\ws\\orgs\\beta\\sub\\users.json').ino, 'while statSync reads the users file under the root');
+  assert.equal(BEFORE_1709.lstatSync('\\\\myhost\\ws\\links\\j').isSymbolicLink(), true, 'and lstatSync answers the junction as a link');
+  assert.equal(SINCE_1709.realpathSync.native(through), 'C:\\ws\\orgs\\beta\\sub\\users.json', 'from 1709 on, the native realpath follows it');
+  // C:\ws\orgs\beta\sub\users.json through the junction, by any name of the share — beside the root on the drive, or named
+  // through the share too (the workspace at \\myhost\ws), where it compared by its name alone.
+  for (const users of [through, '\\\\myhost\\ws\\LINKS\\J\\Users.json', '//myhost/ws/links/j/users.json', '\\\\?\\UNC\\myhost\\ws\\links\\j\\users.json', '\\\\localhost\\C$\\ws\\links\\j\\users.json', 'Z:\\links\\j\\users.json']) {
+    for (const r of [root, '\\\\myhost\\ws\\orgs\\beta']) {
+      assert.equal(usersUnderRoot(users, r, before1709), 'unplaced', `before 1709, purge-org refuses: ${users} may lie under ${r}`);
+      assert.equal(usersUnderRoot(users, r, before1709, {}), false, `before, compared as outside ${r}, the purge deleted C:\\ws\\orgs\\beta\\sub\\users.json: ${users}`);
+      assert.equal(usersUnderRoot(users, r, since1709), true, `from 1709 on, it lies under ${r}: refused as lying there (${users})`);
+    }
+  }
+  // Through the junction to C:\out, outside the root: refused alike before 1709 (a declared false refusal, whose way out
+  // holds), purged from 1709 on. Named on the drive, either junction is followed as before.
+  assert.equal(usersUnderRoot('\\\\myhost\\ws\\links\\o\\users.json', root, before1709), 'unplaced', 'before 1709, through the junction to C:\\out: refused alike');
+  assert.equal(usersUnderRoot('\\\\myhost\\ws\\links\\o\\users.json', root, since1709), false, 'from 1709 on: purged');
+  for (const volume of [before1709, since1709]) {
+    assert.equal(usersUnderRoot('C:\\ws\\links\\j\\users.json', root, volume), true, 'on the drive, through the junction under the root: refused as lying there');
+    assert.equal(usersUnderRoot('C:\\ws\\links\\o\\users.json', root, volume), false, 'on the drive, through the junction to C:\\out: purged');
+  }
+  // A path through the share that passes no link is placed and judged as before: under the root, refused as lying
+  // there; outside it — a users file there, or one not created yet — purged.
+  assert.equal(usersUnderRoot('\\\\myhost\\ws\\orgs\\beta\\sub\\users.json', root, before1709), true, 'through the share under the root: refused as lying there');
+  for (const users of ['\\\\localhost\\C$\\out\\users.json', '\\\\myhost\\ws\\db\\users.json']) assert.equal(usersUnderRoot(users, root, before1709), false, `purged: ${users}`);
+  // Whether a part is a link is read after the walk that spelled the path: a part that walk read and lstatSync then
+  // cannot (the share gone down after the walk, back for the placement's reads) is not known to be no link — refused.
+  const lstatDown = (p) => {
+    if (win32.resolve(p).startsWith('\\\\')) throw Object.assign(new Error(`ENOENT: no such file or directory, lstat '${p}'`), { code: 'ENOENT' });
+    return BEFORE_1709.lstatSync(p);
+  };
+  const blinked = comparedPath(null, { windows: true, path: win32, realpathSync: BEFORE_1709.realpathSync, statSync: BEFORE_1709.statSync, lstatSync: lstatDown });
+  assert.equal(usersUnderRoot(through, root, blinked), 'unplaced', `lstatSync cannot read the parts the walk read: refused (${through})`);
+  // Only purge-org passes deleting: the export compares a path through the junction as before.
+  assert.equal(exportRelation('\\\\myhost\\ws\\links\\j\\new', 'C:\\ws', before1709), 'inside', 'the export\'s comparison is unchanged');
+});
+
+// Reparse points on the drive that are no link, whose target cannot be opened — a cloud placeholder whose provider is not
+// running, a deduplicated file whose chunk store is damaged, a tag no filter on this host handles — and so may lead under
+// beta's root as well as anywhere else: through C:\cloud\betasub (and at the file C:\cloud\users.json) an open reaches
+// something, so lstatSync answers the point, isSymbolicLink() false; through C:\tagged\betasub it does not, and lstatSync
+// fails as statSync does, with the open's error, not ENOENT.
+const REPARSE = ntfsVolume(SUBSHARED_FILES, {
+  shares: SUBSHARES,
+  reparse: {
+    'C:\\cloud\\betasub': { code: 'EIO', lstat: true }, 'C:\\cloud\\users.json': { code: 'EIO', lstat: true },
+    'C:\\tagged\\betasub': { code: 'EACCES', lstat: false },
+  },
+});
+const reparse = comparedPath(null, { windows: true, path: win32, realpathSync: REPARSE.realpathSync, statSync: REPARSE.statSync, lstatSync: REPARSE.lstatSync });
+
+test('purge-org refuses a users file recorded through any other reparse point whose target cannot be opened — one lstatSync answers as no link, or cannot read either — and judges a path not created yet as before', () => {
+  const root = 'C:\\ws\\orgs\\beta';
+  assert.throws(() => REPARSE.realpathSync.native('C:\\cloud\\betasub'), { code: 'EIO' }, 'the native realpath cannot read through the point');
+  assert.equal(REPARSE.realpathSync.native('C:\\cloud'), 'C:\\cloud', 'the directory that holds it answers');
+  assert.equal(REPARSE.lstatSync('C:\\cloud\\betasub').isSymbolicLink(), false, 'lstatSync answers the point, and it is no link');
+  assert.throws(() => REPARSE.lstatSync('C:\\tagged\\betasub'), { code: 'EACCES' }, 'or lstatSync cannot read it either, for another reason than that it does not exist');
+  for (const users of ['C:\\cloud\\betasub\\users.json', 'c:/CLOUD/BetaSub/Users.json', 'C:\\cloud\\betasub\\new.json', 'C:\\cloud\\users.json', 'C:\\tagged\\betasub\\users.json']) {
+    assert.equal(usersUnderRoot(users, root, reparse), 'unplaced', `purge-org refuses: ${users} may lie under ${root}`);
+    assert.equal(usersUnderRoot(users, root, reparse, {}), false, `before, compared by its name on C:, the purge went through: ${users}`);
+  }
+  // A path whose native realpath stops only at parts that do not exist yet is judged as before.
+  for (const users of ['C:\\cloud\\new.json', 'C:\\cloud\\sub\\new.json', 'C:\\tagged\\new.json', 'C:\\out\\new.json']) assert.equal(usersUnderRoot(users, root, reparse), false, `purged: ${users}`);
+  assert.equal(usersUnderRoot('C:\\ws\\orgs\\beta\\sub\\new.json', root, reparse), true, 'under the root, refused as lying there');
+  // Only purge-org passes deleting: the export compares a path through such a point as before.
+  assert.equal(exportRelation('C:\\cloud\\betasub\\new', 'C:\\ws', reparse), null, 'the export\'s comparison is unchanged');
+});
+
+// A drive that bypasses the Volume Mount Manager (an ImDisk RAM disk, R:): the native realpath names no path on it
+// (EISDIR), its root among them, while statSync and lstatSync answer — so a path there is read as written, its short
+// name (R:\WS~1 for R:\ws) and its link R:\links\betasub (to R:\ws\orgs\beta\sub) among them. Beside it, C:\links\ramsub,
+// a link on C: to R:\ws\orgs\beta\sub: a target that opens, on a drive realpath cannot name.
+const RAMDISK = ntfsVolume([...SUBSHARED_FILES, 'R:\\ws\\observogram.db', 'R:\\ws\\orgs\\beta\\users.json', 'R:\\ws\\orgs\\beta\\sub\\users.json', 'R:\\cfg\\users.json'], {
+  short: { 'R:\\ws': 'WS~1' },
+  shares: SUBSHARES,
+  links: { 'R:\\links\\betasub': 'R:\\ws\\orgs\\beta\\sub', 'C:\\links\\ramsub': 'R:\\ws\\orgs\\beta\\sub' },
+  unmanaged: ['R:'],
+});
+const ramdisk = comparedPath(null, { windows: true, path: win32, realpathSync: RAMDISK.realpathSync, statSync: RAMDISK.statSync, lstatSync: RAMDISK.lstatSync });
+
+test('on a volume whose paths the native realpath cannot name (a RAM disk that bypasses the Volume Mount Manager), purge-org refuses a users file — a short name or a link there is read as written — as through a link to it; one outside the root is a declared false refusal', () => {
+  const root = 'R:\\ws\\orgs\\beta';
+  assert.throws(() => RAMDISK.realpathSync.native('R:\\'), { code: 'EISDIR' }, 'the native realpath names nothing on R:, not even its root');
+  assert.equal(RAMDISK.lstatSync('R:\\cfg\\users.json').isSymbolicLink(), false, 'while lstatSync answers there');
+  // Under the root, by its short name or through the link on R: — or through the link on C: to it — the path read as
+  // written compared as outside it, and the purge deleted R:\ws\orgs\beta\users.json or R:\ws\orgs\beta\sub\users.json.
+  for (const users of ['R:\\WS~1\\orgs\\beta\\users.json', 'r:/ws~1/ORGS/beta/sub/users.json', 'R:\\links\\betasub\\users.json', 'C:\\links\\ramsub\\users.json']) {
+    assert.equal(usersUnderRoot(users, root, ramdisk), 'unplaced', `purge-org refuses: ${users} may lie under ${root}`);
+    assert.equal(usersUnderRoot(users, root, ramdisk, {}), false, `before, read as written, the purge deleted it: ${users}`);
+  }
+  // Named as on disk under the root, or outside it — on R:, with the workspace there or on C: — refused alike: nothing
+  // tells the path apart from one that leads elsewhere. Outside the root it is a false refusal, whose way out holds.
+  for (const users of ['R:\\ws\\orgs\\beta\\users.json', 'R:\\cfg\\users.json', 'r:/CFG/Users.json', 'R:\\cfg\\new.json']) {
+    assert.equal(usersUnderRoot(users, root, ramdisk), 'unplaced', `refused: ${users}`);
+  }
+  assert.equal(usersUnderRoot('R:\\cfg\\users.json', 'C:\\ws\\orgs\\beta', ramdisk), 'unplaced', 'refused beside a root on C: too');
+  // A path on another drive is judged as before, beside a root on R: or on C:.
+  for (const r of [root, 'C:\\ws\\orgs\\beta']) assert.equal(usersUnderRoot('C:\\out\\users.json', r, ramdisk), false, `purged beside ${r}: C:\\out\\users.json`);
+  // Only purge-org passes deleting: the export compares a path on R: as before.
+  assert.equal(exportRelation('R:\\exports\\new', 'C:\\ws', ramdisk), null, 'the export\'s comparison is unchanged');
+});
+
 // Another machine cloned from this host's image (machineb), and this drive's disk image attached here as E: (a VHDX of
 // C:, mounted to restore from). A sector copy keeps the disk's serial and its MFT, so every file present at the copy
 // keeps its file id there — the root directory's among them, MFT record 5 on every NTFS volume — and through a share
@@ -418,7 +640,8 @@ const clonedRealpath = (p) => { clonedRealpath.native(p); return win32.resolve(p
 clonedRealpath.native = (p) => (onMachineB(p) ? MACHINEB.realpathSync.native(p)
   : onDisk(p) ? asDrive('E', DISK.realpathSync.native(asDrive('C', p))) : HOST.realpathSync.native(p));
 const clonedStat = (p) => (onMachineB(p) ? MACHINEB.statSync(p) : onDisk(p) ? DISK.statSync(asDrive('C', p)) : HOST.statSync(p));
-const cloned = comparedPath(null, { windows: true, path: win32, realpathSync: clonedRealpath, statSync: clonedStat });
+const clonedLstat = (p) => (onMachineB(p) ? MACHINEB.lstatSync(p) : onDisk(p) ? DISK.lstatSync(asDrive('C', p)) : HOST.lstatSync(p));
+const cloned = comparedPath(null, { windows: true, path: win32, realpathSync: clonedRealpath, statSync: clonedStat, lstatSync: clonedLstat });
 
 test('a machine cloned from this host\'s image, or this drive\'s disk image attached as E:, keeps its serial and its files\' ids — a containment refusal holds for its paths, and no check takes one for the workspace, the database or one of its files: each is refused naming the way out, and the scan reads it', () => {
   const [base, root, dbFile] = ['C:\\ws', 'C:\\ws\\orgs\\beta', 'C:\\ws\\observogram.db'];
@@ -516,7 +739,17 @@ test('every path comparison in ops.mjs and backup.mjs goes through compared; rea
     ['placed === null || placed.startsWith(b + sep)', 'Nothing was changed. Set OBSERVOGRAM_DB to the database\'s path under ${base}, then run the export again'],
     ['users === null', 'nothing was deleted. If it does not lie under'],
     ['users === null', 'by hand, then run purge-org again: it drops org'],
+    ['users === null', 'records. If it does, move it out of ${root} first, then do the same'],
   ]) assert.ok(refusal(raw, guard).includes(way), `the refusal of ${guard} names its way out: ${way}`);
+  // And purge-org's says why the users file may lie under the root, true of every path compared answers null for: a share
+  // no file id places, on any volume, or a path this host cannot fully resolve — through a link or another reparse point
+  // whose target cannot be opened, a part it cannot read, or on a volume whose paths do not resolve. The earlier text,
+  // naming a share alone, read beside the same way out.
+  const why = 'the recorded users file ${usersFile} is not a path on a local drive, or its path cannot be resolved on this host (a link '
+    + 'or another reparse point on it whose target cannot be opened, a part of it this host cannot read, or a volume whose paths do not '
+    + 'resolve), and such a path, like a network share no file id places beside ${root} (one on any volume, a DFS link, one that cannot '
+    + 'be reached), may lead under it — nothing was deleted.';
+  assert.ok(refusal(raw, 'users === null').includes(why), `purge-org's refusal says why the users file may lie under the root: ${why}`);
   const backup = code('backup.mjs');
   assert.equal(count(backup, /\bcanonical\(/g), 1, 'backup.mjs: canonical is only defined, and passed to comparedPath');
   assert.match(backup, /const compared = comparedPath\(canonical\);/);
