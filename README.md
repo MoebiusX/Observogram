@@ -2833,7 +2833,10 @@ and it refuses, deleting nothing:
   later it first deletes the files of the filesystem mounted there. Unmount
   it, then run the purge again; where it holds mounts, which keep it busy
   (`umount`: target is busy), the refusal names them to unmount first, in
-  order, each after the mounts in it. On Linux this includes a bind mount of
+  order, each after the mounts in it. On Windows a mount point is a folder
+  another volume is mounted in, read through a handle on each directory: a
+  junction is none, and neither is `orgs/<id>/` reached through one, on the
+  volume the junction leads to. On Linux this includes a bind mount of
   another directory of the same filesystem, which `/proc/self/mountinfo`
   lists (not one a later mount over a directory above it covers, which it
   lists too: nothing is mounted at its path then, and the purge goes on —

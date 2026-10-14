@@ -37,9 +37,12 @@
 //                              fail with code, EACCES by default; ENOTCONN is a FUSE mount whose server stopped
 //                              answering; with list, readdirSync still names p's entries — a directory that may be
 //                              read but not searched, r--, where lstatSync of each entry fails);
-//   fs                         { lstatSync, statSync, readdirSync, readlinkSync, realpathSync, readFileSync }, stats as
-//                              bigints: { dev, ino, size, mtimeNs, ctimeNs, isFile(), isDirectory(), isSymbolicLink() };
-//                              readFileSync answers /proc/self/mountinfo alone, and only with proc (else ENOENT).
+//   fs                         { lstatSync, statSync, readdirSync, readlinkSync, realpathSync, readFileSync, openSync,
+//                              fstatSync, closeSync }, stats as bigints: { dev, ino, size, mtimeNs, ctimeNs, isFile(),
+//                              isDirectory(), isSymbolicLink() }; readFileSync answers /proc/self/mountinfo alone, and only
+//                              with proc (else ENOENT); openSync opens what a path leads to, every link followed (a
+//                              directory too, as libuv opens one on Windows), and fstatSync answers it as a handle does;
+//   opened()                   how many of what openSync opened closeSync has not closed.
 // A name that is not valid UTF-8 is spelled with each byte 0xNN that is not part of a UTF-8 character as the lone
 // surrogate U+DCNN (Python's surrogateescape); the fs takes a path as such a string or as a Buffer of its bytes, and
 // answers as node:fs does: readdirSync lists names as strings, each such byte U+FFFD (a name no lookup finds), or with
@@ -51,6 +54,12 @@
 // above it (a chroot into a directory that is no mount point), so /proc/self/mountinfo lists neither / nor that mount,
 // while the mounts in it name its ID as their parent, as the kernel lists them;
 // coarse: a clock coarser than every change made, so every change time reads the same and none moves.
+// fastDev: the device lstatSync and statSync report where libuv answers a stat by the path's name, through
+// GetFileInformationByName (Windows 11 24H2, Server 2025) — a path whose last name is no link (a junction, a symlink) and
+// no folder a volume is mounted in, which libuv opens instead (FILE_FS_VOLUME_INFORMATION: the volume's serial, as
+// fstatSync of a handle reports it on every libuv). libuv 1.49.0 to 1.50.x (Node 22.16.0's 1.49.2) declared
+// FILE_STAT_BASIC_INFORMATION with its last two fields swapped and read the device from the upper half of the file's
+// 128-bit id: 0n on NTFS, whatever the volume. null (the default): the volume's own, as libuv 1.51.0 and later report it.
 // Each inode gets a distinct inode number and a modification time with nanoseconds, unless given, and a change time
 // that moves, as the kernel moves a directory's, with every entry added, removed or renamed in it (unless coarse).
 
@@ -73,7 +82,7 @@ function fromBytes(b) {
 const str = (p) => (typeof p === 'string' ? p : fromBytes(p));
 const answered = (s) => bytesOf(s).toString('utf8');
 
-export function mountFs(path, { fold = false, devs = {}, proc = false, chroot = false, coarse = false } = {}) {
+export function mountFs(path, { fold = false, devs = {}, proc = false, chroot = false, coarse = false, fastDev = null } = {}) {
   const key = (s) => (fold ? s.toLowerCase() : s);
   const split = (s) => s.split(path.sep === '\\' ? /[\\/]+/ : /\/+/).filter(Boolean);   // on POSIX paths a backslash is part of a name
   const fail = (code, p) => Object.assign(new Error(`${code}: ${p}`), { code });
@@ -101,12 +110,14 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, chroot = 
   // topmost mount there. A Windows root (a drive, a UNC share) names the volume mounted there, which every lookup reaches.
   const processRoot = (abs) => path.sep === '/' && abs === '/';
 
-  // Where p leads: { node, how, at, mnt } — how is the view the node is seen through, mnt the ID of the mount it lies in;
-  // the last name followed when follow.
+  // Where p leads: { node, how, at, mnt, reparse } — how is the view the node is seen through, mnt the ID of the mount it
+  // lies in, reparse whether p's last name is a link or a folder a volume is mounted in (a reparse point on Windows); the
+  // last name followed when follow.
   function locate(p, follow) {
     let hops = 0;
     let stack;
     let todo;
+    let reparse = false;
     const start = (abs) => {
       const top = path.parse(abs).root;
       const m = processRoot(top) ? null : mountedAt(TOP, top);
@@ -130,6 +141,7 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, chroot = 
       const m = mountedAt(cur.mnt, at);
       const folder = m?.folder && !todo.length && !follow;   // lstatSync of a folder a volume is mounted in: the folder
       const pos = m && !folder ? { node: m.node, how: m.how, at, mnt: m.id } : { node: child.node, how: cur.how, at, mnt: cur.mnt };
+      if (!todo.length && (m?.folder || pos.node.kind === 'link')) reparse = true;
       if (pos.node.kind === 'link' && (todo.length || follow)) {
         if (++hops > MAX_LINKS) throw fail('ELOOP', p);
         const target = pos.node.target;
@@ -144,10 +156,11 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, chroot = 
       }
       stack.push(pos);
     }
-    return stack.at(-1);
+    return { ...stack.at(-1), reparse };
   }
-  const stats = ({ node, how }) => ({
-    dev: how?.dev ?? node.dev,
+  // A stat by name (lstatSync, statSync) or of a handle (fstatSync, byName false): see fastDev.
+  const stats = ({ node, how, reparse }, byName = true) => ({
+    dev: byName && fastDev !== null && !reparse && !how ? fastDev : how?.dev ?? node.dev,
     ino: how?.ino ? how.ino(node.ino) : node.ino,
     size: node.size,
     mtimeNs: how?.mtimeNs ? how.mtimeNs(node.mtimeNs) : node.mtimeNs,
@@ -163,7 +176,10 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, chroot = 
     return { dir: pos.node, name: path.basename(abs) };
   };
 
+  const fds = new Map();
+  let fd = 2;
   const vol = {
+    opened: () => fds.size,
     dir(p, { dev = null, ino = null } = {}) {
       const abs = path.resolve(p);
       const top = path.parse(abs).root;
@@ -258,6 +274,17 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, chroot = 
         return answered(pos.node.target);
       },
       realpathSync: (p) => answered(locate(p, true).at),
+      openSync(p) {
+        const pos = locate(p, true);
+        if (pos.node.denied && !pos.node.listed) throw fail(pos.node.denied, p);
+        fds.set(++fd, pos);
+        return fd;
+      },
+      fstatSync(n) {
+        if (!fds.has(n)) throw fail('EBADF', n);
+        return stats(fds.get(n), false);
+      },
+      closeSync(n) { if (!fds.delete(n)) throw fail('EBADF', n); },
       readFileSync(p) {
         if (!proc || p !== '/proc/self/mountinfo') throw fail('ENOENT', p);
         const octal = (s) => s.replace(/[ \t\n\\]/g, (c) => `\\${c.charCodeAt(0).toString(8).padStart(3, '0')}`);

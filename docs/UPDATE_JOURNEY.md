@@ -1828,3 +1828,17 @@ refusal. The refusal now names the mounts in it to unmount first, in order,
 each after the mounts in it, as a covered mount's does (a mount stacked on it
 names the mounts in the topmost alone, which `umount` takes); followed so,
 the purge passes. Tests: 1494 → 1495 (one more in `server/test-store-ops.mjs`).
+
+On the Windows leg on Node 22.16.0, with a workspace whose `orgs` is a
+junction to a directory on its own volume, purge-org refused the root as a
+mount point on another filesystem than that junction, where Node 22.23 went
+on. libuv answers a stat by the path's name unless its last name is a
+reparse point, which it opens, and libuv 1.49.0 to 1.50.x read the device of
+the one by name from the upper half of the file's 128-bit id, 0 on NTFS, not
+the volume's serial; the root (by name) and the junction (opened) differed.
+On Windows a volume is mounted only in a folder, so only directories are
+compared there, each read through a handle opened on it, which reports the
+serial on every libuv; a file or a link under the root lies on its
+directory's volume. A volume mounted in a folder under the root, or on the
+root, is refused as before. Tests: 1495 → 1496 (one more in
+`server/test-store-ops.mjs`).

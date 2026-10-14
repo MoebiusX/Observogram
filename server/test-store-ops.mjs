@@ -3234,6 +3234,41 @@ test('purge-org users file on Windows paths: through a junction, through a share
   assert.match(placeW('C:\\out\\accounts.json').refusal, /^C:\\ws\\orgs\\beta holds a mount point, C:\\ws\\orgs\\beta\\mnt \(another volume mounted in it\): /);
 });
 
+test('purge-org users file on Windows paths, on either libuv: a root reached through a junction to its workspace\'s orgs, on its own volume or another, is no mount point, nor is a junction under the root, while a volume mounted in a folder under the root, or on the root, is one — a stat by name on libuv 1.49.0 to 1.50.x (Node 22.16.0) reports no volume serial, and the root through a junction was refused as a mount point', () => {
+  // libuv answers a stat by the path's name (GetFileInformationByName) unless its last name is a reparse point — a junction,
+  // a symlink, a folder a volume is mounted in — which it opens, reading the volume's serial (FILE_FS_VOLUME_INFORMATION), as
+  // it reads a handle's (fstatSync). 1.49.0 to 1.50.x read the device of a stat by name from the upper half of the file's
+  // 128-bit id, 0 on NTFS; 1.51.0 and later the serial, as through a handle.
+  const C = 7n;
+  const D = 9n;
+  const E = 11n;
+  for (const [libuv, fastDev] of [['1.49.2', 0n], ['1.51.0', null]]) {
+    const vol = mountFs(win32, { fold: true, devs: { 'C:\\': C, 'D:\\': D, 'E:\\': E }, fastDev })
+      .file('C:\\data\\orgs\\acme\\sub\\users.json').file('D:\\orgs\\acme\\sub\\users.json').file('C:\\out\\accounts.json').dir('C:\\data\\w2').dir('C:\\data\\w3')
+      .symlink('C:\\data\\w2\\orgs', 'C:\\data\\orgs').symlink('C:\\data\\w3\\orgs', 'D:\\orgs')
+      .symlink('C:\\data\\orgs\\acme\\out', 'C:\\out').symlink('D:\\orgs\\acme\\out', 'C:\\out');   // junctions under the roots, leading out
+    const placeW = (file, root) => usersFilePlace(file, root, { fs: vol.fs, path: win32, windows: true, id: 'acme' });
+    // The workspace's orgs a directory (C:\data), a junction to one on the volume it lies on (C:\data\w2), as the Windows CI
+    // leg's test made it, and to one on another volume (C:\data\w3 → D:\orgs): the root lies on the volume the junction leads to.
+    for (const base of ['C:\\data', 'C:\\data\\w2', 'C:\\data\\w3']) {
+      const root = `${base}\\orgs\\acme`;
+      const file = `${root}\\sub\\users.json`;
+      assert.deepEqual(placeW(file, root), { exists: true, refusal: underRoot(file, file, root) }, `libuv ${libuv}: ${root}`);
+      assert.deepEqual(placeW('C:\\out\\accounts.json', root), { exists: true, refusal: null }, `libuv ${libuv}: ${root}, its junction out no mount point`);
+    }
+    // A volume mounted in a folder under the root, and on the root itself (a volume per org), on either libuv.
+    vol.file('E:\\v\\x.txt').mountFolder('E:\\v', 'C:\\data\\orgs\\acme\\mnt');
+    assert.match(placeW('C:\\out\\accounts.json', 'C:\\data\\w2\\orgs\\acme').refusal,
+      /^C:\\data\\w2\\orgs\\acme holds a mount point, C:\\data\\w2\\orgs\\acme\\mnt \(another volume mounted in it\): /, `libuv ${libuv}`);
+    vol.file('E:\\beta\\packs\\a.yaml').mountFolder('E:\\beta', 'C:\\data\\orgs\\beta');
+    assert.equal(placeW('C:\\out\\accounts.json', 'C:\\data\\w2\\orgs\\beta').refusal, 'C:\\data\\w2\\orgs\\beta (another volume mounted in it) is a mount '
+      + 'point: deleting it would take the files of the filesystem mounted there and then fail on the mount point itself (Node 23 and later; '
+      + 'Node 22 fails at once) — nothing was deleted. Unmount it, then run purge-org again: it deletes what is left at '
+      + 'C:\\data\\w2\\orgs\\beta and drops org acme\'s records, and the unmounted filesystem\'s files stay', `libuv ${libuv}`);
+    assert.equal(vol.opened(), 0, `libuv ${libuv}: every handle closed`);
+  }
+});
+
 test('purge-org users file that does not exist: through a mount that is down it is refused, failing closed — recorded, or, none recorded, <base>/users.json a link there; mounted again, refused as lying under the root; moved out of the root as that refusal says, the purge passes', () => {
   const vol = betaVolume().dir('/mnt/b').symlink('/cfg/users.json', '/mnt/b/users.json').symlink('/ws/users.json', '/mnt/b/users.json');
   const byDefault = (text) => text.replace('the recorded users file /ws/users.json',

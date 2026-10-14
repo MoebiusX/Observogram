@@ -32,8 +32,11 @@
 //     itself covers nothing, since a path is looked up from the process's root and a lookup never crosses a mount stacked
 //     on it, so with a tmpfs mounted on / in a chroot, or `mount --bind / /`, a mount under the root is refused still), a
 //     directory the walk reached already
-//     (one directory mounted at a second place under the root), or on Windows a folder another volume is mounted in
-//     (lstatSync answers the folder, statSync the volume). One holding mounts (a bind at <root>/m/n in the one at <root>/m),
+//     (one directory mounted at a second place under the root), or on Windows a folder another volume is mounted in — on
+//     Windows only a directory is compared, its volume read through a handle opened on it (fstatSync), never a stat by name,
+//     which libuv 1.49.0 to 1.50.x (Node 22.16.0) answer with half of the file's 128-bit id in place of the volume serial,
+//     so a root reached through a junction (its workspace's orgs one) read as a mount point; a directory reached through a
+//     junction is one on the volume the junction leads to. One holding mounts (a bind at <root>/m/n in the one at <root>/m),
 //     which keep it busy — `umount <root>/m` fails (target is busy), and the walk never enters it to name them — is refused
 //     naming them to unmount first, in order, each after the mounts in it, as a covered mount's refusal names them (for a
 //     stack, the mounts in its topmost mount, which umount takes). Any other entry on another filesystem than its directory
@@ -54,7 +57,9 @@
 //   - the users file, its path followed through every link (statSync), before the walk and again after it — one that
 //     changed meanwhile (another device, inode, size or modification time) is compared with each entry read again: it
 //     lies under the root when an entry the walk found is the same file — the same device and inode (on Windows the volume serial's low 32 bits, all a
-//     share reports, as server/store/paths.mjs places a path) — or, on another device, the same kind with the same
+//     share reports, as server/store/paths.mjs places a path; on libuv 1.49.0 to 1.50.x a stat by name reports none, so a
+//     users file whose path ends in a link — opened, with the serial — reads as on another device than its entry, by name,
+//     and is matched as a view, below) — or, on another device, the same kind with the same
 //     modification time, compared at the coarser of the two clocks' precision (an SMB view keeps 100 ns, an sshfs
 //     one seconds), and for a file the same size, for a directory the same inode. That is a view of it through
 //     another filesystem: an NFS or SMB mount of a directory under the root reports the server's inode with
@@ -130,8 +135,8 @@
 // file's path leads to a file now (true), or not (false), or null when the check stopped before it could tell;
 // refusal is purge-org's message, or null when deleting the root takes nothing of the users file. recorded is false
 // for <base>/users.json when nothing was recorded; id is the org's. fs = { lstatSync, statSync, readdirSync,
-// readlinkSync, realpathSync, readFileSync } (node:fs's; the stats called with { bigint: true }, readdirSync with
-// { encoding: 'buffer' }), path (node:path's) and windows (the platform) are injectable (server/test-store-ops.mjs, over
+// readlinkSync, realpathSync, readFileSync, and on Windows openSync, fstatSync and closeSync } (node:fs's; the stats
+// called with { bigint: true }, readdirSync with { encoding: 'buffer' }), path (node:path's) and windows (the platform) are injectable (server/test-store-ops.mjs, over
 // server/fixtures/mount-fs.mjs); the default is this host.
 
 import { createHash } from 'node:crypto';
@@ -244,8 +249,21 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
     : Buffer.concat([Buffer.from(at), Buffer.from(path.sep), bytesOf(n)]));
   const rootBytes = Buffer.byteLength(root);
   const relative = (at) => (typeof at === 'string' ? at.slice(root.length) : at.subarray(rootBytes).toString('utf8'));
+  // On Windows a volume is mounted only in a folder, so only a directory may lie on another volume than the directory that
+  // holds it, and its volume is read through a handle opened on it (fstatSync: the volume's serial, FILE_FS_VOLUME_INFORMATION's,
+  // as libuv reads it on every version), the same whether its path ends in a junction or not. A stat by name is not that:
+  // libuv answers one by the path's name (GetFileInformationByName, Windows 11 24H2 and Server 2025) unless its last name is
+  // a reparse point (a junction, a symlink, a folder a volume is mounted in), which it opens, and 1.49.0 to 1.50.x (Node
+  // 22.16.0's 1.49.2) read the device of the one by name from the upper half of the file's 128-bit id (0 on NTFS): the root
+  // reached through a junction to its workspace's orgs (statSync of the junction, opened) read as on another filesystem
+  // than the root (lstatSync, by name), and purge-org refused it as a mount point. A file is never one on Windows, and a link
+  // the walk does not follow.
+  const volumeOf = (at) => {
+    const fd = fs.openSync(at, 'r');
+    try { return dev(fs.fstatSync(fd, { bigint: true })); } finally { fs.closeSync(fd); }
+  };
   let above;
-  try { above = dev(stat(path.dirname(root))); } catch (e) { return unreadable(path.dirname(root), e); }
+  try { above = windows ? volumeOf(path.dirname(root)) : dev(stat(path.dirname(root))); } catch (e) { return unreadable(path.dirname(root), e); }
   // The mount points Linux lists at the root or under it, as paths relative to it ('' the root itself): a bind mount of a
   // directory of the same filesystem among them, which lstatSync cannot tell from a directory. The kernel lists real
   // paths, so the root's is compared. Each maps to { covered, first }: whether it is a covered mount whose path may show
@@ -395,22 +413,28 @@ export function usersFilePlace(file, root, { recorded = true, id = '<id>', fs = 
         + `directory there than the one it is mounted on — the workspace's), mount it there again once ${named(at)} is unmounted, before `
         + 'you run purge-org again'
         : `, holding ${first.length === 1 ? 'a mount, which keeps' : 'mounts, which keep'} it busy: first unmount ${first.join(', then ')}`;
-    if (dev(st) !== parentDev && (st.isDirectory() || mountedHere || info === null)) {
-      mounts.push({ at, why: `another filesystem than ${named(from)}${hint}` });
+    // On Windows a directory's volume, read through a handle (volumeOf, above); a file, or a link, lies on its directory's.
+    let here = dev(st);
+    if (windows) {
+      if (!st.isDirectory()) here = parentDev;
+      else try { here = volumeOf(at); } catch (e) {
+        if (GONE.has(e?.code) && at !== root) return null;
+        return unreadable(at, e);
+      }
+    }
+    if (here !== parentDev && (st.isDirectory() || mountedHere || info === null)) {
+      mounts.push({ at, why: windows ? 'another volume mounted in it' : `another filesystem than ${named(from)}${hint}` });
       return null;
     }
     if (mountedHere) { mounts.push({ at, why: `the same filesystem as ${named(from)}, listed in ${MOUNTINFO}${hint}` }); return null; }
     if (!st.isDirectory()) return null;
-    let through;
-    try { through = stat(at); } catch (e) { return unreadable(at, e); }
-    if (dev(through) !== dev(st)) { mounts.push({ at, why: 'another volume mounted in it' }); return null; }
     const key = idOf(st);
     if (walked.has(key)) { mounts.push({ at, why: `the directory ${named(walked.get(key))} again` }); return null; }
     walked.set(key, at);
     let names;
     try { names = listing(at); } catch (e) { return unreadable(at, e); }
     read.push({ at, key, ctimeNs: st.ctimeNs, names: namesOf(names), mtimeNs: st.mtimeNs });
-    frames.push({ at, dev: dev(st), names, i: 0 });
+    frames.push({ at, dev: here, names, i: 0 });
     return null;
   };
   let walk = visit(root, path.dirname(root), above);
