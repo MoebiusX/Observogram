@@ -1532,11 +1532,11 @@ try {
       // of the hook's URL — raw or normalised — nor of its token — raw, trimmed or per line. undici quotes a
       // token it refuses trimmed (a replace by the raw value misses it) and a URL with credentials as written.
       {
-        const errOf = async (name, url, token, opts = {}) => {
+        const errOf = async (name, url, token, { timeoutMs = 1000, ...opts } = {}) => {
           process.env.OBSERVOGRAM_TEST_E3_URL = url;
           if (token === undefined) delete process.env.OBSERVOGRAM_TEST_E3_TOKEN; else process.env.OBSERVOGRAM_TEST_E3_TOKEN = token;
           writeFileSync(join(TMP, 'journeys', `${name}.journey.yaml`), [`name: ${name}`, `packA: { file: ${A} }`, FILE_B,
-            `notify: { urlEnv: OBSERVOGRAM_TEST_E3_URL${token === undefined ? '' : ', authEnv: OBSERVOGRAM_TEST_E3_TOKEN'}, on: always, timeoutMs: 1000 }`].join('\n'));
+            `notify: { urlEnv: OBSERVOGRAM_TEST_E3_URL${token === undefined ? '' : ', authEnv: OBSERVOGRAM_TEST_E3_TOKEN'}, on: always, timeoutMs: ${timeoutMs} }`].join('\n'));
           const r = await runJourney(loadJourneyDef(name), opts);
           return { notify: r.notify, disk: JSON.stringify(readJourneyRuns(name)[0]) };
         };
@@ -1558,8 +1558,12 @@ try {
           // an IPv6 literal's hostname is bracketed, but Node's net errors quote the address bare, with the port —
           // the scheme's when the URL names none. Through the real fetch (`[::1]` at the receiver's port, where
           // nothing listens: ECONNREFUSED, or EAFNOSUPPORT on a host without IPv6) and in Node's texts verbatim.
+          // A connect to a closed loopback port is refused at once on Linux, but Windows retries a SYN its peer
+          // refused before it reports the refusal (about 2 s on loopback), so a 1000 ms attempt would end there as
+          // a timeout before Node's connect error arrives: the two refusals through the real fetch allow 5000 ms.
+          const REFUSED_MS = 5000;
           const rxPort = new URL(rxUrl).port;
-          const v6 = await errOf('e3-v6-loop', `http://[0:0:0:0:0:0:0:1]:${rxPort}/v6-path`);
+          const v6 = await errOf('e3-v6-loop', `http://[0:0:0:0:0:0:0:1]:${rxPort}/v6-path`, undefined, { timeoutMs: REFUSED_MS });
           assert(v6.notify.status === 'failed' && /^connect E[A-Z]+ <redacted>/.test(v6.notify.error) && !v6.notify.error.includes(rxPort) && !v6.disk.includes(`::1:${rxPort}`) && hits.length === 0,
                  'E3 an IPv6-literal hook\'s address and port, as Node\'s connect error quotes them, are redacted on the record', v6.notify);
           for (const [name, url, text] of [['e3-v6-far', 'http://[fd00::5ec:1]:4443/v6far-path', 'connect ECONNREFUSED fd00::5ec:1:4443'],
@@ -1574,7 +1578,7 @@ try {
           // nothing listens: Node quotes the address it resolved to, `127.0.0.1:<port>`) and in Node's and undici's
           // texts verbatim (a lookup, a connect, undici's connect timeout, the certificate's names).
           const lhPort = String(CLOSED_LOOPBACK_PORT);
-          const lh = await errOf('e3-lh', `http://localhost:${lhPort}/lh-path`);
+          const lh = await errOf('e3-lh', `http://localhost:${lhPort}/lh-path`, undefined, { timeoutMs: REFUSED_MS });
           assert(lh.notify.status === 'failed' && !lh.notify.error.includes(lhPort) && !/127\.0\.0\.1|::1/.test(lh.notify.error) && hits.length === 0,
                  'E3 a named hook\'s resolved address and its port, as Node\'s connect error quotes them, never reach the record', lh.notify);
           for (const [name, url, text, want] of [
