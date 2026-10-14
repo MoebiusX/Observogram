@@ -2248,7 +2248,12 @@ test('packc store rekey-issuer: usage errors exit 2; the store line, the report;
 // ---------- purge-org ----------
 
 const purge = (base, id, opts = {}) => purgeOrg(id, { dbPath: dbOf(base), base, out: silent, ...opts });
-const refusedOp = (re) => (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && re.test(e.message);
+// A mismatch names what was thrown: a validation function that returns false leaves only assert.rejects' message (a
+// path), and the summary a CI log ends with prints the error line alone, never the TAP block's `actual`.
+const refusedOp = (re) => (e) => {
+  if (e?.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && re.test(e.message)) return true;
+  throw new assert.AssertionError({ message: `expected a refusal matching ${re}, got ${e?.code ?? e?.name}: ${e?.message}`, actual: e, expected: re });
+};
 function cliEnv(base) {
   const env = { ...process.env };
   for (const k of STRIP) { delete env[`OBSERVOGRAM_${k}`]; delete env[`TOMOGRAPH_${k}`]; }
