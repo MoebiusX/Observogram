@@ -58,12 +58,12 @@
 // sees them); the rest of the shell never reaches this process's imports.
 const PLAYWRIGHT = process.env.OBSERVOGRAM_PLAYWRIGHT || 'playwright';
 const REQUIRED = process.env.OBSERVOGRAM_LIVE_SMOKE === 'require';
-const { STRIP, serve, signIn } = await import('./fixtures/serve-child.mjs');
+const { STRIP, serve, signIn, dropInheritedOrgVars } = await import('./fixtures/serve-child.mjs');
 for (const k of STRIP) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
 }
-for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
+dropInheritedOrgVars();
 
 const { test } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
@@ -75,8 +75,8 @@ const { hashPassword } = await import('./auth.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
 const { startFakeMcp, endpointIdFor } = await import('./fixtures/fake-mcp.mjs');
 const { mkdirSync, readFileSync, writeFileSync } = await import('node:fs');
-const { resolve, dirname } = await import('node:path');
-const { fileURLToPath } = await import('node:url');
+const { resolve, dirname, isAbsolute } = await import('node:path');
+const { fileURLToPath, pathToFileURL } = await import('node:url');
 const { capabilityTool, candidateTool, probeCandidates, productAttestedByTool } = await import('../tools/lib/contracts/mcp-capabilities.mjs');
 const { stagesFor } = await import('../tools/lib/live-fetch.mjs');
 const { SPEC_DIR } = await import('../tools/lib/validator.mjs');
@@ -91,7 +91,8 @@ const HOSTILE_VERSION = '<img src=y onerror="window.__pwned=2">';
 const T = 20_000;
 
 async function loadPlaywright() {
-  try { return { pw: await import(PLAYWRIGHT) }; }
+  // An absolute path, a Windows one too, is imported as its file URL (import() takes a URL or a package name).
+  try { return { pw: await import(isAbsolute(PLAYWRIGHT) ? pathToFileURL(PLAYWRIGHT).href : PLAYWRIGHT) }; }
   catch (e) { return { error: `cannot import ${PLAYWRIGHT}: ${e.message.split('\n')[0]}` }; }
 }
 

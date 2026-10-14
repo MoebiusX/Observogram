@@ -600,7 +600,7 @@ test('the settings bounds: a pattern slow only on URL-shaped values compiles —
     ['rules[0].when: pattern has more than one unbounded quantifier (*, + or {n,}), which a URL-length value can make slow']);
 });
 
-test('the settings bounds: every pattern the retired timing probe caught, and the ones that slipped past it, compile in milliseconds — speed is the evaluator\'s deadline, not the loader\'s', () => {
+test('the settings bounds: every pattern the retired timing probe caught, and the ones that slipped past it, compile in milliseconds — speed is the evaluator\'s deadline, not the loader\'s', (t) => {
   const errs = (pattern, type = 'url') => compileSettingsPolicy({ version: 1, rules: [{ when: { type, pattern }, warn: 'w' }] }).errors;
   const slow = (c, end = 'x') => `^.*${c}{0,60}${c}{0,60}${c}{0,60}${c}{0,60}${end}$`;
   for (const pattern of [
@@ -611,7 +611,9 @@ test('the settings bounds: every pattern the retired timing probe caught, and th
   ]) {
     const t0 = Date.now();
     assert.deepEqual(errs(pattern, 'text'), [], pattern);
-    assert.ok(Date.now() - t0 < 1000, `${pattern}: compiled without running it on a long value (${Date.now() - t0} ms)`);
+    const tookMs = Date.now() - t0;
+    t.diagnostic(`bound: ${pattern} compiles: ${tookMs} ms < 1000 ms`);
+    assert.ok(tookMs < 1000, `${pattern}: compiled without running it on a long value (${tookMs} ms)`);
   }
   // Every bound of shape still refuses.
   assert.deepEqual(errs('^(a+)+$'), ['rules[0].when: nested quantifier']);

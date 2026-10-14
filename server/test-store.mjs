@@ -59,7 +59,9 @@ function track(proc) {
 after(() => { for (const p of live) p.kill('SIGKILL'); });
 
 // A child ES module run with this very Node binary. `until` resolves once a
-// line matching it appears on stdout; `done` resolves with the exit. Both
+// line matching it appears on stdout; `done` resolves with the exit, once
+// the child's stdout and stderr are read to their end ('close', not 'exit':
+// on Windows a child's last write can arrive after its 'exit' event). Both
 // bounded waits SIGKILL a child still running at their deadline and reject,
 // so a child that never gets there fails its test instead of hanging it:
 // `until(re, ms)` for the line, `exited(ms, what)` for the exit. A test
@@ -77,7 +79,7 @@ function child(code, { env = {} } = {}) {
     for (const w of waiters.splice(0)) { if (w.re.test(stdout)) w.resolve(); else waiters.push(w); }
   });
   proc.stderr.on('data', (b) => { stderr += b; });
-  const done = new Promise((res) => proc.on('exit', (code, signal) => res({ code, signal, stdout, stderr })));
+  const done = new Promise((res) => proc.on('close', (code, signal) => res({ code, signal, stdout, stderr })));
   const deadline = (ms, onTimeout) => setTimeout(() => { proc.kill('SIGKILL'); onTimeout(); }, ms);
   const until = (re, ms = 10_000) => new Promise((res, rej) => {
     if (re.test(stdout)) return res();
@@ -557,7 +559,7 @@ function lockHolder(path, holdMs) {
   `);
 }
 
-test('Concurrency: a write waits out a child holding BEGIN IMMEDIATE for less than busy_timeout, then succeeds', async () => {
+test('Concurrency: a write waits out a child holding BEGIN IMMEDIATE for less than busy_timeout, then succeeds', async (t) => {
   const path = join(tempDir(), 'conc.db');
   const db = await openStore({ path });
   try {
@@ -568,6 +570,7 @@ test('Concurrency: a write waits out a child holding BEGIN IMMEDIATE for less th
     const waited = Date.now() - t0;
     const r = await holder.exited(10_000, "the parent's write");
     assert.equal(r.code, 0, r.stderr);
+    t.diagnostic(`bound: the parent's write waited on the lock: ${waited} ms >= 300 ms of a 700 ms hold`);
     assert.ok(waited >= 300, `the parent waited on the lock (${waited} ms)`);
     assert.equal(prepare(db, "SELECT value FROM schema_meta WHERE key = 'parent'").get().value, 'wrote');
     assert.equal(prepare(db, "SELECT value FROM schema_meta WHERE key = 'held_by_child'").get().value, 'yes');
@@ -576,7 +579,7 @@ test('Concurrency: a write waits out a child holding BEGIN IMMEDIATE for less th
   }
 });
 
-test('Concurrency: a migration waits out a child holding BEGIN IMMEDIATE, then applies', async () => {
+test('Concurrency: a migration waits out a child holding BEGIN IMMEDIATE, then applies', async (t) => {
   const path = join(tempDir(), 'conc-mig.db');
   await openStore({ path });
   closeStore(path);
@@ -589,6 +592,7 @@ test('Concurrency: a migration waits out a child holding BEGIN IMMEDIATE, then a
     assert.deepEqual(runMigrations(db, [...STEPS, step]).applied, [NEXT]);
     const waited = Date.now() - t0;
     assert.equal((await holder.exited(10_000, 'the migration')).code, 0);
+    t.diagnostic(`bound: the migration waited on the lock: ${waited} ms >= 300 ms of a 700 ms hold`);
     assert.ok(waited >= 300, `the migration waited on the lock (${waited} ms)`);
     assert.ok(tables(db).includes('later'));
   } finally {
@@ -1933,7 +1937,7 @@ test('readTokenEnv never names a notify hook\'s variable: the URL or TOKEN shape
   }
 });
 
-test('Concurrency: a repository write waits out a child holding BEGIN IMMEDIATE, then succeeds with its audit row', async () => {
+test('Concurrency: a repository write waits out a child holding BEGIN IMMEDIATE, then succeeds with its audit row', async (t) => {
   const { path, db, close } = await freshStore('conc-repo');
   try {
     const holder = lockHolder(path, 700);
@@ -1942,6 +1946,7 @@ test('Concurrency: a repository write waits out a child holding BEGIN IMMEDIATE,
     users.createUser(db, 'system', { login: 'patient' });
     const waited = Date.now() - t0;
     assert.equal((await holder.exited(10_000, 'the repository write')).code, 0);
+    t.diagnostic(`bound: the repository write waited on the lock: ${waited} ms >= 300 ms of a 700 ms hold`);
     assert.ok(waited >= 300, `waited ${waited} ms`);
     assert.ok(users.getUserByLogin(db, 'patient'));
     assert.deepEqual(auditActions(db), ['user.create']);
@@ -1964,7 +1969,8 @@ function packc(args, env) {
     let stderr = '';
     proc.stdout.on('data', (b) => { stdout += b; });
     proc.stderr.on('data', (b) => { stderr += b; });
-    proc.on('exit', (code, signal) => res({ code, signal, stdout, stderr }));
+    // 'close': the output read to its end (see child()).
+    proc.on('close', (code, signal) => res({ code, signal, stdout, stderr }));
   });
 }
 

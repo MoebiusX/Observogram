@@ -31,8 +31,12 @@ bindings, slice 3b added none, slice 4a removed nine with the index code it dele
 added none; do not add to it). CI on a PR: `validate`
 (includes the vendored-spec check) and `backend-live` on the
 latest 22, `node-floor` (`npm test` on exactly 22.16.0), `store-prestore` (from slice 2b:
-the Export gate against a `v0.4.0` worktree). `refresh-live-pack` runs only on
-demand or when the fetcher changes.
+the Export gate against a `v0.4.0` worktree), `windows (node 22.16.0)` and `windows (node 22)`
+(`npm test` on windows-latest, the summary last) and `windows-vs-linux` (the cross-leg check:
+each Windows run's tests, harness assertions and skips against node-floor's). `node-floor` and
+`validate` end with the summary too: `tools/tap-summary.mjs` prints the totals and every
+failure at the end of the job's log, where the log API's tail reaches them.
+`refresh-live-pack` runs only on demand or when the fetcher changes.
 
 **The store (backlog 0) — slices 1 and 2 on `develop`; slice 3a (roles enforced) and 3b (the identity API) delivered; slice 4a (the pack registry on the store, PR #140) and 4b (services, environments, MCP endpoints) delivered; slice 5 (the audit) delivered; slice 6a (the Services home, the service page) delivered; slice 6b (Settings) delivered; every STORE_PLAN slice is built.**
 Slice 1 (the store foundation: `server/store/*`, `packc store backup` / `restore`, the k8s

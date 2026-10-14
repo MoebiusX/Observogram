@@ -426,8 +426,10 @@ for (const [label, hook] of [
   await new Promise(r => setTimeout(r, 20));
   controller.abort();
   const e1 = await pending;
-  assert(e1?.name === 'AbortError' && !isTransportHookError(e1) && Date.now() - started < 5_000,
-    'aborting the caller\'s signal ends a request in flight with an AbortError, before its 60 s timeout', { name: e1?.name, ms: Date.now() - started });
+  const abortMs = Date.now() - started;
+  console.log(`bound: aborting the caller's signal ends a request in flight: ${abortMs} ms < 5000 ms`);
+  assert(e1?.name === 'AbortError' && !isTransportHookError(e1) && abortMs < 5_000,
+    'aborting the caller\'s signal ends a request in flight with an AbortError, before its 60 s timeout', { name: e1?.name, ms: abortMs });
   assert(inits.length === 1 && inits[0].signal !== controller.signal && inits[0].signal.aborted,
     'the request carried a signal of its own (the timeout combined with the caller\'s), now aborted');
   const e2 = await expectFail(() => rpc('tools/list', {}));
@@ -445,7 +447,9 @@ for (const [label, hook] of [
     const waiting = expectFail(() => nativeRpc('initialize', {}));
     setTimeout(() => native.abort(), 50);
     const e3 = await waiting;
-    assert(e3?.name === 'AbortError' && Date.now() - t0 < 5_000, 'native fetch: the caller\'s abort ends the request in flight promptly', { name: e3?.name, ms: Date.now() - t0 });
+    const nativeMs = Date.now() - t0;
+    console.log(`bound: native fetch: the caller's abort ends the request in flight: ${nativeMs} ms < 5000 ms`);
+    assert(e3?.name === 'AbortError' && nativeMs < 5_000, 'native fetch: the caller\'s abort ends the request in flight promptly', { name: e3?.name, ms: nativeMs });
   } finally { for (const sock of sockets) sock.destroy(); await new Promise(r => silent.close(r)); }
 
   // Without a signal each request still carries its own timeout, as before.
