@@ -1512,7 +1512,7 @@ try {
                  'E1 with resolveNotify the resolver\'s target is posted once, the variable the definition names is never read', { notify: r.notify, hits: hits.length, trap: trapHits.length, seen: seen.length });
           assert(!JSON.stringify(r).includes('tok-resolved-1') && !JSON.stringify(r).includes(rxUrl), 'E1 the resolved URL and token never land on the record');
           hits.length = 0;
-          const lostPort = await closedLoopbackPort();
+          const lostPort = CLOSED_LOOPBACK_PORT;
           writeFileSync(join(TMP, 'journeys', 'seam-lost.journey.yaml'), [`name: seam-lost`, `packA: { file: ${A} }`, `packB: { mcp: { url: http://127.0.0.1:${lostPort}/mcp } }`, 'notify: { urlEnv: OBSERVOGRAM_TEST_TRAP_URL, on: breach, timeoutMs: 1000 }'].join('\n'));
           const seenLost = [];
           let lostErr = null;
@@ -1573,7 +1573,7 @@ try {
           // no value list: the address texts' pattern redacts them. Through the real fetch (`localhost` at a port where
           // nothing listens: Node quotes the address it resolved to, `127.0.0.1:<port>`) and in Node's and undici's
           // texts verbatim (a lookup, a connect, undici's connect timeout, the certificate's names).
-          const lhPort = String(await closedLoopbackPort());
+          const lhPort = String(CLOSED_LOOPBACK_PORT);
           const lh = await errOf('e3-lh', `http://localhost:${lhPort}/lh-path`);
           assert(lh.notify.status === 'failed' && !lh.notify.error.includes(lhPort) && !/127\.0\.0\.1|::1/.test(lh.notify.error) && hits.length === 0,
                  'E3 a named hook\'s resolved address and its port, as Node\'s connect error quotes them, never reach the record', lh.notify);
