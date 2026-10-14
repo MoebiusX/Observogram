@@ -2937,18 +2937,33 @@ test('purge-org users file that exists outside the root: through a mount that is
   assert.deepEqual(placeIn(linked, '/mnt/b/users.json'), { exists: true, refusal: null }, 'the link and what it names moved out');
 });
 
-test('purge-org users file that does not exist: recorded under the root and moved out, or reached by a link whose target is gone from the root, the purge passes; so does one whose path leads only through directories the root lies in, by its real path, to one where the rest does not exist (a sibling org\'s directory purged before), while no entry under the root has its name; one whose place lies elsewhere — a file deleted outside the root, a link to a mount that is down, a path no part of which exists, a path through a directory the root does not lie in, or one whose name an entry under the root has — is refused, failing closed; none recorded and <base>/users.json absent, the purge passes', () => {
+test('purge-org users file that does not exist: recorded under the root and moved out, or reached by a link whose target is gone from the root, or by a chain of 40 links (Linux\'s limit), the purge passes; so does one whose path leads only through directories the root lies in, by its real path, to one where the rest does not exist (a sibling org\'s directory purged before), while no entry under the root has its name; one whose place lies elsewhere — a file deleted outside the root, a link to a mount that is down (also by a link into the root and on by a link under it, the rest of the path kept after each), a mount point that is down on another filesystem whose directory has the inode number of one under the root but another modification time, a path no part of which exists, a path through a directory the root does not lie in, or one whose name an entry under the root has — is refused, failing closed; none recorded and <base>/users.json absent, the purge passes', () => {
   const vol = betaVolume().symlink('/cfg/users.json', `${ROOT_B}/sub/users.json`).symlink('/cfg/gone', `${ROOT_B}/gone`)
     .symlink('/cfg/rel', '../ws/orgs/beta/sub/x/..').dir('/mnt/b').symlink('/cfg/m.json', '/mnt/b/users.json')
     .symlink('/ws/s.json', 'orgs/beta2/users.json').symlink('/cfg/s.json', '/ws/orgs/beta2/users.json').symlink('/cfg/d', '/ws/orgs')
-    .symlink('/lnk', '/ws');
+    .symlink('/lnk', '/ws').symlink('/cfg/ds', `${ROOT_B}/sub`).symlink(`${ROOT_B}/sub/l`, '/mnt/b');
+  // A chain of 40 links, as many as Linux follows in one path, to where the users file lies under the root.
+  for (let i = 1; i < 40; i += 1) vol.symlink(`/cfg/hop${i}`, `/cfg/hop${i + 1}`);
+  vol.symlink('/cfg/hop40', `${ROOT_B}/sub/users.json`);
   assert.equal(placeIn(vol, `${ROOT_B}/sub/users.json`).refusal, underRoot(`${ROOT_B}/sub/users.json`, `${ROOT_B}/sub/users.json`), 'recorded under the root: refused');
   vol.rename(`${ROOT_B}/sub/users.json`, '/keep/users.json');
-  for (const file of [`${ROOT_B}/sub/users.json`, '/cfg/users.json', '/cfg/gone/users.json', `${ROOT_B}/sub/deeper/users.json`, '/cfg/rel/users.json']) {
+  for (const file of [`${ROOT_B}/sub/users.json`, '/cfg/users.json', '/cfg/gone/users.json', `${ROOT_B}/sub/deeper/users.json`, '/cfg/rel/users.json', '/cfg/hop1']) {
     assert.deepEqual(placeIn(vol, file), { exists: false, refusal: null }, `${file}: moved out, it leads under the root`);
   }
   assert.deepEqual(placeIn(vol, '/srv/gone.json'), { exists: null, refusal: unknownPlace('/srv/gone.json', '/srv') }, 'deleted outside the root (declared)');
   assert.deepEqual(placeIn(vol, '/cfg/m.json'), { exists: null, refusal: unknownPlace('/cfg/m.json', '/mnt/b', { to: '/mnt/b/users.json' }) });
+  // By a link into the root (/cfg/ds → <root>/sub) and on by a link under it (<root>/sub/l → /mnt/b): the rest of the path
+  // is kept after each absolute link, so it leads to the mount that is down, not to <root>/sub.
+  assert.deepEqual(placeIn(vol, '/cfg/ds/l/users.json'),
+    { exists: null, refusal: unknownPlace('/cfg/ds/l/users.json', '/mnt/b', { to: '/mnt/b/users.json' }) });
+  // A mount point that is down on another filesystem than the root's (/data/b, on a disk mounted at /data), its directory
+  // with the inode number of <root>/sub — each filesystem numbers its own inodes — but its own modification time: no view
+  // of <root>/sub, so nothing tells where the path leads.
+  const sub = vol.fs.statSync(`${ROOT_B}/sub`);
+  vol.dir('/data', { dev: 50n }).dir('/data/b', { ino: sub.ino });
+  const down = vol.fs.statSync('/data/b');
+  assert.deepEqual([down.ino === sub.ino, down.dev === sub.dev, down.mtimeNs === sub.mtimeNs], [true, false, false]);
+  assert.deepEqual(placeIn(vol, '/data/b/users.json'), { exists: null, refusal: unknownPlace('/data/b/users.json', '/data/b') });
   // Only through directories the root lies in (/, /ws, /ws/orgs), into a sibling org's directory purged before — where the
   // users file was moved out of, as its refusal said — or a file deleted there: a filesystem mounted again on any of them
   // covers the root too. Named through a link to one of them, and with the root named through a link (by its real path).

@@ -9,8 +9,10 @@
 // Imports nothing: the caller passes node:path's posix or win32, so tools/test-platform.mjs's P5 holds.
 //
 // mountFs(path, { fold, devs, proc }) → a volume set, built with:
-//   dir(p, { dev })            mkdir -p; a directory created takes its parent's device, the last one `dev` if given
-//                              (a directory on another device than its parent is what a mount point looks like);
+//   dir(p, { dev, ino })       mkdir -p; a directory created takes its parent's device, the last one `dev` if given
+//                              (a directory on another device than its parent is what a mount point looks like),
+//                              and the inode number `ino` if given (each filesystem numbers its own inodes, so a
+//                              directory on another device may have the number of one under the root);
 //   file(p, { size, mtimeNs, dev }) a file (its directories made as dir does), on its directory's device, or on `dev`
 //                              if given with no mount there (an overlay mount whose layers lie on different
 //                              filesystems, xino=off, shows a lower layer's files so);
@@ -135,7 +137,7 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = 
   };
 
   const vol = {
-    dir(p, { dev = null } = {}) {
+    dir(p, { dev = null, ino = null } = {}) {
       const abs = path.resolve(p);
       const top = path.parse(abs).root;
       if (!tops.has(key(top)) && !mounts.has(key(top))) tops.set(key(top), { ...inode('dir', devs[top] ?? 1n), entries: new Map() });
@@ -145,7 +147,9 @@ export function mountFs(path, { fold = false, devs = {}, proc = false, coarse = 
         const parent = locate(at, true).node;
         at = path.join(at, name);
         if (!entries(parent).has(key(name))) {
-          entries(parent).set(key(name), { name, node: { ...inode('dir', i === names.length - 1 && dev !== null ? dev : parent.dev), entries: new Map() } });
+          const last = i === names.length - 1;
+          const node = inode('dir', last && dev !== null ? dev : parent.dev, last && ino !== null ? { ino } : {});
+          entries(parent).set(key(name), { name, node: { ...node, entries: new Map() } });
           changed(parent);
         }
       });
