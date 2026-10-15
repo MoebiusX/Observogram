@@ -1,0 +1,62 @@
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: checkout-slo
+    folder: SLO
+    interval: 1m
+    rules:
+      - uid: checkout-availability-burn
+        title: CheckoutAvailabilityBurnRate
+        condition: C
+        for: 5m
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: checkout:availability:good / checkout:availability:total < 0.99
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+              expression: A
+              refId: C
+              type: threshold
+        labels:
+          severity: SEV1
+        annotations:
+          summary: "Disponibilit\xE9 du checkout d\xE9grad\xE9e — taux d'erreur \xE9lev\xE9"
+      - uid: checkout-latency-burn
+        title: CheckoutLatencyBurnRate
+        condition: B
+        for: 10m
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model: "{\"editorMode\":\"code\",\"expr\":\"checkout:latency_p99:ms{route=~\\\"/api/v\\\\\\\\d+/.*\\\"} > 250\",\"instant\":true,\"refId\":\"A\"}"
+          - refId: B
+            datasourceUid: __expr__
+            model: "{\"expression\":\"A\",\"refId\":\"B\",\"type\":\"threshold\"}"
+        labels:
+          severity: SEV2
+      - uid: checkout-queue-depth
+        title: CheckoutQueueDepthBurnRate
+        condition: B
+        for: 2m
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model: "{\"editorMode\":\"code\",\"expr\":\"checkout:queue_depth:max > 1000\",\"refId\":\"A\",}"
+        labels:
+          severity: SEV3

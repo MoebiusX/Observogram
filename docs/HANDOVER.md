@@ -25,15 +25,20 @@ next to Discover · Diagnose · Remediate. In order:
 `npm test` passes on Node 22.16+ (the `package.json` `engines` floor, for `node:sqlite`;
 the Node 22.22 pipe truncation in `packc journey run --all --json` that failed
 `tools/test-journey.mjs` was fixed in [STORE_PLAN.md](STORE_PLAN.md) slice 1). `npm run lint`:
-0 errors, 166 warnings on `codex/identity-api` (a baseline of `preserve-caught-error`-style
+0 errors, 156 warnings on `codex/services-api` (a baseline of `preserve-caught-error`-style
 warnings; slice 2a removed five with the file readers it deleted, slice 3a some unused catch
-bindings, and slice 3b added none; do not add to it). CI on a PR: `validate`
+bindings, slice 3b added none, slice 4a removed nine with the index code it deleted and 4b
+added none; do not add to it). CI on a PR: `validate`
 (includes the vendored-spec check) and `backend-live` on the
 latest 22, `node-floor` (`npm test` on exactly 22.16.0), `store-prestore` (from slice 2b:
-the Export gate against a `v0.4.0` worktree). `refresh-live-pack` runs only on
-demand or when the fetcher changes.
+the Export gate against a `v0.4.0` worktree), `windows (node 22.16.0)` and `windows (node 22)`
+(`npm test` on windows-latest, the summary last) and `windows-vs-linux` (the cross-leg check:
+each Windows run's tests, harness assertions and skips against node-floor's). `node-floor` and
+`validate` end with the summary too: `tools/tap-summary.mjs` prints the totals and every
+failure at the end of the job's log, where the log API's tail reaches them.
+`refresh-live-pack` runs only on demand or when the fetcher changes.
 
-**The store (backlog 0) — slices 1 and 2 on `develop`; slice 3a (roles enforced) and 3b (the identity API) delivered; slice 4 is next.**
+**The store (backlog 0) — slices 1 and 2 on `develop`; slice 3a (roles enforced) and 3b (the identity API) delivered; slice 4a (the pack registry on the store, PR #140) and 4b (services, environments, MCP endpoints) delivered; slice 5 (the audit) delivered; slice 6a (the Services home, the service page) delivered; slice 6b (Settings) delivered; every STORE_PLAN slice is built.**
 Slice 1 (the store foundation: `server/store/*`, `packc store backup` / `restore`, the k8s
 store volume) is PR #109. Slice 2a (PR #111, branch `codex/store-identity`, stacked on it)
 moves identity onto the store: `start()` runs `bootStore()` (`server/boot.mjs`: the boot
@@ -61,9 +66,9 @@ carries `denied`). `server/test-authz.mjs` holds completeness, the independent
 `EXPECTED_CLASS`, a probe per `/api` route and the AuthZ matrix over every posture. The
 live pack is per org (`<org root>/live/production-live.pack.yaml`) and the MCP URL keeps no
 credential parameter (`tools/lib/mcp-url-safety.mjs`); the maintainer's decisions for it:
-members are listed to admins only, viewer affordances in the studio wait for slice 6a (the
-studio shows the server's refusal), drafts keep no credential parameter either (with a
-warning), and the old install-wide live pack is not moved.
+members are listed to admins only, viewer affordances in the studio landed in 6a (a control a
+viewer cannot use is drawn disabled with the server's reason), drafts keep no credential
+parameter either (with a warning), and the old install-wide live pack is not moved.
 
 **Slice 3b delivered (branch `codex/identity-api`, stacked on 3a; PR pending): the identity
 API.** `server/routes/identity.mjs` registers the owner routes (`/api/admin/*`: users —
@@ -83,7 +88,87 @@ Surface and The Identity API tables to the route table. The maintainer's decisio
 admins list members, enable and owner grant / revoke ship (the revoke leaves the default
 org's admin membership, and says so), the join role `admin` needs `"confirm": true`, and
 the open-loopback posture keeps the HTTP identity API behind the direct-loopback rule.
-Next is slice 4 (services, environments and org-scoped MCP endpoints on the store).
+
+**Slice 4a delivered (branch `codex/pack-registry`, from `develop` after 3b; PR #140): the
+pack registry on the store.** `packs/index.json` is read once, at boot step 5
+(`server/store/pack-import.mjs`), and frozen in place; a pack's label, source, times and the
+services it names are rows (`server/pack-registry.mjs` over `server/store/packs.mjs` and
+`pack-links.mjs`; `tools/lib/service-keys.mjs` is the one copy of the service rules, read by
+the server and the studio). Services and environments are backfilled from the registered
+packs with no tier; every register, adoption, prune, dedup, eviction and RESET is an audit
+row, and RESET keeps the services. The index hashes live under
+`schema_meta.pack_index_hashes` in a canonical form without `lastUsedAt` — never in
+`legacy_hashes` or the marker — so a rollback to 0.5.0 restarts freely and a rollback that
+only read packs re-upgrades with one bookkeeping line, while one that registered, relabelled
+or removed a pack refuses naming `packc store import --replace`, which re-imports the file.
+`packc store export` in place reconciles the rows with the pack files, then writes
+`index.json` per org root; the Export gate asserts the labels as v0.4.0 reads them
+(`server/fixtures/pre-store-build.mjs` `catalogWithLabels`) and
+`server/fixtures/store-050-guard.mjs` holds v0.5.0's guard loop verbatim (the proof the key
+separation matters). The design's §19 decisions were all taken as recommended (null tiers,
+the plan's guard rule, the aggregate regex verbatim, RESET keeps rows, the canonical
+comparison with the export reconciling first). Recommended, not built: a CI job over a
+v0.5.0 worktree running the live suite against that build (it needs `OBSERVOGRAM_DB` per
+start, so the suite's child env would have to grow a `--build` flag).
+**Slice 4b delivered (branch `codex/services-api`, from `develop` after 4a; PR pending):
+services, environments and MCP endpoints over HTTP.** Every rule lives once in
+`server/service-admin.mjs` (a sibling of `identity-admin.mjs`, the same `AdminRefusal` kinds),
+the fourteen routes in `server/routes/services.mjs` (the handler helpers `routes/identity.mjs`
+had — `pathId`, `refused`, `bodyOf`, `handler` — moved to `routes/util.mjs`, texts unchanged).
+Operators manage services (`slug` fixed; `tier` `null` = graded by the pack) and environments
+(`bindings`, `endpoints`, an optional MCP endpoint); admins manage the org's MCP endpoint
+records, whose three changes take the identity API's defences — the route table's `direct` /
+`closedAs` fields parametrise `authz.mjs`'s step texts and `csrfAlwaysText`, byte-identical for
+identity entries. `mcp_endpoints.url` refuses credential-looking parameter *names* by 3a's
+word rule; `readTokenEnv` must be `OBSERVOGRAM_ORG_<ORG>_<NAME>` and the request's org's — the
+owner is the org with the longest matching prefix, live or removed orgs included, re-checked
+at request time by `resolveMcpTarget`. `GET /api/packs/:id/conformance` grades at the record's
+tier (`declaredTier` is the graded tier; `tier.pack`, `tier.mismatch`; `tools/lib/conformance.mjs`
+untouched). `refresh-live`, `draft-from-mcp`, `deploy`, `deploy-bulk` and `rollback` take
+`mcpEndpointId`; the read token comes from the variable at request time, write tokens stay per
+request. Suites: `server/test-service-admin.mjs`, `server/test-services-api.mjs`; test-authz's
+synthetic entries, test-tenancy's `ORG_SCOPED`, test-smoke's restricted-tier fake reused for
+the token case (no new tool literal). The design's §19 decisions were all taken as
+recommended (`OBSERVOGRAM_ORG_<ORGKEY>_*` with the longest-prefix owner, the MCP endpoint
+mutations behind the identity API's defences, null tiers, the tier enum, `environments.endpoints`
+in full to viewers). The studio's pickers list the org's endpoints first and keep a typed URL
+for an admin only — list-only for every reader the server refuses a typed URL (rebadge batch 3,
+C0); a chosen endpoint is sent as `mcpEndpointId` (6b). The deploy audit (`deploys.jsonl` → rows)
+was slice 5.
+
+**Slice 5 delivered (`codex/audit`): the audit.** Every change a principal makes through the
+server is a row, and the rows can be read. The file-first routes — deploy, deploy-bulk,
+rollback, verify, the journey capture and run, the live refresh — write their row after their
+file through `server/audit-after.mjs` (`auditAfter`, `actorForRecord`, `bounded`, `finite`): on
+its own, never inside the operation; a failed insert never fails the operation (`auditError` on
+the response, one stderr line) and a `deploys.jsonl` line that could not be appended still gets
+its row, flagged `detail.fileError: true`. The rows carry counts and the MCP origin, never a URL
+with a path, an error message or a tool name; `journey.run` is written for every attempt past
+the 404 (`outcome` `error` | `vantage-lost` on a 502). The actor in `deploys.jsonl` is the
+principal's (`req.observogramPrincipal.actor` through `actorForRecord()`, checked before the
+line is appended; the login, the bearer's label, `local`), so viewers of `GET /api/deploys` see logins — the CHANGELOG names both changes.
+`GET /api/audit` (`server/routes/audit.mjs`; the rule once in `server/audit-admin.mjs` —
+`parseAuditQuery(query, { owner, org })` → `{ scope, org, filters, limit }`, the `WAYS` texts,
+`auditView`) reads the org's rows to its admins (`scope=org` only) and the deployment's to
+owners (`scope=all` default, `org`, `deployment`), filtered (`actor`, `action`, `kind`,
+`targetKind`, `targetId`, `since` / `until`), paged by `next` / `before` with a cap of 500;
+the row is `admin`, `exposed: 'refuse'`, `direct: true`, `closedAs: 'the audit API'` (the
+texts parametrised in 4b say "the audit API"). `server/store/audit.mjs` gained the `kind`
+prefix predicate and `DETAIL_MAX = 8192`; the route table lost `later`. The design's §19
+decisions were all taken as recommended (a CLI reader as the last, droppable commit; the
+`journey.run` row on a 502; the `fileError` row; no email in any row — STORE_PLAN §5's one
+changed sentence; viewers see logins; an org admin sees a non-member owner's actor as is).
+Suites: `server/test-audit-api.mjs` (new); test-store, test-deploy-helpers, test-smoke,
+test-tenancy, test-authz, test-auth-oidc, test-chain-history, test-store-guards extended.
+`packc store audit` (`tools/store-admin.mjs`, design §8) lists the audit from a shell —
+one JSON row per line, the route's filters as flags, the same rule through `parseAuditQuery`'s
+`cli` surface, no row written. Settings → Audit reads it, paging by `next` (6b).
+Slice 6a delivered the Services home and the service page on the table
+(`codex/services-axis`). Slice 6b delivered Settings (`codex/settings`, then
+`codex/settings-owner`): environments, the org's MCP endpoint records and the pickers on
+`mcpEndpointId`, members and the org's name, the audit; for owners, users (a temporary
+password shown once and changed at first sign-in), organisations (an owner acts in one they
+are not a member of) and the join role. Every STORE_PLAN slice is built.
 
 ### otel-observability-pack (the spec) — `develop` at the merge of PR #8
 
@@ -130,8 +215,15 @@ These are the rules we learned the hard way; treat them as standing instructions
   open a new PR for work that lands after a merge rather than pushing to the merged branch.
 - **Studio conventions** (`docs/UI_CONVENTIONS.md`): views import `studio/host.mjs`, never
   `app.mjs`; loaders, pure models and renderers are separate exports; models read no state
-  and fetch nothing and are tested under `node:test`; `tools/lib` stays free of `node:*`
-  (it is served to the browser at `/lib`, imported at call time, never statically);
+  and fetch nothing and are tested under `node:test`; a journey's actions ride
+  `host.<namespace>` (`host.build`, `host.services`, `host.settings`), built by the
+  controller and handed to the renderer; the studio's persisted state is one login's in one
+  org (`studioState.v2:<login>:<org>`); the AA scan reads `app.css` zone by zone (a `.set-*`
+  rule under the `==== Settings` marker) and a zone's block comment records what `ux.css` /
+  `reskin.css` override; a secret is shown once and never stored (a temporary password in its
+  dialog only; an MCP read token is a server variable's name); the MCP pickers send
+  `mcpEndpointId`; `tools/lib` stays free of
+  `node:*` (it is served to the browser at `/lib`, imported at call time, never statically);
   `tools/test-studio-graph.mjs` links the module graph on `npm test`.
 - **Reviews before he sees it.** The pattern that worked: implementer → two parallel
   reviewers (one drives the thing as a user and tries to break it; one checks conventions,
@@ -178,7 +270,7 @@ under the workspace for persistence with `:memory:` for tests and demos, one sch
 with versioned migrations, tables for users (with roles), orgs, services (name, owners,
 criticality tier, the pack it carries, its environments), environments (name, bindings,
 endpoints, the MCP it is checked through), pack registrations, and the audit log; the
-existing `requireAuth` / `observogramActor` / `workspaceRoot()` seams stay the integration
+existing `requireAuth` / `observogramActor` (since slice 5 `req.observogramPrincipal`) / `workspaceRoot()` seams stay the integration
 points so OIDC and the file workspace keep working during the migration. The studio side is
 what he means by "feel like a product": sign in, land in your org, see your services and
 their environments as the axis (the landing's *Check an existing service* picks from this
@@ -191,8 +283,10 @@ he ratifies plans for this stream (item 12 says so). *Planned 2026-09-24:*
 decisions are ratified; its §9b lists the refinements made since, which merging it confirms.
 *Status:* slice 1 (the foundation) is PR #109; slice 2 is complete once 2a (identity on the
 store, PR #111) and 2b (export, `import --replace`, `rekey-issuer`, `purge-org`) merge; slice 3a
-(roles enforced, the live pack per org; PR #119) and 3b (the identity API) are delivered and
-slice 4 is next — see §1.
+(roles enforced, the live pack per org; PR #119) and 3b (the identity API) are delivered; slice
+4a (the pack registry on the store, PR #140) and 4b (services, environments, MCP endpoints) are
+delivered; slice 5 (the audit) is delivered; slice 6a (the Services home, the service page) is
+delivered; slice 6b (Settings) is delivered; every STORE_PLAN slice is built — see §1.
 
 **A. Decide: "the draft becomes the pack".** The root cause of every remaining Build gap is
 that the draft is a set of inputs re-instantiated from the seed on each change, with
@@ -278,13 +372,16 @@ read-only by design; the SLI rolodex shows the bare library id until a rename.
 - **`packc init` has no custom SLIs** and `--override` takes only the scalar fields and
   `id` / `semconv_metric` / `good_when`; PromQL edits are studio/API only. Documented in
   `library/README.md`.
-- **Records are half on the store.** Users, orgs, memberships, the owner and the audit live
-  in the store from slice 2a; `users.json` / `orgs.json` are imported once and never read
-  again. `packs/index.json` (pack registrations), services and environments are still files
-  or not records at all until the later slices of `docs/STORE_PLAN.md`; artefacts
-  (`packs/*.pack.yaml`, snapshots, journeys, runs, `deploys.jsonl`) stay files by design.
-  The rollback to a pre-store build is `packc store export` in place, with the server
-  stopped, and the way back after one is `packc store import --replace` (slice 2b).
+- **Records are most of the way onto the store.** Users, orgs, memberships, the owner and
+  the audit live in the store from slice 2a; `users.json` / `orgs.json` are imported once and
+  never read again. From slice 4a the pack registry is rows too (`packs` and
+  `pack_services`; `packs/index.json` is read once, then frozen and compared), and services
+  and environments are records backfilled from the packs; from 4b their API, owners, tiers and
+  the org's MCP endpoints (`server/service-admin.mjs`, `server/routes/services.mjs`). Artefacts (`packs/*.pack.yaml`, snapshots, journeys, runs,
+  `deploys.jsonl`) stay files by design. The rollback to a pre-store build or to 0.5.0 is
+  `packc store export` in place, with the server stopped (it writes `index.json` from the
+  rows), and the way back after one that changed users, orgs or packs is `packc store import
+  --replace` (slices 2b and 4a).
 - **The Build state is inputs + overrides** (see backlog A). Until that changes, every new
   editable thing needs its own special case in the engine and the state.
 - **Distribution SLIs** get no burn rules (null legs) and no direction handling beyond the

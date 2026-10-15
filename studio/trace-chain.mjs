@@ -20,6 +20,26 @@
 // changes the engine's verdict: a link is "missing" exactly when the engine
 // records the gap.
 
+// ---------- the texts that send the reader to live evidence ----------
+//
+// The scrape gap's fix and the next actions whose remedy is a live draft or a
+// deploy, by name — the live studio's words. A caller in the static posture
+// (a bundle, where no server drafts or deploys) passes its own set with the
+// same keys as `actions` to readTraceability, readChain and traceIssue
+// (studio/static-remedies.mjs staticTraceActions); every other caller gets
+// these. metricConfirm takes the metric's name.
+export const LIVE_ACTION_TEXT = Object.freeze({
+  scrapeEvidenceFix: 'Refresh the live draft (or declare the scrape configuration), then check again.',
+  sliRulesHealthy: 'Check the rules behind the SLI are healthy, then refresh live evidence',
+  sliMeasured: 'Capture a live draft to confirm the SLI is measured',
+  metricConfirm: (metric) => `Capture a live draft to confirm ${metric}`,
+  scrapeEvidence: 'Capture scrape evidence: refresh the live draft',
+  dashboardDeploy: 'Deploy the dashboard, then refresh live evidence',
+  alertDeploy: 'Deploy the burn-rate alert, then refresh live evidence',
+});
+// The issue whose fix is one of those texts, and its key.
+const ISSUE_ACTIONS = { missing_scrape_evidence: 'scrapeEvidenceFix' };
+
 // ---------- plain language for the engine's codes ----------
 //
 // kind 'gap' is a hole the engine records (chain.gaps); kind 'note' is a
@@ -44,7 +64,7 @@ export const TRACE_ISSUES = {
   missing_scrape_evidence: {
     kind: 'gap', link: 'scrape', label: 'Scrape evidence missing',
     why: 'No scrape job was declared or observed at all, so nothing shows the metric is collected.',
-    fix: 'Refresh the live draft (or declare the scrape configuration), then check again.',
+    fix: LIVE_ACTION_TEXT.scrapeEvidenceFix,
   },
   missing_dashboard_evidence: {
     kind: 'gap', link: 'dashboard', label: 'Dashboard evidence missing',
@@ -73,10 +93,11 @@ function humanise(code) {
   return s ? s[0].toUpperCase() + s.slice(1) : '';
 }
 
-/** The plain-language record for an engine code; unknown codes are humanised, never dropped. */
-export function traceIssue(code) {
+/** The plain-language record for an engine code; unknown codes are humanised, never dropped. `actions`: LIVE_ACTION_TEXT's keys. */
+export function traceIssue(code, { actions = LIVE_ACTION_TEXT } = {}) {
   const hit = TRACE_ISSUES[code];
-  return hit ? { code, ...hit } : { code, kind: 'gap', link: null, label: humanise(code), why: '', fix: '' };
+  if (!hit) return { code, kind: 'gap', link: null, label: humanise(code), why: '', fix: '' };
+  return ISSUE_ACTIONS[code] ? { code, ...hit, fix: actions[ISSUE_ACTIONS[code]] } : { code, ...hit };
 }
 export function traceIssueLabel(code) { return traceIssue(code).label; }
 
@@ -357,8 +378,9 @@ function alertLink(chain, index) {
   return link('alert', 'inferred', `A live alert rule’s name matches (${few(liveHealthy.map(a => a.name), 2)}); it is not declared for this SLO.`, items);
 }
 
-// The next step for a link that is broken or weak.
-function nextActionFor(l, chain) {
+// The next step for a link that is broken or weak; `actions` words the ones
+// that send the reader to live evidence.
+function nextActionFor(l, chain, actions = LIVE_ACTION_TEXT) {
   const req = chain.slo?.id || chain.sli?.id || chain.id;
   const metrics = chain.metrics || [];
   const firstMetric = (metrics.find(m => (m.sources || []).includes('sli')) || metrics[0])?.name;
@@ -366,31 +388,32 @@ function nextActionFor(l, chain) {
   const at = (label, useTarget = false) => ({ label, layer: l.layer, target: useTarget ? target : null, link: l.key });
   switch (`${l.key}:${l.state}`) {
     case 'sli:missing':          return at('Declare the SLI this SLO references');
-    case 'sli:unverified':       return l.scaffold ? at('Replace the placeholder SLI with the real one', true) : at(l.inLiveDraft ? 'Check the rules behind the SLI are healthy, then refresh live evidence' : 'Capture a live draft to confirm the SLI is measured', true);
+    case 'sli:unverified':       return l.scaffold ? at('Replace the placeholder SLI with the real one', true) : at(l.inLiveDraft ? actions.sliRulesHealthy : actions.sliMeasured, true);
     case 'metric:missing':       return { label: 'Map the SLI to a metric', layer: 'L1', target: null, link: 'metric', openSli: true };
-    case 'metric:unverified':    return at(l.noInventory ? `Capture a live draft to confirm ${firstMetric || 'the metric'}` : `Confirm ${firstMetric || 'the metric'} is emitted live`, true);
+    case 'metric:unverified':    return at(l.noInventory ? actions.metricConfirm(firstMetric || 'the metric') : `Confirm ${firstMetric || 'the metric'} is emitted live`, true);
     case 'metric:inferred':      return { label: 'Name the metric in the SLI’s query', layer: 'L1', target: null, link: 'metric', openSli: true };
     case 'exporter:missing':     return at('Add a metrics exporter to the pipeline');
-    case 'scrape:missing':       return at('Capture scrape evidence: refresh the live draft');
+    case 'scrape:missing':       return at(actions.scrapeEvidence);
     case 'scrape:unverified':    return at(`Tie a scrape job to ${firstMetric || 'this metric'}`);
     case 'scrape:inferred':      return at(`Check the matching job scrapes ${firstMetric || 'this metric'}`, true);
     case 'dashboard:missing':    return at(`Add a dashboard panel bound to ${req}`);
     case 'dashboard:inferred':   return at(`Bind a panel to ${req}`, true);
-    case 'dashboard:unverified': return at('Deploy the dashboard, then refresh live evidence', true);
+    case 'dashboard:unverified': return at(actions.dashboardDeploy, true);
     case 'alert:missing':        return at(`Add a burn-rate alert for ${req}`);
     case 'alert:inferred':       return at(`Declare a burn-rate alert for ${req}`);
-    case 'alert:unverified':     return (l.broken || l.unhealthy) ? at('Repair the unhealthy alert rule') : at('Deploy the burn-rate alert, then refresh live evidence', true);
+    case 'alert:unverified':     return (l.broken || l.unhealthy) ? at('Repair the unhealthy alert rule') : at(actions.alertDeploy, true);
     default:                     return null;
   }
 }
 
 /**
- * readChain(chain, index) → one requirement as the list draws it: its links
- * in chain order (each with a state, a sentence and the items behind it),
- * its overall state, the first broken link (a gap the engine records) or
- * else the weakest one, the next action, and its issues in plain words.
+ * readChain(chain, index, { actions }) → one requirement as the list draws
+ * it: its links in chain order (each with a state, a sentence and the items
+ * behind it), its overall state, the first broken link (a gap the engine
+ * records) or else the weakest one, the next action, and its issues in plain
+ * words — the live-evidence ones worded by `actions` (LIVE_ACTION_TEXT's keys).
  */
-export function readChain(chain, index) {
+export function readChain(chain, index, { actions = LIVE_ACTION_TEXT } = {}) {
   const metric = metricLink(chain, index);
   const links = [
     sliLink(chain, index), metric, ruleLink(chain, index), exporterLink(chain, index),
@@ -432,23 +455,24 @@ export function readChain(chain, index) {
     gapCount: gaps.length,
     firstBroken,
     weakest,
-    next: focus ? nextActionFor(focus, chain) : null,
-    issues: [...gaps, ...(chain.notes || [])].map(traceIssue),
+    next: focus ? nextActionFor(focus, chain, actions) : null,
+    issues: [...gaps, ...(chain.notes || [])].map((code) => traceIssue(code, { actions })),
   };
 }
 
 /**
- * readTraceability(pack) → the whole screen's model: the requirements sorted
- * worst first, counts by state, per-link "linked" versus "proven" counts,
- * what exists in the pack regardless of any requirement, and the issue
- * groups (every requirement that shares a gap, so it can be fixed once).
- * null when the pack carries no requirement chains.
+ * readTraceability(pack, { actions }) → the whole screen's model: the
+ * requirements sorted worst first, counts by state, per-link "linked" versus
+ * "proven" counts, what exists in the pack regardless of any requirement, and
+ * the issue groups (every requirement that shares a gap, so it can be fixed
+ * once). null when the pack carries no requirement chains. `actions` words
+ * the live-evidence texts (LIVE_ACTION_TEXT's keys).
  */
-export function readTraceability(pack) {
+export function readTraceability(pack, { actions = LIVE_ACTION_TEXT } = {}) {
   const chains = Array.isArray(pack?.traceability?.chains) ? pack.traceability.chains : [];
   if (!chains.length) return null;
   const index = traceIndex(pack);
-  const rows = chains.map(c => readChain(c, index))
+  const rows = chains.map(c => readChain(c, index, { actions }))
     .sort((a, b) => b.rank - a.rank || b.gapCount - a.gapCount || String(a.title).localeCompare(String(b.title)));
   const total = rows.length;
   const counts = { broken: 0, unverified: 0, inferred: 0, proven: 0 };

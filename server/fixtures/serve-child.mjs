@@ -20,22 +20,67 @@ const INDEX_URL = pathToFileURL(join(HERE, '..', 'index.mjs')).href;
 export const STRIP = [
   'DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH', 'WORKSPACE', 'USERS_FILE',
   'OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_REDIRECT_URL', 'OIDC_ALLOW_HTTP', 'OIDC_SECURE_COOKIES',
-  'SESSION_SECRET', 'API_TOKEN', 'API_TOKEN_LABEL', 'AUTH',
+  'SESSION_SECRET', 'API_TOKEN', 'API_TOKEN_LABEL', 'AUTH', 'TRANSPORT_HOOK', 'TAXONOMY',
+  // The reverse-proxy identity mode (server/auth-proxy.mjs PROXY_AUTH_ENV).
+  'TRUST_PROXY_AUTH', 'TRUST_PROXY_AUTH_ACK', 'PROXY_AUTH_REALM', 'PROXY_AUTH_USER_HEADER', 'PROXY_AUTH_EMAIL_HEADER',
+  'PROXY_AUTH_NAME_HEADER', 'PROXY_AUTH_GROUPS_HEADER', 'PROXY_AUTH_GROUP_ROLES', 'PROXY_AUTH_ORG', 'PROXY_AUTH_JOIN_ROLE',
+  'PROXY_AUTH_OWNERS', 'PROXY_AUTH_SHARED_SECRET', 'PROXY_AUTH_SECRET_HEADER', 'PROXY_AUTH_LOGOUT_URL',
+  // The brand (tools/lib/brand-env.mjs BRAND_ENV): the shell, the chrome and the auth pages read it.
+  'BRAND_FILE', 'BRAND_NAME', 'BRAND_SHORT_NAME', 'BRAND_TAGLINE', 'BRAND_LOGO_URL', 'BRAND_DOCS_URL', 'BRAND_FOOTER', 'BRAND_ACCENT', 'BRAND_ACCENT_DARK',
+  // The browser suites' own knobs (tools/test-studio-bundle.mjs, tools/test-bundle-compare.mjs, server/test-brand-shell.mjs, server/test-glossary-shell.mjs, server/test-services-studio.mjs, server/test-settings-studio.mjs, server/test-live-studio.mjs, server/test-mcp-settings-studio.mjs): read by no boot, stripped so a child never sees a test knob.
+  'PLAYWRIGHT', 'BUNDLE_SMOKE', 'BRAND_SMOKE', 'GLOSSARY_SMOKE', 'SERVICES_SMOKE', 'SETTINGS_SMOKE', 'LIVE_SMOKE', 'MCP_SETTINGS_SMOKE',
+  // The live fetcher's knobs: server/index.mjs imports tools/fetch-live-pack.mjs at boot, which reads these at
+  // import (brandEnv), and server/mcp-url.mjs reads ALLOW_LOCAL_MCP per call.
+  'ALLOW_LOCAL_MCP', 'MCP_TIMEOUT_MS', 'GRAFANA_DASHBOARD_LIMIT', 'GRAFANA_PANEL_LIMIT', 'GRAFANA_INCLUDE_JSON', 'DEBUG',
+  // The MCP origin allowlist (server/mcp-target-policy.mjs), read per request; the per-org
+  // OBSERVOGRAM_ORG_<KEY>_MCP_ORIGINS goes with every inherited OBSERVOGRAM_ORG_* below.
+  'MCP_ORIGINS',
+  // The notify origin allowlist (server/notify-target-policy.mjs), read per call; the per-org
+  // OBSERVOGRAM_ORG_<KEY>_NOTIFY_ORIGINS and every org's notify hook OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL /
+  // _TOKEN go with every inherited OBSERVOGRAM_ORG_* below.
+  'NOTIFY_ORIGINS',
+  // The configured snapshot scope (server/live-jobs.mjs snapshotScopeConfig), read per request; the per-org
+  // OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_* go with every inherited OBSERVOGRAM_ORG_* below.
+  'SNAPSHOT_METRIC_PREFIXES', 'SNAPSHOT_FOLDER_UIDS', 'SNAPSHOT_DATASOURCE_UID',
+  // The MCP server-settings policy (server/mcp-settings-policy.mjs), read once at start, and the opt-in
+  // pass-through's switch, read per request.
+  'MCP_SETTINGS_POLICY', 'MCP_ADMIN_PROXY',
 ];
 
+// The per-org variables (an MCP endpoint's read token, OBSERVOGRAM_ORG_<KEY>_<NAME>) are read at request time
+// by the variable an endpoint names, so no fixed list covers them: childEnv deletes every inherited one, and a
+// suite passes its own through `extra`.
+export const ORG_PREFIX = 'OBSERVOGRAM_ORG_';
+
+// Windows reads an environment name in any case (an inherited observogram_org_acme_mcp_token is a
+// child's OBSERVOGRAM_ORG_ACME_MCP_TOKEN there), while a copy of process.env keeps each name's
+// spelling. So a name is dropped by its upper-cased form.
+const isOrgVar = (k) => k.toUpperCase().startsWith(ORG_PREFIX);
+
 export function childEnv(ws, extra = {}) {
-  const env = { ...process.env };
-  for (const k of STRIP) { delete env[`OBSERVOGRAM_${k}`]; delete env[`TOMOGRAPH_${k}`]; }
+  const strip = new Set(STRIP.flatMap((k) => [`OBSERVOGRAM_${k}`, `TOMOGRAPH_${k}`]));
+  const env = {};
+  for (const [k, v] of Object.entries(process.env)) if (!strip.has(k.toUpperCase()) && !isOrgVar(k)) env[k] = v;
   if (ws) env.OBSERVOGRAM_WORKSPACE = ws;
   for (const [k, v] of Object.entries(extra)) { if (v === undefined) delete env[k]; else env[k] = v; }
   return env;
 }
 
+// The suites' half: a suite that starts a server in this process deletes every inherited per-org
+// variable from its own environment, whatever the name's case, before it sets its own.
+export function dropInheritedOrgVars(env = process.env) {
+  for (const k of Object.keys(env)) if (isOrgVar(k)) delete env[k];
+}
+
 // ---------- the children ----------
 
+// The import is inside the try: initAuth() runs at import and refuses a
+// malformed identity contract there (the reverse-proxy mode's ACK, OIDC
+// beside it), so that refusal prints REFUSED too — its message raw, no
+// nothingMoved (nothing ran that could write).
 export const BOOT_CODE = `
-const { start } = await import(${JSON.stringify(INDEX_URL)});
 try {
+  const { start } = await import(${JSON.stringify(INDEX_URL)});
   const srv = await start({ port: Number(process.env.BOOT_PORT || 0), host: process.env.BOOT_HOST, silent: process.env.BOOT_SILENT === '1', legacyLivePack: process.env.BOOT_LEGACY_LIVE_PACK || undefined });
   process.stdout.write('LISTENING ' + srv.address().port + '\\n');
   if (process.env.BOOT_KEEP !== '1') { srv.close(); process.exit(0); }
@@ -63,10 +108,15 @@ export function boot(ws, { host = '127.0.0.1', env = {}, silent = true, port = 0
   return out;
 }
 
-// A server that keeps running: { base, stop() }.
-export async function serve(ws, { host = '127.0.0.1', env = {} } = {}) {
-  const proc = spawn(process.execPath, ['--input-type=module', '-e', BOOT_CODE], {
-    env: childEnv(ws, { ...env, BOOT_HOST: host, BOOT_SILENT: '1', BOOT_KEEP: '1' }), stdio: ['ignore', 'pipe', 'pipe'],
+// A server that keeps running: { base, stop(), logs() }. logs() is
+// { stdout, stderr }: everything the child printed so far, kept after it
+// stops — the server has no access log, so a suite proving a value never
+// reached the server's output scans this. `verbose: true` boots without
+// BOOT_SILENT, so the start lines are in it too. `execArgv`: node flags
+// before the script (the permission model's, say).
+export async function serve(ws, { host = '127.0.0.1', env = {}, verbose = false, execArgv = [] } = {}) {
+  const proc = spawn(process.execPath, [...execArgv, '--input-type=module', '-e', BOOT_CODE], {
+    env: childEnv(ws, { ...env, BOOT_HOST: host, BOOT_SILENT: verbose ? '0' : '1', BOOT_KEEP: '1' }), stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '';
   let stderr = '';
@@ -85,6 +135,8 @@ export async function serve(ws, { host = '127.0.0.1', env = {} } = {}) {
   });
   return {
     base: `http://127.0.0.1:${port}`,
+    // The stdout listener above keeps appending after LISTENING, and stderr's from the start.
+    logs: () => ({ stdout, stderr }),
     stop: async () => {
       proc.kill('SIGTERM');
       const t = setTimeout(() => proc.kill('SIGKILL'), 10_000);

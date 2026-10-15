@@ -41,7 +41,7 @@
   font: 600 11px/1.2 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ux-ink-3);
 }
 .dv-filters .ux-segmented { margin: 0; }
-.dv-refine-domain { display: inline-flex; align-items: center; gap: 8px; }
+.dv-refine-domain, .dv-refine-verdict { display: inline-flex; align-items: center; gap: 8px; }
 .dv-refine-label { font: 500 14px/1.2 var(--sans); color: var(--ux-ink-2); }
 .dv-refine-select, .dv-refine-input {
   min-height: 34px; padding: 5px 10px; border-radius: 8px;
@@ -157,6 +157,19 @@
   border-color: color-mix(in srgb, var(--dv-accent) 75%, transparent);
   background: color-mix(in srgb, var(--dv-accent) 10%, var(--ux-bg));
 }
+/* A reviewer's verdict on an item (studio/verdict-html.mjs verdictBadgeHtml): the
+   last child of the item button, nothing without a verdict; the diamond is the
+   shape cue, the colour the status's tone token. */
+.dvb-verdict {
+  display: inline-flex; align-items: center; gap: 4px; justify-self: start;
+  font: 600 11px/1 var(--sans); padding: 2px 6px; border-radius: 999px;
+  border: 1px solid currentColor; color: var(--ux-ink-2); white-space: nowrap;
+}
+.dvb-verdict::before { content: "◆"; font-size: 9px; }
+.dvb-verdict[data-verdict="trusted"] { color: var(--ux-ok); background: var(--ux-ok-bg); }
+.dvb-verdict[data-verdict="suspect"] { color: var(--ux-warn); background: var(--ux-warn-bg); }
+.dvb-verdict[data-verdict="failed"] { color: var(--ux-fail); background: var(--ux-fail-bg); }
+.dvb-inv .dvb-verdict { margin-left: 4px; }
 .dvb-name { min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dvb-sub { min-width: 0; font-size: 12px; color: var(--ux-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dvb-line { display: grid; gap: 1px; padding: 5px 9px; }

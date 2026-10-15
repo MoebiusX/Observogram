@@ -1,0 +1,13 @@
+groups:
+  - name: tier3
+    rules:
+      - alert: 5xxSpike
+        expr: sum(rate(http_requests_total{code=~"5.."}[5m])) > 10
+        for: 5m
+        labels:
+          severity: critical
+      - alert: AVeryLongAlertNameThatGoesOnAndOnVeryLongAlertNameThatGoesOnAndOnVeryLongAlertNameTha
+        expr: sum(rate(http_requests_total{code=~"5.."}[5m])) > 100
+        for: 5m
+        labels:
+          severity: warning

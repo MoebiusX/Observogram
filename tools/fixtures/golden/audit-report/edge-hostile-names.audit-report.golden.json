@@ -1,0 +1,1186 @@
+{
+  "reportVersion": 1,
+  "generator": null,
+  "generatedAt": null,
+  "pack": {
+    "id": "edge-hostile-names",
+    "label": null,
+    "source": null,
+    "name": "edge-hostile-names",
+    "version": "0.1.0",
+    "service": "edge-hostile-names",
+    "environment": null,
+    "environments": [
+      "prod"
+    ],
+    "criticality": "tier-3",
+    "artefacts": 15,
+    "sources": {
+      "Declared": 15,
+      "Verified": 0,
+      "Scaffold": 0
+    }
+  },
+  "tier": {
+    "graded": "tier-3",
+    "pack": "tier-3",
+    "from": "pack",
+    "service": null,
+    "environment": null,
+    "mismatch": false
+  },
+  "conformance": {
+    "declaredTier": "tier-3",
+    "conformant": true,
+    "scorePercent": 100,
+    "mustPercent": 100,
+    "must": {
+      "passed": 9,
+      "total": 9
+    },
+    "should": {
+      "passed": 0,
+      "total": 0
+    },
+    "byDimension": {
+      "L1": {
+        "applicable": 2,
+        "mustPassed": 2,
+        "mustTotal": 2,
+        "shouldPassed": 0,
+        "shouldTotal": 0
+      },
+      "L2": {
+        "applicable": 3,
+        "mustPassed": 3,
+        "mustTotal": 3,
+        "shouldPassed": 0,
+        "shouldTotal": 0
+      },
+      "L2X": {
+        "applicable": 1,
+        "mustPassed": 1,
+        "mustTotal": 1,
+        "shouldPassed": 0,
+        "shouldTotal": 0
+      },
+      "L3": {
+        "applicable": 2,
+        "mustPassed": 2,
+        "mustTotal": 2,
+        "shouldPassed": 0,
+        "shouldTotal": 0
+      },
+      "L5": {
+        "applicable": 1,
+        "mustPassed": 1,
+        "mustTotal": 1,
+        "shouldPassed": 0,
+        "shouldTotal": 0
+      }
+    },
+    "effective": null,
+    "counts": {
+      "blocking": 0,
+      "waived": 0,
+      "recommended": 0,
+      "passed": 9,
+      "notApplicable": 21
+    },
+    "clauses": {
+      "blocking": [],
+      "waived": [],
+      "recommended": [],
+      "passed": [
+        {
+          "id": "L1.MUST.availability_slo",
+          "dimension": "L1",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "At least one availability SLO (ratio-type SLI).",
+          "specRef": "§5.1",
+          "families": [
+            "sli",
+            "slo"
+          ]
+        },
+        {
+          "id": "L1.MUST.sli_covered_by_slo",
+          "dimension": "L1",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "Every declared SLI is referenced by at least one SLO.",
+          "specRef": "§5.1",
+          "families": [
+            "sli",
+            "slo"
+          ]
+        },
+        {
+          "id": "L2.MUST.otlp_receiver",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "OTel Collector pipeline declares an `otlp` receiver.",
+          "specRef": "§5.2",
+          "families": [
+            "pipeline_receiver"
+          ]
+        },
+        {
+          "id": "L2.MUST.service_name_required",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "`service.name` listed in otel.resource_attributes.required.",
+          "specRef": "§5.3",
+          "families": [
+            "otel"
+          ]
+        },
+        {
+          "id": "L2.MUST.semconv_floor",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "OTel SemConv version >= 1.26.0 (binding floor).",
+          "specRef": "§5.3",
+          "families": [
+            "otel"
+          ]
+        },
+        {
+          "id": "L2X.MUST.extended_backend_refs_resolve",
+          "dimension": "L2X",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "Every extended surface references a declared telemetry backend or explicit external ref.",
+          "specRef": "§5.12.4",
+          "families": []
+        },
+        {
+          "id": "L3.MUST.recording_rule_per_slo",
+          "dimension": "L3",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "Every SLO has at least one recording rule materialising its SLI.",
+          "specRef": "§5.5",
+          "families": [
+            "recording_rule"
+          ]
+        },
+        {
+          "id": "L3.MUST.service_overview_dashboard",
+          "dimension": "L3",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "At least one dashboard declared (service overview).",
+          "specRef": "§5.6",
+          "families": [
+            "dashboard"
+          ]
+        },
+        {
+          "id": "L5.MUST.synthetic_probe",
+          "dimension": "L5",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "At least one synthetic check declared.",
+          "specRef": "§5.11",
+          "families": [
+            "synthetic"
+          ]
+        }
+      ],
+      "notApplicable": [
+        {
+          "id": "L1.MUST.latency_slo",
+          "dimension": "L1",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "At least one latency SLO (threshold or distribution SLI).",
+          "specRef": "§5.1",
+          "families": [
+            "sli",
+            "slo"
+          ]
+        },
+        {
+          "id": "L1.SHOULD.domain_slo",
+          "dimension": "L1",
+          "severity": "SHOULD",
+          "minTier": "tier-1",
+          "description": "A third, domain-specific SLO beyond availability and latency (4+ SLOs total).",
+          "specRef": "§5.1",
+          "families": [
+            "slo"
+          ]
+        },
+        {
+          "id": "L2.MUST.semconv_current",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "OTel SemConv at currently-tracked version (1.27.0).",
+          "specRef": "§5.3",
+          "families": [
+            "otel"
+          ]
+        },
+        {
+          "id": "L2.MUST.resource_attrs_5plus",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "At least five required resource attributes declared.",
+          "specRef": "§5.3",
+          "families": [
+            "otel"
+          ]
+        },
+        {
+          "id": "L2.MUST.log_correlation",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "`otel.sdk.log_correlation: true` (trace IDs injected into logs).",
+          "specRef": "§5.3",
+          "families": [
+            "otel"
+          ]
+        },
+        {
+          "id": "L2.MUST.metrics_exporter",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "Pipelines export metrics.",
+          "specRef": "§5.2",
+          "families": [
+            "pipeline_exporter_metrics"
+          ]
+        },
+        {
+          "id": "L2.MUST.logs_and_traces_exporters",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "Pipelines export logs and traces.",
+          "specRef": "§5.2",
+          "families": [
+            "pipeline_exporter_logs",
+            "pipeline_exporter_traces"
+          ]
+        },
+        {
+          "id": "L2.MUST.tail_sampling",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "Pipelines include a tail_sampling processor.",
+          "specRef": "§5.2",
+          "families": [
+            "pipeline_processor"
+          ]
+        },
+        {
+          "id": "L2.MUST.metrics_logs_traces_backends",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "spec.telemetry.backends covers metrics + logs + traces.",
+          "specRef": "§5.12.1",
+          "families": [
+            "backend"
+          ]
+        },
+        {
+          "id": "L2.SHOULD.backend_gating_enforce",
+          "dimension": "L2",
+          "severity": "SHOULD",
+          "minTier": "tier-1",
+          "description": "tier-1 backends pin a `min` version with `gating: enforce`.",
+          "specRef": "§5.12.3",
+          "families": [
+            "backend"
+          ]
+        },
+        {
+          "id": "L3.SHOULD.derived_view",
+          "dimension": "L3",
+          "severity": "SHOULD",
+          "minTier": "tier-2",
+          "description": "At least one derived view (e.g. golden signals or per-tenant rollup).",
+          "specRef": "§5.5",
+          "families": [
+            "derived_view"
+          ]
+        },
+        {
+          "id": "L3.MUST.slo_burn_dashboard",
+          "dimension": "L3",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "A second dashboard (SLO burn) on top of service overview.",
+          "specRef": "§5.6",
+          "families": [
+            "dashboard"
+          ]
+        },
+        {
+          "id": "L3.MUST.tier1_dashboards",
+          "dimension": "L3",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "Service overview + SLO burn + deployment overlay + customer impact (4+ dashboards).",
+          "specRef": "§5.6",
+          "families": [
+            "dashboard"
+          ]
+        },
+        {
+          "id": "L4.MUST.multi_window_burn_rate",
+          "dimension": "L4",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "Every SLO has at least one burn-rate alert with multi-window policy.",
+          "specRef": "§5.7",
+          "families": [
+            "burn_rate"
+          ]
+        },
+        {
+          "id": "L4.SHOULD.forecast_on_availability",
+          "dimension": "L4",
+          "severity": "SHOULD",
+          "minTier": "tier-1",
+          "description": "At least one forecast declared on a primary availability SLO.",
+          "specRef": "§5.7",
+          "families": [
+            "forecast"
+          ]
+        },
+        {
+          "id": "L4.MUST.tier1_voice_route",
+          "dimension": "L4",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "SEV1 route includes a voice channel.",
+          "specRef": "§5.8",
+          "families": [
+            "alert_route"
+          ]
+        },
+        {
+          "id": "L4.MUST.tier1_at_least_one_automation",
+          "dimension": "L4",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "At least one self-healing remediation declared.",
+          "specRef": "§5.9",
+          "families": [
+            "remediation"
+          ]
+        },
+        {
+          "id": "L5.SHOULD.tier1_release_gate",
+          "dimension": "L5",
+          "severity": "SHOULD",
+          "minTier": "tier-1",
+          "description": "Regression gate set to a release-blocking mode.",
+          "specRef": "§5.10",
+          "families": [
+            "synthetic"
+          ]
+        },
+        {
+          "id": "L5.MUST.tier1_chaos_for_each_slo",
+          "dimension": "L5",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "Every SLO is the steady-state hypothesis of at least one chaos experiment.",
+          "specRef": "§5.11",
+          "families": [
+            "chaos"
+          ]
+        },
+        {
+          "id": "L5.MUST.tier2_chaos_staging",
+          "dimension": "L5",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "At least one chaos experiment scheduled monthly+ in staging.",
+          "specRef": "§5.11",
+          "families": [
+            "chaos"
+          ]
+        },
+        {
+          "id": "L5.MUST.tier1_weekly_prod_chaos",
+          "dimension": "L5",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "At least one chaos experiment runs weekly+ in production with OTel-instrumented synthetic probes.",
+          "specRef": "§5.11",
+          "families": [
+            "chaos"
+          ]
+        }
+      ]
+    },
+    "onPlaceholder": null
+  },
+  "placeholders": {
+    "conformant": true,
+    "markers": 0,
+    "writers": {
+      "legacy": false,
+      "crawler": false,
+      "fetcher": false,
+      "library": false
+    },
+    "counts": {
+      "rows": 0,
+      "symbols": 0,
+      "byState": {
+        "placeholder": 0,
+        "marker-only": 0,
+        "unmarked": 0,
+        "dangling": 0
+      },
+      "bySource": {
+        "crawl": 0,
+        "operator": 0,
+        "telemetry": 0
+      },
+      "bySection": {}
+    },
+    "templates": {
+      "todos": 0,
+      "scaffolds": 0
+    },
+    "rows": []
+  },
+  "assessments": {
+    "available": false,
+    "artefacts": 15,
+    "counts": {
+      "unreviewed": 15,
+      "trusted": 0,
+      "suspect": 0,
+      "failed": 0
+    },
+    "orphaned": 0,
+    "verdicts": []
+  },
+  "waivers": {
+    "available": false,
+    "counts": {
+      "active": 0,
+      "expired": 0,
+      "revoked": 0,
+      "unknown": 0
+    },
+    "waivers": []
+  },
+  "coverage": {
+    "families": [
+      {
+        "family": "sli",
+        "label": "Service level indicator",
+        "layer": "L1",
+        "group": "sli",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L1.MUST.availability_slo",
+          "L1.MUST.sli_covered_by_slo"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "slo",
+        "label": "Objective",
+        "layer": "L1",
+        "group": "slo",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L1.MUST.availability_slo",
+          "L1.MUST.sli_covered_by_slo"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "otel",
+        "label": "Instrumentation contract",
+        "layer": "L2",
+        "group": "otel",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L2.MUST.service_name_required",
+          "L2.MUST.semconv_floor"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "backend",
+        "label": "Telemetry backend",
+        "layer": "L2",
+        "group": "exp",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "pipeline_receiver",
+        "label": "Pipeline receiver",
+        "layer": "L2",
+        "group": "rcv",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L2.MUST.otlp_receiver"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "pipeline_processor",
+        "label": "Pipeline processor",
+        "layer": "L2",
+        "group": "prc",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "pipeline_exporter_metrics",
+        "label": "Pipeline exporter",
+        "layer": "L2",
+        "group": "exp",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "pipeline_exporter_logs",
+        "label": "Pipeline exporter",
+        "layer": "L2",
+        "group": "exp",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "pipeline_exporter_traces",
+        "label": "Pipeline exporter",
+        "layer": "L2",
+        "group": "exp",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "storage_metrics",
+        "label": "Storage",
+        "layer": "L2",
+        "group": "exp",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "storage_logs",
+        "label": "Storage",
+        "layer": "L2",
+        "group": "exp",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "storage_traces",
+        "label": "Storage",
+        "layer": "L2",
+        "group": "exp",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "scrape_job",
+        "label": "Scrape job",
+        "layer": "L2",
+        "group": "rcv",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "metric",
+        "label": "Metric",
+        "layer": "L2",
+        "group": "metrics",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "profiling",
+        "label": "Profiling",
+        "layer": "L2X",
+        "group": "prof",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "network",
+        "label": "Network telemetry",
+        "layer": "L2X",
+        "group": "net",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "policy_engine",
+        "label": "Policy engine",
+        "layer": "L2X",
+        "group": "poe",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "mesh",
+        "label": "Service mesh telemetry",
+        "layer": "L2X",
+        "group": "mesh",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "collection",
+        "label": "Collection",
+        "layer": "L2X",
+        "group": "col",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "recording_rule",
+        "label": "Recording rule",
+        "layer": "L3",
+        "group": "qry",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L3.MUST.recording_rule_per_slo"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "derived_view",
+        "label": "Derived view",
+        "layer": "L3",
+        "group": "view",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "dashboard",
+        "label": "Dashboard",
+        "layer": "L3",
+        "group": "dash",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L3.MUST.service_overview_dashboard"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "panel",
+        "label": "Dashboard panel",
+        "layer": "L3",
+        "group": "panel",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "burn_rate",
+        "label": "Burn-rate alert",
+        "layer": "L4",
+        "group": "pol",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "forecast",
+        "label": "Forecast",
+        "layer": "L4",
+        "group": "pol",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "alert_route",
+        "label": "Alert route",
+        "layer": "L4",
+        "group": "alr",
+        "count": 2,
+        "declared": 2,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "alert_rule",
+        "label": "Alert rule",
+        "layer": "L4",
+        "group": "rule",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "remediation",
+        "label": "Self-healing action",
+        "layer": "L4",
+        "group": "heal",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "baselines",
+        "label": "Baselines",
+        "layer": "L5",
+        "group": "base",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "chaos",
+        "label": "Chaos experiment",
+        "layer": "L5",
+        "group": "chaos",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "synthetic",
+        "label": "Synthetic check",
+        "layer": "L5",
+        "group": "syn",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L5.MUST.synthetic_probe"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "imports",
+        "label": "Import",
+        "layer": "GOV",
+        "group": "imp",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      }
+    ],
+    "counts": {
+      "present": 14,
+      "absent": 18,
+      "missing": 0
+    }
+  },
+  "goesBlind": {
+    "available": true,
+    "top": 10,
+    "nodes": 18,
+    "edges": 10,
+    "sloBlindingNodes": 6,
+    "risks": [
+      {
+        "key": "pipeline_exporter_metrics::{\"signal\":\"metrics\",\"target\":\"prometheusremotewrite\"}",
+        "kind": "pipeline_exporter_metrics",
+        "label": "exporter (metrics): prometheusremotewrite",
+        "summary": {
+          "slos": 1,
+          "alerts": 1,
+          "panels": 0,
+          "dashboards": 0,
+          "routes": 2,
+          "remediations": 0,
+          "total": 9
+        },
+        "weight": 18,
+        "byKind": {
+          "slo": 1,
+          "sli": 1,
+          "burn_rate": 1,
+          "recording_rule": 1,
+          "metric": 3,
+          "alert_route": 2
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "metric::{\"name\":\"http_requests_total\"}",
+        "kind": "metric",
+        "label": "http_requests_total",
+        "summary": {
+          "slos": 1,
+          "alerts": 1,
+          "panels": 0,
+          "dashboards": 0,
+          "routes": 2,
+          "remediations": 0,
+          "total": 5
+        },
+        "weight": 10,
+        "byKind": {
+          "slo": 1,
+          "sli": 1,
+          "burn_rate": 1,
+          "alert_route": 2
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "sli::{\"id\":\"latência_p99_süccess\"}",
+        "kind": "sli",
+        "label": "latência_p99_süccess",
+        "summary": {
+          "slos": 1,
+          "alerts": 1,
+          "panels": 0,
+          "dashboards": 0,
+          "routes": 2,
+          "remediations": 0,
+          "total": 4
+        },
+        "weight": 7,
+        "byKind": {
+          "slo": 1,
+          "burn_rate": 1,
+          "alert_route": 2
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "burn_rate::{\"slo\":\"hostile_availability_99\"}",
+        "kind": "burn_rate",
+        "label": "burn-rate alert: hostile_availability_99",
+        "summary": {
+          "slos": 1,
+          "alerts": 0,
+          "panels": 0,
+          "dashboards": 0,
+          "routes": 2,
+          "remediations": 0,
+          "total": 3
+        },
+        "weight": 2,
+        "byKind": {
+          "alert_route": 2
+        },
+        "unprotected": {
+          "slos": [
+            {
+              "key": "slo::{\"id\":\"hostile_availability_99\"}",
+              "label": "hostile_availability_99"
+            }
+          ],
+          "alerts": []
+        }
+      },
+      {
+        "key": "slo::{\"id\":\"hostile_availability_99\"}",
+        "kind": "slo",
+        "label": "hostile_availability_99",
+        "summary": {
+          "slos": 0,
+          "alerts": 1,
+          "panels": 0,
+          "dashboards": 0,
+          "routes": 2,
+          "remediations": 0,
+          "total": 3
+        },
+        "weight": 4,
+        "byKind": {
+          "burn_rate": 1,
+          "alert_route": 2
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "alert_route::{\"severity\":\"sev1\"}",
+        "kind": "alert_route",
+        "label": "SEV1 routes",
+        "summary": {
+          "slos": 1,
+          "alerts": 1,
+          "panels": 0,
+          "dashboards": 0,
+          "routes": 0,
+          "remediations": 0,
+          "total": 2
+        },
+        "weight": 0,
+        "byKind": {},
+        "unprotected": {
+          "slos": [
+            {
+              "key": "slo::{\"id\":\"hostile_availability_99\"}",
+              "label": "hostile_availability_99"
+            }
+          ],
+          "alerts": [
+            {
+              "key": "burn_rate::{\"slo\":\"hostile_availability_99\"}",
+              "label": "burn-rate alert: hostile_availability_99"
+            }
+          ]
+        }
+      },
+      {
+        "key": "alert_route::{\"severity\":\"sev2\"}",
+        "kind": "alert_route",
+        "label": "SEV2 routes",
+        "summary": {
+          "slos": 1,
+          "alerts": 1,
+          "panels": 0,
+          "dashboards": 0,
+          "routes": 0,
+          "remediations": 0,
+          "total": 2
+        },
+        "weight": 0,
+        "byKind": {},
+        "unprotected": {
+          "slos": [
+            {
+              "key": "slo::{\"id\":\"hostile_availability_99\"}",
+              "label": "hostile_availability_99"
+            }
+          ],
+          "alerts": [
+            {
+              "key": "burn_rate::{\"slo\":\"hostile_availability_99\"}",
+              "label": "burn-rate alert: hostile_availability_99"
+            }
+          ]
+        }
+      },
+      {
+        "key": "metric::{\"name\":\"edge:hostile_ratio:5m\"}",
+        "kind": "metric",
+        "label": "edge:hostile_ratio:5m",
+        "summary": {
+          "slos": 0,
+          "alerts": 0,
+          "panels": 0,
+          "dashboards": 0,
+          "routes": 0,
+          "remediations": 0,
+          "total": 1
+        },
+        "weight": 2,
+        "byKind": {
+          "recording_rule": 1
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "metric::{\"name\":\"ncia_p99_s\"}",
+        "kind": "metric",
+        "label": "ncia_p99_s",
+        "summary": {
+          "slos": 0,
+          "alerts": 0,
+          "panels": 0,
+          "dashboards": 0,
+          "routes": 0,
+          "remediations": 0,
+          "total": 1
+        },
+        "weight": 2,
+        "byKind": {
+          "recording_rule": 1
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      }
+    ]
+  },
+  "responsePath": {
+    "configured": false,
+    "compared": false,
+    "counts": {
+      "remediations": 0,
+      "alerts": 0,
+      "linked": 0,
+      "unresolved": 0,
+      "uncovered": 0,
+      "blocked": 0,
+      "suggestions": 0,
+      "placeholder": 0
+    },
+    "links": [],
+    "unresolved": [],
+    "uncovered": [],
+    "families": [],
+    "warnings": []
+  }
+}

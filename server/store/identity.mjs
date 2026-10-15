@@ -9,7 +9,8 @@
 //     once;
 //   - the atomic operations that must write exactly one specific audit
 //     row for a change spanning users, memberships and meta (a just-in-time
-//     OIDC user, an owner grant, the default org, the callback's sign-in).
+//     OIDC user, an owner grant, the default org, the callback's sign-in,
+//     the reverse proxy's per-request sign-in and its membership sync).
 //     They compose the repositories' audit-free row helpers inside one
 //     atomic() and write their own row.
 //
@@ -20,7 +21,7 @@ import { atomic, prepare } from './db.mjs';
 import { writeAudit } from './audit.mjs';
 import { getMeta, setMeta } from './meta.mjs';
 import { createOrg, getOrg } from './orgs.mjs';
-import { getMembership, insertMembershipRow, ROLES, setRoleRow } from './memberships.mjs';
+import { deleteMembershipRow, getMembership, insertMembershipRow, ROLES, setRoleRow } from './memberships.mjs';
 import { getUser, getUserByLogin, insertUserRow, setOwnerRow, updateUserProfile } from './users.mjs';
 import { textOk } from './rows.mjs';
 import { validOrgId } from '../org-context.mjs';
@@ -64,6 +65,24 @@ export function canonIssuer(value) {
 
 export function oidcLogin(issuerKey, sub) {
   return `${issuerKey}#${sub}`;
+}
+
+// The reverse proxy's identity key (server/auth-proxy.mjs): `proxy://<realm>`,
+// a realm of [a-z0-9._-]{1,64}. Its users are kind 'oidc' rows recorded as
+// `proxy://<realm>#<user>` — no migration, and every store operation and
+// CLI that knows an OIDC row knows these (including `packc store
+// rekey-issuer --clear`, which disables them too). A proxy key is never an
+// http(s) URL, so canonIssuer() refuses it and the two never collide.
+export const PROXY_REALM_RE = /^[a-z0-9._-]{1,64}$/;
+const PROXY_KEY_RE = /^proxy:\/\/[a-z0-9._-]{1,64}$/;
+export function proxyIssuerKey(realm) {
+  if (typeof realm !== 'string' || !PROXY_REALM_RE.test(realm)) {
+    throw new TypeError('OBSERVOGRAM_PROXY_AUTH_REALM is 1–64 characters of [a-z0-9._-]');
+  }
+  return `proxy://${realm}`;
+}
+export function isProxyIssuerKey(value) {
+  return typeof value === 'string' && PROXY_KEY_RE.test(value);
 }
 
 // The cookie's `sub` and the export's member key: what a pre-store build
@@ -201,16 +220,22 @@ export function signInOwnerCount(db, { mode, issuerKey = null }) {
 // A just-in-time OIDC row: one user.jit row; then, when oidc_join_role is
 // set and the default org is live, a membership at that role and one
 // membership.jit row. The join happens only here, when the row is created,
-// so an admin's later removal of the membership sticks.
-export function createOidcUser(db, { issuerKey, issuerDisplay, sub, email = null, emailVerified = false, name = null, sessionEpoch = 1, via }) {
+// so an admin's later removal of the membership sticks. The reverse proxy
+// (proxySignIn) passes its own join rule instead: `joinRole` (a role, or
+// null for none) and `joinOrgId` (its configured org) — undefined keeps
+// the OIDC rule, so the callback's rows are what they were.
+export function createOidcUser(db, {
+  issuerKey, issuerDisplay, sub, email = null, emailVerified = false, name = null, sessionEpoch = 1, via,
+  joinRole = undefined, joinOrgId = undefined,
+}) {
   return atomic(db, () => {
     const user = insertUserRow(db, {
       kind: 'oidc', login: oidcLogin(issuerKey, sub), issuer: issuerDisplay, sub,
       email, emailVerified: emailVerified === true, name, sessionEpoch,
     });
     writeAudit(db, SYSTEM, { action: 'user.jit', targetKind: 'user', targetId: user.login, detail: { via, sessionEpoch } });
-    const role = getMeta(db, 'oidc_join_role');
-    const orgId = getMeta(db, 'default_org');
+    const role = joinRole === undefined ? getMeta(db, 'oidc_join_role') : joinRole;
+    const orgId = joinOrgId === undefined ? getMeta(db, 'default_org') : joinOrgId;
     if (role && orgId && liveOrg(db, orgId)) {
       insertMembershipRow(db, { orgId, userId: user.id, role });
       writeAudit(db, SYSTEM, { orgId, action: 'membership.jit', targetKind: 'user', targetId: user.login, detail: { role } });
@@ -310,4 +335,82 @@ export function firstSightOidc(db, { issuerKey, issuerDisplay, sub, email = null
     if (!user) throw e;
     return user;
   }
+}
+
+// ---------- the reverse proxy (server/auth-proxy.mjs) ----------
+
+// The proxy's statement of the user's role in `orgId`, made authoritative
+// there and nowhere else: `role` null → the membership removed (one
+// membership.remove row); a role → added (membership.jit) or changed
+// (membership.role); unchanged → nothing written. An org that is not live
+// (removed since the boot checked it) is left alone. Detail carries
+// `via: 'proxy-groups'`, so the audit tells a proxy's change from an
+// admin's. Inside the caller's atomic().
+export function syncProxyMembership(db, { user, orgId, role }) {
+  if (role !== null && !ROLES.includes(role)) throw new TypeError(`observogram store: a proxy membership role is one of ${ROLES.join(', ')} or null, not ${JSON.stringify(role)}`);
+  return atomic(db, () => {
+    if (!orgId || !liveOrg(db, orgId)) return 'no-org';
+    const current = getMembership(db, orgId, user.id);
+    if (role === null) {
+      if (!current) return 'unchanged';
+      deleteMembershipRow(db, orgId, user.id);
+      writeAudit(db, SYSTEM, { orgId, action: 'membership.remove', targetKind: 'user', targetId: user.login, detail: { role: current.role, via: 'proxy-groups' } });
+      return 'removed';
+    }
+    if (!current) {
+      insertMembershipRow(db, { orgId, userId: user.id, role });
+      writeAudit(db, SYSTEM, { orgId, action: 'membership.jit', targetKind: 'user', targetId: user.login, detail: { role, via: 'proxy-groups' } });
+      return 'added';
+    }
+    if (current.role === role) return 'unchanged';
+    setRoleRow(db, orgId, user.id, role);
+    writeAudit(db, SYSTEM, { orgId, action: 'membership.role', targetKind: 'user', targetId: user.login, detail: { from: current.role, to: role, via: 'proxy-groups' } });
+    return 'changed';
+  });
+}
+
+// The reverse proxy's sign-in, once per request, in one transaction (the
+// twin of oidcSignIn): find or create the row `proxy://<realm>#<user>`
+// (user.jit { via: 'proxy' }, joined at `joinRole` in `orgId` only when the
+// proxy made no statement about groups — `membershipRole` undefined),
+// refuse a local row holding the login or a disabled row, sync the profile
+// (the proxy's email is recorded as verified: the proxy is the authority on
+// who the caller is), apply the groups' role in `orgId` when the proxy
+// stated one (`membershipRole`: a role, or null for none), and grant owner
+// (one owner.grant row, via 'proxy') when `owner` and not yet one — never
+// revoked here. Writes only on change: the second request of a session
+// writes nothing. `user` is the header's value, compared byte for byte.
+export function proxySignIn(db, {
+  issuerKey, issuerDisplay, user: sub, email = null, name = null, orgId, joinRole = null, membershipRole = undefined, owner = false,
+}) {
+  return atomic(db, () => {
+    const login = oidcLogin(issuerKey, sub);
+    let user = getUserByLogin(db, login);
+    let created = false;
+    let granted = false;
+    let membership = null;
+    if (!user) {
+      user = createOidcUser(db, {
+        issuerKey, issuerDisplay, sub, email, emailVerified: email !== null, name, sessionEpoch: 1, via: 'proxy',
+        joinRole: membershipRole === undefined ? joinRole : null, joinOrgId: orgId,
+      });
+      created = true;
+    } else if (user.kind !== 'oidc') {
+      return { user: null, refused: 'local-login', created, granted, membership };
+    } else if (user.disabled) {
+      return { user, refused: 'disabled', created, granted, membership };
+    } else {
+      const patch = {};
+      if (email !== user.email) patch.email = email;
+      if ((email !== null) !== user.emailVerified) patch.emailVerified = email !== null;
+      if (name !== user.name) patch.name = name;
+      if (Object.keys(patch).length) user = updateUserProfile(db, SYSTEM, user.id, patch);
+    }
+    if (membershipRole !== undefined) membership = syncProxyMembership(db, { user, orgId, role: membershipRole });
+    if (owner && !user.isOwner) {
+      user = grantOwner(db, SYSTEM, user.id, { action: 'owner.grant', via: 'proxy' });
+      granted = true;
+    }
+    return { user, refused: null, created, granted, membership };
+  });
 }

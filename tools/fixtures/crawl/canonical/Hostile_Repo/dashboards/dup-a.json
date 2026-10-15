@@ -1,0 +1,17 @@
+{
+  "uid": "same",
+  "title": "Same A",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "title": "A",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total[5m]))"
+        }
+      ]
+    }
+  ]
+}

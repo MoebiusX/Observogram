@@ -1,0 +1,1619 @@
+{
+  "case": "krystaline-repo-carlos.vs.production-curated.service",
+  "opts": {
+    "scopeMode": "service"
+  },
+  "taxonomy": null,
+  "sha256": "a9ad9adb82e1f1734b064365afe2d4df2579c9e0e6406ef270870dce33acde56",
+  "bytes": 436504,
+  "keys": [
+    "a",
+    "b",
+    "scope",
+    "collisions",
+    "summary",
+    "layers"
+  ],
+  "a": {
+    "id": "krystaline",
+    "name": "krystaline",
+    "service": "krystaline",
+    "criticality": "tier-2",
+    "environment": "prod",
+    "version": "0.1.0-crawled",
+    "binding": "otel-elastic-prometheus-grafana"
+  },
+  "b": {
+    "id": "production-curated",
+    "name": "production-curated",
+    "service": "internal-orders",
+    "criticality": "tier-2",
+    "environment": "prod",
+    "version": "0.4.0",
+    "binding": "otel-elastic-prometheus-grafana"
+  },
+  "scope": {
+    "mode": "service",
+    "service": "krystaline",
+    "serviceTokens": [
+      "bayesian",
+      "bayesianservice",
+      "krystaline",
+      "krystalinex",
+      "krystalinexserver",
+      "otelmcpserver",
+      "payment",
+      "paymentprocessor"
+    ],
+    "declaredMetricCount": 183,
+    "metricPrefixes": [
+      "anomalies",
+      "auth",
+      "bayesian",
+      "circuit",
+      "finops",
+      "gen",
+      "genai",
+      "kx",
+      "order",
+      "orders",
+      "price",
+      "settlement",
+      "slo",
+      "up"
+    ]
+  },
+  "collisions": [
+    {
+      "layer": "L2",
+      "kind": "pipeline_processor",
+      "key": "pipeline_processor::{\"name\":\"batch\"}",
+      "aCount": 2,
+      "bCount": 1
+    },
+    {
+      "layer": "L2",
+      "kind": "pipeline_receiver",
+      "key": "pipeline_receiver::{\"name\":\"otlp\"}",
+      "aCount": 2,
+      "bCount": 1
+    },
+    {
+      "layer": "L4",
+      "kind": "alert_route",
+      "key": "alert_route::{\"severity\":\"sev1\"}",
+      "aCount": 2,
+      "bCount": 0
+    },
+    {
+      "layer": "L4",
+      "kind": "alert_route",
+      "key": "alert_route::{\"severity\":\"sev2\"}",
+      "aCount": 5,
+      "bCount": 1
+    }
+  ],
+  "summary": {
+    "onlyInA": 303,
+    "onlyInB": 0,
+    "inBoth": 6,
+    "aligned": 4,
+    "drifted": 2,
+    "outOfScope": 24,
+    "scaffold": 3,
+    "notObserved": 0,
+    "union": 309,
+    "aTotal": 309,
+    "bTotal": 6,
+    "jaccard": 0.02,
+    "alignment": 0.01
+  },
+  "layers": {
+    "L1": {
+      "onlyInA": [
+        {
+          "key": "sli::{\"id\":\"finops_cost\"}",
+          "id": "SLI-15"
+        },
+        {
+          "key": "sli::{\"id\":\"finops_cpu\"}",
+          "id": "SLI-16"
+        },
+        {
+          "key": "sli::{\"id\":\"finops_errors\"}",
+          "id": "SLI-12"
+        },
+        {
+          "key": "sli::{\"id\":\"finops_kong\"}",
+          "id": "SLI-18"
+        },
+        {
+          "key": "sli::{\"id\":\"finops_logs\"}",
+          "id": "SLI-14"
+        },
+        {
+          "key": "sli::{\"id\":\"finops_memory\"}",
+          "id": "SLI-17"
+        },
+        {
+          "key": "sli::{\"id\":\"finops_requests\"}",
+          "id": "SLI-11"
+        },
+        {
+          "key": "sli::{\"id\":\"finops_spans\"}",
+          "id": "SLI-13"
+        },
+        {
+          "key": "sli::{\"id\":\"genai_client_operation_duration\"}",
+          "id": "SLI-06"
+        },
+        {
+          "key": "sli::{\"id\":\"genai_client_operation\"}",
+          "id": "SLI-07"
+        },
+        {
+          "key": "sli::{\"id\":\"genai_client_token_usage\"}",
+          "id": "SLI-08"
+        },
+        {
+          "key": "sli::{\"id\":\"genai_rca_analysis_duration\"}",
+          "id": "SLI-09"
+        },
+        {
+          "key": "sli::{\"id\":\"genai_rca_analysis\"}",
+          "id": "SLI-10"
+        },
+        {
+          "key": "sli::{\"id\":\"slo_availability\"}",
+          "id": "SLI-04"
+        },
+        {
+          "key": "sli::{\"id\":\"slo_http_request_duration\"}",
+          "id": "SLI-02"
+        },
+        {
+          "key": "sli::{\"id\":\"slo_http_requests\"}",
+          "id": "SLI-01"
+        },
+        {
+          "key": "sli::{\"id\":\"slo_latency\"}",
+          "id": "SLI-05"
+        },
+        {
+          "key": "sli::{\"id\":\"slo_server\"}",
+          "id": "SLI-03"
+        },
+        {
+          "key": "slo::{\"id\":\"finops_cost_99\"}",
+          "id": "SLO-15"
+        },
+        {
+          "key": "slo::{\"id\":\"finops_cpu_99\"}",
+          "id": "SLO-16"
+        },
+        {
+          "key": "slo::{\"id\":\"finops_errors_99\"}",
+          "id": "SLO-12"
+        },
+        {
+          "key": "slo::{\"id\":\"finops_kong_99\"}",
+          "id": "SLO-18"
+        },
+        {
+          "key": "slo::{\"id\":\"finops_logs_99\"}",
+          "id": "SLO-14"
+        },
+        {
+          "key": "slo::{\"id\":\"finops_memory_99\"}",
+          "id": "SLO-17"
+        },
+        {
+          "key": "slo::{\"id\":\"finops_requests_99\"}",
+          "id": "SLO-11"
+        },
+        {
+          "key": "slo::{\"id\":\"finops_spans_99\"}",
+          "id": "SLO-13"
+        },
+        {
+          "key": "slo::{\"id\":\"genai_client_operation_99\"}",
+          "id": "SLO-07"
+        },
+        {
+          "key": "slo::{\"id\":\"genai_client_operation_duration_99\"}",
+          "id": "SLO-06"
+        },
+        {
+          "key": "slo::{\"id\":\"genai_client_token_usage_99\"}",
+          "id": "SLO-08"
+        },
+        {
+          "key": "slo::{\"id\":\"genai_rca_analysis_99\"}",
+          "id": "SLO-10"
+        },
+        {
+          "key": "slo::{\"id\":\"genai_rca_analysis_duration_99\"}",
+          "id": "SLO-09"
+        },
+        {
+          "key": "slo::{\"id\":\"slo_availability_99\"}",
+          "id": "SLO-04"
+        },
+        {
+          "key": "slo::{\"id\":\"slo_http_request_duration_99\"}",
+          "id": "SLO-02"
+        },
+        {
+          "key": "slo::{\"id\":\"slo_http_requests_99\"}",
+          "id": "SLO-01"
+        },
+        {
+          "key": "slo::{\"id\":\"slo_latency_99\"}",
+          "id": "SLO-05"
+        },
+        {
+          "key": "slo::{\"id\":\"slo_server_99\"}",
+          "id": "SLO-03"
+        }
+      ],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [
+        {
+          "key": "sli::{\"id\":\"order_settlement_freshness\"}",
+          "id": "SLI-03"
+        },
+        {
+          "key": "sli::{\"id\":\"orders_availability\"}",
+          "id": "SLI-01"
+        },
+        {
+          "key": "sli::{\"id\":\"orders_latency_p99\"}",
+          "id": "SLI-02"
+        },
+        {
+          "key": "slo::{\"id\":\"order_settlement_freshness_99\"}",
+          "id": "SLO-03"
+        },
+        {
+          "key": "slo::{\"id\":\"orders_availability_99_5\"}",
+          "id": "SLO-01"
+        },
+        {
+          "key": "slo::{\"id\":\"orders_latency_99_p99_600ms\"}",
+          "id": "SLO-02"
+        }
+      ],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    },
+    "L2": {
+      "onlyInA": [
+        {
+          "key": "backend::{\"product\":\"alertmanager\",\"signal\":\"alerting\"}",
+          "id": "BAK-01"
+        },
+        {
+          "key": "backend::{\"product\":\"grafana\",\"signal\":\"dashboards\"}",
+          "id": "BAK-10"
+        },
+        {
+          "key": "backend::{\"product\":\"jaeger\",\"signal\":\"traces\"}",
+          "id": "BAK-03"
+        },
+        {
+          "key": "backend::{\"product\":\"kong\",\"signal\":\"gateway\"}",
+          "id": "BAK-09"
+        },
+        {
+          "key": "backend::{\"product\":\"kube-state-metrics\",\"signal\":\"metrics\"}",
+          "id": "BAK-11"
+        },
+        {
+          "key": "backend::{\"product\":\"loki\",\"signal\":\"logs\"}",
+          "id": "BAK-07"
+        },
+        {
+          "key": "backend::{\"product\":\"node-exporter\",\"signal\":\"metrics\"}",
+          "id": "BAK-02"
+        },
+        {
+          "key": "backend::{\"product\":\"opentelemetry-collector\",\"signal\":\"collection\"}",
+          "id": "BAK-04"
+        },
+        {
+          "key": "backend::{\"product\":\"promtail\",\"signal\":\"logs\"}",
+          "id": "BAK-08"
+        },
+        {
+          "key": "backend::{\"product\":\"victoriametrics\",\"signal\":\"metrics\"}",
+          "id": "BAK-05"
+        },
+        {
+          "key": "backend::{\"product\":\"vmalert\",\"signal\":\"alerting\"}",
+          "id": "BAK-06"
+        },
+        {
+          "key": "metric::{\"name\":\"alerts\"}",
+          "id": "METRIC-SRC-01"
+        },
+        {
+          "key": "metric::{\"name\":\"anomalies_detected_total\"}",
+          "id": "METRIC-SRC-02"
+        },
+        {
+          "key": "metric::{\"name\":\"auth_failures_total\"}",
+          "id": "METRIC-SRC-03"
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_alert_incidents_learned\"}",
+          "id": "METRIC-SRC-04"
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_alert_infer_requests_total\"}",
+          "id": "METRIC-SRC-05"
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_alert_train_requests_total\"}",
+          "id": "METRIC-SRC-06"
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_infer_duration_seconds\"}",
+          "id": "METRIC-SRC-07"
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_infer_errors_total\"}",
+          "id": "METRIC-SRC-08"
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_infer_requests_total\"}",
+          "id": "METRIC-SRC-09"
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_model_trained\"}",
+          "id": "METRIC-SRC-10"
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_poll_cycles_total\"}",
+          "id": "METRIC-SRC-11"
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_poll_errors_total\"}",
+          "id": "METRIC-SRC-12"
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_services_tracked\"}",
+          "id": "METRIC-SRC-13"
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_train_duration_seconds\"}",
+          "id": "METRIC-SRC-14"
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_train_errors_total\"}",
+          "id": "METRIC-SRC-15"
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_train_requests_total\"}",
+          "id": "METRIC-SRC-16"
+        },
+        {
+          "key": "metric::{\"name\":\"circuit_breaker_state\"}",
+          "id": "METRIC-SRC-17"
+        },
+        {
+          "key": "metric::{\"name\":\"circuit_breaker_trips_total\"}",
+          "id": "METRIC-SRC-18"
+        },
+        {
+          "key": "metric::{\"name\":\"container_cpu_usage_seconds_total\"}",
+          "id": "METRIC-SRC-19"
+        },
+        {
+          "key": "metric::{\"name\":\"container_fs_limit_bytes\"}",
+          "id": "METRIC-SRC-20"
+        },
+        {
+          "key": "metric::{\"name\":\"container_fs_usage_bytes\"}",
+          "id": "METRIC-SRC-21"
+        },
+        {
+          "key": "metric::{\"name\":\"container_memory_rss\"}",
+          "id": "METRIC-SRC-22"
+        },
+        {
+          "key": "metric::{\"name\":\"container_memory_working_set_bytes\"}",
+          "id": "METRIC-SRC-23"
+        },
+        {
+          "key": "metric::{\"name\":\"container_network_receive_bytes_total\"}",
+          "id": "METRIC-SRC-24"
+        },
+        {
+          "key": "metric::{\"name\":\"container_network_transmit_bytes_total\"}",
+          "id": "METRIC-SRC-25"
+        },
+        {
+          "key": "metric::{\"name\":\"container_spec_cpu_quota\"}",
+          "id": "METRIC-SRC-26"
+        },
+        {
+          "key": "metric::{\"name\":\"container_spec_memory_limit_bytes\"}",
+          "id": "METRIC-SRC-27"
+        },
+        {
+          "key": "metric::{\"name\":\"finops:cost:request_units_per_service_1h\"}",
+          "id": "METRIC-SRC-28"
+        },
+        {
+          "key": "metric::{\"name\":\"finops:cost:telemetry_index_1h\"}",
+          "id": "METRIC-SRC-29"
+        },
+        {
+          "key": "metric::{\"name\":\"finops:cpu:usage_per_pod_5m\"}",
+          "id": "METRIC-SRC-30"
+        },
+        {
+          "key": "metric::{\"name\":\"finops:errors:rate_per_service_5m\"}",
+          "id": "METRIC-SRC-31"
+        },
+        {
+          "key": "metric::{\"name\":\"finops:kong:overhead_seconds\"}",
+          "id": "METRIC-SRC-32"
+        },
+        {
+          "key": "metric::{\"name\":\"finops:logs:bytes_rate_per_component_5m\"}",
+          "id": "METRIC-SRC-33"
+        },
+        {
+          "key": "metric::{\"name\":\"finops:memory:usage_per_pod_gb_hours\"}",
+          "id": "METRIC-SRC-34"
+        },
+        {
+          "key": "metric::{\"name\":\"finops:requests:rate_per_service_5m\"}",
+          "id": "METRIC-SRC-35"
+        },
+        {
+          "key": "metric::{\"name\":\"finops:spans:dropped_rate_5m\"}",
+          "id": "METRIC-SRC-36"
+        },
+        {
+          "key": "metric::{\"name\":\"finops:spans:exported_rate_5m\"}",
+          "id": "METRIC-SRC-37"
+        },
+        {
+          "key": "metric::{\"name\":\"finops:spans:sampling_ratio\"}",
+          "id": "METRIC-SRC-38"
+        },
+        {
+          "key": "metric::{\"name\":\"gen_ai_client_operation_duration_seconds\"}",
+          "id": "METRIC-SRC-39"
+        },
+        {
+          "key": "metric::{\"name\":\"gen_ai_client_operation_time_per_output_chunk_seconds\"}",
+          "id": "METRIC-SRC-41"
+        },
+        {
+          "key": "metric::{\"name\":\"gen_ai_client_operation_time_to_first_chunk_seconds\"}",
+          "id": "METRIC-SRC-43"
+        },
+        {
+          "key": "metric::{\"name\":\"gen_ai_client_operations_total\"}",
+          "id": "METRIC-SRC-45"
+        },
+        {
+          "key": "metric::{\"name\":\"gen_ai_client_token_usage\"}",
+          "id": "METRIC-SRC-46"
+        },
+        {
+          "key": "metric::{\"name\":\"genai:client_operation_duration:p95_5m\"}",
+          "id": "METRIC-SRC-49"
+        },
+        {
+          "key": "metric::{\"name\":\"genai:client_operation_duration:p99_5m\"}",
+          "id": "METRIC-SRC-50"
+        },
+        {
+          "key": "metric::{\"name\":\"genai:client_operation:error_ratio_5m\"}",
+          "id": "METRIC-SRC-48"
+        },
+        {
+          "key": "metric::{\"name\":\"genai:client_token_usage:rate_1h\"}",
+          "id": "METRIC-SRC-51"
+        },
+        {
+          "key": "metric::{\"name\":\"genai:rca_analysis_duration:p95_5m\"}",
+          "id": "METRIC-SRC-53"
+        },
+        {
+          "key": "metric::{\"name\":\"genai:rca_analysis:failure_ratio_5m\"}",
+          "id": "METRIC-SRC-52"
+        },
+        {
+          "key": "metric::{\"name\":\"http_active_connections\"}",
+          "id": "METRIC-SRC-54"
+        },
+        {
+          "key": "metric::{\"name\":\"http_request_duration_seconds\"}",
+          "id": "METRIC-SRC-55"
+        },
+        {
+          "key": "metric::{\"name\":\"http_request_errors_total\"}",
+          "id": "METRIC-SRC-58"
+        },
+        {
+          "key": "metric::{\"name\":\"http_requests_total\"}",
+          "id": "METRIC-SRC-59"
+        },
+        {
+          "key": "metric::{\"name\":\"kong_kong_latency_ms\"}",
+          "id": "METRIC-SRC-60"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_configmap_info\"}",
+          "id": "METRIC-SRC-61"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_deployment_spec_replicas\"}",
+          "id": "METRIC-SRC-62"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_deployment_status_ready_replicas\"}",
+          "id": "METRIC-SRC-63"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_node_info\"}",
+          "id": "METRIC-SRC-64"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_node_spec_taint\"}",
+          "id": "METRIC-SRC-65"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_node_status_allocatable\"}",
+          "id": "METRIC-SRC-66"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_node_status_condition\"}",
+          "id": "METRIC-SRC-67"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_container_info\"}",
+          "id": "METRIC-SRC-68"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_container_resource_limits\"}",
+          "id": "METRIC-SRC-69"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_container_resource_requests\"}",
+          "id": "METRIC-SRC-70"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_container_status_last_terminated_reason\"}",
+          "id": "METRIC-SRC-71"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_container_status_restarts_total\"}",
+          "id": "METRIC-SRC-72"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_created\"}",
+          "id": "METRIC-SRC-73"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_info\"}",
+          "id": "METRIC-SRC-74"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_spec_volumes_persistentvolumeclaims_info\"}",
+          "id": "METRIC-SRC-75"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_status_phase\"}",
+          "id": "METRIC-SRC-76"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_status_ready\"}",
+          "id": "METRIC-SRC-77"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_secret_info\"}",
+          "id": "METRIC-SRC-78"
+        },
+        {
+          "key": "metric::{\"name\":\"kube_service_info\"}",
+          "id": "METRIC-SRC-79"
+        },
+        {
+          "key": "metric::{\"name\":\"kubelet_volume_stats_available_bytes\"}",
+          "id": "METRIC-SRC-80"
+        },
+        {
+          "key": "metric::{\"name\":\"kubelet_volume_stats_used_bytes\"}",
+          "id": "METRIC-SRC-81"
+        },
+        {
+          "key": "metric::{\"name\":\"kx_active_users_current\"}",
+          "id": "METRIC-SRC-82"
+        },
+        {
+          "key": "metric::{\"name\":\"kx_llm_analysis_duration_seconds\"}",
+          "id": "METRIC-SRC-83"
+        },
+        {
+          "key": "metric::{\"name\":\"kx_llm_analysis_total\"}",
+          "id": "METRIC-SRC-85"
+        },
+        {
+          "key": "metric::{\"name\":\"kx_llm_dropped_events_total\"}",
+          "id": "METRIC-SRC-86"
+        },
+        {
+          "key": "metric::{\"name\":\"kx_llm_events_by_severity_total\"}",
+          "id": "METRIC-SRC-87"
+        },
+        {
+          "key": "metric::{\"name\":\"kx_llm_queue_depth\"}",
+          "id": "METRIC-SRC-88"
+        },
+        {
+          "key": "metric::{\"name\":\"kx_logins_total\"}",
+          "id": "METRIC-SRC-89"
+        },
+        {
+          "key": "metric::{\"name\":\"kx_matcher_order_processing_duration_seconds\"}",
+          "id": "METRIC-SRC-90"
+        },
+        {
+          "key": "metric::{\"name\":\"kx_matcher_orders_processed_total\"}",
+          "id": "METRIC-SRC-92"
+        },
+        {
+          "key": "metric::{\"name\":\"kx_matcher_queue_messages\"}",
+          "id": "METRIC-SRC-93"
+        },
+        {
+          "key": "metric::{\"name\":\"kx_matcher_slippage_percent\"}",
+          "id": "METRIC-SRC-94"
+        },
+        {
+          "key": "metric::{\"name\":\"kx_security_events_total\"}",
+          "id": "METRIC-SRC-96"
+        },
+        {
+          "key": "metric::{\"name\":\"kx_trade_value_usd_total\"}",
+          "id": "METRIC-SRC-97"
+        },
+        {
+          "key": "metric::{\"name\":\"kx_trade_volume_total\"}",
+          "id": "METRIC-SRC-98"
+        },
+        {
+          "key": "metric::{\"name\":\"kx_trades_today\"}",
+          "id": "METRIC-SRC-99"
+        },
+        {
+          "key": "metric::{\"name\":\"kx_trades_total\"}",
+          "id": "METRIC-SRC-100"
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_active_sessions\"}",
+          "id": "METRIC-SRC-101"
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_auth_attempts_total\"}",
+          "id": "METRIC-SRC-102"
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_backend_duration_seconds\"}",
+          "id": "METRIC-SRC-103"
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_backend_requests_total\"}",
+          "id": "METRIC-SRC-105"
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_http_request_duration_seconds\"}",
+          "id": "METRIC-SRC-106"
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_http_requests_total\"}",
+          "id": "METRIC-SRC-107"
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_registered_resources\"}",
+          "id": "METRIC-SRC-108"
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_registered_tools\"}",
+          "id": "METRIC-SRC-109"
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_resource_read_duration_seconds\"}",
+          "id": "METRIC-SRC-110"
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_resource_reads_total\"}",
+          "id": "METRIC-SRC-111"
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_server_info\"}",
+          "id": "METRIC-SRC-112"
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_server_operation_duration_seconds\"}",
+          "id": "METRIC-SRC-113"
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_tool_calls_total\"}",
+          "id": "METRIC-SRC-116"
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_tool_duration_seconds\"}",
+          "id": "METRIC-SRC-117"
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_tool_errors_total\"}",
+          "id": "METRIC-SRC-118"
+        },
+        {
+          "key": "metric::{\"name\":\"node_cpu_seconds_total\"}",
+          "id": "METRIC-SRC-119"
+        },
+        {
+          "key": "metric::{\"name\":\"node_filesystem_avail_bytes\"}",
+          "id": "METRIC-SRC-120"
+        },
+        {
+          "key": "metric::{\"name\":\"node_filesystem_size_bytes\"}",
+          "id": "METRIC-SRC-121"
+        },
+        {
+          "key": "metric::{\"name\":\"node_memory_memavailable_bytes\"}",
+          "id": "METRIC-SRC-122"
+        },
+        {
+          "key": "metric::{\"name\":\"node_memory_memtotal_bytes\"}",
+          "id": "METRIC-SRC-123"
+        },
+        {
+          "key": "metric::{\"name\":\"nodejs_nodejs_eventloop_lag_mean_seconds\"}",
+          "id": "METRIC-SRC-124"
+        },
+        {
+          "key": "metric::{\"name\":\"nodejs_nodejs_eventloop_lag_p99_seconds\"}",
+          "id": "METRIC-SRC-125"
+        },
+        {
+          "key": "metric::{\"name\":\"nodejs_process_resident_memory_bytes\"}",
+          "id": "METRIC-SRC-126"
+        },
+        {
+          "key": "metric::{\"name\":\"order_processing_duration_seconds\"}",
+          "id": "METRIC-SRC-127"
+        },
+        {
+          "key": "metric::{\"name\":\"orders_failed_total\"}",
+          "id": "METRIC-SRC-128"
+        },
+        {
+          "key": "metric::{\"name\":\"orders_processed_total\"}",
+          "id": "METRIC-SRC-129"
+        },
+        {
+          "key": "metric::{\"name\":\"otelcol_exporter_send_failed_spans_total\"}",
+          "id": "METRIC-SRC-130"
+        },
+        {
+          "key": "metric::{\"name\":\"otelcol_exporter_sent_spans_total\"}",
+          "id": "METRIC-SRC-131"
+        },
+        {
+          "key": "metric::{\"name\":\"otelcol_processor_dropped_spans_total\"}",
+          "id": "METRIC-SRC-132"
+        },
+        {
+          "key": "metric::{\"name\":\"pg_database_size_bytes\"}",
+          "id": "METRIC-SRC-133"
+        },
+        {
+          "key": "metric::{\"name\":\"pg_settings_max_connections\"}",
+          "id": "METRIC-SRC-134"
+        },
+        {
+          "key": "metric::{\"name\":\"pg_stat_activity_count\"}",
+          "id": "METRIC-SRC-135"
+        },
+        {
+          "key": "metric::{\"name\":\"pg_stat_database_tup_fetched\"}",
+          "id": "METRIC-SRC-136"
+        },
+        {
+          "key": "metric::{\"name\":\"pg_stat_database_tup_inserted\"}",
+          "id": "METRIC-SRC-137"
+        },
+        {
+          "key": "metric::{\"name\":\"pg_stat_database_tup_updated\"}",
+          "id": "METRIC-SRC-138"
+        },
+        {
+          "key": "metric::{\"name\":\"pg_stat_statements_mean_time_seconds\"}",
+          "id": "METRIC-SRC-139"
+        },
+        {
+          "key": "metric::{\"name\":\"pg_up\"}",
+          "id": "METRIC-SRC-140"
+        },
+        {
+          "key": "metric::{\"name\":\"price_feed_active_provider\"}",
+          "id": "METRIC-SRC-141"
+        },
+        {
+          "key": "metric::{\"name\":\"price_feed_escalation_stage\"}",
+          "id": "METRIC-SRC-142"
+        },
+        {
+          "key": "metric::{\"name\":\"price_feed_failovers_total\"}",
+          "id": "METRIC-SRC-143"
+        },
+        {
+          "key": "metric::{\"name\":\"price_feed_last_update_timestamp\"}",
+          "id": "METRIC-SRC-144"
+        },
+        {
+          "key": "metric::{\"name\":\"promtail_read_bytes_total\"}",
+          "id": "METRIC-SRC-145"
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_process_resident_memory_bytes\"}",
+          "id": "METRIC-SRC-146"
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_queue_consumers\"}",
+          "id": "METRIC-SRC-147"
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_queue_depth\"}",
+          "id": "METRIC-SRC-148"
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_queue_messages_delivered_total\"}",
+          "id": "METRIC-SRC-150"
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_queue_messages_published_total\"}",
+          "id": "METRIC-SRC-151"
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_queue_messages_ready\"}",
+          "id": "METRIC-SRC-152"
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_queue_messages\"}",
+          "id": "METRIC-SRC-149"
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_resident_memory_limit_bytes\"}",
+          "id": "METRIC-SRC-153"
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_up\"}",
+          "id": "METRIC-SRC-154"
+        },
+        {
+          "key": "metric::{\"name\":\"redis_connected_clients\"}",
+          "id": "METRIC-SRC-155"
+        },
+        {
+          "key": "metric::{\"name\":\"redis_evicted_keys_total\"}",
+          "id": "METRIC-SRC-156"
+        },
+        {
+          "key": "metric::{\"name\":\"redis_memory_max_bytes\"}",
+          "id": "METRIC-SRC-157"
+        },
+        {
+          "key": "metric::{\"name\":\"redis_memory_used_bytes\"}",
+          "id": "METRIC-SRC-158"
+        },
+        {
+          "key": "metric::{\"name\":\"redis_up\"}",
+          "id": "METRIC-SRC-159"
+        },
+        {
+          "key": "metric::{\"name\":\"settlement_latency_seconds\"}",
+          "id": "METRIC-SRC-160"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:availability:composite_1d\"}",
+          "id": "METRIC-SRC-161"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:availability:composite_1h\"}",
+          "id": "METRIC-SRC-162"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:availability:error_budget_remaining\"}",
+          "id": "METRIC-SRC-163"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_request_duration:p95_1h\"}",
+          "id": "METRIC-SRC-164"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_request_duration:p95_5m\"}",
+          "id": "METRIC-SRC-165"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_request_duration:p99_1h\"}",
+          "id": "METRIC-SRC-166"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_request_duration:p99_5m\"}",
+          "id": "METRIC-SRC-167"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_request_duration:ratio_below_2s_5m\"}",
+          "id": "METRIC-SRC-168"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_request_duration:ratio_below_500ms_1d\"}",
+          "id": "METRIC-SRC-169"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_request_duration:ratio_below_500ms_1h\"}",
+          "id": "METRIC-SRC-170"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_request_duration:ratio_below_500ms_5m\"}",
+          "id": "METRIC-SRC-171"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_requests:error_ratio_1d\"}",
+          "id": "METRIC-SRC-172"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_requests:error_ratio_1h\"}",
+          "id": "METRIC-SRC-173"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_requests:error_ratio_2h\"}",
+          "id": "METRIC-SRC-174"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_requests:error_ratio_30m\"}",
+          "id": "METRIC-SRC-175"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_requests:error_ratio_3d\"}",
+          "id": "METRIC-SRC-176"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_requests:error_ratio_5m\"}",
+          "id": "METRIC-SRC-177"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_requests:error_ratio_6h\"}",
+          "id": "METRIC-SRC-178"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:latency:error_budget_remaining\"}",
+          "id": "METRIC-SRC-179"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:server:probe_success_ratio_1d\"}",
+          "id": "METRIC-SRC-180"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:server:probe_success_ratio_1h\"}",
+          "id": "METRIC-SRC-181"
+        },
+        {
+          "key": "metric::{\"name\":\"slo:server:probe_success_ratio_5m\"}",
+          "id": "METRIC-SRC-182"
+        },
+        {
+          "key": "metric::{\"name\":\"up\"}",
+          "id": "METRIC-SRC-183"
+        },
+        {
+          "key": "pipeline_exporter_traces::{\"signal\":\"traces\",\"target\":\"jaeger\"}",
+          "id": "PIP-EXP-TRC"
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"batch\"}#02",
+          "id": "PIP-PRC-04"
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"tail_sampling\"}",
+          "id": "PIP-PRC-03"
+        },
+        {
+          "key": "pipeline_receiver::{\"name\":\"otlp\"}#02",
+          "id": "PIP-RCV-02"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"alertmanager\"}",
+          "id": "SCRAPE-SRC-01"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"bayesian-service\"}",
+          "id": "SCRAPE-SRC-02"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"grafana\"}",
+          "id": "SCRAPE-SRC-03"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"jaeger\"}",
+          "id": "SCRAPE-SRC-04"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"kong\"}",
+          "id": "SCRAPE-SRC-05"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"krystalinex-server\"}",
+          "id": "SCRAPE-SRC-06"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"kube-state-metrics\"}",
+          "id": "SCRAPE-SRC-07"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"kubernetes-pods\"}",
+          "id": "SCRAPE-SRC-08"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"loki\"}",
+          "id": "SCRAPE-SRC-09"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"mcp-public\"}",
+          "id": "SCRAPE-SRC-10"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"node-exporter\"}",
+          "id": "SCRAPE-SRC-11"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"ollama\"}",
+          "id": "SCRAPE-SRC-12"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"otel-collector\"}",
+          "id": "SCRAPE-SRC-13"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"otel-mcp-server\"}",
+          "id": "SCRAPE-SRC-14"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"payment-processor\"}",
+          "id": "SCRAPE-SRC-15"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"postgres-exporter\"}",
+          "id": "SCRAPE-SRC-16"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"promtail\"}",
+          "id": "SCRAPE-SRC-17"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"pushgateway\"}",
+          "id": "SCRAPE-SRC-18"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"rabbitmq\"}",
+          "id": "SCRAPE-SRC-19"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"redis\"}",
+          "id": "SCRAPE-SRC-20"
+        },
+        {
+          "key": "scrape_job::{\"job\":\"victoriametrics\"}",
+          "id": "SCRAPE-SRC-21"
+        }
+      ],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "otel::{}",
+          "a": "OTEL-01",
+          "b": "OTEL-01",
+          "match": "drifted",
+          "deltas": [
+            {
+              "field": "resource_attributes",
+              "a": {
+                "required": [
+                  "service.name"
+                ]
+              },
+              "b": {
+                "required": [
+                  "deployment.environment",
+                  "service.name",
+                  "service.namespace"
+                ]
+              }
+            },
+            {
+              "field": "sdk",
+              "a": {
+                "languages": [
+                  "go"
+                ],
+                "propagators": [
+                  "tracecontext"
+                ],
+                "sampling": {
+                  "policy": "parentbased_traceidratio",
+                  "ratio": 0.1
+                }
+              },
+              "b": {
+                "languages": [
+                  "java"
+                ],
+                "propagators": [
+                  "tracecontext"
+                ],
+                "sampling": {
+                  "policy": "parentbased_traceidratio",
+                  "ratio": 0.05
+                }
+              }
+            }
+          ]
+        },
+        {
+          "key": "pipeline_exporter_metrics::{\"signal\":\"metrics\",\"target\":\"prometheusremotewrite\"}",
+          "a": "PIP-EXP-MET",
+          "b": "PIP-EXP-MET",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"batch\"}#01",
+          "a": "PIP-PRC-01",
+          "b": "PIP-PRC-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"memory_limiter\"}",
+          "a": "PIP-PRC-02",
+          "b": "PIP-PRC-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_receiver::{\"name\":\"otlp\"}#01",
+          "a": "PIP-RCV-01",
+          "b": "PIP-RCV-01",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [
+        {
+          "key": "backend::{\"product\":\"elasticsearch\",\"signal\":\"logs\"}",
+          "id": "BAK-02"
+        },
+        {
+          "key": "backend::{\"product\":\"elasticsearch\",\"signal\":\"traces\"}",
+          "id": "BAK-03"
+        },
+        {
+          "key": "backend::{\"product\":\"prometheus\",\"signal\":\"metrics\"}",
+          "id": "BAK-01"
+        },
+        {
+          "key": "pipeline_exporter_logs::{\"signal\":\"logs\",\"target\":\"elasticsearch\"}",
+          "id": "PIP-EXP-LOG"
+        },
+        {
+          "key": "pipeline_exporter_traces::{\"signal\":\"traces\",\"target\":\"elasticsearch\"}",
+          "id": "PIP-EXP-TRC"
+        },
+        {
+          "key": "storage_logs::{\"backend\":\"elasticsearch\",\"signal\":\"logs\"}",
+          "id": "STO-LOG-01"
+        },
+        {
+          "key": "storage_metrics::{\"backend\":\"prometheus\",\"signal\":\"metrics\"}",
+          "id": "STO-MET-01"
+        },
+        {
+          "key": "storage_traces::{\"backend\":\"elasticsearch\",\"signal\":\"traces\"}",
+          "id": "STO-TRC-01"
+        }
+      ],
+      "scaffold": [
+        {
+          "key": "pipeline_exporter_logs::{\"signal\":\"logs\",\"target\":\"elasticsearch\"}@a#01",
+          "side": "a",
+          "id": "PIP-EXP-LOG"
+        }
+      ],
+      "notObserved": [],
+      "aligned": 4,
+      "drifted": 1
+    },
+    "L2X": {
+      "onlyInA": [
+        {
+          "key": "mesh::{\"product\":\"kong\",\"role\":\"gateway\"}",
+          "id": "MESH-01"
+        }
+      ],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    },
+    "L3": {
+      "onlyInA": [
+        {
+          "key": "dashboard::{\"id\":\"adz2hpb\"}",
+          "id": "DASH-03"
+        },
+        {
+          "key": "dashboard::{\"id\":\"krystalinex-unified\"}",
+          "id": "DASH-06"
+        },
+        {
+          "key": "dashboard::{\"id\":\"kx-ai-rca-reliability\"}",
+          "id": "DASH-01"
+        },
+        {
+          "key": "dashboard::{\"id\":\"kx-genai-operations\"}",
+          "id": "DASH-02"
+        },
+        {
+          "key": "dashboard::{\"id\":\"kx-mcp-observability-trace-coverage\"}",
+          "id": "DASH-04"
+        },
+        {
+          "key": "dashboard::{\"id\":\"kx-predictive-finops\"}",
+          "id": "DASH-05"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:cost:request_units_per_service_1h\"}",
+          "id": "QRY-35"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:cost:telemetry_index_1h\"}",
+          "id": "QRY-36"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:cpu:usage_per_pod_5m\"}",
+          "id": "QRY-37"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:errors:rate_per_service_5m\"}",
+          "id": "QRY-30"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:kong:overhead_seconds\"}",
+          "id": "QRY-39"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:logs:bytes_rate_per_component_5m\"}",
+          "id": "QRY-34"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:memory:usage_per_pod_gb_hours\"}",
+          "id": "QRY-38"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:requests:rate_per_service_5m\"}",
+          "id": "QRY-29"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:spans:dropped_rate_5m\"}",
+          "id": "QRY-32"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:spans:exported_rate_5m\"}",
+          "id": "QRY-31"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:spans:sampling_ratio\"}",
+          "id": "QRY-33"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"genai:client_operation_duration:p95_5m\"}",
+          "id": "QRY-23"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"genai:client_operation_duration:p99_5m\"}",
+          "id": "QRY-24"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"genai:client_operation:error_ratio_5m\"}",
+          "id": "QRY-25"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"genai:client_token_usage:rate_1h\"}",
+          "id": "QRY-26"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"genai:rca_analysis_duration:p95_5m\"}",
+          "id": "QRY-27"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"genai:rca_analysis:failure_ratio_5m\"}",
+          "id": "QRY-28"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:availability:composite_1d\"}",
+          "id": "QRY-20"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:availability:composite_1h\"}",
+          "id": "QRY-19"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:availability:error_budget_remaining\"}",
+          "id": "QRY-21"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_request_duration:p95_1h\"}",
+          "id": "QRY-14"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_request_duration:p95_5m\"}",
+          "id": "QRY-12"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_request_duration:p99_1h\"}",
+          "id": "QRY-15"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_request_duration:p99_5m\"}",
+          "id": "QRY-13"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_request_duration:ratio_below_2s_5m\"}",
+          "id": "QRY-11"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_request_duration:ratio_below_500ms_1d\"}",
+          "id": "QRY-10"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_request_duration:ratio_below_500ms_1h\"}",
+          "id": "QRY-09"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_request_duration:ratio_below_500ms_5m\"}",
+          "id": "QRY-08"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_requests:error_ratio_1d\"}",
+          "id": "QRY-06"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_requests:error_ratio_1h\"}",
+          "id": "QRY-03"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_requests:error_ratio_2h\"}",
+          "id": "QRY-04"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_requests:error_ratio_30m\"}",
+          "id": "QRY-02"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_requests:error_ratio_3d\"}",
+          "id": "QRY-07"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_requests:error_ratio_5m\"}",
+          "id": "QRY-01"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_requests:error_ratio_6h\"}",
+          "id": "QRY-05"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:latency:error_budget_remaining\"}",
+          "id": "QRY-22"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:server:probe_success_ratio_1d\"}",
+          "id": "QRY-18"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:server:probe_success_ratio_1h\"}",
+          "id": "QRY-17"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:server:probe_success_ratio_5m\"}",
+          "id": "QRY-16"
+        }
+      ],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [
+        {
+          "key": "dashboard::{\"id\":\"orders-service-overview\"}",
+          "id": "DASH-01"
+        },
+        {
+          "key": "dashboard::{\"id\":\"orders-slo-burn\"}",
+          "id": "DASH-02"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"orders:availability:ratio_5m\"}",
+          "id": "QRY-01"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"orders:latency:p99_5m\"}",
+          "id": "QRY-02"
+        }
+      ],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    },
+    "L4": {
+      "onlyInA": [
+        {
+          "key": "alert_route::{\"severity\":\"sev1\"}#01",
+          "id": "ALR-03"
+        },
+        {
+          "key": "alert_route::{\"severity\":\"sev1\"}#02",
+          "id": "ALR-04"
+        },
+        {
+          "key": "alert_route::{\"severity\":\"sev2\"}#02",
+          "id": "ALR-02"
+        },
+        {
+          "key": "alert_route::{\"severity\":\"sev2\"}#03",
+          "id": "ALR-05"
+        },
+        {
+          "key": "alert_route::{\"severity\":\"sev2\"}#04",
+          "id": "ALR-06"
+        },
+        {
+          "key": "alert_route::{\"severity\":\"sev2\"}#05",
+          "id": "ALR-07"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"genai_client_operation_99\"}",
+          "id": "POL-04"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"genai_client_operation_duration_99\"}",
+          "id": "POL-03"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"genai_client_token_usage_99\"}",
+          "id": "POL-06"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"genai_rca_analysis_99\"}",
+          "id": "POL-05"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"slo_availability_99\"}",
+          "id": "POL-07"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"slo_http_request_duration_99\"}",
+          "id": "POL-02"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"slo_http_requests_99\"}",
+          "id": "POL-01"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"slo_latency_99\"}",
+          "id": "POL-08"
+        }
+      ],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "alert_route::{\"severity\":\"sev2\"}#01",
+          "a": "ALR-01",
+          "b": "ALR-01",
+          "match": "drifted",
+          "deltas": [
+            {
+              "field": "channels",
+              "a": [
+                {
+                  "webhook": "http://helmvalue-goalert:8081/goalert/api/v2/prometheusalertmanager/incoming?token=${ALERTMANAGER_GOALERT_GENERAL_TOKEN}"
+                }
+              ],
+              "b": [
+                {
+                  "msteams": "#orders-oncall"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "outOfScope": [
+        {
+          "key": "alert_route::{\"severity\":\"sev3\"}",
+          "id": "ALR-02"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"order_settlement_freshness_99\"}",
+          "id": "POL-03"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"orders_availability_99_5\"}",
+          "id": "POL-01"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"orders_latency_99_p99_600ms\"}",
+          "id": "POL-02"
+        }
+      ],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 1
+    },
+    "L5": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [
+        {
+          "key": "baselines::{}",
+          "id": "BASE-01"
+        },
+        {
+          "key": "synthetic::{\"id\":\"orders-canary\"}",
+          "id": "SYN-01"
+        }
+      ],
+      "scaffold": [
+        {
+          "key": "baselines::{}@a#01",
+          "side": "a",
+          "id": "BASE-01"
+        },
+        {
+          "key": "synthetic::{\"id\":\"krystaline-health-canary\"}@a#02",
+          "side": "a",
+          "id": "SYN-01"
+        }
+      ],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    },
+    "GOV": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    }
+  }
+}

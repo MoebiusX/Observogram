@@ -41,7 +41,7 @@ for (const k of STRIP) {
 
 const { test, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
-const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+const { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
 const { dirname, join } = await import('node:path');
 const { fileURLToPath } = await import('node:url');
@@ -68,7 +68,7 @@ const { currentStore, closeStore, prepare } = await import('./store/db.mjs');
 const { createUser, getUserByLogin, setDisabled, updateUserProfile } = await import('./store/users.mjs');
 const { getMembership, removeMembership } = await import('./store/memberships.mjs');
 const { getMeta } = await import('./store/meta.mjs');
-const { addMemberByLogin, disableUser, removeMemberByLogin } = await import('./identity-admin.mjs');
+const { addMemberByLogin, createOrgFromAdmin, disableUser, removeMemberByLogin } = await import('./identity-admin.mjs');
 const { routeEntry } = await import('./route-table.mjs');
 
 const srv = await start({ port: 0, host: '127.0.0.1', silent: true });
@@ -187,7 +187,7 @@ test('GET /api/admin/orgs: every org, removed ones too, with its member count; G
     { id: 'bravo', name: 'Bravo', root: 'orgs/bravo', default: false, removedAt: null, createdAt: 'T', members: 2 },
   ]);
   ({ json, rows } = await ok('GET /api/admin/join-role', 'olive', '/api/admin/join-role'));
-  assert.deepEqual([json, rows], [{ ok: true, role: getMeta(db, 'oidc_join_role'), oidc: false, issuerKey: null }, []]);
+  assert.deepEqual([json, rows], [{ ok: true, role: getMeta(db, 'oidc_join_role'), oidc: false, issuerKey: null, mode: 'local' }, []]);
 });
 function getMetaRoot(id) { return prepare(db, 'SELECT root FROM orgs WHERE id = ?').get(id).root; }
 
@@ -495,6 +495,40 @@ test('DELETE /api/admin/orgs/:id: a soft removal — the files stay, the org is 
   await refused('POST /api/admin/orgs', 'olive', '/api/admin/orgs', { id: 'charlie' }, 409, 'org "charlie" exists or existed — a slug is never reused');
 });
 
+// An org's notify hooks are OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN,
+// owned by the longest org prefix, removed orgs counting (the follow-up
+// journey-notify-env-ownership, N9): an id that would take another org's
+// hooks, whose own another org's id already takes, or that ties another's
+// KEY is refused at creation — on the API and from a shell alike.
+test('POST /api/admin/orgs refuses an id that would take another org\'s notify hook variables (a removed org\'s too), whose own another org already takes, or that shares another org\'s KEY — 409, nothing written; an id that only starts alike is created; the shell\'s createOrgFromAdmin answers the same texts', async () => {
+  const K = 'POST /api/admin/orgs';
+  const P = (id) => `OBSERVOGRAM_ORG_${id.toUpperCase().replaceAll('-', '_')}_`;
+  const takes = (id, other) => `org "${id}" would take the notify hook variables of org '${other}' (${P(other)}NOTIFY_…) by the longest-prefix rule — choose another id`;
+  const taken = (id, other) => `org "${id}"'s notify hook variables (${P(id)}NOTIFY_…) are already taken by org '${other}' by the longest-prefix rule — choose another id`;
+  const tie = (id, other) => `org "${id}" maps onto the same variables as org '${other}' (${P(id)}) — choose an id that differs in more than - and _`;
+  const orgCount = () => prepare(db, 'SELECT COUNT(*) AS n FROM orgs').get().n;
+  const before = orgCount();
+  for (const id of ['acme-notify', 'acme_notify', 'acme-notify-eu', 'acme_notify_oncall']) await refused(K, 'olive', '/api/admin/orgs', { id }, 409, takes(id, 'acme'));
+  assert.equal((await call('olive', 'GET', '/api/admin/orgs')).json.orgs.find((o) => o.id === 'charlie').removedAt !== null, true, 'charlie is a removed org');
+  await refused(K, 'olive', '/api/admin/orgs', { id: 'charlie-notify' }, 409, takes('charlie-notify', 'charlie'));
+  // Only the whole word NOTIFY_ takes the hooks: acme-notifications is its own org.
+  const own = await ok(K, 'olive', '/api/admin/orgs', { id: 'acme-notifications' }, 201);
+  assert.equal(own.json.org.id, 'acme-notifications');
+  // golf-notify first (nothing of golf's to take), then golf, whose hooks it holds, and golf_notify, its KEY.
+  assert.equal((await ok(K, 'olive', '/api/admin/orgs', { id: 'golf-notify' }, 201)).json.org.id, 'golf-notify');
+  await refused(K, 'olive', '/api/admin/orgs', { id: 'golf' }, 409, taken('golf', 'golf-notify'));
+  await refused(K, 'olive', '/api/admin/orgs', { id: 'golf_notify' }, 409, tie('golf_notify', 'golf-notify'));
+  assert.equal(orgCount(), before + 2, 'only the two accepted ids were written');
+  for (const id of ['acme-notify', 'golf', 'golf_notify', 'charlie-notify']) assert.equal(existsSync(join(WORKSPACE, 'orgs', id)), false, `no directory for ${id}`);
+  // The shell (npm run orgs -- create) runs the same rule with the same texts.
+  const seq = seqNow();
+  for (const [id, text] of [['bravo-notify', takes('bravo-notify', 'bravo')], ['golf', taken('golf', 'golf-notify')], ['golf_notify', tie('golf_notify', 'golf-notify')]]) {
+    assert.throws(() => createOrgFromAdmin(db, 'cli', { id, base: WORKSPACE, surface: 'cli' }), (e) => e.name === 'AdminRefusal' && e.kind === 'conflict' && e.message === text, id);
+  }
+  assert.deepEqual(rowsAfter(seq), [], 'a refusal writes no row');
+  assert.equal(orgCount(), before + 2);
+});
+
 // ---------- the join role ----------
 
 test('PUT /api/admin/join-role: viewer, operator, admin (with confirm) or none; one meta.set row { from, to }; unchanged writes nothing', async () => {
@@ -506,7 +540,7 @@ test('PUT /api/admin/join-role: viewer, operator, admin (with confirm) or none; 
   assert.deepEqual([json, rows], [{ ok: true, role: 'viewer', from: 'viewer' }, []], 'unchanged: no row');
   assert.equal((await call('olive', 'GET', '/api/admin/join-role')).json.role, 'viewer');
 
-  const ADMIN = 'every user the IdP lets in would become an admin of default — its name, its members and, from slice 4, its MCP endpoints; '
+  const ADMIN = 'every user the IdP lets in would become an admin of default — its name, its members and its MCP endpoints; '
     + 'to add admins one by one use POST /api/org/members with {"role": "admin"}, or send {"role": "admin", "confirm": true}';
   await refused(K, 'olive', '/api/admin/join-role', { role: 'admin' }, 409, ADMIN);
   await refused(K, 'olive', '/api/admin/join-role', { role: 'admin', confirm: 'true' }, 409, ADMIN);

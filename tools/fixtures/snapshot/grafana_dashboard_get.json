@@ -1,0 +1,130 @@
+{
+  "_synthetic": "2026-10-07 — hand-written detail answers (grafana_dashboard_get), keyed by uid, for the five dashboards of grafana_dashboards_search.json; each answer is { meta, dashboard } as the fetcher reads it.",
+  "byUid": {
+    "node_exporter_full": {
+      "meta": {
+        "folderTitle": "Payments",
+        "folderUid": "ab12",
+        "url": "/d/node_exporter_full"
+      },
+      "dashboard": {
+        "uid": "node_exporter_full",
+        "title": "Node Exporter Full",
+        "tags": [
+          "synthetic"
+        ],
+        "schemaVersion": 39,
+        "version": 3,
+        "panels": [
+          {
+            "id": 1,
+            "title": "CPU busy",
+            "type": "timeseries"
+          },
+          {
+            "id": 2,
+            "title": "Memory used",
+            "type": "timeseries"
+          }
+        ]
+      }
+    },
+    "3b5d5c3712955042212316173ccf37be": {
+      "meta": {
+        "folderTitle": "Payments",
+        "folderUid": "ab12",
+        "url": "/d/3b5d5c3712955042212316173ccf37be"
+      },
+      "dashboard": {
+        "uid": "3b5d5c3712955042212316173ccf37be",
+        "title": "Kubernetes Pods",
+        "tags": [
+          "synthetic"
+        ],
+        "schemaVersion": 39,
+        "version": 3,
+        "panels": [
+          {
+            "id": 1,
+            "title": "Pod restarts",
+            "type": "timeseries"
+          }
+        ]
+      }
+    },
+    "a--b": {
+      "meta": {
+        "folderTitle": "Payments",
+        "folderUid": "ab12",
+        "url": "/d/a--b"
+      },
+      "dashboard": {
+        "uid": "a--b",
+        "title": "A to B traffic",
+        "tags": [
+          "synthetic"
+        ],
+        "schemaVersion": 39,
+        "version": 3,
+        "panels": [
+          {
+            "id": 1,
+            "title": "Requests",
+            "type": "timeseries"
+          }
+        ]
+      }
+    },
+    "orders-main": {
+      "meta": {
+        "folderTitle": "Orders",
+        "folderUid": "cd34",
+        "url": "/d/orders-main"
+      },
+      "dashboard": {
+        "uid": "orders-main",
+        "title": "Orders",
+        "tags": [
+          "synthetic"
+        ],
+        "schemaVersion": 39,
+        "version": 3,
+        "panels": [
+          {
+            "id": 1,
+            "title": "Error rate",
+            "type": "timeseries"
+          },
+          {
+            "id": 2,
+            "title": "Alert notifications",
+            "type": "timeseries"
+          }
+        ]
+      }
+    },
+    "9xyz_abc": {
+      "meta": {
+        "folderTitle": "Orders",
+        "folderUid": "cd34",
+        "url": "/d/9xyz_abc"
+      },
+      "dashboard": {
+        "uid": "9xyz_abc",
+        "title": "Platform health",
+        "tags": [
+          "synthetic"
+        ],
+        "schemaVersion": 39,
+        "version": 3,
+        "panels": [
+          {
+            "id": 1,
+            "title": "Targets up",
+            "type": "timeseries"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -70,19 +70,74 @@ the testable layer).
   the view isn't vendored.
 - A journey with its own actions (the BUILD steps: `update`, `setTier`,
   `toggleEntry`, `setParam`, `setSli`, `setToggle`, `setStep`, `openEditor`,
-  `closeEditor`, `preview`, `openInDiscover`, …) rides them on that argument as a namespace
-  (`host.build`), built by app.mjs's controller and handed to the renderer at
-  the call site — never added to `host.mjs` (convention 1: the host stays the
-  four stable hooks) and never reached by importing app.mjs. The renderer
+  `closeEditor`, `preview`, `openInDiscover`, …; the services actions `openService`,
+  `openIn`, `openBuild`, `openEditor`, `saveService`, …; the Settings actions `open`, `back`,
+  `selectSection`, `retry`, `explain`, `build`, `openService`, `openEditor`, `closeEditor`, `save`,
+  `step`, `confirm`, `auditApply`, `auditMore`, `pickMcpTarget`, `openMcpEndpoints`, `copySecret`, `signIn`, `switchTo`) rides them on that argument as a
+  namespace (`host.build`, `host.services`, `host.settings`), built by app.mjs's controller and
+  handed to the renderer at the call site — never added to `host.mjs`
+  (convention 1: the host stays the four stable hooks) and never reached by
+  importing app.mjs. The renderer
   stays testable: the models it draws are pure (`studio/build-model.mjs`,
   `tools/test-build-model.mjs`), and the actions are whatever the caller
   passes.
+- Chrome text that names the product — the header wordmark and logo, the
+  About card, the scanner title, the reset confirm, the API-unreachable
+  screen, the origin chip's tip, the atlas compass mark, the version
+  tooltip — comes from `state.brand.chrome` (`studio/brand.mjs`, the
+  normalized brand `tools/lib/brand.mjs` owns), never from a literal:
+  `tools/test-brand.mjs`'s source guard fails the suite on `Observogram` /
+  `Observo<` / `OBSERVOGRAM` / `OBSERVO<` in any `studio/*.mjs` outside
+  comments. A renderer that cannot reach the state takes the chrome (or
+  the one string it needs) as an argument and paints nothing in its place
+  when none is given (`renderVersionChrome(container, model, chrome)`,
+  the atlas `opts.compassMark`).
 
 ## 4. CSS: one class-prefix per functional zone, split files only along the vendoring seam
 
 Zone prefixes (`.mc-*` verdict widgets, `.rq-*` triage queue, `.disco-*`
-Discover, `.diag-*` Diagnose, `.cpc-*`/`.compare-*` Compare) — keep new
-classes inside their zone's prefix. **Never mass-rename existing classes**:
+Discover, `.diag-*` Diagnose, `.cpc-*`/`.compare-*` Compare; `.dvb-verdict`
+the Discover board's reviewer-verdict badge and `.ux-chip-verdict` the fifth
+status property's chip in `ux.css`, `.verdict-*` the drawer's Verdict
+section — all drawn by `studio/verdict-html.mjs` / `studio/verdicts.mjs`,
+nothing without a verdict; `.rflow-*` the response path of
+`studio/remediation-flow-view.mjs`, one zone in `ux-remediate.css` drawn on
+Remediate and on Diagnose alike, nothing for a pack without
+`spec.remediation`; `.ux-gloss-*` the glossary marks of `studio/glossary.mjs`
+in `ux.css` — a toggletip beside a family label or a spec term, drawn only
+when the taxonomy file's v2 `glossary` explains it, `--ux-*` tokens only;
+`.conf-exports` the Conformance view's audit-report download row in `app.css`,
+drawn only with a focused pack id; `.set-*` Settings and its editors in
+`app.css`, under its own `==== Settings` marker the AA scan in
+`tools/test-build-model.mjs` reads, each colour measured on its own
+background and none restyled by `ux.css` / `reskin.css`; `.mcpc-*` the MCP
+panel's live connection — the "test connection" result and the rebuild beside
+it, and the live panel's three steps (`.mcpc-step`, `.mcpc-step-title`), its
+Draft / Snapshot choice (`.mcpc-choice`, `.mcpc-option*`) and its gate log
+(`.mcpc-gatelog`, `.mcpc-stage*`: a state is a word and an icon, never colour
+alone) — in `app.css` under its own `==== Live MCP connection` marker after
+Settings, drawn inside the panel's card with no surface of its own, text in
+`--ink` / `--ink-2` / `--ink-3` measured on the card by the same AA scan, every
+MCP-sourced string set as text by `studio/live-view.mjs`; `.compare-identity-*`
+Compare's Pair by switch, its note and its could-not-load sentence, and
+`.c-mode` the stat bar's "paired by" cell — part of the Compare zone, in
+`app.css` under its own `==== Compare pairing` marker after the live
+connection, no surface of their own (the cell is a `.compare-cell`), text in
+`--ink` / `--ink-2` / `--ink-3` measured on the card and the page by the AA
+scan, drawn by `studio/compare-identity.mjs` and restyled by no other sheet;
+`.mss-*` the MCP panel's Server settings modal (rebadge batch 4) — drawn by
+`studio/mcp-settings-view.mjs` into `#mss-host`, appended last to `<body>`
+over its scrim (`.mss-scrim`) in the `.set-editor` pattern, every node by
+`createElement` and every string by `textContent` (the view assigns no
+`innerHTML` but the host's emptying, pinned in `server/test-authz.mjs`); in
+`app.css` under its own `==== MCP server settings` marker after Compare
+pairing, the dialog the only surface (`--card`), a tone a left border and
+never the text colour, text in `--ink` / `--ink-2` / `--ink-3` measured on the
+card by the AA scan in both themes, restyled by no other sheet) — keep new classes
+inside their zone's prefix. The service audit report's `.ar-*` zone is not a studio stylesheet:
+it is `REPORT_CSS` in `tools/lib/audit-report.mjs`, inlined into one
+standalone document over `design-tokens.css` + `design-kit.css` (it qualifies
+kit classes under `.ar-*` and redefines none). **Never mass-rename existing classes**:
 they are referenced from both .css and .mjs template strings and there is no
 visual-regression net.
 
@@ -92,3 +147,13 @@ emitted by verdict-ui.mjs) is the precedent: it documents the CSS custom
 properties it expects from the host theme in its header, and app.css keeps
 the shared production styles (`.drift-*`, `.diag-*` banners) verdict-ui also
 emits.
+
+The other split along that seam is `studio/static-backend.css`: the static
+bundle's notice (`.no-backend-notice`, a status row pinned to the bottom of the
+window like `.toast`, `role="status"`, dismissable), inlined by
+`tools/build-studio-bundle.mjs` after `reskin.css` and never linked by the live
+studio. It reads the `--og-*` tokens only and is registered in
+`tools/test-studio-layout.mjs`'s EXEMPT list (pinned, but under neither bar).
+The notice's text reads the product name from the shell's `#brand-config`
+(`studio/static-backend.mjs` `noticeText(n, product)`, defaulting to
+`DEFAULT_BRAND.name`), so a `--brand` bundle leaks no upstream name.

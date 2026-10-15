@@ -348,3 +348,99 @@ test('latestCheck and attentionList: the four outcomes kept apart, most urgent f
   assert.deepEqual(list.find(a => a.name === 'broken').reasons, ['load-error', 'never-run']);
   assert.ok(!list.some(a => a.name === 'pass-ok'), 'a passing, unscheduled journey needs nobody');
 });
+
+// The Neuron and Journeys views' notify hints (studio/journeys-view.mjs; the
+// follow-up journey-notify-env-ownership): a journey notifies through one of
+// its org's notify hooks, and one the server would refuse is never "Set up"
+// — its Notification row says the refusal, after any delivery; an org that
+// can have no hook is told so, never a hook to add.
+test('notify hints name the org\'s hook variables — <KEY>, said so, when the org is unknown (never guessed as DEFAULT) — and a journey the server would refuse is never "Set up": the Neuron view says the refusal, whether it ran before or not; for an org whose every hook name another org\'s id takes, the hints say the server\'s sentence that none can be set', async () => {
+  const jv = await import('../studio/journeys-view.mjs');
+  const { setActiveOrg } = await import('../studio/api.mjs');
+  const KEY_NOTE = ' <KEY> is this org\'s id in capitals, with - as _.';
+  assert.equal(jv.notifyHookExample('pay-eu'), 'OBSERVOGRAM_ORG_PAY_EU_NOTIFY_<HOOK>_URL');
+  assert.equal(jv.notifyHookExample('default'), 'OBSERVOGRAM_ORG_DEFAULT_NOTIFY_<HOOK>_URL');
+  assert.equal(jv.notifyKeyNote('pay-eu'), '');
+  for (const org of [null, undefined, '']) {
+    assert.equal(jv.notifyHookExample(org), 'OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL', String(org));
+    assert.equal(jv.notifyKeyNote(org), KEY_NOTE, String(org));
+  }
+  // The not-configured remedy reads the studio's active org when it is read.
+  const remedy = (example) => `Add notify: { urlEnv: ${example} } to the journey file to be warned when it changes — one of this org's notify hooks, which the server's operator sets (GET /api/journeys/notify-hooks lists them).`;
+  setActiveOrg(null);
+  assert.equal(jv.DELIVERY_OUTCOMES['not-configured'].remedy, `${remedy('OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL')}${KEY_NOTE}`);
+  setActiveOrg('pay-eu');
+  try {
+    assert.equal(jv.DELIVERY_OUTCOMES['not-configured'].remedy, remedy('OBSERVOGRAM_ORG_PAY_EU_NOTIFY_<HOOK>_URL'));
+  } finally {
+    setActiveOrg(null);
+  }
+  assert.ok(!JSON.stringify(jv.DELIVERY_OUTCOMES).includes('MY_WEBHOOK_URL'), 'no bare name is suggested');
+  // Before any delivery: what is set up, or the server's refusal (GET /api/journeys' notify.problem).
+  assert.equal(jv.notifySetupLine({ urlEnv: 'OBSERVOGRAM_ORG_PAY_EU_NOTIFY_ONCALL_URL', authEnv: null, on: 'always', format: 'json' }),
+    'Set up: posts always to the webhook in $OBSERVOGRAM_ORG_PAY_EU_NOTIFY_ONCALL_URL.');
+  assert.equal(jv.notifySetupLine({ urlEnv: 'OBSERVOGRAM_ORG_PAY_EU_NOTIFY_ONCALL_URL' }), 'Set up: posts transitions to the webhook in $OBSERVOGRAM_ORG_PAY_EU_NOTIFY_ONCALL_URL.');
+  const problem = 'journey legacy is not run: its notify.urlEnv "MY_HOOK_URL" is not a notify hook of org \'pay-eu\' — the server posts only to OBSERVOGRAM_ORG_PAY_EU_NOTIFY_<HOOK>_URL';
+  const refused = jv.notifySetupLine({ urlEnv: 'MY_HOOK_URL', authEnv: null, on: 'always', format: 'json', problem });
+  // The run's text opens `journey <name> is not run: `; the line's lead says that once.
+  const reason = 'its notify.urlEnv "MY_HOOK_URL" is not a notify hook of org \'pay-eu\' — the server posts only to OBSERVOGRAM_ORG_PAY_EU_NOTIFY_<HOOK>_URL';
+  assert.equal(refused, `The server will not run this journey as it stands: ${reason}`);
+  assert.equal(jv.notifySetupLine({ urlEnv: 'MY_HOOK_URL', problem: `journey Pay EU legacy is not run: ${reason}` }),
+    `The server will not run this journey as it stands: ${reason}`, 'a name: with spaces');
+  assert.ok(!refused.includes('Set up'));
+  // The Neuron view's Notification row says the refusal whatever the newest
+  // record says: a journey that notified before the rule, or through the
+  // CronJob's CLI, is the one the migration must find (DOWNSTREAM §17.2 step 1).
+  const nv = await import('../studio/neuron-view.mjs');
+  const { escapeHtml } = await import('../studio/util.mjs');
+  const legacy = (runs) => entry('legacy', runs, { notify: { urlEnv: 'MY_HOOK_URL', authEnv: null, on: 'always', format: 'json', problem } });
+  const hooked = (runs) => entry('hooked', runs, { notify: { urlEnv: 'OBSERVOGRAM_ORG_PAY_EU_NOTIFY_ONCALL_URL', authEnv: null, on: 'always', format: 'json' } });
+  const notificationRow = (journey, runs) => { const d = buildJourneyDetail(journey(runs), runs); return nv.deliveryLine(d, latestCheck(d)); };
+  for (const [runs, delivery] of [
+    [[], null],
+    [[run(0)], 'Notification sent'],
+    [[run(0, { notify: { status: 'failed', error: 'HTTP 500', httpStatus: 500 } })], 'Notification failed'],
+    [[run(0, { notify: { status: 'skipped', reason: 'policy transitions: no transition' } })], 'Nothing to notify'],
+    [[run(0, { notify: null })], 'No notifications set up'],
+    [[run(0, { notify: {} })], 'Delivery unknown'],
+  ]) {
+    const label = delivery || 'no record';
+    const row = notificationRow(legacy, runs);
+    assert.ok(row.includes(escapeHtml(refused)), `${label}: the row says the server's refusal — ${row}`);
+    if (delivery) assert.ok(row.includes(`>${delivery}</span>`), `${label}: the newest record's delivery is still said — ${row}`);
+    assert.ok(!row.includes('Set up'), label);
+    assert.ok(!notificationRow(hooked, runs).includes('will not run'), `${label}: a journey through its org's hook is not flagged`);
+  }
+  // An org whose every hook name another org's id takes (pay beside pay-notify): GET /api/journeys carries the
+  // listing's none as notifyUnavailable; the listing loaders — the Journeys view's and the Neuron view's — note it
+  // for the org they asked for, and the not-configured remedy and the evidence block's hint say it, never a hook to
+  // add, which no name could satisfy. Another org, and an answer without it, keep the hook example.
+  const NONE = "no notify hook can be set for org 'pay' — another org's id also maps onto every OBSERVOGRAM_ORG_PAY_NOTIFY_<HOOK>_URL by the longest-prefix rule, so the server posts no notification for this org's journeys: whoever holds the workspace leaves notify out of them";
+  const SAID = `N${NONE.slice(1)}.`;
+  const answering = (body) => async (path) => { assert.equal(path, '/api/journeys'); return body; };
+  const libs = async () => ({ model: { buildNeuronModel } });
+  const hint = (org) => `Add <code>notify: { urlEnv: ${escapeHtml(jv.notifyHookExample(org))} }</code> to the journey file to post transitions to a webhook — one of this org's notify hooks, set by the server's operator; the URL and token stay in the server's environment.`;
+  try {
+    setActiveOrg('pay');
+    assert.equal(nv.notifyHintHtml('pay'), hint('pay'), 'before any listing: the hook example');
+    assert.deepEqual((await jv.loadJourneysData({ fetchFn: answering({ journeys: [], notifyUnavailable: NONE }) })).journeys, []);
+    assert.equal(jv.notifyUnavailableOf('pay'), SAID);
+    assert.equal(jv.DELIVERY_OUTCOMES['not-configured'].remedy, SAID, 'the remedy says no hook can be set');
+    assert.equal(nv.notifyHintHtml('pay'), escapeHtml(SAID), 'the evidence hint says no hook can be set');
+    setActiveOrg('pay-eu');
+    assert.equal(jv.DELIVERY_OUTCOMES['not-configured'].remedy, remedy('OBSERVOGRAM_ORG_PAY_EU_NOTIFY_<HOOK>_URL'), 'another org never borrows pay\'s answer');
+    assert.equal(nv.notifyHintHtml('pay-eu'), hint('pay-eu'));
+    setActiveOrg('pay');
+    await nv.loadNeuronData({ fetchFn: answering({ journeys: [] }), libs });
+    assert.equal(nv.notifyHintHtml('pay'), hint('pay'), 'an answer without it: the hook example');
+    await nv.loadNeuronData({ fetchFn: answering({ journeys: [], notifyUnavailable: NONE }), libs });
+    assert.equal(nv.notifyHintHtml('pay'), escapeHtml(SAID), 'the Neuron view\'s loader notes it');
+    // Sign-in off: the studio knows no org, and the answer is the default org's.
+    setActiveOrg(null);
+    await jv.loadJourneysData({ fetchFn: answering({ journeys: [], notifyUnavailable: NONE }) });
+    assert.equal(jv.DELIVERY_OUTCOMES['not-configured'].remedy, SAID);
+  } finally {
+    for (const org of ['pay', null]) { setActiveOrg(org); await jv.loadJourneysData({ fetchFn: answering({ journeys: [] }) }); }
+    setActiveOrg(null);
+  }
+});

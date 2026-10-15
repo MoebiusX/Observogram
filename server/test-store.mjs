@@ -16,12 +16,24 @@ import { chmodSync, chownSync, copyFileSync, existsSync, mkdirSync, mkdtempSync,
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isLinux, win32Skip, WIN32 } from './fixtures/platform.mjs';
 
-import {
+// Hermetic (§0): a developer shell's store or identity variables never reach
+// this process's imports (the identity-admin cases below read the server's
+// own environment) — the children's STRIP list, both spellings, before any
+// server module loads; hence the dynamic imports. serve-child.mjs imports no
+// server code; server/test-hermetic-suites.mjs guards the shape.
+const { STRIP } = await import('./fixtures/serve-child.mjs');
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
+
+const {
   atomic, checkFilesystem, checkNodeVersion, classifyFilesystem, closeStore, execScript,
   isSqliteExperimentalWarning, openRaw, openStore, pragma, prepare, resolveDbPath, tx,
-} from './store/db.mjs';
-import { SCHEMA_VERSION, STEPS, runMigrations, userVersion } from './store/migrations.mjs';
+} = await import('./store/db.mjs');
+const { SCHEMA_VERSION, STEPS, runMigrations, userVersion } = await import('./store/migrations.mjs');
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DB_URL = pathToFileURL(join(HERE, 'store', 'db.mjs')).href;
@@ -47,7 +59,9 @@ function track(proc) {
 after(() => { for (const p of live) p.kill('SIGKILL'); });
 
 // A child ES module run with this very Node binary. `until` resolves once a
-// line matching it appears on stdout; `done` resolves with the exit. Both
+// line matching it appears on stdout; `done` resolves with the exit, once
+// the child's stdout and stderr are read to their end ('close', not 'exit':
+// on Windows a child's last write can arrive after its 'exit' event). Both
 // bounded waits SIGKILL a child still running at their deadline and reject,
 // so a child that never gets there fails its test instead of hanging it:
 // `until(re, ms)` for the line, `exited(ms, what)` for the exit. A test
@@ -65,7 +79,7 @@ function child(code, { env = {} } = {}) {
     for (const w of waiters.splice(0)) { if (w.re.test(stdout)) w.resolve(); else waiters.push(w); }
   });
   proc.stderr.on('data', (b) => { stderr += b; });
-  const done = new Promise((res) => proc.on('exit', (code, signal) => res({ code, signal, stdout, stderr })));
+  const done = new Promise((res) => proc.on('close', (code, signal) => res({ code, signal, stdout, stderr })));
   const deadline = (ms, onTimeout) => setTimeout(() => { proc.kill('SIGKILL'); onTimeout(); }, ms);
   const until = (re, ms = 10_000) => new Promise((res, rej) => {
     if (re.test(stdout)) return res();
@@ -84,7 +98,7 @@ const tables = (db) => prepare(db, "SELECT name FROM sqlite_schema WHERE type = 
 
 // ---------- the harness: a stuck child fails its test, it does not hang the file ----------
 
-test('child(): exited() rejects, naming the wait, and SIGKILLs a child still running after its deadline', async () => {
+test('child(): exited() rejects, naming the wait, and SIGKILLs a child still running after its deadline', { skip: win32Skip(WIN32.signals) }, async () => {
   const c = child(`
     process.on('SIGTERM', () => {});   // a handler that swallows the signal
     console.log('ready');
@@ -209,7 +223,7 @@ test('checkFilesystem refuses a database on NFS, warns on FUSE, passes local dis
   assert.match(warned[0], /FUSE/);
   assert.equal(checkFilesystem('/x', { platform: 'linux', statfs: statfs(0xef53) }).kind, 'local');
   assert.equal(checkFilesystem('/x', { platform: 'darwin', statfs: () => { throw new Error('not called'); } }).kind, 'unchecked');
-  if (process.platform === 'linux') assert.equal(checkFilesystem(tmpdir()).kind === 'network', false, 'the real temp dir is not refused');
+  assert.equal(checkFilesystem(tmpdir()).kind === 'network', false, 'the real temp dir is not refused (unchecked off linux)');
 });
 
 // ---------- Runtime: opening ----------
@@ -366,14 +380,16 @@ test('tx: commits, rolls back and rethrows on throw, refuses a thenable (rolled 
 
 // ---------- Migrations ----------
 
-const V1_TABLES = ['audit', 'environments', 'mcp_endpoints', 'memberships', 'orgs', 'pack_services', 'packs', 'schema_meta', 'services', 'users'];
+const V2_TABLES = ['audit', 'environments', 'mcp_endpoints', 'memberships', 'orgs', 'pack_services', 'packs', 'schema_meta', 'services', 'users', 'verdicts', 'waivers'];
+// The synthetic steps below sit after every real one.
+const NEXT = SCHEMA_VERSION + 1;
 
-test('migrations from user_version 0: schema v1 exactly, with a store_id and the audit triggers', async () => {
+test('migrations from user_version 0: schema v2 exactly, with a store_id and the audit triggers', async () => {
   const path = join(tempDir(), 'm.db');
   const db = await openStore({ path });
   try {
-    assert.equal(userVersion(db), 1);
-    assert.deepEqual(tables(db), V1_TABLES);
+    assert.equal(userVersion(db), 2);
+    assert.deepEqual(tables(db), V2_TABLES);
     const id = prepare(db, "SELECT value FROM schema_meta WHERE key = 'store_id'").get().value;
     assert.match(id, /^[0-9a-f-]{36}$/);
     const triggers = prepare(db, "SELECT name FROM sqlite_schema WHERE type = 'trigger' ORDER BY name").all().map((r) => r.name);
@@ -393,14 +409,14 @@ test('migrations from user_version 0: schema v1 exactly, with a store_id and the
   }
   // A second open applies nothing.
   const raw = await openRaw(path);
-  assert.deepEqual(runMigrations(raw), { from: 1, to: 1, applied: [] });
+  assert.deepEqual(runMigrations(raw), { from: 2, to: 2, applied: [] });
   raw.close();
 });
 
-// A v2 step that rebuilds `users` under `memberships` the plan's way:
+// A next step that rebuilds `users` under `memberships` the plan's way:
 // X_new, copy, drop X, rename — never renaming the parent away first.
-const V2_REBUILD_USERS = {
-  version: 2,
+const REBUILD_USERS = {
+  version: NEXT,
   name: 'rebuild users (test)',
   up(db) {
     execScript(db, `
@@ -431,13 +447,13 @@ async function v1WithChildren(path) {
   return openRaw(path);
 }
 
-test('migrations from v1: a v2 step that rebuilds users under memberships keeps every child row', async () => {
+test('migrations from the current schema: a next step that rebuilds users under memberships keeps every child row', async () => {
   const path = join(tempDir(), 'v1.db');
   const db = await v1WithChildren(path);
   try {
     pragma(db, 'foreign_keys=ON');
-    const r = runMigrations(db, [...STEPS, V2_REBUILD_USERS]);
-    assert.deepEqual(r, { from: 1, to: 2, applied: [2] });
+    const r = runMigrations(db, [...STEPS, REBUILD_USERS]);
+    assert.deepEqual(r, { from: SCHEMA_VERSION, to: NEXT, applied: [NEXT] });
     assert.equal(prepare(db, 'SELECT count(*) AS n FROM memberships').get().n, 3);
     assert.deepEqual(pragma(db, 'foreign_key_check'), []);
     const fk = pragma(db, 'foreign_key_list(memberships)').map((r) => r.table).sort();
@@ -454,17 +470,64 @@ test('a failing step rolls back, leaves user_version and foreign_keys ON; a step
   const db = await v1WithChildren(path);
   try {
     pragma(db, 'foreign_keys=ON');
-    const throwing = { version: 2, name: 'throws', up(d) { execScript(d, 'CREATE TABLE half_done (a)'); throw new Error('step exploded'); } };
+    const throwing = { version: NEXT, name: 'throws', up(d) { execScript(d, 'CREATE TABLE half_done (a)'); throw new Error('step exploded'); } };
     assert.throws(() => runMigrations(db, [...STEPS, throwing]), /step exploded/);
-    assert.equal(userVersion(db), 1);
+    assert.equal(userVersion(db), SCHEMA_VERSION);
     assert.equal(pragma(db, 'foreign_keys')[0].foreign_keys, 1, 'foreign_keys back ON after a failure');
     assert.ok(!tables(db).includes('half_done'), 'the step rolled back');
-    const orphaning = { version: 2, name: 'orphans memberships', up(d) { execScript(d, "DELETE FROM users WHERE login = 'bob'"); } };
+    const orphaning = { version: NEXT, name: 'orphans memberships', up(d) { execScript(d, "DELETE FROM users WHERE login = 'bob'"); } };
     assert.throws(() => runMigrations(db, [...STEPS, orphaning]), /foreign-key violation/);
-    assert.equal(userVersion(db), 1);
+    assert.equal(userVersion(db), SCHEMA_VERSION);
     assert.equal(prepare(db, "SELECT count(*) AS n FROM users WHERE login = 'bob'").get().n, 1, 'bob is back');
     assert.equal(pragma(db, 'foreign_keys')[0].foreign_keys, 1);
-    assert.throws(() => runMigrations(db, [{ ...V2_REBUILD_USERS, version: 3 }]), /numbered 1\.\.n/);
+    assert.throws(() => runMigrations(db, [{ ...REBUILD_USERS, version: NEXT + 1 }]), /numbered 1\.\.n/);
+  } finally {
+    db.close();
+  }
+});
+
+// The one-way door GAP batch 2 opened: a v1 file (every pre-batch store)
+// gets the two tables with every row it held intact. Built through openRaw
+// + the first STEP alone: openStore would write a v2 store.
+test('a real v1 file migrates to v2: the verdicts and waivers tables with their foreign keys, every pre-existing row intact', async () => {
+  const path = join(tempDir('v1-real'), 'observogram.db');
+  const db = await openRaw(path);
+  try {
+    assert.deepEqual(runMigrations(db, STEPS.slice(0, 1)), { from: 0, to: 1, applied: [1] });
+    assert.deepEqual(tables(db), V2_TABLES.filter((t) => t !== 'verdicts' && t !== 'waivers'), 'a v1 store exactly');
+    const at = new Date().toISOString();
+    prepare(db, "INSERT INTO users (kind, login, created_at) VALUES ('local', 'alice', ?), ('local', 'bob', ?)").run(at, at);
+    prepare(db, "INSERT INTO orgs (id, name, root, created_at) VALUES ('default', 'Default', '.', ?), ('acme', 'Acme', 'orgs/acme', ?)").run(at, at);
+    prepare(db, "INSERT INTO memberships (org_id, user_id, role, created_at) VALUES ('default', 1, 'admin', ?), ('acme', 2, 'viewer', ?)").run(at, at);
+    prepare(db, "INSERT INTO services (id, org_id, slug, name, created_at, updated_at) VALUES (1, 'acme', 'pay', 'Payments', ?, ?)").run(at, at);
+    prepare(db, "INSERT INTO packs (org_id, id, created_at) VALUES ('acme', 'uploaded-pay-0123abcd', ?)").run(at);
+    prepare(db, "INSERT INTO pack_services (org_id, pack_id, service_id, role) VALUES ('acme', 'uploaded-pay-0123abcd', 1, 'primary')").run();
+    prepare(db, "INSERT INTO audit (at, org_id, actor, action) VALUES (?, 'acme', 'alice', 'pack.register')").run(at);
+    const counts = () => Object.fromEntries(['users', 'orgs', 'memberships', 'services', 'packs', 'pack_services', 'audit'].map((t) => [t, prepare(db, `SELECT count(*) AS n FROM ${t}`).get().n]));
+    const before = counts();
+    pragma(db, 'foreign_keys=ON');
+    assert.deepEqual(runMigrations(db), { from: 1, to: 2, applied: [2] });
+    assert.deepEqual(tables(db), V2_TABLES);
+    assert.deepEqual(counts(), before, 'every pre-existing row is still there');
+    assert.deepEqual(pragma(db, 'foreign_key_check'), []);
+    assert.deepEqual(pragma(db, 'foreign_key_list(verdicts)').map((r) => [r.table, r.from, r.to]).sort(), [['packs', 'org_id', 'org_id'], ['packs', 'pack_id', 'id']]);
+    assert.deepEqual(pragma(db, 'foreign_key_list(waivers)').map((r) => [r.table, r.from, r.to]).sort(),
+      [['orgs', 'org_id', 'id'], ['services', 'org_id', 'org_id'], ['services', 'service_id', 'id']]);
+    const indexes = prepare(db, "SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'waivers' AND name NOT LIKE 'sqlite_%'").all().map((r) => r.name);
+    assert.deepEqual(indexes, ['waivers_service']);
+    // The cascades and the CHECKs hold in the file.
+    prepare(db, "INSERT INTO verdicts (org_id, pack_id, artefact_id, artefact_key, status, behavior_hash, actor, set_at) VALUES ('acme', 'uploaded-pay-0123abcd', 'SLI-01', 'k', 'trusted', 'h', 'alice', ?)").run(at);
+    assert.throws(() => prepare(db, "INSERT INTO verdicts (org_id, pack_id, artefact_id, artefact_key, status, behavior_hash, actor, set_at) VALUES ('acme', 'uploaded-pay-0123abcd', 'SLI-02', 'k', 'maybe', 'h', 'alice', ?)").run(at), /CHECK/);
+    assert.throws(() => prepare(db, "INSERT INTO verdicts (org_id, pack_id, artefact_id, artefact_key, status, behavior_hash, actor, set_at) VALUES ('acme', 'no-such-pack', 'SLI-01', 'k', 'trusted', 'h', 'alice', ?)").run(at), /FOREIGN KEY/);
+    prepare(db, "INSERT INTO waivers (org_id, service_id, rule_id, reason, author, expires_at, created_at) VALUES ('acme', 1, 'L3.MUST.recording_rule_per_slo', 'r', 'alice', ?, ?)").run(at, at);
+    assert.throws(() => prepare(db, "INSERT INTO waivers (org_id, service_id, artefact_id, rule_id, reason, author, expires_at, created_at) VALUES ('acme', 1, '', 'x', 'r', 'alice', ?, ?)").run(at, at), /CHECK/, 'an empty artefact id is NULL, not \'\'');
+    assert.throws(() => prepare(db, "UPDATE waivers SET revoked_at = ? WHERE id = 1").run(at), /CHECK/, 'revoked_at and revoked_by go together');
+    assert.throws(() => prepare(db, "INSERT INTO waivers (org_id, service_id, rule_id, reason, author, expires_at, created_at) VALUES ('acme', 7, 'x', 'r', 'alice', ?, ?)").run(at, at), /FOREIGN KEY/);
+    prepare(db, "DELETE FROM packs WHERE id = 'uploaded-pay-0123abcd'").run();
+    assert.equal(prepare(db, 'SELECT count(*) AS n FROM verdicts').get().n, 0, 'a verdict cascades with its pack');
+    prepare(db, 'DELETE FROM services WHERE id = 1').run();
+    assert.equal(prepare(db, 'SELECT count(*) AS n FROM waivers').get().n, 0, 'a waiver cascades with its service');
+    assert.equal(prepare(db, 'SELECT count(*) AS n FROM audit').get().n, before.audit, 'the audit outlives what it names');
   } finally {
     db.close();
   }
@@ -475,7 +538,7 @@ test('a database from a newer build is refused, not migrated', async () => {
   const db = await v1WithChildren(path);
   pragma(db, 'user_version=7');
   db.close();
-  await assert.rejects(openStore({ path }), /schema v7, but this build knows up to v1/);
+  await assert.rejects(openStore({ path }), /schema v7, but this build knows up to v2/);
 });
 
 // ---------- Concurrency ----------
@@ -496,7 +559,7 @@ function lockHolder(path, holdMs) {
   `);
 }
 
-test('Concurrency: a write waits out a child holding BEGIN IMMEDIATE for less than busy_timeout, then succeeds', async () => {
+test('Concurrency: a write waits out a child holding BEGIN IMMEDIATE for less than busy_timeout, then succeeds', async (t) => {
   const path = join(tempDir(), 'conc.db');
   const db = await openStore({ path });
   try {
@@ -507,6 +570,7 @@ test('Concurrency: a write waits out a child holding BEGIN IMMEDIATE for less th
     const waited = Date.now() - t0;
     const r = await holder.exited(10_000, "the parent's write");
     assert.equal(r.code, 0, r.stderr);
+    t.diagnostic(`bound: the parent's write waited on the lock: ${waited} ms >= 300 ms of a 700 ms hold`);
     assert.ok(waited >= 300, `the parent waited on the lock (${waited} ms)`);
     assert.equal(prepare(db, "SELECT value FROM schema_meta WHERE key = 'parent'").get().value, 'wrote');
     assert.equal(prepare(db, "SELECT value FROM schema_meta WHERE key = 'held_by_child'").get().value, 'yes');
@@ -515,7 +579,7 @@ test('Concurrency: a write waits out a child holding BEGIN IMMEDIATE for less th
   }
 });
 
-test('Concurrency: a migration waits out a child holding BEGIN IMMEDIATE, then applies', async () => {
+test('Concurrency: a migration waits out a child holding BEGIN IMMEDIATE, then applies', async (t) => {
   const path = join(tempDir(), 'conc-mig.db');
   await openStore({ path });
   closeStore(path);
@@ -524,10 +588,11 @@ test('Concurrency: a migration waits out a child holding BEGIN IMMEDIATE, then a
     const holder = lockHolder(path, 700);
     await holder.until(/locked/);
     const t0 = Date.now();
-    const step = { version: 2, name: 'add a table', up(d) { execScript(d, 'CREATE TABLE later (a INTEGER)'); } };
-    assert.deepEqual(runMigrations(db, [...STEPS, step]).applied, [2]);
+    const step = { version: NEXT, name: 'add a table', up(d) { execScript(d, 'CREATE TABLE later (a INTEGER)'); } };
+    assert.deepEqual(runMigrations(db, [...STEPS, step]).applied, [NEXT]);
     const waited = Date.now() - t0;
     assert.equal((await holder.exited(10_000, 'the migration')).code, 0);
+    t.diagnostic(`bound: the migration waited on the lock: ${waited} ms >= 300 ms of a 700 ms hold`);
     assert.ok(waited >= 300, `the migration waited on the lock (${waited} ms)`);
     assert.ok(tables(db).includes('later'));
   } finally {
@@ -634,7 +699,7 @@ test('Audit: the same on a raw connection opened without recursive_triggers', as
 // ---------- closing on a signal ----------
 
 for (const sig of ['SIGTERM', 'SIGINT']) {
-  test(`${sig}: the child closes the store (no -wal left behind) and still dies by the signal`, async () => {
+  test(`${sig}: the child closes the store (no -wal left behind) and still dies by the signal`, { skip: win32Skip(WIN32.signals) }, async () => {
     const path = join(tempDir(), 'sig.db');
     const c = child(`
       const { openStore, prepare, tx } = await import(${JSON.stringify(DB_URL)});
@@ -665,7 +730,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
 // it was registered before or after the first open, or as a `once`, and
 // must still be closed (checkpointed, no -wal) when that handler exits.
 for (const [where, how] of [['before', 'on'], ['after', 'on'], ['before', 'once']]) {
-  test(`SIGTERM with the process's own handler (${how}, registered ${where} the open): the store stays usable until it exits`, async () => {
+  test(`SIGTERM with the process's own handler (${how}, registered ${where} the open): the store stays usable until it exits`, { skip: win32Skip(WIN32.signals) }, async () => {
     const path = join(tempDir(), `sig-owned-${where}-${how}.db`);
     const c = child(`
       const { openStore, prepare, tx } = await import(${JSON.stringify(DB_URL)});
@@ -710,7 +775,7 @@ const SIG_CHILD = (path) => `
 `;
 
 for (const sig of ['SIGTERM', 'SIGINT']) {
-  test(`${sig}: when the re-raise is dropped (as for PID 1) the child still exits ${SIGNAL_EXIT[sig]} with the store closed`, async () => {
+  test(`${sig}: when the re-raise is dropped (as for PID 1) the child still exits ${SIGNAL_EXIT[sig]} with the store closed`, { skip: win32Skip(WIN32.signals) }, async () => {
     const path = join(tempDir(), 'sig-dropped.db');
     // A no-op process.kill stands in for the kernel ignoring the re-raise.
     const c = child(`process.kill = () => true;\n${SIG_CHILD(path)}`);
@@ -726,7 +791,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
 // The real thing: node as PID 1 of a fresh PID namespace, signalled from
 // outside it, as kubelet does. Skipped where unshare is unavailable.
 const UNSHARE = (() => {
-  if (process.platform !== 'linux') return null;
+  if (!isLinux) return null;
   const base = ['--pid', '--fork', '--kill-child'];
   const tries = [base, ['--user', '--map-root-user', ...base]];
   for (const args of tries) {
@@ -788,6 +853,10 @@ const environments = await import('./store/environments.mjs');
 const mcpEndpoints = await import('./store/mcp-endpoints.mjs');
 const packs = await import('./store/packs.mjs');
 const packServices = await import('./store/pack-services.mjs');
+const packLinks = await import('./store/pack-links.mjs');
+const verdicts = await import('./store/verdicts.mjs');
+const waivers = await import('./store/waivers.mjs');
+const serviceAdmin = await import('./service-admin.mjs');
 
 async function freshStore(tag) {
   const path = join(tempDir(tag), 'observogram.db');
@@ -966,6 +1035,98 @@ test('audit: appendAudit and listAudit filters (deployment rows, one org, actor,
   }
 });
 
+test('audit: listAudit kind is a prefix equality on the text before the dot (never LIKE: _ is literal, xy does not match x)', async () => {
+  const { db, close } = await freshStore('auditkind');
+  try {
+    auditRepo.appendAudit(db, 'alice', { action: 'x.one' });
+    auditRepo.appendAudit(db, 'alice', { orgId: 'acme', action: 'x.two' });
+    auditRepo.appendAudit(db, 'alice', { action: 'y.one' });
+    auditRepo.appendAudit(db, 'alice', { action: 'xy.one' });
+    auditRepo.appendAudit(db, 'alice', { action: 'mcp_endpoint.create' });
+    auditRepo.appendAudit(db, 'alice', { action: 'mcp_endpointx.create' });
+    auditRepo.appendAudit(db, 'alice', { action: 'mcp-endpoint.create' });
+    auditRepo.appendAudit(db, 'alice', { action: 'mcpXendpoint.create' });
+    const kinds = (filter) => auditRepo.listAudit(db, filter).reverse().map((r) => r.action);
+    assert.deepEqual(kinds({ kind: 'x' }), ['x.one', 'x.two'], 'x.* only: neither y.one nor xy.one');
+    assert.deepEqual(kinds({ kind: 'y' }), ['y.one']);
+    assert.deepEqual(kinds({ kind: 'xy' }), ['xy.one']);
+    assert.deepEqual(kinds({ kind: 'mcp_endpoint' }), ['mcp_endpoint.create'], 'the _ is literal: no mcp-endpoint, no mcpXendpoint, no mcp_endpointx');
+    assert.deepEqual(kinds({ kind: 'x', orgId: 'acme' }), ['x.two'], 'kind ANDs with the other filters');
+    assert.deepEqual(kinds({ kind: 'x', action: 'y.one' }), [], 'kind ANDs with action');
+    assert.deepEqual(kinds({ kind: 'nope' }), []);
+    assert.deepEqual(kinds({ kind: '' }), [], 'an empty kind matches no action (no action starts with a dot)');
+    assert.deepEqual(kinds({ kind: 'x.one' }), [], 'a whole action is not a kind');
+    assert.equal(kinds({}).length, 8, 'kind undefined = no predicate');
+  } finally {
+    close();
+  }
+});
+
+test('audit: beforeSeq paging is exact over 7 rows at limit 3, and reaches all 1001 rows at the 1000 clamp', async () => {
+  const { db, close } = await freshStore('auditpage');
+  try {
+    for (let i = 1; i <= 7; i++) auditRepo.appendAudit(db, 'alice', { orgId: 'acme', action: 'p.row', targetId: i });
+    const all = auditRepo.listAudit(db, { orgId: 'acme', limit: 1000 });
+    assert.equal(all.length, 7);
+    const pages = [];
+    let before;
+    for (;;) {
+      const page = auditRepo.listAudit(db, { orgId: 'acme', limit: 3, beforeSeq: before });
+      if (page.length === 0) break;
+      pages.push(page);
+      before = page[page.length - 1].seq;
+    }
+    assert.deepEqual(pages.map((p) => p.length), [3, 3, 1], 'three pages, the last one short');
+    assert.deepEqual(pages.flat().map((r) => r.seq), all.map((r) => r.seq), 'same seqs, same order, no duplicate, no gap');
+    assert.deepEqual(pages.flat().map((r) => r.targetId), ['7', '6', '5', '4', '3', '2', '1']);
+    assert.deepEqual(auditRepo.listAudit(db, { orgId: 'acme', beforeSeq: all[all.length - 1].seq }), [], 'before the smallest seq: nothing');
+
+    // The clamp: 1001 rows, limit 1000 (and anything above it) yields 1000;
+    // one beforeSeq step reaches the last row. An API that asked for
+    // limit + 1 at a cap of 1000 would be clamped here and never see it.
+    for (let i = 0; i < 1001; i++) auditRepo.appendAudit(db, 'bob', { orgId: 'bravo', action: 'q.row' });
+    const first = auditRepo.listAudit(db, { orgId: 'bravo', limit: 1000 });
+    assert.equal(first.length, 1000, 'the clamp');
+    assert.equal(auditRepo.listAudit(db, { orgId: 'bravo', limit: 5000 }).length, 1000, 'a limit above the clamp is clamped');
+    assert.equal(auditRepo.listAudit(db, { orgId: 'bravo', limit: -3 }).length, 1, 'a limit below 1 is 1');
+    assert.equal(auditRepo.listAudit(db, { orgId: 'bravo', limit: 0 }).length, 100, 'limit 0 (falsy) is the default 100, as before');
+    const rest = auditRepo.listAudit(db, { orgId: 'bravo', limit: 1000, beforeSeq: first[first.length - 1].seq });
+    assert.equal(rest.length, 1, 'the 1001st row on the second page');
+    assert.ok(rest[0].seq < first[first.length - 1].seq);
+    assert.equal(new Set([...first, ...rest].map((r) => r.seq)).size, 1001, 'all 1001 reached, none twice');
+  } finally {
+    close();
+  }
+});
+
+test('audit: writeAudit bounds the detail — a serialized detail over DETAIL_MAX is a TypeError and no row; one at the bound is a row', async () => {
+  const { db, close } = await freshStore('auditsize');
+  try {
+    assert.equal(auditRepo.DETAIL_MAX, 8192);
+    const n0 = auditRepo.listAudit(db, { limit: 1000 }).length;
+    // {"s":"<x…>"} serializes to 8 + s.length characters.
+    const atBound = { s: 'x'.repeat(auditRepo.DETAIL_MAX - 8) };
+    assert.equal(JSON.stringify(atBound).length, auditRepo.DETAIL_MAX);
+    const row = auditRepo.appendAudit(db, 'alice', { action: 'z.fits', detail: atBound });
+    assert.deepEqual(row.detail, atBound, 'exactly DETAIL_MAX characters is a row');
+    const over = { s: 'x'.repeat(auditRepo.DETAIL_MAX - 7) };
+    assert.throws(() => auditRepo.appendAudit(db, 'alice', { action: 'z.over', detail: over }), (e) => e instanceof TypeError && /at most 8192 characters/.test(e.message));
+    const big = { blob: 'y'.repeat(9 * 1024) };
+    assert.throws(() => auditRepo.appendAudit(db, 'alice', { action: 'z.big', detail: big }), (e) => e instanceof TypeError && /at most 8192/.test(e.message));
+    assert.deepEqual(auditRepo.listAudit(db, { limit: 1000 }).slice(0, -n0 || undefined).map((r) => r.action), ['z.fits'], 'the refused details wrote no row');
+    // Inside a repository's tx() the refusal rolls the change back too.
+    assert.throws(() => tx(db, () => {
+      auditRepo.writeAudit(db, 'alice', { action: 'z.inner' });
+      auditRepo.writeAudit(db, 'alice', { action: 'z.inner-over', detail: big });
+    }), TypeError);
+    assert.deepEqual(auditRepo.listAudit(db, { action: 'z.inner' }), [], 'the tx rolled back with the refused row');
+    auditRepo.appendAudit(db, 'alice', { action: 'z.none' });
+    assert.equal(auditRepo.listAudit(db, { limit: 1 })[0].detail, null, 'a null detail is unaffected');
+  } finally {
+    close();
+  }
+});
+
 test('meta: get and set with an audit row; store_id is fixed', async () => {
   const { db, close } = await freshStore('meta');
   try {
@@ -992,11 +1153,35 @@ test('context-scoped repositories throw outside runWithOrg()', async () => {
       'environments.create': () => environments.createEnvironment(db, 'a', { serviceId: 1, name: 'prod' }),
       'mcp_endpoints.list': () => mcpEndpoints.listMcpEndpoints(db),
       'mcp_endpoints.create': () => mcpEndpoints.createMcpEndpoint(db, 'a', { name: 'm', url: 'https://mcp.example' }),
+      'mcp_endpoints.countBound': () => mcpEndpoints.countBound(db, 1),
+      'service_admin.tierFor': () => serviceAdmin.serviceTierFor(db, 'p', 'prod'),
+      'service_admin.views': () => serviceAdmin.listServiceViews(db),
       'packs.list': () => packs.listPacks(db),
       'packs.add': () => packs.addPack(db, 'a', { id: 'p' }),
       'packs.touch': () => packs.touch(db, 'p'),
+      'packs.upsert': () => packs.upsertPack(db, 'a', { id: 'p' }),
+      'packs.remove': () => packs.removePack(db, 'a', 'p'),
+      'packs.touchMany': () => packs.touchMany(db, [['p', '2030-01-01T00:00:00.000Z']]),
+      'packs.clear': () => packs.clearPacks(db, 'a'),
+      'environments.getByName': () => environments.getEnvironmentByName(db, 1, 'prod'),
+      'environments.listForOrg': () => environments.listEnvironmentsForOrg(db),
+      'environments.countBoundTo': () => environments.countEnvironmentsBoundTo(db, 1),
       'pack_services.list': () => packServices.listServicesForPack(db, 'p'),
+      'pack_services.listForOrg': () => packServices.listLinksForOrg(db),
       'pack_services.link': () => packServices.linkPackService(db, 'a', { packId: 'p', serviceId: 1 }),
+      'pack_services.linkIfAbsent': () => packServices.linkPackService(db, 'a', { packId: 'p', serviceId: 1 }, { ifAbsent: true }),
+      'pack_services.unlink': () => packServices.unlinkPackService(db, 'a', 'p', 1, { detail: { service: 's', reason: 'replan' } }),
+      'pack_links.link': () => packLinks.linkPack(db, 'a', { packId: 'p', entry: { id: 'p', service: 's' }, canonical: {}, via: 'register' }),
+      'verdicts.list': () => verdicts.listVerdicts(db, 'p'),
+      'verdicts.get': () => verdicts.getVerdict(db, 'p', 'SLI-01'),
+      'verdicts.set': () => verdicts.setVerdict(db, 'a', { packId: 'p', artefactId: 'SLI-01', artefactKey: 'k', status: 'trusted', behaviorHash: 'h' }),
+      'verdicts.clear': () => verdicts.clearVerdict(db, 'a', 'p', 'SLI-01'),
+      'verdicts.carry': () => verdicts.carryVerdicts(db, 'a', { fromPackId: 'p', toPackId: 'q', rows: [], map: new Map() }),
+      'waivers.get': () => waivers.getWaiver(db, 1),
+      'waivers.list': () => waivers.listWaivers(db, 1),
+      'waivers.count': () => waivers.countWaivers(db, 1),
+      'waivers.create': () => waivers.createWaiver(db, 'a', { serviceId: 1, ruleId: 'x', reason: 'r', expiresAt: '2030-01-01T00:00:00.000Z' }),
+      'waivers.revoke': () => waivers.revokeWaiver(db, 'a', 1),
     };
     for (const [name, call] of Object.entries(calls)) assert.throws(call, /org-scoped — call it inside runWithOrg\(\)/, name);
     assert.deepEqual(auditActions(db), []);
@@ -1011,7 +1196,7 @@ test('Tenancy isolation: org B reads and writes nothing of org A through any con
     orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
     orgs.createOrg(db, 'system', { id: 'bravo', name: 'Bravo' });
     const a = runWithOrg('acme', () => {
-      const ep = mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'prod-mcp', url: 'https://mcp.acme.example/mcp', readTokenEnv: 'ACME_MCP_TOKEN' });
+      const ep = mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'prod-mcp', url: 'https://mcp.acme.example/mcp', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' });
       const svc = services.createService(db, 'alice', { slug: 'checkout', name: 'Checkout', owners: ['alice'], tier: 'critical' });
       const env = environments.createEnvironment(db, 'alice', { serviceId: svc.id, name: 'prod', tier: 'high', bindings: { region: 'eu' }, mcpEndpointId: ep.id });
       const pack = packs.addPack(db, 'alice', { id: 'uploaded-checkout-0123abcd', label: 'Checkout', source: 'upload' });
@@ -1042,30 +1227,78 @@ test('Tenancy isolation: org B reads and writes nothing of org A through any con
       assert.deepEqual(packServices.listServicesForPack(db, a.pack.id), []);
       assert.deepEqual(packServices.listPacksForService(db, a.svc.id), []);
       assert.throws(() => packServices.unlinkPackService(db, 'bob', a.pack.id, a.svc.id), /no pack link/);
+      assert.throws(() => packServices.unlinkPackService(db, 'bob', a.pack.id, a.svc.id, { detail: { service: 'checkout', reason: 'replan' } }), /no pack link/);
+      // The org-wide reads and the bookkeeping writes: nothing of A's.
+      assert.equal(environments.getEnvironmentByName(db, a.svc.id, 'prod'), null);
+      assert.deepEqual(environments.listEnvironmentsForOrg(db), []);
+      assert.deepEqual(environments.countEnvironmentsBoundTo(db, a.ep.id), []);
+      assert.equal(mcpEndpoints.countBound(db, a.ep.id), 0);
+      assert.deepEqual(packServices.listLinksForOrg(db), []);
+      assert.equal(serviceAdmin.serviceTierFor(db, a.pack.id, 'prod'), null, 'A\'s pack has no primary link in B');
+      assert.deepEqual(serviceAdmin.listServiceViews(db), []);
+      assert.equal(packs.touchMany(db, [[a.pack.id, '2031-01-01T00:00:00.000Z']]), 0);
+      assert.throws(() => packs.removePack(db, 'bob', a.pack.id, { action: 'pack.evict', detail: { cap: 200 } }), /no pack/);
       // B's own rows, reaching for A's: A's service and A's endpoint are not found.
       const bSvc = services.createService(db, 'bob', { slug: 'checkout', name: 'Bravo checkout' });
       assert.throws(() => environments.createEnvironment(db, 'bob', { serviceId: bSvc.id, name: 'prod', mcpEndpointId: a.ep.id }), /no MCP endpoint/);
       const bEnv = environments.createEnvironment(db, 'bob', { serviceId: bSvc.id, name: 'prod' });
       assert.throws(() => environments.updateEnvironment(db, 'bob', bEnv.id, { mcpEndpointId: a.ep.id }), /no MCP endpoint/);
-      packs.addPack(db, 'bob', { id: 'uploaded-checkout-0123abcd' });
+      assert.equal(environments.getEnvironmentByName(db, a.svc.id, 'prod'), null, 'A\'s service id with a name B also uses');
+      assert.deepEqual(environments.listEnvironmentsForOrg(db).map((e) => e.id), [bEnv.id]);
+      // upsertPack of A's id creates a B row and leaves A's label alone.
+      const up = packs.upsertPack(db, 'bob', { id: 'uploaded-checkout-0123abcd', label: 'Bravo checkout', source: 'upload' });
+      assert.deepEqual([up.created, up.changed, up.pack.orgId, up.pack.label], [true, false, 'bravo', 'Bravo checkout']);
       assert.throws(() => packServices.linkPackService(db, 'bob', { packId: 'uploaded-checkout-0123abcd', serviceId: a.svc.id }), /no service/);
+      assert.throws(() => packServices.linkPackService(db, 'bob', { packId: 'uploaded-checkout-0123abcd', serviceId: a.svc.id }, { ifAbsent: true }), /no service/);
+      assert.equal(packs.touchMany(db, [[a.pack.id, '2031-01-01T00:00:00.000Z']]), 1, 'B\'s own row of that id now — A\'s is unchanged (below)');
+      assert.deepEqual(packServices.listLinksForOrg(db), [], 'B linked nothing');
+      // linkPack from B for A's pack id: B's rows only (B's own checkout service, its prod environment already there).
+      const linked = packLinks.linkPack(db, 'bob', {
+        packId: 'uploaded-checkout-0123abcd', entry: { id: 'uploaded-checkout-0123abcd', service: 'checkout', services: ['checkout'] },
+        canonical: { metadata: { bindings: { service: 'checkout', environments: ['prod'] } } }, via: 'register',
+      });
+      assert.deepEqual(linked, { services: [], environments: [], links: ['checkout'], unlinked: [] });
+      assert.deepEqual(packServices.listLinksForOrg(db).map((l) => [l.packId, l.serviceId, l.role]), [['uploaded-checkout-0123abcd', bSvc.id, 'primary']]);
     });
     // A is untouched.
     runWithOrg('acme', () => {
       assert.equal(services.getService(db, a.svc.id).name, 'Checkout');
       assert.equal(environments.getEnvironment(db, a.env.id).mcpEndpointId, a.ep.id);
+      assert.equal(environments.getEnvironmentByName(db, a.svc.id, 'prod').id, a.env.id);
+      assert.deepEqual(environments.listEnvironmentsForOrg(db).map((e) => e.id), [a.env.id]);
+      assert.deepEqual(environments.countEnvironmentsBoundTo(db, a.ep.id), [a.env.id]);
+      assert.equal(mcpEndpoints.countBound(db, a.ep.id), 1);
       assert.equal(mcpEndpoints.getMcpEndpoint(db, a.ep.id).url, 'https://mcp.acme.example/mcp');
+      assert.deepEqual(serviceAdmin.serviceTierFor(db, a.pack.id, 'prod'),
+        { tier: 'high', from: 'environment', service: { id: a.svc.id, slug: 'checkout' }, environment: { id: a.env.id, name: 'prod' } });
+      assert.deepEqual(serviceAdmin.listServiceViews(db).map((v) => [v.slug, v.environments.map((e) => [e.name, e.effectiveTier, e.mcpEndpoint]), v.packs]),
+        [['checkout', [['prod', 'high', { id: a.ep.id, name: 'prod-mcp', origin: 'https://mcp.acme.example' }]], [{ id: a.pack.id, label: 'Checkout', source: 'upload', role: 'primary' }]]]);
       assert.equal(packs.listPacks(db).length, 1);
-      assert.deepEqual(packServices.listServicesForPack(db, a.pack.id).map((l) => l.role), ['primary']);
+      assert.equal(packs.getPack(db, a.pack.id).label, 'Checkout', 'B\'s upsert of the same id left A\'s label');
+      assert.equal(packs.getPack(db, a.pack.id).lastUsedAt, a.pack.lastUsedAt, 'B\'s touchMany of A\'s id changed nothing');
+      assert.deepEqual(packServices.listServicesForPack(db, a.pack.id).map((l) => [l.role, l.slug]), [['primary', 'checkout']]);
+      assert.deepEqual(packServices.listLinksForOrg(db).map((l) => [l.packId, l.serviceId, l.role, l.label, l.source]),
+        [[a.pack.id, a.svc.id, 'primary', 'Checkout', 'upload']]);
       assert.equal(packs.touch(db, a.pack.id, '2030-01-01T00:00:00.000Z'), true);
       assert.throws(() => packs.touch(db, a.pack.id, new Date()), /cannot bind Date/, 'not a silent false from ? values shifted one slot');
       assert.equal(packs.getPack(db, a.pack.id).lastUsedAt, '2030-01-01T00:00:00.000Z');
     });
     assert.deepEqual(auditActions(db, { orgId: 'acme' }), ['mcp_endpoint.create', 'service.create', 'environment.create', 'pack.register', 'pack.link'],
-      'every write audited in its org, touch() not at all');
-    assert.deepEqual(auditActions(db, { orgId: 'bravo' }), ['service.create', 'environment.create', 'pack.register']);
+      'every write audited in its org, touch() and touchMany() not at all');
+    assert.deepEqual(auditActions(db, { orgId: 'bravo' }), ['service.create', 'environment.create', 'pack.register', 'pack.link']);
     // The schema holds the same line: a link across orgs is a foreign-key failure.
     assert.throws(() => prepare(db, "INSERT INTO pack_services (org_id, pack_id, service_id, role) VALUES ('bravo', 'uploaded-checkout-0123abcd', ?, 'member')").run(a.svc.id), /FOREIGN KEY/);
+    // clearPacks from B drops B's rows only.
+    runWithOrg('bravo', () => {
+      assert.equal(packs.clearPacks(db, 'bob'), 1);
+      assert.deepEqual(packs.listPacks(db), []);
+    });
+    runWithOrg('acme', () => {
+      assert.equal(packs.listPacks(db).length, 1);
+      assert.deepEqual(packServices.listServicesForPack(db, a.pack.id).map((l) => l.role), ['primary']);
+    });
+    assert.deepEqual(auditActions(db, { orgId: 'bravo' }), ['service.create', 'environment.create', 'pack.register', 'pack.link', 'pack.clear']);
+    assert.deepEqual(auditRepo.listAudit(db, { orgId: 'bravo', action: 'pack.clear' }).map((r) => [r.targetId, r.detail]), [[null, { dropped: 1 }]]);
   } finally {
     close();
   }
@@ -1078,7 +1311,7 @@ test('context-scoped updates, deletes and cascades within one org', async () => 
     runWithOrg('acme', () => {
       const ep = mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'mcp', url: 'http://mcp.internal:3001' });
       assert.throws(() => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'leaky', url: 'https://user:secret@mcp.example' }), /may not carry credentials/);
-      assert.throws(() => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'tok', url: 'https://mcp.example', readTokenEnv: 'sk-live-123' }), /env var name/);
+      assert.throws(() => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'tok', url: 'https://mcp.example', readTokenEnv: 'sk-live-123' }), /names an env var of this org/);
       assert.throws(() => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'ftp', url: 'ftp://mcp.example' }), /http\(s\)/);
       const svc = services.createService(db, 'alice', { slug: 'pay', name: 'Payments' });
       assert.throws(() => services.createService(db, 'alice', { slug: 'pay', name: 'Again' }), /UNIQUE/);
@@ -1103,6 +1336,381 @@ test('context-scoped updates, deletes and cascades within one org', async () => 
       'mcp_endpoint.create', 'service.create', 'service.update', 'environment.create', 'environment.update', 'mcp_endpoint.delete',
       'pack.register', 'pack.link', 'service.create', 'pack.link', 'pack.unlink', 'service.delete', 'pack.remove',
     ]);
+  } finally {
+    close();
+  }
+});
+
+test('the pack registry\'s repository calls: upsertPack, the removal actions, touchMany, clearPacks, clampPackText, the create details, the environment reads, idempotent links', async () => {
+  const { db, close } = await freshStore('registry');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    const rows = (action) => auditRepo.listAudit(db, { orgId: 'acme', action, limit: 1000 }).reverse().map((r) => [r.actor, r.targetId, r.detail]);
+    // clampPackText: pure.
+    assert.equal(packs.clampPackText('  Checkout (scanned) '), 'Checkout (scanned)');
+    assert.equal(packs.clampPackText('x'.repeat(201)), 'x'.repeat(200));
+    assert.equal(packs.clampPackText(` ${'y'.repeat(300)}`), 'y'.repeat(200), 'trimmed, then cut');
+    for (const v of ['', '   ', null, undefined, 7, {}, ['a']]) assert.equal(packs.clampPackText(v), null, JSON.stringify(v));
+    runWithOrg('acme', () => {
+      // addPack: the two times bound as given, ISO strings only; detail merged into pack.register.
+      const old = packs.addPack(db, 'system', { id: 'old', label: 'Old', source: 'workspace', createdAt: '2024-01-02T03:04:05.000Z', lastUsedAt: '2024-02-02T00:00:00.000Z', detail: { imported: true } });
+      assert.deepEqual([old.createdAt, old.lastUsedAt], ['2024-01-02T03:04:05.000Z', '2024-02-02T00:00:00.000Z']);
+      assert.deepEqual(rows('pack.register'), [['system', 'old', { label: 'Old', source: 'workspace', imported: true }]]);
+      assert.throws(() => packs.addPack(db, 'system', { id: 'ms', createdAt: 1700000000000 }), /createdAt must be an ISO time string/);
+      assert.throws(() => packs.addPack(db, 'system', { id: 'ms', lastUsedAt: '2024-01-02' }), /lastUsedAt must be an ISO time string/);
+      assert.throws(() => packs.addPack(db, 'system', { id: 'ms', createdAt: new Date() }), /createdAt must be an ISO time string/);
+      assert.equal(packs.getPack(db, 'ms'), null, 'nothing written');
+      const defaulted = packs.addPack(db, 'alice', { id: 'now', label: 'x'.repeat(200) });
+      assert.equal(defaulted.createdAt, defaulted.lastUsedAt, 'lastUsedAt defaults to createdAt');
+      assert.throws(() => packs.addPack(db, 'alice', { id: 'long', label: 'x'.repeat(201) }), /label must be a non-empty string of at most 200/, 'the repository keeps its limit: the callers clamp');
+      // upsertPack: created → pack.register; changed → pack.update { fields } and last_used_at; equal → a touch, no row.
+      const c = packs.upsertPack(db, 'alice', { id: 'uploaded-checkout-0123abcd', label: 'Checkout', source: 'upload' });
+      assert.deepEqual([c.created, c.changed, c.pack.label, c.pack.source], [true, false, 'Checkout', 'upload']);
+      assert.deepEqual(rows('pack.register').at(-1), ['alice', 'uploaded-checkout-0123abcd', { label: 'Checkout', source: 'upload' }]);
+      const before = packs.getPack(db, 'uploaded-checkout-0123abcd');
+      const u = packs.upsertPack(db, 'alice', { id: 'uploaded-checkout-0123abcd', label: 'Checkout (scanned)', source: 'upload' });
+      assert.deepEqual([u.created, u.changed, u.pack.label, u.pack.source], [false, true, 'Checkout (scanned)', 'upload']);
+      assert.ok(u.pack.lastUsedAt >= before.lastUsedAt, 'last_used_at moves with the update');
+      assert.equal(u.pack.createdAt, before.createdAt);
+      assert.deepEqual(rows('pack.update'), [['alice', 'uploaded-checkout-0123abcd', { fields: ['label'] }]]);
+      const both = packs.upsertPack(db, 'alice', { id: 'uploaded-checkout-0123abcd', label: null, source: 'mcp-notes.yaml' });
+      assert.deepEqual([both.changed, both.pack.label, both.pack.source], [true, null, 'mcp-notes.yaml']);
+      assert.deepEqual(rows('pack.update').at(-1), ['alice', 'uploaded-checkout-0123abcd', { fields: ['label', 'source'] }]);
+      const same = packs.upsertPack(db, 'alice', { id: 'uploaded-checkout-0123abcd', label: null, source: 'mcp-notes.yaml' });
+      assert.deepEqual([same.created, same.changed, same.pack.id], [false, false, 'uploaded-checkout-0123abcd']);
+      assert.equal(rows('pack.update').length, 2, 'an unchanged upsert writes no row');
+      assert.equal(rows('pack.register').length, 3);
+      assert.equal(packs.getPack(db, 'uploaded-checkout-0123abcd').lastUsedAt, same.pack.lastUsedAt, 'but touches');
+      assert.throws(() => packs.upsertPack(db, 'alice', { id: 'uploaded-checkout-0123abcd', label: 'x'.repeat(201) }), /label must be/);
+      // the create details.
+      const svc = services.createService(db, 'alice', { slug: 'checkout', name: 'Checkout' }, { detail: { via: 'register', pack: 'uploaded-checkout-0123abcd' } });
+      const plain = services.createService(db, 'alice', { slug: 'ledger', name: 'Ledger' });
+      assert.deepEqual(rows('service.create'), [['alice', 'checkout', { via: 'register', pack: 'uploaded-checkout-0123abcd' }], ['alice', 'ledger', null]]);
+      const ep = mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'mcp', url: 'https://mcp.acme.example/mcp' });
+      const prod = environments.createEnvironment(db, 'alice', { serviceId: svc.id, name: 'prod', mcpEndpointId: ep.id }, { detail: { via: 'register', pack: 'uploaded-checkout-0123abcd' } });
+      const staging = environments.createEnvironment(db, 'alice', { serviceId: svc.id, name: 'staging' });
+      const ledgerProd = environments.createEnvironment(db, 'alice', { serviceId: plain.id, name: 'prod', mcpEndpointId: ep.id });
+      assert.deepEqual(rows('environment.create'), [['alice', 'checkout/prod', { via: 'register', pack: 'uploaded-checkout-0123abcd' }], ['alice', 'checkout/staging', null], ['alice', 'ledger/prod', null]]);
+      // the environment reads.
+      assert.equal(environments.getEnvironmentByName(db, svc.id, 'prod').id, prod.id);
+      assert.equal(environments.getEnvironmentByName(db, svc.id, 'dev'), null);
+      assert.equal(environments.getEnvironmentByName(db, 999999, 'prod'), null);
+      assert.deepEqual(environments.listEnvironmentsForOrg(db).map((e) => [e.serviceId, e.name]), [[svc.id, 'prod'], [svc.id, 'staging'], [plain.id, 'prod']], 'by service id, then name');
+      assert.deepEqual(environments.countEnvironmentsBoundTo(db, ep.id), [prod.id, ledgerProd.id].sort((x, y) => x - y));
+      assert.deepEqual(environments.countEnvironmentsBoundTo(db, 999999), []);
+      assert.equal(staging.mcpEndpointId, null);
+      // links: slug in the list; ifAbsent; the unlink detail; the org-wide list.
+      const link = packServices.linkPackService(db, 'alice', { packId: 'uploaded-checkout-0123abcd', serviceId: svc.id, role: 'primary' }, { ifAbsent: true });
+      assert.deepEqual([link.role, link.serviceId], ['primary', svc.id]);
+      assert.equal(packServices.linkPackService(db, 'alice', { packId: 'uploaded-checkout-0123abcd', serviceId: svc.id, role: 'primary' }, { ifAbsent: true }), null);
+      assert.equal(packServices.linkPackService(db, 'alice', { packId: 'uploaded-checkout-0123abcd', serviceId: svc.id, role: 'member' }, { ifAbsent: true }), null, 'the pair, in any role');
+      assert.throws(() => packServices.linkPackService(db, 'alice', { packId: 'uploaded-checkout-0123abcd', serviceId: svc.id }), /UNIQUE/, 'without ifAbsent the schema refuses');
+      assert.equal(rows('pack.link').length, 1);
+      packServices.linkPackService(db, 'alice', { packId: 'uploaded-checkout-0123abcd', serviceId: plain.id }, { ifAbsent: true });
+      packServices.linkPackService(db, 'alice', { packId: 'old', serviceId: plain.id, role: 'primary' });
+      assert.deepEqual(packServices.listServicesForPack(db, 'uploaded-checkout-0123abcd').map((l) => [l.role, l.slug, l.serviceId]),
+        [['primary', 'checkout', svc.id], ['member', 'ledger', plain.id]]);
+      assert.deepEqual(packServices.listLinksForOrg(db).map((l) => [l.serviceId, l.role, l.packId, l.label, l.source]), [
+        [svc.id, 'primary', 'uploaded-checkout-0123abcd', null, 'mcp-notes.yaml'],
+        [plain.id, 'primary', 'old', 'Old', 'workspace'],
+        [plain.id, 'member', 'uploaded-checkout-0123abcd', null, 'mcp-notes.yaml'],
+      ], 'by service, primary first, then pack id; with the pack\'s label and source');
+      packServices.unlinkPackService(db, 'alice', 'uploaded-checkout-0123abcd', plain.id, { detail: { service: 'ledger', reason: 'replan' } });
+      packServices.unlinkPackService(db, 'alice', 'old', plain.id);
+      assert.deepEqual(rows('pack.unlink'), [['alice', 'uploaded-checkout-0123abcd', { service: 'ledger', reason: 'replan' }], ['alice', 'old', { service: 'ledger' }]]);
+      // touchMany: one transaction, the count changed, no audit row, ISO strings only.
+      const n = auditRepo.listAudit(db, { orgId: 'acme', limit: 1000 }).length;
+      assert.equal(packs.touchMany(db, [['old', '2032-01-01T00:00:00.000Z'], ['now', '2032-01-02T00:00:00.000Z'], ['missing', '2032-01-03T00:00:00.000Z']]), 2);
+      assert.deepEqual([packs.getPack(db, 'old').lastUsedAt, packs.getPack(db, 'now').lastUsedAt], ['2032-01-01T00:00:00.000Z', '2032-01-02T00:00:00.000Z']);
+      assert.equal(packs.touchMany(db, []), 0);
+      assert.throws(() => packs.touchMany(db, [['old', 1700000000000]]), /at must be an ISO time string/);
+      assert.throws(() => packs.touchMany(db, [['old', new Date()]]), /at must be an ISO time string/);
+      assert.throws(() => packs.touchMany(db, [['old']]), /\[id, at\] entries/);
+      assert.throws(() => packs.touchMany(db, new Map()), /array of \[id, at\] entries/);
+      assert.equal(auditRepo.listAudit(db, { orgId: 'acme', limit: 1000 }).length, n, 'bookkeeping, not audited');
+      // removePack: the action names why; anything else is refused before any write.
+      assert.deepEqual(packs.removePack(db, 'alice', 'old', { action: 'pack.replace', detail: { label: 'Old', replacedBy: 'now' } }).id, 'old');
+      assert.deepEqual(rows('pack.replace'), [['alice', 'old', { label: 'Old', replacedBy: 'now' }]]);
+      packs.addPack(db, 'alice', { id: 'evicted' });
+      packs.removePack(db, 'alice', 'evicted', { action: 'pack.evict', detail: { cap: 200 } });
+      assert.deepEqual(rows('pack.evict'), [['alice', 'evicted', { cap: 200 }]]);
+      assert.throws(() => packs.removePack(db, 'alice', 'now', { action: 'pack.delete' }), /recorded as pack\.remove, pack\.replace, pack\.evict, not "pack\.delete"/);
+      assert.throws(() => packs.removePack(db, 'alice', 'now', { action: 'pack.clear' }), TypeError);
+      assert.ok(packs.getPack(db, 'now'), 'a refused action removes nothing');
+      packs.removePack(db, 'system', 'now', { detail: { reason: 'file gone' } });
+      assert.deepEqual(rows('pack.remove'), [['system', 'now', { reason: 'file gone' }]]);
+      assert.throws(() => packs.removePack(db, 'alice', 'now'), /no pack "now"/);
+      // clearPacks: the links cascade, the services and environments stay, one pack.clear { dropped }.
+      packs.addPack(db, 'alice', { id: 'p2' });
+      packServices.linkPackService(db, 'alice', { packId: 'p2', serviceId: plain.id, role: 'primary' });
+      assert.equal(packs.listPacks(db).length, 2);
+      assert.equal(packs.clearPacks(db, 'alice'), 2);
+      assert.deepEqual(packs.listPacks(db), []);
+      assert.deepEqual(packServices.listLinksForOrg(db), [], 'the links went with the packs');
+      assert.deepEqual(services.listServices(db).map((s) => s.slug), ['checkout', 'ledger'], 'the services stay');
+      assert.equal(environments.listEnvironmentsForOrg(db).length, 3, 'and their environments');
+      assert.deepEqual(rows('pack.clear'), [['alice', null, { dropped: 2 }]]);
+      assert.equal(packs.clearPacks(db, 'alice'), 0);
+      assert.deepEqual(rows('pack.clear').at(-1), ['alice', null, { dropped: 0 }]);
+    });
+    assert.deepEqual(auditActions(db, { orgId: 'acme' }).filter((x) => x.startsWith('pack.')), [
+      'pack.register', 'pack.register', 'pack.register', 'pack.update', 'pack.update',
+      'pack.link', 'pack.link', 'pack.link', 'pack.unlink', 'pack.unlink',
+      'pack.replace', 'pack.register', 'pack.evict', 'pack.remove', 'pack.register', 'pack.link', 'pack.clear', 'pack.clear',
+    ]);
+  } finally {
+    close();
+  }
+});
+
+// The one pack → rows rule (server/store/pack-links.mjs): the plan from
+// tools/lib/service-keys.mjs over the catalogue entry, reconciled with the
+// pack's links — created once, nothing twice, a changed plan unlinks first.
+test('linkPack: creates the service, environment and link rows a pack names once; a second call writes nothing; an aggregate links members only; a moved primary unlinks first; the via vocabulary', async () => {
+  const { db, close } = await freshStore('links');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    const rows = (sinceSeq = 0) => auditRepo.listAudit(db, { orgId: 'acme', limit: 1000 }).filter((r) => r.seq > sinceSeq).reverse().map((r) => [r.action, r.actor, r.targetId, r.detail]);
+    const last = () => auditRepo.listAudit(db, { orgId: 'acme', limit: 1 })[0]?.seq ?? 0;
+    runWithOrg('acme', () => {
+      packs.addPack(db, 'alice', { id: 'p1', label: 'Checkout (scanned)', source: 'upload' });
+      packs.addPack(db, 'alice', { id: 'live', label: 'production-live (live MCP draft)', source: 'production-live (live MCP draft)' });
+      packs.addPack(db, 'alice', { id: 'bare', label: null, source: 'upload' });
+      // A plain pack: primary = service, one environment per binding.
+      const plain = { id: 'p1', label: 'Checkout (scanned)', description: 'Uploaded pack — upload', name: 'checkout', service: 'Checkout', namespace: 'payments', services: ['Checkout', 'payments'], source: 'uploaded' };
+      const c1 = { metadata: { name: 'checkout', bindings: { service: 'Checkout', namespace: 'payments', environments: ['prod', 'staging'] } }, spec: { environments: { prod: {}, dev: {} } } };
+      assert.deepEqual(packLinks.planPackServices(plain, c1), { services: [{ name: 'Checkout', key: 'checkout', role: 'primary' }, { name: 'payments', key: 'payments', role: 'member' }], environments: ['prod', 'dev', 'staging'] });
+      let r = packLinks.linkPack(db, 'alice', { packId: 'p1', entry: plain, canonical: c1, via: 'register' });
+      assert.deepEqual(r, { services: ['checkout', 'payments'], environments: ['checkout/prod', 'checkout/dev', 'checkout/staging', 'payments/prod', 'payments/dev', 'payments/staging'], links: ['checkout', 'payments'], unlinked: [] });
+      assert.deepEqual(rows().map((x) => x[0]).filter((a) => a !== 'pack.register'), [
+        'service.create', 'environment.create', 'environment.create', 'environment.create', 'pack.link',
+        'service.create', 'environment.create', 'environment.create', 'environment.create', 'pack.link',
+      ]);
+      assert.deepEqual(rows().filter((x) => x[0] === 'service.create').map((x) => [x[1], x[2], x[3]]), [['alice', 'checkout', { via: 'register', pack: 'p1' }], ['alice', 'payments', { via: 'register', pack: 'p1' }]]);
+      assert.deepEqual(rows().filter((x) => x[0] === 'pack.link').map((x) => x[3]), [{ service: 'checkout', role: 'primary' }, { service: 'payments', role: 'member' }]);
+      assert.deepEqual(services.listServices(db).map((s) => [s.slug, s.name, s.tier, s.owners]), [['checkout', 'Checkout', null, []], ['payments', 'payments', null, []]], 'tier and owners unset: nothing invented');
+      // The same plan again: nothing.
+      const seq = last();
+      r = packLinks.linkPack(db, 'alice', { packId: 'p1', entry: plain, canonical: c1, via: 'register' });
+      assert.deepEqual(r, { services: [], environments: [], links: [], unlinked: [] });
+      assert.deepEqual(rows(seq), []);
+      // A live aggregate: no primary, members for its discovered services (its own key skipped), environments for every member.
+      const agg = { id: 'live', label: 'production-live (live MCP draft)', description: 'Uploaded pack — production-live (live MCP draft)', name: 'production-live', service: 'production-live', namespace: 'production-live', services: ['checkout', 'ledger', 'production-live'], source: 'uploaded' };
+      const c2 = { metadata: { name: 'production-live', annotations: { 'mcp.servicesDiscovered': 'checkout,ledger,production-live' }, bindings: { environments: ['prod'] } } };
+      r = packLinks.linkPack(db, 'system', { packId: 'live', entry: agg, canonical: c2, via: 'import' });
+      assert.deepEqual(r, { services: ['ledger'], environments: ['ledger/prod'], links: ['checkout', 'ledger'], unlinked: [] });
+      assert.deepEqual(packServices.listServicesForPack(db, 'live').map((l) => [l.role, l.slug]), [['member', 'checkout'], ['member', 'ledger']]);
+      assert.deepEqual(rows(seq).filter((x) => x[0] === 'service.create').map((x) => [x[1], x[2], x[3]]), [['system', 'ledger', { via: 'import', pack: 'live' }]]);
+      // A moved primary (a name-less pack re-labelled): the old primary unlinked FIRST, the new linked — one primary, no UNIQUE failure.
+      const c3 = { metadata: { bindings: { environments: ['prod'] } } };
+      const l1 = { id: 'bare', label: 'L1', description: 'Uploaded pack — upload', service: '', namespace: '', services: [], source: 'uploaded' };
+      const l2 = { ...l1, label: 'L2' };
+      packLinks.linkPack(db, 'alice', { packId: 'bare', entry: l1, canonical: c3, via: 'register' });
+      assert.deepEqual(packServices.listServicesForPack(db, 'bare').map((l) => [l.role, l.slug]), [['primary', 'l1']]);
+      const seq2 = last();
+      r = packLinks.linkPack(db, 'alice', { packId: 'bare', entry: l2, canonical: c3, via: 'register' });
+      assert.deepEqual(r, { services: ['l2'], environments: ['l2/prod'], links: ['l2'], unlinked: ['l1'] });
+      assert.deepEqual(packServices.listServicesForPack(db, 'bare').map((l) => [l.role, l.slug]), [['primary', 'l2']]);
+      assert.deepEqual(rows(seq2).map((x) => [x[0], x[3]]), [
+        ['pack.unlink', { service: 'l1', reason: 'relabelled' }],
+        ['service.create', { via: 'register', pack: 'bare' }], ['environment.create', { via: 'register', pack: 'bare' }], ['pack.link', { service: 'l2', role: 'primary' }],
+      ]);
+      assert.ok(services.getServiceBySlug(db, 'l1'), 'the service the plan no longer names stays: a service without a pack exists');
+      // The same pack as an aggregate (a label with "live"): its primary goes, the members stay; the reason follows the via.
+      const seq3 = last();
+      r = packLinks.linkPack(db, 'system', { packId: 'bare', entry: { ...l2, label: 'bare (live MCP draft)', services: ['checkout'] }, canonical: c3, via: 'adopt' });
+      assert.deepEqual(r, { services: [], environments: [], links: ['checkout'], unlinked: ['l2'] });
+      assert.deepEqual(rows(seq3).map((x) => [x[0], x[3]]), [['pack.unlink', { service: 'l2', reason: 'replan' }], ['pack.link', { service: 'checkout', role: 'member' }]]);
+      // The vocabulary; an unusable environment name is left out; a long display name is cut, its key bounded by the plan.
+      assert.throws(() => packLinks.linkPack(db, 'alice', { packId: 'p1', entry: plain, canonical: c1, via: 'manual' }), /linked via one of register, import, adopt, replace, export, not "manual"/);
+      const longName = `${'Long  '.repeat(35)}name`;   // 214 characters; its key (runs of spaces collapse) 179
+      const c4 = { metadata: { bindings: { service: longName, environments: ['ok', 'x'.repeat(201)] } } };
+      r = packLinks.linkPack(db, 'alice', { packId: 'p1', entry: { ...plain, service: longName, namespace: '', services: [] }, canonical: c4, via: 'register' });
+      assert.deepEqual([r.services.length, r.environments.length, r.unlinked], [1, 1, ['checkout', 'payments']]);
+      const created = services.getServiceBySlug(db, r.services[0]);
+      assert.equal(created.name.length, 200, 'the display name is cut to the text limit');
+      assert.deepEqual(environments.listEnvironments(db, created.id).map((e) => e.name), ['ok'], 'the 201-character environment name is dropped, never cut');
+    });
+  } finally {
+    close();
+  }
+});
+
+// ---------- GAP batch 2: verdicts and waivers ----------
+
+const VERDICT_KEYS = ['orgId', 'packId', 'artefactId', 'artefactKey', 'family', 'status', 'reason', 'behaviorHash', 'actor', 'setAt', 'carriedFrom'];
+const WAIVER_KEYS = ['id', 'orgId', 'serviceId', 'artefactId', 'ruleId', 'reason', 'author', 'expiresAt', 'createdAt', 'revokedAt', 'revokedBy', 'revokeReason'];
+const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+test('verdicts: set (insert, then replace with the transition audited), get, list in artefact order, clear; the statuses and the text rules; a verdict cascades with its pack', async () => {
+  const { db, close } = await freshStore('verdicts');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    const rows = (action) => auditRepo.listAudit(db, { orgId: 'acme', action, limit: 1000 }).reverse().map((r) => [r.actor, r.targetKind, r.targetId, r.detail]);
+    runWithOrg('acme', () => {
+      assert.deepEqual(verdicts.VERDICT_STATUSES, ['trusted', 'suspect', 'failed']);
+      packs.addPack(db, 'alice', { id: 'uploaded-pay-0123abcd', label: 'Pay' });
+      assert.deepEqual(verdicts.listVerdicts(db, 'uploaded-pay-0123abcd'), []);
+      assert.equal(verdicts.getVerdict(db, 'uploaded-pay-0123abcd', 'SLI-01'), null);
+      const first = verdicts.setVerdict(db, 'alice', { packId: 'uploaded-pay-0123abcd', artefactId: 'SLO-01', artefactKey: 'slo::{"id":"a"}', family: 'slo', status: 'suspect', reason: 'window too short', behaviorHash: 'abc123' });
+      assert.equal(first.previous, null);
+      assert.deepEqual(Object.keys(first.verdict), VERDICT_KEYS);
+      assert.ok(ISO_RE.test(first.verdict.setAt));
+      assert.deepEqual({ ...first.verdict, setAt: 'T' }, {
+        orgId: 'acme', packId: 'uploaded-pay-0123abcd', artefactId: 'SLO-01', artefactKey: 'slo::{"id":"a"}', family: 'slo', status: 'suspect',
+        reason: 'window too short', behaviorHash: 'abc123', actor: 'alice', setAt: 'T', carriedFrom: null,
+      });
+      const second = verdicts.setVerdict(db, 'bob', { packId: 'uploaded-pay-0123abcd', artefactId: 'SLI-01', artefactKey: 'sli::{"id":"b"}', family: 'sli', status: 'trusted', behaviorHash: 'def456' });
+      assert.deepEqual([second.verdict.reason, second.verdict.family, second.verdict.actor], [null, 'sli', 'bob']);
+      // A replace: the row is rewritten (actor, time, reason), the previous status returned and audited as `from`.
+      const replaced = verdicts.setVerdict(db, 'carol', { packId: 'uploaded-pay-0123abcd', artefactId: 'SLO-01', artefactKey: 'slo::{"id":"a"}', family: 'slo', status: 'failed', reason: 'x'.repeat(2000), behaviorHash: 'abc123' });
+      assert.deepEqual([replaced.previous.status, replaced.verdict.status, replaced.verdict.actor, replaced.verdict.reason.length], ['suspect', 'failed', 'carol', 2000]);
+      assert.deepEqual(verdicts.listVerdicts(db, 'uploaded-pay-0123abcd').map((v) => [v.artefactId, v.status]), [['SLI-01', 'trusted'], ['SLO-01', 'failed']], 'artefact order');
+      assert.deepEqual(rows('verdict.set'), [
+        ['alice', 'artefact', 'uploaded-pay-0123abcd/SLO-01', { pack: 'uploaded-pay-0123abcd', artefact: 'SLO-01', family: 'slo', from: null, to: 'suspect', reason: 'window too short' }],
+        ['bob', 'artefact', 'uploaded-pay-0123abcd/SLI-01', { pack: 'uploaded-pay-0123abcd', artefact: 'SLI-01', family: 'sli', from: null, to: 'trusted', reason: null }],
+        ['carol', 'artefact', 'uploaded-pay-0123abcd/SLO-01', { pack: 'uploaded-pay-0123abcd', artefact: 'SLO-01', family: 'slo', from: 'suspect', to: 'failed', reason: 'x'.repeat(200) }],
+      ], 'the reason is cut to 200 in the row');
+      // The rules: the status vocabulary, the text limits, an unknown pack; nothing written.
+      const base = { packId: 'uploaded-pay-0123abcd', artefactId: 'SLI-02', artefactKey: 'k', status: 'trusted', behaviorHash: 'h' };
+      assert.throws(() => verdicts.setVerdict(db, 'alice', { ...base, status: 'maybe' }), /a verdict status is one of trusted, suspect, failed, not "maybe"/);
+      assert.throws(() => verdicts.setVerdict(db, 'alice', { ...base, reason: 'x'.repeat(2001) }), /reason must be a non-empty string of at most 2000/);
+      assert.throws(() => verdicts.setVerdict(db, 'alice', { ...base, artefactId: 'x'.repeat(101) }), /artefactId must be a non-empty string of at most 100/);
+      assert.throws(() => verdicts.setVerdict(db, 'alice', { ...base, packId: 'nope' }), /no pack "nope"/);
+      assert.throws(() => verdicts.setVerdict(db, '', base), /needs an actor/);
+      assert.equal(verdicts.getVerdict(db, 'uploaded-pay-0123abcd', 'SLI-02'), null);
+      // clear: the row that was; a second clear is not found.
+      const cleared = verdicts.clearVerdict(db, 'alice', 'uploaded-pay-0123abcd', 'SLI-01');
+      assert.deepEqual([cleared.status, cleared.actor], ['trusted', 'bob']);
+      assert.throws(() => verdicts.clearVerdict(db, 'alice', 'uploaded-pay-0123abcd', 'SLI-01'), /no verdict "uploaded-pay-0123abcd\/SLI-01"/);
+      assert.deepEqual(rows('verdict.clear'), [['alice', 'artefact', 'uploaded-pay-0123abcd/SLI-01', { pack: 'uploaded-pay-0123abcd', artefact: 'SLI-01', from: 'trusted' }]]);
+      // The cascade: the pack's removal drops the verdict, writing no verdict row.
+      packs.removePack(db, 'alice', 'uploaded-pay-0123abcd', { action: 'pack.evict', detail: { cap: 200 } });
+      assert.deepEqual(verdicts.listVerdicts(db, 'uploaded-pay-0123abcd'), []);
+    });
+    assert.deepEqual(auditActions(db, { orgId: 'acme' }), ['pack.register', 'verdict.set', 'verdict.set', 'verdict.set', 'verdict.clear', 'pack.evict']);
+  } finally {
+    close();
+  }
+});
+
+test('verdicts: carryVerdicts writes the replaced pack\'s rows onto the new pack by identity key (carried_from set, a verdict already there wins), drops the rest, one verdict.carry row — none at all for no rows', async () => {
+  const { db, close } = await freshStore('carry');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    runWithOrg('acme', () => {
+      packs.addPack(db, 'alice', { id: 'old', label: 'Pay' });
+      packs.addPack(db, 'alice', { id: 'new', label: 'Pay' });
+      assert.throws(() => verdicts.carryVerdicts(db, 'alice', { fromPackId: 'old', toPackId: 'new', rows: null, map: new Map() }), /rows as an array/);
+      assert.throws(() => verdicts.carryVerdicts(db, 'alice', { fromPackId: 'old', toPackId: 'new', rows: [], map: {} }), /artefact index as a Map/);
+      assert.deepEqual(verdicts.carryVerdicts(db, 'alice', { fromPackId: 'old', toPackId: 'new', rows: [], map: new Map() }), { kept: 0, dropped: [] });
+      assert.deepEqual(auditActions(db, { orgId: 'acme' }), ['pack.register', 'pack.register'], 'no rows, no carry row');
+      verdicts.setVerdict(db, 'alice', { packId: 'old', artefactId: 'SLO-01', artefactKey: 'slo::a', family: 'slo', status: 'trusted', reason: 'ok', behaviorHash: 'h1' });
+      verdicts.setVerdict(db, 'bob', { packId: 'old', artefactId: 'SLO-02', artefactKey: 'slo::b', family: 'slo', status: 'failed', behaviorHash: 'h2' });
+      verdicts.setVerdict(db, 'bob', { packId: 'old', artefactId: 'ALR-01', artefactKey: 'alert::c', family: 'alert_rule', status: 'suspect', behaviorHash: 'h3' });
+      verdicts.setVerdict(db, 'carol', { packId: 'new', artefactId: 'SLO-07', artefactKey: 'slo::b', family: 'slo', status: 'trusted', behaviorHash: 'h2' });
+      const rows = verdicts.listVerdicts(db, 'old');
+      const map = new Map([['slo::a', { artefactId: 'SLO-03', family: 'slo', behaviorHash: 'h1x' }], ['slo::b', { artefactId: 'SLO-07', family: 'slo', behaviorHash: 'h2' }]]);
+      const r = verdicts.carryVerdicts(db, 'alice', { fromPackId: 'old', toPackId: 'new', rows, map });
+      assert.deepEqual(r, { kept: 1, dropped: ['alert::c', 'slo::b'] }, 'alert::c is not in the new pack; slo::b already has a verdict there (it wins) — in the rows\' artefact order');
+      const carried = verdicts.getVerdict(db, 'new', 'SLO-03');
+      assert.deepEqual({ ...carried, setAt: 'T' }, { orgId: 'acme', packId: 'new', artefactId: 'SLO-03', artefactKey: 'slo::a', family: 'slo', status: 'trusted', reason: 'ok', behaviorHash: 'h1x', actor: 'alice', setAt: 'T', carriedFrom: 'old' });
+      assert.equal(carried.setAt, rows.find((v) => v.artefactId === 'SLO-01').setAt, 'the reviewer\'s time travels with the verdict');
+      assert.equal(verdicts.getVerdict(db, 'new', 'SLO-07').actor, 'carol', 'the verdict already on the new pack is untouched');
+      const carry = auditRepo.listAudit(db, { orgId: 'acme', action: 'verdict.carry' }).map((x) => [x.actor, x.targetKind, x.targetId, x.detail]);
+      assert.deepEqual(carry, [['alice', 'pack', 'new', { from: 'old', kept: 1, dropped: ['alert::c', 'slo::b'], droppedCount: 2 }]]);
+      // A reviewer's own record afterwards clears the carry mark.
+      verdicts.setVerdict(db, 'dave', { packId: 'new', artefactId: 'SLO-03', artefactKey: 'slo::a', family: 'slo', status: 'suspect', behaviorHash: 'h1x' });
+      assert.equal(verdicts.getVerdict(db, 'new', 'SLO-03').carriedFrom, null);
+      assert.throws(() => verdicts.carryVerdicts(db, 'alice', { fromPackId: 'old', toPackId: 'gone', rows, map }), /no pack "gone"/);
+    });
+  } finally {
+    close();
+  }
+});
+
+test('waivers: create (the author is the actor), get, list newest first, count, revoke once (history kept, a second revoke refused); the rules; a waiver cascades with its service', async () => {
+  const { db, close } = await freshStore('waivers');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    const rows = (action) => auditRepo.listAudit(db, { orgId: 'acme', action, limit: 1000 }).reverse().map((r) => [r.actor, r.targetKind, r.targetId, r.detail]);
+    runWithOrg('acme', () => {
+      const svc = services.createService(db, 'alice', { slug: 'pay', name: 'Payments' });
+      assert.deepEqual([waivers.listWaivers(db, svc.id), waivers.countWaivers(db, svc.id), waivers.getWaiver(db, 1)], [[], 0, null]);
+      const w1 = waivers.createWaiver(db, 'alice', { serviceId: svc.id, ruleId: 'L3.MUST.recording_rule_per_slo', reason: 'the rule ships next sprint', expiresAt: '2030-01-01T00:00:00.000Z' });
+      assert.deepEqual(Object.keys(w1), WAIVER_KEYS);
+      assert.ok(ISO_RE.test(w1.createdAt));
+      assert.deepEqual({ ...w1, createdAt: 'T' }, {
+        id: w1.id, orgId: 'acme', serviceId: svc.id, artefactId: null, ruleId: 'L3.MUST.recording_rule_per_slo', reason: 'the rule ships next sprint', author: 'alice',
+        expiresAt: '2030-01-01T00:00:00.000Z', createdAt: 'T', revokedAt: null, revokedBy: null, revokeReason: null,
+      });
+      const w2 = waivers.createWaiver(db, 'bob', { serviceId: svc.id, artefactId: 'slos.api_latency', ruleId: 'L4.MUST.multi_window_burn_rate', reason: 'r'.repeat(2000), expiresAt: '2030-06-01T00:00:00.000Z' });
+      assert.deepEqual([w2.artefactId, w2.author, w2.reason.length], ['slos.api_latency', 'bob', 2000]);
+      assert.deepEqual(waivers.listWaivers(db, svc.id).map((w) => w.id), [w2.id, w1.id], 'newest first');
+      assert.equal(waivers.countWaivers(db, svc.id), 2);
+      assert.deepEqual(rows('waiver.create'), [
+        ['alice', 'waiver', String(w1.id), { service: 'pay', ruleId: 'L3.MUST.recording_rule_per_slo', artefactId: null, expiresAt: '2030-01-01T00:00:00.000Z', reason: 'the rule ships next sprint' }],
+        ['bob', 'waiver', String(w2.id), { service: 'pay', ruleId: 'L4.MUST.multi_window_burn_rate', artefactId: 'slos.api_latency', expiresAt: '2030-06-01T00:00:00.000Z', reason: 'r'.repeat(200) }],
+      ]);
+      // The rules: an ISO expiry, a reason, a rule id, a known service; nothing written.
+      const base = { serviceId: svc.id, ruleId: 'x', reason: 'r', expiresAt: '2030-01-01T00:00:00.000Z' };
+      assert.throws(() => waivers.createWaiver(db, 'alice', { ...base, expiresAt: '2030-01-01' }), /expiresAt must be an ISO time string/);
+      assert.throws(() => waivers.createWaiver(db, 'alice', { ...base, reason: '' }), /reason must be a non-empty string of at most 2000/);
+      assert.throws(() => waivers.createWaiver(db, 'alice', { ...base, reason: 'r'.repeat(2001) }), /reason must be a non-empty string of at most 2000/);
+      assert.throws(() => waivers.createWaiver(db, 'alice', { ...base, ruleId: '' }), /ruleId must be a non-empty string/);
+      assert.throws(() => waivers.createWaiver(db, 'alice', { ...base, artefactId: '' }), /artefactId must be a non-empty string/);
+      assert.throws(() => waivers.createWaiver(db, 'alice', { ...base, serviceId: 999 }), /no service 999/);
+      assert.equal(waivers.countWaivers(db, svc.id), 2);
+      // revoke: soft, once.
+      const revoked = waivers.revokeWaiver(db, 'carol', w1.id, { reason: 'the rule shipped' });
+      assert.ok(ISO_RE.test(revoked.revokedAt));
+      assert.deepEqual([revoked.revokedBy, revoked.revokeReason, revoked.reason], ['carol', 'the rule shipped', 'the rule ships next sprint']);
+      assert.equal(waivers.countWaivers(db, svc.id), 2, 'history stays');
+      assert.throws(() => waivers.revokeWaiver(db, 'carol', w1.id), new RegExp(`waiver ${w1.id} is revoked already \\(${revoked.revokedAt.replace(/[.]/g, '\\.')}, by carol\\)`));
+      assert.throws(() => waivers.revokeWaiver(db, 'carol', 999), /no waiver 999/);
+      const w3 = waivers.revokeWaiver(db, 'dave', w2.id);
+      assert.deepEqual([w3.revokedBy, w3.revokeReason], ['dave', null]);
+      assert.deepEqual(rows('waiver.revoke'), [
+        ['carol', 'waiver', String(w1.id), { service: 'pay', ruleId: 'L3.MUST.recording_rule_per_slo', artefactId: null, reason: 'the rule shipped' }],
+        ['dave', 'waiver', String(w2.id), { service: 'pay', ruleId: 'L4.MUST.multi_window_burn_rate', artefactId: 'slos.api_latency', reason: null }],
+      ]);
+      // The cascade: the service's deletion drops its waivers, writing no waiver row.
+      services.deleteService(db, 'alice', svc.id);
+      assert.deepEqual([waivers.listWaivers(db, svc.id), waivers.getWaiver(db, w1.id)], [[], null]);
+    });
+    assert.deepEqual(auditActions(db, { orgId: 'acme' }), ['service.create', 'waiver.create', 'waiver.create', 'waiver.revoke', 'waiver.revoke', 'service.delete']);
+  } finally {
+    close();
+  }
+});
+
+test('Tenancy isolation: org B reads and writes no verdict or waiver of org A\'s', async () => {
+  const { db, close } = await freshStore('iso-v2');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    orgs.createOrg(db, 'system', { id: 'bravo', name: 'Bravo' });
+    const a = runWithOrg('acme', () => {
+      const svc = services.createService(db, 'alice', { slug: 'pay', name: 'Payments' });
+      const pack = packs.addPack(db, 'alice', { id: 'uploaded-pay-0123abcd', label: 'Pay' });
+      const v = verdicts.setVerdict(db, 'alice', { packId: pack.id, artefactId: 'SLI-01', artefactKey: 'k', status: 'trusted', behaviorHash: 'h' }).verdict;
+      const w = waivers.createWaiver(db, 'alice', { serviceId: svc.id, ruleId: 'x', reason: 'r', expiresAt: '2030-01-01T00:00:00.000Z' });
+      return { svc, pack, v, w };
+    });
+    runWithOrg('bravo', () => {
+      assert.deepEqual(verdicts.listVerdicts(db, a.pack.id), []);
+      assert.equal(verdicts.getVerdict(db, a.pack.id, 'SLI-01'), null);
+      assert.throws(() => verdicts.setVerdict(db, 'bob', { packId: a.pack.id, artefactId: 'SLI-01', artefactKey: 'k', status: 'failed', behaviorHash: 'h' }), /no pack/);
+      assert.throws(() => verdicts.clearVerdict(db, 'bob', a.pack.id, 'SLI-01'), /no verdict/);
+      assert.throws(() => verdicts.carryVerdicts(db, 'bob', { fromPackId: a.pack.id, toPackId: a.pack.id, rows: [a.v], map: new Map([['k', { artefactId: 'SLI-01', family: null, behaviorHash: 'h' }]]) }), /no pack/);
+      assert.deepEqual([waivers.listWaivers(db, a.svc.id), waivers.countWaivers(db, a.svc.id), waivers.getWaiver(db, a.w.id)], [[], 0, null]);
+      assert.throws(() => waivers.createWaiver(db, 'bob', { serviceId: a.svc.id, ruleId: 'x', reason: 'r', expiresAt: '2030-01-01T00:00:00.000Z' }), /no service/);
+      assert.throws(() => waivers.revokeWaiver(db, 'bob', a.w.id), /no waiver/);
+    });
+    runWithOrg('acme', () => {
+      assert.deepEqual([verdicts.getVerdict(db, a.pack.id, 'SLI-01').status, waivers.getWaiver(db, a.w.id).revokedAt], ['trusted', null]);
+    });
+    assert.deepEqual(auditActions(db, { orgId: 'bravo' }), []);
+    assert.deepEqual(auditActions(db, { orgId: 'acme' }), ['service.create', 'pack.register', 'verdict.set', 'waiver.create']);
   } finally {
     close();
   }
@@ -1144,7 +1752,192 @@ test('an MCP endpoint URL carrying a secret is refused, on create and update, wi
   }
 });
 
-test('Concurrency: a repository write waits out a child holding BEGIN IMMEDIATE, then succeeds with its audit row', async () => {
+// Slice 4 §7.5: the credential test is the word rule of
+// tools/lib/mcp-url-safety.mjs (names echoed, never values), and
+// readTokenEnv is restricted to this org's variables.
+test('an MCP endpoint URL is refused exactly when stripMcpUrl would drop something, naming the parameters', async () => {
+  const { db, close } = await freshStore('mcp-url-words');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    runWithOrg('acme', () => {
+      const ep = mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'ok', url: 'https://mcp.example/sse?signal=1&design=2&author=me&tier=x' });
+      assert.equal(ep.url, 'https://mcp.example/sse?signal=1&design=2&author=me&tier=x', 'a credential word INSIDE a name is not a credential');
+      const refused = [
+        ['https://mcp.example/sse?token=s3cr3t', '"token"'],
+        ['https://mcp.example/sse?api_key=s3cr3t', '"api_key"'],
+        ['https://mcp.example/sse?X-Amz-Signature=s3cr3t', '"X-Amz-Signature"'],
+        ['https://mcp.example/sse?%74oken=s3cr3t', '"token"'],
+        ['https://mcp.example/sse?tier=x;pwd=s3cr3t', '"tier"'],
+        ['https://mcp.example/sse?token=s3cr3t&transport=sse&sig=s3cr3t', '"token", "sig"'],
+      ];
+      for (const [url, names] of refused) {
+        const text = `observogram store: an MCP endpoint URL may not carry credentials in its query — the parameter(s) ${names} look like credentials; remove them and name an env var in readTokenEnv`;
+        for (const write of [
+          () => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'leaky', url }),
+          () => mcpEndpoints.updateMcpEndpoint(db, 'alice', ep.id, { url }),
+        ]) {
+          assert.throws(write, (e) => e instanceof TypeError && e.message === text, url);
+        }
+      }
+      assert.throws(() => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'u', url: 'https://alice:s3cr3t@mcp.example/' }),
+        (e) => e.message === 'observogram store: an MCP endpoint URL may not carry credentials — name an env var in readTokenEnv');
+      assert.throws(() => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'f', url: 'https://mcp.example/#token=s3cr3t' }),
+        (e) => e.message === 'observogram store: an MCP endpoint URL has no fragment');
+      assert.deepEqual(mcpEndpoints.listMcpEndpoints(db).map((e) => e.name), ['ok']);
+      assert.ok(!('CREDENTIAL_PARAM' in mcpEndpoints), 'the substring regex is gone');
+      // The same rule for another field's URL: the API's text, no store prefix.
+      assert.equal(mcpEndpoints.assertNoCredential('https://grafana.example/d/abc?orgId=1&design=x', 'endpoints.grafana'), 'https://grafana.example/d/abc?orgId=1&design=x');
+      for (const [url, note] of [
+        ['https://grafana.example/d/abc?token=s3cr3t&apiKey=s3cr3t', 'the parameter(s) "token", "apiKey", which look like credentials'],
+        ['https://me:s3cr3t@grafana.example/', 'userinfo'],
+        ['https://grafana.example/#access_token=s3cr3t', 'a fragment'],
+      ]) {
+        assert.throws(() => mcpEndpoints.assertNoCredential(url, 'endpoints.grafana'),
+          (e) => e instanceof TypeError && e.message === `endpoints.grafana carries ${note} — a token goes in the auth field, never in a URL`, url);
+      }
+    });
+  } finally {
+    close();
+  }
+});
+
+test('readTokenEnv names a variable of this org: OBSERVOGRAM_ORG_<KEY>_<NAME>, owned by the longest org prefix', async () => {
+  const { db, close } = await freshStore('mcp-env-owner');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    orgs.createOrg(db, 'system', { id: 'acme-eu', name: 'Acme EU' });
+    orgs.createOrg(db, 'system', { id: 'bravo', name: 'Bravo' });
+    orgs.createOrg(db, 'system', { id: 'a-b', name: 'A-B' });
+    orgs.createOrg(db, 'system', { id: 'a_b', name: 'A_B' });
+    orgs.createOrg(db, 'system', { id: 'gone', name: 'Gone' });
+    orgs.removeOrg(db, 'system', 'gone');
+    assert.equal(mcpEndpoints.orgEnvPrefix('pay-eu'), 'OBSERVOGRAM_ORG_PAY_EU_');
+    assert.deepEqual(mcpEndpoints.envNameOwnedBy(db, 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN'), ['acme']);
+    assert.deepEqual(mcpEndpoints.envNameOwnedBy(db, 'OBSERVOGRAM_ORG_ACME_EU_TOKEN'), ['acme-eu'], 'the longest prefix wins');
+    assert.deepEqual(mcpEndpoints.envNameOwnedBy(db, 'OBSERVOGRAM_ORG_A_B_X'), ['a-b', 'a_b'], 'a KEY tie');
+    assert.deepEqual(mcpEndpoints.envNameOwnedBy(db, 'OBSERVOGRAM_ORG_GONE_X'), ['gone'], 'a removed org keeps its variables');
+    assert.deepEqual(mcpEndpoints.envNameOwnedBy(db, 'OBSERVOGRAM_ORG_NOBODY_X'), []);
+    assert.deepEqual(mcpEndpoints.envNameOwnedBy(db, 'OBSERVOGRAM_ORG_ACME_'), [], 'an empty NAME is nobody\'s');
+    assert.deepEqual(mcpEndpoints.envNameOwnedBy(db, 42), []);
+    const shape = (name, key) => `observogram store: readTokenEnv names an env var of this org, OBSERVOGRAM_ORG_<KEY>_<NAME> with <NAME> of [A-Z0-9_]+ (for example OBSERVOGRAM_ORG_${key}_MCP_TOKEN), not ${JSON.stringify(name)} — an admin may only name variables set aside for their org`;
+    const owner = (name, orgList) => `observogram store: ${name} belongs to org ${orgList} (the longest org prefix wins) — an admin may only name variables set aside for their org`;
+    const create = (name, readTokenEnv) => mcpEndpoints.createMcpEndpoint(db, 'alice', { name, url: 'https://mcp.example/mcp', readTokenEnv });
+    const refusedWith = (text) => (e) => e instanceof TypeError && e.message === text;
+    runWithOrg('acme', () => {
+      assert.equal(create('a', 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN').readTokenEnv, 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN');
+      assert.equal(create('b', 'OBSERVOGRAM_ORG_ACME_TOKEN').readTokenEnv, 'OBSERVOGRAM_ORG_ACME_TOKEN');
+      assert.equal(create('c', null).readTokenEnv, null);
+      assert.equal(create('d').readTokenEnv, null);
+      assert.throws(() => create('e', 'MCP_TOKEN'), refusedWith(shape('MCP_TOKEN', 'ACME')));
+      assert.throws(() => create('e', 'OBSERVOGRAM_SESSION_SECRET'), refusedWith(shape('OBSERVOGRAM_SESSION_SECRET', 'ACME')));
+      assert.throws(() => create('e', 'observogram_org_acme_x'), refusedWith(shape('observogram_org_acme_x', 'ACME')), 'upper case only');
+      assert.throws(() => create('e', 'OBSERVOGRAM_ORG_ACME_'), refusedWith(shape('OBSERVOGRAM_ORG_ACME_', 'ACME')));
+      assert.throws(() => create('e', 'OBSERVOGRAM_ORG_NOBODY_X'), refusedWith(shape('OBSERVOGRAM_ORG_NOBODY_X', 'ACME')), 'nobody\'s is refused with the shape text');
+      assert.throws(() => create('e', 'OBSERVOGRAM_ORG_ACME_EU_TOKEN'), refusedWith(owner('OBSERVOGRAM_ORG_ACME_EU_TOKEN', 'acme-eu')), 'starts with acme\'s prefix, but is acme-eu\'s');
+      assert.throws(() => create('e', 'OBSERVOGRAM_ORG_GONE_X'), refusedWith(owner('OBSERVOGRAM_ORG_GONE_X', 'gone')), 'a removed org\'s variable is nobody else\'s');
+      assert.throws(() => create('e', 'OBSERVOGRAM_ORG_A_B_X'), refusedWith(owner('OBSERVOGRAM_ORG_A_B_X', 'a-b, a_b')));
+      assert.throws(() => create('e', 42), refusedWith(shape(42, 'ACME')));
+      // On update too; the audit rows carry the origin and the NAME (never the URL's path or query).
+      const ep = mcpEndpoints.getMcpEndpoint(db, create('f', 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN').id);
+      assert.throws(() => mcpEndpoints.updateMcpEndpoint(db, 'alice', ep.id, { readTokenEnv: 'OBSERVOGRAM_ORG_ACME_EU_TOKEN' }), refusedWith(owner('OBSERVOGRAM_ORG_ACME_EU_TOKEN', 'acme-eu')));
+      assert.equal(mcpEndpoints.updateMcpEndpoint(db, 'alice', ep.id, { readTokenEnv: null }).readTokenEnv, null);
+      assert.equal(mcpEndpoints.updateMcpEndpoint(db, 'alice', ep.id, { url: 'https://mcp2.example:8443/x/mcp?transport=sse', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_OTHER' }).readTokenEnv, 'OBSERVOGRAM_ORG_ACME_OTHER');
+      assert.deepEqual(mcpEndpoints.deleteMcpEndpoint(db, 'alice', ep.id).name, 'f');
+      assert.deepEqual(auditRepo.listAudit(db, { orgId: 'acme', limit: 1000 }).reverse().filter((r) => r.targetId === 'f').map((r) => [r.action, r.detail]), [
+        ['mcp_endpoint.create', { fields: ['name', 'url', 'readTokenEnv'], origin: 'https://mcp.example', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' }],
+        ['mcp_endpoint.update', { fields: ['readTokenEnv'], origin: 'https://mcp.example', readTokenEnv: null }],
+        ['mcp_endpoint.update', { fields: ['url', 'readTokenEnv'], origin: 'https://mcp2.example:8443', readTokenEnv: 'OBSERVOGRAM_ORG_ACME_OTHER' }],
+        ['mcp_endpoint.delete', { origin: 'https://mcp2.example:8443', unbound: 0 }],
+      ]);
+      assert.equal(auditRepo.listAudit(db, { orgId: 'acme', limit: 1000 }).filter((r) => r.action === 'mcp_endpoint.create').length, 5, 'a refused create writes no row');
+    });
+    runWithOrg('acme-eu', () => {
+      assert.equal(create('a', 'OBSERVOGRAM_ORG_ACME_EU_TOKEN').readTokenEnv, 'OBSERVOGRAM_ORG_ACME_EU_TOKEN');
+      assert.throws(() => create('b', 'OBSERVOGRAM_ORG_ACME_TOKEN'), refusedWith(owner('OBSERVOGRAM_ORG_ACME_TOKEN', 'acme')));
+      assert.throws(() => create('b', 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN'), refusedWith(owner('OBSERVOGRAM_ORG_ACME_MCP_TOKEN', 'acme')));
+      assert.throws(() => create('b', 'MCP_TOKEN'), refusedWith(shape('MCP_TOKEN', 'ACME_EU')), 'the example names this org\'s prefix');
+    });
+    runWithOrg('bravo', () => {
+      assert.throws(() => create('a', 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN'), refusedWith(owner('OBSERVOGRAM_ORG_ACME_MCP_TOKEN', 'acme')));
+      assert.equal(create('a', 'OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN').readTokenEnv, 'OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN');
+    });
+    runWithOrg('a-b', () => assert.equal(create('a', 'OBSERVOGRAM_ORG_A_B_X').readTokenEnv, 'OBSERVOGRAM_ORG_A_B_X', 'a tie that includes the context org passes'));
+    runWithOrg('a_b', () => assert.equal(create('a', 'OBSERVOGRAM_ORG_A_B_X').readTokenEnv, 'OBSERVOGRAM_ORG_A_B_X'));
+    // The delete row counts the environments it unbinds.
+    runWithOrg('bravo', () => {
+      const ep = mcpEndpoints.listMcpEndpoints(db)[0];
+      const svc = services.createService(db, 'bob', { slug: 'pay', name: 'Pay' });
+      environments.createEnvironment(db, 'bob', { serviceId: svc.id, name: 'prod', mcpEndpointId: ep.id });
+      environments.createEnvironment(db, 'bob', { serviceId: svc.id, name: 'staging', mcpEndpointId: ep.id });
+      assert.equal(mcpEndpoints.countBound(db, ep.id), 2);
+      mcpEndpoints.deleteMcpEndpoint(db, 'bob', ep.id);
+      assert.deepEqual(auditRepo.listAudit(db, { orgId: 'bravo', action: 'mcp_endpoint.delete' }).map((r) => r.detail), [{ origin: 'https://mcp.example', unbound: 2 }]);
+      assert.deepEqual(environments.listEnvironmentsForOrg(db).map((e) => e.mcpEndpointId), [null, null]);
+    });
+  } finally {
+    close();
+  }
+});
+
+// A notify hook's variables go only to that hook's webhook
+// (server/notify-target-policy.mjs, the follow-up journey-notify-env-ownership,
+// N6): readTokenEnv never names a variable with the shape of ANY org's hook.
+test('readTokenEnv never names a notify hook\'s variable: the URL or TOKEN shape of any org\'s hook, live or removed, whoever owns the name, is refused on create and update with an example that is not itself one, no row; acme-notify cannot read acme\'s hook token; an origin list or a key is no hook', async () => {
+  const { db, close } = await freshStore('mcp-env-hook');
+  try {
+    for (const id of ['acme', 'acme-notify', 'bravo', 'old', 'old-notify']) orgs.createOrg(db, 'system', { id, name: id });
+    orgs.removeOrg(db, 'system', 'old');
+    const hook = (name, example) => `observogram store: ${name} has the shape of a notify hook's variable (OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL or _TOKEN), which the server sends only to its own webhook — name another variable of this org (for example ${example})`;
+    const owner = (name, orgList) => `observogram store: ${name} belongs to org ${orgList} (the longest org prefix wins) — an admin may only name variables set aside for their org`;
+    const create = (name, readTokenEnv) => mcpEndpoints.createMcpEndpoint(db, 'alice', { name, url: 'https://mcp.example/mcp', readTokenEnv });
+    const refusedWith = (text) => (e) => e instanceof TypeError && e.message === text;
+    const endpointRows = () => auditRepo.listAudit(db, { limit: 1000 }).filter((r) => r.action.startsWith('mcp_endpoint.')).length;
+    runWithOrg('bravo', () => {
+      for (const name of ['OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_URL', 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_TOKEN', 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_PLATFORM_ALERTS_TOKEN']) {
+        assert.throws(() => create('h', name), refusedWith(hook(name, 'OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN')), name);
+      }
+      assert.equal(mcpEndpoints.envNameHookText(db, 'X', 'bravo'), hook('X', 'OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN'));
+      assert.equal(endpointRows(), 0, 'a refused create writes no row');
+      const ep = create('ok', 'OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN');
+      assert.equal(ep.readTokenEnv, 'OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN', 'the example is accepted');
+      // By shape only: the org's notify origin list, a NOTIFY_ name with no hook word, a hook word not ending _URL or _TOKEN.
+      for (const name of ['OBSERVOGRAM_ORG_BRAVO_NOTIFY_ORIGINS', 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_URL', 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_KEY']) {
+        assert.equal(mcpEndpoints.isOrgHookShaped(db, name), false, name);
+        assert.equal(create(name.toLowerCase(), name).readTokenEnv, name, name);
+      }
+      assert.throws(() => mcpEndpoints.updateMcpEndpoint(db, 'alice', ep.id, { readTokenEnv: 'OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_TOKEN' }),
+        refusedWith(hook('OBSERVOGRAM_ORG_BRAVO_NOTIFY_ONCALL_TOKEN', 'OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN')), 'on update too');
+      assert.equal(mcpEndpoints.getMcpEndpoint(db, ep.id).readTokenEnv, 'OBSERVOGRAM_ORG_BRAVO_MCP_TOKEN', 'a refused update changes nothing');
+      assert.equal(endpointRows(), 4, 'four creates, no row for a refusal');
+    });
+    // acme-notify owns every OBSERVOGRAM_ORG_ACME_NOTIFY_* name by the longest
+    // prefix — acme's hook token included, which it could otherwise read as
+    // its MCP token (C-F7). Its own <P>MCP_TOKEN is acme's hook MCP's token,
+    // so the example it is given is <P>MCP_READ_KEY.
+    runWithOrg('acme-notify', () => {
+      const ONCALL_TOKEN = 'OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_TOKEN';
+      assert.deepEqual(mcpEndpoints.envNameOwnedBy(db, ONCALL_TOKEN), ['acme-notify']);
+      for (const name of [ONCALL_TOKEN, 'OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_URL', 'OBSERVOGRAM_ORG_ACME_NOTIFY_MCP_TOKEN']) {
+        assert.throws(() => create('h', name), refusedWith(hook(name, 'OBSERVOGRAM_ORG_ACME_NOTIFY_MCP_READ_KEY')), name);
+      }
+      assert.equal(create('ok', 'OBSERVOGRAM_ORG_ACME_NOTIFY_MCP_READ_KEY').readTokenEnv, 'OBSERVOGRAM_ORG_ACME_NOTIFY_MCP_READ_KEY', 'the example is accepted');
+    });
+    // acme itself: its hook names are acme-notify's by the general rule, refused as such.
+    runWithOrg('acme', () => {
+      assert.throws(() => create('h', 'OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_TOKEN'), refusedWith(owner('OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_TOKEN', 'acme-notify')));
+      assert.equal(create('ok', 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN').readTokenEnv, 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN');
+    });
+    // A removed org's hook shape still counts: old's hooks are nobody's MCP token.
+    runWithOrg('old-notify', () => {
+      assert.throws(() => create('h', 'OBSERVOGRAM_ORG_OLD_NOTIFY_ONCALL_TOKEN'), refusedWith(hook('OBSERVOGRAM_ORG_OLD_NOTIFY_ONCALL_TOKEN', 'OBSERVOGRAM_ORG_OLD_NOTIFY_MCP_READ_KEY')));
+    });
+    assert.equal(endpointRows(), 6, 'only the accepted creates wrote a row');
+  } finally {
+    close();
+  }
+});
+
+test('Concurrency: a repository write waits out a child holding BEGIN IMMEDIATE, then succeeds with its audit row', async (t) => {
   const { path, db, close } = await freshStore('conc-repo');
   try {
     const holder = lockHolder(path, 700);
@@ -1153,6 +1946,7 @@ test('Concurrency: a repository write waits out a child holding BEGIN IMMEDIATE,
     users.createUser(db, 'system', { login: 'patient' });
     const waited = Date.now() - t0;
     assert.equal((await holder.exited(10_000, 'the repository write')).code, 0);
+    t.diagnostic(`bound: the repository write waited on the lock: ${waited} ms >= 300 ms of a 700 ms hold`);
     assert.ok(waited >= 300, `waited ${waited} ms`);
     assert.ok(users.getUserByLogin(db, 'patient'));
     assert.deepEqual(auditActions(db), ['user.create']);
@@ -1175,7 +1969,8 @@ function packc(args, env) {
     let stderr = '';
     proc.stdout.on('data', (b) => { stdout += b; });
     proc.stderr.on('data', (b) => { stderr += b; });
-    proc.on('exit', (code, signal) => res({ code, signal, stdout, stderr }));
+    // 'close': the output read to its end (see child()).
+    proc.on('close', (code, signal) => res({ code, signal, stdout, stderr }));
   });
 }
 
@@ -1205,7 +2000,7 @@ async function readStore(path) {
   }
 }
 
-test('packc store backup: refuses :memory:, a missing database (creating none) and an existing target; usage is exit 2', async () => {
+test('packc store backup: refuses :memory:, a missing database (creating none) and an existing target; usage is exit 2', async (t) => {
   const dir = tempDir('bk-refuse');
   const dbPath = join(dir, 'observogram.db');
   let r = await packc(['store', 'backup', join(dir, 'a.db')], { OBSERVOGRAM_DB: ':memory:' });
@@ -1222,22 +2017,26 @@ test('packc store backup: refuses :memory:, a missing database (creating none) a
   r = await packc(['store', 'backup', dbPath], { OBSERVOGRAM_DB: dbPath });
   assert.equal(r.code, 1);
   assert.match(r.stderr, /is the database itself/);
-  // The database's own -wal/-shm/-journal, also named through a symlinked
-  // directory: a backup there reads "written" and the next open deletes it.
-  const via = join(dir, 'via');
-  symlinkSync(dir, via);
-  r = await packc(['store', 'backup', join(via, 'observogram.db')], { OBSERVOGRAM_DB: dbPath });
-  assert.equal(r.code, 1);
-  assert.match(r.stderr, /is the database itself/);
-  for (const sfx of ['-wal', '-shm', '-journal']) {
-    for (const dest of [`${dbPath}${sfx}`, join(via, `observogram.db${sfx}`)]) {
-      r = await packc(['store', 'backup', dest], { OBSERVOGRAM_DB: dbPath });
-      assert.equal(r.code, 1, dest);
-      assert.match(r.stderr, new RegExp(`is the database's own ${sfx} file`));
-      assert.equal(existsSync(`${dbPath}${sfx}`), false, dest);
-      assert.equal(existsSync(`${dbPath}${sfx}.tmp`), false, dest);
-    }
-  }
+  // The database's own -wal/-shm/-journal: a backup there reads "written"
+  // and the next open deletes it, so it is refused as that file (and the
+  // refusal creates neither it nor its .tmp).
+  const ownSidecarRefused = async (dest, sfx) => {
+    r = await packc(['store', 'backup', dest], { OBSERVOGRAM_DB: dbPath });
+    assert.equal(r.code, 1, dest);
+    assert.match(r.stderr, new RegExp(`is the database's own ${sfx} file`));
+    assert.equal(existsSync(`${dbPath}${sfx}`), false, dest);
+    assert.equal(existsSync(`${dbPath}${sfx}.tmp`), false, dest);
+  };
+  for (const sfx of ['-wal', '-shm', '-journal']) await ownSidecarRefused(`${dbPath}${sfx}`, sfx);
+  // The same names through a symlinked directory (a privilege on Windows).
+  await t.test('the database named through a symlinked directory is the database itself, its sidecars too', { skip: win32Skip(WIN32.symlinks) }, async () => {
+    const via = join(dir, 'via');
+    symlinkSync(dir, via);
+    r = await packc(['store', 'backup', join(via, 'observogram.db')], { OBSERVOGRAM_DB: dbPath });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /is the database itself/);
+    for (const sfx of ['-wal', '-shm', '-journal']) await ownSidecarRefused(join(via, `observogram.db${sfx}`), sfx);
+  });
   // A database named *.tmp is the backup's temporary file for the name
   // without it: refused as that, not as an interrupted backup to remove.
   const tmpNamed = join(dir, 'live.tmp');
@@ -1282,7 +2081,7 @@ test('packc store backup while a server holds the store: every committed row, no
     assert.equal((await writer.exited(10_000, 'the backup')).code, 0);
     const got = await readStore(dest);
     assert.match(r.stdout, new RegExp(`backup written: ${dest.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
-    assert.match(r.stdout, new RegExp(`store_id: ${got.storeId} \\(schema v1`));
+    assert.match(r.stdout, new RegExp(`store_id: ${got.storeId} \\(schema v2`));
     assert.deepEqual(got.logins, ['committed-before']);
     assert.equal(got.journal, 'delete', 'a VACUUM INTO file is rollback-journal');
     const raw = await openRaw(dest);
@@ -1295,7 +2094,7 @@ test('packc store backup while a server holds the store: every committed row, no
   }
 });
 
-test('packc store restore: refuses while the server holds the store (even idle), a foreign file, a missing one and :memory:', async () => {
+test('packc store restore: refuses while the server holds the store (even idle), a foreign file, a missing one and :memory:', { skip: win32Skip('signal semantics: the holder is ended by TerminateProcess, so its -wal/-shm survive and the final directory listing differs') }, async () => {
   const dir = tempDir('rs-refuse');
   const dbPath = join(dir, 'observogram.db');
   const backup = join(dir, 'b.db');
@@ -1401,7 +2200,7 @@ test('packc store restore end to end: the in-use probe checkpoints an unclean st
 
   const r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: dbPath });
   assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stdout, new RegExp(`store_id: ${backupId} \\(schema v1\\); previous store_id: ${backupId}`));
+  assert.match(r.stdout, new RegExp(`store_id: ${backupId} \\(schema v2\\); previous store_id: ${backupId}`));
   assert.match(r.stdout, /moved aside: .*observogram\.db\.pre-restore-\d{8}T\d{9}Z/);
   assert.match(r.stdout, /in WAL mode already/);
   const aside = readdirSync(dir).filter((n) => n.startsWith('observogram.db.pre-restore-') && !/-(wal|shm)$/.test(n));
@@ -1430,7 +2229,7 @@ test('packc store restore end to end: the in-use probe checkpoints an unclean st
   assert.notEqual(otherId, backupId);
   const r2 = await packc(['store', 'restore', otherBackup], { OBSERVOGRAM_DB: dbPath });
   assert.equal(r2.code, 0, r2.stderr);
-  assert.match(r2.stdout, new RegExp(`store_id: ${otherId} \\(schema v1\\); previous store_id: ${backupId}`));
+  assert.match(r2.stdout, new RegExp(`store_id: ${otherId} \\(schema v2\\); previous store_id: ${backupId}`));
 
   // A fresh deployment with no database yet: restore just puts it in place.
   const freshPath = join(tempDir('rs-fresh'), 'db', 'observogram.db');
@@ -1484,7 +2283,7 @@ test('packc store restore with a -wal and -shm but no database to probe: they mo
   }
 });
 
-test('packc store restore gives the restored file the replaced store\'s mode (owner read-write, 0600 when there was none), not the backup\'s, and it opens in WAL', async () => {
+test('packc store restore gives the restored file the replaced store\'s mode (owner read-write, 0600 when there was none), not the backup\'s, and it opens in WAL', { skip: win32Skip(WIN32.modes) }, async () => {
   const dir = tempDir('rs-mode');
   const dbPath = join(dir, 'observogram.db');
   await openStore({ path: dbPath });
@@ -1543,7 +2342,7 @@ test('packc store restore gives the restored file the replaced store\'s mode (ow
   }
 });
 
-test('the store holds password records, so no file it creates is group or world readable: the database and its -wal/-shm, a backup, a restored database and the moved-aside files are 0600', async () => {
+test('the store holds password records, so no file it creates is group or world readable: the database and its -wal/-shm, a backup, a restored database and the moved-aside files are 0600', { skip: win32Skip(WIN32.modes) }, async () => {
   const dir = tempDir('modes');
   const dbPath = join(dir, 'db', 'observogram.db');
   const modeOf = (p) => statSync(p).mode & 0o777;
@@ -2569,7 +3368,7 @@ test('identity-admin createOrgFromAdmin on the API: a server without identity is
     const alice = admin.addLocalUser(db, 'cli', { login: 'alice', password: 'pw123456' }).user;
     const n = trail(db).length;
     const offText = 'creating a second org needs identity: this server runs with OBSERVOGRAM_AUTH=off, and a second org would make its next start refuse — '
-      + 'restart it without OBSERVOGRAM_AUTH=off and sign in as an owner (npm run users -- add <login> first when no user exists), or configure OIDC';
+      + 'restart it without OBSERVOGRAM_AUTH=off, once a user exists (npm run users -- add <login>) or with OIDC configured, and sign in as an owner';
     const api = { base, serverIdentity: true, authOff: false, surface: 'api' };
     assert.throws(() => admin.createOrgFromAdmin(db, 'local', { ...api, id: 'Bad!', serverIdentity: false, authOff: true }), refusedAs(offText, 'conflict'),
       'before the id is checked');
@@ -2739,7 +3538,7 @@ test('identity-admin setJoinRole: a role, or null / "none" for no automatic join
     const n = trail(db).length;
     assert.deepEqual(admin.setJoinRole(db, 'olive', 'viewer'), { role: 'viewer', from: null, changed: true });
     assert.deepEqual(admin.setJoinRole(db, 'olive', ' viewer '), { role: 'viewer', from: 'viewer', changed: false });
-    const risk = 'every user the IdP lets in would become an admin of default — its name, its members and, from slice 4, its MCP endpoints; '
+    const risk = 'every user the IdP lets in would become an admin of default — its name, its members and its MCP endpoints; '
       + 'to add admins one by one use POST /api/org/members with {"role": "admin"}, or send {"role": "admin", "confirm": true}';
     for (const confirm of [undefined, false, 'true', 1]) {
       assert.throws(() => admin.setJoinRole(db, 'olive', 'admin', { confirm }), refusedAs(risk, 'conflict'), String(confirm));

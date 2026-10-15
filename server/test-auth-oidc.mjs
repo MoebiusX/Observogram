@@ -11,7 +11,7 @@
 
 import { createServer } from 'node:http';
 import { createHash, createHmac, createSign, generateKeyPairSync, randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -106,34 +106,41 @@ issuer = `http://127.0.0.1:${idp.address().port}`;
 
 // ---------- boot the server in OIDC posture ----------
 
+// Hermetic (§0): a developer shell's store, identity, taxonomy, transport-hook
+// or brand variables never reach this process's imports — the children's STRIP
+// list (server/fixtures/serve-child.mjs imports no server code), both
+// spellings, BEFORE the suite sets its own posture and before any server
+// module loads (every server import below is dynamic: a static one is
+// hoisted above this line). server/test-hermetic-suites.mjs guards the shape.
+const { STRIP } = await import('./fixtures/serve-child.mjs');
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
+// Each block's database lives in its own workspace (docs/STORE_PLAN.md slice 2).
 const WORKSPACE = mkdtempSync(join(tmpdir(), 'observogram-auth-oidc-'));
 process.env.OBSERVOGRAM_WORKSPACE = WORKSPACE;
 process.env.OBSERVOGRAM_OIDC_ISSUER = issuer;
 process.env.OBSERVOGRAM_OIDC_CLIENT_ID = CLIENT_ID;
 process.env.OBSERVOGRAM_OIDC_ALLOW_HTTP = '1';
 process.env.OBSERVOGRAM_SESSION_SECRET = 'test-session-secret-0123456789-abcdef-XYZ';
-delete process.env.OBSERVOGRAM_OIDC_CLIENT_SECRET;
-delete process.env.OBSERVOGRAM_API_TOKEN;
-delete process.env.OBSERVOGRAM_USERS_FILE;
-delete process.env.OBSERVOGRAM_AUTH;
-delete process.env.TOMOGRAPH_AUTH;
-// Hermetic store (docs/STORE_PLAN.md slice 2): each block's database lives
-// in its own workspace.
-for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH']) {
-  delete process.env[`OBSERVOGRAM_${k}`];
-  delete process.env[`TOMOGRAPH_${k}`];
-}
 
 const { start } = await import('./index.mjs');
-const { currentStore } = await import('./store/db.mjs');
+const { currentStore, closeStore } = await import('./store/db.mjs');
 const { createUser, getUserByLogin, listUsers, setDisabled } = await import('./store/users.mjs');
 const { hashPassword } = await import('./auth.mjs');
 const { listMembershipsForUser } = await import('./store/memberships.mjs');
 const { getMeta } = await import('./store/meta.mjs');
 const { listAudit } = await import('./store/audit.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
+const { orgWorkspaceRoot, runWithOrg } = await import('./tenancy.mjs');
+const { createMcpEndpoint } = await import('./store/mcp-endpoints.mjs');
 const srv = await start({ port: 0, host: '127.0.0.1', silent: true });
 const base = `http://127.0.0.1:${srv.address().port}`;
+// The unreachable MCP as the default org's endpoint, planted through the
+// repository before any request: the OIDC operator below deploys by its id,
+// as every caller below the admin does.
+const NO_MCP_ID = runWithOrg('default', () => createMcpEndpoint(currentStore(), 'system', { name: 'unreachable', url: 'http://127.0.0.1:1/no-mcp' })).id;
 process.env.OBSERVOGRAM_OIDC_REDIRECT_URL = `${base}/auth/callback`;
 
 const cookieOf = (res, name) =>
@@ -207,6 +214,39 @@ try {
   });
   assert(r.status === 403, 'OIDC session mutation without CSRF header → 403', r.status, 403);
 
+  // ---- the deploy record's actor is the login, never the email (STORE_PLAN slice 5) ----
+  // user-42 joined default as operator (the empty workspace's import); the ID
+  // token carried email: ada@example.test. The MCP is unreachable, so the
+  // deploy fails (502) — and the attempt is still recorded, with the
+  // principal's actor: the oidcLogin() form <issuerKey>#<sub>. The target is
+  // the org's endpoint by id.
+  r = await fetch(`${base}/api/packs/payment-service/deploy/prometheus-rules`, {
+    method: 'POST',
+    headers: { Cookie: session, 'X-Observogram-CSRF': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mcpEndpointId: NO_MCP_ID }),
+  });
+  const deployBody = await r.json();
+  assert(r.status === 502 && typeof deployBody.deployId === 'string', 'an OIDC operator deploys to an unreachable MCP → 502 with a deployId', [r.status, deployBody.deployId]);
+  const deployLines = readFileSync(join(runWithOrg('default', () => orgWorkspaceRoot()), 'deploys.jsonl'), 'utf8').trim().split('\n');
+  const deployLine = deployLines.find(l => l.includes(`"deployId":"${deployBody.deployId}"`)) || '';
+  assert(JSON.parse(deployLine || '{}').actor === loginOf('user-42') && !deployLine.includes('ada@example.test'),
+    `the deploys.jsonl line says actor ${loginOf('user-42')}, never the email`, deployLine);
+
+  // ---- a typed MCP URL at the deploy routes is an admin's (R4, D3) ----
+  // The same OIDC operator typing the URL is refused before any request
+  // leaves, and nothing is recorded.
+  const linesBefore = readFileSync(join(runWithOrg('default', () => orgWorkspaceRoot()), 'deploys.jsonl'), 'utf8').trim().split('\n').length;
+  r = await fetch(`${base}/api/packs/payment-service/deploy/prometheus-rules`, {
+    method: 'POST',
+    headers: { Cookie: session, 'X-Observogram-CSRF': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mcpUrl: 'http://127.0.0.1:1/no-mcp' }),
+  });
+  const typedBody = await r.json();
+  assert(r.status === 403 && typedBody.denied === 'role' && /^a typed MCP URL needs the admin role in org 'default' \(you are operator\)/.test(typedBody.error || ''),
+    'an OIDC operator typing an MCP URL at deploy → 403 role', [r.status, typedBody]);
+  assert(readFileSync(join(runWithOrg('default', () => orgWorkspaceRoot()), 'deploys.jsonl'), 'utf8').trim().split('\n').length === linesBefore,
+    'the refused deploy writes no deploys.jsonl line');
+
   // ---- replaying the callback (stale flow) is rejected ----
   r = await fetch(cbUrl, { redirect: 'manual', headers: { Cookie: flowCookie } });
   assert(r.status === 401, 'replayed code rejected (single-use at the IdP)', r.status, 401);
@@ -271,8 +311,8 @@ try {
   assert(made.status === 201 && made.json.note === `local users cannot sign in while this server signs in through OIDC issuer ${KEY}`,
     'with a local owner already there, the note says a local user cannot sign in here', made);
   const joinRole = await asBoss('GET', '/api/admin/join-role');
-  assert(joinRole.status === 200 && JSON.stringify(joinRole.json) === JSON.stringify({ ok: true, role: 'operator', oidc: true, issuerKey: KEY }),
-    'GET /api/admin/join-role: the recorded role, OIDC on, its issuer key', joinRole.json);
+  assert(joinRole.status === 200 && JSON.stringify(joinRole.json) === JSON.stringify({ ok: true, role: 'operator', oidc: true, issuerKey: KEY, mode: 'oidc' }),
+    'GET /api/admin/join-role: the recorded role, OIDC on, its issuer key, the mode', joinRole.json);
   process.env.OBSERVOGRAM_BOOTSTRAP_ADMIN = `${issuer}#user-42`;
   got = await signIn(base, DEFAULT_CLAIMS);
   assert(got.status === 302 && getUserByLogin(db, loginOf('user-42')).isOwner === false && listAudit(db, { action: 'owner.bootstrap' }).length === 1,
@@ -334,6 +374,7 @@ try {
 } finally {
   delete process.env.OBSERVOGRAM_BOOTSTRAP_ADMIN;
   await new Promise(res => srv.close(res));
+  closeStore();
   rmSync(WORKSPACE, { recursive: true, force: true });
 }
 
@@ -364,6 +405,7 @@ async function bootBlock(ws, { env = {} } = {}) {
   } finally {
     delete process.env.OBSERVOGRAM_BOOTSTRAP_ADMIN;
     await new Promise(res => s.close(res));
+    closeStore();
     rmSync(WS, { recursive: true, force: true });
   }
 }
@@ -382,6 +424,7 @@ async function bootBlock(ws, { env = {} } = {}) {
     assert(me.authenticated === true && Array.isArray(me.orgs) && me.orgs.length === 0, 'no join role: /auth/me orgs []', me.orgs);
   } finally {
     await new Promise(res => s.close(res));
+    closeStore();
     rmSync(WS, { recursive: true, force: true });
   }
 }
@@ -427,6 +470,7 @@ async function bootBlock(ws, { env = {} } = {}) {
   } finally {
     process.env.OBSERVOGRAM_OIDC_ISSUER = issuer;
     if (booted?.srv) await new Promise(res => booted.srv.close(res));
+    closeStore();
     rmSync(WS, { recursive: true, force: true });
   }
 }

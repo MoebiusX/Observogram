@@ -18,16 +18,23 @@ export const CSRF_HEADER = { 'X-Observogram-CSRF': '1' };
 // request runs in that org's workspace. Resolved at boot from /auth/me
 // memberships + the persisted choice; null in the open posture (the
 // server runs it in the default org).
+// The choice is saved with the login that made it (studioOrgBy.v1): on a
+// shared browser an owner never boots into an org another login chose
+// (settings-model.mjs activeOrgChoice keeps a non-membership only when this
+// login saved it).
 let activeOrg = null;
 export function setActiveOrg(id) {
   activeOrg = id || null;
   try {
     if (activeOrg) localStorage.setItem('studioOrg.v1', activeOrg);
     else localStorage.removeItem('studioOrg.v1');
+    if (activeOrg && signedInLogin) localStorage.setItem('studioOrgBy.v1', signedInLogin);
+    else localStorage.removeItem('studioOrgBy.v1');
   } catch (_) {}
 }
 export function getActiveOrg() { return activeOrg; }
 export function savedOrg() { try { return localStorage.getItem('studioOrg.v1') || null; } catch (_) { return null; } }
+export function savedOrgBy() { try { return localStorage.getItem('studioOrgBy.v1') || null; } catch { return null; } }
 
 // The ORG chip, one pure rule for both header sites (studio/app.mjs):
 // a switcher for a user in more than one org, a static label for a user
@@ -110,6 +117,58 @@ const mcpUrlKey = () => `${MCP_URL_KEY_PREFIX}${signedInLogin || 'local'}:${acti
 
 export function recallMcpUrl() {
   try { return localStorage.getItem(mcpUrlKey()) || null; } catch { return null; }
+}
+
+// ---------- the remembered MCP endpoint (per user and org) ----------
+//
+// The pickers' choice of one of the org's registered MCP endpoints (design
+// §6): its id, stored under mcpEndpoint.v1:<login or 'local'>:<active org or
+// 'default'> — an id means something in one org only — and cleared at
+// sign-out with the remembered URLs. null removes it (a typed URL was used).
+const MCP_ENDPOINT_KEY_PREFIX = 'mcpEndpoint.v1:';
+const mcpEndpointKey = () => `${MCP_ENDPOINT_KEY_PREFIX}${signedInLogin || 'local'}:${activeOrg || 'default'}`;
+
+export function recallMcpEndpoint() {
+  try {
+    const v = localStorage.getItem(mcpEndpointKey());
+    return v && /^[1-9][0-9]{0,15}$/.test(v) ? Number(v) : null;
+  } catch { return null; }
+}
+
+export function rememberMcpEndpoint(id) {
+  try {
+    if (Number.isInteger(id) && id >= 1) localStorage.setItem(mcpEndpointKey(), String(id));
+    else localStorage.removeItem(mcpEndpointKey());
+  } catch { /* storage unavailable: nothing remembered */ }
+}
+
+// ---------- the remembered live job (per user and org) ----------
+//
+// The live panel's running job (rebadge batch 3, C1): { id, kind, startedAt,
+// origin, label } under liveJob.v1:<login or 'local'>:<active org or
+// 'default'> — an id and an origin only, never a credential — so a reload in
+// the same org resumes the poll. Cleared once its result was shown, on the
+// server's 404, and at sign-out with the remembered URLs.
+const LIVE_JOB_KEY_PREFIX = 'liveJob.v1:';
+const liveJobKey = () => `${LIVE_JOB_KEY_PREFIX}${signedInLogin || 'local'}:${activeOrg || 'default'}`;
+const LIVE_JOB_ID = /^[A-Za-z0-9_-]{16,64}$/;
+
+export function rememberLiveJob({ id, kind, startedAt = null, origin = null, label = null } = {}) {
+  if (typeof id !== 'string' || !LIVE_JOB_ID.test(id)) return;
+  try {
+    localStorage.setItem(liveJobKey(), JSON.stringify({ id, kind: kind === 'snapshot' ? 'snapshot' : 'draft', startedAt, origin, label }));
+  } catch { /* storage unavailable: nothing remembered */ }
+}
+
+export function recallLiveJob() {
+  try {
+    const v = JSON.parse(localStorage.getItem(liveJobKey()) || 'null');
+    return v && typeof v.id === 'string' && LIVE_JOB_ID.test(v.id) ? v : null;
+  } catch { return null; }
+}
+
+export function forgetLiveJob() {
+  try { localStorage.removeItem(liveJobKey()); } catch { /* storage unavailable */ }
 }
 
 // The safety rule (tools/lib/mcp-url-safety.mjs), loaded at call time —
@@ -254,19 +313,24 @@ export async function removeDeployProfile(name) {
   writeDeployProfiles(profiles);
 }
 
-// At sign-out: every URL this login remembered, in every org, and the
-// legacy key — and every deploy target profile in the browser (every
+// At sign-out: every URL, MCP endpoint and live job this login remembered,
+// in every org, and the legacy key — and every deploy target profile in the browser (every
 // user's, and the pre-slice-3 key): a shared browser keeps neither past
-// a sign-out.
+// a sign-out. Nor the login itself: the saved org's `studioOrgBy.v1` names
+// who chose it, and goes when it names this login (the org stays, a
+// browser's choice; with no login beside it, no owner inherits it).
 export function forgetMcpUrls(login = signedInLogin) {
   try {
     const prefix = `${MCP_URL_KEY_PREFIX}${login || 'local'}:`;
+    const endpointPrefix = `${MCP_ENDPOINT_KEY_PREFIX}${login || 'local'}:`;
+    const liveJobPrefix = `${LIVE_JOB_KEY_PREFIX}${login || 'local'}:`;
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const k = localStorage.key(i);
-      if (k && (k.startsWith(prefix) || k.startsWith(DEPLOY_PROFILES_KEY_PREFIX))) localStorage.removeItem(k);
+      if (k && (k.startsWith(prefix) || k.startsWith(endpointPrefix) || k.startsWith(liveJobPrefix) || k.startsWith(DEPLOY_PROFILES_KEY_PREFIX))) localStorage.removeItem(k);
     }
     localStorage.removeItem(LEGACY_MCP_URL_KEY);
     localStorage.removeItem(LEGACY_DEPLOY_PROFILES_KEY);
+    if (login && localStorage.getItem('studioOrgBy.v1') === login) localStorage.removeItem('studioOrgBy.v1');
   } catch { /* storage unavailable */ }
 }
 
@@ -298,6 +362,14 @@ export async function api(path, opts = {}) {
   return r.json();
 }
 
+// The artefact taxonomy override the server was started with
+// (GET /api/taxonomy, a viewer route — after loadIdentity()): the document
+// to compile, or null for the default families.
+export async function loadTaxonomy() {
+  const r = await api('/api/taxonomy');
+  return r?.taxonomy ?? null;
+}
+
 export async function loadCatalog() {
   const { packs } = await api('/api/packs');
   state.catalog = packs || [];
@@ -325,4 +397,22 @@ export async function validateUploaded(body, contentType, env) {
   const denial = deniedError(r.status, json);
   if (denial) throw denial;
   return json;
+}
+
+// The pack an adopt selects. A scan or a live draft is registered by the
+// route that answers it (`out.registered.id` — POST /api/crawl,
+// /api/crawl-github, /api/draft-from-mcp), so adopting it selects that
+// catalogue entry. POST /api/validate registers what it validates again,
+// under the YAML's content id (not necessarily another id than the
+// route's): it is the path only when the route registered
+// nothing (the pack failed validation) or the entry has left the catalogue
+// since (a reset). Answers as validateUploaded does; an entry already
+// registered carries no `adapted` / `conformance` — the caller loads it by id.
+export async function registeredOrValidated(out, env) {
+  const id = out?.registered?.id;
+  if (id) {
+    await loadCatalog();
+    if (state.catalog.some(p => p.id === id)) return { ok: true, registered: { id } };
+  }
+  return validateUploaded(out.canonicalYaml, 'application/x-yaml', env);
 }

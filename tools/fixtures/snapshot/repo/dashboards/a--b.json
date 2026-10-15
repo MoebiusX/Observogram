@@ -1,0 +1,22 @@
+{
+  "uid": "a--b",
+  "title": "A to B traffic",
+  "tags": [
+    "synthetic"
+  ],
+  "schemaVersion": 39,
+  "version": 3,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Requests",
+      "type": "timeseries",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_requests_total[5m]))"
+        }
+      ]
+    }
+  ]
+}

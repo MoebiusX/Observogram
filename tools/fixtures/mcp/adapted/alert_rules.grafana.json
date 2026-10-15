@@ -1,0 +1,25 @@
+[
+  {
+    "name": "StackValidationAlwaysFiring",
+    "expr": "vector(1)",
+    "for": "0s",
+    "labels": {
+      "severity": "test"
+    },
+    "annotations": {},
+    "folderUid": "bg0gvuuj8otmof"
+  },
+  {
+    "name": "PaymentsErrorRatioHigh",
+    "expr": "sum(rate(http_requests_total{job=\"payment-processor\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{job=\"payment-processor\"}[5m]))",
+    "for": "5m",
+    "labels": {
+      "severity": "critical",
+      "team": "payments"
+    },
+    "annotations": {
+      "summary": "Payment errors above 5%"
+    },
+    "folderUid": "payments-alerts"
+  }
+]

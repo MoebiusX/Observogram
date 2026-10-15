@@ -1,0 +1,1467 @@
+{
+  "reportVersion": 1,
+  "generator": null,
+  "generatedAt": null,
+  "pack": {
+    "id": "payment-service",
+    "label": null,
+    "source": null,
+    "name": "payment-service",
+    "version": "1.5.0",
+    "service": "payment-service",
+    "environment": null,
+    "environments": [
+      "prod",
+      "staging"
+    ],
+    "criticality": "tier-1",
+    "artefacts": 84,
+    "sources": {
+      "Declared": 84,
+      "Verified": 0,
+      "Scaffold": 0
+    }
+  },
+  "tier": {
+    "graded": "tier-1",
+    "pack": "tier-1",
+    "from": "pack",
+    "service": null,
+    "environment": null,
+    "mismatch": false
+  },
+  "conformance": {
+    "declaredTier": "tier-1",
+    "conformant": false,
+    "scorePercent": 85,
+    "mustPercent": 84,
+    "must": {
+      "passed": 21,
+      "total": 25
+    },
+    "should": {
+      "passed": 5,
+      "total": 5
+    },
+    "byDimension": {
+      "L1": {
+        "applicable": 4,
+        "mustPassed": 3,
+        "mustTotal": 3,
+        "shouldPassed": 1,
+        "shouldTotal": 1
+      },
+      "L2": {
+        "applicable": 11,
+        "mustPassed": 10,
+        "mustTotal": 10,
+        "shouldPassed": 1,
+        "shouldTotal": 1
+      },
+      "L2X": {
+        "applicable": 1,
+        "mustPassed": 1,
+        "mustTotal": 1,
+        "shouldPassed": 0,
+        "shouldTotal": 0
+      },
+      "L3": {
+        "applicable": 5,
+        "mustPassed": 3,
+        "mustTotal": 4,
+        "shouldPassed": 1,
+        "shouldTotal": 1
+      },
+      "L4": {
+        "applicable": 4,
+        "mustPassed": 2,
+        "mustTotal": 3,
+        "shouldPassed": 1,
+        "shouldTotal": 1
+      },
+      "L5": {
+        "applicable": 5,
+        "mustPassed": 2,
+        "mustTotal": 4,
+        "shouldPassed": 1,
+        "shouldTotal": 1
+      }
+    },
+    "effective": null,
+    "counts": {
+      "blocking": 4,
+      "waived": 0,
+      "recommended": 0,
+      "passed": 26,
+      "notApplicable": 0
+    },
+    "clauses": {
+      "blocking": [
+        {
+          "id": "L3.MUST.recording_rule_per_slo",
+          "dimension": "L3",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "Every SLO has at least one recording rule materialising its SLI.",
+          "specRef": "§5.5",
+          "families": [
+            "recording_rule"
+          ]
+        },
+        {
+          "id": "L4.MUST.multi_window_burn_rate",
+          "dimension": "L4",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "Every SLO has at least one burn-rate alert with multi-window policy.",
+          "specRef": "§5.7",
+          "families": [
+            "burn_rate"
+          ]
+        },
+        {
+          "id": "L5.MUST.tier1_chaos_for_each_slo",
+          "dimension": "L5",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "Every SLO is the steady-state hypothesis of at least one chaos experiment.",
+          "specRef": "§5.11",
+          "families": [
+            "chaos"
+          ]
+        },
+        {
+          "id": "L5.MUST.tier1_weekly_prod_chaos",
+          "dimension": "L5",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "At least one chaos experiment runs weekly+ in production with OTel-instrumented synthetic probes.",
+          "specRef": "§5.11",
+          "families": [
+            "chaos"
+          ]
+        }
+      ],
+      "waived": [],
+      "recommended": [],
+      "passed": [
+        {
+          "id": "L1.MUST.availability_slo",
+          "dimension": "L1",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "At least one availability SLO (ratio-type SLI).",
+          "specRef": "§5.1",
+          "families": [
+            "sli",
+            "slo"
+          ]
+        },
+        {
+          "id": "L1.MUST.latency_slo",
+          "dimension": "L1",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "At least one latency SLO (threshold or distribution SLI).",
+          "specRef": "§5.1",
+          "families": [
+            "sli",
+            "slo"
+          ]
+        },
+        {
+          "id": "L1.SHOULD.domain_slo",
+          "dimension": "L1",
+          "severity": "SHOULD",
+          "minTier": "tier-1",
+          "description": "A third, domain-specific SLO beyond availability and latency (4+ SLOs total).",
+          "specRef": "§5.1",
+          "families": [
+            "slo"
+          ]
+        },
+        {
+          "id": "L1.MUST.sli_covered_by_slo",
+          "dimension": "L1",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "Every declared SLI is referenced by at least one SLO.",
+          "specRef": "§5.1",
+          "families": [
+            "sli",
+            "slo"
+          ]
+        },
+        {
+          "id": "L2.MUST.otlp_receiver",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "OTel Collector pipeline declares an `otlp` receiver.",
+          "specRef": "§5.2",
+          "families": [
+            "pipeline_receiver"
+          ]
+        },
+        {
+          "id": "L2.MUST.service_name_required",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "`service.name` listed in otel.resource_attributes.required.",
+          "specRef": "§5.3",
+          "families": [
+            "otel"
+          ]
+        },
+        {
+          "id": "L2.MUST.semconv_floor",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "OTel SemConv version >= 1.26.0 (binding floor).",
+          "specRef": "§5.3",
+          "families": [
+            "otel"
+          ]
+        },
+        {
+          "id": "L2.MUST.semconv_current",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "OTel SemConv at currently-tracked version (1.27.0).",
+          "specRef": "§5.3",
+          "families": [
+            "otel"
+          ]
+        },
+        {
+          "id": "L2.MUST.resource_attrs_5plus",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "At least five required resource attributes declared.",
+          "specRef": "§5.3",
+          "families": [
+            "otel"
+          ]
+        },
+        {
+          "id": "L2.MUST.log_correlation",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "`otel.sdk.log_correlation: true` (trace IDs injected into logs).",
+          "specRef": "§5.3",
+          "families": [
+            "otel"
+          ]
+        },
+        {
+          "id": "L2.MUST.metrics_exporter",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "Pipelines export metrics.",
+          "specRef": "§5.2",
+          "families": [
+            "pipeline_exporter_metrics"
+          ]
+        },
+        {
+          "id": "L2.MUST.logs_and_traces_exporters",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "Pipelines export logs and traces.",
+          "specRef": "§5.2",
+          "families": [
+            "pipeline_exporter_logs",
+            "pipeline_exporter_traces"
+          ]
+        },
+        {
+          "id": "L2.MUST.tail_sampling",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "Pipelines include a tail_sampling processor.",
+          "specRef": "§5.2",
+          "families": [
+            "pipeline_processor"
+          ]
+        },
+        {
+          "id": "L2.MUST.metrics_logs_traces_backends",
+          "dimension": "L2",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "spec.telemetry.backends covers metrics + logs + traces.",
+          "specRef": "§5.12.1",
+          "families": [
+            "backend"
+          ]
+        },
+        {
+          "id": "L2.SHOULD.backend_gating_enforce",
+          "dimension": "L2",
+          "severity": "SHOULD",
+          "minTier": "tier-1",
+          "description": "tier-1 backends pin a `min` version with `gating: enforce`.",
+          "specRef": "§5.12.3",
+          "families": [
+            "backend"
+          ]
+        },
+        {
+          "id": "L2X.MUST.extended_backend_refs_resolve",
+          "dimension": "L2X",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "Every extended surface references a declared telemetry backend or explicit external ref.",
+          "specRef": "§5.12.4",
+          "families": []
+        },
+        {
+          "id": "L3.SHOULD.derived_view",
+          "dimension": "L3",
+          "severity": "SHOULD",
+          "minTier": "tier-2",
+          "description": "At least one derived view (e.g. golden signals or per-tenant rollup).",
+          "specRef": "§5.5",
+          "families": [
+            "derived_view"
+          ]
+        },
+        {
+          "id": "L3.MUST.service_overview_dashboard",
+          "dimension": "L3",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "At least one dashboard declared (service overview).",
+          "specRef": "§5.6",
+          "families": [
+            "dashboard"
+          ]
+        },
+        {
+          "id": "L3.MUST.slo_burn_dashboard",
+          "dimension": "L3",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "A second dashboard (SLO burn) on top of service overview.",
+          "specRef": "§5.6",
+          "families": [
+            "dashboard"
+          ]
+        },
+        {
+          "id": "L3.MUST.tier1_dashboards",
+          "dimension": "L3",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "Service overview + SLO burn + deployment overlay + customer impact (4+ dashboards).",
+          "specRef": "§5.6",
+          "families": [
+            "dashboard"
+          ]
+        },
+        {
+          "id": "L4.SHOULD.forecast_on_availability",
+          "dimension": "L4",
+          "severity": "SHOULD",
+          "minTier": "tier-1",
+          "description": "At least one forecast declared on a primary availability SLO.",
+          "specRef": "§5.7",
+          "families": [
+            "forecast"
+          ]
+        },
+        {
+          "id": "L4.MUST.tier1_voice_route",
+          "dimension": "L4",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "SEV1 route includes a voice channel.",
+          "specRef": "§5.8",
+          "families": [
+            "alert_route"
+          ]
+        },
+        {
+          "id": "L4.MUST.tier1_at_least_one_automation",
+          "dimension": "L4",
+          "severity": "MUST",
+          "minTier": "tier-1",
+          "description": "At least one self-healing remediation declared.",
+          "specRef": "§5.9",
+          "families": [
+            "remediation"
+          ]
+        },
+        {
+          "id": "L5.SHOULD.tier1_release_gate",
+          "dimension": "L5",
+          "severity": "SHOULD",
+          "minTier": "tier-1",
+          "description": "Regression gate set to a release-blocking mode.",
+          "specRef": "§5.10",
+          "families": [
+            "synthetic"
+          ]
+        },
+        {
+          "id": "L5.MUST.synthetic_probe",
+          "dimension": "L5",
+          "severity": "MUST",
+          "minTier": "tier-3",
+          "description": "At least one synthetic check declared.",
+          "specRef": "§5.11",
+          "families": [
+            "synthetic"
+          ]
+        },
+        {
+          "id": "L5.MUST.tier2_chaos_staging",
+          "dimension": "L5",
+          "severity": "MUST",
+          "minTier": "tier-2",
+          "description": "At least one chaos experiment scheduled monthly+ in staging.",
+          "specRef": "§5.11",
+          "families": [
+            "chaos"
+          ]
+        }
+      ],
+      "notApplicable": []
+    },
+    "onPlaceholder": null
+  },
+  "placeholders": {
+    "conformant": true,
+    "markers": 0,
+    "writers": {
+      "legacy": false,
+      "crawler": false,
+      "fetcher": false,
+      "library": false
+    },
+    "counts": {
+      "rows": 0,
+      "symbols": 0,
+      "byState": {
+        "placeholder": 0,
+        "marker-only": 0,
+        "unmarked": 0,
+        "dangling": 0
+      },
+      "bySource": {
+        "crawl": 0,
+        "operator": 0,
+        "telemetry": 0
+      },
+      "bySection": {}
+    },
+    "templates": {
+      "todos": 0,
+      "scaffolds": 0
+    },
+    "rows": []
+  },
+  "assessments": {
+    "available": false,
+    "artefacts": 84,
+    "counts": {
+      "unreviewed": 84,
+      "trusted": 0,
+      "suspect": 0,
+      "failed": 0
+    },
+    "orphaned": 0,
+    "verdicts": []
+  },
+  "waivers": {
+    "available": false,
+    "counts": {
+      "active": 0,
+      "expired": 0,
+      "revoked": 0,
+      "unknown": 0
+    },
+    "waivers": []
+  },
+  "coverage": {
+    "families": [
+      {
+        "family": "sli",
+        "label": "Service level indicator",
+        "layer": "L1",
+        "group": "sli",
+        "count": 6,
+        "declared": 6,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L1.MUST.availability_slo",
+          "L1.MUST.latency_slo",
+          "L1.MUST.sli_covered_by_slo"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "slo",
+        "label": "Objective",
+        "layer": "L1",
+        "group": "slo",
+        "count": 6,
+        "declared": 6,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L1.MUST.availability_slo",
+          "L1.MUST.latency_slo",
+          "L1.SHOULD.domain_slo",
+          "L1.MUST.sli_covered_by_slo"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "otel",
+        "label": "Instrumentation contract",
+        "layer": "L2",
+        "group": "otel",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L2.MUST.service_name_required",
+          "L2.MUST.semconv_floor",
+          "L2.MUST.semconv_current",
+          "L2.MUST.resource_attrs_5plus",
+          "L2.MUST.log_correlation"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "backend",
+        "label": "Telemetry backend",
+        "layer": "L2",
+        "group": "exp",
+        "count": 9,
+        "declared": 9,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L2.MUST.metrics_logs_traces_backends",
+          "L2.SHOULD.backend_gating_enforce"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "pipeline_receiver",
+        "label": "Pipeline receiver",
+        "layer": "L2",
+        "group": "rcv",
+        "count": 2,
+        "declared": 2,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L2.MUST.otlp_receiver"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "pipeline_processor",
+        "label": "Pipeline processor",
+        "layer": "L2",
+        "group": "prc",
+        "count": 6,
+        "declared": 6,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L2.MUST.tail_sampling"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "pipeline_exporter_metrics",
+        "label": "Pipeline exporter",
+        "layer": "L2",
+        "group": "exp",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L2.MUST.metrics_exporter"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "pipeline_exporter_logs",
+        "label": "Pipeline exporter",
+        "layer": "L2",
+        "group": "exp",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L2.MUST.logs_and_traces_exporters"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "pipeline_exporter_traces",
+        "label": "Pipeline exporter",
+        "layer": "L2",
+        "group": "exp",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L2.MUST.logs_and_traces_exporters"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "storage_metrics",
+        "label": "Storage",
+        "layer": "L2",
+        "group": "exp",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "storage_logs",
+        "label": "Storage",
+        "layer": "L2",
+        "group": "exp",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "storage_traces",
+        "label": "Storage",
+        "layer": "L2",
+        "group": "exp",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "scrape_job",
+        "label": "Scrape job",
+        "layer": "L2",
+        "group": "rcv",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "metric",
+        "label": "Metric",
+        "layer": "L2",
+        "group": "metrics",
+        "count": 0,
+        "declared": 0,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "absent"
+      },
+      {
+        "family": "profiling",
+        "label": "Profiling",
+        "layer": "L2X",
+        "group": "prof",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "network",
+        "label": "Network telemetry",
+        "layer": "L2X",
+        "group": "net",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "policy_engine",
+        "label": "Policy engine",
+        "layer": "L2X",
+        "group": "poe",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "mesh",
+        "label": "Service mesh telemetry",
+        "layer": "L2X",
+        "group": "mesh",
+        "count": 2,
+        "declared": 2,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "collection",
+        "label": "Collection",
+        "layer": "L2X",
+        "group": "col",
+        "count": 2,
+        "declared": 2,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "recording_rule",
+        "label": "Recording rule",
+        "layer": "L3",
+        "group": "qry",
+        "count": 5,
+        "declared": 5,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L3.MUST.recording_rule_per_slo"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "derived_view",
+        "label": "Derived view",
+        "layer": "L3",
+        "group": "view",
+        "count": 2,
+        "declared": 2,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L3.SHOULD.derived_view"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "dashboard",
+        "label": "Dashboard",
+        "layer": "L3",
+        "group": "dash",
+        "count": 4,
+        "declared": 4,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L3.MUST.service_overview_dashboard",
+          "L3.MUST.slo_burn_dashboard",
+          "L3.MUST.tier1_dashboards"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "panel",
+        "label": "Dashboard panel",
+        "layer": "L3",
+        "group": "panel",
+        "count": 5,
+        "declared": 5,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "burn_rate",
+        "label": "Burn-rate alert",
+        "layer": "L4",
+        "group": "pol",
+        "count": 5,
+        "declared": 5,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L4.MUST.multi_window_burn_rate"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "forecast",
+        "label": "Forecast",
+        "layer": "L4",
+        "group": "pol",
+        "count": 2,
+        "declared": 2,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L4.SHOULD.forecast_on_availability"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "alert_route",
+        "label": "Alert route",
+        "layer": "L4",
+        "group": "alr",
+        "count": 3,
+        "declared": 3,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L4.MUST.tier1_voice_route"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "alert_rule",
+        "label": "Alert rule",
+        "layer": "L4",
+        "group": "rule",
+        "count": 3,
+        "declared": 3,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "remediation",
+        "label": "Self-healing action",
+        "layer": "L4",
+        "group": "heal",
+        "count": 3,
+        "declared": 3,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L4.MUST.tier1_at_least_one_automation"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "baselines",
+        "label": "Baselines",
+        "layer": "L5",
+        "group": "base",
+        "count": 1,
+        "declared": 1,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      },
+      {
+        "family": "chaos",
+        "label": "Chaos experiment",
+        "layer": "L5",
+        "group": "chaos",
+        "count": 3,
+        "declared": 3,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L5.MUST.tier1_chaos_for_each_slo",
+          "L5.MUST.tier2_chaos_staging",
+          "L5.MUST.tier1_weekly_prod_chaos"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "synthetic",
+        "label": "Synthetic check",
+        "layer": "L5",
+        "group": "syn",
+        "count": 2,
+        "declared": 2,
+        "verified": 0,
+        "scaffold": 0,
+        "required": true,
+        "clauses": [
+          "L5.SHOULD.tier1_release_gate",
+          "L5.MUST.synthetic_probe"
+        ],
+        "status": "present"
+      },
+      {
+        "family": "imports",
+        "label": "Import",
+        "layer": "GOV",
+        "group": "imp",
+        "count": 3,
+        "declared": 3,
+        "verified": 0,
+        "scaffold": 0,
+        "required": false,
+        "clauses": [],
+        "status": "present"
+      }
+    ],
+    "counts": {
+      "present": 30,
+      "absent": 2,
+      "missing": 0
+    }
+  },
+  "goesBlind": {
+    "available": true,
+    "top": 10,
+    "nodes": 94,
+    "edges": 72,
+    "sloBlindingNodes": 29,
+    "risks": [
+      {
+        "key": "backend::{\"product\":\"prometheus\",\"signal\":\"metrics\"}",
+        "kind": "backend",
+        "label": "metrics-prom",
+        "summary": {
+          "slos": 6,
+          "alerts": 5,
+          "panels": 5,
+          "dashboards": 1,
+          "routes": 3,
+          "remediations": 0,
+          "total": 46
+        },
+        "weight": 85.6,
+        "byKind": {
+          "slo": 6,
+          "sli": 6,
+          "burn_rate": 5,
+          "recording_rule": 5,
+          "metric": 10,
+          "alert_route": 3,
+          "forecast": 2,
+          "panel": 5,
+          "dashboard": 1,
+          "chaos": 3
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "pipeline_exporter_metrics::{\"signal\":\"metrics\",\"target\":\"prometheusremotewrite\"}",
+        "kind": "pipeline_exporter_metrics",
+        "label": "exporter (metrics): prometheusremotewrite",
+        "summary": {
+          "slos": 6,
+          "alerts": 5,
+          "panels": 5,
+          "dashboards": 1,
+          "routes": 3,
+          "remediations": 0,
+          "total": 46
+        },
+        "weight": 85.6,
+        "byKind": {
+          "slo": 6,
+          "sli": 6,
+          "burn_rate": 5,
+          "recording_rule": 5,
+          "metric": 10,
+          "alert_route": 3,
+          "forecast": 2,
+          "panel": 5,
+          "dashboard": 1,
+          "chaos": 3
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "metric::{\"name\":\"payment:api_availability:ratio_5m\"}",
+        "kind": "metric",
+        "label": "payment:api_availability:ratio_5m",
+        "summary": {
+          "slos": 1,
+          "alerts": 1,
+          "panels": 2,
+          "dashboards": 1,
+          "routes": 2,
+          "remediations": 0,
+          "total": 12
+        },
+        "weight": 16.8,
+        "byKind": {
+          "slo": 1,
+          "sli": 1,
+          "burn_rate": 1,
+          "recording_rule": 2,
+          "alert_route": 2,
+          "forecast": 1,
+          "panel": 2,
+          "dashboard": 1,
+          "chaos": 1
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "metric::{\"name\":\"http_server_request_duration_seconds_bucket\"}",
+        "kind": "metric",
+        "label": "http_server_request_duration_seconds_bucket",
+        "summary": {
+          "slos": 2,
+          "alerts": 1,
+          "panels": 1,
+          "dashboards": 1,
+          "routes": 2,
+          "remediations": 0,
+          "total": 11
+        },
+        "weight": 18.45,
+        "byKind": {
+          "slo": 2,
+          "sli": 2,
+          "burn_rate": 1,
+          "alert_route": 2,
+          "forecast": 1,
+          "panel": 1,
+          "dashboard": 1,
+          "chaos": 1
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "alert_route::{\"severity\":\"sev2\"}",
+        "kind": "alert_route",
+        "label": "SEV2 routes",
+        "summary": {
+          "slos": 5,
+          "alerts": 5,
+          "panels": 0,
+          "dashboards": 0,
+          "routes": 0,
+          "remediations": 0,
+          "total": 10
+        },
+        "weight": 0,
+        "byKind": {},
+        "unprotected": {
+          "slos": [
+            {
+              "key": "slo::{\"id\":\"api_availability_99_9\"}",
+              "label": "api_availability_99_9"
+            },
+            {
+              "key": "slo::{\"id\":\"checkout_latency_99_5_p99_300ms\"}",
+              "label": "checkout_latency_99_5_p99_300ms"
+            },
+            {
+              "key": "slo::{\"id\":\"consumer_freshness_99_under_60s\"}",
+              "label": "consumer_freshness_99_under_60s"
+            },
+            {
+              "key": "slo::{\"id\":\"consumer_success_99_95\"}",
+              "label": "consumer_success_99_95"
+            },
+            {
+              "key": "slo::{\"id\":\"settlement_consumers_99_9_min_2\"}",
+              "label": "settlement_consumers_99_9_min_2"
+            }
+          ],
+          "alerts": [
+            {
+              "key": "burn_rate::{\"slo\":\"api_availability_99_9\"}",
+              "label": "burn-rate alert: api_availability_99_9"
+            },
+            {
+              "key": "burn_rate::{\"slo\":\"checkout_latency_99_5_p99_300ms\"}",
+              "label": "burn-rate alert: checkout_latency_99_5_p99_300ms"
+            },
+            {
+              "key": "burn_rate::{\"slo\":\"consumer_freshness_99_under_60s\"}",
+              "label": "burn-rate alert: consumer_freshness_99_under_60s"
+            },
+            {
+              "key": "burn_rate::{\"slo\":\"consumer_success_99_95\"}",
+              "label": "burn-rate alert: consumer_success_99_95"
+            },
+            {
+              "key": "burn_rate::{\"slo\":\"settlement_consumers_99_9_min_2\"}",
+              "label": "burn-rate alert: settlement_consumers_99_9_min_2"
+            }
+          ]
+        }
+      },
+      {
+        "key": "metric::{\"name\":\"http_server_request_duration_seconds_count\"}",
+        "kind": "metric",
+        "label": "http_server_request_duration_seconds_count",
+        "summary": {
+          "slos": 1,
+          "alerts": 1,
+          "panels": 2,
+          "dashboards": 1,
+          "routes": 2,
+          "remediations": 0,
+          "total": 10
+        },
+        "weight": 12.8,
+        "byKind": {
+          "slo": 1,
+          "sli": 1,
+          "burn_rate": 1,
+          "alert_route": 2,
+          "forecast": 1,
+          "panel": 2,
+          "dashboard": 1,
+          "chaos": 1
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "recording_rule::{\"record\":\"payment:api_availability:ratio_5m\"}",
+        "kind": "recording_rule",
+        "label": "payment:api_availability:ratio_5m",
+        "summary": {
+          "slos": 1,
+          "alerts": 1,
+          "panels": 2,
+          "dashboards": 1,
+          "routes": 2,
+          "remediations": 0,
+          "total": 10
+        },
+        "weight": 12.8,
+        "byKind": {
+          "slo": 1,
+          "sli": 1,
+          "burn_rate": 1,
+          "alert_route": 2,
+          "forecast": 1,
+          "panel": 2,
+          "dashboard": 1,
+          "chaos": 1
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "metric::{\"name\":\"payment:consumer_lag:seconds_max_5m\"}",
+        "kind": "metric",
+        "label": "payment:consumer_lag:seconds_max_5m",
+        "summary": {
+          "slos": 1,
+          "alerts": 1,
+          "panels": 1,
+          "dashboards": 1,
+          "routes": 2,
+          "remediations": 0,
+          "total": 9
+        },
+        "weight": 13.7,
+        "byKind": {
+          "slo": 1,
+          "sli": 1,
+          "burn_rate": 1,
+          "recording_rule": 1,
+          "alert_route": 2,
+          "panel": 1,
+          "dashboard": 1,
+          "chaos": 1
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "sli::{\"id\":\"api_availability\"}",
+        "kind": "sli",
+        "label": "api_availability",
+        "summary": {
+          "slos": 1,
+          "alerts": 1,
+          "panels": 2,
+          "dashboards": 1,
+          "routes": 2,
+          "remediations": 0,
+          "total": 9
+        },
+        "weight": 9.8,
+        "byKind": {
+          "slo": 1,
+          "burn_rate": 1,
+          "alert_route": 2,
+          "forecast": 1,
+          "panel": 2,
+          "dashboard": 1,
+          "chaos": 1
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      },
+      {
+        "key": "metric::{\"name\":\"messaging_kafka_consumer_lag_seconds\"}",
+        "kind": "metric",
+        "label": "messaging_kafka_consumer_lag_seconds",
+        "summary": {
+          "slos": 1,
+          "alerts": 1,
+          "panels": 1,
+          "dashboards": 1,
+          "routes": 2,
+          "remediations": 0,
+          "total": 8
+        },
+        "weight": 11.7,
+        "byKind": {
+          "slo": 1,
+          "sli": 1,
+          "burn_rate": 1,
+          "alert_route": 2,
+          "panel": 1,
+          "dashboard": 1,
+          "chaos": 1
+        },
+        "unprotected": {
+          "slos": [],
+          "alerts": []
+        }
+      }
+    ]
+  },
+  "responsePath": {
+    "configured": true,
+    "compared": false,
+    "counts": {
+      "remediations": 3,
+      "alerts": 8,
+      "linked": 0,
+      "unresolved": 3,
+      "uncovered": 8,
+      "blocked": 0,
+      "suggestions": 1,
+      "placeholder": 0
+    },
+    "links": [],
+    "unresolved": [
+      {
+        "remediation": {
+          "id": "HEAL-01",
+          "symbol": "remediation[0]",
+          "identityKey": "remediation::{\"trigger\":\"alert:payment-api-pod-oom\"}",
+          "family": "remediation",
+          "title": "alert:payment-api-pod-oom",
+          "source": "Declared"
+        },
+        "trigger": "alert:payment-api-pod-oom",
+        "placeholder": false,
+        "suggestions": [],
+        "annotation": "observogram.remediates.remediation[0]"
+      },
+      {
+        "remediation": {
+          "id": "HEAL-02",
+          "symbol": "remediation[1]",
+          "identityKey": "remediation::{\"trigger\":\"alert:payment-settler-stuck\"}",
+          "family": "remediation",
+          "title": "alert:payment-settler-stuck",
+          "source": "Declared"
+        },
+        "trigger": "alert:payment-settler-stuck",
+        "placeholder": false,
+        "suggestions": [],
+        "annotation": "observogram.remediates.remediation[1]"
+      },
+      {
+        "remediation": {
+          "id": "HEAL-03",
+          "symbol": "remediation[2]",
+          "identityKey": "remediation::{\"trigger\":\"alert:payment-api-cert-expiring\"}",
+          "family": "remediation",
+          "title": "alert:payment-api-cert-expiring",
+          "source": "Declared"
+        },
+        "trigger": "alert:payment-api-cert-expiring",
+        "placeholder": false,
+        "suggestions": [
+          {
+            "id": "RULE-03",
+            "symbol": "alerting.rules[2]",
+            "identityKey": "alert_rule::{\"name\":\"paymentcertificateexpiringsoon\"}",
+            "family": "alert_rule",
+            "title": "PaymentCertificateExpiringSoon",
+            "source": "Declared",
+            "score": 2
+          }
+        ],
+        "annotation": "observogram.remediates.remediation[2]"
+      }
+    ],
+    "uncovered": [
+      {
+        "id": "POL-01",
+        "symbol": "policy.burn_rate_alerts[0]",
+        "identityKey": "burn_rate::{\"slo\":\"api_availability_99_9\"}",
+        "family": "burn_rate",
+        "title": "burn-rate alert: api_availability_99_9",
+        "source": "Declared",
+        "state": "declared"
+      },
+      {
+        "id": "POL-02",
+        "symbol": "policy.burn_rate_alerts[1]",
+        "identityKey": "burn_rate::{\"slo\":\"checkout_latency_99_5_p99_300ms\"}",
+        "family": "burn_rate",
+        "title": "burn-rate alert: checkout_latency_99_5_p99_300ms",
+        "source": "Declared",
+        "state": "declared"
+      },
+      {
+        "id": "POL-03",
+        "symbol": "policy.burn_rate_alerts[2]",
+        "identityKey": "burn_rate::{\"slo\":\"consumer_freshness_99_under_60s\"}",
+        "family": "burn_rate",
+        "title": "burn-rate alert: consumer_freshness_99_under_60s",
+        "source": "Declared",
+        "state": "declared"
+      },
+      {
+        "id": "POL-04",
+        "symbol": "policy.burn_rate_alerts[3]",
+        "identityKey": "burn_rate::{\"slo\":\"settlement_consumers_99_9_min_2\"}",
+        "family": "burn_rate",
+        "title": "burn-rate alert: settlement_consumers_99_9_min_2",
+        "source": "Declared",
+        "state": "declared"
+      },
+      {
+        "id": "POL-05",
+        "symbol": "policy.burn_rate_alerts[4]",
+        "identityKey": "burn_rate::{\"slo\":\"consumer_success_99_95\"}",
+        "family": "burn_rate",
+        "title": "burn-rate alert: consumer_success_99_95",
+        "source": "Declared",
+        "state": "declared"
+      },
+      {
+        "id": "RULE-01",
+        "symbol": "alerting.rules[0]",
+        "identityKey": "alert_rule::{\"name\":\"paymentservicepodrestarting\"}",
+        "family": "alert_rule",
+        "title": "PaymentServicePodRestarting",
+        "source": "Declared",
+        "state": "declared"
+      },
+      {
+        "id": "RULE-02",
+        "symbol": "alerting.rules[1]",
+        "identityKey": "alert_rule::{\"name\":\"paymentdbconnectionpoolsaturated\"}",
+        "family": "alert_rule",
+        "title": "PaymentDbConnectionPoolSaturated",
+        "source": "Declared",
+        "state": "declared"
+      },
+      {
+        "id": "RULE-03",
+        "symbol": "alerting.rules[2]",
+        "identityKey": "alert_rule::{\"name\":\"paymentcertificateexpiringsoon\"}",
+        "family": "alert_rule",
+        "title": "PaymentCertificateExpiringSoon",
+        "source": "Declared",
+        "state": "declared"
+      }
+    ],
+    "families": [
+      {
+        "family": "burn_rate",
+        "alerts": 5,
+        "covered": 0,
+        "uncovered": 5,
+        "remediations": [],
+        "blocked": 0
+      },
+      {
+        "family": "alert_rule",
+        "alerts": 3,
+        "covered": 0,
+        "uncovered": 3,
+        "remediations": [],
+        "blocked": 0
+      }
+    ],
+    "warnings": []
+  }
+}

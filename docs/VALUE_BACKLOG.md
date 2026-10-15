@@ -120,7 +120,9 @@ journeys, runs, `deploys.jsonl`) stay files. See
 **A. Workspace persistence** — `.observogram/` (gitignored;
 `OBSERVOGRAM_WORKSPACE` to relocate): `packs/<id>.pack.yaml` (id = the
 existing deterministic content hash, so **zero client changes**),
-`packs/index.json` (label/source/createdAt/lastUsedAt),
+the store's `packs` table (label/source/createdAt/lastUsedAt and the
+services a pack names — [STORE_PLAN.md](STORE_PLAN.md) slice 4; it was
+`packs/index.json` until then, read once and frozen since),
 `deploys.jsonl`, `snapshots/<deployId>/`. `registerUploadedPack` writes
 through; boot rehydrates. The in-memory LRU-20 becomes a disk retention
 policy (keep ~200, prune by lastUsedAt) and eviction stops being silent.
@@ -239,7 +241,8 @@ The v1 non-goal ("multi-tenant persistence") activates as its own
 stream: **sign in → land in your org → see only your services** —
 packs, journeys, deploys, audit, MCP endpoints all org-scoped,
 enforced server-side. Four stages, each shippable alone: OIDC identity
-(attaches at the existing `requireAuth` / `observogramActor` seam; the
+(attaches at the existing `requireAuth` / `observogramActor` seam — since
+STORE_PLAN slice 5 the gate stamps `req.observogramPrincipal` instead; the
 bearer token becomes the service-account path), workspace-per-org
 tenancy (the `workspaceRoot()` seam — file-first machinery unchanged),
 roles (viewer / operator / admin) + org-scoped MCP endpoints (write

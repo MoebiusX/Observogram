@@ -22,10 +22,11 @@
 
 import { escapeHtml } from './util.mjs';
 import { LAYER_DEFS } from './constants.mjs';
+import { state } from './state.mjs';
 
-// ---------- the four status properties ----------
+// ---------- the five status properties ----------
 //
-// Origin, completion, evidence and assessment answer different questions.
+// Origin, completion, evidence, assessment and verdict answer different questions.
 // The studio used to render all of them as one badge vocabulary (verified ·
 // declared · scaffold · candidate · recorded live · pass · pass on placeholder
 // · conformant · valid · warning · gap · todo), which read as interchangeable.
@@ -36,7 +37,8 @@ export const STATUS_PROPERTIES = {
     label: 'Origin',
     question: 'Where did this come from?',
     values: {
-      library:    { label: 'Library',    tone: 'neutral', tip: 'Instantiated from the Observogram library.' },
+      // The one tip that names the product: a function of the brand (state.brand.chrome.libraryTip).
+      library:    { label: 'Library',    tone: 'neutral', tip: (chrome) => chrome ? chrome.libraryTip : 'Instantiated from the pack library.' },
       imported:   { label: 'Imported',   tone: 'neutral', tip: 'Loaded from an uploaded or scanned pack.' },
       discovered: { label: 'Discovered', tone: 'neutral', tip: 'Found on the live platform, not declared in the repository.' },
       authored:   { label: 'Authored',   tone: 'neutral', tip: 'Written or edited by a person in the studio.' },
@@ -67,10 +69,24 @@ export const STATUS_PROPERTIES = {
     values: {
       pass:          { label: 'Pass',            tone: 'ok',      tip: 'Met this check with real values.' },
       placeholder:   { label: 'Represented',     tone: 'warn',    tip: 'Requirement represented; real value still needed. It passes the rubric on a placeholder.' },
+      // GAP batch 2, B3.2: a failing clause a time-boxed waiver covers. The engine's numbers still count it as not met.
+      waived:        { label: 'Waived',          tone: 'info',    tip: 'A time-boxed waiver covers this failing requirement: the rubric still counts it as not met, the effective numbers read it as met until the waiver expires.' },
       warning:       { label: 'Warning',         tone: 'warn',    tip: 'Met the check, with a finding worth reviewing.' },
       fail:          { label: 'Fail',            tone: 'fail',    tip: 'Did not meet this check.' },
       notEvaluated:  { label: 'Not evaluated',   tone: 'neutral', tip: 'This check has not run, or could not run, for this item.' },
       notApplicable: { label: 'Not applicable',  tone: 'muted',   tip: 'Excluded at this tier: shown for reference only, not counted.' },
+    },
+  },
+  // A reviewer's record (GAP batch 2, B3.1; studio/verdict-html.mjs): never
+  // an engine's word, never summed into a score or a grade.
+  verdict: {
+    label: 'Verdict',
+    question: 'Does a reviewer trust it?',
+    values: {
+      trusted:    { label: 'Trusted',    tone: 'ok',      tip: 'A reviewer recorded this artefact as trusted.' },
+      suspect:    { label: 'Suspect',    tone: 'warn',    tip: 'A reviewer recorded a doubt about this artefact; the reason says what.' },
+      failed:     { label: 'Failed',     tone: 'fail',    tip: 'A reviewer recorded this artefact as failed review.' },
+      unreviewed: { label: 'Unreviewed', tone: 'neutral', tip: 'No verdict is recorded: nobody has reviewed this artefact.' },
     },
   },
 };
@@ -118,11 +134,15 @@ export function statusFromLegacy(word) {
   return hit ? { property: hit[0], value: hit[1] } : null;
 }
 
-// Resolve a (property, value) pair to its display record, or null.
-export function statusRecord(property, value) {
+// Resolve a (property, value) pair to its display record, or null. A tip
+// that is a function of the brand is resolved against state.brand.chrome
+// (or the `chrome` given — a headless test passes one).
+export function statusRecord(property, value, { chrome = state.brand?.chrome ?? null } = {}) {
   const p = STATUS_PROPERTIES[property];
   const v = p?.values?.[value];
-  return v ? { property, value, propertyLabel: p.label, question: p.question, ...v } : null;
+  if (!v) return null;
+  const tip = typeof v.tip === 'function' ? v.tip(chrome) : v.tip;
+  return { property, value, propertyLabel: p.label, question: p.question, ...v, tip };
 }
 
 // One chip for one property. `label` overrides the display text (a count, a

@@ -17,33 +17,60 @@
 //   class        public · self · viewer · operator · admin · owner (required)
 //   audit        the audit actions a successful call writes in this build,
 //                exactly; [] = none
-//   later        the rows a later slice adds, for review; not asserted
 //   csrf         none · session · always · form — GET → none, any other
 //                /api method → session
 //   exposed      allow · refuse · rule — the open-exposed posture's answer;
 //                admin / owner → refuse, else allow
 //   identityApi  the identity API (/api/admin/*, /api/org*)
-//   modes        where the route is registered: local, oidc, off (the
-//                /auth/* routes follow initAuth()'s mode)
+//   direct       without sign-in (the open postures) answered only to a
+//                request sent straight to a loopback address — default
+//                identityApi; true for the MCP endpoint mutations too, a
+//                durable record the server will send a token to, and for
+//                the live MCP API, a server-side request to an MCP target
+//                (operator by class: the only direct entries below admin)
+//   closedAs     how the posture refusals name the route — 'the identity
+//                API' (default), 'the MCP endpoint API', 'the audit API',
+//                'the live MCP API' or 'the MCP server-settings API' (a
+//                singular subject: the texts say `is closed`, `answers only`)
+//   modes        where the route is registered: local, oidc, proxy, off
+//                (the /auth/* routes follow initAuth()'s mode)
 //   self         { pwflow, session, unauth } — class self only
 
 export const CLASSES = Object.freeze(['public', 'self', 'viewer', 'operator', 'admin', 'owner']);
-export const MODES = Object.freeze(['local', 'oidc', 'off']);
+export const MODES = Object.freeze(['local', 'oidc', 'proxy', 'off']);
 
-const SLICE4_PACK = 'slice 4: pack.register, pack.evict, pack.replace';
+// A route that registers a pack (server/pack-registry.mjs): the pack's row
+// (pack.register, or pack.update for the same content under another label
+// or source), the quick-start dedup (pack.replace — with verdict.carry when
+// the replaced pack held verdicts, GAP batch 2), the cap (pack.evict),
+// and the reconcile of its service links (pack.link / pack.unlink, with
+// service.create / environment.create for the rows it names when absent).
+const PACK_REGISTER = Object.freeze([
+  'pack.register', 'pack.update', 'pack.replace', 'pack.evict', 'pack.link', 'pack.unlink', 'service.create', 'environment.create', 'verdict.carry',
+]);
+
+// The live MCP API (rebadge batch 3): a server-side request to an MCP
+// target, so without sign-in answered only to a direct loopback request,
+// closed when exposed, and every request takes the CSRF header in every
+// posture (R2) — the bearer excepted, as for every csrf: 'always' row.
+const LIVE = Object.freeze({ exposed: 'refuse', direct: true, closedAs: 'the live MCP API' });
 
 export const ROUTES = Object.freeze({
   // ---------- public ----------
   'GET /healthz': { class: 'public' },
   'GET /api/version': { class: 'public' },
-  'GET /auth/login': { class: 'public', modes: ['local', 'oidc'] },
+  // The studio shell, by name (server/index.mjs sendShell — the branded
+  // rendering or the file); the SPA fallback below is the same handler.
+  'GET /': { class: 'public' },
+  'GET /index.html': { class: 'public' },
+  'GET /auth/login': { class: 'public', modes: ['local', 'oidc', 'proxy'] },
   'POST /auth/login': { class: 'public', csrf: 'form', modes: ['local'] },
   'GET /auth/callback': {
     class: 'public', modes: ['oidc'],
     audit: ['user.jit', 'membership.jit', 'owner.bootstrap', 'user.update'],
   },
-  'POST /auth/logout': { class: 'public', csrf: 'none', modes: ['local', 'oidc'] },
-  'GET /auth/me': { class: 'public', modes: ['local', 'oidc'] },
+  'POST /auth/logout': { class: 'public', csrf: 'none', modes: ['local', 'oidc', 'proxy'] },
+  'GET /auth/me': { class: 'public', modes: ['local', 'oidc', 'proxy'] },
   'GET /^(?!\\/api\\/).*/': { class: 'public' },
 
   // ---------- self: the caller's own row ----------
@@ -60,7 +87,8 @@ export const ROUTES = Object.freeze({
     self: { pwflow: true, session: false, unauth: 'flow-expired' },
   },
   // "Sign out my other sessions": a session only (never the pwflow cookie),
-  // and an identity change, so the CSRF header in every mode.
+  // and an identity change, so the CSRF header in every mode. Not behind a
+  // reverse proxy: the headers are the session, there is none to end.
   'POST /auth/signout-others': {
     class: 'self', csrf: 'always', modes: ['local', 'oidc'], audit: ['user.signout'],
     self: { pwflow: false, session: true, unauth: 'json' },
@@ -70,10 +98,22 @@ export const ROUTES = Object.freeze({
   'GET /api/orgs': { class: 'viewer' },
   'GET /api/packs': { class: 'viewer' },
   'GET /api/examples': { class: 'viewer' },
+  'GET /api/taxonomy': { class: 'viewer' },
+  // The MCP server-settings policy and the proxy flag (server/routes/mcp-settings.mjs; rebadge batch 4).
+  'GET /api/mcp-settings': { class: 'viewer' },
   'GET /api/references': { class: 'viewer' },
   'GET /api/packs/:id': { class: 'viewer' },
   'GET /api/packs/:id/canonical': { class: 'viewer' },
   'GET /api/packs/:id/conformance': { class: 'viewer' },
+  // A reviewer's verdicts on a registered pack's artefacts (GAP batch 2,
+  // B3.1; server/routes/verdicts.mjs): a catalogue pack answers the empty
+  // document.
+  'GET /api/packs/:id/verdicts': { class: 'viewer' },
+  // The placeholder report and the service audit report (GAP batch 2, B3.5;
+  // server/routes/audit-report.mjs): reads over the pack and the store's
+  // verdict and waiver rows, JSON or HTML.
+  'GET /api/packs/:id/placeholders': { class: 'viewer' },
+  'GET /api/packs/:id/audit-report': { class: 'viewer' },
   'GET /api/diff': { class: 'viewer' },
   'GET /api/compile/targets': { class: 'viewer' },
   'GET /api/packs/:id/compile-catalog': { class: 'viewer' },
@@ -83,6 +123,10 @@ export const ROUTES = Object.freeze({
   'GET /api/deploys': { class: 'viewer' },
   'GET /api/deploys/:deployId/rollback-plan': { class: 'viewer' },
   'GET /api/journeys': { class: 'viewer' },
+  // The org's notify hooks (server/notify-target-policy.mjs): names and
+  // whether each is usable — never a value or origin; the list a journey's
+  // notify chooses from.
+  'GET /api/journeys/notify-hooks': { class: 'viewer' },
   'GET /api/journeys/:name/runs': { class: 'viewer' },
   'GET /api/journeys/:name/schedule': { class: 'viewer' },
   'GET /api/packs/:id/compile/:target': { class: 'viewer' },
@@ -91,24 +135,67 @@ export const ROUTES = Object.freeze({
   'GET /api/library': { class: 'viewer' },
   'GET /api/library/requirements/:tier': { class: 'viewer' },
   'GET /api/library/:id': { class: 'viewer' },
+  // The services and environments API (server/routes/services.mjs, STORE_PLAN
+  // slice 4): the request's org's service records and their environments.
+  'GET /api/services': { class: 'viewer' },
+  'GET /api/services/:id': { class: 'viewer' },
+  'GET /api/services/:id/environments': { class: 'viewer' },
+  // A service record's waivers of conformance findings (GAP batch 2, B3.2;
+  // server/routes/waivers.mjs): history included, newest first.
+  'GET /api/services/:id/waivers': { class: 'viewer' },
+  'GET /api/environments/:id': { class: 'viewer' },
+  // The org's MCP endpoint records: the name and origin to every member,
+  // the URL and the token variable's name to operators and above.
+  'GET /api/mcp-endpoints': { class: 'viewer' },
 
   // ---------- operator: every existing mutation ----------
-  'DELETE /api/uploads': { class: 'operator', later: 'slice 4: pack.clear' },
-  'POST /api/packs/:id/retrofeed': { class: 'operator', later: 'none (computes; writes nothing)' },
-  'POST /api/deploys/:deployId/verify': { class: 'operator', later: 'slice 5: deploy.verify' },
-  'POST /api/deploys/:deployId/rollback': { class: 'operator', later: 'slice 5: deploy.rollback' },
-  'POST /api/packs/:id/deploy-bulk': { class: 'operator', later: 'slice 5: deploy.bulk' },
-  'POST /api/packs/:id/deploy/:target': { class: 'operator', later: 'slice 5: deploy.run' },
-  'POST /api/journeys/:name/run': { class: 'operator', later: 'slice 5: journey.run' },
-  'POST /api/journeys/capture': { class: 'operator', later: 'slice 5: journey.capture' },
-  'POST /api/draft-from-mcp': { class: 'operator', later: SLICE4_PACK },
-  'POST /api/refresh-live': { class: 'operator', later: 'slice 5: live.refresh' },
-  'POST /api/crawl': { class: 'operator', later: SLICE4_PACK },
-  'POST /api/crawl-github': { class: 'operator', later: SLICE4_PACK },
-  'POST /api/validate': { class: 'operator', later: SLICE4_PACK },
-  'POST /api/library/instantiate': { class: 'operator', later: 'none (computes)' },
-  'POST /api/library/compile': { class: 'operator', later: 'none (computes)' },
-  'POST /api/library/register': { class: 'operator', later: SLICE4_PACK },
+  'DELETE /api/uploads': { class: 'operator', audit: ['pack.clear'] },
+  'POST /api/packs/:id/retrofeed': { class: 'operator' }, // computes; writes nothing
+  'POST /api/deploys/:deployId/verify': { class: 'operator', audit: ['deploy.verify'] },
+  'POST /api/deploys/:deployId/rollback': { class: 'operator', audit: ['deploy.rollback'] },
+  'POST /api/packs/:id/deploy-bulk': { class: 'operator', audit: ['deploy.bulk'] },
+  'POST /api/packs/:id/deploy/:target': { class: 'operator', audit: ['deploy.run'] },
+  'POST /api/journeys/:name/run': { class: 'operator', audit: ['journey.run'] },
+  'POST /api/journeys/capture': { class: 'operator', audit: ['journey.capture'] },
+  // The two fetches join the live MCP API's posture (rebadge batch 3, D7):
+  // one posture for every server-side MCP request.
+  'POST /api/draft-from-mcp': { class: 'operator', ...LIVE, csrf: 'always', audit: PACK_REGISTER },
+  'POST /api/refresh-live': { class: 'operator', ...LIVE, csrf: 'always', audit: ['live.refresh'] },
+  // The ping (server/routes/live.mjs): initialize, tools/list and one read;
+  // it writes nothing but a typed URL's row (an admin's privilege, R4).
+  'POST /api/mcp/ping': { class: 'operator', ...LIVE, csrf: 'always', audit: ['live.ping'] },
+  // The live jobs (server/routes/live.mjs, server/live-jobs.mjs): a snapshot
+  // or a draft as a job, its gate log read by its starter only. The start
+  // registers the pack (when the job ends) and writes a live.fetch row at
+  // every end; the cancel's live.fetch is the row the job writes when the
+  // cancel ends it.
+  'GET /api/mcp/jobs': { class: 'operator', ...LIVE },
+  'POST /api/mcp/jobs': { class: 'operator', ...LIVE, csrf: 'always', audit: [...PACK_REGISTER, 'live.fetch'] },
+  'GET /api/mcp/jobs/:jobId': { class: 'operator', ...LIVE },
+  'POST /api/mcp/jobs/:jobId/cancel': { class: 'operator', ...LIVE, csrf: 'always', audit: ['live.fetch'] },
+  'POST /api/crawl': { class: 'operator', audit: PACK_REGISTER },
+  'POST /api/crawl-github': { class: 'operator', audit: PACK_REGISTER },
+  'POST /api/validate': { class: 'operator', audit: PACK_REGISTER },
+  'POST /api/library/instantiate': { class: 'operator' }, // computes; writes nothing
+  'POST /api/library/compile': { class: 'operator' }, // computes; writes nothing
+  'POST /api/library/register': { class: 'operator', audit: PACK_REGISTER },
+  // The services and environments API (server/routes/services.mjs): a
+  // service's deletion cascades its environments, pack links and waivers,
+  // which write no row of their own (the service.delete detail counts them).
+  'POST /api/services': { class: 'operator', audit: ['service.create'] },
+  'PATCH /api/services/:id': { class: 'operator', audit: ['service.update'] },
+  'DELETE /api/services/:id': { class: 'operator', audit: ['service.delete'] },
+  'POST /api/services/:id/environments': { class: 'operator', audit: ['environment.create'] },
+  'PATCH /api/environments/:id': { class: 'operator', audit: ['environment.update'] },
+  'DELETE /api/environments/:id': { class: 'operator', audit: ['environment.delete'] },
+  // The verdicts (server/routes/verdicts.mjs): a record on one artefact of a
+  // registered pack; the same status and reason again writes no row.
+  'PUT /api/packs/:id/verdicts/:artefact': { class: 'operator', audit: ['verdict.set'] },
+  'DELETE /api/packs/:id/verdicts/:artefact': { class: 'operator', audit: ['verdict.clear'] },
+  // The waivers (server/routes/waivers.mjs): a time-boxed suppression of a
+  // conformance finding on a service record; a revoke keeps the row.
+  'POST /api/services/:id/waivers': { class: 'operator', audit: ['waiver.create'] },
+  'POST /api/waivers/:id/revoke': { class: 'operator', audit: ['waiver.revoke'] },
 
   // ---------- admin: the request's org — its name and its members ----------
   // The identity API (server/routes/identity.mjs) for the org the request
@@ -123,6 +210,29 @@ export const ROUTES = Object.freeze({
   },
   'PATCH /api/org/members/:userId': { class: 'admin', identityApi: true, csrf: 'always', exposed: 'refuse', audit: ['membership.role'] },
   'DELETE /api/org/members/:userId': { class: 'admin', identityApi: true, csrf: 'always', exposed: 'refuse', audit: ['membership.remove'] },
+  // The MCP endpoints (server/routes/services.mjs, STORE_PLAN slice 4): a
+  // record is durable configuration the server will fetch with a token it
+  // reads from its own environment, so the three changes take exactly the
+  // identity API's defences — the CSRF header in every posture, closed in
+  // the open, exposed posture and, without sign-in, answered only to a
+  // direct loopback request — without being the identity API.
+  'POST /api/mcp-endpoints': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoint API', audit: ['mcp_endpoint.create'] },
+  'PATCH /api/mcp-endpoints/:id': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoint API', audit: ['mcp_endpoint.update'] },
+  'DELETE /api/mcp-endpoints/:id': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoint API', audit: ['mcp_endpoint.delete'] },
+  // The org's audit (STORE_PLAN §5, slice 5; server/routes/audit.mjs): the
+  // rows with its org_id, to its admins; an owner reads the deployment's
+  // (scope=all, the default for an owner; scope=deployment for the rows
+  // with no org). It lists every login and every MCP origin, so it is
+  // closed where the member and user lists are: in the open, exposed
+  // posture, and without sign-in answered only to a direct loopback
+  // request — without being the identity API. A read: it writes no row.
+  'GET /api/audit': { class: 'admin', exposed: 'refuse', direct: true, closedAs: 'the audit API' },
+  // The MCP server-settings API (rebadge batch 4, server/routes/mcp-settings.mjs): the opt-in
+  // pass-through of an admin's settings to the MCP server — a server-side request carrying a
+  // secret, so admin, closed when exposed, direct without sign-in, the CSRF header always. Off
+  // (404) unless OBSERVOGRAM_MCP_ADMIN_PROXY=1.
+  'POST /api/mcp-settings/describe': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP server-settings API' },
+  'POST /api/mcp-settings/submit': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP server-settings API', audit: ['live.mcp-settings'] },
 
   // ---------- owner: the deployment's users, orgs and join role ----------
   // The identity API (server/routes/identity.mjs), whatever org the request
@@ -156,7 +266,7 @@ export const STATIC_MOUNTS = Object.freeze({ '/lib': 'public', '/': 'public' });
 // The only non-route, non-router, non-static layers the app may hold, by
 // function name (an anonymous app.use fails the completeness test).
 export const MIDDLEWARE = Object.freeze([
-  'authGate', 'orgContext', 'jsonParser', 'textParser', 'urlencodedParser', 'payloadTooLarge',
+  'authGate', 'orgContext', 'jsonParser', 'textParser', 'urlencodedParser', 'bodyParserError',
 ]);
 
 // One entry with its class defaults filled; throws on a key the table does
@@ -176,10 +286,11 @@ export function routeEntry(key) {
     path,
     class: raw.class,
     audit: Object.freeze([...(raw.audit || [])]),
-    later: raw.later ?? null,
     csrf: raw.csrf ?? (method === 'GET' || !isApi ? 'none' : 'session'),
     exposed: raw.exposed ?? (raw.class === 'admin' || raw.class === 'owner' ? 'refuse' : 'allow'),
     identityApi: raw.identityApi === true,
+    direct: raw.direct ?? (raw.identityApi === true),
+    closedAs: raw.closedAs ?? 'the identity API',
     modes: Object.freeze([...(raw.modes || MODES)]),
     self: raw.self ? Object.freeze({ ...raw.self }) : null,
   });

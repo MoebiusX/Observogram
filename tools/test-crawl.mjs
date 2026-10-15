@@ -8,7 +8,7 @@
 // works: crawler output is a valid pack.
 // ============================================================
 
-import { crawlFiles, detectArtefactKind, crawlToYaml, scanReadsPath, scanSkipsName, SCAN_EXT, SCAN_IGNORE_DIRS } from './lib/crawler.mjs';
+import { crawlFiles, dashboardSpecId, detectArtefactKind, crawlToYaml, scanReadsPath, scanSkipsName, walkScanFolder, SCAN_EXT, SCAN_IGNORE_DIRS } from './lib/crawler.mjs';
 import { inferSlisFromRecordingRules, canonicalRuleDuration, burnAlertsFromAlertRules } from './lib/sli-inference.mjs';
 import { compileAlertmanager } from './lib/compile.mjs';
 import { backendForScrapeJob, knownBackendProduct, BACKEND_PATTERNS } from './lib/backend-products.mjs';
@@ -355,6 +355,10 @@ assert(canonical.spec.validation.synthetic_checks.length >= 1, 'synthetic checks
 assert((summary.scaffold || []).includes('baselines'), 'schema-required baselines marked as scaffold');
 assert((summary.scaffold || []).some(s => s.startsWith('validation.synthetic_checks.')),
        'schema-required synthetic check marked as scaffold');
+assert(!(summary.scaffold || []).some(s => /^telemetry\.backends\.[^.]+$/.test(s)),
+       'a real backend is never parked as a scaffold: an assumed port marks the endpoints FIELD only');
+assert((summary.scaffold || []).includes('otel.semconv') && !(summary.scaffold || []).includes('otel'),
+       'the invented otel block is marked field by field, never as the otel artefact (Compare keeps it not-observed)');
 
 assert(Object.keys(evidence).length >= 5, `evidence map populated (${Object.keys(evidence).length} entries)`);
 
@@ -994,5 +998,139 @@ assert(stage.indexOf('scanReadsPath') < stage.indexOf('f.text()'), 'and before i
 const drop = studioSrc.slice(studioSrc.indexOf('async function readEntry'), studioSrc.indexOf('async function stageFileList'));
 assert(/lib\.scanSkipsName\(entry\.name, \{ dir: true \}\)/.test(drop), 'the drop zone applies the same rule to each folder');
 assert(!/CRAWL_IGNORE_DIRS|CRAWL_SCAN_EXT/.test(studioSrc), 'the studio keeps no list of its own');
+
+// ---------- the folder handed over as a handle: skipped folders are never listed ----------
+// A stand-in for FileSystemDirectoryHandle / FileSystemFileHandle. `listed`
+// records every folder whose entries were asked for: the point of the walk
+// is that node_modules is not among them.
+{
+  const listed = [];
+  const fileHandle = (name) => ({ kind: 'file', name });
+  const dirHandle = (name, children) => ({
+    kind: 'directory',
+    name,
+    async *entries() {
+      listed.push(name);
+      // Out of name order on purpose: a platform lists in its own order.
+      for (const c of [...children].reverse()) yield [c.name, c];
+    },
+  });
+  const repo = dirHandle('dist', [                       // the picked folder: named like a skipped one
+    fileHandle('docker-compose.yml'),
+    fileHandle('README.md'),
+    fileHandle('.env.yaml'),
+    dirHandle('k8s', [dirHandle('prometheus', [fileHandle('rules.yaml'), fileHandle('alerts.yml')])]),
+    dirHandle('node_modules', [dirHandle('pkg', [fileHandle('index.js'), fileHandle('dash.json')])]),
+    dirHandle('packages', [dirHandle('api', [
+      dirHandle('node_modules', [fileHandle('x.yml')]),
+      dirHandle('src', [fileHandle('metrics.ts')]),
+    ])]),
+    dirHandle('.git', [fileHandle('config.yaml')]),
+    dirHandle('.claude', [dirHandle('worktrees', [dirHandle('w1', [fileHandle('rules.yaml')])])]),
+    dirHandle('.observability', [fileHandle('pack.yaml')]),
+    dirHandle('build', [fileHandle('out.json')]),
+  ]);
+  const read = [];
+  const notEntered = await walkScanFolder(repo, async (rel, handle) => { read.push(rel); assert(handle.kind === 'file', 'onFile gets the file handle'); });
+  assert(JSON.stringify(read) === JSON.stringify([
+    'dist/.observability/pack.yaml',
+    'dist/docker-compose.yml',
+    'dist/k8s/prometheus/alerts.yml',
+    'dist/k8s/prometheus/rules.yaml',
+    'dist/packages/api/src/metrics.ts',
+  ]), 'the walk reads what the rule reads, rooted at the picked folder, in name order', read);
+  assert(read.every(r => scanReadsPath(r, { skipRoot: true })), 'every path it reads is one the folder input would have read');
+  assert(notEntered === 5, 'node_modules (twice), .git, .claude and build are counted as not entered', notEntered);
+  assert(!listed.includes('node_modules') && !listed.includes('.git') && !listed.includes('worktrees') && !listed.includes('pkg'),
+    'and their entries are never asked for — the dependencies are not listed, not merely filtered', listed);
+  assert(listed.includes('dist') && listed.includes('.observability'), 'the picked folder is entered whatever its name; .observability too');
+
+  const empty = await walkScanFolder(dirHandle('nothing', []), async () => { throw new Error('no file to read'); });
+  assert(empty === 0, 'an empty folder reads nothing and skips nothing');
+
+  // The studio's "pick a folder" goes through the handle where the browser
+  // has one, and keeps the folder input as the fallback.
+  const pick = studioSrc.slice(studioSrc.indexOf('async function pickScanFolder'), studioSrc.indexOf('async function stageFileList'));
+  assert(/pickFolderBtn\.onclick = \(\) => pickScanFolder\(folderInput\)/.test(studioSrc), 'pick a folder calls the picker, not the input');
+  assert(/typeof window\.showDirectoryPicker !== 'function'\) \{ folderInput\.click\(\); return; \}/.test(pick),
+    'a browser without showDirectoryPicker falls back to the folder input');
+  assert(/e\?\.name !== 'AbortError'\) folderInput\.click\(\)/.test(pick), 'a refusal falls back too; a closed dialog does nothing');
+  assert(/lib\.walkScanFolder\(dir,/.test(pick) && !/scanSkipsName|SCAN_EXT/.test(pick), 'and the walk is the library\'s — the studio keeps no rule of its own');
+  assert(pick.indexOf('SCAN_MAX_FILE_BYTES') < pick.indexOf('file.text()'), 'the size cap applies before the file is read');
+}
+
+// ---------- Grafana unified-alerting provisioning ----------
+process.stdout.write('\n--- grafana alert provisioning ---\n');
+{
+  // A provisioning export as other tooling writes it back: query models as
+  // JSON strings, non-ASCII annotations as YAML \xHH escapes (PyYAML's
+  // default), and one rule whose model JSON is broken. See the fixture README.
+  const PROV_PATH = 'grafana/provisioning/alerting/alert-rules.yaml';
+  const PROV = readFileSync(new URL('./fixtures/crawl/grafana-provisioning/alert-rules.yaml', import.meta.url), 'utf8');
+  const RULES = [
+    'groups:',
+    '  - name: slo',
+    '    rules:',
+    '      - record: checkout:availability:good',
+    '        expr: sum(rate(http_requests_total{code!~"5.."}[5m]))',
+    '      - record: checkout:availability:total',
+    '        expr: sum(rate(http_requests_total[5m]))',
+    '',
+  ].join('\n');
+  assert(detectArtefactKind(PROV_PATH, PROV) === 'prometheus-rules', 'provisioned alert rules detected as a rule file');
+
+  const prov = crawlFiles({ [PROV_PATH]: PROV, 'prometheus/rules.yml': RULES }, { repoName: 'checkout', now: '2026-06-05T00:00:00.000Z' });
+  const provWarnings = prov.summary.warnings;
+  assert(!provWarnings.some(w => /Failed to parse/.test(w)),
+    'YAML \\xHH escapes in an annotation do not fail the file', provWarnings.filter(w => /Failed to parse/.test(w)));
+  assert(Object.values(prov.evidence).some(v => v === `${PROV_PATH}#checkout-slo/CheckoutAvailabilityBurnRate`),
+    'the rule with a mapping model survives');
+  assert(Object.values(prov.evidence).some(v => v === `${PROV_PATH}#checkout-slo/CheckoutLatencyBurnRate`),
+    'the rule with a well-formed JSON-string model survives');
+  assert(!Object.values(prov.evidence).some(v => /CheckoutQueueDepthBurnRate/.test(v)),
+    'the rule whose model JSON does not parse is skipped, not declared');
+  assert(prov.summary.discovered.burnRateAlerts === 2,
+    'two of three alert rules discovered', prov.summary.discovered.burnRateAlerts, 2);
+  const skipped = provWarnings.filter(w => /^Skipped .* alert rule\(s\)/.test(w));
+  assert(skipped.length === 1, 'exactly one skip warning for the file', skipped);
+  assert(skipped[0] === `Skipped 1 of 3 alert rule(s) in ${PROV_PATH}: model JSON could not be parsed`,
+    'the warning names the file, the count lost and the cause', skipped[0],
+    `Skipped 1 of 3 alert rule(s) in ${PROV_PATH}: model JSON could not be parsed`);
+
+  // The expr read from data[].model is the one the SLO binding and the metric
+  // inventory use, for a mapping model and for a JSON-string model alike.
+  assert(prov.canonical.spec.policy.burn_rate_alerts.some(a => a.slo === 'checkout_availability_99'),
+    'the mapping model\'s expr binds the alert to the recorded SLO', prov.canonical.spec.policy.burn_rate_alerts);
+  assert(prov.evidence['metrics.checkout:latency_p99:ms'] !== undefined,
+    'the JSON-string model\'s expr feeds the metric inventory', Object.keys(prov.evidence).filter(k => /^metrics\./.test(k)));
+  assert(validateCanonical(prov.canonical, SCHEMA).length === 0, 'provisioning crawl validates against the vendored schema');
+
+  // A clean file keeps no skip warning.
+  const clean = crawlFiles({ 'prometheus/rules.yml': RULES }, { repoName: 'checkout', now: '2026-06-05T00:00:00.000Z' });
+  assert(!clean.summary.warnings.some(w => /^Skipped .* alert rule/.test(w)), 'no skip warning when every rule reads');
+}
+
+// ---------- dashboardSpecId: the crawler's dashboard id rule as one export ----------
+// The one rule a crawled pack and a live snapshot share. The seven uid shapes
+// the fetcher's own slug mapped differently (`_` kept, `--` collapsed, 64 vs
+// 60 characters, `dash-` vs `d-`): the export gives exactly the ids a crawl
+// writes for them.
+{
+  const UIDS = [
+    ['node_exporter_full', 'Node Exporter Full'], ['9xyz_abc', 'Nine'], ['a--b', 'A B'],
+    ['3f1e9c0d2b8a4f6e9d7c5b3a1e0f2d4c', 'Hashed'], ['orders-main', 'Orders'], ['--', 'Fallback Title'],
+    ['Payments_API_Overview_With_A_Very_Long_Uid_That_Runs_Past_Sixty_Chars', 'Long'],
+  ];
+  const files = Object.fromEntries(UIDS.map(([uid, title], i) => [`grafana/dashboards/d${i}.json`,
+    JSON.stringify({ uid, title, schemaVersion: 39, panels: [{ type: 'timeseries', title: 'p', targets: [{ expr: 'up' }] }] })]));
+  const crawled = crawlFiles(files, { repoName: 'ids', now: '2026-06-05T00:00:00.000Z' }).canonical.spec.dashboards;
+  const byUid = Object.fromEntries(crawled.map(d => [d.params.uid, d.id]));
+  const exported = UIDS.map(([uid, title]) => dashboardSpecId({ uid, title }));
+  assert(JSON.stringify(exported) === JSON.stringify(UIDS.map(([uid]) => byUid[uid])),
+    'dashboardSpecId gives the id the crawl writes for each of the seven uid shapes', exported, UIDS.map(([uid]) => byUid[uid]));
+  assert(JSON.stringify(exported) === JSON.stringify(['node-exporter-full', 'd-9xyz-abc', 'a--b', 'd-3f1e9c0d2b8a4f6e9d7c5b3a1e0f2d4c', 'orders-main', 'fallback-title', 'payments-api-overview-with-a-very-long-uid-that-runs-past-si'])
+    && dashboardSpecId({ uid: '', title: '' }) === null && dashboardSpecId(null) === null && dashboardSpecId({ uid: '%%' }) === null,
+    'the rule pinned: `_` mapped, `--` kept, cut at 60, `d-` before a digit, the title when the uid yields nothing, null when neither does', exported);
+}
 
 report('crawler');

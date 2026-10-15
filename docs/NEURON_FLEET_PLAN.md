@@ -631,7 +631,14 @@ see a late sample (§6.3).
    STORE_PLAN for `mcp_endpoints.read_token_env` (`mcp-endpoints.mjs:41-47`
    checks syntax only), which has no callers yet, so nothing existing
    breaks. The Kubernetes `in-cluster` mode (the pod's own service account)
-   is owner-only. Confirm both.
+   is owner-only. Confirm both. *Note (2026-10-03):* taken for
+   `mcp_endpoints.read_token_env` in STORE_PLAN slice 4
+   (`server/store/mcp-endpoints.mjs`), with the longest-prefix rule: the
+   owning org of a name is the org whose `OBSERVOGRAM_ORG_<KEY>_` prefix is
+   the longest match among every org row, live or removed (`acme` /
+   `acme-eu`: `OBSERVOGRAM_ORG_ACME_EU_X` is `acme-eu`'s), re-checked at
+   request time by `resolveMcpTarget` before the variable is read. The
+   fleet source's own env names (§1) take the same rule when they land.
 6. **What a tile's size encodes.** (a) The criticality tier: stable, so a
    refresh never reflows the map. (b) Burn or budget consumed: salient, but
    the map reshuffles as numbers move. Colour carries the SLO state either

@@ -1,0 +1,58 @@
+{
+  "L1::SLI-01": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLO-01": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L2::OTEL-01": {
+    "family": "otel",
+    "via": "id"
+  },
+  "L2::PIP-EXP-LOG": {
+    "family": "pipeline_exporter_logs",
+    "via": "id"
+  },
+  "L2::PIP-EXP-MET": {
+    "family": "pipeline_exporter_metrics",
+    "via": "id"
+  },
+  "L2::PIP-EXP-TRC": {
+    "family": "pipeline_exporter_traces",
+    "via": "id"
+  },
+  "L2::PIP-PRC-01": {
+    "family": "pipeline_processor",
+    "via": "id"
+  },
+  "L2::PIP-RCV-01": {
+    "family": "pipeline_receiver",
+    "via": "id"
+  },
+  "L3::DASH-01": {
+    "family": "dashboard",
+    "via": "defines"
+  },
+  "L3::QRY-01": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L4:alerting:ALR-01": {
+    "family": "alert_route",
+    "via": "id"
+  },
+  "L4:policy:POL-01": {
+    "family": "burn_rate",
+    "via": "id"
+  },
+  "L5::BASE-01": {
+    "family": "baselines",
+    "via": "id"
+  },
+  "L5::SYN-01": {
+    "family": "synthetic",
+    "via": "id"
+  }
+}

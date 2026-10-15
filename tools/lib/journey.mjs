@@ -80,6 +80,7 @@
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync, openSync, readSync, closeSync, realpathSync } from 'node:fs';
 import { resolve, join, dirname, extname, basename, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import { parse as parseYaml, emit as emitYaml } from './mini-yaml.mjs';
 import { validateCanonical, SPEC_SCHEMA_PATH } from './validator.mjs';
 import { adapt } from './adapter.mjs';
@@ -88,6 +89,8 @@ import { diffPacks } from './diff.mjs';
 import { comparePackBranches } from './traceability-graph.mjs';
 import { crawlFiles } from './crawler.mjs';
 import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
+import { isTransportHookError } from './mcp-client.mjs';
+import { safeMcpUrl } from './mcp-url-safety.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from './contracts/stack-self-metrics.mjs';
 import { formatStackValue } from './stack-evidence.mjs';
 import { parseSchedule, windowMs } from './schedule.mjs';
@@ -131,15 +134,44 @@ export function listJourneys() {
 // Persist a journey definition into the workspace. Used by the studio's
 // "save this comparison as a journey" capture; the file is plain YAML the
 // user can edit (e.g. swap a frozen pack file for a crawl: source).
+//
+// The file is exactly what the caller validated, or nothing: every banner
+// line is one comment line (a CR, LF, U+2028 or U+2029 in it becomes a
+// space — a pack label with a line break could otherwise write a key of its
+// own, a `notify:` block capture never checked), and the text is parsed
+// before it is written and must read back deep-equal to { name, ...def }
+// (a key or a string mini-yaml cannot round-trip — a multi-line scope
+// scalar, a key with a line break — is refused). On a refusal nothing is
+// written and a previous file of that name is untouched; the message names
+// the first top-level key that differs, never a value.
 export function saveJourneyDef(name, def, { banner } = {}) {
   const safe = sanitizeName(name);
   if (!safe) throw new Error('journey name required');
   if (!def?.packA || !def?.packB) throw new Error('journey def needs packA and packB');
+  const head = (banner || []).map(l => `# ${String(l).replace(/[\r\n\u2028\u2029]/g, ' ')}`).join('\n');
+  const expected = { name: safe, ...def };
+  const text = (head ? head + '\n' : '') + emitYaml(expected);
+  const reason = readBackMismatch(text, expected);
+  if (reason) throw new Error(`journey ${safe}: the definition does not read back as written (${reason}) — nothing was saved`);
   mkdirSync(journeysDir(), { recursive: true });
   const path = join(journeysDir(), `${safe}.journey.yaml`);
-  const head = (banner || []).map(l => `# ${l}`).join('\n');
-  writeFileSync(path, (head ? head + '\n' : '') + emitYaml({ name: safe, ...def }));
+  writeFileSync(path, text);
   return { name: safe, path };
+}
+
+// Why `text` does not parse back to `expected`, naming a top-level key and
+// never a value; null when it does.
+function readBackMismatch(text, expected) {
+  let back;
+  try { back = parseYaml(text); } catch { return 'it does not parse as YAML'; }
+  if (isDeepStrictEqual(back, expected)) return null;
+  if (!back || typeof back !== 'object' || Array.isArray(back)) return 'it is not a mapping';
+  for (const k of [...new Set([...Object.keys(expected), ...Object.keys(back)])]) {
+    if (!Object.hasOwn(back, k)) return `${JSON.stringify(k)} is missing`;
+    if (!Object.hasOwn(expected, k)) return `${JSON.stringify(k)} appears`;
+    if (!isDeepStrictEqual(back[k], expected[k])) return `${JSON.stringify(k)} differs`;
+  }
+  return 'it differs';
 }
 
 // Resolve a journey by name (workspace journeys/) or by literal file path.
@@ -163,6 +195,7 @@ export function loadJourneyDef(ref, { allowPath = true } = {}) {
   def.name = def.name || sanitizeName(ref).replace(/\.journey\.yaml$/, '');
   if (!def.packA || (!def.packA.file && !def.packA.crawl)) throw new Error(`journey ${def.name}: packA needs file: or crawl:`);
   if (!def.packB || (!def.packB.file && !def.packB.mcp)) throw new Error(`journey ${def.name}: packB needs file: or mcp:`);
+  validatePackBMcp(def.packB.mcp, def.name);
   if (def.gate && typeof def.gate === 'object' && def.gate.stack !== undefined) validateGateStack(def.gate.stack, def.name);
   // Inventory coverage: a malformed inventory: or gate.inventory block is a load-time error too.
   if (def.gate && typeof def.gate === 'object' && def.gate.inventory !== undefined) validateGateInventory(def.gate.inventory, def.name);
@@ -179,6 +212,16 @@ export function loadJourneyDef(ref, { allowPath = true } = {}) {
   if (def.notify !== undefined) validateNotify(def.notify, def.name);
   def.__source = source;
   return def;
+}
+
+// packB.mcp.endpointId — the org's registered MCP endpoint a server-run
+// journey fetches through (capture writes it beside the url) — is a
+// positive integer when present.
+export function validatePackBMcp(mcp, journeyName = '?') {
+  if (!mcp || typeof mcp !== 'object' || mcp.endpointId === undefined) return;
+  if (!Number.isInteger(mcp.endpointId) || mcp.endpointId < 1) {
+    throw new Error(`journey ${journeyName}: packB.mcp.endpointId must be a positive integer (got ${JSON.stringify(mcp.endpointId)})`);
+  }
 }
 
 // Step 5: the notify policy vocabulary, re-exported from the browser-safe
@@ -213,7 +256,9 @@ export function validateNotify(value, journeyName = '?') {
 // kept in a local by the caller, never on `def` or the record. An unset
 // urlEnv/authEnv is a configuration error of the same class as
 // packB.mcp.authEnv (exit 2, no record). null when the definition has no
-// notify block.
+// notify block. The CLI's: it reads whichever names the definition holds
+// from its invoker's environment. A server run never calls it — the server
+// resolves the org's hook itself and hands runJourney a resolveNotify.
 export function resolveNotifyTarget(def) {
   const n = def?.notify;
   if (!n) return null;
@@ -221,6 +266,20 @@ export function resolveNotifyTarget(def) {
   if (!url) throw new Error(`journey ${def.name}: notify.urlEnv names ${n.urlEnv}, but that env var is not set`);
   const auth = n.authEnv ? (process.env[n.authEnv] || null) : null;
   if (n.authEnv && !auth) throw new Error(`journey ${def.name}: notify.authEnv names ${n.authEnv}, but that env var is not set`);
+  return notifyTargetOf(n, { url, auth });
+}
+
+// The target of a notify block from values already resolved — the URL and
+// the bearer token (null for none) as they are sent; rawUrl/rawAuth the
+// variables' values as read, when the caller trimmed them. `secrets` (in
+// this local target only, never on the record) is what a delivery error is
+// redacted by: the URL raw and trimmed and its href, origin, host, hostname
+// (an IPv6 literal's also bare, as Node's net errors quote it), host:port
+// with the scheme's port when the URL names none, and path with query; the
+// token raw, trimmed of HTTP whitespace, and each of its lines — each of at
+// least NOTIFY_SECRET_MIN characters (a shorter one would mangle fixed texts
+// such as `HTTP 500`; scrubNotifyError is the backstop), longest first.
+export function notifyTargetOf(n, { url, auth = null, rawUrl = url, rawAuth = auth } = {}) {
   const format = NOTIFY_FORMATS.includes(n.format) ? n.format : NOTIFY_DEFAULT_FORMAT;
   const raw = Number.isInteger(n.timeoutMs) ? n.timeoutMs : NOTIFY_TIMEOUT_DEFAULT_MS;
   return {
@@ -234,7 +293,70 @@ export function resolveNotifyTarget(def) {
     timeoutMs: Math.min(NOTIFY_TIMEOUT_MAX_MS, Math.max(NOTIFY_TIMEOUT_MIN_MS, raw)),
     urlEnv: n.urlEnv,
     studioUrl: typeof n.studioUrl === 'string' ? n.studioUrl.replace(/\/+$/, '') : null,
+    secrets: notifySecretsOf({ urls: [rawUrl, url], tokens: [rawAuth, auth] }),
   };
+}
+
+const NOTIFY_SECRET_MIN = 4;
+const NOTIFY_SCHEME_PORTS = { 'http:': '80', 'https:': '443' };
+const trimHttpWhitespace = (v) => String(v).replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '');
+function notifySecretsOf({ urls, tokens }) {
+  const set = new Set();
+  const add = (v) => { if (typeof v === 'string' && v.length >= NOTIFY_SECRET_MIN) set.add(v); };
+  for (const u of urls) {
+    if (typeof u !== 'string') continue;
+    add(u);
+    add(u.trim());
+    let p = null;
+    try { p = new URL(u.trim()); } catch { /* not a URL: the strings above */ }
+    if (!p) continue;
+    add(p.href);
+    if (p.origin !== 'null') add(p.origin);
+    add(p.host);
+    add(p.hostname);
+    // `connect ECONNREFUSED fd00::1:443`: the address without its brackets,
+    // and the port even when the URL leaves it to the scheme.
+    const bare = p.hostname.replace(/^\[(.*)\]$/, '$1');
+    const port = p.port || NOTIFY_SCHEME_PORTS[p.protocol];
+    add(bare);
+    if (port) { add(`${p.hostname}:${port}`); add(`${bare}:${port}`); }
+    add(p.pathname + p.search);
+  }
+  for (const t of tokens) {
+    if (typeof t !== 'string') continue;
+    add(t);
+    const trimmed = trimHttpWhitespace(t);
+    add(trimmed);
+    for (const line of trimmed.split(/\r\n|\r|\n/)) { add(line); add(trimHttpWhitespace(line)); }
+  }
+  return [...set].sort((a, b) => b.length - a.length);
+}
+
+// The pattern backstop for the texts that quote a value: undici's two —
+// the header value it refused (the bearer token, trimmed) and the URL with
+// credentials it refused (raw, as the variable held it) — and the four that
+// quote the hook's host, or the address it resolved to with its port:
+// Node's `getaddrinfo E… <host>`, `connect E… <address>:<port>` and
+// `Hostname/IP does not match certificate's altnames: …`, and undici's
+// `Connect Timeout Error (attempted address(es): …, timeout: …)`. It
+// catches what a value list cannot: a value shorter than NOTIFY_SECRET_MIN,
+// a spelling the list does not hold, an address the host resolved to, a
+// record written before the list.
+export function scrubNotifyError(text) {
+  return String(text ?? '')
+    .replace(/(Headers\.(?:append|set): )"[\s\S]*"( is an invalid header value\.)/, '$1"<redacted>"$2')
+    .replace(/(Request cannot be constructed from a URL that includes credentials: )[\s\S]*$/, '$1<redacted>')
+    .replace(/\b(getaddrinfo|connect) (E[A-Z0-9_]+) \S+/g, '$1 $2 <redacted>')
+    .replace(/(Connect Timeout Error \(attempted address(?:es)?: )[\s\S]*?(, timeout: \d+ms\))/g, '$1<redacted>$2')
+    .replace(/(Hostname\/IP does not match certificate's altnames: )[\s\S]*$/, '$1<redacted>');
+}
+
+// A delivery error as it may land on the record: the target's secrets by
+// value, then the pattern backstop, then any //user:pass@ left.
+function notifyErrorText(text, target) {
+  let out = String(text ?? '');
+  for (const secret of target?.secrets ?? []) out = out.split(secret).join('<redacted>');
+  return redactUrlCredentials(scrubNotifyError(out));
 }
 
 // Step 5: the bounded POST. One AbortController per attempt; attempt 2
@@ -284,7 +406,9 @@ function notifyTextLine(record) {
 // Step 5: decide, build, post — and report on the record as `notify`:
 // { status: sent|skipped|failed, reason, triggers, httpStatus, attempts,
 //   tookMs, urlEnv, error }. The URL itself never lands on the record —
-// only the env var NAME. Never throws: a thrown notifier lands in `error`.
+// only the env var NAME — and no part of it or of the token does: every
+// `error` goes through notifyErrorText. Never throws: a thrown notifier
+// lands in `error`.
 export async function deliverNotification(def, target, record, previousRun, notifier = postNotification) {
   if (!target) return null;
   const decision = notifyDecision({ policy: target.on, record, previousRun });
@@ -303,10 +427,10 @@ export async function deliverNotification(def, target, record, previousRun, noti
       httpStatus: typeof r?.httpStatus === 'number' ? r.httpStatus : null,
       attempts: typeof r?.attempts === 'number' ? r.attempts : 0,
       tookMs: typeof r?.tookMs === 'number' ? r.tookMs : 0,
-      error: r?.sent ? null : redactUrlCredentials(r?.error ?? 'notifier returned no result'),
+      error: r?.sent ? null : notifyErrorText(r?.error ?? 'notifier returned no result', target),
     };
   } catch (e) {
-    return { ...base, status: 'failed', attempts: 1, error: redactUrlCredentials(String(e?.message || e)) };
+    return { ...base, status: 'failed', attempts: 1, error: notifyErrorText(String(e?.message || e), target) };
   }
 }
 
@@ -400,39 +524,102 @@ const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
 // The crawl scope of a studio-run journey (STORE_PLAN slice 2): a walk
 // never reads what is not the requesting org's own part of the workspace.
 // scope = { base, ownRoot } (both absolute); null is the CLI's walk,
-// unchanged. Paths are compared as realpaths, so a symlink cannot lead a
-// walk into another org's part.
-function realOrResolved(p) {
-  try { return realpathSync(p); } catch {
-    const parent = dirname(p);
-    return parent === p ? p : join(realOrResolved(parent), basename(p));
-  }
-}
-function within(p, dir) { return p === dir || p.startsWith(dir.endsWith(sep) ? dir : dir + sep); }
-function crawlScopeTest(scope) {
+// unchanged. crawlScopeRefusal(scope) → null, or the test of one path as
+// written: '' when the org may read it, else why not (the refusal's tail);
+// crawlScopeTest(scope) → null, or the same test as true when the org may
+// read it. Paths are compared as realpaths, so a symlink cannot lead a walk
+// into another org's part.
+//
+// On Windows a spelling does not name a path: NTFS names are
+// case-insensitive and a directory has a short (8.3) name beside its long
+// one, so C:\WS\orgs\beta, c:/ws/orgs/beta and C:\WS~1\orgs\beta are one
+// directory, and JS realpathSync keeps whichever the caller wrote. There
+// both sides are compared as the native realpath (long names, the case on
+// disk) of the longest prefix that exists, the rest appended as written,
+// with \ separators and case folded. That form only compares: a refusal
+// names the path as written. Elsewhere the comparison is the realpath's
+// spelling, as it always was. host = { windows, path, realpathSync,
+// statSync } (the platform, node:path's, node:fs's realpathSync with its
+// .native and node:fs's statSync) is injectable
+// (tools/test-journey-scope.mjs); the default is this host.
+//
+// A network share is one more name the native realpath keeps: a path reached
+// through one (\\host\share\…, \\?\UNC\…, a mapped drive) resolves to
+// \\host\share\…, never to the volume behind it, so \\localhost\C$\ws\orgs\beta
+// is C:\ws\orgs\beta, and \\nas01.corp.example\obs the workspace \\nas01\obs,
+// yet neither compares under the workspace. On Windows a path outside the
+// workspace is therefore nobody's part only on a local drive; any other (a
+// share, or a device path no realpath resolves) is refused. The mirror: a
+// workspace named through a share this host serves (\\myhost\ws, a drive
+// mapped to \\localhost\C$\ws) is stored on a local drive, and its path
+// there (C:\ws\orgs\beta) is one more name for it, which no realpath maps
+// back. So while the workspace is named through a share, a path on a local
+// drive outside it is placed by its nearest directory that is the
+// workspace's own — the same file id on the same volume (statSync, with the
+// volume serial's low 32 bits: all a share reports) — and judged there.
+const NODE_PATH = Object.freeze({ resolve, join, dirname, basename, sep });
+const ON_WINDOWS = process.platform === 'win32';
+const LOCAL_DRIVE = /^[a-z]:\\/;   // a compared form on a local drive (folded)
+const IN_ANOTHER_ORGS_PART = 'belongs to another org\'s part of the workspace — refused';
+const NOT_ON_A_LOCAL_DRIVE = 'is not a path on a local drive, and a network share or a device path may lead into another org\'s part of the workspace — refused; '
+  + 'name it by its path on a local drive (copy it there if it has none)';
+export function crawlScopeRefusal(scope, { windows = ON_WINDOWS, path = NODE_PATH, realpathSync: fsRealpath = realpathSync, statSync: fsStat = statSync } = {}) {
   if (!scope) return null;
-  const base = realOrResolved(resolve(scope.base));
-  const ownRoot = realOrResolved(resolve(scope.ownRoot));
-  const orgsDir = join(base, 'orgs');
-  // Outside the workspace (a checkout elsewhere) is nobody's part; inside
-  // it only the org's own root is, and the default org at the base never
-  // enters <base>/orgs/, where the other orgs live.
-  return (real) => !within(real, base) || (within(real, ownRoot) && !(ownRoot === base && within(real, orgsDir)));
+  const realpath = windows ? fsRealpath.native : fsRealpath;
+  const realOrResolved = (p) => {
+    try { return realpath(p); } catch {
+      const parent = path.dirname(p);
+      return parent === p ? p : path.join(realOrResolved(parent), path.basename(p));
+    }
+  };
+  const fold = (p) => p.replaceAll('/', '\\').toLowerCase();
+  const compared = windows ? (p) => fold(realOrResolved(path.resolve(p))) : realOrResolved;
+  const s = windows ? '\\' : path.sep;
+  const within = (p, dir) => p === dir || p.startsWith(dir.endsWith(s) ? dir : dir + s);
+  const base = compared(path.resolve(scope.base));
+  const ownRoot = compared(path.resolve(scope.ownRoot));
+  const orgsDir = path.join(base, 'orgs');
+  // A workspace named through a share: a local path's place in it, by its
+  // nearest directory that is the workspace's own, or null (above).
+  const fileId = (p) => {
+    try { const st = fsStat(p, { bigint: true }); return `${st.dev & 0xffffffffn}:${st.ino}`; } catch { return null; }
+  };
+  const baseId = windows && !LOCAL_DRIVE.test(base) ? fileId(path.resolve(scope.base)) : null;
+  const isBase = new Map();   // a path or its ancestor (native realpath) → whether it is the workspace's own directory
+  const placed = (p) => {
+    const native = realOrResolved(path.resolve(p));
+    for (let dir = native; ; dir = path.dirname(dir)) {
+      if (!isBase.has(dir)) isBase.set(dir, fileId(dir) === baseId);
+      if (isBase.get(dir)) return path.join(base, fold(native.slice(dir.length)));
+      if (path.dirname(dir) === dir) return null;
+    }
+  };
+  // Outside the workspace (a checkout elsewhere) is nobody's part — on
+  // Windows only on a local drive; inside it only the org's own root is,
+  // and the default org at the base never enters <base>/orgs/, where the
+  // other orgs live.
+  return (p) => {
+    let real = compared(p);
+    if (baseId && LOCAL_DRIVE.test(real) && !within(real, base)) real = placed(p) ?? real;
+    if (!within(real, base)) return windows && !LOCAL_DRIVE.test(real) ? NOT_ON_A_LOCAL_DRIVE : '';
+    return within(real, ownRoot) && !(ownRoot === base && within(real, orgsDir)) ? '' : IN_ANOTHER_ORGS_PART;
+  };
+}
+export function crawlScopeTest(scope, host) {
+  const refusal = crawlScopeRefusal(scope, host);
+  return refusal && ((p) => refusal(p) === '');
 }
 
 // A single path (a file: source, an inventory site) read under the scope.
 function refuseOutOfScope(p, scope, what) {
-  const inScope = crawlScopeTest(scope);
-  if (inScope && !inScope(realOrResolved(p))) {
-    throw new Error(`${what} ${p} belongs to another org's part of the workspace — refused`);
-  }
+  const why = crawlScopeRefusal(scope)?.(p);
+  if (why) throw new Error(`${what} ${p} ${why}`);
 }
 
 function walkRepo(root, { scope = null } = {}) {
-  const inScope = crawlScopeTest(scope);
-  if (inScope && !inScope(realOrResolved(root))) {
-    throw new Error(`crawl source ${root} belongs to another org's part of the workspace — refused`);
-  }
+  const refusal = crawlScopeRefusal(scope);
+  const why = refusal?.(root);
+  if (why) throw new Error(`crawl source ${root} ${why}`);
   const files = {};
   let total = 0;
   const stack = [root];
@@ -444,14 +631,14 @@ function walkRepo(root, { scope = null } = {}) {
       if (e.isDirectory()) {
         if (!SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) {
           const sub = join(dir, e.name);
-          if (inScope && !inScope(realOrResolved(sub))) continue;   // never descended into
+          if (refusal?.(sub)) continue;   // never descended into
           stack.push(sub);
         }
         continue;
       }
       if (!SCAN_EXT.test(e.name)) continue;
       const full = join(dir, e.name);
-      if (inScope && !inScope(realOrResolved(full))) continue;      // a symlinked file included: skipped
+      if (refusal?.(full)) continue;      // a symlinked file included: skipped
       let size = 0;
       try { size = statSync(full).size; } catch (_) { continue; }
       if (size > MAX_FILE_BYTES || total + size > MAX_TOTAL_BYTES) continue;
@@ -478,26 +665,58 @@ async function resolvePackA(def, baseDir, crawlScope = null) {
   return { canonical: out.canonical, source: `crawl:${root}` };
 }
 
-async function resolvePackB(def, crawlScope = null) {
-  if (def.packB.file) return loadPackFile(def.packB.file, def.__baseDir, crawlScope);
+// packB.mcp.url as a run record may carry it: stripMcpUrl's rule, with a
+// non-URL value kept as spelled (the fetcher has already refused it).
+function packBSourceUrl(raw) {
+  return safeMcpUrl(raw) ?? String(raw);
+}
+
+// Where a live Pack B is fetched from: { mcpUrl, mcpAuth, safeUrl }.
+// `resolveMcp(packB.mcp)` — the server's: it resolves the block through the
+// org's registered endpoint (endpointId) or, for an admin, the typed url,
+// and answers that target; the def's authEnv is never read there (a
+// server-held token rides only through a registered endpoint). Without it
+// (the CLI) the def's url and authEnv are used; a def whose Pack B names
+// only an endpointId is the server's to run. `lenient` — the inventory
+// observation beside a file-sourced Pack B, as before: an unset authEnv
+// sends no token, a missing url fails the observation, not the run.
+async function liveTargetOf(def, resolveMcp, { lenient = false } = {}) {
   const m = def.packB.mcp;
-  if (!m?.url) throw new Error(`journey ${def.name}: packB.mcp.url required`);
+  if (resolveMcp) {
+    const t = await resolveMcp(m);
+    return { mcpUrl: t.mcpUrl, mcpAuth: t.mcpAuth ?? null, safeUrl: t.safeMcpUrl ?? packBSourceUrl(t.mcpUrl) };
+  }
+  if (lenient) return { mcpUrl: m.url, mcpAuth: m.authEnv ? (process.env[m.authEnv] || null) : null, safeUrl: packBSourceUrl(m.url) };
+  if (!m?.url) {
+    if (m?.endpointId !== undefined) throw new Error(`journey ${def.name}: packB.mcp.endpointId is resolved by the server; run this journey through the server, or give packB.mcp.url`);
+    throw new Error(`journey ${def.name}: packB.mcp.url required`);
+  }
   const mcpAuth = m.authEnv ? (process.env[m.authEnv] || null) : null;
   if (m.authEnv && !mcpAuth) {
     throw new Error(`journey ${def.name}: packB.mcp.authEnv names ${m.authEnv}, but that env var is not set`);
   }
+  // The record and the kept snapshot (its mcp.url annotation) persist the
+  // URL as it may be persisted — userinfo, fragment and credential
+  // parameters stripped — never the URL as the def spelled it.
+  return { mcpUrl: m.url, mcpAuth, safeUrl: packBSourceUrl(m.url) };
+}
+
+async function resolvePackB(def, crawlScope = null, live = null) {
+  if (def.packB.file) return loadPackFile(def.packB.file, def.__baseDir, crawlScope);
   // Imported lazily: fetch-live-pack is the heaviest module and only the
   // live path needs it. Composition mirrors the server's draft route.
   const { fetchMcp, buildCanonicalPack } = await import('../fetch-live-pack.mjs');
   try {
-    const fetched = await fetchMcp({ mcpUrl: m.url, mcpAuth });
+    const fetched = await fetchMcp({ mcpUrl: live.mcpUrl, mcpAuth: live.mcpAuth });
     const refreshedAt = new Date().toISOString();
-    const canonical = buildCanonicalPack({ refreshedAt, mcpUrl: m.url, ...fetched });
-    return { canonical, source: `mcp:${m.url}` };
+    const canonical = buildCanonicalPack({ refreshedAt, mcpUrl: live.safeUrl, ...fetched });
+    return { canonical, source: `mcp:${live.safeUrl}` };
   } catch (e) {
-    // The vantage point itself failed (unreachable, core tools missing,
-    // unbuildable answer) — distinct from the configuration errors above,
-    // which never reach the wire and leave no run record.
+    // A transport hook fault (OBSERVOGRAM_TRANSPORT_HOOK failing to load or
+    // breaking its contract) is a configuration error like the ones above:
+    // it leaves no run record. Everything else here is the vantage point
+    // itself failing (unreachable, core tools missing, unbuildable answer).
+    if (isTransportHookError(e)) throw e;
     e.vantageLost = true;
     throw e;
   }
@@ -512,7 +731,7 @@ async function resolvePackB(def, crawlScope = null) {
 // has no live series (not-attempted, said so); a site that cannot be read or carries no
 // expected block is `failed` with the reason; an MCP without the metrics query tool is
 // not-attempted with the tier reason. Never touches the grade or the alignment.
-async function observeInventoryCoverage(def, checkedAt, crawlScope = null) {
+async function observeInventoryCoverage(def, checkedAt, crawlScope = null, live = null) {
   const site = def.inventory.site;
   const kinds = def.inventory.kinds || null;
   let manifest;
@@ -527,12 +746,14 @@ async function observeInventoryCoverage(def, checkedAt, crawlScope = null) {
   const unknown = unknownKinds(expected, kinds);
   if (unknown.length) return buildInventoryRecord({ site, expected, kinds, checkedAt });   // failed, naming the unknown kinds — no wire call
   if (!def.packB?.mcp) return buildInventoryRecord({ site, expected, kinds, status: 'not-attempted', reason: 'file-sourced Pack B: no live series to compare', checkedAt });
-  const m = def.packB.mcp;
-  const mcpAuth = m.authEnv ? (process.env[m.authEnv] || null) : null;
   const { observeInventory } = await import('../fetch-live-pack.mjs');
   let obs;
-  try { obs = await observeInventory({ mcpUrl: m.url, mcpAuth, expected, kinds }); }
-  catch (e) { return buildInventoryRecord({ site, expected, kinds, status: 'failed', reason: `inventory observation failed: ${e.message}`, checkedAt }); }
+  try { obs = await observeInventory({ mcpUrl: live.mcpUrl, mcpAuth: live.mcpAuth, expected, kinds }); }
+  catch (e) {
+    // A misconfigured transport hook never produces an evidence record.
+    if (isTransportHookError(e)) throw e;
+    return buildInventoryRecord({ site, expected, kinds, status: 'failed', reason: `inventory observation failed: ${e.message}`, checkedAt });
+  }
   if (obs.status !== 'checked') return buildInventoryRecord({ site, expected, kinds, status: obs.status, reason: obs.reason, checkedAt });
   return buildInventoryRecord({ site, expected, observations: obs.observations, kinds, checkedAt });
 }
@@ -919,24 +1140,32 @@ export function pruneLiveSnapshots(recordFiles, liveFiles) {
 // crawlScope: { base, ownRoot } from the server (a crawl: walk, a file:
 // source and an inventory site read only the org's own part of the
 // workspace, or outside it); null for the CLI.
-export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null } = {}) {
+// resolveNotify: `(def.notify) → target` from the server, the twin of
+// resolveMcp — the server resolves the org's notify hook itself (its name
+// rule, its values and its origin list, before anything runs) and hands
+// the target over as notifyTargetOf builds it, so the engine reads no
+// variable a definition names. null for the CLI: resolveNotifyTarget reads
+// the names from the invoker's environment.
+export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null, resolveNotify = null } = {}) {
   def.__baseDir = baseDir || (def.__source ? dirname(def.__source) : '.');
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
   // Step 5: the notify target is resolved before anything else — an unset
   // urlEnv/authEnv is a configuration error (exit 2, no record), like an
   // unset packB.mcp.authEnv. Kept in this local only.
-  const notifyTarget = resolveNotifyTarget(def);
+  const notifyTarget = def.notify ? (resolveNotify ? await resolveNotify(def.notify) : resolveNotifyTarget(def)) : null;
 
   const a = await resolvePackA(def, def.__baseDir, crawlScope);
   let b;
+  let liveTarget = null;   // a live Pack B's target (liveTargetOf), never persisted
   try {
-    b = await resolvePackB(def, crawlScope);
+    if (def.packB?.mcp && !def.packB.file) liveTarget = await liveTargetOf(def, resolveMcp);
+    b = await resolvePackB(def, crawlScope, liveTarget);
   } catch (e) {
     // Only a LIVE source that reached the wire can lose its vantage; a
     // missing pack file or an unset authEnv is a configuration error and
     // leaves no record.
-    if (def.packB?.mcp && e?.vantageLost) {
+    if (liveTarget && e?.vantageLost) {
       const previousRun = readJourneyRuns(def.name, { limit: 1 })[0] || null;
       const lost = {
         journey: def.name,
@@ -945,7 +1174,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
         outcome: 'vantage-lost',
         error: String(e.message || e),
         packA: { source: a.source, name: a.canonical?.metadata?.name || null, version: a.canonical?.metadata?.version || null },
-        packB: { source: `mcp:${def.packB.mcp.url}` },
+        packB: { source: `mcp:${liveTarget.safeUrl}` },
         scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
         gate: { thresholds: def.gate || {}, breaches: [] },
       };
@@ -956,6 +1185,8 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
         lost.notify = await deliverNotification(def, notifyTarget, lost, previousRun, notifier);
         writeRunRecord(def.name, startedAt, lost);
       }
+      // The record's delivery, for a caller that rows it (the server's 502).
+      if (e && typeof e === 'object') e.notify = lost.notify;
     }
     throw e;
   }
@@ -983,7 +1214,8 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   const liveRefreshedAt = b.canonical?.metadata?.annotations?.['mcp.refreshedAt'] || null;
   const live = liveEvidenceFacts(b.canonical);
   // Inventory coverage (inventory-coverage.mjs): the site's expected sets against the live up series.
-  const inventory = def.inventory ? await observeInventoryCoverage(def, startedAt, crawlScope) : null;
+  const inventoryLive = def.inventory && def.packB?.mcp ? liveTarget ?? await liveTargetOf(def, resolveMcp, { lenient: true }) : null;
+  const inventory = def.inventory ? await observeInventoryCoverage(def, startedAt, crawlScope, inventoryLive) : null;
   // grade.overall.audit is the canonical PASS/FAIL contract (score > 85%).
   const audit = grade.overall?.audit || { scorePctExact: 0, passes: false };
   const facts = {

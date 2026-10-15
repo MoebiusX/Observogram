@@ -39,13 +39,35 @@ export function getEnvironment(db, id) {
     WHERE s.org_id = ? AND e.id = ?`).get(org, id));
 }
 
+export function getEnvironmentByName(db, serviceId, name) {
+  const org = requireOrg(REPO);
+  return rowToEnvironment(prepare(db, `SELECT e.* FROM environments e JOIN services s ON s.id = e.service_id
+    WHERE s.org_id = ? AND e.service_id = ? AND e.name = ?`).get(org, serviceId, name));
+}
+
 export function listEnvironments(db, serviceId) {
   const org = requireOrg(REPO);
   return prepare(db, `SELECT e.* FROM environments e JOIN services s ON s.id = e.service_id
     WHERE s.org_id = ? AND e.service_id = ? ORDER BY e.name`).all(org, serviceId).map(rowToEnvironment);
 }
 
-export function createEnvironment(db, actor, { serviceId, name, tier = null, bindings = {}, endpoints = {}, mcpEndpointId = null }) {
+// Every environment of the org in one query, joined on the org.
+export function listEnvironmentsForOrg(db) {
+  const org = requireOrg(REPO);
+  return prepare(db, `SELECT e.* FROM environments e JOIN services s ON s.id = e.service_id
+    WHERE s.org_id = ? ORDER BY e.service_id, e.name`).all(org).map(rowToEnvironment);
+}
+
+// The ids of the org's environments checked through one MCP endpoint (what
+// the endpoint's delete unbinds).
+export function countEnvironmentsBoundTo(db, mcpEndpointId) {
+  const org = requireOrg(REPO);
+  return prepare(db, `SELECT e.id FROM environments e JOIN services s ON s.id = e.service_id
+    WHERE s.org_id = ? AND e.mcp_endpoint_id = ? ORDER BY e.id`).all(org, mcpEndpointId).map((r) => r.id);
+}
+
+// detail extends the environment.create row ({ via: 'pack', pack }).
+export function createEnvironment(db, actor, { serviceId, name, tier = null, bindings = {}, endpoints = {}, mcpEndpointId = null }, { detail = null } = {}) {
   const org = requireOrg(REPO);
   requireText(name, 'name');
   const at = nowIso();
@@ -56,7 +78,7 @@ export function createEnvironment(db, actor, { serviceId, name, tier = null, bin
       VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`).get(
       service.id, name, optionalText(tier, 'tier'), toJson(requireObject(bindings, 'bindings')),
       toJson(requireObject(endpoints, 'endpoints')), requireEndpoint(db, mcpEndpointId), at, at);
-    writeAudit(db, actor, { orgId: org, action: 'environment.create', targetKind: 'environment', targetId: `${service.slug}/${name}` });
+    writeAudit(db, actor, { orgId: org, action: 'environment.create', targetKind: 'environment', targetId: `${service.slug}/${name}`, detail });
     return rowToEnvironment(row);
   });
 }
@@ -73,11 +95,11 @@ export function updateEnvironment(db, actor, id, patch) {
       endpoints: patch.endpoints === undefined ? undefined : toJson(requireObject(patch.endpoints, 'endpoints')),
       mcpEndpointId: patch.mcpEndpointId === undefined ? undefined : requireEndpoint(db, patch.mcpEndpointId),
     };
-    const { sql, params } = setClause(values, { name: 'name', tier: 'tier', bindings: 'bindings', endpoints: 'endpoints', mcpEndpointId: 'mcp_endpoint_id' });
+    const { sql, params, fields } = setClause(values, { name: 'name', tier: 'tier', bindings: 'bindings', endpoints: 'endpoints', mcpEndpointId: 'mcp_endpoint_id' });
     if (!sql) return current;
     prepare(db, `UPDATE environments SET ${sql}, updated_at = :updated_at WHERE id = :id`).run({ ...params, updated_at: nowIso(), id });
     const service = getService(db, current.serviceId);
-    writeAudit(db, actor, { orgId: org, action: 'environment.update', targetKind: 'environment', targetId: `${service.slug}/${current.name}`, detail: { fields: Object.keys(params) } });
+    writeAudit(db, actor, { orgId: org, action: 'environment.update', targetKind: 'environment', targetId: `${service.slug}/${current.name}`, detail: { fields } });
     return getEnvironment(db, id);
   });
 }

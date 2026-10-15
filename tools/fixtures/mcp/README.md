@@ -104,6 +104,7 @@ recording that drops it.
 | `grafana_datasource_health.json` | `grafana_datasource_health` | grafana_datasource_health (`health-object`) — the primary file: uid `ffxm6mvg1ohkwc` (`Loki (absent)`), `{ supported: false, error: 'HTTP 400 …' }`, the check Grafana ran and failed | recording — nothing scrubbed; the loopback Grafana URL inside the error is the stack's own published port (payload, kept verbatim); `_recorded.server` by hand | 2026-09-08, **local stack** |
 | `grafana_datasource_health.ok.json` | `grafana_datasource_health` | grafana_datasource_health (`health-object`) — uid `stack-prom` (`Prometheus (stack)`), `_recorded.case: ok`: `{ supported: true, status: 'OK', message, details }` | recording — nothing scrubbed; `_recorded.server` by hand | 2026-09-08, **local stack** |
 | `grafana_contact_points.json` | `grafana_contact_points` | grafana_contact_points (`contact-points`) — the receivers API: `webhook-oncall` (one webhook integration) and Grafana's default `empty` | recording — nothing to scrub (the receivers shape carries no `uid`, `type` or `settings`); `_recorded.server` by hand | 2026-09-08, **local stack** |
+| `grafana_alert_rules.json` | `grafana_alert_rules` | alert_rules (`rule-groups` — the provisioning shape: a bare array of Grafana-managed rules, identity `title`, body `data[]`, folder `folderUID`), read by a **snapshot** only (`PROBES` alert_rules `adaptSnapshot`; its adapted golden is `adapted/alert_rules.grafana.json`); the draft's reader takes nothing from it, as before | recording — Grafana's own `GET /api/v1/provisioning/alert-rules` answer, payload untouched (re-indented only; no `_recorded` key, since the answer is an array); nothing scrubbed (no credential in the shape: datasource uids, folder uids and the rules); see "Grafana-managed alert rules" below | 2026-10-07, **local stack** (`docker/stack.compose.yaml`'s `grafana` service, Grafana 12.4.4) |
 | `recorded-stack/<row id>.json` | `metrics_query` | stack_self_metrics — one instant vector per family that answered (`scrape_success_ratio`, `notification_errors`, `tsdb_active_series`, `collector_export_failures_spans` — the lazy-policy alias reading 0 on a collector whose `send_failed_spans` is absent —, `datasource_errors` — on this tier the row's first alias `grafana_datasource_request_total` is `not-in-inventory` (never called) and the row falls through to the proxy alias, so the file's provenance query is the `grafana_proxy_response_status_total` expression —, `log_shipper_drops`; ruler, synthetic and traces have no eligible alias on that tier); otel-mcp-server answers a flat Prometheus-style envelope `{ status, resultType, result }` | recording | 2026-09-08, **authenticated tier** (same six rows and outcomes as the 2026-09-07 public-tier recording it replaces) |
 
 The remaining synthetic files are the silences and the two instant-vector
@@ -127,6 +128,34 @@ tolerance, removal gate) — no `adapted/` goldens, because these capabilities
 have no `PROBES` adapter (the fetcher's `observeAlertmanager` /
 `observeGrafana` parse them directly); the recorded status files are held to
 the same three assertions plus "carries no `_synthetic` marker".
+
+## Grafana-managed alert rules (recorded 2026-10-07)
+
+`grafana_alert_rules.json` is the provisioning API's answer of the stack's
+Grafana — the shape the alert-rule candidate `grafana_alert_rules` carries
+when its MCP passes that API through, which a snapshot reads (every
+alert-rule engine unioned; `title` → name, the first query node's
+`model.expr` → expr, `folderUID` → the folder a snapshot's scope reads; a
+Grafana-managed recording rule, `record` set, is not an alert rule). It
+was recorded from **Grafana directly**, not through otel-mcp-server 1.8.0:
+this build's container has no otel-mcp-server checkout or package at that
+version and no route to fetch one, so the MCP envelope around the answer
+is not evidenced here — re-record it through an MCP that advertises the
+tool (`npm run record-fixtures`) when one is at hand, and keep the reader
+if the MCP passes the array through. Reproduction:
+
+    docker compose -f docker/stack.compose.yaml up -d --wait grafana
+    # the stack provisions StackValidationAlwaysFiring (folder stack-validation)
+    # from docker/stack/grafana-provisioning/alerting/rules.yaml; seed the rest
+    # through the Grafana admin API (X-Disable-Provenance: true):
+    #   POST /api/folders {"uid":"payments-alerts","title":"Payments"}
+    #   POST /api/v1/provisioning/alert-rules  PaymentsErrorRatioHigh (folder
+    #     payments-alerts, group payments: an A query on stack-prom, a B reduce,
+    #     a C threshold > 0.05, for 5m, severity critical, team payments)
+    #   POST /api/v1/provisioning/alert-rules  payments:requests:rate5m (a
+    #     Grafana-managed recording rule: record { metric, from: A })
+    curl -s -u admin:admin http://127.0.0.1:13030/api/v1/provisioning/alert-rules
+    docker compose -f docker/stack.compose.yaml down
 
 ## Recording against your MCP (`npm run record-fixtures`)
 

@@ -31,7 +31,7 @@ export function renderSchemaView(host) {
   sectionHead.className = 'section-head';
   sectionHead.innerHTML = `
     <span class="section-num">SCHEMA</span>
-    <span class="section-name">Canonical manifest · ObservabilityPack v1.3${focusBadge}</span>
+    <span class="section-name">Canonical manifest · ObservabilityPack v1.4${focusBadge}</span>
     <span class="section-count">${escapeHtml(pack?.meta?.binding || 'unknown binding')}</span>
   `;
   wrap.appendChild(sectionHead);
@@ -77,13 +77,13 @@ export function renderSchemaView(host) {
       <span class="schema-validation-pip">✓</span>
       <span class="schema-validation-msg">
         Validates against the canonical
-        <a href="https://github.com/MoebiusX/otel-observability-pack/blob/98be4ae8c05899c066b9882e0498feb850afa387/schema/observability-pack.schema.json" target="_blank" rel="noopener">ObservabilityPack v1.3 JSON Schema</a>.
+        <a href="https://github.com/MoebiusX/otel-observability-pack/blob/e64e58132a46364afd5432a86e67d470858936cf/schema/observability-pack.schema.json" target="_blank" rel="noopener">ObservabilityPack v1.4 JSON Schema</a>.
         Packs that fail validation never appear in the catalog.
       </span>
     </div>
     <div class="schema-validation-meta">
-      Schema source: <code>vendor/observability-pack-spec/v1.3/observability-pack.schema.json</code> ·
-      <a href="https://github.com/MoebiusX/otel-observability-pack/blob/98be4ae8c05899c066b9882e0498feb850afa387/spec/ObservabilityPack-Spec.md" target="_blank" rel="noopener">Spec document</a>
+      Schema source: <code>vendor/observability-pack-spec/v1.4/observability-pack.schema.json</code> ·
+      <a href="https://github.com/MoebiusX/otel-observability-pack/blob/e64e58132a46364afd5432a86e67d470858936cf/spec/ObservabilityPack-Spec.md" target="_blank" rel="noopener">Spec document</a>
     </div>
   `;
   wrap.appendChild(validation);

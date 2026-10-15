@@ -1,0 +1,120 @@
+
+    <header class="dvb-head" id="dv-summary" aria-label="The open pack">
+      <div class="dvb-head-text">
+        <p class="dvb-eyebrow">Discover · What do we have?</p>
+        <h2 class="dvb-h">ObservabilityPack <span class="dvb-h-of">— internal-orders</span></h2>
+        <p class="dvb-lede">production-curated-typed v0.4.0 · 32 artefacts across 5 layers</p>
+      </div>
+      <dl class="dvb-facts">
+        <div class="dvb-fact"><svg class="dvb-fact-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg><dt>Service</dt><dd title="internal-orders">internal-orders</dd></div>
+        <div class="dvb-fact"><svg class="dvb-fact-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5M3 16l9 5 9-5"/></svg><dt>Criticality</dt><dd title="tier-2">tier-2</dd></div>
+        <div class="dvb-fact"><svg class="dvb-fact-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></svg><dt>Environment</dt><dd title="prod">prod</dd></div>
+        <div class="dvb-fact"><svg class="dvb-fact-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="9" cy="9" r="3.2"/><path d="M3 20c.6-3.4 3-5 6-5s5.4 1.6 6 5"/><circle cx="17" cy="8" r="2.4"/><path d="M16 14.2c2.6.2 4.4 1.8 5 4.8"/></svg><dt>Owners</dt><dd title="team-internal-svc">team-internal-svc</dd></div>
+        <div class="dvb-fact"><svg class="dvb-fact-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 5l-4 14"/></svg><dt>OTel SemConv</dt><dd title="1.26.0">1.26.0</dd></div>
+        <div class="dvb-fact"><svg class="dvb-fact-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 5h9M8.5 3v2M6 5c.6 4 3 7 6.5 8.5M11 5c-.6 4-3.2 7.2-7 8.5"/><path d="M13 21l4-9 4 9M14.4 18h5.2"/></svg><dt>Languages</dt><dd title="java">java</dd></div>
+        <div class="dvb-fact"><svg class="dvb-fact-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><ellipse cx="12" cy="6" rx="7.5" ry="3"/><path d="M4.5 6v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6M4.5 12v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6"/></svg><dt>Backends</dt><dd title="prometheus, elasticsearch">prometheus, elasticsearch</dd></div></dl>
+    </header>
+<!-- L1 -->
+<div class="dv-groups">
+    <section class="dvb-group" data-group="sli" aria-label="SLIs: 3">
+      <h4 class="dvb-group-title">SLIs <span class="dvb-group-n">3</span></h4>
+      <div class="dvb-items is-tiles"><button type="button" class="dvb-item dvb-tile" data-ux-action="dv-item" data-key="L1/SLI-01" title="SLI-01 · orders_availability · Successful order responses over total."><svg class="dvb-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6l7-3z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><span class="dvb-name">orders_availability</span><span class="dvb-sub">ratio</span></button><button type="button" class="dvb-item dvb-tile" data-ux-action="dv-item" data-key="L1/SLI-02" title="SLI-02 · orders_latency_p99 · 99th-percentile order request latency."><svg class="dvb-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4.5 17a8.5 8.5 0 1 1 15 0"/><path d="M12 13l4-5"/><circle cx="12" cy="13" r="1.2"/></svg><span class="dvb-name">orders_latency_p99</span><span class="dvb-sub">threshold</span></button><button type="button" class="dvb-item dvb-tile" data-ux-action="dv-item" data-key="L1/SLI-03" title="SLI-03 · order_settlement_freshness · Worst-case settlement consumer lag."><svg class="dvb-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4.5 17a8.5 8.5 0 1 1 15 0"/><path d="M12 13l4-5"/><circle cx="12" cy="13" r="1.2"/></svg><span class="dvb-name">order_settlement_freshness</span><span class="dvb-sub">threshold</span></button></div>
+    </section>
+    <section class="dvb-group" data-group="slo" aria-label="SLOs · targets: 3">
+      <h4 class="dvb-group-title">SLOs · targets <span class="dvb-group-n">3</span></h4>
+      <div class="dvb-items is-tiles"><button type="button" class="dvb-item dvb-tile dvb-slo" data-ux-action="dv-item" data-key="L1/SLO-01" title="SLO-01 · orders_availability_99_5 · 99.5% over 30d (SLI: orders_availability)">
+        <span class="dvb-dial" style="--dvb-fill:99.5"><span class="dvb-dial-val">99.5%</span></span>
+        <span class="dvb-name">orders_availability</span>
+        <span class="dvb-sub">/ 30d</span>
+      </button><button type="button" class="dvb-item dvb-tile dvb-slo" data-ux-action="dv-item" data-key="L1/SLO-02" title="SLO-02 · orders_latency_99_p99_600ms · 99% over 30d (SLI: orders_latency_p99)">
+        <span class="dvb-dial" style="--dvb-fill:99"><span class="dvb-dial-val">99%</span></span>
+        <span class="dvb-name">orders_latency_p99</span>
+        <span class="dvb-sub">/ 30d</span>
+      </button><button type="button" class="dvb-item dvb-tile dvb-slo" data-ux-action="dv-item" data-key="L1/SLO-03" title="SLO-03 · order_settlement_freshness_99 · 99% over 30d (SLI: order_settlement_freshness)">
+        <span class="dvb-dial" style="--dvb-fill:99"><span class="dvb-dial-val">99%</span></span>
+        <span class="dvb-name">order_settlement_freshness</span>
+        <span class="dvb-sub">/ 30d</span>
+      </button></div>
+    </section></div>
+<!-- L2 -->
+<div class="dv-groups is-flow">
+    <section class="dvb-group" data-group="otel" aria-label="Instrumentation: 1">
+      <h4 class="dvb-group-title">Instrumentation <span class="dvb-group-n">1</span></h4>
+      <div class="dvb-items"><button type="button" class="dvb-item dvb-facts-item" data-ux-action="dv-item" data-key="L2/OTEL-01" title="OTEL-01 · OTel SemConv 1.26.0 · Languages: java · sampling: parentbased_traceidratio @ 0.05">
+        <span class="dvb-name">OpenTelemetry SDK</span>
+        <span class="dvb-kv"><span class="dvb-k">SemConv</span><span class="dvb-v">1.26.0</span></span><span class="dvb-kv"><span class="dvb-k">Languages</span><span class="dvb-v">java</span></span><span class="dvb-kv"><span class="dvb-k">Sampling</span><span class="dvb-v">parentbased_traceidratio @ 0.05</span></span><span class="dvb-kv"><span class="dvb-k">Propagators</span><span class="dvb-v">tracecontext</span></span><span class="dvb-kv"><span class="dvb-k">Required attributes</span><span class="dvb-v">service.name, service.namespace, deployment.environment</span></span>
+      </button></div>
+    </section>
+    <section class="dvb-group" data-group="rcv" aria-label="Receivers: 1">
+      <h4 class="dvb-group-title">Receivers <span class="dvb-group-n">1</span></h4>
+      <div class="dvb-items"><button type="button" class="dvb-item dvb-line" data-ux-action="dv-item" data-key="L2/PIP-RCV-01" title="PIP-RCV-01 · receiver: otlp · OTel Collector receiver"><span class="dvb-name">otlp</span><span class="dvb-sub">OTel Collector receiver</span></button></div>
+    </section>
+    <section class="dvb-group" data-group="prc" aria-label="Processors: 2">
+      <h4 class="dvb-group-title">Processors <span class="dvb-group-n">2</span></h4>
+      <div class="dvb-items"><button type="button" class="dvb-item dvb-line" data-ux-action="dv-item" data-key="L2/PIP-PRC-01" title="PIP-PRC-01 · processor: memory_limiter · OTel Collector processor"><span class="dvb-name">memory_limiter</span><span class="dvb-sub">OTel Collector processor</span></button><button type="button" class="dvb-item dvb-line" data-ux-action="dv-item" data-key="L2/PIP-PRC-02" title="PIP-PRC-02 · processor: batch · OTel Collector processor"><span class="dvb-name">batch</span><span class="dvb-sub">OTel Collector processor</span></button></div>
+    </section>
+    <section class="dvb-group" data-group="exp" aria-label="Exporters &amp; storage: 9">
+      <h4 class="dvb-group-title">Exporters &amp; storage <span class="dvb-group-n">9</span></h4>
+      <div class="dvb-items"><button type="button" class="dvb-item dvb-line dvb-signal" data-ux-action="dv-item" data-key="L2/BAK-01" title="BAK-01 · metrics-prom · prometheus 2.52 (metrics)"><span class="dvb-chip" data-signal="metrics">metrics</span><span class="dvb-arrow" aria-hidden="true">→</span><span class="dvb-name">prometheus</span></button><button type="button" class="dvb-item dvb-line dvb-signal" data-ux-action="dv-item" data-key="L2/BAK-02" title="BAK-02 · logs-es · elasticsearch 8.13 (logs)"><span class="dvb-chip" data-signal="logs">logs</span><span class="dvb-arrow" aria-hidden="true">→</span><span class="dvb-name">elasticsearch</span></button><button type="button" class="dvb-item dvb-line dvb-signal" data-ux-action="dv-item" data-key="L2/BAK-03" title="BAK-03 · traces-es · elasticsearch 8.13 (traces)"><span class="dvb-chip" data-signal="traces">traces</span><span class="dvb-arrow" aria-hidden="true">→</span><span class="dvb-name">elasticsearch</span></button><button type="button" class="dvb-item dvb-line dvb-signal" data-ux-action="dv-item" data-key="L2/PIP-EXP-MET" title="PIP-EXP-MET · exporter (metrics): prometheusremotewrite · OTel Collector exporter"><span class="dvb-chip" data-signal="metrics">metrics</span><span class="dvb-arrow" aria-hidden="true">→</span><span class="dvb-name">prometheusremotewrite</span></button><button type="button" class="dvb-item dvb-line dvb-signal" data-ux-action="dv-item" data-key="L2/PIP-EXP-LOG" title="PIP-EXP-LOG · exporter (logs): elasticsearch · OTel Collector exporter"><span class="dvb-chip" data-signal="logs">logs</span><span class="dvb-arrow" aria-hidden="true">→</span><span class="dvb-name">elasticsearch</span></button><button type="button" class="dvb-item dvb-line dvb-signal" data-ux-action="dv-item" data-key="L2/PIP-EXP-TRC" title="PIP-EXP-TRC · exporter (traces): elasticsearch · OTel Collector exporter"><span class="dvb-chip" data-signal="traces">traces</span><span class="dvb-arrow" aria-hidden="true">→</span><span class="dvb-name">elasticsearch</span></button></div><button type="button" class="dvb-more" data-ux-action="dv-open" data-layer="L2" title="Open the layer's full list">+3 more</button>
+    </section></div>
+<!-- L3 -->
+<div class="dv-groups is-flow">
+    <section class="dvb-group" data-group="qry" aria-label="Recording rules: 2">
+      <h4 class="dvb-group-title">Recording rules <span class="dvb-group-n">2</span></h4>
+      <div class="dvb-items"><button type="button" class="dvb-item dvb-line" data-ux-action="dv-item" data-key="L3/QRY-01" title="QRY-01 · orders:availability:ratio_5m · recording rule @ 30s"><span class="dvb-name">orders:availability:ratio_5m</span><span class="dvb-sub">recording rule @ 30s</span></button><button type="button" class="dvb-item dvb-line" data-ux-action="dv-item" data-key="L3/QRY-02" title="QRY-02 · orders:latency:p99_5m · recording rule @ 30s"><span class="dvb-name">orders:latency:p99_5m</span><span class="dvb-sub">recording rule @ 30s</span></button></div>
+    </section>
+    <section class="dvb-group is-empty" data-group="view" aria-label="Derived views: 0">
+      <h4 class="dvb-group-title">Derived views</h4>
+      <p class="dvb-none">None in this pack</p>
+    </section>
+    <section class="dvb-group" data-group="dash" aria-label="Dashboards: 2">
+      <h4 class="dvb-group-title">Dashboards <span class="dvb-group-n">2</span></h4>
+      <div class="dvb-items is-tiles"><button type="button" class="dvb-item dvb-tile dvb-dash" data-ux-action="dv-item" data-key="L3/DASH-01" title="DASH-01 · orders-service-overview · grafana 10.4 · folder: internal-orders"><svg class="dvb-ico dvb-ico-wide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 19h16"/><path d="M5 15l4-5 3 3 4-6 3 4"/></svg><span class="dvb-name">orders-service-overview</span><span class="dvb-sub">grafana</span></button><button type="button" class="dvb-item dvb-tile dvb-dash" data-ux-action="dv-item" data-key="L3/DASH-02" title="DASH-02 · orders-slo-burn · grafana 10.4 · folder: internal-orders"><svg class="dvb-ico dvb-ico-wide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 19h16"/><path d="M5 15l4-5 3 3 4-6 3 4"/></svg><span class="dvb-name">orders-slo-burn</span><span class="dvb-sub">grafana</span></button></div>
+    </section>
+    <section class="dvb-group is-aside" data-group="panel" aria-label="Dashboard panels: 2">
+      <h4 class="dvb-group-title">Dashboard panels <span class="dvb-group-n">2</span></h4>
+      <button type="button" class="dvb-item dvb-inv" data-ux-action="dv-open" data-layer="L3" title="Open the layer's full list">
+        <span class="dvb-inv-n">2</span><span class="dvb-inv-name">sli-availability</span><span class="dvb-inv-name">slo-availability</span><span class="dvb-more-text">Open the list →</span>
+      </button>
+    </section></div>
+<!-- L4 -->
+<div class="dv-groups is-flow">
+    <section class="dvb-group" data-group="pol" aria-label="Policy &amp; detection: 2">
+      <h4 class="dvb-group-title">Policy &amp; detection <span class="dvb-group-n">2</span></h4>
+      <div class="dvb-items"><button type="button" class="dvb-item dvb-line" data-ux-action="dv-item" data-key="L4/policy/POL-02" title="POL-02 · burn-rate alert: orders_latency_99_p99_600ms · 2 window(s) · severities: SEV2, SEV3"><span class="dvb-name">orders_latency_99_p99_600ms</span><span class="dvb-sub">2 window(s) · severities: SEV2, SEV3</span></button><button type="button" class="dvb-item dvb-line" data-ux-action="dv-item" data-key="L4/policy/POL-03" title="POL-03 · burn-rate alert: order_settlement_freshness_99 · 2 window(s) · severities: SEV2, SEV3"><span class="dvb-name">order_settlement_freshness_99</span><span class="dvb-sub">2 window(s) · severities: SEV2, SEV3</span></button></div>
+    </section>
+    <section class="dvb-group" data-group="alr" aria-label="Alert routing: 2">
+      <h4 class="dvb-group-title">Alert routing <span class="dvb-group-n">2</span></h4>
+      <div class="dvb-items"><button type="button" class="dvb-item dvb-line dvb-route" data-ux-action="dv-item" data-key="L4/alerting/ALR-01" title="ALR-01 · SEV2 routes · 1 channel(s): msteams"><span class="dvb-sev" data-sev="SEV2">SEV2</span><span class="dvb-arrow" aria-hidden="true">→</span><span class="dvb-name">msteams #orders-oncall</span></button><button type="button" class="dvb-item dvb-line dvb-route" data-ux-action="dv-item" data-key="L4/alerting/ALR-02" title="ALR-02 · SEV3 routes · 1 channel(s): msteams"><span class="dvb-sev" data-sev="SEV3">SEV3</span><span class="dvb-arrow" aria-hidden="true">→</span><span class="dvb-name">msteams #orders-team</span></button></div>
+    </section>
+    <section class="dvb-group" data-group="rule" aria-label="Operational alert rules: 1">
+      <h4 class="dvb-group-title">Operational alert rules <span class="dvb-group-n">1</span></h4>
+      <div class="dvb-items"><button type="button" class="dvb-item dvb-line" data-ux-action="dv-item" data-key="L4/policy/POL-01" title="POL-01 · burn-rate alert: orders_availability_99_5 · 2 window(s) · severities: SEV2, SEV3"><span class="dvb-name">orders_availability_99_5</span><span class="dvb-sub">2 window(s) · severities: SEV2, SEV3</span></button></div>
+    </section>
+    <section class="dvb-group is-empty" data-group="heal" aria-label="Remediation: 0">
+      <h4 class="dvb-group-title">Remediation</h4>
+      <p class="dvb-none">None in this pack</p>
+    </section></div>
+<!-- L5 -->
+<div class="dv-groups">
+    <section class="dvb-group" data-group="base" aria-label="Baselines &amp; performance: 1">
+      <h4 class="dvb-group-title">Baselines &amp; performance <span class="dvb-group-n">1</span></h4>
+      <div class="dvb-items"><button type="button" class="dvb-item dvb-facts-item" data-ux-action="dv-item" data-key="L5/BASE-01" title="BASE-01 · MTTD / MTTR baselines · MTTD p50 5m · MTTR p50 2h">
+        <span class="dvb-name">MTTD / MTTR baselines</span>
+        <span class="dvb-kv"><span class="dvb-k">MTTD p50</span><span class="dvb-v">5m</span></span><span class="dvb-kv"><span class="dvb-k">MTTR p50</span><span class="dvb-v">2h</span></span><span class="dvb-kv"><span class="dvb-k">Review</span><span class="dvb-v">monthly</span></span>
+      </button></div>
+    </section>
+    <section class="dvb-group is-empty" data-group="chaos" aria-label="Chaos experiments: 0">
+      <h4 class="dvb-group-title">Chaos experiments</h4>
+      <p class="dvb-none">None in this pack</p>
+    </section>
+    <section class="dvb-group" data-group="syn" aria-label="Synthetic checks: 1">
+      <h4 class="dvb-group-title">Synthetic checks <span class="dvb-group-n">1</span></h4>
+      <div class="dvb-items"><button type="button" class="dvb-item dvb-line" data-ux-action="dv-item" data-key="L5/SYN-01" title="SYN-01 · orders-canary · blackbox-exporter · interval 1m · on fail: SEV2"><span class="dvb-name">orders-canary</span><span class="dvb-sub">blackbox-exporter · interval 1m · on fail: SEV2</span></button></div>
+    </section></div>
+<!-- GOV -->
+<div class="dv-groups">
+    <section class="dvb-group is-empty" data-group="imp" aria-label="Imports: 0">
+      <h4 class="dvb-group-title">Imports</h4>
+      <p class="dvb-none">None in this pack</p>
+    </section></div>

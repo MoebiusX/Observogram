@@ -10,7 +10,7 @@ The read path powers Diagnose. The write path powers Remediate.
 ## Read Path: Live Pack Generation
 
 `tools/fetch-live-pack.mjs` interrogates an MCP endpoint and emits a canonical
-ObservabilityPack v1.3 manifest. By default it writes the ignored local file:
+ObservabilityPack v1.4 manifest. By default it writes the ignored local file:
 
 ```text
 examples/production-live.pack.yaml
@@ -31,11 +31,612 @@ never stored — never in the URL's path.
 The studio can also call the same flow through `POST /api/draft-from-mcp`.
 Successful drafts are registered in memory and become selectable as Pack B.
 
+An org can name its MCP endpoints once (STORE_PLAN slice 4): an admin
+registers `{ name, url, readTokenEnv? }` with `POST /api/mcp-endpoints`
+(`X-Observogram-CSRF: 1` in every posture), every member lists them with
+`GET /api/mcp-endpoints` (the URL and the variable's name to operators and
+above), and an environment of a service names the one it is checked through
+(`mcpEndpointId`). `POST /api/refresh-live` and `POST /api/draft-from-mcp`
+then take `mcpEndpointId` in place of `mcpUrl`: the record's URL, and the
+read token from the variable the record names —
+`OBSERVOGRAM_ORG_<ORG>_<NAME>`, set in the server's environment (the k8s
+studio Deployment's `env`, from a Secret) — read at request time when the
+request sends no `mcpAuth`, never logged, returned or stored. An admin may
+name only their org's variables (the owning org is the one whose prefix is
+the longest match, so `OBSERVOGRAM_ORG_ACME_EU_X` is `acme-eu`'s); the URL
+may carry no credential-looking query parameter. The deploy and rollback
+routes take `mcpEndpointId` for the URL only — a write token is always the
+request's `mcpAuth`. See the README's Services, Environments And MCP
+Endpoints.
+
 ```bash
 MCP_URL=https://otel-mcp.example.com/mcp \
 MCP_AUTH=$MCP_CLIENT_KEY \
 npm run fetch-live
 ```
+
+### Who may name the target, and where a credential may go
+
+Rebadge batch 3, C0 (docs/DOWNSTREAM.md §15.1 has the migration). A typed
+`mcpUrl` — in the ping, the live jobs, the draft, the refresh, the deploy
+routes and a journey's raw Pack B URL — is an admin's (`TYPED_MCP_URL_ROLE`,
+`server/mcp-target-policy.mjs`); everyone else names a registered endpoint
+(`mcpEndpointId`). Every target, typed or registered, meets the **origin
+allowlist** on the server at registration and at each use:
+`OBSERVOGRAM_MCP_ORIGINS` ∪ `OBSERVOGRAM_ORG_<KEY>_MCP_ORIGINS`, loopback
+always allowed. With no list set, **no credential leaves for an origin other
+than loopback**: an endpoint's server-held token, the caller's `mcpAuth`, a
+credential in a typed URL, and a loaded **transport hook** — which counts as
+a credential, because it may attach its own headers or client certificate;
+the allowlist judges the target the caller chose, before the hook rewrites
+it. A server-held token rides only to its own endpoint's registered URL. The
+check does not resolve DNS: a hostname that resolves to a private address is
+judged by its name (as `server/mcp-url.mjs` documents).
+
+**Redirects are refused everywhere** (`tools/lib/mcp-client.mjs`, D10): every
+request is sent with `redirect: 'manual'`, and a 3xx (or a browser's
+`opaqueredirect`) is an error naming only the origin it pointed at — the
+server, `npm run fetch-live`, the scheduled refresh and journeys alike. An MCP
+behind a redirect is configured with its final URL. **Every answer text is
+redacted by value** — an error's and a successful result's alike — before
+it reaches an error, a 502 body, a log line, a gate-log message, a
+`mcp.probeErrors.*` annotation, a ping's answer or a pack: the bearer, the URL's
+userinfo and credential-named query values become `<redacted>` (in a
+successful result the bearer and the userinfo at any length, a
+credential-named query value only from 12 characters, and a tool's JSON
+text only once it is parsed, so a short credential-named value such as
+`sortkey=title` never renames a key or breaks the JSON), and the
+server's routes redact the credential they resolved once more. One answer is
+read up to 32 MiB (`MAX_MCP_ANSWER_BYTES`), and a caller's `AbortSignal` ends
+every request in flight.
+
+### Test the connection first: the ping
+
+`POST /api/mcp/ping` (C2; `pingMcp` in `tools/fetch-live-pack.mjs`) runs
+`initialize` and `notifications/initialized`, the whole `tools/list` (its
+`nextCursor` followed up to ten pages) and **one** cheap read — the dashboards
+search asked for one item, else the Grafana health read (credential-free: it
+answers without the MCP's backend credentials, and the answer says so), else
+`system_health` — within a 10 s deadline (5 s per request). The verdict is
+read from where a failure surfaced: HTTP 401/403 → `auth-refused`; no answer
+or a 5xx → `unreachable`; a timeout → `timeout`; any other status, a body that
+is not JSON-RPC, a JSON-RPC error or a redirect → `not-mcp`; else `connected`
+(a read whose tool answered an unauthorized text is kept as
+`backendAuthRefused`, the MCP's own credentials to its backend). Advertised
+tools are reported only through `capabilityInventory` (the capabilities a
+fetch reads; the rest a count). The answer lists what it `checked` and what it
+did `notChecked`; it writes no pack and no live file.
+
+### Snapshot mode and live jobs
+
+`fetchMcp({ mode: 'snapshot', scope, onStage, signal })` (C1) inventories what
+is deployed rather than drafting a scaffold: every stage reports to `onStage`
+with the stage ids of `tools/lib/live-fetch.mjs`; there is no core abort (a
+stage whose tools are missing is skipped with its gap and the fetch goes on);
+the stack self-metrics, the Alertmanager and Grafana observers and the ALERTS
+query are not read, while the recording-rule grep still runs over the whole
+metric-name list (it feeds the SLI and SLO inference); the scope narrows
+metric names (prefixes, then a 20 000-name cap), dashboards (folder uids,
+before the detail reads) and alert rules (folder uids, when every rule names
+its folder); every advertised alert-rule engine is read and the rules unioned
+by name, Grafana-managed rules read from the provisioning shape (`title`,
+`data[]`, `folderUID`); a dashboard's id is its obs-pack-id tag, else the
+crawler's `dashboardSpecId`, so a uid pairs with a crawled repository.
+`buildSnapshotPack` writes `mcp.url` as the origin and the
+`observogram.live.*`, `observogram.scope.<kind>` and
+`observogram.unobserved.<kind>` annotations (docs/ADAPTER.md, "Live packs").
+The draft (`mode: 'draft'`, the default) is the fetch as it was, byte for
+byte. On the server both run as **live jobs** — `POST /api/mcp/jobs` answers
+202 with an id, `GET /api/mcp/jobs/:jobId?since=<seq>` is the gate log —
+in memory, so a restart loses them (docs/DOWNSTREAM.md §15.2 has the shapes
+and the stage table). The configured scope is
+`OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES`, `_FOLDER_UIDS` and `_DATASOURCE_UID`
+(deployment) or `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` (one org); a datasource uid
+is named in the gate log as not applied, since no advertised tool takes one.
+
+## Server settings (admin configuration)
+
+Rebadge batch 4. The MCP panel's **Server settings…** button configures the
+**MCP server itself** — the backend base URL, user and secret it reads its
+backend with, its own API key — not the studio's connection to it (the
+panel's URL, endpoint and token stay what they were). The studio never keeps
+any of it: by default the browser sends the settings straight to the MCP
+server, and an opt-in pass-through (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`, below)
+exists for a deployment whose browser cannot reach the MCP server. This
+section is the contract an MCP server implements to be configured from the
+studio; `tools/lib/mcp-server-settings.mjs` (a listed module, pure and
+browser-safe) holds the parser, the path rule, the request builder and the
+outcome model, so a server author can vendor it and check their own
+description against it.
+
+### The settings description, version 1
+
+The server describes its settings at `<MCP server root>/admin/schema`
+(`SETTINGS_DESCRIPTOR_PATH`):
+
+```jsonc
+{
+  "version": 1,                                   // required, an integer; only 1 is read
+  "endpoint": "/configure",                       // required; the path rule below
+  "auth": { "field": "apiKey", "scheme": "bearer" },   // optional: that secret field goes as Authorization: Bearer
+  "fields": [                                     // required, 1–24
+    { "name": "grafanaUrl",                       // /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/, unique; never
+                                                  //   __proto__, constructor, prototype or action
+      "label": "Backend base URL",                // required, 1–80 characters, one line
+      "type": "url",                              // text | url | secret | boolean; any other type is read as text
+      "required": true,                           // optional (default false)
+      "help": "…",                                // optional, ≤ 240, one line
+      "placeholder": "https://…" }                // optional, ≤ 120; ignored on a secret
+  ],
+  "actions": [                                    // optional, 0–4
+    { "name": "disable",                          // the field-name rule; unique among actions
+      "label": "Clear server credential",         // required, 1–80
+      "endpoint": "/configure",                   // optional (default: the description's endpoint); the path rule
+      "fields": ["apiKey"],                       // optional: the fields the action sends
+      "confirm": "The server forgets the backend credential." }   // optional, ≤ 160: asks for a second click
+  ]
+}
+```
+
+- **At most 16 KiB.** A label, help, placeholder, confirm or action label
+  holding a control character (U+0000–U+001F, U+007F) is refused, as are
+  duplicate names, a reserved name, an action naming an unknown field, an
+  `auth.field` that is not a `secret` field and an `auth.scheme` other than
+  `bearer`. Each refusal names its rule (`fields[2].name "__proto__" is
+  reserved`, `duplicate field name "user"`), and the modal shows it with
+  **Try again** and **Use the generic form**.
+- **A 200 that is not a description** — JSON without `version` and `fields`
+  (a JSON-RPC answer such as `{"jsonrpc":"2.0","id":1,"result":{}}`), or a
+  content type that is not JSON — is named as such and treated as no
+  description: the generic form is offered.
+- **Unknown keys are ignored** at every level, so an additive change stays
+  version 1; a breaking change is a new version, which this studio refuses
+  with `this server describes its settings in version N; this studio reads
+  version 1 — update the studio, or use the generic form`.
+- **A description carries no current values.** It is read without a
+  credential; a `value` key is an unknown key, never read and never shown.
+- **Field types.** `text` is a text input, `url` a URL input, `secret` a
+  password input, `boolean` a checkbox; every text-like input takes at most
+  2048 characters. A `url` value is sent normalised (`new URL`, http or https
+  only, scheme and host lower-cased) and is refused when it carries a user or
+  password before `@` — those go in their own fields, so they are treated as
+  secrets. The studio checks nothing else about that URL: the MCP server owns
+  its SSRF policy for its backend.
+
+### Where it lives: the root and the path rule
+
+**The MCP server root** is the MCP URL with its last path segment dropped
+(one trailing slash ignored) and no query, fragment or userinfo:
+`http://127.0.0.1:9000/mcp` and `…/mcp/` give `http://127.0.0.1:9000/`;
+`https://gw.example/team-a/mcp` gives `https://gw.example/team-a/`. A server
+behind a path-prefix gateway therefore publishes its description under its
+own prefix (`https://gw.example/team-a/admin/schema`).
+
+**Every path** — the description's `endpoint`, each action's `endpoint`, the
+generic form's path and the settings policy's `generic.path` — is 1–128
+characters of `^/?[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*$`, with no segment
+`.` or `..` and none starting with `..`: no `%` escape, `;`, `:`, `@`, `\`,
+`?`, `#`, white space or empty segment. A leading `/` is relative to the
+**root**, not the origin (`/configure` under `https://gw.example/team-a/` is
+`https://gw.example/team-a/configure`). The resolved URL is checked again —
+the same origin, under the root, no userinfo, query or fragment, and
+`mcpUrlPolicy` clean — in the browser and again in the pass-through. A path
+that fails is refused by name (`… is not a plain path under <root> … — the
+studio sends settings only to the MCP server itself; its author fixes the
+descriptor`), and nothing is sent.
+
+### The generic form (servers without a description)
+
+A 404, 405, 501, 401 or 403 on the description, or an answer that is not a
+description, gives the **generic form**, which always says it is generic and
+why: `Backend base URL` (`url`, required), `User`, `Password / token` and
+`Server API key` (`secret`, "leave empty only if the server needs none"),
+named `url`, `user`, `secret` and `apiKey`, sent to `/configure`, every field
+in the body (`genericDescriptor`). Under **What the server expects** the
+reader may rename the four fields, change the path and send the API key as
+`Authorization: Bearer` instead. A deployment sets the prefill in its
+settings policy's optional `generic` block (`{ path, names, auth: 'body' |
+'bearer' }`, below); nothing the reader changes is remembered.
+
+### The request
+
+Opening the modal sends nothing at boot and nothing when the panel opens. On
+open the studio reads `GET /api/mcp-settings` (the settings policy, and
+whether the pass-through is on) and, once the target passes the checks below,
+the description — from the browser, a CORS simple `GET` with **no header and
+no credential** (`credentials: 'omit'`, `redirect: 'manual'`,
+`referrerPolicy: 'no-referrer'`, `cache: 'no-store'`), 10 s, read with a
+16 KiB cap.
+
+**Send to the server** POSTs `application/json` from the browser to the
+resolved endpoint (`credentials: 'omit'`, `redirect: 'manual'`, 15 s): one
+key per field — a URL normalised, a secret exactly as typed, a boolean as
+`true`/`false`, an empty optional field omitted — at most 64 KiB. When the
+description has `auth`, that field leaves the body and goes as
+`Authorization: Bearer <value>`. Nothing of the studio goes with it: no
+cookie, no `X-Observogram-*` header (no CSRF header, no active org), no
+referrer. An **action** sends `{ "action": "<name>" }` plus its declared
+`fields`; without them, the `auth` field when there is one, else every
+secret the reader typed — the note under the button says which, and that an
+empty one means a server that needs it will refuse. An action skips the
+required fields, and the policy's acknowledgements unless it carries a field
+a rule matched: then it waits for that acknowledgement (and for a readable
+policy), as the pass-through does.
+
+The **target** is checked before any request (`studio/mcp-settings-model.mjs`
+`settingsTargetModel`): `mcpUrlPolicy`; never the studio's own origin, nor
+another name for this machine on the loopback page's port (a settings request
+there would reach the studio server); a loopback MCP server
+(or a host that may be this machine — `*.localhost`, `0.0.0.0`, `[::]`) only
+from a page that is itself on loopback; `https:` unless loopback; and a
+loopback or **listed** origin — the server's `OBSERVOGRAM_MCP_ORIGINS` (or the
+org's `OBSERVOGRAM_ORG_<KEY>_MCP_ORIGINS`), or in the static bundle the list
+`--mcp-origins` baked. Each refusal names its reason and the way out for the
+reader's posture. Who sees the button enabled: whoever may register an MCP
+endpoint (`GET /api/mcp-endpoints` `policy.register.allowed` — a session
+admin or owner, or the open posture's caller on a direct loopback request);
+anyone else sees it `aria-disabled` with the reason.
+
+Secret inputs are password inputs with `autocomplete="new-password"` and the
+password managers' ignore attributes, in no `<form>` and with no `name`, so a
+saved studio login is never offered; their values are emptied as soon as the
+request is sent, and every input is gone when the modal closes.
+
+### The outcome
+
+A server answers its configure (and each action) with the outcome shape —
+optional, and the only source of "verified":
+
+```jsonc
+{ "ok": true,                                  // the server's verdict
+  "message": "Connected as svc-observogram",   // ≤ 500 characters shown
+  "checks": [ { "label": "Identity", "status": "pass", "detail": "role Viewer" },   // ≤ 24
+              { "label": "Toolset: alerting", "status": "fail", "detail": "403 from backend" } ] }
+```
+
+| The answer | The modal says |
+|---|---|
+| 2xx, `ok: true` | `The server reports the settings verified (HTTP <s>).` — then the panel's connection test runs |
+| 2xx, `ok` absent or not JSON | `The server accepted the settings (HTTP <s>). It reported no verification.` |
+| 2xx, `ok: false` | `The server answered HTTP <s> but reports a failure.` |
+| any other status | `The server refused the settings: HTTP <s>.` |
+| a redirect | `The server answered with a redirect, which the studio never follows.` and that it may have applied the settings |
+| sent, but the answer could not be read (network, no CORS on the answer, timeout) | that the outcome is unknown — never that nothing happened — with **Test the connection** |
+
+A check's status is shown as a word (`pass`, `fail`, `skip`, anything else
+`unknown`). The body is shown as the server returned it — pretty-printed when
+it is JSON, 8 KiB of the 64 KiB read — as text only, after the studio hides
+every submitted secret of 4+ characters it finds echoed back (raw,
+URI-encoded, JSON-escaped, base64, and base64 `<user>:<secret>`), then, in
+parsed JSON, every value under a submitted secret's name or a
+credential-like key (`password`, `secret`, `token`, `apiKey`, `credential`,
+`authorization`) whatever its length; the modal says how many it hid.
+
+After a verified configure the panel's **connection test** runs, and the
+modal reports its read's outcome, not only the verdict — `connected, and the
+read <tool> answered: …` or `connected, but the read failed: …` — since the
+connection test says `connected` even when the MCP server's backend read
+fails. **Open the live panel** then opens the live panel on the same target
+with its test run, so a Snapshot is one click away.
+
+### What your server must do
+
+The studio cannot enforce any of this on the browser-direct path; the MCP
+server's configure endpoint is what holds. The server author:
+
+1. **Authenticates the configure endpoint and every action** — `auth`
+   (`Authorization: Bearer`) or a body field the action also sends. An
+   unauthenticated configure endpoint makes **every studio user, every
+   script running on the studio's origin and every process on that machine**
+   the server's admin: any of them can point it at a backend of their choosing
+   (packs built from a backend they control, requests from the MCP server to
+   an internal host). They need no existing secret — they bring their own
+   backend. The only tolerable exception is a single-user development
+   machine, at that cost.
+2. **Restricts CORS to the studio's origin(s), on every response** — the
+   description, the configure and every action path, **errors and 401
+   included** (set CORS before auth and before the error handler): an exact
+   `Access-Control-Allow-Origin: <studio origin>` with `Vary: Origin`. Never
+   `*` on the configure endpoint and never `null` (a `file://` page sends
+   `Origin: null`); never `Access-Control-Allow-Credentials` (the studio sends
+   no cookie). The `OPTIONS` preflight allows `POST` and the headers
+   `content-type, authorization`.
+3. **Checks `Origin` on the configure POST**: refuses a present Origin that is
+   not a listed studio origin; accepts an absent Origin only from an
+   authenticated caller (the pass-through sends none); requires
+   `Content-Type: application/json`. CORS alone does not stop a cross-site
+   form POST.
+4. **Checks the `Host` header** against its own bind address(es). A loopback
+   server without this check can be reached by DNS rebinding from any page.
+5. **Never redirects** the description or the configure endpoint (the studio
+   follows no redirect), and **never echoes a submitted secret** — the
+   studio's redaction is a backstop, not the contract.
+6. **Serves the description without credentials and without current
+   values**, as `application/json` with `Cache-Control: no-store`: it is a
+   schema, not a state read.
+7. **Validates the values itself**, including its own SSRF policy for a `url`
+   field: the MCP server is what will call that backend.
+8. **Answers the outcome shape and audits its own configure calls.** A
+   configure the browser sends directly leaves no studio record.
+9. **Serves over https unless it binds to loopback** — the studio refuses a
+   plain-http settings target that is not loopback.
+
+### What the studio does, and what it cannot do
+
+The studio's guarantee is that **it** never sends a settings value anywhere
+but the MCP server the panel names, and never keeps one: no value reaches
+`localStorage`, `sessionStorage`, a cookie, the studio's state, the
+workspace, the store, a server log, an audit row or any studio API body
+(`server/test-mcp-settings-studio.mjs` scans all of them after a configure,
+a verify and a snapshot, a reload, a sign-out and a sign-in). On the
+browser-direct path the role gate, the target checks and the settings
+policy's acknowledgements are the studio's affordances: a request sent from
+the browser meets none of the studio server's authorization, its origin
+allowlist, its no-redirect client or its audit, and a reader with the
+browser's developer tools (or curl) can skip all of them. The MCP server's
+own authentication, CORS, Origin and Host checks (above) are what enforce. A
+page reached through an SSH tunnel on `127.0.0.1` passes the studio's
+same-machine check while the MCP server is remote from the reader; there,
+too, the MCP server's Host and Origin checks are what hold.
+`OBSERVOGRAM_ALLOW_LOCAL_MCP=0` protects the studio server's own network from
+its own requests; a browser-direct request is not one, so only the
+pass-through applies it.
+
+**The settings policy** (`OBSERVOGRAM_MCP_SETTINGS_POLICY`, docs/DOWNSTREAM.md
+§9 and §16) adds friction only: a rule whose pattern matches a field's value
+(a URL as its normalised form; a rule never reads a secret) shows its warning
+and, with `require.ack`, blocks the send until its acknowledgement is ticked;
+a rule whose field the form does not have cannot run, says so, and still
+requires its acknowledgement. Acknowledgements are never remembered. On the
+browser-direct path that block is advisory; the pass-through re-checks it
+against the description it reads itself. A deployment that needs the rule
+enforced enforces it in the MCP server. A pattern is checked for its shape
+when the file loads (anchored, at most 200 characters, no quantified group,
+at most one unbounded quantifier), not for its speed: the pass-through
+evaluates the policy in a worker with a 100 ms deadline per rule, and a rule
+that does not finish counts as matched, as do the rules after it. The studio
+evaluates the policy in the page directly, so a slow pattern freezes only
+that admin's tab.
+
+### The pass-through: `OBSERVOGRAM_MCP_ADMIN_PROXY=1`
+
+Off by default (read per request, no restart). Use it when the browser cannot
+reach the MCP server — it sends no CORS headers, or it listens on a machine
+the reader's browser is not on. When `GET /api/mcp-settings` says it is on,
+the modal sends **every** request through the studio server —
+`POST /api/mcp-settings/describe` and `POST /api/mcp-settings/submit` (README
+"API Surface" has the shapes) — and never falls back from one path to the
+other. The routes are `admin`, take the CSRF header in every posture, answer
+without sign-in only a direct loopback request, and are closed when the
+server is exposed without sign-in. The studio server:
+
+- resolves the target as every MCP route does (a registered endpoint, or an
+  admin's typed URL), **never sending the endpoint's read token** and
+  refusing an `mcpAuth`; applies `OBSERVOGRAM_ALLOW_LOCAL_MCP`, https unless
+  loopback, never its own address, and to a submit (which carries a
+  credential) the origin allowlist;
+- sends only to the paths it read: the description at `<root>/admin/schema`;
+  a described submit reads the description again and sends to the endpoint
+  (or the action's endpoint) it declares, whatever the caller says; a generic
+  submit only to the settings policy's `generic.path`, else `/configure`;
+- re-checks the settings policy against what it read — a missing
+  acknowledgement is a 409, `{ denied: 'policy-ack', rule, error }`, naming
+  the rule by index and its warning and acknowledgement, with
+  `unevaluated: true` when the server could not check that rule (it did not
+  finish, the worker could not start or failed, the rule cannot run on the
+  form, or a value it checks is over 512 characters), never a value; the
+  modal then draws that rule's
+  acknowledgement if its own check did not, with a line saying the server
+  could not check the rule (or that its check matched where the page's did
+  not), and once it is ticked the next send carries it —, in a
+  `node:worker_threads` worker that gives
+  each rule 100 ms from its own start (`server/mcp-settings-eval.mjs`), never
+  the time the rules before it took: past a rule's deadline the worker is
+  terminated, that rule and every rule after it count as matched — each
+  one's warning applies and its acknowledgement is required —, and one
+  stderr line names the rules and the deadline, never a value. The check
+  takes at most the worker's start (10 s at most) plus 100 ms per rule —
+  3.2 s for the 32 rules a policy may hold. A server started with a flag a
+  worker refuses (a V8 one: `node --max-old-space-size=… server/index.mjs`)
+  starts the worker without its flags; a worker that cannot start counts
+  every rule as matched the same way, and one that fails every rule it did
+  not finish, its line naming the error's class when the worker could not
+  be constructed or threw, else the deadline;
+- sends with the platform's `fetch`, **never through the transport hook**, so
+  a hook's own credential never rides to a settings path; no redirect
+  followed; exactly `Content-Type`, `Accept` and the description's own
+  `Authorization`; 10 s; the answer read with a cap;
+- passes back **the outcome shape only** — the description re-serialised from
+  its parse, or the outcome's `ok`, `message` and `checks` redacted; any other
+  body is named by its status, media type and size and never shown;
+- never logs, keeps or echoes the body (a malformed body is a 400 that quotes
+  none of it); logs one line per upstream request,
+  `[mcp-settings] <describe|submit|action:<name>> <status> <ms>ms`; writes one
+  `live.mcp-settings` audit row per submit with field names and acknowledged
+  rule indexes, never a value.
+
+An MCP server reachable only through the transport hook's gateway cannot be
+configured through the pass-through; configure it browser-direct, or have the
+gateway forward `/admin/schema` and the configure path.
+
+### A minimal server
+
+A loopback MCP server on port 9000 configured by a studio at
+`http://127.0.0.1:8090`, with its API key as the bearer:
+
+```js
+import { createServer } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
+
+const STUDIO = 'http://127.0.0.1:8090';                 // the studio origin(s) allowed to configure this server
+const HOSTS = new Set(['127.0.0.1:9000', 'localhost:9000']);
+const KEY = Buffer.from(process.env.MCP_ADMIN_KEY);     // required: the server's own API key
+const DESCRIPTION = JSON.stringify({
+  version: 1, endpoint: '/configure', auth: { field: 'apiKey', scheme: 'bearer' },
+  fields: [
+    { name: 'grafanaUrl', label: 'Backend base URL', type: 'url', required: true },
+    { name: 'user', label: 'User', type: 'text' },
+    { name: 'secret', label: 'Password / token', type: 'secret' },
+    { name: 'apiKey', label: 'Server API key', type: 'secret' },
+  ],
+  actions: [{ name: 'disable', label: 'Clear server credential' }],
+});
+const send = (res, status, body) => res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(body));
+const authorised = (req) => {
+  const given = Buffer.from(String(req.headers.authorization ?? '').replace(/^Bearer /, ''));
+  return given.length === KEY.length && timingSafeEqual(given, KEY);
+};
+
+createServer((req, res) => {
+  if (!HOSTS.has(req.headers.host)) return send(res, 421, { ok: false, message: 'unknown host' });   // DNS rebinding
+  res.setHeader('Vary', 'Origin');                                                       // CORS first, on every answer
+  if (req.headers.origin === STUDIO) res.setHeader('Access-Control-Allow-Origin', STUDIO);
+  if (req.method === 'OPTIONS') {
+    return res.writeHead(204, { 'Access-Control-Allow-Methods': 'GET, POST', 'Access-Control-Allow-Headers': 'content-type, authorization' }).end();
+  }
+  if (req.method === 'GET' && req.url === '/admin/schema') return send(res, 200, JSON.parse(DESCRIPTION));
+  if (req.method !== 'POST' || req.url !== '/configure') return send(res, 404, { ok: false, message: 'not found' });
+  if (req.headers.origin !== undefined && req.headers.origin !== STUDIO) return send(res, 403, { ok: false, message: 'origin not allowed' });
+  if (!authorised(req)) return send(res, 401, { ok: false, message: 'API key required' });
+  if (!/^application\/json\b/.test(req.headers['content-type'] ?? '')) return send(res, 415, { ok: false, message: 'JSON only' });
+  let raw = '';
+  req.setEncoding('utf8');
+  req.on('data', (c) => { raw += c; if (raw.length > 65536) req.destroy(); });
+  req.on('end', () => {
+    let body;
+    try { body = JSON.parse(raw); } catch { return send(res, 400, { ok: false, message: 'not JSON' }); }
+    if (body.action === 'disable') { /* forget the backend credential */ return send(res, 200, { ok: true, message: 'The server forgot the backend credential.' }); }
+    // Validate grafanaUrl against this server's own SSRF policy, store the settings,
+    // try the backend, and say what was checked — never echo body.secret.
+    return send(res, 200, { ok: true, message: 'Settings applied.', checks: [{ label: 'Identity', status: 'pass' }] });
+  });
+}).listen(9000, '127.0.0.1');
+```
+
+`server/fixtures/fake-mcp.mjs` (its `admin` option) is the same surface as
+the test suites drive it: a description, configure and disable, CORS for one
+origin, an API key in the header or the body, and every admin request
+recorded.
+
+## Transport hook
+
+Every MCP request Observogram makes — `npm run fetch-live`, `npm run
+record-fixtures`, the live probes (`buildAndValidate`), a journey's live
+source and the studio server's `POST /api/refresh-live`,
+`POST /api/draft-from-mcp` and the deploy and rollback routes — goes through
+one client, `tools/lib/mcp-client.mjs`, and its single `send()`. A
+distribution behind a gateway with its own auth, extra headers, a proxy or a
+private CA shapes those requests there, without forking the client:
+
+```bash
+OBSERVOGRAM_TRANSPORT_HOOK=./hooks/gateway.mjs npm run fetch-live
+```
+
+The value is a path — absolute, or relative to the working directory — or a
+`file:` URL, of an ES module with one or both of these named exports:
+
+```js
+// hooks/gateway.mjs — runs in Node, with the process's trust.
+import { Agent } from 'undici';           // the operator's own dependency, not Observogram's
+
+// Applied to EVERY request. Sync or async. Return what you change: an
+// omitted field keeps the input, returned headers are merged over the built
+// ones ({ ...headers, ...returned }), so Mcp-Session-Id and the rest survive.
+export async function prepareRequest({ url, headers }) {
+  const exchanged = await exchangeToken(headers.Authorization);   // the bearer is visible: Bearer <MCP_AUTH>
+  return {
+    url: url.replace('https://otel-mcp.example.com/', 'https://gateway.internal/otel-mcp/'),
+    headers: { ...headers, Authorization: `Bearer ${exchanged}`, 'X-Tenant': 'payments' },
+  };
+}
+
+// Optional: replace the fetcher wholesale (a private CA, a corporate proxy,
+// mTLS). init is { method: 'POST', headers, body, redirect: 'manual', signal } —
+// the AbortSignal carries OBSERVOGRAM_MCP_TIMEOUT_MS and may be honoured or
+// ignored; a redirect the fetcher returns is refused either way.
+const dispatcher = new Agent({ connect: { ca: process.env.PRIVATE_CA_PEM } });
+export const fetchImpl = (url, init) => fetch(url, { ...init, dispatcher });
+```
+
+What the hook sees and what it must do with it:
+
+- `headers` is the request as the client built it — `Content-Type`,
+  `Accept`, `MCP-Protocol-Version`, `Authorization: Bearer <token>` when a
+  token was given (`MCP_AUTH`, `mcpAuth`, a journey's `authEnv`), and
+  `Mcp-Session-Id` once the server issued one. `url` is the caller's URL as
+  given, credential query parameters included (they are stripped for
+  persistence, not for the wire). The hook may replace both. It is
+  operator-installed code running with the process's trust: **never log the
+  headers or the URL**. As a backstop the client replaces the bearer, the
+  URL's userinfo and every credential-named query value with `<redacted>` in
+  the hook's *own* error text; nothing else the hook does is redacted for it.
+- The URL a `prepareRequest` returns passes the same policy the caller's URL
+  passed: it must parse and be `http(s)`, and under
+  `OBSERVOGRAM_ALLOW_LOCAL_MCP=0` it may not name a local or private address
+  (`tools/lib/mcp-url-safety.mjs` `mcpUrlPolicy`, the pure form of the
+  server's `validateMcpUrl`). A `fetchImpl`-only hook leaves the URL alone,
+  so no second check runs. A hook cannot turn a public URL into `file:` or,
+  in the strict posture, into a loopback one.
+- A `fetchImpl` must answer a Response-like object (`ok`, `status`,
+  `headers.get()`, `text()`, `json()`, and `body.getReader()` when it answers
+  `text/event-stream`); `new Response(…)` satisfies all of it.
+
+Only a **contract fault** is a hard failure (`TransportHookError`): the module
+cannot load or exports neither function; `prepareRequest` throws or returns a
+non-object, a non-string `url`, non-object `headers`, a header name or value
+carrying CR or LF, a non-`http(s)` URL or one the policy refuses; `fetchImpl`
+returns something that is not a Response. Then nothing is written:
+`fetch-live` exits 1 at its FATAL line with the previous `OUTPUT` untouched,
+the recorder exits 1 before its `--write` block, a journey run exits 2 with
+no run record (a configuration error, like an unset `authEnv` — never a
+`vantage-lost` record and never a `failed` inventory record), the studio
+server refuses to start on a load failure (`[studio] failed to start:
+OBSERVOGRAM_TRANSPORT_HOOK: cannot load …`) and answers a call-time fault
+with one `502 { ok: false, error }` and no live pack, no per-item results
+and no deploy or rollback record. **Network failures are not hook faults**:
+a rejection from `fetchImpl` (or from native `fetch` through a
+`prepareRequest`-only hook), a refused connection or an HTTP 503 on one probe
+behave exactly as without a hook — retried once when transient, annotated as
+that probe's failure, the pack written. A `fetchImpl` rejection's message is
+still hook text, so it is redacted like a `prepareRequest` throw's (the
+error itself stays ordinary: same name and code, the original kept as
+`cause`); so is the text of a Response the `fetchImpl` *returns* — the body
+of a non-OK answer (`MCP HTTP <status> on <method>: …`) and a JSON-RPC or
+SSE `error.message`. Native `fetch` is redacted the same way: every text an
+MCP answer puts into an error — a non-OK body, a JSON-RPC or SSE
+`error.message`, a tool's `isError` text — goes through the redaction
+whoever answered, so an upstream that repeats the request's Authorization
+header never carries the token back; a body that is not JSON is reported as
+`MCP <method>: the answer is not valid JSON` (the parser's message would
+quote it).
+
+The texts, exact: `OBSERVOGRAM_TRANSPORT_HOOK: cannot load <path>: <message>`
+· `OBSERVOGRAM_TRANSPORT_HOOK: <path> exports neither prepareRequest nor
+fetchImpl` · `OBSERVOGRAM_TRANSPORT_HOOK: <path> exports prepareRequest,
+which is not a function` (same for `fetchImpl`) · `transport hook <path>:
+prepareRequest threw: <redacted message>` · `transport hook <path>:
+prepareRequest returned <null|string|…>, not { url, headers }` · `… returned
+a url that is not a string` · `… returned headers that are not an object` ·
+`… returned header "<name>" containing CR or LF` · `… returned a URL that is
+not http(s): <safe url>` · `transport hook <path>: mcpUrl targets a
+local/private address (<host>), which OBSERVOGRAM_ALLOW_LOCAL_MCP=0 forbids`
+· `transport hook <path>: fetchImpl returned <type>, not a Response`.
+
+The hook loads **once per process** (`tools/mcp-transport.mjs`
+`mcpTransport()`) and cannot be swapped at runtime; each entrypoint logs the
+path once — `[fetch-live-pack] transport hook: OBSERVOGRAM_TRANSPORT_HOOK=…
+(prepareRequest: yes, fetchImpl: no)` on stderr, `[studio] MCP transport
+hook: …` at start (a silent boot prints nothing) — never a header or a URL.
+The legacy `TOMOGRAPH_TRANSPORT_HOOK` spelling is honoured
+(`tools/lib/brand-env.mjs`'s rule, the modern name wins); every message
+spells the modern name. Unset or empty, the hook is inert: no import, no log
+line, `globalThis.fetch`, the same URL and the same headers in the same
+order, no second URL check (`tools/test-mcp-transport.mjs` proves the request
+log identical with no hook and with an identity hook). The hook runs in Node
+only — the studio in the browser never loads it; the client module itself is
+browser-safe and vendorable (`docs/DOWNSTREAM.md`). A suite that needs a hook
+sets the variable for a child process, never for its own
+(`server/fixtures/serve-child.mjs` strips it from every child it starts).
 
 ## What The Live Pack Contains
 
@@ -48,7 +649,7 @@ diagnostic-grade drift:
 | Metrics | metric inventory and names observed from the live platform |
 | Scrape jobs | Prometheus/VictoriaMetrics scrape evidence |
 | Recording rules | full rule names and expressions where the MCP exposes them |
-| Alert rules | Grafana/Prometheus alerting rules; burn-rate alerts are mapped from them per SLO, never synthesised |
+| Alert rules | Grafana/Prometheus alerting rules; burn-rate alerts are mapped from them per SLO, never synthesised; every other rule is declared in `spec.alerting.rules` (spec 1.4) under its exact name |
 | Alerting routes | the routes of the configuration the running Alertmanager reports — severities and channels, secret addresses as `redacted:secret` |
 | Dashboards | Grafana dashboard metadata plus dashboard bodies, panels, variables, and targets |
 | Baselines | none yet — MTTD/MTTR are platform defaults stamped `Scaffold`; anomaly baselines are only counted (`mcp.baselinesComputed`) |
@@ -153,7 +754,7 @@ JSON arrays (`annotationJson`) at 200 entries; error strings at 200 chars.
 | `mcp.capabilities.unobserved` | comma list of products | what the inventory lists and nothing showed to be running: supported, not deployed — never a backend |
 | `mcp.backends.evidence` | `<backend id>=<what attested it>` joined by `\|` | per backend: the version probe (`metrics_query/vm_app_version`), the scrape job (`scrape job promtail`) or the product tool (`vmalert_rules`) behind it |
 | `mcp.derived.<symbol>` | string | an entry READ from live rules without being attested as what the pack calls it — `policy.burn_rate_alerts[<i>]` read from plain alerting rules names the rules; projects as `Declared`, neither `Verified` nor `Scaffold` |
-| `mcp.discovered.alert_rules_linked` / `alert_rules_operational` | counts | alerting rules that guard a recorded SLO (read as burn-rate entries) / that guard none |
+| `mcp.discovered.alert_rules_linked` / `alert_rules_operational` | counts | alerting rules that guard a recorded SLO (read as burn-rate entries) / that guard none — the latter are declared in `spec.alerting.rules` (spec 1.4), each stamped `mcp.verified.alerting.rules[<i>]` unless the ruler reports it unhealthy |
 | `observogram.unobserved.<family>` | reason string | an artefact family this fetch had no way to look at (see *What the fetch could not look at*) |
 | `mcp.stack.status` | `sampled` \| `not-attempted` | the stack self-metrics panel (step 2, "Stack self-metrics (sampling)"): whether it was sampled at all — signals, never verdicts; written whenever the fetcher ran the step-2 sampler (a caller that predates step 2 writes nothing) |
 | `mcp.stack.reason` | string | only when `not-attempted`: why (`metrics_query not exposed by this MCP (restricted tier)`) |
@@ -282,7 +883,8 @@ first) and each emitted entry is stamped `mcp.verified.policy.burn_rate_alerts[<
   series' SLO and contributes its window (`for`, severity) to the SLO's
   entry; entries with fewer than two windows take the default pair; a rule
   that references no recorded series is an operational alert and no SLO
-  contract. Hand-written rules carry neither the compiler's labels nor its
+  contract — since spec 1.4 it is declared in `spec.alerting.rules` (below),
+  not dropped. Hand-written rules carry neither the compiler's labels nor its
   names — without this a platform with seventy alerting rules read as having
   no burn-rate policy, and every alert its repository declares read "not
   live". Such an entry is real (no scaffold marker) and **not** `Verified`:
@@ -293,6 +895,22 @@ first) and each emitted entry is stamped `mcp.verified.policy.burn_rate_alerts[<
 - A burn group for an SLO nobody inferred, or one with a single window (the
   schema requires two), is not representable and is listed in
   `mcp.discovered.alert_rules_unmapped` instead of being padded.
+- **Operational rules are declared, not lost (spec 1.4 `alerting.rules`).**
+  Every alerting rule the ruler reports that binds to no SLO is read with
+  the same reading the crawler applies to a rule file
+  (`sli-inference.mjs` `operationalAlertRule`): its exact `name` (the join
+  key), `expr` (`query` on the wire), `for` as the canonical duration
+  (`duration: 600` is `10m`), the pack's `severity` from `labels.severity`
+  beside the engine's own word in `labels`, and `engine` from what the
+  answering tool attests (the contract registry's `attests`: grafana,
+  mimir, vmalert → victoriametrics; a plain Prometheus-API answer states
+  none, which means prometheus). The repository's crawler declares the
+  same rules from the rule files, so the two sides pair rule for rule by
+  name in Compare — the engine is not compared (a rule file cannot tell a
+  Prometheus ruler from a VictoriaMetrics one), the expression, wait,
+  labels and severity are. Until 1.4 these rules were counted
+  (`alert_rules_operational`) and carried nowhere, and a live Grafana
+  snapshot matched zero alerts against the repository that provisioned them.
 - A rule with no recognisable severity gets one from its burn factor
   (`>= 10x` SEV1, `>= 5x` SEV2, else SEV3) and is listed in
   `mcp.discovered.alert_rules_severity_inferred`.
@@ -379,6 +997,7 @@ both read, they read through one module:
 |---|---|---|---|
 | SLIs / SLOs | `sli-inference.mjs` `inferSlisFromRecordingRules` | rule files | the ruler's rule list — choices are made by rule NAME, never by arrival order |
 | Burn-rate entries | `sli-inference.mjs` `burnAlertsFromAlertRules` | alerting rule files (`for: 2m`) | the ruler's alerting rules (`duration: 120`) |
+| Operational alert rules (spec 1.4 `alerting.rules`) | `sli-inference.mjs` `operationalAlertRule` | the rules of a rule file or Grafana provisioning YAML that guard no SLO (`alert:` / `title:`, `expr` or `data[].model.expr`) | the ruler's alerting rules that bind to no SLO (`name`, `query`, `duration`) — paired by exact name |
 | Routes | `alert-routes.mjs` `routesFromAlertmanagerConfig` | the Alertmanager config file (`${VAR}` → `unresolved:<VAR>`) | the running configuration (`<secret>` → `redacted:secret`) |
 | Backends | `backend-products.mjs` | container images | scrape jobs, versions, product tools |
 | Extended surfaces | `l2x.mjs` | the backends above | the backends above |
@@ -859,8 +1478,8 @@ history with `stackPostureBudget` (see *History helpers*). Nothing enters
 
 ```yaml
 notify:
-  urlEnv: MY_JOURNEY_WEBHOOK_URL     # env var NAME holding the POST URL (required)
-  authEnv: MY_JOURNEY_WEBHOOK_TOKEN  # optional → Authorization: Bearer <value>
+  urlEnv: OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_URL     # env var NAME holding the POST URL (required): org acme's hook ONCALL
+  authEnv: OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_TOKEN  # optional, that hook's own token → Authorization: Bearer <value>
   on: transitions                    # transitions (default) · breach · always
   format: json                       # json · text (one line + markdown body)
   timeoutMs: 5000                    # per attempt, clamped to [1000, 60000]; one retry
@@ -870,8 +1489,53 @@ notify:
 Secrets never live in a journey file: a literal `url:` / `token:` /
 `headers:` is refused at load (`notify.url is not allowed — reference an env
 var name with urlEnv (secrets never live in a journey file)`); the env vars
-are resolved at RUN time only, and an unset one refuses to run exactly like
-an unset `packB.mcp.authEnv` (exit 2, no record).
+are resolved at RUN time only, and an unset one refuses to run: on the CLI
+exactly like an unset `packB.mcp.authEnv` (exit 2, no record), on the server
+with a 400 before anything runs (no record, no audit row, nothing sent).
+
+**Which names a run may read.** `packc journey run` reads any name the
+journey declares from its own environment — a shell, a CI job's
+`secrets.*`, a CronJob's `secretKeyRef` bindings. The studio server reads
+only the journey's org's own **notify hook**: `notify.urlEnv` must be
+`OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` — `<KEY>` the org id in capitals
+with `-` as `_`, `<HOOK>` words of A–Z and 0–9 joined by single `_`, upper
+case exactly, a name the org owns alone by the longest-prefix rule — and
+`notify.authEnv` that same hook's `…_TOKEN`, or absent. The server's
+operator sets the pair in the server's environment and restarts the server
+(the start prints a `[notify-hooks]` line for each set hook a run would
+refuse); `GET /api/journeys/notify-hooks` lists the org's hooks to every
+member, by name and whether each is usable, never a value or an origin.
+Capture refuses any other `notify` (400). A run is refused before anything
+runs, with a sentence naming what to fix and who fixes it (`journey <name>
+is not run: …`), unless its hook is the org's, set, with an http(s) URL
+without `user:password`, a token the server can send and an allowed origin.
+Without sign-in such a run is answered only to a request sent straight to a
+loopback address, and never on a server bound beyond loopback. Write
+journeys the studio also runs with the hook's names; the CLI reads them the
+same way.
+
+**The notify origin allowlist** (the server's runs and captures):
+`OBSERVOGRAM_NOTIFY_ORIGINS` (every org) ∪
+`OBSERVOGRAM_ORG_<KEY>_NOTIFY_ORIGINS` (one org, read only when the org owns
+the name alone), comma-separated origins (`scheme://host[:port]`; `*` any),
+read at each check. Loopback always passes; with no list, nothing else does.
+It is a separate list from `OBSERVOGRAM_MCP_ORIGINS`: listing a webhook
+origin never lets an MCP read token go there, nor the reverse. A rejected
+entry is noted on stderr by its position only, never echoed. An `http:`
+origin carries the URL and the token in clear.
+
+**The request.** One bounded POST with the platform's `fetch`, never through
+the transport hook: `redirect: 'manual'`, so a 3xx is a failed delivery with
+its status (`{ status: 'failed', httpStatus: 302, attempts: 1 }`) and its
+`Location` receives nothing. A delivery error on the record never carries any
+part of the hook's URL or token, nor the address its host resolved to, on the
+CLI and the server alike: values are replaced by `<redacted>`; undici's two
+texts that quote a value read `Headers.append: "<redacted>" is an invalid
+header value.` and `Request cannot be constructed from a URL that includes
+credentials: <redacted>`, and a failed lookup or connection reads
+`getaddrinfo ENOTFOUND <redacted>` or `connect ECONNREFUSED <redacted>`.
+docs/DOWNSTREAM.md §17 has the rule's every sentence and the migration of a
+journey that names another variable.
 
 The decision is pure (`tools/lib/journey-notify.mjs`, browser-safe):
 `always` posts every run; `breach` posts a gate-failed or vantage-lost run
@@ -899,9 +1563,14 @@ The outcome never changes the exit code (a failed delivery on a passing run
 still exits 0). `renderJourneyMarkdown` ends with `notify: sent (202) —
 <reason>` / `notify: skipped — …` / `notify: failed after N attempts —
 <error>`; `journey list` appends ` · notify <status>`; `GET /api/journeys`
-carries `notify` as names (`{ urlEnv, authEnv, on, format }`) and
+carries `notify` as names (`{ urlEnv, authEnv, on, format }`, plus
+`problem`, the run's refusal, for a journey a server run would refuse) and
 `lastRun.notify` as `{ status, httpStatus, reason }`; the Journeys view
-prints `notify: sent (202) · <reason>`.
+prints `notify: sent (202) · <reason>`. The studio's schedule snippets
+(`GET /api/journeys/:name/schedule`) never bind a notify name the server
+refuses: it is listed in `refusedEnvNames`, and each snippet says so where
+its binding would have been (`packc journey schedule` binds every name, as
+before).
 
 ### Stack self-metrics (registry)
 

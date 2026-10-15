@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "types": {
+    "PackSLI": "sli",
+    "PackSLO": "slo",
+    "OtelContract": "otel",
+    "PrometheusRule": { "family": "alert_rule", "label": "Prometheus rule" },
+    "GrafanaDashboard": { "family": "dashboard", "label": "Grafana dashboard" },
+    "AlertRoute": "alert_route",
+    "RecordingRule": "recording_rule"
+  },
+  "ids": [
+    { "pattern": "^promrule-", "family": "alert_rule", "flags": "i" }
+  ]
+}

@@ -1,0 +1,19 @@
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: hostile-recording
+    folder: SLO
+    interval: 1m
+    rules:
+      - uid: hostile-orders-rate
+        title: hostile orders rate
+        record:
+          metric: hostile:orders:rate5m
+          from: A
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: sum(rate(orders_total[5m]))
+              refId: A

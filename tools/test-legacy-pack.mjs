@@ -66,6 +66,9 @@ for (const file of files) {
   const kept = Object.keys(canonical.metadata.annotations).filter(k => k.startsWith('legacy.artefact.')).length;
   assert(kept === total, 'every legacy artefact preserved in annotations', kept, total);
   assert(conv.mapped === total, 'conversion report counts every artefact', conv.mapped, total);
+  const markers = Object.keys(canonical.metadata.annotations).filter(k => k.startsWith('crawler.scaffold.')).length;
+  assert(conv.scaffolded === markers && canonical.metadata.annotations['legacy.scaffoldCount'] === String(markers),
+    'report.scaffolded and legacy.scaffoldCount count every crawler.scaffold.* key', [conv.scaffolded, canonical.metadata.annotations['legacy.scaffoldCount']], markers);
 
   // 3. The adapter + conformance run on the result without throwing.
   const adapted = adapt(canonical);

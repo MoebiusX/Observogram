@@ -14,7 +14,9 @@
  * carries a literal value anywhere; and the CLI's per-journey CronJob
  * (schedule-snippets.mjs) agrees with the component on the PVC name and the
  * mount; and the README's one-off restore/export pods see the studio's
- * database and workspace at the studio's paths. CI runs no kustomize/kubeconform — this is the gate; `kubectl
+ * database and workspace at the studio's paths; and the Dockerfile copies
+ * LICENSE into the image beside package.json (follow-up compare-in-bundle:
+ * Observogram's MIT licence travels with the code the image runs). CI runs no kustomize/kubeconform — this is the gate; `kubectl
  * kustomize deploy/k8s-journeys` (the sibling overlay — kustomize refuses one
  * nested under the base it references) is run by hand.
  * Exit 0 = pass.
@@ -22,13 +24,14 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, posix } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createHarness } from './lib/harness.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { k8sCronJobManifest, K8S_WORKSPACE_PVC, K8S_WORKSPACE_MOUNT } from './lib/schedule-snippets.mjs';
 
 const { assert, report } = createHarness();
-const ROOT = new URL('../', import.meta.url);
-const K8S = join(ROOT.pathname.replace(/^\/([A-Za-z]:)/, '$1'), 'deploy', 'k8s');
+const ROOT = fileURLToPath(new URL('../', import.meta.url));
+const K8S = join(ROOT, 'deploy', 'k8s');
 
 function walk(dir) {
   const out = [];
@@ -301,7 +304,7 @@ function smp(base, patch, key) {
 // its own, or `kubectl set image … studio=$OLD_IMAGE` changes nothing.
 {
   const readme = readFileSync(join(K8S, 'README.md'), 'utf8');
-  const version = JSON.parse(readFileSync(new URL('package.json', ROOT), 'utf8')).version;
+  const version = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
   const store = readme.match(/^STORE_IMAGE=(.*)$/m)?.[1] ?? '';
   const old = (readme.match(/^OLD_IMAGE=(\S*)/m)?.[1] ?? '').trim();
   const tagOf = ref => ref.slice(ref.lastIndexOf('/') + 1).split(':')[1] ?? '';
@@ -355,6 +358,16 @@ for (const [rel, doc] of Object.entries(docs)) {
   assert(envs(one).filter(e => /(TOKEN|URL)$/.test(e.name) && 'value' in e).length === 0, 'and binds env names by secretKeyRef only');
   assert(!one.spec.jobTemplate.spec.template.spec.volumes.some(v => v.persistentVolumeClaim?.claimName === STORE_PVC) && !c1.env.some(e => e.name === 'OBSERVOGRAM_DB'),
          'and never mounts the store claim nor sets OBSERVOGRAM_DB');
+}
+
+// --- the image carries Observogram's licence (follow-up compare-in-bundle) ---
+// The image's node_modules carries each installed package's own licence file
+// (npm installs them); the MIT licence of the code the image runs must travel
+// with it too. `npm pack` includes LICENSE by itself.
+{
+  const dockerfile = readFileSync(join(ROOT, 'Dockerfile'), 'utf8');
+  const copied = dockerfile.split(/\r?\n/).filter((l) => /^COPY\s/.test(l)).flatMap((l) => l.trim().split(/\s+/).slice(1, -1));
+  assert(copied.includes('LICENSE'), 'the Dockerfile copies LICENSE into the image (Observogram\'s MIT licence travels with the code it runs)', copied);
 }
 
 report('deploy-manifests', 'all deploy-manifest assertions pass.');

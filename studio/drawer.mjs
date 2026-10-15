@@ -13,6 +13,16 @@ import { host as appHost } from './host.mjs';
 import { cardKey } from './layers-view.mjs';
 import { boundText, goodWhen, hasDirection } from './sli-direction.mjs';
 import { readChain, traceIndex } from './trace-chain.mjs';
+import { staticTraceActions } from './static-remedies.mjs';
+import { classifyArtefact } from './taxonomy.mjs';
+import { verdictPanel } from './verdicts.mjs';
+import { glossaryEntryFor, glossaryLabelHtml, glossaryMarkFor, wireGlossary } from './glossary.mjs';
+
+// The requirement trace's live-evidence texts: the static posture's (a bundle,
+// where no server drafts or deploys; studio/static-remedies.mjs), the trace
+// module's own otherwise — as the Traceability screen words them.
+const isStatic = () => state.access?.posture === 'static';
+const traceActions = () => (isStatic() ? { actions: staticTraceActions(state.brand.chrome.name) } : {});
 
 // ---------- drawer ----------
 
@@ -26,7 +36,9 @@ const DRAWER_ELS = {
        meta: '#drawer-meta', panels: '#drawer-panels',   close: '#drawer-close' },
 };
 
-export function openDrawer(artefact, def, sublayerKey, side = 'b') {
+// `opts.pairing` (Compare in a name or id view, studio/compare-identity.mjs):
+// the sentence saying which key paired this artefact, or why it did not.
+export function openDrawer(artefact, def, sublayerKey, side = 'b', opts = {}) {
   const els = DRAWER_ELS[side];
   if (!els) return;
   const drawer = $(els.drawer);
@@ -54,6 +66,17 @@ export function openDrawer(artefact, def, sublayerKey, side = 'b') {
   const meta = $(els.meta);
   meta.innerHTML = '';
   const rows = [];
+  // The kind, with its glossary mark — only when the bound taxonomy's v2
+  // glossary explains this family (studio/glossary.mjs); otherwise the
+  // strip is exactly what it was.
+  const kind = classifyArtefact(artefact);
+  const kindEntry = kind.label ? glossaryEntryFor(kind.label, { family: kind.family }) : null;
+  if (kindEntry) {
+    const dd = document.createElement('span');
+    dd.innerHTML = `${escapeHtml(kind.label)}${glossaryMarkFor(kind.label, { family: kind.family })}`;
+    rows.push(['kind', dd]);
+  }
+  if (opts.pairing)          rows.push(['paired by', opts.pairing]);
   if (artefact.tool)         rows.push(['tool', artefact.tool]);
   if (artefact.tags?.length) rows.push(['tags', artefact.tags.join(', ')]);
   if (artefact.source)       rows.push(['source', artefact.source]);
@@ -72,6 +95,13 @@ export function openDrawer(artefact, def, sublayerKey, side = 'b') {
   // drawer in single-pack views; in compare we check both packs.
   const panels = $(els.panels);
   panels.innerHTML = '';
+  // The reviewer's verdict on it (studio/verdicts.mjs, GAP batch 2): the
+  // record as it stands and the form for whoever may record one — the
+  // single-pack drawer only (Compare's two drawers show two packs' artefacts
+  // and a verdict is per registered pack).
+  if (side === 'b' && state.activeLayer !== 'COMPARE') {
+    panels.appendChild(verdictPanel(artefact, { onSaved: () => appHost.renderMainView() }));
+  }
   const broken = state.symbolTable?.broken?.get(ckey);
   if (broken && broken.length) {
     const sec = panel('Broken references', 'broken-refs');
@@ -94,12 +124,18 @@ export function openDrawer(artefact, def, sublayerKey, side = 'b') {
   pre.textContent = JSON.stringify(artefact.spec ?? artefact, null, 2);
   src.appendChild(pre);
   panels.appendChild(src);
+
+  // The glossary marks of this drawer, if any: wired once on the drawer
+  // itself (delegated), so every re-render is covered; nothing without a mark.
+  wireGlossary(drawer);
 }
 
+// A section head; glossaryLabelHtml is escapeHtml(title) unless the bound
+// glossary explains the title (then the mark follows it).
 function panel(title, className = '') {
   const sec = document.createElement('section');
   sec.className = 'drawer-section ' + className;
-  sec.innerHTML = `<h3>${escapeHtml(title)}</h3>`;
+  sec.innerHTML = `<h3>${glossaryLabelHtml(title)}</h3>`;
   return sec;
 }
 
@@ -163,9 +199,50 @@ function jumpToRef(symbol) {
 
 // ---------- per-artefact-type drawer panels ----------
 
+// The panel per family, for an artefact the taxonomy placed by an explicit
+// `type` or by an operator override (studio/taxonomy.mjs) — a foreign id
+// says nothing to the prefix chain below. Adapted artefacts (via defines /
+// id) keep the prefix chain, whose sub-kinds read the id.
+const FAMILY_PANEL = {
+  sli: (id, s) => panelSLI(s),
+  slo: (id, s) => panelSLO(s),
+  otel: (id, s) => panelOtel(s),
+  backend: (id, s) => panelBackend(s),
+  storage_metrics: (id, s) => panelStorage(s),
+  storage_logs: (id, s) => panelStorage(s),
+  storage_traces: (id, s) => panelStorage(s),
+  metric: (id, s) => panelMetric(s),
+  scrape_job: (id, s) => panelScrapeJob(s),
+  pipeline_receiver: (id, s) => panelPipeline('PIP-RCV-', s),
+  pipeline_processor: (id, s) => panelPipeline('PIP-PRC-', s),
+  pipeline_exporter_metrics: (id, s) => panelPipeline('PIP-EXP-', s),
+  pipeline_exporter_logs: (id, s) => panelPipeline('PIP-EXP-', s),
+  pipeline_exporter_traces: (id, s) => panelPipeline('PIP-EXP-', s),
+  dashboard: (id, s) => panelDashboard(s),
+  panel: (id, s) => panelDashboardPanel(s),
+  recording_rule: (id, s) => panelRecordingRule(s),
+  derived_view: (id, s) => panelDerivedView(s),
+  burn_rate: (id, s) => panelBurnRate(s),
+  forecast: (id, s) => panelForecast(s),
+  alert_route: (id, s) => panelAlertRoute(s),
+  alert_rule: (id, s) => panelAlertRule(s),
+  remediation: (id, s) => panelRemediation(s),
+  baselines: (id, s) => panelBaselines(s),
+  chaos: (id, s) => panelChaos(s),
+  synthetic: (id, s) => panelSynthetic(s),
+  profiling: (id, s) => panelExtended('PROF-', s),
+  network: (id, s) => panelExtended('NET-', s),
+  policy_engine: (id, s) => panelExtended('POE-', s),
+  mesh: (id, s) => panelExtended('MESH-', s),
+  collection: (id, s) => panelExtended('COL-', s),
+  imports: (id, s) => panelImport(s),
+};
+
 function renderTypedPanels(artefact, def) {
   const id = artefact.id || '';
   const s = artefact.spec || {};
+  const c = classifyArtefact(artefact);
+  if ((c.via === 'type' || c.via === 'override') && FAMILY_PANEL[c.family]) return FAMILY_PANEL[c.family](id, s);
   if (id.startsWith('SLI-'))     return panelSLI(s);
   if (id.startsWith('SLO-'))     return panelSLO(s);
   if (id.startsWith('OTEL-'))    return panelOtel(s);
@@ -181,6 +258,7 @@ function renderTypedPanels(artefact, def) {
   if (id.startsWith('POL-'))     return panelBurnRate(s);
   if (id.startsWith('FCST-'))    return panelForecast(s);
   if (id.startsWith('ALR-'))     return panelAlertRoute(s);
+  if (id.startsWith('RULE-'))    return panelAlertRule(s);
   if (id.startsWith('HEAL-'))    return panelRemediation(s);
   if (id.startsWith('BASE-'))    return panelBaselines(s);
   if (id.startsWith('CHAOS-'))   return panelChaos(s);
@@ -208,7 +286,7 @@ function renderRequirementTracePanel(artefact, side = 'b') {
   const index = traceIndex(pack);
   const p = panel('Requirement trace', 'p-requirement-trace');
   for (const chain of hits.slice(0, 3)) {
-    const read = readChain(chain, index);
+    const read = readChain(chain, index, traceActions());
     const scrape = chain.scrapeJobs || {};
     const sec = subpanel(chain.slo?.id || chain.sli?.id || 'requirement');
     sec.appendChild(dl([
@@ -240,7 +318,9 @@ function dl(rows) {
   dl.className = 'panel-dl';
   for (const [k, v] of rows) {
     if (v == null || v === '') continue;
-    const dt = document.createElement('dt'); dt.textContent = k;
+    const dt = document.createElement('dt');
+    // A label the glossary explains carries its mark; every other label is text, as before.
+    if (glossaryEntryFor(k)) dt.innerHTML = glossaryLabelHtml(k); else dt.textContent = k;
     const dd = document.createElement('dd');
     if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') dd.textContent = String(v);
     else dd.appendChild(v);
@@ -579,6 +659,24 @@ function panelForecast(s) {
     sloSpan.appendChild(a);
   }
   p.appendChild(dl([['slo', sloSpan], ['method', s.method], ['horizon', s.horizon], ['on projected breach', s.on_projected_breach]]));
+  return p;
+}
+
+// An operational alert rule (spec 1.4 alerting.rules): the rule as its
+// engine holds it — name, expression, wait, the pack's severity beside the
+// engine's own label, and where it was read from.
+function panelAlertRule(s) {
+  const p = panel('Alert rule', 'p-alert');
+  p.appendChild(dl([
+    ['name', s.name],
+    ['engine', s.engine || 'prometheus (default)'],
+    ['severity', s.severity || '—'],
+    ['for', s.for || '—'],
+  ]));
+  if (s.expr) { const sec = subpanel('expr'); const pre = document.createElement('pre'); pre.textContent = s.expr; sec.appendChild(pre); p.appendChild(sec); }
+  if (s.labels && Object.keys(s.labels).length) { const sec = subpanel('labels'); sec.appendChild(dl(Object.entries(s.labels))); p.appendChild(sec); }
+  if (s.annotations && Object.keys(s.annotations).length) { const sec = subpanel('annotations'); sec.appendChild(dl(Object.entries(s.annotations))); p.appendChild(sec); }
+  if (s.source) p.appendChild(dl([['source', s.source]]));
   return p;
 }
 

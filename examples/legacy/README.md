@@ -43,7 +43,11 @@ that line:
 - Wherever a schema-required machine field had to be filled with a
   placeholder, the artefact is marked `crawler.scaffold.<symbol>` and
   projects as **Scaffold**, never Declared. Replace the placeholders with
-  real values to earn Declared status (conformance shows the list).
+  real values to earn Declared status — `npm run pack-conformance -- <pack>`
+  lists them with the pack path, the field, what it needs and where the
+  value normally comes from (`docs/DOWNSTREAM.md` §11). Re-running the
+  upconvert with the same `-o` merges into the file and never regresses a
+  value you typed (`--overwrite` replaces it).
 - Legacy `GAP` items always convert as scaffolds.
 
 `tools/test-legacy-pack.mjs` gates all four examples on every `npm test`.

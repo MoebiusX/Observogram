@@ -1,0 +1,920 @@
+{
+  "apiVersion": "observability.platform/v1",
+  "kind": "ObservabilityPack",
+  "metadata": {
+    "name": "live-snapshot",
+    "version": "0.29856240.0",
+    "owners": [
+      "mcp-fetcher"
+    ],
+    "bindings": {
+      "service": "live-snapshot",
+      "environments": [
+        "prod"
+      ],
+      "criticality": "tier-3"
+    },
+    "annotations": {
+      "mcp.refreshedAt": "2026-10-07T12:00:00.000Z",
+      "mcp.url": "https://mcp.snapshot.test",
+      "mcp.toolsCalled": "system_health,system_topology,anomalies_active,anomalies_baselines,vmalert_rules,vmalert_rules,grafana_dashboards_search,grafana_dashboard_get,metrics_targets,metrics_label_values",
+      "mcp.toolsFailed": "",
+      "mcp.probesAttempted": "recording_rules,alert_rules,dashboards,scrape_configs,alerting_routes,metric_names",
+      "mcp.probesSucceeded": "recording_rules,alert_rules,dashboards,scrape_configs,metric_names",
+      "mcp.probesEmpty": "",
+      "mcp.probesFailed": "alerting_routes",
+      "mcp.probesUnsupported": "",
+      "mcp.servicesDiscovered": "",
+      "mcp.baselinesComputed": "0",
+      "mcp.activeAnomalies": "0",
+      "mcp.toolsExposed": "system_health,system_topology,anomalies_active,anomalies_baselines,vmalert_rules,metrics_label_values,metrics_targets,alertmanager_status,grafana_dashboards_search,grafana_dashboard_get,grafana_health",
+      "mcp.toolsExposedCount": "11",
+      "mcp.toolsUnmatched": "alertmanager_status",
+      "mcp.probeErrors.alerting_routes": "the Alertmanager status carries no configuration",
+      "mcp.fetchStartedAt": "<time>",
+      "mcp.observedAt.recording_rules": "<time>",
+      "mcp.observedAt.alert_rules": "<time>",
+      "mcp.observedAt.dashboards": "<time>",
+      "mcp.observedAt.scrape_configs": "<time>",
+      "mcp.observedAt.metric_names": "<time>",
+      "mcp.discovered.recording_rules": "15",
+      "mcp.discovered.alert_rules": "15",
+      "mcp.discovered.dashboards": "5",
+      "mcp.discovered.scrape_configs": "6",
+      "mcp.discovered.metric_names": "[\"alertmanager_alerts\",\"alertmanager_alerts_invalid_total\",\"alertmanager_alerts_received_total\",\"alertmanager_build_info\",\"alertmanager_cluster_alive_messages_total\",\"alertmanager_cluster_enabled\",\"alertmanager_cluster_failed_peers\",\"alertmanager_cluster_health_score\",\"alertmanager_cluster_members\",\"alertmanager_cluster_messages_pruned_total\",\"alertmanager_cluster_messages_queued\",\"alertmanager_cluster_messages_received_size_total\",\"alertmanager_cluster_messages_received_total\",\"alertmanager_cluster_messages_sent_size_total\",\"alertmanager_cluster_messages_sent_total\",\"alertmanager_cluster_peer_info\",\"alertmanager_cluster_peers_joined_total\",\"alertmanager_cluster_peers_left_total\",\"alertmanager_cluster_peers_update_total\",\"alertmanager_cluster_reconnections_failed_total\",\"alertmanager_cluster_reconnections_total\",\"alertmanager_cluster_refresh_join_failed_total\",\"alertmanager_cluster_refresh_join_total\",\"alertmanager_config_hash\",\"alertmanager_notifications_failed_total\",\"alertmanager_notifications_total\",\"alertmanager_silences\",\"up\"]",
+      "mcp.scaffold.otel": "schema-required fallback; not attested by any MCP tool",
+      "mcp.verified.telemetry.backends.dashboards-grafana": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.telemetry.backends.metrics-node-exporter": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.telemetry.backends.collection-opentelemetry-collector": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.telemetry.backends.metrics-victoriametrics": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.telemetry.backends.alerting-vmalert": "2026-10-07T12:00:00.000Z",
+      "mcp.backends.evidence": "dashboards-grafana=grafana_health|metrics-node-exporter=scrape job node-exporter|collection-opentelemetry-collector=scrape job otel-collector|metrics-victoriametrics=scrape job victoriametrics|alerting-vmalert=vmalert_rules",
+      "mcp.versions.grafana": "12.4.4",
+      "mcp.versions.grafana.source": "grafana_health",
+      "mcp.versions.grafana.commit": "synthetic",
+      "mcp.verified.telemetry.backends.versions.grafana": "2026-10-07T12:00:00.000Z",
+      "mcp.discovered.extended_surfaces": "0",
+      "mcp.observed.recording_rules": "[{\"name\":\"finops:cpu:usage_per_pod_5m\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:00:34.982755749Z\",\"evaluationTime\":0.002985121},{\"name\":\"finops:memory:usage_per_pod_gb_hours\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:00:34.985773129Z\",\"evaluationTime\":0.0019871},{\"name\":\"finops:kong:overhead_seconds\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:00:34.98778236Z\",\"evaluationTime\":0.002138755},{\"name\":\"finops:requests:rate_per_service_5m\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:06.508908962Z\",\"evaluationTime\":0.001500786},{\"name\":\"finops:errors:rate_per_service_5m\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:06.5104313Z\",\"evaluationTime\":0.001245894},{\"name\":\"finops:spans:exported_rate_5m\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:06.511690472Z\",\"evaluationTime\":0.000974187},{\"name\":\"finops:spans:dropped_rate_5m\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:06.512675455Z\",\"evaluationTime\":0.00115134},{\"name\":\"finops:spans:sampling_ratio\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:06.51384191Z\",\"evaluationTime\":0.001207714},{\"name\":\"finops:logs:bytes_rate_per_component_5m\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:06.515075233Z\",\"evaluationTime\":0.002663719},{\"name\":\"genai:client_operation_duration:p95_5m\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:38.625508452Z\",\"evaluationTime\":0.001648869},{\"name\":\"genai:client_operation_duration:p99_5m\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:38.627191521Z\",\"evaluationTime\":0.001217347},{\"name\":\"genai:client_operation:error_ratio_5m\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:38.628429052Z\",\"evaluationTime\":0.002084359},{\"name\":\"genai:client_token_usage:rate_1h\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:38.6305622Z\",\"evaluationTime\":0.001770986},{\"name\":\"genai:rca_analysis_duration:p95_5m\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:38.632374697Z\",\"evaluationTime\":0.001506144},{\"name\":\"genai:rca_analysis:failure_ratio_5m\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:38.63391313Z\",\"evaluationTime\":0.002744143}]",
+      "mcp.verified.slis.finops_cpu": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.slis.finops_memory": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.slis.finops_kong": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.slis.finops_requests": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.slis.finops_errors": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.slis.finops_spans": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.slis.finops_logs": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.slis.genai_client_operation_duration": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.slis.genai_client_operation": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.slis.genai_client_token_usage": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.slis.genai_rca_analysis_duration": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.slis.genai_rca_analysis": "2026-10-07T12:00:00.000Z",
+      "mcp.scaffold.pipelines.receivers[0]": "schema-required fallback; not attested by any MCP tool",
+      "mcp.scaffold.pipelines.processors[0]": "schema-required fallback; not attested by any MCP tool",
+      "mcp.scaffold.pipelines.processors[1]": "schema-required fallback; not attested by any MCP tool",
+      "mcp.scaffold.pipelines.exporters.logs": "schema-required fallback; not attested by any MCP tool",
+      "mcp.scaffold.pipelines.exporters.traces": "schema-required fallback; not attested by any MCP tool",
+      "mcp.verified.queries.recording_rules[0]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.queries.recording_rules[1]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.queries.recording_rules[2]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.queries.recording_rules[3]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.queries.recording_rules[4]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.queries.recording_rules[5]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.queries.recording_rules[6]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.queries.recording_rules[7]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.queries.recording_rules[8]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.queries.recording_rules[9]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.queries.recording_rules[10]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.queries.recording_rules[11]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.queries.recording_rules[12]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.queries.recording_rules[13]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.queries.recording_rules[14]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.queries.recording_rules": "2026-10-07T12:00:00.000Z",
+      "mcp.discovered.dashboard_panels": "7",
+      "mcp.discovered.dashboard_raw_json": "0",
+      "mcp.verified.dashboards": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.dashboards.node-exporter-full": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.dashboards.d-3b5d5c3712955042212316173ccf37be": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.dashboards.a--b": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.dashboards.orders-main": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.dashboards.d-9xyz-abc": "2026-10-07T12:00:00.000Z",
+      "mcp.discovered.alert_rule_names": "HighErrorRate,HighLatencyP99,HighLatencyP99Critical,ServiceDown,NoTraffic,ColdWalletUnpricedFlows,CustodyWebhookSignatureFailures,CustodyWebhookSignatureFailures,CustodyWebhookErrors,ColdWithdrawalStuckInFlight,ColdWithdrawalSettlementSlow,ContainerCrashLooping,ContainerOOMKilled,PodNotReady,DeploymentReplicasMismatch",
+      "mcp.observed.alert_rules": "[{\"name\":\"HighErrorRate\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:48.227986028Z\",\"state\":\"inactive\",\"activeAt\":null,\"interval\":\"15s\"},{\"name\":\"HighLatencyP99\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:48.231070112Z\",\"state\":\"inactive\",\"activeAt\":null,\"interval\":\"15s\"},{\"name\":\"HighLatencyP99Critical\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:48.233484163Z\",\"state\":\"inactive\",\"activeAt\":null,\"interval\":\"15s\"},{\"name\":\"ServiceDown\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:48.23609988Z\",\"state\":\"inactive\",\"activeAt\":null,\"interval\":\"15s\"},{\"name\":\"NoTraffic\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:48.237535721Z\",\"state\":\"inactive\",\"activeAt\":null,\"interval\":\"15s\"},{\"name\":\"ColdWalletUnpricedFlows\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:52.21460519Z\",\"state\":\"inactive\",\"activeAt\":null,\"interval\":\"15s\"},{\"name\":\"CustodyWebhookSignatureFailures\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:52.216637079Z\",\"state\":\"inactive\",\"activeAt\":null,\"interval\":\"15s\"},{\"name\":\"CustodyWebhookSignatureFailures\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:52.218222516Z\",\"state\":\"inactive\",\"activeAt\":null,\"interval\":\"15s\"},{\"name\":\"CustodyWebhookErrors\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:52.219924116Z\",\"state\":\"inactive\",\"activeAt\":null,\"interval\":\"15s\"},{\"name\":\"ColdWithdrawalStuckInFlight\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:52.221491988Z\",\"state\":\"inactive\",\"activeAt\":null,\"interval\":\"15s\"},{\"name\":\"ColdWithdrawalSettlementSlow\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:52.222901959Z\",\"state\":\"inactive\",\"activeAt\":null,\"interval\":\"15s\"},{\"name\":\"ContainerCrashLooping\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:48.219617703Z\",\"state\":\"inactive\",\"activeAt\":null,\"interval\":\"15s\"},{\"name\":\"ContainerOOMKilled\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:48.223326891Z\",\"state\":\"inactive\",\"activeAt\":null,\"interval\":\"15s\"},{\"name\":\"PodNotReady\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:48.224577881Z\",\"state\":\"inactive\",\"activeAt\":null,\"interval\":\"15s\"},{\"name\":\"DeploymentReplicasMismatch\",\"health\":\"ok\",\"lastError\":null,\"lastEvaluation\":\"2026-09-08T07:03:48.230248764Z\",\"state\":\"inactive\",\"activeAt\":null,\"interval\":\"15s\"}]",
+      "mcp.discovered.alert_rules_linked": "0",
+      "mcp.discovered.alert_rules_operational": "14",
+      "mcp.verified.alerting.rules[0]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.alerting.rules[1]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.alerting.rules[2]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.alerting.rules[3]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.alerting.rules[4]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.alerting.rules[5]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.alerting.rules[6]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.alerting.rules[7]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.alerting.rules[8]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.alerting.rules[9]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.alerting.rules[10]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.alerting.rules[11]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.alerting.rules[12]": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.alerting.rules[13]": "2026-10-07T12:00:00.000Z",
+      "mcp.scaffold.policy.burn_rate_alerts[0]": "schema-required fallback; no burn-rate alerting rule discovered via MCP",
+      "mcp.discovered.scrape_jobs": "node-exporter,grafana,otel-collector,payment-processor,victoriametrics",
+      "mcp.verified.telemetry.scrape": "2026-10-07T12:00:00.000Z",
+      "mcp.verified.pipelines.exporters.metrics": "2026-10-07T12:00:00.000Z",
+      "mcp.discovered.scrape_jobs_down": "alertmanager",
+      "mcp.observed.scrape_targets": "[{\"job\":\"node-exporter\",\"instance\":\"192.168.1.34:9100\",\"health\":\"up\",\"lastScrape\":\"2026-06-12T13:16:04.658Z\",\"lastError\":null},{\"job\":\"alertmanager\",\"instance\":\"kx-krystalinex-alertmanager:9093\",\"health\":\"down\",\"lastScrape\":\"2026-06-12T13:16:04.249Z\",\"lastError\":\"cannot perform request to \\\"http://kx-krystalinex-alertmanager:9093/alertmanager/metrics\\\": Get \\\"http://kx-krystalinex-alertmanager:9093/alertmanager/metrics\\\": dial tcp4 10.96.4.190:9093: connect: conne\"},{\"job\":\"grafana\",\"instance\":\"kx-krystalinex-grafana:3000\",\"health\":\"up\",\"lastScrape\":\"2026-06-12T13:15:46.521Z\",\"lastError\":null},{\"job\":\"otel-collector\",\"instance\":\"kx-krystalinex-otel-collector:8888\",\"health\":\"up\",\"lastScrape\":\"2026-06-12T13:16:10.395Z\",\"lastError\":null},{\"job\":\"payment-processor\",\"instance\":\"kx-krystalinex-payment-processor:3001\",\"health\":\"up\",\"lastScrape\":\"2026-06-12T13:16:10.707Z\",\"lastError\":null},{\"job\":\"victoriametrics\",\"instance\":\"localhost:8428\",\"health\":\"up\",\"lastScrape\":\"2026-06-12T13:16:04.199Z\",\"lastError\":null}]",
+      "mcp.discovered.metric_names_count": "28",
+      "mcp.discovered.metric_names_sample": "alertmanager_alerts,alertmanager_alerts_invalid_total,alertmanager_alerts_received_total,alertmanager_build_info,alertmanager_cluster_alive_messages_total,alertmanager_cluster_enabled,alertmanager_cluster_failed_peers,alertmanager_cluster_health_score,alertmanager_cluster_members,alertmanager_cluster_messages_pruned_total,alertmanager_cluster_messages_queued,alertmanager_cluster_messages_received_size_total,alertmanager_cluster_messages_received_total,alertmanager_cluster_messages_sent_size_total,alertmanager_cluster_messages_sent_total,alertmanager_cluster_peer_info,alertmanager_cluster_peers_joined_total,alertmanager_cluster_peers_left_total,alertmanager_cluster_peers_update_total,alertmanager_cluster_reconnections_failed_total,alertmanager_cluster_reconnections_total,alertmanager_cluster_refresh_join_failed_total,alertmanager_cluster_refresh_join_total,alertmanager_config_hash,alertmanager_notifications_failed_total,alertmanager_notifications_total,alertmanager_silences,up",
+      "mcp.verified.otel.metrics": "2026-10-07T12:00:00.000Z",
+      "mcp.scaffold.alerting.routes[0]": "schema-required fallback; not attested by any MCP tool",
+      "mcp.scaffold.baselines": "schema-required fallback; not attested by any MCP tool",
+      "observogram.unobserved.otel": "no MCP tool exposes the SDK configuration",
+      "observogram.unobserved.pipeline_receiver": "no MCP tool exposes the collector configuration",
+      "observogram.unobserved.pipeline_processor": "no MCP tool exposes the collector configuration",
+      "observogram.unobserved.pipeline_exporter_logs": "no MCP tool exposes the collector configuration",
+      "observogram.unobserved.pipeline_exporter_traces": "no MCP tool exposes the collector configuration",
+      "observogram.unobserved.storage_metrics": "no MCP tool exposes storage settings",
+      "observogram.unobserved.storage_logs": "no MCP tool exposes storage settings",
+      "observogram.unobserved.storage_traces": "no MCP tool exposes storage settings",
+      "observogram.unobserved.baselines": "no MCP tool exposes MTTD / MTTR measurements",
+      "observogram.unobserved.chaos": "no MCP tool exposes chaos experiments",
+      "observogram.unobserved.synthetic": "no MCP tool exposes synthetic checks",
+      "observogram.unobserved.remediation": "no MCP tool exposes remediation automation",
+      "observogram.unobserved.derived_view": "no MCP tool exposes derived views",
+      "observogram.unobserved.imports": "no MCP tool exposes pack imports",
+      "observogram.unobserved.forecast": "forecast rules are not read back from the ruler",
+      "observogram.unobserved.alert_route": "the alerting routes tool got no answer: the Alertmanager status carries no configuration",
+      "observogram.live.mode": "snapshot",
+      "observogram.live.source": "{\"origin\":\"https://mcp.snapshot.test\",\"endpoint\":{\"id\":3,\"name\":\"gw\"}}",
+      "observogram.live.scope": "{\"metricPrefixes\":[\"alertmanager_\",\"up\"],\"folderUids\":[],\"datasourceUid\":null,\"appliesTo\":{\"metricPrefixes\":[\"metric\"],\"folderUids\":[]}}",
+      "observogram.scope.metric": "{\"by\":\"prefix\",\"values\":[\"alertmanager_\",\"up\"]}",
+      "observogram.live.gaps": "[{\"stage\":\"alerting_routes\",\"reason\":\"the alerting routes tool got no answer: the Alertmanager status carries no configuration\"}]"
+    }
+  },
+  "spec": {
+    "otel": {
+      "semconv": "1.27.0",
+      "resource_attributes": {
+        "required": [
+          "service.name"
+        ]
+      },
+      "sdk": {
+        "languages": [
+          "go"
+        ],
+        "sampling": {
+          "policy": "parentbased_traceidratio",
+          "ratio": 0.1
+        },
+        "propagators": [
+          "tracecontext"
+        ]
+      }
+    },
+    "telemetry": {
+      "backends": [
+        {
+          "id": "dashboards-grafana",
+          "signal": "dashboards",
+          "product": "grafana",
+          "version": {
+            "declared": "12.4.4"
+          }
+        },
+        {
+          "id": "metrics-node-exporter",
+          "signal": "metrics",
+          "product": "node-exporter"
+        },
+        {
+          "id": "collection-opentelemetry-collector",
+          "signal": "collection",
+          "product": "opentelemetry-collector"
+        },
+        {
+          "id": "metrics-victoriametrics",
+          "signal": "metrics",
+          "product": "victoriametrics"
+        },
+        {
+          "id": "alerting-vmalert",
+          "signal": "alerting",
+          "product": "vmalert"
+        }
+      ]
+    },
+    "slis": [
+      {
+        "id": "finops_cpu",
+        "description": "Inferred from recording rule finops:cpu:usage_per_pod_5m.",
+        "type": "threshold",
+        "query": "sum(rate(container_cpu_usage_seconds_total{namespace=\"krystalinex\", container!=\"\"}[5m])) by (pod) * 3600\n",
+        "threshold": 1,
+        "unit": "ratio"
+      },
+      {
+        "id": "finops_memory",
+        "description": "Inferred from recording rule finops:memory:usage_per_pod_gb_hours.",
+        "type": "threshold",
+        "query": "sum(container_memory_working_set_bytes{namespace=\"krystalinex\", container!=\"\"}) by (pod) / 1073741824\n",
+        "threshold": 1,
+        "unit": "ratio"
+      },
+      {
+        "id": "finops_kong",
+        "description": "Inferred from recording rule finops:kong:overhead_seconds.",
+        "type": "threshold",
+        "query": "histogram_quantile(0.99,\n  sum(rate(kong_kong_latency_ms_bucket[5m])) by (le)\n) / 1000\n",
+        "threshold": 1,
+        "unit": "ratio"
+      },
+      {
+        "id": "finops_requests",
+        "description": "Inferred from recording rule finops:requests:rate_per_service_5m.",
+        "type": "threshold",
+        "query": "sum(rate(http_requests_total[5m])) by (job)\n",
+        "threshold": 1,
+        "unit": "ratio"
+      },
+      {
+        "id": "finops_errors",
+        "description": "Inferred from recording rule finops:errors:rate_per_service_5m.",
+        "type": "threshold",
+        "query": "sum(rate(http_request_errors_total[5m])) by (job)\n",
+        "threshold": 1,
+        "unit": "ratio"
+      },
+      {
+        "id": "finops_spans",
+        "description": "Inferred from recording rule finops:spans:dropped_rate_5m.",
+        "type": "threshold",
+        "query": "sum(rate(otelcol_processor_dropped_spans_total[5m]))\n",
+        "threshold": 1,
+        "unit": "ratio"
+      },
+      {
+        "id": "finops_logs",
+        "description": "Inferred from recording rule finops:logs:bytes_rate_per_component_5m.",
+        "type": "threshold",
+        "query": "sum(rate(promtail_read_bytes_total[5m])) by (filename)\n",
+        "threshold": 1,
+        "unit": "ratio"
+      },
+      {
+        "id": "genai_client_operation_duration",
+        "description": "Inferred from recording rule genai:client_operation_duration:p95_5m.",
+        "type": "threshold",
+        "query": "histogram_quantile(\n  0.95,\n  sum(rate(gen_ai_client_operation_duration_seconds_bucket[5m]))\n    by (le, provider, model, operation)\n)\n",
+        "threshold": 1,
+        "unit": "ratio"
+      },
+      {
+        "id": "genai_client_operation",
+        "description": "Inferred from recording rule genai:client_operation:error_ratio_5m.",
+        "type": "ratio",
+        "good": "sum(rate(gen_ai_client_operations_total{status=~\"error|timeout\"}[5m]))\n  by (provider, model, operation)\n/\nclamp_min(\n  sum(rate(gen_ai_client_operations_total[5m]))\n    by (provider, model, operation),\n  0.000001\n)\n",
+        "total": "1"
+      },
+      {
+        "id": "genai_client_token_usage",
+        "description": "Inferred from recording rule genai:client_token_usage:rate_1h.",
+        "type": "threshold",
+        "query": "sum(rate(gen_ai_client_token_usage_sum[1h]))\n  by (model, direction)\n",
+        "threshold": 1,
+        "unit": "ratio"
+      },
+      {
+        "id": "genai_rca_analysis_duration",
+        "description": "Inferred from recording rule genai:rca_analysis_duration:p95_5m.",
+        "type": "threshold",
+        "query": "histogram_quantile(\n  0.95,\n  sum(rate(kx_llm_analysis_duration_seconds_bucket[5m])) by (le)\n)\n",
+        "threshold": 1,
+        "unit": "ratio"
+      },
+      {
+        "id": "genai_rca_analysis",
+        "description": "Inferred from recording rule genai:rca_analysis:failure_ratio_5m.",
+        "type": "threshold",
+        "query": "sum(rate(kx_llm_analysis_total{status=~\"failure|timeout\"}[5m]))\n  by (use_case)\n/\nclamp_min(\n  sum(rate(kx_llm_analysis_total[5m])) by (use_case),\n  0.000001\n)\n",
+        "threshold": 1,
+        "unit": "ratio"
+      }
+    ],
+    "slos": [
+      {
+        "id": "finops_cpu_99",
+        "sli": "finops_cpu",
+        "objective": 0.99,
+        "window": "30d",
+        "error_budget_policy": "ref:platform/default-budget"
+      },
+      {
+        "id": "finops_memory_99",
+        "sli": "finops_memory",
+        "objective": 0.99,
+        "window": "30d",
+        "error_budget_policy": "ref:platform/default-budget"
+      },
+      {
+        "id": "finops_kong_99",
+        "sli": "finops_kong",
+        "objective": 0.99,
+        "window": "30d",
+        "error_budget_policy": "ref:platform/default-budget"
+      },
+      {
+        "id": "finops_requests_99",
+        "sli": "finops_requests",
+        "objective": 0.99,
+        "window": "30d",
+        "error_budget_policy": "ref:platform/default-budget"
+      },
+      {
+        "id": "finops_errors_99",
+        "sli": "finops_errors",
+        "objective": 0.99,
+        "window": "30d",
+        "error_budget_policy": "ref:platform/default-budget"
+      },
+      {
+        "id": "finops_spans_99",
+        "sli": "finops_spans",
+        "objective": 0.99,
+        "window": "30d",
+        "error_budget_policy": "ref:platform/default-budget"
+      },
+      {
+        "id": "finops_logs_99",
+        "sli": "finops_logs",
+        "objective": 0.99,
+        "window": "30d",
+        "error_budget_policy": "ref:platform/default-budget"
+      },
+      {
+        "id": "genai_client_operation_duration_99",
+        "sli": "genai_client_operation_duration",
+        "objective": 0.99,
+        "window": "30d",
+        "error_budget_policy": "ref:platform/default-budget"
+      },
+      {
+        "id": "genai_client_operation_99",
+        "sli": "genai_client_operation",
+        "objective": 0.99,
+        "window": "30d",
+        "error_budget_policy": "ref:platform/default-budget"
+      },
+      {
+        "id": "genai_client_token_usage_99",
+        "sli": "genai_client_token_usage",
+        "objective": 0.99,
+        "window": "30d",
+        "error_budget_policy": "ref:platform/default-budget"
+      },
+      {
+        "id": "genai_rca_analysis_duration_99",
+        "sli": "genai_rca_analysis_duration",
+        "objective": 0.99,
+        "window": "30d",
+        "error_budget_policy": "ref:platform/default-budget"
+      },
+      {
+        "id": "genai_rca_analysis_99",
+        "sli": "genai_rca_analysis",
+        "objective": 0.99,
+        "window": "30d",
+        "error_budget_policy": "ref:platform/default-budget"
+      }
+    ],
+    "pipelines": {
+      "receivers": [
+        {
+          "name": "otlp"
+        }
+      ],
+      "processors": [
+        {
+          "name": "memory_limiter"
+        },
+        {
+          "name": "batch"
+        }
+      ],
+      "exporters": {
+        "metrics": {
+          "kind": "prometheusremotewrite"
+        },
+        "logs": {
+          "kind": "elasticsearch"
+        },
+        "traces": {
+          "kind": "jaeger"
+        }
+      }
+    },
+    "queries": {
+      "recording_rules": [
+        {
+          "name": "finops:cpu:usage_per_pod_5m",
+          "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"krystalinex\", container!=\"\"}[5m])) by (pod) * 3600\n",
+          "interval": "5m"
+        },
+        {
+          "name": "finops:memory:usage_per_pod_gb_hours",
+          "expr": "sum(container_memory_working_set_bytes{namespace=\"krystalinex\", container!=\"\"}) by (pod) / 1073741824\n",
+          "interval": "5m"
+        },
+        {
+          "name": "finops:kong:overhead_seconds",
+          "expr": "histogram_quantile(0.99,\n  sum(rate(kong_kong_latency_ms_bucket[5m])) by (le)\n) / 1000\n",
+          "interval": "5m"
+        },
+        {
+          "name": "finops:requests:rate_per_service_5m",
+          "expr": "sum(rate(http_requests_total[5m])) by (job)\n",
+          "interval": "1m"
+        },
+        {
+          "name": "finops:errors:rate_per_service_5m",
+          "expr": "sum(rate(http_request_errors_total[5m])) by (job)\n",
+          "interval": "1m"
+        },
+        {
+          "name": "finops:spans:exported_rate_5m",
+          "expr": "sum(rate(otelcol_exporter_sent_spans_total[5m]))\n",
+          "interval": "1m"
+        },
+        {
+          "name": "finops:spans:dropped_rate_5m",
+          "expr": "sum(rate(otelcol_processor_dropped_spans_total[5m]))\n",
+          "interval": "1m"
+        },
+        {
+          "name": "finops:spans:sampling_ratio",
+          "expr": "(\n  sum(rate(otelcol_exporter_sent_spans_total[5m]))\n  / (\n    sum(rate(otelcol_exporter_sent_spans_total[5m]))\n    + sum(rate(otelcol_processor_dropped_spans_total[5m]))\n  )\n) or vector(1)\n",
+          "interval": "1m"
+        },
+        {
+          "name": "finops:logs:bytes_rate_per_component_5m",
+          "expr": "sum(rate(promtail_read_bytes_total[5m])) by (filename)\n",
+          "interval": "1m"
+        },
+        {
+          "name": "genai:client_operation_duration:p95_5m",
+          "expr": "histogram_quantile(\n  0.95,\n  sum(rate(gen_ai_client_operation_duration_seconds_bucket[5m]))\n    by (le, provider, model, operation)\n)\n",
+          "interval": "30s"
+        },
+        {
+          "name": "genai:client_operation_duration:p99_5m",
+          "expr": "histogram_quantile(\n  0.99,\n  sum(rate(gen_ai_client_operation_duration_seconds_bucket[5m]))\n    by (le, provider, model, operation)\n)\n",
+          "interval": "30s"
+        },
+        {
+          "name": "genai:client_operation:error_ratio_5m",
+          "expr": "sum(rate(gen_ai_client_operations_total{status=~\"error|timeout\"}[5m]))\n  by (provider, model, operation)\n/\nclamp_min(\n  sum(rate(gen_ai_client_operations_total[5m]))\n    by (provider, model, operation),\n  0.000001\n)\n",
+          "interval": "30s"
+        },
+        {
+          "name": "genai:client_token_usage:rate_1h",
+          "expr": "sum(rate(gen_ai_client_token_usage_sum[1h]))\n  by (model, direction)\n",
+          "interval": "30s"
+        },
+        {
+          "name": "genai:rca_analysis_duration:p95_5m",
+          "expr": "histogram_quantile(\n  0.95,\n  sum(rate(kx_llm_analysis_duration_seconds_bucket[5m])) by (le)\n)\n",
+          "interval": "30s"
+        },
+        {
+          "name": "genai:rca_analysis:failure_ratio_5m",
+          "expr": "sum(rate(kx_llm_analysis_total{status=~\"failure|timeout\"}[5m]))\n  by (use_case)\n/\nclamp_min(\n  sum(rate(kx_llm_analysis_total[5m])) by (use_case),\n  0.000001\n)\n",
+          "interval": "30s"
+        }
+      ]
+    },
+    "dashboards": [
+      {
+        "id": "node-exporter-full",
+        "provider": {
+          "kind": "grafana",
+          "version": "12.0",
+          "schemaVersion": 39
+        },
+        "folder": "Payments",
+        "source": "grafana:///d/node_exporter_full",
+        "params": {
+          "uid": "node_exporter_full",
+          "title": "Node Exporter Full",
+          "tags": [
+            "synthetic"
+          ],
+          "dashboardVersion": 3,
+          "panelCount": 2,
+          "returnedPanels": 2,
+          "panels": [
+            {
+              "id": 1,
+              "title": "CPU busy",
+              "type": "timeseries"
+            },
+            {
+              "id": 2,
+              "title": "Memory used",
+              "type": "timeseries"
+            }
+          ]
+        },
+        "panel_bindings": [
+          {
+            "panel": "CPU busy",
+            "binds_to": "ref:grafana/node-exporter-full/panels/cpu-busy"
+          },
+          {
+            "panel": "Memory used",
+            "binds_to": "ref:grafana/node-exporter-full/panels/memory-used"
+          }
+        ]
+      },
+      {
+        "id": "d-3b5d5c3712955042212316173ccf37be",
+        "provider": {
+          "kind": "grafana",
+          "version": "12.0",
+          "schemaVersion": 39
+        },
+        "folder": "Payments",
+        "source": "grafana:///d/3b5d5c3712955042212316173ccf37be",
+        "params": {
+          "uid": "3b5d5c3712955042212316173ccf37be",
+          "title": "Kubernetes Pods",
+          "tags": [
+            "synthetic"
+          ],
+          "dashboardVersion": 3,
+          "panelCount": 1,
+          "returnedPanels": 1,
+          "panels": [
+            {
+              "id": 1,
+              "title": "Pod restarts",
+              "type": "timeseries"
+            }
+          ]
+        },
+        "panel_bindings": [
+          {
+            "panel": "Pod restarts",
+            "binds_to": "ref:grafana/d-3b5d5c3712955042212316173ccf37be/panels/pod-restarts"
+          }
+        ]
+      },
+      {
+        "id": "a--b",
+        "provider": {
+          "kind": "grafana",
+          "version": "12.0",
+          "schemaVersion": 39
+        },
+        "folder": "Payments",
+        "source": "grafana:///d/a--b",
+        "params": {
+          "uid": "a--b",
+          "title": "A to B traffic",
+          "tags": [
+            "synthetic"
+          ],
+          "dashboardVersion": 3,
+          "panelCount": 1,
+          "returnedPanels": 1,
+          "panels": [
+            {
+              "id": 1,
+              "title": "Requests",
+              "type": "timeseries"
+            }
+          ]
+        },
+        "panel_bindings": [
+          {
+            "panel": "Requests",
+            "binds_to": "ref:grafana/a--b/panels/requests"
+          }
+        ]
+      },
+      {
+        "id": "orders-main",
+        "provider": {
+          "kind": "grafana",
+          "version": "12.0",
+          "schemaVersion": 39
+        },
+        "folder": "Orders",
+        "source": "grafana:///d/orders-main",
+        "params": {
+          "uid": "orders-main",
+          "title": "Orders",
+          "tags": [
+            "synthetic"
+          ],
+          "dashboardVersion": 3,
+          "panelCount": 2,
+          "returnedPanels": 2,
+          "panels": [
+            {
+              "id": 1,
+              "title": "Error rate",
+              "type": "timeseries"
+            },
+            {
+              "id": 2,
+              "title": "Alert notifications",
+              "type": "timeseries"
+            }
+          ]
+        },
+        "panel_bindings": [
+          {
+            "panel": "Error rate",
+            "binds_to": "ref:grafana/orders-main/panels/error-rate"
+          },
+          {
+            "panel": "Alert notifications",
+            "binds_to": "ref:grafana/orders-main/panels/alert-notifications"
+          }
+        ]
+      },
+      {
+        "id": "d-9xyz-abc",
+        "provider": {
+          "kind": "grafana",
+          "version": "12.0",
+          "schemaVersion": 39
+        },
+        "folder": "Orders",
+        "source": "grafana:///d/9xyz_abc",
+        "params": {
+          "uid": "9xyz_abc",
+          "title": "Platform health",
+          "tags": [
+            "synthetic"
+          ],
+          "dashboardVersion": 3,
+          "panelCount": 1,
+          "returnedPanels": 1,
+          "panels": [
+            {
+              "id": 1,
+              "title": "Targets up",
+              "type": "timeseries"
+            }
+          ]
+        },
+        "panel_bindings": [
+          {
+            "panel": "Targets up",
+            "binds_to": "ref:grafana/d-9xyz-abc/panels/targets-up"
+          }
+        ]
+      }
+    ],
+    "policy": {
+      "burn_rate_alerts": [
+        {
+          "slo": "finops_cpu_99",
+          "windows": [
+            {
+              "short": "5m",
+              "long": "1h",
+              "factor": 14,
+              "severity": "SEV1"
+            },
+            {
+              "short": "30m",
+              "long": "6h",
+              "factor": 6,
+              "severity": "SEV2"
+            }
+          ]
+        }
+      ]
+    },
+    "alerting": {
+      "routes": [
+        {
+          "severity": "SEV1",
+          "channels": [
+            {
+              "msteams": "#platform-oncall"
+            }
+          ]
+        }
+      ],
+      "rules": [
+        {
+          "name": "HighErrorRate",
+          "expr": "(\n  sum(rate(http_requests_total{status=~\"5..\"}[5m]))\n  /\n  sum(rate(http_requests_total[5m]))\n) > 0.05",
+          "severity": "SEV1",
+          "for": "2m",
+          "labels": {
+            "severity": "critical"
+          },
+          "annotations": {
+            "description": "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)",
+            "summary": "High error rate detected"
+          },
+          "engine": "victoriametrics"
+        },
+        {
+          "name": "HighLatencyP99",
+          "expr": "histogram_quantile(0.99,\n  sum(rate(http_request_duration_seconds_bucket[5m])) by (le)\n) > 2",
+          "severity": "SEV2",
+          "for": "5m",
+          "labels": {
+            "severity": "warning"
+          },
+          "annotations": {
+            "description": "P99 latency is {{ $value | humanizeDuration }} (threshold: 2s)",
+            "summary": "High P99 latency detected"
+          },
+          "engine": "victoriametrics"
+        },
+        {
+          "name": "HighLatencyP99Critical",
+          "expr": "histogram_quantile(0.99,\n  sum(rate(http_request_duration_seconds_bucket[5m])) by (le)\n) > 5",
+          "severity": "SEV1",
+          "for": "2m",
+          "labels": {
+            "severity": "critical"
+          },
+          "annotations": {
+            "description": "P99 latency is {{ $value | humanizeDuration }} (threshold: 5s)",
+            "summary": "Critical P99 latency"
+          },
+          "engine": "victoriametrics"
+        },
+        {
+          "name": "ServiceDown",
+          "expr": "up{job=~\"krystalinex-server|payment-processor\"} == 0",
+          "severity": "SEV1",
+          "for": "1m",
+          "labels": {
+            "severity": "critical"
+          },
+          "annotations": {
+            "description": "The {{ $labels.job }} service has been unreachable for more than 1 minute",
+            "summary": "Service {{ $labels.job }} is down"
+          },
+          "engine": "victoriametrics"
+        },
+        {
+          "name": "NoTraffic",
+          "expr": "sum(rate(http_requests_total[5m])) == 0",
+          "severity": "SEV2",
+          "for": "10m",
+          "labels": {
+            "severity": "warning"
+          },
+          "annotations": {
+            "description": "No HTTP requests received in the last 10 minutes",
+            "summary": "No traffic detected"
+          },
+          "engine": "victoriametrics"
+        },
+        {
+          "name": "ColdWalletUnpricedFlows",
+          "expr": "sum(increase(kx_cold_flow_unpriced_total[15m])) by (direction) > 0",
+          "severity": "SEV2",
+          "for": "1m",
+          "labels": {
+            "severity": "warning"
+          },
+          "annotations": {
+            "description": "{{ $value }} cold-wallet {{ $labels.direction }} settlement(s) in the last 15 minutes could not be valued in USD (no price-service quote at settlement time) — kx_cold_flow_value_usd_total and the Business Activity USD tiles under-count until the price feed is back.",
+            "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#coldwalletunpricedflows",
+            "summary": "Cold-wallet {{ $labels.direction }} settled without a USD price"
+          },
+          "engine": "victoriametrics"
+        },
+        {
+          "name": "CustodyWebhookSignatureFailures",
+          "expr": "sum(increase(kx_custody_webhook_events_total{outcome=\"invalid_signature\"}[10m])) >= 3",
+          "severity": "SEV2",
+          "for": "1m",
+          "labels": {
+            "severity": "warning"
+          },
+          "annotations": {
+            "description": "{{ $value }} custody webhook calls were rejected with an invalid HMAC signature in the last 10 minutes — a probe against the endpoint, or a CUSTODY_WEBHOOK_SECRET mismatch after a deploy (the simulator self-POST falls back to direct delivery, so settlements may still be completing).",
+            "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#custodywebhooksignaturefailures",
+            "summary": "Custody webhook signature failures"
+          },
+          "engine": "victoriametrics"
+        },
+        {
+          "name": "CustodyWebhookErrors",
+          "expr": "sum(increase(kx_custody_webhook_events_total{outcome=\"error\"}[10m])) by (provider, event_type) > 0",
+          "severity": "SEV2",
+          "for": "1m",
+          "labels": {
+            "severity": "warning"
+          },
+          "annotations": {
+            "description": "{{ $value }} {{ $labels.event_type }} event(s) from provider {{ $labels.provider }} threw inside the settlement handler in the last 10 minutes — the hold or the deposit credit may be stuck; check the server error log and the withdrawal_requests / transactions rows referenced by the events.",
+            "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#custodywebhookerrors",
+            "summary": "Custody webhook settlement errors ({{ $labels.provider }}/{{ $labels.event_type }})"
+          },
+          "engine": "victoriametrics"
+        },
+        {
+          "name": "ColdWithdrawalStuckInFlight",
+          "expr": "kx_cold_withdrawals_in_flight > 0",
+          "severity": "SEV1",
+          "for": "30m",
+          "labels": {
+            "severity": "critical"
+          },
+          "annotations": {
+            "description": "{{ $value }} {{ $labels.asset }} cold withdrawal(s) have been queued/processing for more than 30 minutes (the demo settles in ~30 s) — customer funds are on hold with no settlement event arriving; the chain simulator or the custodian callback path is not delivering.",
+            "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#coldwithdrawalstuckinflight",
+            "summary": "{{ $labels.asset }} cold withdrawals stuck in flight"
+          },
+          "engine": "victoriametrics"
+        },
+        {
+          "name": "ColdWithdrawalSettlementSlow",
+          "expr": "(\n  histogram_quantile(0.95,\n    sum(rate(kx_cold_withdrawal_settlement_seconds_bucket[30m])) by (le)\n  ) > 90\n)\nand\n(\n  sum(rate(kx_cold_withdrawal_settlement_seconds_count[30m])) > 0\n)",
+          "severity": "SEV2",
+          "for": "5m",
+          "labels": {
+            "severity": "warning"
+          },
+          "annotations": {
+            "description": "p95 request-to-confirmed settlement latency over the last 30 minutes is {{ $value | humanizeDuration }} (threshold: 90 s; the demo design is ~30 s). A value of exactly 120 s means the p95 fell beyond the histogram's last bucket.",
+            "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#coldwithdrawalsettlementslow",
+            "summary": "Cold withdrawal settlement is slow (p95 over 30m)"
+          },
+          "engine": "victoriametrics"
+        },
+        {
+          "name": "ContainerCrashLooping",
+          "expr": "rate(kube_pod_container_status_restarts_total[15m]) * 60 * 15 > 3",
+          "severity": "SEV1",
+          "for": "5m",
+          "labels": {
+            "severity": "critical"
+          },
+          "annotations": {
+            "description": "A container has restarted multiple times in the last 15 minutes.",
+            "summary": "Container is crash-looping"
+          },
+          "engine": "victoriametrics"
+        },
+        {
+          "name": "ContainerOOMKilled",
+          "expr": "kube_pod_container_status_last_terminated_reason{reason=\"OOMKilled\"} == 1",
+          "severity": "SEV2",
+          "labels": {
+            "severity": "warning"
+          },
+          "annotations": {
+            "description": "A container was terminated due to OOM. Consider increasing memory limits.",
+            "summary": "Container was OOM killed"
+          },
+          "engine": "victoriametrics"
+        },
+        {
+          "name": "PodNotReady",
+          "expr": "(min_over_time(kube_pod_status_ready{condition=\"true\", namespace=\"krystalinex\"}[5m]) == 0)\nand on(pod, namespace)\n(kube_pod_status_phase{phase=\"Running\", namespace=\"krystalinex\"} == 1)",
+          "severity": "SEV2",
+          "for": "10m",
+          "labels": {
+            "severity": "warning"
+          },
+          "annotations": {
+            "description": "A pod has been in a non-ready state for more than 10 minutes.",
+            "summary": "Pod has been not ready for 10m"
+          },
+          "engine": "victoriametrics"
+        },
+        {
+          "name": "DeploymentReplicasMismatch",
+          "expr": "kube_deployment_spec_replicas{namespace=\"krystalinex\"}\n  != kube_deployment_status_ready_replicas{namespace=\"krystalinex\"}",
+          "severity": "SEV2",
+          "for": "10m",
+          "labels": {
+            "severity": "warning"
+          },
+          "annotations": {
+            "description": "A deployment does not have the desired number of ready replicas.",
+            "summary": "Deployment replica mismatch"
+          },
+          "engine": "victoriametrics"
+        }
+      ]
+    },
+    "baselines": {
+      "mttd_target_p50": "15m",
+      "mttr_target_p50": "1d",
+      "measurement_source": "platform-default",
+      "review_cadence": "weekly"
+    },
+    "validation": {}
+  }
+}

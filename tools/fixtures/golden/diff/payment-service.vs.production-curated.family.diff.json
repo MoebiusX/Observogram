@@ -1,0 +1,762 @@
+{
+  "case": "payment-service.vs.production-curated.family",
+  "opts": {
+    "scopeMode": "family"
+  },
+  "taxonomy": null,
+  "sha256": "65c12b50cac608f0232d85a8b341f05ae4b97686af343e32bcd719687b04b3db",
+  "bytes": 52641,
+  "keys": [
+    "a",
+    "b",
+    "scope",
+    "collisions",
+    "summary",
+    "layers"
+  ],
+  "a": {
+    "id": "payment-service",
+    "name": "payment-service",
+    "service": "payment-service",
+    "criticality": "tier-1",
+    "environment": "prod",
+    "version": "1.5.0",
+    "binding": "otel-elastic-prometheus-grafana"
+  },
+  "b": {
+    "id": "production-curated",
+    "name": "production-curated",
+    "service": "internal-orders",
+    "criticality": "tier-2",
+    "environment": "prod",
+    "version": "0.4.0",
+    "binding": "otel-elastic-prometheus-grafana"
+  },
+  "scope": {
+    "mode": "family",
+    "service": "payment-service",
+    "serviceTokens": [
+      "payment",
+      "paymentservice"
+    ],
+    "declaredMetricCount": 0,
+    "metricPrefixes": []
+  },
+  "collisions": [],
+  "summary": {
+    "onlyInA": 63,
+    "onlyInB": 14,
+    "inBoth": 16,
+    "aligned": 2,
+    "drifted": 14,
+    "outOfScope": 0,
+    "scaffold": 0,
+    "notObserved": 0,
+    "union": 93,
+    "aTotal": 79,
+    "bTotal": 30,
+    "jaccard": 0.17,
+    "alignment": 0.02
+  },
+  "layers": {
+    "L1": {
+      "onlyInA": [
+        {
+          "key": "sli::{\"id\":\"api_availability\"}",
+          "id": "SLI-01"
+        },
+        {
+          "key": "sli::{\"id\":\"api_latency_p99_checkout\"}",
+          "id": "SLI-03"
+        },
+        {
+          "key": "sli::{\"id\":\"api_latency_p99\"}",
+          "id": "SLI-02"
+        },
+        {
+          "key": "sli::{\"id\":\"consumer_freshness\"}",
+          "id": "SLI-04"
+        },
+        {
+          "key": "sli::{\"id\":\"consumer_processing_success\"}",
+          "id": "SLI-06"
+        },
+        {
+          "key": "sli::{\"id\":\"settlement_consumers_active\"}",
+          "id": "SLI-05"
+        },
+        {
+          "key": "slo::{\"id\":\"api_availability_99_9\"}",
+          "id": "SLO-01"
+        },
+        {
+          "key": "slo::{\"id\":\"api_latency_99_p99_500ms\"}",
+          "id": "SLO-02"
+        },
+        {
+          "key": "slo::{\"id\":\"checkout_latency_99_5_p99_300ms\"}",
+          "id": "SLO-03"
+        },
+        {
+          "key": "slo::{\"id\":\"consumer_freshness_99_under_60s\"}",
+          "id": "SLO-04"
+        },
+        {
+          "key": "slo::{\"id\":\"consumer_success_99_95\"}",
+          "id": "SLO-06"
+        },
+        {
+          "key": "slo::{\"id\":\"settlement_consumers_99_9_min_2\"}",
+          "id": "SLO-05"
+        }
+      ],
+      "onlyInB": [
+        {
+          "key": "sli::{\"id\":\"order_settlement_freshness\"}",
+          "id": "SLI-03"
+        },
+        {
+          "key": "sli::{\"id\":\"orders_availability\"}",
+          "id": "SLI-01"
+        },
+        {
+          "key": "sli::{\"id\":\"orders_latency_p99\"}",
+          "id": "SLI-02"
+        },
+        {
+          "key": "slo::{\"id\":\"order_settlement_freshness_99\"}",
+          "id": "SLO-03"
+        },
+        {
+          "key": "slo::{\"id\":\"orders_availability_99_5\"}",
+          "id": "SLO-01"
+        },
+        {
+          "key": "slo::{\"id\":\"orders_latency_99_p99_600ms\"}",
+          "id": "SLO-02"
+        }
+      ],
+      "inBoth": [],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    },
+    "L2": {
+      "onlyInA": [
+        {
+          "key": "backend::{\"product\":\"cilium\",\"signal\":\"network\"}",
+          "id": "BAK-06"
+        },
+        {
+          "key": "backend::{\"product\":\"envoy\",\"signal\":\"mesh\"}",
+          "id": "BAK-05"
+        },
+        {
+          "key": "backend::{\"product\":\"kong\",\"signal\":\"gateway\"}",
+          "id": "BAK-08"
+        },
+        {
+          "key": "backend::{\"product\":\"opa\",\"signal\":\"policy\"}",
+          "id": "BAK-07"
+        },
+        {
+          "key": "backend::{\"product\":\"pyroscope\",\"signal\":\"profiles\"}",
+          "id": "BAK-04"
+        },
+        {
+          "key": "backend::{\"product\":\"vector\",\"signal\":\"collection\"}",
+          "id": "BAK-09"
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"attributes/redact\"}",
+          "id": "PIP-PRC-06"
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"resource\"}",
+          "id": "PIP-PRC-03"
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"tail_sampling\"}",
+          "id": "PIP-PRC-05"
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"transform\"}",
+          "id": "PIP-PRC-04"
+        },
+        {
+          "key": "pipeline_receiver::{\"name\":\"prometheus\"}",
+          "id": "PIP-RCV-02"
+        }
+      ],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "backend::{\"product\":\"elasticsearch\",\"signal\":\"logs\"}",
+          "a": "BAK-02",
+          "b": "BAK-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"elasticsearch\",\"signal\":\"traces\"}",
+          "a": "BAK-03",
+          "b": "BAK-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"prometheus\",\"signal\":\"metrics\"}",
+          "a": "BAK-01",
+          "b": "BAK-01",
+          "match": "drifted",
+          "deltas": [
+            {
+              "field": "tenant",
+              "a": "payments",
+              "b": null
+            }
+          ]
+        },
+        {
+          "key": "otel::{}",
+          "a": "OTEL-01",
+          "b": "OTEL-01",
+          "match": "drifted",
+          "deltas": [
+            {
+              "field": "resource_attributes",
+              "a": {
+                "custom": [
+                  "business.domain",
+                  "tenant.id"
+                ],
+                "required": [
+                  "deployment.environment",
+                  "service.instance.id",
+                  "service.name",
+                  "service.namespace",
+                  "service.version"
+                ]
+              },
+              "b": {
+                "required": [
+                  "deployment.environment",
+                  "service.name",
+                  "service.namespace"
+                ]
+              }
+            },
+            {
+              "field": "sdk",
+              "a": {
+                "languages": [
+                  "java",
+                  "node"
+                ],
+                "log_correlation": true,
+                "propagators": [
+                  "baggage",
+                  "tracecontext"
+                ],
+                "sampling": {
+                  "policy": "parentbased_traceidratio",
+                  "ratio": 0.1
+                }
+              },
+              "b": {
+                "languages": [
+                  "java"
+                ],
+                "propagators": [
+                  "tracecontext"
+                ],
+                "sampling": {
+                  "policy": "parentbased_traceidratio",
+                  "ratio": 0.05
+                }
+              }
+            }
+          ]
+        },
+        {
+          "key": "pipeline_exporter_logs::{\"signal\":\"logs\",\"target\":\"elasticsearch\"}",
+          "a": "PIP-EXP-LOG",
+          "b": "PIP-EXP-LOG",
+          "match": "drifted",
+          "deltas": [
+            {
+              "field": "logs_index",
+              "a": "logs-payments-default",
+              "b": null
+            }
+          ]
+        },
+        {
+          "key": "pipeline_exporter_metrics::{\"signal\":\"metrics\",\"target\":\"prometheusremotewrite\"}",
+          "a": "PIP-EXP-MET",
+          "b": "PIP-EXP-MET",
+          "match": "drifted",
+          "deltas": [
+            {
+              "field": "external_labels",
+              "a": {
+                "service": "payment-service"
+              },
+              "b": null
+            }
+          ]
+        },
+        {
+          "key": "pipeline_exporter_traces::{\"signal\":\"traces\",\"target\":\"elasticsearch\"}",
+          "a": "PIP-EXP-TRC",
+          "b": "PIP-EXP-TRC",
+          "match": "drifted",
+          "deltas": [
+            {
+              "field": "traces_index",
+              "a": "traces-apm-default",
+              "b": null
+            }
+          ]
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"batch\"}",
+          "a": "PIP-PRC-02",
+          "b": "PIP-PRC-02",
+          "match": "drifted",
+          "deltas": [
+            {
+              "field": "timeout",
+              "a": "10s",
+              "b": null
+            }
+          ]
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"memory_limiter\"}",
+          "a": "PIP-PRC-01",
+          "b": "PIP-PRC-01",
+          "match": "drifted",
+          "deltas": [
+            {
+              "field": "limit_percentage",
+              "a": 80,
+              "b": null
+            }
+          ]
+        },
+        {
+          "key": "pipeline_receiver::{\"name\":\"otlp\"}",
+          "a": "PIP-RCV-01",
+          "b": "PIP-RCV-01",
+          "match": "drifted",
+          "deltas": [
+            {
+              "field": "protocols",
+              "a": [
+                "grpc",
+                "http"
+              ],
+              "b": null
+            }
+          ]
+        },
+        {
+          "key": "storage_logs::{\"backend\":\"elasticsearch\",\"signal\":\"logs\"}",
+          "a": "STO-LOG-01",
+          "b": "STO-LOG-01",
+          "match": "drifted",
+          "deltas": [
+            {
+              "field": "data_stream",
+              "a": "logs-payments-default",
+              "b": "logs-orders-default"
+            },
+            {
+              "field": "ilm_policy",
+              "a": "ref:platform/std-logs-ilm-90d",
+              "b": null
+            }
+          ]
+        },
+        {
+          "key": "storage_metrics::{\"backend\":\"prometheus\",\"signal\":\"metrics\"}",
+          "a": "STO-MET-01",
+          "b": "STO-MET-01",
+          "match": "drifted",
+          "deltas": [
+            {
+              "field": "remote_write",
+              "a": [
+                {
+                  "tenant": "payments"
+                }
+              ],
+              "b": null
+            },
+            {
+              "field": "retention",
+              "a": "13mo",
+              "b": "15d"
+            }
+          ]
+        },
+        {
+          "key": "storage_traces::{\"backend\":\"elasticsearch\",\"signal\":\"traces\"}",
+          "a": "STO-TRC-01",
+          "b": "STO-TRC-01",
+          "match": "drifted",
+          "deltas": [
+            {
+              "field": "ilm_policy",
+              "a": "ref:platform/std-traces-ilm-14d",
+              "b": null
+            },
+            {
+              "field": "sampling",
+              "a": "tail-based",
+              "b": null
+            }
+          ]
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 2,
+      "drifted": 11
+    },
+    "L2X": {
+      "onlyInA": [
+        {
+          "key": "collection::{\"product\":\"fluentbit\",\"role\":\"agent\"}",
+          "id": "COL-02"
+        },
+        {
+          "key": "collection::{\"product\":\"vector\",\"role\":\"aggregator\"}",
+          "id": "COL-01"
+        },
+        {
+          "key": "mesh::{\"product\":\"envoy\",\"role\":\"proxy\"}",
+          "id": "MESH-01"
+        },
+        {
+          "key": "mesh::{\"product\":\"kong\",\"role\":\"gateway\"}",
+          "id": "MESH-02"
+        },
+        {
+          "key": "network::{\"product\":\"cilium\"}",
+          "id": "NET-01"
+        },
+        {
+          "key": "policy_engine::{\"product\":\"opa\"}",
+          "id": "POE-01"
+        },
+        {
+          "key": "profiling::{\"product\":\"pyroscope\"}",
+          "id": "PROF-01"
+        }
+      ],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    },
+    "L3": {
+      "onlyInA": [
+        {
+          "key": "dashboard::{\"id\":\"payment-customer-impact\"}",
+          "id": "DASH-04"
+        },
+        {
+          "key": "dashboard::{\"id\":\"payment-deployment\"}",
+          "id": "DASH-03"
+        },
+        {
+          "key": "dashboard::{\"id\":\"payment-overview\"}",
+          "id": "DASH-01"
+        },
+        {
+          "key": "dashboard::{\"id\":\"payment-slo-burn\"}",
+          "id": "DASH-02"
+        },
+        {
+          "key": "derived_view::{\"id\":\"golden_signals\"}",
+          "id": "VIEW-01"
+        },
+        {
+          "key": "derived_view::{\"id\":\"per_tenant_availability\"}",
+          "id": "VIEW-02"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"payment:api_availability:ratio_5m\"}",
+          "id": "QRY-01"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"payment:api_errorbudget:burn_1h\"}",
+          "id": "QRY-02"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"payment:checkout_latency:p99_5m\"}",
+          "id": "QRY-03"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"payment:consumer_lag:seconds_max_5m\"}",
+          "id": "QRY-04"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"payment:settlement_consumers:members_min_5m\"}",
+          "id": "QRY-05"
+        }
+      ],
+      "onlyInB": [
+        {
+          "key": "dashboard::{\"id\":\"orders-service-overview\"}",
+          "id": "DASH-01"
+        },
+        {
+          "key": "dashboard::{\"id\":\"orders-slo-burn\"}",
+          "id": "DASH-02"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"orders:availability:ratio_5m\"}",
+          "id": "QRY-01"
+        },
+        {
+          "key": "recording_rule::{\"record\":\"orders:latency:p99_5m\"}",
+          "id": "QRY-02"
+        }
+      ],
+      "inBoth": [],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    },
+    "L4": {
+      "onlyInA": [
+        {
+          "key": "alert_route::{\"severity\":\"sev1\"}",
+          "id": "ALR-01"
+        },
+        {
+          "key": "alert_rule::{\"name\":\"paymentcertificateexpiringsoon\"}",
+          "id": "RULE-03"
+        },
+        {
+          "key": "alert_rule::{\"name\":\"paymentdbconnectionpoolsaturated\"}",
+          "id": "RULE-02"
+        },
+        {
+          "key": "alert_rule::{\"name\":\"paymentservicepodrestarting\"}",
+          "id": "RULE-01"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"api_availability_99_9\"}",
+          "id": "POL-01"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"checkout_latency_99_5_p99_300ms\"}",
+          "id": "POL-02"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"consumer_freshness_99_under_60s\"}",
+          "id": "POL-03"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"consumer_success_99_95\"}",
+          "id": "POL-05"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"settlement_consumers_99_9_min_2\"}",
+          "id": "POL-04"
+        },
+        {
+          "key": "forecast::{\"slo\":\"api_availability_99_9\"}",
+          "id": "FCST-01"
+        },
+        {
+          "key": "forecast::{\"slo\":\"checkout_latency_99_5_p99_300ms\"}",
+          "id": "FCST-02"
+        },
+        {
+          "key": "remediation::{\"trigger\":\"alert:payment-api-cert-expiring\"}",
+          "id": "HEAL-03"
+        },
+        {
+          "key": "remediation::{\"trigger\":\"alert:payment-api-pod-oom\"}",
+          "id": "HEAL-01"
+        },
+        {
+          "key": "remediation::{\"trigger\":\"alert:payment-settler-stuck\"}",
+          "id": "HEAL-02"
+        }
+      ],
+      "onlyInB": [
+        {
+          "key": "burn_rate::{\"slo\":\"order_settlement_freshness_99\"}",
+          "id": "POL-03"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"orders_availability_99_5\"}",
+          "id": "POL-01"
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"orders_latency_99_p99_600ms\"}",
+          "id": "POL-02"
+        }
+      ],
+      "inBoth": [
+        {
+          "key": "alert_route::{\"severity\":\"sev2\"}",
+          "a": "ALR-02",
+          "b": "ALR-01",
+          "match": "drifted",
+          "deltas": [
+            {
+              "field": "channels",
+              "a": [
+                {
+                  "msteams": "#payments-oncall"
+                },
+                {
+                  "voice": "pagerduty://payments-low"
+                }
+              ],
+              "b": [
+                {
+                  "msteams": "#orders-oncall"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "key": "alert_route::{\"severity\":\"sev3\"}",
+          "a": "ALR-03",
+          "b": "ALR-02",
+          "match": "drifted",
+          "deltas": [
+            {
+              "field": "channels",
+              "a": [
+                {
+                  "msteams": "#payments-team"
+                }
+              ],
+              "b": [
+                {
+                  "msteams": "#orders-team"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 2
+    },
+    "L5": {
+      "onlyInA": [
+        {
+          "key": "chaos::{\"id\":\"api-network-latency\"}",
+          "id": "CHAOS-02"
+        },
+        {
+          "key": "chaos::{\"id\":\"api-pod-kill\"}",
+          "id": "CHAOS-01"
+        },
+        {
+          "key": "chaos::{\"id\":\"kafka-partition-failure\"}",
+          "id": "CHAOS-03"
+        },
+        {
+          "key": "synthetic::{\"id\":\"api-checkout-canary\"}",
+          "id": "SYN-01"
+        },
+        {
+          "key": "synthetic::{\"id\":\"api-tls-validity\"}",
+          "id": "SYN-02"
+        }
+      ],
+      "onlyInB": [
+        {
+          "key": "synthetic::{\"id\":\"orders-canary\"}",
+          "id": "SYN-01"
+        }
+      ],
+      "inBoth": [
+        {
+          "key": "baselines::{}",
+          "a": "BASE-01",
+          "b": "BASE-01",
+          "match": "drifted",
+          "deltas": [
+            {
+              "field": "mttd_target_p50",
+              "a": "2m",
+              "b": "5m"
+            },
+            {
+              "field": "mttd_target_p95",
+              "a": "5m",
+              "b": null
+            },
+            {
+              "field": "mttr_target_p50",
+              "a": "30m",
+              "b": "2h"
+            },
+            {
+              "field": "mttr_target_p95",
+              "a": "1h",
+              "b": null
+            },
+            {
+              "field": "regression_gate",
+              "a": "block_release_if_either_breaches_target",
+              "b": null
+            }
+          ]
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 1
+    },
+    "GOV": {
+      "onlyInA": [
+        {
+          "key": "imports::{\"ref\":\"platform/golden-signals-base@1.4\"}",
+          "id": "IMP-01"
+        },
+        {
+          "key": "imports::{\"ref\":\"platform/std-alert-routes@3.0\"}",
+          "id": "IMP-02"
+        },
+        {
+          "key": "imports::{\"ref\":\"platform/std-budget-policy@2.1\"}",
+          "id": "IMP-03"
+        }
+      ],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    }
+  }
+}

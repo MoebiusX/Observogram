@@ -86,7 +86,7 @@ export function renderAtlasView(view) {
       if (!r) return;
       r.oninput = () => {
         state.atlasMorph = Number(r.value) / 100;
-        renderAtlas(state.atlasVariant, stage, datasetFor(), { morph: state.atlasMorph });
+        renderAtlas(state.atlasVariant, stage, datasetFor(), { morph: state.atlasMorph, compassMark: state.brand?.chrome.compassMark });
       };
     }, 0);
   }
@@ -96,6 +96,8 @@ export function renderAtlasView(view) {
   // Render — fetch packB lazily if missing
   const atlasOpts = {
     morph: state.atlasMorph,
+    // The compass-rose mark on the constellation atlas: the brand's (studio/brand.mjs).
+    compassMark: state.brand?.chrome.compassMark,
     arborView: state.arborView || 'A',
     onArborViewChange: (v) => { state.arborView = v; appHost.renderMainView(); },
     onArtefactClick: (artefact, layerId) => openDrawer(artefact, { id: layerId }, null),

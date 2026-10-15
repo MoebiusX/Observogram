@@ -11,22 +11,23 @@ import { existsSync, mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// Hermetic (§0): a developer shell's store, identity, taxonomy, transport-hook
+// or brand variables never reach this process's imports — the children's STRIP
+// list (server/fixtures/serve-child.mjs imports no server code), both
+// spellings, BEFORE the suite sets its own posture and before any server
+// module loads (every server import below is dynamic: a static one is
+// hoisted above this line). server/test-hermetic-suites.mjs guards the shape.
+const { STRIP } = await import('./fixtures/serve-child.mjs');
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
 // Environment BEFORE the server module loads — initAuth reads it at import.
+// Each block's database lives in its own workspace (docs/STORE_PLAN.md slice 2).
 const WORKSPACE = mkdtempSync(join(tmpdir(), 'observogram-auth-local-'));
 process.env.OBSERVOGRAM_WORKSPACE = WORKSPACE;
 process.env.OBSERVOGRAM_API_TOKEN = 'ci-token-abcdef-0123456789';
 process.env.OBSERVOGRAM_API_TOKEN_LABEL = 'ci-bot';
-delete process.env.OBSERVOGRAM_OIDC_ISSUER;
-delete process.env.OBSERVOGRAM_SESSION_SECRET;
-delete process.env.OBSERVOGRAM_AUTH;
-delete process.env.TOMOGRAPH_AUTH;
-delete process.env.OBSERVOGRAM_ADMIN_PASSWORD;
-// Hermetic store (docs/STORE_PLAN.md slice 2): each block's database lives
-// in its own workspace; a shell's OBSERVOGRAM_DB or seed knobs never leak in.
-for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH']) {
-  delete process.env[`OBSERVOGRAM_${k}`];
-  delete process.env[`TOMOGRAPH_${k}`];
-}
 process.env.OBSERVOGRAM_USERS_FILE = join(WORKSPACE, 'users.json');
 
 import { createHarness } from '../tools/lib/harness.mjs';
@@ -34,7 +35,7 @@ const { assert, failures, report } = createHarness({ indent: '  ', truncate: 200
 
 const { hashPassword, verifyPassword, localUsersEnabled } = await import('./auth.mjs');
 const { writeUsersFile } = await import('./store/legacy-files.mjs');
-const { currentStore, prepare } = await import('./store/db.mjs');
+const { currentStore, prepare, closeStore } = await import('./store/db.mjs');
 const { createUser, setDisabled, bumpSessionEpoch, getUserByLogin, listUsers } = await import('./store/users.mjs');
 const { getMeta } = await import('./store/meta.mjs');
 const { listMembershipsForUser } = await import('./store/memberships.mjs');
@@ -507,6 +508,7 @@ try {
   assert(clearedSet.some(c => c.startsWith('tomo_session=;')), 'logout clears the legacy cookie name too');
 } finally {
   await new Promise(res => srv.close(res));
+  closeStore();
   rmSync(WORKSPACE, { recursive: true, force: true });
 }
 
@@ -682,6 +684,7 @@ try {
   assert(r.status === 401, 'admin/admin is dead after the change', r.status, 401);
 } finally {
   await new Promise(res => srv2.close(res));
+  closeStore();
   rmSync(BOOT_WS, { recursive: true, force: true });
 }
 
@@ -706,6 +709,7 @@ try {
 } finally {
   delete process.env.OBSERVOGRAM_ADMIN_PASSWORD;
   await new Promise(res => srv3.close(res));
+  closeStore();
   rmSync(ENV_WS, { recursive: true, force: true });
 }
 
@@ -743,6 +747,7 @@ try {
     await new Promise(res => srv5.close(res));
   }
 } finally {
+  closeStore();
   rmSync(NET_WS, { recursive: true, force: true });
 }
 
@@ -763,6 +768,7 @@ try {
 } finally {
   delete process.env.OBSERVOGRAM_AUTH;
   await new Promise(res => srv4.close(res));
+  closeStore();
   rmSync(OFF_WS, { recursive: true, force: true });
 }
 

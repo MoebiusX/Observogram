@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="Acme Watch">
+<title>payment-service — service audit report · Acme Watch</title>
+<style>
+/* studio/design-tokens.css — the design tokens. VENDORABLE (docs/VENDORING.md).
+ *
+ * The one place the studio's look is decided, as CSS custom properties and
+ * nothing else: no selector but :root and the dark theme, no rule that styles
+ * an element. A downstream app copies this file verbatim and gets the palette,
+ * the type and the measures; it re-themes by overriding tokens, never by
+ * editing rules. studio/design-tokens.json carries the same values for code
+ * that cannot read CSS (charts, canvases, a TypeScript theme object) and
+ * tools/test-design-system.mjs keeps the two identical.
+ *
+ * Contract: names are only ever added, never renamed or removed. They are
+ * semantic (accent, second, warn, fail), not colour words, so a host can
+ * change the hue without changing a name.
+ *
+ *   surface   --og-bg  --og-panel  --og-panel-2  --og-sunken  --og-line  --og-line-strong
+ *   text      --og-text  --og-text-2  --og-muted
+ *   accent    the primary action and "where I am" (current step, pressed
+ *             option, the first of two things compared)
+ *   second    the second voice (the other of two things compared, a second journey)
+ *   warn      needs attention        fail   failed, missing or removed
+ *   info      neutral information
+ *   each of accent / second / warn / fail / info has -bg (a tinted surface);
+ *   accent and second also have -solid + --og-on-* (a filled button and its
+ *   text) and accent / warn have -line (a tinted border)
+ */
+
+:root {
+  /* type */
+  --og-font: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --og-font-code: ui-monospace, 'IBM Plex Mono', 'SF Mono', Menlo, Consolas, monospace;
+  --og-body-font: 400 15px/1.55 var(--og-font);
+  --og-h1-font: 550 34px/1.2 var(--og-font);
+  --og-h1-tracking: -0.03em;
+  --og-h2-font: 550 21px/1.3 var(--og-font);
+  --og-h2-tracking: -0.015em;
+  --og-h3-font: 550 16px/1.3 var(--og-font);
+  --og-eyebrow-font: 650 12px/1.2 var(--og-font);
+  --og-eyebrow-tracking: 0.13em;
+  --og-label-font: 400 14px/1.3 var(--og-font);
+  --og-stat-font: 500 28px/1.2 var(--og-font);
+  --og-stat-tracking: -0.02em;
+
+  /* measures */
+  --og-radius-pill: 5px;
+  --og-radius-control: 6px;
+  --og-radius-card: 8px;
+  --og-radius-panel: 9px;
+  --og-radius-dialog: 12px;
+  --og-control-height: 34px;
+  --og-control-padding: 7px 13px;
+  --og-control-font: 550 13.5px/1.2 var(--og-font);
+  --og-button-padding: 10px 17px;
+  --og-button-font: 550 14px/1.2 var(--og-font);
+  --og-pill-padding: 3px 8px;
+  --og-pill-font: 500 12px/1.4 var(--og-font);
+  --og-panel-padding: 22px 24px;
+  --og-stat-padding: 18px 20px;
+
+  /* colour, light */
+  --og-bg: #f5f6f8;
+  --og-panel: #ffffff;
+  --og-panel-2: #f0f2f5;
+  --og-sunken: #f7f8fa;
+  --og-line: #d8dde6;
+  --og-line-strong: #b9c1ce;
+  --og-text: #131a25;
+  --og-text-2: #2b3545;
+  --og-muted: #5a6779;
+  --og-accent: #3c8a1e;
+  --og-accent-solid: #b4f57b;
+  --og-on-accent: #172312;
+  --og-accent-bg: #e6f6d8;
+  --og-accent-line: #9fcf7d;
+  --og-second: #6a4fd0;
+  --og-second-solid: #b6a0ff;
+  --og-on-second: #201734;
+  --og-second-bg: #ece7fb;
+  --og-warn: #a15c07;
+  --og-warn-bg: #fdf1dc;
+  --og-warn-line: #e3c188;
+  --og-fail: #b4233a;
+  --og-on-fail: #ffffff;
+  --og-fail-bg: #fbe6ea;
+  --og-info: #1d5fc4;
+  --og-info-bg: #e6eefb;
+  --og-scrim: rgba(15, 23, 42, 0.45);
+  --og-shadow: 0 18px 40px rgba(15, 23, 42, 0.14);
+}
+
+[data-theme="dark"] {
+  /* colour, dark */
+  --og-bg: #0c1018;
+  --og-panel: #131a25;
+  --og-panel-2: #1a2330;
+  --og-sunken: #0e1520;
+  --og-line: #293242;
+  --og-line-strong: #3b4657;
+  --og-text: #edf2f9;
+  --og-text-2: #d3dce8;
+  --og-muted: #9ba9bc;
+  --og-accent: #b4f57b;
+  --og-accent-solid: #b4f57b;
+  --og-on-accent: #172312;
+  --og-accent-bg: #24302a;
+  --og-accent-line: #536244;
+  --og-second: #b6a0ff;
+  --og-second-solid: #b6a0ff;
+  --og-on-second: #201734;
+  --og-second-bg: #29233c;
+  --og-warn: #f6c177;
+  --og-warn-bg: #342a20;
+  --og-warn-line: #54432f;
+  --og-fail: #f0a3ad;
+  --og-on-fail: #2a0c12;
+  --og-fail-bg: #38242d;
+  --og-info: #9cc2f2;
+  --og-info-bg: #242e3d;
+  --og-scrim: rgba(4, 9, 18, 0.6);
+  --og-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  color-scheme: dark;
+}
+
+/* studio/design-kit.css — the component kit. VENDORABLE (docs/VENDORING.md).
+ *
+ * The pieces every screen is made of, as plain classes over the tokens of
+ * studio/design-tokens.css. It reads nothing else: no Observogram class, no
+ * global rule, no element selector, no positioning — so it can be dropped
+ * into any app next to the tokens without touching that app's markup.
+ * Every class is prefixed .og- ; modifiers are .og-<piece>--<variant>.
+ *
+ *   .og-app        the page: colour, type (put it on <body> or a root element)
+ *   .og-eyebrow    the small caps line over a heading
+ *   .og-h1 .og-h2 .og-h3   headings      .og-muted   secondary text
+ *   .og-panel      a surface: a line and a radius       (--pad adds padding)
+ *   .og-callout    a one-line notice    (--warn --fail --ok)
+ *   .og-stat       a stat tile: __label, __value, __note (--warn --fail --ok)
+ *   .og-btn        a button             (--primary --second --text)
+ *   .og-seg        a switch of .og-btn: the pressed one is [aria-pressed="true"]
+ *   .og-pill       a pill               (--ok --warn --fail --second --info)
+ *   .og-input      an input, select or textarea
+ *   .og-steps      a stepper: .og-step, the current one is [aria-current]
+ *   .og-letter     the A / B badge of two compared things (--second for B)
+ *
+ * Contract: class names are only ever added, never renamed or removed.
+ */
+
+.og-app { background: var(--og-bg); color: var(--og-text); font: var(--og-body-font); }
+.og-app ::selection { background: color-mix(in srgb, var(--og-accent) 35%, transparent); }
+
+.og-eyebrow {
+  margin: 0; font: var(--og-eyebrow-font); letter-spacing: var(--og-eyebrow-tracking);
+  text-transform: uppercase; color: var(--og-muted);
+}
+.og-h1 { margin: 0; font: var(--og-h1-font); letter-spacing: var(--og-h1-tracking); color: var(--og-text); }
+.og-h2 { margin: 0; font: var(--og-h2-font); letter-spacing: var(--og-h2-tracking); color: var(--og-text); }
+.og-h3 { margin: 0; font: var(--og-h3-font); color: var(--og-text); }
+.og-muted { color: var(--og-muted); }
+.og-code { font-family: var(--og-font-code); }
+
+.og-panel {
+  background: var(--og-panel); border: 1px solid var(--og-line); border-radius: var(--og-radius-panel);
+}
+.og-panel--pad { padding: var(--og-panel-padding); }
+.og-panel--sunken { background: var(--og-sunken); }
+/* A tone is a line down the edge, never a wash over the panel. */
+.og-panel--ok { box-shadow: inset 3px 0 0 var(--og-accent); }
+.og-panel--warn { box-shadow: inset 3px 0 0 var(--og-warn); }
+.og-panel--fail { box-shadow: inset 3px 0 0 var(--og-fail); }
+.og-panel--info { box-shadow: inset 3px 0 0 var(--og-info); }
+
+.og-callout {
+  display: flex; gap: 14px; align-items: flex-start; padding: 16px 20px;
+  background: var(--og-panel); border: 1px solid var(--og-line); border-radius: var(--og-radius-card);
+  color: var(--og-text);
+}
+.og-callout--warn { background: var(--og-warn-bg); border-color: var(--og-warn-line); }
+.og-callout--fail { background: var(--og-fail-bg); border-color: color-mix(in srgb, var(--og-fail) 40%, var(--og-line)); }
+.og-callout--ok { background: var(--og-accent-bg); border-color: var(--og-accent-line); }
+
+.og-stat {
+  display: grid; gap: 4px; align-content: start; padding: var(--og-stat-padding);
+  background: var(--og-panel); border: 1px solid var(--og-line); border-radius: var(--og-radius-card);
+}
+.og-stat__label { font: var(--og-label-font); color: var(--og-muted); }
+.og-stat__value { font: var(--og-stat-font); letter-spacing: var(--og-stat-tracking); color: var(--og-text); }
+.og-stat__note { font: var(--og-label-font); color: var(--og-muted); }
+.og-stat--ok .og-stat__value { color: var(--og-accent); }
+.og-stat--warn .og-stat__value { color: var(--og-warn); }
+.og-stat--fail .og-stat__value { color: var(--og-fail); }
+.og-stat--second .og-stat__value { color: var(--og-second); }
+
+.og-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  min-height: var(--og-control-height); padding: var(--og-control-padding);
+  background: var(--og-panel-2); border: 1px solid var(--og-line-strong); border-radius: var(--og-radius-control);
+  color: var(--og-text); font: var(--og-control-font); text-decoration: none; cursor: pointer;
+}
+.og-btn:hover { border-color: var(--og-accent-line); filter: brightness(1.12); }
+.og-btn:focus-visible { outline: 2px solid var(--og-accent); outline-offset: 2px; }
+.og-btn:disabled, .og-btn[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+.og-btn--primary {
+  padding: var(--og-button-padding); background: var(--og-accent-solid); border-color: var(--og-accent-solid);
+  color: var(--og-on-accent); font: var(--og-button-font);
+}
+.og-btn--second {
+  padding: var(--og-button-padding); background: var(--og-second-solid); border-color: var(--og-second-solid);
+  color: var(--og-on-second); font: var(--og-button-font);
+}
+.og-btn--primary:hover, .og-btn--second:hover { filter: brightness(1.08); }
+.og-btn--text { min-height: 0; padding: 4px 0; background: none; border-color: transparent; color: var(--og-accent); }
+.og-btn--text:hover { border-color: transparent; text-decoration: underline; filter: none; }
+.og-btn[aria-pressed="true"] { background: var(--og-accent-bg); border-color: var(--og-accent-line); color: var(--og-accent); }
+
+.og-seg { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+
+.og-pill {
+  display: inline-flex; align-items: center; gap: 5px; padding: var(--og-pill-padding);
+  border: 1px solid transparent; border-radius: var(--og-radius-pill);
+  background: var(--og-info-bg); color: var(--og-text-2); font: var(--og-pill-font); white-space: nowrap;
+}
+.og-pill--ok { background: var(--og-accent-bg); color: var(--og-accent); }
+.og-pill--warn { background: var(--og-warn-bg); color: var(--og-warn); }
+.og-pill--fail { background: var(--og-fail-bg); color: var(--og-fail); }
+.og-pill--second { background: var(--og-second-bg); color: var(--og-second); }
+.og-pill--info { background: var(--og-info-bg); color: var(--og-info); }
+
+.og-input {
+  min-height: var(--og-control-height); padding: 6px 11px;
+  background: var(--og-sunken); border: 1px solid var(--og-line-strong); border-radius: var(--og-radius-control);
+  color: var(--og-text); font: 400 14px/1.3 var(--og-font);
+}
+.og-input:focus-visible { outline: 2px solid var(--og-accent); outline-offset: 1px; }
+.og-input::placeholder { color: var(--og-muted); opacity: 0.8; }
+
+.og-steps { display: flex; gap: 32px; border-bottom: 1px solid var(--og-line); }
+.og-step {
+  display: inline-flex; align-items: center; gap: 8px; padding: 14px 0;
+  background: none; border: 0; border-bottom: 2px solid transparent;
+  color: var(--og-muted); font: 500 14px/1.3 var(--og-font); cursor: pointer;
+}
+.og-step__n {
+  display: inline-grid; place-items: center; width: 22px; height: 22px;
+  border: 1px solid currentColor; border-radius: 50%; font-size: 12px;
+}
+.og-step[aria-current], .og-step[aria-selected="true"] { color: var(--og-accent); border-bottom-color: var(--og-accent); }
+.og-step:disabled, .og-step[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+
+.og-letter {
+  display: inline-grid; place-items: center; width: 28px; height: 28px; flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--og-accent) 50%, transparent); border-radius: var(--og-radius-control);
+  background: color-mix(in srgb, var(--og-accent) 16%, transparent); color: var(--og-accent);
+  font: 600 14px/1 var(--og-font);
+}
+.og-letter--second {
+  border-color: color-mix(in srgb, var(--og-second) 50%, transparent);
+  background: color-mix(in srgb, var(--og-second) 16%, transparent); color: var(--og-second);
+}
+
+
+.ar-page { max-width: 1080px; margin: 0 auto; padding: 32px 24px 48px; }
+.ar-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 24px; align-items: baseline; padding-bottom: 16px; border-bottom: 1px solid var(--og-line); }
+.ar-brand { font: var(--og-h3-font); color: var(--og-muted); }
+.ar-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 12px 0 0; padding: 0; list-style: none; color: var(--og-text-2); font: var(--og-label-font); }
+.ar-meta li b { color: var(--og-text); font-weight: 550; }
+.ar-toc { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 20px 0 0; padding: 0; list-style: none; font: var(--og-label-font); }
+.ar-toc a { color: var(--og-accent); text-decoration: none; }
+.ar-toc a:hover, .ar-toc a:focus-visible { text-decoration: underline; }
+.ar-section { margin-top: 36px; }
+.ar-section > .og-h2 { margin-bottom: 4px; }
+.ar-lede { margin: 0 0 14px; color: var(--og-text-2); }
+.ar-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin: 14px 0; }
+.ar-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+.ar-table th, .ar-table td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid var(--og-line); }
+.ar-table th { font: var(--og-eyebrow-font); letter-spacing: var(--og-eyebrow-tracking); text-transform: uppercase; color: var(--og-muted); }
+.ar-table td.ar-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ar-table .og-code { font-size: 13px; word-break: break-word; }
+.ar-none { margin: 10px 0; color: var(--og-muted); font-style: italic; }
+.ar-sub { margin: 18px 0 6px; }
+.ar-foot { margin-top: 44px; padding-top: 16px; border-top: 1px solid var(--og-line); display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px; color: var(--og-muted); font: var(--og-label-font); }
+.ar-foot a { color: var(--og-accent); }
+@media print { .ar-page { padding: 0; } .ar-toc { display: none; } .ar-stats > * { break-inside: avoid; } }
+
+</style>
+<style id="brand-tokens">
+:root{--og-accent:#b3261e;--og-accent-solid:#f28b82;}
+[data-theme="dark"]{--og-accent:#f28b82;}
+</style>
+</head>
+<body class="og-app">
+<main class="ar-page">
+  <header class="ar-head">
+    <div>
+      <p class="og-eyebrow">Service audit report</p>
+      <h1 class="og-h1">payment-service</h1>
+    </div>
+    <div class="ar-brand">Acme Watch · reliability, watched</div>
+  </header>
+  <ul class="ar-meta">
+    <li><b>Pack</b> payment-service v1.5.0</li>
+    <li><b>Service</b> payment-service</li>
+    <li><b>Environment</b> as declared</li>
+    <li><b>Criticality</b> tier-1</li>
+    <li><b>Artefacts</b> 84 (Declared 84 · Verified 0 · Scaffold 0)</li>
+    <li><b>Generated</b> unstamped</li>
+  </ul>
+  <ul class="ar-toc"><li><a href="#conformance">1. Conformance</a></li><li><a href="#placeholders">2. Placeholders</a></li><li><a href="#assessments">3. Verdicts</a></li><li><a href="#waivers">4. Waivers</a></li><li><a href="#coverage">5. Coverage</a></li><li><a href="#goes-blind">6. Goes-blind risks</a></li><li><a href="#response-path">7. Response path</a></li></ul>
+  
+<section class="ar-section" id="conformance">
+  <h2 class="og-h2">1. Conformance</h2>
+  <p class="ar-lede">The maturity rubric at tier-1 (graded from the pack). The engine's numbers headline; a waiver never rewrites them.</p>
+  <div class="ar-stats">
+    <div class="og-stat og-stat--fail"><span class="og-stat__label">Decision</span><span class="og-stat__value">Not conformant</span><span class="og-stat__note">4 blocking clauses</span></div>
+    <div class="og-stat og-stat--fail"><span class="og-stat__label">Required (MUST)</span><span class="og-stat__value">21 / 25</span><span class="og-stat__note">84%</span></div>
+    <div class="og-stat"><span class="og-stat__label">Recommended (SHOULD)</span><span class="og-stat__value">5 / 5</span><span class="og-stat__note">lower the score; never block</span></div>
+    <div class="og-stat"><span class="og-stat__label">Weighted score</span><span class="og-stat__value">85%</span><span class="og-stat__note">not the conformance decision</span></div>
+    
+  </div>
+  <h3 class="og-h3 ar-sub">Blocking (4)</h3>
+  <table class="ar-table"><thead><tr><th>Clause</th><th>Severity</th><th>Requirement</th></tr></thead><tbody><tr><td><span class="og-code">L3.MUST.recording_rule_per_slo</span></td><td>MUST</td><td>Every SLO has at least one recording rule materialising its SLI.</td></tr><tr><td><span class="og-code">L4.MUST.multi_window_burn_rate</span></td><td>MUST</td><td>Every SLO has at least one burn-rate alert with multi-window policy.</td></tr><tr><td><span class="og-code">L5.MUST.tier1_chaos_for_each_slo</span></td><td>MUST</td><td>Every SLO is the steady-state hypothesis of at least one chaos experiment.</td></tr><tr><td><span class="og-code">L5.MUST.tier1_weekly_prod_chaos</span></td><td>MUST</td><td>At least one chaos experiment runs weekly+ in production with OTel-instrumented synthetic probes.</td></tr></tbody></table>
+  
+  <h3 class="og-h3 ar-sub">Recommended, failing (0)</h3>
+  <p class="ar-none">Every recommended clause that applies passes.</p>
+  <h3 class="og-h3 ar-sub">Passed (26) · not applicable at this tier (0)</h3>
+  <table class="ar-table"><thead><tr><th>Clause</th><th>Severity</th><th>Requirement</th></tr></thead><tbody><tr><td><span class="og-code">L1.MUST.availability_slo</span></td><td>MUST</td><td>At least one availability SLO (ratio-type SLI).</td></tr><tr><td><span class="og-code">L1.MUST.latency_slo</span></td><td>MUST</td><td>At least one latency SLO (threshold or distribution SLI).</td></tr><tr><td><span class="og-code">L1.SHOULD.domain_slo</span></td><td>SHOULD</td><td>A third, domain-specific SLO beyond availability and latency (4+ SLOs total).</td></tr><tr><td><span class="og-code">L1.MUST.sli_covered_by_slo</span></td><td>MUST</td><td>Every declared SLI is referenced by at least one SLO.</td></tr><tr><td><span class="og-code">L2.MUST.otlp_receiver</span></td><td>MUST</td><td>OTel Collector pipeline declares an `otlp` receiver.</td></tr><tr><td><span class="og-code">L2.MUST.service_name_required</span></td><td>MUST</td><td>`service.name` listed in otel.resource_attributes.required.</td></tr><tr><td><span class="og-code">L2.MUST.semconv_floor</span></td><td>MUST</td><td>OTel SemConv version &gt;= 1.26.0 (binding floor).</td></tr><tr><td><span class="og-code">L2.MUST.semconv_current</span></td><td>MUST</td><td>OTel SemConv at currently-tracked version (1.27.0).</td></tr><tr><td><span class="og-code">L2.MUST.resource_attrs_5plus</span></td><td>MUST</td><td>At least five required resource attributes declared.</td></tr><tr><td><span class="og-code">L2.MUST.log_correlation</span></td><td>MUST</td><td>`otel.sdk.log_correlation: true` (trace IDs injected into logs).</td></tr><tr><td><span class="og-code">L2.MUST.metrics_exporter</span></td><td>MUST</td><td>Pipelines export metrics.</td></tr><tr><td><span class="og-code">L2.MUST.logs_and_traces_exporters</span></td><td>MUST</td><td>Pipelines export logs and traces.</td></tr><tr><td><span class="og-code">L2.MUST.tail_sampling</span></td><td>MUST</td><td>Pipelines include a tail_sampling processor.</td></tr><tr><td><span class="og-code">L2.MUST.metrics_logs_traces_backends</span></td><td>MUST</td><td>spec.telemetry.backends covers metrics + logs + traces.</td></tr><tr><td><span class="og-code">L2.SHOULD.backend_gating_enforce</span></td><td>SHOULD</td><td>tier-1 backends pin a `min` version with `gating: enforce`.</td></tr><tr><td><span class="og-code">L2X.MUST.extended_backend_refs_resolve</span></td><td>MUST</td><td>Every extended surface references a declared telemetry backend or explicit external ref.</td></tr><tr><td><span class="og-code">L3.SHOULD.derived_view</span></td><td>SHOULD</td><td>At least one derived view (e.g. golden signals or per-tenant rollup).</td></tr><tr><td><span class="og-code">L3.MUST.service_overview_dashboard</span></td><td>MUST</td><td>At least one dashboard declared (service overview).</td></tr><tr><td><span class="og-code">L3.MUST.slo_burn_dashboard</span></td><td>MUST</td><td>A second dashboard (SLO burn) on top of service overview.</td></tr><tr><td><span class="og-code">L3.MUST.tier1_dashboards</span></td><td>MUST</td><td>Service overview + SLO burn + deployment overlay + customer impact (4+ dashboards).</td></tr><tr><td><span class="og-code">L4.SHOULD.forecast_on_availability</span></td><td>SHOULD</td><td>At least one forecast declared on a primary availability SLO.</td></tr><tr><td><span class="og-code">L4.MUST.tier1_voice_route</span></td><td>MUST</td><td>SEV1 route includes a voice channel.</td></tr><tr><td><span class="og-code">L4.MUST.tier1_at_least_one_automation</span></td><td>MUST</td><td>At least one self-healing remediation declared.</td></tr><tr><td><span class="og-code">L5.SHOULD.tier1_release_gate</span></td><td>SHOULD</td><td>Regression gate set to a release-blocking mode.</td></tr><tr><td><span class="og-code">L5.MUST.synthetic_probe</span></td><td>MUST</td><td>At least one synthetic check declared.</td></tr><tr><td><span class="og-code">L5.MUST.tier2_chaos_staging</span></td><td>MUST</td><td>At least one chaos experiment scheduled monthly+ in staging.</td></tr></tbody></table>
+  
+</section>
+  
+<section class="ar-section" id="placeholders">
+  <h2 class="og-h2">2. Placeholders</h2>
+  <p class="ar-lede">What still has to become real: an artefact whose symbol carries a scaffold marker, or an importer's stub literal. The rubric grades what is declared, placeholders included.</p>
+  <div class="ar-stats">
+    <div class="og-stat og-stat--ok"><span class="og-stat__label">Rows</span><span class="og-stat__value">0</span><span class="og-stat__note">0 symbols</span></div>
+    <div class="og-stat"><span class="og-stat__label">Markers</span><span class="og-stat__value">0</span><span class="og-stat__note">scaffold annotations</span></div>
+    <div class="og-stat"><span class="og-stat__label">Library todos</span><span class="og-stat__value">0</span><span class="og-stat__note">library.todo.* annotations</span></div>
+    <div class="og-stat"><span class="og-stat__label">Scaffold artefacts</span><span class="og-stat__value">0</span><span class="og-stat__note">parked by the studio</span></div>
+  </div>
+  <p class="ar-none">No placeholders: every value is real.</p>
+</section>
+  
+<section class="ar-section" id="assessments">
+  <h2 class="og-h2">3. Verdicts</h2>
+  <p class="ar-lede">A reviewer's record per artefact (trusted, suspect, failed); unreviewed is the absence of a record. A verdict never feeds the conformance numbers above.</p>
+  <p class="ar-none">Not recorded by this build: the source needs the server (its store holds the record); the CLI and the static bundle have none.</p>
+</section>
+  
+<section class="ar-section" id="waivers">
+  <h2 class="og-h2">4. Waivers</h2>
+  <p class="ar-lede">The service record's time-boxed suppressions of a conformance finding, by rubric clause and optionally one canonical symbol. An expired waiver covers nothing; a revoked one is history.</p>
+  <p class="ar-none">Not recorded by this build: the source needs the server (its store holds the record); the CLI and the static bundle have none.</p>
+</section>
+  
+<section class="ar-section" id="coverage">
+  <h2 class="og-h2">5. Coverage by family</h2>
+  <p class="ar-lede">Every family of the artefact taxonomy and what the pack declares in it. A family is required when a rubric clause that applies at the graded tier names it; required with nothing declared is missing, otherwise absent.</p>
+  <div class="ar-stats">
+    <div class="og-stat og-stat--ok"><span class="og-stat__label">Present</span><span class="og-stat__value">30</span><span class="og-stat__note">families with artefacts</span></div>
+    <div class="og-stat"><span class="og-stat__label">Missing</span><span class="og-stat__value">0</span><span class="og-stat__note">required, none declared</span></div>
+    <div class="og-stat"><span class="og-stat__label">Absent</span><span class="og-stat__value">2</span><span class="og-stat__note">not required here</span></div>
+  </div>
+  <table class="ar-table"><thead><tr><th>Family</th><th>Layer</th><th>Status</th><th>Artefacts</th><th>Declared</th><th>Verified</th><th>Scaffold</th><th>Named by</th></tr></thead><tbody><tr><td>Service level indicator <span class="og-code og-muted">sli</span></td><td>L1</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">6</td><td class="ar-num">6</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L1.MUST.availability_slo</span><br><span class="og-code">L1.MUST.latency_slo</span><br><span class="og-code">L1.MUST.sli_covered_by_slo</span></td></tr><tr><td>Objective <span class="og-code og-muted">slo</span></td><td>L1</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">6</td><td class="ar-num">6</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L1.MUST.availability_slo</span><br><span class="og-code">L1.MUST.latency_slo</span><br><span class="og-code">L1.SHOULD.domain_slo</span><br><span class="og-code">L1.MUST.sli_covered_by_slo</span></td></tr><tr><td>Instrumentation contract <span class="og-code og-muted">otel</span></td><td>L2</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L2.MUST.service_name_required</span><br><span class="og-code">L2.MUST.semconv_floor</span><br><span class="og-code">L2.MUST.semconv_current</span><br><span class="og-code">L2.MUST.resource_attrs_5plus</span><br><span class="og-code">L2.MUST.log_correlation</span></td></tr><tr><td>Telemetry backend <span class="og-code og-muted">backend</span></td><td>L2</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">9</td><td class="ar-num">9</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L2.MUST.metrics_logs_traces_backends</span><br><span class="og-code">L2.SHOULD.backend_gating_enforce</span></td></tr><tr><td>Pipeline receiver <span class="og-code og-muted">pipeline_receiver</span></td><td>L2</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">2</td><td class="ar-num">2</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L2.MUST.otlp_receiver</span></td></tr><tr><td>Pipeline processor <span class="og-code og-muted">pipeline_processor</span></td><td>L2</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">6</td><td class="ar-num">6</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L2.MUST.tail_sampling</span></td></tr><tr><td>Pipeline exporter <span class="og-code og-muted">pipeline_exporter_metrics</span></td><td>L2</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L2.MUST.metrics_exporter</span></td></tr><tr><td>Pipeline exporter <span class="og-code og-muted">pipeline_exporter_logs</span></td><td>L2</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L2.MUST.logs_and_traces_exporters</span></td></tr><tr><td>Pipeline exporter <span class="og-code og-muted">pipeline_exporter_traces</span></td><td>L2</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L2.MUST.logs_and_traces_exporters</span></td></tr><tr><td>Storage <span class="og-code og-muted">storage_metrics</span></td><td>L2</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">0</td><td class="ar-num">0</td><td>—</td></tr><tr><td>Storage <span class="og-code og-muted">storage_logs</span></td><td>L2</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">0</td><td class="ar-num">0</td><td>—</td></tr><tr><td>Storage <span class="og-code og-muted">storage_traces</span></td><td>L2</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">0</td><td class="ar-num">0</td><td>—</td></tr><tr><td>Scrape job <span class="og-code og-muted">scrape_job</span></td><td>L2</td><td><span class="og-pill">absent</span></td><td class="ar-num">0</td><td class="ar-num">0</td><td class="ar-num">0</td><td class="ar-num">0</td><td>—</td></tr><tr><td>Metric <span class="og-code og-muted">metric</span></td><td>L2</td><td><span class="og-pill">absent</span></td><td class="ar-num">0</td><td class="ar-num">0</td><td class="ar-num">0</td><td class="ar-num">0</td><td>—</td></tr><tr><td>Profiling <span class="og-code og-muted">profiling</span></td><td>L2X</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">0</td><td class="ar-num">0</td><td>—</td></tr><tr><td>Network telemetry <span class="og-code og-muted">network</span></td><td>L2X</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">0</td><td class="ar-num">0</td><td>—</td></tr><tr><td>Policy engine <span class="og-code og-muted">policy_engine</span></td><td>L2X</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">0</td><td class="ar-num">0</td><td>—</td></tr><tr><td>Service mesh telemetry <span class="og-code og-muted">mesh</span></td><td>L2X</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">2</td><td class="ar-num">2</td><td class="ar-num">0</td><td class="ar-num">0</td><td>—</td></tr><tr><td>Collection <span class="og-code og-muted">collection</span></td><td>L2X</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">2</td><td class="ar-num">2</td><td class="ar-num">0</td><td class="ar-num">0</td><td>—</td></tr><tr><td>Recording rule <span class="og-code og-muted">recording_rule</span></td><td>L3</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">5</td><td class="ar-num">5</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L3.MUST.recording_rule_per_slo</span></td></tr><tr><td>Derived view <span class="og-code og-muted">derived_view</span></td><td>L3</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">2</td><td class="ar-num">2</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L3.SHOULD.derived_view</span></td></tr><tr><td>Dashboard <span class="og-code og-muted">dashboard</span></td><td>L3</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">4</td><td class="ar-num">4</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L3.MUST.service_overview_dashboard</span><br><span class="og-code">L3.MUST.slo_burn_dashboard</span><br><span class="og-code">L3.MUST.tier1_dashboards</span></td></tr><tr><td>Dashboard panel <span class="og-code og-muted">panel</span></td><td>L3</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">5</td><td class="ar-num">5</td><td class="ar-num">0</td><td class="ar-num">0</td><td>—</td></tr><tr><td>Burn-rate alert <span class="og-code og-muted">burn_rate</span></td><td>L4</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">5</td><td class="ar-num">5</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L4.MUST.multi_window_burn_rate</span></td></tr><tr><td>Forecast <span class="og-code og-muted">forecast</span></td><td>L4</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">2</td><td class="ar-num">2</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L4.SHOULD.forecast_on_availability</span></td></tr><tr><td>Alert route <span class="og-code og-muted">alert_route</span></td><td>L4</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">3</td><td class="ar-num">3</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L4.MUST.tier1_voice_route</span></td></tr><tr><td>Alert rule <span class="og-code og-muted">alert_rule</span></td><td>L4</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">3</td><td class="ar-num">3</td><td class="ar-num">0</td><td class="ar-num">0</td><td>—</td></tr><tr><td>Self-healing action <span class="og-code og-muted">remediation</span></td><td>L4</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">3</td><td class="ar-num">3</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L4.MUST.tier1_at_least_one_automation</span></td></tr><tr><td>Baselines <span class="og-code og-muted">baselines</span></td><td>L5</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">0</td><td class="ar-num">0</td><td>—</td></tr><tr><td>Chaos experiment <span class="og-code og-muted">chaos</span></td><td>L5</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">3</td><td class="ar-num">3</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L5.MUST.tier1_chaos_for_each_slo</span><br><span class="og-code">L5.MUST.tier2_chaos_staging</span><br><span class="og-code">L5.MUST.tier1_weekly_prod_chaos</span></td></tr><tr><td>Synthetic check <span class="og-code og-muted">synthetic</span></td><td>L5</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">2</td><td class="ar-num">2</td><td class="ar-num">0</td><td class="ar-num">0</td><td><span class="og-code">L5.SHOULD.tier1_release_gate</span><br><span class="og-code">L5.MUST.synthetic_probe</span></td></tr><tr><td>Import <span class="og-code og-muted">imports</span></td><td>GOV</td><td><span class="og-pill og-pill--ok">present</span></td><td class="ar-num">3</td><td class="ar-num">3</td><td class="ar-num">0</td><td class="ar-num">0</td><td>—</td></tr></tbody></table>
+</section>
+  
+<section class="ar-section" id="goes-blind">
+  <h2 class="og-h2">6. Goes-blind risks</h2>
+  <p class="ar-lede">Structural exposure from the declared edges: what WOULD go blind if a node died — never that something is blind. The top 10 by what goes blind.</p>
+  
+  <div class="ar-stats">
+    <div class="og-stat"><span class="og-stat__label">Graph</span><span class="og-stat__value">94 / 72</span><span class="og-stat__note">nodes / edges</span></div>
+    <div class="og-stat og-stat--warn"><span class="og-stat__label">Nodes whose loss would blind an SLO</span><span class="og-stat__value">29</span></div>
+  </div>
+  <table class="ar-table"><thead><tr><th>Node</th><th>Kind</th><th>SLOs</th><th>Alerts</th><th>Panels</th><th>Dashboards</th><th>Routes</th><th>Total</th><th>Weight</th><th>Loses protection</th></tr></thead><tbody><tr><td>metrics-prom <span class="og-code og-muted">backend::{&quot;product&quot;:&quot;prometheus&quot;,&quot;signal&quot;:&quot;metrics&quot;}</span></td><td>backend</td><td class="ar-num">6</td><td class="ar-num">5</td><td class="ar-num">5</td><td class="ar-num">1</td><td class="ar-num">3</td><td class="ar-num">46</td><td class="ar-num">85.6</td><td>—</td></tr><tr><td>exporter (metrics): prometheusremotewrite <span class="og-code og-muted">pipeline_exporter_metrics::{&quot;signal&quot;:&quot;metrics&quot;,&quot;target&quot;:&quot;prometheusremotewrite&quot;}</span></td><td>pipeline_exporter_metrics</td><td class="ar-num">6</td><td class="ar-num">5</td><td class="ar-num">5</td><td class="ar-num">1</td><td class="ar-num">3</td><td class="ar-num">46</td><td class="ar-num">85.6</td><td>—</td></tr><tr><td>payment:api_availability:ratio_5m <span class="og-code og-muted">metric::{&quot;name&quot;:&quot;payment:api_availability:ratio_5m&quot;}</span></td><td>metric</td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">2</td><td class="ar-num">1</td><td class="ar-num">2</td><td class="ar-num">12</td><td class="ar-num">16.8</td><td>—</td></tr><tr><td>http_server_request_duration_seconds_bucket <span class="og-code og-muted">metric::{&quot;name&quot;:&quot;http_server_request_duration_seconds_bucket&quot;}</span></td><td>metric</td><td class="ar-num">2</td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">2</td><td class="ar-num">11</td><td class="ar-num">18.45</td><td>—</td></tr><tr><td>SEV2 routes <span class="og-code og-muted">alert_route::{&quot;severity&quot;:&quot;sev2&quot;}</span></td><td>alert_route</td><td class="ar-num">5</td><td class="ar-num">5</td><td class="ar-num">0</td><td class="ar-num">0</td><td class="ar-num">0</td><td class="ar-num">10</td><td class="ar-num">0</td><td>SLO api_availability_99_9<br>SLO checkout_latency_99_5_p99_300ms<br>SLO consumer_freshness_99_under_60s<br>SLO consumer_success_99_95<br>SLO settlement_consumers_99_9_min_2<br>alert burn-rate alert: api_availability_99_9<br>alert burn-rate alert: checkout_latency_99_5_p99_300ms<br>alert burn-rate alert: consumer_freshness_99_under_60s<br>alert burn-rate alert: consumer_success_99_95<br>alert burn-rate alert: settlement_consumers_99_9_min_2</td></tr><tr><td>http_server_request_duration_seconds_count <span class="og-code og-muted">metric::{&quot;name&quot;:&quot;http_server_request_duration_seconds_count&quot;}</span></td><td>metric</td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">2</td><td class="ar-num">1</td><td class="ar-num">2</td><td class="ar-num">10</td><td class="ar-num">12.8</td><td>—</td></tr><tr><td>payment:api_availability:ratio_5m <span class="og-code og-muted">recording_rule::{&quot;record&quot;:&quot;payment:api_availability:ratio_5m&quot;}</span></td><td>recording_rule</td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">2</td><td class="ar-num">1</td><td class="ar-num">2</td><td class="ar-num">10</td><td class="ar-num">12.8</td><td>—</td></tr><tr><td>payment:consumer_lag:seconds_max_5m <span class="og-code og-muted">metric::{&quot;name&quot;:&quot;payment:consumer_lag:seconds_max_5m&quot;}</span></td><td>metric</td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">2</td><td class="ar-num">9</td><td class="ar-num">13.7</td><td>—</td></tr><tr><td>api_availability <span class="og-code og-muted">sli::{&quot;id&quot;:&quot;api_availability&quot;}</span></td><td>sli</td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">2</td><td class="ar-num">1</td><td class="ar-num">2</td><td class="ar-num">9</td><td class="ar-num">9.8</td><td>—</td></tr><tr><td>messaging_kafka_consumer_lag_seconds <span class="og-code og-muted">metric::{&quot;name&quot;:&quot;messaging_kafka_consumer_lag_seconds&quot;}</span></td><td>metric</td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">1</td><td class="ar-num">2</td><td class="ar-num">8</td><td class="ar-num">11.7</td><td>—</td></tr></tbody></table>
+</section>
+  
+<section class="ar-section" id="response-path">
+  <h2 class="og-h2">7. Response path (declared)</h2>
+  <p class="ar-lede">Whether each remediation the pack declares answers to an alert of the pack — the linking rule of the diagnose → remediate flow, from pack data alone, never compared with a live side.</p>
+  
+  <div class="ar-stats">
+    <div class="og-stat"><span class="og-stat__label">Remediations</span><span class="og-stat__value">3</span></div>
+    <div class="og-stat"><span class="og-stat__label">Linked</span><span class="og-stat__value">0</span></div>
+    <div class="og-stat og-stat--warn"><span class="og-stat__label">Unresolved</span><span class="og-stat__value">3</span><span class="og-stat__note">no alert answers the trigger</span></div>
+    <div class="og-stat"><span class="og-stat__label">Alerts</span><span class="og-stat__value">8</span><span class="og-stat__note">8 without a remediation</span></div>
+  </div>
+  
+  <h3 class="og-h3 ar-sub">Unresolved</h3><table class="ar-table"><thead><tr><th>Remediation</th><th>Trigger</th><th>Suggested alerts</th><th>Name it with</th></tr></thead><tbody><tr><td><span class="og-code">remediation[0]</span></td><td>alert:payment-api-pod-oom</td><td>—</td><td><span class="og-code">observogram.remediates.remediation[0]</span></td></tr><tr><td><span class="og-code">remediation[1]</span></td><td>alert:payment-settler-stuck</td><td>—</td><td><span class="og-code">observogram.remediates.remediation[1]</span></td></tr><tr><td><span class="og-code">remediation[2]</span></td><td>alert:payment-api-cert-expiring</td><td><span class="og-code">alerting.rules[2]</span></td><td><span class="og-code">observogram.remediates.remediation[2]</span></td></tr></tbody></table>
+  <h3 class="og-h3 ar-sub">Alerts without a remediation (8)</h3><table class="ar-table"><thead><tr><th>Alert</th><th>Family</th><th>Title</th></tr></thead><tbody><tr><td><span class="og-code">policy.burn_rate_alerts[0]</span></td><td>burn_rate</td><td>burn-rate alert: api_availability_99_9</td></tr><tr><td><span class="og-code">policy.burn_rate_alerts[1]</span></td><td>burn_rate</td><td>burn-rate alert: checkout_latency_99_5_p99_300ms</td></tr><tr><td><span class="og-code">policy.burn_rate_alerts[2]</span></td><td>burn_rate</td><td>burn-rate alert: consumer_freshness_99_under_60s</td></tr><tr><td><span class="og-code">policy.burn_rate_alerts[3]</span></td><td>burn_rate</td><td>burn-rate alert: settlement_consumers_99_9_min_2</td></tr><tr><td><span class="og-code">policy.burn_rate_alerts[4]</span></td><td>burn_rate</td><td>burn-rate alert: consumer_success_99_95</td></tr><tr><td><span class="og-code">alerting.rules[0]</span></td><td>alert_rule</td><td>PaymentServicePodRestarting</td></tr><tr><td><span class="og-code">alerting.rules[1]</span></td><td>alert_rule</td><td>PaymentDbConnectionPoolSaturated</td></tr><tr><td><span class="og-code">alerting.rules[2]</span></td><td>alert_rule</td><td>PaymentCertificateExpiringSoon</td></tr></tbody></table>
+  
+</section>
+  <footer class="ar-foot">
+    <div>Acme Watch · a product of Acme Corp · audit report v1</div>
+    <div><a href="https://docs.example.com/acme-watch" target="_blank" rel="noopener">docs</a>
+    ·
+    <a href="https://support.example.com/?product=watch&amp;tier=&quot;gold&quot;" target="_blank" rel="noopener">support</a>
+    ·
+    <a href="https://status.example.com" target="_blank" rel="noopener">status &lt;live&gt;</a></div>
+  </footer>
+</main>
+</body>
+</html>

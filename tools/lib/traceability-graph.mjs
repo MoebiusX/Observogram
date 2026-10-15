@@ -114,7 +114,7 @@ export function buildDependencyGraph(adaptedPack = {}) {
     });
   }
 
-  graph.collisions.sort((x, y) => x.key.localeCompare(y.key));
+  graph.collisions.sort((x, y) => x.key.localeCompare(y.key, 'en'));
 
   resolveContractEdges(graph);
   resolveRecordingRuleEdges(graph);
@@ -218,10 +218,10 @@ export function buildBranch(graph, rootKey) {
   const nodes = [...nodeKeys]
     .map((key) => graph.nodes.get(key))
     .filter(Boolean)
-    .sort((a, b) => `${a.kind}:${labelOf(a)}`.localeCompare(`${b.kind}:${labelOf(b)}`));
+    .sort((a, b) => `${a.kind}:${labelOf(a)}`.localeCompare(`${b.kind}:${labelOf(b)}`, 'en'));
   const edges = graph.edges
     .filter((edge) => edgeKeys.has(edge.key))
-    .sort((a, b) => `${a.type}:${a.from}:${a.to}`.localeCompare(`${b.type}:${b.from}:${b.to}`));
+    .sort((a, b) => `${a.type}:${a.from}:${a.to}`.localeCompare(`${b.type}:${b.from}:${b.to}`, 'en'));
   const missingRoles = branchMissingRoles(root, nodes);
 
   return {
@@ -465,7 +465,7 @@ function compareBranch(branchA, branchB, liveGraph, radiusA = new Map(), radiusB
     edgeProvenance: combineProvenance(branchA.edgeProvenance, branchB?.edgeProvenance),
     missingRoles: branchA.missingRoles || [],
     counts,
-    nodes: nodeVerdicts.sort((a, b) => `${statusRank(a.status)}:${a.kind}:${a.label}`.localeCompare(`${statusRank(b.status)}:${b.kind}:${b.label}`)),
+    nodes: nodeVerdicts.sort((a, b) => `${statusRank(a.status)}:${a.kind}:${a.label}`.localeCompare(`${statusRank(b.status)}:${b.kind}:${b.label}`, 'en')),
   };
 }
 
@@ -1467,7 +1467,7 @@ function combineProvenance(a = {}, b = {}) {
 }
 
 function compareNodeKeys(graph) {
-  return (a, b) => labelOf(graph.nodes.get(a)).localeCompare(labelOf(graph.nodes.get(b)));
+  return (a, b) => labelOf(graph.nodes.get(a)).localeCompare(labelOf(graph.nodes.get(b)), 'en');
 }
 
 function addMapSet(map, key, value) {

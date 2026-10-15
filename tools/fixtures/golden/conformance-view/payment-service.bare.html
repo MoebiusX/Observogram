@@ -1,0 +1,663 @@
+section conformance-view|{"layer":"CONF","focus":"a"}
+
+    
+    <section class="ux-decision ux-tone-fail" id="conf-decision" aria-label="Conformance · maturity rubric">
+      <div class="ux-ctx">
+      <span class="ux-ctx-item">
+        <span class="ux-ctx-key">Service</span>
+        <span class="ux-ctx-val">payment-service</span>
+      </span><span class="ux-ctx-sep" aria-hidden="true">·</span>
+      <span class="ux-ctx-item">
+        <span class="ux-ctx-key">Environment</span>
+        <span class="ux-ctx-val">prod</span>
+      </span><span class="ux-ctx-sep" aria-hidden="true">·</span>
+      <span class="ux-ctx-item">
+        <span class="ux-ctx-key">Pack</span>
+        <span class="ux-ctx-val">payment-service v1.5.0</span>
+      </span><span class="ux-ctx-sep" aria-hidden="true">·</span>
+      <span class="ux-ctx-item" title="The rubric is evaluated at the pack’s declared tier.">
+        <span class="ux-ctx-key">Criticality</span>
+        <span class="ux-ctx-val">tier 1</span>
+      </span></div>
+      <div class="ux-decision-main">
+        <div class="ux-decision-text">
+          <div class="ux-eyebrow">Conformance · maturity rubric</div>
+          <p class="ux-decision-sentence"><span class="ux-verdict" title="Conformant: every required (MUST) clause for the tier passes — possibly on placeholders. It says nothing about deployment readiness.">21/25 MUST</span>Not conformant at tier 1: four required clauses need attention.</p>
+          <p class="ux-decision-note">Conformance reads the pack’s declarations against the rubric; it does not check live evidence or deployment readiness.</p>
+        </div>
+        
+        <div class="ux-decision-actions">
+          <button type="button" class="ux-primary-btn" data-ux-action="conf-goto:conf-blocking">Review blocking requirements</button>
+          
+        </div>
+      </div>
+      
+      <ol class="ux-causes" aria-label="Main causes">
+        
+          <li class="ux-cause ux-tone-fail">
+            <span class="ux-cause-text">
+              <span class="ux-cause-title">L3 · An SLO has no recording rule</span>
+              <span class="ux-cause-why">Fix: Add a recording rule for each SLO.</span>
+            </span>
+            <button type="button" class="ux-link-btn" data-ux-action="conf-open:L3">Open L3 →</button>
+          </li>
+          <li class="ux-cause ux-tone-fail">
+            <span class="ux-cause-text">
+              <span class="ux-cause-title">L4 · An SLO lacks a multi-window burn-rate alert</span>
+              <span class="ux-cause-why">Fix: Add a multi-window burn-rate alert for each SLO.</span>
+            </span>
+            <button type="button" class="ux-link-btn" data-ux-action="conf-open:L4">Open L4 →</button>
+          </li>
+          <li class="ux-cause ux-tone-fail">
+            <span class="ux-cause-text">
+              <span class="ux-cause-title">L5 · An SLO has no chaos experiment</span>
+              <span class="ux-cause-why">Fix: Add a chaos experiment for each SLO.</span>
+            </span>
+            <button type="button" class="ux-link-btn" data-ux-action="conf-open:L5">Open L5 →</button>
+          </li>
+      </ol>
+      
+      <dl class="ux-measures">
+        
+          <div class="ux-measure ux-tone-fail">
+            <dt>Required (MUST)</dt>
+            <dd><span class="ux-measure-val">21 / 25</span><span class="ux-measure-note">4 blocking</span></dd>
+          </div>
+          <div class="ux-measure ux-tone-neutral">
+            <dt>Recommended (SHOULD)</dt>
+            <dd><span class="ux-measure-val">5 / 5</span><span class="ux-measure-note">lower the score; never block</span></dd>
+          </div>
+          <div class="ux-measure ux-tone-neutral">
+            <dt>Weighted score</dt>
+            <dd><span class="ux-measure-val">85%</span><span class="ux-measure-note">not the conformance decision</span></dd>
+          </div>
+          <div class="ux-measure ux-tone-muted">
+            <dt>Not applicable</dt>
+            <dd><span class="ux-measure-val">0</span><span class="ux-measure-note">excluded at tier 1</span></dd>
+          </div>
+      </dl>
+    </section>
+    
+    <nav class="ux-section-nav" aria-label="Conformance sections">
+      
+        <a class="ux-section-link ux-tone-fail" href="#conf-blocking" data-ux-section="conf-blocking">
+          Blocking <span class="ux-section-count">4</span>
+        </a>
+        <a class="ux-section-link ux-tone-ok" href="#conf-passed" data-ux-section="conf-passed">
+          Passed <span class="ux-section-count">26</span>
+        </a>
+        <a class="ux-section-link ux-tone-neutral" href="#conf-scoring" data-ux-section="conf-scoring">
+          Scoring rules
+        </a>
+    </nav>
+    
+    <div class="conf-dim-grid" role="list" aria-label="By layer">
+      
+          <div class="conf-dim" role="listitem" data-layer="L1" data-pass="true" data-applies="true">
+            <div class="conf-dim-key">L1 <span class="conf-dim-name">SLI/SLO</span></div>
+            
+              <div class="conf-dim-must">3 of 3 required</div>
+              <div class="conf-dim-should">1 of 1 recommended</div>
+          </div>
+          <div class="conf-dim" role="listitem" data-layer="L2" data-pass="true" data-applies="true">
+            <div class="conf-dim-key">L2 <span class="conf-dim-name">Metrics/Logs/Traces</span></div>
+            
+              <div class="conf-dim-must">10 of 10 required</div>
+              <div class="conf-dim-should">1 of 1 recommended</div>
+          </div>
+          <div class="conf-dim" role="listitem" data-layer="L2X" data-pass="true" data-applies="true">
+            <div class="conf-dim-key">L2X <span class="conf-dim-name">Extended</span></div>
+            
+              <div class="conf-dim-must">1 of 1 required</div>
+              
+          </div>
+          <div class="conf-dim" role="listitem" data-layer="L3" data-pass="false" data-applies="true">
+            <div class="conf-dim-key">L3 <span class="conf-dim-name">Dashboards/Recording Rules</span></div>
+            
+              <div class="conf-dim-must">3 of 4 required</div>
+              <div class="conf-dim-should">1 of 1 recommended</div>
+          </div>
+          <div class="conf-dim" role="listitem" data-layer="L4" data-pass="false" data-applies="true">
+            <div class="conf-dim-key">L4 <span class="conf-dim-name">Alerts/Policy/Self-healing</span></div>
+            
+              <div class="conf-dim-must">2 of 3 required</div>
+              <div class="conf-dim-should">1 of 1 recommended</div>
+          </div>
+          <div class="conf-dim" role="listitem" data-layer="L5" data-pass="false" data-applies="true">
+            <div class="conf-dim-key">L5 <span class="conf-dim-name">Self-check</span></div>
+            
+              <div class="conf-dim-must">2 of 4 required</div>
+              <div class="conf-dim-should">1 of 1 recommended</div>
+          </div>
+    </div>
+    
+    <section class="conf-group conf-group-blocking ux-tone-fail ux-section-target" id="conf-blocking" tabindex="-1" aria-labelledby="conf-blocking-title">
+      <h3 class="conf-group-title" id="conf-blocking-title">Blocking requirements <span class="conf-group-count">4</span></h3>
+      <p class="conf-group-note">Required clauses that apply at tier 1 and fail. Each one alone keeps the pack from conformance.</p>
+      <ol class="conf-rows">
+      <li class="conf-row" data-group="blocking" data-dim="L3" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-fail ux-chip-assessment" title="Assessment — Did it meet this check? Did not meet this check. A required clause that applies at this tier: it blocks conformance.">Fail</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">An SLO has no recording rule</p>
+          <p class="conf-row-desc">Every SLO has at least one recording rule materialising its SLI.</p>
+          
+    <div class="conf-row-fix">
+      <span class="conf-row-fix-key">Fix:</span>
+      <span>Add a recording rule for each SLO</span>
+      <button type="button" class="ux-link-btn" data-ux-action="conf-open:L3">Open L3 Dashboards/Recording Rules →</button>
+    </div>
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L3 Dashboards/Recording Rules</span>
+      <span>Applies at every tier</span>
+      <code>L3.MUST.recording_rule_per_slo</code>
+      <span>spec §5.5</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="blocking" data-dim="L4" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-fail ux-chip-assessment" title="Assessment — Did it meet this check? Did not meet this check. A required clause that applies at this tier: it blocks conformance.">Fail</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">An SLO lacks a multi-window burn-rate alert</p>
+          <p class="conf-row-desc">Every SLO has at least one burn-rate alert with multi-window policy.</p>
+          
+    <div class="conf-row-fix">
+      <span class="conf-row-fix-key">Fix:</span>
+      <span>Add a multi-window burn-rate alert for each SLO</span>
+      <button type="button" class="ux-link-btn" data-ux-action="conf-open:L4">Open L4 Alerts/Policy/Self-healing →</button>
+    </div>
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L4 Alerts/Policy/Self-healing</span>
+      <span>Applies at tiers 1 and 2</span>
+      <code>L4.MUST.multi_window_burn_rate</code>
+      <span>spec §5.7</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="blocking" data-dim="L5" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-fail ux-chip-assessment" title="Assessment — Did it meet this check? Did not meet this check. A required clause that applies at this tier: it blocks conformance.">Fail</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">An SLO has no chaos experiment</p>
+          <p class="conf-row-desc">Every SLO is the steady-state hypothesis of at least one chaos experiment.</p>
+          
+    <div class="conf-row-fix">
+      <span class="conf-row-fix-key">Fix:</span>
+      <span>Add a chaos experiment for each SLO</span>
+      <button type="button" class="ux-link-btn" data-ux-action="conf-open:L5">Open L5 Self-check →</button>
+    </div>
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L5 Self-check</span>
+      <span>Applies at tier 1 only</span>
+      <code>L5.MUST.tier1_chaos_for_each_slo</code>
+      <span>spec §5.11</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="blocking" data-dim="L5" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-fail ux-chip-assessment" title="Assessment — Did it meet this check? Did not meet this check. A required clause that applies at this tier: it blocks conformance.">Fail</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">No weekly production chaos with instrumented probes</p>
+          <p class="conf-row-desc">At least one chaos experiment runs weekly+ in production with OTel-instrumented synthetic probes.</p>
+          
+    <div class="conf-row-fix">
+      <span class="conf-row-fix-key">Fix:</span>
+      <span>Schedule weekly production chaos with OTel-instrumented probes</span>
+      <button type="button" class="ux-link-btn" data-ux-action="conf-open:L5">Open L5 Self-check →</button>
+    </div>
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L5 Self-check</span>
+      <span>Applies at tier 1 only</span>
+      <code>L5.MUST.tier1_weekly_prod_chaos</code>
+      <span>spec §5.11</span>
+    </div>
+        </div>
+      </li></ol>
+    </section>
+    
+    
+    
+      <details class="ux-disclosure conf-group conf-group-passed ux-section-target" id="conf-passed">
+        <summary>Passed with real values <span class="conf-group-count">26</span></summary>
+        <div class="ux-disclosure-body"><p class="conf-group-note">The pack declares what each clause asks for, with real values.</p><ol class="conf-rows">
+      <li class="conf-row" data-group="passed" data-dim="L1" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Availability SLO</p>
+          <p class="conf-row-desc">At least one availability SLO (ratio-type SLI).</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L1 SLI/SLO</span>
+      <span>Applies at every tier</span>
+      <code>L1.MUST.availability_slo</code>
+      <span>spec §5.1</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L1" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Latency SLO</p>
+          <p class="conf-row-desc">At least one latency SLO (threshold or distribution SLI).</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L1 SLI/SLO</span>
+      <span>Applies at tiers 1 and 2</span>
+      <code>L1.MUST.latency_slo</code>
+      <span>spec §5.1</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L1" data-sev="SHOULD">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Domain SLO</p>
+          <p class="conf-row-desc">A third, domain-specific SLO beyond availability and latency (4+ SLOs total).</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="SHOULD">Recommended (SHOULD)</span>
+      <span>L1 SLI/SLO</span>
+      <span>Applies at tier 1 only</span>
+      <code>L1.SHOULD.domain_slo</code>
+      <span>spec §5.1</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L1" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Every SLI under an SLO</p>
+          <p class="conf-row-desc">Every declared SLI is referenced by at least one SLO.</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L1 SLI/SLO</span>
+      <span>Applies at every tier</span>
+      <code>L1.MUST.sli_covered_by_slo</code>
+      <span>spec §5.1</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L2" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Otlp receiver</p>
+          <p class="conf-row-desc">OTel Collector pipeline declares an `otlp` receiver.</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L2 Metrics/Logs/Traces</span>
+      <span>Applies at every tier</span>
+      <code>L2.MUST.otlp_receiver</code>
+      <span>spec §5.2</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L2" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Service.name required</p>
+          <p class="conf-row-desc">`service.name` listed in otel.resource_attributes.required.</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L2 Metrics/Logs/Traces</span>
+      <span>Applies at every tier</span>
+      <code>L2.MUST.service_name_required</code>
+      <span>spec §5.3</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L2" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">SemConv ≥ 1.26.0</p>
+          <p class="conf-row-desc">OTel SemConv version &gt;= 1.26.0 (binding floor).</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L2 Metrics/Logs/Traces</span>
+      <span>Applies at every tier</span>
+      <code>L2.MUST.semconv_floor</code>
+      <span>spec §5.3</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L2" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">SemConv 1.27.0</p>
+          <p class="conf-row-desc">OTel SemConv at currently-tracked version (1.27.0).</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L2 Metrics/Logs/Traces</span>
+      <span>Applies at tier 1 only</span>
+      <code>L2.MUST.semconv_current</code>
+      <span>spec §5.3</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L2" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">5+ resource attributes</p>
+          <p class="conf-row-desc">At least five required resource attributes declared.</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L2 Metrics/Logs/Traces</span>
+      <span>Applies at tier 1 only</span>
+      <code>L2.MUST.resource_attrs_5plus</code>
+      <span>spec §5.3</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L2" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Log correlation</p>
+          <p class="conf-row-desc">`otel.sdk.log_correlation: true` (trace IDs injected into logs).</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L2 Metrics/Logs/Traces</span>
+      <span>Applies at tier 1 only</span>
+      <code>L2.MUST.log_correlation</code>
+      <span>spec §5.3</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L2" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Metrics exporter</p>
+          <p class="conf-row-desc">Pipelines export metrics.</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L2 Metrics/Logs/Traces</span>
+      <span>Applies at tiers 1 and 2</span>
+      <code>L2.MUST.metrics_exporter</code>
+      <span>spec §5.2</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L2" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Logs + traces exporters</p>
+          <p class="conf-row-desc">Pipelines export logs and traces.</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L2 Metrics/Logs/Traces</span>
+      <span>Applies at tier 1 only</span>
+      <code>L2.MUST.logs_and_traces_exporters</code>
+      <span>spec §5.2</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L2" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Tail sampling</p>
+          <p class="conf-row-desc">Pipelines include a tail_sampling processor.</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L2 Metrics/Logs/Traces</span>
+      <span>Applies at tier 1 only</span>
+      <code>L2.MUST.tail_sampling</code>
+      <span>spec §5.2</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L2" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Metrics + logs + traces backends</p>
+          <p class="conf-row-desc">spec.telemetry.backends covers metrics + logs + traces.</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L2 Metrics/Logs/Traces</span>
+      <span>Applies at tiers 1 and 2</span>
+      <code>L2.MUST.metrics_logs_traces_backends</code>
+      <span>spec §5.12.1</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L2" data-sev="SHOULD">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Backend gating: enforce</p>
+          <p class="conf-row-desc">tier-1 backends pin a `min` version with `gating: enforce`.</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="SHOULD">Recommended (SHOULD)</span>
+      <span>L2 Metrics/Logs/Traces</span>
+      <span>Applies at tier 1 only</span>
+      <code>L2.SHOULD.backend_gating_enforce</code>
+      <span>spec §5.12.3</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L2X" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Extended backend refs resolve</p>
+          <p class="conf-row-desc">Every extended surface references a declared telemetry backend or explicit external ref.</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L2X Extended</span>
+      <span>Applies at every tier</span>
+      <code>L2X.MUST.extended_backend_refs_resolve</code>
+      <span>spec §5.12.4</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L3" data-sev="SHOULD">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Derived view</p>
+          <p class="conf-row-desc">At least one derived view (e.g. golden signals or per-tenant rollup).</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="SHOULD">Recommended (SHOULD)</span>
+      <span>L3 Dashboards/Recording Rules</span>
+      <span>Applies at tiers 1 and 2</span>
+      <code>L3.SHOULD.derived_view</code>
+      <span>spec §5.5</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L3" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Service overview board</p>
+          <p class="conf-row-desc">At least one dashboard declared (service overview).</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L3 Dashboards/Recording Rules</span>
+      <span>Applies at every tier</span>
+      <code>L3.MUST.service_overview_dashboard</code>
+      <span>spec §5.6</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L3" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">SLO burn board</p>
+          <p class="conf-row-desc">A second dashboard (SLO burn) on top of service overview.</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L3 Dashboards/Recording Rules</span>
+      <span>Applies at tiers 1 and 2</span>
+      <code>L3.MUST.slo_burn_dashboard</code>
+      <span>spec §5.6</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L3" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Deployment overlay + customer impact boards</p>
+          <p class="conf-row-desc">Service overview + SLO burn + deployment overlay + customer impact (4+ dashboards).</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L3 Dashboards/Recording Rules</span>
+      <span>Applies at tier 1 only</span>
+      <code>L3.MUST.tier1_dashboards</code>
+      <span>spec §5.6</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L4" data-sev="SHOULD">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Forecast on availability</p>
+          <p class="conf-row-desc">At least one forecast declared on a primary availability SLO.</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="SHOULD">Recommended (SHOULD)</span>
+      <span>L4 Alerts/Policy/Self-healing</span>
+      <span>Applies at tier 1 only</span>
+      <code>L4.SHOULD.forecast_on_availability</code>
+      <span>spec §5.7</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L4" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">SEV1 voice route</p>
+          <p class="conf-row-desc">SEV1 route includes a voice channel.</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L4 Alerts/Policy/Self-healing</span>
+      <span>Applies at tier 1 only</span>
+      <code>L4.MUST.tier1_voice_route</code>
+      <span>spec §5.8</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L4" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Self-healing remediation</p>
+          <p class="conf-row-desc">At least one self-healing remediation declared.</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L4 Alerts/Policy/Self-healing</span>
+      <span>Applies at tier 1 only</span>
+      <code>L4.MUST.tier1_at_least_one_automation</code>
+      <span>spec §5.9</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L5" data-sev="SHOULD">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Release gate</p>
+          <p class="conf-row-desc">Regression gate set to a release-blocking mode.</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="SHOULD">Recommended (SHOULD)</span>
+      <span>L5 Self-check</span>
+      <span>Applies at tier 1 only</span>
+      <code>L5.SHOULD.tier1_release_gate</code>
+      <span>spec §5.10</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L5" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Synthetic probe</p>
+          <p class="conf-row-desc">At least one synthetic check declared.</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L5 Self-check</span>
+      <span>Applies at every tier</span>
+      <code>L5.MUST.synthetic_probe</code>
+      <span>spec §5.11</span>
+    </div>
+        </div>
+      </li>
+      <li class="conf-row" data-group="passed" data-dim="L5" data-sev="MUST">
+        <div class="conf-row-status"><span class="ux-chip ux-chip-ok ux-chip-assessment" title="Assessment — Did it meet this check? Met this check with real values.">Pass</span></div>
+        <div class="conf-row-body">
+          <p class="conf-row-title">Chaos in staging</p>
+          <p class="conf-row-desc">At least one chaos experiment scheduled monthly+ in staging.</p>
+          
+          
+    <div class="conf-row-meta">
+      <span class="conf-row-sev" data-sev="MUST">Required (MUST)</span>
+      <span>L5 Self-check</span>
+      <span>Applies at tiers 1 and 2</span>
+      <code>L5.MUST.tier2_chaos_staging</code>
+      <span>spec §5.11</span>
+    </div>
+        </div>
+      </li></ol></div>
+      </details>
+    
+    
+    <details class="ux-disclosure conf-scoring ux-section-target" id="conf-scoring">
+      <summary>Scoring rules</summary>
+      <div class="ux-disclosure-body">
+        <p><strong>Conformance and the score answer different questions.</strong></p>
+        <ul class="conf-scoring-list">
+          <li><strong><span class="ux-term" tabindex="0" title="Every MUST clause for the tier is satisfied — possibly on placeholders. It says nothing about deployment readiness.">Conformant</span></strong> means every required (MUST) clause that applies at tier 1 passes. One failing required clause makes the pack not conformant, whatever the score.</li>
+          <li><strong>The score</strong> weighs required clauses 1 and recommended (SHOULD) clauses 0.5:
+            (21 + 0.5 × 5) ÷ (25 + 0.5 × 5) = 23.5 ÷ 27.5 = <strong>85%</strong>.
+            Required clauses alone: 21 of 25 = 84%.</li>
+          <li><strong>Not applicable</strong> clauses apply only at a more critical tier. They are excluded from both the score and conformance, and listed for reference.</li>
+          <li><strong>Template values count as passes.</strong> The rubric reads the pack’s declarations: a placeholder satisfies a clause like a real value would, and nothing here checks live evidence. Conformance says nothing about deployment readiness.</li>
+        </ul>
+        <p>Scored against the <a href="https://github.com/MoebiusX/otel-observability-pack/blob/e64e58132a46364afd5432a86e67d470858936cf/docs/maturity-model.md" target="_blank" rel="noopener">maturity rubric</a> (spec §8).</p>
+      </div>
+    </details>
+  

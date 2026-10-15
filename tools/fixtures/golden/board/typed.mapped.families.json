@@ -1,0 +1,70 @@
+{
+  "L1::checkout-error-budget-sli": {
+    "family": "sli",
+    "via": "type"
+  },
+  "L1::svc-checkout-availability": {
+    "family": "sli",
+    "via": "type"
+  },
+  "L1::svc-checkout-latency": {
+    "family": "sli",
+    "via": "type"
+  },
+  "L1::svc-checkout-slo-availability": {
+    "family": "slo",
+    "via": "type"
+  },
+  "L1::svc-checkout-slo-latency": {
+    "family": "slo",
+    "via": "type"
+  },
+  "L2::mimir-main": {
+    "family": "backend",
+    "via": "type"
+  },
+  "L2::otel-contract-checkout": {
+    "family": "otel",
+    "via": "type"
+  },
+  "L3::grafana-uid-9f2": {
+    "family": "dashboard",
+    "via": "type"
+  },
+  "L3::grafana-uid-a41": {
+    "family": "dashboard",
+    "via": "type"
+  },
+  "L3::rr-checkout-error-ratio": {
+    "family": "recording_rule",
+    "via": "type"
+  },
+  "L3::rr-checkout-latency-p99": {
+    "family": "recording_rule",
+    "via": "type"
+  },
+  "L4:alerting:promrule-HighErrorRate": {
+    "family": "alert_rule",
+    "via": "type"
+  },
+  "L4:alerting:promrule-LatencyBudgetBurn": {
+    "family": "alert_rule",
+    "via": "override"
+  },
+  "L4:alerting:route-sev1-pager": {
+    "family": "alert_route",
+    "via": "type"
+  },
+  "L4:alerting:route-sev2-chat": {
+    "family": "alert_route",
+    "via": "type"
+  },
+  "L4:healing:heal-rollout-restart": {
+    "family": "remediation",
+    "via": "type"
+  },
+  "L4:policy:burn-checkout-fast": {
+    "family": "burn_rate",
+    "via": "type"
+  }
+}

@@ -14,6 +14,13 @@
 // A misplaced field therefore reads `$.spec.slis[N].good_when: matches
 // forbidden 'not' schema`; a bad value `not in enum ["below","above"]`.
 //
+// Spec 1.4 (RFC-0003) adds `alerting.rules[]`, the operational (non-SLO)
+// alert rules: `name` and `expr` required, `engine` a closed enum
+// ($defs/AlertEngine, absent means prometheus), `severity` the pack's
+// SEV1..SEV4. `routes` stays the only required key of `alerting`, so every
+// 1.3 pack validates unchanged; a rule missing `expr` reads
+// `$.spec.alerting.rules[N]: missing required key 'expr'`.
+//
 // Supported keywords:
 //   type, enum, const, pattern, minLength, maxLength,
 //   minimum, maximum, exclusiveMinimum, exclusiveMaximum,
@@ -25,7 +32,7 @@
 
 export const REQUIRED_API_VERSION = 'observability.platform/v1';
 export const REQUIRED_KIND = 'ObservabilityPack';
-export const SPEC_VERSION = '1.3';
+export const SPEC_VERSION = '1.4';
 /** The vendored spec directory and its schema, relative to the repo root (Node callers resolve them; plain strings, browser-safe). */
 export const SPEC_DIR = `vendor/observability-pack-spec/v${SPEC_VERSION}`;
 export const SPEC_SCHEMA_PATH = `${SPEC_DIR}/observability-pack.schema.json`;

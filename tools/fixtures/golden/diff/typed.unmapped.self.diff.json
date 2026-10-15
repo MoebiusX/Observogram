@@ -1,0 +1,253 @@
+{
+  "case": "typed.unmapped.self",
+  "opts": null,
+  "taxonomy": null,
+  "sha256": "fb91381e7e5c4f9d6948ee7758dde9c9b0ef02eaaa36672dc226525ede0245db",
+  "bytes": 13406,
+  "keys": [
+    "a",
+    "b",
+    "scope",
+    "collisions",
+    "summary",
+    "layers"
+  ],
+  "a": {
+    "id": "checkout-typed",
+    "name": "checkout (typed)",
+    "service": "checkout",
+    "criticality": "tier-1",
+    "environment": "prod",
+    "version": "2.3.0"
+  },
+  "b": {
+    "id": "checkout-typed",
+    "name": "checkout (typed)",
+    "service": "checkout",
+    "criticality": "tier-1",
+    "environment": "prod",
+    "version": "2.3.0"
+  },
+  "scope": {
+    "mode": "service",
+    "service": "checkout",
+    "serviceTokens": [
+      "checkout",
+      "checkouttyped",
+      "typed"
+    ],
+    "declaredMetricCount": 0,
+    "metricPrefixes": []
+  },
+  "collisions": [],
+  "summary": {
+    "onlyInA": 0,
+    "onlyInB": 0,
+    "inBoth": 17,
+    "aligned": 17,
+    "drifted": 0,
+    "outOfScope": 0,
+    "scaffold": 0,
+    "notObserved": 0,
+    "union": 17,
+    "aTotal": 17,
+    "bTotal": 17,
+    "jaccard": 1,
+    "alignment": 1
+  },
+  "layers": {
+    "L1": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "sli::{\"id\":\"checkout-error-budget-sli\"}",
+          "a": "checkout-error-budget-sli",
+          "b": "checkout-error-budget-sli",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "unknown::{\"id\":\"svc-checkout-availability\"}",
+          "a": "svc-checkout-availability",
+          "b": "svc-checkout-availability",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "unknown::{\"id\":\"svc-checkout-latency\"}",
+          "a": "svc-checkout-latency",
+          "b": "svc-checkout-latency",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "unknown::{\"id\":\"svc-checkout-slo-availability\"}",
+          "a": "svc-checkout-slo-availability",
+          "b": "svc-checkout-slo-availability",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "unknown::{\"id\":\"svc-checkout-slo-latency\"}",
+          "a": "svc-checkout-slo-latency",
+          "b": "svc-checkout-slo-latency",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 5,
+      "drifted": 0
+    },
+    "L2": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "backend::{\"product\":\"mimir\",\"signal\":\"metrics\"}",
+          "a": "mimir-main",
+          "b": "mimir-main",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "unknown::{\"id\":\"otel-contract-checkout\"}",
+          "a": "otel-contract-checkout",
+          "b": "otel-contract-checkout",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 2,
+      "drifted": 0
+    },
+    "L2X": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    },
+    "L3": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "unknown::{\"id\":\"grafana-uid-9f2\"}",
+          "a": "grafana-uid-9f2",
+          "b": "grafana-uid-9f2",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "unknown::{\"id\":\"grafana-uid-a41\"}",
+          "a": "grafana-uid-a41",
+          "b": "grafana-uid-a41",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "unknown::{\"id\":\"rr-checkout-error-ratio\"}",
+          "a": "rr-checkout-error-ratio",
+          "b": "rr-checkout-error-ratio",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "unknown::{\"id\":\"rr-checkout-latency-p99\"}",
+          "a": "rr-checkout-latency-p99",
+          "b": "rr-checkout-latency-p99",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 4,
+      "drifted": 0
+    },
+    "L4": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "burn_rate::{\"slo\":\"availability-slo\"}",
+          "a": "burn-checkout-fast",
+          "b": "burn-checkout-fast",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "remediation::{\"trigger\":\"alert:higherrorrate\"}",
+          "a": "heal-rollout-restart",
+          "b": "heal-rollout-restart",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "unknown::{\"id\":\"promrule-HighErrorRate\"}",
+          "a": "promrule-HighErrorRate",
+          "b": "promrule-HighErrorRate",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "unknown::{\"id\":\"promrule-LatencyBudgetBurn\"}",
+          "a": "promrule-LatencyBudgetBurn",
+          "b": "promrule-LatencyBudgetBurn",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "unknown::{\"id\":\"route-sev1-pager\"}",
+          "a": "route-sev1-pager",
+          "b": "route-sev1-pager",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "unknown::{\"id\":\"route-sev2-chat\"}",
+          "a": "route-sev2-chat",
+          "b": "route-sev2-chat",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 6,
+      "drifted": 0
+    },
+    "L5": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    },
+    "GOV": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    }
+  }
+}

@@ -1,0 +1,49 @@
+# Synthetic (2026-10-07, tools/test-live-snapshot.mjs): the Grafana-managed
+# rule the recorded provisioning answer holds
+# (tools/fixtures/mcp/grafana_alert_rules.json: PaymentsErrorRatioHigh),
+# declared as a repository provisions it.
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: payments
+    folder: Payments
+    interval: 1m
+    rules:
+      - uid: payments-error-ratio
+        title: PaymentsErrorRatioHigh
+        condition: C
+        for: 5m
+        noDataState: NoData
+        execErrState: Error
+        labels:
+          severity: critical
+          team: payments
+        annotations:
+          summary: Payment errors above 5%
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: stack-prom
+            model:
+              refId: A
+              expr: sum(rate(http_requests_total{job="payment-processor",status=~"5.."}[5m])) / sum(rate(http_requests_total{job="payment-processor"}[5m]))
+              instant: true
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.05]

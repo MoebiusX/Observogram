@@ -1,0 +1,33 @@
+{
+  "uid": "orders-main",
+  "title": "Orders",
+  "tags": [
+    "synthetic"
+  ],
+  "schemaVersion": 39,
+  "version": 3,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Error rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_request_errors_total[5m]))"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Alert notifications",
+      "type": "timeseries",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(alertmanager_notifications_total[5m]))"
+        }
+      ]
+    }
+  ]
+}

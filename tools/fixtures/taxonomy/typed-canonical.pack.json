@@ -1,0 +1,334 @@
+{
+  "apiVersion": "observability.platform/v1",
+  "kind": "ObservabilityPack",
+  "metadata": {
+    "name": "production-curated-typed",
+    "version": "0.4.0",
+    "binding": "otel-elastic-prometheus-grafana",
+    "owners": [
+      "team-internal-svc"
+    ],
+    "bindings": {
+      "service": "internal-orders",
+      "environments": [
+        "prod",
+        "staging"
+      ],
+      "criticality": "tier-2"
+    },
+    "labels": {
+      "business_domain": "orders",
+      "maturity": "bau-growing"
+    },
+    "annotations": {
+      "docs": "https://docs.example.internal/services/internal-orders",
+      "observogram.artefact.type.slis.orders_availability": "PackSLI",
+      "observogram.artefact.type.slos.orders_availability_99_5": "PackSLO",
+      "observogram.artefact.type.otel": "OtelContract",
+      "observogram.artefact.type.queries.recording_rules[0]": "RecordingRule",
+      "observogram.artefact.type.dashboards.orders-service-overview": "GrafanaDashboard",
+      "observogram.artefact.type.policy.burn_rate_alerts[0]": "PrometheusRule",
+      "observogram.artefact.type.alerting.routes[0]": "AlertRoute"
+    }
+  },
+  "spec": {
+    "otel": {
+      "semconv": "1.26.0",
+      "resource_attributes": {
+        "required": [
+          "service.name",
+          "service.namespace",
+          "deployment.environment"
+        ]
+      },
+      "sdk": {
+        "languages": [
+          "java"
+        ],
+        "sampling": {
+          "policy": "parentbased_traceidratio",
+          "ratio": 0.05
+        },
+        "propagators": [
+          "tracecontext"
+        ]
+      }
+    },
+    "telemetry": {
+      "backends": [
+        {
+          "id": "metrics-prom",
+          "signal": "metrics",
+          "product": "prometheus",
+          "version": {
+            "declared": "2.52",
+            "min": "2.45"
+          },
+          "endpoints": [
+            "https://prom.internal:9090"
+          ],
+          "default": true
+        },
+        {
+          "id": "logs-es",
+          "signal": "logs",
+          "product": "elasticsearch",
+          "version": {
+            "declared": "8.13"
+          },
+          "endpoints": [
+            "https://es.internal:9200"
+          ]
+        },
+        {
+          "id": "traces-es",
+          "signal": "traces",
+          "product": "elasticsearch",
+          "version": {
+            "declared": "8.13"
+          },
+          "endpoints": [
+            "https://es.internal:9200"
+          ]
+        }
+      ]
+    },
+    "slis": [
+      {
+        "id": "orders_availability",
+        "type": "ratio",
+        "description": "Successful order responses over total.",
+        "semconv_metric": "http.server.request.duration",
+        "good": "sum(rate(http_server_request_duration_seconds_count{service_name=\"internal-orders\",http_response_status_code!~\"5..\"}[5m]))",
+        "total": "sum(rate(http_server_request_duration_seconds_count{service_name=\"internal-orders\"}[5m]))"
+      },
+      {
+        "id": "orders_latency_p99",
+        "type": "threshold",
+        "description": "99th-percentile order request latency.",
+        "semconv_metric": "http.server.request.duration",
+        "query": "histogram_quantile(0.99,\n  sum by (le)(rate(http_server_request_duration_seconds_bucket{\n    service_name=\"internal-orders\"\n  }[5m])))\n",
+        "threshold": 0.6,
+        "unit": "seconds"
+      },
+      {
+        "id": "order_settlement_freshness",
+        "type": "threshold",
+        "description": "Worst-case settlement consumer lag.",
+        "query": "max(messaging_kafka_consumer_lag_seconds{service_name=\"internal-orders\"})",
+        "threshold": 90,
+        "unit": "seconds"
+      }
+    ],
+    "slos": [
+      {
+        "id": "orders_availability_99_5",
+        "sli": "orders_availability",
+        "objective": 0.995,
+        "window": "30d",
+        "error_budget_policy": "ref:platform/std-budget-policy"
+      },
+      {
+        "id": "orders_latency_99_p99_600ms",
+        "sli": "orders_latency_p99",
+        "objective": 0.99,
+        "window": "30d",
+        "error_budget_policy": "ref:platform/std-budget-policy"
+      },
+      {
+        "id": "order_settlement_freshness_99",
+        "sli": "order_settlement_freshness",
+        "objective": 0.99,
+        "window": "30d",
+        "error_budget_policy": "ref:platform/std-budget-policy"
+      }
+    ],
+    "pipelines": {
+      "receivers": [
+        {
+          "name": "otlp"
+        }
+      ],
+      "processors": [
+        {
+          "name": "memory_limiter"
+        },
+        {
+          "name": "batch"
+        }
+      ],
+      "exporters": {
+        "metrics": {
+          "kind": "prometheusremotewrite"
+        },
+        "logs": {
+          "kind": "elasticsearch"
+        },
+        "traces": {
+          "kind": "elasticsearch"
+        }
+      }
+    },
+    "storage": {
+      "metrics": {
+        "backend": "prometheus",
+        "version": "2.52",
+        "retention": "15d"
+      },
+      "logs": {
+        "backend": "elasticsearch",
+        "version": "8.13",
+        "data_stream": "logs-orders-default"
+      },
+      "traces": {
+        "backend": "elasticsearch",
+        "version": "8.13",
+        "data_stream": "traces-apm-default"
+      }
+    },
+    "queries": {
+      "recording_rules": [
+        {
+          "name": "orders:availability:ratio_5m",
+          "expr": "ref:slis.orders_availability",
+          "interval": "30s"
+        },
+        {
+          "name": "orders:latency:p99_5m",
+          "expr": "ref:slis.orders_latency_p99",
+          "interval": "30s"
+        }
+      ]
+    },
+    "dashboards": [
+      {
+        "id": "orders-service-overview",
+        "provider": {
+          "kind": "grafana",
+          "version": "10.4",
+          "schemaVersion": 36
+        },
+        "folder": "internal-orders",
+        "source": "file://dashboards/orders-overview.json",
+        "panel_bindings": [
+          {
+            "panel": "sli-availability",
+            "binds_to": "slis.orders_availability"
+          },
+          {
+            "panel": "slo-availability",
+            "binds_to": "slos.orders_availability_99_5"
+          }
+        ]
+      },
+      {
+        "id": "orders-slo-burn",
+        "provider": {
+          "kind": "grafana",
+          "version": "10.4",
+          "schemaVersion": 36
+        },
+        "folder": "internal-orders",
+        "template": "ref:platform/slo-burn-template",
+        "params": {
+          "slos": [
+            "orders_availability_99_5",
+            "orders_latency_99_p99_600ms"
+          ]
+        }
+      }
+    ],
+    "policy": {
+      "burn_rate_alerts": [
+        {
+          "slo": "orders_availability_99_5",
+          "windows": [
+            {
+              "short": "5m",
+              "long": "1h",
+              "factor": 14,
+              "severity": "SEV2"
+            },
+            {
+              "short": "30m",
+              "long": "6h",
+              "factor": 6,
+              "severity": "SEV3"
+            }
+          ]
+        },
+        {
+          "slo": "orders_latency_99_p99_600ms",
+          "windows": [
+            {
+              "short": "5m",
+              "long": "1h",
+              "factor": 14,
+              "severity": "SEV2"
+            },
+            {
+              "short": "30m",
+              "long": "6h",
+              "factor": 6,
+              "severity": "SEV3"
+            }
+          ]
+        },
+        {
+          "slo": "order_settlement_freshness_99",
+          "windows": [
+            {
+              "short": "10m",
+              "long": "1h",
+              "factor": 10,
+              "severity": "SEV2"
+            },
+            {
+              "short": "1h",
+              "long": "6h",
+              "factor": 4,
+              "severity": "SEV3"
+            }
+          ]
+        }
+      ]
+    },
+    "alerting": {
+      "routes": [
+        {
+          "severity": "SEV2",
+          "channels": [
+            {
+              "msteams": "#orders-oncall"
+            }
+          ]
+        },
+        {
+          "severity": "SEV3",
+          "channels": [
+            {
+              "msteams": "#orders-team"
+            }
+          ]
+        }
+      ]
+    },
+    "baselines": {
+      "mttd_target_p50": "5m",
+      "mttr_target_p50": "2h",
+      "measurement_source": "alertmanager + incident-mgmt",
+      "review_cadence": "monthly"
+    },
+    "validation": {
+      "synthetic_checks": [
+        {
+          "id": "orders-canary",
+          "kind": "blackbox-exporter",
+          "target": "https://orders.example.internal/health",
+          "interval": "1m",
+          "on_fail_severity": "SEV2"
+        }
+      ]
+    }
+  }
+}

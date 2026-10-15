@@ -3,7 +3,7 @@
 *(formerly **Tomograph** — pre-rebrand env vars, headers, workspaces, and pack annotations keep working; see docs/CHANGELOG.md.)*
 
 **Observogram is the observability compiler and diagnostic workspace for
-ObservabilityPack spec v1.3.**
+ObservabilityPack spec v1.4.**
 
 It answers one operational question:
 
@@ -35,7 +35,7 @@ The gap between those two packs is the diagnostic finding.
 The canonical specification lives at
 [MoebiusX/otel-observability-pack](https://github.com/MoebiusX/otel-observability-pack).
 A checksummed copy is vendored under
-[`vendor/observability-pack-spec/v1.3/`](vendor/observability-pack-spec/v1.3/).
+[`vendor/observability-pack-spec/v1.4/`](vendor/observability-pack-spec/v1.4/).
 
 ## Why It Exists
 
@@ -60,6 +60,16 @@ service or pack* (select a service, or import one: upload, repo scan, live MCP d
 or *build a new pack* (Define · Compile · Verify). The two paths join at *Pack
 available in Discover*: a compiled pack enters the same audit journey as an imported
 one, with its unresolved placeholders still visible.
+
+The home is the org's **services**, one card per record (tier, owners, the packs
+linked, the verdict per environment), and a card opens the **service page**: the
+environments as tabs with the verdict the pack is graded to at the record's tier
+and the MCP endpoint it is checked through, and the four actions — Discover ·
+Diagnose · Remediate · Build — bound to that service and environment through the
+newest primary pack ([Services, Environments And MCP
+Endpoints](#services-environments-and-mcp-endpoints)). Catalogue packs are listed
+apart; what a viewer can open and what only an operator can is drawn from the role
+the server reports for the active org.
 
 ### No pack yet? Build one
 
@@ -216,6 +226,21 @@ The drift drill shows:
 - live-only shadow signals
 - out-of-scope live inventory that belongs to the wider platform
 
+**Compare** (Diagnose → Compare) puts the two packs side by side. Its stat
+bar counts what is only in A, in both and only in B, and its **paired by**
+cell says how the pairs were formed. Under it, the **Pair by** switch chooses
+the key: **Behaviour** (the default — what each artefact does: a series, a
+product and signal, a contract handle), **Name** (the name or title) or **Id**
+(a stable id or uid, such as a Grafana dashboard uid; a family whose name is
+its id uses the name). Name and Id are worked out in your browser over the two
+packs already on screen — no new request — with the same vendorable
+`tools/lib/identity-modes.mjs` and `diff.mjs` the server runs; behaviour still
+decides whether a pair matches field for field, so a dashboard renamed under
+the same uid pairs by id and shows its title change as drift. An in-both
+card's badge says which key paired it (`Paired by id: dashboard uid
+"ord-1"`), and so does its detail drawer. Chains, the Assessment and every
+action keep pairing by behaviour.
+
 Traceability shows requirement chains from SLO to SLI, metrics, recording
 rules, exporters, scrape evidence, dashboards, alerts, and runbooks.
 
@@ -235,6 +260,17 @@ Deployable artifacts can be pushed through an MCP write target. Non-deployable
 or inferred artifacts remain visible as manual follow-up, not silent production
 changes.
 
+When the pack declares remediations (`spec.remediation`), Diagnose and
+Remediate also draw the **response path**: each remediation, the alert its
+`trigger: alert:<slug>` names (matched by rule name, compiled burn-rule name
+or SLO, or declared outright with the annotation
+`observogram.remediates.remediation[<i>]` — `docs/ADAPTER.md` "Response
+path"), that alert's state against live, and what next — deploy the missing
+burn alert, reconcile the drifted one, route the severity, register the
+automation, open the runbook. A trigger no alert answers to is listed as
+unresolved with name-based suggestions; nothing is inferred into a link. Pure
+pack data, no external call; a pack without remediations shows nothing.
+
 ![Observogram Remediate view showing the Pack A minus Pack B deploy delta](docs/img/xray-remediate.png)
 
 ## Quickstart
@@ -243,8 +279,64 @@ Requires **Node 22.16 or later** (`engines` in `package.json`). The studio
 keeps users and orgs in an embedded store on Node's built-in `node:sqlite`
 (services and environments follow), which is unflagged from 22.13; 22.16 is
 the floor because it fixes a `StatementSync` use-after-free and the `run()`
-statement reset that a store hits. CI runs the suites on 22.16.0 and on the
-latest 22. See [docs/STORE_PLAN.md](docs/STORE_PLAN.md).
+statement reset that a store hits. CI runs the suites on Ubuntu and on
+Windows, each on 22.16.0 and on the latest 22. See
+[docs/STORE_PLAN.md](docs/STORE_PLAN.md).
+
+### Platforms
+
+Linux and Windows are tested in CI: `npm test` runs on Ubuntu and on
+`windows-latest` (GitHub-hosted, an elevated runner, Defender as the image
+ships it), each on Node 22.16.0 (the floor) and the latest 22, on every PR
+into develop or main and every push to them; the latest-22 Ubuntu run is under
+c8. The browser suites (Playwright) run on neither: they skip, as on any
+checkout without `OBSERVOGRAM_PLAYWRIGHT`. Windows (Node ≥ 22.16, PowerShell
+or cmd) runs the CLI, the server, the studio and the static bundle, and
+`npm test` is green there except the explicit skips — every one printed by
+`node --test` as `# SKIP win32: <reason>` (or `- SKIP win32: <reason>` in a
+harness suite), never a silent pass — for facts Windows cannot express: POSIX
+mode bits (`0600`/`0644`, `chmod 0000`), signal delivery (`process.kill` ends
+a Windows process outright, so the store's SIGTERM/SIGINT self-close cannot be
+exercised) and symlink creation (a privilege; skipped on every Windows host,
+elevated or not, so the count is one number everywhere). There are
+15 win32-skip sites — `server/test-store.mjs` (8),
+`server/test-store-ops.mjs` (4), `server/test-store-import.mjs` (2),
+`tools/test-journey.mjs` (1) — and 19 `SKIP win32:` lines once the loops
+unroll, plus the PID 1 namespace test's
+`# SKIP unshare --pid is unavailable here` and the Playwright skips. The
+Windows leg fails unless a run prints exactly that number, and unless it ran
+the tests and the harness assertions the Ubuntu floor ran:
+`tools/tap-summary.mjs` holds it and prints the totals and every failure at
+the end of the log. When the leg first went green its summary printed Windows
+10.0.26100 on 4 CPUs, Node v22.16.0 and v22.23.3 (the latest 22), the checkout
+on `D:` and `TEMP` an 8.3 short name on `C:`
+(`C:\Users\RUNNER~1\AppData\Local\Temp`), a symlink created, and the tests the
+Ubuntu floor ran; `npm test` takes 138–219 s there. A Windows box of your own
+reports with the command in [docs/DOWNSTREAM.md](docs/DOWNSTREAM.md) §13.
+
+On Windows, today:
+
+- The database, its backups and `users.json` are protected by their
+  directories' ACLs: Windows does not enforce `0600`. Limit the workspace
+  directory (and the database's, where `OBSERVOGRAM_DB` puts it elsewhere)
+  to the account the server runs as, e.g. from cmd:
+  `icacls C:\observogram /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F"`.
+- The store refuses a network filesystem on Linux only. On Windows, keep the
+  database on a local disk, not a share or a mapped drive.
+- Journey names that differ only in case share one definition file and one
+  runs folder.
+- `packc journey list`, `GET /api/journeys` and `packc journey run --all`
+  follow the directory's order, which on NTFS is case-insensitive.
+
+`tools/test-platform.mjs` (`npm run test:platform`) keeps the sites count and
+the reasons honest, requires this section to state the lines count, and
+proves the module-relative path resolvers (`fileURLToPath`, never
+`URL.pathname`) on every platform. Every suite names the platform only
+through `server/fixtures/platform.mjs` (`isWin32`, `isLinux`, `PLATFORM`,
+`win32Skip(reason)`, `skipOnWin32(t, reason)`, and `WIN32_PLATFORM` for a
+suite that fakes the platform as data). The checkout is LF everywhere
+(`.gitattributes`), so goldens and `VENDOR-MANIFEST.json`'s hashes verify
+under any `core.autocrlf`. macOS is not in CI; the POSIX suites run there.
 
 ```bash
 git clone https://github.com/MoebiusX/Observogram.git
@@ -256,11 +348,15 @@ npm run dev
 Open `http://127.0.0.1:8000` and sign in with **admin / admin** — first
 boot seeds this default user and asks for a password change at sign-in
 (skippable for now; it asks again each sign-in until a real password
-lands — or change it any time from the account menu, top right once a
-pack is open, which also has **sign out my other sessions**). From
+lands — or change it any time from the account menu, top right on every
+screen, which also has **sign out my other sessions**). From
 there it's a signed-in app: your packs, deploy audit and run history
 belong to you. (`OBSERVOGRAM_AUTH=off` skips login entirely
-for a throwaway open sandbox.)
+for a throwaway open sandbox.) To draft from a live MCP there, the home's
+**Register and connect** registers a loopback MCP as the org's endpoint,
+tests the connection and offers Draft or Snapshot; a remote MCP needs its origin listed first —
+`OBSERVOGRAM_MCP_ORIGINS=https://mcp.example.com npm run dev` — or a signed-in
+admin ([Fetch Live From MCP](#fetch-live-from-mcp)).
 
 ### Security Posture
 
@@ -276,12 +372,14 @@ for a throwaway open sandbox.)
    wherever you need (`HOST=0.0.0.0`). Mutating `/api/*` routes (crawl,
    draft, validate-register, deploy, verify, reset) then require
    `Authorization: Bearer <secret>`; read routes stay open. Set
-   `OBSERVOGRAM_API_TOKEN_LABEL=<team-or-owner>` to stamp the deploy audit
-   log with the token's ownership — the secret itself never lands in any
-   log. The label must not be a user's login: the audit log names the
-   bearer by it (default `token`), and the identity API refuses a new user
-   by that name. A token configured on a fresh workspace suppresses the
-   default-admin seed: the token is the expressed auth intent.
+   `OBSERVOGRAM_API_TOKEN_LABEL=<team-or-owner>` to stamp `deploys.jsonl`
+   and the audit ([The Audit](#the-audit)) with the token's ownership — the
+   secret itself never lands in any log. The label must not be a user's
+   login: the audit names the bearer by it (default `token`), and the
+   identity API refuses a new user by that name. A token configured on a fresh workspace suppresses the
+   default-admin seed: the token is the expressed auth intent. In the
+   studio, Settings opens read-only there, under a banner that is the
+   server's own sentence naming the way in.
 3. **Exposed without any auth.** The server **refuses to start** with a
    clear message. `OBSERVOGRAM_INSECURE_NO_AUTH=1` overrides knowingly (it
    logs a loud warning) for trusted-network demos only.
@@ -358,7 +456,99 @@ server opens it at every start.
 - **Journeys run from the studio** load by name only, and a journey's
   `crawl:` roots, `file:` packs and inventory site are read only from the
   org's own part of the workspace (or outside it); a path inside another
-  org's part is refused.
+  org's part is refused. On Windows a path is read only by its name on a
+  local drive or, when the workspace is named through a network share, by
+  that share's name (or a drive mapped to it) inside the workspace; any
+  other name through a share or a mapped drive is refused — the org's own
+  part included, even with one org — and the refusal says to name it by its
+  path on a local drive (copy it there if it has none).
+
+#### Behind a reverse proxy (trusted headers)
+
+An enterprise deployment that terminates SSO at a reverse proxy can have the
+server trust the identity the proxy forwards, instead of running OIDC or
+local users itself ([`server/auth-proxy.mjs`](server/auth-proxy.mjs); the
+auth seam of [docs/DOWNSTREAM.md](docs/DOWNSTREAM.md)). Opt-in, and off
+unless `OBSERVOGRAM_TRUST_PROXY_AUTH=1`: without it no header is read, in
+any posture.
+
+```bash
+OBSERVOGRAM_TRUST_PROXY_AUTH=1
+OBSERVOGRAM_TRUST_PROXY_AUTH_ACK=only-the-proxy-reaches-this-port
+OBSERVOGRAM_PROXY_AUTH_USER_HEADER=X-Forwarded-User        # default; required on every request
+OBSERVOGRAM_PROXY_AUTH_EMAIL_HEADER=X-Forwarded-Email      # default
+OBSERVOGRAM_PROXY_AUTH_NAME_HEADER=                        # unset by default
+OBSERVOGRAM_PROXY_AUTH_GROUPS_HEADER=X-Forwarded-Groups    # unset by default; a comma list
+OBSERVOGRAM_PROXY_AUTH_GROUP_ROLES='sre=admin,dev=operator,*=viewer'
+OBSERVOGRAM_PROXY_AUTH_ORG=                                # the org the groups rule; default the default org
+OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE=none                      # first-sight role when no groups header is configured (refused beside one)
+OBSERVOGRAM_PROXY_AUTH_OWNERS=root                         # comma list of user values granted owner
+OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET=<32+ chars>           # required beyond loopback
+OBSERVOGRAM_PROXY_AUTH_SECRET_HEADER=X-Proxy-Auth-Secret   # default
+OBSERVOGRAM_PROXY_AUTH_LOGOUT_URL=https://sso.example.com/logout
+OBSERVOGRAM_PROXY_AUTH_REALM=proxy                         # default; [a-z0-9._-]{1,64}
+```
+
+- **The rule.** The proxy MUST be the only route to this port, and MUST
+  strip the user, email, name, groups and secret headers from every client
+  request before adding its own — a client that can set `X-Forwarded-User`
+  is anyone. The server cannot verify that, so it refuses to start until
+  the operator says so in words: `OBSERVOGRAM_TRUST_PROXY_AUTH_ACK` must be
+  the sentence `only-the-proxy-reaches-this-port` (not `1`). The refusal:
+  `OBSERVOGRAM_TRUST_PROXY_AUTH=1 trusts identity headers from a reverse
+  proxy, which is safe only when clients cannot reach this port — set
+  OBSERVOGRAM_TRUST_PROXY_AUTH_ACK=only-the-proxy-reaches-this-port once the
+  proxy strips X-Forwarded-User, X-Forwarded-Email[, <groups header>] from
+  every client request, or unset OBSERVOGRAM_TRUST_PROXY_AUTH`.
+- **Loopback, or a shared secret.** Bind to loopback next to the proxy, or
+  set `OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET` (32 characters or more) and have
+  the proxy send it in `X-Proxy-Auth-Secret`: a request without the right
+  secret is anonymous. A bind beyond loopback without it refuses to start
+  (`refusing to bind to <host> with OBSERVOGRAM_TRUST_PROXY_AUTH=1 and no
+  OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET: beyond loopback any client could set
+  X-Forwarded-User. Set the shared secret (the proxy sends it in
+  X-Proxy-Auth-Secret), or bind to loopback (HOST=127.0.0.1) next to the
+  proxy`); on loopback without it the boot warns once that every process
+  reaching the port is trusted as the proxy. The secret is compared in
+  constant time and never printed or recorded.
+- **One sign-in mode per server.** `OBSERVOGRAM_OIDC_ISSUER` set beside the
+  flag refuses to start (`… are both set: one sign-in mode per server —
+  unset one`); `OBSERVOGRAM_AUTH=off` wins over the flag (one warn line,
+  headers not read). Local users are not consulted while the mode is on.
+- **No cookie, no login page.** The headers are the session: every request
+  resolves them against the store, once, in one transaction. `GET
+  /auth/login` answers 401 and says so; the studio's **sign out** goes to
+  `OBSERVOGRAM_PROXY_AUTH_LOGOUT_URL` when set (the proxy's session outlives
+  this app's) and otherwise says it signed out of this app only; **sign out
+  my other sessions** is not offered. The headers are ambient like a
+  cookie, so a session mutation still needs `X-Observogram-CSRF: 1`.
+- **Rows and roles.** Users are recorded as `proxy://<realm>#<user>`, kind
+  `oidc`, under the key `proxy://<realm>` — `npm run users -- owner
+  proxy://proxy#alice`, `remove`, `enable` and the identity API name them
+  that way, whatever OIDC issuer the store recorded (a store that recorded
+  one keeps refusing bare logins from a plain shell, as before). The email
+  the proxy sends is recorded as verified. With a groups header configured,
+  the groups are **authoritative in `OBSERVOGRAM_PROXY_AUTH_ORG`** (default
+  the default org) and nowhere else: on every request that carries the
+  header the membership there is added, raised, lowered or removed to match
+  (`membership.jit` / `membership.role` / `membership.remove` rows, actor
+  `system`, `via: proxy-groups`; an admin's manual edit in that org is
+  overwritten by the next request); a request without the header leaves
+  memberships alone; `*` is every user the header names. Without a groups
+  header, `OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE` applies at the first sight
+  only; beside a groups header it refuses the start (`… are both set: with
+  a groups header the groups rule every membership …`), since it would
+  otherwise apply whenever the proxy omits the header. A user in `OBSERVOGRAM_PROXY_AUTH_OWNERS`, or in a group mapped to
+  `owner`, is granted owner once (`owner.grant`, `via: proxy`) and **never
+  revoked here** — revoke with `PUT /api/admin/users/:id/owner`. A disabled
+  row is refused and never re-enabled by a request; a local row holding the
+  login is refused.
+- **Refused requests are anonymous (401), and write nothing**: a duplicated
+  identity header line, a value over 2000 characters or holding a control
+  character, an empty user header, a missing or wrong secret.
+- **`packc store rekey-issuer --clear` disables `proxy://` rows too**: they
+  are kind `oidc`, and `--clear` disables every enabled OIDC row. `--to`
+  rewrites one issuer's prefix and leaves them alone.
 
 #### Roles
 
@@ -369,16 +559,16 @@ the server registers, and each route's first handler is its guard.
 | Role | May |
 |---|---|
 | `viewer` | every read (`GET`) in the org |
-| `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys, the live refresh, RESET |
-| `admin` | the org's name and members as well ([the identity API](#the-identity-api)) |
-| owner | a deployment-level flag, not an org role: an owner acts as `admin` in every org, plus users, orgs and the join role ([the identity API](#the-identity-api)) |
+| `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys (a journey's `notify` names one of the org's notify hooks — no role types a webhook URL), the live refresh, testing an MCP connection and live jobs against a registered endpoint ([Test An MCP Connection And Build A Live Pack](#test-an-mcp-connection-and-build-a-live-pack)), RESET, and the org's services and environments ([Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)) |
+| `admin` | the org's name, members and MCP endpoints as well ([the identity API](#the-identity-api), [Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)), a typed MCP URL in a ping, a live job, a draft, a live refresh, a deploy, a rollback or a journey's Pack B ([Fetch Live From MCP](#fetch-live-from-mcp); below admin, and without sign-in, only a registered endpoint), cancelling another member's live job, and the org's audit (`GET /api/audit`, [The Audit](#the-audit)) |
+| owner | a deployment-level flag, not an org role: an owner acts as `admin` in every org, plus users, orgs and the join role ([the identity API](#the-identity-api)) and the deployment's audit (`GET /api/audit?scope=all`) |
 
 The role is the membership **of the request's org** (`X-Observogram-Org`,
 `?org=`). `orgs.json` roles are mapped on import: `admin` / `owner` →
 `admin`, `viewer` / `read` / `readonly` / `read-only` → `viewer`,
 anything else (`member`, empty) → `operator`. Per posture:
 
-- **Signed in** (local users or OIDC): the user's role in the org; an owner
+- **Signed in** (local users, OIDC or a reverse proxy): the user's role in the org; an owner
   is an admin everywhere. The bearer (`OBSERVOGRAM_API_TOKEN`) acts as an
   `operator` of its `X-Observogram-Org` (else the default org), never as an
   admin or owner.
@@ -388,7 +578,11 @@ anything else (`member`, empty) → `operator`. Per posture:
   beyond loopback): the caller is `local`, an owner — every route, as
   before, but the identity API: on a loopback server it answers only a
   request sent straight to it, and beyond loopback it is closed (see
-  [The Identity API](#the-identity-api)).
+  [The Identity API](#the-identity-api)); `local` never sends a typed MCP
+  URL — it fetches from registered endpoints ([Fetch Live From MCP](#fetch-live-from-mcp));
+  and a journey that notifies runs only from a request sent straight to a
+  loopback address, never on a server bound beyond loopback ([Saved
+  Journeys](#saved-journeys--repeatable-drift-checks)).
 
 Every authorization refusal carries `denied` — `auth` (401: sign in),
 `csrf`, `org` (not a member of that org), `role` or `posture` — and a
@@ -402,10 +596,22 @@ coming from another site, or a sibling subdomain
 change — every identity-API request but a `GET`, and
 `POST /auth/signout-others` — needs `X-Observogram-CSRF: 1` in every
 posture, the open ones included, so a cross-site form cannot make one (the
-bearer, which a cross-site page cannot send, never reaches one).
+bearer, which a cross-site page cannot send, never reaches one); so does
+every change to the org's MCP endpoint records (`/api/mcp-endpoints`), where
+the server will send a read token of the org.
 Authorization is decided when a request reaches its route: a request
 already running when its user is disabled or demoted finishes; the user's
 next one is refused.
+
+In the studio, Settings (Advanced → Settings, or the account menu) draws
+what each role may do from the server's answer for the active org: every
+member reads the environments and the MCP endpoints (a viewer an
+endpoint's name and origin only), an operator edits the environments, an
+admin the MCP endpoints, the members, the org's name and the audit, an owner
+also the deployment's users, organisations and join role; a section or a
+control the reader's rank cannot use is listed `aria-disabled` with the
+sentence naming who can. The server still decides every write; a
+refusal is shown as served.
 
 **What a viewer can no longer do in the studio** (each answers with the
 server's text): Scan (a repo or GitHub), Draft from MCP and the MCP
@@ -414,15 +620,23 @@ it: the upload registers it), Build (its preview computes on the server,
 and Save registers), Compare's retrofeed, journey Capture and Run, Deploy /
 Verify / Rollback, and RESET. Give such a member `operator` with
 `npm run orgs -- add-member <org> <login> --role operator`, or, as an
-admin of the org, `PATCH /api/org/members/<id>` with `{"role": "operator"}`.
+admin of the org, Settings → Members (or `PATCH /api/org/members/<id>` with
+`{"role": "operator"}`).
 
 MCP write tokens are unrelated to the API token: they pass through per
 request and are never stored server-side. Userinfo, the fragment and query
 parameters named like credentials (`token`, `api_key`, `X-Amz-Signature`, …)
 are never kept in the live pack or a draft; put a token in the auth field —
-never in the URL's path. Registered packs and the deploy
-audit live in the `.observogram/` workspace (`OBSERVOGRAM_WORKSPACE`
-relocates it).
+never in the URL's path. Registered packs (one `packs/<id>.pack.yaml`
+each) and the deploy audit live in the `.observogram/` workspace
+(`OBSERVOGRAM_WORKSPACE` relocates it); a pack's label, source, times and
+the services it names are rows in the store (the `packs` and
+`pack_services` tables). A `packs/index.json` left by a build before the
+pack registry moved (0.5.0 and earlier) is read once, at the first start
+of this build, then frozen in place: the server never writes it again and
+only compares it at every start (see [Stale Import](#stale-import));
+`packc store export` rewrites it from the rows for an older build (see
+[Upgrade And Roll Back](#upgrade-and-roll-back)).
 
 Two read routes answer without a session in every posture: `/healthz`
 (probes) and `GET /api/version` — version, build, commit, branch, dirty,
@@ -469,7 +683,7 @@ emails go in the JSON body.
 | `GET` | `/api/admin/orgs` | owner | — | `defaultOrg` and every org, removed ones too, with its `members` count |
 | `POST` | `/api/admin/orgs` | owner | `{ id, name?, adopt? }` | a new org at `orgs/<id>/` (201), the caller its first admin; `"adopt": true` takes over a non-empty directory; a slug is never reused |
 | `DELETE` | `/api/admin/orgs/:id` | owner | — | a soft removal, never of the default org: the org is refused from its members' next request; its files stay (`packc store purge-org <id>`, with the server stopped) |
-| `GET` | `/api/admin/join-role` | owner | — | the recorded join role (`viewer`, `operator`, `admin` or `null`), `oidc`, `issuerKey` |
+| `GET` | `/api/admin/join-role` | owner | — | the recorded join role (`viewer`, `operator`, `admin` or `null`), `oidc`, `issuerKey`, `mode` (`local`, `oidc` or `proxy`; behind a reverse proxy a `proxy` object says what rules first-sight roles there instead) |
 | `PUT` | `/api/admin/join-role` | owner | `{ role, confirm? }` | the default-org role of every IdP user created from now on; `null` or `"none"`: no automatic join |
 | `PATCH` | `/api/org` | admin | `{ name }` | renames the org (1–200 characters) |
 | `GET` | `/api/org/members` | admin | — | the org and its members: `userId`, `login`, `kind`, `name`, `email`, `role`, `disabled`, `since` |
@@ -546,6 +760,15 @@ request writes none.
   and the bearer — are refused as a new local login, from the API and from
   `npm run users -- add`; the API also refuses the configured
   `OBSERVOGRAM_API_TOKEN_LABEL`.
+- **Org ids that would share variables.** An org's variables are
+  `OBSERVOGRAM_ORG_<KEY>_<NAME>`, each owned by the org whose prefix is the
+  longest match, removed orgs included, so `POST /api/admin/orgs` and
+  `npm run orgs -- create` refuse (409, nothing written; the same texts
+  from a shell) an id that would take another org's notify hooks
+  (`acme-notify` beside `acme`), one whose own hooks another org already
+  takes, and one that differs from another org's id only in `-` and `_`
+  (`a_b` beside `a-b`), naming the other org — an id that only starts alike
+  (`acme-notifications`, `acme-eu`) is created as before.
 - **Without sign-in** (the open postures, where the caller is `local`, an
   owner): on a loopback server the identity API answers only a request
   sent straight to it — `Host` `localhost`, `127.x.x.x` or `[::1]`, no
@@ -570,6 +793,426 @@ keeps its expiry (signing out elsewhere never extends a session). It
 answers `{ ok, sessionEpoch }` and writes one `user.signout` row, the user
 its actor.
 
+**In the studio: Settings → Members and Settings → Audit.** An admin of the
+active org adds a member by login or by verified email (an existing member is
+given the role: `oscar was already a member: operator → admin.`), changes a
+role and removes a member; the last-admin rule is drawn before the server
+says it (the last enabled admin's Remove and lower roles are `aria-disabled`
+with the sentence naming the way out), and removing oneself reloads the
+browser into the next org the user belongs to. Rename sets the org's name
+(`PATCH /api/org`); the ORG chip follows. A member row carries the login, the
+name and the role — never an email. The audit lists the org's rows to an
+admin (`GET /api/audit`, `scope=org`) and the deployment's to an owner,
+filtered by actor, kind, action, target and whole UTC days (`From` and
+`Through`, sent as `since` and an `until` of the day after), older rows paged by `next`; a filter the
+server refuses is its sentence, as served.
+
+**In the studio: Settings → Users, Organisations and Join role** (an owner's;
+a signed-in member who is not one is told to ask one). New local user asks for no
+password: the browser draws a temporary one (24 characters), creates the user
+with it and sets it again at once (`POST /api/admin/users/:id/password`), so
+the user must change it at first sign-in. The dialog shows it once — never in
+the status line, a title, the browser's storage or the console — and Close,
+leaving Settings or the page lets go of it. Reset password does the same for
+a local user; disable, enable, sign out everywhere and make or revoke owner
+each confirm first, and the last enabled owner's Disable and Revoke owner are
+drawn `aria-disabled` with `<login> is the last enabled owner — make another
+user an owner first`. Disabling or signing out oneself clears this browser's
+traces of that login, then offers the sign-in. A user row carries no email.
+On a server without sign-in, at `127.0.0.1`, the first local user is created
+as the owner and arms sign-in for the next start without
+`OBSERVOGRAM_AUTH=off`: the dialog says so, its password not forced to
+change. New organisation makes the owner its first admin (Take over an
+existing directory adopts `orgs/<id>/`) and offers Switch to it; Remove asks
+for the id typed, says what cannot be undone, and shows the server's note.
+**Act in <id>** reloads this browser into an org the owner is not a member
+of — the way to rescue an org with no enabled admin left — with the ORG chip
+reading `<name> — acting as owner`. Join role states the sign-in mode it
+applies to first; admin needs a ticked box, the only body that carries
+`confirm`.
+
+### Services, Environments And MCP Endpoints
+
+A **service record** is the org's own entry for one service, in the store
+since slice 4a: a `slug` (the key the catalogue files services under —
+lowercase letters, digits and `-`, derived from the name; fixed once
+created, because packs link to a service by slug), a `name`, `owners`, a
+`tier` (`tier-1`, `tier-2`, `tier-3`, or `null`: graded by the pack) and a
+`description`. A service has **environments** (`production`, `staging`, …),
+each with its own optional `tier`, free-form string `bindings` (a cluster,
+a namespace, a region), named `endpoints` (http(s) links — a dashboard, a
+runbook) and, optionally, the **MCP endpoint** it is checked through. An
+MCP endpoint record is the org's named MCP server — `name`, `url` and
+`readTokenEnv`, the name of the environment variable the server reads the
+read token from ([Fetch Live From MCP](#fetch-live-from-mcp)); the
+record holds no secret. Packs link to services: registering a pack (a scan,
+a draft, an upload, a library register) creates the service rows it names —
+its primary service and its members; a live aggregate pack, a snapshot of a
+whole MCP backend, has no primary and names every service it discovered —
+with an environment per name the pack declares, and links the pack to each
+(`role` `primary` or `member`). The rows the register creates carry no tier
+(`null`): a person sets one. A service deleted over the API stays deleted
+across restarts and rehydrates (its environments and pack links go with it;
+the packs stay registered); registering a pack that names it re-creates it,
+by that caller (`service.create { via: 'register', pack }`). The rules live
+once in [`server/service-admin.mjs`](server/service-admin.mjs), a sibling
+of `identity-admin.mjs`, and every change writes its audit rows with the
+caller as the actor.
+
+Operators manage services and environments; admins manage the MCP endpoint
+records; every member reads all three. The org is the request's
+(`X-Observogram-Org`, `?org=`): no path names an org, and an id of another
+org is never found (404, or 400 for `mcpEndpointId`).
+
+| Method | Path | Who | Body | What it does |
+|---|---|---|---|---|
+| `GET` | `/api/services` | viewer | — | `services`, by slug, each with `environments` (their `mcpEndpoint` as `{ id, name, origin }` or `null`) and `packs` (`id`, `label`, `source`, `role`) |
+| `POST` | `/api/services` | operator | `{ name, slug?, owners?, tier?, description? }` | a service record (201); `slug` defaults to the name's key; `owners` at most 50 names; a slug in use is 409 naming its id |
+| `GET` | `/api/services/:id` | viewer | — | one service record with its environments and packs; 404 `no service <id>` |
+| `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description` | `changed` lists the fields that differed (none: no audit row); `slug` in the body is 400 — the slug is fixed, create a new service instead |
+| `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments`, `packLinks` and `waivers` removed with it |
+| `GET` | `/api/services/:id/environments` | viewer | — | `service` (`id`, `slug`, `name`, `tier`) and its `environments` |
+| `POST` | `/api/services/:id/environments` | operator | `{ name, tier?, bindings?, endpoints?, mcpEndpointId? }` | an environment (201); `bindings` at most 32 string values of 1–256 characters, `endpoints` at most 20 http(s) URLs by name, `mcpEndpointId` one of the org's MCP endpoints; a name in use is 409 |
+| `GET` | `/api/environments/:id` | viewer | — | `environment` and its `service` (`id`, `slug`, `name`, `tier`); `effectiveTier` is the environment's tier, else the service's |
+| `PATCH` | `/api/environments/:id` | operator | any of `name`, `tier`, `bindings`, `endpoints`, `mcpEndpointId` | `changed`; `"mcpEndpointId": null` unbinds |
+| `DELETE` | `/api/environments/:id` | operator | — | `deleted` |
+| `GET` | `/api/mcp-endpoints` | viewer | — | `endpoints`, by name: `id`, `name`, `origin`, `environments` (how many are checked through it), `createdAt`; `url` and `readTokenEnv` to an operator and above, `null` to a viewer; `policy`: what this reader may do — `typed` (send a typed `mcpUrl`) and `register` (register an endpoint), each `{ allowed, why, listed, origins }`, `why` the refusal's sentence, `listed`/`origins` the reader's own org's origin allowlist (`origins` `null`: any); `register.listedOnly`: only a loopback MCP or a listed origin may be registered, even without `readTokenEnv` (a list applies, or the server has no sign-in) |
+| `POST` | `/api/mcp-endpoints` | admin | `{ name, url, readTokenEnv? }` | an MCP endpoint record (201), the admin's own view with `url` and `readTokenEnv`; a name in use is 409 |
+| `PATCH` | `/api/mcp-endpoints/:id` | admin | any of `name`, `url`, `readTokenEnv` | `changed`; `"readTokenEnv": null` clears it; 404 `no MCP endpoint <id>` |
+| `DELETE` | `/api/mcp-endpoints/:id` | admin | — | `deleted` and `unbound`: the ids of the environments that were checked through it (they stay, with no MCP endpoint) |
+
+Call them with a session cookie, the org header when the org is not your
+default one, and `X-Observogram-CSRF: 1` on every change:
+
+```bash
+# Sign in; the jar keeps the session cookie.
+curl -s -c jar -H 'Accept: application/json' \
+  --data-urlencode username=ada --data-urlencode 'password=<password>' \
+  http://127.0.0.1:8000/auth/login
+# A tier-1 service in acme (201); the slug defaults to "checkout".
+curl -s -b jar -H 'X-Observogram-CSRF: 1' -H 'X-Observogram-Org: acme' \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Checkout","owners":["payments"],"tier":"tier-1"}' \
+  http://127.0.0.1:8000/api/services
+# As an admin of acme: the org's MCP endpoint, its read token read from
+# OBSERVOGRAM_ORG_ACME_MCP_TOKEN on the server (201).
+curl -s -b jar -H 'X-Observogram-CSRF: 1' -H 'X-Observogram-Org: acme' \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"prod-otel","url":"https://otel-mcp.example.com/mcp","readTokenEnv":"OBSERVOGRAM_ORG_ACME_MCP_TOKEN"}' \
+  http://127.0.0.1:8000/api/mcp-endpoints
+# The service's production environment, checked through that endpoint (201).
+curl -s -b jar -H 'X-Observogram-CSRF: 1' -H 'X-Observogram-Org: acme' \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"production","bindings":{"cluster":"eu-1"},"endpoints":{"dashboard":"https://grafana.example.com/d/checkout"},"mcpEndpointId":1}' \
+  http://127.0.0.1:8000/api/services/1/environments
+```
+
+A rule's refusal is 400 (bad input), 404 (no such service, environment or
+endpoint) or 409 (a slug or name in use), and names the way out — `service
+"checkout" exists (id 1) — PATCH /api/services/1 changes it`; a 403 is an
+authorization denial, with `denied`. The three MCP endpoint changes take
+the identity API's defences, because a record is where the server will
+send the org's read token: `X-Observogram-CSRF: 1` in every posture (403
+`csrf` — `missing X-Observogram-CSRF: 1 — changes to the MCP endpoint API need
+it in every posture, so a cross-site form cannot make them (the studio
+sends it; with curl add -H 'X-Observogram-CSRF: 1')`), only a request sent
+straight to a loopback server without sign-in, and closed on an exposed
+server without sign-in (403 `posture`, as [the identity
+API](#the-identity-api) is). Without sign-in only a loopback MCP or an
+origin in the [origin allowlist](#fetch-live-from-mcp) may be registered, with
+or without `readTokenEnv` (400: `on a server without sign-in, only a loopback
+MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS may be registered — list
+<origin> there, or sign in as an admin …`): the quick start against a
+loopback MCP stays one step, and a remote demo MCP takes
+`OBSERVOGRAM_MCP_ORIGINS=<its origin>` or a first user
+(`npm run users -- add <login>`). The bearer (`OBSERVOGRAM_API_TOKEN`) is an
+operator: it manages services and environments and reads the endpoints
+with their URLs, and never changes an endpoint.
+
+- **The tier rule.** `GET /api/packs/:id/conformance` grades a registered
+  pack at its service record's tier when one is set — the environment's for
+  `?env=<name>` when that environment has one, else the service's; the
+  pack's primary service is the record. `declaredTier` in the report is the
+  tier it was graded at, so `scorePercent`, `mustPercent` and each clause's
+  `applies` follow it; the report's `tier` object says where it came from:
+  `{ graded, pack, from: 'environment' | 'service' | 'pack', service: { id,
+  slug } | null, environment: { id, name } | null, mismatch }`. `tier.pack`
+  is the pack's own `metadata.bindings.criticality` (`tier-3` when it
+  declares none) and `tier.mismatch` says the record and the pack differ —
+  shown, never blocked: fix the record or the pack. A pack with no record
+  (a catalogue or example pack, a service whose rows carry no tier) is
+  graded at its own tier, `from: 'pack'`.
+- **An endpoint picked by id.** `POST /api/refresh-live` and
+  `POST /api/draft-from-mcp` take `mcpEndpointId` in place of `mcpUrl` (a
+  typed `mcpUrl` there is an admin's — [Fetch Live From MCP](#fetch-live-from-mcp));
+  the server uses the record's URL and, when the request sends no
+  `mcpAuth`, reads the read token from the record's `readTokenEnv` at
+  request time. The deploy and rollback routes take `mcpEndpointId` for the
+  URL only (a typed `mcpUrl` there is an admin's too): a write token stays
+  the request's `mcpAuth`, never a record's.
+  Sending both `mcpUrl` and `mcpEndpointId` is 400 (`send mcpUrl or
+  mcpEndpointId, not both`); see [Fetch Live From MCP](#fetch-live-from-mcp).
+- **The read-token variable.** `readTokenEnv` must be
+  `OBSERVOGRAM_ORG_<ORG>_<NAME>` — `ORG` the org id in upper case with `-`
+  as `_` (`acme` → `OBSERVOGRAM_ORG_ACME_`, `pay-eu` →
+  `OBSERVOGRAM_ORG_PAY_EU_`), `NAME` of `[A-Z0-9_]+` — and must be **this
+  org's**: the owning org of a name is the one whose prefix is the longest
+  match among every org, so `OBSERVOGRAM_ORG_ACME_EU_TOKEN` is `acme-eu`'s,
+  not `acme`'s. Why: without it an org admin — not an owner — could point
+  an endpoint at a URL they control and have the server send any variable
+  of its process there (`OBSERVOGRAM_SESSION_SECRET`,
+  `OBSERVOGRAM_API_TOKEN`, a cloud credential). The rule runs at the write
+  and again at each request that reads the variable (an org created later
+  can become the owner of a stored name; the request is then refused naming
+  `PATCH /api/mcp-endpoints/<id>`). Pick a `NAME` that is not another
+  org's id followed by `_`. A name with the shape of any org's notify hook
+  (`OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` or `_TOKEN`, [Saved
+  Journeys](#saved-journeys--repeatable-drift-checks)) is refused too, since
+  a hook's variables go only to its own webhook: at the write (400, naming
+  another variable of the org to use), and for an endpoint registered before
+  that rule where the token would be read, before it is read (400, naming
+  `PATCH /api/mcp-endpoints/<id>`). The variable is set on the server — the
+  k8s studio Deployment's `env`, from a Secret; never on the journey CronJob
+  ([`deploy/k8s/README.md`](deploy/k8s/README.md)) — and its value is never
+  logged, returned or stored.
+- **The MCP URL carries no credential.** `url` is refused with userinfo, a
+  fragment, or a query parameter whose *name* looks like a credential
+  (`token`, `api_key`, `sig`, …; `signal`, `design`, `author` pass — the
+  word rule of `tools/lib/mcp-url-safety.mjs`): `observogram store: an MCP
+  endpoint URL may not carry credentials in its query — the parameter(s)
+  "token" look like credentials; remove them and name an env var in
+  readTokenEnv`, naming the parameters and never the URL. An environment's
+  `endpoints` follow the same rule (a token goes in no link).
+- **What a viewer sees.** Every member reads the services, the environments
+  with their `bindings` and `endpoints` in full (they are links a viewer
+  opens — never put a token in one), and each environment's MCP endpoint as
+  `{ id, name, origin }`. The MCP URL itself and the variable's name go to
+  operators and above (`GET /api/mcp-endpoints`); the token's value to
+  nobody.
+- **In the studio** (STORE_PLAN slice 6a). The home reads the table: one card
+  per record — the tier (`graded by the pack` for `null`), the owners, the
+  packs linked, and per environment the verdict of the newest primary pack
+  graded at the record's tier (a base grade named as such when the pack
+  declares no overlay for that environment; a report resting on placeholders
+  is never plain green). A card opens the service page: the environments as
+  tabs with their MCP endpoint (name and origin only) and verdict, the packs
+  linked with the newest primary marked current, and Discover · Diagnose ·
+  Remediate · Build opening bound to the service and the environment; the
+  header SERVICE selector reads the same table through the same resolver.
+  Operators edit the record from the page (name, owners, tier, description
+  over `PATCH /api/services/:id` — the slug stays, the verdict is re-read
+  after a tier save). Build ends by writing the row: the register links the
+  pack by slug and creates its environment, then the tier and owners typed on
+  DEFINE go onto the record where it has none — a tier a person set is never
+  overwritten (the mismatch with the pack's own tier is shown); a DEFINE name
+  that yields another slug is said on DEFINE first, and such a pack registers a
+  new service with the origin untouched. A viewer opens every page and reads
+  every verdict; the Build card, the home's sources and Edit are drawn disabled
+  with the reason (`needs the operator role in <org> — yours is viewer`); a
+  browser beside `OBSERVOGRAM_API_TOKEN` without sign-in reads as a viewer with
+  the token reason. One org switcher (the chip in the OBSERVA bar, its title
+  naming the effective role); the studio's persisted state is one login's in
+  one org, so a draft started in one org is not in another. A signed-in user
+  in no org sees the server's refusal and the account menu.
+- **In the studio: Settings → Environments and Settings → MCP endpoints.**
+  Operators add, edit (name, tier, bindings, links, the MCP endpoint) and
+  delete environments in one editor, opened from Settings or from the service
+  page (Add environment, Edit environment); a save sends only what changed,
+  so a tier save neither resends nor clears the binding. Admins register,
+  edit and delete the org's MCP endpoint records: the URL, and the token as
+  the NAME of a variable under the org's prefix
+  (`OBSERVOGRAM_ORG_<ORGKEY>_<NAME>`), never its value; the server's refusal
+  of a credential in the URL or of another org's variable is shown as served.
+  A viewer sees an endpoint's name and origin only. The MCP
+  pickers — the refresh panel, the home's source card, the draft panel and
+  the deploy modal — list the org's endpoints first, and keep a typed URL
+  for a reader the server lets type one (an admin; `policy.typed` of
+  `GET /api/mcp-endpoints`): for everyone else — an operator, and every
+  caller without sign-in — they are list-only, no sentence offers typing a
+  URL, a hidden field's leftover is never sent, and an empty list names the
+  way in for that reader (an admin registers one in Settings → MCP
+  endpoints; the button when the server says this reader may register).
+  Without sign-in and with no endpoint, the home's Connect is **Register and
+  connect**: the typed URL is registered as the org's endpoint (named by its
+  host) and tested by its id, offered only for a loopback MCP or a listed
+  origin — any other is refused beside the button, nothing sent. A chosen
+  endpoint is sent as `mcpEndpointId` (never with `mcpUrl`), rollback and
+  verify follow it, and a write re-reads the endpoint before it sends: an
+  endpoint moved or deleted since the list was drawn sends nothing and says
+  so. A deploy profile remembers its endpoint per org; a profile with a
+  typed URL, opened by a reader who may not type one, says so and sends the
+  list's endpoint.
+
+### The Audit
+
+Every change a principal makes through the server is one row in the store's
+`audit` table ([docs/STORE_PLAN.md](docs/STORE_PLAN.md) §5): an action
+`<kind>.<verb>` — who (`actor`), when (`at`), in which org (`orgId`; `null`
+for a deployment-level change: a user, an org, an owner grant, a store
+import), on what (`targetKind`, `targetId`) and a small, bounded `detail`
+(it must serialize to at most 8192 characters; every free-text field is cut
+to 200). The table is append-only — a trigger refuses every `UPDATE` and
+`DELETE` (`audit is append-only`) — and no row carries a secret, an email,
+or, in the deploy, journey and live rows, a URL beyond its origin. The route
+table ([`server/route-table.mjs`](server/route-table.mjs)) says per route
+which actions a successful call writes; nothing is implied, and a refused
+request writes no row.
+
+**The actor** is the principal's stable identifier: a user's `login` (a
+local username, or `<issuerKey>#<sub>` for an OIDC user — never the email,
+an unverified claim the IdP re-syncs), the bearer's label
+(`OBSERVOGRAM_API_TOKEN_LABEL`, default `token`), `local` on a server
+without sign-in; `system` for a join made outside a route (`user.jit`,
+`membership.jit`, `owner.bootstrap`, `owner.first-local-user`) and `cli`
+for `npm run users` / `npm run orgs`. **The same actor is stamped in
+`deploys.jsonl`**: a new line names the login where it named the email (an
+OIDC deployer who was `ada@acme.test` is `https://idp.example/realms/acme#9a3e0f`;
+a local user with an email on her row is `ada`), so every viewer of
+`GET /api/deploys` and of the Neuron evidence string sees logins. Old lines
+keep their actor; the bearer's label and `local` are unchanged. Where a
+display name is wanted, the `users` row has `email` and `name` by `login`
+(`GET /api/admin/users` for owners, the member list for admins).
+
+**What an org admin sees** (`GET /api/audit`): every row of their org,
+whoever the actor — including an owner who acted in the org without being
+a member, the bearer, `system`. An admin cannot list the deployment's
+users; the audit does show them the login of every owner who ever changed
+their org, because who changed your org is yours to know. A deployment row
+(`orgId: null`) is an owner's only.
+
+**The verdict rows** (GAP batch 2; [Record Verdicts](#record-verdicts))
+are table rows like the services': written in the transaction of the
+change, by the repository. `verdict.set` on target `artefact`
+`<pack>/<artefact>` with `{ pack, artefact, family, from, to, reason }`
+(`from` null for a first record; the reason cut to 200); `verdict.clear`
+with `{ pack, artefact, from }`; `verdict.carry` on target `pack` (the new
+pack id) with `{ from, kept, dropped, droppedCount }` when a re-upload under
+the same label replaced a pack that held verdicts — written by the register
+routes (`POST /api/validate`, `/api/crawl`, `/api/crawl-github`,
+`/api/draft-from-mcp`, `/api/library/register`) between `pack.register` and
+the link rows, and only then. A verdict cascades with its pack (an eviction,
+`DELETE /api/uploads`, the rehydrate's prune) without a row of its own.
+
+**The waiver rows** (GAP batch 2; [Waive A Conformance
+Finding](#waive-a-conformance-finding)) are table rows too: `waiver.create`
+on target `waiver` `<id>` with `{ service, ruleId, artefactId, expiresAt,
+reason }` (the service's slug; the reason cut to 200), `waiver.revoke` with
+`{ service, ruleId, artefactId, reason }` (the revoke's reason). A waiver
+cascades with its service (`DELETE /api/services/:id` counts them in its
+`service.delete` detail as `waivers`) without a row of its own.
+
+**The file-first rows.** The deploy routes, the journey capture and run,
+and the live refresh change a file of the org's, not a table, so their row
+is written after the file ([`server/audit-after.mjs`](server/audit-after.mjs)),
+in a transaction of its own. `deploys.jsonl` stays the deploy file of
+record, keyed by the `deployId` the row names: the row carries counts and
+the MCP **origin**, never the URL, an item's error or a tool name. The
+ping changes nothing of the org's; its one row — for a typed URL only — is
+written the same way, after the answer is known.
+
+| Route | Action | `targetId` | `detail` |
+|---|---|---|---|
+| `POST /api/packs/:id/deploy/:target` | `deploy.run` | the new `deployId` | `{ pack: { id, version }, env, target: { product, version, folder }, mode, dryRun, origin, mcpEndpoint: { id, name } \| null, items, ok, failed, tookMs }` — on a 502 too (`ok: 0, failed: 1`), as the file records it |
+| `POST /api/packs/:id/deploy-bulk` | `deploy.bulk` | the `deployId` | the same, plus `snapshot` (the pre-deploy snapshot's status) |
+| `POST /api/deploys/:deployId/rollback` | `deploy.rollback` | the rollback's own `deployId` | `{ rollbackOf, pack, env, dryRun, origin, mcpEndpoint, items, ok, failed, manual, tookMs }` |
+| `POST /api/deploys/:deployId/verify` | `deploy.verify` | the verified `deployId` | `{ outcome, alignment, attempts }` (`outcome` cut to 100 characters; the summary and transitions stay in the line) |
+| `POST /api/journeys/capture` | `journey.capture` | the journey name | `{ packA, packB, live, env, service, scopeMode }` — the two pack ids and whether Pack B was saved as a live `mcp:` source, never the paths or the MCP URL the file holds; with a `notify`, also `notify: { urlEnv, authEnv }` — the names of the org's notify hook variables it chose (`authEnv` `null` without a token), never a value |
+| `POST /api/journeys/:name/run` | `journey.run` | the journey name | `{ startedAt, outcome, alignmentPct, gradeScore, gradePass, breaches, tookMs }` — **one row per attempt past the 404** (and past a refused Pack B MCP target, which writes none): a run that fails from the studio leaves a row with `outcome: "error"`, or `"vantage-lost"` when a live source lost its vantage (the engine wrote a run record and may have notified), the four record fields `null`; never the error's message. A journey with `notify` adds `notify: { urlEnv, status, attempts }` — the hook's variable name, `sent` \| `skipped` \| `failed` (`null` when no record exists) and how many requests left the server (0 when none) — never any part of the hook's URL. A notify refused before the run (400) or by the posture (403) writes no row |
+| `POST /api/refresh-live` | `live.refresh` | the MCP origin | `{ mcpEndpoint, refreshedAt, servicesDiscovered, toolsFailed }` (counts) |
+| `POST /api/mcp/ping` | `live.ping` | the MCP origin | `{ verdict, typed: true }` — only when the caller typed the URL (an admin's privilege); a ping by `mcpEndpointId` writes no row |
+| `POST /api/mcp-settings/submit` | `live.mcp-settings` | the MCP origin | `{ op: configure \| action:<name>, path, endpointId, typed, status, fields: [names], acks: [rule indexes] }` — the opt-in pass-through only (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`), once a request left for the MCP server (`status` null when no answer came); never a value. A settings request the browser sends straight to the MCP server leaves no studio row: the MCP server audits its own |
+| `POST /api/mcp/jobs` (and its `…/cancel`) | `live.fetch` | the MCP origin | `{ kind, outcome: done \| failed \| cancelled, typed, mcpEndpoint, jobId, packId, stages: { done, skipped, failed }, gaps: [stage ids] }` — one row when the job ends, whether or not it registered a pack (whose own rows come first) |
+
+When one of the two writes fails: the operation stands. A row the store
+refused (a blocked insert, a `detail` over 8192 characters) puts
+`auditError` with the store's message on the response and one line on
+stderr (`[deploy-bulk]   audit row failed: … (the operation stands;
+deploy.bulk dep_… is not on the record)`); a line that could not be appended (disk
+full, `deploys.jsonl` a directory) still gets its row, flagged
+`detail.fileError: true`, so the record of a deploy never vanishes with the
+file — the verify's 500 carries its flagged row the same way. A request
+refused before the MCP was contacted (400, 404, 409, 412) writes neither;
+a capture, run or refresh whose file write threw writes no row (nothing of
+the org's changed), the run's `vantage-lost` path excepted. CLI runs
+(`packc journey run`, the CronJob) are not audited: that CLI never opens the
+database (`packc store audit`, below, opens it to read and is not a run).
+
+**Reading it — `GET /api/audit`** (`admin`). An org admin reads the rows of
+the request's org (`X-Observogram-Org`, `?org=`): `scope=org`, the only
+scope an admin may ask for. An owner reads the deployment's: `scope=all`
+(the default for an owner: every org's and the deployment's rows in one
+sequence), `scope=org` (the request's org — the org selector picks it, as
+everywhere; `?org=` is never a filter) or `scope=deployment` (the rows with
+no org). An admin asking `scope=all` or `scope=deployment` is refused, 400:
+`the deployment's audit (scope=deployment, scope=all) is an owner's: as an
+admin of org 'acme' you read its rows (scope=org, the default) — drop scope,
+or ask an owner`. The filters, each optional, ANDed: `actor` (exact — a
+login, the bearer's label, `local`, `system`), `action` (`<kind>.<verb>`),
+`kind` (every action of a kind: `deploy`, `pack`, `mcp_endpoint`, …),
+`targetKind`, `targetId` (a `deployId`, a journey name, a pack id, a
+login), `since` / `until` (`2026-10-04` or `2026-10-04T09:00:00Z`;
+`at >= since`, `at < until`), `limit` (1–500, default 100). Rows come
+newest first; `next` is the `seq` of the page's last row when another page
+exists, else `null` — no more, never "try again"; send it back as
+`before=` for the next page, with the same filters. Every refusal is a 400
+whose text names the way out (`limit must be an integer from 1 to 500`,
+`since must be a date or a UTC time: 2026-10-04 or 2026-10-04T09:00:00Z`,
+`scope is org, deployment or all`); an empty value is "not given"; unknown
+parameters are ignored. The response is `{ ok, scope, org, limit, rows,
+next }` — `org` the request's org for `scope=org`, `null` otherwise — and
+each row `{ seq, at, orgId, actor, action, targetKind, targetId, detail }`.
+
+```bash
+# an admin of acme: the org's deploy rows since a date, 50 a page
+curl -sS -b cookies.txt -H 'X-Observogram-Org: acme' \
+  'http://127.0.0.1:8000/api/audit?kind=deploy&since=2026-09-28&limit=50'
+# the next page: the previous answer's next as before=
+curl -sS -b cookies.txt -H 'X-Observogram-Org: acme' \
+  'http://127.0.0.1:8000/api/audit?kind=deploy&since=2026-09-28&limit=50&before=318'
+# an owner: the deployment-level rows only (users, orgs, owners, imports)
+curl -sS -b cookies.txt 'http://127.0.0.1:8000/api/audit?scope=deployment'
+```
+
+The listing holds every login and every MCP origin of the deployment, so
+the route is closed where the member and user lists are: on an exposed
+server without sign-in (403 `posture`, `the audit API is closed on a server
+bound to …`) and, on a loopback server without sign-in, answered only to a
+request sent straight to a loopback address (`on a server without sign-in
+the audit API answers only requests sent straight to a loopback address …`),
+as [the identity API](#the-identity-api) is. Below `admin` it is the
+guard's 403 `role`; the bearer is an operator and cannot read it. The read
+writes no row.
+
+**From a shell — `packc store audit`.** The bearer is an operator and
+cannot read `GET /api/audit`, so a shell on the pod or a CI job lists the
+audit from the database file instead: `packc store audit` (the store is
+`OBSERVOGRAM_DB`, else `<workspace>/observogram.db`; WAL makes the read
+safe while the server runs). It is read-only — it writes no row — and it
+is an owner's view: every org's and the deployment's rows by default,
+`--org <id>` one org's, `--deployment` the rows with no org (`--all` says
+the default). The filters are the route's as flags — `--actor`, `--action`,
+`--kind`, `--target-kind`, `--target`, `--since`, `--until`, `--limit`
+(1–500, default 100), `--before` — with the same rule and the same refusal
+texts spelled with the flags (`--limit must be an integer from 1 to 500`).
+One JSON row per line on stdout, newest first, the row the API serves;
+the `store: <path>` line and, when more rows exist, `next: <seq>` go to
+stderr, so stdout pipes into `jq` as it is:
+
+```bash
+# acme's deploy rows since a date, 50 a page; the next page by the stderr line
+packc store audit --org acme --kind deploy --since 2026-09-28 --limit 50
+packc store audit --org acme --kind deploy --since 2026-09-28 --limit 50 --before 318
+# the deployment-level rows (users, orgs, owners, imports), as JSON lines
+packc store audit --deployment | jq -c '[.seq, .action, .actor, .targetId]'
+```
+
+Like its siblings it refuses `OBSERVOGRAM_DB=:memory:` and a workspace
+whose `users.json` / `orgs.json` the server has not imported yet, and it
+never creates a database (`no database at … — nothing to list`). On a
+loopback server without sign-in, the refusal of an indirect `GET /api/audit`
+names it as the way out from this machine (`…, or list it from this machine
+with packc store audit`).
+
 ### Run In Docker Or Kubernetes
 
 The whole app is one Express process, so the container story is one image:
@@ -584,7 +1227,9 @@ The image binds `0.0.0.0`, so it needs a seeded sign-in (or
 `OBSERVOGRAM_API_TOKEN`) to start — see Security Posture above. Its workspace
 is `/app/.observogram` (owned by the `node` user the container runs as);
 mount a volume there, or point `OBSERVOGRAM_WORKSPACE` at one, to keep users
-and packs across containers.
+and packs across containers. The image carries Observogram's `LICENSE` beside
+`package.json`, and its `node_modules` each installed package's own licence
+file.
 
 Kubernetes manifests (Deployment + Service + Ingress + the `store` PVC,
 applied with Kustomize) live in [`deploy/k8s/`](deploy/k8s/README.md). The
@@ -634,21 +1279,45 @@ and `npm run build:stamp` refuses it (exit 2) until the history is there —
 ### Scan A Repo
 
 ```bash
-npm run crawl -- path/to/service-repo --name krystalinex-core --env prod > repo.pack.yaml
+npm run crawl -- path/to/service-repo --name payments-api --env prod > repo.pack.yaml
 npm run validate-pack -- repo.pack.yaml
 ```
 
 The crawler reads source files such as:
 
-- Prometheus rule files
+- Prometheus rule files (recording rules, burn-rate and operational alerts)
+- Grafana unified-alerting provisioning YAML and Loki rule files
 - Grafana dashboard JSON
 - Alertmanager config
 - OTel Collector config
 - Helm and Kubernetes manifests
 - Docker Compose files
 
-It emits a canonical v1.3 pack plus crawler annotations describing what was
-scanned and what was inferred.
+It emits a canonical v1.4 pack plus crawler annotations describing what was
+scanned and what was inferred. A fresh crawl validates (exit 0) and needs no
+upconversion; `npm run pack-conformance -- repo.pack.yaml` lists what it had to
+stub. Names (`--name`, `--env`, `--owners`) must be spec Slugs — 2-64 lowercase
+letters, digits, `_` or `-`, starting with a letter — and `--criticality` /
+`--binding` must be spec values: a flag the spec cannot hold is refused before
+the crawl with exit 2, the rule in the message and nothing on stdout. Without
+`--name` the folder's name is normalized to a Slug and the original kept in
+`crawler.nameNormalizedFrom`. Exit 3 means the pack failed its own schema — a
+crawler bug, report it. Recording rules not named `<service>:<metric>:<op>`
+cannot be declared in `spec.queries.recording_rules`; they are recorded in
+`crawler.omitted.recording_rules` (their expressions still feed the metric
+inventory). Every value the crawler invents — the stub SLI/SLO, an assumed
+port, an Alertmanager address the config does not state, the default owner,
+the OTel SDK defaults — carries a `crawler.scaffold.<symbol>` annotation with
+the reason; the conformance tool turns those into rows
+([`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §12). Every alert rule is kept: a rule whose
+expression references a recorded SLO series is a burn-rate alert
+(`spec.policy.burn_rate_alerts`); every other rule — a pod restarting, a pool
+saturated, a certificate expiring — is an operational alert and is declared in
+`spec.alerting.rules` (spec 1.4) under its exact name, with its expression,
+wait, severity, labels, engine (`prometheus`, `grafana`, `loki`) and the file
+and group it was read from. The same name is what a live Grafana or ruler
+listing is reconciled on, so the repository's rule and the running rule pair
+in Compare.
 
 ### Fetch Live From MCP
 
@@ -665,6 +1334,73 @@ reads each org's own live pack, `<org root>/live/production-live.pack.yaml`
 refresh; `OUTPUT=<org root>/live/production-live.pack.yaml npm run fetch-live`
 feeds it from the CLI. Both keep the same safe URL: no userinfo, fragment or
 credential query parameter (`MCP_AUTH` is the place for a token).
+Behind a gateway with its own auth, extra headers, a proxy or a private CA,
+`OBSERVOGRAM_TRANSPORT_HOOK=<path.mjs>` names a module whose
+`prepareRequest({ url, headers })` (sync or async) is applied to every MCP
+request the CLI, the recorder, the live probes, a journey and the studio
+server make, and whose optional `fetchImpl` replaces the fetcher; the URL it
+returns passes the same http(s)/local-address policy as the caller's. A hook
+that fails to load or breaks its contract is a hard failure — exit 1, no pack
+written; the server refuses to start on a load failure — while network
+failures through it stay ordinary probe failures. Unset, nothing changes
+(`docs/MCP_INTEGRATION.md`, "Transport hook").
+
+**A typed MCP URL is an admin's.** Supplying the URL the server fetches is
+the privilege, not which endpoint it uses: a typed `mcpUrl` in
+`POST /api/draft-from-mcp`, `POST /api/refresh-live` and the deploy routes
+(`POST /api/packs/:id/deploy/:target`, `…/deploy-bulk`,
+`POST /api/deploys/:deployId/rollback`, which send the caller's write token)
+needs the admin role in the org (an owner included). An operator, the bearer token and every caller
+without sign-in — the open postures' `local`, even on loopback — fetch from the
+org's registered endpoints only (`mcpEndpointId`), and are told the way that
+works for them (403 `role` or `posture`: an admin registers the endpoint in
+Settings → MCP endpoints; in the token posture, sign-in is armed first with
+`npm run users -- add <login>`). A typed URL may not carry `user:password` (400:
+send the token as `mcpAuth`). `GET /api/mcp-endpoints` says what the reader may
+do (`policy`). An operator's CI deploy (the bearer is an operator) registers
+its target once and sends `mcpEndpointId`.
+
+The studio's `POST /api/refresh-live` and `POST /api/draft-from-mcp` take
+either `mcpUrl` (an admin's, with an optional `mcpAuth`) or `mcpEndpointId`:
+one of the org's named MCP endpoints (`GET /api/mcp-endpoints`; an admin
+registers them with `POST /api/mcp-endpoints`). With an id the server uses the
+record's URL, and when the request sends no `mcpAuth` it reads the endpoint's
+read token from the variable the record names, `OBSERVOGRAM_ORG_<ORG>_<NAME>`
+(`ORG` = the org id in upper case, `-` → `_`; for example
+`OBSERVOGRAM_ORG_DEFAULT_MCP_TOKEN`), set in the server's own environment (the
+k8s Deployment's `env`, from a Secret). An admin may name only their org's
+variables; the owning org is the one whose prefix is the longest match, so
+`OBSERVOGRAM_ORG_ACME_EU_X` is `acme-eu`'s, not `acme`'s, and the check runs
+again at each request. A variable that is not set is a 400 naming it, before
+anything is fetched. The response says which record was used (`mcpEndpoint:
+{ id, name }`, or `null` for a URL); the live pack and the draft keep the safe
+URL and never the token. The deploy and rollback routes take `mcpEndpointId`
+for the URL only — a write token stays the request's `mcpAuth`.
+
+**The MCP origin allowlist.** Every MCP target the server reaches — a typed
+`mcpUrl`, a registered endpoint at each use, and an endpoint when it is
+registered or its `url` or `readTokenEnv` changes — meets an origin rule,
+whatever the caller's role. `OBSERVOGRAM_MCP_ORIGINS` lists origins for every
+org and `OBSERVOGRAM_ORG_<ORG>_MCP_ORIGINS` for one org (read only by the org
+that owns the name, the same longest-prefix rule); an org's list is the union
+of the two, so a deployment that keeps tenants apart leaves the global list
+empty. Entries are comma-separated origins — `https://mcp.example.com`,
+`http://mcp.lab:3001`: no path, query, fragment, credentials or `*` in a host;
+a rejected entry is named once on stderr and ignored, and a list with no
+accepted entry allows nothing. A lone `*` allows every origin. Loopback
+(`localhost`, `127.0.0.0/8`, `[::1]`) always passes (`OBSERVOGRAM_ALLOW_LOCAL_MCP=0`
+still closes it). With a list set, every other origin must be in it. **With
+none set, no credential leaves for an origin other than loopback** — not an
+endpoint's server-held token, not the caller's `mcpAuth` (every deploy sends
+one), not a credential in a typed URL, and nothing at all while a transport
+hook is loaded, since the hook may attach its own; a typed URL without a
+credential reaches only an origin one of the org's endpoints uses, and an
+endpoint without `readTokenEnv` may be registered by a signed-in admin and used
+anywhere (without sign-in, only a loopback or listed origin may be registered
+at all). A refusal
+is 403 `origin` at a fetch (400 at registration) and names the origin only and
+the variable to add it to. An install that sends a credential to a remote MCP
+sets `OBSERVOGRAM_MCP_ORIGINS` before upgrading.
 When the MCP exposes `metrics_query`, the fetch also samples the observability
 stack's own self-metrics (scrape, ruler, notify, tsdb, collector, dashboards,
 synthetic, logs, traces) as point-in-time signals — never verdicts, stamps or
@@ -677,6 +1413,88 @@ pinned versions in Docker (`docker/stack.compose.yaml`; skips without Docker).
 See [`docs/MCP_INTEGRATION.md`](docs/MCP_INTEGRATION.md) for the live fetch and
 write-back contract.
 
+### Test An MCP Connection And Build A Live Pack
+
+The studio's **Live MCP connection** panel and **new from live** panel do
+this in three steps — test the connection, choose **Draft** (a scaffold from
+MCP discovery) or **Snapshot** (an inventory of what is actually deployed),
+then follow the gate log — and the same routes serve a script (rebadge batch
+3; docs/DOWNSTREAM.md §15 has every shape). Without sign-in the live MCP API
+answers only a request sent straight to a loopback address, and every POST
+takes `X-Observogram-CSRF: 1` (the bearer is exempt). Below, `$H` is your
+auth (`-H "Authorization: Bearer $OBSERVOGRAM_API_TOKEN"` or a session
+cookie) and endpoint 3 is one of the org's registered MCP endpoints:
+
+```bash
+# 1. Test the connection — writes nothing
+curl -s -X POST http://127.0.0.1:8000/api/mcp/ping $H \
+  -H 'Content-Type: application/json' -H 'X-Observogram-CSRF: 1' \
+  -d '{"mcpEndpointId":3}'
+# → { "verdict": "connected", "tools": { "capabilities": { … } }, "read": { … }, "checked": [ … ], "notChecked": [ … ] }
+
+# 2. Start a snapshot (or "kind":"draft") — 202 at once
+curl -s -X POST http://127.0.0.1:8000/api/mcp/jobs $H \
+  -H 'Content-Type: application/json' -H 'X-Observogram-CSRF: 1' \
+  -d '{"kind":"snapshot","mcpEndpointId":3,"scope":{"metricPrefixes":["payments_"]},"label":"Payments prod"}'
+# → { "ok": true, "job": { "id": "<id>", "state": "running", … }, "poll": "/api/mcp/jobs/<id>" }
+
+# 3. Poll the gate log; send back "next" as since
+curl -s "http://127.0.0.1:8000/api/mcp/jobs/<id>?since=0" $H
+# → { "job": { "state": "running" }, "stages": [ { "seq": 1, "stage": "connect", "state": "done", … } ], "next": 1 }
+#   … until job.state is done (result.registered.id is the new pack), failed or cancelled
+
+# Stop it
+curl -s -X POST http://127.0.0.1:8000/api/mcp/jobs/<id>/cancel $H -H 'X-Observogram-CSRF: 1'
+```
+
+The ping runs `initialize`, the whole `tools/list` and one cheap read within
+10 s and says what it checked and what it did not. A job is its starter's
+(another member's or org's, an expired or a lost one is a 404 `{ gone: true }`);
+one runs per org, four per server; jobs live in the server's memory, so a
+restart loses them (a pack already registered stays). A snapshot is labelled
+`snapshot` in the pickers and the catalogue (`live: 'snapshot'`), a draft
+`scaffold`; Compare's pack header says which. A typed `mcpUrl` in place of
+`mcpEndpointId` is an admin's, under the origin allowlist ([Fetch Live From
+MCP](#fetch-live-from-mcp)).
+
+**The snapshot scope** (inert when unset; a request's `scope` replaces it
+whole; the draft and the refresh never read it):
+
+| Variable | Meaning |
+|---|---|
+| `OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES` | comma-separated metric-name prefixes a snapshot keeps (`payments_,checkout_`) |
+| `OBSERVOGRAM_SNAPSHOT_FOLDER_UIDS` | comma-separated Grafana folder uids for dashboards and, when every rule names one, alert rules |
+| `OBSERVOGRAM_SNAPSHOT_DATASOURCE_UID` | a datasource uid — named in the gate log as not applied while no advertised tool takes one |
+| `OBSERVOGRAM_ORG_<ORG>_SNAPSHOT_METRIC_PREFIXES`, `…_FOLDER_UIDS`, `…_DATASOURCE_UID` | the same for one org (read only by the org that owns the name); each field overrides the deployment's |
+| `OBSERVOGRAM_MCP_ORIGINS`, `OBSERVOGRAM_ORG_<ORG>_MCP_ORIGINS` | the MCP origin allowlist, unioned ([Fetch Live From MCP](#fetch-live-from-mcp)) |
+
+A variable that does not parse is a 400 naming it when a snapshot starts, and
+`GET /api/mcp/jobs` lists it under `scope.errors`.
+
+**Configuring the MCP server itself vs configuring the studio's connection
+to it.** The panel's URL, registered endpoint and token are the *studio's
+connection* to the MCP server — what the studio server uses to read from it.
+The panel's **Server settings…** button configures the *MCP server's own*
+runtime settings — the backend base URL, user and secret it reads its backend
+with, its API key — in a modal of this page (rebadge batch 4). By default
+your browser sends them straight to the MCP server, which must publish a
+settings description at `<MCP server root>/admin/schema` (or the modal offers
+a generic form), answer CORS for the studio's origin and authenticate the
+request; the studio keeps none of the values. After a verified configure the
+panel's connection test runs, and **Open the live panel** leads to a Snapshot
+with nothing but this page. The button is enabled for whoever may register an
+MCP endpoint (an admin or owner, or the open posture's caller on a direct
+loopback request). The contract for MCP server authors, and what the studio
+cannot enforce, is [docs/MCP_INTEGRATION.md](docs/MCP_INTEGRATION.md),
+"Server settings (admin configuration)"; a downstream's migration off a
+separate configuration page is docs/DOWNSTREAM.md §16.
+
+| Variable | Meaning |
+|---|---|
+| `OBSERVOGRAM_MCP_SETTINGS_POLICY` | a settings-policy file (JSON, strict) read once at start — rules that warn on a settings value and require an acknowledgement before the send, and the generic form's prefill; an unreadable or invalid file refuses the start; unset, inert |
+| `OBSERVOGRAM_MCP_ADMIN_PROXY` | `1` passes the modal's settings through the studio server (`POST /api/mcp-settings/describe`, `/submit`) for an MCP server the browser cannot reach; off by default, read per request |
+| `OBSERVOGRAM_MCP_ORIGINS`, `OBSERVOGRAM_ORG_<ORG>_MCP_ORIGINS` | also the remote MCP origins the modal may send settings to: settings carry a credential, so they go only to loopback or a listed https origin |
+
 ### Validate Or Upload A Pack
 
 ```bash
@@ -686,6 +1504,343 @@ npm run validate-pack -- path/to/pack.yaml
 The studio also accepts drag-and-drop or file picker upload. Uploaded, crawled,
 and MCP-drafted packs are registered in memory and become addressable through
 the same `/api/packs/:id/*` endpoints as catalog packs.
+
+### Record Verdicts
+
+A verdict is a reviewer's record on one artefact of a registered pack —
+`trusted`, `suspect` or `failed`, with a reason, who and when — kept in the
+store beside the pack's row ([docs/ADAPTER.md](docs/ADAPTER.md), "Verdicts —
+a reviewer's record per artefact"). It is a trust record, not a scorer
+input: nothing sums verdicts into the conformance score or the diagnostic
+grade, and `unreviewed` is the absence of a record. The artefact is named by
+the adapter's positional id (`SLI-01`, `ALR-02`; `GET /api/packs/:id` lists
+them), which is frozen within a pack id because the id is a content hash; a
+re-upload of the same content keeps the verdicts, and a re-upload under the
+same label with changed content carries each verdict onto the new pack's
+artefact when the artefact's behavioural identity is unchanged (`carriedFrom`
+names the old pack; the rest are dropped and the `verdict.carry` audit row
+counts them). A catalogue or example pack holds no verdicts — register it
+first (`POST /api/validate`) and record on the registered id.
+
+```bash
+# record (operator): the body is { status, reason? }
+curl -sS -X PUT -b cookies.txt -H 'X-Observogram-CSRF: 1' -H 'Content-Type: application/json' \
+  -d '{"status":"suspect","reason":"the window is shorter than the SLO period"}' \
+  http://127.0.0.1:8000/api/packs/uploaded-payment-service-1a2b3c4d/verdicts/SLO-01
+# read (viewer): the document, every artefact counted in summary
+curl -sS -b cookies.txt http://127.0.0.1:8000/api/packs/uploaded-payment-service-1a2b3c4d/verdicts
+# clear (operator)
+curl -sS -X DELETE -b cookies.txt -H 'X-Observogram-CSRF: 1' \
+  http://127.0.0.1:8000/api/packs/uploaded-payment-service-1a2b3c4d/verdicts/SLO-01
+```
+
+In the studio, Discover shows a verdict as a badge on the board and a chip
+on the row, the Refine control filters a layer by verdict, and the drawer's
+Verdict section records one (operators and admins; everyone in the open
+postures — beside `OBSERVOGRAM_API_TOKEN` without sign-in the browser is a
+viewer, and the section names the bearer route for CI instead of a form the
+API would refuse). The `actor` is the audit actor — a login or the token
+label, never an email. `GET /api/packs/:id/export.zip` adds `verdicts.json` (the
+GET document) after the compiled artefacts — only while the pack has a
+verdict, so a pack without one exports exactly what it did before.
+
+### Waive A Conformance Finding
+
+A waiver is a time-boxed, reasoned suppression of one conformance finding:
+one rubric clause (`GET /api/maturity-rubric` lists the ids) and, for the
+four per-item clauses (`L1.MUST.sli_covered_by_slo`,
+`L3.MUST.recording_rule_per_slo`, `L4.MUST.multi_window_burn_rate`,
+`L5.MUST.tier1_chaos_for_each_slo`), optionally one canonical symbol of it —
+`slos.<id>` or `slis.<id>`, the adapter's `defines` vocabulary, never a
+JSONPath ([docs/CONFORMANCE.md](docs/CONFORMANCE.md), "Waivers"). It lives on
+the **service record** the pack is primarily linked to, so a re-upload of
+the service's pack keeps it; a catalogue pack has no service and no waiver.
+A waiver never rewrites the rubric: `GET /api/packs/:id/conformance` keeps
+the engine's numbers and, while the service holds an open waiver, gains a
+`waivers` block — the service, the counts, per clause `waived` (every
+failing subject covered), `partial` (some) or `expired` (the finding fails
+again; the lapsed waiver is shown) with the waivers quoted, the `effective`
+numbers (conformant, MUST, SHOULD, score, per layer) and the `unused`
+waivers that match no finding. Expiry is at most 366 days ahead; a waiver is
+immutable but for its revoke, which keeps the row as history; one active
+waiver per `(service, clause, symbol)`, a new one after it expires. Schema
+errors are not waivable — an invalid pack is never graded. `/api/validate`
+and the library routes answer the bare report.
+
+```bash
+# waive (operator): the body is { ruleId, artefactId?, reason, expiresAt }
+curl -sS -X POST -b cookies.txt -H 'X-Observogram-CSRF: 1' -H 'Content-Type: application/json' \
+  -d '{"ruleId":"L5.MUST.tier1_chaos_for_each_slo","artefactId":"slos.consumer_success_99_95","reason":"chaos day is scheduled for Q1","expiresAt":"2027-03-31T00:00:00Z"}' \
+  http://127.0.0.1:8000/api/services/12/waivers
+# list (viewer): history included, newest first
+curl -sS -b cookies.txt http://127.0.0.1:8000/api/services/12/waivers
+# revoke (operator)
+curl -sS -X POST -b cookies.txt -H 'X-Observogram-CSRF: 1' -H 'Content-Type: application/json' \
+  -d '{"reason":"the chaos experiment landed"}' http://127.0.0.1:8000/api/waivers/7/revoke
+```
+
+The `author` and `revokedBy` a waiver shows are the audit actor — a login
+or the token label, never an email — and every member of the org reads them
+(the list is a viewer route), as does anyone the exported report or a
+sidecar file is shared with. Without a server, the same waiver object in a
+sidecar file drives `packc conformance --waivers <file>` (next section).
+
+### Report Placeholders (pack conformance)
+
+```bash
+npm run pack-conformance -- path/to/pack.yaml [more.pack.json ...] [--json] [--strict] [--quiet] [--waivers <file>]
+packc conformance path/to/pack.yaml
+packc conformance path/to/pack.yaml --waivers waivers.json --strict
+```
+
+A valid pack can still be full of placeholders — the values an importer (the
+upconvert, the crawler, the live fetcher, Build) had to invent to satisfy the
+schema. This tool lists them as rows: the pack path (`$.spec.slis[0]`), the
+field, what it needs, and where the value normally comes from — **crawl** (it
+exists in the service repository: `npm run crawl` reads it), **telemetry** (a
+fact of the running backends: the live fetcher or the backend's API) or
+**operator** (a decision only the owning team can make). The detection rule is
+the studio's: an artefact whose symbol carries a `crawler.scaffold.*`,
+`mcp.scaffold.*` or `library.todo.*` annotation is a placeholder, so the rows
+are what Discover parks as Scaffold. Each row's state is `placeholder` (marker
+present, value still a stub), `marker-only` (value changed — if real, delete the
+marker), `unmarked` (no marker, but the value is an importer's stub literal) or
+`dangling` (a marker naming nothing). Exit 0 when every pack is readable,
+canonical and valid (rows are informational); 1 for an unreadable, layered
+(upconvert it first) or invalid pack, or with `--strict` when any pack still
+has rows; 2 for usage. `--json` prints `{ tool, specVersion, strict, packs:
+[{ path, valid, errors, rubric, rows, counts, … }], totals, exitCode }`. The
+maturity rubric (Diagnose) grades what is declared, placeholders included; the
+rows are what still has to become real; the server answers the same report at
+`GET /api/packs/:id/placeholders` (and the static bundle in the browser). The
+workflow, the marker contract and
+the merge-safe `upconvert-legacy` (`-o` onto an existing canonical file merges;
+`--merge`, `--overwrite`) are in [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §11.
+
+`--waivers <file>` applies a waiver file — `{ "version": 1, "waivers": [{
+"ruleId", "artefactId"?, "reason", "expiresAt", "author" }] }`, the same
+object the server's `GET /api/services/:id/waivers` serves per row, so a
+file can be written by hand or saved from the API ([Waive A Conformance
+Finding](#waive-a-conformance-finding)) — to every pack: a placeholder row
+whose `(rule, symbol)` an active waiver covers (`ruleId` the row's rule,
+`placeholder.slos.objective`; `artefactId` the row's symbol, or omitted for
+every row of that rule) keeps its state, gains `waived` and is counted in
+`waived`, and `--strict` no longer fails on it; a waived rubric clause is met
+in the rubric line's `(+n waived)` and `(m% with waivers)` and in `--json`'s
+`rubric.waivers.effective`, the engine's own numbers never rewritten. An
+expired waiver is shown as lapsed and covers nothing; a revoked one is
+history. Without the flag the output is byte-identical to before; an
+unreadable file is exit 2 naming the entry.
+
+### Classify Typed Packs
+
+Observogram groups a pack's artefacts into families — SLI, SLO, recording
+rule, dashboard, alert route … — and the Discover board, the drawer, the
+diff and the graphs all read that one classification
+(`tools/lib/artefact-classify.mjs`: an explicit `type` first, then the
+canonical `defines` symbol the adapter attaches, then the id prefix). A pack
+produced by another toolchain carries typed artefacts (`type: PackSLI |
+PrometheusRule | …`) with its own id scheme and would otherwise render as a
+flat wall of "Other". Point the server at a JSON file that maps those names
+and id patterns onto Observogram's families:
+
+```json
+{
+  "version": 1,
+  "types": { "PackSLI": "sli", "PackSLO": "slo",
+             "PrometheusRule": { "family": "alert_rule", "label": "Prometheus rule" } },
+  "ids":   [ { "pattern": "^promrule-", "family": "alert_rule", "flags": "i" } ]
+}
+```
+
+```bash
+OBSERVOGRAM_TAXONOMY=./taxonomy.json npm run dev
+```
+
+The server reads the file once at start (`[taxonomy] loaded <path>: N types,
+M id rules`), installs it process-wide and serves it to the studio at
+`GET /api/taxonomy` (`{ ok, taxonomy, configured }` — never the path). An
+unreadable or invalid file **refuses the start** with
+`OBSERVOGRAM_TAXONOMY: <path>: <reason>`. A value is a family name or
+`{ family, label?, role? }`; the family decides the board group
+(`FAMILY_HOME` in the classifier) and the label/role replace the row's
+plain-words kind. Type names match exactly (case-sensitive); a pattern must
+start with `^`, be at most 200 characters, use flags `""` or `"i"` and hold
+no quantified group, and is matched against the first 256 characters of the
+id. The file is operator-trusted configuration: regexes run server-side
+against the ids of uploaded packs. Observogram's own adapted artefacts are
+never re-homed by it — their canonical `defines` symbol wins over any id
+rule. In identity mode an anonymous studio boots on the default families
+until sign-in (`/api/taxonomy` is a viewer route, like `/api/examples`).
+Unset, nothing changes: the families are Observogram's own and the board
+goldens (`npm run test:golden:board`) are byte-identical.
+
+**Schema version 2 adds a glossary.** With `"version": 2` the file may carry
+a `glossary` — the definitions the studio shows beside a family label or a
+spec term, as a mark a person can open (below, *The glossary marks*):
+
+```json
+{
+  "version": 2,
+  "types": { "PackSLI": "sli" },
+  "glossary": [
+    { "term": "Service level indicator", "family": "sli", "aliases": ["SLI", "SLIs"],
+      "definition": "A measurement of how the service behaves for its users.",
+      "link": "https://example.com/handbook/sli" },
+    { "term": "Error budget", "definition": "The share of the window an objective allows to fail." }
+  ]
+}
+```
+
+An entry is `{ term, definition, family?, aliases?, link? }`: `term` and each
+alias one line of 1–80 characters, `definition` one line of 1–600, `family`
+one of Observogram's families (at most one entry per family), `link` an
+`http(s)` URL of at most 2000 characters that carries no credentials (it is
+served to every viewer); at most 500 entries, and no term or alias defined
+twice (case-insensitive). A glossary never changes a classification — the
+families, the board, the diff and the graphs read `types` and `ids` only — and
+a version 1 file stays valid: it compiles exactly as before, to an empty
+glossary; `glossary` under `version: 1` is refused as an unknown key, so a
+file written for an older server keeps working on this one and the other way
+round. The boot line counts the terms (`…: 7 types, 1 id rule, 6 glossary
+terms`), `GET /api/taxonomy` serves the document with its glossary, and the
+static bundle bakes it like any other taxonomy file.
+`tools/fixtures/taxonomy/taxonomy.v2.json` is the worked v2 example beside
+the v1 `taxonomy.json`.
+
+**The glossary marks.** Where the studio names something the glossary
+explains, a small `?` mark follows the label: on Discover, the kind of each
+row (its family's entry, else an entry whose term or alias is the label), the
+board's group titles (the first family at home in the group that has an
+entry, else the title as a term or alias) and the head facts (`Criticality`,
+`Backends` … by label); in the drawer, a *kind* row with the family's entry
+and any section head or field label the glossary knows. The mark is a real
+button, not a tooltip: its name reads "What is <label>?", it opens the
+definition in place (`aria-expanded`, `aria-controls`), hover and keyboard
+focus preview it, Escape closes it and hands the focus back (and is swallowed
+only then — with nothing open Escape still closes the drawer), a click
+elsewhere closes it; `link` is a "Learn more" anchor to the operator's page in
+a new tab. Nothing is hover-only and no colour is the only cue. Without a
+glossary — no file, a v1 file, or a label the glossary does not know — the
+mark is not drawn and every row, board and drawer is byte for byte what it
+was (`npm run test:golden:board` keeps the 24 goldens and adds
+`typed.glossary.board.html`, the typed fixture under the v2 file, which
+stripped of its marks is the mapped golden). The static bundle shows the same
+marks from the baked v2 file (`--taxonomy`). The Tiles, List and Cards views
+carry no mark (`glossary-light-views`, `docs/DOWNSTREAM.md` §14).
+
+A typed pack reaches the pipeline either as a layered JSON upload whose items
+carry a `type` (kept through the upconvert as
+`metadata.annotations["observogram.artefact.type.<symbol>"]` and emitted by
+the adapter as the artefact's `type`, see [docs/ADAPTER.md](docs/ADAPTER.md),
+"Id families and the classifier") or as a layered pack a downstream server
+or bundle serves directly. `tools/fixtures/taxonomy/` holds a worked example
+of both the pack and the override. The static bundle bakes the same file with
+`npm run build:studio -- --taxonomy <file>` (or `OBSERVOGRAM_TAXONOMY` when
+the flag is absent) and groups as the server does ("Serve The Studio Without
+The Server", *Bake the seams*).
+
+### Rebadge The Studio (brand config)
+
+Everything the studio says about the *product* — its name, wordmark,
+tagline, logo, page title and description, footer text and links, the About
+card, the Discover scanner title and hero, the sign-in pages — comes from
+one brand object (`tools/lib/brand.mjs`, zero-import, vendorable). With no
+brand configured the server serves `studio/index.html` byte for byte and
+every chrome string is today's Observogram (`DEFAULT_BRAND`). A downstream
+rebadges with a JSON file, or with a few environment scalars; **one `name` is
+enough** — every other string derives from it unless the file names it:
+
+```json
+{
+  "name": "Acme Watch",
+  "shortName": "Acme",
+  "wordmark": { "lead": "Acme", "tail": "Watch" },
+  "tagline": "reliability, watched",
+  "titleSuffix": "the Reliability Console",
+  "description": "Acme Watch — …",
+  "logo": { "url": "/assets/acme-mark.svg" },
+  "favicon": "/assets/acme.ico",
+  "docsUrl": "https://docs.example.com/acme-watch",
+  "footer": { "text": "Acme Watch · a product of Acme Corp",
+              "links": [{ "label": "docs", "href": "https://docs.example.com/acme-watch" }] },
+  "about": { "changelogUrl": "https://docs.example.com/acme-watch/releases" },
+  "hero": { "src": "/assets/acme-hero.png", "alt": "Acme Watch posture scan" },
+  "tokens": { "light": { "accent": "#b3261e" }, "dark": { "accent": "#f28b82" } }
+}
+```
+
+```bash
+OBSERVOGRAM_BRAND_FILE=./brand.json npm run dev
+# or, without a file (a file's values first, these on top):
+OBSERVOGRAM_BRAND_NAME="Acme Watch" OBSERVOGRAM_BRAND_ACCENT="#b3261e" npm run dev
+```
+
+The scalars are `OBSERVOGRAM_BRAND_NAME`, `_SHORT_NAME`, `_TAGLINE`,
+`_LOGO_URL`, `_DOCS_URL` (→ the footer's `docs` link and the About card's
+changelog link), `_FOOTER` (→ `footer.text`), `_ACCENT` and `_ACCENT_DARK`
+(→ `tokens.light.accent` / `tokens.dark.accent`); the legacy `TOMOGRAPH_*`
+spelling is honoured. The defaults, and what derives from `name` when a
+brand names one: `shortName` ← `name`; the wordmark ← `name` in one piece
+(the default's `Observo`/`gram` split is upstream's); the scanner title
+`<SHORTNAME> SCAN`; the atlas compass mark `<SHORTNAME>` (default `OBSERVO`);
+the footer text `<name> · <titleSuffix>`; the hero alt `<name> scan` — and a
+named brand shows the CSS fallback instead of upstream's hero art until it
+sets `hero.src`; the description `<name> — write one ObservabilityPack
+manifest, …`; the footer links keep the spec link and drop the upstream repo
+link (a `docsUrl` adds a `docs` link); the About changelog link ← `docsUrl`
+(none ⇒ no link). `tokens.light` / `tokens.dark` override design-token values
+by name (`accent`, `accent-solid`, `bg`, … — the names in
+`studio/design-tokens.css` without the `--og-` prefix); a light override
+applies to both themes unless the dark map restates it.
+
+What the server does with it: `GET /`, `GET /index.html` and every
+non-`/api` path answer the shell with the title, meta description, legacy
+header, footer text (the `#build-label` version span kept) and links
+replaced, plus — after the design-tokens link — a `<style id="brand-tokens">`
+when tokens are set, the normalized brand as `<script type="application/json"
+id="brand-config">` (the studio reads it back; never the file's path), and a
+`<link rel="icon">` when a favicon is set. The studio (`studio/brand.mjs`,
+`state.brand.chrome`) paints the header, About, scanner, origin tip, compass
+mark, reset confirm, API-unreachable screen and version tooltip from it;
+`server/auth.mjs` renders the sign-in, change-password and reverse-proxy
+explainer pages from it. The start log says `[studio] brand: <name> (<path> |
+OBSERVOGRAM_BRAND_* env)` once. An unreadable or invalid file **refuses the
+start** with `brand file <path>: not found | is a directory | unreadable | not
+valid JSON | not a JSON object` — the message never carries the contents;
+`brand: tokens.<theme>.<name> is not a design token name`, `brand: token
+value for <name> contains ;{}<>` and `brand: logo.svg is not inline SVG`
+refuse a malformed brand.
+
+Trust: every brand string is escaped where it lands (text and attributes).
+The one raw field is `logo.svg` — inline SVG markup, injected only into the
+JS header through `innerHTML` (never into the server-rendered shell or the
+auth pages); it must start with `<svg` and must not contain `<script`, which
+is a tripwire for a pasted page, not a sanitizer — the brand file is
+operator config like any other server file. `studio/reskin.css` re-strokes
+the header SVG with `--og-accent`, so a custom mark inherits the accent.
+
+What is **never** rebranded, because it is protocol or storage, not chrome:
+the `X-Observogram-CSRF` / `X-Observogram-Org` headers, the `observogram_*`
+cookies, the `observogram.*` annotation keys in packs, the `.observogram/`
+workspace directory, `/api/*` JSON (`/healthz`, `/api/version`), compiled
+artefacts and the gen-site output (golden-gated, brand-free), the CLI's
+banner, and the `/assets/observogram-hero.png` path the default hero reads.
+`tools/test-brand.mjs` keeps the product's name out of every studio and
+auth-page source outside `tools/lib/brand.mjs` (a comment-stripping source
+guard), and proves the inert case: the unconfigured shell is the same string,
+the default chrome is the literal it replaced, `loadBrand({ env: {} })` is
+the default.
+
+The design tokens as JSON follow the same rule: `node
+tools/gen-design-tokens.mjs --brand brand.json --out dist/design-tokens.json`
+writes the rebadged document (a `brand` key names it); the generator never
+reads `OBSERVOGRAM_BRAND_FILE`, and `--brand` with `--write` refuses, so
+`studio/design-tokens.json` stays the vendorable default. The static bundle
+(`npm run build:studio`) bakes the same file with `--brand` — the server's
+loader and the server's shell renderer, so the chrome is the same — and
+honours `OBSERVOGRAM_BRAND_FILE` / the scalars when the flag is absent ("Serve
+The Studio Without The Server", *Bake the seams*).
 
 ### Compile Artifacts
 
@@ -713,11 +1868,209 @@ as the `assurance` item with its own file. See
 [`docs/ASSURANCE_RULES.md`](docs/ASSURANCE_RULES.md) for the rules and a sample
 heartbeat route.
 
+### Export A Service Audit Report
+
+```bash
+npm run audit-report -- path/to/pack.yaml [--env <name>] [--format json|html|both] [--out <path>] [--brand <file.json>] [--taxonomy <file.json>] [--top <n>] [--generated-at <iso> | --no-timestamp] [--verdicts <file.json>] [--waivers <file.json>] [--schema <file>]
+packc audit-report path/to/pack.yaml --format html --out report.html
+packc audit-report path/to/pack.yaml --env prod --waivers waivers.json --no-timestamp
+```
+
+One report per pack (GAP batch 2), as JSON or HTML, in seven sections: the
+maturity rubric's grade (the engine's numbers headline; with waivers the
+`effective` numbers sit beside them, never in their place), the placeholders
+(`packc conformance`'s rows beside the library-todo and Scaffold counts), a
+reviewer's verdicts, the service's waivers, the coverage by artefact family
+(a family a rubric clause that applies at the graded tier names is
+*required*; required with nothing declared is *missing*, otherwise *absent*),
+the goes-blind risks (the blast radius over the traceability graph: what
+WOULD go blind if a node died, never that something is blind) and the
+declared response path (which remediations answer to an alert). The HTML is
+one self-contained document over the studio's design tokens and kit, no
+script, print-friendly; the JSON shape is in
+[`docs/ADAPTER.md`](docs/ADAPTER.md) ("The service audit report"). The
+engine is `tools/lib/audit-report.mjs` (vendorable); nothing in it grades,
+scores or classifies on its own, and a verdict never feeds the conformance
+numbers.
+
+The CLI has no store: without `--verdicts` (a saved `GET
+/api/packs/:id/verdicts` document) and `--waivers` (the waiver file `packc
+conformance --waivers` reads) those sections say *not recorded by this
+build*. `--brand` is the only brand the CLI reads — never
+`OBSERVOGRAM_BRAND_*`, unlike the bundle build, so a report is reproducible
+from its arguments — and `--no-timestamp` leaves `generatedAt` null for
+byte-identical output (`--generated-at` stamps a given time). Exit 0 written;
+1 an unreadable, layered or invalid pack; 2 usage. This is the pack's audit
+report, not the store's audit log ([The Audit](#the-audit)).
+
+### Serve The Studio Without The Server (static bundle)
+
+A downstream that serves the studio behind its own static host — a CDN, an
+S3 bucket, a reverse proxy's `root` — builds it as one HTML file:
+
+```bash
+# Once, in the tree you build from: the packages package-lock.json pins (the
+# bundle embeds Compare's PromQL parser and the packages it imports).
+npm ci
+
+# One file: every module, every stylesheet, the packs it names.
+npm run build:studio -- \
+  --pack vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml --label "Payment service" \
+  --pack my-service.pack.yaml --id my-service --description "Checkout, orders and the ledger" \
+  --out dist/studio/index.html
+
+# A pack the page fetches at its first catalogue read (the host must answer CORS):
+npm run build:studio -- --pack-url https://packs.example.com/orders.pack.yaml --label Orders
+
+# The two seams a server reads from its environment, baked in: the taxonomy
+# override ("Classify Typed Packs") and the brand ("Rebadge The Studio").
+npm run build:studio -- --pack my-service.pack.yaml \
+  --taxonomy tools/fixtures/taxonomy/taxonomy.json --brand brand.json
+
+# Check the build without writing (also --json): the graph, the stylesheets, the packs.
+npm run build:studio -- --check --pack my-service.pack.yaml
+```
+
+Each `--pack` / `--pack-url` takes its own `--id` (default: the file name),
+`--label` (default: the pack's `metadata.name`, else the id) and
+`--description` — the catalogue row the bundled studio shows, field for field
+what a server-side pack row carries. The file loads no font over the network:
+the shell's three Google Fonts lines (the preconnects and the stylesheet) are
+dropped unless `--remote-fonts` keeps them, for a host whose readers are online
+and should get the studio's fonts from Google's CDN (the page then asks
+`fonts.googleapis.com` for the stylesheet and `fonts.gstatic.com` for the
+fonts). `--no-remote-fonts`, the default, is still accepted; the two together
+are a usage error.
+
+**Bake the seams.** `--taxonomy <file.json>` bakes the artefact-taxonomy
+override (the file a server reads from `OBSERVOGRAM_TAXONOMY`, "Classify
+Typed Packs"): validated at build time with the server's `validateTaxonomy` —
+a bad file fails the build with `--taxonomy: <path>: <reason>`, the server's
+own texts — and served by the bundle's `GET /api/taxonomy` as
+`{ ok, taxonomy, configured: true }`, so Discover groups a typed pack exactly
+as a server started with that file does (`tools/test-studio-bundle.mjs` T8
+proves it byte for byte against the board goldens). `--brand <file.json>`
+bakes the brand ("Rebadge The Studio"): the server's loader
+(`tools/lib/brand-env.mjs`, so the `OBSERVOGRAM_BRAND_*` scalars apply on top
+of the file, as on a server) and the server's shell renderer
+(`brandShellHtml`: title, description, header, footer, `#brand-config`,
+`#brand-tokens`, favicon), which the studio chrome, the notice and the `501`
+texts all read — a `--brand` bundle names its own product and never the
+upstream one. When a flag is absent the server's variables are honoured —
+`OBSERVOGRAM_TAXONOMY`, `OBSERVOGRAM_BRAND_FILE`, the `OBSERVOGRAM_BRAND_*`
+scalars (the one-field rebadge is `OBSERVOGRAM_BRAND_NAME=Acme npm run
+build:studio`, POSIX shell syntax) — so a build machine configured for a
+server bakes what that server shows; build unbranded there by unsetting or
+emptying the variable, since an empty value counts as unset:
+`env -u OBSERVOGRAM_BRAND_FILE …` or `OBSERVOGRAM_BRAND_FILE= …` in a POSIX
+shell, `set OBSERVOGRAM_BRAND_FILE=` in cmd, `$env:OBSERVOGRAM_BRAND_FILE=''`
+in PowerShell (there is no `--no-brand`). `--mcp-settings-policy <file.json>`
+bakes the MCP server-settings policy (the file a server reads from
+`OBSERVOGRAM_MCP_SETTINGS_POLICY`; a bad file fails the build with
+`--mcp-settings-policy: <path>: <reason>`, the server's texts) and
+`--mcp-origins <origin>,…` the MCP origins the bundle's Server settings modal
+may send settings to (`OBSERVOGRAM_MCP_ORIGINS`'s list rule, `*` any origin;
+an entry that is not an http(s) origin fails the build); the bundle's
+`GET /api/mcp-settings` serves both, and when a flag is absent
+`OBSERVOGRAM_MCP_SETTINGS_POLICY` and `OBSERVOGRAM_MCP_ORIGINS` are honoured
+(`--json`: `mcpSettingsPolicy: { source, file, rules } | null`, `mcpOrigins:
+{ source, origins } | null`). The bundle's Server settings modal sends to a
+loopback MCP server only from a page served on that machine — serve the
+bundle over `http://127.0.0.1` rather than opening it as `file://` (a
+`file://` page's origin is `null`, which no MCP server should allow). The summary line and `--json` always
+say what was baked (`taxonomy: { source, file, types, ids } | null`, `brand:
+{ source, file, name } | null` — the paths, never the contents, and neither
+path lands in the bundle). Brand URLs must not be server paths: `favicon`,
+`logo.url` and `hero.src` are an absolute URL, a `data:` URL or a path
+relative to the bundle's own directory (resolved against the page's URL by
+the static host) — `/assets/x.ico` fails the build naming the field and the
+fix. A configured brand that gives no `name` keeps the upstream strings, as on
+a server; and the unbranded bundle's Discover hero is the server asset
+`/assets/observogram-hero.png` (the default brand's `hero.src`), so a static
+host serves that asset or the brand names its own `hero.src`.
+
+What the file is (`tools/build-studio-bundle.mjs`): `studio/index.html` with
+every stylesheet inlined in place, an inline **import map** whose keys are the
+studio and `tools/lib` modules and whose addresses are `data:` URLs of each
+module (only the import-specifier strings are rewritten — no transform of the
+code), the packs' canonical manifests and the spec schema inlined as JSON, and
+`studio/static-backend.mjs` installed before the app boots. That module answers
+the pack routes in the browser from the same `tools/lib` engines the
+server runs — the catalogue, Discover, Diagnose (conformance), the canonical
+manifest, Compile (the catalogue, every artefact, every target), **Export**
+(the ZIP, downloaded as a Blob), **Compare** (`GET /api/diff` with its
+traceability graph, and the repository update from live) and the **Audit
+report** (`GET /api/packs/:id/audit-report`, JSON or HTML with the bundle's
+brand, its goes-blind section computed; the Conformance view's anchors
+download it as a Blob; a bundle has no store, so its verdicts and waivers
+sections read "not recorded by this build") — so the verdicts are the server's
+(`tools/test-studio-bundle.mjs` compares every ported route against a running
+server, `tools/test-bundle-compare.mjs` the diff, retrofeed and the audit
+report body for body, the report's declared fields aside;
+`GET /api/packs/:id/verdicts` answers the empty document — a
+bundled pack is never registered, so that IS the server's answer). Everything
+the server alone can do — Scan a repo, Draft from MCP, Refresh from MCP,
+Testing an MCP connection, Building a pack from a live MCP server, uploads, Deploy, Journeys, Build, recording a Verdict, Waivers (they
+live on a service record, which a bundled pack has none of),
+Services (the records behind the home's cards and the service page — a bundle
+has no services table), Organisations (the active org's name and role),
+Settings (members, environments, MCP endpoints, the audit — a bundle has no org),
+Passing MCP server settings through the studio server (the Server settings
+modal sends from the browser in a bundle), sign-in — answers `501 { denied: 'no-backend', error: '<Feature> needs the Observogram server;
+this studio is a static bundle built without one.' }`, which the studio shows
+as the sentence, and a dismissable notice at the bottom of the window says so
+once ("Static studio — no Observogram server behind this page …"). The
+Services home and the service page need the server (the services table); a
+bundle lists the services its packs name, as before.
+
+**Compare and the licences.** Compare's traceability graph needs a PromQL
+parser, the npm package `@prometheus-io/lezer-promql` (Apache-2.0): the build
+inlines it and the three packages it imports — `@lezer/lr`,
+`@lezer/highlight` and `@lezer/common` (MIT) — byte for byte as `npm ci`
+installed them from `package-lock.json`, so the build needs that lockfile,
+`VENDOR-MANIFEST.json` and an `npm ci` in the tree it builds from, and refuses
+a package it cannot account for (a version other than the lockfile's, no
+licence file, a second copy its importer would load, an import it does not
+declare). Every bundle carries a licence block — a `<script type="text/plain"
+id="observogram-licenses">` element at the end of `<head>`, pointed to by a
+comment after the doctype — with Observogram's MIT licence, each embedded
+package's licence files, NOTICE files (none ships one today), copyright lines
+and source repository, and the provenance of the vendored spec, whose
+repository publishes no licence. What the build checks: the packages are the
+ones the manifest's `npm` field names and the packages those import, each at
+the lockfile's version with a licence file, embedded unchanged;
+`verifyBundleNotices` (exported by `tools/build-studio-bundle.mjs`) checks a
+finished file's block. What it does not check: whether those licences suit
+your distribution, the packages' code, that the installed files are the
+registry's (a patched install is embedded as patched, unmarked), NOTICE files
+outside a published package, and the licences of the packs or brand assets
+you build in. The diff is held to a running server's, body for body, in Node
+(from the source and from the built file) and in Chromium under three browser
+locales (only where Playwright and its browser are installed, which CI's jobs
+are not); not in Firefox or Safari. `docs/DOWNSTREAM.md` §10 has the details
+and the migration from an earlier snapshot.
+
+Notes: `--pack` is validated against the spec schema at build time (a failing
+pack fails the build with the validator's text); `--pack-url` refuses a URL
+with userinfo or a credential query parameter — the URL is baked into a file
+you distribute — and `--json` prints URLs stripped; the Google Fonts links are
+dropped unless `--remote-fonts` (offline by default: the stylesheets' font
+stacks apply, a family the reader's system has, else the system fonts after
+it; `--json`'s `remoteFonts` says which); a
+Content-Security-Policy that forbids `data:` in `script-src` cannot run the
+single-file form (a `--split` directory mode is the follow-up); import maps
+need Chrome 89, Firefox 108 or Safari 16.4. Without `--pack` the studio boots
+with an empty catalogue and the notice. The live server is untouched: it
+serves `studio/static-backend.mjs` and `.css` publicly like every studio file,
+and nothing in the live studio imports them. `docs/DOWNSTREAM.md` §10 is the
+downstream view (build from the vendored snapshot, swap packs, upgrade by
+rebuilding).
+
 ### Build A Pack From The Library
 
 For a service that has no pack yet: pick the products it runs on (or an archetype
 for a service built from scratch), a criticality tier and a name, and `packc init`
-instantiates the library entries into a canonical v1.3 pack that validates,
+instantiates the library entries into a canonical v1.4 pack that validates,
 compiles through every target and passes every MUST clause of the tier — with the
 values only the team can fill (pager service, chaos target, endpoints) reported as
 todos, never hidden. The same engine drives the studio's Build journey (Define ·
@@ -758,7 +2111,7 @@ todos (20) — placeholders only the team can fill:
   - telemetry.backends.metrics-prom: version.declared: Prometheus version you run: placeholder '3.14' (param prometheus_version) — … · endpoints.0: Prometheus query endpoint: placeholder 'http://prometheus:9090' (param metrics_endpoint) — …  [L2.MUST.metrics_logs_traces_backends]
   - validation.synthetic_checks.produce-consume-canary: target: Bootstrap servers: placeholder 'kafka.kafka:9092' (param bootstrap) — …  [L5.MUST.synthetic_probe]
   …
-schema: valid (spec v1.3)
+schema: valid (spec v1.4)
 ```
 
 The pack goes to stdout or `--out`; the todo list and the conformance line go to
@@ -810,8 +2163,8 @@ schedule: "*/15 * * * *"        # the cadence it is MEANT to run at — declared
                                 #   also { cron, timezone } or { every: 15m }
 stackBudget: { objective: 0.99, window: 30d }   # posture budget the Journeys view prints per gated stack row (signal, not verdict)
 notify:                         # early-warning delivery: one bounded POST per run
-  urlEnv: MY_JOURNEY_WEBHOOK_URL     # env var NAME holding the URL (a literal url: is refused)
-  authEnv: MY_JOURNEY_WEBHOOK_TOKEN  # optional → Authorization: Bearer <value>
+  urlEnv: OBSERVOGRAM_ORG_DEFAULT_NOTIFY_ONCALL_URL     # env var NAME holding the URL: the org's notify hook (a literal url: is refused)
+  authEnv: OBSERVOGRAM_ORG_DEFAULT_NOTIFY_ONCALL_TOKEN  # optional, that hook's own token → Authorization: Bearer <value>
   on: transitions                    # transitions (default) · breach · always
   format: json                       # json · text (one line + markdown body, ntfy-style)
 inventory:                      # is the right number of things being monitored? (gen-site partition)
@@ -838,7 +2191,63 @@ all, the run still writes an `outcome: vantage-lost` record before exiting
 `2` — the loss is a point in the history, not a gap. The CLI grades on the
 same construct as the studio (requirement-chain integrity rides on the
 diff), so both report one score for one comparison. Secrets never live in
-journey files — MCP auth is referenced by env-var name.
+journey files — MCP auth is referenced by env-var name. The example's
+`notify` names the default org's notify hook `ONCALL`,
+`OBSERVOGRAM_ORG_DEFAULT_NOTIFY_ONCALL_URL` and its `_TOKEN`, for a
+deployment whose default org is `default` (`npm run orgs -- list`);
+otherwise `<KEY>` in `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` is the default
+org's id in capitals, with `-` as `_`. Those names work for the server and
+the CLI alike.
+
+**Through the server, a live Pack B is a registered endpoint's.** A journey's
+`packB.mcp.url` is a URL the server would fetch, so the server treats it as a
+typed MCP URL ([Fetch Live From MCP](#fetch-live-from-mcp)). `POST
+/api/journeys/capture` saves a drafted Pack B as `mcp: { url, endpointId }` —
+the org's registered endpoint whose URL the draft's `mcp.url` is; with no such
+endpoint an admin's capture keeps the URL (it meets the typed-URL and origin
+rules then) and anyone else's saves Pack B as a file. `POST
+/api/journeys/:name/run` fetches through `endpointId` (its token from the
+endpoint's `readTokenEnv`; a def's `authEnv` is never read by the server) and
+takes a raw `url` from an admin only: an operator running a journey captured
+with a raw URL is refused 403 before anything runs (`this journey's Pack B
+fetches <origin>, an MCP URL only an admin may send — an admin re-captures it
+…`). The CLI reads `url` and `authEnv` as before and refuses a def whose Pack B
+names only an `endpointId` (the server resolves it).
+
+**Through the server, a journey notifies only through its org's notify
+hook.** A notify hook is a variable pair the server's operator sets in the
+server's environment — `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` and,
+optionally, `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_TOKEN` (`<KEY>` the org id in
+capitals with `-` as `_`, `<HOOK>` words of A–Z and 0–9 joined by single `_`)
+— and restarts the server; the start prints a `[notify-hooks]` line for each
+set hook a run would refuse. A journey names the hook by `notify.urlEnv`, and
+`notify.authEnv` is that hook's own `_TOKEN` or absent. Nobody types a
+webhook URL in the app: `GET /api/journeys/notify-hooks` lists the org's
+hooks to every member (names and whether each is usable — never a value or
+origin), `POST /api/journeys/capture` refuses a `notify` that is not one of
+them (400), and `POST /api/journeys/:name/run` of a journey that notifies is
+refused **before anything runs** (400, no record, no row, nothing sent)
+unless its hook is the org's alone, set, with an http(s) URL without
+`user:password`, a token the server can send, and an allowed origin — the sentence
+names what to fix and who fixes it, and `GET /api/journeys` carries it as
+`notify.problem`. So a server run reads no other variable: not another
+org's, not one of the server's own secrets, not the org's MCP token. A
+webhook off this machine needs its origin listed; with no list, only
+loopback is posted to. No redirect is followed, and a delivery error never
+carries any part of the hook's URL or token. Without sign-in, a journey that
+notifies runs only from a request sent straight to a loopback address, and
+never on a server bound beyond loopback. The CLI keeps reading any name from
+its own environment. A journey written before this rule names another
+variable: [docs/DOWNSTREAM.md](docs/DOWNSTREAM.md) §17.2 is the migration —
+rotate the secrets such a journey posted, scrub its records, set the hook,
+list its origin, rename the names in the file.
+
+| Variable | Meaning |
+|---|---|
+| `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` | org `<KEY>`'s notify hook `<HOOK>`: the webhook a server-run journey naming it as `notify.urlEnv` posts to; unset, it is not listed and capture and a run refuse it |
+| `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_TOKEN` | that hook's bearer token, sent only to that hook's URL, for a journey naming it as `notify.authEnv` |
+| `OBSERVOGRAM_NOTIFY_ORIGINS` | comma-separated webhook origins (`scheme://host[:port]`; `*` any) every org's hooks may post to; read at each check; unset, with the org's unset too, only loopback — a separate list from `OBSERVOGRAM_MCP_ORIGINS` |
+| `OBSERVOGRAM_ORG_<KEY>_NOTIFY_ORIGINS` | the same for org `<KEY>`'s hooks, unioned with the deployment's (read only when the org owns the name alone) |
 
 Run history is bounded so a journey on a cron cadence never fills the disk:
 after every run the journey's `runs/` directory is pruned to the newest
@@ -984,14 +2393,15 @@ included: a checkpoint between two file copies tears it. Safe options:
 ```bash
 packc store backup /backups/observogram-2026-09-24.db
 # backup written: /backups/observogram-2026-09-24.db
-# store_id: 3f0c… (schema v1, from /app/.observogram/observogram.db)
+# store_id: 3f0c… (schema v2, from /app/.observogram/observogram.db)
 ```
 
 It runs `VACUUM INTO` outside any transaction into `<path>.tmp` and renames
 that into place: every committed row, as one rollback-journal file, while
 writers stay active. It refuses an existing `<path>`, `:memory:`, and a
 path with no database (it never creates one). The backup, like the
-database itself, is created `0600`: both hold the users' password records.
+database itself, is created `0600` (on Windows, the directory's ACL; see
+Platforms): both hold the users' password records.
 
 The other workspace files (packs, snapshots, journeys, runs,
 `deploys.jsonl`, `session-secret`) can be copied live as before. Where the
@@ -1003,7 +2413,7 @@ users, orgs, memberships or audit.
 ```bash
 packc store restore /backups/observogram-2026-09-24.db
 # restored … -> /app/.observogram/observogram.db
-# store_id: 3f0c… (schema v1); previous store_id: 3f0c…
+# store_id: 3f0c… (schema v2); previous store_id: 3f0c…
 # moved aside: /app/.observogram/observogram.db.pre-restore-20260924T101500123Z
 ```
 
@@ -1012,7 +2422,8 @@ needs exclusive access, so even an idle server is caught), checks the
 backup is an Observogram store, moves `observogram.db`, `-wal` and `-shm`
 aside together under one timestamp, and copies the backup in with the
 replaced database's mode and owner, never the backup's (a read-only backup
-restores writable; with no previous database it is 0600), switched to
+restores writable; with no previous database it is 0600 — on Windows, the
+directory's ACL; see Platforms), switched to
 WAL first, so it goes in like a cleanly stopped store and the check also
 sees whatever opens it before the next start. The in-use check also
 folds a `-wal` left by an unclean stop into the old database and removes
@@ -1042,7 +2453,22 @@ stderr — `the restored store is <id>; <base>/.store-imported names <other>
 2. Start the store build. Its first start imports `users.json` /
    `orgs.json` once, prints the `[store]` report and records what it read
    (the files' SHA-256 in the store, and the `.store-imported` marker in
-   the workspace). Take a `packc store backup` once it runs.
+   the workspace). From this build on it also imports each org root's
+   `packs/index.json` once — the pack registry: every pack's label, source
+   and times, and the services it names — prints `[store] imported the
+   pack registry of N org(s) into <database> (store <id>): …` and records
+   the file's canonical SHA-256 (its entries without `lastUsedAt`) under a
+   key of its own; the file stays where it is, frozen (an upgrade from
+   0.5.0 does only this half). Take a `packc store backup` once it runs.
+3. **Schema v2** (GAP batch 2): a store build from this version on migrates a
+   v1 database to v2 at its first start — two tables, `verdicts` (a
+   reviewer's record per artefact of a registered pack) and `waivers` (a
+   service record's time-boxed waivers of conformance findings); every row
+   a v1 store held is kept. The door is one-way: a v1 build refuses a v2
+   database (`the database is at schema v2, but this build knows up to v1`)
+   and `packc store restore` refuses a v2 backup on a v1 build, so take a
+   `packc store backup` before the upgrade. `packc store export` writes no
+   verdict or waiver (a pre-store build has nowhere to hold them).
 
 **Roll back** to a pre-store build (the image before the store) only this
 way. A pre-store build reads `users.json` / `orgs.json`, not the store, so
@@ -1058,6 +2484,7 @@ packc store export /app/.observogram
 # export: in place in /app/.observogram (store 3f0c…)
 # users.json: /app/.observogram/users.json (3 enabled local users; OIDC users are never written)
 # orgs.json: not written (one org at the workspace root, and the deployment never had one)
+# index.json: 1 org root — /app/.observogram/packs/index.json (3 packs)
 # recorded what it wrote in the store and /app/.observogram/.store-imported: a store build starts on these files without refusing
 # note: users revoked in the store stay signed in on a pre-store build until their cookies expire; rotating OBSERVOGRAM_SESSION_SECRET signs everyone out
 # 3. Start the pre-store image on the same workspace.
@@ -1082,6 +2509,25 @@ What the export writes:
   or keeps the default org anywhere but the workspace root: the live orgs,
   their enabled members (an OIDC member by its `sub`, under the recorded
   issuer only) and their roles (`operator` is written as `member`).
+- `packs/index.json` — one per live org root (`<root>/packs/index.json`),
+  in the shape every earlier build wrote (`{ "<id>": { label, source,
+  createdAt, lastUsedAt } }`, times in ms, mode 0644), from the store's
+  rows — after reconciling them with the pack files: a `*.pack.yaml` with
+  no row is adopted (no label, source `workspace`, the file's mtime; its
+  services get rows, actor `cli`), a row whose file is gone is removed on
+  positive evidence. So the older build finds every pack with its label
+  and has nothing to adopt or prune at its first start. The report's line
+  names each path with its pack count and what it adopted or pruned
+  (`index.json: 1 org root — <path> (3 packs; adopted a1; pruned b2)`), or
+  says `index.json: none (no org holds a pack)`. The export records the
+  canonical SHA-256 of each file it wrote (its entries without
+  `lastUsedAt`), so the store build starts on it. It refuses, changing
+  nothing, an `index.json` whose entries differ from what the store last
+  imported or exported (an older build registered, relabelled or removed
+  a pack during a rollback — `packc store import --replace` takes them in,
+  see Re-upgrade below); one that differs in `lastUsedAt` only is
+  overwritten. A `packs/` it cannot list or an index it cannot read
+  refuses before any write. A directory export writes no index.
 - It is the same membership, not the same access: a pre-store build
   enforces no roles, so every viewer and operator regains full write there
   (the report lists them). It has no owners either: an owner enters only
@@ -1131,19 +2577,53 @@ What the export writes:
   the workspace (as on k8s), export to a new directory beside it, such as
   `/data/db/export-$(date +%Y%m%d%H%M%S)`.
 
+**Roll back to 0.5.0** (the first store build: it holds the same database
+but keeps the pack registry in `packs/index.json`) the same way: stop the
+server, `packc store export <workspace>` in place as above — it writes
+each org root's `index.json` from the store's rows, so 0.5.0 finds every
+pack with its label and has nothing to adopt (while this build has never
+completed a start on the store, the registry is still only in the file
+and the export refuses naming it: start the server once first, or roll
+back without the export) — then start the 0.5.0 image
+on the same `OBSERVOGRAM_DB` and workspace. It needs no `users.json` /
+`orgs.json` (it reads the store; the export's files are harmless to it)
+and restarts as often as needed: it reads and rewrites `index.json` as it
+always did, and the hash this build keeps for the index lives under a key
+of its own (`pack_index_hashes`) that 0.5.0's stale-import check never
+reads, so its own rewrites never make it refuse. Without the export,
+0.5.0 starts on the `index.json` frozen at the upgrade: a pack registered
+since has no entry there, so 0.5.0 adopts its file unlabelled (listing it
+by name) and writes that adoption into the file — an entry with no label
+and source `workspace` records nothing the store does not know, so the way
+back starts with the bookkeeping line below and the store's label stands.
+On the way back (stop 0.5.0, start this
+build): a rollback that only **read** packs (0.5.0 rewrites `lastUsedAt`
+on every read) or restarted starts, with one log line — `[store] <path>
+was rewritten by a build before slice 4 (lastUsedAt only — bookkeeping,
+not a change); the store's registry stands` — no row or file written,
+only the file's new byte hash recorded under `pack_index_hashes` so the
+line is said once, not at every start; one
+that only **adopted** files the same, with its own parenthesis — `(it
+says exactly what the store holds — bookkeeping, not a change)`; one
+that **registered, relabelled, removed or RESET** packs refuses (see
+[Stale Import](#stale-import)): `packc store import --replace` takes the
+file's entries into the store, or put the file back, or move it aside.
+
 **Re-upgrade** after a rollback: stop the pre-store build and start the
 store build again.
 
 - **Nothing changed** on the pre-store build: the store build starts on the
   exported files without refusing.
 - **Users or orgs changed** on the pre-store build (its `npm run users` /
-  `npm run orgs`): the start refuses (see [Stale Import](#stale-import)).
-  With the server stopped, request a replace, then start:
+  `npm run orgs`), or **packs changed** on it or on 0.5.0 (a pack
+  registered, relabelled, removed or RESET): the start refuses (see
+  [Stale Import](#stale-import)). With the server stopped, request a
+  replace, then start:
 
 ```bash
 packc store import --replace
 # store: /app/.observogram/observogram.db
-# replace requested: the next server start re-imports users.json/orgs.json with the unit's environment
+# replace requested: the next server start re-imports users.json/orgs.json and each org's packs/index.json with the unit's environment
 ```
 
 The next start re-imports the files as they stand, with the unit's own
@@ -1175,6 +2655,19 @@ may not have), prints a `[store] replaced from …` report and writes one
   removes the default org's memberships (the report lists them) and only
   owners reach it; the others get `no org membership — ask an admin to add
   you` until `npm run orgs -- add-member default <login>`.
+- **Packs**, from each live org root's `packs/index.json` as it stands —
+  the rolled-back build's record: a pack file with no row is added with
+  the entry's label and source (without an entry: adopted, no label), a
+  row whose entry carries another label or source takes the file's (a
+  `pack.update` row), a row whose file is gone is removed on positive
+  evidence (the listing succeeded and the file is absent); a corrupt index
+  keeps the store's labels, and files without a row are still adopted.
+  The report line: `[store]   packs: <org>: added a1 · relabelled b2 ·
+  removed c3 (file gone)` (`· index.json corrupt (<reason>; labels kept
+  from the store)` when it is). An index or a `packs/` it cannot read
+  refuses before any write, and the request stays pending. Services,
+  environments and their links are kept (a new pack may add rows). The
+  recorded index hashes are rewritten to the files as they stand.
 - It refuses, and moves nothing, when a flat entry with data sits beside
   its `orgs/default/` twin, when a rewritten journey would no longer
   parse, or when it would leave no enabled owner who can sign in under the
@@ -1218,6 +2711,43 @@ belong together. Each refusal says `Nothing was …` and names its ways out:
   After a restore of a backup taken before an in-place export, the
   refusal says the files are the export's and names the database the
   export wrote (see [Upgrade And Roll Back](#upgrade-and-roll-back)).
+- **`packs/index.json` changed after the import or the export** — compared
+  per org root, **without `lastUsedAt`**: an older build rewrites that
+  field on every pack read, and a read is not an edit, so that rewrite
+  is logged — `[store] <path> was rewritten by a build before slice 4
+  (lastUsedAt only — bookkeeping, not a change); the store's registry
+  stands` — and never refused. A file that says exactly what the store
+  holds (an entry the older build only adopted, no label and source
+  `workspace`, for a pack the store holds counts as the store's row) is
+  logged the same way with its own parenthesis — `(it says exactly what
+  the store holds — bookkeeping, not a change)` — and never refused. An
+  entry added, dropped or relabelled is: `<path> changed since
+  store <id> last imported or exported it: a build before slice 4
+  registered, relabelled or removed a pack during a rollback (the registry
+  it wrote: 4 entries, the store's: 3)`. Its ways out, with the server
+  stopped: `packc store import --replace` (the next start takes the file's
+  entries into the store — labels and sources from the file; packs it no
+  longer lists are removed on positive evidence); put the file back as it
+  was (the refusal prints the canonical SHA-256: its entries without
+  `lastUsedAt` — or, for a file that was corrupt when recorded, the
+  SHA-256 of its bytes); or move it aside (the store's registry stands; the
+  rollback's registrations are then adopted from their pack files with no
+  label). An index that appeared in a root the store had recorded as
+  having none is refused too, with its own first line — `<path> appeared
+  since store <id> imported the pack registry (that root had no index.json
+  then): a build before slice 4 registered, relabelled or removed a pack
+  during a rollback (the registry it wrote: 1 entry, the store's: 0)` —
+  and two ways out: `packc store import --replace`, or move it aside
+  (there was no file to put back). One that says exactly what the store
+  holds passes, logged as `[store] <path> was rewritten by a build before
+  slice 4 (it says exactly what the store holds — bookkeeping, not a
+  change); the store's registry stands`. Only roots whose
+  hash is recorded are compared; a root that never had an index gets its
+  key at the next export. An
+  `index.json` the server cannot read (anything but absent) aborts the
+  start naming the path, before any write — on a store's first start,
+  after the identity import committed; the next start imports only the
+  packs.
 
 A marker or legacy file that disappeared is repaired and logged, not
 refused. `packc store restore` warns (above) when the marker names another
@@ -1257,14 +2787,147 @@ packc store purge-org acme
 ```
 
 It deletes `orgs/<id>/` and drops that root's entries from the store's
-legacy hashes, writes one `org.purge` audit row and rewrites the marker.
+legacy hashes and its pack index hashes (`dropped from pack_index_hashes:
+orgs/<id>/packs/index.json`), writes one `org.purge` audit row and
+rewrites the marker.
 It runs only on a removed, non-default org whose root is `orgs/<id>`, and
 refuses a root that is a symlink or resolves outside `<workspace>/orgs`,
 and a workspace whose marker names another store. The org row stays, so
 its id is never reused.
 
+Before it deletes anything it reads all of `orgs/<id>/`, every name as the
+bytes on disk, never through a link (it names a path holding a name that is
+not valid UTF-8 as a POSIX shell's `$'…'` spells it, each such byte `\xNN`),
+and it refuses, deleting nothing:
+
+- **on Windows, while the recorded users file's path cannot be fully
+  resolved on this host, or runs through a network share nothing places
+  beside `orgs/<id>/`** — checked before the others: a link or another
+  reparse point on its path whose target cannot be opened (a dangling link
+  too, so a users file recorded as a file link into `orgs/<id>/` and moved
+  out as a refusal below says is refused here, though nothing of it is left
+  there), a part of it this host cannot read, a volume whose paths do not
+  resolve, or a share on any volume, a DFS link or one that cannot be
+  reached: such a path may lead under `orgs/<id>/`. If the users file does
+  not lie under `orgs/<id>/`, delete `orgs/<id>/` by hand and run the purge
+  again; if it does, move it out of `orgs/<id>/` first, then do the same.
+- **while that would take the users file a pre-store build reads** — the
+  one `OBSERVOGRAM_USERS_FILE` named at the import, else
+  `<workspace>/users.json`. This is decided by what deleting the directory
+  takes, not by the users file's path: an entry under `orgs/<id>/` is the
+  users file when it is the same file (the path, or a mount or a link on it,
+  leads there, or it is a hard link of it) or when, on another filesystem, it
+  has the users file's size and modification time (the users file seen
+  through an NFS, SMB, overlay or FUSE mount, or a copy that kept them). The
+  refusal names each such entry: move them out of `orgs/<id>/`, then run the
+  purge again. Through such a mount whose directories show another inode or
+  modification time than theirs under `orgs/<id>/` (an overlay mount with an
+  upper directory shows that directory's), purge-org then cannot trace the
+  users file's path back and refuses it as one that does not exist (below);
+  a refusal naming an entry by its size and modification time names that
+  second step: if the purge then refuses because the users file does not
+  exist, delete `orgs/<id>/` by hand and run the purge again. The store still
+  records the users file's old path, where the in-place `packc store export`
+  writes it and where a pre-store build started with
+  `OBSERVOGRAM_USERS_FILE` set to it reads it: if that path no longer leads
+  to the moved file, make it lead there again before you roll back.
+- **while the users file exists, no entry under `orgs/<id>/` is it, and an
+  entry there has its name** — the name its path ends in, as written or
+  through a link on it, ignoring case: a mount that is down keeps what was
+  written in its mount point meanwhile, so the path leads to such a file
+  now, and once the mount is back to the file of that name under
+  `orgs/<id>/`. The refusal names each such entry (and, for a link, what it
+  leads to under `orgs/<id>/`): move them out of `orgs/<id>/`, then run the
+  purge again; if the purge then refuses because the users file does not
+  exist, delete `orgs/<id>/` by hand and run the purge again. If one of
+  them is the users file, make the users file's path lead to it again
+  before you roll back. An entry of that name that is not the users file
+  is refused alike. So is a users file that does not exist whose path
+  leads into a directory under `orgs/<id>/` while an entry there has its
+  name: a directory on its path may be the mount point of a mount that is
+  down — `orgs/<id>/other` bind-mounted on `orgs/<id>/sub/m`, the users
+  file in `other` recorded through it, and unmounted — and once the mount
+  is back the path leads to that entry. Move the entries it names out of
+  `orgs/<id>/`, then run the purge again; if the users file is among them,
+  make its path lead to it again before you roll back.
+- **while a recorded users file — or, with none recorded,
+  `<workspace>/users.json` as a link — does not exist and its path does not
+  lead under `orgs/<id>/`** (but for one only through directories
+  `orgs/<id>/`, or its path, lies in, below), since a filesystem not mounted
+  now may lead it there. If it lies on a filesystem that is not mounted,
+  mount it and run the purge again; if it does not lie under `orgs/<id>/` (it was deleted,
+  say), delete `orgs/<id>/` by hand and run the purge again: with no
+  directory left it checks no users file and only drops the org's records.
+  After the first refusal's move, with any mount on its path up, that path
+  leads under `orgs/<id>/`, where nothing of the users file is left; the
+  purge goes on when purge-org can trace it there — through a bind mount, a
+  link, or an NFS, SMB, overlay or FUSE mount that shows that directory's own
+  inode and modification time — while no entry under `orgs/<id>/` has the
+  users file's name (above); through any other such mount it is refused
+  here, the second step its first refusal names. Once that org is purged its directory is gone, and the recorded path
+  leads into a directory that does not exist: purging another org goes on
+  when the path is looked up only in directories its `orgs/<id>/` lies in
+  (`<workspace>/orgs` and those above it, by their real paths) or that the
+  path `<workspace>/orgs/<id>` is looked up in (with the workspace, or its
+  `orgs`, reached through a link, the directory that link is in and those
+  above it), and no entry under `orgs/<id>/` has the users file's name,
+  since a filesystem mounted again on one of those directories would cover
+  `orgs/<id>/` too, or the link `<workspace>/orgs/<id>` is reached through,
+  and a directory under `orgs/<id>/` mounted there would show the users file
+  by its name (purge-org does not see a link there to the real path of
+  `orgs/<id>/`). So does a users file deleted in one of those directories. With
+  none recorded and nothing at `<workspace>/users.json`, there is no users
+  file to keep, and the purge goes on.
+- **while the users file, or a directory under `orgs/<id>/`, cannot be
+  read** — run the purge as a user who can read it (a FUSE mount whose
+  server stopped answering: unmount it), or, when the users file does not
+  lie under `orgs/<id>/`, delete the directory by hand as above.
+- **while a mount point is under `orgs/<id>/`, or the directory is one**:
+  on Node 22 the delete stops part-way at a mount point, and on Node 23 and
+  later it first deletes the files of the filesystem mounted there. Unmount
+  it, then run the purge again; where it holds mounts, which keep it busy
+  (`umount`: target is busy), the refusal names them to unmount first, in
+  order, each after the mounts in it. On Windows a mount point is a folder
+  another volume is mounted in, read through a handle on each directory: a
+  junction is none, and neither is `orgs/<id>/` reached through one, on the
+  volume the junction leads to. On Linux this includes a bind mount of
+  another directory of the same filesystem, which `/proc/self/mountinfo`
+  lists (not one a later mount over a directory above it covers, which it
+  lists too: nothing is mounted at its path then, and the purge goes on —
+  unless that path leads through a mount of the covered mount's own
+  filesystem, such as `mount --bind /srv /srv` over it or a recursive bind
+  whose copy of it was unmounted, where it may show the very directory the
+  covered mount is mounted on, which the delete cannot remove: the refusal
+  then names the mounts to unmount first, in order, before you unmount it —
+  and where one of them showed another directory there than the one it is
+  mounted on, the workspace's (the deployment bind-mounted over the directory
+  that holds the covered mount, which purge-org cannot tell apart: a declared
+  false refusal), unmounting it takes the workspace away, so mount it there
+  again once the covered mount is unmounted, then run the purge again;
+  and a mount on `/` itself covers nothing, since a path is looked up from
+  the root and never crosses a mount stacked on it);
+  elsewhere such a mount cannot be told from a directory, so unmount
+  any under `orgs/<id>/` yourself before you purge. It takes a file on
+  another filesystem than its directory for a mount point only when
+  `/proc/self/mountinfo` lists it: an overlay mount whose layers lie on
+  different filesystems shows its lower layers' files so, with nothing
+  mounted there. Where there is no `/proc/self/mountinfo`, it takes every
+  such file for one; on Linux, mount proc at `/proc`
+  (`mount -t proc proc /proc`) and run the purge again. When the users file
+  lies under `orgs/<id>/` as well, the refusal names it too: move it out of
+  `orgs/<id>/` and unmount, then run the purge again — unmounted alone, its
+  path may no longer lead there (a link of its name in a directory mounted
+  there from outside `orgs/<id>/`, to a file under it), and nothing would
+  keep the purge from deleting it. A mount that was down already when
+  purge-org first ran tells nothing of such a link.
+- **while a directory under `orgs/<id>/` changed as it read it**: when the
+  users file exists, it reads each directory again before it goes on, and
+  one that changed — an entry another process added, removed or renamed in
+  it — may have hidden the users file from it. Stop what changes files
+  there, then run the purge again.
+
 **The purge cannot be undone and asks for no confirmation.** It deletes
-everything under `orgs/<id>/` at once: the org's packs, its
+everything under `orgs/<id>/`: the org's packs, its
 `deploys.jsonl` (that org's deploy audit), its rollback `snapshots/`, its
 `runs/` and its `journeys/`. A `packc store backup` holds only the
 database, not these files, so copy `<workspace>/orgs/<id>/` first if any
@@ -1274,21 +2937,49 @@ of it may be needed again.
 
 Every route's class — public, self, viewer, operator, admin, owner — is in
 [`server/route-table.mjs`](server/route-table.mjs) (see [Roles](#roles)).
-Below, `/healthz` and `/api/version` are `public` and `/auth/signout-others`
-is `self`; `/api/org` and every `/api/org/…` route are `admin`, every
-`/api/admin/…` route `owner` (see [The Identity API](#the-identity-api));
-every other `GET` is `viewer` and every other route `operator`.
+Below, `/healthz`, `/api/version`, `/` and `/index.html` are `public` and
+`/auth/signout-others` is `self`; `/api/org` and every `/api/org/…` route are `admin`, every
+`/api/admin/…` route `owner` (see [The Identity API](#the-identity-api)),
+and every `/api/mcp-endpoints` route but its `GET` is `admin` (an endpoint
+record is where the server will send the org's read token: its changes take
+the identity API's defences — the `X-Observogram-CSRF: 1` header in every
+posture, closed on an exposed server without sign-in); `GET /api/audit` is
+`admin` (the org's rows; an owner reads the deployment's; closed in the
+open, exposed posture — see [The Audit](#the-audit)); every `/api/mcp/…`
+route is `operator` (the live MCP API: a server-side request to an MCP
+target, so without sign-in it answers only a request sent straight to a
+loopback address, it is closed on an exposed server without sign-in, and
+every request takes the `X-Observogram-CSRF: 1` header but the bearer
+token's; a live job's gate log is its starter's — `POST /api/draft-from-mcp`
+and `POST /api/refresh-live` take the same posture); every `/api/mcp-settings/…`
+route is `admin` (the MCP server-settings API, off unless `OBSERVOGRAM_MCP_ADMIN_PROXY=1`:
+a server-side request carrying an admin's settings to the MCP server, so the
+live MCP API's posture with the admin class); every other `GET` is `viewer` and every other route `operator`.
+
+A request body the server cannot read is answered as JSON on every route,
+`{ ok: false, error }` with a fixed text and quoting none of the body:
+`400` when it is not valid JSON, `413` when it is over the cap, `415` for an
+unsupported charset or content encoding. The body is not logged.
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/healthz` | Health and vendored spec version |
 | `GET` | `/api/version` | Which build is this: version, build (commit count), commit, branch, dirty, date, shallow, source, label — public, no-store |
+| `GET` | `/` | The studio shell (`studio/index.html`) — the file as shipped, or its branded rendering when `OBSERVOGRAM_BRAND_FILE` / `OBSERVOGRAM_BRAND_*` is set (see Rebadging); every non-`/api` path the router does not know answers the same |
+| `GET` | `/index.html` | The same shell by name |
 | `GET` | `/api/packs` | In-memory and catalog pack registry |
 | `GET` | `/api/examples` | Bundled example packs |
+| `GET` | `/api/taxonomy` | The artefact taxonomy override the server was started with (`OBSERVOGRAM_TAXONOMY`): `{ ok, taxonomy, configured }` — the document or `null`, never its path; no-store |
+| `GET` | `/api/mcp-settings` | The MCP server-settings policy the server was started with (`OBSERVOGRAM_MCP_SETTINGS_POLICY`, rebadge batch 4) and whether the opt-in pass-through is on (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`): `{ ok, proxy, policy, configured }` — the document or `null`, never its path; no-store. The studio reads it when its Server settings modal opens |
+| `POST` | `/api/mcp-settings/describe` | The opt-in pass-through (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`, rebadge batch 4; `404 { denied: 'off' }` otherwise): `{ mcpEndpointId }` or an admin's typed `mcpUrl` → the studio server reads `<MCP server root>/admin/schema` (no token: the endpoint's read token never rides, `mcpAuth` is refused) and answers `{ ok, status, descriptor \| notDescriptor \| reason }` — the validated description re-serialised, never the upstream text. Under the origin allowlist, https unless loopback, no redirect followed, 10 s, 16 KiB, never through the transport hook |
+| `POST` | `/api/mcp-settings/submit` | The same pass-through's configure (or a declared action): `{ mcpEndpointId \| mcpUrl, mode: 'described' \| 'generic', generic?, action?, values, acks }`. The path is the server's — the endpoint of the description it reads again now, or the settings policy's `generic.path` (else `/configure`) —, the settings policy is re-checked (a missing acknowledgement is a 409 `{ ok: false, denied: 'policy-ack', rule, unevaluated?, error }` naming the rule by index, `unevaluated: true` when the server could not check that rule), and the answer is `{ ok, status, contentType, bytes, outcome: { ok?, message?, checks? } \| null, redacted }` — the outcome shape redacted, never another body. A malformed body is a 400 that quotes none of it; the body is never logged or kept; one `live.mcp-settings` row (field names and acknowledged rule indexes, never a value) |
 | `GET` | `/api/references` | Curated catalogue reference packs |
 | `GET` | `/api/packs/:id` | Adapted layered pack |
 | `GET` | `/api/packs/:id/canonical` | Canonical pack with env overlay |
-| `GET` | `/api/packs/:id/conformance` | Maturity-rubric scoring (`onPlaceholder` when the pack carries `library.todo.*` annotations) |
+| `GET` | `/api/packs/:id/verdicts` | A reviewer's verdicts on the pack's artefacts (GAP batch 2): `{ ok, pack, verdicts[], summary }` — each `{ artefact, key, family, title, status, reason, actor, setAt, carriedFrom }`, `status` one of `trusted`, `suspect`, `failed`; `unreviewed` is the absence of a record; a catalogue pack answers the empty document (`?env=` is ignored: verdicts are per pack) — see [Record Verdicts](#record-verdicts) |
+| `GET` | `/api/packs/:id/conformance` | Maturity-rubric scoring (the rubric grades what is declared, placeholders included; `npm run pack-conformance` lists the placeholders) (`onPlaceholder` when the pack carries `library.todo.*` annotations), graded at the service record's tier when one is set (the environment's for `?env=`, else the service's): `declaredTier` is the graded tier, `tier.pack` the pack's own, `tier.mismatch` says they differ; a pack with no record (a catalogue pack, a service without a tier) is graded at its own tier, `tier.from: 'pack'` |
+| `GET` | `/api/packs/:id/audit-report` | The service audit report (GAP batch 2; [Export A Service Audit Report](#export-a-service-audit-report)): `?format=json` (default) or `html`, `?top=<1..100>` the goes-blind listing size, `?download=1` an attachment named `<id>.audit-report.<ext>`, `?env=` grades the environment. Its conformance section is this route's `/conformance` body; its verdict and waiver rows are the store's (the pack's and its primary service's), the author the audit actor; no-store. 400 names a bad `format` or `top`; 404 `{ error: 'unknown pack: <id>' }` |
+| `GET` | `/api/packs/:id/placeholders` | The placeholder report `npm run pack-conformance` prints, for the pack as the env overlay leaves it (`?env=`): `{ name, writers, markers, rows, counts, conformant }` (`tools/lib/pack-conformance.mjs` `packConformance`); no-store |
 | `GET` | `/api/diff?a=&b=` | Repo/live or pack/pack structural diff |
 | `GET` | `/api/packs/:id/compile-catalog` | Per-artifact compile tree |
 | `GET` | `/api/packs/:id/compile-artifact` | Compile one artifact or group |
@@ -1301,15 +2992,44 @@ every other `GET` is `viewer` and every other route `operator`.
 | `POST` | `/api/library/register` | `{ canonical, source? }` → the upload registry as `/api/validate` registers (`registered { id, source }`, `adapted`, `conformance`, `summary`; the source defaults to `library:<entries>@<tier>` for a library-built pack, `metadata.name` otherwise) — VERIFY's "Open pack in Discover" |
 | `POST` | `/api/crawl` | Draft a pack from uploaded repo files |
 | `POST` | `/api/crawl-github` | Draft a pack from a GitHub URL |
-| `POST` | `/api/draft-from-mcp` | Draft a live pack from an MCP endpoint |
-| `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts |
-| `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target |
+| `POST` | `/api/draft-from-mcp` | Draft a live pack from an MCP endpoint: `mcpEndpointId` — one of the org's MCP endpoint records, its read token from the variable the record names when the request sends none — or a typed `mcpUrl` (and `mcpAuth`), which needs the admin role; the answer's `mcpEndpoint` says which. The live MCP API's posture: without sign-in only a direct loopback request, closed when exposed, the CSRF header in every posture |
+| `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts (`mcpEndpointId`, or a typed `mcpUrl`: the admin role, for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.bulk` |
+| `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target (`mcpEndpointId`, or a typed `mcpUrl`: the admin role, for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.run` |
+| `GET` | `/api/deploys?pack=&limit=` | The org's deploy records from `deploys.jsonl`, newest first, the latest verify merged in; `actor` is the deployer's login (an OIDC deployer as `<issuerKey>#<sub>`), the bearer's label or `local` |
+| `POST` | `/api/deploys/:deployId/verify` | Record a post-deploy verification (`outcome`, `alignment`, `attempts`, `summary`, …) against a deploy; an audit row: `deploy.verify` |
+| `POST` | `/api/deploys/:deployId/rollback` | Roll a deploy back from its snapshot (`mcpEndpointId`, or a typed `mcpUrl`: the admin role, for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.rollback` |
 | `DELETE` | `/api/uploads` | Clear uploaded/crawled/drafted packs |
-| `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`, `inventory` `{ status, reason, environment, kinds }`) |
-| `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series) |
-| `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule) |
-| `POST` | `/api/journeys/:name/run` | Run a saved journey now |
-| `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file |
+| `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL; `problem`, the run's refusal, when a server run would refuse it), `notifyUnavailable` (only for an org whose every notify hook name another org's id takes: the `GET /api/journeys/notify-hooks` `none`) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`, `inventory` `{ status, reason, environment, kinds }`) |
+| `GET` | `/api/journeys/notify-hooks` | The org's notify hooks (`OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL`, with its `_TOKEN` when set): names and whether each is usable — never a value or origin |
+| `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series); a run writes its `notify.error` with any part of the hook's URL, the address its host resolved to and its token as `<redacted>`, and every record's — an older one's too — is served with the host or address Node's failed lookup or connection quoted (`getaddrinfo ENOTFOUND <redacted>`, `connect ECONNREFUSED <redacted>`), the address undici's connect timeout quoted, the certificate check's altnames, and any value undici quoted (a bearer token, a URL with credentials) as `<redacted>` |
+| `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule); a notify name the server refuses is never bound — it is listed in `refusedEnvNames`, and each snippet says so where its binding would have been |
+| `POST` | `/api/journeys/:name/run` | Run a saved journey now (a live Pack B through its `endpointId`, or a raw `url`: the admin role); a journey that notifies is refused before it runs unless its hook is the org's, set and allowed; without sign-in it runs only from this machine; an audit row: `journey.run`, on a failed run too |
+| `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file (a live Pack B as the org's registered endpoint, `mcp: { url, endpointId }`; an unregistered URL kept for an admin, else a file); a `notify` names one of the org's notify hooks (`GET /api/journeys/notify-hooks`); an audit row: `journey.capture` |
+| `POST` | `/api/refresh-live` | Fetch the org's live pack from an MCP endpoint (`mcpEndpointId`, or a typed `mcpUrl`: the admin role); an audit row: `live.refresh`. The live MCP API's posture, as the draft's |
+| `POST` | `/api/mcp/ping` | Test an MCP connection without building a pack (rebadge batch 3): `{ mcpEndpointId }` (the endpoint's read token rides as a draft's would; `mcpAuth` overrides it) or a typed `mcpUrl` (the admin role). `initialize`, the whole `tools/list` and one cheap read, within 10 s; answers `{ ok, verdict, origin, mcpEndpoint, reachable, auth: { outcome, sent }, tools: { count, capabilities, unmatched, complete }, read, timings, sentence, checked, notChecked }` — `verdict` one of `connected`, `auth-refused`, `unreachable`, `timeout`, `not-mcp`; 200 whenever the ping ran, 400 / 403 for the target, 502 a transport hook fault. Writes no live file and no pack; an audit row `live.ping` only for a typed URL |
+| `GET` | `/api/mcp/jobs` | The live jobs' context in this org (rebadge batch 3): `{ ok, scope: { defaults: { metricPrefixes, folderUids, datasourceUid }, from: org \| deployment \| null, errors }, running, lastTook: { snapshot, draft } }` — the snapshot scope the server is configured with (`OBSERVOGRAM_SNAPSHOT_*`, or the org's `OBSERVOGRAM_ORG_<ORG>_SNAPSHOT_*`), your own running job here (`null` otherwise), how long the org's last finished snapshot and draft took (ms) |
+| `POST` | `/api/mcp/jobs` | Start a live job: `{ kind: snapshot \| draft, mcpEndpointId \| mcpUrl, mcpAuth?, scope?, packName?, label? }` — the target as for a draft (a typed `mcpUrl` is the admin role's); `scope` (`metricPrefixes`, `folderUids`, `datasourceUid`) is a snapshot's and replaces the configured one. Answers **202** `{ ok, job, poll }` with `Location` at once; the job registers the pack when it ends (`live: 'snapshot'` or `'scaffold'` in `GET /api/packs`). One running job per org, four in the server (409, naming who started it); a label held by a pack of the other live kind is a 409; in memory — a restart loses running and finished jobs. Audit rows: the pack's when it registers, and `live.fetch` at every end |
+| `GET` | `/api/mcp/jobs/:jobId?since=` | Your job's gate log: `{ ok, job, stages, next, result?, error? }` — the stage records after the cursor `since` (send `next` back), each `{ seq, stage, label, state, counts, startedAt, finishedAt, message, gap }`; at the end `result` (`registered`, `validation`, `counts`, `gaps`, `tookMs`, a draft's `draft` summary) or `error`. Another member's job, another org's, one that expired (15 minutes after it ended) or that a restart lost: 404 `{ gone: true }` |
+| `POST` | `/api/mcp/jobs/:jobId/cancel` | Stop a running job (its starter, or an admin of the org — who gets `{ id, state }` and never the gate log): it ends `cancelled`, nothing registered; 409 once it has ended |
+| `GET` | `/api/services` | The org's service records, by slug, each with its environments (their MCP endpoint as `{ id, name, origin }`) and the packs linked to it (`id`, `label`, `source`, `role`) |
+| `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack) |
+| `GET` | `/api/services/:id` | One service record with its environments and packs |
+| `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description` (`changed` lists what differed; nothing → no audit row) |
+| `DELETE` | `/api/services/:id` | Removes the service with its environments, pack links and waivers (the packs stay registered; registering a pack that names the service re-creates it); the body counts `environments`, `packLinks` and `waivers` |
+| `GET` | `/api/services/:id/environments` | The service's environments |
+| `GET` | `/api/services/:id/waivers` | The service's waivers of conformance findings (GAP batch 2), newest first, history included: `{ ok, service: { id, slug }, waivers[], counts: { active, expired, revoked } }` — each `{ id, serviceId, ruleId, artefactId, reason, expiresAt, author, createdAt, state, expiresInDays, revokedAt, revokedBy, revokeReason }`; the `author` is the audit actor, visible to every member — see [Waive A Conformance Finding](#waive-a-conformance-finding) |
+| `POST` | `/api/services/:id/environments` | An environment (201): `{ name, tier?, bindings?, endpoints?, mcpEndpointId? }`; `endpoints` are links every member may open — never put a token in one |
+| `GET` | `/api/environments/:id` | One environment with its service |
+| `PATCH` | `/api/environments/:id` | Changes `name`, `tier`, `bindings`, `endpoints`, `mcpEndpointId` (`null` unbinds) |
+| `DELETE` | `/api/environments/:id` | Removes an environment |
+| `PUT` | `/api/packs/:id/verdicts/:artefact` | Records a reviewer's verdict on one artefact of a registered pack: `{ status, reason? }` → `{ ok, verdict, changed }` (`changed` lists what differed; the same status and reason again writes no row); a catalogue pack is 409, an unknown artefact 404; an audit row: `verdict.set` |
+| `DELETE` | `/api/packs/:id/verdicts/:artefact` | Clears it (the artefact is unreviewed again) → `{ ok, cleared }`; an audit row: `verdict.clear` |
+| `POST` | `/api/services/:id/waivers` | Waives a conformance finding on the service (201): `{ ruleId, artefactId?, reason, expiresAt }` → `{ ok, waiver }` — `ruleId` a rubric clause (`GET /api/maturity-rubric`), `artefactId` a canonical symbol (`slos.<id>`, `slis.<id>`) of one of the four per-item clauses or omitted for the whole clause, `expiresAt` after now and at most 366 days ahead; the `author` is the caller; one active waiver per `(ruleId, artefactId)` (409 names it); an audit row: `waiver.create` |
+| `POST` | `/api/waivers/:id/revoke` | Revokes it (`{ reason? }` → `{ ok, waiver }`, state `revoked`; the row stays as history); a second revoke is 409; an audit row: `waiver.revoke` |
+| `GET` | `/api/mcp-endpoints` | The org's MCP endpoint records, by name: `id`, `name`, `origin`, how many environments are checked through each; `url` and `readTokenEnv` to operators and above, `null` to a viewer; `policy` says whether this reader may send a typed MCP URL or register an endpoint, and the org's origin allowlist |
+| `POST` | `/api/mcp-endpoints` | An MCP endpoint record (201): `{ name, url, readTokenEnv? }` — the URL carries no credential (a query parameter named like one is refused by name), `readTokenEnv` names a variable of this org, `OBSERVOGRAM_ORG_<ORG>_<NAME>` |
+| `PATCH` | `/api/mcp-endpoints/:id` | Changes `name`, `url`, `readTokenEnv` (`null` clears it; `changed` lists what differed) |
+| `DELETE` | `/api/mcp-endpoints/:id` | Removes an MCP endpoint record; the environments checked through it stay, unbound (`unbound` lists their ids) |
 | `GET` | `/api/admin/users` | Every user, disabled ones too, with their memberships — never a password |
 | `POST` | `/api/admin/users` | Create a local user (201) |
 | `POST` | `/api/admin/users/:id/disable` | Disable a user: every session ends |
@@ -1327,6 +3047,7 @@ every other `GET` is `viewer` and every other route `operator`.
 | `POST` | `/api/org/members` | Add an existing user by login or verified email (201), or change a member's role |
 | `PATCH` | `/api/org/members/:userId` | Change a member's role |
 | `DELETE` | `/api/org/members/:userId` | Remove a member |
+| `GET` | `/api/audit?scope=&actor=&action=&kind=&targetKind=&targetId=&since=&until=&limit=&before=` | The org's audit rows, newest first (admins; an owner reads every org's and the deployment's with `scope=all` or `scope=deployment`); `next` pages. Closed in the open, exposed posture ([The Audit](#the-audit)). |
 | `POST` | `/auth/signout-others` | Sign out my other sessions: this browser's cookie is re-issued, every other one refused |
 
 ## Repository Map
@@ -1337,16 +3058,29 @@ server/
   library.mjs              Loads library/**/*.library.yaml from disk (the Node side of the BUILD engine)
   boot.mjs                 The boot order: opens the store, imports users.json / orgs.json once, the seed and the fail-closed checks
   identity-admin.mjs       The user and org rules behind npm run users / npm run orgs
+  service-admin.mjs        The service, environment and MCP endpoint rules behind /api/services, /api/environments and /api/mcp-endpoints; the tier rule; an MCP target picked by id
+  mcp-target-policy.mjs    Who may type an MCP URL (TYPED_MCP_URL_ROLE), the MCP origin allowlist, the redaction of a resolved credential (rebadge batch 3)
+  live-jobs.mjs            The live MCP jobs in memory: start, the gate log, cancel, the bounds, the configured snapshot scope (rebadge batch 3)
+  verdict-admin.mjs        The verdict rules behind /api/packs/:id/verdicts (GAP batch 2): the artefact index, the views, the carry on a label re-registration
+  waiver-admin.mjs         The waiver rules behind /api/services/:id/waivers and /api/waivers/:id/revoke (GAP batch 2): the body, the views, the conformance report's overlay
+  routes/                  The identity API (identity.mjs), the services API (services.mjs), the verdicts API (verdicts.mjs), the waivers API (waivers.mjs), the audit report and placeholders (audit-report.mjs), the live MCP API — the ping and the live jobs (live.mjs), the deploy routes, and the handler helpers they share (util.mjs)
   store/                   The embedded store (docs/STORE_PLAN.md): db.mjs (the one node:sqlite door), migrations, repositories, the legacy import and import --replace, backup/restore, ops.mjs (export, the replace request, rekey-issuer, purge-org)
+  fixtures/                What the suites share: serve-child.mjs (a hermetic child server, the STRIP list), platform.mjs (isWin32, the reasoned win32 skips), pre-store-build.mjs, route-inventory.mjs, store-050-guard.mjs
   test-smoke.mjs           End-to-end route smoke tests
 
 studio/
   app.mjs                  Browser app shell and three-step workflow
   compare-view.mjs         Assessment (diagnostic grade), Compare, drift, traceability
+  compare-identity.mjs     Compare's Pair by switch: behaviour (the server's diff), name or id re-keyed in the browser with /lib/identity-modes.mjs and /lib/diff.mjs
+  live-model.mjs           The live MCP connection's pure models: the ping's result, the live panel's steps, plan, gate log and result (live-api.mjs loads, live-view.mjs draws)
   compile-view.mjs         Remediate, compile catalog, deploy surfaces
+  remediation-flow-view.mjs  The response path (GAP batch 2): the engine loaded at call time, the view model, the panel Diagnose and Remediate share
   layers-view.mjs          Discover Observogram and artifact cards
+  brand.mjs                The studio's brand: reads the shell's #brand-config, loads /lib/brand.mjs the house way, hands state.brand its chrome strings
   neuron-view.mjs          Advanced → Neuron: fleet tiles, trend / heatmap / bar panels, the journey in focus, the newest record opened up
   journeys-view.mjs        Saved journeys: capture, run-now, history, stack chips, chains + cause lines (the cards Neuron composes)
+  static-backend.mjs       The static bundle's backend in the browser: the pack routes and Compare's diff, retrofeed and the audit report from tools/lib (the PromQL parser loaded at the first call), 501 no-backend for the rest, the Export and audit-report downloads, the notice (bundle-only; the live studio never imports it)
+  static-remedies.mjs      The static posture's texts and controls: serverNeeded, DEPLOY_CONTROLS, staticRemedy, staticInputOf, staticTraceActions (a pure model the views read when no server is behind the page)
   build-model.mjs          The BUILD journey's pure models (define / compile / verify, the stack, the definition column, the layer sheet, the clause checklist's three states, step reachability)
   build-api.mjs            The BUILD journey's loaders over /api/library/* (fetchFn injectable)
   build-definition-view.mjs  BUILD — the definition column on every step (service, the tier as a segmented control, the entries as chips, the conformance summary)
@@ -1360,18 +3094,37 @@ tools/
   cli.mjs                  packc CLI (journey run / list, compile, init, store backup / restore, …)
   crawl-repo.mjs           CLI repo crawler
   fetch-live-pack.mjs      MCP live-pack fetcher
+  build-studio-bundle.mjs  The studio as one static HTML file: an import map of data: modules, inlined stylesheets, the packs (npm run build:studio)
   pack-init.mjs            packc init: build a pack from the library (list / show / instantiate)
   test-build-model.mjs     The BUILD journey's studio models over captured API responses (tools/fixtures/build/)
+  test-platform.mjs        The Windows support statement's Linux-runnable proofs: fileURLToPath over URL.pathname, the T1 separator idiom, the platform fixture, and the guards (no URL.pathname as a path, 'win32' only in the fixture, every skip reasoned and counted in README "Platforms", which also states the SKIP win32: lines a Windows run prints)
+  tap-summary.mjs          The end of a CI log for a node --test TAP run: the host, the totals, skips by reason, every failure with its place and error (a harness suite's ✗ lines), the timing bounds (bound: lines, nearest the limit first), the slowest tests, annotations; the SKIP win32: count held to README "Platforms" (--win32-skips readme); the run's shape and the cross-leg comparison (--shape, --compare)
+  test-tap-summary.mjs     tap-summary: the TAP parse and its escapes, the SKIP win32: count, failures and their places (POSIX and Windows), annotations and their order, the verdict, README's count, UTF-16 and code-page captures, the CLI and its refusals, the skip grouping, the timing bounds, the shape and the comparison
+  test-remediation-flow.mjs  The response-path engine: the linking rule, the catalogue pin, states from a diff, the steps
+  test-remediation-flow-view.mjs  The response-path panel: loader, gate, view model, HTML on both screens, escaping, the .rflow-* zone's tokens and AA
+  test-doc-test-totals.mjs The `Tests: a → b` totals in docs/UPDATE_JOURNEY.md chain within a section and agree with docs/CHANGELOG.md's Unreleased pairs and with the batch delivery report (docs/DELIVERY-*.md)
   validate-pack.mjs        Canonical pack validator
+  pack-conformance.mjs     The placeholders a pack still carries: path, field, what it needs, where it comes from (--json, --strict)
+  audit-report.mjs         packc audit-report: a pack's service audit report as JSON or HTML (--env, --format, --out, --brand, --taxonomy, --verdicts, --waivers, --no-timestamp)
+  test-audit-report.mjs    The service audit report: the model's sections, determinism, escaping, the goldens (tools/fixtures/golden/audit-report/), the CLI, the Conformance view's download anchors
+  upconvert-legacy.mjs     Layered JSON -> canonical; idempotent, merges into an existing output (--merge, --overwrite)
   lib/
     adapter.mjs            Canonical pack -> layered UI model
     blast-radius.mjs       Blind-spot blast radius over the requirement graph (zero-import, vendorable)
+    brand.mjs              The one brand config: DEFAULT_BRAND (today's Observogram), normalizeBrand, the chrome / shell / token renderers (zero-import, vendorable)
+    brand-env.mjs          OBSERVOGRAM_* / TOMOGRAPH_* env names, the workspace root, loadBrand() (node-only)
     chain-history.mjs      Requirement-chain records per run, transitions, candidate causes (zero-import, vendorable)
     compile.mjs            packc compiler
     conformance.mjs        Maturity rubric
-    diff.mjs               Structural pack diff
+    remediation-flow.mjs   The response path: a remediation's trigger resolved to its alerts, states from the comparison, next steps (vendorable)
+    diff.mjs               Structural pack diff (an identity mode or key function; a snapshot's scope parked as not checked)
+    identity-modes.mjs     Comparison identity modes: behaviour (identityKeyOf), name and id keys, pairingOf (vendorable)
+    live-fetch.mjs         The live fetch's contract: the stage ids, the plan, the snapshot scope and its annotations (zero-import, vendorable)
     journey.mjs            Journey definitions, runner, gate, run history (node-only)
+    legacy.mjs             Layered-JSON upconvert and the merge-safe re-run (mergeUpconvert); imports pack-conformance.mjs
     library.mjs            The BUILD journey engine: entries, tier scaffold, instantiation, todos, provenance (browser-safe)
+    audit-report.mjs       The service audit report: buildAuditReport (seven sections over the engines), renderAuditReportHtml over the design kit and the brand (vendorable)
+    pack-conformance.mjs   Scaffold markers -> {path, field, needs, source, hint} rows; the adapter's symbol grammar (zero-import, vendorable)
     stack-evidence.mjs     Stack self-metric history helpers (browser-safe, vendorable)
     traceability.mjs       Requirement chains
 
@@ -1380,7 +3133,7 @@ examples/
   target-advanced.pack.yaml
   demo-skeleton.pack.yaml
 
-vendor/observability-pack-spec/v1.3/examples/
+vendor/observability-pack-spec/v1.4/examples/
   payment-service.pack.yaml
 
 reference-packs/
@@ -1422,7 +3175,11 @@ deploy/k8s/
 - [`docs/REFACTORING_PLAN.md`](docs/REFACTORING_PLAN.md) - maintainability refactor backlog from the 2026-06 audit
 - [`docs/BRANCHING.md`](docs/BRANCHING.md) - the branching model: lanes, per-commit bar, multi-writer rules, promotion cadence
 - [`docs/VENDORING.md`](docs/VENDORING.md) - vendoring the verdict/diff engines into a downstream studio, and how to stay current
+- [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) - vendoring the pure libraries by manifest (`VENDOR-MANIFEST.json`): snapshot → verify hashes → smoke → bump
 - [`docs/UI_CONVENTIONS.md`](docs/UI_CONVENTIONS.md) - studio view-module conventions: the host seam, loader/renderer split, render signatures, CSS zones
+- [`docs/DELIVERY-REBADGE-BATCH3.md`](docs/DELIVERY-REBADGE-BATCH3.md) - delivery report for rebadge batch 3 (live-fetch UX: a caller-supplied MCP URL is a privilege, the ping, the true snapshot and live jobs, comparison identity modes): what shipped per item, the measured test totals, what is deferred by name, what a plugin bridge still does
+- [`docs/DELIVERY-GAP-BATCH2.md`](docs/DELIVERY-GAP-BATCH2.md) - delivery report for rebadge batch 2, PR 2 (B3, GAP batch 2: verdicts, waivers, diagnose → remediate flow, glossary widgets, service audit report): what shipped per feature, the measured test totals, what is deferred by name and why
+- [`docs/DELIVERY-REBADGE-BATCH2.md`](docs/DELIVERY-REBADGE-BATCH2.md) - delivery report for rebadge batch 2, PR 1 (B1, B2, B4): what shipped per item, the measured test totals, what is deferred and why
 
 Superseded planning docs live in [`docs/archive/`](docs/archive/README.md).
 

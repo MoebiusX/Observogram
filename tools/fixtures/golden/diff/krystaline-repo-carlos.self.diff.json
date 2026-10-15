@@ -1,0 +1,2381 @@
+{
+  "case": "krystaline-repo-carlos.self",
+  "opts": null,
+  "taxonomy": null,
+  "sha256": "ae7c9bcf9b1107ec31a401cfbb68245ba00566e4fff92eb70f0b2c487bc1e0fb",
+  "bytes": 831518,
+  "keys": [
+    "a",
+    "b",
+    "scope",
+    "collisions",
+    "summary",
+    "layers"
+  ],
+  "a": {
+    "id": "krystaline",
+    "name": "krystaline",
+    "service": "krystaline",
+    "criticality": "tier-2",
+    "environment": "prod",
+    "version": "0.1.0-crawled",
+    "binding": "otel-elastic-prometheus-grafana"
+  },
+  "b": {
+    "id": "krystaline",
+    "name": "krystaline",
+    "service": "krystaline",
+    "criticality": "tier-2",
+    "environment": "prod",
+    "version": "0.1.0-crawled",
+    "binding": "otel-elastic-prometheus-grafana"
+  },
+  "scope": {
+    "mode": "service",
+    "service": "krystaline",
+    "serviceTokens": [
+      "bayesian",
+      "bayesianservice",
+      "krystaline",
+      "krystalinex",
+      "krystalinexserver",
+      "otelmcpserver",
+      "payment",
+      "paymentprocessor"
+    ],
+    "declaredMetricCount": 183,
+    "metricPrefixes": [
+      "anomalies",
+      "auth",
+      "bayesian",
+      "circuit",
+      "finops",
+      "gen",
+      "genai",
+      "kx",
+      "order",
+      "orders",
+      "price",
+      "settlement",
+      "slo",
+      "up"
+    ]
+  },
+  "collisions": [
+    {
+      "layer": "L2",
+      "kind": "pipeline_processor",
+      "key": "pipeline_processor::{\"name\":\"batch\"}",
+      "aCount": 2,
+      "bCount": 2
+    },
+    {
+      "layer": "L2",
+      "kind": "pipeline_receiver",
+      "key": "pipeline_receiver::{\"name\":\"otlp\"}",
+      "aCount": 2,
+      "bCount": 2
+    },
+    {
+      "layer": "L4",
+      "kind": "alert_route",
+      "key": "alert_route::{\"severity\":\"sev1\"}",
+      "aCount": 2,
+      "bCount": 2
+    },
+    {
+      "layer": "L4",
+      "kind": "alert_route",
+      "key": "alert_route::{\"severity\":\"sev2\"}",
+      "aCount": 5,
+      "bCount": 5
+    }
+  ],
+  "summary": {
+    "onlyInA": 0,
+    "onlyInB": 0,
+    "inBoth": 309,
+    "aligned": 309,
+    "drifted": 0,
+    "outOfScope": 0,
+    "scaffold": 6,
+    "notObserved": 0,
+    "union": 309,
+    "aTotal": 309,
+    "bTotal": 309,
+    "jaccard": 1,
+    "alignment": 1
+  },
+  "layers": {
+    "L1": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "sli::{\"id\":\"finops_cost\"}",
+          "a": "SLI-15",
+          "b": "SLI-15",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"finops_cpu\"}",
+          "a": "SLI-16",
+          "b": "SLI-16",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"finops_errors\"}",
+          "a": "SLI-12",
+          "b": "SLI-12",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"finops_kong\"}",
+          "a": "SLI-18",
+          "b": "SLI-18",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"finops_logs\"}",
+          "a": "SLI-14",
+          "b": "SLI-14",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"finops_memory\"}",
+          "a": "SLI-17",
+          "b": "SLI-17",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"finops_requests\"}",
+          "a": "SLI-11",
+          "b": "SLI-11",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"finops_spans\"}",
+          "a": "SLI-13",
+          "b": "SLI-13",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"genai_client_operation_duration\"}",
+          "a": "SLI-06",
+          "b": "SLI-06",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"genai_client_operation\"}",
+          "a": "SLI-07",
+          "b": "SLI-07",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"genai_client_token_usage\"}",
+          "a": "SLI-08",
+          "b": "SLI-08",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"genai_rca_analysis_duration\"}",
+          "a": "SLI-09",
+          "b": "SLI-09",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"genai_rca_analysis\"}",
+          "a": "SLI-10",
+          "b": "SLI-10",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"slo_availability\"}",
+          "a": "SLI-04",
+          "b": "SLI-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"slo_http_request_duration\"}",
+          "a": "SLI-02",
+          "b": "SLI-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"slo_http_requests\"}",
+          "a": "SLI-01",
+          "b": "SLI-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"slo_latency\"}",
+          "a": "SLI-05",
+          "b": "SLI-05",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"slo_server\"}",
+          "a": "SLI-03",
+          "b": "SLI-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"finops_cost_99\"}",
+          "a": "SLO-15",
+          "b": "SLO-15",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"finops_cpu_99\"}",
+          "a": "SLO-16",
+          "b": "SLO-16",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"finops_errors_99\"}",
+          "a": "SLO-12",
+          "b": "SLO-12",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"finops_kong_99\"}",
+          "a": "SLO-18",
+          "b": "SLO-18",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"finops_logs_99\"}",
+          "a": "SLO-14",
+          "b": "SLO-14",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"finops_memory_99\"}",
+          "a": "SLO-17",
+          "b": "SLO-17",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"finops_requests_99\"}",
+          "a": "SLO-11",
+          "b": "SLO-11",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"finops_spans_99\"}",
+          "a": "SLO-13",
+          "b": "SLO-13",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"genai_client_operation_99\"}",
+          "a": "SLO-07",
+          "b": "SLO-07",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"genai_client_operation_duration_99\"}",
+          "a": "SLO-06",
+          "b": "SLO-06",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"genai_client_token_usage_99\"}",
+          "a": "SLO-08",
+          "b": "SLO-08",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"genai_rca_analysis_99\"}",
+          "a": "SLO-10",
+          "b": "SLO-10",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"genai_rca_analysis_duration_99\"}",
+          "a": "SLO-09",
+          "b": "SLO-09",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"slo_availability_99\"}",
+          "a": "SLO-04",
+          "b": "SLO-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"slo_http_request_duration_99\"}",
+          "a": "SLO-02",
+          "b": "SLO-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"slo_http_requests_99\"}",
+          "a": "SLO-01",
+          "b": "SLO-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"slo_latency_99\"}",
+          "a": "SLO-05",
+          "b": "SLO-05",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"slo_server_99\"}",
+          "a": "SLO-03",
+          "b": "SLO-03",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 36,
+      "drifted": 0
+    },
+    "L2": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "backend::{\"product\":\"alertmanager\",\"signal\":\"alerting\"}",
+          "a": "BAK-01",
+          "b": "BAK-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"grafana\",\"signal\":\"dashboards\"}",
+          "a": "BAK-10",
+          "b": "BAK-10",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"jaeger\",\"signal\":\"traces\"}",
+          "a": "BAK-03",
+          "b": "BAK-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"kong\",\"signal\":\"gateway\"}",
+          "a": "BAK-09",
+          "b": "BAK-09",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"kube-state-metrics\",\"signal\":\"metrics\"}",
+          "a": "BAK-11",
+          "b": "BAK-11",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"loki\",\"signal\":\"logs\"}",
+          "a": "BAK-07",
+          "b": "BAK-07",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"node-exporter\",\"signal\":\"metrics\"}",
+          "a": "BAK-02",
+          "b": "BAK-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"opentelemetry-collector\",\"signal\":\"collection\"}",
+          "a": "BAK-04",
+          "b": "BAK-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"promtail\",\"signal\":\"logs\"}",
+          "a": "BAK-08",
+          "b": "BAK-08",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"victoriametrics\",\"signal\":\"metrics\"}",
+          "a": "BAK-05",
+          "b": "BAK-05",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"vmalert\",\"signal\":\"alerting\"}",
+          "a": "BAK-06",
+          "b": "BAK-06",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"alerts\"}",
+          "a": "METRIC-SRC-01",
+          "b": "METRIC-SRC-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"anomalies_detected_total\"}",
+          "a": "METRIC-SRC-02",
+          "b": "METRIC-SRC-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"auth_failures_total\"}",
+          "a": "METRIC-SRC-03",
+          "b": "METRIC-SRC-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_alert_incidents_learned\"}",
+          "a": "METRIC-SRC-04",
+          "b": "METRIC-SRC-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_alert_infer_requests_total\"}",
+          "a": "METRIC-SRC-05",
+          "b": "METRIC-SRC-05",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_alert_train_requests_total\"}",
+          "a": "METRIC-SRC-06",
+          "b": "METRIC-SRC-06",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_infer_duration_seconds\"}",
+          "a": "METRIC-SRC-07",
+          "b": "METRIC-SRC-07",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_infer_errors_total\"}",
+          "a": "METRIC-SRC-08",
+          "b": "METRIC-SRC-08",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_infer_requests_total\"}",
+          "a": "METRIC-SRC-09",
+          "b": "METRIC-SRC-09",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_model_trained\"}",
+          "a": "METRIC-SRC-10",
+          "b": "METRIC-SRC-10",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_poll_cycles_total\"}",
+          "a": "METRIC-SRC-11",
+          "b": "METRIC-SRC-11",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_poll_errors_total\"}",
+          "a": "METRIC-SRC-12",
+          "b": "METRIC-SRC-12",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_services_tracked\"}",
+          "a": "METRIC-SRC-13",
+          "b": "METRIC-SRC-13",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_train_duration_seconds\"}",
+          "a": "METRIC-SRC-14",
+          "b": "METRIC-SRC-14",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_train_errors_total\"}",
+          "a": "METRIC-SRC-15",
+          "b": "METRIC-SRC-15",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"bayesian_train_requests_total\"}",
+          "a": "METRIC-SRC-16",
+          "b": "METRIC-SRC-16",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"circuit_breaker_state\"}",
+          "a": "METRIC-SRC-17",
+          "b": "METRIC-SRC-17",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"circuit_breaker_trips_total\"}",
+          "a": "METRIC-SRC-18",
+          "b": "METRIC-SRC-18",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"container_cpu_usage_seconds_total\"}",
+          "a": "METRIC-SRC-19",
+          "b": "METRIC-SRC-19",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"container_fs_limit_bytes\"}",
+          "a": "METRIC-SRC-20",
+          "b": "METRIC-SRC-20",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"container_fs_usage_bytes\"}",
+          "a": "METRIC-SRC-21",
+          "b": "METRIC-SRC-21",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"container_memory_rss\"}",
+          "a": "METRIC-SRC-22",
+          "b": "METRIC-SRC-22",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"container_memory_working_set_bytes\"}",
+          "a": "METRIC-SRC-23",
+          "b": "METRIC-SRC-23",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"container_network_receive_bytes_total\"}",
+          "a": "METRIC-SRC-24",
+          "b": "METRIC-SRC-24",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"container_network_transmit_bytes_total\"}",
+          "a": "METRIC-SRC-25",
+          "b": "METRIC-SRC-25",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"container_spec_cpu_quota\"}",
+          "a": "METRIC-SRC-26",
+          "b": "METRIC-SRC-26",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"container_spec_memory_limit_bytes\"}",
+          "a": "METRIC-SRC-27",
+          "b": "METRIC-SRC-27",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"finops:cost:request_units_per_service_1h\"}",
+          "a": "METRIC-SRC-28",
+          "b": "METRIC-SRC-28",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"finops:cost:telemetry_index_1h\"}",
+          "a": "METRIC-SRC-29",
+          "b": "METRIC-SRC-29",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"finops:cpu:usage_per_pod_5m\"}",
+          "a": "METRIC-SRC-30",
+          "b": "METRIC-SRC-30",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"finops:errors:rate_per_service_5m\"}",
+          "a": "METRIC-SRC-31",
+          "b": "METRIC-SRC-31",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"finops:kong:overhead_seconds\"}",
+          "a": "METRIC-SRC-32",
+          "b": "METRIC-SRC-32",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"finops:logs:bytes_rate_per_component_5m\"}",
+          "a": "METRIC-SRC-33",
+          "b": "METRIC-SRC-33",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"finops:memory:usage_per_pod_gb_hours\"}",
+          "a": "METRIC-SRC-34",
+          "b": "METRIC-SRC-34",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"finops:requests:rate_per_service_5m\"}",
+          "a": "METRIC-SRC-35",
+          "b": "METRIC-SRC-35",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"finops:spans:dropped_rate_5m\"}",
+          "a": "METRIC-SRC-36",
+          "b": "METRIC-SRC-36",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"finops:spans:exported_rate_5m\"}",
+          "a": "METRIC-SRC-37",
+          "b": "METRIC-SRC-37",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"finops:spans:sampling_ratio\"}",
+          "a": "METRIC-SRC-38",
+          "b": "METRIC-SRC-38",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"gen_ai_client_operation_duration_seconds\"}",
+          "a": "METRIC-SRC-39",
+          "b": "METRIC-SRC-39",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"gen_ai_client_operation_time_per_output_chunk_seconds\"}",
+          "a": "METRIC-SRC-41",
+          "b": "METRIC-SRC-41",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"gen_ai_client_operation_time_to_first_chunk_seconds\"}",
+          "a": "METRIC-SRC-43",
+          "b": "METRIC-SRC-43",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"gen_ai_client_operations_total\"}",
+          "a": "METRIC-SRC-45",
+          "b": "METRIC-SRC-45",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"gen_ai_client_token_usage\"}",
+          "a": "METRIC-SRC-46",
+          "b": "METRIC-SRC-46",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"genai:client_operation_duration:p95_5m\"}",
+          "a": "METRIC-SRC-49",
+          "b": "METRIC-SRC-49",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"genai:client_operation_duration:p99_5m\"}",
+          "a": "METRIC-SRC-50",
+          "b": "METRIC-SRC-50",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"genai:client_operation:error_ratio_5m\"}",
+          "a": "METRIC-SRC-48",
+          "b": "METRIC-SRC-48",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"genai:client_token_usage:rate_1h\"}",
+          "a": "METRIC-SRC-51",
+          "b": "METRIC-SRC-51",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"genai:rca_analysis_duration:p95_5m\"}",
+          "a": "METRIC-SRC-53",
+          "b": "METRIC-SRC-53",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"genai:rca_analysis:failure_ratio_5m\"}",
+          "a": "METRIC-SRC-52",
+          "b": "METRIC-SRC-52",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"http_active_connections\"}",
+          "a": "METRIC-SRC-54",
+          "b": "METRIC-SRC-54",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"http_request_duration_seconds\"}",
+          "a": "METRIC-SRC-55",
+          "b": "METRIC-SRC-55",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"http_request_errors_total\"}",
+          "a": "METRIC-SRC-58",
+          "b": "METRIC-SRC-58",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"http_requests_total\"}",
+          "a": "METRIC-SRC-59",
+          "b": "METRIC-SRC-59",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kong_kong_latency_ms\"}",
+          "a": "METRIC-SRC-60",
+          "b": "METRIC-SRC-60",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_configmap_info\"}",
+          "a": "METRIC-SRC-61",
+          "b": "METRIC-SRC-61",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_deployment_spec_replicas\"}",
+          "a": "METRIC-SRC-62",
+          "b": "METRIC-SRC-62",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_deployment_status_ready_replicas\"}",
+          "a": "METRIC-SRC-63",
+          "b": "METRIC-SRC-63",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_node_info\"}",
+          "a": "METRIC-SRC-64",
+          "b": "METRIC-SRC-64",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_node_spec_taint\"}",
+          "a": "METRIC-SRC-65",
+          "b": "METRIC-SRC-65",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_node_status_allocatable\"}",
+          "a": "METRIC-SRC-66",
+          "b": "METRIC-SRC-66",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_node_status_condition\"}",
+          "a": "METRIC-SRC-67",
+          "b": "METRIC-SRC-67",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_container_info\"}",
+          "a": "METRIC-SRC-68",
+          "b": "METRIC-SRC-68",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_container_resource_limits\"}",
+          "a": "METRIC-SRC-69",
+          "b": "METRIC-SRC-69",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_container_resource_requests\"}",
+          "a": "METRIC-SRC-70",
+          "b": "METRIC-SRC-70",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_container_status_last_terminated_reason\"}",
+          "a": "METRIC-SRC-71",
+          "b": "METRIC-SRC-71",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_container_status_restarts_total\"}",
+          "a": "METRIC-SRC-72",
+          "b": "METRIC-SRC-72",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_created\"}",
+          "a": "METRIC-SRC-73",
+          "b": "METRIC-SRC-73",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_info\"}",
+          "a": "METRIC-SRC-74",
+          "b": "METRIC-SRC-74",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_spec_volumes_persistentvolumeclaims_info\"}",
+          "a": "METRIC-SRC-75",
+          "b": "METRIC-SRC-75",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_status_phase\"}",
+          "a": "METRIC-SRC-76",
+          "b": "METRIC-SRC-76",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_pod_status_ready\"}",
+          "a": "METRIC-SRC-77",
+          "b": "METRIC-SRC-77",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_secret_info\"}",
+          "a": "METRIC-SRC-78",
+          "b": "METRIC-SRC-78",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kube_service_info\"}",
+          "a": "METRIC-SRC-79",
+          "b": "METRIC-SRC-79",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kubelet_volume_stats_available_bytes\"}",
+          "a": "METRIC-SRC-80",
+          "b": "METRIC-SRC-80",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kubelet_volume_stats_used_bytes\"}",
+          "a": "METRIC-SRC-81",
+          "b": "METRIC-SRC-81",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kx_active_users_current\"}",
+          "a": "METRIC-SRC-82",
+          "b": "METRIC-SRC-82",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kx_llm_analysis_duration_seconds\"}",
+          "a": "METRIC-SRC-83",
+          "b": "METRIC-SRC-83",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kx_llm_analysis_total\"}",
+          "a": "METRIC-SRC-85",
+          "b": "METRIC-SRC-85",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kx_llm_dropped_events_total\"}",
+          "a": "METRIC-SRC-86",
+          "b": "METRIC-SRC-86",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kx_llm_events_by_severity_total\"}",
+          "a": "METRIC-SRC-87",
+          "b": "METRIC-SRC-87",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kx_llm_queue_depth\"}",
+          "a": "METRIC-SRC-88",
+          "b": "METRIC-SRC-88",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kx_logins_total\"}",
+          "a": "METRIC-SRC-89",
+          "b": "METRIC-SRC-89",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kx_matcher_order_processing_duration_seconds\"}",
+          "a": "METRIC-SRC-90",
+          "b": "METRIC-SRC-90",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kx_matcher_orders_processed_total\"}",
+          "a": "METRIC-SRC-92",
+          "b": "METRIC-SRC-92",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kx_matcher_queue_messages\"}",
+          "a": "METRIC-SRC-93",
+          "b": "METRIC-SRC-93",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kx_matcher_slippage_percent\"}",
+          "a": "METRIC-SRC-94",
+          "b": "METRIC-SRC-94",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kx_security_events_total\"}",
+          "a": "METRIC-SRC-96",
+          "b": "METRIC-SRC-96",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kx_trade_value_usd_total\"}",
+          "a": "METRIC-SRC-97",
+          "b": "METRIC-SRC-97",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kx_trade_volume_total\"}",
+          "a": "METRIC-SRC-98",
+          "b": "METRIC-SRC-98",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kx_trades_today\"}",
+          "a": "METRIC-SRC-99",
+          "b": "METRIC-SRC-99",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"kx_trades_total\"}",
+          "a": "METRIC-SRC-100",
+          "b": "METRIC-SRC-100",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_active_sessions\"}",
+          "a": "METRIC-SRC-101",
+          "b": "METRIC-SRC-101",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_auth_attempts_total\"}",
+          "a": "METRIC-SRC-102",
+          "b": "METRIC-SRC-102",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_backend_duration_seconds\"}",
+          "a": "METRIC-SRC-103",
+          "b": "METRIC-SRC-103",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_backend_requests_total\"}",
+          "a": "METRIC-SRC-105",
+          "b": "METRIC-SRC-105",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_http_request_duration_seconds\"}",
+          "a": "METRIC-SRC-106",
+          "b": "METRIC-SRC-106",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_http_requests_total\"}",
+          "a": "METRIC-SRC-107",
+          "b": "METRIC-SRC-107",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_registered_resources\"}",
+          "a": "METRIC-SRC-108",
+          "b": "METRIC-SRC-108",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_registered_tools\"}",
+          "a": "METRIC-SRC-109",
+          "b": "METRIC-SRC-109",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_resource_read_duration_seconds\"}",
+          "a": "METRIC-SRC-110",
+          "b": "METRIC-SRC-110",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_resource_reads_total\"}",
+          "a": "METRIC-SRC-111",
+          "b": "METRIC-SRC-111",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_server_info\"}",
+          "a": "METRIC-SRC-112",
+          "b": "METRIC-SRC-112",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_server_operation_duration_seconds\"}",
+          "a": "METRIC-SRC-113",
+          "b": "METRIC-SRC-113",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_tool_calls_total\"}",
+          "a": "METRIC-SRC-116",
+          "b": "METRIC-SRC-116",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_tool_duration_seconds\"}",
+          "a": "METRIC-SRC-117",
+          "b": "METRIC-SRC-117",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"mcp_tool_errors_total\"}",
+          "a": "METRIC-SRC-118",
+          "b": "METRIC-SRC-118",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"node_cpu_seconds_total\"}",
+          "a": "METRIC-SRC-119",
+          "b": "METRIC-SRC-119",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"node_filesystem_avail_bytes\"}",
+          "a": "METRIC-SRC-120",
+          "b": "METRIC-SRC-120",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"node_filesystem_size_bytes\"}",
+          "a": "METRIC-SRC-121",
+          "b": "METRIC-SRC-121",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"node_memory_memavailable_bytes\"}",
+          "a": "METRIC-SRC-122",
+          "b": "METRIC-SRC-122",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"node_memory_memtotal_bytes\"}",
+          "a": "METRIC-SRC-123",
+          "b": "METRIC-SRC-123",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"nodejs_nodejs_eventloop_lag_mean_seconds\"}",
+          "a": "METRIC-SRC-124",
+          "b": "METRIC-SRC-124",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"nodejs_nodejs_eventloop_lag_p99_seconds\"}",
+          "a": "METRIC-SRC-125",
+          "b": "METRIC-SRC-125",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"nodejs_process_resident_memory_bytes\"}",
+          "a": "METRIC-SRC-126",
+          "b": "METRIC-SRC-126",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"order_processing_duration_seconds\"}",
+          "a": "METRIC-SRC-127",
+          "b": "METRIC-SRC-127",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"orders_failed_total\"}",
+          "a": "METRIC-SRC-128",
+          "b": "METRIC-SRC-128",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"orders_processed_total\"}",
+          "a": "METRIC-SRC-129",
+          "b": "METRIC-SRC-129",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"otelcol_exporter_send_failed_spans_total\"}",
+          "a": "METRIC-SRC-130",
+          "b": "METRIC-SRC-130",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"otelcol_exporter_sent_spans_total\"}",
+          "a": "METRIC-SRC-131",
+          "b": "METRIC-SRC-131",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"otelcol_processor_dropped_spans_total\"}",
+          "a": "METRIC-SRC-132",
+          "b": "METRIC-SRC-132",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"pg_database_size_bytes\"}",
+          "a": "METRIC-SRC-133",
+          "b": "METRIC-SRC-133",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"pg_settings_max_connections\"}",
+          "a": "METRIC-SRC-134",
+          "b": "METRIC-SRC-134",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"pg_stat_activity_count\"}",
+          "a": "METRIC-SRC-135",
+          "b": "METRIC-SRC-135",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"pg_stat_database_tup_fetched\"}",
+          "a": "METRIC-SRC-136",
+          "b": "METRIC-SRC-136",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"pg_stat_database_tup_inserted\"}",
+          "a": "METRIC-SRC-137",
+          "b": "METRIC-SRC-137",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"pg_stat_database_tup_updated\"}",
+          "a": "METRIC-SRC-138",
+          "b": "METRIC-SRC-138",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"pg_stat_statements_mean_time_seconds\"}",
+          "a": "METRIC-SRC-139",
+          "b": "METRIC-SRC-139",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"pg_up\"}",
+          "a": "METRIC-SRC-140",
+          "b": "METRIC-SRC-140",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"price_feed_active_provider\"}",
+          "a": "METRIC-SRC-141",
+          "b": "METRIC-SRC-141",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"price_feed_escalation_stage\"}",
+          "a": "METRIC-SRC-142",
+          "b": "METRIC-SRC-142",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"price_feed_failovers_total\"}",
+          "a": "METRIC-SRC-143",
+          "b": "METRIC-SRC-143",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"price_feed_last_update_timestamp\"}",
+          "a": "METRIC-SRC-144",
+          "b": "METRIC-SRC-144",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"promtail_read_bytes_total\"}",
+          "a": "METRIC-SRC-145",
+          "b": "METRIC-SRC-145",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_process_resident_memory_bytes\"}",
+          "a": "METRIC-SRC-146",
+          "b": "METRIC-SRC-146",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_queue_consumers\"}",
+          "a": "METRIC-SRC-147",
+          "b": "METRIC-SRC-147",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_queue_depth\"}",
+          "a": "METRIC-SRC-148",
+          "b": "METRIC-SRC-148",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_queue_messages_delivered_total\"}",
+          "a": "METRIC-SRC-150",
+          "b": "METRIC-SRC-150",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_queue_messages_published_total\"}",
+          "a": "METRIC-SRC-151",
+          "b": "METRIC-SRC-151",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_queue_messages_ready\"}",
+          "a": "METRIC-SRC-152",
+          "b": "METRIC-SRC-152",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_queue_messages\"}",
+          "a": "METRIC-SRC-149",
+          "b": "METRIC-SRC-149",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_resident_memory_limit_bytes\"}",
+          "a": "METRIC-SRC-153",
+          "b": "METRIC-SRC-153",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"rabbitmq_up\"}",
+          "a": "METRIC-SRC-154",
+          "b": "METRIC-SRC-154",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"redis_connected_clients\"}",
+          "a": "METRIC-SRC-155",
+          "b": "METRIC-SRC-155",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"redis_evicted_keys_total\"}",
+          "a": "METRIC-SRC-156",
+          "b": "METRIC-SRC-156",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"redis_memory_max_bytes\"}",
+          "a": "METRIC-SRC-157",
+          "b": "METRIC-SRC-157",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"redis_memory_used_bytes\"}",
+          "a": "METRIC-SRC-158",
+          "b": "METRIC-SRC-158",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"redis_up\"}",
+          "a": "METRIC-SRC-159",
+          "b": "METRIC-SRC-159",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"settlement_latency_seconds\"}",
+          "a": "METRIC-SRC-160",
+          "b": "METRIC-SRC-160",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:availability:composite_1d\"}",
+          "a": "METRIC-SRC-161",
+          "b": "METRIC-SRC-161",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:availability:composite_1h\"}",
+          "a": "METRIC-SRC-162",
+          "b": "METRIC-SRC-162",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:availability:error_budget_remaining\"}",
+          "a": "METRIC-SRC-163",
+          "b": "METRIC-SRC-163",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_request_duration:p95_1h\"}",
+          "a": "METRIC-SRC-164",
+          "b": "METRIC-SRC-164",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_request_duration:p95_5m\"}",
+          "a": "METRIC-SRC-165",
+          "b": "METRIC-SRC-165",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_request_duration:p99_1h\"}",
+          "a": "METRIC-SRC-166",
+          "b": "METRIC-SRC-166",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_request_duration:p99_5m\"}",
+          "a": "METRIC-SRC-167",
+          "b": "METRIC-SRC-167",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_request_duration:ratio_below_2s_5m\"}",
+          "a": "METRIC-SRC-168",
+          "b": "METRIC-SRC-168",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_request_duration:ratio_below_500ms_1d\"}",
+          "a": "METRIC-SRC-169",
+          "b": "METRIC-SRC-169",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_request_duration:ratio_below_500ms_1h\"}",
+          "a": "METRIC-SRC-170",
+          "b": "METRIC-SRC-170",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_request_duration:ratio_below_500ms_5m\"}",
+          "a": "METRIC-SRC-171",
+          "b": "METRIC-SRC-171",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_requests:error_ratio_1d\"}",
+          "a": "METRIC-SRC-172",
+          "b": "METRIC-SRC-172",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_requests:error_ratio_1h\"}",
+          "a": "METRIC-SRC-173",
+          "b": "METRIC-SRC-173",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_requests:error_ratio_2h\"}",
+          "a": "METRIC-SRC-174",
+          "b": "METRIC-SRC-174",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_requests:error_ratio_30m\"}",
+          "a": "METRIC-SRC-175",
+          "b": "METRIC-SRC-175",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_requests:error_ratio_3d\"}",
+          "a": "METRIC-SRC-176",
+          "b": "METRIC-SRC-176",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_requests:error_ratio_5m\"}",
+          "a": "METRIC-SRC-177",
+          "b": "METRIC-SRC-177",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:http_requests:error_ratio_6h\"}",
+          "a": "METRIC-SRC-178",
+          "b": "METRIC-SRC-178",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:latency:error_budget_remaining\"}",
+          "a": "METRIC-SRC-179",
+          "b": "METRIC-SRC-179",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:server:probe_success_ratio_1d\"}",
+          "a": "METRIC-SRC-180",
+          "b": "METRIC-SRC-180",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:server:probe_success_ratio_1h\"}",
+          "a": "METRIC-SRC-181",
+          "b": "METRIC-SRC-181",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"slo:server:probe_success_ratio_5m\"}",
+          "a": "METRIC-SRC-182",
+          "b": "METRIC-SRC-182",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "metric::{\"name\":\"up\"}",
+          "a": "METRIC-SRC-183",
+          "b": "METRIC-SRC-183",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "otel::{}",
+          "a": "OTEL-01",
+          "b": "OTEL-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_exporter_metrics::{\"signal\":\"metrics\",\"target\":\"prometheusremotewrite\"}",
+          "a": "PIP-EXP-MET",
+          "b": "PIP-EXP-MET",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_exporter_traces::{\"signal\":\"traces\",\"target\":\"jaeger\"}",
+          "a": "PIP-EXP-TRC",
+          "b": "PIP-EXP-TRC",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"batch\"}#01",
+          "a": "PIP-PRC-01",
+          "b": "PIP-PRC-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"batch\"}#02",
+          "a": "PIP-PRC-04",
+          "b": "PIP-PRC-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"memory_limiter\"}",
+          "a": "PIP-PRC-02",
+          "b": "PIP-PRC-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"tail_sampling\"}",
+          "a": "PIP-PRC-03",
+          "b": "PIP-PRC-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_receiver::{\"name\":\"otlp\"}#01",
+          "a": "PIP-RCV-01",
+          "b": "PIP-RCV-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_receiver::{\"name\":\"otlp\"}#02",
+          "a": "PIP-RCV-02",
+          "b": "PIP-RCV-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"alertmanager\"}",
+          "a": "SCRAPE-SRC-01",
+          "b": "SCRAPE-SRC-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"bayesian-service\"}",
+          "a": "SCRAPE-SRC-02",
+          "b": "SCRAPE-SRC-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"grafana\"}",
+          "a": "SCRAPE-SRC-03",
+          "b": "SCRAPE-SRC-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"jaeger\"}",
+          "a": "SCRAPE-SRC-04",
+          "b": "SCRAPE-SRC-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"kong\"}",
+          "a": "SCRAPE-SRC-05",
+          "b": "SCRAPE-SRC-05",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"krystalinex-server\"}",
+          "a": "SCRAPE-SRC-06",
+          "b": "SCRAPE-SRC-06",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"kube-state-metrics\"}",
+          "a": "SCRAPE-SRC-07",
+          "b": "SCRAPE-SRC-07",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"kubernetes-pods\"}",
+          "a": "SCRAPE-SRC-08",
+          "b": "SCRAPE-SRC-08",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"loki\"}",
+          "a": "SCRAPE-SRC-09",
+          "b": "SCRAPE-SRC-09",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"mcp-public\"}",
+          "a": "SCRAPE-SRC-10",
+          "b": "SCRAPE-SRC-10",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"node-exporter\"}",
+          "a": "SCRAPE-SRC-11",
+          "b": "SCRAPE-SRC-11",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"ollama\"}",
+          "a": "SCRAPE-SRC-12",
+          "b": "SCRAPE-SRC-12",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"otel-collector\"}",
+          "a": "SCRAPE-SRC-13",
+          "b": "SCRAPE-SRC-13",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"otel-mcp-server\"}",
+          "a": "SCRAPE-SRC-14",
+          "b": "SCRAPE-SRC-14",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"payment-processor\"}",
+          "a": "SCRAPE-SRC-15",
+          "b": "SCRAPE-SRC-15",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"postgres-exporter\"}",
+          "a": "SCRAPE-SRC-16",
+          "b": "SCRAPE-SRC-16",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"promtail\"}",
+          "a": "SCRAPE-SRC-17",
+          "b": "SCRAPE-SRC-17",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"pushgateway\"}",
+          "a": "SCRAPE-SRC-18",
+          "b": "SCRAPE-SRC-18",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"rabbitmq\"}",
+          "a": "SCRAPE-SRC-19",
+          "b": "SCRAPE-SRC-19",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"redis\"}",
+          "a": "SCRAPE-SRC-20",
+          "b": "SCRAPE-SRC-20",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "scrape_job::{\"job\":\"victoriametrics\"}",
+          "a": "SCRAPE-SRC-21",
+          "b": "SCRAPE-SRC-21",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [
+        {
+          "key": "pipeline_exporter_logs::{\"signal\":\"logs\",\"target\":\"elasticsearch\"}@a#01",
+          "side": "a",
+          "id": "PIP-EXP-LOG"
+        },
+        {
+          "key": "pipeline_exporter_logs::{\"signal\":\"logs\",\"target\":\"elasticsearch\"}@b#02",
+          "side": "b",
+          "id": "PIP-EXP-LOG"
+        }
+      ],
+      "notObserved": [],
+      "aligned": 212,
+      "drifted": 0
+    },
+    "L2X": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "mesh::{\"product\":\"kong\",\"role\":\"gateway\"}",
+          "a": "MESH-01",
+          "b": "MESH-01",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 1,
+      "drifted": 0
+    },
+    "L3": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "dashboard::{\"id\":\"adz2hpb\"}",
+          "a": "DASH-03",
+          "b": "DASH-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "dashboard::{\"id\":\"krystalinex-unified\"}",
+          "a": "DASH-06",
+          "b": "DASH-06",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "dashboard::{\"id\":\"kx-ai-rca-reliability\"}",
+          "a": "DASH-01",
+          "b": "DASH-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "dashboard::{\"id\":\"kx-genai-operations\"}",
+          "a": "DASH-02",
+          "b": "DASH-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "dashboard::{\"id\":\"kx-mcp-observability-trace-coverage\"}",
+          "a": "DASH-04",
+          "b": "DASH-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "dashboard::{\"id\":\"kx-predictive-finops\"}",
+          "a": "DASH-05",
+          "b": "DASH-05",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:cost:request_units_per_service_1h\"}",
+          "a": "QRY-35",
+          "b": "QRY-35",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:cost:telemetry_index_1h\"}",
+          "a": "QRY-36",
+          "b": "QRY-36",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:cpu:usage_per_pod_5m\"}",
+          "a": "QRY-37",
+          "b": "QRY-37",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:errors:rate_per_service_5m\"}",
+          "a": "QRY-30",
+          "b": "QRY-30",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:kong:overhead_seconds\"}",
+          "a": "QRY-39",
+          "b": "QRY-39",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:logs:bytes_rate_per_component_5m\"}",
+          "a": "QRY-34",
+          "b": "QRY-34",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:memory:usage_per_pod_gb_hours\"}",
+          "a": "QRY-38",
+          "b": "QRY-38",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:requests:rate_per_service_5m\"}",
+          "a": "QRY-29",
+          "b": "QRY-29",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:spans:dropped_rate_5m\"}",
+          "a": "QRY-32",
+          "b": "QRY-32",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:spans:exported_rate_5m\"}",
+          "a": "QRY-31",
+          "b": "QRY-31",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"finops:spans:sampling_ratio\"}",
+          "a": "QRY-33",
+          "b": "QRY-33",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"genai:client_operation_duration:p95_5m\"}",
+          "a": "QRY-23",
+          "b": "QRY-23",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"genai:client_operation_duration:p99_5m\"}",
+          "a": "QRY-24",
+          "b": "QRY-24",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"genai:client_operation:error_ratio_5m\"}",
+          "a": "QRY-25",
+          "b": "QRY-25",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"genai:client_token_usage:rate_1h\"}",
+          "a": "QRY-26",
+          "b": "QRY-26",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"genai:rca_analysis_duration:p95_5m\"}",
+          "a": "QRY-27",
+          "b": "QRY-27",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"genai:rca_analysis:failure_ratio_5m\"}",
+          "a": "QRY-28",
+          "b": "QRY-28",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:availability:composite_1d\"}",
+          "a": "QRY-20",
+          "b": "QRY-20",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:availability:composite_1h\"}",
+          "a": "QRY-19",
+          "b": "QRY-19",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:availability:error_budget_remaining\"}",
+          "a": "QRY-21",
+          "b": "QRY-21",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_request_duration:p95_1h\"}",
+          "a": "QRY-14",
+          "b": "QRY-14",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_request_duration:p95_5m\"}",
+          "a": "QRY-12",
+          "b": "QRY-12",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_request_duration:p99_1h\"}",
+          "a": "QRY-15",
+          "b": "QRY-15",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_request_duration:p99_5m\"}",
+          "a": "QRY-13",
+          "b": "QRY-13",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_request_duration:ratio_below_2s_5m\"}",
+          "a": "QRY-11",
+          "b": "QRY-11",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_request_duration:ratio_below_500ms_1d\"}",
+          "a": "QRY-10",
+          "b": "QRY-10",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_request_duration:ratio_below_500ms_1h\"}",
+          "a": "QRY-09",
+          "b": "QRY-09",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_request_duration:ratio_below_500ms_5m\"}",
+          "a": "QRY-08",
+          "b": "QRY-08",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_requests:error_ratio_1d\"}",
+          "a": "QRY-06",
+          "b": "QRY-06",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_requests:error_ratio_1h\"}",
+          "a": "QRY-03",
+          "b": "QRY-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_requests:error_ratio_2h\"}",
+          "a": "QRY-04",
+          "b": "QRY-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_requests:error_ratio_30m\"}",
+          "a": "QRY-02",
+          "b": "QRY-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_requests:error_ratio_3d\"}",
+          "a": "QRY-07",
+          "b": "QRY-07",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_requests:error_ratio_5m\"}",
+          "a": "QRY-01",
+          "b": "QRY-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:http_requests:error_ratio_6h\"}",
+          "a": "QRY-05",
+          "b": "QRY-05",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:latency:error_budget_remaining\"}",
+          "a": "QRY-22",
+          "b": "QRY-22",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:server:probe_success_ratio_1d\"}",
+          "a": "QRY-18",
+          "b": "QRY-18",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:server:probe_success_ratio_1h\"}",
+          "a": "QRY-17",
+          "b": "QRY-17",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"slo:server:probe_success_ratio_5m\"}",
+          "a": "QRY-16",
+          "b": "QRY-16",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 45,
+      "drifted": 0
+    },
+    "L4": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "alert_route::{\"severity\":\"sev1\"}#01",
+          "a": "ALR-03",
+          "b": "ALR-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "alert_route::{\"severity\":\"sev1\"}#02",
+          "a": "ALR-04",
+          "b": "ALR-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "alert_route::{\"severity\":\"sev2\"}#01",
+          "a": "ALR-01",
+          "b": "ALR-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "alert_route::{\"severity\":\"sev2\"}#02",
+          "a": "ALR-02",
+          "b": "ALR-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "alert_route::{\"severity\":\"sev2\"}#03",
+          "a": "ALR-05",
+          "b": "ALR-05",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "alert_route::{\"severity\":\"sev2\"}#04",
+          "a": "ALR-06",
+          "b": "ALR-06",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "alert_route::{\"severity\":\"sev2\"}#05",
+          "a": "ALR-07",
+          "b": "ALR-07",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"genai_client_operation_99\"}",
+          "a": "POL-04",
+          "b": "POL-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"genai_client_operation_duration_99\"}",
+          "a": "POL-03",
+          "b": "POL-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"genai_client_token_usage_99\"}",
+          "a": "POL-06",
+          "b": "POL-06",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"genai_rca_analysis_99\"}",
+          "a": "POL-05",
+          "b": "POL-05",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"slo_availability_99\"}",
+          "a": "POL-07",
+          "b": "POL-07",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"slo_http_request_duration_99\"}",
+          "a": "POL-02",
+          "b": "POL-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"slo_http_requests_99\"}",
+          "a": "POL-01",
+          "b": "POL-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"slo_latency_99\"}",
+          "a": "POL-08",
+          "b": "POL-08",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 15,
+      "drifted": 0
+    },
+    "L5": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [],
+      "scaffold": [
+        {
+          "key": "baselines::{}@a#01",
+          "side": "a",
+          "id": "BASE-01"
+        },
+        {
+          "key": "synthetic::{\"id\":\"krystaline-health-canary\"}@a#02",
+          "side": "a",
+          "id": "SYN-01"
+        },
+        {
+          "key": "baselines::{}@b#03",
+          "side": "b",
+          "id": "BASE-01"
+        },
+        {
+          "key": "synthetic::{\"id\":\"krystaline-health-canary\"}@b#04",
+          "side": "b",
+          "id": "SYN-01"
+        }
+      ],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    },
+    "GOV": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    }
+  }
+}

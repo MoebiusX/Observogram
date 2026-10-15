@@ -13,8 +13,17 @@
 //   loadPackCanonical(meta)     → canonical pack object
 //   overlaidCanonical(c, env)   → { canonical } with env overlay applied
 //   readEnv(query)              → ?env= param or null
-//   actorForRequest(req)        → audit actor label
 //   contentHash(canonical)      → 8-char content hash for audit records
+// The actor of a record and its row is the principal's (req.observogramPrincipal.actor:
+// a login, the bearer's label, `local`), read through actorForRecord().
+//
+// Every route that appends to deploys.jsonl writes its audit row AFTER the
+// append (STORE_PLAN §5, slice 5: deploy.run, deploy.bulk, deploy.rollback,
+// deploy.verify) through recordDeploy()/auditAfter(): the actor is checked
+// before the line, the row carries counts and the MCP origin (never the
+// URL, an error or a tool name), a failed insert never fails the deploy
+// (the response says `auditError`), and a line that could not be appended
+// still gets its row, flagged `fileError`.
 
 import express from 'express';
 import {
@@ -22,19 +31,63 @@ import {
   GRAFANA_ALERT_RULE_TOOL, GRAFANA_DASHBOARD_TOOL,
   defaultDeployTool, discoverMcpToolNames, deployToolMissingError,
   targetIsDeployable, filterPromRulesScope, buildNativeDeployCalls,
-  newDeployId, captureDeploySnapshot,
+  newDeployId, captureDeploySnapshot, deployAuditRow,
 } from '../deploy-helpers.mjs';
-import { validateMcpUrl, redactCredentials } from '../mcp-url.mjs';
+import { auditAfter, actorForRecord, bounded, finite } from '../audit-after.mjs';
+import { mcpCallerOf, mcpRefusalBody, redactTarget } from '../mcp-target-policy.mjs';
+import { resolveMcpTarget } from '../service-admin.mjs';
+import { currentStore } from '../store/db.mjs';
 import { brandEnv } from '../../tools/lib/brand-env.mjs';
 import {
   appendDeployRecord, appendDeployVerify, readDeployRecords, readDeploySnapshot,
 } from '../workspace.mjs';
 import { createMcpClient } from '../../tools/fetch-live-pack.mjs';
+import { isTransportHookError } from '../../tools/lib/mcp-client.mjs';
 import { compile, compileArtifact } from '../../tools/lib/compile.mjs';
 
-export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, actorForRequest, contentHash, authorize }) {
+export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, contentHash, authorize }) {
   // Case-sensitive like the app (server/index.mjs): a nested router does not inherit the app's setting.
   const router = express.Router({ caseSensitive: true });
+
+  // A transport hook fault (OBSERVOGRAM_TRANSPORT_HOOK breaking its contract
+  // on a call) is one 502 for the whole request and NO deploy record: the
+  // per-item catches below rethrow it instead of recording N identical
+  // item failures for a deploy that never reached the wire. Every other
+  // error keeps its existing path (Express's own handler, or the single
+  // deploy route's audited 502).
+  const hookFaultTo502 = (handler) => async (req, res) => {
+    try {
+      await handler(req, res);
+    } catch (e) {
+      if (!isTransportHookError(e) || res.headersSent) throw e;
+      const error = redactTarget(e.message, res.locals.mcpTarget ?? null);
+      process.stderr.write(`[deploy]   transport hook fault: ${error}\n`);
+      res.status(502).json({ ok: false, error });
+    }
+  };
+  const rethrowHook = (e) => { if (isTransportHookError(e)) throw e; };
+
+  // One line and one row for a deploy-shaped act (deploy, deploy-bulk,
+  // rollback). In order: the principal's actor goes on the record, third
+  // after deployId and at as every line before it (a blank one — a bug past
+  // authorize() — throws requireActor's TypeError before anything is
+  // written: neither the line nor the row); the line is appended (a failure
+  // is one stderr line and the response stands, as before); the audit row
+  // is written after it, flagged fileError when the line is missing.
+  // Returns null, or the insert's error text for the response's
+  // `auditError`.
+  function recordDeploy(req, { deployId, at, ...rest }, { action, mcpEndpoint = null, manual, tag }) {
+    const record = { deployId, at, actor: actorForRecord(req), ...rest };
+    let fileError = false;
+    try {
+      appendDeployRecord(record);
+    } catch (e) {
+      fileError = true;
+      process.stderr.write(`[${tag}]   audit append failed: ${e.message}\n`);
+    }
+    return auditAfter(req, deployAuditRow(record, { action, mcpEndpoint, manual, fileError }), { tag });
+  }
+  const withAuditError = (auditError) => (auditError ? { auditError } : {});
 
   router.get('/api/deploy/matrix', authorize('GET /api/deploy/matrix'), (req, res) => {
     // Surface the deployable targets + products + versions so the client
@@ -95,20 +148,33 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     const known = readDeployRecords({ limit: 0 }).some(d => d.deployId === deployId);
     if (!known) return res.status(404).json({ ok: false, error: `unknown deployId: ${deployId}` });
     const b = req.body || {};
+    // The principal's actor, checked before the line (the verify line itself
+    // carries none; the deploy.verify row is where who verified is recorded).
+    try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+    const verify = {
+      outcome: typeof b.outcome === 'string' ? b.outcome : 'unknown',
+      summary: (b.summary && typeof b.summary === 'object') ? b.summary : null,
+      transitions: Array.isArray(b.transitions) ? b.transitions.slice(0, 200) : null,
+      packB: typeof b.packB === 'string' ? b.packB : null,
+      refreshedAt: typeof b.refreshedAt === 'string' ? b.refreshedAt : null,
+      attempts: finite(b.attempts),
+      alignment: finite(b.alignment),
+    };
+    let fileError = null;
     try {
-      appendDeployVerify(deployId, {
-        outcome: typeof b.outcome === 'string' ? b.outcome : 'unknown',
-        summary: (b.summary && typeof b.summary === 'object') ? b.summary : null,
-        transitions: Array.isArray(b.transitions) ? b.transitions.slice(0, 200) : null,
-        packB: typeof b.packB === 'string' ? b.packB : null,
-        refreshedAt: typeof b.refreshedAt === 'string' ? b.refreshedAt : null,
-        attempts: Number.isFinite(b.attempts) ? b.attempts : null,
-        alignment: Number.isFinite(b.alignment) ? b.alignment : null,
-      });
-      res.json({ ok: true, deployId });
+      appendDeployVerify(deployId, verify);
     } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
+      fileError = e;
     }
+    // The row after the append attempt: the three scalars the line carries
+    // (outcome bounded to 100 characters), fileError when the line is
+    // missing — the verification was asserted by a principal either way.
+    const auditError = auditAfter(req, {
+      action: 'deploy.verify', targetKind: 'deploy', targetId: deployId,
+      detail: { outcome: bounded(verify.outcome, 100), alignment: verify.alignment, attempts: verify.attempts, ...(fileError ? { fileError: true } : {}) },
+    }, { tag: 'verify' });
+    if (fileError) return res.status(500).json({ ok: false, error: fileError.message, ...withAuditError(auditError) });
+    res.json({ ok: true, deployId, ...withAuditError(auditError) });
   });
 
   // GET /api/deploys/:deployId/rollback-plan — what a rollback WOULD do
@@ -135,7 +201,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
   // write tools; creates need delete tools the MCP doesn't expose yet and are
   // returned as manual steps with exact identities. The rollback is itself a
   // deploy-shaped act and lands in the audit log with `rollbackOf`.
-  router.post('/api/deploys/:deployId/rollback', authorize('POST /api/deploys/:deployId/rollback'), async (req, res) => {
+  router.post('/api/deploys/:deployId/rollback', authorize('POST /api/deploys/:deployId/rollback'), hookFaultTo502(async (req, res) => {
     const rollbackOf = String(req.params.deployId || '');
     if (!/^dep_[A-Za-z0-9_-]+$/.test(rollbackOf)) return res.status(400).json({ ok: false, error: 'malformed deployId' });
     const original = readDeployRecords({ limit: 0 }).find(d => d.deployId === rollbackOf);
@@ -145,19 +211,22 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
       return res.status(409).json({ ok: false, error: `no usable snapshot for ${rollbackOf} (status: ${snap?.meta?.status || 'none'}) — nothing to restore from` });
     }
     const b = req.body || {};
-    const mcpUrl = typeof b.mcpUrl === 'string' ? b.mcpUrl.trim() : '';
-    if (!mcpUrl) return res.status(400).json({ ok: false, error: 'mcpUrl required in JSON body' });
-    const { error: mcpUrlError, safeUrl: safeMcpUrl } = validateMcpUrl(mcpUrl);
-    if (mcpUrlError) return res.status(400).json({ ok: false, error: mcpUrlError });
+    // mcpUrl (an admin's: R4, decision D3), or the org's MCP endpoint by
+    // mcpEndpointId (its URL only: a write token is the request's, never a
+    // stored variable's).
+    const target = resolveMcpTarget(currentStore(), b, { forWrite: true, caller: mcpCallerOf(req) });
+    if (target.status) return res.status(target.status).json(mcpRefusalBody(target));
+    res.locals.mcpTarget = target;   // hookFaultTo502 redacts with it
+    const { mcpUrl, safeMcpUrl, mcpAuth } = target;
     const dryRun = b.dryRun === true || b.dry_run === true;
 
     const t0 = Date.now();
-    const { rpc, callTool } = createMcpClient({ mcpUrl, mcpAuth: typeof b.mcpAuth === 'string' ? b.mcpAuth : null });
+    const { rpc, callTool } = createMcpClient({ mcpUrl, mcpAuth });
     await rpc('initialize', {
       protocolVersion: '2025-06-18',
       capabilities: {},
       clientInfo: { name: 'observabilitypack-studio-rollback', version: '0.4.0' },
-    }).catch(() => {});
+    }).catch(rethrowHook);
     const availableTools = await discoverMcpToolNames(rpc);
 
     const results = [];
@@ -183,7 +252,8 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
           });
           results.push({ ref: it.ref, action: 'restore', ok: true, tookMs: Date.now() - itStart, result });
         } catch (e) {
-          results.push({ ref: it.ref, action: 'restore', ok: false, error: redactCredentials(String(e.message)), tookMs: Date.now() - itStart });
+          rethrowHook(e);
+          results.push({ ref: it.ref, action: 'restore', ok: false, error: redactTarget(e.message, target), tookMs: Date.now() - itStart });
         }
       } else if (it.kind === 'dashboard' && it.restore === 'delete') {
         if (availableTools && availableTools.includes('grafana_delete_dashboard')) {
@@ -192,7 +262,8 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
             const result = await callTool('grafana_delete_dashboard', { uid: it.ref, dry_run: dryRun });
             results.push({ ref: it.ref, action: 'delete', ok: true, tookMs: Date.now() - itStart, result });
           } catch (e) {
-            results.push({ ref: it.ref, action: 'delete', ok: false, error: redactCredentials(String(e.message)), tookMs: Date.now() - itStart });
+            rethrowHook(e);
+            results.push({ ref: it.ref, action: 'delete', ok: false, error: redactTarget(e.message, target), tookMs: Date.now() - itStart });
           }
         } else {
           manual.push({ ref: it.ref, kind: it.kind, why: 'created by the deploy; the MCP does not advertise grafana_delete_dashboard — remove it by hand' });
@@ -205,11 +276,11 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     const okCount = results.filter(r => r.ok).length;
     const failCount = results.length - okCount;
     const deployId = newDeployId();
+    let auditError;
     try {
-      appendDeployRecord({
+      auditError = recordDeploy(req, {
         deployId,
         at: new Date().toISOString(),
-        actor: actorForRequest(req),
         rollbackOf,
         pack: original.pack || null,
         env: original.env || null,
@@ -220,9 +291,9 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
         items: results.map(r => ({ artifact: r.ref, group: r.action, ok: r.ok, tookMs: r.tookMs || 0, ...(r.error ? { error: r.error } : {}) })),
         summary: { total: results.length, ok: okCount, failed: failCount },
         tookMs: Date.now() - t0,
-      });
+      }, { action: 'deploy.rollback', mcpEndpoint: target.endpoint, manual: manual.length, tag: 'rollback' });
     } catch (e) {
-      process.stderr.write(`[rollback]   audit append failed: ${e.message}\n`);
+      return res.status(500).json({ ok: false, error: e.message });
     }
     res.status(failCount > 0 && okCount === 0 && results.length > 0 ? 502 : 200).json({
       ok: failCount === 0,
@@ -233,13 +304,15 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
       manual,
       summary: { total: results.length, ok: okCount, failed: failCount, manual: manual.length },
       tookMs: Date.now() - t0,
+      ...withAuditError(auditError),
     });
-  });
+  }));
 
   // ----------------------------------------------------------------
   // POST /api/packs/:id/deploy-bulk — multi-artefact deploy.
   // Body: {
-  //   mcpUrl, mcpAuth?,
+  //   mcpUrl | mcpEndpointId, mcpAuth?,   (an endpoint by id: its URL only;
+  //                                        the write token stays per request)
   //   targetProduct, targetVersion, targetFolder?,
   //   items: [{ group, flavor?, artifact?, dashboardId?, scope? }, ...]
   // }
@@ -248,12 +321,10 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
   // Returns per-item ok/error so the UI can show partial success
   // instead of failing the whole batch.
   // ----------------------------------------------------------------
-  router.post('/api/packs/:id/deploy-bulk', authorize('POST /api/packs/:id/deploy-bulk'), async (req, res) => {
+  router.post('/api/packs/:id/deploy-bulk', authorize('POST /api/packs/:id/deploy-bulk'), hookFaultTo502(async (req, res) => {
     const meta = findPackMeta(req.params.id);
     if (!meta) return res.status(404).json({ ok: false, error: `unknown pack: ${req.params.id}` });
     const body = req.body || {};
-    const mcpUrl  = typeof body.mcpUrl  === 'string' ? body.mcpUrl.trim() : '';
-    const mcpAuth = typeof body.mcpAuth === 'string' ? body.mcpAuth : null;
     const product = (typeof body.targetProduct === 'string' && body.targetProduct.trim()) ? body.targetProduct.trim() : 'grafana';
     const version = (typeof body.targetVersion === 'string' && body.targetVersion.trim()) ? body.targetVersion.trim() : '12';
     const folder  = typeof body.targetFolder === 'string' ? body.targetFolder.trim() : '';
@@ -262,9 +333,10 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     const items = Array.isArray(body.items) ? body.items : null;
     const env = readEnv(req.query);
 
-    if (!mcpUrl) return res.status(400).json({ ok: false, error: 'mcpUrl required in JSON body' });
-    const { error: mcpUrlError, safeUrl: safeMcpUrl } = validateMcpUrl(mcpUrl);
-    if (mcpUrlError) return res.status(400).json({ ok: false, error: mcpUrlError });
+    const target = resolveMcpTarget(currentStore(), body, { forWrite: true, caller: mcpCallerOf(req) });
+    if (target.status) return res.status(target.status).json(mcpRefusalBody(target));
+    res.locals.mcpTarget = target;   // hookFaultTo502 redacts with it
+    const { mcpUrl, safeMcpUrl, mcpAuth } = target;
     if (!items || items.length === 0) return res.status(400).json({ ok: false, error: 'items array required and must be non-empty' });
     if (!DEPLOY_PRODUCTS.includes(product)) return res.status(400).json({ ok: false, error: `unsupported target product: ${product}` });
     if (!DEPLOY_VERSIONS[product]?.includes(version)) return res.status(400).json({ ok: false, error: `unsupported ${product} version: ${version}` });
@@ -285,7 +357,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
       protocolVersion: '2025-06-18',
       capabilities: {},
       clientInfo: { name: 'observabilitypack-studio-deploy-bulk', version: '0.4.0' },
-    }).catch(() => {});
+    }).catch(rethrowHook);
     const availableTools = await discoverMcpToolNames(rpc);
     const missingTools = new Set();
 
@@ -373,18 +445,19 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
           result: callResults,
         });
       } catch (e) {
-        results.push({ item, ok: false, error: e.message, tookMs: Date.now() - itStart });
+        rethrowHook(e);
+        results.push({ item, ok: false, error: redactTarget(e.message, target), tookMs: Date.now() - itStart });
       }
     }
     const totalMs = Date.now() - t0;
     const okCount = results.filter(r => r.ok).length;
     const failCount = results.length - okCount;
     process.stderr.write(`[deploy-bulk]   done in ${totalMs}ms: ${okCount} ok / ${failCount} failed\n`);
+    let auditError;
     try {
-      appendDeployRecord({
+      auditError = recordDeploy(req, {
         deployId,
         at: new Date().toISOString(),
-        actor: actorForRequest(req),
         pack: { id: meta.id, version: canonical?.metadata?.version || null, contentHash: contentHash(canonical) },
         env: env || null,
         mcpUrl: safeMcpUrl,
@@ -398,13 +471,13 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
           operations: r.operations || 0,
           bytes: r.bytes || 0,
           tookMs: r.tookMs || 0,
-          ...(r.error ? { error: redactCredentials(String(r.error)) } : {}),
+          ...(r.error ? { error: redactTarget(r.error, target) } : {}),
         })),
         summary: { total: results.length, ok: okCount, failed: failCount },
         tookMs: totalMs,
-      });
+      }, { action: 'deploy.bulk', mcpEndpoint: target.endpoint, tag: 'deploy-bulk' });
     } catch (e) {
-      process.stderr.write(`[deploy-bulk]   audit append failed: ${e.message}\n`);
+      return res.status(500).json({ ok: false, error: e.message });
     }
     res.status(failCount > 0 && okCount === 0 ? 502 : 200).json({
       ok: failCount === 0,
@@ -420,10 +493,11 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
       mcpToolsAvailable: availableTools,
       env,
       tookMs: totalMs,
+      ...withAuditError(auditError),
     });
-  });
+  }));
 
-  router.post('/api/packs/:id/deploy/:target', authorize('POST /api/packs/:id/deploy/:target'), async (req, res) => {
+  router.post('/api/packs/:id/deploy/:target', authorize('POST /api/packs/:id/deploy/:target'), hookFaultTo502(async (req, res) => {
     const meta = findPackMeta(req.params.id);
     if (!meta) return res.status(404).json({ ok: false, error: `unknown pack: ${req.params.id}` });
 
@@ -436,8 +510,6 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     }
 
     const body = req.body || {};
-    const mcpUrl  = typeof body.mcpUrl  === 'string' ? body.mcpUrl.trim()  : '';
-    const mcpAuth = typeof body.mcpAuth === 'string' ? body.mcpAuth        : null;
     const product = (typeof body.targetProduct === 'string' && body.targetProduct.trim())
       ? body.targetProduct.trim() : 'grafana';
     const version = (typeof body.targetVersion === 'string' && body.targetVersion.trim())
@@ -464,9 +536,13 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
 
     const env = readEnv(req.query);
     const dashboardId = typeof req.query.dashboardId === 'string' ? req.query.dashboardId : undefined;
-    if (!mcpUrl) return res.status(400).json({ ok: false, error: 'mcpUrl required in JSON body' });
-    const { error: mcpUrlError, safeUrl: safeMcpUrl } = validateMcpUrl(mcpUrl);
-    if (mcpUrlError) return res.status(400).json({ ok: false, error: mcpUrlError });
+    // mcpUrl (an admin's: R4, decision D3), or the org's MCP endpoint by
+    // mcpEndpointId (its URL only; the write token stays the request's
+    // mcpAuth).
+    const mcp = resolveMcpTarget(currentStore(), body, { forWrite: true, caller: mcpCallerOf(req) });
+    if (mcp.status) return res.status(mcp.status).json(mcpRefusalBody(mcp));
+    res.locals.mcpTarget = mcp;   // hookFaultTo502 redacts with it
+    const { mcpUrl, safeMcpUrl, mcpAuth } = mcp;
 
     const t0 = Date.now();
     let canonical = null;   // hoisted: the catch-path audit record reads it
@@ -491,7 +567,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
         protocolVersion: '2025-06-18',
         capabilities: {},
         clientInfo: { name: 'observabilitypack-studio-deploy', version: '0.4.0' },
-      }).catch(() => {});
+      }).catch(rethrowHook);
 
       const availableTools = await discoverMcpToolNames(rpc);
       if (availableTools && !availableTools.includes(mcpTool)) {
@@ -540,15 +616,15 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
 
       const tookMs = Date.now() - t0;
       process.stderr.write(`[deploy]   ok in ${tookMs}ms\n`);
-      const deployId = auditSingleDeploy({
-        meta, canonical, env, safeMcpUrl, product, version, folder, mode, dryRun,
-        actor: actorForRequest(req),
+      const { deployId, auditError } = auditSingleDeploy({
+        req, meta, canonical, env, safeMcpUrl, mcpEndpoint: mcp.endpoint, product, version, folder, mode, dryRun,
         item: { target, scope: scope || null, ok: true, tool: mcpTool, operations, bytes, tookMs },
       });
       res.json({
         ok: true,
         deployId,
-        target, env, tool: mcpTool, mcpUrl,
+        ...withAuditError(auditError),
+        target, env, tool: mcpTool, mcpUrl: safeMcpUrl,
         targetProduct: product, targetVersion: version, scope: scope || null, targetFolder: folder || null,
         mode, dryRun, operations,
         filename: compiled.filename,
@@ -557,42 +633,46 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
         result,
       });
     } catch (e) {
+      rethrowHook(e);   // one 502 without an audit record (hookFaultTo502)
       const tookMs = Date.now() - t0;
-      process.stderr.write(`[deploy]   error in ${tookMs}ms: ${redactCredentials(e.message)}\n`);
-      const deployId = auditSingleDeploy({
-        meta, canonical, env, safeMcpUrl, product, version, folder, mode, dryRun,
-        actor: actorForRequest(req),
-        item: { target, scope: scope || null, ok: false, tool: mcpTool, tookMs, error: redactCredentials(String(e.message)) },
-      });
-      res.status(502).json({ ok: false, deployId, error: e.message, tool: mcpTool, target,
+      const error = redactTarget(e.message, mcp);
+      process.stderr.write(`[deploy]   error in ${tookMs}ms: ${error}\n`);
+      let recorded;
+      try {
+        recorded = auditSingleDeploy({
+          req, meta, canonical, env, safeMcpUrl, mcpEndpoint: mcp.endpoint, product, version, folder, mode, dryRun,
+          item: { target, scope: scope || null, ok: false, tool: mcpTool, tookMs, error },
+        });
+      } catch (actorErr) {
+        return res.status(500).json({ ok: false, error: actorErr.message });
+      }
+      const { deployId, auditError } = recorded;
+      res.status(502).json({ ok: false, deployId, error, tool: mcpTool, target,
         targetProduct: product, targetVersion: version, scope: scope || null, targetFolder: folder || null,
-        mode, dryRun, env, tookMs });
+        mode, dryRun, env, tookMs, ...withAuditError(auditError) });
     }
-  });
+  }));
 
   // One audit record for the single-artefact deploy route — same shape as a
   // bulk record with exactly one item, so /api/deploys consumers see a
-  // uniform stream. Audit failures never fail the deploy response.
-  function auditSingleDeploy({ meta, canonical, env, safeMcpUrl, product, version, folder, mode, dryRun, item, actor }) {
+  // uniform stream — and its deploy.run row after it. Audit failures never
+  // fail the deploy response (auditError says so); a blank actor throws
+  // before anything is written.
+  function auditSingleDeploy({ req, meta, canonical, env, safeMcpUrl, mcpEndpoint, product, version, folder, mode, dryRun, item }) {
     const deployId = newDeployId();
-    try {
-      appendDeployRecord({
-        deployId,
-        at: new Date().toISOString(),
-        actor: actor || 'local',
-        pack: { id: meta.id, version: canonical?.metadata?.version || null, contentHash: contentHash(canonical) },
-        env: env || null,
-        mcpUrl: safeMcpUrl,
-        target: { product, version, folder: folder || null },
-        mode, dryRun,
-        items: [item],
-        summary: { total: 1, ok: item.ok ? 1 : 0, failed: item.ok ? 0 : 1 },
-        tookMs: item.tookMs || 0,
-      });
-    } catch (err) {
-      process.stderr.write(`[deploy]   audit append failed: ${err.message}\n`);
-    }
-    return deployId;
+    const auditError = recordDeploy(req, {
+      deployId,
+      at: new Date().toISOString(),
+      pack: { id: meta.id, version: canonical?.metadata?.version || null, contentHash: contentHash(canonical) },
+      env: env || null,
+      mcpUrl: safeMcpUrl,
+      target: { product, version, folder: folder || null },
+      mode, dryRun,
+      items: [item],
+      summary: { total: 1, ok: item.ok ? 1 : 0, failed: item.ok ? 0 : 1 },
+      tookMs: item.tookMs || 0,
+    }, { action: 'deploy.run', mcpEndpoint, tag: 'deploy' });
+    return { deployId, auditError };
   }
 
   return router;

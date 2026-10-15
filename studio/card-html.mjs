@@ -27,6 +27,9 @@
 
 import { escapeHtml } from './util.mjs';
 import { statusChipHtml, statusRecord } from './ux-kit.mjs';
+import { classifyArtefact } from './taxonomy.mjs';
+import { verdictChipHtml } from './verdict-html.mjs';
+import { glossaryMarkFor } from './glossary.mjs';
 
 /**
  * artefactCardHtml(artefact, { broken, benchmark, tagLimit, note }) → the HTML inside a `.card`.
@@ -88,7 +91,9 @@ export function artefactCardHtml(artefact, { broken = 0, benchmark = null, tagLi
 // What an artefact IS, in plain words, by the adapter's id family
 // (tools/lib/adapter.mjs). Order matters: the longer prefixes first.
 // `role` is the one-line "what it does" when the adapter's desc says nothing
-// more useful.
+// more useful. An artefact the taxonomy places by an explicit `type` or by
+// an operator override (studio/taxonomy.mjs) takes the taxonomy's label and
+// role instead; everything else — every adapted artefact — reads this table.
 export const ARTEFACT_KINDS = [
   ['SLI-',        'Service level indicator',      'Measures how the service behaves.'],
   ['SLO-',        'Objective',                    'Sets the target an indicator must meet over a window.'],
@@ -114,6 +119,7 @@ export const ARTEFACT_KINDS = [
   ['POL-',        'Burn-rate alert',              'Warns when an objective burns its error budget too fast.'],
   ['FCST-',       'Forecast',                     'Predicts when a budget or capacity runs out.'],
   ['ALR-',        'Alert route',                  'Sends alerts of one severity to the people who act on them.'],
+  ['RULE-',       'Alert rule',                   'An operational alert the engine evaluates: something is wrong now, not a budget burning.'],
   ['HEAL-',       'Self-healing action',          'Runs a remediation when an alert fires.'],
   ['BASE-',       'Baselines',                    'Records normal behaviour to compare against.'],
   ['CHAOS-',      'Chaos experiment',             'Breaks something on purpose to prove the alerts fire.'],
@@ -122,11 +128,20 @@ export const ARTEFACT_KINDS = [
 ];
 
 export function artefactKind(artefact) {
+  const { kind, role } = kindAndFamily(artefact);
+  return { kind, role };
+}
+
+// artefactKind plus the family the taxonomy gave ('unknown' when none): the
+// row's glossary mark (studio/glossary.mjs) looks the family up first.
+function kindAndFamily(artefact) {
+  const c = classifyArtefact(artefact);
+  if ((c.via === 'type' || c.via === 'override') && c.label) return { kind: c.label, role: c.role || '', family: c.family };
   const id = String(artefact?.id ?? '');
   const hit = ARTEFACT_KINDS.find(([prefix]) => id.startsWith(prefix));
   return hit
-    ? { kind: hit[1], role: hit[2] }
-    : { kind: artefact?.tool ? String(artefact.tool) : 'Artefact', role: '' };
+    ? { kind: hit[1], role: hit[2], family: c.family }
+    : { kind: artefact?.tool ? String(artefact.tool) : 'Artefact', role: '', family: c.family };
 }
 
 // An artefact on the four-property vocabulary (studio/ux-kit.mjs): the
@@ -298,14 +313,17 @@ function liveWhenOf(artefact) {
  * Name, what it does and status lead; id, type, tags and symbols sit in the
  * row's Details. Tiles and List are artefactLightRowHtml; Cards is the card
  * body (artefactCardHtml) with its title as the button that opens the record.
+ * When the bound taxonomy carries a glossary entry for the kind (its family,
+ * else its label), the full row sets the glossary mark between the name
+ * button and the status chips — '' otherwise, so the row is byte-identical.
  */
-export function artefactRowHtml(artefact, { broken = 0, benchmark = null, rules = null, outsideFilter = false, view = DISCOVER_VIEW_DEFAULT } = {}) {
-  if (view === 'tiles' || view === 'list') return artefactLightRowHtml(artefact, { broken, outsideFilter, view });
+export function artefactRowHtml(artefact, { broken = 0, benchmark = null, rules = null, outsideFilter = false, view = DISCOVER_VIEW_DEFAULT, verdict = null } = {}) {
+  if (view === 'tiles' || view === 'list') return artefactLightRowHtml(artefact, { broken, outsideFilter, view, verdict });
   if (view === 'cards') {
     return artefactCardHtml(artefact || {}, { broken, benchmark, titleButton: true, note: outsideFilter ? 'Open in the detail panel · outside this filter' : null });
   }
   const a = artefact || {};
-  const { kind, role } = artefactKind(a);
+  const { kind, role, family } = kindAndFamily(a);
   const status = artefactStatus(a, { broken });
   const inference = inferredFrom(a);
   const name = a.title || a.id;
@@ -381,8 +399,8 @@ export function artefactRowHtml(artefact, { broken = 0, benchmark = null, rules 
         <span class="dv-row-kind">${escapeHtml(kind)}</span>
         <span class="dv-row-name">${escapeHtml(name)}</span>
         ${a.subtitle ? `<span class="dv-row-bound">${escapeHtml(a.subtitle)}</span>` : ''}
-      </button>
-      <span class="dv-row-status">${artefactStatusChipsHtml(status, { liveWhen })}</span>
+      </button>${glossaryMarkFor(kind, { family })}
+      <span class="dv-row-status">${artefactStatusChipsHtml(status, { liveWhen })}${verdict ? verdictChipHtml(verdict) : ''}</span>
     </div>
     ${what ? `<p class="dv-row-what">${escapeHtml(what)}</p>` : ''}
     ${specLine ? `<p class="dv-row-spec">${escapeHtml(specLine)}</p>` : ''}
@@ -421,7 +439,7 @@ function breakableHtml(text) {
  * Both are one `.dv-row-main` button that opens the full record, as the full
  * row's name does; what the row leaves out is there.
  */
-export function artefactLightRowHtml(artefact, { broken = 0, outsideFilter = false, view = 'tiles' } = {}) {
+export function artefactLightRowHtml(artefact, { broken = 0, outsideFilter = false, view = 'tiles', verdict = null } = {}) {
   const a = artefact || {};
   const { kind } = artefactKind(a);
   const status = artefactStatus(a, { broken });
@@ -448,7 +466,7 @@ export function artefactLightRowHtml(artefact, { broken = 0, outsideFilter = fal
         <span class="dv-row-kind">${escapeHtml(kind)}</span>
         ${a.subtitle ? `<span class="dv-row-bound">${escapeHtml(a.subtitle)}</span>` : ''}
       </span>
-      <span class="dv-row-status">${artefactStatusChipsHtml(status, { liveWhen: liveWhenOf(a), short: true })}</span>
+      <span class="dv-row-status">${artefactStatusChipsHtml(status, { liveWhen: liveWhenOf(a), short: true })}${verdict ? verdictChipHtml(verdict, { short: true }) : ''}</span>
     </button>
     ${outsideFilter ? `<span class="dv-row-pinned" title="${PINNED_TIP}">Open in the detail panel · outside this filter</span>` : ''}
   `;

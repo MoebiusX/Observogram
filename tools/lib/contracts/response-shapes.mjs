@@ -32,13 +32,17 @@
 
 export const RESPONSE_SHAPES = Object.freeze({
   // Prometheus/VMAlert rule listings — recording_rules and alert_rules both
-  // consume this. Rules may be nested in groups or flat.
+  // consume this. Rules may be nested in groups or flat. Grafana's
+  // provisioning API answers a bare array of Grafana-managed rules whose
+  // identity is `title` and whose body is `data[]` (the query and expression
+  // nodes) — recorded from Grafana 12.4.4 on the local Docker stack
+  // (tools/fixtures/mcp/grafana_alert_rules.json); a snapshot reads it.
   'rule-groups': {
-    lists: ['groups', 'data.groups', 'rules'],
+    lists: ['groups', 'data.groups', 'rules', ''],
     nestedRules: true, // items in groups[] carry their own rules[] arrays
     itemAnyOf: [
-      ['record', 'name', 'alert'],   // rule identity
-      ['expr', 'query'],             // rule body
+      ['record', 'name', 'alert', 'title'],   // rule identity
+      ['expr', 'query', 'data'],              // rule body
     ],
   },
   // Grafana dashboard search results (otel-mcp-server + community shapes).

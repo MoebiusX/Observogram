@@ -155,7 +155,9 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
    a user create or load a pack immediately.
 
 2. **The three primary tabs are the workflow.** Do not add another first-class
-   navigation layer that competes with Discover, Diagnose, Remediate.
+   navigation layer that competes with Discover, Diagnose, Remediate. The
+   service page is the home's second level — a card opens it, its actions
+   open the three tabs bound to the service — not a fourth tab.
 
 3. **Pack identity must be explicit.** Uploaded/crawled/drafted pack selectors
    must show enough source context to prevent stale or typo uploads from being
@@ -178,7 +180,87 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
 8. **State must not create false confidence.** Persisted local state is useful,
    but reset and source labels must make stale comparisons easy to clear.
 
+9. **Services are records.** The home and the SERVICE selector read the
+   services table (`GET /api/services`); a service page binds Discover ·
+   Diagnose · Remediate · Build to a service and an environment through one
+   pack resolver (the newest primary); a pack-derived tile appears only where
+   the table is unavailable (the static bundle) or for a registered pack whose
+   service row was deleted, and behaves as before.
+
+10. **Settings is entered from a menu, not a tab** (Advanced → Settings; the
+    account menu); it never competes with Discover · Diagnose · Remediate.
+
 ## What Belongs In Each Step
+
+### Home and the service page
+
+The home is the org's services table, one card per record, and a card opens
+the service page: the environments as tabs, each with the verdict the pack is
+graded to at the record's tier (a base grade is named as such when the pack
+declares no overlay for that environment; "no verdict yet" is said, never a
+zero), the MCP endpoint it is checked through, and the four actions —
+Discover · Diagnose · Remediate · Build — bound to the service and the
+environment through one pack resolver. Catalogue packs are listed apart; the
+affordances are drawn from the effective role the server reports for the
+active org (`GET /api/orgs`).
+
+Belongs here:
+
+- the services table and the record's facts (tier, owners, the packs linked,
+  the newest primary marked current);
+- the verdict per environment — the conformance report at the record's tier,
+  the mismatch with the pack's own tier said;
+- the MCP endpoint as its name and origin only;
+- the four actions, worded for the rank that reads them (a control a role
+  cannot use is drawn disabled with its reason, never as usable);
+- the record editor (name, owners, tier, description) for operators;
+- catalogue packs, apart from the records.
+
+Does not belong here:
+
+- a URL or a token (the endpoint's safe form is all the page shows);
+- environment CRUD, members, MCP endpoint records (Settings);
+- journeys (Neuron) and the deploy history.
+
+### Settings
+
+The org's administration, as a mode of its own: Advanced → Settings or the
+account menu opens it, its Back returns to where it was opened from, and a
+journey tab leaves it. The sections and every control in them are drawn from
+the rank the server reports for the active org; a section or a write that
+rank cannot use is listed `aria-disabled` with its reason, never hidden as if
+it did not exist and never drawn as usable.
+
+Belongs here:
+
+- environments — every service's, each with its tier, bindings, links and
+  MCP endpoint — read by every member, added, edited and deleted by
+  operators (the same editor opens from the service page);
+- the org's MCP endpoint records for admins — the URL and the token as the
+  NAME of a server variable under the org's prefix, never its value; a viewer
+  reads the name and the origin only;
+- members and the org's name for admins — add by login or verified email,
+  change a role, remove; the last-admin rule drawn before the server says it;
+- the audit for admins: the org's rows, filtered by whole UTC days, paged
+  back; for owners, the deployment's;
+- for owners, the deployment: users (a new local user's temporary password
+  shown once, changed at first sign-in; the last-owner rule drawn first),
+  organisations (create and switch to it, act in one they are not a member
+  of, remove with the id typed) and the join role beside the sign-in mode it
+  applies to;
+- one banner naming the way in where the server names one — a token-only
+  server, a server without sign-in, the static bundle — in the server's
+  words;
+- every editor a pop-up over one record, its status line naming what the
+  server changed, or its refusal as served.
+
+Does not belong here:
+
+- services themselves (Build and the service page write them);
+- a secret's value — a token anywhere on the page, a password outside the
+  one dialog that shows a new temporary password once;
+- an email in a member row;
+- a journey tab.
 
 ### Build (no pack yet)
 
@@ -278,6 +360,8 @@ Belongs here:
 - evidence table
 - drift drill
 - traceability to explain why an artifact matters
+- the response path: which alert each declared remediation answers to, and
+  whether that alert is live (read-only here; the fixes are on Remediate)
 - comparison and atlas analysis as advanced diagnostics
 
 Does not belong here:
@@ -297,6 +381,8 @@ Belongs here:
 - deploy modal
 - validation status
 - rollback/dry-run affordances
+- the response path's next steps: deploy a missing burn alert, reconcile a
+  drifted one, name the alert an unresolved trigger means
 
 Does not belong here:
 
@@ -324,6 +410,8 @@ See [`DRY_RUN.md`](DRY_RUN.md) for the executable checklist.
 
 ## See Also
 
+- [`BUILD_JOURNEY.md`](BUILD_JOURNEY.md) - building a new pack: Define, Compile, Verify
+- [`UPDATE_JOURNEY.md`](UPDATE_JOURNEY.md) - proposal: changing a pack that already exists
 - [`DIFF.md`](DIFF.md) - structural drift model
 - [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md) - live scan and write-back path
 - [`CONFORMANCE.md`](CONFORMANCE.md) - maturity rubric scoring

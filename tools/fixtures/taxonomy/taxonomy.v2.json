@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "types": {
+    "PackSLI": "sli",
+    "PackSLO": "slo",
+    "OtelContract": "otel",
+    "PrometheusRule": { "family": "alert_rule", "label": "Prometheus rule" },
+    "GrafanaDashboard": { "family": "dashboard", "label": "Grafana dashboard" },
+    "AlertRoute": "alert_route",
+    "RecordingRule": "recording_rule"
+  },
+  "ids": [
+    { "pattern": "^promrule-", "family": "alert_rule", "flags": "i" }
+  ],
+  "glossary": [
+    { "term": "Service level indicator", "family": "sli", "aliases": ["SLI", "SLIs"],
+      "definition": "A measurement of how the service behaves for its users: a ratio of good events to all events, or a threshold on a latency distribution." },
+    { "term": "Service level objective", "family": "slo", "aliases": ["SLO", "SLOs · targets", "Objective"],
+      "definition": "The target an indicator must meet over a window, for example 99.9% of requests under 500 ms over 30 days." },
+    { "term": "Alert rule", "family": "alert_rule", "aliases": ["Prometheus rule", "Operational alert rules"],
+      "definition": "An operational alert the engine evaluates: something is wrong now, not a budget burning.",
+      "link": "https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/" },
+    { "term": "Telemetry backend", "family": "backend", "aliases": ["Backend", "Backends"],
+      "definition": "A system that stores and serves one kind of signal — metrics, logs or traces — for the dashboards and alerts to read." },
+    { "term": "Error budget", "aliases": ["Budget"],
+      "definition": "The share of the window an objective allows to fail: 1 − target. A burn-rate alert fires when it is spent too fast." },
+    { "term": "Criticality tier", "aliases": ["Criticality", "Tier"],
+      "definition": "How much harm an outage would do, from tier 1 (the most critical) to tier 3; the tier decides which conformance clauses apply." }
+  ]
+}

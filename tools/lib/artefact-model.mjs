@@ -26,6 +26,7 @@
 // Pure ESM, no Node APIs — the studio imports this same file in the browser.
 
 import { canonicalizePromql } from './promql-canon.mjs';
+import { familyOf } from './artefact-classify.mjs';
 
 // ---------------------------------------------------------------------------
 // Normalisation primitives
@@ -113,7 +114,7 @@ export function canonicalize(value, keyName) {
     const out = value
       .map((v) => canonicalize(v))
       .filter((v) => !isEmptyComparable(v))
-      .sort((x, y) => JSON.stringify(x).localeCompare(JSON.stringify(y)));
+      .sort((x, y) => JSON.stringify(x).localeCompare(JSON.stringify(y), 'en'));
     return out.length ? out : undefined;
   }
   if (value && typeof value === 'object') {
@@ -145,47 +146,13 @@ function sortedObject(value) {
 // Family classification
 // ---------------------------------------------------------------------------
 
-// Resolve an artefact to its behavioural family. Prefers the canonical
-// `defines` symbol the adapter attaches; otherwise reads the id prefix. The
-// positional number in the id is never used as identity — only as a family
-// discriminator here.
+// Resolve an artefact to its behavioural family — tools/lib/artefact-classify.mjs
+// decides (an explicit `type` first, then the canonical `defines` symbol the
+// adapter attaches, then the taxonomy override's id rules, then the id
+// prefix). The positional number in the id is never used as identity — only
+// as a family discriminator there.
 export function classify(artefact) {
-  if (!artefact) return 'unknown';
-  const defines = artefact.defines || '';
-  if (defines.startsWith('slis.'))               return 'sli';
-  if (defines.startsWith('slos.'))               return 'slo';
-  if (defines.startsWith('telemetry.backends.')) return 'backend';
-  if (defines.startsWith('queries.derived_views.')) return 'derived_view';
-  if (defines.startsWith('dashboards.'))         return 'dashboard';
-
-  const id = artefact.id || '';
-  if (id === 'OTEL-01')          return 'otel';
-  if (id.startsWith('PIP-RCV-')) return 'pipeline_receiver';
-  if (id.startsWith('PIP-PRC-')) return 'pipeline_processor';
-  if (id === 'PIP-EXP-MET')      return 'pipeline_exporter_metrics';
-  if (id === 'PIP-EXP-LOG')      return 'pipeline_exporter_logs';
-  if (id === 'PIP-EXP-TRC')      return 'pipeline_exporter_traces';
-  if (id === 'STO-MET-01')       return 'storage_metrics';
-  if (id === 'STO-LOG-01')       return 'storage_logs';
-  if (id === 'STO-TRC-01')       return 'storage_traces';
-  if (id.startsWith('SCRAPE-'))  return 'scrape_job';
-  if (id.startsWith('METRIC-'))  return 'metric';
-  if (id === 'PROF-01')          return 'profiling';
-  if (id === 'NET-01')           return 'network';
-  if (id === 'POE-01')           return 'policy_engine';
-  if (id.startsWith('MESH-'))    return 'mesh';
-  if (id.startsWith('COL-'))     return 'collection';
-  if (id.startsWith('QRY-'))     return 'recording_rule';
-  if (id.startsWith('PANEL-'))   return 'panel';
-  if (id.startsWith('POL-'))     return 'burn_rate';
-  if (id.startsWith('FCST-'))    return 'forecast';
-  if (id.startsWith('ALR-'))     return 'alert_route';
-  if (id.startsWith('HEAL-'))    return 'remediation';
-  if (id === 'BASE-01')          return 'baselines';
-  if (id.startsWith('CHAOS-'))   return 'chaos';
-  if (id.startsWith('SYN-'))     return 'synthetic';
-  if (id.startsWith('IMP-'))     return 'imports';
-  return 'unknown';
+  return artefact ? familyOf(artefact) : 'unknown';
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +230,11 @@ const IDENTITY = {
   // decision-bearing drift on the paired route instead; same-severity
   // duplicates survive via the diff's occurrence ordinals and `collisions`.
   alert_route:  (s) => ({ severity: low(s.severity) }),
+  // An operational alert rule (spec 1.4 alerting.rules) IS its name: the
+  // exact name the engine evaluates it under — `alert:` in a rule file,
+  // `title` of a Grafana-managed rule, `name` in a ruler's listing — is
+  // what a repository and a live listing share. Never the RULE-NN index.
+  alert_rule:   (s) => ({ name: low(s.name) }),
   remediation:  (s) => ({ trigger: low(s.trigger) }),
   // spec.baselines is a singular object (fixed BASE-01 id, at most one per
   // pack) — empty identity is the documented singleton invariant, like otel.
@@ -325,6 +297,16 @@ function behaviorFor(kind, spec) {
   }
   if (kind === 'scrape_job') {
     return canonicalize({ job: spec.job });
+  }
+  if (kind === 'alert_rule') {
+    // What the rule does: its expression (normalised like every expr), its
+    // wait, its labels and the pack's severity. Not `engine`: a rule file
+    // cannot tell a Prometheus ruler from a Mimir or VictoriaMetrics one
+    // and a live listing may know more than the repository — reader
+    // knowledge, not deployed behaviour. `source` and `annotations` are
+    // volatile already.
+    const { engine: _engine, ...rest } = stripRefFields(spec) || {};
+    return canonicalize(rest);
   }
   if (kind === 'sli') {
     // An SLI's `good` and `total` are expressions like its `query`: the
@@ -552,7 +534,7 @@ export function foldMetricFamilies(aItems, bItems) {
     }
     return out.map((slot) => {
       if (!slot.family || !groups.has(slot.family) || classify(slot) === 'metric') return slot;
-      const members = groups.get(slot.family).slice().sort((x, y) => nameOf(x).localeCompare(nameOf(y)));
+      const members = groups.get(slot.family).slice().sort((x, y) => nameOf(x).localeCompare(nameOf(y), 'en'));
       const head = members.find((x) => nameOf(x) === slot.family) || members[0];
       if (members.length === 1 && nameOf(head) === slot.family) return head;
       return {

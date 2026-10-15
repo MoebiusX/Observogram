@@ -135,7 +135,35 @@ function servicePanelHtml(model) {
             <datalist id="build-env-options"><option value="prod"></option><option value="staging"></option><option value="dev"></option><option value="eks"></option><option value="local-docker"></option></datalist>
             <span class="build-def-hint" id="build-env-hint">Where it runs, e.g. prod or staging</span>
           </label>
-        </div>`);
+        </div>
+        <div class="build-def-origin-host" id="build-origin-host">${originNoteHtml(model.originNote)}</div>`);
+}
+
+/**
+ * The slug guard (slice 6a, design §6.4): a Build opened from a service page registers the pack under the
+ * typed name's slug, never under the record's id — when the two differ (a renamed record, an explicit slug)
+ * the note says where the pack will land and offers the one name that still yields the record's slug, when
+ * there is one. Said, never blocked: the field stays editable and Compile stays reachable. Repainted in place
+ * as the name is typed (wireOriginNote), from the controller's `originNote(name)`.
+ */
+function originNoteHtml(n) {
+  if (!n) return '';
+  return `<p class="build-def-origin" id="build-origin-note" role="status">${escapeHtml(n.text)}${n.useName ? ` <button type="button" class="ctrl-btn build-def-origin-use" id="build-use-origin-name">use ${escapeHtml(n.useName)}</button>` : ''}</p>`;
+}
+
+/** The note follows the name as typed; "use <origin name>" puts the name that yields the record's slug back (the draft re-instantiates at once, the focus stays on the field). */
+function wireOriginNote(container, model, act) {
+  const host = container.querySelector('#build-origin-host');
+  if (!host) return;
+  let note = model.originNote || null;
+  const wireUse = () => host.querySelector('#build-use-origin-name')?.addEventListener('click', () => act.update({ name: note.useName }, { rerender: true, delay: 0, focus: 'name' }));
+  wireUse();
+  if (!act?.originNote) return;
+  container.querySelector('#build-name')?.addEventListener('input', (e) => {
+    note = act.originNote(e.target.value) || null;
+    host.innerHTML = originNoteHtml(note);
+    wireUse();
+  });
 }
 
 // ---------- 2 · Criticality ----------
@@ -351,6 +379,7 @@ export function renderBuildDefine(container, model, host = appHost) {
   wireBuildDefinition(container, model, host);   // the fields, the tier cards, the technology cards, the substep buttons
   wireBuildStack(container, model.stack, host);
   wireSuggestions(container, model, act);
+  wireOriginNote(container, model, act);
   container.querySelector('#build-next').addEventListener('click', () => (act.seed ? act.seed() : act.setStep('compile')));
   // The substep shown is pinned on the draft (UI state, never persisted) the first time the step renders: the default
   // follows the draft, so without the pin the first technology picked, or a re-render while the name is typed, would

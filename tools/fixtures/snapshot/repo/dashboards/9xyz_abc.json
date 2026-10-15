@@ -1,0 +1,22 @@
+{
+  "uid": "9xyz_abc",
+  "title": "Platform health",
+  "tags": [
+    "synthetic"
+  ],
+  "schemaVersion": 39,
+  "version": 3,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Targets up",
+      "type": "timeseries",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(up)"
+        }
+      ]
+    }
+  ]
+}

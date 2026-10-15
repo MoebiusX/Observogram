@@ -748,4 +748,58 @@ process.stdout.write('\n--- scaffold placeholders never pair ---\n');
     'a different window in `good` is still a delta');
 }
 
+// ---------- a snapshot's scope: what it did not read is "not checked", never "missing" ----------
+{
+  const metricA = (name) => ({ id: `METRIC-${name}`, title: name, tags: ['metric'], source: 'Declared', parent: 'telemetry.metric_inventory', spec: { name } });
+  const dash = (id, folderUid) => ({ id: `DASH-${id}`, title: id, source: 'Declared', defines: `dashboards.${id}`, spec: { id, folder: 'f', params: { title: id, uid: id, ...(folderUid ? { folderUid } : {}) } } });
+  const rec = (record) => ({ id: `QRY-${record}`, title: record, tags: ['recording'], tool: 'Prometheus recording rule', source: 'Declared', spec: { name: record, expr: 'sum(up)' } });
+  const pack = (id, { L2 = [], L3 = [] }, annotations = {}) => ({ id, name: id, meta: { service: 'payments', annotations }, layers: { L1: [], L2, L2X: [], L3, L4: { policy: [], alerting: [], healing: [] }, L5: [], GOV: [] } });
+  const SCOPE = {
+    'observogram.scope.metric': '{"by":"prefix","values":["payments_"]}',
+    'observogram.scope.dashboard': '{"by":"folder","values":[{"uid":"ab12","title":"Payments"}]}',
+  };
+  const repo = () => pack('repo', {
+    L2: [metricA('payments_total'), metricA('orders_total')],
+    L3: [dash('crawled', null), dash('elsewhere', 'cd34'), dash('payments-main', 'ab12'), rec('job:up:sum')],
+  });
+  const snapshot = (annotations = SCOPE) => pack('snapshot', { L2: [metricA('payments_total')], L3: [dash('payments-live', 'ab12')] }, annotations);
+  const byKey = (d) => Object.fromEntries(Object.values(d.layers).flatMap(l => [
+    ...l.notObserved.map(e => [e.artefact.id, `notObserved:${e.side}:${e.reason}`]),
+    ...l.onlyInA.map(e => [e.artefact.id, 'onlyInA']), ...l.onlyInB.map(e => [e.artefact.id, 'onlyInB']),
+    ...l.outOfScope.map(e => [e.artefact.id, 'outOfScope']), ...l.inBoth.map(e => [e.a.id, 'inBoth']),
+  ]));
+
+  const d = byKey(diffPacks(repo(), snapshot()));
+  assert(d['METRIC-payments_total'] === 'inBoth' && d['METRIC-orders_total'] === "notObserved:a:outside the snapshot's metric scope (prefixes payments_)",
+    'a metric outside the snapshot\'s prefixes is not checked, with the scope as its reason; one inside pairs', d);
+  assert(d['DASH-elsewhere'] === "notObserved:a:outside the snapshot's dashboard folders (Payments)",
+    'a dashboard whose folder uid is outside the snapshot\'s folders is "outside"', d['DASH-elsewhere']);
+  assert(d['DASH-crawled'] === 'notObserved:a:the snapshot read only the folders Payments; Pack A does not say which folder this dashboard is in, so it was not checked',
+    'a crawled dashboard (no folder uid) is never called outside: the reason says only what is known', d['DASH-crawled']);
+  assert(d['DASH-payments-main'] === 'onlyInA' && d['QRY-job:up:sum'] === 'onlyInA' && d['DASH-payments-live'] === 'onlyInB',
+    'inside the scope an absence is real (declared, not live); a family the snapshot did not scope is untouched', d);
+
+  // Symmetric: the snapshot on side A, the repository on side B.
+  const s = byKey(diffPacks(snapshot(), repo(), { scopeMode: 'all' }));
+  assert(s['METRIC-orders_total'] === "notObserved:b:outside the snapshot's metric scope (prefixes payments_)"
+    && s['DASH-crawled'] === 'notObserved:b:the snapshot read only the folders Payments; Pack B does not say which folder this dashboard is in, so it was not checked'
+    && s['DASH-payments-main'] === 'onlyInB',
+    'symmetric: the other side\'s out-of-scope artefacts are notObserved on side b, the reason naming Pack B', s);
+
+  // Without the annotation — or with one that does not parse — the pair is compared as before.
+  const plain = diffPacks(repo(), snapshot({}));
+  const broken = diffPacks(repo(), snapshot({ 'observogram.scope.metric': '{nope', 'observogram.scope.dashboard': '{"by":"folder","values":[]}' }));
+  assert(JSON.stringify(broken) === JSON.stringify({ ...plain, b: broken.b }) && plain.summary.notObserved === 0
+    && byKey(plain)['METRIC-orders_total'] === 'onlyInA' && byKey(plain)['DASH-crawled'] === 'onlyInA',
+    'without a scope annotation (or with one that does not parse) nothing is parked', plain.summary);
+  const scoped = diffPacks(repo(), snapshot());
+  assert(scoped.summary.notObserved === 3 && scoped.summary.onlyInA === plain.summary.onlyInA - 3 && scoped.summary.union === plain.summary.union - 3,
+    'parked artefacts leave the union: what the snapshot did not read does not lower the match', [scoped.summary, plain.summary]);
+
+  // A family the snapshot could not observe at all keeps that reason over its scope.
+  const blind = byKey(diffPacks(repo(), snapshot({ ...SCOPE, 'observogram.unobserved.dashboard': 'this MCP offers no dashboards tool' })));
+  assert(blind['DASH-crawled'] === 'notObserved:a:this MCP offers no dashboards tool' && blind['DASH-payments-main'] === 'notObserved:a:this MCP offers no dashboards tool',
+    'an unobserved family keeps the unobserved reason, inside the scope or not', blind);
+}
+
 report('diff');

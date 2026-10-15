@@ -35,17 +35,22 @@ The base is no longer ephemeral. The studio pod mounts its own
 
 | subPath | Mounted at | Env | Holds |
 |---|---|---|---|
-| `db` | `/data/db` | `OBSERVOGRAM_DB=/data/db/observogram.db` | the database: users, orgs, memberships, the audit, the session epoch that revokes cookies |
-| `workspace` | `/data/workspace` | `OBSERVOGRAM_WORKSPACE=/data/workspace` | the files the rows point at: `packs/`, `snapshots/`, `deploys.jsonl`, `journeys/`, `runs/`, `session-secret`, `users.json` and `orgs.json` until the store imports them |
+| `db` | `/data/db` | `OBSERVOGRAM_DB=/data/db/observogram.db` | the database: users, orgs, memberships, the audit, the session epoch that revokes cookies, the pack registry (each pack's label, source and the services it names) |
+| `workspace` | `/data/workspace` | `OBSERVOGRAM_WORKSPACE=/data/workspace` | the files the rows point at: `packs/` (the pack files; their registry is in the database), `snapshots/`, `deploys.jsonl`, `journeys/`, `runs/`, `session-secret`, and `users.json`, `orgs.json` and `packs/index.json` until the store imports them (read once; they stay, frozen) |
 
 Before this volume, the workspace was the image's `/app/.observogram`, so
 every rollout and every pod restart wiped users, registered packs and the
 deploy audit. With the store it would also have wiped roles and the audit,
 and reset the session epoch, which revives revoked cookies. Both halves now
 live on one claim, so they persist together and a rollout loses neither.
+The pack registry moves from `packs/index.json` into the database at the
+first start of this build (the file stays, read once and compared at
+every start); `packc store export` rewrites it from the rows for an older
+image, 0.5.0 included — see the README's Upgrade And Roll Back.
 The studio opens the store at start; its first start imports the legacy
-files (`users.json`, `orgs.json`) once, prints a report in the pod log and
-leaves them in place, never read again
+files (`users.json`, `orgs.json`, `packs/index.json`) once, prints a report
+in the pod log and leaves them in place: the identity files are never read
+again, `packs/index.json` is compared at every start as above
 ([docs/STORE_PLAN.md](../../docs/STORE_PLAN.md)). From then on the user and
 org CLIs (`kubectl exec … -- node tools/user-admin.mjs …`,
 `tools/org-admin.mjs …`) change users and orgs; a `users.json` or
@@ -211,7 +216,7 @@ spec:
       persistentVolumeClaim: { claimName: observabilitypack-studio-store }
 EOF
 kubectl -n $NS wait --for=jsonpath='{.status.phase}'=Succeeded pod/observogram-store-export --timeout=300s
-kubectl -n $NS logs observogram-store-export      # export: in place in /data/workspace …, users.json: …, note: …
+kubectl -n $NS logs observogram-store-export      # export: in place in /data/workspace …, users.json: …, index.json: …, note: …
 kubectl -n $NS delete pod observogram-store-export
 
 # 3. Change the image only (keep the store volume and the env), then start.
@@ -225,10 +230,14 @@ claim there instead of the `workspace` subPath, and set
 `OBSERVOGRAM_WORKSPACE=/workspace` and the export directory to
 `/workspace`. Change the image, not the manifests: an older base kept the
 workspace in the container, where every restart lost it. The export's log lists the
-users it wrote, the viewers and operators who regain full write on the old
+users it wrote, the `packs/index.json` it wrote per org root (the old
+image reads the pack registry from it, with every label), the viewers and
+operators who regain full write on the old
 build (it enforces no roles), and the cookie note: users revoked in the
 store stay signed in there until their cookies expire, and rotating
-`OBSERVOGRAM_SESSION_SECRET` signs everyone out. When it prints "the
+`OBSERVOGRAM_SESSION_SECRET` signs everyone out. A rollback to the 0.5.0
+image is the same two steps — it keeps the database and reads the pack
+registry from the `index.json` the export wrote — and restarts freely. When it prints "the
 default org's root is now orgs/default — point its CronJobs at …", the
 default org's data moved to `orgs/default/` for the old build: point that
 org's journey CronJob at `/workspace/orgs/default` (see Tenancy below).
@@ -282,7 +291,10 @@ scale to 1. `store purge-org <id>` (the files of an org removed with
 `tools/org-admin.mjs remove`) runs the same way; it cannot be undone and
 asks for no confirmation, and it deletes that org's packs, `deploys.jsonl`,
 `snapshots/`, `runs/` and `journeys/`, which no `store backup` holds, so
-copy `/data/workspace/orgs/<id>` off the claim first.
+copy `/data/workspace/orgs/<id>` off the claim first. It refuses, deleting
+nothing, while that would take the users file a pre-store build reads, or a
+mount point is under that directory; the README's "Purge A Removed Org"
+names the ways out.
 
 ### Storage class
 
@@ -340,7 +352,14 @@ docroot. That architecture is gone:
   (`OBSERVOGRAM_OIDC_*`) also satisfies the requirement; with it,
   `OBSERVOGRAM_BOOTSTRAP_ADMIN` names the first owner (`<issuer>#<sub>`, or
   an email the ID token marks verified) — see
-  [.env.example](../../.env.example).
+  [.env.example](../../.env.example). Behind an ingress or sidecar that
+  terminates SSO, `OBSERVOGRAM_TRUST_PROXY_AUTH=1` takes identity from its
+  headers instead: the pod binds beyond loopback, so
+  `OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET` (a Secret the proxy sends in
+  `X-Proxy-Auth-Secret`) is required, the ACK sentence must be set, and the
+  proxy must be the only route to the pod's port (a NetworkPolicy) and
+  strip the identity headers from client requests — see the README's
+  "Behind a reverse proxy".
 - `GITHUB_TOKEN` (optional) — uncomment in
   [deployment-studio.yaml](deployment-studio.yaml) to raise GitHub rate
   limits / allow private repos for `POST /api/crawl-github`.
@@ -381,8 +400,9 @@ base's.)
 What the component adds ([components/journeys](components/journeys)):
 
 - `pvc-workspace.yaml` — the PVC `observabilitypack-studio-workspace`
-  (journeys/, runs/, deploys.jsonl, packs/, and the legacy users.json /
-  orgs.json until the first start imports them). It takes the
+  (journeys/, runs/, deploys.jsonl, packs/ — the pack files; their
+  registry is in the database — and the legacy users.json / orgs.json /
+  packs/index.json until the first start imports them). It takes the
   studio's workspace over from `/data/workspace`; the database stays on the
   store claim. `1Gi` is a placeholder, not a measurement: the workspace
   grows as journeys × `OBSERVOGRAM_JOURNEY_RUN_RETENTION` (default 1000) ×
@@ -397,9 +417,22 @@ What the component adds ([components/journeys](components/journeys)):
   `kubectl get jobs` shows a gate failure as a failed Job, which is the
   intended signal. The env var names your journeys reference
   (`packB.mcp.authEnv`, `notify.urlEnv`, `notify.authEnv`) are bound there
-  from Secrets (`secretKeyRef`, commented stanzas) — never as literals. It
+  from Secrets (`secretKeyRef`, commented stanzas) — never as literals. A
+  journey the studio also runs names its org's notify hook,
+  `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` and its `_TOKEN`, bound on the
+  studio Deployment as well (its commented stanza, with
+  `OBSERVOGRAM_NOTIFY_ORIGINS`): the studio reads no other notify name
+  ([`docs/DOWNSTREAM.md`](../../docs/DOWNSTREAM.md) §17). It
   never mounts the store claim and sets no `OBSERVOGRAM_DB`: the journey
-  runner opens no database.
+  runner opens no database. The read tokens an org's MCP endpoint records
+  name (`readTokenEnv`, `OBSERVOGRAM_ORG_<ORG>_<NAME>` — `ORG` the org id
+  upper-cased, `-` → `_`; an admin may name only their org's) are **the
+  studio Deployment's** `env`, bound from a Secret with `secretKeyRef`:
+  the studio reads the variable when `POST /api/refresh-live` or
+  `/api/draft-from-mcp` picks the endpoint by `mcpEndpointId`. Never set
+  them on the CronJob — the journey runner reads `packB.mcp.authEnv`, its
+  own names, and a write token is never a variable at all (deploys and
+  rollbacks take theirs per request).
 - `patch-studio-workspace.yaml` — mounts the same PVC into the studio at
   `/workspace` and sets its `OBSERVOGRAM_WORKSPACE`. It never touches
   `OBSERVOGRAM_DB`, the `store` volume or the strategy: the database stays

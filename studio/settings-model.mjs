@@ -1,0 +1,1493 @@
+// studio/settings-model.mjs
+//
+// The pure models of Settings (docs/STORE_PLAN.md §6 item 3, slice 6b) and of
+// the MCP target the pickers send (an org's registered endpoint by id, or a
+// typed URL). Every function takes its inputs explicitly — 6a's accessModel()
+// (studio/services-model.mjs), the /auth/me body, the probe's answer, the
+// GET /api/services rows (ServiceView), GET /api/mcp-endpoints
+// (McpEndpointView), GET /api/org/members and GET /api/admin/users (already
+// email-free: the loaders in studio/settings-api.mjs drop it), GET /api/audit,
+// GET /api/admin/orgs and /api/admin/join-role — and returns plain data
+// for the renderers and the controller (studio/app.mjs). No state reads, no
+// fetches, no DOM: tools/test-settings-model.mjs exercises it under node:test
+// (docs/UI_CONVENTIONS.md §2). Its one import is the tier vocabulary of
+// services-model.mjs, itself import-free — one source for the tiers.
+//
+// The honesty rules the models carry: a control a rank or a posture cannot
+// use is drawn disabled with a reason that names a way out working for the
+// rank reading it; the server's refusal is shown as is (`<status>: <text>`);
+// the MCP read token is a server environment variable's NAME, never a value;
+// no member's or user's email reaches a model; a temporary password reaches
+// the editor model of the one step that shows it, and no status sentence.
+
+import { TIERS, TIER_BY_PACK } from './services-model.mjs';
+
+export const SETTINGS_SECTIONS = ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role'];
+// The sections this build draws (the nav lists only these — never a
+// placeholder for one that is not built).
+export const BUILT_SECTIONS = ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role'];
+// The record editors this build draws: a section whose editor is not built
+// draws no primary and no row action, and no sentence names one.
+export const BUILT_EDITORS = ['endpoint', 'environment', 'org-name', 'member-add', 'member', 'user-create', 'user', 'org-create', 'org', 'join-role'];
+
+const SECTION_LABEL = {
+  environments: 'Environments', endpoints: 'MCP endpoints', members: 'Members', audit: 'Audit',
+  users: 'Users', orgs: 'Organisations', 'join-role': 'Join role',
+};
+const SECTION_GROUP = { environments: 'org', endpoints: 'org', members: 'org', audit: 'org', users: 'deployment', orgs: 'deployment', 'join-role': 'deployment' };
+// What each section needs: everyone reads environments and endpoints; the
+// members and the audit are an admin's; the deployment group an owner's.
+const SECTION_NEEDS = { environments: null, endpoints: null, members: 'admin', audit: 'admin', users: 'own', orgs: 'own', 'join-role': 'own' };
+
+const RANKS = { viewer: 0, operator: 1, admin: 2 };
+const ORG_FALLBACK = 'this organisation';
+const CLOSED_REASON = 'closed on this server without sign-in — the banner above names the way in';
+// The token posture's reads that need a signed-in user (the members and the
+// audit, design §3.3 "— (banner)"): `why.read`, which names no role that would
+// not open them; 6a's write reason stays on every write (§3.4, B16). They
+// point at the banner only when it holds the probe's 403 (`denied: 'role'`,
+// the server's sentence naming the way in); a probe that failed otherwise (no
+// answer, a 5xx) is a banner naming no way in, and before it answers there is
+// no banner at all.
+const TOKEN_READ_NEEDS = { admin: 'needs the admin role and a signed-in user', own: 'needs a signed-in owner' };
+function tokenReadReasons(refusal) {
+  const tail = !refusal ? '' : refusal.denied === 'role' ? ' — the banner above names the way in' : ' — the read above failed; reload this page to retry';
+  return { admin: `${TOKEN_READ_NEEDS.admin}${tail}`, own: `${TOKEN_READ_NEEDS.own}${tail}` };
+}
+const OWN_REASON = "users, organisations and the join role belong to the deployment's owners — ask an owner";
+const CREATE_ORG_REASON = 'a second organisation needs sign-in, and this server runs without it — start it with sign-in (npm run users -- add <login>, or OIDC) and sign in as an owner';
+const OPEN_BANNER = 'This server runs without sign-in: you act as local, an owner, and every change here is audited as local.';
+
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const DEPLOYMENT_HEAD = 'The deployment';
+
+// The deployment group's line for a signed-in reader who is not an owner
+// (design §3.4, A-7, D-H): it cannot say whether an owner exists — only who
+// to ask, and how a deployment with none gets one. It names the deployment
+// sections this build draws, and no other.
+export function noOwnerText(builtSections = BUILT_SECTIONS) {
+  const ids = SETTINGS_SECTIONS.filter((id) => SECTION_GROUP[id] === 'deployment' && builtSections.includes(id));
+  if (!ids.length) return null;
+  const words = ids.map((id, i) => (id === 'join-role' ? 'the join role' : i === 0 ? SECTION_LABEL[id] : SECTION_LABEL[id].toLowerCase()));
+  const list = words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+  return `${list} ${words.length === 1 && ids[0] !== 'users' ? 'is' : 'are'} an owner's — ask one. (A deployment with no owner gets one from the server's shell: npm run users -- owner <login>.)`;
+}
+const isArr = Array.isArray;
+
+// The probe's answer as the controller hands it: null (not issued or not
+// settled), { ok: true, body } (200), or the Error requestJson threw
+// (`.message` is `<status>: <sentence>`, `.denied`, `.status`).
+function probeRefusal(probe) {
+  if (!probe || probe.ok === true) return null;
+  const text = typeof probe.message === 'string' && probe.message ? probe.message : null;
+  return text ? { text, denied: probe.denied ?? null, status: probe.status ?? null } : null;
+}
+
+// ---------- access: one model for every Settings control (design §4) ----------
+
+// `access` is 6a's accessModel() ({ posture, role, rank, canWrite, reason,
+// orgName }); `identity` the /auth/me body (null in the open and token
+// postures); `probe` the answer of GET /api/org/members in the token and open
+// postures (design §3.4) — and, in the static bundle, the frame's first read
+// (its 501). For affordances only: the server decides every write.
+export function settingsAccessModel({ access, identity = null, probe = null, chromeName = 'the studio' } = {}) {
+  const posture = access?.posture ?? 'unknown';
+  const role = access?.role ?? null;
+  const rank = Object.hasOwn(RANKS, role) ? RANKS[role] : null;
+  const org = access?.orgName ?? ORG_FALLBACK;
+  const refusal = probeRefusal(probe);
+  const owner = posture === 'identity' ? identity?.user?.owner === true : posture === 'open';
+  const closed = posture === 'open' && refusal?.denied === 'posture' ? refusal.text : null;
+  const none = { operate: false, admin: false, own: false, createOrg: false };
+
+  if (posture === 'static') {
+    const text = refusal?.text ?? `501: Settings needs the ${chromeName} server; this studio is a static bundle built without one.`;
+    return { posture, role, owner: false, closed: null, can: none, why: { operate: text, admin: text, own: text, closed: null, createOrg: text }, banner: { kind: 'static', text } };
+  }
+  if (posture === 'token') {
+    const reason = access?.reason ?? null;
+    return {
+      posture, role, owner: false, closed: null, can: none,
+      why: { operate: reason, admin: reason, own: reason, closed: null, createOrg: reason, read: tokenReadReasons(refusal) },
+      banner: refusal ? { kind: 'token', text: refusal.text } : null,
+    };
+  }
+  const operate = access?.canWrite !== false;
+  // An unknown rank (the org list failed and no identity said otherwise) is
+  // left to the server, as 6a's accessModel does.
+  const admin = (rank === null ? true : rank >= RANKS.admin) && !closed;
+  const own = owner && !closed;
+  const createOrg = own && posture === 'identity';
+  const why = {
+    operate: operate ? null : (access?.reason ?? null),
+    admin: admin ? null : (closed ? CLOSED_REASON : `needs the admin role in ${org} — yours is ${role}; ask an admin of ${org}`),
+    own: own ? null : (closed ? CLOSED_REASON : OWN_REASON),
+    closed: closed ? CLOSED_REASON : null,
+    createOrg: createOrg ? null : (closed ? CLOSED_REASON : posture === 'open' ? CREATE_ORG_REASON : OWN_REASON),
+  };
+  let banner = null;
+  if (closed) banner = { kind: 'closed', text: closed };
+  else if (posture === 'open' && probe?.ok === true) banner = { kind: 'open', text: OPEN_BANNER };
+  return { posture, role, owner, closed, can: { operate, admin, own, createOrg }, why, banner };
+}
+
+// Why a section that needs `need` cannot be read: the posture's read reason
+// where it has one (the token posture's), else the role's.
+const readWhy = (access, need) => access.why?.read?.[need] ?? access.why?.[need] ?? null;
+
+// Can this access read `section`? (environments and endpoints: everyone
+// but the bundle; members and the audit: can.admin; the deployment: can.own).
+function sectionReadable(access, id) {
+  if (access.posture === 'static') return false;
+  const need = SECTION_NEEDS[id];
+  return need === null ? true : access.can[need] === true;
+}
+
+// The section the frame opens on: the one asked for when it is built and
+// readable, else the first readable built one (null in the static bundle).
+export function settingsSectionFor(access, wanted = null, builtSections = BUILT_SECTIONS) {
+  const built = SETTINGS_SECTIONS.filter((id) => builtSections.includes(id));
+  if (wanted && built.includes(wanted) && sectionReadable(access, wanted)) return wanted;
+  return built.find((id) => sectionReadable(access, id)) ?? null;
+}
+
+// ---------- the frame (design §3.2) ----------
+
+// `access` is settingsAccessModel(); `statusOf(id)` the section's status
+// line ({ kind, text }) or null; `acting` an owner in an org they are not a
+// member of (isActingOrg). The nav lists only `builtSections`.
+export function buildSettingsFrameModel({ access, section = null, orgName = null, orgId = null, acting = false, statusOf = null, builtSections = BUILT_SECTIONS } = {}) {
+  const current = settingsSectionFor(access, section, builtSections);
+  const where = orgName && orgId ? `${orgName} (${orgId})` : (orgName || orgId || null);
+  // An owner acting in an org they are not a member of says so (D-M).
+  const who = acting ? `you are an owner acting in ${orgId ?? orgName} — not a member`
+    : access.role ? `you are ${access.role}${access.owner ? ', an owner' : ''}` : null;
+  const scope = ['Settings', where, who].filter(Boolean).join(' · ');
+  let nav = access.posture === 'static' ? [] : SETTINGS_SECTIONS.filter((id) => builtSections.includes(id)).map((id) => {
+    const enabled = sectionReadable(access, id);
+    const need = SECTION_NEEDS[id];
+    return { id, label: SECTION_LABEL[id], group: SECTION_GROUP[id], current: id === current, enabled, reason: enabled ? null : readWhy(access, need) };
+  });
+  // The deployment group (the owner's sections), under its own head; for a
+  // signed-in reader who is not an owner, collapsed to one line naming who to
+  // ask (A-27) — never a list of sections they cannot open. The token and
+  // closed postures draw the items unavailable with their reasons (the banner
+  // names the way); on the open loopback, local is an owner (D-E).
+  let deployment = null;
+  if (nav.some((n) => n.group === 'deployment')) {
+    const collapse = access.posture === 'identity' && access.owner !== true;
+    deployment = { head: DEPLOYMENT_HEAD, note: collapse ? noOwnerText(builtSections) : null };
+    if (collapse) nav = nav.filter((n) => n.group !== 'deployment');
+  }
+  return {
+    title: 'Settings', scope, banner: access.banner, nav, deployment, section: current,
+    status: current && typeof statusOf === 'function' ? (statusOf(current) ?? null) : null,
+  };
+}
+
+// A section's heading and its one-line scope sentence; the status line
+// while it is read.
+export function settingsSectionHead(id, { orgName = null } = {}) {
+  const org = orgName || ORG_FALLBACK;
+  const title = SECTION_LABEL[id] ?? id;
+  const scope = {
+    environments: `Every environment of ${org}'s services — its tier, the MCP endpoint it is checked through, its bindings and links. Build registers a service; each opens on its own page.`,
+    endpoints: `The MCP gateways registered in ${org}, and the environments checked through each. A read token stays on the server: a gateway names the variable that holds it, never its value.`,
+    users: 'Every user of this deployment: how they sign in, whether they are an owner, and the organisations they belong to. A new local user gets a temporary password, shown once.',
+    orgs: 'Every organisation of this deployment: its members, where its files live, when it was created. A removed one stays listed — its id is never used again.',
+    // The join role's scope sentence is the section model's (the sign-in mode the server runs).
+    // The members' scope sentence is the section model's (it names the org's id, and an owner acting from outside).
+  }[id] ?? null;
+  return { title, scope, loading: `Reading ${title.replace(/^[A-Z](?=[a-z])/, (c) => c.toLowerCase())}…` };
+}
+
+// The cached Settings answers the access may still read (C-6): members and
+// the org row need can.admin; the audit too, and a non-owner keeps only the
+// rows of the active org; the deployment's answers need can.own. Returns a
+// new object — forgetSettingsAbove's pure half.
+export function settingsAboveRank(settings, access, { orgId = null } = {}) {
+  if (!settings) return settings;
+  const out = { ...settings };
+  if (!access.can.admin) { out.members = null; out.org = null; out.audit = null; }
+  if (out.audit && !access.owner) {
+    const rows = isArr(out.audit.rows) ? out.audit.rows.filter((r) => r.orgId === orgId) : [];
+    out.audit = { ...out.audit, rows };
+  }
+  if (!access.can.own) { out.users = null; out.orgs = null; out.joinRole = null; }
+  return out;
+}
+
+// ---------- environments (design §5.1) ----------
+
+const countOf = (obj) => (obj && typeof obj === 'object' ? Object.keys(obj).length : 0);
+const endpointLabel = (ep) => `${ep.name} — ${ep.origin}`;
+
+// `services` is GET /api/services (null when it failed — `error` is then the
+// thrown `<status>: <sentence>`). Each environment carries its own
+// mcpEndpoint summary, so the endpoint list is not needed here. `editable`
+// says whether the environment editor is built: without it there is no
+// primary (null), no row Edit, and the empty line names no control.
+export function buildEnvironmentsSectionModel({ services, access, orgName = null, error = null, editable = true } = {}) {
+  const org = orgName || ORG_FALLBACK;
+  const can = access.can.operate === true;
+  const primaryOf = (p) => (editable ? p : null);
+  if (!isArr(services)) {
+    const text = error || 'the services could not be read';
+    return { groups: [], primary: primaryOf({ enabled: false, reason: text }), empty: null, error: text, build: false };
+  }
+  if (!services.length) {
+    // Build is offered to a rank that may build; any other reader is told who
+    // registers one (the 6a home's viewer wording) and gets no Build.
+    const role = access.role ?? 'viewer';
+    const text = can
+      ? `No service in ${org} yet — Build registers one (its DEFINE names the service).`
+      : `No service in ${org} yet — an operator registers one with Build (its DEFINE names the service); your role in ${org} is ${role}.`;
+    return { groups: [], primary: primaryOf({ enabled: false, reason: text }), empty: text, error: null, build: can };
+  }
+  const groups = services.map((s) => ({
+    serviceId: s.id, name: s.name, slug: s.slug,
+    envs: (isArr(s.environments) ? s.environments : []).map((e) => ({
+      id: e.id, name: e.name,
+      tierText: e.effectiveTier ?? TIER_BY_PACK,
+      mcpText: e.mcpEndpoint ? endpointLabel(e.mcpEndpoint) : 'none',
+      bindingsCount: countOf(e.bindings), linksCount: countOf(e.endpoints),
+      canEdit: can && editable,
+    })),
+  }));
+  const anyEnv = groups.some((g) => g.envs.length);
+  const empty = anyEnv ? null : `No environments in ${org} yet.${can && editable ? ' Add environment registers one.' : ''}`;
+  return { groups, primary: primaryOf({ enabled: can, reason: can ? null : access.why.operate }), empty, error: null, build: false };
+}
+
+// ---------- MCP endpoints (design §5.3) ----------
+
+// The environments bound to endpoint `id`, named `<service slug> / <env>`
+// from the services table; null when the table is unavailable.
+function boundNames(id, services) {
+  if (!isArr(services)) return null;
+  const names = [];
+  for (const s of services) {
+    for (const e of isArr(s.environments) ? s.environments : []) {
+      if (e.mcpEndpoint && e.mcpEndpoint.id === id) names.push(`${s.slug} / ${e.name}`);
+    }
+  }
+  return names;
+}
+
+// An environment id resolved through the services table: `<slug> / <env>`,
+// or `environment <id>` when it does not resolve.
+function environmentName(id, services) {
+  for (const s of isArr(services) ? services : []) {
+    const e = (isArr(s.environments) ? s.environments : []).find((x) => x.id === id);
+    if (e) return `${s.slug} / ${e.name}`;
+  }
+  return `environment ${id}`;
+}
+
+const rankOfAccess = (access) => (Object.hasOwn(RANKS, access.role) ? RANKS[access.role] : -1);
+
+// `editable` as for the environments: without the endpoint editor no
+// primary, and the empty line names no control.
+export function buildEndpointsSectionModel({ endpoints, services = null, access, orgName = null, error = null, editable = true } = {}) {
+  const org = orgName || ORG_FALLBACK;
+  const admin = access.can.admin === true;
+  const primary = editable ? { enabled: admin, reason: admin ? null : access.why.admin } : null;
+  if (!isArr(endpoints)) {
+    const text = error || 'the MCP endpoints could not be read';
+    return { rows: [], primary, empty: null, error: text };
+  }
+  // The URL and the variable's name only for operators and above — the
+  // server nulls them for a viewer; the model does not read them either.
+  const full = rankOfAccess(access) >= RANKS.operator;
+  const rows = endpoints.map((ep) => {
+    const n = Number.isInteger(ep.environments) ? ep.environments : 0;
+    const names = boundNames(ep.id, services);
+    const counted = `checked by ${plural(n, 'environment')}`;
+    const boundText = names && names.length === n && n > 0 ? `${counted}: ${names.join(', ')}` : counted;
+    return {
+      id: ep.id, name: ep.name, origin: ep.origin,
+      url: full ? (ep.url ?? null) : null,
+      tokenText: full ? (ep.readTokenEnv ? `token: ${ep.readTokenEnv}` : 'token: none (requests send their own)') : null,
+      boundText,
+      // Edit… on the row: an admin's (the editor's writes are admin class);
+      // not drawn for another rank — the row already shows every fact.
+      canEdit: admin && editable,
+    };
+  });
+  const how = editable ? ` ${admin ? 'New MCP endpoint registers one.' : 'An admin registers them.'}` : '';
+  const empty = rows.length ? null : `No MCP endpoints in ${org} yet.${how}`;
+  return { rows, primary, empty, error: null };
+}
+
+// 'OBSERVOGRAM_ORG_<KEY>_' — server/store/mcp-endpoints.mjs orgEnvPrefix, mirrored.
+export function orgEnvPrefix(orgId) {
+  return `OBSERVOGRAM_ORG_${String(orgId).toUpperCase().replaceAll('-', '_')}_`;
+}
+
+// ---------- members (design §5.4) ----------
+
+// The member is the org's only enabled admin and the caller is not an
+// owner (an owner passes the server's rule).
+export function lastAdmin(member, members, { owner = false } = {}) {
+  if (owner || !member || member.role !== 'admin' || member.disabled) return false;
+  const enabledAdmins = (isArr(members) ? members : []).filter((m) => m.role === 'admin' && !m.disabled);
+  return enabledAdmins.length === 1 && enabledAdmins[0].userId === member.userId;
+}
+
+const lastAdminText = (login, org) => `${login} is the last admin of ${org}: only an owner can demote or remove them — make another member an admin first`;
+
+// What the confirm step says when the row is the caller's own (C-2).
+function selfNotes(org, owner) {
+  if (owner) {
+    const t = `This is you: your membership changes, but as an owner you keep the admin role in ${org}.`;
+    return { demote: t, remove: t };
+  }
+  return { demote: 'This is you: you lose the admin role at once.', remove: `This is you: you lose access to ${org} at once.` };
+}
+
+// The status after removing oneself from the org on screen: a member's page
+// reloads with no active org and lands in their next organisation; an
+// owner's requests are never refused (server/authz.mjs orgContext), so the
+// page reloads into the same org, now acted in from outside (design §3.5, D-M).
+export function leftOrgText(orgName, owner = false) {
+  return owner
+    ? `You left ${orgName}; as an owner you go on acting in it — this browser reloads.`
+    : `You left ${orgName}; this browser switches to your next organisation.`;
+}
+
+// ---------- an owner acting in an org they are not a member of (design §3.5, D-M) ----------
+
+const membershipsOf = (identity) => (isArr(identity?.orgs) ? identity.orgs : []);
+const signedInOwner = (identity) => identity?.authenticated === true && identity?.user?.owner === true;
+
+// The org this browser sends at boot (`identity` the /auth/me body, `saved`
+// the persisted choice, `savedBy` the login that saved it): the saved one
+// when it is a membership — or, for a signed-in owner, whatever this owner
+// saved (the server is the check: an org removed since is refused, and the
+// boot recovers once — actingRecovery; an org another login chose on this
+// browser is never inherited); else the first membership; else none (the
+// open posture, or an owner in no org: the server lands the request in the
+// default org).
+export function activeOrgChoice({ identity = null, saved = null, savedBy = null } = {}) {
+  const orgs = membershipsOf(identity);
+  if (saved && orgs.some((o) => o.id === saved)) return saved;
+  if (saved && signedInOwner(identity) && savedBy && savedBy === identity.user?.login) return saved;
+  return orgs[0]?.id ?? null;
+}
+
+// Whether `orgId` (the org the server resolved) is one this signed-in owner
+// acts in without being a member of it.
+export function isActingOrg({ identity = null, orgId = null } = {}) {
+  return Boolean(orgId) && signedInOwner(identity) && !membershipsOf(identity).some((o) => o.id === orgId);
+}
+
+// The ORG chip's list: the memberships, plus — for an owner acting elsewhere —
+// that org, marked `acting` (studio/api.mjs orgChipModel takes the longer
+// list; choosing a membership leaves the acting org).
+export function orgChipEntries({ identity = null, orgId = null, orgName = null } = {}) {
+  const orgs = membershipsOf(identity);
+  return isActingOrg({ identity, orgId }) ? [...orgs, { id: orgId, name: orgName || orgId, acting: true }] : orgs;
+}
+export function orgChipLabel(entry) {
+  const name = entry?.name || entry?.id || '';
+  return entry?.acting ? `${name} — acting as owner` : name;
+}
+
+// The boot's one-time recovery (T25): the catalogue read refused with
+// `denied: 'org'` while an owner acts in an org that is not a membership (it
+// was removed since) → the org to reload into, the first membership or none
+// (`{ to }`); null otherwise, and null once tried — a second refusal draws the
+// no-org screen with the server's sentence instead of reloading again.
+export function actingRecovery({ identity = null, orgId = null, error = null, tried = false } = {}) {
+  if (tried || error?.denied !== 'org' || !isActingOrg({ identity, orgId })) return null;
+  return { to: membershipsOf(identity)[0]?.id ?? null };
+}
+
+// `members` already email-free; `org` the GET /api/org/members `org`; `me`
+// the caller's login (/auth/me has no user id — "you" is by login).
+export function buildMembersSectionModel({ members, org = null, access, me = null, acting = false, error = null } = {}) {
+  const orgName = org?.name || access.orgName || ORG_FALLBACK;
+  const orgId = org?.id ?? null;
+  const admin = access.can.admin === true;
+  const owner = access.owner === true;
+  const orgRow = { id: orgId, name: orgName, canRename: admin, renameReason: admin ? null : access.why.admin };
+  const where = orgId ? `${orgName} (${orgId})` : orgName;
+  const scopeSentence = acting
+    ? `The members of ${where} — you are an owner acting in ${orgId ?? orgName} — not a member.`
+    : `The members of ${where} and their roles.`;
+  const primary = { enabled: admin, reason: admin ? null : access.why.admin };
+  if (!isArr(members)) return { org: orgRow, scopeSentence, rows: [], primary, empty: null, error: error || 'the members could not be read' };
+  const rows = members.map((m) => {
+    const isLast = lastAdmin(m, members, { owner });
+    const wouldBeLast = owner && lastAdmin(m, members, { owner: false });
+    const you = Boolean(me) && m.login === me;
+    const base = admin ? null : access.why.admin;
+    const lockText = isLast ? lastAdminText(m.login, orgName) : null;
+    return {
+      userId: m.userId, login: m.login, name: m.name ?? null, role: m.role, disabled: m.disabled === true, since: m.since ?? null,
+      you, lastAdmin: isLast,
+      ownerLastAdminNote: wouldBeLast ? `${m.login} is ${orgName}'s last admin: afterwards only an owner can manage its members, endpoints and audit.` : null,
+      selfNote: you ? selfNotes(orgName, owner) : null,
+      canEdit: admin,
+      reasons: {
+        remove: base ?? lockText,
+        roles: { viewer: base ?? lockText, operator: base ?? lockText, admin: base },
+      },
+    };
+  });
+  return { org: orgRow, scopeSentence, rows, primary, empty: rows.length ? null : `No members in ${orgName}.`, error: null };
+}
+
+// ---------- the audit (design §5.5) ----------
+
+// The kinds the server writes today (a text input's datalist: a kind added
+// later is still reachable; the server's KIND check is the authority).
+export const AUDIT_KINDS = ['deploy', 'environment', 'issuer', 'journey', 'live', 'mcp_endpoint', 'membership', 'meta', 'org', 'owner', 'pack', 'service', 'store', 'user', 'verdict', 'waiver'];
+
+const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+// 'YYYY-MM-DD' → the next UTC day; anything else is sent as typed (the
+// server's refusal names the shape).
+function nextUtcDay(text) {
+  const m = DAY.exec(text);
+  if (!m) return text;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + 1));
+  return Number.isNaN(d.getTime()) ? text : d.toISOString().slice(0, 10);
+}
+
+// '?…' with only the filled parameters. `until` is exclusive on the server
+// (at midnight UTC), so "through" a day sends the day after (A7); `scope`
+// only for an owner (the server refuses an admin any other than org).
+export function auditQuery(filters = {}, { owner = false, before = null, limit = 100 } = {}) {
+  const f = filters || {};
+  const val = (k) => (typeof f[k] === 'string' ? f[k].trim() : (f[k] == null ? '' : String(f[k]).trim()));
+  const pairs = [];
+  if (owner && val('scope')) pairs.push(['scope', val('scope')]);
+  for (const k of ['actor', 'kind', 'action', 'targetKind', 'targetId']) if (val(k)) pairs.push([k, val(k)]);
+  if (val('from')) pairs.push(['since', val('from')]);
+  if (val('through')) pairs.push(['until', nextUtcDay(val('through'))]);
+  pairs.push(['limit', String(limit)]);
+  if (before !== null && before !== undefined && before !== '') pairs.push(['before', String(before)]);
+  return `?${pairs.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&')}`;
+}
+
+// `doc` the last page's body (null before the first), `rows` the
+// accumulated rows (newest first). `formatTime(iso)` the controller's local
+// time (the model stays clock- and locale-free by default).
+export function buildAuditSectionModel({ doc = null, rows = [], filters = {}, access, orgId = null, formatTime = (iso) => iso, error = null } = {}) {
+  const owner = access.owner === true;
+  const list = isArr(rows) ? rows : [];
+  const scope = doc?.scope ?? (owner ? (filters?.scope || 'all') : 'org');
+  const showOrg = scope === 'all' || scope === 'deployment';
+  const caption = doc ? `${plural(list.length, 'row')}, newest first · scope ${scope}${doc.org ? ` · org ${doc.org}` : ''}` : null;
+  const scopeControl = owner ? {
+    options: [
+      { value: 'all', label: 'all' },
+      { value: 'org', label: `this org (${orgId ?? ORG_FALLBACK})` },
+      { value: 'deployment', label: "the deployment's own rows" },
+    ],
+    value: filters?.scope || 'all',
+  } : null;
+  const scopeSentence = owner ? null : `This org's rows (${orgId ?? ORG_FALLBACK}) — the deployment's are an owner's.`;
+  const out = list.map((r) => ({
+    seq: r.seq, iso: r.at, when: formatTime(r.at),
+    org: showOrg ? (r.orgId ?? null) : null,
+    actor: r.actor, action: r.action,
+    target: [r.targetKind, r.targetId].filter((x) => x !== null && x !== undefined && x !== '').join(' '),
+    detailJson: JSON.stringify(r.detail ?? null, null, 2),
+  }));
+  const more = Boolean(doc) && doc.next !== null && doc.next !== undefined;
+  const end = doc && (doc.next === null || doc.next === undefined) ? 'No older rows.' : null;
+  return {
+    canRead: access.can.admin === true, reason: access.can.admin ? null : readWhy(access, 'admin'),
+    caption, showOrg, scopeControl, scopeSentence, kinds: AUDIT_KINDS, rows: out, more, end, error,
+    // A filter the server refused (400) is answered by changing the filters, not by Retry.
+    retry: error ? !/^400:/.test(String(error)) : null,
+  };
+}
+
+// ---------- users (design §5.7 — an owner's) ----------
+
+// The temporary password (D-D): 20 symbols of a 32-symbol alphabet — lower
+// case without l and o, digits without 0 and 1 — each from one random byte's
+// low five bits (32 divides 256: no modulo bias), in groups of four: 24
+// characters, 100 bits. `bytes` is crypto.getRandomValues(new Uint8Array(20)).
+export const PASSWORD_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
+export function temporaryPassword(bytes) {
+  const symbols = Array.from(bytes || [], (b) => PASSWORD_ALPHABET[b & 31]);
+  if (symbols.length !== 20) throw new Error('a temporary password takes 20 random bytes');
+  return symbols.join('').match(/.{4}/g).join('-');
+}
+
+// The line a Users dialog shows when the server does not sign in with local
+// passwords (A13): GET /api/admin/join-role `mode`. Null for local sign-in.
+export function signInModeLine(joinRole) {
+  if (joinRole?.mode === 'oidc') return `This server signs in through OIDC issuer ${joinRole.issuerKey ?? '(unrecorded)'}: a local user cannot sign in here until it runs local sign-in.`;
+  if (joinRole?.mode === 'proxy') return 'This server signs in through its reverse proxy: a local user cannot sign in here until it runs local sign-in.';
+  return null;
+}
+
+const enabledOwnerCount = (users) => (isArr(users) ? users : []).filter((u) => u.owner && !u.disabled).length;
+const lastOwnerText = (login) => `${login} is the last enabled owner — make another user an owner first`;
+const membershipsText = (u) => (isArr(u.memberships) && u.memberships.length ? u.memberships.map((m) => `${m.orgId}:${m.role}`).join(', ') : 'no organisation');
+function userBadges(u) {
+  return [u.owner && 'owner', u.disabled && 'disabled', u.mustChange && 'must change password', u.seededDefault && 'seeded default'].filter(Boolean);
+}
+
+// `users` already email-free (null when the read failed — `error` the
+// thrown `<status>: <sentence>`); `me` the caller's login ("you", by login).
+export function buildUsersSectionModel({ users, access, me = null, error = null, formatTime = (iso) => iso } = {}) {
+  const own = access.can.own === true;
+  const primary = { enabled: own, reason: own ? null : (readWhy(access, 'own') ?? access.why.own) };
+  if (!isArr(users)) return { rows: [], primary, empty: null, error: error || 'the users could not be read', enabledOwners: 0 };
+  const owners = enabledOwnerCount(users);
+  const rows = users.map((u) => ({
+    id: u.id, login: u.login, kind: u.kind, name: u.name ?? null,
+    badges: userBadges(u),
+    memberships: membershipsText(u),
+    lastSignIn: u.lastLoginAt ? `last sign-in ${formatTime(u.lastLoginAt)}` : 'never signed in',
+    you: Boolean(me) && u.login === me,
+    lastOwner: u.owner === true && !u.disabled && owners === 1,
+    canManage: own,
+  }));
+  return { rows, primary, empty: rows.length ? null : `No users yet.${own ? ' New local user creates one.' : ''}`, error: null, enabledOwners: owners };
+}
+
+// What the owner may do to one user (the Manage… dialog), each with the
+// reason it is unavailable — the server's own rules drawn first: the last
+// enabled owner is neither disabled nor revoked; one's own password is
+// changed at /auth/change-password; an IdP user has no password here; a
+// disabled user is enabled before being made an owner.
+export function userActions(record, users, { me = null, can = true, reason = null } = {}) {
+  const login = record.login;
+  const last = record.owner === true && !record.disabled && enabledOwnerCount(users) === 1;
+  const self = Boolean(me) && login === me;
+  const gate = (own) => (!can ? reason : own);
+  return [
+    { id: 'reset', label: 'Reset password…', reason: gate(self ? 'this is your own account — change your password at /auth/change-password'
+      : record.kind !== 'local' ? `${login} signs in through the IdP and has no password here — sign them out everywhere, or disable them` : null) },
+    record.disabled ? { id: 'enable', label: 'Enable…', reason: gate(null) } : { id: 'disable', label: 'Disable…', reason: gate(last ? lastOwnerText(login) : null) },
+    { id: 'signout', label: 'Sign out everywhere…', reason: gate(null) },
+    record.owner
+      ? { id: 'owner-revoke', label: 'Revoke owner…', reason: gate(last ? lastOwnerText(login) : null) }
+      : { id: 'owner-grant', label: 'Make owner…', reason: gate(record.disabled ? `${login} is disabled — enable them first` : null) },
+  ].map((a) => ({ ...a, enabled: a.reason === null }));
+}
+
+// Whether a local user signs in here — the one rule the reset's confirm, its
+// status and the secret step read, so they never disagree. Not without
+// sign-in (`open`, the open posture: a local user exists, so the store is
+// armed and the server runs OBSERVOGRAM_AUTH=off — nobody signs in until it
+// starts without it), nor where the server signs in through OIDC or its
+// reverse proxy (`joinRole` GET /api/admin/join-role `mode`, A13 — a local
+// user signs in once it runs local sign-in).
+const localSignInHere = ({ open = false, joinRole = null } = {}) => !open && signInModeLine(joinRole) === null;
+const OPEN_SIGN_IN = (login) => `This server runs without sign-in (OBSERVOGRAM_AUTH=off): ${login} signs in once it starts without it`;
+
+// A reset's confirm and its status, by where a local user signs in: where
+// they cannot, each says so and what the reset still does — every session
+// ends, and the temporary password is the one they sign in with once they
+// can, then set their own.
+function resetTexts(login, { open = false, joinRole = null } = {}) {
+  if (open) {
+    return {
+      confirm: `Reset ${login}'s password? Every session of ${login} ends; a new temporary password is shown once. ${OPEN_SIGN_IN(login)}, and sets their own then.`,
+      status: `Every session of ${login} ended. ${OPEN_SIGN_IN(login)}, with the password below, and sets a new one then.`,
+    };
+  }
+  if (!localSignInHere({ joinRole })) {
+    const line = signInModeLine(joinRole);
+    return {
+      confirm: `Reset ${login}'s password? ${line} The reset still ends every session of ${login}, and a new temporary password is shown once — ${login} signs in with it then, and sets their own.`,
+      status: `Every session of ${login} ended. ${line} Then ${login} signs in with the password below, and sets a new one.`,
+    };
+  }
+  return {
+    confirm: `Reset ${login}'s password? Every session of ${login} ends; a new temporary password is shown once, and ${login} sets their own at their next sign-in.`,
+    status: `Every session of ${login} ended; they set a new password at their next sign-in.`,
+  };
+}
+
+// An IdP user's login is `<key>#<subject>`: the key is `proxy://<realm>` for
+// a reverse proxy's user, the OIDC issuer's key otherwise.
+const idpKeyOf = (login) => { const s = String(login ?? ''); const i = s.indexOf('#'); return i > 0 ? s.slice(0, i) : null; };
+const isProxyKey = (key) => typeof key === 'string' && key.startsWith('proxy://');
+const idpName = (key) => (isProxyKey(key) ? `a reverse proxy (realm ${key.slice('proxy://'.length)})` : `OIDC issuer ${key ?? '(unrecorded)'}`);
+
+// Whether this user signs in here, and how: the one rule a user action's
+// confirm and its status read about signing in (Enable…, Sign out
+// everywhere…), so they agree. A local user signs in with their password
+// only where the server signs in with local passwords (localSignInHere); an
+// IdP user (kind 'oidc': an OIDC issuer's or a reverse proxy's) never with a
+// password — only through their own identity provider, where the server
+// signs in through it (`joinRole` `mode` and `issuerKey`; behind a proxy, or
+// with the join role unread, the signed-in owner's own key `me` names the
+// way the server signs in, since they signed in through it).
+// → { here: true, way } | { here: false, why } (whole sentences).
+export function userSignIn(record, { open = false, joinRole = null, me = null } = {}) {
+  const login = record?.login ?? 'the user';
+  if (record?.kind !== 'oidc') {
+    if (open) return { here: false, why: `${OPEN_SIGN_IN(login)}, with their password.` };
+    if (localSignInHere({ joinRole })) return { here: true, way: 'with their password' };
+    return { here: false, why: `${signInModeLine(joinRole)} Then ${login} signs in with their password.` };
+  }
+  const key = idpKeyOf(login);
+  const theirs = idpName(key);
+  if (open) return { here: false, why: `This server runs without sign-in (OBSERVOGRAM_AUTH=off): ${login} signs in through ${theirs} once it restarts without it and signs in through that.` };
+  const mine = idpKeyOf(me);
+  const mode = joinRole?.mode ?? (mine ? (isProxyKey(mine) ? 'proxy' : 'oidc') : 'local');
+  if (mode === 'oidc') {
+    const server = joinRole?.issuerKey ?? (mine && !isProxyKey(mine) ? mine : null);
+    if (server ? key === server : !isProxyKey(key)) return { here: true, way: `through OIDC issuer ${key}` };
+    return { here: false, why: `This server signs in through OIDC issuer ${server ?? '(unrecorded)'}: ${login} signs in through ${theirs}, and cannot sign in here until the server signs in through that.` };
+  }
+  if (mode === 'proxy') {
+    const server = isProxyKey(mine) ? mine : null;
+    if (server ? key === server : isProxyKey(key)) return { here: true, way: 'through the reverse proxy' };
+    return { here: false, why: `This server signs in through its reverse proxy: ${login} signs in through ${theirs}, and cannot sign in here until the server signs in through that.` };
+  }
+  return { here: false, why: `This server runs local sign-in: ${login} signs in through ${theirs}, and cannot sign in here until the server signs in through that.` };
+}
+
+// The confirm step of one user action: the consequence, then the danger
+// button naming it. `self` the row is the caller's; `kind` the user's (local
+// or oidc); `open`, `joinRole` and `me` see localSignInHere and userSignIn.
+function userConfirm(action, login, { self = false, defaultOrg = null, open = false, joinRole = null, kind = 'local', me = null } = {}) {
+  const def = defaultOrg || 'the default organisation';
+  const signIn = () => userSignIn({ login, kind }, { open, joinRole, me });
+  switch (action) {
+    case 'reset': return { text: resetTexts(login, { open, joinRole }).confirm, danger: `Reset ${login}'s password` };
+    case 'disable': return { text: `Disable ${login}? Every session of ${login} ends, and they cannot sign in until an owner enables them; their memberships stay.${self ? ' This is you: this browser is signed out at its next request.' : ''}`, danger: `Disable ${login}` };
+    case 'enable': { const si = signIn(); return { text: si.here ? `Enable ${login}? They can sign in again ${si.way}.` : `Enable ${login}? ${si.why}`, danger: `Enable ${login}` }; }
+    case 'signout': {
+      const si = signIn();
+      const after = si.here ? `Every session of ${login} ends at its next request; they can sign in again.` : `Every session of ${login} ends at its next request. ${si.why}`;
+      return { text: `Sign ${login} out everywhere? ${after}${self ? ' This is you: this browser is signed out too.' : ''}`, danger: `Sign ${login} out everywhere` };
+    }
+    case 'owner-grant': return { text: `Make ${login} an owner? An owner manages this deployment's users and acts as an admin in every organisation; ${login} also becomes an admin of ${def}.`, danger: `Make ${login} an owner` };
+    case 'owner-revoke': return { text: `Revoke ${login}'s owner role? Their memberships stay as they are.${self ? ' This is you: you lose the owner role at once.' : ''}`, danger: `Revoke ${login}'s owner role` };
+    default: return null;
+  }
+}
+
+// The status after one user action, from the server's answer (`you`: the
+// caller acted on their own account — this browser is signed out next;
+// `kind`, `open`, `joinRole` and `me` see userConfirm).
+export function userActionStatus(action, answer = {}, { login = 'the user', defaultOrg = null, open = false, joinRole = null, kind = 'local', me = null } = {}) {
+  const note = answer?.note ? ` ${answer.note}` : '';
+  const def = defaultOrg || 'the default organisation';
+  const saved = (text) => ({ kind: 'saved', text });
+  const signIn = () => userSignIn({ login, kind }, { open, joinRole, me });
+  switch (action) {
+    case 'reset': return saved(resetTexts(login, { open, joinRole }).status);
+    case 'disable': return saved(answer?.you ? 'You disabled your own account — this browser is signed out at its next request.' : `${login} disabled — every session ended.`);
+    case 'enable': { const si = signIn(); return saved(si.here ? `${login} enabled.` : `${login} enabled. ${si.why}`); }
+    case 'signout': {
+      if (answer?.you) return saved('You signed out everywhere — this browser is signed out at its next request.');
+      const si = signIn();
+      return saved(si.here ? `Every session of ${login} ended.` : `Every session of ${login} ended. ${si.why}`);
+    }
+    case 'owner-grant': return answer?.changed === false ? { kind: 'idle', text: `${login} is already an owner — nothing changed.` } : saved(`${login} is an owner (and an admin of ${def}).${note}`);
+    case 'owner-revoke': return answer?.changed === false ? { kind: 'idle', text: `${login} is not an owner — nothing changed.` } : saved(`${login} is no longer an owner.${note}`);
+    default: return { kind: 'idle', text: 'Nothing changed.' };
+  }
+}
+
+// The POST /api/admin/users body without the password (the controller adds
+// the one it generated): the login, the non-empty name and email, the role,
+// the organisation when one is chosen.
+export function buildUserCreateBody(draft = {}) {
+  const body = { login: String(draft.login ?? '').trim() };
+  for (const k of ['name', 'email']) { const v = String(draft[k] ?? '').trim(); if (v) body[k] = v; }
+  body.role = ROLES.includes(draft.role) ? draft.role : 'operator';
+  if (typeof draft.orgId === 'string' && draft.orgId) body.orgId = draft.orgId;
+  return body;
+}
+
+// The status after a create (D-D, D-E). `answer` POST /api/admin/users';
+// `reset`: 'ok' (the password is temporary now), the refusal's sentence (it
+// is not), or null (not attempted — the create armed sign-in); `signIn`:
+// after an arming create, whether /auth/me answered (sign-in is on now).
+export function userCreateStatus(answer = {}, { login = 'the user', orgId = null, orgName = null, reset = 'ok', signIn = false } = {}) {
+  const who = answer?.user?.login ?? login;
+  const first = answer?.owner ? ' — an owner: the first local user' : '';
+  const note = answer?.note ? ` ${answer.note}` : '';
+  if (answer?.armed) {
+    if (signIn) return { kind: 'saved', text: `Sign-in is on now: ${who}${answer.owner ? ' is an owner' : ' is created'}. Sign in as ${who} with the password below.${note}` };
+    return { kind: 'saved', text: `${who} is created${answer.owner ? ' (an owner: the first local user)' : ''}. This server runs without sign-in (OBSERVOGRAM_AUTH=off): ${who} signs in once it starts without it, with the password below. It is not forced to change — change it at /auth/change-password after signing in.${note}` };
+  }
+  const joined = isArr(answer?.joined) ? answer.joined : [];
+  const entry = joined.find((j) => j.orgId === orgId) ?? joined[joined.length - 1] ?? null;
+  const where = entry ? ` (${entry.role} in ${entry.orgId === orgId && orgName ? orgName : entry.orgId})` : '';
+  if (reset !== 'ok') {
+    return { kind: 'error', text: `Created ${who}${where}${first}, but making its password temporary was refused — ${reset || 'no answer'}. The password below is not forced to change: reset it from ${who}'s Manage….${note}` };
+  }
+  return { kind: 'saved', text: `Created ${who}${where}${first}. Copy the temporary password before closing.${note}` };
+}
+
+// The secret step's sentence (the password itself is drawn beside it, once).
+// `forced`: changed at the next sign-in; `reason` 'create' | 'reset';
+// `localSignIn`: a local user signs in here (localSignInHere; else the clause
+// about setting their own is dropped — A13 — and the status says when).
+function secretText(login, { forced = true, reason = 'create', localSignIn = true } = {}) {
+  const head = `${forced ? 'Temporary password' : 'Password'} for ${login} — shown once. It is not stored in this browser and cannot be shown again`;
+  const own = forced && localSignIn ? `; ${login} sets their own at ${reason === 'reset' ? 'their next' : 'first'} sign-in.` : '.';
+  return `${head}${own} Reset it to get a new one.`;
+}
+
+// ---------- the organisations (design §5.8 — an owner's) ----------
+
+const orgFiles = (root) => (root === '.' ? 'the workspace root' : root);
+const membersCount = (n) => plural(Number.isInteger(n) ? n : 0, 'member');
+
+// GET /api/admin/orgs (`orgs` its rows, removed ones included; null when the
+// read failed — `error` the thrown `<status>: <sentence>`); `activeOrg` the
+// org this browser is in. Each live row offers Remove… — the default org's
+// unavailable with the server's own sentence; a removed row is listed greyed,
+// its id never used again. Where the server signs in, each live row but the
+// active one offers "Act in <id>" (D-M): this browser reloads into that org's
+// members — an owner manages an org they are not a member of (the server
+// ignores the org a browser names when it runs without sign-in).
+export function buildOrgsSectionModel({ orgs, defaultOrg = null, access, activeOrg = null, error = null, formatTime = (iso) => iso } = {}) {
+  const own = access.can.own === true;
+  // New organisation: an owner's, and only where the server signs in (without
+  // sign-in a second organisation would make its next start refuse).
+  const create = access.can.createOrg === true;
+  const act = own && access.posture === 'identity';
+  const primary = { enabled: create, reason: create ? null : !own ? (readWhy(access, 'own') ?? access.why.own) : access.why.createOrg };
+  if (!isArr(orgs)) return { rows: [], primary, empty: null, error: error || 'the organisations could not be read' };
+  const rows = orgs.map((o) => {
+    const removed = Boolean(o.removedAt);
+    const isDefault = o.id === defaultOrg || o.default === true;
+    const reason = !own ? (access.why.own ?? null) : isDefault ? `${o.id} is the default org and cannot be removed` : null;
+    return {
+      id: o.id, name: o.name ?? o.id, isDefault, removed, active: o.id === activeOrg,
+      facts: [membersCount(o.members), `files: ${orgFiles(o.root)}`, o.createdAt ? `created ${formatTime(o.createdAt)}` : null].filter(Boolean).join(' · '),
+      removedText: removed ? `removed ${formatTime(o.removedAt)} — a slug is never reused` : null,
+      remove: removed || !own ? null : { enabled: reason === null, reason },
+      act: removed || !act || o.id === activeOrg ? null : `Act in ${o.id}`,
+    };
+  });
+  return { rows, primary, empty: rows.length ? null : 'No organisations yet.', error: null };
+}
+
+// POST /api/admin/orgs { id, name?, adopt } — the name only when one is
+// typed, adopt only when ticked (the server refuses an occupied directory
+// without it, naming the way).
+export function buildOrgCreateBody(draft = {}) {
+  const body = { id: String(draft.id ?? '').trim() };
+  const name = String(draft.name ?? '').trim();
+  if (name) body.name = name;
+  if (draft.adopt === true) body.adopt = true;
+  return body;
+}
+
+// The status after a create: the org, that the creator is its first admin,
+// where its files live — and when its directory was taken over.
+export function orgCreateStatus(answer = {}) {
+  const org = answer?.org || {};
+  const adopted = answer?.adopted === true ? " The directory's files were taken over." : '';
+  return { kind: 'saved', text: `Created ${org.name ?? org.id} (${org.id}) — you are its first admin; its files live in ${answer?.path ?? orgFiles(org.root)}.${adopted}` };
+}
+
+// The status after a removal: the server's note as served.
+export function orgRemoveStatus(record, answer = {}) {
+  const note = answer?.note ? ` — ${answer.note}` : '';
+  return { kind: 'saved', text: `Removed ${record.name ?? record.id} (${record.id})${note}.` };
+}
+
+// What a removal cannot undo (A2): no route restores an org and its id is
+// never used again; its members lose access and what it holds can no longer
+// be reached from the studio; its files stay. Removing the org this browser
+// is in says where the browser goes next.
+function orgRemoveConfirm(record, { active = false } = {}) {
+  const n = Number.isInteger(record.members) ? record.members : 0;
+  const who = n === 0 ? 'No member loses access' : n === 1 ? 'Its 1 member loses access' : `Its ${n} members lose access`;
+  const here = active ? ' This is the org you are in; afterwards this browser switches to your first other organisation.' : '';
+  return {
+    text: `Remove ${record.name ?? record.id} (${record.id})? This cannot be undone here: no route restores an organisation, and ${record.id} is never used again. ${who}, and its services, environments and MCP endpoints can no longer be reached from the studio. The files stay under ${orgFiles(record.root)}.${here}`,
+    danger: `Remove ${record.id}`,
+    typed: record.id,
+  };
+}
+
+// ---------- the join role (design §5.9 — an owner's) ----------
+
+const JOIN_ROLE_CHOICES = ['viewer', 'operator', 'admin', null];
+
+// The sign-in mode the server runs, first (GET /api/admin/join-role): what
+// the recorded join role does under it — and, behind a reverse proxy, that
+// it does nothing (the proxy's own setting rules). `open` the open posture:
+// the server answers mode 'local' under OBSERVOGRAM_AUTH=off, but nobody signs
+// in there, so the head says the server runs without sign-in — and the way
+// the join role comes to apply is a restart without it, with OIDC
+// configured: OBSERVOGRAM_AUTH=off beats an OIDC issuer (server/auth.mjs
+// oidcEnabled), so configuring one alone changes nothing (D-F's way in, as
+// the token posture's). The section is read there only straight from this
+// machine, on the loopback, where a store without sign-in means
+// OBSERVOGRAM_AUTH=off (a first boot seeds a user that arms it otherwise).
+export function joinRoleModeSentence(doc, { defaultOrgName = null, open = false } = {}) {
+  const role = doc?.role ?? null;
+  const def = defaultOrgName || 'the default organisation';
+  if (doc?.mode === 'oidc') {
+    const head = `Sign-in: OIDC issuer ${doc.issuerKey ?? '(unrecorded)'}.`;
+    return role ? `${head} An IdP user joins ${def} as ${role} at their first sign-in.` : `${head} An IdP user gets no membership at first sign-in (an admin adds them).`;
+  }
+  if (doc?.mode === 'proxy') {
+    const groups = doc.proxy?.groupsConfigured ? ' — the groups header decides when it names a group' : '';
+    return `Sign-in: a reverse proxy. Its first-sight role is the proxy's (OBSERVOGRAM_PROXY_AUTH_JOIN_ROLE: ${doc.proxy?.joinRole ?? 'none'})${groups}; the recorded join role below does not apply to proxy users.`;
+  }
+  if (open) return `This server runs without sign-in (OBSERVOGRAM_AUTH=off). The join role applies to IdP users once it restarts without OBSERVOGRAM_AUTH=off, with OIDC configured: ${role ?? 'none'}.`;
+  return `Sign-in: local users. The join role applies to IdP users once OIDC is configured: ${role ?? 'none'}.`;
+}
+
+// `doc` GET /api/admin/join-role minus ok (null when the read failed —
+// `error` the thrown `<status>: <sentence>`); `defaultOrgName` the default
+// org's name (GET /api/admin/orgs).
+export function buildJoinRoleSectionModel({ doc, access, defaultOrgName = null, error = null } = {}) {
+  const own = access.can.own === true;
+  const primary = { enabled: own, reason: own ? null : (readWhy(access, 'own') ?? access.why.own) };
+  if (!doc || typeof doc !== 'object') return { scopeSentence: null, role: null, roleText: null, primary, empty: null, error: error || 'the join role could not be read' };
+  const role = doc.role ?? null;
+  return {
+    scopeSentence: joinRoleModeSentence(doc, { defaultOrgName, open: access.posture === 'open' }), role,
+    roleText: `Recorded join role: ${role ?? 'none — no automatic join'}`,
+    primary, empty: null, error: null,
+  };
+}
+
+// The PUT /api/admin/join-role body (B14): `{ role }` for viewer, operator
+// and null (no automatic join); `{ role: 'admin', confirm: true }` only when
+// the box is ticked; null — no call — for admin unticked. `confirm` never
+// rides a body that is not admin.
+export function joinRoleBody(role, ticked) {
+  if (role === 'admin') return ticked === true ? { role: 'admin', confirm: true } : null;
+  return { role: role ?? null };
+}
+
+// The status after a PUT: `Join role: <from|none> → <role|none>.`; the same
+// role → nothing changed (the server writes no row).
+export function joinRoleStatus({ role = null, from = null } = {}) {
+  if ((role ?? null) === (from ?? null)) return { kind: 'idle', text: 'Nothing changed.' };
+  return { kind: 'saved', text: `Join role: ${from ?? 'none'} → ${role ?? 'none'}.` };
+}
+
+// ---------- the editors (design §5) ----------
+
+// 'k=v' per line → { k: 'v' }; blank lines skipped; the first '=' splits; a
+// line without '=' is kept as { line: '' } so the server's refusal says
+// what is wrong (the studio refuses nothing the server would accept).
+export function parseKeyValueLines(text) {
+  const out = {};
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const at = line.indexOf('=');
+    if (at === -1) { out[line] = ''; continue; }
+    out[line.slice(0, at).trim()] = line.slice(at + 1).trim();
+  }
+  return out;
+}
+
+const linesOf = (obj) => Object.entries(obj && typeof obj === 'object' ? obj : {}).map(([k, v]) => `${k}=${v}`).join('\n');
+const canon = (obj) => JSON.stringify(Object.keys(obj).sort().map((k) => [k, obj[k]]));
+const asObject = (v) => (typeof v === 'string' ? parseKeyValueLines(v) : (v && typeof v === 'object' ? { ...v } : {}));
+const asId = (v) => {
+  if (v === null || v === '' || v === 'none') return null;
+  const n = typeof v === 'string' && /^[1-9][0-9]{0,15}$/.test(v) ? Number(v) : v;
+  return Number.isInteger(n) && n >= 1 ? n : null;
+};
+const asTier = (v) => (TIERS.includes(v) ? v : null);
+
+// The PATCH body for an environment: only the fields that differ, parsed —
+// tier → one of TIERS or null; mcpEndpointId → a positive id or null (left
+// out when the draft's is undefined: the list was not read, the binding is
+// kept); bindings / endpoints sent whole (the server replaces them).
+export function buildEnvironmentPatch(current, draft = {}) {
+  const patch = {};
+  if (typeof draft.name === 'string' && draft.name.trim() !== current.name) patch.name = draft.name.trim();
+  if (draft.tier !== undefined) {
+    const tier = asTier(draft.tier);
+    if (tier !== (current.tier ?? null)) patch.tier = tier;
+  }
+  if (draft.mcpEndpointId !== undefined) {
+    const id = asId(draft.mcpEndpointId);
+    if (id !== (current.mcpEndpoint?.id ?? null)) patch.mcpEndpointId = id;
+  }
+  for (const k of ['bindings', 'endpoints']) {
+    if (draft[k] === undefined) continue;
+    const next = asObject(draft[k]);
+    if (canon(next) !== canon(current[k] && typeof current[k] === 'object' ? current[k] : {})) patch[k] = next;
+  }
+  return patch;
+}
+
+// The POST body for a new environment: the name and only the non-empty fields.
+export function buildEnvironmentCreate(draft = {}) {
+  const body = { name: typeof draft.name === 'string' ? draft.name.trim() : '' };
+  const tier = asTier(draft.tier);
+  if (tier) body.tier = tier;
+  const id = draft.mcpEndpointId === undefined ? null : asId(draft.mcpEndpointId);
+  if (id !== null) body.mcpEndpointId = id;
+  for (const k of ['bindings', 'endpoints']) {
+    const next = asObject(draft[k]);
+    if (Object.keys(next).length) body[k] = next;
+  }
+  return body;
+}
+
+// The PATCH body for an MCP endpoint: name, url, readTokenEnv ('' → null: cleared).
+export function buildEndpointPatch(current, draft = {}) {
+  const patch = {};
+  if (typeof draft.name === 'string' && draft.name.trim() !== current.name) patch.name = draft.name.trim();
+  if (typeof draft.url === 'string' && draft.url.trim() !== (current.url ?? '')) patch.url = draft.url.trim();
+  if (draft.readTokenEnv !== undefined) {
+    const v = typeof draft.readTokenEnv === 'string' && draft.readTokenEnv.trim() ? draft.readTokenEnv.trim() : null;
+    if (v !== (current.readTokenEnv ?? null)) patch.readTokenEnv = v;
+  }
+  return patch;
+}
+
+// The POST body for a new endpoint: readTokenEnv omitted when empty.
+export function buildEndpointCreate(draft = {}) {
+  const body = { name: String(draft.name ?? '').trim(), url: String(draft.url ?? '').trim() };
+  const v = String(draft.readTokenEnv ?? '').trim();
+  if (v) body.readTokenEnv = v;
+  return body;
+}
+
+// The POST /api/org/members body: by login or by verified email, and the role.
+export function buildMemberAddBody(draft = {}) {
+  const value = String(draft.value ?? '').trim();
+  const body = draft.by === 'email' ? { email: value } : { login: value };
+  if (draft.role) body.role = draft.role;
+  return body;
+}
+
+const ENV_LABELS = { name: 'name', tier: 'tier', mcpEndpointId: 'MCP endpoint', bindings: 'bindings', endpoints: 'links' };
+const ENDPOINT_LABELS = { name: 'name', url: 'URL', readTokenEnv: 'token variable' };
+const savedText = (changed, labels) => (isArr(changed) && changed.length
+  ? { kind: 'saved', text: `Saved: ${changed.map((f) => labels[f] ?? f).join(', ')}` }
+  : { kind: 'idle', text: 'Nothing changed.' });
+
+export function environmentSaveStatus(changed = []) { return savedText(changed, ENV_LABELS); }
+export function endpointSaveStatus(changed = []) { return savedText(changed, ENDPOINT_LABELS); }
+
+// POST /api/org/members answers 201 (added), 200 with changed { from, to },
+// or 200 with changed null; PATCH answers { member, changed }.
+export function memberSaveStatus(answer = {}, { login = null } = {}) {
+  const who = answer?.member?.login ?? login ?? 'the member';
+  const role = answer?.member?.role ?? null;
+  if (answer?.added === true) return { kind: 'saved', text: `Added ${who} as ${role}.` };
+  if (answer?.changed && answer.changed.from !== undefined) {
+    const text = answer.added === false ? `${who} was already a member: ${answer.changed.from} → ${answer.changed.to}.` : `${who}: ${answer.changed.from} → ${answer.changed.to}.`;
+    return { kind: 'saved', text };
+  }
+  if (answer?.added === false) return { kind: 'idle', text: `${who} is already a${role === 'admin' || role === 'operator' ? 'n' : ''} ${role} — nothing changed.` };
+  return { kind: 'idle', text: 'Nothing changed.' };
+}
+
+// PATCH /api/org answers no `changed`: compare the names (A-16).
+export function orgRenameStatus(before, after) {
+  return before === after ? { kind: 'idle', text: 'Nothing changed.' } : { kind: 'saved', text: `Renamed: ${before} → ${after}.` };
+}
+
+// DELETE /api/mcp-endpoints/:id answers `unbound`: the ids of the
+// environments it unbound (B2), named through the services table.
+export function endpointDeleteStatus(name, unbound = [], services = null) {
+  const ids = isArr(unbound) ? unbound : [];
+  if (!ids.length) return { kind: 'saved', text: `Deleted ${name}.` };
+  const names = ids.map((id) => environmentName(id, services));
+  return { kind: 'saved', text: `Deleted ${name} — ${plural(ids.length, 'environment')} unbound: ${names.join(', ')}` };
+}
+
+const ROLES = ['viewer', 'operator', 'admin'];
+const idleStatus = (text) => ({ kind: 'idle', text });
+
+// The environment's MCP endpoint field (A4): the record's binding is always
+// an option; `[]` → the empty help; null (the read failed) → disabled, the
+// binding kept (the draft's mcpEndpointId stays undefined).
+function mcpEndpointField(record, endpoints, value, { orgName, endpointsError }) {
+  const current = record?.mcpEndpoint ?? null;
+  const list = isArr(endpoints) ? endpoints : [];
+  const options = [{ value: null, label: 'none' }, ...list.map((ep) => ({ value: ep.id, label: endpointLabel(ep) }))];
+  if (current && !options.some((o) => o.value === current.id)) options.push({ value: current.id, label: endpointLabel(current) });
+  const selected = value === undefined ? (current?.id ?? null) : value;
+  const field = { name: 'mcpEndpointId', label: 'MCP endpoint', type: 'select', value: selected, options: options.map((o) => ({ ...o, selected: o.value === selected })), help: null, disabled: false, reason: null };
+  if (!isArr(endpoints)) {
+    field.disabled = true;
+    field.reason = `The org's MCP endpoints could not be read${endpointsError ? ` — ${endpointsError}` : ''}; the binding is kept.`;
+    field.help = field.reason;
+  } else if (!endpoints.length) {
+    field.help = `No MCP endpoint is registered in ${orgName} yet — an admin registers one in Settings → MCP endpoints.`;
+  }
+  return field;
+}
+
+// The editor's model by kind (environment, endpoint, org-name, member-add,
+// member; an owner's user-create, user, org-create, org, join-role).
+// `record` is the row edited (null to create), `draft` what was typed (keys
+// of `fields`), `status` the footer line, `step` 'edit' | 'confirm-delete' |
+// 'confirm-action' | 'secret' | 'notice'. `ctx`: { access
+// (settingsAccessModel), orgName, orgId, services, endpoints,
+// endpointsError, serviceId, members, me, users, orgs, defaultOrg,
+// defaultOrgName, joinRole, action, secret, signIn, created, formatTime }.
+// The returned `draft` is the
+// effective one (record values under what was typed): its mcpEndpointId is
+// undefined when the endpoint list was not read.
+export function buildSettingsEditorModel(kind, record = null, { draft = null, status = null, step = 'edit', ctx = {} } = {}) {
+  const d = draft || {};
+  const access = ctx.access;
+  const orgName = ctx.orgName || access?.orgName || ORG_FALLBACK;
+  const st = status || null;
+  const saving = st?.kind === 'pending';
+  const services = isArr(ctx.services) ? ctx.services : [];
+  const base = { kind, id: record?.id ?? record?.userId ?? null, step, saving, confirm: null };
+  const primaryOf = (label, can, reason) => ({ label, enabled: can && !saving, reason: !can ? reason : (saving ? 'Saving…' : null) });
+  const str = (k, fallback) => (typeof d[k] === 'string' ? d[k] : fallback);
+
+  if (kind === 'environment') {
+    const can = access?.can?.operate === true;
+    const serviceId = record ? record.serviceId : (d.serviceId !== undefined ? Number(d.serviceId) : (ctx.serviceId ?? services[0]?.id ?? null));
+    const service = services.find((s) => s.id === serviceId) || null;
+    const serviceName = service?.name ?? 'the service';
+    const mcpValue = d.mcpEndpointId !== undefined ? asId(d.mcpEndpointId) : (isArr(ctx.endpoints) ? (record?.mcpEndpoint?.id ?? null) : undefined);
+    const eff = {
+      serviceId,
+      name: str('name', record?.name ?? ''),
+      tier: d.tier !== undefined ? asTier(d.tier) : (record?.tier ?? null),
+      mcpEndpointId: isArr(ctx.endpoints) ? mcpValue : undefined,
+      bindings: str('bindings', linesOf(record?.bindings)),
+      endpoints: str('endpoints', linesOf(record?.endpoints)),
+    };
+    const fields = [];
+    if (!record) fields.push({ name: 'serviceId', label: 'Service', type: 'select', value: serviceId, options: services.map((s) => ({ value: s.id, label: `${s.name} (${s.slug})`, selected: s.id === serviceId })) });
+    fields.push(
+      { name: 'name', label: 'Name', type: 'text', value: eff.name, max: 200 },
+      { name: 'tier', label: 'Tier', type: 'segmented', value: eff.tier,
+        options: [...TIERS.map((t) => ({ value: t, label: t, selected: eff.tier === t })), { value: null, label: 'graded by the service', selected: eff.tier === null }],
+        help: `Graded by the service: ${serviceName}'s tier, ${service?.tier ?? TIER_BY_PACK}.` },
+      mcpEndpointField(record, ctx.endpoints, eff.mcpEndpointId, { orgName, endpointsError: ctx.endpointsError }),
+      { name: 'bindings', label: 'Bindings', type: 'textarea', value: eff.bindings, help: 'One key=value per line, at most 32.' },
+      { name: 'endpoints', label: 'Links', type: 'textarea', value: eff.endpoints, help: 'One name=https://… per line, at most 20 — http(s) only; a token never goes in a URL.' },
+    );
+    // The rank refused (demoted while the dialog was open): no danger button —
+    // Delete… again, with the reason (as a user's actions and org remove).
+    const confirm = record && step === 'confirm-delete' && can ? {
+      text: `Delete ${record.name} of ${serviceName}? Its tier, bindings, links and endpoint binding go; the packs stay registered, and a pack that declares ${record.name} brings the name back without them.`,
+      danger: `Delete ${record.name}`,
+    } : null;
+    return {
+      ...base, title: record ? `Edit ${record.name}` : 'Add environment', eyebrow: record ? `Environment of ${serviceName}` : 'New environment',
+      fields, limits: { name: 200, bindings: 32, endpoints: 20 }, draft: eff, confirm,
+      remove: record ? { enabled: can, reason: can ? null : (access?.why?.operate ?? null) } : null,
+      status: st || idleStatus(record ? 'Name, tier, MCP endpoint, bindings and links.' : `A new environment of ${serviceName}.`),
+      primary: primaryOf(record ? 'Save' : 'Create', can, access?.why?.operate ?? null),
+    };
+  }
+
+  if (kind === 'endpoint') {
+    const can = access?.can?.admin === true;
+    const prefix = orgEnvPrefix(ctx.orgId ?? 'default');
+    const eff = { name: str('name', record?.name ?? ''), url: str('url', record?.url ?? ''), readTokenEnv: str('readTokenEnv', record?.readTokenEnv ?? '') };
+    const fields = [
+      { name: 'name', label: 'Name', type: 'text', value: eff.name, max: 200 },
+      { name: 'url', label: 'URL', type: 'url', value: eff.url, help: "The gateway's address — no credentials in it: the server refuses a URL with a user, a fragment or a token-like parameter." },
+      { name: 'readTokenEnv', label: 'Token variable', type: 'text', value: eff.readTokenEnv,
+        help: `The NAME of an environment variable on the server, set aside for ${orgName}: ${prefix}<NAME> (for example ${prefix}MCP_TOKEN). Its value stays on the server — this page never sees it, and nothing here says whether it is set. Leave empty when requests send their own token.` },
+    ];
+    let confirm = null;
+    // The rank refused (demoted while the dialog was open): no danger button.
+    if (record && step === 'confirm-delete' && can) {
+      const n = Number.isInteger(record.environments) ? record.environments : 0;
+      const names = boundNames(record.id, ctx.services);
+      const which = names && names.length === n && n > 0 ? ` (${names.join(', ')})` : '';
+      const text = n
+        ? `Delete ${record.name}? ${plural(n, 'environment is', 'environments are')} checked through it${which}; they keep their rows, unbound.`
+        : `Delete ${record.name}? No environment is checked through it.`;
+      confirm = { text, danger: `Delete ${record.name}` };
+    }
+    return {
+      ...base, title: record ? `Edit ${record.name}` : 'New MCP endpoint', eyebrow: 'MCP endpoint',
+      fields, limits: { name: 200, url: 2000 }, draft: eff, confirm,
+      remove: record ? { enabled: can, reason: can ? null : (access?.why?.admin ?? null) } : null,
+      status: st || idleStatus('A name, the gateway URL and, if the server holds its token, the variable naming it.'),
+      primary: primaryOf(record ? 'Save' : 'Create', can, access?.why?.admin ?? null),
+    };
+  }
+
+  if (kind === 'org-name') {
+    const can = access?.can?.admin === true;
+    const eff = { name: str('name', record?.name ?? '') };
+    return {
+      ...base, id: record?.id ?? null, title: `Rename ${record?.name ?? orgName}`, eyebrow: 'Organisation',
+      fields: [{ name: 'name', label: 'Name', type: 'text', value: eff.name, max: 200, help: record?.id ? `The id ${record.id} stays; only the name changes.` : null }],
+      limits: { name: 200 }, draft: eff,
+      status: st || idleStatus('1–200 characters.'),
+      primary: primaryOf('Save', can, access?.why?.admin ?? null),
+    };
+  }
+
+  if (kind === 'member-add') {
+    const can = access?.can?.admin === true;
+    const by = d.by === 'email' ? 'email' : 'login';
+    const role = ROLES.includes(d.role) ? d.role : 'operator';
+    const eff = { by, value: str('value', ''), role };
+    return {
+      ...base, title: 'Add member', eyebrow: `Members of ${orgName}`,
+      fields: [
+        { name: 'by', label: 'Find the user', type: 'radio', value: by, options: [{ value: 'login', label: 'by login', selected: by === 'login' }, { value: 'email', label: 'by verified email', selected: by === 'email' }] },
+        { name: 'value', label: by === 'email' ? 'Verified email' : 'Login', type: by === 'email' ? 'email' : 'text', value: eff.value, max: 200 },
+        { name: 'role', label: 'Role', type: 'segmented', value: role, options: ROLES.map((r) => ({ value: r, label: r, selected: r === role })) },
+      ],
+      limits: {}, draft: eff,
+      status: st || idleStatus(`An existing user joins ${orgName}; a member already here gets the role chosen.`),
+      primary: primaryOf('Add', can, access?.why?.admin ?? null),
+    };
+  }
+
+  if (kind === 'member') {
+    const can = access?.can?.admin === true;
+    const owner = access?.owner === true;
+    const members = isArr(ctx.members) ? ctx.members : [];
+    const isLast = lastAdmin(record, members, { owner });
+    const role = ROLES.includes(d.role) ? d.role : record.role;
+    const you = Boolean(ctx.me) && record.login === ctx.me;
+    const lock = isLast ? lastAdminText(record.login, orgName) : null;
+    const options = ROLES.map((r) => {
+      const reason = !can ? (access?.why?.admin ?? null) : (lock && r !== 'admin' ? lock : null);
+      return { value: r, label: r, selected: r === role, enabled: reason === null, reason };
+    });
+    let confirm = null;
+    const notes = [];
+    if (owner && lastAdmin(record, members, { owner: false })) notes.push(`${record.login} is ${orgName}'s last admin: afterwards only an owner can manage its members, endpoints and audit.`);
+    // The rank refused (demoted while the dialog was open): no danger button.
+    if (step === 'confirm-delete' && can) {
+      if (you) notes.unshift(selfNotes(orgName, owner).remove);
+      // An owner may request any live org (server/authz.mjs orgContext): the
+      // refusal is never theirs. The caller knows whether they are one;
+      // another member's row carries no owner flag, so it says "unless".
+      const refused = `Remove ${record.login} from ${orgName}? Their sessions keep working elsewhere; here their next request is refused`;
+      const lead = !you ? `${refused}, unless they are an owner.` : owner ? `Remove ${record.login} from ${orgName}?` : `${refused}.`;
+      confirm = { text: [lead, ...notes].join(' '), danger: `Remove ${record.login}` };
+    } else if (step === 'confirm-action' && can) {
+      if (you) notes.unshift(selfNotes(orgName, owner).demote);
+      confirm = { text: [`Change ${record.login}'s role to ${role}?`, ...notes].join(' '), danger: `Make ${record.login} ${role}` };
+    }
+    const removeReason = !can ? (access?.why?.admin ?? null) : lock;
+    // The role group's help says why a choice is unavailable (once, not per button).
+    const roleHelp = !can ? (access?.why?.admin ?? null) : lock;
+    return {
+      ...base, id: record.userId, title: record.login, eyebrow: `Member of ${orgName}`,
+      fields: [{ name: 'role', label: 'Role', type: 'segmented', value: role, options, help: roleHelp }],
+      limits: {}, draft: { role }, confirm,
+      remove: { enabled: removeReason === null, reason: removeReason, label: 'Remove…' },
+      status: st || idleStatus(`${record.login} is ${record.role} in ${orgName}.`),
+      primary: primaryOf('Save', can, access?.why?.admin ?? null),
+    };
+  }
+
+  // A new local user (an owner's): no password field — the controller draws
+  // a temporary one on Create and the secret step shows it once (D-D).
+  if (kind === 'user-create') {
+    const can = access?.can?.own === true;
+    const why = access?.why?.own ?? null;
+    const orgs = isArr(ctx.orgs) ? ctx.orgs.filter((o) => !o.removedAt) : null;
+    const role = ROLES.includes(d.role) ? d.role : 'operator';
+    const orgId = typeof d.orgId === 'string' && d.orgId ? d.orgId : (orgs ? (orgs.find((o) => o.id === ctx.orgId) ?? orgs[0])?.id ?? null : null);
+    const eff = { login: str('login', ''), name: str('name', ''), email: str('email', ''), role, orgId };
+    const modeLine = signInModeLine(ctx.joinRole);
+    const out = {
+      ...base, title: 'New local user', eyebrow: 'Users', limits: { login: 64, name: 200, email: 254 }, draft: eff, signIn: ctx.signIn === true, secret: null,
+      fields: [
+        { name: 'login', label: 'Login', type: 'text', value: eff.login, max: 64, help: '2–64 of a–z, A–Z, 0–9 . _ @ -' },
+        { name: 'name', label: 'Name (optional)', type: 'text', value: eff.name, max: 200 },
+        { name: 'email', label: 'Email (optional)', type: 'email', value: eff.email, max: 254, help: 'not verified — an email counts for adding members only when a sign-in verified it' },
+        { name: 'role', label: 'Role', type: 'segmented', value: role, options: ROLES.map((x) => ({ value: x, label: x, selected: x === role })) },
+        ...(orgs ? [{ name: 'orgId', label: 'Organisation', type: 'select', value: orgId,
+          options: orgs.map((o) => ({ value: o.id, label: `${o.name} (${o.id})`, selected: o.id === orgId })),
+          help: orgs.length > 1 ? 'Required: this deployment has more than one organisation.' : null }] : []),
+      ],
+      status: st || idleStatus(modeLine ?? 'A local user who signs in with a password: a temporary one is drawn on Create and shown once.'),
+      primary: primaryOf('Create', can, why),
+    };
+    if (step === 'secret' && ctx.secret) {
+      out.secret = { text: secretText(ctx.secret.login, { forced: ctx.secret.forced !== false, reason: 'create', localSignIn: localSignInHere({ open: access?.posture === 'open', joinRole: ctx.joinRole }) }), value: ctx.secret.value };
+      out.primary = null;
+    }
+    return out;
+  }
+
+  // One user (an owner's): the facts, then the actions — each a confirm
+  // step, then one call; a reset ends on the secret step, one's own sign-out
+  // or disable on a step with "Go to sign-in".
+  if (kind === 'user') {
+    const can = access?.can?.own === true;
+    const users = isArr(ctx.users) ? ctx.users : [record];
+    const self = Boolean(ctx.me) && record.login === ctx.me;
+    const facts = [
+      [record.kind, ...userBadges(record)].join(' · '),
+      `organisations: ${membershipsText(record)}`,
+      record.lastLoginAt ? `last sign-in ${typeof ctx.formatTime === 'function' ? ctx.formatTime(record.lastLoginAt) : record.lastLoginAt}` : 'never signed in',
+    ];
+    const actions = userActions(record, users, { me: ctx.me ?? null, can, reason: access?.why?.own ?? null });
+    const out = {
+      ...base, id: record.id, title: record.login, eyebrow: self ? 'User — you' : 'User', fields: [], limits: {}, draft: {}, facts, actions,
+      signIn: ctx.signIn === true, secret: null,
+      status: st || idleStatus('Each action asks first, then takes effect at once.'),
+      primary: null,
+    };
+    // The rank refused (an owner revoked while the dialog was open): no
+    // danger button — the actions again, each with the reason (as org remove).
+    const open = access?.posture === 'open';
+    if (step === 'confirm-action' && can) out.confirm = userConfirm(ctx.action, record.login, { self, defaultOrg: ctx.defaultOrg ?? null, open, joinRole: ctx.joinRole, kind: record.kind, me: ctx.me ?? null });
+    if (step === 'secret' && ctx.secret) out.secret = { text: secretText(record.login, { forced: ctx.secret.forced !== false, reason: 'reset', localSignIn: localSignInHere({ open, joinRole: ctx.joinRole }) }), value: ctx.secret.value };
+    return out;
+  }
+
+  // A new organisation (an owner's, where the server signs in): its id, a
+  // name, and whether to take over a directory that already holds files.
+  // Created, the dialog says where its files live and offers Switch to it.
+  if (kind === 'org-create') {
+    const can = access?.can?.createOrg === true;
+    const why = access?.why?.createOrg ?? null;
+    const eff = { id: str('id', ''), name: str('name', ''), adopt: d.adopt === true };
+    const out = {
+      ...base, title: 'New organisation', eyebrow: 'Organisations', limits: { id: 64, name: 200 }, draft: eff, switchTo: null,
+      fields: [
+        { name: 'id', label: 'Id', type: 'text', value: eff.id, max: 64, help: 'a slug: lowercase letters, digits, - and _; never reused' },
+        { name: 'name', label: 'Name (optional)', type: 'text', value: eff.name, max: 200 },
+        { name: 'adopt', label: 'Take over an existing directory', type: 'checkbox', checked: eff.adopt, help: 'when orgs/<id>/ already holds files — adopt them instead of being refused' },
+      ],
+      status: st || idleStatus('You become its first admin; its files live in a directory of its own.'),
+      primary: primaryOf('Create', can, why),
+    };
+    if (step === 'notice' && ctx.created?.id) { out.primary = null; out.switchTo = { orgId: ctx.created.id, label: 'Switch to it' }; }
+    return out;
+  }
+
+  // One organisation (an owner's): its facts, and Remove… — a step that says
+  // what cannot be undone and asks for the id typed.
+  if (kind === 'org') {
+    const can = access?.can?.own === true;
+    const isDefault = record.id === ctx.defaultOrg || record.default === true;
+    const removed = Boolean(record.removedAt);
+    const reason = !can ? (access?.why?.own ?? null) : isDefault ? `${record.id} is the default org and cannot be removed` : removed ? `${record.id} is already removed` : null;
+    const fmt = typeof ctx.formatTime === 'function' ? ctx.formatTime : (iso) => iso;
+    const out = {
+      ...base, id: record.id, title: `${record.name ?? record.id} (${record.id})`, eyebrow: 'Organisation', fields: [], limits: {}, draft: {},
+      facts: [
+        [membersCount(record.members), isDefault ? 'the default organisation' : null].filter(Boolean).join(' · '),
+        `files: ${orgFiles(record.root)}`,
+        record.createdAt ? `created ${fmt(record.createdAt)}` : null,
+        removed ? `removed ${fmt(record.removedAt)} — a slug is never reused` : null,
+      ].filter(Boolean),
+      remove: { enabled: reason === null, reason, label: 'Remove…' },
+      status: st || idleStatus(record.id === ctx.orgId ? 'The organisation this browser is in.' : 'Removing one asks for its id first.'),
+      primary: null,
+    };
+    if (step === 'confirm-delete' && reason === null) out.confirm = orgRemoveConfirm(record, { active: record.id === ctx.orgId });
+    return out;
+  }
+
+  // The join role (an owner's): viewer, operator, admin or no automatic join.
+  // Admin asks for a box ticked first — the server refuses it unconfirmed —
+  // and only admin sends the confirmation (joinRoleBody).
+  if (kind === 'join-role') {
+    const can = access?.can?.own === true;
+    const current = record?.role ?? null;
+    const role = d.role !== undefined ? (JOIN_ROLE_CHOICES.includes(d.role) ? d.role : null) : current;
+    const def = ctx.defaultOrgName || 'the default organisation';
+    const eff = { role, confirm: d.confirm === true };
+    return {
+      ...base, id: null, title: 'Join role', eyebrow: 'The deployment', limits: {}, draft: eff,
+      fields: [
+        { name: 'role', label: 'Join role', type: 'segmented', value: role,
+          options: JOIN_ROLE_CHOICES.map((r) => ({ value: r, label: r ?? 'no automatic join', selected: r === role })) },
+        { name: 'confirm', type: 'checkbox', checked: eff.confirm, showWhen: { field: 'role', value: 'admin', now: role === 'admin' }, required: 'tick the box first',
+          label: `I understand: every user the IdP lets in becomes an admin of ${def} — its name, its members and its MCP endpoints. To add admins one by one, use Members.` },
+      ],
+      status: st || idleStatus(record ? joinRoleModeSentence(record, { defaultOrgName: ctx.defaultOrgName, open: access?.posture === 'open' }) : 'The role an IdP user gets at their first sign-in.'),
+      primary: primaryOf('Save', can, access?.why?.own ?? null),
+    };
+  }
+
+  throw new Error(`no Settings editor of kind ${JSON.stringify(kind)}`);
+}
+
+// ---------- the MCP target: a registered endpoint, or a typed URL (design §6) ----------
+
+const AUTH_WRITE = "MCP client key — a write token, sent with this request only, never stored. (The endpoint's read variable is never used to write.)";
+
+// Whether a picker's empty-list hint may offer Settings → MCP endpoints:
+// only when the reader is known to be an admin of the org (C-7) — the
+// identity posture at rank admin, or the open posture whose probe answered
+// 200 in this page for this org (`probe` { orgId, ok }: you act as local,
+// an owner). A closed probe, another org's, none yet, or any other posture:
+// false.
+export function mcpPickerCanAdmin({ access = null, probe = null, orgId = null } = {}) {
+  if (access?.posture === 'identity') return access.role === 'admin';
+  if (access?.posture === 'open') return probe?.ok === true && probe.orgId === orgId;
+  return false;
+}
+
+// The empty list's line without sign-in when the server named no way in:
+// none is named.
+const NO_REGISTER_WHY = { token: 'registering one needs a signed-in admin', open: 'registering one is not open to you here' };
+
+// `endpoints` is state.mcpEndpoints (null: not read or failed → typed only;
+// [] → none registered); `remembered` the remembered endpoint id for this
+// org; `liveUrl` the live status's URL; `typedUrl` the remembered typed URL
+// (not a default demo URL — a default would outrank the list); `purpose`
+// 'read' | 'write'; `canAdmin` whether the empty-list hint may offer a
+// button to Settings → MCP endpoints (known true only — C-7); `chosen` the
+// choice the person made in this picker ('' = Type a URL…, an id = that
+// endpoint while it is listed), which outranks every preselection.
+// Preselection: remembered endpoint > the endpoint whose url is the live
+// status's > the remembered typed URL > the first endpoint > typed.
+//
+// `typed` is what the server said this reader may do with a typed URL
+// (GET /api/mcp-endpoints `policy.typed`; R4 — an admin's, never without
+// sign-in): `{ allowed: false }` makes the picker list-only — no "Type a
+// URL…", never the typed value, no URL row — and the empty list's hint
+// names the way in for this reader: without sign-in (`posture` 'token' or
+// 'open'), the server's own sentence — `registerWhy`, GET /api/mcp-endpoints
+// `policy.register.why`, whose way in is the server's for the posture it
+// runs in (bound off the loopback, a request not sent straight to it,
+// OBSERVOGRAM_AUTH=off) — and, when it named none, no way in at all; signed
+// in, an admin registers them. `unreadable`: the policy's read failed — the
+// pickers draw no list beside it (studio/app.mjs mcpPickerEndpoints), so a
+// reader refused a typed URL is told the list could not be read, since
+// nothing else can be sent: never an empty list's refusal the server did not
+// make.
+export function mcpTargetModel({ endpoints = null, remembered = null, liveUrl = null, typedUrl = '', purpose = 'read', orgName = null, canAdmin = false, chosen = null, typed = { allowed: true }, posture = null, registerWhy = null, unreadable = false } = {}) {
+  const typedAllowed = typed?.allowed !== false;
+  const list = isArr(endpoints) ? endpoints : [];
+  const options = [
+    ...list.map((ep) => ({ value: String(ep.id), label: endpointLabel(ep), name: ep.name, origin: ep.origin, tokenText: ep.readTokenEnv ?? null })),
+    ...(typedAllowed ? [{ value: '', label: 'Type a URL…', name: null, origin: null, tokenText: null }] : []),
+  ];
+  const has = (id) => id !== null && id !== undefined && list.some((ep) => String(ep.id) === String(id));
+  let value = '';
+  if (chosen === '' && list.length && typedAllowed) value = '';
+  else if (has(chosen)) value = String(chosen);
+  else if (has(remembered)) value = String(remembered);
+  else if (liveUrl && list.some((ep) => ep.url && ep.url === liveUrl)) value = String(list.find((ep) => ep.url === liveUrl).id);
+  else if (typedAllowed && typedUrl && String(typedUrl).trim()) value = '';
+  else if (list.length) value = String(list[0].id);
+  const picked = list.find((ep) => String(ep.id) === value) || null;
+  let authHelp = null;
+  if (picked) {
+    if (purpose === 'write') authHelp = AUTH_WRITE;
+    else if (picked.readTokenEnv) authHelp = `Optional — empty uses ${picked.readTokenEnv} on the server.`;
+    else if (picked.url) authHelp = 'Optional — this endpoint names no token variable; send one here if the server needs it.';
+    else authHelp = 'Optional.';
+  }
+  const org = orgName || ORG_FALLBACK;
+  let hint = null;
+  if (!typedAllowed && unreadable) {
+    hint = { text: `${org}'s MCP endpoints could not be read just now — reopen this to try again.`, button: null };
+  } else if (isArr(endpoints) && !endpoints.length) {
+    if (canAdmin) hint = { text: `No MCP endpoint is registered in ${org} yet.`, button: 'Settings → MCP endpoints' };
+    else if (typedAllowed) hint = { text: `No MCP endpoint is registered in ${org} yet — an admin registers them.`, button: null };
+    else if (posture === 'token' || posture === 'open') hint = { text: `No MCP endpoint is registered in ${org} yet — ${registerWhy || NO_REGISTER_WHY[posture]}.`, button: null };
+    else hint = { text: `No MCP endpoint is registered in ${org} yet — an admin registers them in Settings → MCP endpoints.`, button: null };
+  }
+  return { show: list.length > 0, options, value, showUrl: typedAllowed && picked === null, authHelp, hint };
+}
+
+// The status line when a picker has nothing to send: the typed URL named
+// only for a reader who may type one (R4); with no endpoint, the way in for
+// this reader (`canRegister`: the server says it may register one) — without
+// sign-in (`posture` 'token' or 'open') the server's own sentence,
+// `registerWhy`, as the empty list's hint says it (mcpTargetModel); the
+// policy's read failed (`unreadable`), that the list could not be read, as
+// the picker's hint says it: no list is drawn beside it to choose from.
+export function mcpTargetMissingText({ typedAllowed = true, orgName = null, empty = false, canRegister = false, posture = null, registerWhy = null, unreadable = false } = {}) {
+  if (typedAllowed) return 'choose an MCP endpoint or type a URL';
+  const org = orgName || ORG_FALLBACK;
+  if (unreadable) return `${org}'s MCP endpoints could not be read just now — reopen this to try again`;
+  if (!empty) return `choose one of ${org}'s MCP endpoints`;
+  if (canRegister) return `no MCP endpoint is registered in ${org} yet — register one in Settings → MCP endpoints`;
+  if (posture === 'token' || posture === 'open') return `no MCP endpoint is registered in ${org} yet — ${registerWhy || NO_REGISTER_WHY[posture]}`;
+  return `no MCP endpoint is registered in ${org} yet — an admin registers them in Settings → MCP endpoints`;
+}
+
+// The deploy history's roll back toast when the deploy modal's picker has
+// nothing to send (studio/app.mjs doRollback): what roll back needs, then
+// the picker's own line (mcpTargetMissingText) as it reads — several end in
+// their own instruction, so nothing is appended after it.
+export function rollbackTargetMissingText(missing) {
+  return `Roll back needs an MCP target in the form above: ${missing}.`;
+}
+
+const LOOPBACK_V4 = /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+const LOOPBACK_MAPPED = /^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/;
+
+// Before the home card registers a typed URL as an endpoint (D4): would the
+// server accept its origin from this reader? `register` is the policy's
+// (`{ allowed, listed, origins, listedOnly }`). → { origin, name, error }:
+// `error` null when the registration may be sent, else the sentence (the
+// server's own rule: without sign-in, a loopback MCP or a listed origin);
+// `name` the endpoint's name (its host). The server judges again. The
+// refusal names the one way out that holds in every posture — the
+// operator's list — and no sign-in way: GET /api/mcp-endpoints names none
+// for this reader (register is allowed), and on the loopback a server
+// without sign-in runs OBSERVOGRAM_AUTH=off, where adding a user arms
+// nothing (the server's POST answer names its restart).
+export function mcpRegisterCheck(url, register = null) {
+  let u = null;
+  try { u = new URL(String(url ?? '').trim()); } catch { /* not a URL */ }
+  if (!u || (u.protocol !== 'http:' && u.protocol !== 'https:')) return { origin: null, name: null, error: 'type the MCP URL (http:// or https://)' };
+  const origin = u.origin;
+  const name = u.port ? `${u.hostname}:${u.port}` : u.hostname;
+  if (!register?.allowed) return { origin, name, error: register?.why || 'registering an MCP endpoint is not open to you here' };
+  const host = u.hostname;
+  const loopback = host === 'localhost' || LOOPBACK_V4.test(host) || host === '[::1]' || LOOPBACK_MAPPED.test(host);
+  if (loopback || !register.listedOnly || register.origins === null || (isArr(register.origins) && register.origins.includes(origin))) return { origin, name, error: null };
+  return { origin, name, error: `${origin} cannot be registered on a server without sign-in — only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS; the server's operator lists it there` };
+}
+
+// The request's target: an endpoint → { mcpEndpointId, mcpAuth? }; a typed
+// URL → { mcpUrl, mcpAuth? } — never both (the server refuses both); null
+// when nothing is chosen and nothing typed.
+export function mcpTargetBody(selection, typedUrl, auth) {
+  const key = typeof auth === 'string' && auth.trim() ? auth.trim() : null;
+  const id = asId(selection === undefined ? null : selection);
+  if (id !== null) return key ? { mcpEndpointId: id, mcpAuth: key } : { mcpEndpointId: id };
+  const url = typeof typedUrl === 'string' ? typedUrl.trim() : '';
+  if (!url) return null;
+  return key ? { mcpUrl: url, mcpAuth: key } : { mcpUrl: url };
+}
+
+// A deploy profile that names an endpoint records its org (A-12): select it
+// only in that org with the id still listed; otherwise typed mode and a note.
+// `typedAllowed` (R4): for a reader who may not type a URL, a typed
+// profile is said, and no sentence offers typing one.
+export function profileEndpointNote(profile, { orgId = null, orgName = null, endpoints = null, profileName = null, typedAllowed = true } = {}) {
+  const ep = profile?.mcpEndpoint;
+  const name = profileName ?? profile?.name ?? 'this profile';
+  const org = orgName || orgId || ORG_FALLBACK;
+  if (!ep || ep.id === undefined || ep.id === null) {
+    if (!typedAllowed && typeof profile?.mcpUrl === 'string' && profile.mcpUrl.trim()) {
+      return { select: null, note: `Profile "${name}" sends a typed MCP URL, which only an admin may send — choose one of ${org}'s MCP endpoints.` };
+    }
+    return { select: null, note: null };
+  }
+  const listed = isArr(endpoints) && endpoints.some((x) => String(x.id) === String(ep.id));
+  if (ep.orgId === orgId && listed) return { select: ep.id, note: null };
+  return { select: null, note: `Profile "${name}" names MCP endpoint "${ep.name}" of ${ep.orgId} — choose one of ${org}'s${typedAllowed ? ', or type a URL.' : ' MCP endpoints.'}` };
+}
+
+// Before a write is sent (C-3): the chosen endpoint as the option showed it
+// ({ id, name, origin }) against the list just re-read. null = send; else
+// the sentence, and nothing is sent. A re-read that failed (not an array)
+// cannot vouch for the origin, so it does not send either.
+export function endpointDrift(chosen, endpoints, { orgName = null, typedAllowed = true } = {}) {
+  if (!chosen) return null;
+  const org = orgName || ORG_FALLBACK;
+  if (!isArr(endpoints)) return `${chosen.name} could not be checked against ${org}'s MCP endpoints just now — send again${typedAllowed ? ', or type a URL.' : '.'}`;
+  const now = endpoints.find((ep) => String(ep.id) === String(chosen.id));
+  if (!now) return `${chosen.name} is no longer one of ${org}'s MCP endpoints — ${typedAllowed ? 'choose another or type a URL.' : `choose another of ${org}'s MCP endpoints.`}`;
+  if (now.origin !== chosen.origin) return `${chosen.name} now points at ${now.origin} (it showed ${chosen.origin}) — check the target and send again.`;
+  return null;
+}

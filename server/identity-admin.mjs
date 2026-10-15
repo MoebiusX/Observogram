@@ -22,10 +22,12 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { authDisabled, hashPassword, issuerKey } from './auth.mjs';
+import { proxyAuthConfig } from './auth-proxy.mjs';
 import { validOrgId } from './org-context.mjs';
 import { atomic, prepare } from './store/db.mjs';
 import { writeAudit } from './store/audit.mjs';
 import { getMeta, isIdentityArmed, setMeta } from './store/meta.mjs';
+import { orgEnvPrefix } from './store/mcp-endpoints.mjs';
 import { createOrg, getOrg, listOrgs, removeOrg, renameOrg } from './store/orgs.mjs';
 import {
   addMembership, countEnabledAdmins, getMembership, listMembershipsForUser, removeMembership, ROLES, setRole,
@@ -36,7 +38,7 @@ import {
 import { textOk } from './store/rows.mjs';
 import {
   canonIssuer, CLI, defaultOrgId, ensureDefaultOrg, grantOwner, liveOrg, oidcLogin, parseJoinRole, revokeOwner,
-  signInOwnerCount, SYSTEM,
+  signInOwnerCount, SYSTEM, isProxyIssuerKey,
 } from './store/identity.mjs';
 
 export const REFUSAL_KINDS = Object.freeze(['invalid', 'missing', 'conflict']);
@@ -170,6 +172,13 @@ export function resolveLogin(db, arg, { shellIssuerRaw = null } = {}) {
     if (local && local.kind === 'local' && (K === null || !isHttpUrl(arg.slice(0, hash)))) {
       return { kind: 'local', login: arg, row: local };
     }
+    // 2a. proxy://<realm>#<user> — a reverse proxy's user (server/auth-proxy.mjs):
+    // never an http(s) key, so the recorded OIDC issuer has no say.
+    if (isProxyIssuerKey(arg.slice(0, hash))) {
+      const sub = arg.slice(hash + 1);
+      if (!textOk(sub, { max: 2000 })) invalid(`${arg} is not proxy://<realm>#<user>`);
+      return oidcTarget(db, arg, sub, arg.slice(0, hash));
+    }
     // 2. <issuer>#<sub>
     let key;
     try { key = canonIssuer(arg.slice(0, hash)); } catch { invalid(`${arg} is not <issuer>#<sub>`); }
@@ -219,6 +228,10 @@ export function serverSignInMode(db, { shellIssuerRaw = null } = {}) {
     const key = M.slice('oidc:'.length);
     return { kind: 'oidc', issuerKey: key, why: `the server last started with OIDC issuer ${key}` };
   }
+  if (M !== null && M.startsWith('proxy:')) {
+    const key = M.slice('proxy:'.length);
+    return { kind: 'oidc', issuerKey: key, why: `the server last started behind a reverse proxy (identity key ${key})` };
+  }
   const last = {
     local: 'the server last started without OIDC, with local sign-in',
     token: 'the server last started without OIDC, with only OBSERVOGRAM_API_TOKEN',
@@ -242,6 +255,8 @@ export function serverSignInMode(db, { shellIssuerRaw = null } = {}) {
 export function liveSignInMode() {
   const key = issuerKey();
   if (key) return { kind: 'oidc', issuerKey: key, why: `this server signs in through OIDC issuer ${key}` };
+  const proxy = proxyAuthConfig();
+  if (proxy) return { kind: 'oidc', issuerKey: proxy.issuerKey, why: `this server takes identity from its reverse proxy (key ${proxy.issuerKey})` };
   return {
     kind: 'local',
     why: authDisabled() ? 'this server runs with OBSERVOGRAM_AUTH=off and without OIDC' : 'this server signs in with local passwords',
@@ -488,11 +503,37 @@ function nonEmptyDir(path) {
 
 const NEEDS_IDENTITY = 'creating a second org needs identity: add the first user with npm run users -- add, or configure OIDC';
 const NEEDS_IDENTITY_AUTH_OFF = 'creating a second org needs identity: this server runs with OBSERVOGRAM_AUTH=off, '
-  + 'and a second org would make its next start refuse — restart it without OBSERVOGRAM_AUTH=off and sign in as an owner '
-  + '(npm run users -- add <login> first when no user exists), or configure OIDC';
+  + 'and a second org would make its next start refuse — restart it without OBSERVOGRAM_AUTH=off, once a user exists '
+  + '(npm run users -- add <login>) or with OIDC configured, and sign in as an owner';
+
+// An org's variables are OBSERVOGRAM_ORG_<KEY>_<NAME>, each owned by the org
+// whose prefix is the longest prefix of the name, removed orgs counting
+// (server/store/mcp-endpoints.mjs) — its notify hooks
+// OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN among them
+// (server/notify-target-policy.mjs, the follow-up journey-notify-env-ownership,
+// N9). An id whose prefix extends another org's <P>NOTIFY_ would take that
+// org's hooks for good (ids are never reused); one whose own <P>NOTIFY_ another
+// org's prefix extends would never have hooks of its own; one sharing another
+// org's KEY (a-b, a_b) ties every variable, and a hook is refused for both.
+// Each is refused at creation; the orgs-file import is not (it reproduces
+// what exists), and the start's [notify-hooks] lines name each set hook
+// variable such a pair shadows. The reader is an owner, who may know every
+// org. → null | the refusal text.
+function orgIdVariablesRefusal(db, id) {
+  const P = orgEnvPrefix(id);
+  const others = listOrgs(db, { includeRemoved: true }).filter((o) => o.id !== id).map((o) => ({ id: o.id, P: orgEnvPrefix(o.id) }));
+  const takes = others.find((o) => P.startsWith(`${o.P}NOTIFY_`));
+  if (takes) return `org ${JSON.stringify(id)} would take the notify hook variables of org '${takes.id}' (${takes.P}NOTIFY_…) by the longest-prefix rule — choose another id`;
+  const taken = others.find((o) => o.P.startsWith(`${P}NOTIFY_`));
+  if (taken) return `org ${JSON.stringify(id)}'s notify hook variables (${P}NOTIFY_…) are already taken by org '${taken.id}' by the longest-prefix rule — choose another id`;
+  const tie = others.find((o) => o.P === P);
+  if (tie) return `org ${JSON.stringify(id)} maps onto the same variables as org '${tie.id}' (${P}) — choose an id that differs in more than - and _`;
+  return null;
+}
 
 // `orgs -- create`: needs identity and an enabled owner (A-15); refuses a
-// non-empty orgs/<id>/ unless adopted; a slug is never reused. With
+// non-empty orgs/<id>/ unless adopted; a slug is never reused, nor an id
+// that takes another org's variables (orgIdVariablesRefusal). With
 // `admin` (a shell's login) or `adminUserId` (the API's creator), that
 // user's admin membership. The API also passes the server's posture: a
 // server without identity (`serverIdentity: false`) is refused first —
@@ -511,6 +552,8 @@ export function createOrgFromAdmin(db, actor, {
     if (!isIdentityArmed(db) && !getMeta(db, 'oidc_issuer')) refuse(NEEDS_IDENTITY);
     if (enabledOwnerCount(db) === 0) refuse('no owner — run npm run users -- owner <login> first');
     if (getOrg(db, id)) refuse(`org ${JSON.stringify(id)} exists or existed — a slug is never reused`);
+    const variables = orgIdVariablesRefusal(db, id);
+    if (variables) refuse(variables);
     const dir = join(base, 'orgs', id);
     const occupied = nonEmptyDir(dir);
     if (occupied && !adopt) refuse(`${dir} exists and is not empty — ${ways.adopt}`);
@@ -705,7 +748,7 @@ export function setJoinRole(db, actor, role, { confirm = false } = {}) {
   }
   return atomic(db, () => {
     if (value === 'admin' && confirm !== true) {
-      refuse(`every user the IdP lets in would become an admin of ${defaultOrgId(db)} — its name, its members and, from slice 4, `
+      refuse(`every user the IdP lets in would become an admin of ${defaultOrgId(db)} — its name, its members and `
         + 'its MCP endpoints; to add admins one by one use POST /api/org/members with {"role": "admin"}, '
         + 'or send {"role": "admin", "confirm": true}');
     }

@@ -1,0 +1,501 @@
+{
+  "case": "target-advanced.self",
+  "opts": null,
+  "taxonomy": null,
+  "sha256": "52a570e77abab545afc7ab173453658223a4f98392467abcf9ca39fcd550e994",
+  "bytes": 47192,
+  "keys": [
+    "a",
+    "b",
+    "scope",
+    "collisions",
+    "summary",
+    "layers"
+  ],
+  "a": {
+    "id": "platform-edge",
+    "name": "platform-edge",
+    "service": "platform-edge",
+    "criticality": "tier-1",
+    "environment": "prod",
+    "version": "1.0.0",
+    "binding": "otel-elastic-prometheus-grafana"
+  },
+  "b": {
+    "id": "platform-edge",
+    "name": "platform-edge",
+    "service": "platform-edge",
+    "criticality": "tier-1",
+    "environment": "prod",
+    "version": "1.0.0",
+    "binding": "otel-elastic-prometheus-grafana"
+  },
+  "scope": {
+    "mode": "service",
+    "service": "platform-edge",
+    "serviceTokens": [
+      "edge",
+      "platformedge"
+    ],
+    "declaredMetricCount": 0,
+    "metricPrefixes": []
+  },
+  "collisions": [],
+  "summary": {
+    "onlyInA": 0,
+    "onlyInB": 0,
+    "inBoth": 52,
+    "aligned": 52,
+    "drifted": 0,
+    "outOfScope": 0,
+    "scaffold": 0,
+    "notObserved": 0,
+    "union": 52,
+    "aTotal": 52,
+    "bTotal": 52,
+    "jaccard": 1,
+    "alignment": 1
+  },
+  "layers": {
+    "L1": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "sli::{\"id\":\"cache_hit_ratio\"}",
+          "a": "SLI-03",
+          "b": "SLI-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"gateway_availability\"}",
+          "a": "SLI-01",
+          "b": "SLI-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"gateway_latency_p99\"}",
+          "a": "SLI-02",
+          "b": "SLI-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "sli::{\"id\":\"upstream_success_ratio\"}",
+          "a": "SLI-04",
+          "b": "SLI-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"cache_hit_98\"}",
+          "a": "SLO-03",
+          "b": "SLO-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"gateway_availability_99_9\"}",
+          "a": "SLO-01",
+          "b": "SLO-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"gateway_latency_99_p99_400ms\"}",
+          "a": "SLO-02",
+          "b": "SLO-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "slo::{\"id\":\"upstream_success_99_95\"}",
+          "a": "SLO-04",
+          "b": "SLO-04",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 8,
+      "drifted": 0
+    },
+    "L2": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "backend::{\"product\":\"elasticsearch\",\"signal\":\"logs\"}",
+          "a": "BAK-02",
+          "b": "BAK-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"elasticsearch\",\"signal\":\"traces\"}",
+          "a": "BAK-03",
+          "b": "BAK-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"prometheus\",\"signal\":\"metrics\"}",
+          "a": "BAK-01",
+          "b": "BAK-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "backend::{\"product\":\"pyroscope\",\"signal\":\"profiles\"}",
+          "a": "BAK-04",
+          "b": "BAK-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "otel::{}",
+          "a": "OTEL-01",
+          "b": "OTEL-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_exporter_logs::{\"signal\":\"logs\",\"target\":\"elasticsearch\"}",
+          "a": "PIP-EXP-LOG",
+          "b": "PIP-EXP-LOG",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_exporter_metrics::{\"signal\":\"metrics\",\"target\":\"prometheusremotewrite\"}",
+          "a": "PIP-EXP-MET",
+          "b": "PIP-EXP-MET",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_exporter_traces::{\"signal\":\"traces\",\"target\":\"elasticsearch\"}",
+          "a": "PIP-EXP-TRC",
+          "b": "PIP-EXP-TRC",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"batch\"}",
+          "a": "PIP-PRC-02",
+          "b": "PIP-PRC-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"memory_limiter\"}",
+          "a": "PIP-PRC-01",
+          "b": "PIP-PRC-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_processor::{\"name\":\"tail_sampling\"}",
+          "a": "PIP-PRC-03",
+          "b": "PIP-PRC-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "pipeline_receiver::{\"name\":\"otlp\"}",
+          "a": "PIP-RCV-01",
+          "b": "PIP-RCV-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "storage_logs::{\"backend\":\"elasticsearch\",\"signal\":\"logs\"}",
+          "a": "STO-LOG-01",
+          "b": "STO-LOG-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "storage_metrics::{\"backend\":\"prometheus\",\"signal\":\"metrics\"}",
+          "a": "STO-MET-01",
+          "b": "STO-MET-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "storage_traces::{\"backend\":\"elasticsearch\",\"signal\":\"traces\"}",
+          "a": "STO-TRC-01",
+          "b": "STO-TRC-01",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 15,
+      "drifted": 0
+    },
+    "L2X": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 0,
+      "drifted": 0
+    },
+    "L3": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "dashboard::{\"id\":\"edge-customer-impact\"}",
+          "a": "DASH-04",
+          "b": "DASH-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "dashboard::{\"id\":\"edge-deployment\"}",
+          "a": "DASH-03",
+          "b": "DASH-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "dashboard::{\"id\":\"edge-service-overview\"}",
+          "a": "DASH-01",
+          "b": "DASH-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "dashboard::{\"id\":\"edge-slo-burn\"}",
+          "a": "DASH-02",
+          "b": "DASH-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "derived_view::{\"id\":\"golden_signals\"}",
+          "a": "VIEW-01",
+          "b": "VIEW-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"edge:cache_hit:ratio_5m\"}",
+          "a": "QRY-03",
+          "b": "QRY-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"edge:gateway_availability:ratio_5m\"}",
+          "a": "QRY-01",
+          "b": "QRY-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"edge:gateway_latency:p99_5m\"}",
+          "a": "QRY-02",
+          "b": "QRY-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "recording_rule::{\"record\":\"edge:upstream_success:ratio_5m\"}",
+          "a": "QRY-04",
+          "b": "QRY-04",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 9,
+      "drifted": 0
+    },
+    "L4": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "alert_route::{\"severity\":\"sev1\"}",
+          "a": "ALR-01",
+          "b": "ALR-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "alert_route::{\"severity\":\"sev2\"}",
+          "a": "ALR-02",
+          "b": "ALR-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "alert_route::{\"severity\":\"sev3\"}",
+          "a": "ALR-03",
+          "b": "ALR-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"cache_hit_98\"}",
+          "a": "POL-03",
+          "b": "POL-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"gateway_availability_99_9\"}",
+          "a": "POL-01",
+          "b": "POL-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"gateway_latency_99_p99_400ms\"}",
+          "a": "POL-02",
+          "b": "POL-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "burn_rate::{\"slo\":\"upstream_success_99_95\"}",
+          "a": "POL-04",
+          "b": "POL-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "forecast::{\"slo\":\"gateway_availability_99_9\"}",
+          "a": "FCST-01",
+          "b": "FCST-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "remediation::{\"trigger\":\"alert:edge-cache-cold\"}",
+          "a": "HEAL-02",
+          "b": "HEAL-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "remediation::{\"trigger\":\"alert:edge-upstream-saturated\"}",
+          "a": "HEAL-01",
+          "b": "HEAL-01",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 10,
+      "drifted": 0
+    },
+    "L5": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "baselines::{}",
+          "a": "BASE-01",
+          "b": "BASE-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "chaos::{\"id\":\"cache-eviction-storm\"}",
+          "a": "CHAOS-03",
+          "b": "CHAOS-03",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "chaos::{\"id\":\"gateway-network-latency\"}",
+          "a": "CHAOS-02",
+          "b": "CHAOS-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "chaos::{\"id\":\"gateway-pod-kill\"}",
+          "a": "CHAOS-01",
+          "b": "CHAOS-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "chaos::{\"id\":\"upstream-partition-failure\"}",
+          "a": "CHAOS-04",
+          "b": "CHAOS-04",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "synthetic::{\"id\":\"edge-checkout-canary\"}",
+          "a": "SYN-01",
+          "b": "SYN-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "synthetic::{\"id\":\"edge-tls-validity\"}",
+          "a": "SYN-02",
+          "b": "SYN-02",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 7,
+      "drifted": 0
+    },
+    "GOV": {
+      "onlyInA": [],
+      "onlyInB": [],
+      "inBoth": [
+        {
+          "key": "imports::{\"ref\":\"platform/golden-signals-base@1.4\"}",
+          "a": "IMP-01",
+          "b": "IMP-01",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "imports::{\"ref\":\"platform/std-alert-routes@3.0\"}",
+          "a": "IMP-02",
+          "b": "IMP-02",
+          "match": "aligned",
+          "deltas": []
+        },
+        {
+          "key": "imports::{\"ref\":\"platform/std-budget-policy@2.1\"}",
+          "a": "IMP-03",
+          "b": "IMP-03",
+          "match": "aligned",
+          "deltas": []
+        }
+      ],
+      "outOfScope": [],
+      "scaffold": [],
+      "notObserved": [],
+      "aligned": 3,
+      "drifted": 0
+    }
+  }
+}

@@ -614,7 +614,7 @@ function renderConstellation(host, { a, b, diff }, opts = {}) {
         return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="rgba(232,220,196,0.4)" stroke-width="0.5"/>`;
       }).join('')}
       <text x="0" y="-58" text-anchor="middle" style="font-family:'Newsreader', serif; font-style:italic; fill:#E8DCC4; font-size:11px;">★</text>
-      <text x="0" y="4"   text-anchor="middle" style="font-family:'Newsreader', serif; font-style:italic; fill:#E8DCC4; font-size:9px; letter-spacing:0.10em;">OBSERVO</text>
+      ${opts.compassMark ? `<text x="0" y="4"   text-anchor="middle" style="font-family:'Newsreader', serif; font-style:italic; fill:#E8DCC4; font-size:9px; letter-spacing:0.10em;">${escapeHtml(opts.compassMark)}</text>` : ''}
       <text x="0" y="14"  text-anchor="middle" style="font-family:'IBM Plex Mono', monospace; fill:rgba(232,220,196,0.55); font-size:7.5px; letter-spacing:0.16em;">${escapeHtml(A.name || 'A')} → ${escapeHtml(B.name || 'B')}</text>
     </g>
   </g>`;

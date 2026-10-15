@@ -32,6 +32,7 @@ import { getUserByLogin, insertUserRow, listUsers, updateUserRow } from './users
 import { textOk } from './rows.mjs';
 import { mapLegacyRole, oidcLogin, signInOwnerCount, SYSTEM } from './identity.mjs';
 import { planJourneyRewrites } from './ops.mjs';
+import { applyPackReplace, formatPackReplace, planPackReplace } from './pack-import.mjs';
 import { validOrgId } from '../org-context.mjs';
 import {
   hasData, legacyUsersPath, lexists, MIGRATABLE, orgsFilePath, readOrgsFileStrict, readUsersFileStrict, sha256Of, usersHashKey,
@@ -466,7 +467,18 @@ export function formatReport(r) {
 //   - in the same tx(): every changed or disabled user's epoch is bumped
 //     (a membership change is a change: it also ends cookies minted during
 //     the downgrade window), legacy_hashes rewritten, replace_requested
-//     cleared, one store.replace row (and org.root for the root change).
+//     cleared, one store.replace row (and org.root for the root change);
+//   - the pack registry (slice 4, design §10.2), when the boot passes its
+//     pack-file readers (`files`) and the registry was imported: for every
+//     live org after the replace, created ones included, its
+//     packs/index.json — what a rolled-back build wrote — is the record:
+//     files without a row are added with the entry's label and source (or
+//     adopted without an entry), rows an entry relabels are updated, rows
+//     whose file is gone are removed on positive evidence; services,
+//     environments and endpoints are kept (new packs may add rows);
+//     pack_index_hashes is rewritten to the files as they stand (never
+//     legacy_hashes, never the marker). Each org's root is the one it will
+//     have — the plan's, not the cache's: runWithOrg resolves no root here.
 
 const DEFAULT_MOVED = 'orgs/default';
 
@@ -474,7 +486,7 @@ const ownerSignsIn = (u, mode) => u.isOwner && !u.disabled && (mode.mode === 'lo
   ? u.kind === 'local' && u.password !== null && u.password !== undefined
   : u.kind === 'oidc' && u.login.startsWith(`${mode.issuerKey}#`));
 
-export function planReplace(db, legacy, ctx, migration) {
+export function planReplace(db, legacy, ctx, migration, { files = null } = {}) {
   const oidc = ctx.identityMode === 'oidc';
   const now = ctx.now;
   const id = storeId(db);
@@ -696,6 +708,19 @@ export function planReplace(db, legacy, ctx, migration) {
   report.noOwner = ownersBefore > 0 && ownersAfter === 0;
   report.sessionsEnded = [...bump].map((uid) => byId.get(uid).login);
 
+  // ---- the pack registry (slice 4): the roots as they will be after this tx() (trap 30) ----
+  const packs = files && getMeta(db, 'packs_imported')
+    ? planPackReplace(db, [
+      ...liveBefore.filter((o) => !removes.includes(o.id)).map((o) => ({ id: o.id, root: rootChange && o.id === 'default' ? DEFAULT_MOVED : o.root })),
+      ...orgCreates.map((o) => ({ id: o.id, root: o.root })),
+    ], ctx, files)
+    : null;
+  // The report carries the plan (the apply confirms it: a row that appeared meanwhile is skipped there).
+  report.packs = packs ? {
+    added: packs.reduce((n, p) => n + p.add.length, 0), relabelled: packs.reduce((n, p) => n + p.relabel.length, 0), removed: packs.reduce((n, p) => n + p.remove.length, 0),
+    orgs: packs.map((p) => ({ org: p.org, root: p.root, idxPath: p.idxPath, corrupt: p.corrupt, added: p.add.map((a) => a.id), relabelled: p.relabel.map((r) => r.id), removed: [...p.remove], skipped: [...p.skipped], badFields: [...p.badFields] })),
+  } : null;
+
   // ---- meta ----
   const recorded = getMetaJson(db, 'legacy_hashes', {}) || {};
   // A file still absent keeps the hash it was imported with (step 2 (d)/(e)).
@@ -712,7 +737,7 @@ export function planReplace(db, legacy, ctx, migration) {
 
   const liveOrgsAfter = [...liveBefore.map((o) => o.id).filter((o) => !removes.includes(o)), ...orgCreates.map((o) => o.id)];
   return {
-    replace: true,
+    replace: true, packs,
     users: { create: [...creates.values(), ...plannedOidc.values()], update: [...updates.entries()] },
     orgs: { create: orgCreates, rename: renames, remove: removes },
     memberships: { add: memberAdds, remove: memberRemoves, role: memberRoles },
@@ -759,6 +784,12 @@ export function applyReplace(db, plan, ctx) {
       }
       for (const [key, value] of Object.entries(plan.meta)) putMeta(db, key, value);
       const r = plan.report;
+      if (plan.packs) {
+        // After the root change (the created orgs' rows exist too): the
+        // pre-move 'packs/index.json' key goes with the file.
+        const packs = applyPackReplace(db, plan.packs, { drop: plan.rootChange ? ['packs/index.json'] : [] });
+        r.packs = { ...packs.totals, orgs: packs.orgs };
+      }
       writeAudit(db, SYSTEM, {
         action: 'store.replace', targetKind: 'store', targetId: r.storeId,
         detail: {
@@ -766,6 +797,7 @@ export function applyReplace(db, plan, ctx) {
           orgs: { created: r.orgs.created.length, renamed: r.orgs.renamed.length, removed: r.orgs.removed.length },
           memberships: { added: r.memberships.added.length, removed: r.memberships.removed.length, changed: r.memberships.changed.length },
           sessionsEnded: r.sessionsEnded.length, rootChanged: r.rootChanged, mode: r.identityMode,
+          ...(r.packs ? { packs: { added: r.packs.added, relabelled: r.packs.relabelled, removed: r.packs.removed } } : {}),
         },
       });
     });
@@ -825,6 +857,7 @@ export function formatReplace(r) {
   if (r.migration.leftBehind.length) out.push(`[store]   left behind (orgs/default/ already has them; neither moved nor merged): ${r.migration.leftBehind.join(', ')}`);
   if (r.rootChanged) out.push(`[store]   the default org's root is now ${DEFAULT_MOVED} — point its CronJobs at ${r.cronJob}`);
   if (r.journeys.length) out.push(`[store]   journey file: paths rewritten: ${r.journeys.join(', ')}`);
+  out.push(...formatPackReplace(r.packs));
   if (r.leftovers.length) out.push(`[store]   removed empty leftovers of a pre-store build: ${r.leftovers.join(', ')}`);
   if (r.sessionsEnded.length) out.push(`[store]   sessions ended (changed or disabled): ${r.sessionsEnded.join(', ')}`);
   if (r.memberships.inexact.length) {

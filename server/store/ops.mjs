@@ -2,16 +2,19 @@
 // (docs/STORE_PLAN.md §4 "packc store export <dir> — the exit and the
 // downgrade path").
 //
-//   exportStore(dir, { dbPath, base })   users.json / orgs.json a pre-store
+//   exportStore(dir, { dbPath, base })   users.json / orgs.json, and each
+//                                        org's packs/index.json, a pre-store
 //                                        build boots on, to a directory or
 //                                        in place (with the default org's
 //                                        move); planExport is its read-only half
 //   formatExport(result)                 the CLI's report lines
 //   requestReplace({ dbPath, base })     `packc store import --replace`: asks the
 //                                        next server start to re-import
-//                                        users.json / orgs.json as they stand
-//                                        (boot step 3, planReplace/applyReplace
-//                                        in server/store/import.mjs)
+//                                        users.json / orgs.json and each org's
+//                                        packs/index.json as they stand (boot
+//                                        step 3, planReplace/applyReplace in
+//                                        server/store/import.mjs, planPackReplace
+//                                        in pack-import.mjs)
 //   rekeyIssuer({ to | clear })          `packc store rekey-issuer`: the OIDC
 //                                        users follow the IdP to a new URL
 //                                        (--to), or are retired for another
@@ -40,20 +43,49 @@
 // makes the move itself, every check before the first write:
 //   0. users.json / orgs.json, where it writes them, are as the store last
 //      imported or exported them (a file a pre-store build edited since
-//      is refused naming `import --replace`, never overwritten);
+//      is refused naming `import --replace`, never overwritten); likewise
+//      every org root's packs/index.json whose hash is recorded (compared
+//      canonically — a lastUsedAt rewrite, or a file that says what the
+//      reconcile below will make the store hold, is overwritten);
 //   1. dry run: no ORG_ENTRIES entry present at the base has an
 //      orgs/default/ twin (refused listing every conflict), and every
-//      journey whose file: paths it rewrites still parses;
+//      journey whose file: paths it rewrites still parses; every live org's
+//      pack files reconciled with its rows (planPackExport: files without a
+//      row to adopt, rows whose file is gone to prune) — an older build
+//      adopts and prunes at its first start and flushes, so an index
+//      written from the rows alone would be "changed" by a start nobody
+//      edited anything in (slice 4, design §10.1);
 //   2. rename each entry into orgs/default/;
 //   3. rewrite the default org's journey file: values <base>/<entry>/ →
 //      <base>/orgs/default/<entry>/ (forward slashes, as
 //      /api/journeys/capture writes them);
-//   4. write users.json / orgs.json;
-//   5. one tx(): the default org's root (org.root), legacy_hashes of what
-//      step 4 wrote, one store.export row;
-//   6. the marker (by 'export').
+//   4. write users.json / orgs.json; then, for every live org with rows or
+//      an existing <root>/packs, <root>/packs/index.json in the shape every
+//      earlier build wrote (ms numbers), from the rows as step 5 leaves
+//      them;
+//   5. one tx(): the default org's root (org.root), the adoptions and
+//      prunes of step 1 (actor cli), legacy_hashes of what step 4 wrote,
+//      pack_index_hashes of every live root (the canonical hash of the
+//      index written, { absent: true } where none was; the pre-move
+//      'packs/index.json' key dropped when the default org moved), one
+//      store.export row;
+//   6. the marker (by 'export'; the identity files only — never a pack key).
+// Step 4's index files are written BEFORE step 5's tx applies the adoptions
+// and prunes — the design (§10.1) orders the rows first. The order here is
+// deliberate: the file's content is the plan's reconciled list, which is
+// exactly what the rows hold once the tx commits, so file and rows agree
+// either way; the hash recorded in the tx is the canonical hash of the file
+// as written (its bytes' SHA-256 rides along as `raw` only); and no file
+// I/O runs inside tx(), as users.json / orgs.json already did not. A
+// kill between 4 and 5 leaves the file ahead of the rows, the same window
+// the identity files have, and the next boot's guard accepts it (adopted
+// files match the reference; a prune ahead of its row refuses naming
+// import --replace).
 // A failure in 2–5 undoes what ran from in-memory copies (renames back,
-// journey and legacy file contents restored) and says so.
+// journey, legacy and index file contents restored) and says so.
+// A directory export writes no index and reconciles nothing: it carries no
+// packs. The pack-file readers here are node:fs over the same rules as
+// server/workspace.mjs's (a store module imports no server module).
 //
 // Every regex here is used through .test() / .match() / replace: the
 // store's source guard refuses a raw handle call's spelling here.
@@ -62,8 +94,10 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSy
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { baseWorkspacePath } from '../../tools/lib/brand-env.mjs';
 import { parse as parseYaml } from '../../tools/lib/mini-yaml.mjs';
-import { closeStore, openStore, resolveDbPath, tx } from './db.mjs';
+import { closeStore, nowIso, openStore, resolveDbPath, tx } from './db.mjs';
 import { assertNotInUse, identifyFile } from './backup.mjs';
+import { comparedPath } from './paths.mjs';
+import { usersFilePlace } from './users-file-place.mjs';
 import { listAudit, writeAudit } from './audit.mjs';
 import { getMeta, getMetaJson, isIdentityArmed, putMeta, setMeta, storeId } from './meta.mjs';
 import { getOrg, listOrgs, setOrgRoot } from './orgs.mjs';
@@ -71,12 +105,39 @@ import { listMembers } from './memberships.mjs';
 import { disableOidcRows, listUsers, rewriteLoginPrefix } from './users.mjs';
 import { CLI, canonIssuer, preStoreSub } from './identity.mjs';
 import {
-  ORG_ENTRIES, lexists, markerPath, orgsFilePath, readMarker, sha256File, usersHashKey, writeMarker, writeOrgsFile, writeUsersFile,
+  adoptionsResolved, canonicalPackIndex, ORG_ENTRIES, lexists, markerPath, orgsFilePath, packIndexHash, packIndexKey, readMarker, readPackIndexStrict, sha256File,
+  usersHashKey, writeMarker, writeOrgsFile, writePackIndexFile, writeUsersFile,
 } from './legacy-files.mjs';
+import { applyPackExport, packIndexDataOf, planPackExport } from './pack-import.mjs';
 
 const MEMORY = ':memory:';
 const DEFAULT_MOVED = 'orgs/default';
 const JOURNEY_SUFFIX = '.journey.yaml';
+const PACK_SUFFIX = '.pack.yaml';
+const PACK_INDEX_KEY_FLAT = 'packs/index.json';
+
+// The pack-file reads planPackExport takes, against an explicit org root —
+// the same answers server/workspace.mjs's readers give (ENOENT is an empty
+// listing or a missing file; anything else an error, never "empty").
+const PACK_FILES = Object.freeze({
+  list(root) {
+    try {
+      return { ids: readdirSync(join(root, 'packs')).filter((f) => f.endsWith(PACK_SUFFIX)).map((f) => f.slice(0, -PACK_SUFFIX.length)).sort() };
+    } catch (e) {
+      if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR') return { ids: [] };
+      return { error: e?.code || e?.message || 'error' };
+    }
+  },
+  read(root, id) {
+    try { return { raw: readFileSync(join(root, 'packs', `${id}${PACK_SUFFIX}`), 'utf8') }; } catch (e) {
+      if (e?.code === 'ENOENT') return null;
+      return { error: e?.code || e?.message || 'error' };
+    }
+  },
+  stat(root, id) {
+    try { return { mtimeMs: statSync(join(root, 'packs', `${id}${PACK_SUFFIX}`)).mtimeMs }; } catch { return null; }
+  },
+});
 // Store roles → the words a pre-store orgs.json used.
 const LEGACY_ROLE = Object.freeze({ admin: 'admin', operator: 'member', viewer: 'viewer' });
 
@@ -92,6 +153,14 @@ function refuse(message) {
 function realOr(path) {
   try { return realpathSync(path); } catch { return resolve(path); }
 }
+// realOr spells a path (the journey rewrites' base, below); a check compares two through compared
+// (server/store/paths.mjs): realOr's form off Windows, the on-disk spelling, case folded, on Windows —
+// where compared(p, beside) places p beside the path it is checked against across a share's name. A
+// containment refusal compares placed (purge-org's users file with { deleting: true }: a share nothing places,
+// on any volume, or a path the native realpath cannot fully resolve may lie under the root it deletes); a check
+// whose answer writes or skips (the in-place detection, the scan for another store, the no-marker check)
+// compares by path alone and refuses what only placement equates.
+const compared = comparedPath(realOr);
 
 const slashed = (p) => p.replaceAll('\\', '/');
 
@@ -136,7 +205,18 @@ export function planJourneyRewrites(base, moved, { dir = join(base, 'journeys') 
 // recorded absent keeps its imported hash). One a pre-store build edited
 // since holds the only copy of those edits, so it is refused, not
 // overwritten: the replace takes them into the store first.
-function assertUnedited(db, id, base, files) {
+//
+// The pack registry's files (slice 4) likewise, under pack_index_hashes
+// and compared CANONICALLY (design D13): an index whose canonical form —
+// entries by id with label, source, createdAt; lastUsedAt dropped — equals
+// the recorded hash, or says what the store will hold after this export's
+// reconcile (an older build adopted a hand-copied file, or a pack the store
+// holds a row for — read as the row, adoptionsResolved; a lastUsedAt
+// rewrite), is overwritten (it is what the export writes anyway); one that
+// differs — an entry added with a label, relabelled or removed by a
+// rolled-back build — holds the only copy of that registry and is refused.
+// An unreadable index throws naming it, before any write.
+function assertUnedited(db, id, base, files, indexes = []) {
   const recorded = getMetaJson(db, 'legacy_hashes', {}) || {};
   const expectedOf = (r) => (r?.absent ? (typeof r.importedSha256 === 'string' ? r.importedSha256 : null)
     : typeof r?.sha256 === 'string' ? r.sha256 : null);
@@ -149,6 +229,32 @@ function assertUnedited(db, id, base, files) {
     if (now.absent) continue;
     const was = expectedOf(recorded[key]);
     if (now.sha256 !== was) edited.push(`${path} (${was ? `it was SHA-256 ${was}` : 'it was absent'}, it is ${now.sha256})`);
+  }
+  const packHashes = getMetaJson(db, 'pack_index_hashes', {}) || {};
+  for (const plan of indexes) {
+    if (!Object.hasOwn(packHashes, plan.key)) continue;                     // never recorded: nothing to compare (trap 15)
+    const path = join(base, plan.readRoot, 'packs', 'index.json');
+    let idx;
+    try {
+      idx = readPackIndexStrict(path);
+    } catch (e) {
+      if (e?.code !== 'ERR_OBSERVOGRAM_LEGACY_FILE') throw e;
+      throw refuse(`${path} cannot be read (${e.cause?.code || e.cause?.message || 'error'}) — an in-place export compares it with what store ${id} last imported `
+        + 'or exported before it overwrites it. Nothing was changed. With the server stopped, make it readable or move it aside, then export again');
+    }
+    if (!idx.exists) continue;
+    const now = packIndexHash(idx);
+    const rec = packHashes[plan.key];
+    const was = rec?.absent ? null : typeof rec?.sha256 === 'string' ? rec.sha256 : null;
+    if (now.sha256 === was) continue;
+    const reference = plan.packs.map((r) => [r.id, { label: r.label, source: r.source, createdAt: r.createdAt }]);
+    if (!idx.corrupt && canonicalPackIndex(adoptionsResolved(idx.entries, reference)) === canonicalPackIndex(reference)) continue;
+    // packIndexHash records a corrupt index by the SHA-256 of its bytes (no entries to canonicalise), as boot's guard says: name
+    // it as such, or the operator is sent looking for an entry set no file can reproduce.
+    const label = rec?.canon === 'raw'
+      ? `it was SHA-256 ${was} of its bytes — the file was corrupt when recorded, so it is compared byte for byte;`
+      : `it was canonical SHA-256 ${was},`;
+    edited.push(`${path} (${was ? label : 'it was absent,'} it is ${now.sha256})`);
   }
   if (!edited.length) return;
   throw refuse(`${edited.join(', ')} ${edited.length === 1 ? 'differs' : 'differ'} from what store ${id} last imported or exported — `
@@ -189,6 +295,21 @@ export function planExport(db, { inPlace, target, base }) {
   // orgs.json: when the deployment had one, has more than one live org, or
   // keeps the default org anywhere but the workspace root (A-30).
   const live = listOrgs(db);
+  // A store whose pack registry is still in the files (import_done set by
+  // a build before slice 4, and this build's step 5 never ran — its only
+  // start was refused earlier, or there was none): an org root's
+  // packs/index.json holds the only copy of the labels, and the reconcile
+  // below, with no rows, would adopt every file label-null over it. Refused
+  // as the identity half is: start the server once.
+  if (inPlace && !getMeta(db, 'packs_imported')) {
+    const pending = live.map((org) => join(base, org.root, 'packs', 'index.json')).filter((p) => lexists(p));
+    if (pending.length) {
+      throw refuse(`store ${id} has not imported its pack registry (packs_imported is unset): ${pending.join(', ')} `
+        + `${pending.length === 1 ? 'holds' : 'hold'} the labels the store has no rows for yet, and an in-place export writes `
+        + `${pending.length === 1 ? 'it' : 'them'} from the rows. Nothing was changed. Start the server once with its environment, `
+        + 'so the store takes the registry in, then export again; or export to a directory');
+    }
+  }
   const atRoot = live.find((o) => o.root === '.') ?? null;
   const report = getMetaJson(db, 'import_report', null);
   const writeOrgs = !!report?.orgsJson || live.length > 1 || !atRoot;
@@ -225,21 +346,39 @@ export function planExport(db, { inPlace, target, base }) {
     }
   }
   const orgsPath = !writeOrgs ? null : inPlace ? orgsFilePath(base) : join(target, 'orgs.json');
+
+  // The default org's move (in place only): known before the pack plans,
+  // whose index is written where the root will be.
+  let move = [];
+  let journeys = [];
+  const moving = inPlace && writeOrgs && !!atRoot && atRoot.id === 'default';
+  if (moving) move = ORG_ENTRIES.filter((entry) => lexists(join(base, entry)));
+  const rootAfter = (org) => (moving && move.length && org.id === 'default' ? DEFAULT_MOVED : org.root);
+
+  // The pack registry per live org: the reconcile and the index to write
+  // (step 1 of the header); a directory export carries no packs.
+  let indexes = null;
   if (inPlace) {
+    const ctx = { base, now: nowIso() };
+    try {
+      indexes = live.map((org) => {
+        const plan = planPackExport(db, org, ctx, PACK_FILES, { readRoot: org.root, writeRoot: rootAfter(org) });
+        return { ...plan, write: plan.packs.length > 0 || lexists(join(base, org.root, 'packs')) };
+      });
+    } catch (e) {
+      if (e?.code === 'ERR_OBSERVOGRAM_PACK_FILES') throw refuse(`${e.message}. Nothing was changed`);
+      throw e;
+    }
     assertUnedited(db, id, base, [
       ...(usersPath ? [[usersHashKey(recordedUsersFile), usersPath]] : []),
       ...(orgsPath ? [['orgs.json', orgsPath]] : []),
-    ]);
+    ], indexes.map((plan) => ({ ...plan, key: packIndexKey(plan.readRoot) })));
   }
 
-  // The default org's move (in place only).
-  let move = [];
-  let journeys = [];
   if (inPlace && writeOrgs && atRoot) {
     if (atRoot.id !== 'default') {
       throw refuse(`org ${atRoot.id} keeps the workspace root, but only the default org "default" can move to ${DEFAULT_MOVED} — nothing was changed`);
     }
-    move = ORG_ENTRIES.filter((entry) => lexists(join(base, entry)));
     const conflicts = move.filter((entry) => lexists(join(base, DEFAULT_MOVED, entry)));
     if (conflicts.length) {
       throw refuse(`the default org's entries must move to ${join(base, DEFAULT_MOVED)} for a pre-store build, but it already holds `
@@ -258,7 +397,7 @@ export function planExport(db, { inPlace, target, base }) {
     storeId: id, inPlace, base, target, armed,
     users: { path: usersPath, data: { users: records }, logins: Object.keys(records), noPassword },
     orgs: { path: orgsPath, data: orgs, ids: Object.keys(orgs), members: memberCount, collisions },
-    writeAccess, ownerLoss, move, journeys,
+    writeAccess, ownerLoss, move, journeys, indexes,
     usersKey: usersHashKey(recordedUsersFile),
   };
 }
@@ -280,8 +419,15 @@ function exportDirectory(target, base) {
     if (hops >= 40) throw refuse(`${target} is a symlink loop. Nothing was changed. Choose an empty or new directory`);
     into = resolve(dirname(into), readlinkSync(into));
   }
-  const t = realOr(into);
-  const b = realOr(base);
+  const t = compared(into, base);
+  if (t === null) {   // Windows: through a share on the workspace's volume (or its serial) that file ids cannot place, or one not reached (store/paths.mjs)
+    throw refuse(`${named(into)} is not a path on a local drive, and a network share on the volume that holds the workspace ${base} `
+      + '(or on another machine\'s volume that has its serial, as a machine cloned from the same image does), or one that cannot be '
+      + 'reached, may lead inside it — a directory export there could write files without the in-place steps. Nothing was changed. '
+      + 'Name the directory by its path on a local drive; if it has none on this host, export to an empty or new directory on a local '
+      + `drive outside the workspace, then copy that directory to ${target}`);
+  }
+  const b = compared(base);
   const inside = t.startsWith(b + sep);
   if (t === b || inside || b.startsWith(t.endsWith(sep) ? t : t + sep)) {
     // The in-place way out is named only for a workspace that exists: the default <cwd>/.observogram may not.
@@ -305,13 +451,13 @@ function exportDirectory(target, base) {
 // The candidates are the *.db files directly in <base> and <base>/db (<base>/observogram.db, the default, among
 // them), each opened read-only without migrating; one that cannot be read is refused naming it.
 async function assertNoOtherStore(base, path, id) {
-  const own = realOr(path);
+  const own = compared(path);   // the database itself by its path alone: a file id never skips another (store/paths.mjs)
   for (const dir of [base, join(base, 'db')]) {
     let names;
     try { names = readdirSync(dir); } catch (e) { if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR') continue; throw e; }
     for (const name of names.filter((n) => n.endsWith('.db')).sort()) {
       const file = join(dir, name);
-      if (realOr(file) === own) continue;
+      if (compared(file) === own) continue;
       try { if (!statSync(file).isFile()) continue; } catch { continue; }
       let other;
       try {
@@ -338,7 +484,16 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
   out.write(`store: ${path}\n`);
   if (!existsSync(path)) throw refuse(`no database at ${path} — nothing to export (this command never creates one; check OBSERVOGRAM_DB and OBSERVOGRAM_WORKSPACE)`);
   const target = resolve(dir);
-  const inPlace = realOr(target) === realOr(base);
+  // The workspace by its path alone. On Windows a target only its file id places on it (store/paths.mjs) may be the
+  // workspace named another way, or a copy that keeps its file ids: the export takes it for neither.
+  const inPlace = compared(target) === compared(base);
+  if (!inPlace && compared(target, base) === compared(base)) {
+    const inPlaceWay = existsSync(base) ? `To export the workspace in place, stop the server and run packc store export ${base}; otherwise choose` : 'Choose';
+    throw refuse(`${target} matches the workspace ${base} only by its file id, not by its path: it may be the workspace named through `
+      + 'a network share or a mapped drive, or a copy that keeps its file ids (another machine cloned from this host\'s image, an '
+      + 'attached disk image) — an in-place export could work on a directory other than the one named, and a directory export '
+      + `could write files without the in-place steps. Nothing was changed. ${inPlaceWay} an empty or new directory`);
+  }
   let into = target;   // where a directory export writes: the target, or the directory its symlink resolves to
   if (inPlace) {
     if (!existsSync(base)) throw refuse(`the workspace ${base} does not exist — an in-place export works on an existing workspace. Nothing was changed. Check OBSERVOGRAM_WORKSPACE, or choose an empty or new directory for a directory export`);
@@ -368,9 +523,18 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
         // A database elsewhere proves nothing about the directory — an empty or unrelated one would pass, and the
         // export would record that directory's files as this store's legacy files.
         await assertNoOtherStore(base, path, id);   // the more specific refusal first: it names the other store
-        const own = realOr(path);
-        const b = realOr(base);
-        if (!own.startsWith(b + sep)) {
+        const b = compared(base);
+        if (!compared(path).startsWith(b + sep)) {   // in the workspace by its path alone (store/paths.mjs)
+          // Windows: through a share on the workspace's volume that file ids cannot place, or one not reached — or placed in
+          // the workspace by its file id alone: the workspace named another way, or a copy that keeps its file ids.
+          const placed = compared(path, base);
+          if (placed === null || placed.startsWith(b + sep)) {
+            throw refuse(`${mp} is missing and ${path} is not named under ${base}: through a network share or a mapped drive, or as `
+              + 'a copy that keeps its file ids (another machine cloned from this host\'s image, an attached disk image), it may or '
+              + `may not lie in the workspace, so ${base} is not known to be store ${id}'s. Nothing was changed. Set OBSERVOGRAM_DB to `
+              + `the database's path under ${base}, then run the export again; otherwise choose an empty or new directory for a `
+              + 'directory export');
+          }
           throw refuse(`${mp} is missing and ${path} lives outside ${base}: the workspace ${base} is not known to be store ${id}'s. `
             + `Nothing was changed. If ${base} is this store's workspace, start the server once with OBSERVOGRAM_WORKSPACE=${base} `
             + `and OBSERVOGRAM_DB=${path} (the start rewrites the marker), stop it, then run the export again; otherwise choose an `
@@ -443,16 +607,32 @@ function exportInPlace(db, plan) {
       writeOrgsFile(plan.orgs.data, plan.orgs.path);
       written['orgs.json'] = sha256File(plan.orgs.path);
     }
+    // 4b. the pack registry's files, where each root now is, from the rows
+    // step 5 leaves (the plan's reconcile is deterministic: the store is not
+    // in use); the hash recorded is of the file as written.
+    const writtenPacks = {};
+    for (const idx of plan.indexes) {
+      if (!idx.write) { writtenPacks[idx.key] = { absent: true }; continue; }
+      restores.push({ path: idx.path, before: readOrNull(idx.path) });
+      writePackIndexFile(idx.path, packIndexDataOf(idx.packs));
+      writtenPacks[idx.key] = packIndexHash(readPackIndexStrict(idx.path));
+    }
     // 5. the store, in one transaction
     tx(db, () => {
       if (plan.move.length) { setOrgRoot(db, CLI, 'default', DEFAULT_MOVED); rootChanged = true; }
+      const packs = applyPackExport(db, CLI, plan.indexes);
       const hashes = { ...(getMetaJson(db, 'legacy_hashes', {}) || {}), ...written };
       putMeta(db, 'legacy_hashes', JSON.stringify(hashes));
+      const packHashes = { ...(getMetaJson(db, 'pack_index_hashes', {}) || {}) };
+      if (rootChanged) delete packHashes[PACK_INDEX_KEY_FLAT];   // the file moved with packs/
+      Object.assign(packHashes, writtenPacks);
+      putMeta(db, 'pack_index_hashes', JSON.stringify(packHashes));
       writeAudit(db, CLI, {
         action: 'store.export', targetKind: 'store', targetId: plan.storeId,
         detail: {
           inPlace: true, users: plan.users.path ? plan.users.logins.length : null,
           orgs: plan.orgs.path ? plan.orgs.ids.length : null, moved: plan.move,
+          indexes: plan.indexes.filter((i) => i.write).map((i) => i.path), packs,
         },
       });
     });
@@ -475,7 +655,7 @@ function exportInPlace(db, plan) {
 
 // ---------- import --replace: the request ----------
 
-export const REPLACE_REQUESTED = "replace requested: the next server start re-imports users.json/orgs.json with the unit's environment";
+export const REPLACE_REQUESTED = "replace requested: the next server start re-imports users.json/orgs.json and each org's packs/index.json with the unit's environment";
 
 // Only a request: the replace itself runs at the next start, with the
 // unit's environment (its OIDC issuer, its users file), which this shell
@@ -603,10 +783,15 @@ export function formatRekey(r) {
 // remove` soft-removed (the row stays, so its slug and root are never
 // reused). The org exists, is removed and is not the default org; its root
 // is orgs/<id> and resolves under <base>/orgs/ (a symlink is refused, never
-// followed). Then one tx(): the root's keys dropped from legacy_hashes
-// (none before slice 4), one org.purge row; then the marker rewritten from
-// legacy_hashes (by 'purge-org'). A workspace whose marker names another
-// store is refused: its orgs/ are not this store's to delete.
+// followed). Then one tx(): the root's keys dropped from legacy_hashes (a
+// key an older build may hold) and from pack_index_hashes (its
+// packs/index.json, slice 4), one org.purge row; then the marker rewritten
+// from legacy_hashes (by 'purge-org'; it carries no pack key). A workspace
+// whose marker names another store is refused: its orgs/ are not this
+// store's to delete. Before rmSync, the root is read whole: deleting it must
+// not take the users file a pre-store build reads, decided by what it takes,
+// not by the path's spelling, and nothing under it may be a mount point
+// (store/users-file-place.mjs).
 export async function purgeOrg(id, { dbPath = resolveDbPath(), base = baseWorkspacePath(), out = process.stdout } = {}) {
   if (!id) throw refuse('name the org: packc store purge-org <id>');
   if (dbPath === MEMORY) throw refuse('OBSERVOGRAM_DB is :memory: — an in-memory store lives in one process; purge from the server\'s database file');
@@ -631,31 +816,54 @@ export async function purgeOrg(id, { dbPath = resolveDbPath(), base = baseWorksp
     const rel = `orgs/${id}`;
     if (org.root !== rel) throw refuse(`org ${id}'s root is ${org.root}, not ${rel} — only an org's own directory is purged; nothing was deleted`);
     const root = join(base, 'orgs', id);
-    const parent = realOr(join(base, 'orgs'));
+    const parent = compared(join(base, 'orgs'));
     let present = false;
     if (lexists(root)) {
       const st = lstatSync(root);
       if (!st.isDirectory()) throw refuse(`${root} is not a directory (${st.isSymbolicLink() ? 'a symlink, never followed' : 'a file'}) — move it aside by hand; nothing was deleted`);
-      if (!realOr(root).startsWith(parent + sep)) throw refuse(`${root} resolves outside ${join(base, 'orgs')} — nothing was deleted`);
+      if (!compared(root).startsWith(parent + sep)) throw refuse(`${root} resolves outside ${join(base, 'orgs')} — nothing was deleted`);
       present = true;
     }
     const usersFile = getMeta(db, 'users_file');
-    if (usersFile && isAbsolute(usersFile) && present && realOr(usersFile).startsWith(realOr(root) + sep)) {
+    const users = usersFile && isAbsolute(usersFile) && present ? compared(usersFile, root, { deleting: true }) : undefined;
+    if (users === null) {   // Windows: through a share no file id places (any volume), one not reached, or a path realpath cannot resolve (store/paths.mjs)
+      throw refuse(`the recorded users file ${usersFile} is not a path on a local drive, or its path cannot be resolved on this host (a link `
+        + 'or another reparse point on it whose target cannot be opened, a part of it this host cannot read, or a volume whose paths do not '
+        + `resolve), and such a path, like a network share no file id places beside ${root} (one on any volume, a DFS link, one that cannot `
+        + `be reached), may lead under it — nothing was deleted. If it does not lie under ${root}, delete ${root} by hand, then run `
+        + `purge-org again: it drops org ${id}'s records. If it does, move it out of ${root} first, then do the same`);
+    }
+    // By what deleting the root takes, not by the path's spelling (store/users-file-place.mjs): the users file a
+    // pre-store build reads, seen under the root through a mount, a link or a hard link, a mount point under it, and
+    // a recorded users file that does not exist by where its path leads — so the path check below holds only while it
+    // exists, and "move it out first", followed, lets the purge through.
+    const place = present ? usersFilePlace(usersFile || join(base, 'users.json'), root, { recorded: Boolean(usersFile), id }) : null;
+    if (place?.refusal) throw refuse(place.refusal);
+    if (users?.startsWith(compared(root) + sep) && place.exists) {
       throw refuse(`the recorded users file ${usersFile} lies under ${root} — move it out first; nothing was deleted`);
     }
+    const underRoot = (k) => !isAbsolute(k) && slashed(k).startsWith(`${rel}/`);
     const hashes = getMetaJson(db, 'legacy_hashes', {}) || {};
-    const dropped = Object.keys(hashes).filter((k) => !isAbsolute(k) && slashed(k).startsWith(`${rel}/`)).sort();
-    if (!present && !dropped.length && listAudit(db, { action: 'org.purge', targetId: id, limit: 1 }).length) {
+    const dropped = Object.keys(hashes).filter(underRoot).sort();
+    const packHashes = getMetaJson(db, 'pack_index_hashes', {}) || {};
+    const droppedPackIndex = Object.keys(packHashes).filter(underRoot).sort();
+    if (!present && !dropped.length && !droppedPackIndex.length && listAudit(db, { action: 'org.purge', targetId: id, limit: 1 }).length) {
       throw refuse(`org ${id} was purged already and nothing of it is left at ${root}`);
     }
     if (present) rmSync(root, { recursive: true });
     const files = Object.fromEntries(Object.entries(hashes).filter(([k]) => !dropped.includes(k)));
     tx(db, () => {
       if (dropped.length) putMeta(db, 'legacy_hashes', JSON.stringify(files));
-      writeAudit(db, CLI, { action: 'org.purge', targetKind: 'org', targetId: id, detail: { root: rel, deleted: present, legacyHashes: dropped } });
+      if (droppedPackIndex.length) {
+        putMeta(db, 'pack_index_hashes', JSON.stringify(Object.fromEntries(Object.entries(packHashes).filter(([k]) => !droppedPackIndex.includes(k)))));
+      }
+      writeAudit(db, CLI, {
+        action: 'org.purge', targetKind: 'org', targetId: id,
+        detail: { root: rel, deleted: present, legacyHashes: dropped, packIndexHashes: droppedPackIndex },
+      });
     });
     const written = marker ? writeMarker(base, { storeId: sid, files, by: 'purge-org' }) : null;
-    return { storeId: sid, path, id, root, deleted: present, dropped, marker: written };
+    return { storeId: sid, path, id, root, deleted: present, dropped, droppedPackIndex, marker: written };
   } finally {
     closeStore(path);
   }
@@ -664,6 +872,7 @@ export async function purgeOrg(id, { dbPath = resolveDbPath(), base = baseWorksp
 export function formatPurge(r) {
   const out = [r.deleted ? `purged org ${r.id}: deleted ${r.root}` : `purged org ${r.id}: nothing on disk at ${r.root}`];
   if (r.dropped.length) out.push(`dropped from legacy_hashes: ${r.dropped.join(', ')}`);
+  if (r.droppedPackIndex.length) out.push(`dropped from pack_index_hashes: ${r.droppedPackIndex.join(', ')}`);
   if (r.marker) out.push(`rewrote ${r.marker}`);
   return out;
 }
@@ -698,6 +907,14 @@ export function formatExport(r) {
     : 'orgs.json: not written (one org at the workspace root, and the deployment never had one)');
   if (r.orgs.collisions.length) {
     out.push(`  left out (a pre-store build knows both by the same name): ${r.orgs.collisions.map((c) => `${c.org}/${c.login} as ${c.key}`).join(' · ')}`);
+  }
+  if (r.indexes) {
+    const written = r.indexes.filter((i) => i.write);
+    const n = (k, word) => `${k} ${word}${k === 1 ? '' : 's'}`;
+    out.push(written.length
+      ? `index.json: ${n(written.length, 'org root')} — ${written.map((i) => `${i.path} (${n(i.packs.length, 'pack')}`
+        + `${i.adopt.length ? `; adopted ${i.adopt.map((a) => a.id).join(', ')}` : ''}${i.prune.length ? `; pruned ${i.prune.join(', ')}` : ''})`).join(' · ')}`
+      : 'index.json: none (no org holds a pack)');
   }
   if (r.move.length) out.push(`moved to ${join(r.base, DEFAULT_MOVED)}: ${r.move.join(', ')}`);
   if (r.journeys.length) out.push(`journey file: paths rewritten: ${r.journeys.map((j) => j.name).join(', ')}`);

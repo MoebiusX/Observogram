@@ -1,0 +1,44 @@
+/* studio/static-backend.css — the static studio bundle's notice
+   (studio/static-backend.mjs installStaticBackend): one status row pinned
+   to the bottom of the window, like .toast, saying there is no Observogram
+   server behind the page. The bundle inlines this file after reskin.css;
+   the live studio never links it. Colours from the design tokens only. */
+
+.no-backend-notice {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--og-warn-bg);
+  color: var(--og-text);
+  border-top: 1px solid var(--og-warn-line);
+  font: var(--og-control-font);
+  font-family: var(--og-font);
+  box-shadow: var(--og-shadow);
+}
+.no-backend-notice.is-error {
+  background: var(--og-fail-bg);
+  border-top-color: var(--og-fail);
+}
+.no-backend-notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.no-backend-notice-dismiss {
+  flex: 0 0 auto;
+  appearance: none;
+  cursor: pointer;
+  padding: var(--og-button-padding);
+  border: 1px solid var(--og-line-strong);
+  border-radius: var(--og-radius-control);
+  background: var(--og-panel);
+  color: var(--og-text);
+  font: var(--og-button-font);
+}
+.no-backend-notice-dismiss:hover { border-color: var(--og-accent); }
+.no-backend-notice-dismiss:focus-visible { outline: 2px solid var(--og-accent); outline-offset: 2px; }

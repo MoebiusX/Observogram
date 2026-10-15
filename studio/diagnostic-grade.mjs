@@ -254,8 +254,16 @@ export function partialLiveEvidence(packB) {
   };
 }
 
+// The drift-free check's hint when nothing live backs the pack — where a live
+// signal comes from. opts.noLiveHint replaces it (the static posture's text:
+// studio/compare-view.mjs passes studio/static-remedies.mjs's); every other
+// caller, tools/lib/journey.mjs included, reads this one.
+const NO_LIVE_HINT = 'connect MCP or scan live';
+
+// opts: { nowMs, noLiveHint } — the clock (Date.now() by default) and the hint above.
 export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, opts = {}) {
   const nowMs = Number.isFinite(opts.nowMs) ? opts.nowMs : Date.now();
+  const noLiveHint = typeof opts.noLiveHint === 'string' && opts.noLiveHint ? opts.noLiveHint : NO_LIVE_HINT;
   const ann = packA?.meta?.annotations || packA?.metadata?.annotations || {};
   const L1 = packA?.layers?.L1 || [];
   const L2 = packA?.layers?.L2 || [];
@@ -425,7 +433,7 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
   } else if (!hasMcpSource) {
     driftFree = false;
     driftScore = 0;
-    driftDetail = 'declared-only - no live signal to verify against (connect MCP or scan live)';
+    driftDetail = `declared-only - no live signal to verify against (${noLiveHint})`;
   } else if (probesAttempted.length === 0) {
     driftFree = true;
     driftScore = 1;

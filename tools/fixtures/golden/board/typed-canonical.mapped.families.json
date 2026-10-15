@@ -1,0 +1,130 @@
+{
+  "L1::SLI-01": {
+    "family": "sli",
+    "via": "type"
+  },
+  "L1::SLI-02": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLI-03": {
+    "family": "sli",
+    "via": "defines"
+  },
+  "L1::SLO-01": {
+    "family": "slo",
+    "via": "type"
+  },
+  "L1::SLO-02": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L1::SLO-03": {
+    "family": "slo",
+    "via": "defines"
+  },
+  "L2::BAK-01": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-02": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::BAK-03": {
+    "family": "backend",
+    "via": "defines"
+  },
+  "L2::OTEL-01": {
+    "family": "otel",
+    "via": "type"
+  },
+  "L2::PIP-EXP-LOG": {
+    "family": "pipeline_exporter_logs",
+    "via": "id"
+  },
+  "L2::PIP-EXP-MET": {
+    "family": "pipeline_exporter_metrics",
+    "via": "id"
+  },
+  "L2::PIP-EXP-TRC": {
+    "family": "pipeline_exporter_traces",
+    "via": "id"
+  },
+  "L2::PIP-PRC-01": {
+    "family": "pipeline_processor",
+    "via": "id"
+  },
+  "L2::PIP-PRC-02": {
+    "family": "pipeline_processor",
+    "via": "id"
+  },
+  "L2::PIP-RCV-01": {
+    "family": "pipeline_receiver",
+    "via": "id"
+  },
+  "L2::STO-LOG-01": {
+    "family": "storage_logs",
+    "via": "id"
+  },
+  "L2::STO-MET-01": {
+    "family": "storage_metrics",
+    "via": "id"
+  },
+  "L2::STO-TRC-01": {
+    "family": "storage_traces",
+    "via": "id"
+  },
+  "L3::DASH-01": {
+    "family": "dashboard",
+    "via": "type"
+  },
+  "L3::DASH-02": {
+    "family": "dashboard",
+    "via": "defines"
+  },
+  "L3::PANEL-01": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::PANEL-02": {
+    "family": "panel",
+    "via": "id"
+  },
+  "L3::QRY-01": {
+    "family": "recording_rule",
+    "via": "type"
+  },
+  "L3::QRY-02": {
+    "family": "recording_rule",
+    "via": "id"
+  },
+  "L4:alerting:ALR-01": {
+    "family": "alert_route",
+    "via": "type"
+  },
+  "L4:alerting:ALR-02": {
+    "family": "alert_route",
+    "via": "id"
+  },
+  "L4:policy:POL-01": {
+    "family": "alert_rule",
+    "via": "type"
+  },
+  "L4:policy:POL-02": {
+    "family": "burn_rate",
+    "via": "id"
+  },
+  "L4:policy:POL-03": {
+    "family": "burn_rate",
+    "via": "id"
+  },
+  "L5::BASE-01": {
+    "family": "baselines",
+    "via": "id"
+  },
+  "L5::SYN-01": {
+    "family": "synthetic",
+    "via": "id"
+  }
+}

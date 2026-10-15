@@ -12,14 +12,19 @@
 // (the migration, then the rehydrate of the flat scope, whose
 // loadWorkspacePacks() creates <base>/packs even with tenancy armed) and
 // server/workspace.mjs / tools/lib/journey.mjs (what the catalog lists:
-// every packs/<id>.pack.yaml; every journeys/<name>.journey.yaml). The
-// only change: the env those functions read (OBSERVOGRAM_WORKSPACE,
-// OBSERVOGRAM_USERS_FILE) is a parameter here, so one process can look at
-// many workspaces. Do not "fix" anything in it: it is what the old build
-// does, bugs included.
+// every packs/<id>.pack.yaml; every journeys/<name>.journey.yaml) and, for
+// the labels (STORE_PLAN slice 4: the Export gate's "the same packs with
+// their labels"), server/workspace.mjs's readIndex() and the label join of
+// loadWorkspacePacks() — an entry's label, or null for a file the index
+// does not list (what the old build adopts). The only change: the env those
+// functions read (OBSERVOGRAM_WORKSPACE, OBSERVOGRAM_USERS_FILE) is a
+// parameter here, so one process can look at many workspaces; the stderr
+// lines of the old readers are kept. Do not "fix" anything in it: it is
+// what the old build does, bugs included (copying more of the old
+// behaviour, as slice 4 did for the index, is allowed; correcting it is not).
 
 import { scryptSync, timingSafeEqual } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from '../../tools/lib/mini-yaml.mjs';
 
@@ -137,6 +142,63 @@ export function packIds(base, org = null) {
   return files.filter((f) => {
     try { const c = parseYaml(readFileSync(join(dir, f), 'utf8')); return !!c && typeof c === 'object'; } catch { return false; }
   }).map((f) => f.slice(0, -'.pack.yaml'.length)).sort();
+}
+
+// ---------- workspace.mjs: the index and the label join ----------
+
+// v0.4.0 readIndex(), its indexPath() spelt out for `root`.
+function readIndex(root) {
+  let raw;
+  try { raw = readFileSync(join(root, 'packs', 'index.json'), 'utf8'); }
+  catch (e) {
+    // ENOENT is the normal first-boot case. Anything else (EPERM/EBUSY from
+    // an AV scanner, a torn handle, ...) is a TRANSIENT failure that must be
+    // loud: silently treating it as "empty index" is how a boot once wiped
+    // the registry metadata (2026-06-11 incident).
+    if (e.code !== 'ENOENT') {
+      process.stderr.write(`[workspace] index read failed (${e.code || e.message}); treating as empty\n`);
+    }
+    return {};
+  }
+  try {
+    const data = JSON.parse(raw);
+    return (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+  } catch (e) {
+    process.stderr.write(`[workspace] index.json is corrupt (${e.message}); rebuilding from pack files\n`);
+    return {};
+  }
+}
+
+// What GET /api/packs lists for `org` with the label the old build shows
+// for each uploaded pack: v0.4.0 loadWorkspacePacks()'s join of the pack
+// files with the index — an orphan file (copied in by hand) is adopted with
+// label null, source 'workspace' and its mtime; an index entry whose file
+// is gone is dropped. (The old build then flushes the index; this copy
+// reads only — the real build's flush is what tools/test-store-prestore-live.mjs
+// exercises.) → [{ id, label }] by id.
+export function catalogWithLabels(base, org = null) {
+  const root = orgWorkspaceRoot(base, org);
+  const idx = readIndex(root);
+  const dir = join(root, 'packs');
+  let files;
+  try { files = readdirSync(dir).filter((f) => f.endsWith('.pack.yaml')); } catch { return []; }
+  const out = [];
+  for (const file of files.sort()) {
+    const id = file.slice(0, -'.pack.yaml'.length);
+    let canonical;
+    try { canonical = parseYaml(readFileSync(join(dir, file), 'utf8')); } catch { continue; }
+    if (!canonical || typeof canonical !== 'object') continue;
+    const meta = idx[id];
+    if (!meta) {
+      // Orphan file (e.g. copied in by hand) — adopt it with file mtime.
+      let mtime = Date.now();
+      try { mtime = statSync(join(dir, file)).mtimeMs; } catch { /* as the old build: Date.now() */ }
+      idx[id] = { label: null, source: 'workspace', createdAt: mtime, lastUsedAt: mtime };
+    }
+    const m = idx[id];
+    out.push({ id, label: m.label });
+  }
+  return out;
 }
 
 // GET /api/journeys for `org`: name → { packA, packB } (their file: values).

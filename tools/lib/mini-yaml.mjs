@@ -368,14 +368,50 @@ function parseValue(s) {
 
 function unquote(s) {
   if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
-    // Reuse JSON's parser for double-quoted strings — close enough for the
-    // canonical example's escape vocabulary (\n, \t, \", \\, etc.).
-    return JSON.parse(s);
+    return decodeDoubleQuoted(s.slice(1, -1));
   }
   if (s.length >= 2 && s.startsWith("'") && s.endsWith("'")) {
     return s.slice(1, -1).replace(/''/g, "'");
   }
   return s;
+}
+
+// Single-character escapes of a YAML double-quoted scalar (YAML 1.2 §5.7).
+// JSON's set is a subset; the rest (\0 \a \v \e \<space> \N \_ \L \P and
+// the \x / \U code points below) are what YAML writers such as PyYAML emit
+// for non-ASCII and control characters, so a file they wrote must read.
+const DOUBLE_QUOTED_ESCAPES = {
+  '0': '\0', a: '\x07', b: '\b', t: '\t', '\t': '\t', n: '\n', v: '\v', f: '\f',
+  r: '\r', e: '\x1b', ' ': ' ', '"': '"', '/': '/', '\\': '\\',
+  N: '\u0085', _: '\u00a0', L: '\u2028', P: '\u2029',
+};
+const DOUBLE_QUOTED_HEX_ESCAPES = { x: 2, u: 4, U: 8 };
+
+// Decode the body of a double-quoted scalar (quotes already removed).
+function decodeDoubleQuoted(body) {
+  let out = '';
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c !== '\\') { out += c; continue; }
+    const e = body[i + 1];
+    if (e === undefined) throw new Error('yaml: unterminated escape in double-quoted scalar');
+    if (Object.hasOwn(DOUBLE_QUOTED_ESCAPES, e)) { out += DOUBLE_QUOTED_ESCAPES[e]; i++; continue; }
+    const width = DOUBLE_QUOTED_HEX_ESCAPES[e];
+    if (width) {
+      const hex = body.slice(i + 2, i + 2 + width);
+      if (hex.length !== width || !/^[0-9a-fA-F]+$/.test(hex)) {
+        throw new Error(`yaml: bad escape \\${e}${hex} in double-quoted scalar (expected ${width} hex digits)`);
+      }
+      const code = parseInt(hex, 16);
+      if (code > 0x10FFFF) throw new Error(`yaml: escape \\${e}${hex} is not a Unicode code point`);
+      // \u surrogate halves pair up as they do in JSON; \U is a full code point.
+      out += e === 'U' ? String.fromCodePoint(code) : String.fromCharCode(code);
+      i += 1 + width;
+      continue;
+    }
+    throw new Error(`yaml: bad escape \\${e} in double-quoted scalar`);
+  }
+  return out;
 }
 
 function parseFlowMapping(s) {
@@ -457,9 +493,14 @@ function needsQuoting(s) {
   if (/^[\s\-?:,[\]{}#&*!|>'"%@`]/.test(s)) return true;
   // Trailing whitespace would lose data on parse
   if (/[\s]$/.test(s)) return true;
-  // Embedded ": " (mapping ambiguity) or " #" (comment ambiguity)
-  if (/: /.test(s)) return true;
-  if (/ #/.test(s)) return true;
+  // Trailing ":" reads as a mapping key with an empty value (`job:metric:`,
+  // the recording-rule naming convention, is the common victim: as a
+  // sequence item it re-parses as `{ "job:metric": null }`).
+  if (/:$/.test(s)) return true;
+  // Embedded ":<ws>" (mapping ambiguity) or "<ws>#" (comment ambiguity).
+  // The parser treats a tab like a space in both positions.
+  if (/:\s/.test(s)) return true;
+  if (/\s#/.test(s)) return true;
   return false;
 }
 

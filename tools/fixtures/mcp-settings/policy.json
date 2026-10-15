@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "rules": [
+    { "when": { "field": "grafanaUrl", "pattern": "^(?!https://approved\\.)" },
+      "warn": "Non-approved backend host.",
+      "require": { "ack": "I have operator approval for this target" } }
+  ]
+}

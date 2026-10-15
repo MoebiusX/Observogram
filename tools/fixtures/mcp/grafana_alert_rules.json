@@ -1,0 +1,190 @@
+[
+  {
+    "id": 1,
+    "uid": "stack-validation-always",
+    "orgID": 1,
+    "folderUID": "bg0gvuuj8otmof",
+    "ruleGroup": "stack-validation",
+    "title": "StackValidationAlwaysFiring",
+    "condition": "B",
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 300,
+          "to": 0
+        },
+        "datasourceUid": "stack-prom",
+        "model": {
+          "expr": "vector(1)",
+          "instant": true,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 0,
+          "to": 0
+        },
+        "datasourceUid": "__expr__",
+        "model": {
+          "conditions": [
+            {
+              "evaluator": {
+                "params": [
+                  0
+                ],
+                "type": "gt"
+              }
+            }
+          ],
+          "expression": "A",
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "B",
+          "type": "threshold"
+        }
+      }
+    ],
+    "updated": "2026-10-07T02:39:36Z",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "for": "0s",
+    "keep_firing_for": "0s",
+    "labels": {
+      "severity": "test"
+    },
+    "provenance": "file",
+    "isPaused": false,
+    "notification_settings": null,
+    "record": null
+  },
+  {
+    "id": 2,
+    "uid": "payments-error-ratio",
+    "orgID": 1,
+    "folderUID": "payments-alerts",
+    "ruleGroup": "payments",
+    "title": "PaymentsErrorRatioHigh",
+    "condition": "C",
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 600,
+          "to": 0
+        },
+        "datasourceUid": "stack-prom",
+        "model": {
+          "expr": "sum(rate(http_requests_total{job=\"payment-processor\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{job=\"payment-processor\"}[5m]))",
+          "instant": true,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 0,
+          "to": 0
+        },
+        "datasourceUid": "__expr__",
+        "model": {
+          "expression": "A",
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "reducer": "last",
+          "refId": "B",
+          "type": "reduce"
+        }
+      },
+      {
+        "refId": "C",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 0,
+          "to": 0
+        },
+        "datasourceUid": "__expr__",
+        "model": {
+          "conditions": [
+            {
+              "evaluator": {
+                "params": [
+                  0.05
+                ],
+                "type": "gt"
+              }
+            }
+          ],
+          "expression": "B",
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "C",
+          "type": "threshold"
+        }
+      }
+    ],
+    "updated": "2026-10-07T02:39:52Z",
+    "noDataState": "NoData",
+    "execErrState": "Error",
+    "for": "5m",
+    "keep_firing_for": "0s",
+    "annotations": {
+      "summary": "Payment errors above 5%"
+    },
+    "labels": {
+      "severity": "critical",
+      "team": "payments"
+    },
+    "isPaused": false,
+    "notification_settings": null,
+    "record": null
+  },
+  {
+    "id": 3,
+    "uid": "payments-requests-rate",
+    "orgID": 1,
+    "folderUID": "payments-alerts",
+    "ruleGroup": "payments",
+    "title": "payments:requests:rate5m",
+    "condition": "",
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 600,
+          "to": 0
+        },
+        "datasourceUid": "stack-prom",
+        "model": {
+          "expr": "sum(rate(http_requests_total{job=\"payment-processor\"}[5m]))",
+          "instant": true,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "A"
+        }
+      }
+    ],
+    "updated": "2026-10-07T02:39:52Z",
+    "noDataState": "",
+    "execErrState": "",
+    "for": "0s",
+    "keep_firing_for": "0s",
+    "isPaused": false,
+    "notification_settings": null,
+    "record": {
+      "metric": "payments:requests:rate5m",
+      "from": "A"
+    }
+  }
+]

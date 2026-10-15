@@ -7,55 +7,64 @@
 // catalogue made visible: every item is an artefact of the pack and opens its
 // record; nothing is scored. Pure HTML builders over the adapted pack (no
 // state, no DOM), like card-html.mjs; layers-view.mjs wires the actions.
+// A group title and a head fact carry a glossary mark (studio/glossary.mjs)
+// when the bound taxonomy's v2 glossary explains them — nothing otherwise.
 
 import { escapeHtml } from './util.mjs';
+import { classifyArtefact, requireTaxonomy } from './taxonomy.mjs';
+import { verdictBadgeHtml } from './verdict-html.mjs';
+import { glossaryGroupMarkHtml, glossaryLabelHtml } from './glossary.mjs';
 
 // Items a group draws before "+N more" (which opens the layer's full list).
 export const BOARD_ITEMS_SHOWN = 6;
 
-// Per layer: its groups, in order. A group takes the artefacts whose id starts
-// with one of its prefixes (the adapter's id families, tools/lib/adapter.mjs);
+// Per layer: its groups, in order. A group takes the artefacts whose family
+// (tools/lib/artefact-classify.mjs, bound through studio/taxonomy.mjs) has
+// its home there — FAMILY_HOME maps every family to one layer and group;
 // anything no group claims lands in a trailing "Other" group, so the board
-// never hides an artefact. `flow` draws an arrow between consecutive groups
-// (signals move left to right); an `aside` group is an inventory beside the
-// flow, not a step in it. An `optional` group is not drawn when empty.
+// never hides an artefact, and the board never moves an artefact across
+// layers: an artefact whose family lives elsewhere is this layer's "Other".
+// `flow` draws an arrow between consecutive groups (signals move left to
+// right); an `aside` group is an inventory beside the flow, not a step in
+// it. An `optional` group is not drawn when empty.
 export const BOARD_LAYERS = {
   L1: { groups: [
-    { id: 'sli', title: 'SLIs', prefixes: ['SLI-'], draw: 'sli' },
-    { id: 'slo', title: 'SLOs · targets', prefixes: ['SLO-'], draw: 'slo' },
+    { id: 'sli', title: 'SLIs', draw: 'sli' },
+    { id: 'slo', title: 'SLOs · targets', draw: 'slo' },
   ] },
   L2: { flow: true, groups: [
-    { id: 'otel', title: 'Instrumentation', prefixes: ['OTEL-'], draw: 'otel' },
-    { id: 'rcv', title: 'Receivers', prefixes: ['PIP-RCV-', 'SCRAPE-SRC-', 'SCRAPE-'] },
-    { id: 'prc', title: 'Processors', prefixes: ['PIP-PRC-'] },
-    { id: 'exp', title: 'Exporters & storage', prefixes: ['PIP-EXP-', 'BAK-', 'STO-'], draw: 'signal' },
-    { id: 'metrics', title: 'Metric inventory', prefixes: ['METRIC-SRC-', 'METRIC-'], draw: 'inventory', aside: true, optional: true },
+    { id: 'otel', title: 'Instrumentation', draw: 'otel' },
+    { id: 'rcv', title: 'Receivers' },
+    { id: 'prc', title: 'Processors' },
+    { id: 'exp', title: 'Exporters & storage', draw: 'signal' },
+    { id: 'metrics', title: 'Metric inventory', draw: 'inventory', aside: true, optional: true },
   ] },
   L2X: { groups: [
-    { id: 'prof', title: 'Profiles', prefixes: ['PROF-'], optional: true },
-    { id: 'net', title: 'Network', prefixes: ['NET-'], optional: true },
-    { id: 'poe', title: 'Policy engine', prefixes: ['POE-'], optional: true },
-    { id: 'mesh', title: 'Service mesh', prefixes: ['MESH-'], optional: true },
-    { id: 'col', title: 'Collection', prefixes: ['COL-'], optional: true },
+    { id: 'prof', title: 'Profiles', optional: true },
+    { id: 'net', title: 'Network', optional: true },
+    { id: 'poe', title: 'Policy engine', optional: true },
+    { id: 'mesh', title: 'Service mesh', optional: true },
+    { id: 'col', title: 'Collection', optional: true },
   ] },
   L3: { flow: true, groups: [
-    { id: 'qry', title: 'Recording rules', prefixes: ['QRY-'] },
-    { id: 'view', title: 'Derived views', prefixes: ['VIEW-'] },
-    { id: 'dash', title: 'Dashboards', prefixes: ['DASH-'], draw: 'dash' },
-    { id: 'panel', title: 'Dashboard panels', prefixes: ['PANEL-'], draw: 'inventory', aside: true, optional: true },
+    { id: 'qry', title: 'Recording rules' },
+    { id: 'view', title: 'Derived views' },
+    { id: 'dash', title: 'Dashboards', draw: 'dash' },
+    { id: 'panel', title: 'Dashboard panels', draw: 'inventory', aside: true, optional: true },
   ] },
   L4: { flow: true, groups: [
-    { id: 'pol', title: 'Policy & detection', prefixes: ['POL-', 'FCST-'] },
-    { id: 'alr', title: 'Alert routing', prefixes: ['ALR-'], draw: 'route' },
-    { id: 'heal', title: 'Remediation', prefixes: ['HEAL-'] },
+    { id: 'pol', title: 'Policy & detection' },
+    { id: 'alr', title: 'Alert routing', draw: 'route' },
+    { id: 'rule', title: 'Operational alert rules', optional: true },
+    { id: 'heal', title: 'Remediation' },
   ] },
   L5: { groups: [
-    { id: 'base', title: 'Baselines & performance', prefixes: ['BASE-'], draw: 'baseline' },
-    { id: 'chaos', title: 'Chaos experiments', prefixes: ['CHAOS-'] },
-    { id: 'syn', title: 'Synthetic checks', prefixes: ['SYN-'] },
+    { id: 'base', title: 'Baselines & performance', draw: 'baseline' },
+    { id: 'chaos', title: 'Chaos experiments' },
+    { id: 'syn', title: 'Synthetic checks' },
   ] },
   GOV: { groups: [
-    { id: 'imp', title: 'Imports', prefixes: ['IMP-'] },
+    { id: 'imp', title: 'Imports' },
   ] },
 };
 
@@ -100,6 +109,9 @@ function tip(a) {
   return [a.id, a.title, a.desc].filter(Boolean).join(' · ');
 }
 const itemAttrs = (e, cls) => `type="button" class="dvb-item ${cls}" data-ux-action="dv-item" data-key="${escapeHtml(e.key)}" title="${escapeHtml(tip(e.a))}"`;
+// A reviewer's verdict on the entry (`e.verdict`, set by the Discover screen
+// from state; the goldens' entries carry none): the last child of the item.
+const badge = (e) => (e.verdict ? verdictBadgeHtml(e.verdict) : '');
 
 // ---------- one item, per drawing ----------
 
@@ -109,13 +121,13 @@ const DRAW = {
     const a = e.a;
     const name = shortTitle(a);
     const sub = a.desc && a.desc !== a.title ? a.desc : '';
-    return `<button ${itemAttrs(e, 'dvb-line')}><span class="dvb-name">${escapeHtml(name)}</span>${sub ? `<span class="dvb-sub">${escapeHtml(sub)}</span>` : ''}</button>`;
+    return `<button ${itemAttrs(e, 'dvb-line')}><span class="dvb-name">${escapeHtml(name)}</span>${sub ? `<span class="dvb-sub">${escapeHtml(sub)}</span>` : ''}${badge(e)}</button>`;
   },
   // An indicator: what it measures and how (ratio, threshold).
   sli(e) {
     const a = e.a;
     const type = String(a.spec?.type || '').toLowerCase();
-    return `<button ${itemAttrs(e, 'dvb-tile')}>${icon(type === 'ratio' ? 'shield' : 'gauge')}<span class="dvb-name">${escapeHtml(a.title || a.id)}</span>${type ? `<span class="dvb-sub">${escapeHtml(type)}</span>` : ''}</button>`;
+    return `<button ${itemAttrs(e, 'dvb-tile')}>${icon(type === 'ratio' ? 'shield' : 'gauge')}<span class="dvb-name">${escapeHtml(a.title || a.id)}</span>${type ? `<span class="dvb-sub">${escapeHtml(type)}</span>` : ''}${badge(e)}</button>`;
   },
   // An objective: the target as a dial, its indicator and window.
   slo(e) {
@@ -125,7 +137,7 @@ const DRAW = {
     return `<button ${itemAttrs(e, 'dvb-tile dvb-slo')}>
         <span class="dvb-dial" style="--dvb-fill:${fill}"><span class="dvb-dial-val">${escapeHtml(pct || '—')}</span></span>
         <span class="dvb-name">${escapeHtml(a.spec?.sli || a.title || a.id)}</span>
-        ${a.spec?.window ? `<span class="dvb-sub">/ ${escapeHtml(a.spec.window)}</span>` : ''}
+        ${a.spec?.window ? `<span class="dvb-sub">/ ${escapeHtml(a.spec.window)}</span>` : ''}${badge(e)}
       </button>`;
   },
   // The instrumentation contract: its settings as facts.
@@ -141,7 +153,7 @@ const DRAW = {
     ].filter(([, v]) => v);
     return `<button ${itemAttrs(e, 'dvb-facts-item')}>
         <span class="dvb-name">${escapeHtml(e.a.tool || e.a.title || e.a.id)}</span>
-        ${facts.map(([k, v]) => `<span class="dvb-kv"><span class="dvb-k">${escapeHtml(k)}</span><span class="dvb-v">${escapeHtml(v)}</span></span>`).join('')}
+        ${facts.map(([k, v]) => `<span class="dvb-kv"><span class="dvb-k">${escapeHtml(k)}</span><span class="dvb-v">${escapeHtml(v)}</span></span>`).join('')}${badge(e)}
       </button>`;
   },
   // An exporter, backend or store: the signal, then where it goes.
@@ -150,7 +162,7 @@ const DRAW = {
     const signal = a.spec?.signal || (a.tags || []).find(t => ['metrics', 'logs', 'traces', 'profiles'].includes(t)) || '';
     const target = a.spec?.product || a.spec?.kind || a.tool || '';
     if (!signal || !target) return DRAW.line(e);
-    return `<button ${itemAttrs(e, 'dvb-line dvb-signal')}><span class="dvb-chip" data-signal="${escapeHtml(signal)}">${escapeHtml(signal)}</span><span class="dvb-arrow" aria-hidden="true">→</span><span class="dvb-name">${escapeHtml(target)}</span></button>`;
+    return `<button ${itemAttrs(e, 'dvb-line dvb-signal')}><span class="dvb-chip" data-signal="${escapeHtml(signal)}">${escapeHtml(signal)}</span><span class="dvb-arrow" aria-hidden="true">→</span><span class="dvb-name">${escapeHtml(target)}</span>${badge(e)}</button>`;
   },
   // An alert route: the severity, then who is told.
   route(e) {
@@ -158,12 +170,12 @@ const DRAW = {
     const sev = a.spec?.severity || (a.tags || []).find(t => /^SEV\d$/i.test(t)) || '';
     const channels = (a.spec?.channels || []).map(c => (c && typeof c === 'object' ? Object.entries(c).map(([k, v]) => `${k} ${v}`).join(', ') : String(c))).join(' · ');
     if (!sev) return DRAW.line(e);
-    return `<button ${itemAttrs(e, 'dvb-line dvb-route')}><span class="dvb-sev" data-sev="${escapeHtml(String(sev).toUpperCase())}">${escapeHtml(sev)}</span><span class="dvb-arrow" aria-hidden="true">→</span><span class="dvb-name">${escapeHtml(channels || a.desc || '')}</span></button>`;
+    return `<button ${itemAttrs(e, 'dvb-line dvb-route')}><span class="dvb-sev" data-sev="${escapeHtml(String(sev).toUpperCase())}">${escapeHtml(sev)}</span><span class="dvb-arrow" aria-hidden="true">→</span><span class="dvb-name">${escapeHtml(channels || a.desc || '')}</span>${badge(e)}</button>`;
   },
   // A dashboard: a thumbnail tile.
   dash(e) {
     const a = e.a;
-    return `<button ${itemAttrs(e, 'dvb-tile dvb-dash')}>${icon('chart', 'dvb-ico dvb-ico-wide')}<span class="dvb-name">${escapeHtml(a.title || a.id)}</span>${a.tool ? `<span class="dvb-sub">${escapeHtml(a.tool)}</span>` : ''}</button>`;
+    return `<button ${itemAttrs(e, 'dvb-tile dvb-dash')}>${icon('chart', 'dvb-ico dvb-ico-wide')}<span class="dvb-name">${escapeHtml(a.title || a.id)}</span>${a.tool ? `<span class="dvb-sub">${escapeHtml(a.tool)}</span>` : ''}${badge(e)}</button>`;
   },
   // Baselines: the detection and recovery targets.
   baseline(e) {
@@ -176,7 +188,7 @@ const DRAW = {
     if (!facts.length) return DRAW.line(e);
     return `<button ${itemAttrs(e, 'dvb-facts-item')}>
         <span class="dvb-name">${escapeHtml(e.a.title || e.a.id)}</span>
-        ${facts.map(([k, v]) => `<span class="dvb-kv"><span class="dvb-k">${escapeHtml(k)}</span><span class="dvb-v">${escapeHtml(v)}</span></span>`).join('')}
+        ${facts.map(([k, v]) => `<span class="dvb-kv"><span class="dvb-k">${escapeHtml(k)}</span><span class="dvb-v">${escapeHtml(v)}</span></span>`).join('')}${badge(e)}
       </button>`;
   },
 };
@@ -185,14 +197,18 @@ const TILE_DRAWS = new Set(['sli', 'slo', 'dash']);
 
 // ---------- a layer's groups ----------
 
-/** Split a layer's entries ({ a, key }) onto its groups; the rest go to "Other". */
+/**
+ * Split a layer's entries ({ a, key }) onto its groups by family; the rest
+ * go to "Other". Throws until bindTaxonomy() has run (studio/taxonomy.mjs).
+ */
 export function boardGroups(layerId, entries) {
+  requireTaxonomy();
   const def = BOARD_LAYERS[layerId] || { groups: [] };
   const groups = def.groups.map(g => ({ ...g, entries: [] }));
-  const other = { id: 'other', title: 'Other', prefixes: [], optional: true, entries: [] };
+  const other = { id: 'other', title: 'Other', optional: true, entries: [] };
   for (const e of entries || []) {
-    const id = String(e.a?.id ?? '');
-    const g = groups.find(x => x.prefixes.some(p => id.startsWith(p)));
+    const c = classifyArtefact(e.a);
+    const g = c.layer === layerId ? groups.find(x => x.id === c.group) : null;
     (g || other).entries.push(e);
   }
   return { flow: !!def.flow, groups: [...groups, other].filter(g => g.entries.length || !g.optional) };
@@ -205,7 +221,7 @@ function groupHtml(g, layerId) {
     body = '<p class="dvb-none">None in this pack</p>';
   } else if (g.draw === 'inventory') {
     // A long inventory (every metric, every panel): its size and a few names.
-    const names = g.entries.slice(0, 3).map(e => `<span class="dvb-inv-name">${escapeHtml(shortTitle(e.a))}</span>`).join('');
+    const names = g.entries.slice(0, 3).map(e => `<span class="dvb-inv-name">${escapeHtml(shortTitle(e.a))}${badge(e)}</span>`).join('');
     body = `<button type="button" class="dvb-item dvb-inv" data-ux-action="dv-open" data-layer="${escapeHtml(layerId)}" title="Open the layer's full list">
         <span class="dvb-inv-n">${n}</span>${names}<span class="dvb-more-text">Open the list →</span>
       </button>`;
@@ -218,7 +234,7 @@ function groupHtml(g, layerId) {
   }
   return `
     <section class="dvb-group${g.aside ? ' is-aside' : ''}${n ? '' : ' is-empty'}" data-group="${escapeHtml(g.id)}" aria-label="${escapeHtml(`${g.title}: ${n}`)}">
-      <h4 class="dvb-group-title">${escapeHtml(g.title)}${n ? ` <span class="dvb-group-n">${n}</span>` : ''}</h4>
+      <h4 class="dvb-group-title">${escapeHtml(g.title)}${glossaryGroupMarkHtml(layerId, g.id, g.title)}${n ? ` <span class="dvb-group-n">${n}</span>` : ''}</h4>
       ${body}
     </section>`;
 }
@@ -238,10 +254,11 @@ export function boardGroupsHtml(layerId, entries) {
  * the instrumentation contract, the backends, the imports).
  */
 export function boardHeadHtml({ meta = {}, env = '', total = 0, layers = 0, artefacts = [] } = {}) {
-  const byPrefix = (p) => artefacts.filter(a => String(a?.id ?? '').startsWith(p));
-  const otel = byPrefix('OTEL-')[0]?.spec || {};
-  const backends = [...new Set(byPrefix('BAK-').map(a => a.spec?.product || a.tool).filter(Boolean))];
-  const imports = byPrefix('IMP-');
+  requireTaxonomy();
+  const byFamily = (f) => artefacts.filter(a => classifyArtefact(a).family === f);
+  const otel = byFamily('otel')[0]?.spec || {};
+  const backends = [...new Set(byFamily('backend').map(a => a.spec?.product || a.tool).filter(Boolean))];
+  const imports = byFamily('imports');
   const facts = [
     ['service', 'Service', meta.service],
     ['tier', 'Criticality', meta.criticality],
@@ -265,6 +282,6 @@ export function boardHeadHtml({ meta = {}, env = '', total = 0, layers = 0, arte
         <p class="dvb-lede">${escapeHtml([name, version].filter(Boolean).join(' '))}${name || version ? ' · ' : ''}${escapeHtml(size)}</p>
       </div>
       ${facts.length ? `<dl class="dvb-facts">${facts.map(([ic, k, v]) => `
-        <div class="dvb-fact">${icon(ic, 'dvb-fact-ico')}<dt>${escapeHtml(k)}</dt><dd title="${escapeHtml(v)}">${escapeHtml(v)}</dd></div>`).join('')}</dl>` : ''}
+        <div class="dvb-fact">${icon(ic, 'dvb-fact-ico')}<dt>${glossaryLabelHtml(k)}</dt><dd title="${escapeHtml(v)}">${escapeHtml(v)}</dd></div>`).join('')}</dl>` : ''}
     </header>`;
 }

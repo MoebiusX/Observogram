@@ -84,6 +84,7 @@ async function inspect(path, fn) {
       orgs: () => prepare(db, 'SELECT id, root, removed_at FROM orgs ORDER BY created_at, rowid').all(),
       audit: (action) => prepare(db, 'SELECT * FROM audit WHERE action = ? ORDER BY seq').all(action),
       count: (sql) => prepare(db, sql).get().n,
+      rows: (sql) => prepare(db, sql).all().map((r) => ({ ...r })),
     });
   } finally {
     db.close();
@@ -939,6 +940,65 @@ test('journeys: packc journey run/list open no store; a default-org CronJob stil
   assert.ok(c.status === 0 && c.stdout.includes('nightly'), c.stdout + c.stderr);
 });
 
+// ====================== the Boot order gate, slice 4: packs/index.json ======================
+
+// An unreadable (non-ENOENT) packs/index.json — a DIRECTORY, so the read
+// fails with EISDIR deterministically, as root too — aborts and names the
+// path. On a store's FIRST boot step 5 runs after the identity import
+// committed, so the refusal says users and orgs were imported and the
+// registry was not; the database holds import_done, no packs_imported and
+// no pack row, and the next start (the directory replaced by a file)
+// imports the packs and nothing else. On an upgraded store (import_done
+// already set) the same refusal comes from the stale-import guard (step 2,
+// before any write) with no prefix.
+test('boot order 14: an unreadable packs/index.json aborts naming the path — after the identity import on a first boot (the next start imports only the packs), from the guard on an upgraded store', async () => {
+  const ws = workspace();
+  usersFile(ws, { alice: { createdAt: 't', password: REAL } });
+  flatPack(ws);
+  mkdirSync(join(ws, 'packs', 'index.json'));
+  let r = boot(ws);
+  assert.ok(!r.listening && r.code === 'ERR_OBSERVOGRAM_LEGACY_FILE', r.message);
+  assert.ok(r.message.startsWith('users and orgs were imported at this start; the pack registry was not — ' + join(ws, 'packs', 'index.json') + ': cannot be read (EISDIR) — the start imports no pack registry until it can be read'), r.message);
+  assert.ok(/make it readable or move it aside .* the next start imports only the packs$/.test(r.message), r.message);
+  await inspectWs(ws, (v) => {
+    assert.ok(v.meta('import_done'), 'the identity import committed');
+    assert.equal(v.meta('packs_imported'), null, 'the pack registry was not imported');
+    assert.equal(v.meta('pack_index_hashes'), null);
+    assert.equal(v.count('SELECT count(*) AS n FROM packs'), 0, 'no pack row');
+    assert.deepEqual(v.users().map((u) => u.login), ['alice']);
+    assert.equal(v.audit('store.import').length, 1);
+    assert.equal(v.audit('store.packs-import').length, 0);
+  });
+  rmSync(join(ws, 'packs', 'index.json'), { recursive: true });
+  writeFileSync(join(ws, 'packs', 'index.json'), JSON.stringify({ flat: { label: 'Flat', source: 'upload', createdAt: 1700000000000, lastUsedAt: 1700000000000 } }));
+  r = boot(ws, { silent: false });
+  assert.ok(r.listening, r.message);
+  assert.ok(r.stdout.includes(`[store] imported the pack registry of 1 org into ${dbFile(ws)}`), r.stdout);
+  assert.ok(!/\[store\] imported (no users file|\d+ users)/.test(r.stdout), 'the identity import did not run again');
+  await inspectWs(ws, (v) => {
+    assert.ok(v.meta('packs_imported'));
+    assert.equal(v.audit('store.import').length, 1, 'the identity import ran once');
+    assert.equal(v.audit('store.packs-import').length, 1);
+    assert.deepEqual(v.rows('SELECT id, label, source, created_at FROM packs'), [{ id: 'flat', label: 'Flat', source: 'upload', created_at: '2023-11-14T22:13:20.000Z' }]);
+    assert.deepEqual(Object.keys(JSON.parse(v.meta('pack_index_hashes'))), ['packs/index.json']);
+    assert.deepEqual(Object.keys(JSON.parse(v.meta('legacy_hashes'))).sort(), ['orgs.json', 'users.json'], 'legacy_hashes never holds a pack key');
+  });
+
+  // An upgraded store: the guard refuses, before any write, with no prefix.
+  const ws2 = workspace();
+  usersFile(ws2, { alice: { createdAt: 't', password: REAL } });
+  flatPack(ws2);
+  assert.ok(boot(ws2).listening);
+  await inspectWs(ws2, (v) => assert.deepEqual(JSON.parse(v.meta('pack_index_hashes')), { 'packs/index.json': { absent: true } }));
+  mkdirSync(join(ws2, 'packs', 'index.json'));
+  r = boot(ws2);
+  assert.ok(!r.listening && r.code === 'ERR_OBSERVOGRAM_LEGACY_FILE', r.message);
+  assert.ok(r.message.startsWith(join(ws2, 'packs', 'index.json') + ': cannot be read (EISDIR) — the start imports no pack registry'), r.message);
+  assert.ok(!/users and orgs were imported/.test(r.message), 'no prefix: nothing was imported at this start');
+  rmSync(join(ws2, 'packs', 'index.json'), { recursive: true });
+  assert.ok(boot(ws2).listening, 'the directory gone, the start passes (the root is recorded absent)');
+});
+
 // ====================== :memory: ======================
 
 test(':memory: prints its warning, writes no marker, and a restart imports again', async () => {
@@ -972,13 +1032,13 @@ test(':memory: over orgs.json and flat data serves the flat data in place (defau
     writeFileSync(join(ws, 'packs', 'flat.pack.yaml'), pack);
     orgsFile(ws, orgs);
     if (!entryLine) usersFile(ws, { alice: { createdAt: 't', password: REAL } });   // two orgs need an identity
-    // The store moves and writes nothing; the only new file is the pack
-    // registry's own index, in the root it serves (., as any flat server
-    // writes it). The two-org case also gets the server's own session
-    // secret and orgs/acme; orgs/default never appears.
+    // The store moves and writes nothing under an org root: no index.json
+    // (the pack registry is the packs table, slice 4) and no packs/
+    // directory (the rehydrate is read-only). The two-org case gets the
+    // server's own session secret; orgs/default never appears.
     const storeTree = () => {
       const t = treeOf(ws);
-      const serverOwn = entryLine ? ['packs/index.json'] : ['packs/index.json', 'session-secret', 'orgs', 'orgs/acme', 'orgs/acme/packs'];
+      const serverOwn = entryLine ? [] : ['session-secret'];
       for (const k of serverOwn) delete t[k];
       return t;
     };
@@ -1013,8 +1073,8 @@ test(':memory: over a half-migrated workspace plans the default at orgs/default,
   writeFileSync(join(ws, 'orgs', 'default', 'packs', 'moved.pack.yaml'), pack);
   writeFileSync(join(ws, 'deploys.jsonl'), '{}\n');
   orgsFile(ws, { default: { name: 'Default', members: {} } });
-  // The only new file is the pack registry's own index, in the root it serves.
-  const storeTree = () => { const t = treeOf(ws); delete t['orgs/default/packs/index.json']; return t; };
+  // Nothing new under the workspace: no index.json, no directory (slice 4).
+  const storeTree = () => treeOf(ws);
   const before = treeOf(ws);
   const env = { OBSERVOGRAM_DB: ':memory:', OBSERVOGRAM_API_TOKEN: token };
   const b = boot(ws, { env, silent: false });

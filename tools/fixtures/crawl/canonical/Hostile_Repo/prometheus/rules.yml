@@ -1,0 +1,25 @@
+groups:
+  - name: hostile-slo
+    interval: 30
+    rules:
+      - record: hostile:availability:good
+        expr: sum(rate(http_requests_total{code!~"5.."}[5m]))
+      - record: hostile:availability:total
+        expr: sum(rate(http_requests_total[5m]))
+      - record: :node_memory_MemAvailable_bytes:sum
+        expr: sum(node_memory_MemAvailable_bytes)
+      - record: apiserver_request:burnrate1d
+        expr: sum(rate(apiserver_request_total{code=~"5.."}[1d])) / sum(rate(apiserver_request_total[1d]))
+      - record: HTTP:Requests:Rate
+        expr: sum(rate(http_requests_total[5m]))
+      - alert: HostileAvailabilityBurn
+        expr: hostile:availability:good / hostile:availability:total < 0.99
+        for: 5m
+        labels:
+          severity: critical
+      - alert: DiskFull
+        expr: node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1
+        for: 10m
+        labels:
+          severity: critical
+          priority: 1

@@ -55,20 +55,35 @@ export function requireText(value, field, { max = 200 } = {}) {
   return value;
 }
 
+// What nowIso() and new Date(ms).toISOString() produce — the one time
+// format the rows hold, so ISO strings sort as time.
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+export function requireIso(value, field) {
+  if (typeof value !== 'string' || !ISO_TIME.test(value)) {
+    throw new TypeError(`observogram store: ${field} must be an ISO time string (toISOString()), not ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
 export function optionalText(value, field, opts) {
   return value === undefined || value === null ? null : requireText(value, field, opts);
 }
 
 // Builds `SET a = :a, b = :b` from a patch whose keys are mapped to
 // columns, skipping undefined values. Column names come from the map,
-// never from the caller.
+// never from the caller. `fields` lists the patch keys written — the API
+// names, in the map's order — for an audit row's `{ fields }`, which
+// spells them as the create rows and the API's `changed` do.
 export function setClause(patch, columns) {
   const sets = [];
   const params = {};
+  const fields = [];
   for (const [key, column] of Object.entries(columns)) {
     if (patch[key] === undefined) continue;
     sets.push(`${column} = :${column}`);
     params[column] = patch[key];
+    fields.push(key);
   }
-  return { sql: sets.join(', '), params };
+  return { sql: sets.join(', '), params, fields };
 }

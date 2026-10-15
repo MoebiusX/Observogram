@@ -1,0 +1,22 @@
+{
+  "uid": "3b5d5c3712955042212316173ccf37be",
+  "title": "Kubernetes Pods",
+  "tags": [
+    "synthetic"
+  ],
+  "schemaVersion": 39,
+  "version": 3,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Pod restarts",
+      "type": "timeseries",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(kube_pod_container_status_restarts_total[15m]))"
+        }
+      ]
+    }
+  ]
+}

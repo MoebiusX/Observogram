@@ -16,8 +16,9 @@ import {
 } from './constants.mjs';
 import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } from './state.mjs';
 import {
-  api, loadCatalog, validateUploaded, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError, deployRefusal,
-  setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls, signOutOthersText,
+  api, loadCatalog, loadTaxonomy, validateUploaded, registeredOrValidated, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, savedOrgBy, orgChipModel, deniedError, deployRefusal,
+  setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls, signOutOthersText, recallMcpEndpoint, rememberMcpEndpoint,
+  rememberLiveJob, recallLiveJob, forgetLiveJob,
   loadDeployProfiles, storeDeployProfile, removeDeployProfile,
 } from './api.mjs';
 import {
@@ -31,7 +32,7 @@ import {
 } from './focus.mjs';
 import { escapeHtml, toast, fmtRelative, installDialogFocusTrap, downloadText } from './util.mjs';
 import {
-  personalName, announce, parseRecentServices, orderServicesByRecent,
+  personalName, announce, parseRecentServices,
 } from './ux-kit.mjs';
 import { renderSchemaView } from './schema-view.mjs';
 import { renderConformanceView } from './conformance-view.mjs';
@@ -47,6 +48,44 @@ import { catalogToDeployManifest } from './artifact-model.mjs';
 import { computeDeployTransitions } from './verify-deploy.mjs';
 import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-view.mjs';
 import { initHost } from './host.mjs';
+import {
+  recentServicesKey, buildNoOrgModel, buildServicesHomeModel, buildServicePageModel, accessModel, servicesStatusOf,
+  packForService, newestPack, serviceChipModel, servicesSelectModel, discoverEmptyNote, buildPrefillFromService, verdictKey, buildHandoffPlan, buildDefineOriginNote, buildExitRefusal,
+  buildServiceEditorModel, buildServicePatch, serviceSaveStatus,
+} from './services-model.mjs';
+import { loadOrgs, loadServices, loadService, patchService, verdictLoader, requestJson } from './services-api.mjs';
+import { pingMcp, readLiveJobs, startLiveJob, pollLiveJob, cancelLiveJob } from './live-api.mjs';
+import {
+  pingResultModel, rebuildNoteText, durationText, liveTargetKey, stepTwoVisible, preselectedKind, scopeFormModel, scopeFromForm,
+  planModel, gateLogModel, elapsedText, liveResultModel, LIVE_JOB_GONE_TEXT, liveKindSuffix,
+} from './live-model.mjs';
+import { renderPingResult, renderGateLog, renderLiveResult } from './live-view.mjs';
+import { renderServerSettings } from './mcp-settings-view.mjs';
+import {
+  settingsGateModel, settingsTargetModel, descriptorReadModel, statusLine, ledeText, fieldInputSpec, actionNote, primaryBlock, actionBlock, policyView, serverAckModel, secretsEmptiedLine, verifiedLine,
+  proxyDescribeModel, proxyOutcomeModel,
+} from './mcp-settings-model.mjs';
+import { loadServerSettingsConfig, loadSettingsLibs, readDescriptorDirect, submitDirect, describeViaProxy, submitViaProxy } from './mcp-settings-api.mjs';
+import { renderNoOrgHome, renderServicesHome, renderServicePage, renderServiceEditor, markUnavailable } from './services-view.mjs';
+import { serverNeeded, staticRemedy, staticInputOf } from './static-remedies.mjs';
+import {
+  BUILT_SECTIONS, BUILT_EDITORS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsSectionHead, settingsAboveRank,
+  buildEnvironmentsSectionModel, buildEndpointsSectionModel, buildMembersSectionModel, buildAuditSectionModel, auditQuery,
+  buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus,
+  buildMemberAddBody, memberSaveStatus, orgRenameStatus, lastAdmin, leftOrgText,
+  buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
+  mcpTargetModel, mcpTargetBody, mcpTargetMissingText, rollbackTargetMissingText, mcpRegisterCheck, profileEndpointNote, endpointDrift,
+  buildUsersSectionModel, buildUserCreateBody, userCreateStatus, userActionStatus, temporaryPassword,
+  activeOrgChoice, isActingOrg, orgChipEntries, orgChipLabel, actingRecovery,
+  buildOrgsSectionModel, buildOrgCreateBody, orgCreateStatus, orgRemoveStatus, buildJoinRoleSectionModel, joinRoleBody, joinRoleStatus,
+} from './settings-model.mjs';
+import {
+  loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
+  addMember, patchMember, removeMember, renameOrg, loadAudit,
+  loadUsers, createUser, userAction, setOwner, loadAdminOrgs, loadJoinRole, createOrg, removeOrg, putJoinRole,
+} from './settings-api.mjs';
+import { renderSettings, renderSettingsEditor, renderMcpTarget, readAuditDrafts } from './settings-view.mjs';
+import { bindTaxonomy } from './taxonomy.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
   BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, enterStep as enterBuildStep, stepAfterInstantiate as buildStepAfterInstantiate, focusFallbackSelectors, instantiateBody as buildInstantiateBody,
@@ -67,6 +106,16 @@ import { renderBuildDefinition } from './build-definition-view.mjs';
 import { renderBuildSheet } from './build-sheet-view.mjs';
 import { revealTodo } from './build-atoms.mjs';
 import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from './build-label.mjs';
+import { loadBrand } from './brand.mjs';
+import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
+
+// The brand (studio/brand.mjs): kicked off here, at module top level, so the
+// one fetch (/lib/brand.mjs, modulepreloaded by the shell) overlaps the
+// module graph instead of following it; boot() awaits it first. Marked
+// handled so a rejection waits for that await (under node — the graph
+// test — the specifier cannot resolve).
+const brandReady = loadBrand();
+brandReady.catch(() => {});
 
 // `state`, the `$`/`$$` DOM helpers and the persistence layer now live in
 // studio/state.mjs (imported above).
@@ -96,9 +145,30 @@ async function rehydrateFromPersistence() {
   // canonical is re-instantiated from them, never read back. A session
   // that was building resumes on its step whether or not a pack was open.
   if (saved.build && typeof saved.build === 'object') restoreBuildDraft(saved.build);
+  // A Build or a workspace opened from a service page keeps its binding across a
+  // reload (the exit bar back to the page, the bound environment option, the
+  // empty Discover's sentence) — read before the build branch returns; the
+  // service-page branch below sets both again from the record.
+  if (Number.isInteger(saved.serviceId)) state.serviceId = saved.serviceId;
+  if (typeof saved.serviceEnv === 'string') state.serviceEnv = saved.serviceEnv;
   if (saved.mode === 'build') {
     enterBuildMode(state.build.step);
     return true;
+  }
+  // The service page (STORE_PLAN §6, slice 6a): GET /api/services/:id again —
+  // a record deleted meanwhile (404) drops the snapshot and lands on home.
+  // The key is one org's, so an org mismatch can no longer happen here.
+  if (saved.mode === 'service' && Number.isInteger(saved.serviceId)) {
+    const ok = await enterServicePage(saved.serviceId, typeof saved.serviceEnv === 'string' ? saved.serviceEnv : null, { rehydrate: true });
+    if (ok) return true;
+    persistence.clear();
+    return false;
+  }
+  // Settings (slice 6b): it opens in every posture — a section the rank
+  // cannot read falls back to the first it can — so it always answers true.
+  // The section is set before the first render (enterSettings does).
+  if (saved.mode === 'settings') {
+    return enterSettings(typeof saved.settingsSection === 'string' ? saved.settingsSection : null, { rehydrate: true });
   }
   const allKnown = [...(state.catalog || []), ...(state._examplesCache || [])];
   const aMeta = allKnown.find(p => p.id === saved.selectedPackId);
@@ -200,6 +270,10 @@ async function loadPack(id, env) {
   state.conformance = conformance;
   state.uploadedSource = null;
   state.symbolTable = buildSymbolTable(pack);
+  // The reviewer's verdicts on it (GAP batch 2; none for a catalogue pack):
+  // after the pack, never blocking it — a server that cannot answer leaves
+  // the studio as it was.
+  await loadVerdicts(id);
 }
 
 // ---------- selectors ----------
@@ -216,43 +290,23 @@ function packSelectLabel(p, { prefixUploaded = false } = {}) {
   const prefix = prefixUploaded && p.source === 'uploaded' ? '📂 ' : '';
   const version = p.version || '?';
   const source = uploadedSourceHint(p);
-  return `${prefix}${p.label} · v${version}${source ? ` · from ${source}` : ''}`;
+  return `${prefix}${p.label}${liveKindSuffix(p)} · v${version}${source ? ` · from ${source}` : ''}`;
 }
 
-function normalizeServiceKey(value) {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
-
-function serviceNamesForPack(p) {
-  const names = new Set();
-  const add = (value) => {
-    const v = String(value || '').trim();
-    if (v) names.add(v);
-  };
-  add(p?.service);
-  add(p?.namespace);
-  add(p?.name);
-  if (Array.isArray(p?.services)) p.services.forEach(add);
-  return [...names];
-}
-
-function primaryServiceName(p) {
-  return String(p?.service || p?.namespace || p?.name || p?.label || '').trim();
-}
-
-function serviceKeyForPack(p) {
-  return normalizeServiceKey(primaryServiceName(p));
-}
-
-function isLiveAggregatePack(p) {
-  const text = [
-    p?.id, p?.label, p?.name, p?.description, p?.source,
-  ].filter(Boolean).join(' ').toLowerCase();
-  return /\b(live|mcp|production-live|draft-from-mcp)\b/.test(text);
-}
+// The service rules — the key every service goes by, the names a pack
+// spells, its primary, the live-aggregate test and the per-pack plan
+// (`servicesForPack`) — live in tools/lib/service-keys.mjs, shared with
+// the server so the rows it writes and the tiles drawn here can never name
+// different services. Bound in boot() from `/lib/service-keys.mjs` (the
+// studio loads tools/lib at call time, never statically: a static import
+// would make the Node suites that import this module resolve `/lib/`).
+// Only what the studio calls is bound: `primaryServiceName` is reached
+// through `serviceKeyForPack` and `servicesForPack`.
+let normalizeServiceKey;
+let serviceNamesForPack;
+let serviceKeyForPack;
+let isLiveAggregatePack;
+let servicesForPack;
 
 // `ownOnly` (the home tiles): only the packs in this workspace's catalog —
 // never the bundled reference examples, which are not the user's services
@@ -293,13 +347,10 @@ function serviceCatalogue({ ownOnly = false } = {}) {
     : [...(state.catalog || []), ...(state._examplesCache || [])];
   for (const p of packs) {
     if (!p?.ok) continue;
-    const aggregate = isLiveAggregatePack(p);
-    const primaryKey = serviceKeyForPack(p);
-    if (!aggregate) add(primaryServiceName(p), p);
-    for (const svc of p.services || []) {
-      if (aggregate && normalizeServiceKey(svc) === primaryKey) continue;
-      add(svc, p);
-    }
+    // The per-pack rule (the primary unless the pack is an aggregate, then
+    // its services[] members) is the module's: the same plan the server
+    // links as rows.
+    for (const s of servicesForPack(p)) add(s.name, p);
   }
   const current = state.pack?.meta?.service;
   if (current && !ownOnly) add(current);
@@ -335,44 +386,82 @@ function clearPackBState() {
   state.viewFocus = 'a';
 }
 
+// The header SERVICE selector reads the table (design §6.3): one option per
+// record — sorted by name — then, apart after a disabled separator, the own
+// derived services no record covers (never the examples' services, A-M5) and
+// the open catalogue pack's own service as "(catalogue pack)". With the table
+// unavailable, the list is today's own derived one. Choosing a record goes
+// through the SAME resolver as the card → page → Discover path (A-M4); a
+// record with no pack opens its page (D2); a derived-only key re-picks Pack A
+// by the resolver's rule (the newest declared pack, else the newest aggregate).
 function renderServiceSelect() {
   const sel = $('#service-select');
   if (!sel) return;
-  const services = serviceCatalogue();
+  ensureServiceFromPack();
+  const currentA = state.catalog.find(p => p.id === state.selectedPackId);
+  const current = state.selectedPackId
+    ? (serviceKeyForPack(currentA) || normalizeServiceKey(state.pack?.meta?.service) || null)
+    : null;
+  const m = servicesSelectModel(Array.isArray(state.services) ? state.services : null,
+    serviceCatalogue({ ownOnly: true }), state.selectedService, { current });
   sel.innerHTML = '';
-  if (!services.length) {
+  if (m.disabled) {
     const opt = document.createElement('option');
     opt.value = '';
     opt.textContent = '— service —';
     sel.appendChild(opt);
     sel.disabled = true;
+    updateObservaServiceChip();
     return;
   }
   sel.disabled = false;
-  if (!state.selectedService || !services.some(s => s.key === state.selectedService)) {
-    ensureServiceFromPack();
-    if (!state.selectedService || !services.some(s => s.key === state.selectedService)) {
-      state.selectedService = services[0].key;
-    }
-  }
-  for (const service of services) {
+  // A key nothing lists any more (a record deleted since the state was saved):
+  // the first listed service, as today — the open pack's own key is always listed.
+  if (!m.value) state.selectedService = m.options[0]?.value ?? m.extra[0]?.value ?? null;
+  const addOption = (o) => {
     const opt = document.createElement('option');
-    opt.value = service.key;
-    opt.textContent = service.label;
+    opt.value = o.value;
+    opt.textContent = o.label;
+    if (o.serviceId != null) opt.dataset.serviceId = String(o.serviceId);
     sel.appendChild(opt);
+  };
+  m.options.forEach(addOption);
+  if (m.extra.length) {
+    if (m.options.length) {
+      const sep = document.createElement('option');
+      sep.disabled = true;
+      sep.value = '';
+      sep.textContent = '— from packs only —';
+      sel.appendChild(sep);
+    }
+    m.extra.forEach(addOption);
   }
   sel.value = state.selectedService || '';
   updateObservaServiceChip();
   sel.onchange = () => {
-    state.selectedService = sel.value || null;
-    const currentA = state.catalog.find(p => p.id === state.selectedPackId);
+    const value = sel.value || null;
+    const record = m.options.find(o => o.value === value && o.serviceId != null);
+    if (record) {
+      const service = findServiceRecord(record.serviceId);
+      const { pack } = packForService(service, state.catalog, { isLiveAggregatePack });
+      const currentB = [...(state.catalog || []), ...(state._examplesCache || [])].find(p => p.id === state.compareBId);
+      if (state.compareBId && !packMatchesService(currentB, record.value, { side: 'b' })) clearPackBState();
+      state.diff = null;
+      if (!pack) { enterServicePage(record.serviceId, state.selectedEnv); return; }
+      const view = ['layers', 'compare', 'compile'].includes(state.view) ? state.view : 'layers';
+      openServiceIn(view, { serviceId: record.serviceId, env: state.selectedEnv });
+      return;
+    }
+    state.selectedService = value;
     if (state.selectedPackId && !packMatchesService(currentA, state.selectedService, { side: 'a' })) {
-      const nextA = state.catalog.find(p => p.ok && packMatchesService(p, state.selectedService, { side: 'a' }));
+      const matches = state.catalog.filter(p => p.ok && packMatchesService(p, state.selectedService, { side: 'a' }));
+      const nextA = newestPack(matches, p => !isLiveAggregatePack(p)).pack;
       state.selectedPackId = nextA?.id || null;
       state.selectedEnv = state.selectedPackId ? defaultEnvFor(state.selectedPackId) : null;
       state.pack = null;
       state.conformance = null;
       state.symbolTable = null;
+      emptyVerdicts();
     }
     const currentB = [...(state.catalog || []), ...(state._examplesCache || [])].find(p => p.id === state.compareBId);
     if (state.compareBId && !packMatchesService(currentB, state.selectedService, { side: 'b' })) clearPackBState();
@@ -405,8 +494,17 @@ function renderPackSelect() {
     if (!p.ok) opt.disabled = true;
     sel.appendChild(opt);
   }
+  // A service with no pack here (a record opened from its page): the bar says
+  // so instead of keeping the previous pack's text.
+  if (!options.length) {
+    const opt = document.createElement('option');
+    opt.value = ''; opt.textContent = '— no pack —';
+    sel.appendChild(opt);
+  }
+  sel.disabled = !options.length;
   sel.value = state.selectedPackId || (options.find(p => p.ok)?.id ?? '');
   sel.onchange = () => {
+    if (!sel.value) return;
     state.selectedPackId = sel.value;
     state.selectedEnv = defaultEnvFor(state.selectedPackId);
     const entry = state.catalog.find(p => p.id === state.selectedPackId);
@@ -560,6 +658,14 @@ function renderEnvSelect() {
     return;
   }
   sel.disabled = false;
+  // An environment bound from a service record that the pack does not declare
+  // (the row exists; the overlay is a no-op and the grade is the pack's base
+  // grade): the select says so instead of showing another environment.
+  if (state.selectedEnv && !envs.includes(state.selectedEnv)) {
+    const opt = document.createElement('option');
+    opt.value = state.selectedEnv; opt.textContent = `${state.selectedEnv} (service record — no overlay in the pack)`;
+    sel.appendChild(opt);
+  }
   for (const e of envs) {
     const opt = document.createElement('option');
     opt.value = e; opt.textContent = e;
@@ -762,15 +868,25 @@ export function renderLayerFilterChips() {
 
 export function renderMainView() {
   const view = $('#layer-view');
+  // The audit's filters as typed but not applied survive the repaint.
+  const auditDrafts = state.mode === 'settings' ? readAuditDrafts(view) : null;
   view.innerHTML = '';
   // Persistence: every mutation chain ends here, so this is the single
   // hook for the debounced write. Cheap when suspended (boot phase).
   persistence.schedule();
+  // The record editors live in their own hosts on <body> (syncServiceEditor
+  // and syncSettingsEditor draw or clear them).
+  syncServiceEditor();
+  syncSettingsEditor();
   if (state.mode === 'home') {
     if (state.homeVariant === 'gate') renderServiceGate();
     else renderHomeView();
     return;
   }
+  // Settings (STORE_PLAN §6 item 3, slice 6b): the org's environments and MCP endpoints.
+  if (state.mode === 'settings') { renderSettingsHost(view, auditDrafts); return; }
+  // The service page (STORE_PLAN §6, slice 6a): one record, its environments as tabs.
+  if (state.mode === 'service') { renderServicePageHost(view); return; }
   // The BUILD journey renders its own three steps (Define · Compile ·
   // Verify) under BUILD_TABS; nothing below applies until "Open in
   // Discover" hands the produced pack to the analysis journey. Its pop-up
@@ -954,6 +1070,7 @@ async function handleFile(file) {
     state.pack = res.adapted;
     state.conformance = withPlaceholderPasses(res);
     state.symbolTable = buildSymbolTable(res.adapted);
+    await loadVerdicts(res.registered?.id);
     state.uploadedSource = file.name;
     state.activeLayer = 'L1';
     state.activeCardKey = null;
@@ -969,7 +1086,7 @@ async function handleFile(file) {
       // Refresh the catalog so the picker shows the new uploaded pack
       // alongside the file-backed ones. Pack B picker reads the same
       // catalog so it's available there too.
-      await loadCatalog();
+      await refreshCatalogue();
     }
     state.selectedService = serviceKeyForPack(state.catalog.find(p => p.id === state.selectedPackId))
       || normalizeServiceKey(state.pack?.meta?.service)
@@ -983,7 +1100,7 @@ async function handleFile(file) {
     renderTabs();
     renderMainView();
     if (res.legacy) {
-      toast(`Loaded ${file.name} — previous (layered JSON) format upconverted to canonical v1.3: ${res.legacy.mapped} artefacts mapped, ${res.legacy.scaffolded} scaffolds`);
+      toast(`Loaded ${file.name} — previous (layered JSON) format upconverted to canonical v1.4: ${res.legacy.mapped} artefacts mapped, ${res.legacy.scaffolded} scaffolds`);
     } else {
       toast(`Loaded ${file.name}`);
     }
@@ -1054,8 +1171,9 @@ function setupUpload() {
         setTimeout(() => {
           const panelUrl = document.getElementById('draft-mcp-url');
           if (panelUrl) panelUrl.value = 'https://www.krystaline.io/mcp/public';
-          const goBtn = document.getElementById('draft-mcp-go-btn');
-          if (goBtn) goBtn.click();
+          // Test the connection first; the person then chooses Draft or Snapshot (D8).
+          const testBtn = document.getElementById('live-test-btn');
+          if (testBtn) testBtn.click();
         }, 60);
         return;
       }
@@ -1201,7 +1319,7 @@ const OBSERVA_ADV = [
   { id: 'neuron',       label: 'Neuron',       sub: 'observability control · journeys · chains · causes · posture · trends' },
   { id: 'references',   label: 'References',   sub: 'catalogue reference packs · benchmark vs best practice' },
   { id: 'conformance',  label: 'Conformance',  sub: 'maturity rubric · MUST/SHOULD per tier' },
-  { id: 'schema',       label: 'Schema',       sub: 'canonical YAML + v1.3 validation' },
+  { id: 'schema',       label: 'Schema',       sub: 'canonical YAML + v1.4 validation' },
   { id: 'otlp',         label: 'OTLP Coverage', sub: 'receiver protocols · per-signal exporters' },
   { id: 'traceability', label: 'Traceability', sub: 'requirements · proof chain · repo vs live' },
   { id: 'atlas',        label: 'Atlas',        sub: 'visual atlases · strata · periodic · skyline' },
@@ -1270,7 +1388,14 @@ function routeTo(id) {
   // mode='home' and every tab would keep rendering the landing hero (the
   // bug behind "why is Discover like the landing hero page?"). The pack is
   // still null until the user loads one — Discover's empty state handles that.
-  if (state.mode === 'home' || state.mode === 'build') state.mode = 'single';
+  // A journey tab clicked on the service page opens the service's pack bound
+  // to the page's environment (the one resolver, services-model.mjs
+  // packForService) — never the empty workspace.
+  if (state.mode === 'service' && (id === 'layers' || id === 'compare' || id === 'compile') && state.serviceId) {
+    openServiceIn(id, { serviceId: state.serviceId, env: state.serviceEnv });
+    return;
+  }
+  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings') state.mode = 'single';
   state.view = id;
   state.activeCardKey = null;
   state.activeLayer = ({ compile: 'COMPILE', conformance: 'CONF', schema: 'CONF', atlas: 'ATLAS', layers: state.layerFilter !== 'all' ? state.layerFilter : 'L1' })[id] || 'L1';
@@ -1304,7 +1429,11 @@ function trackContextBarHeight() {
   syncContextBarHeight();
 }
 
-function installObservaChrome() {
+// The chrome strings come from the brand (studio/brand.mjs, state.brand.chrome)
+// — never a literal here, so a rebadged server rebadges the header, and the
+// default reads exactly what it always did. logo.svg is the one raw-HTML
+// brand field; this innerHTML is the only place it lands.
+function installObservaChrome(chrome) {
   if (document.querySelector('.observa-hdr')) return;
   document.body.classList.add('chrome-observa');
 
@@ -1312,26 +1441,15 @@ function installObservaChrome() {
   hdr.className = 'observa-hdr';
   hdr.innerHTML = `
     <div class="observa-hdr-inner">
-      <a class="observa-brand" href="/" aria-label="Observogram home">
+      <a class="observa-brand" href="/" aria-label="${escapeHtml(chrome.homeAriaLabel)}">
         <span class="observa-logo" aria-hidden="true">
-          <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-              <linearGradient id="observaLogoG" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%"  stop-color="#3b82f6"/>
-                <stop offset="50%" stop-color="#a855f7"/>
-                <stop offset="100%" stop-color="#10b981"/>
-              </linearGradient>
-            </defs>
-            <path d="M18 3 L31 11 L31 25 L18 33 L5 25 L5 11 Z" stroke="url(#observaLogoG)" stroke-width="2" fill="none"/>
-            <path d="M18 11 L25 15 L25 22 L18 26 L11 22 L11 15 Z" stroke="url(#observaLogoG)" stroke-width="1.4" fill="rgba(168,85,247,0.12)"/>
-            <circle cx="18" cy="18" r="2.4" fill="url(#observaLogoG)"/>
-          </svg>
+          ${chrome.logoHtml('observa-logo-img')}
         </span>
         <span class="observa-brand-text">
-          <span class="observa-wordmark">OBSERVO<strong>GRAM</strong></span>
+          <span class="observa-wordmark">${chrome.wordmarkHtml('strong', '', { upper: true })}</span>
           <span class="observa-tagline">
             <!-- Home names no journey: the stepper appears once one is chosen. -->
-            <span class="observa-tagline-home">the observability compiler</span>
+            <span class="observa-tagline-home">${escapeHtml(chrome.tagline)}</span>
             <span class="observa-tagline-step">Discover</span>
             <span class="observa-tagline-dot">·</span>
             <span class="observa-tagline-step">Diagnose</span>
@@ -1342,7 +1460,7 @@ function installObservaChrome() {
       </a>
 
       <!-- The active org (Stage 2 tenancy) — same rule as the SERVICE
-           chip: which workspace Observogram is reading must never be a
+           chip: which workspace the studio is reading must never be a
            mystery. Becomes a switcher when the user has several orgs. -->
       <span class="observa-service observa-org" id="observa-org" hidden>
         <span class="observa-service-key">ORG</span>
@@ -1350,7 +1468,7 @@ function installObservaChrome() {
       </span>
 
       <!-- The active service — always visible once chosen (the gate or
-           the header SERVICE selector set it). "Observogram is configured
+           the header SERVICE selector set it). "The studio is configured
            for MY service" must never be a mystery. -->
       <span class="observa-service" id="observa-service" hidden>
         <span class="observa-service-key">SERVICE</span>
@@ -1359,7 +1477,7 @@ function installObservaChrome() {
 
       <nav class="observa-tabs" role="tablist" aria-label="Primary"></nav>
 
-      <div class="observa-actions" aria-label="Advanced tools">
+      <div class="observa-actions" aria-label="Advanced tools and account">
         <div class="observa-adv-wrap">
           <button type="button" class="observa-action observa-adv-toggle"
                   aria-haspopup="true" aria-expanded="false" aria-controls="observa-adv-menu"
@@ -1377,9 +1495,13 @@ function installObservaChrome() {
               </button>
             `).join('')}
             <div class="observa-adv-menu-head">Administration</div>
+            <button type="button" class="observa-adv-item" role="menuitem" data-action="settings">
+              <span class="observa-adv-item-label">Settings</span>
+              <span class="observa-adv-item-sub">environments, MCP endpoints, members, the audit, users, organisations, the join role…</span>
+            </button>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="mcp">
               <span class="observa-adv-item-label">Live MCP connection</span>
-              <span class="observa-adv-item-sub" id="observa-adv-mcp-sub">refresh production-live from an MCP server</span>
+              <span class="observa-adv-item-sub" id="observa-adv-mcp-sub">test it, rebuild production-live</span>
             </button>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="api">
               <span class="observa-adv-item-label">Pack catalogue API</span>
@@ -1394,7 +1516,7 @@ function installObservaChrome() {
               <span class="observa-adv-item-sub">drop uploaded packs and saved state · asks first</span>
             </button>
             <button type="button" class="observa-adv-item observa-adv-about" role="menuitem" data-action="about">
-              <span class="observa-adv-item-label">About Observogram</span>
+              <span class="observa-adv-item-label">${escapeHtml(chrome.aboutLabel)}</span>
               <span class="observa-adv-item-sub" id="observa-about-sub">version &amp; build</span>
             </button>
           </div>
@@ -1459,6 +1581,7 @@ function installObservaChrome() {
       closeAdv();
       const action = item.dataset.action;
       if (action === 'about') { openAboutModal(); return; }
+      if (action === 'settings') { enterSettings(null); return; }
       // Admin tools proxy to the header's original controls. Deferred, so
       // this click's own document-level outside-click handlers (the MCP
       // panel closes on any click outside it) run before the panel opens.
@@ -1513,7 +1636,7 @@ function paintObservaActiveTab() {
   // The landing/reset hero is NOT a tab — it's the pre-workspace start
   // screen. Clearing the active marker there is what keeps Discover from
   // "being" the landing hero: you only light a tab once you're working.
-  const onLanding = state.mode === 'home';
+  const onLanding = state.mode === 'home' || state.mode === 'service' || state.mode === 'settings';
   for (const btn of document.querySelectorAll('.observa-tab')) {
     // A workflow tab is active only when we're NOT in an advanced view
     // and NOT on the landing screen.
@@ -1528,9 +1651,15 @@ function paintObservaActiveTab() {
 }
 
 async function boot() {
-  // Mount the new chrome FIRST so the user sees the demo shape even
-  // while the catalog loads.
-  installObservaChrome();
+  // The brand first (kicked off at module top level, see brandReady), then
+  // the chrome — mounted before anything else so the user sees the demo
+  // shape even while the catalog loads.
+  state.brand = await brandReady;
+  installObservaChrome(state.brand.chrome);
+  // The shared service rules (tools/lib/service-keys.mjs), bound before the
+  // first catalogue read — loaded at call time like every tools/lib module.
+  ({ normalizeServiceKey, serviceNamesForPack, serviceKeyForPack, isLiveAggregatePack, servicesForPack }
+    = await import('/lib/service-keys.mjs'));
   // Which build is this? Fire-and-forget: fills the footer span, the About
   // entry, the header subtitle and the brand tooltip. /api/version is
   // public, so it needs neither identity nor org — and never blocks boot.
@@ -1540,6 +1669,16 @@ async function boot() {
   // header has to be resolved before the catalog loads.
   await loadIdentity();
   resolveActiveOrg();
+  // The persisted snapshot is this login's in this org (state.mjs): scoped
+  // here, after the org is known and before the rehydrate reads it.
+  persistence.scope(signedInLogin(), getActiveOrg());
+  // The artefact taxonomy (tools/lib/artefact-classify.mjs), bound before
+  // the first render with the server's override (GET /api/taxonomy, a
+  // viewer route — hence after the identity): the Discover board groups
+  // by it, the row kinds and the drawer read it for typed artefacts. An
+  // answer that cannot be fetched or compiled binds the default families
+  // and says so once; it never blocks the boot.
+  await bindTaxonomyFromServer();
   // The deploy target profiles saved before slice 3 (one browser-wide key,
   // URLs as typed) become this user's, stripped, now — not at the first
   // deploy: no credential waits in localStorage until then. Not on a boot
@@ -1549,15 +1688,43 @@ async function boot() {
   // (state.identity stays null in the open posture, which adopts here.)
   if (state.identity?.authenticated !== false) loadDeployProfiles().catch(() => {});
   syncApiLink();
-  try { await loadCatalog(); }
+  // The account menu before the first catalogue read: a signed-in user the
+  // org middleware refuses (no membership) still has a way to sign out.
+  setupIdentityChip();
+  try { await loadCatalog(); setActingRecoveryTried(false); }
   catch (e) {
-    document.body.innerHTML = `<pre class="json" style="margin:48px;max-width:800px">Failed to reach Observogram's API.\n\n${escapeHtml(e.message)}\n\nMake sure the server is running: \`node server/index.mjs\` or \`npm run serve\`.</pre>`;
+    // An owner's acting org refused (removed since): reload once into the
+    // first membership, or none (design §3.5, D-M; T25).
+    const recovery = actingRecovery({ identity: state.identity, orgId: getActiveOrg(), error: e, tried: actingRecoveryTried() });
+    if (recovery) {
+      setActingRecoveryTried(true);
+      persistence.suspend();
+      setActiveOrg(recovery.to);
+      window.location.reload();
+      return;
+    }
+    if (e.denied === 'org') {
+      // Signed in, in no organisation (STORE_PLAN §6, slice 6a): the server's
+      // sentence as is, under the chrome — not the API-unreachable screen.
+      // GET /api/orgs is not attempted (it would refuse the same way). The
+      // refusal is kept: Settings, which such a user cannot read, explains
+      // with it instead of opening.
+      state.noOrg = e;
+      applyModeChrome();
+      renderNoOrgHome($('#layer-view'), buildNoOrgModel({ identity: state.identity, error: e }), servicesHost);
+      return;
+    }
+    document.body.innerHTML = `<pre class="json" style="margin:48px;max-width:800px">${escapeHtml(state.brand.chrome.apiUnreachable)}\n\n${escapeHtml(e.message)}\n\nMake sure the server is running: \`node server/index.mjs\` or \`npm run serve\`.</pre>`;
     return;
   }
+  // The services axis (STORE_PLAN §6, slice 6a): the rank the guard applies
+  // here (GET /api/orgs) and the services table (GET /api/services), read
+  // once the catalogue answered — so a user in no org never reaches them.
+  // Both viewer routes; a bundle's 501 leaves the derived tiles, silently.
+  await Promise.all([refreshAccess(), refreshServices()]);
 
   setupUpload();
   setupTheme();
-  setupIdentityChip();
   setupResetButton();
   setupExportButton();
   // Eagerly fetch /api/examples so the Pack B picker has the archived
@@ -1587,6 +1754,8 @@ async function boot() {
   setupMcpPanel();
   setupCrawlPanel();
   setupDraftFromMcpPanel();
+  // A live job remembered for this login and org resumes its poll (never in the bundle or the token posture).
+  resumeLiveJob();
   setupDeployModal();
   installDialogFocusTrap();
   setupHomeAffordance();   // logo click returns home
@@ -1616,8 +1785,10 @@ async function boot() {
 // ============================================================
 
 function goHome() {
+  navGeneration++;
   state.mode = 'home';
   state.pack = null;
+  emptyVerdicts();
   state.packB = null;
   state.diff = null;
   state.compileCatalog = null;
@@ -1627,6 +1798,12 @@ function goHome() {
   state.selectedService = null;
   state.selectedPackId = null;
   state.selectedEnv = null;
+  state.serviceId = null;
+  state.serviceEnv = null;
+  servicePageRecord = null;
+  closeSettingsEditor({ focus: false });
+  state.settingsFrom = null;
+  state.settings = null;
   state.compareBId = null;
   state.compareBEnv = null;
   state.conformanceB = null;
@@ -1642,7 +1819,11 @@ function goHome() {
   // you working on?", not the marketing hero. The hero stays for local
   // mode and for true cold starts (no services yet); the gate links to
   // it for "start something new".
-  state.homeVariant = (state.identity?.authenticated && serviceCatalogue({ ownOnly: true }).length) ? 'gate' : 'hero';
+  // The gate opens on service records in every posture (the registry writes
+  // them whoever registered — a developer's `npm run dev` sees cards after
+  // the first scan), and on derived services for a signed-in user where the
+  // table is unavailable (a bundle, a failed read).
+  state.homeVariant = ((state.services?.length > 0) || (state.identity?.authenticated && serviceCatalogue({ ownOnly: true }).length)) ? 'gate' : 'hero';
   applyModeChrome();
   if (state.homeVariant === 'gate') renderServiceGate();
   else renderHomeView();
@@ -1691,66 +1872,1768 @@ function homeChoiceHtml({ checkOpen }) {
 }
 
 // When each service was last opened here — the tiles' "last activity". The
-// catalogue carries no timestamps, so this is this browser's own record.
-const RECENT_SERVICES_KEY = 'studioRecentServices';
+// catalogue carries no timestamps, so this is this browser's own record,
+// kept per org (services-model.mjs recentServicesKey): the services of one
+// org are not another's recents. The unscoped pre-slice-6a key is adopted
+// once into the default org's and never read again.
+const LEGACY_RECENT_SERVICES_KEY = 'studioRecentServices';
 function recentServices() {
-  try { return parseRecentServices(localStorage.getItem(RECENT_SERVICES_KEY)); }
-  catch { return parseRecentServices(null); }
+  try {
+    const legacy = localStorage.getItem(LEGACY_RECENT_SERVICES_KEY);
+    if (legacy !== null) {
+      localStorage.removeItem(LEGACY_RECENT_SERVICES_KEY);
+      if (localStorage.getItem(recentServicesKey(null)) === null) localStorage.setItem(recentServicesKey(null), legacy);
+    }
+    return parseRecentServices(localStorage.getItem(recentServicesKey(getActiveOrg())));
+  } catch { return parseRecentServices(null); }
 }
 function recordRecentService(key) {
   if (!key) return;
   try {
     const all = recentServices();
     all[key] = new Date().toISOString();
-    localStorage.setItem(RECENT_SERVICES_KEY, JSON.stringify(all));
+    localStorage.setItem(recentServicesKey(getActiveOrg()), JSON.stringify(all));
   } catch (_) {}
 }
-
-// A tile carries what tells two services apart: environments, packs and
-// drafts, tier, when it was last opened, and the one issue worth knowing.
-function serviceTileHtml(s, openedAt) {
-  const packs = [
-    s.packCount ? `${s.packCount} pack${s.packCount === 1 ? '' : 's'}` : '',
-    s.liveCount ? `${s.liveCount} live draft${s.liveCount === 1 ? '' : 's'}` : '',
-  ].filter(Boolean).join(' · ') || 'no packs';
-  const envs = (s.environments || []).join(', ');
-  const tiers = (s.tiers || []).join(', ');
-  const issue = !s.packCount && s.liveCount ? 'Live draft only — no repository pack to compare with' : '';
-  return `
-    <button type="button" class="svc-gate-card" data-service="${escapeHtml(s.key)}"
-            data-search="${escapeHtml(`${s.label} ${envs} ${tiers}`.toLowerCase())}">
-      <span class="svc-gate-name">${escapeHtml(s.label)}</span>
-      <span class="svc-gate-meta">${escapeHtml([envs, packs, tiers].filter(Boolean).join(' · '))}</span>
-      <span class="svc-gate-activity">${openedAt ? `Opened ${escapeHtml(fmtRelative(openedAt))}` : 'Not opened here yet'}</span>
-      ${issue ? `<span class="svc-gate-issue">${escapeHtml(issue)}</span>` : ''}
-    </button>`;
+// Sign-out: the recents of every org go with the snapshots — a shared
+// browser keeps no record of which services a user who left had opened.
+function forgetRecentServices() {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(LEGACY_RECENT_SERVICES_KEY)) localStorage.removeItem(k);
+    }
+  } catch { /* storage unavailable */ }
 }
 
-// The check branch's next step: recent services first, a search, then the
-// sources a pack can come from (filled in by the caller).
-function homeCheckHtml(services, open) {
-  const opened = recentServices();
-  const ordered = orderServicesByRecent(services, opened);
-  const anyRecent = services.some(s => opened[s.key]);
-  return `
-    <div class="home-check" id="home-check"${open ? '' : ' hidden'}>
-      ${services.length ? `
-      <div class="home-check-head">
-        <h2 class="home-check-title" id="svc-gate-which">${anyRecent ? 'Recent services' : 'Your services'}</h2>
-        <label class="home-check-search">
-          <span class="sr-text">Search services</span>
-          <input type="search" id="home-service-search" placeholder="Search by service, environment or tier" autocomplete="off" aria-controls="home-service-grid">
-        </label>
-      </div>
-      <div class="svc-gate-grid" id="home-service-grid">
-        ${ordered.map(s => serviceTileHtml(s, opened[s.key])).join('')}
-      </div>
-      <p class="home-check-none" id="home-service-none" role="status" hidden>No service matches that search.</p>` : `
-      <p class="home-check-empty">No services yet. Bring a pack in from one of the sources below.</p>`}
-      <h2 class="home-check-title home-check-sources-title">Import or scan another source</h2>
-      <div class="home-sources" id="home-sources"></div>
-    </div>`;
+// ---------- the services table, the rank, the catalogue refresh ----------
+
+// GET /api/orgs → what this browser may do in the active org and the org's
+// name (services-model.mjs accessModel). The call failing is not an error
+// the home shows: the /auth/me memberships are the fallback, and a bundle's
+// 501 is the static posture. Logs nothing (the bundle smoke fails on a
+// console.error).
+async function refreshAccess() {
+  let orgs = null;
+  let orgsError = null;
+  try { orgs = await loadOrgs(); }
+  catch (e) { orgsError = e; }
+  state.access = accessModel({ orgs, identity: state.identity, activeOrg: getActiveOrg(), orgsError });
+  state.orgName = state.access.orgName;
+  // The org the server resolved — in the open and token postures no header
+  // names one, and the answer's `active` is the only source.
+  state.orgId = orgs?.active ?? getActiveOrg();
 }
+
+// GET /api/services → state.services, or null with the reason in
+// state.servicesStatus (static · denied · error). Never throws, logs nothing.
+async function refreshServices() {
+  try {
+    state.services = await loadServices();
+    state.servicesStatus = { kind: 'ok', error: null };
+  } catch (e) {
+    state.services = null;
+    state.servicesStatus = servicesStatusOf(e);
+  }
+}
+
+// Every register path refreshes the catalogue; the services table follows
+// it (a register writes service rows) and the verdict cache is dropped (a
+// new primary pack changes what a card grades). loadCatalog()'s own failure
+// still propagates as it did; the table's never does.
+async function refreshCatalogue() {
+  await loadCatalog();
+  state.serviceVerdicts = {};
+  await refreshServices();
+}
+
+// The home's model from the state (services-model.mjs buildServicesHomeModel):
+// the table, the rank, the catalogue and the derived services as of now.
+function homeServicesModel() {
+  return buildServicesHomeModel({
+    status: state.servicesStatus, services: state.services, catalog: state.catalog, examples: state._examplesCache || [],
+    derived: serviceCatalogue({ ownOnly: true }), verdicts: state.serviceVerdicts, opened: recentServices(),
+    access: state.access, orgName: state.orgName, isLiveAggregatePack,
+  });
+}
+
+// The verdict per environment on the cards on screen: the current primary
+// pack's conformance report at the environment's name, fetched lazily and
+// pooled (four in flight), cached for the session in state.serviceVerdicts.
+// One repaint of the services section per settled batch — and only while
+// the home is still on screen (a settled report never repaints a page the
+// user left). A failed report reads "Unavailable" with the parsed refusal.
+const verdictPool = verdictLoader();
+function loadHomeVerdicts(model) {
+  const wanted = model.cards.flatMap(c => c.envs).filter(e => e.verdict.state === 'loading' && e.packId && e.key && !(e.key in state.serviceVerdicts));
+  if (!wanted.length) return;
+  Promise.allSettled(wanted.map(e => verdictPool.load(e.packId, e.name)
+    .then(report => { state.serviceVerdicts[e.key] = report; }, err => { state.serviceVerdicts[e.key] = { error: err?.message || 'no answer' }; })))
+    .then(() => { if (state.mode === 'home') repaintHomeServices(); });
+}
+
+// Repaint the services section in place (not the whole home: the import
+// sources below it keep what was typed), keeping the search as typed and
+// the focus where it was.
+function repaintHomeServices() {
+  const section = $('#home-services');
+  if (!section) return;
+  const search = section.querySelector('#home-service-search');
+  const q = search?.value ?? '';
+  const focused = search && document.activeElement === search;
+  const model = homeServicesModel();
+  renderServicesHome(section, model, servicesHost);
+  const again = section.querySelector('#home-service-search');
+  if (again && q) { again.value = q; again.dispatchEvent(new Event('input')); }
+  if (focused) again?.focus({ preventScroll: true });
+  loadHomeVerdicts(model);
+}
+
+// A refused affordance explains itself when activated: the reason the rank
+// cannot use it, as the server's effective role words it.
+function explainUnavailable(reason) {
+  const text = reason ? reason.charAt(0).toUpperCase() + reason.slice(1) : 'Not available for your role here.';
+  toast(text);
+  announce(text);
+}
+
+// ---------- the service page (STORE_PLAN §6, slice 6a, design §5) ----------
+
+// The record the page shows, as GET /api/services/:id answered it (the table's
+// row is replaced by it too). Not persisted: a reload reads it again.
+let servicePageRecord = null;
+// The next render of the page moves the focus to its heading (entering it).
+let servicePageFocusNext = false;
+// Bumped by every mode transition: a GET /api/services/:id that answers after
+// the user went elsewhere (home, a pack, Build) must not paint the page over it.
+let navGeneration = 0;
+
+function findServiceRecord(id) {
+  if (servicePageRecord && servicePageRecord.id === id) return servicePageRecord;
+  return (state.services || []).find(s => s.id === id) || null;
+}
+
+// A record as the server just answered it (GET /api/services/:id, a PATCH's
+// view) replaces the table's row and becomes the page's.
+function adoptServiceRecord(service) {
+  if (Array.isArray(state.services)) {
+    const i = state.services.findIndex(s => s.id === service.id);
+    if (i >= 0) state.services[i] = service; else state.services.push(service);
+  }
+  servicePageRecord = service;
+}
+
+// Enter the page: GET /api/services/:id, then mode 'service' with the record
+// id and the selected environment set BEFORE the render (the render persists
+// them — a reload lands here again). The service counts as opened (the home's
+// recents) only once the read succeeded. A refusal (404 `no service <id>`,
+// a 403) is the server's sentence in a toast; a rehydrate answers false
+// instead so the boot falls back to home, and `onRefused` (Build's exit)
+// takes the sentence in place of the toast so the caller can name its own
+// way out. The selected tab's verdict is always read anew here (a tier
+// change since the home's cache must show).
+async function enterServicePage(id, env = null, { rehydrate = false, onRefused = null } = {}) {
+  const nav = ++navGeneration;
+  const refused = (why) => { if (rehydrate) return false; if (onRefused) onRefused(why); else toast(why, 'error'); return false; };
+  let service;
+  try { service = await loadService(id); }
+  catch (e) { return refused(e.message || `Could not read service ${id}`); }
+  if (!service) return refused(`${id}: no service answered`);
+  if (nav !== navGeneration) return false;   // the user went elsewhere meanwhile
+  adoptServiceRecord(service);
+  recordRecentService(service.slug);
+  const names = (service.environments || []).map(e => e.name);
+  // On the page the service is the axis, not a pack: Pack A is let go (an
+  // action re-resolves it through packForService; Build's exit and a reload
+  // come back here, not to a pack). Pack B, a comparison's other side, stays.
+  state.selectedPackId = null;
+  state.selectedEnv = null;
+  state.pack = null;
+  state.conformance = null;
+  state.symbolTable = null;
+  emptyVerdicts();
+  state.mode = 'service';
+  state.serviceId = service.id;
+  state.serviceEnv = names.includes(env) ? env : (names[0] ?? null);
+  state.selectedService = service.slug;
+  state.activeCardKey = null;
+  if (state.serviceEnv) {
+    const { pack, how } = packForService(service, state.catalog, { isLiveAggregatePack });
+    if (pack && how === 'primary') delete state.serviceVerdicts[verdictKey(pack.id, state.serviceEnv)];
+  }
+  servicePageFocusNext = true;
+  applyModeChrome();
+  paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+  return true;
+}
+
+function servicePageModel(service) {
+  return buildServicePageModel({
+    service, envName: state.serviceEnv, verdicts: state.serviceVerdicts, catalog: state.catalog,
+    access: state.access, orgName: state.orgName, isLiveAggregatePack,
+  });
+}
+
+// renderMainView's branch for mode 'service': the page from the record, the
+// focus on its heading when just entered, the selected tab's verdict read
+// lazily through the pool — repainting only while this page is still on screen.
+function renderServicePageHost(view) {
+  const service = findServiceRecord(state.serviceId);
+  if (!service) { goHome(); return; }
+  const model = servicePageModel(service);
+  renderServicePage(view, model, servicesHost);
+  if (servicePageFocusNext) {
+    servicePageFocusNext = false;
+    view.querySelector('.svc-page-name')?.focus({ preventScroll: true });
+    window.scrollTo({ top: 0 });
+  }
+  const v = model.panel.verdict;
+  const env = model.panel.env;
+  if (v && v.state === 'loading' && v.fetch && model.panel.pack && env) {
+    const key = v.key;
+    verdictPool.load(model.panel.pack.id, env.name)
+      .then(report => { state.serviceVerdicts[key] = report; }, err => { state.serviceVerdicts[key] = { error: err?.message || 'no answer' }; })
+      .then(() => {
+        if (state.mode !== 'service' || state.serviceId !== service.id || state.serviceEnv !== env.name) return;   // the user left
+        repaintServicePage();
+        const fresh = servicePageModel(findServiceRecord(service.id) || service).panel.verdict;
+        if (fresh) announce(`${env.name}: ${fresh.text}`);
+      });
+  }
+}
+
+// Repaint the page keeping the focus where it is (a verdict settled, a tab
+// selected by keyboard): the heading just entered, a tab, an action, a row.
+function repaintServicePage() {
+  const active = document.activeElement;
+  const focusedTab = active?.closest?.('.svc-tabs') ? active.dataset.env : null;
+  const focusedId = !focusedTab && active?.id && active.closest?.('.svc-page') ? active.id : null;
+  renderMainView();
+  if (focusedTab) document.querySelector(`.svc-tab[data-env="${CSS.escape(focusedTab)}"]`)?.focus({ preventScroll: true });
+  else if (focusedId) document.getElementById(focusedId)?.focus({ preventScroll: true });
+}
+
+// The tab: the environment NAME selected on the page; its verdict is read if
+// the cache has none for it (the render above issues the read).
+function selectServiceEnv(name) {
+  if (state.mode !== 'service' || !name) return;
+  const service = findServiceRecord(state.serviceId);
+  if (!service || !(service.environments || []).some(e => e.name === name)) return;
+  state.serviceEnv = name;
+  repaintServicePage();
+}
+
+// Discover · Diagnose · Remediate bound to the service and the environment
+// (design §5.4–5.5): the page decides the pack (the one resolver,
+// packForService) and the environment; the user never picks a file. Without
+// a pack the workspace opens empty, and Discover's empty state says, for the
+// rank that reads it, how one is registered.
+function openServiceIn(view, { serviceId, env = null } = {}) {
+  const service = findServiceRecord(serviceId);
+  if (!service) { toast(`Service ${serviceId} is not in the table here — reload the page.`, 'error'); return; }
+  const names = (service.environments || []).map(e => e.name);
+  const envName = names.includes(env) ? env : (names[0] ?? null);
+  state.serviceId = service.id;
+  state.serviceEnv = envName;
+  const { pack } = packForService(service, state.catalog, { isLiveAggregatePack });
+  state.view = view;
+  state.activeCardKey = null;
+  if (pack) {
+    enterAnalyzeMode(pack.id, envName || defaultEnvFor(pack.id));
+    state.selectedService = service.slug;
+    state.activeLayer = ({ compile: 'COMPILE', compare: 'COMPARE' })[view] || 'L1';
+    paintObservaActiveTab();
+    renderTabs();
+    return;
+  }
+  state.mode = 'single';
+  state.selectedService = service.slug;
+  state.selectedPackId = null;
+  state.selectedEnv = envName;
+  state.pack = null;
+  state.conformance = null;
+  state.symbolTable = null;
+  emptyVerdicts();
+  state.activeLayer = ({ compile: 'COMPILE', compare: 'COMPARE' })[view] || 'L1';
+  applyModeChrome();
+  // The context bar is redrawn for the empty workspace: the service listed
+  // and selected, "— no pack —", no environment, the meta strip blank.
+  renderServiceSelect();
+  renderPackSelect();
+  renderPackBSelect();
+  renderEnvSelect();
+  renderMeta();
+  paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+}
+
+// Build from the page (design §6.4): DEFINE prefilled from the record — name,
+// owners, tier, the tab's environment, and the ORIGIN id the hand-off may
+// write — only when the draft is empty; a draft in progress is kept and said so.
+function openBuild({ serviceId, env = null } = {}) {
+  const service = findServiceRecord(serviceId);
+  if (!service) { toast(`Service ${serviceId} is not in the table here — reload the page.`, 'error'); return; }
+  if (state.access?.canWrite === false) { explainUnavailable(state.access.reason); return; }
+  state.serviceId = service.id;
+  state.serviceEnv = env ?? state.serviceEnv;
+  const plan = buildPrefillFromService(state.build, service, env);
+  if (plan.apply) Object.assign(state.build, plan.patch);
+  else if (plan.note) toast(plan.note);
+  enterBuildMode('define');
+}
+
+// A pack opens as Pack A at the given environment (else the pack's first): a
+// row under "Packs linked" on the page (the binding kept — an older primary or
+// a member pack is one click away but never the default), or a catalogue pack
+// (an example, a file-backed entry) from the home — an example lives only in
+// its cache, so it is promoted into the catalogue first.
+function openPack(id, env = null) {
+  if (!id) return;
+  if (!(state.catalog || []).find(p => p.id === id)) {
+    const ex = (state._examplesCache || []).find(p => p.id === id);
+    if (ex) (state.catalog = state.catalog || []).push(ex);
+  }
+  state.view = 'layers';
+  enterAnalyzeMode(id, env || defaultEnvFor(id));
+}
+
+// ---------- the record editor (design §6.5) ----------
+
+// The pop-up over the page's record: UI state of the page, never persisted
+// (a reload lands on the page, closed). It is drawn into its own host on
+// <body>, outside #layer-view, so the page behind it repaints (a verdict
+// settles, a save lands) without the dialog losing the focus or what was
+// typed — renderServiceEditor repaints the status alone for the same record.
+let serviceEditor = null;   // { serviceId, draft, status } | null
+
+function serviceEditorHost() {
+  let el = document.getElementById('svc-editor-host');
+  if (!el) { el = document.createElement('div'); el.id = 'svc-editor-host'; document.body.appendChild(el); }
+  return el;
+}
+
+// Draw the editor over the page's record, or clear it: leaving the page (any
+// mode change, another record) closes it.
+function syncServiceEditor() {
+  const el = document.getElementById('svc-editor-host');
+  const service = serviceEditor ? findServiceRecord(serviceEditor.serviceId) : null;
+  if (state.mode !== 'service' || !service || state.serviceId !== service.id) {
+    serviceEditor = null;
+    if (el && el.innerHTML) el.innerHTML = '';
+    return;
+  }
+  renderServiceEditor(serviceEditorHost(), buildServiceEditorModel(service, { draft: serviceEditor.draft, status: serviceEditor.status }), servicesHost);
+}
+
+// Edit (the page's button): the rank that may PATCH gets the dialog with the
+// focus in its first field; another rank is told why (the button is not
+// drawn for it, but the access can downgrade while the page is open).
+function openServiceEditor(serviceId) {
+  if (state.mode !== 'service' || !findServiceRecord(serviceId)) return;
+  if (state.access?.canWrite === false) { explainUnavailable(state.access.reason); return; }
+  serviceEditor = { serviceId, draft: null, status: null };
+  syncServiceEditor();
+  document.getElementById('svc-edit-name')?.focus({ preventScroll: true });
+}
+
+// Close (the scrim, esc, Close, Escape): the focus returns to the Edit button.
+function closeServiceEditor() {
+  if (!serviceEditor) return;
+  serviceEditor = null;
+  const el = document.getElementById('svc-editor-host');
+  if (el) el.innerHTML = '';
+  document.getElementById('svc-edit')?.focus({ preventScroll: true });
+}
+
+// Save: the draft diffed against the record (services-model.mjs
+// buildServicePatch — only the fields that differ, parsed; never the slug);
+// nothing differing → "Nothing changed." without a call; else PATCH
+// /api/services/:id (CSRF and org headers through requestJson). A refusal
+// is the server's sentence in the status line (`400: a tier is …`; a 401/403
+// auth/role also downgrades the rank the affordances draw from). On success
+// the record is read anew (GET /api/services/:id — the PATCH's view stands if
+// that fails), the cached verdicts of its packs are dropped (the tier grades
+// them, A-M3), the page repaints — which re-reads the selected tab's verdict —
+// the header SERVICE selector follows a rename, and the status names what
+// the server says changed. Returns { ok, service, changed } or null.
+async function saveServiceRecord(serviceId, draft) {
+  const current = findServiceRecord(serviceId);
+  if (!serviceEditor || serviceEditor.serviceId !== serviceId || !current) return null;
+  if (serviceEditor.status?.kind === 'pending') return null;   // one PATCH at a time: a second Save while it runs is ignored
+  serviceEditor.draft = draft;
+  const patch = buildServicePatch(current, draft);
+  if (!Object.keys(patch).length) {
+    serviceEditor.status = serviceSaveStatus([]);
+    syncServiceEditor();
+    return { ok: true, service: current, changed: [] };
+  }
+  serviceEditor.status = { kind: 'pending', text: 'Saving…' };
+  syncServiceEditor();
+  let res;
+  try { res = await patchService(serviceId, patch); }
+  catch (e) {
+    if (e.denied === 'auth' || e.denied === 'role') state.access = { ...(state.access || {}), canWrite: false, reason: e.message };
+    if (!serviceEditor || serviceEditor.serviceId !== serviceId) return null;
+    serviceEditor.status = { kind: 'error', text: e.message || 'no answer' };
+    if (state.mode === 'service' && state.serviceId === serviceId) repaintServicePage(); else syncServiceEditor();
+    return null;
+  }
+  let service = res.service || current;
+  try { service = (await loadService(serviceId)) || service; } catch { /* the PATCH's own view of the record stands */ }
+  adoptServiceRecord(service);
+  forgetServiceVerdicts(current);
+  state.selectedService = service.slug;
+  if (res.changed.includes('name')) renderServiceSelect();
+  const status = serviceSaveStatus(res.changed);
+  if (serviceEditor && serviceEditor.serviceId === serviceId) { serviceEditor.status = status; serviceEditor.draft = null; }
+  if (state.mode === 'service' && state.serviceId === serviceId) repaintServicePage(); else syncServiceEditor();
+  announce(status.text);
+  return { ok: true, service, changed: res.changed };
+}
+
+// The host the services renderers get (docs/UI_CONVENTIONS.md §3): the two
+// stable hooks plus the axis's actions under `services`. Sign-out is the
+// account menu's handler, proxied — one place knows the IdP logout rules.
+const servicesActions = {
+  openService: (id, env = null) => { enterServicePage(id, typeof env === 'string' ? env : null); },
+  openDerived: (key) => enterServiceWorkspace(key),
+  selectEnv: selectServiceEnv,
+  openIn: openServiceIn,
+  openBuild,
+  openPack,
+  home: () => goHome(),
+  retry: async () => { await refreshServices(); if (state.mode === 'home') repaintHomeServices(); },
+  explain: explainUnavailable,
+  openEditor: openServiceEditor,
+  closeEditor: closeServiceEditor,
+  saveService: saveServiceRecord,
+  // The environment editor is Settings' (one editor, two doors — design §5.2):
+  // the page opens it over its record without changing mode.
+  editEnvironment: (envId) => openSettingsEditor('environment', envId),
+  addEnvironment: (serviceId) => openSettingsEditor('environment', null, serviceId),
+  signOut: () => document.querySelector('.hdr-user-out')?.click(),
+};
+const servicesHost = { renderMainView, renderTabs, services: servicesActions };
+
+// ---------- Settings (STORE_PLAN §6 item 3, slice 6b; design §3–§5) ----------
+
+// Bumped by every Settings read: an answer that settles after the user left
+// the section (or Settings) never repaints it.
+let settingsGeneration = 0;
+// The next render moves the focus to the page's h1 (entering Settings).
+let settingsFocusNext = false;
+
+// The frame's answers for one entry: the probe (token and open postures),
+// a downgrade a read met, each section's status line, the endpoints read's
+// refusal. Never persisted; a new entry starts afresh.
+function freshSettings() {
+  return {
+    probe: null, denied: null, deniedAdmin: null, deniedOwn: null, status: {}, members: null, org: null, membersError: null, endpointsError: null, audit: null,
+    users: null, usersError: null, orgs: null, orgsError: null, joinRole: null, joinRoleError: null,
+  };
+}
+
+// What this reader may do in Settings (settings-model.mjs settingsAccessModel)
+// — 6a's access, /auth/me's owner bit, the probe's answer — and, once a read
+// was refused by the gate (the session ended, the membership went), nothing
+// at all, with the server's sentence as every reason (the downgrade, §4).
+function settingsAccess() {
+  const access = settingsAccessModel({ access: state.access, identity: state.identity, probe: state.settings?.probe ?? null, chromeName: state.brand?.chrome?.name });
+  const denied = state.settings?.denied;
+  const deniedAdmin = state.settings?.deniedAdmin;
+  const deniedOwn = state.settings?.deniedOwn;
+  if (!denied && !deniedAdmin && deniedOwn) {
+    // An owner's read or write refused by the role (no longer an owner): the
+    // deployment's controls go, with the server's sentence; the org's stay.
+    return { ...access, owner: false, can: { ...access.can, own: false, createOrg: false }, why: { ...access.why, own: deniedOwn, createOrg: deniedOwn } };
+  }
+  if (!denied && deniedAdmin) {
+    // An admin write refused by the role (demoted meanwhile): the admin's
+    // controls and the owner's go, with the server's sentence; the rest stays.
+    return {
+      ...access,
+      can: { ...access.can, admin: false, own: false, createOrg: false },
+      why: { ...access.why, admin: deniedAdmin, own: deniedAdmin, createOrg: deniedAdmin },
+    };
+  }
+  if (!denied) return access;
+  return {
+    ...access,
+    can: { operate: false, admin: false, own: false, createOrg: false },
+    why: { operate: denied, admin: denied, own: denied, closed: access.why.closed, createOrg: denied },
+  };
+}
+
+// The cached answers the access may no longer read are dropped, and the
+// frame moves to the first section it may (C-6).
+function forgetSettingsAbove(access) {
+  state.settings = settingsAboveRank(state.settings, access, { orgId: state.orgId });
+  state.settingsSection = settingsSectionFor(access, state.settingsSection, BUILT_SECTIONS);
+}
+
+// Enter Settings (Advanced → Settings, the account menu, a reload in it):
+// where Back returns is kept unless rehydrating (a reload's Back is home);
+// the section asked for, else the last one, else the first the rank reads —
+// set before the first render, which persists it. Then the frame's reads.
+// A signed-in user in no organisation is told why instead (the boot's
+// refusal). Answers true when Settings is on screen.
+function enterSettings(section = null, { rehydrate = false } = {}) {
+  if (state.noOrg) { explainUnavailable(state.noOrg.message); return false; }
+  navGeneration++;
+  if (rehydrate) state.settingsFrom = null;
+  else if (state.mode !== 'settings') {
+    state.settingsFrom = state.mode === 'service' && Number.isInteger(state.serviceId)
+      ? { mode: 'service', serviceId: state.serviceId, env: state.serviceEnv }
+      : { mode: 'home' };
+  }
+  state.mode = 'settings';
+  state.settings = freshSettings();
+  state.settingsSection = settingsSectionFor(settingsAccess(), section ?? state.settingsSection, BUILT_SECTIONS);
+  if (state.settingsSection) state.settings.status[state.settingsSection] = { kind: 'loading', text: settingsSectionHead(state.settingsSection).loading };
+  settingsFocusNext = true;
+  applyModeChrome();
+  paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+  loadSettingsFrame();
+  return true;
+}
+
+// Back: the service page Settings was entered from, else home. A record
+// gone meanwhile lands home with the server's sentence.
+function leaveSettings() {
+  const from = state.settingsFrom;
+  closeSettingsEditor({ focus: false });
+  state.settingsFrom = null;
+  state.settings = null;
+  if (from?.mode === 'service' && Number.isInteger(from.serviceId)) {
+    enterServicePage(from.serviceId, from.env ?? null, { onRefused: (why) => { goHome(); toast(why, 'error'); } });
+    return;
+  }
+  goHome();
+}
+
+// The frame's first read, by posture (design §3.4): the bundle's — GET
+// /api/mcp-endpoints, whose 501 sentence is the banner; the token and open
+// postures' probe — GET /api/org/members, whose refusal is the banner (the
+// token posture's way in, a server bound without sign-in) and whose 200 is
+// the members list; none in the identity posture (GET /api/orgs and
+// /auth/me already said). Then the section on screen. Logs nothing.
+async function loadSettingsFrame() {
+  const settings = state.settings;
+  const here = () => state.mode === 'settings' && state.settings === settings;
+  const posture = state.access?.posture;
+  if (posture === 'static') {
+    try { state.mcpEndpoints = await loadMcpEndpoints(); }
+    catch (e) { if (here()) settings.probe = e; }
+    if (here()) repaintSettings();
+    return;
+  }
+  if (posture === 'token' || posture === 'open') {
+    try {
+      const body = await loadMembers();
+      if (here()) Object.assign(settings, { probe: { ok: true }, members: body.members, org: body.org });
+      if (here() && posture === 'open') state.openProbe = { orgId: state.orgId, ok: true };
+    } catch (e) {
+      if (here()) settings.probe = e;
+      if (here() && posture === 'open') state.openProbe = { orgId: state.orgId, ok: false };
+    }
+    if (!here()) return;
+    state.settingsSection = settingsSectionFor(settingsAccess(), state.settingsSection, BUILT_SECTIONS);
+  }
+  if (here() && state.settingsSection) loadSettingsSection(state.settingsSection);
+}
+
+// One section's reads (design §7.5): the environments and the MCP endpoints
+// both read the services table (the environments are its rows; the
+// endpoints name the environments bound to them) and the org's endpoints
+// (shared with the pickers — state.mcpEndpoints). The status line says
+// "Reading …" meanwhile, the refusal as served after. A refusal by the gate
+// (the session ended, the membership went) downgrades the frame first.
+async function loadSettingsSection(id, { notice = null } = {}) {
+  if (state.mode !== 'settings' || !id) return;
+  const settings = state.settings;
+  const gen = ++settingsGeneration;
+  settings.status[id] = { kind: 'loading', text: settingsSectionHead(id).loading };
+  repaintSettings();
+  if (id === 'members') return loadMembersSection(settings, gen, notice);
+  if (id === 'audit') return loadAuditSection(settings, gen, notice);
+  if (id === 'users') return loadUsersSection(settings, gen, notice);
+  if (id === 'orgs' || id === 'join-role') return loadDeploymentSection(id, settings, gen, notice);
+  let endpointsRefusal = null;
+  await Promise.all([
+    refreshServices(),
+    loadMcpEndpoints().then((list) => { state.mcpEndpoints = list; settings.endpointsError = null; }, (e) => {
+      state.mcpEndpoints = null;
+      settings.endpointsError = e?.message || 'no answer';
+      endpointsRefusal = e;
+    }),
+  ]);
+  if (state.mode !== 'settings' || state.settings !== settings) return;
+  const gate = [endpointsRefusal, state.servicesStatus?.kind === 'denied' ? { denied: 'org', message: state.servicesStatus.error } : null]
+    .find((e) => e && ['auth', 'role', 'posture', 'org'].includes(e.denied));
+  if (gate) {
+    settings.denied = gate.message || 'refused';
+    forgetSettingsAbove(settingsAccess());
+  }
+  settings.status[id] = { kind: 'ok', text: notice ?? '' };
+  if (gen !== settingsGeneration || state.settingsSection !== id) return;   // the user moved on meanwhile
+  repaintSettings();
+}
+
+// The members and the org's row (GET /api/org/members, an admin's read): a
+// refusal by the role (demoted meanwhile) takes the admin's sections away
+// with the server's sentence; one by the gate (the session, the membership)
+// every control. Either way the frame moves to a section the rank reads,
+// which is read with the sentence in its status line.
+async function loadMembersSection(settings, gen, notice) {
+  let refusal = null;
+  try {
+    const body = await loadMembers();
+    if (state.settings === settings) Object.assign(settings, { members: body.members, org: body.org, membersError: null });
+  } catch (e) {
+    refusal = e;
+    if (state.settings === settings) Object.assign(settings, { members: null, membersError: e?.message || 'no answer' });
+  }
+  if (state.mode !== 'settings' || state.settings !== settings) return;
+  if (adminReadRefused(settings, refusal, gen, 'members')) return;
+  settings.status.members = { kind: 'ok', text: notice ?? '' };
+  if (gen !== settingsGeneration || state.settingsSection !== 'members') return;
+  repaintSettings();
+}
+
+// An admin's read (the members, the audit) refused by the gate: the role
+// (demoted meanwhile) takes the admin's sections away with the server's
+// sentence; the session or the membership every control. The frame moves to
+// a section the rank reads, read with the sentence in its status line.
+// Answers true when it moved.
+function adminReadRefused(settings, refusal, gen, id, { need = 'admin' } = {}) {
+  if (!refusal || !['auth', 'role', 'posture', 'org'].includes(refusal.denied)) return false;
+  if (refusal.denied === 'role' && need === 'own') settings.deniedOwn = refusal.message || 'refused';
+  else if (refusal.denied === 'role') settings.deniedAdmin = refusal.message || 'refused';
+  else settings.denied = refusal.message || 'refused';
+  forgetSettingsAbove(settingsAccess());
+  if (gen === settingsGeneration && state.settingsSection && state.settingsSection !== id) {
+    loadSettingsSection(state.settingsSection, { notice: settings.denied || settings.deniedAdmin || settings.deniedOwn });
+    return true;
+  }
+  return false;
+}
+
+// The deployment's users (GET /api/admin/users, an owner's read), with the
+// live organisations a new user may join (GET /api/admin/orgs) and the
+// sign-in mode the server runs (GET /api/admin/join-role — a dialog says when
+// a local user cannot sign in here, A13). The users' refusal is the
+// section's; the other two only narrow the dialog (no organisation select,
+// no mode line) when they fail.
+async function loadUsersSection(settings, gen, notice) {
+  const [users, orgs, joinRole] = await Promise.allSettled([loadUsers(), loadAdminOrgs(), loadJoinRole()]);
+  if (state.settings === settings) {
+    Object.assign(settings, {
+      users: users.status === 'fulfilled' ? users.value : null,
+      usersError: users.status === 'fulfilled' ? null : (users.reason?.message || 'no answer'),
+      orgs: orgs.status === 'fulfilled' ? orgs.value : null,
+      joinRole: joinRole.status === 'fulfilled' ? joinRole.value : null,
+    });
+  }
+  if (state.mode !== 'settings' || state.settings !== settings) return;
+  if (adminReadRefused(settings, users.status === 'rejected' ? users.reason : null, gen, 'users', { need: 'own' })) return;
+  settings.status.users = { kind: 'ok', text: notice ?? '' };
+  if (gen !== settingsGeneration || state.settingsSection !== 'users') return;
+  repaintSettings();
+}
+
+// The organisations (GET /api/admin/orgs) and the join role (GET
+// /api/admin/join-role, with the organisations for the default org's name):
+// an owner's reads. The section's own read's refusal is its status line; a
+// refusal by the gate downgrades the frame first.
+async function loadDeploymentSection(id, settings, gen, notice) {
+  const [orgs, joinRole] = await Promise.allSettled([loadAdminOrgs(), id === 'join-role' ? loadJoinRole() : Promise.resolve(settings.joinRole)]);
+  if (state.settings === settings) {
+    Object.assign(settings, {
+      orgs: orgs.status === 'fulfilled' ? orgs.value : null,
+      orgsError: orgs.status === 'fulfilled' ? null : (orgs.reason?.message || 'no answer'),
+    });
+    if (id === 'join-role') {
+      Object.assign(settings, {
+        joinRole: joinRole.status === 'fulfilled' ? joinRole.value : null,
+        joinRoleError: joinRole.status === 'fulfilled' ? null : (joinRole.reason?.message || 'no answer'),
+      });
+    }
+  }
+  if (state.mode !== 'settings' || state.settings !== settings) return;
+  const own = id === 'orgs' ? orgs : joinRole;
+  if (adminReadRefused(settings, own.status === 'rejected' ? own.reason : null, gen, id, { need: 'own' })) return;
+  settings.status[id] = { kind: 'ok', text: notice ?? '' };
+  if (gen !== settingsGeneration || state.settingsSection !== id) return;
+  repaintSettings();
+}
+
+// The default organisation's name, as GET /api/admin/orgs listed it (its id
+// when the list was not read).
+function settingsDefaultOrgName() {
+  const doc = state.settings?.orgs;
+  if (!doc?.defaultOrg) return null;
+  return (doc.orgs || []).find((o) => o.id === doc.defaultOrg)?.name ?? doc.defaultOrg;
+}
+
+// The audit (GET /api/audit, an admin's read; the deployment's rows an
+// owner's): the filters kept for the entry, the query only the filled ones
+// (auditQuery — "through" a day reaches the next midnight UTC). A first page
+// replaces the rows; an older page (`before`) adds to them. A refusal (a
+// filter the server refuses — `400: since must be before until`) is the
+// section's status as served.
+function settingsAudit(settings) {
+  return settings.audit || { filters: {}, doc: null, rows: [], error: null };
+}
+async function loadAuditSection(settings, gen, notice, { before = null } = {}) {
+  const prev = settingsAudit(settings);
+  let doc = null;
+  let refusal = null;
+  try { doc = await loadAudit(auditQuery(prev.filters, { owner: settingsAccess().owner, before })); }
+  catch (e) { refusal = e; }
+  if (state.mode !== 'settings' || state.settings !== settings) return;
+  const rows = Array.isArray(doc?.rows) ? doc.rows : [];
+  if (doc) settings.audit = { filters: prev.filters, doc, rows: before === null ? rows : [...prev.rows, ...rows], error: null };
+  else settings.audit = before === null ? { filters: prev.filters, doc: null, rows: [], error: refusal?.message || 'no answer' } : { ...prev, error: refusal?.message || 'no answer' };
+  if (adminReadRefused(settings, refusal, gen, 'audit')) return;
+  settings.status.audit = { kind: 'ok', text: notice ?? '' };
+  if (gen !== settingsGeneration || state.settingsSection !== 'audit') return;
+  repaintSettings();
+}
+
+// Apply: the filters change, the list starts again.
+function applyAuditFilters(filters) {
+  if (state.mode !== 'settings' || !state.settings) return;
+  state.settings.audit = { filters: { ...(filters || {}) }, doc: null, rows: [], error: null };
+  loadSettingsSection('audit');
+}
+
+// Older rows: the page before the oldest shown, added under it.
+function loadOlderAuditRows() {
+  const settings = state.settings;
+  const audit = settings?.audit;
+  if (state.mode !== 'settings' || state.settingsSection !== 'audit' || audit?.doc?.next == null) return;
+  const gen = ++settingsGeneration;
+  settings.status.audit = { kind: 'loading', text: 'Reading older rows…' };
+  repaintSettings();
+  loadAuditSection(settings, gen, null, { before: audit.doc.next });
+}
+
+// An audit row's time in this browser's local time (the ISO stays in the
+// row's <time datetime>).
+function auditTime(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? String(iso ?? '') : d.toLocaleString();
+}
+
+// The nav: a section the rank reads becomes the one on screen (persisted)
+// and is read anew; the focus stays on its nav item.
+function selectSettingsSection(id) {
+  if (state.mode !== 'settings') return;
+  if (settingsSectionFor(settingsAccess(), id, BUILT_SECTIONS) !== id) return;   // drawn unavailable: its click explains
+  state.settingsSection = id;
+  loadSettingsSection(id);
+}
+
+// Repaint Settings keeping the focus where it was: a nav item, or a control
+// of the section with an id.
+function repaintSettings() {
+  if (state.mode !== 'settings') return;
+  const active = document.activeElement;
+  const navItem = active?.closest?.('.set-nav') ? active.dataset.section : null;
+  const focusedId = !navItem && active?.id && active.closest?.('.set-page') ? active.id : null;
+  renderMainView();
+  if (navItem) document.querySelector(`.set-nav-item[data-section="${CSS.escape(navItem)}"]`)?.focus({ preventScroll: true });
+  else if (focusedId) document.getElementById(focusedId)?.focus({ preventScroll: true });
+}
+
+// The section on screen as the renderer takes it: its head, its model, its status line.
+function settingsSectionView(id, access) {
+  const settings = state.settings || freshSettings();
+  const head = settingsSectionHead(id, { orgName: state.orgName });
+  const status = settings.status[id] ?? null;
+  if (id === 'audit') {
+    const audit = settingsAudit(settings);
+    const model = buildAuditSectionModel({ doc: audit.doc, rows: audit.rows, filters: audit.filters, access, orgId: state.orgId, formatTime: auditTime, error: audit.error });
+    return { id, head, model, status, filters: audit.filters };
+  }
+  if (id === 'users') {
+    const model = buildUsersSectionModel({ users: settings.users, access, me: signedInLogin(), error: settings.usersError, formatTime: auditTime });
+    return { id, head, model, status };
+  }
+  if (id === 'orgs') {
+    const model = buildOrgsSectionModel({ orgs: settings.orgs?.orgs ?? null, defaultOrg: settings.orgs?.defaultOrg ?? null, access, activeOrg: state.orgId, error: settings.orgsError, formatTime: auditTime });
+    return { id, head, model, status };
+  }
+  if (id === 'join-role') {
+    const model = buildJoinRoleSectionModel({ doc: settings.joinRole, access, defaultOrgName: settingsDefaultOrgName(), error: settings.joinRoleError });
+    return { id, head, model, status };
+  }
+  if (id === 'members') {
+    const model = buildMembersSectionModel({
+      members: settings.members, org: settings.org ?? { id: state.orgId, name: state.orgName }, access,
+      me: signedInLogin(), acting: settingsActing(), error: settings.membersError,
+    });
+    return { id, head, model, status };
+  }
+  const model = id === 'environments'
+    ? buildEnvironmentsSectionModel({
+      services: state.services, access, orgName: state.orgName,
+      error: state.services === null ? (state.servicesStatus?.error || null) : null,
+      editable: BUILT_EDITORS.includes('environment'),
+    })
+    : buildEndpointsSectionModel({
+      endpoints: state.mcpEndpoints, services: state.services, access, orgName: state.orgName,
+      error: settings.endpointsError, editable: BUILT_EDITORS.includes('endpoint'),
+    });
+  return { id, head, model, status };
+}
+
+// An owner acting in the org on screen without being a member of it (D-M):
+// the head and the Members scope sentence say so.
+function settingsActing() {
+  return isActingOrg({ identity: state.identity, orgId: state.orgId });
+}
+
+// renderMainView's branch for mode 'settings': the frame and the section
+// from the state, the focus on the h1 when just entered.
+function renderSettingsHost(view, auditDrafts = null) {
+  const access = settingsAccess();
+  const section = settingsSectionFor(access, state.settingsSection, BUILT_SECTIONS);
+  const frame = buildSettingsFrameModel({ access, section, orgName: state.orgName, orgId: state.orgId, acting: settingsActing(), builtSections: BUILT_SECTIONS });
+  const sectionView = section ? settingsSectionView(section, access) : null;
+  if (sectionView?.id === 'audit') sectionView.drafts = auditDrafts;
+  renderSettings(view, frame, sectionView, settingsHost);
+  if (settingsFocusNext) {
+    settingsFocusNext = false;
+    view.querySelector('.set-title')?.focus({ preventScroll: true });
+    window.scrollTo({ top: 0 });
+  }
+}
+
+// A reload that lands in Settings in another org (the ORG chip changed in
+// Settings — design §3.5): this org's snapshot written now and no write
+// after it, the target org's seeded with Settings and the section, then the
+// org chosen and the page reloaded.
+function reloadIntoSettings(orgId, section = null) {
+  persistence.write();
+  persistence.suspend();
+  persistence.seed(signedInLogin(), orgId, { mode: 'settings', settingsSection: section });
+  setActiveOrg(orgId);
+  window.location.reload();
+}
+
+// ---------- the Settings record editor (design §5, the editor idiom) ----------
+
+// The pop-up over one record of a section (an MCP endpoint, an environment —
+// new or registered): UI state, never persisted — a reload lands on the
+// section, closed. Drawn into its own host on <body>, outside #layer-view, so
+// a section repaint keeps what was typed and the focus. `record` is the row
+// as last read (kept when a re-read fails; a re-read that lacks it closes the
+// editor); `opener` the selector the focus returns to. The environment
+// editor has a second door, the service page (design §5.2, D-C): `page` is
+// the service whose page opened it (null from Settings) — leaving that page
+// closes it, as leaving Settings closes one opened there. `endpointsError`
+// is the refusal of the endpoint list read when the editor opened (A4).
+let settingsEditor = null;   // { kind, id, serviceId, page, record, draft, status, step, action, opener, endpointsError, secret, signIn } | null
+// A temporary password (users, D-D) lives in `settingsEditor.secret` only —
+// never in `state`, the draft, a status, a toast, announce() or the console —
+// for as long as the dialog shows it; while it does, a pagehide listener
+// empties the dialog (the back-forward cache would restore it — C-4).
+// Bumped by every open: an open that awaited the endpoint list and was
+// overtaken meanwhile (another open, the page left) draws nothing.
+let settingsEditorOpening = 0;
+
+function settingsEditorHost() {
+  let el = document.getElementById('set-editor-host');
+  if (!el) { el = document.createElement('div'); el.id = 'set-editor-host'; document.body.appendChild(el); }
+  return el;
+}
+
+// The services the environment editor reads (its service select, its
+// eyebrow): the table; on the service page with the table unavailable, the
+// page's own record.
+function settingsEditorServices() {
+  if (Array.isArray(state.services)) return state.services;
+  const own = state.mode === 'service' ? findServiceRecord(state.serviceId) : null;
+  return own ? [own] : [];
+}
+
+// The environment `id` as read now: on the service page its record first
+// (the page's own read), then the table.
+function environmentRecord(id) {
+  const rows = [state.mode === 'service' ? findServiceRecord(state.serviceId) : null, ...(Array.isArray(state.services) ? state.services : [])];
+  for (const s of rows) {
+    const e = (s?.environments || []).find((x) => x.id === id);
+    if (e) return e;
+  }
+  return null;
+}
+
+// An environment as a write answered it, put in the service rows held (the
+// table and the page's record) — or taken out of them — so the dialog and the
+// page agree before the re-read lands.
+function adoptEnvironment(env, { remove = false } = {}) {
+  const rows = new Set([...(Array.isArray(state.services) ? state.services : []), servicePageRecord].filter(Boolean));
+  for (const s of rows) {
+    if (s.id !== env.serviceId) continue;
+    const list = Array.isArray(s.environments) ? [...s.environments] : [];
+    const i = list.findIndex((e) => e.id === env.id);
+    if (remove) { if (i >= 0) list.splice(i, 1); } else if (i >= 0) list[i] = env; else list.push(env);
+    s.environments = list;
+  }
+}
+
+// The record the editor is over, as the section's list has it now.
+function settingsEditorRecord(ed) {
+  if (ed.kind === 'org-name') return settingsOrgRecord();
+  if (ed.kind === 'join-role') return state.settings?.joinRole ?? ed.record;
+  if (ed.id === null) return null;
+  if (ed.kind === 'org') return Array.isArray(state.settings?.orgs?.orgs) ? (state.settings.orgs.orgs.find((o) => o.id === ed.id) ?? undefined) : ed.record;
+  if (ed.kind === 'member') return Array.isArray(state.settings?.members) ? (state.settings.members.find((m) => m.userId === ed.id) ?? undefined) : ed.record;
+  if (ed.kind === 'user') return Array.isArray(state.settings?.users) ? (state.settings.users.find((u) => u.id === ed.id) ?? undefined) : ed.record;
+  if (ed.kind === 'endpoint' && Array.isArray(state.mcpEndpoints)) return state.mcpEndpoints.find((ep) => ep.id === ed.id) ?? undefined;
+  if (ed.kind === 'environment' && (state.mode === 'service' || Array.isArray(state.services))) return environmentRecord(ed.id) ?? undefined;
+  return ed.record;
+}
+
+// The org the members section is about: its row as GET /api/org/members
+// answered, else the active org's id and name.
+function settingsOrgRecord() {
+  return state.settings?.org ?? { id: state.orgId, name: state.orgName };
+}
+
+// The editor belongs where it was opened: Settings, or the page of the
+// service it was opened from.
+function settingsEditorHere(ed) {
+  return ed.page === null ? state.mode === 'settings' : state.mode === 'service' && state.serviceId === ed.page;
+}
+
+// Draw the editor, or clear it: leaving where it was opened (Settings, the
+// service page — any mode change, another service) closes it, and so does
+// its record gone from a list read anew.
+function syncSettingsEditor() {
+  const el = document.getElementById('set-editor-host');
+  const ed = settingsEditor;
+  const record = ed ? settingsEditorRecord(ed) : null;
+  if (!ed || !settingsEditorHere(ed) || record === undefined) {
+    settingsEditor = null;
+    dropSettingsSecret(ed);
+    if (el && el.innerHTML) el.innerHTML = '';
+    return;
+  }
+  if (record) ed.record = record;
+  const model = buildSettingsEditorModel(ed.kind, ed.record, {
+    draft: ed.draft, status: ed.status, step: ed.step,
+    ctx: {
+      access: settingsAccess(), orgName: state.orgName, orgId: state.orgId, services: ed.kind === 'environment' ? settingsEditorServices() : state.services,
+      endpoints: state.mcpEndpoints, endpointsError: ed.endpointsError ?? state.settings?.endpointsError ?? null, serviceId: ed.serviceId ?? null,
+      members: state.settings?.members ?? null, me: signedInLogin(),
+      users: state.settings?.users ?? null, orgs: state.settings?.orgs?.orgs ?? null, defaultOrg: state.settings?.orgs?.defaultOrg ?? null,
+      joinRole: state.settings?.joinRole ?? null, action: ed.action ?? null, secret: ed.secret ?? null, signIn: ed.signIn === true, formatTime: auditTime,
+      defaultOrgName: settingsDefaultOrgName(), created: ed.created ?? null,
+    },
+  });
+  renderSettingsEditor(settingsEditorHost(), model, settingsHost);
+}
+
+// Where the focus returns on close: the opener (Edit… of its row, the
+// section's primary, the service page's button), else the section's primary,
+// else the page's h1.
+function settingsOpenerSelector(el) {
+  if (!el) return null;
+  if (el.dataset?.editEndpoint) return `[data-edit-endpoint="${CSS.escape(el.dataset.editEndpoint)}"]`;
+  if (el.dataset?.editEnv) return `[data-edit-env="${CSS.escape(el.dataset.editEnv)}"]`;
+  if (el.dataset?.memberRole) return `[data-member-role="${CSS.escape(el.dataset.memberRole)}"]`;
+  if (el.dataset?.memberRemove) return `[data-member-remove="${CSS.escape(el.dataset.memberRemove)}"]`;
+  if (el.dataset?.userManage) return `[data-user-manage="${CSS.escape(el.dataset.userManage)}"]`;
+  if (el.dataset?.orgRemove) return `[data-org-remove="${CSS.escape(el.dataset.orgRemove)}"]`;
+  return el.id ? `#${CSS.escape(el.id)}` : null;
+}
+
+// Open (a section's primary, a row's Edit…, the service page's Add
+// environment / Edit environment): the rank that may write gets the dialog
+// with the focus in its first field; another is told why (the controls say so
+// already, but the access can downgrade meanwhile). The environment editor
+// awaits the org's MCP endpoints when they were never read (the service page
+// opens it without Settings having read them — A4), so its select never
+// offers "none" alone over a bound record. An open MCP panel closes first —
+// one dialog at a time (T11).
+async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'edit' } = {}) {
+  const page = state.mode === 'service' ? state.serviceId : null;
+  if (!BUILT_EDITORS.includes(kind)) return;
+  if (kind === 'environment' ? !(state.mode === 'settings' || state.mode === 'service') : state.mode !== 'settings') return;
+  const access = settingsAccess();
+  const need = kind === 'environment' ? 'operate' : kind === 'org-create' ? 'createOrg'
+    : ['user', 'user-create', 'org', 'join-role'].includes(kind) ? 'own' : 'admin';
+  if (!access.can[need]) { explainUnavailable(access.why[need]); return; }
+  const opening = ++settingsEditorOpening;
+  const opener = settingsOpenerSelector(document.activeElement);
+  const mode = state.mode;
+  const find = () => {
+    if (kind === 'endpoint') return Array.isArray(state.mcpEndpoints) ? state.mcpEndpoints.find((ep) => ep.id === id) : null;
+    if (kind === 'member') return Array.isArray(state.settings?.members) ? state.settings.members.find((m) => m.userId === id) : null;
+    if (kind === 'user') return Array.isArray(state.settings?.users) ? state.settings.users.find((u) => u.id === id) : null;
+    if (kind === 'org') return Array.isArray(state.settings?.orgs?.orgs) ? state.settings.orgs.orgs.find((o) => o.id === id) : null;
+    if (kind === 'org-name') return settingsOrgRecord();
+    return environmentRecord(id);
+  };
+  if (id !== null && !find()) return;
+  let endpointsError = null;
+  if (kind === 'environment') {
+    if (id === null && !settingsEditorServices().length) return;   // no service yet: the primary says so (A11)
+    if (state.mcpEndpoints === null) {
+      try {
+        state.mcpEndpoints = await loadMcpEndpoints();
+        if (state.settings) state.settings.endpointsError = null;
+      } catch (e) {
+        endpointsError = e?.message || 'no answer';
+      }
+      if (opening !== settingsEditorOpening || state.mode !== mode || (page !== null && state.serviceId !== page)) return;
+    }
+  }
+  // The join role's dialog is over the role as read (none read: nothing to change).
+  const record = kind === 'join-role' ? (state.settings?.joinRole ?? null) : id === null ? null : find();
+  if ((id !== null || kind === 'join-role') && !record) return;
+  closeMcpPanel();
+  const draftPanel = document.getElementById('draft-mcp-panel');
+  if (draftPanel) draftPanel.hidden = true;
+  dropSettingsSecret(settingsEditor);
+  settingsEditor = {
+    kind, id, serviceId: record?.serviceId ?? serviceId ?? page, page: kind === 'environment' ? page : null,
+    record, draft: null, status: null, step: (kind === 'member' || kind === 'org') && step === 'confirm-delete' ? 'confirm-delete' : 'edit', opener, endpointsError,
+  };
+  syncSettingsEditor();
+  focusSettingsEditor();
+}
+
+function focusSettingsEditor() {
+  const dialog = document.querySelector('#set-editor-host .set-editor');
+  // The first field drawn (a box shown only on a choice may be hidden).
+  const first = [...(dialog?.querySelectorAll('input, textarea, select') || [])].find((el) => !el.closest('[hidden]'))
+    || dialog?.querySelector('#set-editor-confirm')
+    || dialog?.querySelector('#set-secret-copy, #set-editor-signin, #set-editor-switch, [data-user-action]')
+    || dialog?.querySelector('[role="radio"][tabindex="0"]') || dialog;
+  first?.focus({ preventScroll: true });
+}
+
+// A refusal that redrew the dialog — the gate's (the rank, the session or the
+// posture went): a confirm step the rank lost is drawn as the edit step, so
+// the danger button under the focus went with it, and the status region now
+// holding the refusal is a new node, whose sentence no reader hears. So the
+// refusal is announced and the focus goes back into the dialog, as after a
+// create's redraw. `drawn` the status region before the refusal: still the
+// same node, it spoke for itself and the focus never left.
+function refusalRedrawn(ed, drawn) {
+  if (settingsEditor !== ed) return;
+  const now = document.getElementById('set-editor-status');
+  if (!now || now === drawn) return;
+  announce(ed.status?.text ?? now.textContent);
+  const dialog = document.querySelector('#set-editor-host .set-editor');
+  if (dialog && !dialog.contains(document.activeElement)) focusSettingsEditor();
+}
+
+// Close (the scrim, esc, Close, Escape, a delete done, leaving Settings):
+// the focus returns to the opener when it is still on the page.
+function closeSettingsEditor({ focus = true } = {}) {
+  if (!settingsEditor) return;
+  const opener = settingsEditor.opener;
+  dropSettingsSecret(settingsEditor);
+  settingsEditor = null;
+  const el = document.getElementById('set-editor-host');
+  if (el) el.innerHTML = '';
+  if (focus) closeSettingsEditorFocus(opener);
+}
+
+// The delete step and back: the body swaps for the consequence sentence; what
+// was typed is kept for the way back.
+function setSettingsEditorStep(step, draft = null) {
+  if (!settingsEditor || settingsEditor.status?.kind === 'pending') return;
+  if (draft) settingsEditor.draft = draft;
+  // 'confirm-action:<action>' — a user's action (reset, disable, …) to confirm.
+  const [base, action = null] = String(step).split(':');
+  settingsEditor.step = ['confirm-delete', 'confirm-action'].includes(base) ? base : 'edit';
+  settingsEditor.action = settingsEditor.step === 'confirm-action' ? (action ?? settingsEditor.action ?? null) : null;
+  settingsEditor.status = null;
+  syncSettingsEditor();
+  focusSettingsEditor();
+}
+
+// A write refused by the gate: the session ended, the membership went or the
+// server closed the API (every control goes, with the server's sentence), or
+// the role went (the admin's controls go). Then what the rank may no longer
+// read is forgotten and the page repaints (design §4).
+function settingsWriteRefused(e, { need = 'admin' } = {}) {
+  if (!state.settings) return;
+  if (e?.denied === 'role' && need === 'own') state.settings.deniedOwn = e.message || 'refused';
+  else if (e?.denied === 'role') state.settings.deniedAdmin = e.message || 'refused';
+  else if (['auth', 'posture', 'org'].includes(e?.denied)) state.settings.denied = e.message || 'refused';
+  else return;
+  forgetSettingsAbove(settingsAccess());
+  repaintSettings();
+}
+
+// The section's lists after a write: the MCP endpoints (the pickers read the
+// same list) and the services (bindings may have gone), the section
+// repainted with `notice` in its status line.
+async function rereadAfterSettingsWrite(notice = null) {
+  if (state.mode === 'settings' && state.settingsSection) await loadSettingsSection(state.settingsSection, { notice });
+  syncSettingsEditor();
+}
+
+// Save (Create or Save): an endpoint created — POST with the non-empty
+// fields, `Created <name> (<origin>).`, and the dialog stays over the new
+// record — or saved: only the differing fields PATCHed (nothing differing →
+// "Nothing changed." without a call), the status naming what the server
+// says changed. A refusal is the server's sentence in the status line.
+async function saveSettingsEditor(draft) {
+  const ed = settingsEditor;
+  if (!ed || ed.status?.kind === 'pending') return null;
+  if (ed.kind === 'environment') return saveEnvironmentEditor(ed, draft);
+  if (ed.kind === 'org-name') return saveOrgName(ed, draft);
+  if (ed.kind === 'member-add') return saveMemberAdd(ed, draft);
+  if (ed.kind === 'member') return saveMemberRole(ed, draft);
+  if (ed.kind === 'user-create') return createUserEditor(ed, draft);
+  if (ed.kind === 'org-create') return createOrgEditor(ed, draft);
+  if (ed.kind === 'join-role') return saveJoinRoleEditor(ed, draft);
+  if (ed.kind !== 'endpoint') return null;
+  ed.draft = draft;
+  const record = ed.record;
+  const patch = record ? buildEndpointPatch(record, draft) : null;
+  if (record && !Object.keys(patch).length) {
+    ed.status = endpointSaveStatus([]);
+    syncSettingsEditor();
+    return { ok: true, changed: [] };
+  }
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let status;
+  try {
+    if (record) {
+      const res = await patchEndpoint(record.id, patch);
+      if (settingsEditor === ed && res.endpoint) ed.record = res.endpoint;
+      status = endpointSaveStatus(res.changed);
+    } else {
+      const created = await createEndpoint(buildEndpointCreate(draft));
+      status = { kind: 'saved', text: `Created ${created?.name ?? draft.name} (${created?.origin ?? ''}).` };
+      // The list holds it until the re-read below answers (the editor stays over it).
+      if (created && Array.isArray(state.mcpEndpoints)) state.mcpEndpoints = [...state.mcpEndpoints, created];
+      if (settingsEditor === ed && created) Object.assign(ed, { id: created.id, record: created });
+    }
+  } catch (e) {
+    if (settingsEditor !== ed) return null;
+    const drawn = document.getElementById('set-editor-status');
+    ed.status = { kind: 'error', text: e?.message || 'no answer' };
+    syncSettingsEditor();
+    settingsWriteRefused(e);
+    refusalRedrawn(ed, drawn);
+    return null;
+  }
+  const opened = settingsEditor === ed;
+  if (opened) { ed.status = status; ed.draft = null; }
+  syncSettingsEditor();
+  if (opened && !record) focusSettingsEditor();
+  announce(status.text);
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
+// The danger button of the delete step: DELETE, then the sentence naming the
+// environments it unbound (resolved through the services table as read
+// before the delete) in the section's status line; the dialog closes.
+async function confirmSettingsEditor(typed = null) {
+  const ed = settingsEditor;
+  if (!ed || ed.status?.kind === 'pending' || !ed.record) return null;
+  if (ed.kind === 'org' && ed.step === 'confirm-delete') return removeOrgEditor(ed, typed);
+  if (ed.kind === 'member' && ed.step === 'confirm-action') return patchMemberRole(ed, ed.draft?.role);
+  if (ed.kind === 'user' && ed.step === 'confirm-action') return userActionEditor(ed);
+  if (ed.step !== 'confirm-delete') return null;
+  if (ed.kind === 'member') return removeMemberEditor(ed);
+  if (ed.kind === 'environment') return deleteEnvironmentEditor(ed);
+  if (ed.kind !== 'endpoint') return null;
+  ed.status = { kind: 'pending', text: 'Deleting…' };
+  syncSettingsEditor();
+  let res;
+  try { res = await deleteEndpoint(ed.record.id); }
+  catch (e) {
+    if (settingsEditor !== ed) return null;
+    const drawn = document.getElementById('set-editor-status');
+    ed.status = { kind: 'error', text: e?.message || 'no answer' };
+    syncSettingsEditor();
+    settingsWriteRefused(e);
+    refusalRedrawn(ed, drawn);
+    return null;
+  }
+  const status = endpointDeleteStatus(ed.record.name, res.unbound, state.services);
+  // The row it was opened from goes with the record: the focus goes to the section's primary.
+  if (settingsEditor === ed) { ed.opener = null; closeSettingsEditor(); }
+  announce(status.text);
+  await rereadAfterSettingsWrite(status.text);
+  return { ok: true };
+}
+
+// ---------- the members and the org's name (design §5.4) ----------
+
+// A members write refused: the server's sentence in the dialog's status line
+// (the last-admin 409 among them, as served); the gate's refusals downgrade.
+function memberWriteRefused(ed, e, { need = 'admin' } = {}) {
+  if (settingsEditor !== ed) return null;
+  const drawn = document.getElementById('set-editor-status');
+  ed.status = { kind: 'error', text: e?.message || 'no answer' };
+  syncSettingsEditor();
+  settingsWriteRefused(e, { need });
+  refusalRedrawn(ed, drawn);
+  return null;
+}
+
+// The org renamed: the name everywhere this page shows it — the Settings
+// head, the section, the ORG chip (its option or its label) and the
+// membership /auth/me listed; the next boot reads it anew.
+function adoptOrgName(org) {
+  if (!org?.name) return;
+  if (state.settings) state.settings.org = { ...(state.settings.org || {}), ...org };
+  if (org.id === state.orgId || !org.id) {
+    state.orgName = org.name;
+    if (state.access) state.access = { ...state.access, orgName: org.name };
+  }
+  const entry = (state.identity?.orgs || []).find((o) => o.id === org.id);
+  if (entry) entry.name = org.name;
+  const option = [...document.querySelectorAll('#observa-org select option')].find((o) => o.value === org.id);
+  if (option) option.textContent = org.name;
+  updateObservaOrgChip();
+}
+
+// Rename… (PATCH /api/org): nothing differing → "Nothing changed." without a
+// call; the answer has no `changed`, so the status compares the names (A-16).
+async function saveOrgName(ed, draft) {
+  ed.draft = draft;
+  const before = ed.record?.name ?? state.orgName ?? '';
+  const name = String(draft?.name ?? '').trim();
+  if (name === before) {
+    ed.status = orgRenameStatus(before, before);
+    syncSettingsEditor();
+    return { ok: true, changed: [] };
+  }
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let org;
+  try { org = await renameOrg(name); }
+  catch (e) { return memberWriteRefused(ed, e); }
+  const status = orgRenameStatus(before, org?.name ?? name);
+  adoptOrgName(org ?? { id: ed.record?.id ?? state.orgId, name });
+  if (settingsEditor === ed) { ed.status = status; ed.draft = null; }
+  repaintSettings();
+  syncSettingsEditor();
+  announce(status.text);
+  return { ok: true };
+}
+
+// Add member (POST /api/org/members, an upsert — A-23): by login or by
+// verified email; the status says what the server did (added, the role
+// changed, nothing). The dialog stays for the next one; the list is read anew.
+async function saveMemberAdd(ed, draft) {
+  ed.draft = draft;
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let answer;
+  try { answer = await addMember(buildMemberAddBody(draft)); }
+  catch (e) { return memberWriteRefused(ed, e); }
+  const status = memberSaveStatus(answer, { login: draft?.by === 'email' ? null : String(draft?.value ?? '').trim() });
+  if (settingsEditor === ed) ed.status = status;
+  syncSettingsEditor();
+  announce(status.text);
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
+// Save on a member's dialog: the role chosen. The same role → "Nothing
+// changed." without a call; a change the reader should weigh first — their
+// own role, or an owner demoting the org's last admin (A12) — goes to the
+// confirm step, which says what it leaves; any other is sent at once.
+async function saveMemberRole(ed, draft) {
+  ed.draft = draft;
+  const role = draft?.role ?? ed.record.role;
+  if (role === ed.record.role) {
+    ed.status = { kind: 'idle', text: 'Nothing changed.' };
+    syncSettingsEditor();
+    return { ok: true, changed: [] };
+  }
+  const access = settingsAccess();
+  const you = ed.record.login === signedInLogin();
+  const ownerNote = access.owner && lastAdmin(ed.record, state.settings?.members || [], { owner: false }) && role !== 'admin';
+  if (you || ownerNote) { setSettingsEditorStep('confirm-action', draft); return { ok: true, confirm: true }; }
+  return patchMemberRole(ed, role);
+}
+
+// PATCH /api/org/members/:userId { role }: `<login>: <from> → <to>.` A
+// reader who demoted themselves out of the admin role (still a member)
+// reads their rank anew: the members and the audit go, with what they held,
+// and the frame moves to a section the new rank reads (A-29, C-6).
+async function patchMemberRole(ed, role) {
+  if (!role) return null;
+  const login = ed.record.login;
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let res;
+  try { res = await patchMember(ed.record.userId, role); }
+  catch (e) { return memberWriteRefused(ed, e); }
+  const status = memberSaveStatus(res, { login });
+  announce(status.text);
+  if (login === signedInLogin() && !settingsAccess().owner && role !== 'admin') {
+    closeSettingsEditor({ focus: false });
+    await refreshAccess();
+    if (state.settings) state.settings.deniedAdmin = null;
+    forgetSettingsAbove(settingsAccess());
+    updateObservaOrgChip();
+    if (state.mode === 'settings' && state.settingsSection) await loadSettingsSection(state.settingsSection, { notice: status.text });
+    document.querySelector('.set-title')?.focus({ preventScroll: true });
+    return { ok: true };
+  }
+  if (settingsEditor === ed) { ed.status = status; ed.step = 'edit'; ed.draft = null; }
+  syncSettingsEditor();
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
+// Remove (DELETE /api/org/members/:userId): `Removed <login>.` in the
+// section's status line. The reader removing themselves from the org on
+// screen never stays on it: the next request would carry an org they are no
+// longer in (A3, C-2) — the status says so, and the page reloads into their
+// next organisation (or the no-org screen). An owner is never refused: the
+// page reloads into the same org's members, acted in from outside (D-M).
+async function removeMemberEditor(ed) {
+  const login = ed.record.login;
+  const orgName = settingsOrgRecord().name || state.orgName || state.orgId;
+  ed.status = { kind: 'pending', text: 'Removing…' };
+  syncSettingsEditor();
+  try { await removeMember(ed.record.userId); }
+  catch (e) { return memberWriteRefused(ed, e); }
+  if (login === signedInLogin()) {
+    const owner = settingsAccess().owner;
+    const text = leftOrgText(orgName, owner);
+    if (settingsEditor === ed) { ed.status = { kind: 'saved', text }; syncSettingsEditor(); }
+    announce(text);
+    if (owner) reloadIntoSettings(state.orgId, 'members');
+    else leaveOrgAndReload();
+    return { ok: true, left: true };
+  }
+  const text = `Removed ${login}.`;
+  // The row it was opened from goes with the membership: the focus goes to the section's primary.
+  if (settingsEditor === ed) { ed.opener = null; closeSettingsEditor(); }
+  announce(text);
+  await rereadAfterSettingsWrite(text);
+  return { ok: true };
+}
+
+// This browser leaves the org on screen: its snapshot is written now, the
+// active org forgotten — the boot picks the first live membership, or draws
+// the no-org screen — and the page reloads.
+function leaveOrgAndReload() {
+  persistence.write();
+  persistence.suspend();
+  setActiveOrg(null);
+  window.location.reload();
+}
+
+// ---------- the deployment's users (design §5.7 — an owner's) ----------
+
+// The temporary password: 20 random bytes from Web Crypto (D-D).
+function drawTemporaryPassword() {
+  return temporaryPassword(crypto.getRandomValues(new Uint8Array(20)));
+}
+
+// The pagehide listener held while a dialog shows a password (C-4): the
+// dialog is emptied before the page can enter the back-forward cache.
+function onSettingsSecretPagehide() {
+  closeSettingsEditor({ focus: false });
+}
+
+// The dialog now holds a password: the step that shows it, and the pagehide
+// clearing while it does.
+function holdSettingsSecret(ed, secret) {
+  ed.secret = secret;
+  ed.step = 'secret';
+  window.addEventListener('pagehide', onSettingsSecretPagehide);
+}
+
+// The dialog lets go of its password (Close, leaving, pagehide, a sign-in).
+function dropSettingsSecret(ed) {
+  if (!ed?.secret) return;
+  ed.secret = null;
+  window.removeEventListener('pagehide', onSettingsSecretPagehide);
+}
+
+// Copy: the clipboard, else the password selected for the reader to copy.
+// Nothing about it is announced but that it happened.
+async function copySettingsSecret() {
+  const value = settingsEditor?.secret?.value;
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+    announce('Copied.');
+  } catch {
+    const code = document.getElementById('set-secret-value');
+    const range = document.createRange();
+    if (code) { range.selectNodeContents(code); const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range); }
+    announce('Selected — copy it with the keyboard.');
+  }
+}
+
+// Go to sign-in: the dialog (and any password it shows) is cleared first.
+function goToSignIn() {
+  closeSettingsEditor({ focus: false });
+  window.location.assign('/auth/login');
+}
+
+// This browser's traces of a user whose session ends from Settings (their
+// own disable or sign-out everywhere — C-5): the MCP URLs, endpoints and
+// deploy profiles, every snapshot in every org, the recent services — as the
+// account menu's sign-out clears them. Nothing is written after.
+function forgetBrowserTraces(login) {
+  persistence.suspend();
+  forgetMcpUrls(login);
+  persistence.forget(login);
+  forgetRecentServices();
+}
+
+// Create (POST /api/admin/users) with a temporary password drawn here, then
+// the reset with the same value (POST …/password) so the account must change
+// it at first sign-in (D-D: the create alone leaves it unforced). The dialog
+// then shows the password once. A create that armed sign-in (the first
+// local user on a store never armed — D-E) makes no second call: /auth/me
+// says whether sign-in is on now (any further call would then redirect) —
+// a JSON answer when it is; without sign-in (OBSERVOGRAM_AUTH=off) the route
+// is not mounted and the shell answers instead, as the boot's
+// loadIdentity() reads it.
+async function createUserEditor(ed, draft) {
+  ed.draft = draft;
+  const body = buildUserCreateBody(draft);
+  ed.status = { kind: 'pending', text: 'Creating…' };
+  syncSettingsEditor();
+  const password = drawTemporaryPassword();
+  let answer;
+  try { answer = await createUser({ ...body, password }); }
+  catch (e) { return memberWriteRefused(ed, e, { need: 'own' }); }
+  if (settingsEditor !== ed) return null;
+  const login = answer.user?.login ?? body.login;
+  const orgs = state.settings?.orgs?.orgs || [];
+  const orgName = orgs.find((o) => o.id === body.orgId)?.name ?? null;
+  let reset = null;
+  let signIn = false;
+  let forced = false;
+  if (answer.armed) {
+    try {
+      const r = await fetch('/auth/me');
+      const body = r.ok ? await r.json().catch(() => null) : null;
+      signIn = Boolean(body && typeof body === 'object' && 'authenticated' in body);
+    } catch { signIn = false; }
+  } else {
+    try { await userAction(answer.user.id, 'password', { password }); reset = 'ok'; forced = true; }
+    catch (e) { reset = e?.message || 'no answer'; }
+  }
+  const status = userCreateStatus(answer, { login, orgId: body.orgId ?? null, orgName, reset: answer.armed ? 'ok' : reset, signIn });
+  if (settingsEditor !== ed) return null;
+  holdSettingsSecret(ed, { login, value: password, forced });
+  Object.assign(ed, { status, signIn, draft: null });
+  syncSettingsEditor();
+  document.getElementById('set-secret-copy')?.focus({ preventScroll: true });
+  announce(status.text);
+  if (answer.armed && signIn) return { ok: true, armed: true };
+  if (state.mode === 'settings' && state.settingsSection) await loadSettingsSection(state.settingsSection);
+  return { ok: true };
+}
+
+// One user action, confirmed: reset (a new temporary password, shown once),
+// disable / enable, sign out everywhere, make or revoke owner. The status
+// says what the server did. One's own disable or sign-out ends this
+// browser's session: its traces go first, then the sentence and Go to
+// sign-in — and no further call (it would redirect mid-dialog, T8). One's
+// own owner revoke reads /auth/me again and re-gates the page.
+async function userActionEditor(ed) {
+  const action = ed.action;
+  const row = ed.record;
+  if (!action || !row) return null;
+  const login = row.login;
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let answer;
+  let password = null;
+  try {
+    if (action === 'reset') { password = drawTemporaryPassword(); answer = await userAction(row.id, 'password', { password }); }
+    else if (action === 'disable' || action === 'enable' || action === 'signout') answer = await userAction(row.id, action);
+    else if (action === 'owner-grant' || action === 'owner-revoke') answer = await setOwner(row.id, action === 'owner-grant');
+    else return null;
+  } catch (e) { return memberWriteRefused(ed, e, { need: 'own' }); }
+  const status = userActionStatus(action, answer, { login, defaultOrg: state.settings?.orgs?.defaultOrg ?? null, open: settingsAccess().posture === 'open', joinRole: state.settings?.joinRole ?? null, kind: row.kind, me: signedInLogin() });
+  if (answer.you && (action === 'disable' || action === 'signout')) {
+    forgetBrowserTraces(signedInLogin());
+    if (settingsEditor === ed) { Object.assign(ed, { step: 'notice', action: null, status, signIn: true }); syncSettingsEditor(); }
+    document.getElementById('set-editor-signin')?.focus({ preventScroll: true });
+    announce(status.text);
+    return { ok: true, signedOut: true };
+  }
+  if (settingsEditor === ed) {
+    if (action === 'reset') holdSettingsSecret(ed, { login, value: password, forced: true });
+    else ed.step = 'edit';
+    Object.assign(ed, { action: null, status });
+    syncSettingsEditor();
+    focusSettingsEditor();
+  }
+  announce(status.text);
+  if (action === 'owner-revoke' && login === signedInLogin()) return afterOwnOwnerRevoke(status.text);
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
+// One's own owner role revoked: /auth/me read again; in an org this user is
+// a member of, the page re-gates (the deployment's sections go, with what
+// they held) and lands on a section the rank reads; else this browser
+// reloads into their first organisation.
+async function afterOwnOwnerRevoke(notice) {
+  closeSettingsEditor({ focus: false });
+  await loadIdentity();
+  const member = (state.identity?.orgs || []).some((o) => o.id === state.orgId);
+  if (!member) { leaveOrgAndReload(); return { ok: true, left: true }; }
+  await refreshAccess();
+  if (state.settings) state.settings.deniedOwn = null;
+  forgetSettingsAbove(settingsAccess());
+  updateObservaOrgChip();
+  if (state.mode === 'settings' && state.settingsSection) await loadSettingsSection(state.settingsSection, { notice });
+  document.querySelector('.set-title')?.focus({ preventScroll: true });
+  return { ok: true };
+}
+
+// ---------- the organisations and the join role (design §5.8–5.9 — an owner's) ----------
+
+// New organisation (POST /api/admin/orgs): the creator becomes its first
+// admin. The dialog then says where its files live — and that a directory
+// was taken over — and offers Switch to it (this browser reloads into its
+// Settings, design §3.5); the list is read anew.
+async function createOrgEditor(ed, draft) {
+  ed.draft = draft;
+  ed.status = { kind: 'pending', text: 'Creating…' };
+  syncSettingsEditor();
+  let answer;
+  try { answer = await createOrg(buildOrgCreateBody(draft)); }
+  catch (e) { return memberWriteRefused(ed, e, { need: 'own' }); }
+  const status = orgCreateStatus(answer);
+  if (settingsEditor === ed) {
+    Object.assign(ed, { status, step: 'notice', created: { id: answer.org?.id ?? buildOrgCreateBody(draft).id }, draft: null });
+    syncSettingsEditor();
+    document.getElementById('set-editor-switch')?.focus({ preventScroll: true });
+  }
+  announce(status.text);
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
+// Remove (DELETE /api/admin/orgs/:id), once its id is typed: the server's
+// note in the section's status line, the dialog closed. Removing the org
+// this browser is in reloads it into the first other organisation.
+async function removeOrgEditor(ed, typed) {
+  const org = ed.record;
+  if (String(typed ?? '').trim() !== org.id) { explainUnavailable(`Type ${org.id} to remove it`); return null; }
+  ed.status = { kind: 'pending', text: 'Removing…' };
+  syncSettingsEditor();
+  let answer;
+  try { answer = await removeOrg(org.id); }
+  catch (e) { return memberWriteRefused(ed, e, { need: 'own' }); }
+  const status = orgRemoveStatus(org, answer);
+  announce(status.text);
+  if (org.id === state.orgId) {
+    if (settingsEditor === ed) { ed.status = status; syncSettingsEditor(); }
+    leaveOrgAndReload();
+    return { ok: true, left: true };
+  }
+  // The row's Remove… goes with the org: the focus goes to the section's primary.
+  if (settingsEditor === ed) { ed.opener = null; closeSettingsEditor(); }
+  await rereadAfterSettingsWrite(status.text);
+  return { ok: true };
+}
+
+// Save on the join role (PUT /api/admin/join-role): the same role →
+// "Nothing changed." without a call; admin unticked → no call, the box's
+// reason (joinRoleBody answers null); else the body joinRoleBody builds —
+// `confirm` on an admin body only.
+async function saveJoinRoleEditor(ed, draft) {
+  ed.draft = draft;
+  const role = draft?.role ?? null;
+  if (role === (ed.record?.role ?? null)) {
+    ed.status = joinRoleStatus({ role, from: role });
+    syncSettingsEditor();
+    return { ok: true, changed: [] };
+  }
+  const body = joinRoleBody(role, draft?.confirm === true);
+  if (!body) { explainUnavailable('tick the box first'); return null; }
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let answer;
+  try { answer = await putJoinRole(body.role, body.confirm === true); }
+  catch (e) { return memberWriteRefused(ed, e, { need: 'own' }); }
+  const status = joinRoleStatus(answer);
+  if (state.settings?.joinRole) state.settings.joinRole = { ...state.settings.joinRole, role: answer.role };
+  if (settingsEditor === ed) Object.assign(ed, { status, draft: null, record: state.settings?.joinRole ?? ed.record });
+  syncSettingsEditor();
+  announce(status.text);
+  await rereadAfterSettingsWrite();
+  return { ok: true };
+}
+
+// ---------- the environment editor (design §5.1–5.2: one editor, two doors) ----------
+
+// An environment write refused: the server's sentence in the status line; a
+// refusal by the session or the role also downgrades the rank the controls
+// draw from (6a's rule), and Settings forgets what the rank may no longer read.
+function environmentWriteRefused(ed, e) {
+  if (e?.denied === 'auth' || e?.denied === 'role') state.access = { ...(state.access || {}), canWrite: false, reason: e.message };
+  if (settingsEditor !== ed) return;
+  const drawn = document.getElementById('set-editor-status');
+  ed.status = { kind: 'error', text: e?.message || 'no answer' };
+  syncSettingsEditor();
+  settingsWriteRefused(e);
+  if (state.mode === 'service' && (e?.denied === 'auth' || e?.denied === 'role')) repaintServicePage();
+  refusalRedrawn(ed, drawn);
+}
+
+// After a write: the cached verdicts of the service's packs are dropped (the
+// environment's tier grades them — 6a A-M3); Settings reads its section anew
+// (the table with it) with `notice` in its status line; the service page
+// reads the table and its record anew and repaints.
+async function rereadAfterEnvironmentWrite(serviceId, notice = null) {
+  forgetServiceVerdicts(findServiceRecord(serviceId));
+  if (state.mode === 'settings') {
+    if (state.settingsSection) await loadSettingsSection(state.settingsSection, { notice });
+  } else {
+    await refreshServices();
+    if (state.mode === 'service' && state.serviceId === serviceId) {
+      try { const fresh = await loadService(serviceId); if (fresh) adoptServiceRecord(fresh); } catch { /* the write's own answer stands */ }
+      if (state.mode === 'service' && state.serviceId === serviceId) repaintServicePage();
+    }
+  }
+  syncSettingsEditor();
+}
+
+// Save (Create or Save) of the environment editor: created — POST
+// /api/services/:id/environments with the non-empty fields, `Created <name>
+// on <service>.`, and the dialog stays over the new record (on its service's
+// page, its tab is selected) — or saved: only the differing fields PATCHed
+// (nothing differing → "Nothing changed." without a call), the status naming
+// what the server says changed. The binding is never resent nor nulled when
+// the endpoint list could not be read (A4). A refusal is the server's sentence.
+async function saveEnvironmentEditor(ed, draft) {
+  ed.draft = draft;
+  const d = { ...draft };
+  if (!Array.isArray(state.mcpEndpoints)) d.mcpEndpointId = undefined;
+  const record = ed.record;
+  const patch = record ? buildEnvironmentPatch(record, d) : null;
+  if (record && !Object.keys(patch).length) {
+    ed.status = environmentSaveStatus([]);
+    syncSettingsEditor();
+    return { ok: true, changed: [] };
+  }
+  const serviceId = record ? record.serviceId : Number(d.serviceId ?? ed.serviceId);
+  const service = settingsEditorServices().find((s) => s.id === serviceId) || findServiceRecord(serviceId);
+  ed.status = { kind: 'pending', text: 'Saving…' };
+  syncSettingsEditor();
+  let status;
+  let env;
+  try {
+    if (record) {
+      const res = await patchEnvironment(record.id, patch);
+      env = res.environment;
+      status = environmentSaveStatus(res.changed);
+    } else {
+      const body = buildEnvironmentCreate(d);
+      env = await createEnvironment(serviceId, body);
+      status = { kind: 'saved', text: `Created ${env?.name ?? body.name} on ${service?.name ?? `service ${serviceId}`}.` };
+    }
+  } catch (e) {
+    environmentWriteRefused(ed, e);
+    return null;
+  }
+  if (env) {
+    adoptEnvironment({ ...env, serviceId: env.serviceId ?? serviceId });
+    // On its service's page the tab follows: a rename keeps it selected; a new one is shown.
+    if (state.mode === 'service' && state.serviceId === serviceId && (!record || state.serviceEnv === record.name)) state.serviceEnv = env.name;
+  }
+  const opened = settingsEditor === ed;
+  if (opened) {
+    ed.status = status;
+    ed.draft = null;
+    if (env) Object.assign(ed, { id: env.id, serviceId: env.serviceId ?? serviceId, record: { ...env, serviceId: env.serviceId ?? serviceId } });
+  }
+  if (state.mode === 'service') repaintServicePage(); else syncSettingsEditor();
+  if (opened && !record) focusSettingsEditor();
+  announce(status.text);
+  await rereadAfterEnvironmentWrite(serviceId);
+  return { ok: true };
+}
+
+// The danger button of the environment's delete step: DELETE, `Deleted
+// <env>.` (in the section's status line in Settings; said on the service
+// page), the dialog closes and the focus goes back to where it came from.
+async function deleteEnvironmentEditor(ed) {
+  const env = ed.record;
+  ed.status = { kind: 'pending', text: 'Deleting…' };
+  syncSettingsEditor();
+  try { await deleteEnvironment(env.id); }
+  catch (e) {
+    environmentWriteRefused(ed, e);
+    return null;
+  }
+  const status = { kind: 'saved', text: `Deleted ${env.name}.` };
+  adoptEnvironment(env, { remove: true });
+  if (state.mode === 'service' && state.serviceId === env.serviceId && state.serviceEnv === env.name) state.serviceEnv = null;
+  if (settingsEditor === ed) {
+    // The row it was opened from goes with the record (Settings): the focus goes to the section's primary.
+    if (ed.page === null) ed.opener = null;
+    closeSettingsEditor({ focus: false });
+    if (state.mode === 'service') repaintServicePage();
+    closeSettingsEditorFocus(ed.opener);
+  }
+  announce(status.text);
+  if (state.mode === 'service') toast(status.text);
+  await rereadAfterEnvironmentWrite(env.serviceId, status.text);
+  return { ok: true };
+}
+
+// The focus after a close: the opener when still on the page, else the
+// section's primary or the page's h1 (Settings), else the service page's
+// environment buttons or its heading.
+function closeSettingsEditorFocus(opener) {
+  const back = (opener && document.querySelector(opener)) || document.getElementById('set-primary') || document.querySelector('.set-title')
+    || document.getElementById('svc-edit-env') || document.getElementById('svc-add-env') || document.querySelector('.svc-page-name');
+  back?.focus({ preventScroll: true });
+}
+
+// The host the Settings renderers get (docs/UI_CONVENTIONS.md §3): the two
+// stable hooks plus Settings' actions under `settings`.
+const settingsActions = {
+  open: (section = null) => enterSettings(section),
+  back: () => leaveSettings(),
+  selectSection: (id) => selectSettingsSection(id),
+  retry: (id) => loadSettingsSection(id),
+  explain: explainUnavailable,
+  build: () => enterBuildMode('define'),
+  openService: (id) => { enterServicePage(id); },
+  openEditor: ({ kind, id = null, serviceId = null, step = 'edit' } = {}) => openSettingsEditor(kind, id, serviceId, { step }),
+  closeEditor: () => closeSettingsEditor(),
+  save: (draft) => saveSettingsEditor(draft),
+  step: (step, draft = null) => setSettingsEditorStep(step, draft),
+  confirm: (typed = null) => confirmSettingsEditor(typed),
+  auditApply: (filters) => applyAuditFilters(filters),
+  auditMore: () => loadOlderAuditRows(),
+  pickMcpTarget: (container, value) => pickMcpTarget(container, value),
+  openMcpEndpoints: () => openMcpEndpointsFromPicker(),
+  copySecret: () => copySettingsSecret(),
+  signIn: () => goToSignIn(),
+  switchTo: (orgId, section = null) => { closeSettingsEditor({ focus: false }); reloadIntoSettings(orgId, section); },
+};
+const settingsHost = { renderMainView, renderTabs, settings: settingsActions };
 
 // Greet a person only by a name that is a name — "Welcome back, Admin" read
 // as a role label, not a greeting.
@@ -1765,7 +3648,7 @@ function homeCheckRemembered() {
   try { return localStorage.getItem('studioHomeChoice') === 'check'; } catch (_) { return false; }
 }
 
-function wireHomeChoice(view) {
+function wireHomeChoice(view, model) {
   const checkBtn = view.querySelector('#home-choice-check');
   const panel = view.querySelector('#home-check');
   checkBtn?.addEventListener('click', () => {
@@ -1779,22 +3662,11 @@ function wireHomeChoice(view) {
       (view.querySelector('#home-service-search') || view.querySelector('#home-mcp-url'))?.focus({ preventScroll: true });
     }
   });
-  view.querySelector('#home-choice-build')?.addEventListener('click', () => enterBuildMode('define'));
-  view.querySelectorAll('.svc-gate-card').forEach(card => {
-    card.addEventListener('click', () => enterServiceWorkspace(card.dataset.service));
-  });
-  const search = view.querySelector('#home-service-search');
-  search?.addEventListener('input', () => {
-    const q = search.value.trim().toLowerCase();
-    let shown = 0;
-    view.querySelectorAll('.svc-gate-card').forEach(card => {
-      const hit = !q || card.dataset.search.includes(q);
-      card.hidden = !hit;
-      if (hit) shown++;
-    });
-    const none = view.querySelector('#home-service-none');
-    if (none) none.hidden = shown > 0;
-  });
+  // Build is operator work (POST /api/library/instantiate): a rank without it
+  // sees the card drawn unavailable with the reason, and the click explains.
+  const buildBtn = view.querySelector('#home-choice-build');
+  if (!model.build.enabled) markUnavailable(buildBtn, model.build.reason);
+  buildBtn?.addEventListener('click', () => (model.build.enabled ? enterBuildMode('define') : explainUnavailable(model.build.reason)));
 }
 
 // The signed-in service gate and the local hero are one screen now: the
@@ -1802,13 +3674,20 @@ function wireHomeChoice(view) {
 // user's services; both keep the import sources one step down.
 function renderServiceGate() { renderHomeView(); }
 
-// Reflect the active service into the always-visible OBSERVA-bar chip.
-// Called wherever the selection can change (service select, analyze
-// mode entry, mode chrome) — hidden on home where no service is active.
+// The one ORG chip (STORE_PLAN §6, slice 6a D6/D7): on every screen in the
+// OBSERVA bar — a switcher for a user in a second org, a label for one org
+// that is not the default one, nothing otherwise (orgChipModel). The list is
+// the user's memberships (/auth/me `orgs`: an org the chip offers is one the
+// next boot can re-select) and, for an owner acting in an org they are not a
+// member of, that org labelled `<name> — acting as owner` (D-M: the boot
+// keeps it; choosing a membership leaves it); the role in the title is the
+// EFFECTIVE one the guard applies in the active org (GET /api/orgs → state.access — an owner
+// reads admin), the membership's as the fallback before that call answered.
+// Called wherever the chrome repaints (updateObservaServiceChip).
 function updateObservaOrgChip() {
   const chip = document.getElementById('observa-org');
   if (!chip) return;
-  const orgs = state.identity?.orgs || [];
+  const orgs = orgChipEntries({ identity: state.identity, orgId: getActiveOrg(), orgName: state.orgName });
   const { kind, active } = orgChipModel(orgs, getActiveOrg());
   if (kind === 'none') { chip.hidden = true; return; }
   const name = document.getElementById('observa-org-name');
@@ -1819,10 +3698,12 @@ function updateObservaOrgChip() {
     for (const o of orgs) {
       const opt = document.createElement('option');
       opt.value = o.id;
-      opt.textContent = o.name || o.id;
       sel.appendChild(opt);
     }
     sel.addEventListener('change', () => {
+      // From Settings the reload lands in Settings in the chosen org, on the
+      // same section (the target org's snapshot is seeded first).
+      if (state.mode === 'settings') { reloadIntoSettings(sel.value, state.settingsSection); return; }
       setActiveOrg(sel.value);
       // Every view is a projection of the active org's workspace — a
       // clean re-boot is the honest refresh.
@@ -1831,21 +3712,49 @@ function updateObservaOrgChip() {
     name.replaceWith(sel);
   }
   const sel = chip.querySelector('select');
-  if (sel) sel.value = active.id;
-  else name.textContent = active.name || active.id;
-  chip.title = `organisation: ${active.id} (role: ${active.role || 'member'})`;
+  // The labels on every repaint: the acting org's name is known once GET /api/orgs answered.
+  if (sel) {
+    for (const opt of sel.options) { const o = orgs.find((e) => e.id === opt.value); if (o) opt.textContent = orgChipLabel(o); }
+    sel.value = active.id;
+  } else name.textContent = orgChipLabel(active);
+  const role = (state.access?.posture === 'identity' && state.access.role) || active.effectiveRole || active.role || 'member';
+  chip.title = `organisation: ${active.id} (role: ${role})`;
   chip.hidden = false;
 }
 
+// The chip resolves the active service key against the table (services-model.mjs
+// serviceChipModel): a record → a <button> back to its page; a key no record
+// covers (the table unavailable, a derived-only service) → today's label, not
+// interactive; hidden on home, on the page itself and in Build.
 function updateObservaServiceChip() {
   updateObservaOrgChip();
-  const chip = document.getElementById('observa-service');
+  let chip = document.getElementById('observa-service');
   if (!chip) return;
+  const derived = serviceCatalogue().find(s => s.key === state.selectedService);
+  const m = serviceChipModel({ services: state.services, selected: state.selectedService, derivedLabel: derived?.label ?? null });
+  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings' || m.kind === 'none') { chip.hidden = true; return; }
+  const wantTag = m.kind === 'record' ? 'BUTTON' : 'SPAN';
+  if (chip.tagName !== wantTag) {
+    const next = document.createElement(wantTag.toLowerCase());
+    next.className = chip.className;
+    next.id = chip.id;
+    if (wantTag === 'BUTTON') next.type = 'button';
+    next.innerHTML = chip.innerHTML;
+    chip.replaceWith(next);
+    chip = next;
+  }
   const name = document.getElementById('observa-service-name');
-  const services = serviceCatalogue();
-  const active = services.find(s => s.key === state.selectedService);
-  if (state.mode === 'home' || state.mode === 'build' || !active) { chip.hidden = true; return; }
-  name.textContent = active.label;
+  if (name) name.textContent = m.label;
+  if (m.kind === 'record') {
+    chip.title = `Back to the service page of ${m.label}`;
+    chip.setAttribute('aria-label', `Service ${m.label} — back to its page`);
+    chip.onclick = () => enterServicePage(m.serviceId, state.serviceEnv);
+  } else {
+    // A label: its text is the whole name; the title shows it where the phone cap ellipsizes it (app.css).
+    chip.title = `service: ${m.label}`;
+    chip.removeAttribute('aria-label');
+    chip.onclick = null;
+  }
   chip.hidden = false;
 }
 
@@ -1860,8 +3769,9 @@ function enterServiceWorkspace(serviceKey) {
   // snapshot of some other service is never opened as this one's Pack A.
   const matches = state.catalog.filter(p => p.ok
     && (serviceKeyForPack(p) === serviceKey || packMatchesService(p, serviceKey, { side: 'a' })));
-  const declared = matches.filter(p => !isLiveAggregatePack(p));
-  const pack = declared[declared.length - 1] || matches[matches.length - 1];
+  // The same rule the record card, the page and the selector apply
+  // (services-model.mjs newestPack): the newest declared pack, else the newest aggregate.
+  const { pack } = newestPack(matches, p => !isLiveAggregatePack(p));
   if (!pack) {
     // Nothing loadable for it here: say so, open nothing, and record
     // nothing — the tile must not then read "Opened".
@@ -1878,6 +3788,7 @@ function enterServiceWorkspace(serviceKey) {
 
 function enterAnalyzeMode(packId, env) {
   if (!packId) return;
+  navGeneration++;
   state.mode = 'single';
   state.selectedPackId = packId;
   state.selectedEnv    = env || defaultEnvFor(packId);
@@ -1915,7 +3826,7 @@ function enterCompareMode(aId, aEnv, bId, bEnv) {
 function applyModeChrome() {
   // The BUILD journey hides the pack controls like home does: there is no
   // pack until VERIFY's "Open pack in Discover" (with visible gaps, or without) registers one.
-  const isHome = state.mode === 'home' || state.mode === 'build';
+  const isHome = state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings';
   updateObservaServiceChip();
   // Under the OBSERVA chrome the pack/env selectors are PINNED as a
   // permanent master row — they are the user's primary controls and
@@ -1974,7 +3885,7 @@ function setupResetButton() {
   const btn = $('#reset-btn');
   if (!btn) return;
   btn.onclick = async () => {
-    const ok = confirm('Reset Observogram?\n\n' +
+    const ok = confirm(`${state.brand.chrome.resetTitle}\n\n` +
       'This will:\n' +
       '  • drop every uploaded / scanned / drafted pack from the server\n' +
       '  • clear saved view + filter + focus + trace preferences from localStorage\n' +
@@ -2061,6 +3972,7 @@ function restoreBuildDraft(saved) {
 }
 
 export function enterBuildMode(step) {
+  navGeneration++;
   state.mode = 'build';
   state.activeCardKey = null;
   // The step clamped to what is reachable now; a demoted step (VERIFY before the
@@ -2086,7 +3998,25 @@ function exitBuildMode() {
   if (state.mode !== 'build') return;
   state.build.editor = null;   // the pop-up editor is UI state of the journey; the render that follows clears its host
   if (state.selectedPackId) { state.mode = 'single'; state.view = 'layers'; enterAnalyzeMode(state.selectedPackId, state.selectedEnv); return; }
+  // Opened from a service page (no pack was open): back to that page. A row
+  // deleted meanwhile (404) or refused since cannot be landed on — the exit
+  // still works: home, with the server's sentence and where the user ended up
+  // (a refusal names a way out that works), and the stale binding dropped.
+  if (state.serviceId) {
+    const name = findServiceRecord(state.serviceId)?.name || 'The service this Build was opened from';
+    enterServicePage(state.serviceId, state.serviceEnv, {
+      onRefused: (why) => { if (state.mode !== 'build') return; goHome(); toast(buildExitRefusal(name, why), 'error'); },
+    });
+    return;
+  }
   goHome();
+}
+
+// Where leaving Build goes, said plainly: the open pack, the service page it was opened from, or home.
+function buildExitLabel() {
+  if (state.selectedPackId) return 'Back to the open pack';
+  if (state.serviceId) return `Back to ${findServiceRecord(state.serviceId)?.name || 'the service'}`;
+  return 'Back to home';
 }
 
 // `todo` (a todo path) lands the step on that todo instead of its top — a card's
@@ -2380,6 +4310,9 @@ const buildActions = {
     rerenderBuild();
     scheduleBuildInstantiate(0);
   },
+  // The slug guard as typed (design §6.4): the DEFINE view repaints its note on every keystroke from this —
+  // the key rule lives here, bound at boot (T19), never imported by a view (T8). null when nothing is to say.
+  originNote(name) { return buildDefineOriginNote(buildDefineOrigin(name)); },
   // DEFINE's primary action: the definition is confirmed once (seeded, persisted) and COMPILE opens; the
   // column recedes into the seed card there. Idempotent: once seeded it is "Continue to Compile →".
   seed() {
@@ -2575,16 +4508,26 @@ const buildActions = {
     b.registeredId = id;
     const left = placeholdersRemaining(b.result);
     const onPh = res.summary?.onPlaceholder?.length || 0;
-    try { await loadCatalog(); } catch (e) { toast(`Registered, but the catalog did not refresh: ${e.message}`, 'error'); }
+    try { await refreshCatalogue(); } catch (e) { toast(`Registered, but the catalog did not refresh: ${e.message}`, 'error'); }
+    // Build ends by writing the service row (docs/STORE_PLAN.md §6, slice 6a; design §6.1): the register linked the
+    // pack by its service's slug and created the row when none existed — tier null, owners []. The tier and the
+    // owners typed on DEFINE go onto that row only where it has none (a person's values are never overwritten; a
+    // differing tier is said), and never onto a row that is not the record Build was opened from (a renamed record
+    // or an explicit slug lands the pack under another service — named, not repaired: there is no re-link by id).
+    // The pack IS registered whatever happens here: nothing below throws out of the hand-off.
+    const handoff = await writeServiceRowAfterRegister(b, id);
     state.pack = res.adapted;
     state.conformance = withPlaceholderPasses(res);
     state.symbolTable = buildSymbolTable(res.adapted);
+    await loadVerdicts(res.registered?.id);
     state.uploadedSource = res.registered.source;
     state.mode = 'single';
     state.view = 'layers';
     state.layerFilter = 'all';
     const annotatedEnv = canonical.metadata?.annotations?.['library.environment'] || null;
     const env = annotatedEnv || defaultEnvFor(id);
+    // The workspace is bound to the service the pack landed under (the origin when it landed elsewhere) and the environment DEFINE named.
+    if (handoff) { state.serviceId = handoff.serviceId; state.serviceEnv = b.environment || env; }
     // enterAnalyzeMode refetches the pack and its conformance report, which
     // names the placeholder passes itself for a library-built pack.
     enterAnalyzeMode(id, env);
@@ -2598,11 +4541,58 @@ const buildActions = {
       todosLeft ? `${todosLeft} todo${todosLeft === 1 ? '' : 's'} to write or measure` : '',
     ].filter(Boolean);
     const opened = `Opened ${canonical.metadata.name} in Discover — the same kind of pack you inspect and improve there. `
-      + (gaps.length ? `It carries ${gaps.length > 1 ? `${gaps.slice(0, -1).join(', ')} and ${gaps[gaps.length - 1]}` : gaps[0]} as visible gaps.` : 'Every value is filled and no clause rests on a placeholder.');
+      + (gaps.length ? `It carries ${gaps.length > 1 ? `${gaps.slice(0, -1).join(', ')} and ${gaps[gaps.length - 1]}` : gaps[0]} as visible gaps.` : 'Every value is filled and no clause rests on a placeholder.')
+      + (handoff?.sentence || '');
     toast(opened);
     announce(opened);
   },
 };
+
+// The service row after a register (design §6.1 steps 1–5), from the table refreshCatalogue() just re-read:
+// the row whose primary link is the registered pack, the plan over it (services-model.mjs buildHandoffPlan —
+// pure), the PATCH when the plan has one, and what the hand-off says. Returns null in a bundle (no table
+// exists there — nothing to say), else { serviceId, sentence }. A refusal of the PATCH is the server's
+// sentence in a toast (a 401/403 auth/role also downgrades the rank the affordances draw from) and the
+// hand-off goes on — the pack is registered; a retry must not re-register.
+async function writeServiceRowAfterRegister(build, packId) {
+  if (state.servicesStatus?.kind === 'static') return null;
+  const tableRead = Array.isArray(state.services);
+  if (!tableRead) toast(`Registered, but the services table did not refresh: ${state.servicesStatus?.error || 'no answer'}`, 'error');
+  const row = tableRead ? state.services.find(s => (s.packs || []).some(p => p.id === packId && p.role === 'primary')) || null : null;
+  const origin = build.serviceId != null ? (findServiceRecord(build.serviceId) || { id: build.serviceId, name: null, slug: null }) : null;
+  const plan = buildHandoffPlan(build, row, { origin, tableRead });
+  let changed = [];
+  if (row && Object.keys(plan.patch).length) {
+    try {
+      const res = await patchService(row.id, plan.patch);
+      changed = res.changed;
+      if (res.service) state.services = state.services.map(s => (s.id === row.id ? res.service : s));
+      forgetServiceVerdicts(row);   // the tier grades the pack: the cached reports are stale (A-M3)
+    } catch (e) {
+      toast(`Registered, but the service row was not written: ${e.message}`, 'error');
+      if (e.denied === 'auth' || e.denied === 'role') state.access = { ...(state.access || {}), canWrite: false, reason: e.message };
+    }
+  }
+  const serviceId = (plan.outcome === 'other-service' ? origin?.id : row?.id) ?? null;
+  return { serviceId, sentence: plan.sentence(changed) };
+}
+
+// Drop every cached verdict of a service's packs: a tier written on the row changes what every report grades at.
+function forgetServiceVerdicts(service) {
+  const ids = new Set((service?.packs || []).map(p => p.id));
+  for (const key of Object.keys(state.serviceVerdicts || {})) {
+    if (ids.has(key.split('::')[0])) delete state.serviceVerdicts[key];
+  }
+}
+
+// The slug guard's inputs (design §6.4, T19): the record DEFINE was prefilled from (state.build.serviceId) and the
+// service keys of `name` and of the record's name — the key rule is /lib/service-keys.mjs, bound at boot, so the
+// pure model takes the computed keys, not the function.
+function buildDefineOrigin(name) {
+  const origin = state.build.serviceId != null ? findServiceRecord(state.build.serviceId) : null;
+  if (!origin) return { origin: null, nameKey: null, originNameKey: null };
+  return { origin: { id: origin.id, slug: origin.slug, name: origin.name }, nameKey: normalizeServiceKey(name) || null, originNameKey: normalizeServiceKey(origin.name) || null };
+}
 
 // The host the Build renderers get (docs/UI_CONVENTIONS.md §3): the two stable hooks plus the journey's actions.
 const buildHost = { renderMainView, renderTabs, build: buildActions };
@@ -2620,7 +4610,7 @@ function renderBuildView(view) {
   const exitBar = document.createElement('div');
   exitBar.className = 'build-exit';
   // Where leaving goes, said plainly: the open pack, or home (where the journeys are chosen).
-  exitBar.innerHTML = `<button type="button" class="build-exit-btn" title="Leave the Build journey — your definition is kept">← ${state.selectedPackId ? 'Back to the open pack' : 'Back to home'}</button>`;
+  exitBar.innerHTML = `<button type="button" class="build-exit-btn" title="Leave the Build journey — your definition is kept">← ${escapeHtml(buildExitLabel())}</button>`;
   exitBar.querySelector('button').addEventListener('click', exitBuildMode);
   const def = document.createElement('aside');
   def.className = 'build-def';
@@ -2657,7 +4647,7 @@ function renderBuildView(view) {
   let stack;
   switch (b.step) {
     case 'verify': {
-      const m = buildVerifyModel({ build: b, library, clauses, targets: buildTargets || [] });
+      const m = buildVerifyModel({ build: b, library, clauses, targets: buildTargets || [], access: state.access || { canWrite: true } });
       stack = m.stack;
       renderBuildVerify(stepEl, m, host);
       break;
@@ -2670,7 +4660,7 @@ function renderBuildView(view) {
     }
     case 'define':
     default: {
-      const m = buildDefineModel({ build: b, library, requirements });
+      const m = buildDefineModel({ build: b, library, requirements, ...buildDefineOrigin(b.name) });
       stack = m.stack;
       renderBuildDefine(stepEl, m, host);
       break;
@@ -2744,10 +4734,16 @@ function packPickerRowsHtml() {
 // ============================================================
 function renderDiscoverEmpty(view) {
   const pickerRows = packPickerRowsHtml();
+  // Opened from a service page with no pack (design §5.4): one sentence for
+  // the rank — an operator is offered Build with DEFINE prefilled, a viewer
+  // told who registers one.
+  const bound = state.serviceId ? findServiceRecord(state.serviceId) : null;
+  const note = discoverEmptyNote({ service: bound, env: state.serviceEnv, access: state.access });
   view.innerHTML = `
     <section class="discover-empty">
       <header class="discover-empty-head">
         <h2 class="discover-empty-title">What do we have?</h2>
+        ${note ? `<p class="discover-empty-service" id="discover-empty-service">${escapeHtml(note.text)}${note.build ? ' <button type="button" class="ux-secondary-btn" id="discover-empty-build">Build one</button>' : ''}</p>` : ''}
         <p class="discover-empty-lede">
           Load or generate an ObservabilityPack to draw its observogram — the
           per-layer inventory of every contract, signal, dashboard, alert
@@ -2793,7 +4789,7 @@ function renderDiscoverEmpty(view) {
         <button type="button" class="discover-load-card" data-load="upload">
           <span class="discover-load-glyph" aria-hidden="true">▤</span>
           <span class="discover-load-label">Upload a pack</span>
-          <span class="discover-load-sub">an existing canonical v1.3 YAML or JSON manifest</span>
+          <span class="discover-load-sub">an existing canonical v1.4 YAML or JSON manifest</span>
         </button>
       </div>
 
@@ -2811,19 +4807,27 @@ function renderDiscoverEmpty(view) {
   view.querySelectorAll('.discover-load-card').forEach(card => {
     card.onclick = () => $(proxy[card.dataset.load])?.click();
   });
+  view.querySelector('#discover-empty-build')?.addEventListener('click', () => openBuild({ serviceId: state.serviceId, env: state.serviceEnv }));
   wirePackPickerRows(view);
 }
 
 // Diagnose / Remediate with no pack loaded — both need a pack from
 // Discover first. Point the user there rather than showing an empty grid.
+// The static posture (a bundle: no server behind the page). The prompt below
+// says where a pack comes from there — the packs built in, or whoever builds
+// the bundle (studio/static-remedies.mjs staticRemedy) — where a server's
+// names the crawl, the live MCP draft and the upload, each a 501 in a bundle.
+const isStatic = () => state.access?.posture === 'static';
+const staticInput = () => staticInputOf(state.brand.chrome.name, state.catalog, state.selectedPackId);
+
 function renderNeedPackPrompt(view) {
   const what = state.view === 'compile' ? 'compile and deploy' : 'diagnose';
   view.innerHTML = `
     <section class="need-pack">
       <h2 class="need-pack-title">Load a pack first</h2>
-      <p class="need-pack-lede">There's nothing to ${escapeHtml(what)} yet. Head to
+      <p class="need-pack-lede">There's nothing to ${escapeHtml(what)} yet. ${isStatic() ? escapeHtml(staticRemedy('need-pack', staticInput())) : `Head to
         <strong>Discover</strong> to crawl a repo, generate from a live MCP server, or
-        upload a manifest — then come back here.</p>
+        upload a manifest — then come back here.`}</p>
       <button type="button" class="need-pack-btn" id="need-pack-goto-discover">
         <span>Go to Discover</span><span aria-hidden="true">→</span>
       </button>
@@ -2851,22 +4855,30 @@ function renderHomeView() {
   const mcpUrl = recallMcpUrl() || DEFAULT_MCP_URL;
 
   // One question, two journeys. The signed-in gate opens on the user's
-  // services; the check branch is otherwise remembered from last time.
-  const services = serviceCatalogue({ ownOnly: true });
-  const checkOpen = (state.homeVariant === 'gate' && services.length > 0) || homeCheckRemembered();
+  // services — the records of the services table, or the services the
+  // loaded packs name where the table is unavailable (services-view.mjs
+  // renderServicesHome); the check branch is otherwise remembered from last time.
+  const model = homeServicesModel();
+  const hasServices = model.kind === 'table' || model.derived.length > 0;
+  const checkOpen = (state.homeVariant === 'gate' && hasServices) || homeCheckRemembered();
   view.innerHTML = `
     <section class="home-hero">
       ${homeGreetingHtml()}
       <h1 class="home-hero-title" id="home-title">What would you like to do?</h1>
       <p class="home-hero-lede">
-        Observogram compares what a service's repository <em>declares</em> with
+        ${escapeHtml(state.brand.chrome.name)} compares what a service's repository <em>declares</em> with
         what the live platform <em>verifies</em>, and helps you close the gap.
       </p>
 
       ${homeChoiceHtml({ checkOpen })}
-      ${homeCheckHtml(services, checkOpen)}
+      <div class="home-check" id="home-check"${checkOpen ? '' : ' hidden'}>
+        <div class="home-services" id="home-services"></div>
+        <h2 class="home-check-title home-check-sources-title">Import or scan another source</h2>
+        <div class="home-sources" id="home-sources"></div>
+      </div>
     </section>
   `;
+  renderServicesHome(view.querySelector('#home-services'), model, servicesHost);
   // The import sources live inside the check branch.
   const sources = view.querySelector('#home-sources');
   sources.innerHTML = `
@@ -2891,16 +4903,6 @@ function renderHomeView() {
             <input id="home-mcp-auth" type="password" placeholder="bearer" autocomplete="off">
           </label>
         </div>
-
-        <!-- Capabilities surface here once the MCP responds. -->
-        <div id="home-mcp-capabilities" class="home-mcp-capabilities" hidden></div>
-
-        <div id="home-mcp-adopt-bar" class="home-mcp-adopt-bar" hidden>
-          <button id="home-mcp-adopt" type="button" class="home-mcp-adopt-btn">
-            <span class="home-mcp-adopt-title">Render the manifest</span>
-            <span class="home-mcp-adopt-sub" id="home-mcp-adopt-hint">canonical v1.3 · ready to compile and deploy</span>
-          </button>
-        </div>
       </div>
 
       <div class="home-alt">
@@ -2908,7 +4910,7 @@ function renderHomeView() {
           <button id="home-shortcut-upload" type="button" class="home-alt-btn">
             <span class="home-alt-key" aria-hidden="true">▤</span>
             <span class="home-alt-label">Upload a pack file</span>
-            <span class="home-alt-sub">a YAML or JSON manifest (spec v1.3) — or drop it anywhere on the page</span>
+            <span class="home-alt-sub">a YAML or JSON manifest (spec v1.4) — or drop it anywhere on the page</span>
           </button>
           <button id="home-shortcut-crawl" type="button" class="home-alt-btn">
             <span class="home-alt-key" aria-hidden="true">↻</span>
@@ -2921,6 +4923,7 @@ function renderHomeView() {
 
   $('#home-mcp-connect').onclick = () => doHomeMcpConnect();
   $('#home-mcp-url').onkeydown = (e) => { if (e.key === 'Enter') doHomeMcpConnect(); };
+  $('#home-mcp-url').oninput = () => paintHomeRegisterCheck();
   $('#home-mcp-advanced-toggle').onclick = () => {
     const adv = $('#home-mcp-advanced');
     const tog = $('#home-mcp-advanced-toggle');
@@ -2932,268 +4935,112 @@ function renderHomeView() {
   // The header (and its upload popover) is hidden on home: go straight to the file picker.
   $('#home-shortcut-upload').onclick = () => $('#file-input')?.click();
   $('#home-shortcut-crawl').onclick  = () => $('#crawl-btn')?.click();
-  wireHomeChoice(view);
+  // The three sources are operator routes (POST /api/draft-from-mcp, /api/validate,
+  // /api/crawl): a rank without them sees the buttons drawn unavailable with the
+  // reason and every activation explains; the URL field stays editable (a
+  // viewer may paste a URL for Pack B, a viewer read).
+  if (!model.sources.enabled) {
+    const explain = () => explainUnavailable(model.sources.reason);
+    for (const id of ['home-mcp-connect', 'home-shortcut-upload', 'home-shortcut-crawl']) {
+      const btn = $(`#${id}`);
+      // The Connect button is a filled action with no room for a line: its reason sits in the status slot beside it.
+      markUnavailable(btn, model.sources.reason, { into: id === 'home-mcp-connect' ? $('#home-mcp-status') : btn });
+      btn.onclick = explain;
+    }
+    $('#home-mcp-url').onkeydown = (e) => { if (e.key === 'Enter') explain(); };
+  }
+  paintHomeMcpTarget();
+  wireHomeChoice(view, model);
+  loadHomeVerdicts(model);
+}
+
+// The home's source card lists the org's MCP endpoints (D-J) for a rank that
+// may connect, in the identity and open postures: read once, then only the
+// picker is repainted when the read settles; a re-render reuses the list. An
+// empty list, a refusal or a failure leaves today's card (the URL typed).
+// After a failed read, each drawing of the home reads again (its hint says
+// "reopen this"), its policy unread meanwhile — as a picker's opening
+// (openMcpTarget). No read of its, the first included, takes the list
+// another view drew when it fails (readMcpEndpointsForPickers).
+let homeMcpEndpointsRead = false;
+let homeMcpEndpointsReading = false;
+function paintHomeMcpTarget() {
+  const failed = state.mcpTargetPolicy?.failed === true;
+  const reads = mcpPickersReadable() && state.access?.canWrite !== false && !homeMcpEndpointsReading
+    && (failed || (!homeMcpEndpointsRead && (state.mcpEndpoints === null || state.mcpTargetPolicy === null)));
+  if (reads && failed) unreadMcpPolicy();
+  paintMcpTarget('home');
+  if (!reads) return;
+  homeMcpEndpointsRead = true;
+  homeMcpEndpointsReading = true;
+  // Repainted when the read settles: the list, and what the policy says
+  // this reader may do (a list-only card, or Register and connect).
+  readMcpEndpointsForPickers().then(() => {
+    homeMcpEndpointsReading = false;
+    if (document.getElementById('home-mcp-url')) paintMcpTarget('home');
+  });
 }
 
 async function doHomeMcpConnect() {
   const urlInput  = $('#home-mcp-url');
-  const authInput = $('#home-mcp-auth');
   const statusEl  = $('#home-mcp-status');
   const goBtn     = $('#home-mcp-connect');
-  const capEl     = $('#home-mcp-capabilities');
-  const adoptBar  = $('#home-mcp-adopt-bar');
   if (!urlInput || !statusEl) return;
 
-  const url  = urlInput.value.trim();
-  const auth = authInput?.value || '';
-  if (!url) {
-    statusEl.textContent = 'enter your MCP URL first';
+  let { body: target, chosen } = mcpTargetOf('home');
+  if (!target && homeRegisterMode()) {
+    // D4: register the typed URL as the org's endpoint (the server judges
+    // its origin again), then connect by its id.
+    const check = mcpRegisterCheck(urlInput.value, state.mcpTargetPolicy.register);
+    if (check.error) {
+      statusEl.textContent = check.error;
+      statusEl.className = 'home-mcp-status is-error';
+      return;
+    }
+    goBtn.disabled = true;
+    statusEl.textContent = 'registering the MCP endpoint…';
+    statusEl.className = 'home-mcp-status is-pending';
+    let created;
+    try {
+      created = await createEndpoint({ name: check.name, url: urlInput.value.trim() });
+    } catch (e) {
+      statusEl.textContent = `error: ${e.message}`;
+      statusEl.className = 'home-mcp-status is-error';
+      goBtn.disabled = false;
+      return;
+    }
+    goBtn.disabled = false;
+    if (!created) return;
+    state.mcpEndpoints = [created];
+    paintMcpTarget('home', { chosen: String(created.id) });
+    ({ body: target, chosen } = mcpTargetOf('home'));
+  }
+  if (!target) {
+    statusEl.textContent = mcpTargetMissing('home');
     statusEl.className = 'home-mcp-status is-error';
     return;
   }
-  rememberMcpUrl(url).catch(() => {});
-
+  // D8: the home's Connect tests the connection first, in the live panel,
+  // which then offers Draft or Snapshot — the same target (the endpoint, or
+  // the typed URL for a reader the server lets type one) and its key.
+  const panel = $('#draft-mcp-panel');
+  if (panel?.hidden) $('#draft-mcp-btn')?.click();
+  if (target.mcpUrl) $('#draft-mcp-url').value = target.mcpUrl;
+  $('#draft-mcp-auth').value = $('#home-mcp-auth')?.value ?? '';
+  paintMcpTarget('draft', { chosen: chosen ? String(chosen.id) : '' });
   goBtn.disabled = true;
-  statusEl.textContent = 'contacting MCP…';
+  statusEl.textContent = 'testing the connection in the live panel…';
   statusEl.className = 'home-mcp-status is-pending';
-  capEl.hidden = true;
-  adoptBar.hidden = true;
-
   try {
-    const r = await fetch('/api/draft-from-mcp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({
-        mcpUrl: url,
-        mcpAuth: auth || undefined,
-        // Forward the quick-start friendly label when the user came
-        // through the Upload popover. window._observogramQuickLabel is
-        // cleared after consumption so manual draft-from-mcp from the
-        // panel keeps the auto-generated label.
-        label: window._observogramQuickLabel || undefined,
-      }),
-    });
-    if (window._observogramQuickLabel) window._observogramQuickLabel = null;
-    const ct = r.headers.get('content-type') || '';
-    if (!ct.includes('application/json')) {
-      throw new Error(`server returned ${r.status} ${ct || 'no content-type'}`);
-    }
-    const out = await r.json();
-    if (!out.ok) throw new Error(out.error || 'MCP draft failed');
-    draftMcpState.lastResult = out;
-
-    statusEl.textContent = `connected · ${out.summary.discovered.backends} backend(s) · ${out.tookMs}ms`;
-    statusEl.className = 'home-mcp-status is-ok';
-
-    renderHomeMcpCapabilities(out, capEl);
-    capEl.hidden = false;
-    adoptBar.hidden = false;
-
-    const hint = $('#home-mcp-adopt-hint');
-    if (hint) hint.textContent = out.canonical?.metadata?.name
-      ? `pack name: ${out.canonical.metadata.name}` : '';
-
-    $('#home-mcp-adopt').onclick = () => adoptDraftFromMcpResult();
-  } catch (e) {
-    statusEl.textContent = `error: ${e.message}`;
-    statusEl.className = 'home-mcp-status is-error';
+    await testLiveConnection();
   } finally {
     goBtn.disabled = false;
   }
-}
-
-function renderHomeMcpCapabilities(out, host) {
-  const s = out.summary?.discovered || {};
-  const ann = out.annotations || {};
-  const tools = (ann['mcp.toolsCalled'] || '').split(',').filter(Boolean);
-  const failed = (ann['mcp.toolsFailed'] || '').split(',').filter(Boolean);
-  const services = (ann['mcp.servicesDiscovered'] || '').split(',').filter(Boolean);
-  const baselines = parseInt(ann['mcp.baselinesComputed'] || '0', 10);
-  const anomalies = parseInt(ann['mcp.activeAnomalies'] || '0', 10);
-  const backends = s.backends ?? 0;
-
-  // tools/list inventory: the full set of tools the MCP advertised, and the
-  // subset Observogram doesn't yet have a probe pattern for. These come from
-  // the post-rename fetcher that calls `tools/list` instead of guessing.
-  const toolsExposed   = (ann['mcp.toolsExposed']   || '').split(',').filter(Boolean);
-  const toolsUnmatched = (ann['mcp.toolsUnmatched'] || '').split(',').filter(Boolean);
-
-  // backend_capabilities inventory: the canonical skill → backend →
-  // product → version matrix the MCP exposes. When present, render the
-  // full version-gating story below the 4-card grid so the user sees
-  // EVERYTHING their MCP can speak to before drafting a pack.
-  const capabilities = out.summary?.capabilities || null;
-
-  // Live version captures — authoritative version strings pulled from
-  // grafana_health / metrics_query vm_app_version etc. Threaded into
-  // the capability chips so the demo audience sees ground truth, not
-  // just the policy band.
-  const liveVersions = {};
-  for (const [k, v] of Object.entries(ann)) {
-    const m = /^mcp\.versions\.([a-z0-9_-]+)$/.exec(k);
-    if (m) liveVersions[m[1]] = v;
-  }
-
-  // Recognised vs unrecognised tools (over what we CALLED, not what was
-  // advertised). Tracks the canonical otel-mcp-server tool catalog
-  // (metrics_*, grafana_*, alertmanager_*, pipeline_*) plus the generic
-  // system + zk-proof tools.
-  const knownTools = new Set([
-    // generic / system
-    'system_health', 'system_topology',
-    'anomalies_active', 'anomalies_baselines',
-    // zk-proofs skill
-    'zk_proof_get', 'zk_proof_verify', 'zk_solvency', 'zk_stats',
-    // metrics skill (Prometheus)
-    'metrics_query', 'metrics_query_range', 'metrics_targets',
-    'metrics_alerts', 'metrics_metadata', 'metrics_label_values',
-    // grafana skill
-    'grafana_health', 'grafana_datasources', 'grafana_datasource_health',
-    'grafana_datasource_query', 'grafana_dashboards_search',
-    'grafana_dashboard_get', 'grafana_folders', 'grafana_alert_rules',
-    'grafana_alerts', 'grafana_contact_points',
-    // alertmanager skill
-    'alertmanager_alerts', 'alertmanager_groups', 'alertmanager_silences',
-    'alertmanager_status',
-    // pipeline skill
-    'pipeline_alloy', 'pipeline_beats', 'pipeline_fluentbit', 'pipeline_vector',
-  ]);
-  const recognised   = tools.filter(t => knownTools.has(t));
-  const unrecognised = tools.filter(t => !knownTools.has(t));
-  const mcpHost = (() => {
-    try { return new URL(out.summary?.mcpUrl || '').host || 'mcp'; }
-    catch (_) { return 'mcp'; }
-  })();
-
-  // Four-card grid: each capability owns its own card with detail
-  // content inside. Connection status sits above as a pulse-dot line.
-  // Styling kept from the premium pass (subtle borders, serif numbers,
-  // ink-tone accents) but the per-card content is back so the user can
-  // SEE which tools were called, which services were discovered, etc.
-  host.innerHTML = `
-    <div class="home-mcp-report">
-      <div class="home-mcp-report-head">
-        <span class="home-mcp-report-dot" aria-hidden="true"></span>
-        Connected to <strong>${escapeHtml(mcpHost)}</strong>${out.tookMs ? ` <span class="home-mcp-report-meta">· ${out.tookMs}ms</span>` : ''}
-      </div>
-      <div class="home-mcp-cap-grid">
-        <div class="home-mcp-cap" data-cap="tools">
-          <div class="home-mcp-cap-num">${toolsExposed.length || tools.length}</div>
-          <div class="home-mcp-cap-key">${toolsExposed.length ? 'tools exposed' : 'tools called'}</div>
-          <div class="home-mcp-cap-detail">${recognised.length ? recognised.map(t => `<code>${escapeHtml(t)}</code>`).join(' ') : '<em>none recognised</em>'}</div>
-          ${toolsUnmatched.length ? `<div class="home-mcp-cap-detail home-mcp-cap-detail-unknown">+${toolsUnmatched.length} not yet probed: ${toolsUnmatched.slice(0, 8).map(t => `<code>${escapeHtml(t)}</code>`).join(' ')}${toolsUnmatched.length > 8 ? ` <em>+${toolsUnmatched.length - 8} more</em>` : ''}</div>` : ''}
-          ${unrecognised.length && !toolsUnmatched.length ? `<div class="home-mcp-cap-detail home-mcp-cap-detail-unknown">+${unrecognised.length} unrecognised: ${unrecognised.map(t => `<code>${escapeHtml(t)}</code>`).join(' ')}</div>` : ''}
-          ${failed.length ? `<div class="home-mcp-cap-detail home-mcp-cap-detail-fail">⚠ failed: ${failed.map(t => `<code>${escapeHtml(t)}</code>`).join(' ')}</div>` : ''}
-        </div>
-        <div class="home-mcp-cap" data-cap="services">
-          <div class="home-mcp-cap-num">${services.length}</div>
-          <div class="home-mcp-cap-key">services discovered</div>
-          <div class="home-mcp-cap-detail">${services.length ? services.slice(0, 6).map(s => `<code>${escapeHtml(s)}</code>`).join(' ') + (services.length > 6 ? `<div class="home-mcp-cap-more">+${services.length - 6} more</div>` : '') : '<em>none</em>'}</div>
-        </div>
-        <div class="home-mcp-cap" data-cap="backends">
-          <div class="home-mcp-cap-num">${backends}</div>
-          <div class="home-mcp-cap-key">backends inferred</div>
-          <div class="home-mcp-cap-detail">${backends ? 'metrics / logs / traces<div class="home-mcp-cap-meta">pipelines inferred from topology</div>' : '<em>none observed</em>'}</div>
-        </div>
-        <div class="home-mcp-cap" data-cap="anomalies">
-          <div class="home-mcp-cap-num">${anomalies}</div>
-          <div class="home-mcp-cap-key">active anomalies</div>
-          <div class="home-mcp-cap-detail">${baselines} baseline${baselines === 1 ? '' : 's'} computed<div class="home-mcp-cap-meta">from recent telemetry</div></div>
-        </div>
-      </div>
-      ${renderCapabilitiesPanel(capabilities, liveVersions)}
-      ${out.summary?.warnings?.length ? `
-        <div class="home-mcp-gaps">
-          <div class="home-mcp-gaps-head">⚠ Honest gaps</div>
-          <ul>${out.summary.warnings.slice(0, 5).map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul>
-        </div>` : ''}
-    </div>
-  `;
-}
-
-// Render the skill → backend → product → version matrix the MCP
-// exposes via `backend_capabilities`. The signal-class skills
-// (metrics/logs/traces/profiles + alerting/dashboards) lead because
-// they're what drive Observogram's L1–L4 projection; the rest follow
-// in a compact tail.
-//
-// When `liveVersions` carries an authoritative live version for a
-// product (e.g. {grafana: "12.4.0", victoriametrics: "v1.113.0"} from
-// grafana_health + metrics_query), the chip flips to "live mode": the
-// live version is shown in bold instead of the policy must[0], and a
-// "● LIVE" indicator hangs off the chip so the audience can see at a
-// glance which versions are attested vs which are inferred from
-// capabilities.
-function renderCapabilitiesPanel(capabilities, liveVersions = {}) {
-  if (!capabilities || !Array.isArray(capabilities.inventory) || !capabilities.inventory.length) return '';
-
-  // The spec's Signal enum order — used to group + sort entries.
-  const SIGNAL_SKILLS = ['metrics', 'logs', 'traces', 'pyroscope', 'alertmanager', 'grafana'];
-  const grouped = new Map();
-  for (const row of capabilities.inventory) {
-    if (!grouped.has(row.skill)) grouped.set(row.skill, []);
-    grouped.get(row.skill).push(row);
-  }
-  const orderedSkills = [
-    ...SIGNAL_SKILLS.filter(s => grouped.has(s)),
-    ...[...grouped.keys()].filter(s => !SIGNAL_SKILLS.includes(s)).sort(),
-  ];
-
-  const liveCount = Object.keys(liveVersions).length;
-
-  const rows = orderedSkills.map(skill => {
-    const backends = grouped.get(skill);
-    const chips = backends.map(b => {
-      const product = b.product || b.backend;
-      // `liveVersions[product]` carries either a real version string
-      // (e.g. "12.4.0") OR the sentinel "live" when the backend
-      // responded to a probe but doesn't expose a readable version
-      // (Jaeger via traces_services). Both flip the chip to live mode.
-      const live = liveVersions[product];
-      const policyVer = (b.versions?.must || [])[0] || '';
-      const isLive = !!live;
-      // When the capture has a real version, show it. When it's the
-      // "live" sentinel, keep showing the policy version (jaeger 2.x)
-      // because that's the only number we have — but still mark it
-      // ● LIVE so the user knows the backend itself is responding.
-      const isAliveSentinel = isLive && live === 'live';
-      const ver = isAliveSentinel ? policyVer : (isLive ? live : policyVer);
-      const liveTooltip = !isLive ? '' :
-        (isAliveSentinel
-          ? ` · live=responding (version not exposed)`
-          : ` · live=${live}`);
-      return `<span class="home-mcp-skill-chip${isLive ? ' is-live' : ''}" title="${escapeHtml(b.backend)} · must=${escapeHtml((b.versions?.must||[]).join(','))}${liveTooltip}">
-        <strong>${escapeHtml(product)}</strong>${ver ? ` <em>${escapeHtml(ver)}</em>` : ''}${isLive ? `<span class="home-mcp-skill-chip-live" aria-label="live version">●&nbsp;LIVE</span>` : ''}
-      </span>`;
-    }).join('');
-    return `
-      <div class="home-mcp-skill-row" data-skill="${escapeHtml(skill)}">
-        <div class="home-mcp-skill-name">${escapeHtml(skill)}</div>
-        <div class="home-mcp-skill-chips">${chips}</div>
-      </div>
-    `;
-  }).join('');
-
-  const liveSummary = liveCount
-    ? ` · <span class="home-mcp-skills-meta-live">${liveCount} live version${liveCount === 1 ? '' : 's'}</span>`
-    : '';
-
-  return `
-    <div class="home-mcp-skills">
-      <div class="home-mcp-skills-head">
-        <div class="home-mcp-skills-title">
-          Backend capabilities
-          <span class="home-mcp-skills-meta">
-            ${capabilities.skillCount} skill${capabilities.skillCount === 1 ? '' : 's'}
-            · ${capabilities.backendCount} backend${capabilities.backendCount === 1 ? '' : 's'}
-            · gating <code>${escapeHtml(capabilities.gatingMode)}</code>${liveSummary}
-          </span>
-        </div>
-        <div class="home-mcp-skills-sub">From <code>backend_capabilities</code> — every skill the MCP can speak to, the products it implements, and the version policy it enforces. <strong>LIVE</strong> chips carry an authoritative version captured from the backend itself.</div>
-      </div>
-      <div class="home-mcp-skills-body">${rows}</div>
-    </div>
-  `;
+  const ok = liveUi.ping?.ok === true;
+  statusEl.textContent = ok
+    ? 'connected — choose Draft or Snapshot in the live panel'
+    : 'the connection test failed — the live panel says why';
+  statusEl.className = `home-mcp-status ${ok ? 'is-ok' : 'is-error'}`;
 }
 
 async function loadAndCacheExamples() {
@@ -3247,7 +5094,9 @@ export async function loadAndCacheReferences() {
 
 $('#drawer-close').onclick   = () => closeDrawer('b');
 $('#drawer-a-close').onclick = () => closeDrawer('a');
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeDrawer(); closeMcpPanel(); } });
+// While the Server settings modal is open, its own Escape closes it alone:
+// the drawer and the MCP panel underneath stay as they were.
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (mssOpen()) return; closeDrawer(); closeMcpPanel(); } });
 
 // ---------- MCP refresh panel ----------
 
@@ -3265,7 +5114,7 @@ function renderMcpBadge(status) {
   if (!status?.present) {
     btn.dataset.mcpState = 'idle';
     ageEl.textContent = 'idle';
-    btn.title = 'No live pack yet — open to refresh from MCP';
+    btn.title = 'No live pack yet — open to test the MCP connection and rebuild production-live';
     return;
   }
   const stale = status.refreshedAt && (Date.now() - Date.parse(status.refreshedAt) > MCP_STALE_HOURS * 3600_000);
@@ -3295,7 +5144,7 @@ function renderMcpStatusBody(status) {
   const el = $('#mcp-status-body');
   if (!el) return;
   if (!status?.present) {
-    el.innerHTML = '<em>No live pack for this org yet — refresh from an MCP server.</em>';
+    el.innerHTML = '<em>No live pack for this org yet — rebuild production-live from an MCP server.</em>';
     return;
   }
   const rows = [
@@ -3312,6 +5161,314 @@ function renderMcpStatusBody(status) {
   el.innerHTML = '<dl>' + rows.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${k === 'refreshed' ? v : escapeHtml(v)}</dd>`).join('') + '</dl>';
 }
 
+// ---------- the MCP pickers: a registered endpoint, or a typed URL (design §6) ----------
+//
+// Four pickers — the refresh panel, the draft panel, the deploy modal (its
+// rollback and its post-deploy verify ride it) and the home's source card —
+// draw the org's registered MCP endpoints before their URL field
+// (renderMcpTarget over mcpTargetModel), list first and preselected, "Type a
+// URL…" last. With an endpoint chosen the URL row is hidden (its value kept)
+// and the request names it by id (mcpTargetBody: an id or a URL, never
+// both); the read token stays on the server, named by the record. The list
+// (state.mcpEndpoints) is drawn in the identity and open postures only — the
+// bundle and the token posture never draw it, and keep the typed URL (the
+// token posture reads it for the Server settings button's way in alone:
+// readMcpGatePolicy).
+// Typing a URL is the server's to allow (R4): the list's read carries
+// `policy` (state.mcpTargetPolicy), and a reader it refuses a typed URL —
+// below admin, or without sign-in — gets the pickers list-only, with the
+// way in for that reader where the list is empty (rebadge batch 3, C0).
+const MCP_PICKERS = {
+  refresh: { url: 'mcp-url', auth: 'mcp-auth', purpose: 'read', field: 'mcp-field', key: 'mcp-field-key', hint: true },
+  draft: { url: 'draft-mcp-url', auth: 'draft-mcp-auth', purpose: 'read', field: 'mcp-field', key: 'mcp-field-key', hint: true },
+  deploy: { url: 'deploy-target-mcp', auth: 'deploy-target-auth', purpose: 'write', field: 'deploy-field', key: 'deploy-field-key', hint: true },
+  // D-J: the home reads the list for a rank that may connect, and says
+  // nothing when the org has none (today's card, the demo URL typed) —
+  // unless the reader may not type a URL: then its hint names the way in,
+  // and without sign-in it offers Register and connect (D4).
+  home: { url: 'home-mcp-url', auth: 'home-mcp-auth', purpose: 'read', field: 'home-mcp-url-row', key: 'home-mcp-url-label', hint: false, needsWrite: true },
+};
+
+function mcpPickersReadable() {
+  const posture = state.access?.posture;
+  return posture === 'identity' || posture === 'open';
+}
+
+// Where GET /api/mcp-endpoints answers this reader with its policy: the
+// postures that draw the list, and the token posture, whose policy carries
+// the server's own way in (`register.why`) and nothing the pickers draw.
+function mcpPolicyReadable() {
+  return mcpPickersReadable() || state.access?.posture === 'token';
+}
+
+// The empty list's way to Settings → MCP endpoints: the server says whether
+// this reader may register one (GET /api/mcp-endpoints `policy.register` —
+// a session admin, or the open posture's caller on a direct loopback
+// request), never guessed (C-7).
+function mcpPickerCanAdminNow() {
+  return state.mcpTargetPolicy?.register?.allowed === true;
+}
+
+// May this picker send a typed URL (R4)? The server's answer in the
+// postures that read the list (unknown or failed: no — closed); where the
+// list is never read (the bundle, the token posture) or the rank cannot
+// send at all (the home's buttons say why), the URL row stays as it was
+// and the server decides.
+function mcpTypedAllowed(id) {
+  const p = MCP_PICKERS[id];
+  if (!mcpPickersReadable()) return true;
+  if (p?.needsWrite && state.access?.canWrite === false) return true;
+  return state.mcpTargetPolicy?.typed?.allowed === true;
+}
+
+// The list as the pickers draw it: with its policy, so none while the policy
+// is unread (a read in flight answers both) or failed — never an empty
+// list's line before the server says what this reader may do, nor a list
+// beside a policy that could not be read, where with no typed URL allowed
+// its first endpoint would be preselected over the person's own choice (the
+// deploy modal's Type a URL…) and a write sent there. A list read without
+// the policy, or kept by a failed read (Settings, an environment's editor),
+// stays in state.mcpEndpoints for the view that drew it.
+function mcpPickerEndpoints() {
+  const policy = state.mcpTargetPolicy;
+  return policy === null || policy.failed === true ? null : state.mcpEndpoints;
+}
+
+// The status line when a picker has nothing to send.
+function mcpTargetMissing(id) {
+  const endpoints = mcpPickerEndpoints();
+  return mcpTargetMissingText({
+    typedAllowed: mcpTypedAllowed(id), orgName: state.orgName,
+    empty: Array.isArray(endpoints) && endpoints.length === 0, canRegister: mcpPickerCanAdminNow(),
+    posture: state.access?.posture ?? null, registerWhy: state.mcpTargetPolicy?.register?.why ?? null,
+    unreadable: state.mcpTargetPolicy?.failed === true,
+  });
+}
+
+// GET /api/mcp-endpoints for the pickers, with the caller's policy. Silent:
+// a refusal or a failure leaves the policy closed (state.mcpTargetPolicy
+// `failed`) and the list as it was — unread (null), or the one another read
+// drew, which a view may be drawing still (Settings → MCP endpoints: Edit…
+// finds its row there) until a read's answer replaces it; however many of
+// these reads are in flight, none takes it. The pickers draw none of it
+// beside the failed policy (mcpPickerEndpoints): each says the list could
+// not be read, and Settings is where a failed read is said. `keep` keeps
+// the policy already read too (the pre-send check: its own sentence says it
+// could not check).
+const CLOSED_MCP_POLICY = Object.freeze({ typed: { allowed: false }, register: { allowed: false }, failed: true });
+// A failed read about to be read again: its policy unread, so the pickers
+// draw no list meanwhile (mcpPickerEndpoints); the list stays.
+function unreadMcpPolicy() {
+  state.mcpTargetPolicy = null;
+}
+async function readMcpEndpointsForPickers({ keep = false } = {}) {
+  if (!mcpPolicyReadable()) return null;
+  try {
+    const { endpoints, policy } = await loadMcpEndpoints({ withPolicy: true });
+    state.mcpEndpoints = endpoints;
+    state.mcpTargetPolicy = policy ?? CLOSED_MCP_POLICY;
+    return state.mcpEndpoints;
+  } catch {
+    if (!keep) state.mcpTargetPolicy = CLOSED_MCP_POLICY;
+    return null;
+  }
+}
+
+// The picker's slot before its URL row (created once per row: the home's is
+// drawn anew with its card), in the host's own field idiom.
+function mcpTargetSlot(id) {
+  const p = MCP_PICKERS[id];
+  const row = document.getElementById(p.url)?.closest('label');
+  if (!row?.parentElement) return null;
+  const prev = row.previousElementSibling;
+  if (prev?.dataset?.mcpTarget === id) return prev;
+  const slot = document.createElement('div');
+  slot.className = p.field;
+  slot.dataset.mcpTarget = id;
+  slot.hidden = true;
+  slot.innerHTML = `<span class="${p.key}" aria-hidden="true">Registered MCP endpoint</span><div class="mcp-target-body" hidden></div>`;
+  row.before(slot);
+  return slot;
+}
+
+function mcpPickerModel(id, chosen = null) {
+  const p = MCP_PICKERS[id];
+  const readable = mcpPickersReadable() && (!p.needsWrite || state.access?.canWrite !== false);
+  const model = mcpTargetModel({
+    endpoints: readable ? mcpPickerEndpoints() : null,
+    remembered: recallMcpEndpoint(),
+    liveUrl: state.mcpStatus?.url || null,
+    // The remembered typed URL — or, in the deploy modal (which remembers
+    // none), what its field holds (a profile's URL).
+    typedUrl: id === 'deploy' ? (document.getElementById(p.url)?.value || '') : (recallMcpUrl() || ''),
+    purpose: p.purpose, orgName: state.orgName, canAdmin: mcpPickerCanAdminNow(), chosen,
+    typed: { allowed: mcpTypedAllowed(id) }, posture: state.access?.posture ?? null,
+    registerWhy: state.mcpTargetPolicy?.register?.why ?? null, unreadable: state.mcpTargetPolicy?.failed === true,
+  });
+  return p.hint || !mcpTypedAllowed(id) ? model : { ...model, hint: null };
+}
+
+// The home card without sign-in and with no endpoint (D4): the URL row
+// stays, and Connect registers the typed URL as the org's endpoint first —
+// offered only while the server would accept it (policy.register).
+function homeRegisterMode() {
+  return !mcpTypedAllowed('home') && state.mcpTargetPolicy?.register?.allowed === true
+    && Array.isArray(state.mcpEndpoints) && state.mcpEndpoints.length === 0;
+}
+
+// Register and connect: the typed URL checked against the server's rule as
+// it is typed — a refusal is said beside the button, which then does
+// nothing (aria-disabled), never a request the server would refuse.
+function paintHomeRegisterCheck() {
+  const btn = document.getElementById('home-mcp-connect');
+  const statusEl = document.getElementById('home-mcp-status');
+  const label = btn?.querySelector('.home-mcp-connect-label');
+  const on = homeRegisterMode();
+  if (label) label.textContent = on ? 'Register and connect' : 'Connect';
+  if (!btn || btn.classList.contains('is-unavailable')) return;
+  const check = on ? mcpRegisterCheck(document.getElementById('home-mcp-url')?.value, state.mcpTargetPolicy.register) : null;
+  if (check?.error) {
+    btn.setAttribute('aria-disabled', 'true');
+    if (statusEl) { statusEl.textContent = check.error; statusEl.className = 'home-mcp-status is-error'; }
+  } else if (btn.dataset.registerBlocked) {
+    btn.removeAttribute('aria-disabled');
+    if (statusEl) { statusEl.textContent = ''; statusEl.className = 'home-mcp-status'; }
+  }
+  if (check?.error) btn.dataset.registerBlocked = '1'; else delete btn.dataset.registerBlocked;
+}
+
+// The URL row and the auth field's help follow the choice: an endpoint hides
+// the URL row (its value kept) and says where the token comes from.
+function applyMcpTargetChoice(id, model) {
+  const p = MCP_PICKERS[id];
+  const row = document.getElementById(p.url)?.closest('label');
+  const registering = id === 'home' && homeRegisterMode();
+  if (row) row.hidden = !(model.showUrl || registering);
+  if (id === 'home') {
+    const urlKey = row?.querySelector('.home-mcp-url-label');
+    if (urlKey) urlKey.textContent = registering ? 'MCP URL to register' : (model.show ? 'MCP URL' : 'MCP endpoint');
+    paintHomeRegisterCheck();
+  }
+  const key = document.getElementById(p.auth)?.closest('label')?.querySelector('span');
+  if (!key) return;
+  if (key.dataset.mcpKeyHtml === undefined) key.dataset.mcpKeyHtml = key.innerHTML;
+  if (!model.authHelp) { key.innerHTML = key.dataset.mcpKeyHtml; return; }
+  if (p.purpose === 'write') { key.textContent = model.authHelp; return; }
+  const label = [...key.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim())?.textContent.trim() || 'Auth token';
+  key.innerHTML = `${escapeHtml(label)} <em>${escapeHtml(model.authHelp)}</em>`;
+}
+
+// (Re)draw a picker: the person's choice in it is kept across a repaint
+// while its endpoint is listed; `chosen` replaces it ('' = Type a URL…).
+function paintMcpTarget(id, { chosen } = {}) {
+  const slot = mcpTargetSlot(id);
+  if (!slot) return;
+  const body = slot.querySelector('.mcp-target-body');
+  const current = body.querySelector('select.set-mcp-target')?.value;
+  const model = mcpPickerModel(id, chosen !== undefined ? chosen : (current ?? null));
+  renderMcpTarget(body, model, settingsHost);
+  slot.hidden = body.hidden;
+  applyMcpTargetChoice(id, model);
+  if (id === 'deploy') updateDeployTargetSummary();
+}
+
+// What a picker would send: { body, chosen, url } — `chosen` is the
+// endpoint as its option shows it ({ id, name, origin }), null when typed.
+function mcpTargetOf(id) {
+  const p = MCP_PICKERS[id];
+  const slot = document.querySelector(`[data-mcp-target="${id}"]`);
+  const sel = slot && !slot.hidden ? slot.querySelector('select.set-mcp-target') : null;
+  const value = sel?.value || '';
+  const opt = value ? sel.selectedOptions?.[0] : null;
+  const chosen = opt ? { id: Number(value), name: opt.dataset.name, origin: opt.dataset.origin } : null;
+  // A hidden field's leftover is never sent: the typed URL only for a
+  // reader the server lets type one (R4).
+  const url = mcpTypedAllowed(id) ? (document.getElementById(p.url)?.value ?? '') : '';
+  const auth = document.getElementById(p.auth)?.value ?? '';
+  return { body: mcpTargetBody(value, url, auth), chosen, url: url.trim() };
+}
+
+// The deploy modal's target — Deploy, rollback and the post-deploy verify
+// all send it.
+function deployTargetBody() {
+  return mcpTargetOf('deploy').body;
+}
+
+// Before a write is sent (C-3): the chosen endpoint is re-read; when its
+// origin moved, or it is gone, nothing is sent — the picker is repainted
+// (the option names the new origin; a gone one falls back to Type a URL…)
+// and the sentence says why. null: send.
+async function checkEndpointDrift(id) {
+  const { chosen } = mcpTargetOf(id);
+  if (!chosen) return null;
+  const list = await readMcpEndpointsForPickers({ keep: true });
+  const drift = endpointDrift(chosen, list, { orgName: state.orgName, typedAllowed: mcpTypedAllowed(id) });
+  if (drift && Array.isArray(list)) {
+    paintMcpTarget(id, { chosen: list.some((ep) => ep.id === chosen.id) ? String(chosen.id) : (mcpTypedAllowed(id) ? '' : null) });
+  }
+  return drift;
+}
+
+// A picker opening: drawn from the list already read, then — when the list
+// is unread, its policy unread or failed (a list read without it — Settings,
+// an environment's editor — leaves a failed one so), or `fresh` (the deploy
+// modal: every open) — read and redrawn. Returns the read's promise
+// (resolved at once when nothing is read). A failed read is unread again
+// while it is read again — its policy, so the picker draws no list — so
+// neither the picker nor the Server settings button says "reopen" (nor, the
+// list empty, a refusal) while the opening does just that (as
+// readMcpGatePolicy in the token posture); the list another view drew is
+// kept until an answer replaces it — a failed read, or another opening's
+// while this one reads, never takes it (readMcpEndpointsForPickers).
+function openMcpTarget(id, { fresh = false } = {}) {
+  const failed = state.mcpTargetPolicy?.failed === true;
+  const reads = mcpPickersReadable() && (fresh || failed || state.mcpEndpoints === null || state.mcpTargetPolicy === null);
+  if (reads && failed) unreadMcpPolicy();
+  paintMcpTarget(id);
+  if (!reads) return Promise.resolve();
+  return readMcpEndpointsForPickers().then(() => paintMcpTarget(id));
+}
+
+// The token posture's Server settings button names the server's own way in
+// (settingsGateModel: `policy.register.why` — OBSERVOGRAM_AUTH=off
+// included), so the panel's opening reads the policy there until one read
+// answers; the pickers draw nothing from it. Resolved at once elsewhere.
+// A failed read is unread again while it is read again, so the button says
+// it is checking — never "close and reopen" while the panel does just that.
+function readMcpGatePolicy() {
+  if (state.access?.posture !== 'token' || (state.mcpTargetPolicy !== null && !state.mcpTargetPolicy.failed)) return Promise.resolve();
+  state.mcpTargetPolicy = null;
+  return readMcpEndpointsForPickers();
+}
+
+// The focus a picker opens on: the URL field, or the select while it hides it.
+function focusMcpTarget(id) {
+  const url = document.getElementById(MCP_PICKERS[id].url);
+  if (url && !url.closest('label')?.hidden) url.focus();
+  else document.querySelector(`[data-mcp-target="${id}"] select.set-mcp-target`)?.focus();
+}
+
+// The picker's change (host.settings.pickMcpTarget): the URL row and the
+// auth help follow; the select is not redrawn under the focus.
+function pickMcpTarget(container, value) {
+  const id = container?.closest?.('[data-mcp-target]')?.dataset?.mcpTarget;
+  if (!MCP_PICKERS[id]) return;
+  applyMcpTargetChoice(id, mcpPickerModel(id, value));
+  if (id === 'deploy') updateDeployTargetSummary();
+  if (id === 'refresh') { clearPingResult(); paintMcpSettingsButton(); }
+  if (id === 'draft') clearLivePing();
+  if (value === '') document.getElementById(MCP_PICKERS[id].url)?.focus();
+}
+
+// The empty list's button: Settings → MCP endpoints, the pickers' panels closed first.
+function openMcpEndpointsFromPicker() {
+  closeMcpPanel();
+  const draft = $('#draft-mcp-panel');
+  if (draft) draft.hidden = true;
+  if ($('#deploy-modal') && !$('#deploy-modal').hidden) closeDeployModal();
+  enterSettings('endpoints');
+}
+
 function openMcpPanel() {
   const panel = $('#mcp-panel');
   if (!panel) return;
@@ -3324,7 +5481,11 @@ function openMcpPanel() {
     const liveUrl = state.mcpStatus?.url || null; // served to operators only
     urlInput.value = saved || liveUrl || '';
   }
-  urlInput.focus();
+  const reads = Promise.all([openMcpTarget('refresh'), readMcpGatePolicy()]);
+  paintMcpSettingsButton();
+  reads.then(paintMcpSettingsButton);
+  if (state.access?.posture === 'static' && mcpSettingsBundle.origins === undefined) readBundleMcpOrigins();
+  focusMcpTarget('refresh');
 }
 function closeMcpPanel() {
   const panel = $('#mcp-panel');
@@ -3333,15 +5494,531 @@ function closeMcpPanel() {
   if (btn) btn.setAttribute('aria-expanded', 'false');
 }
 
-async function refreshLive() {
-  const url = $('#mcp-url').value.trim();
-  const auth = $('#mcp-auth').value;
-  if (!url) {
-    setRefreshStatus('mcp url required', 'error');
+// ---------- the MCP panel: test the connection; rebuilding production-live is its own action ----------
+//
+// "test connection" (#mcp-refresh-btn — the id a habit or a script clicks as
+// a connectivity check) pings: POST /api/mcp/ping with the picker's target,
+// which writes no live pack and no pack (rebadge batch 3, C2). The result
+// block (studio/live-view.mjs over pingResultModel) says what was checked
+// and what was not; any change to the picker or the auth field clears it,
+// so a result never describes a target other than the one shown.
+// "rebuild production-live" (#mcp-rebuild-btn) is the explicit, separate
+// action that reads every family again and rewrites the live pack.
+
+function clearPingResult() {
+  renderPingResult($('#mcp-ping-result'), null);
+  setPingStatus('');
+}
+
+function setPingStatus(msg, kind = '') {
+  const el = $('#mcp-ping-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
+}
+
+// → { model, answer } as drawn, or { model: null, error } when there was
+// nothing to send, no result, or a refusal (the Server settings modal words
+// its connection-test line from it).
+async function pingFromPanel() {
+  const { body: target } = mcpTargetOf('refresh');
+  renderPingResult($('#mcp-ping-result'), null);
+  if (!target) {
+    setPingStatus(mcpTargetMissing('refresh'), 'error');
+    return { model: null, error: mcpTargetMissing('refresh') };
+  }
+  const btn = $('#mcp-refresh-btn');
+  btn.disabled = true;
+  setPingStatus('testing the connection…');
+  try {
+    const answer = await pingMcp(target);
+    const model = pingResultModel(answer);
+    if (!model) { setPingStatus('error: the server sent no ping result', 'error'); return { model: null, error: 'the server sent no ping result' }; }
+    setPingStatus(model.status, model.tone === 'ok' ? 'ok' : 'error');
+    renderPingResult($('#mcp-ping-result'), model);
+    return { model, answer };
+  } catch (e) {
+    // The server's refusal (400 / 403 / 502), or the bundle's 501 sentence.
+    setPingStatus(`error: ${e.message}`, 'error');
+    return { model: null, error: e.message };
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ---------- the MCP panel: Server settings (rebadge batch 4, D1/D2) ----------
+//
+// "Server settings…" (#mcp-settings-btn) opens a modal in this page that
+// configures the MCP server behind the panel's target — not the studio's
+// connection to it. Only a reader who may change an MCP endpoint opens it
+// (settingsGateModel: GET /api/mcp-endpoints `policy.register.allowed`, the
+// pickers' read — in the token posture readMcpGatePolicy's); the button is
+// never hidden, and says why when it cannot be used — without sign-in, in
+// the server's own sentence (`policy.register.why`).
+//
+// Nothing runs at boot or when the panel opens. Opening the modal reads
+// GET /api/mcp-settings (the deployment's settings policy) and, once the
+// target passes the browser's rule (settingsTargetModel: mcpUrlPolicy,
+// never the studio's own origin, a loopback MCP only from a loopback page,
+// https unless loopback, a loopback or listed origin), the server's
+// settings description from <MCP server root>/admin/schema — from the
+// browser, with no credential. The configure and the server's actions are
+// POSTed from the browser straight to the MCP server
+// (studio/mcp-settings-api.mjs): no value passes through, or stays in, the
+// studio. A secret input is emptied as soon as the request is sent, every
+// input on close, and nothing modal-related is put in `state`. The
+// deployment's settings policy runs on what is typed (150 ms after the last
+// keystroke, and again at send): a rule that matches, or cannot run on this
+// form, shows its warning, and its acknowledgement — a box in the dialog,
+// never kept — must be ticked before the send. Through the studio server, a
+// rule its 409 names that the page's check did not find gets its box too,
+// with a line saying why (the server could not check it, or its check
+// matched), until what is typed changes; a secret the refused send emptied
+// is asked for until it is typed again, whatever is ticked meanwhile. The
+// outcome is shown as the server returned it (redacted, as text); after a
+// verified configure the panel's connection test runs, and the modal words
+// what it showed from the read's outcome.
+
+const mss = { ctx: null, serial: 0, outcomeSerial: 0 };
+// The static bundle's baked MCP origin list ({ listed, origins }), null when none; undefined until read.
+const mcpSettingsBundle = { origins: undefined };
+const MSS_FORM_STATES = new Set(['described', 'generic', 'sending', 'outcome', 'unknown', 'verifying', 'verified']);
+
+function mssHost() { return document.getElementById('mss-host'); }
+function mssOpen() { return !!mssHost()?.firstElementChild; }
+
+function paintMcpSettingsButton() {
+  const btn = $('#mcp-settings-btn');
+  if (!btn) return;
+  const gate = settingsGateModel({
+    access: state.access, mcpTargetPolicy: state.mcpTargetPolicy, hasTarget: !!mcpTargetOf('refresh').body,
+    missing: mcpTargetMissing('refresh'), pageOrigin: location.origin, bundleOrigins: mcpSettingsBundle.origins,
+  });
+  btn.dataset.why = gate.reason ?? '';
+  if (gate.enabled) {
+    btn.removeAttribute('aria-disabled');
+    btn.classList.remove('is-unavailable');
+    btn.querySelector('.svc-why')?.remove();
+  } else {
+    markUnavailable(btn, gate.reason);
+  }
+}
+
+// The bundle's shim answers GET /api/mcp-settings in the page (no request leaves it).
+function readBundleMcpOrigins() {
+  loadServerSettingsConfig()
+    .then((c) => { mcpSettingsBundle.origins = c?.mcpOrigins ?? null; }, () => { mcpSettingsBundle.origins = null; })
+    .then(paintMcpSettingsButton);
+}
+
+const mssOriginOf = (url) => { try { return new URL(url).origin; } catch { return null; } };
+
+async function openServerSettings() {
+  const btn = $('#mcp-settings-btn');
+  if (btn?.getAttribute('aria-disabled') === 'true') { explainUnavailable(btn.dataset.why); return; }
+  if (mssOpen()) return;
+  const target = mcpTargetOf('refresh');
+  const url = target.chosen ? (state.mcpEndpoints?.find((ep) => ep.id === target.chosen.id)?.url ?? '') : target.url;
+  let host = mssHost();
+  if (!host) { host = document.createElement('div'); host.id = 'mss-host'; }
+  document.body.appendChild(host);
+  const ctx = {
+    abort: new AbortController(), url, chosen: target.chosen, posture: state.access?.posture ?? 'unknown',
+    state: 'reading', serial: ++mss.serial, origin: mssOriginOf(url), descriptorUrl: null, libs: null,
+    policyState: 'loading', policy: null, prefill: null, findings: null, findingsFor: null, findingsTimer: null, serverAcks: [], retype: [], descriptor: null, generic: null, genericReason: null, genericError: null,
+    reason: null, redirect: false, outcome: null, verified: null, notice: null, confirming: null, busy: false, sendingTo: null, afterAction: false,
+    proxy: false,
+  };
+  mss.ctx = ctx;
+  paintMss();
+  let libs;
+  let config;
+  try {
+    [libs, config] = await Promise.all([loadSettingsLibs(), loadServerSettingsConfig().catch(() => null)]);
+  } catch {
+    if (mss.ctx !== ctx) return;
+    ctx.state = 'refused';
+    ctx.reason = 'the studio could not load its settings rules — close and reopen to try again';
+    paintMss();
     return;
   }
-  const dropped = await rememberMcpUrl(url).catch(() => []);
-  const btn = $('#mcp-refresh-btn');
+  if (mss.ctx !== ctx) return;
+  ctx.libs = libs;
+  // The studio server passes every request through when it says so (never a fallback); the bundle's shim never does.
+  ctx.proxy = ctx.posture !== 'static' && config?.proxy === true;
+  const compiled = config && config.policy !== null && config.policy !== undefined ? libs.lib.compileSettingsPolicy(config.policy, { timed: false }) : null;
+  ctx.policyState = !config ? 'failed' : !compiled ? 'none' : compiled.policy ? 'served' : 'failed';
+  ctx.policy = compiled?.policy ?? null;
+  const g = ctx.policy?.generic ?? null;
+  ctx.prefill = { names: g?.names ?? libs.lib.GENERIC_NAMES, path: g?.path ?? '/configure', auth: g?.auth ?? 'body' };
+  const origins = ctx.posture === 'static' ? (config?.mcpOrigins ?? null) : (state.mcpTargetPolicy?.typed ?? null);
+  const t = settingsTargetModel({ url, posture: ctx.posture, origins, pageOrigin: location.origin, proxyWayOut: mssProxyWayOut(ctx), proxy: ctx.proxy }, libs);
+  if (!t.ok) {
+    ctx.state = 'target-refused';
+    ctx.reason = t.reason;
+    paintMss();
+    return;
+  }
+  ctx.origin = t.origin;
+  ctx.descriptorUrl = t.descriptorUrl;
+  await readMssDescriptor(ctx);
+}
+
+async function readMssDescriptor(ctx) {
+  Object.assign(ctx, { state: 'reading', serial: ++mss.serial, descriptor: null, generic: null, outcome: null, verified: null, notice: null, confirming: null, serverAcks: [], retype: [] });
+  paintMss();
+  let r;
+  if (ctx.proxy) {
+    let answer = null;
+    let error = null;
+    try { answer = await describeViaProxy(mssTargetBody(ctx), { signal: ctx.abort.signal }); } catch (e) { error = e; }
+    if (mss.ctx !== ctx || ctx.abort.signal.aborted) return;
+    r = proxyDescribeModel(answer, { mcpUrl: ctx.url, descriptorUrl: ctx.descriptorUrl, error }, ctx.libs);
+  } else {
+    const read = await readDescriptorDirect(ctx.descriptorUrl, { signal: ctx.abort.signal });
+    if (mss.ctx !== ctx || read.kind === 'aborted') return;
+    r = descriptorReadModel(read, { mcpUrl: ctx.url, descriptorUrl: ctx.descriptorUrl }, ctx.libs);
+  }
+  ctx.serial = ++mss.serial;
+  if (r.state === 'described') { ctx.state = 'described'; ctx.descriptor = r.descriptor; }
+  else if (r.state === 'generic') useMssGeneric(ctx, r.reason);
+  else { ctx.state = r.state; ctx.reason = r.reason ?? null; ctx.redirect = r.redirect === true; }
+  paintMss();
+}
+
+// The studio server's pass-through names the target as the panel does: the endpoint by id, else the typed URL.
+const mssTargetBody = (ctx) => (ctx.chosen ? { mcpEndpointId: ctx.chosen.id } : { mcpUrl: ctx.url });
+// Naming OBSERVOGRAM_MCP_ADMIN_PROXY as a way out is true only where a studio server could turn it on and has not.
+const mssProxyWayOut = (ctx) => (ctx.posture === 'identity' || ctx.posture === 'open') && !ctx.proxy;
+
+// The generic form (A.1.5): the policy's prefill, else the defaults; editable under "What the server expects".
+function useMssGeneric(ctx, reason) {
+  const d = ctx.libs.lib.genericDescriptor(ctx.prefill);
+  ctx.serial = ++mss.serial;
+  ctx.state = 'generic';
+  ctx.genericReason = reason;
+  ctx.generic = { ...ctx.prefill, names: { ...ctx.prefill.names } };
+  ctx.genericError = d.reason ?? null;
+  ctx.descriptor = d.reason ? ctx.libs.lib.genericDescriptor() : d;
+  ctx.serverAcks = [];
+}
+
+// What the reader typed, read from the inputs into a value that goes out of scope with its caller.
+function mssValues() {
+  const out = Object.create(null);
+  for (const input of mssHost()?.querySelectorAll('.mss-form input[data-field]') ?? []) {
+    out[input.getAttribute('data-field')] = input.type === 'checkbox' ? input.checked : input.value;
+  }
+  return out;
+}
+
+// The settings policy's findings for what is typed now (A.3.4): rule indexes, warnings and notes — no value.
+function mssCheckPolicy(ctx, values) {
+  ctx.findings = ctx.policy && ctx.descriptor ? ctx.libs.lib.policyFindings(ctx.policy, ctx.descriptor, values) : [];
+  ctx.findingsFor = ctx.descriptor;
+}
+
+// The acknowledgements ticked in the dialog (they are kept nowhere else).
+function mssTicked() {
+  return [...mssHost()?.querySelectorAll('.mss-policy input[data-ack]:checked') ?? []].map((i) => i.getAttribute('data-ack'));
+}
+
+// → the inputs that held a value.
+function clearMssSecrets() {
+  const emptied = [];
+  for (const input of mssHost()?.querySelectorAll('input[type="password"]') ?? []) {
+    if (input.value) emptied.push(input);
+    input.value = '';
+  }
+  return emptied;
+}
+
+// The line asking for the secrets a refused send emptied (ctx.retype, their
+// inputs), while one is still empty: an edit or a tick that clears the
+// notice leaves this one, until each is typed again or the form is new.
+function mssRetypeNotice(ctx) {
+  ctx.retype = ctx.retype.filter((input) => input.isConnected && !input.value);
+  return secretsEmptiedLine(ctx.retype.length) || null;
+}
+
+function buildMssModel(ctx) {
+  const lib = ctx.libs?.lib;
+  const showForm = !!ctx.descriptor && MSS_FORM_STATES.has(ctx.state);
+  const values = showForm ? mssValues() : null;
+  const status = ctx.notice ? { text: ctx.notice, kind: 'error' } : statusLine({
+    state: ctx.state, descriptorUrl: ctx.descriptorUrl, reason: ctx.reason, genericReason: ctx.genericReason, redirect: ctx.redirect,
+    pageOrigin: location.origin, proxyWayOut: mssProxyWayOut(ctx), proxy: ctx.proxy, sendingTo: ctx.sendingTo, outcome: ctx.outcome, verified: ctx.verified,
+  });
+  const buttons = [];
+  if (ctx.state === 'refused' || ctx.state === 'unreachable') buttons.push('retry', 'generic');
+  if (ctx.state === 'unknown') buttons.push('test', 'retry');
+  if (ctx.state === 'outcome' && (ctx.afterAction || ctx.outcome?.tone === 'warn')) buttons.push('test');
+  if (ctx.state === 'verified' && ctx.posture !== 'static' && ctx.verified?.kind !== 'error') buttons.push('openLive');
+  const model = {
+    key: showForm ? `form:${ctx.serial}` : `${ctx.state}:${ctx.serial}`,
+    eyebrow: ctx.origin ? `MCP server · ${ctx.origin}` : 'MCP server',
+    lede: ctx.descriptorUrl ? ledeText(ctx.origin, { proxy: ctx.proxy }) : null,
+    status,
+    busy: ctx.busy,
+    buttons,
+    outcome: MSS_FORM_STATES.has(ctx.state) ? ctx.outcome : null,
+    fields: null,
+    generic: null,
+    policy: null,
+    primary: null,
+    actions: [],
+  };
+  if (!showForm) return model;
+  model.fields = ctx.descriptor.fields.map((f) => ({ ...f, spec: fieldInputSpec(f) }));
+  if (ctx.generic) model.generic = { ...ctx.generic, reason: ctx.genericError ? `Not valid: ${ctx.genericError}.` : '' };
+  const req = lib.settingsRequest(ctx.descriptor, values);
+  // The findings of the last check (re-run on a new form, 150 ms after typing, and at send).
+  if (ctx.findings === null || ctx.findingsFor !== ctx.descriptor) mssCheckPolicy(ctx, values);
+  const ticked = mssTicked();
+  const policy = policyView(ctx.findings, ticked, ctx.serverAcks);
+  model.policy = policy.rules;
+  model.primary = { label: 'Send to the server', blocked: primaryBlock({ policyState: ctx.policyState, requestReason: req.reason ?? null, genericReason: ctx.genericError, ackReason: policy.block }) };
+  model.actions = ctx.descriptor.actions.map((a) => {
+    const r = lib.settingsRequest(ctx.descriptor, values, { action: a.name });
+    const blocked = r.reason ? null : actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: r.sent, ticked, named: ctx.serverAcks });
+    return { name: a.name, label: a.label, confirm: a.confirm, confirming: ctx.confirming === a.name, blocked, note: r.reason ? r.reason : actionNote(r.carries) };
+  });
+  return model;
+}
+
+function paintMss() {
+  const ctx = mss.ctx;
+  const host = mssHost();
+  if (!ctx || !host) return;
+  renderServerSettings(host, buildMssModel(ctx), mcpSettingsHost);
+}
+
+async function sendMss(ctx, req, actionName, values) {
+  const lib = ctx.libs.lib;
+  const where = lib.resolveSettingsPath(req.path, ctx.url, ctx.generic
+    ? { noun: 'the settings path', fix: 'correct it under What the server expects' }
+    : (actionName ? { noun: `the server's endpoint for action "${actionName}"` } : {}));
+  if (where.reason) { ctx.notice = where.reason.charAt(0).toUpperCase() + where.reason.slice(1) + '.'; paintMss(); return; }
+  const to = new URL(where.url);
+  Object.assign(ctx, { busy: true, state: 'sending', sendingTo: `${to.origin}${to.pathname}`, outcome: null, verified: null, notice: null, afterAction: !!actionName });
+  paintMss();
+  if (ctx.proxy) { await sendMssViaProxy(ctx, values, actionName); return; }
+  const res = await submitDirect(where.url, { headers: req.headers, body: req.body }, { signal: ctx.abort.signal, onSent: clearMssSecrets });
+  clearMssSecrets();
+  if (mss.ctx !== ctx || res.kind === 'aborted') return;
+  ctx.busy = false;
+  if (res.kind === 'unknown') { ctx.state = 'unknown'; paintMss(); return; }
+  const answer = res.kind === 'redirect'
+    ? { status: 0, type: 'opaqueredirect', contentType: null, text: '' }
+    : { status: res.status, contentType: res.contentType, text: res.text, truncated: res.truncated };
+  const o = lib.outcomeOf(answer, { secretValues: req.secretValues, secretNames: req.secretNames, user: req.user });
+  ctx.outcome = { ...o, serial: ++mss.outcomeSerial };
+  ctx.state = 'outcome';
+  paintMss();
+  if (!actionName && o.success) await verifyMss(ctx);
+}
+
+// Through the studio server (OBSERVOGRAM_MCP_ADMIN_PROXY=1): the values as
+// typed (it builds the request from the description it reads itself), the
+// ticked acknowledgements, and the outcome shape it passes back. The
+// secrets are emptied as soon as the request is issued.
+async function sendMssViaProxy(ctx, values, actionName) {
+  const payload = {
+    ...mssTargetBody(ctx), mode: ctx.generic ? 'generic' : 'described', values, acks: mssTicked().map(Number),
+    ...(ctx.generic ? { generic: { path: ctx.generic.path, names: { ...ctx.generic.names }, auth: ctx.generic.auth } } : {}),
+    ...(actionName ? { action: actionName } : {}),
+  };
+  const pending = submitViaProxy(payload, { signal: ctx.abort.signal });
+  const emptied = clearMssSecrets();
+  let answer = null;
+  let error = null;
+  try { answer = await pending; } catch (e) { error = e; }
+  if (mss.ctx !== ctx || ctx.abort.signal.aborted) return;
+  ctx.busy = false;
+  if (error) {
+    // The studio server's own refusal, in its words: a 502 (no answer, a
+    // redirect, a timeout) may have reached the MCP server — the unknown
+    // state; anything else was refused before a request left.
+    ctx.state = error.status === 502 ? 'unknown' : (ctx.generic ? 'generic' : 'described');
+    ctx.notice = `The studio server answered ${error.message || 'nothing it could read'}`.replace(/([^.…?!])$/, '$1.');
+    // A rule its policy check names gets its acknowledgement box, which the
+    // page's own check may not have drawn: the server could not check it, or
+    // its check matched. Neither the send nor an action that carries a field
+    // the rule checks goes until it is ticked, and a secret emptied by this
+    // send is typed again.
+    const named = serverAckModel(error, ctx.policy, ctx.descriptor);
+    if (named) {
+      if (!ctx.serverAcks.some((r) => r.rule === named.rule)) ctx.serverAcks = [...ctx.serverAcks, named];
+      ctx.retype = [...new Set([...ctx.retype, ...emptied])];
+      const retype = mssRetypeNotice(ctx);
+      if (retype) ctx.notice += ` ${retype}`;
+    }
+    paintMss();
+    return;
+  }
+  const o = proxyOutcomeModel(answer, ctx.libs);
+  ctx.retype = [];
+  ctx.outcome = { ...o, serial: ++mss.outcomeSerial };
+  ctx.state = 'outcome';
+  paintMss();
+  if (!actionName && o.success) await verifyMss(ctx);
+}
+
+// The panel's connection test, after a verified configure or on request.
+async function verifyMss(ctx) {
+  const headline = ctx.outcome?.headline ?? '';
+  if (ctx.posture === 'static') {
+    ctx.verified = verifiedLine(headline, null, { isStatic: true });
+    ctx.state = 'verified';
+    paintMss();
+    return;
+  }
+  Object.assign(ctx, { state: 'verifying', busy: true, notice: null });
+  paintMss();
+  const ping = await pingFromPanel();
+  if (mss.ctx !== ctx) return;
+  ctx.busy = false;
+  ctx.verified = verifiedLine(headline, ping.model ? ping : null, { error: ping.error ?? null });
+  ctx.state = 'verified';
+  paintMss();
+}
+
+function closeServerSettings({ focus = true } = {}) {
+  const ctx = mss.ctx;
+  mss.ctx = null;
+  ctx?.abort.abort();
+  if (ctx?.findingsTimer) clearTimeout(ctx.findingsTimer);
+  const host = mssHost();
+  if (host) {
+    for (const input of host.querySelectorAll('input')) {
+      if (input.type === 'checkbox' || input.type === 'radio') input.checked = false;
+      else input.value = '';
+    }
+    host.innerHTML = '';
+  }
+  if (focus) $('#mcp-settings-btn')?.focus();
+}
+
+// "Open the live panel": the live panel on the same target, its connection test run (step 2 drawn when connected).
+function openLiveFromSettings() {
+  const ctx = mss.ctx;
+  if (!ctx) return;
+  const { chosen, url } = ctx;
+  closeServerSettings({ focus: false });
+  closeMcpPanel();
+  const panel = $('#draft-mcp-panel');
+  if (!panel) return;
+  if (panel.hidden) $('#draft-mcp-btn')?.onclick?.();
+  if (panel.hidden) panel.hidden = false;
+  if (chosen) paintMcpTarget('draft', { chosen: String(chosen.id) });
+  else {
+    paintMcpTarget('draft', { chosen: '' });
+    const input = $('#draft-mcp-url');
+    if (input) input.value = url;
+  }
+  clearLivePing();
+  testLiveConnection();
+}
+
+const mcpSettingsActions = {
+  close: () => closeServerSettings(),
+  input: ({ typed = false, secret = false } = {}) => {
+    const ctx = mss.ctx;
+    if (!ctx) return;
+    ctx.notice = mssRetypeNotice(ctx);
+    ctx.confirming = null;
+    // A value other than a secret was edited: the page's check decides
+    // again, alone. A secret, which no rule reads, keeps the server's boxes.
+    if (typed && !secret) ctx.serverAcks = [];
+    paintMss();
+    if (!ctx.policy) return;
+    clearTimeout(ctx.findingsTimer);
+    ctx.findingsTimer = setTimeout(() => {
+      ctx.findingsTimer = null;
+      if (mss.ctx !== ctx) return;
+      ctx.findings = null;
+      paintMss();
+    }, 150);
+  },
+  ack: () => { const ctx = mss.ctx; if (!ctx) return; ctx.notice = mssRetypeNotice(ctx); paintMss(); },
+  generic: () => {
+    const ctx = mss.ctx;
+    if (!ctx?.generic) return;
+    const host = mssHost();
+    const read = (k) => host.querySelector(`input[data-generic="${k}"]`)?.value ?? '';
+    const auth = host.querySelector('input[data-generic="auth"]:checked')?.value ?? 'body';
+    const g = { path: read('path'), names: { url: read('url'), user: read('user'), secret: read('secret'), apiKey: read('apiKey') }, auth };
+    const d = ctx.libs.lib.genericDescriptor(g);
+    ctx.generic = g;
+    ctx.genericError = d.reason ?? null;
+    if (!d.reason) ctx.descriptor = d;
+    ctx.notice = mssRetypeNotice(ctx);
+    ctx.serverAcks = [];
+    paintMss();
+    // The inputs carry the new names now: the policy checks the form under them.
+    ctx.findings = null;
+    paintMss();
+  },
+  send: () => {
+    const ctx = mss.ctx;
+    if (!ctx?.descriptor || ctx.busy) return;
+    const lib = ctx.libs.lib;
+    const values = mssValues();
+    const req = lib.settingsRequest(ctx.descriptor, values);
+    clearTimeout(ctx.findingsTimer);
+    ctx.findingsTimer = null;
+    mssCheckPolicy(ctx, values);
+    const block = primaryBlock({ policyState: ctx.policyState, requestReason: req.reason ?? null, genericReason: ctx.genericError, ackReason: policyView(ctx.findings, mssTicked(), ctx.serverAcks).block });
+    if (block) { ctx.notice = block; paintMss(); return; }
+    ctx.confirming = null;
+    sendMss(ctx, req, null, values);
+  },
+  action: (name) => {
+    const ctx = mss.ctx;
+    if (!ctx?.descriptor || ctx.busy) return;
+    const a = ctx.descriptor.actions.find((x) => x.name === name);
+    if (!a) return;
+    const values = mssValues();
+    const req = ctx.libs.lib.settingsRequest(ctx.descriptor, values, { action: name });
+    if (!req.reason) {
+      // An action that carries a field the policy checks waits on its ack, as the pass-through does.
+      clearTimeout(ctx.findingsTimer);
+      ctx.findingsTimer = null;
+      mssCheckPolicy(ctx, values);
+      const block = actionBlock({ policyState: ctx.policyState, findings: ctx.findings, sent: req.sent, ticked: mssTicked(), named: ctx.serverAcks });
+      if (block) { ctx.notice = block; ctx.confirming = null; paintMss(); return; }
+    }
+    if (a.confirm && ctx.confirming !== name) { ctx.confirming = name; ctx.notice = mssRetypeNotice(ctx); paintMss(); return; }
+    ctx.confirming = null;
+    if (req.reason) { ctx.notice = req.reason.charAt(0).toUpperCase() + req.reason.slice(1) + '.'; paintMss(); return; }
+    sendMss(ctx, req, name, values);
+  },
+  retry: () => {
+    const ctx = mss.ctx;
+    if (!ctx) return;
+    if (ctx.state === 'unknown') { Object.assign(ctx, { state: ctx.generic ? 'generic' : 'described', notice: mssRetypeNotice(ctx) }); paintMss(); return; }
+    readMssDescriptor(ctx);
+  },
+  useGeneric: () => {
+    const ctx = mss.ctx;
+    if (!ctx?.libs) return;
+    useMssGeneric(ctx, ctx.state === 'refused' ? `its settings description was refused: ${ctx.reason}` : 'your browser could not read one');
+    paintMss();
+  },
+  test: () => { const ctx = mss.ctx; if (ctx && !ctx.busy) verifyMss(ctx); },
+  openLive: () => openLiveFromSettings(),
+};
+const mcpSettingsHost = { mcpSettings: mcpSettingsActions };
+
+async function refreshLive() {
+  const { body: target, chosen } = mcpTargetOf('refresh');
+  if (!target) {
+    setRefreshStatus(mcpTargetMissing('refresh'), 'error');
+    return;
+  }
+  // A typed URL is remembered (its safe form); an endpoint's choice is, on success.
+  const dropped = target.mcpUrl ? await rememberMcpUrl(target.mcpUrl).catch(() => []) : [];
+  const btn = $('#mcp-rebuild-btn');
   btn.disabled = true;
   $('#mcp-btn').dataset.mcpState = 'active';
   setRefreshStatus('contacting mcp…');
@@ -3349,7 +6026,7 @@ async function refreshLive() {
     const r = await fetch('/api/refresh-live', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ mcpUrl: url, mcpAuth: auth || undefined }),
+      body: JSON.stringify(target),
     });
     // Read as text first so we can surface a useful error if the server
     // returned HTML (typical when the dev server is stale and the route
@@ -3378,10 +6055,12 @@ async function refreshLive() {
       $('#mcp-btn').dataset.mcpState = 'error';
       return;
     }
+    rememberMcpEndpoint(chosen ? chosen.id : null);
     // Say what was not kept: the server's note (the live pack) and ours
-    // (the remembered URL).
+    // (the remembered URL) — and the endpoint the server went through.
     setRefreshStatus([
       `refreshed · ${fmtRelative(body.refreshedAt)}`,
+      body.mcpEndpoint?.name ? `through ${body.mcpEndpoint.name}` : null,
       body.note || null,
       dropped.length ? `remembered without its ${dropped.map((n) => `"${n}"`).join(', ')} parameter${dropped.length === 1 ? '' : 's'} — put the token in the auth field` : null,
     ].filter(Boolean).join(' · '), 'ok');
@@ -3390,17 +6069,11 @@ async function refreshLive() {
     renderMcpBadge(state.mcpStatus);
     renderMcpStatusBody(state.mcpStatus);
     toast('Live pack refreshed');
-    // If the user is currently viewing production-live, reload it so the
-    // adapter projection updates.
-    if (state.selectedPackId === 'production-live') {
-      await refresh();
-    } else {
-      // Refresh the catalog so the production-live entry's ok-state updates.
-      await loadCatalog();
-      renderServiceSelect();
-      renderPackSelect();
-      renderPackBSelect();
-    }
+    // Refresh the catalog so the production-live entry's ok-state updates.
+    await refreshCatalogue();
+    renderServiceSelect();
+    renderPackSelect();
+    renderPackBSelect();
   } catch (e) {
     setRefreshStatus(`error: ${e.message}`, 'error');
     $('#mcp-btn').dataset.mcpState = 'error';
@@ -3410,7 +6083,7 @@ async function refreshLive() {
 }
 
 function setRefreshStatus(msg, kind = '') {
-  const el = $('#mcp-refresh-status');
+  const el = $('#mcp-rebuild-status');
   if (!el) return;
   el.textContent = msg;
   el.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
@@ -3472,7 +6145,7 @@ function setupCrawlPanel() {
   resultCloseBtn.onclick = () => { $('#crawl-result').hidden = true; };
   resetBtn.onclick = () => { resetCrawlStaged(); };
 
-  pickFolderBtn.onclick = () => folderInput.click();
+  pickFolderBtn.onclick = () => pickScanFolder(folderInput);
   pickFilesBtn.onclick = () => {
     if (!multiInput) {
       multiInput = document.createElement('input');
@@ -3565,6 +6238,47 @@ async function readEntry(entry, prefix, lib) {
       for (const ent of batch) await readEntry(ent, (prefix ? `${prefix}/` : '') + entry.name, lib);
     } while (batch.length > 0);
   }
+}
+
+// "pick a folder". Where the browser can hand over the folder itself
+// (showDirectoryPicker: Chromium, a secure context such as localhost) the
+// studio walks it and never enters node_modules, so a large repository is
+// staged in the time it takes to read its own sources. Elsewhere — Firefox,
+// Safari, plain http on a LAN address, a frame the API is refused in — the
+// folder input lists every file under the folder first (stageFileList).
+async function pickScanFolder(folderInput) {
+  if (typeof window.showDirectoryPicker !== 'function') { folderInput.click(); return; }
+  let dir;
+  try {
+    dir = await window.showDirectoryPicker({ id: 'observogram-scan', mode: 'read' });
+  } catch (e) {
+    // AbortError: the dialog was closed. Anything else: the API is there but
+    // refused here — the input still works.
+    if (e?.name !== 'AbortError') folderInput.click();
+    return;
+  }
+  await stageFolderHandle(dir);
+}
+
+async function stageFolderHandle(dir) {
+  const lib = await getCrawlerLib();
+  const list = $('#crawl-staged-files');
+  const say = (n) => { if (list) list.innerHTML = `<span class="crawl-staged-empty">reading ${escapeHtml(dir.name || 'the folder')}… ${n} file${n === 1 ? '' : 's'}</span>`; };
+  let read = 0;
+  say(0);
+  try {
+    crawlState.ignored += await lib.walkScanFolder(dir, async (rel, handle) => {
+      const file = await handle.getFile();
+      if (file.size > lib.SCAN_MAX_FILE_BYTES) return;
+      crawlState.files.set(rel, await file.text());
+      if (++read % 25 === 0) say(read);
+    });
+  } catch (e) {
+    // A file removed or locked mid-walk: what was read is still staged.
+    toast(`Stopped reading the folder: ${e.message}`, 'error');
+  }
+  if (!crawlState.rootName) crawlState.rootName = dir.name || null;
+  finalizeStaging();
 }
 
 async function stageFileList(fileList, _rootHint) {
@@ -3741,6 +6455,7 @@ async function doCrawl() {
     if (!out.ok) { setStatus(`error: ${out.error || 'unknown'}`, 'error'); return; }
     crawlState.lastResult = out;
     renderCrawlResult(out);
+    followReplacedPack(out.registered?.id).catch(() => {});
     setStatus(`done in ${out.tookMs}ms · ${out.summary.files.classified}/${out.summary.files.scanned} files classified`, 'ok');
   } catch (e) {
     setStatus(`error: ${e.message}`, 'error');
@@ -3800,6 +6515,7 @@ async function doCrawlFromGithub() {
     }
     crawlState.lastResult = out;
     renderCrawlResult(out);
+    followReplacedPack(out.registered?.id).catch(() => {});
     if (out.canonical) {
       setGhStatus(`done in ${out.tookMs}ms · ${out.summary?.files?.classified ?? 0} files classified from ${out.summary?.repo}@${out.summary?.ref}`, 'ok');
     } else {
@@ -3825,7 +6541,7 @@ function renderCrawlResult(out) {
   vBox.innerHTML = `
     <h4>schema validation</h4>
     ${out.validation.ok
-      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.3</div>`
+      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.4</div>`
       : `<div class="crawl-pill crawl-pill-err">✗ ${out.validation.errors.length} schema error(s)</div>
          <ul class="crawl-result-errs">${out.validation.errors.slice(0, 8).map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul>`}
   `;
@@ -3892,9 +6608,14 @@ function renderCrawlResult(out) {
 //
 // kind ∈ {'repo','live'}. Returns true when it entered compare.
 async function adoptValidatedPack(res, sourceLabel, kind) {
-  state.pack = res.adapted;
-  state.conformance = withPlaceholderPasses(res);
-  state.symbolTable = buildSymbolTable(res.adapted);
+  // An entry the scan or draft route registered arrives as its id alone
+  // (registeredOrValidated): enterAnalyzeMode / enterCompareMode load it.
+  if (res.adapted) {
+    state.pack = res.adapted;
+    state.conformance = withPlaceholderPasses(res);
+    state.symbolTable = buildSymbolTable(res.adapted);
+    await loadVerdicts(res.registered?.id);
+  }
   state.uploadedSource = sourceLabel;
   state.activeCardKey = null;
 
@@ -3918,7 +6639,7 @@ async function adoptValidatedPack(res, sourceLabel, kind) {
     return false;
   }
 
-  await loadCatalog();
+  await refreshCatalogue();
   if (kind === 'repo') {
     state.selectedService = serviceKeyForPack(state.catalog.find(p => p.id === newId)) || state.selectedService;
   }
@@ -3956,14 +6677,44 @@ async function adoptValidatedPack(res, sourceLabel, kind) {
   return false;
 }
 
+// A scan or draft that carries the label of an earlier one replaces it on
+// the server (registerUploadedPack drops the older id), and adopting selects
+// that labelled entry — so the pack it replaced can be the one on screen.
+// Pack A or Pack B then follows to the new id; left alone it would name a
+// pack that no longer exists. Both gone at once is a reset, not a
+// replacement, and is left as it is.
+async function followReplacedPack(newId) {
+  if (!newId || (state.mode !== 'single' && state.mode !== 'compare')) return;
+  await refreshCatalogue();
+  const replaced = (id) => typeof id === 'string' && id.startsWith('uploaded-') && !state.catalog.some(p => p.id === id);
+  const aGone = replaced(state.selectedPackId);
+  const bGone = replaced(state.compareBId);
+  if (aGone === bGone || state.selectedPackId === newId || state.compareBId === newId) return;
+  if (aGone) {
+    state.selectedPackId = newId;
+    state.selectedEnv = defaultEnvFor(newId);
+    await refresh();
+  } else {
+    state.compareBId = newId;
+    state.compareBEnv = defaultEnvFor(newId);
+    state.packB = null; state.diff = null;
+    await loadPackB();
+    renderPackBSelect();
+  }
+  if (state.compareBId) await refreshDiff();
+  const label = state.catalog.find(p => p.id === newId)?.label || newId;
+  toast(`Pack ${aGone ? 'A' : 'B'} now shows the newer ${label} — it replaced the one that was loaded`);
+}
+
 async function adoptCrawlResult() {
   const out = crawlState.lastResult;
   if (!out) return;
-  // Reuse the upload flow: POST /api/validate → if ok, route the pack
-  // into the drift journey (repo scan → Pack A). Same validation path
-  // as drag-dropping a yaml file onto the studio shell.
+  // Route the pack the scan registered into the drift journey (repo scan
+  // → Pack A). A scan that failed validation registered nothing: it goes
+  // through POST /api/validate, as a yaml file dropped on the studio does,
+  // and its errors are the toast.
   try {
-    const res = await validateUploaded(out.canonicalYaml, 'application/x-yaml', state.selectedEnv);
+    const res = await registeredOrValidated(out, state.selectedEnv);
     if (!res.ok) {
       toast(`Could not adopt — ${res.errors.length} validation error(s)`, 'error');
       return;
@@ -3984,8 +6735,8 @@ async function adoptCrawlResult() {
 // Parallel to the crawler (Path A). The SRE enters their MCP URL,
 // optionally an auth token, and a pack name; the server hits the
 // MCP, builds a canonical pack from what the MCP can attest to, and
-// returns it for review. Adoption round-trips through /api/validate
-// like every other pack path.
+// returns it for review, registered. Adoption selects that entry
+// (registeredOrValidated), as a repo scan's does.
 // ============================================================
 
 const draftMcpState = {
@@ -4048,6 +6799,11 @@ function setupDeployModal() {
 }
 
 export function openDeployModal({ packId, packLabel, presetIdentities } = {}) {
+  // A static bundle has no server to deploy through: every entry point —
+  // prototype space included — explains instead of opening a modal whose
+  // every read is a 501. The views draw their deploy controls unavailable
+  // too (DEPLOY_CONTROLS, studio/static-remedies.mjs); their clicks land here.
+  if (state.access?.posture === 'static') { explainUnavailable(serverNeeded('Deploy', state.brand.chrome.name)); return; }
   const modal = $('#deploy-modal');
   if (!modal) return;
   // Optional preset: when the Remediate plan hands off a curated set, pre-
@@ -4066,6 +6822,9 @@ export function openDeployModal({ packId, packLabel, presetIdentities } = {}) {
   if (verifyHost) { verifyHost.hidden = true; verifyHost.innerHTML = ''; }
   cancelDeployVerify();
   loadDeployManifest(packId || state.selectedPackId);
+  // The org's endpoints, re-read on every open (C-3): a write goes where
+  // the option shows.
+  openMcpTarget('deploy', { fresh: true });
   updateDeployTargetSummary();
   loadDeployHistory(packId || state.selectedPackId);
 }
@@ -4116,21 +6875,32 @@ async function loadDeployHistory(packId) {
   } catch (_) { /* history is optional context — never block the modal */ }
 }
 
-// Roll a deploy back to its pre-deploy snapshot (10D). Reuses the MCP
-// target fields already in the modal; the result lands in the audit log
-// as its own record (rollbackOf) and the history refreshes to show it.
+// Roll a deploy back to its pre-deploy snapshot (10D). Reuses the modal's
+// MCP target (a registered endpoint, re-read before it is sent — C-3 — or
+// the typed URL); the result lands in the audit log as its own record
+// (rollbackOf) and the history refreshes to show it. A refusal reads as the
+// server's sentence (C-1); a result where every restore failed (a 502 with
+// its summary) still reads as a result.
 async function doRollback(deployId, packId, btn) {
-  const url = $('#deploy-target-mcp')?.value.trim();
-  const auth = $('#deploy-target-auth')?.value;
-  if (!url) { toast('Enter the MCP URL in the target form first', 'error'); return; }
+  if (!deployTargetBody()) { toast(rollbackTargetMissingText(mcpTargetMissing('deploy')), 'error'); return; }
+  const moved = await checkEndpointDrift('deploy');
+  if (moved) { toast(moved, 'error'); return; }
   if (!confirm(`Roll back ${deployId}?\n\nRestorable artefacts are re-upserted from the pre-deploy snapshot. Anything this deploy created is listed for manual removal.`)) return;
+  const drift = await checkEndpointDrift('deploy');
+  if (drift) { toast(drift, 'error'); return; }
+  const target = deployTargetBody();
+  if (!target) return;
   btn.disabled = true;
   try {
-    const r = await api(`/api/deploys/${encodeURIComponent(deployId)}/rollback`, {
+    const res = await fetch(`/api/deploys/${encodeURIComponent(deployId)}/rollback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...authHeaders() },
-      body: JSON.stringify({ mcpUrl: url, mcpAuth: auth || undefined }),
+      body: JSON.stringify(target),
     });
+    const r = await res.json().catch(() => null);
+    if (res.status === 401 && r?.login) { window.location.assign(r.login); return; }
+    const refusal = deployRefusal(res.status, r);
+    if (refusal) throw refusal;
     const manualNote = r.manual?.length ? ` · ${r.manual.length} manual step${r.manual.length === 1 ? '' : 's'}` : '';
     toast(r.ok
       ? `Rolled back: ${r.summary.ok}/${r.summary.total} restored${manualNote}`
@@ -4203,7 +6973,33 @@ async function loadDeployProfile(name) {
   $('#deploy-target-product').value = p.product || 'grafana';
   $('#deploy-target-version').value = p.version || '12';
   $('#deploy-target-mcp').value     = p.mcpUrl || '';
+  // A profile that names an endpoint selects it in the org it belongs to,
+  // while it is listed; anywhere else the typed mode, empty, and the note
+  // says why (A-12: another org's id is never sent). A typed profile is typed.
+  // A typed profile opened by a reader who may not type a URL (R4) is
+  // said, and the list stays chosen: its URL is never sent. The policy is
+  // read first when the modal's own read has not settled yet.
+  if (mcpPickersReadable() && state.mcpTargetPolicy === null) await readMcpEndpointsForPickers({ keep: true });
+  const typedAllowed = mcpTypedAllowed('deploy');
+  const { select, note } = profileEndpointNote(p, {
+    orgId: state.orgId ?? getActiveOrg(), orgName: state.orgName,
+    endpoints: mcpPickersReadable() ? state.mcpEndpoints : null, profileName: name, typedAllowed,
+  });
+  if (p.mcpEndpoint) {
+    if (select === null) $('#deploy-target-mcp').value = '';
+    paintMcpTarget('deploy', { chosen: select === null ? (typedAllowed ? '' : null) : String(select) });
+  } else if (p.mcpUrl) {
+    paintMcpTarget('deploy', { chosen: typedAllowed ? '' : null });
+  }
+  setDeployStatus(note || '', note ? 'error' : '');
   updateDeployTargetSummary();
+}
+
+// The endpoint a saved profile names, with the org it belongs to (A-12) —
+// none when the URL is typed.
+function chosenEndpointForProfile() {
+  const { chosen } = mcpTargetOf('deploy');
+  return chosen ? { orgId: state.orgId ?? getActiveOrg() ?? 'default', id: chosen.id, name: chosen.name } : undefined;
 }
 async function saveDeployProfile() {
   const name = prompt('Profile name (e.g. "Prod Grafana"):', $('#deploy-target-profile').selectedOptions?.[0]?.value || '');
@@ -4218,6 +7014,7 @@ async function saveDeployProfile() {
       product:   $('#deploy-target-product').value,
       version:   $('#deploy-target-version').value,
       mcpUrl:    $('#deploy-target-mcp').value.trim(),
+      mcpEndpoint: chosenEndpointForProfile(),
     });
   } catch (e) {
     toast(`Profile not saved: ${e.message}`, 'error');
@@ -4339,13 +7136,11 @@ function updateManifestCounter(selected, total) {
 
 async function doDeployBulk() {
   if (deployModalState.inflight) return;
-  const url  = $('#deploy-target-mcp').value.trim();
-  const auth = $('#deploy-target-auth').value;
   const folder = $('#deploy-target-folder').value.trim();
   const product = $('#deploy-target-product').value;
   const version = $('#deploy-target-version').value;
   const setStatus = setDeployStatus;
-  if (!url) { setStatus('mcp url required', 'error'); return; }
+  if (!deployTargetBody()) { setStatus(mcpTargetMissing('deploy'), 'error'); return; }
   // Deploy what the review shows: a selected row the type filter hides is
   // not counted, not reviewed — and so not deployed.
   const types = new Set([...document.querySelectorAll('#deploy-type-filters input:checked')].map(i => i.value));
@@ -4369,6 +7164,16 @@ async function doDeployBulk() {
   deployModalState.inflight = true;
   const goBtn = $('#deploy-modal-go');
   goBtn.disabled = true;
+  // A registered endpoint is re-read just before the write (C-3): moved or
+  // gone → nothing is sent, and the status line says why.
+  const drift = await checkEndpointDrift('deploy');
+  const target = drift ? null : deployTargetBody();
+  if (!target) {
+    if (drift) setStatus(drift, 'error');
+    deployModalState.inflight = false;
+    goBtn.disabled = false;
+    return;
+  }
   setStatus(`deploying ${items.length} artefact${items.length === 1 ? '' : 's'}…`);
 
   try {
@@ -4379,7 +7184,7 @@ async function doDeployBulk() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
-        mcpUrl: url, mcpAuth: auth || undefined,
+        ...target,
         targetProduct: product, targetVersion: version, targetFolder: folder || undefined,
         items,
       }),
@@ -4408,8 +7213,7 @@ async function doDeployBulk() {
         deployId: body.deployId,
         packId: deployModalState.packId,
         env: state.selectedEnv || null,
-        mcpUrl: url,
-        mcpAuth: auth || undefined,
+        target,
         items: okItems,
       });
     }
@@ -4440,9 +7244,12 @@ function cancelDeployVerify() {
 
 const VERIFY_DELAYS_MS = [3000, 15000, 30000, 60000];
 
-export async function startDeployVerify({ deployId, packId, env, mcpUrl, mcpAuth, items }) {
+// `target` is the deploy's MCP target (deployTargetBody(): a registered
+// endpoint by id, or the typed URL — with the deploy's typed key when one was
+// typed; without one, the server reads the endpoint's own variable).
+export async function startDeployVerify({ deployId, packId, env, target, items }) {
   const host = $('#deploy-modal-verify');
-  if (!host || !items.length || !mcpUrl) return;
+  if (!host || !items.length || !target) return;
   if (deployVerifyState.running) cancelDeployVerify();
   deployVerifyState.cancelled = false;
   deployVerifyState.running = true;
@@ -4457,15 +7264,21 @@ export async function startDeployVerify({ deployId, packId, env, mcpUrl, mcpAuth
     try {
       host.querySelector('.deploy-verify-status')?.replaceChildren(
         document.createTextNode(`check ${attempt}/${VERIFY_DELAYS_MS.length}: drafting live state…`));
-      const out = await api('/api/draft-from-mcp', {
+      // requestJson: a refusal (an endpoint whose token variable is unset,
+      // one gone from the org) reads as the server's sentence, never a `{`.
+      const out = await requestJson('/api/draft-from-mcp', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...authHeaders() },
-        body: JSON.stringify({ mcpUrl, mcpAuth }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(target),
       });
       if (!out.ok) throw new Error(out.error || 'MCP draft failed');
-      const reg = await validateUploaded(out.canonicalYaml, 'application/x-yaml');
+      // The draft is registered by the route that answered it; it replaces
+      // the earlier draft of the same label — the previous check's, or the
+      // live draft loaded as Pack B, which then follows to this one.
+      const reg = await registeredOrValidated(out);
       if (!reg.ok || !reg.registered?.id) throw new Error('live draft failed validation');
       packBId = reg.registered.id;
+      followReplacedPack(packBId).catch(() => {});
       refreshedAt = out.canonical?.metadata?.annotations?.['mcp.refreshedAt'] || null;
       const params = new URLSearchParams({ a: packId, b: packBId });
       if (env) params.set('aEnv', env);
@@ -4480,6 +7293,10 @@ export async function startDeployVerify({ deployId, packId, env, mcpUrl, mcpAuth
       if (last.summary.outcome !== 'pending') break;
     } catch (e) {
       lastError = e;
+      // The server refused the draft (a 4xx: the endpoint's token variable
+      // unset, the endpoint gone, the role): waiting changes nothing — the
+      // panel settles on the sentence now instead of polling behind it.
+      if (e.status >= 400 && e.status < 500) break;
       renderDeployVerifyPanel(host, last, { attempt, packBId, final: false, error: e.message });
     }
   }
@@ -4638,7 +7455,13 @@ function setupDraftFromMcpPanel() {
       if (!urlInput.value) {
         urlInput.value = recallMcpUrl() || '';
       }
-      urlInput.focus();
+      openMcpTarget('draft');
+      paintLiveSteps();
+      if (liveUi.job) document.getElementById('live-step-progress-title')?.scrollIntoView?.({ block: 'nearest' });
+      else focusMcpTarget('draft');
+      readLiveJobsForPanel().catch(() => {});
+      // A finished job's result is on screen now: its key goes.
+      if (liveUi.job && liveUi.job.view.state !== 'running') forgetLiveJob();
     }
   };
   closeBtn.onclick = () => { panel.hidden = true; };
@@ -4647,52 +7470,345 @@ function setupDraftFromMcpPanel() {
     $('#draft-mcp-url').value = '';
     $('#draft-mcp-auth').value = '';
     $('#draft-mcp-name').value = '';
+    $('#live-label').value = '';
     $('#draft-mcp-result').hidden = true;
-    $('#draft-mcp-status').textContent = '';
+    setLiveStatus('draft-mcp-status', '');
     draftMcpState.lastResult = null;
+    liveUi.kindChosen = null;
+    clearLivePing();
   };
-  goBtn.onclick = () => doDraftFromMcp();
+  // Any change to the target or its key: a ping never stands for another.
+  for (const id of ['draft-mcp-url', 'draft-mcp-auth']) $(`#${id}`)?.addEventListener('input', clearLivePing);
+  $('#live-test-btn').onclick = () => testLiveConnection();
+  for (const radio of document.querySelectorAll('input[name="live-kind"]')) {
+    radio.addEventListener('change', () => { liveUi.kindChosen = liveKind(); paintLiveChoice(); });
+  }
+  goBtn.onclick = () => startLiveFromPanel();
+  $('#live-cancel-btn').onclick = () => cancelLiveFromPanel();
   adoptBtn.onclick = () => adoptDraftFromMcpResult();
 }
 
-async function doDraftFromMcp() {
-  const url  = $('#draft-mcp-url').value.trim();
-  const auth = $('#draft-mcp-auth').value;
-  const name = $('#draft-mcp-name').value.trim();
-  const statusEl = $('#draft-mcp-status');
-  const setStatus = (msg, kind) => {
-    statusEl.textContent = msg;
-    statusEl.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
-  };
-  if (!url) { setStatus('mcp url required', 'error'); return; }
-  rememberMcpUrl(url).catch(() => {});
+// ---------- the live panel: test, choose Draft or Snapshot, follow the job ----------
+//
+// "New pack from a live MCP server" (#draft-mcp-panel, rebadge batch 3, C1):
+// three steps. (1) Test the connection — the draft picker, the auth field,
+// POST /api/mcp/ping. (2) Choose what to build — drawn only after a
+// connected ping for the target on screen (stepTwoVisible: a change of the
+// picker or the auth field hides it again): Draft (a scaffold) or Snapshot
+// (an inventory), Draft preselected unless the org configured a snapshot
+// scope; under Snapshot the plan (fetchPlan over the ping's mapped
+// inventory, /lib/live-fetch.mjs) and the scope fields prefilled from
+// GET /api/mcp/jobs; the duration from this org's last finished job.
+// (3) Progress and result — both kinds run as live jobs (POST
+// /api/mcp/jobs), polled every second while the panel is open, every five
+// while closed, ten after a lost connection; the gate log drawn from the
+// stages of the kind. The job's id is remembered per login and org
+// (rememberLiveJob: an id and an origin, never a credential), so a reload
+// resumes the poll; opening the panel also finds a job started in another
+// tab (GET /api/mcp/jobs `running`). The home's Connect opens this panel
+// and tests its target here (D8). POST /api/draft-from-mcp stays for the
+// API and the deploy verify.
 
-  const goBtn = $('#draft-mcp-go-btn');
-  goBtn.disabled = true;
-  setStatus('contacting mcp…');
-  $('#draft-mcp-result').hidden = true;
+const liveUi = {
+  ping: null,        // { key, ok, answer } — the last ping, for one target
+  jobs: null,        // GET /api/mcp/jobs's answer (scope, running, lastTook)
+  job: null,         // { id, kind, label, records, since, view, answer }
+  timer: null,
+  kindChosen: null,  // the person's own choice in this panel
+};
+let liveFetchLib = null;
+const loadLiveFetchLib = async () => (liveFetchLib ??= await import('/lib/live-fetch.mjs'));
 
+function liveJobsReadable() {
+  const posture = state.access?.posture;
+  return posture === 'identity' || posture === 'open';
+}
+
+function setLiveStatus(id, msg, kind = '') {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
+}
+
+// A change of the picker or the auth field: the ping no longer stands.
+function clearLivePing() {
+  liveUi.ping = null;
+  renderPingResult($('#live-ping-result'), null);
+  setLiveStatus('live-ping-status', '');
+  paintLiveSteps();
+}
+
+function liveKind() {
+  return document.querySelector('input[name="live-kind"]:checked')?.value === 'snapshot' ? 'snapshot' : 'draft';
+}
+
+function paintLiveSteps() {
+  const running = liveUi.job?.view?.state === 'running';
+  const two = stepTwoVisible(liveUi.ping, mcpTargetOf('draft').body);
+  const choose = $('#live-step-choose');
+  if (choose) choose.hidden = !two || running;
+  const progress = $('#live-step-progress');
+  if (progress) progress.hidden = !liveUi.job;
+  paintLiveBadge();
+}
+
+// The "new from live" button says a job is running (text, never colour alone).
+function paintLiveBadge() {
+  const btn = $('#draft-mcp-btn');
+  if (!btn) return;
+  const running = liveUi.job?.view?.state === 'running';
+  btn.dataset.liveJob = running ? 'running' : '';
+  btn.textContent = running ? 'new from live · live job running' : 'new from live';
+}
+
+async function paintLiveChoice() {
+  const kind = liveKind();
+  const answer = liveUi.ping?.answer;
+  const snapshot = kind === 'snapshot';
+  $('#live-snapshot-opts').hidden = !snapshot;
+  $('#draft-mcp-go-btn').textContent = snapshot ? 'start snapshot' : 'start draft';
+  const name = $('#draft-mcp-name');
+  name.placeholder = snapshot ? 'live-snapshot' : 'production-live';
+  $('#draft-mcp-name-hint').textContent = `(defaults to "${name.placeholder}")`;
+  $('#live-duration').textContent = durationText(kind, liveUi.jobs?.lastTook?.[kind] ?? null);
+  if (!snapshot) return;
   try {
-    const r = await fetch('/api/draft-from-mcp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ mcpUrl: url, mcpAuth: auth || undefined, packName: name || undefined }),
-    });
-    const ct = r.headers.get('content-type') || '';
-    const raw = await r.text();
-    if (!ct.includes('application/json')) {
-      setStatus(`server returned ${r.status} ${ct || 'no content-type'} — restart \`npm run dev\` if you just changed server code`, 'error');
-      return;
-    }
-    const out = JSON.parse(raw);
-    if (!out.ok) { setStatus(`error: ${out.error || 'unknown'}`, 'error'); return; }
-    draftMcpState.lastResult = out;
-    renderDraftMcpResult(out);
-    setStatus(`drafted in ${out.tookMs}ms · ${out.summary.discovered.backends} backend(s) discovered`, 'ok');
+    const lib = await loadLiveFetchLib();
+    const plan = lib.fetchPlan(answer?.tools?.capabilities ?? null, { kind, complete: answer?.tools ? answer.tools.complete !== false : false });
+    const model = planModel(plan, lib.stagesFor(kind));
+    $('#live-plan').textContent = [model.gapText, model.unknownText].filter(Boolean).join('. ') || 'This MCP offers a tool for every inventory family.';
+  } catch {
+    $('#live-plan').textContent = '';
+  }
+}
+
+async function testLiveConnection() {
+  const { body: target } = mcpTargetOf('draft');
+  liveUi.ping = null;
+  renderPingResult($('#live-ping-result'), null);
+  paintLiveSteps();
+  if (!target) { setLiveStatus('live-ping-status', mcpTargetMissing('draft'), 'error'); return; }
+  const btn = $('#live-test-btn');
+  btn.disabled = true;
+  setLiveStatus('live-ping-status', 'testing the connection…');
+  try {
+    const answer = await pingMcp(target);
+    const model = pingResultModel(answer);
+    if (!model) { setLiveStatus('live-ping-status', 'error: the server sent no ping result', 'error'); return; }
+    renderPingResult($('#live-ping-result'), model);
+    if (target.mcpUrl) rememberMcpUrl(target.mcpUrl).catch(() => {});
+    if (!model.ok) { setLiveStatus('live-ping-status', model.status, 'error'); return; }
+    liveUi.ping = { key: liveTargetKey(target), ok: true, answer };
+    try { liveUi.jobs = await readLiveJobs(); } catch { liveUi.jobs = null; }
+    const form = scopeFormModel(liveUi.jobs?.scope);
+    $('#live-scope-prefixes').value = form.prefixes;
+    $('#live-scope-folders').value = form.folders;
+    $('#live-scope-note').textContent = form.errors.length ? `The configured scope does not parse: ${form.errors.join('; ')}` : form.note;
+    const kind = liveUi.kindChosen ?? preselectedKind(liveUi.jobs?.scope?.from);
+    document.querySelector(`input[name="live-kind"][value="${kind}"]`).checked = true;
+    paintLiveSteps();
+    await paintLiveChoice();
+    // Said once step 2 is drawn: the status names what the person can do next.
+    setLiveStatus('live-ping-status', model.status, model.tone === 'ok' ? 'ok' : 'error');
   } catch (e) {
-    setStatus(`error: ${e.message}`, 'error');
+    setLiveStatus('live-ping-status', `error: ${e.message}`, 'error');
   } finally {
-    goBtn.disabled = false;
+    btn.disabled = false;
+  }
+}
+
+async function startLiveFromPanel() {
+  const { body: target, chosen } = mcpTargetOf('draft');
+  if (!stepTwoVisible(liveUi.ping, target)) { clearLivePing(); return; }
+  const kind = liveKind();
+  const name = $('#draft-mcp-name').value.trim();
+  const label = $('#live-label').value.trim();
+  const body = {
+    kind, ...target,
+    ...(name ? { packName: name } : {}),
+    ...(label ? { label } : {}),
+    ...(kind === 'snapshot' ? { scope: scopeFromForm({ prefixes: $('#live-scope-prefixes').value, folders: $('#live-scope-folders').value }) } : {}),
+  };
+  const btn = $('#draft-mcp-go-btn');
+  btn.disabled = true;
+  setLiveStatus('draft-mcp-status', `starting the ${kind}…`);
+  try {
+    const out = await startLiveJob(body);
+    setLiveStatus('draft-mcp-status', '');
+    rememberMcpEndpoint(chosen ? chosen.id : null);
+    $('#draft-mcp-result').hidden = true;
+    followLiveJob(out.job);
+  } catch (e) {
+    setLiveStatus('draft-mcp-status', `error: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Follows a job: the gate log, the elapsed time, and its end.
+function followLiveJob(view, { records = [], since = 0 } = {}) {
+  clearTimeout(liveUi.timer);
+  liveUi.job = { id: view.id, kind: view.kind, label: view.label, records: [...records], since, view, answer: null };
+  rememberLiveJob({ id: view.id, kind: view.kind, startedAt: view.startedAt, origin: view.target?.origin ?? null, label: view.label });
+  renderLiveResult($('#live-result'), null);
+  paintLiveJob();
+  paintLiveSteps();
+  pollLiveOnce();
+}
+
+async function paintLiveJob() {
+  const job = liveUi.job;
+  if (!job) return;
+  const view = job.view;
+  const running = view.state === 'running';
+  setLiveStatus('live-job-status', running
+    ? `${view.kind === 'snapshot' ? 'snapshot' : 'draft'} running${view.cancelRequested ? ' — cancel requested' : ''}`
+    : `${view.kind} ${view.state}`, running ? '' : (view.state === 'done' ? 'ok' : 'error'));
+  $('#live-elapsed').textContent = `elapsed ${elapsedText(view.elapsedMs)}`;
+  $('#live-cancel-btn').hidden = !running;
+  try {
+    const lib = await loadLiveFetchLib();
+    renderGateLog($('#live-gatelog'), gateLogModel(job.records, lib.stagesFor(job.kind)));
+  } catch { /* the stage rows need /lib: a static bundle never runs a job */ }
+}
+
+function liveJobGone() {
+  forgetLiveJob();
+  clearTimeout(liveUi.timer);
+  if (liveUi.job) liveUi.job.view = { ...liveUi.job.view, state: 'gone' };
+  setLiveStatus('live-job-status', '');
+  $('#live-cancel-btn').hidden = true;
+  renderLiveResult($('#live-result'), { state: 'gone', sentence: LIVE_JOB_GONE_TEXT, registered: null });
+  paintLiveBadge();
+}
+
+async function pollLiveOnce() {
+  const job = liveUi.job;
+  if (!job || job.view.state !== 'running') return;
+  let answer;
+  try {
+    answer = await pollLiveJob(job.id, job.since);
+  } catch (e) {
+    if (liveUi.job !== job) return;
+    if (e.status === 404) { liveJobGone(); return; }
+    if (e.status) { setLiveStatus('live-job-status', `error: ${e.message}`, 'error'); return; }
+    setLiveStatus('live-job-status', 'connection lost — retrying', 'error');
+    liveUi.timer = setTimeout(pollLiveOnce, 10_000);
+    return;
+  }
+  if (liveUi.job !== job) return;
+  job.records.push(...(answer.stages ?? []));
+  job.since = answer.next ?? job.since;
+  job.view = answer.job;
+  job.label = answer.job.label ?? job.label;
+  job.answer = answer;
+  await paintLiveJob();
+  if (answer.job.state === 'running') {
+    liveUi.timer = setTimeout(pollLiveOnce, $('#draft-mcp-panel').hidden ? 5000 : 1000);
+    return;
+  }
+  await finishLiveJob(answer);
+}
+
+async function finishLiveJob(answer) {
+  const model = liveResultModel(answer);
+  // The result is shown here (the panel open), or the toast below says it: the key goes.
+  forgetLiveJob();
+  paintLiveSteps();
+  renderLiveResult($('#live-result'), model, {
+    onOpen: (id) => openLivePack(id),
+    onCompare: (id) => compareWithLivePack(id),
+    compareWith: state.selectedPackId && state.selectedPackId !== model?.registered?.id
+      ? (state.catalog.find((p) => p.id === state.selectedPackId)?.label ?? state.selectedPackId) : null,
+  });
+  if (model?.registered) {
+    // The catalogue gains the pack: the pickers name it (with its kind).
+    try { await refreshCatalogue(); renderPackSelect(); renderPackBSelect(); } catch { /* the next load lists it */ }
+    followReplacedPack(model.registered.id).catch(() => {});
+    if ($('#draft-mcp-panel').hidden) toast(`Registered: ${model.registered.label}`, 'ok');
+    if (answer.job.kind === 'draft' && answer.result?.draft) showLiveDraftResult(answer).catch(() => {});
+  }
+}
+
+// A draft job's result block: today's draft review, from the job's summary
+// and the registered pack (its canonical and YAML read by id).
+async function showLiveDraftResult(answer) {
+  const id = answer.result.registered.id;
+  const [canonical, yaml] = await Promise.all([
+    api(`/api/packs/${encodeURIComponent(id)}/canonical`),
+    fetch(`/api/packs/${encodeURIComponent(id)}/canonical?format=yaml`, { headers: authHeaders() }).then((r) => r.text()),
+  ]);
+  const out = {
+    ok: true, canonical, canonicalYaml: yaml, summary: answer.result.draft.summary, annotations: canonical?.metadata?.annotations ?? {},
+    validation: { ok: true, errors: [] }, conformance: answer.result.draft.conformance, registered: answer.result.registered,
+    mcpEndpoint: answer.result.draft.mcpEndpoint, tookMs: answer.result.tookMs,
+  };
+  draftMcpState.lastResult = out;
+  renderDraftMcpResult(out);
+}
+
+async function openLivePack(id) {
+  $('#draft-mcp-panel').hidden = true;
+  await refreshCatalogue();
+  state.view = 'layers';
+  enterAnalyzeMode(id, defaultEnvFor(id));
+}
+
+async function compareWithLivePack(id) {
+  const aId = state.selectedPackId;
+  if (!aId) return openLivePack(id);
+  $('#draft-mcp-panel').hidden = true;
+  await refreshCatalogue();
+  state.view = 'compare';
+  enterCompareMode(aId, state.selectedEnv ?? defaultEnvFor(aId), id, defaultEnvFor(id));
+}
+
+async function cancelLiveFromPanel() {
+  const job = liveUi.job;
+  if (!job) return;
+  try {
+    const out = await cancelLiveJob(job.id);
+    if (out?.job?.cancelRequested) job.view = { ...job.view, cancelRequested: true };
+    paintLiveJob();
+  } catch (e) {
+    if (e.status === 404) liveJobGone();
+    else setLiveStatus('live-job-status', `error: ${e.message}`, 'error');
+  }
+}
+
+// Opening the panel: a job started in another tab (or before a reload) is
+// followed; its step 3 shows.
+async function readLiveJobsForPanel() {
+  if (!liveJobsReadable()) return;
+  try { liveUi.jobs = await readLiveJobs(); } catch { return; }
+  const running = liveUi.jobs?.running;
+  if (running && liveUi.job?.id !== running.id) followLiveJob(running);
+}
+
+// At boot, once the org is known: one poll for a remembered job (identity
+// and open postures only — never the bundle, never the token posture).
+async function resumeLiveJob() {
+  if (!liveJobsReadable()) return;
+  const remembered = recallLiveJob();
+  if (!remembered) return;
+  try {
+    const answer = await pollLiveJob(remembered.id, 0);
+    liveUi.job = { id: remembered.id, kind: answer.job.kind, label: answer.job.label, records: [...(answer.stages ?? [])], since: answer.next ?? 0, view: answer.job, answer };
+    paintLiveSteps();
+    await paintLiveJob();
+    if (answer.job.state === 'running') liveUi.timer = setTimeout(pollLiveOnce, 5000);
+    else {
+      // Finished while the page was away: the result waits for the panel.
+      renderLiveResult($('#live-result'), liveResultModel(answer), {
+        onOpen: (id) => openLivePack(id), onCompare: (id) => compareWithLivePack(id), compareWith: null,
+      });
+      toast(answer.job.state === 'done' && answer.result?.registered ? `Registered: ${answer.result.registered.label}` : `The live ${answer.job.kind} ${answer.job.state}`, answer.job.state === 'done' ? 'ok' : 'error');
+      forgetLiveJob();
+    }
+  } catch (e) {
+    if (e.status === 404) { forgetLiveJob(); return; }
+    // The server unreachable at boot: the key stays for the next load.
   }
 }
 
@@ -4822,7 +7938,7 @@ function renderDraftMcpResult(out) {
   $('#draft-mcp-result-validation').innerHTML = `
     <h4>schema validation</h4>
     ${v.ok
-      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.3</div>`
+      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.4</div>`
       : `<div class="crawl-pill crawl-pill-err">✗ ${v.errors.length} schema error(s)</div>
          <ul class="crawl-result-errs">${v.errors.slice(0, 8).map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul>`}
   `;
@@ -4936,7 +8052,7 @@ function renderDraftMcpResult(out) {
     ${alertsFiringCount > 0 || recordingFallbackCount > 0 ? `
       <div class="crawl-evidence-note">
         Rows in italic = fallback evidence. The standard rule endpoints came back empty,
-        but Observogram found evidence in metric data: firing alerts via the
+        but ${escapeHtml(state.brand.chrome.name)} found evidence in metric data: firing alerts via the
         <code>ALERTS</code> series, recording rules via metric names following the
         <code>&lt;ns&gt;:&lt;metric&gt;:&lt;op&gt;</code> convention.
       </div>
@@ -4975,7 +8091,7 @@ async function adoptDraftFromMcpResult() {
   const out = draftMcpState.lastResult;
   if (!out) return;
   try {
-    const res = await validateUploaded(out.canonicalYaml, 'application/x-yaml', state.selectedEnv);
+    const res = await registeredOrValidated(out, state.selectedEnv);
     if (!res.ok) {
       toast(`Could not adopt — ${res.errors.length} validation error(s)`, 'error');
       return;
@@ -4999,12 +8115,21 @@ function setupMcpPanel() {
     if (open) closeMcpPanel(); else openMcpPanel();
   };
   $('#mcp-panel-close').onclick = closeMcpPanel;
-  $('#mcp-refresh-btn').onclick = refreshLive;
+  $('#mcp-refresh-btn').onclick = pingFromPanel;
+  $('#mcp-rebuild-btn').onclick = refreshLive;
+  const note = $('#mcp-rebuild-note');
+  if (note) note.textContent = rebuildNoteText();
+  // A result never describes a target other than the one shown.
+  for (const id of ['#mcp-url', '#mcp-auth']) $(id)?.addEventListener('input', clearPingResult);
+  $('#mcp-url')?.addEventListener('input', paintMcpSettingsButton);
+  $('#mcp-settings-btn')?.addEventListener('click', openServerSettings);
 
-  // Close on outside click
+  // Close on outside click — never while the Server settings modal is open,
+  // nor for a click whose node a repaint removed (it was inside the modal).
   document.addEventListener('click', (e) => {
     const panel = $('#mcp-panel');
     if (panel.hidden) return;
+    if (!e.target.isConnected || mssOpen()) return;
     if (e.target.closest('#mcp-panel') || e.target.closest('#mcp-btn')) return;
     closeMcpPanel();
   });
@@ -5028,25 +8153,43 @@ function setupMcpPanel() {
 let serverVersion = null;   // /healthz: { version, build, node, specVersion }
 let serverBuild = null;     // buildLabelModel(/api/version)
 
+async function bindTaxonomyFromServer() {
+  const mod = await import('/lib/artefact-classify.mjs');
+  let json = null;
+  state.taxonomyBindError = '';
+  try { json = await loadTaxonomy(); }
+  catch (e) {
+    console.warn(`[taxonomy] GET /api/taxonomy failed — classifying with the default families: ${e.message}`);
+    state.taxonomyBindError = 'GET /api/taxonomy failed';
+  }
+  try { bindTaxonomy(mod, json); }
+  catch (e) {
+    console.warn(`[taxonomy] the served override does not compile — classifying with the default families: ${e.message}`);
+    state.taxonomyBindError = 'the served taxonomy override does not compile here';
+    bindTaxonomy(mod, null);
+  }
+}
+
 async function loadVersion() {
   const [info, health] = await Promise.all([loadBuildInfo(), loadHealth()]);
   serverVersion = health;
   serverBuild = buildLabelModel(info);
-  renderVersionChrome(document, serverBuild);
+  renderVersionChrome(document, serverBuild, state.brand.chrome);
 }
 
 function openAboutModal() {
   document.getElementById('about-modal')?.remove();
   const v = serverVersion || {};
   const b = serverBuild;
+  const chrome = state.brand.chrome;
   const row = (k, val) => val ? `<div class="about-row"><span class="about-key">${k}</span><span class="about-val">${escapeHtml(String(val))}</span></div>` : '';
   const overlay = document.createElement('div');
   overlay.id = 'about-modal';
   overlay.className = 'about-overlay';
   overlay.innerHTML = `
-    <div class="about-card" role="dialog" aria-modal="true" aria-label="About Observogram">
-      <div class="about-brand">Observo<i>gram</i></div>
-      <div class="about-tagline">the observability compiler</div>
+    <div class="about-card" role="dialog" aria-modal="true" aria-label="${escapeHtml(chrome.aboutLabel)}">
+      <div class="about-brand">${chrome.wordmarkHtml('i')}</div>
+      <div class="about-tagline">${escapeHtml(chrome.tagline)}</div>
       <div class="about-version">${escapeHtml(b ? `v${b.version ?? '?'}` : v.version ? `v${v.version}` : 'version unknown')}<span class="about-build">${escapeHtml(b ? ` · build ${b.build ?? 'unknown'}` : v.build ? ` · build ${v.build}` : '')}</span></div>
       <div class="about-rows">
         ${row('commit', b?.commit ? [b.commit, b.branch, b.dirty ? 'dirty' : null].filter(Boolean).join(' · ') : null)}
@@ -5058,7 +8201,7 @@ function openAboutModal() {
         ${row('identity', state.identity?.mode || 'local (no sign-in)')}
         ${state.identity?.orgs?.length ? row('org', state.identity.orgs.map(o => o.name || o.id).join(' · ')) : ''}
       </div>
-      <a class="about-link" href="https://github.com/MoebiusX/Observogram/blob/develop/docs/CHANGELOG.md" target="_blank" rel="noopener">changelog</a>
+      ${chrome.aboutChangelogHref ? `<a class="about-link" href="${escapeHtml(chrome.aboutChangelogHref)}" target="_blank" rel="noopener">changelog</a>` : ''}
       <button type="button" class="about-close" aria-label="Close">esc</button>
     </div>
   `;
@@ -5072,6 +8215,12 @@ function openAboutModal() {
 
 // /auth/me → state.identity. Local mode: the endpoint 404s and identity
 // stays null — every downstream check degrades to today's behaviour.
+// The signed-in login, or null in the open posture and before /auth/me
+// answered — the first half of every per-user storage key.
+function signedInLogin() {
+  return state.identity?.authenticated ? (state.identity.user?.login || null) : null;
+}
+
 async function loadIdentity() {
   try {
     const r = await fetch('/auth/me');
@@ -5084,14 +8233,30 @@ async function loadIdentity() {
 
 // Stage 2 tenancy: pick the active org from the session's memberships
 // (/auth/me carries them in every identity posture) — the persisted choice
-// when still valid, the first membership otherwise. Without memberships
-// (the open posture) no org header is sent: the server runs the request in
-// the default org. The header is sent whatever the ORG chip shows.
+// when still valid, the first membership otherwise; an owner keeps a
+// persisted org they are not a member of when they persisted it (acting in
+// it, design §3.5 D-M; never one another login chose on this browser). The
+// server is the check, and the boot recovers once when it refuses.
+// Without memberships (the open posture) no org header is sent: the server
+// runs the request in the default org. The header is sent whatever the ORG
+// chip shows.
 function resolveActiveOrg() {
-  const orgs = state.identity?.orgs || [];
-  if (!orgs.length) { setActiveOrg(null); return; }
-  const saved = savedOrg();
-  setActiveOrg((orgs.find(o => o.id === saved) || orgs[0]).id);
+  setActiveOrg(activeOrgChoice({ identity: state.identity, saved: savedOrg(), savedBy: savedOrgBy() }));
+}
+
+// The boot's one-time recovery from an acting org the server refuses (an
+// owner's, removed since — settings-model.mjs actingRecovery): a
+// sessionStorage flag, set before the reload and dropped once the catalogue
+// answers, so a second refusal draws the no-org screen instead of looping.
+const ACTING_RECOVERY_KEY = 'studioActingRecovery.v1';
+function actingRecoveryTried() {
+  try { return sessionStorage.getItem(ACTING_RECOVERY_KEY) === '1'; } catch { return false; }
+}
+function setActingRecoveryTried(on) {
+  try {
+    if (on) sessionStorage.setItem(ACTING_RECOVERY_KEY, '1');
+    else sessionStorage.removeItem(ACTING_RECOVERY_KEY);
+  } catch { /* storage unavailable */ }
 }
 
 // The header's `api` link (studio/index.html #api-link) names the active
@@ -5102,50 +8267,27 @@ function syncApiLink() {
 }
 
 // Identity chip — only renders when the server runs in an identity
-// posture and a session exists.
+// posture and a session exists. The account menu mounts in the chrome's
+// action cluster (installObservaChrome runs first in boot): the one bar
+// every screen shows. The context bar (.hdr) is hidden on the home and
+// Build screens (app.css, ux.css), so a menu there left a signed-in user
+// no way to sign out or change a password until a pack was open.
 function setupIdentityChip() {
   const me = state.identity;
   if (!me?.authenticated) return;
-  const anchor = $('#theme-toggle');
-  if (!anchor || document.getElementById('hdr-user')) return;
+  const actions = document.querySelector('.observa-hdr .observa-actions');
+  if (!actions || document.getElementById('hdr-user')) return;
 
-  // Org indicator (orgChipModel) — a switcher when the user belongs to
-  // several orgs, a static label for one org that is not the default one,
-  // nothing for the default org alone. Switching reloads: every view is a
-  // projection of the active org's workspace, so a clean re-boot is the
-  // honest refresh.
-  const orgs = me.orgs || [];
-  const orgChip = orgChipModel(orgs, getActiveOrg());
-  if (orgChip.kind !== 'none' && !document.getElementById('hdr-org')) {
-    const wrap = document.createElement('span');
-    wrap.id = 'hdr-org';
-    wrap.className = 'hdr-org';
-    if (orgChip.kind === 'switcher') {
-      wrap.innerHTML = `<span class="ctrl-key">ORG</span>`;
-      const sel = document.createElement('select');
-      sel.setAttribute('aria-label', 'Active organisation');
-      for (const o of orgs) {
-        const opt = document.createElement('option');
-        opt.value = o.id;
-        opt.textContent = o.name || o.id;
-        if (o.id === getActiveOrg()) opt.selected = true;
-        sel.appendChild(opt);
-      }
-      sel.addEventListener('change', () => {
-        setActiveOrg(sel.value);
-        window.location.reload();
-      });
-      wrap.appendChild(sel);
-    } else {
-      const active = orgChip.active;
-      wrap.innerHTML = `<span class="ctrl-key">ORG</span><span class="hdr-org-name">${escapeHtml(active.name || active.id)}</span>`;
-      wrap.title = `organisation: ${active.id}`;
-    }
-    anchor.parentNode.insertBefore(wrap, anchor);
-  }
+  // The ORG indicator / switcher is the OBSERVA bar's chip alone
+  // (updateObservaOrgChip), on every screen; the context bar carries no copy.
 
   // Account menu: who you are, change password (stand-alone mode — OIDC
-  // passwords belong to the IdP), sign out my other sessions, sign out.
+  // passwords belong to the IdP), sign out my other sessions (not behind a
+  // reverse proxy: the headers are the session, the route is not
+  // registered), sign out.
+  // The name is its own span: beside the tabs it gives way (ux.css — ten
+  // characters at a laptop width, the glyph alone at phone width), so the
+  // tab titles keep their room; the title and the menu say it in full.
   const chip = document.createElement('span');
   chip.id = 'hdr-user';
   chip.className = 'hdr-user';
@@ -5154,11 +8296,12 @@ function setupIdentityChip() {
   // buttons are natively focusable and honest about what this is.
   chip.innerHTML = `
     <button type="button" class="ctrl-btn hdr-user-btn" aria-expanded="false"
-            title="signed in as ${escapeHtml(me.email || me.sub)} (${escapeHtml(me.mode)})">⏣ ${escapeHtml(me.name || me.email || me.sub)} ▾</button>
+            title="signed in as ${escapeHtml(me.email || me.sub)} (${escapeHtml(me.mode)})">⏣ <span class="hdr-user-name">${escapeHtml(me.name || me.email || me.sub)}</span> ▾</button>
     <div class="hdr-user-menu" hidden>
       <div class="hdr-user-menu-id" aria-live="polite">signed in as <strong>${escapeHtml(me.email || me.sub)}</strong><span class="hdr-user-menu-mode">${escapeHtml(me.mode)}</span></div>
+      <button type="button" class="hdr-user-menu-item hdr-user-settings">settings</button>
       ${me.mode === 'local-users' ? '<a class="hdr-user-menu-item" href="/auth/change-password">change password…</a>' : ''}
-      <button type="button" class="hdr-user-menu-item hdr-user-others">sign out my other sessions</button>
+      ${me.mode === 'proxy' ? '' : '<button type="button" class="hdr-user-menu-item hdr-user-others">sign out my other sessions</button>'}
       <button type="button" class="hdr-user-menu-item hdr-user-out">sign out</button>
     </div>
   `;
@@ -5166,13 +8309,15 @@ function setupIdentityChip() {
   const menu = chip.querySelector('.hdr-user-menu');
   const setOpen = (open) => { menu.hidden = !open; menuBtn.setAttribute('aria-expanded', String(open)); };
   menuBtn.addEventListener('click', () => setOpen(menu.hidden));
-  document.addEventListener('click', (e) => { if (!chip.contains(e.target)) setOpen(false); });
+  // On the way down (capture): the Advanced toggle beside it stops its own
+  // click from bubbling, and would leave this menu open under that one.
+  document.addEventListener('click', (e) => { if (!chip.contains(e.target)) setOpen(false); }, true);
   chip.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setOpen(false); menuBtn.focus(); } });
   // Every other session of this user ends at its next request; this
   // browser's cookie comes back re-issued (Set-Cookie). The id line says
   // what happened — or the server's refusal, as it words it.
   const others = chip.querySelector('.hdr-user-others');
-  others.addEventListener('click', async () => {
+  if (others) others.addEventListener('click', async () => {
     others.disabled = true;
     let status = 0;
     let body;
@@ -5186,12 +8331,25 @@ function setupIdentityChip() {
     chip.querySelector('.hdr-user-menu-id').textContent = signOutOthersText(status, body);
     others.disabled = false;
   });
+  // Behind a reverse proxy the proxy's session outlives this app's: go to
+  // its logout URL when the server names one (/auth/me logoutUrl); without
+  // one, say what happened instead of landing on the 401 explainer.
   chip.querySelector('.hdr-user-out').addEventListener('click', async () => {
     forgetMcpUrls(me.user?.login);   // a shared browser keeps no MCP URL or deploy profile of this user
+    persistence.forget(me.user?.login);   // nor a snapshot of this user in any org — the Build draft included
+    forgetRecentServices();
     await fetch('/auth/logout', { method: 'POST', headers: { ...authHeaders() } }).catch(() => {});
+    if (me.mode === 'proxy') {
+      if (me.logoutUrl) { window.location.assign(me.logoutUrl); return; }
+      chip.querySelector('.hdr-user-menu-id').textContent = 'signed out of this app only — the reverse proxy still knows you; end its session there';
+      return;
+    }
     window.location.assign('/auth/login');
   });
-  anchor.parentNode.insertBefore(chip, anchor);
+  // Settings — the same door as Advanced → Settings (a user in no org is
+  // told why instead).
+  chip.querySelector('.hdr-user-settings').addEventListener('click', () => { setOpen(false); enterSettings(null); });
+  actions.appendChild(chip);
 }
 
 // The inline script in <head> already applied the persisted/system theme

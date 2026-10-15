@@ -15,6 +15,11 @@ import { LAYER_DEFS, LAYER_NAMES, L4_SUBGROUPS } from './constants.mjs';
 import { openDrawer } from './drawer.mjs';
 import { defaultEnvFor, refresh } from './app.mjs';
 import { host as appHost } from './host.mjs';
+import { liveKindSuffix, liveChipText } from './live-model.mjs';
+import {
+  compareIdentityEngine, viewDiffFor, identitySwitchModel, identityAnnouncement, pairingModeOf, pairingTitle, unpairedHint,
+  renderCompareIdentitySwitch, DEFAULT_PAIRING,
+} from './compare-identity.mjs';
 import { cardKey } from './layers-view.mjs';
 import { diffEntryLabel, deploySelectionFromEntries, deploySurfaceForArtefact, prettyDiffKey } from './artifact-model.mjs';
 import {
@@ -37,14 +42,41 @@ import { catalogEntryFor, LAYERS_FOR_DIFF } from './compare-catalog.mjs';
 // traceability section's own ux-kit imports can never collide with these.
 import * as diagUx from './ux-kit.mjs';
 import { driftedEntryBadness as diagDriftCost } from './diagnostic-grade.mjs';
+import { buildRemediationFlowViewModel, packDeclaresRemediation, remediationFlowEngine, remediationFlowHtml } from './remediation-flow-view.mjs';
 
 // Requirements traceability (the TRACEABILITY VIEW section below).
 import { decisionHeaderHtml, disclosureHtml, emptyStateHtml, LAYER_PURPOSE, layerTitle, plural, wireUxActions } from './ux-kit.mjs';
 import { LINK_STATES, readTraceability, traceIssue } from './trace-chain.mjs';
+import { metricReaders, readersDigest, readersSentence, readerLine, readerRank, readerCounts, alertNames } from './metric-readers.mjs';
+// The static posture — no server behind the page (a static bundle): the deploy controls drawn unavailable.
+import { serverNeeded, DEPLOY_CONTROLS, staticRemedy, staticInputOf, staticTraceActions } from './static-remedies.mjs';
+import { markUnavailable } from './services-view.mjs';
 
 // Re-exported: these two lived here before moving to compare-catalog.mjs
 // (kept importable from the view for compile-view.mjs and proto-shared.mjs).
 export { catalogEntryFor, LAYERS_FOR_DIFF };
+
+// ---------- the static posture ----------
+
+// A static bundle answers no deploy: every deploy control Diagnose and its
+// Compare draw — the drift action, the chain cards, the pack picker cards — is
+// drawn unavailable with the reason once the view has rendered (an
+// aria-disabled control is never a modal opener), without the title that says
+// what it would open. Each keeps its handler, which reaches openDeployModal
+// (studio/app.mjs) and explains.
+const isStatic = () => state.access?.posture === 'static';
+// Every remedy that names a server action says, in the static posture, how a
+// bundle gets a live pack (studio/static-remedies.mjs staticRemedy) — what is
+// built in reads from the catalogue; and Traceability words its live-evidence
+// texts the same way (staticTraceActions), the module's own otherwise.
+const staticInput = () => staticInputOf(state.brand.chrome.name, state.catalog, state.selectedPackId);
+const traceActions = () => (isStatic() ? { actions: staticTraceActions(state.brand.chrome.name) } : {});
+
+function drawDeployUnavailable(root) {
+  if (!isStatic() || !root) return;
+  const reason = serverNeeded('Deploy', state.brand.chrome.name);
+  for (const control of root.querySelectorAll(DEPLOY_CONTROLS)) { markUnavailable(control, reason); control.removeAttribute('title'); }
+}
 
 // ---------- compare view ----------
 
@@ -292,7 +324,7 @@ export function renderTraceabilityView(host) {
       section.innerHTML = emptyStateHtml({
         title: 'No SLI or SLO requirements in this pack.',
         checked: `the SLOs and SLIs declared by ${state.pack?.meta?.name || 'this pack'}`,
-        body: 'Traceability follows each objective to the metrics, rules, scrape jobs, dashboards and alerts that prove it. Declare an SLO, or pick a live pack as Pack B to compare the repository with live.',
+        body: isStatic() ? staticRemedy('trace-no-b', staticInput()) : 'Traceability follows each objective to the metrics, rules, scrape jobs, dashboards and alerts that prove it. Declare an SLO, or pick a live pack as Pack B to compare the repository with live.',
       });
     }
     host.appendChild(section);
@@ -544,7 +576,7 @@ const RT_FILTERS = [
 ];
 
 function renderRequirementTraceabilityBlock(pack) {
-  const model = readTraceability(pack);
+  const model = readTraceability(pack, traceActions());
   if (!model) return null;
   const block = document.createElement('div');
   block.className = 'rt-block';
@@ -733,7 +765,7 @@ function renderRequirementRow(row, i, groupSize, repaint) {
   const bodyId = `rt-req-body-${i}`;
   const expanded = state.rtExpanded === row.id;
   const focus = row.firstBroken || row.weakest;
-  const focusIssue = focus?.gap ? traceIssue(focus.gap) : null;
+  const focusIssue = focus?.gap ? traceIssue(focus.gap, traceActions()) : null;
   // The issue label already names its link ("Alert evidence missing").
   const breakText = row.firstBroken
     ? (focusIssue ? focusIssue.label : `${row.firstBroken.label}: ${LINK_STATES[row.firstBroken.state].label.toLowerCase()}`)
@@ -793,7 +825,7 @@ function renderRequirementChain(row, groupSize, repaint) {
     li.className = 'rt-link';
     li.dataset.state = l.state;
     if (l.broken) li.dataset.broken = 'true';
-    const issue = l.gap ? traceIssue(l.gap) : null;
+    const issue = l.gap ? traceIssue(l.gap, traceActions()) : null;
     const shared = issue ? groupSize.get(issue.code) || 0 : 0;
     li.innerHTML = `
       <div class="rt-link-head">
@@ -990,6 +1022,11 @@ function renderDiagnoseSubnav(active) {
 }
 
 export function renderBenchmarkView(view) {
+  renderDiagnose(view);
+  drawDeployUnavailable(view);
+}
+
+function renderDiagnose(view) {
   // Sub-tabs under DIAGNOSE: Assessment (the diagnostic-grade report) and
   // Compare (the artefact-level live-pack-vs-baseline side-by-side).
   const sub = state.diagnoseSub === 'compare' ? 'compare' : 'grade';
@@ -1080,7 +1117,7 @@ export function renderBenchmarkView(view) {
   const posture = computePostureMatrix(state.pack, state.packB);
 
   // THE verdict — diagnostic grade from coverage (2A) + trust / drift (2B).
-  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe);
+  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe, isStatic() ? { noLiveHint: staticRemedy('no-live-hint', staticInput()) } : {});
 
   // The screen grammar (docs/UX_SCREEN_GRAMMAR.md): context · decision ·
   // next action · explanation first, then the report's sections behind a
@@ -1093,8 +1130,19 @@ export function renderBenchmarkView(view) {
   // computeDiagnosticGrade, so the sentence and the checks read one record.
   const liveEvidence = partialLiveEvidence(engineLivePack(state.pack, state.packB));
   const lensLabel = lens !== 'all' ? (LENS_PRODUCTS.find(lp => lp.slug === lens)?.label || lens) : '';
-  const decision = buildAssessmentDecision({ diagnostic, digest, roles: ctx.roles, liveEvidence, haveB, baselineName: ctx.b?.name || '', lensLabel });
+  const decision = buildAssessmentDecision({
+    diagnostic, digest, roles: ctx.roles, liveEvidence, haveB, baselineName: ctx.b?.name || '', lensLabel,
+    remedy: isStatic() ? (key) => staticRemedy(key, staticInput()) : null,
+  });
   const parts = renderDiagnosticGradeVerdict(diagnostic);
+  // The response path (GAP batch 2, B3.3): only for a pack that declares a
+  // remediation; the engine loads at call time and repaints once when it
+  // lands, so the block and its index entry appear together.
+  const flowModel = packDeclaresRemediation(state.pack)
+    ? buildRemediationFlowViewModel(remediationFlowEngine({ onLoaded: () => appHost.renderMainView() }), {
+      pack: state.pack, packB: haveB ? state.packB : null, diff: diffSafe, compareBId: state.compareBId, packId: state.selectedPackId,
+    })
+    : null;
 
   const report = document.createElement('div');
   report.className = 'diag-report diag-assess';
@@ -1122,6 +1170,7 @@ export function renderBenchmarkView(view) {
     { id: 'diag-compare', label: 'Comparison', count: digest ? decision.qualityGaps : null, tone: countTone(decision.qualityGaps, 'warn') },
     { id: 'diag-evidence', label: 'Evidence', count: parts.failingChecks, tone: countTone(parts.failingChecks, 'warn') },
     parts.requirementsHtml ? { id: 'diag-requirements', label: 'Requirements', count: (rollup?.broken || 0) + (rollup?.partial || 0), tone: countTone((rollup?.broken || 0) + (rollup?.partial || 0), 'warn') } : null,
+    flowModel ? { id: 'diag-flow', label: 'Response path', count: flowModel.counts.blocked + flowModel.counts.unresolved, tone: countTone(flowModel.counts.blocked + flowModel.counts.unresolved, 'warn') } : null,
     { id: 'diag-layers', label: 'Layer scores', count: thinLayers, tone: countTone(thinLayers, 'warn') },
   ];
   report.insertAdjacentHTML('beforeend', assessmentStickyHtml(decision, ctx, navSections));
@@ -1161,6 +1210,7 @@ export function renderBenchmarkView(view) {
   // Evidence (the scored checks + the evidence ledger), then requirement chains.
   report.insertAdjacentHTML('beforeend', parts.evidenceHtml);
   if (parts.requirementsHtml) report.insertAdjacentHTML('beforeend', parts.requirementsHtml);
+  if (flowModel) report.insertAdjacentHTML('beforeend', remediationFlowHtml(flowModel, { screen: 'diagnose', notComparedNote: isStatic() ? staticRemedy('flow-not-compared-diagnose', staticInput()) : null }));
 
   // Layer scores — per-layer × per-mechanism coverage. Pack-A-derived, so
   // it's the "why" behind the coverage checks whether or not a Pack B exists.
@@ -1179,14 +1229,17 @@ export function renderBenchmarkView(view) {
 // Affordance shown in Diagnose when only Pack A is loaded. Points the
 // user at the EXISTING header Pack B picker (no duplicate control) and
 // names the two comparison use cases. Selecting nothing here is fine —
-// the assessment above already stands on Pack A alone.
+// the assessment above already stands on Pack A alone. A bundle's picker
+// offers the other packs that load (its /api/examples is empty), so in a
+// bundle of one pack it offers none: the static posture then says what
+// Compare says there (row 4).
 function renderComparePrompt() {
   const el = document.createElement('div');
   el.className = 'diag-compare-prompt';
   el.innerHTML = diagUx.emptyStateHtml({
     title: 'No baseline selected: this assessment reads the pack on its own.',
     checked: 'What the pack itself declares — its coverage, its trust evidence and its requirement chains.',
-    body: 'Choose a baseline in the header’s Pack B picker to compare: a live draft shows drift (declared versus deployed); a curated or reference pack shows the gap to a target.',
+    body: !defaultCompareB() && isStatic() ? staticRemedy('compare-one-pack', { product: state.brand.chrome.name }) : 'Choose a baseline in the header’s Pack B picker to compare: a live draft shows drift (declared versus deployed); a curated or reference pack shows the gap to a target.',
   });
   return el;
 }
@@ -1421,7 +1474,7 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
       ${liveEvidence.failed.length} of ${liveEvidence.attempted.length} probe${liveEvidence.attempted.length === 1 ? '' : 's'} failed during the live draft
       (<code>${escapeHtml(liveEvidence.failed.join(', '))}</code>) — the live endpoint was likely mid-deploy or overloaded.
       The live pack may be missing whole surfaces, so <strong>"${escapeHtml(overstated)}" is probably overstated</strong>.
-      Redraft from MCP before acting on this drift.${(liveEvidence.unsupported || []).length ? ` restricted MCP tier — not exposed: ${escapeHtml(liveEvidence.unsupported.join(', '))}` : ''}
+      ${isStatic() ? escapeHtml(staticRemedy('drift-partial', { product: state.brand.chrome.name })) : 'Redraft from MCP before acting on this drift.'}${(liveEvidence.unsupported || []).length ? ` restricted MCP tier — not exposed: ${escapeHtml(liveEvidence.unsupported.join(', '))}` : ''}
     </div>` : '';
 
   const weightsBody = `
@@ -1559,7 +1612,7 @@ export async function runRetrofeed(btn, host, { keys, scopeMode } = {}) {
       ${r.adopted.length ? `<p class="drift-retrofeed-dl">
           ${dl('⬇ additions fragment', r.fragmentYaml, `${slug}.retrofeed-fragment.yaml`)}
           ${dl('⬇ updated pack', r.updatedPackYaml, `${slug}.pack.yaml`)}
-          <span class="drift-retrofeed-note">commit the updated pack to the service repo (it carries observogram.retrofeed.* provenance), then re-scan to confirm the gap closed</span>
+          <span class="drift-retrofeed-note">${isStatic() ? escapeHtml(staticRemedy('retrofeed-result', { product: state.brand.chrome.name })) : 'commit the updated pack to the service repo (it carries observogram.retrofeed.* provenance), then re-scan to confirm the gap closed'}</span>
         </p>` : ''}
     `;
     host.hidden = false;
@@ -1962,7 +2015,7 @@ function renderDiagnosticGradeVerdict(diagnostic) {
         ${!trust.hasMcpSource ? `
           <div class="diag-banner" role="note">
             <span class="diag-banner-key">WARN</span>
-            Nothing live backs this pack. “Drift-free” and “Fresh” need a live draft (MCP) or a live refresh to verify.
+            ${isStatic() ? escapeHtml(staticRemedy('diagnose-banner', staticInput())) : 'Nothing live backs this pack. “Drift-free” and “Fresh” need a live draft (MCP) or a live refresh to verify.'}
           </div>
         ` : ''}
         ${critTable(trust.criteria)}
@@ -2298,7 +2351,7 @@ function renderCompareView(view) {
     empty.innerHTML = diagUx.emptyStateHtml({
       title: 'There is no baseline to compare with yet.',
       checked: 'The pack catalog — a comparison needs at least two packs.',
-      body: 'Load or scan another pack (for example a live draft, or a curated repository pack) from Discover, then come back to compare.',
+      body: isStatic() ? staticRemedy('compare-one-pack', { product: state.brand.chrome.name }) : 'Load or scan another pack (for example a live draft, or a curated repository pack) from Discover, then come back to compare.',
     });
     view.appendChild(empty);
     return;
@@ -2357,19 +2410,44 @@ function renderCompareView(view) {
   // B cards (each with its own pickers, swap between them) and the set
   // arithmetic are always on screen. ONE switch follows — Side by side
   // (default) · Changes needing review · Summary — over the same lensed digest.
+  // The diff on screen is a parameter, not the global: behaviour is the
+  // server's state.diff; name or id is re-keyed in this browser over the two
+  // packs on screen (studio/compare-identity.mjs), no refetch. Every Compare
+  // helper below that reads a diff takes `diff`; Diagnose, Atlas, Compile,
+  // trace preferences, verdicts and every action keep state.diff (behaviour).
+  const engine = compareIdentityEngine({ onLoaded: () => { if (state.view === 'compare' && state.diagnoseSub === 'compare') appHost.renderMainView(); } });
+  const engineState = engine === undefined ? 'loading' : engine === null ? 'failed' : 'ready';
+  const shown = viewDiffFor({ engine, diff: state.diff, pack: state.pack, packB: state.packB, mode: state.compareIdentity, taxonomyError: state.taxonomyBindError || '' });
+  const diff = shown.diff;
+  const pairing = { mode: shown.mode, matchedBy: pairingModeOf(shown.mode).matchedBy, engine: engineState === 'ready' ? engine : null };
+
   const lens = state.compareLens || 'all';
   const ctx = diagnoseContext();
-  const digest = diffDigest(state.diff, state.packB, lens);
+  ctx.matchedBy = pairing.matchedBy;
+  const digest = diffDigest(diff, state.packB, lens);
   const cmp = buildCompareDecision(digest, ctx);
   const focus = ['summary', 'review', 'all'].includes(state.compareFocus) ? state.compareFocus : 'all';
 
   // Build per-layer key-set lookups once (the roles ride along so every
   // card and column names its side the same way).
-  const sets = buildCompareKeySets();
+  const sets = buildCompareKeySets(diff);
   sets.roles = ctx.roles;
+  sets.pairing = pairing;
 
-  scaffold.appendChild(renderComparePackHeaders());
-  scaffold.appendChild(renderCompareSummary(digest));
+  scaffold.appendChild(renderComparePackHeaders(diff));
+  scaffold.appendChild(renderCompareSummary(digest, pairing.matchedBy));
+  renderCompareIdentitySwitch(scaffold, identitySwitchModel({
+    chosen: state.compareIdentity, shown: shown.mode, engineState, unavailable: shown.unavailable,
+  }), {
+    onChange: (mode) => {
+      state.compareIdentity = pairingModeOf(mode).id;
+      appHost.renderMainView();
+      const now = viewDiffFor({ engine, diff: state.diff, pack: state.pack, packB: state.packB, mode: state.compareIdentity, taxonomyError: state.taxonomyBindError || '' });
+      const totals = diffDigest(now.diff, state.packB, state.compareLens || 'all')?.totals;
+      diagUx.announce(identityAnnouncement(now.mode, totals));
+      document.querySelector(`.compare-identity input[value="${state.compareIdentity}"]`)?.focus();
+    },
+  });
 
   const lead = document.createElement('div');
   lead.className = 'compare-digest compare-focus-row';
@@ -2391,7 +2469,7 @@ function renderCompareView(view) {
     // Side by side: slice filters + lens + scope + search, then the
     // per-layer rows (layer head spanning both columns, A grid left, B
     // grid right).
-    scaffold.appendChild(renderCompareFilters());
+    scaffold.appendChild(renderCompareFilters(pairing.matchedBy));
     scaffold.appendChild(renderCompareColumnHeads(ctx));
     for (const L of LAYERS_FOR_DIFF) {
       const row = renderCompareLayerRow(L, sets);
@@ -2433,7 +2511,7 @@ function renderCompareColumnHeads(ctx) {
   return wrap;
 }
 
-function buildCompareKeySets() {
+function buildCompareKeySets(diff) {
   // Diff entry keys are behavioural identity keys (identityKeyOf, server-side)
   // — a keyspace the client can't rebuild from `defines`/id. Every entry
   // embeds the artefact object(s) it paired though, and artefact ids are
@@ -2444,7 +2522,7 @@ function buildCompareKeySets() {
   const aReason = new Map(), bReason = new Map();
   const aEntry = new Map(), bEntry = new Map();
   for (const L of LAYERS_FOR_DIFF) {
-    const bucket = state.diff.layers[L] || {};
+    const bucket = diff.layers[L] || {};
     const a = new Map(), b = new Map();
     // A metric family stands for several of the pack's own artefacts (a
     // histogram's _bucket / _count / _sum series): every member takes the
@@ -2474,12 +2552,23 @@ function buildCompareKeySets() {
     aStatus[L] = a;
     bStatus[L] = b;
   }
-  return { aStatus, bStatus, aReason, bReason, aEntry, bEntry };
+  return { aStatus, bStatus, aReason, bReason, aEntry, bEntry, diff };
 }
 
 // Why a card could not be checked, or ''.
 function compareUncheckedReason(side, L, art, sets) {
   return (side === 'a' ? sets.aReason : sets.bReason)?.get(`${L}:${art?.id}`) || '';
+}
+
+// The artefacts that stand for one diff entry in the pack that holds it: the
+// entry's own artefact, or every member of its metric family. The entry embeds
+// one head artefact; what reads a metric is recorded on each series
+// (studio/metric-readers.mjs), so the readers are asked of the members.
+function entryMemberArtefacts(entry, pack, L) {
+  const art = entry?.artefact;
+  const ids = new Set([art?.id, ...(art?.memberIds || [])].filter(Boolean));
+  const held = layerItemsFor(pack, L).filter(a => ids.has(a.id));
+  return held.length ? held : [art].filter(Boolean);
 }
 
 // 'both' | 'only' | 'unchecked' | null for one card. 'unchecked' = the other
@@ -2492,10 +2581,10 @@ function compareStatusFor(side, L, art, sets) {
 }
 
 // New: stacked PACK A + PACK B header band, side-by-side.
-function renderComparePackHeaders() {
+function renderComparePackHeaders(diff) {
   const wrap = document.createElement('div');
   wrap.className = 'compare-pack-headers';
-  wrap.appendChild(renderComparePackHeader('a', state.pack,  state.diff?.a));
+  wrap.appendChild(renderComparePackHeader('a', state.pack,  diff?.a));
 
   // Swap button BETWEEN the two cards — visually anchors the
   // "A vs B" relationship and removes the need for a separate
@@ -2522,7 +2611,7 @@ function renderComparePackHeaders() {
   };
   wrap.appendChild(swapWrap);
 
-  wrap.appendChild(renderComparePackHeader('b', state.packB, state.diff?.b));
+  wrap.appendChild(renderComparePackHeader('b', state.packB, diff?.b));
   return wrap;
 }
 
@@ -2537,14 +2626,24 @@ function uploadedSourceHint(p) {
 function packOptionLabel(p) {
   const version = p.version || '?';
   const source = uploadedSourceHint(p);
-  return `${p.label || p.id} · v${version}${source ? ` · from ${source}` : ''}`;
+  return `${p.label || p.id}${liveKindSuffix(p)} · v${version}${source ? ` · from ${source}` : ''}`;
+}
+
+// The chip under a live pack's name (rebadge batch 3, C1): a scaffold is
+// never presented as a snapshot. The snapshot's origin and time are its own
+// annotations (a provenance claim, as every annotation).
+function liveChipOf(entry, pack) {
+  const ann = pack?.meta?.annotations ?? {};
+  let source = null;
+  try { source = JSON.parse(ann['observogram.live.source'] ?? 'null'); } catch { /* not JSON: no origin to name */ }
+  return liveChipText(entry?.live ?? null, { origin: source?.origin ?? null, at: ann['mcp.refreshedAt'] ?? null });
 }
 
 function renderComparePackHeader(side, pack, diffMeta) {
   const card = document.createElement('div');
   card.className = `compare-pack-card compare-pack-card-${side}`;
   const tier = pack?.meta?.criticality || '?';
-  const sourcePill = inferPackSource(pack);   // 'Repo' | 'Live' | 'Target' | 'Pack'
+  const sourcePill = inferPackSource(pack, catalogEntryFor(side === 'a' ? state.selectedPackId : state.compareBId));   // 'Repo' | 'Live' | 'Target' | 'Pack'
   // Artefact count: sum across all layers (L4 has sub-buckets).
   let count = 0;
   for (const L of LAYERS_FOR_DIFF) {
@@ -2595,6 +2694,7 @@ function renderComparePackHeader(side, pack, diffMeta) {
       <span class="cpc-source-pill" data-source="${escapeHtml(sourcePill)}">${escapeHtml(sourcePill)}</span>
       <span class="cpc-name" title="catalog label">${escapeHtml(displayLabel)}</span>
     </div>
+    ${liveChipOf(catalogEntry, pack) ? `<p class="cpc-live-chip" data-live="${escapeHtml(catalogEntry.live)}">${escapeHtml(liveChipOf(catalogEntry, pack))}</p>` : ''}
     <div class="cpc-meta">
       <span class="cpc-meta-pill" data-tier="${escapeHtml(tierResolved)}">${escapeHtml(tierResolved)}</span>
       <span class="cpc-meta-pill">v${escapeHtml(versionResolved)}</span>
@@ -2867,13 +2967,15 @@ function renderCoveragePopoverBody(pack) {
         <td class="cv-val"><strong>${total}</strong></td>
       </tr>
     </table>
-    <div class="cv-foot">Sub-buckets count by id prefix (SLI-, BAK-, DASH-, etc.). Pack generated from canonical v1.3 manifest.</div>
+    <div class="cv-foot">Sub-buckets count by id prefix (SLI-, BAK-, DASH-, etc.). Pack generated from canonical v1.4 manifest.</div>
   `;
 }
 
-function inferPackSource(pack) {
+function inferPackSource(pack, entry = null) {
   // The studio's source taxonomy is per-artefact, not per-pack. We
-  // infer the pack-level label from id + dominant artefact source.
+  // infer the pack-level label from id + dominant artefact source —
+  // after what the catalogue says of a live pack (its `live` kind).
+  if (entry?.live) return 'Live';
   if (!pack) return 'Pack';
   const id = (pack.id || '').toLowerCase();
   if (id.includes('live'))     return 'Live';
@@ -2901,7 +3003,7 @@ export function compareView(id) {
   return COMPARE_VIEWS.some(v => v.id === id) ? id : COMPARE_VIEW_DEFAULT;
 }
 
-function renderCompareFilters() {
+function renderCompareFilters(matchedBy = DEFAULT_PAIRING) {
   const wrap = document.createElement('div');
   wrap.className = 'compare-filters';
   // The slices are named by the A / B letters the pack cards carry; each
@@ -2911,7 +3013,7 @@ function renderCompareFilters() {
     { id: 'all',   label: 'All',       hint: 'Every artefact from both packs, side by side.' },
     { id: 'onlyA', label: 'Only in A', hint: `Artefacts in Pack A (the ${roles.aNoun}) with no counterpart in Pack B (the ${roles.bNoun}). The right column is empty.` },
     { id: 'onlyB', label: 'Only in B', hint: `Artefacts in Pack B (the ${roles.bNoun}) with no counterpart in Pack A (the ${roles.aNoun}). The left column is empty.` },
-    { id: 'both',  label: 'In both',   hint: 'In both packs (matched by behavioural identity — the same deployed control, whatever it is named).' },
+    { id: 'both',  label: 'In both',   hint: matchedBy === DEFAULT_PAIRING ? 'In both packs (matched by behavioural identity — the same deployed control, whatever it is named).' : `In both packs (matched by ${matchedBy}; behaviour still decides aligned vs drifted).` },
     { id: 'a-b',   label: 'A − B',     hint: 'Set difference: every artefact in A, minus anything also in B.' },
     { id: 'a+b',   label: 'A + B',     hint: 'Union: combined view of both packs without duplication.' },
   ];
@@ -3267,7 +3369,7 @@ function renderCompareLayerColumn(side, L, items, sets) {
   // side holds; then what the comparison does not pair (template
   // placeholders, live inventory outside the declared scope, dashboard panels).
   const pairAt = new Map();
-  (state.diff?.layers?.[L]?.inBoth || []).forEach((e, i) => {
+  (sets.diff?.layers?.[L]?.inBoth || []).forEach((e, i) => {
     const art = side === 'a' ? e.a : e.b;
     // The members of a metric family sit together, at the family's place.
     for (const id of [art?.id, ...(art?.memberIds || [])]) if (id && !pairAt.has(id)) pairAt.set(id, i);
@@ -3280,9 +3382,27 @@ function renderCompareLayerColumn(side, L, items, sets) {
   groups.both.sort((x, y) => (pairAt.get(x.id) ?? Infinity) - (pairAt.get(y.id) ?? Infinity));
   const letter = side.toUpperCase();
   const other = letter === 'A' ? 'B' : 'A';
+  const entryOf = side === 'a' ? sets.aEntry : sets.bEntry;
+  // What only this side holds, by what reads it (studio/metric-readers.mjs):
+  // the metrics an alert rule reads lead the group, and the group says in
+  // words what reads them — "only in A" is a count, this is what it costs.
+  const onlyByEntry = new Map();
+  for (const art of groups.only) {
+    const k = entryOf?.get(`${L}:${art.id}`) || `id:${art.id}`;
+    if (!onlyByEntry.has(k)) onlyByEntry.set(k, []);
+    onlyByEntry.get(k).push(art);
+  }
+  const onlyRank = new Map();
+  for (const arts of onlyByEntry.values()) {
+    const rank = readerRank(metricReaders(arts));
+    for (const art of arts) onlyRank.set(art.id, rank);
+  }
+  groups.only.sort((x, y) => onlyRank.get(x.id) - onlyRank.get(y.id));
+  const otherIsLive = side === 'a' ? isLivePack(state.packB, state.compareBId) : isLivePack(state.pack, state.selectedPackId);
+  const onlyWhy = readersSentence(readersDigest([...onlyByEntry.values()]), { holder: letter, other, otherIsLive });
   const reasons = [...new Set(groups.unchecked.map(art => compareUncheckedReason(side, L, art, sets)).filter(Boolean))];
   const titles = {
-    both: ['In both', 'In both packs, matched by behaviour. The same order on both sides.'],
+    both: ['In both', `In both packs, matched by ${sets.pairing?.matchedBy || DEFAULT_PAIRING}. The same order on both sides.`],
     only: [`Only in ${letter}`, `In Pack ${letter}, with no counterpart in Pack ${other}.`],
     unchecked: [`Not checked in ${other}`, `In Pack ${letter}; Pack ${other} had no way to observe ${groups.unchecked.length === 1 ? 'this family' : 'these families'}, so ${groups.unchecked.length === 1 ? 'it is' : 'they are'} neither matched nor missing.${reasons.length ? ` Why: ${reasons.join('; ')}.` : ''}`],
     rest: ['Not compared', 'Not paired by the comparison: template placeholders, live inventory outside the declared scope and dashboard panels.'],
@@ -3296,7 +3416,6 @@ function renderCompareLayerColumn(side, L, items, sets) {
     // The number is what the summary counts: artefacts. A metric is one
     // artefact however many series (cards) it is exposed as, so when the
     // two differ the cards are said too — never two unexplained numbers.
-    const entryOf = side === 'a' ? sets.aEntry : sets.bEntry;
     const artefacts = k === 'rest'
       ? groups[k].length
       : new Set(groups[k].map(art => entryOf?.get(`${L}:${art.id}`) || `id:${art.id}`)).size;
@@ -3311,6 +3430,12 @@ function renderCompareLayerColumn(side, L, items, sets) {
       const why = document.createElement('p');
       why.className = 'compare-col-group-why';
       why.textContent = reasons.length === 1 ? reasons[0] : reasons.join(' · ');
+      col.appendChild(why);
+    }
+    if (k === 'only' && onlyWhy) {
+      const why = document.createElement('p');
+      why.className = 'compare-col-group-why';
+      why.textContent = onlyWhy;
       col.appendChild(why);
     }
     for (const art of groups[k]) col.appendChild(renderCompareCard(art, def, art._sub || null, side, sets));
@@ -3417,13 +3542,20 @@ function renderCompareCard(artefact, def, sublayerKey, side, sets) {
   // Comparison status pill — what this card means in the diff.
   let statusPill = '';
   const noun = side === 'a' ? sets?.roles?.aNoun : sets?.roles?.bNoun;
-  if (inBoth) statusPill = '<span class="diff-chip chip-both" title="In both packs, matched by behaviour">in both</span>';
-  else if (isOnlySide) statusPill = `<span class="diff-chip chip-only-${side}" title="${escapeHtml(noun ? `Only in the ${noun}` : `Pack ${side.toUpperCase()} only`)}">only in ${side.toUpperCase()}</span>`;
+  // In a name or id view the pill says which key paired it, or why it did not.
+  const pairing = sets?.pairing;
+  const pairedBy = inBoth ? pairingTitle(pairing?.engine, artefact, pairing?.mode) : '';
+  const notPaired = isOnlySide ? unpairedHint(pairing?.engine, artefact, pairing?.mode) : '';
+  if (inBoth) statusPill = `<span class="diff-chip chip-both" title="${escapeHtml(pairedBy || 'In both packs, matched by behaviour')}">in both</span>`;
+  else if (isOnlySide) statusPill = `<span class="diff-chip chip-only-${side}" title="${escapeHtml(`${noun ? `Only in the ${noun}` : `Pack ${side.toUpperCase()} only`}${notPaired ? ` — ${notPaired}` : ''}`)}">only in ${side.toUpperCase()}</span>`;
   else if (isUnchecked) {
     const otherLetter = side === 'a' ? 'B' : 'A';
     const why = compareUncheckedReason(side, def.id, artefact, sets);
     statusPill = `<span class="diff-chip chip-unchecked" title="${escapeHtml(`Pack ${otherLetter} had no way to observe this${why ? `: ${why}` : ''}. Not counted as a difference.`)}">not checked in ${otherLetter}</span>`;
   }
+
+  // What reads a metric only this side holds, in this pack's own words.
+  const readers = isOnlySide ? readerLine(metricReaders(artefact)) : '';
 
   // Source pill — Declared/Verified/Missing (what the studio's
   // per-artefact taxonomy already says about this card's status in
@@ -3446,12 +3578,14 @@ function renderCompareCard(artefact, def, sublayerKey, side, sets) {
     </div>
     <div class="card-title">${escapeHtml(artefact.title || artefact.id)}</div>
     ${artefact.desc ? `<div class="card-desc">${escapeHtml(artefact.desc)}</div>` : ''}
+    ${readers ? `<div class="card-readers">${escapeHtml(readers)}</div>` : ''}
     <div class="card-foot card-foot-compare">
       ${sourcePill}
       ${artefact.tool ? `<span class="tool">${escapeHtml(artefact.tool)}</span>` : ''}
     </div>
   `;
-  btn.onclick = () => openDrawer(artefact, def, sublayerKey, side);
+  const pairingLine = pairedBy || (notPaired ? `Not paired by ${pairing.matchedBy}: ${notPaired}` : '');
+  btn.onclick = () => openDrawer(artefact, def, sublayerKey, side, pairingLine ? { pairing: pairingLine } : {});
   return btn;
 }
 
@@ -3534,7 +3668,7 @@ export function renderComparePicker() {
 // The set arithmetic, always under the two pack cards. Counts come from the
 // same lensed digest as the summary so every number on the screen agrees;
 // the cells are named by the A / B letters of the cards above them.
-function renderCompareSummary(digest) {
+function renderCompareSummary(digest, matchedBy = DEFAULT_PAIRING) {
   const t = digest?.totals || { onlyInA: 0, onlyInB: 0, shared: 0, universe: 0, notObserved: 0 };
   const jaccard = t.universe ? `${Math.round((t.shared / t.universe) * 100)}%` : '—';
   // Shown only when there is something to say: artefacts one pack holds in
@@ -3547,12 +3681,14 @@ function renderCompareSummary(digest) {
   wrap.className = 'compare-summary';
   wrap.innerHTML = `
     <div class="compare-cell c-a" title="In Pack A, with no counterpart in Pack B"><div class="c-key">only in A</div><div class="c-val">${t.onlyInA}</div></div>
-    <div class="compare-cell c-both" title="In both A and B, matched by behaviour"><div class="c-key">in both</div><div class="c-val">${t.shared}</div></div>
+    <div class="compare-cell c-both" title="In both A and B, matched by ${escapeHtml(matchedBy)}"><div class="c-key">in both</div><div class="c-val">${t.shared}</div></div>
     <div class="compare-cell c-b" title="In Pack B, with no counterpart in Pack A"><div class="c-key">only in B</div><div class="c-val">${t.onlyInB}</div></div>
     <div class="compare-cell c-union" title="Union: A + B without duplicates"><div class="c-key">union</div><div class="c-val">${t.universe}</div></div>
     <div class="compare-cell c-jacc"><div class="c-key">${diagUx.termHtml('jaccard', 'jaccard')}</div><div class="c-val"${t.universe ? '' : ' title="Nothing was compared, so there is no overlap to measure"'}>${jaccard}</div></div>
     ${unchecked}
+    <div class="compare-cell c-mode" title="Which key paired A with B (the Pair by switch below)"><div class="c-key">paired by</div><div class="c-val">${escapeHtml(matchedBy)}</div></div>
   `;
+  wrap.classList.add('has-mode');
   if (t.notObserved) wrap.classList.add('has-unchecked');
   return wrap;
 }
@@ -3755,7 +3891,7 @@ const CRITERION_COPY = {
 // or mismatched live read undermines every other reading), then coverage.
 const CRITERION_PRIORITY = ['drift-free', 'fresh', 'multi-modal', 'correlated', 'calibrated', 'comprehensive', 'chaos-validated'];
 
-function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel = '' }) {
+function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel = '', remedy = null }) {
   const copy = CRITERION_COPY[c.key] || { title: `${c.label} is not met`, why: c.sub || '', fix: '' };
   const b = {
     key: c.key, scored: true,
@@ -3771,12 +3907,13 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
     if (!hasLive) {
       b.title = 'Nothing live has been checked';
       b.why = 'Every claim rests on what the pack declares; nothing confirms the signals exist in production.';
-      b.fix = 'Connect MCP or scan live, then choose the live draft as the baseline (Pack B) to compare.';
+      b.fix = remedy ? remedy('drift-free-no-live') : 'Connect MCP or scan live, then choose the live draft as the baseline (Pack B) to compare.';
       b.actionLabel = haveB ? 'Review the comparison' : 'How to compare with live';
       b.actionId = 'diag-goto:diag-compare';
     } else if (haveB) {
       b.actionLabel = 'Review differences';
       b.actionId = 'diag-goto:diag-compare';
+      if (remedy) b.fix = remedy('drift-free-fix');
       if (digest && roles.mode === 'drift') {
         const t = digest.totals;
         // The engine's detail counts the whole diff; the digest may be
@@ -3789,6 +3926,7 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
       b.fix = 'Choose the live draft as the baseline (Pack B) to see which artefacts differ.';
     }
   } else if (c.key === 'fresh') {
+    if (remedy) b.fix = remedy('fresh-fix');
     if (/never been verified|no mcp\.refreshedAt/i.test(c.detail || '')) b.title = 'Never verified against live';
     else if (/vantage lost/i.test(c.detail || '')) {
       b.title = 'The last live check saw nothing';
@@ -3806,8 +3944,10 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
 // explicit. Returns the one sentence, its tone, the inline explanation of
 // apparent contradictions, the next action, and the blockers in priority
 // order (what failed → why it matters → fix), the top three of which are
-// the header's causes.
-export function buildAssessmentDecision({ diagnostic, digest = null, roles = compareRoles('gap'), liveEvidence = null, haveB = false, baselineName = '', lensLabel = '' } = {}) {
+// the header's causes. `remedy` is the static posture's text for a fix that
+// names a server action (studio/static-remedies.mjs staticRemedy, bound to
+// the product), or null on a server.
+export function buildAssessmentDecision({ diagnostic, digest = null, roles = compareRoles('gap'), liveEvidence = null, haveB = false, baselineName = '', lensLabel = '', remedy = null } = {}) {
   const overall = diagnostic.overall;
   const audit = overall.audit || diagnosticAuditStatus(overall.passed, overall.total);
   const ig = overall.instrumentGrade || instrumentGradeFor(audit.scorePctExact);
@@ -3834,7 +3974,7 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
         ? `no probe family answered${silent.length ? ` (${silent.join(', ')})` : ''}`
         : `${liveEvidence.failed.length} of ${liveEvidence.attempted.length} live probes failed (${liveEvidence.failed.join(', ')})`,
       why: 'Surfaces the live draft could not see look like drift, so differences may be overstated.',
-      fix: 'Draft the live pack again from MCP once the endpoint is healthy, then re-check.',
+      fix: remedy ? remedy('live-evidence-fix') : 'Draft the live pack again from MCP once the endpoint is healthy, then re-check.',
       cost: 'Does not change the grade by itself',
       actionLabel: haveB ? 'View the comparison' : 'View the evidence',
       actionId: haveB ? 'diag-goto:diag-compare' : 'diag-goto:diag-evidence',
@@ -3852,7 +3992,7 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
   const noLiveFresh = !hasLive && failing.some(f => f.c.key === 'drift-free') ? failing.find(f => f.c.key === 'fresh') : null;
   for (const { c, lost } of failing) {
     if (noLiveFresh && c.key === 'fresh') continue;
-    const b = criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel });
+    const b = criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel, remedy });
     if (noLiveFresh && c.key === 'drift-free') {
       const both = lost + noLiveFresh.lost;
       b.observed = `${c.detail || ''} · ${noLiveFresh.c.detail || ''}`.replace(/^ · | · $/g, '');
@@ -3901,7 +4041,7 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
         title: `${missing} declared ${missing === 1 ? 'artefact is' : 'artefacts are'} not seen live${inLens}`,
         observed: `the pack declares ${missing === 1 ? 'it' : 'them'}; the live draft has no counterpart`,
         why: 'The pack promises signals that production may not have.',
-        fix: 'Review them, then deploy what is missing live or update the repository from live.',
+        fix: remedy ? remedy('live-missing-fix') : 'Review them, then deploy what is missing live or update the repository from live.',
         cost,
         actionLabel: 'Review differences', actionId: 'diag-goto:diag-compare',
       });
@@ -4003,7 +4143,7 @@ function assessmentMeasuresHtml(diagnostic, d) {
   const nPartial = scored.filter(c => !c.pass && criterionScore(c) > 0).length;
   const nFail = scored.length - nPass - nPartial;
   const rollup = diagnostic.traceabilityGraph?.rollup;
-  const live = !d.hasLive ? { v: 'Not checked', note: 'connect MCP or scan live to verify', tone: 'warn' }
+  const live = !d.hasLive ? { v: 'Not checked', note: isStatic() ? staticRemedy('live-measure', staticInput()) : 'connect MCP or scan live to verify', tone: 'warn' }
     : d.vantage === 'lost' ? { v: 'Could not observe', note: 'a live check ran, but no probe family answered', tone: 'warn' }
       : d.vantage === 'partial' ? { v: 'Partial', note: 'some live probes failed', tone: 'warn' }
         : d.vantage === 'none' ? { v: 'Refreshed', note: 'no probe record, so what the live check observed is unknown', tone: 'warn' }
@@ -4341,13 +4481,15 @@ function compareSummaryHtml(digest, cmp, ctx) {
       title: 'Pack A only — in A, with no behavioural counterpart in B',
     }),
     tile({
-      label: 'Shared', name: 'in both packs, matched by behaviour', n: t.shared,
+      label: 'Shared', name: `in both packs, matched by ${ctx.matchedBy || DEFAULT_PAIRING}`, n: t.shared,
       tone: t.drifted ? 'warn' : 'ok', zeroTone: 'neutral',
       means: t.drifted ? `${t.aligned} match · ${t.drifted} differ in at least one field.` : `All ${t.shared} match field for field.`,
       zero: 'No artefact appears in both packs: they describe different things.',
       action: t.drifted ? 'cmp-focus:review' : 'cmp-slice:both',
       actionLabel: t.drifted ? `Review ${diagUx.plural(t.drifted, 'change')}` : `Show ${t.shared}`,
-      title: 'In both A and B, paired by behavioural identity — the same deployed control, whatever it is named',
+      title: (ctx.matchedBy || DEFAULT_PAIRING) === DEFAULT_PAIRING
+        ? 'In both A and B, paired by behavioural identity — the same deployed control, whatever it is named'
+        : `In both A and B, paired by ${ctx.matchedBy}; behaviour still decides whether they match field for field`,
     }),
     tile({
       label: r.bOnly, name: ctx.b ? packLine(ctx.b) : '', n: t.onlyInB,
@@ -4368,6 +4510,14 @@ function compareSummaryHtml(digest, cmp, ctx) {
   const cosmeticCount = driftedEntries.filter(e => diagDriftCost(e).className === 'cosmetic').length;
   const qItems = [];
   if (cmp.missing) qItems.push(`<li class="ux-tone-fail"><strong>${cmp.missing}</strong> ${drift ? `declared artefact${s(cmp.missing)} not seen live` : `artefact${s(cmp.missing)} from the ${escapeHtml(r.bNoun)} missing from the ${escapeHtml(r.aNoun)}`}</li>`);
+  // What the missing metrics cost, where the pack that holds them says what
+  // reads them: counted once each, the alert rules by name.
+  const gapPack = drift ? state.pack : state.packB;
+  const gapReaders = readersDigest((digest?.rows || []).flatMap(row => (drift ? row.onlyInA : row.onlyInB).map(e => entryMemberArtefacts(e, gapPack, row.L))));
+  if (gapReaders.read) {
+    const n = gapReaders.alerts.length + gapReaders.panels.length + gapReaders.rules.length;
+    qItems.push(`<li class="ux-tone-fail compare-readers-item"><strong>${escapeHtml(readerCounts(gapReaders))}</strong> in the ${escapeHtml(drift ? r.aNoun : r.bNoun)} read${n === 1 ? 's' : ''} ${gapReaders.read === 1 ? 'a metric' : `${gapReaders.read} metrics`} ${drift ? 'not seen live' : `the ${escapeHtml(r.aNoun)} does not hold`}${gapReaders.alerts.length ? ` — alert rule${gapReaders.alerts.length === 1 ? '' : 's'}: ${escapeHtml(alertNames(gapReaders.alerts))}` : ''}</li>`);
+  }
   if (cmp.changed) qItems.push(`<li class="ux-tone-warn"><strong>${cmp.changed}</strong> shared artefact${s(cmp.changed)} with changed fields${decisionCount ? ` — ${decisionCount} affect${decisionCount === 1 ? 's' : ''} decisions (objectives, thresholds, queries, routing)` : ''}${cosmeticCount ? `${decisionCount ? ',' : ' —'} ${cosmeticCount} cosmetic` : ''}</li>`);
   const qualityPanel = `
       <section class="compare-panel ux-tone-${cmp.missing ? 'fail' : cmp.changed ? 'warn' : 'ok'}" aria-labelledby="compare-quality-title">
@@ -4495,7 +4645,11 @@ function renderCompareReview(digest, cmp, ctx) {
   const MAX_FIELDS = 8;
 
   const missingSide = drift ? 'a' : 'b';
-  const missing = (digest?.rows || []).flatMap(row => (drift ? row.onlyInA : row.onlyInB).map(e => ({ L: row.L, e })));
+  // What an alert rule reads leads the queue, then what anything reads
+  // (studio/metric-readers.mjs); each row says its readers.
+  const missingPack = drift ? state.pack : state.packB;
+  const missing = (digest?.rows || []).flatMap(row => (drift ? row.onlyInA : row.onlyInB).map(e => ({ L: row.L, e, readers: metricReaders(entryMemberArtefacts(e, missingPack, row.L)) })))
+    .sort((x, y) => readerRank(x.readers) - readerRank(y.readers));
   const changed = (digest?.rows || []).flatMap(row => row.drifted.map(e => ({ L: row.L, e, cost: diagDriftCost(e) })))
     .sort((x, y) => y.cost.weight - x.cost.weight);
 
@@ -4506,12 +4660,13 @@ function renderCompareReview(digest, cmp, ctx) {
         ? 'The declared pack promises these; the live pack shows no behavioural counterpart.'
         : `The ${escapeHtml(r.bNoun)} declares these; the ${escapeHtml(r.aNoun)} has no behavioural counterpart.`}</p>
       <ul class="compare-missing-list">
-        ${missing.slice(0, MAX_MISSING).map(({ L, e }) => {
+        ${missing.slice(0, MAX_MISSING).map(({ L, e, readers }) => {
           const art = e.artefact || (missingSide === 'a' ? e.a : e.b);
+          const readBy = readerLine(readers);
           return `
           <li class="compare-missing-item ux-tone-fail">
             <span class="drift-row-num" title="${escapeHtml(diagUx.layerTitle(L))}">${escapeHtml(L)}</span>
-            <span class="compare-missing-label">${escapeHtml(diffEntryLabel(e))}</span>
+            <span class="compare-missing-label">${escapeHtml(diffEntryLabel(e))}${readBy ? `<span class="compare-missing-readers">${escapeHtml(readBy)}</span>` : ''}</span>
             ${art?.id ? `<code class="compare-missing-id">${escapeHtml(art.id)}</code>` : ''}
             ${openBtn(art, L, missingSide, 'Open')}
           </li>`;

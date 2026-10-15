@@ -17,7 +17,8 @@
  *   GET  /api/packs                       Pack catalog
  *   GET  /api/packs/:id                   Adapted layered pack (?env=<name>)
  *   GET  /api/packs/:id/canonical         Canonical manifest + env overlay (?env=<name>)
- *   GET  /api/packs/:id/conformance       Maturity-rubric scoring (?env=<name>; onPlaceholder for a library-built pack)
+ *   GET  /api/packs/:id/conformance       Maturity-rubric scoring (?env=<name>; onPlaceholder for a library-built pack; graded at the service record's tier when one is set — `tier`)
+ *   GET  /api/packs/:id/verdicts          A reviewer's verdicts on the pack's artefacts (server/routes/verdicts.mjs; PUT / DELETE …/verdicts/:artefact record and clear one)
  *   GET  /api/maturity-rubric             Rubric metadata (clause definitions)
  *   POST /api/validate                    Validate uploaded JSON/YAML body (summary.onPlaceholder for a library-built pack)
  *   GET  /api/library                     The pack library index (BUILD journey, docs/BUILD_JOURNEY.md)
@@ -35,11 +36,11 @@
 import express from 'express';
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
-import { resolve, dirname, extname, join } from 'node:path';
+import { resolve, basename, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHash } from 'node:crypto';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
-import { adapt, listEnvironments, applyEnvironmentOverlay } from '../tools/lib/adapter.mjs';
+import { adapt, listEnvironments, overlaidCanonical } from '../tools/lib/adapter.mjs';
+import { serviceMetadata, catalogEntryOf, livePackKind } from '../tools/lib/service-keys.mjs';
 import { isLegacyLayeredPack, upconvertLegacyPack } from '../tools/lib/legacy.mjs';
 import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from '../tools/lib/validator.mjs';
 import { evaluateConformance, RUBRIC } from '../tools/lib/conformance.mjs';
@@ -55,22 +56,34 @@ import {
   TIERS, SCAFFOLD_PARAMS,
 } from '../tools/lib/library.mjs';
 import { parsePromqlDependencies as parsePromql } from '../tools/lib/promql-lezer.mjs';
-import {
-  saveWorkspacePack, deleteWorkspacePack, touchWorkspacePack,
-  loadWorkspacePacks, clearWorkspacePacks, workspaceInfo,
-  writeLivePack, readLivePack, LIVE_PACK_FILE,
-} from './workspace.mjs';
+import { workspaceInfo, writeLivePack, readLivePack, LIVE_PACK_FILE } from './workspace.mjs';
+import { registerPack, uploadsMap, ensureOrgLoaded, touchPack, clearPacks, contentHash, slugify } from './pack-registry.mjs';
 import {
   listJourneys, loadJourneyDef, runJourney, readJourneyRuns, saveJourneyDef, validateGateStack,
-  validateSchedule, validateStackBudget, validateNotify,
+  validateSchedule, validateStackBudget, validateNotify, notifyTargetOf, scrubNotifyError,
 } from '../tools/lib/journey.mjs';
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
-import { validateMcpUrl, redactCredentials, stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
+import { describeProxyAuth } from './auth-proxy.mjs';
+import { stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
+import { mcpCallerOf, mcpRefusalBody, redactTarget } from './mcp-target-policy.mjs';
+import { captureNotifyRefusal, hooksAllTaken, notifyBootReport, notifyHookOf, notifyHooksOf, notifyNamesRefusal, notifyPostureRefusal, resolveJourneyNotify } from './notify-target-policy.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
+import { auditAfter, actorForRecord, bounded, finite } from './audit-after.mjs';
 import { identityRoutes } from './routes/identity.mjs';
-import { authGate, orgContext, authorize, effectiveRoleOf, rankOf, rankOfRole } from './authz.mjs';
+import { servicesRoutes } from './routes/services.mjs';
+import { auditRoutes } from './routes/audit.mjs';
+import { verdictsRoutes } from './routes/verdicts.mjs';
+import { waiversRoutes } from './routes/waivers.mjs';
+import { auditReportRoutes } from './routes/audit-report.mjs';
+import { liveRoutes, livePackCounts } from './routes/live.mjs';
+import { mcpSettingsRoutes } from './routes/mcp-settings.mjs';
+import { abortAllLiveJobs } from './live-jobs.mjs';
+import { verdictsDocument } from './verdict-admin.mjs';
+import { journeyPackBSource, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
+import { conformanceWaivers, listWaiverViews } from './waiver-admin.mjs';
+import { authGate, orgContext, authorize, effectiveRoleOf, listenOf, rankOf, rankOfRole } from './authz.mjs';
 import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
 import { runWithOrg, currentOrg, orgWorkspaceRoot, baseWorkspaceRoot, orgRootOf } from './tenancy.mjs';
@@ -80,7 +93,11 @@ import { currentStore } from './store/db.mjs';
 import { defaultOrgId } from './store/identity.mjs';
 import { getOrg, listOrgs } from './store/orgs.mjs';
 import { listMembershipsForUser } from './store/memberships.mjs';
-import { brandEnv } from '../tools/lib/brand-env.mjs';
+import { brandEnv, loadBrand, brandSource } from '../tools/lib/brand-env.mjs';
+import { brandShellHtml, DEFAULT_BRAND } from '../tools/lib/brand.mjs';
+import { loadTaxonomy, taxonomyAnswer } from './taxonomy.mjs';
+import { loadSettingsPolicy } from './mcp-settings-policy.mjs';
+import { mcpTransport, describeTransport } from '../tools/mcp-transport.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
 import { stackSummary } from '../tools/lib/stack-evidence.mjs';
 import { parseSchedule } from '../tools/lib/schedule.mjs';
@@ -186,121 +203,39 @@ function loadPackFile(relPath) {
 // by an id under /api/packs/:id/*. Without this they'd be opaque blobs the
 // server can't refer back to.
 //
-// Capped at MAX_UPLOADS to bound memory; oldest entry evicted on overflow.
-// Backed by the workspace directory (server/workspace.mjs): every
-// registration writes through to disk and start() rehydrates the map, so
-// crawled / drafted / uploaded packs survive restarts. Eviction at the cap
-// prunes both the map and the disk copy (retention by least-recently-used).
-// Tenancy is always on: each org has its own registry — a process-wide
-// map would leak one org's packs into another's catalog, which is exactly
-// what the Stage 2 isolation gate forbids. The scope key is the request's
-// org (currentOrg()) within a store handle, so a suite that re-points the
-// workspace (and so the store) between boots in one process never sees
-// the previous workspace's packs. An org's map rehydrates from its own
-// workspace subtree on first touch (boot step 6 touches every live org).
-const UPLOAD_REGISTRIES = new WeakMap();   // store handle → Map(orgId → Map(id → { canonical, source, label, createdAt }))
-const MAX_UPLOADS = 200;
+// The org's upload registry — crawled / drafted / uploaded packs — lives in
+// server/pack-registry.mjs (STORE_PLAN slice 4): one pack file per pack
+// (server/workspace.mjs), one `packs` row with its service links, and the
+// per-org in-memory Map this module reads (uploadsMap(), rehydrated from the
+// rows and files on an org's first touch — boot step 6 touches every live
+// org). A register writes the file, the rows and their audit rows under the
+// request's principal; a read touches lastUsedAt (debounced, audit-free).
+// The actor is the principal's (a login, the bearer's label, `local`); an
+// anonymous principal has none and never reaches an operator route — a
+// missing one fails closed in the repository (requireActor), never defaults.
+const actorOf = (req) => req.observogramPrincipal?.actor;
 
-function rehydrateInto(m, scope) {
-  let restored = 0;
-  try {
-    // loadWorkspacePacks resolves the org root from the AsyncLocalStorage
-    // context. Entries arrive oldest lastUsedAt first, preserving the
-    // map's LRU insertion order.
-    for (const p of loadWorkspacePacks()) {
-      if (m.has(p.id)) continue;
-      m.set(p.id, { canonical: p.canonical, source: p.source, label: p.label, createdAt: p.createdAt });
-      restored++;
-    }
-  } catch (e) {
-    process.stderr.write(`[workspace] org '${scope}' rehydrate failed: ${e.message}\n`);
-  }
-  return restored;
-}
-
-let lastRehydrated = 0;
-function uploadsMap() {
-  const scope = currentOrg();
-  if (!scope) throw new Error('uploadsMap() outside an org context');
-  const db = currentStore();
-  let byOrg = UPLOAD_REGISTRIES.get(db);
-  if (!byOrg) { byOrg = new Map(); UPLOAD_REGISTRIES.set(db, byOrg); }
-  let m = byOrg.get(scope);
-  if (!m) {
-    m = new Map();
-    byOrg.set(scope, m);
-    lastRehydrated = rehydrateInto(m, scope);
-  }
-  return m;
-}
-
-function slugify(s) {
-  return String(s || 'pack')
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40) || 'pack';
-}
-
-// Deterministic content hash — same canonical → same id across restarts,
-// engineers, and environments. The first 8 hex chars of SHA-256 over the
-// JSON.stringify of the canonical pack object. 8 chars = 32 bits = ~4B
-// slots, comfortably collision-free for the demo's 20-pack cap. Run-time
-// annotations (metadata.annotations.mcp.refreshedAt etc.) ARE included in
-// the hash on purpose — two packs that differ only in their refreshedAt
-// timestamp are genuinely different snapshots and deserve distinct ids.
-function contentHash(canonical) {
-  const json = JSON.stringify(canonical || {});
-  return createHash('sha256').update(json).digest('hex').slice(0, 8);
-}
-
-function registerUploadedPack(canonical, source, label) {
-  const slug = slugify(canonical?.metadata?.name || source || 'pack');
-  const id = `uploaded-${slug}-${contentHash(canonical)}`;
-  // Idempotent: if the same canonical content was already registered,
-  // delete + re-insert refreshes its LRU position without minting a new
-  // id. That makes re-upload safe (no duplicate entries) AND keeps the
-  // user's pick alive when they're actively working with that pack.
-  const uploads = uploadsMap();
-  if (uploads.has(id)) uploads.delete(id);
-  // ALSO drop any older entry whose friendly label collides with the
-  // new one. This is how the quick-start cases stay deduplicated:
-  // a second "KrystalineX (repo scan)" replaces the first instead of
-  // accumulating clones in the picker.
-  if (label) {
-    for (const [otherId, rec] of [...uploads.entries()]) {
-      if (rec.label === label && otherId !== id) {
-        uploads.delete(otherId);
-        deleteWorkspacePack(otherId);
-      }
-    }
-  }
-  const rec = { canonical, source: source || 'upload', label, createdAt: Date.now() };
-  uploads.set(id, rec);
-  saveWorkspacePack(id, rec);
-  // Evict the oldest if we've blown the cap — disk copy goes with it.
-  while (uploads.size > MAX_UPLOADS) {
-    const oldestKey = uploads.keys().next().value;
-    uploads.delete(oldestKey);
-    deleteWorkspacePack(oldestKey);
-  }
-  return id;
+function registerUploadedPack(req, canonical, source, label) {
+  return registerPack(currentStore(), actorOf(req), { canonical, source, label });
 }
 
 function uploadedMeta(id) {
   const upl = uploadsMap().get(id);
   if (!upl) return null;
-  touchWorkspacePack(id);   // keeps lastUsedAt-based retention honest (debounced)
+  touchPack(currentStore(), id);   // keeps lastUsedAt-based retention honest (debounced)
+  // The catalogue entry GET /api/packs serves for it — the one builder the
+  // registry's rows and the studio's tiles read too (tools/lib/service-keys.mjs):
+  // the label falls back to the canonical pack name, then the id.
+  const entry = catalogEntryOf(id, { label: upl.label, source: upl.source }, upl.canonical, listEnvironments(upl.canonical));
   return {
     id,
     path: null,        // signal: not file-backed
     canonical: upl.canonical,
-    // Prefer the explicit friendly label when present, fall back to
-    // the canonical pack name. This is what the picker dropdown reads.
-    label: upl.label || upl.canonical?.metadata?.name || id,
-    description: `Uploaded pack — ${upl.source}`,
+    label: entry.label,
+    description: entry.description,
     source: upl.source,
     uploaded: true,
+    entry,
   };
 }
 
@@ -317,6 +252,7 @@ function catalogEntry(meta) {
   try {
     const c = loadPackFile(meta.path);
     const svc = serviceMetadata(c);
+    const live = livePackKind(c);   // 'scaffold' | 'snapshot' for a live pack only
     return {
       id: meta.id,
       label: meta.label,
@@ -329,6 +265,7 @@ function catalogEntry(meta) {
       namespace: svc.namespace,
       services: svc.services,
       environments: listEnvironments(c),
+      ...(live ? { live } : {}),
       ok: true,
     };
   } catch (e) {
@@ -336,55 +273,35 @@ function catalogEntry(meta) {
   }
 }
 
-function serviceMetadata(canonical) {
-  const bindings = canonical?.metadata?.bindings || {};
-  const annotations = canonical?.metadata?.annotations || {};
-  const services = new Set();
-  const add = (value) => {
-    for (const part of String(value || '').split(',')) {
-      const service = part.trim();
-      if (service) services.add(service);
-    }
-  };
-  add(bindings.service);
-  add(bindings.namespace);
-  add(annotations['mcp.servicesDiscovered']);
-  add(annotations['observogram.services']);
-  add(annotations['tomograph.services']);   // legacy namespace (pre-rebrand packs)
-  return {
-    service: bindings.service || canonical?.metadata?.name || '',
-    namespace: bindings.namespace || bindings.service || canonical?.metadata?.name || '',
-    services: [...services].sort(),
-  };
-}
-
 function readEnv(query) {
   return typeof query.env === 'string' && query.env ? query.env : null;
 }
 
 // MCP URL validation (SSRF guard) lives in server/mcp-url.mjs — every
-// deploy / draft / refresh endpoint goes through validateMcpUrl(), and
-// stderr logs use redactCredentials()/safeUrl, never the raw URL.
+// deploy / draft / refresh endpoint goes through validateMcpUrl() (inside
+// resolveMcpTarget, server/service-admin.mjs, which also takes the org's
+// MCP endpoint by id — STORE_PLAN slice 4 §7.6), and stderr logs use
+// redactCredentials()/safeUrl, never the raw URL.
 
-// Returns a canonical object with the env overlay applied to spec.* AND
-// effective criticality/target propagated up to metadata.bindings so the
-// conformance scorer sees the correct tier for the selected environment.
-// (The adapter already takes opts.environment and produces its own metadata
-// projection — this helper is for non-adapter consumers.)
-function overlaidCanonical(canonical, envName) {
-  const { spec, effective } = applyEnvironmentOverlay(canonical.spec || {}, envName);
-  const next = { ...canonical, spec };
-  if (effective.criticality || effective.target) {
-    next.metadata = {
-      ...(canonical.metadata || {}),
-      bindings: {
-        ...(canonical.metadata?.bindings || {}),
-        ...(effective.criticality ? { criticality: effective.criticality } : {}),
-        ...(effective.target ? { default_target: effective.target } : {}),
-      },
-    };
-  }
-  return { canonical: next, effective };
+// overlaidCanonical (the env overlay applied to spec.* with the effective
+// criticality / target propagated up to metadata.bindings) is the adapter's
+// (tools/lib/adapter.mjs): one helper for the server, the static bundle and
+// the CLIs.
+
+// The default tools/lib/conformance.mjs grades at (tierOf) — the pack's own
+// tier once the env overlay has lifted the environment's criticality.
+const DEFAULT_TIER = 'tier-3';
+const packTierOf = (canonical) => canonical.metadata?.bindings?.criticality ?? DEFAULT_TIER;
+
+// A copy of `canonical` with metadata.bindings.criticality replaced — the
+// tier the conformance scorer grades at (STORE_PLAN slice 4 §9: a service
+// record's tier). Spreads metadata and bindings so the registry's live
+// object is never mutated.
+function withCriticality(canonical, tier) {
+  return {
+    ...canonical,
+    metadata: { ...(canonical.metadata || {}), bindings: { ...(canonical.metadata?.bindings || {}), criticality: tier } },
+  };
 }
 
 // ---------- app ----------
@@ -422,11 +339,19 @@ app.get('/api/version', authorize('GET /api/version'), (req, res) => {
 // and stamps the principal. Both before the body parsers: the context
 // survives Express's body parsing.
 
-// Who performed a mutating request — the audit log's actor field.
-function actorForRequest(req) { return req?.observogramActor || 'local'; }
-
 app.use(authGate);
 app.use(orgContext);
+
+// The MCP server-settings API (rebadge batch 4) lives in
+// server/routes/mcp-settings.mjs: GET /api/mcp-settings — the settings
+// policy (OBSERVOGRAM_MCP_SETTINGS_POLICY) and whether the opt-in
+// pass-through is on, read by the studio when its Server settings modal
+// opens — and the pass-through itself (OBSERVOGRAM_MCP_ADMIN_PROXY=1), whose
+// two POSTs carry a secret in their body. Mounted BEFORE the body parsers:
+// those two read their own body (64 KiB) and answer a malformed one with a
+// fixed JSON text, where the app-wide parser's error page would quote it
+// (M6 (b) — every other route's answer is unchanged).
+app.use(mcpSettingsRoutes({ authorize }));
 
 app.use(express.json({ limit: '16mb' }));   // /api/crawl can carry a whole repo's worth of YAML
 app.use(express.text({ type: ['application/x-yaml', 'text/yaml', 'text/plain'], limit: '4mb' }));
@@ -436,12 +361,36 @@ app.use(express.urlencoded({ extended: false, limit: '64kb' }));   // /auth/logi
 // boot when OIDC is configured incompletely. See server/auth.mjs.
 initAuth(app, { authorize });
 
-// Express's PayloadTooLargeError is thrown by the body parsers BEFORE
-// any of our handlers run, and the default error path returns HTML.
-// /api/* always wants JSON so the client can show a clean error and
-// hint the user toward client-side filtering instead of dumping a stack
-// trace into the dropzone.
-app.use(function payloadTooLarge(err, req, res, next) {
+// The body parsers' errors — a malformed JSON body, a body over the cap,
+// a charset or content encoding the parser does not take — are thrown
+// BEFORE any of our handlers run (before a route's authorize() too: only
+// authGate and orgContext run ahead of the parsers), and Express's default
+// error path answers them as an HTML page carrying the error's stack, which
+// for a malformed JSON body quotes a fragment of the body (an `mcpAuth`, a
+// password), and prints that stack on stderr. So every one is answered
+// here, on every path, as JSON in the house shape — { ok: false, error }
+// with a fixed text, the parser's own status, no fragment of the body — and
+// nothing is logged (malformed-json-app-wide; the MCP server-settings
+// pass-through's two POSTs keep their own parser and answers,
+// server/routes/mcp-settings.mjs, M6 (b)).
+//
+// /api/*'s 413 keeps its text: the client shows it and hints the user
+// toward client-side filtering instead of dumping a stack trace into the
+// dropzone.
+const BODY_ERROR_TEXT = Object.freeze({
+  'entity.parse.failed': 'the request body is not valid JSON',
+  'entity.too.large': 'the request body is too large',
+  'parameters.too.many': 'the request body has too many parameters',
+  'charset.unsupported': 'the request body\'s charset is not supported',
+  'encoding.unsupported': 'the request body\'s content encoding is not supported',
+  'entity.verify.failed': 'the request body could not be read',
+  'request.aborted': 'the request body could not be read',
+  'request.size.invalid': 'the request body could not be read',
+  'stream.encoding.set': 'the request body could not be read',
+  'stream.not.readable': 'the request body could not be read',
+});
+app.use(function bodyParserError(err, req, res, next) {
+  if (res.headersSent) return next(err);
   if (err?.type === 'entity.too.large' || err?.status === 413) {
     if ((req.path || '').startsWith('/api/')) {
       const limit = err.limit ? Math.round(err.limit / 1024 / 1024) + 'MB' : '16MB';
@@ -451,7 +400,10 @@ app.use(function payloadTooLarge(err, req, res, next) {
       });
     }
   }
-  return next(err);
+  if (typeof err?.type !== 'string' || !Object.hasOwn(BODY_ERROR_TEXT, err.type)) return next(err);
+  const status = Number.isInteger(err.status) && err.status >= 400 && err.status < 600 ? err.status : 400;
+  res.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+  return res.status(status).json({ ok: false, error: BODY_ERROR_TEXT[err.type] });
 });
 
 app.get('/healthz', authorize('GET /healthz'), (req, res) => {
@@ -463,15 +415,16 @@ app.get('/healthz', authorize('GET /healthz'), (req, res) => {
   });
 });
 
-// Wipe in-memory uploaded / crawled / drafted packs. Used by the
-// studio's RESET button so the user can start truly fresh — the client
-// pairs this with a localStorage.clear() + reload. No body, no params.
-// Returns the number of entries dropped so the client can echo it.
+// Wipe the org's uploaded / crawled / drafted packs. Used by the studio's
+// RESET button so the user can start truly fresh — the client pairs this
+// with a localStorage.clear() + reload. No body, no params. The rows go
+// (their service links with them; one pack.clear audit row), the map and
+// the disk copies go too — reset means reset — but the services and
+// environments the packs named STAY: a reset of the working set is not a
+// deletion of the org's services. Returns the number of packs dropped so
+// the client can echo it.
 app.delete('/api/uploads', authorize('DELETE /api/uploads'), (req, res) => {
-  const uploads = uploadsMap();
-  const dropped = uploads.size;
-  uploads.clear();
-  clearWorkspacePacks();   // reset means reset — the disk copies go too
+  const dropped = clearPacks(currentStore(), actorOf(req));
   res.json({ ok: true, dropped });
 });
 
@@ -514,25 +467,7 @@ app.get('/api/packs', authorize('GET /api/packs'), (req, res) => {
 });
 
 function catalogEntryForUpload(id) {
-  const meta = uploadedMeta(id);
-  if (!meta) return null;
-  const c = meta.canonical;
-  const svc = serviceMetadata(c);
-  return {
-    id,
-    label: meta.label,
-    description: meta.description,
-    name: c?.metadata?.name,
-    version: c?.metadata?.version,
-    binding: c?.metadata?.binding,
-    criticality: c?.metadata?.bindings?.criticality,
-    service: svc.service,
-    namespace: svc.namespace,
-    services: svc.services,
-    environments: listEnvironments(c),
-    source: 'uploaded',
-    ok: true,
-  };
+  return uploadedMeta(id)?.entry ?? null;
 }
 
 // Opt-in lookup across uploads + catalog + examples — used by every
@@ -550,6 +485,16 @@ function findPackMeta(id) {
 // home screen renders these as a small "Browse examples" affordance.
 app.get('/api/examples', authorize('GET /api/examples'), (req, res) => {
   res.json({ examples: EXAMPLE_PACKS.map(catalogEntry) });
+});
+
+// The artefact taxonomy override (OBSERVOGRAM_TAXONOMY, server/taxonomy.mjs):
+// the document the studio compiles at boot to classify typed artefacts, or
+// null when none is configured. `configured` says which; the file's path
+// is logged at start, never served. `no-store` like /api/version: the
+// answer changes with the process, not with the resource.
+app.get('/api/taxonomy', authorize('GET /api/taxonomy'), (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(taxonomyAnswer());
 });
 
 // Catalogue reference packs — the curated best-practice packs surfaced in
@@ -596,21 +541,62 @@ app.get('/api/packs/:id/canonical', authorize('GET /api/packs/:id/canonical'), (
   }
 });
 
+// GET /api/packs/:id/conformance — the maturity rubric over the env-overlaid
+// pack, graded at the service record's tier when one is set (STORE_PLAN
+// slice 4 §9): an uploaded pack's primary service row, its environment row
+// for ?env= first (environment.tier, else service.tier); a catalogue or
+// example pack has no row and is graded at its own tier, as every pack was
+// before. `declaredTier` is the tier the report was graded at, so
+// scorePercent, mustPercent and the clauses' `applies` follow it; `tier`
+// says where it came from: { graded (=== declaredTier), pack (the pack's own
+// declaration for this env), from: 'environment' | 'service' | 'pack',
+// service { id, slug } | null, environment { id, name } | null, mismatch
+// (the record's tier differs from the pack's — shown, never blocked) }.
+// tools/lib/conformance.mjs is untouched: the tier goes in through a copy
+// of the canonical.
+// conformanceReportFor(meta, canonical, env) is the one builder of that
+// body: the route answers it, and GET /api/packs/:id/audit-report (GAP batch
+// 2, server/routes/audit-report.mjs) reads the same object, so the two can
+// never grade one pack differently. The service record's waivers (GAP batch
+// 2 B3.2, server/waiver-admin.mjs conformanceWaivers) overlay the engine's
+// report here and here only: with no open waiver the report is the same
+// object (byte-identical body); /api/validate and the library routes keep
+// the bare report.
+function conformanceReportFor(meta, canonical, env, { now = new Date().toISOString() } = {}) {
+  const { canonical: overlaid } = overlaidCanonical(canonical, env);
+  const packTier = packTierOf(overlaid);
+  const record = meta.uploaded ? serviceTierFor(currentStore(), meta.id, env) : null;
+  const graded = record?.tier ? withCriticality(overlaid, record.tier) : overlaid;
+  const engine = evaluateConformance(graded);
+  const report = record?.service ? conformanceWaivers(currentStore(), record.service, engine, graded, { now }) : engine;
+  // Which clauses pass only on a placeholder, for this env overlay at the
+  // graded tier — the same list /api/validate and /api/library/register
+  // put in summary.onPlaceholder. Only a pack carrying library.todo.*
+  // annotations can say; for any other pack the key is omitted (not []),
+  // because "no placeholder" is not known there and the view keeps its hedge.
+  const onPlaceholder = librarySummaryFor(graded)?.onPlaceholder;
+  return {
+    environment: env,
+    ...report,
+    ...(Array.isArray(onPlaceholder) ? { onPlaceholder } : {}),
+    tier: {
+      graded: report.declaredTier,
+      pack: packTier,
+      from: record?.from ?? 'pack',
+      service: record?.service ?? null,
+      environment: record?.environment ?? null,
+      mismatch: !!record?.tier && record.tier !== packTier,
+    },
+  };
+}
+
 app.get('/api/packs/:id/conformance', authorize('GET /api/packs/:id/conformance'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ error: `unknown pack: ${req.params.id}` });
   try {
     const canonical = loadPackCanonical(meta);
     const env = readEnv(req.query);
-    const { canonical: overlaid } = overlaidCanonical(canonical, env);
-    const report = evaluateConformance(overlaid);
-    // Which clauses pass only on a placeholder, for this env overlay — the
-    // same list /api/validate and /api/library/register put in
-    // summary.onPlaceholder. Only a pack carrying library.todo.* annotations
-    // can say; for any other pack the key is omitted (not []), because "no
-    // placeholder" is not known there and the view keeps its hedge.
-    const onPlaceholder = librarySummaryFor(overlaid)?.onPlaceholder;
-    res.json({ environment: env, ...report, ...(Array.isArray(onPlaceholder) ? { onPlaceholder } : {}) });
+    res.json(conformanceReportFor(meta, canonical, env));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -711,7 +697,11 @@ app.get('/api/packs/:id/compile-artifact', authorize('GET /api/packs/:id/compile
 
 // GET /api/packs/:id/export.zip — the whole pack as one download: the
 // canonical pack.yaml plus every compiled artefact (the 'all' bundle of each
-// compile group × flavor) under artefacts/. Hand-rolled ZIP, no zip dep.
+// compile group × flavor) under artefacts/, and — only when the pack carries
+// any — the reviewer's verdicts as verdicts.json (the GET
+// /api/packs/:id/verdicts document, GAP batch 2 B3.1; a catalogue pack and
+// a pack nobody reviewed export exactly what they did before, so the static
+// bundle's ZIP stays the server's). Hand-rolled ZIP, no zip dep.
 app.get('/api/packs/:id/export.zip', authorize('GET /api/packs/:id/export.zip'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ error: `unknown pack: ${req.params.id}` });
@@ -734,6 +724,10 @@ app.get('/api/packs/:id/export.zip', authorize('GET /api/packs/:id/export.zip'),
         } catch (_) { /* a flavor that can't compile for this pack — skip it */ }
       }
     }
+    if (meta.uploaded) {
+      const doc = verdictsDocument(currentStore(), { meta, adapted: adapt(canonical) });
+      if (doc.verdicts.length > 0) files.push({ name: 'verdicts.json', data: `${JSON.stringify(doc, null, 2)}\n` });
+    }
 
     const zip = makeZip(files);
     res.setHeader('Content-Type', 'application/zip');
@@ -750,13 +744,73 @@ app.get('/api/packs/:id/export.zip', authorize('GET /api/packs/:id/export.zip'),
 // plan/execute, bulk + single deploy) live in server/routes/deploy.mjs;
 // the shaping transforms in server/deploy-helpers.mjs. The pack-registry
 // seam is injected until the registry extraction slice.
-app.use(deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, actorForRequest, contentHash, authorize }));
+app.use(deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, contentHash, authorize }));
 
 // The identity API (STORE_PLAN slice 3b) lives in server/routes/identity.mjs:
 // the deployment's users, orgs and join role under /api/admin/* (owners),
 // the request's org — its name and its members — under /api/org* (its
 // admins), every rule server/identity-admin.mjs's — the CLIs' own.
 app.use(identityRoutes({ authorize }));
+
+// The services and environments API (STORE_PLAN slice 4) lives in
+// server/routes/services.mjs: the request's org's service records under
+// /api/services (viewer reads, operator writes) and their environments
+// under /api/environments, every rule server/service-admin.mjs's.
+app.use(servicesRoutes({ authorize }));
+
+// The verdicts API (GAP batch 2, B3.1) lives in server/routes/verdicts.mjs:
+// a reviewer's trusted | suspect | failed record per artefact of a
+// registered pack under /api/packs/:id/verdicts (viewer reads, operator
+// writes), every rule server/verdict-admin.mjs's. The pack-registry seam is
+// injected as the deploy routes take it.
+app.use(verdictsRoutes({ findPackMeta, loadPackCanonical, authorize }));
+
+// The waivers API (GAP batch 2, B3.2) lives in server/routes/waivers.mjs: a
+// service record's time-boxed waivers of conformance findings under
+// /api/services/:id/waivers and /api/waivers/:id/revoke (viewer reads,
+// operator writes), every rule server/waiver-admin.mjs's; the overlay they
+// produce is read by conformanceReportFor above.
+app.use(waiversRoutes({ authorize }));
+
+// The service audit report (GAP batch 2, B3.5) lives in
+// server/routes/audit-report.mjs: GET /api/packs/:id/audit-report (JSON or
+// HTML, branded like the shell) and GET /api/packs/:id/placeholders, both
+// viewer reads. The report's conformance section is conformanceReportFor's
+// body (the one builder), its verdict and waiver rows the admin modules'
+// views over the store — mapped field by field here, the one `now` shared
+// with the conformance overlay. The brand is the one start() loads; the
+// styles (the studio's design tokens and kit) are read at the first request.
+app.use(auditReportRoutes({
+  authorize, findPackMeta, loadPackCanonical, readEnv, conformanceReportFor, overlaidCanonical, currentStore,
+  brand: () => brand,
+  styles: () => `${readFileSync(resolve(STUDIO_DIR, 'design-tokens.css'), 'utf8')}\n${readFileSync(resolve(STUDIO_DIR, 'design-kit.css'), 'utf8')}`,
+  generator: () => ({ name: `${brand.name} server`, version: buildInfo().version }),
+  assessments: {
+    // A pack's verdict rows (server/verdict-admin.mjs verdictsDocument): a catalogue pack has none, by construction.
+    verdictsFor: (db, meta, _env, adapted) => verdictsDocument(db, { meta, adapted }).verdicts
+      .map((v) => ({ artefactKey: v.artefact, key: v.key, family: v.family, title: v.title, state: v.status, reason: v.reason, at: v.setAt, by: v.actor })),
+    // The pack's primary service record's waivers (server/waiver-admin.mjs listWaiverViews), history included; no service → none.
+    waiversFor: (db, meta, env, now) => {
+      const service = meta.uploaded ? serviceTierFor(db, meta.id, env)?.service : null;
+      if (!service) return [];
+      return listWaiverViews(db, service, now).waivers
+        .map((w) => ({ id: w.id, artefactKey: w.artefactId, rule: w.ruleId, reason: w.reason, expiresAt: w.expiresAt, at: w.createdAt, by: w.author, status: w.state, revokedAt: w.revokedAt, revokedBy: w.revokedBy, revokeReason: w.revokeReason }));
+    },
+  },
+}));
+
+// The audit reader (STORE_PLAN slice 5) lives in server/routes/audit.mjs:
+// GET /api/audit — the request's org's rows to its admins, the
+// deployment's to owners, filtered and paged; the scope and every query
+// rule server/audit-admin.mjs's.
+app.use(auditRoutes({ authorize }));
+
+// The live MCP API (rebadge batch 3) lives in server/routes/live.mjs:
+// POST /api/mcp/ping — initialize, tools/list and one cheap read against
+// the request's MCP target (resolveMcpTarget's, as a draft's), writing no
+// live file and no pack; the live jobs — /api/mcp/jobs, a snapshot or a
+// draft (draftFromMcp, below) run in the server's memory, polled by id.
+app.use(liveRoutes({ authorize, draftFromMcp }));
 
 // ---------- saved journeys (VALUE_BACKLOG item 11, studio surface) ----------
 
@@ -823,6 +877,16 @@ function parsedSchedule(def) {
   try { return parseSchedule(def.schedule); } catch { return null; }
 }
 
+// The journey's file as a run's notify refusal names it
+// (server/notify-target-policy.mjs J): the file the route loaded, relative to
+// the workspace, in the org's root — journeys/<file> for an org at the base,
+// orgs/<id>/journeys/<file> for any other; never rebuilt from its name:,
+// which need not match the file's.
+function journeyFileOf(def) {
+  const root = orgRootOf(currentOrg());
+  return `${root === '.' ? '' : `${root}/`}journeys/${basename(def.__source)}`;
+}
+
 app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
   try {
     const journeys = listJourneys().map(name => {
@@ -833,6 +897,11 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
       let loadError = null;
       try { def = loadJourneyDef(name, { allowPath: false }); } catch (e) { loadError = e.message; }
       const lastRun = readJourneyRuns(name, { limit: 1 })[0] || null;
+      // A journey whose notification a server run would refuse says so —
+      // the run's own text, which names who acts (the server's operator, or
+      // whoever holds the workspace); never for a journey a run would
+      // notify through its org's hook.
+      const problem = def?.notify ? resolveJourneyNotify(currentStore(), def.notify, { org: currentOrg(), journey: def.name, file: journeyFileOf(def) }).refused : null;
       return {
         name,
         loadError,
@@ -842,12 +911,16 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
         scope: { env: def?.env || null, service: def?.service || null, scopeMode: def?.scopeMode || null },
         // Step 5: the declared cadence (parsed the way the CLI parses it —
         // cadenceMs null with a note for an irregular cron), the posture
-        // budget inputs and the notify block as env var NAMES only. No
-        // computation here: the journeys view derives the posture line
-        // from the run history with the same browser-safe helpers.
+        // budget inputs and the notify block as env var NAMES only (with
+        // `problem` when a run would refuse it). No computation here: the
+        // journeys view derives the posture line from the run history with
+        // the same browser-safe helpers.
         schedule: parsedSchedule(def),
         stackBudget: def?.stackBudget ?? null,
-        notify: def?.notify ? { urlEnv: def.notify.urlEnv, authEnv: def.notify.authEnv ?? null, on: def.notify.on ?? NOTIFY_DEFAULT_POLICY, format: def.notify.format ?? NOTIFY_DEFAULT_FORMAT } : null,
+        notify: def?.notify ? {
+          urlEnv: def.notify.urlEnv, authEnv: def.notify.authEnv ?? null, on: def.notify.on ?? NOTIFY_DEFAULT_POLICY, format: def.notify.format ?? NOTIFY_DEFAULT_FORMAT,
+          ...(problem ? { problem } : {}),
+        } : null,
         lastRun: lastRun && {
           startedAt: lastRun.startedAt,
           outcome: lastRun.outcome,
@@ -887,16 +960,44 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
         },
       };
     });
-    res.json({ journeys });
+    // An org whose every notify hook name another org's id takes
+    // (hooksAllTaken) can notify through none, whatever a journey names: the
+    // listing's `none` sentence says so as `notifyUnavailable` (absent
+    // otherwise), and the studio's hints say it in place of a hook to add.
+    const notifyUnavailable = hooksAllTaken(currentStore(), currentOrg()) ? notifyHooksOf(currentStore(), currentOrg()).none : null;
+    res.json({ journeys, ...(notifyUnavailable ? { notifyUnavailable } : {}) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/journeys/notify-hooks — the org's notify hooks (the follow-up
+// journey-notify-env-ownership; server/notify-target-policy.mjs
+// notifyHooksOf): every set OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL the org
+// solely owns, its token variable's name when that is set, and whether a run
+// could post through it (`usable`, else the capture's `problem`); `none`
+// says who sets one when there is none. The list a journey's notify chooses
+// from (R4: a registered target, chosen by name). Names only — never a
+// value, an origin or a list entry, and never another org's name. Declared
+// before the /api/journeys/:name/… routes for reading order only. A read:
+// no row.
+app.get('/api/journeys/notify-hooks', authorize('GET /api/journeys/notify-hooks'), (req, res) => {
+  res.json({ ok: true, ...notifyHooksOf(currentStore(), currentOrg()) });
+});
+
 // GET /api/journeys/:name/runs — run history newest first (the
-// drift-over-time series behind the panel's trend sparkline).
+// drift-over-time series behind the panel's trend sparkline). A record is
+// served as written but for its notify.error, which goes through
+// scrubNotifyError (tools/lib/journey.mjs): a record written before the
+// follow-up journey-notify-env-ownership — or by an older CLI on the shared
+// workspace — may hold undici's echo of the bearer token or of a hook URL
+// with credentials, or the hook's host or address in a failed lookup or
+// connect, and every member reads these records.
+const servedRun = (run) => (run?.notify && typeof run.notify === 'object' && typeof run.notify.error === 'string'
+  ? { ...run, notify: { ...run.notify, error: scrubNotifyError(run.notify.error) } }
+  : run);
 app.get('/api/journeys/:name/runs', authorize('GET /api/journeys/:name/runs'), (req, res) => {
   const limit = Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || 30));
   try {
-    res.json({ runs: readJourneyRuns(req.params.name, { limit }) });
+    res.json({ runs: readJourneyRuns(req.params.name, { limit }).map(servedRun) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -907,19 +1008,50 @@ app.get('/api/journeys/:name/runs', authorize('GET /api/journeys/:name/runs'), (
 // --json`. Env var NAMES only — no snippet ever carries a value. Without
 // a schedule: every snippet uses the placeholder cadence and `placeholder`
 // says so (nothing fabricated is presented as the journey's cadence). 404
-// for an unknown or unloadable journey.
+// for an unknown or unloadable journey. A notify name the server refuses
+// for this journey (server/notify-target-policy.mjs notifyNamesRefusal,
+// which reads no environment: not one of the org's notify hooks, or not the
+// token of the hook its urlEnv names) is never bound — it leaves `envNames`
+// for `refusedEnvNames`, a key present only when non-empty, and each snippet
+// says so where the binding would have been: the studio does not tell a
+// deployer to bind a name it refuses itself. A token refused beside the org's
+// own hook (the PAIR refusal) is told that hook's own token, the way out the
+// run's refusal names (scheduleSnippets' refusedPairs); another of the org's
+// hook tokens beside a refused urlEnv, its own hook's URL (refusedHookTokens)
+// — never a rename to the shape it has; one of them named as the urlEnv
+// itself (alone or as the authEnv too), that it is refused as notify.urlEnv
+// and its hook's URL (refusedUrlTokens) — never only to remove the authEnv,
+// which leaves the urlEnv refused; a name of an org whose every hook name
+// another org's id takes (the TAKEN refusal), to leave notify out, as the
+// run says — never a rename no name can satisfy (refusedTaken); else a name
+// of the org's hook shape, URL or token, that another org's id also maps
+// onto (the SHADOW refusal), that it is not the org's and to name a hook
+// the listing lists, as the run says — never a rename to the shape it has
+// (refusedShadows).
 app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/schedule'), (req, res) => {
   let def;
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
   try {
     const parsed = parsedSchedule(def);
-    const envNames = [...new Set([def.packB?.mcp?.authEnv, def.notify?.urlEnv, def.notify?.authEnv].filter(Boolean))];
+    const refuses = (notify) => notifyNamesRefusal(currentStore(), notify, { org: currentOrg(), at: 'run', journey: def.name, file: journeyFileOf(def) }) !== null;
+    const urlRefused = !!def.notify?.urlEnv && refuses({ urlEnv: def.notify.urlEnv });
+    const authRefused = !!def.notify?.authEnv && (urlRefused || refuses({ urlEnv: def.notify.urlEnv, authEnv: def.notify.authEnv }));
+    const envNames = [...new Set([def.packB?.mcp?.authEnv, urlRefused ? null : def.notify?.urlEnv, authRefused ? null : def.notify?.authEnv].filter(Boolean))];
+    const refusedEnvNames = [...new Set([urlRefused ? def.notify.urlEnv : null, authRefused ? def.notify.authEnv : null].filter((n) => n && !envNames.includes(n)))];
+    const hook = authRefused && !urlRefused && def.notify.urlEnv ? notifyHookOf(currentStore(), def.notify.urlEnv, currentOrg()) : null;
+    const refusedPairs = hook?.kind === 'hook' ? [{ authEnv: def.notify.authEnv, urlEnv: hook.urlEnv, tokenEnv: hook.tokenEnv }] : [];
+    const owned = authRefused && urlRefused ? notifyHookOf(currentStore(), def.notify.authEnv, currentOrg(), 'TOKEN') : null;
+    const refusedHookTokens = owned?.kind === 'hook' ? [{ authEnv: def.notify.authEnv, urlEnv: owned.urlEnv }] : [];
+    const asUrl = urlRefused ? notifyHookOf(currentStore(), def.notify.urlEnv, currentOrg(), 'TOKEN') : null;
+    const refusedUrlTokens = asUrl?.kind === 'hook' ? [{ tokenEnv: def.notify.urlEnv, urlEnv: asUrl.urlEnv }] : [];
+    const refusedTaken = refusedEnvNames.length > 0 && hooksAllTaken(currentStore(), currentOrg());
+    const refusedShadows = refusedEnvNames.filter((n) => ['URL', 'TOKEN'].some((suffix) => notifyHookOf(currentStore(), n, currentOrg(), suffix).kind === 'shadow'));
     const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
     const snippets = scheduleSnippets({
       name: def.name,
       cron: parsed?.cron ?? null, timezone: parsed?.timezone ?? null, every: parsed?.every ?? null, cadenceNote: parsed?.cadenceNote ?? null,
-      envNames,
+      envNames, refusedEnvNames, refusedPairs, refusedHookTokens, refusedUrlTokens, refusedTaken, refusedShadows,
       nodePath: process.execPath, cliPath: resolve(ROOT, 'tools/cli.mjs'), cwd: process.cwd(),
       workspace: orgWorkspaceRoot(), orgRoot: orgRootOf(currentOrg()),
       image: `observogram:${pkg.version}`, namespace: 'observability',
@@ -927,25 +1059,98 @@ app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/sched
       placeholder: !parsed,
       source: def.__source || null,
     });
-    res.json({ ok: true, name: def.name, schedule: parsed, placeholder: !parsed, envNames, snippets });
+    res.json({ ok: true, name: def.name, schedule: parsed, placeholder: !parsed, envNames, ...(refusedEnvNames.length ? { refusedEnvNames } : {}), snippets });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // POST /api/journeys/:name/run — execute now. HTTP 200 even when the gate
 // fails: the run succeeded, the outcome is data. 404 for unknown names,
 // 502 when a pack source can't be resolved (live MCP down etc.).
+//
+// A journey with `notify` posts to its org's notify hook (the follow-up
+// journey-notify-env-ownership, server/notify-target-policy.mjs), resolved
+// before anything runs, after the Pack B target: without sign-in only a
+// request sent straight to a loopback address on a loopback bind runs it
+// (403 posture otherwise — the hook's token is a server-held credential);
+// then the hook — the org's own OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL,
+// solely owned, with that hook's own _TOKEN, its values sound and its
+// origin allowed — or 400 with the sentence that says what to fix and who
+// fixes it. A refusal runs nothing, writes no record and no row, and sends
+// nothing: a refused run can never become the next run's baseline. The
+// engine is handed the resolved target and reads no variable a definition
+// names.
+//
+// The audit (STORE_PLAN slice 5): one journey.run row for every attempt
+// past the 404, the Pack B target refusal and the notify refusals, written after the engine returned or threw — on the 200
+// path the record's seven scalars; on the 502 path the same keys from the
+// route's own clock, the outcome `vantage-lost` when a live source lost its
+// vantage (the engine wrote a run record and may have notified) else
+// `error` (no record exists). Never the error's message: it may carry a URL
+// or a credential. A journey with `notify` adds `notify: { urlEnv, status,
+// attempts }` — the hook's variable name, sent | skipped | failed (null when
+// no record exists) and how many requests left the server — never any part
+// of the URL. A failed insert never fails the run: `auditError` on the
+// response, one line on stderr.
 app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), async (req, res) => {
   let def;
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
+  try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+  // A live Pack B is a server-side request to an MCP target (R4, decision
+  // D6): resolved before anything runs — through the org's registered
+  // endpoint (packB.mcp.endpointId), or a raw url as a typed URL, which
+  // only an admin may send. A refusal sends nothing and writes no row; the
+  // def's authEnv is never read here.
+  const usesMcp = !!def.packB?.mcp && (!def.packB.file || def.inventory !== undefined);
+  const mcpTarget = usesMcp ? resolveJourneyMcp(currentStore(), def.packB.mcp, { caller: mcpCallerOf(req) }) : null;
+  if (mcpTarget?.status) return res.status(mcpTarget.status).json(mcpRefusalBody(mcpTarget));
+  let notifyHook = null;
+  if (def.notify) {
+    const posture = notifyPostureRefusal({ ...mcpCallerOf(req), host: listenOf(req).host });
+    if (posture) return res.status(posture.status).json({ ok: false, error: posture.error, denied: posture.denied });
+    notifyHook = resolveJourneyNotify(currentStore(), def.notify, { org: currentOrg(), journey: def.name, file: journeyFileOf(def) });
+    if (notifyHook.refused) return res.status(400).json({ ok: false, error: notifyHook.refused });
+  }
+  const t0 = new Date();
+  // The row's notify key (only for a journey with `notify`): from the
+  // record's delivery, or — no record — nothing left the server.
+  const notifyOf = (delivery) => (def.notify ? {
+    notify: {
+      urlEnv: bounded(def.notify.urlEnv),
+      status: ['sent', 'skipped', 'failed'].includes(delivery?.status) ? delivery.status : null,
+      attempts: Number.isInteger(delivery?.attempts) ? delivery.attempts : 0,
+    },
+  } : {});
+  const runRow = (detail) => ({ action: 'journey.run', targetKind: 'journey', targetId: bounded(def.name), detail });
   try {
     // A crawl: walk, a file: source and an inventory site read only this
     // org's own part of the workspace (STORE_PLAN slice 2, A-24); a path in
     // another org's part is refused.
-    const record = await runJourney(def, { crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() } });
-    res.json({ ok: true, record });
+    const record = await runJourney(def, {
+      crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() },
+      resolveMcp: () => {
+        if (!mcpTarget) throw new Error(`journey ${def.name}: Pack B's MCP was not resolved`);
+        return mcpTarget;
+      },
+      resolveNotify: (n) => notifyTargetOf(n, { url: notifyHook.url, auth: notifyHook.auth }),
+    });
+    const auditError = auditAfter(req, runRow({
+      startedAt: bounded(record.startedAt), outcome: bounded(record.outcome, 100),
+      alignmentPct: finite(record.drift?.alignmentPct), gradeScore: finite(record.grade?.score),
+      gradePass: typeof record.grade?.pass === 'boolean' ? record.grade.pass : null,
+      breaches: Array.isArray(record.gate?.breaches) ? record.gate.breaches.length : null,
+      tookMs: finite(record.tookMs),
+      ...notifyOf(record.notify),
+    }), { tag: 'journey' });
+    res.json({ ok: true, record, ...(auditError ? { auditError } : {}) });
   } catch (e) {
-    res.status(502).json({ ok: false, error: redactCredentials(String(e.message)) });
+    const auditError = auditAfter(req, runRow({
+      startedAt: t0.toISOString(), outcome: def.packB?.mcp && e?.vantageLost ? 'vantage-lost' : 'error',
+      alignmentPct: null, gradeScore: null, gradePass: null, breaches: null, tookMs: Date.now() - t0.getTime(),
+      // The vantage-lost path posted from the record it kept (runJourney sets e.notify).
+      ...notifyOf(e?.notify),
+    }), { tag: 'journey' });
+    res.status(502).json({ ok: false, error: redactTarget(String(e.message), mcpTarget), ...(auditError ? { auditError } : {}) });
   }
 });
 
@@ -954,7 +1159,13 @@ app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), a
 // packs keep their path; uploaded/crawled/drafted packs point at their
 // persisted workspace copy (10A); a Pack B that came from a live MCP draft
 // is saved as a live mcp: source via its mcp.url annotation, so re-runs
-// re-draft instead of comparing against a frozen snapshot.
+// re-draft instead of comparing against a frozen copy (a live snapshot is
+// saved as a file: it is an inventory read at one time) — through the
+// org's registered endpoint whose safe URL is the annotation's
+// ({ url, endpointId }); without one, an admin's capture keeps the URL
+// (typed-URL and origin rules) and anyone else's saves Pack B as a file
+// (R4, decision D6). A `notify` names one of the org's notify hooks — no
+// role types a webhook URL (journey-notify-env-ownership).
 app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req, res) => {
   const b = req.body || {};
   const name = typeof b.name === 'string' ? b.name.trim() : '';
@@ -974,13 +1185,15 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
   };
   const packA = sourceFor(metaA);
   let packB;
-  let bAnn = {};
-  try { bAnn = loadPackCanonical(metaB)?.metadata?.annotations || {}; } catch (_) {}
-  if (bAnn['mcp.url']) {
-    packB = { mcp: { url: bAnn['mcp.url'] } };
-  } else {
-    packB = sourceFor(metaB);
-  }
+  let canonicalB = null;
+  try { canonicalB = loadPackCanonical(metaB); } catch (_) {}
+  const bAnn = canonicalB?.metadata?.annotations || {};
+  // A snapshot is an inventory read at one time (its mcp.url is an origin
+  // only): it is saved as the file it is, never re-fetched as a draft.
+  const live = bAnn['mcp.url'] && livePackKind(canonicalB) !== 'snapshot'
+    ? journeyPackBSource(currentStore(), bAnn['mcp.url'], { caller: mcpCallerOf(req) }) : null;
+  if (live?.status) return res.status(live.status).json(mcpRefusalBody(live));
+  packB = live ?? sourceFor(metaB);
 
   const def = {
     packA, packB,
@@ -993,6 +1206,11 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
     ...(b.stackBudget !== undefined ? { stackBudget: b.stackBudget } : {}),
     ...(b.notify !== undefined ? { notify: b.notify } : {}),
   };
+  // The audit (STORE_PLAN slice 5): the principal is checked before the
+  // file is written — a missing actor (a bug) writes neither the file nor
+  // the row, 500.
+  try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+  let saved;
   try {
     // The same validation loadJourneyDef applies: a captured gate that
     // names an unknown stack row must be refused here (400), not saved as
@@ -1001,19 +1219,40 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
     if (def.gate.stack !== undefined) validateGateStack(def.gate.stack, name);
     if (def.schedule !== undefined) validateSchedule(def.schedule, name);
     if (def.stackBudget !== undefined) validateStackBudget(def.stackBudget, name);
-    if (def.notify !== undefined) validateNotify(def.notify, name);
-    const saved = saveJourneyDef(name, def, {
+    if (def.notify !== undefined) {
+      validateNotify(def.notify, name);
+      // A notify names one of the org's notify hooks — the listing's
+      // (GET /api/journeys/notify-hooks), set, its values sound and its
+      // origin allowed — or nothing is saved: a run checks the same again.
+      const refused = captureNotifyRefusal(currentStore(), def.notify, { org: currentOrg() });
+      if (refused) throw new Error(refused);
+    }
+    saved = saveJourneyDef(name, def, {
       banner: [
         `Captured from a studio session on ${new Date().toISOString()}.`,
         `Pack A: ${metaA.label || metaA.id} · Pack B: ${metaB.label || metaB.id}`,
-        `Edit freely — e.g. swap a frozen pack file for a crawl: source,`,
-        `or add authEnv under packB.mcp for authenticated MCPs.`,
+        `Edit freely — e.g. swap a frozen pack file for a crawl: source.`,
+        `The server fetches a live Pack B through packB.mcp.endpointId (its token`,
+        `from the endpoint's readTokenEnv); the CLI reads url and authEnv.`,
       ],
     });
-    res.json({ ok: true, name: saved.name });
   } catch (e) {
-    res.status(400).json({ ok: false, error: e.message });
+    return res.status(400).json({ ok: false, error: e.message });
   }
+  // The row, after the file: the two pack ids and whether Pack B was saved
+  // as a live mcp: source — never the paths or the mcp.url the file holds;
+  // the three scope scalars cut to the row's text rule; with a notify, the
+  // hook's variable names (who pointed the journey at which hook), never a
+  // value.
+  const auditError = auditAfter(req, {
+    action: 'journey.capture', targetKind: 'journey', targetId: bounded(saved.name),
+    detail: {
+      packA: metaA.id, packB: metaB.id, live: Boolean(packB.mcp),
+      env: bounded(def.env), service: bounded(def.service), scopeMode: bounded(def.scopeMode),
+      ...(def.notify !== undefined ? { notify: { urlEnv: bounded(def.notify.urlEnv), authEnv: bounded(def.notify.authEnv) } } : {}),
+    },
+  }, { tag: 'journeys' });
+  res.json({ ok: true, name: saved.name, ...(auditError ? { auditError } : {}) });
 });
 
 app.get('/api/packs/:id/compile/:target', authorize('GET /api/packs/:id/compile/:target'), (req, res) => {
@@ -1216,220 +1455,248 @@ app.get('/api/live-status', authorize('GET /api/live-status'), (req, res) => {
 // disk. The studio shows the preview + summary; "use this pack"
 // round-trips it through /api/validate just like the crawler flow.
 //
-// Body: { mcpUrl, mcpAuth?, packName? }
+// Body: { mcpUrl | mcpEndpointId, mcpAuth?, packName? } — an endpoint by id
+// is the org's record (STORE_PLAN slice 4 §7.6): its URL, and its read
+// token from the org's own variable when the request sends none.
 // Response: { ok, canonical, canonicalYaml, summary, validation,
-//             conformance, annotations, tookMs }
+//             conformance, annotations, registered, mcpEndpoint, tookMs }
 // ----------------------------------------------------------------
 app.post('/api/draft-from-mcp', authorize('POST /api/draft-from-mcp'), async (req, res) => {
   const body = req.body || {};
-  const mcpUrl  = typeof body.mcpUrl  === 'string' && body.mcpUrl.trim() ? body.mcpUrl.trim() : null;
-  const mcpAuth = typeof body.mcpAuth === 'string' && body.mcpAuth ? body.mcpAuth : null;
-  const packName = typeof body.packName === 'string' && body.packName.trim()
-    ? body.packName.trim()
+  const target = resolveMcpTarget(currentStore(), body, { forWrite: false, caller: mcpCallerOf(req) });
+  if (target.status) return res.status(target.status).json(mcpRefusalBody(target));
+  const t0 = Date.now();
+  try {
+    res.json(await draftFromMcp(target, {
+      packName: body.packName,
+      label: body.label,
+      register: (pack, label) => registerUploadedPack(req, pack, label, label),
+    }));
+  } catch (e) {
+    const error = redactTarget(e.message, target);
+    process.stderr.write(`[draft-from-mcp]   error in ${Date.now() - t0}ms: ${error}\n`);
+    res.status(502).json({ ok: false, error, tookMs: Date.now() - t0 });
+  }
+});
+
+// The draft itself, shared by POST /api/draft-from-mcp and a draft live job
+// (server/routes/live.mjs), so a job's canonical is the route's byte for
+// byte. `target` is resolveMcpTarget's answer. `onStage` and `signal` reach
+// fetchMcp (the draft's canonical is the same with or without them); the
+// `build` stage is reported here. `register(pack, label)` registers a valid
+// pack and returns its id (the route: the request's principal; a job: its
+// captured actor, after its authority re-check). Throws what the fetch
+// throws; answers { ok, canonical, canonicalYaml, summary, annotations,
+// validation, conformance, registered, mcpEndpoint, tookMs }.
+async function draftFromMcp(target, { packName: rawName = null, label = null, onStage = null, signal = null, register, tag = 'draft-from-mcp', verb = 'POST' } = {}) {
+  const packName = typeof rawName === 'string' && rawName.trim()
+    ? rawName.trim()
     : null;
-  if (!mcpUrl) return res.status(400).json({ ok: false, error: 'mcpUrl required in JSON body' });
-  const { error: mcpUrlError, safeUrl: safeMcpUrl } = validateMcpUrl(mcpUrl);
-  if (mcpUrlError) return res.status(400).json({ ok: false, error: mcpUrlError });
+  const { mcpUrl, safeMcpUrl, mcpAuth, endpoint: mcpEndpoint } = target;
   // The draft is a registered pack every viewer of the org reads: it keeps
   // the safe URL (a journey captured from it re-drafts from it; a header
   // token rides packB.mcp.authEnv), and says what it dropped.
   const { dropped } = stripMcpUrl(mcpUrl);
 
   const t0 = Date.now();
-  try {
-    process.stderr.write(`[draft-from-mcp] POST -> ${safeMcpUrl}\n`);
-    const fetched = await fetchMcp({ mcpUrl, mcpAuth });
-    const refreshedAt = new Date().toISOString();
-    const pack = buildCanonicalPack({ refreshedAt, mcpUrl: safeMcpUrl, packName, ...fetched });
-    const errors = validateCanonical(pack, SCHEMA);
+  process.stderr.write(`[${tag}] ${verb} -> ${safeMcpUrl}\n`);
+  const fetched = await fetchMcp({ mcpUrl, mcpAuth, onStage, signal });
+  onStage?.({ stage: 'build', state: 'running', counts: null, message: null, gap: null });
+  const refreshedAt = new Date().toISOString();
+  const pack = buildCanonicalPack({ refreshedAt, mcpUrl: safeMcpUrl, packName, ...fetched });
+  const errors = validateCanonical(pack, SCHEMA);
 
-    // Build a discovery summary in the same shape the crawler returns,
-    // so the client can render BOTH path A and path B drafts with the
-    // same review component.
-    const ann = pack.metadata?.annotations || {};
-    const probesAttempted = (ann['mcp.probesAttempted'] || '').split(',').filter(Boolean);
-    const probesSucceeded = (ann['mcp.probesSucceeded'] || '').split(',').filter(Boolean);
-    const probesEmpty     = (ann['mcp.probesEmpty']     || '').split(',').filter(Boolean);
-    const probesFailed    = (ann['mcp.probesFailed']    || '').split(',').filter(Boolean);
-    const probesUnsupported = (ann['mcp.probesUnsupported'] || '').split(',').filter(Boolean);
-    // Why a family got no answer — the fetcher's last candidate error.
-    const probeErrors = {};
-    for (const [k, v] of Object.entries(ann)) {
-      if (k.startsWith('mcp.probeErrors.') && v) probeErrors[k.slice('mcp.probeErrors.'.length)] = String(v);
-    }
-
-    // Parse the capability inventory (skill → backend → product → versions)
-    // out of the flat annotation set the fetcher stamped. The studio's
-    // connect screen reads this directly to render the version-gating
-    // story up-front, before the user even commits to drafting a pack.
-    const inventoryRaw = ann['mcp.capabilities.inventory'] || '';
-    const inventory = inventoryRaw.split('|').filter(Boolean).map(row => {
-      const [skill, backend, product, mustCsv] = row.split(':');
-      return {
-        skill, backend,
-        product: product === '-' ? null : product,
-        versions: { must: (mustCsv || '').split(';').filter(Boolean) },
-      };
-    });
-    const capabilities = ann['mcp.capabilities.skillCount']
-      ? {
-          gatingMode:    ann['mcp.capabilities.gatingMode'] || 'warn',
-          protocolModel: ann['mcp.capabilities.protocolModel'] || null,
-          skillCount:    Number(ann['mcp.capabilities.skillCount'] || 0),
-          backendCount:  Number(ann['mcp.capabilities.backendCount'] || 0),
-          skills:        (ann['mcp.capabilities.skills'] || '').split(',').filter(Boolean),
-          inventory,
-        }
-      : null;
-
-    const summary = {
-      source: 'mcp',
-      mcpUrl: safeMcpUrl,
-      refreshedAt,
-      discovered: {
-        backends:        (pack.spec?.telemetry?.backends || []).length,
-        servicesDiscovered: (ann['mcp.servicesDiscovered'] || '').split(',').filter(Boolean),
-        toolsCalled:    (ann['mcp.toolsCalled']    || '').split(',').filter(Boolean),
-        toolsFailed:    (ann['mcp.toolsFailed']    || '').split(',').filter(Boolean),
-        activeAnomalies: Number(ann['mcp.activeAnomalies'] || 0),
-        // Probe-discovered facts — counts only, full data lives in the
-        // pack itself (spec.queries.recording_rules etc.)
-        recordingRules:  Number(ann['mcp.discovered.recording_rules'] || (pack.spec?.queries?.recording_rules || []).length),
-        alertRules:      Number(ann['mcp.discovered.alert_rules'] || 0),
-        dashboards:      Number(ann['mcp.discovered.dashboards'] || (pack.spec?.dashboards || []).length),
-        scrapeJobs:     (ann['mcp.discovered.scrape_jobs'] || '').split(',').filter(Boolean),
-        // Routes read from the running Alertmanager configuration.
-        alertingRoutes:  Number(ann['mcp.discovered.alerting_routes'] || 0),
-        // Alerting rules that guard a recorded SLO (read as burn-rate
-        // entries) and the operational ones that guard none.
-        alertRulesLinked:      Number(ann['mcp.discovered.alert_rules_linked'] || 0),
-        alertRulesOperational: Number(ann['mcp.discovered.alert_rules_operational'] || 0),
-        // Products the MCP can speak to that showed no sign of running:
-        // supported, not deployed — never listed as backends.
-        supportedOnly:  (ann['mcp.capabilities.unobserved'] || '').split(',').filter(Boolean),
-        // Artefact families this fetch had no way to look at, with why
-        // (observogram.unobserved.<family>) — a comparison reports them as
-        // "not checked", never as missing.
-        unobserved: Object.fromEntries(Object.entries(ann)
-          .filter(([k]) => k.startsWith('observogram.unobserved.'))
-          .map(([k, v]) => [k.slice('observogram.unobserved.'.length), String(v)])),
-        // On-wire liveness: jobs whose every target is down, and rules the
-        // ruler reports as failing to evaluate. Names, so the studio can
-        // say WHICH ones — the pack's mcp.observed.* annotations carry the
-        // per-target / per-rule detail.
-        scrapeJobsDown:         (ann['mcp.discovered.scrape_jobs_down'] || '').split(',').filter(Boolean),
-        recordingRulesUnhealthy: (ann['mcp.discovered.recording_rules_unhealthy'] || '').split(',').filter(Boolean),
-        alertRulesUnhealthy:    (ann['mcp.discovered.alert_rules_unhealthy'] || '').split(',').filter(Boolean),
-        metricNamesCount: Number(ann['mcp.discovered.metric_names_count'] || 0),
-        // tools/list inventory — what the MCP advertised vs what we matched
-        toolsExposed:    (ann['mcp.toolsExposed']    || '').split(',').filter(Boolean),
-        toolsUnmatched:  (ann['mcp.toolsUnmatched']  || '').split(',').filter(Boolean),
-        probesAttempted, probesSucceeded, probesEmpty, probesFailed,
-        probesUnsupported, probeErrors,
-      },
-      // Full backend_capabilities inventory — the version-gating contract.
-      // When null, the MCP didn't expose backend_capabilities (older
-      // server). When set, the studio renders the full skill → backend →
-      // product → version matrix on connect.
-      capabilities,
-      // Step 2: the stack's own self-metrics and the Alertmanager /
-      // Grafana status surfaces — point-in-time samples the studio shows
-      // under "signal, not verdict". null when the fetcher predates step 2
-      // (or the surface wasn't advertised); never a Verified stamp.
-      stack: stackSummaryFromAnnotations(ann),
-      alertmanager: alertmanagerSummaryFromAnnotations(ann),
-      grafana: grafanaSummaryFromAnnotations(ann),
-      warnings: [],
-      tier: pack.metadata?.bindings?.criticality || 'tier-3',
-    };
-
-    // The strip is never silent.
-    const strippedNote = droppedNote(dropped, { where: 'not kept in the draft' });
-    if (strippedNote) summary.warnings.push(strippedNote);
-    // Warnings — only flag a gap when we ASKED and got nothing, never
-    // when we never asked. The MCP probe table is the contract for
-    // "what we tried."
-    if ((summary.discovered.toolsFailed || []).length) {
-      summary.warnings.push(`MCP tools that failed: ${summary.discovered.toolsFailed.join(', ')}`);
-    }
-    // A family the MCP doesn't expose at all is a tier restriction, not an
-    // empty answer — one honest line, never the per-family "returned empty"
-    // narrative below.
-    if (probesUnsupported.length) {
-      summary.warnings.push(`Restricted MCP tier — families not exposed by this server: ${probesUnsupported.join(', ')}.`);
-    }
-    // The stack panel is gated on metrics_query alone; a restricted tier
-    // reads "not attempted", never "healthy" and never "absent".
-    if (summary.stack && summary.stack.status === 'not-attempted') {
-      summary.warnings.push(/not exposed/.test(summary.stack.reason || '')
-        ? 'Stack self-metrics not attempted — metrics_query not exposed by this MCP tier.'
-        : `Stack self-metrics not attempted — ${summary.stack.reason || 'no reason recorded'}.`);
-    }
-    if (summary.alertmanager?.error) {
-      summary.warnings.push(`Alertmanager status probe failed — ${summary.alertmanager.error}`);
-    }
-    if (summary.grafana?.error) {
-      summary.warnings.push(`Grafana status probe failed — ${summary.grafana.error}`);
-    }
-    const attemptedNothing = (k) => probesAttempted.includes(k) && !probesSucceeded.includes(k) && !probesUnsupported.includes(k);
-    if (attemptedNothing('recording_rules')) {
-      summary.warnings.push('Recording-rule probes returned empty. The SLI/SLO sections were synthesised from system_health — if your platform has Prometheus/Mimir rules, the MCP isn\'t exposing them yet.');
-    }
-    if (attemptedNothing('alert_rules')) {
-      summary.warnings.push('Alert-rule probes returned empty. Burn-rate alerts are synthesized from SLOs; existing fired alerts couldn\'t be surfaced.');
-    }
-    if (attemptedNothing('dashboards')) {
-      summary.warnings.push(probesFailed.includes('dashboards')
-        ? `The dashboards probe got no answer${probeErrors.dashboards ? ` (${probeErrors.dashboards})` : ''}. The dashboards section is a stub, and a comparison reports declared dashboards as not checked — not as missing.`
-        : 'Dashboard probes returned empty. The dashboards section is a stub — point the MCP at Grafana\'s /api/search to populate it.');
-    }
-    if (attemptedNothing('alerting_routes')) {
-      summary.warnings.push(`The running Alertmanager configuration could not be read${probeErrors.alerting_routes ? ` (${probeErrors.alerting_routes})` : ''}. The route in the draft is a placeholder, and a comparison reports declared routes as not checked.`);
-    }
-    if (attemptedNothing('scrape_configs')) {
-      summary.warnings.push('Scrape-config probes returned empty. spec.telemetry.scrape_evidence is unknown — declare scrape jobs in the pack by hand if you can.');
-    }
-    if (attemptedNothing('metric_names')) {
-      summary.warnings.push('Metric-inventory probes returned empty. The metrics actually exported by the platform couldn\'t be enumerated.');
-    }
-    // Hard guards regardless of probes (the live state has to satisfy SOMETHING).
-    if ((pack.spec?.slis || []).length === 0) {
-      summary.warnings.push('No SLIs at all — recording rules + system_health both came up empty.');
-    }
-
-    const conformance = evaluateConformance(pack);
-    const canonicalYaml = banner(pack) + emitYaml(pack);
-    // Register only if validation passes; bad packs aren't addressable.
-    // Prefer the caller-supplied label (the quick-start cases pass
-    // something friendlier than the auto-generated metadata name).
-    const friendlyLabel = (typeof body.label === 'string' && body.label.trim())
-      ? body.label.trim()
-      : `${pack.metadata?.name || 'mcp-draft'} (live MCP draft)`;
-    const registered = errors.length === 0
-      ? { id: registerUploadedPack(pack, friendlyLabel, friendlyLabel) }
-      : null;
-    process.stderr.write(`[draft-from-mcp]   ok in ${Date.now() - t0}ms; ` +
-      `valid=${errors.length === 0}; ` +
-      `services=${summary.discovered.backends}; ` +
-      `registered=${registered?.id || '-'}; ` +
-      `failed=${summary.discovered.toolsFailed.join(',') || 'none'}\n`);
-
-    res.json({
-      ok: true,
-      canonical: pack,
-      canonicalYaml,
-      summary,
-      annotations: ann,
-      validation: { ok: errors.length === 0, errors },
-      conformance,
-      registered,
-      tookMs: Date.now() - t0,
-    });
-  } catch (e) {
-    process.stderr.write(`[draft-from-mcp]   error in ${Date.now() - t0}ms: ${redactCredentials(e.message)}\n`);
-    res.status(502).json({ ok: false, error: e.message, tookMs: Date.now() - t0 });
+  // Build a discovery summary in the same shape the crawler returns,
+  // so the client can render BOTH path A and path B drafts with the
+  // same review component.
+  const ann = pack.metadata?.annotations || {};
+  const probesAttempted = (ann['mcp.probesAttempted'] || '').split(',').filter(Boolean);
+  const probesSucceeded = (ann['mcp.probesSucceeded'] || '').split(',').filter(Boolean);
+  const probesEmpty     = (ann['mcp.probesEmpty']     || '').split(',').filter(Boolean);
+  const probesFailed    = (ann['mcp.probesFailed']    || '').split(',').filter(Boolean);
+  const probesUnsupported = (ann['mcp.probesUnsupported'] || '').split(',').filter(Boolean);
+  // Why a family got no answer — the fetcher's last candidate error.
+  const probeErrors = {};
+  for (const [k, v] of Object.entries(ann)) {
+    if (k.startsWith('mcp.probeErrors.') && v) probeErrors[k.slice('mcp.probeErrors.'.length)] = String(v);
   }
-});
+
+  // Parse the capability inventory (skill → backend → product → versions)
+  // out of the flat annotation set the fetcher stamped. The studio's
+  // connect screen reads this directly to render the version-gating
+  // story up-front, before the user even commits to drafting a pack.
+  const inventoryRaw = ann['mcp.capabilities.inventory'] || '';
+  const inventory = inventoryRaw.split('|').filter(Boolean).map(row => {
+    const [skill, backend, product, mustCsv] = row.split(':');
+    return {
+      skill, backend,
+      product: product === '-' ? null : product,
+      versions: { must: (mustCsv || '').split(';').filter(Boolean) },
+    };
+  });
+  const capabilities = ann['mcp.capabilities.skillCount']
+    ? {
+        gatingMode:    ann['mcp.capabilities.gatingMode'] || 'warn',
+        protocolModel: ann['mcp.capabilities.protocolModel'] || null,
+        skillCount:    Number(ann['mcp.capabilities.skillCount'] || 0),
+        backendCount:  Number(ann['mcp.capabilities.backendCount'] || 0),
+        skills:        (ann['mcp.capabilities.skills'] || '').split(',').filter(Boolean),
+        inventory,
+      }
+    : null;
+
+  const summary = {
+    source: 'mcp',
+    mcpUrl: safeMcpUrl,
+    refreshedAt,
+    discovered: {
+      backends:        (pack.spec?.telemetry?.backends || []).length,
+      servicesDiscovered: (ann['mcp.servicesDiscovered'] || '').split(',').filter(Boolean),
+      toolsCalled:    (ann['mcp.toolsCalled']    || '').split(',').filter(Boolean),
+      toolsFailed:    (ann['mcp.toolsFailed']    || '').split(',').filter(Boolean),
+      activeAnomalies: Number(ann['mcp.activeAnomalies'] || 0),
+      // Probe-discovered facts — counts only, full data lives in the
+      // pack itself (spec.queries.recording_rules etc.)
+      recordingRules:  Number(ann['mcp.discovered.recording_rules'] || (pack.spec?.queries?.recording_rules || []).length),
+      alertRules:      Number(ann['mcp.discovered.alert_rules'] || 0),
+      dashboards:      Number(ann['mcp.discovered.dashboards'] || (pack.spec?.dashboards || []).length),
+      scrapeJobs:     (ann['mcp.discovered.scrape_jobs'] || '').split(',').filter(Boolean),
+      // Routes read from the running Alertmanager configuration.
+      alertingRoutes:  Number(ann['mcp.discovered.alerting_routes'] || 0),
+      // Alerting rules that guard a recorded SLO (read as burn-rate
+      // entries) and the operational ones that guard none.
+      alertRulesLinked:      Number(ann['mcp.discovered.alert_rules_linked'] || 0),
+      alertRulesOperational: Number(ann['mcp.discovered.alert_rules_operational'] || 0),
+      // Products the MCP can speak to that showed no sign of running:
+      // supported, not deployed — never listed as backends.
+      supportedOnly:  (ann['mcp.capabilities.unobserved'] || '').split(',').filter(Boolean),
+      // Artefact families this fetch had no way to look at, with why
+      // (observogram.unobserved.<family>) — a comparison reports them as
+      // "not checked", never as missing.
+      unobserved: Object.fromEntries(Object.entries(ann)
+        .filter(([k]) => k.startsWith('observogram.unobserved.'))
+        .map(([k, v]) => [k.slice('observogram.unobserved.'.length), String(v)])),
+      // On-wire liveness: jobs whose every target is down, and rules the
+      // ruler reports as failing to evaluate. Names, so the studio can
+      // say WHICH ones — the pack's mcp.observed.* annotations carry the
+      // per-target / per-rule detail.
+      scrapeJobsDown:         (ann['mcp.discovered.scrape_jobs_down'] || '').split(',').filter(Boolean),
+      recordingRulesUnhealthy: (ann['mcp.discovered.recording_rules_unhealthy'] || '').split(',').filter(Boolean),
+      alertRulesUnhealthy:    (ann['mcp.discovered.alert_rules_unhealthy'] || '').split(',').filter(Boolean),
+      metricNamesCount: Number(ann['mcp.discovered.metric_names_count'] || 0),
+      // tools/list inventory — what the MCP advertised vs what we matched
+      toolsExposed:    (ann['mcp.toolsExposed']    || '').split(',').filter(Boolean),
+      toolsUnmatched:  (ann['mcp.toolsUnmatched']  || '').split(',').filter(Boolean),
+      probesAttempted, probesSucceeded, probesEmpty, probesFailed,
+      probesUnsupported, probeErrors,
+    },
+    // Full backend_capabilities inventory — the version-gating contract.
+    // When null, the MCP didn't expose backend_capabilities (older
+    // server). When set, the studio renders the full skill → backend →
+    // product → version matrix on connect.
+    capabilities,
+    // Step 2: the stack's own self-metrics and the Alertmanager /
+    // Grafana status surfaces — point-in-time samples the studio shows
+    // under "signal, not verdict". null when the fetcher predates step 2
+    // (or the surface wasn't advertised); never a Verified stamp.
+    stack: stackSummaryFromAnnotations(ann),
+    alertmanager: alertmanagerSummaryFromAnnotations(ann),
+    grafana: grafanaSummaryFromAnnotations(ann),
+    warnings: [],
+    tier: pack.metadata?.bindings?.criticality || 'tier-3',
+  };
+
+  // The strip is never silent.
+  const strippedNote = droppedNote(dropped, { where: 'not kept in the draft' });
+  if (strippedNote) summary.warnings.push(strippedNote);
+  // Warnings — only flag a gap when we ASKED and got nothing, never
+  // when we never asked. The MCP probe table is the contract for
+  // "what we tried."
+  if ((summary.discovered.toolsFailed || []).length) {
+    summary.warnings.push(`MCP tools that failed: ${summary.discovered.toolsFailed.join(', ')}`);
+  }
+  // A family the MCP doesn't expose at all is a tier restriction, not an
+  // empty answer — one honest line, never the per-family "returned empty"
+  // narrative below.
+  if (probesUnsupported.length) {
+    summary.warnings.push(`Restricted MCP tier — families not exposed by this server: ${probesUnsupported.join(', ')}.`);
+  }
+  // The stack panel is gated on metrics_query alone; a restricted tier
+  // reads "not attempted", never "healthy" and never "absent".
+  if (summary.stack && summary.stack.status === 'not-attempted') {
+    summary.warnings.push(/not exposed/.test(summary.stack.reason || '')
+      ? 'Stack self-metrics not attempted — metrics_query not exposed by this MCP tier.'
+      : `Stack self-metrics not attempted — ${summary.stack.reason || 'no reason recorded'}.`);
+  }
+  if (summary.alertmanager?.error) {
+    summary.warnings.push(`Alertmanager status probe failed — ${summary.alertmanager.error}`);
+  }
+  if (summary.grafana?.error) {
+    summary.warnings.push(`Grafana status probe failed — ${summary.grafana.error}`);
+  }
+  const attemptedNothing = (k) => probesAttempted.includes(k) && !probesSucceeded.includes(k) && !probesUnsupported.includes(k);
+  if (attemptedNothing('recording_rules')) {
+    summary.warnings.push('Recording-rule probes returned empty. The SLI/SLO sections were synthesised from system_health — if your platform has Prometheus/Mimir rules, the MCP isn\'t exposing them yet.');
+  }
+  if (attemptedNothing('alert_rules')) {
+    summary.warnings.push('Alert-rule probes returned empty. Burn-rate alerts are synthesized from SLOs; existing fired alerts couldn\'t be surfaced.');
+  }
+  if (attemptedNothing('dashboards')) {
+    summary.warnings.push(probesFailed.includes('dashboards')
+      ? `The dashboards probe got no answer${probeErrors.dashboards ? ` (${probeErrors.dashboards})` : ''}. The dashboards section is a stub, and a comparison reports declared dashboards as not checked — not as missing.`
+      : 'Dashboard probes returned empty. The dashboards section is a stub — point the MCP at Grafana\'s /api/search to populate it.');
+  }
+  if (attemptedNothing('alerting_routes')) {
+    summary.warnings.push(`The running Alertmanager configuration could not be read${probeErrors.alerting_routes ? ` (${probeErrors.alerting_routes})` : ''}. The route in the draft is a placeholder, and a comparison reports declared routes as not checked.`);
+  }
+  if (attemptedNothing('scrape_configs')) {
+    summary.warnings.push('Scrape-config probes returned empty. spec.telemetry.scrape_evidence is unknown — declare scrape jobs in the pack by hand if you can.');
+  }
+  if (attemptedNothing('metric_names')) {
+    summary.warnings.push('Metric-inventory probes returned empty. The metrics actually exported by the platform couldn\'t be enumerated.');
+  }
+  // Hard guards regardless of probes (the live state has to satisfy SOMETHING).
+  if ((pack.spec?.slis || []).length === 0) {
+    summary.warnings.push('No SLIs at all — recording rules + system_health both came up empty.');
+  }
+
+  const conformance = evaluateConformance(pack);
+  const canonicalYaml = banner(pack) + emitYaml(pack);
+  onStage?.({
+    stage: 'build',
+    state: errors.length === 0 ? 'done' : 'failed',
+    counts: { ...livePackCounts(pack), errors: errors.length, bytes: Buffer.byteLength(canonicalYaml) },
+    message: errors.length === 0 ? null : `the draft failed schema validation (${errors.length} error${errors.length === 1 ? '' : 's'})`,
+    gap: null,
+  });
+  // Register only if validation passes; bad packs aren't addressable.
+  // Prefer the caller-supplied label (the quick-start cases pass
+  // something friendlier than the auto-generated metadata name).
+  const friendlyLabel = (typeof label === 'string' && label.trim())
+    ? label.trim()
+    : `${pack.metadata?.name || 'mcp-draft'} (live MCP draft)`;
+  const registered = errors.length === 0
+    ? { id: await register(pack, friendlyLabel) }
+    : null;
+  process.stderr.write(`[${tag}]   ok in ${Date.now() - t0}ms; ` +
+    `valid=${errors.length === 0}; ` +
+    `services=${summary.discovered.backends}; ` +
+    `registered=${registered?.id || '-'}; ` +
+    `failed=${summary.discovered.toolsFailed.join(',') || 'none'}\n`);
+
+  return {
+    ok: true,
+    canonical: pack,
+    canonicalYaml,
+    summary,
+    annotations: ann,
+    validation: { ok: errors.length === 0, errors },
+    conformance,
+    registered,
+    mcpEndpoint,
+    tookMs: Date.now() - t0,
+  };
+}
 
 function banner(pack) {
   return [
@@ -1451,14 +1718,18 @@ function banner(pack) {
   ].join('\n');
 }
 
+// Body: { mcpUrl | mcpEndpointId, mcpAuth? } (as draft-from-mcp). The
+// response says which record was used (mcpEndpoint: { id, name } | null);
+// the live pack keeps the safe URL, never a token.
 app.post('/api/refresh-live', authorize('POST /api/refresh-live'), async (req, res) => {
   const body = req.body || {};
-  const mcpUrl = typeof body.mcpUrl === 'string' && body.mcpUrl.trim() ? body.mcpUrl.trim() : null;
-  const mcpAuth = typeof body.mcpAuth === 'string' && body.mcpAuth ? body.mcpAuth : null;
-  if (!mcpUrl) return res.status(400).json({ ok: false, error: 'mcpUrl required in JSON body' });
-  const { error: mcpUrlError, safeUrl: safeMcpUrl } = validateMcpUrl(mcpUrl);
-  if (mcpUrlError) return res.status(400).json({ ok: false, error: mcpUrlError });
+  const target = resolveMcpTarget(currentStore(), body, { forWrite: false, caller: mcpCallerOf(req) });
+  if (target.status) return res.status(target.status).json(mcpRefusalBody(target));
+  const { mcpUrl, safeMcpUrl, mcpAuth, endpoint: mcpEndpoint } = target;
   const { dropped } = stripMcpUrl(mcpUrl);
+  // The audit (STORE_PLAN slice 5): the principal is checked before any
+  // fetch or file write — a missing actor (a bug) writes nothing, 500.
+  try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 
   const t0 = Date.now();
   try {
@@ -1475,17 +1746,31 @@ app.post('/api/refresh-live', authorize('POST /api/refresh-live'), async (req, r
     process.stderr.write(`[refresh-live]   ok in ${Date.now() - t0}ms; ` +
       `services=${pack.metadata.annotations['mcp.servicesDiscovered'] || '(none)'} ` +
       `failed=${pack.metadata.annotations['mcp.toolsFailed'] || 'none'}\n`);
+    // The row, after the file: the MCP origin (never the URL), the record
+    // used, and counts from the comma-list annotations.
+    const listCount = (v) => (typeof v === 'string' ? v.split(',').filter(Boolean).length : 0);
+    const auditError = auditAfter(req, {
+      action: 'live.refresh', targetKind: 'live', targetId: mcpUrlOrigin(safeMcpUrl),
+      detail: {
+        mcpEndpoint, refreshedAt,
+        servicesDiscovered: listCount(pack.metadata.annotations['mcp.servicesDiscovered']),
+        toolsFailed: listCount(pack.metadata.annotations['mcp.toolsFailed']),
+      },
+    }, { tag: 'refresh-live' });
     const note = droppedNote(dropped);
     res.json({
       ok: true,
       refreshedAt,
       pack: adapt(pack),
       annotations: pack.metadata.annotations,
+      mcpEndpoint,
       ...(note ? { note } : {}),
+      ...(auditError ? { auditError } : {}),
     });
   } catch (e) {
-    process.stderr.write(`[refresh-live]   error in ${Date.now() - t0}ms: ${redactCredentials(e.message)}\n`);
-    res.status(502).json({ ok: false, error: e.message, details: e.details });
+    const error = redactTarget(e.message, target);
+    process.stderr.write(`[refresh-live]   error in ${Date.now() - t0}ms: ${error}\n`);
+    res.status(502).json({ ok: false, error, details: e.details });
   }
 });
 
@@ -1554,7 +1839,7 @@ app.post('/api/crawl', authorize('POST /api/crawl'), (req, res) => {
       ? body.label.trim()
       : `${opts.repoName || canonical.metadata?.name || 'crawl'} (scanned)`;
     const registered = validationErrors.length === 0
-      ? { id: registerUploadedPack(canonical, friendlyLabel, friendlyLabel) }
+      ? { id: registerUploadedPack(req, canonical, friendlyLabel, friendlyLabel) }
       : null;
     process.stderr.write(`[crawl] ${entries.length} files, ${summary.files.classified} classified, ${Object.keys(evidence).length} evidence, tier=${summary.inferred.tier}, valid=${validationErrors.length === 0}, registered=${registered?.id || '-'}, ${Date.now() - t0}ms\n`);
     res.json({
@@ -1675,16 +1960,10 @@ app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, r
       });
     }
 
-    // 5. Run the SAME crawler the upload path uses.
-    // Default the repoName to a Slug-pattern-compliant variant of the
-    // repo path (owner-repo, lowercase, slashes → hyphens, dots
-    // collapsed) so the canonical pack's metadata.name validates against
-    // the spec's `^[a-z][a-z0-9_-]*[a-z0-9]$` pattern.
-    const defaultRepoName = `${owner}-${repo}`
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 64);
+    // 5. Run the SAME crawler the upload path uses. The default name is the
+    // raw `owner-repo`: the library normalizes it to a spec Slug (one rule
+    // for the three doors; the original rides in crawler.nameNormalizedFrom).
+    const defaultRepoName = `${owner}-${repo}`;
     const opts = {
       repoName: typeof body.repoName === 'string' && body.repoName.trim()
         ? body.repoName.trim() : defaultRepoName,
@@ -1702,7 +1981,7 @@ app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, r
       ? body.label.trim()
       : `${owner}/${repo} (repo scan)`;
     const registered = validationErrors.length === 0
-      ? { id: registerUploadedPack(canonical, friendlyLabel, friendlyLabel) }
+      ? { id: registerUploadedPack(req, canonical, friendlyLabel, friendlyLabel) }
       : null;
 
     summary.source = 'github';
@@ -1766,7 +2045,7 @@ app.post('/api/validate', authorize('POST /api/validate'), (req, res) => {
     // client describe where the pack came from (file name, crawl target,
     // mcp URL); falls back to the canonical's metadata.name.
     const sourceHint = typeof req.query.source === 'string' && req.query.source ? req.query.source : null;
-    const id = registerUploadedPack(canonical, sourceHint || canonical.metadata?.name || 'upload');
+    const id = registerUploadedPack(req, canonical, sourceHint || canonical.metadata?.name || 'upload');
     // A library-built pack (docs/BUILD_JOURNEY.md, Placeholders) is conformant
     // on paper: the rubric reads no annotations, so a pager route of
     // `pagerduty://<svc>` satisfies its clause like a real one. Only the
@@ -2001,7 +2280,7 @@ app.post('/api/library/register', authorize('POST /api/library/register'), (req,
     const { canonical: overlaid } = overlaidCanonical(canonical, env);
     const conformance = evaluateConformance(overlaid);
     const summary = librarySummaryFor(overlaid) || validationSummary(overlaid, []);
-    const id = registerUploadedPack(canonical, source);
+    const id = registerUploadedPack(req, canonical, source);
     res.json({ ok: true, registered: { id, source }, adapted, conformance, summary });
   } catch (e) {
     res.status(400).json({ ok: false, errors: [e.message] });
@@ -2021,14 +2300,35 @@ app.use('/lib', express.static(resolve(ROOT, 'tools/lib'), {
   },
 }));
 
-app.use(express.static(STUDIO_DIR, { extensions: ['html'], index: 'index.html' }));
+// The studio shell (studio/index.html), one way out for every path that
+// serves it: `/`, `/index.html` and the SPA fallback below. Unbranded (the
+// default) it is res.sendFile — the same `send` pipeline express.static ran,
+// so the bytes and the headers (ETag, Last-Modified, Cache-Control, Accept-
+// Ranges) are the ones the static mount used to answer. Branded
+// (OBSERVOGRAM_BRAND_FILE / OBSERVOGRAM_BRAND_*, read once in start()), it is
+// brandShellHtml's rendering, held in memory, no-cache. The static mount
+// serves no index and tries no extension, so `/index` cannot reach the
+// on-disk shell around this handler (it falls to the SPA route instead).
+const SHELL_FILE = resolve(STUDIO_DIR, 'index.html');
+let brandedShell = null;
+// The brand start() loaded (DEFAULT_BRAND until then): the audit report's
+// chrome and tokens read it through the closure above.
+let brand = DEFAULT_BRAND;
+function sendShell(req, res) {
+  if (brandedShell !== null) return res.type('html').set('Cache-Control', 'no-cache').send(brandedShell);
+  res.sendFile(SHELL_FILE);
+}
+app.get('/', authorize('GET /'), sendShell);
+app.get('/index.html', authorize('GET /index.html'), sendShell);
+
+app.use(express.static(STUDIO_DIR, { index: false }));
 
 // SPA-style fallback: any unknown GET returns the studio shell so the client
 // can route. The /api/* paths above already handled JSON requests.
 const SPA_FALLBACK = /^(?!\/api\/).*/;
 app.get(SPA_FALLBACK, authorize(`GET ${SPA_FALLBACK}`), (req, res, next) => {
   if (req.method !== 'GET') return next();
-  res.sendFile(resolve(STUDIO_DIR, 'index.html'));
+  sendShell(req, res);
 });
 
 // ---------- entrypoint ----------
@@ -2040,17 +2340,13 @@ const HOST = process.env.HOST || '127.0.0.1';
 
 export { app };
 
-// Boot step 6: rehydrate each live org's upload registry from its
-// workspace subtree. Idempotent per store: a map that exists is not
+// Boot step 6: rehydrate each live org's upload registry from its rows and
+// its workspace subtree. Idempotent per store: a map that exists is not
 // refilled (suites call start() several times in one process).
 function rehydrateOrgs(silent) {
   let restored = 0;
   for (const org of listOrgs(currentStore())) {
-    runWithOrg(org.id, () => {
-      lastRehydrated = 0;
-      uploadsMap();
-      restored += lastRehydrated;
-    });
+    runWithOrg(org.id, () => { restored += ensureOrgLoaded(currentStore()); });
   }
   if (restored && !silent) process.stdout.write(`[studio] restored ${restored} pack${restored === 1 ? '' : 's'} from workspace\n`);
 }
@@ -2081,7 +2377,40 @@ function noteLegacyLivePack(db, log, legacyPath) {
 export async function start({ port = PORT, host = HOST, silent = false, legacyLivePack = resolve(ROOT, LEGACY_LIVE_PACK) } = {}) {
   const log = (m) => { if (!silent) process.stdout.write(m + '\n'); };
   const warn = (m) => { if (!silent) process.stderr.write(m + '\n'); };
+  // The artefact taxonomy override (OBSERVOGRAM_TAXONOMY, server/taxonomy.mjs)
+  // is read first: an unreadable or invalid file refuses the start before
+  // the store is touched; a loaded one is installed process-wide for the
+  // diff and the graphs and logged here once, path only.
+  loadTaxonomy({ log });
+  // The MCP server-settings policy (OBSERVOGRAM_MCP_SETTINGS_POLICY,
+  // server/mcp-settings-policy.mjs), the taxonomy's twin: an unreadable or
+  // invalid file refuses the start before the store is touched; a loaded one
+  // is logged here once, path and rule count only.
+  loadSettingsPolicy({ log });
+  // The brand (tools/lib/brand-env.mjs loadBrand, tools/lib/brand.mjs): read
+  // here, not at import, so an in-process suite's env lands first; a bad
+  // brand file refuses the start before the store is touched. Said once,
+  // name and source (a path or 'env') only — never the file's contents.
+  brand = loadBrand();
+  brandedShell = brand.configured ? brandShellHtml(readFileSync(SHELL_FILE, 'utf8'), brand) : null;
+  if (brand.configured) log(`[studio] brand: ${brand.name} (${brandSource() === 'env' ? 'OBSERVOGRAM_BRAND_* env' : brandSource()})`);
   const { db, ctx } = await bootStore({ host, log, warn });
+  // The notify hooks (server/notify-target-policy.mjs notifyBootReport): a
+  // hook is registered by setting its variables and starting the server, so
+  // the start checks every one that is set — a hook a run would refuse, a
+  // name another org's id shadows, a name no org owns — one line each,
+  // variables and org ids only, never a value or an origin. Nothing when no
+  // such variable is set.
+  for (const line of notifyBootReport(db, process.env)) warn(line);
+  // The MCP transport hook (OBSERVOGRAM_TRANSPORT_HOOK, tools/mcp-transport.mjs)
+  // loads once per process: a hook that cannot load refuses the start, and
+  // every MCP call the routes make (refresh, draft, deploy) goes through it.
+  // Logged here once, by this entrypoint — the loader is silent.
+  const transport = await mcpTransport();
+  if (transport.hookPath) log(`[studio] MCP transport hook: ${describeTransport(transport)}`);
+  // Identity from a reverse proxy (OBSERVOGRAM_TRUST_PROXY_AUTH=1,
+  // server/auth-proxy.mjs): said once here, header names only, never the secret.
+  if (ctx.proxyAuth) log(`[studio] identity from the reverse proxy: ${describeProxyAuth(ctx.proxyAuth)}`);
   if (localUsersEnabled()) touchSessionSecret();
   // Journeys/runs live in the engine (tools/lib/journey.mjs) — wire its
   // root through the same context-aware resolver the registry uses.
@@ -2107,6 +2436,9 @@ export async function start({ port = PORT, host = HOST, silent = false, legacyLi
       resolveListen(srv);
     });
     srv.on('error', reject);
+    // The live jobs run in this process's memory: a server that stops
+    // aborts them (each fails, saying so; every timer is unref()'d).
+    srv.on('close', abortAllLiveJobs);
   });
 }
 

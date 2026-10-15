@@ -32,7 +32,9 @@ flowchart TD
     F --> G{"Ready to continue?"}
     G -->|"Resolve or adjust"| D
     G -->|"Open pack in Discover (with visible gaps)"| H["Pack available in Discover"]
+    F -->|"Open pack in Discover"| H2["Service row written: tier, owners"] --> H
     C --> H
+    C --> C2["Service page<br/>environments · verdict · endpoint"] --> H
     H --> I["DISCOVER<br/>What do we have?"]
     I --> J["DIAGNOSE<br/>How reliable is this pack?"]
     J --> K["REMEDIATE<br/>Resolve gaps"]
@@ -52,8 +54,13 @@ returns to DEFINE; *Open pack in Discover with visible gaps* (*Open pack in Disc
 no placeholder remains) registers the produced pack in the studio's upload registry (the
 same path an uploaded pack takes) and switches to the existing journey:
 Discover shows its layers, Diagnose compares it with a live pack, Remediate compiles
-and deploys the delta. Nothing in Discover / Diagnose / Remediate changes; a
-library-built pack is an ordinary canonical pack with provenance annotations.
+and deploys the delta — and **writes the service row**: the register links the pack to
+the service by slug and creates its environment; Build then sets the record's tier and
+owners from DEFINE where the record has none — a tier a person already set is never
+overwritten, the mismatch is shown; a pack whose name yields another slug lands under a
+new service and the origin is left alone — DEFINE says so first. Nothing in Discover /
+Diagnose / Remediate changes; a library-built pack is an ordinary canonical pack with
+provenance annotations.
 
 ## The screens, after the 2026-09 UX review
 
@@ -273,7 +280,7 @@ spliced into a 9 MB pack); the unknown-key error echoes at most ten of the unkno
 (200,000 bogus keys once made a 1.7 MB error). A value error reads `param <key>: …`, so a
 caller can point at the field. Every
 resolved SLI expression is then parsed with the parser given as `promql`: `packc init`
-passes the Lezer grammar (`tools/lib/promql-lezer.mjs`, an npm import, Node-only) and a
+passes the Lezer grammar (`tools/lib/promql-lezer.mjs`, an npm import: Node, or the static bundle's import map) and a
 failure is a `warnings` entry of kind `promql`, which makes the CLI exit 1. The
 browser-safe core (`tools/lib/promql.mjs`) extracts dependencies and reports no grammar
 error, so a caller with no parser gets no `promql` warning: the studio (slice 2) runs the
@@ -308,7 +315,7 @@ packc init --entry <id>[,<id>] --tier tier-2 --name <svc> [--env <env>] [--owner
 ```
 
 YAML to stdout (or `--out`), the todo list, the warnings and the conformance line to
-stderr; exit `0` ok, `1` the produced pack does not validate against the v1.3 schema (a
+stderr; exit `0` ok, `1` the produced pack does not validate against the v1.4 schema (a
 section toggled off), fails a MUST clause of its tier (a `--slis` selection with no
 latency SLO at tier-2: `packc journey`'s "gate failed", so a CI caller can tell `MUST
 14/15` from `15/15`), an SLI is not valid PromQL once the `--param` values are in, or an
@@ -969,12 +976,21 @@ the metric; the CLI).
 
 ## What the next slices add
 
+- **Build from a service page** — done (STORE_PLAN slice 6a): *Build a pack for
+  `<env>`* on the service page opens DEFINE prefilled from the record (name,
+  owners, tier, the environment) with the record as the origin; a kept draft is
+  left as it was and said so; the hand-off writes the row as above.
 - **Slice 3.** Seeding DEFINE from a repo scan or a live MCP draft (the crawler's
   discovered backends and scrape jobs pre-select entries and fill params); live
   metric-name verification of an entry's `metrics[]` through the MCP capability
   registry, promoting `semconv` / `upstream-docs` evidence to a recorded one per
   deployment; library-upgrade proposals in Remediate (a pack whose `library.source`
   is behind the shipped entry version gets the diff as a remediation).
+- **Updating a pack that exists.** Build cannot open a pack once it is registered:
+  the draft holds inputs only, and a second SLO on an SLI, a burn alert with its
+  own windows and a fourth route are outside what the generator writes. The
+  journey for it — *Build or update a pack* — is proposed in
+  [`UPDATE_JOURNEY.md`](UPDATE_JOURNEY.md).
 
 ## Open questions
 

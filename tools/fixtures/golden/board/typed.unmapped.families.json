@@ -1,0 +1,70 @@
+{
+  "L1::checkout-error-budget-sli": {
+    "family": "sli",
+    "via": "type"
+  },
+  "L1::svc-checkout-availability": {
+    "family": "unknown",
+    "via": "none"
+  },
+  "L1::svc-checkout-latency": {
+    "family": "unknown",
+    "via": "none"
+  },
+  "L1::svc-checkout-slo-availability": {
+    "family": "unknown",
+    "via": "none"
+  },
+  "L1::svc-checkout-slo-latency": {
+    "family": "unknown",
+    "via": "none"
+  },
+  "L2::mimir-main": {
+    "family": "backend",
+    "via": "type"
+  },
+  "L2::otel-contract-checkout": {
+    "family": "unknown",
+    "via": "none"
+  },
+  "L3::grafana-uid-9f2": {
+    "family": "unknown",
+    "via": "none"
+  },
+  "L3::grafana-uid-a41": {
+    "family": "unknown",
+    "via": "none"
+  },
+  "L3::rr-checkout-error-ratio": {
+    "family": "unknown",
+    "via": "none"
+  },
+  "L3::rr-checkout-latency-p99": {
+    "family": "unknown",
+    "via": "none"
+  },
+  "L4:alerting:promrule-HighErrorRate": {
+    "family": "unknown",
+    "via": "none"
+  },
+  "L4:alerting:promrule-LatencyBudgetBurn": {
+    "family": "unknown",
+    "via": "none"
+  },
+  "L4:alerting:route-sev1-pager": {
+    "family": "unknown",
+    "via": "none"
+  },
+  "L4:alerting:route-sev2-chat": {
+    "family": "unknown",
+    "via": "none"
+  },
+  "L4:healing:heal-rollout-restart": {
+    "family": "remediation",
+    "via": "type"
+  },
+  "L4:policy:burn-checkout-fast": {
+    "family": "burn_rate",
+    "via": "type"
+  }
+}

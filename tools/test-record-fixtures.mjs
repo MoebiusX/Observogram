@@ -21,7 +21,7 @@
 
 import { createServer } from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync, readdirSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -136,12 +136,14 @@ function answer(name, args, reqUrl = '') {
 
 async function startFakeMcp(toolNames) {
   const calls = [];
+  const requests = [];   // every request's headers (the transport-hook proof)
   const srv = createServer(async (req, res) => {
     let raw = '';
     req.setEncoding('utf8');
     for await (const chunk of req) raw += chunk;
     let msg = {};
     try { msg = JSON.parse(raw || '{}'); } catch { /* not JSON */ }
+    requests.push({ method: msg.method, headers: { ...req.headers } });
     const send = (result) => {
       res.writeHead(200, { 'Content-Type': 'application/json', 'Mcp-Session-Id': 'recorder-test' });
       res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id ?? 1, result }));
@@ -158,16 +160,18 @@ async function startFakeMcp(toolNames) {
   });
   await new Promise(r => srv.listen(0, '127.0.0.1', r));
   const addr = srv.address();
-  return { url: `http://${addr.address}:${addr.port}/mcp?token=${TOKEN}`, calls, close: () => new Promise(r => srv.close(r)) };
+  return { url: `http://${addr.address}:${addr.port}/mcp?token=${TOKEN}`, calls, requests, close: () => new Promise(r => srv.close(r)) };
 }
 
 // Async on purpose: the fake MCP lives in THIS process, so a spawnSync
-// would block the event loop that has to answer the recorder.
+// would block the event loop that has to answer the recorder. The child
+// never inherits a developer's transport hook (both spellings blanked); a
+// case that wants one sets it through envOverride.
 function runRecorder(url, extraArgs = [], envOverride = {}) {
   return new Promise((done) => {
     const child = spawn(process.execPath, [RECORDER, ...extraArgs], {
       cwd: ROOT,
-      env: { ...process.env, MCP_URL: url, MCP_AUTH: TOKEN, OBSERVOGRAM_DEBUG: '', ...envOverride },
+      env: { ...process.env, MCP_URL: url, MCP_AUTH: TOKEN, OBSERVOGRAM_DEBUG: '', OBSERVOGRAM_TRANSPORT_HOOK: '', TOMOGRAPH_TRANSPORT_HOOK: '', ...envOverride },
     });
     let stdout = '';
     let stderr = '';
@@ -329,8 +333,41 @@ try {
 }
 
 // ---- 4. no MCP_URL ----
-const noUrl = spawnSync(process.execPath, [RECORDER], { cwd: ROOT, env: { ...process.env, MCP_URL: '' }, encoding: 'utf8' });
+const noUrl = spawnSync(process.execPath, [RECORDER], { cwd: ROOT, env: { ...process.env, MCP_URL: '', OBSERVOGRAM_TRANSPORT_HOOK: '', TOMOGRAPH_TRANSPORT_HOOK: '' }, encoding: 'utf8' });
 assert(noUrl.status === 1 && /MCP_URL is required/.test(noUrl.stderr), 'without MCP_URL the recorder exits 1 with usage');
+
+// ---- 5. the transport hook (docs/MCP_INTEGRATION.md "Transport hook") ----
+// A hook that breaks its contract is FATAL before the --write block: exit
+// 1, no fixture written, the token (bearer and URL query) in no output. A
+// header hook reaches every request the recorder makes.
+{
+  const hooked = await startFakeMcp(FULL_TOOLS);
+  try {
+    const throwing = join(tmp, 'throwing-hook.mjs');
+    writeFileSync(throwing, 'export function prepareRequest({ url, headers }) { throw new Error(`refused ${headers.Authorization} at ${url}`); }\n');
+    const hookOut = join(tmp, 'hook-write');
+    const fatal = await runRecorder(hooked.url, ['--write', '--out', hookOut], { OBSERVOGRAM_TRANSPORT_HOOK: throwing });
+    assert(fatal.status === 1 && /^\[record-mcp-fixtures\] FATAL: transport hook .*prepareRequest threw: refused/m.test(fatal.stderr),
+      'a throwing hook: the recorder exits 1 with the FATAL line', { status: fatal.status, stderr: fatal.stderr.slice(-300) });
+    assert(!existsSync(hookOut), 'a throwing hook: --write wrote nothing (the out dir is never created)');
+    assert(!fatal.stdout.includes(TOKEN) && !fatal.stderr.includes(TOKEN) && fatal.stderr.includes('<redacted>'),
+      'a throwing hook: the token (bearer and URL query) reaches no output; the hook\'s text shows <redacted>');
+    assert(hooked.requests.length === 0, 'a throwing hook: nothing reached the fake');
+    const unloadable = await runRecorder(hooked.url, [], { OBSERVOGRAM_TRANSPORT_HOOK: join(tmp, 'nope.mjs') });
+    assert(unloadable.status === 1 && /FATAL: OBSERVOGRAM_TRANSPORT_HOOK: cannot load/.test(unloadable.stderr), 'a hook that cannot load: exit 1 before any probe', unloadable.stderr.slice(-300));
+
+    const gateway = join(tmp, 'gateway-hook.mjs');
+    writeFileSync(gateway, 'export function prepareRequest({ url, headers }) { return { url, headers: { ...headers, "X-Gateway": "recorder" } }; }\n');
+    hooked.requests.length = 0;
+    const ok = await runRecorder(hooked.url, ['--out', join(tmp, 'hook-report')], { OBSERVOGRAM_TRANSPORT_HOOK: gateway });
+    assert(ok.status === 0, 'a header hook: the report runs', { status: ok.status, stderr: ok.stderr.slice(-300) });
+    assert(hooked.requests.length > 0 && hooked.requests.every(r => r.headers['x-gateway'] === 'recorder'),
+      `a header hook: every one of the fake's ${hooked.requests.length} requests carries X-Gateway`, hooked.requests.filter(r => r.headers['x-gateway'] !== 'recorder').map(r => r.method));
+    assert(!ok.stdout.includes(TOKEN) && !ok.stderr.includes(TOKEN), 'a header hook: the token still reaches no output');
+  } finally {
+    await hooked.close();
+  }
+}
 
 rmSync(tmp, { recursive: true, force: true });
 report('record-fixtures', 'the recorder reports honestly, records the README\'s fixtures, and never leaks the token.');

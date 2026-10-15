@@ -32,3 +32,22 @@ export function symbolSlug(s) {
 // (`<prefix>:<sli>:…`, `<prefix>:inventory:<kind>`), so it lives here, a leaf module, and
 // burn-rules.mjs re-exports it: a downstream that vendors only the site core needs no more.
 export const metricPrefix = (name) => fileSlug(String(name ?? 'pack'), 'pack').replace(/-/g, '_');
+
+// The spec Slug (`$defs.Slug`: ^[a-z][a-z0-9_-]*[a-z0-9]$, 2..64) for a value the
+// crawler must spell canonically — a folder name, an environment, an owner:
+// lowercase; every run outside [a-z0-9_-] → '-'; '-' runs collapsed; leading
+// '-'/'_' stripped; PREFIXED (never truncated at the front) when the first
+// character is not a letter (`1password` → `svc-1password`); cut at 64, then
+// trailing non-alphanumerics trimmed; fewer than 2 characters → `fallback`.
+// Mirrors the schema pattern by hand (a browser-safe module cannot read the
+// schema file); tools/test-crawl-canonical.mjs pins the mirror.
+export function packSlug(s, fallback = 'crawled-service', { prefix = 'svc-' } = {}) {
+  let out = String(s ?? '').toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-_]+/, '');
+  if (out && !/^[a-z]/.test(out)) out = `${prefix}${out}`;
+  out = out.slice(0, 64).replace(/[^a-z0-9]+$/, '');
+  return out.length >= 2 ? out : fallback;
+}
+

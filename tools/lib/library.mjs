@@ -444,7 +444,7 @@ export function libraryIndex(entries) {
       sliCountByTier: Object.fromEntries(TIERS.map(t => [t, slis.filter(s => atTier(t, s.minTier)).length])),
       tiers: [...TIERS],
     };
-  }).sort((a, b) => (a.kind === b.kind ? a.id.localeCompare(b.id) : a.kind === 'product' ? -1 : 1));
+  }).sort((a, b) => (a.kind === b.kind ? a.id.localeCompare(b.id, 'en') : a.kind === 'product' ? -1 : 1));
 }
 
 /** The conformance clauses that apply at a tier — the rubric itself (tools/lib/conformance.mjs), filtered by minTier; no second rubric. */
@@ -701,8 +701,8 @@ function checkSloIds(slis) {
 
 /**
  * Every SLI expression, with the params in, must still be PromQL. The parser is an input: packc
- * init passes the Lezer grammar (tools/lib/promql-lezer.mjs, an npm import and so not for the
- * browser); the browser-safe core in tools/lib/promql.mjs extracts dependencies and reports no
+ * init passes the Lezer grammar (tools/lib/promql-lezer.mjs, an npm import: Node, or the static
+ * bundle's import map); the browser-safe core in tools/lib/promql.mjs extracts dependencies and reports no
  * grammar error, so without a parser no `promql` warning can arise and the caller has to run the
  * check where Node is. A `promql` warning means the pack must not ship as it is.
  */
@@ -1249,7 +1249,7 @@ export function instantiatePack(entryOrEntries, opts = {}) {
   const todos = [...merged.values()].map(m => {
     const clauses = uniq([...m.clauses, ...clausesFor(m.symbol, canonical, tier)]).sort();   // sorted: todosFromAnnotations reproduces the same list
     return { path: m.symbol, fields: m.fields, what: m.what.join(' · '), clause: clauses[0] || null, clauses, params: [...m.params] };
-  }).sort((a, b) => a.path.localeCompare(b.path));
+  }).sort((a, b) => a.path.localeCompare(b.path, 'en'));
 
   // Provenance and the todo annotations (flat string map, as the schema requires).
   const source = entries.map(en => `${en.id}@${en.version}`).join(',');
@@ -1351,5 +1351,5 @@ export function todosFromAnnotations(canonical) {
       const clauses = canonical?.spec ? uniq(clausesFor(path, canonical, tier)).sort() : [];
       return { path, fields, what, clause: clauses[0] || null, clauses, params };
     })
-    .sort((a, b) => a.path.localeCompare(b.path));
+    .sort((a, b) => a.path.localeCompare(b.path, 'en'));
 }

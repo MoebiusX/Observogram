@@ -1,0 +1,135 @@
+# =============================================================================
+# compare-modes / A — one side of the identity-modes fixture (rebadge batch 3,
+# C3; tools/test-identity-modes.mjs, server/test-live-studio.mjs).
+#
+# A and B are identical except for five dashboards, one backend and one alert
+# rule, chosen so the three pairing modes give three distinct count sets:
+#   - orders / errors / traffic: renamed, same uid      → pair by id only
+#   - payments / latency: same title, another uid       → pair by name only
+#   - prom-main vs compare-prometheus: same product and
+#     signal, another backend id                        → pair by behaviour only
+#   - HighLatency: same name, another expression        → pair in every mode,
+#                                                         drifted
+# =============================================================================
+
+apiVersion: observability.platform/v1
+kind: ObservabilityPack
+
+metadata:
+  name: compare-modes-a
+  version: 0.1.0
+  binding: otel-elastic-prometheus-grafana
+  owners:
+    - team-platform
+  bindings:
+    service: compare-modes
+    environments: [prod]
+    criticality: tier-3
+
+spec:
+
+  otel:
+    semconv: "1.26.0"
+    resource_attributes:
+      required:
+        - service.name
+    sdk:
+      languages: [go]
+      sampling:
+        policy: parentbased_traceidratio
+        ratio: 0.1
+      propagators: [tracecontext]
+
+  telemetry:
+    backends:
+      - id: prom-main
+        signal: metrics
+        product: prometheus
+        endpoints: [https://prom.internal:9090]
+
+  slis:
+    - id: service_availability
+      type: ratio
+      description: Successful (non-5xx) responses over total responses.
+      good:  sum(rate(http_requests_total{status_code!~"5.."}[5m]))
+      total: sum(rate(http_requests_total[5m]))
+
+  slos:
+    - id: service_availability_99
+      sli: service_availability
+      objective: 0.99
+      window: 30d
+      error_budget_policy: ref:platform/default-budget
+
+  pipelines:
+    receivers:
+      - name: otlp
+    processors:
+      - name: batch
+    exporters:
+      metrics: { kind: prometheusremotewrite }
+      logs:    { kind: elasticsearch }
+      traces:  { kind: jaeger }
+
+  queries:
+    recording_rules:
+      - name: compare:service_availability:ratio_5m
+        expr: ref:slis.service_availability
+
+  dashboards:
+    - id: orders
+      provider: { kind: grafana }
+      folder: compare
+      source: file://dashboards/orders.json
+      params: { title: Orders, uid: ord-1 }
+    - id: errors
+      provider: { kind: grafana }
+      folder: compare
+      source: file://dashboards/errors.json
+      params: { title: Errors, uid: err-1 }
+    - id: traffic
+      provider: { kind: grafana }
+      folder: compare
+      source: file://dashboards/traffic.json
+      params: { title: Traffic, uid: trf-1 }
+    - id: payments
+      provider: { kind: grafana }
+      folder: compare
+      source: file://dashboards/payments.json
+      params: { title: Payments, uid: pay-a }
+    - id: latency
+      provider: { kind: grafana }
+      folder: compare
+      source: file://dashboards/latency.json
+      params: { title: Latency, uid: lat-1 }
+
+  policy:
+    burn_rate_alerts:
+      - slo: service_availability_99
+        windows:
+          - { short: 5m,  long: 1h, factor: 14, severity: SEV1 }
+          - { short: 30m, long: 6h, factor: 6,  severity: SEV2 }
+
+  alerting:
+    routes:
+      - severity: SEV1
+        channels:
+          - { msteams: "#compare-oncall" }
+    rules:
+      - name: HighLatency
+        expr: histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket[5m]))) > 1
+        for: 5m
+        severity: SEV2
+
+  baselines:
+    mttd_target_p50: 15m
+    mttr_target_p50: 1d
+    review_cadence: monthly
+
+  validation:
+    synthetic_checks:
+      - id: compare-health-canary
+        kind: blackbox-exporter
+        target: https://compare.example.com/health
+        interval: 1m
+        on_fail_severity: SEV3

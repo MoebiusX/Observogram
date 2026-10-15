@@ -188,6 +188,121 @@ const S45 = withSched({ every: '45m' });
   assert(githubActionsWorkflow(acme) === githubActionsWorkflow(S15), 'actions: unchanged by orgRoot (a repo-committed .observogram)');
 }
 
+// --- a name the studio refuses for the journey's notify (journey-notify-env-ownership): never bound, said where it would have been ---
+{
+  const REFUSED = (e) => `${e} is not a notify hook of this org: the studio never reads it — rename it to OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  const r = { ...S15, envNames: ['MY_MCP_TOKEN'], refusedEnvNames: ['MY_HOOK_URL', 'OBSERVOGRAM_API_TOKEN', 'MY_HOOK_URL', 'MY_MCP_TOKEN', 'not a name'] };
+  assert(normaliseSnippetInput(r).refusedEnvNames.join() === 'MY_HOOK_URL,OBSERVOGRAM_API_TOKEN' && normaliseSnippetInput(S15).refusedEnvNames.length === 0,
+         'refusedEnvNames: de-duplicated, validated, minus the names bound; none by default');
+  const all = scheduleSnippets(r);
+  const lines = (f) => all[f].split('\n');
+  for (const e of ['MY_HOOK_URL', 'OBSERVOGRAM_API_TOKEN']) {
+    assert(lines('cron').includes(`# ${REFUSED(e)}`) && !all.cron.includes(`export ${e}=`), `cron: ${e} — one comment, no export`);
+    assert(lines('schtasks').includes(`REM ${REFUSED(e)}`) && !all.schtasks.includes(`setx ${e} `), `schtasks: ${e} — one REM, no setx`);
+    assert(lines('actions').includes(`          # ${REFUSED(e)}`) && !all.actions.includes(`secrets.${e}`), `actions: ${e} — a comment in the step's env, no secret`);
+    assert(lines('k8s').includes(`                # ${REFUSED(e)}`) && !all.k8s.includes(`key: ${e}`) && !all.k8s.includes(`name: ${e}`), `k8s: ${e} — a comment in the container's env, no secretKeyRef`);
+  }
+  assert(lines('cron').includes('# export MY_MCP_TOKEN=<set in your environment>') && all.actions.includes('MY_MCP_TOKEN: ${{ secrets.MY_MCP_TOKEN }}'), 'a name bound stays bound');
+  const env = parseYaml(all.k8s).spec.jobTemplate.spec.template.spec.containers[0].env.map(e => e.name);
+  assert(env.join() === 'OBSERVOGRAM_WORKSPACE,OBSERVOGRAM_JOURNEY_RUN_RETENTION,MY_MCP_TOKEN', 'k8s: the manifest parses, and binds only the names given as envNames', env);
+  for (const f of SNIPPET_FORMATS) {
+    assert(scheduleSnippets({ ...S15, refusedEnvNames: [] })[f] === scheduleSnippets(S15)[f] && scheduleSnippets({ ...S15, refusedEnvNames: ['MY_HOOK_URL'], envNames: [...S15.envNames] })[f] === scheduleSnippets(S15)[f],
+           `${f}: without a refused name (or with one already bound), byte-identical`);
+    assert(noSecret(all[f]), `${f}: no value with refused names`);
+  }
+  // A token refused beside the org's own hook (the PAIR refusal) — here another
+  // of its hooks' — is told that hook's own token, never the rename.
+  const HOOK = 'OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_URL', OWN = 'OBSERVOGRAM_ORG_ACME_NOTIFY_ONCALL_TOKEN', PAGER = 'OBSERVOGRAM_ORG_ACME_NOTIFY_PAGER_TOKEN';
+  const PAIRED = `${PAGER} is not the token of the hook ${HOOK} names: a hook's token goes only to its own URL — set the journey's notify.authEnv to ${OWN}, or remove it, before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  const pairs = [{ authEnv: PAGER, urlEnv: HOOK, tokenEnv: OWN }, { authEnv: PAGER, urlEnv: 'X_URL', tokenEnv: 'X_TOKEN' }, { authEnv: 'MY_MCP_TOKEN', urlEnv: HOOK, tokenEnv: OWN },
+    { authEnv: 'UNLISTED', urlEnv: HOOK, tokenEnv: OWN }, { authEnv: 'MY_HOOK_URL', urlEnv: 'not a name', tokenEnv: OWN }, null];
+  const p = { ...S15, envNames: ['MY_MCP_TOKEN', HOOK], refusedEnvNames: ['MY_HOOK_URL', PAGER], refusedPairs: pairs };
+  assert(JSON.stringify(normaliseSnippetInput(p).refusedPairs) === JSON.stringify([{ authEnv: PAGER, urlEnv: HOOK, tokenEnv: OWN }]) && normaliseSnippetInput(S15).refusedPairs.length === 0,
+         'refusedPairs: a refused name\'s first pair of valid names only; none by default');
+  const ps = scheduleSnippets(p);
+  for (const [f, pre] of [['cron', '# '], ['schtasks', 'REM '], ['actions', '          # '], ['k8s', '                # ']]) {
+    const ls = ps[f].split('\n');
+    assert(ls.includes(`${pre}${PAIRED}`) && !ps[f].includes(`${PAGER} is not a notify hook`), `${f}: the paired token's comment names the hook's own token, never a rename`, ls.filter(l => l.includes(PAGER)));
+    assert(ls.includes(`${pre}${REFUSED('MY_HOOK_URL')}`), `${f}: a refused name without a pair keeps its comment`);
+    assert(ps[f] === scheduleSnippets({ ...p, refusedPairs: undefined })[f].replace(REFUSED(PAGER), PAIRED), `${f}: only the paired token's comment differs`);
+  }
+  // Another of the org's hook tokens refused beside a refused urlEnv (refusedHookTokens) is the org's own: never
+  // "not a notify hook of this org", nor a rename to the shape it has — the urlEnv of its own hook, or no authEnv.
+  const PAGER_URL = 'OBSERVOGRAM_ORG_ACME_NOTIFY_PAGER_URL';
+  const OWNED = `${PAGER} is the token of the hook ${PAGER_URL} names, not of the journey's notify.urlEnv: a hook's token goes only to its own URL — set the journey's notify.urlEnv to ${PAGER_URL}, or remove notify.authEnv, before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  const tokens = [{ authEnv: PAGER, urlEnv: PAGER_URL }, { authEnv: PAGER, urlEnv: 'X_URL' }, { authEnv: 'MY_MCP_TOKEN', urlEnv: PAGER_URL },
+    { authEnv: 'UNLISTED', urlEnv: PAGER_URL }, { authEnv: 'MY_HOOK_URL', urlEnv: 'not a name' }, null];
+  const o = { ...S15, envNames: ['MY_MCP_TOKEN'], refusedEnvNames: ['MY_HOOK_URL', PAGER], refusedHookTokens: tokens };
+  assert(JSON.stringify(normaliseSnippetInput(o).refusedHookTokens) === JSON.stringify([{ authEnv: PAGER, urlEnv: PAGER_URL }]) && normaliseSnippetInput(S15).refusedHookTokens.length === 0,
+         'refusedHookTokens: a refused name\'s first entry of valid names only; none by default');
+  const os = scheduleSnippets(o);
+  for (const [f, pre] of [['cron', '# '], ['schtasks', 'REM '], ['actions', '          # '], ['k8s', '                # ']]) {
+    const ls = os[f].split('\n');
+    assert(ls.includes(`${pre}${OWNED}`) && !os[f].includes(`${PAGER} is not a notify hook`), `${f}: the org's hook token names its own hook's URL, never a rename`, ls.filter(l => l.includes(PAGER)));
+    assert(ls.includes(`${pre}${REFUSED('MY_HOOK_URL')}`), `${f}: the refused urlEnv keeps its comment`);
+    assert(os[f] === scheduleSnippets({ ...o, refusedHookTokens: undefined })[f].replace(REFUSED(PAGER), OWNED), `${f}: only the hook token's comment differs`);
+    assert(noSecret(os[f]), `${f}: no value with refusedHookTokens`);
+  }
+  // The org's hook token named as notify.urlEnv itself (refusedUrlTokens) — alone, or as the authEnv too, when the
+  // route's refusedEnvNames holds it once and its refusedHookTokens names it — is told it is refused as notify.urlEnv
+  // and its own hook's URL: never only to remove notify.authEnv, which leaves the urlEnv naming the token, refused.
+  const AS_URL = `${OWN} is the token of the hook ${HOOK} names, refused as the journey's notify.urlEnv: the studio posts only to a hook's URL — set the journey's notify.urlEnv to ${HOOK}, and its notify.authEnv to ${OWN} or leave it out, before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  const urlTokens = [{ tokenEnv: OWN, urlEnv: HOOK }, { tokenEnv: OWN, urlEnv: 'X_URL' }, { tokenEnv: 'MY_MCP_TOKEN', urlEnv: HOOK },
+    { tokenEnv: 'UNLISTED', urlEnv: HOOK }, { tokenEnv: 'MY_HOOK_URL', urlEnv: 'not a name' }, null];
+  const alone = { ...S15, envNames: ['MY_MCP_TOKEN'], refusedEnvNames: [OWN] };
+  const u = { ...alone, refusedUrlTokens: urlTokens };
+  assert(JSON.stringify(normaliseSnippetInput(u).refusedUrlTokens) === JSON.stringify([{ tokenEnv: OWN, urlEnv: HOOK }]) && normaliseSnippetInput(S15).refusedUrlTokens.length === 0,
+         'refusedUrlTokens: a refused name\'s first entry of valid names only; none by default');
+  for (const [label, input] of [['alone', u], ['as the authEnv too', { ...u, refusedHookTokens: [{ authEnv: OWN, urlEnv: HOOK }] }]]) {
+    const us = scheduleSnippets(input);
+    for (const [f, pre] of [['cron', '# '], ['schtasks', 'REM '], ['actions', '          # '], ['k8s', '                # ']]) {
+      const ls = us[f].split('\n');
+      assert(ls.filter(l => l.includes(OWN)).join('\n') === `${pre}${AS_URL}`, `${f} (${label}): one comment, refused as notify.urlEnv, naming its hook's URL`, ls.filter(l => l.includes(OWN)));
+      assert(!us[f].includes('remove notify.authEnv') && !us[f].includes(`${OWN} is not a notify hook`), `${f} (${label}): never only to remove notify.authEnv, nor a rename`);
+      assert(us[f] === scheduleSnippets(alone)[f].replace(REFUSED(OWN), AS_URL), `${f} (${label}): only the token's comment differs`);
+      assert(noSecret(us[f]), `${f} (${label}): no value with refusedUrlTokens`);
+    }
+  }
+  // A name of the org's hook shape another org's id also maps onto (refusedShadows: acme-notify-eu beside acme owns
+  // OBSERVOGRAM_ORG_ACME_NOTIFY_EU_*) — as the urlEnv, or as the authEnv beside a refused urlEnv — already has the
+  // shape the rename names: it is told what the run's SHADOW refusal says, that another org's id also maps onto it,
+  // and to name a hook the listing lists — never the rename, which followed literally changes nothing.
+  const EU = 'OBSERVOGRAM_ORG_ACME_NOTIFY_EU_X_URL', EU_TOKEN = 'OBSERVOGRAM_ORG_ACME_NOTIFY_EU_X_TOKEN';
+  const SHADOW = (e) => `${e} has the shape of a notify hook of this org, but another org's id also maps onto it by the longest-prefix rule, so the studio never reads it — set the journey's notify.urlEnv to one that GET /api/journeys/notify-hooks lists, and its notify.authEnv to that hook's _TOKEN or leave it out, before scheduling (docs/DOWNSTREAM.md §17.2)`;
+  const sh = { ...S15, envNames: ['MY_MCP_TOKEN'], refusedEnvNames: ['MY_HOOK_URL', EU, EU_TOKEN], refusedShadows: [EU, EU_TOKEN, EU, 'MY_MCP_TOKEN', 'UNLISTED', 'not a name', null] };
+  assert(normaliseSnippetInput(sh).refusedShadows.join() === `${EU},${EU_TOKEN}` && normaliseSnippetInput(S15).refusedShadows.length === 0,
+         'refusedShadows: refused names only, validated, de-duplicated; none by default');
+  const shs = scheduleSnippets(sh);
+  for (const [f, pre] of [['cron', '# '], ['schtasks', 'REM '], ['actions', '          # '], ['k8s', '                # ']]) {
+    const ls = shs[f].split('\n');
+    for (const e of [EU, EU_TOKEN]) {
+      assert(ls.filter(l => l.includes(e)).join('\n') === `${pre}${SHADOW(e)}` && !shs[f].includes(`${e} is not a notify hook`), `${f}: ${e} — another org's id also maps onto it, a hook the listing lists, never a rename`, ls.filter(l => l.includes(e)));
+    }
+    assert(ls.includes(`${pre}${REFUSED('MY_HOOK_URL')}`), `${f}: a refused name of no hook's shape keeps its comment`);
+    assert(shs[f] === [EU, EU_TOKEN].reduce((s, e) => s.replace(REFUSED(e), SHADOW(e)), scheduleSnippets({ ...sh, refusedShadows: undefined })[f]), `${f}: only the shadowed names' comments differ`);
+    assert(scheduleSnippets({ ...sh, refusedTaken: true })[f] === scheduleSnippets({ ...sh, refusedShadows: undefined, refusedTaken: true })[f], `${f}: refusedTaken wins — no name can be the org's hook there`);
+    const paired = { ...S15, envNames: [HOOK], refusedEnvNames: [EU_TOKEN], refusedPairs: [{ authEnv: EU_TOKEN, urlEnv: HOOK, tokenEnv: OWN }] };
+    assert(scheduleSnippets({ ...paired, refusedShadows: [EU_TOKEN] })[f] === scheduleSnippets(paired)[f], `${f}: beside the org's own hook, the PAIR comment wins`);
+    assert(noSecret(shs[f]), `${f}: no value with refusedShadows`);
+  }
+  // An org whose every hook name another org's id takes (refusedTaken: pay beside pay-notify, a KEY tie) has no
+  // name a rename could reach — its hook-shaped names already have the shape — so each refused name, hook-shaped or
+  // bare, is told to leave notify out, as the run's TAKEN refusal says; never the rename.
+  const TAKEN = (e) => `${e} cannot be a notify hook of this org: another org's id also maps onto every name of its hook shape (OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL/_TOKEN) by the longest-prefix rule, so the studio posts no notification for its journeys — remove the journey's notify before scheduling (docs/DOWNSTREAM.md §17.1)`;
+  const PAY = ['OBSERVOGRAM_ORG_PAY_NOTIFY_ONCALL_URL', 'OBSERVOGRAM_ORG_PAY_NOTIFY_ONCALL_TOKEN', 'MY_HOOK_URL'];
+  const t = { ...S15, envNames: ['MY_MCP_TOKEN'], refusedEnvNames: PAY, refusedTaken: true };
+  assert(normaliseSnippetInput(t).refusedTaken === true && normaliseSnippetInput(S15).refusedTaken === false && normaliseSnippetInput({ ...t, refusedTaken: 'yes' }).refusedTaken === false,
+         'refusedTaken: true only when given as true; false by default');
+  const ts = scheduleSnippets(t);
+  for (const [f, pre] of [['cron', '# '], ['schtasks', 'REM '], ['actions', '          # '], ['k8s', '                # ']]) {
+    const ls = ts[f].split('\n');
+    for (const e of PAY) assert(ls.includes(`${pre}${TAKEN(e)}`) && !ts[f].includes(`${e} is not a notify hook`), `${f}: ${e} — leave notify out, never a rename`, ls.filter(l => l.includes(e)));
+    assert(ts[f] === PAY.reduce((s, e) => s.replace(REFUSED(e), TAKEN(e)), scheduleSnippets({ ...t, refusedTaken: false })[f]), `${f}: only the refused names' comments differ`);
+    assert(scheduleSnippets({ ...S15, refusedTaken: true })[f] === scheduleSnippets(S15)[f], `${f}: refusedTaken without a refused name, byte-identical`);
+    assert(noSecret(ts[f]), `${f}: no value with refusedTaken`);
+  }
+}
+
 // --- secrets discipline across every form ---
 for (const [label, input] of Object.entries({ S15, S2H, SD, SW, SIRR, S45, base })) {
   const all = scheduleSnippets(input);
