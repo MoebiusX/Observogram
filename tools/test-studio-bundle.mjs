@@ -1234,7 +1234,12 @@ test('T8 baked taxonomy: a --taxonomy bundle answers /api/taxonomy as a server s
   t.after(async () => { await child.stop(); rmSync(ws, { recursive: true, force: true }); bindTaxonomy(artefactClassify, null); });
   const fixture = JSON.parse(readFileSync(TAX, 'utf8'));
   const typedCanonical = JSON.parse(readFileSync(TYPED_CANONICAL, 'utf8'));
-  const registered = await fetch(`${child.base}/api/validate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(typedCanonical) }).then((r) => r.json());
+  // Every request to the child goes out on a connection of its own (as
+  // serverFetch does in tools/test-bundle-compare.mjs): the two builds below
+  // run through spawnSync and stop this event loop, seconds on a loaded
+  // runner, and a socket pooled across them would carry the next request
+  // after the child closed it at its 5 s keep-alive ("fetch failed").
+  const registered = await fetch(`${child.base}/api/validate`, { method: 'POST', headers: { 'Content-Type': 'application/json', Connection: 'close' }, body: JSON.stringify(typedCanonical) }).then((r) => r.json());
   assert.equal(registered.ok, true, JSON.stringify(registered.errors));
   const id = registered.registered.id;
 
@@ -1259,7 +1264,7 @@ test('T8 baked taxonomy: a --taxonomy bundle answers /api/taxonomy as a server s
   // Parity: the server's body and header, the layered bodies with their `type` keys.
   const backend = createStaticBackend(config);
   assert.equal(backend.taxonomyConfigured, true);
-  const server = async (path) => { const r = await fetch(`${child.base}${path}`, { headers: { Accept: 'application/json' } }); return { status: r.status, type: r.headers.get('content-type'), cc: r.headers.get('cache-control'), body: await bodyOf(r) }; };
+  const server = async (path) => { const r = await fetch(`${child.base}${path}`, { headers: { Accept: 'application/json', Connection: 'close' } }); return { status: r.status, type: r.headers.get('content-type'), cc: r.headers.get('cache-control'), body: await bodyOf(r) }; };
   const shim = async (path) => { const r = await backend.handle(path); assert.ok(r, `${path} answered`); return { status: r.status, type: r.headers.get('content-type'), cc: r.headers.get('cache-control'), body: await bodyOf(r) }; };
   const same = async (path) => { const [a, b] = await Promise.all([server(path), shim(path)]); assert.equal(b.status, a.status, path); assert.equal(b.type, a.type, path); assert.deepEqual(b.body, a.body, `${path}: body`); return { a, b }; };
   const tax = await same('/api/taxonomy');

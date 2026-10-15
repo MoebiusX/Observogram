@@ -98,14 +98,49 @@ export function parseBoot(stdout) {
   return { listening: false, message: null };
 }
 
-// One boot that exits: { listening, port?, message?, code?, nothingMoved?, stdout, stderr }.
-export function boot(ws, { host = '127.0.0.1', env = {}, silent = true, port = 0 } = {}) {
-  const r = spawnSync(process.execPath, ['--input-type=module', '-e', BOOT_CODE], {
-    env: childEnv(ws, { ...env, BOOT_HOST: host, BOOT_SILENT: silent ? '1' : '0', BOOT_PORT: String(port) }), encoding: 'utf8', timeout: 60_000,
-  });
-  const out = { ...parseBoot(r.stdout), stdout: r.stdout, stderr: r.stderr, status: r.status };
-  if (out.message === null) throw new Error(`the boot child printed neither LISTENING nor REFUSED (status ${r.status}): ${r.stderr}`);
+const bootEnv = (ws, { host = '127.0.0.1', env = {}, silent = true, port = 0 } = {}) =>
+  childEnv(ws, { ...env, BOOT_HOST: host, BOOT_SILENT: silent ? '1' : '0', BOOT_PORT: String(port) });
+
+function bootOutcome({ stdout, stderr, status }) {
+  const out = { ...parseBoot(stdout), stdout, stderr, status };
+  if (out.message === null) throw new Error(`the boot child printed neither LISTENING nor REFUSED (status ${status}): ${stderr}`);
   return out;
+}
+
+// One boot that exits: { listening, port?, message?, code?, nothingMoved?, stdout, stderr }.
+export function boot(ws, opts) {
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', BOOT_CODE], { env: bootEnv(ws, opts), encoding: 'utf8', timeout: 60_000 });
+  return bootOutcome(r);
+}
+
+// boot() for a suite that keeps a server in this process (or a keep-alive
+// connection to one) across the boot: the same child and result, but this
+// process's event loop runs while the child boots. spawnSync stops the loop
+// for the whole boot, a second or more each on a loaded Windows runner. A
+// pooled socket idle past the server's keepAliveTimeout (Node's 5 s) then
+// takes the suite's next request before either side's keep-alive timer has
+// run. When the loop resumes in its check or poll phase, the server's timer
+// fires next and closes its end with the request unread, and the client reads
+// ECONNRESET ("fetch failed"; a POST is not retried). With the loop running,
+// fetch closes an idle socket at its own keep-alive (the server's timeout less
+// 2 s) and the next request opens a new one.
+export function bootAsync(ws, opts) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(process.execPath, ['--input-type=module', '-e', BOOT_CODE], { env: bootEnv(ws, opts), stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.setEncoding('utf8');
+    proc.stderr.setEncoding('utf8');
+    proc.stdout.on('data', (c) => { stdout += c; });
+    proc.stderr.on('data', (c) => { stderr += c; });
+    const t = setTimeout(() => proc.kill('SIGTERM'), 60_000);
+    proc.on('error', (e) => { clearTimeout(t); reject(e); });
+    // 'close': the output read to its end.
+    proc.on('close', (status) => {
+      clearTimeout(t);
+      try { resolve(bootOutcome({ stdout, stderr, status })); } catch (e) { reject(e); }
+    });
+  });
 }
 
 // A server that keeps running: { base, stop(), logs() }. logs() is
