@@ -30,6 +30,12 @@ export function isCrawlerFile(path) {
   return (
     sourceMetricCandidate ||
     /(^|\/)(application|bootstrap)[\w.-]*\.ya?ml$/.test(p) ||
+    // A prebuilt exporter: its manifest, a saved /metrics, its config; a
+    // collector config a Helm chart keeps under files/.
+    /(^|[/.])metrics-manifest\.json$/.test(p) ||
+    (/\.(prom|metrics)$/.test(p) && !/(^|\/)(tests?|__tests__|specs?|fixtures?|testdata)\//.test(p)) ||
+    /(^|\/)config\.ya?ml$/.test(p) ||
+    /(^|\/)files\/.*\.ya?ml$/.test(p) ||
     /(^|\/)docker[-_]compose[a-z0-9._-]*\.(ya?ml)$/.test(p) ||
     /(^|\/)compose[a-z0-9._-]*\.(ya?ml)$/.test(p) ||
     /\.rules\.(ya?ml)$/.test(p) ||

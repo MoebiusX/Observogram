@@ -1289,9 +1289,15 @@ The crawler reads source files such as:
 - Grafana unified-alerting provisioning YAML and Loki rule files
 - Grafana dashboard JSON
 - Alertmanager config
-- OTel Collector config
+- OTel Collector config, its prometheus receivers' scrape jobs included (with
+  or without a `service:` block)
 - Helm and Kubernetes manifests
 - Docker Compose files
+- A prebuilt exporter's metrics: its `metrics-manifest.json`, a saved
+  `/metrics` (`.prom`, `.metrics`), or its config read against an exporter
+  catalogue (`--exporter-catalogue <file.json>` adds or replaces entries).
+  `packc emit --exporter <url>` writes the manifest from a live endpoint
+  ([`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §18)
 
 It emits a canonical v1.4 pack plus crawler annotations describing what was
 scanned and what was inferred. A fresh crawl validates (exit 0) and needs no

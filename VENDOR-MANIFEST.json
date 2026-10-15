@@ -378,8 +378,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "6705a45caf5253caf795b0c23b5d1ea8cdbe75d8f91b4d748fec20911265c16f",
-      "bytes": 110301,
+      "sha256": "c4f564f2c0968120500defba9f61f0776e34342b2536011883a12553a7724e1f",
+      "bytes": 125803,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
@@ -395,6 +395,7 @@
       "imports": [
         "tools/lib/alert-routes.mjs",
         "tools/lib/backend-products.mjs",
+        "tools/lib/exporter-metrics.mjs",
         "tools/lib/l2x.mjs",
         "tools/lib/mini-yaml.mjs",
         "tools/lib/promql.mjs",
@@ -509,6 +510,40 @@
       ],
       "npm": [],
       "changedSinceRelease": false
+    },
+    "tools/lib/exporter-catalogue.mjs": {
+      "sha256": "594c0bb91e68a1a87a598ff57532d388e40f17a0133de6eec64db8e06c82cb9a",
+      "bytes": 5963,
+      "exports": [
+        "EXPORTER_CATALOGUE"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
+    "tools/lib/exporter-metrics.mjs": {
+      "sha256": "6a9cff6f68206ae8a43e0f6b1066cc3f595a0df128e4bf8d2bfdea6dd6e49ba5",
+      "bytes": 16534,
+      "exports": [
+        "EXPOSITION_TYPES",
+        "inferExporterFamilies",
+        "isExpositionSnapshotPath",
+        "isMetricsManifestPath",
+        "manifestFromExposition",
+        "matchExporterConfig",
+        "mayBeExporterConfig",
+        "parseExposition",
+        "readMetricsManifest",
+        "resolveExporterCatalogue",
+        "safeSourceUrl"
+      ],
+      "imports": [
+        "tools/lib/exporter-catalogue.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
     },
     "tools/lib/good-when.mjs": {
       "sha256": "f89b81ef3c6afc30a60453deee4cc659503ec16f720351fcb61991766337e474",

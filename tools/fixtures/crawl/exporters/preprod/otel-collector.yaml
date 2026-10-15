@@ -1,0 +1,16 @@
+receivers:
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: qmgrs-preprod
+          scrape_interval: 60s
+          static_configs:
+            - targets: ["mq-exp-pp1:9157"]
+exporters:
+  kafka:
+    topic: mq-metrics-preprod
+service:
+  pipelines:
+    metrics:
+      receivers: [prometheus]
+      exporters: [kafka]
