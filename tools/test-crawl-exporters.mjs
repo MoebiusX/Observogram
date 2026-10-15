@@ -348,12 +348,18 @@ data:
   const r = crawlFiles({
     'a/metrics-manifest.json': '{ "metrics": [] }',
     'b/metrics-manifest.json': JSON.stringify({ exporter: 'x', metrics: [{ name: 'ok_metric', type: 'Gauge' }, { name: '9bad', type: 'gauge' }, { name: 'ok_metric', type: 'counter' }, { name: 'no_type' }] }),
-    'c/metrics-manifest.json': 'not json',
+    'c/metrics-manifest.json': 'ghp_SECRETxyz: not json',
   }, { repoName: 'bad', now: NOW });
   const w = r.summary.warnings;
   assert(w.includes('a/metrics-manifest.json is not a metrics manifest (no `exporter` name); it is not read.')
-    && w.some(x => x.startsWith('c/metrics-manifest.json is not a metrics manifest (not JSON')),
-  'a manifest that is not one is named in a warning', w);
+    && w.includes('c/metrics-manifest.json is not a metrics manifest (not JSON); it is not read.') && !JSON.stringify(r.summary).includes('ghp_'),
+  'a manifest that is not one is named in a warning, none of its text quoted', w);
+  const bom = crawlFiles({
+    'metrics-manifest.json': `\uFEFF${JSON.stringify({ exporter: 'x', metrics: [{ name: 'bom_metric', type: 'gauge' }] })}`,
+    'mq/config.yaml': `\uFEFF${FILES['mq-exporter/config.yaml']}`,
+  }, { repoName: 'bom', now: NOW });
+  assert(json(bom, 'crawler.discovered.metric_names').includes('bom_metric') && bom.summary.files.byKind['exporter-config'] === 1,
+    'a manifest and an exporter config saved with a BOM are read', bom.summary.files.byKind);
   assert(w.some(x => x.startsWith('b/metrics-manifest.json: 3 metric entries are not read')), 'skipped entries are counted', w);
   assert(JSON.stringify(json(r, 'crawler.discovered.metric_names')) === '["ok_metric"]', 'the valid entry is read (the type case-insensitive)');
   const m = readMetricsManifest(JSON.stringify({ exporter: 'x', source: 'https://u:p@h/metrics?t=1', metrics: [] }));

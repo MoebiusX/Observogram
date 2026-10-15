@@ -191,7 +191,9 @@ export function manifestFromExposition(text, { exporter, version, source, genera
  */
 export function readMetricsManifest(text) {
   let obj;
-  try { obj = JSON.parse(String(text ?? '')); } catch (e) { return { ok: false, error: `not JSON (${e.message})` }; }
+  // Never the parser's message: it quotes the start of the text, which in a
+  // file that is not a manifest may be a key.
+  try { obj = JSON.parse(stripBom(text)); } catch { return { ok: false, error: 'not JSON' }; }
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return { ok: false, error: 'not a JSON object' };
   const exporter = typeof obj.exporter === 'string' ? obj.exporter.trim() : '';
   if (!exporter) return { ok: false, error: 'no `exporter` name' };
@@ -228,6 +230,8 @@ export function readMetricsManifest(text) {
 // ---------- the exporter config catalogue ----------
 
 const isMapping = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+// One leading U+FEFF, as mini-yaml strips it (Windows editors write one).
+const stripBom = (text) => String(text ?? '').replace(/^\uFEFF/, '');
 
 function pathValue(obj, path) {
   let cur = obj;
@@ -320,7 +324,7 @@ export function resolveExporterCatalogue(custom) {
  * parsed. Cheap; `matchExporterConfig` decides.
  */
 export function mayBeExporterConfig(content, catalogue) {
-  const text = String(content ?? '');
+  const text = stripBom(content);
   return catalogue.exporters.some(e => e.match.keys.every(k => new RegExp(`^${k}\\s*:`, 'm').test(text)));
 }
 
