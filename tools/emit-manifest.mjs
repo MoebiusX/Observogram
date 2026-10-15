@@ -36,6 +36,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve, basename } from 'node:path';
 import { manifestFromExposition, safeSourceUrl } from './lib/exporter-metrics.mjs';
 
+// A value that may be a URL with its credentials or token: never echoed.
+const urlLike = (v) => /:\/\/|@|\?|^[^/\\\s]+:\d+(?:[/?#]|$)/.test(String(v ?? ''));
+
 const USAGE = 'usage: packc emit --exporter <url> | --from <file.prom> [--name <exporter>] [--version <v>] [--out <file>|-] [--generated-at <iso> | --no-timestamp] [--timeout <seconds>]';
 
 function fail(code, message) {
@@ -55,7 +58,7 @@ function parseArgs(argv) {
     let inline;
     if (eq > 0) { inline = a.slice(eq + 1); a = a.slice(0, eq); }
     // An unknown argument may be a URL with its credentials: never echoed.
-    if (!takes.has(a)) fail(2, `unknown argument ${/:\/\/|@/.test(a) ? '(a URL-like value, not shown)' : `'${a}'`}\n${USAGE}`);
+    if (!takes.has(a)) fail(2, `unknown argument ${urlLike(a) ? '(a URL-like value, not shown)' : `'${a}'`}\n${USAGE}`);
     if (inline !== undefined) { out[a.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = inline; continue; }
     const v = argv[++i];
     if (v === undefined || (v.startsWith('--') && v !== '-')) fail(2, `${a} needs a value\n${USAGE}`);
@@ -121,6 +124,7 @@ if (args.exporter) {
   source = url.href;
   defaultName = url.hostname;
 } else {
+  if (urlLike(args.from)) fail(2, '--from takes a saved exposition file, not a URL (the value is not shown); scrape a URL with --exporter');
   try { text = readFileSync(resolve(args.from), 'utf8'); } catch (e) { fail(2, `cannot read --from ${args.from}: ${e.code || e.message}`); }
   defaultName = basename(args.from).replace(/\.[^.]+$/, '');
 }
