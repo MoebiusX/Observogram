@@ -585,10 +585,10 @@ export function crawlFiles(filesInput, opts = {}) {
   const scrapeJobs = [];
   const exporters = new Map();   // exporter name → the files that say what it exposes
   // A collector config with no pipelines names its metrics exporter only by
-  // guess; a guess is applied after every file is walked, and only when no
-  // pipeline declared one (a config split across --config files declares it
-  // in another file).
-  const collectorGuesses = [];
+  // guess; the guesses are settled after every file is walked against the
+  // metrics pipelines the walk found (a config split across --config files
+  // declares them in another file) — settleCollectorGuesses.
+  const collectorState = newCollectorState();
   const dashboards = [];
   const alertingRoutes = [];
   const pipelines = { receivers: [], processors: [], exporters: { metrics: null, logs: null, traces: null } };
@@ -641,13 +641,13 @@ export function crawlFiles(filesInput, opts = {}) {
         case 'actuator-metrics-config': walkActuatorMetricsConfig(f, scrapeJobs, evidence, summary, repoName); break;
         case 'metric-source-code': walkMetricSourceCode(f, metricDefinitions, evidence, summary, repoName); break;
         case 'alertmanager':     walkAlertmanager(f, alertingRoutes, evidence, summary); break;
-        case 'otel-collector':   walkOtelCollector(f, pipelines, scrapeJobs, evidence, summary, collectorGuesses); break;
+        case 'otel-collector':   walkOtelCollector(f, pipelines, scrapeJobs, evidence, summary, collectorState); break;
         case 'metrics-manifest': walkMetricsManifest(f, metricDefinitions, exporters, summary, evidence); break;
         case 'exposition-snapshot': walkExpositionSnapshot(f, metricDefinitions, exporters, summary, evidence); break;
         case 'exporter-config':  walkExporterConfig(f, catalogue, metricDefinitions, exporters, summary, evidence); break;
         case 'grafana-dashboard':walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summary); break;
-        case 'helm-template':    walkHelmTemplate(f, { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, collectorGuesses, repoName }, evidence, summary); break;
-        case 'helm-values':      walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents, { scrapeJobs, collectorGuesses }); break;
+        case 'helm-template':    walkHelmTemplate(f, { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, collectorState, repoName }, evidence, summary); break;
+        case 'helm-values':      walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents, { scrapeJobs, collectorState }); break;
         case 'k8s-workload':     walkK8sWorkload(f, backends, pipelines, evidence, summary); break;
         // Chart.yaml itself carries no observability contracts — the payloads
         // live in the templated manifests (handled as 'helm-template'). We
@@ -659,18 +659,7 @@ export function crawlFiles(filesInput, opts = {}) {
     }
   }
 
-  if (!pipelines.exporters.metrics && collectorGuesses.length) {
-    const g = collectorGuesses[0];
-    pipelines.exporters.metrics = { kind: mapExporterKind(g.candidates[0].split('/')[0]) };
-    evidence['pipelines.exporters.metrics'] = g.relPath;
-    if (g.candidates.length > 1) {
-      summary.warnings.push(`${g.relPath} has no service pipelines and ${g.candidates.length} metrics-capable exporters (${g.candidates.join(', ')}); the metrics exporter is taken to be the first, '${g.candidates[0]}'.`);
-    }
-    if (!g.counted) {
-      evidence[`PIP-${summary.discovered.pipelines + 1}`] = g.relPath;
-      summary.discovered.pipelines++;
-    }
-  }
+  settleCollectorGuesses(collectorState, pipelines, evidence, summary);
 
   // ----- infer SLIs/SLOs (decompiler ⇄ compiler symmetry) -----
   // PRIMARY source: recording rules. compile.mjs materialises every SLI in
@@ -1875,7 +1864,7 @@ function collectDisabledComponents(valuesFiles) {
   return disabled;
 }
 
-function walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents = new Set(), { scrapeJobs = [], collectorGuesses = [] } = {}) {
+function walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents = new Set(), { scrapeJobs = [], collectorState = newCollectorState() } = {}) {
   const visit = (node, path = []) => {
     if (!node) return;
     // Prune the subtree of any top-level component the environment disables
@@ -1914,7 +1903,7 @@ function walkHelmValues(f, backends, pipelines, evidence, summary, disabledCompo
     // (the chart's `pipelines.metrics: null` drops a pipeline) is warned
     // about and never costs the values file its images.
     for (const collector of valuesCollectorConfigs(obj)) {
-      try { walkOtelCollectorDoc(collector, f.relPath, pipelines, scrapeJobs, evidence, summary, collectorGuesses); }
+      try { walkOtelCollectorDoc(collector, f.relPath, pipelines, scrapeJobs, evidence, summary, collectorState); }
       catch (e) { summary.warnings.push(`The collector config in ${f.relPath} could not be read (${e.message}); its images are read as before.`); }
     }
     visit(obj);
@@ -1958,14 +1947,14 @@ function walkK8sWorkload(f, backends, pipelines, evidence, summary) {
 // like a rule shipped as a standalone file. If the template embeds nothing, we
 // strip the scaffolding and treat the document itself as a single manifest.
 function walkHelmTemplate(f, buckets, evidence, summary) {
-  const { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, collectorGuesses, repoName } = buckets;
+  const { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, collectorState, repoName } = buckets;
   const route = (kind, sub) => {
     switch (kind) {
       case 'prometheus-rules': walkPrometheusRules(sub, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary); return true;
       case 'prometheus-scrape-config': walkPrometheusScrapeConfig(sub, scrapeJobs, evidence, summary); return true;
       case 'actuator-metrics-config': walkActuatorMetricsConfig(sub, scrapeJobs, evidence, summary, repoName); return true;
       case 'alertmanager':     walkAlertmanager(sub, alertingRoutes, evidence, summary); return true;
-      case 'otel-collector':   walkOtelCollector(sub, pipelines, scrapeJobs, evidence, summary, collectorGuesses); return true;
+      case 'otel-collector':   walkOtelCollector(sub, pipelines, scrapeJobs, evidence, summary, collectorState); return true;
       case 'grafana-dashboard':walkGrafanaDashboard(sub, dashboards, metricDefinitions, evidence, summary); return true;
       case 'docker-compose':   walkDockerCompose(sub, backends, pipelines, evidence, summary); return true;
       case 'k8s-workload':     walkK8sWorkload(sub, backends, pipelines, evidence, summary); return true;
@@ -2326,13 +2315,19 @@ function walkAlertmanager(f, routes, evidence, summary) {
 // config with no `service:` block (a Helm chart's files/ copy, assembled
 // with the pipelines elsewhere) still names its receivers and exporters:
 // the prometheus receivers' jobs are read, and the metrics exporter it
-// configures is a guess (`guesses`), applied by crawlFiles only when no
-// pipeline in any file declares one.
-function walkOtelCollector(f, pipelines, scrapeJobs, evidence, summary, guesses = []) {
-  for (const obj of parseYamlDocs(f.content)) walkOtelCollectorDoc(obj, f.relPath, pipelines, scrapeJobs, evidence, summary, guesses);
+// configures is a guess, settled after the walk (settleCollectorGuesses).
+function walkOtelCollector(f, pipelines, scrapeJobs, evidence, summary, state = newCollectorState()) {
+  for (const obj of parseYamlDocs(f.content)) walkOtelCollectorDoc(obj, f.relPath, pipelines, scrapeJobs, evidence, summary, state);
 }
 
-function walkOtelCollectorDoc(obj, relPath, pipelines, scrapeJobs, evidence, summary, guesses) {
+// What the walk learns about collector configs across files: each metrics
+// pipeline declared (its receivers and exporters, with the exporters'
+// configs), and each pipeline-less config's guess.
+function newCollectorState() {
+  return { declared: [], guesses: [] };
+}
+
+function walkOtelCollectorDoc(obj, relPath, pipelines, scrapeJobs, evidence, summary, state) {
   const scrapeReceivers = collectorScrapeReceivers(obj);
   const exporterCfgs = isMapping(obj?.exporters) ? obj.exporters : {};
   if (obj?.service?.pipelines) {
@@ -2365,6 +2360,11 @@ function walkOtelCollectorDoc(obj, relPath, pipelines, scrapeJobs, evidence, sum
     }
     evidence[`PIP-${summary.discovered.pipelines + 1}`] = relPath;
     summary.discovered.pipelines++;
+    for (const [sig, p] of Object.entries(obj.service.pipelines)) {
+      if (/^metrics/i.test(sig) && isMapping(p) && Array.isArray(p.receivers)) {
+        state.declared.push({ receivers: p.receivers, exporters: Array.isArray(p.exporters) ? p.exporters : [], cfgs: exporterCfgs });
+      }
+    }
     // Each scrape receiver's samples leave by the exporters of the metrics
     // pipelines that list it.
     for (const { key, config } of scrapeReceivers) {
@@ -2382,24 +2382,67 @@ function walkOtelCollectorDoc(obj, relPath, pipelines, scrapeJobs, evidence, sum
   }
 
   // No pipelines: the metrics exporter is the metrics-capable exporter the
-  // config names (the first when it names several) — a guess, applied by
-  // crawlFiles after the walk, and only when no pipeline declares one.
+  // config names (the first when it names several) — a guess. Its scrape
+  // jobs carry it for now; settleCollectorGuesses replaces it with a
+  // declared pipeline's exporters when one lists the receiver, and applies
+  // it to spec.pipelines only when nothing else set the metrics exporter.
   const candidates = Object.keys(exporterCfgs).filter(n => METRICS_EXPORTER_TYPES.has(n.split('/')[0].toLowerCase()));
   const chosen = candidates[0] || null;
   if (!scrapeReceivers.length && !chosen) return;
-  for (const { key } of scrapeReceivers) {
-    const name = key.split('/')[0];
-    if (!pipelines.receivers.some(r => r.name === name)) pipelines.receivers.push({ name });
-  }
-  const exporters = chosen ? [collectorExporterDetail(chosen, exporterCfgs[chosen])] : [];
+  const groups = [];
   for (const { key, config } of scrapeReceivers) {
+    // One array per receiver, shared with its jobs' entries (patched in place).
+    const exporters = chosen ? [collectorExporterDetail(chosen, exporterCfgs[chosen])] : [];
+    groups.push({ receiver: key, exporters });
     walkScrapeConfigDoc(config, relPath, scrapeJobs, evidence, summary, { receiver: key, exporters });
   }
-  if (scrapeReceivers.length) {
-    evidence[`PIP-${summary.discovered.pipelines + 1}`] = relPath;
+  state.guesses.push({ relPath, candidates, cfgs: exporterCfgs, groups, receivers: scrapeReceivers.map(({ key }) => key.split('/')[0]) });
+}
+
+// After every file is walked: a pipeline-less config's scrape jobs leave by
+// the exporters of the declared metrics pipelines that list their receiver
+// (a config split across --config files), else by its guess; its receivers
+// join spec.pipelines; the first guess sets spec.pipelines.exporters.metrics
+// only when nothing else set it (no declared pipeline, no metrics backend
+// image). A first-of-several guess left standing is warned about.
+function settleCollectorGuesses(state, pipelines, evidence, summary) {
+  const warned = new Set();
+  const warnFirstOfSeveral = (g) => {
+    if (g.candidates.length < 2 || warned.has(g.relPath)) return;
+    warned.add(g.relPath);
+    summary.warnings.push(`${g.relPath} has no service pipelines and ${g.candidates.length} metrics-capable exporters (${g.candidates.join(', ')}); the metrics exporter is taken to be the first, '${g.candidates[0]}'.`);
+  };
+  for (const g of state.guesses) {
+    for (const group of g.groups) {
+      const names = [];
+      const cfgOf = {};
+      for (const d of state.declared) {
+        if (!d.receivers.includes(group.receiver)) continue;
+        for (const n of d.exporters) {
+          if (typeof n !== 'string') continue;
+          if (!names.includes(n)) names.push(n);
+          if (isMapping(d.cfgs?.[n]) && Object.keys(d.cfgs[n]).length && !cfgOf[n]) cfgOf[n] = d.cfgs[n];
+        }
+      }
+      if (names.length) {
+        group.exporters.splice(0, group.exporters.length,
+          ...names.map(n => collectorExporterDetail(n, isMapping(g.cfgs[n]) && Object.keys(g.cfgs[n]).length ? g.cfgs[n] : cfgOf[n])));
+      } else if (group.exporters.length) {
+        warnFirstOfSeveral(g);
+      }
+    }
+    for (const name of g.receivers) {
+      if (!pipelines.receivers.some(r => r.name === name)) pipelines.receivers.push({ name });
+    }
+  }
+  const first = state.guesses.find(g => g.candidates.length);
+  if (!pipelines.exporters.metrics && first) {
+    pipelines.exporters.metrics = { kind: mapExporterKind(first.candidates[0].split('/')[0]) };
+    evidence['pipelines.exporters.metrics'] = first.relPath;
+    warnFirstOfSeveral(first);
+    evidence[`PIP-${summary.discovered.pipelines + 1}`] = first.relPath;
     summary.discovered.pipelines++;
   }
-  if (chosen) guesses.push({ relPath, candidates, counted: scrapeReceivers.length > 0 });
 }
 
 // Collector exporters that carry metrics, by component type.
@@ -2475,7 +2518,7 @@ function collectionEvidenceOf(relPath, content, catalogue) {
       // the whole template), walked into throwaway buckets.
       const buckets = {
         backends: [], recordingRules: [], burnRateAlerts: [], alertRules: [], metricDefinitions: [], scrapeJobs: [],
-        alertingRoutes: [], dashboards: [], collectorGuesses: [], repoName: null,
+        alertingRoutes: [], dashboards: [], collectorState: newCollectorState(), repoName: null,
         pipelines: { receivers: [], processors: [], exporters: { metrics: null, logs: null, traces: null } },
       };
       const scratch = {

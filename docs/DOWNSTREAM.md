@@ -1953,13 +1953,14 @@ under `config:`, or under a subchart's `<key>.config:`).
   `crawler.discovered.scrape_job_origins` adds `via: otel-collector`, the
   `receiver`, the `target_count` of its static targets, and the `exporters`
   its samples leave by: the exporters of the metrics pipelines that list the
-  receiver, or, with no pipelines, the metrics exporter the config names.
+  receiver, in the same file or another (a config split across `--config`
+  files), or, when none does, the metrics exporter the config names.
   Each exporter is given as `{ name, kind, topic | endpoint }`: a kafka
   exporter's metrics topic, any other's endpoint reduced by `safeSourceUrl`
   (no userinfo, query or fragment).
 - That exporter's kind is `spec.pipelines.exporters.metrics`, in place of the
   `prometheusremotewrite` scaffold. A config with no pipelines only proposes
-  one: it applies after every file is walked, and only when no pipeline in
-  any file declares a metrics exporter (a config split across `--config`
-  files declares it in another). When it names several, the first is taken
-  and the crawl warns.
+  one: it applies after every file is walked, and only when nothing else set
+  the metrics exporter — no pipeline in any file declares one, and no metrics
+  backend image implies one. When it names several, the first is taken and
+  the crawl warns.

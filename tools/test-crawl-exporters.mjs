@@ -360,6 +360,32 @@ service:
       && !split.summary.warnings.some(w => /metrics-capable/.test(w)) && split.evidence['pipelines.exporters.metrics'] === undefined,
     `a split config (${a} first): the declared metrics exporter, one pipeline, no guess warning`, [split.canonical.spec.pipelines.exporters.metrics, split.summary.discovered.pipelines]);
   }
+  // The same split with a scrape receiver: the job leaves by the declared
+  // pipeline that lists its receiver (endpoint from the file that configures
+  // the exporter), not by the guess; one receiver, one pipeline, no warning.
+  const A = 'receivers:\n  prometheus/mq:\n    config:\n      scrape_configs:\n        - job_name: qmgrs\n          static_configs: [{ targets: ["a:1"] }]\nexporters:\n  otlp:\n    endpoint: http://gw:4317\n  prometheusremotewrite:\n    endpoint: https://w:SECRET@mimir:9009/api/v1/push\n';
+  const B = 'receivers:\n  prometheus/mq: {}\nexporters:\n  otlp: {}\n  prometheusremotewrite: {}\nservice:\n  pipelines:\n    metrics: { receivers: [prometheus/mq], exporters: [prometheusremotewrite] }\n';
+  for (const [a, b] of [['otel/a.yaml', 'otel/b.yaml'], ['otel/b.yaml', 'otel/a.yaml']]) {
+    const split = crawlFiles({ [a]: A, [b]: B }, { repoName: 'col', now: NOW });
+    const job = json(split, 'crawler.discovered.scrape_job_origins').qmgrs;
+    assert(JSON.stringify(job.exporters) === '[{"name":"prometheusremotewrite","kind":"prometheusremotewrite","endpoint":"https://mimir:9009/api/v1/push"}]'
+      && split.canonical.spec.pipelines.exporters.metrics.kind === 'prometheusremotewrite' && split.summary.discovered.pipelines === 1
+      && JSON.stringify(split.canonical.spec.pipelines.receivers) === '[{"name":"prometheus"}]' && !split.summary.warnings.some(w => /metrics-capable/.test(w)),
+    `a split config with a scrape receiver (${a} first): the job leaves by the declared pipeline`, [job, split.canonical.spec.pipelines, split.summary.discovered.pipelines]);
+  }
+  // Alone, the same config's job carries the guess, and the warning says so.
+  const alone = crawlFiles({ 'otel/a.yaml': A }, { repoName: 'col', now: NOW });
+  assert(json(alone, 'crawler.discovered.scrape_job_origins').qmgrs.exporters[0].name === 'otlp' && alone.summary.warnings.some(w => /taken to be the first, 'otlp'/.test(w)),
+    'alone, a first-of-several guess stands on the job and is warned about');
+  // A metrics backend image already set the metrics exporter: the guess does
+  // not override it (the walk's precedence, as for a declared pipeline); the
+  // job still names the exporter its collector configures.
+  const img = crawlFiles({
+    'charts/vm/values.yaml': 'vm:\n  image:\n    repository: victoriametrics/victoria-metrics\n    tag: v1.99.0\n',
+    'charts/c/files/collector.yaml': FILES['charts/otel-collector/files/collector.yaml'],
+  }, { repoName: 'col', now: NOW });
+  assert(img.canonical.spec.pipelines.exporters.metrics.kind === 'prometheusremotewrite' && json(img, 'crawler.discovered.scrape_job_origins').qmgrs.exporters[0].kind === 'kafka',
+    'a metrics backend image keeps the metrics exporter it implies; the job names the kafka exporter', img.canonical.spec.pipelines.exporters.metrics);
   // An Alertmanager config (receivers is a list) is still Alertmanager.
   assert(detectArtefactKind('am.yaml', 'route:\n  receiver: x\nreceivers:\n  - name: x\n') === 'alertmanager', 'Alertmanager receivers are not a collector\'s');
 
