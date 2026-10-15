@@ -201,8 +201,11 @@ const json = (r, key) => JSON.parse(ann(r)[key] ?? 'null');
   assert(detectArtefactKind('snapshots/ibm-mq.prom', PROM) === 'exposition-snapshot', 'a .prom file with families is an exposition snapshot');
   assert(detectArtefactKind('test/fixtures/ibm-mq.prom', PROM) === 'unknown' && detectArtefactKind('src/x.test.metrics', PROM) === 'unknown'
     && detectArtefactKind('testdata/a.prom', PROM) === 'unknown'
-    && ['src/__fixtures__/node.prom', 'test-data/node.prom', 'test_fixtures/a.prom', 'x/__mocks__/a.metrics', 'mocks/a.prom', 'spec/a.prom'].every(p => detectArtefactKind(p, PROM) === 'unknown'),
+    && ['src/__fixtures__/node.prom', 'test-data/node.prom', 'test_fixtures/a.prom', 'x/__mocks__/a.metrics', 'mocks/a.prom', 'spec/a.prom',
+      'e2e/mq.prom', 'integration-tests/mq.prom', 'e2e-tests/mq.prom', 'unit_tests/mq.prom', 'testing/mq.prom', 'src/__snapshots__/mq.prom', 'exp/mq_spec.prom', 'exp/mq.spec.prom'].every(p => detectArtefactKind(p, PROM) === 'unknown'),
   'never from a test, fixture or mock path, in any of the usual spellings');
+  assert(['snapshots/ibm-mq.prom', 'exporters/latest/mq.prom', 'contest/mq.prom', 'attestation/mq.prom'].every(p => detectArtefactKind(p, PROM) === 'exposition-snapshot'),
+    'a folder that only contains such a word in a longer one is not a test folder');
   assert(detectArtefactKind('notes.metrics', 'nothing to see here\n') === 'unknown', 'a .metrics file with no family is not a snapshot');
 
   const r = crawlFiles({ 'snapshots/ibm-mq.prom': PROM, 'test/ibm-mq.prom': '# TYPE test_only gauge\ntest_only 1\n' }, { repoName: 'snap', now: NOW });

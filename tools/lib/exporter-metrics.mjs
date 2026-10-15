@@ -50,16 +50,20 @@ export function isMetricsManifestPath(relPath) {
 }
 
 /**
- * A path a saved exposition is never read from: a test, spec, fixture, mock
- * or test-data folder in any of the usual spellings (`test/`, `__tests__/`,
- * `fixtures/`, `__fixtures__/`, `__mocks__/`, `testdata/`, `test-data/`,
- * `test_fixtures/`, …) or a `*.test.*` / `*.spec.*` / `*_test.*` file — there
- * an exposition is sample input, not what a deployed exporter serves.
+ * A path a saved exposition is never read from: a folder whose name is a
+ * test, spec, fixture, mock or test-data word, alone or joined to others by
+ * `-` / `_` and wrapped in `__` or not (`test/`, `__tests__/`, `e2e/`,
+ * `integration-tests/`, `unit_tests/`, `testing/`, `__fixtures__/`,
+ * `__mocks__/`, `testdata/`, `test-data/`, `__snapshots__/`, …), or a
+ * `*.test.*` / `*.spec.*` / `*_test.*` / `*_spec.*` file — there an
+ * exposition is sample input, not what a deployed exporter serves.
  */
 export function isTestOrFixturePath(relPath) {
   const p = String(relPath ?? '').replace(/\\/g, '/').toLowerCase();
-  return /(^|\/)(?:__)?(?:tests?|specs?|fixtures?|mocks?|testdata|test[-_]?(?:data|fixtures?))(?:__)?(\/|$)/.test(p)
-    || /\.(?:test|spec)\.[a-z]+$|_test\.[a-z]+$/.test(p);
+  const word = '(?:tests?|specs?|fixtures?|mocks?|testdata|testing|e2e|test[-_]?data)';
+  const folder = new RegExp(`^(?:__)?(?:[a-z0-9]+[-_])*${word}(?:[-_][a-z0-9]+)*(?:__)?$|^__snapshots__$`);
+  return p.split('/').slice(0, -1).some(seg => folder.test(seg))
+    || /[._](?:test|spec)\.[a-z]+$/.test(p);
 }
 
 /** A saved exposition: `.prom` or `.metrics`. */
