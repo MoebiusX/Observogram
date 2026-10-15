@@ -2795,8 +2795,139 @@ refuses a root that is a symlink or resolves outside `<workspace>/orgs`,
 and a workspace whose marker names another store. The org row stays, so
 its id is never reused.
 
+Before it deletes anything it reads all of `orgs/<id>/`, every name as the
+bytes on disk, never through a link (it names a path holding a name that is
+not valid UTF-8 as a POSIX shell's `$'…'` spells it, each such byte `\xNN`),
+and it refuses, deleting nothing:
+
+- **on Windows, while the recorded users file's path cannot be fully
+  resolved on this host, or runs through a network share nothing places
+  beside `orgs/<id>/`** — checked before the others: a link or another
+  reparse point on its path whose target cannot be opened (a dangling link
+  too, so a users file recorded as a file link into `orgs/<id>/` and moved
+  out as a refusal below says is refused here, though nothing of it is left
+  there), a part of it this host cannot read, a volume whose paths do not
+  resolve, or a share on any volume, a DFS link or one that cannot be
+  reached: such a path may lead under `orgs/<id>/`. If the users file does
+  not lie under `orgs/<id>/`, delete `orgs/<id>/` by hand and run the purge
+  again; if it does, move it out of `orgs/<id>/` first, then do the same.
+- **while that would take the users file a pre-store build reads** — the
+  one `OBSERVOGRAM_USERS_FILE` named at the import, else
+  `<workspace>/users.json`. This is decided by what deleting the directory
+  takes, not by the users file's path: an entry under `orgs/<id>/` is the
+  users file when it is the same file (the path, or a mount or a link on it,
+  leads there, or it is a hard link of it) or when, on another filesystem, it
+  has the users file's size and modification time (the users file seen
+  through an NFS, SMB, overlay or FUSE mount, or a copy that kept them). The
+  refusal names each such entry: move them out of `orgs/<id>/`, then run the
+  purge again. Through such a mount whose directories show another inode or
+  modification time than theirs under `orgs/<id>/` (an overlay mount with an
+  upper directory shows that directory's), purge-org then cannot trace the
+  users file's path back and refuses it as one that does not exist (below);
+  a refusal naming an entry by its size and modification time names that
+  second step: if the purge then refuses because the users file does not
+  exist, delete `orgs/<id>/` by hand and run the purge again. The store still
+  records the users file's old path, where the in-place `packc store export`
+  writes it and where a pre-store build started with
+  `OBSERVOGRAM_USERS_FILE` set to it reads it: if that path no longer leads
+  to the moved file, make it lead there again before you roll back.
+- **while the users file exists, no entry under `orgs/<id>/` is it, and an
+  entry there has its name** — the name its path ends in, as written or
+  through a link on it, ignoring case: a mount that is down keeps what was
+  written in its mount point meanwhile, so the path leads to such a file
+  now, and once the mount is back to the file of that name under
+  `orgs/<id>/`. The refusal names each such entry (and, for a link, what it
+  leads to under `orgs/<id>/`): move them out of `orgs/<id>/`, then run the
+  purge again; if the purge then refuses because the users file does not
+  exist, delete `orgs/<id>/` by hand and run the purge again. If one of
+  them is the users file, make the users file's path lead to it again
+  before you roll back. An entry of that name that is not the users file
+  is refused alike. So is a users file that does not exist whose path
+  leads into a directory under `orgs/<id>/` while an entry there has its
+  name: a directory on its path may be the mount point of a mount that is
+  down — `orgs/<id>/other` bind-mounted on `orgs/<id>/sub/m`, the users
+  file in `other` recorded through it, and unmounted — and once the mount
+  is back the path leads to that entry. Move the entries it names out of
+  `orgs/<id>/`, then run the purge again; if the users file is among them,
+  make its path lead to it again before you roll back.
+- **while a recorded users file — or, with none recorded,
+  `<workspace>/users.json` as a link — does not exist and its path does not
+  lead under `orgs/<id>/`** (but for one only through directories
+  `orgs/<id>/`, or its path, lies in, below), since a filesystem not mounted
+  now may lead it there. If it lies on a filesystem that is not mounted,
+  mount it and run the purge again; if it does not lie under `orgs/<id>/` (it was deleted,
+  say), delete `orgs/<id>/` by hand and run the purge again: with no
+  directory left it checks no users file and only drops the org's records.
+  After the first refusal's move, with any mount on its path up, that path
+  leads under `orgs/<id>/`, where nothing of the users file is left; the
+  purge goes on when purge-org can trace it there — through a bind mount, a
+  link, or an NFS, SMB, overlay or FUSE mount that shows that directory's own
+  inode and modification time — while no entry under `orgs/<id>/` has the
+  users file's name (above); through any other such mount it is refused
+  here, the second step its first refusal names. Once that org is purged its directory is gone, and the recorded path
+  leads into a directory that does not exist: purging another org goes on
+  when the path is looked up only in directories its `orgs/<id>/` lies in
+  (`<workspace>/orgs` and those above it, by their real paths) or that the
+  path `<workspace>/orgs/<id>` is looked up in (with the workspace, or its
+  `orgs`, reached through a link, the directory that link is in and those
+  above it), and no entry under `orgs/<id>/` has the users file's name,
+  since a filesystem mounted again on one of those directories would cover
+  `orgs/<id>/` too, or the link `<workspace>/orgs/<id>` is reached through,
+  and a directory under `orgs/<id>/` mounted there would show the users file
+  by its name (purge-org does not see a link there to the real path of
+  `orgs/<id>/`). So does a users file deleted in one of those directories. With
+  none recorded and nothing at `<workspace>/users.json`, there is no users
+  file to keep, and the purge goes on.
+- **while the users file, or a directory under `orgs/<id>/`, cannot be
+  read** — run the purge as a user who can read it (a FUSE mount whose
+  server stopped answering: unmount it), or, when the users file does not
+  lie under `orgs/<id>/`, delete the directory by hand as above.
+- **while a mount point is under `orgs/<id>/`, or the directory is one**:
+  on Node 22 the delete stops part-way at a mount point, and on Node 23 and
+  later it first deletes the files of the filesystem mounted there. Unmount
+  it, then run the purge again; where it holds mounts, which keep it busy
+  (`umount`: target is busy), the refusal names them to unmount first, in
+  order, each after the mounts in it. On Windows a mount point is a folder
+  another volume is mounted in, read through a handle on each directory: a
+  junction is none, and neither is `orgs/<id>/` reached through one, on the
+  volume the junction leads to. On Linux this includes a bind mount of
+  another directory of the same filesystem, which `/proc/self/mountinfo`
+  lists (not one a later mount over a directory above it covers, which it
+  lists too: nothing is mounted at its path then, and the purge goes on —
+  unless that path leads through a mount of the covered mount's own
+  filesystem, such as `mount --bind /srv /srv` over it or a recursive bind
+  whose copy of it was unmounted, where it may show the very directory the
+  covered mount is mounted on, which the delete cannot remove: the refusal
+  then names the mounts to unmount first, in order, before you unmount it —
+  and where one of them showed another directory there than the one it is
+  mounted on, the workspace's (the deployment bind-mounted over the directory
+  that holds the covered mount, which purge-org cannot tell apart: a declared
+  false refusal), unmounting it takes the workspace away, so mount it there
+  again once the covered mount is unmounted, then run the purge again;
+  and a mount on `/` itself covers nothing, since a path is looked up from
+  the root and never crosses a mount stacked on it);
+  elsewhere such a mount cannot be told from a directory, so unmount
+  any under `orgs/<id>/` yourself before you purge. It takes a file on
+  another filesystem than its directory for a mount point only when
+  `/proc/self/mountinfo` lists it: an overlay mount whose layers lie on
+  different filesystems shows its lower layers' files so, with nothing
+  mounted there. Where there is no `/proc/self/mountinfo`, it takes every
+  such file for one; on Linux, mount proc at `/proc`
+  (`mount -t proc proc /proc`) and run the purge again. When the users file
+  lies under `orgs/<id>/` as well, the refusal names it too: move it out of
+  `orgs/<id>/` and unmount, then run the purge again — unmounted alone, its
+  path may no longer lead there (a link of its name in a directory mounted
+  there from outside `orgs/<id>/`, to a file under it), and nothing would
+  keep the purge from deleting it. A mount that was down already when
+  purge-org first ran tells nothing of such a link.
+- **while a directory under `orgs/<id>/` changed as it read it**: when the
+  users file exists, it reads each directory again before it goes on, and
+  one that changed — an entry another process added, removed or renamed in
+  it — may have hidden the users file from it. Stop what changes files
+  there, then run the purge again.
+
 **The purge cannot be undone and asks for no confirmation.** It deletes
-everything under `orgs/<id>/` at once: the org's packs, its
+everything under `orgs/<id>/`: the org's packs, its
 `deploys.jsonl` (that org's deploy audit), its rollback `snapshots/`, its
 `runs/` and its `journeys/`. A `packc store backup` holds only the
 database, not these files, so copy `<workspace>/orgs/<id>/` first if any
