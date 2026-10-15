@@ -582,6 +582,11 @@ export function crawlFiles(filesInput, opts = {}) {
   const metricDefinitions = [];
   const scrapeJobs = [];
   const exporters = new Map();   // exporter name → the files that say what it exposes
+  // A collector config with no pipelines names its metrics exporter only by
+  // guess; a guess is applied after every file is walked, and only when no
+  // pipeline declared one (a config split across --config files declares it
+  // in another file).
+  const collectorGuesses = [];
   const dashboards = [];
   const alertingRoutes = [];
   const pipelines = { receivers: [], processors: [], exporters: { metrics: null, logs: null, traces: null } };
@@ -634,12 +639,12 @@ export function crawlFiles(filesInput, opts = {}) {
         case 'actuator-metrics-config': walkActuatorMetricsConfig(f, scrapeJobs, evidence, summary, repoName); break;
         case 'metric-source-code': walkMetricSourceCode(f, metricDefinitions, evidence, summary, repoName); break;
         case 'alertmanager':     walkAlertmanager(f, alertingRoutes, evidence, summary); break;
-        case 'otel-collector':   walkOtelCollector(f, pipelines, scrapeJobs, evidence, summary); break;
+        case 'otel-collector':   walkOtelCollector(f, pipelines, scrapeJobs, evidence, summary, collectorGuesses); break;
         case 'metrics-manifest': walkMetricsManifest(f, metricDefinitions, exporters, summary, evidence); break;
         case 'exposition-snapshot': walkExpositionSnapshot(f, metricDefinitions, exporters, summary, evidence); break;
         case 'exporter-config':  walkExporterConfig(f, catalogue, metricDefinitions, exporters, summary, evidence); break;
         case 'grafana-dashboard':walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summary); break;
-        case 'helm-template':    walkHelmTemplate(f, { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, repoName }, evidence, summary); break;
+        case 'helm-template':    walkHelmTemplate(f, { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, collectorGuesses, repoName }, evidence, summary); break;
         case 'helm-values':      walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents); break;
         case 'k8s-workload':     walkK8sWorkload(f, backends, pipelines, evidence, summary); break;
         // Chart.yaml itself carries no observability contracts — the payloads
@@ -649,6 +654,19 @@ export function crawlFiles(filesInput, opts = {}) {
       }
     } catch (e) {
       summary.warnings.push(`Failed to parse ${f.relPath}: ${e.message}`);
+    }
+  }
+
+  if (!pipelines.exporters.metrics && collectorGuesses.length) {
+    const g = collectorGuesses[0];
+    pipelines.exporters.metrics = { kind: mapExporterKind(g.candidates[0].split('/')[0]) };
+    evidence['pipelines.exporters.metrics'] = g.relPath;
+    if (g.candidates.length > 1) {
+      summary.warnings.push(`${g.relPath} has no service pipelines and ${g.candidates.length} metrics-capable exporters (${g.candidates.join(', ')}); the metrics exporter is taken to be the first, '${g.candidates[0]}'.`);
+    }
+    if (!g.counted) {
+      evidence[`PIP-${summary.discovered.pipelines + 1}`] = g.relPath;
+      summary.discovered.pipelines++;
     }
   }
 
@@ -1917,14 +1935,14 @@ function walkK8sWorkload(f, backends, pipelines, evidence, summary) {
 // like a rule shipped as a standalone file. If the template embeds nothing, we
 // strip the scaffolding and treat the document itself as a single manifest.
 function walkHelmTemplate(f, buckets, evidence, summary) {
-  const { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, repoName } = buckets;
+  const { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, collectorGuesses, repoName } = buckets;
   const route = (kind, sub) => {
     switch (kind) {
       case 'prometheus-rules': walkPrometheusRules(sub, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary); return true;
       case 'prometheus-scrape-config': walkPrometheusScrapeConfig(sub, scrapeJobs, evidence, summary); return true;
       case 'actuator-metrics-config': walkActuatorMetricsConfig(sub, scrapeJobs, evidence, summary, repoName); return true;
       case 'alertmanager':     walkAlertmanager(sub, alertingRoutes, evidence, summary); return true;
-      case 'otel-collector':   walkOtelCollector(sub, pipelines, scrapeJobs, evidence, summary); return true;
+      case 'otel-collector':   walkOtelCollector(sub, pipelines, scrapeJobs, evidence, summary, collectorGuesses); return true;
       case 'grafana-dashboard':walkGrafanaDashboard(sub, dashboards, metricDefinitions, evidence, summary); return true;
       case 'docker-compose':   walkDockerCompose(sub, backends, pipelines, evidence, summary); return true;
       case 'k8s-workload':     walkK8sWorkload(sub, backends, pipelines, evidence, summary); return true;
@@ -2284,79 +2302,79 @@ function walkAlertmanager(f, routes, evidence, summary) {
 // exporter per signal) and the scrape jobs of its prometheus receivers. A
 // config with no `service:` block (a Helm chart's files/ copy, assembled
 // with the pipelines elsewhere) still names its receivers and exporters:
-// the prometheus receivers' jobs are read, and the one metrics exporter it
-// configures is the metrics exporter.
-function walkOtelCollector(f, pipelines, scrapeJobs, evidence, summary) {
-  for (const obj of parseYamlDocs(f.content)) {
-    const scrapeReceivers = collectorScrapeReceivers(obj);
-    const exporterCfgs = isMapping(obj?.exporters) ? obj.exporters : {};
-    if (obj?.service?.pipelines) {
-      const seen = new Set();
-      for (const pipeline of Object.values(obj.service.pipelines)) {
-        for (const recv of pipeline.receivers || []) {
-          if (!seen.has(`r:${recv}`)) {
-            seen.add(`r:${recv}`);
-            pipelines.receivers.push({ name: recv.split('/')[0] });
-          }
-        }
-        for (const proc of pipeline.processors || []) {
-          if (!seen.has(`p:${proc}`)) {
-            seen.add(`p:${proc}`);
-            pipelines.processors.push({ name: proc.split('/')[0] });
-          }
-        }
-        for (const exp of pipeline.exporters || []) {
-          const kind = exp.split('/')[0];
-          const sig = Object.entries(obj.service.pipelines).find(([_, p]) => p === pipeline)?.[0] || '';
-          const signalClass = /^metrics/i.test(sig) ? 'metrics'
-                           : /^logs/i.test(sig) ? 'logs'
-                           : /^traces/i.test(sig) ? 'traces' : null;
-          if (signalClass && !pipelines.exporters[signalClass]) {
-            pipelines.exporters[signalClass] = { kind: mapExporterKind(kind) };
-          }
-        }
-      }
-      evidence[`PIP-${summary.discovered.pipelines + 1}`] = f.relPath;
-      summary.discovered.pipelines++;
-      // Each scrape receiver's samples leave by the exporters of the metrics
-      // pipelines that list it.
-      for (const { key, config } of scrapeReceivers) {
-        const names = [];
-        for (const [sig, p] of Object.entries(obj.service.pipelines)) {
-          if (!/^metrics/i.test(sig) || !Array.isArray(p?.receivers) || !p.receivers.includes(key)) continue;
-          for (const exp of p.exporters || []) if (!names.includes(exp)) names.push(exp);
-        }
-        walkScrapeConfigDoc(config, f.relPath, scrapeJobs, evidence, summary, {
-          receiver: key,
-          exporters: names.map(n => collectorExporterDetail(n, exporterCfgs[n])),
-        });
-      }
-      continue;
-    }
+// the prometheus receivers' jobs are read, and the metrics exporter it
+// configures is a guess (`guesses`), applied by crawlFiles only when no
+// pipeline in any file declares one.
+function walkOtelCollector(f, pipelines, scrapeJobs, evidence, summary, guesses = []) {
+  for (const obj of parseYamlDocs(f.content)) walkOtelCollectorDoc(obj, f.relPath, pipelines, scrapeJobs, evidence, summary, guesses);
+}
 
-    // No pipelines: the metrics exporter is the one metrics-capable exporter
-    // the config names (the first, with a warning, when it names several).
-    const candidates = Object.keys(exporterCfgs).filter(n => METRICS_EXPORTER_TYPES.has(n.split('/')[0].toLowerCase()));
-    const chosen = candidates[0] || null;
-    if (candidates.length > 1) {
-      summary.warnings.push(`${f.relPath} has no service pipelines and ${candidates.length} metrics-capable exporters (${candidates.join(', ')}); the metrics exporter is taken to be the first, '${chosen}'.`);
+function walkOtelCollectorDoc(obj, relPath, pipelines, scrapeJobs, evidence, summary, guesses) {
+  const scrapeReceivers = collectorScrapeReceivers(obj);
+  const exporterCfgs = isMapping(obj?.exporters) ? obj.exporters : {};
+  if (obj?.service?.pipelines) {
+    const seen = new Set();
+    for (const pipeline of Object.values(obj.service.pipelines)) {
+      for (const recv of pipeline.receivers || []) {
+        if (!seen.has(`r:${recv}`)) {
+          seen.add(`r:${recv}`);
+          pipelines.receivers.push({ name: recv.split('/')[0] });
+        }
+      }
+      for (const proc of pipeline.processors || []) {
+        if (!seen.has(`p:${proc}`)) {
+          seen.add(`p:${proc}`);
+          pipelines.processors.push({ name: proc.split('/')[0] });
+        }
+      }
+      for (const exp of pipeline.exporters || []) {
+        const kind = exp.split('/')[0];
+        const sig = Object.entries(obj.service.pipelines).find(([_, p]) => p === pipeline)?.[0] || '';
+        const signalClass = /^metrics/i.test(sig) ? 'metrics'
+                         : /^logs/i.test(sig) ? 'logs'
+                         : /^traces/i.test(sig) ? 'traces' : null;
+        if (signalClass && !pipelines.exporters[signalClass]) {
+          pipelines.exporters[signalClass] = { kind: mapExporterKind(kind) };
+        }
+      }
     }
-    if (!scrapeReceivers.length && !chosen) continue;
-    for (const { key } of scrapeReceivers) {
-      const name = key.split('/')[0];
-      if (!pipelines.receivers.some(r => r.name === name)) pipelines.receivers.push({ name });
-    }
-    if (chosen && !pipelines.exporters.metrics) {
-      pipelines.exporters.metrics = { kind: mapExporterKind(chosen.split('/')[0]) };
-      evidence['pipelines.exporters.metrics'] = f.relPath;
-    }
-    const exporters = chosen ? [collectorExporterDetail(chosen, exporterCfgs[chosen])] : [];
+    evidence[`PIP-${summary.discovered.pipelines + 1}`] = relPath;
+    summary.discovered.pipelines++;
+    // Each scrape receiver's samples leave by the exporters of the metrics
+    // pipelines that list it.
     for (const { key, config } of scrapeReceivers) {
-      walkScrapeConfigDoc(config, f.relPath, scrapeJobs, evidence, summary, { receiver: key, exporters });
+      const names = [];
+      for (const [sig, p] of Object.entries(obj.service.pipelines)) {
+        if (!/^metrics/i.test(sig) || !Array.isArray(p?.receivers) || !p.receivers.includes(key)) continue;
+        for (const exp of p.exporters || []) if (!names.includes(exp)) names.push(exp);
+      }
+      walkScrapeConfigDoc(config, relPath, scrapeJobs, evidence, summary, {
+        receiver: key,
+        exporters: names.map(n => collectorExporterDetail(n, exporterCfgs[n])),
+      });
     }
-    evidence[`PIP-${summary.discovered.pipelines + 1}`] = f.relPath;
+    return;
+  }
+
+  // No pipelines: the metrics exporter is the metrics-capable exporter the
+  // config names (the first when it names several) — a guess, applied by
+  // crawlFiles after the walk, and only when no pipeline declares one.
+  const candidates = Object.keys(exporterCfgs).filter(n => METRICS_EXPORTER_TYPES.has(n.split('/')[0].toLowerCase()));
+  const chosen = candidates[0] || null;
+  if (!scrapeReceivers.length && !chosen) return;
+  for (const { key } of scrapeReceivers) {
+    const name = key.split('/')[0];
+    if (!pipelines.receivers.some(r => r.name === name)) pipelines.receivers.push({ name });
+  }
+  const exporters = chosen ? [collectorExporterDetail(chosen, exporterCfgs[chosen])] : [];
+  for (const { key, config } of scrapeReceivers) {
+    walkScrapeConfigDoc(config, relPath, scrapeJobs, evidence, summary, { receiver: key, exporters });
+  }
+  if (scrapeReceivers.length) {
+    evidence[`PIP-${summary.discovered.pipelines + 1}`] = relPath;
     summary.discovered.pipelines++;
   }
+  if (chosen) guesses.push({ relPath, candidates, counted: scrapeReceivers.length > 0 });
 }
 
 // Collector exporters that carry metrics, by component type.

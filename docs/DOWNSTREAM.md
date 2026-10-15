@@ -1950,10 +1950,13 @@ without a `service:` block (a Helm chart's `files/` copy has none).
   `crawler.discovered.scrape_job_origins` adds `via: otel-collector`, the
   `receiver`, the `target_count` of its static targets, and the `exporters`
   its samples leave by: the exporters of the metrics pipelines that list the
-  receiver, or, with no pipelines, the one metrics exporter the config names.
+  receiver, or, with no pipelines, the metrics exporter the config names.
   Each exporter is given as `{ name, kind, topic | endpoint }`: a kafka
   exporter's metrics topic, any other's endpoint reduced by `safeSourceUrl`
   (no userinfo, query or fragment).
 - That exporter's kind is `spec.pipelines.exporters.metrics`, in place of the
-  `prometheusremotewrite` scaffold. When a config with no pipelines names
-  several metrics exporters, the first is taken and the crawl warns.
+  `prometheusremotewrite` scaffold. A config with no pipelines only proposes
+  one: it applies after every file is walked, and only when no pipeline in
+  any file declares a metrics exporter (a config split across `--config`
+  files declares it in another). When it names several, the first is taken
+  and the crawl warns.

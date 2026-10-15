@@ -317,6 +317,18 @@ service:
   assert(two.canonical.spec.pipelines.exporters.metrics.kind === 'otlp'
     && two.summary.warnings.includes("files/collector.yaml has no service pipelines and 2 metrics-capable exporters (otlp, kafka); the metrics exporter is taken to be the first, 'otlp'."),
   'two candidates: the first is taken and the warning says so', two.summary.warnings);
+  // A config split across --config files: the components in one file, the
+  // service in another. The declared metrics pipeline wins over the guess,
+  // whichever file is walked first, and the guess leaves no trace.
+  for (const [a, b] of [['otel/a-components.yaml', 'otel/b-service.yaml'], ['otel/b-components.yaml', 'otel/a-service.yaml']]) {
+    const split = crawlFiles({
+      [a]: 'receivers:\n  otlp: {}\nexporters:\n  otlp/tempo:\n    endpoint: http://tempo:4317\n  prometheusremotewrite:\n    endpoint: http://mimir:9009/api/v1/push\n',
+      [b]: 'receivers:\n  otlp: {}\nexporters:\n  otlp/tempo: {}\n  prometheusremotewrite: {}\nservice:\n  pipelines:\n    traces: { receivers: [otlp], exporters: [otlp/tempo] }\n    metrics: { receivers: [otlp], exporters: [prometheusremotewrite] }\n',
+    }, { repoName: 'col', now: NOW });
+    assert(split.canonical.spec.pipelines.exporters.metrics.kind === 'prometheusremotewrite' && split.summary.discovered.pipelines === 1
+      && !split.summary.warnings.some(w => /metrics-capable/.test(w)) && split.evidence['pipelines.exporters.metrics'] === undefined,
+    `a split config (${a} first): the declared metrics exporter, one pipeline, no guess warning`, [split.canonical.spec.pipelines.exporters.metrics, split.summary.discovered.pipelines]);
+  }
   // An Alertmanager config (receivers is a list) is still Alertmanager.
   assert(detectArtefactKind('am.yaml', 'route:\n  receiver: x\nreceivers:\n  - name: x\n') === 'alertmanager', 'Alertmanager receivers are not a collector\'s');
 
