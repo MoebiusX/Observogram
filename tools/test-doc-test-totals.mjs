@@ -11,6 +11,9 @@
 // entries quote the same kind of pair (`a → b tests`, `Suite total a → b`):
 // no two may start from the same total, and one that starts where a journey
 // entry starts must end where it ends, so the two documents cannot disagree.
+// A release cut moves those entries verbatim under the new `## x.y.z — date`
+// heading and leaves `## Unreleased` empty; until the next entry lands there,
+// the release section right under it is the one these rules read.
 // A batch's delivery report (`docs/DELIVERY-*.md`, the batch acceptance's
 // "short delivery report" — one per PR of rebadge batch 2) quotes the same
 // pairs per work item: it must exist and every pair it states must be one
@@ -75,16 +78,20 @@ test('within a section the journey\'s test totals chain start-to-end', () => {
 });
 
 test('the CHANGELOG\'s Unreleased test totals agree with each other and with the journey', () => {
-  const unreleased = /^## Unreleased\n([\s\S]*?)(?=^## |(?![\s\S]))/m.exec(changelog);
-  assert.ok(unreleased, 'docs/CHANGELOG.md has a `## Unreleased` section');
-  const firstLine = changelog.slice(0, unreleased.index).split('\n').length + 1;
+  const SECTION = /^## (.*)\n([\s\S]*?)(?=^## |(?![\s\S]))/gm;
+  const sections = [...changelog.matchAll(SECTION)];
+  const at = sections.findIndex((m) => m[1].trim() === 'Unreleased');
+  assert.ok(at >= 0, 'docs/CHANGELOG.md has a `## Unreleased` section');
+  // Empty right after a release cut: the entries it held are the release section under it.
+  const read = sections[at][2].trim() === '' && sections[at + 1] && /^\d+\.\d+\.\d+ — \d{4}-\d{2}-\d{2}$/.test(sections[at + 1][1].trim()) ? sections[at + 1] : sections[at];
+  const firstLine = changelog.slice(0, read.index).split('\n').length + 1;
   const quoted = [];
-  unreleased[1].split('\n').forEach((line, i) => {
+  read[2].split('\n').forEach((line, i) => {
     for (const m of line.matchAll(/Suite total (\d+) → (\d+)|(\d+) → (\d+) tests\b/g)) {
       quoted.push({ start: Number(m[1] ?? m[3]), end: Number(m[2] ?? m[4]), line: firstLine + i });
     }
   });
-  assert.ok(quoted.length > 0, 'the Unreleased entries quote at least one suite total');
+  assert.ok(quoted.length > 0, `the ${read[1].trim()} entries quote at least one suite total`);
   const problems = [];
   const byStart = new Map();
   for (const q of quoted) {
