@@ -1873,8 +1873,9 @@ exposition type (`counter`, `gauge`, `histogram`, `summary`, `untyped`,
 `unknown`, `gaugehistogram`, `info`, `stateset`). An entry that has neither,
 or repeats a name, is not read and the crawl says how many; a file that is not
 a manifest is named in a warning. `source` is recorded without userinfo,
-query or fragment: everything before the last `@` and from the first `?` or
-`#` is dropped (`safeSourceUrl`, textual — a password may hold `/` or `@`).
+query or fragment: tabs and line breaks, everything before the last `@`, and
+everything from the first `?` or `#` are dropped (`safeSourceUrl`, textual —
+a password may hold `/` or `@`).
 Label values are never part of a manifest.
 
 `packc emit --exporter <url>` (`tools/emit-manifest.mjs`) writes one from a

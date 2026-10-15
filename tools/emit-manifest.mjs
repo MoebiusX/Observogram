@@ -47,10 +47,16 @@ function parseArgs(argv) {
   const out = { out: 'metrics-manifest.json', timeout: 15, timestamp: true };
   const takes = new Set(['--exporter', '--from', '--name', '--version', '--out', '--generated-at', '--timeout']);
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
+    let a = argv[i];
     if (a === '-h' || a === '--help') { out.help = true; continue; }
     if (a === '--no-timestamp') { out.timestamp = false; continue; }
-    if (!takes.has(a)) fail(2, `unknown argument '${a}'\n${USAGE}`);
+    // `--flag=value` as well as `--flag value`.
+    const eq = a.startsWith('--') ? a.indexOf('=') : -1;
+    let inline;
+    if (eq > 0) { inline = a.slice(eq + 1); a = a.slice(0, eq); }
+    // An unknown argument may be a URL with its credentials: never echoed.
+    if (!takes.has(a)) fail(2, `unknown argument ${/:\/\/|@/.test(a) ? '(a URL-like value, not shown)' : `'${a}'`}\n${USAGE}`);
+    if (inline !== undefined) { out[a.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = inline; continue; }
     const v = argv[++i];
     if (v === undefined || (v.startsWith('--') && v !== '-')) fail(2, `${a} needs a value\n${USAGE}`);
     out[a.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = v;
@@ -85,7 +91,11 @@ async function scrape(url, timeoutSeconds) {
   }
   if (res.status >= 300 && res.status < 400) fail(1, redirectRefusal(url, res.status, res.headers.get('location')));
   if (res.status !== 200) fail(1, `${safeSourceUrl(url)} answered ${res.status}; a metrics endpoint answers 200`);
-  return res.text();
+  try {
+    return await res.text();
+  } catch (e) {
+    fail(1, `could not read the response of ${safeSourceUrl(url)}: ${e?.name === 'TimeoutError' ? `not complete within ${timeoutSeconds}s (raise --timeout)` : 'the connection ended before the body did'}`);
+  }
 }
 
 const args = parseArgs(process.argv.slice(2));

@@ -523,8 +523,8 @@
       "releasedExports": null
     },
     "tools/lib/exporter-metrics.mjs": {
-      "sha256": "2ea5fb2293e3c3247ac7aaca2b9dce7abc1c94ced7d93a60fd103d10a286c4a9",
-      "bytes": 19273,
+      "sha256": "633a536d2c488869627ae74a38ff44a9f9c53f4b612550ed63469949884d8b5a",
+      "bytes": 19410,
       "exports": [
         "EXPOSITION_TYPES",
         "asResolvedCatalogue",

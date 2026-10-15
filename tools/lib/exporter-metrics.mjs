@@ -79,13 +79,15 @@ export function isExpositionSnapshotPath(relPath) {
  * rule.
  */
 export function safeSourceUrl(raw) {
-  const s = String(raw ?? '').trim();
+  // Tab and line breaks go first, as a URL parser drops them (the value
+  // would still send its query).
+  const s = String(raw ?? '').replace(/[\t\n\r]/g, '').trim();
   if (!s) return '';
   const prefix = /^(?:[A-Za-z][A-Za-z0-9+.-]*:)?\/\//.exec(s)?.[0] ?? '';
   let rest = s.slice(prefix.length);
   const at = rest.lastIndexOf('@');
   if (at >= 0) rest = rest.slice(at + 1);
-  return prefix + rest.replace(/[?#].*$/, '');
+  return prefix + rest.replace(/[?#][\s\S]*$/, '');
 }
 
 function parseSampleLine(line) {

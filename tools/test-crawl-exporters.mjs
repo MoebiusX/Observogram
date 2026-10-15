@@ -326,6 +326,10 @@ service:
     ['//u:p@h/metrics', '//h/metrics'],
     ['HTTPS://U:P@H:1/m?t=1#f', 'HTTPS://H:1/m'],
     ['svc:Zx9/Qk+SECRET==@otel-gw:4317', 'otel-gw:4317'],
+    // A line break or tab, which a URL parser drops (the value still sends its query).
+    ['http://mq:9157/metrics?token=SECRET1\nx', 'http://mq:9157/metrics'],
+    ['https://i/v1?k=SECRET\u2028x', 'https://i/v1'],
+    ['https://u:p\t@h/v1#frag\r\nx', 'https://h/v1'],
   ];
   assert(SECRETS.every(([raw, want]) => safeSourceUrl(raw) === want), 'safeSourceUrl drops everything before the last @ and from the first ? or #',
     SECRETS.map(([raw]) => safeSourceUrl(raw)), SECRETS.map(([, want]) => want));
@@ -466,6 +470,7 @@ const server = createServer((req, res) => {
   if (path === '/metrics') { res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4' }); res.end(EXPOSITION); return; }
   if (path === '/moved') { res.writeHead(302, { location: '/metrics?token=abc' }); res.end(); return; }
   if (path === '/empty') { res.writeHead(200); res.end('\n'); return; }
+  if (path === '/cut') { res.writeHead(200, { 'content-length': '1000' }); res.write('# TYPE x gauge\n'); setTimeout(() => res.destroy(), 50); return; }
   if (path === '/badloc') { res.writeHead(302, { location: 'http://[oops/metrics' }); res.end(); return; }
   res.writeHead(500); res.end('boom');
 });
@@ -497,10 +502,10 @@ try {
   assert(JSON.stringify(manifestFromExposition(EXPOSITION, { exporter: 'ibm-mq', version: '5.6.0', source: `${base}/metrics`, generatedAt: NOW })) === JSON.stringify(written),
     'the CLI writes exactly manifestFromExposition\'s manifest');
 
-  const viaPackc = await run(['emit', '--exporter', `${base}/metrics`, '--out', '-', '--no-timestamp'], CLI);
+  const viaPackc = await run(['emit', `--exporter=${base}/metrics`, '--out=-', '--no-timestamp'], CLI);
   const piped = JSON.parse(viaPackc.stdout);
   assert(viaPackc.status === 0 && piped.exporter === '127.0.0.1' && !('generatedAt' in piped) && piped.metrics.length === 2,
-    '`packc emit` dispatches; --out - writes to stdout; the host names the exporter; --no-timestamp leaves the stamp out', viaPackc);
+    '`packc emit` dispatches; `--flag=value` is read; --out - writes to stdout; the host names the exporter; --no-timestamp leaves the stamp out', viaPackc);
 
   writeFileSync(join(tmp, 'qm1.prom'), EXPOSITION);
   const from = await run(['--from', 'qm1.prom', '--out', '-', '--no-timestamp']);
@@ -516,11 +521,14 @@ try {
     [['--exporter', 'file:///etc/passwd'], 2, 'packc emit: --exporter must be an http or https URL, not file:\n'],
     [['--exporter', `${base}/metrics`, '--from', 'qm1.prom'], 2, 'packc emit: pass --exporter or --from, not both\n'],
     [['--exporter', `${base}/metrics`, '--bogus'], 2, null],
+    [['http://user:SECRET4@127.0.0.1:1/metrics?token=SECRET5'], 2, null],
+    [['--exporter=http://user:SECRET6@127.0.0.1:1/metrics'], 2, 'packc emit: the --exporter URL carries credentials, which are neither sent nor recorded; save the exposition with your own client and pass it with --from\n'],
+    [['--exporter', `${base}/cut?token=SECRET7`], 1, `packc emit: could not read the response of ${base}/cut: the connection ended before the body did\n`],
     [[], 2, null],
   ];
   for (const [args, code, message] of refusals) {
     const out = await run(args);
-    assert(out.status === code && out.stdout === '' && (message === null || out.stderr === message),
+    assert(out.status === code && out.stdout === '' && (message === null || out.stderr === message) && !/SECRET/.test(out.stderr),
       `emit ${args.join(' ') || '(no args)'} → exit ${code}${message ? ', the reason named' : ''}`, out, { status: code, message });
   }
   // The refusals' ways out work: save it yourself and pass --from (above);
