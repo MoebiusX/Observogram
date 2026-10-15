@@ -26,9 +26,19 @@
 // it is checked against are not under one name (their realpaths' roots
 // differ), p is placed by the nearest of itself and its directories that is
 // that path or one of its directories — the same file id on the same volume
-// (statSync, with the volume serial's low 32 bits: all a share reports) —
-// and spelled from there. A path reached through a share that this cannot
-// place may still lie inside that path: a share of a directory below it
+// (with the volume serial's low 32 bits: all a share reports) — and spelled
+// from there. A file id and a volume are read through a handle opened on the
+// path (openSync, fstatSync, closeSync: libuv opens a directory too), which
+// reports the serial on every libuv, never a stat by name: libuv answers one
+// by the path's name (GetFileInformationByName, Windows 11 24H2 and Server
+// 2025) unless the path is reached through a share or its last name is a
+// reparse point, which it opens, and 1.49.0 to 1.50.x (Node 22.16.0's
+// 1.49.2) declared FILE_STAT_BASIC_INFORMATION with its last two fields
+// swapped, so a stat by name reported the upper half of the file's 128-bit id
+// as the device, 0 on NTFS: C:\ws read as on another volume than \\myhost\ws,
+// nothing placed a path through that share, and a directory export to
+// \\myhost\ws\exports\new was written into the workspace. A path reached
+// through a share that this cannot place may still lie inside that path: a share of a directory below it
 // (\\myhost\exports, which is C:\ws\exports, beside C:\ws) names none of its
 // directories. So on that path's volume such a path answers null — it may lie
 // inside — and the export, purge-org and no-marker checks refuse it, naming
@@ -110,17 +120,18 @@
 // crawlScopeRefusal's placement, which places only a local path while the
 // workspace is named through a share (it refuses any other path off a local
 // drive). That form only compares: every message, record and return value
-// keeps the path as given. host = { windows, path, realpathSync, statSync,
-// lstatSync } (the platform, node:path's, node:fs's realpathSync with its
-// .native, node:fs's statSync and lstatSync) is injectable
-// (server/test-store-paths.mjs); the default is this host.
+// keeps the path as given. host = { windows, path, realpathSync, lstatSync,
+// openSync, fstatSync, closeSync } (the platform, node:path's, node:fs's
+// realpathSync with its .native, lstatSync, openSync, fstatSync and
+// closeSync) is injectable (server/test-store-paths.mjs); the default is this
+// host.
 
-import { lstatSync, realpathSync, statSync } from 'node:fs';
+import { closeSync, fstatSync, lstatSync, openSync, realpathSync } from 'node:fs';
 import * as nodePath from 'node:path';
 
 const ON_WINDOWS = process.platform === 'win32';
 
-export function comparedPath(own, { windows = ON_WINDOWS, path = nodePath, realpathSync: fsRealpath = realpathSync, statSync: fsStat = statSync, lstatSync: fsLstat = lstatSync } = {}) {
+export function comparedPath(own, { windows = ON_WINDOWS, path = nodePath, realpathSync: fsRealpath = realpathSync, lstatSync: fsLstat = lstatSync, openSync: fsOpen = openSync, fstatSync: fsFstat = fstatSync, closeSync: fsClose = closeSync } = {}) {
   if (!windows) return own;
   const real = (p, unread = []) => {   // the native realpath of p's longest prefix it can read, the rest as written; unread gets the parts it cannot
     try { return fsRealpath.native(p); } catch {
@@ -134,14 +145,19 @@ export function comparedPath(own, { windows = ON_WINDOWS, path = nodePath, realp
     return folded.endsWith('\\') ? folded.slice(0, -1) : folded;   // a root too, so <form> + \ prefixes what lies under it
   };
   const root = (native) => form(path.parse(native).root);
-  const stat = (p) => { try { return fsStat(p, { bigint: true }); } catch { return null; } };
+  const stat = (p) => {   // p's stats through a handle opened on it, closed before it answers, or null when p cannot be opened
+    try {
+      const fd = fsOpen(p, 'r');
+      try { return fsFstat(fd, { bigint: true }); } finally { fsClose(fd); }
+    } catch { return null; }
+  };
   const fileId = (p) => { const st = stat(p); return st && `${st.dev & 0xffffffffn}:${st.ino}`; };
   const lineage = (native) => {   // native and its ancestors, nearest first
     const dirs = [native];
     while (path.dirname(dirs.at(-1)) !== dirs.at(-1)) dirs.push(path.dirname(dirs.at(-1)));
     return dirs;
   };
-  const volume = (native) => {   // the volume serial's low 32 bits of native's nearest path that exists, or null
+  const volume = (native) => {   // the volume serial's low 32 bits of native's nearest path that opens, or null
     for (const dir of lineage(native)) { const st = stat(dir); if (st) return st.dev & 0xffffffffn; }
     return null;
   };
