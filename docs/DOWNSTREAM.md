@@ -1944,7 +1944,9 @@ with `packc emit` and the manifest outranks it.
 
 An OTel collector's prometheus receivers (`prometheus`,
 `prometheus/<name>`) are read for their `config.scrape_configs`, with or
-without a `service:` block (a Helm chart's `files/` copy has none).
+without a `service:` block (a Helm chart's `files/` copy has none), in a
+config file, a Helm ConfigMap, or a chart's `values*.yaml` (at its top level
+or under `config:`).
 
 - Each job is in `crawler.discovered.scrape_jobs`. Its entry in
   `crawler.discovered.scrape_job_origins` adds `via: otel-collector`, the

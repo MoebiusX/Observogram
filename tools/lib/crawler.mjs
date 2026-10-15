@@ -646,7 +646,7 @@ export function crawlFiles(filesInput, opts = {}) {
         case 'exporter-config':  walkExporterConfig(f, catalogue, metricDefinitions, exporters, summary, evidence); break;
         case 'grafana-dashboard':walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summary); break;
         case 'helm-template':    walkHelmTemplate(f, { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, collectorGuesses, repoName }, evidence, summary); break;
-        case 'helm-values':      walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents); break;
+        case 'helm-values':      walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents, { scrapeJobs, collectorGuesses }); break;
         case 'k8s-workload':     walkK8sWorkload(f, backends, pipelines, evidence, summary); break;
         // Chart.yaml itself carries no observability contracts — the payloads
         // live in the templated manifests (handled as 'helm-template'). We
@@ -1874,7 +1874,7 @@ function collectDisabledComponents(valuesFiles) {
   return disabled;
 }
 
-function walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents = new Set()) {
+function walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents = new Set(), { scrapeJobs = [], collectorGuesses = [] } = {}) {
   const visit = (node, path = []) => {
     if (!node) return;
     // Prune the subtree of any top-level component the environment disables
@@ -1905,7 +1905,21 @@ function walkHelmValues(f, backends, pipelines, evidence, summary, disabledCompo
     }
   };
 
-  for (const obj of parseYamlDocs(f.content)) visit(obj);
+  for (const obj of parseYamlDocs(f.content)) {
+    // A collector chart's values carry the collector config: at the top
+    // level, or under `config:` (the opentelemetry-collector chart's idiom).
+    // Read first, so a pipeline it declares beats an image's inference.
+    const collector = valuesCollectorConfig(obj);
+    if (collector) walkOtelCollectorDoc(collector, f.relPath, pipelines, scrapeJobs, evidence, summary, collectorGuesses);
+    visit(obj);
+  }
+}
+
+// The collector config a Helm values document carries, or null.
+function valuesCollectorConfig(obj) {
+  if (isMapping(obj) && looksLikeOtelCollector(obj)) return obj;
+  if (isMapping(obj?.config) && looksLikeOtelCollector(obj.config)) return obj.config;
+  return null;
 }
 
 function workloadPodSpec(obj) {
@@ -2440,6 +2454,27 @@ function collectionEvidenceOf(relPath, content, catalogue) {
     if (kind === 'exporter-config') {
       const entry = matchExporterConfig(parseYaml(content), catalogue);
       return `${relPath} (exporter config: ${entry?.id ?? 'unknown'})`;
+    }
+    if (kind === 'helm-values') {
+      const jobs = jobsOf(parseYamlDocs(content).map(valuesCollectorConfig).filter(Boolean)
+        .flatMap(c => collectorScrapeReceivers(c).map(r => r.config)));
+      return jobs.length ? `${relPath} (collector scrape jobs: ${jobs.join(', ')})` : null;
+    }
+    if (kind === 'helm-template') {
+      // The jobs the template's walker would read (its ConfigMap values or
+      // the whole template), walked into throwaway buckets.
+      const buckets = {
+        backends: [], recordingRules: [], burnRateAlerts: [], alertRules: [], metricDefinitions: [], scrapeJobs: [],
+        alertingRoutes: [], dashboards: [], collectorGuesses: [], repoName: null,
+        pipelines: { receivers: [], processors: [], exporters: { metrics: null, logs: null, traces: null } },
+      };
+      const scratch = {
+        discovered: {}, warnings: [], invented: { endpoints: [], channels: [] },
+        omitted: { syntheticRecordingRules: [], unresolvedChannels: [], recordingRules: [], ruleIntervals: [] },
+      };
+      walkHelmTemplate({ relPath, content }, buckets, {}, scratch);
+      const jobs = [...new Set(buckets.scrapeJobs.map(j => j.job))];
+      return jobs.length ? `${relPath} (template scrape jobs: ${jobs.join(', ')})` : null;
     }
   } catch { /* unreadable: nothing to report */ }
   return null;

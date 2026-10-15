@@ -379,6 +379,29 @@ data:
     'a Helm ConfigMap\'s collector with no service block: its job and its kafka exporter', ann(h)['crawler.discovered.scrape_jobs']);
 }
 
+// A collector config in a chart's values: at the top level, or under
+// `config:` (the opentelemetry-collector chart's idiom).
+{
+  const COL = 'receivers:\n  prometheus:\n    config:\n      scrape_configs:\n        - job_name: qmgrs\n          static_configs:\n            - targets: ["a:1", "b:1"]\nexporters:\n  kafka:\n    topic: mq\n';
+  const nested = 'mode: deployment\nimage:\n  repository: otel/opentelemetry-collector-contrib\nconfig:\n' + COL.split('\n').map(l => (l ? `  ${l}` : l)).join('\n');
+  for (const [label, text] of [['top level', COL], ['under config:', nested]]) {
+    const r = crawlFiles({ 'charts/otel-collector/values.yaml': text }, { repoName: 'vals', now: NOW });
+    const job = json(r, 'crawler.discovered.scrape_job_origins')?.qmgrs;
+    assert(job?.target_count === 2 && job.exporters[0].topic === 'mq' && r.canonical.spec.pipelines.exporters.metrics.kind === 'kafka',
+      `a collector in a chart's values.yaml (${label}): its job and its kafka exporter`, job);
+  }
+  // The environment scope names an excluded values file or Helm template
+  // that carries scrape jobs, as it names a plain collector config.
+  const TPL = 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ include "c.fullname" . }}\ndata:\n  relay.yaml: |\n' + COL.split('\n').map(l => (l ? `    ${l}` : l)).join('\n');
+  const scoped = crawlFiles({
+    'charts/c/templates/cm.yaml': TPL, 'charts/c/Chart.yaml': 'apiVersion: v2\nname: c\nversion: 0.1.0\n',
+    'charts/v/values.yaml': nested, 'docker-compose.yml': 'services:\n  p:\n    image: prom/prometheus:v2.51.0\n',
+  }, { repoName: 'vals', environment: 'local-docker', now: NOW });
+  const w = scoped.summary.warnings.find(x => /carry scrape jobs/.test(x)) || '';
+  assert(w.includes('charts/c/templates/cm.yaml (template scrape jobs: qmgrs)') && w.includes('charts/v/values.yaml (collector scrape jobs: qmgrs)'),
+    'an excluded Helm template or values file with scrape jobs is named in the scope warning', w);
+}
+
 // ---------- G. a malformed manifest ----------
 {
   const r = crawlFiles({

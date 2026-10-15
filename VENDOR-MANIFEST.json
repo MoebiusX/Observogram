@@ -378,8 +378,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "af729dd71bc8e1f64f2d82add27facee42563cc1e69e94e117669268c0ca2408",
-      "bytes": 126787,
+      "sha256": "7f7dab04a206997c86cb2e296679f4da8856219cabc8752e3dcecce77a4bf477",
+      "bytes": 128822,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
