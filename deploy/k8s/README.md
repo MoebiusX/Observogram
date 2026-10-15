@@ -7,14 +7,14 @@ and one PersistentVolumeClaim that holds the studio's state.
 
 ```bash
 # 1. Stamp the checkout (build.json says which commit the image is), then build it from the repo root.
-npm run build:stamp && docker build -t observogram:0.5.0 .
+npm run build:stamp && docker build -t observogram:0.6.0 .
 
 # 2. Make it visible to your cluster.
 #    docker-desktop: nothing to do.
-#    kind:           kind load docker-image observogram:0.5.0
-#    remote:         docker tag observogram:0.5.0 <registry>/observogram:0.5.0
-#                    docker push <registry>/observogram:0.5.0
-#                    cd deploy/k8s && kustomize edit set image observogram=<registry>/observogram:0.5.0
+#    kind:           kind load docker-image observogram:0.6.0
+#    remote:         docker tag observogram:0.6.0 <registry>/observogram:0.6.0
+#                    docker push <registry>/observogram:0.6.0
+#                    cd deploy/k8s && kustomize edit set image observogram=<registry>/observogram:0.6.0
 
 # 3. Check that the cluster can provision the store volume (see "Storage class" below).
 kubectl get storageclass            # one line should say (default)
@@ -111,7 +111,7 @@ spec:
     fsGroupChangePolicy: OnRootMismatch
   containers:
     - name: restore
-      image: observogram:0.5.0          # the studio's image and tag
+      image: observogram:0.6.0          # the studio's image and tag
       workingDir: /app
       command: ["node", "tools/cli.mjs", "store", "restore", "/data/db/$BACKUP"]
       env:
@@ -154,8 +154,9 @@ the studio at 0, from a one-off pod of the **store** image (the old one
 has no `store export`) that mounts both subPaths of the `store` claim at
 the studio's two paths:
 
-The pre-store release is the git tag `v0.4.0`. The store build is `0.5.0`,
-but builds of `develop` between the two also said `0.4.0` in `package.json`
+The pre-store release is the git tag `v0.4.0`. The store build is `0.6.0`
+(`0.5.0` was the first store release), but builds of `develop` between
+`v0.4.0` and `0.5.0` also said `0.4.0` in `package.json`
 and `kustomization.yaml`, so an image called `observogram:0.4.0` may be
 either: one built from a pre-0.5.0 checkout is a store build and replaced
 any older image of that name. Build the old one under a tag of its own
@@ -499,7 +500,7 @@ spec:
     fsGroupChangePolicy: OnRootMismatch
   containers:
     - name: copy
-      image: observogram:0.5.0          # the studio's image and tag
+      image: observogram:0.6.0          # the studio's image and tag
       command: ["sh", "-c", "cp -a /data/workspace/. /workspace/ && ls -la /workspace"]
       volumeMounts:
         - { name: store, mountPath: /data/workspace, subPath: workspace }
