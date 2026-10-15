@@ -55,16 +55,21 @@ export function isMetricsManifestPath(relPath) {
  * `-` / `_` and wrapped in `__` or not (`test/`, `__tests__/`, `e2e/`,
  * `integration-tests/`, `integrationTest/`, `unit_tests/`, `unittests/`,
  * `testing/`, `__fixtures__/`, `testFixtures/`, `__mocks__/`, `testdata/`,
- * `test-data/`, `__snapshots__/`, …), or a
+ * `test-data/`, `__snapshots__/`, …), a camelCase test source set
+ * (`componentTest/`, `smokeTest/`, `testUtils/`), Maven's `src/it/`, or a
  * `*.test.*` / `*.spec.*` / `*_test.*` / `*_spec.*` file — there an
  * exposition is sample input, not what a deployed exporter serves.
  */
 export function isTestOrFixturePath(relPath) {
-  const p = String(relPath ?? '').replace(/\\/g, '/').toLowerCase();
-  const word = '(?:tests?|specs?|fixtures?|mocks?|testing|e2e|test[-_]?(?:data|fixtures?)|(?:integration|unit|e2e|functional|acceptance)[-_]?tests?)';
+  const segs = String(relPath ?? '').replace(/\\/g, '/').split('/');
+  const word = '(?:tests?|specs?|fixtures?|mocks?|testing|e2e|test[-_]?(?:data|fixtures?|resources|utils?|support|helpers?)|(?:integration|unit|e2e|functional|acceptance)[-_]?tests?)';
   const folder = new RegExp(`^(?:__)?(?:[a-z0-9]+[-_])*${word}(?:[-_][a-z0-9]+)*(?:__)?$|^__snapshots__$`);
-  return p.split('/').slice(0, -1).some(seg => folder.test(seg))
-    || /[._](?:test|spec)\.[a-z]+$/.test(p);
+  // A camelCase test source set (Gradle: componentTest, smokeTest, intTest,
+  // testFixtures, testUtils) and Maven's src/it.
+  const camel = /^[a-z][a-zA-Z0-9]*Tests?$|^tests?[A-Z][a-zA-Z0-9]*$/;
+  return segs.slice(0, -1).some((seg, i) => folder.test(seg.toLowerCase()) || camel.test(seg)
+      || (/^(?:it|int)$/i.test(seg) && segs[i - 1]?.toLowerCase() === 'src'))
+    || /[._](?:test|spec)\.[a-z]+$/i.test(segs[segs.length - 1] || '');
 }
 
 /** A saved exposition: `.prom` or `.metrics`. */
@@ -77,9 +82,11 @@ export function isExpositionSnapshotPath(relPath) {
  * credential rides. Textual, never a URL parse: a password may hold `/`, `?`
  * or `@`, which end a parsed authority early and leave the rest of the secret
  * in the "host" or "path". So everything before the LAST `@` goes (a value
- * whose path or query holds an `@` keeps only what follows it, which loses
- * the host rather than risk a credential), then everything from the first
- * `?` or `#`. A leading `scheme://` or `//` is kept; a value that is not a
+ * whose path holds an `@` keeps only what follows it, which loses the host
+ * rather than risk a credential), then everything from the first `?` or
+ * `#`. A value with a `?` or `#` before its last `@` (the `@` in a query, or
+ * a `?` in a password: text cannot tell which) is recorded as nothing ('');
+ * so is one with nothing left past its scheme. A leading `scheme://` or `//` is kept; a value that is not a
  * URL at all (`prometheus:9090`, `${env:ENDPOINT}`) passes through the same
  * rule.
  */
@@ -91,8 +98,15 @@ export function safeSourceUrl(raw) {
   const prefix = /^(?:[A-Za-z][A-Za-z0-9+.-]*:)?\/\//.exec(s)?.[0] ?? '';
   let rest = s.slice(prefix.length);
   const at = rest.lastIndexOf('@');
+  const query = rest.search(/[?#]/);
+  // A `?` or `#` before the last `@`: the `@` is in a query or fragment, or
+  // a password holds the `?` — text cannot tell which, so nothing after the
+  // scheme is kept.
+  if (at >= 0 && query >= 0 && query < at) return '';
   if (at >= 0) rest = rest.slice(at + 1);
-  return prefix + rest.replace(/[?#][\s\S]*$/, '');
+  rest = rest.replace(/[?#][\s\S]*$/, '');
+  // Nothing past the scheme: nothing to record.
+  return rest ? prefix + rest : '';
 }
 
 function parseSampleLine(line) {

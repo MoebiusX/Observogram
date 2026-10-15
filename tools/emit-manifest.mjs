@@ -32,9 +32,13 @@
  * URL with the values the exporter expects.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve, basename } from 'node:path';
 import { manifestFromExposition, safeSourceUrl } from './lib/exporter-metrics.mjs';
+
+// A URL as a message may name it: safeSourceUrl's form, or a stand-in when
+// that leaves nothing (the URL is then not shown at all).
+const shown = (url) => safeSourceUrl(url) || 'the exporter URL (not shown)';
 
 // A value that may be a URL with its credentials or token: never echoed.
 const urlLike = (v) => /:\/\/|@|\?|^[^/\\\s]+:\d+(?:[/?#]|$)/.test(String(v ?? ''));
@@ -76,8 +80,8 @@ function redirectRefusal(url, status, location) {
   const keys = target ? [...new Set([...target.searchParams.keys()])] : [];
   const to = !location ? ''
     : !target ? ' to a location that is not a URL'
-      : ` to ${safeSourceUrl(target.href)}${keys.length ? `?${keys.map(k => `${encodeURIComponent(k)}=…`).join('&')} (query values not shown)` : ''}`;
-  return `${safeSourceUrl(url)} answered ${status}, a redirect${to}; it is not followed — pass the URL the exporter serves its metrics at${keys.length ? ', with the query values it expects' : ''}`;
+      : ` to ${shown(target.href)}${keys.length ? `?${keys.map(k => `${encodeURIComponent(k)}=…`).join('&')} (query values not shown)` : ''}`;
+  return `${shown(url)} answered ${status}, a redirect${to}; it is not followed — pass the URL the exporter serves its metrics at${keys.length ? ', with the query values it expects' : ''}`;
 }
 
 async function scrape(url, timeoutSeconds) {
@@ -90,14 +94,14 @@ async function scrape(url, timeoutSeconds) {
     });
   } catch (e) {
     const why = e?.name === 'TimeoutError' ? `no answer within ${timeoutSeconds}s (raise --timeout)` : (e?.cause?.message || e?.message || String(e));
-    fail(1, `could not scrape ${safeSourceUrl(url)}: ${why}`);
+    fail(1, `could not scrape ${shown(url)}: ${why}`);
   }
   if (res.status >= 300 && res.status < 400) fail(1, redirectRefusal(url, res.status, res.headers.get('location')));
-  if (res.status !== 200) fail(1, `${safeSourceUrl(url)} answered ${res.status}; a metrics endpoint answers 200`);
+  if (res.status !== 200) fail(1, `${shown(url)} answered ${res.status}; a metrics endpoint answers 200`);
   try {
     return await res.text();
   } catch (e) {
-    fail(1, `could not read the response of ${safeSourceUrl(url)}: ${e?.name === 'TimeoutError' ? `not complete within ${timeoutSeconds}s (raise --timeout)` : 'the connection ended before the body did'}`);
+    fail(1, `could not read the response of ${shown(url)}: ${e?.name === 'TimeoutError' ? `not complete within ${timeoutSeconds}s (raise --timeout)` : 'the connection ended before the body did'}`);
   }
 }
 
@@ -110,21 +114,23 @@ if (!Number.isFinite(timeout) || timeout <= 0 || timeout > 600) fail(2, '--timeo
 let generatedAt;
 if (args.timestamp) {
   const at = args.generatedAt === undefined ? new Date() : new Date(args.generatedAt);
-  if (Number.isNaN(at.getTime())) fail(2, `--generated-at '${args.generatedAt}' is not a date`);
+  if (Number.isNaN(at.getTime())) fail(2, `--generated-at ${urlLike(args.generatedAt) ? '(a URL-like value, not shown)' : `'${args.generatedAt}'`} is not a date`);
   generatedAt = at.toISOString();
 } else if (args.generatedAt !== undefined) fail(2, 'pass --generated-at or --no-timestamp, not both');
 
 let text, source, defaultName;
 if (args.exporter) {
   let url;
-  try { url = new URL(args.exporter); } catch { fail(2, `--exporter '${safeSourceUrl(args.exporter)}' is not a URL (e.g. http://mq-exporter:9157/metrics); shown without anything before an @ or after a ? or #`); }
+  try { url = new URL(args.exporter); } catch { fail(2, `--exporter '${shown(args.exporter)}' is not a URL (e.g. http://mq-exporter:9157/metrics); shown without anything before an @ or after a ? or #`); }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') fail(2, `--exporter must be an http or https URL, not ${url.protocol}`);
   if (url.username || url.password) fail(2, 'the --exporter URL carries credentials, which are neither sent nor recorded; save the exposition with your own client and pass it with --from');
   text = await scrape(url.href, timeout);
   source = url.href;
   defaultName = url.hostname;
 } else {
-  if (urlLike(args.from)) fail(2, '--from takes a saved exposition file, not a URL (the value is not shown); scrape a URL with --exporter');
+  // A file whose name holds `@` or `?` is read; a URL-like value that is not
+  // a file is refused unshown.
+  if (urlLike(args.from) && !existsSync(resolve(args.from))) fail(2, '--from takes a saved exposition file, not a URL (the value is not shown); scrape a URL with --exporter');
   try { text = readFileSync(resolve(args.from), 'utf8'); } catch (e) { fail(2, `cannot read --from ${args.from}: ${e.code || e.message}`); }
   defaultName = basename(args.from).replace(/\.[^.]+$/, '');
 }
@@ -132,12 +138,13 @@ if (args.exporter) {
 const name = String(args.name ?? defaultName ?? '').trim();
 if (!name) fail(2, 'the exporter has no name; pass --name');
 const manifest = manifestFromExposition(text, { exporter: name, version: args.version, source, generatedAt });
-if (!manifest.metrics.length) fail(1, `${source ? safeSourceUrl(source) : args.from} holds no metric family (no # TYPE, # HELP or sample line)`);
+if (!manifest.metrics.length) fail(1, `${source ? shown(source) : args.from} holds no metric family (no # TYPE, # HELP or sample line)`);
 
 const json = `${JSON.stringify(manifest, null, 2)}\n`;
 if (args.out === '-') {
   process.stdout.write(json, () => process.exit(0));
 } else {
-  writeFileSync(resolve(args.out), json);
+  try { writeFileSync(resolve(args.out), json); }
+  catch (e) { fail(2, `cannot write --out ${urlLike(args.out) ? '(a URL-like value, not shown)' : args.out}: ${e.code || 'write failed'}`); }
   process.stdout.write(`wrote ${args.out}: ${manifest.metrics.length} metric famil${manifest.metrics.length === 1 ? 'y' : 'ies'} of ${name}\n`, () => process.exit(0));
 }

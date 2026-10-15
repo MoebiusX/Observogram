@@ -378,8 +378,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "7c011c2b4c8e2307a2ffc53273916061979fa1d2ad2f41316e0025633c1a7a79",
-      "bytes": 133095,
+      "sha256": "d0387b62b132f273fc622aaa7ca0411c3e90dc907db4bd07e4a98c89f552455e",
+      "bytes": 133296,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
@@ -523,8 +523,8 @@
       "releasedExports": null
     },
     "tools/lib/exporter-metrics.mjs": {
-      "sha256": "5d002100de4a32c9c548429f92a3c55fe912d722772514ccf2c44cdb41ab0cde",
-      "bytes": 19780,
+      "sha256": "57be2804bd81a9c9c4666839540d0c22d00486f292a85d54b852226099a88471",
+      "bytes": 20774,
       "exports": [
         "EXPOSITION_TYPES",
         "asResolvedCatalogue",

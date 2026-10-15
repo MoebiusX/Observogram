@@ -202,9 +202,10 @@ const json = (r, key) => JSON.parse(ann(r)[key] ?? 'null');
   assert(detectArtefactKind('test/fixtures/ibm-mq.prom', PROM) === 'unknown' && detectArtefactKind('src/x.test.metrics', PROM) === 'unknown'
     && detectArtefactKind('testdata/a.prom', PROM) === 'unknown'
     && ['src/__fixtures__/node.prom', 'test-data/node.prom', 'test_fixtures/a.prom', 'x/__mocks__/a.metrics', 'mocks/a.prom', 'spec/a.prom',
-      'e2e/mq.prom', 'integration-tests/mq.prom', 'src/testFixtures/resources/node.prom', 'testfixtures/a.prom', 'src/integrationTest/resources/mq.prom', 'unittests/a.prom', 'e2etests/a.prom', 'e2e-tests/mq.prom', 'unit_tests/mq.prom', 'testing/mq.prom', 'src/__snapshots__/mq.prom', 'exp/mq_spec.prom', 'exp/mq.spec.prom'].every(p => detectArtefactKind(p, PROM) === 'unknown'),
+      'e2e/mq.prom', 'integration-tests/mq.prom', 'src/testFixtures/resources/node.prom', 'testfixtures/a.prom', 'src/integrationTest/resources/mq.prom', 'unittests/a.prom', 'e2etests/a.prom',
+      'src/componentTest/resources/a.prom', 'src/smokeTest/a.prom', 'src/intTest/a.prom', 'src/systemTest/a.prom', 'src/testUtils/a.prom', 'src/it/resources/a.prom', 'module/testResources/a.prom', 'e2e-tests/mq.prom', 'unit_tests/mq.prom', 'testing/mq.prom', 'src/__snapshots__/mq.prom', 'exp/mq_spec.prom', 'exp/mq.spec.prom'].every(p => detectArtefactKind(p, PROM) === 'unknown'),
   'never from a test, fixture or mock path, in any of the usual spellings');
-  assert(['snapshots/ibm-mq.prom', 'exporters/latest/mq.prom', 'contest/mq.prom', 'attestation/mq.prom'].every(p => detectArtefactKind(p, PROM) === 'exposition-snapshot'),
+  assert(['snapshots/ibm-mq.prom', 'exporters/latest/mq.prom', 'contest/mq.prom', 'attestation/mq.prom', 'i18n/it/mq.prom', 'prod/mq.prom', 'Latest/mq.prom'].every(p => detectArtefactKind(p, PROM) === 'exposition-snapshot'),
     'a folder that only contains such a word in a longer one is not a test folder');
   assert(detectArtefactKind('notes.metrics', 'nothing to see here\n') === 'unknown', 'a .metrics file with no family is not a snapshot');
 
@@ -325,7 +326,12 @@ service:
     ['user:pa/ss@otel:4317', 'otel:4317'],
     ['https://user:pa/ss@otel:4317/v1', 'https://otel:4317/v1'],
     ['https://user:12/ss@otel/v1', 'https://otel/v1'],
-    ['https://u:pa?ss@h/x', 'https://h/x'],
+    // A `?` or `#` before the last `@`: a query holding an `@`, or a password
+    // holding a `?` — nothing is kept.
+    ['https://u:pa?ss@h/x', ''],
+    ['https://mimir/api/v1/push?user=ops@corp.example&api_key=SECRET', ''],
+    ['https://h/push#frag@SECRET', ''],
+    ['https://', ''],
     ['//u:p@h/metrics', '//h/metrics'],
     ['HTTPS://U:P@H:1/m?t=1#f', 'HTTPS://H:1/m'],
     ['svc:Zx9/Qk+SECRET==@otel-gw:4317', 'otel-gw:4317'],
@@ -336,6 +342,13 @@ service:
   ];
   assert(SECRETS.every(([raw, want]) => safeSourceUrl(raw) === want), 'safeSourceUrl drops everything before the last @ and from the first ? or #',
     SECRETS.map(([raw]) => safeSourceUrl(raw)), SECRETS.map(([, want]) => want));
+  const queryAt = crawlFiles({
+    'otel/collector.yaml': 'receivers:\n  prometheus:\n    config:\n      scrape_configs:\n        - job_name: mq\n          static_configs: [{ targets: ["a:1"] }]\nexporters:\n  otlphttp:\n    endpoint: "https://mimir/push?user=ops@corp.example&api_key=SECRETQ"\n',
+    'metrics-manifest.json': JSON.stringify({ exporter: 'x', source: 'http://mq/metrics?u=a@b&token=SECRETR', metrics: [{ name: 'm', type: 'gauge' }] }),
+  }, { repoName: 'col', now: NOW });
+  assert(!JSON.stringify(queryAt).includes('SECRET') && !('endpoint' in json(queryAt, 'crawler.discovered.scrape_job_origins').mq.exporters[0])
+    && !('source' in json(queryAt, 'crawler.discovered.exporters').x.sources[0]),
+  'an endpoint or source whose query holds an @ is not recorded at all', [json(queryAt, 'crawler.discovered.scrape_job_origins').mq, json(queryAt, 'crawler.discovered.exporters')]);
   const leak = crawlFiles({ 'otel/collector.yaml': `receivers:\n  prometheus:\n    config:\n      scrape_configs:\n        - job_name: mq\n          static_configs: [{ targets: ["a:1"] }]\nexporters:\n  otlp:\n    endpoint: "svc:Zx9/Qk+SECRETPW@otel-gw:4317"\n` }, { repoName: 'col', now: NOW });
   assert(!JSON.stringify(leak.canonical).includes('SECRET') && json(leak, 'crawler.discovered.scrape_job_origins').mq.exporters[0].endpoint === 'otel-gw:4317',
     'a collector endpoint whose password holds `/` reaches the pack without it', json(leak, 'crawler.discovered.scrape_job_origins').mq);
@@ -452,6 +465,9 @@ data:
   const sub = 'opentelemetry-collector:\n  enabled: ENABLED\n  config:\n' + COL.split('\n').map(l => (l ? `    ${l}` : l)).join('\n');
   const off = crawlFiles({ 'charts/u/values.yaml': sub.replace('ENABLED', 'false') }, { repoName: 'vals', now: NOW });
   const overlay = crawlFiles({ 'charts/u/values.yaml': sub.replace('ENABLED', 'true'), 'charts/u/values-prod.yaml': 'opentelemetry-collector:\n  enabled: false\n' }, { repoName: 'vals', environment: 'prod', now: NOW });
+  // The overlay wins both ways: re-enabled by values-prod.yaml, it is read.
+  const reenabled = crawlFiles({ 'charts/u/values.yaml': sub.replace('ENABLED', 'false'), 'charts/u/values-prod.yaml': 'opentelemetry-collector:\n  enabled: true\n' }, { repoName: 'vals', environment: 'prod', now: NOW });
+  assert(JSON.stringify(json(reenabled, 'crawler.discovered.scrape_jobs')) === '["qmgrs"]', 'a subchart an overlay re-enables has its collector read', ann(reenabled)['crawler.discovered.scrape_jobs']);
   assert(!('crawler.discovered.scrape_jobs' in ann(off)) && !('crawler.discovered.scrape_jobs' in ann(overlay))
     && off.canonical.spec.pipelines.exporters.metrics.kind === 'prometheusremotewrite' && overlay.canonical.spec.pipelines.exporters.metrics.kind === 'prometheusremotewrite',
   'a disabled umbrella subchart\'s collector is not read (same file, prod overlay)', [ann(off)['crawler.discovered.scrape_jobs'], ann(overlay)['crawler.discovered.scrape_jobs']]);
@@ -585,6 +601,9 @@ try {
     '`packc emit` dispatches; `--flag=value` is read; --out - writes to stdout; the host names the exporter; --no-timestamp leaves the stamp out', viaPackc);
 
   writeFileSync(join(tmp, 'qm1.prom'), EXPOSITION);
+  writeFileSync(join(tmp, 'node@1.0.prom'), EXPOSITION);
+  const atName = await run(['--from', 'node@1.0.prom', '--out', '-', '--no-timestamp']);
+  assert(atName.status === 0 && JSON.parse(atName.stdout).exporter === 'node@1.0', 'a --from file whose name holds an @ is read', atName);
   const from = await run(['--from', 'qm1.prom', '--out', '-', '--no-timestamp']);
   assert(from.status === 0 && JSON.parse(from.stdout).exporter === 'qm1' && !('source' in JSON.parse(from.stdout)), '--from reads a saved exposition, named by the file', from);
 
@@ -601,6 +620,9 @@ try {
     [['http://user:SECRET4@127.0.0.1:1/metrics?token=SECRET5'], 2, null],
     [['mq:9157/metrics?token=SECRET8'], 2, null],
     [['--from', 'http://svc:SECRET9@mq:9157/metrics'], 2, 'packc emit: --from takes a saved exposition file, not a URL (the value is not shown); scrape a URL with --exporter\n'],
+    [['--from', 'x.prom', '--generated-at', 'http://u:SECRETG@h'], 2, 'packc emit: --generated-at (a URL-like value, not shown) is not a date\n'],
+    [['--from', 'qm1.prom', '--out', 'http://u:SECRETO@h/x/y'], 2, 'packc emit: cannot write --out (a URL-like value, not shown): ENOENT\n'],
+    [['--from', 'qm1.prom', '--out', 'no/such/dir/m.json'], 2, 'packc emit: cannot write --out no/such/dir/m.json: ENOENT\n'],
     [['--from=mq:9157/metrics'], 2, 'packc emit: --from takes a saved exposition file, not a URL (the value is not shown); scrape a URL with --exporter\n'],
     [['--exporter=http://user:SECRET6@127.0.0.1:1/metrics'], 2, 'packc emit: the --exporter URL carries credentials, which are neither sent nor recorded; save the exposition with your own client and pass it with --from\n'],
     [['--exporter', `${base}/cut?token=SECRET7`], 1, `packc emit: could not read the response of ${base}/cut: the connection ended before the body did\n`],

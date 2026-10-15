@@ -1875,7 +1875,8 @@ or repeats a name, is not read and the crawl says how many; a file that is not
 a manifest is named in a warning. `source` is recorded without userinfo,
 query or fragment: tabs and line breaks, everything before the last `@`, and
 everything from the first `?` or `#` are dropped (`safeSourceUrl`, textual —
-a password may hold `/` or `@`).
+a password may hold `/` or `@`). A value with a `?` or `#` before its last
+`@` is not recorded at all.
 Label values are never part of a manifest.
 
 `packc emit --exporter <url>` (`tools/emit-manifest.mjs`) writes one from a
@@ -1948,7 +1949,8 @@ An OTel collector's prometheus receivers (`prometheus`,
 without a `service:` block (a Helm chart's `files/` copy has none), in a
 config file, a Helm ConfigMap, or a chart's `values*.yaml` (at its top level,
 under `config:`, or under a subchart's `<key>.config:` unless the subchart
-is disabled).
+is disabled — its `enabled` toggles merged across the in-scope values files,
+an overlay winning).
 
 - Each job is in `crawler.discovered.scrape_jobs`. Its entry in
   `crawler.discovered.scrape_job_origins` adds `via: otel-collector`, the

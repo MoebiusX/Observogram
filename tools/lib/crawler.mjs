@@ -222,7 +222,7 @@ export function detectArtefactKind(relPath, content, opts) {
   // A saved /metrics response — not from a test or fixture path, where an
   // exposition is sample input, not what a deployed exporter serves.
   if (isExpositionSnapshotPath(lower)) {
-    return !isTestOrFixturePath(lower) && parseExposition(content).families.length ? 'exposition-snapshot' : 'unknown';
+    return !isTestOrFixturePath(relPath) && parseExposition(content).families.length ? 'exposition-snapshot' : 'unknown';
   }
   // JSON first — Grafana dashboards are the only json we care about.
   if (lower.endsWith('.json')) {
@@ -1902,7 +1902,7 @@ function walkHelmValues(f, backends, pipelines, evidence, summary, disabledCompo
     // it declares beats an image's inference; a config this walk cannot read
     // (the chart's `pipelines.metrics: null` drops a pipeline) is warned
     // about and never costs the values file its images.
-    for (const collector of valuesCollectorConfigs(obj, disabledComponents)) {
+    for (const collector of valuesCollectorConfigs(obj, { disabled: disabledComponents })) {
       try { walkOtelCollectorDoc(collector, f.relPath, pipelines, scrapeJobs, evidence, summary, collectorState); }
       catch (e) { summary.warnings.push(`The collector config in ${f.relPath} could not be read (${e.message}); its images are read as before.`); }
     }
@@ -1912,14 +1912,17 @@ function walkHelmValues(f, backends, pipelines, evidence, summary, disabledCompo
 
 // The collector configs a Helm values document carries: the document
 // itself, its `config:`, or a subchart's `<key>.config:` (an umbrella
-// chart) — never a subchart the environment disables (`disabled`, the
-// merged `enabled: false` toggles) or this document sets `enabled: false`.
-function valuesCollectorConfigs(obj, disabled = new Set()) {
+// chart) — never a subchart that is disabled. A crawl knows that from
+// `disabled`, the `enabled` toggles merged across the in-scope values files
+// (an overlay wins, as with `helm -f`); a file read alone (the scope warning)
+// from its own `enabled: false`.
+function valuesCollectorConfigs(obj, { disabled = null } = {}) {
   if (!isMapping(obj)) return [];
   if (looksLikeOtelCollector(obj)) return [obj];
   if (isMapping(obj.config) && looksLikeOtelCollector(obj.config)) return [obj.config];
+  const off = (key, v) => (disabled ? disabled.has(key) : v?.enabled === false);
   return Object.entries(obj)
-    .filter(([key, v]) => !disabled.has(key) && v?.enabled !== false && isMapping(v?.config) && looksLikeOtelCollector(v.config))
+    .filter(([key, v]) => !off(key, v) && isMapping(v?.config) && looksLikeOtelCollector(v.config))
     .map(([, v]) => v.config);
 }
 
@@ -2498,7 +2501,8 @@ function collectorExporterDetail(name, cfg) {
     if (typeof topic === 'string' && topic.trim()) out.topic = topic.trim();
   } else {
     const endpoint = cfg?.endpoint ?? cfg?.metrics_endpoint;
-    if (typeof endpoint === 'string' && endpoint.trim()) out.endpoint = safeSourceUrl(endpoint);
+    const safe = typeof endpoint === 'string' ? safeSourceUrl(endpoint) : '';
+    if (safe) out.endpoint = safe;
   }
   return out;
 }
