@@ -251,6 +251,21 @@ const json = (r, key) => JSON.parse(ann(r)[key] ?? 'null');
     'the crawl reads both configs with the downstream catalogue', Object.keys(o));
   assert(r.summary.warnings.filter(w => /exporter catalogue entry/.test(w)).length === 3, 'the dropped entries are crawl warnings');
   assert(detectArtefactKind('gw/acme.yaml', 'acme:\n  tls: true\nlisten: ":8080"\n') === 'unknown', 'without the catalogue the gateway config is nothing');
+  // detectArtefactKind takes the same downstream catalogue: merged with the
+  // built-in entries, in either form, a malformed entry dropped, never thrown.
+  const acmeOnly = [custom.exporters[1]];
+  assert(detectArtefactKind('gw/acme.yaml', 'acme:\n  tls: true\nlisten: ":8080"\n', { exporterCatalogue: { exporters: acmeOnly } }) === 'exporter-config'
+    && detectArtefactKind('gw/acme.yaml', 'acme:\n  tls: true\nlisten: ":8080"\n', { exporterCatalogue: acmeOnly }) === 'exporter-config'
+    && detectArtefactKind('mq/config.yaml', FILES['mq-exporter/config.yaml'], { exporterCatalogue: acmeOnly }) === 'exporter-config'
+    && detectArtefactKind('a.yaml', 'acme: 1\n', { exporterCatalogue: { exporters: [{ id: 'nokeys' }] } }) === 'unknown',
+  'detectArtefactKind merges a downstream catalogue (object or array) with the built-in one and never throws on a malformed entry');
+  // A gate or scope the entry never defines is refused, whatever its name
+  // (toString and constructor are on every object's prototype).
+  const proto = resolveExporterCatalogue({ exporters: [
+    { id: 'p1', match: { keys: ['p'] }, families: [{ name: 'a', type: 'gauge', gate: 'toString' }] },
+    { id: 'p2', match: { keys: ['p'] }, families: [{ name: 'b', type: 'gauge', scope: 'constructor' }] },
+  ] });
+  assert(proto.warnings.length === 2 && !proto.exporters.some(e => /^p\d$/.test(e.id)), 'a family gated or scoped on a prototype name is dropped', proto.warnings);
   const junk = crawlFiles({ 'a.yaml': 'a: 1\n' }, { repoName: 'cat', now: NOW, exporterCatalogue: 'not a catalogue' });
   assert(junk.summary.warnings.some(w => /neither `\{ exporters: \[\.\.\.\] \}` nor an array/.test(w)), 'a catalogue of the wrong shape is warned about');
 }

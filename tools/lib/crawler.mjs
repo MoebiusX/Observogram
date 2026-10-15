@@ -35,7 +35,7 @@ import { PROMQL_KEYWORDS, extractPromqlMetricNames } from './promql.mjs';
 import { symbolSlug as slug, packSlug } from './slug.mjs';
 import {
   isMetricsManifestPath, isExpositionSnapshotPath, isTestOrFixturePath, parseExposition, readMetricsManifest, safeSourceUrl,
-  resolveExporterCatalogue, mayBeExporterConfig, matchExporterConfig, inferExporterFamilies,
+  resolveExporterCatalogue, asResolvedCatalogue, mayBeExporterConfig, matchExporterConfig, inferExporterFamilies,
 } from './exporter-metrics.mjs';
 
 // The spec's closed vocabularies, mirrored by hand (a browser-safe module
@@ -203,8 +203,9 @@ function registerMetricsExporterFromBackend(pattern, pipelines, relPath, evidenc
  * @param {string} relPath - repo-relative path
  * @param {string} content - file content
  * @param {object} [opts]
- * @param {object} [opts.exporterCatalogue] - a resolved exporter catalogue
- *   (resolveExporterCatalogue); the built-in one when omitted
+ * @param {object|Array} [opts.exporterCatalogue] - a downstream's exporter
+ *   catalogue ({ exporters: [...] } or the array), merged with the built-in
+ *   entries; the built-in one when omitted
  * @returns {string} kind: 'prometheus-rules' | 'alertmanager' | 'grafana-dashboard' |
  *                          'otel-collector' | 'docker-compose' | 'helm-chart' |
  *                          'helm-template' | 'metrics-manifest' | 'exposition-snapshot' |
@@ -212,6 +213,7 @@ function registerMetricsExporterFromBackend(pattern, pipelines, relPath, evidenc
  */
 export function detectArtefactKind(relPath, content, { exporterCatalogue = BUILTIN_EXPORTER_CATALOGUE } = {}) {
   const lower = relPath.toLowerCase();
+  const catalogue = asResolvedCatalogue(exporterCatalogue);
   // A prebuilt exporter's metric list, as `packc emit --exporter` writes it.
   // Named by its file, so a malformed one is walked and warned about, never
   // silently skipped.
@@ -259,10 +261,10 @@ export function detectArtefactKind(relPath, content, { exporterCatalogue = BUILT
   // A prebuilt exporter's own config (mq-metric-samples' config.yaml), by
   // the top-level keys a catalogue entry names — before the filename
   // heuristics, which would read `mq-collector.yaml` as an OTel collector.
-  if (mayBeExporterConfig(content, exporterCatalogue)) {
+  if (mayBeExporterConfig(content, catalogue)) {
     let cfg = null;
     try { cfg = parseYaml(content); } catch { /* not YAML: fall through */ }
-    if (matchExporterConfig(cfg, exporterCatalogue)) return 'exporter-config';
+    if (matchExporterConfig(cfg, catalogue)) return 'exporter-config';
   }
 
   // Filename heuristics first — fastest.
@@ -503,9 +505,8 @@ export function crawlFiles(filesInput, opts = {}) {
   // Profile detection reads the environment as given (it lowercases itself).
   const envScope = scopeFilesForEnvironment(rawFiles, envRaw);
   const files = envScope.files;
-  const catalogueRead = resolveExporterCatalogue(opts.exporterCatalogue);
-  const catalogue = { exporters: catalogueRead.exporters };
-  const inputWarnings = [...catalogueRead.warnings];
+  const catalogue = resolveExporterCatalogue(opts.exporterCatalogue);
+  const inputWarnings = [...catalogue.warnings];
   const normalized = { name: null, environment: null, owners: [] };
   if (repoName !== String(nameRaw)) {
     normalized.name = { from: String(nameRaw), to: repoName };

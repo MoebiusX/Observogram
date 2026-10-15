@@ -264,7 +264,7 @@ const stripBom = (text) => String(text ?? '').replace(/^\uFEFF/, '');
 function pathValue(obj, path) {
   let cur = obj;
   for (const key of String(path ?? '').split('.').filter(Boolean)) {
-    if (!isMapping(cur)) return undefined;
+    if (!isMapping(cur) || !Object.hasOwn(cur, key)) return undefined;
     cur = cur[key];
   }
   return cur;
@@ -293,7 +293,7 @@ function normalizeEntry(e, i) {
   for (const f of e.families) {
     const bad = !isMapping(f) || typeof f.name !== 'string' || !/^[A-Za-z0-9_:]+$/.test(f.name)
       || !TYPE_SET.has(String(f.type ?? '').toLowerCase())
-      || (f.gate !== undefined && !gates[f.gate]) || (f.scope !== undefined && !scopes[f.scope]);
+      || (f.gate !== undefined && !Object.hasOwn(gates, f.gate)) || (f.scope !== undefined && !Object.hasOwn(scopes, f.scope));
     if (bad) return { error: `${where}: family ${JSON.stringify(f?.name ?? f)} needs a name, an exposition type, and only the gates and scopes the entry defines` };
     families.push({
       name: f.name,
@@ -316,6 +316,10 @@ function normalizeEntry(e, i) {
     },
   };
 }
+
+// The catalogues resolveExporterCatalogue made, so a resolved one is never
+// resolved again (asResolvedCatalogue).
+const RESOLVED = new WeakSet();
 
 /**
  * The catalogue a crawl reads: the built-in entries, then a caller's (an
@@ -343,7 +347,18 @@ export function resolveExporterCatalogue(custom) {
       });
     }
   }
-  return { exporters: [...byId.values()], warnings };
+  const resolved = { exporters: [...byId.values()], warnings };
+  RESOLVED.add(resolved);
+  return resolved;
+}
+
+/**
+ * A catalogue as a caller hands it over — resolveExporterCatalogue's result,
+ * or a downstream's `{ exporters: [...] }` / array (resolved here: merged
+ * with the built-in entries, a malformed entry dropped) — ready to read.
+ */
+export function asResolvedCatalogue(catalogue) {
+  return catalogue && RESOLVED.has(catalogue) ? catalogue : resolveExporterCatalogue(catalogue);
 }
 
 /**
@@ -392,7 +407,8 @@ export function inferExporterFamilies(obj, entry) {
   const gates = Object.fromEntries(Object.entries(entry.gates).map(([k, g]) => [k, switchOn(pathValue(obj, g.path), g.default)]));
   const scopes = Object.fromEntries(Object.entries(entry.scopes).map(([k, s]) => [k, selectionNonEmpty(pathValue(obj, s.path))]));
   const families = entry.families
-    .filter(f => (f.gate === undefined || gates[f.gate]) && (f.scope === undefined || scopes[f.scope]))
+    .filter(f => (f.gate === undefined || (Object.hasOwn(gates, f.gate) && gates[f.gate]))
+      && (f.scope === undefined || (Object.hasOwn(scopes, f.scope) && scopes[f.scope])))
     .map(f => ({ name: namespace ? `${namespace}_${f.name}` : f.name, type: f.type, help: f.help, labels: f.labels }))
     .filter(f => NAME_RE.test(f.name));
   return { namespace, gates, scopes, families };
