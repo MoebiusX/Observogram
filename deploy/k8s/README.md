@@ -291,7 +291,10 @@ scale to 1. `store purge-org <id>` (the files of an org removed with
 `tools/org-admin.mjs remove`) runs the same way; it cannot be undone and
 asks for no confirmation, and it deletes that org's packs, `deploys.jsonl`,
 `snapshots/`, `runs/` and `journeys/`, which no `store backup` holds, so
-copy `/data/workspace/orgs/<id>` off the claim first.
+copy `/data/workspace/orgs/<id>` off the claim first. It refuses, deleting
+nothing, while that would take the users file a pre-store build reads, or a
+mount point is under that directory; the README's "Purge A Removed Org"
+names the ways out.
 
 ### Storage class
 

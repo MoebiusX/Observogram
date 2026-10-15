@@ -15,7 +15,10 @@
  * and start the store build again: it refuses, and after `packc store
  * import --replace` the next start re-imports them. `packc store
  * rekey-issuer` (--to, --clear) closes the OIDC upgrade gate's IdP moves;
- * `packc store purge-org` deletes a removed org's files, and `packc store
+ * `packc store purge-org` deletes a removed org's files — never while that
+ * would take the users file a pre-store build reads, decided by what deleting
+ * the root takes (server/store/users-file-place.mjs, over the mounts a runner
+ * cannot make in server/fixtures/mount-fs.mjs) — and `packc store
  * restore` warns when the workspace's marker names another store. `packc
  * store audit` (slice 5, the audit) lists the rows from a shell, newest
  * first, one JSON line each, and writes none.
@@ -48,9 +51,9 @@ const { test } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const { spawnSync } = await import('node:child_process');
 const { createHmac } = await import('node:crypto');
-const { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } = await import('node:fs');
+const { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
-const { dirname, join } = await import('node:path');
+const { dirname, join, posix, win32 } = await import('node:path');
 const { fileURLToPath, pathToFileURL } = await import('node:url');
 const { isWin32, win32Skip, WIN32 } = await import('./fixtures/platform.mjs');
 
@@ -66,6 +69,8 @@ const {
   exportStore, formatExport, formatPurge, formatRekey, COOKIE_NOTE, purgeOrg, rekeyIssuer, REPLACE_REQUESTED, requestReplace, restoreMarkerWarning,
 } = await import('./store/ops.mjs');
 const { backupStore, restoreStore } = await import('./store/backup.mjs');
+const { usersFilePlace } = await import('./store/users-file-place.mjs');
+const { mountFs } = await import('./fixtures/mount-fs.mjs');
 const admin = await import('./identity-admin.mjs');
 const { hashPassword, resolveSession, verifyPassword } = await import('./auth.mjs');
 const boot = await import('./boot.mjs');
@@ -2243,7 +2248,12 @@ test('packc store rekey-issuer: usage errors exit 2; the store line, the report;
 // ---------- purge-org ----------
 
 const purge = (base, id, opts = {}) => purgeOrg(id, { dbPath: dbOf(base), base, out: silent, ...opts });
-const refusedOp = (re) => (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && re.test(e.message);
+// A mismatch names what was thrown: a validation function that returns false leaves only assert.rejects' message (a
+// path), and the summary a CI log ends with prints the error line alone, never the TAP block's `actual`.
+const refusedOp = (re) => (e) => {
+  if (e?.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && re.test(e.message)) return true;
+  throw new assert.AssertionError({ message: `expected a refusal matching ${re}, got ${e?.code ?? e?.name}: ${e?.message}`, actual: e, expected: re });
+};
 function cliEnv(base) {
   const env = { ...process.env };
   for (const k of STRIP) { delete env[`OBSERVOGRAM_${k}`]; delete env[`TOMOGRAPH_${k}`]; }
@@ -2251,9 +2261,8 @@ function cliEnv(base) {
   return env;
 }
 
-// A flat deployment with two created orgs, acme removed (its files stay).
-async function removedOrgDeployment() {
-  const base = tempDir();
+// A flat deployment with two created orgs, acme removed (its files stay); at base, a directory that exists, if given.
+async function removedOrgDeployment(base = tempDir()) {
   usersJson(base, ['alice']);
   pack(base, 'p1');
   await start(base);
@@ -2337,7 +2346,7 @@ test('replace and export texts: the CLI confirmation, both usages and the README
   assert.ok(readme.includes(`\n# ${REPLACE_REQUESTED}\n`), 'the README quotes the confirmation line as the CLI prints it');
 });
 
-test('purge-org docs: the README and the k8s note say it cannot be undone, what it deletes, and that a store backup holds none of it', () => {
+test('purge-org docs: the README and the k8s note say it cannot be undone, what it deletes, that a store backup holds none of it, and what it refuses before deleting; the README names each users-file refusal\'s way out as purge-org does', () => {
   const section = (text, heading) => {
     const at = text.indexOf(heading);
     assert.notEqual(at, -1, heading);
@@ -2353,6 +2362,33 @@ test('purge-org docs: the README and the k8s note say it cannot be undone, what 
     for (const part of ['deploys.jsonl', 'snapshots/', 'runs/', 'journeys/']) assert.ok(text.includes(part), `${name}: names ${part}`);
     assert.match(text, /store backup` holds/, `${name}: a store backup does not cover the files`);
     assert.match(text, /copy `[^`]*orgs\/<id>\/?` .*first/, `${name}: copy the directory first`);
+    assert.match(text, /users file a pre-store build reads/, `${name}: the users-file refusal`);
+    assert.match(text, /mount point is under/, `${name}: the mount-point refusal`);
+  }
+  // The README names each users-file refusal's way out, as purge-org (server/store/users-file-place.mjs) names it.
+  for (const way of [
+    'move them out of `orgs/<id>/`, then run the purge again',
+    'if the purge then refuses because the users file does not exist, delete `orgs/<id>/` by hand and run the purge again',
+    'make it lead there again before you roll back',
+    'mount it and run the purge again',
+    'delete `orgs/<id>/` by hand and run the purge again',
+    'run the purge as a user who can read it',
+    'Unmount it, then run the purge again',
+    'names the mounts to unmount first, in order, before you unmount it',
+    'names them to unmount first, in order, each after the mounts in it',
+    'mount it there again once the covered mount is unmounted, then run the purge again',
+    'move it out of `orgs/<id>/` and unmount, then run the purge again',
+    'Stop what changes files there, then run the purge again',
+    // On Windows, first: a path that cannot be fully resolved (server/store/paths.mjs, ops.mjs's refusal).
+    'if it does, move it out of `orgs/<id>/` first, then do the same',
+  ]) assert.ok(readme.includes(way), `README: ${way}`);
+  const place = readFileSync(join(HERE, 'store', 'users-file-place.mjs'), 'utf8').replace(/[`']\s*\+\s*[`']/g, '');
+  for (const way of ['out of ${root}, then run purge-org again', 'if it then refuses because ${file} does not exist',
+    'make it lead there again before a pre-store build', 'mount it, then run purge-org again',
+    'delete ${root} by hand, then run purge-org again', 'Run purge-org as a user who can read', 'Unmount it, then run purge-org again',
+    ': first unmount ', 'mount it there again once ${named(at)} is unmounted, before you run purge-org again',
+    'out of ${root} and unmount what is mounted there, then run purge-org again', 'Stop what changes files under ${root}, then run purge-org again']) {
+    assert.ok(place.includes(way), `purge-org's refusal names the same way out: ${way}`);
   }
 });
 
@@ -2417,6 +2453,1190 @@ test('packc store purge-org: usage exits 2; the store line, the report; a refusa
   const rm = spawnSync(process.execPath, [join(HERE, '..', 'tools', 'org-admin.mjs'), 'remove', 'beta'], { env, encoding: 'utf8', timeout: 60_000 });
   assert.equal(rm.status, 0, rm.stderr);
   assert.match(rm.stdout, /removed org beta — its files under .*orgs.beta stay; `packc store purge-org beta` deletes them with the server stopped/);
+});
+
+// ---------- purge-org: the users file by what deleting the root takes ----------
+
+// The users file a pre-store build reads may have its bytes under the purged root while its path lies outside it —
+// through a mount of a directory under the root, reached directly or through a link (realpath never crosses a mount
+// back to its source), or as a hard link — and purge-org compared the path alone, so it deleted it. usersFilePlace
+// (server/store/users-file-place.mjs) decides by what rmSync(root) would take: these run it over an injected
+// filesystem (server/fixtures/mount-fs.mjs) with the mounts a test runner cannot make, on POSIX and Windows paths;
+// the real-filesystem cases below run through purgeOrg itself.
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const ROOT_B = '/ws/orgs/beta';
+const betaVolume = (opts) => mountFs(posix, opts).dir(`${ROOT_B}/packs`).file(`${ROOT_B}/packs/b1.pack.yaml`).file(`${ROOT_B}/sub/users.json`)
+  .file('/srv/accounts.json');
+const placeIn = (vol, file, opts = {}) => usersFilePlace(file, ROOT_B, { fs: vol.fs, path: posix, windows: false, id: 'beta', ...opts });
+const underRoot = (file, entries, root = ROOT_B) => `the recorded users file ${file} lies under ${root}: it is ${entries} there — nothing was deleted. `
+  + `Move ${entries} out of ${root}, then run purge-org again. If ${file} then no longer leads to the users file, make it lead there `
+  + 'again before a pre-store build or the in-place `packc store export` uses it';
+// The users file outside the root while an entry under it has its name: through a mount that is down, whose mount point
+// holds a file of that name meanwhile, the path leads there once it is mounted again. targets: what a link of that name
+// leads to under the root.
+const namesake = (file, entries, { targets = [], root = ROOT_B } = {}) => {
+  const listed = (xs) => (xs.length < 3 ? xs.join(' and ') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
+  const them = listed([...entries, ...targets].sort());
+  return `the recorded users file ${file} is no file under ${root}, but ${listed(entries)} under it ${entries.length === 1 ? 'has' : 'have'} its name`
+    + (targets.length ? `, and ${listed(targets)} ${targets.length === 1 ? 'is' : 'are'} what a link of that name leads to` : '')
+    + ': a mount that is down keeps what was written in its mount point meanwhile, and mounted again it may lead the path there — nothing was '
+    + `deleted. Move ${them} out of ${root}, then run purge-org again; if it then refuses because ${file} does not exist (the users file `
+    + `seen there through a mount that cannot be traced back), delete ${root} by hand, then run purge-org again: it drops org beta's `
+    + `records. If the users file is among them, make ${file} lead to it again before a pre-store build or the in-place \`packc store `
+    + 'export` uses it';
+};
+// The users file does not exist, its path leads into a directory under the root (into), and an entry under the root has its
+// name: a directory on its path may be the mount point of a mount that is down, and mounted again the path leads there.
+const namesakeMissing = (file, into, entries, { targets = [], root = ROOT_B } = {}) => {
+  const listed = (xs) => (xs.length < 3 ? xs.join(' and ') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
+  return `the recorded users file ${file} does not exist, and its path leads into ${into}${into === root ? '' : `, under ${root}`}, but `
+    + `${listed(entries)} under it ${entries.length === 1 ? 'has' : 'have'} its name`
+    + (targets.length ? `, and ${listed(targets)} ${targets.length === 1 ? 'is' : 'are'} what a link of that name leads to` : '')
+    + ': a directory on its path may be the mount point of a mount that is down, and mounted again it may lead the path there — nothing '
+    + `was deleted. Move ${listed([...entries, ...targets].sort())} out of ${root}, then run purge-org again. If the users file is among `
+    + `them, make ${file} lead to it again before a pre-store build or the in-place \`packc store export\` uses it`;
+};
+const unknownPlace =(file, nearest, { to = null, root = ROOT_B } = {}) => `the recorded users file ${file} does not exist, and nothing on this host `
+  + `tells where its path leads${to ? ` (to ${to})` : ''}: ${nearest === null ? 'no part of it exists' : `the nearest part of it that exists, ${nearest}, is no directory under ${root}`}, `
+  + `and a filesystem not mounted now may lead it under ${root} — nothing was deleted. If it lies on a filesystem that is not mounted now, `
+  + `mount it, then run purge-org again; if it does not lie under ${root}, delete ${root} by hand, then run purge-org again: it drops org `
+  + 'beta\'s records';
+const mounted = (what, root = ROOT_B) => `${root} holds a mount point, ${what}: deleting ${root} would take the files of the filesystem mounted there `
+  + `(Node 23 and later) or stop part-way at it (Node 22), and a directory mounted from outside ${root} may hold the users file — `
+  + 'nothing was deleted. Unmount what is mounted there, then run purge-org again';
+// A mount point under the root while the users file lies under it besides: unmounted, its path may lead there no more, so
+// the refusal names the entries to move out with the unmounting.
+const mountedHolding = (what, file, entries, root = ROOT_B) => `${root} holds a mount point, ${what}: deleting ${root} would take the files of the `
+  + `filesystem mounted there (Node 23 and later) or stop part-way at it (Node 22), and a directory mounted from outside ${root} may hold the users `
+  + `file; and the recorded users file ${file} lies under ${root}: it is ${entries} there — nothing was deleted. Move ${entries} out of ${root} and `
+  + 'unmount what is mounted there, then run purge-org again (unmounted, its path may no longer lead there, and nothing would keep the purge '
+  + `from deleting it). If ${file} then no longer leads to the users file, make it lead there again before a pre-store build or the in-place `
+  + '`packc store export` uses it';
+
+test('purge-org users file: under the root through a bind mount that is up — by its path there, through a file link and a directory link to it, and as spelled — is refused naming its entry under the root; one outside the root is purged, also when a link under the root leads to it, to its directory or to another filesystem (rmSync deletes the link alone)', () => {
+  const vol = betaVolume().dir('/mnt/b').bind(`${ROOT_B}/sub`, '/mnt/b')
+    .symlink('/cfg/users.json', '/mnt/b/users.json').symlink('/cfg/d', '/mnt/b');
+  for (const file of ['/mnt/b/users.json', '/cfg/users.json', '/cfg/d/users.json', `${ROOT_B}/sub/users.json`]) {
+    assert.deepEqual(placeIn(vol, file), { exists: true, refusal: underRoot(file, `${ROOT_B}/sub/users.json`) }, file);
+  }
+  // The mount is what realpath does not cross: the same device and inode as the entry, by another path.
+  assert.deepEqual([vol.fs.statSync('/mnt/b/users.json').ino, vol.fs.statSync('/mnt/b/users.json').dev],
+    [vol.fs.statSync(`${ROOT_B}/sub/users.json`).ino, vol.fs.statSync(`${ROOT_B}/sub/users.json`).dev]);
+  assert.deepEqual(placeIn(vol, '/srv/accounts.json'), { exists: true, refusal: null }, 'outside the root: purged');
+  // A link under the root that leads out — to the users file, to its directory, to a directory on another filesystem — is
+  // what rmSync deletes, never what it leads to: the walk does not follow it, so it is neither the users file nor a mount point.
+  const links = betaVolume().dir('/srv7', { dev: 7n }).file('/srv7/x.json')
+    .symlink(`${ROOT_B}/link.json`, '/srv/accounts.json').symlink(`${ROOT_B}/near`, '/srv').symlink(`${ROOT_B}/sub/far`, '/srv7');
+  assert.deepEqual(placeIn(links, '/srv/accounts.json'), { exists: true, refusal: null }, 'links under the root that lead out: purged');
+  // The users file a pre-store build reads when none was recorded: <base>/users.json, through a link into the root.
+  vol.symlink('/ws/users.json', `${ROOT_B}/sub/users.json`);
+  assert.equal(placeIn(vol, '/ws/users.json', { recorded: false }).refusal,
+    underRoot('/ws/users.json', `${ROOT_B}/sub/users.json`).replace('the recorded users file /ws/users.json',
+      'the users file /ws/users.json (the one a pre-store build reads: OBSERVOGRAM_USERS_FILE was not set at the import)'));
+  // The way out, followed: the entry moved out of the root, the record leads nowhere under it.
+  vol.rename(`${ROOT_B}/sub/users.json`, '/keep/users.json');
+  assert.deepEqual(placeIn(vol, '/keep/users.json'), { exists: true, refusal: null });
+});
+
+test('purge-org users file: every hard link under the root is named, so one move clears them all; with none left, the purge passes', () => {
+  const vol = betaVolume().hardlink('/srv/accounts.json', `${ROOT_B}/b/u.json`).hardlink('/srv/accounts.json', `${ROOT_B}/a/users.json`).dir('/keep');
+  const both = `${ROOT_B}/a/users.json and ${ROOT_B}/b/u.json`;
+  assert.deepEqual(placeIn(vol, '/srv/accounts.json'), { exists: true, refusal: underRoot('/srv/accounts.json', both) });
+  vol.rename(`${ROOT_B}/a/users.json`, '/keep/1.json').rename(`${ROOT_B}/b/u.json`, '/keep/2.json');
+  assert.deepEqual(placeIn(vol, '/srv/accounts.json'), { exists: true, refusal: null }, 'both moved out: purged, and /srv/accounts.json stays');
+});
+
+test('purge-org users file: a view through another filesystem — NFS (the inode kept), SMB (100 ns times), overlay (xino, an upper directory under the root, and one outside it), FUSE without inode numbers (whole seconds) — is refused by its size and modification time; another size or time is not; a copy that kept both reads the same (declared); moved out as the refusal says, its path through the NFS or SMB view leads to the directory under the root where nothing of it is left, and the purge passes once no entry under the root has its name, and through a view whose directories show another inode or time it is refused as a users file that does not exist — the second step the first refusal names, deleting the root by hand', () => {
+  const T = 1_760_000_123_456_789_123n;
+  const vol = betaVolume().file(`${ROOT_B}/sub/users.json`, { size: 117n, mtimeNs: T }).file(`${ROOT_B}/up/users.json`, { size: 90n })
+    .file(`${ROOT_B}/packs/same-size.yaml`, { size: 117n, mtimeNs: T + 1_000_000_000n })
+    .file(`${ROOT_B}/packs/same-time.yaml`, { size: 118n, mtimeNs: T }).dir('/srv/upper');
+  const ino = vol.fs.statSync(`${ROOT_B}/sub/users.json`).ino;
+  // An overlay mount with lowerdir=<root>/sub and an upper directory outside the root: its merged directory shows the
+  // upper directory's inode and modification time, a file only in the lower its own, on the overlay's device.
+  const [sub, upper] = [vol.fs.statSync(`${ROOT_B}/sub`), vol.fs.statSync('/srv/upper')];
+  vol.view(`${ROOT_B}/sub`, '/mnt/nfs', { dev: 41n })
+    .view(`${ROOT_B}/sub`, '/mnt/smb', { dev: 42n, mtimeNs: (t) => t - (t % 100n) })
+    .view(`${ROOT_B}/sub`, '/mnt/ovl', { dev: 43n, ino: (i) => i | (1n << 62n) })
+    .view(`${ROOT_B}/up`, '/mnt/upper', { dev: 44n, ino: () => ino + 7n })
+    .view(`${ROOT_B}/sub`, '/mnt/sshfs', { dev: 45n, ino: () => 2n, mtimeNs: (t) => t - (t % 1_000_000_000n) })
+    .view(`${ROOT_B}/sub`, '/mnt/merged', { dev: 48n, ino: (i) => (i === sub.ino ? upper.ino : i), mtimeNs: (t) => (t === sub.mtimeNs ? upper.mtimeNs : t) });
+  for (const [file, entry] of [['/mnt/nfs/users.json', 'sub'], ['/mnt/smb/users.json', 'sub'], ['/mnt/ovl/users.json', 'sub'], ['/mnt/upper/users.json', 'up'],
+    ['/mnt/sshfs/users.json', 'sub'], ['/mnt/merged/users.json', 'sub']]) {
+    assert.equal(vol.fs.statSync(file).dev === vol.fs.statSync(`${ROOT_B}/${entry}/users.json`).dev, false, `${file} is another device`);
+    assert.equal(placeIn(vol, file).refusal, `the recorded users file ${file} lies under ${ROOT_B}: ${ROOT_B}/${entry}/users.json under it has its size `
+      + 'and modification time on another filesystem (the users file seen through a network or overlay mount, or a copy that kept '
+      + `them) — nothing was deleted. Move ${ROOT_B}/${entry}/users.json out of ${ROOT_B}, then run purge-org again; if it then refuses `
+      + `because ${file} does not exist (a mount whose directories show another inode or modification time than theirs under ${ROOT_B}, `
+      + `as an overlay mount with an upper directory does, cannot be traced back there), delete ${ROOT_B} by hand, then run purge-org `
+      + `again: it drops org beta's records. If ${file} then no longer leads to the users file, make it lead there again before a `
+      + 'pre-store build or the in-place `packc store export` uses it', file);
+  }
+  // A FUSE view that keeps neither the size nor the time is not matched (README: known, not fixed); a view of a directory
+  // shows its names, so the entries of the users file's name are refused by it.
+  vol.view(`${ROOT_B}/sub`, '/mnt/fuse', { dev: 46n, ino: () => 3n, mtimeNs: () => 0n });
+  assert.deepEqual(placeIn(vol, '/mnt/fuse/users.json'),
+    { exists: true, refusal: namesake('/mnt/fuse/users.json', [`${ROOT_B}/sub/users.json`, `${ROOT_B}/up/users.json`]) });
+  // On another device, another file with the users file's size or its time is not it; one with both reads the same.
+  vol.dir('/other', { dev: 47n }).file('/other/accounts.json', { size: 117n, mtimeNs: T + 5n });
+  assert.deepEqual(placeIn(vol, '/other/accounts.json'), { exists: true, refusal: null }, 'the same size, another time');
+  vol.file('/other/copy.json', { size: 117n, mtimeNs: T });
+  assert.match(placeIn(vol, '/other/copy.json').refusal, /^the recorded users file \/other\/copy\.json lies under \/ws\/orgs\/beta: \/ws\/orgs\/beta\/sub\/users\.json under it has its size and modification time on another filesystem/,
+    'a copy that kept its size and time (cp -p) on another device is refused: a declared false refusal');
+  vol.rename(`${ROOT_B}/sub/users.json`, '/keep-copy.json');
+  assert.deepEqual(placeIn(vol, '/other/copy.json'), { exists: true, refusal: null }, 'its way out: moved out of the root, purged');
+  // The views' way out, followed: with the users file moved out of the root, its path through the NFS or SMB view leads to
+  // that view of <root>/sub — the same directory by its inode and modification time — where nothing of it is left. While
+  // another entry under the root has its name (<root>/up/users.json, which the upper view above shows), a mount that is down
+  // on its path may lead it there, and it is refused by that name; moved out too, the purge passes.
+  for (const file of ['/mnt/nfs/users.json', '/mnt/smb/users.json']) {
+    assert.deepEqual(placeIn(vol, file), { exists: false, refusal: namesakeMissing(file, `${ROOT_B}/sub`, [`${ROOT_B}/up/users.json`]) },
+      `${file}: moved out, an entry of its name left`);
+  }
+  vol.rename(`${ROOT_B}/up/users.json`, '/keep-up.json');
+  for (const file of ['/mnt/nfs/users.json', '/mnt/smb/users.json']) {
+    assert.deepEqual(placeIn(vol, file), { exists: false, refusal: null }, `${file}: moved out, it leads under the root`);
+  }
+  // Through a view whose directories show another inode or time — the overlay's merged directory (its upper directory's),
+  // an xino overlay's, an sshfs one's — nothing traces the path back to <root>/sub: refused as a users file that does not
+  // exist, the second step its first refusal names, whose way out is deleting the root by hand (the real-filesystem
+  // case below: then purge-org drops the records).
+  for (const at of ['/mnt/merged', '/mnt/ovl', '/mnt/sshfs']) {
+    assert.deepEqual(placeIn(vol, `${at}/users.json`), { exists: null, refusal: unknownPlace(`${at}/users.json`, at) }, `${at}: moved out`);
+  }
+});
+
+test('purge-org users file: a mount point under the root — another filesystem, a file mounted there, one directory reached twice, a loop, the root itself, a mount of the same filesystem /proc/self/mountinfo lists (of a directory or a file) — is refused before anything is deleted, and once unmounted the purge passes; with no /proc/self/mountinfo, a same-filesystem bind mount from outside is entered as a directory; a file on another device than its directory that /proc/self/mountinfo does not list (an overlay mount\'s lower layer on another filesystem) is none, nor is a mount it lists that a later mount of another filesystem over a directory above it covers (one of its own filesystem may show the directory it is mounted on: refused, naming what to unmount first), though a mount stacked on / covers none', () => {
+  const vol = betaVolume().dir('/srv5', { dev: 7n }).file('/srv5/accounts.json').bind('/srv5', `${ROOT_B}/m`);
+  // The reverse of a mount view: a directory from outside mounted under the root, holding the users file.
+  assert.deepEqual(placeIn(vol, '/srv5/accounts.json'), { exists: null, refusal: mounted(`${ROOT_B}/m (another filesystem than ${ROOT_B})`) });
+  vol.unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(vol, '/srv5/accounts.json'), { exists: true, refusal: null }, 'unmounted: the users file is outside, purged');
+  vol.bind('/srv5/accounts.json', `${ROOT_B}/u.json`);
+  assert.equal(placeIn(vol, '/srv/accounts.json').refusal, mounted(`${ROOT_B}/u.json (another filesystem than ${ROOT_B})`), 'a file mounted there');
+  vol.unmount(`${ROOT_B}/u.json`).bind(`${ROOT_B}/packs`, `${ROOT_B}/z/packs2`);
+  assert.equal(placeIn(vol, '/srv/accounts.json').refusal, mounted(`${ROOT_B}/z/packs2 (the directory ${ROOT_B}/packs again)`), 'one directory reached twice');
+  vol.unmount(`${ROOT_B}/z/packs2`).bind(ROOT_B, `${ROOT_B}/sub/loop`);
+  assert.equal(placeIn(vol, '/srv/accounts.json').refusal, mounted(`${ROOT_B}/sub/loop (the directory ${ROOT_B} again)`), 'a loop ends');
+  vol.unmount(`${ROOT_B}/sub/loop`).dir('/vol', { dev: 8n }).file('/vol/packs/b2.pack.yaml').bind('/vol', ROOT_B);
+  assert.deepEqual(placeIn(vol, '/srv/accounts.json'), {
+    exists: null,
+    refusal: `${ROOT_B} (another filesystem than /ws/orgs) is a mount point: deleting it would take the files of the filesystem mounted there and `
+      + 'then fail on the mount point itself (Node 23 and later; Node 22 fails at once) — nothing was deleted. Unmount it, then run purge-org '
+      + `again: it deletes what is left at ${ROOT_B} and drops org beta's records, and the unmounted filesystem's files stay`,
+  }, 'the root itself mounted');
+  vol.unmount(ROOT_B);
+  assert.deepEqual(placeIn(vol, '/srv/accounts.json'), { exists: true, refusal: null });
+  // A bind mount from outside on the root's own filesystem is a directory to lstatSync (the same device). With no
+  // /proc/self/mountinfo to list it (off Linux), the walk enters it, and the users file seen through it is named as an entry.
+  vol.dir('/srv6').file('/srv6/accounts.json').bind('/srv6', `${ROOT_B}/m6`);
+  assert.equal(placeIn(vol, '/srv6/accounts.json').refusal, underRoot('/srv6/accounts.json', `${ROOT_B}/m6/accounts.json`), 'no mountinfo: entered');
+  // Linux lists it in /proc/self/mountinfo (a space in its path as \040), and it is refused, holding the users file or not:
+  // rmSync deleted the files of the directory mounted there, outside the root (Node 23 and later), then failed on the mount
+  // point (Node 22 failed there), and once the users file was moved out of it as the "lies under" refusal said, the purge
+  // deleted the rest of it the same way. Unmounted, the purge passes. The root, reached through a link, is compared by its
+  // real path, as the kernel lists mount points; the root itself mounted from the same filesystem is refused as a mount point.
+  const linux = betaVolume({ proc: true }).dir('/srv6').file('/srv6/accounts.json').file('/srv6/other-data').dir('/srv7').file('/srv7/other-data')
+    .bind('/srv6', `${ROOT_B}/m 6`);
+  const same = (at, root = ROOT_B) => `${at} (the same filesystem as ${root}, listed in /proc/self/mountinfo)`;
+  assert.deepEqual(placeIn(linux, '/srv6/accounts.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m 6`)) }, 'holding the users file');
+  linux.unmount(`${ROOT_B}/m 6`).bind('/srv7', `${ROOT_B}/m7`);
+  assert.deepEqual(placeIn(linux, '/srv6/accounts.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m7`)) }, 'holding other files');
+  linux.symlink('/lnk', '/ws');
+  assert.equal(usersFilePlace('/srv6/accounts.json', '/lnk/orgs/beta', { fs: linux.fs, path: posix, windows: false, id: 'beta' }).refusal,
+    mounted(same('/lnk/orgs/beta/m7', '/lnk/orgs/beta'), '/lnk/orgs/beta'), 'the root through a link');
+  linux.unmount(`${ROOT_B}/m7`);
+  assert.deepEqual(placeIn(linux, '/srv6/accounts.json'), { exists: true, refusal: null }, 'unmounted: the users file is outside, purged');
+  linux.dir('/srv8').file('/srv8/packs/b2.pack.yaml').bind('/srv8', ROOT_B);
+  assert.equal(placeIn(linux, '/srv6/accounts.json').refusal, `${same(ROOT_B, '/ws/orgs')} is a mount point: deleting it would take the files of `
+    + 'the filesystem mounted there and then fail on the mount point itself (Node 23 and later; Node 22 fails at once) — nothing was deleted. '
+    + `Unmount it, then run purge-org again: it deletes what is left at ${ROOT_B} and drops org beta's records, and the unmounted filesystem's `
+    + 'files stay', 'the root itself, from the same filesystem');
+  linux.unmount(ROOT_B);
+  assert.deepEqual(placeIn(linux, '/srv6/accounts.json'), { exists: true, refusal: null });
+  // A mount that a later one covers — a filesystem mounted on /ws over a tree that held mounts already (fstab entries
+  // mounted out of order, an autofs mount over a directory that holds mounts) — is listed in /proc/self/mountinfo still,
+  // on the filesystem now hidden, while its path shows a plain directory of the filesystem mounted above: nothing is
+  // mounted there, and the purge passes (it was refused as a mount point, and unmounting, its way out, failed: not
+  // mounted). A mount in a covered mount is covered too, and one in that (with the parents followed one level up only,
+  // <root>/m/n/o was refused, and unmounting it failed: not mounted). One made there on the filesystem above is refused,
+  // and once unmounted the purge passes, the covered one listed still; the root itself likewise.
+  const covering = (vol) => vol.dir('/fresh', { dev: 70n }).dir('/fresh/x').bind('/fresh', '/ws').file(`${ROOT_B}/packs/b1.pack.yaml`);
+  const covered = covering(betaVolume({ proc: true }).dir('/srv6').dir('/srv7').dir('/srv8').bind('/srv6', `${ROOT_B}/m`)
+    .bind('/srv7', `${ROOT_B}/m/n`).bind('/srv8', `${ROOT_B}/m/n/o`)).dir(`${ROOT_B}/m/n/o`);
+  for (const at of ['m', 'm/n', 'm/n/o']) {
+    assert.ok(covered.fs.readFileSync('/proc/self/mountinfo').includes(` ${ROOT_B}/${at} rw`), `${at}: listed still`);
+    assert.equal(covered.fs.lstatSync(`${ROOT_B}/${at}`).dev, 70n, `${at}: a directory of the filesystem above`);
+    assert.throws(() => covered.unmount(`${ROOT_B}/${at}`), { code: 'EINVAL' }, `${at}: not mounted`);
+  }
+  assert.deepEqual(placeIn(covered, '/srv/accounts.json'), { exists: true, refusal: null }, 'covered mounts: none is a mount point, purged');
+  covered.bind('/fresh/x', `${ROOT_B}/m`);
+  assert.deepEqual(placeIn(covered, '/srv/accounts.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m`)) }, 'mounted there on the filesystem above');
+  covered.unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(covered, '/srv/accounts.json'), { exists: true, refusal: null }, 'unmounted as its refusal says: purged');
+  const coveredRoot = covering(betaVolume({ proc: true }).dir('/srv8').bind('/srv8', ROOT_B));
+  assert.throws(() => coveredRoot.unmount(ROOT_B), { code: 'EINVAL' }, 'the root: not mounted');
+  assert.deepEqual(placeIn(coveredRoot, '/srv/accounts.json'), { exists: true, refusal: null }, 'the root, covered: purged');
+  coveredRoot.bind('/fresh/x', ROOT_B);
+  assert.ok(placeIn(coveredRoot, '/srv/accounts.json').refusal.startsWith(`${same(ROOT_B, '/ws/orgs')} is a mount point: `), 'the root mounted on the filesystem above');
+  coveredRoot.unmount(ROOT_B);
+  assert.deepEqual(placeIn(coveredRoot, '/srv/accounts.json'), { exists: true, refusal: null }, 'the root unmounted as its refusal says: purged');
+  // A mount covers what lies under the directory it is mounted on, not every path that begins with its own: with the
+  // workspace on a filesystem mounted on /ws and another mounted on /w, a bind mount at <root>/m of a directory of the
+  // workspace's filesystem is reached at its path, and refused (/w taken for a directory above /ws, it was passed over as
+  // covered, and rmSync failed there with EBUSY); once unmounted as its refusal says, the purge passes.
+  const beside = covering(betaVolume({ proc: true })).file('/ws/src/other-data').bind('/ws/src', `${ROOT_B}/m`).dir('/wfs', { dev: 72n })
+    .bind('/wfs', '/w');
+  assert.deepEqual(beside.fs.readdirSync(`${ROOT_B}/m`), ['other-data'], '/w beside /ws: <root>/m reached at its path');
+  assert.deepEqual(placeIn(beside, '/srv/accounts.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m`)) }, '/w beside /ws');
+  beside.unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(beside, '/srv/accounts.json'), { exists: true, refusal: null }, '/w beside /ws: unmounted as its refusal says, purged');
+  // Covered by a mount of the filesystem it lies in — /ws bound on itself (an fstab line mounted out of order), a recursive
+  // bind of /ws whose copy of the mount at <root>/m was unmounted as its refusal said, or a filesystem mounted on /ws that
+  // holds a bind mount of the directory it lies in — the covered mount's path shows the very directory it is mounted on,
+  // which rmdir refuses while it is a mount point (rmSync deleted part of the root, then failed there with EBUSY), and
+  // unmounting it at its path fails (not mounted). It is refused, naming what to unmount first; followed literally, the
+  // purge passes. The root itself likewise.
+  const coveredSame = (at, first, root = ROOT_B) => `${at} (the same filesystem as ${root}, listed in /proc/self/mountinfo, covered by a later `
+    + `mount through which its path may show what it is mounted on: first unmount ${first}; if the workspace goes with `
+    + `${first.includes(', then ') ? 'one of them' : 'it'} (a mount that showed another directory there than the one it is mounted on — the `
+    + `workspace's), mount it there again once ${at} is unmounted, before you run purge-org again)`;
+  const selfBound = betaVolume({ proc: true }).dir('/srv6').file('/srv6/other-data').dir(`${ROOT_B}/m`);
+  const point = selfBound.fs.lstatSync(`${ROOT_B}/m`).ino;
+  selfBound.bind('/srv6', `${ROOT_B}/m`).bind('/ws', '/ws');
+  assert.equal(selfBound.fs.lstatSync(`${ROOT_B}/m`).ino, point, '/ws bound on itself: <root>/m shows the directory mounted on');
+  assert.throws(() => selfBound.unmount(`${ROOT_B}/m`), { code: 'EINVAL' }, '/ws bound on itself: <root>/m not mounted');
+  assert.deepEqual(placeIn(selfBound, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws')) }, '/ws bound on itself');
+  selfBound.unmount('/ws').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(selfBound, '/srv/accounts.json'), { exists: true, refusal: null }, '/ws bound on itself: unmounted as its refusal says, purged');
+  // The declared false refusal: the deployment at /data/ws, holding <root>/m as a plain directory, bind-mounted on /ws over
+  // the original directory, where a bind at <root>/m lies covered — a mount of the same filesystem that shows another
+  // directory there than the one it is mounted on, so nothing at <root>/m is a mount point, yet it is refused naming /ws
+  // first. Followed literally, `umount /ws` took the workspace away with it, and purge-org, run again, found no database
+  // at /ws/observogram.db (the refusal said nothing of mounting it again). It now says to mount it there again once <root>/m
+  // is unmounted; followed so, the purge passes, and the mounted directory's files stay.
+  const declared = mountFs(posix, { proc: true }).dir(`${ROOT_B}/m`).dir('/srv6').file('/srv6/other-data').bind('/srv6', `${ROOT_B}/m`)
+    .file('/srv/accounts.json').file('/data/ws/observogram.db').file(`/data${ROOT_B}/packs/b1.pack.yaml`).dir(`/data${ROOT_B}/m`).bind('/data/ws', '/ws');
+  assert.equal(declared.fs.lstatSync(`${ROOT_B}/m`).ino, declared.fs.lstatSync(`/data${ROOT_B}/m`).ino, 'the deployment over the original: <root>/m shows the deployment\'s own directory');
+  assert.throws(() => declared.unmount(`${ROOT_B}/m`), { code: 'EINVAL' }, 'the deployment over the original: <root>/m not mounted');
+  assert.deepEqual(placeIn(declared, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws')) },
+    'the deployment over the original: refused, naming /ws first and the workspace to mount again');
+  declared.unmount('/ws').unmount(`${ROOT_B}/m`);
+  assert.throws(() => declared.fs.lstatSync('/ws/observogram.db'), { code: 'ENOENT' }, 'unmounted as its refusal says: the workspace went with /ws');
+  declared.bind('/data/ws', '/ws');
+  assert.deepEqual(placeIn(declared, '/srv/accounts.json'), { exists: true, refusal: null }, 'the workspace mounted there again, as its refusal says: purged');
+  assert.deepEqual(declared.fs.readdirSync('/srv6'), ['other-data'], 'the mounted directory\'s files stay');
+  const rbound =betaVolume({ proc: true }).dir('/srv6').file('/srv6/other-data').bind('/srv6', `${ROOT_B}/m`).bind('/ws', '/ws')
+    .bind('/srv6', `${ROOT_B}/m`);
+  assert.deepEqual(placeIn(rbound, '/srv/accounts.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m`)) }, 'a recursive bind: its copy');
+  assert.throws(() => rbound.unmount('/ws'), { code: 'EBUSY' }, 'a recursive bind: busy while its copy is mounted');
+  rbound.unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(rbound, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws')) },
+    'a recursive bind, its copy unmounted as its refusal says');
+  rbound.unmount('/ws').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(rbound, '/srv/accounts.json'), { exists: true, refusal: null }, 'a recursive bind: unmounted as its refusal says, purged');
+  const inAbove = betaVolume({ proc: true }).dir('/srv6').bind('/srv6', `${ROOT_B}/m`).bind('/ws', '/keep').dir('/fresh', { dev: 70n })
+    .bind('/fresh', '/ws').bind('/keep/orgs', '/ws/orgs').unmount('/keep');
+  assert.deepEqual(placeIn(inAbove, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws/orgs, then /ws')) },
+    'a bind mount of the directory it lies in, on the filesystem above');
+  inAbove.unmount('/ws/orgs').unmount('/ws').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(inAbove, '/srv/accounts.json'), { exists: true, refusal: null }, 'on the filesystem above: unmounted as its refusal says, purged');
+  const rootBound = betaVolume({ proc: true }).bind(ROOT_B, ROOT_B).bind('/ws', '/ws');
+  assert.ok(placeIn(rootBound, '/srv/accounts.json').refusal.startsWith(`${coveredSame(ROOT_B, '/ws', '/ws/orgs')} is a mount point: `),
+    'the root bound on itself, /ws bound on itself');
+  rootBound.unmount('/ws').unmount(ROOT_B);
+  assert.deepEqual(placeIn(rootBound, '/srv/accounts.json'), { exists: true, refusal: null }, 'the root: unmounted as its refusal says, purged');
+  // Whether the covered mount's path leads through a mount of the filesystem it lies in is decided by its parent mount's
+  // filesystem and the topmost mount of a stack, and the hint names what `umount` takes, in that order, when followed
+  // literally. Each of these read otherwise under a change to users-file-place.mjs the suite stayed green under, and on real
+  // mounts the purge then passed the covered mount over (rmSync deleted part of the root and failed there with EBUSY), or the
+  // hint's first step failed (not mounted; target is busy) and the same refusal came back. A tmpfs on <root>/m under /ws bound
+  // on itself: compared by its own filesystem it was passed over.
+  const onTmpfs = betaVolume({ proc: true }).dir('/tfs', { dev: 47n }).file('/tfs/t').bind('/tfs', `${ROOT_B}/m`).bind('/ws', '/ws');
+  assert.match(onTmpfs.fs.readFileSync('/proc/self/mountinfo'), new RegExp(`^\\d+ 21 0:47 / ${ROOT_B}/m `, 'm'), 'a tmpfs on <root>/m: listed on its own device');
+  assert.deepEqual(placeIn(onTmpfs, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws')) }, 'a tmpfs on <root>/m, /ws bound on itself');
+  onTmpfs.unmount('/ws').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(onTmpfs, '/srv/accounts.json'), { exists: true, refusal: null }, 'a tmpfs on <root>/m: unmounted as its refusal says, purged');
+  // A stack on /ws — /ws bound on /alt, a tmpfs mounted on /ws, then /alt bound on /ws over it — leads the path through
+  // its topmost mount, of the root's filesystem (by the lowest, the tmpfs, it was passed over); both come off first.
+  const stackedWs = betaVolume({ proc: true }).dir('/srv6').file('/srv6/other-data').bind('/srv6', `${ROOT_B}/m`).dir('/alt').bind('/ws', '/alt')
+    .dir('/fresh', { dev: 70n }).bind('/fresh', '/ws').bind('/alt', '/ws');
+  assert.equal(stackedWs.fs.lstatSync(`${ROOT_B}/m`).dev, 1n, 'a stack on /ws: <root>/m shows the directory mounted on');
+  assert.deepEqual(placeIn(stackedWs, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws, then /ws')) },
+    'a stack on /ws, the root\'s filesystem on top');
+  stackedWs.unmount('/ws').unmount('/ws').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(stackedWs, '/srv/accounts.json'), { exists: true, refusal: null }, 'a stack on /ws: unmounted as its refusal says, purged');
+  // The covered mount's parent mount covered itself, nothing in it above the covered mount — /ws/orgs bound on itself, the
+  // bind at <root>/m made in it, then /ws bound on itself: the hint names what covers the parent (it named nothing, and
+  // `umount <root>/m`, the way out then, said not mounted).
+  const inCovered = betaVolume({ proc: true }).bind('/ws/orgs', '/ws/orgs').dir('/srv6').file('/srv6/other-data').bind('/srv6', `${ROOT_B}/m`).bind('/ws', '/ws');
+  assert.deepEqual(placeIn(inCovered, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws')) }, 'in a covered /ws/orgs');
+  inCovered.unmount('/ws').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(inCovered, '/srv/accounts.json'), { exists: true, refusal: null }, 'in a covered /ws/orgs: unmounted as its refusal says, purged');
+  // Two coverers in one parent — /ws/orgs, then /ws, each bound on itself over the bind at <root>/m — come off outermost
+  // first: /ws/orgs is reached only once /ws is unmounted (named first, `umount /ws/orgs` said not mounted).
+  const twoAbove = betaVolume({ proc: true }).dir('/srv6').file('/srv6/other-data').bind('/srv6', `${ROOT_B}/m`).bind('/ws/orgs', '/ws/orgs').bind('/ws', '/ws');
+  assert.throws(() => twoAbove.unmount('/ws/orgs'), { code: 'EINVAL' }, 'two coverers: /ws/orgs not mounted while /ws is');
+  assert.deepEqual(placeIn(twoAbove, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws, then /ws/orgs')) }, 'two coverers in one parent');
+  twoAbove.unmount('/ws').unmount('/ws/orgs').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(twoAbove, '/srv/accounts.json'), { exists: true, refusal: null }, 'two coverers: unmounted as its refusal says, purged');
+  // What covers the parent comes before what is above the covered mount in the parent: /ws/orgs bound on itself, the bind at
+  // <root>/m in it, a tmpfs stacked on /ws/orgs in it, then /ws bound on itself (named after, `umount /ws/orgs` said not mounted).
+  const parentCovered = betaVolume({ proc: true }).bind('/ws/orgs', '/ws/orgs').dir('/srv6').file('/srv6/other-data').bind('/srv6', `${ROOT_B}/m`)
+    .dir('/fresh', { dev: 70n }).bind('/fresh', '/ws/orgs').bind('/ws', '/ws');
+  assert.deepEqual(placeIn(parentCovered, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws, then /ws/orgs')) },
+    'the parent covered, and a mount above in it');
+  parentCovered.unmount('/ws').unmount('/ws/orgs').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(parentCovered, '/srv/accounts.json'), { exists: true, refusal: null }, 'the parent covered, and a mount above in it: unmounted as its refusal says, purged');
+  // The mounts in the covered mount keep it busy, and come after it is uncovered: a bind at <root>/m/n in the one at <root>/m
+  // (left out, `umount <root>/m` said target is busy).
+  const inner = betaVolume({ proc: true }).dir('/srv6').dir('/srv7').file('/srv7/other-data').bind('/srv6', `${ROOT_B}/m`).bind('/srv7', `${ROOT_B}/m/n`).bind('/ws', '/ws');
+  assert.deepEqual(placeIn(inner, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, `/ws, then ${ROOT_B}/m/n`)) }, 'a mount in the covered mount');
+  inner.unmount('/ws');
+  assert.throws(() => inner.unmount(`${ROOT_B}/m`), { code: 'EBUSY' }, 'a mount in the covered mount: busy until that is unmounted');
+  inner.unmount(`${ROOT_B}/m/n`).unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(inner, '/srv/accounts.json'), { exists: true, refusal: null }, 'a mount in the covered mount: unmounted as its refusal says, purged');
+  // A mount stacked on / itself — a tmpfs mounted on / in a chroot, or `mount --bind / /` — covers nothing: a path is looked
+  // up from the process's root, and a lookup never crosses a mount stacked on it, so <root>/m is reached at its path still.
+  // It is refused, holding other files or the users file (it was passed over as covered: rmSync failed there with EBUSY, and
+  // holding the users file, the "lies under" refusal named <root>/m/accounts.json, in the directory mounted there, to move
+  // out), and once unmounted as its refusal says, the purge passes.
+  for (const [how, onRoot] of [['a tmpfs mounted on /', (v) => v.dir('/fresh', { dev: 70n }).bind('/fresh', '/')], ['mount --bind / /', (v) => v.bind('/', '/')]]) {
+    for (const [source, file] of [['/srv7', '/srv/accounts.json'], ['/srv6', '/srv6/accounts.json']]) {
+      const stacked = onRoot(betaVolume({ proc: true }).file('/srv6/accounts.json').file('/srv7/other-data').bind(source, `${ROOT_B}/m`));
+      assert.match(stacked.fs.readFileSync('/proc/self/mountinfo'), /^\d+ 21 \S+ \/ \/ /m, `${how}: listed at /, in the root's mount`);
+      assert.deepEqual(stacked.fs.readdirSync(`${ROOT_B}/m`), stacked.fs.readdirSync(source), `${how}: <root>/m reached at its path`);
+      assert.deepEqual(placeIn(stacked, file), { exists: null, refusal: mounted(same(`${ROOT_B}/m`)) }, `${how}: ${source} mounted there`);
+      stacked.unmount(`${ROOT_B}/m`);
+      assert.deepEqual(placeIn(stacked, file), { exists: true, refusal: null }, `${how}: ${source} unmounted as its refusal says, purged`);
+    }
+  }
+  // A file on another device than its directory is a mount point only as /proc/self/mountinfo lists it (a file mounted on a
+  // file, which Linux alone makes): an overlay mount whose layers lie on different filesystems (xino=off) shows its
+  // directories on its own device and a lower layer's files on that layer's, with nothing mounted there, and the purge
+  // passes (it was refused as a mount point, and unmounting, its way out, could not be followed). A file from another
+  // filesystem mounted on a file under the root is listed, and refused. With no /proc/self/mountinfo to tell, a file on
+  // another device is refused as one mounted there (above).
+  linux.file(`${ROOT_B}/packs/lower.pack.yaml`, { dev: 60n }).file(`${ROOT_B}/sub/lower.json`, { dev: 60n });
+  assert.deepEqual(placeIn(linux, '/srv6/accounts.json'), { exists: true, refusal: null }, 'an overlay\'s lower-layer files: no mount point');
+  linux.dir('/srv9', { dev: 9n }).file('/srv9/x.json').bind('/srv9/x.json', `${ROOT_B}/packs/m.json`);
+  assert.equal(placeIn(linux, '/srv6/accounts.json').refusal, mounted(`${ROOT_B}/packs/m.json (another filesystem than ${ROOT_B}/packs)`),
+    'a file from another filesystem mounted on a file, listed');
+  linux.unmount(`${ROOT_B}/packs/m.json`);
+  assert.deepEqual(placeIn(linux, '/srv6/accounts.json'), { exists: true, refusal: null });
+  // A file of the root's own filesystem mounted on a file under it is a file to lstatSync (the same device), and listed:
+  // refused, holding the users file or not. Passed, rmSync failed there with EBUSY, and the users file mounted there was
+  // refused as an entry under the root to move out, which fails on a mount point (mv: Device or resource busy). Unmounted
+  // as its refusal says, the purge passes.
+  linux.file('/srv6/src.json').file(`${ROOT_B}/m.json`).bind('/srv6/src.json', `${ROOT_B}/m.json`);
+  for (const file of ['/srv6/accounts.json', '/srv6/src.json']) {
+    assert.deepEqual(placeIn(linux, file), { exists: null, refusal: mounted(same(`${ROOT_B}/m.json`)) }, `a file of the same filesystem mounted on a file: ${file}`);
+  }
+  linux.unmount(`${ROOT_B}/m.json`);
+  assert.deepEqual(placeIn(linux, '/srv6/src.json'), { exists: true, refusal: null }, 'unmounted as its refusal says: purged');
+  // /proc/self/mountinfo there but unreadable: nothing tells which directory is a mount point, so it is refused.
+  const locked = { ...linux.fs, readFileSync: (p) => { throw Object.assign(new Error(`EACCES: ${p}`), { code: 'EACCES' }); } };
+  assert.equal(placeIn({ fs: locked }, '/srv6/accounts.json').refusal, `/proc/self/mountinfo cannot be read (EACCES), so purge-org cannot tell what `
+    + `deleting ${ROOT_B} takes — nothing was deleted. Run purge-org as a user who can read it; or, if the recorded users file /srv6/accounts.json `
+    + `does not lie under ${ROOT_B}, delete ${ROOT_B} by hand as such a user, then run purge-org again: it drops org beta's records`);
+});
+
+test('purge-org users file: in a chroot into a directory that is no mount point, /proc/self/mountinfo lists neither / nor the mount the root lies in, and the mounts in it name a parent it does not list — a mount under the root that a later mount of another filesystem covers is passed over there too (it was refused, and its way out, unmounting the covering mount, unmounted the filesystem holding the workspace), one a mount of the root\'s own filesystem covers is refused naming what to unmount first, and a mount stacked on / covers none', () => {
+  const same = (at, root = ROOT_B) => `${at} (the same filesystem as ${root}, listed in /proc/self/mountinfo)`;
+  const coveredSame = (at, first) => `${at} (the same filesystem as ${ROOT_B}, listed in /proc/self/mountinfo, covered by a later mount through which `
+    + `its path may show what it is mounted on: first unmount ${first}; if the workspace goes with it (a mount that showed another directory `
+    + `there than the one it is mounted on — the workspace's), mount it there again once ${at} is unmounted, before you run purge-org again)`;
+  const chrooted = () => betaVolume({ proc: true, chroot: true }).dir('/srv6').file('/srv6/other-data').bind('/srv6', `${ROOT_B}/m`);
+  // A tmpfs mounted on the workspace over the bind mount at <root>/m (c86f545's case), in the chroot: <root>/m is a plain
+  // directory of the tmpfs, and the purge passes. Refused, its way out named the tmpfs, the whole deployment's filesystem.
+  const covered = chrooted().dir('/fresh', { dev: 70n }).dir('/fresh/x').bind('/fresh', '/ws').file(`${ROOT_B}/packs/b1.pack.yaml`).dir(`${ROOT_B}/m`);
+  const info = covered.fs.readFileSync('/proc/self/mountinfo');
+  assert.doesNotMatch(info, /^\d+ \d+ \S+ \/ \/ /m, 'the chroot: nothing listed at /');
+  const [, parent] = info.match(new RegExp(`^\\d+ (\\d+) \\S+ / ${ROOT_B}/m `, 'm'));
+  assert.doesNotMatch(info, new RegExp(`^${parent} `, 'm'), '<root>/m names a parent mount that is not listed');
+  assert.equal(covered.fs.lstatSync(`${ROOT_B}/m`).dev, 70n, '<root>/m: a directory of the filesystem above');
+  assert.throws(() => covered.unmount(`${ROOT_B}/m`), { code: 'EINVAL' }, '<root>/m: not mounted');
+  assert.deepEqual(placeIn(covered, '/srv/accounts.json'), { exists: true, refusal: null }, 'in the chroot, the covered mount is passed over: purged');
+  // <root>/m in the tmpfs a link to a directory of the root's own filesystem (/srv7, holding a file): what is at the covered
+  // mount's path is the link, of the tmpfs, which rmSync deletes without following it, so the covered mount is passed over
+  // and the purge goes on, the link's target kept. Compared through the link (statSync), the target's filesystem is the one
+  // / shows, and it was refused naming the tmpfs, the whole deployment's filesystem, to unmount first.
+  const linked = chrooted().dir('/fresh', { dev: 70n }).bind('/fresh', '/ws').file(`${ROOT_B}/packs/b1.pack.yaml`).dir('/srv7').file('/srv7/g')
+    .symlink(`${ROOT_B}/m`, '/srv7');
+  assert.ok(linked.fs.lstatSync(`${ROOT_B}/m`).isSymbolicLink(), '<root>/m: a link');
+  assert.equal(linked.fs.lstatSync(`${ROOT_B}/m`).dev, 70n, '<root>/m: a link of the filesystem above');
+  assert.equal(linked.fs.statSync(`${ROOT_B}/m`).dev, linked.fs.statSync('/').dev, '<root>/m leads to a directory of the filesystem / shows');
+  assert.throws(() => linked.unmount(`${ROOT_B}/m`), { code: 'EINVAL' }, '<root>/m a link: not mounted');
+  assert.deepEqual(placeIn(linked, '/srv/accounts.json'), { exists: true, refusal: null }, 'in the chroot, the covered mount under a link of the filesystem above is passed over: purged');
+  // The root itself so covered, and <root>/m mounted again on the filesystem above, read as outside a chroot.
+  const coveredRoot = betaVolume({ proc: true, chroot: true }).dir('/srv8').bind('/srv8', ROOT_B).dir('/fresh', { dev: 70n }).bind('/fresh', '/ws')
+    .file(`${ROOT_B}/packs/b1.pack.yaml`);
+  assert.deepEqual(placeIn(coveredRoot, '/srv/accounts.json'), { exists: true, refusal: null }, 'the root, covered, in the chroot: purged');
+  covered.dir('/fresh/y').bind('/fresh/y', `${ROOT_B}/m`);
+  assert.deepEqual(placeIn(covered, '/srv/accounts.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m`)) }, 'mounted there on the filesystem above');
+  covered.unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(covered, '/srv/accounts.json'), { exists: true, refusal: null }, 'unmounted as its refusal says: purged');
+  // Covered by a mount of the root's own filesystem — /ws bound on itself in the chroot — <root>/m shows the very directory
+  // it is mounted on, and is refused naming what to unmount first; followed literally, the purge passes.
+  const selfBound = chrooted().bind('/ws', '/ws');
+  assert.throws(() => selfBound.unmount(`${ROOT_B}/m`), { code: 'EINVAL' }, '/ws bound on itself: <root>/m not mounted');
+  assert.deepEqual(placeIn(selfBound, '/srv/accounts.json'), { exists: null, refusal: mounted(coveredSame(`${ROOT_B}/m`, '/ws')) }, '/ws bound on itself, in the chroot');
+  selfBound.unmount('/ws').unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(selfBound, '/srv/accounts.json'), { exists: true, refusal: null }, '/ws bound on itself: unmounted as its refusal says, purged');
+  // A tmpfs mounted on / in the chroot, listed at / with the unlisted parent, covers nothing: <root>/m is refused as a mount point.
+  const stacked = chrooted().dir('/fresh', { dev: 70n }).bind('/fresh', '/');
+  assert.match(stacked.fs.readFileSync('/proc/self/mountinfo'), new RegExp(`^\\d+ ${parent} \\S+ / / `, 'm'), 'listed at /, in the unlisted mount');
+  assert.deepEqual(placeIn(stacked, '/srv/accounts.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m`)) }, 'a tmpfs on / in the chroot: /srv6 mounted there');
+  stacked.unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(stacked, '/srv/accounts.json'), { exists: true, refusal: null }, 'unmounted as its refusal says: purged');
+});
+
+test('purge-org users file: a mount point under the root holding mounts is refused naming them to unmount first, in order, each after the mounts in it — named alone, `umount <root>/m` said target is busy and the same refusal came back; a mount stacked on it names the mounts in the topmost alone', () => {
+  const same = (at, root = ROOT_B) => `${at} (the same filesystem as ${root}, listed in /proc/self/mountinfo)`;
+  const busy = (at, first, why = `the same filesystem as ${ROOT_B}, listed in /proc/self/mountinfo`) => `${at} (${why}, holding `
+    + `${first.includes(', then ') ? 'mounts, which keep' : 'a mount, which keeps'} it busy: first unmount ${first})`;
+  // A bind at <root>/m holding one at <root>/m/n, in that one at <root>/m/n/o, and beside it one at <root>/m/p: the walk never
+  // enters <root>/m, so they went unnamed, though /proc/self/mountinfo lists them. Each comes after the mounts in it.
+  const nested = betaVolume({ proc: true }).dir('/srv6').dir('/srv7').dir('/srv8').dir('/srv9').file('/srv9/other-data').bind('/srv6', `${ROOT_B}/m`)
+    .bind('/srv7', `${ROOT_B}/m/n`).bind('/srv8', `${ROOT_B}/m/n/o`).bind('/srv9', `${ROOT_B}/m/p`);
+  assert.throws(() => nested.unmount(`${ROOT_B}/m`), { code: 'EBUSY' }, 'the mounts in <root>/m keep it busy');
+  assert.deepEqual(placeIn(nested, '/srv/accounts.json'), { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/n/o, then ${ROOT_B}/m/n, then ${ROOT_B}/m/p`)) },
+    'refused naming the mounts in it, each after the mounts in it');
+  // Followed literally — the named order, then <root>/m, as the refusal says — the purge passes, and the mounted directories' files stay.
+  nested.unmount(`${ROOT_B}/m/n/o`).unmount(`${ROOT_B}/m/n`);
+  assert.deepEqual(placeIn(nested, '/srv/accounts.json'), { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/p`)) }, 'part-way: the mount left in it');
+  nested.unmount(`${ROOT_B}/m/p`).unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(nested, '/srv/accounts.json'), { exists: true, refusal: null }, 'unmounted as its refusal says: purged');
+  assert.deepEqual(nested.fs.readdirSync('/srv9'), ['other-data'], 'the mounted directory\'s files stay');
+  // A mount in it that a later one over a directory above it covers comes after the one that covers it (unmounted first, it
+  // is not mounted). A mount of another filesystem holding one is named alike.
+  const coveredIn = betaVolume({ proc: true }).dir('/srv6').dir('/srv7').dir('/srv8').bind('/srv6', `${ROOT_B}/m`).bind('/srv8', `${ROOT_B}/m/n/o`)
+    .bind('/srv7', `${ROOT_B}/m/n`);
+  assert.throws(() => coveredIn.unmount(`${ROOT_B}/m/n/o`), { code: 'EINVAL' }, 'covered in <root>/m: not mounted');
+  assert.deepEqual(placeIn(coveredIn, '/srv/accounts.json'), { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/n, then ${ROOT_B}/m/n/o`)) }, 'a covered mount in it');
+  coveredIn.unmount(`${ROOT_B}/m/n`).unmount(`${ROOT_B}/m/n/o`).unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(coveredIn, '/srv/accounts.json'), { exists: true, refusal: null }, 'a covered mount in it: unmounted as its refusal says, purged');
+  // In a mount in it, two at different depths, one covering the other: a bind at <root>/m/n/x/y, in the one at <root>/m/n, then one
+  // at <root>/m/n/x, in <root>/m/n too, which covers it and holds one at <root>/m/n/x/z. The mounts in <root>/m/n are named the
+  // one that covers first (the outermost), each after the mounts in it, then <root>/m/n — the cases above order the mounts in
+  // <root>/m alone, and give a mount in them one mount at most, so the order of the mounts in a mount in it went untested, and
+  // named the covered one first, on real mounts `umount <root>/m/n/x/y` said no mount point specified, <root>/m/n and
+  // <root>/m stayed busy, and the same refusal came back.
+  const deepIn = betaVolume({ proc: true }).dir('/srv6').dir('/srv7').dir('/srv8').file('/srv8/h').dir('/srv9').dir('/srv10').bind('/srv6', `${ROOT_B}/m`)
+    .bind('/srv7', `${ROOT_B}/m/n`).bind('/srv8', `${ROOT_B}/m/n/x/y`).bind('/srv9', `${ROOT_B}/m/n/x`).bind('/srv10', `${ROOT_B}/m/n/x/z`);
+  assert.throws(() => deepIn.unmount(`${ROOT_B}/m/n/x/y`), { code: 'EINVAL' }, 'covered by <root>/m/n/x: not mounted');
+  assert.throws(() => deepIn.unmount(`${ROOT_B}/m/n`), { code: 'EBUSY' }, 'the mounts in <root>/m/n keep it busy');
+  assert.deepEqual(placeIn(deepIn, '/srv/accounts.json'),
+    { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/n/x/z, then ${ROOT_B}/m/n/x, then ${ROOT_B}/m/n/x/y, then ${ROOT_B}/m/n`)) },
+    'in a mount in it, the one that covers first, after the mount in it, then the covered one, then the mount they are in');
+  deepIn.unmount(`${ROOT_B}/m/n/x/z`).unmount(`${ROOT_B}/m/n/x`);
+  assert.deepEqual(placeIn(deepIn, '/srv/accounts.json'), { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/n/x/y, then ${ROOT_B}/m/n`)) },
+    'part-way: the covered one, mounted now, then the mount it is in');
+  deepIn.unmount(`${ROOT_B}/m/n/x/y`).unmount(`${ROOT_B}/m/n`).unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(deepIn, '/srv/accounts.json'), { exists: true, refusal: null }, 'in a mount in it: unmounted as its refusal says, purged');
+  assert.deepEqual(deepIn.fs.readdirSync('/srv8'), ['h'], 'the covered mount\'s directory\'s files stay');
+  const onTmpfs = betaVolume({ proc: true }).dir('/tfs', { dev: 47n }).bind('/tfs', `${ROOT_B}/m`).dir('/srv7').bind('/srv7', `${ROOT_B}/m/n`);
+  assert.deepEqual(placeIn(onTmpfs, '/srv/accounts.json'), { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/n`, `another filesystem than ${ROOT_B}`)) },
+    'a tmpfs on <root>/m holding a mount');
+  onTmpfs.unmount(`${ROOT_B}/m/n`).unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(onTmpfs, '/srv/accounts.json'), { exists: true, refusal: null }, 'a tmpfs on <root>/m: unmounted as its refusal says, purged');
+  // A mount stacked on <root>/m: `umount <root>/m` takes the topmost, so the mounts in that alone are named (the lower mount's
+  // are covered by it), and once it is off, the lower mount's.
+  const stack = betaVolume({ proc: true }).dir('/srv6').dir('/srv7').dir('/srv8').dir('/srv9').bind('/srv6', `${ROOT_B}/m`).bind('/srv7', `${ROOT_B}/m/n`)
+    .bind('/srv8', `${ROOT_B}/m`);
+  assert.deepEqual(placeIn(stack, '/srv/accounts.json'), { exists: null, refusal: mounted(same(`${ROOT_B}/m`)) }, 'a stack on <root>/m, nothing in its topmost');
+  stack.bind('/srv9', `${ROOT_B}/m/q`);
+  assert.deepEqual(placeIn(stack, '/srv/accounts.json'), { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/q`)) }, 'a stack on <root>/m: the mount in its topmost');
+  stack.unmount(`${ROOT_B}/m/q`).unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(stack, '/srv/accounts.json'), { exists: null, refusal: mounted(busy(`${ROOT_B}/m`, `${ROOT_B}/m/n`)) }, 'the topmost off: the lower mount\'s');
+  stack.unmount(`${ROOT_B}/m/n`).unmount(`${ROOT_B}/m`);
+  assert.deepEqual(placeIn(stack, '/srv/accounts.json'), { exists: true, refusal: null }, 'a stack on <root>/m: unmounted as its refusal says, purged');
+});
+
+test('purge-org users file: a directory under the root this user cannot read is refused, nothing deleted, and read by a user who can, the purge passes; one it may list but not search (r--) is refused naming the entry it cannot read; one a stopped FUSE server cannot answer for is refused naming unmounting it', () => {
+  const vol = betaVolume().dir(`${ROOT_B}/runs/locked`).file(`${ROOT_B}/runs/locked/r.json`).deny(`${ROOT_B}/runs/locked`);
+  assert.deepEqual(placeIn(vol, '/srv/accounts.json'), {
+    exists: null,
+    refusal: `${ROOT_B}/runs/locked under ${ROOT_B} cannot be read (EACCES), so purge-org cannot tell what deleting ${ROOT_B} takes — nothing `
+      + 'was deleted. Run purge-org as a user who can read it; or, if the recorded users file /srv/accounts.json does not lie under '
+      + `${ROOT_B}, delete ${ROOT_B} by hand as such a user, then run purge-org again: it drops org beta's records`,
+  });
+  const reader = betaVolume().dir(`${ROOT_B}/runs/locked`).file(`${ROOT_B}/runs/locked/r.json`);
+  assert.deepEqual(placeIn(reader, '/srv/accounts.json'), { exists: true, refusal: null }, 'the way out: a user who can read it');
+  // A directory it may list but not search (r--): readdirSync names its entries but lstatSync of each fails (rmSync fails
+  // there too) — refused naming the entry it cannot read.
+  const listed = betaVolume().file(`${ROOT_B}/runs/listed/r.json`).deny(`${ROOT_B}/runs/listed`, 'EACCES', { list: true });
+  assert.deepEqual(placeIn(listed, '/srv/accounts.json'), {
+    exists: null,
+    refusal: `${ROOT_B}/runs/listed/r.json under ${ROOT_B} cannot be read (EACCES), so purge-org cannot tell what deleting ${ROOT_B} takes — `
+      + 'nothing was deleted. Run purge-org as a user who can read it; or, if the recorded users file /srv/accounts.json does not lie under '
+      + `${ROOT_B}, delete ${ROOT_B} by hand as such a user, then run purge-org again: it drops org beta's records`,
+  });
+  // A FUSE mount under the root whose server stopped answering is no permission matter: its way out is to unmount it.
+  const stale = betaVolume().dir(`${ROOT_B}/sshfs`).deny(`${ROOT_B}/sshfs`, 'ENOTCONN');
+  assert.equal(placeIn(stale, '/srv/accounts.json').refusal, `${ROOT_B}/sshfs under ${ROOT_B} cannot be read (ENOTCONN), so purge-org cannot `
+    + `tell what deleting ${ROOT_B} takes — nothing was deleted. If it is a filesystem mounted there that stopped answering, unmount it, then `
+    + `run purge-org again; or, if the recorded users file /srv/accounts.json does not lie under ${ROOT_B}, delete ${ROOT_B} by hand, then run `
+    + 'purge-org again: it drops org beta\'s records');
+});
+
+test('purge-org users file: a directory under the root that changes while the walk reads it — the directory holding the users file renamed from one not read yet into one read already, or into the root — is refused, nothing deleted, and run again with nothing changing it, the walk finds the users file; so is a change that leaves the names as they were (by its change time), and, on a coarse clock, a change that leaves the change time (by the names) and a mount over a directory read already (by its inode)', () => {
+  // The users file recorded as /mnt/b/users.json, /mnt/b a bind mount of <root>/z/sub: its bytes lie under the root alone.
+  // The walk reads <root>, <root>/a, <root>/packs, <root>/sub, <root>/z; another process acts at the nth lstatSync of a path
+  // (the walk's is the first, the second reading's the second).
+  const tree = (opts) => betaVolume(opts).dir(`${ROOT_B}/a`).file(`${ROOT_B}/z/sub/users.json`).dir('/mnt/b').bind(`${ROOT_B}/z/sub`, '/mnt/b');
+  const during = (vol, file, acts) => {
+    const seen = new Map();
+    const lstatSync = (p, o) => {
+      seen.set(p, (seen.get(p) ?? 0) + 1);
+      acts[`${p}#${seen.get(p)}`]?.();
+      return vol.fs.lstatSync(p, o);
+    };
+    return placeIn(vol, file, { fs: { ...vol.fs, lstatSync } });
+  };
+  const changed = (at) => ({
+    exists: null,
+    refusal: `${at === ROOT_B ? ROOT_B : `${at} under ${ROOT_B}`} changed while purge-org read ${at === ROOT_B ? 'it' : ROOT_B} (an entry added, `
+      + `removed or renamed in it, or a mount over it), so purge-org cannot tell what deleting ${ROOT_B} takes — nothing was deleted. Stop `
+      + `what changes files under ${ROOT_B}, then run purge-org again`,
+  });
+  assert.deepEqual(placeIn(tree(), '/mnt/b/users.json'), { exists: true, refusal: underRoot('/mnt/b/users.json', `${ROOT_B}/z/sub/users.json`) },
+    'nothing changing it: refused');
+  for (const coarse of [false, true]) {
+    // Renamed into <root>/a, read already, before <root>/z is read: in neither listing. Unseen, the purge deleted the users file.
+    const vol = tree({ coarse });
+    assert.deepEqual(during(vol, '/mnt/b/users.json', { [`${ROOT_B}/packs#1`]: () => vol.rename(`${ROOT_B}/z/sub`, `${ROOT_B}/a/sub`) }),
+      changed(`${ROOT_B}/a`), coarse ? 'a coarse clock: by the names' : 'by the change time and the names');
+    assert.deepEqual(placeIn(vol, '/mnt/b/users.json'), { exists: true, refusal: underRoot('/mnt/b/users.json', `${ROOT_B}/a/sub/users.json`) },
+      'the way out: run again with nothing changing it, the walk finds it');
+    const into = tree({ coarse });
+    assert.deepEqual(during(into, '/mnt/b/users.json', { [`${ROOT_B}/z#1`]: () => into.rename(`${ROOT_B}/z/sub`, `${ROOT_B}/moved`) }),
+      changed(ROOT_B), 'into the root, read already');
+  }
+  // Renamed into <root>/a while the walk runs, then on into the root, read again already, before <root>/a is read again: <root>/a
+  // has the names the walk found, and its change time moved.
+  const twice = tree();
+  assert.deepEqual(during(twice, '/mnt/b/users.json', {
+    [`${ROOT_B}/z#1`]: () => twice.rename(`${ROOT_B}/z/sub`, `${ROOT_B}/a/sub`),
+    [`${ROOT_B}/a#2`]: () => twice.rename(`${ROOT_B}/a/sub`, `${ROOT_B}/moved`),
+  }), changed(`${ROOT_B}/a`), 'the same names, by the change time');
+  // On a coarse clock, a directory from outside the root mounted over <root>/a once it is read, with the same names: another
+  // inode. Unseen, it is a mount point under the root the walk did not refuse, and on Node 23 and later rmSync deletes the
+  // files of /srv5 through it, the users file among them.
+  const over = betaVolume({ coarse: true }).remove(`${ROOT_B}/sub/users.json`).file(`${ROOT_B}/a/users.json`).file('/srv5/users.json');
+  assert.deepEqual(placeIn(over, '/srv5/users.json'), { exists: true, refusal: namesake('/srv5/users.json', [`${ROOT_B}/a/users.json`]) },
+    'nothing mounted: outside the root, refused by the name <root>/a/users.json has (the same names as /srv5 hold)');
+  assert.deepEqual(during(over, '/srv5/users.json', { [`${ROOT_B}/packs#1`]: () => over.bind('/srv5', `${ROOT_B}/a`) }),
+    changed(`${ROOT_B}/a`), 'a mount over a directory read already, by its inode');
+});
+
+// A root too large to keep in memory entry by entry, made up as each entry is asked for by an injected filesystem that keeps
+// none of it, the users file outside: 'files', 150 directories of 1,000 files and one of 100,000, at /ws/orgs/beta; or
+// 'directories', one directory of 100,000 empty directories, the root's path 40 characters long. Each entry's stats as
+// node:fs gives them with { bigint: true }, eighteen bigints. The child prints the place and how many lstatSync calls it
+// answered.
+const HUGE_ROOT = `
+const { posix } = await import('node:path');
+const { usersFilePlace } = await import(${JSON.stringify(pathToFileURL(join(HERE, 'store', 'users-file-place.mjs')).href)});
+const DIRECTORIES = process.argv[1] === 'directories';
+const ROOT = DIRECTORIES ? '/var/lib/observogram/workspace/orgs/beta' : '/ws/orgs/beta';
+const USERS = posix.join(ROOT, '..', '..', 'users.json');
+const [DIRS, FILES, WIDE] = DIRECTORIES ? [0, 0, 100_000] : [150, 1000, 100_000];
+const [IFMT, IFDIR, IFREG, IFLNK] = [0o170000n, 0o040000n, 0o100000n, 0o120000n];
+class BigIntStats {
+  constructor(dir, ino) {
+    const ns = 1_760_000_000_000_000_000n + ino * 1_000_003n;
+    const ms = ns / 1_000_000n;
+    Object.assign(this, { dev: 2049n, mode: (dir ? IFDIR : IFREG) | 0o644n, nlink: ino - ino + 1n, uid: ino - ino, gid: ino - ino,
+      rdev: ino - ino, blksize: ino - ino + 4096n, ino, size: dir ? ino - ino + 4096n : ino - ino, blocks: ino - ino,
+      atimeMs: ms, mtimeMs: ms + 0n, ctimeMs: ms + 1n, birthtimeMs: ms - 1n, atimeNs: ns, mtimeNs: ns + 0n, ctimeNs: ns + 1n, birthtimeNs: ns - 1n });
+  }
+  isFile() { return (this.mode & IFMT) === IFREG; }
+  isDirectory() { return (this.mode & IFMT) === IFDIR; }
+  isSymbolicLink() { return (this.mode & IFMT) === IFLNK; }
+}
+const fail = (code, p) => Object.assign(new Error(code + ': ' + p), { code });
+// The root and the directories it lies in ('/', '/ws', '/ws/orgs', '/ws/orgs/beta'), then <root>/wide.
+const above = ROOT.split('/').map((_, i, parts) => parts.slice(0, i + 1).join('/') || '/');
+const dirs = new Map([...above.map((p, i) => [p, BigInt(i + 1)]), [ROOT + '/wide', BigInt(above.length + 1)]]);
+const R = new RegExp('^' + ROOT + '/r([0-9]+)(?:/f([0-9]+)[.]json)?$');
+const W = new RegExp('^' + ROOT + '/wide/w([0-9]+)' + (DIRECTORIES ? '' : '[.]json') + '$');
+const RD = new RegExp('^' + ROOT + '/r[0-9]+$');
+let lstats = 0;
+const lstatSync = (p) => {
+  lstats += 1;
+  if (dirs.has(p)) return new BigIntStats(true, dirs.get(p));
+  if (p === USERS) return new BigIntStats(false, BigInt(above.length + 2));
+  const r = R.exec(p);
+  if (r && Number(r[1]) < DIRS && Number(r[2] ?? 0) < FILES) {
+    return new BigIntStats(r[2] === undefined, r[2] === undefined ? BigInt(100 + Number(r[1])) : BigInt(1_000_000 + Number(r[1]) * FILES + Number(r[2])));
+  }
+  const w = W.exec(p);
+  if (w && Number(w[1]) < WIDE) return new BigIntStats(DIRECTORIES, BigInt(500_000_000 + Number(w[1])));
+  throw fail('ENOENT', p);
+};
+const names = (n, name) => Array.from({ length: n }, (_, i) => Buffer.from(name(i)));
+const fs = {
+  lstatSync,
+  statSync: lstatSync,
+  readdirSync(p) {
+    if (p === ROOT) return [...names(DIRS, (i) => 'r' + i), Buffer.from('wide')];
+    if (p === ROOT + '/wide') return names(WIDE, (i) => 'w' + i + (DIRECTORIES ? '' : '.json'));
+    if (RD.test(p)) return names(FILES, (i) => 'f' + i + '.json');
+    if (DIRECTORIES && W.test(p)) return [];
+    throw fail('ENOTDIR', p);
+  },
+  readlinkSync: (p) => { throw fail('EINVAL', p); },
+  realpathSync: (p) => p,
+  readFileSync: (p) => { throw fail('ENOENT', p); },
+};
+const place = usersFilePlace(USERS, ROOT, { fs, path: posix, windows: false, id: 'beta' });
+console.log(JSON.stringify({ place, lstats }));
+`;
+
+test('purge-org users file: the walk keeps nothing of a file it passes, and of a directory\'s entries only the listings of the directories it is in — a root of 250,000 files, 150 directories of 1,000 and one of 100,000, is read in a 32 MB heap, where keeping each entry\'s stats ran out of memory, and one directory of 100,000 empty directories, the root\'s path 40 characters long, in 64 MB; so a users file created, replaced or written while the walk runs is compared with each entry again: refused as lying under the root, as when nothing changes it', () => {
+  // Kept, the stats of 250,000 entries take some 175 MB: purge-org died, out of memory, where rmSync of the same tree
+  // completed. Each entry is compared with the users file as the walk reaches it, and a directory's entries are taken from
+  // its listing one by one as the walk goes, not pushed ahead of it.
+  // Of a directory the walk keeps its path, device and inode, times and a digest of its names, and it holds the listing of
+  // each directory it is in: one directory of 100,000 empty directories, the root's path 40 characters long, needs more heap
+  // than the 250,000 files — 48 MB is too little.
+  const env = { ...process.env };
+  delete env.NODE_OPTIONS;   // the heap limit is this child's alone
+  for (const [shape, heap, entries] of [['files', 32, 250_000], ['directories', 64, 100_000]]) {
+    const r = spawnSync(process.execPath, [`--max-old-space-size=${heap}`, '--input-type=module', '-e', HUGE_ROOT, shape], { env, encoding: 'utf8', timeout: 120_000 });
+    assert.equal(r.status, 0, `${shape}: the child ended ${r.signal ?? r.status}: ${r.stderr.split('\n').find((l) => /heap|Error/.test(l)) ?? r.stderr.slice(0, 400)}`);
+    const { place, lstats } = JSON.parse(r.stdout);
+    assert.deepEqual(place, { exists: true, refusal: null }, `${shape}: the users file outside the root: purged`);
+    assert.ok(lstats > entries, `${shape}: every entry read (${lstats} lstatSync calls)`);
+  }
+  // So the users file is placed before the walk and again after it: one created, replaced or written meanwhile — once the
+  // walk has read <root>/packs, before <root>/sub — is compared with each entry again. Written in place, through an NFS view
+  // of <root>/sub, within one tick of a coarse clock (its size alone moves) or to the same size (its time alone moves).
+  const racing = (vol, file, act, write = null) => {
+    const ino = vol.fs.statSync(`${ROOT_B}/sub/users.json`).ino;
+    let acted = false;
+    const as = (s) => (acted && write && s.ino === ino ? { ...s, ...write(s) } : s);
+    const lstatSync = (p, o) => {
+      if (!acted && p === `${ROOT_B}/packs`) { acted = true; act(); }
+      return as(vol.fs.lstatSync(p, o));
+    };
+    return placeIn(vol, file, { fs: { ...vol.fs, lstatSync, statSync: (p, o) => as(vol.fs.statSync(p, o)) } });
+  };
+  const viewed = (file) => new RegExp(`^the recorded users file ${esc(file)} lies under ${esc(ROOT_B)}: ${esc(`${ROOT_B}/sub/users.json`)} under it has `
+    + 'its size and modification time on another filesystem');
+  // Replaced by a hard link to a file under the root that kept its size and time (cp -p): another inode alone. Its two
+  // names under the root are named in the walk's order, as when nothing changes it.
+  const replaced = betaVolume();
+  const was = replaced.fs.statSync('/srv/accounts.json');
+  replaced.file(`${ROOT_B}/sub/users.json`, { mtimeNs: was.mtimeNs }).hardlink(`${ROOT_B}/sub/users.json`, `${ROOT_B}/z.json`);
+  const twoNames = { exists: true, refusal: underRoot('/srv/accounts.json', `${ROOT_B}/sub/users.json and ${ROOT_B}/z.json`) };
+  assert.deepEqual(racing(replaced, '/srv/accounts.json', () => replaced.remove('/srv/accounts.json').hardlink(`${ROOT_B}/sub/users.json`, '/srv/accounts.json')),
+    twoNames, 'replaced by a hard link to a file under the root');
+  assert.deepEqual(placeIn(replaced, '/srv/accounts.json'), twoNames, 'nothing changing it');
+  // Replaced by a link to a file of another filesystem with the same inode number (one per filesystem), size and time, while
+  // a copy under the root kept that size and time: another device alone, and the copy reads as the users file.
+  const other = betaVolume();
+  const its = other.fs.statSync('/srv/accounts.json');
+  other.file(`${ROOT_B}/sub/users.json`, { mtimeNs: its.mtimeNs }).file('/srv9/accounts.json', { mtimeNs: its.mtimeNs })
+    .view('/srv9', '/mnt/srv9', { dev: 9n, ino: () => its.ino });
+  assert.match(racing(other, '/srv/accounts.json', () => other.remove('/srv/accounts.json').symlink('/srv/accounts.json', '/mnt/srv9/accounts.json')).refusal ?? '',
+    viewed('/srv/accounts.json'), 'replaced by a file of another filesystem with the same inode number');
+  const created = betaVolume();
+  assert.deepEqual(racing(created, '/srv/new.json', () => created.hardlink(`${ROOT_B}/sub/users.json`, '/srv/new.json')),
+    { exists: true, refusal: underRoot('/srv/new.json', `${ROOT_B}/sub/users.json`) }, 'created as a hard link to a file under the root');
+  for (const [how, write] of [['its size', (s) => ({ size: s.size + 1n })], ['its time', (s) => ({ mtimeNs: s.mtimeNs + 1_000_000_000n })]]) {
+    const nfs = betaVolume().view(`${ROOT_B}/sub`, '/mnt/nfs', { dev: 41n });
+    assert.match(racing(nfs, '/mnt/nfs/users.json', () => {}, write).refusal ?? '', viewed('/mnt/nfs/users.json'), `written in place, ${how} moved`);
+  }
+});
+
+test('purge-org users file: a name under the root that is not valid UTF-8 is read as the bytes the filesystem holds — the users file in such a directory, reached through a link, is refused naming it as a POSIX shell\'s $\'…\' spells it (a quote and a backslash escaped), and moved out as that says, the purge passes; below such a name an entry of the users file\'s name, a mount point (also under a root whose path is not ASCII) and a directory it cannot read are refused; with the users file outside, a tree of such names passes', () => {
+  // node:fs lists a name that is not valid UTF-8 as a string with U+FFFD in place of each such byte (c\xffd as 'c\ufffdd'), a
+  // name no lookup finds: lstatSync of it fails with ENOENT, the walk took that for an entry gone while it ran, and so read
+  // nothing of that directory, while rmSync, which lists names as bytes, deleted the users file in it. The fixture spells
+  // such a byte 0xNN as U+DCNN.
+  const C = `${ROOT_B}/c\udcffd`;
+  const shown = (rest = '') => `$'${ROOT_B}/c\\xffd${rest}'`;
+  const vol = betaVolume().remove(`${ROOT_B}/sub/users.json`).file(`${C}/users.json`).file(`${ROOT_B}/run\udce9/inner/data.json`)
+    .symlink('/cfg/users.json', `${C}/users.json`).dir('/keep');
+  assert.deepEqual(vol.fs.readdirSync(ROOT_B), ['c\ufffdd', 'packs', 'run\ufffd', 'sub'], 'listed as a string, as node:fs lists it');
+  assert.throws(() => vol.fs.lstatSync(`${ROOT_B}/c\ufffdd`), { code: 'ENOENT' }, 'a name no lookup finds');
+  assert.deepEqual(placeIn(vol, '/cfg/users.json'), { exists: true, refusal: underRoot('/cfg/users.json', shown('/users.json')) });
+  // The way out, followed (mv $'/ws/orgs/beta/c\xffd/users.json' /keep/ in a shell): the link then leads under the root, where
+  // nothing of the users file is left, and the users file outside a tree of such names is purged.
+  vol.rename(`${C}/users.json`, '/keep/users.json');
+  assert.deepEqual(placeIn(vol, '/cfg/users.json'), { exists: false, refusal: null });
+  assert.deepEqual(placeIn(vol, '/keep/users.json'), { exists: true, refusal: null }, 'outside, the tree read again unchanged: purged');
+  // A quote or a backslash in such a path is escaped as $'…' takes it (\' and \\), so the path named can be typed as it
+  // stands: mv $'/ws/orgs/beta/it\'s\\c\xffd/users.json' /keep/ moves the users file. Unescaped, the quote ended the $'…'.
+  const Q = `${ROOT_B}/it's\\c\udcffd`;
+  vol.file(`${Q}/users.json`).symlink('/cfg/q.json', `${Q}/users.json`);
+  assert.deepEqual(placeIn(vol, '/cfg/q.json'), { exists: true, refusal: underRoot('/cfg/q.json', `$'${ROOT_B}/it\\'s\\\\c\\xffd/users.json'`) },
+    'a quote and a backslash escaped');
+  vol.rename(`${Q}/users.json`, '/keep/q.json');
+  assert.deepEqual(placeIn(vol, '/cfg/q.json'), { exists: false, refusal: null }, 'moved out as that says: purged');
+  // Below such a name, an entry of the users file's name: a mount that is down keeps what was written in its mount point
+  // meanwhile (the users file recorded as /mnt/b/users.json, /mnt/b a bind mount of <root>/c\xffd that is down, a users.json
+  // written there), and mounted again the path leads to that entry. Refused by its name; moved out as that says, the purge
+  // passes. Passed, the purge deleted it.
+  vol.file('/mnt/b/users.json').file(`${C}/users.json`);
+  assert.deepEqual(placeIn(vol, '/mnt/b/users.json'), { exists: true, refusal: namesake('/mnt/b/users.json', [shown('/users.json')]) },
+    'an entry of its name below such a name');
+  vol.rename(`${C}/users.json`, '/keep/b.json');
+  assert.deepEqual(placeIn(vol, '/mnt/b/users.json'), { exists: true, refusal: null }, 'moved out as that says: purged');
+  // Below such a name: a directory from another filesystem mounted there, a bind mount of one of the same filesystem that
+  // /proc/self/mountinfo lists (the kernel writes the name's bytes, read as UTF-8 as the walk's own path is), a directory it
+  // cannot read. Unmounted, the purge passes.
+  const mnt = betaVolume({ proc: true }).dir('/srv5', { dev: 7n }).file('/srv5/accounts.json').dir('/srv6').file('/srv6/data.json')
+    .dir(`${C}/m`).bind('/srv5', `${C}/m`);
+  assert.deepEqual(placeIn(mnt, '/srv5/accounts.json'), { exists: null, refusal: mounted(`${shown('/m')} (another filesystem than ${shown()})`) });
+  mnt.unmount(`${C}/m`).bind('/srv6', `${C}/m6`);
+  assert.deepEqual(placeIn(mnt, '/srv5/accounts.json'),
+    { exists: null, refusal: mounted(`${shown('/m6')} (the same filesystem as ${shown()}, listed in /proc/self/mountinfo)`) });
+  mnt.unmount(`${C}/m6`);
+  assert.deepEqual(placeIn(mnt, '/srv5/accounts.json'), { exists: true, refusal: null }, 'unmounted: purged');
+  // Under a root whose path is not ASCII (a workspace at /srv/données): a path held as bytes is longer than the root's
+  // characters, and the bind mount below such a name that /proc/self/mountinfo lists is refused all the same. Missed, the
+  // walk entered it as a directory and the purge went on to rmSync, which failed there with EBUSY (Node 22).
+  const RU = '/srv/données/orgs/beta';
+  const accented = mountFs(posix, { proc: true }).dir(`${RU}/packs`).file('/srv/accounts.json').dir('/srv6').file('/srv6/data.json')
+    .dir(`${RU}/c\udcffd/m6`).bind('/srv6', `${RU}/c\udcffd/m6`);
+  const placeU = () => usersFilePlace('/srv/accounts.json', RU, { fs: accented.fs, path: posix, windows: false, id: 'beta' });
+  assert.deepEqual(placeU(), {
+    exists: null,
+    refusal: mounted(`$'${RU}/c\\xffd/m6' (the same filesystem as $'${RU}/c\\xffd', listed in /proc/self/mountinfo)`, RU),
+  }, 'under a root whose path is not ASCII');
+  accented.unmount(`${RU}/c\udcffd/m6`);
+  assert.deepEqual(placeU(), { exists: true, refusal: null }, 'unmounted as its refusal says: purged');
+  mnt.dir(`${C}/locked`).deny(`${C}/locked`);
+  assert.equal(placeIn(mnt, '/srv5/accounts.json').refusal, `${shown('/locked')} under ${ROOT_B} cannot be read (EACCES), so purge-org cannot `
+    + `tell what deleting ${ROOT_B} takes — nothing was deleted. Run purge-org as a user who can read it; or, if the recorded users file `
+    + `/srv5/accounts.json does not lie under ${ROOT_B}, delete ${ROOT_B} by hand as such a user, then run purge-org again: it drops org beta's records`);
+});
+
+test('purge-org users file on Windows paths: through a junction, through a share of a directory under the root (the volume serial\'s low 32 bits, all a share reports), and a volume mounted in a folder under the root', () => {
+  const RW = 'C:\\ws\\orgs\\beta';
+  const C = 0x1_0000_0007n;   // a local stat may report all 64 bits of the serial; a share only the low 32
+  const vol = mountFs(win32, { fold: true, devs: { 'C:\\': C, 'D:\\': 9n } }).file(`${RW}\\sub\\users.json`).file('C:\\out\\accounts.json')
+    .symlink('C:\\cfg\\d', `${RW}\\sub`)
+    .view(`${RW}\\sub`, '\\\\myhost\\betasub\\', { dev: C & 0xffffffffn, mtimeNs: (t) => t - (t % 100n) });
+  const placeW = (file, opts = {}) => usersFilePlace(file, RW, { fs: vol.fs, path: win32, windows: true, id: 'beta', ...opts });
+  for (const file of ['C:\\cfg\\d\\users.json', '\\\\myhost\\betasub\\users.json', 'c:\\WS\\orgs\\BETA\\sub\\users.json']) {
+    assert.deepEqual(placeW(file), { exists: true, refusal: underRoot(file, `${RW}\\sub\\users.json`, RW) }, `the same volume and file id: ${file}`);
+  }
+  assert.deepEqual(placeW('C:\\out\\accounts.json'), { exists: true, refusal: null });
+  // The share's serial is the volume's: a copy under the root that kept the size and time is another file on it (another id).
+  vol.file(`${RW}\\copy\\users.json`, { size: 23n, mtimeNs: vol.fs.statSync('C:\\out\\accounts.json').mtimeNs })
+    .view('C:\\out', '\\\\myhost\\out\\', { dev: C & 0xffffffffn });
+  assert.deepEqual(placeW('\\\\myhost\\out\\accounts.json'), { exists: true, refusal: null }, 'one volume through the share: compared by file id');
+  assert.match(placeW('\\\\myhost\\out\\accounts.json', { windows: false }).refusal, /has its size and modification time on another filesystem/,
+    'with all 64 bits compared, the share read as another filesystem and the copy as a view of it');
+  vol.file('D:\\v\\x.txt').mountFolder('D:\\v', `${RW}\\mnt`);
+  assert.match(placeW('C:\\out\\accounts.json').refusal, /^C:\\ws\\orgs\\beta holds a mount point, C:\\ws\\orgs\\beta\\mnt \(another volume mounted in it\): /);
+});
+
+test('purge-org users file on Windows paths, on either libuv: a root reached through a junction to its workspace\'s orgs, on its own volume or another, is no mount point, nor is a junction under the root, while a volume mounted in a folder under the root, or on the root, is one — a stat by name on libuv 1.49.0 to 1.50.x (Node 22.16.0) reports no volume serial, and the root through a junction was refused as a mount point', () => {
+  // libuv answers a stat by the path's name (GetFileInformationByName) unless its last name is a reparse point — a junction,
+  // a symlink, a folder a volume is mounted in — which it opens, reading the volume's serial (FILE_FS_VOLUME_INFORMATION), as
+  // it reads a handle's (fstatSync). 1.49.0 to 1.50.x read the device of a stat by name from the upper half of the file's
+  // 128-bit id, 0 on NTFS; 1.51.0 and later the serial, as through a handle.
+  const C = 7n;
+  const D = 9n;
+  const E = 11n;
+  for (const [libuv, fastDev] of [['1.49.2', 0n], ['1.51.0', null]]) {
+    const vol = mountFs(win32, { fold: true, devs: { 'C:\\': C, 'D:\\': D, 'E:\\': E }, fastDev })
+      .file('C:\\data\\orgs\\acme\\sub\\users.json').file('D:\\orgs\\acme\\sub\\users.json').file('C:\\out\\accounts.json').dir('C:\\data\\w2').dir('C:\\data\\w3')
+      .symlink('C:\\data\\w2\\orgs', 'C:\\data\\orgs').symlink('C:\\data\\w3\\orgs', 'D:\\orgs')
+      .symlink('C:\\data\\orgs\\acme\\out', 'C:\\out').symlink('D:\\orgs\\acme\\out', 'C:\\out');   // junctions under the roots, leading out
+    const placeW = (file, root) => usersFilePlace(file, root, { fs: vol.fs, path: win32, windows: true, id: 'acme' });
+    // The workspace's orgs a directory (C:\data), a junction to one on the volume it lies on (C:\data\w2), as the Windows CI
+    // leg's test made it, and to one on another volume (C:\data\w3 → D:\orgs): the root lies on the volume the junction leads to.
+    for (const base of ['C:\\data', 'C:\\data\\w2', 'C:\\data\\w3']) {
+      const root = `${base}\\orgs\\acme`;
+      const file = `${root}\\sub\\users.json`;
+      assert.deepEqual(placeW(file, root), { exists: true, refusal: underRoot(file, file, root) }, `libuv ${libuv}: ${root}`);
+      assert.deepEqual(placeW('C:\\out\\accounts.json', root), { exists: true, refusal: null }, `libuv ${libuv}: ${root}, its junction out no mount point`);
+    }
+    // A volume mounted in a folder under the root, and on the root itself (a volume per org), on either libuv.
+    vol.file('E:\\v\\x.txt').mountFolder('E:\\v', 'C:\\data\\orgs\\acme\\mnt');
+    assert.match(placeW('C:\\out\\accounts.json', 'C:\\data\\w2\\orgs\\acme').refusal,
+      /^C:\\data\\w2\\orgs\\acme holds a mount point, C:\\data\\w2\\orgs\\acme\\mnt \(another volume mounted in it\): /, `libuv ${libuv}`);
+    vol.file('E:\\beta\\packs\\a.yaml').mountFolder('E:\\beta', 'C:\\data\\orgs\\beta');
+    assert.equal(placeW('C:\\out\\accounts.json', 'C:\\data\\w2\\orgs\\beta').refusal, 'C:\\data\\w2\\orgs\\beta (another volume mounted in it) is a mount '
+      + 'point: deleting it would take the files of the filesystem mounted there and then fail on the mount point itself (Node 23 and later; '
+      + 'Node 22 fails at once) — nothing was deleted. Unmount it, then run purge-org again: it deletes what is left at '
+      + 'C:\\data\\w2\\orgs\\beta and drops org acme\'s records, and the unmounted filesystem\'s files stay', `libuv ${libuv}`);
+    assert.equal(vol.opened(), 0, `libuv ${libuv}: every handle closed`);
+  }
+});
+
+test('purge-org users file that does not exist: through a mount that is down it is refused, failing closed — recorded, or, none recorded, <base>/users.json a link there; mounted again, refused as lying under the root; moved out of the root as that refusal says, the purge passes', () => {
+  const vol = betaVolume().dir('/mnt/b').symlink('/cfg/users.json', '/mnt/b/users.json').symlink('/ws/users.json', '/mnt/b/users.json');
+  const byDefault = (text) => text.replace('the recorded users file /ws/users.json',
+    'the users file /ws/users.json (the one a pre-store build reads: OBSERVOGRAM_USERS_FILE was not set at the import)');
+  // The bytes are under the root; the mount that leads there is down, so its mount point is an empty directory.
+  for (const [file, to] of [['/mnt/b/users.json', null], ['/cfg/users.json', '/mnt/b/users.json']]) {
+    assert.deepEqual(placeIn(vol, file), { exists: null, refusal: unknownPlace(file, '/mnt/b', { to }) }, file);
+  }
+  // None recorded, <base>/users.json a link through that mount is no absent default: taken for one, the purge deleted
+  // <root>/sub/users.json behind the mount that is down.
+  assert.deepEqual(placeIn(vol, '/ws/users.json', { recorded: false }),
+    { exists: null, refusal: byDefault(unknownPlace('/ws/users.json', '/mnt/b', { to: '/mnt/b/users.json' })) }, '/ws/users.json, none recorded');
+  vol.bind(`${ROOT_B}/sub`, '/mnt/b');   // the way out: mount it, then run purge-org again
+  assert.deepEqual(placeIn(vol, '/mnt/b/users.json'), { exists: true, refusal: underRoot('/mnt/b/users.json', `${ROOT_B}/sub/users.json`) });
+  assert.deepEqual(placeIn(vol, '/ws/users.json', { recorded: false }),
+    { exists: true, refusal: byDefault(underRoot('/ws/users.json', `${ROOT_B}/sub/users.json`)) }, '/ws/users.json, none recorded, mounted');
+  vol.rename(`${ROOT_B}/sub/users.json`, '/keep/users.json');   // that refusal's way out: move it out, then run purge-org again
+  for (const [file, opts] of [['/mnt/b/users.json', {}], ['/cfg/users.json', {}], ['/ws/users.json', { recorded: false }]]) {
+    assert.deepEqual(placeIn(vol, file, opts), { exists: false, refusal: null }, `${file} leads under the root, where nothing of it is left`);
+  }
+});
+
+test('purge-org users file that exists outside the root: through a mount that is down whose mount point holds a file of its name meanwhile, an entry under the root with that name is refused — named directly, through a file link, through a link of another name, in another case or Unicode normalization, and, none recorded, <base>/users.json a link there — and one that is a link names what it leads to under the root too; mounted again, refused as lying under the root; moved out as either refusal says, the purge passes', () => {
+  // The users file recorded as /mnt/b/users.json, /mnt/b a bind mount of <root>/sub that is down, and a users.json written
+  // in its mount point meanwhile: the path leads to that file now, and to <root>/sub/users.json once mounted again. Taken
+  // for a users file outside the root, the purge deleted <root>/sub/users.json.
+  const vol = mountFs(posix).dir(`${ROOT_B}/packs`).file(`${ROOT_B}/packs/b1.pack.yaml`).file(`${ROOT_B}/sub/users.json`, { size: 300n })
+    .file('/mnt/b/users.json', { size: 40n }).file('/mnt/c/Users.json').symlink('/cfg/users.json', '/mnt/b/users.json')
+    .symlink('/cfg/x.json', '/mnt/b/users.json').symlink('/ws/users.json', '/mnt/b/users.json');
+  const sub = [`${ROOT_B}/sub/users.json`];
+  for (const file of ['/mnt/b/users.json', '/cfg/users.json', '/cfg/x.json', '/mnt/c/Users.json']) {
+    assert.deepEqual(placeIn(vol, file), { exists: true, refusal: namesake(file, sub) }, file);
+  }
+  assert.deepEqual(placeIn(vol, '/ws/users.json', { recorded: false }), {
+    exists: true,
+    refusal: namesake('/ws/users.json', sub).replace('the recorded users file /ws/users.json',
+      'the users file /ws/users.json (the one a pre-store build reads: OBSERVOGRAM_USERS_FILE was not set at the import)'),
+  }, '/ws/users.json, none recorded');
+  // The same name in another Unicode normalization (macOS writes names decomposed, NFD): a filesystem may look it up as one.
+  const nfd = mountFs(posix).dir(`${ROOT_B}/packs`).file(`${ROOT_B}/sub/caf\u00e9.json`).file('/mnt/b/cafe\u0301.json');
+  assert.deepEqual(placeIn(nfd, '/mnt/b/cafe\u0301.json'),
+    { exists: true, refusal: namesake('/mnt/b/cafe\u0301.json', [`${ROOT_B}/sub/caf\u00e9.json`]) });
+  // A link of that name under the root: mounted again, the path leads through it to what it names, which rmSync deletes
+  // while the link moves out — named too.
+  const linked = mountFs(posix).dir(`${ROOT_B}/packs`).file(`${ROOT_B}/data/real.json`).symlink(`${ROOT_B}/sub/users.json`, '../data/real.json')
+    .file('/mnt/b/users.json');
+  assert.deepEqual(placeIn(linked, '/mnt/b/users.json'),
+    { exists: true, refusal: namesake('/mnt/b/users.json', [`${ROOT_B}/sub/users.json`], { targets: [`${ROOT_B}/data/real.json`] }) });
+  // The way out by mounting it: the mount hides the file written in its mount point, and the path leads under the root.
+  vol.bind(`${ROOT_B}/sub`, '/mnt/b');
+  assert.deepEqual(placeIn(vol, '/mnt/b/users.json'), { exists: true, refusal: underRoot('/mnt/b/users.json', sub[0]) }, 'mounted again');
+  // Moved out of the root, as either refusal says: the purge passes, the mount up or down.
+  vol.rename(sub[0], '/keep/users.json');
+  assert.deepEqual(placeIn(vol, '/mnt/b/users.json'), { exists: false, refusal: null }, 'mounted, moved out: it leads under the root');
+  vol.unmount('/mnt/b');
+  for (const file of ['/mnt/b/users.json', '/cfg/users.json', '/cfg/x.json', '/mnt/c/Users.json']) {
+    assert.deepEqual(placeIn(vol, file), { exists: true, refusal: null }, `${file}, unmounted, moved out`);
+  }
+  linked.rename(`${ROOT_B}/sub/users.json`, '/keep/users.json').rename(`${ROOT_B}/data/real.json`, '/keep/real.json');
+  assert.deepEqual(placeIn(linked, '/mnt/b/users.json'), { exists: true, refusal: null }, 'the link and what it names moved out');
+});
+
+test('purge-org users file that does not exist: its path leads into a directory under the root while an entry under the root has its name — the mount point of a bind mount of another directory under the root, holding the users file, that is down — and it is refused naming that entry (for a link of that name, what it leads to too), recorded through a file link, directly or through a directory link; with the mount up it is refused as a mount point, naming the users file under the root to move out with the unmounting, and so it is with a directory from outside the root mounted there whose link of the users file\'s name leads to a file under the root (unmounted as the mount point\'s refusal said, it was purged, the file deleted); moved out as either refusal says, the purge passes, and on the real filesystem through purgeOrg the moved file stays', async () => {
+  // <root>/other bind-mounted on <root>/sub/m, and the users file, <root>/other/users.json, recorded through the mount. Up,
+  // the mount is refused as a mount point, naming the users file under the root too; unmounted, as that refusal said,
+  // <root>/sub/m is an empty directory the walk read, and the purge went on and deleted the users file behind it: the path
+  // leads into a directory under the root, which passed without the name check.
+  const sub = `${ROOT_B}/sub/m`;
+  const behind = `${ROOT_B}/other/users.json`;
+  const point = `${sub} (the same filesystem as ${ROOT_B}/sub, listed in /proc/self/mountinfo)`;
+  const bound = () => mountFs(posix, { proc: true }).dir(`${ROOT_B}/packs`).file(`${ROOT_B}/packs/b1.pack.yaml`).dir(sub).file(behind)
+    .symlink('/cfg/users.json', `${sub}/users.json`).symlink('/cfg/d', sub).bind(`${ROOT_B}/other`, sub);
+  const vol = bound();
+  const files = ['/cfg/users.json', `${sub}/users.json`, '/cfg/d/users.json'];
+  for (const file of files) {
+    assert.deepEqual(placeIn(vol, file), { exists: true, refusal: mountedHolding(point, file, behind) }, `${file}, mounted`);
+    // Followed literally: moved out and unmounted, the purge passes.
+    const followed = bound().rename(behind, '/keep/users.json').unmount(sub);
+    assert.deepEqual(placeIn(followed, file), { exists: false, refusal: null }, `${file}: moved out and unmounted as the refusal says`);
+  }
+  // A directory from outside the root mounted there instead, its users.json a link to a file under the root that holds the
+  // users file's bytes (/src bind-mounted on <root>/sub/m, /src/users.json → <root>/x/data.json): no entry under the root has
+  // the users file's name, so unmounted as the mount point's refusal said, the path led into the empty mount point and the
+  // purge deleted <root>/x/data.json. Up, the refusal names it to move out with the unmounting; followed, the purge passes
+  // and the moved file stays. Unmounted before purge-org ever saw the mount up, nothing under the root tells (declared).
+  const data = `${ROOT_B}/x/data.json`;
+  const outside = () => mountFs(posix, { proc: true }).dir(`${ROOT_B}/packs`).file(`${ROOT_B}/packs/b1.pack.yaml`).dir(sub).file(data)
+    .symlink('/src/users.json', data).symlink('/cfg/users.json', `${sub}/users.json`).bind('/src', sub);
+  for (const file of [`${sub}/users.json`, '/cfg/users.json']) {
+    const up = outside();
+    assert.equal(up.fs.statSync(file).ino, up.fs.statSync(data).ino, `${file}: mounted, the record leads to ${data}`);
+    assert.deepEqual(placeIn(up, file), { exists: true, refusal: mountedHolding(point, file, data) }, `${file}, mounted from outside`);
+    up.rename(data, '/keep/data.json').unmount(sub);
+    assert.deepEqual(placeIn(up, file), { exists: false, refusal: null }, `${file}: moved out and unmounted as the refusal says`);
+    assert.ok(up.fs.statSync('/keep/data.json').isFile(), `${file}: the moved file stays`);
+    assert.deepEqual(placeIn(outside().unmount(sub), file), { exists: false, refusal: null }, `${file}: unmounted first, nothing tells (declared)`);
+  }
+  vol.unmount(sub);
+  for (const file of files) {
+    assert.deepEqual(placeIn(vol, file), { exists: false, refusal: namesakeMissing(file, sub, [behind]) }, `${file}, unmounted`);
+  }
+  // A link of that name under the root names what it leads to there too, which rmSync deletes once the link is moved out.
+  const linked = mountFs(posix).dir(`${ROOT_B}/packs`).dir(sub).file(`${ROOT_B}/data/real.json`).symlink(behind, '../data/real.json');
+  assert.deepEqual(placeIn(linked, `${sub}/users.json`),
+    { exists: false, refusal: namesakeMissing(`${sub}/users.json`, sub, [behind], { targets: [`${ROOT_B}/data/real.json`] }) });
+  // Moved out as the refusal says: the path leads into a directory under the root where nothing of it is, and no entry has its name.
+  vol.rename(behind, '/keep/users.json');
+  for (const file of files) assert.deepEqual(placeIn(vol, file), { exists: false, refusal: null }, `${file}, moved out`);
+  linked.rename(behind, '/keep/users.json').rename(`${ROOT_B}/data/real.json`, '/keep/real.json');
+  assert.deepEqual(placeIn(linked, `${sub}/users.json`), { exists: false, refusal: null }, 'the link and what it names moved out');
+
+  // On the real filesystem, through purgeOrg — no mount needed: what that mount leaves once it is down, <root>/sub/m an empty
+  // directory and the users file at <root>/other/users.json, recorded as <root>/sub/m/users.json and through a directory link.
+  const base = await removedOrgDeployment();
+  const root = join(base, 'orgs', 'acme');
+  const m = join(root, 'sub', 'm');
+  const usersAt = join(root, 'other', 'users.json');
+  mkdirSync(m, { recursive: true });
+  usersJson(base, ['alice'], usersAt);
+  const cfg = tempDir('ops-cfg');
+  symlinkSync(m, join(cfg, 'd'), 'junction');   // a junction needs no privilege on Windows; a symlink elsewhere
+  const filesBefore = readdirSync(root, { recursive: true }).sort();
+  for (const usersFile of [join(m, 'users.json'), join(cfg, 'd', 'users.json')]) {
+    await change(base, (db) => tx(db, () => meta.putMeta(db, 'users_file', usersFile)));
+    await assert.rejects(purge(base, 'acme'), refusedOp(new RegExp(`^${esc(namesakeMissing(usersFile, m, [usersAt], { root }))}$`)), usersFile);
+    assert.deepEqual(readdirSync(root, { recursive: true }).sort(), filesBefore, 'nothing deleted');
+  }
+  const keep = join(tempDir('ops-keep'), 'users.json');
+  renameSync(usersAt, keep);
+  assert.equal((await purge(base, 'acme')).deleted, true);
+  assert.equal(existsSync(root), false);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(keep, 'utf8')).users), ['alice'], 'the moved users file stays');
+});
+
+test('purge-org users file that does not exist: recorded under the root and moved out, or reached by a link whose target is gone from the root, or by a chain of 40 links (Linux\'s limit), the purge passes; so does one whose path leads only through directories the root lies in, by its real path, or that its path as named is looked up in (the workspace or its orgs/ reached through a link in a directory the root does not lie in), to one where the rest does not exist (a sibling org\'s directory purged before), while no entry under the root has its name; one whose place lies elsewhere — a file deleted outside the root, a link to a mount that is down (also by a link into the root and on by a link under it, the rest of the path kept after each), a mount point that is down on another filesystem whose directory has the inode number of one under the root but another modification time, a path no part of which exists, a path through a directory neither the root nor its path lies in, or one whose name an entry under the root has — is refused, failing closed; none recorded and <base>/users.json absent, the purge passes', () => {
+  const vol = betaVolume().symlink('/cfg/users.json', `${ROOT_B}/sub/users.json`).symlink('/cfg/gone', `${ROOT_B}/gone`)
+    .symlink('/cfg/rel', '../ws/orgs/beta/sub/x/..').dir('/mnt/b').symlink('/cfg/m.json', '/mnt/b/users.json')
+    .symlink('/ws/s.json', 'orgs/beta2/users.json').symlink('/cfg/s.json', '/ws/orgs/beta2/users.json').symlink('/cfg/d', '/ws/orgs')
+    .symlink('/lnk', '/ws').symlink('/cfg/ds', `${ROOT_B}/sub`).symlink(`${ROOT_B}/sub/l`, '/mnt/b');
+  // A chain of 40 links, as many as Linux follows in one path, to where the users file lies under the root.
+  for (let i = 1; i < 40; i += 1) vol.symlink(`/cfg/hop${i}`, `/cfg/hop${i + 1}`);
+  vol.symlink('/cfg/hop40', `${ROOT_B}/sub/users.json`);
+  assert.equal(placeIn(vol, `${ROOT_B}/sub/users.json`).refusal, underRoot(`${ROOT_B}/sub/users.json`, `${ROOT_B}/sub/users.json`), 'recorded under the root: refused');
+  vol.rename(`${ROOT_B}/sub/users.json`, '/keep/users.json');
+  for (const file of [`${ROOT_B}/sub/users.json`, '/cfg/users.json', '/cfg/gone/users.json', `${ROOT_B}/sub/deeper/users.json`, '/cfg/rel/users.json', '/cfg/hop1']) {
+    assert.deepEqual(placeIn(vol, file), { exists: false, refusal: null }, `${file}: moved out, it leads under the root`);
+  }
+  assert.deepEqual(placeIn(vol, '/srv/gone.json'), { exists: null, refusal: unknownPlace('/srv/gone.json', '/srv') }, 'deleted outside the root (declared)');
+  assert.deepEqual(placeIn(vol, '/cfg/m.json'), { exists: null, refusal: unknownPlace('/cfg/m.json', '/mnt/b', { to: '/mnt/b/users.json' }) });
+  // By a link into the root (/cfg/ds → <root>/sub) and on by a link under it (<root>/sub/l → /mnt/b): the rest of the path
+  // is kept after each absolute link, so it leads to the mount that is down, not to <root>/sub.
+  assert.deepEqual(placeIn(vol, '/cfg/ds/l/users.json'),
+    { exists: null, refusal: unknownPlace('/cfg/ds/l/users.json', '/mnt/b', { to: '/mnt/b/users.json' }) });
+  // A mount point that is down on another filesystem than the root's (/data/b, on a disk mounted at /data), its directory
+  // with the inode number of <root>/sub — each filesystem numbers its own inodes — but its own modification time: no view
+  // of <root>/sub, so nothing tells where the path leads.
+  const sub = vol.fs.statSync(`${ROOT_B}/sub`);
+  vol.dir('/data', { dev: 50n }).dir('/data/b', { ino: sub.ino });
+  const down = vol.fs.statSync('/data/b');
+  assert.deepEqual([down.ino === sub.ino, down.dev === sub.dev, down.mtimeNs === sub.mtimeNs], [true, false, false]);
+  assert.deepEqual(placeIn(vol, '/data/b/users.json'), { exists: null, refusal: unknownPlace('/data/b/users.json', '/data/b') });
+  // Only through directories the root lies in (/, /ws, /ws/orgs), into a sibling org's directory purged before — where the
+  // users file was moved out of, as its refusal said — or a file deleted there: a filesystem mounted again on any of them
+  // covers the root too. Named through a link to one of them, and with the root named through a link (by its real path).
+  for (const file of ['/ws/orgs/beta2/users.json', '/ws/orgs/beta2/sub/users.json', '/ws/gone.json', '/ws/s.json', '/lnk/orgs/beta2/users.json']) {
+    assert.deepEqual(placeIn(vol, file), { exists: false, refusal: null }, `${file}: through directories the root lies in`);
+    assert.deepEqual(usersFilePlace(file, '/lnk/orgs/beta', { fs: vol.fs, path: posix, windows: false, id: 'beta' }), { exists: false, refusal: null },
+      `${file}, the root named through a link`);
+  }
+  // Through a directory the root does not lie in — a link there, to a file or a directory — a filesystem mounted on it now
+  // down may lead the path anywhere.
+  assert.deepEqual(placeIn(vol, '/cfg/s.json'), { exists: null, refusal: unknownPlace('/cfg/s.json', '/ws/orgs', { to: '/ws/orgs/beta2/users.json' }) });
+  assert.deepEqual(placeIn(vol, '/cfg/d/beta2/users.json'),
+    { exists: null, refusal: unknownPlace('/cfg/d/beta2/users.json', '/ws/orgs', { to: '/ws/orgs/beta2/users.json' }) });
+  // The root named through a link in a directory it does not lie in — the workspace (/home/u/ws → /ws) or its orgs/
+  // (/w2/orgs → /ws/orgs): its path is looked up in that directory and those above it too, and a filesystem mounted again
+  // on one of them hides the link the root's own path is reached through. A path looked up only in those and in the
+  // directories the root lies in passes. With the root named by its real path, a path through /home/u/ws is looked up in
+  // directories its path is not (/home, /home/u), and refused; so is one through /w2/orgs, the root named through /home/u/ws.
+  vol.symlink('/home/u/ws', '/ws').symlink('/w2/orgs', '/ws/orgs');
+  const placeAt = (file, root) => usersFilePlace(file, root, { fs: vol.fs, path: posix, windows: false, id: 'beta' });
+  for (const [root, file] of [['/home/u/ws/orgs/beta', '/home/u/ws/orgs/beta2/users.json'], ['/home/u/ws/orgs/beta', '/home/u/ws/orgs/beta2/sub/users.json'],
+    ['/home/u/ws/orgs/beta', '/home/u/ws/gone.json'], ['/home/u/ws/orgs/beta', '/home/u/gone.json'], ['/w2/orgs/beta', '/w2/orgs/beta2/users.json']]) {
+    assert.deepEqual(placeAt(file, root), { exists: false, refusal: null }, `${file}, the root named ${root}`);
+  }
+  assert.deepEqual(placeIn(vol, '/home/u/ws/orgs/beta2/users.json'),
+    { exists: null, refusal: unknownPlace('/home/u/ws/orgs/beta2/users.json', '/ws/orgs', { to: '/ws/orgs/beta2/users.json' }) }, 'the root named by its real path');
+  assert.deepEqual(placeAt('/w2/orgs/beta2/users.json', '/home/u/ws/orgs/beta'),
+    { exists: null, refusal: unknownPlace('/w2/orgs/beta2/users.json', '/ws/orgs', { to: '/ws/orgs/beta2/users.json', root: '/home/u/ws/orgs/beta' }) },
+    'through a link the root\'s path does not pass');
+  // /ws/orgs a bind mount of <root>/x, down now: the users file written through it is <root>/x/beta2/users.json, and an
+  // entry under the root with its name is refused (a directory under the root mounted above it keeps its names).
+  vol.file(`${ROOT_B}/x/beta2/users.json`);
+  assert.deepEqual(placeIn(vol, '/ws/orgs/beta2/users.json'), { exists: null, refusal: unknownPlace('/ws/orgs/beta2/users.json', '/ws/orgs') });
+  assert.deepEqual(placeIn(vol, '/ws/s.json'), { exists: null, refusal: unknownPlace('/ws/s.json', '/ws/orgs', { to: '/ws/orgs/beta2/users.json' }) });
+  vol.rename(`${ROOT_B}/x/beta2/users.json`, '/keep/x/users.json');
+  assert.deepEqual(placeIn(vol, '/ws/orgs/beta2/users.json'), { exists: false, refusal: null }, 'moved out, no entry of its name');
+  assert.deepEqual(placeIn(vol, '/ws/users.json', { recorded: false }), { exists: false, refusal: null }, 'the default nothing records, absent: nothing to keep');
+});
+
+test('purge-org users file that cannot be read: a directory on its path this user may not search is refused, and as a user who can the purge passes; a link loop is refused; a part of its path that stops answering once statSync found nothing there is refused', () => {
+  const vol = betaVolume().file('/priv/accounts.json').deny('/priv').symlink('/cfg/a', '/cfg/b').symlink('/cfg/b', '/cfg/a');
+  assert.deepEqual(placeIn(vol, '/priv/accounts.json'), {
+    exists: null,
+    refusal: `the recorded users file /priv/accounts.json cannot be read on this host (EACCES), so nothing tells whether it lies under ${ROOT_B} — `
+      + 'nothing was deleted. Run purge-org as a user who can read /priv/accounts.json; or, if it does not lie under '
+      + `${ROOT_B}, delete ${ROOT_B} by hand, then run purge-org again: it drops org beta's records`,
+  });
+  const reader = betaVolume().file('/priv/accounts.json');
+  assert.deepEqual(placeIn(reader, '/priv/accounts.json'), { exists: true, refusal: null }, 'the way out: a user who can read it');
+  assert.equal(placeIn(vol, '/cfg/a').refusal, `the recorded users file /cfg/a cannot be read on this host (ELOOP: a link loop, or a chain of more `
+    + `than 40 links), so nothing tells whether it lies under ${ROOT_B} — nothing was deleted. If it does not lie under ${ROOT_B}, delete `
+    + `${ROOT_B} by hand, then run purge-org again: it drops org beta's records`);
+  assert.match(placeIn(vol, '/priv/accounts.json', { recorded: false }).refusal, /^the users file \/priv\/accounts\.json \(the one a pre-store build reads: OBSERVOGRAM_USERS_FILE was not set at the import\) cannot be read on this host \(EACCES\)/);
+  // A part of its path that stops answering once statSync found nothing there (a FUSE server stopping between the two
+  // reads): where the path leads cannot be told — refused naming that part, failing closed.
+  const stopping = betaVolume().dir('/mnt/f');
+  const flaky = {
+    ...stopping.fs,
+    lstatSync: (p, o) => {
+      if (p === '/mnt/f') throw Object.assign(new Error('ENOTCONN: /mnt/f'), { code: 'ENOTCONN' });
+      return stopping.fs.lstatSync(p, o);
+    },
+  };
+  assert.deepEqual(placeIn(stopping, '/mnt/f/users.json', { fs: flaky }), {
+    exists: null,
+    refusal: `the recorded users file /mnt/f/users.json cannot be read on this host (ENOTCONN at /mnt/f), so nothing tells whether it lies under ${ROOT_B} — `
+      + `nothing was deleted. If it does not lie under ${ROOT_B}, delete ${ROOT_B} by hand, then run purge-org again: it drops org beta's records`,
+  });
+});
+
+test('purge-org users file that does not exist, on Windows paths: moved out from under the root, by any spelling or through a junction into it, or in a sibling org\'s directory purged before, by any spelling, the purge passes; through a share whose directory is gone, on a drive that does not exist, deleted outside the root, or through a directory whose name differs from one the root lies in by case alone (case-sensitive), refused', () => {
+  const RW = 'C:\\ws\\orgs\\beta';
+  const C = 0x1_0000_0007n;
+  const vol = mountFs(win32, { fold: true, devs: { 'C:\\': C } }).file(`${RW}\\sub\\users.json`).dir('C:\\out')
+    .symlink('C:\\cfg\\d', `${RW}\\sub`).view(`${RW}\\sub`, '\\\\myhost\\betasub\\', { dev: C & 0xffffffffn });
+  const placeW = (file) => usersFilePlace(file, RW, { fs: vol.fs, path: win32, windows: true, id: 'beta' });
+  vol.rename(`${RW}\\sub\\users.json`, 'C:\\keep\\users.json');
+  for (const file of [`${RW}\\sub\\users.json`, 'c:/WS/orgs/BETA/sub/users.json', 'C:\\cfg\\d\\users.json', '\\\\myhost\\betasub\\users.json',
+    'C:\\ws\\orgs\\acme\\sub\\users.json', 'c:/WS/orgs/ACME/sub/users.json']) {
+    assert.deepEqual(placeW(file), { exists: false, refusal: null }, `${file}: nothing of it under the root`);
+  }
+  assert.deepEqual(placeW('C:\\out\\users.json'), { exists: null, refusal: unknownPlace('C:\\out\\users.json', 'C:\\out', { root: RW }) });
+  assert.deepEqual(placeW('Q:\\users.json'), { exists: null, refusal: unknownPlace('Q:\\users.json', null, { root: RW }) }, 'a drive that does not exist');
+  // A directory NTFS keeps case-sensitive (per directory): C:\WS beside C:\ws is another directory, which the root does not lie in.
+  const cased = mountFs(win32, { devs: { 'C:\\': C } }).dir(`${RW}\\packs`).dir('C:\\WS\\orgs');
+  assert.deepEqual(usersFilePlace('C:\\WS\\orgs\\acme\\users.json', RW, { fs: cased.fs, path: win32, windows: true, id: 'beta' }),
+    { exists: null, refusal: unknownPlace('C:\\WS\\orgs\\acme\\users.json', 'C:\\WS\\orgs', { root: RW }) }, 'another directory by case');
+});
+
+test('purge-org: a users file recorded outside the root with a hard link under it is refused naming the link, nothing deleted; with the link moved out, the purge passes and the users file stays', async () => {
+  const base = await removedOrgDeployment();
+  const root = join(base, 'orgs', 'acme');
+  const srv = tempDir('ops-users');
+  const usersFile = join(srv, 'users.json');
+  usersJson(srv, ['alice'], usersFile);
+  await change(base, (db) => tx(db, () => meta.putMeta(db, 'users_file', usersFile)));
+  linkSync(usersFile, join(root, 'u.json'));
+  const filesBefore = readdirSync(root, { recursive: true }).sort();
+  await assert.rejects(purge(base, 'acme'), refusedOp(new RegExp(`^the recorded users file ${esc(usersFile)} lies under ${esc(root)}: it is ${esc(join(root, 'u.json'))} there — nothing was deleted\\. Move ${esc(join(root, 'u.json'))} out of ${esc(root)}, then run purge-org again\\.`)));
+  assert.deepEqual(readdirSync(root, { recursive: true }).sort(), filesBefore, 'nothing deleted');
+  renameSync(join(root, 'u.json'), join(srv, 'moved.json'));
+  const r = await purge(base, 'acme');
+  assert.equal(r.deleted, true);
+  assert.equal(existsSync(root), false);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(usersFile, 'utf8')).users), ['alice'], 'the users file stays');
+});
+
+test('purge-org: the recorded users file reached through a directory link into the root is refused naming its entry under the root (by its path, realpath placed it under the root too), nothing deleted; moved out as the refusal says, the purge passes', async () => {
+  const base = await removedOrgDeployment();
+  const root = join(base, 'orgs', 'acme');
+  const cfg = tempDir('ops-cfg');
+  usersJson(join(root, 'sub'), ['alice'], join(root, 'sub', 'users.json'));
+  symlinkSync(join(root, 'sub'), join(cfg, 'd'), 'junction');   // a junction needs no privilege on Windows; a symlink elsewhere
+  const usersFile = join(cfg, 'd', 'users.json');
+  await change(base, (db) => tx(db, () => meta.putMeta(db, 'users_file', usersFile)));
+  await assert.rejects(purge(base, 'acme'), refusedOp(new RegExp(`^the recorded users file ${esc(usersFile)} lies under ${esc(root)}: it is ${esc(join(root, 'sub', 'users.json'))} there — nothing was deleted`)));
+  assert.ok(existsSync(join(root, 'sub', 'users.json')) && existsSync(join(root, 'packs', 'a1.pack.yaml')), 'nothing deleted');
+  // The way out, followed: moved out of the root, the record leads through the link to a directory under the root, where
+  // nothing of the users file is left.
+  const keep = join(tempDir('ops-keep'), 'users.json');
+  renameSync(join(root, 'sub', 'users.json'), keep);
+  assert.equal((await purge(base, 'acme')).deleted, true);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(keep, 'utf8')).users), ['alice'], 'the moved users file stays');
+});
+
+test('purge-org: with no users file recorded, <base>/users.json — the one a pre-store build reads — with a hard link under the root is refused; with the link moved out, the purge passes and <base>/users.json stays', async () => {
+  const base = await removedOrgDeployment();
+  const root = join(base, 'orgs', 'acme');
+  await read(base, (db) => assert.equal(meta.getMeta(db, 'users_file'), null, 'none recorded: OBSERVOGRAM_USERS_FILE was not set at the import'));
+  mkdirSync(join(root, 'sub'));
+  linkSync(join(base, 'users.json'), join(root, 'sub', 'users.json'));
+  const entry = join(root, 'sub', 'users.json');
+  await assert.rejects(purge(base, 'acme'), refusedOp(new RegExp(`^the users file ${esc(join(base, 'users.json'))} \\(the one a pre-store build reads: OBSERVOGRAM_USERS_FILE was not set at the import\\) lies under ${esc(root)}: it is ${esc(entry)} there — nothing was deleted\\. Move ${esc(entry)} out of ${esc(root)}, then run purge-org again\\.`)));
+  renameSync(entry, join(tempDir('ops-keep'), 'users.json'));
+  assert.equal((await purge(base, 'acme')).deleted, true);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(base, 'users.json'), 'utf8')).users), ['alice'], '<base>/users.json stays');
+});
+
+test('purge-org: the users file recorded under the root is refused naming it, nothing deleted; moved out of the root as the refusal says, the purge passes — it used to refuse again, and again — and the moved file stays', async () => {
+  const base = await removedOrgDeployment();
+  const root = join(base, 'orgs', 'acme');
+  const usersFile = join(root, 'sub', 'users.json');
+  usersJson(base, ['alice'], usersFile);
+  await change(base, (db) => tx(db, () => meta.putMeta(db, 'users_file', usersFile)));
+  await assert.rejects(purge(base, 'acme'), refusedOp(new RegExp(`^${esc(underRoot(usersFile, usersFile, root))}$`)));
+  assert.ok(existsSync(usersFile) && existsSync(join(root, 'packs', 'a1.pack.yaml')), 'nothing deleted');
+  const keep = join(tempDir('ops-keep'), 'users.json');
+  renameSync(usersFile, keep);
+  const r = await purge(base, 'acme');
+  assert.equal(r.deleted, true);
+  assert.equal(existsSync(root), false);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(keep, 'utf8')).users), ['alice'], 'the moved users file stays');
+});
+
+test('purge-org: the users file recorded under one org\'s root and moved out as the refusal says, that org purged, a later purge of another org passes — the record leads into the purged root, which no longer exists, through directories the other root lies in, where a filesystem mounted again covers that root too, and with the workspace or its orgs/ reached through a directory link (a junction on Windows) in a directory the roots do not lie in, through that directory too, where one hides the link the root\'s own path is reached through; it used to be refused as a users file that does not exist, for every org purged afterwards (through such a link, also with only the directories on the root\'s real path) — and the moved file stays', async () => {
+  // The workspace named by its real path; through a link to it in a directory the roots do not lie in (<d>/home/u/ws →
+  // <d>/data/ws); and with its orgs/ such a link (<d>/data/w2/orgs → <d>/data/orgs).
+  const d = tempDir('ops-linked');
+  for (const dir of [join(d, 'home', 'u'), join(d, 'data', 'ws'), join(d, 'data', 'w2'), join(d, 'data', 'orgs')]) mkdirSync(dir, { recursive: true });
+  symlinkSync(join(d, 'data', 'ws'), join(d, 'home', 'u', 'ws'), 'junction');   // a junction needs no privilege on Windows; a symlink elsewhere
+  symlinkSync(join(d, 'data', 'orgs'), join(d, 'data', 'w2', 'orgs'), 'junction');
+  for (const at of [undefined, join(d, 'home', 'u', 'ws'), join(d, 'data', 'w2')]) {
+    const base = await removedOrgDeployment(at);
+    const acme = join(base, 'orgs', 'acme');
+    const beta = join(base, 'orgs', 'beta');
+    const usersFile = join(acme, 'sub', 'users.json');
+    usersJson(base, ['alice'], usersFile);
+    await change(base, (db) => tx(db, () => meta.putMeta(db, 'users_file', usersFile)));
+    await assert.rejects(purge(base, 'acme'), refusedOp(new RegExp(`^${esc(underRoot(usersFile, usersFile, acme))}$`)), base);
+    const keep = join(tempDir('ops-keep'), 'users.json');
+    renameSync(usersFile, keep);
+    assert.equal((await purge(base, 'acme')).deleted, true, base);
+    await change(base, (db) => admin.removeOrgSoft(db, 'cli', 'beta'));
+    const r = await purge(base, 'beta');
+    assert.equal(r.deleted, true, base);
+    assert.equal(existsSync(beta), false, base);
+    assert.deepEqual(Object.keys(JSON.parse(readFileSync(keep, 'utf8')).users), ['alice'], `${base}: the moved users file stays`);
+  }
+});
+
+test('purge-org: a recorded users file outside the root that no longer exists is refused (declared), naming where its path leads as this host resolves it — through a directory link, as a temporary directory on macOS is (/var → /private/var), not where it is spelled — nothing deleted; with the root deleted by hand as the refusal says, the purge passes and drops the org\'s records; none recorded and <base>/users.json deleted, the purge passes', async () => {
+  const base = await removedOrgDeployment();
+  const root = join(base, 'orgs', 'acme');
+  const srv = tempDir('ops-users');
+  const linked = join(tempDir('ops-link'), 'srv');
+  symlinkSync(srv, linked, 'junction');   // a junction needs no privilege on Windows; a symlink elsewhere
+  // Where the path leads and its nearest part that exists are named as this host resolves them, every link followed: the
+  // real path of the users file's directory. Through a link — on macOS the temporary directory is reached through one —
+  // that is not how the path is spelled, and the refusal names the place it leads to.
+  for (const usersFile of [join(srv, 'users.json'), join(linked, 'users.json')]) {
+    const near = realpathSync(dirname(usersFile));
+    const place = join(near, 'users.json');
+    await change(base, (db) => tx(db, () => meta.putMeta(db, 'users_file', usersFile)));
+    await assert.rejects(purge(base, 'acme'), refusedOp(new RegExp(`^${esc(`the recorded users file ${usersFile} does not exist, and nothing on this host tells where its path leads${place === usersFile ? '' : ` (to ${place})`}: the nearest part of it that exists, ${near}, is no directory under ${root}`)}.* If it lies on a filesystem that is not mounted now, mount it, then run purge-org again; if it does not lie under ${esc(root)}, delete ${esc(root)} by hand, then run purge-org again: it drops org acme's records$`)));
+    assert.ok(existsSync(join(root, 'packs', 'a1.pack.yaml')), 'nothing deleted');
+  }
+  const rows = await read(base, (db) => actions(db).length);
+  rmSync(root, { recursive: true });
+  const r = await purge(base, 'acme');
+  assert.deepEqual(formatPurge(r)[0], `purged org acme: nothing on disk at ${root}`);
+  await read(base, (db) => assert.deepEqual(actions(db).slice(rows), ['org.purge:cli:acme']));
+
+  const oidcOnly = await removedOrgDeployment();
+  rmSync(join(oidcOnly, 'users.json'));
+  assert.equal((await purge(oidcOnly, 'acme')).deleted, true, 'the default users file nothing records, absent: nothing to keep');
 });
 
 // ---------- audit: the CLI reader ----------

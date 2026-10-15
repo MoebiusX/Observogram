@@ -1807,3 +1807,210 @@ take `{ timed }`; the studio binds what it is served untimed — the server or
 the builder timed the same document — and the shim's three computing routes
 answer `500` naming the reason when the taxonomy a bundle bakes is not the one
 the classifier holds.
+
+### Follow-up: the users file by what deleting the root takes
+
+`packc store purge-org` deletes a removed org's root with `rmSync`, and it
+refused only a users file whose path lay under that root. The path is not
+where the bytes are: with the users file recorded as `/mnt/b/users.json`,
+`/mnt/b` a bind mount of the root's `sub` directory, realpath does not cross
+the mount back to its source, so the path compared as outside the root and
+purge-org deleted the file — named directly, through a file link or a
+directory link to the mount, through an NFS or SMB loopback mount, and with
+nothing recorded, a `<base>/users.json` that is a link into the root. purge-org
+now walks the root as `rmSync` takes it, never through a link, and follows the
+users file's path through every link: the users file lies under the root when
+an entry is the same file — the same device and inode (on Windows the volume
+serial's low 32 bits), or, on another device, the same size and modification
+time at the coarser clock's precision, a view of it through a network,
+overlay or FUSE mount. The refusal names every such entry, hard links
+included, and its way out is to move them out of the root. A hard link under
+the root to a users file outside it, and a copy under the root on another
+device that kept its size and time, are refused alike (declared false
+refusals). The walk also refuses a mount point under the root — on Node 22
+`rmSync` stops part-way at one, on Node 23 and later it first deletes the
+files of the filesystem mounted there — the root itself mounted, and a
+directory under the root it cannot read, where `rmSync` failed part-way; now
+nothing is deleted. A bind mount of a directory from outside the root, on the
+root's own filesystem, cannot be told from a directory by `lstatSync`: on
+Node 23 and later `rmSync` deleted that directory's files, outside the root,
+and then failed on the mount point, and when it held the users file the
+refusal named the entry to move out, after which the purge went on the same
+way. On Linux `/proc/self/mountinfo` lists every mount point, and purge-org,
+reading the root by its real path there, refuses it as a mount point; once it
+is unmounted the purge passes. The kernel lists a mount that a later one
+covers too — a filesystem mounted over a directory above it, as fstab entries
+mounted out of order leave it, or an autofs mount over a directory that holds
+mounts — while its path shows a directory of the filesystem mounted above,
+where nothing is mounted to unmount; purge-org passes over such a mount,
+unless that path leads through a mount of the covered mount's own
+filesystem — `mount --bind /srv /srv` over it, or a recursive bind whose
+copy of it was unmounted — where it may show the very directory the covered
+mount is mounted on, which `rmdir` refuses while it is a mount point:
+`rmSync` deleted part of the root there, then failed with `EBUSY`. Such a
+mount is refused, naming the mounts to unmount first, in order. Where the
+covering mount shows another directory there than the one it is mounted on —
+the deployment bind-mounted over the directory that holds the covered mount —
+the refusal is false (declared), and unmounting that mount takes the
+workspace away: followed literally, the way out ended with purge-org finding
+no database. So the refusal says to mount it there again once the covered
+mount is unmounted, before purge-org runs again; followed so, the purge
+passes. A
+mount on `/` itself covers nothing: a path is looked up from the process's
+root and never crosses a mount stacked on it (a tmpfs mounted on `/` in a
+chroot, or `mount --bind / /`), so a mount under the root is refused still.
+Where there is no such file, the walk enters it.
+
+The refusal of a users file recorded under the root said "move it out
+first", and after the move it came back word for word: the record still named
+the path under the root, and the comparison fell back to it as written. The
+comparison by path now holds only while the users file exists. One that does
+not is followed to where its path leads — every link that exists followed, a
+dangling one by its target — and its nearest directory that exists: one under
+the root, with no entry there of the users file's name (below), means nothing
+of the users file is left there to delete, and the purge goes on; any other is
+refused, since a mount that is down leaves only an empty mount point, and
+with the bind mount above down purge-org had deleted the users file behind it.
+On Windows a path through a dangling link is refused before this, as a
+path the native realpath cannot fully resolve (the section above), and
+deleting the root by hand lets purge-org drop the records.
+Through a view whose directories show another inode or modification time than
+theirs under the root — an overlay mount's merged
+directory shows its upper directory's — the path of a users file moved out
+leads to no directory purge-org can tell is under the root, so it is refused
+too, and the view's refusal names that second step: delete the root by hand.
+A users file deleted on purpose outside the root is refused alike (a declared
+false refusal), and its way out is deleting the root by hand, after which
+purge-org drops the records. A users file purge-org cannot read (`EACCES` on
+its path, a link loop), which compared as written and was purged, is refused
+too. Tests: 1495 → 1510 (fifteen more in `server/test-store-ops.mjs`).
+
+The walk read each directory once, at its own moment, so another process
+renaming a directory, while it ran, from one the walk had not read yet into
+one it had read already — the directory holding the users file, which the
+bind mount above leads to — hid it from both listings, and the purge deleted
+the users file. When the users file exists and no entry is it, purge-org now
+reads each directory again before it goes on: the same directory, the same
+change time, which moves with every entry added, removed or renamed in it,
+and the same names. One that changed is refused, deleting nothing; stop what
+changes files there and run the purge again, and the walk finds the users
+file. Tests: 1510 → 1511 (one more in `server/test-store-ops.mjs`).
+
+The walk listed names as strings, and `node:fs` gives a name that is not
+valid UTF-8 with U+FFFD in place of each such byte: a name no lookup finds,
+which the walk took for an entry gone while it ran, so it read nothing under
+it, while `rmSync`, which lists names as bytes, deleted the users file there.
+The walk now lists each name as the bytes the filesystem holds and follows
+such a name as bytes, so the users file, a mount point or a directory it
+cannot read below it is refused; a refusal names that path as a POSIX
+shell's `$'…'` spells it, so moving the users file out, as the refusal says,
+can be typed. Tests: 1511 → 1512 (one more in `server/test-store-ops.mjs`).
+
+Failing closed through a mount that is down held only while the users file
+did not exist, and a mount that is down keeps what was written in its mount
+point meanwhile: with a `users.json` written in `/mnt/b` while the bind
+mount above was down, the recorded path led to that file, outside the root,
+and purge-org deleted `<root>/sub/users.json`, the users file the path leads
+to once the mount is back. When the users file exists and no entry is it, an
+entry under the root with its name — the name its path ends in, as written
+or at a link it leads through, ignoring case — is now refused, naming each
+such entry and what one that is a link leads to under the root; moving them
+out of the root is its way out. An entry of that name that is not the users
+file is refused alike (a declared false refusal), and the users file seen
+through a view of a directory under the root that reports neither its inode
+nor its size and time is refused by its name. Tests: 1512 → 1513 (one more
+in `server/test-store-ops.mjs`).
+
+Following the refusal of a users file recorded under the root — moving it
+out, then purging that org — left the record naming a path in a directory
+that no longer exists, and every later purge of another org was refused as a
+recorded users file that does not exist: the nearest part of its path that
+exists, `<workspace>/orgs`, was no directory under the other root. Making
+the path lead to the moved file again meant re-creating directories in the
+purged org's root, and neither the refusal nor README said so. A users file
+that does not exist is now nothing to keep, too, when its path is looked up
+only in directories the root lies in — its parent and theirs, on its real
+path — or that the root's own path is looked up in, as purge-org names it
+(with the workspace, or its `orgs`, reached through a link in a directory
+the root does not lie in, that directory and those above it), and no entry
+under the root has its name: a filesystem mounted again on one of them
+covers the root as well, or hides the link the root's own path is reached
+through, so through it the path leads under the root by a directory under
+the root mounted there, which shows the users file by its name, or by a link
+purge-org does not see. Through any other directory, or with an entry of
+that name under the root, it is refused as before. Tests: 1513 → 1514 (one
+more in `server/test-store-ops.mjs`).
+
+The walk kept every entry's stats until it ended, since the users file was
+placed only after it: some 770 bytes an entry, so a root of 100 directories
+of 1,000 empty files ran purge-org out of memory in a 40 MB heap, deleting
+nothing, where `rmSync` of the same tree completed — at a 1 GB heap about
+1.3 million entries, wherever the host set the limit. The users file is now
+placed before the walk, and each entry compared with it and with its name as
+the walk reaches it; placed again after the walk, one created, replaced or
+written meanwhile is compared with each entry read again. Of a directory the
+walk keeps its path, its identity, its times and a digest of its names, and it
+takes a directory's entries from its listing as it goes, holding only the
+listings of the directories it is in, as Node 22's `rmSync` does: its memory
+grows with the directories under the root and the longest listing, not with
+the files, and that root passes in 16 MB. Tests: 1514 → 1515 (one more in
+`server/test-store-ops.mjs`).
+
+A users file that does not exist whose path leads into a directory under the
+root passed without the name check a users file that exists has, and a
+directory on that path may be the mount point of a mount that is down: with
+`<root>/other` bind-mounted on `<root>/sub/m` and the users file in `other`
+recorded through it, purge-org refused the mount point, and once it was
+unmounted, as that refusal said, the purge deleted the users file. Such a
+path is now refused by the name too when an entry under the root has it,
+naming each such entry; moving them out of the root is its way out, and the
+purge then passes. A users file moved out of the root as the refusal of one
+under it says passes as before unless another entry under the root has its
+name, which is refused alike (a declared false refusal) until it is moved out
+too. Tests: 1515 → 1516 (one more in `server/test-store-ops.mjs`).
+
+The refusal of a mount point under the root said only to unmount it, and
+unmounting may take away the path to the users file: with a directory from
+outside the root mounted under it, holding a link of the users file's name
+to a file under the root, the path led into the empty mount point once it
+was unmounted, no entry under the root had the users file's name, and the
+purge deleted the file. That refusal now names the users file the walk finds
+under the root as well, to move out with the unmounting; followed, the purge
+passes and the moved file stays. A mount that was down already when
+purge-org first ran tells nothing of such a link (declared). One test in
+`server/test-store-ops.mjs` is extended; the total stays 1516.
+
+In a chroot into a directory that is no mount point, `/proc/self/mountinfo`
+lists neither `/` nor the mount the root lies in, and the mounts in it name a
+parent it does not list; a covered mount with such a parent was taken for one
+whose path may show what it is mounted on, so a tmpfs mounted on the workspace
+over a bind mount at `<root>/m` — which passes outside a chroot — was
+refused there, and its way out, unmounting the tmpfs first, unmounted the
+filesystem holding the whole deployment. The parent not listed is the mount
+the root lies in, whose filesystem `/` shows: a covered mount whose path shows
+a directory of another filesystem is passed over, one of the same filesystem
+refused naming what to unmount first, as before, and followed literally the
+purge passes. Tests: 1516 → 1517 (one more in `server/test-store-ops.mjs`).
+
+A mount point under the root holding mounts was refused naming it alone: the
+walk never enters a mount point, so the mounts in it went unnamed, though
+`/proc/self/mountinfo` lists them, and followed literally — `umount <root>/m`
+— the way out said target is busy, and every later run repeated the
+refusal. The refusal now names the mounts in it to unmount first, in order,
+each after the mounts in it, as a covered mount's does (a mount stacked on it
+names the mounts in the topmost alone, which `umount` takes); followed so,
+the purge passes. Tests: 1517 → 1518 (one more in `server/test-store-ops.mjs`).
+
+On the Windows leg on Node 22.16.0, with a workspace whose `orgs` is a
+junction to a directory on its own volume, purge-org refused the root as a
+mount point on another filesystem than that junction, where Node 22.23 went
+on. libuv answers a stat by the path's name unless its last name is a
+reparse point, which it opens, and libuv 1.49.0 to 1.50.x read the device of
+the one by name from the upper half of the file's 128-bit id, 0 on NTFS, not
+the volume's serial; the root (by name) and the junction (opened) differed.
+On Windows a volume is mounted only in a folder, so only directories are
+compared there, each read through a handle opened on it, which reports the
+serial on every libuv; a file or a link under the root lies on its
+directory's volume. A volume mounted in a folder under the root, or on the
+root, is refused as before. Tests: 1518 → 1519 (one more in
+`server/test-store-ops.mjs`).

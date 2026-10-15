@@ -787,7 +787,7 @@ test('every path comparison in ops.mjs and backup.mjs goes through compared; rea
   assert.match(ops, /const own = compared\(path\);[^]*?if \(compared\(file\) === own\) continue;/, 'assertNoOtherStore');
   assert.match(ops, /const inPlace = compared\(target\) === compared\(base\);\s*if \(!inPlace && compared\(target, base\) === compared\(base\)\) \{/, 'the in-place detection');
   assert.match(ops, /const b = compared\(base\);\s*if \(!compared\(path\)\.startsWith\(b \+ sep\)\) \{\s*const placed = compared\(path, base\);\s*if \(placed === null \|\| placed\.startsWith\(b \+ sep\)\) \{/, 'the no-marker database check');
-  assert.match(ops, /const users = [^;]*\? compared\(usersFile, root, \{ deleting: true \}\) : undefined;\s*if \(users === null\) \{[^}]*\}\s*if \(users\?\.startsWith\(compared\(root\) \+ sep\)\)/, 'purge-org\'s users file');
+  assert.match(ops, /const users = [^;]*\? compared\(usersFile, root, \{ deleting: true \}\) : undefined;\s*if \(users === null\) \{[^}]*\}\s*const place = present \? usersFilePlace\([^;]*\) : null;\s*if \(place\?\.refusal\) throw refuse\(place\.refusal\);\s*if \(users\?\.startsWith\(compared\(root\) \+ sep\) && place\.exists\)/, 'purge-org\'s users file: by path, then by what deleting the root takes (store/users-file-place.mjs), the path check only while the file exists');
   // Each such refusal names its way out (its message from the guard to the throw's end, the parts joined).
   const joined = (file) => readFileSync(join(HERE, 'store', file), 'utf8');
   const refusal = (raw, guard) => {
