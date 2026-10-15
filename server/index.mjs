@@ -68,7 +68,7 @@ import { describeProxyAuth } from './auth-proxy.mjs';
 import { stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
 import { mcpCallerOf, mcpRefusalBody, redactTarget } from './mcp-target-policy.mjs';
 import { captureNotifyRefusal, hooksAllTaken, notifyBootReport, notifyHookOf, notifyHooksOf, notifyNamesRefusal, notifyPostureRefusal, resolveJourneyNotify } from './notify-target-policy.mjs';
-import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
+import { parseGithubUrl, selectCrawlerFiles, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
 import { auditAfter, actorForRecord, bounded, finite } from './audit-after.mjs';
 import { identityRoutes } from './routes/identity.mjs';
@@ -1880,7 +1880,7 @@ app.post('/api/crawl', authorize('POST /api/crawl'), (req, res) => {
 //
 // Bandwidth guards: max 200 files, max 16 MB total, max 1 MB per file.
 // ----------------------------------------------------------------
-// parseGithubUrl / isCrawlerFile / ghFetch live in server/github-crawl.mjs.
+// parseGithubUrl / selectCrawlerFiles / ghFetch live in server/github-crawl.mjs.
 
 app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, res) => {
   const body = req.body || {};
@@ -1914,10 +1914,8 @@ app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, r
     const FILE_CAP_BYTES = 1 * 1024 * 1024;        // 1 MB / file
     const TOTAL_CAP_BYTES = 16 * 1024 * 1024;      // 16 MB total
     const MAX_FILES = 200;
-    const candidates = (treeResp.tree || [])
-      .filter(node => node.type === 'blob' && isCrawlerFile(node.path))
-      .filter(node => !node.size || node.size <= FILE_CAP_BYTES)
-      .slice(0, MAX_FILES);
+    // isCrawlerFile's blobs first, the exporter candidates after them.
+    const candidates = selectCrawlerFiles(treeResp.tree, { maxFiles: MAX_FILES, fileCapBytes: FILE_CAP_BYTES });
 
     if (candidates.length === 0) {
       return res.json({

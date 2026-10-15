@@ -35,6 +35,7 @@ import {
 } from './lib/exporter-metrics.mjs';
 import { EXPORTER_CATALOGUE as BUILTIN } from './lib/exporter-catalogue.mjs';
 import { validateCanonical, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
+import { isCrawlerFile, isExporterCandidateFile, selectCrawlerFiles } from '../server/github-crawl.mjs';
 import { createHarness } from './lib/harness.mjs';
 
 const { assert, report } = createHarness({ truncate: 600 });
@@ -396,6 +397,27 @@ data:
   assert(!keys.some(k => /^crawler\.discovered\.(exporters|scrape_job)/.test(k)) && !('exporters' in r.summary.discovered)
     && JSON.stringify(r.canonical.spec.pipelines.exporters.metrics) === '{"kind":"otlp"}',
   'a crawl with no exporter or collector scrape evidence carries no new key', keys.filter(k => /discovered/.test(k)));
+}
+
+// ---------- the GitHub crawl's file budget ----------
+// The exporter patterns match names too common to fetch first: a monorepo's
+// 210 config.yaml files never push out its rules, Alertmanager or collector.
+{
+  const tree = [
+    ...Array.from({ length: 210 }, (_, i) => ({ type: 'blob', path: `apps/svc-${String(i).padStart(3, '0')}/config.yaml`, size: 100 })),
+    { type: 'blob', path: 'monitoring/alertmanager.yml' }, { type: 'blob', path: 'monitoring/slo.rules.yaml' },
+    { type: 'blob', path: 'otel/otel-collector-config.yaml' }, { type: 'blob', path: 'mq/metrics-manifest.json' },
+    { type: 'blob', path: 'snap/ibm-mq.prom' }, { type: 'blob', path: 'test/fixtures/x.prom' }, { type: 'blob', path: 'charts/c/files/collector.yaml' },
+    { type: 'tree', path: 'apps' }, { type: 'blob', path: 'big/config.yaml', size: 2e6 },
+  ];
+  const picked = selectCrawlerFiles(tree, { maxFiles: 200, fileCapBytes: 1e6 }).map(n => n.path);
+  assert(picked.length === 200 && picked.slice(0, 4).join() === 'monitoring/alertmanager.yml,monitoring/slo.rules.yaml,otel/otel-collector-config.yaml,mq/metrics-manifest.json',
+    'the established files and the manifest come first; the exporter candidates fill what is left', picked.slice(0, 5));
+  const all = selectCrawlerFiles(tree, { maxFiles: 1000, fileCapBytes: 1e6 }).map(n => n.path);
+  assert(all.includes('snap/ibm-mq.prom') && all.includes('charts/c/files/collector.yaml') && !all.includes('test/fixtures/x.prom') && !all.includes('big/config.yaml') && !all.includes('apps'),
+    'with room, a snapshot and a chart\'s files/ collector are fetched; a fixture snapshot, an oversized file and a tree never');
+  assert(isCrawlerFile('mq/metrics-manifest.json') && !isCrawlerFile('apps/x/config.yaml') && isExporterCandidateFile('apps/x/config.yaml')
+    && !isExporterCandidateFile('monitoring/prometheus.yml'), 'isCrawlerFile is develop\'s rule plus the manifest; the broad names are candidates only');
 }
 
 // ---------- I. packc emit --exporter ----------
