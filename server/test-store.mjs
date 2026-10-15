@@ -543,13 +543,31 @@ test('a database from a newer build is refused, not migrated', async () => {
 
 // ---------- Concurrency ----------
 
+// A parent that waits out a lockHolder meant to commit (or the migrating
+// child of 'two openers racing the same step') waits this long at most (its
+// busy_timeout, set by waitOutHolder or openRaw's timeout). The wait ends at
+// the child's COMMIT, ~700 ms on a healthy runner; nothing asserts an
+// upper bound on it, so this is liveness only. At the store's own 5000 ms
+// (BUSY_TIMEOUT_MS, still pinned on openStore above) the parent raced the
+// child's scheduling: on a loaded Windows runner a write waited 2355 ms of a
+// 700 ms hold and a migration ran out of its 5000 ms ("database is locked").
+// Only a child stalled for more than 30 s after "locked" fails these tests now.
+const LOCK_WAIT_LIVENESS_MS = 30_000;
+const waitOutHolder = (db) => pragma(db, `busy_timeout=${LOCK_WAIT_LIVENESS_MS}`);
+
 // A child that takes BEGIN IMMEDIATE through tx(), says "locked", holds it
-// for `holdMs` (< busy_timeout) and commits.
+// for `holdMs` (< the parent's busy_timeout) and commits. synchronous=OFF
+// keeps every fsync out of the window the parent waits through: at openRaw's
+// default FULL, a commit into a -wal that a closed store just removed syncs
+// the new WAL header and then the commit (FlushFileBuffers twice on Windows),
+// time the parent's wait pays for. The child's durability is not under test,
+// its lock is.
 function lockHolder(path, holdMs) {
   return child(`
     import { writeSync } from 'node:fs';
-    const { openRaw, tx, prepare } = await import(${JSON.stringify(DB_URL)});
+    const { openRaw, pragma, tx, prepare } = await import(${JSON.stringify(DB_URL)});
     const db = await openRaw(${JSON.stringify(path)});
+    pragma(db, 'synchronous=OFF');
     tx(db, () => {
       prepare(db, "INSERT INTO schema_meta (key, value) VALUES ('held_by_child', 'yes')").run();
       writeSync(1, 'locked\\n');
@@ -563,6 +581,7 @@ test('Concurrency: a write waits out a child holding BEGIN IMMEDIATE for less th
   const path = join(tempDir(), 'conc.db');
   const db = await openStore({ path });
   try {
+    waitOutHolder(db);
     const holder = lockHolder(path, 700);
     await holder.until(/locked/);
     const t0 = Date.now();
@@ -583,7 +602,7 @@ test('Concurrency: a migration waits out a child holding BEGIN IMMEDIATE, then a
   const path = join(tempDir(), 'conc-mig.db');
   await openStore({ path });
   closeStore(path);
-  const db = await openRaw(path);
+  const db = await openRaw(path, { timeout: LOCK_WAIT_LIVENESS_MS });
   try {
     const holder = lockHolder(path, 700);
     await holder.until(/locked/);
@@ -600,6 +619,10 @@ test('Concurrency: a migration waits out a child holding BEGIN IMMEDIATE, then a
   }
 });
 
+// The child holds BEGIN IMMEDIATE from "locked" to its COMMIT, as a
+// lockHolder does, and the parent waits it out the same way: the child syncs
+// nothing (a fresh rollback-journal file at FULL fsyncs the journal and the
+// database inside the window), the parent waits up to LOCK_WAIT_LIVENESS_MS.
 test('Migrations: two openers racing the same step apply it once', async () => {
   const path = join(tempDir(), 'race.db');
   const steps = `[{ version: 1, name: 'counted', up(d) {
@@ -609,16 +632,17 @@ test('Migrations: two openers racing the same step apply it once', async () => {
     } }]`;
   const c = child(`
     import { writeSync } from 'node:fs';
-    const { openRaw, execScript, prepare } = await import(${JSON.stringify(DB_URL)});
+    const { openRaw, pragma, execScript, prepare } = await import(${JSON.stringify(DB_URL)});
     const { runMigrations } = await import(${JSON.stringify(MIGRATIONS_URL)});
     const WHO = 'child';
     const HOLD = () => { writeSync(1, 'locked\\n'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 700); };
     const db = await openRaw(${JSON.stringify(path)});
+    pragma(db, 'synchronous=OFF');
     console.log(JSON.stringify(runMigrations(db, ${steps})));
     db.close();
   `);
   await c.until(/locked/);
-  const db = await openRaw(path);
+  const db = await openRaw(path, { timeout: LOCK_WAIT_LIVENESS_MS });
   try {
     const WHO = 'parent';
     const HOLD = () => {};
@@ -1940,6 +1964,7 @@ test('readTokenEnv never names a notify hook\'s variable: the URL or TOKEN shape
 test('Concurrency: a repository write waits out a child holding BEGIN IMMEDIATE, then succeeds with its audit row', async (t) => {
   const { path, db, close } = await freshStore('conc-repo');
   try {
+    waitOutHolder(db);
     const holder = lockHolder(path, 700);
     await holder.until(/locked/);
     const t0 = Date.now();

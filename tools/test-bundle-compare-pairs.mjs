@@ -46,11 +46,13 @@ const HEADERS = ['content-type', 'cache-control', 'content-disposition', 'x-cont
 const answerOf = async (r) => ({ status: r.status, statusText: r.statusText, headers: Object.fromEntries(HEADERS.map((h) => [h, r.headers.get(h)])), text: await r.text() });
 // Every request to the child server goes out on a connection of its own: a kept-alive socket the server closes at 5 s
 // idle while this process computes the shim's answer fails the next request sent on it. tools/test-bundle-compare.mjs
-// C3 pins this helper, the same text there and here.
-const serverFetch = (url, init = {}) => {
+// C3 pins this helper, the same text there and here — and that a body goes out as one buffer with its headers (a
+// FormData streamed in parts lets the server close on an unread tail: an RST, `fetch failed` on Windows).
+const serverFetch = async (url, init = {}) => {
   const headers = new Headers(init.headers);
   headers.set('connection', 'close');
-  return fetch(url, { ...init, headers });
+  const request = new Request(url, { ...init, headers });
+  return fetch(url, { ...init, headers: request.headers, body: request.body && await request.arrayBuffer() });
 };
 
 test('M1 every ordered pair of ten packs, in each scope mode the studio sends: the shim\'s GET /api/diff is the server\'s, status, reason phrase, headers and raw text', async (t) => {
