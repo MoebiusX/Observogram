@@ -543,9 +543,10 @@ test('a database from a newer build is refused, not migrated', async () => {
 
 // ---------- Concurrency ----------
 
-// A parent that waits out a lockHolder meant to commit waits this long at
-// most (its busy_timeout, set by waitOutHolder or openRaw's timeout). The wait
-// ends at the child's COMMIT, ~700 ms on a healthy runner; nothing asserts an
+// A parent that waits out a lockHolder meant to commit (or the migrating
+// child of 'two openers racing the same step') waits this long at most (its
+// busy_timeout, set by waitOutHolder or openRaw's timeout). The wait ends at
+// the child's COMMIT, ~700 ms on a healthy runner; nothing asserts an
 // upper bound on it, so this is liveness only. At the store's own 5000 ms
 // (BUSY_TIMEOUT_MS, still pinned on openStore above) the parent raced the
 // child's scheduling: on a loaded Windows runner a write waited 2355 ms of a
@@ -618,6 +619,10 @@ test('Concurrency: a migration waits out a child holding BEGIN IMMEDIATE, then a
   }
 });
 
+// The child holds BEGIN IMMEDIATE from "locked" to its COMMIT, as a
+// lockHolder does, and the parent waits it out the same way: the child syncs
+// nothing (a fresh rollback-journal file at FULL fsyncs the journal and the
+// database inside the window), the parent waits up to LOCK_WAIT_LIVENESS_MS.
 test('Migrations: two openers racing the same step apply it once', async () => {
   const path = join(tempDir(), 'race.db');
   const steps = `[{ version: 1, name: 'counted', up(d) {
@@ -627,16 +632,17 @@ test('Migrations: two openers racing the same step apply it once', async () => {
     } }]`;
   const c = child(`
     import { writeSync } from 'node:fs';
-    const { openRaw, execScript, prepare } = await import(${JSON.stringify(DB_URL)});
+    const { openRaw, pragma, execScript, prepare } = await import(${JSON.stringify(DB_URL)});
     const { runMigrations } = await import(${JSON.stringify(MIGRATIONS_URL)});
     const WHO = 'child';
     const HOLD = () => { writeSync(1, 'locked\\n'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 700); };
     const db = await openRaw(${JSON.stringify(path)});
+    pragma(db, 'synchronous=OFF');
     console.log(JSON.stringify(runMigrations(db, ${steps})));
     db.close();
   `);
   await c.until(/locked/);
-  const db = await openRaw(path);
+  const db = await openRaw(path, { timeout: LOCK_WAIT_LIVENESS_MS });
   try {
     const WHO = 'parent';
     const HOLD = () => {};
