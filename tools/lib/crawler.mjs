@@ -211,7 +211,8 @@ function registerMetricsExporterFromBackend(pattern, pipelines, relPath, evidenc
  *                          'helm-template' | 'metrics-manifest' | 'exposition-snapshot' |
  *                          'exporter-config' | 'unknown'
  */
-export function detectArtefactKind(relPath, content, { exporterCatalogue = BUILTIN_EXPORTER_CATALOGUE } = {}) {
+export function detectArtefactKind(relPath, content, opts) {
+  const { exporterCatalogue = BUILTIN_EXPORTER_CATALOGUE } = opts ?? {};
   const lower = relPath.toLowerCase();
   const catalogue = asResolvedCatalogue(exporterCatalogue);
   // A prebuilt exporter's metric list, as `packc emit --exporter` writes it.
@@ -1907,19 +1908,26 @@ function walkHelmValues(f, backends, pipelines, evidence, summary, disabledCompo
 
   for (const obj of parseYamlDocs(f.content)) {
     // A collector chart's values carry the collector config: at the top
-    // level, or under `config:` (the opentelemetry-collector chart's idiom).
-    // Read first, so a pipeline it declares beats an image's inference.
-    const collector = valuesCollectorConfig(obj);
-    if (collector) walkOtelCollectorDoc(collector, f.relPath, pipelines, scrapeJobs, evidence, summary, collectorGuesses);
+    // level, under `config:` (the opentelemetry-collector chart's idiom), or
+    // under a subchart's key in an umbrella chart. Read first, so a pipeline
+    // it declares beats an image's inference; a config this walk cannot read
+    // (the chart's `pipelines.metrics: null` drops a pipeline) is warned
+    // about and never costs the values file its images.
+    for (const collector of valuesCollectorConfigs(obj)) {
+      try { walkOtelCollectorDoc(collector, f.relPath, pipelines, scrapeJobs, evidence, summary, collectorGuesses); }
+      catch (e) { summary.warnings.push(`The collector config in ${f.relPath} could not be read (${e.message}); its images are read as before.`); }
+    }
     visit(obj);
   }
 }
 
-// The collector config a Helm values document carries, or null.
-function valuesCollectorConfig(obj) {
-  if (isMapping(obj) && looksLikeOtelCollector(obj)) return obj;
-  if (isMapping(obj?.config) && looksLikeOtelCollector(obj.config)) return obj.config;
-  return null;
+// The collector configs a Helm values document carries: the document
+// itself, its `config:`, or a subchart's `<key>.config:` (an umbrella chart).
+function valuesCollectorConfigs(obj) {
+  if (!isMapping(obj)) return [];
+  if (looksLikeOtelCollector(obj)) return [obj];
+  if (isMapping(obj.config) && looksLikeOtelCollector(obj.config)) return [obj.config];
+  return Object.values(obj).filter(v => isMapping(v?.config) && looksLikeOtelCollector(v.config)).map(v => v.config);
 }
 
 function workloadPodSpec(obj) {
@@ -2227,7 +2235,7 @@ function walkScrapeConfigDoc(obj, origin, scrapeJobs, evidence, summary, collect
       ...(collector ? {
         via: 'otel-collector',
         receiver: collector.receiver,
-        target_count: (cfg.static_configs || []).reduce((n, sc) => n + (Array.isArray(sc?.targets) ? sc.targets.filter(Boolean).length : 0), 0),
+        target_count: (Array.isArray(cfg.static_configs) ? cfg.static_configs : []).reduce((n, sc) => n + (Array.isArray(sc?.targets) ? sc.targets.filter(Boolean).length : 0), 0),
         exporters: collector.exporters,
       } : {}),
     });
@@ -2330,6 +2338,8 @@ function walkOtelCollectorDoc(obj, relPath, pipelines, scrapeJobs, evidence, sum
   if (obj?.service?.pipelines) {
     const seen = new Set();
     for (const pipeline of Object.values(obj.service.pipelines)) {
+      // `metrics: null` removes a pipeline (the Helm chart's idiom).
+      if (!isMapping(pipeline)) continue;
       for (const recv of pipeline.receivers || []) {
         if (!seen.has(`r:${recv}`)) {
           seen.add(`r:${recv}`);
@@ -2456,7 +2466,7 @@ function collectionEvidenceOf(relPath, content, catalogue) {
       return `${relPath} (exporter config: ${entry?.id ?? 'unknown'})`;
     }
     if (kind === 'helm-values') {
-      const jobs = jobsOf(parseYamlDocs(content).map(valuesCollectorConfig).filter(Boolean)
+      const jobs = jobsOf(parseYamlDocs(content).flatMap(valuesCollectorConfigs)
         .flatMap(c => collectorScrapeReceivers(c).map(r => r.config)));
       return jobs.length ? `${relPath} (collector scrape jobs: ${jobs.join(', ')})` : null;
     }

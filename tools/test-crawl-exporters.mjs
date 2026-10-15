@@ -394,6 +394,22 @@ data:
     assert(job?.target_count === 2 && job.exporters[0].topic === 'mq' && r.canonical.spec.pipelines.exporters.metrics.kind === 'kafka',
       `a collector in a chart's values.yaml (${label}): its job and its kafka exporter`, job);
   }
+  // An umbrella chart: the collector under its subchart's key.
+  const umbrella = crawlFiles({ 'charts/u/values.yaml': 'opentelemetry-collector:\n  config:\n' + COL.split('\n').map(l => (l ? `    ${l}` : l)).join('\n') }, { repoName: 'vals', now: NOW });
+  assert(json(umbrella, 'crawler.discovered.scrape_jobs')?.includes('qmgrs') && umbrella.canonical.spec.pipelines.exporters.metrics.kind === 'kafka',
+    'an umbrella chart\'s subchart collector config is read', ann(umbrella)['crawler.discovered.scrape_jobs']);
+  // A collector config this walk cannot read never costs the values file
+  // its images; `pipelines.metrics: null` (the chart's way to drop a
+  // pipeline) is skipped, in values and in a plain collector file alike.
+  const LOKI = 'loki:\n  image:\n    repository: grafana/loki\n    tag: 3.0.0\n';
+  const nullPipe = crawlFiles({ 'charts/c/values.yaml': `${LOKI}config:\n  receivers:\n    otlp: {}\n  exporters:\n    kafka: {topic: t}\n  service:\n    pipelines:\n      metrics: null\n      traces: { receivers: [otlp], exporters: [kafka] }\n` }, { repoName: 'vals', now: NOW });
+  assert(nullPipe.canonical.spec.telemetry.backends.some(b => b.product === 'loki') && nullPipe.canonical.spec.pipelines.exporters.traces.kind === 'kafka'
+    && !nullPipe.summary.warnings.some(w => /could not be read|Failed to parse/.test(w)), 'a null pipeline is skipped; the images are read', nullPipe.summary.warnings);
+  const broken = crawlFiles({ 'charts/c/values.yaml': `${LOKI}config:\n  receivers:\n    otlp: {}\n  exporters:\n    kafka: {topic: t}\n  service:\n    pipelines:\n      metrics: { receivers: [1], exporters: [kafka] }\n` }, { repoName: 'vals', now: NOW });
+  assert(broken.canonical.spec.telemetry.backends.some(b => b.product === 'loki')
+    && broken.summary.warnings.some(w => /^The collector config in charts\/c\/values\.yaml could not be read \(.*\); its images are read as before\.$/.test(w)),
+  'a collector config the walk cannot read is warned about and the values file keeps its images', broken.summary.warnings);
+  assert(detectArtefactKind('a.yaml', 'a: 1\n', null) === 'unknown', 'detectArtefactKind takes null options, as before');
   // The environment scope names an excluded values file or Helm template
   // that carries scrape jobs, as it names a plain collector config.
   const TPL = 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ include "c.fullname" . }}\ndata:\n  relay.yaml: |\n' + COL.split('\n').map(l => (l ? `    ${l}` : l)).join('\n');
