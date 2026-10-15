@@ -66,7 +66,11 @@
 // then retried). Every request to a child server, in this file and M1's,
 // goes out on a connection of its own (serverFetch): a stand-in server that
 // closes a kept-alive socket when a request arrives on it fails plain fetches,
-// as C3 failed under load, and no request serverFetch sends.
+// as C3 failed under load, and no request serverFetch sends. Its body goes to
+// fetch as one buffer (a FormData as the bytes and Content-Type fetch gives
+// it), so it leaves in the headers' write: a server that answers from the
+// headers and closes leaves no tail unread, which would reset the connection
+// — C6's multipart, streamed in parts, failed so on Windows.
 //
 // C3b the taxonomy: a child started with OBSERVOGRAM_TAXONOMY and this
 // process bound to the same document through studio/taxonomy.mjs answer the
@@ -592,11 +596,18 @@ const answerOf = async (r) => ({ status: r.status, statusText: r.statusText, hea
 // Every request to a child server goes out on a connection of its own. Between two of them this process computes the
 // shim's answer synchronously (seconds for krystaline under load), and fetch's idle timer advances only while the event
 // loop turns: it sends the next request on a socket the server, in its own process, closed at its 5 s keep-alive —
-// `fetch failed` (UND_ERR_SOCKET, other side closed), red for no parity reason. C3 pins it, here and in M1's file.
-const serverFetch = (url, init = {}) => {
+// `fetch failed` (UND_ERR_SOCKET, other side closed), red for no parity reason. And a body goes out as one buffer, in
+// the same write as the headers: fetch streams a FormData in parts (its closing boundary a write of its own), the
+// server answers a body it does not parse (multipart) from the headers alone and, the connection being close, closes
+// with the tail unread — an RST, which on Windows discards the answer before fetch has read it (`fetch failed`,
+// ECONNRESET). Sent whole, the request is read with its headers and the server closes with nothing unread. The bytes
+// on the wire are the same (the Content-Type, boundary included, is the one fetch would send). C3 pins it, here and in
+// M1's file.
+const serverFetch = async (url, init = {}) => {
   const headers = new Headers(init.headers);
   headers.set('connection', 'close');
-  return fetch(url, { ...init, headers });
+  const request = new Request(url, { ...init, headers });
+  return fetch(url, { ...init, headers: request.headers, body: request.body && await request.arrayBuffer() });
 };
 // '' when the two answers are equal, else what differs — in a sentence, since a body can be a megabyte.
 function difference(server, shim) {
@@ -763,6 +774,26 @@ test('C3 GET /api/diff from the source, body for body: every scopeMode spelling 
   const plain = await fourTo(fetch);
   assert.ok(plain.includes('fetch failed: UND_ERR_SOCKET'), `plain fetch sends a request on a kept-alive socket the server closes, and fails: ${plain.join(', ')}`);
   assert.deepEqual(await fourTo(serverFetch), ['ok', 'ok', 'ok', 'ok'], 'serverFetch: one connection per request');
+  // And a body goes to fetch as one buffer, so it leaves in the headers' write: a FormData, which fetch would stream in
+  // parts (the closing boundary a write of its own, which a server answering from the headers can leave unread when it
+  // closes — an RST, `fetch failed` on Windows), goes as the bytes and Content-Type fetch gives it, whole.
+  const sent = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { sent.push(init); return new Response('ok'); };
+  const form = new FormData();
+  form.set('packBId', 'x');
+  try {
+    await serverFetch('http://127.0.0.1:9/', { method: 'POST', body: form });
+    await serverFetch('http://127.0.0.1:9/');
+  } finally { globalThis.fetch = realFetch; }
+  assert.ok(sent[0].body instanceof ArrayBuffer, `serverFetch sends a FormData as one buffer, not ${sent[0].body?.constructor?.name}`);
+  const boundaryOf = (h) => /^multipart\/form-data; boundary=(\S+)$/.exec(new Headers(h).get('content-type'))?.[1];
+  const reference = new Request('http://127.0.0.1:9/', { method: 'POST', body: form });
+  const [boundary, referenceBoundary] = [boundaryOf(sent[0].headers), boundaryOf(reference.headers)];
+  assert.ok(boundary, 'with the multipart Content-Type fetch gives a FormData');
+  assert.equal(Buffer.from(sent[0].body).toString().replaceAll(boundary, 'B'), Buffer.from(await reference.arrayBuffer()).toString().replaceAll(referenceBoundary, 'B'), 'the bytes fetch serializes the FormData to');
+  assert.equal(new Headers(sent[0].headers).get('connection'), 'close');
+  assert.equal(sent[1].body, null, 'a GET has no body');
   const PARITY_FILES = ['tools/test-bundle-compare.mjs', 'tools/test-bundle-compare-pairs.mjs'];
   const [here, inM1] = PARITY_FILES.map((file) => /^const serverFetch = [\s\S]*?^};$/m.exec(read(file))?.[0]);
   assert.ok(here, 'this file defines serverFetch at the top level');
