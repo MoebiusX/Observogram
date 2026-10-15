@@ -202,7 +202,7 @@ const json = (r, key) => JSON.parse(ann(r)[key] ?? 'null');
   assert(detectArtefactKind('test/fixtures/ibm-mq.prom', PROM) === 'unknown' && detectArtefactKind('src/x.test.metrics', PROM) === 'unknown'
     && detectArtefactKind('testdata/a.prom', PROM) === 'unknown'
     && ['src/__fixtures__/node.prom', 'test-data/node.prom', 'test_fixtures/a.prom', 'x/__mocks__/a.metrics', 'mocks/a.prom', 'spec/a.prom',
-      'e2e/mq.prom', 'integration-tests/mq.prom', 'e2e-tests/mq.prom', 'unit_tests/mq.prom', 'testing/mq.prom', 'src/__snapshots__/mq.prom', 'exp/mq_spec.prom', 'exp/mq.spec.prom'].every(p => detectArtefactKind(p, PROM) === 'unknown'),
+      'e2e/mq.prom', 'integration-tests/mq.prom', 'src/testFixtures/resources/node.prom', 'testfixtures/a.prom', 'src/integrationTest/resources/mq.prom', 'unittests/a.prom', 'e2etests/a.prom', 'e2e-tests/mq.prom', 'unit_tests/mq.prom', 'testing/mq.prom', 'src/__snapshots__/mq.prom', 'exp/mq_spec.prom', 'exp/mq.spec.prom'].every(p => detectArtefactKind(p, PROM) === 'unknown'),
   'never from a test, fixture or mock path, in any of the usual spellings');
   assert(['snapshots/ibm-mq.prom', 'exporters/latest/mq.prom', 'contest/mq.prom', 'attestation/mq.prom'].every(p => detectArtefactKind(p, PROM) === 'exposition-snapshot'),
     'a folder that only contains such a word in a longer one is not a test folder');
@@ -373,6 +373,30 @@ service:
       && JSON.stringify(split.canonical.spec.pipelines.receivers) === '[{"name":"prometheus"}]' && !split.summary.warnings.some(w => /metrics-capable/.test(w)),
     `a split config with a scrape receiver (${a} first): the job leaves by the declared pipeline`, [job, split.canonical.spec.pipelines, split.summary.discovered.pipelines]);
   }
+  // A config WITH pipelines whose receiver no metrics pipeline lists (only
+  // traces here, or `metrics: null`): another file's metrics pipeline that
+  // lists it says where its jobs go.
+  for (const pipes of ['    traces: { receivers: [otlp], exporters: [otlp] }\n', '    metrics: null\n    traces: { receivers: [otlp], exporters: [otlp] }\n']) {
+    const tracesOnly = 'receivers:\n  otlp: {}\n  prometheus:\n    config:\n      scrape_configs:\n        - job_name: mq\n          static_configs: [{ targets: ["a:1"] }]\nexporters:\n  otlp: {}\nservice:\n  pipelines:\n' + pipes;
+    const metricsFile = 'receivers:\n  prometheus: {}\nexporters:\n  kafka:\n    topic: mq-metrics\nservice:\n  pipelines:\n    metrics: { receivers: [prometheus], exporters: [kafka] }\n';
+    const r = crawlFiles({ 'otel/a.yaml': tracesOnly, 'otel/b.yaml': metricsFile }, { repoName: 'col', now: NOW });
+    assert(JSON.stringify(json(r, 'crawler.discovered.scrape_job_origins').mq.exporters) === '[{"name":"kafka","kind":"kafka","topic":"mq-metrics"}]',
+      'a receiver its own file\'s pipelines do not list for metrics leaves by the other file\'s metrics pipeline', json(r, 'crawler.discovered.scrape_job_origins').mq);
+  }
+  // A guess no job carries (its receiver's jobs are settled elsewhere, or it
+  // has none) is not warned about.
+  const spur = crawlFiles({
+    'otel/a.yaml': A.replace('exporters:\n', 'receivers2: {}\nexporters:\n').replace('receivers:\n  prometheus/mq:', 'receivers:\n  prometheus/empty:\n    config:\n      scrape_configs: []\n  prometheus/mq:'),
+    'otel/b.yaml': B,
+  }, { repoName: 'col', now: NOW });
+  assert(!spur.summary.warnings.some(w => /metrics-capable/.test(w)) && spur.canonical.spec.pipelines.exporters.metrics.kind === 'prometheusremotewrite',
+    'no first-of-several warning for a guess no job and no spec field carries', spur.summary.warnings);
+  // A malformed job in a collector config is warned about and skipped; its
+  // sibling and the rest of the file (a second document) are read.
+  const mal = crawlFiles({ 'otel/otel-collector.yaml': 'receivers:\n  prometheus:\n    config:\n      scrape_configs:\n        - job_name: bad\n          static_configs: { targets: [x] }\n        - job_name: good\n          static_configs: [{ targets: ["g:1"] }]\nexporters:\n  kafka: { topic: t }\nservice:\n  pipelines:\n    metrics: { receivers: [prometheus], exporters: [kafka] }\n---\nreceivers:\n  otlp: {}\nexporters:\n  otlp: {}\nservice:\n  pipelines:\n    traces: { receivers: [otlp], exporters: [otlp] }\n' }, { repoName: 'col', now: NOW });
+  assert(JSON.stringify(json(mal, 'crawler.discovered.scrape_jobs')) === '["good"]' && mal.canonical.spec.pipelines.exporters.traces.kind === 'otlp' && mal.summary.discovered.pipelines === 2
+    && mal.summary.warnings.some(w => /^Scrape job 'bad' of receiver prometheus in otel\/otel-collector\.yaml could not be read \(.*\); the rest of the config is read\.$/.test(w))
+    && !mal.summary.warnings.some(w => /Failed to parse/.test(w)), 'a malformed collector job costs only itself', mal.summary.warnings);
   // Alone, the same config's job carries the guess, and the warning says so.
   const alone = crawlFiles({ 'otel/a.yaml': A }, { repoName: 'col', now: NOW });
   assert(json(alone, 'crawler.discovered.scrape_job_origins').qmgrs.exporters[0].name === 'otlp' && alone.summary.warnings.some(w => /taken to be the first, 'otlp'/.test(w)),
@@ -423,6 +447,14 @@ data:
     assert(job?.target_count === 2 && job.exporters[0].topic === 'mq' && r.canonical.spec.pipelines.exporters.metrics.kind === 'kafka',
       `a collector in a chart's values.yaml (${label}): its job and its kafka exporter`, job);
   }
+  // A disabled subchart's collector config is not read: in the same file, or
+  // by the environment's overlay.
+  const sub = 'opentelemetry-collector:\n  enabled: ENABLED\n  config:\n' + COL.split('\n').map(l => (l ? `    ${l}` : l)).join('\n');
+  const off = crawlFiles({ 'charts/u/values.yaml': sub.replace('ENABLED', 'false') }, { repoName: 'vals', now: NOW });
+  const overlay = crawlFiles({ 'charts/u/values.yaml': sub.replace('ENABLED', 'true'), 'charts/u/values-prod.yaml': 'opentelemetry-collector:\n  enabled: false\n' }, { repoName: 'vals', environment: 'prod', now: NOW });
+  assert(!('crawler.discovered.scrape_jobs' in ann(off)) && !('crawler.discovered.scrape_jobs' in ann(overlay))
+    && off.canonical.spec.pipelines.exporters.metrics.kind === 'prometheusremotewrite' && overlay.canonical.spec.pipelines.exporters.metrics.kind === 'prometheusremotewrite',
+  'a disabled umbrella subchart\'s collector is not read (same file, prod overlay)', [ann(off)['crawler.discovered.scrape_jobs'], ann(overlay)['crawler.discovered.scrape_jobs']]);
   // An umbrella chart: the collector under its subchart's key.
   const umbrella = crawlFiles({ 'charts/u/values.yaml': 'opentelemetry-collector:\n  config:\n' + COL.split('\n').map(l => (l ? `    ${l}` : l)).join('\n') }, { repoName: 'vals', now: NOW });
   assert(json(umbrella, 'crawler.discovered.scrape_jobs')?.includes('qmgrs') && umbrella.canonical.spec.pipelines.exporters.metrics.kind === 'kafka',
@@ -567,6 +599,9 @@ try {
     [['--exporter', `${base}/metrics`, '--from', 'qm1.prom'], 2, 'packc emit: pass --exporter or --from, not both\n'],
     [['--exporter', `${base}/metrics`, '--bogus'], 2, null],
     [['http://user:SECRET4@127.0.0.1:1/metrics?token=SECRET5'], 2, null],
+    [['mq:9157/metrics?token=SECRET8'], 2, null],
+    [['--from', 'http://svc:SECRET9@mq:9157/metrics'], 2, 'packc emit: --from takes a saved exposition file, not a URL (the value is not shown); scrape a URL with --exporter\n'],
+    [['--from=mq:9157/metrics'], 2, 'packc emit: --from takes a saved exposition file, not a URL (the value is not shown); scrape a URL with --exporter\n'],
     [['--exporter=http://user:SECRET6@127.0.0.1:1/metrics'], 2, 'packc emit: the --exporter URL carries credentials, which are neither sent nor recorded; save the exposition with your own client and pass it with --from\n'],
     [['--exporter', `${base}/cut?token=SECRET7`], 1, `packc emit: could not read the response of ${base}/cut: the connection ended before the body did\n`],
     [[], 2, null],

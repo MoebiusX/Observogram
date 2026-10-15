@@ -1947,14 +1947,17 @@ An OTel collector's prometheus receivers (`prometheus`,
 `prometheus/<name>`) are read for their `config.scrape_configs`, with or
 without a `service:` block (a Helm chart's `files/` copy has none), in a
 config file, a Helm ConfigMap, or a chart's `values*.yaml` (at its top level,
-under `config:`, or under a subchart's `<key>.config:`).
+under `config:`, or under a subchart's `<key>.config:` unless the subchart
+is disabled).
 
 - Each job is in `crawler.discovered.scrape_jobs`. Its entry in
   `crawler.discovered.scrape_job_origins` adds `via: otel-collector`, the
   `receiver`, the `target_count` of its static targets, and the `exporters`
   its samples leave by: the exporters of the metrics pipelines that list the
-  receiver, in the same file or another (a config split across `--config`
-  files), or, when none does, the metrics exporter the config names.
+  receiver, in the same file or, when none there does, another (a config
+  split across `--config` files), or, when none does, the metrics exporter a
+  pipeline-less config names. A job that cannot be read is warned about and
+  skipped; the rest of the config is read.
   Each exporter is given as `{ name, kind, topic | endpoint }`: a kafka
   exporter's metrics topic, any other's endpoint reduced by `safeSourceUrl`
   (no userinfo, query or fragment).

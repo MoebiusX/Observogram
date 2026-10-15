@@ -1902,7 +1902,7 @@ function walkHelmValues(f, backends, pipelines, evidence, summary, disabledCompo
     // it declares beats an image's inference; a config this walk cannot read
     // (the chart's `pipelines.metrics: null` drops a pipeline) is warned
     // about and never costs the values file its images.
-    for (const collector of valuesCollectorConfigs(obj)) {
+    for (const collector of valuesCollectorConfigs(obj, disabledComponents)) {
       try { walkOtelCollectorDoc(collector, f.relPath, pipelines, scrapeJobs, evidence, summary, collectorState); }
       catch (e) { summary.warnings.push(`The collector config in ${f.relPath} could not be read (${e.message}); its images are read as before.`); }
     }
@@ -1911,12 +1911,16 @@ function walkHelmValues(f, backends, pipelines, evidence, summary, disabledCompo
 }
 
 // The collector configs a Helm values document carries: the document
-// itself, its `config:`, or a subchart's `<key>.config:` (an umbrella chart).
-function valuesCollectorConfigs(obj) {
+// itself, its `config:`, or a subchart's `<key>.config:` (an umbrella
+// chart) — never a subchart the environment disables (`disabled`, the
+// merged `enabled: false` toggles) or this document sets `enabled: false`.
+function valuesCollectorConfigs(obj, disabled = new Set()) {
   if (!isMapping(obj)) return [];
   if (looksLikeOtelCollector(obj)) return [obj];
   if (isMapping(obj.config) && looksLikeOtelCollector(obj.config)) return [obj.config];
-  return Object.values(obj).filter(v => isMapping(v?.config) && looksLikeOtelCollector(v.config)).map(v => v.config);
+  return Object.entries(obj)
+    .filter(([key, v]) => !disabled.has(key) && v?.enabled !== false && isMapping(v?.config) && looksLikeOtelCollector(v.config))
+    .map(([, v]) => v.config);
 }
 
 function workloadPodSpec(obj) {
@@ -2202,33 +2206,43 @@ function walkPrometheusScrapeConfig(f, scrapeJobs, evidence, summary) {
 // One Prometheus config document's scrape jobs — a standalone prometheus.yml
 // or the `config:` of an OTel collector's prometheus receiver (`collector`
 // then names the receiver and the exporters its samples leave by).
+// Answers how many jobs it added. In a collector config a job this walk
+// cannot read is warned about and skipped (its siblings and the rest of the
+// config are still read); a standalone prometheus.yml reads as before.
 function walkScrapeConfigDoc(obj, origin, scrapeJobs, evidence, summary, collector = null) {
-  if (!Array.isArray(obj?.scrape_configs)) return;
+  if (!Array.isArray(obj?.scrape_configs)) return 0;
+  let added = 0;
   for (const cfg of obj.scrape_configs) {
     const job = String(cfg?.job_name || '').trim();
     if (!job) continue;
-    // Promtail and Alloy use the same `scrape_configs` / `job_name` keys
-    // to say which LOG FILES to tail. Such an entry is not a metrics
-    // scrape job and never appears among a metrics store's targets;
-    // declaring it made it read "not live" on every platform.
-    if (isLogScrapeConfig(cfg, obj)) {
-      summary.discovered.logScrapeConfigs = (summary.discovered.logScrapeConfigs || 0) + 1;
-      continue;
-    }
-    addScrapeJob(scrapeJobs, evidence, summary, {
-      job,
-      metrics_path: cfg.metrics_path || '/metrics',
-      interval: cfg.scrape_interval || obj.global?.scrape_interval || null,
-      targets: scrapeTargets(cfg),
-      origin,
-      ...(collector ? {
-        via: 'otel-collector',
-        receiver: collector.receiver,
-        target_count: (Array.isArray(cfg.static_configs) ? cfg.static_configs : []).reduce((n, sc) => n + (Array.isArray(sc?.targets) ? sc.targets.filter(Boolean).length : 0), 0),
-        exporters: collector.exporters,
-      } : {}),
-    });
+    const read = () => {
+      // Promtail and Alloy use the same `scrape_configs` / `job_name` keys
+      // to say which LOG FILES to tail. Such an entry is not a metrics
+      // scrape job and never appears among a metrics store's targets;
+      // declaring it made it read "not live" on every platform.
+      if (isLogScrapeConfig(cfg, obj)) {
+        summary.discovered.logScrapeConfigs = (summary.discovered.logScrapeConfigs || 0) + 1;
+        return;
+      }
+      if (addScrapeJob(scrapeJobs, evidence, summary, {
+        job,
+        metrics_path: cfg.metrics_path || '/metrics',
+        interval: cfg.scrape_interval || obj.global?.scrape_interval || null,
+        targets: scrapeTargets(cfg),
+        origin,
+        ...(collector ? {
+          via: 'otel-collector',
+          receiver: collector.receiver,
+          target_count: (Array.isArray(cfg.static_configs) ? cfg.static_configs : []).reduce((n, sc) => n + (Array.isArray(sc?.targets) ? sc.targets.filter(Boolean).length : 0), 0),
+          exporters: collector.exporters,
+        } : {}),
+      })) added++;
+    };
+    if (!collector) { read(); continue; }
+    try { read(); }
+    catch (e) { summary.warnings.push(`Scrape job '${job}' of receiver ${collector.receiver} in ${origin} could not be read (${e.message}); the rest of the config is read.`); }
   }
+  return added;
 }
 
 // A log-collection scrape config (Promtail, Alloy's loki.source): it has
@@ -2258,11 +2272,12 @@ function walkActuatorMetricsConfig(f, scrapeJobs, evidence, summary, repoName = 
 }
 
 function addScrapeJob(scrapeJobs, evidence, summary, item) {
-  if (!item?.job) return;
-  if (scrapeJobs.some(j => j.job === item.job && j.origin === item.origin)) return;
+  if (!item?.job) return false;
+  if (scrapeJobs.some(j => j.job === item.job && j.origin === item.origin)) return false;
   scrapeJobs.push(item);
   if (!evidence[`scrape.${item.job}`]) evidence[`scrape.${item.job}`] = item.origin;
   summary.discovered.scrapeJobs++;
+  return true;
 }
 
 function scrapeTargets(cfg) {
@@ -2373,10 +2388,11 @@ function walkOtelCollectorDoc(obj, relPath, pipelines, scrapeJobs, evidence, sum
         if (!/^metrics/i.test(sig) || !Array.isArray(p?.receivers) || !p.receivers.includes(key)) continue;
         for (const exp of p.exporters || []) if (!names.includes(exp)) names.push(exp);
       }
-      walkScrapeConfigDoc(config, relPath, scrapeJobs, evidence, summary, {
-        receiver: key,
-        exporters: names.map(n => collectorExporterDetail(n, exporterCfgs[n])),
-      });
+      const exporters = names.map(n => collectorExporterDetail(n, exporterCfgs[n]));
+      const jobs = walkScrapeConfigDoc(config, relPath, scrapeJobs, evidence, summary, { receiver: key, exporters });
+      // No metrics pipeline here lists the receiver: another file's may (a
+      // config split across --config files), settled after the walk.
+      if (!names.length) state.guesses.push({ relPath, candidates: [], cfgs: exporterCfgs, groups: [{ receiver: key, exporters, jobs }], receivers: [] });
     }
     return;
   }
@@ -2393,8 +2409,8 @@ function walkOtelCollectorDoc(obj, relPath, pipelines, scrapeJobs, evidence, sum
   for (const { key, config } of scrapeReceivers) {
     // One array per receiver, shared with its jobs' entries (patched in place).
     const exporters = chosen ? [collectorExporterDetail(chosen, exporterCfgs[chosen])] : [];
-    groups.push({ receiver: key, exporters });
-    walkScrapeConfigDoc(config, relPath, scrapeJobs, evidence, summary, { receiver: key, exporters });
+    const jobs = walkScrapeConfigDoc(config, relPath, scrapeJobs, evidence, summary, { receiver: key, exporters });
+    groups.push({ receiver: key, exporters, jobs });
   }
   state.guesses.push({ relPath, candidates, cfgs: exporterCfgs, groups, receivers: scrapeReceivers.map(({ key }) => key.split('/')[0]) });
 }
@@ -2427,7 +2443,7 @@ function settleCollectorGuesses(state, pipelines, evidence, summary) {
       if (names.length) {
         group.exporters.splice(0, group.exporters.length,
           ...names.map(n => collectorExporterDetail(n, isMapping(g.cfgs[n]) && Object.keys(g.cfgs[n]).length ? g.cfgs[n] : cfgOf[n])));
-      } else if (group.exporters.length) {
+      } else if (group.exporters.length && group.jobs) {
         warnFirstOfSeveral(g);
       }
     }
@@ -2509,7 +2525,7 @@ function collectionEvidenceOf(relPath, content, catalogue) {
       return `${relPath} (exporter config: ${entry?.id ?? 'unknown'})`;
     }
     if (kind === 'helm-values') {
-      const jobs = jobsOf(parseYamlDocs(content).flatMap(valuesCollectorConfigs)
+      const jobs = jobsOf(parseYamlDocs(content).flatMap(d => valuesCollectorConfigs(d))
         .flatMap(c => collectorScrapeReceivers(c).map(r => r.config)));
       return jobs.length ? `${relPath} (collector scrape jobs: ${jobs.join(', ')})` : null;
     }
