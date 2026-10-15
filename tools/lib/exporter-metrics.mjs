@@ -55,23 +55,24 @@ export function isExpositionSnapshotPath(relPath) {
 }
 
 /**
- * A URL as it may be recorded: scheme, host, port and path — never the
- * userinfo, query or fragment, where a credential rides. A value that is not
- * a `scheme://` URL (`prometheus:9090`, `${env:ENDPOINT}`) loses anything up
- * to an `@` and from a `?` or `#`.
+ * A URL as it may be recorded: never the userinfo, query or fragment, where a
+ * credential rides. Textual, never a URL parse: a password may hold `/`, `?`
+ * or `@`, which end a parsed authority early and leave the rest of the secret
+ * in the "host" or "path". So everything before the LAST `@` goes (a value
+ * whose path or query holds an `@` keeps only what follows it, which loses
+ * the host rather than risk a credential), then everything from the first
+ * `?` or `#`. A leading `scheme://` or `//` is kept; a value that is not a
+ * URL at all (`prometheus:9090`, `${env:ENDPOINT}`) passes through the same
+ * rule.
  */
 export function safeSourceUrl(raw) {
   const s = String(raw ?? '').trim();
   if (!s) return '';
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(s)) {
-    try {
-      const u = new URL(s);
-      // The path as written: `http://h:9157` stays without the `/` URL adds.
-      const path = /^[^:]+:\/\/[^/?#]*\//.test(s) ? u.pathname : '';
-      return `${u.protocol}//${u.host}${path}`;
-    } catch { /* fall through to the textual rule */ }
-  }
-  return s.replace(/^([A-Za-z][A-Za-z0-9+.-]*:\/\/)?[^\s/@]*@/, '$1').replace(/[?#].*$/, '');
+  const prefix = /^(?:[A-Za-z][A-Za-z0-9+.-]*:)?\/\//.exec(s)?.[0] ?? '';
+  let rest = s.slice(prefix.length);
+  const at = rest.lastIndexOf('@');
+  if (at >= 0) rest = rest.slice(at + 1);
+  return prefix + rest.replace(/[?#].*$/, '');
 }
 
 function parseSampleLine(line) {

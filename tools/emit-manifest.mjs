@@ -26,8 +26,10 @@
  *   exit 1  the scrape failed: unreachable, a redirect, a status other than 200, no metric families
  *   exit 2  usage: no source, both sources, an unknown flag, a URL that is not http(s) or carries credentials
  *
- * The recorded `source` is the URL without userinfo, query or fragment. A
- * redirect is refused, not followed: pass the URL it names.
+ * The recorded `source` is the URL without userinfo, query or fragment
+ * (tools/lib/exporter-metrics.mjs safeSourceUrl). A redirect is refused, not
+ * followed: the refusal names its target, the query as keys only — pass that
+ * URL with the values the exporter expects.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -56,6 +58,19 @@ function parseArgs(argv) {
   return out;
 }
 
+// A redirect is named, never followed: its target without userinfo, and its
+// query as keys only (`?format=…`) — a value may be a token — so the URL to
+// pass is the one shown with the values the exporter expects.
+function redirectRefusal(url, status, location) {
+  let target = null;
+  try { target = location ? new URL(location, url) : null; } catch { /* not a URL: named as such */ }
+  const keys = target ? [...new Set([...target.searchParams.keys()])] : [];
+  const to = !location ? ''
+    : !target ? ' to a location that is not a URL'
+      : ` to ${safeSourceUrl(target.href)}${keys.length ? `?${keys.map(k => `${encodeURIComponent(k)}=…`).join('&')} (query values not shown)` : ''}`;
+  return `${safeSourceUrl(url)} answered ${status}, a redirect${to}; it is not followed — pass the URL the exporter serves its metrics at${keys.length ? ', with the query values it expects' : ''}`;
+}
+
 async function scrape(url, timeoutSeconds) {
   let res;
   try {
@@ -68,10 +83,7 @@ async function scrape(url, timeoutSeconds) {
     const why = e?.name === 'TimeoutError' ? `no answer within ${timeoutSeconds}s (raise --timeout)` : (e?.cause?.message || e?.message || String(e));
     fail(1, `could not scrape ${safeSourceUrl(url)}: ${why}`);
   }
-  if (res.status >= 300 && res.status < 400) {
-    const to = res.headers.get('location');
-    fail(1, `${safeSourceUrl(url)} answered ${res.status}, a redirect${to ? ` to ${safeSourceUrl(new URL(to, url).href)}` : ''}; it is not followed — pass the exporter's own metrics URL`);
-  }
+  if (res.status >= 300 && res.status < 400) fail(1, redirectRefusal(url, res.status, res.headers.get('location')));
   if (res.status !== 200) fail(1, `${safeSourceUrl(url)} answered ${res.status}; a metrics endpoint answers 200`);
   return res.text();
 }
@@ -92,7 +104,7 @@ if (args.timestamp) {
 let text, source, defaultName;
 if (args.exporter) {
   let url;
-  try { url = new URL(args.exporter); } catch { fail(2, `--exporter '${args.exporter}' is not a URL (e.g. http://mq-exporter:9157/metrics)`); }
+  try { url = new URL(args.exporter); } catch { fail(2, `--exporter '${safeSourceUrl(args.exporter)}' is not a URL (e.g. http://mq-exporter:9157/metrics); shown without anything before an @ or after a ? or #`); }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') fail(2, `--exporter must be an http or https URL, not ${url.protocol}`);
   if (url.username || url.password) fail(2, 'the --exporter URL carries credentials, which are neither sent nor recorded; save the exposition with your own client and pass it with --from');
   text = await scrape(url.href, timeout);

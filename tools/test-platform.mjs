@@ -65,7 +65,6 @@ const PATHNAME_ALLOWED = Object.freeze({
   'server/routes/mcp-settings.mjs': 2,  // an MCP server's settings URL path, for a refusal and the audit row
   'server/test-auth-oidc.mjs': 4,       // the fake IdP's HTTP request paths
   'tools/build-studio-bundle.mjs': 1,   // a --pack-url (http) path, for an id
-  'tools/lib/exporter-metrics.mjs': 1,  // an exporter or collector endpoint's path, recorded without userinfo or query
   'tools/lib/journey.mjs': 1,           // a notify hook URL's path and query, redacted from a delivery error
   'tools/record-mcp-fixtures.mjs': 1,   // an MCP URL, printed without its query
   'tools/test-crawl-exporters.mjs': 1,  // the fake exporter's HTTP request path

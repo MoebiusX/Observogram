@@ -282,7 +282,7 @@ service:
 `;
   const r = crawlFiles({ 'deploy/otel-collector.yaml': COL }, { repoName: 'col', now: NOW });
   const jobs = json(r, 'crawler.discovered.scrape_job_origins');
-  const leave = [{ name: 'prometheusremotewrite', kind: 'prometheusremotewrite', endpoint: 'https://mimir.example/api/v1/push' }, { name: 'kafka/metrics', kind: 'kafka', topic: 'legacy-topic' }];
+  const leave = [{ name: 'prometheusremotewrite', kind: 'prometheusremotewrite', endpoint: 'https://mimir.example:443/api/v1/push' }, { name: 'kafka/metrics', kind: 'kafka', topic: 'legacy-topic' }];
   assert(JSON.stringify(jobs.qmgrs.exporters) === JSON.stringify(leave) && jobs.qmgrs.target_count === 3 && jobs.qmgrs.interval === '15s',
     'the job leaves by every metrics pipeline that lists its receiver; the endpoint loses userinfo, query and fragment', jobs.qmgrs);
   assert(jobs.node.target_count === 0 && JSON.stringify(jobs.node.targets) === '["kubernetes:pod"]', 'a discovered-target job counts no static target', jobs.node);
@@ -291,6 +291,23 @@ service:
   const pe = r.canonical.spec.pipelines.exporters;
   assert(JSON.stringify([pe.metrics, pe.traces, pe.logs]) === '[{"kind":"prometheusremotewrite"},{"kind":"otlp"},{"kind":"elasticsearch"}]',
     'the pipelines read as before', r.canonical.spec.pipelines.exporters);
+  // Every spelling of a credential: a password holding `@`, `/` or `?`, no
+  // scheme, a scheme-relative URL, one a URL parser reads as host:port/path.
+  const SECRETS = [
+    ['user:p@ss@otel:4317', 'otel:4317'],
+    ['user:pa/ss@otel:4317', 'otel:4317'],
+    ['https://user:pa/ss@otel:4317/v1', 'https://otel:4317/v1'],
+    ['https://user:12/ss@otel/v1', 'https://otel/v1'],
+    ['https://u:pa?ss@h/x', 'https://h/x'],
+    ['//u:p@h/metrics', '//h/metrics'],
+    ['HTTPS://U:P@H:1/m?t=1#f', 'HTTPS://H:1/m'],
+    ['svc:Zx9/Qk+SECRET==@otel-gw:4317', 'otel-gw:4317'],
+  ];
+  assert(SECRETS.every(([raw, want]) => safeSourceUrl(raw) === want), 'safeSourceUrl drops everything before the last @ and from the first ? or #',
+    SECRETS.map(([raw]) => safeSourceUrl(raw)), SECRETS.map(([, want]) => want));
+  const leak = crawlFiles({ 'otel/collector.yaml': `receivers:\n  prometheus:\n    config:\n      scrape_configs:\n        - job_name: mq\n          static_configs: [{ targets: ["a:1"] }]\nexporters:\n  otlp:\n    endpoint: "svc:Zx9/Qk+SECRETPW@otel-gw:4317"\n` }, { repoName: 'col', now: NOW });
+  assert(!JSON.stringify(leak.canonical).includes('SECRET') && json(leak, 'crawler.discovered.scrape_job_origins').mq.exporters[0].endpoint === 'otel-gw:4317',
+    'a collector endpoint whose password holds `/` reaches the pack without it', json(leak, 'crawler.discovered.scrape_job_origins').mq);
   assert(safeSourceUrl('prometheus:9090') === 'prometheus:9090' && safeSourceUrl('${env:ENDPOINT}') === '${env:ENDPOINT}'
     && safeSourceUrl('u:p@host:4317?x=1') === 'host:4317' && safeSourceUrl('http://h:9157') === 'http://h:9157' && safeSourceUrl('http://h:9157/') === 'http://h:9157/',
   'safeSourceUrl: a non-URL keeps its spelling less userinfo and query');
@@ -363,6 +380,7 @@ const server = createServer((req, res) => {
   if (path === '/metrics') { res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4' }); res.end(EXPOSITION); return; }
   if (path === '/moved') { res.writeHead(302, { location: '/metrics?token=abc' }); res.end(); return; }
   if (path === '/empty') { res.writeHead(200); res.end('\n'); return; }
+  if (path === '/badloc') { res.writeHead(302, { location: 'http://[oops/metrics' }); res.end(); return; }
   res.writeHead(500); res.end('boom');
 });
 await new Promise(r => server.listen(0, '127.0.0.1', r));
@@ -403,7 +421,9 @@ try {
   assert(from.status === 0 && JSON.parse(from.stdout).exporter === 'qm1' && !('source' in JSON.parse(from.stdout)), '--from reads a saved exposition, named by the file', from);
 
   const refusals = [
-    [['--exporter', `${base}/moved`], 1, `packc emit: ${base}/moved answered 302, a redirect to ${base}/metrics; it is not followed — pass the exporter's own metrics URL\n`],
+    [['--exporter', `${base}/moved`], 1, `packc emit: ${base}/moved answered 302, a redirect to ${base}/metrics?token=… (query values not shown); it is not followed — pass the URL the exporter serves its metrics at, with the query values it expects\n`],
+    [['--exporter', `${base}/badloc?token=SECRET3`], 1, `packc emit: ${base}/badloc answered 302, a redirect to a location that is not a URL; it is not followed — pass the URL the exporter serves its metrics at\n`],
+    [['--exporter', '//admin:SECRET1@127.0.0.1:1/metrics'], 2, "packc emit: --exporter '//127.0.0.1:1/metrics' is not a URL (e.g. http://mq-exporter:9157/metrics); shown without anything before an @ or after a ? or #\n"],
     [['--exporter', `${base}/broken`], 1, `packc emit: ${base}/broken answered 500; a metrics endpoint answers 200\n`],
     [['--exporter', `${base}/empty`], 1, `packc emit: ${base}/empty holds no metric family (no # TYPE, # HELP or sample line)\n`],
     [['--exporter', 'http://u:p@127.0.0.1:1/metrics'], 2, 'packc emit: the --exporter URL carries credentials, which are neither sent nor recorded; save the exposition with your own client and pass it with --from\n'],
@@ -417,8 +437,9 @@ try {
     assert(out.status === code && out.stdout === '' && (message === null || out.stderr === message),
       `emit ${args.join(' ') || '(no args)'} → exit ${code}${message ? ', the reason named' : ''}`, out, { status: code, message });
   }
-  // The refusal's way out works: save it yourself, pass --from.
-  assert(from.status === 0, 'the credentials refusal\'s way out (--from) is the one that worked above');
+  // The refusals' ways out work: save it yourself and pass --from (above);
+  // the redirect's target with the query values it expects (the first run).
+  assert(from.status === 0 && ok.status === 0, 'the credentials refusal\'s --from and the redirect refusal\'s URL with its query values are the runs that worked above');
 } finally {
   server.close();
   rmSync(tmp, { recursive: true, force: true });

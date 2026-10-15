@@ -1873,7 +1873,9 @@ exposition type (`counter`, `gauge`, `histogram`, `summary`, `untyped`,
 `unknown`, `gaugehistogram`, `info`, `stateset`). An entry that has neither,
 or repeats a name, is not read and the crawl says how many; a file that is not
 a manifest is named in a warning. `source` is recorded without userinfo,
-query or fragment. Label values are never part of a manifest.
+query or fragment: everything before the last `@` and from the first `?` or
+`#` is dropped (`safeSourceUrl`, textual — a password may hold `/` or `@`).
+Label values are never part of a manifest.
 
 `packc emit --exporter <url>` (`tools/emit-manifest.mjs`) writes one from a
 live endpoint — run it in the exporter's build pipeline against the image it
@@ -1885,10 +1887,11 @@ packc emit --from saved.prom --name ibm-mq --out -     # a saved exposition, to 
 ```
 
 It scrapes once and records each family's name, type, help and label names.
-A redirect is refused, not followed (pass the URL it names); a URL with
-credentials is refused (save the exposition with your own client and pass it
-with `--from`); a status other than 200 or a response with no metric family
-exits 1.
+A redirect is refused, not followed: the refusal names its target with the
+query as keys only (`?token=…`) — pass that URL with the values the exporter
+expects. A URL with credentials is refused (save the exposition with your own
+client and pass it with `--from`). A status other than 200 or a response
+with no metric family exits 1.
 
 ### 18.2 The catalogue
 
@@ -1949,8 +1952,8 @@ without a `service:` block (a Helm chart's `files/` copy has none).
   its samples leave by: the exporters of the metrics pipelines that list the
   receiver, or, with no pipelines, the one metrics exporter the config names.
   Each exporter is given as `{ name, kind, topic | endpoint }`: a kafka
-  exporter's metrics topic, any other's endpoint without userinfo, query or
-  fragment.
+  exporter's metrics topic, any other's endpoint reduced by `safeSourceUrl`
+  (no userinfo, query or fragment).
 - That exporter's kind is `spec.pipelines.exporters.metrics`, in place of the
   `prometheusremotewrite` scaffold. When a config with no pipelines names
   several metrics exporters, the first is taken and the crawl warns.
