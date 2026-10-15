@@ -49,6 +49,19 @@ export function isMetricsManifestPath(relPath) {
   return /(^|[/\\.])metrics-manifest\.json$/i.test(String(relPath ?? ''));
 }
 
+/**
+ * A path a saved exposition is never read from: a test, spec, fixture, mock
+ * or test-data folder in any of the usual spellings (`test/`, `__tests__/`,
+ * `fixtures/`, `__fixtures__/`, `__mocks__/`, `testdata/`, `test-data/`,
+ * `test_fixtures/`, …) or a `*.test.*` / `*.spec.*` / `*_test.*` file — there
+ * an exposition is sample input, not what a deployed exporter serves.
+ */
+export function isTestOrFixturePath(relPath) {
+  const p = String(relPath ?? '').replace(/\\/g, '/').toLowerCase();
+  return /(^|\/)(?:__)?(?:tests?|specs?|fixtures?|mocks?|testdata|test[-_]?(?:data|fixtures?))(?:__)?(\/|$)/.test(p)
+    || /\.(?:test|spec)\.[a-z]+$|_test\.[a-z]+$/.test(p);
+}
+
 /** A saved exposition: `.prom` or `.metrics`. */
 export function isExpositionSnapshotPath(relPath) {
   return /\.(prom|metrics)$/i.test(String(relPath ?? ''));
@@ -114,13 +127,15 @@ function unescapeHelp(s) {
 /**
  * Parse a Prometheus / OpenMetrics text exposition into its metric families:
  * `{ families: [{ name, type, help, labels }], samples }`, families sorted by
- * name, labels in first-seen order. A sample with no # TYPE for it (or for
+ * name, labels in first-seen order. A family's name is the one Prometheus
+ * stores: an OpenMetrics counter `jobs` is `jobs_total`, an info `build` is
+ * `build_info`. A sample with no # TYPE for it (or for
  * the family its suffix names) is its own `untyped` family.
  */
 export function parseExposition(text) {
   const families = new Map();
   const family = (name) => {
-    if (!families.has(name)) families.set(name, { name, type: 'untyped', help: '', labels: [], typed: false });
+    if (!families.has(name)) families.set(name, { name, type: 'untyped', help: '', labels: [], typed: false, stored: '' });
     return families.get(name);
   };
   let samples = 0;
@@ -147,7 +162,13 @@ export function parseExposition(text) {
       for (const [type, suffixes] of Object.entries(FAMILY_SUFFIXES)) {
         const suffix = suffixes.find(s => sample.name.endsWith(s) && sample.name.length > s.length);
         const base = suffix ? families.get(sample.name.slice(0, -suffix.length)) : null;
-        if (base && base.type === type) { f = base; break; }
+        if (base && base.type === type) {
+          f = base;
+          // An OpenMetrics counter or info family is stored (and queried)
+          // under its sample's name: `jobs` → jobs_total, `build` → build_info.
+          if ((suffix === '_total' || suffix === '_info') && !f.stored) f.stored = sample.name;
+          break;
+        }
       }
     }
     if (!f) f = family(sample.name);
@@ -156,8 +177,15 @@ export function parseExposition(text) {
       if (!skip.includes(l) && !f.labels.includes(l) && f.labels.length < LABEL_CAP) f.labels.push(l);
     }
   }
+  // OpenMetrics (`# EOF`) names a counter family without `_total` and an
+  // info family without `_info`; with no sample to say so, the stored name
+  // is the family's plus that suffix.
+  const openMetrics = /^#\s*EOF\s*$/m.test(String(text ?? ''));
+  const storedName = (f) => f.stored
+    || (openMetrics && f.type === 'counter' && !f.name.endsWith('_total') ? `${f.name}_total`
+      : openMetrics && f.type === 'info' && !f.name.endsWith('_info') ? `${f.name}_info` : f.name);
   const out = [...families.values()]
-    .map(({ name, type, help, labels }) => ({ name, type, help, labels }))
+    .map((f) => ({ name: storedName(f), type: f.type, help: f.help, labels: f.labels }))
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return { families: out, samples };
 }

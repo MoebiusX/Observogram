@@ -378,8 +378,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "34004a75cde40b59a18a8b2c5d3f3b68ed0e7075d1fc5365e331d142233ea0f7",
-      "bytes": 126702,
+      "sha256": "6d287a79c23694feec56e229503c364aaa0be74991ac41a458ccd2895e0e307e",
+      "bytes": 126732,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
@@ -523,13 +523,14 @@
       "releasedExports": null
     },
     "tools/lib/exporter-metrics.mjs": {
-      "sha256": "9fb2b0456f9df4d0e54d886b9fbc2cd4e7b58a4436f5d3a067910870c68d5dd7",
-      "bytes": 16936,
+      "sha256": "a791bd00c83849b2a774b64d18ed035555ff3cdde93da73f1122dcbf5136d488",
+      "bytes": 18546,
       "exports": [
         "EXPOSITION_TYPES",
         "inferExporterFamilies",
         "isExpositionSnapshotPath",
         "isMetricsManifestPath",
+        "isTestOrFixturePath",
         "manifestFromExposition",
         "matchExporterConfig",
         "mayBeExporterConfig",

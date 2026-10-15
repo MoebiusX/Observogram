@@ -34,7 +34,7 @@ import { BACKEND_PATTERNS } from './backend-products.mjs';
 import { PROMQL_KEYWORDS, extractPromqlMetricNames } from './promql.mjs';
 import { symbolSlug as slug, packSlug } from './slug.mjs';
 import {
-  isMetricsManifestPath, isExpositionSnapshotPath, parseExposition, readMetricsManifest, safeSourceUrl,
+  isMetricsManifestPath, isExpositionSnapshotPath, isTestOrFixturePath, parseExposition, readMetricsManifest, safeSourceUrl,
   resolveExporterCatalogue, mayBeExporterConfig, matchExporterConfig, inferExporterFamilies,
 } from './exporter-metrics.mjs';
 
@@ -219,7 +219,7 @@ export function detectArtefactKind(relPath, content, { exporterCatalogue = BUILT
   // A saved /metrics response — not from a test or fixture path, where an
   // exposition is sample input, not what a deployed exporter serves.
   if (isExpositionSnapshotPath(lower)) {
-    return !isTestPath(lower) && parseExposition(content).families.length ? 'exposition-snapshot' : 'unknown';
+    return !isTestOrFixturePath(lower) && parseExposition(content).families.length ? 'exposition-snapshot' : 'unknown';
   }
   // JSON first — Grafana dashboards are the only json we care about.
   if (lower.endsWith('.json')) {

@@ -1842,7 +1842,7 @@ pure):
 | Source | Files | `origin_kind` | Confidence |
 |---|---|---|---|
 | a metrics manifest | `metrics-manifest.json`, `*.metrics-manifest.json` | `exporter-manifest` | `declared` |
-| a saved exposition | `*.prom`, `*.metrics` (never under a test or fixture path) | `exporter-snapshot` | `declared` |
+| a saved exposition | `*.prom`, `*.metrics` (never under a test, fixture or mock folder; an OpenMetrics counter or info named as stored, `_total` / `_info`) | `exporter-snapshot` | `declared` |
 | the exporter's config, read against the catalogue | any YAML whose top-level keys match a catalogue entry | `exporter-config` | `inferred` (a candidate) |
 
 A metric named in several files reads as the strongest: manifest, snapshot,

@@ -178,40 +178,48 @@ const json = (r, key) => JSON.parse(ann(r)[key] ?? 'null');
     '# TYPE jobs counter',
     'jobs_total{kind="x"} 7',
     'process_up 1',
-    '# EOF',
   ].join('\n');
   const { families, samples } = parseExposition(PROM);
   const by = Object.fromEntries(families.map(f => [f.name, f]));
-  assert(samples === 9 && families.map(f => f.name).join() === 'http_request_duration_seconds,ibmmq_queue_depth,jobs,process_up,rpc_latency',
+  assert(samples === 9 && families.map(f => f.name).join() === 'http_request_duration_seconds,ibmmq_queue_depth,jobs_total,process_up,rpc_latency',
     'families by name; suffixed samples fold into their family; an undeclared sample is its own', families.map(f => f.name));
   assert(JSON.stringify(by.ibmmq_queue_depth.labels) === '["qmgr","queue","description"]', 'label names only, a quoted value with `,` `}` and `\\"` parsed past', by.ibmmq_queue_depth);
   assert(JSON.stringify(by.http_request_duration_seconds.labels) === '["route"]' && by.http_request_duration_seconds.help === 'Latency\nsecond line',
     'a histogram family drops `le`; HELP unescaped', by.http_request_duration_seconds);
-  assert(JSON.stringify(by.rpc_latency.labels) === '["method"]' && by.jobs.type === 'counter' && JSON.stringify(by.jobs.labels) === '["kind"]'
-    && by.process_up.type === 'untyped', 'a summary drops `quantile`; `_total` folds into an OpenMetrics counter; no TYPE is untyped', [by.rpc_latency, by.jobs, by.process_up]);
+  assert(JSON.stringify(by.rpc_latency.labels) === '["method"]' && by.jobs_total.type === 'counter' && JSON.stringify(by.jobs_total.labels) === '["kind"]'
+    && by.process_up.type === 'untyped', 'a summary drops `quantile`; `_total` folds into a counter, named as stored; no TYPE is untyped', [by.rpc_latency, by.jobs_total, by.process_up]);
+  // OpenMetrics: a counter or info family is named without its suffix and
+  // stored with it; the declared names are the ones rules and dashboards read.
+  const om = parseExposition('# TYPE jobs counter\njobs_total{k="x"} 7\njobs_created{k="x"} 1\n# TYPE build info\nbuild_info{version="1"} 1\n# TYPE idle counter\n# TYPE g gauge\ng 1\n# EOF\n');
+  assert(om.families.map(f => f.name).join() === 'build_info,g,idle_total,jobs_total',
+    'OpenMetrics counters and infos are named as Prometheus stores them, with or without a sample', om.families.map(f => f.name));
+  assert(parseExposition('# TYPE jobs_total counter\njobs_total 1\n').families[0].name === 'jobs_total', 'a 0.0.4 counter keeps its name');
   assert(!JSON.stringify(families).includes('APP.IN'), 'no label value is kept');
 
   assert(scanReadsPath('exporter/ibm-mq.prom') && scanReadsPath('snapshots/node.metrics'), 'a scan reads .prom and .metrics files');
   assert(detectArtefactKind('snapshots/ibm-mq.prom', PROM) === 'exposition-snapshot', 'a .prom file with families is an exposition snapshot');
   assert(detectArtefactKind('test/fixtures/ibm-mq.prom', PROM) === 'unknown' && detectArtefactKind('src/x.test.metrics', PROM) === 'unknown'
-    && detectArtefactKind('testdata/a.prom', PROM) === 'unknown', 'never from a test or fixture path');
+    && detectArtefactKind('testdata/a.prom', PROM) === 'unknown'
+    && ['src/__fixtures__/node.prom', 'test-data/node.prom', 'test_fixtures/a.prom', 'x/__mocks__/a.metrics', 'mocks/a.prom', 'spec/a.prom'].every(p => detectArtefactKind(p, PROM) === 'unknown'),
+  'never from a test, fixture or mock path, in any of the usual spellings');
   assert(detectArtefactKind('notes.metrics', 'nothing to see here\n') === 'unknown', 'a .metrics file with no family is not a snapshot');
 
   const r = crawlFiles({ 'snapshots/ibm-mq.prom': PROM, 'test/ibm-mq.prom': '# TYPE test_only gauge\ntest_only 1\n' }, { repoName: 'snap', now: NOW });
   const o = json(r, 'crawler.discovered.metric_origins');
   assert(o.ibmmq_queue_depth.origin_kind === 'exporter-snapshot' && o.ibmmq_queue_depth.confidence === 'declared' && o.ibmmq_queue_depth.service === 'ibm-mq'
     && !('test_only' in o), 'a crawl declares the snapshot\'s families, named by the file; the test path is not read', o.ibmmq_queue_depth);
+  assert(o.jobs_total.origin_kind === 'exporter-snapshot', 'the counter is declared under its stored name', Object.keys(o));
   assert(JSON.stringify(json(r, 'crawler.discovered.exporters')) === '{"ibm-mq":{"sources":[{"origin_kind":"exporter-snapshot","file":"snapshots/ibm-mq.prom","metrics":5}]}}',
     'the snapshot is a source of the exporter', ann(r)['crawler.discovered.exporters']);
   // Rank: manifest > snapshot > source code.
   const ranked = crawlFiles({
     'snapshots/ibm-mq.prom': PROM,
     'metrics-manifest.json': JSON.stringify({ exporter: 'ibm-mq', metrics: [{ name: 'ibmmq_queue_depth', type: 'gauge', help: 'from the manifest' }] }),
-    'src/metrics.ts': "import { Gauge } from 'prom-client';\nexport const j = new Gauge({ name: 'jobs', help: 'from code' });\n",
+    'src/metrics.ts': "import { Counter } from 'prom-client';\nexport const j = new Counter({ name: 'jobs_total', help: 'from code' });\n",
   }, { repoName: 'snap', now: NOW });
   const ro = json(ranked, 'crawler.discovered.metric_origins');
   assert(ro.ibmmq_queue_depth.help === 'from the manifest' && ro.ibmmq_queue_depth.origin_kind === 'exporter-manifest'
-    && ro.jobs.origin_kind === 'exporter-snapshot', 'the manifest outranks the snapshot, the snapshot outranks source code', [ro.ibmmq_queue_depth, ro.jobs]);
+    && ro.jobs_total.origin_kind === 'exporter-snapshot', 'the manifest outranks the snapshot, the snapshot outranks source code', [ro.ibmmq_queue_depth, ro.jobs_total]);
 }
 
 // ---------- E. a downstream catalogue ----------
