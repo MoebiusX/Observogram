@@ -1890,8 +1890,8 @@ packc emit --from saved.prom --name ibm-mq --out -     # a saved exposition, to 
 
 It scrapes once and records each family's name, type, help and label names.
 A redirect is refused, not followed: the refusal names its target with the
-query as keys only (`?token=…`) — pass that URL with the values the exporter
-expects. A URL with credentials is refused (save the exposition with your own
+query as the keys of its `key=value` parts only (`?token=…`) — pass that URL
+with the values the exporter expects. A URL with credentials is refused (save the exposition with your own
 client and pass it with `--from`). A status other than 200 or a response
 with no metric family exits 1.
 

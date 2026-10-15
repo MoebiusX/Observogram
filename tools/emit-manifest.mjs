@@ -28,7 +28,7 @@
  *
  * The recorded `source` is the URL without userinfo, query or fragment
  * (tools/lib/exporter-metrics.mjs safeSourceUrl). A redirect is refused, not
- * followed: the refusal names its target, the query as keys only — pass that
+ * followed: the refusal names its target, the query as `key=value` keys only — pass that
  * URL with the values the exporter expects.
  */
 
@@ -42,6 +42,8 @@ const shown = (url) => safeSourceUrl(url) || 'the exporter URL (not shown)';
 
 // A value that may be a URL with its credentials or token: never echoed.
 const urlLike = (v) => /:\/\/|@|\?|^[^/\\\s]+:\d+(?:[/?#]|$)/.test(String(v ?? ''));
+// A path argument as a message may name it.
+const showArg = (v) => (urlLike(v) ? '(a URL-like value, not shown)' : v);
 
 const USAGE = 'usage: packc emit --exporter <url> | --from <file.prom> [--name <exporter>] [--version <v>] [--out <file>|-] [--generated-at <iso> | --no-timestamp] [--timeout <seconds>]';
 
@@ -72,16 +74,22 @@ function parseArgs(argv) {
 }
 
 // A redirect is named, never followed: its target without userinfo, and its
-// query as keys only (`?format=…`) — a value may be a token — so the URL to
+// query as the keys of `key=value` parts only (`?format=…`; a bare `?<x>` is
+// a value) — a value may be a token — so the URL to
 // pass is the one shown with the values the exporter expects.
 function redirectRefusal(url, status, location) {
   let target = null;
   try { target = location ? new URL(location, url) : null; } catch { /* not a URL: named as such */ }
-  const keys = target ? [...new Set([...target.searchParams.keys()])] : [];
+  // Keys of `key=value` parts only: a bare `?<token>` is a value, not a key.
+  const parts = target?.search ? target.search.slice(1).split('&').filter(Boolean) : [];
+  const keys = [...new Set(parts.filter(p => p.includes('=')).map(p => p.slice(0, p.indexOf('='))))];
+  const bare = parts.some(p => !p.includes('='));
+  const query = !parts.length ? ''
+    : `${keys.length ? `?${keys.map(k => `${k}=…`).join('&')}` : ''}${bare ? `${keys.length ? ' and' : ' with'} a query part` : ''} (query values not shown)`;
   const to = !location ? ''
     : !target ? ' to a location that is not a URL'
-      : ` to ${shown(target.href)}${keys.length ? `?${keys.map(k => `${encodeURIComponent(k)}=…`).join('&')} (query values not shown)` : ''}`;
-  return `${shown(url)} answered ${status}, a redirect${to}; it is not followed — pass the URL the exporter serves its metrics at${keys.length ? ', with the query values it expects' : ''}`;
+      : ` to ${shown(target.href)}${query}`;
+  return `${shown(url)} answered ${status}, a redirect${to}; it is not followed — pass the URL the exporter serves its metrics at${parts.length ? ', with the query values it expects' : ''}`;
 }
 
 async function scrape(url, timeoutSeconds) {
@@ -131,20 +139,20 @@ if (args.exporter) {
   // A file whose name holds `@` or `?` is read; a URL-like value that is not
   // a file is refused unshown.
   if (urlLike(args.from) && !existsSync(resolve(args.from))) fail(2, '--from takes a saved exposition file, not a URL (the value is not shown); scrape a URL with --exporter');
-  try { text = readFileSync(resolve(args.from), 'utf8'); } catch (e) { fail(2, `cannot read --from ${args.from}: ${e.code || e.message}`); }
+  try { text = readFileSync(resolve(args.from), 'utf8'); } catch (e) { fail(2, `cannot read --from ${showArg(args.from)}: ${e.code || 'read failed'}`); }
   defaultName = basename(args.from).replace(/\.[^.]+$/, '');
 }
 
 const name = String(args.name ?? defaultName ?? '').trim();
 if (!name) fail(2, 'the exporter has no name; pass --name');
 const manifest = manifestFromExposition(text, { exporter: name, version: args.version, source, generatedAt });
-if (!manifest.metrics.length) fail(1, `${source ? shown(source) : args.from} holds no metric family (no # TYPE, # HELP or sample line)`);
+if (!manifest.metrics.length) fail(1, `${source ? shown(source) : showArg(args.from)} holds no metric family (no # TYPE, # HELP or sample line)`);
 
 const json = `${JSON.stringify(manifest, null, 2)}\n`;
 if (args.out === '-') {
   process.stdout.write(json, () => process.exit(0));
 } else {
   try { writeFileSync(resolve(args.out), json); }
-  catch (e) { fail(2, `cannot write --out ${urlLike(args.out) ? '(a URL-like value, not shown)' : args.out}: ${e.code || 'write failed'}`); }
-  process.stdout.write(`wrote ${args.out}: ${manifest.metrics.length} metric famil${manifest.metrics.length === 1 ? 'y' : 'ies'} of ${name}\n`, () => process.exit(0));
+  catch (e) { fail(2, `cannot write --out ${showArg(args.out)}: ${e.code || 'write failed'}`); }
+  process.stdout.write(`wrote ${showArg(args.out)}: ${manifest.metrics.length} metric famil${manifest.metrics.length === 1 ? 'y' : 'ies'} of ${name}\n`, () => process.exit(0));
 }

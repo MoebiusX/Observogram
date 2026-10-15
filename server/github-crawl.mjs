@@ -64,7 +64,8 @@ export function isExporterCandidateFile(path) {
   if (typeof path !== 'string' || isCrawlerFile(path)) return false;
   const p = path.toLowerCase();
   if (p.includes('node_modules/') || p.startsWith('.git/') || p.includes('/.git/')) return false;
-  return (/\.(prom|metrics)$/.test(p) && !isTestOrFixturePath(p))
+  // The test-folder rule reads the path as written (camelCase source sets).
+  return (/\.(prom|metrics)$/.test(p) && !isTestOrFixturePath(path))
     || /(^|\/)config\.ya?ml$/.test(p)
     || /(^|\/)files\/.*\.ya?ml$/.test(p);
 }

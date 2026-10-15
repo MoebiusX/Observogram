@@ -23,7 +23,7 @@
  * Exit 0 = pass.
  */
 
-import { readFileSync, readdirSync, statSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -551,6 +551,8 @@ data:
   const all = selectCrawlerFiles(tree, { maxFiles: 1000, fileCapBytes: 1e6 }).map(n => n.path);
   assert(all.includes('snap/ibm-mq.prom') && all.includes('charts/c/files/collector.yaml') && !all.includes('test/fixtures/x.prom') && !all.includes('big/config.yaml') && !all.includes('apps'),
     'with room, a snapshot and a chart\'s files/ collector are fetched; a fixture snapshot, an oversized file and a tree never');
+  assert(!isExporterCandidateFile('src/componentTest/resources/node.prom') && !isExporterCandidateFile('src/smokeTest/a.prom') && isExporterCandidateFile('snap/a.prom'),
+    'the GitHub crawl skips a camelCase test source set\'s snapshot, as the crawler does');
   assert(isCrawlerFile('mq/metrics-manifest.json') && !isCrawlerFile('apps/x/config.yaml') && isExporterCandidateFile('apps/x/config.yaml')
     && !isExporterCandidateFile('monitoring/prometheus.yml'), 'isCrawlerFile is develop\'s rule plus the manifest; the broad names are candidates only');
 }
@@ -564,6 +566,7 @@ const server = createServer((req, res) => {
   if (path === '/moved') { res.writeHead(302, { location: '/metrics?token=abc' }); res.end(); return; }
   if (path === '/empty') { res.writeHead(200); res.end('\n'); return; }
   if (path === '/cut') { res.writeHead(200, { 'content-length': '1000' }); res.write('# TYPE x gauge\n'); setTimeout(() => res.destroy(), 50); return; }
+  if (path === '/bare') { res.writeHead(302, { location: '/m?SECRETBARE&format=prom' }); res.end(); return; }
   if (path === '/badloc') { res.writeHead(302, { location: 'http://[oops/metrics' }); res.end(); return; }
   res.writeHead(500); res.end('boom');
 });
@@ -602,6 +605,10 @@ try {
 
   writeFileSync(join(tmp, 'qm1.prom'), EXPOSITION);
   writeFileSync(join(tmp, 'node@1.0.prom'), EXPOSITION);
+  writeFileSync(join(tmp, 'svcSECRETF@h.prom'), '\n');
+  mkdirSync(join(tmp, 'svcSECRETD@h'));
+  const named = await run(['--from', 'qm1.prom', '--out', 'outSECRETO@h.json', '--no-timestamp']);
+  assert(named.status === 0 && named.stdout === 'wrote (a URL-like value, not shown): 2 metric families of qm1\n', 'the success line names no URL-like --out', named);
   const atName = await run(['--from', 'node@1.0.prom', '--out', '-', '--no-timestamp']);
   assert(atName.status === 0 && JSON.parse(atName.stdout).exporter === 'node@1.0', 'a --from file whose name holds an @ is read', atName);
   const from = await run(['--from', 'qm1.prom', '--out', '-', '--no-timestamp']);
@@ -621,7 +628,11 @@ try {
     [['mq:9157/metrics?token=SECRET8'], 2, null],
     [['--from', 'http://svc:SECRET9@mq:9157/metrics'], 2, 'packc emit: --from takes a saved exposition file, not a URL (the value is not shown); scrape a URL with --exporter\n'],
     [['--from', 'x.prom', '--generated-at', 'http://u:SECRETG@h'], 2, 'packc emit: --generated-at (a URL-like value, not shown) is not a date\n'],
-    [['--from', 'qm1.prom', '--out', 'http://u:SECRETO@h/x/y'], 2, 'packc emit: cannot write --out (a URL-like value, not shown): ENOENT\n'],
+    // The error code is the platform's (a ':' in a Windows path is invalid): only the exit and the unshown value are pinned.
+    [['--from', 'qm1.prom', '--out', 'http://u:SECRETO@h/x/y'], 2, null],
+    [['--exporter', `${base}/bare`], 1, `packc emit: ${base}/bare answered 302, a redirect to ${base}/m?format=… and a query part (query values not shown); it is not followed — pass the URL the exporter serves its metrics at, with the query values it expects\n`],
+    [['--from', 'svcSECRETF@h.prom', '--out', '-'], 1, 'packc emit: (a URL-like value, not shown) holds no metric family (no # TYPE, # HELP or sample line)\n'],
+    [['--from', 'svcSECRETD@h'], 2, null],   // a directory: the code is the platform's
     [['--from', 'qm1.prom', '--out', 'no/such/dir/m.json'], 2, 'packc emit: cannot write --out no/such/dir/m.json: ENOENT\n'],
     [['--from=mq:9157/metrics'], 2, 'packc emit: --from takes a saved exposition file, not a URL (the value is not shown); scrape a URL with --exporter\n'],
     [['--exporter=http://user:SECRET6@127.0.0.1:1/metrics'], 2, 'packc emit: the --exporter URL carries credentials, which are neither sent nor recorded; save the exposition with your own client and pass it with --from\n'],
