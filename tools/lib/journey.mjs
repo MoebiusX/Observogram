@@ -517,7 +517,7 @@ function loadPackFile(path, baseDir, scope = null) {
 // Minimal repo walk for the crawl source — mirrors tools/crawl-repo.mjs's
 // filters (that script runs main() on import, so it can't be imported).
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'out', '.observogram', '.tomograph', 'coverage', 'vendor']);
-const SCAN_EXT = /\.(ya?ml|json|cs|go|java|py|ts|tsx|js|mjs|rs|kt)$/i;
+const SCAN_EXT = /\.(ya?ml|json|cs|go|java|py|ts|tsx|js|mjs|rs|kt|prom|metrics)$/i;
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
 

@@ -33,6 +33,10 @@ import { routesFromAlertmanagerConfig } from './alert-routes.mjs';
 import { BACKEND_PATTERNS } from './backend-products.mjs';
 import { PROMQL_KEYWORDS, extractPromqlMetricNames } from './promql.mjs';
 import { symbolSlug as slug, packSlug } from './slug.mjs';
+import {
+  isMetricsManifestPath, isExpositionSnapshotPath, isTestOrFixturePath, parseExposition, readMetricsManifest, safeSourceUrl,
+  resolveExporterCatalogue, asResolvedCatalogue, mayBeExporterConfig, matchExporterConfig, inferExporterFamilies,
+} from './exporter-metrics.mjs';
 
 // The spec's closed vocabularies, mirrored by hand (a browser-safe module
 // cannot read the schema file; tools/test-crawl-canonical.mjs pins the
@@ -58,7 +62,8 @@ function suffixedId(base, suffix) {
 // before it used this rule it staged 75,000 files (430 MB) of a repository
 // whose scannable sources are 600. Where the browser hands over the folder
 // itself, walkScanFolder (below) does not list them in the first place.
-export const SCAN_EXT = /\.(ya?ml|json|cjs|mjs|js|jsx|ts|tsx|py|go|java|kt|rs|cs)$/i;
+// `.prom` / `.metrics`: a saved /metrics response (an exposition snapshot).
+export const SCAN_EXT = /\.(ya?ml|json|cjs|mjs|js|jsx|ts|tsx|py|go|java|kt|rs|cs|prom|metrics)$/i;
 export const SCAN_MAX_FILE_BYTES = 5 * 1024 * 1024;
 export const SCAN_IGNORE_DIRS = new Set([
   'node_modules', 'vendor', 'venv',
@@ -140,6 +145,12 @@ const K8S_WORKLOAD_KINDS = new Set([
 
 const METRIC_SOURCE_EXT_RE = /\.(?:cjs|mjs|js|jsx|ts|tsx|py|go|java|kt|rs|cs)$/i;
 
+// The built-in exporter catalogue (tools/lib/exporter-catalogue.mjs), the one
+// detectArtefactKind reads when its caller names none.
+const BUILTIN_EXPORTER_CATALOGUE = resolveExporterCatalogue();
+
+const isMapping = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
 // Match an image reference (`repository[:tag]`) against the known backend
 // catalog and register it on the backends bucket. Shared by the Helm values,
 // Helm template, and plain-K8s workload walkers. When `dedupeByProduct` is set
@@ -191,12 +202,28 @@ function registerMetricsExporterFromBackend(pattern, pipelines, relPath, evidenc
  * Detect what kind of observability artefact a file is.
  * @param {string} relPath - repo-relative path
  * @param {string} content - file content
+ * @param {object} [opts]
+ * @param {object|Array} [opts.exporterCatalogue] - a downstream's exporter
+ *   catalogue ({ exporters: [...] } or the array), merged with the built-in
+ *   entries; the built-in one when omitted
  * @returns {string} kind: 'prometheus-rules' | 'alertmanager' | 'grafana-dashboard' |
  *                          'otel-collector' | 'docker-compose' | 'helm-chart' |
- *                          'helm-template' | 'unknown'
+ *                          'helm-template' | 'metrics-manifest' | 'exposition-snapshot' |
+ *                          'exporter-config' | 'unknown'
  */
-export function detectArtefactKind(relPath, content) {
+export function detectArtefactKind(relPath, content, opts) {
+  const { exporterCatalogue = BUILTIN_EXPORTER_CATALOGUE } = opts ?? {};
   const lower = relPath.toLowerCase();
+  const catalogue = asResolvedCatalogue(exporterCatalogue);
+  // A prebuilt exporter's metric list, as `packc emit --exporter` writes it.
+  // Named by its file, so a malformed one is walked and warned about, never
+  // silently skipped.
+  if (isMetricsManifestPath(lower)) return 'metrics-manifest';
+  // A saved /metrics response — not from a test or fixture path, where an
+  // exposition is sample input, not what a deployed exporter serves.
+  if (isExpositionSnapshotPath(lower)) {
+    return !isTestOrFixturePath(relPath) && parseExposition(content).families.length ? 'exposition-snapshot' : 'unknown';
+  }
   // JSON first — Grafana dashboards are the only json we care about.
   if (lower.endsWith('.json')) {
     try {
@@ -232,6 +259,15 @@ export function detectArtefactKind(relPath, content) {
   // config second.
   if (looksLikeHelm(content)) return 'helm-template';
 
+  // A prebuilt exporter's own config (mq-metric-samples' config.yaml), by
+  // the top-level keys a catalogue entry names — before the filename
+  // heuristics, which would read `mq-collector.yaml` as an OTel collector.
+  if (mayBeExporterConfig(content, catalogue)) {
+    let cfg = null;
+    try { cfg = parseYaml(content); } catch { /* not YAML: fall through */ }
+    if (matchExporterConfig(cfg, catalogue)) return 'exporter-config';
+  }
+
   // Filename heuristics first — fastest.
   if (/(^|\/)(docker-)?compose\.ya?ml$/.test(lower))             return 'docker-compose';
   if (/(^|\/)chart\.ya?ml$/.test(lower))                          return 'helm-chart';
@@ -255,7 +291,7 @@ export function detectArtefactKind(relPath, content) {
       && obj.scrape_configs.some(s => s?.job_name)) return 'prometheus-scrape-config';
   if (looksLikeActuatorMetricsConfig(lower, content, obj)) return 'actuator-metrics-config';
   if (obj.route && obj.receivers && Array.isArray(obj.receivers)) return 'alertmanager';
-  if (obj.receivers && obj.exporters && obj.service?.pipelines)   return 'otel-collector';
+  if (looksLikeOtelCollector(obj))                                return 'otel-collector';
   if (obj.services && typeof obj.services === 'object'
       && Object.values(obj.services).some(s => s?.image))         return 'docker-compose';
   // Plain (non-templated) Kubernetes workload manifest carrying concrete
@@ -369,6 +405,9 @@ function isSourceCodePath(relPath) {
 function shouldIncludeForEnvironment(relPath, profile, surfaces) {
   const p = normalizeRepoPath(relPath);
   if (isSourceCodePath(p)) return true;
+  // What an exporter exposes is the exporter's, not a deployment surface's:
+  // a metrics manifest and a saved exposition are read in every environment.
+  if (isMetricsManifestPath(p) || isExpositionSnapshotPath(p)) return true;
 
   if (profile === 'local-docker') {
     if (!surfaces.docker) return true;
@@ -437,6 +476,9 @@ function scopeFilesForEnvironment(files, environment) {
  * @param {string} [opts.criticality]                  - 'tier-1'|'tier-2'|'tier-3'. Inferred if omitted.
  * @param {string} [opts.binding='otel-elastic-prometheus-grafana']
  * @param {Array<string>} [opts.owners=['team-platform']]
+ * @param {object|Array} [opts.exporterCatalogue] - exporter family catalogue
+ *   entries ({ exporters: [...] } or the array) that replace or extend the
+ *   built-in ones (tools/lib/exporter-catalogue.mjs)
  * @returns {{canonical: object, summary: object, evidence: Record<string,string>}}
  */
 export function crawlFiles(filesInput, opts = {}) {
@@ -464,7 +506,8 @@ export function crawlFiles(filesInput, opts = {}) {
   // Profile detection reads the environment as given (it lowercases itself).
   const envScope = scopeFilesForEnvironment(rawFiles, envRaw);
   const files = envScope.files;
-  const inputWarnings = [];
+  const catalogue = resolveExporterCatalogue(opts.exporterCatalogue);
+  const inputWarnings = [...catalogue.warnings];
   const normalized = { name: null, environment: null, owners: [] };
   if (repoName !== String(nameRaw)) {
     normalized.name = { from: String(nameRaw), to: repoName };
@@ -522,6 +565,15 @@ export function crawlFiles(filesInput, opts = {}) {
   summary.warnings.push(...inputWarnings);
   if (envScope.applied) {
     summary.warnings.push(`Environment scope "${envScope.profile}" excluded ${envScope.excluded.length} file(s) from other deployment surfaces.`);
+    // A file the scope leaves out may be the only one that shows how the
+    // metrics are collected: say which, never drop them silently.
+    const collection = envScope.excluded
+      .map(relPath => collectionEvidenceOf(relPath, rawFiles.get(relPath), catalogue))
+      .filter(Boolean);
+    if (collection.length) {
+      const shown = collection.slice(0, 8).join('; ') + (collection.length > 8 ? `; … (${collection.length - 8} more)` : '');
+      summary.warnings.push(`Environment scope "${envScope.profile}" excluded ${collection.length} file(s) that carry scrape jobs or exporter evidence: ${shown}. An environment that names no deployment profile (e.g. \`all\`) reads every file.`);
+    }
   }
   const evidence = {};   // <artefact-id> -> <relPath>
 
@@ -531,6 +583,12 @@ export function crawlFiles(filesInput, opts = {}) {
   const alertRules = [];       // every alert rule found, raw, with its file and group (classified below)
   const metricDefinitions = [];
   const scrapeJobs = [];
+  const exporters = new Map();   // exporter name → the files that say what it exposes
+  // A collector config with no pipelines names its metrics exporter only by
+  // guess; the guesses are settled after every file is walked against the
+  // metrics pipelines the walk found (a config split across --config files
+  // declares them in another file) — settleCollectorGuesses.
+  const collectorState = newCollectorState();
   const dashboards = [];
   const alertingRoutes = [];
   const pipelines = { receivers: [], processors: [], exporters: { metrics: null, logs: null, traces: null } };
@@ -555,7 +613,7 @@ export function crawlFiles(filesInput, opts = {}) {
   // ----- pass 1: classify -----
   const classified = [];
   for (const [relPath, content] of files) {
-    const kind = detectArtefactKind(relPath, content);
+    const kind = detectArtefactKind(relPath, content, { exporterCatalogue: catalogue });
     if (kind === 'unknown') continue;
     classified.push({ relPath, content, kind });
     summary.files.classified++;
@@ -583,10 +641,13 @@ export function crawlFiles(filesInput, opts = {}) {
         case 'actuator-metrics-config': walkActuatorMetricsConfig(f, scrapeJobs, evidence, summary, repoName); break;
         case 'metric-source-code': walkMetricSourceCode(f, metricDefinitions, evidence, summary, repoName); break;
         case 'alertmanager':     walkAlertmanager(f, alertingRoutes, evidence, summary); break;
-        case 'otel-collector':   walkOtelCollector(f, pipelines, evidence, summary); break;
+        case 'otel-collector':   walkOtelCollector(f, pipelines, scrapeJobs, evidence, summary, collectorState); break;
+        case 'metrics-manifest': walkMetricsManifest(f, metricDefinitions, exporters, summary, evidence); break;
+        case 'exposition-snapshot': walkExpositionSnapshot(f, metricDefinitions, exporters, summary, evidence); break;
+        case 'exporter-config':  walkExporterConfig(f, catalogue, metricDefinitions, exporters, summary, evidence); break;
         case 'grafana-dashboard':walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summary); break;
-        case 'helm-template':    walkHelmTemplate(f, { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, repoName }, evidence, summary); break;
-        case 'helm-values':      walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents); break;
+        case 'helm-template':    walkHelmTemplate(f, { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, collectorState, repoName }, evidence, summary); break;
+        case 'helm-values':      walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents, { scrapeJobs, collectorState }); break;
         case 'k8s-workload':     walkK8sWorkload(f, backends, pipelines, evidence, summary); break;
         // Chart.yaml itself carries no observability contracts — the payloads
         // live in the templated manifests (handled as 'helm-template'). We
@@ -597,6 +658,8 @@ export function crawlFiles(filesInput, opts = {}) {
       summary.warnings.push(`Failed to parse ${f.relPath}: ${e.message}`);
     }
   }
+
+  settleCollectorGuesses(collectorState, pipelines, evidence, summary);
 
   // ----- infer SLIs/SLOs (decompiler ⇄ compiler symmetry) -----
   // PRIMARY source: recording rules. compile.mjs materialises every SLI in
@@ -896,6 +959,7 @@ export function crawlFiles(filesInput, opts = {}) {
   curateMetricDefinitions(metricDefinitions, summary);
   const metricAnnotations = buildMetricDefinitionAnnotations(metricDefinitions);
   const scrapeAnnotations = buildScrapeJobAnnotations(scrapeJobs);
+  const exporterAnnotations = buildExporterAnnotations(exporters);
 
   // ----- canonical assembly -----
   const canonical = {
@@ -947,6 +1011,7 @@ export function crawlFiles(filesInput, opts = {}) {
         ...(sdkLanguages.length ? { 'crawler.discovered.sdk_languages': annotationJson(sdkLanguages) } : {}),
         ...metricAnnotations,
         ...scrapeAnnotations,
+        ...exporterAnnotations,
         ...scaffoldAnnotations,
       },
     },
@@ -1117,7 +1182,7 @@ function sniffObservabilityKind(content) {
   if (Array.isArray(obj.scrape_configs) && obj.scrape_configs.some(s => s?.job_name)) return 'prometheus-scrape-config';
   if (looksLikeActuatorMetricsConfig('', content, obj)) return 'actuator-metrics-config';
   if (obj.route && Array.isArray(obj.receivers)) return 'alertmanager';
-  if (obj.receivers && obj.exporters && obj.service?.pipelines) return 'otel-collector';
+  if (looksLikeOtelCollector(obj)) return 'otel-collector';
   if (obj.services && typeof obj.services === 'object'
       && Object.values(obj.services).some(s => s?.image)) return 'docker-compose';
   if (K8S_WORKLOAD_KINDS.has(obj.kind)
@@ -1410,7 +1475,8 @@ function addMetricDefinition(metricDefinitions, evidence, summary, item) {
     sourceName: item.sourceName && item.sourceName !== name ? item.sourceName : item.sourceName || null,
     originKind: item.originKind || 'source-code',
     candidateOnly: Boolean(item.candidateOnly),
-    confidence: item.candidateOnly ? 'candidate' : 'declared',
+    // A caller may state it ('inferred': an exporter config's family).
+    confidence: item.confidence || (item.candidateOnly ? 'candidate' : 'declared'),
     references: Array.isArray(item.references) ? item.references : [],
     usedBy: Array.isArray(item.usedBy) ? item.usedBy.filter(Boolean) : [],
   };
@@ -1435,7 +1501,9 @@ function mergeMetricEvidence(target, source) {
   target.usedBy = dedupe([...(target.usedBy || []), ...(source.usedBy || [])]).slice(0, 24);
   target.references = [...(target.references || []), ...(source.references || [])].slice(0, 12);
   target.candidateOnly = Boolean(target.candidateOnly && source.candidateOnly);
-  target.confidence = target.candidateOnly ? 'candidate' : 'declared';
+  target.confidence = target.candidateOnly
+    ? (target.confidence === 'inferred' ? 'inferred' : 'candidate')
+    : 'declared';
 }
 
 function dedupe(values) {
@@ -1634,8 +1702,11 @@ function curateMetricDefinitions(metricDefinitions, summary) {
   let unreferenced = 0;
   for (const metric of metricDefinitions) {
     if (!metric.candidateOnly) continue;
-    metric.confidence = referenced.has(metric.name) ? 'referenced-candidate' : 'candidate';
     if (!referenced.has(metric.name)) unreferenced++;
+    // An exporter config's family stays 'inferred': the config says the
+    // exporter is switched on, not that the name is right.
+    if (metric.confidence === 'inferred') continue;
+    metric.confidence = referenced.has(metric.name) ? 'referenced-candidate' : 'candidate';
   }
   summary.discovered.metricEvidence = metricDefinitions.length;
   summary.discovered.metricDefinitions = new Set(metricDefinitions.map(m => m.name)).size;
@@ -1693,12 +1764,19 @@ function annotationJson(value) {
     : compact;
 }
 
+// Which file speaks for a metric named in several: what the exporter says it
+// exposes first (its manifest, then a saved exposition), then the code that
+// registers it, then what reads it, and last a name only inferred from an
+// exporter's config.
 function metricOriginRank(metric) {
   const kind = metric?.originKind || 'source-code';
-  if (kind === 'source-code') return 0;
-  if (kind === 'source-code-fragment') return 1;
-  if (kind === 'recording-rule-output') return 2;
-  if (kind === 'promql-reference') return 3;
+  if (kind === 'exporter-manifest') return 0;
+  if (kind === 'exporter-snapshot') return 1;
+  if (kind === 'source-code') return 2;
+  if (kind === 'source-code-fragment') return 3;
+  if (kind === 'recording-rule-output') return 4;
+  if (kind === 'promql-reference') return 5;
+  if (kind === 'exporter-config') return 6;
   return 9;
 }
 
@@ -1717,6 +1795,14 @@ function buildScrapeJobAnnotations(scrapeJobs) {
       metrics_path: item.metrics_path || '',
       interval: item.interval || '',
       targets: item.targets || [],
+      // A job an OTel collector's prometheus receiver scrapes: the receiver,
+      // its static target count, and where the collector ships the samples.
+      ...(item.via ? {
+        via: item.via,
+        receiver: item.receiver,
+        target_count: item.target_count,
+        exporters: item.exporters,
+      } : {}),
     };
   }
   return {
@@ -1724,6 +1810,26 @@ function buildScrapeJobAnnotations(scrapeJobs) {
     'crawler.discovered.scrape_jobs_count': String(jobs.length),
     'crawler.discovered.scrape_job_origins': annotationJson(origins),
   };
+}
+
+// crawler.discovered.exporters: each prebuilt exporter the crawl learned
+// metrics from, and the files that said what it exposes (a manifest, a saved
+// exposition, its own config).
+function buildExporterAnnotations(exporters) {
+  if (!exporters.size) return {};
+  const names = [...exporters.keys()].sort();
+  return {
+    'crawler.discovered.exporters': annotationJson(Object.fromEntries(names.map(n => [n, exporters.get(n)]))),
+    'crawler.discovered.exporters_count': String(names.length),
+  };
+}
+
+function recordExporter(exporters, name, source, summary) {
+  if (!exporters.has(name)) {
+    exporters.set(name, { sources: [] });
+    summary.discovered.exporters = (summary.discovered.exporters || 0) + 1;
+  }
+  exporters.get(name).sources.push(source);
 }
 
 // Components disabled via Helm `enabled: false`, merged across the in-scope
@@ -1758,7 +1864,7 @@ function collectDisabledComponents(valuesFiles) {
   return disabled;
 }
 
-function walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents = new Set()) {
+function walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents = new Set(), { scrapeJobs = [], collectorState = newCollectorState() } = {}) {
   const visit = (node, path = []) => {
     if (!node) return;
     // Prune the subtree of any top-level component the environment disables
@@ -1789,7 +1895,35 @@ function walkHelmValues(f, backends, pipelines, evidence, summary, disabledCompo
     }
   };
 
-  for (const obj of parseYamlDocs(f.content)) visit(obj);
+  for (const obj of parseYamlDocs(f.content)) {
+    // A collector chart's values carry the collector config: at the top
+    // level, under `config:` (the opentelemetry-collector chart's idiom), or
+    // under a subchart's key in an umbrella chart. Read first, so a pipeline
+    // it declares beats an image's inference; a config this walk cannot read
+    // (the chart's `pipelines.metrics: null` drops a pipeline) is warned
+    // about and never costs the values file its images.
+    for (const collector of valuesCollectorConfigs(obj, { disabled: disabledComponents })) {
+      try { walkOtelCollectorDoc(collector, f.relPath, pipelines, scrapeJobs, evidence, summary, collectorState); }
+      catch (e) { summary.warnings.push(`The collector config in ${f.relPath} could not be read (${e.message}); its images are read as before.`); }
+    }
+    visit(obj);
+  }
+}
+
+// The collector configs a Helm values document carries: the document
+// itself, its `config:`, or a subchart's `<key>.config:` (an umbrella
+// chart) — never a subchart that is disabled. A crawl knows that from
+// `disabled`, the `enabled` toggles merged across the in-scope values files
+// (an overlay wins, as with `helm -f`); a file read alone (the scope warning)
+// from its own `enabled: false`.
+function valuesCollectorConfigs(obj, { disabled = null } = {}) {
+  if (!isMapping(obj)) return [];
+  if (looksLikeOtelCollector(obj)) return [obj];
+  if (isMapping(obj.config) && looksLikeOtelCollector(obj.config)) return [obj.config];
+  const off = (key, v) => (disabled ? disabled.has(key) : v?.enabled === false);
+  return Object.entries(obj)
+    .filter(([key, v]) => !off(key, v) && isMapping(v?.config) && looksLikeOtelCollector(v.config))
+    .map(([, v]) => v.config);
 }
 
 function workloadPodSpec(obj) {
@@ -1820,14 +1954,14 @@ function walkK8sWorkload(f, backends, pipelines, evidence, summary) {
 // like a rule shipped as a standalone file. If the template embeds nothing, we
 // strip the scaffolding and treat the document itself as a single manifest.
 function walkHelmTemplate(f, buckets, evidence, summary) {
-  const { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, repoName } = buckets;
+  const { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, collectorState, repoName } = buckets;
   const route = (kind, sub) => {
     switch (kind) {
       case 'prometheus-rules': walkPrometheusRules(sub, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary); return true;
       case 'prometheus-scrape-config': walkPrometheusScrapeConfig(sub, scrapeJobs, evidence, summary); return true;
       case 'actuator-metrics-config': walkActuatorMetricsConfig(sub, scrapeJobs, evidence, summary, repoName); return true;
       case 'alertmanager':     walkAlertmanager(sub, alertingRoutes, evidence, summary); return true;
-      case 'otel-collector':   walkOtelCollector(sub, pipelines, evidence, summary); return true;
+      case 'otel-collector':   walkOtelCollector(sub, pipelines, scrapeJobs, evidence, summary, collectorState); return true;
       case 'grafana-dashboard':walkGrafanaDashboard(sub, dashboards, metricDefinitions, evidence, summary); return true;
       case 'docker-compose':   walkDockerCompose(sub, backends, pipelines, evidence, summary); return true;
       case 'k8s-workload':     walkK8sWorkload(sub, backends, pipelines, evidence, summary); return true;
@@ -1849,6 +1983,9 @@ function walkHelmTemplate(f, buckets, evidence, summary) {
     else if (lk.endsWith('.json') || /"schemaVersion"\s*:/.test(clean))              kind = 'grafana-dashboard';
     else if (/^route:/m.test(clean) && /^receivers:/m.test(clean))                   kind = 'alertmanager';
     else if (/^receivers:/m.test(clean) && /^exporters:/m.test(clean) && /pipelines:/.test(clean)) kind = 'otel-collector';
+    // A collector config with no service block: a prometheus receiver's
+    // scrape jobs, or its exporters alone.
+    else if (/^receivers:/m.test(clean) && (/^exporters:/m.test(clean) || /^\s+scrape_configs:/m.test(clean))) kind = 'otel-collector';
 
     // A ConfigMap whose data key looks like an observability artefact but
     // can't be parsed is a genuine signal worth surfacing; ordinary
@@ -2066,28 +2203,49 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
 }
 
 function walkPrometheusScrapeConfig(f, scrapeJobs, evidence, summary) {
-  for (const obj of parseYamlDocs(f.content)) {
-    if (!Array.isArray(obj?.scrape_configs)) continue;
-    for (const cfg of obj.scrape_configs) {
-      const job = String(cfg?.job_name || '').trim();
-      if (!job) continue;
+  for (const obj of parseYamlDocs(f.content)) walkScrapeConfigDoc(obj, f.relPath, scrapeJobs, evidence, summary);
+}
+
+// One Prometheus config document's scrape jobs — a standalone prometheus.yml
+// or the `config:` of an OTel collector's prometheus receiver (`collector`
+// then names the receiver and the exporters its samples leave by).
+// Answers how many jobs it added. In a collector config a job this walk
+// cannot read is warned about and skipped (its siblings and the rest of the
+// config are still read); a standalone prometheus.yml reads as before.
+function walkScrapeConfigDoc(obj, origin, scrapeJobs, evidence, summary, collector = null) {
+  if (!Array.isArray(obj?.scrape_configs)) return 0;
+  let added = 0;
+  for (const cfg of obj.scrape_configs) {
+    const job = String(cfg?.job_name || '').trim();
+    if (!job) continue;
+    const read = () => {
       // Promtail and Alloy use the same `scrape_configs` / `job_name` keys
       // to say which LOG FILES to tail. Such an entry is not a metrics
       // scrape job and never appears among a metrics store's targets;
       // declaring it made it read "not live" on every platform.
       if (isLogScrapeConfig(cfg, obj)) {
         summary.discovered.logScrapeConfigs = (summary.discovered.logScrapeConfigs || 0) + 1;
-        continue;
+        return;
       }
-      addScrapeJob(scrapeJobs, evidence, summary, {
+      if (addScrapeJob(scrapeJobs, evidence, summary, {
         job,
         metrics_path: cfg.metrics_path || '/metrics',
         interval: cfg.scrape_interval || obj.global?.scrape_interval || null,
         targets: scrapeTargets(cfg),
-        origin: f.relPath,
-      });
-    }
+        origin,
+        ...(collector ? {
+          via: 'otel-collector',
+          receiver: collector.receiver,
+          target_count: (Array.isArray(cfg.static_configs) ? cfg.static_configs : []).reduce((n, sc) => n + (Array.isArray(sc?.targets) ? sc.targets.filter(Boolean).length : 0), 0),
+          exporters: collector.exporters,
+        } : {}),
+      })) added++;
+    };
+    if (!collector) { read(); continue; }
+    try { read(); }
+    catch (e) { summary.warnings.push(`Scrape job '${job}' of receiver ${collector.receiver} in ${origin} could not be read (${e.message}); the rest of the config is read.`); }
   }
+  return added;
 }
 
 // A log-collection scrape config (Promtail, Alloy's loki.source): it has
@@ -2117,11 +2275,12 @@ function walkActuatorMetricsConfig(f, scrapeJobs, evidence, summary, repoName = 
 }
 
 function addScrapeJob(scrapeJobs, evidence, summary, item) {
-  if (!item?.job) return;
-  if (scrapeJobs.some(j => j.job === item.job && j.origin === item.origin)) return;
+  if (!item?.job) return false;
+  if (scrapeJobs.some(j => j.job === item.job && j.origin === item.origin)) return false;
   scrapeJobs.push(item);
   if (!evidence[`scrape.${item.job}`]) evidence[`scrape.${item.job}`] = item.origin;
   summary.discovered.scrapeJobs++;
+  return true;
 }
 
 function scrapeTargets(cfg) {
@@ -2169,11 +2328,31 @@ function walkAlertmanager(f, routes, evidence, summary) {
   }
 }
 
-function walkOtelCollector(f, pipelines, evidence, summary) {
-  for (const obj of parseYamlDocs(f.content)) {
-    if (!obj?.service?.pipelines) continue;
+// An OTel collector config: its pipelines (receivers, processors, the
+// exporter per signal) and the scrape jobs of its prometheus receivers. A
+// config with no `service:` block (a Helm chart's files/ copy, assembled
+// with the pipelines elsewhere) still names its receivers and exporters:
+// the prometheus receivers' jobs are read, and the metrics exporter it
+// configures is a guess, settled after the walk (settleCollectorGuesses).
+function walkOtelCollector(f, pipelines, scrapeJobs, evidence, summary, state = newCollectorState()) {
+  for (const obj of parseYamlDocs(f.content)) walkOtelCollectorDoc(obj, f.relPath, pipelines, scrapeJobs, evidence, summary, state);
+}
+
+// What the walk learns about collector configs across files: each metrics
+// pipeline declared (its receivers and exporters, with the exporters'
+// configs), and each pipeline-less config's guess.
+function newCollectorState() {
+  return { declared: [], guesses: [] };
+}
+
+function walkOtelCollectorDoc(obj, relPath, pipelines, scrapeJobs, evidence, summary, state) {
+  const scrapeReceivers = collectorScrapeReceivers(obj);
+  const exporterCfgs = isMapping(obj?.exporters) ? obj.exporters : {};
+  if (obj?.service?.pipelines) {
     const seen = new Set();
     for (const pipeline of Object.values(obj.service.pipelines)) {
+      // `metrics: null` removes a pipeline (the Helm chart's idiom).
+      if (!isMapping(pipeline)) continue;
       for (const recv of pipeline.receivers || []) {
         if (!seen.has(`r:${recv}`)) {
           seen.add(`r:${recv}`);
@@ -2197,8 +2376,266 @@ function walkOtelCollector(f, pipelines, evidence, summary) {
         }
       }
     }
-    evidence[`PIP-${summary.discovered.pipelines + 1}`] = f.relPath;
+    evidence[`PIP-${summary.discovered.pipelines + 1}`] = relPath;
     summary.discovered.pipelines++;
+    for (const [sig, p] of Object.entries(obj.service.pipelines)) {
+      if (/^metrics/i.test(sig) && isMapping(p) && Array.isArray(p.receivers)) {
+        state.declared.push({ receivers: p.receivers, exporters: Array.isArray(p.exporters) ? p.exporters : [], cfgs: exporterCfgs });
+      }
+    }
+    // Each scrape receiver's samples leave by the exporters of the metrics
+    // pipelines that list it.
+    for (const { key, config } of scrapeReceivers) {
+      const names = [];
+      for (const [sig, p] of Object.entries(obj.service.pipelines)) {
+        if (!/^metrics/i.test(sig) || !Array.isArray(p?.receivers) || !p.receivers.includes(key)) continue;
+        for (const exp of p.exporters || []) if (!names.includes(exp)) names.push(exp);
+      }
+      const exporters = names.map(n => collectorExporterDetail(n, exporterCfgs[n]));
+      const jobs = walkScrapeConfigDoc(config, relPath, scrapeJobs, evidence, summary, { receiver: key, exporters });
+      // No metrics pipeline here lists the receiver: another file's may (a
+      // config split across --config files), settled after the walk.
+      if (!names.length) state.guesses.push({ relPath, candidates: [], cfgs: exporterCfgs, groups: [{ receiver: key, exporters, jobs }], receivers: [] });
+    }
+    return;
+  }
+
+  // No pipelines: the metrics exporter is the metrics-capable exporter the
+  // config names (the first when it names several) — a guess. Its scrape
+  // jobs carry it for now; settleCollectorGuesses replaces it with a
+  // declared pipeline's exporters when one lists the receiver, and applies
+  // it to spec.pipelines only when nothing else set the metrics exporter.
+  const candidates = Object.keys(exporterCfgs).filter(n => METRICS_EXPORTER_TYPES.has(n.split('/')[0].toLowerCase()));
+  const chosen = candidates[0] || null;
+  if (!scrapeReceivers.length && !chosen) return;
+  const groups = [];
+  for (const { key, config } of scrapeReceivers) {
+    // One array per receiver, shared with its jobs' entries (patched in place).
+    const exporters = chosen ? [collectorExporterDetail(chosen, exporterCfgs[chosen])] : [];
+    const jobs = walkScrapeConfigDoc(config, relPath, scrapeJobs, evidence, summary, { receiver: key, exporters });
+    groups.push({ receiver: key, exporters, jobs });
+  }
+  state.guesses.push({ relPath, candidates, cfgs: exporterCfgs, groups, receivers: scrapeReceivers.map(({ key }) => key.split('/')[0]) });
+}
+
+// After every file is walked: a pipeline-less config's scrape jobs leave by
+// the exporters of the declared metrics pipelines that list their receiver
+// (a config split across --config files), else by its guess; its receivers
+// join spec.pipelines; the first guess sets spec.pipelines.exporters.metrics
+// only when nothing else set it (no declared pipeline, no metrics backend
+// image). A first-of-several guess left standing is warned about.
+function settleCollectorGuesses(state, pipelines, evidence, summary) {
+  const warned = new Set();
+  const warnFirstOfSeveral = (g) => {
+    if (g.candidates.length < 2 || warned.has(g.relPath)) return;
+    warned.add(g.relPath);
+    summary.warnings.push(`${g.relPath} has no service pipelines and ${g.candidates.length} metrics-capable exporters (${g.candidates.join(', ')}); the metrics exporter is taken to be the first, '${g.candidates[0]}'.`);
+  };
+  for (const g of state.guesses) {
+    for (const group of g.groups) {
+      const names = [];
+      const cfgOf = {};
+      for (const d of state.declared) {
+        if (!d.receivers.includes(group.receiver)) continue;
+        for (const n of d.exporters) {
+          if (typeof n !== 'string') continue;
+          if (!names.includes(n)) names.push(n);
+          if (isMapping(d.cfgs?.[n]) && Object.keys(d.cfgs[n]).length && !cfgOf[n]) cfgOf[n] = d.cfgs[n];
+        }
+      }
+      if (names.length) {
+        group.exporters.splice(0, group.exporters.length,
+          ...names.map(n => collectorExporterDetail(n, isMapping(g.cfgs[n]) && Object.keys(g.cfgs[n]).length ? g.cfgs[n] : cfgOf[n])));
+      } else if (group.exporters.length && group.jobs) {
+        warnFirstOfSeveral(g);
+      }
+    }
+    for (const name of g.receivers) {
+      if (!pipelines.receivers.some(r => r.name === name)) pipelines.receivers.push({ name });
+    }
+  }
+  const first = state.guesses.find(g => g.candidates.length);
+  if (!pipelines.exporters.metrics && first) {
+    pipelines.exporters.metrics = { kind: mapExporterKind(first.candidates[0].split('/')[0]) };
+    evidence['pipelines.exporters.metrics'] = first.relPath;
+    warnFirstOfSeveral(first);
+    evidence[`PIP-${summary.discovered.pipelines + 1}`] = first.relPath;
+    summary.discovered.pipelines++;
+  }
+}
+
+// Collector exporters that carry metrics, by component type.
+const METRICS_EXPORTER_TYPES = new Set([
+  'kafka', 'prometheusremotewrite', 'prometheus', 'otlp', 'otlphttp',
+  'googlemanagedprometheus', 'awsemf', 'datadog', 'influxdb', 'clickhouse',
+  'signalfx', 'carbon', 'azuremonitor', 'splunk_hec', 'sumologic',
+]);
+
+// A collector's prometheus receivers (`prometheus`, `prometheus/<name>`)
+// that state scrape jobs: [{ key, config }].
+function collectorScrapeReceivers(obj) {
+  if (!isMapping(obj?.receivers)) return [];
+  return Object.entries(obj.receivers)
+    .filter(([key, r]) => /^prometheus(\/|$)/.test(key) && isMapping(r?.config) && Array.isArray(r.config.scrape_configs))
+    .map(([key, r]) => ({ key, config: r.config }));
+}
+
+// An OTel collector config by shape: receivers, exporters and pipelines (a
+// full config), or a receivers mapping with a prometheus receiver's scrape
+// jobs or with exporters (one with no service block). Alertmanager's
+// `receivers` is a list, never a mapping.
+function looksLikeOtelCollector(obj) {
+  if (obj.receivers && obj.exporters && obj.service?.pipelines) return true;
+  if (!isMapping(obj.receivers)) return false;
+  return collectorScrapeReceivers(obj).length > 0 || isMapping(obj.exporters);
+}
+
+// What a collector exporter is and where it sends: a kafka exporter's
+// metrics topic, any other's endpoint — reduced by safeSourceUrl, so no
+// userinfo, query or fragment is recorded.
+function collectorExporterDetail(name, cfg) {
+  const type = String(name).split('/')[0];
+  const out = { name: String(name), kind: mapExporterKind(type) };
+  if (/^kafka$/i.test(type)) {
+    const topic = cfg?.metrics?.topic ?? cfg?.topic;
+    if (typeof topic === 'string' && topic.trim()) out.topic = topic.trim();
+  } else {
+    const endpoint = cfg?.endpoint ?? cfg?.metrics_endpoint;
+    const safe = typeof endpoint === 'string' ? safeSourceUrl(endpoint) : '';
+    if (safe) out.endpoint = safe;
+  }
+  return out;
+}
+
+// The scrape jobs or exporter evidence a file carries, as one line for the
+// environment-scope warning (`<file> (scrape jobs: a, b)`), or null.
+function collectionEvidenceOf(relPath, content, catalogue) {
+  if (typeof content !== 'string') return null;
+  let kind;
+  try { kind = detectArtefactKind(relPath, content, { exporterCatalogue: catalogue }); } catch { return null; }
+  const jobsOf = (docs) => docs.flatMap(d => (Array.isArray(d?.scrape_configs) ? d.scrape_configs : []))
+    .map(c => String(c?.job_name || '').trim()).filter(Boolean);
+  try {
+    if (kind === 'prometheus-scrape-config') {
+      const jobs = jobsOf(parseYamlDocs(content));
+      return jobs.length ? `${relPath} (scrape jobs: ${jobs.join(', ')})` : null;
+    }
+    if (kind === 'otel-collector') {
+      const jobs = jobsOf(parseYamlDocs(content).flatMap(d => collectorScrapeReceivers(d).map(r => r.config)));
+      return jobs.length ? `${relPath} (collector scrape jobs: ${jobs.join(', ')})` : null;
+    }
+    if (kind === 'exporter-config') {
+      const entry = matchExporterConfig(parseYaml(content), catalogue);
+      return `${relPath} (exporter config: ${entry?.id ?? 'unknown'})`;
+    }
+    if (kind === 'helm-values') {
+      const jobs = jobsOf(parseYamlDocs(content).flatMap(d => valuesCollectorConfigs(d))
+        .flatMap(c => collectorScrapeReceivers(c).map(r => r.config)));
+      return jobs.length ? `${relPath} (collector scrape jobs: ${jobs.join(', ')})` : null;
+    }
+    if (kind === 'helm-template') {
+      // The jobs the template's walker would read (its ConfigMap values or
+      // the whole template), walked into throwaway buckets.
+      const buckets = {
+        backends: [], recordingRules: [], burnRateAlerts: [], alertRules: [], metricDefinitions: [], scrapeJobs: [],
+        alertingRoutes: [], dashboards: [], collectorState: newCollectorState(), repoName: null,
+        pipelines: { receivers: [], processors: [], exporters: { metrics: null, logs: null, traces: null } },
+      };
+      const scratch = {
+        discovered: {}, warnings: [], invented: { endpoints: [], channels: [] },
+        omitted: { syntheticRecordingRules: [], unresolvedChannels: [], recordingRules: [], ruleIntervals: [] },
+      };
+      walkHelmTemplate({ relPath, content }, buckets, {}, scratch);
+      const jobs = [...new Set(buckets.scrapeJobs.map(j => j.job))];
+      return jobs.length ? `${relPath} (template scrape jobs: ${jobs.join(', ')})` : null;
+    }
+  } catch { /* unreadable: nothing to report */ }
+  return null;
+}
+
+// ---------- prebuilt exporters ----------
+
+// A metrics manifest: each entry is a declared metric of the exporter.
+function walkMetricsManifest(f, metricDefinitions, exporters, summary, evidence) {
+  const read = readMetricsManifest(f.content);
+  if (!read.ok) {
+    summary.warnings.push(`${f.relPath} is not a metrics manifest (${read.error}); it is not read.`);
+    return;
+  }
+  const m = read.manifest;
+  for (const metric of m.metrics) {
+    addMetricDefinition(metricDefinitions, evidence, summary, {
+      name: metric.name,
+      type: metric.type,
+      help: metric.help,
+      labels: metric.labels,
+      service: m.exporter,
+      origin: f.relPath,
+      originKind: 'exporter-manifest',
+      confidence: 'declared',
+    });
+  }
+  if (read.skipped) {
+    summary.warnings.push(`${f.relPath}: ${read.skipped} metric entr${read.skipped === 1 ? 'y is' : 'ies are'} not read (each needs a metric name not listed before and an exposition type: ${['counter', 'gauge', 'histogram', 'summary', 'untyped'].join(', ')}, …).`);
+  }
+  recordExporter(exporters, m.exporter, {
+    origin_kind: 'exporter-manifest',
+    file: f.relPath,
+    metrics: m.metrics.length,
+    ...(m.version ? { version: m.version } : {}),
+    ...(m.source ? { source: m.source } : {}),
+    ...(m.generatedAt ? { generated_at: m.generatedAt } : {}),
+  }, summary);
+}
+
+// A saved exposition: the exporter is named by the file (`ibm-mq.prom` →
+// ibm-mq).
+function walkExpositionSnapshot(f, metricDefinitions, exporters, summary, evidence) {
+  const { families } = parseExposition(f.content);
+  const exporter = basenameOf(f.relPath).replace(/\.(prom|metrics)$/i, '') || 'exporter';
+  for (const fam of families) {
+    addMetricDefinition(metricDefinitions, evidence, summary, {
+      name: fam.name,
+      type: fam.type,
+      help: fam.help,
+      labels: fam.labels,
+      service: exporter,
+      origin: f.relPath,
+      originKind: 'exporter-snapshot',
+      confidence: 'declared',
+    });
+  }
+  recordExporter(exporters, exporter, { origin_kind: 'exporter-snapshot', file: f.relPath, metrics: families.length }, summary);
+}
+
+// An exporter's own config, read against the catalogue: the families it
+// switches on, as candidates.
+function walkExporterConfig(f, catalogue, metricDefinitions, exporters, summary, evidence) {
+  for (const obj of parseYamlDocs(f.content)) {
+    const entry = matchExporterConfig(obj, catalogue);
+    if (!entry) continue;
+    const inferred = inferExporterFamilies(obj, entry);
+    for (const fam of inferred.families) {
+      addMetricDefinition(metricDefinitions, evidence, summary, {
+        name: fam.name,
+        type: fam.type,
+        help: fam.help,
+        labels: fam.labels,
+        service: entry.id,
+        origin: f.relPath,
+        originKind: 'exporter-config',
+        confidence: 'inferred',
+        candidateOnly: true,
+      });
+    }
+    recordExporter(exporters, entry.id, {
+      origin_kind: 'exporter-config',
+      file: f.relPath,
+      metrics: inferred.families.length,
+      namespace: inferred.namespace,
+      gates: inferred.gates,
+      scopes: inferred.scopes,
+    }, summary);
   }
 }
 

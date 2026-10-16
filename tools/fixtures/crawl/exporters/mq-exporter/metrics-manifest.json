@@ -1,0 +1,14 @@
+{
+  "exporter": "ibm-mq",
+  "version": "5.6.0",
+  "source": "http://mq-exporter:9157/metrics",
+  "generatedAt": "2026-10-01T00:00:00.000Z",
+  "metrics": [
+    { "name": "ibmmq_qmgr_status", "type": "gauge", "help": "Queue manager status (1 = running)", "labels": ["qmgr", "platform"] },
+    { "name": "ibmmq_qmgr_uptime", "type": "gauge", "help": "Queue manager uptime in seconds", "labels": ["qmgr", "platform"] },
+    { "name": "ibmmq_queue_depth", "type": "gauge", "help": "Current depth of the queue", "labels": ["qmgr", "queue", "usage", "description"] },
+    { "name": "ibmmq_queue_mqget_count", "type": "counter", "help": "MQGET calls", "labels": ["qmgr", "queue"] },
+    { "name": "ibmmq_channel_status", "type": "gauge", "help": "Channel status", "labels": ["qmgr", "channel", "type", "connname"] },
+    { "name": "ibmmq_qmgr_log_write_size_bytes", "type": "gauge", "help": "Log write size", "labels": ["qmgr", "platform"] }
+  ]
+}

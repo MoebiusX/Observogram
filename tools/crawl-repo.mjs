@@ -78,6 +78,10 @@ manifest by introspecting common observability artefacts.
     (the original is kept in crawler.nameNormalizedFrom).
     --diff-scope <mode>  live-drift comparison lens: service | family | all
                          (default: service)
+    --exporter-catalogue <file>
+                         a JSON exporter family catalogue whose entries
+                         replace or extend the built-in ones
+                         (tools/lib/exporter-catalogue.mjs; docs/DOWNSTREAM.md §18)
     -h, --help           print this message
 
   Output:
@@ -96,6 +100,12 @@ manifest by introspecting common observability artefacts.
     - OTel Collector configs     → spec.pipelines
     - Grafana dashboard JSONs    → spec.dashboards[]
     - Helm values / K8s workloads→ spec.telemetry.backends[]
+    - metrics-manifest.json, saved
+      /metrics (.prom, .metrics),
+      a prebuilt exporter's config → the exporter's metrics (crawler.discovered.exporters)
+    - an OTel Collector's prometheus
+      receiver scrape jobs         → crawler.discovered.scrape_jobs, and its
+                                     metrics exporter → spec.pipelines.exporters.metrics
 
   Example:
     npm run crawl -- ./payments-svc --name payments --criticality tier-2 > payments.pack.yaml
@@ -121,6 +131,7 @@ function parseArgs(argv) {
     else if (a === '--binding')     out.binding = argv[++i];
     else if (a === '--owners')      out.owners = (argv[++i] ?? '').split(',');
     else if (a === '--diff-scope' || a === '--live-scope') out.diffScopeMode = argv[++i];
+    else if (a === '--exporter-catalogue') out.exporterCatalogueFile = argv[++i] ?? '';
   }
   return out;
 }
@@ -165,6 +176,14 @@ async function main() {
     process.exit(2);
   }
   if (!opts.repoName) opts.repoName = basename(opts.repoPath.replace(/[\\/]$/, ''));
+  if (opts.exporterCatalogueFile !== undefined) {
+    try {
+      opts.exporterCatalogue = JSON.parse(readFileSync(opts.exporterCatalogueFile, 'utf8'));
+    } catch (e) {
+      process.stderr.write(`crawl-repo: --exporter-catalogue ${JSON.stringify(opts.exporterCatalogueFile)}: ${e instanceof SyntaxError ? `not JSON (${e.message})` : (e.code || e.message)}\n`);
+      process.exit(2);
+    }
+  }
 
   const files = await walk(opts.repoPath);
   const { yaml, canonical, summary, evidence } = crawlToYaml(files, opts);
@@ -195,6 +214,7 @@ async function main() {
     `#   alert rules      : ${summary.discovered.alertRules} (operational, alerting.rules)`,
     `#   metric definitions: ${summary.discovered.metricDefinitions}`,
     `#   scrape jobs       : ${summary.discovered.scrapeJobs}`,
+    ...(summary.discovered.exporters ? [`#   exporters        : ${summary.discovered.exporters}`] : []),
     `#   dashboards       : ${summary.discovered.dashboards}`,
     `#   alerting routes  : ${summary.discovered.alertingRoutes}`,
     `#   pipelines        : ${summary.discovered.pipelines}`,
