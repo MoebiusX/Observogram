@@ -77,7 +77,7 @@
 // total loss of the observation point is a point in the drift history,
 // not a hole in it.
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync, openSync, readSync, closeSync, realpathSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync, openSync, readSync, closeSync, fstatSync, realpathSync } from 'node:fs';
 import { resolve, join, dirname, extname, basename, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
@@ -539,9 +539,9 @@ const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
 // with \ separators and case folded. That form only compares: a refusal
 // names the path as written. Elsewhere the comparison is the realpath's
 // spelling, as it always was. host = { windows, path, realpathSync,
-// statSync } (the platform, node:path's, node:fs's realpathSync with its
-// .native and node:fs's statSync) is injectable
-// (tools/test-journey-scope.mjs); the default is this host.
+// openSync, fstatSync, closeSync } (the platform, node:path's, node:fs's
+// realpathSync with its .native, openSync, fstatSync and closeSync) is
+// injectable (tools/test-journey-scope.mjs); the default is this host.
 //
 // A network share is one more name the native realpath keeps: a path reached
 // through one (\\host\share\…, \\?\UNC\…, a mapped drive) resolves to
@@ -555,15 +555,22 @@ const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
 // there (C:\ws\orgs\beta) is one more name for it, which no realpath maps
 // back. So while the workspace is named through a share, a path on a local
 // drive outside it is placed by its nearest directory that is the
-// workspace's own — the same file id on the same volume (statSync, with the
-// volume serial's low 32 bits: all a share reports) — and judged there.
+// workspace's own — the same file id on the same volume (the volume serial's
+// low 32 bits: all a share reports) — and judged there. A file id is read
+// through a handle opened on the path (openSync, fstatSync, closeSync: libuv
+// opens a directory too), which reports the serial on every libuv, never a
+// stat by name, as server/store/paths.mjs reads it: libuv answers one of a
+// local path by its name (GetFileInformationByName, Windows 11 24H2 and
+// Server 2025), and 1.49.0 to 1.50.x (Node 22.16.x's 1.49.2) report there no
+// volume (0) — no local directory was the workspace's own, and beta's
+// C:\ws\orgs\beta\… read as outside it, nobody's part.
 const NODE_PATH = Object.freeze({ resolve, join, dirname, basename, sep });
 const ON_WINDOWS = process.platform === 'win32';
 const LOCAL_DRIVE = /^[a-z]:\\/;   // a compared form on a local drive (folded)
 const IN_ANOTHER_ORGS_PART = 'belongs to another org\'s part of the workspace — refused';
 const NOT_ON_A_LOCAL_DRIVE = 'is not a path on a local drive, and a network share or a device path may lead into another org\'s part of the workspace — refused; '
   + 'name it by its path on a local drive (copy it there if it has none)';
-export function crawlScopeRefusal(scope, { windows = ON_WINDOWS, path = NODE_PATH, realpathSync: fsRealpath = realpathSync, statSync: fsStat = statSync } = {}) {
+export function crawlScopeRefusal(scope, { windows = ON_WINDOWS, path = NODE_PATH, realpathSync: fsRealpath = realpathSync, openSync: fsOpen = openSync, fstatSync: fsFstat = fstatSync, closeSync: fsClose = closeSync } = {}) {
   if (!scope) return null;
   const realpath = windows ? fsRealpath.native : fsRealpath;
   const realOrResolved = (p) => {
@@ -581,8 +588,11 @@ export function crawlScopeRefusal(scope, { windows = ON_WINDOWS, path = NODE_PAT
   const orgsDir = path.join(base, 'orgs');
   // A workspace named through a share: a local path's place in it, by its
   // nearest directory that is the workspace's own, or null (above).
-  const fileId = (p) => {
-    try { const st = fsStat(p, { bigint: true }); return `${st.dev & 0xffffffffn}:${st.ino}`; } catch { return null; }
+  const fileId = (p) => {   // through a handle opened on p, closed before it answers, or null when p cannot be opened
+    try {
+      const fd = fsOpen(p, 'r');
+      try { const st = fsFstat(fd, { bigint: true }); return `${st.dev & 0xffffffffn}:${st.ino}`; } finally { fsClose(fd); }
+    } catch { return null; }
   };
   const baseId = windows && !LOCAL_DRIVE.test(base) ? fileId(path.resolve(scope.base)) : null;
   const isBase = new Map();   // a path or its ancestor (native realpath) → whether it is the workspace's own directory
