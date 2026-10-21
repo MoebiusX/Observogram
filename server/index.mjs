@@ -2307,6 +2307,11 @@ app.use('/lib', express.static(resolve(ROOT, 'tools/lib'), {
 // brandShellHtml's rendering, held in memory, no-cache. The static mount
 // serves no index and tries no extension, so `/index` cannot reach the
 // on-disk shell around this handler (it falls to the SPA route instead).
+// The file is named relative to `root`, as the static mount names its own:
+// `send`'s dotfiles rule ('ignore', a 404) reads every segment of the path it
+// is given, so an absolute one refused the shell wherever the install path
+// holds a dot-directory (~/.nvm/…/node_modules/observogram, ~/.local/…, a
+// .claude/worktrees checkout); with a root it reads only 'index.html'.
 const SHELL_FILE = resolve(STUDIO_DIR, 'index.html');
 let brandedShell = null;
 // The brand start() loaded (DEFAULT_BRAND until then): the audit report's
@@ -2314,7 +2319,7 @@ let brandedShell = null;
 let brand = DEFAULT_BRAND;
 function sendShell(req, res) {
   if (brandedShell !== null) return res.type('html').set('Cache-Control', 'no-cache').send(brandedShell);
-  res.sendFile(SHELL_FILE);
+  res.sendFile('index.html', { root: STUDIO_DIR });
 }
 app.get('/', authorize('GET /'), sendShell);
 app.get('/index.html', authorize('GET /index.html'), sendShell);

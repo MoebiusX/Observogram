@@ -8,7 +8,11 @@
 //              byte with the static file headers; GET /index (the old
 //              `extensions: ['html']` path) answers the same shell, not a
 //              static file; /lib/brand.mjs is served.
-//   BRANDED  — OBSERVOGRAM_BRAND_FILE=tools/fixtures/brand/acme.json: every
+//   DOT PATH — the same shell, headers and mounts with the server run from a
+//              path holding a dot-directory (~/.nvm/…, ~/.local/…, a
+//              .claude/worktrees checkout), which `send` refused in an
+//              absolute path: the repo through a link under <tmp>/.install/.
+//   BRANDED  —OBSERVOGRAM_BRAND_FILE=tools/fixtures/brand/acme.json: every
 //              shell path and every auth page (sign-in, change password, the
 //              reverse-proxy explainer) names the brand and carries no
 //              "Observogram"; the config JSON and the tokens are injected.
@@ -25,11 +29,12 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { get as httpGet } from 'node:http';
+import { spawnSync } from 'node:child_process';
 import { boot, serve, signIn } from './fixtures/serve-child.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -44,21 +49,25 @@ const get = async (base, path, headers = {}) => {
   const r = await fetch(`${base}${path}`, { headers, redirect: 'manual' });
   return { status: r.status, headers: r.headers, body: await r.text() };
 };
+// Every shell path answers studio/index.html byte for byte with the static file headers.
+async function assertShellFile(base) {
+  for (const p of SHELL_PATHS) {
+    const r = await get(base, p);
+    assert.equal(r.status, 200, p);
+    assert.equal(r.body, SHELL, `${p}: the shell as on disk`);
+    assert.match(r.headers.get('content-type'), /^text\/html; charset=utf-8/i, p);
+    assert.ok(r.headers.get('etag'), `${p}: ETag (res.sendFile — the pipeline the static mount used)`);
+    assert.ok(r.headers.get('last-modified'), `${p}: Last-Modified`);
+    assert.equal(r.headers.get('cache-control'), 'public, max-age=0', p);
+    assert.equal(r.headers.get('accept-ranges'), 'bytes', p);
+  }
+}
 
 test('DEFAULT: every shell path answers studio/index.html byte for byte with the static file headers; /index too; /lib/brand.mjs is served', async () => {
   const ws = workspace();
   const s = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off' } });
   try {
-    for (const p of SHELL_PATHS) {
-      const r = await get(s.base, p);
-      assert.equal(r.status, 200, p);
-      assert.equal(r.body, SHELL, `${p}: the shell as on disk`);
-      assert.match(r.headers.get('content-type'), /^text\/html; charset=utf-8/i, p);
-      assert.ok(r.headers.get('etag'), `${p}: ETag (res.sendFile — the pipeline the static mount used)`);
-      assert.ok(r.headers.get('last-modified'), `${p}: Last-Modified`);
-      assert.equal(r.headers.get('cache-control'), 'public, max-age=0', p);
-      assert.equal(r.headers.get('accept-ranges'), 'bytes', p);
-    }
+    await assertShellFile(s.base);
     const root = await get(s.base, '/');
     const named = await get(s.base, '/index.html');
     assert.equal(root.headers.get('etag'), named.headers.get('etag'), 'one file, one ETag');
@@ -79,6 +88,39 @@ test('DEFAULT: every shell path answers studio/index.html byte for byte with the
     assert.ok(root.body.includes('<title>Observogram — the Observability Compiler</title>'));
   } finally {
     await s.stop();
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test('DOT PATH: run from a path holding a dot-directory, every shell path still answers studio/index.html byte for byte with the static file headers; the static mount and /lib too', async () => {
+  // The repo reached through <tmp>/.install/observogram, a link to it (a junction needs no privilege on Windows; a
+  // symlink elsewhere), booted with --preserve-symlinks: the child's import.meta.url keeps the link's path, so its
+  // STUDIO_DIR holds the dot segment whatever path this checkout has.
+  const ws = workspace();
+  const outer = mkdtempSync(join(tmpdir(), 'observogram-dot-path-'));
+  const install = join(outer, '.install', 'observogram');
+  mkdirSync(dirname(install));
+  symlinkSync(ROOT, install, 'junction');
+  const index = join(install, 'server', 'index.mjs');
+  let s = null;
+  try {
+    // Under that flag the server module resolves to the link's path, not this checkout's: the child runs from the dot path.
+    const url = pathToFileURL(index).href;
+    const resolved = spawnSync(process.execPath, ['--preserve-symlinks', '--input-type=module', '-e', `process.stdout.write(import.meta.resolve(${JSON.stringify(url)}))`], { encoding: 'utf8' });
+    assert.equal(resolved.stdout, url, `the server module through the link: ${resolved.stderr}`);
+    s = await serve(ws, { env: { OBSERVOGRAM_AUTH: 'off' }, execArgv: ['--preserve-symlinks'], index });
+    await assertShellFile(s.base);
+    const css = await get(s.base, '/app.css');
+    assert.equal(css.status, 200, '/app.css: the static mount');
+    assert.match(css.headers.get('content-type'), /^text\/css/);
+    const lib = await get(s.base, '/lib/brand.mjs');
+    assert.equal(lib.status, 200, '/lib/brand.mjs: the /lib mount');
+    assert.ok(lib.body.includes('export function normalizeBrand'));
+  } finally {
+    await s?.stop();
+    // The link first, by itself: unlink takes the link (a junction too), never the checkout it leads to.
+    unlinkSync(install);
+    rmSync(outer, { recursive: true, force: true });
     rmSync(ws, { recursive: true, force: true });
   }
 });
