@@ -77,10 +77,11 @@ export function dropInheritedOrgVars(env = process.env) {
 // The import is inside the try: initAuth() runs at import and refuses a
 // malformed identity contract there (the reverse-proxy mode's ACK, OIDC
 // beside it), so that refusal prints REFUSED too — its message raw, no
-// nothingMoved (nothing ran that could write).
-export const BOOT_CODE = `
+// nothingMoved (nothing ran that could write). bootCode(url) imports the
+// server module at that URL; BOOT_CODE, the one beside this fixture.
+const bootCode = (indexUrl) => `
 try {
-  const { start } = await import(${JSON.stringify(INDEX_URL)});
+  const { start } = await import(${JSON.stringify(indexUrl)});
   const srv = await start({ port: Number(process.env.BOOT_PORT || 0), host: process.env.BOOT_HOST, silent: process.env.BOOT_SILENT === '1', legacyLivePack: process.env.BOOT_LEGACY_LIVE_PACK || undefined });
   process.stdout.write('LISTENING ' + srv.address().port + '\\n');
   if (process.env.BOOT_KEEP !== '1') { srv.close(); process.exit(0); }
@@ -89,6 +90,7 @@ try {
   process.exit(3);
 }
 `;
+export const BOOT_CODE = bootCode(INDEX_URL);
 
 export function parseBoot(stdout) {
   const listening = /^LISTENING (\d+)$/m.exec(stdout);
@@ -148,9 +150,11 @@ export function bootAsync(ws, opts) {
 // stops — the server has no access log, so a suite proving a value never
 // reached the server's output scans this. `verbose: true` boots without
 // BOOT_SILENT, so the start lines are in it too. `execArgv`: node flags
-// before the script (the permission model's, say).
-export async function serve(ws, { host = '127.0.0.1', env = {}, verbose = false, execArgv = [] } = {}) {
-  const proc = spawn(process.execPath, [...execArgv, '--input-type=module', '-e', BOOT_CODE], {
+// before the script (the permission model's, say). `index`: the server
+// module to boot, by path, when not the one beside this fixture (the repo
+// reached through a link, say).
+export async function serve(ws, { host = '127.0.0.1', env = {}, verbose = false, execArgv = [], index = null } = {}) {
+  const proc = spawn(process.execPath, [...execArgv, '--input-type=module', '-e', index ? bootCode(pathToFileURL(index).href) : BOOT_CODE], {
     env: childEnv(ws, { ...env, BOOT_HOST: host, BOOT_SILENT: verbose ? '0' : '1', BOOT_KEEP: '1' }), stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '';

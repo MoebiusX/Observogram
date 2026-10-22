@@ -2014,3 +2014,18 @@ serial on every libuv; a file or a link under the root lies on its
 directory's volume. A volume mounted in a folder under the root, or on the
 root, is refused as before. Tests: 1518 → 1519 (one more in
 `server/test-store-ops.mjs`).
+
+### Follow-up: the studio shell under a dot-directory
+
+The unbranded shell was answered by `res.sendFile` with the absolute path of
+`studio/index.html`, and `send` applies its default dotfiles rule (ignore, a
+404) to every segment of an absolute path: run from an nvm global install
+(`~/.nvm/versions/node/…/lib/node_modules/observogram`), from `~/.local/…` or
+from a `.claude/worktrees` checkout, the studio answered 404 at `/`,
+`/index.html` and every SPA path, while the assets the static mount serves
+under its root loaded. The shell is now named relative to the studio
+directory, as the mount names its files, so only `index.html` is read for a
+dot segment; the bytes and the headers are the ones it answered before. The
+test boots a child from a link under `<tmp>/.install/` with
+`--preserve-symlinks`, so the server's own paths hold the dot segment on any
+checkout. Tests: 1486 → 1487 (one more in `server/test-brand-shell.mjs`).
