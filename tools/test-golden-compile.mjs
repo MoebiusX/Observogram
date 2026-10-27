@@ -48,6 +48,10 @@ const PACKS = [
   { id: 'edge-hostile-names', path: 'tools/fixtures/compile/edge-hostile-names.pack.yaml' },
   // Two SLOs on one SLI: the per-artifact matrix only (Grafana-managed uid/title uniqueness).
   { id: 'shared-sli',         path: 'tools/fixtures/compile/shared-sli.pack.yaml', artifactsOnly: true },
+  // The blackbox fixture: four probers, every assertion kind, the grpc knob. `targets`
+  // limits its MATRIX rows to the blackbox target — its rules, collector, Alertmanager
+  // and boards are the hostile-names pack's, already pinned there.
+  { id: 'synthetic-checks',   path: 'tools/fixtures/compile/synthetic-checks.pack.yaml', targets: ['blackbox-exporter'] },
 ];
 
 // ---------------------------------------------------------------------------
@@ -82,6 +86,10 @@ const MATRIX = [
   { target: 'grafana-dashboard', product: 'grafana',        version: '11.0', band: 'grafana-11' },
   { target: 'grafana-dashboard', product: 'grafana',        version: '10.0', band: 'grafana-10' },
   { target: 'grafana-dashboard', product: 'grafana',        version: '9.5',  band: 'grafana-9' },
+
+  // The producer side: blackbox.yml. 0.19 has no grpc prober (the one knob).
+  { target: 'blackbox-exporter', product: 'blackbox-exporter', version: '0.26.0', band: 'bb-0.20+' },
+  { target: 'blackbox-exporter', product: 'blackbox-exporter', version: '0.19.0', band: 'bb-pre-0.20' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -101,7 +109,14 @@ const ARTIFACTS = [
   // Step 5: the assurance group as its own file (the per-item file the studio deploys), both flavours.
   { group: 'rules', flavor: 'prometheus', artifact: 'assurance', packs: ['payment-service'] },
   { group: 'rules', flavor: 'grafana-managed', artifact: 'assurance', packs: ['payment-service'] },
+  // The blackbox scrape jobs and a per-check module file — the artefacts no `compile()` TARGET covers.
+  { group: 'synthetics', flavor: 'blackbox', artifact: 'scrape-config', packs: ['synthetic-checks', 'edge-hostile-names'] },
+  { group: 'synthetics', flavor: 'blackbox', artifact: 'check:api-canary', packs: ['synthetic-checks'] },
 ];
+
+// The `compile()` target each artifact group is a slice of — what a pack's
+// `targets` limit is matched against in the artifact matrix.
+const ARTIFACT_TARGET = { rules: 'prometheus-rules', dashboards: 'grafana-dashboard', pipelines: 'otel-collector', alertmanager: 'alertmanager', synthetics: 'blackbox-exporter' };
 
 const artifactGoldenName = (packId, row) => {
   // ':' is not a filename character on every platform; the artifact id keeps its shape otherwise.
@@ -124,6 +139,7 @@ for (const pack of PACKS) {
   const canonical = parseYaml(readFileSync(resolve(ROOT, pack.path), 'utf8'));
 
   for (const row of MATRIX) {
+    if (pack.targets && !pack.targets.includes(row.target)) continue;
     const id = `${pack.id} · ${row.target} @ ${row.product} ${row.version}`;
     let result = null;
     try {
@@ -177,6 +193,7 @@ for (const pack of PACKS) {
   const canonical = parseYaml(readFileSync(resolve(ROOT, pack.path), 'utf8'));
   for (const row of ARTIFACTS) {
     if (row.packs && !row.packs.includes(pack.id)) continue;
+    if (pack.targets && !pack.targets.includes(ARTIFACT_TARGET[row.group])) continue;
     const id = `${pack.id} · artifact ${row.group}/${row.flavor}/${row.artifact}`;
     let result = null;
     try {

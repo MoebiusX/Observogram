@@ -803,7 +803,7 @@ test('buildVerifyModel: the verdict with the three states, schema, warnings, tod
   assert.equal(m.blocking, false);
   assert.equal(m.todoCount, 21);
   assert.equal(m.placeholdersRemaining, 17);
-  assert.deepEqual(m.artifacts.map(a => a.id), ['prometheus-rules', 'otel-collector', 'alertmanager', 'grafana-dashboard']);
+  assert.deepEqual(m.artifacts.map(a => a.id), ['prometheus-rules', 'otel-collector', 'alertmanager', 'grafana-dashboard', 'blackbox-exporter']);
   assert.equal(m.artifacts[0].label, 'Prometheus rules');
   assert.equal(m.fileName, 'orders-api.pack.yaml');
   assert.equal(m.packName, 'orders-api');
@@ -1060,7 +1060,7 @@ test('build-api loaders: the paths and bodies the six routes take, with an injec
   const [t1a, t1b] = await Promise.all([loadRequirements('tier-1', { fetchFn }), loadRequirements('tier-1', { fetchFn })]);
   assert.equal(t1a, t1b);
   assert.equal(calls.filter(c => c.path.endsWith('/tier-1')).length, 1, 'one request for two concurrent loads of the same tier');
-  assert.equal((await loadTargets({ fetchFn })).length, 4);
+  assert.equal((await loadTargets({ fetchFn })).length, 5);
   const res = await instantiate(draft(), { fetchFn });
   assert.equal(res.ok, true);
   const post = calls.find(c => c.path === '/api/library/instantiate');

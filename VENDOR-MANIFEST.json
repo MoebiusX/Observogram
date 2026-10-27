@@ -166,6 +166,31 @@
       "npm": [],
       "changedSinceRelease": false
     },
+    "tools/lib/blackbox.mjs": {
+      "sha256": "d16338aa5788c64d8736d14f65641395f9b8ef4da7541eca6c6b2ada1c773a19",
+      "bytes": 15695,
+      "exports": [
+        "BLACKBOX_KIND",
+        "DEFAULT_BLACKBOX_ADDRESS",
+        "DEFAULT_PROBE_TIMEOUT_SECONDS",
+        "blackboxFileName",
+        "blackboxScrapeFileName",
+        "classifyTarget",
+        "compileBlackboxModules",
+        "compileBlackboxScrapeConfig",
+        "durationSeconds",
+        "formatDuration",
+        "planBlackboxChecks"
+      ],
+      "imports": [
+        "tools/lib/mini-yaml.mjs",
+        "tools/lib/slug.mjs",
+        "tools/lib/validator.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
     "tools/lib/blast-radius.mjs": {
       "sha256": "5d6eef2a8699b8b844f1748e583934f8b93f15e16913dedcea72d26261f57ae1",
       "bytes": 12674,
@@ -275,8 +300,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/compile.mjs": {
-      "sha256": "4a53a483186fb98b69afa7207d088e9f6ae6059fa8e4af1923a9bf1c3ef95e4c",
-      "bytes": 80339,
+      "sha256": "d74c77006ee4c6b5eabc6942435b97472c36d10cb81c3746b8226d39c1e8e975",
+      "bytes": 84132,
       "exports": [
         "TARGETS",
         "compile",
@@ -302,6 +327,7 @@
       "imports": [
         "tools/lib/artefact-model.mjs",
         "tools/lib/assurance-rules.mjs",
+        "tools/lib/blackbox.mjs",
         "tools/lib/burn-rules.mjs",
         "tools/lib/dashboards/generic.mjs",
         "tools/lib/mini-yaml.mjs",
@@ -868,8 +894,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/profiles.mjs": {
-      "sha256": "027f2d9004a0858641baab79192a2a4019f58e608fb7c08380ddbace4de3141f",
-      "bytes": 11907,
+      "sha256": "d97132ade5956dc0796faebc3104b0d5b6d2bea050f9b255282254d6070afd6a",
+      "bytes": 12459,
       "exports": [
         "PRODUCTS",
         "PROTOCOLS",
@@ -926,8 +952,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/protocols.mjs": {
-      "sha256": "faf5642ee59c0dab9681116414c363901dfa29a508550785774403d73b2758b3",
-      "bytes": 17812,
+      "sha256": "04980bf11b7e1a65cd12c6874249630f4cc38feb510b30d3ff68b40d980cce6b",
+      "bytes": 19023,
       "exports": [
         "PROTOCOLS",
         "compareVersions",

@@ -92,6 +92,7 @@ Node-only `semver` package.
 | **OTel Collector** | `debugExporter` (`logging` → `debug` rename in 0.86), `telemetryMetricsReaders` (`address` deprecated for `readers`) | A config naming the wrong exporter fails to start on the target version. |
 | **Alertmanager** | `msteamsV2` (`msteamsv2_configs` in 0.28), `msteams` (`msteams_configs` in 0.26) | Routing a Teams channel to a receiver the version doesn't have breaks the config. |
 | **Grafana-managed rules** | `recordBlock`, `keepFiringFor`, `notificationSettings` | Unified-alerting rule shape evolved across Grafana 9 → 12. |
+| **Blackbox exporter** | `grpcProber` (the grpc prober arrived in 0.20) | A `grpc://` synthetic check compiled for an older exporter is skipped with a warning instead of emitted as a module the exporter cannot load. |
 
 ## How the compiler selects a version
 
@@ -135,7 +136,7 @@ surfaces the markers of the protocols it speaks):
 | Marker | Meaning | Protocols |
 | --- | --- | --- |
 | `native` | The version-determining shape is small and fully expressible in JS — we implement it faithfully. | `grafana-dashboard-schema` (schemaVersion + datasource form) |
-| `partial` | We model the high-impact features; the full schema is larger than we encode, and unmodelled fields pass through. | `otel-collector-config`, `alertmanager-config`, `grafana-alerting-provisioning` |
+| `partial` | We model the high-impact features; the full schema is larger than we encode, and unmodelled fields pass through. | `otel-collector-config`, `alertmanager-config`, `grafana-alerting-provisioning`, `blackbox-exporter-config` |
 | `vendored-go-needed` | **Faithful validation** requires the product's own Go schema/parser. We emit best-effort and flag it; we do **not** claim canonical fidelity. | `prometheus-rule-format`, `promql` (`promtool`/`rulefmt`) |
 
 ### Why some families need vendored Go schemas
