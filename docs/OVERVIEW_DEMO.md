@@ -18,7 +18,14 @@ the screen, never from this page.
    otherwise.
 4. Press **Check again** once and watch it come back (3–30 s). If it comes
    back *Unreachable*, the public MCP is down: skip to "If live is down".
-5. Leave the page on Krystaline · prod. Full screen, nothing else open.
+5. Leave the page on Krystaline · prod. Full screen, nothing else open, on
+   a 1080p display or larger: on a 768 px-tall laptop screen the third *Why*
+   line sits just below the fold.
+
+Rehearsed 2026-10-27 22:40: a second `npm run demo` starts in seconds and
+seeds nothing; a fresh profile opens on Overview in dark; Check again came
+back in 11 s; the refusal and the live-down states both render as written
+here.
 
 ## The 90 seconds
 

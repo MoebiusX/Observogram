@@ -1998,6 +1998,12 @@ async function runOverviewCheck() {
   overviewFacts = { ...overviewFacts, running: false };
   await refreshOverviewFacts();
   announce('Check finished.');
+  // The repaint replaced the button the user pressed: keyboard focus goes
+  // back to it (or to the next step's button when there is no Check now).
+  if (state.mode === 'overview') {
+    const back = document.querySelector('#layer-view .ov-check') || document.querySelector('#layer-view .ov-next__btn');
+    back?.focus?.({ preventScroll: true });
+  }
 }
 
 const overviewActions = {

@@ -93,10 +93,12 @@ async function registeredPacks() {
 async function seed() {
   await waitForServer();
   const before = await registeredPacks();
-  const bySource = (label) => before.find((p) => p.label === label || p.source === label || p.id === label || String(p.id).includes(label));
+  const bySource = (label) => before.find((p) => p.label === label || p.source === label || p.id === label);
 
-  // 1. The repository pack (Pack A).
-  let repo = bySource(DEMO.repoLabel);
+  // 1. The repository pack (Pack A). The catalogue names it by the pack's
+  //    own name, not by the upload's source label, so a second start finds
+  //    it as the service's non-live pack.
+  let repo = bySource(DEMO.repoLabel) || before.find((p) => !p.live && p.service === DEMO.service && p.name === DEMO.service);
   if (!repo) {
     const body = readFileSync(DEMO.repoPack, 'utf8');
     const r = await json(`/api/validate?source=${encodeURIComponent(DEMO.repoLabel)}`, {

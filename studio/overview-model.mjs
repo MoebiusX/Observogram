@@ -240,8 +240,9 @@ export function stillTrueModel({ journey = null, run = null, now = Date.now(), r
     return { ...base, status: 'never', pill: OVERVIEW_STATUS.never, sentence: 'Never checked against live.', tone: 'info' };
   }
   if (!run) {
+    // The one Check now is the next step's primary; this panel only says so.
     const env = journey.scope?.env ? ` for ${journey.scope.env}` : '';
-    return { ...base, status: 'never', pill: OVERVIEW_STATUS.never, sentence: `Never checked against live. A live check is set up${env}.`, tone: 'info', canCheck: live, checkLabel: 'Check now', checkPrimary: false };
+    return { ...base, status: 'never', pill: OVERVIEW_STATUS.never, sentence: `Never checked against live. A live check is set up${env}.`, tone: 'info', canCheck: false, checkLabel: '', checkPrimary: false };
   }
   const ago = agoText(run.startedAt, now);
   const startedMs = Date.parse(run.startedAt || '');

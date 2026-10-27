@@ -261,13 +261,13 @@ test('stillTrueModel: never checked (no journey; a journey without a run, with a
   assert.deepEqual(keep(stillTrueModel()), s0);
   // S1: a journey, never run. The fixture's scope.env is null; with one the sentence names it.
   const s1 = keep(stillTrueModel({ journey, run: null, now: NOW }));
-  assert.deepEqual(s1, { status: 'never', pill: 'Never checked', sentence: 'Never checked against live. A live check is set up.', note: '', cadence: 'Checks run only when you click.', stale: false, canCheck: true, checkLabel: 'Check now', checkPrimary: false, tone: 'info', error: null, pending: false, running: false });
+  assert.deepEqual(s1, { status: 'never', pill: 'Never checked', sentence: 'Never checked against live. A live check is set up.', note: '', cadence: 'Checks run only when you click.', stale: false, canCheck: false, checkLabel: '', checkPrimary: false, tone: 'info', error: null, pending: false, running: false });
   const s1prod = keep(stillTrueModel({ journey: { ...journey, scope: { ...journey.scope, env: 'prod' } }, run: null, now: NOW }));
   assert.equal(s1prod.sentence, 'Never checked against live. A live check is set up for prod.');
   assert.equal(keep(stillTrueModel({ journey: { ...journey, schedule: '0 * * * *' }, run: null, now: NOW })).cadence, 'Checks run on a schedule.');
   // A file-backed journey cannot be checked from here.
   const s1file = keep(stillTrueModel({ journey: fileJourney, run: null, now: NOW }));
-  assert.deepEqual([s1file.status, s1file.sentence, s1file.canCheck, s1file.checkLabel, s1file.checkPrimary], ['never', 'Never checked against live. A live check is set up.', false, 'Check now', false]);
+  assert.deepEqual([s1file.status, s1file.sentence, s1file.canCheck, s1file.checkLabel, s1file.checkPrimary], ['never', 'Never checked against live. A live check is set up.', false, '', false]);
 });
 
 test('stillTrueModel: the real run reads Changed with the count of what differs (declared-not-live plus drifted), no transition clause on a first run; the since clause counts worse first, else changed', () => {
