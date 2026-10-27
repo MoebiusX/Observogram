@@ -7,6 +7,12 @@
       "runtimeArgs": ["server/index.mjs"],
       "port": 8000,
       "autoPort": true
+    },
+    {
+      "name": "studio-demo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/demo-studio.mjs"],
+      "port": 8010
     }
   ]
 }

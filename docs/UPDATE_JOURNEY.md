@@ -2015,6 +2015,32 @@ directory's volume. A volume mounted in a folder under the root, or on the
 root, is refused as before. Tests: 1518 → 1519 (one more in
 `server/test-store-ops.mjs`).
 
+### Overview — the simplified front door (2026-10-27)
+
+Investors and partners understood the concept and not the UI: every screen
+asked them to learn layers, artefact ids, evidence states and compile targets
+before it said whether a service is well observed. The maintainer decided:
+Overview is the first-run default and Expert the opt-in; the one headline
+number is the diagnostic grade; existing services only; a polished demo over
+breadth. Overview is one screen — one service, three answers: the grade letter
+with its ladder name (the journey's last run when it graded this pack against
+live, else the pack alone, and the line under it says which); one of four
+words (*Never checked · Unchanged · Changed · Unreachable*) with one timed
+sentence from the service's journey, and **Check again** running the journey
+in the room; one next step, one button, at most three plain items. Nothing is
+computed anew; what cannot be known is said. Expert is today's studio
+untouched, one switch away; the choice is the browser's (`studioUiMode.v1`,
+`?mode=`), and the first run opens Overview only when the services table has
+rows, so the empty studio boots as before. A journey is matched to its service
+by the pack it reads, not by its scope string (which is also the diff's
+service scope). `npm run demo` seeds a populated studio from the maintainer's
+real service and the public MCP. The browser suites that pre-seed services
+now need `studioUiMode.v1 = 'expert'` or `/?mode=expert` to see the home — a
+declared change, skipped where Playwright is absent. Tests: 1487 → 1509
+(a new file, `tools/test-overview-model.mjs`: the mode rule, the service and
+journey matching, every state's exact words, the one-primary rule, the
+vocabulary guard, the renderer over a DOM shim).
+
 ### Follow-up: the studio shell under a dot-directory
 
 The unbranded shell was answered by `res.sendFile` with the absolute path of

@@ -52,6 +52,29 @@ Observogram treats observability as a compiled contract. The pack is the source
 of truth. Native artifacts are generated from it. Live systems are scanned back
 into pack shape. The diff between declared and live is the operational truth.
 
+## Overview — The Front Door
+
+The studio has two faces. **Overview** is the one most people see first: one
+service at a time and three answers, with nothing to read around them —
+
+- **How well is it observed?** The diagnostic grade as a letter, drawn
+  large, with its ladder name in plain words (*Industrial grade*) and
+  whether it was graded against live or from the repository alone.
+- **Is that still true right now?** One of four words — *Never checked ·
+  Unchanged · Changed · Unreachable* — and one sentence with a time, from the
+  service's saved journey and its last run: *Checked 2 hours ago against
+  live — 43 things differ from what the repository declares.* **Check
+  again** runs the journey against the live platform while you watch.
+- **What to do next.** One sentence, one button, at most three plain items
+  behind *Why*.
+
+**Expert** is everything below — Discover · Diagnose · Remediate, Compare,
+Build, the Advanced tools — one switch away in the header, unchanged. A
+browser opens on Overview the first time it finds a service to show, and on
+the home when the workspace is empty; the choice is remembered per browser
+(`?mode=overview` or `?mode=expert` sets it). `npm run demo` seeds a
+populated studio on port 8010 (see *Run The Demo* below).
+
 ## Main Journey
 
 The first decision is about the pack, because a service may already exist without
@@ -1275,6 +1298,26 @@ and `npm run build:stamp` refuses it (exit 2) until the history is there —
 `fetch-depth: 0` in the workflow, `git fetch --unshallow` locally.
 
 ## Common Operations
+
+### Run The Demo
+
+```bash
+npm run demo
+```
+
+`tools/demo-studio.mjs` starts the studio in the open posture on its own
+workspace (`.observogram-demo`, port 8010, `OBSERVOGRAM_MCP_ORIGINS` set for
+the public MCP) and seeds it once over its own HTTP API, so the first page is
+Overview on a real service, never an empty studio: the repository pack
+`examples/krystaline-repo-carlos.pack.yaml`, the MCP endpoint
+`krystaline-public` (https://www.krystaline.io/mcp/public), a live draft from
+it (drafted twice when a cold endpoint lost probe families), and a saved
+journey `krystaline` between the two, run once. A second start finds
+everything in place and seeds nothing. `OBSERVOGRAM_DEMO_SKIP_LIVE=1` seeds the
+repository pack only; `OBSERVOGRAM_DEMO_REDRAFT=1` drafts the live pack again;
+`PORT` and `OBSERVOGRAM_DEMO_MCP_URL` move the port and the endpoint. Rehearse
+in a fresh browser profile (or after **Reset**): a browser that already holds
+an Expert session keeps it.
 
 ### Scan A Repo
 
@@ -3161,6 +3204,7 @@ deploy/k8s/
 - [`docs/HANDOVER.md`](docs/HANDOVER.md) - hand-over note for the next session: where the three repos stand, the maintainer's working rules, the backlog and the known debts (2026-09-24)
 - [`docs/STORE_PLAN.md`](docs/STORE_PLAN.md) - the embedded `node:sqlite` store for users, orgs, services, environments and the audit: schema, import from today's files, roles, slices and gates (decisions ratified 2026-09-24)
 - [`docs/NEURON_FLEET_PLAN.md`](docs/NEURON_FLEET_PLAN.md) - the fleet in Neuron: one service registry per org (Kubernetes Services, Backstage or Consul), live SLO state through the MCP, the SLO ledger and the fleet map (proposed, for ratification)
+- [`docs/OVERVIEW_DEMO.md`](docs/OVERVIEW_DEMO.md) - the 90-second Overview demo: pre-flight, the scripted path, the fallback when live is down, the questions that come
 - [`docs/USER_JOURNEY.md`](docs/USER_JOURNEY.md) - product journey and design invariants
 - [`docs/DRY_RUN.md`](docs/DRY_RUN.md) - dry-run script and readiness checklist
 - [`docs/RELEASE_READINESS.md`](docs/RELEASE_READINESS.md) - V1 release gate

@@ -152,3 +152,29 @@ last — maps the screens that predate the kit onto them. The system:
 A new screen uses the `.og-*` classes and the `--og-*` tokens; it does not
 bring a font, a gradient or a button of its own, and it needs no line in
 `reskin.css`.
+
+## Two faces: Overview and Expert
+
+Everything above is Expert: the studio for the people who do the work. Most
+people who open it are not those people, and for them there is **Overview**
+(`studio/overview-model.mjs`, `overview-view.mjs`): one service at a time and
+three answers, with nothing to read around them —
+
+| Question | What is drawn | Where it comes from |
+| --- | --- | --- |
+| How well is it observed? | The grade letter, large; its ladder name in plain words; whether it was graded against live or from the repository alone | `computeDiagnosticGrade` — the journey's last run when it graded this pack against live, else the pack alone |
+| Is that still true right now? | One of four words — *Never checked · Unchanged · Changed · Unreachable* — and one sentence with a time | the service's journey and its last run (`/api/journeys`, `…/runs`) |
+| What to do next | One sentence, one button, at most three plain items behind *Why* | the run's drift counts; the assessment's causes when nothing live was checked |
+
+Rules Overview adds to the grammar: four status words and no others; never a
+percentage, a layer code, an artefact id or an engine word (declared only,
+scaffold, candidate, recorded live); every sentence a projection of an
+existing route or engine, and what cannot be known is said (*Never checked
+against live.*); exactly one primary button on the screen. A journey whose
+Pack B is a recording is worded *against a live recording from 7 Oct* and has
+no Check button — re-reading a file proves nothing about production.
+
+The switch between the two faces sits in the chrome on every screen. Expert
+is one click away and unchanged; Overview is the first-run default when the
+services table has rows, the home when the workspace is empty. The choice is
+the browser's (`studioUiMode.v1`, `?mode=`), never the snapshot's.

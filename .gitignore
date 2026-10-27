@@ -19,6 +19,7 @@ coverage/
 # Per-machine state, never source. OBSERVOGRAM_WORKSPACE relocates it
 # (.tomograph/ is the pre-rebrand name; existing ones keep working).
 .observogram/
+.observogram-demo/
 .tomograph/
 
 # Pinned backend-validator binaries + compiled-artifact scratch
