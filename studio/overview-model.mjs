@@ -22,7 +22,7 @@
 // termHtml hovers in the renderer, never in the sentence.
 
 import { agoText, packForService } from './services-model.mjs';
-import { instrumentGradeFor } from './diagnostic-grade.mjs';
+import { instrumentGradeFor, INSTRUMENT_GRADE_SCALE } from './diagnostic-grade.mjs';
 
 export const UI_MODE_KEY = 'studioUiMode.v1';
 export const UI_MODES = Object.freeze(['overview', 'expert']);
@@ -115,6 +115,28 @@ export function journeyIsLive(journey) {
   return /^mcp:/i.test(String(journey?.packB || ''));
 }
 
+// ---------- a live side that showed less than the check before ----------
+
+// The run's causes.vantage compares which probe families failed with the
+// check before. A family that newly failed means the live side showed less
+// than last time, so the counts are not comparable with the last reading —
+// a half-blind live side must never read as "86 things differ" (it did, the
+// night before the first demo, while the stack behind the MCP restarted).
+// The newly failed families; [] when the vantage held, grew, or is unknown.
+const FAMILY_WORDS = { alerting_routes: 'alert routes', scrape_configs: 'scrape targets', recording_rules: 'recording rules', alert_rules: 'alert rules', dashboards: 'dashboards', metric_names: 'metric names' };
+const familyWord = (f) => FAMILY_WORDS[f] || String(f || '').replace(/_/g, ' ');
+const listWords = (xs) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+export function vantageShrank(run) {
+  const v = run?.causes?.vantage;
+  if (!v || !v.changed) return [];
+  // The check before saw nothing at all: there is no earlier picture to have
+  // shrunk from (the first good check after an outage is a recovery).
+  if (v.from?.vantage === 'lost') return [];
+  const from = Array.isArray(v.from?.failed) ? v.from.failed : [];
+  const to = Array.isArray(v.to?.failed) ? v.to.failed : [];
+  return to.filter((f) => !from.includes(f));
+}
+
 // ---------- the grade ----------
 
 // "Industrial Grade" → "Industrial grade"; "Diagnostic / Clinical Grade" →
@@ -148,6 +170,109 @@ export function runGradedPack(run, pack) {
   return !!name && name === (pack.name ?? pack.label) && (!version || !pack.version || String(version) === String(pack.version));
 }
 
+// ---------- why this grade ----------
+//
+// The seven criteria the engine scores (studio/diagnostic-grade.mjs, grade
+// schema 2: one point each, Drift-free fractional), each as one plain
+// sentence with a yes / partly / no mark, the yeses first. Five read the
+// repository alone and come from the pack-alone diagnostic's criteria; the
+// two that need the other side (Drift-free, Fresh) come from the run that
+// graded the letter on screen, or say that nothing live was checked. The
+// list is offered only when it adds up to the letter shown (within two
+// points of a hundred): a run of another schema, or a pack whose own
+// annotations already carry live evidence, explains nothing and shows nothing.
+const GRADE_POINTS = 7;
+const GRADE_SCHEMA = 2;
+const GRADE_BAR = 85;
+const WHY_RANK = { yes: 0, partly: 1, no: 2 };
+const criterionOf = (diagnostic, key) => [...(diagnostic?.coverage?.criteria || []), ...(diagnostic?.trust?.criteria || [])].find((c) => c && c.key === key) || null;
+const numbersIn = (s) => (String(s || '').match(/\d+(?:\.\d+)?/g) || []).map(Number);
+const tenth = (n) => String(Math.round(n * 10) / 10);
+
+// The five criteria that read the repository alone, from the engine's
+// criteria (key, pass, detail) — the numbers are read back out of the detail.
+function repositoryGradeLines(diagnostic) {
+  const keys = ['multi-modal', 'correlated', 'calibrated', 'comprehensive', 'chaos-validated'];
+  const c = Object.fromEntries(keys.map((k) => [k, criterionOf(diagnostic, k)]));
+  if (keys.some((k) => !c[k])) return null;
+  const [got = 0, of = 4] = numbersIn(c['multi-modal'].detail);
+  const kinds = (String(c['multi-modal'].detail).match(/\(([^)]*)\)/) || [])[1] || '';
+  const [objectives = 0] = numbersIn(c.calibrated.detail);
+  const [coverage = 0] = numbersIn(c.comprehensive.detail);
+  const [experiments = 0] = numbersIn(c['chaos-validated'].detail);
+  const line = (crit, yes, no) => ({ ok: crit.pass ? 'yes' : 'no', text: crit.pass ? yes : no });
+  return [
+    line(c['multi-modal'],
+      `${got} of ${of} kinds of signal are collected${kinds ? `: ${kinds}` : ''}.`,
+      got ? `Only ${got} of ${of} kinds of signal ${got === 1 ? 'is' : 'are'} collected${kinds ? `: ${kinds}` : ''}.` : 'No kind of signal is collected yet.'),
+    line(c.correlated,
+      'Traces and logs can be joined, so one request can be followed end to end.',
+      'Traces and logs cannot be joined, so a request cannot be followed end to end.'),
+    line(c.calibrated,
+      `Normal is defined with numbers: ${objectives} objective${objectives === 1 ? '' : 's'}, with detection and repair baselines.`,
+      /no .*baselines/i.test(c.calibrated.detail) ? 'Normal is not defined with numbers: no detection and repair baselines.' : 'Normal is not defined with numbers: no objective has a target.'),
+    line(c.comprehensive,
+      `Coverage reaches ${coverage} in 100 across infrastructure, platform, application and user experience.`,
+      `Coverage reaches only ${coverage} in 100 across infrastructure, platform, application and user experience.`),
+    line(c['chaos-validated'],
+      `Recovery has been proven by fault injection: ${experiments} experiment${experiments === 1 ? '' : 's'}.`,
+      'Recovery has never been proven by fault injection.'),
+  ];
+}
+
+// The two criteria that need the other side, from the run that graded the
+// letter on screen: Drift-free is the integrity of the declared commitment
+// chains (the run's traceability), Fresh the age of the live picture when
+// the run read it. Null when the run scored drift on another construct.
+function liveGradeLines(run, { against, where, now }) {
+  if (run?.grade?.driftConstruct !== 'requirement-chain' || !(Number(run.traceability?.declaredTotal) > 0)) return null;
+  const pct = Number(run.traceability.integrityPct);
+  if (!Number.isFinite(pct)) return null;
+  const ageHours = Number(run.freshness?.liveAgeHours);
+  const fresh = Number.isFinite(ageHours) ? ageHours * 3600e3 <= FRESH_WINDOW_MS : true;
+  return [
+    { ok: pct >= GRADE_BAR ? 'yes' : (pct > 0 ? 'partly' : 'no'), score: Math.max(0, Math.min(1, pct / 100)),
+      text: `Of what the repository promises, ${Math.round(pct)} in 100 holds up ${where}; the bar is ${GRADE_BAR}.` },
+    { ok: fresh ? 'yes' : 'no',
+      text: fresh ? `Checked ${against} ${agoText(run.startedAt, now)}.` : `The ${where === 'live' ? 'live picture' : 'recording'} was more than a day old when it was checked.` },
+  ];
+}
+
+const gradePoints = (lines) => lines.reduce((n, l) => n + (l.ok === 'yes' ? 1 : l.ok === 'partly' ? (l.score ?? 0) : 0), 0);
+
+// "4.8 of 7 points. B+ starts at 5.3." — the next band up in points, so the
+// distance to the next letter is one subtraction.
+function pointsText(points, letter) {
+  const bands = INSTRUMENT_GRADE_SCALE.filter((g) => g.minPct !== null).reverse();
+  const i = bands.findIndex((g) => g.letter === letter);
+  const next = i >= 0 ? bands[i + 1] : null;
+  const head = `${tenth(points)} of ${GRADE_POINTS} points.`;
+  if (!next) return head;
+  return `${head} ${next.letter} starts ${next.exclusiveMin ? 'above' : 'at'} ${tenth(next.minPct / 100 * GRADE_POINTS)}.`;
+}
+
+// gradeWhy({ diagnostic, run, letter, score, against, where, now }) → { why, points }
+//   why     [{ ok: 'yes' | 'partly' | 'no', text }] — seven lines, or none
+//   points  "4.8 of 7 points. B+ starts at 5.3." — or ''
+export function gradeWhy({ diagnostic = null, run = null, letter = '', score = null, against = 'against live', where = 'live', now = Date.now() } = {}) {
+  const none = { why: [], points: '' };
+  if (run && run.grade?.schema != null && Number(run.grade.schema) !== GRADE_SCHEMA) return none;
+  if (diagnostic?.gradeSchema != null && Number(diagnostic.gradeSchema) !== GRADE_SCHEMA) return none;
+  const fixed = repositoryGradeLines(diagnostic);
+  if (!fixed) return none;
+  const live = run ? liveGradeLines(run, { against, where, now }) : [
+    { ok: 'no', text: 'Nothing live has been checked, so no promise is confirmed live.' },
+    { ok: 'no', text: 'Never checked against live.' },
+  ];
+  if (!live) return none;
+  const lines = [...fixed, ...live];
+  const points = gradePoints(lines);
+  const pct = Number(score);
+  if (Number.isFinite(pct) && Math.abs(points / GRADE_POINTS * 100 - pct) > 2) return none;
+  const why = lines.slice().sort((a, b) => WHY_RANK[a.ok] - WHY_RANK[b.ok]).map(({ ok, text }) => ({ ok, text }));
+  return { why, points: pointsText(points, letter) };
+}
+
 const toneForLetter = (letter) => {
   const l = String(letter || '');
   if (l.startsWith('A')) return l === 'A++' ? GRADE_TONE.ref : GRADE_TONE.a;
@@ -166,12 +291,15 @@ const toneForLetter = (letter) => {
 // recording", never "against live".
 export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagnosticError = null, run = null, journey = null, now = Date.now() } = {}) {
   if (!pack || how === 'none') {
-    return { letter: '–', label: 'No pack yet', word: 'Nothing to grade: no pack is registered for this service.', source: '', tone: 'neutral', title: '', basis: 'none' };
+    return { letter: '–', label: 'No pack yet', word: 'Nothing to grade: no pack is registered for this service.', source: '', tone: 'neutral', title: '', basis: 'none', why: [], points: '' };
   }
   if (how !== 'primary') {
-    return { letter: '–', label: 'No pack of its own', word: 'This service appears in a live draft, but no pack of its own is registered yet.', source: '', tone: 'neutral', title: '', basis: 'none' };
+    return { letter: '–', label: 'No pack of its own', word: 'This service appears in a live draft, but no pack of its own is registered yet.', source: '', tone: 'neutral', title: '', basis: 'none', why: [], points: '' };
   }
-  const usable = run && (run.outcome === 'pass' || run.outcome === 'gate-failed') && run.grade?.letter && runGradedPack(run, pack);
+  // A run that saw less of the live side than the check before graded a
+  // smaller picture: not usable as the letter, and the source line says so.
+  const shrank = vantageShrank(run);
+  const usable = run && (run.outcome === 'pass' || run.outcome === 'gate-failed') && run.grade?.letter && !shrank.length && runGradedPack(run, pack);
   if (usable) {
     const ig = instrumentGradeFor(Number(run.grade.score)) || { letter: run.grade.letter, label: run.grade.letterLabel || '', blurb: '' };
     const letter = run.grade.letter;
@@ -183,21 +311,26 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
       source: `Graded ${against}, ${agoText(run.startedAt, now)}.`,
       tone: toneForLetter(letter), title: `${letter} · ${run.grade.letterLabel || ig.label}${ig.blurb ? ` — ${ig.blurb}` : ''}`,
       basis: recording ? 'recording' : 'live',
+      ...gradeWhy({ diagnostic, run, letter, score: run.grade.score, against, where: recording ? 'in the recording' : 'live', now }),
     };
   }
   if (diagnosticError) {
-    return { letter: '?', label: 'Not graded', word: `The pack could not be read: ${diagnosticError}`, source: '', tone: 'neutral', title: '', basis: 'error' };
+    return { letter: '?', label: 'Not graded', word: `The pack could not be read: ${diagnosticError}`, source: '', tone: 'neutral', title: '', basis: 'error', why: [], points: '' };
   }
   if (!diagnostic?.overall) {
-    return { letter: '·', label: 'Reading…', word: '', source: '', tone: 'neutral', title: '', basis: 'pending' };
+    return { letter: '·', label: 'Reading…', word: '', source: '', tone: 'neutral', title: '', basis: 'pending', why: [], points: '' };
   }
   const ig = diagnostic.overall.instrumentGrade || instrumentGradeFor(diagnostic.overall.audit?.scorePctExact ?? 0);
   const lost = run && run.outcome === 'vantage-lost' && runGradedPack(run, pack);
+  const partial = !lost && run && shrank.length > 0 && runGradedPack(run, pack);
   return {
     letter: ig.letter, label: shortGradeLabel(ig), word: diagnostic.overall.verdict?.word || verdictWordFor(diagnostic.overall.audit?.scorePctExact),
-    source: lost ? 'Graded from the repository alone; the last live check could not see production.' : 'Graded from the repository alone.',
+    source: lost ? 'Graded from the repository alone; the last live check could not see production.'
+      : partial ? 'Graded from the repository alone; the last live check saw only part of production.'
+        : 'Graded from the repository alone.',
     tone: GRADE_TONE[ig.tier] || 'neutral', title: `${ig.letter} · ${ig.label}${ig.blurb ? ` — ${ig.blurb}` : ''}`,
     basis: 'repository',
+    ...gradeWhy({ diagnostic, letter: ig.letter, score: diagnostic.overall.audit?.scorePctExact, now }),
   };
 }
 
@@ -264,8 +397,19 @@ export function stillTrueModel({ journey = null, run = null, now = Date.now(), r
   // run; the first run has none, and the sentence then says nothing of it.
   const firstRun = !run.transition || t.reason === 'first run' || !t.since;
   let since = '';
+  const betterCount = Array.isArray(t.changed) ? t.changed.filter((c) => c && c.direction === 'better').length : 0;
   if (!firstRun && worseCount > 0) since = ` ${worseCount} got worse since the check before.`;
+  else if (!firstRun && changedCount > 0 && betterCount === changedCount) since = ` ${changedCount} recovered since the check before.`;
   else if (!firstRun && changedCount > 0) since = ` ${changedCount} changed since the check before.`;
+  // The live side showed less than the check before: the counts are not
+  // comparable, so the sentence says so instead of announcing a difference,
+  // and Check again (the next step's primary) is the one thing to do.
+  const shrank = vantageShrank(run);
+  if (shrank.length) {
+    return { ...base, status: 'changed', pill: OVERVIEW_STATUS.changed, tone: 'warn', stale,
+      sentence: `Checked ${ago} ${against} — the live side showed less than the check before: its ${listWords(shrank.map(familyWord))} could not be read, so what differs cannot be told yet.`,
+      canCheck: live && !stale, checkLabel: 'Check again', checkPrimary: false };
+  }
   if (k === 0) {
     // Live-only things are not a difference from what the repository
     // declares, but they are not hidden either: the sentence names them.
@@ -324,6 +468,14 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
       ? { sentence: 'Check again once the live side answers; until then nothing is known.', button: { label: 'Check again', action: 'ov-check' }, why: ['The live side did not answer the last check.'], primary: true }
       : { sentence: 'The recording could not be read; open Expert mode to look.', button: { label: 'Open Expert mode', action: 'ov-expert' }, why: [], primary: true };
   }
+  // The live side showed less than the check before: the one thing to do is
+  // to check again; the differences are not worth a trip until it answers.
+  const shrank = vantageShrank(run);
+  if (shrank.length && still.status === 'changed') {
+    return live
+      ? { sentence: 'Check again: the live side answered only in part.', button: { label: 'Check again', action: 'ov-check' }, why: [`Its ${listWords(shrank.map(familyWord))} could not be read this time.`, 'What differs was counted against a smaller live picture.'], primary: true }
+      : { sentence: 'The recording answered only in part; open Expert mode to look.', button: { label: 'Open Expert mode', action: 'ov-expert' }, why: [], primary: true };
+  }
   if (still.stale && live) {
     const ago = run?.startedAt ? agoText(run.startedAt, now) : '';
     return { sentence: 'Check it against live now.', button: { label: 'Check now', action: 'ov-check' }, why: [`The last check is ${ago.replace(/ ago$/, '')} old; readings older than a day are not trusted.`], primary: true };
@@ -362,7 +514,13 @@ export function buildOverviewModel(input = {}) {
   } = input;
   const ordered = orderServicesForOverview(services, catalog, { isLiveAggregatePack });
   const picked = pickOverviewService(services, catalog, { serviceId, env, isLiveAggregatePack });
-  const options = ordered.map((s) => ({ id: s.id, name: s.name, selected: picked.service ? s.id === picked.service.id : false }));
+  // The picker lists the rows with a pack of their own; a row whose only pack
+  // is a live aggregate's membership has nothing to grade and is Expert's to
+  // show — unless it is the one remembered, which stays so the screen can say
+  // so. When no row has a pack of its own, every row is listed.
+  const own = ordered.filter((s) => packForService(s, catalog, { isLiveAggregatePack }).how === 'primary');
+  const listed = own.length ? ordered.filter((s) => own.includes(s) || (picked.service && s.id === picked.service.id)) : ordered;
+  const options = listed.map((s) => ({ id: s.id, name: s.name, selected: picked.service ? s.id === picked.service.id : false }));
   if (!picked.service) {
     const unreadable = servicesStatus && servicesStatus.kind !== 'ok' && servicesStatus.kind !== 'loading' ? (servicesStatus.error || 'the services table could not be read') : null;
     return { kind: unreadable ? 'error' : (servicesStatus?.kind === 'loading' ? 'loading' : 'empty'), error: unreadable, options: [], service: null, envs: [], env: null, grade: null, still: null, next: null, productName, primary: null };

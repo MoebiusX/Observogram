@@ -22,8 +22,8 @@ import { readFileSync } from 'node:fs';
 import {
   UI_MODES, OVERVIEW_STATUS, FRESH_WINDOW_MS,
   decideUiMode, orderServicesForOverview, pickOverviewService, journeyForService, journeyIsLive,
-  shortGradeLabel, verdictWordFor, runGradedPack, differenceCount,
-  gradeModel, stillTrueModel, nextActionModel, buildOverviewModel,
+  shortGradeLabel, verdictWordFor, runGradedPack, differenceCount, vantageShrank,
+  gradeModel, gradeWhy, stillTrueModel, nextActionModel, buildOverviewModel,
 } from '../studio/overview-model.mjs';
 import { renderOverview } from '../studio/overview-view.mjs';
 
@@ -48,11 +48,29 @@ const HOUR = 3600e3;
 // The pack-alone diagnostic (computeDiagnosticGrade on Pack A) and the decision (buildAssessmentDecision), minimal.
 const diagnostic = { overall: { instrumentGrade: { letter: 'C', tier: 'c', label: 'Field Grade', blurb: '…' }, verdict: { word: 'Not yet diagnostic-grade' }, audit: { scorePctExact: 43 } } };
 const decision = { causes: [{ title: 'Nothing live has been checked' }, { title: 'Not every signal type is declared' }, { title: 'Whole layers are unobserved' }, { title: 'a fourth' }] };
+// The same diagnostic with the engine's criteria (grade schema 2), as computeDiagnosticGrade writes them for the demo pack alone.
+const diagnosticFull = {
+  ...diagnostic, gradeSchema: 2,
+  coverage: { criteria: [
+    { key: 'multi-modal', label: 'Multi-modal', pass: true, detail: '3 of 4 signals declared as backends (metrics, traces, logs)' },
+    { key: 'correlated', label: 'Correlated', pass: true, detail: 'tracecontext propagator declared' },
+    { key: 'calibrated', label: 'Calibrated', pass: true, detail: 'MTTD/MTTR baselines + 18 SLOs with explicit objective' },
+    { key: 'comprehensive', label: 'Comprehensive', pass: false, detail: '35% average observed across infra · platform · app · ux' },
+  ] },
+  trust: { criteria: [
+    { key: 'chaos-validated', label: 'Chaos-validated', pass: false, detail: 'no chaos experiments - recovery procedures are theoretical' },
+    { key: 'drift-free', label: 'Drift-free', pass: false, score: 0, detail: 'declared-only - no live signal to verify against (connect MCP or scan live)' },
+    { key: 'fresh', label: 'Fresh', pass: false, detail: 'no mcp.refreshedAt annotation - pack has never been verified against live state' },
+  ] },
+};
 
 // Derived runs: nothing differs; the live side did not answer.
 const withDrift = (over) => ({ ...run, drift: { ...run.drift, ...over } });
 const unchangedRun = withDrift({ declaredNotLive: 0, drifted: 0, liveNotDeclared: 0 });
 const lostRun = { ...run, outcome: 'vantage-lost' };
+// The record the night before the first demo: the stack behind the MCP was restarting, the metric names
+// probe newly failed, and the engine read C · 30 % alignment · 86 declared-not-live — a smaller live picture.
+const partialRun = fixture('krystaline-run-partial');
 // The same journey reading a recording as Pack B (a file path, not "mcp: …").
 const fileJourney = { ...journey, packB: 'C:/demo/.observogram-demo/journeys/krystaline/live/2026-10-07T12-00-00-000Z.json' };
 
@@ -209,7 +227,7 @@ test('gradeModel: the run\'s letter when it graded this pack against live; the p
     letter: 'B', label: 'Industrial grade', word: 'Almost diagnostic-grade',
     source: 'Graded against live, 2 hours ago.', tone: 'warn',
     title: 'B · Industrial Grade — Suitable for production, maintenance, process control, and routine professional use.',
-    basis: 'live',
+    basis: 'live', why: [], points: '',
   });
   assert.equal(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic, run: { ...run, outcome: 'pass' }, journey, now: NOW })).basis, 'live', 'a passing run is as usable as a gate-failed one');
   // The same run against a recording: the words say so, and never "against live".
@@ -221,7 +239,7 @@ test('gradeModel: the run\'s letter when it graded this pack against live; the p
   // The run graded another pack: the pack-alone grade.
   const packAlone = {
     letter: 'C', label: 'Field grade', word: 'Not yet diagnostic-grade',
-    source: 'Graded from the repository alone.', tone: 'warn', title: 'C · Field Grade — …', basis: 'repository',
+    source: 'Graded from the repository alone.', tone: 'warn', title: 'C · Field Grade — …', basis: 'repository', why: [], points: '',
   };
   assert.deepEqual(keep(gradeModel({ pack: { ...krystalinePack, id: 'other-pack', name: 'krystaline-v2', label: 'krystaline-v2' }, how: 'primary', diagnostic, run, journey, now: NOW })), packAlone);
   assert.deepEqual(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic, run: null, journey: null, now: NOW })), packAlone, 'no run at all');
@@ -234,20 +252,61 @@ test('gradeModel: the run\'s letter when it graded this pack against live; the p
   const derived = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: { overall: { audit: { scorePctExact: 90 } } }, now: NOW }));
   assert.deepEqual([derived.letter, derived.label, derived.word, derived.tone, derived.title], ['A', 'Diagnostic grade', 'Diagnostic-grade', 'ok', 'A · Diagnostic / Clinical Grade — Fit for professional diagnostic, clinical, or decision-critical use.']);
   // No pack, or only a live draft's membership.
-  const noPack = { letter: '–', label: 'No pack yet', word: 'Nothing to grade: no pack is registered for this service.', source: '', tone: 'neutral', title: '', basis: 'none' };
+  const noPack = { letter: '–', label: 'No pack yet', word: 'Nothing to grade: no pack is registered for this service.', source: '', tone: 'neutral', title: '', basis: 'none', why: [], points: '' };
   assert.deepEqual(keep(gradeModel({ pack: null, how: 'none', diagnostic, run, journey, now: NOW })), noPack);
   assert.deepEqual(keep(gradeModel({ pack: krystalinePack, how: 'none', diagnostic, run, journey, now: NOW })), noPack, 'how says none: the pack is not this service\'s');
   assert.deepEqual(keep(gradeModel()), noPack);
   assert.deepEqual(keep(gradeModel({ pack: packs[1], how: 'aggregate', diagnostic, run, journey, now: NOW })), {
-    letter: '–', label: 'No pack of its own', word: 'This service appears in a live draft, but no pack of its own is registered yet.', source: '', tone: 'neutral', title: '', basis: 'none',
+    letter: '–', label: 'No pack of its own', word: 'This service appears in a live draft, but no pack of its own is registered yet.', source: '', tone: 'neutral', title: '', basis: 'none', why: [], points: '',
   });
   // Unreadable, and not yet read.
   assert.deepEqual(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnosticError: 'the pack file is not valid YAML', now: NOW })), {
-    letter: '?', label: 'Not graded', word: 'The pack could not be read: the pack file is not valid YAML', source: '', tone: 'neutral', title: '', basis: 'error',
+    letter: '?', label: 'Not graded', word: 'The pack could not be read: the pack file is not valid YAML', source: '', tone: 'neutral', title: '', basis: 'error', why: [], points: '',
   });
-  assert.deepEqual(keep(gradeModel({ pack: krystalinePack, how: 'primary', now: NOW })), { letter: '·', label: 'Reading…', word: '', source: '', tone: 'neutral', title: '', basis: 'pending' });
+  assert.deepEqual(keep(gradeModel({ pack: krystalinePack, how: 'primary', now: NOW })), { letter: '·', label: 'Reading…', word: '', source: '', tone: 'neutral', title: '', basis: 'pending', why: [], points: '' });
   assert.equal(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: {}, now: NOW })).basis, 'pending', 'a diagnostic without overall is not read yet');
   assert.equal(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic, diagnosticError: 'x', run, journey, now: NOW })).basis, 'live', 'a usable run outranks a read error of the pack alone');
+});
+
+test('gradeWhy: the seven criteria in plain words behind the letter — against live, from the repository alone, against a recording; the points line names the next band; nothing when the list would not add up to the letter', () => {
+  const has = [
+    ['yes', '3 of 4 kinds of signal are collected: metrics, traces, logs.'],
+    ['yes', 'Traces and logs can be joined, so one request can be followed end to end.'],
+    ['yes', 'Normal is defined with numbers: 18 objectives, with detection and repair baselines.'],
+  ];
+  const lacks = [
+    ['no', 'Coverage reaches only 35 in 100 across infrastructure, platform, application and user experience.'],
+    ['no', 'Recovery has never been proven by fault injection.'],
+  ];
+  const rows = (why) => why.map((w) => [w.ok, w.text]);
+  // Against live: the yeses first, the partly, then the noes; the points line says how far B+ is.
+  const live = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run, journey, now: NOW }));
+  assert.deepEqual(rows(live.why), [...has, ['yes', 'Checked against live 2 hours ago.'], ['partly', 'Of what the repository promises, 84 in 100 holds up live; the bar is 85.'], ...lacks]);
+  assert.equal(live.points, '4.8 of 7 points. B+ starts at 5.3.');
+  // The repository alone: the two live criteria say so, and score nothing.
+  const alone = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: null, now: NOW }));
+  assert.deepEqual(rows(alone.why), [...has, ...lacks, ['no', 'Nothing live has been checked, so no promise is confirmed live.'], ['no', 'Never checked against live.']]);
+  assert.equal(alone.points, '3 of 7 points. B starts at 4.4.');
+  // Against a recording: the words say so.
+  const recorded = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run, journey: fileJourney, now: NOW }));
+  assert.deepEqual(rows(recorded.why).slice(3, 5), [['yes', 'Checked against a live recording 2 hours ago.'], ['partly', 'Of what the repository promises, 84 in 100 holds up in the recording; the bar is 85.']]);
+  // A live picture older than a day when it was read: Fresh says no, with the letter that goes with it.
+  const stale = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...run, freshness: { liveAgeHours: 30 }, grade: { ...run.grade, score: 55, letter: 'C', letterLabel: 'Field Grade' } }, journey, now: NOW }));
+  assert.deepEqual([stale.letter, rows(stale.why).at(-1), stale.points], ['C', ['no', 'The live picture was more than a day old when it was checked.'], '3.8 of 7 points. B starts at 4.4.']);
+  // Nothing when it would not add up: another grade schema, a score the lines do not reach, drift scored on another construct, a diagnostic without the criteria.
+  for (const [what, over] of [['schema', { grade: { ...run.grade, schema: 1 } }], ['score', { grade: { ...run.grade, score: 30, letter: 'D', letterLabel: 'Consumer Grade' } }], ['construct', { grade: { ...run.grade, driftConstruct: 'diff-buckets' } }]]) {
+    const m = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...run, ...over }, journey, now: NOW }));
+    assert.deepEqual([m.why, m.points], [[], ''], what);
+  }
+  assert.deepEqual(gradeWhy({ diagnostic, run, letter: 'B', score: 69, now: NOW }), { why: [], points: '' }, 'the minimal diagnostic carries no criteria');
+  assert.equal(gradeWhy({ diagnostic: diagnosticFull, letter: 'C', score: 43 }).why.length, 7);
+  // The top of the ladder names no next band.
+  const allPass = (list) => list.map((c) => ({ ...c, pass: true }));
+  const top = gradeWhy({
+    diagnostic: { ...diagnosticFull, coverage: { criteria: allPass(diagnosticFull.coverage.criteria) }, trust: { criteria: allPass(diagnosticFull.trust.criteria) } },
+    run: { ...run, traceability: { ...run.traceability, integrityPct: 100 }, grade: { ...run.grade, score: 100, letter: 'A+' } }, letter: 'A+', score: 100, now: NOW,
+  });
+  assert.deepEqual([top.points, top.why.every((w) => w.ok === 'yes')], ['7 of 7 points.', true]);
 });
 
 // ---------- is that still true right now? ----------
@@ -282,6 +341,8 @@ test('stillTrueModel: the real run reads Changed with the count of what differs 
   assert.equal(since({ reason: 'first run', since: null, changed: [] }), 'Checked 2 hours ago against live — 43 things differ from what the repository declares.');
   assert.equal(since({ reason: null, since: '2026-10-27T18:48:29.174Z', changed: [{ direction: 'worse' }, { direction: 'better' }] }), 'Checked 2 hours ago against live — 43 things differ from what the repository declares. 1 got worse since the check before.');
   assert.equal(since({ reason: null, since: '2026-10-27T18:48:29.174Z', changed: [{ direction: 'better' }, { direction: 'same' }] }), 'Checked 2 hours ago against live — 43 things differ from what the repository declares. 2 changed since the check before.');
+  // Every chain that moved moved back (the first good check after a half-blind one): recovered, not merely changed.
+  assert.equal(since({ reason: null, since: '2026-10-27T18:48:29.174Z', changed: [{ direction: 'better' }, { direction: 'better' }] }), 'Checked 2 hours ago against live — 43 things differ from what the repository declares. 2 recovered since the check before.');
   assert.equal(since({ reason: null, since: '2026-10-27T18:48:29.174Z', changed: [{ direction: 'worse' }, { direction: 'worse' }, { direction: 'better' }] }), 'Checked 2 hours ago against live — 43 things differ from what the repository declares. 2 got worse since the check before.');
   assert.equal(since({ reason: null, since: null, changed: [{ direction: 'worse' }] }), 'Checked 2 hours ago against live — 43 things differ from what the repository declares.', 'no `since` is a first run whatever `changed` holds');
   assert.equal(since({ reason: null, since: '2026-10-27T18:48:29.174Z', changed: 3, worse: 1 }), 'Checked 2 hours ago against live — 43 things differ from what the repository declares. 1 got worse since the check before.', 'the listing\'s counted shape');
@@ -300,7 +361,7 @@ test('stillTrueModel: Unchanged with the Check again primary; stale after a day 
     note: '', cadence: 'Checks run only when you click.', stale: false, canCheck: true, checkLabel: 'Check again', checkPrimary: true, tone: 'ok', error: null, pending: false, running: false,
   });
   assert.equal(keep(stillTrueModel({ journey, run: { ...unchangedRun, transition: { reason: null, since: '2026-10-27T18:48:29.174Z', changed: [{ direction: 'better' }] } }, now: NOW })).sentence,
-    'Checked 2 hours ago against live — it matches: everything the repository declares is running live. 1 changed since the check before.');
+    'Checked 2 hours ago against live — it matches: everything the repository declares is running live. 1 recovered since the check before.');
   // Stale: older than the freshness window — no Check from here, and Unchanged turns to warn.
   const stale = keep(stillTrueModel({ journey, run: unchangedRun, now: STALE_NOW }));
   assert.deepEqual([stale.status, stale.stale, stale.canCheck, stale.checkPrimary, stale.tone, stale.sentence], ['unchanged', true, false, false, 'warn', 'Checked 1 day ago against live — it matches: everything the repository declares is running live.']);
@@ -423,7 +484,7 @@ test('buildOverviewModel: the real screen end to end — krystaline on prod, gra
   const m = keep(screen());
   assert.equal(m.kind, 'service');
   assert.equal(m.error, null);
-  assert.deepEqual(m.options, [{ id: 1, name: 'krystaline', selected: true }, { id: 2, name: 'kx-exchange', selected: false }, { id: 3, name: 'kx-matcher', selected: false }, { id: 4, name: 'kx-wallet', selected: false }]);
+  assert.deepEqual(m.options, [{ id: 1, name: 'krystaline', selected: true }], 'the picker lists the rows with a pack of their own; the member-only rows are Expert\'s');
   assert.deepEqual(m.service, { id: 1, name: 'krystaline', slug: 'krystaline' });
   assert.deepEqual([m.envs, m.env], [[{ name: 'prod', selected: true }], 'prod']);
   assert.deepEqual(m.journey, { name: 'krystaline', live: true });
@@ -444,6 +505,8 @@ test('buildOverviewModel: the real screen end to end — krystaline on prod, gra
   // A member-only row: no pack of its own, no journey, Expert mode is the one thing to do.
   const kx = keep(screen({ serviceId: 2 }));
   assert.deepEqual([kx.service.slug, kx.options.find((o) => o.selected).id, kx.journey, kx.grade.label, kx.still.status, kx.next.button.label, kx.primary], ['kx-exchange', 2, null, 'No pack of its own', 'never', 'Open Expert mode', 'next']);
+  assert.deepEqual(kx.options, [{ id: 1, name: 'krystaline', selected: false }, { id: 2, name: 'kx-exchange', selected: true }], 'the remembered member-only row stays listed');
+  assert.deepEqual(keep(screen({ catalog: [] })).options.map((o) => o.id), [1, 2, 3, 4], 'no row has a pack of its own: every row is listed');
   // Running: the still-true panel says so; the listing unreadable: nothing claimed, Retry.
   const running = keep(screen({ running: true }));
   assert.deepEqual([running.still.sentence, running.still.checkLabel], ['Checking against live now…', 'Checking…']);
@@ -514,6 +577,9 @@ const STATES = {
   'unchanged (recording)': { journeys: [fileJourney], run: unchangedRun },
   unreachable: { run: lostRun },
   'unreachable (recording)': { journeys: [fileJourney], run: lostRun },
+  'showed less than the check before': { run: partialRun },
+  'showed less than the check before (recording)': { journeys: [fileJourney], run: partialRun },
+  'running, showed less than the check before': { run: partialRun, running: true },
   'stale changed': { now: STALE_NOW },
   'stale unchanged': { run: unchangedRun, now: STALE_NOW },
   'stale changed (recording)': { journeys: [fileJourney], now: STALE_NOW },
@@ -534,7 +600,7 @@ const STATES = {
   'services error': { services: null, servicesStatus: { kind: 'error', error: '503: down' } },
 };
 const NONE_ALLOWED = new Set(['unchanged (recording)', 'stale unchanged (recording)', 'journeys error', 'pending', 'loading', 'empty', 'services error']);
-const EITHER = new Set(['running, no run', 'running, changed', 'running, unchanged', 'running, unreachable']);
+const EITHER = new Set(['running, no run', 'running, changed', 'running, unchanged', 'running, unreachable', 'running, showed less than the check before']);
 const primariesOf = (m) => (m.primary === 'next' && m.next?.button ? 1 : 0) + (m.primary === 'check' && m.still?.checkPrimary ? 1 : 0);
 
 test('one primary across the screen: every state has exactly one primary button, or none where nothing can be done from here', () => {
@@ -588,7 +654,7 @@ test('renderOverview: the four pieces, one primary button, the sentences as the 
   const html = c.innerHTML;
   assert.ok(html.startsWith('<div class="ov-page">'), 'the zone');
   for (const piece of ['class="og-input ov-service"', 'class="ov-grade og-panel', 'class="ov-live og-panel', 'class="ov-next og-panel']) assert.ok(html.includes(piece), `the piece ${piece}`);
-  assert.ok(html.includes('<select class="og-input ov-service" id="ov-service" aria-label="Service">') && html.includes('<option value="1" selected>krystaline</option>') && html.includes('<option value="2">kx-exchange</option>'));
+  assert.ok(html.includes('<select class="og-input ov-service" id="ov-service" aria-label="Service">') && html.includes('<option value="1" selected>krystaline</option>') && !html.includes('kx-exchange'), 'the picker: the rows with a pack of their own');
   assert.ok(html.includes('<span class="og-pill ov-env-one">prod</span>') && !html.includes('ov-envs'), 'one environment: a pill, not a switch');
   assert.equal(countOf(html, 'og-btn--primary'), 1, 'exactly one primary button');
   assert.ok(html.includes('<button type="button" class="og-btn og-btn--primary ov-next__btn" data-ux-action="ov-next-neuron">See the differences</button>'));
@@ -601,6 +667,13 @@ test('renderOverview: the four pieces, one primary button, the sentences as the 
   assert.ok(html.includes('<p class="ov-next__sentence">Fix the 43 things the live side does differently.</p>'));
   assert.ok(html.includes('<details class="ux-disclosure ov-next__why"><summary>Why</summary>') && html.includes('<li>38 declared things are not running live.</li><li>5 things run differently live than declared.</li><li>30 more things run live that the repository does not declare.</li>'), 'the why is a closed disclosure');
   assert.ok(html.includes('<span class="ux-term" tabindex="0" title="Diagnostic grade: ') && html.includes('>How well is it observed?</span>'), 'the grade eyebrow carries the formal term on hover');
+  assert.ok(!html.includes('Why this grade'), 'the minimal diagnostic carries no criteria: no grade disclosure');
+  // With the engine's criteria: Why this grade, closed — the points line, then a pill and a sentence per criterion; still one primary.
+  const full = overviewContainer();
+  renderOverview(full, screen({ diagnostic: diagnosticFull }), host);
+  assert.ok(full.innerHTML.includes('<details class="ux-disclosure ov-grade__why"><summary>Why this grade</summary><div class="ux-disclosure-body"><p class="ov-grade__points og-muted">4.8 of 7 points. B+ starts at 5.3.</p><ul class="ov-gw-list"><li class="ov-gw ov-gw--yes"><span class="og-pill og-pill--ok ov-gw__pill">Yes</span><span class="ov-gw__text">3 of 4 kinds of signal are collected: metrics, traces, logs.</span></li>'), 'the grade disclosure');
+  assert.ok(full.innerHTML.includes('<li class="ov-gw ov-gw--partly"><span class="og-pill og-pill--warn ov-gw__pill">Partly</span>') && full.innerHTML.includes('<li class="ov-gw ov-gw--no"><span class="og-pill og-pill--fail ov-gw__pill">No</span>'));
+  assert.equal(countOf(full.innerHTML, 'og-btn--primary'), 1, 'still one primary');
   assert.ok(!html.includes('ov-live__error'), 'no start error: no callout');
   // The wiring: every action reaches host.overview; the select's change reads the id as a number.
   assert.equal(c.click('ov-check'), true, 'a handled click is prevented');
@@ -696,6 +769,28 @@ test('verdictWordFor: a missing score (null, empty) yields no word', () => {
 
 test('stillTrueModel: one thing that differs reads "1 thing differs from"', () => {
   assert.equal(stillTrueModel({ journey, run: withDrift({ declaredNotLive: 1, drifted: 0 }), now: NOW }).sentence, 'Checked 2 hours ago against live — 1 thing differs from what the repository declares.');
+});
+
+test('a live side that showed less than the check before (a probe family newly failed): the sentence says so instead of a count, the grade falls back to the repository and says why, Check again is the one thing to do; a vantage that held or grew changes nothing', () => {
+  const LATER = Date.parse(partialRun.startedAt) + 2 * HOUR;
+  assert.deepEqual(vantageShrank(partialRun), ['metric_names']);
+  assert.deepEqual([vantageShrank(run), vantageShrank(null), vantageShrank({ causes: { vantage: { changed: true, from: { failed: ['a', 'b'] }, to: { failed: ['a'] } } } })], [[], [], []], 'held, none, grew');
+  // The first good check after an outage compares with a record that saw nothing: a recovery, not a shrink (dashboards has always been short).
+  assert.deepEqual(vantageShrank({ causes: { vantage: { changed: true, from: { vantage: 'lost', failed: [], unsupported: [] }, to: { vantage: 'partial', failed: ['dashboards'], unsupported: [] } } } }), []);
+  const g = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic, run: partialRun, journey, now: LATER }));
+  assert.deepEqual([g.letter, g.basis, g.source], ['C', 'repository', 'Graded from the repository alone; the last live check saw only part of production.']);
+  const s = keep(stillTrueModel({ journey, run: partialRun, now: LATER }));
+  assert.deepEqual([s.status, s.pill, s.tone, s.sentence, s.canCheck, s.checkLabel, s.checkPrimary],
+    ['changed', 'Changed', 'warn', 'Checked 2 hours ago against live — the live side showed less than the check before: its metric names could not be read, so what differs cannot be told yet.', true, 'Check again', false]);
+  const n = keep(nextActionModel({ still: s, grade: g, run: partialRun, journey, now: LATER }));
+  assert.deepEqual(n, { sentence: 'Check again: the live side answered only in part.', button: { label: 'Check again', action: 'ov-check' }, why: ['Its metric names could not be read this time.', 'What differs was counted against a smaller live picture.'], primary: true });
+  const m = keep(screen({ run: partialRun, now: LATER }));
+  assert.deepEqual([m.grade.letter, m.grade.basis, m.still.status, m.next.button.label, m.primary], ['C', 'repository', 'changed', 'Check again', 'next']);
+  // Two families newly failed read as a list; a recording that answered in part sends to Expert.
+  const two = { ...partialRun, causes: { vantage: { changed: true, from: { failed: [] }, to: { failed: ['dashboards', 'metric_names'] } } } };
+  assert.ok(keep(stillTrueModel({ journey, run: two, now: LATER })).sentence.includes('its dashboards and metric names could not be read'));
+  const rec = keep(nextActionModel({ still: keep(stillTrueModel({ journey: fileJourney, run: partialRun, now: LATER })), grade: g, run: partialRun, journey: fileJourney, now: LATER }));
+  assert.deepEqual([rec.sentence, rec.button.label], ['The recording answered only in part; open Expert mode to look.', 'Open Expert mode']);
 });
 
 test('while a check is running, the next panel offers no second Check beside the busy one', () => {

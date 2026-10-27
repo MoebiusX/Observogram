@@ -28,6 +28,13 @@ const PORT = Number(process.env.PORT || 8010);
 const HOST = '127.0.0.1';
 const BASE = `http://${HOST}:${PORT}`;
 const WORKSPACE = resolve(ROOT, process.env.OBSERVOGRAM_WORKSPACE || '.observogram-demo');
+// The address to open: it forces the Overview face and the dark theme, and
+// the browser remembers both — a profile that last saw Expert opens here too.
+const DEMO_URL = `${BASE}/?mode=overview&theme=dark`;
+// A check older than this at start is run again, so the page opens on
+// "Checked a few minutes ago" and the first Check in the room meets a warm
+// endpoint (a cold one answers its first probes in 20–30 s and loses families).
+const WARM_AFTER_MS = Number(process.env.OBSERVOGRAM_DEMO_WARM_AFTER_MIN || 10) * 60_000;
 
 const DEMO = {
   service: 'krystaline',
@@ -157,12 +164,52 @@ async function seed() {
     j = { name: DEMO.journey, lastRun: null };
   }
   if (!j.lastRun) {
-    const r = await json(`/api/journeys/${encodeURIComponent(DEMO.journey)}/run`, { method: 'POST' });
-    const rec = r.record || {};
-    log(`ran the journey: ${rec.outcome || '?'} · grade ${rec.grade?.letter || '?'} (${rec.grade?.score ?? '?'}%) · alignment ${rec.drift?.alignmentPct ?? '?'}%`);
-  } else log(`journey ${DEMO.journey} last ran ${j.lastRun.startedAt} (${j.lastRun.outcome})`);
+    await runJourney('first check');
+    return;
+  }
+  log(`journey ${DEMO.journey} last ran ${j.lastRun.startedAt} (${j.lastRun.outcome})`);
+
+  // 5. Warm the live side and refresh "last checked" when the newest run is
+  //    older than WARM_AFTER_MS; once more when that run lost more than one
+  //    probe family (a cold endpoint). A 502 means the live side did not
+  //    answer at all: the server kept a vantage-lost record, Overview reads
+  //    Unreachable, and the morning pre-flight decides which beat it is.
+  if (process.env.OBSERVOGRAM_DEMO_NO_WARM) { log('warm check skipped (OBSERVOGRAM_DEMO_NO_WARM)'); return; }
+  const age = Date.now() - Date.parse(j.lastRun.startedAt);
+  if (!(age > WARM_AFTER_MS)) { log(`last check is ${Math.round(age / 60000)} min old — fresh enough, no warm check`); return; }
+  // Once more when the run lost more than one probe family, or saw less of
+  // the live side than the check before (Overview then reads "showed less
+  // than the check before" and asks for another check — better done here).
+  const rec = await runJourney('warm check');
+  if (rec && ((rec.probes?.failed?.length || 0) > 1 || newlyFailed(rec).length)) await runJourney('warm check again (the first saw less of the live side than the check before)');
 }
 
-seed().then(() => log(`ready — open ${BASE}`)).catch((e) => {
-  process.stderr.write(`[demo] seed failed: ${e.message}\n[demo] the studio keeps running on ${BASE}; fix the cause and start again.\n`);
+// The probe families this run lost that the check before could read — the
+// record's causes.vantage, as Overview reads it (studio/overview-model.mjs
+// vantageShrank); none when the check before saw nothing at all.
+function newlyFailed(rec) {
+  const v = rec?.causes?.vantage;
+  if (!v?.changed || v.from?.vantage === 'lost') return [];
+  const before = Array.isArray(v.from?.failed) ? v.from.failed : [];
+  return (Array.isArray(v.to?.failed) ? v.to.failed : []).filter((f) => !before.includes(f));
+}
+
+// POST the journey's run; log the record's headline; null when the live
+// side did not answer (the route answers 502 after keeping the record).
+async function runJourney(why) {
+  log(`${why}: running the journey ${DEMO.journey}…`);
+  try {
+    const r = await json(`/api/journeys/${encodeURIComponent(DEMO.journey)}/run`, { method: 'POST' });
+    const rec = r.record || {};
+    const failed = rec.probes?.failed || [];
+    log(`${why}: ${rec.outcome || '?'} · grade ${rec.grade?.letter || '?'} (${rec.grade?.score ?? '?'}%) · alignment ${rec.drift?.alignmentPct ?? '?'}% · ${rec.tookMs ?? '?'} ms${failed.length ? ` · probe families failed: ${failed.join(', ')}` : ''}`);
+    return rec;
+  } catch (e) {
+    if (e.status === 502) { log(`${why}: the live side did not answer (${e.message.slice(0, 300)}) — Overview reads Unreachable until a check succeeds; press Check again on the page in a minute, or start again`); return null; }
+    throw e;
+  }
+}
+
+seed().then(() => log(`ready — open ${DEMO_URL}`)).catch((e) => {
+  process.stderr.write(`[demo] seed failed: ${e.message}\n[demo] the studio keeps running on ${DEMO_URL}; fix the cause and start again.\n`);
 });

@@ -2036,7 +2036,19 @@ by the pack it reads, not by its scope string (which is also the diff's
 service scope). `npm run demo` seeds a populated studio from the maintainer's
 real service and the public MCP. The browser suites that pre-seed services
 now need `studioUiMode.v1 = 'expert'` or `/?mode=expert` to see the home — a
-declared change, skipped where Playwright is absent. Tests: 1487 → 1509
+declared change, skipped where Playwright is absent. Polished the night
+before the room (2026-10-28): *Why this grade* under the letter — the seven
+criteria in plain words with a yes / partly / no each and the sum with the
+next band, offered only when it adds up to the letter; the picker lists the
+rows with a pack of their own; `?theme=` is remembered like `?mode=`; the
+demo prints the address to open and runs the check again at start when the
+last one is old, so the first Check in the room meets a warm endpoint; the
+three answers and an open *Why* fit a 768 px-tall screen. That warm check
+caught the stack behind the public MCP restarting — one check half blind
+(a probe family newly failed: C, 86 declared-not-live), the next a 503 —
+so a live side that showed less than the check before now reads as exactly
+that, never as a count, with the letter back on the repository and Check
+again as the one thing to do. Tests: 1487 → 1511
 (a new file, `tools/test-overview-model.mjs`: the mode rule, the service and
 journey matching, every state's exact words, the one-primary rule, the
 vocabulary guard, the renderer over a DOM shim).

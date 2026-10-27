@@ -39,7 +39,22 @@ function gradeHtml(g) {
           ${g.source ? `<div class="ov-grade__src og-muted">${escapeHtml(g.source)}</div>` : ''}
         </div>
       </div>
+      ${gradeWhyHtml(g)}
     </section>`;
+}
+
+// The seven criteria behind the letter, collapsed: a yes / partly / no pill
+// and one sentence each, the points line first. Nothing when the model has
+// no list that adds up to the letter.
+const WHY_MARK = { yes: ['ok', 'Yes'], partly: ['warn', 'Partly'], no: ['fail', 'No'] };
+function gradeWhyHtml(g) {
+  if (!Array.isArray(g.why) || !g.why.length) return '';
+  const items = g.why.map((w) => {
+    const [tone, word] = WHY_MARK[w.ok] || ['', w.ok];
+    return `<li class="ov-gw ov-gw--${escapeHtml(w.ok)}"><span class="og-pill${tone ? ` og-pill--${tone}` : ''} ov-gw__pill">${escapeHtml(word)}</span><span class="ov-gw__text">${escapeHtml(w.text)}</span></li>`;
+  }).join('');
+  const points = g.points ? `<p class="ov-grade__points og-muted">${escapeHtml(g.points)}</p>` : '';
+  return disclosureHtml('Why this grade', `${points}<ul class="ov-gw-list">${items}</ul>`, { cls: 'ov-grade__why' });
 }
 
 function stillHtml(s, primary) {

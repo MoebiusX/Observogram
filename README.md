@@ -1313,11 +1313,16 @@ Overview on a real service, never an empty studio: the repository pack
 `krystaline-public` (https://www.krystaline.io/mcp/public), a live draft from
 it (drafted twice when a cold endpoint lost probe families), and a saved
 journey `krystaline` between the two, run once. A second start finds
-everything in place and seeds nothing. `OBSERVOGRAM_DEMO_SKIP_LIVE=1` seeds the
-repository pack only; `OBSERVOGRAM_DEMO_REDRAFT=1` drafts the live pack again;
-`PORT` and `OBSERVOGRAM_DEMO_MCP_URL` move the port and the endpoint. Rehearse
-in a fresh browser profile (or after **Reset**): a browser that already holds
-an Expert session keeps it.
+everything in place and seeds nothing; it runs the check again when the last
+one is older than ten minutes, so the page opens on *Checked a few minutes
+ago* and the first Check meets a warm endpoint (`OBSERVOGRAM_DEMO_NO_WARM=1`
+skips it, `OBSERVOGRAM_DEMO_WARM_AFTER_MIN` moves the bar). The ready line
+prints the address to open, `/?mode=overview&theme=dark`: it forces Overview
+and the dark theme and the browser remembers both, so no fresh profile is
+needed. `OBSERVOGRAM_DEMO_SKIP_LIVE=1` seeds the repository pack only;
+`OBSERVOGRAM_DEMO_REDRAFT=1` drafts the live pack again; `PORT` and
+`OBSERVOGRAM_DEMO_MCP_URL` move the port and the endpoint. The script is
+[docs/OVERVIEW_DEMO.md](docs/OVERVIEW_DEMO.md).
 
 ### Scan A Repo
 

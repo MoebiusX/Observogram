@@ -11,6 +11,10 @@
   (function () {
     try {
       var t = localStorage.getItem('studioTheme');
+      // ?theme=dark|light wins and is remembered, like ?mode= (npm run demo
+      // prints such an address, so the room's browser opens as rehearsed).
+      var q = new URLSearchParams(window.location.search).get('theme');
+      if (q === 'light' || q === 'dark') { t = q; localStorage.setItem('studioTheme', q); }
       if (t !== 'light' && t !== 'dark') {
         t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
       }

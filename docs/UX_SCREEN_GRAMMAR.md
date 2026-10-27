@@ -162,7 +162,7 @@ three answers, with nothing to read around them —
 
 | Question | What is drawn | Where it comes from |
 | --- | --- | --- |
-| How well is it observed? | The grade letter, large; its ladder name in plain words; whether it was graded against live or from the repository alone | `computeDiagnosticGrade` — the journey's last run when it graded this pack against live, else the pack alone |
+| How well is it observed? | The grade letter, large; its ladder name in plain words; whether it was graded against live or from the repository alone; behind *Why this grade* (closed), the seven criteria as one plain sentence each with a *Yes · Partly · No* pill, the yeses first, and the sum with the next band (*4.8 of 7 points. B+ starts at 5.3.*) | `computeDiagnosticGrade` — the journey's last run when it graded this pack against live, else the pack alone; the seven lines from the pack-alone criteria plus the run's chain integrity and live age, withheld unless they add up to the letter |
 | Is that still true right now? | One of four words — *Never checked · Unchanged · Changed · Unreachable* — and one sentence with a time | the service's journey and its last run (`/api/journeys`, `…/runs`) |
 | What to do next | One sentence, one button, at most three plain items behind *Why* | the run's drift counts; the assessment's causes when nothing live was checked |
 
@@ -172,7 +172,13 @@ scaffold, candidate, recorded live); every sentence a projection of an
 existing route or engine, and what cannot be known is said (*Never checked
 against live.*); exactly one primary button on the screen. A journey whose
 Pack B is a recording is worded *against a live recording from 7 Oct* and has
-no Check button — re-reading a file proves nothing about production.
+no Check button — re-reading a file proves nothing about production. A live
+side that showed less than the check before (a probe family newly failed)
+never reads as a count: the sentence says what could not be read, the
+letter falls back to the repository's and says why, Check again is the one
+thing to do. The service picker lists the rows with a pack of their own; a row that only
+appears in a live draft has nothing to grade and is Expert's to show (it
+stays listed only while it is the one remembered).
 
 The switch between the two faces sits in the chrome on every screen. Expert
 is one click away and unchanged; Overview is the first-run default when the

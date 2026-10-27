@@ -1,0 +1,403 @@
+{
+  "journey": "krystaline",
+  "startedAt": "2026-10-27T23:26:21.974Z",
+  "tookMs": 3970,
+  "packA": {
+    "source": "C:\\Users\\bizai\\Documents\\GitHub\\Observogram\\.observogram-demo\\packs\\uploaded-krystaline-a37d2521.pack.yaml",
+    "name": "krystaline",
+    "version": "0.1.0-crawled"
+  },
+  "packB": {
+    "source": "mcp:https://www.krystaline.io/mcp/public",
+    "name": "production-live",
+    "version": "0.29885726.0",
+    "refreshedAt": "2026-10-27T23:26:25.327Z"
+  },
+  "scope": {
+    "env": null,
+    "service": null,
+    "scopeMode": null
+  },
+  "grade": {
+    "score": 57,
+    "pass": false,
+    "threshold": 85,
+    "schema": 2,
+    "letter": "C",
+    "letterLabel": "Field Grade",
+    "driftConstruct": "requirement-chain"
+  },
+  "traceability": {
+    "integrityPct": 0,
+    "intact": 0,
+    "partial": 0,
+    "broken": 18,
+    "undeclared": 0,
+    "declaredTotal": 18
+  },
+  "versions": {
+    "alertmanager": "0.27.0",
+    "grafana": "12.4.0",
+    "jaeger": "live",
+    "loki": "3.0.0"
+  },
+  "transition": {
+    "since": "2026-10-27T20:41:19.521Z",
+    "changed": [
+      {
+        "rootKey": "slo::{\"id\":\"genai_client_operation_99\"}",
+        "title": "genai_client_operation_99",
+        "from": {
+          "verdict": "intact",
+          "ladderVerdict": "healthy"
+        },
+        "to": {
+          "verdict": "broken",
+          "ladderVerdict": "broken"
+        },
+        "direction": "worse",
+        "nodes": {
+          "newlyDegraded": [
+            "krystalinex-server",
+            "mcp-public",
+            "genai:client_operation_duration:p95_5m",
+            "genai:client_operation_duration:p99_5m",
+            "genai:client_operation:error_ratio_5m",
+            "SEV2 routes",
+            "genai_client_operation",
+            "SEV1 routes",
+            "burn-rate alert: genai_client_operation_99"
+          ],
+          "recovered": [
+            "scrape: cadvisor",
+            "scrape: krystalinex-frontend"
+          ]
+        },
+        "note": "degraded list truncated (cap 16) — a node that moved may be unrecorded"
+      },
+      {
+        "rootKey": "slo::{\"id\":\"genai_client_operation_duration_99\"}",
+        "title": "genai_client_operation_duration_99",
+        "from": {
+          "verdict": "intact",
+          "ladderVerdict": "healthy"
+        },
+        "to": {
+          "verdict": "broken",
+          "ladderVerdict": "broken"
+        },
+        "direction": "worse",
+        "nodes": {
+          "newlyDegraded": [
+            "krystalinex-server",
+            "mcp-public",
+            "genai:client_operation_duration:p95_5m",
+            "genai:client_operation_duration:p99_5m",
+            "genai_client_operation_duration",
+            "SEV2 routes",
+            "SEV1 routes",
+            "burn-rate alert: genai_client_operation_duration_99",
+            "genai_client_operation_duration_99"
+          ],
+          "recovered": [
+            "scrape: cadvisor",
+            "scrape: krystalinex-frontend"
+          ]
+        },
+        "note": "degraded list truncated (cap 16) — a node that moved may be unrecorded"
+      },
+      {
+        "rootKey": "slo::{\"id\":\"genai_client_token_usage_99\"}",
+        "title": "genai_client_token_usage_99",
+        "from": {
+          "verdict": "intact",
+          "ladderVerdict": "healthy"
+        },
+        "to": {
+          "verdict": "broken",
+          "ladderVerdict": "broken"
+        },
+        "direction": "worse",
+        "nodes": {
+          "newlyDegraded": [
+            "krystalinex-server",
+            "mcp-public",
+            "SEV2 routes",
+            "genai:client_token_usage:rate_1h",
+            "SEV1 routes",
+            "genai_client_token_usage",
+            "burn-rate alert: genai_client_token_usage_99",
+            "genai_client_token_usage_99",
+            "gen_ai_client_token_usage_sum"
+          ],
+          "recovered": [
+            "scrape: cadvisor",
+            "scrape: krystalinex-frontend"
+          ]
+        },
+        "note": "degraded list truncated (cap 16) — a node that moved may be unrecorded"
+      },
+      {
+        "rootKey": "slo::{\"id\":\"genai_rca_analysis_99\"}",
+        "title": "genai_rca_analysis_99",
+        "from": {
+          "verdict": "intact",
+          "ladderVerdict": "healthy"
+        },
+        "to": {
+          "verdict": "broken",
+          "ladderVerdict": "broken"
+        },
+        "direction": "worse",
+        "nodes": {
+          "newlyDegraded": [
+            "krystalinex-server",
+            "mcp-public",
+            "genai:rca_analysis_duration:p95_5m",
+            "genai:rca_analysis:failure_ratio_5m",
+            "genai_rca_analysis",
+            "SEV2 routes",
+            "SEV1 routes",
+            "burn-rate alert: genai_rca_analysis_99",
+            "genai_rca_analysis_99"
+          ],
+          "recovered": [
+            "scrape: cadvisor",
+            "scrape: krystalinex-frontend"
+          ]
+        },
+        "note": "degraded list truncated (cap 16) — a node that moved may be unrecorded"
+      },
+      {
+        "rootKey": "slo::{\"id\":\"slo_availability_99\"}",
+        "title": "slo_availability_99",
+        "from": {
+          "verdict": "broken",
+          "ladderVerdict": "degraded"
+        },
+        "to": {
+          "verdict": "broken",
+          "ladderVerdict": "broken"
+        },
+        "direction": "worse",
+        "nodes": {
+          "newlyDegraded": [
+            "krystalinex-server",
+            "mcp-public",
+            "SEV2 routes",
+            "slo:availability:composite_1d",
+            "slo:availability:composite_1h",
+            "slo:availability:error_budget_remaining",
+            "SEV1 routes"
+          ],
+          "recovered": [
+            "scrape: cadvisor",
+            "scrape: krystalinex-frontend",
+            "slo:http_requests:error_ratio_1d",
+            "slo:server:probe_success_ratio_1d"
+          ]
+        },
+        "note": "degraded list truncated (cap 16) — a node that moved may be unrecorded"
+      },
+      {
+        "rootKey": "slo::{\"id\":\"slo_http_request_duration_99\"}",
+        "title": "slo_http_request_duration_99",
+        "from": {
+          "verdict": "partial",
+          "ladderVerdict": "degraded"
+        },
+        "to": {
+          "verdict": "broken",
+          "ladderVerdict": "broken"
+        },
+        "direction": "worse",
+        "nodes": {
+          "newlyDegraded": [
+            "krystalinex-server",
+            "mcp-public",
+            "slo:http_request_duration:ratio_below_500ms_1d",
+            "SEV2 routes",
+            "slo:http_request_duration:p95_1h",
+            "slo:http_request_duration:p95_5m",
+            "slo:http_request_duration:p99_1h",
+            "slo:http_request_duration:p99_5m",
+            "slo:http_request_duration:ratio_below_2s_5m",
+            "slo:http_request_duration:ratio_below_500ms_1h"
+          ],
+          "recovered": [
+            "slo_http_request_duration",
+            "scrape: cadvisor",
+            "scrape: krystalinex-frontend"
+          ]
+        },
+        "note": "degraded list truncated (cap 16) — a node that moved may be unrecorded"
+      },
+      {
+        "rootKey": "slo::{\"id\":\"slo_latency_99\"}",
+        "title": "slo_latency_99",
+        "from": {
+          "verdict": "intact",
+          "ladderVerdict": "healthy"
+        },
+        "to": {
+          "verdict": "broken",
+          "ladderVerdict": "broken"
+        },
+        "direction": "worse",
+        "nodes": {
+          "newlyDegraded": [
+            "krystalinex-server",
+            "mcp-public",
+            "slo:http_request_duration:ratio_below_500ms_1d",
+            "SEV2 routes",
+            "slo:latency:error_budget_remaining",
+            "slo_latency",
+            "SEV1 routes",
+            "burn-rate alert: slo_latency_99",
+            "slo_latency_99"
+          ],
+          "recovered": [
+            "scrape: cadvisor",
+            "scrape: krystalinex-frontend"
+          ]
+        },
+        "note": "degraded list truncated (cap 16) — a node that moved may be unrecorded"
+      }
+    ],
+    "appeared": [],
+    "disappeared": [],
+    "any": true,
+    "skipped": [],
+    "reason": null
+  },
+  "livePack": {
+    "kept": true,
+    "path": "live/2026-10-27T23-26-21-974Z.json",
+    "bytes": 37279,
+    "reason": "chains changed since 2026-10-27T20:41:19.521Z: 7 changed"
+  },
+  "conformance": {
+    "scorePercent": 77,
+    "mustPercent": 80,
+    "conformant": false,
+    "declaredTier": "tier-2"
+  },
+  "drift": {
+    "alignmentPct": 30,
+    "aligned": 38,
+    "drifted": 0,
+    "declaredNotLive": 86,
+    "liveNotDeclared": 2,
+    "outOfScope": 4,
+    "scaffold": 18
+  },
+  "freshness": {
+    "liveAgeHours": 0.00016638888888888888,
+    "refreshedAt": "2026-10-27T23:26:25.327Z"
+  },
+  "probes": {
+    "attempted": [
+      "dashboards",
+      "alerting_routes",
+      "metric_names",
+      "scrape_configs",
+      "recording_rules",
+      "alert_rules"
+    ],
+    "succeeded": [
+      "alerting_routes",
+      "scrape_configs"
+    ],
+    "empty": [
+      "recording_rules",
+      "alert_rules"
+    ],
+    "failed": [
+      "dashboards",
+      "metric_names"
+    ],
+    "unsupported": []
+  },
+  "probeErrors": {
+    "dashboards": "grafana_dashboards_search: Error: HTTP 401: Unauthorized — http://kx-krystalinex-grafana:3000/api/search?limit=100&type=dash-db",
+    "metric_names": "metrics_metadata: MCP error -32602: Input validation error: Invalid arguments for tool metrics_metadata: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"metric\"\n    ],"
+  },
+  "vantage": "partial",
+  "toolsExposedCount": 43,
+  "scrapeJobsDown": 0,
+  "unhealthyRules": 0,
+  "stack": {
+    "status": "sampled",
+    "reason": null,
+    "sampled": 12,
+    "empty": 12,
+    "failed": 0,
+    "notAttempted": 0
+  },
+  "gate": {
+    "thresholds": {
+      "minAlignmentPct": 85
+    },
+    "breaches": [
+      {
+        "criterion": "minAlignmentPct",
+        "detail": "alignment 30% < required 85%"
+      }
+    ]
+  },
+  "outcome": "gate-failed",
+  "causes": {
+    "causes": [
+      {
+        "rank": 1,
+        "kind": "stack-self-metric",
+        "score": 0.5,
+        "evidence": "scrape_duration_max = 0.533 seconds (scrape) — point-in-time sample",
+        "chains": [
+          "genai_client_operation_99",
+          "genai_client_operation_duration_99",
+          "genai_client_token_usage_99",
+          "genai_rca_analysis_99",
+          "slo_availability_99",
+          "slo_http_request_duration_99",
+          "slo_latency_99"
+        ],
+        "rootKeys": [
+          "slo::{\"id\":\"genai_client_operation_99\"}",
+          "slo::{\"id\":\"genai_client_operation_duration_99\"}",
+          "slo::{\"id\":\"genai_client_token_usage_99\"}",
+          "slo::{\"id\":\"genai_rca_analysis_99\"}",
+          "slo::{\"id\":\"slo_availability_99\"}",
+          "slo::{\"id\":\"slo_http_request_duration_99\"}",
+          "slo::{\"id\":\"slo_latency_99\"}"
+        ],
+        "nodes": [
+          "krystalinex-server",
+          "mcp-public"
+        ]
+      }
+    ],
+    "vantage": {
+      "changed": true,
+      "from": {
+        "vantage": "partial",
+        "failed": [
+          "dashboards"
+        ],
+        "unsupported": [],
+        "toolsExposedCount": 43
+      },
+      "to": {
+        "vantage": "partial",
+        "failed": [
+          "dashboards",
+          "metric_names"
+        ],
+        "unsupported": [],
+        "toolsExposedCount": 43
+      },
+      "detail": "probe family metric_names newly failed (metrics_metadata: MCP error -32602: Input validation error: Invalid arguments for tool metrics_metadata: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"metric\"\n    ],)"
+    },
+    "note": "candidate causes ranked by evidence — not a root-cause verdict"
+  }
+}
