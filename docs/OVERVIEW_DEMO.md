@@ -44,8 +44,8 @@ the next a 503, the one after B again), which is now its own beat below.
 
 ## The 90 seconds
 
-**0:00 — the page.** Three columns, the words you showed last time on top of
-each: Discover · Diagnose · Remediate. Say: *"This is the real service behind
+**0:00 — the page.** Three numbered stages over three columns, the words you
+showed last time: 1 Discover · 2 Diagnose · 3 Remediate. Say: *"This is the real service behind
 krystaline.io. Left, what the repository puts in place, layer by layer — 600
 things; the application layer has seven of the ten kinds of signal, the
 user-experience layer none, and that is where the 35 in 100 comes from.
@@ -74,8 +74,8 @@ moves with drift."*
 **1:05 — Why this grade** (open on a tall monitor; on a laptop, open it).
 Seven lines, each a yes, a partly or a no, and the sum: *4.8 of 7 points. B+
 starts at 5.3.* Say: *"Four things it has, one nearly, two it lacks. That is
-the whole grade; nobody has to take the letter on trust."* Above it, the
-rules bar: *12 of 15 required rules met for a tier 2 service.*
+the whole grade; nobody has to take the letter on trust."* Beside the
+shield, the rules: *12 / 15 required rules met · tier 2.*
 
 **1:15 — press Open in Remediate** (bottom of the right column). Expert's
 Remediate, on this service. Say: *"Everything you saw last time is one click
@@ -160,9 +160,10 @@ either way.
   Overview names no artefact types.
 - **"What are the cells?"** Ten kinds of signal per layer — indicators,
   objectives, metrics, logs, traces, dashboards, alerts, runbooks, chaos
-  tests, synthetic checks (on a laptop the legend under the stack names
-  them; on a tall monitor each layer's own line names the kinds it has). A
-  lit cell is a kind the repository declares on that layer, with how many;
+  tests, synthetic checks (the column labels above the stack name them:
+  *SLI · SLO · Met · Log · Trc · Dash · Alrt · Run · Chaos · Syn*; on a tall
+  monitor each layer's own line spells them out). A lit cell, in the layer's
+  own colour, is a kind the repository declares on that layer, with how many;
   a dot is a kind seen live without a declaration. The four layers' average
   is the *coverage* line of the grade: the application row alone reads 70;
   platform 40, infrastructure 30 and the empty user-experience row bring the

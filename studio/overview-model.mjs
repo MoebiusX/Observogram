@@ -383,7 +383,7 @@ export function stillTrueModel({ journey = null, run = null, now = Date.now(), r
   const live = journeyIsLive(journey);
   // The cadence line belongs to a check this screen can run; a recording has nothing to click.
   const cadence = journey && live ? (journey.schedule ? 'Checks run on a schedule.' : 'Checks run only when you click.') : '';
-  const base = { status: null, pill: '', sentence: '', note: '', cadence, stale: false, canCheck: false, checkLabel: '', checkPrimary: false, tone: 'neutral', error: startError || null, pending: false, running: false };
+  const base = { status: null, pill: '', sentence: '', note: '', cadence, stale: false, canCheck: false, checkLabel: '', checkPrimary: false, tone: 'neutral', error: startError || null, pending: false, running: false, ago: '' };
   // The facts are still being read: say so, never "never checked" for a moment.
   if (pending) return { ...base, cadence: '', sentence: 'Reading…', pending: true };
   if (running) {
@@ -401,6 +401,7 @@ export function stillTrueModel({ journey = null, run = null, now = Date.now(), r
     return { ...base, status: 'never', pill: OVERVIEW_STATUS.never, sentence: `Never checked against live. A live check is set up${env}.`, tone: 'info', canCheck: false, checkLabel: '', checkPrimary: false };
   }
   const ago = agoText(run.startedAt, now);
+  base.ago = ago;
   const startedMs = Date.parse(run.startedAt || '');
   const stale = Number.isFinite(startedMs) && now - startedMs > FRESH_WINDOW_MS;
   if (run.outcome === 'vantage-lost') {
@@ -655,7 +656,7 @@ export function rulesModel(conformance, { error = null } = {}) {
 //              and a reading older than a day, which the engine does not trust
 export function fidelityModel({ run = null, journey = null, pack = null, now = Date.now() } = {}) {
   const against = journey ? (journeyIsLive(journey) ? 'live' : 'recording') : (/^mcp:/i.test(String(run?.packB?.source || '')) || !run ? 'live' : 'recording');
-  const base = { known: false, alignmentPct: null, tiles: [], chains: null, against, note: '' };
+  const base = { known: false, alignmentPct: null, tiles: [], chains: null, against, note: '', partial: [] };
   if (!run || !runGradedPack(run, pack)) return { ...base, note: 'Never checked against live.' };
   if (run.outcome === 'vantage-lost') return { ...base, note: 'The live side did not answer the last check, so nothing is known about it right now.' };
   if (vantageShrank(run).length) return { ...base, note: 'The live side showed less than the check before, so the counts cannot be compared yet.' };
@@ -682,7 +683,7 @@ export function fidelityModel({ run = null, journey = null, pack = null, now = D
   if (failed.length) notes.push(`The live side answered only in part: its ${listWords(failed)} could not be read.`);
   const startedMs = Date.parse(run.startedAt || '');
   if (Number.isFinite(startedMs) && now - startedMs > FRESH_WINDOW_MS) notes.push(`Counted ${agoText(run.startedAt, now)}; readings older than a day are not trusted.`);
-  return { ...base, known: true, alignmentPct: Number.isFinite(pct) ? pct : null, tiles, chains, note: notes.join(' ') };
+  return { ...base, known: true, alignmentPct: Number.isFinite(pct) ? pct : null, tiles, chains, note: notes.join(' '), partial: failed };
 }
 
 // ---------- the board: what to change ----------

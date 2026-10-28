@@ -133,13 +133,59 @@ function simpleBodyHtml(model) {
 }
 
 // ---------- the board ----------
+//
+// Three numbered stages under Expert's own words, one over each column —
+// Discover · Diagnose · Remediate — a compact context bar for the service,
+// then the columns in a 30 / 40 / 30 rhythm. Colour has two roles here: a
+// layer keeps one identity colour wherever it appears (the plate, its cells),
+// a result reads green, amber or red with words beside it; lime stays the
+// brand's accent, for the one primary button and the pressed state. One
+// outline icon family (24-unit grid, 1.6 stroke, currentColor), drawn inline.
 
 const reading = (what) => `<p class="ov-reading og-muted" role="status">Reading ${what}…</p>`;
-const footHtml = (action, label) => `<div class="ov-col__foot"><button type="button" class="og-btn og-btn--text ov-link" data-ux-action="${action}">${label}</button></div>`;
+const footHtml = (action, label) => `<div class="ov-col__foot"><button type="button" class="og-btn og-btn--text ov-link" data-ux-action="${action}">${label} <span class="ov-link__arrow" aria-hidden="true">→</span></button></div>`;
 
-// Discover — the stack, top down: per layer, the ten kinds of signal as
-// cells (lit where the repository declares some, with the count), the kinds
-// named under it; then the pack's own layers as counts.
+const ICON_PATHS = {
+  discover: 'M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm9.5 16-4.4-4.4',
+  diagnose: 'M3 12h4l2.5-6 4 12 2.5-6h5',
+  remediate: 'M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-2.4 2.6-2.6Z',
+  ux: 'M4 5h16v11H4zM9 20h6M12 16v4',
+  app: 'M8 7 4 12l4 5M16 7l4 5-4 5M14 4l-4 16',
+  platform: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3Zm0 0v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
+  infra: 'M4 4h16v6H4zM4 14h16v6H4zM7 7h.01M7 17h.01',
+  add: 'M12 5v14M5 12h14',
+  update: 'M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5',
+  review: 'M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z',
+};
+const iconHtml = (name, cls = '') => `<svg class="ov-ic${cls ? ` ${cls}` : ''}" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="${ICON_PATHS[name] || ''}"></path></svg>`;
+
+// The workflow header: three numbered stages, one over each column, in the
+// words the Expert tabs use.
+const STAGES = [
+  { n: 1, key: 'discover', word: 'Discover', ask: 'What is in place?' },
+  { n: 2, key: 'diagnose', word: 'Diagnose', ask: 'Is it diagnostic-grade?' },
+  { n: 3, key: 'remediate', word: 'Remediate', ask: 'What to change?' },
+];
+function stagesHtml() {
+  return `<ol class="ov-stages" aria-label="The three stages">${STAGES.map((s) => `
+      <li class="ov-stage ov-stage--${s.key}">
+        <span class="ov-stage__n" aria-hidden="true">${s.n}</span>
+        <span class="ov-stage__text"><span class="ov-stage__word">${iconHtml(s.key, 'ov-stage__ic')}${s.word}</span><span class="ov-stage__ask">${s.ask}</span></span>
+      </li>`).join('')}</ol>`;
+}
+
+// Discover — the stack, top down. Each layer: its plate in its own colour,
+// its name and hint, how many kinds of signal the repository declares on it
+// (a result: green, amber, red) and how many things; then the ten cells, lit
+// in the layer's colour where the repository declares that kind, with the
+// count. The kinds are labelled once, above the first row.
+const KIND_SHORT = { sli: 'SLI', slo: 'SLO', metric: 'Met', log: 'Log', trace: 'Trc', dashboard: 'Dash', alert: 'Alrt', runbook: 'Run', chaos: 'Chaos', synthetic: 'Syn' };
+const plateHtml = (key) => `<span class="ov-plate" aria-hidden="true"><svg class="ov-plate__svg" viewBox="0 0 56 36"><path class="ov-plate__side" d="M2 16v5l26 13 26-13v-5"></path><path class="ov-plate__top" d="M28 3 54 16 28 29 2 16Z"></path></svg>${iconHtml(key, 'ov-plate__ic')}</span>`;
+
+function kindHeadHtml(kinds) {
+  return `<div class="ov-cells ov-cells--head" aria-hidden="true">${kinds.map((k) => `<span class="ov-cell-h" title="${escapeHtml(k.word)}">${escapeHtml(KIND_SHORT[k.key] || k.word)}</span>`).join('')}</div>`;
+}
+
 function layerRowHtml(r) {
   // A cell lit by live evidence alone (no declaration to count) shows a dot.
   const cells = r.kinds.map((k) => `<span class="ov-cell${k.present ? ' ov-cell--on' : ''}" title="${escapeHtml(k.label)}">${k.count > 0 ? k.count : (k.present ? '•' : '')}</span>`).join('');
@@ -148,11 +194,12 @@ function layerRowHtml(r) {
   // line under it is hidden from sight, never from assistive technology.
   const name = `${r.name}: ${r.covered} of ${r.of} kinds of signal${present ? ` — ${present}` : ''}`;
   return `
-        <li class="ov-layer ov-layer--${escapeHtml(r.tone)}">
+        <li class="ov-layer ov-layer--${escapeHtml(r.key)} ov-layer--${escapeHtml(r.tone)}">
           <div class="ov-layer__head">
-            <span class="ov-layer__name">${escapeHtml(r.name)}</span>
-            <span class="ov-layer__hint og-muted">${escapeHtml(r.hint)}</span>
-            <span class="ov-layer__n">${r.covered} of ${r.of} kinds</span>
+            ${plateHtml(r.key)}
+            <span class="ov-layer__name">${escapeHtml(r.name)}<span class="ov-layer__hint" title="${escapeHtml(r.hint)}">${escapeHtml(r.hint)}</span></span>
+            <span class="og-pill og-pill--${escapeHtml(r.tone)} ov-layer__n">${r.covered} of ${r.of} kinds</span>
+            <span class="ov-layer__total" title="declared on this layer"><b>${r.total}</b><small>declared</small></span>
           </div>
           <div class="ov-cells" role="img" aria-label="${escapeHtml(name)}">${cells}</div>
           <div class="ov-layer__kinds og-muted">${present ? escapeHtml(present) : 'nothing declared on this layer'}</div>
@@ -160,34 +207,63 @@ function layerRowHtml(r) {
 }
 
 function discoverColHtml(L) {
-  // The cells' kinds, named once under the stack (the compact screen hides
-  // the per-layer line and shows this one instead).
-  const legend = L ? `<p class="ov-legend og-muted">Cells, left to right: ${escapeHtml(L.rows[0].kinds.map((k) => k.word).join(' · '))}.</p>` : '';
   const body = L
     ? `
-      ${L.lead ? `<p class="ov-col__lead">${escapeHtml(L.lead)}</p>` : ''}
+      ${kindHeadHtml(L.rows[0].kinds)}
       <ol class="ov-stack" aria-label="The stack, top down">${L.rows.map(layerRowHtml).join('')}</ol>
-      ${legend}
-      <p class="ov-col__note og-muted">${escapeHtml(L.coverage)}${L.unplacedNote ? ` ${escapeHtml(L.unplacedNote)}` : ''}</p>
-      ${L.composition.length ? `<p class="ov-comp og-muted"><span class="ov-sr">In the repository: </span>${L.composition.map((c) => `<span class="ov-comp__item"><b class="ov-comp__n">${c.count}</b> ${escapeHtml(c.name)}</span>`).join('<span class="ov-comp__sep"> · </span>')}</p>` : ''}`
+      <dl class="ov-stats">
+        <div class="ov-stat" title="${escapeHtml(L.lead)}"><dt>Declared</dt><dd>${L.declared}</dd></div>
+        <div class="ov-stat" title="${escapeHtml(L.coverage)}"><dt>Coverage</dt><dd>${L.coveragePct}<small>%</small></dd></div>
+        <div class="ov-stat" title="${escapeHtml(L.unplacedNote || 'Everything found its layer.')}"><dt>Unplaced</dt><dd>${L.unplaced}</dd></div>
+      </dl>
+      ${L.composition.length ? disclosureHtml('In the repository', `<p class="ov-comp og-muted">${L.composition.map((c) => `<span class="ov-comp__item"><b class="ov-comp__n">${c.count}</b> ${escapeHtml(c.name)}</span>`).join('<span class="ov-comp__sep"> · </span>')}</p>`, { cls: 'ov-comp__wrap' }) : ''}`
     : reading('the repository');
   return `
     <section class="ov-col ov-col--discover og-panel og-panel--pad" aria-labelledby="ov-discover-h">
-      <div class="og-eyebrow">Discover</div>
-      <h2 class="og-h2 ov-col__h" id="ov-discover-h">What is in place</h2>
+      <header class="ov-col__head">
+        <h2 class="ov-card__h" id="ov-discover-h">Layers</h2>
+        <p class="ov-card__sub">The stack, top down, as the repository declares it</p>
+        <span class="ov-src" title="What the repository declares">REPO</span>
+      </header>
       ${body}
       ${footHtml('ov-open-discover', 'Open in Discover')}
     </section>`;
 }
 
-// Diagnose — the grade as a shield with the seven criteria open and the
-// specification's rules; then the live fidelity: a ring, four counts, the
-// promises that hold, and the still-true row with its Check button.
+// Diagnose — one status strip for the whole column (what was graded against
+// what, when, and which probe families could not be read), then two groups:
+// A, are the right signals in place — the letter as a shield, the required
+// rules, the seven criteria behind "Why this grade"; B, can you trust what
+// the signals show — the alignment as a ring, the four counts, the promises
+// that hold, and the still-true row with its Check button.
+function statusStripHtml(g, s, f) {
+  const partial = f?.known && Array.isArray(f.partial) && f.partial.length ? f.partial : [];
+  const tone = !s ? 'neutral'
+    : s.status === 'unreachable' ? 'fail'
+      : (s.status === 'never' || s.pending) ? 'neutral'
+        : (s.stale || partial.length) ? 'warn' : 'ok';
+  const parts = [];
+  if (g?.basis === 'live') parts.push(['source', 'Graded against live']);
+  else if (g?.basis === 'recording') parts.push(['source', 'Graded against a recording']);
+  else if (g?.basis === 'repository') parts.push(['source', 'Graded from the repository']);
+  if (s?.running) parts.push(['when', 'checking now…']);
+  else if (s?.ago) parts.push(['when', `checked ${s.ago}`]);
+  else if (s?.status === 'never') parts.push(['when', 'never checked against live']);
+  if (partial.length) parts.push(['partial', `live side partial: ${partial.join(', ')} not read`]);
+  if (s?.stale) parts.push(['stale', 'older than a day']);
+  // The cadence rides at the end; a short screen drops it (it is a fact about
+  // the journey, not about this reading).
+  if (s?.cadence) parts.push(['cadence', s.cadence.replace(/\.$/, '').replace(/^Checks run only when you click$/, 'checks run when you click').replace(/^Checks run/, 'checks run')]);
+  if (!parts.length) return '';
+  const spans = parts.map(([k, text], i) => `${i ? `<span class="ov-status__sep ov-status__part--${k}" aria-hidden="true">·</span> ` : ''}<span class="ov-status__part ov-status__part--${k}">${escapeHtml(text)}</span>`).join(' ');
+  return `<div class="ov-status ov-status--${tone}" role="status"><span class="ov-status__dot" aria-hidden="true"></span><span class="ov-status__text">${spans}</span></div>`;
+}
+
 function rulesHtml(r) {
   if (!r) return '';
   if (r.unknown) return `<div class="ov-rules ov-rules--unknown"><span class="ov-rules__text og-muted">${escapeHtml(r.sentence)}</span></div>`;
   const short = escapeHtml(`${r.passed} of ${r.total} required rules met`);
-  return `<div class="ov-rules ov-rules--${escapeHtml(r.tone)}" title="${short}"><div class="ov-rules__bar" role="img" aria-label="${short}"><span style="width:${Math.max(0, Math.min(100, r.pct))}%"></span></div><span class="ov-rules__text">${escapeHtml(r.sentence)}</span></div>`;
+  return `<div class="ov-rules ov-rules--${escapeHtml(r.tone)}" title="${escapeHtml(r.sentence)}"><div class="ov-rules__n"><b>${r.passed}</b><span class="ov-rules__of">/ ${r.total}</span></div><div class="ov-rules__bar" role="img" aria-label="${short}"><span style="width:${Math.max(0, Math.min(100, r.pct))}%"></span></div><span class="ov-rules__text">required rules met${r.tier ? ` · tier ${escapeHtml(r.tier)}` : ''}</span></div>`;
 }
 
 const ringTone = (pct) => (pct === null ? 'neutral' : pct >= 85 ? 'ok' : pct >= 50 ? 'warn' : 'fail');
@@ -210,7 +286,6 @@ function fidelityHtml(f) {
   const tiles = f?.known
     ? `<div class="ov-tiles">${f.tiles.map((t) => `<div class="ov-tile ov-tile--${escapeHtml(t.tone)}" title="${escapeHtml(t.note)}"><span class="ov-tile__n">${t.value}</span><span class="ov-tile__l">${escapeHtml(t.label)}</span></div>`).join('')}</div>`
     : `<p class="ov-fid__note og-muted">${escapeHtml(f?.note || 'Reading…')}</p>`;
-  const partial = f?.known && f.note ? `<p class="ov-fid__partial og-muted">${escapeHtml(f.note)}</p>` : '';
   const c = f?.known ? f.chains : null;
   const chains = c ? `
       <div class="ov-chains" title="${escapeHtml(`${c.intact} intact · ${c.partial} in part · ${c.broken} broken`)}">
@@ -221,13 +296,15 @@ function fidelityHtml(f) {
         </div>
         <p class="ov-chains__text og-muted">${escapeHtml(c.sentence)}</p>
       </div>` : '';
+  // A stale reading is said beside the counts; the families not read are in the status strip.
+  const stale = f?.known && /older than a day/.test(f.note || '') ? `<p class="ov-fid__partial og-muted">${escapeHtml(f.note.split('. ').find((p) => /older than a day/.test(p)) || f.note)}</p>` : '';
   return `
       <div class="ov-fid">
         ${ringHtml(f)}
         ${tiles}
       </div>
       ${chains}
-      ${partial}`;
+      ${stale}`;
 }
 
 // The seven rows open on a tall monitor, closed behind "Why this grade" on
@@ -246,25 +323,34 @@ function boardWhyHtml(g) {
   return compactScreen() ? disclosureHtml('Why this grade', list, { cls: 'ov-grade__why' }) : `<div class="ov-grade__why ov-grade__why--open">${list}</div>`;
 }
 
+const cardHeadHtml = (badge, id, question, sub) => `
+        <header class="ov-card__head">
+          <span class="ov-card__badge" aria-hidden="true">${badge}</span>
+          <div class="ov-card__titles"><h2 class="ov-card__h" id="${id}">${question}</h2><p class="ov-card__sub">${sub}</p></div>
+        </header>`;
+
 function diagnoseColHtml(g, rules, f, s, primary) {
+  // The source line under the shield repeats the status strip when the
+  // letter is the live one; it stays for the other sources, which it explains.
+  const source = g.source && g.basis !== 'live' ? `<div class="ov-grade__src og-muted">${escapeHtml(g.source)}</div>` : '';
   return `
     <div class="ov-col ov-col--diagnose">
-      <section class="ov-card ov-grade og-panel og-panel--pad${toneClass('og-panel', g.tone)}" aria-labelledby="ov-grade-eyebrow">
-        <div class="og-eyebrow">Diagnose</div>
-        <h2 class="og-h2 ov-col__h" id="ov-grade-eyebrow">${termHtml('diagnostic-grade', 'Are the right signals in place?')}</h2>
-        <div class="ov-shield-row">
+      ${statusStripHtml(g, s, f)}
+      <section class="ov-card ov-card--a ov-grade og-panel og-panel--pad${toneClass('og-panel', g.tone)}" aria-labelledby="ov-grade-eyebrow">
+        ${cardHeadHtml('A', 'ov-grade-eyebrow', termHtml('diagnostic-grade', 'Are the right signals in place?'), 'The repository against what good looks like')}
+        <div class="ov-result">
           <div class="ov-shield ov-tone-${escapeHtml(g.tone || 'neutral')}"${g.title ? ` title="${escapeHtml(g.title)}"` : ''} aria-label="Grade ${escapeHtml(g.letter)}"><span class="ov-shield__letter">${escapeHtml(g.letter)}</span></div>
-          <div class="ov-grade__text">
+          <div class="ov-result__text">
             <div class="ov-grade__label">${escapeHtml(g.label)}</div>
             ${g.word ? `<div class="ov-grade__word">${escapeHtml(g.word)}</div>` : ''}
-            ${g.source ? `<div class="ov-grade__src og-muted">${escapeHtml(g.source)}</div>` : ''}
+            ${source}
           </div>
+          ${rulesHtml(rules)}
         </div>
-        ${rulesHtml(rules)}
         ${boardWhyHtml(g)}
       </section>
-      <section class="ov-card ov-live og-panel og-panel--pad${toneClass('og-panel', s.tone)}" aria-labelledby="ov-live-eyebrow" aria-live="polite">
-        <h2 class="og-h2 ov-col__h" id="ov-live-eyebrow">Can you trust what the signals show?</h2>
+      <section class="ov-card ov-card--b ov-live og-panel og-panel--pad${toneClass('og-panel', s.tone)}" aria-labelledby="ov-live-eyebrow" aria-live="polite">
+        ${cardHeadHtml('B', 'ov-live-eyebrow', 'Can you trust what the signals show?', 'The repository against live')}
         ${fidelityHtml(f)}
         ${liveRowHtml(s, primary)}
         ${footHtml('ov-next-diagnose', 'Open in Diagnose')}
@@ -272,18 +358,23 @@ function diagnoseColHtml(g, rules, f, s, primary) {
     </div>`;
 }
 
-// Remediate — the delta as three counts (what Remediate compiles, what runs
-// differently, what runs live unasked) and the one next step.
+// Remediate — the delta as three tiles (what Remediate compiles, what runs
+// differently, what runs live unasked — to review, never to remove) and the
+// one next step with its one primary button.
+const CHANGE_ICON = { add: 'add', update: 'update', review: 'review' };
+const CHANGE_SHORT = { add: 'declared, not live', update: 'live, not as declared', review: 'live, not declared' };
 function remediateColHtml(c, n, primary) {
   const items = c
     ? (c.known
-      ? `<div class="ov-changes">${c.items.map((i) => `<div class="ov-change ov-change--${escapeHtml(i.tone)}"><span class="ov-change__n">${i.value}</span><span class="ov-change__l">${escapeHtml(i.label)}</span><span class="ov-change__note og-muted">${escapeHtml(i.note)}</span></div>`).join('')}</div>${c.sentence ? `<p class="ov-col__note og-muted">${escapeHtml(c.sentence)}</p>` : ''}`
+      ? `<div class="ov-changes">${c.items.map((i) => `<div class="ov-change ov-change--${escapeHtml(i.tone)}" title="${escapeHtml(i.note)}">${iconHtml(CHANGE_ICON[i.key] || 'add', 'ov-change__ic')}<span class="ov-change__l">${escapeHtml(i.label)}</span><span class="ov-change__n">${i.value}</span><span class="ov-change__note og-muted">${escapeHtml(CHANGE_SHORT[i.key] || i.note)}</span></div>`).join('')}</div>${c.sentence ? `<p class="ov-col__note og-muted">${escapeHtml(c.sentence)}</p>` : ''}`
       : `<p class="ov-col__lead og-muted">${escapeHtml(c.sentence)}</p>`)
     : reading('the last check');
   return `
     <section class="ov-col ov-col--remediate og-panel og-panel--pad" aria-labelledby="ov-remediate-h">
-      <div class="og-eyebrow">Remediate</div>
-      <h2 class="og-h2 ov-col__h" id="ov-remediate-h">What to change</h2>
+      <header class="ov-col__head">
+        <h2 class="ov-card__h" id="ov-remediate-h">Changes to apply</h2>
+        <p class="ov-card__sub">Between the repository and live</p>
+      </header>
       ${items}
       ${nextRowHtml(n, primary)}
       ${footHtml('ov-open-remediate', 'Open in Remediate')}
@@ -293,6 +384,7 @@ function remediateColHtml(c, n, primary) {
 function boardBodyHtml(model) {
   const b = model.board || {};
   return `
+    ${stagesHtml()}
     <div class="ov-board">
       ${discoverColHtml(b.layers)}
       ${diagnoseColHtml(model.grade, b.rules, b.fidelity, model.still, model.primary)}
