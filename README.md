@@ -55,8 +55,9 @@ into pack shape. The diff between declared and live is the operational truth.
 ## Overview — The Front Door
 
 The studio has two faces. **Overview** is the one most people see first: one
-service at a time, the machine drawn as three columns under the words Expert
-uses, every number the engine's own —
+service at a time, the machine drawn as three numbered stages — *1 Discover ·
+2 Diagnose · 3 Remediate*, the words Expert uses — over three columns, every
+number the engine's own —
 
 - **Discover — What is in place.** The stack top down — user experience,
   application, platform, infrastructure — each layer with ten cells, one per
