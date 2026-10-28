@@ -175,7 +175,9 @@ async function upstream(url, { method, headers, body, cap, refuseOver = false })
   const ms = () => Date.now() - t0;
   let res;
   try {
-    res = await fetch(url, { method, headers, body, redirect: 'manual', signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
+    // The upstream is a third party: an uncompressed answer, so fetch's decoder (the Brotli decoder of the
+    // October 2026 Node security release, CVE-2026-111497) never runs on its bytes; a caller's own header wins.
+    res = await fetch(url, { method, headers: { 'Accept-Encoding': 'identity', ...(headers || {}) }, body, redirect: 'manual', signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
   } catch (e) {
     const code = typeof e?.cause?.code === 'string' && /^[A-Z0-9_]{2,40}$/.test(e.cause.code) ? e.cause.code : null;
     return { failure: isTimeout(e) ? 'timeout' : 'unreachable', code, ms: ms() };

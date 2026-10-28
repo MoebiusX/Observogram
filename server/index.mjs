@@ -356,9 +356,16 @@ app.use(orgContext);
 // (M6 (b) — every other route's answer is unchanged).
 app.use(mcpSettingsRoutes({ authorize }));
 
-app.use(express.json({ limit: '16mb' }));   // /api/crawl can carry a whole repo's worth of YAML
-app.use(express.text({ type: ['application/x-yaml', 'text/yaml', 'text/plain'], limit: '4mb' }));
-app.use(express.urlencoded({ extended: false, limit: '64kb' }));   // /auth/login form
+// `inflate: false` on all three: a compressed request body (Content-Encoding
+// gzip, deflate or br) is answered 415 ("content encoding is not supported",
+// below) instead of being decompressed by node:zlib before any route's
+// authorize() runs. Nothing the studio or the CLI sends is compressed, and the
+// decoder is the attack surface the October 2026 Node security release names
+// (the Brotli out-of-bounds write, CVE-2026-111497): the runtime floor carries
+// the fix, this keeps untrusted bytes away from the decoder on any runtime.
+app.use(express.json({ limit: '16mb', inflate: false }));   // /api/crawl can carry a whole repo's worth of YAML
+app.use(express.text({ type: ['application/x-yaml', 'text/yaml', 'text/plain'], limit: '4mb', inflate: false }));
+app.use(express.urlencoded({ extended: false, limit: '64kb', inflate: false }));   // /auth/login form
 
 // Identity routes (/auth/*) — inert in local mode; throws fail-closed at
 // boot when OIDC is configured incompletely. See server/auth.mjs.

@@ -4,7 +4,7 @@
   "description": "Observogram — the Observability Compiler. Compiles, scans, and scores ObservabilityPack spec v1.4 manifests. Express server + thin client.",
   "type": "module",
   "engines": {
-    "node": ">=22.16.0"
+    "node": ">=22.23.4"
   },
   "bin": {
     "packc": "tools/cli.mjs",

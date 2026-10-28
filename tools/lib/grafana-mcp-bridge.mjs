@@ -41,6 +41,7 @@ export async function startGrafanaMcpBridge({
         Authorization: authHeader,
         'Content-Type': 'application/json',
         Accept: 'application/json',
+        'Accept-Encoding': 'identity',   // no decompression of the platform's bytes (the Brotli decoder, CVE-2026-111497)
         // Without this header Grafana marks provisioned resources
         // immutable (provenance=api) and upserts via PUT are refused.
         'X-Disable-Provenance': 'true',
