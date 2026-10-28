@@ -139,6 +139,7 @@ coverage copy the upstream unit test of a module and run it with
 | `validator.mjs` | `tools/test-validator.mjs` |
 | `contracts/mcp-capabilities.mjs`, `contracts/response-shapes.mjs` | `tools/test-contract-guard.mjs`, `tools/test-contract-shapes.mjs` |
 | `zip.mjs` | `tools/test-zip.mjs` |
+| the Overview board — `studio/overview-model.mjs`, `overview-view.mjs`, `overview-api.mjs`, `ux-kit-pure.mjs`, `overview.css` (VENDORING.md, *The Overview board*) | `tools/test-overview-model.mjs` with `tools/fixtures/overview/` — headless, over a DOM shim; it pins every state's words and markup and the files' import closure |
 
 The golden suites read `tools/fixtures/` — copy that directory with them.
 
@@ -175,9 +176,9 @@ The golden suites read `tools/fixtures/` — copy that directory with them.
 
 - Server routes, studio views and the store: the manifest is the library
   contract, not an API contract.
-- The zero-import studio modules `VENDORING.md` lists (`diagnostic-grade`,
-  `artifact-model`, `constants`, `verify-deploy`, `metric-readers`): still the
-  prose table, still CI-asserted zero-import; folding them into the manifest
+- The studio modules `VENDORING.md` lists (`diagnostic-grade`,
+  `artifact-model`, `constants`, `verify-deploy`, `metric-readers`, and the
+  Overview board's five files): still the prose table, still CI-asserted; folding them into the manifest
   (which would also let `retrofeed.mjs` enter the set) is a follow-up.
 - The npm packages a static bundle carries beyond the `npm` fields' roots
   (`@lezer/lr`, `@lezer/highlight` and `@lezer/common`, which
@@ -262,6 +263,11 @@ entry names) against a running server:
 | Answered in the browser | Answered `501 { ok: false, denied: 'no-backend', error: '<Feature> needs the Observogram server; this studio is a static bundle built without one.' }` |
 |---|---|
 | `GET /api/packs`, `/api/packs/:id` (+ `?env=`), `/canonical` (JSON, `?format=yaml`), `/conformance`, `/compile-catalog`, `/compile-artifact`, `/compile/:target`, `/export.zip` (the Export button downloads it as a Blob); `/api/compile/targets`, `/api/maturity-rubric`, `/api/version`, `/healthz`, `/api/taxonomy` (unconfigured, or the document `--taxonomy` baked — a v2 file's `glossary` included, so the glossary marks draw as on a server), `/api/mcp-settings` (`proxy: false`; the policy `--mcp-settings-policy` baked or `null`, and `mcpOrigins` when `--mcp-origins` baked a list), `/api/examples` and `/api/references` (empty), `/api/live-status` (`present: false`); `/api/packs/:id/verdicts` (the empty document — a bundled pack is never registered, so this is the server's own answer); `/api/packs/:id/placeholders` (the placeholder report, the zero-store engine in the browser); `/auth/me` → `404 { ok: false, error: 'identity not configured' }` (the open posture); `GET /api/diff` (Compare: the diff and its traceability graph, computed in the browser over two packs the bundle carries — the PromQL parser and the packages it imports inlined from the lockfile); `POST /api/packs/:id/retrofeed` (retrofeed, the one non-GET answered: computed in the browser over two packs the bundle carries, written nowhere, with the server's body parsing and refusals — a `Content-Encoding`, a JSON body in a UTF charset other than UTF-8 and a text body's charset are not ported); `GET /api/packs/:id/audit-report` (the service audit report, JSON or HTML with the bundle's brand over its own design kit, its goes-blind section computed in the browser; a bundle has no store, so `assessments` and `waivers` are `available: false`, "not recorded by this build"; the generator is `<product> static bundle`, `pack.source` `bundle` or `url`; the Conformance view's download anchors are answered by the shim's click handler as a Blob download) | every other `/api` or `/auth` path and every non-GET but retrofeed: Scan a repo (`/api/crawl*`), Draft from MCP, Refresh from MCP, Testing an MCP connection (`/api/mcp/ping`), Building a pack from a live MCP server (`/api/mcp/jobs`), uploads (`/api/validate`, `/api/uploads`), Deploy, Journeys, Build (`/api/library*`), Verdicts (`PUT` / `DELETE …/verdicts/:artefact`), Waivers (`/api/waivers`, `/api/services/:id/waivers` — a bundled pack has no service record), Services (`/api/services`, `/api/services/:id` — the records behind the home's cards and the service page; a bundle has no services table, so the home lists the services its packs name), Organisations (`/api/orgs` — the active org's name and effective role), Settings (`/api/org`, `/api/org/members`, `/api/environments/:id`, `/api/mcp-endpoints`, `/api/audit` — a bundle has no org, so Settings shows this sentence), Passing MCP server settings through the studio server (`/api/mcp-settings/describe`, `/submit` — the opt-in pass-through; the bundle's Server settings modal sends from the browser), sign-in (`/auth/*`) |
+
+The bundle opens on the Expert home, never on Overview: the studio's front
+door reads the services table and the journeys, and both answer 501 here. A
+host that wants the board vendors it (VENDORING.md, *The Overview board*) and
+feeds its model from its own records.
 
 Swapping packs is a rebuild: `--pack` inlines a file validated against the
 schema at build time; `--pack-url` names a URL the page fetches at its first

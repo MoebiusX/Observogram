@@ -130,7 +130,11 @@ pack holds in a family the other could not observe move no weight. The Fresh cri
 appends the live vantage to its `detail` (`vantage lost …` / `vantage partial
 …`) read through `partialLiveEvidence` from the same module — the pass/fail
 and every score are unchanged, and no import was added.
-
+| [`studio/overview-model.mjs`](../studio/overview-model.mjs) | imports `services-model.mjs` (zero-import), `diagnostic-grade.mjs`, `constants.mjs` — copy the four together (CI-asserted: `tools/test-overview-model.mjs`) | the Overview board's model, pure — `buildOverviewModel(input)` and its parts (`gradeModel`, `gradeWhy`, `stillTrueModel`, `nextActionModel`, `layersModel`, `rulesModel`, `fidelityModel`, `changesModel`, `vantageShrank`, `decideUiMode`, `decideOverviewLayout`); see *The Overview board* below |
+| [`studio/overview-view.mjs`](../studio/overview-view.mjs) | `escapeHtml` from `util.mjs` (the stub); `host.mjs`; `ux-kit-pure.mjs` (CI-asserted) | `renderOverview(container, model, host)`: the board and its simple fallback layout from the model; actions ride on `host.overview` |
+| [`studio/overview-api.mjs`](../studio/overview-api.mjs) | `services-api.mjs` → `api.mjs` (the default fetcher only); `diagnostic-grade.mjs` | the loaders: `loadOverviewFacts({ pack, env, journeyFor, fetchFn })`, `runServiceCheck(name, { fetchFn })`, `computeOverviewPosture`, `computeOverviewDiagnostic` — pass your own `fetchFn` and the stub never runs |
+| [`studio/ux-kit-pure.mjs`](../studio/ux-kit-pure.mjs) | `escapeHtml` from `util.mjs` (the stub) | the state-free part of the screen grammar: `GLOSSARY`, `termHtml`, `disclosureHtml`, `emptyStateHtml`, `wireUxActions` (`ux-kit.mjs` re-exports them for the studio's own views) |
+| [`studio/overview.css`](../studio/overview.css) | `design-tokens.css` + `design-kit.css` (CI-asserted: reads `--og-*` and its own `--ov-*` only) | the board's zone (`.ov-*`), with the three kit pieces the view emits styled from the tokens, scoped to `.ov-page` — load after `design-kit.css` |
 ## The design system
 
 The studio's look is three files a downstream app copies verbatim, so its
@@ -169,6 +173,65 @@ only for markup it already has; new markup uses the `.og-*` classes.
 file contains nothing but tokens, both themes define every colour, the JSON
 equals the CSS, the kit and the bridge read tokens only, the adapter decides
 no colour of its own, and no stylesheet reads a token that does not exist.
+
+## The Overview board
+
+The studio's front door — one service, the machine drawn as three columns
+under *Discover · Diagnose · Remediate* — is vendorable as a unit: the model,
+the renderer, the loaders, the state-free kit pieces it emits and its
+stylesheet, on top of the design system above. `tools/test-overview-model.mjs`
+holds the set in CI: the import closure of each file is exactly the one the
+table lists, the model and the pure kit touch no DOM, and `overview.css`
+reads design tokens and its own `--ov-*` properties only.
+
+**The model takes its inputs explicitly** and returns words and numbers, never
+markup:
+
+```js
+buildOverviewModel({
+  services, servicesStatus, catalog,            // GET /api/services rows and their status; the pack catalogue
+  serviceId, env, isLiveAggregatePack,          // the row and environment on screen; your rule for aggregate packs
+  diagnostic, diagnosticError, decision,        // computeOverviewDiagnostic(layered) and its causes (or the read error)
+  journeys, journeysError, run,                 // GET /api/journeys and the service's newest run record
+  running, startError, pending,                 // a check in flight, a refused start, facts still being read
+  layout, cells, layered, conformance, conformanceError,   // 'board' | 'simple'; computePostureMatrix(layered).cells; the layered pack; GET /api/packs/:id/conformance
+  now, productName,
+});
+```
+
+The shapes are the ones the fixtures under `tools/fixtures/overview/` carry
+(`services.json`, `packs.json`, `journeys.json`, a real run, a half-blind
+run, the posture cells as counts, a conformance body). Percentages stay
+numbers in the model (`alignmentPct`, `coveragePct`); the renderer puts the
+sign on them. The vocabulary rule the test walks — no layer code, artefact
+id or engine state word in any string — is part of the contract.
+
+**The renderer** is `renderOverview(container, model, host)`: `container` is
+any element (the test uses a 20-line shim with `innerHTML` and one click
+listener), and the actions ride on `host.overview`, an object a host fills
+with its own implementations:
+
+```js
+host.overview = {
+  selectService(id), selectEnv(name),           // the picker and the environment switch
+  checkNow(),                                   // Check again → runServiceCheck, then re-read the facts
+  openDiscover(), openDiagnose(), openRemediate(), openNeuron(),   // the column links and "See the differences"
+  expert(), retry(),                            // the mode switch; the Retry of an unreadable listing
+};
+```
+
+A hook a host does not supply is a no-op (the view calls them optionally).
+Exactly one `.og-btn--primary` is drawn in every state; the simple layout is
+drawn instead of the board when `model.layout` is `'simple'`, when the
+service has no pack of its own, or when the board throws (the error is
+logged and the screen never goes blank). The static bundle (DOWNSTREAM.md
+§10) does not draw Overview: its shim answers the services and journeys
+routes with 501.
+
+**Staying current:** the headless suite is the smoke test — copy
+`tools/test-overview-model.mjs` and `tools/fixtures/overview/` beside the
+files and run it with `node --test`; it pins every state's exact words and
+markup, so an upstream change shows as a failing assertion at copy time.
 
 ## What the host supplies
 
@@ -259,7 +322,9 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
      studio/compare-catalog.mjs studio/host.mjs studio/proto-synthesis.mjs \
      studio/design-tokens.css studio/design-tokens.json \
      studio/design-kit.css studio/design-bridge.css studio/discover-board.mjs \
-     studio/taxonomy.mjs studio/verdict-html.mjs studio/glossary.mjs
+     studio/taxonomy.mjs studio/verdict-html.mjs studio/glossary.mjs \
+     studio/overview-model.mjs studio/overview-view.mjs studio/overview-api.mjs \
+     studio/overview.css studio/ux-kit-pure.mjs studio/services-model.mjs studio/services-api.mjs
    ```
 
    `diff.mjs` → `artefact-model.mjs` → `promql-canon.mjs` → `promql.mjs` is

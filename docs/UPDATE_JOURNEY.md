@@ -2077,6 +2077,20 @@ counts, the rules, the fidelity and the changes and when they are withheld,
 the layout rule, the board's markup with its one primary across every
 state, the links, the fallback).
 
+### Overview vendorable (2026-10-28)
+
+The downstream studio (a TypeScript application that vendors the engines)
+is to carry the Overview board as its entry point too, so the board joins
+the vendorable set as a unit: the pure model, the renderer, the loaders, a
+state-free kit module split out of `ux-kit.mjs` (which re-exports it) and
+the board's own stylesheet, moved out of `ux.css` with the three kit pieces
+the view emits styled from the tokens. `docs/VENDORING.md` gains the rows,
+a section on the model's inputs and the host hooks, and the files in its
+diff list; `docs/DOWNSTREAM.md` names the headless suite as the smoke test
+and says the static bundle never opens on Overview. One more test holds it (the
+import closure of each file, the pure modules' independence from the DOM,
+the stylesheet's tokens and scope).
+
 ### Follow-up: the studio shell under a dot-directory
 
 The unbranded shell was answered by `res.sendFile` with the absolute path of

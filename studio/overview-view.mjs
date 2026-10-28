@@ -20,7 +20,7 @@
 
 import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
-import { termHtml, disclosureHtml, emptyStateHtml, wireUxActions } from './ux-kit.mjs';
+import { termHtml, disclosureHtml, emptyStateHtml, wireUxActions } from './ux-kit-pure.mjs';
 
 const toneClass = (prefix, tone) => (tone && tone !== 'neutral' ? ` ${prefix}--${tone}` : '');
 
