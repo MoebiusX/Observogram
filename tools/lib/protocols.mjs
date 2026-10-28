@@ -341,6 +341,33 @@ export const PROTOCOLS = {
       },
     ],
   },
+
+  // -------------------------------------------------------------------------
+  // Blackbox exporter module config. The http / tcp / icmp probers and their
+  // module settings (valid_status_codes, fail_if_body_*_regexp, fail_if_not_ssl,
+  // preferred_ip_protocol) predate every version we profile; the grpc prober
+  // arrived in 0.20. A grpc:// target compiled for an older exporter is
+  // skipped with a warning rather than emitted as a module it cannot load.
+  // -------------------------------------------------------------------------
+  'blackbox-exporter-config': {
+    label: 'Blackbox exporter config',
+    tractability: 'partial',
+    upstream: { repo: 'prometheus/blackbox_exporter', latestKnown: '0.27' },
+    versions: [
+      {
+        id: 'bbc-0.20', range: '>=0.20', label: 'Blackbox config 0.20+',
+        features: {
+          grpcProber: { value: true, since: '0.20', evidence: 'blackbox_exporter v0.20.0 (gRPC prober)' },
+        },
+      },
+      {
+        id: 'bbc-pre-0.20', range: '<0.20', label: 'Blackbox config <0.20',
+        features: {
+          grpcProber: { value: false, since: '0.20', evidence: 'blackbox_exporter v0.20.0 (gRPC prober)' },
+        },
+      },
+    ],
+  },
 };
 
 // ---------------------------------------------------------------------------

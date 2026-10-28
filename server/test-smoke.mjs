@@ -298,10 +298,10 @@ try {
 
   // /api/compile/targets
   const compTargets = await getJson(base, '/api/compile/targets');
-  assert(Array.isArray(compTargets.targets) && compTargets.targets.length === 4,
-         '/api/compile/targets returns 4 target descriptors');
+  assert(Array.isArray(compTargets.targets) && compTargets.targets.length === 5,
+         '/api/compile/targets returns 5 target descriptors');
   const targetIds = compTargets.targets.map(t => t.id);
-  for (const need of ['prometheus-rules', 'otel-collector', 'alertmanager', 'grafana-dashboard']) {
+  for (const need of ['prometheus-rules', 'otel-collector', 'alertmanager', 'grafana-dashboard', 'blackbox-exporter']) {
     assert(targetIds.includes(need), `compile target catalog includes ${need}`);
   }
 
@@ -1992,7 +1992,7 @@ try {
 
   // POST /api/library/compile — every target from the generated canonical, nothing registered.
   const packsBefore = (await getJson(base, '/api/packs')).packs.length;
-  for (const target of ['prometheus-rules', 'otel-collector', 'alertmanager', 'grafana-dashboard']) {
+  for (const target of ['prometheus-rules', 'otel-collector', 'alertmanager', 'grafana-dashboard', 'blackbox-exporter']) {
     const c = await (await postLib('/api/library/compile', { canonical: inst.canonical, target })).json();
     assert(c.ok === true && c.target === target && typeof c.label === 'string' && typeof c.contentType === 'string', `POST /api/library/compile ${target} → ok, label, contentType`);
     assert(typeof c.artifact?.filename === 'string' && typeof c.artifact.content === 'string' && c.artifact.content.length > 100 && Array.isArray(c.artifact.warnings), `compile ${target} returns artifact { filename, content, warnings }`);
@@ -2000,7 +2000,7 @@ try {
   assert((await getJson(base, '/api/packs')).packs.length === packsBefore, 'compile previews register nothing');
   const compileBad = await postLib('/api/library/compile', { canonical: inst.canonical, target: 'nope' });
   const compileBadBody = await compileBad.json();
-  assert(compileBad.status === 400 && /prometheus-rules, otel-collector, alertmanager, grafana-dashboard/.test(compileBadBody.error || ''), 'unknown compile target → 400 naming the known targets', compileBadBody.error);
+  assert(compileBad.status === 400 && /prometheus-rules, otel-collector, alertmanager, grafana-dashboard, blackbox-exporter/.test(compileBadBody.error || ''), 'unknown compile target → 400 naming the known targets', compileBadBody.error);
   const compileNoCanonical = await postLib('/api/library/compile', { target: 'alertmanager' });
   assert(compileNoCanonical.status === 400, 'compile without a canonical → 400', compileNoCanonical.status, 400);
 
