@@ -54,6 +54,10 @@ import {
   sliErrorRatioRule, forecastExpr, forecastHorizon, forecastSeverity, forFor, MIN_BAD_SAMPLES,
 } from './burn-rules.mjs';
 import { genericBoards, checkBindings, unifiedIdOf } from './dashboards/generic.mjs';
+import {
+  compileBlackboxModules, compileBlackboxScrapeConfig, planBlackboxChecks,
+  blackboxFileName, blackboxScrapeFileName, BLACKBOX_KIND,
+} from './blackbox.mjs';
 
 // ============================================================
 // Helpers — ref resolution, slug normalisation, expression building
@@ -108,6 +112,12 @@ function profileForTarget(canonical, family, opts = {}) {
       // The collector version is declared on the otel block when present.
       const v = canonical?.spec?.otel?.collector?.version || canonical?.spec?.pipelines?.collector_version;
       return resolveProfile('otel-collector', v);
+    }
+    case 'blackbox-exporter': {
+      // The exporter's version is declared on a telemetry backend when the
+      // pack names one; otherwise the default band.
+      const b = (canonical?.spec?.telemetry?.backends || []).find((x) => /blackbox/i.test(x.product || ''));
+      return resolveProfile('blackbox-exporter', b?.version?.declared);
     }
     default:
       return resolveProfile(family, opts.version);
@@ -1039,6 +1049,36 @@ export function compileCatalog(canonical) {
     });
   }
 
+  // ---- Synthetic probes (blackbox exporter) — the producer side ----
+  // The group exists when the pack declares synthetic checks at all, so a
+  // pack whose checks run on another engine still sees, in the banner, why
+  // nothing was compiled for the blackbox exporter.
+  {
+    const checks = canonical?.spec?.validation?.synthetic_checks || [];
+    if (checks.length) {
+      const plan = planBlackboxChecks(canonical, { onWarning: () => {} });
+      const items = [
+        { id: 'all', kind: 'blackbox-modules', label: 'Exporter modules · blackbox.yml',
+          subtitle: `${plan.modules.length} module(s)${plan.skipped.length ? ` · ${plan.skipped.length} check(s) not compiled` : ''}` },
+        { id: 'scrape-config', kind: 'blackbox-scrape', label: 'Scrape jobs · prometheus.yml snippet',
+          subtitle: `${plan.modules.length} job(s) · module=<id>&target=<address> → /probe` },
+      ];
+      for (const m of plan.modules) {
+        items.push({ id: `check:${m.id}`, kind: 'blackbox-module', label: `check · ${m.id}`,
+          subtitle: `${m.prober} · ${m.address} · every ${m.check.interval}`, checkId: m.id });
+      }
+      groups.push({
+        id: 'synthetics',
+        label: 'Synthetic probes',
+        blurb: `Blackbox exporter modules for the pack's synthetic checks of kind ${BLACKBOX_KIND}, and the scrape jobs that drive them — the producer side: this is what makes probe_success exist.`,
+        flavors: [{ id: 'blackbox', label: 'Blackbox exporter', platform: 'Prometheus blackbox exporter',
+                    description: 'blackbox.yml modules keyed by check id, plus the Prometheus scrape jobs (one per check) with the exporter\'s relabelling. Not deployable from the studio: the exporter and its scrape config are env-specific files.',
+                    contentType: 'application/x-yaml', extension: 'yaml', deployable: false }],
+        items,
+      });
+    }
+  }
+
   return { groups };
 }
 
@@ -1114,6 +1154,18 @@ export function compileArtifact(canonical, { group, flavor, artifact, dashboardI
   }
   if (group === 'alertmanager') {
     return { contentType: 'application/x-yaml', filename: `${serviceSlug(canonical)}.alertmanager.yaml`, content: compileAlertmanager(canonical) };
+  }
+  if (group === 'synthetics') {
+    const profile = profileForTarget(canonical, 'blackbox-exporter', opts);
+    const o = { ...opts, profile, knobs: profile.knobs };
+    if (artifact === 'scrape-config') {
+      return { contentType: 'application/x-yaml', filename: blackboxScrapeFileName(canonical), content: compileBlackboxScrapeConfig(canonical, o) };
+    }
+    if (artifact && artifact.startsWith('check:')) {
+      const checkId = artifact.slice(6);
+      return { contentType: 'application/x-yaml', filename: blackboxFileName(canonical, { checkId }), content: compileBlackboxModules(canonical, { ...o, checkId }) };
+    }
+    return { contentType: 'application/x-yaml', filename: blackboxFileName(canonical), content: compileBlackboxModules(canonical, o) };
   }
   throw new Error(`unknown compile group: ${group}`);
 }
@@ -1572,6 +1624,15 @@ export const TARGETS = {
     family: 'grafana-dashboard',
     suggestedFile: (canonical, opts) => `${serviceSlug(canonical)}.${slug(defaultDashboardId(canonical, opts))}.json`,
     compile: (canonical, opts) => compileGrafanaDashboard(canonical, defaultDashboardId(canonical, opts), opts),
+  },
+  'blackbox-exporter': {
+    label: 'Blackbox exporter',
+    description: `Blackbox exporter modules (blackbox.yml) — one per synthetic check of kind ${BLACKBOX_KIND}, named by the check id; the producer side of the pack's probes. The matching Prometheus scrape jobs are the synthetics/scrape-config artifact.`,
+    contentType: 'application/x-yaml',
+    extension: 'yaml',
+    family: 'blackbox-exporter',
+    suggestedFile: (canonical) => blackboxFileName(canonical),
+    compile: (canonical, opts) => compileBlackboxModules(canonical, { ...opts, knobs: opts.profile?.knobs }),
   },
 };
 

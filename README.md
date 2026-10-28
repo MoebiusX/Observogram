@@ -289,6 +289,8 @@ Observogram compiles the pack delta into native backend artifacts:
 - Grafana dashboards
 - OTel Collector pipelines
 - Alertmanager routes
+- Blackbox exporter modules and the scrape jobs that drive them, from the
+  pack's synthetic checks (the producer side: what makes `probe_success` exist)
 
 Deployable artifacts can be pushed through an MCP write target. Non-deployable
 or inferred artifacts remain visible as manual follow-up, not silent production
