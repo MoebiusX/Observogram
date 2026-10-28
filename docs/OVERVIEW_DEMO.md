@@ -112,16 +112,19 @@ On the board the ring and the four counts are withheld in this state, with
 the reason in their place; the right column reads *Check against live to
 count what to change.*
 
-**Known since 2026-10-28 09:30:** the public MCP's `metrics_metadata` tool
-now rejects the fetcher's call (it wants a `metric` argument), so every new
-check loses the *metric names* family. On a workspace whose last good check
-still had it, the first Check again in the room reads exactly as above (the
-half-blind beat); a second Check again compares like with like and shows the
-numbers again, smaller — the board then says *The live side answered only in
-part: its dashboards and metric names could not be read.* under the counts.
-A fresh seed starts in that state and never shows the beat. Either way the
-screen says what it could not see; the fix is the fetcher's (another tool
-for the metric inventory), not the screen's.
+**Seen 2026-10-28, 00:26 to about 11:00:** after the stack behind the
+public MCP restarted, the *metric names* family failed on every check for
+some ten hours (the record blamed `metrics_metadata`, the last fallback the
+fetcher tried, with a schema error; the first candidate, `metrics_label_values`,
+had simply stopped answering), then came back by itself: a check at 11:15
+read B · 78 in 100 aligned · 253 match · 5 run differently · 37 not running
+live · 30 live only, dashboards the only family short. While it lasted, a
+workspace whose last good check still had the family read the half-blind
+beat above on its first Check again, and a second Check again showed the
+numbers again, smaller, with *The live side answered only in part: its
+dashboards and metric names could not be read.* under the counts. Expect it
+to happen again after a restart; the screen says what it could not see
+either way.
 
 ## Questions that may come
 
