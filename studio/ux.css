@@ -677,6 +677,9 @@ html[data-theme="light"] .ov-page { --ov-on-warn: #ffffff; }
 .ov-board .ov-live__row .ov-check, .ov-board .ov-live__row .ov-retry { order: 2; margin-left: auto; }
 .ov-board .ov-live__sentence { order: 3; flex: 1 1 100%; }
 .ov-fid__note { flex: 1 1 220px; }
+/* Read out, not shown: the composition line's lead-in. */
+.ov-sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.ov-comp { position: relative; }
 /* The same short screen, measured on the demo at 1366 × 768: every column above the fold. */
 @media (max-height: 820px) and (min-width: 1101px) {
   .ov-page--board { padding-bottom: 12px; }

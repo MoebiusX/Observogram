@@ -169,7 +169,7 @@ function discoverColHtml(L) {
       <ol class="ov-stack" aria-label="The stack, top down">${L.rows.map(layerRowHtml).join('')}</ol>
       ${legend}
       <p class="ov-col__note og-muted">${escapeHtml(L.coverage)}${L.unplacedNote ? ` ${escapeHtml(L.unplacedNote)}` : ''}</p>
-      ${L.composition.length ? `<p class="ov-comp og-muted" aria-label="In the repository">${L.composition.map((c) => `<span class="ov-comp__item"><b class="ov-comp__n">${c.count}</b> ${escapeHtml(c.name)}</span>`).join('<span class="ov-comp__sep"> · </span>')}</p>` : ''}`
+      ${L.composition.length ? `<p class="ov-comp og-muted"><span class="ov-sr">In the repository: </span>${L.composition.map((c) => `<span class="ov-comp__item"><b class="ov-comp__n">${c.count}</b> ${escapeHtml(c.name)}</span>`).join('<span class="ov-comp__sep"> · </span>')}</p>` : ''}`
     : reading('the repository');
   return `
     <section class="ov-col ov-col--discover og-panel og-panel--pad" aria-labelledby="ov-discover-h">
