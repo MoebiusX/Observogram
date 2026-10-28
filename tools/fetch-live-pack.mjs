@@ -375,6 +375,33 @@ const OBSERVED_ERROR_LENGTH = 200;
 
 const trimError = (v) => (v == null || v === '' ? null : String(v).slice(0, OBSERVED_ERROR_LENGTH));
 
+// Why a probe family got no answer: every candidate that failed, in the
+// order the cascade tried them, each named and trimmed like any observed
+// error — `metrics_label_values: HTTP 502 · metrics_metadata: MCP error
+// -32602 …`. The FIRST entry is the cause worth reading: the cascade only
+// reached the later ones because of it (the night the stack behind the
+// public MCP restarted, the one message kept was the last fallback's
+// schema complaint, which read like a contract change). A message that
+// already begins with the tool's name is not prefixed twice. Null when no
+// attempted candidate left a message.
+const PROBE_FAILURE_SEPARATOR = ' · ';
+function probeFailureText(attempted, probeFailures) {
+  const entries = [];
+  const seen = new Set();
+  for (const name of (Array.isArray(attempted) ? attempted : [])) {
+    // A tool tried twice for one family (two argument shapes) failed once
+    // as far as the record is concerned: probeFailures holds one message
+    // per tool name.
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const msg = probeFailures?.[name];
+    if (typeof msg !== 'string' || !msg) continue;
+    const named = msg.startsWith(`${name}:`) ? msg : `${name}: ${msg}`;
+    entries.push(trimError(named));
+  }
+  return entries.length ? entries.join(PROBE_FAILURE_SEPARATOR) : null;
+}
+
 // Prometheus target health is 'up' | 'down' | 'unknown'; anything we do
 // not recognise reads as null (no evidence either way).
 function normTargetHealth(v) {
@@ -1177,10 +1204,10 @@ export function buildCanonicalPack({
   // (we asked, nothing answered) so the studio never blames a deploy for
   // a surface the server simply doesn't offer.
   const probesUnsupported = probesByOutcome('unsupported');
-  // Last error per probe family: fetchMcp keys probeFailures by candidate
-  // tool NAME; map each name back to its family through the candidate
-  // list the probe loop recorded in `attempted`. The last erroring
-  // candidate wins (it is the one the cascade gave up on). Only FAILED
+  // Why each probe family got no answer: fetchMcp keys probeFailures by
+  // candidate tool NAME; map the names back to their family through the
+  // candidate list the probe loop recorded in `attempted`, and keep every
+  // candidate that failed, first first (probeFailureText). Only FAILED
   // families get an entry: the key documents WHY a family got no answer,
   // so a family whose later candidate answered (after an earlier one
   // errored) must not carry one — it would name a family that is listed
@@ -1191,11 +1218,8 @@ export function buildCanonicalPack({
     // the full candidate list, so a same-named tool that errored for a
     // DIFFERENT family must not be blamed on it.
     if (classify(v) !== 'failed') continue;
-    const attempted = Array.isArray(v?.attempted) ? v.attempted : [];
-    for (const name of attempted) {
-      const msg = probeFailures[name];
-      if (typeof msg === 'string' && msg) probeErrors[family] = trimError(msg);
-    }
+    const text = probeFailureText(v?.attempted, probeFailures);
+    if (text) probeErrors[family] = text;
   }
 
   const annotations = {
@@ -1226,8 +1250,9 @@ export function buildCanonicalPack({
     // the user can name what to wire next.
     'mcp.toolsUnmatched':      unmatchedTools.map(t => t.name).join(','),
   };
-  // WHY a probe family got no answer — the last candidate's error message,
-  // trimmed like every other observed error. Absent when nothing errored.
+  // WHY a probe family got no answer — every failed candidate's message in
+  // the order tried, each trimmed like every other observed error. Absent
+  // when nothing errored.
   for (const [family, msg] of Object.entries(probeErrors)) {
     annotations[`mcp.probeErrors.${family}`] = msg;
   }
@@ -2667,9 +2692,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     const r = probeResults[name];
     if (r?.outcome === 'unsupported') return { state: 'skipped', gap: gapOf(stage, name, offersNo(stage)) };
     if (r?.outcome === 'failed') {
-      const attempted = Array.isArray(r.attempted) ? r.attempted : [];
-      const last = attempted.map(n => probeFailures[n]).filter(Boolean).pop();
-      return { state: 'failed', gap: gapOf(stage, name, `the ${stageNoun(stageLabel.get(stage))} tool got no answer${last ? `: ${last}` : ''}`) };
+      const why = probeFailureText(r.attempted, probeFailures);
+      return { state: 'failed', gap: gapOf(stage, name, `the ${stageNoun(stageLabel.get(stage))} tool got no answer${why ? `: ${why}` : ''}`) };
     }
     return null;
   };

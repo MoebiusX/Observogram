@@ -30,7 +30,7 @@
       "mcp.toolsExposed": "system_health,system_topology,anomalies_active,anomalies_baselines,vmalert_rules,metrics_label_values,metrics_targets,alertmanager_status,grafana_dashboards_search,grafana_dashboard_get,grafana_health",
       "mcp.toolsExposedCount": "11",
       "mcp.toolsUnmatched": "alertmanager_status",
-      "mcp.probeErrors.alerting_routes": "the Alertmanager status carries no configuration",
+      "mcp.probeErrors.alerting_routes": "alertmanager_status: the Alertmanager status carries no configuration",
       "mcp.fetchStartedAt": "<time>",
       "mcp.observedAt.recording_rules": "<time>",
       "mcp.observedAt.alert_rules": "<time>",
@@ -140,12 +140,12 @@
       "observogram.unobserved.derived_view": "no MCP tool exposes derived views",
       "observogram.unobserved.imports": "no MCP tool exposes pack imports",
       "observogram.unobserved.forecast": "forecast rules are not read back from the ruler",
-      "observogram.unobserved.alert_route": "the alerting routes tool got no answer: the Alertmanager status carries no configuration",
+      "observogram.unobserved.alert_route": "the alerting routes tool got no answer: alertmanager_status: the Alertmanager status carries no configuration",
       "observogram.live.mode": "snapshot",
       "observogram.live.source": "{\"origin\":\"https://mcp.snapshot.test\",\"endpoint\":{\"id\":3,\"name\":\"gw\"}}",
       "observogram.live.scope": "{\"metricPrefixes\":[\"alertmanager_\",\"up\"],\"folderUids\":[],\"datasourceUid\":null,\"appliesTo\":{\"metricPrefixes\":[\"metric\"],\"folderUids\":[]}}",
       "observogram.scope.metric": "{\"by\":\"prefix\",\"values\":[\"alertmanager_\",\"up\"]}",
-      "observogram.live.gaps": "[{\"stage\":\"alerting_routes\",\"reason\":\"the alerting routes tool got no answer: the Alertmanager status carries no configuration\"}]"
+      "observogram.live.gaps": "[{\"stage\":\"alerting_routes\",\"reason\":\"the alerting routes tool got no answer: alertmanager_status: the Alertmanager status carries no configuration\"}]"
     }
   },
   "spec": {
