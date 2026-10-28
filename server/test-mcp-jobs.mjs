@@ -219,7 +219,7 @@ test('a snapshot by id: 202, an id and a Location at once; the gate log by curso
   assert.deepEqual([...last.values()].filter((x) => x.state !== 'done').map((x) => [x.stage, x.state]), [['alerting_routes', 'failed']],
     'every stage done but the routes, offered and unanswered');
   assert.equal(last.get('register').message, 'registered as live-snapshot (live MCP snapshot)');
-  assert.equal(last.get('alerting_routes').gap.reason, 'the alerting routes tool got no answer: the Alertmanager status carries no configuration', 'the recorded status carries no configuration: a gap');
+  assert.equal(last.get('alerting_routes').gap.reason, 'the alerting routes tool got no answer: alertmanager_status: the Alertmanager status carries no configuration', 'the recorded status carries no configuration: a gap');
   const { result } = end;
   assert.deepEqual(result.registered.label, 'live-snapshot (live MCP snapshot)');
   assert.deepEqual(result.validation, { ok: true, errors: 0, first: [] });

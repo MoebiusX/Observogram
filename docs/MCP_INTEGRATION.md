@@ -679,7 +679,7 @@ metadata:
     mcp.probesEmpty: ""                              # a probe answered with an empty list
     mcp.probesFailed: "dashboards"                   # every candidate errored — a hole of unknown size
     mcp.probesUnsupported: ""                        # e.g. "traces_services" when tools/list exposes no candidate — a restricted tier, not an outage
-    mcp.probeErrors.dashboards: "HTTP 502 Bad Gateway"   # last erroring candidate of a FAILED family only (trimmed to 200 chars)
+    mcp.probeErrors.dashboards: "grafana_dashboards_search: HTTP 502 Bad Gateway · grafana_search: HTTP 503"   # every failed candidate of a FAILED family, first first, each trimmed to 200 chars
 
     mcp.verified.otel.metrics: "2026-06-09T00:09:14.730Z"
     mcp.verified.telemetry.scrape: "2026-06-09T00:09:14.730Z"
@@ -734,7 +734,7 @@ JSON arrays (`annotationJson`) at 200 entries; error strings at 200 chars.
 | `mcp.toolsCalled`, `mcp.toolsFailed` | comma list | core tools (`system_health`, …) called / errored |
 | `mcp.toolsExposed`, `mcp.toolsExposedCount`, `mcp.toolsUnmatched` | comma list, count | the `tools/list` inventory, and advertised tools with no probe pattern |
 | `mcp.probesAttempted` / `Succeeded` / `Empty` / `Failed` / `Unsupported` | comma list of probe families | outcome per family: answered with data / answered empty / every candidate errored / no candidate advertised by `tools/list` |
-| `mcp.probeErrors.<family>` | string | last erroring candidate's message, written only for a family whose outcome is `failed` (a family whose later candidate answered carries none — it is in `probesSucceeded`) |
+| `mcp.probeErrors.<family>` | string | every failed candidate's message in the order tried, each named (`<tool>: <message>`) and trimmed to 200 chars, joined with ` · `; written only for a family whose outcome is `failed` (a family whose later candidate answered carries none — it is in `probesSucceeded`). The first entry is the cause: the cascade reached the later ones because of it |
 | `mcp.verified.<symbol>` | `refreshedAt` | the adapter projects the artefact as `Verified`; indexed for per-entry lists (`queries.recording_rules[<i>]`, `policy.burn_rate_alerts[<i>]`), per id for dashboards (`dashboards.<id>`, beside the aggregate `dashboards`) |
 | `mcp.scaffold.<symbol>` | note string (same convention as `crawler.scaffold.*`) | schema-forced placeholder no tool attested; projects as `Scaffold` |
 | `mcp.discovered.<family>` | count | array length of a probe's adapted result, `"0"` when it answered empty |
