@@ -2072,7 +2072,7 @@ Each column opens its Expert view bound to the service, so the two faces
 are one product. The simple layout stays as the fallback (`?layout=simple`,
 remembered), drawn by the renderer itself should the board fail. Nothing
 the mockup shows without an engine behind it (cost and ingestion, a quality
-trend, a 3-D tomogram) is drawn. Tests: 1511 → 1517 (the stack and its
+trend, a 3-D tomogram) is drawn. Tests: 1511 → 1518 (the stack and its
 counts, the rules, the fidelity and the changes and when they are withheld,
 the layout rule, the board's markup with its one primary across every
 state, the links, the fallback).

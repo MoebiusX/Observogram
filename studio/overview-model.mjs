@@ -248,6 +248,9 @@ function liveGradeLines(run, { against, where, now }) {
   if (!Number.isFinite(pct)) return null;
   const ageHours = Number(run.freshness?.liveAgeHours);
   const fresh = Number.isFinite(ageHours) ? ageHours * 3600e3 <= FRESH_WINDOW_MS : true;
+  // The engine scores this criterion by the integrity itself (0.85 of a
+  // point at 85 in 100) and calls it met at the bar: the mark follows the
+  // bar, the points follow the integrity, above the bar too.
   return [
     { ok: pct >= GRADE_BAR ? 'yes' : (pct > 0 ? 'partly' : 'no'), score: Math.max(0, Math.min(1, pct / 100)),
       text: `Of what the repository promises, ${Math.round(pct)} in 100 holds up ${where}; the bar is ${GRADE_BAR}.` },
@@ -256,7 +259,9 @@ function liveGradeLines(run, { against, where, now }) {
   ];
 }
 
-const gradePoints = (lines) => lines.reduce((n, l) => n + (l.ok === 'yes' ? 1 : l.ok === 'partly' ? (l.score ?? 0) : 0), 0);
+// A line's points: its fractional score when it carries one (the engine's
+// criterionScore), else one for a yes and nothing otherwise.
+const gradePoints = (lines) => lines.reduce((n, l) => n + (typeof l.score === 'number' ? l.score : (l.ok === 'yes' ? 1 : 0)), 0);
 
 // "4.8 of 7 points. B+ starts at 5.3." — the next band up in points, so the
 // distance to the next letter is one subtraction.

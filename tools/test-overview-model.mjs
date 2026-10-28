@@ -994,3 +994,14 @@ test('vocabulary: no string of any model built above carries a percentage, a lay
   const pills = new Set(builtModels.map((m) => m?.pill ?? m?.still?.pill).filter(Boolean));
   assert.deepEqual([...pills].sort(), ['Changed', 'Never checked', 'Unchanged', 'Unreachable']);
 });
+
+test('gradeWhy at the bar: promises at 85 in 100 read Yes and still count 0.85 of a point, as the engine scores them, so the list is offered for the letter it explains (seen on the demo 2026-10-28 when a check moved 84 to 85)', () => {
+  const atBar = { ...run, traceability: { ...run.traceability, integrityPct: 85 } };
+  const g = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: atBar, journey, now: NOW }));
+  assert.equal(g.why.length, 7, 'offered: 3 + 0.85 + 1 = 4.85 of 7 is the letter\'s 69');
+  assert.equal(g.why.find((w) => w.text.startsWith('Of what the repository promises'))?.ok, 'yes', 'at the bar the mark is a yes');
+  assert.ok(g.why.some((w) => w.text === 'Of what the repository promises, 85 in 100 holds up live; the bar is 85.'));
+  assert.equal(g.points, '4.9 of 7 points. B+ starts at 5.3.');
+  const far = { ...run, traceability: { ...run.traceability, integrityPct: 100 } };
+  assert.equal(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: far, journey, now: NOW })).why.length, 0, 'a full point at 100 no longer adds up to a score of 69: withheld, as before');
+});
