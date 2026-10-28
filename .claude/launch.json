@@ -13,6 +13,12 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["tools/demo-studio.mjs"],
       "port": 8010
+    },
+    {
+      "name": "studio-demo-board",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/demo-studio.mjs", "--port", "8020", "--workspace", ".observogram-demo-board"],
+      "port": 8020
     }
   ]
 }

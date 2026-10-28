@@ -20,6 +20,7 @@ coverage/
 # (.tomograph/ is the pre-rebrand name; existing ones keep working).
 .observogram/
 .observogram-demo/
+.observogram-demo-board/
 .tomograph/
 
 # Pinned backend-validator binaries + compiled-artifact scratch

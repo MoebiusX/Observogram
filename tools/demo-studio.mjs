@@ -10,6 +10,8 @@
 //
 //   npm run demo                      # http://127.0.0.1:8010
 //   PORT=8000 npm run demo
+//   npm run demo -- --port 8020 --workspace .observogram-demo-board
+//                                     # a second demo beside the first (its own workspace)
 //   OBSERVOGRAM_DEMO_SKIP_LIVE=1 …    # seed the repository pack only (no MCP)
 //
 // The server is a child process with the environment this file sets; the
@@ -24,13 +26,26 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = Number(process.env.PORT || 8010);
+// --port N / --workspace DIR on the command line win over the environment,
+// so a second demo can run beside the first on its own workspace.
+const argOf = (flag) => {
+  const i = process.argv.indexOf(flag);
+  const v = i >= 0 ? process.argv[i + 1] : undefined;
+  return v && !v.startsWith('--') ? v : undefined;
+};
+const PORT = Number(argOf('--port') || process.env.PORT || 8010);
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
+  process.stderr.write(`[demo] --port / PORT must be a port number, not ${JSON.stringify(argOf('--port') || process.env.PORT)}\n`);
+  process.exit(2);
+}
 const HOST = '127.0.0.1';
 const BASE = `http://${HOST}:${PORT}`;
-const WORKSPACE = resolve(ROOT, process.env.OBSERVOGRAM_WORKSPACE || '.observogram-demo');
-// The address to open: it forces the Overview face and the dark theme, and
-// the browser remembers both — a profile that last saw Expert opens here too.
-const DEMO_URL = `${BASE}/?mode=overview&theme=dark`;
+const WORKSPACE = resolve(ROOT, argOf('--workspace') || process.env.OBSERVOGRAM_WORKSPACE || '.observogram-demo');
+// The address to open: it forces the Overview face, the board layout and the
+// dark theme, and the browser remembers all three — a profile that last saw
+// Expert, or the simple layout, opens here too.
+const DEMO_URL = `${BASE}/?mode=overview&theme=dark&layout=board`;
+const SIMPLE_URL = `${BASE}/?mode=overview&theme=dark&layout=simple`;
 // A check older than this at start is run again, so the page opens on
 // "Checked a few minutes ago" and the first Check in the room meets a warm
 // endpoint (a cold one answers its first probes in 20–30 s and loses families).
@@ -210,6 +225,9 @@ async function runJourney(why) {
   }
 }
 
-seed().then(() => log(`ready — open ${DEMO_URL}`)).catch((e) => {
+seed().then(() => {
+  log(`ready — open ${DEMO_URL}`);
+  log(`the three sentences alone (the fallback layout): ${SIMPLE_URL}`);
+}).catch((e) => {
   process.stderr.write(`[demo] seed failed: ${e.message}\n[demo] the studio keeps running on ${DEMO_URL}; fix the cause and start again.\n`);
 });

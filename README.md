@@ -55,25 +55,36 @@ into pack shape. The diff between declared and live is the operational truth.
 ## Overview — The Front Door
 
 The studio has two faces. **Overview** is the one most people see first: one
-service at a time and three answers, with nothing to read around them —
+service at a time, the machine drawn as three columns under the words Expert
+uses, every number the engine's own —
 
-- **How well is it observed?** The diagnostic grade as a letter, drawn
-  large, with its ladder name in plain words (*Industrial grade*) and
-  whether it was graded against live or from the repository alone.
-- **Is that still true right now?** One of four words — *Never checked ·
-  Unchanged · Changed · Unreachable* — and one sentence with a time, from the
-  service's saved journey and its last run: *Checked 2 hours ago against
-  live — 43 things differ from what the repository declares.* **Check
-  again** runs the journey against the live platform while you watch.
-- **What to do next.** One sentence, one button, at most three plain items
-  behind *Why*.
+- **Discover — What is in place.** The stack top down — user experience,
+  application, platform, infrastructure — each layer with ten cells, one per
+  kind of signal, lit where the repository declares some and carrying the
+  count; *7 of 10 kinds*; the pack's own layers as counts under it.
+- **Diagnose — Are the right signals in place?** The diagnostic grade as a
+  letter in a shield with its ladder name (*Industrial grade*), whether it
+  was graded against live or from the repository alone, the specification's
+  required rules as a bar, and the seven criteria behind the letter as one
+  plain sentence each with a yes, a partly or a no. **Can you trust what the
+  signals show?** The alignment as a ring, four counts (*252 match · 5 run
+  differently · 38 not running live · 30 live only*), the promises that hold
+  end to end, and one of four words — *Never checked · Unchanged · Changed ·
+  Unreachable* — with a timed sentence from the service's saved journey:
+  *Checked 2 hours ago against live — 43 things differ from what the
+  repository declares.* **Check again** runs the journey against the live
+  platform while you watch.
+- **Remediate — What to change.** *38 to add · 5 to update · 30 to review*,
+  and one next step with one button.
 
-**Expert** is everything below — Discover · Diagnose · Remediate, Compare,
-Build, the Advanced tools — one switch away in the header, unchanged. A
-browser opens on Overview the first time it finds a service to show, and on
-the home when the workspace is empty; the choice is remembered per browser
-(`?mode=overview` or `?mode=expert` sets it). `npm run demo` seeds a
-populated studio on port 8010 (see *Run The Demo* below).
+Each column opens its Expert view bound to the service. **Expert** is
+everything below — Discover · Diagnose · Remediate, Compare, Build, the
+Advanced tools — one switch away in the header, unchanged. A browser opens on
+Overview the first time it finds a service to show, and on the home when the
+workspace is empty; the choice is remembered per browser (`?mode=overview` or
+`?mode=expert` sets it), and so is the layout: `?layout=simple` is the three
+sentences alone, the fallback. `npm run demo` seeds a populated studio on
+port 8010 (see *Run The Demo* below).
 
 ## Main Journey
 
@@ -1317,11 +1328,14 @@ everything in place and seeds nothing; it runs the check again when the last
 one is older than ten minutes, so the page opens on *Checked a few minutes
 ago* and the first Check meets a warm endpoint (`OBSERVOGRAM_DEMO_NO_WARM=1`
 skips it, `OBSERVOGRAM_DEMO_WARM_AFTER_MIN` moves the bar). The ready line
-prints the address to open, `/?mode=overview&theme=dark`: it forces Overview
-and the dark theme and the browser remembers both, so no fresh profile is
-needed. `OBSERVOGRAM_DEMO_SKIP_LIVE=1` seeds the repository pack only;
-`OBSERVOGRAM_DEMO_REDRAFT=1` drafts the live pack again; `PORT` and
-`OBSERVOGRAM_DEMO_MCP_URL` move the port and the endpoint. The script is
+prints the address to open, `/?mode=overview&theme=dark&layout=board`: it
+forces Overview, the board and the dark theme, and the browser remembers all
+three, so no fresh profile is needed; a second line gives the same page as
+the three sentences alone (`layout=simple`, the fallback layout). `OBSERVOGRAM_DEMO_SKIP_LIVE=1` seeds
+the repository pack only; `OBSERVOGRAM_DEMO_REDRAFT=1` drafts the live pack
+again; `PORT` and `OBSERVOGRAM_DEMO_MCP_URL` move the port and the endpoint;
+`npm run demo -- --port 8020 --workspace .observogram-demo-board` runs a
+second demo beside the first on its own workspace. The script is
 [docs/OVERVIEW_DEMO.md](docs/OVERVIEW_DEMO.md).
 
 ### Scan A Repo

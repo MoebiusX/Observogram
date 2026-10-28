@@ -108,9 +108,9 @@ import { revealTodo } from './build-atoms.mjs';
 import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from './build-label.mjs';
 import { loadBrand } from './brand.mjs';
 import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
-import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, UI_MODE_KEY, UI_MODES } from './overview-model.mjs';
-import { loadOverviewFacts, runServiceCheck, computeOverviewDiagnostic } from './overview-api.mjs';
-import { renderOverview } from './overview-view.mjs';
+import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS } from './overview-model.mjs';
+import { loadOverviewFacts, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
+import { renderOverview, COMPACT_SCREEN_QUERY } from './overview-view.mjs';
 
 // The brand (studio/brand.mjs): kicked off here, at module top level, so the
 // one fetch (/lib/brand.mjs, modulepreloaded by the shell) overlaps the
@@ -1819,6 +1819,8 @@ let overviewFacts = emptyOverviewFacts();
 // Bumped by every entry and refresh: a read that settles after the user
 // moved to another service never repaints the wrong one.
 let overviewGeneration = 0;
+// The layout on screen: the board, or the three sentences (?layout=simple).
+let overviewLayout = 'board';
 
 function readUiModePreference() {
   try { return localStorage.getItem(UI_MODE_KEY); } catch (_) { return null; }
@@ -1833,12 +1835,22 @@ function setUiMode(mode) {
 
 // The ?mode= query wins and is remembered; else the preference; else
 // Overview when the services table has rows — the empty studio boots as
-// before, on the home.
+// before, on the home. The layout the same way: ?layout=board|simple wins
+// and is remembered; the board is the default, the simple layout (the three
+// sentences alone) the fallback a hand can reach for.
 function decideUiModeAtBoot() {
-  let query = null;
-  try { query = new URLSearchParams(window.location.search).get('mode'); } catch (_) { query = null; }
+  let query = null, layoutQuery = null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    query = params.get('mode');
+    layoutQuery = params.get('layout');
+  } catch (_) { query = null; layoutQuery = null; }
   state.uiMode = decideUiMode({ saved: readUiModePreference(), query, hasServices: (state.services?.length || 0) > 0 });
   if (UI_MODES.includes(query)) { try { localStorage.setItem(UI_MODE_KEY, query); } catch (_) { /* as above */ } }
+  let savedLayout = null;
+  try { savedLayout = localStorage.getItem(OVERVIEW_LAYOUT_KEY); } catch (_) { savedLayout = null; }
+  overviewLayout = decideOverviewLayout({ saved: savedLayout, query: layoutQuery });
+  if (OVERVIEW_LAYOUTS.includes(layoutQuery)) { try { localStorage.setItem(OVERVIEW_LAYOUT_KEY, layoutQuery); } catch (_) { /* as above */ } }
   paintUiModeSwitch();
 }
 
@@ -1854,6 +1866,12 @@ function paintUiModeSwitch() {
 }
 
 function setupUiModeSwitch() {
+  // The board reads the screen's height once per paint (the seven criteria
+  // open or behind Why this grade): a window dragged to the other monitor
+  // is repainted when the query flips.
+  try {
+    window.matchMedia?.(COMPACT_SCREEN_QUERY)?.addEventListener?.('change', () => { if (state.mode === 'overview') renderMainView(); });
+  } catch (_) { /* no matchMedia: the first reading stands */ }
   const seg = document.querySelector('.observa-ui-mode');
   if (!seg) return;
   seg.querySelectorAll('[data-ui-mode]').forEach((b) => {
@@ -1874,15 +1892,27 @@ function setupUiModeSwitch() {
 // The model from the facts on hand: the pack-alone grade is the engine's
 // (computeOverviewDiagnostic), its causes buildAssessmentDecision's; both are
 // computed here, in the DOM world, and handed to the pure model.
+// The posture, the grade and its causes are derived from the layered pack
+// once per pack object: a repaint while a check runs, or after a start
+// error, reuses them (the matrix walks every artefact of the pack).
+let overviewDerived = { layered: null, posture: null, diagnostic: null, diagnosticError: null, decision: null };
+function deriveOverview(f) {
+  if (overviewDerived.layered === f.layered && overviewDerived.layeredError === f.layeredError) return overviewDerived;
+  const d = { layered: f.layered, layeredError: f.layeredError, posture: null, diagnostic: null, diagnosticError: f.layeredError, decision: null };
+  if (f.layered && !d.diagnosticError) {
+    try {
+      d.posture = computeOverviewPosture(f.layered);
+      d.diagnostic = computeOverviewDiagnostic(f.layered, d.posture);
+    } catch (e) { d.diagnosticError = e.message || String(e); }
+  }
+  if (d.diagnostic) { try { d.decision = buildAssessmentDecision({ diagnostic: d.diagnostic }); } catch (_) { d.decision = null; } }
+  overviewDerived = d;
+  return d;
+}
+
 function overviewModel() {
   const f = overviewFacts;
-  let diagnostic = null;
-  let diagnosticError = f.layeredError;
-  if (f.layered && !diagnosticError) {
-    try { diagnostic = computeOverviewDiagnostic(f.layered); } catch (e) { diagnosticError = e.message || String(e); }
-  }
-  let decision = null;
-  if (diagnostic) { try { decision = buildAssessmentDecision({ diagnostic }); } catch (_) { decision = null; } }
+  const { posture, diagnostic, diagnosticError, decision } = deriveOverview(f);
   return buildOverviewModel({
     services: state.services, servicesStatus: state.servicesStatus, catalog: state.catalog,
     serviceId: state.overviewServiceId, env: state.overviewEnv, isLiveAggregatePack,
@@ -1890,6 +1920,7 @@ function overviewModel() {
     diagnostic, diagnosticError, decision,
     journeys: f.journeys, journeysError: f.journeysError, run: f.run,
     running: f.running, startError: f.startError,
+    layout: overviewLayout, cells: posture?.cells || null, layered: f.layered, conformance: f.conformance, conformanceError: f.conformanceError,
     now: Date.now(), productName: state.brand?.chrome?.name || '',
   });
 }
@@ -1956,14 +1987,19 @@ function enterExpert() {
   goHome();
 }
 
-// "See what to fix": Expert's Diagnose, bound to this service and environment.
-function openOverviewDiagnose() {
+// The board's columns open Expert's own views, bound to this service and
+// environment: Discover (the layer inventory), Diagnose ("See what to fix",
+// the compliance report), Remediate (compile and deploy the delta).
+function openOverviewView(view) {
   const id = state.overviewServiceId;
   const env = state.overviewEnv;
   setUiMode('expert');
-  if (Number.isInteger(id) && findServiceRecord(id)) { openServiceIn('compare', { serviceId: id, env }); return; }
+  if (Number.isInteger(id) && findServiceRecord(id)) { openServiceIn(view, { serviceId: id, env }); return; }
   goHome();
 }
+const openOverviewDiscover = () => openOverviewView('layers');
+const openOverviewDiagnose = () => openOverviewView('compare');
+const openOverviewRemediate = () => openOverviewView('compile');
 
 // "See the differences": Expert's Neuron on this service's journey — the
 // run whose numbers Overview showed, one click away.
@@ -2010,7 +2046,9 @@ const overviewActions = {
   selectService: (id) => { enterOverview(Number.isInteger(id) ? id : null, null); },
   selectEnv: (name) => { enterOverview(state.overviewServiceId, typeof name === 'string' ? name : null); },
   checkNow: runOverviewCheck,
+  openDiscover: openOverviewDiscover,
   openDiagnose: openOverviewDiagnose,
+  openRemediate: openOverviewRemediate,
   openNeuron: openOverviewNeuron,
   expert: enterExpert,
   retry: async () => { await refreshServices(); await refreshOverviewFacts(); },

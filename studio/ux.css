@@ -525,3 +525,178 @@ body[data-mode="overview"] #layer-view { padding: 0; background: var(--og-bg); }
   .ov-grade__row { gap: 22px; margin-top: 6px; }
   .ov-grade__letter { min-width: 96px; font-size: 96px; }
 }
+
+/* ---- the board: three columns under the words Expert uses (studio/overview-view.mjs boardBodyHtml) ---- */
+.ov-page--board { max-width: 1480px; }
+.ov-board { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr) minmax(0, 0.88fr); gap: 16px; align-items: start; }
+.ov-col { display: grid; gap: 12px; align-content: start; min-width: 0; }
+.ov-col--diagnose { gap: 16px; }
+.ov-board .ov-col__h { font: 550 20px/1.3 var(--og-font); letter-spacing: -0.01em; }
+.ov-col__lead { margin: 0; font: 550 16px/1.35 var(--og-font); color: var(--og-text); }
+.ov-col__note { margin: 0; font: var(--og-label-font); }
+.ov-col__foot { margin-top: 2px; }
+.ov-link.og-btn--text { padding-left: 0; padding-right: 0; min-height: 28px; }
+.ov-reading { margin: 0; }
+.ov-fid__note { margin: 0; font: 400 15px/1.45 var(--og-font); }
+
+/* Discover: the stack, top down. */
+.ov-stack { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.ov-layer {
+  display: grid; gap: 6px; padding: 9px 12px 9px 11px;
+  border: 1px solid var(--og-line); border-left: 3px solid var(--og-muted); border-radius: var(--og-radius-card); background: var(--og-panel-2);
+}
+.ov-layer--ok { border-left-color: var(--og-accent); }
+.ov-layer--warn { border-left-color: var(--og-warn); }
+.ov-layer--fail { border-left-color: var(--og-fail); }
+.ov-layer__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.ov-layer__name { font: 600 15px/1.3 var(--og-font); color: var(--og-text); }
+.ov-layer__hint { flex: 1 1 auto; font: 400 12.5px/1.3 var(--og-font); }
+.ov-layer__n { font: 600 12.5px/1.3 var(--og-font); color: var(--og-text-2); white-space: nowrap; }
+.ov-cells { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 3px; }
+.ov-cell {
+  display: block; height: 22px; border-radius: 4px; border: 1px solid var(--og-line); background: var(--og-sunken);
+  font: 600 11px/20px var(--og-font); text-align: center; color: var(--og-on-accent); overflow: hidden;
+}
+/* Lit cells use the kit's filled pairs (accent-solid / on-accent, fail / on-fail); amber has no
+   designed ink, so the light theme writes white on it (5.5:1) and the dark theme the dark ink (11:1). */
+.ov-page { --ov-on-warn: #1b1407; }
+html[data-theme="light"] .ov-page { --ov-on-warn: #ffffff; }
+.ov-cell--on { border-color: transparent; background: var(--og-accent-solid); color: var(--og-on-accent); }
+.ov-layer--warn .ov-cell--on { background: var(--og-warn); color: var(--ov-on-warn); }
+.ov-layer--fail .ov-cell--on { background: var(--og-fail); color: var(--og-on-fail); }
+.ov-layer__kinds { font: 400 12.5px/1.35 var(--og-font); }
+
+/* Diagnose: the shield, the rules, the seven rows open; then the ring and the counts. */
+.ov-shield-row { display: flex; align-items: center; gap: 16px; margin-top: 8px; }
+.ov-shield {
+  flex: 0 0 auto; width: 84px; height: 84px; display: grid; place-items: center; color: var(--og-text);
+  border: 2px solid currentColor; border-radius: 18px; background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.ov-shield.ov-tone-ok { color: var(--og-accent); }
+.ov-shield.ov-tone-warn { color: var(--og-warn); }
+.ov-shield.ov-tone-fail { color: var(--og-fail); }
+.ov-shield.ov-tone-info { color: var(--og-info); }
+.ov-shield__letter { font: 650 50px/1 var(--og-font); letter-spacing: -0.04em; }
+.ov-board .ov-grade__text { gap: 3px; }
+.ov-board .ov-grade__label { font: 600 20px/1.2 var(--og-font); letter-spacing: -0.01em; color: var(--og-text); }
+.ov-board .ov-grade__word { font-size: 14.5px; }
+.ov-board .ov-grade__src { font-size: 13px; }
+.ov-rules { display: grid; gap: 5px; margin-top: 12px; }
+.ov-rules__bar { height: 6px; border-radius: 3px; background: var(--og-sunken); border: 1px solid var(--og-line); overflow: hidden; }
+.ov-rules__bar > span { display: block; height: 100%; background: var(--og-accent); }
+.ov-rules--warn .ov-rules__bar > span { background: var(--og-warn); }
+.ov-rules--fail .ov-rules__bar > span { background: var(--og-fail); }
+.ov-rules__text { font: 400 13.5px/1.3 var(--og-font); color: var(--og-text-2); }
+.ov-board .ov-grade__points { margin-top: 10px; font-size: 13px; }
+.ov-gw-list--open { margin-top: 6px; gap: 4px; font-size: 14px; line-height: 1.4; }
+.ov-gw-list--open .ov-gw__pill { min-width: 52px; }
+.ov-fid { display: flex; align-items: center; gap: 16px; margin-top: 8px; flex-wrap: wrap; }
+.ov-ring { flex: 0 0 auto; width: 96px; height: 96px; color: var(--og-muted); }
+.ov-ring--ok { color: var(--og-accent); }
+.ov-ring--warn { color: var(--og-warn); }
+.ov-ring--fail { color: var(--og-fail); }
+.ov-ring__track { fill: none; stroke: var(--og-line-strong); stroke-width: 7; }
+.ov-ring__arc { fill: none; stroke: currentColor; stroke-width: 7; stroke-linecap: round; }
+.ov-ring__pct { font: 650 20px var(--og-font); letter-spacing: -0.03em; fill: var(--og-text); text-anchor: middle; dominant-baseline: middle; }
+.ov-ring__word { font: 600 8.5px var(--og-font); letter-spacing: 0.08em; text-transform: uppercase; fill: var(--og-muted); text-anchor: middle; dominant-baseline: middle; }
+.ov-tiles { flex: 1 1 220px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.ov-tile { display: grid; gap: 0; padding: 7px 10px; border: 1px solid var(--og-line); border-radius: var(--og-radius-card); background: var(--og-panel-2); }
+.ov-tile__n { font: 650 23px/1.15 var(--og-font); letter-spacing: -0.02em; color: var(--og-text); }
+.ov-tile--ok .ov-tile__n { color: var(--og-accent); }
+.ov-tile--warn .ov-tile__n { color: var(--og-warn); }
+.ov-tile--fail .ov-tile__n { color: var(--og-fail); }
+.ov-tile--info .ov-tile__n { color: var(--og-info); }
+.ov-tile__l { font: 500 12.5px/1.25 var(--og-font); color: var(--og-text-2); }
+.ov-chains { display: grid; gap: 5px; margin-top: 12px; }
+.ov-chains__bar { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; background: var(--og-sunken); }
+.ov-chains__seg { display: block; min-width: 2px; }
+.ov-chains__seg--ok { background: var(--og-accent); }
+.ov-chains__seg--warn { background: var(--og-warn); }
+.ov-chains__seg--fail { background: var(--og-fail); }
+.ov-chains__text { margin: 0; font: 400 13.5px/1.3 var(--og-font); color: var(--og-text-2); }
+.ov-board .ov-live__row { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--og-line); gap: 10px 14px; }
+.ov-board .ov-live__sentence { font-size: 15.5px; flex-basis: 220px; }
+.ov-board .ov-live__cadence { font-size: 12.5px; margin-top: 6px; }
+
+/* Remediate: three counts, then the one next step. */
+.ov-changes { display: grid; gap: 8px; margin-top: 8px; }
+.ov-change {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 12px; align-items: baseline;
+  padding: 9px 12px 9px 11px; border: 1px solid var(--og-line); border-left: 3px solid var(--og-muted); border-radius: var(--og-radius-card); background: var(--og-panel-2);
+}
+.ov-change__n { grid-row: 1 / span 2; min-width: 44px; font: 650 30px/1 var(--og-font); letter-spacing: -0.03em; color: var(--og-text); }
+.ov-change__l { font: 600 15px/1.25 var(--og-font); color: var(--og-text); }
+.ov-change__note { font: 400 12.5px/1.3 var(--og-font); }
+.ov-change--fail { border-left-color: var(--og-fail); }
+.ov-change--fail .ov-change__n { color: var(--og-fail); }
+.ov-change--warn { border-left-color: var(--og-warn); }
+.ov-change--warn .ov-change__n { color: var(--og-warn); }
+.ov-change--info { border-left-color: var(--og-info); }
+.ov-change--info .ov-change__n { color: var(--og-info); }
+.ov-board .ov-next__row { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--og-line); gap: 10px 14px; }
+.ov-board .ov-next__sentence { font-size: 15.5px; flex-basis: 200px; }
+.ov-board .ov-next__why { margin-top: 8px; }
+.ov-board .ov-why { font-size: 13.5px; }
+
+@media (max-width: 1100px) {
+  .ov-board { grid-template-columns: 1fr; }
+}
+/* A 768 px-tall laptop at full width: the three columns above the fold. */
+@media (max-height: 820px) and (min-width: 1101px) {
+  .ov-page--board { padding-top: 12px; gap: 10px; }
+  .ov-page--board .og-panel--pad { padding: 14px 18px; }
+  .ov-col { gap: 10px; }
+  .ov-col--diagnose { gap: 10px; }
+  .ov-stack { gap: 6px; }
+  .ov-layer { padding: 6px 10px 6px 9px; gap: 4px; }
+  .ov-cell { height: 18px; line-height: 16px; font-size: 10px; }
+  .ov-shield { width: 68px; height: 68px; border-radius: 14px; }
+  .ov-shield__letter { font-size: 40px; }
+  .ov-gw-list--open { gap: 2px; font-size: 13px; }
+  .ov-ring { width: 84px; height: 84px; }
+  .ov-change { padding: 6px 10px 6px 9px; }
+  .ov-change__n { font-size: 26px; }
+}
+/* The cells' legend and the composition line; the compact screen trades the per-layer kinds for the legend. */
+.ov-legend { margin: 0; font: 400 12.5px/1.35 var(--og-font); display: none; }
+.ov-comp { margin: 0; font: 400 13px/1.5 var(--og-font); }
+.ov-comp__item { white-space: nowrap; }
+.ov-comp__n { font-weight: 650; color: var(--og-text); }
+.ov-fid__partial { margin: 10px 0 0; font: 400 13px/1.35 var(--og-font); }
+.ov-grade__why--open { margin-top: 10px; }
+@media (max-height: 820px) and (min-width: 1101px) {
+  /* Out of sight, still read out: the picture's name carries the kinds too. */
+  .ov-layer__kinds { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .ov-layer { position: relative; }
+  .ov-legend { display: block; }
+  .ov-board .ov-grade__points { margin-top: 8px; }
+}
+/* The still-true row on the board: the pill and the button on one line, the sentence under them at full width. */
+.ov-board .ov-live__row { display: flex; flex-wrap: wrap; align-items: center; }
+.ov-board .ov-live__pill { order: 1; }
+.ov-board .ov-live__row .ov-check, .ov-board .ov-live__row .ov-retry { order: 2; margin-left: auto; }
+.ov-board .ov-live__sentence { order: 3; flex: 1 1 100%; }
+.ov-fid__note { flex: 1 1 220px; }
+/* The same short screen, measured on the demo at 1366 × 768: every column above the fold. */
+@media (max-height: 820px) and (min-width: 1101px) {
+  .ov-page--board { padding-bottom: 12px; }
+  .ov-page--board .og-panel--pad { padding: 12px 16px; }
+  .ov-col--diagnose { gap: 8px; }
+  .ov-board .ov-col__h { font-size: 18px; }
+  .ov-col__lead { font-size: 15px; }
+  .ov-shield-row { margin-top: 6px; gap: 12px; }
+  .ov-rules { margin-top: 8px; }
+  .ov-fid { margin-top: 6px; gap: 12px; }
+  .ov-ring { width: 78px; height: 78px; }
+  .ov-tiles { gap: 5px; }
+  .ov-tile { padding: 4px 8px; }
+  .ov-tile__n { font-size: 19px; line-height: 1.1; }
+  .ov-chains { margin-top: 8px; gap: 4px; }
+  .ov-fid__partial { margin-top: 6px; }
+  .ov-chains__text, .ov-fid__partial, .ov-rules__text { font-size: 12.5px; }
+  .ov-board .ov-live__row { margin-top: 8px; padding-top: 8px; gap: 6px 12px; }
+  .ov-board .ov-live__sentence { font-size: 14.5px; }
+  .ov-board .ov-live__cadence { margin-top: 4px; }
+  .ov-board .ov-next__row { margin-top: 10px; padding-top: 8px; }
+  .ov-legend, .ov-col__note, .ov-comp { font-size: 12px; line-height: 1.35; }
+}

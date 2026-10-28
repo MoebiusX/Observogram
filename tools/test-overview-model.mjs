@@ -24,6 +24,7 @@ import {
   decideUiMode, orderServicesForOverview, pickOverviewService, journeyForService, journeyIsLive,
   shortGradeLabel, verdictWordFor, runGradedPack, differenceCount, vantageShrank,
   gradeModel, gradeWhy, stillTrueModel, nextActionModel, buildOverviewModel,
+  layersModel, compositionOf, rulesModel, fidelityModel, changesModel, decideOverviewLayout, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS,
 } from '../studio/overview-model.mjs';
 import { renderOverview } from '../studio/overview-view.mjs';
 
@@ -77,7 +78,7 @@ const fileJourney = { ...journey, packB: 'C:/demo/.observogram-demo/journeys/kry
 // buildOverviewModel's input for the real screen: krystaline on prod, +2h after the run.
 const screen = (over = {}) => buildOverviewModel({
   services, servicesStatus: { kind: 'ok', error: null }, catalog: packs, serviceId: 1, env: 'prod', isLiveAggregatePack,
-  diagnostic, decision, journeys, run, now: NOW, ...over,
+  diagnostic, decision, journeys, run, now: NOW, layout: 'simple', ...over,
 });
 
 // Every model built in the grade / still-true / next / screen tests is kept for the vocabulary guard.
@@ -517,7 +518,7 @@ test('buildOverviewModel: the real screen end to end — krystaline on prod, gra
   assert.deepEqual([pending.grade.letter, pending.grade.label, pending.grade.basis, pending.still.sentence, pending.still.pending, pending.next.button, pending.primary], ['·', 'Reading…', 'pending', 'Reading…', true, null, null]);
   assert.equal(keep(screen({ pending: true, serviceId: 2 })).next.button.label, 'Open Expert mode', 'no pack of its own is known from the catalogue alone: Expert mode, pending or not');
   // No service to show: the table empty, unreadable, or not yet read. No panel is built.
-  const blank = { options: [], service: null, envs: [], env: null, grade: null, still: null, next: null, productName: '', primary: null };
+  const blank = { options: [], service: null, envs: [], env: null, grade: null, still: null, next: null, productName: '', primary: null, layout: 'board', board: null };
   assert.deepEqual(keep(buildOverviewModel({ services: null, servicesStatus: { kind: 'error', error: '503: down' }, catalog: packs })), { kind: 'error', error: '503: down', ...blank });
   assert.deepEqual(keep(buildOverviewModel({ services: null, servicesStatus: { kind: 'error', error: null } })), { kind: 'error', error: 'the services table could not be read', ...blank });
   assert.deepEqual(keep(buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, catalog: packs })), { kind: 'empty', error: null, ...blank });
@@ -526,37 +527,6 @@ test('buildOverviewModel: the real screen end to end — krystaline on prod, gra
   assert.equal(keep(buildOverviewModel({ services: null, servicesStatus: { kind: 'static', error: null } })).kind, 'error', 'any status but ok/loading with no rows is unreadable');
 });
 
-// ---------- the vocabulary ----------
-
-const stringsOf = (value, out = []) => {
-  if (typeof value === 'string') out.push(value);
-  else if (Array.isArray(value)) value.forEach((v) => stringsOf(v, out));
-  else if (value && typeof value === 'object') Object.values(value).forEach((v) => stringsOf(v, out));
-  return out;
-};
-
-test('vocabulary: no string of any model built above carries a percentage, a layer code, an artefact id, engine jargon or the product name', () => {
-  assert.ok(builtModels.length >= 60, `the guard saw ${builtModels.length} models`);
-  const all = stringsOf(builtModels);
-  assert.ok(all.length >= 200, `the guard saw ${all.length} strings`);
-  const banned = [
-    ['%', (s) => s.includes('%')],
-    ['a layer code', (s) => /\bL[1-5]\b|\bL2X\b|\bGOV\b/.test(s)],
-    ['an artefact id', (s) => /uploaded-|\b[0-9a-f]{8}\b/.test(s)],
-    ['"scaffold"', (s) => /scaffold/i.test(s)],
-    ['"declared only"', (s) => /declared only/i.test(s)],
-    ['"candidate"', (s) => /candidate/i.test(s)],
-    ['"recorded live"', (s) => /recorded live/i.test(s)],
-    ['the product name', (s) => /Observogram/.test(s)],
-  ];
-  for (const [what, hit] of banned) {
-    const offenders = all.filter(hit);
-    assert.deepEqual(offenders, [], `${what} reaches the screen: ${JSON.stringify(offenders)}`);
-  }
-  // The four status words, and only those, ever reach the pill.
-  const pills = new Set(builtModels.map((m) => m?.pill ?? m?.still?.pill).filter(Boolean));
-  assert.deepEqual([...pills].sort(), ['Changed', 'Never checked', 'Unchanged', 'Unreachable']);
-});
 
 // ---------- one primary across the screen ----------
 
@@ -798,4 +768,229 @@ test('while a check is running, the next panel offers no second Check beside the
     const m = screen(over);
     assert.notEqual(m.next.button?.action, 'ov-check', `running with ${over.run ? 'an unreachable last run' : 'no run'}: a second Check is offered (${JSON.stringify(m.next.button)})`);
   }
+});
+
+// ---------- the board ----------
+//
+// The same model, drawn as pictures: the stack (the posture matrix's cells as
+// counts, tools/fixtures/overview/krystaline-posture.json, saved from the demo
+// seed because the layered pack is 1.1 MB), the specification's rules (the
+// real GET /api/packs/:id/conformance), the live fidelity and the delta (the
+// real run). A layered stub stands in for the pack's own layers.
+
+const posture = fixture('krystaline-posture');
+const conformance = fixture('krystaline-conformance');
+const layeredStub = {
+  layers: {
+    L1: Array.from({ length: 36 }, (_, i) => ({ id: `SLI-${i}` })), L2: Array.from({ length: 225 }, () => ({})), L2X: [{}], L3: Array.from({ length: 321 }, () => ({})),
+    L4: { policy: Array.from({ length: 8 }, () => ({})), alerting: Array.from({ length: 7 }, () => ({})), healing: [] }, L5: [{}, {}], GOV: [],
+  },
+};
+const board = (over = {}) => screen({ layout: 'board', cells: posture.cells, layered: layeredStub, conformance, ...over });
+
+test('layersModel: the four layers top down with the ten kinds each, counts of distinct declared artefacts (a backend the matrix lists twice counts once, evidence not at all), the coverage average the engine reports, the unplaced, the composition with the extended layer folded in', () => {
+  const L = keep(layersModel({ cells: posture.cells, layered: layeredStub }));
+  assert.deepEqual(L.rows.map((r) => [r.key, r.name, r.covered, r.of, r.pct, r.tone, r.total]), [
+    ['ux', 'User experience', 0, 10, 0, 'fail', 0], ['app', 'Application', 7, 10, 70, 'ok', 80], ['platform', 'Platform', 4, 10, 40, 'warn', 4], ['infra', 'Infrastructure', 3, 10, 30, 'warn', 7],
+  ]);
+  assert.deepEqual(L.rows[1].kinds.map((k) => k.key), ['sli', 'slo', 'metric', 'log', 'trace', 'dashboard', 'alert', 'runbook', 'chaos', 'synthetic'], 'the ten kinds, in drawing order');
+  assert.deepEqual(L.rows[1].kinds.filter((k) => k.present).map((k) => k.label), ['17 indicators', '15 objectives', '37 metrics', '2 logs', '1 trace', '4 dashboards', '4 alerts']);
+  assert.deepEqual(L.rows[1].kinds.filter((k) => !k.present).map((k) => k.label), ['no runbooks', 'no chaos tests', 'no synthetic checks']);
+  assert.deepEqual([L.coveragePct, L.unplaced, L.declared], [35, 7, 600], 'the average of the four layers is the engine\'s "35% average observed"');
+  assert.deepEqual(L.composition, [{ name: 'SLI/SLO', count: 36 }, { name: 'Metrics/Logs/Traces', count: 226 }, { name: 'Dashboards/Recording Rules', count: 321 }, { name: 'Alerts/Policy/Self-healing', count: 15 }, { name: 'Self-check', count: 2 }]);
+  assert.deepEqual([L.lead, L.coverage, L.unplacedNote], ['600 things declared in the repository.', 'Coverage reaches 35 in 100 across the four layers.', '7 things could not be placed on a layer.']);
+  // Cells as the matrix hands them (arrays of artefacts): distinct ids; evidence pseudo-artefacts skipped; an artefact without an id counts once.
+  const cells = { 'app:trace': [{ id: 'BAK-03' }, { id: 'BAK-03' }, { id: 'scrape/x', title: 'x', _evidence: true }], 'app:metric': [{ id: 'QRY-1' }, {}, {}], 'unknown:alert': [{ id: 'POL-9' }] };
+  const fromArrays = layersModel({ cells });
+  assert.deepEqual(fromArrays.rows[1].kinds.filter((k) => k.present).map((k) => [k.key, k.count]), [['metric', 3], ['trace', 1]]);
+  assert.deepEqual([fromArrays.unplaced, fromArrays.declared, fromArrays.lead, fromArrays.composition, fromArrays.unplacedNote], [1, 0, '', [], '1 thing could not be placed on a layer.']);
+  assert.equal(layersModel({ cells: null }), null, 'no matrix, no stack');
+  assert.deepEqual(compositionOf(null), []);
+});
+
+test('rulesModel, fidelityModel, changesModel: the required rules, the live fidelity with its four counts and the promises that hold, the three counts to change — withheld with the reason (never as zeros) when nothing live was seen whole', () => {
+  assert.deepEqual(keep(rulesModel(conformance)), { passed: 12, total: 15, pct: 80, tier: '2', met: false, unknown: false, sentence: '12 of 15 required rules met for a tier 2 service.', tone: 'warn' });
+  assert.deepEqual([rulesModel(null), rulesModel({ must: { passed: 0, total: 0 } })], [null, null]);
+  assert.deepEqual([rulesModel({ must: { passed: 3, total: 3 }, conformant: true, declaredTier: 'tier-1' }).tone, rulesModel({ must: { passed: 1, total: 4 } }).sentence, rulesModel({ must: { passed: 1, total: 4 } }).tone], ['ok', '1 of 4 required rules met.', 'fail']);
+  const f = keep(fidelityModel({ run, journey, pack: krystalinePack }));
+  assert.deepEqual([f.known, f.alignmentPct, f.against, f.note], [true, 78, 'live', 'The live side answered only in part: its dashboards could not be read.']);
+  assert.deepEqual(f.tiles.map((t) => [t.key, t.value, t.label, t.tone]), [['aligned', 252, 'match', 'ok'], ['drifted', 5, 'run differently', 'warn'], ['missing', 38, 'not running live', 'fail'], ['extra', 30, 'live only', 'info']]);
+  assert.deepEqual(f.chains, { total: 18, intact: 5, partial: 1, broken: 12, integrityPct: 84, sentence: '5 of 18 promises hold end to end, 1 in part.' });
+  assert.equal(keep(fidelityModel({ run: { ...run, probes: { failed: [] } }, journey, pack: krystalinePack })).note, '', 'every family answered: no note');
+  assert.equal(keep(fidelityModel({ run: { ...run, traceability: { declaredTotal: 0 } }, journey, pack: krystalinePack })).chains, null, 'no declared chains: no promises line');
+  // Withheld: never checked, a run of another pack, the live side lost, the live side shrunk — each with its reason and no counts.
+  const never = keep(fidelityModel({}));
+  assert.deepEqual([never.known, never.alignmentPct, never.tiles, never.chains, never.note], [false, null, [], null, 'Never checked against live.']);
+  assert.equal(keep(fidelityModel({ run, journey, pack: { ...krystalinePack, id: 'other', name: 'v2' } })).known, false);
+  assert.equal(keep(fidelityModel({ run: lostRun, journey, pack: krystalinePack })).note, 'The live side did not answer the last check, so nothing is known about it right now.');
+  assert.equal(keep(fidelityModel({ run: partialRun, journey, pack: krystalinePack })).note, 'The live side showed less than the check before, so the counts cannot be compared yet.');
+  assert.deepEqual([fidelityModel({ run, journey: fileJourney, pack: krystalinePack }).against, fidelityModel({ run: { ...run, packB: { source: '/rec.json' } }, pack: krystalinePack }).against], ['recording', 'recording']);
+  const c = keep(changesModel({ fidelity: f }));
+  assert.deepEqual(c.items.map((i) => [i.key, i.value, i.label, i.note, i.tone]), [
+    ['add', 38, 'to add', 'declared in the repository, not running live', 'fail'], ['update', 5, 'to update', 'running live, but not as declared', 'warn'], ['review', 30, 'to review', 'running live, not in the repository', 'info'],
+  ]);
+  assert.deepEqual([c.known, c.total, c.sentence], [true, 73, '']);
+  assert.deepEqual(keep(changesModel({ fidelity: never })), { known: false, items: [], total: 0, sentence: 'Check against live to count what to change.' });
+  const none = keep(changesModel({ fidelity: fidelityModel({ run: unchangedRun, journey, pack: krystalinePack }) }));
+  assert.deepEqual([none.total, none.sentence], [0, 'Nothing to change: live matches what the repository declares.']);
+});
+
+test('decideOverviewLayout: the query wins, then the saved preference, else the board; unknown values are ignored', () => {
+  assert.deepEqual([decideOverviewLayout({ query: 'simple', saved: 'board' }), decideOverviewLayout({ saved: 'simple' }), decideOverviewLayout({}), decideOverviewLayout({ query: 'x', saved: 'y' })], ['simple', 'simple', 'board', 'board']);
+  assert.deepEqual([OVERVIEW_LAYOUT_KEY, [...OVERVIEW_LAYOUTS]], ['studioOverviewLayout.v1', ['board', 'simple']]);
+});
+
+test('buildOverviewModel: the board from the same facts — layers, rules, fidelity, changes; nothing while the facts are read, nothing for a service without a pack of its own; the layout rides on the model and the renderer decides', () => {
+  const m = keep(board());
+  assert.deepEqual([m.layout, m.board.layers.declared, m.board.rules.pct, m.board.fidelity.alignmentPct, m.board.changes.total, m.grade.letter, m.still.status, m.primary], ['board', 600, 80, 78, 73, 'B', 'changed', 'next']);
+  assert.deepEqual(keep(board({ pending: true })).board, { layers: null, rules: null, fidelity: null, changes: null }, 'reading: nothing yet');
+  assert.deepEqual(keep(board({ serviceId: 2 })).board, { layers: null, rules: null, fidelity: null, changes: null }, 'no pack of its own: nothing to picture');
+  const bare = keep(board({ cells: null, conformance: null }));
+  assert.deepEqual([bare.board.layers, bare.board.rules, bare.board.fidelity.known], [null, null, true], 'no matrix and no conformance cost their pieces, not the others');
+  const never = keep(board({ run: null, journeys: [] }));
+  assert.deepEqual([never.board.fidelity.known, never.board.fidelity.note, never.board.changes.sentence, never.next.button.label], [false, 'Never checked against live.', 'Check against live to count what to change.', 'See what to fix']);
+  assert.deepEqual([keep(screen()).layout, keep(screen()).board.layers], ['simple', null], 'the simple layout carries the board too, without cells');
+  assert.equal(keep(buildOverviewModel({ services, servicesStatus: { kind: 'ok', error: null }, catalog: packs })).layout, 'board', 'the board is the default');
+});
+
+test('renderOverview: the board — three columns under Discover · Diagnose · Remediate; the stack with lit cells and counts; the shield, the rules bar, the seven rows open; the ring, four counts and the promises bar; the three counts to change; one primary; the column links reach host.overview; the simple layout on request, without a pack of its own, and as the fallback when the board cannot be drawn', () => {
+  const c = overviewContainer();
+  const calls = [];
+  const host = { overview: { openDiscover: () => calls.push('discover'), openDiagnose: () => calls.push('diagnose'), openRemediate: () => calls.push('remediate'), openNeuron: () => calls.push('neuron'), checkNow: () => calls.push('check') } };
+  renderOverview(c, board({ diagnostic: diagnosticFull }), host);
+  const html = c.innerHTML;
+  assert.ok(html.startsWith('<div class="ov-page ov-page--board">'), 'the zone, the board');
+  for (const piece of ['<div class="ov-board">', 'class="ov-col ov-col--discover og-panel og-panel--pad"', 'class="ov-col ov-col--diagnose"', 'class="ov-col ov-col--remediate og-panel og-panel--pad"', '<div class="og-eyebrow">Discover</div>', '<div class="og-eyebrow">Diagnose</div>', '<div class="og-eyebrow">Remediate</div>']) assert.ok(html.includes(piece), piece);
+  assert.ok(html.includes('<h2 class="og-h2 ov-col__h" id="ov-discover-h">What is in place</h2>') && html.includes('>Are the right signals in place?</span></h2>') && html.includes('<h2 class="og-h2 ov-col__h" id="ov-live-eyebrow">Can you trust what the signals show?</h2>') && html.includes('<h2 class="og-h2 ov-col__h" id="ov-remediate-h">What to change</h2>'), 'the three questions');
+  // Discover: the stack.
+  assert.ok(html.includes('<p class="ov-col__lead">600 things declared in the repository.</p>'));
+  assert.equal(countOf(html, '<li class="ov-layer ov-layer--'), 4);
+  assert.ok(html.indexOf('>User experience<') < html.indexOf('>Application<') && html.indexOf('>Application<') < html.indexOf('>Platform<') && html.indexOf('>Platform<') < html.indexOf('>Infrastructure<'), 'top down');
+  assert.equal(countOf(html, 'class="ov-cell ov-cell--on"'), 14, '7 + 4 + 3 lit cells');
+  assert.equal(countOf(html, 'class="ov-cell"'), 26, 'the rest dark');
+  assert.ok(html.includes('<span class="ov-cell ov-cell--on" title="37 metrics">37</span>') && html.includes('<span class="ov-cell" title="no runbooks"></span>'));
+  assert.ok(html.includes('<span class="ov-layer__n">7 of 10 kinds</span>') && html.includes('<div class="ov-layer__kinds og-muted">17 indicators · 15 objectives · 37 metrics · 2 logs · 1 trace · 4 dashboards · 4 alerts</div>'));
+  assert.ok(html.includes('<li class="ov-layer ov-layer--fail">') && html.includes('<div class="ov-layer__kinds og-muted">nothing declared on this layer</div>'));
+  assert.ok(html.includes('<p class="ov-legend og-muted">Cells, left to right: indicators · objectives · metrics · logs · traces · dashboards · alerts · runbooks · chaos tests · synthetic checks.</p>'));
+  assert.ok(html.includes('<p class="ov-col__note og-muted">Coverage reaches 35 in 100 across the four layers. 7 things could not be placed on a layer.</p>'));
+  assert.ok(html.includes('<span class="ov-comp__item"><b class="ov-comp__n">321</b> Dashboards/Recording Rules</span>'));
+  // Diagnose: the shield, the rules, the seven rows (open when headless).
+  assert.ok(html.includes('<div class="ov-shield ov-tone-warn" title="B · Industrial Grade — Suitable for production, maintenance, process control, and routine professional use." aria-label="Grade B"><span class="ov-shield__letter">B</span></div>'));
+  assert.ok(html.includes('<div class="ov-grade__label">Industrial grade</div>') && html.includes('<div class="ov-grade__word">Almost diagnostic-grade</div>') && html.includes('Graded against live, 2 hours ago.'));
+  assert.ok(html.includes('<div class="ov-rules ov-rules--warn" title="12 of 15 required rules met"><div class="ov-rules__bar" role="img" aria-label="12 of 15 required rules met"><span style="width:80%"></span></div><span class="ov-rules__text">12 of 15 required rules met for a tier 2 service.</span></div>'));
+  assert.ok(html.includes('<div class="ov-grade__why ov-grade__why--open"><p class="ov-grade__points og-muted">4.8 of 7 points. B+ starts at 5.3.</p><ul class="ov-gw-list ov-gw-list--open">'), 'headless: the seven rows open, no disclosure');
+  assert.equal(countOf(html, '<li class="ov-gw '), 7);
+  // Diagnose: the fidelity.
+  assert.ok(html.includes('<svg class="ov-ring ov-ring--warn" viewBox="0 0 88 88" role="img" aria-label="78 in 100 aligned">') && html.includes('stroke-dasharray="238.76" stroke-dashoffset="52.53"') && html.includes('<text class="ov-ring__pct" x="44" y="42">78%</text>'));
+  for (const t of ['<div class="ov-tile ov-tile--ok" title="declared and running live"><span class="ov-tile__n">252</span><span class="ov-tile__l">match</span></div>', '<span class="ov-tile__n">5</span><span class="ov-tile__l">run differently</span>', '<span class="ov-tile__n">38</span><span class="ov-tile__l">not running live</span>', '<span class="ov-tile__n">30</span><span class="ov-tile__l">live only</span>']) assert.ok(html.includes(t), t);
+  assert.ok(html.includes('<span class="ov-chains__seg ov-chains__seg--ok" style="flex-grow:5"></span>') && html.includes('<span class="ov-chains__seg ov-chains__seg--warn" style="flex-grow:1"></span>') && html.includes('<span class="ov-chains__seg ov-chains__seg--fail" style="flex-grow:12"></span>'));
+  assert.ok(html.includes('<p class="ov-chains__text og-muted">5 of 18 promises hold end to end, 1 in part.</p>') && html.includes('<p class="ov-fid__partial og-muted">The live side answered only in part: its dashboards could not be read.</p>'));
+  assert.ok(html.includes('<span class="og-pill og-pill--warn ov-live__pill">Changed</span>') && html.includes('<p class="ov-live__sentence">Checked 2 hours ago against live — 43 things differ from what the repository declares.</p>') && html.includes('<button type="button" class="og-btn ov-check" data-ux-action="ov-check">Check again</button>'));
+  // Remediate: the counts and the one next step.
+  assert.ok(html.includes('<div class="ov-change ov-change--fail"><span class="ov-change__n">38</span><span class="ov-change__l">to add</span><span class="ov-change__note og-muted">declared in the repository, not running live</span></div>'));
+  assert.ok(html.includes('<span class="ov-change__n">5</span><span class="ov-change__l">to update</span>') && html.includes('<span class="ov-change__n">30</span><span class="ov-change__l">to review</span>'));
+  assert.ok(html.includes('<p class="ov-next__sentence">Fix the 43 things the live side does differently.</p>') && html.includes('<button type="button" class="og-btn og-btn--primary ov-next__btn" data-ux-action="ov-next-neuron">See the differences</button>'));
+  assert.equal(countOf(html, 'og-btn--primary'), 1, 'one primary on the board');
+  for (const [action, label] of [['ov-open-discover', 'Open in Discover'], ['ov-next-diagnose', 'Open in Diagnose'], ['ov-open-remediate', 'Open in Remediate']]) assert.ok(html.includes(`<button type="button" class="og-btn og-btn--text ov-link" data-ux-action="${action}">${label}</button>`), label);
+  c.click('ov-open-discover'); c.click('ov-next-diagnose'); c.click('ov-open-remediate'); c.click('ov-next-neuron'); c.click('ov-check');
+  assert.deepEqual(calls, ['discover', 'diagnose', 'remediate', 'neuron', 'check']);
+  assert.ok(!/<(img|script)\b/.test(html) && !html.includes('%</span>'), 'no raw markup; the one percent sign is the ring\'s');
+  // Never checked: the ring empty, the counts withheld with their reason; the next step is the one primary.
+  const never = overviewContainer();
+  renderOverview(never, board({ run: null, journeys: [] }), { overview: {} });
+  assert.ok(never.innerHTML.includes('<svg class="ov-ring ov-ring--neutral" viewBox="0 0 88 88" role="img" aria-label="Not known">') && never.innerHTML.includes('<text class="ov-ring__pct" x="44" y="42">–</text>'));
+  assert.ok(never.innerHTML.includes('<p class="ov-fid__note og-muted">Never checked against live.</p>') && !never.innerHTML.includes('ov-tile') && !never.innerHTML.includes('ov-chains') && !never.innerHTML.includes('ov-fid__partial'));
+  assert.ok(never.innerHTML.includes('<p class="ov-col__lead og-muted">Check against live to count what to change.</p>') && !never.innerHTML.includes('class="ov-change '));
+  assert.equal(countOf(never.innerHTML, 'og-btn--primary'), 1);
+  // Reading: placeholders, no counts, no rules.
+  const pending = overviewContainer();
+  renderOverview(pending, board({ pending: true }), { overview: {} });
+  assert.ok(pending.innerHTML.includes('<p class="ov-reading og-muted" role="status">Reading the repository…</p>') && pending.innerHTML.includes('Reading the last check…') && !pending.innerHTML.includes('ov-rules') && !pending.innerHTML.includes('ov-tile'));
+  // Without a pack of its own there is nothing to picture: the simple layout, whatever was asked.
+  const kx = overviewContainer();
+  renderOverview(kx, board({ serviceId: 2 }), { overview: {} });
+  assert.ok(kx.innerHTML.startsWith('<div class="ov-page">') && !kx.innerHTML.includes('ov-board') && kx.innerHTML.includes('No pack of its own'));
+  // The simple layout on request.
+  const simple = overviewContainer();
+  renderOverview(simple, board({ layout: 'simple' }), { overview: {} });
+  assert.ok(simple.innerHTML.startsWith('<div class="ov-page">') && !simple.innerHTML.includes('ov-board') && simple.innerHTML.includes('class="ov-next og-panel'));
+  // The fallback: a board that cannot be drawn gives the simple layout and logs, never a blank screen.
+  const broken = board();
+  broken.board.layers.rows = null;
+  const fb = overviewContainer();
+  const logged = [];
+  const original = console.error;
+  console.error = (...a) => logged.push(a[0]);
+  try { renderOverview(fb, broken, { overview: {} }); } finally { console.error = original; }
+  assert.ok(fb.innerHTML.startsWith('<div class="ov-page">') && fb.innerHTML.includes('class="ov-next og-panel') && !fb.innerHTML.includes('ov-board'));
+  assert.deepEqual(logged, ['[overview] the board could not be drawn; the simple layout instead']);
+  // Every state of the matrix draws on the board too, with exactly the model's primaries and no raw markup.
+  for (const [name, over] of Object.entries(STATES)) {
+    const m = board(over);
+    const bc = overviewContainer();
+    assert.doesNotThrow(() => renderOverview(bc, m, { overview: {} }), name);
+    assert.equal(countOf(bc.innerHTML, 'og-btn--primary'), primariesOf(m), `${name}: the board's primaries`);
+    assert.ok(!/<(img|script)\b/.test(bc.innerHTML), `${name}: no raw markup from data`);
+  }
+});
+
+test('the board agrees with the engine: a cell lit by live evidence alone is present (observed) but counts nothing and reads "seen live"; the coverage is summed the way Comprehensive sums it, rounded once; the required rules read the tier out of the body\'s object and say when they could not be read; a stale reading is said beside the counts', () => {
+  // Evidence only: present for the engine, no declaration to count.
+  const evidenceOnly = { 'infra:metric': [{ id: 'scrape/node', title: 'node', _evidence: true }], 'infra:slo': [{ id: 'SLO-1' }] };
+  const infra = layersModel({ cells: evidenceOnly }).rows.find((r) => r.key === 'infra');
+  assert.deepEqual([infra.covered, infra.total, infra.kinds.find((k) => k.key === 'metric')], [2, 1, { key: 'metric', word: 'metrics', count: 0, present: true, label: 'metrics seen live' }]);
+  // Rounding: per-layer shares summed then rounded once — 7/10 + 4/10 + 3/10 + 0 = 1.4 / 4 = 35; and a case where rounding each layer first would differ.
+  const cells = (a, b, c, d) => Object.fromEntries([['app', a], ['platform', b], ['infra', c], ['ux', d]].flatMap(([L, n]) => Array.from({ length: n }, (_, i) => [`${L}:${['sli', 'slo', 'metric', 'log', 'trace', 'dashboard', 'alert', 'runbook', 'chaos', 'synthetic'][i]}`, 1])));
+  assert.equal(layersModel({ cells: cells(7, 4, 3, 0) }).coveragePct, 35);
+  const engineAverage = (...covered) => Math.round(covered.reduce((n, c) => n + c / 10, 0) / 4 * 100);
+  for (const combo of [[1, 1, 1, 2], [3, 3, 3, 0], [9, 7, 1, 1], [5, 5, 5, 6]]) assert.equal(layersModel({ cells: cells(...combo) }).coveragePct, engineAverage(...combo), combo.join('/'));
+  // The rules: the body's `tier` is an object; a read failure is said, not shown as "no rules".
+  assert.equal(rulesModel({ must: { passed: 1, total: 2 }, tier: { graded: 'tier-3' } }).sentence, '1 of 2 required rules met for a tier 3 service.');
+  assert.deepEqual(keep(rulesModel(null, { error: '500: boom' })), { passed: 0, total: 0, pct: 0, tier: '', met: false, unknown: true, sentence: 'The required rules could not be read.', tone: 'neutral' });
+  assert.equal(rulesModel(null, { error: null }), null, 'no body and no error: nothing to say');
+  const unread = overviewContainer();
+  renderOverview(unread, board({ conformance: null, conformanceError: '500: boom' }), { overview: {} });
+  assert.ok(unread.innerHTML.includes('<div class="ov-rules ov-rules--unknown"><span class="ov-rules__text og-muted">The required rules could not be read.</span></div>') && !unread.innerHTML.includes('ov-rules__bar'));
+  // Stale: the counts are shown, with the caveat the engine applies.
+  const stale = keep(fidelityModel({ run, journey, pack: krystalinePack, now: STALE_NOW }));
+  assert.deepEqual([stale.known, stale.note], [true, 'The live side answered only in part: its dashboards could not be read. Counted 1 day ago; readings older than a day are not trusted.']);
+  assert.equal(keep(board({ now: STALE_NOW })).board.fidelity.note.endsWith('readings older than a day are not trusted.'), true);
+  // The lit-by-evidence cell draws a dot, never a zero.
+  const dot = overviewContainer();
+  renderOverview(dot, board({ cells: { ...posture.cells, 'ux:metric': [{ id: 'scrape/rum', _evidence: true }] } }), { overview: {} });
+  assert.ok(dot.innerHTML.includes('<span class="ov-cell ov-cell--on" title="metrics seen live">•</span>'));
+});
+
+// ---------- the vocabulary ----------
+//
+// Last, so every model the tests above kept — the board's included — is walked.
+
+const stringsOf = (value, out = []) => {
+  if (typeof value === 'string') out.push(value);
+  else if (Array.isArray(value)) value.forEach((v) => stringsOf(v, out));
+  else if (value && typeof value === 'object') Object.values(value).forEach((v) => stringsOf(v, out));
+  return out;
+};
+
+test('vocabulary: no string of any model built above carries a percentage, a layer code, an artefact id, engine jargon or the product name', () => {
+  assert.ok(builtModels.length >= 60, `the guard saw ${builtModels.length} models`);
+  const all = stringsOf(builtModels);
+  assert.ok(all.length >= 200, `the guard saw ${all.length} strings`);
+  const banned = [
+    ['%', (s) => s.includes('%')],
+    ['a layer code', (s) => /\bL[1-5]\b|\bL2X\b|\bGOV\b/.test(s)],
+    ['an artefact id', (s) => /uploaded-|\b[0-9a-f]{8}\b/.test(s)],
+    ['"scaffold"', (s) => /scaffold/i.test(s)],
+    ['"declared only"', (s) => /declared only/i.test(s)],
+    ['"candidate"', (s) => /candidate/i.test(s)],
+    ['"recorded live"', (s) => /recorded live/i.test(s)],
+    ['the product name', (s) => /Observogram/.test(s)],
+  ];
+  for (const [what, hit] of banned) {
+    const offenders = all.filter(hit);
+    assert.deepEqual(offenders, [], `${what} reaches the screen: ${JSON.stringify(offenders)}`);
+  }
+  // The four status words, and only those, ever reach the pill.
+  const pills = new Set(builtModels.map((m) => m?.pill ?? m?.still?.pill).filter(Boolean));
+  assert.deepEqual([...pills].sort(), ['Changed', 'Never checked', 'Unchanged', 'Unreachable']);
 });

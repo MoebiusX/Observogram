@@ -2053,6 +2053,30 @@ again as the one thing to do. Tests: 1487 → 1511
 journey matching, every state's exact words, the one-primary rule, the
 vocabulary guard, the renderer over a DOM shim).
 
+### Overview as a board (2026-10-28)
+
+The three sentences alone read to the maintainer as a different, lesser
+product than Expert — "naively simplistic", not doing justice to the
+engineering — and his OBSERVA mockup (a layer tomogram, a comparison under
+two plain questions, the delta to apply) is Observogram's own journey drawn
+as pictures. Overview now draws it, from the engine's real numbers only.
+Discover: the stack top down with ten cells per layer, lit where the
+repository declares that kind of signal, with the counts; the four layers'
+average is the Comprehensive criterion, so the picture and *Why this grade*
+agree. Diagnose: the letter as a shield, the specification's required rules
+as a bar (a new read of the conformance route), the seven criteria open on a
+tall monitor; then the alignment as a ring with the four counts and the
+promises that hold, withheld with the reason when nothing live was seen
+whole. Remediate: to add · to update · to review, and the one next step.
+Each column opens its Expert view bound to the service, so the two faces
+are one product. The simple layout stays as the fallback (`?layout=simple`,
+remembered), drawn by the renderer itself should the board fail. Nothing
+the mockup shows without an engine behind it (cost and ingestion, a quality
+trend, a 3-D tomogram) is drawn. Tests: 1511 → 1517 (the stack and its
+counts, the rules, the fidelity and the changes and when they are withheld,
+the layout rule, the board's markup with its one primary across every
+state, the links, the fallback).
+
 ### Follow-up: the studio shell under a dot-directory
 
 The unbranded shell was answered by `res.sendFile` with the absolute path of

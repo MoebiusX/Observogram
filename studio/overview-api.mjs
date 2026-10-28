@@ -11,25 +11,40 @@ import { computeDiagnosticGrade, computePostureMatrix } from './diagnostic-grade
 const enc = encodeURIComponent;
 const sentence = (e) => String(e?.message || e || 'unknown error');
 
-// The grade of the pack on its own: no Pack B, no diff — the repository's
-// declaration graded by the same engine Diagnose runs.
-export function computeOverviewDiagnostic(layered) {
+// The posture matrix of the pack on its own — which kinds of signal the
+// repository declares on which layer — the board's stack and the engine's
+// Comprehensive criterion, from one computation.
+export function computeOverviewPosture(layered) {
   if (!layered) return null;
-  return computeDiagnosticGrade(layered, null, computePostureMatrix(layered, null), null, null);
+  return computePostureMatrix(layered, null);
+}
+
+// The grade of the pack on its own: no Pack B, no diff — the repository's
+// declaration graded by the same engine Diagnose runs. `posture` is the
+// matrix above when the caller already has it.
+export function computeOverviewDiagnostic(layered, posture = null) {
+  if (!layered) return null;
+  return computeDiagnosticGrade(layered, null, posture || computePostureMatrix(layered, null), null, null);
 }
 
 // loadOverviewFacts({ pack, env, journeyFor, fetchFn }) → the facts the model
 // projects, each failure captured as a sentence, never thrown:
-//   { layered, layeredError, journeys, journeysError, journey, run, runError }
+//   { layered, layeredError, conformance, conformanceError, journeys, journeysError, journey, run, runError }
 // `journeyFor(journeys)` picks this service's journey (the model's rule), so
-// the run is read for the right one.
+// the run is read for the right one. The conformance (the pack against the
+// specification's clauses for its tier) is the board's "required rules" line;
+// a failure there costs that line and nothing else.
 export async function loadOverviewFacts({ pack = null, env = null, journeyFor = () => null, fetchFn = requestJson } = {}) {
-  const out = { layered: null, layeredError: null, journeys: null, journeysError: null, journey: null, run: null, runError: null };
+  const out = { layered: null, layeredError: null, conformance: null, conformanceError: null, journeys: null, journeysError: null, journey: null, run: null, runError: null };
   const reads = [];
   if (pack?.id) {
-    reads.push(fetchFn(`/api/packs/${enc(pack.id)}${env ? `?env=${enc(env)}` : ''}`)
+    const q = env ? `?env=${enc(env)}` : '';
+    reads.push(fetchFn(`/api/packs/${enc(pack.id)}${q}`)
       .then((body) => { out.layered = body; })
       .catch((e) => { out.layeredError = sentence(e); }));
+    reads.push(fetchFn(`/api/packs/${enc(pack.id)}/conformance${q}`)
+      .then((body) => { out.conformance = body && typeof body === 'object' ? body : null; })
+      .catch((e) => { out.conformanceError = sentence(e); }));
   }
   reads.push(fetchFn('/api/journeys')
     .then((body) => { out.journeys = Array.isArray(body?.journeys) ? body.journeys : []; })

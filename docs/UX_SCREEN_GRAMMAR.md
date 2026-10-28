@@ -157,20 +157,28 @@ bring a font, a gradient or a button of its own, and it needs no line in
 
 Everything above is Expert: the studio for the people who do the work. Most
 people who open it are not those people, and for them there is **Overview**
-(`studio/overview-model.mjs`, `overview-view.mjs`): one service at a time and
-three answers, with nothing to read around them —
+(`studio/overview-model.mjs`, `overview-view.mjs`): one service at a time,
+and the machine drawn as pictures under plain questions — a board of three
+columns that carry Expert's own words, so the two faces read as one product.
+The same model has a simple layout, the three sentences alone, as the
+fallback (`?layout=simple`, remembered; drawn by the renderer itself should
+the board fail, and for a service without a pack of its own).
 
-| Question | What is drawn | Where it comes from |
-| --- | --- | --- |
-| How well is it observed? | The grade letter, large; its ladder name in plain words; whether it was graded against live or from the repository alone; behind *Why this grade* (closed), the seven criteria as one plain sentence each with a *Yes · Partly · No* pill, the yeses first, and the sum with the next band (*4.8 of 7 points. B+ starts at 5.3.*) | `computeDiagnosticGrade` — the journey's last run when it graded this pack against live, else the pack alone; the seven lines from the pack-alone criteria plus the run's chain integrity and live age, withheld unless they add up to the letter |
-| Is that still true right now? | One of four words — *Never checked · Unchanged · Changed · Unreachable* — and one sentence with a time | the service's journey and its last run (`/api/journeys`, `…/runs`) |
-| What to do next | One sentence, one button, at most three plain items behind *Why* | the run's drift counts; the assessment's causes when nothing live was checked |
+| Column | Question | What is drawn | Where it comes from |
+| --- | --- | --- | --- |
+| Discover | What is in place | The stack top down (user experience · application · platform · infrastructure), each layer with ten cells, one per kind of signal, lit where the repository declares some and carrying the count; *7 of 10 kinds*; a legend; the pack's own layers as counts; what could not be placed | `computePostureMatrix(pack, null).cells`, distinct declared artefacts per cell; `layerItemsFor` per pack layer; the four layers' average is the Comprehensive criterion |
+| Diagnose | Are the right signals in place? | The grade letter in a shield; its ladder name in plain words; whether it was graded against live or from the repository alone; the specification's required rules as a bar (*12 of 15 required rules met for a tier 2 service.*); the seven criteria as one plain sentence each with a *Yes · Partly · No* pill, the yeses first, and the sum with the next band (*4.8 of 7 points. B+ starts at 5.3.*) — open on a tall monitor, behind *Why this grade* under 1000 px | `computeDiagnosticGrade` — the journey's last run when it graded this pack against live, else the pack alone; `GET /api/packs/:id/conformance`; the seven lines from the pack-alone criteria plus the run's chain integrity and live age, withheld unless they add up to the letter |
+| Diagnose | Can you trust what the signals show? | The alignment as a ring; four counts — *match · run differently · not running live · live only*; the promises as a bar (*5 of 18 promises hold end to end, 1 in part.*); which probe families could not be read; then one of four words — *Never checked · Unchanged · Changed · Unreachable* — and one sentence with a time, and **Check again**. Withheld with the reason, never as zeros, when nothing live was seen whole | the service's journey and its last run (`/api/journeys`, `…/runs`): `drift`, `traceability`, `probes` |
+| Remediate | What to change | *38 to add · 5 to update · 30 to review*, each with its plain note; one sentence, one button, at most three plain items behind *Why* | the run's drift counts; the assessment's causes when nothing live was checked |
 
 Rules Overview adds to the grammar: four status words and no others; never a
 percentage, a layer code, an artefact id or an engine word (declared only,
-scaffold, candidate, recorded live); every sentence a projection of an
+scaffold, candidate, recorded live) in a sentence — the board's ring and bars
+carry a number as a picture, the model keeps it a number and the renderer
+puts the sign on it; every sentence a projection of an
 existing route or engine, and what cannot be known is said (*Never checked
-against live.*); exactly one primary button on the screen. A journey whose
+against live.*); exactly one primary button on the screen; each column ends
+in the link to its Expert view, bound to the service. A journey whose
 Pack B is a recording is worded *against a live recording from 7 Oct* and has
 no Check button — re-reading a file proves nothing about production. A live
 side that showed less than the check before (a probe family newly failed)

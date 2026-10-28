@@ -20,12 +20,30 @@
 // No layer code, no artefact id, no percentage reaches a string this module
 // returns (the test holds it to that). The formal terms live behind
 // termHtml hovers in the renderer, never in the sentence.
+//
+// Two layouts draw the same model. The board (the default) shows the machine
+// as pictures under the three questions — the stack's four layers with the
+// kinds of signal each has, the grade with its seven criteria open, the live
+// fidelity as a ring and four counts, the delta as three counts; the simple
+// layout is the three sentences alone. Percentages stay numbers in this
+// module (alignmentPct, pct); the renderer puts the sign on them.
 
 import { agoText, packForService } from './services-model.mjs';
-import { instrumentGradeFor, INSTRUMENT_GRADE_SCALE } from './diagnostic-grade.mjs';
+import { instrumentGradeFor, INSTRUMENT_GRADE_SCALE, layerItemsFor, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER } from './diagnostic-grade.mjs';
+import { LAYER_DEFS } from './constants.mjs';
 
 export const UI_MODE_KEY = 'studioUiMode.v1';
 export const UI_MODES = Object.freeze(['overview', 'expert']);
+export const OVERVIEW_LAYOUT_KEY = 'studioOverviewLayout.v1';
+export const OVERVIEW_LAYOUTS = Object.freeze(['board', 'simple']);
+
+// The layout: ?layout= wins (and is remembered by the caller), else the
+// browser's preference, else the board.
+export function decideOverviewLayout({ saved = null, query = null } = {}) {
+  if (OVERVIEW_LAYOUTS.includes(query)) return query;
+  if (OVERVIEW_LAYOUTS.includes(saved)) return saved;
+  return 'board';
+}
 
 export const OVERVIEW_STATUS = Object.freeze({
   never: 'Never checked',
@@ -501,16 +519,196 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
   return { sentence: `Fix the ${things(k)} the live side does differently.`, button: { label: 'See the differences', action: 'ov-next-neuron' }, why: why.slice(0, 3), primary: true };
 }
 
+// ---------- the board: what is in place ----------
+//
+// The stack as the engine sees it: four layers (the posture matrix's, drawn
+// top-down, user experience first) and, per layer, which of the ten kinds of
+// signal the repository declares there and how many of each. The average of
+// the four layers' coverage is the engine's Comprehensive criterion ("35%
+// average observed across infra · platform · app · ux"), so the picture and
+// the Why line agree by construction. The composition is the pack's own
+// layers (the names Discover uses), one count each.
+
+// Top-down, as a tomogram reads: the user at the top, the metal at the bottom.
+export const BOARD_LAYERS = Object.freeze([
+  { key: 'ux', name: 'User experience', hint: 'front end · journeys · business outcomes' },
+  { key: 'app', name: 'Application', hint: 'services · APIs · jobs' },
+  { key: 'platform', name: 'Platform', hint: 'databases · caches · queues · gateways' },
+  { key: 'infra', name: 'Infrastructure', hint: 'nodes · pods · disks · network' },
+]);
+
+// The ten kinds the matrix knows, in drawing order, each with its plain
+// word (many, one).
+const SIGNAL_WORDS = {
+  sli: ['indicators', 'indicator'], slo: ['objectives', 'objective'], metric: ['metrics', 'metric'], log: ['logs', 'log'], trace: ['traces', 'trace'],
+  dashboard: ['dashboards', 'dashboard'], alert: ['alerts', 'alert'], runbook: ['runbooks', 'runbook'], chaos: ['chaos tests', 'chaos test'], synthetic: ['synthetic checks', 'synthetic check'],
+};
+const SIGNAL_ORDER = ['sli', 'slo', 'metric', 'log', 'trace', 'dashboard', 'alert', 'runbook', 'chaos', 'synthetic'];
+export const SIGNAL_KINDS = Object.freeze(SIGNAL_ORDER
+  .filter((k) => POSTURE_MECHANISMS_PER_LAYER.some((m) => m.key === k))
+  .map((k) => ({ key: k, word: (SIGNAL_WORDS[k] || [k, k])[0], one: (SIGNAL_WORDS[k] || [k, k])[1] })));
+
+// A cell is the matrix's list of artefacts, or (in a test, or a saved
+// posture) just its count. The matrix lists a telemetry backend twice on the
+// application layer (as itself and as the signal it carries) and adds
+// evidence pseudo-artefacts from a live side's annotations; the board counts
+// what the repository declares, each artefact once — but a cell is present
+// (lit, and observed by the engine's Comprehensive criterion) when it holds
+// anything at all, evidence included.
+const cellOf = (cells, key) => {
+  const v = cells?.[key];
+  if (!Array.isArray(v)) { const n = Number(v) || 0; return { count: n, present: n > 0 }; }
+  const ids = new Set();
+  let anonymous = 0;
+  for (const a of v) {
+    if (!a || a._evidence) continue;
+    if (a.id) ids.add(a.id); else anonymous += 1;
+  }
+  return { count: ids.size + anonymous, present: v.length > 0 };
+};
+const layerTone = (pct) => (pct >= 70 ? 'ok' : pct >= 30 ? 'warn' : 'fail');
+
+// The pack's own layers, as Discover names them, one count each; the small
+// extended telemetry layer counts with the telemetry it extends.
+export function compositionOf(layered) {
+  if (!layered?.layers) return [];
+  const counts = Object.fromEntries(LAYER_DEFS.map((d) => [d.id, layerItemsFor(layered, d.id).length]));
+  counts.L2 += counts.L2X || 0;
+  counts.L2X = 0;
+  return LAYER_DEFS.filter((d) => counts[d.id] > 0).map((d) => ({ name: d.name, count: counts[d.id] }));
+}
+
+// layersModel({ cells, layered }) → { rows, coveragePct, unplaced, composition, declared, lead, coverage, unplacedNote } | null
+//   rows      one per BOARD_LAYERS entry: { key, name, hint, covered, of, pct, total, tone,
+//             kinds: [{ key, word, count, present, label }] (all ten, in drawing order;
+//             a kind present by live evidence alone has count 0 and reads "seen live") }
+//   coveragePct  the engine's Comprehensive figure: the four layers' covered
+//             shares summed in the matrix's layer order, then rounded once
+export function layersModel({ cells = null, layered = null } = {}) {
+  if (!cells) return null;
+  const rows = BOARD_LAYERS.map((L) => {
+    const kinds = SIGNAL_KINDS.map((k) => {
+      const { count, present } = cellOf(cells, `${L.key}:${k.key}`);
+      const label = count > 0 ? `${count} ${count === 1 ? k.one : k.word}` : (present ? `${k.word} seen live` : `no ${k.word}`);
+      return { key: k.key, word: k.word, count, present, label };
+    });
+    const covered = kinds.filter((k) => k.present).length;
+    const pct = Math.round(covered / kinds.length * 100);
+    return { key: L.key, name: L.name, hint: L.hint, covered, of: kinds.length, pct, total: kinds.reduce((n, k) => n + k.count, 0), tone: layerTone(pct), kinds };
+  });
+  // Summed the way computeDiagnosticGrade sums it (infra, platform, app, ux),
+  // so the two round the same way.
+  let shares = 0;
+  for (const l of POSTURE_LAYERS) { const r = rows.find((x) => x.key === l.key); if (r) shares += r.covered / r.of; }
+  const coveragePct = Math.round(shares / rows.length * 100);
+  const unplaced = SIGNAL_KINDS.reduce((n, k) => n + cellOf(cells, `unknown:${k.key}`).count, 0);
+  const composition = compositionOf(layered);
+  const declared = composition.reduce((n, c) => n + c.count, 0);
+  return {
+    rows, coveragePct, unplaced, composition, declared,
+    lead: declared ? `${things(declared)} declared in the repository.` : '',
+    coverage: `Coverage reaches ${coveragePct} in 100 across the four layers.`,
+    unplacedNote: unplaced ? `${things(unplaced)} could not be placed on a layer.` : '',
+  };
+}
+
+// ---------- the board: the specification's rules ----------
+
+// rulesModel(conformance, { error }) → { passed, total, pct, tier, met, unknown, sentence, tone } | null
+//   conformance  GET /api/packs/:id/conformance — the pack against the
+//                specification's clauses for its declared tier (`tier` in the
+//                body is an object; the string is `declaredTier` or `tier.graded`)
+//   error        the read's failure sentence, when it failed: the line then
+//                says the rules could not be read — not that none apply
+export function rulesModel(conformance, { error = null } = {}) {
+  const must = conformance?.must;
+  const passed = Number(must?.passed) || 0, total = Number(must?.total) || 0;
+  if (!total) {
+    if (!conformance && error) return { passed: 0, total: 0, pct: 0, tier: '', met: false, unknown: true, sentence: 'The required rules could not be read.', tone: 'neutral' };
+    return null;
+  }
+  const pct = Math.round(passed / total * 100);
+  const rawTier = conformance.declaredTier || (conformance.tier && typeof conformance.tier === 'object' ? conformance.tier.graded : conformance.tier) || '';
+  const tier = String(rawTier).replace(/^tier-/i, '').trim();
+  const met = conformance.conformant === true;
+  return {
+    passed, total, pct, tier, met, unknown: false,
+    sentence: `${passed} of ${total} required rules met${tier ? ` for a tier ${tier} service` : ''}.`,
+    tone: met ? 'ok' : (pct >= 50 ? 'warn' : 'fail'),
+  };
+}
+
+// ---------- the board: can you trust what the signals show? ----------
+
+// fidelityModel({ run, journey, pack, now }) → { known, alignmentPct, tiles, chains, against, note }
+//   known      a run graded this pack and saw the live side whole; else the
+//              note says why the numbers are withheld (never shown as zeros)
+//   tiles      [{ key, value, label, note, tone }] — match · run differently ·
+//              not running live · live only, the run's drift counts
+//   chains     { total, intact, partial, broken, integrityPct, sentence } | null
+//   note       beside the numbers: the probe families that could not be read,
+//              and a reading older than a day, which the engine does not trust
+export function fidelityModel({ run = null, journey = null, pack = null, now = Date.now() } = {}) {
+  const against = journey ? (journeyIsLive(journey) ? 'live' : 'recording') : (/^mcp:/i.test(String(run?.packB?.source || '')) || !run ? 'live' : 'recording');
+  const base = { known: false, alignmentPct: null, tiles: [], chains: null, against, note: '' };
+  if (!run || !runGradedPack(run, pack)) return { ...base, note: 'Never checked against live.' };
+  if (run.outcome === 'vantage-lost') return { ...base, note: 'The live side did not answer the last check, so nothing is known about it right now.' };
+  if (vantageShrank(run).length) return { ...base, note: 'The live side showed less than the check before, so the counts cannot be compared yet.' };
+  const n = (x) => Number(x) || 0;
+  const d = run.drift || {};
+  const tiles = [
+    { key: 'aligned', value: n(d.aligned), label: 'match', note: 'declared and running live', tone: 'ok' },
+    { key: 'drifted', value: n(d.drifted), label: 'run differently', note: 'running live, not as declared', tone: 'warn' },
+    { key: 'missing', value: n(d.declaredNotLive), label: 'not running live', note: 'declared, nowhere live', tone: 'fail' },
+    { key: 'extra', value: n(d.liveNotDeclared), label: 'live only', note: 'running live, not declared', tone: 'info' },
+  ];
+  const t = run.traceability || {};
+  const total = n(t.declaredTotal);
+  const integrity = Number(t.integrityPct);
+  const chains = total ? {
+    total, intact: n(t.intact), partial: n(t.partial), broken: n(t.broken), integrityPct: Number.isFinite(integrity) ? integrity : null,
+    sentence: `${n(t.intact)} of ${total} promises hold end to end${n(t.partial) ? `, ${n(t.partial)} in part` : ''}.`,
+  } : null;
+  const pct = Number(d.alignmentPct);
+  // A live side that answered only in part (a probe family failed) is said
+  // beside the numbers: they count what could be seen.
+  const failed = Array.isArray(run.probes?.failed) ? run.probes.failed.map(familyWord) : [];
+  const notes = [];
+  if (failed.length) notes.push(`The live side answered only in part: its ${listWords(failed)} could not be read.`);
+  const startedMs = Date.parse(run.startedAt || '');
+  if (Number.isFinite(startedMs) && now - startedMs > FRESH_WINDOW_MS) notes.push(`Counted ${agoText(run.startedAt, now)}; readings older than a day are not trusted.`);
+  return { ...base, known: true, alignmentPct: Number.isFinite(pct) ? pct : null, tiles, chains, note: notes.join(' ') };
+}
+
+// ---------- the board: what to change ----------
+
+// changesModel({ fidelity }) → { known, items, total, sentence }
+//   items  [{ key, value, label, note, tone }] — to add (declared, not running
+//          live: what Remediate compiles) · to update (runs differently) · to
+//          review (live only, not in the repository)
+export function changesModel({ fidelity = null } = {}) {
+  if (!fidelity?.known) return { known: false, items: [], total: 0, sentence: 'Check against live to count what to change.' };
+  const v = (k) => fidelity.tiles.find((t) => t.key === k)?.value || 0;
+  const items = [
+    { key: 'add', value: v('missing'), label: 'to add', note: 'declared in the repository, not running live', tone: 'fail' },
+    { key: 'update', value: v('drifted'), label: 'to update', note: 'running live, but not as declared', tone: 'warn' },
+    { key: 'review', value: v('extra'), label: 'to review', note: 'running live, not in the repository', tone: 'info' },
+  ];
+  const total = items.reduce((n, i) => n + i.value, 0);
+  return { known: true, items, total, sentence: total ? '' : 'Nothing to change: live matches what the repository declares.' };
+}
+
 // ---------- the whole screen ----------
 
 // buildOverviewModel({ services, servicesStatus, catalog, serviceId, env, isLiveAggregatePack,
 //   diagnostic, diagnosticError, decision, journeys, journeysError, run, running, startError,
-//   now, productName })
+//   now, productName, pending, layout, cells, layered, conformance, conformanceError })
 export function buildOverviewModel(input = {}) {
   const {
     services = null, servicesStatus = null, catalog = [], serviceId = null, env = null, isLiveAggregatePack = () => false,
     diagnostic = null, diagnosticError = null, decision = null, journeys = null, journeysError = null, run = null,
     running = false, startError = null, now = Date.now(), productName = '', pending = false,
+    layout = 'board', cells = null, layered = null, conformance = null, conformanceError = null,
   } = input;
   const ordered = orderServicesForOverview(services, catalog, { isLiveAggregatePack });
   const picked = pickOverviewService(services, catalog, { serviceId, env, isLiveAggregatePack });
@@ -523,7 +721,7 @@ export function buildOverviewModel(input = {}) {
   const options = listed.map((s) => ({ id: s.id, name: s.name, selected: picked.service ? s.id === picked.service.id : false }));
   if (!picked.service) {
     const unreadable = servicesStatus && servicesStatus.kind !== 'ok' && servicesStatus.kind !== 'loading' ? (servicesStatus.error || 'the services table could not be read') : null;
-    return { kind: unreadable ? 'error' : (servicesStatus?.kind === 'loading' ? 'loading' : 'empty'), error: unreadable, options: [], service: null, envs: [], env: null, grade: null, still: null, next: null, productName, primary: null };
+    return { kind: unreadable ? 'error' : (servicesStatus?.kind === 'loading' ? 'loading' : 'empty'), error: unreadable, options: [], service: null, envs: [], env: null, grade: null, still: null, next: null, productName, primary: null, layout, board: null };
   }
   const journey = journeyForService(journeys, { slug: picked.service.slug, env: picked.env, packId: picked.pack?.id || null });
   const grade = gradeModel({ pack: picked.pack, how: picked.how, diagnostic: pending ? null : diagnostic, diagnosticError: pending ? null : diagnosticError, run: run && journey && !pending ? run : null, journey, now });
@@ -532,11 +730,21 @@ export function buildOverviewModel(input = {}) {
   // One primary button on the screen: the next step's when it has one, else
   // the still-true panel's Check button.
   const primary = next.button && next.primary ? 'next' : (still.checkPrimary ? 'check' : null);
+  // The board's pictures, from the same facts: nothing while the facts are
+  // still being read, nothing for a service without a pack of its own.
+  const graded = picked.how === 'primary' && !pending;
+  const fidelity = fidelityModel({ run: graded && journey ? run : null, journey, pack: picked.pack, now });
+  const board = {
+    layers: graded ? layersModel({ cells, layered }) : null,
+    rules: graded ? rulesModel(conformance, { error: conformanceError }) : null,
+    fidelity: graded ? fidelity : null,
+    changes: graded ? changesModel({ fidelity }) : null,
+  };
   return {
     kind: 'service', error: null, options,
     service: { id: picked.service.id, name: picked.service.name, slug: picked.service.slug },
     envs: picked.envs.map((name) => ({ name, selected: name === picked.env })), env: picked.env,
     journey: journey ? { name: journey.name, live: journeyIsLive(journey) } : null,
-    grade, still, next, primary, productName,
+    grade, still, next, primary, productName, layout, board,
   };
 }
