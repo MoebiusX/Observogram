@@ -91,6 +91,7 @@ export async function ghFetch(path, init = {}) {
     'Accept': 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'observogram-crawler/1.0',
+    'Accept-Encoding': 'identity',   // no decompression of a third party's bytes (the Brotli decoder, CVE-2026-111497)
     ...(init.headers || {}),
   };
   if (process.env.GITHUB_TOKEN) {

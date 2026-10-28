@@ -112,6 +112,20 @@ test('the token posture: a malformed body is a JSON 400 on POST /api/mcp/ping, t
     r = await call(s.base, 'POST', '/api/mcp/ping', { headers: BEARER, body: `{"mcpAuth":"${MARKER}"}`, type: 'application/json; charset=x-bogus' });
     clean(r, 'POST /api/mcp/ping, an unknown charset');
     assert.deepEqual([r.status, r.json], [415, { ok: false, error: 'the request body\'s charset is not supported' }]);
+    // A compressed body is never decompressed (inflate: false on every parser — the Brotli decoder of the October
+    // 2026 Node security release, CVE-2026-111497, sees no untrusted bytes): a JSON 415 on every encoding, the
+    // bytes unread, before any route's authorize(); the bearer and the anonymous caller get the same answer shape.
+    for (const encoding of ['br', 'gzip', 'deflate']) {
+      for (const [who, headers] of [['bearer', BEARER], ['anonymous', {}]]) {
+        r = await call(s.base, 'POST', '/api/mcp/ping', { headers: { ...headers, 'Content-Encoding': encoding }, body: `{"mcpAuth":"${MARKER}"}` });
+        clean(r, `${who} POST /api/mcp/ping, Content-Encoding ${encoding}`);
+        if (who === 'bearer') assert.deepEqual([r.status, r.json], [415, { ok: false, error: 'the request body\'s content encoding is not supported' }], `bearer, ${encoding}`);
+        else assert.ok(r.status === 415 || ([401, 403].includes(r.status) && r.json?.denied), `anonymous, ${encoding}: refused before or at the parser (${r.status})`);
+      }
+    }
+    r = await call(s.base, 'POST', '/auth/login', { headers: { 'Content-Encoding': 'br' }, body: `{"username":"ada","password":"${MARKER}"}` });
+    clean(r, 'POST /auth/login, Content-Encoding br');
+    assert.deepEqual([r.status, r.json], [415, { ok: false, error: 'the request body\'s content encoding is not supported' }]);
 
     // Every mutating route: the bearer reaches the parser on all but the pass-through (its authorize() first);
     // anonymous is refused by authGate on every /api mutation before the body is read, exactly as a well-formed body is.

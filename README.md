@@ -312,22 +312,28 @@ pack data, no external call; a pack without remediations shows nothing.
 
 ## Quickstart
 
-Requires **Node 22.16 or later** (`engines` in `package.json`). The studio
-keeps users and orgs in an embedded store on Node's built-in `node:sqlite`
-(services and environments follow), which is unflagged from 22.13; 22.16 is
-the floor because it fixes a `StatementSync` use-after-free and the `run()`
-statement reset that a store hits. CI runs the suites on Ubuntu and on
-Windows, each on 22.16.0 and on the latest 22. See
-[docs/STORE_PLAN.md](docs/STORE_PLAN.md).
+Requires **Node 22.23.4 or later** (`engines` in `package.json`). 22.23.4 is
+the October 2026 security release: it fixes the Brotli decoder out-of-bounds
+write (CVE-2026-111497), which a compressed request body or a compressed
+answer from an MCP server would reach through `node:zlib`, and three TLS and
+DNS hostname-validation bypasses; the server also refuses compressed request
+bodies (415) and asks MCP servers and GitHub for uncompressed answers, so the
+decoder sees no untrusted bytes on any runtime. The floor before it was 22.16:
+the studio keeps users and orgs in an embedded store on Node's built-in
+`node:sqlite` (services and environments follow), unflagged from 22.13, and
+22.16 fixed a `StatementSync` use-after-free and the `run()` statement reset
+that a store hits. CI runs the suites on Ubuntu and on Windows, each on
+22.23.4 and on the latest 22. The Docker image pins `node:22.23.4-alpine`.
+See [docs/STORE_PLAN.md](docs/STORE_PLAN.md).
 
 ### Platforms
 
 Linux and Windows are tested in CI: `npm test` runs on Ubuntu and on
 `windows-latest` (GitHub-hosted, an elevated runner, Defender as the image
-ships it), each on Node 22.16.0 (the floor) and the latest 22, on every PR
+ships it), each on Node 22.23.4 (the floor) and the latest 22, on every PR
 into develop or main and every push to them; the latest-22 Ubuntu run is under
 c8. The browser suites (Playwright) run on neither: they skip, as on any
-checkout without `OBSERVOGRAM_PLAYWRIGHT`. Windows (Node ≥ 22.16, PowerShell
+checkout without `OBSERVOGRAM_PLAYWRIGHT`. Windows (Node ≥ 22.23.4, PowerShell
 or cmd) runs the CLI, the server, the studio and the static bundle, and
 `npm test` is green there except the explicit skips — every one printed by
 `node --test` as `# SKIP win32: <reason>` (or `- SKIP win32: <reason>` in a

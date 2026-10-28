@@ -9,7 +9,12 @@
 # Open:   http://127.0.0.1:8000
 #
 # The k8s manifests under deploy/k8s/ expect this image; see deploy/k8s/README.md.
-FROM node:22-alpine
+# Pinned to the patch, not `node:22`: 22.23.4 is the October 2026 security
+# release (the Brotli decoder out-of-bounds write, CVE-2026-111497, reachable
+# through the body parsers and native fetch), and a moving tag would let a
+# rebuild on a stale mirror ship an unpatched runtime. Move the pin with
+# package.json's engines floor.
+FROM node:22.23.4-alpine
 
 # Which build is this image? The container has no .git (.dockerignore drops
 # it), so stamp the checkout on the host BEFORE building: `npm run
