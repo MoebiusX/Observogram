@@ -1,0 +1,241 @@
+# Library entry (archetype): the service base — what every service carries whatever it runs on
+# (docs/SLI_CATALOGUE.md §3, class A). Product-independent on purpose: it reads only two things
+# every service has once it is scraped — the `up` series Prometheus writes for its scrape target,
+# and the security-event counter the service itself emits (one counter, labelled by event_type
+# and severity; the name is a parameter because every codebase spells it differently).
+#
+# What the base is NOT: the request SLIs (those are the archetype of the service's shape —
+# http-service, queue-consumer), the dependency SLIs (the product entries), the telemetry pipeline
+# (otel-collector, loki, tempo), the workload and the node (kubernetes-workload, node). Compose it
+# with those; `packc init` adds it to every pack unless --no-base, and the studio's DEFINE suggests
+# it first.
+library: v1
+id: service-base
+kind: archetype
+version: 1.0.0
+title: Service base (every service)
+summary: Probe liveness of the scrape target as an SLO, plus the security-event rules every service with an authentication surface needs — brute force, credential stuffing, rate-limit abuse, token enumeration, high-severity events — at a depth that grows with the tier.
+description: |
+  The generic, multi-dimensional base. Two SLIs: probe availability (the share of scrapes of the
+  service's job that answered — the SLI a request-based availability cannot replace, since a total
+  outage has no requests) and, from tier-2, security-event pressure (high and critical security
+  events over ten minutes, against a ceiling). The symptom alerts are the ones a request SLI never
+  shows: the target down, the security-event spikes, and at tier-1 a service that emits no security
+  event at all. Thresholds are parameters with the catalogue's values as defaults; the security
+  event taxonomy (event_type values) is the service's own and is declared through parameters.
+tags: [archetype, base, security, probe]
+evidence:
+  status: upstream-docs
+  verifiedOn: null
+  sources:
+    - Prometheus documentation, "Jobs and instances" — the `up` series Prometheus writes per scrape target (1 when the scrape succeeded, 0 otherwise); the only series every scraped service has
+    - docs/SLI_CATALOGUE.md §1.4 "krystalinex.security" and §3 "Events · security" — the ten security-event rules of the KrystalineX rule file (counter kx_security_events_total, labels event_type and severity), generalised here with the counter's name and the event_type values as parameters
+    - Google SRE Workbook, "Alerting on SLOs" — the probe (black-box) SLI beside the request (white-box) SLI, and why both are needed
+  notes: |
+    The security-event counter is the service's own: no exporter emits it. The defaults
+    (security_events_total; event_type login_failed, 2fa_failed, invalid_token, token_expired,
+    rate limit variants; severity high/critical) are the KrystalineX taxonomy with the kx_ prefix
+    removed — a service that spells them differently sets the parameters, and one that emits no
+    such counter leaves security_events_metric at its placeholder and sees the todo. The absolute
+    thresholds (20 failed logins in 5 minutes, 100 in 15, 50 rate-limit events in 5, 30 token
+    failures in 5, 25 high-severity events in 10) are the file's; they are not traffic-relative,
+    so a very large service raises them and a very small one lowers them.
+  gaps:
+    - No request SLI — the service's shape (HTTP, consumer) is the archetype composed beside this one.
+    - No trace- or log-derived SLI — the telemetry pipeline's health is the otel-collector and loki entries'; a trace-derived RED set needs span metrics the base cannot assume.
+    - The security-event counter's existence is assumed, never verified — a service without one sees the tier-1 absence rule fire on day one, which is the point.
+params:
+  - id: job
+    label: Service job label
+    default: "${service}"
+    description: The `job` label of the service's scrape target (the resource's service.name after the OTLP → Prometheus translation, or the scrape job's name).
+  - id: security_events_metric
+    label: Security-event counter
+    default: security_events_total
+    placeholder: true
+    description: The counter the service increments once per security event, with labels event_type (the service's own taxonomy) and severity (low | medium | high | critical).
+  - id: login_failed_event
+    label: Failed-login event_type
+    default: login_failed
+    description: The event_type value of a failed login attempt.
+  - id: second_factor_failed_event
+    label: Failed second-factor event_type
+    default: 2fa_failed
+    description: The event_type value of a failed second-factor (TOTP, email code) check.
+  - id: token_failed_events
+    label: Token-failure event_types (regex)
+    default: "invalid_token|token_expired"
+    description: The event_type values of a rejected or expired token, as a regex.
+  - id: rate_limit_events
+    label: Rate-limit event_types (regex)
+    default: ".*rate_limit.*"
+    description: The event_type values written when a rate limit triggers, as a regex.
+  - id: brute_force_count
+    label: Failed logins in 5 minutes that mean brute force
+    default: 20
+    description: Failed login attempts in five minutes above which the brute-force rule fires.
+  - id: credential_stuffing_count
+    label: Failed logins in 15 minutes that mean credential stuffing
+    default: 100
+    description: Failed login attempts in fifteen minutes above which the credential-stuffing rule fires.
+  - id: second_factor_count
+    label: Second-factor failures in 10 minutes
+    default: 10
+    description: Failed second-factor checks in ten minutes above which the rule fires.
+  - id: rate_limit_abuse_count
+    label: Rate-limit events in 5 minutes that mean abuse
+    default: 50
+    description: Rate-limit events in five minutes above which the abuse rule fires.
+  - id: token_flood_count
+    label: Token failures in 5 minutes that mean enumeration
+    default: 30
+    description: Rejected or expired tokens in five minutes above which the enumeration rule fires.
+  - id: high_severity_count
+    label: High-severity events in 10 minutes that mean an incident
+    default: 25
+    description: High- or critical-severity security events in ten minutes above which the incident rule fires.
+otel:
+  languages: [go]
+slis:
+  - id: probe_availability
+    type: ratio
+    minTier: tier-3
+    description: Share of the service's scrape targets that answered the last scrape (the `up` series Prometheus writes per target of the job).
+    why: A request-based availability says nothing when there are no requests; a target that stops answering its scrape is the outage the request SLI misses.
+    unit: ratio
+    metrics: [up]
+    evidence: { status: upstream-docs, source: "Prometheus — the up series per scrape target; the probe leg of the KrystalineX composite availability (docs/SLI_CATALOGUE.md §1.1)" }
+    good: |
+      sum(up{job="${job}"} == bool 1)
+    total: |
+      count(up{job="${job}"})
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.995, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+  - id: security_event_pressure
+    type: threshold
+    minTier: tier-2
+    description: High- and critical-severity security events the service emitted in the last ten minutes, against a ceiling of 25 — the rate at which an incident is in progress rather than noise.
+    why: The one security signal that needs only a severity on each event, not the service's whole event taxonomy; above the ceiling a human looks, whatever the event types were.
+    unit: events
+    metrics: [security_events_total]
+    evidence: { status: upstream-docs, source: "docs/SLI_CATALOGUE.md §1.4 HighSeveritySecurityEvents (kx_security_events_total{severity=~\"high|critical\"} > 25 / 10m), generalised" }
+    query: |
+      sum(increase(${security_events_metric}{job="${job}",severity=~"high|critical"}[10m])) or vector(0)
+    threshold: 25
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.99 }
+      window: 30d
+    burn: saturation
+  - id: instances_down
+    type: threshold
+    minTier: tier-1
+    description: Scrape targets of the service's job that did not answer the last scrape, against a ceiling of 0 — a tier-1 service runs redundantly, and every instance down is one failure closer to an outage.
+    why: The probe ratio averages a dead instance away across the fleet; this counts it, so a tier-1 service does not run one-legged for a month inside its availability budget.
+    unit: instances
+    metrics: [up]
+    evidence: { status: upstream-docs, source: "Prometheus — the up series per scrape target (0 when the scrape failed), summed over the job" }
+    query: |
+      sum(up{job="${job}"} == bool 0) or vector(0)
+    threshold: 0.5
+    slo:
+      objective: 0.999
+      window: 30d
+    burn: slow
+  - id: login_failures
+    type: threshold
+    minTier: tier-1
+    description: Failed login attempts in the last five minutes, against a ceiling of 20 — the brute-force threshold as an objective, so sustained guessing burns a budget instead of only paging.
+    why: A tier-1 service accounts for its authentication surface over the month, not only in the minute an attack is noticed; the SLO is what the quarterly review reads.
+    unit: events
+    metrics: [security_events_total]
+    evidence: { status: upstream-docs, source: "docs/SLI_CATALOGUE.md §1.4 BruteForceAttack (login_failed > 20 / 5m), as an objective" }
+    query: |
+      sum(increase(${security_events_metric}{job="${job}",event_type="${login_failed_event}"}[5m])) or vector(0)
+    threshold: 20
+    slo:
+      objective: 0.999
+      window: 30d
+    burn: saturation
+alerts:
+  - name: ScrapeTargetDown
+    minTier: tier-3
+    severity: { tier-1: SEV1, tier-2: SEV2, tier-3: SEV2 }
+    for: 1m
+    metrics: [up]
+    expr: |
+      up{job="${job}"} == 0
+    summary: "A scrape target of ${job} is down"
+    description: "An instance of job ${job} has not answered its scrape for more than a minute."
+    why: The outage the request SLI cannot see — no requests reach a dead process. Paged, because nothing else will say it.
+  - name: BruteForceAttack
+    minTier: tier-2
+    severity: SEV1
+    for: 1m
+    metrics: [security_events_total]
+    expr: |
+      sum(increase(${security_events_metric}{job="${job}",event_type="${login_failed_event}"}[5m])) > ${brute_force_count}
+    summary: "Potential brute-force attack on ${job}"
+    description: "More than ${brute_force_count} failed login attempts in the last five minutes."
+    why: A short burst of failed logins against one service is the first minute of an attack; the count is small on purpose and raised per service.
+  - name: CredentialStuffingAttack
+    minTier: tier-2
+    severity: SEV1
+    for: 2m
+    metrics: [security_events_total]
+    expr: |
+      sum(increase(${security_events_metric}{job="${job}",event_type="${login_failed_event}"}[15m])) > ${credential_stuffing_count}
+    summary: "Credential stuffing in progress on ${job}"
+    description: "More than ${credential_stuffing_count} failed logins in fifteen minutes — a list of leaked credentials being tried."
+    why: Slower and wider than brute force; the longer window and higher count tell the two apart.
+  - name: RateLimitAbuse
+    minTier: tier-2
+    severity: SEV2
+    for: 2m
+    metrics: [security_events_total]
+    expr: |
+      sum(increase(${security_events_metric}{job="${job}",event_type=~"${rate_limit_events}"}[5m])) > ${rate_limit_abuse_count}
+    summary: "Rate limits on ${job} triggering aggressively"
+    description: "More than ${rate_limit_abuse_count} rate-limit events in five minutes — a client ignoring the limits, or a scraper."
+    why: Rate limits that fire constantly are either an attack or a misconfigured client; both need a look.
+  - name: HighSeveritySecurityEvents
+    minTier: tier-2
+    severity: SEV1
+    for: 2m
+    metrics: [security_events_total]
+    expr: |
+      sum(increase(${security_events_metric}{job="${job}",severity=~"high|critical"}[10m])) > ${high_severity_count}
+    summary: "Security incident in progress on ${job}"
+    description: "More than ${high_severity_count} high- or critical-severity security events in ten minutes."
+    why: The taxonomy-free rule — whatever the event types, this many severe events together is an incident.
+  - name: SecondFactorFailures
+    minTier: tier-1
+    severity: SEV1
+    for: 1m
+    metrics: [security_events_total]
+    expr: |
+      sum(increase(${security_events_metric}{job="${job}",event_type="${second_factor_failed_event}"}[10m])) > ${second_factor_count}
+    summary: "Multiple second-factor failures on ${job}"
+    description: "More than ${second_factor_count} failed second-factor checks in ten minutes — accounts whose password is already known being pushed through the second factor."
+    why: A second-factor failure means the first factor passed; a burst of them is an attack that is half-way in.
+  - name: TokenEnumerationAttack
+    minTier: tier-1
+    severity: SEV2
+    for: 2m
+    metrics: [security_events_total]
+    expr: |
+      sum(increase(${security_events_metric}{job="${job}",event_type=~"${token_failed_events}"}[5m])) > ${token_flood_count}
+    summary: "Token validation flood on ${job}"
+    description: "More than ${token_flood_count} rejected or expired tokens in five minutes."
+    why: Guessing or replaying tokens shows as a flood of rejections long before one succeeds.
+  - name: SecurityEventsAbsent
+    minTier: tier-1
+    severity: SEV3
+    for: 30m
+    metrics: [security_events_total]
+    expr: |
+      absent(${security_events_metric}{job="${job}"})
+    summary: "${job} emits no security events"
+    description: "No series ${security_events_metric} for job ${job} for thirty minutes — the counter is not instrumented, not scraped, or named differently (the security_events_metric parameter)."
+    why: A tier-1 service whose security rules can never fire is worse than one with no rules — this says so instead of staying green.

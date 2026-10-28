@@ -232,7 +232,7 @@ try {
   assert(r.status === 200 && j.ok === true && j.canonical?.metadata?.name === 'orders', 'session POST /api/library/instantiate WITH the CSRF header answers', r.status, 200);
   r = await fetch(`${base}/api/library`, { headers: { Cookie: session } });
   j = await r.json();
-  assert(r.ok && j.entries?.length === 10, 'GET /api/library answers with a session', r.status, 200);
+  assert(r.ok && j.entries?.length === 16, 'GET /api/library answers with a session', r.status, 200);
 
   // ---- signed-in self-service password change (account menu) ----
   r = await fetch(`${base}/auth/change-password`, { headers: { Cookie: session } });

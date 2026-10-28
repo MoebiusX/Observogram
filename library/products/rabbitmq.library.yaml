@@ -1,0 +1,153 @@
+# Library entry: RabbitMQ, observed through the rabbitmq_prometheus plugin (the broker's own
+# /metrics on port 15692). The per-queue series (rabbitmq_queue_messages_ready, _consumers,
+# _messages) are what the KrystalineX rule file reads (docs/SLI_CATALOGUE.md §1.4
+# krystalinex.rabbitmq, krystalinex.trading); the plugin exposes them on the aggregated endpoint
+# only when `prometheus.return_per_object_metrics = true` is set, else on
+# /metrics/per-object or /metrics/detailed?family=queue_metrics — the notes say so.
+library: v1
+id: rabbitmq
+kind: product
+version: 1.0.0
+title: RabbitMQ
+product: rabbitmq
+summary: Broker liveness, queue backlog, consumer presence and resident-memory saturation of a RabbitMQ broker through the rabbitmq_prometheus plugin.
+description: |
+  The dependency-kind SLIs of a queue broker (docs/SLI_CATALOGUE.md §2, class B), in RabbitMQ's
+  names: the broker answers its scrape (availability), the watched queues hold fewer ready messages
+  than a ceiling (backlog), every watched queue has a consumer (consumer presence), and the broker's
+  resident memory stays under its high-watermark (memory saturation). The queue pattern is a
+  parameter: an application pack narrows it to its own queues.
+tags: [messaging, broker]
+evidence:
+  status: upstream-docs
+  verifiedOn: null
+  sources:
+    - RabbitMQ documentation, "Monitoring with Prometheus and Grafana" — the rabbitmq_prometheus plugin, port 15692, the aggregated /metrics endpoint and the per-object series (rabbitmq_queue_messages, rabbitmq_queue_messages_ready, rabbitmq_queue_consumers), rabbitmq_process_resident_memory_bytes and rabbitmq_resident_memory_limit_bytes, rabbitmq_connections
+    - docs/SLI_CATALOGUE.md §1.4 — the KrystalineX rules krystalinex.rabbitmq (RabbitMQDown, RabbitMQHighMemory > 80%, RabbitMQNoConsumers, RabbitMQConsumerLag ready > 50) and krystalinex.trading (OrderQueueBackup > 100, OrderQueueCritical > 500), the thresholds taken as defaults
+    - Prometheus documentation, "Jobs and instances" — up{job} for the scrape target
+  notes: |
+    NOT verified against a live exposition in this repository. The per-queue series appear on the
+    aggregated endpoint only with prometheus.return_per_object_metrics = true (RabbitMQ 3.8+);
+    otherwise scrape /metrics/per-object or /metrics/detailed?family=queue_metrics. The file this
+    entry is read from alerts on rabbitmq_up, a series the plugin does not write — the broker's
+    liveness here is Prometheus's up{job}.
+  gaps:
+    - No publish or delivery latency SLI — the plugin exposes no duration histogram.
+    - No per-vhost or per-connection SLI; the queue pattern is the only scope.
+params:
+  - id: job
+    label: Broker scrape job
+    default: rabbitmq
+    description: The job label of the rabbitmq_prometheus scrape.
+  - id: target
+    label: Broker metrics target
+    default: rabbitmq:15692
+    placeholder: true
+    description: host:port of the broker's rabbitmq_prometheus endpoint.
+  - id: queue_pattern
+    label: Queues to watch (regex)
+    default: ".*"
+    description: The queue names the backlog and consumer SLIs read, as a regex; an application pack narrows it to its own queues.
+  - id: backlog_warning
+    label: Ready messages that mean a backlog
+    default: 100
+    description: Ready (unacknowledged, undelivered) messages on one watched queue above which the backlog is a warning.
+  - id: backlog_critical
+    label: Ready messages that mean a critical backlog
+    default: 500
+    description: Ready messages on one watched queue above which the backlog pages.
+telemetry:
+  scrape_jobs:
+    - job_name: "${job}"
+      scrape_interval: 15s
+      targets: ["${target}"]
+      minTier: tier-3
+slis:
+  - id: broker_availability
+    type: ratio
+    minTier: tier-3
+    description: Share of the broker's scrape targets that answered the last scrape (up for the rabbitmq_prometheus job).
+    why: A broker that stops answering its own metrics endpoint is down or wedged; the producers see it a minute later.
+    unit: ratio
+    metrics: [up]
+    evidence: { status: upstream-docs, source: "Prometheus up{job} for the rabbitmq_prometheus target; the file's RabbitMQDown read rabbitmq_up, which the plugin does not write" }
+    good: |
+      sum(up{job="${job}"} == bool 1)
+    total: |
+      count(up{job="${job}"})
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.999, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+  - id: queue_backlog
+    type: threshold
+    minTier: tier-3
+    description: Ready messages on the most backed-up watched queue, against a ceiling of 100 (the warning rung; the alert rule pages at the critical one).
+    why: Backlog is the queue's own latency — messages waiting are work the consumers are not doing; the max over the watched queues finds the one that is stuck.
+    unit: messages
+    metrics: [rabbitmq_queue_messages_ready]
+    evidence: { status: upstream-docs, source: "rabbitmq_prometheus per-object series rabbitmq_queue_messages_ready; the file's RabbitMQConsumerLag (> 50) and OrderQueueBackup (> 100)" }
+    query: |
+      max(rabbitmq_queue_messages_ready{queue=~"${queue_pattern}"}) or vector(0)
+    threshold: 100
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.995, tier-3: 0.99 }
+      window: 30d
+    burn: saturation
+  - id: consumer_presence
+    type: ratio
+    minTier: tier-2
+    description: Share of the watched queues that have at least one consumer.
+    why: A queue with no consumer fills silently and nothing downstream happens; the backlog SLI sees it late, this sees it at once.
+    unit: ratio
+    metrics: [rabbitmq_queue_consumers]
+    evidence: { status: upstream-docs, source: "rabbitmq_prometheus per-object series rabbitmq_queue_consumers; the file's RabbitMQNoConsumers (consumers == 0 on orders)" }
+    good: |
+      sum(rabbitmq_queue_consumers{queue=~"${queue_pattern}"} > bool 0)
+    total: |
+      count(rabbitmq_queue_consumers{queue=~"${queue_pattern}"})
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.99 }
+      window: 30d
+    burn: availability
+  - id: memory_saturation
+    type: threshold
+    minTier: tier-2
+    description: The broker's resident memory as a share of its high-watermark limit, against a ceiling of 0.8.
+    why: At the watermark the broker blocks publishers — producers see timeouts before any queue metric moves.
+    unit: ratio
+    metrics: [rabbitmq_process_resident_memory_bytes, rabbitmq_resident_memory_limit_bytes]
+    evidence: { status: upstream-docs, source: "rabbitmq_prometheus series rabbitmq_process_resident_memory_bytes / rabbitmq_resident_memory_limit_bytes; the file's RabbitMQHighMemory (> 80%)" }
+    query: |
+      max(rabbitmq_process_resident_memory_bytes / rabbitmq_resident_memory_limit_bytes) or vector(0)
+    threshold: 0.8
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.99 }
+      window: 30d
+    burn: saturation
+views:
+  - id: per_queue_backlog
+    bind: ref:platform/per-resource-rollup
+    params: { metric: "rabbitmq_queue_messages_ready{queue=~\"${queue_pattern}\"}", by: [queue] }
+    minTier: tier-2
+alerts:
+  - name: RabbitMQQueueBacklogCritical
+    minTier: tier-3
+    severity: { tier-1: SEV1, tier-2: SEV1, tier-3: SEV2 }
+    for: 2m
+    metrics: [rabbitmq_queue_messages_ready]
+    expr: |
+      max by (queue) (rabbitmq_queue_messages_ready{queue=~"${queue_pattern}"}) > ${backlog_critical}
+    summary: "Queue {{ $labels.queue }} critically backed up"
+    description: "{{ $value }} ready messages waiting on {{ $labels.queue }} (critical above ${backlog_critical}; the SLO's ceiling is ${backlog_warning})."
+    why: The second rung of the backlog — the SLO burns at the first; this one pages when the consumers are clearly not keeping up.
+  - name: RabbitMQQueueNoConsumers
+    minTier: tier-3
+    severity: { tier-1: SEV1, tier-2: SEV1, tier-3: SEV2 }
+    for: 2m
+    metrics: [rabbitmq_queue_consumers]
+    expr: |
+      rabbitmq_queue_consumers{queue=~"${queue_pattern}"} == 0
+    summary: "No consumer on queue {{ $labels.queue }}"
+    description: "Queue {{ $labels.queue }} has had no active consumer for two minutes — the consuming service may be down."
+    why: Named per queue so the page says which consumer is missing.

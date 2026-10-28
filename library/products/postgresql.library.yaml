@@ -1,0 +1,135 @@
+# Library entry: PostgreSQL, observed through postgres_exporter (prometheus-community, port 9187):
+# pg_up, pg_stat_activity_count, pg_settings_max_connections, pg_stat_database_xact_commit /
+# xact_rollback / deadlocks, pg_stat_statements (when the extension is enabled and the collector on).
+# The KrystalineX rule file's database group (docs/SLI_CATALOGUE.md §1.4 krystalinex.database) is
+# the seed: down, connection-pool saturation at 80 % / 95 %, slow queries.
+library: v1
+id: postgresql
+kind: product
+version: 1.0.0
+title: PostgreSQL
+product: postgresql
+summary: Database liveness, connection-pool saturation, transaction rollback share and deadlocks of a PostgreSQL server through postgres_exporter.
+description: |
+  The dependency-kind SLIs of a datastore (docs/SLI_CATALOGUE.md §2, class B), in postgres_exporter's
+  names: the exporter reaches the server (availability, pg_up), connections in use stay under a share
+  of max_connections (pool saturation — the two rungs of the file, 80 % as the SLO's ceiling and 95 %
+  as the page), the share of transactions that roll back stays small (from tier-2), and deadlocks do
+  not happen (tier-1). The slow-query rule of the file is deliberately not an SLI here: it took
+  rate() of a mean-time gauge, which measures the mean's drift, not slowness (§4 of the catalogue);
+  query latency needs pg_stat_statements and its own histogram, named in the gaps.
+tags: [database, sql]
+evidence:
+  status: upstream-docs
+  verifiedOn: null
+  sources:
+    - prometheus-community/postgres_exporter README — pg_up (1 when the exporter connects), pg_stat_activity_count (by datname, state), pg_settings_max_connections, pg_stat_database_xact_commit / xact_rollback / deadlocks (counters by datname)
+    - docs/SLI_CATALOGUE.md §1.4 krystalinex.database — PostgreSQLDown (pg_up == 0), DatabaseConnectionsHigh / Critical (connections / max > 80 % / 95 %), SlowQueries (noted as doubtful in §4)
+  notes: |
+    NOT verified against a live exposition in this repository. pg_stat_activity_count carries datname
+    and state labels on every exporter version since 0.10; the sum over them is the server's count.
+    The exporter's own pg_up is 0 when it cannot connect, so a dead server and a wrong password read
+    alike — both are "the database is not reachable from where the exporter runs".
+  gaps:
+    - No query-latency SLI — the file's SlowQueries rule is unsound (rate of a mean gauge) and pg_stat_statements exposes no histogram; a p99 needs the application's own client-side duration metric.
+    - No replication-lag SLI — pg_replication_lag exists on replicas only and the entry cannot know the topology.
+    - No per-database scope; every SLI sums over the server.
+params:
+  - id: job
+    label: Exporter scrape job
+    default: postgres-exporter
+    description: The job label of the postgres_exporter scrape.
+  - id: target
+    label: Exporter target
+    default: postgres-exporter:9187
+    placeholder: true
+    description: host:port of the postgres_exporter endpoint.
+  - id: pool_warning
+    label: Connection share that means pool pressure
+    default: 0.8
+    description: Connections in use as a share of max_connections above which the pool is under pressure (the SLO's ceiling).
+  - id: pool_critical
+    label: Connection share that pages
+    default: 0.95
+    description: Connections in use as a share of max_connections above which the exhaustion rule pages.
+telemetry:
+  scrape_jobs:
+    - job_name: "${job}"
+      scrape_interval: 15s
+      targets: ["${target}"]
+      minTier: tier-3
+slis:
+  - id: database_availability
+    type: ratio
+    minTier: tier-3
+    description: Share of the exporter's scrapes in which it reached the server (pg_up).
+    why: The application's errors arrive seconds after the database stops answering; this is the earlier, unambiguous signal.
+    unit: ratio
+    metrics: [pg_up]
+    evidence: { status: upstream-docs, source: "postgres_exporter pg_up; the file's PostgreSQLDown (pg_up == 0)" }
+    good: |
+      sum(pg_up{job="${job}"} == bool 1)
+    total: |
+      count(pg_up{job="${job}"})
+    slo:
+      objective: { tier-1: 0.9995, tier-2: 0.999, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+  - id: connection_saturation
+    type: threshold
+    minTier: tier-3
+    description: Connections in use as a share of max_connections, against a ceiling of 0.8.
+    why: A full pool refuses the next connection — the application fails before the server is slow; the ceiling leaves room for the burst.
+    unit: ratio
+    metrics: [pg_stat_activity_count, pg_settings_max_connections]
+    evidence: { status: upstream-docs, source: "postgres_exporter pg_stat_activity_count / pg_settings_max_connections; the file's DatabaseConnectionsHigh (> 80%)" }
+    query: |
+      sum(pg_stat_activity_count{job="${job}"}) / max(pg_settings_max_connections{job="${job}"})
+    threshold: 0.8
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.995, tier-3: 0.99 }
+      window: 30d
+    burn: saturation
+  - id: transaction_rollback_share
+    type: threshold
+    minTier: tier-2
+    description: Rolled-back transactions as a share of all transactions over five minutes, against a ceiling of 0.05.
+    why: Rollbacks are the application's errors seen from the database — constraint violations, deadlocks, aborted requests; a rising share is a failing release before the HTTP errors say so.
+    unit: ratio
+    metrics: [pg_stat_database_xact_rollback, pg_stat_database_xact_commit]
+    evidence: { status: upstream-docs, source: "postgres_exporter pg_stat_database_xact_rollback / xact_commit counters (by datname)" }
+    query: |
+      (sum(rate(pg_stat_database_xact_rollback{job="${job}"}[5m])) or vector(0))
+      /
+      (sum(rate(pg_stat_database_xact_commit{job="${job}"}[5m])) + sum(rate(pg_stat_database_xact_rollback{job="${job}"}[5m])) > 0)
+    threshold: 0.05
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.99 }
+      window: 30d
+    burn: saturation
+  - id: deadlocks
+    type: threshold
+    minTier: tier-1
+    description: Deadlocks per second over five minutes, against a ceiling of 0.01 (one in a hundred seconds).
+    why: A deadlock is a transaction the server killed; more than a rare one means two code paths lock in opposite orders.
+    unit: per_second
+    metrics: [pg_stat_database_deadlocks]
+    evidence: { status: upstream-docs, source: "postgres_exporter pg_stat_database_deadlocks counter (by datname)" }
+    query: |
+      sum(rate(pg_stat_database_deadlocks{job="${job}"}[5m])) or vector(0)
+    threshold: 0.01
+    slo:
+      objective: 0.999
+      window: 30d
+    burn: slow
+alerts:
+  - name: PostgreSQLConnectionsExhausted
+    minTier: tier-3
+    severity: { tier-1: SEV1, tier-2: SEV1, tier-3: SEV2 }
+    for: 2m
+    metrics: [pg_stat_activity_count, pg_settings_max_connections]
+    expr: |
+      sum(pg_stat_activity_count{job="${job}"}) / max(pg_settings_max_connections{job="${job}"}) > ${pool_critical}
+    summary: "PostgreSQL connections nearly exhausted"
+    description: "{{ $value | humanizePercentage }} of max_connections in use (pages above ${pool_critical}; the SLO's ceiling is ${pool_warning})."
+    why: The second rung of pool saturation — the SLO burns at the first; here the next connection is about to be refused.

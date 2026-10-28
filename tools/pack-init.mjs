@@ -51,14 +51,20 @@ const USAGE = `usage: packc init --list [--library <dir>]
                   [--owner <team>]... [--param k=v]... [--slis a,b | --sli <id>]...
                   [--override <sli>.<id|objective|window|threshold|good_when|semconv_metric>=<value>]...
                   [--no-slos] [--no-policy] [--no-routes] [--no-dashboards] [--no-validation]
-                  [--out <file>] [--json]`;
+                  [--no-base] [--out <file>] [--json]
+
+A pack built from an archetype (a service built from scratch: http-service, queue-consumer) carries the
+service base (the entry service-base — probe liveness and the security-event rules, docs/SLI_CATALOGUE.md §3)
+unless --no-base; a pack of products alone (kafka, postgresql, …) does not add it.`;
 
 /** What --override takes on the command line: the scalar fields. PromQL is edited in the studio or the pack file. */
 const CLI_OVERRIDE_FIELDS = ['id', 'objective', 'window', 'threshold', 'good_when', 'semconv_metric'];
 /** The scalar overrides that are numbers on the command line; the rest stay strings. */
 const CLI_NUMERIC_OVERRIDES = ['objective', 'threshold'];
 const VALUE_FLAGS = new Set(['--entry', '--tier', '--name', '--env', '--owner', '--param', '--slis', '--sli', '--override', '--out', '--library', '--show']);
-const BOOL_FLAGS = new Set(['--list', '--json', '--help', '-h', ...SECTION_TOGGLES.map(s => `--no-${s}`)]);
+const BOOL_FLAGS = new Set(['--list', '--json', '--help', '-h', '--no-base', ...SECTION_TOGGLES.map(s => `--no-${s}`)]);
+/** The entry every archetype pack carries unless --no-base (docs/SLI_CATALOGUE.md §3: the generic base). */
+export const BASE_ENTRY = 'service-base';
 
 function usageError(msg) {
   process.stderr.write(`packc init: ${msg}\n${USAGE}\n`);
@@ -75,6 +81,7 @@ function parseArgs(argv) {
       if (a === '--list') o.list = true;
       else if (a === '--json') o.json = true;
       else if (a === '--help' || a === '-h') o.help = true;
+      else if (a === '--no-base') o.noBase = true;
       else o.off.add(a.slice('--no-'.length));
       continue;
     }
@@ -189,6 +196,15 @@ function main() {
       usageError(`unknown entry ${id} (packc init --list)`);
     }
     entries.push(entry);
+  }
+  // The base travels with every service built from scratch: an archetype pack gains service-base unless
+  // --no-base; a products-only pack (a broker, a database) is not a service with an authentication surface
+  // and does not. Said on stderr, so a caller sees why the pack has more than it asked for.
+  const base = findEntry(library, BASE_ENTRY);
+  const wantsBase = !o.noBase && base && entries.some(e => e.kind === 'archetype') && !entries.some(e => e.id === BASE_ENTRY);
+  if (wantsBase) {
+    entries.push(base);
+    process.stderr.write(`packc init: ${BASE_ENTRY} added — the base every service carries (probe liveness, the security-event rules); --no-base leaves it out\n`);
   }
 
   const toggles = Object.fromEntries(SECTION_TOGGLES.map(s => [s, !o.off.has(s)]));

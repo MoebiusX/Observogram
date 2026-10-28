@@ -543,6 +543,8 @@ export function buildDefineModel({ build, library, requirements = {}, origin = n
     id: r.id, kind: r.kind, title: r.title, summary: r.summary, product: r.product, version: r.version, tags: r.tags || [],
     selected: selected.has(r.id),
     evidence: { status: r.evidence?.status || null, verifiedOn: r.evidence?.verifiedOn || null, gaps: (r.evidence?.gaps || []).length },
+    // The symptom alert rules the entry adds at this tier (spec 1.4 alerting.rules; the library index's alertCountByTier).
+    alertCountAtTier: r.alertCountByTier?.[build?.tier] ?? 0,
     gaps: (r.evidence?.gaps || []).length,
     sliCountByTier: r.sliCountByTier,
     sliCountAtTier: r.sliCountByTier?.[build?.tier] ?? 0,
@@ -558,7 +560,10 @@ export function buildDefineModel({ build, library, requirements = {}, origin = n
     name, slug: serviceSlug(name), owners: build?.owners || '', ownerList: parseOwners(build?.owners), environment: build?.environment || 'prod',
     tier: build?.tier, tiers,
     products: rows.filter(r => r.kind === 'product').map(card),
-    archetypes: rows.filter(r => r.kind === 'archetype').map(card),
+    // The service base first among the archetypes: the entry every service built from scratch carries
+    // (docs/SLI_CATALOGUE.md §3); `baseHint` says so while an archetype is picked without it.
+    archetypes: rows.filter(r => r.kind === 'archetype').map(card).map(c => ({ ...c, base: c.id === BASE_ENTRY })).sort((a, b) => (a.base === b.base ? 0 : a.base ? -1 : 1)),
+    baseHint: baseHintFor(rows, selected),
     selectedEntries: selectedEntries(build, library).map(card),
     params,
     // The silhouette: the tier's clauses as ghost cards on their slabs, the selection's
@@ -1491,6 +1496,8 @@ export function artefactOrigins({ build, result, stack }) {
     if (/^HEAL-/.test(id)) return sloOrigin(ref(a.spec?.trigger, /^alert:(.+?)_burn_/));
     if (/^CHAOS-/.test(id)) return byName(name) || (own(String(name || '')) ? null : sloOrigin(ref(a.spec?.steady_state_hypothesis, /^ref:slos\.(.+)$/)));
     if (/^PANEL-/.test(id)) return byName(String(a.parent || '').replace(/^dashboards\./, ''));
+    // A symptom alert rule carries the entry that declared it as a label (the engine stamps `library.entry`).
+    if (/^RULE-/.test(id)) { const e = a.spec?.labels?.['library.entry']; return entries.some(x => x.id === e) ? e : byName(name); }
     return byName(name);
   };
   const groups = new Map([
@@ -1895,6 +1902,20 @@ export function buildEditorModel({ build, library, mode = 'edit' }) {
     item, result: r, library, build, mode, errors: item.custom ? errs.byCustom[item.key] : errs.byOverride[item.key],
     allKeys: items.filter(i => i.selected && !i.custom).map(i => i.key),
   });
+}
+
+/** The entry every service built from scratch carries unless left out (library/archetypes/service-base.library.yaml). */
+export const BASE_ENTRY = 'service-base';
+/**
+ * Whether DEFINE should say the base is missing: an archetype other than the base is selected, the library has the
+ * base, and it is not selected. `{ id, title }` to offer, or null. A products-only pack (a broker, a database) is
+ * not a service with an authentication surface and gets no hint.
+ */
+export function baseHintFor(rows, selected) {
+  const base = (rows || []).find(r => r.id === BASE_ENTRY);
+  if (!base || selected.has(BASE_ENTRY)) return null;
+  const archetypePicked = (rows || []).some(r => r.kind === 'archetype' && r.id !== BASE_ENTRY && selected.has(r.id));
+  return archetypePicked ? { id: base.id, title: base.title } : null;
 }
 
 /** The DEFINE validity errors, spelled once for the define model and the definition column. */

@@ -142,3 +142,54 @@ synthetic:
       - { latency_lt: 1s }
     on_fail_severity: SEV2
     minTier: tier-3
+# Symptom alert rules (spec 1.4 alerting.rules): the traffic dimension of the base
+# (docs/SLI_CATALOGUE.md §3) — absence, and anomaly against the previous hour's baseline, which travels
+# to any service where an absolute request rate would not. The latency and error ceilings are the
+# SLOs' burn-rate alerts above; nothing here repeats them.
+alerts:
+  - name: NoTraffic
+    minTier: tier-3
+    severity: SEV3
+    for: 10m
+    metrics: [http_server_request_duration_seconds_count]
+    expr: |
+      sum(rate(${duration_metric}_count{job="${job}"}[5m])) == 0
+    summary: "${job} received no requests for ten minutes"
+    description: "No HTTP request reached ${job} in ten minutes — the service is unreachable, or nothing calls it."
+    why: Every ratio reads as perfect when there are no requests; the absence rule is the one that says the callers are gone.
+  - name: TrafficSpike
+    minTier: tier-2
+    severity: SEV3
+    for: 3m
+    metrics: [http_server_request_duration_seconds_count]
+    expr: |
+      sum(rate(${duration_metric}_count{job="${job}"}[5m]))
+        > 5 * sum(rate(${duration_metric}_count{job="${job}"}[1h] offset 1h))
+      and sum(rate(${duration_metric}_count{job="${job}"}[1h] offset 1h)) > 1
+    summary: "Traffic to ${job} is five times the previous hour's"
+    description: "The request rate is more than five times the previous hour's baseline (which was above one request per second)."
+    why: Relative to the service's own baseline, so the rule means the same for a service doing ten requests a second and one doing ten thousand.
+  - name: TrafficFlood
+    minTier: tier-2
+    severity: SEV2
+    for: 1m
+    metrics: [http_server_request_duration_seconds_count]
+    expr: |
+      sum(rate(${duration_metric}_count{job="${job}"}[2m]))
+        > 10 * sum(rate(${duration_metric}_count{job="${job}"}[1h] offset 1h))
+      and sum(rate(${duration_metric}_count{job="${job}"}[1h] offset 1h)) > 1
+    summary: "Possible flood of ${job} — ten times the previous hour's traffic"
+    description: "The request rate over two minutes is more than ten times the previous hour's baseline — a flood or an attack in progress."
+    why: The second rung of the spike, faster and louder; it pages because the saturation it causes will not wait.
+  - name: ClientErrorSpike
+    minTier: tier-1
+    severity: SEV3
+    for: 3m
+    metrics: [http_server_request_duration_seconds_count]
+    expr: |
+      sum(rate(${duration_metric}_count{job="${job}",http_response_status_code=~"4.."}[5m]))
+        > 5 * sum(rate(${duration_metric}_count{job="${job}",http_response_status_code=~"4.."}[1h] offset 1h))
+      and sum(rate(${duration_metric}_count{job="${job}",http_response_status_code=~"4.."}[1h] offset 1h)) > 0.5
+    summary: "Unusual spike in 4xx responses from ${job}"
+    description: "The 4xx rate is more than five times the previous hour's — scanning, probing, or a client release that broke."
+    why: 4xx are the caller's errors and stay out of the availability SLO; a spike of them is still something to look at, so it is a symptom rule, not an SLI.

@@ -986,6 +986,16 @@ the metric; the CLI).
   registry, promoting `semconv` / `upstream-docs` evidence to a recorded one per
   deployment; library-upgrade proposals in Remediate (a pack whose `library.source`
   is behind the shipped entry version gets the diff as a remediation).
+- **The service base.** Built (2026-10-28; `library/README.md` "The service base,
+  and the dimensions", `docs/SLI_CATALOGUE.md`): entries declare symptom alert
+  rules (`alerts:`), and the archetype `service-base` carries what every service
+  needs whatever it runs on. It is an entry, not scaffold-level SLIs, because its
+  values are a service's (the security-event counter's name, the thresholds) and
+  the scaffold has no parameters of its own beyond the platform's; an entry puts
+  them on DEFINE's params like any other, and a products-only pack (a broker, a
+  database) can leave it out. The default is the CLI's (`--no-base` to leave it
+  out) and DEFINE's hint, not a pre-ticked chip: a new draft still starts empty, so
+  the tests and the studio's first screen read as before.
 - **Updating a pack that exists.** Built (2026-10-28, slices 1 and 2 of
   [`UPDATE_JOURNEY.md`](UPDATE_JOURNEY.md)): `update` on a pack made in Build
   reopens it on this screen — the draft is read back from the pack's own

@@ -149,7 +149,8 @@ test('every 1.3-shaped pack of the repo validates unchanged against the 1.4 sche
     const text = readFileSync(resolve(ROOT, rel), 'utf8');
     const pack = rel.endsWith('.json') ? JSON.parse(text) : parseYaml(text);
     assert.deepEqual(errorsOf(pack), [], rel);
-    assert.ok(!('rules' in (pack.spec.alerting || {})), `${rel} is 1.3-shaped: alerting carries no rules`);
+    // The library's goldens are 1.4-shaped since the archetypes declare symptom alert rules (library/README.md `alerts:`); every other pack here is 1.3-shaped.
+    if (!rel.startsWith('tools/fixtures/library/')) assert.ok(!('rules' in (pack.spec.alerting || {})), `${rel} is 1.3-shaped: alerting carries no rules`);
     assert.ok((pack.spec.slis || []).every(s => !('good_when' in s)), `${rel} is 1.2-shaped too: no SLI carries good_when`);
     // The meaning is unchanged too: with an explicit `below` on every threshold / distribution SLI the pack still validates.
     const stated = clone(pack);

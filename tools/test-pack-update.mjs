@@ -186,7 +186,7 @@ test('additions: every refusal is named, in the field\'s own words, and the rest
   ];
   const { canonical, applied, refused } = applyAdditions(a, bad);
   assert.equal(applied.length, 1);
-  assert.equal(canonical.spec.alerting.rules.length, 1);
+  assert.equal(canonical.spec.alerting.rules.length, (a.spec.alerting.rules || []).length + 1, 'the archetype\'s own symptom rules plus the one addition');
   assert.deepEqual(refused.map(r => r.reason), [
     'kind "nope" — expected slo | route | alert_rule',
     'slo.sli: the pack has no SLI "nope"',
@@ -240,7 +240,7 @@ test('a hand-edited pack: what Build did not write is foreign; an SLO with its a
   c.spec.policy.burn_rate_alerts.push({ slo: 'availability_99_99', windows: defaultBurnWindows('ratio', 'tier-2') });
   c.spec.slos.push({ id: 'latency_p99_95', sli: 'latency_p99', objective: 0.95, window: '30d', error_budget_policy: 'ref:platform/std-budget-policy' });   // no alert
   c.spec.alerting.routes.push({ severity: 'SEV4', channels: [{ email: 'a@b.c' }] });
-  c.spec.alerting.rules = [{ name: 'Manual', expr: 'up == 0' }];
+  c.spec.alerting.rules = [...(c.spec.alerting.rules || []), { name: 'Manual', expr: 'up == 0' }];   // beside the archetype's own symptom rules
   c.spec.dashboards.push({ ...JSON.parse(JSON.stringify(c.spec.dashboards[0])), id: 'extra' });
   const rb = rebuildPack(c, { resolveEntry });
   assert.equal(rb.exact, false);

@@ -179,6 +179,8 @@ export function wireBuildDefinition(container, model, host = appHost) {
     });
   });
   container.querySelectorAll('.build-chip').forEach(b => b.addEventListener('click', () => act.toggleEntry(b.dataset.entry)));
+  // The base hint's "Add it to this pack": the service base joins the selection like a chip would.
+  container.querySelectorAll('[data-add-base]').forEach(b => b.addEventListener('click', () => act.toggleEntry(b.dataset.addBase)));
   container.querySelector('[data-change-seed]')?.addEventListener('click', () => act.setStep('define'));
   // A product chip on the seed card opens the L1 sheet on that product's SLIs.
   container.querySelectorAll('[data-seed-entry]').forEach(b => b.addEventListener('click', () => act.openSheet?.('L1', { entry: b.dataset.seedEntry })));
