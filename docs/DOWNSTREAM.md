@@ -101,7 +101,18 @@ regenerates anything.
 
 A local patch is drift by definition. Keep patches as a separate overlay
 applied after the copy, so `--verify` on the pristine copy stays clean and
-the overlay is the list of what to re-apply at the next bump.
+the overlay is the list of what to re-apply at the next bump. Where a patch
+has to live inside the copy, mark every changed line
+`// LOCAL DEVIATION (<org> <TAG>): <why>`: `--verify` then reports the file as
+`drift (local patch (marked LOCAL DEVIATION) — re-apply it at the next bump,
+or send it upstream)` instead of bare drift, so a reviewer can tell a known
+patch from a copy that went wrong; markers that use other words are named
+with `--patch-marker <text>` (plain text, case-sensitive, never recorded
+here). A tree that vendors the whole repository
+rather than the listed modules bumps by three-way merge, not by re-copying:
+keep it as a git subtree (`git subtree pull`) or carry the patches as a
+`git format-patch` series applied with `git am -3`, and send upstream the
+patches that are engine concerns — a merged patch stops being drift.
 
 ## 5. Run module smoke tests
 
