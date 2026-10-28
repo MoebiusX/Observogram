@@ -300,10 +300,11 @@
       "changedSinceRelease": false
     },
     "tools/lib/compile.mjs": {
-      "sha256": "d74c77006ee4c6b5eabc6942435b97472c36d10cb81c3746b8226d39c1e8e975",
-      "bytes": 84132,
+      "sha256": "4be1a0b282448a73d9026da45ff4c0bc43ad104d0bf860b52fe355c48157e67a",
+      "bytes": 86839,
       "exports": [
         "TARGETS",
+        "buildDeclaredAlertRules",
         "compile",
         "compileAlertmanager",
         "compileArtifact",
@@ -336,7 +337,29 @@
         "tools/lib/validator.mjs"
       ],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "TARGETS",
+        "compile",
+        "compileAlertmanager",
+        "compileArtifact",
+        "compileAssuranceGrafanaManagedRules",
+        "compileAssurancePrometheusRules",
+        "compileCatalog",
+        "compileDeclaredPrometheusRule",
+        "compileGrafanaDashboard",
+        "compileGrafanaManagedRules",
+        "compileOtelCollector",
+        "compilePrometheusRules",
+        "compileSloGrafanaManagedRules",
+        "compileSloPrometheusRules",
+        "listProfiles",
+        "listProtocols",
+        "listTargets",
+        "parseVersion",
+        "resolveProfile",
+        "satisfies"
+      ]
     },
     "tools/lib/conformance.mjs": {
       "sha256": "a234869139b1b096d8f2e23f5e5122da6cc163f1d352e9b3f2df244e9f12a8ff",
@@ -687,8 +710,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/library.mjs": {
-      "sha256": "90ed9b24bdaba4f8d2174ebabcc07a944b69e6c1ea6b785d27fd279a90139c03",
-      "bytes": 91623,
+      "sha256": "059167a9e1417a56abfe3d66b86132e54acacba221e67f1540674675733066df",
+      "bytes": 96470,
       "exports": [
         "BURN_PROFILES",
         "CUSTOM_FIELDS",

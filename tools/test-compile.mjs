@@ -397,7 +397,11 @@ process.stdout.write('\n[policy PromQL] burn-rules.mjs is the single source\n');
   const policyAlerts = alerts.filter(a => a.labels?.burn_rate || a.labels?.kind === 'forecast');
   const shared = policyAlerts.filter(a => genAlerts[a.alert]);
   assert(shared.length === policyAlerts.length && shared.length === 12, 'the generator and the compiler emit the same policy alert names (10 burn + 2 forecast)', shared.length, 12);
-  assert(alerts.length === policyAlerts.length + assuranceAlerts.length, 'every other alert of the full file is an assurance alert', alerts.length - policyAlerts.length - assuranceAlerts.length, 0);
+  // The pack's own declared rules (spec 1.4 alerting.rules) compile under <svc>_declared_alerts, labelled kind: declared.
+  const declaredAlerts = alerts.filter(a => a.labels?.kind === 'declared');
+  const promqlDeclared = (pack.spec.alerting?.rules || []).filter(r => !r.engine || ['prometheus', 'mimir', 'thanos', 'victoriametrics'].includes(r.engine));
+  assert(declaredAlerts.length === promqlDeclared.length, 'every PromQL-engine declared alert rule of the pack is compiled, once (a rule of another engine is left to its own ruler)', declaredAlerts.length, promqlDeclared.length);
+  assert(alerts.length === policyAlerts.length + assuranceAlerts.length + declaredAlerts.length, 'every other alert of the full file is an assurance or a declared alert', alerts.length - policyAlerts.length - assuranceAlerts.length - declaredAlerts.length, 0);
   const differing = shared.filter(a => normalise(genAlerts[a.alert].expr, a.labels.sli) !== a.expr).map(a => a.alert);
   assert(differing.length === 0, 'every shared alert has byte-identical expr modulo the threshold series name', differing, []);
   assert(shared.filter(a => a.labels.burn_rate && sliOf(a.labels.sli)?.type === 'threshold').length === 6, 'six threshold burn alerts took part in the comparison (the floor SLO\'s two among them)');

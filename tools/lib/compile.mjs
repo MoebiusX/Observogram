@@ -316,6 +316,19 @@ export function compilePrometheusRules(canonical, opts = {}) {
     groups.push({ name: `${svc}_forecast`, interval: '5m', rules: forecastRules });
   }
 
+  // ----- declared alert rules (spec 1.4 alerting.rules) -----
+  // The operational (non-SLO) rules the pack declares — a repository's own,
+  // or the library entries' symptom rules — for the PromQL rulers: every rule
+  // whose engine is prometheus-compatible (or unset), name kept exactly (the
+  // key a reconciler joins on), the pack's routing severity as the `severity`
+  // label so the compiled routes apply, the engine's own severity label kept
+  // under `engine_severity` when it differs. A Loki, Grafana-managed or
+  // Alertmanager rule is not a PromQL rule and is left to its own compiler.
+  const declaredAlerts = buildDeclaredAlertRules(canonical, ctx);
+  if (declaredAlerts.length) {
+    groups.push({ name: `${svc}_declared_alerts`, interval: '30s', rules: declaredAlerts });
+  }
+
   // ----- assurance (step 5) -----
   // Watchdog + declared-job target-down + instrument liveness from the
   // stack self-metric alias table (tools/lib/assurance-rules.mjs). Default
@@ -597,6 +610,39 @@ export function compileSloPrometheusRules(canonical, sloId, opts = {}) {
   return banner(`Prometheus rules — SLO ${slo.id}`, canonical) + emitYaml({ groups });
 }
 
+/** The engines whose `expr` is PromQL a Prometheus-compatible ruler evaluates (spec 1.4 AlertEngine); absent means prometheus. */
+const PROMQL_ALERT_ENGINES = new Set(['prometheus', 'mimir', 'thanos', 'victoriametrics']);
+
+/**
+ * The pack's declared alert rules (spec 1.4 alerting.rules) in the Prometheus rule shape, for the rulers
+ * that evaluate PromQL. Exported for the per-artefact compile and the tests; `ctx` is policyContext's
+ * (its `service` labels the rules like the burn alerts).
+ */
+export function buildDeclaredAlertRules(canonical, ctx = { service: serviceSlug(canonical) }) {
+  const out = [];
+  for (const r of canonical?.spec?.alerting?.rules || []) {
+    if (!r || typeof r.name !== 'string' || typeof r.expr !== 'string') continue;
+    if (r.engine && !PROMQL_ALERT_ENGINES.has(r.engine)) continue;
+    const own = r.labels || {};
+    const labels = { ...own };
+    if (r.severity) {
+      if (own.severity && own.severity !== r.severity) labels.engine_severity = own.severity;
+      labels.severity = r.severity;
+    }
+    labels.service = labels.service || ctx.service;
+    labels.pack = labels.pack || ctx.service;
+    labels.kind = labels.kind || 'declared';
+    out.push({
+      alert: r.name,
+      expr: resolveRefs(r.expr, canonical),
+      ...(r.for ? { for: r.for } : {}),
+      labels,
+      ...(r.annotations && Object.keys(r.annotations).length ? { annotations: { ...r.annotations } } : {}),
+    });
+  }
+  return out;
+}
+
 export function compileDeclaredPrometheusRule(canonical, indexOrName) {
   const decl = canonical?.spec?.queries?.recording_rules || [];
   const rule = typeof indexOrName === 'number' ? decl[indexOrName] : decl.find(r => r.name === indexOrName);
@@ -833,6 +879,11 @@ export function compileGrafanaManagedRules(canonical, opts = {}) {
     if (fa) forecastRules.push(buildGrafanaAlertRule(fa));
   }
   if (forecastRules.length) groups.push(grafanaGroupOf(`${svc}_forecast`, forecastRules, '5m'));
+
+  // Declared alert rules (spec 1.4 alerting.rules): the same rules as the Prometheus flavour, uids keyed
+  // <svc>_<alert> (a declared name carries no svc prefix and the folder is shared across packs).
+  const declaredAlerts = buildDeclaredAlertRules(canonical, ctx).map(r => buildGrafanaAlertRule(r, { uidKey: `${svc}_${r.alert}` }));
+  if (declaredAlerts.length) groups.push(grafanaGroupOf(`${svc}_declared_alerts`, declaredAlerts, '30s'));
 
   // Assurance (step 5): the same rules as the Prometheus flavour, uids keyed
   // by <svc>_<alert> (unique across packs in the shared folder), the

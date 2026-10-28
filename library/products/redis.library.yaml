@@ -1,0 +1,142 @@
+# Library entry: Redis, observed through redis_exporter (oliver006, port 9121): redis_up,
+# redis_memory_used_bytes / redis_memory_max_bytes, redis_keyspace_hits_total / misses_total,
+# redis_evicted_keys_total, redis_connected_clients, redis_rejected_connections_total. The
+# KrystalineX rule file's redis group (docs/SLI_CATALOGUE.md §1.4 krystalinex.redis) is the seed:
+# down, memory above 85 %, clients above 100, any eviction.
+library: v1
+id: redis
+kind: product
+version: 1.0.0
+title: Redis
+product: redis
+summary: Cache liveness, memory saturation, keyspace hit ratio, eviction rate and client saturation of a Redis instance through redis_exporter.
+description: |
+  The dependency-kind SLIs of a cache (docs/SLI_CATALOGUE.md §2, class B), in redis_exporter's
+  names: the exporter reaches the instance (availability), used memory stays under a share of
+  maxmemory (memory saturation — guarded, since maxmemory 0 means unlimited and the share is
+  meaningless), reads hit the keyspace (hit ratio, from tier-2 — a cache that misses is a database
+  under load), keys are not evicted (tier-2) and connected clients stay under a ceiling (tier-1).
+tags: [cache, datastore]
+evidence:
+  status: upstream-docs
+  verifiedOn: null
+  sources:
+    - oliver006/redis_exporter README — redis_up, redis_memory_used_bytes, redis_memory_max_bytes (0 when maxmemory is unset), redis_keyspace_hits_total, redis_keyspace_misses_total, redis_evicted_keys_total, redis_connected_clients, redis_rejected_connections_total
+    - docs/SLI_CATALOGUE.md §1.4 krystalinex.redis — RedisDown, RedisMemoryHigh (> 85%), RedisConnectedClientsHigh (> 100), RedisKeyEviction (rate > 0)
+  notes: |
+    NOT verified against a live exposition in this repository. redis_memory_max_bytes is 0 when
+    maxmemory is not configured; the saturation SLI selects instances where it is above 0 and reads
+    no data otherwise — honestly, since there is no limit to saturate. The hit ratio is meaningful
+    only for a cache that is read; a write-mostly instance reads near 1 whatever happens.
+  gaps:
+    - No command-latency SLI — redis_commands_duration_seconds_total is a sum, not a histogram; a p99 needs the client's own metric.
+    - No replication or persistence SLI (redis_master_link_up, rdb_last_save) — topology the entry cannot assume.
+params:
+  - id: job
+    label: Exporter scrape job
+    default: redis
+    description: The job label of the redis_exporter scrape.
+  - id: target
+    label: Exporter target
+    default: redis-exporter:9121
+    placeholder: true
+    description: host:port of the redis_exporter endpoint.
+  - id: client_ceiling
+    label: Connected clients that mean a leak
+    default: 100
+    description: Connected clients above which the client-saturation SLI counts the instance as saturated — size it from the application's pool sizes.
+telemetry:
+  scrape_jobs:
+    - job_name: "${job}"
+      scrape_interval: 15s
+      targets: ["${target}"]
+      minTier: tier-3
+slis:
+  - id: cache_availability
+    type: ratio
+    minTier: tier-3
+    description: Share of the exporter's scrapes in which it reached the instance (redis_up).
+    why: A cache that is down turns every read into a database read; the application slows before it errors.
+    unit: ratio
+    metrics: [redis_up]
+    evidence: { status: upstream-docs, source: "redis_exporter redis_up; the file's RedisDown (redis_up == 0)" }
+    good: |
+      sum(redis_up{job="${job}"} == bool 1)
+    total: |
+      count(redis_up{job="${job}"})
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.999, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+  - id: memory_saturation
+    type: threshold
+    minTier: tier-3
+    description: Used memory as a share of maxmemory on the fullest instance that has a limit, against a ceiling of 0.85.
+    why: At maxmemory the instance evicts or refuses writes, by policy; the ceiling leaves room before either.
+    unit: ratio
+    metrics: [redis_memory_used_bytes, redis_memory_max_bytes]
+    evidence: { status: upstream-docs, source: "redis_exporter redis_memory_used_bytes / redis_memory_max_bytes (0 when unlimited — guarded); the file's RedisMemoryHigh (> 85%)" }
+    query: |
+      max(redis_memory_used_bytes{job="${job}"} / (redis_memory_max_bytes{job="${job}"} > 0)) or vector(0)
+    threshold: 0.85
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.995, tier-3: 0.99 }
+      window: 30d
+    burn: saturation
+  - id: hit_ratio
+    type: ratio
+    minTier: tier-2
+    description: Keyspace hits as a share of all keyspace lookups over five minutes.
+    why: A cache that misses is not caching — the database carries the load and the latency SLO of the service pays for it.
+    unit: ratio
+    metrics: [redis_keyspace_hits_total, redis_keyspace_misses_total]
+    evidence: { status: upstream-docs, source: "redis_exporter redis_keyspace_hits_total / redis_keyspace_misses_total" }
+    good: |
+      sum(rate(redis_keyspace_hits_total{job="${job}"}[5m])) or vector(0)
+    total: |
+      sum(rate(redis_keyspace_hits_total{job="${job}"}[5m])) + sum(rate(redis_keyspace_misses_total{job="${job}"}[5m]))
+    slo:
+      objective: { tier-1: 0.95, tier-2: 0.9 }
+      window: 30d
+    burn: slow
+  - id: eviction_rate
+    type: threshold
+    minTier: tier-2
+    description: Keys evicted per second over five minutes, against a ceiling of 1.
+    why: Evictions mean the working set no longer fits — the hit ratio falls next; one a second is already memory pressure.
+    unit: per_second
+    metrics: [redis_evicted_keys_total]
+    evidence: { status: upstream-docs, source: "redis_exporter redis_evicted_keys_total; the file's RedisKeyEviction (rate > 0)" }
+    query: |
+      sum(rate(redis_evicted_keys_total{job="${job}"}[5m])) or vector(0)
+    threshold: 1
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.99 }
+      window: 30d
+    burn: saturation
+  - id: client_saturation
+    type: threshold
+    minTier: tier-1
+    description: Connected clients on the busiest instance, against a ceiling of 100.
+    why: A climbing client count with flat traffic is a connection leak; the ceiling is the application's pools added up, with room.
+    unit: clients
+    metrics: [redis_connected_clients]
+    evidence: { status: upstream-docs, source: "redis_exporter redis_connected_clients; the file's RedisConnectedClientsHigh (> 100)" }
+    query: |
+      max(redis_connected_clients{job="${job}"}) or vector(0)
+    threshold: 100
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: slow
+alerts:
+  - name: RedisRejectedConnections
+    minTier: tier-2
+    severity: SEV2
+    for: 2m
+    metrics: [redis_rejected_connections_total]
+    expr: |
+      sum(rate(redis_rejected_connections_total{job="${job}"}[5m])) > 0
+    summary: "Redis is refusing connections"
+    description: "Connections are being rejected at maxclients — the application's pools are larger than the instance allows, or a client leaks connections (the client_ceiling parameter)."
+    why: The client-saturation SLI warns before this; a rejection is the failure itself, seen by the application as a connection error.

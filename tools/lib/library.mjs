@@ -222,6 +222,8 @@ const DURATION_RE = /^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h|d|w|mo|y))+$/;
 const SYNTHETIC_KINDS = ['elastic-synthetics', 'blackbox-exporter', 'checkly', 'k6', 'grafana-synthetics'];
 const CHAOS_ENGINES = ['chaos-mesh', 'litmus', 'gremlin'];
 const SEVERITIES = ['SEV1', 'SEV2', 'SEV3', 'SEV4'];
+/** The engines a symptom alert rule names (spec 1.4 AlertEngine); absent means prometheus. */
+const ALERT_ENGINES = ['prometheus', 'mimir', 'thanos', 'victoriametrics', 'loki', 'grafana', 'alertmanager'];
 
 /** Every `${x}` used anywhere in a value tree. */
 function collectPlaceholders(value, out = new Set()) {
@@ -361,6 +363,36 @@ export function validateLibraryEntry(entry) {
     if (!thresholdByTier2) e('slis: at least one threshold SLI with minTier tier-3 or tier-2 is required (L1.MUST.latency_slo applies from tier-2)');
   }
 
+  // alerts — symptom alert rules (spec 1.4 alerting.rules): a condition the engine evaluates, not a burn rate on
+  // an SLO. Each lands in the pack's alerting.rules at or above its minTier, its ${param}s resolved like an SLI's.
+  const alertNames = new Set();
+  for (const [i, a] of (entry.alerts || []).entries()) {
+    const at = `alerts[${i}]`;
+    if (!isObj(a)) { e(`${at}: not an object`); continue; }
+    if (typeof a.name !== 'string' || !/^[A-Za-z][A-Za-z0-9_]{0,189}$/.test(a.name)) e(`${at}.name: the rule's exact alert name (letters, digits, _; 1 to 190 characters)`);
+    else if (alertNames.has(a.name)) e(`${at}.name: duplicate '${a.name}'`);
+    else alertNames.add(a.name);
+    if (!TIERS.includes(a.minTier)) e(`${at}.minTier: expected ${TIERS.join('|')}, got ${JSON.stringify(a.minTier)}`);
+    if (typeof a.expr !== 'string' || !a.expr.trim()) e(`${at}.expr: the condition, in PromQL (or the engine's language), is required`);
+    for (const t of TIERS) {
+      const sev = perTier(a.severity, t, undefined);
+      if (sev === undefined) { if (atTier(t, a.minTier)) e(`${at}.severity[${t}]: required (${SEVERITIES.join('|')}; one value or a per-tier map)`); }
+      else if (!SEVERITIES.includes(sev)) e(`${at}.severity[${t}]: expected ${SEVERITIES.join('|')}, got ${JSON.stringify(sev)}`);
+    }
+    if (a.for != null && !DURATION_RE.test(String(a.for))) e(`${at}.for: a duration (5m)`);
+    if (typeof a.summary !== 'string' || !a.summary.trim()) e(`${at}.summary: required (one line, the alert's annotation)`);
+    if (typeof a.why !== 'string' || !a.why.trim()) e(`${at}.why: required (why this rule, for the studio)`);
+    if (a.description != null && typeof a.description !== 'string') e(`${at}.description: a string`);
+    if (a.engine != null && !ALERT_ENGINES.includes(a.engine)) e(`${at}.engine: expected ${ALERT_ENGINES.join('|')}`);
+    if (a.labels != null && (!isObj(a.labels) || Object.values(a.labels).some(v => typeof v !== 'string'))) e(`${at}.labels: a map of strings`);
+    const text = withDefaults(String(a.expr));
+    if (!Array.isArray(a.metrics) || !a.metrics.length) e(`${at}.metrics: the metric names the condition reads (non-empty list)`);
+    else for (const m of a.metrics) {
+      if (typeof m !== 'string' || !/^[a-zA-Z_:][a-zA-Z0-9_:]*$/.test(m)) e(`${at}.metrics: '${m}' is not a metric name`);
+      else if (!new RegExp(`(^|[^a-zA-Z0-9_:])${m}([^a-zA-Z0-9_:]|$)`).test(text)) e(`${at}.metrics: '${m}' does not appear in the condition`);
+    }
+  }
+
   // views, dashboards, synthetic, telemetry
   const viewIds = new Set();
   for (const [i, v] of (entry.views || []).entries()) {
@@ -435,6 +467,8 @@ export function libraryIndex(entries) {
       windows: Object.fromEntries(TIERS.map(t => [t, perTier(s.slo?.window, t, null)])),
       ...(s.type === 'ratio' ? { good: stripText(s.good), total: stripText(s.total) } : { query: stripText(s.query), threshold: s.threshold, good_when: goodWhen(s) }),
     }));
+    // The symptom alert rules the entry adds (spec 1.4 alerting.rules), with the severity each tier starts from.
+    const alerts = (entry.alerts || []).map(a => ({ name: a.name, minTier: a.minTier, summary: stripText(a.summary), severities: Object.fromEntries(TIERS.map(t => [t, perTier(a.severity, t, null)])) }));
     return {
       id: entry.id, kind: entry.kind, title: entry.title, product: entry.product || null, version: entry.version,
       summary: entry.summary, tags: [...(entry.tags || [])],
@@ -442,6 +476,8 @@ export function libraryIndex(entries) {
       params: (entry.params || []).map(p => ({ id: p.id, label: p.label, default: p.default, placeholder: !!p.placeholder, description: p.description })),
       slis,
       sliCountByTier: Object.fromEntries(TIERS.map(t => [t, slis.filter(s => atTier(t, s.minTier)).length])),
+      alerts,
+      alertCountByTier: Object.fromEntries(TIERS.map(t => [t, alerts.filter(a => atTier(t, a.minTier)).length])),
       tiers: [...TIERS],
     };
   }).sort((a, b) => (a.kind === b.kind ? a.id.localeCompare(b.id, 'en') : a.kind === 'product' ? -1 : 1));
@@ -686,6 +722,21 @@ function checkCustom(custom, selected, known) {
  * so (measured: schema valid, MUST 15/15, the compiled rules carrying the alert twice). A usage error spelled on
  * the field the user can change: the custom SLI's id, else the overridden objective.
  */
+/**
+ * Two entries may not declare one alert name: a reconciler joins on the name, and a pack carrying it twice would
+ * compile two rules under one alert. A usage error naming both entries.
+ */
+function checkAlertNames(fragments) {
+  const seen = new Map();
+  for (const f of fragments) {
+    for (const a of f.alerts || []) {
+      const other = seen.get(a.name);
+      if (other && other !== f.entry?.id) throw new Error(`alert ${a.name}: declared by both ${other} and ${f.entry?.id} — a pack carries one rule per alert name; drop one entry or rename the rule`);
+      seen.set(a.name, f.entry?.id || 'custom');
+    }
+  }
+}
+
 function checkSloIds(slis) {
   const bySlo = new Map();
   for (const x of slis) {
@@ -785,6 +836,15 @@ function entryFragment(entry, { tier, selectedSlis, prefixed, overrides = new Ma
     receivers: (entry.telemetry?.receivers || []).filter(has).map(r => clone(r)),
     languages: entry.otel?.languages || [],
     customAttributes: entry.otel?.custom_attributes || [],
+    // The entry's symptom alert rules at this tier, in the pack's shape (spec 1.4 alerting.rules); the severity
+    // read per tier through the walk, the name kept exactly (an alert name is the key a reconciler joins on).
+    alerts: (entry.alerts || []).filter(has).map(a => ({
+      name: a.name, expr: stripText(a.expr), severity: perTier(a.severity, tier, 'SEV3'),
+      ...(a.for ? { for: String(a.for) } : {}),
+      ...(a.engine ? { engine: a.engine } : {}),
+      labels: { ...(a.labels || {}), 'library.entry': entry.id },
+      annotations: { summary: stripText(a.summary), ...(a.description ? { description: stripText(a.description) } : {}), why: stripText(a.why) },
+    })),
   };
 }
 
@@ -808,7 +868,7 @@ function customFragment(defs, { tier }) {
       windows: burnWindowsFor(template, tier), overrides: {}, customised: [], custom: true, aboveTier: false,
     };
   });
-  return { entry: null, custom: true, slis, views: [], dashboards: [], synthetic: [], chaos: [], remediation: [], scrapeJobs: [], receivers: [], languages: [], customAttributes: [] };
+  return { entry: null, custom: true, slis, views: [], dashboards: [], synthetic: [], chaos: [], remediation: [], scrapeJobs: [], receivers: [], languages: [], customAttributes: [], alerts: [] };
 }
 
 const RESOURCE_ATTRIBUTES = {
@@ -977,7 +1037,10 @@ export function tierScaffold({ tier, service, environment, owners, fragments, to
       { severity: 'SEV2', channels: [{ msteams: '${oncall_channel}' }, ...(t1 ? [{ voice: '${pager_service_low}' }] : [])] },
       { severity: 'SEV3', channels: [{ msteams: '${team_channel}' }] },
     ];
-    alerting = { routes, dedup: 'ref:platform/std-dedup', ...(t2 ? { suppress: ['maintenance_windows', 'deploy_freezes'] } : {}) };
+    // The entries' symptom alert rules (spec 1.4 alerting.rules) travel with the routes: a rule without a route
+    // would page nobody, so `routes` off drops them too (the rubric has no clause on them; the toggle is the user's).
+    const rules = fragments.flatMap(f => f.alerts || []);
+    alerting = { routes, ...(rules.length ? { rules } : {}), dedup: 'ref:platform/std-dedup', ...(t2 ? { suppress: ['maintenance_windows', 'deploy_freezes'] } : {}) };
   }
 
   // ----- L4: remediation (tier-2 and up; tier-1 MUST have one) -----
@@ -1228,6 +1291,7 @@ export function instantiatePack(entryOrEntries, opts = {}) {
   ];
   checkSliIds(fragments.flatMap(f => f.slis), known);
   checkSloIds(fragments.flatMap(f => f.slis));
+  checkAlertNames(fragments);
   const { canonical: draft, todos: scaffoldTodos } = tierScaffold({ tier, service, environment, owners, fragments, toggles });
 
   const rows = paramTable(entries, prefixed);

@@ -151,6 +151,12 @@
         "tier-2": 3,
         "tier-1": 4
       },
+      "alerts": [],
+      "alertCountByTier": {
+        "tier-3": 0,
+        "tier-2": 0,
+        "tier-1": 0
+      },
       "tiers": [
         "tier-3",
         "tier-2",
@@ -414,6 +420,12 @@
         "tier-3": 2,
         "tier-2": 6,
         "tier-1": 8
+      },
+      "alerts": [],
+      "alertCountByTier": {
+        "tier-3": 0,
+        "tier-2": 0,
+        "tier-1": 0
       },
       "tiers": [
         "tier-3",
@@ -710,6 +722,235 @@
         "tier-2": 6,
         "tier-1": 8
       },
+      "alerts": [],
+      "alertCountByTier": {
+        "tier-3": 0,
+        "tier-2": 0,
+        "tier-1": 0
+      },
+      "tiers": [
+        "tier-3",
+        "tier-2",
+        "tier-1"
+      ]
+    },
+    {
+      "id": "k8s-workload",
+      "kind": "product",
+      "title": "Kubernetes workload",
+      "product": "kubernetes",
+      "version": "1.0.0",
+      "summary": "Replica readiness, pod readiness, restart rate and OOM kills of the pods a service runs in, through kube-state-metrics — the platform dimension every containerised service has.",
+      "tags": [
+        "platform",
+        "kubernetes"
+      ],
+      "evidence": {
+        "status": "upstream-docs",
+        "verifiedOn": null,
+        "sources": [
+          "kubernetes/kube-state-metrics docs/metrics — kube_deployment_spec_replicas, kube_deployment_status_ready_replicas (by deployment, namespace); kube_pod_status_ready (by pod, namespace, condition), kube_pod_status_phase (by phase); kube_pod_container_status_restarts_total (by pod, container); kube_pod_container_status_last_terminated_reason (by reason)",
+          "docs/SLI_CATALOGUE.md §1.4 krystalinex.container_health — ContainerCrashLooping (> 3 restarts / 15m), ContainerOOMKilled, PodNotReady (10m), DeploymentReplicasMismatch (10m)"
+        ],
+        "gaps": [
+          "No resource-saturation SLI (CPU throttling, memory working set vs limit) — those are cAdvisor series the entry does not assume.",
+          "StatefulSets and DaemonSets are not read (kube_statefulset_*, kube_daemonset_*); the readiness ratio covers Deployments."
+        ]
+      },
+      "params": [
+        {
+          "id": "namespace",
+          "label": "Kubernetes namespace",
+          "default": "${service}",
+          "placeholder": true,
+          "description": "The namespace the service's workload runs in."
+        },
+        {
+          "id": "pod_pattern",
+          "label": "Pod names (regex)",
+          "default": "${service}-.*",
+          "placeholder": false,
+          "description": "The pods of the service, as a regex on the pod name (a Deployment's pods are <name>-<hash>-<id>)."
+        },
+        {
+          "id": "deployment_pattern",
+          "label": "Deployment names (regex)",
+          "default": "${service}.*",
+          "placeholder": false,
+          "description": "The Deployments of the service, as a regex on the deployment name."
+        },
+        {
+          "id": "ksm_job",
+          "label": "kube-state-metrics scrape job",
+          "default": "kube-state-metrics",
+          "placeholder": false,
+          "description": "The job label of the kube-state-metrics scrape."
+        },
+        {
+          "id": "ksm_target",
+          "label": "kube-state-metrics target",
+          "default": "kube-state-metrics:8080",
+          "placeholder": true,
+          "description": "host:port of the kube-state-metrics endpoint."
+        },
+        {
+          "id": "restarts_per_15m",
+          "label": "Restarts in 15 minutes that mean a crash loop",
+          "default": 3,
+          "placeholder": false,
+          "description": "Container restarts in fifteen minutes above which a pod is crash-looping."
+        }
+      ],
+      "slis": [
+        {
+          "id": "pod_readiness",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Share of the service's pods whose Ready condition is true (kube_pod_status_ready, condition true, is 1 per Ready pod and 0 otherwise).",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "kube_pod_status_ready"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.995,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "good": "sum(kube_pod_status_ready{namespace=\"${namespace}\",pod=~\"${pod_pattern}\",condition=\"true\"} == bool 1)",
+          "total": "count(kube_pod_status_ready{namespace=\"${namespace}\",pod=~\"${pod_pattern}\",condition=\"true\"})"
+        },
+        {
+          "id": "restart_rate",
+          "type": "threshold",
+          "minTier": "tier-3",
+          "unit": "restarts",
+          "description": "Container restarts of the most restarting pod over fifteen minutes, against a ceiling of 3.",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "kube_pod_container_status_restarts_total"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.995,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "query": "max(increase(kube_pod_container_status_restarts_total{namespace=\"${namespace}\",pod=~\"${pod_pattern}\"}[15m])) or vector(0)",
+          "threshold": 3,
+          "good_when": "below"
+        },
+        {
+          "id": "replica_shortfall",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "replicas",
+          "description": "Replicas missing on the worst Deployment of the service (spec replicas minus ready replicas), against a ceiling of 0 — any shortfall counts.",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "kube_deployment_spec_replicas",
+            "kube_deployment_status_ready_replicas"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "query": "max(kube_deployment_spec_replicas{namespace=\"${namespace}\",deployment=~\"${deployment_pattern}\"} - kube_deployment_status_ready_replicas{namespace=\"${namespace}\",deployment=~\"${deployment_pattern}\"}) or vector(0)",
+          "threshold": 0.5,
+          "good_when": "below"
+        },
+        {
+          "id": "oom_kills",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "containers",
+          "description": "Containers of the service whose last termination was an OOM kill, against a ceiling of 0 (any is too many).",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "kube_pod_container_status_last_terminated_reason"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "query": "sum(kube_pod_container_status_last_terminated_reason{namespace=\"${namespace}\",pod=~\"${pod_pattern}\",reason=\"OOMKilled\"}) or vector(0)",
+          "threshold": 0.5,
+          "good_when": "below"
+        }
+      ],
+      "sliCountByTier": {
+        "tier-3": 2,
+        "tier-2": 4,
+        "tier-1": 4
+      },
+      "alerts": [
+        {
+          "name": "ContainerCrashLooping",
+          "minTier": "tier-3",
+          "summary": "{{ $labels.pod }} is crash-looping",
+          "severities": {
+            "tier-3": "SEV2",
+            "tier-2": "SEV1",
+            "tier-1": "SEV1"
+          }
+        },
+        {
+          "name": "ContainerOOMKilled",
+          "minTier": "tier-3",
+          "summary": "{{ $labels.container }} in {{ $labels.pod }} was OOM-killed",
+          "severities": {
+            "tier-3": "SEV2",
+            "tier-2": "SEV2",
+            "tier-1": "SEV2"
+          }
+        },
+        {
+          "name": "PodNotReady",
+          "minTier": "tier-2",
+          "summary": "{{ $labels.pod }} has not been Ready for ten minutes",
+          "severities": {
+            "tier-3": "SEV2",
+            "tier-2": "SEV2",
+            "tier-1": "SEV2"
+          }
+        },
+        {
+          "name": "DeploymentReplicasMismatch",
+          "minTier": "tier-2",
+          "summary": "{{ $labels.deployment }} is short of ready replicas",
+          "severities": {
+            "tier-3": "SEV3",
+            "tier-2": "SEV3",
+            "tier-1": "SEV3"
+          }
+        }
+      ],
+      "alertCountByTier": {
+        "tier-3": 2,
+        "tier-2": 4,
+        "tier-1": 4
+      },
       "tiers": [
         "tier-3",
         "tier-2",
@@ -949,6 +1190,12 @@
         "tier-2": 5,
         "tier-1": 6
       },
+      "alerts": [],
+      "alertCountByTier": {
+        "tier-3": 0,
+        "tier-2": 0,
+        "tier-1": 0
+      },
       "tiers": [
         "tier-3",
         "tier-2",
@@ -1105,6 +1352,210 @@
         "tier-3": 1,
         "tier-2": 2,
         "tier-1": 4
+      },
+      "alerts": [],
+      "alertCountByTier": {
+        "tier-3": 0,
+        "tier-2": 0,
+        "tier-1": 0
+      },
+      "tiers": [
+        "tier-3",
+        "tier-2",
+        "tier-1"
+      ]
+    },
+    {
+      "id": "node",
+      "kind": "product",
+      "title": "Node (node_exporter)",
+      "product": "node",
+      "version": "1.0.0",
+      "summary": "Node liveness, filesystem, memory and CPU saturation of the hosts a service runs on, with the disk and memory exhaustion forecasts, through node_exporter.",
+      "tags": [
+        "platform",
+        "node"
+      ],
+      "evidence": {
+        "status": "upstream-docs",
+        "verifiedOn": null,
+        "sources": [
+          "prometheus/node_exporter README — node_filesystem_avail_bytes and node_filesystem_size_bytes (by mountpoint, fstype), node_memory_MemAvailable_bytes and node_memory_MemTotal_bytes, node_cpu_seconds_total (by cpu, mode)",
+          "docs/SLI_CATALOGUE.md §1.3 — DiskExhaustionForecast (predict_linear(node_filesystem_avail_bytes[6h], 7d) < 0), MemoryExhaustionForecast (predict_linear(node_memory_MemAvailable_bytes[6h], 4h) < 0)",
+          "Prometheus documentation, \"predict_linear()\" — the linear extrapolation over a range vector"
+        ],
+        "gaps": [
+          "No network or disk-I/O saturation SLI — node_network_* and node_disk_* exist but the ceilings are hardware-specific.",
+          "A node pool shared by many services reads the same values for each; the entry has no per-service scope."
+        ]
+      },
+      "params": [
+        {
+          "id": "job",
+          "label": "node_exporter scrape job",
+          "default": "node-exporter",
+          "placeholder": false,
+          "description": "The job label of the node_exporter scrape."
+        },
+        {
+          "id": "target",
+          "label": "node_exporter target",
+          "default": "node-exporter:9100",
+          "placeholder": true,
+          "description": "host:port of a node_exporter endpoint (a DaemonSet is discovered by DNS in practice; the pack's static target is the placeholder)."
+        },
+        {
+          "id": "mountpoint",
+          "label": "Filesystem mountpoint",
+          "default": "/",
+          "placeholder": false,
+          "description": "The mountpoint the filesystem SLI and the disk forecast read."
+        },
+        {
+          "id": "disk_horizon_days",
+          "label": "Disk forecast horizon (days)",
+          "default": 7,
+          "placeholder": false,
+          "description": "Days ahead the disk-exhaustion forecast looks at the current trend."
+        },
+        {
+          "id": "memory_horizon_hours",
+          "label": "Memory forecast horizon (hours)",
+          "default": 4,
+          "placeholder": false,
+          "description": "Hours ahead the memory-exhaustion forecast looks at the current trend."
+        }
+      ],
+      "slis": [
+        {
+          "id": "node_availability",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Share of the nodes' scrape targets that answered the last scrape (up for the node_exporter job).",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "up"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.995,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "good": "sum(up{job=\"${job}\"} == bool 1)",
+          "total": "count(up{job=\"${job}\"})"
+        },
+        {
+          "id": "filesystem_saturation",
+          "type": "threshold",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Used share of the mountpoint's filesystem on the fullest node, against a ceiling of 0.85.",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "node_filesystem_avail_bytes",
+            "node_filesystem_size_bytes"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.995,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "query": "max(1 - node_filesystem_avail_bytes{job=\"${job}\",mountpoint=\"${mountpoint}\",fstype!=\"tmpfs\"} / node_filesystem_size_bytes{job=\"${job}\",mountpoint=\"${mountpoint}\",fstype!=\"tmpfs\"}) or vector(0)",
+          "threshold": 0.85,
+          "good_when": "below"
+        },
+        {
+          "id": "memory_saturation",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "ratio",
+          "description": "Used share of memory on the fullest node (1 − MemAvailable / MemTotal), against a ceiling of 0.9.",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "node_memory_MemAvailable_bytes",
+            "node_memory_MemTotal_bytes"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "query": "max(1 - node_memory_MemAvailable_bytes{job=\"${job}\"} / node_memory_MemTotal_bytes{job=\"${job}\"}) or vector(0)",
+          "threshold": 0.9,
+          "good_when": "below"
+        },
+        {
+          "id": "cpu_saturation",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "ratio",
+          "description": "Busy share of CPU time on the busiest node over five minutes (1 − idle), against a ceiling of 0.9.",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "node_cpu_seconds_total"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "query": "max by (instance) (1 - avg by (instance) (rate(node_cpu_seconds_total{job=\"${job}\",mode=\"idle\"}[5m]))) or vector(0)",
+          "threshold": 0.9,
+          "good_when": "below"
+        }
+      ],
+      "sliCountByTier": {
+        "tier-3": 2,
+        "tier-2": 4,
+        "tier-1": 4
+      },
+      "alerts": [
+        {
+          "name": "DiskExhaustionForecast",
+          "minTier": "tier-2",
+          "summary": "Disk on {{ $labels.instance }} predicted to fill within ${disk_horizon_days} days",
+          "severities": {
+            "tier-3": "SEV3",
+            "tier-2": "SEV3",
+            "tier-1": "SEV3"
+          }
+        },
+        {
+          "name": "MemoryExhaustionForecast",
+          "minTier": "tier-1",
+          "summary": "Memory on {{ $labels.instance }} predicted to run out within ${memory_horizon_hours} hours",
+          "severities": {
+            "tier-3": "SEV2",
+            "tier-2": "SEV2",
+            "tier-1": "SEV2"
+          }
+        }
+      ],
+      "alertCountByTier": {
+        "tier-3": 0,
+        "tier-2": 1,
+        "tier-1": 2
       },
       "tiers": [
         "tier-3",
@@ -1314,6 +1765,193 @@
         "tier-3": 1,
         "tier-2": 4,
         "tier-1": 6
+      },
+      "alerts": [],
+      "alertCountByTier": {
+        "tier-3": 0,
+        "tier-2": 0,
+        "tier-1": 0
+      },
+      "tiers": [
+        "tier-3",
+        "tier-2",
+        "tier-1"
+      ]
+    },
+    {
+      "id": "postgresql",
+      "kind": "product",
+      "title": "PostgreSQL",
+      "product": "postgresql",
+      "version": "1.0.0",
+      "summary": "Database liveness, connection-pool saturation, transaction rollback share and deadlocks of a PostgreSQL server through postgres_exporter.",
+      "tags": [
+        "database",
+        "sql"
+      ],
+      "evidence": {
+        "status": "upstream-docs",
+        "verifiedOn": null,
+        "sources": [
+          "prometheus-community/postgres_exporter README — pg_up (1 when the exporter connects), pg_stat_activity_count (by datname, state), pg_settings_max_connections, pg_stat_database_xact_commit / xact_rollback / deadlocks (counters by datname)",
+          "docs/SLI_CATALOGUE.md §1.4 krystalinex.database — PostgreSQLDown (pg_up == 0), DatabaseConnectionsHigh / Critical (connections / max > 80 % / 95 %), SlowQueries (noted as doubtful in §4)"
+        ],
+        "gaps": [
+          "No query-latency SLI — the file's SlowQueries rule is unsound (rate of a mean gauge) and pg_stat_statements exposes no histogram; a p99 needs the application's own client-side duration metric.",
+          "No replication-lag SLI — pg_replication_lag exists on replicas only and the entry cannot know the topology.",
+          "No per-database scope; every SLI sums over the server."
+        ]
+      },
+      "params": [
+        {
+          "id": "job",
+          "label": "Exporter scrape job",
+          "default": "postgres-exporter",
+          "placeholder": false,
+          "description": "The job label of the postgres_exporter scrape."
+        },
+        {
+          "id": "target",
+          "label": "Exporter target",
+          "default": "postgres-exporter:9187",
+          "placeholder": true,
+          "description": "host:port of the postgres_exporter endpoint."
+        },
+        {
+          "id": "pool_warning",
+          "label": "Connection share that means pool pressure",
+          "default": 0.8,
+          "placeholder": false,
+          "description": "Connections in use as a share of max_connections above which the pool is under pressure (the SLO's ceiling)."
+        },
+        {
+          "id": "pool_critical",
+          "label": "Connection share that pages",
+          "default": 0.95,
+          "placeholder": false,
+          "description": "Connections in use as a share of max_connections above which the exhaustion rule pages."
+        }
+      ],
+      "slis": [
+        {
+          "id": "database_availability",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Share of the exporter's scrapes in which it reached the server (pg_up).",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "pg_up"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.999,
+            "tier-1": 0.9995
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "good": "sum(pg_up{job=\"${job}\"} == bool 1)",
+          "total": "count(pg_up{job=\"${job}\"})"
+        },
+        {
+          "id": "connection_saturation",
+          "type": "threshold",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Connections in use as a share of max_connections, against a ceiling of 0.8.",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "pg_stat_activity_count",
+            "pg_settings_max_connections"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.995,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "query": "sum(pg_stat_activity_count{job=\"${job}\"}) / max(pg_settings_max_connections{job=\"${job}\"})",
+          "threshold": 0.8,
+          "good_when": "below"
+        },
+        {
+          "id": "transaction_rollback_share",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "ratio",
+          "description": "Rolled-back transactions as a share of all transactions over five minutes, against a ceiling of 0.05.",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "pg_stat_database_xact_rollback",
+            "pg_stat_database_xact_commit"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "query": "(sum(rate(pg_stat_database_xact_rollback{job=\"${job}\"}[5m])) or vector(0))\n/\n(sum(rate(pg_stat_database_xact_commit{job=\"${job}\"}[5m])) + sum(rate(pg_stat_database_xact_rollback{job=\"${job}\"}[5m])) > 0)",
+          "threshold": 0.05,
+          "good_when": "below"
+        },
+        {
+          "id": "deadlocks",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "per_second",
+          "description": "Deadlocks per second over five minutes, against a ceiling of 0.01 (one in a hundred seconds).",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "pg_stat_database_deadlocks"
+          ],
+          "objectives": {
+            "tier-3": 0.999,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "query": "sum(rate(pg_stat_database_deadlocks{job=\"${job}\"}[5m])) or vector(0)",
+          "threshold": 0.01,
+          "good_when": "below"
+        }
+      ],
+      "sliCountByTier": {
+        "tier-3": 2,
+        "tier-2": 3,
+        "tier-1": 4
+      },
+      "alerts": [
+        {
+          "name": "PostgreSQLConnectionsExhausted",
+          "minTier": "tier-3",
+          "summary": "PostgreSQL connections nearly exhausted",
+          "severities": {
+            "tier-3": "SEV2",
+            "tier-2": "SEV1",
+            "tier-1": "SEV1"
+          }
+        }
+      ],
+      "alertCountByTier": {
+        "tier-3": 1,
+        "tier-2": 1,
+        "tier-1": 1
       },
       "tiers": [
         "tier-3",
@@ -1582,6 +2220,404 @@
         "tier-2": 6,
         "tier-1": 8
       },
+      "alerts": [],
+      "alertCountByTier": {
+        "tier-3": 0,
+        "tier-2": 0,
+        "tier-1": 0
+      },
+      "tiers": [
+        "tier-3",
+        "tier-2",
+        "tier-1"
+      ]
+    },
+    {
+      "id": "rabbitmq",
+      "kind": "product",
+      "title": "RabbitMQ",
+      "product": "rabbitmq",
+      "version": "1.0.0",
+      "summary": "Broker liveness, queue backlog, consumer presence and resident-memory saturation of a RabbitMQ broker through the rabbitmq_prometheus plugin.",
+      "tags": [
+        "messaging",
+        "broker"
+      ],
+      "evidence": {
+        "status": "upstream-docs",
+        "verifiedOn": null,
+        "sources": [
+          "RabbitMQ documentation, \"Monitoring with Prometheus and Grafana\" — the rabbitmq_prometheus plugin, port 15692, the aggregated /metrics endpoint and the per-object series (rabbitmq_queue_messages, rabbitmq_queue_messages_ready, rabbitmq_queue_consumers), rabbitmq_process_resident_memory_bytes and rabbitmq_resident_memory_limit_bytes, rabbitmq_connections",
+          "docs/SLI_CATALOGUE.md §1.4 — the KrystalineX rules krystalinex.rabbitmq (RabbitMQDown, RabbitMQHighMemory > 80%, RabbitMQNoConsumers, RabbitMQConsumerLag ready > 50) and krystalinex.trading (OrderQueueBackup > 100, OrderQueueCritical > 500), the thresholds taken as defaults",
+          "Prometheus documentation, \"Jobs and instances\" — up{job} for the scrape target"
+        ],
+        "gaps": [
+          "No publish or delivery latency SLI — the plugin exposes no duration histogram.",
+          "No per-vhost or per-connection SLI; the queue pattern is the only scope."
+        ]
+      },
+      "params": [
+        {
+          "id": "job",
+          "label": "Broker scrape job",
+          "default": "rabbitmq",
+          "placeholder": false,
+          "description": "The job label of the rabbitmq_prometheus scrape."
+        },
+        {
+          "id": "target",
+          "label": "Broker metrics target",
+          "default": "rabbitmq:15692",
+          "placeholder": true,
+          "description": "host:port of the broker's rabbitmq_prometheus endpoint."
+        },
+        {
+          "id": "queue_pattern",
+          "label": "Queues to watch (regex)",
+          "default": ".*",
+          "placeholder": false,
+          "description": "The queue names the backlog and consumer SLIs read, as a regex; an application pack narrows it to its own queues."
+        },
+        {
+          "id": "backlog_warning",
+          "label": "Ready messages that mean a backlog",
+          "default": 100,
+          "placeholder": false,
+          "description": "Ready (unacknowledged, undelivered) messages on one watched queue above which the backlog is a warning."
+        },
+        {
+          "id": "backlog_critical",
+          "label": "Ready messages that mean a critical backlog",
+          "default": 500,
+          "placeholder": false,
+          "description": "Ready messages on one watched queue above which the backlog pages."
+        }
+      ],
+      "slis": [
+        {
+          "id": "broker_availability",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Share of the broker's scrape targets that answered the last scrape (up for the rabbitmq_prometheus job).",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "up"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "good": "sum(up{job=\"${job}\"} == bool 1)",
+          "total": "count(up{job=\"${job}\"})"
+        },
+        {
+          "id": "queue_backlog",
+          "type": "threshold",
+          "minTier": "tier-3",
+          "unit": "messages",
+          "description": "Ready messages on the most backed-up watched queue, against a ceiling of 100 (the warning rung; the alert rule pages at the critical one).",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "rabbitmq_queue_messages_ready"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.995,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "query": "max(rabbitmq_queue_messages_ready{queue=~\"${queue_pattern}\"}) or vector(0)",
+          "threshold": 100,
+          "good_when": "below"
+        },
+        {
+          "id": "consumer_presence",
+          "type": "ratio",
+          "minTier": "tier-2",
+          "unit": "ratio",
+          "description": "Share of the watched queues that have at least one consumer.",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "rabbitmq_queue_consumers"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "good": "sum(rabbitmq_queue_consumers{queue=~\"${queue_pattern}\"} > bool 0)",
+          "total": "count(rabbitmq_queue_consumers{queue=~\"${queue_pattern}\"})"
+        },
+        {
+          "id": "memory_saturation",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "ratio",
+          "description": "The broker's resident memory as a share of its high-watermark limit, against a ceiling of 0.8.",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "rabbitmq_process_resident_memory_bytes",
+            "rabbitmq_resident_memory_limit_bytes"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "query": "max(rabbitmq_process_resident_memory_bytes / rabbitmq_resident_memory_limit_bytes) or vector(0)",
+          "threshold": 0.8,
+          "good_when": "below"
+        }
+      ],
+      "sliCountByTier": {
+        "tier-3": 2,
+        "tier-2": 4,
+        "tier-1": 4
+      },
+      "alerts": [
+        {
+          "name": "RabbitMQQueueBacklogCritical",
+          "minTier": "tier-3",
+          "summary": "Queue {{ $labels.queue }} critically backed up",
+          "severities": {
+            "tier-3": "SEV2",
+            "tier-2": "SEV1",
+            "tier-1": "SEV1"
+          }
+        },
+        {
+          "name": "RabbitMQQueueNoConsumers",
+          "minTier": "tier-3",
+          "summary": "No consumer on queue {{ $labels.queue }}",
+          "severities": {
+            "tier-3": "SEV2",
+            "tier-2": "SEV1",
+            "tier-1": "SEV1"
+          }
+        }
+      ],
+      "alertCountByTier": {
+        "tier-3": 2,
+        "tier-2": 2,
+        "tier-1": 2
+      },
+      "tiers": [
+        "tier-3",
+        "tier-2",
+        "tier-1"
+      ]
+    },
+    {
+      "id": "redis",
+      "kind": "product",
+      "title": "Redis",
+      "product": "redis",
+      "version": "1.0.0",
+      "summary": "Cache liveness, memory saturation, keyspace hit ratio, eviction rate and client saturation of a Redis instance through redis_exporter.",
+      "tags": [
+        "cache",
+        "datastore"
+      ],
+      "evidence": {
+        "status": "upstream-docs",
+        "verifiedOn": null,
+        "sources": [
+          "oliver006/redis_exporter README — redis_up, redis_memory_used_bytes, redis_memory_max_bytes (0 when maxmemory is unset), redis_keyspace_hits_total, redis_keyspace_misses_total, redis_evicted_keys_total, redis_connected_clients, redis_rejected_connections_total",
+          "docs/SLI_CATALOGUE.md §1.4 krystalinex.redis — RedisDown, RedisMemoryHigh (> 85%), RedisConnectedClientsHigh (> 100), RedisKeyEviction (rate > 0)"
+        ],
+        "gaps": [
+          "No command-latency SLI — redis_commands_duration_seconds_total is a sum, not a histogram; a p99 needs the client's own metric.",
+          "No replication or persistence SLI (redis_master_link_up, rdb_last_save) — topology the entry cannot assume."
+        ]
+      },
+      "params": [
+        {
+          "id": "job",
+          "label": "Exporter scrape job",
+          "default": "redis",
+          "placeholder": false,
+          "description": "The job label of the redis_exporter scrape."
+        },
+        {
+          "id": "target",
+          "label": "Exporter target",
+          "default": "redis-exporter:9121",
+          "placeholder": true,
+          "description": "host:port of the redis_exporter endpoint."
+        },
+        {
+          "id": "client_ceiling",
+          "label": "Connected clients that mean a leak",
+          "default": 100,
+          "placeholder": false,
+          "description": "Connected clients above which the client-saturation SLI counts the instance as saturated — size it from the application's pool sizes."
+        }
+      ],
+      "slis": [
+        {
+          "id": "cache_availability",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Share of the exporter's scrapes in which it reached the instance (redis_up).",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "redis_up"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "good": "sum(redis_up{job=\"${job}\"} == bool 1)",
+          "total": "count(redis_up{job=\"${job}\"})"
+        },
+        {
+          "id": "memory_saturation",
+          "type": "threshold",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Used memory as a share of maxmemory on the fullest instance that has a limit, against a ceiling of 0.85.",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "redis_memory_used_bytes",
+            "redis_memory_max_bytes"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.995,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "query": "max(redis_memory_used_bytes{job=\"${job}\"} / (redis_memory_max_bytes{job=\"${job}\"} > 0)) or vector(0)",
+          "threshold": 0.85,
+          "good_when": "below"
+        },
+        {
+          "id": "hit_ratio",
+          "type": "ratio",
+          "minTier": "tier-2",
+          "unit": "ratio",
+          "description": "Keyspace hits as a share of all keyspace lookups over five minutes.",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "redis_keyspace_hits_total",
+            "redis_keyspace_misses_total"
+          ],
+          "objectives": {
+            "tier-3": 0.9,
+            "tier-2": 0.9,
+            "tier-1": 0.95
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "good": "sum(rate(redis_keyspace_hits_total{job=\"${job}\"}[5m])) or vector(0)",
+          "total": "sum(rate(redis_keyspace_hits_total{job=\"${job}\"}[5m])) + sum(rate(redis_keyspace_misses_total{job=\"${job}\"}[5m]))"
+        },
+        {
+          "id": "eviction_rate",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "per_second",
+          "description": "Keys evicted per second over five minutes, against a ceiling of 1.",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "redis_evicted_keys_total"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "query": "sum(rate(redis_evicted_keys_total{job=\"${job}\"}[5m])) or vector(0)",
+          "threshold": 1,
+          "good_when": "below"
+        },
+        {
+          "id": "client_saturation",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "clients",
+          "description": "Connected clients on the busiest instance, against a ceiling of 100.",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "redis_connected_clients"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          },
+          "query": "max(redis_connected_clients{job=\"${job}\"}) or vector(0)",
+          "threshold": 100,
+          "good_when": "below"
+        }
+      ],
+      "sliCountByTier": {
+        "tier-3": 2,
+        "tier-2": 4,
+        "tier-1": 5
+      },
+      "alerts": [
+        {
+          "name": "RedisRejectedConnections",
+          "minTier": "tier-2",
+          "summary": "Redis is refusing connections",
+          "severities": {
+            "tier-3": "SEV2",
+            "tier-2": "SEV2",
+            "tier-1": "SEV2"
+          }
+        }
+      ],
+      "alertCountByTier": {
+        "tier-3": 0,
+        "tier-2": 1,
+        "tier-1": 1
+      },
       "tiers": [
         "tier-3",
         "tier-2",
@@ -1748,6 +2784,12 @@
         "tier-2": 2,
         "tier-1": 4
       },
+      "alerts": [],
+      "alertCountByTier": {
+        "tier-3": 0,
+        "tier-2": 0,
+        "tier-1": 0
+      },
       "tiers": [
         "tier-3",
         "tier-2",
@@ -1905,6 +2947,53 @@
       "sliCountByTier": {
         "tier-3": 1,
         "tier-2": 2,
+        "tier-1": 4
+      },
+      "alerts": [
+        {
+          "name": "NoTraffic",
+          "minTier": "tier-3",
+          "summary": "${job} received no requests for ten minutes",
+          "severities": {
+            "tier-3": "SEV3",
+            "tier-2": "SEV3",
+            "tier-1": "SEV3"
+          }
+        },
+        {
+          "name": "TrafficSpike",
+          "minTier": "tier-2",
+          "summary": "Traffic to ${job} is five times the previous hour's",
+          "severities": {
+            "tier-3": "SEV3",
+            "tier-2": "SEV3",
+            "tier-1": "SEV3"
+          }
+        },
+        {
+          "name": "TrafficFlood",
+          "minTier": "tier-2",
+          "summary": "Possible flood of ${job} — ten times the previous hour's traffic",
+          "severities": {
+            "tier-3": "SEV2",
+            "tier-2": "SEV2",
+            "tier-1": "SEV2"
+          }
+        },
+        {
+          "name": "ClientErrorSpike",
+          "minTier": "tier-1",
+          "summary": "Unusual spike in 4xx responses from ${job}",
+          "severities": {
+            "tier-3": "SEV3",
+            "tier-2": "SEV3",
+            "tier-1": "SEV3"
+          }
+        }
+      ],
+      "alertCountByTier": {
+        "tier-3": 1,
+        "tier-2": 3,
         "tier-1": 4
       },
       "tiers": [
@@ -2074,6 +3163,331 @@
         "tier-3": 1,
         "tier-2": 2,
         "tier-1": 4
+      },
+      "alerts": [
+        {
+          "name": "NoConsumption",
+          "minTier": "tier-3",
+          "summary": "${job} consumed nothing for ten minutes",
+          "severities": {
+            "tier-3": "SEV3",
+            "tier-2": "SEV3",
+            "tier-1": "SEV3"
+          }
+        }
+      ],
+      "alertCountByTier": {
+        "tier-3": 1,
+        "tier-2": 1,
+        "tier-1": 1
+      },
+      "tiers": [
+        "tier-3",
+        "tier-2",
+        "tier-1"
+      ]
+    },
+    {
+      "id": "service-base",
+      "kind": "archetype",
+      "title": "Service base (every service)",
+      "product": null,
+      "version": "1.0.0",
+      "summary": "Probe liveness of the scrape target as an SLO, plus the security-event rules every service with an authentication surface needs — brute force, credential stuffing, rate-limit abuse, token enumeration, high-severity events — at a depth that grows with the tier.",
+      "tags": [
+        "archetype",
+        "base",
+        "security",
+        "probe"
+      ],
+      "evidence": {
+        "status": "upstream-docs",
+        "verifiedOn": null,
+        "sources": [
+          "Prometheus documentation, \"Jobs and instances\" — the `up` series Prometheus writes per scrape target (1 when the scrape succeeded, 0 otherwise); the only series every scraped service has",
+          "docs/SLI_CATALOGUE.md §1.4 \"krystalinex.security\" and §3 \"Events · security\" — the ten security-event rules of the KrystalineX rule file (counter kx_security_events_total, labels event_type and severity), generalised here with the counter's name and the event_type values as parameters",
+          "Google SRE Workbook, \"Alerting on SLOs\" — the probe (black-box) SLI beside the request (white-box) SLI, and why both are needed"
+        ],
+        "gaps": [
+          "No request SLI — the service's shape (HTTP, consumer) is the archetype composed beside this one.",
+          "No trace- or log-derived SLI — the telemetry pipeline's health is the otel-collector and loki entries'; a trace-derived RED set needs span metrics the base cannot assume.",
+          "The security-event counter's existence is assumed, never verified — a service without one sees the tier-1 absence rule fire on day one, which is the point."
+        ]
+      },
+      "params": [
+        {
+          "id": "job",
+          "label": "Service job label",
+          "default": "${service}",
+          "placeholder": false,
+          "description": "The `job` label of the service's scrape target (the resource's service.name after the OTLP → Prometheus translation, or the scrape job's name)."
+        },
+        {
+          "id": "security_events_metric",
+          "label": "Security-event counter",
+          "default": "security_events_total",
+          "placeholder": true,
+          "description": "The counter the service increments once per security event, with labels event_type (the service's own taxonomy) and severity (low | medium | high | critical)."
+        },
+        {
+          "id": "login_failed_event",
+          "label": "Failed-login event_type",
+          "default": "login_failed",
+          "placeholder": false,
+          "description": "The event_type value of a failed login attempt."
+        },
+        {
+          "id": "second_factor_failed_event",
+          "label": "Failed second-factor event_type",
+          "default": "2fa_failed",
+          "placeholder": false,
+          "description": "The event_type value of a failed second-factor (TOTP, email code) check."
+        },
+        {
+          "id": "token_failed_events",
+          "label": "Token-failure event_types (regex)",
+          "default": "invalid_token|token_expired",
+          "placeholder": false,
+          "description": "The event_type values of a rejected or expired token, as a regex."
+        },
+        {
+          "id": "rate_limit_events",
+          "label": "Rate-limit event_types (regex)",
+          "default": ".*rate_limit.*",
+          "placeholder": false,
+          "description": "The event_type values written when a rate limit triggers, as a regex."
+        },
+        {
+          "id": "brute_force_count",
+          "label": "Failed logins in 5 minutes that mean brute force",
+          "default": 20,
+          "placeholder": false,
+          "description": "Failed login attempts in five minutes above which the brute-force rule fires."
+        },
+        {
+          "id": "credential_stuffing_count",
+          "label": "Failed logins in 15 minutes that mean credential stuffing",
+          "default": 100,
+          "placeholder": false,
+          "description": "Failed login attempts in fifteen minutes above which the credential-stuffing rule fires."
+        },
+        {
+          "id": "second_factor_count",
+          "label": "Second-factor failures in 10 minutes",
+          "default": 10,
+          "placeholder": false,
+          "description": "Failed second-factor checks in ten minutes above which the rule fires."
+        },
+        {
+          "id": "rate_limit_abuse_count",
+          "label": "Rate-limit events in 5 minutes that mean abuse",
+          "default": 50,
+          "placeholder": false,
+          "description": "Rate-limit events in five minutes above which the abuse rule fires."
+        },
+        {
+          "id": "token_flood_count",
+          "label": "Token failures in 5 minutes that mean enumeration",
+          "default": 30,
+          "placeholder": false,
+          "description": "Rejected or expired tokens in five minutes above which the enumeration rule fires."
+        },
+        {
+          "id": "high_severity_count",
+          "label": "High-severity events in 10 minutes that mean an incident",
+          "default": 25,
+          "placeholder": false,
+          "description": "High- or critical-severity security events in ten minutes above which the incident rule fires."
+        }
+      ],
+      "slis": [
+        {
+          "id": "probe_availability",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Share of the service's scrape targets that answered the last scrape (the `up` series Prometheus writes per target of the job).",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "up"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.995,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "good": "sum(up{job=\"${job}\"} == bool 1)",
+          "total": "count(up{job=\"${job}\"})"
+        },
+        {
+          "id": "security_event_pressure",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "events",
+          "description": "High- and critical-severity security events the service emitted in the last ten minutes, against a ceiling of 25 — the rate at which an incident is in progress rather than noise.",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "security_events_total"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "query": "sum(increase(${security_events_metric}{job=\"${job}\",severity=~\"high|critical\"}[10m])) or vector(0)",
+          "threshold": 25,
+          "good_when": "below"
+        },
+        {
+          "id": "instances_down",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "instances",
+          "description": "Scrape targets of the service's job that did not answer the last scrape, against a ceiling of 0 — a tier-1 service runs redundantly, and every instance down is one failure closer to an outage.",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "up"
+          ],
+          "objectives": {
+            "tier-3": 0.999,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "query": "sum(up{job=\"${job}\"} == bool 0) or vector(0)",
+          "threshold": 0.5,
+          "good_when": "below"
+        },
+        {
+          "id": "login_failures",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "events",
+          "description": "Failed login attempts in the last five minutes, against a ceiling of 20 — the brute-force threshold as an objective, so sustained guessing burns a budget instead of only paging.",
+          "evidence": "upstream-docs",
+          "metrics": [
+            "security_events_total"
+          ],
+          "objectives": {
+            "tier-3": 0.999,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          },
+          "query": "sum(increase(${security_events_metric}{job=\"${job}\",event_type=\"${login_failed_event}\"}[5m])) or vector(0)",
+          "threshold": 20,
+          "good_when": "below"
+        }
+      ],
+      "sliCountByTier": {
+        "tier-3": 1,
+        "tier-2": 2,
+        "tier-1": 4
+      },
+      "alerts": [
+        {
+          "name": "ScrapeTargetDown",
+          "minTier": "tier-3",
+          "summary": "A scrape target of ${job} is down",
+          "severities": {
+            "tier-3": "SEV2",
+            "tier-2": "SEV2",
+            "tier-1": "SEV1"
+          }
+        },
+        {
+          "name": "BruteForceAttack",
+          "minTier": "tier-2",
+          "summary": "Potential brute-force attack on ${job}",
+          "severities": {
+            "tier-3": "SEV1",
+            "tier-2": "SEV1",
+            "tier-1": "SEV1"
+          }
+        },
+        {
+          "name": "CredentialStuffingAttack",
+          "minTier": "tier-2",
+          "summary": "Credential stuffing in progress on ${job}",
+          "severities": {
+            "tier-3": "SEV1",
+            "tier-2": "SEV1",
+            "tier-1": "SEV1"
+          }
+        },
+        {
+          "name": "RateLimitAbuse",
+          "minTier": "tier-2",
+          "summary": "Rate limits on ${job} triggering aggressively",
+          "severities": {
+            "tier-3": "SEV2",
+            "tier-2": "SEV2",
+            "tier-1": "SEV2"
+          }
+        },
+        {
+          "name": "HighSeveritySecurityEvents",
+          "minTier": "tier-2",
+          "summary": "Security incident in progress on ${job}",
+          "severities": {
+            "tier-3": "SEV1",
+            "tier-2": "SEV1",
+            "tier-1": "SEV1"
+          }
+        },
+        {
+          "name": "SecondFactorFailures",
+          "minTier": "tier-1",
+          "summary": "Multiple second-factor failures on ${job}",
+          "severities": {
+            "tier-3": "SEV1",
+            "tier-2": "SEV1",
+            "tier-1": "SEV1"
+          }
+        },
+        {
+          "name": "TokenEnumerationAttack",
+          "minTier": "tier-1",
+          "summary": "Token validation flood on ${job}",
+          "severities": {
+            "tier-3": "SEV2",
+            "tier-2": "SEV2",
+            "tier-1": "SEV2"
+          }
+        },
+        {
+          "name": "SecurityEventsAbsent",
+          "minTier": "tier-1",
+          "summary": "${job} emits no security events",
+          "severities": {
+            "tier-3": "SEV3",
+            "tier-2": "SEV3",
+            "tier-1": "SEV3"
+          }
+        }
+      ],
+      "alertCountByTier": {
+        "tier-3": 1,
+        "tier-2": 5,
+        "tier-1": 8
       },
       "tiers": [
         "tier-3",
