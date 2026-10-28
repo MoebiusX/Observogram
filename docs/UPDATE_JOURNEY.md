@@ -2015,6 +2015,68 @@ directory's volume. A volume mounted in a folder under the root, or on the
 root, is refused as before. Tests: 1518 → 1519 (one more in
 `server/test-store-ops.mjs`).
 
+### Overview — the simplified front door (2026-10-27)
+
+Investors and partners understood the concept and not the UI: every screen
+asked them to learn layers, artefact ids, evidence states and compile targets
+before it said whether a service is well observed. The maintainer decided:
+Overview is the first-run default and Expert the opt-in; the one headline
+number is the diagnostic grade; existing services only; a polished demo over
+breadth. Overview is one screen — one service, three answers: the grade letter
+with its ladder name (the journey's last run when it graded this pack against
+live, else the pack alone, and the line under it says which); one of four
+words (*Never checked · Unchanged · Changed · Unreachable*) with one timed
+sentence from the service's journey, and **Check again** running the journey
+in the room; one next step, one button, at most three plain items. Nothing is
+computed anew; what cannot be known is said. Expert is today's studio
+untouched, one switch away; the choice is the browser's (`studioUiMode.v1`,
+`?mode=`), and the first run opens Overview only when the services table has
+rows, so the empty studio boots as before. A journey is matched to its service
+by the pack it reads, not by its scope string (which is also the diff's
+service scope). `npm run demo` seeds a populated studio from the maintainer's
+real service and the public MCP. The browser suites that pre-seed services
+now need `studioUiMode.v1 = 'expert'` or `/?mode=expert` to see the home — a
+declared change, skipped where Playwright is absent. Polished the night
+before the room (2026-10-28): *Why this grade* under the letter — the seven
+criteria in plain words with a yes / partly / no each and the sum with the
+next band, offered only when it adds up to the letter; the picker lists the
+rows with a pack of their own; `?theme=` is remembered like `?mode=`; the
+demo prints the address to open and runs the check again at start when the
+last one is old, so the first Check in the room meets a warm endpoint; the
+three answers and an open *Why* fit a 768 px-tall screen. That warm check
+caught the stack behind the public MCP restarting — one check half blind
+(a probe family newly failed: C, 86 declared-not-live), the next a 503 —
+so a live side that showed less than the check before now reads as exactly
+that, never as a count, with the letter back on the repository and Check
+again as the one thing to do. Tests: 1487 → 1511
+(a new file, `tools/test-overview-model.mjs`: the mode rule, the service and
+journey matching, every state's exact words, the one-primary rule, the
+vocabulary guard, the renderer over a DOM shim).
+
+### Overview as a board (2026-10-28)
+
+The three sentences alone read to the maintainer as a different, lesser
+product than Expert — "naively simplistic", not doing justice to the
+engineering — and his OBSERVA mockup (a layer tomogram, a comparison under
+two plain questions, the delta to apply) is Observogram's own journey drawn
+as pictures. Overview now draws it, from the engine's real numbers only.
+Discover: the stack top down with ten cells per layer, lit where the
+repository declares that kind of signal, with the counts; the four layers'
+average is the Comprehensive criterion, so the picture and *Why this grade*
+agree. Diagnose: the letter as a shield, the specification's required rules
+as a bar (a new read of the conformance route), the seven criteria open on a
+tall monitor; then the alignment as a ring with the four counts and the
+promises that hold, withheld with the reason when nothing live was seen
+whole. Remediate: to add · to update · to review, and the one next step.
+Each column opens its Expert view bound to the service, so the two faces
+are one product. The simple layout stays as the fallback (`?layout=simple`,
+remembered), drawn by the renderer itself should the board fail. Nothing
+the mockup shows without an engine behind it (cost and ingestion, a quality
+trend, a 3-D tomogram) is drawn. Tests: 1511 → 1518 (the stack and its
+counts, the rules, the fidelity and the changes and when they are withheld,
+the layout rule, the board's markup with its one primary across every
+state, the links, the fallback).
+
 ### Follow-up: the studio shell under a dot-directory
 
 The unbranded shell was answered by `res.sendFile` with the absolute path of

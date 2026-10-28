@@ -52,6 +52,40 @@ Observogram treats observability as a compiled contract. The pack is the source
 of truth. Native artifacts are generated from it. Live systems are scanned back
 into pack shape. The diff between declared and live is the operational truth.
 
+## Overview — The Front Door
+
+The studio has two faces. **Overview** is the one most people see first: one
+service at a time, the machine drawn as three columns under the words Expert
+uses, every number the engine's own —
+
+- **Discover — What is in place.** The stack top down — user experience,
+  application, platform, infrastructure — each layer with ten cells, one per
+  kind of signal, lit where the repository declares some and carrying the
+  count; *7 of 10 kinds*; the pack's own layers as counts under it.
+- **Diagnose — Are the right signals in place?** The diagnostic grade as a
+  letter in a shield with its ladder name (*Industrial grade*), whether it
+  was graded against live or from the repository alone, the specification's
+  required rules as a bar, and the seven criteria behind the letter as one
+  plain sentence each with a yes, a partly or a no. **Can you trust what the
+  signals show?** The alignment as a ring, four counts (*252 match · 5 run
+  differently · 38 not running live · 30 live only*), the promises that hold
+  end to end, and one of four words — *Never checked · Unchanged · Changed ·
+  Unreachable* — with a timed sentence from the service's saved journey:
+  *Checked 2 hours ago against live — 43 things differ from what the
+  repository declares.* **Check again** runs the journey against the live
+  platform while you watch.
+- **Remediate — What to change.** *38 to add · 5 to update · 30 to review*,
+  and one next step with one button.
+
+Each column opens its Expert view bound to the service. **Expert** is
+everything below — Discover · Diagnose · Remediate, Compare, Build, the
+Advanced tools — one switch away in the header, unchanged. A browser opens on
+Overview the first time it finds a service to show, and on the home when the
+workspace is empty; the choice is remembered per browser (`?mode=overview` or
+`?mode=expert` sets it), and so is the layout: `?layout=simple` is the three
+sentences alone, the fallback. `npm run demo` seeds a populated studio on
+port 8010 (see *Run The Demo* below).
+
 ## Main Journey
 
 The first decision is about the pack, because a service may already exist without
@@ -1277,6 +1311,34 @@ and `npm run build:stamp` refuses it (exit 2) until the history is there —
 `fetch-depth: 0` in the workflow, `git fetch --unshallow` locally.
 
 ## Common Operations
+
+### Run The Demo
+
+```bash
+npm run demo
+```
+
+`tools/demo-studio.mjs` starts the studio in the open posture on its own
+workspace (`.observogram-demo`, port 8010, `OBSERVOGRAM_MCP_ORIGINS` set for
+the public MCP) and seeds it once over its own HTTP API, so the first page is
+Overview on a real service, never an empty studio: the repository pack
+`examples/krystaline-repo-carlos.pack.yaml`, the MCP endpoint
+`krystaline-public` (https://www.krystaline.io/mcp/public), a live draft from
+it (drafted twice when a cold endpoint lost probe families), and a saved
+journey `krystaline` between the two, run once. A second start finds
+everything in place and seeds nothing; it runs the check again when the last
+one is older than ten minutes, so the page opens on *Checked a few minutes
+ago* and the first Check meets a warm endpoint (`OBSERVOGRAM_DEMO_NO_WARM=1`
+skips it, `OBSERVOGRAM_DEMO_WARM_AFTER_MIN` moves the bar). The ready line
+prints the address to open, `/?mode=overview&theme=dark&layout=board`: it
+forces Overview, the board and the dark theme, and the browser remembers all
+three, so no fresh profile is needed; a second line gives the same page as
+the three sentences alone (`layout=simple`, the fallback layout). `OBSERVOGRAM_DEMO_SKIP_LIVE=1` seeds
+the repository pack only; `OBSERVOGRAM_DEMO_REDRAFT=1` drafts the live pack
+again; `PORT` and `OBSERVOGRAM_DEMO_MCP_URL` move the port and the endpoint;
+`npm run demo -- --port 8020 --workspace .observogram-demo-board` runs a
+second demo beside the first on its own workspace. The script is
+[docs/OVERVIEW_DEMO.md](docs/OVERVIEW_DEMO.md).
 
 ### Scan A Repo
 
@@ -3163,6 +3225,7 @@ deploy/k8s/
 - [`docs/HANDOVER.md`](docs/HANDOVER.md) - hand-over note for the next session: where the three repos stand, the maintainer's working rules, the backlog and the known debts (2026-09-24)
 - [`docs/STORE_PLAN.md`](docs/STORE_PLAN.md) - the embedded `node:sqlite` store for users, orgs, services, environments and the audit: schema, import from today's files, roles, slices and gates (decisions ratified 2026-09-24)
 - [`docs/NEURON_FLEET_PLAN.md`](docs/NEURON_FLEET_PLAN.md) - the fleet in Neuron: one service registry per org (Kubernetes Services, Backstage or Consul), live SLO state through the MCP, the SLO ledger and the fleet map (proposed, for ratification)
+- [`docs/OVERVIEW_DEMO.md`](docs/OVERVIEW_DEMO.md) - the 90-second Overview demo: pre-flight, the scripted path, the fallback when live is down, the questions that come
 - [`docs/USER_JOURNEY.md`](docs/USER_JOURNEY.md) - product journey and design invariants
 - [`docs/DRY_RUN.md`](docs/DRY_RUN.md) - dry-run script and readiness checklist
 - [`docs/RELEASE_READINESS.md`](docs/RELEASE_READINESS.md) - V1 release gate

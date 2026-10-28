@@ -43,7 +43,7 @@ import { openDrawer, closeDrawer } from './drawer.mjs';
 import { renderDiscoverDashboard, renderLayersView, renderCard, cardKey } from './layers-view.mjs';
 import { renderAtlasView } from './atlas-view.mjs';
 import { renderNeuronView } from './neuron-view.mjs';
-import { renderBenchmarkView, renderComparePicker, renderTraceabilityView, refreshDiff, loadDiff, LENS_PRODUCTS, activeDiffScopeMode } from './compare-view.mjs';
+import { renderBenchmarkView, renderComparePicker, renderTraceabilityView, refreshDiff, loadDiff, LENS_PRODUCTS, activeDiffScopeMode, buildAssessmentDecision } from './compare-view.mjs';
 import { catalogToDeployManifest } from './artifact-model.mjs';
 import { computeDeployTransitions } from './verify-deploy.mjs';
 import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-view.mjs';
@@ -108,6 +108,9 @@ import { revealTodo } from './build-atoms.mjs';
 import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from './build-label.mjs';
 import { loadBrand } from './brand.mjs';
 import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
+import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS } from './overview-model.mjs';
+import { loadOverviewFacts, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
+import { renderOverview, COMPACT_SCREEN_QUERY } from './overview-view.mjs';
 
 // The brand (studio/brand.mjs): kicked off here, at module top level, so the
 // one fetch (/lib/brand.mjs, modulepreloaded by the shell) overlaps the
@@ -884,6 +887,9 @@ export function renderMainView() {
     return;
   }
   // Settings (STORE_PLAN §6 item 3, slice 6b): the org's environments and MCP endpoints.
+  // Overview (the simplified front door): one service, three answers, read
+  // from the engines; Expert — every screen below — is one switch away.
+  if (state.mode === 'overview') { renderOverviewHost(view); return; }
   if (state.mode === 'settings') { renderSettingsHost(view, auditDrafts); return; }
   // The service page (STORE_PLAN §6, slice 6a): one record, its environments as tabs.
   if (state.mode === 'service') { renderServicePageHost(view); return; }
@@ -1395,7 +1401,7 @@ function routeTo(id) {
     openServiceIn(id, { serviceId: state.serviceId, env: state.serviceEnv });
     return;
   }
-  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings') state.mode = 'single';
+  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings' || state.mode === 'overview') state.mode = 'single';
   state.view = id;
   state.activeCardKey = null;
   state.activeLayer = ({ compile: 'COMPILE', conformance: 'CONF', schema: 'CONF', atlas: 'ATLAS', layers: state.layerFilter !== 'all' ? state.layerFilter : 'L1' })[id] || 'L1';
@@ -1478,6 +1484,10 @@ function installObservaChrome(chrome) {
       <nav class="observa-tabs" role="tablist" aria-label="Primary"></nav>
 
       <div class="observa-actions" aria-label="Advanced tools and account">
+        <div class="observa-ui-mode og-seg" role="group" aria-label="Studio mode">
+          <button type="button" class="og-btn" data-ui-mode="overview" aria-pressed="false" title="One grade, one time, one next step">Overview</button>
+          <button type="button" class="og-btn" data-ui-mode="expert" aria-pressed="true" title="Every artefact, check and operation">Expert</button>
+        </div>
         <div class="observa-adv-wrap">
           <button type="button" class="observa-action observa-adv-toggle"
                   aria-haspopup="true" aria-expanded="false" aria-controls="observa-adv-menu"
@@ -1498,6 +1508,10 @@ function installObservaChrome(chrome) {
             <button type="button" class="observa-adv-item" role="menuitem" data-action="settings">
               <span class="observa-adv-item-label">Settings</span>
               <span class="observa-adv-item-sub">environments, MCP endpoints, members, the audit, users, organisations, the join role…</span>
+            </button>
+            <button type="button" class="observa-adv-item" role="menuitem" data-action="overview">
+              <span class="observa-adv-item-label">Overview</span>
+              <span class="observa-adv-item-sub">the simplified view: one service, its grade, whether it still holds live, the next step</span>
             </button>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="mcp">
               <span class="observa-adv-item-label">Live MCP connection</span>
@@ -1582,6 +1596,7 @@ function installObservaChrome(chrome) {
       const action = item.dataset.action;
       if (action === 'about') { openAboutModal(); return; }
       if (action === 'settings') { enterSettings(null); return; }
+      if (action === 'overview') { setUiMode('overview'); enterOverview(state.serviceId ?? state.overviewServiceId, state.serviceEnv ?? state.overviewEnv); return; }
       // Admin tools proxy to the header's original controls. Deferred, so
       // this click's own document-level outside-click handlers (the MCP
       // panel closes on any click outside it) run before the panel opens.
@@ -1636,7 +1651,7 @@ function paintObservaActiveTab() {
   // The landing/reset hero is NOT a tab — it's the pre-workspace start
   // screen. Clearing the active marker there is what keeps Discover from
   // "being" the landing hero: you only light a tab once you're working.
-  const onLanding = state.mode === 'home' || state.mode === 'service' || state.mode === 'settings';
+  const onLanding = state.mode === 'home' || state.mode === 'service' || state.mode === 'settings' || state.mode === 'overview';
   for (const btn of document.querySelectorAll('.observa-tab')) {
     // A workflow tab is active only when we're NOT in an advanced view
     // and NOT on the landing screen.
@@ -1722,6 +1737,10 @@ async function boot() {
   // once the catalogue answered — so a user in no org never reaches them.
   // Both viewer routes; a bundle's 501 leaves the derived tiles, silently.
   await Promise.all([refreshAccess(), refreshServices()]);
+  // Which face of the studio this browser opens: the ?mode= query, else the
+  // remembered preference, else Overview when there is a service to show.
+  decideUiModeAtBoot();
+  setupUiModeSwitch();
 
   setupUpload();
   setupTheme();
@@ -1775,10 +1794,266 @@ async function boot() {
   // Try to rehydrate from the previous session before falling back to
   // home. Persistence stays suspended until rehydrate finishes so the
   // boot-time mutations don't fire `schedule()` writes.
-  const restored = await rehydrateFromPersistence();
+  // In Overview the snapshot's Expert fields are left as they are for the
+  // next Expert session; only the service Overview showed is read back.
+  const saved = state.uiMode === 'overview' ? persistence.read() : null;
+  const restored = state.uiMode === 'overview'
+    ? await enterOverview(Number.isInteger(saved?.overviewServiceId) ? saved.overviewServiceId : null, typeof saved?.overviewEnv === 'string' ? saved.overviewEnv : null, { rehydrate: true })
+    : await rehydrateFromPersistence();
   persistence.resume();
   if (!restored) goHome();
 }
+
+// ============================================================
+// OVERVIEW — the simplified front door: one service, three answers (how
+// well it is observed · is that still true right now · what to do next).
+// studio/overview-model.mjs words it from the engines, overview-view.mjs
+// draws it, overview-api.mjs reads it; this controller holds the facts and
+// the actions. uiMode ('overview' | 'expert') is the browser's preference
+// (localStorage studioUiMode.v1), decided on the first run from the
+// services table; Expert is today's studio, untouched.
+// ============================================================
+
+const emptyOverviewFacts = () => ({ layered: null, layeredError: null, journeys: null, journeysError: null, journey: null, run: null, runError: null, running: false, startError: null, loaded: false });
+let overviewFacts = emptyOverviewFacts();
+// Bumped by every entry and refresh: a read that settles after the user
+// moved to another service never repaints the wrong one.
+let overviewGeneration = 0;
+// The layout on screen: the board, or the three sentences (?layout=simple).
+let overviewLayout = 'board';
+
+function readUiModePreference() {
+  try { return localStorage.getItem(UI_MODE_KEY); } catch (_) { return null; }
+}
+
+function setUiMode(mode) {
+  if (!UI_MODES.includes(mode)) return;
+  state.uiMode = mode;
+  try { localStorage.setItem(UI_MODE_KEY, mode); } catch (_) { /* private mode: the preference lives for the page */ }
+  paintUiModeSwitch();
+}
+
+// The ?mode= query wins and is remembered; else the preference; else
+// Overview when the services table has rows — the empty studio boots as
+// before, on the home. The layout the same way: ?layout=board|simple wins
+// and is remembered; the board is the default, the simple layout (the three
+// sentences alone) the fallback a hand can reach for.
+function decideUiModeAtBoot() {
+  let query = null, layoutQuery = null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    query = params.get('mode');
+    layoutQuery = params.get('layout');
+  } catch (_) { query = null; layoutQuery = null; }
+  state.uiMode = decideUiMode({ saved: readUiModePreference(), query, hasServices: (state.services?.length || 0) > 0 });
+  if (UI_MODES.includes(query)) { try { localStorage.setItem(UI_MODE_KEY, query); } catch (_) { /* as above */ } }
+  let savedLayout = null;
+  try { savedLayout = localStorage.getItem(OVERVIEW_LAYOUT_KEY); } catch (_) { savedLayout = null; }
+  overviewLayout = decideOverviewLayout({ saved: savedLayout, query: layoutQuery });
+  if (OVERVIEW_LAYOUTS.includes(layoutQuery)) { try { localStorage.setItem(OVERVIEW_LAYOUT_KEY, layoutQuery); } catch (_) { /* as above */ } }
+  paintUiModeSwitch();
+}
+
+// The Overview | Expert switch in the chrome: pressed follows the mode on
+// screen, so Expert reads pressed on every screen but Overview.
+function paintUiModeSwitch() {
+  const seg = document.querySelector('.observa-ui-mode');
+  if (!seg) return;
+  const onOverview = state.mode === 'overview';
+  seg.querySelectorAll('[data-ui-mode]').forEach((b) => {
+    b.setAttribute('aria-pressed', ((b.dataset.uiMode === 'overview') === onOverview) ? 'true' : 'false');
+  });
+}
+
+function setupUiModeSwitch() {
+  // The board reads the screen's height once per paint (the seven criteria
+  // open or behind Why this grade): a window dragged to the other monitor
+  // is repainted when the query flips.
+  try {
+    window.matchMedia?.(COMPACT_SCREEN_QUERY)?.addEventListener?.('change', () => { if (state.mode === 'overview') renderMainView(); });
+  } catch (_) { /* no matchMedia: the first reading stands */ }
+  const seg = document.querySelector('.observa-ui-mode');
+  if (!seg) return;
+  seg.querySelectorAll('[data-ui-mode]').forEach((b) => {
+    b.addEventListener('click', () => {
+      if (b.dataset.uiMode === 'overview') {
+        setUiMode('overview');
+        enterOverview(state.serviceId ?? state.overviewServiceId, state.serviceEnv ?? state.overviewEnv);
+      } else if (state.mode === 'overview') {
+        enterExpert();
+      } else {
+        setUiMode('expert');
+      }
+    });
+  });
+  paintUiModeSwitch();
+}
+
+// The model from the facts on hand: the pack-alone grade is the engine's
+// (computeOverviewDiagnostic), its causes buildAssessmentDecision's; both are
+// computed here, in the DOM world, and handed to the pure model.
+// The posture, the grade and its causes are derived from the layered pack
+// once per pack object: a repaint while a check runs, or after a start
+// error, reuses them (the matrix walks every artefact of the pack).
+let overviewDerived = { layered: null, posture: null, diagnostic: null, diagnosticError: null, decision: null };
+function deriveOverview(f) {
+  if (overviewDerived.layered === f.layered && overviewDerived.layeredError === f.layeredError) return overviewDerived;
+  const d = { layered: f.layered, layeredError: f.layeredError, posture: null, diagnostic: null, diagnosticError: f.layeredError, decision: null };
+  if (f.layered && !d.diagnosticError) {
+    try {
+      d.posture = computeOverviewPosture(f.layered);
+      d.diagnostic = computeOverviewDiagnostic(f.layered, d.posture);
+    } catch (e) { d.diagnosticError = e.message || String(e); }
+  }
+  if (d.diagnostic) { try { d.decision = buildAssessmentDecision({ diagnostic: d.diagnostic }); } catch (_) { d.decision = null; } }
+  overviewDerived = d;
+  return d;
+}
+
+function overviewModel() {
+  const f = overviewFacts;
+  const { posture, diagnostic, diagnosticError, decision } = deriveOverview(f);
+  return buildOverviewModel({
+    services: state.services, servicesStatus: state.servicesStatus, catalog: state.catalog,
+    serviceId: state.overviewServiceId, env: state.overviewEnv, isLiveAggregatePack,
+    pending: !f.loaded,
+    diagnostic, diagnosticError, decision,
+    journeys: f.journeys, journeysError: f.journeysError, run: f.run,
+    running: f.running, startError: f.startError,
+    layout: overviewLayout, cells: posture?.cells || null, layered: f.layered, conformance: f.conformance, conformanceError: f.conformanceError,
+    now: Date.now(), productName: state.brand?.chrome?.name || '',
+  });
+}
+
+function renderOverviewHost(view) {
+  renderOverview(view, overviewModel(), overviewHost);
+}
+
+async function refreshOverviewFacts() {
+  const gen = ++overviewGeneration;
+  const picked = pickOverviewService(state.services, state.catalog, { serviceId: state.overviewServiceId, env: state.overviewEnv, isLiveAggregatePack });
+  if (!picked.service) {
+    overviewFacts = { ...emptyOverviewFacts(), loaded: true };
+    if (state.mode === 'overview') renderMainView();
+    return;
+  }
+  const facts = await loadOverviewFacts({
+    pack: picked.pack, env: picked.env,
+    journeyFor: (journeys) => journeyForService(journeys, { slug: picked.service.slug, env: picked.env, packId: picked.pack?.id || null }),
+  });
+  if (gen !== overviewGeneration) return;
+  overviewFacts = { ...facts, running: false, startError: null, loaded: true };
+  if (state.mode === 'overview') renderMainView();
+}
+
+// Enter Overview on a service (the remembered one, else the first with a
+// pack of its own). With `rehydrate`, nothing to show answers false and the
+// caller falls back to the home.
+async function enterOverview(serviceId = null, env = null, { rehydrate = false } = {}) {
+  const picked = pickOverviewService(state.services, state.catalog, { serviceId: serviceId ?? state.overviewServiceId, env: env ?? state.overviewEnv, isLiveAggregatePack });
+  if (!picked.service && rehydrate) return false;
+  navGeneration++;
+  state.mode = 'overview';
+  state.pack = null;
+  emptyVerdicts();
+  state.packB = null;
+  state.diff = null;
+  state.selectedPackId = null;
+  state.selectedEnv = null;
+  state.conformance = null;
+  state.symbolTable = null;
+  state.compileCatalog = null;
+  state.compileContent = null;
+  state.overviewServiceId = picked.service?.id ?? null;
+  state.overviewEnv = picked.env ?? null;
+  state.selectedService = picked.service?.slug ?? null;
+  closeSettingsEditor({ focus: false });
+  overviewFacts = emptyOverviewFacts();
+  applyModeChrome();
+  paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+  refreshOverviewFacts().catch((e) => { console.error('[overview]', e); });
+  persistence.schedule();
+  return !!picked.service;
+}
+
+// Expert is today's studio: the service page of the service Overview showed,
+// with Discover · Diagnose · Remediate · Build, exactly as it is.
+function enterExpert() {
+  setUiMode('expert');
+  const id = state.overviewServiceId;
+  if (Number.isInteger(id) && findServiceRecord(id)) { enterServicePage(id, state.overviewEnv); return; }
+  goHome();
+}
+
+// The board's columns open Expert's own views, bound to this service and
+// environment: Discover (the layer inventory), Diagnose ("See what to fix",
+// the compliance report), Remediate (compile and deploy the delta).
+function openOverviewView(view) {
+  const id = state.overviewServiceId;
+  const env = state.overviewEnv;
+  setUiMode('expert');
+  if (Number.isInteger(id) && findServiceRecord(id)) { openServiceIn(view, { serviceId: id, env }); return; }
+  goHome();
+}
+const openOverviewDiscover = () => openOverviewView('layers');
+const openOverviewDiagnose = () => openOverviewView('compare');
+const openOverviewRemediate = () => openOverviewView('compile');
+
+// "See the differences": Expert's Neuron on this service's journey — the
+// run whose numbers Overview showed, one click away.
+function openOverviewNeuron() {
+  const name = overviewFacts.journey?.name || null;
+  setUiMode('expert');
+  if (name) state.neuronJourney = name;
+  routeTo('neuron');
+}
+
+// "Check now": run the journey (the server drafts the live side again and
+// compares), then read the new last run. A 502 means the live side did not
+// answer and the server kept a vantage-lost record — the re-read shows it; a
+// refusal to start keeps the previous sentence and names the reason.
+async function runOverviewCheck() {
+  const journey = overviewFacts.journey;
+  if (!journey || overviewFacts.running) return;
+  const gen = overviewGeneration;
+  overviewFacts = { ...overviewFacts, running: true, startError: null };
+  renderMainView();
+  announce(`Checking ${state.selectedService || 'the service'} against live…`);
+  let refused = null;
+  try { await runServiceCheck(journey.name); }
+  catch (e) { if (e?.status !== 502) refused = e?.message || String(e); }
+  if (gen !== overviewGeneration || state.mode !== 'overview') return;
+  if (refused) {
+    overviewFacts = { ...overviewFacts, running: false, startError: refused };
+    renderMainView();
+    announce('The check could not start.');
+    return;
+  }
+  overviewFacts = { ...overviewFacts, running: false };
+  await refreshOverviewFacts();
+  announce('Check finished.');
+  // The repaint replaced the button the user pressed: keyboard focus goes
+  // back to it (or to the next step's button when there is no Check now).
+  if (state.mode === 'overview') {
+    const back = document.querySelector('#layer-view .ov-check') || document.querySelector('#layer-view .ov-next__btn');
+    back?.focus?.({ preventScroll: true });
+  }
+}
+
+const overviewActions = {
+  selectService: (id) => { enterOverview(Number.isInteger(id) ? id : null, null); },
+  selectEnv: (name) => { enterOverview(state.overviewServiceId, typeof name === 'string' ? name : null); },
+  checkNow: runOverviewCheck,
+  openDiscover: openOverviewDiscover,
+  openDiagnose: openOverviewDiagnose,
+  openRemediate: openOverviewRemediate,
+  openNeuron: openOverviewNeuron,
+  expert: enterExpert,
+  retry: async () => { await refreshServices(); await refreshOverviewFacts(); },
+};
+const overviewHost = { renderMainView, renderTabs, overview: overviewActions };
 
 // ============================================================
 // Home / Analyze / Compare mode transitions
@@ -3732,7 +4007,7 @@ function updateObservaServiceChip() {
   if (!chip) return;
   const derived = serviceCatalogue().find(s => s.key === state.selectedService);
   const m = serviceChipModel({ services: state.services, selected: state.selectedService, derivedLabel: derived?.label ?? null });
-  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings' || m.kind === 'none') { chip.hidden = true; return; }
+  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings' || state.mode === 'overview' || m.kind === 'none') { chip.hidden = true; return; }
   const wantTag = m.kind === 'record' ? 'BUTTON' : 'SPAN';
   if (chip.tagName !== wantTag) {
     const next = document.createElement(wantTag.toLowerCase());
@@ -3826,8 +4101,9 @@ function enterCompareMode(aId, aEnv, bId, bEnv) {
 function applyModeChrome() {
   // The BUILD journey hides the pack controls like home does: there is no
   // pack until VERIFY's "Open pack in Discover" (with visible gaps, or without) registers one.
-  const isHome = state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings';
+  const isHome = state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings' || state.mode === 'overview';
   updateObservaServiceChip();
+  paintUiModeSwitch();
   // Under the OBSERVA chrome the pack/env selectors are PINNED as a
   // permanent master row — they are the user's primary controls and
   // must never be hidden by view. Only the legacy (non-chrome) layout
@@ -3952,7 +4228,8 @@ function setupHomeAffordance() {
     legacy.onclick = () => goHome();
   }
   const brand = document.querySelector('.observa-brand');
-  if (brand) brand.addEventListener('click', (e) => { e.preventDefault(); goHome(); });
+  // The brand is "start over": Overview's front door in Overview, home in Expert.
+  if (brand) brand.addEventListener('click', (e) => { e.preventDefault(); if (state.uiMode === 'overview') { enterOverview(); return; } goHome(); });
 }
 
 // ============================================================
