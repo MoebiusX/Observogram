@@ -963,6 +963,10 @@ export function installStaticBackend(config, win = globalThis.window) {
     // (app.css, reskin.css): set the style too.
     const link = doc.getElementById('api-link');
     if (link) { link.hidden = true; link.style.display = 'none'; }
+    // The UPDATE journey registers through the server (POST /api/library/reopen and /update): a bundle has none, so
+    // its door is not drawn — the Build journey's own hand-off already says the bundle registers nothing.
+    const update = doc.getElementById('update-btn');
+    if (update) { update.hidden = true; update.style.display = 'none'; update.setAttribute('data-static-hidden', 'update needs the server'); }
     disableApiMenuItem(doc, win, product);
     mountNotice(doc, win, backend.packCount, product);
   });

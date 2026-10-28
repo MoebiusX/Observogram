@@ -1022,6 +1022,8 @@ const EXPECTED_CLASS = Object.freeze({
   'POST /api/library/instantiate': 'operator',
   'POST /api/library/compile': 'operator',
   'POST /api/library/register': 'operator',
+  'POST /api/library/reopen': 'operator',
+  'POST /api/library/update': 'operator',
   'POST /api/services': 'operator',
   'PATCH /api/services/:id': 'operator',
   'DELETE /api/services/:id': 'operator',
@@ -1517,6 +1519,8 @@ const PROBES = Object.freeze({
   'POST /api/library/instantiate': ['POST', '/api/library/instantiate'],
   'POST /api/library/compile': ['POST', '/api/library/compile'],
   'POST /api/library/register': ['POST', '/api/library/register'],
+  'POST /api/library/reopen': ['POST', '/api/library/reopen'],
+  'POST /api/library/update': ['POST', '/api/library/update'],
   // The services and environments API (STORE_PLAN slice 4): unknown ids
   // (404) and empty bodies (400) — nothing is written.
   'GET /api/services': ['GET', '/api/services'],

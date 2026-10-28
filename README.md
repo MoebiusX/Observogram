@@ -2147,7 +2147,16 @@ values only the team can fill (pager service, chaos target, endpoints) reported 
 todos, never hidden. The same engine drives the studio's Build journey (Define ·
 Compile · Verify, see "Main Journey" above) through `/api/library/*`; the
 contract is [`docs/BUILD_JOURNEY.md`](docs/BUILD_JOURNEY.md) and the entries and
-their evidence bar are in [`library/README.md`](library/README.md).
+their evidence bar are in [`library/README.md`](library/README.md). A pack made
+in Build is not final: **`update`** (the header, beside `export`; or the home's
+*Update a pack you have*) reopens it on the same screen from its own
+annotations, lists the changes since the saved version, shows the saved pack
+beside the pack with the changes and saves the **next version of the same
+pack** — the earlier version kept under it in the picker. A second SLO on an
+SLI, a route and a plain alert rule are *additions* the pack records and the
+engine re-applies after every regenerate
+([`docs/UPDATE_JOURNEY.md`](docs/UPDATE_JOURNEY.md); `POST /api/library/reopen`,
+`POST /api/library/update`, `tools/lib/pack-update.mjs`).
 
 ```bash
 $ node tools/cli.mjs init --list

@@ -27,6 +27,8 @@
  *   POST /api/library/instantiate         Library entries + name/tier/env/owners/params/toggles/overrides/custom → canonical pack, todos, summary, adapted
  *   POST /api/library/compile             { canonical | the instantiate inputs, target } → one compiled artefact, nothing registered
  *   POST /api/library/register            { canonical | the instantiate inputs, source? } → the upload registry (as /api/validate registers)
+ *   POST /api/library/reopen              { id } → the UPDATE journey's Open stage: origin, Build's inputs, additions, exact or what differs (docs/UPDATE_JOURNEY.md)
+ *   POST /api/library/update              { base, canonical, source? } → the pack registered as the next version of `base` (kept under it)
  *
  * Env:
  *   PORT   default 8000
@@ -57,7 +59,8 @@ import {
 } from '../tools/lib/library.mjs';
 import { parsePromqlDependencies as parsePromql } from '../tools/lib/promql-lezer.mjs';
 import { workspaceInfo, writeLivePack, readLivePack, LIVE_PACK_FILE } from './workspace.mjs';
-import { registerPack, uploadsMap, ensureOrgLoaded, touchPack, clearPacks, contentHash, slugify } from './pack-registry.mjs';
+import { registerPack, uploadsMap, ensureOrgLoaded, touchPack, clearPacks, contentHash, slugify, packVersionChains } from './pack-registry.mjs';
+import { rebuildPack, foreignAsAdditions, applyAdditions, additionLabel, artefactLabel, comparePacks, fieldDiff, stampUpdate, packOrigin, MAX_ADDITIONS } from '../tools/lib/pack-update.mjs';
 import {
   listJourneys, loadJourneyDef, runJourney, readJourneyRuns, saveJourneyDef, validateGateStack,
   validateSchedule, validateStackBudget, validateNotify, notifyTargetOf, scrubNotifyError,
@@ -462,7 +465,20 @@ app.get('/api/packs', authorize('GET /api/packs'), (req, res) => {
   // Catalog + in-memory uploads. Uploaded packs lead the list so the
   // picker surfaces them at the top — they're the user's just-created
   // work and most likely what they want to interact with next.
-  const uploads = [...uploadsMap().keys()].map(id => catalogEntryForUpload(id)).filter(Boolean);
+  // The UPDATE journey's versions (docs/UPDATE_JOURNEY.md "What Save does"): a
+  // pack saved as the next version of another carries `previous` (the id it
+  // replaced); the one it replaced reads `superseded` with `head` (the newest
+  // version of the chain), so a picker lists a pack once at its current version
+  // and the earlier ones under it.
+  const chains = packVersionChains();
+  const headOf = new Map();
+  for (const h of chains.heads) for (const e of h.earlier) headOf.set(e, h.id);
+  const uploads = [...uploadsMap().keys()].map(id => catalogEntryForUpload(id)).filter(Boolean).map((entry) => {
+    const previous = uploadsMap().get(entry.id)?.canonical?.metadata?.annotations?.['library.update.previous'] || null;
+    const head = headOf.get(entry.id) || null;
+    // A pack with no lineage reads exactly as before (the static bundle's shim answers the same entry).
+    return { ...entry, ...(previous ? { previous } : {}), ...(head ? { superseded: true, head } : {}) };
+  });
   res.json({ packs: [...uploads, ...PACK_CATALOG.map(catalogEntry)] });
 });
 
@@ -2173,13 +2189,28 @@ function instantiateInputs(body) {
   return { opts: { entries: picked.entries, name: body.name, tier: body.tier, environment: body.environment, owners, params, toggles, overrides, custom } };
 }
 
-/** instantiatePack on a request's inputs: { result } or { errors } — an engine usage error is a 400, never a 500. */
+/**
+ * instantiatePack on a request's inputs: { result } or { errors } — an engine usage error is a 400, never a 500.
+ * `additions` (the UPDATE journey, tools/lib/pack-update.mjs) are applied on top of the generated pack, in
+ * order, and recorded in it; one the pack cannot take comes back as a warning of kind `addition` (never a 500,
+ * never dropped silently) and under `result.additions.refused`.
+ */
 function instantiateFromBody(body) {
   const inputs = instantiateInputs(body);
   if (inputs.errors) return inputs;
   const { entries, ...opts } = inputs.opts;
+  let additions = [];
+  if (body.additions !== undefined && body.additions !== null) {
+    if (!Array.isArray(body.additions)) return { errors: ['additions: expected a list of { kind: slo | route | alert_rule, … }'] };
+    if (body.additions.length > MAX_ADDITIONS) return { errors: [`additions: at most ${MAX_ADDITIONS} (${body.additions.length} given)`] };
+    additions = body.additions;
+  }
   try {
-    return { result: instantiatePack(entries, { ...opts, promql: parsePromql }) };
+    const made = instantiatePack(entries, { ...opts, promql: parsePromql });
+    if (!additions.length) return { result: { ...made, additions: { applied: [], refused: [] } } };
+    const applied = applyAdditions(made.canonical, additions);
+    const warnings = [...made.warnings, ...applied.refused.map(r => ({ kind: 'addition', message: `addition ${r.index + 1} (${additionLabel(r.addition)}) was not applied: ${r.reason}`, index: r.index }))];
+    return { result: { ...made, canonical: applied.canonical, warnings, additions: { applied: applied.applied, refused: applied.refused } } };
   } catch (e) {
     return { errors: [e.message] };
   }
@@ -2200,7 +2231,7 @@ app.post('/api/library/instantiate', authorize('POST /api/library/instantiate'),
   if (!body) return res.status(400).json({ ok: false, errors: ['expected a JSON body { entries, name, tier, environment, owners, params, toggles, overrides, custom }'] });
   const made = instantiateFromBody(body);
   if (made.errors) return res.status(400).json({ ok: false, errors: made.errors });
-  const { canonical, todos, provenance, warnings } = made.result;
+  const { canonical, todos, provenance, warnings, additions } = made.result;
   const schemaErrors = validateCanonical(canonical, SCHEMA);
   const summary = validationSummary(canonical, todos);
   const { canonical: overlaid } = overlaidCanonical(canonical, provenance.environment);
@@ -2208,7 +2239,131 @@ app.post('/api/library/instantiate', authorize('POST /api/library/instantiate'),
   // adapt() applies the environment overlay itself: the same call /api/validate makes.
   const adapted = adapt(canonical, { environment: provenance.environment });
   const canonicalYaml = `# ObservabilityPack ${canonical.metadata.name} — built from the library (${provenance.source}) at ${provenance.tier}\n# Todos: ${todos.length} (metadata.annotations library.todo.*). Spec v${SPEC_VERSION}.\n` + emitYaml(canonical);
-  res.json({ ok: true, canonical, canonicalYaml, todos, provenance, warnings, schemaErrors, summary, conformance, adapted });
+  // The UPDATE journey's review (docs/UPDATE_JOURNEY.md "Verify"): with `base` (the id of the pack being
+  // updated) the answer carries the saved pack beside this one, artefact by artefact — what is only in the
+  // saved one, only here, changed (with the fields), and the counts. An unknown base is said, not a 500.
+  let review = null;
+  if (typeof body.base === 'string' && body.base.trim()) {
+    const baseMeta = findPackMeta(body.base.trim());
+    if (!baseMeta) review = { error: `no pack ${body.base.trim()} in the catalogue` };
+    else {
+      const saved = loadPackCanonical(baseMeta);
+      const cmp = comparePacks(saved, canonical);
+      review = {
+        base: { id: body.base.trim(), version: saved.metadata?.version || null, name: saved.metadata?.name || null },
+        onlyInSaved: cmp.onlyInA.map(x => ({ key: x.key, label: artefactLabel(x.key, x.value), value: x.value })),
+        onlyInNext: cmp.onlyInB.map(x => ({ key: x.key, label: artefactLabel(x.key, x.value), value: x.value })),
+        changed: cmp.changed.map(x => ({ key: x.key, label: artefactLabel(x.key, x.b), saved: x.a, next: x.b, fields: fieldDiff(x.a, x.b) })),
+        same: cmp.same.length,
+      };
+    }
+  }
+  res.json({ ok: true, canonical, canonicalYaml, todos, provenance, warnings, schemaErrors, summary, conformance, adapted, additions, ...(review ? { review } : {}) });
+});
+
+// ----------------------------------------------------------------
+// The UPDATE journey (docs/UPDATE_JOURNEY.md; tools/lib/pack-update.mjs):
+// `update` opens an existing pack on Build's own screen and saves it as the
+// next version of itself.
+// ----------------------------------------------------------------
+
+// What a pack is to the UPDATE journey, as the journey's Open stage words it.
+const ORIGIN_SENTENCE = {
+  build: null,
+  scan: 'This is a reading of the repository. The next scan replaces it. To change what it holds, change the repository and scan again.',
+  live: 'This is what the live system reported. The next draft replaces it. To change what is live, change the live system and draft again.',
+  hand: 'Build did not make this pack, so it has no definition to reopen. Change it by file and upload it again.',
+  example: 'It ships with the studio and is read-only. Build a pack of your own to change one.',
+};
+
+// POST /api/library/reopen — body { id } → the Open stage's answer: what kind
+// of pack this is (origin), the inputs Build made it from, the additions it
+// records, whether Build rebuilds it exactly today and, when not, what differs
+// (differences: Build would write a value differently; foreign: things Build
+// did not write, with the ones that can be read in as additions; missing:
+// things Build would write that the pack no longer holds). Computes; writes
+// nothing. An unknown id is 404.
+app.post('/api/library/reopen', authorize('POST /api/library/reopen'), (req, res) => {
+  const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
+  const id = typeof body.id === 'string' ? body.id.trim() : '';
+  if (!id) return res.status(400).json({ ok: false, errors: ['expected a JSON body { id } — the id of a pack in the catalogue'] });
+  const meta = findPackMeta(id);
+  if (!meta) return res.status(404).json({ ok: false, errors: [`no pack ${id} in the catalogue`] });
+  try {
+    const canonical = loadPackCanonical(meta);
+    const shipped = !meta.uploaded;
+    const lib = library();
+    const opened = rebuildPack(canonical, { resolveEntry: (entryId) => findEntry(lib, entryId), promql: parsePromql, shipped });
+    const chains = packVersionChains();
+    const headId = chains.replacedBy.has(id) ? (chains.heads.find(h => h.earlier.includes(id))?.id || null) : null;
+    const headMeta = headId ? findPackMeta(headId) : null;
+    const chain = chains.heads.find(h => h.id === id || h.earlier.includes(id));
+    const earlier = (chain?.earlier || []).filter(e => e !== id).map(e => ({ id: e, version: findPackMeta(e)?.canonical?.metadata?.version || null }));
+    const adoptable = foreignAsAdditions(opened.foreign);
+    res.json({
+      ok: true, id, name: canonical.metadata?.name || null, version: canonical.metadata?.version || null,
+      label: meta.label || canonical.metadata?.name || id, source: meta.source || null,
+      environment: canonical.metadata?.annotations?.['library.environment'] || null,
+      origin: opened.origin, originSentence: ORIGIN_SENTENCE[opened.origin] || null,
+      head: headMeta ? { id: headId, version: headMeta.canonical?.metadata?.version || null } : null,
+      earlier,
+      exact: opened.exact, inputs: opened.inputs, notes: opened.notes, additions: opened.additions, refused: opened.refused,
+      differences: opened.differences, foreign: opened.foreign, missing: opened.missing, errors: opened.errors,
+      adoptable,
+      canonical,
+    });
+  } catch (e) {
+    res.status(400).json({ ok: false, errors: [e.message] });
+  }
+});
+
+// POST /api/library/update — body { base, canonical, source? } → the pack
+// registered as the NEXT VERSION of `base` (a pack made in Build, registered
+// here): its version bumped, its lineage recorded (library.update.previous),
+// the base kept under it and exempt from eviction. Refused (409) when the base
+// is a reading (a scan, a live draft) — those are never edited in place — or
+// when someone saved a newer version of it since this update began (`newer`
+// names it); 400 when the pack's name changed (that is a new pack) or the
+// pack does not validate. Nothing else of the register route changes.
+app.post('/api/library/update', authorize('POST /api/library/update'), (req, res) => {
+  const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
+  const base = typeof body.base === 'string' ? body.base.trim() : '';
+  if (!base) return res.status(400).json({ ok: false, errors: ['expected `base`: the id of the pack this one is the next version of'] });
+  const got = canonicalOfBody(body, (e) => ({ errors: Array.isArray(e) ? e : [e] }));
+  if (got.status) return res.status(got.status).json(got.body);
+  const canonical = got.canonical;
+  const baseMeta = uploadedMeta(base);
+  if (!baseMeta) return res.status(404).json({ ok: false, errors: [`no pack ${base} in this workspace — a pack that ships with the studio cannot be updated in place; save yours as a new pack`] });
+  const baseCanonical = baseMeta.canonical;
+  const origin = packOrigin(baseCanonical);
+  if (origin !== 'build') return res.status(409).json({ ok: false, errors: [ORIGIN_SENTENCE[origin] || 'this pack cannot be updated in place'], origin });
+  const chains = packVersionChains();
+  if (chains.replacedBy.has(base)) {
+    const newerId = chains.replacedBy.get(base);
+    const newer = uploadedMeta(newerId);
+    return res.status(409).json({ ok: false, errors: [`${baseCanonical.metadata?.name || base} was saved as v${newer?.canonical?.metadata?.version || '?'} since this update began — open that version and apply your changes there`], newer: { id: newerId, version: newer?.canonical?.metadata?.version || null } });
+  }
+  const baseName = baseCanonical.metadata?.name;
+  if (canonical.metadata?.name !== baseName) return res.status(400).json({ ok: false, errors: [`the pack's name changed (${baseName} → ${canonical.metadata?.name}): that is a new pack — save it as one, or keep the name to save the next version of ${baseName}`] });
+  try {
+    const stamped = stampUpdate(canonical, { previousId: base, previousVersion: baseCanonical.metadata?.version || null });
+    const errors = validateCanonical(stamped, SCHEMA);
+    if (errors.length) return res.status(400).json({ ok: false, errors });
+    const ann = stamped.metadata?.annotations || {};
+    const libSource = typeof ann['library.source'] === 'string' && ann['library.source'].trim() ? ann['library.source'].trim() : null;
+    const entryIds = libSource ? libSource.split(',').map(s => s.split('@')[0].trim()).filter(Boolean) : [];
+    const defaultSource = libSource ? `library:${entryIds.join(',') || 'pack'}@${ann['library.tier'] || stamped.metadata?.bindings?.criticality || 'tier-3'}` : (baseMeta.source || stamped.metadata?.name || 'upload');
+    const source = typeof body.source === 'string' && body.source.trim() ? body.source.trim() : defaultSource;
+    const env = readEnv(req.query) || ann['library.environment'] || null;
+    const adapted = adapt(stamped, { environment: env });
+    const { canonical: overlaid } = overlaidCanonical(stamped, env);
+    const conformance = evaluateConformance(overlaid);
+    const summary = librarySummaryFor(overlaid) || validationSummary(overlaid, []);
+    const id = registerUploadedPack(req, stamped, source);
+    res.json({ ok: true, registered: { id, source, version: stamped.metadata.version, previous: base, previousVersion: baseCanonical.metadata?.version || null }, adapted, conformance, summary });
+  } catch (e) {
+    res.status(400).json({ ok: false, errors: [e.message] });
+  }
 });
 
 // The pack a compile or register request means: its `canonical`, or — when it carries the instantiate
