@@ -53,7 +53,7 @@ function check(file) {
 
   // ---------- listTargets / TARGETS ----------
   const targets = listTargets();
-  assert(targets.length === 4, 'four compile targets registered', targets.length, 4);
+  assert(targets.length === 5, 'five compile targets registered', targets.length, 5);
   assert(targets.every(t => t.id && t.label && t.extension), 'all targets describe themselves');
 
   // ---------- prometheus-rules ----------
@@ -903,6 +903,109 @@ process.stdout.write('\n[reference packs] Grafana-managed uids and same-name dec
   const declaredRecords = parseRules(declaredOut.content).groups.flatMap(g => g.rules).filter(r => r.record === 'svc:errorbudget:burn_1h');
   assert(declaredRecords.length === 2 && declaredRecords[0].labels?.slo === 'avail_99_9' && !declaredRecords[1].labels,
          'both rules are kept (generated first, the pack\'s own last)', declaredRecords.map(r => r.labels));
+}
+
+// ---------- blackbox-exporter: the producer side of the synthetic checks ----------
+{
+  const stripComments = (t) => t.replace(/^#[^\n]*\n/gm, '');
+  const fixture = parseYaml(readFileSync(resolve(ROOT, 'tools/fixtures/compile/synthetic-checks.pack.yaml'), 'utf8'));
+
+  // Every bundled pack compiles the target to a blackbox.yml that round-trips.
+  for (const f of FIXTURES) {
+    const canonical = parseYaml(readFileSync(resolve(ROOT, f.path), 'utf8'));
+    const out = compile(canonical, 'blackbox-exporter');
+    assert(out.filename.endsWith('.blackbox.yaml') && out.content.length > 0, `[${f.id}] blackbox-exporter produces a blackbox.yml`, out.filename);
+    assert(out.profile.product === 'blackbox-exporter' && out.profile.band === 'bb-0.20+', `[${f.id}] blackbox-exporter resolves the default band`, out.profile.band, 'bb-0.20+');
+    let parsed = null;
+    try { parsed = parseYaml(stripComments(out.content)); } catch (_) { parsed = null; }
+    assert(parsed && parsed.modules && typeof parsed.modules === 'object', `[${f.id}] blackbox.yml round-trips with a modules: map`);
+  }
+
+  // The vendored example declares its checks for elastic-synthetics: nothing is
+  // compiled for the blackbox exporter, and the banner says which checks and why.
+  {
+    const payment = parseYaml(readFileSync(resolve(ROOT, FIXTURES[0].path), 'utf8'));
+    const out = compile(payment, 'blackbox-exporter');
+    const parsed = parseYaml(stripComments(out.content));
+    assert(Object.keys(parsed.modules).length === 0, 'payment-service: no module for checks declared on another engine', Object.keys(parsed.modules));
+    assert(/api-checkout-canary · declared for elastic-synthetics/.test(out.content) && /api-tls-validity · declared for elastic-synthetics/.test(out.content),
+      'payment-service: the banner names each check left to its engine of record');
+    assert(out.warnings.length === 0, 'payment-service: another engine of record is not a warning', out.warnings);
+  }
+
+  // The fixture: four probers, every assertion kind, the knob, the skips.
+  const out = compile(fixture, 'blackbox-exporter');
+  const modules = parseYaml(stripComments(out.content)).modules;
+  assert(Object.keys(modules).join(',') === 'api-canary,tls-horizon,login-body,db-port,grpc-health,gateway-ping,odd-assertion',
+    'fixture: one module per probe-able blackbox-exporter check, in pack order, named by the check id', Object.keys(modules));
+
+  const api = modules['api-canary'];
+  assert(api.prober === 'http' && api.timeout === '10s', 'api-canary: http prober, default 10s timeout', api);
+  assert(JSON.stringify(api.http.valid_status_codes) === '[200]', 'api-canary: status_code → valid_status_codes', api.http.valid_status_codes);
+  assert(JSON.stringify(api.http.fail_if_body_not_matches_regexp) === JSON.stringify(['"status":"ok"']), 'api-canary: body_contains → fail_if_body_not_matches_regexp', api.http.fail_if_body_not_matches_regexp);
+  assert(api.http.preferred_ip_protocol === 'ip4', 'api-canary: ip4 preferred, as the stack does');
+  assert(/latency_lt 500ms → not a module setting; a rule: probe_duration_seconds\{instance="https:\/\/api\.example\.com\/health"\} > 0\.5/.test(out.content),
+    'api-canary: latency_lt is named as a rule on probe_duration_seconds');
+  assert(out.warnings.some(w => /api-canary asks for otel_instrumentation/.test(w)), 'api-canary: otel_instrumentation is a warning (no traceparent on a probe)', out.warnings);
+
+  const tls = modules['tls-horizon'];
+  assert(tls.http.fail_if_not_ssl === true && !tls.http.valid_status_codes, 'tls-horizon: tls_expiry_gt requires TLS in the module, nothing else', tls.http);
+  assert(/probe_ssl_earliest_cert_expiry\{instance="https:\/\/api\.example\.com\/"\} - time\(\) < 1209600/.test(out.content), 'tls-horizon: the 14d horizon is a rule in seconds');
+
+  const login = modules['login-body'];
+  assert(JSON.stringify(login.http.valid_status_codes) === '[200,204]', 'login-body: status_codes list', login.http.valid_status_codes);
+  assert(JSON.stringify(login.http.fail_if_body_matches_regexp) === JSON.stringify(['maintenance \\(planned\\)']), 'login-body: body_not_contains is regex-escaped', login.http.fail_if_body_matches_regexp);
+  assert(JSON.stringify(login.http.fail_if_body_not_matches_regexp) === JSON.stringify(['build [0-9]+']), 'login-body: body_matches is kept as written', login.http.fail_if_body_not_matches_regexp);
+
+  const db = modules['db-port'];
+  assert(db.prober === 'tcp' && db.tcp && !db.http, 'db-port: host:port → tcp prober', db);
+  assert(out.warnings.some(w => /db-port asserts body_contains on a tcp target/.test(w)), 'db-port: a body assertion on tcp is a warning', out.warnings);
+  assert(/latency_lt 100ms → not a module setting; a rule: probe_duration_seconds\{instance="db\.example\.internal:5432"\} > 0\.1/.test(out.content), 'db-port: latency on tcp is a rule');
+
+  assert(modules['grpc-health'].prober === 'grpc' && modules['grpc-health'].grpc.preferred_ip_protocol === 'ip4', 'grpc-health: grpc:// → grpc prober', modules['grpc-health']);
+  assert(modules['gateway-ping'].prober === 'icmp' && modules['gateway-ping'].timeout === '5s', 'gateway-ping: icmp:// → icmp prober, timeout capped by the 5s interval', modules['gateway-ping']);
+
+  const odd = modules['odd-assertion'];
+  assert(!odd.http.valid_status_codes, 'odd-assertion: a status class is not a valid_status_codes entry', odd.http);
+  assert(out.warnings.some(w => /odd-assertion asserts status_code "2xx"/.test(w)) && out.warnings.some(w => /odd-assertion asserts header_present, which has no blackbox module setting/.test(w)),
+    'odd-assertion: both inexpressible assertions are warnings', out.warnings);
+
+  assert(!modules['template-target'] && out.warnings.some(w => /template-target is not compiled — the target is not a URL/.test(w)), 'template-target: a placeholder target is skipped with a warning', out.warnings);
+  assert(!modules['journey-elastic'] && /journey-elastic · declared for elastic-synthetics/.test(out.content), 'journey-elastic: another engine, listed and not compiled');
+
+  // The version knob: an exporter older than 0.20 has no grpc prober.
+  const old = compile(fixture, 'blackbox-exporter', { product: 'blackbox-exporter', version: '0.19.0' });
+  const oldModules = parseYaml(stripComments(old.content)).modules;
+  assert(old.profile.band === 'bb-pre-0.20' && !oldModules['grpc-health'] && Object.keys(oldModules).length === 6, 'blackbox 0.19: the grpc module is not emitted', Object.keys(oldModules));
+  assert(old.warnings.some(w => /grpc-health is not compiled — the grpc prober needs blackbox exporter 0\.20/.test(w)), 'blackbox 0.19: the skip is a warning naming the version', old.warnings);
+
+  // The scrape jobs that drive the modules.
+  const scrape = compileArtifact(fixture, { group: 'synthetics', flavor: 'blackbox', artifact: 'scrape-config' });
+  const jobs = parseYaml(stripComments(scrape.content)).scrape_configs;
+  assert(scrape.filename === 'synthetic-checks.blackbox.scrape.yaml' && jobs.length === 7, 'scrape-config: one job per module', jobs.length, 7);
+  assert(jobs.every(j => j.metrics_path === '/probe' && j.job_name === `blackbox-${j.params.module[0]}`), 'scrape-config: /probe with module=<id>, job named blackbox-<id>');
+  const dbJob = jobs.find(j => j.job_name === 'blackbox-db-port');
+  assert(dbJob.static_configs[0].targets[0] === 'db.example.internal:5432' && dbJob.scrape_interval === '1m', 'scrape-config: tcp target is host:port, interval is the check\'s', dbJob);
+  assert(jobs.find(j => j.job_name === 'blackbox-grpc-health').static_configs[0].targets[0] === 'grpc.example.internal:9090', 'scrape-config: grpc target loses the scheme the exporter does not take');
+  assert(jobs.find(j => j.job_name === 'blackbox-gateway-ping').scrape_timeout === '5s', 'scrape-config: scrape_timeout follows the module timeout');
+  const relabel = dbJob.relabel_configs;
+  assert(relabel[0].target_label === '__param_target' && relabel[1].target_label === 'instance' && relabel[2].replacement === 'blackbox-exporter:9115',
+    'scrape-config: the exporter\'s documented relabelling, default address', relabel);
+  assert(JSON.stringify(dbJob.static_configs[0].labels) === JSON.stringify({ service: 'synthetic-checks', check: 'db-port' }), 'scrape-config: service and check labels on every target');
+  const elsewhere = compileArtifact(fixture, { group: 'synthetics', artifact: 'scrape-config', blackboxAddress: 'probes.internal:9115' });
+  assert(parseYaml(stripComments(elsewhere.content)).scrape_configs[0].relabel_configs[2].replacement === 'probes.internal:9115', 'scrape-config: blackboxAddress moves the exporter');
+
+  // The per-check artifact and the catalog group.
+  const one = compileArtifact(fixture, { group: 'synthetics', artifact: 'check:api-canary' });
+  assert(one.filename === 'synthetic-checks.api-canary.blackbox.yaml' && Object.keys(parseYaml(stripComments(one.content)).modules).join() === 'api-canary', 'check:<id> compiles that module alone', one.filename);
+  const group = compileCatalog(fixture).groups.find(g => g.id === 'synthetics');
+  assert(group && group.flavors[0].deployable === false, 'catalog: a synthetics group, not deployable from the studio');
+  assert(group.items.map(i => i.id).join(',') === 'all,scrape-config,check:api-canary,check:tls-horizon,check:login-body,check:db-port,check:grpc-health,check:gateway-ping,check:odd-assertion',
+    'catalog: modules, scrape jobs, then one item per compiled check', group.items.map(i => i.id));
+  assert(/7 module\(s\) · 2 check\(s\) not compiled/.test(group.items[0].subtitle), 'catalog: the modules item counts what was and was not compiled', group.items[0].subtitle);
+  const noChecks = { ...fixture, spec: { ...fixture.spec, validation: undefined } };
+  assert(!compileCatalog(noChecks).groups.some(g => g.id === 'synthetics'), 'catalog: no synthetics group without synthetic checks');
+  assert(Object.keys(parseYaml(stripComments(compile(noChecks, 'blackbox-exporter').content)).modules).length === 0, 'no checks: an empty modules map, still a file');
 }
 
 report('compile');
