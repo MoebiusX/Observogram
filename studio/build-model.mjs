@@ -53,6 +53,7 @@ import { LAYER_DEFS, L4_SUBGROUPS } from './constants.mjs';
 import { OVERRIDE_FIELDS, overrideFor, effectiveSli, effectiveId, customisedFields, promqlEdited, customEffective, sliEditorModel, sliName, boundWords } from './build-copies-model.mjs';
 import { boundText } from './sli-direction.mjs';
 import { buildDefineOriginNote } from './services-model.mjs';
+import { nextVersionOf, reviewModel } from './update-model.mjs';
 
 export const BUILD_STEPS = ['define', 'compile', 'verify'];
 /** Least stringent first — the order the engine lists them and the DEFINE step shows them. */
@@ -74,6 +75,7 @@ export const WARNING_KINDS = {
   promql: { label: 'PromQL', blocking: true, hint: 'an SLI expression does not parse once the params are in — the pack must not ship' },
   override: { label: 'Override kept aside', blocking: false, hint: 'an override names an SLI that is not in the pack; nothing is applied until it is' },
   'burn-rules': { label: 'Burn rules', blocking: false, hint: 'the burn-rule generator’s own warnings on the produced policy' },
+  addition: { label: 'Addition not applied', blocking: false, hint: 'an SLO, route or alert rule added on top of Build’s output that the pack cannot take as it stands (its SLI gone, its id taken) — the pack is generated without it' },
 };
 /** The one-line note at the top of the DEFINE column once the pack is seeded. */
 export const SEEDED_NOTE = 'Seeded. Changing the tier re-grades the pack and refreshes library defaults; your customisations stay. Removing a product drops its SLIs.';
@@ -229,6 +231,10 @@ export function restoreBuildDraft(saved, defaults, fields) {
     if (k === 'step') { const step = LEGACY_STEP[v] || v; if (BUILD_STEPS.includes(step)) next.step = step; continue; }
     if (k === 'tier') { if (TIERS.includes(v)) next.tier = v; continue; }
     if (k === 'serviceId') { if (Number.isInteger(v) && v > 0) next.serviceId = v; continue; }
+    // The UPDATE journey's fields: the additions (objects with a kind), the pack being updated (an object with a string id), the definition as opened.
+    if (k === 'additions' && Array.isArray(v)) { next.additions = v.filter(a => a && typeof a === 'object' && !Array.isArray(a) && typeof a.kind === 'string').map(a => ({ ...a })); continue; }
+    if (k === 'update') { if (typeof v === 'object' && !Array.isArray(v) && typeof v.id === 'string' && v.id) next.update = { ...v }; continue; }
+    if (k === 'opened') { if (typeof v === 'object' && !Array.isArray(v)) next.opened = { ...v }; continue; }
     if (['name', 'owners', 'environment', 'registeredId'].includes(k) && typeof v === 'string') next[k] = v;
   }
   if (typeof src.seeded !== 'boolean' && ['compile', 'verify'].includes(LEGACY_STEP[src.step] || src.step)) next.seeded = true;
@@ -493,6 +499,10 @@ export function instantiateBody(build, library = null) {
     toggles,
     overrides: effectiveOverrides(build, library),
     custom: (build?.custom || []).map(def => ({ ...def })),
+    // The UPDATE journey (docs/UPDATE_JOURNEY.md): the additions the engine applies on top of the generated pack,
+    // and the pack being updated, which the server compares the result with (the review on Verify).
+    ...((build?.additions || []).length ? { additions: build.additions.map(a => ({ ...a })) } : {}),
+    ...(build?.update?.id ? { base: build.update.id } : {}),
   };
 }
 
@@ -941,6 +951,20 @@ export function buildVerifyModel({ build, library, clauses, targets, access = { 
   const tier = s?.tier || build?.tier;
   const canRegister = !!r && schemaOk && !blocking && !error && writable;
   const remains = r ? verifyRemains({ result: r, checklist, params, editors: stackCardActions({ build, library }), accepted }) : null;
+  // The UPDATE journey (docs/UPDATE_JOURNEY.md "Verify"): the saved pack beside the pack with the changes, and
+  // Save as the next version as the primary once the hand-off would otherwise be — a gate (a blocking item,
+  // required values) stays the primary; "Save as a new pack…" is the secondary (the register exit as today).
+  const review = reviewModel({ build, result: r, access });
+  let next = verifyNext(readiness, { canRegister, remains });
+  if (review && !review.error) {
+    // The user came to make a change and save it: once the pack can be registered (nothing blocks it), Save is
+    // the primary and the gate the hand-off would have put first (required values, a failing requirement) moves
+    // beside it — the placeholders were in the saved version already. A blocking item stays the primary.
+    const gate = next.primary && next.primary.action !== 'open-discover' && next.primary.action !== 'fix-first' ? next.primary : null;
+    const saveNew = review.secondary.map(s => ({ ...s }));
+    if (canRegister) next = { primary: review.unchanged ? null : review.primary, secondary: [...(gate ? [gate] : []), ...saveNew] };
+    else next = { ...next, secondary: next.secondary.filter(s => s.action !== 'open-discover') };
+  }
   return {
     ready: !!r, pending: !!build?.pending, error, stale: isStale(build),
     tier,
@@ -952,7 +976,9 @@ export function buildVerifyModel({ build, library, clauses, targets, access = { 
     states: readinessStates(readiness, tier),
     decision: verifyDecision(readiness, { tier }),
     remains,
-    next: verifyNext(readiness, { canRegister, remains }),
+    next,
+    review,
+    update: build?.update || null,
     // "Accept with reason": a per-session acknowledgement of a non-blocking warning, kept on the draft and never
     // persisted or written into the pack — there is no backend for it. `accepting` is the item whose reason form is
     // open, `acceptDraft` the reason being typed (so a re-render does not lose it).
@@ -990,8 +1016,11 @@ export function buildVerifyModel({ build, library, clauses, targets, access = { 
     // The gaps are read from readiness, not from the parameter values alone: with every value filled, a clause that
     // passes only on a placeholder or a todo to write or measure still travels with the pack as a visible gap.
     gaps,
-    continueLabel: handoffGaps(gaps, readiness) ? 'Open pack in Discover with visible gaps' : 'Open pack in Discover',
-    readyText: handoffText(gaps, readiness),
+    continueLabel: review ? 'Save as a new pack' : handoffGaps(gaps, readiness) ? 'Open pack in Discover with visible gaps' : 'Open pack in Discover',
+    readyText: review && !review.error
+      ? (review.unchanged ? `No change against v${review.base.version || '?'} yet — Save waits for one. Save as a new pack registers a second ${review.base.name} beside it.`
+        : `Save registers ${review.base.name} v${review.next.version} as the next version of v${review.base.version || '?'}, kept under it; Pack A moves to the new version. Save as a new pack registers it as a separate pack instead and leaves v${review.base.version || '?'} as it is.`)
+      : handoffText(gaps, readiness),
     // A stale pack (the last compilation failed) is never handed off: the error stands until the field is fixed.
     canRegister,
   };
@@ -1044,13 +1073,17 @@ const sentenceCount = (n) => COUNT_WORDS[n] || String(n);
 /** The working context both result screens name first: the service, its environment, the tier, what it is built from. */
 function stepContext(build, r) {
   const prov = r?.provenance || {};
+  const u = build?.update;
   return [
     { key: 'Service', value: r?.canonical?.metadata?.name || serviceSlug(build?.name) || '' },
     { key: 'Environment', value: prov.environment || build?.environment || '' },
     { key: 'Tier', value: prov.tier || build?.tier || '' },
     { key: 'Built from', value: (prov.entries || []).map(e => e.id).join(' + ') || (build?.entries || []).join(' + ') },
+    // The UPDATE journey names source and destination: the version opened and the one Save writes.
+    ...(u?.id ? [{ key: 'Updating', value: `v${u.version || '?'} → saves as v${nextVersionOf(u.version)}`, title: 'An update edits the pack’s own values, not an environment’s overlay; Save registers the next version of the same pack and keeps this one under it.' }] : []),
   ];
 }
+
 
 /** The key a warning is acknowledged under ("Accept with reason"): stable while the engine says the same thing. */
 export function warningKey(w) {

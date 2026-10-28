@@ -355,6 +355,41 @@ Two tests, written first, because the one-click path rests on them:
 | **2. The additions** | **+ SLO on an SLI with its alert, + route**, recorded in the pack and kept across every regenerate. Packs added to by hand or by Remediate open. *Open as the next version* from Remediate; *upload as the next version*. | Change or remove what Build generated beyond its inputs. Scans and live drafts. | A new engine module built from the insert logic in `tools/lib/retrofeed.mjs`, with a real duplicate check for routes and an id check that sees additions; the instantiate and register routes; the Build stack, sheet and Verify models, which read the generator's output only today; upload that validates without registering. No change to generated output. |
 | **3. Any pack** | *Keep as my pack* for a scan or a live draft; changing and removing artefacts Build did not write, and the windows and routes it did; wiring an added SLO to the boards; environments. | — | A second edit model (patch the pack). |
 
+## Built — slices 1 and 2 (2026-10-28)
+
+Shipped together as *Build or update a pack*, on the recommended answer to each
+decision below (`docs/CHANGELOG.md`, *Build or update a pack*). What the
+journey above describes is what the studio does, with these differences:
+
+- **"Add an alert" means both things people mean by it.** Spec 1.4 made plain
+  alert rules pack artefacts (`alerting.rules`, RFC-0003) after this journey was
+  written, so decision 1's (b) needed no spec change: **+ Alert rule** adds one
+  as an addition beside **+ SLO** (an SLO with its burn-rate alert) and
+  **+ Route**. The three kinds are the additions (`library.additions`).
+- **Open compares, as written**, through `POST /api/library/reopen`
+  (`tools/lib/pack-update.mjs` `rebuildPack`): the inputs from the `library.*`
+  annotations, the additions re-applied, one normal form. The round trip holds
+  for every library entry at every tier, with and without edits
+  (`tools/test-pack-update.mjs`); the custom SLI whose objective is stored
+  nowhere reopens exactly with a note. Every panel of the Open table is drawn
+  but two rows: *several packs share this name* (today's Build hand-offs still
+  leave twins, and Save does not ask about them) and the reference pack's *Save
+  a copy as your pack…* (it says it is read-only and offers nothing).
+- **Verify's live-check line never checks**: it says *Not checked here* and
+  points at Compare after saving (decision 6's check is not built).
+- **Save as the primary** once nothing blocks the pack; a required value moves
+  beside it (the placeholders were in the saved version already). *Save as a
+  new pack…* is the register exit as before. Save is refused on a moved base
+  (409 with the newer version, drawn with *Open v0.2.0*).
+- **Versions**: one row per pack in the picker, earlier versions under it
+  (`↳ v0.1.0 · earlier version`), exempt from eviction — decisions 4 and 7(a).
+  `reset` still clears every pack, saved versions included, and its confirm
+  says so in general terms, not by count.
+- **Not built**: Remediate's *Open as the next version*, `upload`'s *Save as
+  the next version*, Deploy's pre-selection of the changed rules, *Put v0.1.0
+  in Pack B* after Save, *Restore v0.1.0*, the captured check following the
+  pack, and slice 3 entire.
+
 ## Decisions for the owner
 
 1. **What is "an alert"?** The pack spec has two kinds, both bound to an SLO: a

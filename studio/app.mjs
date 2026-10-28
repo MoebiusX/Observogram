@@ -104,6 +104,11 @@ import { renderBuildCompile } from './build-compile-view.mjs';
 import { renderBuildVerify } from './build-verify-view.mjs';
 import { renderBuildDefinition } from './build-definition-view.mjs';
 import { renderBuildSheet } from './build-sheet-view.mjs';
+// The UPDATE journey (docs/UPDATE_JOURNEY.md): Build's second door — `update` opens an existing pack on Build's
+// screen and saves the next version of it. Models, renderers and the two loaders.
+import { draftFromReopen, openDecision, changesSince, handoffSentence, addDraft, toAddition, defaultBurnWindows, updatablePacks, pickerRows } from './update-model.mjs';
+import { renderUpdateOpen, definitionExtrasHtml, wireDefinitionExtras, renderAddEditor, homeUpdateListHtml } from './update-view.mjs';
+import { reopenPack, saveUpdate } from './build-api.mjs';
 import { revealTodo } from './build-atoms.mjs';
 import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from './build-label.mjs';
 import { loadBrand } from './brand.mjs';
@@ -484,16 +489,17 @@ function renderPackSelect() {
   sel.innerHTML = '';
   ensureServiceFromPack();
   const options = state.catalog.filter(p => packMatchesService(p, state.selectedService, { side: 'a' }));
-  for (const p of options) {
+  // One row per pack at its current version, its earlier versions under it (docs/UPDATE_JOURNEY.md "What Save does").
+  for (const p of pickerRows(options)) {
     const opt = document.createElement('option');
     opt.value = p.id;
     // Uploaded packs lead with a folder glyph so the user can tell
     // them apart from file-backed catalog entries at a glance. Tier
     // is omitted from the option text — it already renders as a
     // separate badge on the picker chrome.
-    opt.textContent = p.ok
-      ? packSelectLabel(p, { prefixUploaded: true })
-      : `${p.label} (error)`;
+    opt.textContent = !p.ok ? `${p.label} (error)`
+      : p.earlier ? `   ↳ v${p.version || '?'} · earlier version`
+        : packSelectLabel(p, { prefixUploaded: true });
     if (!p.ok) opt.disabled = true;
     sel.appendChild(opt);
   }
@@ -1746,6 +1752,7 @@ async function boot() {
   setupTheme();
   setupResetButton();
   setupExportButton();
+  setupUpdateButton();
   // Eagerly fetch /api/examples so the Pack B picker has the archived
   // reference packs available even before the user visits the home
   // examples disclosure. AWAITED so the persistence rehydrate below can
@@ -2135,13 +2142,17 @@ function homeChoiceHtml({ checkOpen }) {
           <span class="home-choice-path">Discover / Diagnose / Remediate</span>
           <span class="home-choice-cta">Inspect a service</span>
         </button>
-        <button type="button" class="home-choice-card is-build" id="home-choice-build">
+        <div class="home-choice-card is-build has-two" role="group" aria-labelledby="home-build-title">
           <span class="home-choice-key" aria-hidden="true">⬡</span>
-          <span class="home-choice-title">Build a new pack</span>
-          <span class="home-choice-sub">Define a service and generate a pack you can review.</span>
+          <span class="home-choice-title" id="home-build-title">Build or update a pack</span>
+          <span class="home-choice-sub">Define a service and generate a pack you can review — or open one you have and save its next version.</span>
           <span class="home-choice-path">Define / Compile / Verify</span>
-          <span class="home-choice-cta">Create a pack</span>
-        </button>
+          <span class="home-choice-two">
+            <button type="button" class="home-choice-cta is-btn" id="home-choice-build">Start a new pack</button>
+            <button type="button" class="home-choice-cta is-btn is-quiet" id="home-choice-update" aria-expanded="false" aria-controls="home-update-list">Update a pack you have</button>
+          </span>
+          <div class="upd-home" id="home-update-list" hidden></div>
+        </div>
       </div>
     </div>`;
 }
@@ -3942,6 +3953,22 @@ function wireHomeChoice(view, model) {
   const buildBtn = view.querySelector('#home-choice-build');
   if (!model.build.enabled) markUnavailable(buildBtn, model.build.reason);
   buildBtn?.addEventListener('click', () => (model.build.enabled ? enterBuildMode('define') : explainUnavailable(model.build.reason)));
+  // The second door (docs/UPDATE_JOURNEY.md "Where it starts"): this workspace's packs made in Build,
+  // `name · version · made in Build`; a pick opens it on Compile. Updating writes a pack: the same gate as Build.
+  const updateBtn = view.querySelector('#home-choice-update');
+  const list = view.querySelector('#home-update-list');
+  if (!model.build.enabled) markUnavailable(updateBtn, model.build.reason);
+  updateBtn?.addEventListener('click', () => {
+    if (!model.build.enabled) { explainUnavailable(model.build.reason); return; }
+    const open = updateBtn.getAttribute('aria-expanded') !== 'true';
+    updateBtn.setAttribute('aria-expanded', String(open));
+    if (!list) return;
+    list.hidden = !open;
+    if (!open) return;
+    list.innerHTML = homeUpdateListHtml(updatablePacks(state.catalog));
+    for (const b of list.querySelectorAll('[data-upd-open]')) b.addEventListener('click', () => enterUpdateMode(b.dataset.updOpen, { from: 'home' }));
+    list.querySelector('[data-upd-open]')?.focus({ preventScroll: true });
+  });
 }
 
 // The signed-in service gate and the local hero are one screen now: the
@@ -4137,6 +4164,16 @@ function applyModeChrome() {
   // pack's manifest + compiled artefacts).
   const exportBtn = $('#export-btn');
   if (exportBtn) exportBtn.hidden = isHome || !focusedPackId();
+  // `update` is an operation on a pack, so it sits with the other operations, beside export (docs/UPDATE_JOURNEY.md
+  // "Where it starts"): shown when a pack is open. A viewer sees it disabled, with the reason, on the click.
+  const updateBtn = $('#update-btn');
+  if (updateBtn) {
+    updateBtn.hidden = isHome || !focusedPackId();
+    const writable = state.access?.canWrite !== false;
+    updateBtn.setAttribute('aria-disabled', writable ? 'false' : 'true');
+    updateBtn.classList.toggle('is-unavailable', !writable);
+    updateBtn.title = writable ? 'Update this pack — open it on Build’s screen, change it, save the next version of it' : `Updating a pack ${state.access?.reason || 'needs the operator role here'}`;
+  }
   // The header's cards follow the mode too: leaving the BUILD journey through
   // its exit bar (goHome, or enterAnalyzeMode when a pack was open) once left
   // the three build cards up, the last step highlighted and the tagline
@@ -4198,6 +4235,18 @@ function setupResetButton() {
 // Export button — download the focused pack as one ZIP: its canonical
 // pack.yaml plus every compiled artefact. The server builds the bundle
 // (GET /api/packs/:id/export.zip); here we just trigger the download.
+// `update` on the open pack (Pack A): the UPDATE journey's door from any workspace screen.
+function setupUpdateButton() {
+  const btn = $('#update-btn');
+  if (!btn) return;
+  btn.onclick = () => {
+    const id = focusedPackId();
+    if (!id) { toast('Load a pack first', 'error'); return; }
+    if (state.access?.canWrite === false) { explainUnavailable(state.access.reason); return; }
+    enterUpdateMode(id, { from: 'pack' });
+  };
+}
+
 function setupExportButton() {
   const btn = $('#export-btn');
   if (!btn) return;
@@ -4270,9 +4319,70 @@ export function enterBuildMode(step) {
 }
 let buildTargets = null;
 
+// ============================================================
+// The UPDATE journey (docs/UPDATE_JOURNEY.md) — Build's second door. `update`
+// reopens a pack: the server reads it as stored, recovers Build's inputs and
+// the recorded additions, regenerates and compares (POST /api/library/reopen);
+// the pure model decides what the user sees (update-model.mjs openDecision):
+// the pack reopens exactly → Compile, with one line; otherwise one panel.
+// ============================================================
+
+// The Open stage on screen: null, { pending, id } while the server answers, or { decision, reopen, from }.
+let updateOpen = null;
+
+export async function enterUpdateMode(packId, { from = 'pack' } = {}) {
+  if (!packId) return;
+  if (state.access?.canWrite === false) { explainUnavailable(state.access.reason); return; }
+  navGeneration++;
+  const gen = navGeneration;
+  state.mode = 'build';
+  state.activeCardKey = null;
+  updateOpen = { pending: true, id: packId, from };
+  applyModeChrome();
+  paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+  let reopen;
+  try { reopen = await reopenPack(packId); }
+  catch (e) { reopen = { ok: false, errors: [e.message] }; }
+  if (navGeneration !== gen) return;   // the user went elsewhere meanwhile
+  const decision = openDecision({ reopen, draft: state.build, access: state.access || { canWrite: true } });
+  if (decision.kind === 'open') { openFromReopen(reopen, { from, notice: decision.notice }); return; }
+  updateOpen = { decision, reopen, from };
+  renderMainView();
+  announce(decision.sentence);
+}
+
+// Build opened on the pack: the draft is the pack's own definition (its inputs, its additions — the ones it
+// records plus the hand-added artefacts read in), seeded, on Compile. The pack reopened is what Save updates.
+function openFromReopen(reopen, { from = 'pack', notice = '' } = {}) {
+  const additions = [...(reopen.additions || []), ...(reopen.adoptable?.additions || [])];
+  const fields = draftFromReopen(reopen, { additions, from });
+  state.build = { ...defaultBuildState(), ...fields, updateBase: reopen, updateNotice: notice || null };
+  updateOpen = null;
+  // The library must be loaded for the draft to instantiate; enterBuildMode handles both.
+  enterBuildMode('compile');
+  if (notice) { toast(notice); announce(notice); }
+  persistence.schedule();
+}
+
+// The Open panel's one action.
+function updateOpenAction(id) {
+  const o = updateOpen;
+  if (!o?.decision) return;
+  if (id === 'continue') { updateOpen = null; enterBuildMode(state.build.step); return; }
+  if (id === 'discard' || id === 'open-with-build-values') { openFromReopen(o.reopen, { from: o.from, notice: `Opened ${o.reopen.name || 'the pack'} v${o.reopen.version || '?'}${id === 'open-with-build-values' ? ' with Build’s values — each appears on Verify as a change' : ''}.` }); return; }
+  if (id === 'open-head' && o.reopen?.head?.id) { enterUpdateMode(o.reopen.head.id, { from: o.from }); return; }
+  // 'leave' (and anything else): back where the user came from, the pack untouched.
+  updateOpen = null;
+  if (state.selectedPackId && o.from !== 'home') { state.mode = 'single'; state.view = 'layers'; enterAnalyzeMode(state.selectedPackId, state.selectedEnv); return; }
+  goHome();
+}
+
 // Leave the journey without a hand-off: back to the pack that was open, or home.
 function exitBuildMode() {
   if (state.mode !== 'build') return;
+  updateOpen = null;
   state.build.editor = null;   // the pop-up editor is UI state of the journey; the render that follows clears its host
   if (state.selectedPackId) { state.mode = 'single'; state.view = 'layers'; enterAnalyzeMode(state.selectedPackId, state.selectedEnv); return; }
   // Opened from a service page (no pack was open): back to that page. A row
@@ -4387,6 +4497,12 @@ function syncBuildEditor() {
   const b = state.build;
   const library = buildLibraryCache();
   if (state.mode !== 'build' || !b?.editor || !library) { if (el && el.innerHTML) el.innerHTML = ''; return; }
+  // The add editor (+ SLO · + Route · + Alert rule): its own form in the editor's shell, the draft on b.editor.
+  if (b.editor.add) {
+    renderAddEditor(buildEditorHost(), { draft: b.editor.draft, build: b, result: b.result, serverError: b.editor.error || null }, buildHost, { focus: buildEditorFocus === 'first' ? null : buildEditorFocus });
+    buildEditorFocus = null;
+    return;
+  }
   const model = buildEditorModel({ build: b, library, mode: editorModeFor(b.step) });
   // The SLI it was over is gone (its entry deselected, a custom one removed): the editor closes.
   if (!model) { b.editor = null; if (el) el.innerHTML = ''; return; }
@@ -4461,6 +4577,9 @@ function applyInstantiateOk(b, res) {
     summary: res.summary || null, conformance: res.conformance || null, schemaErrors: res.schemaErrors || [], provenance: res.provenance || null,
     // The adapter's layered projection — what the stack draws and what Discover will show.
     adapted: res.adapted || null,
+    // The UPDATE journey: the additions as applied (and refused), and the saved pack beside this one (review).
+    additions: res.additions || null,
+    review: res.review || null,
   };
   b.error = null;
   b.preview = null;
@@ -4739,6 +4858,88 @@ const buildActions = {
     buildFocusNext = `.build-slab[data-layer="${CSS.escape(layer)}"] .build-slab-edge`;
     rerenderBuild();
   },
+  // ---- the UPDATE journey (docs/UPDATE_JOURNEY.md) ----
+  // The Open panel's action (update-view.mjs renderUpdateOpen).
+  openAction: updateOpenAction,
+  // + SLO · + Route · + Alert rule: the add editor over a fresh draft, prefilled from the pack.
+  openAdd(kind, { opener = null } = {}) {
+    const b = state.build;
+    if (!['slo', 'route', 'alert_rule'].includes(kind)) return;
+    b.editor = { add: kind, draft: addDraft(kind, { build: b, result: b.result }), error: null };
+    buildEditorOpener = opener ? focusKeySelector(opener) : null;
+    buildEditorOpenerKey = opener || null;
+    buildEditorFocus = 'first';
+    rerenderBuild();
+  },
+  // The form as typed: redrawn in place (no regenerate until Add).
+  updateAddDraft(draft, { focus = null } = {}) {
+    const b = state.build;
+    if (!b.editor?.add) return;
+    b.editor = { ...b.editor, draft, error: null };
+    buildEditorFocus = focus;
+    syncBuildEditor();
+  },
+  defaultWindowsFor(sliType) { return defaultBurnWindows(sliType, state.build.tier); },
+  // Add: the addition goes on the draft; the pack regenerates with it (the engine applies it after the generate
+  // and names a refusal as a warning of kind `addition`, which the Compile queue shows).
+  commitAdd() {
+    const b = state.build;
+    if (!b.editor?.add) return;
+    const addition = toAddition(b.editor.draft, { build: b, result: b.result });
+    if (!addition) { syncBuildEditor(); return; }
+    b.additions = [...(b.additions || []), addition];
+    b.editor = null;
+    returnFocusToOpener();
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+    persistence.schedule();
+  },
+  // "Changes since v0.1.0": undo one row — the patch that restores what the row changed.
+  undoChange(row) {
+    if (!row?.restore) return;
+    Object.assign(state.build, row.restore);
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+    persistence.schedule();
+    announce(`Undone: ${row.text}`);
+  },
+  enterUpdate(id) { enterUpdateMode(id, { from: 'pack' }); },
+  // Save as the next version of the pack opened (POST /api/library/update): the base is kept under it, Pack A
+  // moves to the new version, and the message is built only from what the answer says.
+  async saveUpdate() {
+    const b = state.build;
+    if (!b.result || !b.update?.id) return;
+    const canonical = b.result.canonical;
+    let res;
+    try { res = await saveUpdate(b.update.id, canonical); }
+    catch (e) { res = { ok: false, errors: [e.message] }; }
+    if (!res?.ok) {
+      b.saveError = { errors: res?.errors || [res?.error || 'unknown error'], newer: res?.newer || null };
+      rerenderBuild();
+      toast(`Not saved: ${b.saveError.errors.join('; ')}`, 'error');
+      return;
+    }
+    const id = res.registered.id;
+    const changes = changesSince(b).count;
+    b.saveError = null;
+    b.registeredId = id;
+    try { await refreshCatalogue(); } catch (e) { toast(`Saved, but the catalog did not refresh: ${e.message}`, 'error'); }
+    state.pack = res.adapted;
+    state.conformance = withPlaceholderPasses(res);
+    state.symbolTable = buildSymbolTable(res.adapted);
+    await loadVerdicts(id);
+    state.uploadedSource = res.registered.source;
+    state.mode = 'single';
+    state.view = 'layers';
+    state.layerFilter = 'all';
+    const env = canonical.metadata?.annotations?.['library.environment'] || defaultEnvFor(id);
+    // Pack A moves to the new version; Pack B is never touched.
+    enterAnalyzeMode(id, env);
+    paintObservaActiveTab();
+    const message = handoffSentence({ name: canonical.metadata?.name || b.update.name, version: res.registered.version, previousVersion: res.registered.previousVersion, changes });
+    toast(message);
+    announce(message);
+  },
   setStep: goToBuildStep,
   exit: exitBuildMode,
   // VERIFY: one compile target previewed from the generated canonical —
@@ -4897,6 +5098,16 @@ function renderBuildView(view) {
   shell.append(exitBar, def, main);
   view.appendChild(shell);
 
+  // The UPDATE journey's Open stage: while the server reads the pack, and when it cannot be reopened without a
+  // word — one panel in the main column, no definition column (there is no definition yet).
+  if (updateOpen) {
+    shell.classList.add('is-opening');
+    def.hidden = true;
+    if (updateOpen.pending) main.innerHTML = '<div class="placeholder">Opening the pack — reading it as stored, rebuilding it from its definition…</div>';
+    else renderUpdateOpen(main, updateOpen.decision, buildHost);
+    return;
+  }
+
   const library = buildLibraryCache();
   if (!library) {
     main.innerHTML = '<div class="placeholder">Loading the library…</div>';
@@ -4911,6 +5122,16 @@ function renderBuildView(view) {
   const checklist = buildClauseChecklist(clauses, b.result?.summary || null);
   const definition = buildDefinitionModel({ build: b, library, requirements, checklist });
   renderBuildDefinition(def, definition, host);
+  // Past DEFINE the column gains the add actions (+ SLI · + SLO · + Route · + Alert rule) and, on an update,
+  // "Changes since v0.1.0" with undo (docs/UPDATE_JOURNEY.md "Compile"); read-only on Verify.
+  if (b.step !== 'define') {
+    const changes = changesSince(b);
+    const extras = document.createElement('div');
+    extras.className = 'upd-def-extras';
+    extras.innerHTML = definitionExtrasHtml({ build: b, changes, readOnly: b.step === 'verify' });
+    (def.querySelector('.build-def-inner') || def).appendChild(extras);
+    wireDefinitionExtras(extras, { changes }, host);
+  }
   // The status line goes to the one persistent live region (#build-status, outside this
   // re-rendered tree) and only when it changed: the summary block itself is rebuilt on every
   // re-render, so a live region on it announced nothing, or the whole block after each keystroke.
@@ -4933,6 +5154,14 @@ function renderBuildView(view) {
       const m = buildCompileModel({ build: b, library, clauses });
       stack = m.stack;
       renderBuildCompile(stepEl, m, host);
+      // The Open stage's one line, on the pack just opened for update, until the first change.
+      if (b.updateNotice && !changesSince(b).count) {
+        const note = document.createElement('p');
+        note.className = 'build-note upd-notice';
+        note.setAttribute('role', 'note');
+        note.textContent = b.updateNotice;
+        stepEl.querySelector('.build-step-head')?.insertAdjacentElement('afterend', note);
+      }
       break;
     }
     case 'define':

@@ -9602,3 +9602,102 @@ select.build-edit-input { appearance: auto; }
 .mss-outcome-note { margin: 0; font: italic 12.5px/1.45 var(--serif); color: var(--ink-2); }
 .mss-raw-summary { cursor: pointer; font: 600 12.5px/1.5 var(--sans); color: var(--ink-2); }
 .mss-raw-body { margin: 6px 0 0; max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.45 var(--mono); color: var(--ink); }
+
+/* ============================================================
+   The UPDATE journey (docs/UPDATE_JOURNEY.md) — zone .upd-* (docs/UI_CONVENTIONS.md §4).
+   Build's second door: the Open panel, the definition column's add actions and
+   "Changes since v0.1.0", the add editor's forms, Verify's review, the home list.
+   ============================================================ */
+.home-choice-card.has-two { cursor: default; }
+.home-choice-card.has-two:hover { transform: none; }
+.home-choice-two { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.home-choice-cta.is-btn { cursor: pointer; border: 1px solid var(--BLD); border-radius: 8px; padding: 8px 14px; background: color-mix(in srgb, var(--BLD) 14%, transparent); color: var(--ink); font: 600 13px/1.2 var(--sans); }
+.home-choice-cta.is-btn:hover { background: color-mix(in srgb, var(--BLD) 24%, transparent); }
+.home-choice-cta.is-btn.is-quiet { background: transparent; border-color: var(--line); color: var(--ink-2); }
+.home-choice-cta.is-btn.is-quiet[aria-expanded="true"] { border-color: var(--BLD); color: var(--ink); }
+.home-choice-cta.is-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.home-choice-cta.is-btn.is-unavailable { opacity: .6; cursor: not-allowed; }
+.upd-home { margin-top: 10px; text-align: left; }
+.upd-home-none { margin: 0; font: 13px/1.45 var(--sans); color: var(--ink-3); }
+.upd-home-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.upd-home-pack { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; width: 100%; text-align: left; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); cursor: pointer; }
+.upd-home-pack:hover { border-color: var(--BLD); background: var(--hover); }
+.upd-home-pack:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.upd-home-name { font: 600 14px/1.3 var(--mono); }
+.upd-home-meta { grid-column: 1; font: 12px/1.3 var(--sans); color: var(--ink-3); }
+.upd-home-cta { grid-column: 2; grid-row: 1 / span 2; align-self: center; font: 600 12px/1.2 var(--sans); color: var(--BLD); }
+
+/* The Open panel */
+.build-shell.is-opening .build-main { grid-column: 1 / -1; }
+.upd-open .upd-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 16px; }
+.upd-list { margin: 14px 0 0; padding: 12px 16px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--card); }
+.upd-list-title { margin: 0 0 6px; font: 600 12px/1.3 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+.upd-list ul { margin: 0; padding-left: 18px; font: 13px/1.5 var(--sans); color: var(--ink-2); }
+.upd-list--can .upd-list-title { color: var(--accent-text); }
+.upd-list--cannot .upd-list-title { color: var(--warn); }
+.upd-list--items ul { font-family: var(--mono); font-size: 12.5px; }
+
+/* The definition column: add actions and the changes */
+.upd-def-extras { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
+.upd-adds-title { font: 600 12px/1.3 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; }
+.upd-adds-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.upd-add { font-weight: 600; }
+.upd-change-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.upd-change { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 6px 10px; border-left: 3px solid var(--BLD); background: color-mix(in srgb, var(--BLD) 8%, transparent); border-radius: 0 6px 6px 0; font: 13px/1.4 var(--sans); color: var(--ink); }
+.upd-change-text { min-width: 0; overflow-wrap: anywhere; }
+.upd-undo { flex: 0 0 auto; }
+.upd-none { margin: 0; font: 12.5px/1.45 var(--sans); color: var(--ink-3); }
+.upd-notice { border-left: 3px solid var(--BLD); }
+
+/* The add editor */
+.upd-form { display: flex; flex-direction: column; gap: 12px; }
+.upd-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.upd-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+.upd-hint { font: 12px/1.4 var(--sans); color: var(--ink-3); }
+.upd-err { font: 12px/1.4 var(--sans); color: var(--error-text); }
+.upd-windows, .upd-channels { margin: 0; padding: 10px 12px 12px; border: 1px solid var(--line-2); border-radius: 8px; display: flex; flex-direction: column; gap: 8px; }
+.upd-windows legend, .upd-channels legend { padding: 0 6px; font: 600 12.5px/1.3 var(--sans); color: var(--ink-2); }
+.upd-window-row { display: grid; grid-template-columns: 1fr 1fr 1fr 1.2fr; gap: 8px; }
+.upd-channel-row { display: grid; grid-template-columns: 1fr 2fr auto; gap: 8px; align-items: end; }
+.upd-select { appearance: auto; }
+.upd-expr { min-height: 72px; font-family: var(--mono); }
+.build-edit-msg.is-error { font: 12px/1.4 var(--sans); color: var(--error-text); }
+
+/* Verify's review */
+.upd-review { margin: 18px 0; padding: 16px 18px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--card); display: flex; flex-direction: column; gap: 12px; }
+.upd-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.upd-card { padding: 12px 14px; border: 1px solid var(--line-2); border-radius: 8px; }
+.upd-card.is-next { border-color: var(--BLD); background: color-mix(in srgb, var(--BLD) 8%, transparent); }
+.upd-card-eyebrow { font: 600 11px/1.3 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); }
+.upd-card-title { font: 600 18px/1.25 var(--mono); color: var(--ink); margin-top: 2px; }
+.upd-card-title b { color: var(--accent-text); }
+.upd-card-sub { font: 12.5px/1.4 var(--sans); color: var(--ink-3); }
+.upd-numbers { margin: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; font: 13px/1.4 var(--sans); color: var(--ink-2); }
+.upd-numbers b { font-family: var(--mono); color: var(--ink); }
+.upd-sentence { margin: 0; font: 600 15px/1.4 var(--sans); color: var(--ink); }
+.upd-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.upd-row { padding: 8px 12px; border-left: 3px solid var(--line); border-radius: 0 6px 6px 0; }
+.upd-row.is-added { border-left-color: var(--accent); }
+.upd-row.is-changed { border-left-color: var(--warn); }
+.upd-row.is-removed { border-left-color: var(--error-border); }
+.upd-row-head { font: 13px/1.4 var(--sans); color: var(--ink); }
+.upd-row-kind { font: 600 11px/1.3 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); margin-right: 6px; }
+.upd-row-label { font-family: var(--mono); }
+.upd-row-why { color: var(--ink-3); }
+.upd-cols, .upd-fields > div { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; font: 12.5px/1.4 var(--mono); }
+.upd-fields { margin: 4px 0 0; }
+.upd-fields > div { grid-template-columns: 120px 1fr 1fr; }
+.upd-fields dt { color: var(--ink-3); font-family: var(--sans); }
+.upd-fields dd { margin: 0; overflow-wrap: anywhere; }
+.upd-old { color: var(--ink-3); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--ink-3) 50%, transparent); }
+.upd-new { color: var(--ink); }
+.upd-also summary { cursor: pointer; font: 600 13px/1.4 var(--sans); color: var(--ink-2); }
+.upd-also[open] summary { margin-bottom: 8px; }
+.upd-gone h4 { margin: 0 0 4px; font: 600 13px/1.4 var(--sans); color: var(--warn); }
+.upd-gone ul { margin: 4px 0 0; padding-left: 18px; font: 12.5px/1.4 var(--mono); }
+.upd-live { margin: 0; font: 13px/1.45 var(--sans); color: var(--ink-2); }
+.upd-save-error { margin: 0; }
+#update-btn.is-unavailable { opacity: .6; cursor: not-allowed; }
+@media (max-width: 900px) {
+  .upd-grid-2, .upd-grid-3, .upd-cards, .upd-window-row { grid-template-columns: 1fr; }
+}

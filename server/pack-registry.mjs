@@ -39,6 +39,7 @@ import { createHash } from 'node:crypto';
 import { parse as parseYaml } from '../tools/lib/mini-yaml.mjs';
 import { listEnvironments } from '../tools/lib/adapter.mjs';
 import { catalogEntryOf } from '../tools/lib/service-keys.mjs';
+import { versionChains } from '../tools/lib/pack-update.mjs';
 import {
   clearWorkspacePackFiles, deleteWorkspacePack, listPackFiles, packFileStat, readPackFile, saveWorkspacePack,
 } from './workspace.mjs';
@@ -130,6 +131,30 @@ export function ensureOrgLoaded(db = currentStore()) {
 
 // ---------- register ----------
 
+/**
+ * The ids that belong to a version chain — a pack saved as the next version
+ * of another (`library.update.previous`) and the versions under it — among
+ * the map's packs plus the one being registered. These never evict.
+ */
+export function savedVersionIds(uploads, incoming = null) {
+  const packs = [...uploads].map(([id, rec]) => ({ id, canonical: rec.canonical }));
+  if (incoming?.id && incoming.canonical) packs.push({ id: incoming.id, canonical: incoming.canonical });
+  const { heads } = versionChains(packs);
+  const out = new Set();
+  for (const h of heads) {
+    if (!h.earlier.length) continue;
+    out.add(h.id);
+    for (const e of h.earlier) out.add(e);
+  }
+  return out;
+}
+
+/** The version chains of the org's packs: `{ heads: [{ id, earlier }], superseded: Set, replacedBy: Map }` (tools/lib/pack-update.mjs). */
+export function packVersionChains(db = currentStore()) {
+  const uploads = uploadsMap(db);
+  return versionChains([...uploads].map(([id, rec]) => ({ id, canonical: rec.canonical })));
+}
+
 export function registerPack(db, actor, { canonical, source, label }) {
   // The clamp runs first, so the dedup below compares the cut label with the
   // cut labels in the map (a rehydrated map holds the rows' cut labels). A
@@ -143,12 +168,17 @@ export function registerPack(db, actor, { canonical, source, label }) {
   // the first instead of accumulating clones in the picker.
   const replaced = label ? [...uploads].filter(([otherId, rec]) => rec.label === label && otherId !== id).map(([otherId]) => otherId) : [];
   // The eviction: the oldest ids (insertion order) that the insert of `id`
-  // pushes beyond the cap — never `id` itself, never one already replaced.
+  // pushes beyond the cap — never `id` itself, never one already replaced,
+  // and never a saved version: a pack the UPDATE journey saved as the next
+  // version of another, and every version under it, is exempt from the cap
+  // (docs/UPDATE_JOURNEY.md, decision 7) — the map may then hold more than
+  // MAX_UPLOADS, which is the exemption, not a leak.
   const sizeAfter = uploads.size - replaced.length - (uploads.has(id) ? 1 : 0) + 1;
+  const kept = savedVersionIds(uploads, { id, canonical });
   const evicted = [];
   for (const otherId of uploads.keys()) {
     if (evicted.length >= sizeAfter - MAX_UPLOADS) break;
-    if (otherId === id || replaced.includes(otherId)) continue;
+    if (otherId === id || replaced.includes(otherId) || kept.has(otherId)) continue;
     evicted.push(otherId);
   }
   const entry = catalogEntryOf(id, { label, source }, canonical, listEnvironments(canonical));

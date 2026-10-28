@@ -40,6 +40,7 @@ import { stepHeadHtml, instantiateErrorHtml } from './build-define-view.mjs';
 import { buildStackHtml, wireBuildStack } from './build-stack-view.mjs';
 import { revealTodo, todoLines } from './build-atoms.mjs';
 import { decisionHeaderHtml, wireUxActions, termHtml, disclosureHtml, emptyStateHtml, announce, plural, LAYER_PURPOSE } from './ux-kit.mjs';
+import { reviewHtml } from './update-view.mjs';
 
 const GLYPH = { pass: '✓', placeholder: '◐', fail: '✗' };
 const REPRESENTED = 'Requirement represented; real value still needed';
@@ -281,6 +282,7 @@ export function renderBuildVerify(container, model, host = appHost) {
         primary: next.primary, secondary: next.secondary, measures,
       }) : ''}
 
+      ${model.ready && model.review ? reviewHtml(model.review) : ''}
       ${model.ready ? remainsHtml(model) : ''}
       ${model.ready ? rubricDetailHtml(model) : ''}
 
@@ -424,6 +426,9 @@ function wireRemains(container, model, act) {
       fixOnCompile({ kind: 'sheet', layer: failing?.dimension || 'L1' });
     },
     'open-discover': () => act.openInDiscover(),
+    // The UPDATE journey: Save as the next version of the pack opened; a refused Save names the newer version to open.
+    'save-update': () => act.saveUpdate?.(),
+    'open-newer': (_e, el) => act.enterUpdate?.(el.dataset.id),
     'accept-open': (_e, el) => act.update({ accepting: el.dataset.key, acceptDraft: { key: el.dataset.key, text: '' } }, { rerender: true, reinstantiate: false, focus: 'accept:reason' }),
     'accept-cancel': () => act.update({ accepting: null, acceptDraft: null }, { rerender: true, reinstantiate: false }),
     'accept-save': (_e, el) => save(el.dataset.key),

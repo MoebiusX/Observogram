@@ -21,6 +21,7 @@ coverage/
 .observogram/
 .observogram-demo/
 .observogram-demo-board/
+.observogram-demo-update/
 .tomograph/
 
 # Pinned backend-validator binaries + compiled-artifact scratch

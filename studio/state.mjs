@@ -45,6 +45,12 @@ export function defaultBuildState() {
     preview: null,            // { target, label, filename, contentType, content, warnings } — the VERIFY artefact open
     registeredId: null,       // the id VERIFY's "Continue …" exit registered
     serviceId: null,          // the service record DEFINE was prefilled from (a Build opened from a service page; docs/STORE_PLAN.md §6, slice 6a) — the ORIGIN the hand-off may write; null for a draft started from the home
+    additions: [],            // the artefacts added on top of Build's output (docs/UPDATE_JOURNEY.md "additions"): [{ kind: 'slo' | 'route' | 'alert_rule', … }], applied by the engine after every regenerate and recorded in the pack; persisted
+    update: null,             // the UPDATE journey: { id, name, version, label, environment, from } — the pack being updated (Build opened on it; Save registers the next version of it); null for a new pack; persisted
+    opened: null,             // the definition as it was when the pack was opened for update ({ tier, entries, params, slis, toggles, overrides, custom, additions, owners, environment }), what "Changes since v0.1.0" compares with; persisted
+    updateBase: null,         // the reopen answer the update was opened from (its canonical and comparison) — re-fetched on a reload (UI state, never persisted)
+    updateNotice: null,       // the Open stage's one line for Compile ("Opened checkout v0.1.0. Build rebuilt it…"; the values opened with Build's; the additions read in) (UI state, never persisted)
+    saveError: null,          // the last Save's refusal: { errors, newer? } (UI state, never persisted)
     stackOpen: {},            // { [`${layerId}/detail`]: true } — the stack's open detail folds (UI state, never persisted)
     sheetOpen: null,          // the layer whose sheet is open ('L1' … 'GOV'), one at a time (UI state, never persisted)
     rolodexAll: false,        // the L1 rolodex shows every product's SLIs, not only the selected entries' (UI state, never persisted)
@@ -62,7 +68,7 @@ export function defaultBuildState() {
   };
 }
 // The build fields that survive a reload (never `result`, `preview`, `error`, `pending`).
-export const BUILD_PERSIST_FIELDS = ['step', 'name', 'owners', 'environment', 'tier', 'entries', 'params', 'slis', 'toggles', 'overrides', 'custom', 'seeded', 'registeredId', 'serviceId'];
+export const BUILD_PERSIST_FIELDS = ['step', 'name', 'owners', 'environment', 'tier', 'entries', 'params', 'slis', 'toggles', 'overrides', 'custom', 'seeded', 'registeredId', 'serviceId', 'additions', 'update', 'opened'];
 
 export const state = {
   // 'home' starts the studio empty; user picks Analyze (one pack) or
