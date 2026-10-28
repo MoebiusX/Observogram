@@ -78,6 +78,17 @@ export const state = {
   // org's environments and MCP endpoints, entered from Advanced and the
   // account menu — the home's administrative sibling, not a journey tab.
   mode: 'home',
+  // Overview (the simplified front door: one service, three answers) is a
+  // mode of its own, 'overview', entered only while uiMode is 'overview'.
+  // uiMode is the browser's preference between the two faces of the studio
+  // — 'overview' or 'expert' (today's studio, every screen) — remembered
+  // under localStorage studioUiMode.v1, never in the snapshot; the first run
+  // decides it from the services table (overview-model.mjs decideUiMode).
+  // overviewServiceId / overviewEnv are the service and environment Overview
+  // shows, persisted so a reload lands on the same one.
+  uiMode: 'expert',
+  overviewServiceId: null,
+  overviewEnv: null,
   // The service page's record id and the environment NAME its selected tab
   // shows — kept while a workspace opened from the page is on screen (the
   // breadcrumb back, the empty Discover's sentence, the bound env option),
@@ -278,6 +289,7 @@ const PERSIST_FIELDS = [
   'mode',                        // 'build', 'service' and 'settings' are acted on at rehydrate; the pack ids decide the rest
   'build',                       // snapshotted through BUILD_PERSIST_FIELDS (inputs only, never the canonical)
   'serviceId', 'serviceEnv',     // the service page (or the workspace opened from it)
+  'overviewServiceId', 'overviewEnv',   // the service Overview shows (uiMode itself is a browser preference, not snapshot state)
   'settingsSection',             // Settings' section on screen
   'selectedService',
   'selectedPackId', 'selectedEnv',

@@ -120,6 +120,7 @@ function legacyDeployTargetFor(group) {
   if (group === 'dashboards')   return 'grafana-dashboard';
   if (group === 'pipelines')    return 'otel-collector';
   if (group === 'alertmanager') return 'alertmanager';
+  if (group === 'synthetics')   return 'blackbox-exporter';
   return null;
 }
 
