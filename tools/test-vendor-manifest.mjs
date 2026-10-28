@@ -383,6 +383,15 @@ test('--verify and --smoke run a vendored copy against its manifest, with manife
     assert.deepEqual(verifyVendoredTree(dir).find(r => r.path === 'tools/lib/slug.mjs'), { path: 'tools/lib/slug.mjs', status: 'drift' });
     fs.writeFileSync(slug, original.replace(/\n/g, '\r\n'));
     assert.deepEqual(verifyVendoredTree(dir).find(r => r.path === 'tools/lib/slug.mjs'), { path: 'tools/lib/slug.mjs', status: 'drift', hint: 'line endings differ (CRLF) — copy the bytes verbatim' });
+    // A patch marked the downstream way is drift that names itself; an unmarked edit stays bare drift.
+    fs.writeFileSync(slug, `${original}// LOCAL DEVIATION (acme SLUG-DASH): keep dashes\n`);
+    assert.deepEqual(verifyVendoredTree(dir).find(r => r.path === 'tools/lib/slug.mjs'), { path: 'tools/lib/slug.mjs', status: 'drift', hint: 'local patch (marked LOCAL DEVIATION) — re-apply it at the next bump, or send it upstream' });
+    fs.writeFileSync(slug, `${original.replace(/\n/g, '\r\n')}// LOCAL DEVIATION (acme SLUG-DASH): keep dashes\r\n`);
+    assert.equal(verifyVendoredTree(dir).find(r => r.path === 'tools/lib/slug.mjs').hint, 'local patch (marked LOCAL DEVIATION) — re-apply it at the next bump, or send it upstream', 'a marked patch in a CRLF copy is still a patch, not a line-ending slip');
+    // A downstream's own words, matched as text (a regex metacharacter is literal); the default words are then not looked for.
+    fs.writeFileSync(slug, `${original}// ORG-TAG (slug): keep dashes\n`);
+    assert.deepEqual(verifyVendoredTree(dir, { marker: 'ORG-TAG (' }).find(r => r.path === 'tools/lib/slug.mjs'), { path: 'tools/lib/slug.mjs', status: 'drift', hint: 'local patch (marked ORG-TAG () — re-apply it at the next bump, or send it upstream' });
+    assert.deepEqual(verifyVendoredTree(dir).find(r => r.path === 'tools/lib/slug.mjs'), { path: 'tools/lib/slug.mjs', status: 'drift' }, 'without the words, bare drift');
     fs.writeFileSync(slug, original);
     // Missing: a file not copied.
     fs.unlinkSync(path.join(dir, 'tools', 'lib', 'protocols.mjs'));
