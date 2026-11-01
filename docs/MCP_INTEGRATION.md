@@ -116,9 +116,9 @@ stage whose tools are missing is skipped with its gap and the fetch goes on);
 the stack self-metrics, the Alertmanager and Grafana observers and the ALERTS
 query are not read, while the recording-rule grep still runs over the whole
 metric-name list (it feeds the SLI and SLO inference); the scope narrows
-metric names (prefixes, then a 20 000-name cap), dashboards (folder uids,
-before the detail reads) and alert rules (folder uids, when every rule names
-its folder); every advertised alert-rule engine is read and the rules unioned
+metric names (prefixes, then exclude patterns, then a 20 000-name cap),
+dashboards (folder uids, before the detail reads) and alert rules (folder
+uids, when every rule names its folder); every advertised alert-rule engine is read and the rules unioned
 by name, Grafana-managed rules read from the provisioning shape (`title`,
 `data[]`, `folderUID`); a dashboard's id is its obs-pack-id tag, else the
 crawler's `dashboardSpecId`, so a uid pairs with a crawled repository.
@@ -130,8 +130,8 @@ byte. On the server both run as **live jobs** — `POST /api/mcp/jobs` answers
 202 with an id, `GET /api/mcp/jobs/:jobId?since=<seq>` is the gate log —
 in memory, so a restart loses them (docs/DOWNSTREAM.md §15.2 has the shapes
 and the stage table). The configured scope is
-`OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES`, `_FOLDER_UIDS` and `_DATASOURCE_UID`
-(deployment) or `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` (one org); a datasource uid
+`OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES`, `_FOLDER_UIDS`, `_DATASOURCE_UID` and
+`_METRIC_EXCLUDE` (deployment) or `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` (one org); a datasource uid
 is named in the gate log as not applied, since no advertised tool takes one.
 
 ## Server settings (admin configuration)

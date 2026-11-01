@@ -29,8 +29,9 @@
 //              running job; every timer is unref()'d
 //
 // The configured snapshot scope (snapshotScopeConfig) is read here too:
-// OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES / _FOLDER_UIDS / _DATASOURCE_UID for
-// the deployment, OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_* for one org (read only by
+// OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES / _FOLDER_UIDS / _DATASOURCE_UID /
+// _METRIC_EXCLUDE (white-space-separated patterns) for the deployment,
+// OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_* for one org (read only by
 // the org that owns the name, the longest-prefix rule of
 // server/store/mcp-endpoints.mjs), the org's overriding the deployment's
 // field by field. Read per request; inert when unset.
@@ -38,6 +39,7 @@
 import { randomBytes } from 'node:crypto';
 import { brandEnvFrom } from '../tools/lib/brand-env.mjs';
 import { normalizeScope, stagesFor, SNAPSHOT_LIMITS } from '../tools/lib/live-fetch.mjs';
+import { timedExcludeErrors } from '../tools/fetch-live-pack.mjs';
 import { redactTarget } from './mcp-target-policy.mjs';
 import { envNameOwnedBy, orgEnvPrefix } from './store/mcp-endpoints.mjs';
 
@@ -55,10 +57,11 @@ export const SNAPSHOT_SCOPE_VARS = Object.freeze([
   Object.freeze({ field: 'metricPrefixes', name: 'SNAPSHOT_METRIC_PREFIXES' }),
   Object.freeze({ field: 'folderUids', name: 'SNAPSHOT_FOLDER_UIDS' }),
   Object.freeze({ field: 'datasourceUid', name: 'SNAPSHOT_DATASOURCE_UID' }),
+  Object.freeze({ field: 'metricExclude', name: 'SNAPSHOT_METRIC_EXCLUDE' }),
 ]);
 
 // The scope an org's snapshots use when the request sends none →
-// { defaults: { metricPrefixes, folderUids, datasourceUid }, from: 'org' |
+// { defaults: { metricPrefixes, folderUids, datasourceUid, metricExclude }, from: 'org' |
 // 'deployment' | null, errors: [text] }. `from` is 'org' when any field came
 // from the org's own variable. A variable that does not parse names itself
 // in `errors` and contributes nothing.
@@ -81,6 +84,9 @@ export function snapshotScopeConfig(db, org, env = process.env) {
     }
     if (value === null) continue;
     const one = normalizeScope({ [field]: value });
+    // The exclude patterns' timed half runs here too: a pattern that crawls is
+    // the variable's error, not a failed job an hour later.
+    if (!one.errors.length && field === 'metricExclude') one.errors.push(...timedExcludeErrors(one.scope.metricExclude));
     if (one.errors.length) errors.push(...one.errors.map((e) => e.replace(/^scope\.[A-Za-z]+/, varName)));
     else input[field] = one.scope[field];
   }
@@ -89,6 +95,7 @@ export function snapshotScopeConfig(db, org, env = process.env) {
       metricPrefixes: input.metricPrefixes ?? [],
       folderUids: input.folderUids ?? [],
       datasourceUid: input.datasourceUid ?? null,
+      metricExclude: input.metricExclude ?? [],
     },
     from,
     errors,

@@ -360,6 +360,10 @@
             <span class="mcp-field-key">Dashboard / rule folder uids <em>(comma-separated)</em></span>
             <input id="live-scope-folders" type="text" placeholder="ab12cd" autocomplete="off">
           </label>
+          <label class="mcp-field">
+            <span class="mcp-field-key">Exclude metric names matching <em>(anchored patterns, separated by spaces; dropped after the prefixes)</em></span>
+            <input id="live-scope-exclude" type="text" placeholder="^app_event_\d+_total$ ^go_" autocomplete="off">
+          </label>
         </div>
         <p class="mcpc-note" id="live-scope-note"></p>
       </div>

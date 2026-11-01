@@ -71,6 +71,7 @@ import { brandEnv } from './lib/brand-env.mjs';
 import { stripMcpUrl } from './lib/mcp-url-safety.mjs';
 import { dashboardSpecId } from './lib/crawler.mjs';
 import { LIVE_KINDS, SNAPSHOT_LIMITS, stagesFor, stageNoun, normalizeScope, scopeAnnotations } from './lib/live-fetch.mjs';
+import { compileBoundedPattern } from './lib/artefact-classify.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = resolve(__dirname, '..', 'vendor', 'observability-pack-spec', `v${SPEC_VERSION}`, 'observability-pack.schema.json');
@@ -2397,6 +2398,21 @@ const STAGE_OF_PROBE = Object.freeze({
   scrape_configs: 'scrape_targets', alerting_routes: 'alerting_routes', metric_names: 'metric_names',
 });
 
+// The timed half of the exclude-pattern rule over a normalized scope's
+// `metricExclude` (normalizeScope ran the static half): one sentence per
+// pattern that crawls over an adversarial 256-character name, in the shape of
+// normalizeScope's own errors (`scope.metricExclude[i] "…" is …`), so the
+// server's start route and its configured-scope reader refuse it the same way
+// as any other bad scope value, before a job starts.
+export function timedExcludeErrors(patterns) {
+  const errors = [];
+  (Array.isArray(patterns) ? patterns : []).forEach((pattern, i) => {
+    if (compileBoundedPattern(pattern).re) return;
+    errors.push(`scope.metricExclude[${i}] ${JSON.stringify(pattern)} is too slow to match (it crawls over a 256-character name)`);
+  });
+  return errors;
+}
+
 // fetchMcp({ mode, scope, onStage, signal }) — rebadge batch 3, C1.
 //
 // mode 'draft' (the default) is the fetch as it always was: its answer, and
@@ -2437,10 +2453,19 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   if (!LIVE_KINDS.includes(mode)) throw new TypeError(`fetchMcp: unknown mode ${JSON.stringify(mode)} (snapshot or draft)`);
   const snapshot = mode === 'snapshot';
   let snapScope = null;
+  // The exclude patterns, compiled once through the repository's bounded-regex
+  // rule (the timed half: a pattern that crawls over an adversarial name is
+  // refused here, like any other bad scope value — normalizeScope checked the
+  // static half, and that module imports nothing). The server runs the same
+  // check before it answers a start, so this is the backstop.
+  const excludeMatchers = [];
   if (snapshot) {
     const normalized = normalizeScope(scope);
     if (normalized.errors.length) throw new TypeError(`fetchMcp: ${normalized.errors.join('; ')}`);
     snapScope = normalized.scope;
+    const slow = timedExcludeErrors(snapScope.metricExclude);
+    if (slow.length) throw new TypeError(`fetchMcp: ${slow.join('; ')}`);
+    for (const pattern of snapScope.metricExclude) excludeMatchers.push(compileBoundedPattern(pattern, { timed: false }).re);
   }
   const stageLabel = new Map(stagesFor(mode).map(st => [st.id, st]));
   const report = (stage, state, { counts = null, message = null, gap = null } = {}) => {
@@ -2870,15 +2895,29 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   {
     const listed = Array.isArray(unscopedMetricNames) ? unscopedMetricNames.length : 0;
     let message = null;
+    let excluded = null;
     if (snapshot && Array.isArray(unscopedMetricNames)) {
       const prefixes = snapScope.metricPrefixes;
       let kept = prefixes.length ? unscopedMetricNames.filter(n => prefixes.some(pre => n.startsWith(pre))) : unscopedMetricNames;
+      // The exclude patterns, after the keep-list and before the cap: names a
+      // backend lists that no declaration will ever match (an exporter's
+      // malformed mints, a tenant's noise), kept out of the inventory and
+      // counted in the gate log.
+      if (excludeMatchers.length) {
+        const before = kept.length;
+        kept = kept.filter(n => !excludeMatchers.some(re => re.test(n)));
+        excluded = before - kept.length;
+      }
       if (kept.length > SNAPSHOT_LIMITS.metricNames) {
-        message = `listed ${listed}, kept the first ${SNAPSHOT_LIMITS.metricNames} — set metric prefixes to narrow it`;
+        message = `listed ${listed}, kept the first ${SNAPSHOT_LIMITS.metricNames} — set metric prefixes or exclude patterns to narrow it`;
         kept = kept.slice(0, SNAPSHOT_LIMITS.metricNames);
       }
-      if (prefixes.length) applied.push('metric');
+      if (prefixes.length || excludeMatchers.length) applied.push('metric');
       probeResults.metric_names = { ...probeResults.metric_names, adapted: kept };
+    }
+    if (excluded !== null) {
+      const ex = `excluded ${excluded} by pattern`;
+      message = message ? `${ex}; ${message}` : ex;
     }
     // No capability row declares a datasource-uid argument slot today
     // (tools/lib/contracts/mcp-capabilities.mjs runtimeArgs): the scope field
@@ -2887,7 +2926,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       const ds = `datasource uid "${snapScope.datasourceUid}" not applied — no advertised tool takes a datasource uid`;
       message = message ? `${ds}; ${message}` : ds;
     }
-    endProbeStage('metric_names', { listed, kept: adaptedLength('metric_names') }, message);
+    endProbeStage('metric_names', { listed, kept: adaptedLength('metric_names'), ...(excluded !== null ? { excluded } : {}) }, message);
   }
 
   // Dashboard search only returns the catalogue row. For diagnostic-grade
