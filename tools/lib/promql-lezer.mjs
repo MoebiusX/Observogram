@@ -8,7 +8,7 @@
 // reaches no package.
 
 import { parser } from '@prometheus-io/lezer-promql';
-import { parsePromqlDependencies as parseCoreDependencies } from './promql.mjs';
+import { parsePromqlDependencies as parseCoreDependencies, colonEdged } from './promql.mjs';
 
 export function extractPromqlMetricNames(value) {
   return parsePromqlDependencies(value).metrics;
@@ -58,8 +58,13 @@ function parseOneWithLezer(expr) {
         });
       }
       if (cursor.name === 'VectorSelector') {
+        // The grammar admits a colon at either end of an identifier
+        // (`app_queue_depth:`), which is a stripped-variable fragment, never a
+        // metric; refuse it here, or the union in parsePromqlDependencies
+        // re-admits what the core parser dropped. Only that rule is shared:
+        // a single-word name the grammar proves to be a selector stays.
         const metric = vectorMetricName(cursor, text);
-        if (metric) metrics.add(metric);
+        if (metric && !colonEdged(metric)) metrics.add(metric);
       }
       if (cursor.firstChild()) {
         walk();
