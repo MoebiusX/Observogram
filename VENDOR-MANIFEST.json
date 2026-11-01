@@ -753,8 +753,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/live-fetch.mjs": {
-      "sha256": "c095215c05f2a8615460cca0c79f1c53ac758953dfe38933968754bcd3a7d72b",
-      "bytes": 16778,
+      "sha256": "601dbc7bb9203449fe164187fcff44bd710f9dce37dab92e80d0e74e7ac4a513",
+      "bytes": 20663,
       "exports": [
         "LIVE_KINDS",
         "LIVE_SCOPE_ANNOTATION",

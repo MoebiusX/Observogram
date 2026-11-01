@@ -40,7 +40,7 @@ export const LIVE_STAGES = Object.freeze([
 export const LIVE_KINDS = Object.freeze(['snapshot', 'draft']);
 export const STAGE_STATES = Object.freeze(['pending', 'running', 'done', 'failed', 'skipped']);
 
-export const SCOPE_LIMITS = Object.freeze({ prefixes: 32, prefixLength: 100, folders: 32, uidLength: 40 });
+export const SCOPE_LIMITS = Object.freeze({ prefixes: 32, prefixLength: 100, folders: 32, uidLength: 40, excludes: 32, excludeLength: 200 });
 export const SNAPSHOT_LIMITS = Object.freeze({ metricNames: 20_000, packBytes: 16 * 1024 * 1024, messageChars: 300 });
 
 // The rows of one kind of fetch, in order.
@@ -86,17 +86,20 @@ export function fetchPlan(capabilities, { kind, complete = true } = {}) {
 
 const PREFIX_RE = /^[A-Za-z_:][A-Za-z0-9_:]*$/;
 const UID_RE = /^[A-Za-z0-9_-]+$/;
-const SCOPE_FIELDS = Object.freeze(['metricPrefixes', 'folderUids', 'datasourceUid']);
+const SCOPE_FIELDS = Object.freeze(['metricPrefixes', 'folderUids', 'datasourceUid', 'metricExclude']);
 // A refused value is quoted, cut so a pasted blob never fills the sentence.
 const quoted = (value) => {
   const s = String(value);
   return JSON.stringify(s.length > 60 ? `${s.slice(0, 60)}…` : s);
 };
 const listOf = (value) => (typeof value === 'string' ? value.split(',') : value);
+// Exclude patterns in a variable are separated by white space, never by a
+// comma: a metric name has no white space, a regex may well have a comma.
+const wordsOf = (value) => (typeof value === 'string' ? value.split(/\s+/) : value);
 
-function normalizeList(raw, field, { limit, check }, errors) {
+function normalizeList(raw, field, { limit, check, split = listOf }, errors) {
   if (raw === undefined || raw === null || raw === '') return [];
-  const list = listOf(raw);
+  const list = split(raw);
   if (!Array.isArray(list)) { errors.push(`scope.${field} is not a list`); return []; }
   const out = [];
   list.forEach((item, i) => {
@@ -118,18 +121,32 @@ const checkPrefix = (value) => {
 const checkUid = (what) => (value) => (value.length <= SCOPE_LIMITS.uidLength && UID_RE.test(value)
   ? null
   : `is not a ${what} uid (1–${SCOPE_LIMITS.uidLength} letters, digits, _ and -)`);
+// An exclude pattern: the static half of the bounded-regex rule every
+// user-written regex in this repository obeys (tools/lib/artefact-classify.mjs
+// compileBoundedPattern — anchored, short, no quantified group, compiles).
+// This module imports nothing, so the rule is restated here; the fetcher runs
+// the timed half against adversarial names before a pattern touches a list.
+const QUANTIFIED_GROUP = /\)[+*{]/;
+const checkExclude = (value) => {
+  if (value.length > SCOPE_LIMITS.excludeLength) return `is longer than ${SCOPE_LIMITS.excludeLength} characters`;
+  if (!value.startsWith('^')) return 'is not anchored (an exclude pattern starts with ^)';
+  if (QUANTIFIED_GROUP.test(value)) return 'has a quantified group (nested quantifier)';
+  try { new RegExp(value); } catch (e) { return `is not a regular expression (${e.message})`; }
+  return null;
+};
 
 // A scope from a request body or the configuration → { scope, errors }. The
-// list fields take an array or a comma list (the configuration's form); the
+// list fields take an array or a comma list (the configuration's form; the
+// exclude patterns a white-space list, since a regex may carry a comma); the
 // values are trimmed and deduplicated in order. `errors` holds one sentence
 // per refused field or value, naming it and the rule; the scope keeps only the
 // values that passed, and a caller refuses the whole scope when `errors` is
 // not empty.
 export function normalizeScope(input) {
   const errors = [];
-  const scope = { metricPrefixes: [], folderUids: [], datasourceUid: null };
+  const scope = { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [] };
   if (input === undefined || input === null) return { scope, errors };
-  if (typeof input !== 'object' || Array.isArray(input)) return { scope, errors: ['scope is not an object (metricPrefixes, folderUids, datasourceUid)'] };
+  if (typeof input !== 'object' || Array.isArray(input)) return { scope, errors: [`scope is not an object (${SCOPE_FIELDS.join(', ')})`] };
   for (const key of Object.keys(input)) {
     if (!SCOPE_FIELDS.includes(key)) errors.push(`scope.${key} is not a scope field (${SCOPE_FIELDS.join(', ')})`);
   }
@@ -145,20 +162,23 @@ export function normalizeScope(input) {
       else scope.datasourceUid = value;
     }
   }
+  scope.metricExclude = normalizeList(input.metricExclude, 'metricExclude', { limit: SCOPE_LIMITS.excludes, check: checkExclude, split: wordsOf }, errors);
   return { scope, errors };
 }
 
 export function scopeIsEmpty(scope) {
-  return !scope || ((scope.metricPrefixes || []).length === 0 && (scope.folderUids || []).length === 0 && !scope.datasourceUid);
+  return !scope || ((scope.metricPrefixes || []).length === 0 && (scope.folderUids || []).length === 0 && !scope.datasourceUid
+    && (scope.metricExclude || []).length === 0);
 }
 
-// The families each scope field may apply to. Metric prefixes narrow the
-// metric family; folder uids the dashboards, and the rule families only when
-// every rule the answers carry names its folder (the fetcher decides and
-// says so in `learned.applied`).
+// The families each scope field may apply to. Metric prefixes and exclude
+// patterns narrow the metric family; folder uids the dashboards, and the rule
+// families only when every rule the answers carry names its folder (the
+// fetcher decides and says so in `learned.applied`).
 export const SCOPE_FAMILIES = Object.freeze({
   metricPrefixes: Object.freeze(['metric']),
   folderUids: Object.freeze(['dashboard', 'alert_rule', 'recording_rule']),
+  metricExclude: Object.freeze(['metric']),
 });
 
 export const LIVE_SCOPE_ANNOTATION = 'observogram.live.scope';
@@ -167,26 +187,38 @@ const FOLDER_TITLE_CHARS = 100;
 
 // The annotations a snapshot records for its scope. `learned` is what the
 // fetch found out: `applied` — the families the scope was actually applied
-// to (default: the metric family when prefixes are set, dashboards when
-// folders are) — and `folderTitles` ({ <uid>: <title> }, from the dashboard
-// search answers). `observogram.live.scope` is always written (an unscoped
-// snapshot says so); a family's `observogram.scope.<kind>` only when the
-// scope was applied to it, so the diff parks nothing the fetch did not narrow.
+// to (default: the metric family when prefixes or exclude patterns are set,
+// dashboards when folders are) — and `folderTitles` ({ <uid>: <title> }, from
+// the dashboard search answers). `observogram.live.scope` is always written
+// (an unscoped snapshot says so; `metricExclude` and its `appliesTo` entry
+// appear only when patterns are set, so a pack without them reads as before);
+// a family's `observogram.scope.<kind>` only when the scope was applied to it,
+// so the diff parks nothing the fetch did not narrow. The metric entry carries
+// the prefixes as `values` and, when set, the patterns as `exclude`.
 export function scopeAnnotations(scope, learned = {}) {
   const s = scope || {};
   const prefixes = [...(s.metricPrefixes || [])];
   const folders = [...(s.folderUids || [])];
-  const defaults = [...(prefixes.length ? ['metric'] : []), ...(folders.length ? ['dashboard'] : [])];
+  const excludes = [...(s.metricExclude || [])];
+  const defaults = [...(prefixes.length || excludes.length ? ['metric'] : []), ...(folders.length ? ['dashboard'] : [])];
   const applied = new Set(Array.isArray(learned.applied) ? learned.applied : defaults);
   const titles = learned.folderTitles && typeof learned.folderTitles === 'object' ? learned.folderTitles : {};
   const appliesTo = {
     metricPrefixes: prefixes.length ? SCOPE_FAMILIES.metricPrefixes.filter((k) => applied.has(k)) : [],
     folderUids: folders.length ? SCOPE_FAMILIES.folderUids.filter((k) => applied.has(k)) : [],
+    ...(excludes.length ? { metricExclude: SCOPE_FAMILIES.metricExclude.filter((k) => applied.has(k)) } : {}),
   };
   const out = {
-    [LIVE_SCOPE_ANNOTATION]: JSON.stringify({ metricPrefixes: prefixes, folderUids: folders, datasourceUid: s.datasourceUid || null, appliesTo }),
+    [LIVE_SCOPE_ANNOTATION]: JSON.stringify({
+      metricPrefixes: prefixes, folderUids: folders, datasourceUid: s.datasourceUid || null,
+      ...(excludes.length ? { metricExclude: excludes } : {}),
+      appliesTo,
+    }),
   };
-  for (const kind of appliesTo.metricPrefixes) out[`${SCOPE_ANNOTATION_PREFIX}${kind}`] = JSON.stringify({ by: 'prefix', values: prefixes });
+  const metricKinds = new Set([...appliesTo.metricPrefixes, ...(appliesTo.metricExclude || [])]);
+  for (const kind of metricKinds) {
+    out[`${SCOPE_ANNOTATION_PREFIX}${kind}`] = JSON.stringify({ by: 'prefix', values: prefixes, ...(excludes.length ? { exclude: excludes } : {}) });
+  }
   const folderValues = folders.map((uid) => {
     const title = typeof titles[uid] === 'string' && titles[uid] !== '' ? titles[uid].slice(0, FOLDER_TITLE_CHARS) : null;
     return { uid, title };
@@ -197,9 +229,11 @@ export function scopeAnnotations(scope, learned = {}) {
 
 // A pack's scope, read back from its annotations (an adapted pack carries
 // them on meta.annotations, a canonical on metadata.annotations): kind →
-// { by: 'prefix', values: [prefix] } | { by: 'folder', values: [{ uid, title }] }.
-// A value that does not parse, or has no value, is ignored — the family is
-// then compared as if unscoped, never parked on a guess.
+// { by: 'prefix', values: [prefix], exclude?: [pattern] } | { by: 'folder',
+// values: [{ uid, title }] }. A value that does not parse, or has no value, is
+// ignored — the family is then compared as if unscoped, never parked on a
+// guess; an exclude pattern that does not pass the scope's own rule is
+// dropped the same way.
 export function scopeOf(annotations) {
   const out = new Map();
   if (!annotations || typeof annotations !== 'object') return out;
@@ -210,7 +244,12 @@ export function scopeOf(annotations) {
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.values)) continue;
     if (parsed.by === 'prefix') {
       const values = parsed.values.filter((v) => typeof v === 'string' && v !== '');
-      if (values.length) out.set(key.slice(SCOPE_ANNOTATION_PREFIX.length), { by: 'prefix', values });
+      const exclude = (Array.isArray(parsed.exclude) ? parsed.exclude : [])
+        .filter((v) => typeof v === 'string' && v !== '' && checkExclude(v) === null)
+        .slice(0, SCOPE_LIMITS.excludes);
+      if (values.length || exclude.length) {
+        out.set(key.slice(SCOPE_ANNOTATION_PREFIX.length), { by: 'prefix', values, ...(exclude.length ? { exclude } : {}) });
+      }
     } else if (parsed.by === 'folder') {
       const values = parsed.values
         .map((v) => (typeof v === 'string' ? { uid: v, title: null } : v))
@@ -252,7 +291,11 @@ export function inScope(kind, artefact, scopeEntry) {
   if (scopeEntry.by === 'prefix') {
     const names = metricNamesOf(artefact);
     if (!names.length) return null;
-    return names.some((n) => scopeEntry.values.some((p) => n.startsWith(p)));
+    const excluded = excludeMatchers(scopeEntry);
+    // A name is inside when it carries a prefix (any name, when no prefix was
+    // set) and no exclude pattern matches it: the fetcher kept exactly those.
+    return names.some((n) => (scopeEntry.values.length === 0 || scopeEntry.values.some((p) => n.startsWith(p)))
+      && !excluded.some((re) => re.test(n)));
   }
   if (scopeEntry.by === 'folder') {
     const uid = folderUidOf(artefact);
@@ -260,6 +303,21 @@ export function inScope(kind, artefact, scopeEntry) {
     return scopeEntry.values.some((v) => v.uid === uid);
   }
   return null;
+}
+
+// The compiled exclude patterns of a prefix entry, once per entry (scopeOf
+// let through only patterns that pass checkExclude, so these compile).
+const EXCLUDE_MATCHERS = new WeakMap();
+function excludeMatchers(scopeEntry) {
+  const patterns = Array.isArray(scopeEntry.exclude) ? scopeEntry.exclude : [];
+  if (!patterns.length) return [];
+  let compiled = EXCLUDE_MATCHERS.get(scopeEntry);
+  if (!compiled) {
+    compiled = [];
+    for (const p of patterns) { try { compiled.push(new RegExp(p)); } catch { /* refused by checkExclude; skipped */ } }
+    EXCLUDE_MATCHERS.set(scopeEntry, compiled);
+  }
+  return compiled;
 }
 
 const FAMILY_NOUNS = Object.freeze({
@@ -280,10 +338,13 @@ export function scopeReason(kind, verdict, scopeEntry, { holder = 'a' } = {}) {
   const [one, many] = nounOf(kind);
   const pack = `Pack ${String(holder).toUpperCase() === 'B' ? 'B' : 'A'}`;
   if (scopeEntry.by === 'prefix') {
-    const list = scopeEntry.values.join(', ');
+    const prefixes = scopeEntry.values.length ? `prefixes ${scopeEntry.values.join(', ')}` : '';
+    const excluded = Array.isArray(scopeEntry.exclude) && scopeEntry.exclude.length ? `excluded ${scopeEntry.exclude.join(' ')}` : '';
+    const list = [prefixes, excluded].filter(Boolean).join('; ');
+    const read = [scopeEntry.values.length ? `with the prefixes ${scopeEntry.values.join(', ')}` : '', excluded ? `not matching ${scopeEntry.exclude.join(' ')}` : ''].filter(Boolean).join(' and ');
     return verdict === false
-      ? `outside the snapshot's ${one} scope (prefixes ${list})`
-      : `the snapshot read only ${many} with the prefixes ${list}; ${pack} gives this ${one} no name, so it was not checked`;
+      ? `outside the snapshot's ${one} scope (${list})`
+      : `the snapshot read only ${many} ${read}; ${pack} gives this ${one} no name, so it was not checked`;
   }
   if (scopeEntry.by === 'folder') {
     const list = folderNames(scopeEntry.values);

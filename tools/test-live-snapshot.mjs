@@ -24,7 +24,9 @@
  * abort (the draft still throws), the folder scope before the detail loop,
  * two alert-rule engines unioned, a two-page tools/list, the cancel, the
  * metric-name cap, the gate log's order and counts, a token an MCP echoes
- * never reaching a stage message, and the Grafana-managed rules of the
+ * never reaching a stage message, the exclude patterns (names dropped after
+ * the prefixes, counted, the excluded repository metric parked with its
+ * reason, patterns alone, a bad pattern refused), and the Grafana-managed rules of the
  * provisioning API (recorded from the local Docker stack's Grafana,
  * tools/fixtures/mcp/grafana_alert_rules.json) unioned with vmalert's, read
  * by title with their folder uid — the rule folder scope applied when every
@@ -51,7 +53,8 @@ import {
 import {
   CAPABILITIES, capabilityInventory, probeCandidates, capabilityTool, candidateTool, productAttestedByTool,
 } from './lib/contracts/mcp-capabilities.mjs';
-import { fetchMcp, buildSnapshotPack, buildCanonicalPack, TOOLS_LIST_MAX_PAGES } from './fetch-live-pack.mjs';
+import { fetchMcp, buildSnapshotPack, buildCanonicalPack, TOOLS_LIST_MAX_PAGES, timedExcludeErrors } from './fetch-live-pack.mjs';
+import { PATTERN_MAX_LENGTH } from './lib/artefact-classify.mjs';
 import { crawlFiles } from './lib/crawler.mjs';
 import { adapt } from './lib/adapter.mjs';
 import { diffPacks } from './lib/diff.mjs';
@@ -89,7 +92,9 @@ test('the stages: ids in fetch order, the draft alone reads the stack signals, e
   assert.throws(() => stagesFor(undefined), TypeError);
   assert.equal(stageNoun(LIVE_STAGES[1]), 'services');
   assert.equal(stageNoun(LIVE_STAGES[7]), 'scrape targets');
-  assert.deepEqual(SCOPE_LIMITS, { prefixes: 32, prefixLength: 100, folders: 32, uidLength: 40 });
+  assert.deepEqual(SCOPE_LIMITS, { prefixes: 32, prefixLength: 100, folders: 32, uidLength: 40, excludes: 32, excludeLength: 200 });
+  // An exclude pattern's length cap is the repository's bounded-regex cap, restated (live-fetch imports nothing).
+  assert.equal(SCOPE_LIMITS.excludeLength, PATTERN_MAX_LENGTH);
   assert.deepEqual(SNAPSHOT_LIMITS, { metricNames: 20000, packBytes: 16777216, messageChars: 300 });
 });
 
@@ -127,27 +132,42 @@ test('fetchPlan over an incomplete or absent listing: a missing capability is un
 });
 
 test('normalizeScope: arrays or comma lists, trimmed and deduplicated in order; nothing is an empty scope', () => {
-  assert.deepEqual(normalizeScope(undefined), { scope: { metricPrefixes: [], folderUids: [], datasourceUid: null }, errors: [] });
-  assert.deepEqual(normalizeScope({}), { scope: { metricPrefixes: [], folderUids: [], datasourceUid: null }, errors: [] });
+  assert.deepEqual(normalizeScope(undefined), { scope: { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [] }, errors: [] });
+  assert.deepEqual(normalizeScope({}), { scope: { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [] }, errors: [] });
   assert.deepEqual(normalizeScope({ metricPrefixes: ['payments_', ' checkout_', 'payments_', 'ns:job:'], folderUids: 'ab12, cd-34,,', datasourceUid: ' prom_1 ' }), {
-    scope: { metricPrefixes: ['payments_', 'checkout_', 'ns:job:'], folderUids: ['ab12', 'cd-34'], datasourceUid: 'prom_1' },
+    scope: { metricPrefixes: ['payments_', 'checkout_', 'ns:job:'], folderUids: ['ab12', 'cd-34'], datasourceUid: 'prom_1', metricExclude: [] },
     errors: [],
   });
   assert.ok(scopeIsEmpty(normalizeScope(null).scope));
   assert.ok(!scopeIsEmpty({ metricPrefixes: [], folderUids: [], datasourceUid: 'x' }));
+  assert.ok(!scopeIsEmpty({ metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: ['^go_'] }));
   assert.ok(scopeIsEmpty(null));
+});
+
+test('normalizeScope: exclude patterns — an array or a white-space list (a regex may carry a comma), anchored, at most 200 characters, compiling, no quantified group; deduplicated, counted, bounded', () => {
+  assert.deepEqual(normalizeScope({ metricExclude: ' ^app_event_\\d+_total$  ^go_ ^app_event_\\d+_total$ ' }).scope.metricExclude, ['^app_event_\\d+_total$', '^go_']);
+  assert.deepEqual(normalizeScope({ metricExclude: ['^a{2,5}_'] }), { scope: { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: ['^a{2,5}_'] }, errors: [] });
+  assert.deepEqual(normalizeScope({ metricExclude: ['app_'] }).errors, ['scope.metricExclude[0] "app_" is not anchored (an exclude pattern starts with ^)']);
+  assert.deepEqual(normalizeScope({ metricExclude: ['^(a+)+$'] }).errors, ['scope.metricExclude[0] "^(a+)+$" has a quantified group (nested quantifier)']);
+  assert.match(normalizeScope({ metricExclude: ['^(a'] }).errors[0], /^scope\.metricExclude\[0\] "\^\(a" is not a regular expression \(/);
+  assert.deepEqual(normalizeScope({ metricExclude: [`^${'a'.repeat(200)}`] }).errors, [`scope.metricExclude[0] "^${'a'.repeat(59)}…" is longer than 200 characters`]);
+  const many = normalizeScope({ metricExclude: Array.from({ length: 33 }, (_, i) => `^m${i}_`) });
+  assert.deepEqual(many.errors, ['scope.metricExclude has 33 entries; at most 32']);
+  assert.equal(many.scope.metricExclude.length, 32);
+  assert.deepEqual(normalizeScope({ metricExclude: [7] }).errors, ['scope.metricExclude[0] is not a string']);
+  assert.deepEqual(normalizeScope({ metricExclude: { a: 1 } }).errors, ['scope.metricExclude is not a list']);
 });
 
 test('normalizeScope refuses by field and rule: a prefix starting with a digit, a uid with a space, an over-long value, too many entries, a non-string, an unknown field, a non-object — a pasted blob is quoted cut', () => {
   const { scope, errors } = normalizeScope({ metricPrefixes: ['ok_', 'x', '1bad'], folderUids: ['x y', 'a'.repeat(41)], datasourceUid: 'p q', extra: 1 });
   assert.deepEqual(errors, [
-    'scope.extra is not a scope field (metricPrefixes, folderUids, datasourceUid)',
+    'scope.extra is not a scope field (metricPrefixes, folderUids, datasourceUid, metricExclude)',
     'scope.metricPrefixes[2] "1bad" is not a metric-name prefix (letters, digits, _ and :, not starting with a digit)',
     'scope.folderUids[0] "x y" is not a folder uid (1–40 letters, digits, _ and -)',
     `scope.folderUids[1] "${'a'.repeat(41)}" is not a folder uid (1–40 letters, digits, _ and -)`,
     'scope.datasourceUid "p q" is not a datasource uid (1–40 letters, digits, _ and -)',
   ]);
-  assert.deepEqual(scope, { metricPrefixes: ['ok_', 'x'], folderUids: [], datasourceUid: null }, 'only what passed is kept');
+  assert.deepEqual(scope, { metricPrefixes: ['ok_', 'x'], folderUids: [], datasourceUid: null, metricExclude: [] }, 'only what passed is kept');
   const long = normalizeScope({ metricPrefixes: ['a'.repeat(101)] });
   assert.deepEqual(long.errors, [`scope.metricPrefixes[0] "${'a'.repeat(60)}…" is longer than 100 characters`]);
   const many = normalizeScope({ folderUids: Array.from({ length: 33 }, (_, i) => `f${i}`) });
@@ -156,8 +176,8 @@ test('normalizeScope refuses by field and rule: a prefix starting with a digit, 
   assert.deepEqual(normalizeScope({ metricPrefixes: [7] }).errors, ['scope.metricPrefixes[0] is not a string']);
   assert.deepEqual(normalizeScope({ metricPrefixes: { a: 1 } }).errors, ['scope.metricPrefixes is not a list']);
   assert.deepEqual(normalizeScope({ datasourceUid: 5 }).errors, ['scope.datasourceUid is not a string']);
-  assert.deepEqual(normalizeScope(['a']).errors, ['scope is not an object (metricPrefixes, folderUids, datasourceUid)']);
-  assert.deepEqual(normalizeScope('payments_').errors, ['scope is not an object (metricPrefixes, folderUids, datasourceUid)']);
+  assert.deepEqual(normalizeScope(['a']).errors, ['scope is not an object (metricPrefixes, folderUids, datasourceUid, metricExclude)']);
+  assert.deepEqual(normalizeScope('payments_').errors, ['scope is not an object (metricPrefixes, folderUids, datasourceUid, metricExclude)']);
   assert.deepEqual(normalizeScope({ metricPrefixes: [''] }).errors, ['scope.metricPrefixes[0] "" is not a metric-name prefix (letters, digits, _ and :, not starting with a digit)']);
 });
 
@@ -186,6 +206,37 @@ test('scopeAnnotations: the live scope always, with appliesTo; a family\'s scope
   assert.deepEqual(back.get('metric'), { by: 'prefix', values: ['payments_', 'checkout_'] });
   assert.equal(back.get('dashboard').values[0].title, 'Payments');
   assert.deepEqual(SCOPE_FAMILIES.folderUids, ['dashboard', 'alert_rule', 'recording_rule']);
+  assert.deepEqual(SCOPE_FAMILIES.metricExclude, ['metric']);
+});
+
+test('scopeAnnotations with exclude patterns: they ride in the live scope and the metric entry only when set; scopeOf reads them back, inScope and scopeReason honour them, a pattern that fails the rule is dropped', () => {
+  const ann = scopeAnnotations({ metricPrefixes: ['app_'], folderUids: [], datasourceUid: null, metricExclude: ['^app_event_\\d+_total$'] });
+  assert.deepEqual(JSON.parse(ann['observogram.live.scope']), {
+    metricPrefixes: ['app_'], folderUids: [], datasourceUid: null, metricExclude: ['^app_event_\\d+_total$'],
+    appliesTo: { metricPrefixes: ['metric'], folderUids: [], metricExclude: ['metric'] },
+  });
+  assert.deepEqual(JSON.parse(ann['observogram.scope.metric']), { by: 'prefix', values: ['app_'], exclude: ['^app_event_\\d+_total$'] });
+  // Patterns alone narrow the metric family too, with no prefix.
+  const only = scopeAnnotations({ metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: ['^go_'] });
+  assert.deepEqual(Object.keys(only), ['observogram.live.scope', 'observogram.scope.metric']);
+  assert.deepEqual(JSON.parse(only['observogram.scope.metric']), { by: 'prefix', values: [], exclude: ['^go_'] });
+  // The fetcher said it did not apply the metric scope: no metric entry.
+  assert.deepEqual(Object.keys(scopeAnnotations({ metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: ['^go_'] }, { applied: [] })), ['observogram.live.scope']);
+  const entry = scopeOf(ann).get('metric');
+  assert.deepEqual(entry, { by: 'prefix', values: ['app_'], exclude: ['^app_event_\\d+_total$'] });
+  assert.equal(inScope('metric', { spec: { name: 'app_requests_total' } }, entry), true);
+  assert.equal(inScope('metric', { spec: { name: 'app_event_07_total' } }, entry), false, 'excluded by pattern');
+  assert.equal(inScope('metric', { spec: { name: 'go_goroutines' } }, entry), false, 'outside the prefixes');
+  const onlyEntry = scopeOf(only).get('metric');
+  assert.deepEqual(onlyEntry, { by: 'prefix', values: [], exclude: ['^go_'] });
+  assert.equal(inScope('metric', { spec: { name: 'go_goroutines' } }, onlyEntry), false);
+  assert.equal(inScope('metric', { spec: { name: 'app_requests_total' } }, onlyEntry), true, 'no prefix set: every name not excluded is inside');
+  assert.equal(scopeReason('metric', false, entry), "outside the snapshot's metric scope (prefixes app_; excluded ^app_event_\\d+_total$)");
+  assert.equal(scopeReason('metric', false, onlyEntry), "outside the snapshot's metric scope (excluded ^go_)");
+  assert.equal(scopeReason('metric', null, onlyEntry), 'the snapshot read only metrics not matching ^go_; Pack A gives this metric no name, so it was not checked');
+  assert.equal(scopeReason('metric', null, entry), 'the snapshot read only metrics with the prefixes app_ and not matching ^app_event_\\d+_total$; Pack A gives this metric no name, so it was not checked');
+  assert.equal(scopeOf({ 'observogram.scope.metric': '{"by":"prefix","values":[],"exclude":["unanchored"]}' }).size, 0, 'a pattern that fails the rule narrows nothing');
+  assert.deepEqual(scopeOf({ 'observogram.scope.metric': '{"by":"prefix","values":["a_"],"exclude":["unanchored"]}' }).get('metric'), { by: 'prefix', values: ['a_'] });
 });
 
 test('scopeOf ignores what does not parse or holds no value — a family is then compared unscoped, never parked on a guess', () => {
@@ -598,7 +649,7 @@ test('the metric-name cap: kept the first 20000, the stage says so and how to na
   const { records, pack } = await snapshotOf(fullTools({ [T.metricNames]: () => ({ label: '__name__', values: many }) }));
   const rec = records.filter((r) => r.stage === 'metric_names').pop();
   assert.deepEqual(rec.counts, { listed: SNAPSHOT_LIMITS.metricNames + 5, kept: SNAPSHOT_LIMITS.metricNames });
-  assert.equal(rec.message, `listed ${SNAPSHOT_LIMITS.metricNames + 5}, kept the first ${SNAPSHOT_LIMITS.metricNames} — set metric prefixes to narrow it`);
+  assert.equal(rec.message, `listed ${SNAPSHOT_LIMITS.metricNames + 5}, kept the first ${SNAPSHOT_LIMITS.metricNames} — set metric prefixes or exclude patterns to narrow it`);
   assert.equal(pack.metadata.annotations['mcp.discovered.metric_names_count'], String(SNAPSHOT_LIMITS.metricNames));
 });
 
@@ -625,6 +676,48 @@ test('the gate log: snapshot stage ids only, connect first, each reading stage r
   await assert.rejects(fetchMcp({ mcpUrl: URL_, transport: fakeMcp(fullTools()).transport, mode: 'snapshot', scope: { metricPrefixes: ['1bad'] } }), /scope\.metricPrefixes\[0\] "1bad" is not a metric-name prefix/);
   await assert.rejects(fetchMcp({ mcpUrl: URL_, transport: fakeMcp(fullTools()).transport, mode: 'nope' }), /unknown mode/);
   assert.throws(() => buildSnapshotPack({}, {}), /origin required/);
+});
+
+test('the exclude patterns: names dropped after the prefixes and before the cap, counted and named in the gate log, out of the inventory and in the scope annotation; a repository metric they match is not checked, never "declared, not live"; a bad pattern is refused', async () => {
+  const scope = { metricPrefixes: ['alertmanager_', 'up'], metricExclude: ['^alertmanager_notifications_total$', '^alertmanager_cluster_'] };
+  const { pack, records } = await snapshotOf(fullTools(), { scope });
+  const all = recorded('metrics_label_values.json').values;
+  const underPrefix = all.filter((n) => n.startsWith('alertmanager_') || n.startsWith('up'));
+  const kept = underPrefix.filter((n) => n !== 'alertmanager_notifications_total' && !n.startsWith('alertmanager_cluster_'));
+  assert.ok(underPrefix.length - kept.length > 1, 'the fixture has names the patterns drop');
+  const last = new Map(records.map((r) => [r.stage, r]));
+  assert.deepEqual(last.get('metric_names').counts, { listed: all.length, kept: kept.length, excluded: underPrefix.length - kept.length });
+  assert.equal(last.get('metric_names').message, `excluded ${underPrefix.length - kept.length} by pattern`);
+  const ann = pack.metadata.annotations;
+  assert.deepEqual([...JSON.parse(ann['mcp.discovered.metric_names'])].sort(), [...kept].sort(), 'the inventory is what the prefixes kept minus the patterns');
+  assert.deepEqual(JSON.parse(ann['observogram.live.scope']), {
+    metricPrefixes: scope.metricPrefixes, folderUids: [], datasourceUid: null, metricExclude: scope.metricExclude,
+    appliesTo: { metricPrefixes: ['metric'], folderUids: [], metricExclude: ['metric'] },
+  });
+  assert.deepEqual(JSON.parse(ann['observogram.scope.metric']), { by: 'prefix', values: scope.metricPrefixes, exclude: scope.metricExclude });
+  // The repository declares alertmanager_notifications_total: parked, with the reason, never drift.
+  const d = diffPacks(adapt(crawledRepo()), adapt(pack));
+  const parked = entries(d, 'notObserved', 'metric').find((e) => JSON.stringify(e).includes('alertmanager_notifications_total'));
+  assert.ok(parked, 'the excluded repository metric is not checked');
+  assert.equal(parked.reason, "outside the snapshot's metric scope (prefixes alertmanager_, up; excluded ^alertmanager_notifications_total$ ^alertmanager_cluster_)");
+  assert.ok(!entries(d, 'onlyInA', 'metric').some((e) => JSON.stringify(e).includes('alertmanager_notifications_total')), 'never "declared, not live"');
+  assert.ok(entries(d, 'inBoth', 'metric').some((e) => JSON.stringify(e).includes('alertmanager_alerts_received_total')), 'a declared metric the patterns leave still pairs');
+  // Patterns alone, no prefix: the whole list minus the matches, and the metric scope is applied.
+  const alone = await snapshotOf(fullTools(), { scope: { metricExclude: ['^alertmanager_'] } });
+  const aloneLast = new Map(alone.records.map((r) => [r.stage, r]));
+  const notAm = all.filter((n) => !n.startsWith('alertmanager_'));
+  assert.deepEqual(aloneLast.get('metric_names').counts, { listed: all.length, kept: notAm.length, excluded: all.length - notAm.length });
+  assert.deepEqual(JSON.parse(alone.pack.metadata.annotations['observogram.scope.metric']), { by: 'prefix', values: [], exclude: ['^alertmanager_'] });
+  // Refused: unanchored at normalizeScope; a pattern that crawls (polynomial backtracking, no group, so the
+  // static half lets it through) at the timed half — timedExcludeErrors, which the server runs before a job
+  // starts and the fetcher runs again as its backstop, in the shape of normalizeScope's own errors.
+  await assert.rejects(fetchMcp({ mcpUrl: URL_, transport: fakeMcp(fullTools()).transport, mode: 'snapshot', scope: { metricExclude: ['up'] } }), /scope\.metricExclude\[0\] "up" is not anchored \(an exclude pattern starts with \^\)/);
+  const SLOW = '^a*a*a*a*b$';
+  assert.deepEqual(normalizeScope({ metricExclude: [SLOW] }).errors, [], 'the static half admits it');
+  assert.deepEqual(timedExcludeErrors(['^alertmanager_', '^app_event_\\d+_total$']), []);
+  assert.deepEqual(timedExcludeErrors([]), []);
+  assert.deepEqual(timedExcludeErrors(['^go_', SLOW]), [`scope.metricExclude[1] "${SLOW}" is too slow to match (it crawls over a 256-character name)`]);
+  await assert.rejects(fetchMcp({ mcpUrl: URL_, transport: fakeMcp(fullTools()).transport, mode: 'snapshot', scope: { metricExclude: [SLOW] } }), new RegExp(`^TypeError: fetchMcp: scope\\.metricExclude\\[0\\] "\\${SLOW.replace(/[*$]/g, (c) => `\\${c}`)}" is too slow to match`));
 });
 
 test('Grafana-managed rules (the recorded provisioning answer) join vmalert\'s: unioned by title, engine grafana, the recording rule left out; the folder scope is not applied while vmalert names no folder', async () => {

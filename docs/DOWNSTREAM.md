@@ -1217,14 +1217,22 @@ or in a gapped family — is *not checked*, never *declared, not live*
 annotation: a hand-uploaded pack can make them.
 
 **The scope.** `OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES`,
-`OBSERVOGRAM_SNAPSHOT_FOLDER_UIDS`, `OBSERVOGRAM_SNAPSHOT_DATASOURCE_UID` for
-the deployment and `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` for one org — the org's
-overriding the deployment's field by field; a request's `scope` replaces the
-configured one whole. Inert when unset; the draft and the refresh never read
-them. Metric prefixes filter the name list (then a 20 000-name cap, named);
-folder uids filter dashboards before the detail reads and alert rules when
-every rule names its folder; a datasource uid is named in the gate log as not
-applied, because no advertised tool takes one.
+`OBSERVOGRAM_SNAPSHOT_FOLDER_UIDS`, `OBSERVOGRAM_SNAPSHOT_DATASOURCE_UID`,
+`OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE` for the deployment and
+`OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` for one org — the org's overriding the
+deployment's field by field; a request's `scope` replaces the configured one
+whole. Inert when unset; the draft and the refresh never read them. Metric
+prefixes filter the name list, then the exclude patterns drop names from what
+the prefixes kept (anchored, bounded regexes, white-space-separated in the
+variable — a backend's names that no declaration will ever match, an
+exporter's malformed mints; the count is in the gate log, the patterns ride in
+`observogram.scope.metric` as `exclude`, and the diff parks a repository
+metric they match as *not checked*), then a 20 000-name cap, named; folder
+uids filter dashboards before the detail reads and alert rules when every
+rule names its folder; a datasource uid is named in the gate log as not
+applied, because no advertised tool takes one. The exclusion is a scope
+field, not a setting: the regex that names one product's junk belongs in the
+deployment's or the org's variable, never in the engine.
 
 **Adding a capability with a scope argument.** Record the tool's real answer
 first (`npm run record-fixtures -- --write`, against the product at a pinned

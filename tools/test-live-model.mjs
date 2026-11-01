@@ -141,11 +141,13 @@ test('the kind preselected: Draft, unless the org or the server configured a sna
 
 test('the scope fields: prefilled from the configured scope, read back as the request\'s scope', () => {
   const form = scopeFormModel({ defaults: { metricPrefixes: ['payments_', 'checkout_'], folderUids: ['ab12'], datasourceUid: null }, from: 'org', errors: [] });
-  assert.deepEqual(form, { prefixes: 'payments_, checkout_', folders: 'ab12', note: 'Prefilled from this org\'s configured snapshot scope.', errors: [] });
+  assert.deepEqual(form, { prefixes: 'payments_, checkout_', folders: 'ab12', exclude: '', note: 'Prefilled from this org\'s configured snapshot scope.', errors: [] });
+  assert.equal(scopeFormModel({ defaults: { metricExclude: ['^app_event_\\d+_total$', '^go_'] }, from: 'deployment', errors: [] }).exclude, '^app_event_\\d+_total$ ^go_');
   assert.match(scopeFormModel(null).note, /^No snapshot scope is configured/);
   assert.deepEqual(scopeFormModel({ defaults: {}, from: null, errors: ['X: bad'] }).errors, ['X: bad']);
-  assert.deepEqual(scopeFromForm({ prefixes: ' payments_ ,, checkout_ ', folders: '' }), { metricPrefixes: ['payments_', 'checkout_'], folderUids: [] });
-  assert.deepEqual(scopeFromForm(), { metricPrefixes: [], folderUids: [] });
+  assert.deepEqual(scopeFromForm({ prefixes: ' payments_ ,, checkout_ ', folders: '' }), { metricPrefixes: ['payments_', 'checkout_'], folderUids: [], metricExclude: [] });
+  assert.deepEqual(scopeFromForm({ exclude: '  ^a{2,5}_   ^go_ ' }), { metricPrefixes: [], folderUids: [], metricExclude: ['^a{2,5}_', '^go_'] }, 'patterns split on white space, never on a comma');
+  assert.deepEqual(scopeFromForm(), { metricPrefixes: [], folderUids: [], metricExclude: [] });
 });
 
 test('the plan before a snapshot: what this MCP does not offer, and what cannot be told while pages remained', () => {

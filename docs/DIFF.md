@@ -201,7 +201,10 @@ and the diff reads those keys beside `observogram.unobserved.<kind>`. An
 unmatched artefact on the other side, in a scoped family, goes to
 `notObserved` with one of two reasons, each stating only what is known:
 **outside** the scope — `outside the snapshot's metric scope (prefixes
-payments_, checkout_)`, `outside the snapshot's dashboard folders (Payments)`
+payments_, checkout_)`, with `; excluded ^app_event_\d+_total$` appended when
+the snapshot also dropped names by pattern (`outside the snapshot's metric
+scope (excluded ^go_)` when it set patterns and no prefix), `outside the
+snapshot's dashboard folders (Payments)`
 — or **cannot tell**, when the artefact does not say what the scope needs (a
 crawled dashboard names no folder uid): `the snapshot read only the folders
 Payments; Pack A does not say which folder this dashboard is in, so it was
