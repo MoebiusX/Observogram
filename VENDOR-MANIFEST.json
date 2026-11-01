@@ -991,8 +991,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/promql-lezer.mjs": {
-      "sha256": "9f3f1519095ec795fb42f9469afb39c0a8168ce639611175a5deb231d73cdfee",
-      "bytes": 3255,
+      "sha256": "b198d17f75ba19bfe47547d5f17c3c8ad5533c892bafcbb53b91f99f57f65c46",
+      "bytes": 3664,
       "exports": [
         "extractPromqlMetricNames",
         "parsePromqlDependencies"
@@ -1006,16 +1006,22 @@
       "changedSinceRelease": false
     },
     "tools/lib/promql.mjs": {
-      "sha256": "96932d45d3108373dd6b0305dc2d44d263f41780d2f4aba5c9145db4bb65b7ec",
-      "bytes": 11273,
+      "sha256": "85fdf72e24302095d0f3cad70aa7a4926203c44c9d1f938c42249d87738cafcb",
+      "bytes": 12043,
       "exports": [
         "PROMQL_KEYWORDS",
+        "colonEdged",
         "extractPromqlMetricNames",
         "parsePromqlDependencies"
       ],
       "imports": [],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "PROMQL_KEYWORDS",
+        "extractPromqlMetricNames",
+        "parsePromqlDependencies"
+      ]
     },
     "tools/lib/protocols.mjs": {
       "sha256": "04980bf11b7e1a65cd12c6874249630f4cc38feb510b30d3ff68b40d980cce6b",
