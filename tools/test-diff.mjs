@@ -547,6 +547,8 @@ assert(allLiveDiff.summary.outOfScope === 0,
   }
   assert(!('exporterTokens' in scopedDiff.scope),
          'a pack without an exporter origin reports no exporterTokens key (goldens unchanged)');
+}
+
 // ---------- a dashboard reaches the scope through the metrics its panels query ----------
 // A live dashboard's scope text used to be its id, folder and refs, so a
 // dashboard in a foreign folder that charts a metric this pack declares was
