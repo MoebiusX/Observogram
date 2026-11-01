@@ -491,6 +491,64 @@ assert(allLiveDiff.summary.outOfScope === 0,
        'all-live mode counts every unmatched live artefact as live-not-declared',
        allLiveDiff.summary.outOfScope, 0);
 
+// ---------- an exporter's name is not the service's ----------
+// A metric read from an exporter manifest carries the exporter as its service
+// (`event-exporter`). Its name counts for the scope; its service string must
+// not, or every live artefact whose text says "event" is pulled into scope.
+{
+  const repo = clone(scopedRepoPack);
+  const names = JSON.parse(repo.metadata.annotations['crawler.discovered.metric_names']);
+  const origins = JSON.parse(repo.metadata.annotations['crawler.discovered.metric_origins']);
+  names.push('event_published_total');
+  origins.event_published_total = { file: 'exporter/metrics-manifest.json', service: 'event-exporter', type: 'counter', origin_kind: 'exporter-manifest' };
+  repo.metadata.annotations['crawler.discovered.metric_names'] = JSON.stringify(names);
+  repo.metadata.annotations['crawler.discovered.metric_names_count'] = String(names.length);
+  repo.metadata.annotations['crawler.discovered.metric_origins'] = JSON.stringify(origins);
+  // A declared scrape job, so the scrape-job kind is one the repo speaks of (else every live job is parked unseen).
+  repo.metadata.annotations['crawler.discovered.scrape_jobs'] = JSON.stringify(['checkout-api']);
+  repo.metadata.annotations['crawler.discovered.scrape_jobs_count'] = '1';
+  const live = clone(scopedLivePack);
+  const liveNames = [...JSON.parse(live.metadata.annotations['mcp.discovered.metric_names']), 'event_published_total'];
+  live.metadata.annotations['mcp.discovered.metric_names'] = JSON.stringify(liveNames);
+  live.metadata.annotations['mcp.discovered.metric_names_count'] = String(liveNames.length);
+  live.spec.dashboards = [...live.spec.dashboards, { id: 'event-pipeline', provider: { kind: 'grafana' }, panel_bindings: [{ panel: 'Event lag', binds_to: 'slis.event_lag' }] }];
+  live.metadata.annotations['mcp.discovered.scrape_jobs'] = JSON.stringify(['event-exporter', 'other-exporter']);
+
+  // The two exporter origins whose service is always an emitter behave alike.
+  for (const originKind of ['exporter-manifest', 'exporter-config']) {
+    origins.event_published_total.origin_kind = originKind;
+    repo.metadata.annotations['crawler.discovered.metric_origins'] = JSON.stringify(origins);
+    const d = diffPacks(adapt(repo), adapt(live));
+    assert(!d.scope.serviceTokens.includes('event') && !d.scope.serviceTokens.includes('eventexporter'),
+           `a ${originKind} metric does not lend the exporter's name to the service scope`, d.scope.serviceTokens);
+    assert(JSON.stringify(d.scope.exporterTokens) === JSON.stringify(['event', 'eventexporter']),
+           `the exporter's name is kept apart as exporterTokens (${originKind})`, d.scope.exporterTokens);
+    assert(d.layers.L2.inBoth.some(x => x.key.includes('event_published_total')),
+           `the ${originKind} metric itself still pairs by name`);
+    assert(d.layers.L3.outOfScope.some(x => x.key.includes('event-pipeline')),
+           `a live dashboard that only shares the exporter's name stays out of scope (${originKind})`);
+    assert(d.layers.L2.onlyInB.some(x => x.key.includes('event-exporter')),
+           `the live job that scrapes the exporter is in scope (${originKind})`, d.layers.L2.onlyInB.map(x => x.key));
+    assert(d.layers.L2.outOfScope.some(x => x.key.includes('other-exporter')),
+           `a live job named for another exporter is not (${originKind})`);
+  }
+
+  // The same metric declared in source code, or read from a saved exposition
+  // (named by its file, as often the service's own `checkout-api.prom` as a
+  // third party's): that service string still widens the scope.
+  for (const [originKind, file] of [['source-code', 'src/events.ts'], ['exporter-snapshot', 'docs/event-exporter.prom']]) {
+    origins.event_published_total = { ...origins.event_published_total, file, origin_kind: originKind };
+    repo.metadata.annotations['crawler.discovered.metric_origins'] = JSON.stringify(origins);
+    const d2 = diffPacks(adapt(repo), adapt(live));
+    assert(d2.scope.serviceTokens.includes('event') && !('exporterTokens' in d2.scope),
+           `a ${originKind} metric's service still lends its tokens, and no exporterTokens key appears`, d2.scope);
+    assert(d2.layers.L3.onlyInB.some(x => x.key.includes('event-pipeline')),
+           `and the dashboard that shares them is then in scope (${originKind})`);
+  }
+  assert(!('exporterTokens' in scopedDiff.scope),
+         'a pack without an exporter origin reports no exporterTokens key (goldens unchanged)');
+}
+
 // ---------- `ref:` prefix is authoring syntax, not behaviour ----------
 // A burn alert declared as `slo: ref:x` and one discovered as `slo: x` bind
 // to the same SLO. Identity already stripped the prefix (they paired); the
