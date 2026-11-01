@@ -544,8 +544,13 @@
       "changedSinceRelease": false
     },
     "tools/lib/diff.mjs": {
+<<<<<<< HEAD
       "sha256": "535c93a47a93d13993774155be07d225f7bd44ac106c099d56344dd9f4090939",
       "bytes": 28258,
+=======
+      "sha256": "9419da36582ee86c80050528a786c1f6231f6116920593c444c62cedebfe7920",
+      "bytes": 31086,
+>>>>>>> 1808033a (fix(diff): a live dashboard reaches the service scope through the metrics its panels query)
       "exports": [
         "deltasOf",
         "diffPacks",

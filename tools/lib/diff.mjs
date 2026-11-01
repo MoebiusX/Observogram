@@ -359,6 +359,11 @@ function buildServiceScope(layered, serviceOverride) {
   const declaredMetrics = new Set();
   const metricPrefixes = new Set();
   const exporterTokens = new Set();
+  // The declared metrics specific enough to carry a dashboard in by name:
+  // a segmented name under a prefix that is not a platform's (`up`,
+  // `node_cpu_seconds_total`, `http_requests_total` are charted by every
+  // board in the estate; `checkout_requests_total` by this service's).
+  const specificMetrics = new Set();
 
   for (const layerId of LAYER_ORDER) {
     for (const artefact of layerArtefacts(layered, layerId)) {
@@ -369,7 +374,10 @@ function buildServiceScope(layered, serviceOverride) {
         if (!metric) continue;
         declaredMetrics.add(metric.toLowerCase());
         const prefix = metricPrefix(metric);
-        if (isUsefulMetricPrefix(prefix)) metricPrefixes.add(prefix);
+        if (isUsefulMetricPrefix(prefix)) {
+          metricPrefixes.add(prefix);
+          if (/[_:]/.test(metric)) specificMetrics.add(metric.toLowerCase());
+        }
       }
       // A metric read from an exporter's manifest or catalogue config names
       // the EMITTING exporter as its service, not the service this pack
@@ -383,7 +391,7 @@ function buildServiceScope(layered, serviceOverride) {
     }
   }
 
-  return { service: serviceOverride || layered?.meta?.service || layered?.meta?.name || layered?.name || layered?.id || '', explicit, declaredMetrics, metricPrefixes, exporterTokens };
+  return { service: serviceOverride || layered?.meta?.service || layered?.meta?.name || layered?.name || layered?.id || '', explicit, declaredMetrics, metricPrefixes, exporterTokens, specificMetrics };
 }
 
 // The crawler's exporter walks (tools/lib/crawler.mjs) stamp three
@@ -423,8 +431,16 @@ function artefactInServiceScope(artefact, scope) {
     if (token && compactText.includes(token)) return true;
   }
   if (kind !== 'metric') {
-    for (const metric of scope.declaredMetrics || []) {
-      if (metric && mentionsPromMetric(text, metric)) return true;
+    // A dashboard is also read through the expressions its panels query, and
+    // the estate's platform boards chart the generic series a service
+    // declares too (`up`, `node_*`, `kube_*`, `http_*`); only a specific
+    // declared name carries a dashboard in. Every other kind keeps the full
+    // set over its own text, as before.
+    const dashboard = kind === 'dashboard';
+    const names = dashboard ? (scope.specificMetrics || new Set()) : (scope.declaredMetrics || new Set());
+    const haystack = dashboard ? `${text} ${dashboardQueryText(spec)}` : text;
+    for (const metric of names) {
+      if (metric && mentionsPromMetric(haystack, metric)) return true;
     }
   }
 
@@ -459,7 +475,91 @@ function artefactScopeText(artefact) {
     ...(artefact?.refs || []),
   ];
   appendSpecScopeText(spec, chunks);
+  if (classify(artefact) === 'dashboard') appendDashboardTitles(spec, chunks);
   return chunks.filter(Boolean).join(' ');
+}
+
+// A dashboard's own words beyond its id, folder and refs live under
+// `params`, which appendSpecScopeText never walks (and whose raw targets sit
+// deeper than it goes): a crawled Grafana dashboard carries
+// `params.panels[].{title,expr}`, one entry per query target
+// (tools/lib/crawler.mjs); a live one `params.title`, `params.panels[]`
+// summaries ({id,title,type}; some servers add targets) and, when the MCP
+// returned the dashboard JSON, `params.raw.panels[].targets[].expr`, rows
+// nested one level (tools/fetch-live-pack.mjs dashboardFromGrafanaDetail).
+// Two readers, because the two kinds of text are matched differently: the
+// titles join the scope text, where a service token matches by substring as
+// it does an id or a folder; the expressions are read for whole metric names
+// only (mentionsPromMetric), never by substring — `loan_repayment_total`
+// must not answer for a service called `payment`. Not read: template
+// variables, descriptions, labels. Bounds: as many panels per list as the
+// fetcher asks the MCP for (GRAFANA_DASHBOARD_PANEL_LIMIT caps at 500), so
+// many targets per panel, strings only.
+const DASHBOARD_SCOPE_PANELS = 512;
+const DASHBOARD_SCOPE_TARGETS = 16;
+
+function dashboardParams(spec) {
+  const params = spec?.params;
+  return params && typeof params === 'object' && !Array.isArray(params) ? params : null;
+}
+
+function appendDashboardTitles(spec, chunks) {
+  const params = dashboardParams(spec);
+  if (!params) return;
+  if (typeof params.title === 'string') chunks.push(params.title);
+  for (const panel of dashboardPanels(params)) {
+    for (const key of ['title', 'panel']) {
+      if (typeof panel[key] === 'string') chunks.push(panel[key]);
+    }
+  }
+}
+
+function dashboardQueryText(spec) {
+  const params = dashboardParams(spec);
+  if (!params) return '';
+  const chunks = [];
+  for (const panel of dashboardPanels(params)) {
+    for (const key of ['expr', 'query', 'expression']) {
+      if (typeof panel[key] === 'string') chunks.push(panel[key]);
+    }
+    const targets = Array.isArray(panel.targets) ? panel.targets.slice(0, DASHBOARD_SCOPE_TARGETS) : [];
+    for (const target of targets) {
+      if (!target || typeof target !== 'object') continue;
+      for (const key of ['expr', 'query', 'expression']) {
+        if (typeof target[key] === 'string') chunks.push(target[key]);
+      }
+    }
+  }
+  return chunks.join(' ');
+}
+
+// The panels of a dashboard's params. The raw Grafana JSON's first, because
+// those carry the targets, with a row's nested `panels` flattened (Grafana
+// rows do not nest, and a row container itself is not a panel); then the
+// flat `panels` list (the crawler's, with expressions; the fetcher's
+// summaries). Each list has the whole budget to itself, so a board the
+// fetcher returned with hundreds of summaries still has its targets read.
+function dashboardPanels(params) {
+  const out = [];
+  const take = (list) => {
+    let taken = 0;
+    for (const panel of Array.isArray(list) ? list : []) {
+      if (taken >= DASHBOARD_SCOPE_PANELS) return;
+      if (!panel || typeof panel !== 'object') continue;
+      if (Array.isArray(panel.panels)) {
+        for (const inner of panel.panels) {
+          if (taken >= DASHBOARD_SCOPE_PANELS) return;
+          if (inner && typeof inner === 'object') { out.push(inner); taken++; }
+        }
+        continue;
+      }
+      out.push(panel);
+      taken++;
+    }
+  };
+  if (params.raw && typeof params.raw === 'object') take(params.raw.panels);
+  take(params.panels);
+  return out;
 }
 
 function appendSpecScopeText(value, chunks, depth = 0) {

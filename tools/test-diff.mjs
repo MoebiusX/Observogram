@@ -547,6 +547,85 @@ assert(allLiveDiff.summary.outOfScope === 0,
   }
   assert(!('exporterTokens' in scopedDiff.scope),
          'a pack without an exporter origin reports no exporterTokens key (goldens unchanged)');
+// ---------- a dashboard reaches the scope through the metrics its panels query ----------
+// A live dashboard's scope text used to be its id, folder and refs, so a
+// dashboard in a foreign folder that charts a metric this pack declares was
+// parked out of scope unless a name token happened to match. Its title, its
+// panels' titles and its panel expressions now count, in both shapes the
+// packs carry: the live one (`params.title`, panel summaries, the raw Grafana
+// JSON's `panels[].targets[].expr`, rows nested) and the crawled one
+// (`params.panels[].{title,expr}`).
+{
+  // The repo declares, besides its own `checkout_requests_total`, a specific
+  // series with no service word in it and two platform series.
+  const repo = clone(scopedRepoPack);
+  const names = JSON.parse(repo.metadata.annotations['crawler.discovered.metric_names']);
+  const origins = JSON.parse(repo.metadata.annotations['crawler.discovered.metric_origins']);
+  for (const name of ['basket_depth_ratio', 'node_cpu_seconds_total', 'up']) {
+    names.push(name);
+    origins[name] = { file: 'src/metrics.ts', service: 'checkout-api', type: 'gauge' };
+  }
+  repo.metadata.annotations['crawler.discovered.metric_names'] = JSON.stringify(names);
+  repo.metadata.annotations['crawler.discovered.metric_names_count'] = String(names.length);
+  repo.metadata.annotations['crawler.discovered.metric_origins'] = JSON.stringify(origins);
+
+  const liveDash = (id, folder, title, panels, raw) => ({
+    id, provider: { kind: 'grafana', version: '12.0', schemaVersion: 41 }, folder, source: `grafana:///d/${id}`,
+    params: { uid: id, title, panelCount: panels.length, returnedPanels: panels.length, panels, ...(raw ? { raw } : {}) },
+    panel_bindings: panels.map((p, i) => ({ panel: p.title, binds_to: `ref:grafana/${id}/panels/panel-${i + 1}` })),
+  });
+  const summaries = (n) => Array.from({ length: n }, (_, i) => ({ id: i + 1, title: `Series ${i + 1}`, type: 'timeseries' }));
+  const live = clone(scopedLivePack);
+  live.spec.dashboards = [
+    ...live.spec.dashboards,
+    // A foreign folder, generic names; the only link to the pack is a target expression on the specific metric, inside a row.
+    liveDash('mq-ops', 'Platform MQ', 'Queue depth', [{ id: 1, title: 'Depth', type: 'timeseries' }], {
+      panels: [{ id: 10, type: 'row', title: 'Traffic', panels: [{ id: 1, title: 'Depth', type: 'timeseries', targets: [{ refId: 'A', expr: 'max(basket_depth_ratio) by (queue)' }] }] }],
+    }),
+    // An expression on a series that merely contains the declared name: not this pack's.
+    liveDash('mq-ops-2', 'Platform MQ', 'Buckets', [{ id: 1, title: 'Buckets', type: 'timeseries' }], {
+      panels: [{ id: 1, title: 'Buckets', type: 'timeseries', targets: [{ refId: 'A', expr: 'sum(rate(basket_depth_ratio_bucket[5m]))' }] }],
+    }),
+    // Summaries only (no JSON returned), nothing in the names: out of scope as before.
+    liveDash('mq-ops-3', 'Platform MQ', 'Latency', [{ id: 1, title: 'Latency', type: 'timeseries' }], null),
+    // A platform board charting the platform series the repo also declares: not carried in by `node_*` or `up`.
+    liveDash('node-health', 'Platform', 'Node health', [{ id: 1, title: 'CPU', type: 'timeseries' }], {
+      panels: [{ id: 1, title: 'CPU', type: 'timeseries', targets: [{ refId: 'A', expr: 'rate(node_cpu_seconds_total[5m])' }, { refId: 'B', expr: 'count(up == 1)' }] }],
+    }),
+    // The service's name in the board's title, nothing else: the token path, as for an id or a folder.
+    liveDash('funnel-7', 'Product', 'Checkout funnel', [{ id: 1, title: 'Steps', type: 'timeseries' }], null),
+    // A big board: 400 summaries, and the one target that names the specific metric at the end of the JSON.
+    liveDash('mq-big', 'Platform MQ', 'Everything MQ', summaries(400), {
+      panels: [...summaries(399).map((p) => ({ ...p, targets: [{ refId: 'A', expr: 'sum(rate(mq_other_total[5m]))' }] })), { id: 400, title: 'Series 400', type: 'timeseries', targets: [{ refId: 'A', expr: 'max(basket_depth_ratio)' }] }],
+    }),
+    // The crawled shape: params.panels carry the expression themselves.
+    { id: 'mq-crawled', provider: { kind: 'grafana' }, folder: 'Platform MQ', params: { title: 'MQ crawled', panels: [{ panel: 'depth', title: 'Depth', expr: 'max(basket_depth_ratio)' }] } },
+    // A service token inside an expression is not a match: expressions are read for whole metric names only.
+    liveDash('steps-9', 'Product', 'Steps', [{ id: 1, title: 'Steps', type: 'timeseries' }], {
+      panels: [{ id: 1, title: 'Steps', type: 'timeseries', targets: [{ refId: 'A', expr: 'sum(rate(precheckout_steps_total[5m]))' }] }],
+    }),
+    // The bounds: the 512th raw panel is read, the 513th is not; the 16th target is read, the 17th is not.
+    liveDash('bound-in', 'Platform MQ', 'Bound in', [], { panels: [...summaries(511), { id: 512, title: 'Last', type: 'timeseries', targets: [{ refId: 'A', expr: 'max(basket_depth_ratio)' }] }] }),
+    liveDash('bound-out', 'Platform MQ', 'Bound out', [], { panels: [...summaries(512), { id: 513, title: 'Last', type: 'timeseries', targets: [{ refId: 'A', expr: 'max(basket_depth_ratio)' }] }] }),
+    liveDash('targets-in', 'Platform MQ', 'Targets in', [], { panels: [{ id: 1, title: 'Many', type: 'timeseries', targets: [...Array.from({ length: 15 }, (_, i) => ({ refId: `T${i}`, expr: 'up' })), { refId: 'Z', expr: 'max(basket_depth_ratio)' }] }] }),
+    liveDash('targets-out', 'Platform MQ', 'Targets out', [], { panels: [{ id: 1, title: 'Many', type: 'timeseries', targets: [...Array.from({ length: 16 }, (_, i) => ({ refId: `T${i}`, expr: 'up' })), { refId: 'Z', expr: 'max(basket_depth_ratio)' }] }] }),
+  ];
+  const d = diffPacks(adapt(repo), adapt(live));
+  const onlyInB = d.layers.L3.onlyInB.map(x => x.key);
+  const outOfScope = d.layers.L3.outOfScope.map(x => x.key);
+  const has = (list, id) => list.some(k => k.includes(`"id":"${id}"`));
+  assert(has(onlyInB, 'mq-ops'), 'a live dashboard whose raw panel target queries a declared metric is in scope', onlyInB);
+  assert(has(outOfScope, 'mq-ops-2'), 'an expression on a series that merely contains the declared name does not carry a dashboard in', outOfScope);
+  assert(has(outOfScope, 'mq-ops-3'), 'a dashboard with summaries only and foreign names stays out of scope', outOfScope);
+  assert(has(outOfScope, 'node-health'), 'a platform board on the generic series the repo declares (node_*, up) stays out of scope', outOfScope);
+  assert(has(onlyInB, 'funnel-7'), 'the service\'s name in the board title carries it in, as an id or folder would', onlyInB);
+  assert(has(onlyInB, 'mq-big'), 'a board with hundreds of summaries still has its last raw target read', onlyInB);
+  assert(has(onlyInB, 'mq-crawled'), 'a crawled dashboard whose params.panels expression names a declared metric is in scope', onlyInB);
+  assert(has(outOfScope, 'steps-9'), 'a service token inside an expression does not carry a dashboard in: expressions are read for whole metric names only', outOfScope);
+  assert(has(onlyInB, 'bound-in') && has(outOfScope, 'bound-out'), 'the 512th raw panel is read and the 513th is not', [onlyInB, outOfScope]);
+  assert(has(onlyInB, 'targets-in') && has(outOfScope, 'targets-out'), 'the 16th target is read and the 17th is not', [onlyInB, outOfScope]);
+  assert(d.layers.L2.outOfScope.some(x => x.key.includes('alertmanager_alerts_total')) && d.layers.L2.inBoth.some(x => x.key.includes('node_cpu_seconds_total')),
+         'the metric rule is untouched: an undeclared platform metric is still out of scope, a declared one still pairs');
 }
 
 // ---------- `ref:` prefix is authoring syntax, not behaviour ----------
