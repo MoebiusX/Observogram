@@ -812,11 +812,12 @@ test('rulesModel, fidelityModel, changesModel: the required rules, the live fide
   assert.deepEqual(keep(rulesModel(conformance)), { passed: 12, total: 15, pct: 80, tier: '2', met: false, unknown: false, sentence: '12 of 15 required rules met for a tier 2 service.', tone: 'warn' });
   assert.deepEqual([rulesModel(null), rulesModel({ must: { passed: 0, total: 0 } })], [null, null]);
   assert.deepEqual([rulesModel({ must: { passed: 3, total: 3 }, conformant: true, declaredTier: 'tier-1' }).tone, rulesModel({ must: { passed: 1, total: 4 } }).sentence, rulesModel({ must: { passed: 1, total: 4 } }).tone], ['ok', '1 of 4 required rules met.', 'fail']);
-  const f = keep(fidelityModel({ run, journey, pack: krystalinePack }));
+  // The fixture's run is dated; pin the clock or the freshness note appends itself once the run is a day old.
+  const f = keep(fidelityModel({ run, journey, pack: krystalinePack, now: NOW }));
   assert.deepEqual([f.known, f.alignmentPct, f.against, f.note], [true, 78, 'live', 'The live side answered only in part: its dashboards could not be read.']);
   assert.deepEqual(f.tiles.map((t) => [t.key, t.value, t.label, t.tone]), [['aligned', 252, 'match', 'ok'], ['drifted', 5, 'run differently', 'warn'], ['missing', 38, 'not running live', 'fail'], ['extra', 30, 'live only', 'info']]);
   assert.deepEqual(f.chains, { total: 18, intact: 5, partial: 1, broken: 12, integrityPct: 84, sentence: '5 of 18 promises hold end to end, 1 in part.' });
-  assert.equal(keep(fidelityModel({ run: { ...run, probes: { failed: [] } }, journey, pack: krystalinePack })).note, '', 'every family answered: no note');
+  assert.equal(keep(fidelityModel({ run: { ...run, probes: { failed: [] } }, journey, pack: krystalinePack, now: NOW })).note, '', 'every family answered: no note');
   assert.equal(keep(fidelityModel({ run: { ...run, traceability: { declaredTotal: 0 } }, journey, pack: krystalinePack })).chains, null, 'no declared chains: no promises line');
   // Withheld: never checked, a run of another pack, the live side lost, the live side shrunk — each with its reason and no counts.
   const never = keep(fidelityModel({}));
