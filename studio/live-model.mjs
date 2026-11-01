@@ -151,6 +151,7 @@ export function scopeFormModel(scope) {
     prefixes: (d.metricPrefixes ?? []).join(', '),
     folders: (d.folderUids ?? []).join(', '),
     exclude: (d.metricExclude ?? []).join(' '),
+    groups: (d.ruleGroups ?? []).join(', '),
     note: from === 'org' ? 'Prefilled from this org\'s configured snapshot scope.'
       : from === 'deployment' ? 'Prefilled from the server\'s configured snapshot scope.'
         : 'No snapshot scope is configured: empty fields read every metric name, dashboard and rule.',
@@ -158,9 +159,9 @@ export function scopeFormModel(scope) {
   };
 }
 
-// The request's scope from the three fields (what the person sees is what is sent).
-export function scopeFromForm({ prefixes = '', folders = '', exclude = '' } = {}) {
-  return { metricPrefixes: splitList(prefixes), folderUids: splitList(folders), metricExclude: splitWords(exclude) };
+// The request's scope from the four fields (what the person sees is what is sent).
+export function scopeFromForm({ prefixes = '', folders = '', exclude = '', groups = '' } = {}) {
+  return { metricPrefixes: splitList(prefixes), folderUids: splitList(folders), metricExclude: splitWords(exclude), ruleGroups: splitList(groups) };
 }
 
 // The plan before a snapshot (fetchPlan's rows, the stages' labels) → the

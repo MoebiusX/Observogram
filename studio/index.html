@@ -364,6 +364,10 @@
             <span class="mcp-field-key">Exclude metric names matching <em>(anchored patterns, separated by spaces; dropped after the prefixes)</em></span>
             <input id="live-scope-exclude" type="text" placeholder="^app_event_\d+_total$ ^go_" autocomplete="off">
           </label>
+          <label class="mcp-field">
+            <span class="mcp-field-key">Rule groups <em>(comma-separated; alert and recording rules, when every rule names its group)</em></span>
+            <input id="live-scope-groups" type="text" placeholder="payments, checkout:slo" autocomplete="off">
+          </label>
         </div>
         <p class="mcpc-note" id="live-scope-note"></p>
       </div>

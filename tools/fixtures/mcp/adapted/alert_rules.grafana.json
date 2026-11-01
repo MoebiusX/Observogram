@@ -7,7 +7,8 @@
       "severity": "test"
     },
     "annotations": {},
-    "folderUid": "bg0gvuuj8otmof"
+    "folderUid": "bg0gvuuj8otmof",
+    "group": "stack-validation"
   },
   {
     "name": "PaymentsErrorRatioHigh",
@@ -20,6 +21,7 @@
     "annotations": {
       "summary": "Payment errors above 5%"
     },
-    "folderUid": "payments-alerts"
+    "folderUid": "payments-alerts",
+    "group": "payments"
   }
 ]

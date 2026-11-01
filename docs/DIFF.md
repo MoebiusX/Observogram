@@ -204,11 +204,16 @@ unmatched artefact on the other side, in a scoped family, goes to
 payments_, checkout_)`, with `; excluded ^app_event_\d+_total$` appended when
 the snapshot also dropped names by pattern (`outside the snapshot's metric
 scope (excluded ^go_)` when it set patterns and no prefix), `outside the
-snapshot's dashboard folders (Payments)`
+snapshot's dashboard folders (Payments)`, `outside the snapshot's alert rule
+groups (payments, checkout:slo)` (the group a crawled rule's `source` names,
+`<file>#<group>/<name>`), `outside the snapshot's alert rule scope (folders
+Payments; rule groups payments)` when both were applied
 — or **cannot tell**, when the artefact does not say what the scope needs (a
 crawled dashboard names no folder uid): `the snapshot read only the folders
 Payments; Pack A does not say which folder this dashboard is in, so it was
-not checked`. One artefact of a key inside the scope keeps the group compared
+not checked`, `the snapshot read only the rule groups payments; Pack A does not
+say which group this recording rule is in, so it was not checked` (a canonical
+recording rule names no group). One artefact of a key inside the scope keeps the group compared
 as usual; an unobserved family keeps its own reason. Without the annotation
 the answer is byte-identical.
 
