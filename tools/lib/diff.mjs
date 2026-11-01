@@ -316,6 +316,9 @@ function diffScopeMeta(mode, scope) {
     mode,
     service: scope.service || null,
     serviceTokens: [...(scope.explicit || [])].sort(),
+    // Present only when an exporter lent its name (no pack in the catalogue
+    // does), so every stored golden keeps its bytes.
+    ...(scope.exporterTokens?.size ? { exporterTokens: [...scope.exporterTokens].sort() } : {}),
     declaredMetricCount: scope.declaredMetrics?.size || 0,
     metricPrefixes: [...(scope.metricPrefixes || [])].sort(),
   };
@@ -355,6 +358,7 @@ function buildServiceScope(layered, serviceOverride) {
 
   const declaredMetrics = new Set();
   const metricPrefixes = new Set();
+  const exporterTokens = new Set();
 
   for (const layerId of LAYER_ORDER) {
     for (const artefact of layerArtefacts(layered, layerId)) {
@@ -367,12 +371,34 @@ function buildServiceScope(layered, serviceOverride) {
         const prefix = metricPrefix(metric);
         if (isUsefulMetricPrefix(prefix)) metricPrefixes.add(prefix);
       }
-      if (spec.origin_service) addNameTokens(explicit, spec.origin_service, { allowShort: false });
-      if (spec.service) addNameTokens(explicit, spec.service, { allowShort: false });
+      // A metric read from an exporter's manifest or catalogue config names
+      // the EMITTING exporter as its service, not the service this pack
+      // declares. Its name and prefix count (above); its service strings go
+      // to exporterTokens, which only the scrape-job test reads: the job that
+      // scrapes the exporter is this pack's business, a dashboard or rule
+      // whose text merely says "event" is not.
+      const target = isExporterOrigin(spec) ? exporterTokens : explicit;
+      if (spec.origin_service) addNameTokens(target, spec.origin_service, { allowShort: false });
+      if (spec.service) addNameTokens(target, spec.service, { allowShort: false });
     }
   }
 
-  return { service: serviceOverride || layered?.meta?.service || layered?.meta?.name || layered?.name || layered?.id || '', explicit, declaredMetrics, metricPrefixes };
+  return { service: serviceOverride || layered?.meta?.service || layered?.meta?.name || layered?.name || layered?.id || '', explicit, declaredMetrics, metricPrefixes, exporterTokens };
+}
+
+// The crawler's exporter walks (tools/lib/crawler.mjs) stamp three
+// `origin_kind`s. Two name an emitter that is never the pack's own service:
+// `exporter-manifest` (a metrics manifest; service = the manifest's
+// `exporter`) and `exporter-config` (an exporter config read against the
+// catalogue; service = the catalogue id, candidates only). The third,
+// `exporter-snapshot` (a saved exposition), takes its service from the
+// file's basename, which is as often the service itself
+// (`checkout-api/docs/checkout-api.prom`) as a third party (`ibm-mq.prom`),
+// and the annotation keeps that origin over the code's; it stays explicit.
+const EXPORTER_EMITTER_ORIGINS = new Set(['exporter-manifest', 'exporter-config']);
+
+function isExporterOrigin(spec) {
+  return EXPORTER_EMITTER_ORIGINS.has(spec?.origin_kind);
 }
 
 function isOutsideServiceScope(group, scope) {
@@ -411,7 +437,9 @@ function artefactInServiceScope(artefact, scope) {
 
   if (kind === 'scrape_job') {
     const job = compact(spec.job || artefact.title || '');
-    for (const token of scope.explicit || []) {
+    // The exporter's own name counts here and nowhere else: a job named
+    // for the exporter scrapes the metrics this pack declares.
+    for (const token of [...(scope.explicit || []), ...(scope.exporterTokens || [])]) {
       if (job.includes(token) || token.includes(job)) return true;
     }
   }
