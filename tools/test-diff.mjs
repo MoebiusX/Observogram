@@ -996,18 +996,22 @@ process.stdout.write('\n--- scaffold placeholders never pair ---\n');
   assert(sum.declared === 1 && sum.members === 2 && sum.unmatched.length === 0 && sum.refused.length === 0
     && sum.families.length === 1 && sum.families[0].pattern === FAMILY && sum.families[0].members === 2 && sum.families[0].side === 'a' && sum.families[0].exporter === 'acme-exporter',
     'summary.dynamicFamilies accounts for each family', sum);
-  // A pattern is weaker evidence than a name: it neither lowers nor raises the score.
+  // A member is a pair like any other: it counts in the ratios.
   const without = diffPacks(adapt(scopedRepoPack), adapt(listing([])));
   const noMember = diffPacks(adapt(declare(scopedRepoPack, [FAMILY])), adapt(listing(['acme_other_total'])));
-  assert(d.summary.alignment === noMember.summary.alignment && d.summary.jaccard === noMember.summary.jaccard && d.summary.aligned === noMember.summary.aligned + 2 && d.summary.aligned === without.summary.aligned + 2,
-    'members count in aligned and stay out of the ratios', [d.summary, noMember.summary]);
+  assert(d.summary.aligned === noMember.summary.aligned + 2 && d.summary.aligned === without.summary.aligned + 2
+    && d.summary.alignment === Math.round((d.summary.aligned / d.summary.union) * 100) / 100
+    && d.summary.jaccard === Math.round((d.summary.inBoth / d.summary.union) * 100) / 100,
+    'members count in aligned and in the ratios', [d.summary, noMember.summary]);
   const missing = clone(scopedRepoPack);
   missing.metadata.annotations['crawler.discovered.metric_names'] = JSON.stringify([...JSON.parse(missing.metadata.annotations['crawler.discovered.metric_names']), 'acme_gone_a', 'acme_gone_b', 'acme_gone_c', 'acme_gone_d', 'acme_gone_e']);
   const many = Array.from({ length: 200 }, (_, i) => `acme_queue_q${i}_total`);
   const swamp = diffPacks(adapt(declare(missing, [FAMILY])), adapt(listing(many)));
   const small = diffPacks(adapt(declare(missing, [FAMILY])), adapt(listing([])));
-  assert(swamp.summary.aligned === small.summary.aligned + 200 && swamp.summary.alignment === small.summary.alignment && swamp.summary.jaccard === small.summary.jaccard && swamp.summary.onlyInA === small.summary.onlyInA,
-    '200 members do not hide five declared metrics that are gone', [swamp.summary, small.summary]);
+  assert(swamp.summary.aligned === small.summary.aligned + 200 && swamp.summary.alignment > small.summary.alignment && swamp.summary.jaccard > small.summary.jaccard,
+    '200 members raise the ratios', [swamp.summary, small.summary]);
+  assert(swamp.summary.onlyInA === small.summary.onlyInA && keys(swamp.layers.L2.onlyInA).filter(k => k.includes('acme_gone_')).length === 5 && swamp.summary.dynamicFamilies.members === 200,
+    'five declared metrics that are gone stay named, and the summary says how much rests on a pattern', swamp.summary);
   assert(d.summary.inBoth === d.layers.L1.inBoth.length + d.layers.L2.inBoth.length + d.layers.L2X.inBoth.length + d.layers.L3.inBoth.length + d.layers.L4.inBoth.length + d.layers.L5.inBoth.length + d.layers.GOV.inBoth.length,
     'the members count as inBoth', d.summary);
   assert(!d.scope.serviceTokens.includes('acme') && !d.scope.serviceTokens.includes('acmeexporter') && JSON.stringify(d.scope.exporterTokens) === JSON.stringify(['acme', 'acmeexporter']),

@@ -292,13 +292,12 @@ a pack without one keeps its bytes:
 }
 ```
 
-Members count in `inBoth`, `aligned` and `union`, and **stay out of `jaccard` and
-`alignment`**. A pattern matched them, which is weaker than a name declared one
-by one: a family neither lowers the score (they are not undeclared) nor raises
-it (200 minted names must not hide five declared metrics that are gone), so a
-gate on `alignment` reads what the pack declares by name. The studio's compare
-digest leaves them out of its aligned count too, its head says how many there
-are, and a member's card names the pattern that answered for it.
+Members count like any other pair: in `inBoth`, `aligned` and `union`, and so in
+**`jaccard` and `alignment`**. A gate on `alignment` reads them too, so a family
+with many members can lift the score while declared metrics are gone. Those stay
+named in `onlyInA`, and `summary.dynamicFamilies.members` says how many pairs rest
+on a pattern. The studio's compare digest counts members as aligned, its head says
+how many there are, and a member's card names the pattern that answered for it.
 
 ## Addresses a source does not state
 

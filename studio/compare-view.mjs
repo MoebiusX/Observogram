@@ -1264,7 +1264,7 @@ function diffDigest(diff, packB, lens) {
     return productSurface(art, lens, pack);
   };
 
-  const totals = { aligned: 0, drifted: 0, onlyInA: 0, onlyInB: 0, outOfScope: 0, scaffold: 0, notObserved: 0 };
+  const totals = { aligned: 0, byPattern: 0, drifted: 0, onlyInA: 0, onlyInB: 0, outOfScope: 0, scaffold: 0, notObserved: 0 };
   const rows = [];
   for (const L of LAYERS_FOR_DIFF) {
     const bucket = diff.layers[L] || { onlyInA: [], onlyInB: [], inBoth: [], outOfScope: [] };
@@ -1275,9 +1275,7 @@ function diffDigest(diff, packB, lens) {
     // aligned; same-identity-but-divergent pairs are drifted. Matching is
     // an object comparison, not a name check.
     const matched = (bucket.inBoth || []).filter(e => passesLens(e, 'a') && !isScaffoldDiffEntry(e));
-    // A metric only a dynamic family answered for is not counted as agreement:
-    // the engine's ratios leave it out too (summary.dynamicFamilies counts it).
-    const aligned = matched.filter(e => e.match !== 'drifted' && e.matchedBy !== 'declared-family');
+    const aligned = matched.filter(e => e.match !== 'drifted');
     const drifted = matched.filter(e => e.match === 'drifted');
     const rawOnlyInA = (bucket.onlyInA || []).filter(e => passesLens(e, 'a'));
     const rawOnlyInB = (bucket.onlyInB || []).filter(e => passesLens(e, 'b'));
@@ -1296,6 +1294,7 @@ function diffDigest(diff, packB, lens) {
     if (aligned.length === 0 && drifted.length === 0 && onlyInA.length === 0
         && onlyInB.length === 0 && outOfScope.length === 0 && scaffold.length === 0 && notObserved.length === 0) continue;
     totals.aligned += aligned.length;
+    totals.byPattern += aligned.filter(e => e.matchedBy === 'declared-family').length;
     totals.drifted += drifted.length;
     totals.onlyInA += onlyInA.length;
     totals.onlyInB += onlyInB.length;
@@ -4489,7 +4488,9 @@ function compareSummaryHtml(digest, cmp, ctx) {
     tile({
       label: 'Shared', name: `in both packs, matched by ${ctx.matchedBy || DEFAULT_PAIRING}`, n: t.shared,
       tone: t.drifted ? 'warn' : 'ok', zeroTone: 'neutral',
-      means: t.drifted ? `${t.aligned} match · ${t.drifted} differ in at least one field.` : `All ${t.shared} match field for field.`,
+      means: t.drifted ? `${t.aligned} match · ${t.drifted} differ in at least one field.`
+        : t.byPattern ? `${t.shared - t.byPattern} match field for field · ${t.byPattern} only by a dynamic family's pattern.`
+        : `All ${t.shared} match field for field.`,
       zero: 'No artefact appears in both packs: they describe different things.',
       action: t.drifted ? 'cmp-focus:review' : 'cmp-slice:both',
       actionLabel: t.drifted ? `Review ${diagUx.plural(t.drifted, 'change')}` : `Show ${t.shared}`,
