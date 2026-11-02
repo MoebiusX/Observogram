@@ -64,9 +64,8 @@
 //   family. Two sides declaring one pattern pair with each other. A family
 //   with no member is never onlyInA: it is counted in
 //   `summary.dynamicFamilies`, a key present only when a family is declared.
-//   A pattern is weaker evidence than a name: members stay out of `jaccard` and
-//   `alignment`, so a family neither lowers nor raises what the pack's declared
-//   artefacts score.
+//   A member is a pair like any other, so it counts in `jaccard` and `alignment`;
+//   `summary.dynamicFamilies.members` says how much of them rests on a pattern.
 //
 // IDENTITY MODES
 //   `diffPacks(a, b, { identity })` pairs by another key: a mode id of
@@ -288,9 +287,6 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
   }
 
   const dynamicFamilies = familySummary([...familyLedger.values()], { a: aBlind, b: bBlind }, { a: aScoped, b: bScoped });
-  // What a pattern answered for is not in the ratios (see DYNAMIC FAMILIES).
-  const familyMembers = dynamicFamilies?.members || 0;
-  const ratioUnion = onlyInA + onlyInB + inBoth - familyMembers;
 
   return {
     a: packMeta(aLayered),
@@ -326,14 +322,14 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
       union: onlyInA + onlyInB + inBoth,
       aTotal: onlyInA + inBoth,
       bTotal: onlyInB + inBoth,
-      jaccard: ratioUnion === 0
+      jaccard: (onlyInA + onlyInB + inBoth) === 0
         ? 1
-        : Math.round(((inBoth - familyMembers) / ratioUnion) * 100) / 100,
+        : Math.round((inBoth / (onlyInA + onlyInB + inBoth)) * 100) / 100,
       // True alignment ratio: only structurally-equal matches count, over
       // the full union. Identity-only matches that drifted are excluded.
-      alignment: ratioUnion === 0
+      alignment: (onlyInA + onlyInB + inBoth) === 0
         ? 1
-        : Math.round(((aligned - familyMembers) / ratioUnion) * 100) / 100,
+        : Math.round((aligned / (onlyInA + onlyInB + inBoth)) * 100) / 100,
     },
     layers,
   };

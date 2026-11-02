@@ -544,8 +544,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/diff.mjs": {
-      "sha256": "8cf33e2b945b05e78c641a368b4bd2ad85bb29adde5ae0ef759b9770137cda7d",
-      "bytes": 40907,
+      "sha256": "cb2f8be454aa9ad87b4624fbcd714936c9a42da27cde28b64a814c5fb6d1b10f",
+      "bytes": 40725,
       "exports": [
         "deltasOf",
         "diffPacks",
