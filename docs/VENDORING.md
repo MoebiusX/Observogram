@@ -295,7 +295,9 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
   empty array and the counts it always had. A metric family's entry adds
   `series` and `memberIds` to the artefact it embeds; a consumer that lists
   a pack's own artefacts beside the diff uses `memberIds` to give every
-  series its family's status (the studio's Compare does).
+  series its family's status (the studio's Compare does). `declaredAhead`
+  (per layer, and `summary.declaredAhead`) came after it, and those keys exist
+  only when a pack carries a lifecycle statement (docs/DIFF.md).
 - **`L4_SUBGROUPS`** is intentionally duplicated: `constants.mjs` owns the
   display copy, `diagnostic-grade.mjs` inlines a private copy so it stays
   zero-import. Change both or neither.
@@ -306,6 +308,10 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
   headers (echoing `X-Observogram-Org`).
 
 ## Staying current
+
+A tree that vendors the whole repository follows [`DOWNSTREAM.md`](DOWNSTREAM.md) §4
+instead; if it still carries the eleven-patch hand-off, start with
+[*Bumping past the eleven-patch hand-off*](#bumping-past-the-eleven-patch-hand-off).
 
 1. Record the Observogram commit you vendored from (e.g. in a
    `packages/upstream/UPSTREAM_SHA` file).
@@ -348,3 +354,141 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
    recorded sha. Because the modules take their inputs explicitly, upstream
    changes surface as signature diffs at copy time — not as silent behaviour
    drift at runtime.
+
+## Bumping past the eleven-patch hand-off
+
+For the agent that keeps a whole-tree snapshot at `fe03de6` with the eleven theme
+patches of the hand-off applied. Every patch is now decided (2026-11-02). This section
+says what to do with each one. [`DOWNSTREAM.md`](DOWNSTREAM.md) §4 and §6 are the
+general workflow.
+
+**Target.** `develop` at `f3f9266` or later. `main` does not have this work until the
+next promotion, so record a commit, not a tag. Node 22.23.4 or later.
+
+**Do not replay the series.** The patches are cumulative, most of them landed in a
+different shape, and 09 to 11 no longer apply. Start from a clean copy of the target
+tree and put back only the rows below that say *keep*.
+
+| Patch | Upstream | What you do |
+| --- | --- | --- |
+| 01 RRNAME-PATTERN | Spec 1.4's 2026-11-01 revision, synced in #192: any Prometheus name with at least one `:` and no empty segment | Drop it. This is stricter than your patch: `foo:` and `foo::bar` do not validate, so rename any you have |
+| 02 METRICISH | #184: colon-edged tokens are not metrics, in both parsers | Drop it |
+| 03 UNMARKED | Not taken; it changes no behaviour | Yours to keep or drop. If you keep it, mark it (*Check the result*) |
+| 04 METRIC-LABEL | Not taken | Keep it, marked, in `tools/lib/adapter.mjs` |
+| 05 PROMRULE-LABEL | Not taken | Keep it, marked, in `tools/lib/adapter.mjs` |
+| 06 SEQUENTIAL-CALLS | Not taken: the transport hook already serialises every MCP request | Drop it and use your `serial-transport-hook` (*Sequential calls*) |
+| 07 EVENT-JUNK-FILTER | #187: `metricExclude`, a scope field | Drop it and set the variable (*Scope variables*) |
+| 08 SCOPED-RULE-GROUPS | #189: `ruleGroups`, a scope field, and the folder scope pushed down to the alert-rule tool | Drop it and set the variables. Recording rules by folder title were not built (*Scope variables*) |
+| 09 EXPORTER-MANIFEST | #185 (service scope) and #190 (`dynamicFamilies`) | Drop it and move your file (*Exporter manifests*) |
+| 10 DYNAMIC-FAMILY | #190 and #191 | Drop it |
+| 11 LIFECYCLE-DECLARED-AHEAD | #193 | Drop it, then move your blocks and update what reads the diff (*Lifecycle blocks*) |
+
+### Sequential calls
+
+The hook's `fetchImpl` sees every MCP request, and `OBSERVOGRAM_TRANSPORT_HOOK` loads
+one module, so add the queue to the module that already prepares your gateway requests.
+Two things differ from your patch. The timeout (`MCP_TIMEOUT_MS`, 30 seconds by default,
+at most 300 seconds) starts when a request enters the queue, not when it reaches the
+wire, so raise it to cover the wait. The transport is one per process, so the queue
+serialises across every live job the server runs (up to four), not per fetch.
+
+### Scope variables
+
+```bash
+OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE='^demo_event_(?:\d+|blank)_total$'
+OBSERVOGRAM_SNAPSHOT_FOLDER_UIDS=folder-a
+OBSERVOGRAM_SNAPSHOT_RULE_GROUPS='Group One,Group Two'
+```
+
+- `METRIC_EXCLUDE` takes white-space-separated patterns, each anchored and bounded. It
+  runs after `METRIC_PREFIXES`.
+- `RULE_GROUPS` is a comma list, compared exactly, so a name may hold spaces.
+- These values describe one team, service and environment. Keep them in the deployment's
+  variables or in `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*`, not in code (§15.2).
+- The two variables your patch read inside `fetchMcp` do not exist upstream.
+- After the first snapshot, read the gate log. It says whether the folder scope was pushed
+  down or the rules were read whole.
+- **Not built:** no tool in the capability registry takes a rule group or a folder title,
+  so the rule-group and recording-rule tools your patch called were not added. Read
+  `observogram.live.gaps`. If recording rules are missing, send the tool's recorded answer
+  (`npm run record-fixtures -- --write`) so it can get a registry row. A hunk that calls an
+  unregistered tool fails `tools/test-contract-guard.mjs`.
+
+### Exporter manifests
+
+Detection is by file name, so a YAML file with your keys is never read. Use
+`metrics-manifest.json` (§18.1): `static_metrics` becomes `metrics`, or comes from
+`packc emit --exporter`, and `dynamic_families` becomes `dynamicFamilies`.
+
+- A pattern must be anchored and open with a literal prefix of at least three characters
+  that a platform does not own (`^node_` is refused, `^node_hwmon_` is not). An entry
+  that breaks a rule is a crawl warning and is not read.
+- Names are tested as listed. Your patch lowercased the live name first, so check any
+  pattern that relied on that.
+- Members count in `jaccard` and `alignment`, and `summary.dynamicFamilies.members` says
+  how many pairs rest on a pattern.
+- Key on `spec.origin_kind: exporter-family`, not on the `METRIC-FAM-` id prefix.
+
+### Lifecycle blocks
+
+- **Move the block to the top of the file.** Only comments, `---` and Helm directives may
+  sit above it. Lower down it is a warning and parks nothing.
+- **Use only `deployed`, `planned` or `not-deployed` as states.** Any other word is a
+  warning and parks nothing. `maturity` is optional.
+- **Expect some rules to stay visible.** A symbol parks only when every file that speaks
+  for it carries the same deployment, readers included. If an alert or a dashboard in a
+  file with no block reads a rule, that rule still reads *declared, not live*.
+- **A `PrometheusRule` custom resource is not walked.** A block in one does nothing, and a
+  rule in one does not keep a series visible.
+- **Update what reads the diff.** The pack carries one `observogram.lifecycle` annotation,
+  not `.sources` and `.symbols`. `summary.lifecycleEnvironment` is now
+  `summary.lifecycleEnvironments`, an array. Every new key exists only when a pack carries
+  a statement, so read them as optional.
+- **Name the environment.** `diffPacks` now takes `opts.environment`. Without it the
+  statement must hold for both packs' environments, and a live pack is always bound to
+  `prod`, so a staging comparison should pass `environment`.
+
+### What will read differently
+
+Compare a pack before and after the bump, and expect these to move:
+
+- An exporter's name no longer widens a service's scope, and a live dashboard now reaches
+  the scope through its panel expressions (#185, #186).
+- Parked artefacts leave the union, so `alignment` rises by what is parked. A statement
+  does not expire. Set `gate.maxDeclaredAhead` on any journey whose gate you rely on.
+- A repository metric your exclude patterns match, or a rule of another group, reads as
+  *not checked* rather than as drift.
+
+### Check the result
+
+```bash
+node vendor/observogram-app/tools/gen-vendor-manifest.mjs --verify vendor/observogram-app
+node vendor/observogram-app/tools/gen-vendor-manifest.mjs --smoke vendor/observogram-app
+```
+
+Mark every changed line of a kept patch `// LOCAL DEVIATION (<org> <TAG>): <why>`. The only listed module
+that should report drift is `tools/lib/adapter.mjs`, as a local patch. The hint that only
+line endings differ is a checkout setting, not a patch. `npm run sync-spec:check` should
+be clean, since the schema is no longer patched.
+
+Run upstream's `npm test` on the patched tree. With 04 and 05 applied to `f3f9266`, exactly
+four tests fail: `tools/test-adapt.mjs`, `tools/test-crawl-alerting-rules.mjs`,
+`tools/test-golden-diff.mjs` (15 goldens and the check that repeats one of them) and the
+manifest's in-sync check. Any other failure is real. Your `repro/demo.mjs` scenarios for 07,
+08, 09 and 11 drive your patches' shapes, so move them to the shapes above before reading
+their tables. Then run your own suite.
+
+### Sending more upstream
+
+- Cut each patch from a named `develop` commit, one theme per patch, with its note and
+  fixture.
+- A value that belongs to one team, service or environment is configuration: a variable or
+  `plugins/`, never `tools/lib`.
+- The diff goldens hash the whole diff, so a new key must be absent unless its data is present.
+- Run your redaction over patches, notes and fixtures before they leave.
+
+Upstream would still use three things from you: the alert-rule tool's recorded per-folder
+answer, the recording-rule tool's recorded answer, and whether your rules live in
+`PrometheusRule` custom resources, which would make walking them the next piece of work.
+If 04 and 05 are still worth carrying after this bump, say so: the likely shape is a pack
+annotation.
