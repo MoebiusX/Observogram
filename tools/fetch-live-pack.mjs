@@ -1754,9 +1754,9 @@ export function buildCanonicalPack({
   // platform exposed no recorded series at all.
   let recordingRules;
   if (recordedRules.length > 0) {
-    // Schema requires the rule NAME to match the prometheus convention
-    // ns:metric:op. Anything that doesn't can't go in spec.queries —
-    // skip those (and they'll surface in the warnings).
+    // Schema requires the rule NAME to be a metric name with a `:`.
+    // Anything that isn't can't go in spec.queries — skip those (and
+    // they'll surface in the warnings).
     recordingRules = recordedRules.filter(r => isSpecRecordingRuleName(r.name));
     // The adapter projects each rule from sourceOf('queries.recording_rules[<i>]'),
     // so the evidence has to be stamped per index — and only for rules the

@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { crawlFiles } from './lib/crawler.mjs';
 import { packSlug } from './lib/slug.mjs';
-import { isSpecRecordingRuleName, SPEC_DURATION_RE } from './lib/sli-inference.mjs';
+import { isSpecRecordingRuleName, recordedSloForExpr, SPEC_DURATION_RE, SPEC_RECORDING_RULE_NAME_RE } from './lib/sli-inference.mjs';
 import { validate, validateCanonical, SPEC_VERSION, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { adapt } from './lib/adapter.mjs';
@@ -80,17 +80,17 @@ assert(summary.environment.requested === 'prod' && summary.normalized.environmen
 
 // 3. recording rules: the spec's names only, the rest recorded as evidence; intervals as Durations; the Grafana record form read
 const ruleNames = canonical.spec.queries.recording_rules.map(r => r.name);
-assert(JSON.stringify(ruleNames) === JSON.stringify(['hostile:availability:good', 'hostile:availability:total', 'hostile:orders:rate5m']),
-  'only <service>:<metric>:<op> rules are declared; the Grafana `record: { metric, from }` form is read', ruleNames);
+assert(JSON.stringify(ruleNames) === JSON.stringify(['hostile:availability:good', 'hostile:availability:total', 'apiserver_request:burnrate1d', 'HTTP:Requests:Rate', 'hostile:orders:rate5m']),
+  'every metric name with a colon is declared, two segments and mixed case too; the Grafana `record: { metric, from }` form is read', ruleNames);
 assert(canonical.spec.queries.recording_rules.slice(0, 2).every(r => r.interval === '30s'), 'a numeric group interval becomes a Duration (30 → 30s)', canonical.spec.queries.recording_rules.map(r => r.interval));
-const grafanaRule = canonical.spec.queries.recording_rules[2];
+const grafanaRule = canonical.spec.queries.recording_rules.find(r => r.name === 'hostile:orders:rate5m');
 assert(grafanaRule.interval === '1m' && grafanaRule.expr === 'sum(rate(orders_total[5m]))', 'the Grafana recording rule keeps its stated 1m interval and takes its expr from the data node', grafanaRule);
 const omitted = JSON.parse(ann['crawler.omitted.recording_rules']);
-assert(JSON.stringify(omitted.map(r => r.name).sort()) === JSON.stringify([':node_memory_MemAvailable_bytes:sum', 'HTTP:Requests:Rate', 'apiserver_request:burnrate1d']),
-  'the three non-conforming names are recorded in crawler.omitted.recording_rules', omitted);
+assert(JSON.stringify(omitted.map(r => r.name)) === JSON.stringify([':node_memory_MemAvailable_bytes:sum']),
+  'the one name the schema refuses is recorded in crawler.omitted.recording_rules', omitted);
 assert(omitted.every(r => /^prometheus\/rules\.yml#hostile-slo\/.+$/.test(r.source)), 'each omitted rule names its <file>#<group>/<name> source', omitted);
-assert(ann['crawler.omittedRecordingRuleCount'] === '3' && summary.discovered.recordingRulesOmitted === 3, 'the omitted count rides in the annotation and the summary', [ann['crawler.omittedRecordingRuleCount'], summary.discovered.recordingRulesOmitted]);
-assert(summary.warnings.some(w => /3 recording rule\(s\) are not named/.test(w)), 'one warning names the omitted rules', summary.warnings);
+assert(ann['crawler.omittedRecordingRuleCount'] === '1' && summary.discovered.recordingRulesOmitted === 1, 'the omitted count rides in the annotation and the summary', [ann['crawler.omittedRecordingRuleCount'], summary.discovered.recordingRulesOmitted]);
+assert(summary.warnings.some(w => /1 recording rule\(s\) are not metric names/.test(w)), 'one warning names the omitted rules', summary.warnings);
 const origins = JSON.parse(ann['crawler.discovered.metric_origins']);
 assert('node_memory_MemAvailable_bytes' in origins, 'an omitted rule\'s expression still feeds the metric inventory (evidence is never lost)', Object.keys(origins));
 assert(summary.omitted.ruleIntervals.length === 0, 'every interval in the fixture is a Duration once spelled', summary.omitted.ruleIntervals);
@@ -218,8 +218,18 @@ const tier3 = crawlFiles(readTree(TIER3_DIR), { repoName: 'tier3-alerts', now: N
 
 // ---------- mirror pins: the hand-written copies of the schema rules ----------
 assert(SPEC_DURATION_RE.source === SCHEMA.$defs.Duration.pattern, 'SPEC_DURATION_RE mirrors $defs.Duration', [SPEC_DURATION_RE.source, SCHEMA.$defs.Duration.pattern]);
-assert(isSpecRecordingRuleName('svc:metric:op') && !isSpecRecordingRuleName(':x:y') && !isSpecRecordingRuleName('HTTP:Requests:Rate') && !isSpecRecordingRuleName({ metric: 'a:b:c' }),
-  'isSpecRecordingRuleName is the <service>:<metric>:<op> reading');
+assert(isSpecRecordingRuleName('svc:metric:op') && isSpecRecordingRuleName('job:rate') && isSpecRecordingRuleName('HTTP:Requests:Rate') && isSpecRecordingRuleName('_a:b:c:d'),
+  'isSpecRecordingRuleName admits two segments, mixed case and more than three');
+assert(!isSpecRecordingRuleName(':x:y') && !isSpecRecordingRuleName('foo:') && !isSpecRecordingRuleName('foo::bar') && !isSpecRecordingRuleName('no_colon') && !isSpecRecordingRuleName({ metric: 'a:b:c' }),
+  'isSpecRecordingRuleName refuses an edge or empty segment, a name with no colon, and a non-string');
+{
+  const pattern = SCHEMA.$defs.Queries.properties.recording_rules.items.properties.name.pattern;
+  assert(pattern === SPEC_RECORDING_RULE_NAME_RE.source, "SPEC_RECORDING_RULE_NAME_RE mirrors the schema's pattern", [pattern, SPEC_RECORDING_RULE_NAME_RE.source]);
+  const hasSlo = (id) => id === 'pay_api_99';
+  assert(recordedSloForExpr('sum(pay:api:ratio_5m) < 0.99', hasSlo) === 'pay_api_99', 'a three-segment series still answers for its SLO');
+  assert(recordedSloForExpr('sum(pay:api:ratio_5m:extra) < 0.99', hasSlo) === null && recordedSloForExpr('sum(xPay:api:ratio_5m) < 0.99', hasSlo) === null && recordedSloForExpr('sum(job:rate) < 0.99', hasSlo) === null,
+    'a four-segment, mixed-case or two-segment series answers for no SLO, not even by a part of its name');
+}
 {
   const probes = ['My_Repo', '1password', '.', 'a', 'payments.git', '--', '_foo', 'x'.repeat(70), 'Team Platform', 'Canonical_Repo', 'golden', 'ab', 'a-', 'prod'];
   const bad = [];
@@ -256,7 +266,7 @@ try {
   assert(r.status === 0, 'the CLI crawls the hostile repository with exit 0', [r.status, r.stderr.slice(-400)]);
   assert(/schema\s+: valid/.test(r.stderr), 'the summary says the pack is valid', r.stderr.slice(-300));
   assert(r.stderr.includes("name             : hostile_repo (normalized from 'Hostile_Repo')"), 'the summary shows the normalized name and its origin', r.stderr);
-  assert(r.stderr.includes('rules omitted    : 3'), 'the summary counts the omitted rules', r.stderr);
+  assert(r.stderr.includes('rules omitted    : 1'), 'the summary counts the omitted rules', r.stderr);
   const out = join(tmp, 'hostile.pack.yaml');
   writeFileSync(out, r.stdout);
   const v = spawnSync(process.execPath, [VALIDATE, out], { encoding: 'utf8', env });

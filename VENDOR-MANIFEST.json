@@ -210,7 +210,7 @@
       "changedSinceRelease": false
     },
     "tools/lib/brand.mjs": {
-      "sha256": "a3965a788f7d0073eef71ea05a690d51ba410fc755e15789e8496a047ea6238f",
+      "sha256": "f4161401e29e48ebb23cc56b8858972e976c935ffad89221b1f8350a70765c7d",
       "bytes": 12914,
       "exports": [
         "DEFAULT_BRAND",
@@ -427,8 +427,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "bd5efbac7ba54eda53a930a3a076ccca9f22abaa14198fa6f6cb17b02d39f5da",
-      "bytes": 135121,
+      "sha256": "e5d543a66b9ea26e3d9c91f95bb41948446703347de0364620466cf0a46ba898",
+      "bytes": 135101,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
@@ -1245,10 +1245,11 @@
       "changedSinceRelease": false
     },
     "tools/lib/sli-inference.mjs": {
-      "sha256": "945c3d06dfea10502c9952ccd295816f302766526aefa66fa2035fc178cffb15",
-      "bytes": 18734,
+      "sha256": "ce29be94f458982954ad6374de4a70533b066aa080dcf315e366ee324e65cc81",
+      "bytes": 19228,
       "exports": [
         "SPEC_DURATION_RE",
+        "SPEC_RECORDING_RULE_NAME_RE",
         "alertRuleExpr",
         "alertRuleWindows",
         "burnAlertsFromAlertRules",
@@ -1270,7 +1271,25 @@
         "tools/lib/slug.mjs"
       ],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "SPEC_DURATION_RE",
+        "alertRuleExpr",
+        "alertRuleWindows",
+        "burnAlertsFromAlertRules",
+        "burnCandidateFromAlertRule",
+        "canonicalRuleDuration",
+        "defaultBurnWindows",
+        "inferSlisFromRecordingRules",
+        "isGrafanaManagedRule",
+        "isSpecRecordingRuleName",
+        "mergeBurnAlertsBySlo",
+        "operationalAlertRule",
+        "operationalAlertRules",
+        "recordedSloForExpr",
+        "ruleNameToSliId",
+        "ruleNameToSloId"
+      ]
     },
     "tools/lib/slug.mjs": {
       "sha256": "bf9f4c4816363d65c66203e4f7fdbc061b9a144f909545278b7192b4ec903c51",

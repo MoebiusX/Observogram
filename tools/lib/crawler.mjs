@@ -774,7 +774,7 @@ export function crawlFiles(filesInput, opts = {}) {
 
   if (summary.omitted.recordingRules.length) {
     const names = summary.omitted.recordingRules.map(r => r.name);
-    summary.warnings.push(`${names.length} recording rule(s) are not named <service>:<metric>:<op> and cannot be declared in spec.queries.recording_rules: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}. Recorded in crawler.omitted.recording_rules; their expressions still feed the metric inventory.`);
+    summary.warnings.push(`${names.length} recording rule(s) are not metric names with a colon and cannot be declared in spec.queries.recording_rules: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}. Recorded in crawler.omitted.recording_rules; their expressions still feed the metric inventory.`);
   }
   if (summary.omitted.ruleIntervals.length) {
     summary.warnings.push(`${summary.omitted.ruleIntervals.length} rule-group interval(s) are not a spec Duration and are left out: ${summary.omitted.ruleIntervals.slice(0, 8).map(o => `${o.group}=${o.value} (${o.source})`).join(', ')}.`);
@@ -999,8 +999,8 @@ export function crawlFiles(filesInput, opts = {}) {
         ...(normalized.environment ? { 'crawler.environmentNormalizedFrom': normalized.environment.from } : {}),
         ...(criticalityIgnored ? { 'crawler.criticalityIgnored': String(opts.criticality) } : {}),
         ...(bindingIgnored ? { 'crawler.bindingIgnored': String(opts.binding) } : {}),
-        // Recording rules the spec cannot declare (name outside
-        // <service>:<metric>:<op>) — evidence, never silently dropped.
+        // Recording rules the spec cannot declare (not a metric name with
+        // a `:`) — evidence, never silently dropped.
         ...(summary.omitted.recordingRules.length ? {
           'crawler.omittedRecordingRuleCount': String(summary.omitted.recordingRules.length),
           'crawler.omitted.recording_rules': annotationJson(summary.omitted.recordingRules),
@@ -2170,8 +2170,8 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
       origin,
       usedBy: `recording_rule:${name}`,
     });
-    // The spec declares `<service>:<metric>:<op>` names only (the reading the
-    // live fetcher already applies); any other name is recorded as omitted.
+    // The spec declares metric names with a `:` only (the reading the live
+    // fetcher already applies); any other name is recorded as omitted.
     if (!isSpecRecordingRuleName(name)) {
       summary.omitted.recordingRules.push({ name, source: origin });
       return;

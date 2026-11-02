@@ -699,8 +699,8 @@ upconvert is for the archive, and a re-crawl supersedes an upconverted pack.
    reaches the stored pack). A name that does not start with a letter is
    prefixed (`1password` → `svc-1password`), never truncated at the front.
 4. What the spec cannot hold is omitted and recorded as evidence, never
-   invented and never silently dropped: recording rules not named
-   `<service>:<metric>:<op>` in `crawler.omitted.recording_rules` (name +
+   invented and never silently dropped: recording rules that are not
+   metric names with a `:` in `crawler.omitted.recording_rules` (name +
    `<file>#<group>/<name>`; their expressions still feed the metric
    inventory), a dashboard `schemaVersion` below 30 in
    `params.schema_version`, a rule-group interval that is not a Duration in

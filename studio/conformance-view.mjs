@@ -39,7 +39,7 @@ import {
   wireSectionNav, wireUxActions,
 } from './ux-kit.mjs';
 
-const RUBRIC_URL = 'https://github.com/MoebiusX/otel-observability-pack/blob/e64e58132a46364afd5432a86e67d470858936cf/docs/maturity-model.md';
+const RUBRIC_URL = 'https://github.com/MoebiusX/otel-observability-pack/blob/c34196b7a48f4f8b0829f26f2944fa7803dffd5e/docs/maturity-model.md';
 
 const DIMENSIONS = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5'];
 
