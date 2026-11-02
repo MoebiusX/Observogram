@@ -189,12 +189,12 @@ test('GET /api/mcp/jobs: the org\'s configured scope (acme\'s own variable), not
   assert.equal(r.status, 200, r.text);
   assert.deepEqual(r.json, {
     ok: true,
-    scope: { defaults: { metricPrefixes: ['alertmanager_', 'up'], folderUids: [], datasourceUid: null, metricExclude: [] }, from: 'org', errors: [] },
+    scope: { defaults: { metricPrefixes: ['alertmanager_', 'up'], folderUids: [], datasourceUid: null, metricExclude: [], ruleGroups: [] }, from: 'org', errors: [] },
     running: null,
     lastTook: { snapshot: null, draft: null },
   });
   const bravo = await call('GET', '/api/mcp/jobs', 'ada', undefined, 'bravo');
-  assert.deepEqual(bravo.json.scope, { defaults: { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [] }, from: null, errors: [] }, 'acme\'s variable is never bravo\'s');
+  assert.deepEqual(bravo.json.scope, { defaults: { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [], ruleGroups: [] }, from: null, errors: [] }, 'acme\'s variable is never bravo\'s');
 });
 
 test('a snapshot by id: 202, an id and a Location at once; the gate log by cursor; done registers a pack labelled snapshot; one live.fetch row with the origin', async () => {
@@ -208,7 +208,7 @@ test('a snapshot by id: 202, an id and a Location at once; the gate log by curso
   assert.equal(r.json.poll, r.location);
   assert.deepEqual([job.kind, job.state, job.cancelRequested, job.label], ['snapshot', 'running', false, null]);
   assert.deepEqual(job.target, { mcpEndpoint: { id: ENDPOINT, name: 'acme-gw' }, origin: main.origin });
-  assert.deepEqual(job.scope, { metricPrefixes: ['alertmanager_', 'up'], folderUids: [], datasourceUid: null, metricExclude: [] }, 'the configured scope');
+  assert.deepEqual(job.scope, { metricPrefixes: ['alertmanager_', 'up'], folderUids: [], datasourceUid: null, metricExclude: [], ruleGroups: [] }, 'the configured scope');
   const end = await settle('oscar', job.id);
   assert.equal(end.job.state, 'done', end.error);
   assert.deepEqual(end.records.map((x) => x.seq), end.records.map((_, i) => i + 1), 'every record once, in order');
@@ -515,7 +515,7 @@ test('the typed-URL rule and the request checks: operators and the bearer send i
     // A request's scope replaces the configured one whole.
     r = await startJob('oscar', { kind: 'snapshot', mcpEndpointId: ENDPOINT, scope: {}, label: 'request scope' });
     assert.equal(r.status, 202, r.text);
-    assert.deepEqual(r.json.job.scope, { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [] });
+    assert.deepEqual(r.json.job.scope, { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [], ruleGroups: [] });
     await settle('oscar', r.json.job.id);
   } finally { delete process.env.OBSERVOGRAM_ORG_ACME_SNAPSHOT_FOLDER_UIDS; }
   // The exclude patterns: a white-space list in the variable; each bad one named with its rule.
@@ -534,12 +534,29 @@ test('the typed-URL rule and the request checks: operators and the bearer send i
     assert.deepEqual([r.status, r.json.error], [400, 'scope.metricExclude[0] "^a*a*a*a*b$" is too slow to match (it crawls over a 256-character name)']);
     process.env.OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_EXCLUDE = ' ^alertmanager_cluster_  ^go_ ';
     const jobs = await call('GET', '/api/mcp/jobs', 'oscar');
-    assert.deepEqual(jobs.json.scope, { defaults: { metricPrefixes: ['alertmanager_', 'up'], folderUids: [], datasourceUid: null, metricExclude: ['^alertmanager_cluster_', '^go_'] }, from: 'org', errors: [] });
+    assert.deepEqual(jobs.json.scope, { defaults: { metricPrefixes: ['alertmanager_', 'up'], folderUids: [], datasourceUid: null, metricExclude: ['^alertmanager_cluster_', '^go_'], ruleGroups: [] }, from: 'org', errors: [] });
     r = await startJob('oscar', { kind: 'snapshot', mcpEndpointId: ENDPOINT, label: 'excluded' });
     assert.equal(r.status, 202, r.text);
     assert.deepEqual(r.json.job.scope.metricExclude, ['^alertmanager_cluster_', '^go_']);
     await settle('oscar', r.json.job.id);
   } finally { delete process.env.OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_EXCLUDE; }
+  // The rule groups: a comma list in the variable (a group name may carry spaces); a bad one named with its rule.
+  process.env.OBSERVOGRAM_ORG_ACME_SNAPSHOT_RULE_GROUPS = 'payments, bad\u0001group';
+  try {
+    r = await startJob('oscar', { kind: 'snapshot', mcpEndpointId: ENDPOINT });
+    assert.deepEqual([r.status, r.json.error], [400, 'the configured snapshot scope does not parse — OBSERVOGRAM_ORG_ACME_SNAPSHOT_RULE_GROUPS[1] "bad\\u0001group" has a control character; fix the variable, or send a scope with the request']);
+    r = await startJob('oscar', { kind: 'snapshot', mcpEndpointId: ENDPOINT, scope: { ruleGroups: ['g'.repeat(101)] } });
+    assert.deepEqual([r.status, r.json.error], [400, `scope.ruleGroups[0] "${'g'.repeat(60)}…" is longer than 100 characters`]);
+    r = await startJob('oscar', { kind: 'snapshot', mcpEndpointId: ENDPOINT, scope: { ruleGroups: [' '] } });
+    assert.deepEqual([r.status, r.json.error], [400, 'scope.ruleGroups[0] "" is empty (a rule-group name has at least one character)']);
+    process.env.OBSERVOGRAM_ORG_ACME_SNAPSHOT_RULE_GROUPS = ' payments , Group One ';
+    const jobs = await call('GET', '/api/mcp/jobs', 'oscar');
+    assert.deepEqual(jobs.json.scope.defaults.ruleGroups, ['payments', 'Group One']);
+    r = await startJob('oscar', { kind: 'snapshot', mcpEndpointId: ENDPOINT, label: 'grouped' });
+    assert.equal(r.status, 202, r.text);
+    assert.deepEqual(r.json.job.scope.ruleGroups, ['payments', 'Group One']);
+    await settle('oscar', r.json.job.id);
+  } finally { delete process.env.OBSERVOGRAM_ORG_ACME_SNAPSHOT_RULE_GROUPS; }
 });
 
 test('the bearer starts and reads its own job by id; a session cannot read it; an admin\'s typed URL runs (typed: true on the row)', async () => {

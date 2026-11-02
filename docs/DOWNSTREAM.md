@@ -1218,7 +1218,7 @@ annotation: a hand-uploaded pack can make them.
 
 **The scope.** `OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES`,
 `OBSERVOGRAM_SNAPSHOT_FOLDER_UIDS`, `OBSERVOGRAM_SNAPSHOT_DATASOURCE_UID`,
-`OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE` for the deployment and
+`OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE`, `OBSERVOGRAM_SNAPSHOT_RULE_GROUPS` for the deployment and
 `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` for one org — the org's overriding the
 deployment's field by field; a request's `scope` replaces the configured one
 whole. Inert when unset; the draft and the refresh never read them. Metric
@@ -1229,8 +1229,19 @@ exporter's malformed mints; the count is in the gate log, the patterns ride in
 `observogram.scope.metric` as `exclude`, and the diff parks a repository
 metric they match as *not checked*), then a 20 000-name cap, named; folder
 uids filter dashboards before the detail reads and alert rules when every
-rule names its folder; a datasource uid is named in the gate log as not
-applied, because no advertised tool takes one. The exclusion is a scope
+rule names its folder (an alert-rule tool that takes a folder uid — Grafana's,
+through its registry row's `runtimeArgs` slot — is asked once per folder and the
+gate log says the scope was pushed down; it is read whole instead, and said,
+when a folder gets no answer, when the tool ignores the argument, or when
+another engine names no folder, so the pack never holds half an engine; folders
+that hold no rule still record the scope); rule
+groups filter alert and recording rules when every rule the engines list names
+its group (Grafana's `ruleGroup`, a `groups[].name`), compared exactly, and the
+gate log says when a listing names none; the groups ride in
+`observogram.scope.<rule family>` (`{ by: "group", values }`, or `groups` on
+the folder entry) and the diff parks a repository rule of another group — the
+group its `source` names — as *not checked*; a datasource uid is named in the
+gate log as not applied, because no advertised tool takes one. The exclusion is a scope
 field, not a setting: the regex that names one product's junk belongs in the
 deployment's or the org's variable, never in the engine.
 
@@ -1239,6 +1250,8 @@ first (`npm run record-fixtures -- --write`, against the product at a pinned
 version), then add the candidate to `tools/lib/contracts/mcp-capabilities.mjs`
 with a `runtimeArgs` slot (`{ argName: slotName }`) the fetcher fills from the
 scope — the data layer never reads the environment — and its response shape
+(the first such slot is `grafana_alert_rules`'s `folder_uid`, whose per-folder
+answer is the recorded provisioning shape, folder by folder)
 to `contracts/response-shapes.mjs`; `tools/test-contract-shapes.mjs` and the
 contract guard then pin both. No tool name is typed anywhere else.
 

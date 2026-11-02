@@ -429,9 +429,9 @@ snapshot alike); a draft's report is byte-identical. A snapshot's annotations:
 |---|---|
 | `observogram.live.mode` | `snapshot` |
 | `observogram.live.source` | JSON `{ origin, endpoint: { id, name } \| null }` — where it was read |
-| `observogram.live.scope` | the scope the snapshot was asked for (`metricPrefixes`, `folderUids`, `datasourceUid`, and `metricExclude` when patterns were set) and the families it applied to; always written |
+| `observogram.live.scope` | the scope the snapshot was asked for (`metricPrefixes`, `folderUids`, `datasourceUid`, `metricExclude` when patterns were set and `ruleGroups` when groups were) and the families it applied to; always written |
 | `observogram.live.gaps` | JSON `[{ stage, reason }]` — the stages that could not run; only when there are any |
-| `observogram.scope.<kind>` | written only for a family the scope narrowed (`metric`, `dashboard`, `alert_rule`, `recording_rule`): what was read — for `metric`, `{ by: "prefix", values, exclude? }`, `values` empty when only patterns were set — the diff parks an artefact outside it as *not checked* (docs/DIFF.md) |
+| `observogram.scope.<kind>` | written only for a family the scope narrowed (`metric`, `dashboard`, `alert_rule`, `recording_rule`): what was read — for `metric`, `{ by: "prefix", values, exclude? }`, `values` empty when only patterns were set; for a rule family, `{ by: "folder", values, groups? }` or `{ by: "group", values }` — the diff parks an artefact outside it as *not checked* (docs/DIFF.md) |
 | `observogram.unobserved.<kind>` | every family of a gapped stage, with the stage's reason (`alert_rule` included) |
 
 `mcp.url` of a snapshot is the MCP's origin only. These are provenance

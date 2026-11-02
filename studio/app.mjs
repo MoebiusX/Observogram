@@ -8111,6 +8111,7 @@ async function testLiveConnection() {
     $('#live-scope-prefixes').value = form.prefixes;
     $('#live-scope-folders').value = form.folders;
     $('#live-scope-exclude').value = form.exclude;
+    $('#live-scope-groups').value = form.groups;
     $('#live-scope-note').textContent = form.errors.length ? `The configured scope does not parse: ${form.errors.join('; ')}` : form.note;
     const kind = liveUi.kindChosen ?? preselectedKind(liveUi.jobs?.scope?.from);
     document.querySelector(`input[name="live-kind"][value="${kind}"]`).checked = true;
@@ -8135,7 +8136,7 @@ async function startLiveFromPanel() {
     kind, ...target,
     ...(name ? { packName: name } : {}),
     ...(label ? { label } : {}),
-    ...(kind === 'snapshot' ? { scope: scopeFromForm({ prefixes: $('#live-scope-prefixes').value, folders: $('#live-scope-folders').value, exclude: $('#live-scope-exclude').value }) } : {}),
+    ...(kind === 'snapshot' ? { scope: scopeFromForm({ prefixes: $('#live-scope-prefixes').value, folders: $('#live-scope-folders').value, exclude: $('#live-scope-exclude').value, groups: $('#live-scope-groups').value }) } : {}),
   };
   const btn = $('#draft-mcp-go-btn');
   btn.disabled = true;

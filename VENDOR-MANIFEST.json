@@ -376,8 +376,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/contracts/mcp-capabilities.mjs": {
-      "sha256": "f1d3065a32fb237b6a6602cebc0bd8c7e22c60a5921b24899e55c225e9890e4e",
-      "bytes": 17988,
+      "sha256": "fe84faaecf29d4da08baac7b51766edc71c89301c750bff766e9a8f93106e97e",
+      "bytes": 18338,
       "exports": [
         "BUILD_INFO_PROBES",
         "CAPABILITIES",
@@ -753,9 +753,33 @@
       "changedSinceRelease": false
     },
     "tools/lib/live-fetch.mjs": {
-      "sha256": "601dbc7bb9203449fe164187fcff44bd710f9dce37dab92e80d0e74e7ac4a513",
-      "bytes": 20663,
+      "sha256": "8bfbcdf7d472765f7983cdd39fa564cefc2904927ef92615e366320951dd9293",
+      "bytes": 26087,
       "exports": [
+        "LIVE_KINDS",
+        "LIVE_SCOPE_ANNOTATION",
+        "LIVE_STAGES",
+        "SCOPE_ANNOTATION_PREFIX",
+        "SCOPE_FAMILIES",
+        "SCOPE_LIMITS",
+        "SNAPSHOT_LIMITS",
+        "STAGE_STATES",
+        "fetchPlan",
+        "folderUidOf",
+        "inScope",
+        "normalizeScope",
+        "ruleGroupOf",
+        "scopeAnnotations",
+        "scopeIsEmpty",
+        "scopeOf",
+        "scopeReason",
+        "stageNoun",
+        "stagesFor"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": [
         "LIVE_KINDS",
         "LIVE_SCOPE_ANNOTATION",
         "LIVE_STAGES",
@@ -774,10 +798,7 @@
         "scopeReason",
         "stageNoun",
         "stagesFor"
-      ],
-      "imports": [],
-      "npm": [],
-      "changedSinceRelease": false
+      ]
     },
     "tools/lib/mcp-client.mjs": {
       "sha256": "e7e2630dbda52fe8c9d0c0869b477bba66f24c669e52879553365673ccecc5ab",

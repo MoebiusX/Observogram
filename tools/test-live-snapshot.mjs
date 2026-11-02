@@ -48,12 +48,12 @@ import { resolve, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   LIVE_STAGES, LIVE_KINDS, STAGE_STATES, SCOPE_LIMITS, SNAPSHOT_LIMITS, SCOPE_FAMILIES,
-  stagesFor, stageNoun, fetchPlan, normalizeScope, scopeIsEmpty, scopeAnnotations, scopeOf, inScope, scopeReason, folderUidOf,
+  stagesFor, stageNoun, fetchPlan, normalizeScope, scopeIsEmpty, scopeAnnotations, scopeOf, inScope, scopeReason, folderUidOf, ruleGroupOf,
 } from './lib/live-fetch.mjs';
 import {
   CAPABILITIES, capabilityInventory, probeCandidates, capabilityTool, candidateTool, productAttestedByTool,
 } from './lib/contracts/mcp-capabilities.mjs';
-import { fetchMcp, buildSnapshotPack, buildCanonicalPack, TOOLS_LIST_MAX_PAGES, timedExcludeErrors } from './fetch-live-pack.mjs';
+import { fetchMcp, buildSnapshotPack, buildCanonicalPack, TOOLS_LIST_MAX_PAGES, timedExcludeErrors, PROBES } from './fetch-live-pack.mjs';
 import { PATTERN_MAX_LENGTH } from './lib/artefact-classify.mjs';
 import { crawlFiles } from './lib/crawler.mjs';
 import { adapt } from './lib/adapter.mjs';
@@ -92,7 +92,7 @@ test('the stages: ids in fetch order, the draft alone reads the stack signals, e
   assert.throws(() => stagesFor(undefined), TypeError);
   assert.equal(stageNoun(LIVE_STAGES[1]), 'services');
   assert.equal(stageNoun(LIVE_STAGES[7]), 'scrape targets');
-  assert.deepEqual(SCOPE_LIMITS, { prefixes: 32, prefixLength: 100, folders: 32, uidLength: 40, excludes: 32, excludeLength: 200 });
+  assert.deepEqual(SCOPE_LIMITS, { prefixes: 32, prefixLength: 100, folders: 32, uidLength: 40, excludes: 32, excludeLength: 200, groups: 32, groupLength: 100 });
   // An exclude pattern's length cap is the repository's bounded-regex cap, restated (live-fetch imports nothing).
   assert.equal(SCOPE_LIMITS.excludeLength, PATTERN_MAX_LENGTH);
   assert.deepEqual(SNAPSHOT_LIMITS, { metricNames: 20000, packBytes: 16777216, messageChars: 300 });
@@ -132,10 +132,10 @@ test('fetchPlan over an incomplete or absent listing: a missing capability is un
 });
 
 test('normalizeScope: arrays or comma lists, trimmed and deduplicated in order; nothing is an empty scope', () => {
-  assert.deepEqual(normalizeScope(undefined), { scope: { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [] }, errors: [] });
-  assert.deepEqual(normalizeScope({}), { scope: { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [] }, errors: [] });
+  assert.deepEqual(normalizeScope(undefined), { scope: { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [], ruleGroups: [] }, errors: [] });
+  assert.deepEqual(normalizeScope({}), { scope: { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [], ruleGroups: [] }, errors: [] });
   assert.deepEqual(normalizeScope({ metricPrefixes: ['payments_', ' checkout_', 'payments_', 'ns:job:'], folderUids: 'ab12, cd-34,,', datasourceUid: ' prom_1 ' }), {
-    scope: { metricPrefixes: ['payments_', 'checkout_', 'ns:job:'], folderUids: ['ab12', 'cd-34'], datasourceUid: 'prom_1', metricExclude: [] },
+    scope: { metricPrefixes: ['payments_', 'checkout_', 'ns:job:'], folderUids: ['ab12', 'cd-34'], datasourceUid: 'prom_1', metricExclude: [], ruleGroups: [] },
     errors: [],
   });
   assert.ok(scopeIsEmpty(normalizeScope(null).scope));
@@ -146,7 +146,7 @@ test('normalizeScope: arrays or comma lists, trimmed and deduplicated in order; 
 
 test('normalizeScope: exclude patterns — an array or a white-space list (a regex may carry a comma), anchored, at most 200 characters, compiling, no quantified group; deduplicated, counted, bounded', () => {
   assert.deepEqual(normalizeScope({ metricExclude: ' ^app_event_\\d+_total$  ^go_ ^app_event_\\d+_total$ ' }).scope.metricExclude, ['^app_event_\\d+_total$', '^go_']);
-  assert.deepEqual(normalizeScope({ metricExclude: ['^a{2,5}_'] }), { scope: { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: ['^a{2,5}_'] }, errors: [] });
+  assert.deepEqual(normalizeScope({ metricExclude: ['^a{2,5}_'] }), { scope: { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: ['^a{2,5}_'], ruleGroups: [] }, errors: [] });
   assert.deepEqual(normalizeScope({ metricExclude: ['app_'] }).errors, ['scope.metricExclude[0] "app_" is not anchored (an exclude pattern starts with ^)']);
   assert.deepEqual(normalizeScope({ metricExclude: ['^(a+)+$'] }).errors, ['scope.metricExclude[0] "^(a+)+$" has a quantified group (nested quantifier)']);
   assert.match(normalizeScope({ metricExclude: ['^(a'] }).errors[0], /^scope\.metricExclude\[0\] "\^\(a" is not a regular expression \(/);
@@ -161,13 +161,13 @@ test('normalizeScope: exclude patterns — an array or a white-space list (a reg
 test('normalizeScope refuses by field and rule: a prefix starting with a digit, a uid with a space, an over-long value, too many entries, a non-string, an unknown field, a non-object — a pasted blob is quoted cut', () => {
   const { scope, errors } = normalizeScope({ metricPrefixes: ['ok_', 'x', '1bad'], folderUids: ['x y', 'a'.repeat(41)], datasourceUid: 'p q', extra: 1 });
   assert.deepEqual(errors, [
-    'scope.extra is not a scope field (metricPrefixes, folderUids, datasourceUid, metricExclude)',
+    'scope.extra is not a scope field (metricPrefixes, folderUids, datasourceUid, metricExclude, ruleGroups)',
     'scope.metricPrefixes[2] "1bad" is not a metric-name prefix (letters, digits, _ and :, not starting with a digit)',
     'scope.folderUids[0] "x y" is not a folder uid (1–40 letters, digits, _ and -)',
     `scope.folderUids[1] "${'a'.repeat(41)}" is not a folder uid (1–40 letters, digits, _ and -)`,
     'scope.datasourceUid "p q" is not a datasource uid (1–40 letters, digits, _ and -)',
   ]);
-  assert.deepEqual(scope, { metricPrefixes: ['ok_', 'x'], folderUids: [], datasourceUid: null, metricExclude: [] }, 'only what passed is kept');
+  assert.deepEqual(scope, { metricPrefixes: ['ok_', 'x'], folderUids: [], datasourceUid: null, metricExclude: [], ruleGroups: [] }, 'only what passed is kept');
   const long = normalizeScope({ metricPrefixes: ['a'.repeat(101)] });
   assert.deepEqual(long.errors, [`scope.metricPrefixes[0] "${'a'.repeat(60)}…" is longer than 100 characters`]);
   const many = normalizeScope({ folderUids: Array.from({ length: 33 }, (_, i) => `f${i}`) });
@@ -176,8 +176,8 @@ test('normalizeScope refuses by field and rule: a prefix starting with a digit, 
   assert.deepEqual(normalizeScope({ metricPrefixes: [7] }).errors, ['scope.metricPrefixes[0] is not a string']);
   assert.deepEqual(normalizeScope({ metricPrefixes: { a: 1 } }).errors, ['scope.metricPrefixes is not a list']);
   assert.deepEqual(normalizeScope({ datasourceUid: 5 }).errors, ['scope.datasourceUid is not a string']);
-  assert.deepEqual(normalizeScope(['a']).errors, ['scope is not an object (metricPrefixes, folderUids, datasourceUid, metricExclude)']);
-  assert.deepEqual(normalizeScope('payments_').errors, ['scope is not an object (metricPrefixes, folderUids, datasourceUid, metricExclude)']);
+  assert.deepEqual(normalizeScope(['a']).errors, ['scope is not an object (metricPrefixes, folderUids, datasourceUid, metricExclude, ruleGroups)']);
+  assert.deepEqual(normalizeScope('payments_').errors, ['scope is not an object (metricPrefixes, folderUids, datasourceUid, metricExclude, ruleGroups)']);
   assert.deepEqual(normalizeScope({ metricPrefixes: [''] }).errors, ['scope.metricPrefixes[0] "" is not a metric-name prefix (letters, digits, _ and :, not starting with a digit)']);
 });
 
@@ -237,6 +237,84 @@ test('scopeAnnotations with exclude patterns: they ride in the live scope and th
   assert.equal(scopeReason('metric', null, entry), 'the snapshot read only metrics with the prefixes app_ and not matching ^app_event_\\d+_total$; Pack A gives this metric no name, so it was not checked');
   assert.equal(scopeOf({ 'observogram.scope.metric': '{"by":"prefix","values":[],"exclude":["unanchored"]}' }).size, 0, 'a pattern that fails the rule narrows nothing');
   assert.deepEqual(scopeOf({ 'observogram.scope.metric': '{"by":"prefix","values":["a_"],"exclude":["unanchored"]}' }).get('metric'), { by: 'prefix', values: ['a_'] });
+});
+
+test('normalizeScope: rule groups — an array or a comma list, any text without a control character, at most 100 characters, 32 entries; nothing is an empty scope', () => {
+  assert.deepEqual(normalizeScope({ ruleGroups: ' payments , checkout:slo ,, Group One' }), { scope: { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [], ruleGroups: ['payments', 'checkout:slo', 'Group One'] }, errors: [] });
+  assert.deepEqual(normalizeScope({ ruleGroups: ['krystalinex.application', 'krystalinex.application'] }).scope.ruleGroups, ['krystalinex.application'], 'deduplicated');
+  assert.deepEqual(normalizeScope({ ruleGroups: ['', '  '] }).errors, ['scope.ruleGroups[0] "" is empty (a rule-group name has at least one character)', 'scope.ruleGroups[1] "" is empty (a rule-group name has at least one character)'], 'an empty name from an array is refused (a comma list skips its empties)');
+  assert.deepEqual(normalizeScope({ ruleGroups: 'payments,,' }).scope.ruleGroups, ['payments']);
+  assert.deepEqual(normalizeScope({ ruleGroups: ['a\u0001b', 'g'.repeat(101), 7] }).errors, [
+    'scope.ruleGroups[0] "a\\u0001b" has a control character',
+    `scope.ruleGroups[1] "${'g'.repeat(60)}…" is longer than 100 characters`,
+    'scope.ruleGroups[2] is not a string',
+  ]);
+  const many = normalizeScope({ ruleGroups: Array.from({ length: 33 }, (_, i) => `g${i}`) });
+  assert.deepEqual(many.errors, ['scope.ruleGroups has 33 entries; at most 32']);
+  assert.equal(many.scope.ruleGroups.length, 32);
+  assert.ok(!scopeIsEmpty({ metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [], ruleGroups: ['payments'] }));
+  assert.ok(scopeIsEmpty(normalizeScope({ ruleGroups: '' }).scope));
+  assert.deepEqual(SCOPE_FAMILIES.ruleGroups, ['alert_rule', 'recording_rule']);
+});
+
+test('scopeAnnotations with rule groups: in the live scope only when set, applied to a rule family only when the fetcher says so; the entry is by group, or the folder entry gains the groups; scopeOf, inScope, scopeReason and ruleGroupOf', () => {
+  const scope = { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [], ruleGroups: ['payments', 'checkout:slo'] };
+  // The fetcher said nothing: groups are set but applied nowhere (only it can tell that every rule named its group).
+  const none = scopeAnnotations(scope);
+  assert.deepEqual(Object.keys(none), ['observogram.live.scope']);
+  assert.deepEqual(JSON.parse(none['observogram.live.scope']), {
+    metricPrefixes: [], folderUids: [], datasourceUid: null, ruleGroups: ['payments', 'checkout:slo'],
+    appliesTo: { metricPrefixes: [], folderUids: [], ruleGroups: [] },
+  });
+  // Applied to both rule families, no folders: entries by group.
+  const both = scopeAnnotations(scope, { appliedGroups: ['alert_rule', 'recording_rule'] });
+  assert.deepEqual(Object.keys(both), ['observogram.live.scope', 'observogram.scope.alert_rule', 'observogram.scope.recording_rule']);
+  assert.deepEqual(JSON.parse(both['observogram.live.scope']).appliesTo, { metricPrefixes: [], folderUids: [], ruleGroups: ['alert_rule', 'recording_rule'] });
+  assert.deepEqual(JSON.parse(both['observogram.scope.alert_rule']), { by: 'group', values: ['payments', 'checkout:slo'] });
+  // Folders and groups both applied to alert rules: one folder entry carrying the groups; recording rules by group alone.
+  const mixed = scopeAnnotations({ ...scope, folderUids: ['ab12'] }, { applied: ['dashboard', 'alert_rule'], appliedGroups: ['alert_rule', 'recording_rule'], folderTitles: { ab12: 'Payments' } });
+  assert.deepEqual(JSON.parse(mixed['observogram.scope.alert_rule']), { by: 'folder', values: [{ uid: 'ab12', title: 'Payments' }], groups: ['payments', 'checkout:slo'] });
+  assert.deepEqual(JSON.parse(mixed['observogram.scope.recording_rule']), { by: 'group', values: ['payments', 'checkout:slo'] });
+  assert.deepEqual(JSON.parse(mixed['observogram.scope.dashboard']), { by: 'folder', values: [{ uid: 'ab12', title: 'Payments' }] }, 'a dashboard entry never carries groups');
+  // A pack without groups reads as before.
+  assert.ok(!JSON.parse(scopeAnnotations({ metricPrefixes: ['a_'], folderUids: [], datasourceUid: null, metricExclude: [], ruleGroups: [] })['observogram.live.scope']).ruleGroups);
+  // Read back; a group that fails the rule is dropped, an entry left with none narrows nothing.
+  const back = scopeOf({ ...mixed, 'observogram.scope.scrape_job': '{"by":"group","values":[" x ","",7,"a\\u0001b"]}' });
+  assert.deepEqual(back.get('alert_rule'), { by: 'folder', values: [{ uid: 'ab12', title: 'Payments' }], groups: ['payments', 'checkout:slo'] });
+  assert.deepEqual(back.get('recording_rule'), { by: 'group', values: ['payments', 'checkout:slo'] });
+  assert.deepEqual(back.get('scrape_job'), { by: 'group', values: ['x'] });
+  assert.equal(scopeOf({ 'observogram.scope.alert_rule': '{"by":"group","values":["a\\u0001b"]}' }).size, 0);
+  assert.deepEqual(scopeOf({ 'observogram.scope.alert_rule': '{"by":"folder","values":["f"],"groups":["bad\\u0001"]}' }).get('alert_rule'), { by: 'folder', values: [{ uid: 'f', title: null }] });
+  // ruleGroupOf: an adapted rule's `group`, else the group the spec's `source` names (`<file>#<group>/<name>`), `_` meaning none.
+  assert.equal(ruleGroupOf({ spec: { group: ' payments ' } }), 'payments');
+  assert.equal(ruleGroupOf({ spec: { name: 'HighErrorRate', source: 'prometheus/rules/service.rules.yml#krystalinex.application/HighErrorRate' } }), 'krystalinex.application');
+  assert.equal(ruleGroupOf({ spec: { name: 'checkout:requests:good_5m', source: 'rules/a.yml#checkout:slo/checkout:requests:good_5m' } }), 'checkout:slo');
+  assert.equal(ruleGroupOf({ spec: { name: 'API / 5xx rate', source: 'alerting/payments.yaml#payments/API / 5xx rate' } }), 'payments', 'a Grafana title with slashes: the name comes off the end, never a guess at the last slash');
+  assert.equal(ruleGroupOf({ spec: { name: 'X', source: 'rules/#1/a.yml#grp/X' } }), 'grp', 'a path with a # reads right');
+  assert.equal(ruleGroupOf({ spec: { name: 'X', source: 'rules/a.yml#grp/Y' } }), null, 'a source that does not end in the rule\'s name says nothing');
+  assert.equal(ruleGroupOf({ spec: { source: 'rules/a.yml#grp/X' } }), null, 'no name, no reading');
+  assert.equal(ruleGroupOf({ spec: { name: 'X', source: 'rules/a.yml#_/X' } }), null);
+  assert.equal(ruleGroupOf({ spec: { name: 'X', source: 'rules/a.yml' } }), null);
+  assert.equal(ruleGroupOf({ spec: {} }), null);
+  assert.equal(ruleGroupOf(null), null);
+  // inScope: by group — inside, outside, not known; the folder entry with groups asks both.
+  const group = back.get('recording_rule');
+  assert.equal(inScope('recording_rule', { spec: { group: 'payments' } }, group), true);
+  assert.equal(inScope('alert_rule', { spec: { name: 'X', source: 'r.yml#other/X' } }, group), false);
+  assert.equal(inScope('recording_rule', { spec: { name: 'checkout:requests:good_5m', expr: 'x' } }, group), null, 'a canonical recording rule names no group');
+  const folderAndGroups = back.get('alert_rule');
+  assert.equal(inScope('alert_rule', { spec: { folderUid: 'ab12', group: 'payments' } }, folderAndGroups), true);
+  assert.equal(inScope('alert_rule', { spec: { folderUid: 'zz', group: 'payments' } }, folderAndGroups), false, 'outside the folders');
+  assert.equal(inScope('alert_rule', { spec: { name: 'X', folderUid: 'ab12', source: 'r.yml#other/X' } }, folderAndGroups), false, 'outside the groups');
+  assert.equal(inScope('alert_rule', { spec: { name: 'X', source: 'r.yml#other/X' } }, folderAndGroups), false, 'no folder known, but outside the groups');
+  assert.equal(inScope('alert_rule', { spec: { folderUid: 'ab12' } }, folderAndGroups), null, 'in the folders, group not known');
+  assert.equal(inScope('alert_rule', { spec: { name: 'X', source: 'r.yml#payments/X' } }, folderAndGroups), null, 'in the groups, folder not known');
+  // scopeReason.
+  assert.equal(scopeReason('alert_rule', false, group), "outside the snapshot's alert rule groups (payments, checkout:slo)");
+  assert.equal(scopeReason('recording_rule', null, group), 'the snapshot read only the rule groups payments, checkout:slo; Pack A does not say which group this recording rule is in, so it was not checked');
+  assert.equal(scopeReason('alert_rule', false, folderAndGroups), "outside the snapshot's alert rule scope (folders Payments; rule groups payments, checkout:slo)");
+  assert.equal(scopeReason('alert_rule', null, folderAndGroups, { holder: 'b' }), 'the snapshot read only the folders Payments and the rule groups payments, checkout:slo; Pack B does not say which folder and group this alert rule is in, so it was not checked');
+  assert.equal(scopeReason('alert_rule', true, group), null);
 });
 
 test('scopeOf ignores what does not parse or holds no value — a family is then compared unscoped, never parked on a guess', () => {
@@ -732,7 +810,7 @@ test('Grafana-managed rules (the recorded provisioning answer) join vmalert\'s: 
   const grafanaAlerting = PROVISIONED.filter((r) => !r.record);
   assert.equal(alerts.counts.engines, 2);
   assert.equal(alerts.counts.listed, vmAlerting.length + grafanaAlerting.length);
-  assert.equal(alerts.message, `the rule groups name no folder uid; the folder scope was not applied to alert rules (all ${alerts.counts.kept} kept)`);
+  assert.equal(alerts.message, `grafana answered rules outside the folder asked for, so it was read whole instead; the rule groups name no folder uid; the folder scope was not applied to alert rules (all ${alerts.counts.kept} kept)`);
   const rules = pack.spec.alerting.rules;
   const payments = rules.find((r) => r.name === 'PaymentsErrorRatioHigh');
   assert.equal(payments.engine, 'grafana');
@@ -753,7 +831,7 @@ test('Grafana-managed rules alone: the rule folder scope is applied and recorded
   const { pack, records } = await snapshotOf(tools, { scope });
   const alerts = records.filter((r) => r.stage === 'alert_rules').pop();
   assert.equal(alerts.state, 'done');
-  assert.equal(alerts.message, null);
+  assert.equal(alerts.message, 'grafana answered rules outside the folder asked for, so it was read whole instead', 'this fake answers every rule whatever the folder asked: the engine is read whole and the client-side filter keeps the folder\'s');
   assert.deepEqual({ engines: alerts.counts.engines, listed: alerts.counts.listed, kept: alerts.counts.kept }, { engines: 1, listed: 2, kept: 1 });
   assert.deepEqual(pack.spec.alerting.rules.map((r) => [r.name, r.engine]), [['PaymentsErrorRatioHigh', 'grafana']]);
   const ann = pack.metadata.annotations;
@@ -765,6 +843,152 @@ test('Grafana-managed rules alone: the rule folder scope is applied and recorded
   const parked = entries(d, 'notObserved', 'alert_rule');
   assert.equal(parked.length, 1);
   assert.equal(parked[0].reason, 'the snapshot read only the folders payments-alerts; Pack A does not say which folder this alert rule is in, so it was not checked');
+  assert.equal(entries(d, 'onlyInA', 'alert_rule').length, 0);
+});
+
+// ---------- the rule-group scope and the folder push-down ----------
+
+const VM = () => recorded('vmalert_rules.json');
+const vmRules = (type, group = null) => VM().groups.filter((g) => group === null || g.name === group).flatMap((g) => g.rules).filter((r) => r.type === type);
+
+test('the rule-group scope: alert and recording rules kept by their group when every rule names one, counted in the gate log, recorded by group; a repository rule of another group is parked by the group its source names, a recording rule that names none is not checked', async () => {
+  const scope = { ruleGroups: ['krystalinex.cold-wallet', 'finops:ingestion'] };
+  const { pack, records } = await snapshotOf(fullTools(), { scope });
+  const last = new Map(records.map((r) => [r.stage, r]));
+  assert.deepEqual(last.get('alert_rules').counts, { listed: vmRules('alerting').length, kept: vmRules('alerting', 'krystalinex.cold-wallet').length, engines: 1 });
+  assert.equal(last.get('alert_rules').message, null);
+  assert.deepEqual(last.get('recording_rules').counts, { listed: vmRules('recording').length, kept: vmRules('recording', 'finops:ingestion').length, fromInventory: 0 });
+  assert.equal(last.get('recording_rules').message, null);
+  assert.deepEqual(pack.spec.alerting.rules.map((r) => r.name).sort(), [...new Set(vmRules('alerting', 'krystalinex.cold-wallet').map((r) => r.name))].sort());
+  assert.ok(pack.spec.queries.recording_rules.every((r) => r.name.startsWith('finops:')), 'only the group\'s recording rules');
+  assert.ok(!JSON.stringify(pack.spec).includes('"group"'), 'the canonical never carries a group');
+  const ann = pack.metadata.annotations;
+  assert.deepEqual(JSON.parse(ann['observogram.live.scope']), {
+    metricPrefixes: [], folderUids: [], datasourceUid: null, ruleGroups: scope.ruleGroups,
+    appliesTo: { metricPrefixes: [], folderUids: [], ruleGroups: ['alert_rule', 'recording_rule'] },
+  });
+  assert.deepEqual(JSON.parse(ann['observogram.scope.alert_rule']), { by: 'group', values: scope.ruleGroups });
+  assert.deepEqual(JSON.parse(ann['observogram.scope.recording_rule']), { by: 'group', values: scope.ruleGroups });
+  assert.deepEqual(validateCanonical(pack, SCHEMA), []);
+  // The repository's HighErrorRate and ServiceDown sit in krystalinex.application (their source says so): outside, parked, never "declared, not live".
+  const d = diffPacks(adapt(crawledRepo()), adapt(pack));
+  const parkedAlerts = entries(d, 'notObserved', 'alert_rule');
+  assert.deepEqual(parkedAlerts.map((e) => e.artefact.title).sort(), ['HighErrorRate', 'ServiceDown']);
+  assert.ok(parkedAlerts.every((e) => e.reason === "outside the snapshot's alert rule groups (krystalinex.cold-wallet, finops:ingestion)"), JSON.stringify(parkedAlerts.map((e) => e.reason)));
+  assert.equal(entries(d, 'onlyInA', 'alert_rule').length, 0);
+  // The repository's finops:requests:rate_per_service_5m is in the group read: compared as usual; its checkout:* rules name no group in the canonical: not checked.
+  assert.ok(entries(d, 'inBoth', 'recording_rule').some((e) => JSON.stringify(e).includes('finops:requests:rate_per_service_5m')));
+  const parkedRecording = entries(d, 'notObserved', 'recording_rule');
+  assert.ok(parkedRecording.length >= 1 && parkedRecording.every((e) => e.reason === 'the snapshot read only the rule groups krystalinex.cold-wallet, finops:ingestion; Pack A does not say which group this recording rule is in, so it was not checked'), JSON.stringify(parkedRecording.map((e) => [e.key, e.reason])));
+  assert.equal(entries(d, 'onlyInA', 'recording_rule').length, 0);
+});
+
+test('the rule-group scope is not applied to a listing that names no group (a flat rules answer), and says so; nothing is recorded for that family', async () => {
+  const flat = { rules: vmRules('alerting').map((r) => ({ alert: r.name, expr: r.query, for: '1m', labels: r.labels || {} })) };
+  const tools = fullTools({ [T.promRules]: () => flat });
+  delete tools[T.vmalert];
+  const { pack, records } = await snapshotOf(tools, { scope: { ruleGroups: ['krystalinex.cold-wallet'] } });
+  const alerts = records.filter((r) => r.stage === 'alert_rules').pop();
+  assert.equal(alerts.message, `the rules name no group; the rule-group scope was not applied to alert rules (all ${flat.rules.length} kept)`);
+  assert.deepEqual(alerts.counts, { listed: flat.rules.length, kept: flat.rules.length, engines: 1 });
+  const ann = pack.metadata.annotations;
+  assert.equal(ann['observogram.scope.alert_rule'], undefined);
+  assert.deepEqual(JSON.parse(ann['observogram.live.scope']).appliesTo, { metricPrefixes: [], folderUids: [], ruleGroups: [] });
+});
+
+test('the folder push-down: an engine whose tool takes a folder uid is asked once per scoped folder and never without one; the union of its answers is the engine\'s; it is read whole instead beside an engine that names no folder, when a folder gets no answer, or when the tool ignores the argument; folders holding no rule still record the scope', async () => {
+  const PROVISIONED = recorded('grafana_alert_rules.json');
+  const byFolder = (args) => (args.folder_uid ? PROVISIONED.filter((r) => r.folderUID === args.folder_uid) : PROVISIONED);
+  const folders = ['payments-alerts', 'bg0gvuuj8otmof'];
+  const tools = fullTools({ [T.grafanaRules]: byFolder });
+  for (const t of [T.vmalert, T.search, T.detail]) delete tools[t];
+  const { pack, records, fake } = await snapshotOf(tools, { scope: { folderUids: folders } });
+  const calls = fake.calls.filter((c) => c.name === T.grafanaRules);
+  assert.deepEqual(calls.map((c) => c.args), folders.map((uid) => ({ folder_uid: uid })), 'one call per folder, in the scope\'s order, none argless');
+  const alerts = records.filter((r) => r.stage === 'alert_rules').pop();
+  assert.deepEqual([alerts.state, alerts.counts, alerts.message], ['done', { listed: 2, kept: 2, engines: 1 }, 'the folder scope was pushed down to grafana (2 folders asked for)']);
+  assert.deepEqual(pack.spec.alerting.rules.map((r) => [r.name, r.engine]).sort(), [['PaymentsErrorRatioHigh', 'grafana'], ['StackValidationAlwaysFiring', 'grafana']]);
+  assert.deepEqual(JSON.parse(pack.metadata.annotations['observogram.scope.alert_rule']), { by: 'folder', values: folders.map((uid) => ({ uid, title: null })) });
+  // Beside vmalert (which names no folder) the family cannot be narrowed as a whole: the engine is read whole again,
+  // the pack holds every Grafana rule (as before this change), and nothing is recorded for the family.
+  const mixed = await snapshotOf(fullTools({ [T.grafanaRules]: byFolder }), { scope: { folderUids: ['payments-alerts'] } });
+  const mixedAlerts = mixed.records.filter((r) => r.stage === 'alert_rules').pop();
+  assert.equal(mixedAlerts.message, `grafana was read whole, since another engine names no folder; the rule groups name no folder uid; the folder scope was not applied to alert rules (all ${vmRules('alerting').length + 2} kept)`);
+  assert.deepEqual(mixed.fake.calls.filter((c) => c.name === T.grafanaRules).map((c) => c.args), [{ folder_uid: 'payments-alerts' }, {}], 'the per-folder read, then the whole one');
+  assert.ok(mixed.pack.spec.alerting.rules.some((r) => r.name === 'PaymentsErrorRatioHigh'));
+  assert.ok(mixed.pack.spec.alerting.rules.some((r) => r.name === 'StackValidationAlwaysFiring'), 'the other folder\'s rule is in the pack: never half an engine under no annotation');
+  assert.equal(mixed.pack.metadata.annotations['observogram.scope.alert_rule'], undefined);
+  // Mixed estate whose whole re-read fails: the per-folder half is left out (never half an engine in the pack), and the gate log says so.
+  const halfFails = fullTools({ [T.grafanaRules]: (args) => (args.folder_uid ? byFolder(args) : { isError: 'listing too large' }) });
+  const half = await snapshotOf(halfFails, { scope: { folderUids: ['payments-alerts'] } });
+  const halfAlerts = half.records.filter((r) => r.stage === 'alert_rules').pop();
+  assert.deepEqual([halfAlerts.state, halfAlerts.counts], ['done', { listed: vmRules('alerting').length, kept: vmRules('alerting').length, engines: 1 }]);
+  assert.equal(halfAlerts.message, `grafana gave no answer when read whole beside an engine that names no folder, so its rules were left out; the rule groups name no folder uid; the folder scope was not applied to alert rules (all ${vmRules('alerting').length} kept)`);
+  assert.ok(!half.pack.spec.alerting.rules.some((r) => r.engine === 'grafana'), 'no Grafana rule at all, rather than the scoped folder\'s alone');
+  // One folder answers with an error: the engine is read whole instead (whole or not at all), the folder scope applies client-side, and the gate log says so.
+  const flaky = fullTools({ [T.grafanaRules]: (args) => (args.folder_uid === 'bg0gvuuj8otmof' ? { isError: 'folder gone' } : byFolder(args)) });
+  for (const t of [T.vmalert, T.search, T.detail]) delete flaky[t];
+  const broken = await snapshotOf(flaky, { scope: { folderUids: folders } });
+  const brokenAlerts = broken.records.filter((r) => r.stage === 'alert_rules').pop();
+  assert.deepEqual([brokenAlerts.state, brokenAlerts.counts, brokenAlerts.message], ['done', { listed: 2, kept: 2, engines: 1 }, 'grafana gave no answer for folder bg0gvuuj8otmof, so it was read whole instead']);
+  assert.deepEqual(JSON.parse(broken.pack.metadata.annotations['observogram.scope.alert_rule']), { by: 'folder', values: folders.map((uid) => ({ uid, title: null })) });
+  assert.equal(broken.pack.metadata.annotations['observogram.unobserved.alert_rule'], undefined);
+  // A whole read that fails too leaves the engine unanswered, as it always did: with no other engine the family is a gap.
+  const dead = fullTools({ [T.grafanaRules]: (args) => (args.folder_uid === 'bg0gvuuj8otmof' || !args.folder_uid ? { isError: 'down' } : byFolder(args)) });
+  for (const t of [T.vmalert, T.search, T.detail]) delete dead[t];
+  const gone = await snapshotOf(dead, { scope: { folderUids: folders } });
+  assert.equal(gone.records.filter((r) => r.stage === 'alert_rules').pop().state, 'failed');
+  assert.ok(gone.pack.metadata.annotations['observogram.unobserved.alert_rule'], 'the family is unobserved, never half-read');
+  // A folder that holds no rule (a mistyped uid): the engine answered per folder, so the folder scope still counts as applied
+  // and the annotation is written — the diff parks the repository's rules as not checked instead of calling them "declared, not live".
+  const none = await snapshotOf(tools, { scope: { folderUids: ['nope'] } });
+  const noneAlerts = none.records.filter((r) => r.stage === 'alert_rules').pop();
+  assert.deepEqual([noneAlerts.state, noneAlerts.counts, noneAlerts.message], ['done', { listed: 0, kept: 0, engines: 0 }, 'the folder scope was pushed down to grafana (1 folder asked for; no rule in them)']);
+  assert.deepEqual(JSON.parse(none.pack.metadata.annotations['observogram.scope.alert_rule']), { by: 'folder', values: [{ uid: 'nope', title: null }] });
+  const dNone = diffPacks(adapt(crawledRepo('repo-grafana')), adapt(none.pack));
+  assert.equal(entries(dNone, 'onlyInA', 'alert_rule').length, 0, 'nothing is "declared, not live" under a folder the snapshot read and found empty');
+  assert.deepEqual(entries(dNone, 'notObserved', 'alert_rule').map((e) => e.artefact.title).sort(), ['HighErrorRate', 'PaymentsErrorRatioHigh']);
+  // The same beside an engine that answered whole with no rule at all (Prometheus' empty ruler on a VM stack): it narrows nothing, so the scope still counts as applied.
+  const emptyBeside = fullTools({ [T.grafanaRules]: byFolder, [T.vmalert]: () => ({ groups: [] }) });
+  for (const t of [T.search, T.detail]) delete emptyBeside[t];
+  const besides = await snapshotOf(emptyBeside, { scope: { folderUids: ['nope'] } });
+  const besidesAlerts = besides.records.filter((r) => r.stage === 'alert_rules').pop();
+  assert.deepEqual([besidesAlerts.state, besidesAlerts.counts, besidesAlerts.message], ['done', { listed: 0, kept: 0, engines: 0 }, 'the folder scope was pushed down to grafana (1 folder asked for; no rule in them)']);
+  assert.deepEqual(JSON.parse(besides.pack.metadata.annotations['observogram.scope.alert_rule']), { by: 'folder', values: [{ uid: 'nope', title: null }] });
+  // The draft is untouched: the registry resolves the candidate argless, and the draft's reader keeps no group.
+  const alertProbe = PROBES.find((p) => p.name === 'alert_rules');
+  assert.ok(alertProbe.candidates.every((c) => typeof c === 'string'), 'no draft candidate carries a folder argument');
+  assert.ok(alertProbe.adapt(VM()).every((r) => !('group' in r)));
+  assert.ok(alertProbe.adaptSnapshot(VM()).every((r) => typeof r.group === 'string' && r.group !== ''));
+  const recordingProbe = PROBES.find((p) => p.name === 'recording_rules');
+  assert.ok(recordingProbe.adapt(VM()).every((r) => !('group' in r)));
+  assert.deepEqual([...new Set(recordingProbe.adaptSnapshot(VM()).map((r) => r.group))].sort(), ['finops:capacity', 'finops:ingestion', 'genai:operations']);
+  assert.deepEqual(alertProbe.adaptSnapshot(PROVISIONED).map((r) => r.group), ['stack-validation', 'payments']);
+  // A name listed under two groups carries each (the group is positional, never joined by name); a flat listing names none.
+  const twice = { groups: [{ name: 'g1', rules: [{ alert: 'X', expr: 'up == 0' }] }, { name: 'g2', rules: [{ alert: 'X', expr: 'up == 0' }, { alert: 'Y', expr: 'up == 1' }] }] };
+  assert.deepEqual(alertProbe.adaptSnapshot(twice).map((r) => [r.name, r.group ?? null]), [['X', 'g1'], ['X', 'g2'], ['Y', 'g2']]);
+  assert.deepEqual(alertProbe.adaptSnapshot({ rules: [{ alert: 'X', expr: 'up == 0' }] }).map((r) => 'group' in r), [false]);
+  // Under a group scope the two X's are told apart: only g1's survives.
+  const twiceTools = fullTools({ [T.vmalert]: () => twice });
+  const twiceSnap = await snapshotOf(twiceTools, { scope: { ruleGroups: ['g1'] } });
+  assert.deepEqual(twiceSnap.records.filter((r) => r.stage === 'alert_rules').pop().counts, { listed: 3, kept: 1, engines: 1 });
+});
+
+test('folders and rule groups together on Grafana-managed rules: one folder entry carrying the groups; a crawled Prometheus-format rule of another group is outside, the provisioned rule pairs', async () => {
+  const PROVISIONED = recorded('grafana_alert_rules.json');
+  const tools = fullTools({ [T.grafanaRules]: (args) => PROVISIONED.filter((r) => r.folderUID === args.folder_uid) });
+  for (const t of [T.vmalert, T.search, T.detail]) delete tools[t];
+  const { pack, records } = await snapshotOf(tools, { scope: { folderUids: ['payments-alerts'], ruleGroups: ['payments'] } });
+  const alerts = records.filter((r) => r.stage === 'alert_rules').pop();
+  assert.deepEqual(alerts.counts, { listed: 1, kept: 1, engines: 1 });
+  const ann = pack.metadata.annotations;
+  assert.deepEqual(JSON.parse(ann['observogram.scope.alert_rule']), { by: 'folder', values: [{ uid: 'payments-alerts', title: null }], groups: ['payments'] });
+  assert.deepEqual(JSON.parse(ann['observogram.live.scope']).appliesTo, { metricPrefixes: [], folderUids: ['alert_rule'], ruleGroups: ['alert_rule'] });
+  assert.equal(ann['observogram.scope.recording_rule'], undefined, 'no recording rule was read, so nothing is recorded for that family');
+  const d = diffPacks(adapt(crawledRepo('repo-grafana')), adapt(pack));
+  assert.deepEqual(entries(d, 'inBoth', 'alert_rule').map((e) => e.key), ['alert_rule::{"name":"paymentserrorratiohigh"}']);
+  const parked = entries(d, 'notObserved', 'alert_rule');
+  assert.deepEqual(parked.map((e) => [e.artefact.title, e.reason]), [['HighErrorRate', "outside the snapshot's alert rule scope (folders payments-alerts; rule groups payments)"]]);
   assert.equal(entries(d, 'onlyInA', 'alert_rule').length, 0);
 });
 

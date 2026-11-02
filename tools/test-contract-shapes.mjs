@@ -339,11 +339,15 @@ assert(vEmpty.ok && vEmpty.items === 0,
   const alertProbe = PROBES.find(p => p.name === 'alert_rules');
   assert(alertProbe.adapt(clone(provisioned)).length === 0, 'grafana_alert_rules.json: the draft adapter reads no rule from the provisioning shape (unchanged)');
   const read = alertProbe.adaptSnapshot(clone(provisioned));
-  assert(read.length === provisioned.filter(r => !r.record).length && read.every(r => r.folderUid && r.expr),
-    'grafana_alert_rules.json: every alerting rule read with its expr and folder uid; the recording rule left out', read.map(r => r.name));
-  assert(JSON.stringify(alertProbe.adaptSnapshot(clone(JSON.parse(readFileSync(resolve(FIXTURE_DIR, 'vmalert_rules.json'), 'utf8')))))
-    === JSON.stringify(alertProbe.adapt(clone(JSON.parse(readFileSync(resolve(FIXTURE_DIR, 'vmalert_rules.json'), 'utf8'))))),
-  'adaptSnapshot reads a rule-groups answer exactly as adapt does');
+  assert(read.length === provisioned.filter(r => !r.record).length && read.every(r => r.folderUid && r.group && r.expr),
+    'grafana_alert_rules.json: every alerting rule read with its expr, folder uid and group; the recording rule left out', read.map(r => r.name));
+  // A rule-groups answer: adaptSnapshot is adapt plus each rule's group (the rule-group scope reads it); nothing else moves.
+  const vmalert = JSON.parse(readFileSync(resolve(FIXTURE_DIR, 'vmalert_rules.json'), 'utf8'));
+  const strip = (rules) => rules.map(({ group: _group, ...rest }) => rest);
+  const snap = alertProbe.adaptSnapshot(clone(vmalert));
+  assert(JSON.stringify(strip(snap)) === JSON.stringify(alertProbe.adapt(clone(vmalert))) && snap.every(r => typeof r.group === 'string' && r.group),
+    'adaptSnapshot reads a rule-groups answer as adapt does, each rule naming its group');
+  assert(alertProbe.adapt(clone(vmalert)).every(r => !('group' in r)), 'the draft adapter names no group (byte-identical draft)');
 }
 const recProbe = PROBES.find(p => p.name === 'recording_rules');
 assert(Array.isArray(recProbe.adapt(empty)) && recProbe.adapt(empty).length === 0,
