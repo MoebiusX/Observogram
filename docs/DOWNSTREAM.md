@@ -1949,6 +1949,13 @@ side's unpaired metric names against it (docs/DIFF.md, *Dynamic metric
 families*). `packc emit` over an existing manifest keeps its `dynamicFamilies`
 as they stand and says how many.
 
+A rules file authored ahead of an environment says so in a comment block that
+opens the file, `# observogram-lifecycle:` with `maturity` and a nested `deployment` of
+`<env>: deployed | planned | not-deployed`, and its rules read as declared ahead
+instead of declared, not live (docs/DIFF.md, *Declared ahead of an environment*).
+The crawler carries it as the `observogram.lifecycle` annotation, which a
+hand-written pack states directly.
+
 `packc emit --exporter <url>` (`tools/emit-manifest.mjs`) writes one from a
 live endpoint — run it in the exporter's build pipeline against the image it
 just built:

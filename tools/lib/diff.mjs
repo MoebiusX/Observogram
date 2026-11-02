@@ -67,6 +67,19 @@
 //   A member is a pair like any other, so it counts in `jaccard` and `alignment`;
 //   `summary.dynamicFamilies.members` says how much of them rests on a pattern.
 //
+// DECLARED AHEAD
+//   A statement that an artefact was authored ahead of an environment
+//   (`lifecycle`, tools/lib/lifecycle.mjs) parks it when it has no counterpart and
+//   its state for the compared environment is explicitly not `deployed`: in
+//   `bucket.declaredAhead`, with the reason, out of the union like notObserved.
+//   Every artefact of the group must say so. notObserved wins (nothing was
+//   checked at all), and an artefact that pairs is compared as usual. The compared
+//   environment is `opts.environment`; without it, the environments of both packs,
+//   and the statement must hold for each: a repo read for staging against a pack
+//   bound to prod parks nothing that is deployed in either. The bucket and the
+//   summary's `declaredAhead` and `lifecycleEnvironments` exist only when a pack
+//   carries statements, so a pack without one keeps its bytes.
+//
 // IDENTITY MODES
 //   `diffPacks(a, b, { identity })` pairs by another key: a mode id of
 //   tools/lib/identity-modes.mjs (`'behaviour'`, `'name'`, `'id'`) or a
@@ -84,6 +97,7 @@
 //     A − B  = onlyInA
 //     B − A  = onlyInB ∪ outOfScope
 
+import { LIFECYCLE_ANNOTATION, lifecycleStateFor, normalizeLifecycleEnvironment } from './lifecycle.mjs';
 import {
   classify,
   identityKeyOf,
@@ -177,6 +191,9 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
   const aScoped = scopeOf(aLayered?.meta?.annotations);
   const bScoped = scopeOf(bLayered?.meta?.annotations);
   const familyLedger = new Map();
+  const hasLifecycle = Boolean(aLayered?.meta?.annotations?.[LIFECYCLE_ANNOTATION] || bLayered?.meta?.annotations?.[LIFECYCLE_ANNOTATION]);
+  const lifecycleEnvironments = hasLifecycle ? comparedEnvironments(opts.environment, aLayered, bLayered) : [];
+  let declaredAhead = 0;
   const layers = {};
   const collisions = [];
   let onlyInA = 0, onlyInB = 0, inBoth = 0, aligned = 0, drifted = 0, outOfScope = 0, scaffold = 0, notObserved = 0;
@@ -231,7 +248,9 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
         // B never looked at this family, or read it only within a scope this
         // artefact is not in: A's artefact is unchecked, not absent.
         const unchecked = bBlind.has(kind) ? bBlind.get(kind) : outsideScope(kind, aGroup, bScoped, 'a');
+        const ahead = unchecked ? null : declaredAheadReason(aGroup, lifecycleEnvironments);
         if (unchecked) pushNotObserved(bucket.notObserved, k, aGroup, 'a', unchecked);
+        else if (ahead) pushNotObserved(bucketAhead(bucket), k, aGroup, 'a', ahead);
         else pushUnmatched(bucket.onlyInA, k, aGroup);
       }
     }
@@ -244,7 +263,9 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
       } else if (scopeMode === 'service' && isOutsideServiceScope(bGroup, serviceScope)) {
         pushUnmatched(bucket.outOfScope, k, bGroup);
       } else if (aKinds.has(kind) || scopeMode === 'all') {
-        pushUnmatched(bucket.onlyInB, k, bGroup);
+        const ahead = declaredAheadReason(bGroup, lifecycleEnvironments);
+        if (ahead) pushNotObserved(bucketAhead(bucket), k, bGroup, 'b', ahead);
+        else pushUnmatched(bucket.onlyInB, k, bGroup);
       } else {
         pushUnmatched(bucket.outOfScope, k, bGroup);
       }
@@ -261,6 +282,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     bucket.inBoth.sort ((x, y) => x.key.localeCompare(y.key, 'en'));
     bucket.outOfScope.sort((x, y) => x.key.localeCompare(y.key, 'en'));
     bucket.notObserved.sort((x, y) => `${x.side}:${x.key}`.localeCompare(`${y.side}:${y.key}`, 'en'));
+    bucket.declaredAhead?.sort((x, y) => `${x.side}:${x.key}`.localeCompare(`${y.side}:${y.key}`, 'en'));
     // Parked placeholders keep their behavioural key (with the side, so a
     // placeholder present on both sides stays two entries) for display.
     const parkedKey = ({ side, artefact }) => pairKey(artefact, { side });
@@ -284,6 +306,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     outOfScope += bucket.outOfScope.length;
     scaffold += bucket.scaffold.length;
     notObserved += bucket.notObserved.length;
+    declaredAhead += bucket.declaredAhead?.length || 0;
   }
 
   const dynamicFamilies = familySummary([...familyLedger.values()], { a: aBlind, b: bBlind }, { a: aScoped, b: bScoped });
@@ -319,6 +342,9 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
       // Only when a side declares a dynamic family, so a pack without one
       // keeps its bytes: what each family claimed, and what it could not.
       ...(dynamicFamilies ? { dynamicFamilies } : {}),
+      // Only when a pack states a lifecycle: what was parked as authored ahead
+      // of the environment it was compared for. Never paired, never counted.
+      ...(hasLifecycle ? { declaredAhead, lifecycleEnvironments } : {}),
       union: onlyInA + onlyInB + inBoth,
       aTotal: onlyInA + inBoth,
       bTotal: onlyInB + inBoth,
@@ -707,6 +733,31 @@ function pushNotObserved(target, baseKey, group, side, reason) {
   group.forEach((artefact, i) => {
     target.push({ key: occurrenceKey(baseKey, i, suffix), side, artefact, reason });
   });
+}
+
+// ---------- declared ahead ----------
+
+function bucketAhead(bucket) {
+  if (!bucket.declaredAhead) bucket.declaredAhead = [];
+  return bucket.declaredAhead;
+}
+
+// The environments a statement must hold for: the one asked for, else each pack's.
+function comparedEnvironments(asked, aLayered, bLayered) {
+  const usable = (name) => typeof name === 'string' && name.trim();
+  const names = usable(asked) ? [asked] : [aLayered?.meta?.environment, bLayered?.meta?.environment].filter(usable);
+  return [...new Set(names.map(normalizeLifecycleEnvironment))].sort();
+}
+
+// The reason a group is parked as authored ahead, or null: every artefact in it
+// must state a state for every compared environment, and none may be deployed.
+function declaredAheadReason(group, environments) {
+  if (!environments.length) return null;
+  const states = (artefact) => environments.map((environment) => lifecycleStateFor(artefact?.lifecycle, environment));
+  if (group.some((artefact) => states(artefact).some((state) => !state || state === 'deployed'))) return null;
+  const { source } = group[0].lifecycle;
+  const where = states(group[0]).map((state, i) => `${state} in ${environments[i]}`).join(', ');
+  return `Declared ahead: ${where}${source ? `, as ${source} states` : ''}.`;
 }
 
 // ---------- dynamic metric families ----------

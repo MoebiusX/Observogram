@@ -299,6 +299,84 @@ named in `onlyInA`, and `summary.dynamicFamilies.members` says how many pairs re
 on a pattern. The studio's compare digest counts members as aligned, its head says
 how many there are, and a member's card names the pattern that answered for it.
 
+## Declared ahead of an environment
+
+A team writes a rules file before its service reaches prod. Compared with prod,
+every rule in it would read *declared, not live*, which looks like drift and is
+not. A comment block that opens the file says so:
+
+```yaml
+# observogram-lifecycle:
+#   maturity: authored
+#   deployment:
+#     prod: planned
+#     staging: deployed
+groups:
+  - name: orders-slo
+    rules: []
+```
+
+A state is `deployed`, `planned` or `not-deployed`. `prod` and `production`, `stg`
+and `stage` and `staging`, `dev` and `development` are one environment, as are `prd`
+and `prod`; any other spelling is its own. The crawler reads one block per rules
+file, including a Helm template (`tools/lib/lifecycle.mjs`). The block must open the
+file, with only comments, `---` and Helm directives above it, because further down
+the same lines may be a rule's description quoting one. A block it cannot read is a
+warning that names the file and the rule, never its text, and parks nothing.
+It writes one annotation, which is also how a hand-written pack states this:
+
+```json
+"observogram.lifecycle": "[{ \"source\": \"rules/orders.rules.yml\", \"maturity\": \"authored\", \"deployment\": { \"prod\": \"planned\" }, \"symbols\": [\"slis.orders_availability\", \"slos.orders_availability_99\", \"queries.recording_rules.orders:availability:good\", \"alerting.rules.OrdersStuck\", \"policy.burn_rate_alerts.orders_availability_99\", \"metrics.orders_total\"] }]"
+```
+
+The adapter stamps the statement on those artefacts as `lifecycle`. An artefact
+with no counterpart on the other side goes to `layers.<L>.declaredAhead`
+(`{ key, side, artefact, reason }`) when its state for the compared environment is
+explicitly not `deployed`:
+
+- The compared environment is `diffPacks(a, b, { environment })`. Without it, it is
+  each pack's own, and the statement must hold for both, so a repo read for staging
+  against a pack bound to prod parks nothing deployed in either. The live fetcher
+  binds its packs to `prod`, so comparing a staging repo with one parks only what is
+  stated as not deployed in both. `summary.lifecycleEnvironments` names what was
+  compared, and with none (`[]`) nothing is parked.
+- Every artefact of a group must say so, and a folded metric family only keeps the
+  statement when every series carries it from the same file.
+- **A statement can only hide what its own file, or files that say the same,
+  declare.** The crawler covers a symbol only when every file that speaks for it
+  carries a block with the same deployment, so rules and alerts split across two
+  files park together. A metric the code or a manifest's family also names, an SLI
+  with a rule in a file with no block or another state, or anything an alert, a
+  dashboard or a rule in such a file reads, down the chain, keeps reading as usual.
+- An artefact `notObserved` stays there, because nothing was checked at all. One that
+  pairs is compared as usual, and its statement is no delta.
+- On side B, service scope comes first: what is outside the service stays
+  `outOfScope`.
+- Parked artefacts leave the union, like `notObserved`, so `alignment` and `jaccard`
+  **rise** by what is parked: a pack with everything parked reads 100%. So
+  `summary.declaredAhead` counts them, a journey records the count beside its
+  alignment, and `gate.maxDeclaredAhead` can refuse it (opt-in; omitted, it does not
+  gate).
+- Requirement chains do not read the statement, so the grade's chain integrity
+  still counts a parked rule as broken, and says how many are declared ahead.
+
+`layers.<L>.declaredAhead`, `summary.declaredAhead` and
+`summary.lifecycleEnvironments` exist only when a pack carries the annotation, so a
+pack without one keeps its bytes. The studio shows the count wherever it shows
+*not checked*.
+
+**What this cannot catch.**
+
+- A statement nobody updates keeps a rule parked after it should have gone live, and
+  a rule that really is missing then reads as declared ahead. A statement does not
+  expire. The count is there so that it stays visible.
+- A live pack does not record which stack it read: the fetcher binds it to `prod`.
+  With no environment named on either side, a default repo crawl compared with a
+  staging stack is compared for `prod`.
+- With several environments in a pack and none picked, the adapter reads the first.
+- Only what the crawl reads can speak for a series. A `PrometheusRule` custom resource
+  (`spec.groups`) is not walked, so a rule in one does not keep a series visible.
+
 ## Addresses a source does not state
 
 An alert route's channels are compared by kind and address. Two readers can
