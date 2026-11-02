@@ -822,8 +822,8 @@ an owner string may be an address); an input with a closed vocabulary is
 refused by the CLI (exit 2, before the crawl) and defaulted-with-a-warning by
 the library (criticality, binding) — a throw would be a 500 that registers
 nothing for the server and the studio; a value the spec cannot hold is
-recorded as evidence rather than declared (rule names outside
-`<service>:<metric>:<op>`, dashboard schemaVersions below 30, intervals that
+recorded as evidence rather than declared (rule names that are
+not metric names with a `:`, dashboard schemaVersions below 30, intervals that
 are not Durations) — the reading the live side already applied to rule names.
 Provenance marks are field-level wherever an artefact-level mark would move
 Compare (the five otel fields, a backend's endpoints, a route's channels) and

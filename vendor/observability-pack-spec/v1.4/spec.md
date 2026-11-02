@@ -6,7 +6,7 @@
 | Status | Draft for review |
 | Author | Carlos Montero  |
 | First publication | 2026-05-08 |
-| Last updated | 2026-10-03 |
+| Last updated | 2026-11-01 |
 | Default binding | `otel-elastic-prometheus-grafana` |
 | Audience | Service owners, SREs, platform engineers, security & compliance, leadership |
 
@@ -36,7 +36,7 @@ This document defines the contract for an ObservabilityPack: its conceptual mode
 
 ### 1.3 Versioning
 
-This document — the standard itself — carries an explicit **spec version** (see the header table; currently **1.4**), a two-part `major.minor` number: the minor part moves for backward-compatible additions and clarifications, the major part for breaking changes to the contract. The lineage: **1.0** was the generic observability standard; **1.1** added the OpenTelemetry instrumentation contract as a separate concern; **1.2** consolidates the two into this single unified document; **1.3** gives `threshold` and `distribution` SLIs a direction (`good_when`, §5.1), an additive minor; **1.4** gives operational (non-SLO) alert rules a home (`alerting.rules`, §5.8), an additive minor. Because the consolidation and the additions all preserve the manifest contract (`apiVersion` stays `observability.platform/v1`, existing packs still validate and keep their meaning), each is a backward-compatible minor bump rather than a breaking `2.0`. Beyond the spec version, five independent versioning axes appear inside the contract and should not be confused with one another:
+This document — the standard itself — carries an explicit **spec version** (see the header table; currently **1.4**), a two-part `major.minor` number: the minor part moves for backward-compatible additions and clarifications, the major part for breaking changes to the contract. The lineage: **1.0** was the generic observability standard; **1.1** added the OpenTelemetry instrumentation contract as a separate concern; **1.2** consolidates the two into this single unified document; **1.3** gives `threshold` and `distribution` SLIs a direction (`good_when`, §5.1), an additive minor; **1.4** gives operational (non-SLO) alert rules a home (`alerting.rules`, §5.8), an additive minor; a 2026-11-01 revision of 1.4 relaxes the `recording_rules[].name` pattern to the Prometheus metric-name grammar and makes the three-segment form a SHOULD (§5.5) — a pure widening, so it stays within 1.4 rather than opening 1.5. Because the consolidation and the additions all preserve the manifest contract (`apiVersion` stays `observability.platform/v1`, existing packs still validate and keep their meaning), each is a backward-compatible minor bump rather than a breaking `2.0`. Beyond the spec version, five independent versioning axes appear inside the contract and should not be confused with one another:
 
 - **Spec version** (`1.4`) — the version of this prose standard, in the header table. Owned by the platform engineering team. `major.minor`; bumped whenever this document changes.
 - **`apiVersion: observability.platform/v1`** — the stable API surface for pack manifests, in the Kubernetes-style sense. A breaking change to the manifest shape would bump this to `v2`. Tracks the spec's major version but is not identical to it: an editorial spec patch does not move `apiVersion`.
@@ -243,10 +243,12 @@ Default retention by criticality: tier-1 metrics 13mo (via remote_write to Mimir
 
 ### 5.5 Queries (L3)
 
-Recording rules pre-compute SLI ratios and burn rates. Named in the conventional `<service>:<signal>:<aggregation>_<window>` form. Pack MAY reference SLI/SLO IDs symbolically (`expr: ref:slis.api_availability`) rather than re-typing the underlying expression.
+Recording rules pre-compute SLI ratios and burn rates. A rule's `name` is the recorded series exactly as the engine will hold it (`record:` in a Prometheus rule file): a metric name in the Prometheus grammar with at least one `:` and no empty segment — `^[a-zA-Z_][a-zA-Z0-9_]*(:[a-zA-Z0-9_]+)+$` in the schema, so `foo:` and `foo::bar` are refused. The conventional form is three segments, `<service>:<signal>:<aggregation>_<window>` (`payment:api_availability:ratio_5m`), and new rules SHOULD follow it; a pack that imports a service's existing rules keeps their names as they are — two segments, mixed case, a different order — because the name is the join key against the live engine and renaming it would break every dashboard and alert that reads the series. Until the 2026-11-01 revision the schema demanded exactly three lowercase segments, so such a pack could not be written faithfully. Pack MAY reference SLI/SLO IDs symbolically (`expr: ref:slis.api_availability`) rather than re-typing the underlying expression.
 
 **Conformance:**
 - MUST: every SLO has a recording rule materialising the SLI at evaluation cadence.
+- MUST: every `recording_rules[].name` is a Prometheus metric name with at least one `:` and no empty segment.
+- SHOULD: a recording rule the pack introduces is named `<service>:<signal>:<aggregation>_<window>`; an imported rule keeps the engine's spelling.
 - SHOULD: dashboard panels reference recording rules rather than raw queries.
 
 ### 5.6 Dashboards (L3)

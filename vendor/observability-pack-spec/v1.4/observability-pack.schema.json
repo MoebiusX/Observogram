@@ -307,7 +307,8 @@
       "additionalProperties": false,
       "properties": {
         "recording_rules": { "type": "array", "items": { "type": "object", "required": ["name","expr"], "additionalProperties": false,
-                              "properties": { "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*:[a-z0-9_]+$" },
+                              "properties": { "name": { "type": "string", "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*(:[a-zA-Z0-9_]+)+$",
+                                                        "description": "The recorded series name as Prometheus holds it (`record:` in a rule file): a metric name with at least one `:` and no empty segment, so `foo:` and `foo::bar` are refused. Until the 2026-11-01 revision of spec 1.4 the pattern demanded exactly three lowercase segments, and a pack that imported a service's existing two-segment or mixed-case rule names did not validate. The three-segment `<service>:<signal>:<aggregation>_<window>` form is the convention the spec recommends (§5.5, SHOULD), not a rule of this schema." },
                                               "expr": { "type": "string" },
                                               "interval": { "$ref": "#/$defs/Duration" },
                                               "labels": { "type": "object", "additionalProperties": { "type": "string" } } } } },

@@ -3,19 +3,19 @@
   "upstream": {
     "repo": "MoebiusX/otel-observability-pack",
     "ref": "develop",
-    "commit": "e64e58132a46364afd5432a86e67d470858936cf"
+    "commit": "c34196b7a48f4f8b0829f26f2944fa7803dffd5e"
   },
-  "fetchedAt": "2026-10-03T13:29:01Z",
+  "fetchedAt": "2026-11-02T11:28:47Z",
   "files": {
     "v1.4/spec.md": {
       "sourcePath": "spec/ObservabilityPack-Spec.md",
-      "sha256": "6fd908d981a541aca7e3c336b3921245f4fda434e25aa80ad7ee6ccd628795cc",
-      "bytes": 35689
+      "sha256": "9837ba253e05f7f40bc1e39f31d7055443420b78245bca32d55a10e52a0a5acb",
+      "bytes": 36950
     },
     "v1.4/observability-pack.schema.json": {
       "sourcePath": "schema/observability-pack.schema.json",
-      "sha256": "2d7537e83f0b5f97e9936435f9cda7f715c46b0aca3115ea6668b5730c636b4d",
-      "bytes": 31685
+      "sha256": "9326f14f71e22672002562e79ee008bf0e28a0e24dabd80a63a6880d74761164",
+      "bytes": 32275
     },
     "v1.4/examples/payment-service.pack.yaml": {
       "sourcePath": "examples/payment-service.pack.yaml",
